@@ -335,8 +335,34 @@
 		}
 	});
 
-	function handleRegistered(_stance: 'support' | 'oppose') {
-		landscapeRevealed = true;
+	function handleRegistered(stance: 'support' | 'oppose') {
+		if (stance === 'support') {
+			// Support → reveal Power Landscape for direct action
+			landscapeRevealed = true;
+		} else {
+			// Oppose → route into deliberation
+			landscapeRevealed = true;
+			const userTier = data.user?.trust_tier ?? 0;
+			const hasDebate = !!(data.debate as DebateData | null);
+
+			if (userTier >= 3 && !hasDebate) {
+				// Tier 3+ with no debate: spark one immediately
+				modalActions.openModal('debate-modal', 'debate', {
+					template,
+					user: data.user,
+					mode: 'initiate'
+				});
+			} else if (hasDebate) {
+				// Debate exists: scroll to it
+				tick().then(() => {
+					document.querySelector('[data-debate-surface]')?.scrollIntoView({
+						behavior: 'smooth',
+						block: 'start'
+					});
+				});
+			}
+			// Tier < 3 with no debate: StanceRegistration shows verify CTA inline
+		}
 	}
 
 	function handleWriteTo(member: LandscapeMember) {
@@ -651,6 +677,44 @@
 					onRegistered={handleRegistered}
 					recipientCount={landscape.totalCount}
 					{isCongressional}
+					debateExists={!!(data.debate as DebateData | null)}
+					canInitiateDebate={(data.user?.trust_tier ?? 0) >= 3 && !(data.debate as DebateData | null)}
+					onChallenge={() => {
+						const hasDebate = !!(data.debate as DebateData | null);
+						if (hasDebate) {
+							// Join existing debate
+							modalActions.openModal('debate-modal', 'debate', {
+								template,
+								user: data.user,
+								debate: data.debate,
+								mode: 'participate'
+							});
+						} else {
+							// Initiate new debate
+							modalActions.openModal('debate-modal', 'debate', {
+								template,
+								user: data.user,
+								mode: 'initiate'
+							});
+						}
+					}}
+					onVerifyForChallenge={data.user ? () => {
+						if ((data.user!.trust_tier ?? 0) < 2) {
+							modalActions.openModal('address-modal', 'address', {
+								template,
+								user: data.user,
+								context: 'debate'
+							});
+						} else {
+							modalActions.openModal('identity-verification-modal', 'identity-verification', {
+								userId: data.user!.id,
+								templateSlug: template.slug,
+								onComplete: async () => {
+									await invalidateAll();
+								}
+							});
+						}
+					} : undefined}
 				/>
 			{:else}
 				<!-- Guest / no identity: stance-first framing that routes to auth -->
@@ -681,7 +745,7 @@
 							I support this
 						</button>
 						<button
-							class="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-slate-300 px-5 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 sm:flex-none"
+							class="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-red-200 bg-red-50 px-5 py-2.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 sm:flex-none"
 							onclick={() => {
 								if (!data.user) {
 									modalActions.openModal('template-modal', 'template_modal', { template, user: null });
@@ -869,6 +933,7 @@
 				<DebateSurface
 					debate={(data.debate as DebateData) ?? null}
 					userTrustTier={data.user?.trust_tier ?? 0}
+					userOpposed={positionState.isRegistered && positionState.stance === 'oppose'}
 					onInitiateDebate={() => {
 						modalActions.openModal('debate-modal', 'debate', {
 							template,

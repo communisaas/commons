@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Check, Loader2, ArrowRight } from '@lucide/svelte';
+	import { Check, Loader2, ArrowRight, Swords } from '@lucide/svelte';
 	import { positionState } from '$lib/stores/positionState.svelte';
 	import PositionCount from './PositionCount.svelte';
 
@@ -9,7 +9,11 @@
 		districtCode = undefined,
 		onRegistered = undefined,
 		recipientCount = 0,
-		isCongressional = false
+		isCongressional = false,
+		debateExists = false,
+		canInitiateDebate = false,
+		onChallenge = undefined,
+		onVerifyForChallenge = undefined
 	}: {
 		templateId: string;
 		identityCommitment: string;
@@ -17,6 +21,10 @@
 		onRegistered?: (stance: 'support' | 'oppose') => void;
 		recipientCount?: number;
 		isCongressional?: boolean;
+		debateExists?: boolean;
+		canInitiateDebate?: boolean;
+		onChallenge?: () => void;
+		onVerifyForChallenge?: () => void;
 	} = $props();
 
 	const recipientLabel = $derived(
@@ -46,18 +54,55 @@
 
 <div>
 	{#if positionState.isRegistered}
-		<!-- Registered state — horizontal inline -->
-		<div class="flex flex-wrap items-center gap-x-2 gap-y-1" role="status" aria-live="polite">
+		<!-- Registered state -->
+		<div role="status" aria-live="polite">
 			{#if positionState.stance === 'support'}
-				<Check class="h-4 w-4 text-channel-verified-600" />
-				<span class="text-sm font-medium text-channel-verified-600">You support this</span>
+				<!-- Support: simple confirmation -->
+				<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+					<Check class="h-4 w-4 text-channel-verified-600" />
+					<span class="text-sm font-medium text-channel-verified-600">You support this</span>
+					{#if positionState.totalCount > 0}
+						<span class="text-slate-300">&middot;</span>
+						<PositionCount count={positionState.count} />
+					{/if}
+				</div>
 			{:else}
-				<Check class="h-4 w-4 text-slate-600" />
-				<span class="text-sm font-medium text-slate-600">You oppose this</span>
-			{/if}
-			{#if positionState.totalCount > 0}
-				<span class="text-slate-300">&middot;</span>
-				<PositionCount count={positionState.count} />
+				<!-- Oppose: opposition is a challenge — route into deliberation -->
+				<div class="space-y-3">
+					<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+						<Check class="h-4 w-4 text-red-500" />
+						<span class="text-sm font-medium text-red-600">You oppose this</span>
+						{#if positionState.totalCount > 0}
+							<span class="text-slate-300">&middot;</span>
+							<PositionCount count={positionState.count} />
+						{/if}
+					</div>
+					{#if debateExists && onChallenge}
+						<button
+							class="inline-flex items-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 transition-colors"
+							onclick={onChallenge}
+						>
+							<Swords class="h-3.5 w-3.5" />
+							Join the deliberation
+						</button>
+					{:else if canInitiateDebate && onChallenge}
+						<button
+							class="inline-flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm font-medium text-red-700 hover:bg-red-100 transition-colors"
+							onclick={onChallenge}
+						>
+							<Swords class="h-4 w-4" />
+							Challenge this framing — open a deliberation
+						</button>
+					{:else if onVerifyForChallenge}
+						<button
+							class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 transition-colors"
+							onclick={onVerifyForChallenge}
+						>
+							<Swords class="h-3.5 w-3.5" />
+							Verify your identity to challenge this framing
+						</button>
+					{/if}
+				</div>
 			{/if}
 		</div>
 	{:else}
@@ -82,7 +127,7 @@
 				</button>
 
 				<button
-					class="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-slate-300 px-5 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 sm:flex-none"
+					class="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-red-200 bg-red-50 px-5 py-2.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 sm:flex-none"
 					disabled={positionState.registrationState === 'registering'}
 					onclick={() => handleRegister('oppose')}
 				>
