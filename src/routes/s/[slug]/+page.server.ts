@@ -59,7 +59,7 @@ function buildAIResolution(
 	return {
 		argumentScores,
 		alphaWeight: 4000,
-		modelCount: source === 'bittensor_subnet' ? (minerCount ?? 0) : (models.length || 5),
+		modelCount: minerCount ?? (models.length || 5),
 		signatureCount: dbDebate.ai_signature_count ?? 0,
 		quorumRequired: 4,
 		resolutionMethod: (dbDebate.resolution_method as AIResolutionData['resolutionMethod']) ?? 'ai_community',

@@ -81,7 +81,7 @@ function buildResolutionData(
 	return {
 		argumentScores,
 		alphaWeight: 4000,
-		modelCount: source === 'bittensor_subnet' ? (minerCount ?? 0) : (models.length || 5),
+		modelCount: minerCount ?? (models.length || 5),
 		signatureCount: signatureCount ?? 0,
 		quorumRequired: 4,
 		resolutionMethod: 'ai_community',

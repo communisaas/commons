@@ -234,7 +234,7 @@ Sign up → create org → import supporter CSV or connect AN API → create fir
 
 ### Debate Market Spawns from Campaign (person-facing → org-facing)
 
-Campaign reaches traction threshold → org enables debate market → verified supporters stake on SUPPORT/OPPOSE/AMEND with structured arguments → LMSR pricing reflects genuine conviction → 5-model AI panel scores argument quality → campaign page shows: "62% AMEND (market depth $247). Top argument: 'Bill should index to CPI, not flat rate.' Score: 0.84." → org delivers to decision-maker as quality signal alongside constituent count.
+Campaign reaches traction threshold → org enables debate market → verified supporters stake on SUPPORT/OPPOSE/AMEND with structured arguments → LMSR pricing reflects genuine conviction → TEE-attested AI evaluation scores argument quality (open-weight models inside Nitro Enclave, attestation hash on-chain) → campaign page shows: "62% AMEND (market depth $247). Top argument: 'Bill should index to CPI, not flat rate.' Score: 0.84." → org delivers to decision-maker as quality signal alongside constituent count.
 
 ---
 

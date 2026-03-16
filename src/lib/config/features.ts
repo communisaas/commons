@@ -18,7 +18,7 @@ export type AddressSpecificity = 'off' | 'region' | 'district';
 
 export const FEATURES = {
 	/** Deliberation surfaces, argument submission, LMSR market, resolution/appeal */
-	DEBATE: true,
+	DEBATE: false,
 
 	/** CWC delivery, district officials, congressional template routing */
 	CONGRESSIONAL: true,

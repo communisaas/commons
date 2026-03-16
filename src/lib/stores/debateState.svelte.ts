@@ -94,7 +94,7 @@ export interface AIResolutionData {
 	resolutionMethod: 'ai_community' | 'governance_override' | 'community_only';
 	evaluatedAt?: string;
 	// Evaluation source attribution
-	source?: 'bittensor_subnet' | 'ai_panel';
+	source?: 'ai_panel' | string;
 	minerCount?: number;
 	// Level 3 miner transparency — per-miner raw evaluations with grounding evidence
 	minerEvaluations?: MinerEvaluation[];
@@ -528,7 +528,7 @@ function createDebateState() {
 				const resolution: AIResolutionData = {
 					argumentScores,
 					alphaWeight: 4000,
-					modelCount: source === 'bittensor_subnet' ? (resMinerCount ?? 0) : 5,
+					modelCount: resMinerCount ?? (models.length || 5),
 					signatureCount: aiResolution.signatureCount ?? 0,
 					quorumRequired: 4,
 					resolutionMethod: aiResolution.resolutionMethod ?? 'ai_community',

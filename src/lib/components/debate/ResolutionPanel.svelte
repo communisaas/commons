@@ -225,7 +225,7 @@
 						<!-- Dimension breakdown -->
 						<AIScoreBreakdown scores={dimensions} />
 
-						<!-- Level 3: Miner evidence (when subnet evaluation data exists) -->
+						<!-- Level 3: Per-evaluator evidence (when multi-evaluator data exists) -->
 						{#if resolution?.minerEvaluations}
 							<EvidencePanel
 								argumentIndex={arg.argumentIndex}

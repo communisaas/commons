@@ -8,7 +8,7 @@
 		resolutionMethod?: 'ai_community' | 'governance_override' | 'community_only';
 		appealDeadline?: string;
 		compact?: boolean;
-		source?: 'bittensor_subnet' | 'ai_panel' | string;
+		source?: 'ai_panel' | string;
 		minerCount?: number;
 	}
 
@@ -92,9 +92,6 @@
 	{#if methodLabel && phase === 'resolved'}
 		<span class="text-xs font-medium text-slate-500">
 			via {methodLabel}
-			{#if source === 'bittensor_subnet'}
-				· Bittensor Subnet ({minerCount ?? 0} miners)
-			{/if}
 		</span>
 	{/if}
 

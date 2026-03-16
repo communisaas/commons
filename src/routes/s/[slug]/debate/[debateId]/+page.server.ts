@@ -54,13 +54,13 @@ function buildAIResolution(
 			};
 		});
 
-	// Level 3: extract per-miner evaluations with grounding evidence
+	// Level 3: extract per-evaluator results with grounding evidence
 	const rawMinerEvals = blob.minerEvaluations as MinerEvaluation[] | undefined;
 
 	return {
 		argumentScores,
 		alphaWeight: 4000, // Default α from MockAIEvaluationRegistry
-		modelCount: source === 'bittensor_subnet' ? (minerCount ?? 0) : (models.length || 5),
+		modelCount: minerCount ?? (models.length || 5),
 		signatureCount: dbDebate.ai_signature_count ?? 0,
 		quorumRequired: 4, // ceil(2*5/3)
 		resolutionMethod: (dbDebate.resolution_method as AIResolutionData['resolutionMethod']) ?? 'ai_community',

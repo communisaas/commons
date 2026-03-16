@@ -247,12 +247,7 @@
 									<h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wider">
 										AI Evaluation Evidence
 									</h3>
-									{#if resolution?.source === 'bittensor_subnet'}
-										<span class="text-xs font-medium text-violet-600 bg-violet-50 px-2 py-0.5 rounded-full">
-											Bittensor Subnet ({resolution.minerCount ?? 0} miners)
-										</span>
-									{/if}
-								</div>
+									</div>
 							</div>
 
 							<!-- Arguments ranked by AI score -->
