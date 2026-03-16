@@ -29,10 +29,9 @@ const handlePlatformEnv: Handle = async ({ event, resolve }) => {
 		envShimApplied = true;
 
 		// Wire IPFS CIDs from env vars so Shadow Atlas reads go live.
-		// Quarterly CID updates are a `wrangler pages secret put` — no redeploy.
+		// Quarterly CID updates are automated by push-cids.ts — no manual wrangler needed.
 		setCIDs({
-			districtMapping: process.env.IPFS_CID_DISTRICT_MAPPING || '',
-			officials: process.env.IPFS_CID_OFFICIALS || '',
+			root: process.env.IPFS_CID_ROOT || '',
 			merkleSnapshot: process.env.IPFS_CID_MERKLE_SNAPSHOT || '',
 		});
 	}

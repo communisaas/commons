@@ -153,9 +153,8 @@ declare global {
 			// Identity Verification (mDL via Digital Credentials API — no provider API keys needed)
 			// District resolution via Shadow Atlas H3 mapping (no external API keys needed)
 
-			// IPFS CIDs for Shadow Atlas data (updated quarterly via `wrangler pages secret put`)
-			IPFS_CID_DISTRICT_MAPPING?: string;
-			IPFS_CID_OFFICIALS?: string;
+			// IPFS CID for Shadow Atlas chunked data (single root CID for UnixFS DAG)
+			IPFS_CID_ROOT?: string;
 			IPFS_CID_MERKLE_SNAPSHOT?: string;
 
 			// Witness Encryption (X25519 keypair for witness encryption/decryption)

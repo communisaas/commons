@@ -18,13 +18,14 @@
 import { env } from '$env/dynamic/private';
 import { latLngToCell } from 'h3-js';
 import {
-	getDistrictMapping,
-	getOfficialsDataset,
 	getMerkleSnapshot,
 	checkIPFSHealth,
 	isIPFSConfigured,
+	getChunkForCell,
+	getOfficialsForDistrict,
 	clearCache,
 	type CellDistricts,
+	type OfficialsFileIPFS,
 } from './ipfs-store';
 import {
 	deserializeCellTreeSnapshot,
@@ -142,29 +143,6 @@ function convertDistrictId(substrateId: string): string {
 	return `${stateCode}-${district}`;
 }
 
-/** Reverse lookup: state abbreviation → FIPS code (derived from FIPS_TO_STATE) */
-const STATE_TO_FIPS: Record<string, string> = Object.fromEntries(
-	Object.entries(FIPS_TO_STATE).map(([fips, state]) => [state, fips]),
-);
-
-/**
- * Convert commons' district code to substrate's IPFS key format.
- * "CA-12" → "cd-0612", "VT-AL" → "cd-5000"
- * Used for officials dataset lookup (keyed by substrate format).
- */
-function toSubstrateDistrictKey(districtCode: string): string {
-	const match = districtCode.match(/^([A-Z]{2})-(\d{2}|AL)$/);
-	if (!match) return districtCode;
-
-	const stateCode = match[1];
-	const district = match[2];
-	const fips = STATE_TO_FIPS[stateCode];
-	if (!fips) return districtCode;
-
-	const districtNum = district === 'AL' ? '00' : district;
-	return `cd-${fips}${districtNum}`;
-}
-
 /**
  * Build a human-readable district name from a district code.
  * "CA-12" → "California's 12th Congressional District"
@@ -264,6 +242,11 @@ export interface ShadowAtlasResponse {
  * Slot index → jurisdiction metadata.
  * Inline from voter-protocol jurisdiction.ts (will import after cross-repo exports P0).
  */
+/**
+ * Canonical slot → jurisdiction mapping.
+ * MUST match voter-protocol CIRCUIT_SLOT_NAMES (authority-mapper.ts)
+ * and US_JURISDICTION (jurisdiction.ts). Any divergence is a correctness bug.
+ */
 const US_SLOT_NAMES: ReadonlyArray<{ jurisdiction: string; label: string }> = [
 	/* 0  */ { jurisdiction: 'congressional', label: 'Congressional District' },
 	/* 1  */ { jurisdiction: 'federal-senate', label: 'Federal Senate' },
@@ -276,19 +259,19 @@ const US_SLOT_NAMES: ReadonlyArray<{ jurisdiction: string; label: string }> = [
 	/* 8  */ { jurisdiction: 'elementary-school', label: 'Elementary School District' },
 	/* 9  */ { jurisdiction: 'secondary-school', label: 'Secondary School District' },
 	/* 10 */ { jurisdiction: 'community-college', label: 'Community College District' },
-	/* 11 */ { jurisdiction: 'water', label: 'Water District' },
-	/* 12 */ { jurisdiction: 'fire', label: 'Fire District' },
+	/* 11 */ { jurisdiction: 'water-sewer', label: 'Water/Sewer District' },
+	/* 12 */ { jurisdiction: 'fire', label: 'Fire/EMS District' },
 	/* 13 */ { jurisdiction: 'transit', label: 'Transit District' },
 	/* 14 */ { jurisdiction: 'hospital', label: 'Hospital District' },
 	/* 15 */ { jurisdiction: 'library', label: 'Library District' },
-	/* 16 */ { jurisdiction: 'park', label: 'Park District' },
+	/* 16 */ { jurisdiction: 'park', label: 'Parks/Recreation District' },
 	/* 17 */ { jurisdiction: 'conservation', label: 'Conservation District' },
 	/* 18 */ { jurisdiction: 'utility', label: 'Utility District' },
 	/* 19 */ { jurisdiction: 'judicial', label: 'Judicial District' },
 	/* 20 */ { jurisdiction: 'township', label: 'Township/MCD' },
 	/* 21 */ { jurisdiction: 'precinct', label: 'Voting Precinct' },
-	/* 22 */ { jurisdiction: 'overflow-1', label: 'Overflow 1' },
-	/* 23 */ { jurisdiction: 'overflow-2', label: 'Overflow 2' },
+	/* 22 */ { jurisdiction: 'tribal', label: 'Tribal/Native Area' },
+	/* 23 */ { jurisdiction: 'overflow', label: 'Other Special District' },
 ];
 
 /**
@@ -393,9 +376,15 @@ export async function lookupDistrict(lat: number, lng: number): Promise<District
 	}
 
 	try {
-		const mapping = await getDistrictMapping();
 		const cellIndex = latLngToCell(lat, lng, H3_RESOLUTION);
-		const cellDistricts = mapping.mapping[cellIndex];
+
+		let cellDistricts: CellDistricts | undefined;
+
+		// Fetch only the ~8 KB chunk for this cell's H3 res-3 parent
+		const slots = await getChunkForCell(cellIndex);
+		if (slots) {
+			cellDistricts = { slots };
+		}
 
 		if (!cellDistricts) {
 			throw new Error(
@@ -439,9 +428,15 @@ export async function lookupAllDistricts(lat: number, lng: number): Promise<Mult
 	}
 
 	try {
-		const mapping = await getDistrictMapping();
 		const cellIndex = latLngToCell(lat, lng, H3_RESOLUTION);
-		const cellDistricts = mapping.mapping[cellIndex];
+
+		let cellDistricts: CellDistricts | undefined;
+
+		// Fetch only the ~8 KB chunk for this cell's H3 res-3 parent
+		const slots = await getChunkForCell(cellIndex);
+		if (slots) {
+			cellDistricts = { slots };
+		}
 
 		if (!cellDistricts) {
 			throw new Error(
@@ -959,7 +954,7 @@ export interface OfficialsResponse {
  * Get federal officials for a congressional district.
  *
  * Dual-path architecture:
- * 1. IPFS-native (primary): cached officials dataset (504 KB). Zero runtime calls.
+ * 1. IPFS chunked (primary): per-district officials file (~2-5 KB). Zero runtime calls.
  * 2. Shadow Atlas HTTP (fallback): when IPFS CIDs are not yet published.
  *
  * @param districtCode - District code like "CA-12", "VT-AL", "DC-00"
@@ -967,26 +962,33 @@ export interface OfficialsResponse {
  * @throws Error if district not found or data unavailable
  */
 export async function getOfficials(districtCode: string): Promise<OfficialsResponse> {
-	// Primary: IPFS-native (when quarterly CIDs are published)
+	// Primary: IPFS chunked (when root CID is published)
 	if (isIPFSConfigured()) {
 		try {
-			const dataset = await getOfficialsDataset();
-
-			// IPFS officials dataset is keyed by substrate format (cd-0612).
-			// Callers may pass commons format (CA-12). Try substrate key first,
-			// then fall back to the raw key for forward compatibility.
-			const substrateKey = toSubstrateDistrictKey(districtCode);
-			const entry = dataset.districts[substrateKey] ?? dataset.districts[districtCode];
-
-			if (!entry) {
-				throw new Error(`No officials data for district ${districtCode} (tried key: ${substrateKey})`);
+			const officialsFile = await getOfficialsForDistrict(districtCode);
+			if (!officialsFile) {
+				throw new Error(`No officials data for district ${districtCode}`);
 			}
 
 			return {
-				officials: entry.officials as Official[],
+				officials: officialsFile.officials.map(o => ({
+					bioguide_id: o.id,
+					name: o.name,
+					party: o.party,
+					chamber: o.chamber as 'house' | 'senate',
+					state: o.state,
+					district: o.district,
+					office: `${o.chamber === 'senate' ? 'Senator' : 'Representative'}, ${o.state}`,
+					phone: o.phone,
+					contact_form_url: o.contact_form_url,
+					website_url: o.website_url,
+					cwc_code: null,
+					is_voting: o.is_voting,
+					delegate_type: o.delegate_type,
+				})),
 				district_code: districtCode,
-				state: entry.state,
-				special_status: entry.special_status,
+				state: districtCode.split('-')[0],
+				special_status: null,
 				source: 'congress-legislators',
 				cached: true,
 			};
