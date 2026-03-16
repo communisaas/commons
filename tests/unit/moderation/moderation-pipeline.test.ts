@@ -70,7 +70,7 @@ function makeSafetyResult(
 		hazard_descriptions: hazards.map((h) => `Description for ${h}`),
 		reasoning: safe ? 'No safety violations detected' : 'Safety violations found',
 		timestamp: new Date().toISOString(),
-		model: 'llama-guard-4-12b'
+		model: 'openai/gpt-oss-safeguard-20b'
 	};
 }
 

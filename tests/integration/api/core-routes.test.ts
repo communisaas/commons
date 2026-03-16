@@ -35,7 +35,7 @@ vi.mock('$lib/core/server/moderation', () => ({
     latency_ms: 100,
     safety: {
       safe: true,
-      model: 'llama-guard-4',
+      model: 'openai/gpt-oss-safeguard-20b',
       hazards: [],
       blocking_hazards: [],
       hazard_descriptions: [],

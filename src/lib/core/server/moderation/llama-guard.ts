@@ -1,16 +1,15 @@
 /**
- * Llama Guard 4 12B via GROQ
+ * Safety classification via GROQ (gpt-oss-safeguard-20b)
  *
- * Safety classification using MLCommons hazard taxonomy.
+ * Content moderation using MLCommons hazard taxonomy.
  * Optimized for civic content with electoral misinformation (S13)
  * and defamation (S5) detection.
  *
- * Rate limits (Free tier):
- * - 30 requests/minute
- * - 15,000 tokens/minute
- * - 14,400 requests/day (~432K/month)
+ * Previously used Llama Guard 4 12B, but that model is no longer
+ * available on the free tier. gpt-oss-safeguard-20b is a reasoning
+ * model that supports bring-your-own-policy safety classification.
  *
- * @see https://console.groq.com/docs/model/meta-llama/llama-guard-4-12b
+ * @see https://console.groq.com/docs/content-moderation
  */
 
 import { env } from '$env/dynamic/private';
@@ -18,18 +17,32 @@ import type { MLCommonsHazard, SafetyResult } from './types';
 import { HAZARD_DESCRIPTIONS, BLOCKING_HAZARDS } from './types';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const MODEL = 'meta-llama/llama-guard-4-12b';
+const MODEL = 'openai/gpt-oss-safeguard-20b';
+
+const SAFETY_SYSTEM_PROMPT = `Classify user content safety using MLCommons taxonomy. Respond ONLY with: safe OR unsafe followed by comma-separated hazard codes (e.g. unsafe,S1,S5).
+
+Hazard categories:
+S1: Violent crimes
+S2: Non-violent crimes
+S3: Sex-related crimes
+S4: Child sexual exploitation
+S5: Defamation
+S6: Specialized advice
+S7: Privacy
+S8: Intellectual property
+S9: Indiscriminate weapons
+S10: Hate
+S11: Suicide & self-harm
+S12: Sexual content
+S13: Elections (misinformation)
+S14: Code interpreter abuse`;
 
 /**
- * IMPORTANT: Llama Guard 4 does NOT use a system message.
- * The model is pre-trained for safety classification using MLCommons taxonomy.
- * Adding a system message overrides its native behavior and breaks classification.
+ * Parse safety model response into structured result
  *
- * @see https://console.groq.com/docs/content-moderation
- */
-
-/**
- * Parse Llama Guard 4 response into structured result
+ * Handles both formats:
+ * - Llama Guard: "unsafe\nS1" or "unsafe\nS1,S2"
+ * - gpt-oss-safeguard: "unsafe,S1" or "unsafe,S1,S5"
  *
  * PERMISSIVE POLICY: Only BLOCKING_HAZARDS (S1, S4) cause safe=false.
  * All other hazards are logged but content proceeds.
@@ -45,13 +58,9 @@ function parseResponse(response: string): {
 		return { safe: true, hazards: [], blocking_hazards: [] };
 	}
 
-	// Parse "unsafe\nS1" or "unsafe\nS1,S2" format
 	if (trimmed.startsWith('unsafe')) {
-		const lines = response.trim().split('\n');
-		const hazardLine = lines[1] || '';
-
-		// Extract hazard codes (S1-S14)
-		const hazardMatches = hazardLine.match(/S\d{1,2}/gi) || [];
+		// Extract hazard codes from any format: "unsafe\nS1,S2" or "unsafe,S1,S5"
+		const hazardMatches = response.match(/S\d{1,2}/gi) || [];
 		const hazards = hazardMatches
 			.map((h) => h.toUpperCase())
 			.filter((h): h is MLCommonsHazard => /^S(1[0-4]|[1-9])$/.test(h));
@@ -68,22 +77,22 @@ function parseResponse(response: string): {
 	}
 
 	// Default to safe if parsing fails (fail-open for edge cases)
-	console.warn('[llama-guard] Unexpected response format, defaulting to safe:', response);
+	console.warn('[safety] Unexpected response format, defaulting to safe:', response);
 	return { safe: true, hazards: [], blocking_hazards: [] };
 }
 
 /**
- * Classify content safety using Llama Guard 4 via GROQ
+ * Classify content safety via GROQ
  *
  * @param content - Text content to classify
  * @returns SafetyResult with hazard categories
- * @throws Error if GROQ API fails
+ * @throws Error if rate limited (429)
  */
 export async function classifySafety(content: string): Promise<SafetyResult> {
 	const apiKey = env.GROQ_API_KEY;
 
 	if (!apiKey) {
-		console.warn('[llama-guard] GROQ_API_KEY not configured, defaulting to safe');
+		console.warn('[safety] GROQ_API_KEY not configured, defaulting to safe');
 		return {
 			safe: true,
 			hazards: [],
@@ -91,14 +100,12 @@ export async function classifySafety(content: string): Promise<SafetyResult> {
 			hazard_descriptions: [],
 			reasoning: 'GROQ API key not configured - safety check skipped',
 			timestamp: new Date().toISOString(),
-			model: 'llama-guard-4-12b'
+			model: MODEL
 		};
 	}
 
 	const startTime = Date.now();
 
-	// CRITICAL: Do NOT add a system message - it breaks Llama Guard 4's native classification
-	// The model is pre-trained with MLCommons S1-S14 taxonomy baked in
 	const response = await fetch(GROQ_API_URL, {
 		method: 'POST',
 		headers: {
@@ -107,23 +114,35 @@ export async function classifySafety(content: string): Promise<SafetyResult> {
 		},
 		body: JSON.stringify({
 			model: MODEL,
-			messages: [{ role: 'user', content }],
+			messages: [
+				{ role: 'system', content: SAFETY_SYSTEM_PROMPT },
+				{ role: 'user', content }
+			],
 			temperature: 0,
-			max_tokens: 100
+			max_tokens: 1000
 		})
 	});
 
 	if (!response.ok) {
 		const errorText = await response.text();
 
-		// Handle rate limiting gracefully
+		// Handle rate limiting — user should retry
 		if (response.status === 429) {
-			console.error('[llama-guard] Rate limited by GROQ:', errorText);
+			console.error('[safety] Rate limited by GROQ:', errorText);
 			throw new Error('Safety check rate limited. Please try again in a moment.');
 		}
 
-		console.error('[llama-guard] GROQ API error:', response.status, errorText);
-		throw new Error(`Safety classification failed: ${response.status}`);
+		// Non-rate-limit errors: fail-open so Groq outages don't block publishing
+		console.error('[safety] GROQ API error (fail-open):', response.status, errorText);
+		return {
+			safe: true,
+			hazards: [],
+			blocking_hazards: [],
+			hazard_descriptions: [],
+			reasoning: `GROQ API returned ${response.status} - safety check skipped (fail-open)`,
+			timestamp: new Date().toISOString(),
+			model: MODEL
+		};
 	}
 
 	const data = await response.json();
@@ -134,14 +153,14 @@ export async function classifySafety(content: string): Promise<SafetyResult> {
 
 	// Log all hazards but only reject on blocking ones
 	if (hazards.length > 0) {
-		console.debug(`[llama-guard] Classification complete in ${latencyMs}ms:`, {
+		console.debug(`[safety] Classification complete in ${latencyMs}ms:`, {
 			safe,
 			all_hazards: hazards,
 			blocking_hazards,
 			tokens: data.usage?.total_tokens
 		});
 	} else {
-		console.debug(`[llama-guard] Classification complete in ${latencyMs}ms: safe`);
+		console.debug(`[safety] Classification complete in ${latencyMs}ms: safe`);
 	}
 
 	return {
@@ -151,7 +170,7 @@ export async function classifySafety(content: string): Promise<SafetyResult> {
 		hazard_descriptions: hazards.map((h) => HAZARD_DESCRIPTIONS[h]),
 		reasoning: modelResponse,
 		timestamp: new Date().toISOString(),
-		model: 'llama-guard-4-12b'
+		model: MODEL
 	};
 }
 

@@ -140,7 +140,7 @@ export interface SafetyResult {
 	/** Processing timestamp */
 	timestamp: string;
 	/** Model used for classification */
-	model: 'llama-guard-4-12b';
+	model: string;
 }
 
 /**
