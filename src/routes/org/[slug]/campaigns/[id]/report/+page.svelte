@@ -75,7 +75,7 @@
 		<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 			<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
 		</svg>
-		<span class="text-text-tertiary">Report</span>
+		<span class="text-text-tertiary">Deliver Proof</span>
 	</nav>
 
 	<!-- Error/success messages -->
@@ -86,13 +86,27 @@
 	{/if}
 	{#if form?.success}
 		<div class="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
-			Report sent to {form.sentCount} target{form.sentCount === 1 ? '' : 's'}
+			Proof delivered to {form.sentCount} decision-maker{form.sentCount === 1 ? '' : 's'}
 		</div>
 	{/if}
 
+	<!-- Proof context -->
+	<div class="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-6 py-4">
+		<p class="text-sm text-text-secondary">
+			You're about to deliver cryptographic proof of constituent support.
+		</p>
+		{#if data.packet}
+			<p class="text-sm text-text-tertiary mt-1">
+				This packet contains <span class="font-mono tabular-nums text-emerald-400 font-semibold">{data.packet.verified.toLocaleString('en-US')}</span> verified actions
+				across <span class="font-mono tabular-nums text-teal-400">{data.packet.districtCount}</span> districts.
+				Each recipient will see verification they cannot fabricate or dismiss.
+			</p>
+		{/if}
+	</div>
+
 	<!-- Targets + Send -->
 	<form method="POST" action="?/send" use:enhance={({ cancel }) => {
-		if (!confirm(`Send report to ${selectedCount} target${selectedCount === 1 ? '' : 's'}? This cannot be undone.`)) {
+		if (!confirm(`Deliver proof packet to ${selectedCount} decision-maker${selectedCount === 1 ? '' : 's'}? This delivers a cryptographic verification report.`)) {
 			cancel();
 			return;
 		}
@@ -102,7 +116,7 @@
 	}} class="space-y-6">
 		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
 			<div class="flex items-center justify-between">
-				<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Sending to</p>
+				<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Decision-maker recipients</p>
 				{#if hasTargets}
 					<button
 						type="button"
@@ -116,9 +130,9 @@
 
 			{#if !hasTargets}
 				<div class="py-4 text-center">
-					<p class="text-sm text-text-tertiary">No targets configured for this campaign.</p>
+					<p class="text-sm text-text-tertiary">No decision-makers targeted.</p>
 					<p class="text-xs text-text-quaternary mt-1">
-						Add decision-maker targets in the campaign settings to enable report delivery.
+						Add recipients in campaign settings to enable proof delivery.
 					</p>
 				</div>
 			{:else}
@@ -181,18 +195,18 @@
 				<button
 					type="submit"
 					disabled={selectedCount === 0}
-					class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+					class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-6 py-3 text-sm font-medium text-white hover:bg-teal-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
 				>
 					<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
 					</svg>
-					Send to {selectedCount} target{selectedCount === 1 ? '' : 's'}
+					Deliver proof to {selectedCount} decision-maker{selectedCount === 1 ? '' : 's'}
 				</button>
 				<a
 					href="/org/{data.org.slug}/campaigns/{data.campaign.id}"
 					class="rounded-lg bg-surface-overlay px-4 py-2.5 text-sm font-medium text-text-primary hover:bg-surface-raised transition-colors"
 				>
-					Back to dashboard
+					Back to campaign
 				</a>
 			</div>
 		{:else}
@@ -200,7 +214,7 @@
 				href="/org/{data.org.slug}/campaigns/{data.campaign.id}"
 				class="inline-flex rounded-lg bg-surface-overlay px-4 py-2.5 text-sm font-medium text-text-primary hover:bg-surface-raised transition-colors"
 			>
-				Back to dashboard
+				Back to campaign
 			</a>
 		{/if}
 	</form>
@@ -208,7 +222,7 @@
 	<!-- Past Deliveries -->
 	{#if data.pastDeliveries.length > 0}
 		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
-			<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Delivery History</p>
+			<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Proof delivery arc</p>
 
 			<div class="overflow-x-auto">
 				<table class="w-full text-sm">
@@ -216,6 +230,7 @@
 						<tr class="border-b border-surface-border">
 							<th class="text-left text-xs font-mono text-text-quaternary pb-2 pr-4">Recipient</th>
 							<th class="text-left text-xs font-mono text-text-quaternary pb-2 pr-4">Status</th>
+							<th class="text-left text-xs font-mono text-text-quaternary pb-2 pr-4">Proof strength</th>
 							<th class="text-left text-xs font-mono text-text-quaternary pb-2 pr-4">Sent</th>
 							<th class="text-left text-xs font-mono text-text-quaternary pb-2">District</th>
 						</tr>
@@ -237,6 +252,15 @@
 									<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-mono {statusBadgeClass(delivery.status)}">
 										{delivery.status}
 									</span>
+								</td>
+								<td class="py-2.5 pr-4">
+									{#if delivery.proofStrength}
+										<span class="text-xs font-mono tabular-nums text-emerald-400">{delivery.proofStrength.verified.toLocaleString('en-US')}</span>
+										<span class="text-xs text-text-quaternary mx-0.5">/</span>
+										<span class="text-xs font-mono tabular-nums text-teal-400">{delivery.proofStrength.districtCount}d</span>
+									{:else}
+										<span class="text-xs text-text-quaternary">{'\u2014'}</span>
+									{/if}
 								</td>
 								<td class="py-2.5 pr-4">
 									<span class="text-xs font-mono tabular-nums text-text-tertiary">

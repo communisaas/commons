@@ -1,6 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { loadReportPreview, sendReport, loadPastDeliveries } from '$lib/server/campaigns/report';
+import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params, parent }) => {
@@ -37,6 +38,12 @@ export const actions: Actions = {
 
 		if (selectedEmails.length === 0) {
 			return fail(400, { error: 'No targets selected' });
+		}
+
+		// Billing usage check — proof reports count against email quota
+		const usage = await getOrgUsage(org.id);
+		if (isOverLimit(usage).emails) {
+			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
 		}
 
 		const result = await sendReport(params.id, org.id, selectedEmails);
