@@ -41,6 +41,10 @@
 		}
 	}
 
+	// Effective reach (email status breakdown)
+	const er = $derived(data.emailReach);
+	const erPct = $derived(er.total > 0 ? (er.subscribed / er.total * 100).toFixed(1) : '0.0');
+
 	// Funnel percentages (relative to imported)
 	const funnel = $derived(data.funnel);
 	const funnelMax = $derived(Math.max(funnel.imported, 1));
@@ -163,9 +167,68 @@
 <div class="space-y-6">
 	<!-- Page title -->
 	<div>
-		<h1 class="text-xl font-semibold text-text-primary">Dashboard</h1>
-		<p class="text-sm text-text-tertiary mt-1">Verification signals for {data.org.name}</p>
+		<h1 class="text-xl font-semibold text-text-primary">{data.org.name}</h1>
 	</div>
+
+	<!-- ===== Effective Reach ===== -->
+	{#if er.total > 0}
+		<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
+			<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary mb-3">Effective Reach</p>
+
+			<!-- Hero number -->
+			<div class="flex items-baseline gap-3 mb-4">
+				<span class="font-mono tabular-nums text-3xl font-bold text-text-primary">{fmt(er.subscribed)}</span>
+				<span class="text-sm text-text-secondary">/ {fmt(er.total)}</span>
+				<span class="text-sm font-mono tabular-nums text-emerald-400">({erPct}%)</span>
+			</div>
+
+			<!-- Stacked bar -->
+			<div class="h-3 rounded-full overflow-hidden flex bg-surface-raised">
+				{#if er.subscribed > 0}
+					<div class="bg-emerald-500 transition-all duration-700" style="width: {er.subscribed / er.total * 100}%"></div>
+				{/if}
+				{#if er.unsubscribed > 0}
+					<div class="bg-amber-500 transition-all duration-700" style="width: {er.unsubscribed / er.total * 100}%"></div>
+				{/if}
+				{#if er.bounced > 0}
+					<div class="bg-red-500 transition-all duration-700" style="width: {er.bounced / er.total * 100}%"></div>
+				{/if}
+				{#if er.complained > 0}
+					<div class="bg-red-400 transition-all duration-700" style="width: {er.complained / er.total * 100}%"></div>
+				{/if}
+			</div>
+
+			<!-- Legend -->
+			<div class="flex flex-wrap gap-x-5 gap-y-1 mt-3 text-xs">
+				<span class="flex items-center gap-1.5">
+					<span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+					<span class="text-text-secondary">Subscribed</span>
+					<span class="font-mono tabular-nums text-text-tertiary">{fmt(er.subscribed)}</span>
+				</span>
+				{#if er.unsubscribed > 0}
+					<span class="flex items-center gap-1.5">
+						<span class="w-2 h-2 rounded-full bg-amber-500"></span>
+						<span class="text-text-secondary">Unsubscribed</span>
+						<span class="font-mono tabular-nums text-text-tertiary">{fmt(er.unsubscribed)}</span>
+					</span>
+				{/if}
+				{#if er.bounced > 0}
+					<span class="flex items-center gap-1.5">
+						<span class="w-2 h-2 rounded-full bg-red-500"></span>
+						<span class="text-text-secondary">Bounced</span>
+						<span class="font-mono tabular-nums text-text-tertiary">{fmt(er.bounced)}</span>
+					</span>
+				{/if}
+				{#if er.complained > 0}
+					<span class="flex items-center gap-1.5">
+						<span class="w-2 h-2 rounded-full bg-red-400"></span>
+						<span class="text-text-secondary">Complained</span>
+						<span class="font-mono tabular-nums text-text-tertiary">{fmt(er.complained)}</span>
+					</span>
+				{/if}
+			</div>
+		</div>
+	{/if}
 
 	<!-- ===== Onboarding Checklist (first-run) ===== -->
 	{#if !data.onboardingComplete}
@@ -174,6 +237,7 @@
 			onboarding={data.onboardingState}
 			orgDescription={data.org.description}
 			billingEmail={data.org.billing_email ?? null}
+			funnel={data.funnel}
 		/>
 	{/if}
 
@@ -183,84 +247,110 @@
 		label={data.stats.activeCampaigns > 0
 			? `Coordination Integrity \u00b7 ${data.stats.activeCampaigns} active campaign${data.stats.activeCampaigns === 1 ? '' : 's'}`
 			: 'Coordination Integrity'}
-	/>
-
-	<!-- ===== SECTION 2: Verification Funnel ===== -->
-	<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
-		<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary mb-4">Verification Funnel</p>
-
-		{#if funnel.imported === 0}
-			<div class="py-4 text-center">
-				<p class="text-sm text-text-quaternary">No supporters yet. Import supporters to see verification progress.</p>
-			</div>
-		{:else}
-			<div class="space-y-3">
-				{#each funnelSteps as step, i}
-					<div class="flex items-center gap-4">
-						<div class="w-32 flex items-center gap-2">
-							<span class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-mono {step.count > 0 ? 'bg-teal-500/20 text-teal-400' : 'bg-surface-overlay text-text-quaternary'}">
-								{i + 1}
-							</span>
-							<span class="text-xs text-text-tertiary truncate">{step.label}</span>
-						</div>
-						<div class="flex-1 h-6 rounded bg-surface-raised overflow-hidden relative">
-							<div
-								class="h-full rounded transition-all duration-700 ease-out {i === 0 ? 'bg-text-quaternary' : i === 1 ? 'bg-teal-500/40' : i === 2 ? 'bg-teal-500/60' : 'bg-emerald-500/70'}"
-								style="width: {Math.max(step.pct, 1)}%"
-							></div>
-							{#if step.count > 0}
-								<span class="absolute inset-0 flex items-center justify-end pr-2 text-[10px] font-mono tabular-nums text-text-tertiary">
-									{step.pct}%
-								</span>
-							{/if}
-						</div>
-						<span class="w-16 text-right font-mono tabular-nums text-sm text-text-secondary">
-							{fmt(step.count)}
-						</span>
-					</div>
-				{/each}
-			</div>
-		{/if}
-	</div>
-
-	<!-- ===== SECTION 3: Tier Distribution ===== -->
-	<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
-		<div class="flex items-center justify-between mb-4">
-			<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Engagement Tier Distribution</p>
-			{#if tierTotal > 0}
-				<span class="text-xs font-mono tabular-nums text-text-quaternary">{fmt(tierTotal)} actions</span>
+	>
+		{#snippet actions()}
+			{#if data.packet && data.topCampaignId}
+				<div class="flex gap-3 pt-2">
+					<a href="/org/{data.org.slug}/campaigns/{data.topCampaignId}/report"
+					   class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors">
+						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+						</svg>
+						Deliver Proof
+					</a>
+					<a href="/org/{data.org.slug}/campaigns/{data.topCampaignId}/report"
+					   class="inline-flex items-center gap-2 rounded-lg bg-surface-overlay px-4 py-2.5 text-sm font-medium text-text-secondary hover:bg-surface-raised transition-colors">
+						Preview Proof Packet
+					</a>
+				</div>
 			{/if}
-		</div>
+		{/snippet}
+	</VerificationPacket>
 
-		{#if tierTotal === 0}
-			<div class="py-4 text-center">
-				<p class="text-sm text-text-quaternary">No campaign actions yet. Tier distribution will appear as supporters take action.</p>
-			</div>
-		{:else}
-			<div class="space-y-2">
-				{#each [...data.tiers].reverse() as tier}
-					<div class="flex items-center gap-3">
-						<span class="w-24 text-[10px] font-mono text-text-tertiary text-right">
-							{tier.label}
-							<span class="text-text-quaternary">T{tier.tier}</span>
-						</span>
-						<div class="flex-1 h-5 rounded bg-surface-raised overflow-hidden">
-							<div
-								class="h-full rounded {tierColor(tier.tier)} transition-all duration-700 ease-out"
-								style="width: {tier.count > 0 ? Math.max((tier.count / tierMax) * 100, 2) : 0}%"
-							></div>
-						</div>
-						<span class="w-14 text-xs font-mono tabular-nums text-text-tertiary text-right">
-							{fmt(tier.count)}
-						</span>
-						<span class="w-10 text-[10px] font-mono tabular-nums text-text-quaternary text-right">
-							{Math.round((tier.count / tierTotal) * 100)}%
-						</span>
+	<!-- ===== SECTIONS 2+3: Verification Pipeline & Engagement Tiers (collapsed) ===== -->
+	<details class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)]">
+		<summary class="cursor-pointer px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
+			Verification pipeline &amp; engagement tiers
+		</summary>
+		<div class="px-6 pb-6 space-y-6">
+			<!-- Verification Funnel -->
+			<div>
+				<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary mb-4">Verification Funnel</p>
+
+				{#if funnel.imported === 0}
+					<div class="py-4 text-center">
+						<p class="text-sm text-text-quaternary">No supporters yet. Import supporters to see verification progress.</p>
 					</div>
-				{/each}
+				{:else}
+					<div class="space-y-3">
+						{#each funnelSteps as step, i}
+							<div class="flex items-center gap-4">
+								<div class="w-32 flex items-center gap-2">
+									<span class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-mono {step.count > 0 ? 'bg-teal-500/20 text-teal-400' : 'bg-surface-overlay text-text-quaternary'}">
+										{i + 1}
+									</span>
+									<span class="text-xs text-text-tertiary truncate">{step.label}</span>
+								</div>
+								<div class="flex-1 h-6 rounded bg-surface-raised overflow-hidden relative">
+									<div
+										class="h-full rounded transition-all duration-700 ease-out {i === 0 ? 'bg-text-quaternary' : i === 1 ? 'bg-teal-500/40' : i === 2 ? 'bg-teal-500/60' : 'bg-emerald-500/70'}"
+										style="width: {Math.max(step.pct, 1)}%"
+									></div>
+									{#if step.count > 0}
+										<span class="absolute inset-0 flex items-center justify-end pr-2 text-[10px] font-mono tabular-nums text-text-tertiary">
+											{step.pct}%
+										</span>
+									{/if}
+								</div>
+								<span class="w-16 text-right font-mono tabular-nums text-sm text-text-secondary">
+									{fmt(step.count)}
+								</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
 			</div>
-		{/if}
-	</div>
+
+			<!-- Tier Distribution -->
+			<div>
+				<div class="flex items-center justify-between mb-4">
+					<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Engagement Tier Distribution</p>
+					{#if tierTotal > 0}
+						<span class="text-xs font-mono tabular-nums text-text-quaternary">{fmt(tierTotal)} actions</span>
+					{/if}
+				</div>
+
+				{#if tierTotal === 0}
+					<div class="py-4 text-center">
+						<p class="text-sm text-text-quaternary">No campaign actions yet. Tier distribution will appear as supporters take action.</p>
+					</div>
+				{:else}
+					<div class="space-y-2">
+						{#each [...data.tiers].reverse() as tier}
+							<div class="flex items-center gap-3">
+								<span class="w-24 text-[10px] font-mono text-text-tertiary text-right">
+									{tier.label}
+									<span class="text-text-quaternary">T{tier.tier}</span>
+								</span>
+								<div class="flex-1 h-5 rounded bg-surface-raised overflow-hidden">
+									<div
+										class="h-full rounded {tierColor(tier.tier)} transition-all duration-700 ease-out"
+										style="width: {tier.count > 0 ? Math.max((tier.count / tierMax) * 100, 2) : 0}%"
+									></div>
+								</div>
+								<span class="w-14 text-xs font-mono tabular-nums text-text-tertiary text-right">
+									{fmt(tier.count)}
+								</span>
+								<span class="w-10 text-[10px] font-mono tabular-nums text-text-quaternary text-right">
+									{Math.round((tier.count / tierTotal) * 100)}%
+								</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		</div>
+	</details>
 
 	<!-- ===== SECTION 4: Campaign List ===== -->
 	<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
@@ -281,16 +371,22 @@
 					href="/org/{data.org.slug}/campaigns/new"
 					class="inline-block mt-2 text-xs text-teal-500 hover:text-teal-400 transition-colors"
 				>
-					Create your first campaign
+					Assemble your first proof
 				</a>
 			</div>
 		{:else}
 			<div class="space-y-2">
 				{#each data.campaigns as campaign (campaign.id)}
-					<a
-						href="/org/{data.org.slug}/campaigns/{campaign.id}"
-						class="flex items-center gap-3 rounded-lg border border-surface-border bg-surface-raised px-4 py-3 transition-colors hover:border-[var(--coord-route-solid)] group"
-					>
+					<a href="/org/{data.org.slug}/campaigns/{campaign.id}"
+					   class="flex items-center gap-4 rounded-lg border border-surface-border bg-surface-raised px-4 py-3 transition-colors hover:border-[var(--coord-route-solid)] group">
+						<!-- Verified count (hero element per card) -->
+						<div class="flex-shrink-0 text-right">
+							<p class="font-mono tabular-nums text-2xl font-bold text-emerald-400">
+								{fmt(campaign.verifiedActions)}
+							</p>
+							<p class="text-[10px] text-text-quaternary">verified</p>
+						</div>
+
 						<div class="min-w-0 flex-1">
 							<div class="flex items-center gap-2">
 								<p class="text-sm font-medium text-text-primary group-hover:text-teal-500 transition-colors truncate">
@@ -301,20 +397,17 @@
 								</span>
 							</div>
 							<p class="text-xs text-text-quaternary mt-0.5">
-								{campaign.type}
-								<span class="text-surface-border-strong mx-1">&middot;</span>
-								<span class="font-mono tabular-nums">{fmt(campaign.verifiedActions)}</span> verified / <span class="font-mono tabular-nums">{fmt(campaign.totalActions)}</span> total
+								<span class="font-mono tabular-nums">{fmt(campaign.totalActions)}</span> total actions
 								<span class="text-surface-border-strong mx-1">&middot;</span>
 								{relativeTime(campaign.updatedAt)}
 							</p>
 						</div>
+
 						{#if campaign.totalActions > 0}
 							{@const pct = Math.round((campaign.verifiedActions / campaign.totalActions) * 100)}
-							<div class="flex-shrink-0 w-12 h-12 relative">
-								<!-- Mini verified-rate ring -->
-								<svg viewBox="0 0 36 36" class="w-12 h-12 -rotate-90">
-									<circle cx="18" cy="18" r="15" fill="none" stroke-width="3"
-										class="stroke-surface-border" />
+							<div class="flex-shrink-0 w-10 h-10 relative">
+								<svg viewBox="0 0 36 36" class="w-10 h-10 -rotate-90">
+									<circle cx="18" cy="18" r="15" fill="none" stroke-width="3" class="stroke-surface-border" />
 									<circle cx="18" cy="18" r="15" fill="none" stroke-width="3"
 										stroke-dasharray="{pct * 0.942} {(100 - pct) * 0.942}"
 										class="stroke-teal-500/60" />
@@ -335,7 +428,7 @@
 		<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
 			<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary mb-4">Recent Activity</p>
 			<div class="space-y-1">
-				{#each data.recentActivity as item (item.id)}
+				{#each data.recentActivity.slice(0, 5) as item (item.id)}
 					<div class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-raised transition-colors">
 						<!-- I4: Type indicator with label -->
 						{#if item.type === 'action'}
@@ -388,80 +481,79 @@
 		</div>
 	{/if}
 
-	<!-- ===== Endorsed Templates ===== -->
-	<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
-		<div class="flex items-center justify-between mb-4">
-			<p class="text-sm font-medium text-text-secondary">
-				Endorsed Templates
-				{#if endorsedList.length > 0}
-					<span class="text-text-quaternary ml-1">&middot; {endorsedList.length}</span>
-				{/if}
-			</p>
-		</div>
-
-		{#if endorsedList.length > 0}
-			<div class="space-y-2 mb-4">
-				{#each endorsedList as item (item.templateId)}
-					<div class="group flex items-center gap-3 rounded-lg border border-surface-border bg-surface-raised px-4 py-3 transition-colors hover:border-[var(--coord-route-solid)]">
-						<div class="w-0.5 h-8 rounded-full bg-teal-500/60 flex-shrink-0"></div>
-						<div class="min-w-0 flex-1">
-							<a href="/s/{item.slug}" class="text-sm font-medium text-text-primary hover:text-teal-500 transition-colors line-clamp-1">
-								{item.title}
-							</a>
-							<p class="text-xs text-text-quaternary mt-0.5">
-								<span class="font-mono tabular-nums">{fmt(item.sends)}</span> sends &middot; <span class="font-mono tabular-nums">{fmt(item.districts)}</span> districts
-							</p>
-						</div>
-						<button
-							class="text-xs text-text-quaternary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
-							onclick={() => removeEndorsement(item.templateId)}
-						>
-							Remove
-						</button>
-					</div>
-				{/each}
-			</div>
-		{:else}
-			<p class="text-xs text-text-quaternary mb-4">No endorsed templates yet. Endorse public templates to signal coalition support.</p>
-		{/if}
-
-		<!-- Search to endorse -->
-		<div class="relative">
-			<input
-				type="text"
-				class="participation-input text-sm"
-				placeholder="Search templates to endorse..."
-				value={searchQuery}
-				oninput={handleSearchInput}
-			/>
-			{#if searchResults.length > 0}
-				<div class="absolute left-0 right-0 top-full mt-1 rounded-lg border border-surface-border bg-surface-base shadow-[var(--shadow-lg)] z-10 overflow-hidden">
-					{#each searchResults as t (t.id)}
-						<button
-							class="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-surface-raised transition-colors border-b border-surface-border last:border-0"
-							onclick={() => endorseTemplate(t.id)}
-						>
+	<!-- ===== Endorsed Templates (collapsed) ===== -->
+	<details class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)]">
+		<summary class="cursor-pointer px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
+			Endorsed templates
+			{#if endorsedList.length > 0}
+				<span class="text-text-quaternary ml-1">&middot; {endorsedList.length}</span>
+			{/if}
+		</summary>
+		<div class="px-6 pb-6">
+			{#if endorsedList.length > 0}
+				<div class="space-y-2 mb-4">
+					{#each endorsedList as item (item.templateId)}
+						<div class="group flex items-center gap-3 rounded-lg border border-surface-border bg-surface-raised px-4 py-3 transition-colors hover:border-[var(--coord-route-solid)]">
+							<div class="w-0.5 h-8 rounded-full bg-teal-500/60 flex-shrink-0"></div>
 							<div class="min-w-0 flex-1">
-								<p class="text-sm text-text-primary line-clamp-1">{t.title}</p>
+								<a href="/s/{item.slug}" class="text-sm font-medium text-text-primary hover:text-teal-500 transition-colors line-clamp-1">
+									{item.title}
+								</a>
 								<p class="text-xs text-text-quaternary mt-0.5">
-									<span class="font-mono tabular-nums">{fmt(t.verified_sends)}</span> sends
-									{#if t.similarity != null}
-										<span class="text-surface-border-strong mx-1">&middot;</span>
-										<span class="text-teal-600">{Math.round(t.similarity * 100)}% match</span>
-									{/if}
+									<span class="font-mono tabular-nums">{fmt(item.sends)}</span> sends &middot; <span class="font-mono tabular-nums">{fmt(item.districts)}</span> districts
 								</p>
 							</div>
-							<span class="text-xs font-medium text-teal-500 flex-shrink-0">Endorse</span>
-						</button>
+							<button
+								class="text-xs text-text-quaternary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
+								onclick={() => removeEndorsement(item.templateId)}
+							>
+								Remove
+							</button>
+						</div>
 					{/each}
 				</div>
+			{:else}
+				<p class="text-xs text-text-quaternary mb-4">No endorsed templates yet. Endorse public templates to signal coalition support.</p>
 			{/if}
-			{#if searching}
-				<div class="absolute right-3 top-1/2 -translate-y-1/2">
-					<div class="w-3 h-3 border border-text-quaternary border-t-teal-500 rounded-full animate-spin"></div>
-				</div>
-			{/if}
+
+			<!-- Search to endorse -->
+			<div class="relative">
+				<input
+					type="text"
+					class="participation-input text-sm"
+					placeholder="Search templates to endorse..."
+					value={searchQuery}
+					oninput={handleSearchInput}
+				/>
+				{#if searchResults.length > 0}
+					<div class="absolute left-0 right-0 top-full mt-1 rounded-lg border border-surface-border bg-surface-base shadow-[var(--shadow-lg)] z-10 overflow-hidden">
+						{#each searchResults as t (t.id)}
+							<button
+								class="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-surface-raised transition-colors border-b border-surface-border last:border-0"
+								onclick={() => endorseTemplate(t.id)}
+							>
+								<div class="min-w-0 flex-1">
+									<p class="text-sm text-text-primary line-clamp-1">{t.title}</p>
+									<p class="text-xs text-text-quaternary mt-0.5">
+										<span class="font-mono tabular-nums">{fmt(t.verified_sends)}</span> sends
+										{#if t.similarity != null}
+											<span class="text-surface-border-strong mx-1">&middot;</span>
+											<span class="text-teal-600">{Math.round(t.similarity * 100)}% match</span>
+										{/if}
+									</p>
+								</div>
+								<span class="text-xs font-medium text-teal-500 flex-shrink-0">Endorse</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
+				{#if searching}
+					<div class="absolute right-3 top-1/2 -translate-y-1/2">
+						<div class="w-3 h-3 border border-text-quaternary border-t-teal-500 rounded-full animate-spin"></div>
+					</div>
+				{/if}
+			</div>
 		</div>
-	</div>
+	</details>
 
 </div>

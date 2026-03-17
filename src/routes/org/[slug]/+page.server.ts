@@ -43,7 +43,14 @@ export const load: PageServerLoad = async ({ parent }) => {
 		sentEmailCount,
 
 		// I2: Verified action counts per campaign
-		verifiedActionGroups
+		verifiedActionGroups,
+
+		// Growth: verified actions this week vs last week
+		verifiedThisWeek,
+		verifiedLastWeek,
+
+		// Email status breakdown for effective reach
+		emailStatusGroups
 	] = await Promise.all([
 		// Total supporters
 		db.supporter.count({ where: { orgId: org.id } }),
@@ -161,6 +168,34 @@ export const load: PageServerLoad = async ({ parent }) => {
 				verified: true
 			},
 			_count: { id: true }
+		}),
+
+		// Growth: verified actions this week
+		db.campaignAction.count({
+			where: {
+				campaign: { orgId: org.id },
+				verified: true,
+				createdAt: { gte: new Date(Date.now() - 7 * 86400000) }
+			}
+		}),
+
+		// Growth: verified actions last week
+		db.campaignAction.count({
+			where: {
+				campaign: { orgId: org.id },
+				verified: true,
+				createdAt: {
+					gte: new Date(Date.now() - 14 * 86400000),
+					lt: new Date(Date.now() - 7 * 86400000)
+				}
+			}
+		}),
+
+		// Email status breakdown for effective reach
+		db.supporter.groupBy({
+			by: ['emailStatus'],
+			where: { orgId: org.id },
+			_count: { id: true }
 		})
 	]);
 
@@ -186,10 +221,13 @@ export const load: PageServerLoad = async ({ parent }) => {
 		hasSupporters: totalSupporters > 0,
 		hasCampaigns: campaigns.length > 0,
 		hasTeam: teamCount > 1,
-		hasSentEmail: sentEmailCount > 0
+		hasSentEmail: sentEmailCount > 0,
+		postalResolvedCount,
+		totalSupporters,
+		topCampaignId: (campaigns.find(c => c.status === 'ACTIVE') || campaigns[0])?.id ?? null
 	};
 
-	const onboardingComplete = onboardingState.hasSupporters && onboardingState.hasCampaigns;
+	const onboardingComplete = onboardingState.hasSupporters && onboardingState.hasCampaigns && onboardingState.hasSentEmail;
 
 	return {
 		// Verification funnel
@@ -214,12 +252,24 @@ export const load: PageServerLoad = async ({ parent }) => {
 			updatedAt: c.updatedAt.toISOString()
 		})),
 
+		// Top campaign (first active, or first overall)
+		topCampaignId: (campaigns.find(c => c.status === 'ACTIVE') || campaigns[0])?.id ?? null,
+
 		// Stats
 		stats: {
 			supporters: totalSupporters,
 			campaigns: campaigns.length,
 			templates: templateCount,
 			activeCampaigns: activeCampaignCount
+		},
+
+		// Effective reach: email status breakdown
+		emailReach: {
+			subscribed: emailStatusGroups.find(g => g.emailStatus === 'subscribed')?._count?.id ?? 0,
+			unsubscribed: emailStatusGroups.find(g => g.emailStatus === 'unsubscribed')?._count?.id ?? 0,
+			bounced: emailStatusGroups.find(g => g.emailStatus === 'bounced')?._count?.id ?? 0,
+			complained: emailStatusGroups.find(g => g.emailStatus === 'complained')?._count?.id ?? 0,
+			total: totalSupporters
 		},
 
 		// Packet
@@ -258,6 +308,12 @@ export const load: PageServerLoad = async ({ parent }) => {
 			districts: e.template.unique_districts,
 			endorsedAt: e.endorsedAt.toISOString()
 		})),
+
+		// Verification growth rate
+		growth: {
+			thisWeek: verifiedThisWeek,
+			lastWeek: verifiedLastWeek
+		},
 
 		// Onboarding
 		onboardingState,
