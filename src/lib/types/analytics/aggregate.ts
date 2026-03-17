@@ -86,7 +86,7 @@ export interface AggregateResult {
  */
 export interface PrivacyMetadata {
 	epsilon: number;
-	differential_privacy: true;
+	differential_privacy: boolean;
 	ldp_corrected: boolean;
 	coarsening_applied: boolean;
 	coarsen_threshold: number;

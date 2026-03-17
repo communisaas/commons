@@ -24,14 +24,14 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { materializeNoisySnapshot, getRemainingBudget } from '$lib/core/analytics/snapshot';
 import { PrivacyBudgetExhaustedError } from '$lib/core/analytics/budget';
-import { getDaysAgoUTC } from '$lib/core/analytics/aggregate';
+import { getDaysAgoUTC, isDPEnabled } from '$lib/core/analytics/aggregate';
 import { cleanupOldRateLimits, isDBRateLimitEnabled } from '$lib/core/analytics/rate-limit-db';
 
 /**
  * GET /api/cron/analytics-snapshot
  *
  * Daily maintenance tasks:
- * 1. Materialize noisy snapshots for yesterday's data
+ * 1. Materialize noisy snapshots for yesterday's data (only when DP enabled)
  * 2. Clean up rate limit entries older than 2 days
  */
 export const GET: RequestHandler = async ({ request }) => {
@@ -44,12 +44,20 @@ export const GET: RequestHandler = async ({ request }) => {
 	}
 
 	try {
-		// Task 1: Materialize yesterday's data (run at 00:05 UTC to ensure previous day is complete)
+		let snapshotsCreated = 0;
+		let epsilonSpent = 0;
+		let budgetRemaining = 0;
 		const yesterday = getDaysAgoUTC(1);
-		const result = await materializeNoisySnapshot(yesterday);
-		const budgetRemaining = await getRemainingBudget(yesterday);
 
-		// Task 2: Clean up old rate limit entries (only if DB rate limiting is enabled)
+		// Task 1: Materialize snapshots only when DP is enabled
+		if (isDPEnabled()) {
+			const result = await materializeNoisySnapshot(yesterday);
+			snapshotsCreated = result.created;
+			epsilonSpent = result.epsilonSpent;
+			budgetRemaining = await getRemainingBudget(yesterday);
+		}
+
+		// Task 2: Clean up old rate limit entries (always — anti-abuse)
 		let rateLimitsDeleted = 0;
 		if (isDBRateLimitEnabled()) {
 			rateLimitsDeleted = await cleanupOldRateLimits(2);
@@ -57,9 +65,10 @@ export const GET: RequestHandler = async ({ request }) => {
 
 		return json({
 			success: true,
+			dp_enabled: isDPEnabled(),
 			date: yesterday.toISOString().split('T')[0],
-			snapshots_created: result.created,
-			epsilon_spent: result.epsilonSpent,
+			snapshots_created: snapshotsCreated,
+			epsilon_spent: epsilonSpent,
 			budget_remaining: budgetRemaining,
 			rate_limits_deleted: rateLimitsDeleted,
 			rate_limit_db_enabled: isDBRateLimitEnabled()

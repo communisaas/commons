@@ -26,6 +26,23 @@ import {
 import { correctKaryRR } from './noise';
 
 // =============================================================================
+// DP FEATURE GATE
+// =============================================================================
+
+/**
+ * Check if differential privacy is enabled
+ *
+ * When false (default): queries return raw aggregates, processBatch skips LDP correction.
+ * When true: full two-layer DP — LDP correction on ingest, noisy snapshots on read.
+ *
+ * Flip to true when DAU > ~100 (noise becomes statistically meaningful).
+ * Set via environment variable: ANALYTICS_DP_ENABLED=true
+ */
+export function isDPEnabled(): boolean {
+	return process.env.ANALYTICS_DP_ENABLED === 'true';
+}
+
+// =============================================================================
 // RATE LIMITING
 // =============================================================================
 
@@ -268,16 +285,9 @@ export async function processBatch(
 		return { processed: 0 };
 	}
 
-	// Step 1: Count observed metrics for LDP correction
-	const observedCounts = new Map<Metric, number>();
-	for (const inc of increments) {
-		observedCounts.set(inc.metric, (observedCounts.get(inc.metric) ?? 0) + 1);
-	}
-
-	// Step 2: Apply LDP correction
-	const corrected = correctKaryRR(observedCounts, increments.length);
-
-	// Step 3: Aggregate in memory by bucket key
+	// Step 1: Aggregate in memory by bucket key
+	// When DP is enabled, apply LDP correction to debias randomized response from clients.
+	// When DP is disabled, clients send true metrics — count each increment as 1.
 	const buckets = new Map<
 		string,
 		{
@@ -287,23 +297,39 @@ export async function processBatch(
 		}
 	>();
 
-	for (const inc of increments) {
-		const dims = inc.dimensions ?? {};
-		const correctedCount = corrected.get(inc.metric) ?? 0;
+	if (isDPEnabled()) {
+		// LDP correction path: debias k-ary Randomized Response
+		const observedCounts = new Map<Metric, number>();
+		for (const inc of increments) {
+			observedCounts.set(inc.metric, (observedCounts.get(inc.metric) ?? 0) + 1);
+		}
 
-		if (correctedCount <= 0) continue;
+		const corrected = correctKaryRR(observedCounts, increments.length);
 
-		const key = makeBucketKey(inc.metric, dims);
-		const existing = buckets.get(key);
+		for (const inc of increments) {
+			const dims = inc.dimensions ?? {};
+			const correctedCount = corrected.get(inc.metric) ?? 0;
+			if (correctedCount <= 0) continue;
 
-		if (existing) {
-			existing.count += correctedCount;
-		} else {
-			buckets.set(key, {
-				metric: inc.metric,
-				dimensions: dims,
-				count: correctedCount
-			});
+			const key = makeBucketKey(inc.metric, dims);
+			const existing = buckets.get(key);
+			if (existing) {
+				existing.count += correctedCount;
+			} else {
+				buckets.set(key, { metric: inc.metric, dimensions: dims, count: correctedCount });
+			}
+		}
+	} else {
+		// Raw path: no LDP on client, count each increment as 1
+		for (const inc of increments) {
+			const dims = inc.dimensions ?? {};
+			const key = makeBucketKey(inc.metric, dims);
+			const existing = buckets.get(key);
+			if (existing) {
+				existing.count += 1;
+			} else {
+				buckets.set(key, { metric: inc.metric, dimensions: dims, count: 1 });
+			}
 		}
 	}
 
@@ -360,42 +386,97 @@ function makeBucketKey(metric: Metric, dims: Dimensions): string {
 // =============================================================================
 
 /**
- * Query aggregates with differential privacy via snapshot system
+ * Query aggregates
  *
- * Always routes through queryNoisySnapshots() for ε = 1.0 differential privacy.
+ * When DP is enabled: routes through queryNoisySnapshots() for ε = 1.0 differential privacy.
+ * When DP is disabled: queries raw aggregates directly (accurate counts for low-traffic analysis).
  */
 export async function queryAggregates(params: AggregateQuery): Promise<AggregateQueryResponse> {
 	const { metric, start, end, groupBy, filters } = params;
 
-	// Import snapshot query function (avoid circular dependency)
-	const { queryNoisySnapshots } = await import('./snapshot');
+	if (isDPEnabled()) {
+		// Import snapshot query function (avoid circular dependency)
+		const { queryNoisySnapshots } = await import('./snapshot');
 
-	// Query noisy snapshots instead of raw aggregates
-	const snapshotResults = await queryNoisySnapshots({
+		const snapshotResults = await queryNoisySnapshots({
+			metric,
+			start,
+			end,
+			groupBy,
+			filters
+		});
+
+		return {
+			success: true,
+			metric,
+			date_range: {
+				start: start.toISOString(),
+				end: end.toISOString()
+			},
+			results: snapshotResults.map((r) => ({
+				dimensions: r.dimensions,
+				count: r.count,
+				coarsened: false
+			})),
+			privacy: {
+				epsilon: PRIVACY.SERVER_EPSILON,
+				differential_privacy: true,
+				ldp_corrected: true,
+				coarsening_applied: false,
+				coarsen_threshold: PRIVACY.COARSEN_THRESHOLD
+			}
+		};
+	}
+
+	// DP disabled: query raw aggregates directly
+	const where: Record<string, unknown> = {
 		metric,
-		start,
-		end,
-		groupBy,
-		filters
-	});
+		date: { gte: start, lte: end }
+	};
+	if (filters?.template_id) where.template_id = filters.template_id;
+	if (filters?.jurisdiction) where.jurisdiction = filters.jurisdiction;
+	if (filters?.delivery_method) where.delivery_method = filters.delivery_method;
 
-	// Convert snapshot results to AggregateQueryResponse format
+	const aggregates = await db.analytics_aggregate.findMany({ where });
+
+	// Group if requested
+	if (!groupBy || groupBy.length === 0) {
+		const total = aggregates.reduce((sum, a) => sum + a.count, 0);
+		return {
+			success: true,
+			metric,
+			date_range: { start: start.toISOString(), end: end.toISOString() },
+			results: [{ dimensions: {}, count: total, coarsened: false }],
+			privacy: {
+				epsilon: 0,
+				differential_privacy: false,
+				ldp_corrected: false,
+				coarsening_applied: false,
+				coarsen_threshold: PRIVACY.COARSEN_THRESHOLD
+			}
+		};
+	}
+
+	const key = groupBy[0] as keyof (typeof aggregates)[0];
+	const groups = new Map<string | null, number>();
+	for (const a of aggregates) {
+		const value = a[key] as string | null;
+		groups.set(value, (groups.get(value) ?? 0) + a.count);
+	}
+
 	return {
 		success: true,
 		metric,
-		date_range: {
-			start: start.toISOString(),
-			end: end.toISOString()
-		},
-		results: snapshotResults.map((r) => ({
-			dimensions: r.dimensions,
-			count: r.count,
+		date_range: { start: start.toISOString(), end: end.toISOString() },
+		results: Array.from(groups.entries()).map(([value, count]) => ({
+			dimensions: { [key]: value },
+			count,
 			coarsened: false
 		})),
 		privacy: {
-			epsilon: PRIVACY.SERVER_EPSILON,
-			differential_privacy: true,
-			ldp_corrected: true,
+			epsilon: 0,
+			differential_privacy: false,
+			ldp_corrected: false,
 			coarsening_applied: false,
 			coarsen_threshold: PRIVACY.COARSEN_THRESHOLD
 		}
@@ -407,73 +488,59 @@ export async function queryAggregates(params: AggregateQuery): Promise<Aggregate
 // =============================================================================
 
 /**
- * Get platform health metrics via snapshot system
+ * Get platform health metrics
  *
- * Uses pre-noised snapshots for ε = 1.0 differential privacy per metric.
+ * When DP enabled: uses pre-noised snapshots for ε = 1.0 differential privacy per metric.
+ * When DP disabled: queries raw aggregates for accurate counts.
  */
 export async function getHealthMetrics() {
 	const now = getTodayUTC();
 	const thirtyDaysAgo = getDaysAgoUTC(30);
 	const sevenDaysAgo = getDaysAgoUTC(7);
 
-	// Import snapshot query function
-	const { queryNoisySnapshots } = await import('./snapshot');
+	const dpEnabled = isDPEnabled();
 
-	// Query noisy snapshots for all metrics in parallel
-	const [views30d, uses30d, attempted7d, succeeded7d, failed7d] = await Promise.all([
-		queryNoisySnapshots({
-			metric: 'template_view',
-			start: thirtyDaysAgo,
-			end: now
-		}),
-		queryNoisySnapshots({
-			metric: 'template_use',
-			start: thirtyDaysAgo,
-			end: now
-		}),
-		queryNoisySnapshots({
-			metric: 'delivery_attempt',
-			start: sevenDaysAgo,
-			end: now
-		}),
-		queryNoisySnapshots({
-			metric: 'delivery_success',
-			start: sevenDaysAgo,
-			end: now
-		}),
-		queryNoisySnapshots({
-			metric: 'delivery_fail',
-			start: sevenDaysAgo,
-			end: now
-		})
+	// Query function — snapshots when DP enabled, raw aggregates when disabled
+	const query = async (metric: string, start: Date, end: Date): Promise<number> => {
+		if (dpEnabled) {
+			const { queryNoisySnapshots } = await import('./snapshot');
+			const results = await queryNoisySnapshots({ metric, start, end });
+			return results[0]?.count ?? 0;
+		}
+
+		const aggregates = await db.analytics_aggregate.findMany({
+			where: { metric, date: { gte: start, lte: end } }
+		});
+		return aggregates.reduce((sum, a) => sum + a.count, 0);
+	};
+
+	const [views, uses, attempted, succeeded, failed] = await Promise.all([
+		query('template_view', thirtyDaysAgo, now),
+		query('template_use', thirtyDaysAgo, now),
+		query('delivery_attempt', sevenDaysAgo, now),
+		query('delivery_success', sevenDaysAgo, now),
+		query('delivery_fail', sevenDaysAgo, now)
 	]);
-
-	// Extract counts (already noisy from snapshots)
-	const viewsNoisy = views30d[0]?.count ?? 0;
-	const usesNoisy = uses30d[0]?.count ?? 0;
-	const attemptedNoisy = attempted7d[0]?.count ?? 0;
-	const succeededNoisy = succeeded7d[0]?.count ?? 0;
-	const failedNoisy = failed7d[0]?.count ?? 0;
 
 	return {
 		success: true,
 		metrics: {
 			template_adoption: {
-				views_30d: viewsNoisy,
-				uses_30d: usesNoisy,
-				conversion_rate: viewsNoisy > 0 ? usesNoisy / viewsNoisy : 0
+				views_30d: views,
+				uses_30d: uses,
+				conversion_rate: views > 0 ? uses / views : 0
 			},
 			delivery_health: {
-				attempted_7d: attemptedNoisy,
-				succeeded_7d: succeededNoisy,
-				failed_7d: failedNoisy,
-				success_rate: attemptedNoisy > 0 ? succeededNoisy / attemptedNoisy : 0
+				attempted_7d: attempted,
+				succeeded_7d: succeeded,
+				failed_7d: failed,
+				success_rate: attempted > 0 ? succeeded / attempted : 0
 			}
 		},
 		privacy: {
-			epsilon: PRIVACY.SERVER_EPSILON * 5, // 5 metrics queried
-			differential_privacy: true as const,
-			ldp_corrected: true,
+			epsilon: dpEnabled ? PRIVACY.SERVER_EPSILON * 5 : 0,
+			differential_privacy: dpEnabled,
+			ldp_corrected: dpEnabled,
 			coarsening_applied: false,
 			coarsen_threshold: PRIVACY.COARSEN_THRESHOLD
 		},

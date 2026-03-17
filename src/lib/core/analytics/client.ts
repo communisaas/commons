@@ -121,16 +121,11 @@ class AnalyticsClient {
 
 	constructor() {
 		// LDP state is IMMUTABLE after construction
-		// Only disable via build-time environment variable
-		// In production builds, VITE_ANALYTICS_LDP_ENABLED is always 'true' or undefined
-		this.ldpEnabled = import.meta.env.VITE_ANALYTICS_LDP_ENABLED !== 'false';
+		// LDP is OFF by default — enable via VITE_ANALYTICS_DP_ENABLED=true when DAU > ~100
+		this.ldpEnabled = import.meta.env.VITE_ANALYTICS_DP_ENABLED === 'true';
 
 		// Initialize contribution tracker
 		this.contributionTracker = new ContributionTracker();
-
-		if (!this.ldpEnabled && import.meta.env.PROD) {
-			console.error('[Analytics] CRITICAL: LDP disabled in production build!');
-		}
 
 		if (browser) {
 			// Flush on page visibility change
