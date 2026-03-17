@@ -21,7 +21,7 @@ We've implemented a flexible, agent-interpreted domain credibility system that w
 - **Integration**: Congressional delivery pipeline tracking
 
 ### voter-protocol (agent logic):
-- **ReputationAgent**: Multi-model credential verification (Gemini 2.5 Flash primary)
+- **ReputationAgent**: Multi-model credential verification (Gemini 3 Flash primary)
 - **State API integrations**: Nursing boards, IAAP, APICS, ISA, GPA verifications
 - **Deterministic scoring**: Credibility multiplier calculation (2.0x → 1.0x)
 - **Agent consensus**: Cross-model validation for disputed credentials
@@ -76,7 +76,7 @@ model UserExpertise {
 
 **Verification Flow**:
 
-1. **Agent Parsing** (Gemini 2.5 Flash - voter-protocol):
+1. **Agent Parsing** (Gemini 3 Flash - voter-protocol):
    - Reads free-text `credentials_claim`
    - Extracts license numbers, certification codes, org names
    - Routes to appropriate verification strategy
@@ -475,7 +475,7 @@ Allows decision-makers to set thresholds:
 ## References
 
 - **McDonald 2018 Research**: Congressional staffers value concrete behaviors (professional credentials, bill tracking, niche expertise) - NOT abstract quality scores
-- **VOTER Protocol ReputationAgent Spec**: `/Users/noot/Documents/voter-protocol/specs/REPUTATION-AGENT-SPEC.md` (Gemini 2.5 Flash implementation)
+- **VOTER Protocol ReputationAgent Spec**: `/Users/noot/Documents/voter-protocol/specs/REPUTATION-AGENT-SPEC.md` (Gemini 3 Flash implementation)
 - **VOTER Protocol Reputation Registry**: `/Users/noot/Documents/voter-protocol/specs/REPUTATION-REGISTRY-SPEC.md` (Phase 2 on-chain attestations)
 - **Architecture**: `docs/architecture.md`
 - **Phase 1 Implementation**: See `docs/strategy/product-roadmap.md` (Phase 1 scope)
@@ -501,9 +501,9 @@ Allows decision-makers to set thresholds:
 
 **Implementation Status**: ⏳ Architecture refactored - verification logic moved to voter-protocol
 **Next Steps**:
-1. Deploy voter-protocol ReputationAgent API (Cloudflare Workers with Gemini 2.5 Flash)
+1. Deploy voter-protocol ReputationAgent API (Cloudflare Workers with Gemini 3 Flash)
 2. Update Commons `/api/expertise/verify` to call voter-protocol API
 3. Remove local credential-verifier.ts (agent logic belongs in voter-protocol)
 4. Build UI components + congressional staffer filtering interface
 
-**Cost Savings**: $682.50/month (Gemini 2.5 Flash FREE tier vs OpenAI GPT-4o $700/month)
+**Cost Savings**: $682.50/month (Gemini 3 Flash FREE tier vs OpenAI GPT-4o $700/month)

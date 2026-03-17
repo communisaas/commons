@@ -20,7 +20,7 @@ Backend cryptographic infrastructure. Noir/UltraHonk zero-knowledge proofs, AWS 
 - **voter-protocol** (sibling repo): Cryptography, TEE deployment, blockchain, ZK proofs, ReputationAgent
 
 **Cost Savings (2025-11-09 refactor):**
-- Credential verification: $682.50/month savings (Gemini 2.5 Flash FREE vs OpenAI GPT-4o)
+- Credential verification: $682.50/month savings (Gemini 3 Flash FREE vs OpenAI GPT-4o)
 - Encrypted storage (Phase 2): 99.97% reduction ($500/month Postgres → $10 IPFS)
 
 ---
@@ -69,7 +69,7 @@ Backend cryptographic infrastructure. Noir/UltraHonk zero-knowledge proofs, AWS 
 - ✅ **Solidity Verifier** - On-chain UltraHonk proof verification (~2.2M gas on Scroll L2)
 - ✅ **AWS Nitro Enclaves** - TEE deployment, encrypted witness decryption
 - ✅ **CWC API Integration** - Congressional message delivery (inside TEE)
-- ✅ **ReputationAgent** - Gemini 2.5 Flash credential verification
+- ✅ **ReputationAgent** - Gemini 3 Flash credential verification
 - ✅ **ERC-8004 Reputation** - On-chain reputation tracking with time decay
 - ✅ **Smart Contracts** - DistrictGate, VerifierRegistry, UserRootRegistry, CellMapRegistry, NullifierRegistry, DistrictRegistry, CampaignRegistry
 - ✅ **Shadow Atlas** - Merkle tree generation, IPFS pinning
@@ -285,7 +285,7 @@ CONTEXT:
 **After (CORRECT architecture):**
 | Component | Model | Cost |
 |-----------|-------|------|
-| Credential Verification | Gemini 2.5 Flash (voter-protocol) | FREE tier (1M tokens/day) |
+| Credential Verification | Gemini 3 Flash (voter-protocol) | FREE tier (1M tokens/day) |
 | Estimated Usage | 50K verifications/month | ~100M tokens (within FREE tier) |
 | **Monthly Cost** | - | **$0** |
 
@@ -294,7 +294,7 @@ CONTEXT:
 **What Changed:**
 - ❌ Removed 519 lines of OpenAI verification code from Commons
 - ✅ Commons now proxies to voter-protocol ReputationAgent API
-- ✅ voter-protocol uses Gemini 2.5 Flash (FREE tier)
+- ✅ voter-protocol uses Gemini 3 Flash (FREE tier)
 - ✅ Proper separation: verification logic in voter-protocol, storage in Commons
 
 ---
@@ -375,7 +375,7 @@ TOTAL COST:
 ┌─────────────────────────────────────────────────────────────────┐
 │ VOTER-PROTOCOL BACKEND (Cloudflare Workers)                      │
 ├─────────────────────────────────────────────────────────────────┤
-│ • ReputationAgent API (Gemini 2.5 Flash credential verification) │
+│ • ReputationAgent API (Gemini 3 Flash credential verification) │
 │ • Geocoding Service (Census Bureau + Geocodio)                   │
 │ • District Resolver (city council + congressional lookup)        │
 │ • Shadow Atlas API (Merkle tree registration)                    │
@@ -545,7 +545,7 @@ GOOGLE_CLIENT_SECRET=<google-oauth-secret>
 ### voter-protocol (Backend) Deployment
 
 **Components to Deploy:**
-1. **ReputationAgent** (Cloudflare Workers with Gemini 2.5 Flash)
+1. **ReputationAgent** (Cloudflare Workers with Gemini 3 Flash)
    - Deploy to `https://reputation.voter.workers.dev`
    - Set `GEMINI_API_KEY` in Cloudflare secrets
    - Implement `/reputation/verify` endpoint

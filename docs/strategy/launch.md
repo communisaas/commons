@@ -88,7 +88,7 @@ Their followers see it → cycle repeats
 
 **Already built**:
 - Layer 1: OpenAI GPT-4
-- Layer 2: Google Gemini 2.5 Flash OR Anthropic Claude 3.5 Haiku
+- Layer 2: Google Gemini 3 Flash OR Anthropic Claude 3.5 Haiku
 - Layer 3: Human review (if consensus < 67%)
 
 **What it prevents**:

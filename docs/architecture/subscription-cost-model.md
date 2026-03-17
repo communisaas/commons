@@ -75,43 +75,60 @@ Source: [Groq rate limits](https://console.groq.com/docs/rate-limits)
 
 This is the action users perform most. **It is NOT a single Gemini call.** The `generateMessage()` pipeline in `message-writer.ts` runs a two-phase process:
 
-**Phase 1 — Source Discovery** (`source-discovery.ts` line 216):
-- Google Search grounding enabled (`enableGrounding: true`)
-- `thinkingLevel: 'medium'` (4,096 thinking tokens)
-- System prompt: ~1,200 chars = ~300 input tokens
-- User prompt (subject + message + topics + location): ~800 chars = ~200 input tokens
-- Grounding adds search result context: ~2,000 input tokens
-- Output: ~250 tokens (JSON with 3-8 sources)
+**Phase 1a — Source Search** (Exa stratified search, `source-discovery.ts`):
+- 3 parallel Exa searches (gov, news, general) with domain filtering
+- Deterministic retrieval — no LLM cost
+
+| Component | Quantity | Rate | Cost |
+|---|---|---|---|
+| Exa search queries | 3 | $0.007/query | $0.021 |
+| **Phase 1a subtotal** | | | **$0.021** |
+
+**Phase 1b — Content Fetch** (Firecrawl, `source-discovery.ts`):
+- Top 6 candidate URLs fetched for full content + provenance signals
+- Deterministic — no LLM cost
+
+| Component | Quantity | Rate | Cost |
+|---|---|---|---|
+| Firecrawl page reads | 6 | ~$0.0008/read (Standard) | $0.005 |
+| **Phase 1b subtotal** | | | **$0.005** |
+
+**Phase 1c — Source Evaluation** (Gemini structured JSON, `source-evaluator.ts`):
+- Incentive-aware evaluation of 6 candidates
+- `temperature: 0.3`, structured `responseSchema`, no grounding
+- Input: system prompt + 6 source excerpts with provenance (~4,000 tokens)
+- Output: structured JSON evaluation (~400 tokens)
 
 | Component | Tokens | Rate | Cost |
 |---|---|---|---|
-| Input (prompt + grounding context) | ~2,500 | $0.50/1M | $0.00125 |
-| Thinking tokens | 4,096 | $3.00/1M | $0.01229 |
-| Output tokens | ~250 | $3.00/1M | $0.00075 |
-| Google Search grounding | 1 query | $14/1K | $0.014 |
-| **Phase 1 subtotal** | | | **$0.028** |
+| Input (prompt + sources) | ~4,000 | $0.50/1M | $0.00200 |
+| Output tokens | ~400 | $3.00/1M | $0.00120 |
+| **Phase 1c subtotal** | | | **$0.003** |
 
-**Phase 1.5 — URL Validation** (`url-validator.ts`):
-- HEAD requests to each discovered URL (3-8 URLs)
-- Free (just HTTP requests from Workers)
+**Phase 1 total (first message on a template): ~$0.029**
 
-**Phase 2 — Message Generation** (`message-writer.ts` line 249):
+**Template source caching**: Evaluated sources are cached per-template (72h TTL). Subsequent messages on the same template skip Phase 1 entirely — cost: $0.
+
+**Phase 2 — Message Generation** (`message-writer.ts`):
 - Grounding disabled (`enableGrounding: false`)
 - `thinkingLevel: 'high'` (8,192 thinking tokens)
 - System prompt (MESSAGE_WRITER_PROMPT): ~3,300 chars = ~825 input tokens
-- User prompt (subject + DMs + verified sources): ~1,300 chars = ~325 input tokens
+- User prompt (subject + DMs + evaluated sources with incentive context): ~1,500 chars = ~375 input tokens
 - Output: ~500 tokens (message body + metadata JSON)
 
 | Component | Tokens | Rate | Cost |
 |---|---|---|---|
-| Input (system + user prompt) | ~1,150 | $0.50/1M | $0.00058 |
+| Input (system + user prompt) | ~1,200 | $0.50/1M | $0.00060 |
 | Thinking tokens | 8,192 | $3.00/1M | $0.02458 |
 | Output tokens | ~500 | $3.00/1M | $0.00150 |
 | **Phase 2 subtotal** | | | **$0.027** |
 
-**Total per message generation: ~$0.055**
+**Total per message generation:**
+- **First message on a template: ~$0.056** (Phase 1 + Phase 2)
+- **Subsequent messages (cache hit): ~$0.027** (Phase 2 only)
+- **Blended cost (assuming 50% cache hit rate): ~$0.041**
 
-Note: If the Google Search grounding free tier (5,000/month) is not exhausted, the $0.014 grounding cost drops to $0. At 5,000 free queries/month, that covers ~5,000 message generations before grounding becomes a paid cost.
+Note: Exa provides 1,000 free searches/month. At 3 searches per Phase 1, that covers ~333 unique templates before Exa search becomes a paid cost.
 
 ### Action 2: Generate a subject line
 
@@ -232,7 +249,7 @@ Then each person who generates a message from that template:
 
 | Step | What fires | Cost |
 |---|---|---|
-| Source discovery + message write | 1 grounded Gemini + 1 Gemini (thinking: high) | $0.055 |
+| Source discovery + message write | 3 Exa + 6 Firecrawl + 1 Gemini eval + 1 Gemini (thinking: high) | $0.056 (first) / $0.027 (cached) |
 
 ---
 
@@ -342,63 +359,62 @@ Thin margins. At 5,000 messages/month, revenue must be $350+ for healthy economi
 
 ---
 
-## The Real Problem: Per-Message Cost
+## Per-Message Cost Breakdown
 
-Message generation at $0.055 is the margin killer. The breakdown:
+First message on a template at $0.056 includes both search and generation:
 
-| Component | Cost | % of message |
+| Component | Cost | % of first message |
 |---|---|---|
-| **Thinking tokens** (high=8,192 in Phase 2) | $0.025 | 45% |
-| **Google Search grounding** (Phase 1) | $0.014 | 25% |
-| **Thinking tokens** (medium=4,096 in Phase 1) | $0.012 | 22% |
-| Input + output tokens | $0.004 | 7% |
+| **Thinking tokens** (high=8,192 in Phase 2) | $0.025 | 44% |
+| **Exa search** (3 queries in Phase 1a) | $0.021 | 38% |
+| **Firecrawl reads** (6 pages in Phase 1b) | $0.005 | 9% |
+| **Gemini evaluator** (Phase 1c, no thinking) | $0.003 | 5% |
+| Input + output tokens (Phase 2) | $0.002 | 4% |
 
-**Thinking is 67% of message cost. Grounding is 25%.** The actual input/output tokens that produce the message are only 7%.
+**Thinking is 44% of first-message cost. Exa search is 38%.** Firecrawl and the evaluator are modest.
 
-### Optimization levers (in order of impact)
+### Template source caching (IMPLEMENTED)
 
-**1. Cache verified sources per template ($0.028 → $0 for repeat messages)**
+Evaluated sources are cached per-template with a 72-hour TTL (`cachedSources` + `sourcesCachedAt` fields on `Template` model). Subsequent messages on the same template skip Phase 1 entirely:
 
-Currently, `verifiedSources` is never pre-populated from the route. Every message generation triggers a fresh source discovery with Google Search grounding. If we cache verified sources from the first message and pass them to subsequent messages on the same template, Phase 1 is eliminated entirely for all but the first message.
+- First message on a template: $0.056 (Phase 1 + Phase 2)
+- Subsequent messages (cache hit): $0.027 (Phase 2 only)
+- Cache invalidation: template title/body edits clear cached sources (handled in template update endpoint)
 
-Impact: Message cost drops from **$0.055 to $0.027** for cached-source messages. This is 2x improvement on the dominant cost.
+### Remaining optimization levers
 
-First message on a template: $0.055 (full pipeline)
-Every subsequent message: $0.027 (Phase 2 only, no grounding)
-
-**2. Reduce thinking level for message writer (high → medium)**
+**1. Reduce thinking level for message writer (high → medium)**
 
 Subject line uses `thinkingLevel: 'high'` for "emotional archaeology" — justified. But the message writer's Phase 2 also uses high. Dropping to medium saves 4,096 thinking tokens per message.
 
-Impact: Phase 2 cost drops from $0.027 to $0.015. Total per message (with source caching) drops from $0.027 to **$0.015**.
+Impact: Phase 2 cost drops from $0.027 to $0.015. Total per cached message drops from $0.027 to **$0.015**.
 
-**3. Stay within Google Search grounding free tier**
+**2. Stay within Exa free tier**
 
-5,000 free grounded prompts/month. If source caching is implemented (lever 1), only the first message per template needs grounding. At 100 templates/month, that's 100 grounding calls — well within the free tier.
+1,000 free Exa searches/month. At 3 searches per Phase 1, that covers ~333 unique templates before Exa search becomes a paid cost. With caching, only the first message per template triggers search.
 
-Impact: $0.014/message → $0 for all but template-first messages.
-
-**4. Batch Gemini embedding API**
+**3. Batch Gemini embedding API**
 
 Already using batch pricing for embeddings. Marginal improvement.
 
-### Projected per-message cost after optimization
+### Projected per-message cost after further optimization
 
 | Scenario | Cost |
 |---|---|
-| Current (no optimization) | $0.055 |
-| After source caching (lever 1) | $0.027 for repeat, $0.055 for first |
-| After source caching + thinking reduction (levers 1+2) | $0.015 for repeat, $0.043 for first |
-| Blended (assuming 95% repeat messages) | **$0.016** |
+| Current with caching (first message) | $0.056 |
+| Current with caching (repeat message) | $0.027 |
+| After thinking reduction (repeat message) | $0.015 |
+| Blended (assuming 90% cache hits) | **$0.030** |
+| Blended (assuming 95% cache hits) | **$0.028** |
 
-At $0.016/message blended, the economics recover:
+At $0.030/message blended, the economics are solid:
 
 | Tier | Messages/mo | COGS | Revenue | Margin |
 |---|---|---|---|---|
-| Pro | 100 | $1.60 + $0.39 DM | $10 | **80%** |
-| Pro power | 300 | $4.80 + $0.92 DM | $10 | **43%** |
-| Small org | 500 | $8.00 + $0.79 DM | $40 | **78%** |
-| Mid org | 2,000 | $32.00 + $1.81 DM | $150 | **77%** |
+| Pro | 100 | $3.00 + $0.39 DM | $10 | **66%** |
+| Pro power | 300 | $9.00 + $0.92 DM | $10 | **1%** |
+| Small org | 500 | $15.00 + $0.79 DM | $40 | **61%** |
+| Mid org | 2,000 | $60.00 + $1.81 DM | $150 | **59%** |
 
 ---
 
@@ -450,7 +466,7 @@ Using blended $0.016/message after optimization.
 ## Pricing Floor for Custom Org Deals (corrected)
 
 ```
-floor = infra_share + (estimated_monthly_messages × $0.016)
+floor = infra_share + (estimated_monthly_messages × $0.030)
                     + (estimated_monthly_dm_lookups × $0.13)
                     + 40% margin
 ```
@@ -458,8 +474,8 @@ floor = infra_share + (estimated_monthly_messages × $0.016)
 For a 12-person org estimating 2,000 messages/month and 8 DM lookups/month:
 
 ```
-floor = $8 + $32 + $1.04 = $41.04
-with margin: $41.04 / 0.6 = $68
+floor = $8 + $60 + $1.04 = $69.04
+with margin: $69.04 / 0.6 = $115
 ```
 
 Price at $150 based on value. Floor ensures no loss.
@@ -468,19 +484,21 @@ Price at $150 based on value. Floor ensures no loss.
 
 ## Critical Action Items
 
+### Completed
+
+**1. ~~Implement source caching.~~** DONE. Template source caching implemented via `cachedSources` + `sourcesCachedAt` fields on `Template` model (72h TTL). `stream-message/+server.ts` checks cache before `generateMessage()`, writes cache on miss. Phase 1 skipped entirely for cached templates.
+
+**2. ~~Replace Google Search grounding with Exa+Firecrawl.~~** DONE. Source discovery now uses Exa stratified search (3 parallel queries: gov, news, general) + Firecrawl content fetch + Gemini incentive-aware evaluation. Eliminates grounding dependency and $0.014/query cost. Google Search grounding is no longer used in the message generation pipeline.
+
 ### Must-do before launch
 
-**1. Implement source caching.** Without it, message generation at $0.055 makes the Pro tier unprofitable above ~180 messages/month. Cache verified sources from the first message generation per template and pass them to subsequent generations. This is the single highest-leverage optimization.
-
-Code change: In `src/routes/api/agents/stream-message/+server.ts`, look up the template's cached sources before calling `generateMessage()`. Store sources in a `TemplateSourceCache` table or in the template's existing `sources` JSON field after first generation. Pass as `verifiedSources` option to skip Phase 1.
-
-**2. Monitor per-message cost in production.** The `AgentTrace` model with `costUsd` field exists. Use it. Dashboard the actual per-message cost against these projections. If thinking tokens are consuming more than projected (models don't always use the full budget), adjust.
+**3. Monitor per-message cost in production.** The `AgentTrace` model with `costUsd` field exists. Completion traces now always written (even without cost data). Dashboard the actual per-message cost against these projections. If thinking tokens are consuming more than projected (models don't always use the full budget), adjust.
 
 ### Should-do
 
-**3. Evaluate thinking level reduction for message writer.** Test quality impact of `thinkingLevel: 'medium'` vs `'high'` in Phase 2 of message generation. If quality holds, the per-message cost drops another 40%.
+**4. Evaluate thinking level reduction for message writer.** Test quality impact of `thinkingLevel: 'medium'` vs `'high'` in Phase 2 of message generation. If quality holds, the per-message cost drops another 40%.
 
-**4. Evaluate Gemini 2.5 Flash as fallback.** At $0.30/$2.50 (vs $0.50/$3.00), it's 17% cheaper on thinking tokens. If quality is comparable for message writing, switch the message writer to 2.5 Flash while keeping 3.0 Flash for decision-maker discovery.
+**5. Evaluate Gemini 3 Flash Lite as fallback.** If quality is comparable for message writing, use the lighter variant for Phase 2 while keeping Flash for source discovery and decision-maker identification.
 
 ---
 

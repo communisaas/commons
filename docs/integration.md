@@ -30,7 +30,7 @@
 - ZK proof generation (Noir/UltraHonk WASM prover, depths 18/20/22/24)
 - On-chain verification (DistrictGate on Scroll — nullifier registry, campaign tracking)
 - TEE deployment (AWS Nitro Enclaves)
-- ReputationAgent (Gemini 2.5 Flash credential verification)
+- ReputationAgent (Gemini 3 Flash credential verification)
 
 ### voter-protocol API Endpoints
 

@@ -16,7 +16,7 @@ Commons is a multi-stakeholder civic engagement platform serving ANY decision-ma
 The architecture uses:
 1. **Llama Prompt Guard 2** (REQUIRED) - Protects AI agents from manipulation
 2. **Llama Guard 4** (OPTIONAL, PERMISSIVE) - Only blocks S1 (threats) and S4 (CSAM)
-3. **Gemini 2.5 Flash** (OPTIONAL) - Quality assessment
+3. **Gemini 3 Flash** (OPTIONAL) - Quality assessment
 
 ---
 
@@ -43,7 +43,7 @@ User Submits Input
         |
         | If no blocking hazards (S1/S4)...
         v
-[Layer 2: Gemini 2.5 Flash] - OPTIONAL
+[Layer 2: Gemini 3 Flash] - OPTIONAL
   - Quality assessment only
   - Policy relevance, professionalism
         |
