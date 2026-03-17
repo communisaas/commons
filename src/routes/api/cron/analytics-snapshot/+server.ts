@@ -35,11 +35,14 @@ import { cleanupOldRateLimits, isDBRateLimitEnabled } from '$lib/core/analytics/
  * 2. Clean up rate limit entries older than 2 days
  */
 export const GET: RequestHandler = async ({ request }) => {
-	// Verify cron secret (for production security)
-	const authHeader = request.headers.get('authorization');
+	// Verify cron secret — fail-closed if not configured
 	const cronSecret = process.env.CRON_SECRET;
+	if (!cronSecret) {
+		return json({ error: 'CRON_SECRET not configured' }, { status: 500 });
+	}
 
-	if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+	const authHeader = request.headers.get('authorization');
+	if (authHeader !== `Bearer ${cronSecret}`) {
 		return json({ error: 'Unauthorized' }, { status: 401 });
 	}
 

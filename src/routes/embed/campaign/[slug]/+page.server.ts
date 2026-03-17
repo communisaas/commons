@@ -1,6 +1,8 @@
 import { error, fail } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
+import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
+import { dispatchTrigger } from '$lib/server/automation/trigger';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -49,6 +51,12 @@ export const actions: Actions = {
 			return fail(429, { error: 'Too many submissions. Please try again later.' });
 		}
 
+		// Billing usage check — enforce action limits
+		const usage = await getOrgUsage(campaign.orgId);
+		if (isOverLimit(usage).actions) {
+			return fail(403, { error: 'This campaign has reached its action limit for the current billing period.' });
+		}
+
 		const formData = await request.formData();
 		const email = formData.get('email')?.toString().trim().toLowerCase();
 		const name = formData.get('name')?.toString().trim();
@@ -74,6 +82,7 @@ export const actions: Actions = {
 			where: { orgId_email: { orgId: campaign.orgId, email } }
 		});
 
+		let isNewSupporter = false;
 		if (!supporter) {
 			supporter = await db.supporter.create({
 				data: {
@@ -85,6 +94,7 @@ export const actions: Actions = {
 					source: 'widget'
 				}
 			});
+			isNewSupporter = true;
 		} else {
 			// Update name/postal/phone if provided and not already set
 			const updates: Record<string, string> = {};
@@ -98,6 +108,11 @@ export const actions: Actions = {
 					data: updates
 				});
 			}
+		}
+
+		// Fire-and-forget: dispatch supporter_created trigger
+		if (isNewSupporter) {
+			void dispatchTrigger(campaign.orgId, 'supporter_created', { entityId: supporter.id, supporterId: supporter.id });
 		}
 
 		// Compute messageHash if a message was provided (for ALD uniqueness)
@@ -132,6 +147,13 @@ export const actions: Actions = {
 				engagementTier: 0,
 				messageHash
 			}
+		});
+
+		// Fire-and-forget: dispatch campaign_action trigger
+		void dispatchTrigger(campaign.orgId, 'campaign_action', {
+			entityId: campaign.id,
+			supporterId: supporter.id,
+			metadata: { campaignId: campaign.id }
 		});
 
 		// Get updated verified action count

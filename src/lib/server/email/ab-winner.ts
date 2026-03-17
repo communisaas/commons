@@ -8,6 +8,7 @@
 
 import { db } from '$lib/core/db';
 import { sendBlast } from './engine';
+import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 
 export interface AbTestConfig {
 	splitPct: number;          // % of test group going to variant A (rest to B)
@@ -140,6 +141,17 @@ export async function sendWinnerBlast(parentId: string, winner: 'A' | 'B'): Prom
 			abTestConfig: winnerBlast.abTestConfig as any
 		}
 	});
+
+	// Billing usage check — skip send if org has exceeded email limits
+	const usage = await getOrgUsage(winnerBlast.orgId);
+	if (isOverLimit(usage).emails) {
+		await db.emailBlast.update({
+			where: { id: remainderBlast.id },
+			data: { status: 'failed' }
+		});
+		console.warn(`[ab-winner] Remainder blast ${remainderBlast.id} skipped: org ${winnerBlast.orgId} over email limit`);
+		return;
+	}
 
 	// Send asynchronously
 	await sendBlast(remainderBlast.id);

@@ -7,7 +7,7 @@
  * - Idempotent: upsert for creation, update keyed on stripe_subscription_id
  *
  * CSRF: Stripe sends application/json (not form data), so SvelteKit's
- * csrf.checkOrigin does not apply. Server-to-server calls have no Origin header.
+ * CSRF origin checking (trustedOrigins) does not apply. Server-to-server calls have no Origin header.
  *
  * Rate limiting: Exempted in RATE_LIMIT_EXEMPT_PATHS (signature-authenticated).
  */

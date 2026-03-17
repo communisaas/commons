@@ -11,8 +11,12 @@ import { db } from '$lib/core/db';
 import { pickAbWinner, sendWinnerBlast, type AbTestConfig } from '$lib/server/email/ab-winner';
 
 export const GET: RequestHandler = async ({ request }) => {
+	// Fail-closed: require CRON_SECRET to be configured
 	const secret = env.CRON_SECRET;
-	if (secret && request.headers.get('x-cron-secret') !== secret) {
+	if (!secret) {
+		return json({ error: 'CRON_SECRET not configured' }, { status: 500 });
+	}
+	if (request.headers.get('x-cron-secret') !== secret) {
 		return json({ error: 'Unauthorized' }, { status: 401 });
 	}
 
