@@ -1457,6 +1457,7 @@ model Supporter {
   // Verification state: imported → postal-resolved → verified
   verified    Boolean @default(false)
   emailStatus String  @default("subscribed") @map("email_status") // subscribed|unsubscribed|bounced|complained
+  smsStatus   String  @default("none") @map("sms_status") // none|subscribed|unsubscribed|stopped
 
   // Import tracking
   source     String?   @map("source") // 'csv' | 'action_network' | 'organic' | 'widget'
@@ -1480,6 +1481,7 @@ model Supporter {
   @@unique([orgId, email])
   @@index([orgId])
   @@index([emailStatus])
+  @@index([smsStatus])
   @@index([source])
   @@index([identityCommitment])
   @@map("supporter")

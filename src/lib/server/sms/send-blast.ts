@@ -31,7 +31,7 @@ export async function sendSmsBlast(blastId: string): Promise<void> {
 			where: {
 				orgId: blast.orgId,
 				phone: { not: null },
-				emailStatus: 'subscribed' // respect opt-out
+				smsStatus: 'subscribed' // TCPA: only send to explicitly consented supporters
 			},
 			select: { id: true, phone: true, name: true }
 		});
