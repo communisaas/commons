@@ -115,7 +115,7 @@ async function processStep(
 			return processEmailAction(supporterId, step);
 		case 'add_tag':
 		case 'remove_tag':
-			return processTagAction(supporterId, step);
+			return processTagAction(supporterId, step, true);
 		case 'delay': {
 			const nextRunAt = new Date(Date.now() + step.delayMinutes * 60 * 1000);
 			return { success: true, status: 'paused', nextRunAt };

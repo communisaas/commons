@@ -5,11 +5,14 @@
 
 import { db } from '$lib/core/db';
 import { sendEmail } from '$lib/server/email/ses';
+import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
+import { dispatchTrigger } from './trigger';
 import { env } from '$env/dynamic/private';
 import type { EmailStep, TagStep, ConditionStep } from './types';
 
 /**
  * Send an email to the supporter.
+ * Checks billing usage limits before sending.
  */
 export async function processEmailAction(
 	supporterId: string | null,
@@ -19,12 +22,18 @@ export async function processEmailAction(
 
 	const supporter = await db.supporter.findUnique({
 		where: { id: supporterId },
-		select: { email: true, name: true, emailStatus: true }
+		select: { email: true, name: true, emailStatus: true, orgId: true }
 	});
 
 	if (!supporter) return { success: false, error: 'Supporter not found' };
 	if (supporter.emailStatus !== 'subscribed') {
 		return { success: false, error: `Supporter email status: ${supporter.emailStatus}` };
+	}
+
+	// Billing usage check
+	const usage = await getOrgUsage(supporter.orgId);
+	if (isOverLimit(usage).emails) {
+		return { success: false, error: 'Email send limit reached for billing period' };
 	}
 
 	const fromEmail = env.EMAIL_FROM || 'noreply@commons.app';
@@ -43,10 +52,12 @@ export async function processEmailAction(
 
 /**
  * Add or remove a tag from the supporter.
+ * @param fromAutomation — if true, suppresses tag_added trigger dispatch to prevent infinite recursion
  */
 export async function processTagAction(
 	supporterId: string | null,
-	step: TagStep
+	step: TagStep,
+	fromAutomation?: boolean
 ): Promise<{ success: boolean; error?: string }> {
 	if (!supporterId) return { success: false, error: 'No supporter for tag action' };
 
@@ -71,6 +82,15 @@ export async function processTagAction(
 			create: { supporterId: supporter.id, tagId: step.tagId },
 			update: {}
 		});
+
+		// Fire-and-forget: dispatch tag_added trigger (only from non-automation callers)
+		if (!fromAutomation) {
+			void dispatchTrigger(supporter.orgId, 'tag_added', {
+				entityId: step.tagId,
+				supporterId: supporter.id,
+				metadata: { tagId: step.tagId }
+			});
+		}
 	} else {
 		await db.supporterTag.deleteMany({
 			where: { supporterId: supporter.id, tagId: step.tagId }

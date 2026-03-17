@@ -14,6 +14,7 @@
  */
 
 import type { PrismaClient } from '@prisma/client';
+import { dispatchTrigger } from '$lib/server/automation/trigger';
 import {
 	fetchPeople,
 	fetchTags,
@@ -403,6 +404,9 @@ async function processPeopleBatch(
 
 				// Add tags from AN taggings
 				await syncPersonTags(person, supporter.id, tagHrefToId, apiKey, prisma);
+
+				// Fire-and-forget: dispatch supporter_created trigger
+				void dispatchTrigger(orgId, 'supporter_created', { entityId: supporter.id, supporterId: supporter.id });
 
 				imported++;
 			}

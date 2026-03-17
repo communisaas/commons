@@ -2,6 +2,7 @@ import { redirect, fail } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { parseCSV } from '$lib/server/csv';
+import { dispatchTrigger } from '$lib/server/automation/trigger';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ parent }) => {
@@ -57,7 +58,12 @@ const COLUMN_MAP: Record<string, string> = {
 	tags: 'tags',
 	tag: 'tags',
 	// Action Network specific
-	can_message: 'can_message'
+	can_message: 'can_message',
+	// SMS consent
+	sms_consent: 'sms_consent',
+	can_text: 'sms_consent',
+	sms_status: 'sms_consent',
+	sms_opt_in: 'sms_consent'
 };
 
 interface MappedRow {
@@ -67,6 +73,7 @@ interface MappedRow {
 	phone: string | null;
 	country: string | null;
 	emailStatus: string;
+	smsStatus: string;
 	tags: string[];
 }
 
@@ -123,6 +130,15 @@ function applyMapping(
 		}
 	}
 
+	// SMS consent: default 'none' (TCPA safe), only 'subscribed' with explicit consent
+	let smsStatus = 'none';
+	if (fields['sms_consent'] !== undefined) {
+		const val = fields['sms_consent'].toLowerCase();
+		if (val === 'true' || val === '1' || val === 'yes' || val === 'subscribed') {
+			smsStatus = 'subscribed';
+		}
+	}
+
 	// Tags: comma-separated within cell
 	const tags: string[] = [];
 	if (fields['tags']) {
@@ -139,6 +155,7 @@ function applyMapping(
 		phone: fields['phone'] || null,
 		country: fields['country'] || null,
 		emailStatus,
+		smsStatus,
 		tags
 	};
 }
@@ -249,6 +266,7 @@ export const actions: Actions = {
 		// Process supporters in batches
 		for (let batchStart = 0; batchStart < mappedRows.length; batchStart += BATCH_SIZE) {
 			const batch = mappedRows.slice(batchStart, batchStart + BATCH_SIZE);
+			const newSupporterIds: string[] = [];
 
 			try {
 				await db.$transaction(async (tx) => {
@@ -264,6 +282,7 @@ export const actions: Actions = {
 									phone: true,
 									country: true,
 									emailStatus: true,
+									smsStatus: true,
 									source: true
 								}
 							});
@@ -282,6 +301,11 @@ export const actions: Actions = {
 								const newStatus = stricterStatus(existing.emailStatus, mapped.emailStatus);
 								if (newStatus !== existing.emailStatus) {
 									updateData.emailStatus = newStatus;
+								}
+
+								// SMS: only upgrade none→subscribed, never downgrade stopped/unsubscribed
+								if (mapped.smsStatus === 'subscribed' && existing.smsStatus === 'none') {
+									updateData.smsStatus = 'subscribed';
 								}
 
 								if (Object.keys(updateData).length > 0) {
@@ -317,6 +341,7 @@ export const actions: Actions = {
 										phone: mapped.phone,
 										country: mapped.country,
 										emailStatus: mapped.emailStatus,
+										smsStatus: mapped.smsStatus,
 										source: 'csv',
 										importedAt: new Date()
 									}
@@ -332,6 +357,7 @@ export const actions: Actions = {
 									}
 								}
 
+								newSupporterIds.push(supporter.id);
 								imported++;
 							}
 						} catch (err) {
@@ -341,6 +367,11 @@ export const actions: Actions = {
 						}
 					}
 				});
+
+				// Fire-and-forget: dispatch supporter_created triggers after transaction commits
+				for (const supporterId of newSupporterIds) {
+					void dispatchTrigger(org.id, 'supporter_created', { entityId: supporterId, supporterId });
+				}
 			} catch (err) {
 				// Entire batch failed — count all as skipped
 				const msg = err instanceof Error ? err.message : String(err);
