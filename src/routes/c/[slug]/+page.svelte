@@ -57,6 +57,8 @@
 
 	// ── Live verified count (optimistic + polled) ──
 	let displayCount = $state(data.stats.verifiedActions);
+	let displayDistricts = $state(data.stats.uniqueDistricts);
+	let hasSubmitted = $state(false);
 
 	// Check mDL support on mount
 	$effect(() => {
@@ -65,9 +67,10 @@
 		}
 	});
 
-	// Poll verified count every 30s (Phase 0: simple polling, no WebSocket)
+	// Poll verified count — 10s after submission, 30s otherwise
 	$effect(() => {
 		if (!browser) return;
+		const intervalMs = hasSubmitted ? 10_000 : 30_000;
 		const interval = setInterval(async () => {
 			try {
 				const res = await fetch(`/api/c/${data.campaign.id}/stats`);
@@ -76,9 +79,12 @@
 					if (typeof stats.verifiedActions === 'number') {
 						displayCount = stats.verifiedActions;
 					}
+					if (typeof stats.uniqueDistricts === 'number') {
+						displayDistricts = stats.uniqueDistricts;
+					}
 				}
 			} catch { /* ignore polling failures */ }
-		}, 30_000);
+		}, intervalMs);
 
 		return () => clearInterval(interval);
 	});
@@ -87,6 +93,7 @@
 	$effect(() => {
 		if (form?.success) {
 			currentStep = 'success';
+			hasSubmitted = true;
 			if (typeof form.actionCount === 'number') {
 				displayCount = form.actionCount;
 			}
@@ -258,6 +265,14 @@
 	<meta property="og:title" content={data.campaign.title} />
 	<meta property="og:description" content={data.campaign.body || `Take action with ${data.campaign.orgName}`} />
 	<meta property="og:type" content="website" />
+	<meta property="og:url" content={`https://commons.email/c/${data.campaign.id}`} />
+	<meta property="og:image" content={`https://commons.email/og/campaign/${data.campaign.id}`} />
+	<meta property="og:image:width" content="1200" />
+	<meta property="og:image:height" content="630" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:title" content={data.campaign.title} />
+	<meta name="twitter:description" content={data.campaign.body || `Take action with ${data.campaign.orgName}`} />
+	<meta name="twitter:image" content={`https://commons.email/og/campaign/${data.campaign.id}`} />
 </svelte:head>
 
 <div class="mx-auto min-h-[80vh] max-w-lg px-4 py-6 sm:py-10">
@@ -327,9 +342,9 @@
 				<div class="mt-3 border-t border-slate-200 pt-3">
 					<p class="font-mono text-3xl font-bold text-slate-900">{displayCount}</p>
 					<p class="text-sm text-slate-500">verified actions taken</p>
-					{#if data.stats.uniqueDistricts > 0}
+					{#if displayDistricts > 0}
 						<p class="mt-1 text-xs text-slate-400">
-							across {data.stats.uniqueDistricts} {data.stats.uniqueDistricts === 1 ? 'district' : 'districts'}
+							across {displayDistricts} {displayDistricts === 1 ? 'district' : 'districts'}
 						</p>
 					{/if}
 				</div>
@@ -385,9 +400,9 @@
 				<p class="font-mono text-lg font-bold text-slate-900">{displayCount}</p>
 				<p class="text-xs text-slate-500">
 					verified {displayCount === 1 ? 'action' : 'actions'} taken
-					{#if data.stats.uniqueDistricts > 0}
+					{#if displayDistricts > 0}
 						<span class="ml-1 text-slate-400">
-							across {data.stats.uniqueDistricts} {data.stats.uniqueDistricts === 1 ? 'district' : 'districts'}
+							across {displayDistricts} {displayDistricts === 1 ? 'district' : 'districts'}
 						</span>
 					{/if}
 				</p>

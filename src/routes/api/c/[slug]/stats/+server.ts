@@ -12,17 +12,22 @@ export const GET: RequestHandler = async ({ params, getClientAddress }) => {
 		return json({ error: 'Too many requests' }, { status: 429 });
 	}
 
-	const [verifiedCount, totalCount] = await Promise.all([
+	const [verifiedCount, totalCount, districtCounts] = await Promise.all([
 		db.campaignAction.count({
 			where: { campaignId: params.slug, verified: true }
 		}),
 		db.campaignAction.count({
 			where: { campaignId: params.slug }
+		}),
+		db.campaignAction.groupBy({
+			by: ['districtHash'],
+			where: { campaignId: params.slug, verified: true, districtHash: { not: null } },
+			_count: true
 		})
 	]);
 
 	return json(
-		{ verifiedActions: verifiedCount, totalActions: totalCount },
+		{ verifiedActions: verifiedCount, totalActions: totalCount, uniqueDistricts: districtCounts.length },
 		{ headers: { 'Cache-Control': 'public, max-age=10' } }
 	);
 };

@@ -4,6 +4,7 @@ import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import { FEATURES } from '$lib/config/features';
 import { hashDistrict } from '$lib/core/identity/district-credential';
+import { dispatchTrigger } from '$lib/server/automation/trigger';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -288,6 +289,13 @@ export const actions: Actions = {
 				districtHash,
 				messageHash
 			}
+		});
+
+		// Fire-and-forget: dispatch campaign_action trigger
+		void dispatchTrigger(campaign.orgId, 'campaign_action', {
+			entityId: campaign.id,
+			supporterId: supporter.id,
+			metadata: { campaignId: campaign.id }
 		});
 
 		// Get updated counts
