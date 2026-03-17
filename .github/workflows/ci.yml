@@ -1,18 +1,18 @@
 name: CI Tests
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
-    strategy:
-      matrix:
-        node-version: [20]
 
     services:
       postgres:
@@ -33,9 +33,7 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/test
       CI: true
-      # CWC API for smoke tests
-      CWC_API_BASE_URL: ${{ secrets.CWC_API_BASE_URL }}
-      # OAuth test credentials - safe for CI
+      # OAuth test credentials — safe for CI
       OAUTH_REDIRECT_BASE_URL: http://localhost:5173
       GOOGLE_CLIENT_ID: test-google-client-id
       GOOGLE_CLIENT_SECRET: test-google-client-secret
@@ -47,9 +45,6 @@ jobs:
       LINKEDIN_CLIENT_SECRET: test-linkedin-client-secret
       TWITTER_CLIENT_ID: test-twitter-client-id
       TWITTER_CLIENT_SECRET: test-twitter-client-secret
-      # Feature flags for testing
-      ENABLE_BETA: false
-      ENABLE_RESEARCH: false
 
     steps:
       - name: Checkout code
@@ -58,7 +53,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 20
           cache: 'npm'
 
       - name: Install dependencies
@@ -75,31 +70,13 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
 
-      - name: Environment health check
-        run: |
-          echo "Node version: $(node --version)"
-          echo "NPM version: $(npm --version)"
-          echo "Database URL configured: $([ -n "$DATABASE_URL" ] && echo "yes" || echo "no")"
-          echo "OAuth redirect base: $OAUTH_REDIRECT_BASE_URL"
-          echo "Feature flags - BETA: $ENABLE_BETA, RESEARCH: $ENABLE_RESEARCH"
-
-      - name: Unit tests
-        run: npm run test:unit
-        timeout-minutes: 5
-
-      - name: Integration tests
-        run: npm run test:integration
-        timeout-minutes: 8
-        env:
-          # Additional timeout for integration tests
-          VITEST_TIMEOUT: 10000
-
-      - name: Test coverage
+      - name: Run tests with coverage
         run: npm run test:coverage
         timeout-minutes: 10
 
       - name: Code Coverage Summary
         uses: irongut/CodeCoverageSummary@v1.3.0
+        if: always()
         with:
           filename: coverage/cobertura-coverage.xml
           badge: true
@@ -121,80 +98,3 @@ jobs:
       - name: Build verification
         run: npm run build
         timeout-minutes: 10
-
-  # e2e:
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 10
-  #   needs: test
-  #
-  #   services:
-  #     postgres:
-  #       image: pgvector/pgvector:pg15
-  #       env:
-  #         POSTGRES_PASSWORD: postgres
-  #         POSTGRES_DB: test
-  #       options: >-
-  #         --health-cmd pg_isready
-  #         --health-interval 10s
-  #         --health-timeout 5s
-  #         --health-retries 5
-  #       ports:
-  #         - 5432:5432
-  #
-  #   env:
-  #     NODE_ENV: test
-  #     DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
-  #     DIRECT_URL: postgresql://postgres:postgres@localhost:5432/test
-  #     CI: true
-  #     OAUTH_REDIRECT_BASE_URL: http://localhost:4173
-  #     GOOGLE_CLIENT_ID: test-google-client-id
-  #     GOOGLE_CLIENT_SECRET: test-google-client-secret
-  #     FACEBOOK_CLIENT_ID: test-facebook-client-id
-  #     FACEBOOK_CLIENT_SECRET: test-facebook-client-secret
-  #     DISCORD_CLIENT_ID: test-discord-client-id
-  #     DISCORD_CLIENT_SECRET: test-discord-client-secret
-  #     LINKEDIN_CLIENT_ID: test-linkedin-client-id
-  #     LINKEDIN_CLIENT_SECRET: test-linkedin-client-secret
-  #     TWITTER_CLIENT_ID: test-twitter-client-id
-  #     TWITTER_CLIENT_SECRET: test-twitter-client-secret
-  #     ENABLE_BETA: false
-  #     ENABLE_RESEARCH: false
-  #
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 20
-  #         cache: 'npm'
-  #
-  #     - name: Install dependencies
-  #       run: npm ci
-  #
-  #     - name: Generate Prisma client
-  #       run: npm run db:generate
-  #
-  #     - name: Enable pgvector extension
-  #       run: PGPASSWORD=postgres psql -h localhost -U postgres -d test -c 'CREATE EXTENSION IF NOT EXISTS vector;'
-  #
-  #     - name: Push database schema
-  #       run: npx prisma db push --accept-data-loss
-  #
-  #     - name: Seed database
-  #       run: npm run db:seed
-  #
-  #     - name: Install Playwright browsers
-  #       run: npx playwright install --with-deps
-  #
-  #     - name: Run E2E tests
-  #       run: npm run test:e2e
-  #
-  #     - name: Upload E2E artifacts
-  #       uses: actions/upload-artifact@v4
-  #       if: failure()
-  #       with:
-  #         name: playwright-report
-  #         path: playwright-report/
-  #         retention-days: 30
