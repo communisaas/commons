@@ -214,6 +214,54 @@ export async function computeVerificationPacket(campaignId: string, orgId: strin
 	};
 }
 
+// ---------------------------------------------------------------------------
+// KV-cached wrapper (30s TTL, graceful degradation)
+// ---------------------------------------------------------------------------
+
+/** Minimal KV type — avoids @cloudflare/workers-types dependency */
+type KVNamespace = {
+	get(key: string): Promise<string | null>;
+	put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+};
+
+const PACKET_TTL_SECONDS = 30;
+
+/**
+ * KV-cached version of computeVerificationPacket.
+ * Cache key: `packet:${campaignId}:${orgId}` (tenant-isolated).
+ * Falls back to fresh computation if KV is unavailable or misses.
+ */
+export async function computeVerificationPacketCached(
+	campaignId: string,
+	orgId: string,
+	kv?: KVNamespace
+): Promise<VerificationPacket> {
+	const cacheKey = `packet:${campaignId}:${orgId}`;
+
+	// Try KV read
+	if (kv) {
+		try {
+			const cached = await kv.get(cacheKey);
+			if (cached) return JSON.parse(cached) as VerificationPacket;
+		} catch {
+			// KV read failed — fall through to fresh computation
+		}
+	}
+
+	const packet = await computeVerificationPacket(campaignId, orgId);
+
+	// Write to KV (fire-and-forget)
+	if (kv) {
+		try {
+			await kv.put(cacheKey, JSON.stringify(packet), { expirationTtl: PACKET_TTL_SECONDS });
+		} catch {
+			// KV write failed — non-fatal
+		}
+	}
+
+	return packet;
+}
+
 /** Assemble packet from pre-queried aggregates (shared between single + org). */
 function assemblePacket(
 	totalCount: number, verifiedCount: number,

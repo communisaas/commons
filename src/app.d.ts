@@ -65,6 +65,7 @@ declare global {
 				REGISTRATION_RETRY_KV?: KVNamespace;
 				REJECTION_MONITOR_KV?: KVNamespace;
 				VICAL_KV?: KVNamespace;
+				PACKET_CACHE_KV?: KVNamespace;
 				PUBLIC_APP_URL?: string;
 			};
 			context?: {

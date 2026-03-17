@@ -6,6 +6,13 @@ import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
 import type { RequestHandler } from './$types';
 
+function csvEscape(value: string): string {
+	if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+		return `"${value.replace(/"/g, '""')}"`;
+	}
+	return value;
+}
+
 /**
  * GET /api/org/[slug]/segments — List saved segments
  */
@@ -29,10 +36,13 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 };
 
 /**
- * POST /api/org/[slug]/segments — Save a named segment or count matches
+ * POST /api/org/[slug]/segments — Save a named segment, count matches, or bulk actions
  * Body: { action: 'count', filters: SegmentFilter }
  *     | { action: 'save', name: string, filters: SegmentFilter }
  *     | { action: 'save', id: string, name: string, filters: SegmentFilter }  (update)
+ *     | { action: 'apply_tag', filters: SegmentFilter, tagId: string }
+ *     | { action: 'remove_tag', filters: SegmentFilter, tagId: string }
+ *     | { action: 'export_csv', filters: SegmentFilter }
  */
 export const POST: RequestHandler = async ({ request, params, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
@@ -103,6 +113,102 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			}
 		});
 		return json({ segment }, { status: 201 });
+	}
+
+	if (action === 'apply_tag' || action === 'remove_tag') {
+		requireRole(membership.role, 'editor');
+
+		const bulkLimit = await getRateLimiter().check(
+			`ratelimit:segment:bulk:org:${org.id}`,
+			{ maxRequests: 1, windowMs: 60_000 }
+		);
+		if (!bulkLimit.allowed) throw error(429, 'Bulk operations limited to 1 per minute');
+
+		const tagId = body.tagId as string;
+		if (!tagId) throw error(400, 'tagId is required');
+
+		// Verify tag belongs to this org
+		const tag = await db.tag.findFirst({ where: { id: tagId, orgId: org.id } });
+		if (!tag) throw error(404, 'Tag not found');
+
+		const filters = body.filters as SegmentFilter;
+		const validationError = validateSegmentFilter(filters);
+		if (validationError) throw error(400, validationError);
+
+		const where = buildSegmentWhere(org.id, filters);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const supporters = await db.supporter.findMany({
+			where: where as any,
+			select: { id: true }
+		});
+
+		if (supporters.length === 0) {
+			return json({ affected: 0 });
+		}
+
+		if (action === 'apply_tag') {
+			// Batch upsert — skip duplicates via the unique constraint
+			await db.supporterTag.createMany({
+				data: supporters.map((s) => ({ supporterId: s.id, tagId })),
+				skipDuplicates: true
+			});
+		} else {
+			await db.supporterTag.deleteMany({
+				where: {
+					tagId,
+					supporterId: { in: supporters.map((s) => s.id) }
+				}
+			});
+		}
+
+		console.info(`[bulk] ${action} org=${org.id} user=${locals.user.id} tag=${tagId} affected=${supporters.length}`);
+		return json({ affected: supporters.length });
+	}
+
+	if (action === 'export_csv') {
+		// Any org member can export
+		const filters = body.filters as SegmentFilter;
+		const validationError = validateSegmentFilter(filters);
+		if (validationError) throw error(400, validationError);
+
+		const bulkLimit = await getRateLimiter().check(
+			`ratelimit:segment:bulk:org:${org.id}`,
+			{ maxRequests: 1, windowMs: 60_000 }
+		);
+		if (!bulkLimit.allowed) throw error(429, 'Bulk operations limited to 1 per minute');
+
+		const where = buildSegmentWhere(org.id, filters);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const supporters = await db.supporter.findMany({
+			where: where as any,
+			select: {
+				email: true,
+				name: true,
+				phone: true,
+				tags: { select: { tag: { select: { name: true } } } }
+			},
+			orderBy: { createdAt: 'desc' }
+		});
+
+		const header = 'email,name,phone,tags';
+		const rows = supporters.map((s) => {
+			const tagNames = s.tags.map((t) => t.tag.name).join('; ');
+			return [
+				csvEscape(s.email),
+				csvEscape(s.name ?? ''),
+				csvEscape(s.phone ?? ''),
+				csvEscape(tagNames)
+			].join(',');
+		});
+
+		console.info(`[bulk] export_csv org=${org.id} user=${locals.user.id} rows=${supporters.length}`);
+		const csv = [header, ...rows].join('\n');
+		return new Response(csv, {
+			headers: {
+				'Content-Type': 'text/csv',
+				'Content-Disposition': `attachment; filename="segment-export-${Date.now()}.csv"`
+			}
+		});
 	}
 
 	throw error(400, 'Invalid action');

@@ -24,6 +24,8 @@
 		onApply?: (filter: SegmentFilter, count: number) => void;
 		/** Show save/load segment controls */
 		showSaveControls?: boolean;
+		/** Show bulk action controls (apply/remove tag, export CSV) */
+		showBulkActions?: boolean;
 		/** Initial filter to load */
 		initialFilter?: SegmentFilter;
 	}
@@ -35,6 +37,7 @@
 		onFilterChange,
 		onApply,
 		showSaveControls = true,
+		showBulkActions = false,
 		initialFilter
 	}: Props = $props();
 
@@ -221,6 +224,80 @@
 	// --- Value renderers for each field type ---
 	function getOperatorsForField(field: ConditionField) {
 		return FIELD_OPTIONS.find((f) => f.value === field)?.operators ?? [];
+	}
+
+	// --- Bulk actions ---
+	let bulkActionLoading = $state(false);
+	let bulkTagId = $state('');
+	let bulkConfirm = $state<{ action: 'apply_tag' | 'remove_tag'; tagId: string; tagName: string } | null>(null);
+	let bulkResult = $state<{ message: string; type: 'success' | 'error' } | null>(null);
+
+	const bulkDisabled = $derived(matchCount === null || matchCount === 0 || countLoading);
+
+	function promptBulkTag(action: 'apply_tag' | 'remove_tag') {
+		if (!bulkTagId) return;
+		const tag = tags.find((t) => t.id === bulkTagId);
+		if (!tag) return;
+		bulkConfirm = { action, tagId: bulkTagId, tagName: tag.name };
+	}
+
+	async function executeBulkTag() {
+		if (!bulkConfirm) return;
+		bulkActionLoading = true;
+		bulkResult = null;
+		try {
+			const res = await fetch(`/api/org/${orgSlug}/segments`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					action: bulkConfirm.action,
+					filters: currentFilter,
+					tagId: bulkConfirm.tagId
+				})
+			});
+			if (res.ok) {
+				const data = await res.json();
+				const verb = bulkConfirm.action === 'apply_tag' ? 'Applied tag to' : 'Removed tag from';
+				bulkResult = { message: `${verb} ${data.affected} supporter${data.affected === 1 ? '' : 's'}`, type: 'success' };
+			} else {
+				const data = await res.json().catch(() => ({ message: 'Request failed' }));
+				bulkResult = { message: data.message ?? 'Request failed', type: 'error' };
+			}
+		} catch {
+			bulkResult = { message: 'Network error', type: 'error' };
+		} finally {
+			bulkActionLoading = false;
+			bulkConfirm = null;
+		}
+	}
+
+	async function exportCsv() {
+		bulkActionLoading = true;
+		bulkResult = null;
+		try {
+			const res = await fetch(`/api/org/${orgSlug}/segments`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action: 'export_csv', filters: currentFilter })
+			});
+			if (res.ok) {
+				const blob = await res.blob();
+				const url = URL.createObjectURL(blob);
+				const a = document.createElement('a');
+				a.href = url;
+				a.download = `segment-export-${Date.now()}.csv`;
+				a.click();
+				URL.revokeObjectURL(url);
+				bulkResult = { message: 'CSV downloaded', type: 'success' };
+			} else {
+				const data = await res.json().catch(() => ({ message: 'Export failed' }));
+				bulkResult = { message: data.message ?? 'Export failed', type: 'error' };
+			}
+		} catch {
+			bulkResult = { message: 'Network error', type: 'error' };
+		} finally {
+			bulkActionLoading = false;
+		}
 	}
 </script>
 
@@ -537,6 +614,90 @@
 			>
 				{saveLoading ? 'Saving...' : editingSegmentId ? 'Update' : 'Save'}
 			</button>
+		</div>
+	{/if}
+
+	<!-- Bulk actions -->
+	{#if showBulkActions && conditions.length > 0}
+		<div class="rounded-lg border border-zinc-800/60 bg-zinc-900/30 p-3 space-y-3">
+			<h4 class="text-xs font-medium text-zinc-400">Bulk Actions</h4>
+
+			<!-- Tag selector for apply/remove -->
+			{#if tags.length > 0}
+				<div class="flex items-center gap-2">
+					<select
+						class="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+						bind:value={bulkTagId}
+					>
+						<option value="">Select tag...</option>
+						{#each tags as tag (tag.id)}
+							<option value={tag.id}>{tag.name}</option>
+						{/each}
+					</select>
+					<button
+						type="button"
+						class="rounded-md bg-teal-600/20 border border-teal-500/30 px-3 py-1.5 text-xs text-teal-400 hover:bg-teal-600/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+						disabled={bulkDisabled || !bulkTagId || bulkActionLoading}
+						onclick={() => promptBulkTag('apply_tag')}
+					>
+						Apply Tag
+					</button>
+					<button
+						type="button"
+						class="rounded-md bg-red-600/10 border border-red-500/20 px-3 py-1.5 text-xs text-red-400 hover:bg-red-600/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+						disabled={bulkDisabled || !bulkTagId || bulkActionLoading}
+						onclick={() => promptBulkTag('remove_tag')}
+					>
+						Remove Tag
+					</button>
+				</div>
+			{/if}
+
+			<!-- Export CSV -->
+			<button
+				type="button"
+				class="flex items-center gap-1.5 rounded-md bg-zinc-800 border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+				disabled={bulkDisabled || bulkActionLoading}
+				onclick={exportCsv}
+			>
+				<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+				</svg>
+				Export CSV
+			</button>
+
+			<!-- Confirmation dialog -->
+			{#if bulkConfirm}
+				<div class="rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+					<p class="text-xs text-amber-200">
+						{bulkConfirm.action === 'apply_tag' ? 'Apply' : 'Remove'} tag "{bulkConfirm.tagName}" {bulkConfirm.action === 'apply_tag' ? 'to' : 'from'} {matchCount?.toLocaleString()} supporter{matchCount === 1 ? '' : 's'}?
+					</p>
+					<div class="flex items-center gap-2 mt-2">
+						<button
+							type="button"
+							class="rounded-md bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-500 transition-colors disabled:opacity-50"
+							disabled={bulkActionLoading}
+							onclick={executeBulkTag}
+						>
+							{bulkActionLoading ? 'Processing...' : 'Confirm'}
+						</button>
+						<button
+							type="button"
+							class="rounded-md px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+							onclick={() => (bulkConfirm = null)}
+						>
+							Cancel
+						</button>
+					</div>
+				</div>
+			{/if}
+
+			<!-- Result message -->
+			{#if bulkResult}
+				<p class="text-xs {bulkResult.type === 'success' ? 'text-teal-400' : 'text-red-400'}">
+					{bulkResult.message}
+				</p>
+			{/if}
 		</div>
 	{/if}
 
