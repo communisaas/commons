@@ -24,6 +24,14 @@ Start here. Everything else references this.
 
 **How one verified action appears in three worlds.** The design philosophy connecting the person-facing experience (built) to the org-facing experience (building). Read this before designing any org-layer surface.
 
+### [ORG-UX-AUDIT.md](ORG-UX-AUDIT.md) — Org Layer UX Audit (2026-03-17)
+
+**Critical finding: the org layer implementation diverged from PERCEPTUAL-BRIDGE.md.** Multi-agent critique (Claude, Codex, Gemini) + adversarial debate. 13 findings, all validated. The interface makes verification a feature of a CRM instead of making CRM a consequence of verification. Read this before any org-layer work.
+
+### [ORG-REDESIGN-THESIS.md](ORG-REDESIGN-THESIS.md) — Org Layer Redesign Direction
+
+**The fix: invert the information hierarchy.** Every screen opens with proof/power/verification state, arrives at operational tools secondarily. Prioritized implementation plan (P0-P3). Derived from the audit findings + the original PERCEPTUAL-BRIDGE.md vision.
+
 ### [jurisdiction-ux-strategy.md](jurisdiction-ux-strategy.md) — Jurisdiction UX
 
 **Plain language to structured geospatial data.** Agent-assisted jurisdiction assignment for template creators.
