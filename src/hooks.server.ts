@@ -20,16 +20,19 @@ import { setCIDs } from '$lib/core/shadow-atlas/ipfs-store';
 // the ~90 call sites using process.env.XXX work without modification.
 let envShimApplied = false;
 const handlePlatformEnv: Handle = async ({ event, resolve }) => {
-	if (!envShimApplied && event.platform?.env) {
-		for (const [key, value] of Object.entries(event.platform.env as Record<string, unknown>)) {
-			if (typeof value === 'string') {
-				process.env[key] = value;
+	if (!envShimApplied) {
+		if (event.platform?.env) {
+			for (const [key, value] of Object.entries(event.platform.env as Record<string, unknown>)) {
+				if (typeof value === 'string') {
+					process.env[key] = value;
+				}
 			}
 		}
 		envShimApplied = true;
 
 		// Wire IPFS CIDs from env vars so Shadow Atlas reads go live.
-		// Quarterly CID updates are automated by push-cids.ts — no manual wrangler needed.
+		// In dev: process.env is populated by Vite from .env.
+		// On Workers: platform.env was just copied to process.env above.
 		setCIDs({
 			root: process.env.IPFS_CID_ROOT || '',
 			merkleSnapshot: process.env.IPFS_CID_MERKLE_SNAPSHOT || '',

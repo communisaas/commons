@@ -16,6 +16,9 @@
 // Configuration
 // ============================================================================
 
+/** Local IPFS gateway for development (Docker commons-ipfs container) */
+const LOCAL_IPFS_GATEWAY = 'http://localhost:8080/ipfs';
+
 /** Primary IPFS gateway (Cloudflare — no rate limits, global CDN) */
 const IPFS_GATEWAY = 'https://cloudflare-ipfs.com/ipfs';
 
@@ -220,7 +223,10 @@ async function fetchFromIPFS<T>(cid: string, mode: 'json' | 'binary' = 'json'): 
 		);
 	}
 
-	const gateways = [IPFS_GATEWAY, ...FALLBACK_GATEWAYS];
+	// In dev, try local Docker IPFS node first (fast, no rate limits)
+	const gateways = typeof globalThis.process !== 'undefined' && globalThis.process.env?.NODE_ENV !== 'production'
+		? [LOCAL_IPFS_GATEWAY, IPFS_GATEWAY, ...FALLBACK_GATEWAYS]
+		: [IPFS_GATEWAY, ...FALLBACK_GATEWAYS];
 	let lastError: Error | null = null;
 
 	for (const gateway of gateways) {
@@ -274,7 +280,10 @@ async function fetchFromRootCID<T>(path: string): Promise<T> {
 		throw new Error('IPFS root CID not configured');
 	}
 
-	const gateways = [IPFS_GATEWAY, ...FALLBACK_GATEWAYS];
+	// In dev, try local Docker IPFS node first (fast, no rate limits)
+	const gateways = typeof globalThis.process !== 'undefined' && globalThis.process.env?.NODE_ENV !== 'production'
+		? [LOCAL_IPFS_GATEWAY, IPFS_GATEWAY, ...FALLBACK_GATEWAYS]
+		: [IPFS_GATEWAY, ...FALLBACK_GATEWAYS];
 	let lastError: Error | null = null;
 	let all404 = true;
 

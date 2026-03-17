@@ -138,8 +138,8 @@ function convertDistrictId(substrateId: string): string {
 	const stateCode = FIPS_TO_STATE[stateFips];
 	if (!stateCode) return substrateId;
 
-	// At-large districts: 00 → AL
-	const district = districtNum === '00' ? 'AL' : districtNum;
+	// At-large districts: 00 (single-district states) and 98 (non-voting delegates: DC, AS, GU, MP, PR, VI) → AL
+	const district = (districtNum === '00' || districtNum === '98') ? 'AL' : districtNum;
 	return `${stateCode}-${district}`;
 }
 
