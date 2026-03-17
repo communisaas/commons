@@ -205,10 +205,10 @@
 	});
 
 	const mergeFieldHints = [
-		{ field: '{{firstName}}', desc: 'First name' },
-		{ field: '{{lastName}}', desc: 'Last name' },
-		{ field: '{{postalCode}}', desc: 'Postal code' },
-		{ field: '{{tierContext}}', desc: 'Verification context message' }
+		{ field: '{{firstName}}', desc: 'Recipient\'s first name' },
+		{ field: '{{lastName}}', desc: 'Recipient\'s last name' },
+		{ field: '{{postalCode}}', desc: 'Recipient\'s postal code' },
+		{ field: '{{tierContext}}', desc: 'Verification context, e.g., "You\'re one of 43 Established advocates in District 6"' }
 	];
 
 	function insertMergeField(field: string) {
@@ -265,8 +265,8 @@
 			</svg>
 		</a>
 		<div>
-			<h1 class="text-xl font-semibold text-text-primary">Compose Email</h1>
-			<p class="text-sm text-text-tertiary mt-1">Send an email blast to your supporters</p>
+			<h1 class="text-xl font-semibold text-text-primary">Compose Invitation</h1>
+			<p class="text-sm text-text-tertiary mt-1">Invite supporters to take verified action</p>
 		</div>
 	</div>
 
@@ -560,10 +560,10 @@
 						<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
 					</svg>
 					<div>
-						<p class="text-xs font-medium text-text-secondary">Verification context is structural</p>
+						<p class="text-xs font-medium text-text-secondary">Verification proof is built in</p>
 						<p class="text-xs text-text-tertiary mt-0.5">
-							Every email includes a verification context block showing recipient verification density.
-							This block cannot be removed -- it is appended automatically.
+							Every email includes a live verification block showing how many verified constituents have acted.
+							Recipients see themselves joining a proven collective — not responding to a blast.
 						</p>
 					</div>
 				</div>
@@ -786,7 +786,7 @@
 						use:enhance={({ cancel }) => {
 							if (activeVariant === 'A') bodyHtmlA = bodyHtml;
 							else bodyHtmlB = bodyHtml;
-							if (!confirm(`Send A/B test to ${recipientCount.toLocaleString()} supporter${recipientCount === 1 ? '' : 's'}? This cannot be undone.`)) {
+							if (!confirm(`Send invitation to ${recipientCount.toLocaleString()} supporter${recipientCount === 1 ? '' : 's'}? Each email includes your campaign's verification proof.`)) {
 								cancel();
 								return;
 							}
@@ -831,7 +831,7 @@
 						method="POST"
 						action="?/send"
 						use:enhance={({ cancel }) => {
-							if (!confirm(`Send email to ${recipientCount.toLocaleString()} supporter${recipientCount === 1 ? '' : 's'}? This cannot be undone.`)) {
+							if (!confirm(`Send invitation to ${recipientCount.toLocaleString()} supporter${recipientCount === 1 ? '' : 's'}? Each email includes your campaign's verification proof.`)) {
 								cancel();
 								return;
 							}
@@ -860,7 +860,7 @@
 							{#if sending}
 								Sending...
 							{:else}
-								Send to {recipientCount.toLocaleString()} supporter{recipientCount === 1 ? '' : 's'}
+								Send invitation to {recipientCount.toLocaleString()} supporter{recipientCount === 1 ? '' : 's'}
 							{/if}
 						</button>
 					</form>

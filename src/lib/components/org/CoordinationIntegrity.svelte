@@ -35,36 +35,36 @@
 
 		return [
 			{
-				key: 'gds', label: 'Geo Spread', value: packet.gds,
-				description: 'Geographic diversity of actions. Higher = spread across more districts.',
+				key: 'gds', label: 'Geographic diversity', value: packet.gds,
+				description: 'How spread across districts. 1.0 = one action per district.',
 				normalized: gdsNorm,
 				color: qualityColor(packet.gds),
 				invertedWarning: false
 			},
 			{
-				key: 'ald', label: 'Msg Unique', value: packet.ald,
-				description: 'Message uniqueness. Higher = more original content.',
+				key: 'ald', label: 'Message authenticity', value: packet.ald,
+				description: 'How unique each message is. 1.0 = every message distinct.',
 				normalized: aldNorm,
 				color: qualityColor(packet.ald),
 				invertedWarning: false
 			},
 			{
-				key: 'te', label: 'Time Spread', value: packet.temporalEntropy,
-				description: 'Temporal spread of actions. Higher = more organic timing.',
+				key: 'te', label: 'Timing pattern', value: packet.temporalEntropy,
+				description: 'How spread over time. Higher = organic, not a single burst.',
 				normalized: teNorm,
 				color: qualityColor(teNorm > 0 ? teNorm : null),
 				invertedWarning: false
 			},
 			{
-				key: 'bv', label: 'Burst', value: packet.burstVelocity,
-				description: 'Peak vs average action rate. Lower = more organic.',
+				key: 'bv', label: 'Action rate', value: packet.burstVelocity,
+				description: 'Peak vs. average rate. Lower = steady, organic action.',
 				normalized: bvNorm,
 				color: packet.burstVelocity !== null && packet.burstVelocity > 5 ? '#fbbf24' : qualityColor(bvNorm > 0 ? bvNorm : null),
 				invertedWarning: packet.burstVelocity !== null && packet.burstVelocity > 5
 			},
 			{
-				key: 'cai', label: 'Depth', value: packet.cai,
-				description: 'Long-term engagement graduation. Higher = deeper engagement.',
+				key: 'cai', label: 'Engagement depth', value: packet.cai,
+				description: 'How many supporters deepen engagement over time.',
 				normalized: caiNorm,
 				color: qualityColor(packet.cai),
 				invertedWarning: false
@@ -98,13 +98,18 @@
 
 	{#if allNull}
 		<div class="py-4 text-center">
-			<p class="text-sm text-text-quaternary">Insufficient data for integrity analysis</p>
-			<p class="text-[10px] text-text-quaternary mt-1">Scores appear after enough verified actions accumulate.</p>
+			<p class="text-sm text-text-quaternary">Integrity scores appear after 10+ verified actions.</p>
 		</div>
 	{:else}
+		{#if packet.burstVelocity !== null && packet.burstVelocity > 5}
+			<div class="bg-amber-500/10 border border-amber-500/20 px-4 py-2 rounded text-sm font-medium text-amber-700">
+				Action rate spike detected — decision-makers may question authenticity.
+			</div>
+		{/if}
+
 		<div class="space-y-3">
 			{#each scores as score}
-				<div class="group" title={score.description}>
+				<div class="group">
 					<div class="flex items-center justify-between mb-1">
 						<span class="text-[10px] font-mono text-text-tertiary">{score.label}</span>
 						<span
@@ -125,6 +130,7 @@
 							></div>
 						{/if}
 					</div>
+					<p class="text-xs text-text-tertiary mt-1">{score.description}</p>
 				</div>
 			{/each}
 		</div>

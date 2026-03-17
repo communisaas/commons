@@ -21,10 +21,10 @@
 			<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 				<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
 			</svg>
-			<span class="text-text-tertiary">New</span>
+			<span class="text-text-tertiary">Assemble Proof</span>
 		</nav>
-		<h1 class="text-xl font-semibold text-text-primary">Create Campaign</h1>
-		<p class="text-sm text-text-tertiary mt-1">Set up a new campaign to coordinate verified action.</p>
+		<h1 class="text-xl font-semibold text-text-primary">Assemble Proof Packet</h1>
+		<p class="text-sm text-text-tertiary mt-1">Direct verified constituent proof at your decision-makers.</p>
 	</div>
 
 	{#if form?.error}
@@ -34,73 +34,11 @@
 	{/if}
 
 	<form method="POST" use:enhance class="space-y-6">
-		<!-- Title -->
-		<div>
-			<label for="title" class="block text-sm font-medium text-text-secondary mb-1.5">Title</label>
-			<input
-				type="text"
-				id="title"
-				name="title"
-				required
-				value={form?.title ?? ''}
-				placeholder="e.g., District 5 Zoning Letter Drive"
-				class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
-			/>
-		</div>
-
-		<!-- Type -->
-		<div>
-			<label for="type" class="block text-sm font-medium text-text-secondary mb-1.5">Type</label>
-			<select
-				id="type"
-				name="type"
-				required
-				class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
-			>
-				<option value="LETTER" selected={form?.type === 'LETTER'}>Letter</option>
-				<option value="EVENT" selected={form?.type === 'EVENT'}>Event</option>
-				<option value="FORM" selected={form?.type === 'FORM'}>Form</option>
-			</select>
-		</div>
-
-		<!-- Body -->
-		<div>
-			<label for="body" class="block text-sm font-medium text-text-secondary mb-1.5">
-				Description
-				<span class="text-text-quaternary font-normal">(optional)</span>
-			</label>
-			<textarea
-				id="body"
-				name="body"
-				rows="4"
-				placeholder="Describe this campaign's purpose and goals..."
-				class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors resize-y"
-			>{form?.body ?? ''}</textarea>
-		</div>
-
-		<!-- Template -->
-		<div>
-			<label for="templateId" class="block text-sm font-medium text-text-secondary mb-1.5">
-				Template
-				<span class="text-text-quaternary font-normal">(optional)</span>
-			</label>
-			<select
-				id="templateId"
-				name="templateId"
-				class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
-			>
-				<option value="">None</option>
-				{#each data.templates as template}
-					<option value={template.id}>{template.title}</option>
-				{/each}
-			</select>
-		</div>
-
-		<!-- Geographic targeting -->
+		<!-- Section 1: Who should see this proof? -->
 		<div class="rounded-lg bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 space-y-4">
 			<div>
-				<p class="text-sm font-medium text-text-secondary">Geographic Targeting</p>
-				<p class="text-xs text-text-tertiary mt-0.5">Set the country and jurisdiction for this campaign</p>
+				<p class="text-sm font-medium text-text-secondary">Who should see this proof?</p>
+				<p class="text-xs text-text-tertiary mt-0.5">Choose the jurisdiction where your proof will land</p>
 			</div>
 
 			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -121,17 +59,84 @@
 
 			{#if targetJurisdiction}
 				<p class="text-xs text-text-tertiary">
-					This campaign targets <span class="text-text-secondary font-medium">{targetJurisdiction}</span> in <span class="text-text-secondary font-medium">{targetCountry}</span>
+					Proof will target decision-makers in <span class="text-text-secondary font-medium">{targetJurisdiction}</span>, <span class="text-text-secondary font-medium">{targetCountry}</span>
 				</p>
 			{/if}
+		</div>
+
+		<!-- Section 2: What are you proving? -->
+		<div class="space-y-5">
+			<p class="text-sm font-medium text-text-secondary">What are you proving?</p>
+
+			<!-- Title -->
+			<div>
+				<label for="title" class="block text-sm font-medium text-text-secondary mb-1.5">Title</label>
+				<input
+					type="text"
+					id="title"
+					name="title"
+					required
+					value={form?.title ?? ''}
+					placeholder="e.g., District 5 Zoning Letter Drive"
+					class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
+				/>
+			</div>
+
+			<!-- Type -->
+			<div>
+				<label for="type" class="block text-sm font-medium text-text-secondary mb-1.5">Type</label>
+				<select
+					id="type"
+					name="type"
+					required
+					class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
+				>
+					<option value="LETTER" selected={form?.type === 'LETTER'}>Letter</option>
+					<option value="EVENT" selected={form?.type === 'EVENT'}>Event</option>
+					<option value="FORM" selected={form?.type === 'FORM'}>Form</option>
+				</select>
+			</div>
+
+			<!-- Body -->
+			<div>
+				<label for="body" class="block text-sm font-medium text-text-secondary mb-1.5">
+					Description
+					<span class="text-text-quaternary font-normal">(optional)</span>
+				</label>
+				<textarea
+					id="body"
+					name="body"
+					rows="4"
+					placeholder="What civic action are supporters being asked to prove?"
+					class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors resize-y"
+				>{form?.body ?? ''}</textarea>
+			</div>
+
+			<!-- Template -->
+			<div>
+				<label for="templateId" class="block text-sm font-medium text-text-secondary mb-1.5">
+					Template
+					<span class="text-text-quaternary font-normal">(optional)</span>
+				</label>
+				<select
+					id="templateId"
+					name="templateId"
+					class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
+				>
+					<option value="">None</option>
+					{#each data.templates as template}
+						<option value={template.id}>{template.title}</option>
+					{/each}
+				</select>
+			</div>
 		</div>
 
 		<!-- Debate settings -->
 		<div class="rounded-lg bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 space-y-4">
 			<div class="flex items-center justify-between">
 				<div>
-					<p class="text-sm font-medium text-text-secondary">Debate Market</p>
-					<p class="text-xs text-text-tertiary mt-0.5">Enable on-chain debate for this campaign</p>
+					<p class="text-sm font-medium text-text-secondary">Adversarial Debate</p>
+					<p class="text-xs text-text-tertiary mt-0.5">Enable on-chain debate for this proof packet</p>
 				</div>
 				<label class="relative inline-flex items-center cursor-pointer">
 					<input
@@ -145,6 +150,9 @@
 			</div>
 
 			{#if debateEnabled}
+				<p class="text-xs text-text-tertiary">
+					When supporters take verified action, an adversarial debate spawns. The strongest arguments surface and attach to your proof packet, making it harder to dismiss.
+				</p>
 				<div>
 					<label for="debateThreshold" class="block text-sm font-medium text-text-secondary mb-1.5">
 						Threshold
@@ -162,13 +170,23 @@
 			{/if}
 		</div>
 
+		<!-- Proof preview -->
+		<div class="rounded-xl border border-surface-border bg-surface-raised p-6 space-y-3">
+			<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary">What decision-makers will see</p>
+			<div class="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+				<p class="text-xs font-mono uppercase tracking-wider text-text-quaternary mb-1">Verification Packet</p>
+				<p class="font-mono tabular-nums text-2xl font-bold text-text-quaternary">0</p>
+				<p class="text-xs text-text-quaternary mt-1">Proof assembles as supporters take action</p>
+			</div>
+		</div>
+
 		<!-- Submit -->
 		<div class="flex items-center gap-3 pt-2">
 			<button
 				type="submit"
 				class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors"
 			>
-				Create Campaign
+				Assemble Proof Packet
 			</button>
 			<a
 				href="/org/{data.org.slug}/campaigns"

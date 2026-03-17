@@ -35,7 +35,7 @@
 		<div>
 			<h1 class="text-xl font-semibold text-text-primary">Emails</h1>
 			<p class="text-sm text-text-tertiary mt-1">
-				{data.blasts.length} email blast{data.blasts.length === 1 ? '' : 's'}
+				{data.blasts.length} invitation{data.blasts.length === 1 ? '' : 's'} sent
 			</p>
 		</div>
 		{#if canCreate}
@@ -46,7 +46,7 @@
 				<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 					<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
 				</svg>
-				New Email
+				New Invitation
 			</a>
 		{/if}
 	</div>
@@ -60,7 +60,7 @@
 				</svg>
 			</div>
 			<p class="text-sm text-text-tertiary">
-				No emails sent yet. Compose your first email blast to reach your supporters.
+				No invitations sent yet. Compose your first invitation to reach your supporters.
 			</p>
 		</div>
 	{:else}

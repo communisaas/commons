@@ -11,6 +11,7 @@ import {
 import { sanitizeEmailBody } from '$lib/server/email/sanitize';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { orgMeetsPlan } from '$lib/server/billing/plan-check';
+import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -139,6 +140,12 @@ export const actions: Actions = {
 			return fail(429, { error: 'Too many requests. Try again later.' });
 		}
 
+		// Billing usage check — enforce email send limits
+		const usage = await getOrgUsage(org.id);
+		if (isOverLimit(usage).emails) {
+			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
+		}
+
 		const formData = await request.formData();
 		const subject = formData.get('subject')?.toString().trim();
 		const rawBodyHtml = formData.get('bodyHtml')?.toString();
@@ -225,6 +232,12 @@ export const actions: Actions = {
 		});
 		if (!sendLimit.allowed) {
 			return fail(429, { error: 'Too many requests. Try again later.' });
+		}
+
+		// Billing usage check — enforce email send limits
+		const abUsage = await getOrgUsage(org.id);
+		if (isOverLimit(abUsage).emails) {
+			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
 		}
 
 		const formData = await request.formData();

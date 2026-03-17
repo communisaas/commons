@@ -1,7 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
-import { computeVerificationPacket } from '$lib/server/campaigns/verification';
+import { computeVerificationPacketCached } from '$lib/server/campaigns/verification';
 import { loadCampaignAnalytics } from '$lib/server/campaigns/analytics';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad, Actions } from './$types';
@@ -14,7 +14,7 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
 	COMPLETE: []
 };
 
-export const load: PageServerLoad = async ({ params, parent }) => {
+export const load: PageServerLoad = async ({ params, parent, platform }) => {
 	const { org } = await parent();
 
 	const campaign = await db.campaign.findFirst({
@@ -39,9 +39,12 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 	}
 
 	// Compute verification packet and analytics for non-draft campaigns
+	const packetKV = platform?.env?.PACKET_CACHE_KV as
+		| { get(key: string): Promise<string | null>; put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> }
+		| undefined;
 	const isActive = campaign.status !== 'DRAFT';
 	const [packet, analytics] = await Promise.all([
-		isActive ? computeVerificationPacket(campaign.id, org.id) : null,
+		isActive ? computeVerificationPacketCached(campaign.id, org.id, packetKV) : null,
 		isActive && FEATURES.ANALYTICS_EXPANDED
 			? loadCampaignAnalytics(campaign.id, org.id)
 			: null

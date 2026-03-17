@@ -6,10 +6,12 @@
 
 	let {
 		topDistricts,
-		districtCount
+		districtCount,
+		targetDistricts
 	}: {
 		topDistricts: DistrictBucket[];
 		districtCount: number;
+		targetDistricts?: number;
 	} = $props();
 
 	const isEmpty = $derived(topDistricts.length === 0 && districtCount === 0);
@@ -29,6 +31,14 @@
 			<p class="text-[10px] text-text-quaternary mt-1">District data appears as verified actions accumulate.</p>
 		</div>
 	{:else}
+		<p class="text-sm text-secondary mb-3">
+			{#if targetDistricts}
+				Your proof covers {districtCount} of {targetDistricts} targeted districts
+			{:else}
+				Proof covers {districtCount} district{districtCount === 1 ? '' : 's'}
+			{/if}
+		</p>
+
 		<!-- Total districts -->
 		<div class="flex items-center justify-between rounded-lg border border-surface-border bg-surface-raised px-4 py-3">
 			<div class="flex items-center gap-2">
@@ -36,7 +46,7 @@
 					<path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
 					<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
 				</svg>
-				<span class="text-xs text-text-tertiary">districts reached</span>
+				<span class="text-xs text-text-tertiary">districts in proof</span>
 			</div>
 			<span class="font-mono tabular-nums text-lg font-semibold text-teal-400">
 				{districtCount}

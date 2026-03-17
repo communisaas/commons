@@ -5,21 +5,28 @@
 		hasCampaigns: boolean;
 		hasTeam: boolean;
 		hasSentEmail: boolean;
+		postalResolvedCount: number;
+		totalSupporters: number;
+		topCampaignId: string | null;
 	}
 </script>
 
 <script lang="ts">
+	import VerificationPipeline from './VerificationPipeline.svelte';
+
 	let {
 		orgSlug,
 		onboarding,
 		orgDescription,
 		billingEmail,
+		funnel,
 		onStepComplete
 	}: {
 		orgSlug: string;
 		onboarding: OnboardingState;
 		orgDescription: string | null;
 		billingEmail: string | null;
+		funnel?: { imported: number; postalResolved: number; identityVerified: number; districtVerified: number };
 		onStepComplete?: (step: keyof OnboardingState) => void;
 	} = $props();
 
@@ -38,23 +45,25 @@
 		onStepComplete?.(step);
 	}
 
-	// Step 1: Configure org (inline form)
+	// Step 1: Name your org (inline form)
 	let editingOrg = $state(false);
 	let descInput = $state(orgDescription ?? '');
 	let emailInput = $state(billingEmail ?? '');
 	let savingOrg = $state(false);
 	let orgSaveError = $state('');
 
-	// Step 2: Invite team (inline form)
-	let editingInvite = $state(false);
-	let inviteEmail = $state('');
-	let inviteRole = $state('editor');
-	let sendingInvite = $state(false);
-	let inviteMsg = $state('');
-	let inviteMsgType = $state<'success' | 'error'>('success');
+	// Step 3: Verification power — complete when supporters exist and postal codes resolve
+	const hasVerificationPower = $derived(resolved.hasSupporters && onboarding.postalResolvedCount > 0);
+
+	// Step 5: Ship first proof — link available when a campaign exists
+	const proofReportHref = $derived(
+		onboarding.topCampaignId
+			? `/org/${orgSlug}/campaigns/${onboarding.topCampaignId}/report`
+			: null
+	);
 
 	const completedCount = $derived(
-		[resolved.hasDescription, resolved.hasSupporters, resolved.hasCampaigns, resolved.hasTeam, resolved.hasSentEmail]
+		[resolved.hasDescription, resolved.hasSupporters, hasVerificationPower, resolved.hasCampaigns, resolved.hasSentEmail]
 			.filter(Boolean).length
 	);
 
@@ -93,42 +102,12 @@
 			savingOrg = false;
 		}
 	}
-
-	async function sendInvite(): Promise<void> {
-		if (!inviteEmail.trim() || !inviteEmail.includes('@')) return;
-		sendingInvite = true;
-		inviteMsg = '';
-
-		try {
-			const res = await fetch(`/api/org/${orgSlug}/invites`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					invites: [{ email: inviteEmail.trim().toLowerCase(), role: inviteRole }]
-				})
-			});
-
-			if (!res.ok) {
-				const data = await res.json().catch(() => null);
-				inviteMsg = data?.message || 'Failed to send invite.';
-				inviteMsgType = 'error';
-				return;
-			}
-
-			inviteMsg = `Invite sent to ${inviteEmail.trim()}`;
-			inviteMsgType = 'success';
-			inviteEmail = '';
-			markComplete('hasTeam');
-		} finally {
-			sendingInvite = false;
-		}
-	}
 </script>
 
 <div class="checklist">
 	<div class="checklist__header">
 		<div class="checklist__header-text">
-			<p class="checklist__title">Get started</p>
+			<p class="checklist__title">Assemble your first proof</p>
 			<p class="checklist__progress-label">{completedCount} of {totalSteps} complete</p>
 		</div>
 		<div class="checklist__progress-bar">
@@ -137,7 +116,7 @@
 	</div>
 
 	<div class="checklist__steps">
-		<!-- Step 1: Configure org -->
+		<!-- Step 1: Name your org -->
 		<div class="checklist__step" class:checklist__step--done={resolved.hasDescription}>
 			<div class="checklist__step-indicator">
 				{#if resolved.hasDescription}
@@ -150,11 +129,12 @@
 			</div>
 			<div class="checklist__step-content">
 				<div class="checklist__step-row">
-					<span class="checklist__step-label">Add a description and billing email</span>
+					<span class="checklist__step-label">Name your org</span>
 					{#if !resolved.hasDescription && !editingOrg}
 						<button class="checklist__step-action" onclick={() => { editingOrg = true; }}>Configure</button>
 					{/if}
 				</div>
+				<p class="checklist__step-hint">Description and billing email</p>
 				{#if editingOrg}
 					<div class="checklist__inline-form">
 						<label class="checklist__field">
@@ -190,10 +170,10 @@
 			</div>
 		</div>
 
-		<!-- Step 2: Invite team -->
-		<div class="checklist__step" class:checklist__step--done={resolved.hasTeam}>
+		<!-- Step 2: Bring your supporters -->
+		<div class="checklist__step" class:checklist__step--done={resolved.hasSupporters}>
 			<div class="checklist__step-indicator">
-				{#if resolved.hasTeam}
+				{#if resolved.hasSupporters}
 					<svg viewBox="0 0 20 20" fill="currentColor" class="checklist__check-icon">
 						<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
 					</svg>
@@ -203,48 +183,19 @@
 			</div>
 			<div class="checklist__step-content">
 				<div class="checklist__step-row">
-					<span class="checklist__step-label">Invite your team</span>
-					{#if !resolved.hasTeam && !editingInvite}
-						<button class="checklist__step-action" onclick={() => { editingInvite = true; }}>Invite</button>
+					<span class="checklist__step-label">Bring your supporters</span>
+					{#if !resolved.hasSupporters}
+						<a href="/org/{orgSlug}/supporters/import" class="checklist__step-action">Import</a>
 					{/if}
 				</div>
-				{#if editingInvite}
-					<div class="checklist__inline-form">
-						<div class="checklist__invite-row">
-							<input
-								type="email"
-								class="checklist__input checklist__input--flex"
-								placeholder="colleague@example.com"
-								bind:value={inviteEmail}
-								onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendInvite(); } }}
-							/>
-							<select class="checklist__select" bind:value={inviteRole}>
-								<option value="editor">Editor</option>
-								<option value="member">Viewer</option>
-							</select>
-							<button
-								class="checklist__btn-primary"
-								disabled={sendingInvite || !inviteEmail.includes('@')}
-								onclick={sendInvite}
-							>
-								{sendingInvite ? 'Sending...' : 'Send'}
-							</button>
-						</div>
-						{#if inviteMsg}
-							<p class="checklist__msg" class:checklist__msg--error={inviteMsgType === 'error'}>
-								{inviteMsg}
-							</p>
-						{/if}
-						<button class="checklist__btn-ghost checklist__btn-sm" onclick={() => { editingInvite = false; }}>Done</button>
-					</div>
-				{/if}
+				<p class="checklist__step-hint">Bring your existing supporters. We'll show you how many can be verified.</p>
 			</div>
 		</div>
 
-		<!-- Step 3: Import supporters -->
-		<div class="checklist__step" class:checklist__step--done={resolved.hasSupporters}>
+		<!-- Step 3: See your verification power -->
+		<div class="checklist__step" class:checklist__step--done={hasVerificationPower}>
 			<div class="checklist__step-indicator">
-				{#if resolved.hasSupporters}
+				{#if hasVerificationPower}
 					<svg viewBox="0 0 20 20" fill="currentColor" class="checklist__check-icon">
 						<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
 					</svg>
@@ -254,16 +205,32 @@
 			</div>
 			<div class="checklist__step-content">
 				<div class="checklist__step-row">
-					<span class="checklist__step-label">Import supporters</span>
-					{#if !resolved.hasSupporters}
-						<a href="/org/{orgSlug}/supporters/import" class="checklist__step-action">Import</a>
-					{/if}
+					<span class="checklist__step-label">See your verification power</span>
 				</div>
-				<p class="checklist__step-hint">Upload CSV or sync from Action Network</p>
+				{#if hasVerificationPower}
+					<p class="checklist__step-hint">
+						<span class="checklist__step-hint--num">{onboarding.postalResolvedCount.toLocaleString('en-US')}</span> of your supporters have postal codes that resolve to districts.
+					</p>
+				{:else if resolved.hasSupporters}
+					<p class="checklist__step-hint">Import supporters with postal codes to unlock district resolution.</p>
+				{:else}
+					<p class="checklist__step-hint">Import supporters first to see your verification pipeline.</p>
+				{/if}
+				{#if funnel && resolved.hasSupporters}
+					<div class="checklist__pipeline-embed">
+						<VerificationPipeline
+							total={funnel.imported}
+							postalResolved={funnel.postalResolved}
+							identityVerified={funnel.identityVerified}
+							districtVerified={funnel.districtVerified}
+							class="checklist__pipeline"
+						/>
+					</div>
+				{/if}
 			</div>
 		</div>
 
-		<!-- Step 4: Create first campaign -->
+		<!-- Step 4: Choose your target -->
 		<div class="checklist__step" class:checklist__step--done={resolved.hasCampaigns}>
 			<div class="checklist__step-indicator">
 				{#if resolved.hasCampaigns}
@@ -276,16 +243,16 @@
 			</div>
 			<div class="checklist__step-content">
 				<div class="checklist__step-row">
-					<span class="checklist__step-label">Create your first campaign</span>
+					<span class="checklist__step-label">Choose your target</span>
 					{#if !resolved.hasCampaigns}
-						<a href="/org/{orgSlug}/campaigns/new" class="checklist__step-action">Create</a>
+						<a href="/org/{orgSlug}/campaigns/new" class="checklist__step-action">Assemble proof</a>
 					{/if}
 				</div>
-				<p class="checklist__step-hint">Letter campaigns, events, or forms</p>
+				<p class="checklist__step-hint">Choose a decision-maker to receive your proof</p>
 			</div>
 		</div>
 
-		<!-- Step 5: Send first email -->
+		<!-- Step 5: Ship your first proof -->
 		<div class="checklist__step" class:checklist__step--done={resolved.hasSentEmail}>
 			<div class="checklist__step-indicator">
 				{#if resolved.hasSentEmail}
@@ -298,12 +265,16 @@
 			</div>
 			<div class="checklist__step-content">
 				<div class="checklist__step-row">
-					<span class="checklist__step-label">Send your first email</span>
+					<span class="checklist__step-label">Ship your first proof packet</span>
 					{#if !resolved.hasSentEmail}
-						<a href="/org/{orgSlug}/emails/compose" class="checklist__step-action">Compose</a>
+						{#if proofReportHref}
+							<a href={proofReportHref} class="checklist__step-action">Deliver proof</a>
+						{:else}
+							<span class="checklist__step-action checklist__step-action--disabled">Create a campaign first</span>
+						{/if}
 					{/if}
 				</div>
-				<p class="checklist__step-hint">Reach supporters with verified delivery</p>
+				<p class="checklist__step-hint">Deliver cryptographic proof of constituent support to a decision-maker</p>
 			</div>
 		</div>
 	</div>
@@ -435,6 +406,13 @@
 		margin: 0.125rem 0 0;
 	}
 
+	.checklist__step-hint--num {
+		font-family: 'JetBrains Mono', monospace;
+		font-variant-numeric: tabular-nums;
+		font-weight: 600;
+		color: oklch(0.45 0.12 180);
+	}
+
 	.checklist__step-action {
 		font-size: 0.75rem;
 		font-weight: 500;
@@ -451,6 +429,27 @@
 	.checklist__step-action:hover {
 		background: oklch(0.94 0.03 180);
 		color: oklch(0.3 0.12 180);
+	}
+
+	.checklist__step-action--disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+
+	.checklist__step-action--disabled:hover {
+		background: transparent;
+		color: oklch(0.4 0.1 180);
+	}
+
+	/* Pipeline embed */
+	.checklist__pipeline-embed {
+		margin-top: 0.5rem;
+	}
+
+	.checklist__pipeline-embed :global(.checklist__pipeline) {
+		padding: 0.75rem;
+		border-radius: 8px;
+		box-shadow: none;
 	}
 
 	/* Inline forms */
@@ -498,11 +497,6 @@
 		color: oklch(0.7 0.01 250);
 	}
 
-	.checklist__input--flex {
-		flex: 1;
-		min-width: 0;
-	}
-
 	.checklist__textarea {
 		padding: 0.5rem 0.625rem;
 		border-radius: 6px;
@@ -522,23 +516,6 @@
 
 	.checklist__textarea::placeholder {
 		color: oklch(0.7 0.01 250);
-	}
-
-	.checklist__select {
-		padding: 0.5rem 0.375rem;
-		border-radius: 6px;
-		border: 1px solid oklch(0.88 0.02 250);
-		background: white;
-		font-size: 0.75rem;
-		color: oklch(0.3 0.02 250);
-		outline: none;
-		cursor: pointer;
-	}
-
-	.checklist__invite-row {
-		display: flex;
-		gap: 0.375rem;
-		align-items: center;
 	}
 
 	.checklist__inline-actions {
@@ -583,24 +560,9 @@
 		color: oklch(0.3 0.02 250);
 	}
 
-	.checklist__btn-sm {
-		align-self: flex-start;
-		padding: 0.25rem 0;
-	}
-
 	.checklist__error {
 		font-size: 0.75rem;
 		color: oklch(0.5 0.15 25);
 		margin: 0;
-	}
-
-	.checklist__msg {
-		font-size: 0.75rem;
-		color: oklch(0.45 0.12 150);
-		margin: 0;
-	}
-
-	.checklist__msg--error {
-		color: oklch(0.5 0.15 25);
 	}
 </style>

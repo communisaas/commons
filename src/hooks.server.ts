@@ -143,7 +143,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 /**
  * BA-010: Defense-in-depth CSRF protection for sensitive identity endpoints.
  *
- * SvelteKit's built-in csrf.checkOrigin (enabled in svelte.config.js) already
+ * SvelteKit's built-in CSRF origin checking (trustedOrigins, see svelte.config.js) already
  * rejects non-GET requests with a mismatched Origin header. This handle adds
  * an additional layer specifically for identity verification endpoints:
  *
@@ -196,7 +196,7 @@ const handleCsrfGuard: Handle = async ({ event, resolve }) => {
 
 	// If no Origin header at all on a sensitive endpoint, this is suspicious
 	// for browser requests (browsers always send Origin on POST). Server-to-server
-	// calls won't have Origin. SvelteKit's checkOrigin handles this case, but
+	// calls won't have Origin. SvelteKit's trustedOrigins handles this case, but
 	// we log it for audit visibility.
 	if (!origin && isSensitive) {
 		console.warn(

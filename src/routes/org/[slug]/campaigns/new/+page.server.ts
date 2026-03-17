@@ -36,15 +36,15 @@ export const actions: Actions = {
 		const targetJurisdiction = formData.get('targetJurisdiction')?.toString() || null;
 
 		if (!title) {
-			return fail(400, { error: 'Title is required', title, type, body });
+			return fail(400, { error: 'Title is required', title, type, body, targetCountry, targetJurisdiction });
 		}
 
 		if (!type || !['LETTER', 'EVENT', 'FORM'].includes(type)) {
-			return fail(400, { error: 'Invalid campaign type', title, type, body });
+			return fail(400, { error: 'Invalid campaign type', title, type, body, targetCountry, targetJurisdiction });
 		}
 
 		if (debateEnabled && (isNaN(debateThreshold) || debateThreshold < 1)) {
-			return fail(400, { error: 'Debate threshold must be at least 1', title, type, body });
+			return fail(400, { error: 'Debate threshold must be at least 1', title, type, body, targetCountry, targetJurisdiction });
 		}
 
 		// Validate templateId belongs to this org if provided
@@ -53,7 +53,7 @@ export const actions: Actions = {
 				where: { id: templateId, orgId: org.id }
 			});
 			if (!template) {
-				return fail(400, { error: 'Invalid template selection', title, type, body });
+				return fail(400, { error: 'Invalid template selection', title, type, body, targetCountry, targetJurisdiction });
 			}
 		}
 

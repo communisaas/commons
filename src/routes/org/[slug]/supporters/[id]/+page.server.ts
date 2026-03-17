@@ -1,6 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
+import { dispatchTrigger } from '$lib/server/automation/trigger';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params, parent }) => {
@@ -36,7 +37,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 			postalCode: supporter.postalCode,
 			country: supporter.country,
 			phone: supporter.phone,
-			identityCommitment: supporter.identityCommitment,
+			identityVerified: !!(supporter.identityCommitment && supporter.verified),
 			verified: supporter.verified,
 			emailStatus: supporter.emailStatus,
 			source: supporter.source,
@@ -87,6 +88,13 @@ export const actions: Actions = {
 			},
 			create: { supporterId: params.id, tagId },
 			update: {}
+		});
+
+		// Fire-and-forget: dispatch tag_added trigger
+		void dispatchTrigger(org.id, 'tag_added', {
+			entityId: tagId,
+			supporterId: params.id,
+			metadata: { tagId }
 		});
 
 		return { success: true, action: 'addTag' };

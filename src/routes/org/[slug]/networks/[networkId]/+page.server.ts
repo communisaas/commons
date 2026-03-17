@@ -53,11 +53,11 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 	});
 	const uniqueSupporters = uniqueResult.length;
 
-	// Verified supporters (engagementTier >= 2)
+	// Verified supporters (identity-verified)
 	const verifiedResult = await db.supporter.count({
 		where: {
 			orgId: { in: activeMemberOrgIds },
-			engagementTier: { gte: 2 }
+			verified: true
 		}
 	});
 

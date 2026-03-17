@@ -9,11 +9,11 @@
 	);
 
 	const vState = $derived(
-		data.supporter.identityCommitment && data.supporter.verified
-			? 'VER'
+		data.supporter.identityVerified
+			? 'Verified'
 			: data.supporter.postalCode
-				? 'POST'
-				: 'IMP'
+				? 'Resolved'
+				: 'Imported'
 	);
 
 	const currentTagIds = $derived(new Set(data.supporter.tags.map((t) => t.id)));
@@ -52,28 +52,28 @@
 	<!-- Verification status hero -->
 	<div class="rounded-xl border border-surface-border bg-surface-base p-6">
 		<div class="flex items-center gap-4">
-			{#if vState === 'VER'}
+			{#if vState === 'Verified'}
 				<div class="w-12 h-12 rounded-full bg-emerald-500/15 flex items-center justify-center">
 					<span class="inline-block w-5 h-5 rounded-full bg-emerald-500"></span>
 				</div>
 				<div>
-					<p class="font-mono text-sm text-emerald-400">VERIFIED</p>
-					<p class="text-xs text-text-tertiary mt-0.5">Identity commitment confirmed via ZK proof</p>
+					<p class="text-sm font-medium text-emerald-400">Verified</p>
+					<p class="text-xs text-text-tertiary mt-0.5">Identity verified via ZK proof of residency</p>
 				</div>
-			{:else if vState === 'POST'}
-				<div class="w-12 h-12 rounded-full bg-amber-500/15 flex items-center justify-center">
-					<span class="inline-block w-5 h-5 rounded-full border-2 border-amber-500 bg-amber-500/30"></span>
+			{:else if vState === 'Resolved'}
+				<div class="w-12 h-12 rounded-full bg-teal-500/15 flex items-center justify-center">
+					<span class="inline-block w-5 h-5 rounded-full border-2 border-teal-500 bg-teal-500/30"></span>
 				</div>
 				<div>
-					<p class="font-mono text-sm text-amber-400">POSTAL-RESOLVED</p>
-					<p class="text-xs text-text-tertiary mt-0.5">Postal code on file, awaiting identity verification</p>
+					<p class="text-sm font-medium text-teal-400">District-Resolved</p>
+					<p class="text-xs text-text-tertiary mt-0.5">Postal code resolves to a district, awaiting identity verification</p>
 				</div>
 			{:else}
 				<div class="w-12 h-12 rounded-full bg-surface-overlay flex items-center justify-center">
 					<span class="inline-block w-5 h-5 rounded-full bg-text-quaternary"></span>
 				</div>
 				<div>
-					<p class="font-mono text-sm text-text-tertiary">IMPORTED</p>
+					<p class="text-sm font-medium text-text-tertiary">Imported</p>
 					<p class="text-xs text-text-tertiary mt-0.5">Imported record, no verification data yet</p>
 				</div>
 			{/if}

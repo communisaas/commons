@@ -12,6 +12,32 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
+	// Live verification packet — starts from server data, updates via SSE
+	let packet = $state(data.packet);
+
+	// SSE connection for live packet updates on active campaigns
+	$effect(() => {
+		if (!browser) return;
+		if (!data.packet) return;
+		if (data.campaign.status !== 'ACTIVE' && data.campaign.status !== 'PAUSED') return;
+
+		const es = new EventSource(`/api/org/${data.org.slug}/campaigns/${data.campaign.id}/stream`);
+
+		es.addEventListener('packet', (e: MessageEvent) => {
+			try {
+				packet = JSON.parse(e.data);
+			} catch {
+				// Invalid JSON, skip
+			}
+		});
+
+		es.addEventListener('error', () => {
+			// SSE disconnected — browser will auto-reconnect
+		});
+
+		return () => es.close();
+	});
+
 	let debateEnabled = $state(data.campaign.debateEnabled);
 	let targetCountry = $state(data.campaign.targetCountry ?? 'US');
 	let targetJurisdiction = $state(data.campaign.targetJurisdiction ?? '');
@@ -166,191 +192,25 @@
 		</div>
 	{/if}
 
-	<!-- Edit form -->
-	<form method="POST" action="?/update" use:enhance class="space-y-6">
-		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-5">
-			<!-- Title -->
-			<div>
-				<label for="title" class="block text-sm font-medium text-text-secondary mb-1.5">Title</label>
-				<input
-					type="text"
-					id="title"
-					name="title"
-					required
-					disabled={!canEdit || !isEditable}
-					value={data.campaign.title}
-					class="w-full rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm text-text-primary placeholder-text-quaternary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-				/>
-			</div>
-
-			<!-- Type -->
-			<div>
-				<label for="type" class="block text-sm font-medium text-text-secondary mb-1.5">Type</label>
-				<select
-					id="type"
-					name="type"
-					required
-					disabled={!canEdit || !isEditable}
-					class="w-full rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm text-text-primary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-				>
-					<option value="LETTER" selected={data.campaign.type === 'LETTER'}>Letter</option>
-					<option value="EVENT" selected={data.campaign.type === 'EVENT'}>Event</option>
-					<option value="FORM" selected={data.campaign.type === 'FORM'}>Form</option>
-				</select>
-			</div>
-
-			<!-- Body -->
-			<div>
-				<label for="body" class="block text-sm font-medium text-text-secondary mb-1.5">
-					Description
-					<span class="text-text-quaternary font-normal">(optional)</span>
-				</label>
-				<textarea
-					id="body"
-					name="body"
-					rows="4"
-					disabled={!canEdit || !isEditable}
-					placeholder="Describe this campaign's purpose and goals..."
-					class="w-full rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm text-text-primary placeholder-text-quaternary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors resize-y disabled:opacity-50 disabled:cursor-not-allowed"
-				>{data.campaign.body ?? ''}</textarea>
-			</div>
-
-			<!-- Template -->
-			<div>
-				<label for="templateId" class="block text-sm font-medium text-text-secondary mb-1.5">
-					Template
-					<span class="text-text-quaternary font-normal">(optional)</span>
-				</label>
-				<select
-					id="templateId"
-					name="templateId"
-					disabled={!canEdit || !isEditable}
-					class="w-full rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm text-text-primary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-				>
-					<option value="">None</option>
-					{#each data.templates as template}
-						<option value={template.id} selected={data.campaign.templateId === template.id}>
-							{template.title}
-						</option>
-					{/each}
-				</select>
-			</div>
-
-			<!-- Geographic targeting -->
-			<div class="rounded-lg border border-surface-border bg-surface-raised p-4 space-y-4">
-				<div>
-					<p class="text-sm font-medium text-text-secondary">Geographic Targeting</p>
-					<p class="text-xs text-text-tertiary mt-0.5">Country and jurisdiction for this campaign</p>
-				</div>
-
-				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-					<div>
-						<label for="targetCountry" class="block text-sm font-medium text-text-secondary mb-1.5">Country</label>
-						<input type="hidden" name="targetCountry" value={targetCountry} />
-						{#if canEdit && isEditable}
-							<CountrySelector value={targetCountry} onchange={(c) => { targetCountry = c; targetJurisdiction = ''; }} />
-						{:else}
-							<p class="py-2 text-sm text-text-tertiary">{targetCountry}</p>
-						{/if}
-					</div>
-					<div>
-						<label for="targetJurisdiction" class="block text-sm font-medium text-text-secondary mb-1.5">Jurisdiction</label>
-						<input type="hidden" name="targetJurisdiction" value={targetJurisdiction} />
-						{#if canEdit && isEditable}
-							<JurisdictionPicker value={targetJurisdiction || null} country={targetCountry} onchange={(j) => { targetJurisdiction = j; }} />
-						{:else}
-							<p class="py-2 text-sm text-text-tertiary">{targetJurisdiction || 'Not set'}</p>
-						{/if}
-					</div>
-				</div>
-
-				{#if targetJurisdiction}
-					<p class="text-xs text-text-tertiary">
-						Targeting <span class="text-text-secondary font-medium">{targetJurisdiction}</span> in <span class="text-text-secondary font-medium">{targetCountry}</span>
-					</p>
-				{/if}
-			</div>
-
-			<!-- Debate settings -->
-			<div class="rounded-lg border border-surface-border bg-surface-raised p-4 space-y-4">
-				<div class="flex items-center justify-between">
-					<div>
-						<p class="text-sm font-medium text-text-secondary">Debate Market</p>
-						<p class="text-xs text-text-tertiary mt-0.5">Enable on-chain debate for this campaign</p>
-					</div>
-					<label class="relative inline-flex items-center cursor-pointer">
-						<input
-							type="checkbox"
-							name="debateEnabled"
-							class="sr-only peer"
-							disabled={!canEdit || !isEditable}
-							bind:checked={debateEnabled}
-						/>
-						<div class="w-9 h-5 bg-surface-border-strong peer-focus:ring-2 peer-focus:ring-teal-500/40 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-tertiary after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-teal-600 peer-checked:after:bg-white disabled:opacity-50"></div>
-					</label>
-				</div>
-
-				{#if debateEnabled}
-					<div>
-						<label for="debateThreshold" class="block text-sm font-medium text-text-secondary mb-1.5">
-							Threshold
-							<span class="text-text-quaternary font-normal">(minimum verified participants)</span>
-						</label>
-						<input
-							type="number"
-							id="debateThreshold"
-							name="debateThreshold"
-							min="1"
-							disabled={!canEdit || !isEditable}
-							value={data.campaign.debateThreshold}
-							class="w-32 rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm font-mono text-text-primary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-						/>
-					</div>
-				{/if}
-			</div>
-
-			<!-- Save button -->
-			{#if canEdit && isEditable}
-				<div class="pt-2">
-					<button
-						type="submit"
-						class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors"
-					>
-						Save Changes
-					</button>
-				</div>
-			{/if}
-		</div>
-	</form>
-
-	<!-- Verification Packet -->
+	<!-- HERO: Verification Packet — the proof this campaign has assembled -->
 	<VerificationPacket
-		packet={data.packet}
+		packet={packet}
 		showDebate={data.campaign.debateEnabled}
-	/>
-
-	<!-- Analytics Dashboard (non-draft campaigns with analytics data) -->
-	{#if data.analytics}
-		<!-- Email Delivery Metrics -->
-		<DeliveryMetrics metrics={data.analytics.delivery} />
-
-		<!-- Verification Timeline -->
-		<VerificationTimeline timeline={data.analytics.timeline} />
-
-		<!-- Analytics: two-column layout for geographic + coordination -->
-		<div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-			<!-- Geographic Spread -->
-			<GeographicSpread
-				topDistricts={data.analytics.topDistricts}
-				districtCount={data.packet?.districtCount ?? 0}
-			/>
-
-			<!-- Coordination Integrity -->
-			{#if data.packet}
-				<CoordinationIntegrity packet={data.packet} />
+	>
+		{#snippet actions()}
+			{#if data.campaign.status === 'ACTIVE' || data.campaign.status === 'PAUSED' || data.campaign.status === 'COMPLETE'}
+				<div class="flex gap-3 pt-2">
+					<a href="/org/{data.org.slug}/campaigns/{data.campaign.id}/report"
+					   class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors">
+						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+						</svg>
+						Deliver Proof
+					</a>
+				</div>
 			{/if}
-		</div>
-	{/if}
+		{/snippet}
+	</VerificationPacket>
 
 	<!-- Decision-Maker Targets -->
 	<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
@@ -361,6 +221,7 @@
 				<table class="w-full text-left">
 					<thead>
 						<tr class="border-b border-surface-border">
+							<th class="pb-2 text-xs font-medium text-text-tertiary w-6"></th>
 							<th class="pb-2 text-xs font-medium text-text-tertiary">Name</th>
 							<th class="pb-2 text-xs font-medium text-text-tertiary">Email</th>
 							<th class="pb-2 text-xs font-medium text-text-tertiary">Title</th>
@@ -373,6 +234,7 @@
 					<tbody>
 						{#each data.campaign.targets as target}
 							<tr class="border-b border-surface-border">
+								<td class="py-2 pr-2 text-emerald-400" title="Resolved">&#x25CF;</td>
 								<td class="py-2 pr-4 text-sm text-text-secondary">{target.name}</td>
 								<td class="py-2 pr-4 text-sm text-text-tertiary font-mono">{target.email}</td>
 								<td class="py-2 pr-4 text-sm text-text-tertiary">{target.title ?? '—'}</td>
@@ -437,21 +299,6 @@
 		{/if}
 	</div>
 
-	<!-- Report delivery link -->
-	{#if data.campaign.status === 'ACTIVE' || data.campaign.status === 'PAUSED' || data.campaign.status === 'COMPLETE'}
-		<div class="flex items-center">
-			<a
-				href="/org/{data.org.slug}/campaigns/{data.campaign.id}/report"
-				class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors"
-			>
-				<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-				</svg>
-				Preview Report
-			</a>
-		</div>
-	{/if}
-
 	<!-- Embed widget -->
 	{#if data.campaign.status === 'ACTIVE' || data.campaign.status === 'PAUSED'}
 		<div class="rounded-xl border border-surface-border bg-surface-base">
@@ -477,7 +324,10 @@
 			{#if embedOpen}
 				<div class="border-t border-surface-border px-6 py-4 space-y-3">
 					<p class="text-xs text-text-tertiary">
-						Paste this code on your website to embed the campaign action form.
+						Each person who takes action through this widget strengthens your proof packet.
+						{#if packet}
+							<span class="font-mono tabular-nums text-teal-400">{packet.verified}</span> verified and counting.
+						{/if}
 					</p>
 					<div class="relative">
 						<pre class="overflow-x-auto rounded-lg border border-surface-border-strong bg-surface-raised px-4 py-3 font-mono text-xs text-text-secondary leading-relaxed">{embedCode}</pre>
@@ -492,6 +342,203 @@
 				</div>
 			{/if}
 		</div>
+	{/if}
+
+	<!-- Campaign settings -->
+	<details open={data.campaign.status === 'DRAFT'}>
+		<summary class="cursor-pointer rounded-xl border border-surface-border bg-surface-base px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
+			Campaign settings
+		</summary>
+		<div class="mt-2">
+			<form method="POST" action="?/update" use:enhance class="space-y-6">
+				<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-5">
+					<!-- Title -->
+					<div>
+						<label for="title" class="block text-sm font-medium text-text-secondary mb-1.5">Title</label>
+						<input
+							type="text"
+							id="title"
+							name="title"
+							required
+							disabled={!canEdit || !isEditable}
+							value={data.campaign.title}
+							class="w-full rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm text-text-primary placeholder-text-quaternary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+						/>
+					</div>
+
+					<!-- Type -->
+					<div>
+						<label for="type" class="block text-sm font-medium text-text-secondary mb-1.5">Type</label>
+						<select
+							id="type"
+							name="type"
+							required
+							disabled={!canEdit || !isEditable}
+							class="w-full rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm text-text-primary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+						>
+							<option value="LETTER" selected={data.campaign.type === 'LETTER'}>Letter</option>
+							<option value="EVENT" selected={data.campaign.type === 'EVENT'}>Event</option>
+							<option value="FORM" selected={data.campaign.type === 'FORM'}>Form</option>
+						</select>
+					</div>
+
+					<!-- Body -->
+					<div>
+						<label for="body" class="block text-sm font-medium text-text-secondary mb-1.5">
+							Description
+							<span class="text-text-quaternary font-normal">(optional)</span>
+						</label>
+						<textarea
+							id="body"
+							name="body"
+							rows="4"
+							disabled={!canEdit || !isEditable}
+							placeholder="Describe this campaign's purpose and goals..."
+							class="w-full rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm text-text-primary placeholder-text-quaternary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors resize-y disabled:opacity-50 disabled:cursor-not-allowed"
+						>{data.campaign.body ?? ''}</textarea>
+					</div>
+
+					<!-- Template -->
+					<div>
+						<label for="templateId" class="block text-sm font-medium text-text-secondary mb-1.5">
+							Template
+							<span class="text-text-quaternary font-normal">(optional)</span>
+						</label>
+						<select
+							id="templateId"
+							name="templateId"
+							disabled={!canEdit || !isEditable}
+							class="w-full rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm text-text-primary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+						>
+							<option value="">None</option>
+							{#each data.templates as template}
+								<option value={template.id} selected={data.campaign.templateId === template.id}>
+									{template.title}
+								</option>
+							{/each}
+						</select>
+					</div>
+
+					<!-- Geographic targeting -->
+					<div class="rounded-lg border border-surface-border bg-surface-raised p-4 space-y-4">
+						<div>
+							<p class="text-sm font-medium text-text-secondary">Geographic Targeting</p>
+							<p class="text-xs text-text-tertiary mt-0.5">Country and jurisdiction for this campaign</p>
+						</div>
+
+						<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+							<div>
+								<label for="targetCountry" class="block text-sm font-medium text-text-secondary mb-1.5">Country</label>
+								<input type="hidden" name="targetCountry" value={targetCountry} />
+								{#if canEdit && isEditable}
+									<CountrySelector value={targetCountry} onchange={(c) => { targetCountry = c; targetJurisdiction = ''; }} />
+								{:else}
+									<p class="py-2 text-sm text-text-tertiary">{targetCountry}</p>
+								{/if}
+							</div>
+							<div>
+								<label for="targetJurisdiction" class="block text-sm font-medium text-text-secondary mb-1.5">Jurisdiction</label>
+								<input type="hidden" name="targetJurisdiction" value={targetJurisdiction} />
+								{#if canEdit && isEditable}
+									<JurisdictionPicker value={targetJurisdiction || null} country={targetCountry} onchange={(j) => { targetJurisdiction = j; }} />
+								{:else}
+									<p class="py-2 text-sm text-text-tertiary">{targetJurisdiction || 'Not set'}</p>
+								{/if}
+							</div>
+						</div>
+
+						{#if targetJurisdiction}
+							<p class="text-xs text-text-tertiary">
+								Targeting <span class="text-text-secondary font-medium">{targetJurisdiction}</span> in <span class="text-text-secondary font-medium">{targetCountry}</span>
+							</p>
+						{/if}
+					</div>
+
+					<!-- Debate settings -->
+					<div class="rounded-lg border border-surface-border bg-surface-raised p-4 space-y-4">
+						<div class="flex items-center justify-between">
+							<div>
+								<p class="text-sm font-medium text-text-secondary">Debate Market</p>
+								<p class="text-xs text-text-tertiary mt-0.5">When enough supporters act, an adversarial debate strengthens your proof</p>
+							</div>
+							<label class="relative inline-flex items-center cursor-pointer">
+								<input
+									type="checkbox"
+									name="debateEnabled"
+									class="sr-only peer"
+									disabled={!canEdit || !isEditable}
+									bind:checked={debateEnabled}
+								/>
+								<div class="w-9 h-5 bg-surface-border-strong peer-focus:ring-2 peer-focus:ring-teal-500/40 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-tertiary after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-teal-600 peer-checked:after:bg-white disabled:opacity-50"></div>
+							</label>
+						</div>
+
+						{#if debateEnabled}
+							<p class="text-xs text-text-tertiary mt-2">
+								When {data.campaign.debateThreshold ?? 10} supporters take action, an adversarial debate spawns. The strongest arguments surface and attach to your proof packet.
+							</p>
+							<div>
+								<label for="debateThreshold" class="block text-sm font-medium text-text-secondary mb-1.5">
+									Threshold
+									<span class="text-text-quaternary font-normal">(minimum verified participants)</span>
+								</label>
+								<input
+									type="number"
+									id="debateThreshold"
+									name="debateThreshold"
+									min="1"
+									disabled={!canEdit || !isEditable}
+									value={data.campaign.debateThreshold}
+									class="w-32 rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm font-mono text-text-primary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+								/>
+							</div>
+						{/if}
+					</div>
+
+					<!-- Save button -->
+					{#if canEdit && isEditable}
+						<div class="pt-2">
+							<button
+								type="submit"
+								class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors"
+							>
+								Save Changes
+							</button>
+						</div>
+					{/if}
+				</div>
+			</form>
+		</div>
+	</details>
+
+	<!-- Analytics detail -->
+	{#if data.analytics}
+		<details>
+			<summary class="cursor-pointer rounded-xl border border-surface-border bg-surface-base px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
+				Analytics detail
+			</summary>
+			<div class="mt-2 space-y-6">
+				<!-- Email Delivery Metrics -->
+				<DeliveryMetrics metrics={data.analytics.delivery} />
+
+				<!-- Verification Timeline -->
+				<VerificationTimeline timeline={data.analytics.timeline} />
+
+				<!-- Analytics: two-column layout for geographic + coordination -->
+				<div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+					<!-- Geographic Spread -->
+					<GeographicSpread
+						topDistricts={data.analytics.topDistricts}
+						districtCount={packet?.districtCount ?? 0}
+					/>
+
+					<!-- Coordination Integrity -->
+					{#if packet}
+						<CoordinationIntegrity packet={packet} />
+					{/if}
+				</div>
+			</div>
+		</details>
 	{/if}
 
 	<!-- Metadata footer -->
