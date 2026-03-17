@@ -13,11 +13,22 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 
 	// If not an A/B test, just show basic info
 	if (!blast.isAbTest || !blast.abParentId) {
+		const bounceEvents = await db.emailEvent.findMany({
+			where: { blastId: blast.id, eventType: 'bounce' },
+			select: { recipientEmail: true, timestamp: true },
+			orderBy: { timestamp: 'desc' },
+			take: 100
+		});
+
 		return {
 			isAbTest: false,
 			blast: serializeBlast(blast),
 			variants: [],
-			winnerBlast: null
+			winnerBlast: null,
+			bounceEvents: bounceEvents.map((e) => ({
+				email: maskEmail(e.recipientEmail),
+				timestamp: e.timestamp.toISOString()
+			}))
 		};
 	}
 
@@ -33,6 +44,14 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 
 	const config = (variantA?.abTestConfig ?? {}) as Record<string, unknown>;
 
+	const abBlastIds = allBlasts.map((b) => b.id);
+	const bounceEvents = await db.emailEvent.findMany({
+		where: { blastId: { in: abBlastIds }, eventType: 'bounce' },
+		select: { recipientEmail: true, timestamp: true },
+		orderBy: { timestamp: 'desc' },
+		take: 100
+	});
+
 	return {
 		isAbTest: true,
 		blast: serializeBlast(blast),
@@ -46,7 +65,11 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 			winnerMetric: (config.winnerMetric as string) ?? 'open',
 			testDurationMs: (config.testDurationMs as number) ?? 0,
 			testGroupPct: (config.testGroupPct as number) ?? 20
-		}
+		},
+		bounceEvents: bounceEvents.map((e) => ({
+			email: maskEmail(e.recipientEmail),
+			timestamp: e.timestamp.toISOString()
+		}))
 	};
 };
 
@@ -80,4 +103,10 @@ function serializeBlast(b: {
 		createdAt: b.createdAt.toISOString(),
 		abWinnerPickedAt: b.abWinnerPickedAt?.toISOString() ?? null
 	};
+}
+
+function maskEmail(email: string): string {
+	const [local, domain] = email.split('@');
+	if (!local || !domain) return '***@***';
+	return local[0] + '***@' + domain;
 }

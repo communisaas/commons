@@ -1,5 +1,7 @@
+import { fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
-import type { PageServerLoad } from './$types';
+import { loadOrgContext, requireRole } from '$lib/server/org';
+import type { PageServerLoad, Actions } from './$types';
 
 const PAGE_SIZE = 50;
 
@@ -81,7 +83,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 			}),
 			db.tag.findMany({
 				where: { orgId: org.id },
-				select: { id: true, name: true },
+				select: { id: true, name: true, _count: { select: { supporters: true } } },
 				orderBy: { name: 'asc' }
 			}),
 			db.supporter.groupBy({
@@ -104,7 +106,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		postalCode: s.postalCode,
 		country: s.country,
 		phone: s.phone,
-		identityCommitment: s.identityCommitment,
+		identityVerified: !!(s.identityCommitment && s.verified),
 		verified: s.verified,
 		emailStatus: s.emailStatus,
 		source: s.source,
@@ -121,18 +123,113 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 	const totalInOrg = statusCounts.reduce((sum, row) => sum + row._count.id, 0);
 	const importedCount = totalInOrg - verifiedCount - postalCount;
 
+	// Build email health counts
+	const emailHealth: Record<string, number> = {
+		subscribed: 0,
+		unsubscribed: 0,
+		bounced: 0,
+		complained: 0
+	};
+	for (const row of statusCounts) {
+		if (row.emailStatus in emailHealth) {
+			emailHealth[row.emailStatus] = row._count.id;
+		}
+	}
+
 	return {
 		supporters,
 		total,
 		hasMore,
 		nextCursor,
-		tags,
+		tags: tags.map((t) => ({ id: t.id, name: t.name, supporterCount: t._count.supporters })),
 		campaigns,
 		summary: {
 			verified: verifiedCount,
 			postal: postalCount,
 			imported: importedCount
 		},
+		emailHealth,
 		filters: { q, status, verified, tagId, source }
 	};
+};
+
+export const actions: Actions = {
+	createTag: async ({ request, params, locals }) => {
+		if (!locals.user) {
+			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/supporters`);
+		}
+		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+		requireRole(membership.role, 'editor');
+
+		const formData = await request.formData();
+		const name = formData.get('name')?.toString()?.trim();
+
+		if (!name) {
+			return fail(400, { error: 'Tag name is required', action: 'createTag' });
+		}
+
+		const existing = await db.tag.findUnique({
+			where: { orgId_name: { orgId: org.id, name } }
+		});
+		if (existing) {
+			return fail(409, { error: 'A tag with this name already exists', action: 'createTag' });
+		}
+
+		await db.tag.create({ data: { orgId: org.id, name } });
+		return { success: true, action: 'createTag' };
+	},
+
+	renameTag: async ({ request, params, locals }) => {
+		if (!locals.user) {
+			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/supporters`);
+		}
+		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+		requireRole(membership.role, 'editor');
+
+		const formData = await request.formData();
+		const tagId = formData.get('tagId')?.toString();
+		const name = formData.get('name')?.toString()?.trim();
+
+		if (!tagId || !name) {
+			return fail(400, { error: 'Tag ID and name are required', action: 'renameTag' });
+		}
+
+		const tag = await db.tag.findFirst({ where: { id: tagId, orgId: org.id } });
+		if (!tag) {
+			return fail(404, { error: 'Tag not found', action: 'renameTag' });
+		}
+
+		const conflict = await db.tag.findUnique({
+			where: { orgId_name: { orgId: org.id, name } }
+		});
+		if (conflict && conflict.id !== tagId) {
+			return fail(409, { error: 'A tag with this name already exists', action: 'renameTag' });
+		}
+
+		await db.tag.update({ where: { id: tagId }, data: { name } });
+		return { success: true, action: 'renameTag' };
+	},
+
+	deleteTag: async ({ request, params, locals }) => {
+		if (!locals.user) {
+			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/supporters`);
+		}
+		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+		requireRole(membership.role, 'editor');
+
+		const formData = await request.formData();
+		const tagId = formData.get('tagId')?.toString();
+
+		if (!tagId) {
+			return fail(400, { error: 'Tag ID is required', action: 'deleteTag' });
+		}
+
+		const tag = await db.tag.findFirst({ where: { id: tagId, orgId: org.id } });
+		if (!tag) {
+			return fail(404, { error: 'Tag not found', action: 'deleteTag' });
+		}
+
+		await db.tag.delete({ where: { id: tagId } });
+		return { success: true, action: 'deleteTag' };
+	}
 };

@@ -1,11 +1,114 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { invalidateAll } from '$app/navigation';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
 
 	const isOwner = $derived(data.membership.role === 'owner');
+	const canInvite = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
 	const planName = $derived(data.subscription?.plan ?? 'free');
+
+	// Invite form state
+	let inviteEmail = $state('');
+	let inviteRole = $state<'member' | 'editor'>('member');
+	let inviteSending = $state(false);
+	let inviteMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
+
+	// Invite action loading states (keyed by invite id)
+	let resendingId = $state<string | null>(null);
+	let revokingId = $state<string | null>(null);
+
+	async function resendInvite(inviteId: string) {
+		if (resendingId) return;
+		resendingId = inviteId;
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/invites`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ inviteId })
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ message: 'Failed to resend invite' }));
+				inviteMessage = { type: 'error', text: err.message ?? 'Failed to resend invite' };
+				return;
+			}
+			inviteMessage = { type: 'success', text: 'Invite resent successfully' };
+			await invalidateAll();
+		} catch {
+			inviteMessage = { type: 'error', text: 'Network error. Please try again.' };
+		} finally {
+			resendingId = null;
+		}
+	}
+
+	async function revokeInvite(inviteId: string) {
+		if (revokingId) return;
+		revokingId = inviteId;
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/invites`, {
+				method: 'DELETE',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ inviteId })
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ message: 'Failed to revoke invite' }));
+				inviteMessage = { type: 'error', text: err.message ?? 'Failed to revoke invite' };
+				return;
+			}
+			inviteMessage = { type: 'success', text: 'Invite revoked' };
+			await invalidateAll();
+		} catch {
+			inviteMessage = { type: 'error', text: 'Network error. Please try again.' };
+		} finally {
+			revokingId = null;
+		}
+	}
+
+	const seatsUsed = $derived(data.members.length + data.invites.length);
+	const maxSeats = $derived(data.org.max_seats);
+	const atSeatLimit = $derived(seatsUsed >= maxSeats);
+
+	const isValidEmail = $derived(inviteEmail.trim().length > 0 && inviteEmail.includes('@') && inviteEmail.includes('.'));
+
+	async function sendInvite() {
+		if (!isValidEmail || inviteSending || atSeatLimit) return;
+
+		inviteSending = true;
+		inviteMessage = null;
+
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/invites`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					invites: [{ email: inviteEmail.trim().toLowerCase(), role: inviteRole }]
+				})
+			});
+
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ message: 'Failed to send invite' }));
+				inviteMessage = { type: 'error', text: err.message ?? 'Failed to send invite' };
+				return;
+			}
+
+			const result = await res.json();
+			const status = result.results?.[0]?.status;
+
+			if (status === 'skipped') {
+				inviteMessage = { type: 'error', text: 'Already a member or has a pending invite' };
+			} else {
+				inviteMessage = { type: 'success', text: `Invite sent to ${inviteEmail.trim()}` };
+				inviteEmail = '';
+				inviteRole = 'member';
+				await invalidateAll();
+			}
+		} catch {
+			inviteMessage = { type: 'error', text: 'Network error. Please try again.' };
+		} finally {
+			inviteSending = false;
+		}
+	}
 	const billingSuccess = $derived($page.url.searchParams.get('billing') === 'success');
 	const billingCanceled = $derived($page.url.searchParams.get('billing') === 'canceled');
 
@@ -234,7 +337,7 @@
 	<section class="space-y-4">
 		<div class="flex items-center justify-between">
 			<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Team</h2>
-			<span class="text-xs text-text-tertiary">{data.members.length} member{data.members.length !== 1 ? 's' : ''}</span>
+			<span class="text-xs text-text-tertiary font-mono tabular-nums">{seatsUsed} of {maxSeats} seats used</span>
 		</div>
 		<div class="rounded-xl border border-surface-border bg-surface-base divide-y divide-surface-border">
 			{#each data.members as member}
@@ -259,6 +362,48 @@
 			{/each}
 		</div>
 
+		<!-- Invite Form (editor+ only) -->
+		{#if canInvite}
+			<div class="rounded-xl border border-surface-border bg-surface-base p-5 space-y-3">
+				<h3 class="text-sm font-medium text-text-primary">Invite a team member</h3>
+				{#if atSeatLimit}
+					<p class="text-xs text-amber-400">All {maxSeats} seats are in use. Upgrade your plan to invite more members.</p>
+				{/if}
+				<form
+					onsubmit={(e) => { e.preventDefault(); sendInvite(); }}
+					class="flex flex-col sm:flex-row gap-3"
+				>
+					<input
+						type="email"
+						bind:value={inviteEmail}
+						placeholder="colleague@example.com"
+						disabled={inviteSending || atSeatLimit}
+						class="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 disabled:opacity-50"
+					/>
+					<select
+						bind:value={inviteRole}
+						disabled={inviteSending || atSeatLimit}
+						class="px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-secondary focus:outline-none focus:border-teal-500 disabled:opacity-50"
+					>
+						<option value="member">Member</option>
+						<option value="editor">Editor</option>
+					</select>
+					<button
+						type="submit"
+						disabled={!isValidEmail || inviteSending || atSeatLimit}
+						class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+					>
+						{inviteSending ? 'Sending...' : 'Send Invite'}
+					</button>
+				</form>
+				{#if inviteMessage}
+					<p class="text-xs {inviteMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}">
+						{inviteMessage.text}
+					</p>
+				{/if}
+			</div>
+		{/if}
+
 		<!-- Pending Invites -->
 		{#if data.invites.length > 0}
 			<div class="space-y-2">
@@ -267,7 +412,26 @@
 					{#each data.invites as invite}
 						<div class="flex items-center justify-between px-4 py-2.5 text-sm">
 							<span class="text-text-tertiary">{invite.email}</span>
-							<span class="text-xs text-text-quaternary">expires {formatDate(invite.expiresAt)}</span>
+							<div class="flex items-center gap-3">
+								<span class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-tertiary capitalize">{invite.role}</span>
+								<span class="text-xs text-text-quaternary">expires {formatDate(invite.expiresAt)}</span>
+								{#if canInvite}
+									<button
+										onclick={() => resendInvite(invite.id)}
+										disabled={resendingId === invite.id || !!revokingId}
+										class="text-xs px-2 py-1 rounded border border-surface-border-strong text-text-secondary hover:text-text-primary hover:bg-surface-overlay transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+									>
+										{resendingId === invite.id ? 'Resending...' : 'Resend'}
+									</button>
+									<button
+										onclick={() => revokeInvite(invite.id)}
+										disabled={revokingId === invite.id || !!resendingId}
+										class="text-xs px-2 py-1 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+									>
+										{revokingId === invite.id ? 'Revoking...' : 'Revoke'}
+									</button>
+								{/if}
+							</div>
 						</div>
 					{/each}
 				</div>

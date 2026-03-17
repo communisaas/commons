@@ -22,6 +22,30 @@
 		verified_action: 'Verified Action Rate'
 	};
 
+	function bounceRate(bounced: number, sent: number): number {
+		if (sent === 0) return 0;
+		return (bounced / sent) * 100;
+	}
+
+	function bounceRateColor(rate: number): string {
+		if (rate < 2) return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20';
+		if (rate <= 5) return 'bg-amber-500/15 text-amber-400 border-amber-500/20';
+		return 'bg-red-500/15 text-red-400 border-red-500/20';
+	}
+
+	// Compute total bounced/sent across all relevant blasts
+	const totalBounced = $derived(
+		data.isAbTest
+			? data.variants.reduce((sum, v) => sum + (v?.totalBounced ?? 0), 0)
+			: data.blast.totalBounced
+	);
+	const totalSent = $derived(
+		data.isAbTest
+			? data.variants.reduce((sum, v) => sum + (v?.totalSent ?? 0), 0)
+			: data.blast.totalSent
+	);
+	const rate = $derived(bounceRate(totalBounced, totalSent));
+
 	function isWinner(variant: typeof data.variants[0]): boolean {
 		if (!data.isAbTest || data.variants.length < 2) return false;
 		const a = data.variants[0];
@@ -54,13 +78,20 @@
 				<path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
 			</svg>
 		</a>
-		<div>
-			<h1 class="text-xl font-semibold text-text-primary">
-				{#if data.isAbTest}A/B Test Results{:else}Email Details{/if}
-			</h1>
-			<p class="text-sm text-text-tertiary mt-1">
-				{data.blast.subject}
-			</p>
+		<div class="flex items-center gap-3">
+			<div>
+				<h1 class="text-xl font-semibold text-text-primary">
+					{#if data.isAbTest}A/B Test Results{:else}Email Details{/if}
+				</h1>
+				<p class="text-sm text-text-tertiary mt-1">
+					{data.blast.subject}
+				</p>
+			</div>
+			{#if totalSent > 0}
+				<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-mono {bounceRateColor(rate)}">
+					{rate.toFixed(1)}% bounced
+				</span>
+			{/if}
 		</div>
 	</div>
 
@@ -159,6 +190,24 @@
 					<p class="text-xl font-mono tabular-nums text-text-primary">{data.blast.totalBounced.toLocaleString()}</p>
 					<p class="text-xs font-mono text-text-tertiary">{pct(data.blast.totalBounced, data.blast.totalSent)}</p>
 				</div>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Bounced Recipients -->
+	{#if data.bounceEvents.length > 0}
+		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-3">
+			<h3 class="text-sm font-medium text-text-secondary">
+				Bounced Recipients
+				<span class="ml-2 font-mono text-text-tertiary">{data.bounceEvents.length}</span>
+			</h3>
+			<div class="divide-y divide-surface-border">
+				{#each data.bounceEvents as event}
+					<div class="flex items-center justify-between py-2 text-sm">
+						<span class="font-mono text-text-tertiary">{event.email}</span>
+						<span class="text-xs text-text-quaternary">{formatDate(event.timestamp)}</span>
+					</div>
+				{/each}
 			</div>
 		</div>
 	{/if}

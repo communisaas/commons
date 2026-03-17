@@ -143,6 +143,72 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	return json({ invites });
 };
 
+/** Revoke a pending invite. */
+export const DELETE: RequestHandler = async ({ params, locals, request }) => {
+	if (!locals.user) {
+		throw error(401, 'Authentication required');
+	}
+
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
+
+	const body = await request.json();
+	const { inviteId } = body as { inviteId?: string };
+
+	if (!inviteId) {
+		throw error(400, 'inviteId is required');
+	}
+
+	const invite = await db.orgInvite.findFirst({
+		where: { id: inviteId, orgId: org.id }
+	});
+
+	if (!invite) {
+		throw error(404, 'Invite not found');
+	}
+
+	await db.orgInvite.delete({ where: { id: inviteId } });
+
+	return json({ ok: true });
+};
+
+/** Resend a pending invite (regenerate token + reset expiry). */
+export const PATCH: RequestHandler = async ({ params, locals, request }) => {
+	if (!locals.user) {
+		throw error(401, 'Authentication required');
+	}
+
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
+
+	const body = await request.json();
+	const { inviteId } = body as { inviteId?: string };
+
+	if (!inviteId) {
+		throw error(400, 'inviteId is required');
+	}
+
+	const invite = await db.orgInvite.findFirst({
+		where: { id: inviteId, orgId: org.id, accepted: false }
+	});
+
+	if (!invite) {
+		throw error(404, 'Invite not found');
+	}
+
+	const token = generateToken();
+	const expiresAt = new Date();
+	expiresAt.setDate(expiresAt.getDate() + 7);
+
+	const updated = await db.orgInvite.update({
+		where: { id: inviteId },
+		data: { token, expiresAt },
+		select: { id: true, email: true, role: true, expiresAt: true }
+	});
+
+	return json({ invite: updated });
+};
+
 function generateToken(): string {
 	const bytes = new Uint8Array(32);
 	crypto.getRandomValues(bytes);
