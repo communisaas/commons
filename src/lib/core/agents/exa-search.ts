@@ -14,6 +14,7 @@
 import { getExaClient, getSearchRateLimiter } from '$lib/server/exa';
 import { getFirecrawlClient, getFirecrawlRateLimiter } from '$lib/server/firecrawl';
 import { extractContactHints } from '$lib/core/agents/agents/decision-maker';
+import type { ProvenanceSignals } from '$lib/core/agents/types';
 
 // ============================================================================
 // Timeout Helper
@@ -89,9 +90,24 @@ export interface ExaPageContent {
  * @param options - Optional: maxResults (default 25, max before 5x price jump)
  * @returns Array of search hits with URL, title, publishedDate
  */
+/** Extended search options — backwards compatible with original { maxResults } interface */
+export interface SearchWebOptions {
+	maxResults?: number;
+	/** Exa domain filter: only return results from these domains (e.g., ['.gov', '.gov.uk']) */
+	includeDomains?: string[];
+	/** Exa domain filter: exclude results from these domains */
+	excludeDomains?: string[];
+	/** Exa category filter: 'news', 'research paper', 'company', etc. */
+	category?: 'company' | 'research paper' | 'news' | 'pdf' | 'tweet' | 'personal site' | 'financial report' | 'people';
+	/** ISO date string — only return results published after this date */
+	startPublishedDate?: string;
+	/** Strings that must NOT appear in result text */
+	excludeText?: string[];
+}
+
 export async function searchWeb(
 	query: string,
-	options?: { maxResults?: number }
+	options?: SearchWebOptions
 ): Promise<ExaSearchHit[]> {
 	const maxResults = options?.maxResults ?? 25;
 	const exa = getExaClient();
@@ -99,13 +115,21 @@ export async function searchWeb(
 
 	console.debug(`[exa-search] searchWeb: "${query}"`);
 
+	// Build Exa search params — only include optional fields when provided
+	const searchParams: Record<string, unknown> = {
+		numResults: maxResults,
+		type: 'auto',
+		contents: false as const
+	};
+	if (options?.includeDomains?.length) searchParams.includeDomains = options.includeDomains;
+	if (options?.excludeDomains?.length) searchParams.excludeDomains = options.excludeDomains;
+	if (options?.category) searchParams.category = options.category;
+	if (options?.startPublishedDate) searchParams.startPublishedDate = options.startPublishedDate;
+	if (options?.excludeText?.length) searchParams.excludeText = options.excludeText;
+
 	const result = await rateLimiter.execute(
 		async () => withTimeout(
-			exa.search(query, {
-				numResults: maxResults,
-				type: 'auto',
-				contents: false as const
-			}),
+			exa.search(query, searchParams as Parameters<typeof exa.search>[1]),
 			SEARCH_TIMEOUT_MS,
 			`exa-search "${query.slice(0, 40)}"`
 		),
@@ -404,4 +428,279 @@ export function prunePageContent(text: string, protectedNames?: string[]): strin
 		`[prune] ${text.length} → ${result.length} chars (dropped ${noiseCount} noise paragraphs, kept ${protectedParts.length} protected + ${contextParts.length} context)`
 	);
 	return result;
+}
+
+// ============================================================================
+// pruneSourceContent — Factual-priority content assembly
+// ============================================================================
+
+const SOURCE_PRUNE_TARGET_CHARS = 3_000;
+
+/**
+ * Prune page content for source discovery, preserving factual density.
+ *
+ * Different from prunePageContent() which protects contact signals (emails, phones).
+ * This variant protects:
+ * - Statistics, data points, dollar amounts, percentages
+ * - Direct quotes (text in quotation marks)
+ * - Dates, legislative references, vote counts
+ * - Methodology mentions (sample size, confidence intervals)
+ * - The article's core finding/thesis (first 2-3 paragraphs)
+ *
+ * Strips navigation link clusters, boilerplate, and duplicate paragraphs.
+ *
+ * @param text - Full page markdown text
+ * @param maxChars - Character budget (default 3,000)
+ * @returns Pruned text ≤ maxChars
+ */
+export function pruneSourceContent(text: string, maxChars: number = SOURCE_PRUNE_TARGET_CHARS): string {
+	if (text.length <= maxChars) {
+		return text;
+	}
+
+	const paragraphs = text.split(/\n{2,}/);
+
+	// Classify each paragraph
+	const PARA_PROTECTED = 0;
+	const PARA_NOISE = 1;
+	const PARA_CONTEXT = 2;
+
+	const classes: number[] = new Array(paragraphs.length);
+	const seen = new Set<string>();
+
+	for (let i = 0; i < paragraphs.length; i++) {
+		const para = paragraphs[i];
+		const paraLower = para.toLowerCase();
+
+		// Protect paragraphs with factual signals
+		const hasFactualSignal =
+			// Statistics, dollar amounts, percentages
+			/\$[\d,.]+|\d+(?:\.\d+)?%|\b\d{1,3}(?:,\d{3})+\b/.test(para) ||
+			// Direct quotes
+			/[""\u201C\u201D][^""\u201C\u201D]{10,}[""\u201C\u201D]/.test(para) ||
+			// Legislative references, bill numbers, vote counts
+			/\b(?:H\.?R\.?\s*\d|S\.?\s*\d|bill|resolution|ordinance|statute|vote[ds]?\s+\d|passed\s+\d|enacted)\b/i.test(para) ||
+			// Dates with context (not just bare years)
+			/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/.test(para) ||
+			// Methodology / research signals
+			/\b(?:sample size|n\s*=\s*\d|confidence interval|margin of error|statistically|regression|survey(?:ed)?|respondents)\b/i.test(para) ||
+			// Specific findings language
+			/\b(?:found that|results show|data (?:shows?|indicates?|reveals?)|according to the)\b/i.test(para);
+
+		if (hasFactualSignal) {
+			classes[i] = PARA_PROTECTED;
+			continue;
+		}
+
+		// Check for noise (same patterns as prunePageContent)
+		const linkCount = countLinks(para);
+		const linkCharCount = countLinkChars(para);
+		const isLinkCluster = linkCount >= LINK_CLUSTER_MIN_LINKS &&
+			para.length > 0 &&
+			(linkCharCount / para.length) >= LINK_CLUSTER_RATIO;
+
+		const isBoilerplate = BOILERPLATE_PATTERNS.some(p => paraLower.includes(p));
+
+		const trimmed = para.trim();
+		const isDuplicate = seen.has(trimmed) && trimmed.length > 0;
+		if (trimmed.length > 0) seen.add(trimmed);
+
+		if (isLinkCluster || isBoilerplate || isDuplicate) {
+			classes[i] = PARA_NOISE;
+		} else {
+			classes[i] = PARA_CONTEXT;
+		}
+	}
+
+	// Protect first 2-3 non-noise paragraphs (article thesis/lede)
+	let ledeCount = 0;
+	for (let i = 0; i < paragraphs.length && ledeCount < 3; i++) {
+		if (classes[i] !== PARA_NOISE && paragraphs[i].trim().length > 30) {
+			classes[i] = PARA_PROTECTED;
+			ledeCount++;
+		}
+	}
+
+	// Assembly: PROTECTED always included, then CONTEXT until budget, NOISE dropped
+	const protectedParts: string[] = [];
+	const contextParts: string[] = [];
+
+	for (let i = 0; i < paragraphs.length; i++) {
+		if (classes[i] === PARA_PROTECTED) {
+			protectedParts.push(paragraphs[i]);
+		} else if (classes[i] === PARA_CONTEXT) {
+			contextParts.push(paragraphs[i]);
+		}
+	}
+
+	// Build output: protected first, then context to fill budget
+	let result = protectedParts.join('\n\n');
+
+	if (result.length > maxChars) {
+		// Protected content alone exceeds budget — truncate
+		return result.slice(0, maxChars);
+	}
+
+	let charsRemaining = maxChars - result.length;
+
+	if (charsRemaining > 0 && contextParts.length > 0) {
+		const contextBlock: string[] = [];
+		for (const part of contextParts) {
+			if (part.length + 2 > charsRemaining) break;
+			contextBlock.push(part);
+			charsRemaining -= (part.length + 2);
+		}
+		if (contextBlock.length > 0) {
+			result += '\n\n' + contextBlock.join('\n\n');
+		}
+	}
+
+	return result;
+}
+
+// ============================================================================
+// extractProvenance — Source provenance signal extraction
+// ============================================================================
+
+const FUNDING_PATTERNS = [
+	/funded by\s+([^.]+)/i,
+	/supported by\s+([^.]+)/i,
+	/sponsored by\s+([^.]+)/i,
+	/grant from\s+([^.]+)/i,
+	/financial support from\s+([^.]+)/i
+];
+
+const ADVOCACY_PATTERNS = [
+	/our mission is to\s+([^.]+)/i,
+	/we advocate for\s+([^.]+)/i,
+	/dedicated to\s+(?:promoting|advancing|protecting|fighting|opposing)\s+([^.]+)/i,
+	/committed to\s+(?:ensuring|achieving|stopping)\s+([^.]+)/i
+];
+
+/**
+ * Extract provenance signals from a fetched page.
+ *
+ * Targets page regions that mainstream content pruning discards as "boilerplate" —
+ * About sections, footer disclaimers, author bios, funding acknowledgments.
+ * These signals reveal *why* the source exists and feed the Gemini evaluator,
+ * not the message writer.
+ *
+ * @param page - Firecrawl page content
+ * @returns Provenance signals struct
+ */
+export function extractProvenance(page: ExaPageContent): ProvenanceSignals {
+	const text = page.text;
+
+	// Publisher: use page title domain or extract from content
+	const publisher = extractPublisher(page);
+
+	// Org description: look for "About Us" or mission statements
+	const orgDescription = extractOrgDescription(text);
+
+	// Funding disclosure
+	let fundingDisclosure: string | undefined;
+	for (const pattern of FUNDING_PATTERNS) {
+		const match = text.match(pattern);
+		if (match) {
+			fundingDisclosure = match[0].trim();
+			break;
+		}
+	}
+
+	// Advocacy indicators
+	const advocacyIndicators: string[] = [];
+	for (const pattern of ADVOCACY_PATTERNS) {
+		const match = text.match(pattern);
+		if (match) {
+			advocacyIndicators.push(match[0].trim());
+		}
+	}
+
+	// Source order classification
+	const sourceOrder = classifySourceOrder(text);
+
+	// Author byline
+	const author = extractAuthor(text);
+
+	// Methodology detection
+	const hasMethodology = /\b(?:methodology|sample size|n\s*=\s*\d|confidence interval|margin of error|statistically significant|regression analysis)\b/i.test(text);
+
+	return {
+		publisher,
+		orgDescription,
+		fundingDisclosure,
+		sourceOrder,
+		advocacyIndicators,
+		author,
+		hasMethodology
+	};
+}
+
+/** Extract publisher identity from URL domain or page content */
+function extractPublisher(page: ExaPageContent): string {
+	// Try extracting from URL domain
+	try {
+		const hostname = new URL(page.url).hostname.replace(/^www\./, '');
+		// Use domain as fallback publisher
+		return hostname;
+	} catch {
+		return page.title || 'Unknown';
+	}
+}
+
+/** Extract org description from About sections or mission statements */
+function extractOrgDescription(text: string): string | undefined {
+	// Look for "About Us" / "About [Org]" / "Our Mission" sections
+	const aboutMatch = text.match(
+		/(?:^|\n)#+\s*(?:About\s+(?:Us|the)|Our\s+Mission|Who\s+We\s+Are)\s*\n([\s\S]{10,300}?)(?:\n#|\n\n\n)/im
+	);
+	if (aboutMatch) {
+		return aboutMatch[1].trim().slice(0, 300);
+	}
+
+	// Look for meta-description-style sentences near the top
+	const missionMatch = text.slice(0, 2000).match(
+		/(?:is a|is an|is the)\s+((?:non-?profit|organization|institute|foundation|center|association|agency|bureau|department)[^.]{10,200}\.)/i
+	);
+	if (missionMatch) {
+		return missionMatch[0].trim().slice(0, 300);
+	}
+
+	return undefined;
+}
+
+/** Classify source as primary, secondary, opinion, or unknown */
+function classifySourceOrder(text: string): 'primary' | 'secondary' | 'opinion' | 'unknown' {
+	const isOpinion = /\b(?:editorial|op-?ed|opinion|commentary|perspective|column|my view|I (?:believe|think|argue))\b/i.test(text);
+	if (isOpinion) return 'opinion';
+
+	// Secondary signals: reporting on others' data/research
+	const secondarySignals = /\b(?:according to|a report by|data from|published by|researchers found|a study by)\b/i.test(text);
+	// Primary signals: this source produced the data itself
+	const primarySignals = /\b(?:our (?:survey|study|analysis|research|findings|report)|we (?:found|collected|analyzed|surveyed|measured)|methodology|sample size|n\s*=\s*\d)\b/i.test(text);
+
+	if (primarySignals) return 'primary';
+	if (secondarySignals) return 'secondary';
+	return 'unknown';
+}
+
+/** Extract author byline from page content */
+function extractAuthor(text: string): string | undefined {
+	// Common byline patterns — check first ~2000 chars (bylines are near the top)
+	const header = text.slice(0, 2000);
+
+	const bylinePatterns = [
+		/\b[Bb]y[ \t]+([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){1,3})/m,
+		/\b[Aa]uthor:[ \t]*([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){1,3})/m,
+		/\b[Ww]ritten[ \t]+[Bb]y[ \t]+([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){1,3})/m
+	];
+
+	for (const pattern of bylinePatterns) {
+		const match = header.match(pattern);
+		if (match) {
+			return match[1].trim();
+		}
+	}
+
+	return undefined;
 }

@@ -429,7 +429,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		// Layer 1: Llama Guard 4 (MLCommons S1-S14 hazard taxonomy)
 		//   - Elections (S13), Defamation (S5), specialized for civic content
 		//   - 14,400 free requests/day via GROQ
-		// Layer 2: Gemini 2.5 Flash (quality assessment)
+		// Layer 2: Gemini 3 Flash (quality assessment)
 		//   - Policy relevance, professionalism, congressional appropriateness
 		let consensusResult;
 

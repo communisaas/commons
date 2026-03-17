@@ -74,6 +74,48 @@ export interface Source {
 	type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other';
 }
 
+// ============================================================================
+// Source Discovery Pipeline Types
+// ============================================================================
+
+/** Provenance metadata extracted from page content — consumed by source evaluator, not message writer */
+export interface ProvenanceSignals {
+	publisher: string;
+	orgDescription?: string;
+	fundingDisclosure?: string;
+	sourceOrder: 'primary' | 'secondary' | 'opinion' | 'unknown';
+	advocacyIndicators: string[];
+	author?: string;
+	hasMethodology: boolean;
+}
+
+/** Candidate source after Exa search + Firecrawl content fetch + provenance extraction */
+export interface SourceCandidate {
+	url: string;
+	title: string;
+	publishedDate?: string;
+	exaScore?: number;
+	stratum: 'gov' | 'news' | 'general';
+	excerpt: string;
+	provenance: ProvenanceSignals;
+}
+
+/** Source after Gemini incentive-aware evaluation */
+export interface EvaluatedSource {
+	num: number;
+	title: string;
+	url: string;
+	type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other';
+	snippet: string;
+	relevance: string;
+	date?: string;
+	publisher?: string;
+	excerpt: string;
+	credibility_rationale: string;
+	incentive_position: 'adversarial' | 'neutral' | 'aligned';
+	source_order: 'primary' | 'secondary' | 'opinion';
+}
+
 export interface MessageResponse {
 	message: string;
 	sources: Source[];

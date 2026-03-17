@@ -132,6 +132,97 @@
 		return formData.objective.rawInput || formData.objective.description || '';
 	}
 
+	// US state abbreviations for geographic inference
+	const US_STATES: Record<string, string> = {
+		AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
+		CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia',
+		HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa',
+		KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
+		MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi',
+		MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire',
+		NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina',
+		ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania',
+		RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee',
+		TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington',
+		WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming', DC: 'District of Columbia'
+	};
+
+	/**
+	 * Infer geographic scope from decision makers' organizations.
+	 * Heuristic-based — doesn't need to be perfect; Exa queries still work with approximate scope.
+	 */
+	function inferGeographicScope(
+		dms: { name: string; title: string; organization: string }[]
+	): { type: 'international' | 'nationwide' | 'subnational'; country?: string; subdivision?: string; locality?: string } {
+		if (!dms || dms.length === 0) return { type: 'nationwide', country: 'US' };
+
+		const orgs = dms.map((dm) => dm.organization || '');
+
+		// Try to extract state abbreviations from org strings (e.g. "CA State Legislature")
+		function extractState(org: string): string | null {
+			// Match 2-letter state code at word boundary
+			const match = org.match(/\b([A-Z]{2})\b/);
+			if (match && US_STATES[match[1]]) return match[1];
+			// Match full state names
+			for (const [abbr, name] of Object.entries(US_STATES)) {
+				if (org.toLowerCase().includes(name.toLowerCase())) return abbr;
+			}
+			return null;
+		}
+
+		// Try to extract city/locality from org strings (e.g. "San Francisco Board of Supervisors")
+		// Common patterns: "City of X", "X City Council", "X Board of Supervisors", "X County"
+		function extractLocality(org: string): string | null {
+			const patterns = [
+				/City of ([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)/,
+				/([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\s+(?:City Council|Board of Supervisors|Town Council|Village Board|Borough Council)/,
+				/([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\s+County/
+			];
+			for (const pat of patterns) {
+				const m = org.match(pat);
+				if (m) return m[1];
+			}
+			return null;
+		}
+
+		const states = orgs.map(extractState);
+		const localities = orgs.map(extractLocality);
+
+		// Check if all share a locality
+		const nonNullLocalities = localities.filter((l): l is string => l !== null);
+		if (nonNullLocalities.length === dms.length) {
+			const unique = [...new Set(nonNullLocalities)];
+			if (unique.length === 1) {
+				const state = states.find((s): s is string => s !== null);
+				return {
+					type: 'subnational',
+					country: 'US',
+					subdivision: state || undefined,
+					locality: unique[0]
+				};
+			}
+		}
+
+		// Check if all share a state
+		const nonNullStates = states.filter((s): s is string => s !== null);
+		if (nonNullStates.length === dms.length) {
+			const unique = [...new Set(nonNullStates)];
+			if (unique.length === 1) {
+				return { type: 'subnational', country: 'US', subdivision: unique[0] };
+			}
+		}
+
+		// Check for US-level indicators (Congress, Senate, federal agencies)
+		const federalPatterns = /\b(U\.?S\.?|United States|Congress|Senate|House of Representatives|Federal)\b/i;
+		const allUS = orgs.every(
+			(org) => federalPatterns.test(org) || nonNullStates.length > 0
+		);
+		if (allUS) return { type: 'nationwide', country: 'US' };
+
+		// Default: if we can't determine, assume nationwide US
+		return { type: 'nationwide', country: 'US' };
+	}
+
 	async function generateMessage() {
 		// Prevent concurrent generation
 		if (isGenerating) return;
@@ -176,7 +267,8 @@
 						organization: dm.organization
 					})),
 					voice_sample: voiceSample,
-					raw_input: rawInput
+					raw_input: rawInput,
+					geographic_scope: inferGeographicScope(formData.audience.decisionMakers)
 				})
 			});
 

@@ -31,7 +31,12 @@ import {
 } from '$lib/server/llm-cost-protection';
 import type { DecisionMaker } from '$lib/core/agents';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
-import { traceRequest } from '$lib/server/agent-trace';
+import { traceRequest, traceEvent } from '$lib/server/agent-trace';
+import { db } from '$lib/core/db';
+import type { EvaluatedSource } from '$lib/core/agents/types';
+
+/** 72-hour cache TTL for template source cache */
+const SOURCE_CACHE_TTL_MS = 72 * 60 * 60 * 1000;
 
 interface RequestBody {
 	subject_line: string;
@@ -40,6 +45,7 @@ interface RequestBody {
 	decision_makers: DecisionMaker[];
 	voice_sample?: string;
 	raw_input?: string;
+	template_id?: string;
 	geographic_scope?: {
 		type: 'international' | 'nationwide' | 'subnational';
 		country?: string;
@@ -158,6 +164,44 @@ export const POST: RequestHandler = async (event) => {
 		let resultExternalCounts: import('$lib/core/agents/types').ExternalApiCounts | undefined;
 
 		try {
+			// ================================================================
+			// Template source cache: lookup
+			// ================================================================
+			let cacheHit = false;
+			let verifiedSources: EvaluatedSource[] | undefined;
+
+			if (body.template_id) {
+				try {
+					const template = await db.template.findUnique({
+						where: { id: body.template_id },
+						select: { cachedSources: true, sourcesCachedAt: true }
+					});
+
+					if (
+						template?.cachedSources &&
+						template.sourcesCachedAt &&
+						(Date.now() - template.sourcesCachedAt.getTime()) < SOURCE_CACHE_TTL_MS
+					) {
+						cacheHit = true;
+						verifiedSources = template.cachedSources as unknown as EvaluatedSource[];
+						console.log('[stream-message] Source cache hit:', {
+							templateId: body.template_id,
+							sourceCount: verifiedSources.length,
+							cachedAge: Math.round((Date.now() - template.sourcesCachedAt.getTime()) / 60000) + 'min'
+						});
+					}
+				} catch (cacheErr) {
+					// Cache lookup failure is non-fatal — proceed without cache
+					console.warn('[stream-message] Source cache lookup failed:', cacheErr);
+				}
+
+				traceEvent(traceId, 'message-generation', 'source-cache', {
+					cacheHit,
+					templateId: body.template_id,
+					sourceCount: verifiedSources?.length ?? 0
+				}, { userId: session.userId });
+			}
+
 			const result = await generateMessage({
 				subjectLine: body.subject_line,
 				coreMessage: body.core_message,
@@ -166,6 +210,8 @@ export const POST: RequestHandler = async (event) => {
 				voiceSample: body.voice_sample,
 				rawInput: body.raw_input,
 				geographicScope: body.geographic_scope,
+				verifiedSources,
+				traceId,
 				onThought: (thought: string, phase?: PipelinePhase) => {
 					const cleaned = cleanThoughtForDisplay(thought);
 					if (cleaned) {
@@ -185,6 +231,22 @@ export const POST: RequestHandler = async (event) => {
 			// Send final result
 			emitter.complete(clientResult);
 			streamSuccess = true;
+
+			// ================================================================
+			// Template source cache: write (fire-and-forget)
+			// Cache miss + template_id + non-empty sources → write cache
+			// ================================================================
+			if (body.template_id && !cacheHit && result.evaluatedSources && result.evaluatedSources.length > 0) {
+				db.template.update({
+					where: { id: body.template_id },
+					data: {
+						cachedSources: result.evaluatedSources as unknown as import('@prisma/client').Prisma.InputJsonValue,
+						sourcesCachedAt: new Date()
+					}
+				}).catch((err: unknown) => {
+					console.warn('[stream-message] Source cache write failed:', err);
+				});
+			}
 
 			console.log('[stream-message] Two-phase generation complete:', {
 				userId: session.userId,

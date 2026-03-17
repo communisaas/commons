@@ -1,14 +1,15 @@
 /**
- * Message Writer Agent — Two-Phase Source Verification
+ * Message Writer Agent — Two-Phase Pipeline
  *
- * Phase 1 (Source Discovery): Find and validate sources via web search.
- *   - Google Search grounding to find REAL URLs
- *   - URL validation to confirm accessibility
- *   - Returns verified source pool
+ * Phase 1 (Source Discovery): Deterministic retrieval via Exa + Firecrawl.
+ *   - Stratified Exa search (gov, news, general)
+ *   - Firecrawl content fetch + provenance extraction
+ *   - Gemini incentive-aware evaluation (structured JSON)
+ *   - Returns evaluated source pool with credibility rationale
  *
- * Phase 2 (Message Generation): Write message using ONLY verified sources.
+ * Phase 2 (Message Generation): Write message using ONLY evaluated sources.
  *   - Cannot fabricate URLs—must cite from pool
- *   - Grounded in actual, accessible evidence
+ *   - Sources include incentive framing for context-aware citations
  *
  * This eliminates citation hallucination: every URL in the output is verified.
  */
@@ -17,8 +18,8 @@ import { z } from 'zod';
 import { generateWithThoughts } from '../gemini-client';
 import { MESSAGE_WRITER_PROMPT } from '../prompts/message-writer';
 import { extractJsonFromGroundingResponse, isSuccessfulExtraction } from '../utils/grounding-json';
-import { discoverSources, formatSourcesForPrompt, type VerifiedSource } from './source-discovery';
-import type { MessageResponse, DecisionMaker, TokenUsage, ExternalApiCounts } from '../types';
+import { discoverSources, formatSourcesForPrompt } from './source-discovery';
+import type { MessageResponse, DecisionMaker, TokenUsage, ExternalApiCounts, EvaluatedSource } from '../types';
 import { sumTokenUsage, emptyExternalCounts } from '../types';
 
 // ============================================================================
@@ -83,6 +84,8 @@ export interface GenerateMessageResult extends MessageResponse {
 	tokenUsage?: TokenUsage;
 	/** External API call counts for cost tracking */
 	externalCounts?: ExternalApiCounts;
+	/** Full evaluated sources with incentive context — used for template source caching */
+	evaluatedSources?: EvaluatedSource[];
 }
 
 export interface GenerateMessageOptions {
@@ -99,8 +102,10 @@ export interface GenerateMessageOptions {
 		subdivision?: string;
 		locality?: string;
 	};
-	/** Pre-verified sources (skip Phase 1 if provided) */
-	verifiedSources?: VerifiedSource[];
+	/** Pre-evaluated sources (skip Phase 1 if provided) */
+	verifiedSources?: EvaluatedSource[];
+	/** Trace ID for observability — threaded to source discovery */
+	traceId?: string;
 	/** Callback for streaming thoughts */
 	onThought?: (thought: string, phase?: PipelinePhase) => void;
 	/** Callback for phase updates */
@@ -128,8 +133,8 @@ export async function generateMessage(options: GenerateMessageOptions): Promise<
 	// Phase 1: Source Discovery (skip if pre-verified sources provided)
 	// ====================================================================
 
-	let verifiedSources: VerifiedSource[] = options.verifiedSources || [];
-	let actualSearchQueries: string[] = []; // The REAL Google searches we ran
+	let verifiedSources: EvaluatedSource[] = options.verifiedSources || [];
+	let actualSearchQueries: string[] = []; // The REAL search queries we ran
 	let sourceTokenUsage: TokenUsage | undefined;
 	const externalCounts = emptyExternalCounts();
 
@@ -143,8 +148,14 @@ export async function generateMessage(options: GenerateMessageOptions): Promise<
 			subjectLine,
 			topics,
 			geographicScope: options.geographicScope,
+			decisionMakers: decisionMakers.map(dm => ({
+				name: dm.name,
+				title: dm.title,
+				organization: dm.organization
+			})),
 			minSources: 3,
 			maxSources: 6,
+			traceId: options.traceId,
 			onThought: onThought ? (thought) => onThought(thought, 'sources') : undefined,
 			onPhase: (phase, message) => {
 				if (phase === 'validate') {
@@ -153,14 +164,22 @@ export async function generateMessage(options: GenerateMessageOptions): Promise<
 			}
 		});
 
-		verifiedSources = sourceResult.verified;
-		actualSearchQueries = sourceResult.searchQueries; // Capture REAL search queries
+		verifiedSources = sourceResult.evaluated;
+		actualSearchQueries = sourceResult.searchQueries;
 		sourceTokenUsage = sourceResult.tokenUsage;
-		externalCounts.groundingSearches = sourceResult.groundingSearches;
+
+		// Update external counts from new pipeline
+		if (sourceResult.externalCounts) {
+			externalCounts.exaSearches = sourceResult.externalCounts.exaSearches;
+			externalCounts.firecrawlReads = sourceResult.externalCounts.firecrawlReads;
+			externalCounts.groundingSearches = sourceResult.externalCounts.groundingSearches;
+		} else {
+			externalCounts.groundingSearches = sourceResult.groundingSearches;
+		}
 
 		console.debug('[message-writer] Phase 1 complete:', {
 			discovered: sourceResult.discovered.length,
-			verified: verifiedSources.length,
+			evaluated: sourceResult.evaluated.length,
 			failed: sourceResult.failed.length,
 			searchQueries: actualSearchQueries
 		});
@@ -176,7 +195,7 @@ export async function generateMessage(options: GenerateMessageOptions): Promise<
 		// Bridging thought
 		if (onThought && verifiedSources.length > 0) {
 			onThought(
-				`Verified ${verifiedSources.length} sources. Now writing the message...`,
+				`Evaluated ${verifiedSources.length} sources. Now writing the message...`,
 				'sources'
 			);
 		}
@@ -205,7 +224,7 @@ export async function generateMessage(options: GenerateMessageOptions): Promise<
 	// Inject current date into system prompt
 	const systemPrompt = MESSAGE_WRITER_PROMPT.replace('{CURRENT_DATE}', currentDate);
 
-	// Format verified sources for the prompt
+	// Format evaluated sources for the prompt
 	const sourcesBlock = formatSourcesForPrompt(verifiedSources);
 
 	// Build the voice block — this is the emotional core to mine
@@ -258,7 +277,7 @@ The stranger who shares this link should think "I need to send that too." Every 
 			temperature: 0.8,
 			thinkingLevel: 'high',
 			enableGrounding: false, // Disabled — using pre-verified sources
-			maxOutputTokens: 65536 // Maximum for Gemini 2.5+ to prevent truncation
+			maxOutputTokens: 65536
 		},
 		onThought ? (thought) => onThought(thought, 'message') : undefined
 	);
@@ -292,14 +311,23 @@ The stranger who shares this link should think "I need to send that too." Every 
 		throw new Error('Message generation hit a snag. Please try again.');
 	}
 
-	// CRITICAL: Replace generated sources with verified sources
+	// CRITICAL: Replace generated sources with verified/evaluated sources
 	// The model may have included source metadata in its output, but we trust only the verified pool
-	const verifiedSourcesForOutput = verifiedSources.map((s) => ({
-		num: s.num,
-		title: s.title,
-		url: s.url,
-		type: s.type
-	}));
+	const verifiedSourcesForOutput = verifiedSources.map((s) => {
+		const base: Record<string, unknown> = {
+			num: s.num,
+			title: s.title,
+			url: s.url,
+			type: s.type
+		};
+		// Include evaluation fields when available (EvaluatedSource)
+		if ('credibility_rationale' in s) {
+			base.credibility_rationale = s.credibility_rationale;
+			base.incentive_position = s.incentive_position;
+			base.source_order = s.source_order;
+		}
+		return base as { num: number; title: string; url: string; type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other' };
+	});
 
 	// Normalize [Personal Connection] — fix case variations the model may produce
 	const normalizedMessage = validationResult.data.message.trim()
@@ -320,6 +348,7 @@ The stranger who shares this link should think "I need to send that too." Every 
 		research_log: actualSearchQueries.length > 0 ? actualSearchQueries : [],
 		tokenUsage: sumTokenUsage(sourceTokenUsage, messageTokenUsage),
 		externalCounts,
+		evaluatedSources: verifiedSources,
 	};
 
 	console.debug('[message-writer] Two-phase generation complete', {

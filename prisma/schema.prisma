@@ -165,6 +165,8 @@ model Template {
   message_body     String
   sources          Json?   @default("[]") // Citation sources from message generation agent
   research_log     Json?   @default("[]") @map("research_log") // Agent's research process log
+  cachedSources    Json?     @map("cached_sources")    // Evaluated source pool from first generation
+  sourcesCachedAt  DateTime? @map("sources_cached_at") // Cache timestamp (72h TTL)
   delivery_config  Json
   cwc_config       Json?
   recipient_config Json

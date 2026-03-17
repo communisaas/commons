@@ -419,13 +419,14 @@ export function logLLMOperation(
 		costUsd: breakdown ? `$${breakdown.totalCostUsd.toFixed(6)}` : 'no token data'
 	});
 
-	// Persist to agent_trace (fire-and-forget)
-	if (traceId && breakdown) {
-		traceCompletion(traceId, operation, { components: breakdown.components, externalCounts: breakdown.externalCounts }, {
+	// Persist to agent_trace (fire-and-forget) — always write when traceId exists,
+	// even without cost data, so completion traces are never silently dropped.
+	if (traceId) {
+		traceCompletion(traceId, operation, { components: breakdown?.components, externalCounts: breakdown?.externalCounts }, {
 			userId: context.userId,
 			durationMs: details.durationMs,
 			success: details.success,
-			costUsd: breakdown.totalCostUsd,
+			costUsd: breakdown?.totalCostUsd,
 			inputTokens: details.tokenUsage?.promptTokens,
 			outputTokens: details.tokenUsage?.candidatesTokens,
 			thoughtsTokens: details.tokenUsage?.thoughtsTokens,
