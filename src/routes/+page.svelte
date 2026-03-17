@@ -442,7 +442,7 @@
 </script>
 
 <svelte:head>
-	<title>Commons — Write once, send together</title>
+	<title>Commons | Write once, send together</title>
 	<meta
 		name="description"
 		content="Write once, share the link, everyone can send it. Coordinated messages make impact."

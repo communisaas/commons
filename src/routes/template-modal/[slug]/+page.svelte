@@ -51,7 +51,7 @@
 </script>
 
 <svelte:head>
-	<title>{data.template.title} - Take Action - Commons</title>
+	<title>{data.template.title} | Take Action | Commons</title>
 	<meta name="description" content={data.template.description} />
 
 	<!-- Prevent indexing of modal pages -->

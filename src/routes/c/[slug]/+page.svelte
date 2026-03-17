@@ -253,7 +253,7 @@
 </script>
 
 <svelte:head>
-	<title>{data.campaign.title} - {data.campaign.orgName}</title>
+	<title>{data.campaign.title} | {data.campaign.orgName}</title>
 	<meta name="description" content={data.campaign.body || `Take action: ${data.campaign.title}`} />
 	<meta property="og:title" content={data.campaign.title} />
 	<meta property="og:description" content={data.campaign.body || `Take action with ${data.campaign.orgName}`} />

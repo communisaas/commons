@@ -144,7 +144,7 @@
 </script>
 
 <svelte:head>
-	<title>Profile - Commons</title>
+	<title>Profile | Commons</title>
 	<meta name="description" content="Your civic identity and advocacy impact" />
 </svelte:head>
 

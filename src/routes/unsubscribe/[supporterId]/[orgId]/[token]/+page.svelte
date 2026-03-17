@@ -5,7 +5,7 @@
 </script>
 
 <svelte:head>
-	<title>Unsubscribe — commons.email</title>
+	<title>Unsubscribe | commons.email</title>
 </svelte:head>
 
 <div class="min-h-screen flex items-center justify-center bg-zinc-950 px-4">

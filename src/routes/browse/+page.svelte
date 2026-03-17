@@ -44,7 +44,7 @@
 </script>
 
 <svelte:head>
-	<title>Browse Templates - Commons</title>
+	<title>Browse Templates | Commons</title>
 	<meta
 		name="description"
 		content="Browse templates to contact your representatives about issues that matter to you."

@@ -12,7 +12,7 @@
 </script>
 
 <svelte:head>
-	<title>Developers - Commons</title>
+	<title>Developers | Commons</title>
 	<meta name="description" content="Commons Public API documentation. Free, uncapped REST API with TypeScript and Python SDKs." />
 </svelte:head>
 
