@@ -118,7 +118,7 @@ describe('Fundraising CRUD - POST /api/org/[slug]/fundraising', () => {
 
 	it('returns 404 when FEATURES.FUNDRAISING is false', async () => {
 		mockFeatures.FUNDRAISING = false;
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -129,7 +129,7 @@ describe('Fundraising CRUD - POST /api/org/[slug]/fundraising', () => {
 	});
 
 	it('returns 401 without authenticated user', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -145,7 +145,7 @@ describe('Fundraising CRUD - POST /api/org/[slug]/fundraising', () => {
 			(e as any).status = 403;
 			throw e;
 		});
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -157,7 +157,7 @@ describe('Fundraising CRUD - POST /api/org/[slug]/fundraising', () => {
 
 	it('returns 403 when org does not meet Starter plan', async () => {
 		mockOrgMeetsPlan.mockResolvedValue(false);
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -168,7 +168,7 @@ describe('Fundraising CRUD - POST /api/org/[slug]/fundraising', () => {
 	});
 
 	it('returns 400 for missing title', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -179,7 +179,7 @@ describe('Fundraising CRUD - POST /api/org/[slug]/fundraising', () => {
 	});
 
 	it('returns 400 for title shorter than 3 characters', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -190,7 +190,7 @@ describe('Fundraising CRUD - POST /api/org/[slug]/fundraising', () => {
 	});
 
 	it('creates fundraiser campaign with correct data and returns 201', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		const res = await POST({
 			params: { slug: 'test-org' },
 			request: makeRequest({ title: 'Save the Park', goalAmountCents: 500000 }),
@@ -207,7 +207,7 @@ describe('Fundraising CRUD - POST /api/org/[slug]/fundraising', () => {
 	});
 
 	it('returns 400 for negative goalAmountCents', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -231,7 +231,7 @@ describe('Fundraising CRUD - GET /api/org/[slug]/fundraising', () => {
 
 	it('returns 404 when FEATURES.FUNDRAISING is false', async () => {
 		mockFeatures.FUNDRAISING = false;
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { GET } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		await expect(
 			GET({ params: { slug: 'test-org' }, url: makeUrl(), locals: makeLocals() } as any)
 		).rejects.toThrow('Not found');
@@ -244,7 +244,7 @@ describe('Fundraising CRUD - GET /api/org/[slug]/fundraising', () => {
 			{ id: 'c2', title: 'Fund B', status: 'DRAFT', goalAmountCents: null, raisedAmountCents: 0, donorCount: 0, donationCurrency: 'usd', createdAt: now, updatedAt: now }
 		]);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { GET } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		const res = await GET({
 			params: { slug: 'test-org' },
 			url: makeUrl(),
@@ -261,7 +261,7 @@ describe('Fundraising CRUD - GET /api/org/[slug]/fundraising', () => {
 
 	it('filters by status query param', async () => {
 		mockDbCampaignFindMany.mockResolvedValue([]);
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/+server.ts');
+		const { GET } = await import('../../../src/routes/api/org/[slug]/fundraising/+server');
 		await GET({
 			params: { slug: 'test-org' },
 			url: makeUrl({ status: 'ACTIVE' }),
@@ -294,7 +294,7 @@ describe('Fundraising CRUD - PATCH /api/org/[slug]/fundraising/[id]', () => {
 	});
 
 	it('updates fundraiser with valid data', async () => {
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/org/[slug]/fundraising/[id]/+server');
 		const res = await PATCH({
 			params: { slug: 'test-org', id: 'camp-1' },
 			request: makeRequest({ title: 'Updated Title', goalAmountCents: 750000 }),
@@ -306,7 +306,7 @@ describe('Fundraising CRUD - PATCH /api/org/[slug]/fundraising/[id]', () => {
 
 	it('returns 404 for non-FUNDRAISER campaign', async () => {
 		mockDbCampaignFindFirst.mockResolvedValue(null);
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/org/[slug]/fundraising/[id]/+server');
 		await expect(
 			PATCH({
 				params: { slug: 'test-org', id: 'camp-other' },
@@ -317,7 +317,7 @@ describe('Fundraising CRUD - PATCH /api/org/[slug]/fundraising/[id]', () => {
 	});
 
 	it('returns 400 when no fields to update', async () => {
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/org/[slug]/fundraising/[id]/+server');
 		await expect(
 			PATCH({
 				params: { slug: 'test-org', id: 'camp-1' },
@@ -328,7 +328,7 @@ describe('Fundraising CRUD - PATCH /api/org/[slug]/fundraising/[id]', () => {
 	});
 
 	it('returns 400 for invalid status', async () => {
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/org/[slug]/fundraising/[id]/+server');
 		await expect(
 			PATCH({
 				params: { slug: 'test-org', id: 'camp-1' },
@@ -357,7 +357,7 @@ describe('Fundraising CRUD - DELETE /api/org/[slug]/fundraising/[id]', () => {
 		});
 		mockDbCampaignUpdate.mockResolvedValue({ id: 'camp-1', status: 'COMPLETE' });
 
-		const { DELETE } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/[id]/+server.ts');
+		const { DELETE } = await import('../../../src/routes/api/org/[slug]/fundraising/[id]/+server');
 		const res = await DELETE({
 			params: { slug: 'test-org', id: 'camp-1' },
 			locals: makeLocals()
@@ -372,7 +372,7 @@ describe('Fundraising CRUD - DELETE /api/org/[slug]/fundraising/[id]', () => {
 
 	it('returns 404 for fundraiser not in org', async () => {
 		mockDbCampaignFindFirst.mockResolvedValue(null);
-		const { DELETE } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/[id]/+server.ts');
+		const { DELETE } = await import('../../../src/routes/api/org/[slug]/fundraising/[id]/+server');
 		await expect(
 			DELETE({
 				params: { slug: 'test-org', id: 'camp-other' },
@@ -407,7 +407,7 @@ describe('Fundraising CRUD - GET /api/org/[slug]/fundraising/[id]/donors', () =>
 			}
 		]);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/[id]/donors/+server.ts');
+		const { GET } = await import('../../../src/routes/api/org/[slug]/fundraising/[id]/donors/+server');
 		const res = await GET({
 			params: { slug: 'test-org', id: 'camp-1' },
 			locals: makeLocals()
@@ -435,7 +435,7 @@ describe('Fundraising CRUD - GET /api/org/[slug]/fundraising/[id]/donors', () =>
 			}
 		]);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/[id]/donors/+server.ts');
+		const { GET } = await import('../../../src/routes/api/org/[slug]/fundraising/[id]/donors/+server');
 		const res = await GET({
 			params: { slug: 'test-org', id: 'camp-1' },
 			locals: makeLocals()
@@ -447,7 +447,7 @@ describe('Fundraising CRUD - GET /api/org/[slug]/fundraising/[id]/donors', () =>
 
 	it('returns 404 for non-FUNDRAISER campaign', async () => {
 		mockDbCampaignFindFirst.mockResolvedValue(null);
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/fundraising/[id]/donors/+server.ts');
+		const { GET } = await import('../../../src/routes/api/org/[slug]/fundraising/[id]/donors/+server');
 		await expect(
 			GET({
 				params: { slug: 'test-org', id: 'camp-other' },

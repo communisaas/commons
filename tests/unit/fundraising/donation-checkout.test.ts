@@ -133,66 +133,66 @@ describe('Donation Checkout - POST /api/d/[campaignId]/checkout', () => {
 
 	it('returns 404 when FEATURES.FUNDRAISING is false', async () => {
 		mockFeatures.FUNDRAISING = false;
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs(VALID_BODY))).rejects.toThrow('Not found');
 	});
 
 	it('returns 429 when rate limited', async () => {
 		mockRateLimiterCheck.mockResolvedValue({ allowed: false, remaining: 0, limit: 10, reset: Date.now() });
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs(VALID_BODY))).rejects.toThrow('Too many requests');
 	});
 
 	it('returns 400 for missing email', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs({ name: 'Jane', amountCents: 5000 }))).rejects.toThrow('email');
 	});
 
 	it('returns 400 for invalid email', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs({ email: 'not-an-email', name: 'Jane', amountCents: 5000 }))).rejects.toThrow('email');
 	});
 
 	it('returns 400 for missing name', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs({ email: 'a@b.com', amountCents: 5000 }))).rejects.toThrow('Name is required');
 	});
 
 	it('returns 400 for amountCents < 100 ($1 minimum)', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs({ email: 'a@b.com', name: 'Jane', amountCents: 50 }))).rejects.toThrow('Amount must be');
 	});
 
 	it('returns 400 for amountCents > 100_000_000 ($1M max)', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs({ email: 'a@b.com', name: 'Jane', amountCents: 100_000_001 }))).rejects.toThrow('Amount must be');
 	});
 
 	it('returns 400 for non-integer amountCents', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs({ email: 'a@b.com', name: 'Jane', amountCents: 50.5 }))).rejects.toThrow('Amount must be');
 	});
 
 	it('returns 404 for non-existent campaign', async () => {
 		mockDbCampaignFindUnique.mockResolvedValue(null);
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs(VALID_BODY))).rejects.toThrow('Campaign not found');
 	});
 
 	it('returns 400 for campaign with type !== FUNDRAISER', async () => {
 		mockDbCampaignFindUnique.mockResolvedValue({ ...ACTIVE_FUNDRAISER, type: 'LETTER' });
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs(VALID_BODY))).rejects.toThrow('not a fundraiser');
 	});
 
 	it('returns 400 for campaign with status !== ACTIVE', async () => {
 		mockDbCampaignFindUnique.mockResolvedValue({ ...ACTIVE_FUNDRAISER, status: 'DRAFT' });
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await expect(POST(makeCheckoutArgs(VALID_BODY))).rejects.toThrow('not accepting donations');
 	});
 
 	it('creates Stripe Checkout Session with mode=payment for one-time', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		const res = await POST(makeCheckoutArgs(VALID_BODY));
 		expect(res.status).toBe(200);
 		const body = await res.json();
@@ -208,14 +208,14 @@ describe('Donation Checkout - POST /api/d/[campaignId]/checkout', () => {
 	});
 
 	it('creates Stripe Checkout Session with mode=subscription for recurring', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await POST(makeCheckoutArgs({ ...VALID_BODY, recurring: true, recurringInterval: 'month' }));
 		const sessionArgs = mockStripeSessionCreate.mock.calls[0][0];
 		expect(sessionArgs.mode).toBe('subscription');
 	});
 
 	it('creates Donation record with status=pending', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await POST(makeCheckoutArgs(VALID_BODY));
 		expect(mockDbDonationCreate).toHaveBeenCalledOnce();
 		const createArgs = mockDbDonationCreate.mock.calls[0][0];
@@ -226,7 +226,7 @@ describe('Donation Checkout - POST /api/d/[campaignId]/checkout', () => {
 
 	it('finds existing supporter instead of creating new one', async () => {
 		mockDbSupporterFindFirst.mockResolvedValue({ id: 'existing-sup' });
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await POST(makeCheckoutArgs(VALID_BODY));
 		expect(mockDbSupporterCreate).not.toHaveBeenCalled();
 		const createArgs = mockDbDonationCreate.mock.calls[0][0];
@@ -234,7 +234,7 @@ describe('Donation Checkout - POST /api/d/[campaignId]/checkout', () => {
 	});
 
 	it('creates new supporter when none exists', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await POST(makeCheckoutArgs(VALID_BODY));
 		expect(mockDbSupporterCreate).toHaveBeenCalledOnce();
 		const createCall = mockDbSupporterCreate.mock.calls[0][0];
@@ -244,7 +244,7 @@ describe('Donation Checkout - POST /api/d/[campaignId]/checkout', () => {
 	});
 
 	it('hashes districtCode and sets engagementTier=2', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await POST(makeCheckoutArgs({ ...VALID_BODY, districtCode: 'CA-12' }));
 		const createArgs = mockDbDonationCreate.mock.calls[0][0];
 		expect(createArgs.data.districtHash).toBeTruthy();
@@ -253,7 +253,7 @@ describe('Donation Checkout - POST /api/d/[campaignId]/checkout', () => {
 	});
 
 	it('updates donation with stripeSessionId after session creation', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/checkout/+server.ts');
+		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await POST(makeCheckoutArgs(VALID_BODY));
 		expect(mockDbDonationUpdate).toHaveBeenCalledWith({
 			where: { id: 'don-1' },
@@ -274,13 +274,13 @@ describe('Donation Stats - GET /api/d/[campaignId]/stats', () => {
 
 	it('returns 404 when FEATURES.FUNDRAISING is false', async () => {
 		mockFeatures.FUNDRAISING = false;
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/stats/+server.ts');
+		const { GET } = await import('../../../src/routes/api/d/[campaignId]/stats/+server');
 		await expect(GET(makeStatsArgs())).rejects.toThrow('Not found');
 	});
 
 	it('returns 404 for non-existent campaign', async () => {
 		mockDbCampaignFindUnique.mockResolvedValue(null);
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/stats/+server.ts');
+		const { GET } = await import('../../../src/routes/api/d/[campaignId]/stats/+server');
 		await expect(GET(makeStatsArgs())).rejects.toThrow('Campaign not found');
 	});
 
@@ -291,7 +291,7 @@ describe('Donation Stats - GET /api/d/[campaignId]/stats', () => {
 			goalAmountCents: 500000,
 			donationCurrency: 'usd'
 		});
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/d/[campaignId]/stats/+server.ts');
+		const { GET } = await import('../../../src/routes/api/d/[campaignId]/stats/+server');
 		const res = await GET(makeStatsArgs());
 		expect(res.status).toBe(200);
 		const body = await res.json();

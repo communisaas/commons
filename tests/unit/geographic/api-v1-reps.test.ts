@@ -125,7 +125,7 @@ describe('GET /api/v1/representatives', () => {
 		);
 		mockAuthenticateApiKey.mockResolvedValue(authError);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/representatives/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/representatives/+server');
 		const response = await GET({
 			request: new Request('http://localhost', {
 				headers: { Authorization: 'Bearer invalid-key' }
@@ -143,7 +143,7 @@ describe('GET /api/v1/representatives', () => {
 		);
 		mockCheckApiPlanRateLimit.mockResolvedValue(rateLimitResponse);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/representatives/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/representatives/+server');
 		const response = await GET({
 			request: new Request('http://localhost', {
 				headers: { Authorization: 'Bearer test-key' }
@@ -158,7 +158,7 @@ describe('GET /api/v1/representatives', () => {
 		mockDbIntlRepFindMany.mockResolvedValue([makeRep()]);
 		mockDbIntlRepCount.mockResolvedValue(1);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/representatives/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/representatives/+server');
 		const response = await GET({
 			request: new Request('http://localhost', {
 				headers: { Authorization: 'Bearer test-key' }
@@ -177,7 +177,7 @@ describe('GET /api/v1/representatives', () => {
 		mockDbIntlRepFindMany.mockResolvedValue([makeRep()]);
 		mockDbIntlRepCount.mockResolvedValue(1);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/representatives/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/representatives/+server');
 		await GET({
 			request: new Request('http://localhost', {
 				headers: { Authorization: 'Bearer test-key' }
@@ -193,7 +193,7 @@ describe('GET /api/v1/representatives', () => {
 		mockDbIntlRepFindMany.mockResolvedValue([]);
 		mockDbIntlRepCount.mockResolvedValue(0);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/representatives/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/representatives/+server');
 		const response = await GET({
 			request: new Request('http://localhost', {
 				headers: { Authorization: 'Bearer test-key' }
@@ -210,7 +210,7 @@ describe('GET /api/v1/representatives', () => {
 		mockDbIntlRepFindMany.mockResolvedValue([makeRep(), makeRep({ id: 'rep-extra' })]);
 		mockDbIntlRepCount.mockResolvedValue(2);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/representatives/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/representatives/+server');
 		const response = await GET({
 			request: new Request('http://localhost', {
 				headers: { Authorization: 'Bearer test-key' }

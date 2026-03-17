@@ -107,12 +107,12 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 
 	it('returns 404 when FEATURES.EVENTS is false', async () => {
 		mockFeatures.EVENTS = false;
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		await expect(POST(makeArgs({ email: 'a@b.com', name: 'Test' }))).rejects.toThrow('Not found');
 	});
 
 	it('creates RSVP successfully with valid data', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		const res = await POST(makeArgs({ email: 'user@test.com', name: 'Jane Doe' }));
 		expect(res.status).toBe(200);
 		const body = await res.json();
@@ -125,7 +125,7 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 			id: 'rsvp-1', status: 'GOING',
 			createdAt: new Date(Date.now() - 100000) // old = already existed
 		});
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		const res = await POST(makeArgs({ email: 'user@test.com', name: 'Jane' }));
 		expect(res.status).toBe(200);
 		// rsvpCount should NOT be incremented for existing RSVP
@@ -133,23 +133,23 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 	});
 
 	it('returns 400 with missing email', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		await expect(POST(makeArgs({ name: 'Test' }))).rejects.toThrow('email');
 	});
 
 	it('returns 400 with missing name', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		await expect(POST(makeArgs({ email: 'a@b.com' }))).rejects.toThrow('Name is required');
 	});
 
 	it('returns 400 with invalid email format', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		await expect(POST(makeArgs({ email: 'not-an-email', name: 'Test' }))).rejects.toThrow('email');
 	});
 
 	it('returns 429 when rate limited', async () => {
 		mockRateLimiterCheck.mockResolvedValue({ allowed: false, remaining: 0, limit: 10, reset: Date.now() });
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		await expect(POST(makeArgs({ email: 'a@b.com', name: 'Test' }))).rejects.toThrow('Too many requests');
 	});
 
@@ -163,7 +163,7 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 		mockDbEventRsvpUpsert.mockResolvedValue({
 			id: 'rsvp-2', status: 'WAITLISTED', createdAt: new Date()
 		});
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		const res = await POST(makeArgs({ email: 'wait@test.com', name: 'Waiter' }));
 		const body = await res.json();
 		expect(body.status).toBe('WAITLISTED');
@@ -171,12 +171,12 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 
 	it('returns 404 for non-existent event', async () => {
 		mockDbEventFindUnique.mockReset().mockResolvedValue(null);
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		await expect(POST(makeArgs({ email: 'a@b.com', name: 'Test' }))).rejects.toThrow('Event not found');
 	});
 
 	it('hashes district code when ADDRESS_SPECIFICITY is district', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		await POST(makeArgs({ email: 'a@b.com', name: 'Test', districtCode: 'CA-12' }));
 		const upsertCall = mockDbEventRsvpUpsert.mock.calls[0][0];
 		expect(upsertCall.create.districtHash).toBeTruthy();
@@ -185,7 +185,7 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 	});
 
 	it('creates supporter record linked to org', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		await POST(makeArgs({ email: 'new@test.com', name: 'New User' }));
 		expect(mockDbSupporterCreate).toHaveBeenCalledWith({
 			data: expect.objectContaining({
@@ -198,7 +198,7 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 
 	it('uses existing supporter if found', async () => {
 		mockDbSupporterFindFirst.mockResolvedValue({ id: 'existing-sup' });
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/rsvp/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		await POST(makeArgs({ email: 'existing@test.com', name: 'Existing' }));
 		expect(mockDbSupporterCreate).not.toHaveBeenCalled();
 		const upsertCall = mockDbEventRsvpUpsert.mock.calls[0][0];
@@ -214,7 +214,7 @@ describe('Event Stats - GET /api/e/[id]/stats', () => {
 
 	it('returns 404 when FEATURES.EVENTS is false', async () => {
 		mockFeatures.EVENTS = false;
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/stats/+server.ts');
+		const { GET } = await import('../../../src/routes/api/e/[id]/stats/+server');
 		await expect(GET({ params: { id: 'evt-1' } } as any)).rejects.toThrow('Not found');
 	});
 
@@ -226,7 +226,7 @@ describe('Event Stats - GET /api/e/[id]/stats', () => {
 			.mockResolvedValueOnce(20) // GOING
 			.mockResolvedValueOnce(5);  // MAYBE
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/stats/+server.ts');
+		const { GET } = await import('../../../src/routes/api/e/[id]/stats/+server');
 		const res = await GET({ params: { id: 'evt-1' } } as any);
 		const body = await res.json();
 		expect(body.rsvpCount).toBe(25);

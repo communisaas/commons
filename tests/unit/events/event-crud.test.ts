@@ -137,7 +137,7 @@ describe('Event CRUD - POST /api/org/[slug]/events', () => {
 
 	it('returns 404 when FEATURES.EVENTS is false', async () => {
 		mockFeatures.EVENTS = false;
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -148,7 +148,7 @@ describe('Event CRUD - POST /api/org/[slug]/events', () => {
 	});
 
 	it('returns 401 without authenticated user', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -164,7 +164,7 @@ describe('Event CRUD - POST /api/org/[slug]/events', () => {
 			(e as any).status = 403;
 			throw e;
 		});
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -176,7 +176,7 @@ describe('Event CRUD - POST /api/org/[slug]/events', () => {
 
 	it('returns 403 without Starter plan', async () => {
 		mockOrgMeetsPlan.mockResolvedValue(false);
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -187,7 +187,7 @@ describe('Event CRUD - POST /api/org/[slug]/events', () => {
 	});
 
 	it('creates event with valid data and returns 201 + checkinCode', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		const res = await POST({
 			params: { slug: 'test-org' },
 			request: makeRequest({ title: 'Town Hall', startAt: futureDate }),
@@ -201,7 +201,7 @@ describe('Event CRUD - POST /api/org/[slug]/events', () => {
 	});
 
 	it('returns 400 with missing title', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -212,7 +212,7 @@ describe('Event CRUD - POST /api/org/[slug]/events', () => {
 	});
 
 	it('returns 400 with past startAt', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -223,7 +223,7 @@ describe('Event CRUD - POST /api/org/[slug]/events', () => {
 	});
 
 	it('returns 400 with invalid eventType', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { POST } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -243,7 +243,7 @@ describe('Event CRUD - GET /api/org/[slug]/events', () => {
 
 	it('returns 404 when FEATURES.EVENTS is false', async () => {
 		mockFeatures.EVENTS = false;
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { GET } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		await expect(
 			GET({ params: { slug: 'test-org' }, url: makeUrl(), locals: makeLocals() } as any)
 		).rejects.toThrow('Not found');
@@ -255,7 +255,7 @@ describe('Event CRUD - GET /api/org/[slug]/events', () => {
 			{ id: 'e2', title: 'Later', startAt: now, endAt: null, createdAt: now, updatedAt: now },
 			{ id: 'e1', title: 'Earlier', startAt: now, endAt: null, createdAt: now, updatedAt: now }
 		]);
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { GET } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		const res = await GET({
 			params: { slug: 'test-org' },
 			url: makeUrl(),
@@ -268,7 +268,7 @@ describe('Event CRUD - GET /api/org/[slug]/events', () => {
 
 	it('filters by status query param', async () => {
 		mockDbEventFindMany.mockResolvedValue([]);
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/+server.ts');
+		const { GET } = await import('../../../src/routes/api/org/[slug]/events/+server');
 		await GET({
 			params: { slug: 'test-org' },
 			url: makeUrl({ status: 'PUBLISHED' }),
@@ -301,7 +301,7 @@ describe('Event CRUD - PATCH /api/org/[slug]/events/[id]', () => {
 	});
 
 	it('updates event with valid data', async () => {
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/org/[slug]/events/[id]/+server');
 		const res = await PATCH({
 			params: { slug: 'test-org', id: 'evt-1' },
 			request: makeRequest({ title: 'Updated Title' }),
@@ -313,7 +313,7 @@ describe('Event CRUD - PATCH /api/org/[slug]/events/[id]', () => {
 
 	it('returns 404 for event not in org', async () => {
 		mockDbEventFindFirst.mockResolvedValue(null);
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/org/[slug]/events/[id]/+server');
 		await expect(
 			PATCH({
 				params: { slug: 'test-org', id: 'evt-other' },
@@ -325,7 +325,7 @@ describe('Event CRUD - PATCH /api/org/[slug]/events/[id]', () => {
 
 	it('returns 400 for completed event', async () => {
 		mockDbEventFindFirst.mockResolvedValue({ id: 'evt-1', orgId: 'org-1', status: 'COMPLETED' });
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/org/[slug]/events/[id]/+server');
 		await expect(
 			PATCH({
 				params: { slug: 'test-org', id: 'evt-1' },
@@ -347,7 +347,7 @@ describe('Event CRUD - DELETE /api/org/[slug]/events/[id]', () => {
 	it('cancels event (sets status to CANCELLED)', async () => {
 		mockDbEventFindFirst.mockResolvedValue({ id: 'evt-1', orgId: 'org-1', status: 'PUBLISHED' });
 		mockDbEventUpdate.mockResolvedValue({ id: 'evt-1', status: 'CANCELLED' });
-		const { DELETE } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/[id]/+server.ts');
+		const { DELETE } = await import('../../../src/routes/api/org/[slug]/events/[id]/+server');
 		const res = await DELETE({
 			params: { slug: 'test-org', id: 'evt-1' },
 			locals: makeLocals()
@@ -362,7 +362,7 @@ describe('Event CRUD - DELETE /api/org/[slug]/events/[id]', () => {
 
 	it('returns 404 for event not in org', async () => {
 		mockDbEventFindFirst.mockResolvedValue(null);
-		const { DELETE } = await import('/Users/noot/Documents/commons/src/routes/api/org/[slug]/events/[id]/+server.ts');
+		const { DELETE } = await import('../../../src/routes/api/org/[slug]/events/[id]/+server');
 		await expect(
 			DELETE({
 				params: { slug: 'test-org', id: 'evt-other' },

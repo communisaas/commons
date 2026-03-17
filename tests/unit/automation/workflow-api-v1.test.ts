@@ -152,7 +152,7 @@ describe('GET /api/v1/workflows', () => {
 		mockAuthenticateApiKey.mockResolvedValue(authError);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/workflows/+server.ts'
+			'../../../src/routes/api/v1/workflows/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -168,7 +168,7 @@ describe('GET /api/v1/workflows', () => {
 		mockDbWorkflowCount.mockResolvedValue(2);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/workflows/+server.ts'
+			'../../../src/routes/api/v1/workflows/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -187,7 +187,7 @@ describe('GET /api/v1/workflows', () => {
 		mockDbWorkflowCount.mockResolvedValue(0);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/workflows/+server.ts'
+			'../../../src/routes/api/v1/workflows/+server.ts'
 		);
 		await GET({
 			request: makeRequest(),
@@ -203,7 +203,7 @@ describe('GET /api/v1/workflows', () => {
 		mockDbWorkflowCount.mockResolvedValue(0);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/workflows/+server.ts'
+			'../../../src/routes/api/v1/workflows/+server.ts'
 		);
 		await GET({
 			request: makeRequest(),
@@ -218,7 +218,7 @@ describe('GET /api/v1/workflows', () => {
 		mockFeatures.AUTOMATION = false;
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/workflows/+server.ts'
+			'../../../src/routes/api/v1/workflows/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -238,7 +238,7 @@ describe('GET /api/v1/workflows', () => {
 		mockCheckApiPlanRateLimit.mockResolvedValue(rateLimitResponse);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/workflows/+server.ts'
+			'../../../src/routes/api/v1/workflows/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -256,7 +256,7 @@ describe('GET /api/v1/workflows', () => {
 		mockRequireScope.mockReturnValue(scopeError);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/workflows/+server.ts'
+			'../../../src/routes/api/v1/workflows/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -286,7 +286,7 @@ describe('GET /api/v1/workflows/[id]', () => {
 		mockDbWorkflowFindFirst.mockResolvedValue(makeWorkflow());
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/workflows/[id]/+server.ts'
+			'../../../src/routes/api/v1/workflows/[id]/+server.ts'
 		);
 		const res = await GET({
 			params: { id: 'wf-1' },
@@ -304,7 +304,7 @@ describe('GET /api/v1/workflows/[id]', () => {
 		mockDbWorkflowFindFirst.mockResolvedValue(null);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/workflows/[id]/+server.ts'
+			'../../../src/routes/api/v1/workflows/[id]/+server.ts'
 		);
 		const res = await GET({
 			params: { id: 'wf-other' },
@@ -320,7 +320,7 @@ describe('GET /api/v1/workflows/[id]', () => {
 		mockDbWorkflowFindFirst.mockResolvedValue(null);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/workflows/[id]/+server.ts'
+			'../../../src/routes/api/v1/workflows/[id]/+server.ts'
 		);
 		const res = await GET({
 			params: { id: 'wf-nonexistent' },

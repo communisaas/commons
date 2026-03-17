@@ -166,7 +166,7 @@ describe('POST /api/org/[slug]/calls', () => {
 
 	it('creates call record and initiates Twilio call (201)', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		const res = await POST({
 			params: { slug: 'test-org' },
@@ -203,7 +203,7 @@ describe('POST /api/org/[slug]/calls', () => {
 
 	it('updates record with callSid from Twilio', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await POST({
 			params: { slug: 'test-org' },
@@ -224,7 +224,7 @@ describe('POST /api/org/[slug]/calls', () => {
 		mockFeatures.SMS = false;
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await expect(
 			POST({
@@ -244,7 +244,7 @@ describe('POST /api/org/[slug]/calls', () => {
 		});
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await expect(
 			POST({
@@ -260,7 +260,7 @@ describe('POST /api/org/[slug]/calls', () => {
 		mockOrgMeetsPlan.mockResolvedValue(false);
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await expect(
 			POST({
@@ -274,7 +274,7 @@ describe('POST /api/org/[slug]/calls', () => {
 
 	it('returns 400 for missing supporterId', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await expect(
 			POST({
@@ -288,7 +288,7 @@ describe('POST /api/org/[slug]/calls', () => {
 
 	it('returns 400 for missing targetPhone', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await expect(
 			POST({
@@ -302,7 +302,7 @@ describe('POST /api/org/[slug]/calls', () => {
 
 	it('returns 400 for invalid targetPhone (not E.164)', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await expect(
 			POST({
@@ -318,7 +318,7 @@ describe('POST /api/org/[slug]/calls', () => {
 		mockDbSupporterFindFirst.mockResolvedValue({ id: 'sup-1', phone: null, name: 'Jane' });
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await expect(
 			POST({
@@ -334,7 +334,7 @@ describe('POST /api/org/[slug]/calls', () => {
 		mockDbSupporterFindFirst.mockResolvedValue(null);
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await expect(
 			POST({
@@ -353,7 +353,7 @@ describe('POST /api/org/[slug]/calls', () => {
 		});
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await expect(
 			POST({
@@ -375,7 +375,7 @@ describe('POST /api/org/[slug]/calls', () => {
 
 	it('passes targetName to Twilio', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await POST({
 			params: { slug: 'test-org' },
@@ -394,7 +394,7 @@ describe('POST /api/org/[slug]/calls', () => {
 
 	it('stores districtHash when provided', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await POST({
 			params: { slug: 'test-org' },
@@ -429,7 +429,7 @@ describe('GET /api/org/[slug]/calls', () => {
 		mockDbPatchThroughCallFindMany.mockResolvedValue(calls);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		const res = await GET({
 			params: { slug: 'test-org' },
@@ -448,7 +448,7 @@ describe('GET /api/org/[slug]/calls', () => {
 		mockDbPatchThroughCallFindMany.mockResolvedValue([]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await GET({
 			params: { slug: 'test-org' },
@@ -464,7 +464,7 @@ describe('GET /api/org/[slug]/calls', () => {
 		mockDbPatchThroughCallFindMany.mockResolvedValue([]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await GET({
 			params: { slug: 'test-org' },
@@ -483,7 +483,7 @@ describe('GET /api/org/[slug]/calls', () => {
 		mockDbPatchThroughCallFindMany.mockResolvedValue(calls);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		const res = await GET({
 			params: { slug: 'test-org' },
@@ -501,7 +501,7 @@ describe('GET /api/org/[slug]/calls', () => {
 		mockFeatures.SMS = false;
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/calls/+server.ts'
+			'../../../src/routes/api/org/[slug]/calls/+server.ts'
 		);
 		await expect(
 			GET({

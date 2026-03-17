@@ -145,7 +145,7 @@ describe('POST /api/org/[slug]/workflows', () => {
 
 	it('creates a valid workflow and returns 201', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		const res = await POST({
 			params: { slug: 'test-org' },
@@ -169,7 +169,7 @@ describe('POST /api/org/[slug]/workflows', () => {
 
 	it('rejects missing name with 400', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		await expect(
 			POST({
@@ -182,7 +182,7 @@ describe('POST /api/org/[slug]/workflows', () => {
 
 	it('rejects name shorter than 3 characters with 400', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		await expect(
 			POST({
@@ -195,7 +195,7 @@ describe('POST /api/org/[slug]/workflows', () => {
 
 	it('rejects missing trigger with 400', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		await expect(
 			POST({
@@ -208,7 +208,7 @@ describe('POST /api/org/[slug]/workflows', () => {
 
 	it('rejects invalid trigger type with 400', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		await expect(
 			POST({
@@ -225,7 +225,7 @@ describe('POST /api/org/[slug]/workflows', () => {
 
 	it('rejects empty steps array with 400', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		await expect(
 			POST({
@@ -238,7 +238,7 @@ describe('POST /api/org/[slug]/workflows', () => {
 
 	it('rejects step with invalid type', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		await expect(
 			POST({
@@ -261,7 +261,7 @@ describe('POST /api/org/[slug]/workflows', () => {
 		});
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		await expect(
 			POST({
@@ -276,7 +276,7 @@ describe('POST /api/org/[slug]/workflows', () => {
 		mockOrgMeetsPlan.mockResolvedValue(false);
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		await expect(
 			POST({
@@ -291,7 +291,7 @@ describe('POST /api/org/[slug]/workflows', () => {
 		mockFeatures.AUTOMATION = false;
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		await expect(
 			POST({
@@ -319,7 +319,7 @@ describe('GET /api/org/[slug]/workflows', () => {
 		mockDbWorkflowFindMany.mockResolvedValue(workflows);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		const res = await GET({
 			params: { slug: 'test-org' },
@@ -337,7 +337,7 @@ describe('GET /api/org/[slug]/workflows', () => {
 		mockDbWorkflowFindMany.mockResolvedValue([]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		await GET({
 			params: { slug: 'test-org' },
@@ -353,7 +353,7 @@ describe('GET /api/org/[slug]/workflows', () => {
 		mockDbWorkflowFindMany.mockResolvedValue([]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
 		);
 		const res = await GET({
 			params: { slug: 'test-org' },
@@ -385,7 +385,7 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 
 	it('updates workflow name', async () => {
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
 		);
 		const res = await PATCH({
 			params: { slug: 'test-org', id: 'wf-1' },
@@ -403,7 +403,7 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 
 	it('toggles enabled status', async () => {
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
 		);
 		await PATCH({
 			params: { slug: 'test-org', id: 'wf-1' },
@@ -420,7 +420,7 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 
 	it('rejects invalid trigger on update', async () => {
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
 		);
 		await expect(
 			PATCH({
@@ -435,7 +435,7 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 		mockDbWorkflowFindFirst.mockResolvedValue(null);
 
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
 		);
 		await expect(
 			PATCH({
@@ -463,7 +463,7 @@ describe('DELETE /api/org/[slug]/workflows/[id]', () => {
 
 	it('deletes workflow and returns success', async () => {
 		const { DELETE } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
 		);
 		const res = await DELETE({
 			params: { slug: 'test-org', id: 'wf-1' },
@@ -480,7 +480,7 @@ describe('DELETE /api/org/[slug]/workflows/[id]', () => {
 		mockDbWorkflowFindFirst.mockResolvedValue(null);
 
 		const { DELETE } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
 		);
 		await expect(
 			DELETE({
@@ -520,7 +520,7 @@ describe('GET /api/org/[slug]/workflows/[id]/executions', () => {
 		]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/[id]/executions/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/executions/+server.ts'
 		);
 		const res = await GET({
 			params: { slug: 'test-org', id: 'wf-1' },
@@ -539,7 +539,7 @@ describe('GET /api/org/[slug]/workflows/[id]/executions', () => {
 		mockDbExecutionFindMany.mockResolvedValue([]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/[id]/executions/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/executions/+server.ts'
 		);
 		await GET({
 			params: { slug: 'test-org', id: 'wf-1' },
@@ -555,7 +555,7 @@ describe('GET /api/org/[slug]/workflows/[id]/executions', () => {
 		mockDbWorkflowFindFirst.mockResolvedValue(null);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/workflows/[id]/executions/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/executions/+server.ts'
 		);
 		await expect(
 			GET({

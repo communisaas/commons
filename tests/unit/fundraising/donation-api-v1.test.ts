@@ -150,7 +150,7 @@ describe('API v1 Donations - GET /api/v1/donations', () => {
 
 	it('returns 404 when FEATURES.FUNDRAISING is false', async () => {
 		mockFeatures.FUNDRAISING = false;
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/donations/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/donations/+server');
 		const res = await GET(makeListArgs());
 		expect(res.status).toBe(404);
 		const body = await res.json();
@@ -163,7 +163,7 @@ describe('API v1 Donations - GET /api/v1/donations', () => {
 				status: 401, headers: { 'Content-Type': 'application/json' }
 			})
 		);
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/donations/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/donations/+server');
 		const res = await GET(makeListArgs());
 		expect(res.status).toBe(401);
 	});
@@ -174,7 +174,7 @@ describe('API v1 Donations - GET /api/v1/donations', () => {
 				status: 429, headers: { 'Content-Type': 'application/json' }
 			})
 		);
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/donations/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/donations/+server');
 		const res = await GET(makeListArgs());
 		expect(res.status).toBe(429);
 	});
@@ -190,7 +190,7 @@ describe('API v1 Donations - GET /api/v1/donations', () => {
 		]);
 		mockDbDonationCount.mockResolvedValue(1);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/donations/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/donations/+server');
 		const res = await GET(makeListArgs());
 		expect(res.status).toBe(200);
 		const body = await res.json();
@@ -204,7 +204,7 @@ describe('API v1 Donations - GET /api/v1/donations', () => {
 		mockDbDonationFindMany.mockResolvedValue([]);
 		mockDbDonationCount.mockResolvedValue(0);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/donations/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/donations/+server');
 		await GET(makeListArgs({ status: 'completed' }));
 
 		const findCall = mockDbDonationFindMany.mock.calls[0][0];
@@ -215,7 +215,7 @@ describe('API v1 Donations - GET /api/v1/donations', () => {
 		mockDbDonationFindMany.mockResolvedValue([]);
 		mockDbDonationCount.mockResolvedValue(0);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/donations/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/donations/+server');
 		await GET(makeListArgs({ campaignId: 'camp-99' }));
 
 		const findCall = mockDbDonationFindMany.mock.calls[0][0];
@@ -247,7 +247,7 @@ describe('API v1 Donations - GET /api/v1/donations/[id]', () => {
 			stripeSessionId: 'sess-1', completedAt: now, createdAt: now
 		});
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/donations/[id]/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/donations/[id]/+server');
 		const res = await GET(makeDetailArgs('don-1'));
 		expect(res.status).toBe(200);
 		const body = await res.json();
@@ -259,7 +259,7 @@ describe('API v1 Donations - GET /api/v1/donations/[id]', () => {
 	it('returns 404 for donation from wrong org', async () => {
 		mockDbDonationFindFirst.mockResolvedValue(null);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/donations/[id]/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/donations/[id]/+server');
 		const res = await GET(makeDetailArgs('don-wrong'));
 		expect(res.status).toBe(404);
 		const body = await res.json();
@@ -268,7 +268,7 @@ describe('API v1 Donations - GET /api/v1/donations/[id]', () => {
 
 	it('returns 404 when FEATURES.FUNDRAISING is false', async () => {
 		mockFeatures.FUNDRAISING = false;
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/donations/[id]/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/donations/[id]/+server');
 		const res = await GET(makeDetailArgs('don-1'));
 		expect(res.status).toBe(404);
 	});

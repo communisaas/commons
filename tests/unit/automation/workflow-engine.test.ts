@@ -154,7 +154,7 @@ describe('dispatchTrigger', () => {
 		mockDbExecutionCreate.mockResolvedValue({ id: 'exec-1' });
 
 		const { dispatchTrigger } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/trigger.ts'
+			'../../../src/lib/server/automation/trigger.ts'
 		);
 		await dispatchTrigger('org-1', 'supporter_created', {
 			entityId: 'sup-1',
@@ -176,7 +176,7 @@ describe('dispatchTrigger', () => {
 		mockDbWorkflowFindMany.mockResolvedValue([makeWorkflow({ enabled: false })]);
 
 		const { dispatchTrigger } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/trigger.ts'
+			'../../../src/lib/server/automation/trigger.ts'
 		);
 
 		// Note: findMany filters by enabled:true in the where clause, so disabled
@@ -197,7 +197,7 @@ describe('dispatchTrigger', () => {
 		mockFeatures.AUTOMATION = false;
 
 		const { dispatchTrigger } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/trigger.ts'
+			'../../../src/lib/server/automation/trigger.ts'
 		);
 		await dispatchTrigger('org-1', 'supporter_created', { entityId: 'sup-1' });
 
@@ -209,7 +209,7 @@ describe('dispatchTrigger', () => {
 		mockDbExecutionFindFirst.mockResolvedValue({ id: 'exec-existing' });
 
 		const { dispatchTrigger } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/trigger.ts'
+			'../../../src/lib/server/automation/trigger.ts'
 		);
 		await dispatchTrigger('org-1', 'supporter_created', {
 			entityId: 'sup-1',
@@ -229,7 +229,7 @@ describe('dispatchTrigger', () => {
 			.mockResolvedValueOnce({ id: 'exec-2' });
 
 		const { dispatchTrigger } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/trigger.ts'
+			'../../../src/lib/server/automation/trigger.ts'
 		);
 		await dispatchTrigger('org-1', 'supporter_created', {
 			entityId: 'sup-1',
@@ -243,7 +243,7 @@ describe('dispatchTrigger', () => {
 		mockDbWorkflowFindMany.mockResolvedValue([]);
 
 		const { dispatchTrigger } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/trigger.ts'
+			'../../../src/lib/server/automation/trigger.ts'
 		);
 		await expect(
 			dispatchTrigger('org-1', 'supporter_created', { entityId: 'sup-1' })
@@ -280,7 +280,7 @@ describe('executeWorkflow', () => {
 		mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-123' });
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await executeWorkflow('exec-1');
 
@@ -311,7 +311,7 @@ describe('executeWorkflow', () => {
 		mockDbSupporterTagUpsert.mockResolvedValue({});
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await executeWorkflow('exec-1');
 
@@ -334,7 +334,7 @@ describe('executeWorkflow', () => {
 		mockDbSupporterTagDeleteMany.mockResolvedValue({ count: 1 });
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await executeWorkflow('exec-1');
 
@@ -354,7 +354,7 @@ describe('executeWorkflow', () => {
 		mockDbExecutionFindUnique.mockResolvedValue(execution);
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await executeWorkflow('exec-1');
 
@@ -405,7 +405,7 @@ describe('executeWorkflow', () => {
 		mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-1' });
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await executeWorkflow('exec-1');
 
@@ -441,7 +441,7 @@ describe('executeWorkflow', () => {
 		mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-1' });
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await executeWorkflow('exec-1');
 
@@ -468,7 +468,7 @@ describe('executeWorkflow', () => {
 		mockDbSupporterFindUnique.mockRejectedValue(new Error('DB connection lost'));
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await executeWorkflow('exec-1');
 
@@ -494,7 +494,7 @@ describe('executeWorkflow', () => {
 		mockDbSupporterTagUpsert.mockResolvedValue({});
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await executeWorkflow('exec-1');
 
@@ -513,7 +513,7 @@ describe('executeWorkflow', () => {
 		mockDbExecutionFindUnique.mockResolvedValue(makeExecution({ status: 'completed' }));
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await executeWorkflow('exec-1');
 
@@ -527,7 +527,7 @@ describe('executeWorkflow', () => {
 		);
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await executeWorkflow('exec-1');
 
@@ -538,7 +538,7 @@ describe('executeWorkflow', () => {
 		mockDbExecutionFindUnique.mockResolvedValue(null);
 
 		const { executeWorkflow } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/executor.ts'
+			'../../../src/lib/server/automation/executor.ts'
 		);
 		await expect(executeWorkflow('exec-nonexistent')).resolves.toBeUndefined();
 	});
@@ -563,7 +563,7 @@ describe('processScheduledWorkflows', () => {
 		]);
 
 		const { processScheduledWorkflows } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/scheduler.ts'
+			'../../../src/lib/server/automation/scheduler.ts'
 		);
 		const count = await processScheduledWorkflows();
 
@@ -581,7 +581,7 @@ describe('processScheduledWorkflows', () => {
 		mockDbExecutionFindMany.mockResolvedValue([]);
 
 		const { processScheduledWorkflows } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/scheduler.ts'
+			'../../../src/lib/server/automation/scheduler.ts'
 		);
 		const count = await processScheduledWorkflows();
 
@@ -592,7 +592,7 @@ describe('processScheduledWorkflows', () => {
 		mockDbExecutionFindMany.mockResolvedValue([]);
 
 		const { processScheduledWorkflows } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/scheduler.ts'
+			'../../../src/lib/server/automation/scheduler.ts'
 		);
 		await processScheduledWorkflows();
 
@@ -620,7 +620,7 @@ describe('processEmailAction', () => {
 
 	it('returns error when no supporterId', async () => {
 		const { processEmailAction } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/actions.ts'
+			'../../../src/lib/server/automation/actions.ts'
 		);
 		const result = await processEmailAction(null, {
 			type: 'send_email',
@@ -640,7 +640,7 @@ describe('processEmailAction', () => {
 		});
 
 		const { processEmailAction } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/actions.ts'
+			'../../../src/lib/server/automation/actions.ts'
 		);
 		const result = await processEmailAction('sup-1', {
 			type: 'send_email',
@@ -663,7 +663,7 @@ describe('processTagAction', () => {
 		mockDbTagFindUnique.mockResolvedValue({ id: 'tag-1', orgId: 'org-other' });
 
 		const { processTagAction } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/actions.ts'
+			'../../../src/lib/server/automation/actions.ts'
 		);
 		const result = await processTagAction('sup-1', { type: 'add_tag', tagId: 'tag-1' });
 
@@ -681,7 +681,7 @@ describe('processConditionAction', () => {
 		mockDbSupporterFindUnique.mockResolvedValue(null);
 
 		const { processConditionAction } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/actions.ts'
+			'../../../src/lib/server/automation/actions.ts'
 		);
 		const result = await processConditionAction('sup-missing', {
 			type: 'condition',
@@ -705,7 +705,7 @@ describe('processConditionAction', () => {
 		mockDbCampaignActionFindFirst.mockResolvedValue({ engagementTier: 3 });
 
 		const { processConditionAction } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/actions.ts'
+			'../../../src/lib/server/automation/actions.ts'
 		);
 		const result = await processConditionAction('sup-1', {
 			type: 'condition',
@@ -728,7 +728,7 @@ describe('processConditionAction', () => {
 		});
 
 		const { processConditionAction } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/automation/actions.ts'
+			'../../../src/lib/server/automation/actions.ts'
 		);
 		const result = await processConditionAction('sup-1', {
 			type: 'condition',

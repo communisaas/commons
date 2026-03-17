@@ -158,7 +158,7 @@ describe('POST /api/org/[slug]/sms', () => {
 
 	it('creates a valid SMS blast and returns 201', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		const res = await POST({
 			params: { slug: 'test-org' },
@@ -185,7 +185,7 @@ describe('POST /api/org/[slug]/sms', () => {
 		mockFeatures.SMS = false;
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		await expect(
 			POST({
@@ -204,7 +204,7 @@ describe('POST /api/org/[slug]/sms', () => {
 		});
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		await expect(
 			POST({
@@ -219,7 +219,7 @@ describe('POST /api/org/[slug]/sms', () => {
 		mockOrgMeetsPlan.mockResolvedValue(false);
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		await expect(
 			POST({
@@ -232,7 +232,7 @@ describe('POST /api/org/[slug]/sms', () => {
 
 	it('returns 400 for missing body', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		await expect(
 			POST({
@@ -245,7 +245,7 @@ describe('POST /api/org/[slug]/sms', () => {
 
 	it('returns 400 for empty string body', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		await expect(
 			POST({
@@ -258,7 +258,7 @@ describe('POST /api/org/[slug]/sms', () => {
 
 	it('returns 400 for body exceeding 1600 chars', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		await expect(
 			POST({
@@ -271,7 +271,7 @@ describe('POST /api/org/[slug]/sms', () => {
 
 	it('stores campaignId and recipientFilter when provided', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		await POST({
 			params: { slug: 'test-org' },
@@ -310,7 +310,7 @@ describe('GET /api/org/[slug]/sms', () => {
 		mockDbSmsBlastFindMany.mockResolvedValue(blasts);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		const res = await GET({
 			params: { slug: 'test-org' },
@@ -328,7 +328,7 @@ describe('GET /api/org/[slug]/sms', () => {
 		mockDbSmsBlastFindMany.mockResolvedValue([]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		const res = await GET({
 			params: { slug: 'test-org' },
@@ -346,7 +346,7 @@ describe('GET /api/org/[slug]/sms', () => {
 		mockDbSmsBlastFindMany.mockResolvedValue([]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		await GET({
 			params: { slug: 'test-org' },
@@ -366,7 +366,7 @@ describe('GET /api/org/[slug]/sms', () => {
 		mockDbSmsBlastFindMany.mockResolvedValue(blasts);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		const res = await GET({
 			params: { slug: 'test-org' },
@@ -384,7 +384,7 @@ describe('GET /api/org/[slug]/sms', () => {
 		mockDbSmsBlastFindMany.mockResolvedValue([]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/+server.ts'
 		);
 		await GET({
 			params: { slug: 'test-org' },
@@ -413,7 +413,7 @@ describe('PATCH /api/org/[slug]/sms/[id]', () => {
 
 	it('updates body on draft blast', async () => {
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		const res = await PATCH({
 			params: { slug: 'test-org', id: 'blast-1' },
@@ -431,7 +431,7 @@ describe('PATCH /api/org/[slug]/sms/[id]', () => {
 
 	it('triggers send action (calls sendSmsBlast fire-and-forget)', async () => {
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		const res = await PATCH({
 			params: { slug: 'test-org', id: 'blast-1' },
@@ -449,7 +449,7 @@ describe('PATCH /api/org/[slug]/sms/[id]', () => {
 		mockDbSmsBlastFindFirst.mockResolvedValue(makeBlast({ status: 'sent' }));
 
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		await expect(
 			PATCH({
@@ -464,7 +464,7 @@ describe('PATCH /api/org/[slug]/sms/[id]', () => {
 		mockDbSmsBlastFindFirst.mockResolvedValue(makeBlast({ status: 'sending' }));
 
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		await expect(
 			PATCH({
@@ -479,7 +479,7 @@ describe('PATCH /api/org/[slug]/sms/[id]', () => {
 		mockDbSmsBlastFindFirst.mockResolvedValue(null);
 
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		await expect(
 			PATCH({
@@ -492,7 +492,7 @@ describe('PATCH /api/org/[slug]/sms/[id]', () => {
 
 	it('returns 400 for body exceeding 1600 chars on update', async () => {
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		await expect(
 			PATCH({
@@ -505,7 +505,7 @@ describe('PATCH /api/org/[slug]/sms/[id]', () => {
 
 	it('returns 400 when no valid fields to update', async () => {
 		const { PATCH } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		await expect(
 			PATCH({
@@ -534,7 +534,7 @@ describe('DELETE /api/org/[slug]/sms/[id]', () => {
 
 	it('deletes draft blast and returns 204', async () => {
 		const { DELETE } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		const res = await DELETE({
 			params: { slug: 'test-org', id: 'blast-1' },
@@ -550,7 +550,7 @@ describe('DELETE /api/org/[slug]/sms/[id]', () => {
 		mockDbSmsBlastFindFirst.mockResolvedValue(makeBlast({ status: 'sending' }));
 
 		const { DELETE } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		await expect(
 			DELETE({
@@ -564,7 +564,7 @@ describe('DELETE /api/org/[slug]/sms/[id]', () => {
 		mockDbSmsBlastFindFirst.mockResolvedValue(null);
 
 		const { DELETE } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		await expect(
 			DELETE({
@@ -578,7 +578,7 @@ describe('DELETE /api/org/[slug]/sms/[id]', () => {
 		mockDbSmsBlastFindFirst.mockResolvedValue(makeBlast({ status: 'sent' }));
 
 		const { DELETE } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/+server.ts'
 		);
 		const res = await DELETE({
 			params: { slug: 'test-org', id: 'blast-1' },
@@ -616,7 +616,7 @@ describe('GET /api/org/[slug]/sms/[id]/messages', () => {
 		]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/messages/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/messages/+server.ts'
 		);
 		const res = await GET({
 			params: { slug: 'test-org', id: 'blast-1' },
@@ -635,7 +635,7 @@ describe('GET /api/org/[slug]/sms/[id]/messages', () => {
 		mockDbSmsMessageFindMany.mockResolvedValue([]);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/messages/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/messages/+server.ts'
 		);
 		await GET({
 			params: { slug: 'test-org', id: 'blast-1' },
@@ -651,7 +651,7 @@ describe('GET /api/org/[slug]/sms/[id]/messages', () => {
 		mockDbSmsBlastFindFirst.mockResolvedValue(null);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/org/[slug]/sms/[id]/messages/+server.ts'
+			'../../../src/routes/api/org/[slug]/sms/[id]/messages/+server.ts'
 		);
 		await expect(
 			GET({

@@ -49,7 +49,7 @@ beforeEach(() => {
 describe('POST /api/geographic/infer-scope', () => {
 	it('requires authentication', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/geographic/infer-scope/+server.ts'
+			'../../../src/routes/api/geographic/infer-scope/+server.ts'
 		);
 
 		const response = await POST({
@@ -76,7 +76,7 @@ describe('POST /api/geographic/infer-scope', () => {
 		});
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/geographic/infer-scope/+server.ts'
+			'../../../src/routes/api/geographic/infer-scope/+server.ts'
 		);
 
 		const response = await POST({
@@ -99,7 +99,7 @@ describe('POST /api/geographic/infer-scope', () => {
 		mockFuzzyMatch.mockReturnValue(null);
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/geographic/infer-scope/+server.ts'
+			'../../../src/routes/api/geographic/infer-scope/+server.ts'
 		);
 
 		const response = await POST({
@@ -118,7 +118,7 @@ describe('POST /api/geographic/infer-scope', () => {
 
 	it('rejects requests without text', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/geographic/infer-scope/+server.ts'
+			'../../../src/routes/api/geographic/infer-scope/+server.ts'
 		);
 
 		const response = await POST({
@@ -139,7 +139,7 @@ describe('POST /api/geographic/infer-scope', () => {
 		mockFuzzyMatch.mockReturnValue(null);
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/geographic/infer-scope/+server.ts'
+			'../../../src/routes/api/geographic/infer-scope/+server.ts'
 		);
 
 		const longText = 'a'.repeat(500);

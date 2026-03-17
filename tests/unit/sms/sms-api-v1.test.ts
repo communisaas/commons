@@ -182,7 +182,7 @@ describe('GET /api/v1/sms', () => {
 		mockAuthenticateApiKey.mockResolvedValue(authError);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/sms/+server.ts'
+			'../../../src/routes/api/v1/sms/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -198,7 +198,7 @@ describe('GET /api/v1/sms', () => {
 		mockDbSmsBlastCount.mockResolvedValue(2);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/sms/+server.ts'
+			'../../../src/routes/api/v1/sms/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -220,7 +220,7 @@ describe('GET /api/v1/sms', () => {
 		mockDbSmsBlastCount.mockResolvedValue(50);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/sms/+server.ts'
+			'../../../src/routes/api/v1/sms/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -237,7 +237,7 @@ describe('GET /api/v1/sms', () => {
 		mockDbSmsBlastCount.mockResolvedValue(0);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/sms/+server.ts'
+			'../../../src/routes/api/v1/sms/+server.ts'
 		);
 		await GET({
 			request: makeRequest(),
@@ -252,7 +252,7 @@ describe('GET /api/v1/sms', () => {
 		mockFeatures.SMS = false;
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/sms/+server.ts'
+			'../../../src/routes/api/v1/sms/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -272,7 +272,7 @@ describe('GET /api/v1/sms', () => {
 		mockCheckApiPlanRateLimit.mockResolvedValue(rateLimitResponse);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/sms/+server.ts'
+			'../../../src/routes/api/v1/sms/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -290,7 +290,7 @@ describe('GET /api/v1/sms', () => {
 		mockRequireScope.mockReturnValue(scopeError);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/sms/+server.ts'
+			'../../../src/routes/api/v1/sms/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -305,7 +305,7 @@ describe('GET /api/v1/sms', () => {
 		mockDbSmsBlastCount.mockResolvedValue(0);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/sms/+server.ts'
+			'../../../src/routes/api/v1/sms/+server.ts'
 		);
 		await GET({
 			request: makeRequest(),
@@ -340,7 +340,7 @@ describe('GET /api/v1/calls', () => {
 		mockDbPatchThroughCallCount.mockResolvedValue(2);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/calls/+server.ts'
+			'../../../src/routes/api/v1/calls/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -358,7 +358,7 @@ describe('GET /api/v1/calls', () => {
 		mockDbPatchThroughCallCount.mockResolvedValue(0);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/calls/+server.ts'
+			'../../../src/routes/api/v1/calls/+server.ts'
 		);
 		await GET({
 			request: makeRequest(),
@@ -374,7 +374,7 @@ describe('GET /api/v1/calls', () => {
 		mockDbPatchThroughCallCount.mockResolvedValue(0);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/calls/+server.ts'
+			'../../../src/routes/api/v1/calls/+server.ts'
 		);
 		await GET({
 			request: makeRequest(),
@@ -389,7 +389,7 @@ describe('GET /api/v1/calls', () => {
 		mockFeatures.SMS = false;
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/calls/+server.ts'
+			'../../../src/routes/api/v1/calls/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),
@@ -409,7 +409,7 @@ describe('GET /api/v1/calls', () => {
 		mockAuthenticateApiKey.mockResolvedValue(authError);
 
 		const { GET } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/v1/calls/+server.ts'
+			'../../../src/routes/api/v1/calls/+server.ts'
 		);
 		const res = await GET({
 			request: makeRequest(),

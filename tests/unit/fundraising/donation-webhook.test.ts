@@ -143,7 +143,7 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 		mockDbDonationUpdate.mockResolvedValue({});
 		mockDbCampaignUpdate.mockResolvedValue({});
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/billing/webhook/+server.ts');
+		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		const res = await POST({ request: makeWebhookRequest() } as any);
 		expect(res.status).toBe(200);
 
@@ -171,7 +171,7 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 		mockDbDonationUpdate.mockResolvedValue({});
 		mockDbCampaignUpdate.mockResolvedValue({});
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/billing/webhook/+server.ts');
+		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		await POST({ request: makeWebhookRequest() } as any);
 
 		expect(mockDbCampaignUpdate).toHaveBeenCalledWith({
@@ -195,7 +195,7 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 			id: 'don-1', status: 'completed', amountCents: 5000
 		});
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/billing/webhook/+server.ts');
+		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		const res = await POST({ request: makeWebhookRequest() } as any);
 		expect(res.status).toBe(200);
 
@@ -213,7 +213,7 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 		mockDbDonationUpdate.mockResolvedValue({});
 		mockDbCampaignUpdate.mockResolvedValue({});
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/billing/webhook/+server.ts');
+		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		const res = await POST({ request: makeWebhookRequest() } as any);
 		expect(res.status).toBe(200);
 
@@ -233,7 +233,7 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 		mockDbDonationUpdate.mockResolvedValue({});
 		mockDbCampaignUpdate.mockResolvedValue({});
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/billing/webhook/+server.ts');
+		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		await POST({ request: makeWebhookRequest() } as any);
 
 		expect(mockDbCampaignUpdate).toHaveBeenCalledWith({
@@ -252,7 +252,7 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 			id: 'don-1', status: 'pending', amountCents: 5000
 		});
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/billing/webhook/+server.ts');
+		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		const res = await POST({ request: makeWebhookRequest() } as any);
 		expect(res.status).toBe(200);
 
@@ -263,7 +263,7 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 		const event = makeRefundEvent(null);
 		mockStripeConstructEvent.mockReturnValue(event);
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/billing/webhook/+server.ts');
+		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		const res = await POST({ request: makeWebhookRequest() } as any);
 		expect(res.status).toBe(200);
 
@@ -276,7 +276,7 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 			data: { object: {} }
 		});
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/billing/webhook/+server.ts');
+		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		const res = await POST({ request: makeWebhookRequest() } as any);
 		expect(res.status).toBe(200);
 	});
@@ -306,7 +306,7 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 		mockDbSubscriptionUpsert.mockResolvedValue({});
 		mockDbOrganizationUpdate.mockResolvedValue({});
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/billing/webhook/+server.ts');
+		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		const res = await POST({ request: makeWebhookRequest() } as any);
 		expect(res.status).toBe(200);
 
@@ -323,7 +323,7 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 			throw new Error('Signature verification failed');
 		});
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/billing/webhook/+server.ts');
+		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		await expect(POST({ request: makeWebhookRequest() } as any)).rejects.toThrow('Invalid signature');
 	});
 });

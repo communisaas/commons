@@ -127,7 +127,7 @@ describe('isValidE164', () => {
 	beforeEach(async () => {
 		vi.clearAllMocks();
 		const mod = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		isValidE164 = mod.isValidE164;
 	});
@@ -180,7 +180,7 @@ describe('sendSms', () => {
 		mockFetch.mockResolvedValue(mockJsonResponse({ sid: 'SM_test_123' }));
 
 		const { sendSms } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		const result = await sendSms('+15551234567', 'Hello!');
 
@@ -203,7 +203,7 @@ describe('sendSms', () => {
 
 	it('returns error for invalid E.164 phone', async () => {
 		const { sendSms } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		const result = await sendSms('555-1234', 'Hello!');
 
@@ -218,7 +218,7 @@ describe('sendSms', () => {
 		);
 
 		const { sendSms } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		const result = await sendSms('+15551234567', 'Hello!');
 
@@ -230,7 +230,7 @@ describe('sendSms', () => {
 		mockFetch.mockResolvedValue(mockJsonResponse({ sid: 'SM_test' }));
 
 		const { sendSms } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		await sendSms('+15551234567', 'Hello!');
 
@@ -242,7 +242,7 @@ describe('sendSms', () => {
 		mockFetch.mockResolvedValue(mockJsonResponse({ sid: 'SM_test' }));
 
 		const { sendSms } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		await sendSms('+15551234567', 'Hello!', '+15559999999');
 
@@ -254,7 +254,7 @@ describe('sendSms', () => {
 		mockFetch.mockResolvedValue(mockJsonResponse({ sid: 'SM_test' }));
 
 		const { sendSms } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		await sendSms('+15551234567', 'Hello!');
 
@@ -266,7 +266,7 @@ describe('sendSms', () => {
 		mockFetch.mockRejectedValue(new Error('Network unreachable'));
 
 		const { sendSms } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		const result = await sendSms('+15551234567', 'Hello!');
 
@@ -296,7 +296,7 @@ describe('initiatePatchThroughCall', () => {
 		mockFetch.mockResolvedValue(mockJsonResponse({ sid: 'CA_test_123' }));
 
 		const { initiatePatchThroughCall } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		const result = await initiatePatchThroughCall(
 			'+15551234567',
@@ -323,7 +323,7 @@ describe('initiatePatchThroughCall', () => {
 
 	it('returns error for invalid caller phone', async () => {
 		const { initiatePatchThroughCall } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		const result = await initiatePatchThroughCall(
 			'invalid',
@@ -338,7 +338,7 @@ describe('initiatePatchThroughCall', () => {
 
 	it('returns error for invalid target phone', async () => {
 		const { initiatePatchThroughCall } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		const result = await initiatePatchThroughCall(
 			'+15551234567',
@@ -354,7 +354,7 @@ describe('initiatePatchThroughCall', () => {
 		mockFetch.mockResolvedValue(mockJsonResponse({ sid: 'CA_test' }));
 
 		const { initiatePatchThroughCall } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		await initiatePatchThroughCall(
 			'+15551234567',
@@ -371,7 +371,7 @@ describe('initiatePatchThroughCall', () => {
 		mockFetch.mockResolvedValue(mockJsonResponse({ sid: 'CA_test' }));
 
 		const { initiatePatchThroughCall } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		await initiatePatchThroughCall(
 			'+15551234567',
@@ -391,7 +391,7 @@ describe('initiatePatchThroughCall', () => {
 		);
 
 		const { initiatePatchThroughCall } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		const result = await initiatePatchThroughCall(
 			'+15551234567',
@@ -407,7 +407,7 @@ describe('initiatePatchThroughCall', () => {
 		mockFetch.mockResolvedValue(mockJsonResponse({ sid: 'CA_test' }));
 
 		const { initiatePatchThroughCall } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		await initiatePatchThroughCall(
 			'+15551234567',
@@ -423,7 +423,7 @@ describe('initiatePatchThroughCall', () => {
 		mockFetch.mockResolvedValue(mockJsonResponse({ sid: 'CA_test' }));
 
 		const { initiatePatchThroughCall } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/twilio.ts'
+			'../../../src/lib/server/sms/twilio.ts'
 		);
 		await initiatePatchThroughCall(
 			'+15551234567',
@@ -475,7 +475,7 @@ describe('sendSmsBlast', () => {
 			.mockResolvedValueOnce(mockJsonResponse({ sid: 'SM_2' }));
 
 		const { sendSmsBlast } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/send-blast.ts'
+			'../../../src/lib/server/sms/send-blast.ts'
 		);
 		await sendSmsBlast('blast-1');
 
@@ -515,7 +515,7 @@ describe('sendSmsBlast', () => {
 		});
 
 		const { sendSmsBlast } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/send-blast.ts'
+			'../../../src/lib/server/sms/send-blast.ts'
 		);
 		await sendSmsBlast('blast-1');
 
@@ -527,7 +527,7 @@ describe('sendSmsBlast', () => {
 		mockDbSmsBlastFindUnique.mockResolvedValue(null);
 
 		const { sendSmsBlast } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/send-blast.ts'
+			'../../../src/lib/server/sms/send-blast.ts'
 		);
 		await sendSmsBlast('blast-nonexistent');
 
@@ -538,7 +538,7 @@ describe('sendSmsBlast', () => {
 		mockDbSupporterFindMany.mockResolvedValue([]);
 
 		const { sendSmsBlast } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/send-blast.ts'
+			'../../../src/lib/server/sms/send-blast.ts'
 		);
 		await sendSmsBlast('blast-1');
 
@@ -561,7 +561,7 @@ describe('sendSmsBlast', () => {
 		mockDbSupporterFindMany.mockRejectedValue(new Error('DB error'));
 
 		const { sendSmsBlast } = await import(
-			'/Users/noot/Documents/commons/src/lib/server/sms/send-blast.ts'
+			'../../../src/lib/server/sms/send-blast.ts'
 		);
 		await sendSmsBlast('blast-1');
 
@@ -606,7 +606,7 @@ describe('SMS Status Webhook - POST /api/sms/webhook', () => {
 		mockDbSmsBlastUpdate.mockResolvedValue({});
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/webhook/+server.ts'
+			'../../../src/routes/api/sms/webhook/+server.ts'
 		);
 		const res = await POST({
 			request: makeWebhookRequest({
@@ -641,7 +641,7 @@ describe('SMS Status Webhook - POST /api/sms/webhook', () => {
 		mockDbSmsMessageUpdate.mockResolvedValue({});
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/webhook/+server.ts'
+			'../../../src/routes/api/sms/webhook/+server.ts'
 		);
 		const res = await POST({
 			request: makeWebhookRequest({
@@ -664,7 +664,7 @@ describe('SMS Status Webhook - POST /api/sms/webhook', () => {
 		mockDbSmsMessageFindFirst.mockResolvedValue(null);
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/webhook/+server.ts'
+			'../../../src/routes/api/sms/webhook/+server.ts'
 		);
 		const res = await POST({
 			request: makeWebhookRequest({
@@ -682,7 +682,7 @@ describe('SMS Status Webhook - POST /api/sms/webhook', () => {
 		mockValidateTwilioSignature.mockReturnValue(false);
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/webhook/+server.ts'
+			'../../../src/routes/api/sms/webhook/+server.ts'
 		);
 		const res = await POST({
 			request: makeWebhookRequest({
@@ -697,7 +697,7 @@ describe('SMS Status Webhook - POST /api/sms/webhook', () => {
 
 	it('returns 400 for missing required fields', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/webhook/+server.ts'
+			'../../../src/routes/api/sms/webhook/+server.ts'
 		);
 		const res = await POST({
 			request: makeWebhookRequest({}),
@@ -735,7 +735,7 @@ describe('Call Status Webhook - POST /api/sms/call-status', () => {
 		mockDbPatchThroughCallUpdateMany.mockResolvedValue({ count: 1 });
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/call-status/+server.ts'
+			'../../../src/routes/api/sms/call-status/+server.ts'
 		);
 		const res = await POST({
 			request: makeCallWebhookRequest({
@@ -763,7 +763,7 @@ describe('Call Status Webhook - POST /api/sms/call-status', () => {
 		mockDbPatchThroughCallUpdateMany.mockResolvedValue({ count: 1 });
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/call-status/+server.ts'
+			'../../../src/routes/api/sms/call-status/+server.ts'
 		);
 		const res = await POST({
 			request: makeCallWebhookRequest({
@@ -788,7 +788,7 @@ describe('Call Status Webhook - POST /api/sms/call-status', () => {
 		mockDbPatchThroughCallUpdateMany.mockResolvedValue({ count: 1 });
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/call-status/+server.ts'
+			'../../../src/routes/api/sms/call-status/+server.ts'
 		);
 		const res = await POST({
 			request: makeCallWebhookRequest({
@@ -813,7 +813,7 @@ describe('Call Status Webhook - POST /api/sms/call-status', () => {
 		mockDbPatchThroughCallUpdateMany.mockResolvedValue({ count: 1 });
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/call-status/+server.ts'
+			'../../../src/routes/api/sms/call-status/+server.ts'
 		);
 		await POST({
 			request: makeCallWebhookRequest({
@@ -831,7 +831,7 @@ describe('Call Status Webhook - POST /api/sms/call-status', () => {
 		mockValidateTwilioSignature.mockReturnValue(false);
 
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/call-status/+server.ts'
+			'../../../src/routes/api/sms/call-status/+server.ts'
 		);
 		const res = await POST({
 			request: makeCallWebhookRequest({
@@ -846,7 +846,7 @@ describe('Call Status Webhook - POST /api/sms/call-status', () => {
 
 	it('returns 400 for missing required fields', async () => {
 		const { POST } = await import(
-			'/Users/noot/Documents/commons/src/routes/api/sms/call-status/+server.ts'
+			'../../../src/routes/api/sms/call-status/+server.ts'
 		);
 		const res = await POST({
 			request: makeCallWebhookRequest({}),

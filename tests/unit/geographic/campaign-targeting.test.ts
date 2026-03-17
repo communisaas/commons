@@ -143,7 +143,7 @@ describe('PATCH /api/v1/campaigns/:id — geographic targeting', () => {
 			updatedAt: new Date('2026-03-12T11:00:00Z')
 		}));
 
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/v1/campaigns/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/v1/campaigns/[id]/+server');
 		const response = await PATCH({
 			request: new Request('http://localhost', {
 				method: 'PATCH',
@@ -167,7 +167,7 @@ describe('PATCH /api/v1/campaigns/:id — geographic targeting', () => {
 	it('rejects invalid jurisdiction type', async () => {
 		mockDbCampaignFindFirst.mockResolvedValue(makeCampaign());
 
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/v1/campaigns/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/v1/campaigns/[id]/+server');
 		const response = await PATCH({
 			request: new Request('http://localhost', {
 				method: 'PATCH',
@@ -186,7 +186,7 @@ describe('PATCH /api/v1/campaigns/:id — geographic targeting', () => {
 	it('rejects invalid country code', async () => {
 		mockDbCampaignFindFirst.mockResolvedValue(makeCampaign());
 
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/v1/campaigns/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/v1/campaigns/[id]/+server');
 		const response = await PATCH({
 			request: new Request('http://localhost', {
 				method: 'PATCH',
@@ -206,7 +206,7 @@ describe('PATCH /api/v1/campaigns/:id — geographic targeting', () => {
 		mockDbCampaignFindFirst.mockResolvedValue(makeCampaign({ targetJurisdiction: 'uk-constituency' }));
 		mockDbCampaignUpdate.mockResolvedValue(makeCampaign({ updatedAt: new Date() }));
 
-		const { PATCH } = await import('/Users/noot/Documents/commons/src/routes/api/v1/campaigns/[id]/+server.ts');
+		const { PATCH } = await import('../../../src/routes/api/v1/campaigns/[id]/+server');
 		const response = await PATCH({
 			request: new Request('http://localhost', {
 				method: 'PATCH',
@@ -236,7 +236,7 @@ describe('POST /api/v1/campaigns — with geographic targeting', () => {
 			targetCountry: 'CA'
 		}));
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/v1/campaigns/+server.ts');
+		const { POST } = await import('../../../src/routes/api/v1/campaigns/+server');
 		const response = await POST({
 			request: new Request('http://localhost', {
 				method: 'POST',
@@ -260,7 +260,7 @@ describe('POST /api/v1/campaigns — with geographic targeting', () => {
 	it('defaults to US when targetCountry not specified', async () => {
 		mockDbCampaignCreate.mockResolvedValue(makeCampaign());
 
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/v1/campaigns/+server.ts');
+		const { POST } = await import('../../../src/routes/api/v1/campaigns/+server');
 		await POST({
 			request: new Request('http://localhost', {
 				method: 'POST',
@@ -290,7 +290,7 @@ describe('GET /api/v1/campaigns — targeting fields in response', () => {
 		]);
 		mockDbCampaignCount.mockResolvedValue(1);
 
-		const { GET } = await import('/Users/noot/Documents/commons/src/routes/api/v1/campaigns/+server.ts');
+		const { GET } = await import('../../../src/routes/api/v1/campaigns/+server');
 		const response = await GET({
 			request: new Request('http://localhost', {
 				headers: { Authorization: 'Bearer test-key' }

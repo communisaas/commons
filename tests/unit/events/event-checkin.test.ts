@@ -99,12 +99,12 @@ describe('Event Check-in - POST /api/e/[id]/checkin', () => {
 
 	it('returns 404 when FEATURES.EVENTS is false', async () => {
 		mockFeatures.EVENTS = false;
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/checkin/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/checkin/+server');
 		await expect(POST(makeArgs({ email: 'a@b.com' }))).rejects.toThrow('Not found');
 	});
 
 	it('creates attendance record successfully', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/checkin/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/checkin/+server');
 		const res = await POST(makeArgs({ email: 'user@test.com' }));
 		expect(res.status).toBe(200);
 		const body = await res.json();
@@ -115,7 +115,7 @@ describe('Event Check-in - POST /api/e/[id]/checkin', () => {
 	});
 
 	it('creates verified attendance with identity commitment', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/checkin/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/checkin/+server');
 		const res = await POST(makeArgs({
 			email: 'user@test.com',
 			identityCommitment: '0xabc123'
@@ -133,7 +133,7 @@ describe('Event Check-in - POST /api/e/[id]/checkin', () => {
 			requireVerification: true,
 			checkinCode: 'abc12345'
 		});
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/checkin/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/checkin/+server');
 		await expect(
 			POST(makeArgs({ email: 'a@b.com', checkinCode: 'wrong' }))
 		).rejects.toThrow('Invalid check-in code');
@@ -143,7 +143,7 @@ describe('Event Check-in - POST /api/e/[id]/checkin', () => {
 		mockDbEventFindUnique.mockReset().mockResolvedValueOnce({
 			...PUBLISHED_EVENT, status: 'DRAFT'
 		});
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/checkin/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/checkin/+server');
 		await expect(
 			POST(makeArgs({ email: 'a@b.com' }))
 		).rejects.toThrow('not active');
@@ -151,7 +151,7 @@ describe('Event Check-in - POST /api/e/[id]/checkin', () => {
 
 	it('allows walk-in without existing RSVP', async () => {
 		mockDbEventRsvpFindUnique.mockResolvedValue(null); // no RSVP
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/checkin/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/checkin/+server');
 		const res = await POST(makeArgs({ email: 'walkin@test.com' }));
 		expect(res.status).toBe(200);
 		const createCall = mockDbEventAttendanceCreate.mock.calls[0][0];
@@ -162,7 +162,7 @@ describe('Event Check-in - POST /api/e/[id]/checkin', () => {
 		mockDbEventRsvpFindUnique.mockResolvedValue({
 			id: 'rsvp-1', districtHash: 'hash123'
 		});
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/checkin/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/checkin/+server');
 		await POST(makeArgs({ email: 'rsvpd@test.com' }));
 		const createCall = mockDbEventAttendanceCreate.mock.calls[0][0];
 		expect(createCall.data.rsvpId).toBe('rsvp-1');
@@ -171,12 +171,12 @@ describe('Event Check-in - POST /api/e/[id]/checkin', () => {
 
 	it('returns 429 when rate limited', async () => {
 		mockRateLimiterCheck.mockResolvedValue({ allowed: false, remaining: 0, limit: 5, reset: Date.now() });
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/checkin/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/checkin/+server');
 		await expect(POST(makeArgs({ email: 'a@b.com' }))).rejects.toThrow('Too many requests');
 	});
 
 	it('increments verifiedAttendees counter when verified', async () => {
-		const { POST } = await import('/Users/noot/Documents/commons/src/routes/api/e/[id]/checkin/+server.ts');
+		const { POST } = await import('../../../src/routes/api/e/[id]/checkin/+server');
 		await POST(makeArgs({
 			email: 'user@test.com',
 			checkinCode: 'abc12345'
