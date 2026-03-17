@@ -600,7 +600,7 @@
 </script>
 
 <svelte:head>
-	<title>{template.title} - Commons</title>
+	<title>{template.title} | Commons</title>
 	<meta name="description" content={template.description} />
 
 	<!-- Open Graph / Facebook -->
@@ -661,7 +661,7 @@
 	</div>
 
 	<!-- COMMIT: Stance registration / action — the page's experiential pivot -->
-	{#if FEATURES.STANCE_POSITIONS}
+	{#if FEATURES.DEBATE && FEATURES.STANCE_POSITIONS}
 		<div class="border-y border-slate-200/80 py-4 my-6">
 			<!-- Debate signal — contextualizes the support/oppose decision -->
 			{#if FEATURES.DEBATE}

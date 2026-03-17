@@ -4,6 +4,7 @@
 	import { deriveTargetPresentation } from '$lib/utils/deriveTargetPresentation';
 	import SimpleTooltip from '$lib/components/ui/SimpleTooltip.svelte';
 	import { z } from 'zod';
+	import { FEATURES } from '$lib/config/features';
 
 	interface Props {
 		template: Template;
@@ -204,7 +205,7 @@
 	<div
 		class="mt-auto border-t border-slate-100/50 bg-gradient-to-br from-slate-50/30 to-violet-50/10 p-4"
 	>
-		{#if template.debateSummary}
+		{#if FEATURES.DEBATE && template.debateSummary}
 			{@const ds = template.debateSummary}
 			<div class="mb-2 flex items-center gap-2 text-sm">
 				{#if ds.status === 'resolved'}
@@ -231,7 +232,7 @@
 					<span class="font-brand text-slate-500">Resolving...</span>
 				{/if}
 			</div>
-		{:else if template.hasActiveDebate}
+		{:else if FEATURES.DEBATE && template.hasActiveDebate}
 			<div class="mb-2 flex items-center gap-2 text-sm">
 				<span class="debate-pulse h-2 w-2 shrink-0 rounded-full bg-amber-500"></span>
 				<span class="font-brand text-amber-600">Deliberating</span>

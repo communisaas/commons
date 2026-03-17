@@ -7,6 +7,7 @@
 	import SkeletonTemplate from '$lib/components/ui/SkeletonTemplate.svelte';
 	import { deriveTargetPresentation } from '$lib/utils/deriveTargetPresentation';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
+	import { FEATURES } from '$lib/config/features';
 
 	interface Props {
 		groups: TemplateGroup[];
@@ -446,7 +447,7 @@
 
 							<MessageMetrics {template} />
 
-							{#if template.hasActiveDebate}
+							{#if FEATURES.DEBATE && template.hasActiveDebate}
 								<div class="mt-1 flex items-center gap-2 text-sm">
 									<span class="debate-pulse h-2 w-2 shrink-0 rounded-full bg-amber-500"></span>
 									<span class="font-brand text-amber-600">Deliberating</span>
