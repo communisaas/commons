@@ -31,7 +31,7 @@ export async function processScheduledWorkflows(): Promise<number> {
 			// Clear nextRunAt before resuming
 			await db.workflowExecution.update({
 				where: { id: execution.id },
-				data: { nextRunAt: null, status: 'running' }
+				data: { nextRunAt: null }
 			});
 
 			await executeWorkflow(execution.id);

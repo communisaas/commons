@@ -7,6 +7,7 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
+import { maskEmail } from '$lib/server/org/mask';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 
@@ -30,7 +31,7 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	return apiOk({
 		id: donation.id,
 		campaignId: donation.campaignId,
-		email: donation.email,
+		email: maskEmail(donation.email),
 		name: donation.name,
 		amountCents: donation.amountCents,
 		currency: donation.currency,
@@ -39,7 +40,6 @@ export const GET: RequestHandler = async ({ params, request }) => {
 		status: donation.status,
 		engagementTier: donation.engagementTier,
 		districtHash: donation.districtHash,
-		stripeSessionId: donation.stripeSessionId,
 		completedAt: donation.completedAt?.toISOString() ?? null,
 		createdAt: donation.createdAt.toISOString()
 	});

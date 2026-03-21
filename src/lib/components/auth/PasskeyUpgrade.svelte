@@ -17,7 +17,7 @@
 		user,
 		onregistered
 	}: {
-		user: { passkey_credential_id?: string | null; [key: string]: unknown };
+		user: { hasPasskey?: boolean; [key: string]: unknown };
 		onregistered?: () => void;
 	} = $props();
 
@@ -62,7 +62,7 @@
 
 	// Show for authenticated users who haven't added a passkey yet
 	const shouldShow = $derived(
-		!user.passkey_credential_id && !isDismissed && browser && window.PublicKeyCredential
+		!user.hasPasskey && !isDismissed && browser && window.PublicKeyCredential
 	);
 </script>
 

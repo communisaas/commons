@@ -2,7 +2,6 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
 import { TEMPLATE_LIST_SELECT } from '$lib/core/db/template-select';
-import { extractRecipientEmails } from '$lib/types/templateConfig';
 import {
 	createApiError,
 	createValidationError,
@@ -350,17 +349,7 @@ export const GET: RequestHandler = async () => {
 				// Scopes array for ClientSideTemplateFilter hierarchical matching
 				scopes: scopesByTemplateId.get(template.id) ?? [],
 
-				recipientEmails: (() => {
-					let recipientConfig: unknown = template.recipient_config;
-					if (typeof recipientConfig === 'string') {
-						try {
-							recipientConfig = JSON.parse(recipientConfig);
-						} catch {
-							recipientConfig = null;
-						}
-					}
-					return extractRecipientEmails(recipientConfig);
-				})()
+				recipientEmails: []
 			};
 		});
 

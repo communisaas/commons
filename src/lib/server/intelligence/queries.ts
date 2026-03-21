@@ -92,11 +92,16 @@ export async function insertIntelligenceItem(
 }
 
 export async function insertIntelligenceWithEmbedding(
-	item: Omit<IntelligenceItem, 'id' | 'created_at'> & { embedding: number[] }
+	item: Omit<IntelligenceItem, 'id' | 'created_at'> & { embedding: number[] },
+	tx?: Parameters<Parameters<typeof db.$transaction>[0]>[0]
 ): Promise<string> {
+	const client = tx ?? db;
+	if (!item.embedding.every(Number.isFinite)) {
+		throw new Error('Invalid embedding: contains NaN or Infinity');
+	}
 	const vectorStr = `[${item.embedding.join(',')}]`;
 
-	const result = await db.$queryRaw<{ id: string }[]>`
+	const result = await client.$queryRaw<{ id: string }[]>`
 		INSERT INTO intelligence (
 			id, category, title, source, source_url, published_at, snippet,
 			topics, entities, embedding, relevance_score, sentiment,
@@ -111,7 +116,7 @@ export async function insertIntelligenceWithEmbedding(
 			${item.snippet},
 			${item.topics}::text[],
 			${item.entities}::text[],
-			${vectorStr}::vector(1024),
+			${vectorStr}::vector(768),
 			${item.relevance_score},
 			${item.sentiment},
 			${item.geographic_scope},
@@ -127,17 +132,35 @@ export async function insertIntelligenceWithEmbedding(
 export async function bulkInsertIntelligence(
 	items: Omit<IntelligenceItem, 'id' | 'created_at'>[]
 ): Promise<string[]> {
-	const ids: string[] = [];
-	for (const item of items) {
-		if (item.embedding) {
-			const id = await insertIntelligenceWithEmbedding(
-				item as Omit<IntelligenceItem, 'id' | 'created_at'> & { embedding: number[] }
-			);
-			ids.push(id);
-		} else {
-			const id = await insertIntelligenceItem(item);
-			ids.push(id);
+	return db.$transaction(async (tx) => {
+		const ids: string[] = [];
+		for (const item of items) {
+			if (item.embedding) {
+				const id = await insertIntelligenceWithEmbedding(
+					item as Omit<IntelligenceItem, 'id' | 'created_at'> & { embedding: number[] },
+					tx
+				);
+				ids.push(id);
+			} else {
+				const result = await tx.intelligence.create({
+					data: {
+						category: item.category,
+						title: item.title,
+						source: item.source,
+						source_url: item.source_url,
+						published_at: item.published_at,
+						snippet: item.snippet,
+						topics: item.topics,
+						entities: item.entities,
+						relevance_score: item.relevance_score,
+						sentiment: item.sentiment,
+						geographic_scope: item.geographic_scope,
+						expires_at: item.expires_at
+					}
+				});
+				ids.push(result.id);
+			}
 		}
-	}
-	return ids;
+		return ids;
+	});
 }

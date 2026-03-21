@@ -6,8 +6,8 @@ import sharp from 'sharp';
 export const GET: RequestHandler = async ({ params }) => {
 	try {
 		// Fetch template with metrics
-		const template = await prisma.template.findUnique({
-			where: { slug: params.slug },
+		const template = await prisma.template.findFirst({
+			where: { slug: params.slug, is_public: true },
 			select: {
 				title: true,
 				description: true,

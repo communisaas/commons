@@ -26,7 +26,7 @@ export async function validateOAuthSession(request: Request): Promise<SessionVal
 		}
 
 		// Parse session ID from cookies (adjust based on your auth setup)
-		const sessionMatch = cookies.match(/auth-session=([^;]+)/);
+		const sessionMatch = cookies.match(/(?:^|;\s*)auth-session=([^;]+)/);
 		if (!sessionMatch) {
 			return { valid: false, error: 'No auth session found' };
 		}

@@ -1,6 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
+import { getNetworkProofPressure } from '$lib/server/legislation/receipts/aggregation';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, parent }) => {
@@ -26,6 +27,26 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 	const currentMembership = network.members.find((m) => m.orgId === org.id);
 	if (!currentMembership || currentMembership.status === 'removed') {
 		throw error(403, 'Not a member of this network');
+	}
+
+	if (currentMembership.status === 'pending') {
+		// Pending orgs see only the invitation, not full network data
+		return {
+			proofPressure: [],
+			network: {
+				id: network.id,
+				name: network.name,
+				slug: network.slug,
+				description: network.description,
+				status: network.status,
+				ownerOrg: network.ownerOrg,
+				isOwner: false
+			},
+			isAdmin: false,
+			isPending: true,
+			members: [],
+			stats: { memberCount: 0, totalSupporters: 0, uniqueSupporters: 0, verifiedSupporters: 0 }
+		};
 	}
 
 	const isAdmin = currentMembership.role === 'admin';
@@ -61,7 +82,13 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 		}
 	});
 
+	// Proof pressure aggregation (gated)
+	const proofPressure = FEATURES.ACCOUNTABILITY
+		? await getNetworkProofPressure(params.networkId)
+		: [];
+
 	return {
+		proofPressure,
 		network: {
 			id: network.id,
 			name: network.name,

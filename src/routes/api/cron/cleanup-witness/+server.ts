@@ -23,21 +23,19 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
-import { dev } from '$app/environment';
+import { env } from '$env/dynamic/private';
+import { verifyCronSecret } from '$lib/server/cron-auth';
 
 export const GET: RequestHandler = async ({ request }) => {
-	// Authenticate cron requests in production
-	if (!dev) {
-		const cronSecret = process.env.CRON_SECRET;
-		if (!cronSecret) {
-			throw error(500, 'CRON_SECRET not configured');
-		}
+	// Authenticate cron requests — fail-closed if not configured
+	const cronSecret = env.CRON_SECRET;
+	if (!cronSecret) {
+		throw error(500, 'CRON_SECRET not configured');
+	}
 
-		const authHeader = request.headers.get('authorization');
-		const token = authHeader?.replace('Bearer ', '');
-		if (token !== cronSecret) {
-			throw error(401, 'Invalid cron secret');
-		}
+	const authHeader = request.headers.get('authorization');
+	if (!verifyCronSecret(authHeader, cronSecret)) {
+		throw error(401, 'Invalid cron secret');
 	}
 
 	try {

@@ -1,10 +1,12 @@
 import { error, fail } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
+import { env } from '$env/dynamic/private';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import { FEATURES } from '$lib/config/features';
 import { hashDistrict } from '$lib/core/identity/district-credential';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
+import { spawnDebateForCampaign } from '$lib/server/debates/spawn';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -127,7 +129,11 @@ export const load: PageServerLoad = async ({ params }) => {
 			orgName: campaign.org.name,
 			orgSlug: campaign.org.slug,
 			orgAvatar: campaign.org.avatar,
-			targets: campaign.targets as Array<{ name: string; email: string; title?: string; district?: string }> | null
+			targets: (campaign.targets as Array<{ name: string; email?: string; title?: string; district?: string }> | null)?.map(t => ({
+				name: t.name,
+				title: t.title,
+				district: t.district
+			})) ?? null
 		},
 		stats: {
 			verifiedActions: campaign._count.actions,
@@ -143,7 +149,7 @@ export const load: PageServerLoad = async ({ params }) => {
 };
 
 export const actions: Actions = {
-	default: async ({ request, params, getClientAddress }) => {
+	default: async ({ request, params, getClientAddress, platform }) => {
 		// Look up the campaign (must be ACTIVE)
 		const campaign = await db.campaign.findFirst({
 			where: { id: params.slug, status: 'ACTIVE' },
@@ -179,6 +185,10 @@ export const actions: Actions = {
 		const postalCode = formData.get('postalCode')?.toString().trim() || null;
 		const message = formData.get('message')?.toString().trim() || null;
 		const rawDistrictCode = formData.get('districtCode')?.toString().trim() || null;
+
+		if (message && message.length > 5000) {
+			return fail(400, { error: 'Message too long (5000 character maximum)' });
+		}
 
 		if (!email) {
 			return fail(400, { error: 'Email is required' });
@@ -238,7 +248,7 @@ export const actions: Actions = {
 			districtVerified = true;
 		} else if (postalCode) {
 			// Fallback: region-level hash from postal code (existing behavior)
-			const salt = process.env.DISTRICT_HASH_SALT || 'commons-district-v1';
+			const salt = env.DISTRICT_HASH_SALT || 'commons-district-v1';
 			const encoder = new TextEncoder();
 			const hashBuffer = await crypto.subtle.digest(
 				'SHA-256',
@@ -297,6 +307,35 @@ export const actions: Actions = {
 			supporterId: supporter.id,
 			metadata: { campaignId: campaign.id }
 		});
+
+		// Check debate auto-spawn threshold — use waitUntil on CF Workers
+		if (FEATURES.DEBATE) {
+			const debatePromise = (async () => {
+				try {
+					const c = await db.campaign.findUnique({
+						where: { id: campaign.id },
+						select: { debateEnabled: true, debateThreshold: true, debateId: true }
+					});
+					if (!c?.debateEnabled || c.debateId) return;
+
+					const actionCount = await db.campaignAction.count({
+						where: { campaignId: campaign.id, verified: true }
+					});
+					if (actionCount >= (c.debateThreshold ?? 50)) {
+						await spawnDebateForCampaign(campaign.id);
+						console.log(`[debate-auto-spawn] Spawned debate for campaign ${campaign.id} at ${actionCount} actions`);
+					}
+				} catch (e) {
+					console.error('[debate-auto-spawn] Failed:', e);
+				}
+			})();
+
+			if (platform?.context) {
+				platform.context.waitUntil(debatePromise);
+			} else {
+				void debatePromise;
+			}
+		}
 
 		// Get updated counts
 		const [verifiedCount, totalCount] = await Promise.all([

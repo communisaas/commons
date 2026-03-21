@@ -421,9 +421,15 @@
 		needsAddress = false;
 
 		// Extract congressional district from representatives or default to at-large
-		const houseRep = data.representatives?.find(
-			(r) => 'chamber' in r && r.chamber === 'house'
-		) as Representative | undefined;
+		// Supports DecisionMaker shapes (title field derives chamber)
+		const houseRep = data.representatives?.find((r) => {
+			if ('chamber' in r && r.chamber === 'house') return true;
+			if ('title' in r && typeof r.title === 'string') {
+				const t = r.title.toLowerCase();
+				return !t.includes('senator') && !t.includes('senate');
+			}
+			return false;
+		}) as Representative | undefined;
 		const districtNumber = houseRep?.district ?? 'AL';
 		const district = `${data.state}-${districtNumber.toString().padStart(2, '0')}`;
 
@@ -443,7 +449,7 @@
 				modalActions.setState('trust-upgrade');
 
 				// Always call verify-address — even for Tier 2+ users re-entering address.
-				// This updates district_hash, user_representatives, and credential on the server.
+				// This updates district_hash, UserDMRelation, and credential on the server.
 				// Without this, a user who moves districts keeps their old district forever.
 				const verifyRes = await fetch('/api/identity/verify-address', {
 					method: 'POST',

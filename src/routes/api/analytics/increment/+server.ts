@@ -44,12 +44,12 @@ function hashIP(ip: string): string {
  * @returns Client IP address
  */
 function getClientIP(request: Request): string {
-	// Check common proxy headers (in order of preference)
+	// Check common proxy headers (in order of preference — Cloudflare-set headers first)
 	const headers = [
+		'cf-connecting-ip', // Cloudflare (cannot be spoofed by client)
+		'true-client-ip', // Cloudflare Enterprise
 		'x-forwarded-for', // Standard proxy header
-		'x-real-ip', // Nginx proxy
-		'cf-connecting-ip', // Cloudflare
-		'true-client-ip' // Cloudflare Enterprise
+		'x-real-ip' // Nginx proxy
 	];
 
 	for (const header of headers) {

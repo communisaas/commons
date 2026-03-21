@@ -1,16 +1,12 @@
 import { db } from '$lib/core/db';
 import { computeOrgVerificationPacket } from '$lib/server/campaigns/verification';
+import { FEATURES } from '$lib/config/features';
+import { maskEmail } from '$lib/server/org/mask';
+import { loadOrgBilling } from '$lib/server/org';
 import type { PageServerLoad } from './$types';
 
-/** Mask email for display: "jane@example.com" -> "j***@example.com" */
-function maskEmail(email: string): string {
-	const [local, domain] = email.split('@');
-	if (!domain) return '***';
-	return `${local.charAt(0)}***@${domain}`;
-}
-
 export const load: PageServerLoad = async ({ parent }) => {
-	const { org } = await parent();
+	const { org, membership } = await parent();
 
 	const [
 		// Verification funnel counts
@@ -41,6 +37,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 		// Onboarding state (I1: moved into main Promise.all)
 		teamCount,
 		sentEmailCount,
+		issueDomainCount,
 
 		// I2: Verified action counts per campaign
 		verifiedActionGroups,
@@ -50,7 +47,21 @@ export const load: PageServerLoad = async ({ parent }) => {
 		verifiedLastWeek,
 
 		// Email status breakdown for effective reach
-		emailStatusGroups
+		emailStatusGroups,
+
+		// Legislative alerts
+		legislativeAlerts,
+
+		// Intelligence loop: followed reps
+		followedRepCount,
+		followedRepsTop,
+
+		// Intelligence loop: watched bills
+		watchedBillCount,
+		watchedBillsTop,
+
+		// Billing email for onboarding checklist
+		orgBilling
 	] = await Promise.all([
 		// Total supporters
 		db.supporter.count({ where: { orgId: org.id } }),
@@ -150,7 +161,8 @@ export const load: PageServerLoad = async ({ parent }) => {
 					}
 				}
 			},
-			orderBy: { endorsedAt: 'desc' }
+			orderBy: { endorsedAt: 'desc' },
+			take: 50
 		}),
 
 		// Template count
@@ -159,6 +171,9 @@ export const load: PageServerLoad = async ({ parent }) => {
 		// I1: Onboarding queries — now in main Promise.all
 		db.orgMembership.count({ where: { orgId: org.id } }),
 		db.emailBlast.count({ where: { orgId: org.id, status: 'sent' } }),
+		db.orgIssueDomain.count({
+			where: { orgId: org.id, label: { not: '__alert_preferences__' } }
+		}),
 
 		// I2: Verified action counts per campaign (org-wide, no dependency on campaign IDs)
 		db.campaignAction.groupBy({
@@ -196,7 +211,67 @@ export const load: PageServerLoad = async ({ parent }) => {
 			by: ['emailStatus'],
 			where: { orgId: org.id },
 			_count: { id: true }
-		})
+		}),
+
+		// Legislative alerts (pending, sorted by urgency then recency)
+		FEATURES.LEGISLATION
+			? db.legislativeAlert.findMany({
+					where: { orgId: org.id, status: 'pending' },
+					orderBy: [{ createdAt: 'desc' }],
+					take: 5,
+					include: {
+						bill: {
+							select: {
+								id: true,
+								title: true,
+								status: true,
+								relevances: {
+									where: { orgId: org.id },
+									select: { score: true },
+									take: 1
+								}
+							}
+						}
+					}
+				})
+			: Promise.resolve([]),
+
+		// Followed decision-makers (count + top 5)
+		FEATURES.LEGISLATION
+			? db.orgDMFollow.count({ where: { orgId: org.id } })
+			: Promise.resolve(0),
+		FEATURES.LEGISLATION
+			? db.orgDMFollow.findMany({
+					where: { orgId: org.id },
+					orderBy: { followedAt: 'desc' },
+					take: 5,
+					include: {
+						decisionMaker: {
+							select: { id: true, name: true, party: true, jurisdiction: true }
+						}
+					}
+				})
+			: Promise.resolve([]),
+
+		// Watched bills (count + top 5)
+		FEATURES.LEGISLATION
+			? db.orgBillWatch.count({ where: { orgId: org.id } })
+			: Promise.resolve(0),
+		FEATURES.LEGISLATION
+			? db.orgBillWatch.findMany({
+					where: { orgId: org.id },
+					orderBy: { createdAt: 'desc' },
+					take: 5,
+					include: {
+						bill: {
+							select: { id: true, title: true, status: true }
+						}
+					}
+				})
+			: Promise.resolve([]),
+
+		// Billing email for onboarding checklist (loaded separately from org context)
+		loadOrgBilling(org.id)
 	]);
 
 	// I2: Build verified action count map from parallel query
@@ -218,6 +293,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 
 	const onboardingState = {
 		hasDescription: !!org.description,
+		hasIssueDomains: issueDomainCount > 0,
 		hasSupporters: totalSupporters > 0,
 		hasCampaigns: campaigns.length > 0,
 		hasTeam: teamCount > 1,
@@ -315,8 +391,50 @@ export const load: PageServerLoad = async ({ parent }) => {
 			lastWeek: verifiedLastWeek
 		},
 
+		// Billing email (for onboarding checklist only)
+		billingEmail: ['admin', 'owner'].includes(membership.role) ? orgBilling.billing_email : null,
+
 		// Onboarding
 		onboardingState,
-		onboardingComplete
+		onboardingComplete,
+
+		// Intelligence loop: followed decision-makers
+		followedReps: {
+			count: followedRepCount,
+			top: followedRepsTop.map((f: typeof followedRepsTop[number]) => ({
+				id: f.decisionMaker.id,
+				name: f.decisionMaker.name,
+				party: f.decisionMaker.party,
+				jurisdiction: f.decisionMaker.jurisdiction
+			}))
+		},
+
+		// Intelligence loop: watched bills
+		watchedBills: {
+			count: watchedBillCount,
+			top: watchedBillsTop.map((w: typeof watchedBillsTop[number]) => ({
+				id: w.bill.id,
+				title: w.bill.title,
+				status: w.bill.status,
+				position: w.position
+			}))
+		},
+
+		// Legislative alerts
+		legislativeAlerts: legislativeAlerts.map((a: typeof legislativeAlerts[number]) => ({
+			id: a.id,
+			type: a.type,
+			title: a.title,
+			summary: a.summary,
+			urgency: a.urgency,
+			status: a.status,
+			createdAt: a.createdAt.toISOString(),
+			bill: {
+				id: a.bill.id,
+				title: a.bill.title,
+				status: a.bill.status,
+				relevanceScore: a.bill.relevances[0]?.score ?? null
+			}
+		}))
 	};
 };

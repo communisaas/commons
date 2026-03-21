@@ -17,6 +17,7 @@ import { getStripe } from '$lib/server/billing/stripe';
 import { PLANS } from '$lib/server/billing/plans';
 import { db } from '$lib/core/db';
 import type Stripe from 'stripe';
+import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
 
 /** Extract billing period from subscription's first item (Stripe API 2026+). */
@@ -28,10 +29,10 @@ function getPeriodDates(sub: Stripe.Subscription): { start: Date; end: Date } {
 	};
 }
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, platform }) => {
 	const stripe = getStripe();
 	const signature = request.headers.get('stripe-signature');
-	const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+	const webhookSecret = env.STRIPE_WEBHOOK_SECRET;
 
 	if (!signature || !webhookSecret) {
 		throw error(400, 'Missing signature or webhook secret');
@@ -56,41 +57,48 @@ export const POST: RequestHandler = async ({ request }) => {
 				const donationId = session.metadata.donationId;
 				const campaignId = session.metadata.campaignId;
 				if (donationId) {
+					// Atomic status transition — prevents double-processing by concurrent workers
+					const updated = await db.donation.updateMany({
+						where: { id: donationId, status: 'pending' },
+						data: {
+							status: 'completed',
+							stripePaymentIntentId: typeof session.payment_intent === 'string' ? session.payment_intent : null,
+							stripeSubscriptionId: typeof session.subscription === 'string' ? session.subscription : null,
+							completedAt: new Date()
+						}
+					});
+					if (updated.count === 0) break; // Already processed or not found
+
+					// Now safe to read the donation for amountCents
 					const donation = await db.donation.findUnique({ where: { id: donationId } });
-					if (donation && donation.status === 'pending') {
-						await db.donation.update({
-							where: { id: donationId },
+					if (donation && campaignId) {
+						await db.campaign.update({
+							where: { id: campaignId },
 							data: {
-								status: 'completed',
-								stripePaymentIntentId: typeof session.payment_intent === 'string' ? session.payment_intent : null,
-								stripeSubscriptionId: typeof session.subscription === 'string' ? session.subscription : null,
-								completedAt: new Date()
+								raisedAmountCents: { increment: donation.amountCents },
+								donorCount: { increment: 1 }
 							}
 						});
-						// Increment campaign counters
-						if (campaignId) {
-							await db.campaign.update({
-								where: { id: campaignId },
-								data: {
-									raisedAmountCents: { increment: donation.amountCents },
-									donorCount: { increment: 1 }
-								}
-							});
-						}
+					}
 
-						// Fire-and-forget: trigger automation workflows
-						const orgId = session.metadata?.orgId;
-						if (orgId) {
-							void (async () => {
-								try {
-									const { dispatchTrigger } = await import('$lib/server/automation/trigger');
-									await dispatchTrigger(orgId, 'donation_completed', {
-										entityId: donationId,
-										supporterId: donation.supporterId ?? undefined,
-										metadata: { campaignId, amountCents: donation.amountCents }
-									});
-								} catch {}
-							})();
+					// Fire-and-forget: trigger automation workflows
+					const orgId = session.metadata?.orgId;
+					if (orgId && donation) {
+						const backgroundWork = (async () => {
+							try {
+								const { dispatchTrigger } = await import('$lib/server/automation/trigger');
+								await dispatchTrigger(orgId, 'donation_completed', {
+									entityId: donationId,
+									supporterId: donation.supporterId ?? undefined,
+									metadata: { campaignId, amountCents: donation.amountCents }
+								});
+							} catch {}
+						})();
+
+						if (platform?.context?.waitUntil) {
+							platform.context.waitUntil(backgroundWork);
+						} else {
+							void backgroundWork;
 						}
 					}
 				}

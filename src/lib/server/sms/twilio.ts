@@ -6,8 +6,13 @@
  * HTTP calls with Basic Auth + form encoding.
  */
 import { env } from '$env/dynamic/private';
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { SmsSendResult, CallInitResult } from './types';
+
+function escapeXml(s: string): string {
+	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
 
 const TWILIO_API_BASE = 'https://api.twilio.com/2010-04-01/Accounts';
 
@@ -104,7 +109,7 @@ export async function initiatePatchThroughCall(
 			? ` You are a verified constituent from ${districtInfo}.`
 			: '';
 
-		const twiml = `<Response><Say>${greeting}${districtMsg} Please hold.</Say><Dial callerId="${getFromNumber()}">${targetPhone}</Dial></Response>`;
+		const twiml = `<Response><Say>${escapeXml(greeting)}${escapeXml(districtMsg)} Please hold.</Say><Dial callerId="${getFromNumber()}">${targetPhone}</Dial></Response>`;
 
 		const params = new URLSearchParams();
 		params.set('To', callerPhone);
@@ -161,7 +166,8 @@ export function validateTwilioSignature(
 			.update(data)
 			.digest('base64');
 
-		return computed === signature;
+		if (computed.length !== signature.length) return false;
+		return timingSafeEqual(Buffer.from(computed), Buffer.from(signature));
 	} catch {
 		return false;
 	}

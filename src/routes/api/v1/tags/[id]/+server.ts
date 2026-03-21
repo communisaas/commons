@@ -19,17 +19,17 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'write');
 	if (scopeErr) return scopeErr;
 
-	const tag = await db.tag.findFirst({ where: { id: params.id, orgId: auth.orgId } });
-	if (!tag) return apiError('NOT_FOUND', 'Tag not found', 404);
-
 	let body: Record<string, unknown>;
 	try { body = await request.json(); } catch { return apiError('BAD_REQUEST', 'Invalid JSON body', 400); }
 
 	const { name } = body as { name?: string };
 	if (!name || typeof name !== 'string' || !name.trim()) return apiError('BAD_REQUEST', 'Tag name is required', 400);
+	if (name.trim().length > 100) return apiError('BAD_REQUEST', 'Tag name must be 100 characters or fewer', 400);
 
-	const updated = await db.tag.update({ where: { id: params.id }, data: { name: name.trim() } });
-	return apiOk({ id: updated.id, name: updated.name });
+	const result = await db.tag.updateMany({ where: { id: params.id, orgId: auth.orgId }, data: { name: name.trim() } });
+	if (result.count === 0) return apiError('NOT_FOUND', 'Tag not found', 404);
+	const updated = await db.tag.findUnique({ where: { id: params.id } });
+	return apiOk({ id: updated!.id, name: updated!.name });
 };
 
 export const DELETE: RequestHandler = async ({ request, params }) => {
@@ -41,9 +41,7 @@ export const DELETE: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'write');
 	if (scopeErr) return scopeErr;
 
-	const tag = await db.tag.findFirst({ where: { id: params.id, orgId: auth.orgId } });
-	if (!tag) return apiError('NOT_FOUND', 'Tag not found', 404);
-
-	await db.tag.delete({ where: { id: params.id } });
+	const result = await db.tag.deleteMany({ where: { id: params.id, orgId: auth.orgId } });
+	if (result.count === 0) return apiError('NOT_FOUND', 'Tag not found', 404);
 	return apiOk({ deleted: true });
 };

@@ -14,6 +14,19 @@ export const GET: RequestHandler = async ({ locals }) => {
 			},
 			orderBy: {
 				updatedAt: 'desc'
+			},
+			select: {
+				id: true,
+				slug: true,
+				title: true,
+				description: true,
+				body: true,
+				category: true,
+				status: true,
+				is_public: true,
+				verified_sends: true,
+				createdAt: true,
+				updatedAt: true
 			}
 		});
 

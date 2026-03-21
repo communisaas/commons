@@ -13,6 +13,10 @@ export interface Representative {
 	district: string;
 	bioguideId?: string;
 	email?: string;
+	/** DecisionMaker title — used to derive chamber when coming from DM model */
+	title?: string;
+	/** DecisionMaker jurisdiction — maps to state in legacy shape */
+	jurisdiction?: string;
 }
 
 /** A specific legislative office that can receive constituent messages. */

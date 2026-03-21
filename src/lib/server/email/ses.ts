@@ -38,14 +38,17 @@ export async function sendEmail(
 ): Promise<SendResult> {
 	try {
 		const ses = getClient();
+		// Defense-in-depth: strip control characters from header-interpolated values
+		const safeFromName = fromName.replace(/[\r\n\x00-\x1f\x7f]/g, '');
+		const safeSubject = subject.replace(/[\r\n\x00-\x1f\x7f]/g, '');
 		const command = new SendEmailCommand({
-			FromEmailAddress: `${fromName} <${from}>`,
+			FromEmailAddress: `${safeFromName} <${from}>`,
 			Destination: {
 				ToAddresses: [to]
 			},
 			Content: {
 				Simple: {
-					Subject: { Data: subject, Charset: 'UTF-8' },
+					Subject: { Data: safeSubject, Charset: 'UTF-8' },
 					Body: {
 						Html: { Data: htmlBody, Charset: 'UTF-8' }
 					},

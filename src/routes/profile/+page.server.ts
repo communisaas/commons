@@ -101,10 +101,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 		});
 
 	// Stream representatives data separately
+	// DUAL-WRITE: Read from both legacy and DM paths; prefer DM when populated. Remove legacy in S1-07.
 	const representativesPromise = db.user
 		.findUnique({
 			where: { id: locals.user.id },
 			select: {
+				// DUAL-WRITE: Remove in S1-07
 				representatives: {
 					where: { is_active: true },
 					select: {
@@ -122,16 +124,58 @@ export const load: PageServerLoad = async ({ locals }) => {
 							}
 						}
 					}
+				},
+				// New DecisionMaker path
+				dmRelations: {
+					where: { isActive: true },
+					select: {
+						relationship: true,
+						decisionMaker: {
+							select: {
+								id: true,
+								name: true,
+								party: true,
+								title: true,
+								jurisdiction: true,
+								district: true,
+								phone: true,
+								email: true
+							}
+						}
+					}
 				}
 			}
 		})
-		.then(
-			(result) =>
-				result?.representatives.map((ur: { relationship: string; representative: Record<string, unknown> }) => ({
-					relationship: ur.relationship,
-					...(ur.representative as object)
-				})) || []
-		);
+		.then((result) => {
+			if (!result) return [];
+
+			// Transform DM relations to match the expected shape
+			const dmReps = result.dmRelations.map((dr: { relationship: string; decisionMaker: Record<string, unknown> }) => {
+				const title = (dr.decisionMaker.title as string) ?? '';
+				const isSenate = title.toLowerCase().includes('senator') || title.toLowerCase().includes('senate');
+				return {
+					relationship: dr.relationship,
+					id: dr.decisionMaker.id,
+					name: dr.decisionMaker.name,
+					party: dr.decisionMaker.party ?? '',
+					state: dr.decisionMaker.jurisdiction ?? '',
+					district: dr.decisionMaker.district ?? '',
+					chamber: isSenate ? 'senate' : 'house',
+					phone: dr.decisionMaker.phone ?? null,
+					email: dr.decisionMaker.email ?? null,
+					title,
+					jurisdiction: dr.decisionMaker.jurisdiction ?? ''
+				};
+			});
+
+			// Prefer DM path when populated; fall back to legacy. Remove in S1-07.
+			if (dmReps.length > 0) return dmReps;
+
+			return result.representatives.map((ur: { relationship: string; representative: Record<string, unknown> }) => ({
+				relationship: ur.relationship,
+				...(ur.representative as object)
+			}));
+		});
 
 	// Return immediately — user from locals (no DB hit), everything else streamed
 	return {

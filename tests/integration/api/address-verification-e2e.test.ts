@@ -70,16 +70,21 @@ describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
 	afterAll(async () => {
 		// Cleanup in reverse dependency order
 		if (testUser) {
-			await db.user_representatives.deleteMany({ where: { user_id: testUser.id } });
+			await db.userDMRelation.deleteMany({ where: { userId: testUser.id } });
 			await db.districtCredential.deleteMany({ where: { user_id: testUser.id } });
 			await db.user.delete({ where: { id: testUser.id } }).catch(() => {});
 		}
-		// Clean up test representatives
-		await db.representative.deleteMany({
-			where: {
-				bioguide_id: { in: ['CAS001', 'CAS002', 'CAH011', 'CAH012'] }
-			}
+		// Clean up test DecisionMakers (via ExternalId join)
+		const testBioguides = ['CAS001', 'CAS002', 'CAH011', 'CAH012'];
+		const testExternalIds = await db.externalId.findMany({
+			where: { system: 'bioguide', value: { in: testBioguides } },
+			select: { decisionMakerId: true }
 		});
+		if (testExternalIds.length > 0) {
+			const dmIds = testExternalIds.map((e) => e.decisionMakerId);
+			await db.externalId.deleteMany({ where: { decisionMakerId: { in: dmIds } } });
+			await db.decisionMaker.deleteMany({ where: { id: { in: dmIds } } });
+		}
 		// Clean env vars
 		delete process.env.IDENTITY_SIGNING_KEY;
 	});
@@ -200,51 +205,52 @@ describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
 			expect(credential!.expires_at.getTime()).toBeGreaterThan(Date.now());
 		});
 
-		it('persisted representatives to the database', async () => {
-			const reps = await db.representative.findMany({
-				where: {
-					bioguide_id: {
-						in: resolvedOfficials
-							.map((o) => o.bioguide_id as string)
-							.filter(Boolean)
-					}
-				}
+		it('persisted decision-makers to the database', async () => {
+			const bioguides = resolvedOfficials
+				.map((o) => o.bioguide_id as string)
+				.filter(Boolean);
+			const externalIds = await db.externalId.findMany({
+				where: { system: 'bioguide', value: { in: bioguides } },
+				select: { decisionMakerId: true }
+			});
+			const dmIds = externalIds.map((e) => e.decisionMakerId);
+			const dms = await db.decisionMaker.findMany({
+				where: { id: { in: dmIds } }
 			});
 
-			// Should have created representative records for all officials
-			expect(reps.length).toBeGreaterThan(0);
+			expect(dms.length).toBeGreaterThan(0);
 
-			// Each rep should have the expected fields
-			for (const rep of reps) {
-				expect(rep.name).toBeTruthy();
-				expect(rep.party).toBeTruthy();
-				expect(rep.chamber).toBeTruthy();
-				expect(rep.is_active).toBe(true);
-				expect(rep.data_source).toBe('congress_api');
+			for (const dm of dms) {
+				expect(dm.name).toBeTruthy();
+				expect(dm.party).toBeTruthy();
+				expect(dm.title).toBeTruthy();
+				expect(dm.active).toBe(true);
+				expect(dm.type).toBe('legislator');
 			}
 		});
 
-		it('created user_representatives junction records', async () => {
-			const junctions = await db.user_representatives.findMany({
+		it('created UserDMRelation junction records', async () => {
+			const dmRelations = await db.userDMRelation.findMany({
 				where: {
-					user_id: testUser.id,
-					is_active: true
+					userId: testUser.id,
+					isActive: true
 				},
-				include: { representative: true }
+				include: { decisionMaker: true }
 			});
 
-			// Should have junction records linking user to their representatives
-			expect(junctions.length).toBeGreaterThan(0);
+			// Should have DM relation records linking user to their decision-makers
+			expect(dmRelations.length).toBeGreaterThan(0);
 
-			// Each junction should have correct relationship and be active
-			for (const junction of junctions) {
-				expect(junction.relationship).toBe('constituent');
-				expect(junction.is_active).toBe(true);
-				expect(junction.last_validated).toBeDefined();
+			// Each relation should have correct relationship and be active
+			for (const rel of dmRelations) {
+				expect(rel.relationship).toBe('constituent');
+				expect(rel.isActive).toBe(true);
+				expect(rel.lastValidated).toBeDefined();
 
-				// The linked representative should exist and be active
-				expect(junction.representative.name).toBeTruthy();
-				expect(junction.representative.is_active).toBe(true);
+				// The linked decision-maker should exist and be active
+				expect(rel.decisionMaker.name).toBeTruthy();
+				expect(rel.decisionMaker.active).toBe(true);
+				expect(rel.decisionMaker.type).toBe('legislator');
 			}
 		});
 	});
@@ -254,23 +260,22 @@ describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
 	// ====================================================================
 
 	describe('Step 3: profile page representative query', () => {
-		it('returns representatives via the profile page query pattern', async () => {
-			// This mirrors the query in src/routes/profile/+page.server.ts
+		it('returns decision-makers via UserDMRelation query pattern', async () => {
 			const result = await db.user.findUnique({
 				where: { id: testUser.id },
 				select: {
-					representatives: {
-						where: { is_active: true },
+					dmRelations: {
+						where: { isActive: true },
 						select: {
 							relationship: true,
-							representative: {
+							decisionMaker: {
 								select: {
 									id: true,
 									name: true,
 									party: true,
-									state: true,
+									jurisdiction: true,
 									district: true,
-									chamber: true,
+									title: true,
 									phone: true,
 									email: true
 								}
@@ -281,44 +286,40 @@ describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
 			});
 
 			expect(result).not.toBeNull();
-			expect(result!.representatives.length).toBeGreaterThan(0);
+			expect(result!.dmRelations.length).toBeGreaterThan(0);
 
-			// Flatten to match the profile page's .then() transform
-			const representatives = result!.representatives.map((ur) => ({
-				relationship: ur.relationship,
-				...ur.representative
+			const dms = result!.dmRelations.map((r) => ({
+				relationship: r.relationship,
+				...r.decisionMaker
 			}));
 
-			// Verify the shape matches what the profile page expects
-			for (const rep of representatives) {
-				expect(rep.relationship).toBe('constituent');
-				expect(rep.name).toBeTruthy();
-				expect(rep.party).toBeTruthy();
-				expect(rep.chamber).toBeTruthy();
-				expect(rep.state).toBeTruthy();
+			for (const dm of dms) {
+				expect(dm.relationship).toBe('constituent');
+				expect(dm.name).toBeTruthy();
+				expect(dm.party).toBeTruthy();
+				expect(dm.title).toMatch(/^(Senator|Representative)$/);
+				expect(dm.jurisdiction).toBeTruthy();
 			}
 		});
 
-		it('returns representatives via the layout server query pattern', async () => {
+		it('returns decision-makers via the layout server query pattern', async () => {
 			// This mirrors the query in src/routes/+layout.server.ts
 			const result = await db.user.findUnique({
 				where: { id: testUser.id },
 				select: {
-					representatives: {
-						where: { is_active: true },
+					dmRelations: {
+						where: { isActive: true },
 						select: {
-							representative: {
+							decisionMaker: {
 								select: {
 									id: true,
 									name: true,
 									party: true,
-									state: true,
+									jurisdiction: true,
 									district: true,
-									chamber: true,
+									title: true,
 									phone: true,
-									email: true,
-									office_code: true,
-									bioguide_id: true
+									email: true
 								}
 							}
 						}
@@ -327,14 +328,13 @@ describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
 			});
 
 			expect(result).not.toBeNull();
-			const reps = result!.representatives.map((ur) => ur.representative);
+			const dms = result!.dmRelations.map((r) => r.decisionMaker);
 
-			expect(reps.length).toBeGreaterThan(0);
+			expect(dms.length).toBeGreaterThan(0);
 
-			for (const rep of reps) {
-				expect(rep.bioguide_id).toBeTruthy();
-				expect(rep.name).toBeTruthy();
-				expect(rep.chamber).toMatch(/^(house|senate)$/);
+			for (const dm of dms) {
+				expect(dm.name).toBeTruthy();
+				expect(dm.title).toMatch(/^(Senator|Representative)$/);
 			}
 		});
 	});
@@ -345,11 +345,11 @@ describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
 
 	describe('Step 4: re-verification handles district change', () => {
 		it('deactivates old representatives when district changes', async () => {
-			// Count current active junctions
-			const beforeCount = await db.user_representatives.count({
-				where: { user_id: testUser.id, is_active: true }
+			// Count current active DM relations
+			const beforeDmCount = await db.userDMRelation.count({
+				where: { userId: testUser.id, isActive: true }
 			});
-			expect(beforeCount).toBeGreaterThan(0);
+			expect(beforeDmCount).toBeGreaterThan(0);
 
 			// Re-verify with a different district (CA-11) and new officials
 			const event = createMockRequestEvent({
@@ -383,24 +383,23 @@ describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
 			const response = await verifyAddress(event as any);
 			expect(response.status).toBe(200);
 
-			// New active junctions should be for CA officials only
-			const activeJunctions = await db.user_representatives.findMany({
-				where: { user_id: testUser.id, is_active: true },
-				include: { representative: true }
+			// New active DM relations should be for CA officials only
+			const activeDmRelations = await db.userDMRelation.findMany({
+				where: { userId: testUser.id, isActive: true },
+				include: { decisionMaker: true }
 			});
 
-			expect(activeJunctions.length).toBe(2); // 1 house + 1 senate
+			expect(activeDmRelations.length).toBe(2); // 1 house + 1 senate
 
-			const bioguideIds = activeJunctions.map((j) => j.representative.bioguide_id);
-			expect(bioguideIds).toContain('CAH011');
-			expect(bioguideIds).toContain('CAS001');
+			const dmNames = activeDmRelations.map((r) => r.decisionMaker.name);
+			expect(dmNames).toContain('New House Rep');
+			expect(dmNames).toContain('New Senator');
 
-			// Old IL reps should be deactivated
-			const inactiveJunctions = await db.user_representatives.findMany({
-				where: { user_id: testUser.id, is_active: false }
+			// Old DM relations should be deactivated
+			const inactiveDmRelations = await db.userDMRelation.findMany({
+				where: { userId: testUser.id, isActive: false }
 			});
-
-			expect(inactiveJunctions.length).toBeGreaterThan(0);
+			expect(inactiveDmRelations.length).toBeGreaterThan(0);
 		});
 	});
 

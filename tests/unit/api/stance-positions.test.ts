@@ -21,6 +21,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const {
 	mockFeatures,
+	mockUserFindUnique,
 	mockTemplateFindUnique,
 	mockShadowAtlasFindFirst,
 	mockPositionRegistrationFindUnique,
@@ -45,6 +46,7 @@ const {
 		AB_TESTING: true,
 		PUBLIC_API: false
 	},
+	mockUserFindUnique: vi.fn(),
 	mockTemplateFindUnique: vi.fn(),
 	mockShadowAtlasFindFirst: vi.fn(),
 	mockPositionRegistrationFindUnique: vi.fn(),
@@ -66,6 +68,7 @@ vi.mock('$lib/config/features', () => ({
 
 vi.mock('$lib/core/db', () => ({
 	prisma: {
+		user: { findUnique: mockUserFindUnique },
 		template: { findUnique: mockTemplateFindUnique },
 		shadowAtlasRegistration: { findFirst: mockShadowAtlasFindFirst },
 		positionRegistration: {
@@ -189,7 +192,7 @@ describe('STANCE_POSITIONS feature gate', () => {
 		it('POST /api/positions/register without auth returns 401', async () => {
 			const response = await registerPositionHandler(buildEventArgs({
 				locals: { session: null },
-				body: { templateId: 't1', stance: 'support', identityCommitment: 'ic1' }
+				body: { templateId: 't1', stance: 'support' }
 			}));
 			expect(response.status).toBe(401);
 			const data = await response.json();
@@ -219,13 +222,14 @@ describe('STANCE_POSITIONS feature gate', () => {
 		});
 
 		it('valid registration returns { registrationId, isNew: true, count }', async () => {
+			mockUserFindUnique.mockResolvedValueOnce({ identity_commitment: 'ic-abc' });
 			mockTemplateFindUnique.mockResolvedValueOnce({ id: 'tmpl-1' });
 			mockShadowAtlasFindFirst.mockResolvedValueOnce(null);
 			mockRegisterPosition.mockResolvedValueOnce({ id: 'reg-1', isNew: true });
 			mockGetPositionCounts.mockResolvedValueOnce({ support: 1, oppose: 0, districts: 0 });
 
 			const response = await registerPositionHandler(buildEventArgs({
-				body: { templateId: 'tmpl-1', stance: 'support', identityCommitment: 'ic-abc' }
+				body: { templateId: 'tmpl-1', stance: 'support' }
 			}));
 
 			expect(response.status).toBe(200);
@@ -236,13 +240,14 @@ describe('STANCE_POSITIONS feature gate', () => {
 		});
 
 		it('duplicate registration returns { registrationId, isNew: false, count }', async () => {
+			mockUserFindUnique.mockResolvedValueOnce({ identity_commitment: 'ic-abc' });
 			mockTemplateFindUnique.mockResolvedValueOnce({ id: 'tmpl-1' });
 			mockShadowAtlasFindFirst.mockResolvedValueOnce(null);
 			mockRegisterPosition.mockResolvedValueOnce({ id: 'reg-1', isNew: false });
 			mockGetPositionCounts.mockResolvedValueOnce({ support: 5, oppose: 3, districts: 2 });
 
 			const response = await registerPositionHandler(buildEventArgs({
-				body: { templateId: 'tmpl-1', stance: 'oppose', identityCommitment: 'ic-abc' }
+				body: { templateId: 'tmpl-1', stance: 'oppose' }
 			}));
 
 			expect(response.status).toBe(200);
@@ -254,7 +259,7 @@ describe('STANCE_POSITIONS feature gate', () => {
 
 		it('missing templateId returns 400', async () => {
 			const response = await registerPositionHandler(buildEventArgs({
-				body: { stance: 'support', identityCommitment: 'ic-abc' }
+				body: { stance: 'support' }
 			}));
 
 			expect(response.status).toBe(400);
@@ -264,7 +269,7 @@ describe('STANCE_POSITIONS feature gate', () => {
 
 		it('invalid stance returns 400', async () => {
 			const response = await registerPositionHandler(buildEventArgs({
-				body: { templateId: 'tmpl-1', stance: 'neutral', identityCommitment: 'ic-abc' }
+				body: { templateId: 'tmpl-1', stance: 'neutral' }
 			}));
 
 			expect(response.status).toBe(400);
@@ -272,21 +277,24 @@ describe('STANCE_POSITIONS feature gate', () => {
 			expect(data.error).toMatch(/stance/);
 		});
 
-		it('missing identityCommitment returns 400', async () => {
+		it('user without identity_commitment returns 403', async () => {
+			mockUserFindUnique.mockResolvedValueOnce({ identity_commitment: null });
+
 			const response = await registerPositionHandler(buildEventArgs({
 				body: { templateId: 'tmpl-1', stance: 'support' }
 			}));
 
-			expect(response.status).toBe(400);
+			expect(response.status).toBe(403);
 			const data = await response.json();
-			expect(data.error).toMatch(/identityCommitment/);
+			expect(data.error).toMatch(/Identity verification required/);
 		});
 
 		it('template not found returns 404', async () => {
+			mockUserFindUnique.mockResolvedValueOnce({ identity_commitment: 'ic-abc' });
 			mockTemplateFindUnique.mockResolvedValueOnce(null);
 
 			const response = await registerPositionHandler(buildEventArgs({
-				body: { templateId: 'nonexistent', stance: 'support', identityCommitment: 'ic-abc' }
+				body: { templateId: 'nonexistent', stance: 'support' }
 			}));
 
 			expect(response.status).toBe(404);

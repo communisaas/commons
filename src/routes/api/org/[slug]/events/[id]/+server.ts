@@ -47,7 +47,14 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		data.startAt = d;
 	}
 	if (body.endAt !== undefined) data.endAt = body.endAt ? new Date(body.endAt) : null;
-	if (body.timezone !== undefined) data.timezone = body.timezone;
+	if (body.timezone !== undefined) {
+		if (typeof body.timezone !== 'string') throw error(400, 'Timezone must be a string');
+		const validTimezones = Intl.supportedValuesOf('timeZone');
+		if (!validTimezones.includes(body.timezone)) {
+			throw error(400, 'Invalid timezone. Must be a valid IANA timezone identifier');
+		}
+		data.timezone = body.timezone;
+	}
 	if (body.venue !== undefined) data.venue = body.venue?.trim() || null;
 	if (body.address !== undefined) data.address = body.address?.trim() || null;
 	if (body.city !== undefined) data.city = body.city?.trim() || null;

@@ -7,29 +7,42 @@ import { db } from '$lib/core/db';
 import { processEmailAction, processTagAction, processConditionAction } from './actions';
 import type { WorkflowStep } from './types';
 
+const MAX_ITERATIONS = 200;
+
 /**
  * Execute a workflow from its current step.
  * For delay steps, sets nextRunAt and pauses. Scheduler resumes later.
  */
 export async function executeWorkflow(executionId: string): Promise<void> {
+	// Atomic status transition — prevents double-execute race
+	const { count } = await db.workflowExecution.updateMany({
+		where: { id: executionId, status: { in: ['pending', 'paused'] } },
+		data: { status: 'running' }
+	});
+	if (count === 0) return;
+
+	// Now fetch execution data for step processing
 	const execution = await db.workflowExecution.findUnique({
 		where: { id: executionId },
 		include: { workflow: true }
 	});
 
 	if (!execution || !execution.workflow) return;
-	if (execution.status === 'completed' || execution.status === 'failed') return;
-
-	// Mark as running
-	await db.workflowExecution.update({
-		where: { id: executionId },
-		data: { status: 'running' }
-	});
 
 	const steps = execution.workflow.steps as unknown as WorkflowStep[];
 	let currentStep = execution.currentStep;
+	let iterations = 0;
 
 	while (currentStep < steps.length) {
+		iterations++;
+		if (iterations > MAX_ITERATIONS) {
+			await db.workflowExecution.update({
+				where: { id: executionId },
+				data: { status: 'failed', error: 'Max iterations exceeded (possible infinite loop)' }
+			});
+			return;
+		}
+
 		const step = steps[currentStep];
 		if (!step) break;
 
@@ -60,6 +73,14 @@ export async function executeWorkflow(executionId: string): Promise<void> {
 			}
 
 			if (result.nextStep !== undefined) {
+				// Bounds check: prevent silent skip of remaining steps
+				if (result.nextStep < 0 || result.nextStep >= steps.length) {
+					await db.workflowExecution.update({
+						where: { id: executionId },
+						data: { status: 'failed', error: `Condition step index ${result.nextStep} out of bounds (0-${steps.length - 1})` }
+					});
+					return;
+				}
 				// Condition step — jump to specified step
 				currentStep = result.nextStep;
 			} else {
@@ -74,19 +95,28 @@ export async function executeWorkflow(executionId: string): Promise<void> {
 		} catch (err) {
 			const errorMsg = err instanceof Error ? err.message : 'Unknown error';
 
-			await db.workflowActionLog.create({
-				data: {
-					executionId,
-					stepIndex: currentStep,
-					actionType: step.type,
-					result: { success: false, error: errorMsg } as any
-				}
-			});
+			// Double-fault protection: ensure status is set to 'failed' even if logging fails
+			try {
+				await db.workflowActionLog.create({
+					data: {
+						executionId,
+						stepIndex: currentStep,
+						actionType: step.type,
+						result: { success: false, error: errorMsg } as any
+					}
+				});
+			} catch {
+				// Log creation failed — proceed to status update regardless
+			}
 
-			await db.workflowExecution.update({
-				where: { id: executionId },
-				data: { status: 'failed', error: errorMsg }
-			});
+			try {
+				await db.workflowExecution.update({
+					where: { id: executionId },
+					data: { status: 'failed', error: errorMsg }
+				});
+			} catch (updateErr) {
+				console.error(`[Automation] Failed to mark execution ${executionId} as failed:`, updateErr);
+			}
 			return;
 		}
 	}

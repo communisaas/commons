@@ -4,8 +4,11 @@ import { loadReportPreview, sendReport, loadPastDeliveries } from '$lib/server/c
 import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import type { PageServerLoad, Actions } from './$types';
 
-export const load: PageServerLoad = async ({ params, parent }) => {
+export const load: PageServerLoad = async ({ params, parent, locals }) => {
+	if (!locals.user) throw redirect(302, '/auth/login');
 	const { org } = await parent();
+	const { membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	const preview = await loadReportPreview(params.id, org.id);
 

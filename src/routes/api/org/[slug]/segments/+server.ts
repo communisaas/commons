@@ -7,10 +7,15 @@ import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
 import type { RequestHandler } from './$types';
 
 function csvEscape(value: string): string {
-	if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-		return `"${value.replace(/"/g, '""')}"`;
+	let escaped = value;
+	// F-R8-04: Prefix formula injection characters (OWASP)
+	if (/^[=+\-@\t\r]/.test(escaped)) {
+		escaped = "'" + escaped;
 	}
-	return value;
+	if (escaped.includes(',') || escaped.includes('"') || escaped.includes('\n')) {
+		return `"${escaped.replace(/"/g, '""')}"`;
+	}
+	return escaped;
 }
 
 /**
@@ -166,7 +171,7 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 	}
 
 	if (action === 'export_csv') {
-		// Any org member can export
+		requireRole(membership.role, 'editor');
 		const filters = body.filters as SegmentFilter;
 		const validationError = validateSegmentFilter(filters);
 		if (validationError) throw error(400, validationError);

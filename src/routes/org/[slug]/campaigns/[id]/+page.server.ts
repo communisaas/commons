@@ -15,7 +15,7 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
 };
 
 export const load: PageServerLoad = async ({ params, parent, platform }) => {
-	const { org } = await parent();
+	const { org, membership } = await parent();
 
 	const campaign = await db.campaign.findFirst({
 		where: { id: params.id, orgId: org.id }
@@ -50,6 +50,46 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 			: null
 	]);
 
+	// Load debate data if campaign has a linked debate
+	let debate = null;
+	if (campaign.debateId) {
+		const dbDebate = await db.debate.findUnique({
+			where: { id: campaign.debateId },
+			select: {
+				id: true,
+				proposition_text: true,
+				status: true,
+				deadline: true,
+				argument_count: true,
+				unique_participants: true,
+				winning_stance: true,
+				winning_argument_index: true,
+				ai_panel_consensus: true,
+				template: { select: { slug: true } },
+				arguments: {
+					select: { body: true, stance: true, argument_index: true }
+				}
+			}
+		});
+		if (dbDebate) {
+			const winningArg = dbDebate.winning_argument_index != null
+				? dbDebate.arguments.find((a) => a.argument_index === dbDebate.winning_argument_index)
+				: null;
+			debate = { ...dbDebate, winningArg };
+		}
+	}
+
+	// Action count for pre-threshold debate progress
+	const actionCount = isActive && campaign.debateEnabled && !campaign.debateId
+		? await db.campaignAction.count({ where: { campaignId: campaign.id, verified: true } })
+		: null;
+
+	// Strip target emails for non-editor members (PII minimization)
+	const rawTargets = campaign.targets;
+	const safeTargets = membership.role === 'member' && Array.isArray(rawTargets)
+		? rawTargets.map((t: Record<string, unknown>) => ({ name: t.name, title: t.title, district: t.district }))
+		: rawTargets;
+
 	return {
 		campaign: {
 			id: campaign.id,
@@ -61,7 +101,8 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 			templateTitle,
 			debateEnabled: campaign.debateEnabled,
 			debateThreshold: campaign.debateThreshold,
-			targets: campaign.targets,
+			debateId: campaign.debateId,
+			targets: safeTargets,
 			targetCountry: campaign.targetCountry,
 			targetJurisdiction: campaign.targetJurisdiction,
 			createdAt: campaign.createdAt.toISOString(),
@@ -69,7 +110,24 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 		},
 		templates,
 		packet,
-		analytics
+		analytics,
+		debate: debate
+			? {
+					id: debate.id,
+					propositionText: debate.proposition_text,
+					status: debate.status,
+					deadline: debate.deadline.toISOString(),
+					argumentCount: debate.argument_count,
+					uniqueParticipants: debate.unique_participants,
+					winningStance: debate.winning_stance,
+					aiPanelConsensus: debate.ai_panel_consensus,
+					templateSlug: debate.template.slug,
+					winningArgument: debate.winningArg
+						? { body: debate.winningArg.body, stance: debate.winningArg.stance }
+						: null
+				}
+			: null,
+		actionCount
 	};
 };
 

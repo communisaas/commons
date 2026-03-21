@@ -58,5 +58,11 @@ export const FEATURES = {
 	SMS: true,
 
 	/** Multi-org coalition networks: parent/child orgs, shared supporter pools */
-	NETWORKS: true
+	NETWORKS: true,
+
+	/** Legislative intelligence loop: bill monitoring, alerts, scorecards */
+	LEGISLATION: true,
+
+	/** Accountability receipts: proof-weighted decision-maker tracking */
+	ACCOUNTABILITY: true
 } as const;

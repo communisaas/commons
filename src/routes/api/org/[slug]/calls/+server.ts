@@ -32,8 +32,17 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 	if (!targetPhone || typeof targetPhone !== 'string') {
 		throw error(400, 'targetPhone is required');
 	}
-	if (!isValidE164(targetPhone)) {
-		throw error(400, 'targetPhone must be in E.164 format (e.g., +12025551234)');
+	if (!/^\+\d{10,15}$/.test(targetPhone)) throw error(400, 'Invalid phone number format');
+	if (targetName && (typeof targetName !== 'string' || targetName.length > 200)) {
+		throw error(400, 'Invalid target name');
+	}
+
+	// Validate campaignId belongs to this org
+	if (campaignId) {
+		const campaign = await db.campaign.findFirst({ where: { id: campaignId, orgId: org.id } });
+		if (!campaign) {
+			return json({ error: 'Campaign not found in this organization' }, { status: 400 });
+		}
 	}
 
 	// Look up supporter and verify they belong to this org
@@ -150,14 +159,13 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	return json({
 		data: items.map((c) => ({
 			id: c.id,
-			targetPhone: c.targetPhone,
+			targetPhone: c.targetPhone ? '***' + c.targetPhone.slice(-4) : null,
 			targetName: c.targetName,
 			status: c.status,
 			duration: c.duration,
-			twilioCallSid: c.twilioCallSid,
 			campaignId: c.campaignId,
 			supporter: c.supporter
-				? { id: c.supporter.id, name: c.supporter.name, phone: c.supporter.phone }
+				? { id: c.supporter.id, name: c.supporter.name }
 				: null,
 			createdAt: c.createdAt.toISOString(),
 			updatedAt: c.updatedAt.toISOString()

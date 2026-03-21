@@ -1,6 +1,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
+import { maskEmail } from '$lib/server/org/mask';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -53,7 +54,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		executions: workflow.executions.map((e) => ({
 			id: e.id,
 			supporterName: e.supporter?.name ?? 'Unknown',
-			supporterEmail: e.supporter?.email ?? '',
+			supporterEmail: e.supporter?.email ? maskEmail(e.supporter.email) : '',
 			status: e.status,
 			currentStep: e.currentStep,
 			error: e.error,

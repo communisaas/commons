@@ -143,7 +143,12 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	};
 
 	return {
-		user: locals.user,
+		user: locals.user ? {
+			id: locals.user.id,
+			name: locals.user.name,
+			trust_tier: locals.user.trust_tier,
+			is_verified: locals.user.is_verified
+		} : null,
 		template: parentData.template,
 		channel: parentData.channel,
 		debate

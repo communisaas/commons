@@ -26,7 +26,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		orderBy: { createdAt: 'desc' },
 		take: 50,
 		include: {
-			supporter: { select: { name: true, email: true } }
+			supporter: { select: { name: true } }
 		}
 	});
 
@@ -43,8 +43,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		calls: calls.map((c) => ({
 			id: c.id,
 			supporterName: c.supporter?.name ?? 'Unknown',
-			supporterEmail: c.supporter?.email ?? '',
-			targetPhone: c.targetPhone,
+			targetPhone: c.targetPhone ? '***' + c.targetPhone.slice(-4) : null,
 			targetName: c.targetName,
 			status: c.status,
 			duration: c.duration,

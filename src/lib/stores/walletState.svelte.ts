@@ -14,12 +14,9 @@ import type { EVMWalletProvider } from '$lib/core/wallet/evm-provider';
 // TYPES
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Minimal user shape from page data — avoids importing $page. */
+/** Minimal user shape from page data — boolean flags only (PII stays server-side). */
 export interface PageUser {
-	wallet_address?: string | null;
-	wallet_type?: string | null;
-	near_account_id?: string | null;
-	near_derived_scroll_address?: string | null;
+	hasWallet?: boolean;
 }
 
 export type WalletType = 'evm' | 'near';
@@ -120,36 +117,46 @@ function createWalletState() {
 
 		/**
 		 * Initialize wallet state from server-provided page data.
-		 * Called from layout on mount to hydrate wallet state without
-		 * triggering any wallet popup.
+		 * Layout provides boolean `hasWallet` flag only (addresses are PII).
+		 * When hasWallet is true, fetches actual wallet details from /api/wallet/status.
 		 */
 		initFromPageData(user: PageUser | null) {
-			if (!user) {
+			if (!user || !user.hasWallet) {
 				resetState();
 				return;
 			}
 
-			// Case 1: User has a directly-connected EVM wallet
-			if (user.wallet_address && user.wallet_type === 'evm') {
-				connected = true;
-				address = user.wallet_address;
-				walletType = 'evm';
-				error = null;
-				// chainId and balance unknown until provider connects — leave null
-				return;
-			}
+			// User has a wallet — fetch details from authenticated API
+			if (typeof globalThis.fetch === 'function') {
+				globalThis.fetch('/api/wallet/status')
+					.then((res) => {
+						if (!res.ok) {
+							resetState();
+							return null;
+						}
+						return res.json();
+					})
+					.then((data: { wallet_address?: string; wallet_type?: string; near_derived_scroll_address?: string } | null) => {
+						if (!data) return;
 
-			// Case 2: NEAR user with a derived Scroll address (no direct EVM wallet)
-			if (user.near_derived_scroll_address && !user.wallet_address) {
-				connected = true;
-				address = user.near_derived_scroll_address;
-				walletType = 'near';
-				error = null;
-				return;
+						if (data.wallet_address && data.wallet_type === 'evm') {
+							connected = true;
+							address = data.wallet_address;
+							walletType = 'evm';
+							error = null;
+						} else if (data.near_derived_scroll_address && !data.wallet_address) {
+							connected = true;
+							address = data.near_derived_scroll_address;
+							walletType = 'near';
+							error = null;
+						} else {
+							resetState();
+						}
+					})
+					.catch(() => {
+						resetState();
+					});
 			}
-
-			// Neither — disconnected
-			resetState();
 		},
 
 		/**

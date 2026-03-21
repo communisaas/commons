@@ -11,18 +11,19 @@ import { sendSms } from './twilio';
  * Send an SMS blast to all matching supporters with phone numbers.
  */
 export async function sendSmsBlast(blastId: string): Promise<void> {
+	// Atomic status transition — prevents double-send race
+	const { count } = await db.smsBlast.updateMany({
+		where: { id: blastId, status: 'draft' },
+		data: { status: 'sending', sentAt: new Date() }
+	});
+	if (count === 0) return; // blast doesn't exist, not draft, or another process won
+
+	// Now fetch blast data for sending
 	const blast = await db.smsBlast.findUnique({
 		where: { id: blastId },
 		include: { org: { select: { id: true } } }
 	});
-
-	if (!blast || blast.status !== 'draft') return;
-
-	// Mark as sending
-	await db.smsBlast.update({
-		where: { id: blastId },
-		data: { status: 'sending', sentAt: new Date() }
-	});
+	if (!blast) return;
 
 	try {
 		// Find supporters with phone numbers in this org

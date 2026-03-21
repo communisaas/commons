@@ -130,6 +130,14 @@ export async function validateSession(
 		return { session: null, user: null };
 	}
 
+	// F-R4B-02: Absolute session lifetime cap — prevents indefinite renewal of stolen tokens
+	const MAX_SESSION_LIFETIME_MS = 90 * DAY_IN_MS; // 90 days
+	const sessionAge = Date.now() - session.createdAt.getTime();
+	if (sessionAge > MAX_SESSION_LIFETIME_MS) {
+		await db.session.delete({ where: { id: session.id } });
+		return { session: null, user: null };
+	}
+
 	const renewSession = Date.now() >= session.expiresAt.getTime() - DAY_IN_MS * 15;
 	if (renewSession) {
 		session.expiresAt = new Date(Date.now() + DAY_IN_MS * 30);

@@ -118,6 +118,12 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!title || typeof title !== 'string' || !title.trim()) {
 		return apiError('BAD_REQUEST', 'Title is required', 400);
 	}
+	if (title.length > 200) {
+		return apiError('BAD_REQUEST', 'Title must be 200 characters or fewer', 400);
+	}
+	if (campaignBody && typeof campaignBody === 'string' && campaignBody.length > 50000) {
+		return apiError('BAD_REQUEST', 'Body must be 50,000 characters or fewer', 400);
+	}
 
 	if (!type || !['LETTER', 'EVENT', 'FORM'].includes(type)) {
 		return apiError('BAD_REQUEST', 'Type must be one of: LETTER, EVENT, FORM', 400);
@@ -135,7 +141,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (targetJurisdiction && !VALID_JURISDICTIONS.includes(targetJurisdiction as JurisdictionType)) {
 		return apiError('BAD_REQUEST', `Invalid jurisdiction: ${targetJurisdiction}`, 400);
 	}
-	if (targetCountry && !VALID_COUNTRY_CODES.includes(targetCountry.toUpperCase() as CountryCode)) {
+	if (targetCountry && typeof targetCountry === 'string' && !VALID_COUNTRY_CODES.includes(targetCountry.toUpperCase() as CountryCode)) {
 		return apiError('BAD_REQUEST', `Invalid country code: ${targetCountry}`, 400);
 	}
 

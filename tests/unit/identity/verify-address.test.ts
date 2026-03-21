@@ -184,12 +184,20 @@ beforeEach(() => {
 		const tx = {
 			districtCredential: { create: vi.fn().mockResolvedValue({}) },
 			user: { update: vi.fn().mockResolvedValue({}) },
-			user_representatives: {
+			userDMRelation: {
 				updateMany: vi.fn().mockResolvedValue({}),
 				upsert: vi.fn().mockResolvedValue({})
 			},
-			representative: {
-				upsert: vi.fn().mockResolvedValue({ id: 'rep-mock' })
+			externalId: {
+				findUnique: vi.fn().mockResolvedValue(null),
+				create: vi.fn().mockResolvedValue({})
+			},
+			decisionMaker: {
+				update: vi.fn().mockResolvedValue({}),
+				create: vi.fn().mockResolvedValue({ id: 'dm-mock' })
+			},
+			institution: {
+				upsert: vi.fn().mockResolvedValue({ id: 'inst-mock' })
 			}
 		};
 		return fn(tx);
@@ -947,30 +955,38 @@ describe('POST /api/identity/verify-address', () => {
 			expect(response.status).toBe(200);
 		});
 
-		it('should call representative upsert and user_representatives upsert in transaction', async () => {
-			const repUpsertCalls: any[] = [];
-			const junctionUpsertCalls: any[] = [];
-			const updateManyCalls: any[] = [];
+		it('should create DecisionMaker and UserDMRelation in transaction', async () => {
+			const dmCreateCalls: any[] = [];
+			const dmRelationUpsertCalls: any[] = [];
+			const deactivateCalls: any[] = [];
 
 			mockDbTransaction.mockImplementation(async (fn: any) => {
 				const tx = {
 					districtCredential: { create: vi.fn().mockResolvedValue({}) },
 					user: { update: vi.fn().mockResolvedValue({}) },
-					user_representatives: {
+					userDMRelation: {
 						updateMany: vi.fn().mockImplementation((args: any) => {
-							updateManyCalls.push(args);
+							deactivateCalls.push(args);
 							return {};
 						}),
 						upsert: vi.fn().mockImplementation((args: any) => {
-							junctionUpsertCalls.push(args);
+							dmRelationUpsertCalls.push(args);
 							return {};
 						})
 					},
-					representative: {
-						upsert: vi.fn().mockImplementation((args: any) => {
-							repUpsertCalls.push(args);
-							return { id: `rep-${args.where.bioguide_id}` };
+					externalId: {
+						findUnique: vi.fn().mockResolvedValue(null),
+						create: vi.fn().mockResolvedValue({})
+					},
+					decisionMaker: {
+						update: vi.fn().mockResolvedValue({}),
+						create: vi.fn().mockImplementation((args: any) => {
+							dmCreateCalls.push(args);
+							return { id: `dm-${dmCreateCalls.length}` };
 						})
+					},
+					institution: {
+						upsert: vi.fn().mockResolvedValue({ id: 'inst-mock' })
 					}
 				};
 				return fn(tx);
@@ -1004,43 +1020,50 @@ describe('POST /api/identity/verify-address', () => {
 			const response = await POST(event);
 			expect(response.status).toBe(200);
 
-			// Should deactivate existing user_representatives first
-			expect(updateManyCalls).toHaveLength(1);
-			expect(updateManyCalls[0].where.user_id).toBe(TEST_USER_ID);
-			expect(updateManyCalls[0].data.is_active).toBe(false);
+			// Should deactivate existing UserDMRelation rows first
+			expect(deactivateCalls).toHaveLength(1);
+			expect(deactivateCalls[0].where.userId).toBe(TEST_USER_ID);
+			expect(deactivateCalls[0].data.isActive).toBe(false);
 
-			// Should upsert 2 representatives
-			expect(repUpsertCalls).toHaveLength(2);
-			expect(repUpsertCalls[0].where.bioguide_id).toBe('ILS001');
-			expect(repUpsertCalls[0].create.name).toBe('Senator Test');
-			expect(repUpsertCalls[0].create.chamber).toBe('senate');
-			expect(repUpsertCalls[0].create.data_source).toBe('congress_api');
-			expect(repUpsertCalls[1].where.bioguide_id).toBe('ILH018');
-			expect(repUpsertCalls[1].create.chamber).toBe('house');
+			// Should create 2 decision-makers (since externalId.findUnique returns null)
+			expect(dmCreateCalls).toHaveLength(2);
+			expect(dmCreateCalls[0].data.name).toBe('Senator Test');
+			expect(dmCreateCalls[0].data.title).toBe('Senator');
+			expect(dmCreateCalls[0].data.type).toBe('legislator');
+			expect(dmCreateCalls[1].data.name).toBe('Rep Test');
+			expect(dmCreateCalls[1].data.title).toBe('Representative');
 
-			// Should create 2 junction records
-			expect(junctionUpsertCalls).toHaveLength(2);
-			expect(junctionUpsertCalls[0].create.user_id).toBe(TEST_USER_ID);
-			expect(junctionUpsertCalls[0].create.relationship).toBe('constituent');
-			expect(junctionUpsertCalls[0].create.is_active).toBe(true);
+			// Should create 2 UserDMRelation records
+			expect(dmRelationUpsertCalls).toHaveLength(2);
+			expect(dmRelationUpsertCalls[0].create.userId).toBe(TEST_USER_ID);
+			expect(dmRelationUpsertCalls[0].create.relationship).toBe('constituent');
+			expect(dmRelationUpsertCalls[0].create.isActive).toBe(true);
 		});
 
-		it('should skip representative upsert when no officials provided', async () => {
-			const repUpsertCalls: any[] = [];
+		it('should skip DM creation when no officials provided', async () => {
+			const dmCreateCalls: any[] = [];
 
 			mockDbTransaction.mockImplementation(async (fn: any) => {
 				const tx = {
 					districtCredential: { create: vi.fn().mockResolvedValue({}) },
 					user: { update: vi.fn().mockResolvedValue({}) },
-					user_representatives: {
+					userDMRelation: {
 						updateMany: vi.fn(),
 						upsert: vi.fn()
 					},
-					representative: {
-						upsert: vi.fn().mockImplementation((args: any) => {
-							repUpsertCalls.push(args);
+					externalId: {
+						findUnique: vi.fn().mockResolvedValue(null),
+						create: vi.fn().mockResolvedValue({})
+					},
+					decisionMaker: {
+						update: vi.fn(),
+						create: vi.fn().mockImplementation((args: any) => {
+							dmCreateCalls.push(args);
 							return { id: 'nope' };
 						})
+					},
+					institution: {
+						upsert: vi.fn().mockResolvedValue({ id: 'inst-mock' })
 					}
 				};
 				return fn(tx);
@@ -1057,26 +1080,34 @@ describe('POST /api/identity/verify-address', () => {
 			const response = await POST(event);
 			expect(response.status).toBe(200);
 
-			// Should NOT have called representative upsert
-			expect(repUpsertCalls).toHaveLength(0);
+			// Should NOT have called DM create
+			expect(dmCreateCalls).toHaveLength(0);
 		});
 
 		it('should filter out officials missing required fields', async () => {
-			const repUpsertCalls: any[] = [];
+			const dmCreateCalls: any[] = [];
 
 			mockDbTransaction.mockImplementation(async (fn: any) => {
 				const tx = {
 					districtCredential: { create: vi.fn().mockResolvedValue({}) },
 					user: { update: vi.fn().mockResolvedValue({}) },
-					user_representatives: {
+					userDMRelation: {
 						updateMany: vi.fn().mockResolvedValue({}),
 						upsert: vi.fn().mockResolvedValue({})
 					},
-					representative: {
-						upsert: vi.fn().mockImplementation((args: any) => {
-							repUpsertCalls.push(args);
-							return { id: `rep-${args.where.bioguide_id}` };
+					externalId: {
+						findUnique: vi.fn().mockResolvedValue(null),
+						create: vi.fn().mockResolvedValue({})
+					},
+					decisionMaker: {
+						update: vi.fn(),
+						create: vi.fn().mockImplementation((args: any) => {
+							dmCreateCalls.push(args);
+							return { id: `dm-${dmCreateCalls.length}` };
 						})
+					},
+					institution: {
+						upsert: vi.fn().mockResolvedValue({ id: 'inst-mock' })
 					}
 				};
 				return fn(tx);
@@ -1113,27 +1144,35 @@ describe('POST /api/identity/verify-address', () => {
 			const response = await POST(event);
 			expect(response.status).toBe(200);
 
-			// Only the valid official should be upserted
-			expect(repUpsertCalls).toHaveLength(1);
-			expect(repUpsertCalls[0].where.bioguide_id).toBe('CAH012');
+			// Only the valid official should be created as DM
+			expect(dmCreateCalls).toHaveLength(1);
+			expect(dmCreateCalls[0].data.name).toBe('Valid Rep');
 		});
 
-		it('should use office_code from official or generate fallback', async () => {
-			const repUpsertCalls: any[] = [];
+		it('should derive title from chamber for DecisionMaker creation', async () => {
+			const dmCreateCalls: any[] = [];
 
 			mockDbTransaction.mockImplementation(async (fn: any) => {
 				const tx = {
 					districtCredential: { create: vi.fn().mockResolvedValue({}) },
 					user: { update: vi.fn().mockResolvedValue({}) },
-					user_representatives: {
+					userDMRelation: {
 						updateMany: vi.fn().mockResolvedValue({}),
 						upsert: vi.fn().mockResolvedValue({})
 					},
-					representative: {
-						upsert: vi.fn().mockImplementation((args: any) => {
-							repUpsertCalls.push(args);
-							return { id: `rep-${args.where.bioguide_id}` };
+					externalId: {
+						findUnique: vi.fn().mockResolvedValue(null),
+						create: vi.fn().mockResolvedValue({})
+					},
+					decisionMaker: {
+						update: vi.fn(),
+						create: vi.fn().mockImplementation((args: any) => {
+							dmCreateCalls.push(args);
+							return { id: `dm-${dmCreateCalls.length}` };
 						})
+					},
+					institution: {
+						upsert: vi.fn().mockResolvedValue({ id: 'inst-mock' })
 					}
 				};
 				return fn(tx);
@@ -1145,22 +1184,20 @@ describe('POST /api/identity/verify-address', () => {
 					verification_method: 'civic_api',
 					officials: [
 						{
-							name: 'With Office Code',
+							name: 'House Rep',
 							chamber: 'house',
 							party: 'Democratic',
 							state: 'CA',
 							district: 'CA-12',
-							bioguide_id: 'CAH012',
-							office_code: 'HCA12'
+							bioguide_id: 'CAH012'
 						},
 						{
-							name: 'Without Office Code',
+							name: 'Senate Rep',
 							chamber: 'senate',
 							party: 'Republican',
 							state: 'CA',
 							district: 'CA',
 							bioguide_id: 'CAS001'
-							// No office_code — should fall back to chamber-state
 						}
 					]
 				}
@@ -1169,8 +1206,8 @@ describe('POST /api/identity/verify-address', () => {
 			const response = await POST(event);
 			expect(response.status).toBe(200);
 
-			expect(repUpsertCalls[0].create.office_code).toBe('HCA12');
-			expect(repUpsertCalls[1].create.office_code).toBe('senate-CA');
+			expect(dmCreateCalls[0].data.title).toBe('Representative');
+			expect(dmCreateCalls[1].data.title).toBe('Senator');
 		});
 	});
 

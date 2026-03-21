@@ -4,7 +4,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
-import { loadOrgContext } from '$lib/server/org';
+import { loadOrgContext, requireRole } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
 import { VALID_SMS_STATUSES } from '$lib/server/sms/types';
 import type { RequestHandler } from './$types';
@@ -13,7 +13,8 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	// Verify blast belongs to this org
 	const blast = await db.smsBlast.findFirst({
@@ -44,7 +45,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 			createdAt: true,
 			updatedAt: true,
 			supporter: {
-				select: { id: true, name: true, email: true, phone: true }
+				select: { id: true, name: true }
 			}
 		}
 	};
@@ -65,12 +66,11 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	return json({
 		data: items.map((m) => ({
 			id: m.id,
-			to: m.to,
+			to: m.to ? '***' + m.to.slice(-4) : null,
 			status: m.status,
-			twilioSid: m.twilioSid,
 			errorCode: m.errorCode,
 			supporter: m.supporter
-				? { id: m.supporter.id, name: m.supporter.name, email: m.supporter.email, phone: m.supporter.phone }
+				? { id: m.supporter.id, name: m.supporter.name }
 				: null,
 			createdAt: m.createdAt.toISOString(),
 			updatedAt: m.updatedAt.toISOString()

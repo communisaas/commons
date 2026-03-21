@@ -1,5 +1,5 @@
 /**
- * GET /api/v1/representatives — List international representatives.
+ * GET /api/v1/representatives — List international decision-makers.
  * Full API v1 auth chain: API key + plan-tiered rate limit.
  */
 
@@ -25,18 +25,26 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const countryCode = url.searchParams.get('country');
 	const constituencyId = url.searchParams.get('constituency');
 
-	const where: Record<string, unknown> = {};
-	if (countryCode) where.countryCode = countryCode;
-	if (constituencyId) where.constituencyId = constituencyId;
+	const where: Record<string, unknown> = { jurisdictionLevel: 'international' };
+	if (countryCode) where.jurisdiction = countryCode;
+	if (constituencyId) {
+		where.externalIds = { some: { system: 'constituency', value: constituencyId } };
+	}
 
 	const findArgs: Record<string, unknown> = {
 		where,
 		take: limit + 1,
 		orderBy: [
-			{ countryCode: 'asc' as const },
-			{ constituencyName: 'asc' as const },
+			{ jurisdiction: 'asc' as const },
+			{ district: 'asc' as const },
 			{ name: 'asc' as const }
-		]
+		],
+		include: {
+			externalIds: {
+				where: { system: 'constituency' },
+				select: { value: true }
+			}
+		}
 	};
 
 	if (cursor) {
@@ -45,25 +53,24 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	}
 
 	const [raw, total] = await Promise.all([
-		db.internationalRepresentative.findMany(
-			findArgs as Parameters<typeof db.internationalRepresentative.findMany>[0]
+		db.decisionMaker.findMany(
+			findArgs as Parameters<typeof db.decisionMaker.findMany>[0]
 		),
-		db.internationalRepresentative.count({ where })
+		db.decisionMaker.count({ where })
 	]);
 
 	const hasMore = raw.length > limit;
 	const items = raw.slice(0, limit);
 	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
 
-	const data = items.map((r) => ({
+	const data = items.map((r: any) => ({
 		id: r.id,
-		countryCode: r.countryCode,
-		constituencyId: r.constituencyId,
-		constituencyName: r.constituencyName,
+		countryCode: r.jurisdiction,
+		constituencyId: r.externalIds?.[0]?.value ?? null,
+		constituencyName: r.district,
 		name: r.name,
 		party: r.party,
-		chamber: r.chamber,
-		office: r.office,
+		title: r.title,
 		phone: r.phone,
 		email: r.email,
 		websiteUrl: r.websiteUrl,

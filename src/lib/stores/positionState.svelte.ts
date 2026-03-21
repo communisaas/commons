@@ -71,9 +71,7 @@ function createPositionState() {
 
 		/** Register a position. Returns true on success. */
 		async register(
-			selectedStance: 'support' | 'oppose',
-			identityCommitment: string,
-			districtCode?: string
+			selectedStance: 'support' | 'oppose'
 		): Promise<boolean> {
 			if (!templateId || registrationState === 'registering') return false;
 
@@ -86,9 +84,7 @@ function createPositionState() {
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
 						templateId,
-						stance: selectedStance,
-						identityCommitment,
-						districtCode
+						stance: selectedStance
 					})
 				});
 

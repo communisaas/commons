@@ -672,8 +672,6 @@
 				<!-- Authenticated: real stance registration -->
 				<StanceRegistration
 					templateId={template.id}
-					{identityCommitment}
-					districtCode={data.userDistrictCode ?? undefined}
 					onRegistered={handleRegistered}
 					recipientCount={landscape.totalCount}
 					{isCongressional}

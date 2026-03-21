@@ -2,12 +2,13 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
 import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
+import { env } from '$env/dynamic/private';
 
 /** In-memory guard to prevent concurrent backfill runs */
 let backfillRunning = false;
 
-/** Admin user IDs — hardcoded seed user for now */
-const ADMIN_USER_IDS = new Set(['user-seed-1']);
+/** Admin user IDs — populated from ADMIN_USER_IDS env var (comma-separated) */
+const ADMIN_USER_IDS = new Set((env.ADMIN_USER_IDS || '').split(',').filter(Boolean));
 
 /**
  * POST /api/admin/backfill-embeddings

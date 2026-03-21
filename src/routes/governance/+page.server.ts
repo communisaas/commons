@@ -1,5 +1,7 @@
+import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import { prisma } from '$lib/core/db';
+import { FEATURES } from '$lib/config/features';
 import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
 
 /**
@@ -93,7 +95,10 @@ function buildResolutionData(
 	};
 }
 
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ url, locals }) => {
+	if (!FEATURES.DEBATE) throw error(404, 'Not found');
+	if (!locals.user) throw error(401, 'Authentication required');
+
 	const focusDebateId = url.searchParams.get('debate');
 
 	const debates = await prisma.debate.findMany({

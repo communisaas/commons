@@ -49,18 +49,25 @@ export async function dispatchTrigger(
 		const triggerEvent: TriggerEventData = { type: triggerType, ...triggerData };
 		const supporterId = triggerData.supporterId || null;
 
+		// Batch dedup: single query for all matching workflows instead of N+1
+		const recentWorkflowIds = supporterId
+			? new Set(
+					(
+						await db.workflowExecution.findMany({
+							where: {
+								supporterId,
+								workflowId: { in: matching.map((w) => w.id) },
+								createdAt: { gte: new Date(Date.now() - 60_000) }
+							},
+							select: { workflowId: true }
+						})
+					).map((r) => r.workflowId)
+				)
+			: new Set<string>();
+
 		for (const workflow of matching) {
 			// Dedup: skip if execution exists for same workflow+supporter within 1 minute
-			if (supporterId) {
-				const recent = await db.workflowExecution.findFirst({
-					where: {
-						workflowId: workflow.id,
-						supporterId,
-						createdAt: { gte: new Date(Date.now() - 60_000) }
-					}
-				});
-				if (recent) continue;
-			}
+			if (recentWorkflowIds.has(workflow.id)) continue;
 
 			// Create execution record
 			const execution = await db.workflowExecution.create({

@@ -36,9 +36,12 @@ export const PATCH: RequestHandler = async ({ request, params, locals, url }) =>
 
 	const { name } = body as { name?: string };
 	if (!name?.trim()) return apiError('BAD_REQUEST', 'Name is required', 400);
+	if (name.trim().length > 200) return apiError('BAD_REQUEST', 'Name must be 200 characters or fewer', 400);
 
-	const updated = await db.apiKey.update({ where: { id: params.id }, data: { name: name.trim() } });
-	return apiOk({ id: updated.id, name: updated.name });
+	const updateResult = await db.apiKey.updateMany({ where: { id: params.id, orgId: result.org.id }, data: { name: name.trim() } });
+	if (updateResult.count === 0) return apiError('NOT_FOUND', 'API key not found', 404);
+	const updated = await db.apiKey.findUnique({ where: { id: params.id } });
+	return apiOk({ id: updated!.id, name: updated!.name });
 };
 
 export const DELETE: RequestHandler = async ({ params, locals, url }) => {
@@ -46,6 +49,7 @@ export const DELETE: RequestHandler = async ({ params, locals, url }) => {
 	const result = await resolveKeyAndOrg(params, locals, url);
 	if ('error' in result) return result.error;
 
-	await db.apiKey.update({ where: { id: params.id }, data: { revokedAt: new Date() } });
+	const revokeResult = await db.apiKey.updateMany({ where: { id: params.id, orgId: result.org.id }, data: { revokedAt: new Date() } });
+	if (revokeResult.count === 0) return apiError('NOT_FOUND', 'API key not found', 404);
 	return apiOk({ revoked: true });
 };

@@ -169,14 +169,13 @@ export async function computeVerificationPacket(campaignId: string, orgId: strin
 				where: { campaignId },
 				_count: { id: true }
 			}),
-			Promise.all([
-				db.campaignAction.count({ where: { campaignId, messageHash: { not: null } } }),
-				db.campaignAction.findMany({
-					where: { campaignId, messageHash: { not: null } },
-					select: { messageHash: true },
-					distinct: ['messageHash']
-				})
-			]).then(([total, unique]) => ({ total, unique: unique.length })),
+			db.$queryRaw<[{ total: bigint; unique: bigint }]>`
+				SELECT
+					COUNT(*) FILTER (WHERE "message_hash" IS NOT NULL) AS total,
+					COUNT(DISTINCT "message_hash") AS unique
+				FROM "campaign_action"
+				WHERE "campaign_id" = ${campaignId}
+			`.then(([row]) => ({ total: Number(row.total), unique: Number(row.unique) })),
 			queryHourlyBins(campaignWhere)
 		]);
 
@@ -313,13 +312,13 @@ export async function computeOrgVerificationPacket(orgId: string): Promise<Verif
 			db.campaignAction.count({ where: { ...where, verified: true } }),
 			db.campaignAction.groupBy({ by: ['engagementTier'], where, _count: { id: true } }),
 			db.campaignAction.groupBy({ by: ['districtHash'], where, _count: { id: true } }),
-			Promise.all([
-				db.campaignAction.count({ where: { ...where, messageHash: { not: null } } }),
-				db.campaignAction.findMany({
-					where: { ...where, messageHash: { not: null } },
-					select: { messageHash: true }, distinct: ['messageHash']
-				})
-			]).then(([total, unique]) => ({ total, unique: unique.length })),
+			db.$queryRaw<[{ total: bigint; unique: bigint }]>`
+				SELECT
+					COUNT(*) FILTER (WHERE "message_hash" IS NOT NULL) AS total,
+					COUNT(DISTINCT "message_hash") AS unique
+				FROM "campaign_action"
+				WHERE "campaign_id" IN (${Prisma.join(campaignIds)})
+			`.then(([row]) => ({ total: Number(row.total), unique: Number(row.unique) })),
 			queryHourlyBins(orgWhere)
 		]);
 

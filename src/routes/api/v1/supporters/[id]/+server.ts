@@ -53,9 +53,6 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'write');
 	if (scopeErr) return scopeErr;
 
-	const existing = await db.supporter.findFirst({ where: { id: params.id, orgId: auth.orgId } });
-	if (!existing) return apiError('NOT_FOUND', 'Supporter not found', 404);
-
 	let body: Record<string, unknown>;
 	try { body = await request.json(); } catch { return apiError('BAD_REQUEST', 'Invalid JSON body', 400); }
 
@@ -64,16 +61,33 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	};
 
 	const data: Record<string, unknown> = {};
-	if (typeof name === 'string') data.name = name;
-	if (typeof postalCode === 'string') data.postalCode = postalCode;
-	if (typeof country === 'string') data.country = country;
-	if (typeof phone === 'string') data.phone = phone;
-	if (customFields && typeof customFields === 'object') data.customFields = customFields;
+	if (typeof name === 'string') {
+		if (name.length > 200) return apiError('BAD_REQUEST', 'Name must be 200 characters or fewer', 400);
+		data.name = name;
+	}
+	if (typeof postalCode === 'string') {
+		if (postalCode.length > 20) return apiError('BAD_REQUEST', 'Postal code must be 20 characters or fewer', 400);
+		data.postalCode = postalCode;
+	}
+	if (typeof country === 'string') {
+		if (country.length > 10) return apiError('BAD_REQUEST', 'Country code must be 10 characters or fewer', 400);
+		data.country = country;
+	}
+	if (typeof phone === 'string') {
+		if (phone.length > 30) return apiError('BAD_REQUEST', 'Phone must be 30 characters or fewer', 400);
+		data.phone = phone;
+	}
+	if (customFields && typeof customFields === 'object') {
+		if (JSON.stringify(customFields).length > 10000) return apiError('BAD_REQUEST', 'Custom fields too large (10KB max)', 400);
+		data.customFields = customFields;
+	}
 
 	if (Object.keys(data).length === 0) return apiError('BAD_REQUEST', 'No fields to update', 400);
 
-	const updated = await db.supporter.update({ where: { id: params.id }, data });
-	return apiOk({ id: updated.id, updatedAt: updated.updatedAt.toISOString() });
+	const result = await db.supporter.updateMany({ where: { id: params.id, orgId: auth.orgId }, data });
+	if (result.count === 0) return apiError('NOT_FOUND', 'Supporter not found', 404);
+	const updated = await db.supporter.findUnique({ where: { id: params.id } });
+	return apiOk({ id: updated!.id, updatedAt: updated!.updatedAt.toISOString() });
 };
 
 export const DELETE: RequestHandler = async ({ request, params }) => {
@@ -85,9 +99,7 @@ export const DELETE: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'write');
 	if (scopeErr) return scopeErr;
 
-	const existing = await db.supporter.findFirst({ where: { id: params.id, orgId: auth.orgId } });
-	if (!existing) return apiError('NOT_FOUND', 'Supporter not found', 404);
-
-	await db.supporter.delete({ where: { id: params.id } });
+	const result = await db.supporter.deleteMany({ where: { id: params.id, orgId: auth.orgId } });
+	if (result.count === 0) return apiError('NOT_FOUND', 'Supporter not found', 404);
 	return apiOk({ deleted: true });
 };

@@ -41,9 +41,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			return json({ error: 'Template not found' }, { status: 404 });
 		}
 
-		// Derive identity_commitment from session (same as page.server.ts)
-		const identityCommitment =
-			locals.user?.identity_commitment ?? `demo-${session.userId}`;
+		// Derive identity_commitment from DB — require real verification
+		const user = await prisma.user.findUnique({
+			where: { id: session.userId },
+			select: { identity_commitment: true }
+		});
+		if (!user?.identity_commitment) {
+			return json({ error: 'Identity verification required to confirm send' }, { status: 403 });
+		}
+		const identityCommitment = user.identity_commitment;
 
 		// Auto-fill district_code from ShadowAtlasRegistration
 		let districtCode: string | undefined;

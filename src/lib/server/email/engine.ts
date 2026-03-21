@@ -238,15 +238,6 @@ async function compileAndSendToRecipient(
 	blast: { fromEmail: string; fromName: string; subject: string; bodyHtml: string; orgId: string },
 	verificationBlock: VerificationBlock
 ): Promise<{ success: boolean; error?: string }> {
-	// Re-check status to avoid sending to newly bounced/complained addresses
-	const currentStatus = await db.supporter.findUnique({
-		where: { id: recipient.id },
-		select: { emailStatus: true }
-	});
-	if (!currentStatus || currentStatus.emailStatus !== 'subscribed') {
-		return { success: false, error: `Skipped: status is ${currentStatus?.emailStatus ?? 'unknown'}` };
-	}
-
 	const { firstName, lastName } = splitName(recipient.name);
 	const verificationStatus = deriveVerificationStatus(
 		recipient.verified,
@@ -350,9 +341,17 @@ export async function sendBlast(blastId: string): Promise<void> {
 				}
 			});
 
+			// Batch recheck email status (1 query per batch, not per recipient)
+			const statuses = await db.supporter.findMany({
+				where: { id: { in: batch.map((r) => r.id) } },
+				select: { id: true, emailStatus: true }
+			});
+			const statusMap = new Map(statuses.map((s) => [s.id, s.emailStatus]));
+			const activeBatch = batch.filter((r) => statusMap.get(r.id) === 'subscribed');
+
 			// Parallel sends within this batch
 			const results = await Promise.allSettled(
-				batch.map((recipient) =>
+				activeBatch.map((recipient) =>
 					limit(() => compileAndSendToRecipient(recipient, blast, verificationBlock))
 				)
 			);

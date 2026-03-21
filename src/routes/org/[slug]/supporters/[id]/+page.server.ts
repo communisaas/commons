@@ -26,7 +26,8 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 	const allTags = await db.tag.findMany({
 		where: { orgId: org.id },
 		select: { id: true, name: true },
-		orderBy: { name: 'asc' }
+		orderBy: { name: 'asc' },
+		take: 1000
 	});
 
 	return {

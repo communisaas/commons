@@ -1,6 +1,7 @@
 <script module lang="ts">
 	export interface OnboardingState {
 		hasDescription: boolean;
+		hasIssueDomains: boolean;
 		hasSupporters: boolean;
 		hasCampaigns: boolean;
 		hasTeam: boolean;
@@ -13,6 +14,7 @@
 
 <script lang="ts">
 	import VerificationPipeline from './VerificationPipeline.svelte';
+	import IssueDomainOnboarding from './IssueDomainOnboarding.svelte';
 
 	let {
 		orgSlug,
@@ -34,6 +36,7 @@
 	let localOverrides = $state<Partial<OnboardingState>>({});
 	const resolved = $derived({
 		hasDescription: localOverrides.hasDescription ?? onboarding.hasDescription,
+		hasIssueDomains: localOverrides.hasIssueDomains ?? onboarding.hasIssueDomains,
 		hasSupporters: localOverrides.hasSupporters ?? onboarding.hasSupporters,
 		hasCampaigns: localOverrides.hasCampaigns ?? onboarding.hasCampaigns,
 		hasTeam: localOverrides.hasTeam ?? onboarding.hasTeam,
@@ -44,6 +47,9 @@
 		localOverrides = { ...localOverrides, [step]: true };
 		onStepComplete?.(step);
 	}
+
+	// Issue domain step expansion
+	let issueDomainExpanded = $state(false);
 
 	// Step 1: Name your org (inline form)
 	let editingOrg = $state(false);
@@ -63,11 +69,11 @@
 	);
 
 	const completedCount = $derived(
-		[resolved.hasDescription, resolved.hasSupporters, hasVerificationPower, resolved.hasCampaigns, resolved.hasSentEmail]
+		[resolved.hasDescription, resolved.hasIssueDomains, resolved.hasSupporters, hasVerificationPower, resolved.hasCampaigns, resolved.hasSentEmail]
 			.filter(Boolean).length
 	);
 
-	const totalSteps = 5;
+	const totalSteps = 6;
 
 	const progressPct = $derived(Math.round((completedCount / totalSteps) * 100));
 
@@ -170,7 +176,38 @@
 			</div>
 		</div>
 
-		<!-- Step 2: Bring your supporters -->
+		<!-- Step 1.5: Issue domains (cold start) -->
+		<div class="checklist__step" class:checklist__step--done={resolved.hasIssueDomains}>
+			<div class="checklist__step-indicator">
+				{#if resolved.hasIssueDomains}
+					<svg viewBox="0 0 20 20" fill="currentColor" class="checklist__check-icon">
+						<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+					</svg>
+				{:else}
+					<span class="checklist__step-number">2</span>
+				{/if}
+			</div>
+			<div class="checklist__step-content">
+				<div class="checklist__step-row">
+					<span class="checklist__step-label">Define your issue areas</span>
+					{#if !resolved.hasIssueDomains && !issueDomainExpanded}
+						<button class="checklist__step-action" onclick={() => { issueDomainExpanded = true; }}>Add issues</button>
+					{/if}
+				</div>
+				<p class="checklist__step-hint">We'll match you with relevant legislation automatically</p>
+				{#if issueDomainExpanded && !resolved.hasIssueDomains}
+					<div class="checklist__inline-form" style="padding: 0; border: none; background: transparent;">
+						<IssueDomainOnboarding
+							{orgSlug}
+							onComplete={() => { issueDomainExpanded = false; markComplete('hasIssueDomains'); }}
+							onSkip={() => { issueDomainExpanded = false; markComplete('hasIssueDomains'); }}
+						/>
+					</div>
+				{/if}
+			</div>
+		</div>
+
+		<!-- Step 3: Bring your supporters -->
 		<div class="checklist__step" class:checklist__step--done={resolved.hasSupporters}>
 			<div class="checklist__step-indicator">
 				{#if resolved.hasSupporters}
@@ -178,7 +215,7 @@
 						<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
 					</svg>
 				{:else}
-					<span class="checklist__step-number">2</span>
+					<span class="checklist__step-number">3</span>
 				{/if}
 			</div>
 			<div class="checklist__step-content">
@@ -192,7 +229,7 @@
 			</div>
 		</div>
 
-		<!-- Step 3: See your verification power -->
+		<!-- Step 4: See your verification power -->
 		<div class="checklist__step" class:checklist__step--done={hasVerificationPower}>
 			<div class="checklist__step-indicator">
 				{#if hasVerificationPower}
@@ -200,7 +237,7 @@
 						<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
 					</svg>
 				{:else}
-					<span class="checklist__step-number">3</span>
+					<span class="checklist__step-number">4</span>
 				{/if}
 			</div>
 			<div class="checklist__step-content">
@@ -230,7 +267,7 @@
 			</div>
 		</div>
 
-		<!-- Step 4: Choose your target -->
+		<!-- Step 5: Choose your target -->
 		<div class="checklist__step" class:checklist__step--done={resolved.hasCampaigns}>
 			<div class="checklist__step-indicator">
 				{#if resolved.hasCampaigns}
@@ -238,7 +275,7 @@
 						<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
 					</svg>
 				{:else}
-					<span class="checklist__step-number">4</span>
+					<span class="checklist__step-number">5</span>
 				{/if}
 			</div>
 			<div class="checklist__step-content">
@@ -252,7 +289,7 @@
 			</div>
 		</div>
 
-		<!-- Step 5: Ship your first proof -->
+		<!-- Step 6: Ship your first proof -->
 		<div class="checklist__step" class:checklist__step--done={resolved.hasSentEmail}>
 			<div class="checklist__step-indicator">
 				{#if resolved.hasSentEmail}
@@ -260,7 +297,7 @@
 						<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
 					</svg>
 				{:else}
-					<span class="checklist__step-number">5</span>
+					<span class="checklist__step-number">6</span>
 				{/if}
 			</div>
 			<div class="checklist__step-content">

@@ -5,12 +5,25 @@
  * Filters: email, verified, emailStatus, source, tag
  */
 
+import { z } from 'zod';
 import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import type { RequestHandler } from './$types';
+
+// F-R8-03: Zod schema replaces manual email validation with includes('@')
+const CreateSupporterSchema = z.object({
+	email: z.string().email('A valid email address is required'),
+	name: z.string().max(200).optional(),
+	postalCode: z.string().max(20).optional(),
+	country: z.string().max(10).optional(),
+	phone: z.string().max(30).optional(),
+	source: z.string().max(50).optional(),
+	customFields: z.record(z.unknown()).optional(),
+	tags: z.array(z.string()).optional()
+});
 
 export const GET: RequestHandler = async ({ request, url }) => {
 	requirePublicApi();
@@ -106,27 +119,24 @@ export const POST: RequestHandler = async ({ request }) => {
 	const scopeErr = requireScope(auth, 'write');
 	if (scopeErr) return scopeErr;
 
-	let body: Record<string, unknown>;
+	let body: unknown;
 	try {
 		body = await request.json();
 	} catch {
 		return apiError('BAD_REQUEST', 'Invalid JSON body', 400);
 	}
 
-	const { email, name, postalCode, country, phone, source, customFields, tags } = body as {
-		email?: string;
-		name?: string;
-		postalCode?: string;
-		country?: string;
-		phone?: string;
-		source?: string;
-		customFields?: Record<string, unknown>;
-		tags?: string[];
-	};
-
-	if (!email || typeof email !== 'string' || !email.includes('@')) {
-		return apiError('BAD_REQUEST', 'Valid email is required', 400);
+	let parsed: z.infer<typeof CreateSupporterSchema>;
+	try {
+		parsed = CreateSupporterSchema.parse(body);
+	} catch (e) {
+		if (e instanceof z.ZodError) {
+			return apiError('BAD_REQUEST', e.errors.map((err) => err.message).join(', '), 400);
+		}
+		return apiError('BAD_REQUEST', 'Invalid request body', 400);
 	}
+
+	const { email, name, postalCode, country, phone, source, customFields, tags } = parsed;
 
 	// Check for duplicate
 	const existing = await db.supporter.findUnique({

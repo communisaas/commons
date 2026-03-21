@@ -170,7 +170,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!Number.isInteger(claimedTier) || claimedTier < 0 || claimedTier > 7) {
 		throw error(400, 'Invalid engagement tier in public inputs');
 	}
-	const coSignerTier = Math.min(claimedTier, serverTier);
+	const coSignerTier = Math.min(claimedTier, Math.min(serverTier, 4));
 	if (claimedTier > serverTier) {
 		console.warn(`[debates/cosign] Tier inflation attempt: claimed=${claimedTier}, actual=${serverTier}, user=${session.userId}`);
 	}

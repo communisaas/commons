@@ -50,12 +50,27 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 		}
 	});
 
-	// Determine verification status
-	const verified = Boolean(
-		identityCommitment ||
-		(checkinCode && checkinCode === event.checkinCode) ||
-		(verificationMethod && ['mdl', 'passkey'].includes(verificationMethod))
-	);
+	// Only trust the server-validated checkin code for verification on an unauthenticated route
+	const verified = Boolean(checkinCode && checkinCode === event.checkinCode);
+
+	// Dedup: if this RSVP already checked in, return early without creating a duplicate
+	if (rsvp) {
+		const existingCheckin = await db.eventAttendance.findUnique({
+			where: { rsvpId: rsvp.id }
+		});
+		if (existingCheckin) {
+			const current = await db.event.findUnique({
+				where: { id: event.id },
+				select: { attendeeCount: true }
+			});
+			return json({
+				success: true,
+				verified: existingCheckin.verified,
+				attendeeCount: current?.attendeeCount ?? 0,
+				alreadyCheckedIn: true
+			});
+		}
+	}
 
 	// Create attendance record
 	await db.eventAttendance.create({

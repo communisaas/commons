@@ -8,14 +8,19 @@
  * Phase 2: IPFS + on-chain pointer
  */
 
-import { json } from '@sveltejs/kit';
+import { json, error } from '@sveltejs/kit';
+import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
-import type { EncryptedBlob } from '$lib/core/identity/blob-encryption';
 
-interface StoreRequest {
-	blob: EncryptedBlob;
-}
+const StoreBlobSchema = z.object({
+	blob: z.object({
+		ciphertext: z.string().min(1).max(1_000_000),
+		nonce: z.string().min(1).max(256),
+		publicKey: z.string().min(1).max(256),
+		version: z.string().optional()
+	})
+});
 
 export const POST: RequestHandler = async ({ locals, request }) => {
 	// Authentication check
@@ -27,17 +32,14 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const userId = locals.user.id;
 
 	try {
-		const body = (await request.json()) as StoreRequest;
-		const { blob } = body;
-
-		if (!blob) {
-			return json({ error: 'Missing blob' }, { status: 400 });
+		let input;
+		try {
+			input = StoreBlobSchema.parse(await request.json());
+		} catch (e) {
+			if (e instanceof z.ZodError) throw error(400, `Invalid blob: ${e.errors[0]?.message ?? 'validation failed'}`);
+			throw error(400, 'Invalid request body');
 		}
-
-		// Validate blob structure
-		if (!blob.ciphertext || !blob.nonce || !blob.publicKey) {
-			return json({ error: 'Invalid encrypted blob format' }, { status: 400 });
-		}
+		const { blob } = input;
 
 		// Store or update encrypted blob
 		const encryptedData = await prisma.encryptedDeliveryData.upsert({

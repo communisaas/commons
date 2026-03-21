@@ -3,7 +3,7 @@
  *
  * Routes to the correct data source based on country code:
  * - US: Shadow Atlas officials
- * - GB/CA/AU: InternationalRepresentative table
+ * - GB/CA/AU: DecisionMaker table (with ExternalId for constituency lookup)
  */
 
 import { db } from '$lib/core/db';
@@ -28,7 +28,7 @@ export interface RepresentativeResult {
  * Look up representatives for a given country + district.
  *
  * For US, delegates to Shadow Atlas getOfficials().
- * For international countries, queries the InternationalRepresentative table.
+ * For international countries, queries the DecisionMaker table.
  */
 export async function lookupRepresentatives(
 	countryCode: string,
@@ -79,32 +79,43 @@ async function lookupUSRepresentatives(districtCode: string): Promise<Representa
 }
 
 /**
- * International representative lookup from the database.
+ * International representative lookup from the DecisionMaker table.
+ * Uses ExternalId with system='constituency' for constituency matching.
  */
 async function lookupInternationalRepresentatives(
 	countryCode: CountryCode,
 	constituencyId: string
 ): Promise<RepresentativeResult[]> {
-	const reps = await db.internationalRepresentative.findMany({
+	// Find decision-makers by jurisdiction (country) + constituency external ID
+	const externalIds = await db.externalId.findMany({
 		where: {
-			countryCode,
-			constituencyId
+			system: 'constituency',
+			value: constituencyId,
+			decisionMaker: {
+				jurisdiction: countryCode
+			}
+		},
+		include: {
+			decisionMaker: true
 		}
 	});
 
-	return reps.map((r): RepresentativeResult => ({
-		id: r.id,
-		name: r.name,
-		party: r.party,
-		chamber: r.chamber,
-		office: r.office,
-		phone: r.phone,
-		email: r.email,
-		websiteUrl: r.websiteUrl,
-		countryCode: r.countryCode,
-		constituencyId: r.constituencyId,
-		constituencyName: r.constituencyName
-	}));
+	return externalIds.map((ext): RepresentativeResult => {
+		const dm = ext.decisionMaker;
+		return {
+			id: dm.id,
+			name: dm.name,
+			party: dm.party,
+			chamber: null, // chamber is now implied by institutionId
+			office: dm.title,
+			phone: dm.phone,
+			email: dm.email,
+			websiteUrl: dm.websiteUrl,
+			countryCode: dm.jurisdiction ?? countryCode,
+			constituencyId,
+			constituencyName: dm.district ?? constituencyId
+		};
+	});
 }
 
 /**
@@ -116,13 +127,21 @@ export async function listRepresentatives(
 	cursor?: string | null,
 	limit = 50
 ): Promise<{ data: InternationalRepresentativeData[]; nextCursor: string | null; hasMore: boolean }> {
-	const where: Record<string, unknown> = { countryCode: countryCode.toUpperCase() };
-	if (constituencyId) where.constituencyId = constituencyId;
+	const where: Record<string, unknown> = {
+		jurisdiction: countryCode.toUpperCase(),
+		jurisdictionLevel: 'international'
+	};
 
 	const findArgs: Record<string, unknown> = {
 		where,
 		take: limit + 1,
-		orderBy: { name: 'asc' as const }
+		orderBy: { name: 'asc' as const },
+		include: {
+			externalIds: {
+				where: { system: 'constituency' },
+				select: { value: true }
+			}
+		}
 	};
 
 	if (cursor) {
@@ -130,23 +149,30 @@ export async function listRepresentatives(
 		findArgs.skip = 1;
 	}
 
-	const reps = await db.internationalRepresentative.findMany(
-		findArgs as Parameters<typeof db.internationalRepresentative.findMany>[0]
+	// If filtering by constituency, find via ExternalId join
+	if (constituencyId) {
+		(where as Record<string, unknown>).externalIds = {
+			some: { system: 'constituency', value: constituencyId }
+		};
+	}
+
+	const reps = await db.decisionMaker.findMany(
+		findArgs as Parameters<typeof db.decisionMaker.findMany>[0]
 	);
 
 	const hasMore = reps.length > limit;
 	const items = reps.slice(0, limit);
 	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
 
-	const data: InternationalRepresentativeData[] = items.map((r) => ({
+	const data: InternationalRepresentativeData[] = items.map((r: any) => ({
 		id: r.id,
-		countryCode: r.countryCode as CountryCode,
-		constituencyId: r.constituencyId,
-		constituencyName: r.constituencyName,
+		countryCode: (r.jurisdiction ?? countryCode) as CountryCode,
+		constituencyId: r.externalIds?.[0]?.value ?? '',
+		constituencyName: r.district ?? '',
 		name: r.name,
 		party: r.party,
-		chamber: r.chamber,
-		office: r.office,
+		chamber: null, // chamber implied by institutionId
+		office: r.title,
 		phone: r.phone,
 		email: r.email,
 		websiteUrl: r.websiteUrl

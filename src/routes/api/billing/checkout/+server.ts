@@ -9,7 +9,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { loadOrgContext, requireRole } from '$lib/server/org';
+import { loadOrgContext, loadOrgBilling, requireRole } from '$lib/server/org';
 import { getStripe } from '$lib/server/billing/stripe';
 import { PLANS, PLAN_ORDER } from '$lib/server/billing/plans';
 import { db } from '$lib/core/db';
@@ -51,10 +51,11 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 	}
 
 	// Find or create Stripe customer
-	let customerId = org.stripe_customer_id;
+	const billing = await loadOrgBilling(org.id);
+	let customerId = billing.stripe_customer_id;
 	if (!customerId) {
 		const customer = await stripe.customers.create({
-			email: org.billing_email ?? locals.user.email,
+			email: billing.billing_email ?? locals.user.email,
 			metadata: { orgId: org.id, orgSlug: org.slug }
 		});
 		customerId = customer.id;

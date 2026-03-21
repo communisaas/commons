@@ -23,12 +23,25 @@
  */
 
 import { json, error } from '@sveltejs/kit';
+import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import {
 	generatePasskeyRegistrationOptions,
 	verifyPasskeyRegistration
 } from '$lib/core/identity/passkey-registration';
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
+
+const PasskeyVerifySchema = z.object({
+	response: z.object({
+		id: z.string().min(1),
+		rawId: z.string().min(1),
+		response: z.record(z.unknown()),
+		type: z.literal('public-key'),
+		clientExtensionResults: z.record(z.unknown()).optional(),
+		authenticatorAttachment: z.string().optional()
+	}),
+	sessionId: z.string().min(1).max(128)
+});
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	// Both steps require an authenticated session
@@ -40,7 +53,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	// Step 2: Verify registration (body contains response + sessionId)
 	if (body.response && body.sessionId) {
-		return handleVerification(locals.user.id, body.response, body.sessionId);
+		let input;
+		try {
+			input = PasskeyVerifySchema.parse(body);
+		} catch (e) {
+			if (e instanceof z.ZodError) throw error(400, `Invalid registration: ${e.errors[0]?.message ?? 'validation failed'}`);
+			throw e;
+		}
+		return handleVerification(locals.user.id, input.response as unknown as RegistrationResponseJSON, input.sessionId);
 	}
 
 	// Step 1: Generate registration options (no response in body)
@@ -88,15 +108,6 @@ async function handleVerification(
 	response: RegistrationResponseJSON,
 	sessionId: string
 ): Promise<Response> {
-	// Validate input shape
-	if (!response.id || !response.rawId || !response.response || !response.type) {
-		throw error(400, 'Invalid registration response format');
-	}
-
-	if (typeof sessionId !== 'string' || sessionId.length === 0) {
-		throw error(400, 'Invalid session ID');
-	}
-
 	try {
 		const result = await verifyPasskeyRegistration(userId, response, sessionId);
 

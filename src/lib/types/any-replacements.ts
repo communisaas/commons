@@ -238,21 +238,25 @@ export function isAddress(obj: unknown): obj is Address {
 	);
 }
 
-// Representative type from user.ts
+// Representative type from user.ts — supports DecisionMaker shapes
 export interface Representative {
 	id: string;
-	bioguide_id: string;
+	bioguide_id?: string;
 	name: string;
 	party: string;
 	state: string;
 	district: string;
 	chamber: string;
-	office_code: string;
+	office_code?: string;
 	phone?: string;
 	email?: string;
 	office?: string;
 	is_voting_member?: boolean;
 	delegate_type?: 'delegate' | 'resident_commissioner' | string | null;
+	/** DecisionMaker title — used to derive chamber when coming from DM model */
+	title?: string;
+	/** DecisionMaker jurisdiction — maps to state in legacy shape */
+	jurisdiction?: string;
 }
 
 // Template and component types for AppHeader

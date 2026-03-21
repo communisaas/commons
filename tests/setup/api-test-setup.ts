@@ -54,9 +54,10 @@ export async function clearTestDatabase() {
     // Leaf nodes (no other tables depend on them)
     await db.template_campaign.deleteMany();
 
-    // Representative relationships
-    await db.user_representatives.deleteMany();
-    await db.representative.deleteMany();
+    // DecisionMaker relationships (new path)
+    await db.userDMRelation.deleteMany();
+    await db.externalId.deleteMany();
+    await db.decisionMaker.deleteMany();
 
     // Templates (depend on users)
     await db.template.deleteMany();
@@ -109,23 +110,34 @@ export async function createTestTemplate(userId: string, overrides?: Partial<any
   });
 }
 
-export async function createTestRepresentative(overrides?: Partial<any>) {
-  return await db.representative.create({
+export async function createTestDecisionMaker(overrides?: Partial<any>) {
+  const dm = await db.decisionMaker.create({
     data: {
-      id: 'test-rep-123',
-      bioguide_id: 'T000001',
+      id: 'test-dm-123',
+      type: 'legislator',
       name: 'Test Representative',
+      firstName: 'Test',
+      lastName: 'Representative',
       party: 'Democratic',
-      state: 'CA',
+      jurisdiction: 'CA',
+      jurisdictionLevel: 'federal',
       district: '12',
-      chamber: 'house',
-      office_code: 'CA12',
-      email: 'test.rep@mail.house.gov',
-      phone: '202-555-0123',
-      office_address: '1234 Capitol Hill, Washington DC 20515',
+      title: 'Representative',
+      active: true,
       ...overrides
     }
   });
+  // Create bioguide ExternalId if bioguideId provided
+  if (overrides?.bioguideId) {
+    await db.externalId.create({
+      data: {
+        decisionMakerId: dm.id,
+        system: 'bioguide',
+        value: overrides.bioguideId
+      }
+    });
+  }
+  return dm;
 }
 
 export async function createTestSubmission(templateId: string, userId: string, overrides?: Partial<any>) {

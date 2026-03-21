@@ -42,6 +42,11 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (startDate <= new Date()) {
 		throw error(400, 'Start date must be in the future');
 	}
+	const maxDate = new Date();
+	maxDate.setFullYear(maxDate.getFullYear() + 2);
+	if (startDate > maxDate) {
+		throw error(400, 'Event start date cannot be more than 2 years in the future');
+	}
 
 	if (eventType && !VALID_EVENT_TYPES.includes(eventType)) {
 		throw error(400, 'Event type must be one of: IN_PERSON, VIRTUAL, HYBRID');
@@ -56,6 +61,10 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		if (endDate <= startDate) {
 			throw error(400, 'End date must be after start date');
 		}
+		const MAX_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+		if (endDate.getTime() - startDate.getTime() > MAX_DURATION_MS) {
+			throw error(400, 'Event duration cannot exceed 30 days');
+		}
 	}
 
 	if (campaignId) {
@@ -63,6 +72,19 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			where: { id: campaignId, orgId: org.id }
 		});
 		if (!campaign) throw error(400, 'Invalid campaign selection');
+	}
+
+	if (timezone) {
+		try {
+			const validTimezones = Intl.supportedValuesOf('timeZone');
+			if (!validTimezones.includes(timezone)) {
+				throw error(400, 'Invalid timezone. Must be a valid IANA timezone identifier');
+			}
+		} catch (e: unknown) {
+			// Re-throw our HTTP errors
+			if (e && typeof e === 'object' && 'status' in e) throw e;
+			// Runtime doesn't support supportedValuesOf — skip validation
+		}
 	}
 
 	const checkinCode = crypto.randomUUID().slice(0, 8);

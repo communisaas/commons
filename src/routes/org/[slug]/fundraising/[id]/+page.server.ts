@@ -1,6 +1,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
+import { maskEmail } from '$lib/server/org/mask';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -61,7 +62,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		donors: campaign.donations.map((d) => ({
 			id: d.id,
 			name: d.name,
-			email: d.email,
+			email: membership.role === 'member' ? maskEmail(d.email) : d.email,
 			amountCents: d.amountCents,
 			recurring: d.recurring,
 			engagementTier: d.engagementTier,

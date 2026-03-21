@@ -102,12 +102,12 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 					.catch(() => [])
 			: Promise.resolve([]),
 
-		// Total active states
-		prisma.representative
+		// Total active states (via DecisionMaker)
+		prisma.decisionMaker
 			.findMany({
-				where: { is_active: true },
-				select: { state: true },
-				distinct: ['state']
+				where: { active: true, type: 'legislator', jurisdictionLevel: 'federal' },
+				select: { jurisdiction: true },
+				distinct: ['jurisdiction']
 			})
 			.catch(() => []),
 
@@ -144,18 +144,16 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 
 		// User representative (for district code)
 		userId && userDistrictHash
-			? prisma.user_representatives
+			? prisma.userDMRelation
 					.findFirst({
-						where: { user_id: userId, is_active: true },
-						select: { representative_id: true }
+						where: { userId, isActive: true },
+						select: { decisionMaker: { select: { jurisdiction: true, district: true } } }
 					})
-					.then(async (userRep) => {
-						if (!userRep) return null;
-						const rep = await prisma.representative.findUnique({
-							where: { id: userRep.representative_id },
-							select: { state: true, district: true }
-						});
-						return rep?.state && rep?.district ? `${rep.state}-${rep.district}` : null;
+					.then((dmRel) => {
+						if (dmRel?.decisionMaker?.jurisdiction && dmRel.decisionMaker.district) {
+							return `${dmRel.decisionMaker.jurisdiction}-${dmRel.decisionMaker.district}`;
+						}
+						return null;
 					})
 					.catch(() => null)
 			: Promise.resolve(null)
@@ -275,7 +273,15 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		: {};
 
 	return {
-		user: locals.user,
+		user: locals.user ? {
+			id: locals.user.id,
+			name: locals.user.name,
+			email: locals.user.email,
+			avatar: locals.user.avatar,
+			trust_tier: locals.user.trust_tier,
+			is_verified: locals.user.is_verified,
+			identity_commitment: locals.user.identity_commitment
+		} : null,
 		template: parentData.template,
 		channel: parentData.channel,
 		totalDistricts,

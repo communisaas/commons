@@ -1,10 +1,17 @@
 import { json, error } from '@sveltejs/kit';
+import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 import {
 	bindIdentityCommitment
 } from '$lib/core/identity/identity-binding';
+
+const VerifyMdlSchema = z.object({
+	protocol: z.string().min(1),
+	data: z.string().min(1),
+	nonce: z.string().min(1).max(128)
+});
 
 /**
  * mDL Verification Verify Endpoint
@@ -24,11 +31,14 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 	try {
 		const body = await request.json();
-		const { protocol, data, nonce } = body;
-
-		if (!protocol || !data || !nonce) {
-			throw error(400, 'Missing required fields: protocol, data, nonce');
+		let input;
+		try {
+			input = VerifyMdlSchema.parse(body);
+		} catch (e) {
+			if (e instanceof z.ZodError) throw error(400, `Invalid request: ${e.errors[0]?.message ?? 'validation failed'}`);
+			throw e;
 		}
+		const { protocol, data, nonce } = input;
 
 		// Retrieve ephemeral private key from KV (one-time use)
 		const kvKey = `mdl-session:${nonce}`;
@@ -153,7 +163,8 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			cellId: result.cellId ?? null,
 			// Signal to client whether Shadow Atlas registration can proceed
 			identityCommitmentBound: true,
-			userId: canonicalUserId
+			// F-R3-13: Signal client to re-authenticate when session references deleted user
+			requireReauth: bindingResult.requireReauth ?? false
 		});
 	} catch (err) {
 		console.error('[mDL Verify] Error:', err);

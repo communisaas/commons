@@ -58,12 +58,11 @@ export const GET: RequestHandler = async ({ request, url }) => {
 
 	const data = items.map((c) => ({
 		id: c.id,
-		callerPhone: c.callerPhone,
-		targetPhone: c.targetPhone,
+		callerPhone: c.callerPhone ? '***' + c.callerPhone.slice(-4) : null,
+		targetPhone: c.targetPhone ? '***' + c.targetPhone.slice(-4) : null,
 		targetName: c.targetName,
 		status: c.status,
 		duration: c.duration,
-		twilioCallSid: c.twilioCallSid,
 		campaignId: c.campaignId,
 		districtHash: c.districtHash,
 		createdAt: c.createdAt.toISOString(),

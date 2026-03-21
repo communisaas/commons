@@ -167,6 +167,9 @@ export class OAuthCallbackHandler {
 				throw new Error('Invalid user data from provider');
 			}
 
+			// Normalize email to prevent case-sensitivity duplicates
+			userData.email = userData.email.toLowerCase();
+
 			// Step 4: Find or create user in database
 			const user = await this.findOrCreateUser(config, userData, tokenData);
 
@@ -390,7 +393,7 @@ export class OAuthCallbackHandler {
 		// Set session cookie
 		cookies.set(sessionCookieName, session.id, {
 			path: '/',
-			secure: process.env.NODE_ENV === 'production',
+			secure: !dev,
 			httpOnly: true,
 			maxAge: cookieMaxAge,
 			sameSite: 'lax'

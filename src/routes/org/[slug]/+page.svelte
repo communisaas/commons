@@ -1,6 +1,7 @@
 <script lang="ts">
 	import VerificationPacket from '$lib/components/org/VerificationPacket.svelte';
 	import OnboardingChecklist from '$lib/components/org/OnboardingChecklist.svelte';
+	import LegislativeActivity from '$lib/components/org/LegislativeActivity.svelte';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -236,7 +237,7 @@
 			orgSlug={data.org.slug}
 			onboarding={data.onboardingState}
 			orgDescription={data.org.description}
-			billingEmail={data.org.billing_email ?? null}
+			billingEmail={data.billingEmail ?? null}
 			funnel={data.funnel}
 		/>
 	{/if}
@@ -266,6 +267,105 @@
 			{/if}
 		{/snippet}
 	</VerificationPacket>
+
+	<!-- ===== Legislative Activity ===== -->
+	<LegislativeActivity
+		alerts={data.legislativeAlerts}
+		orgSlug={data.org.slug}
+		pendingCount={data.legislativeAlerts.length}
+	/>
+
+	<!-- ===== Intelligence Loop: Decision Makers & Legislation ===== -->
+	{#if data.followedReps.count > 0 || data.watchedBills.count > 0}
+		<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+			<!-- Decision Makers card -->
+			<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
+				<div class="flex items-center justify-between mb-4">
+					<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Decision Makers</p>
+					<a
+						href="/org/{data.org.slug}/representatives"
+						class="text-xs text-text-quaternary hover:text-teal-500 transition-colors"
+					>
+						View all &rarr;
+					</a>
+				</div>
+
+				<div class="flex items-baseline gap-2 mb-4">
+					<span class="font-mono tabular-nums text-2xl font-bold text-text-primary">{fmt(data.followedReps.count)}</span>
+					<span class="text-xs text-text-tertiary">followed</span>
+				</div>
+
+				{#if data.followedReps.top.length > 0}
+					<div class="space-y-2">
+						{#each data.followedReps.top as dm (dm.id)}
+							<div class="flex items-center gap-2 text-sm">
+								{#if dm.party}
+									<span class="inline-block w-5 h-5 rounded-full text-[10px] font-mono font-bold flex items-center justify-center text-white {dm.party === 'D' ? 'bg-blue-600' : dm.party === 'R' ? 'bg-red-600' : 'bg-purple-600'}">
+										{dm.party}
+									</span>
+								{/if}
+								<span class="text-text-primary truncate">{dm.name}</span>
+								{#if dm.jurisdiction}
+									<span class="text-text-quaternary text-xs flex-shrink-0">{dm.jurisdiction}</span>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<p class="text-xs text-text-quaternary">No decision makers followed yet.</p>
+				{/if}
+			</div>
+
+			<!-- Legislation card -->
+			<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
+				<div class="flex items-center justify-between mb-4">
+					<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Legislation</p>
+					<a
+						href="/org/{data.org.slug}/legislation"
+						class="text-xs text-text-quaternary hover:text-teal-500 transition-colors"
+					>
+						View all &rarr;
+					</a>
+				</div>
+
+				<div class="flex items-baseline gap-2 mb-4">
+					<span class="font-mono tabular-nums text-2xl font-bold text-text-primary">{fmt(data.watchedBills.count)}</span>
+					<span class="text-xs text-text-tertiary">watched</span>
+				</div>
+
+				{#if data.watchedBills.top.length > 0}
+					<div class="space-y-2">
+						{#each data.watchedBills.top as bill (bill.id)}
+							<div class="flex items-center gap-2 text-sm">
+								<span class="inline-block text-[10px] font-mono px-1.5 py-0.5 rounded border {
+									bill.status === 'introduced' ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' :
+									bill.status === 'committee' ? 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' :
+									bill.status === 'floor' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
+									bill.status === 'passed' || bill.status === 'signed' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' :
+									bill.status === 'failed' || bill.status === 'vetoed' ? 'text-red-400 bg-red-500/10 border-red-500/20' :
+									'text-text-tertiary bg-surface-raised border-surface-border'
+								} flex-shrink-0">
+									{bill.status}
+								</span>
+								<span class="text-text-primary truncate">{bill.title}</span>
+								{#if bill.position}
+									<span class="text-[10px] font-mono px-1 py-0.5 rounded {
+										bill.position === 'support' ? 'text-emerald-400 bg-emerald-500/10' :
+										bill.position === 'oppose' ? 'text-red-400 bg-red-500/10' :
+										'text-text-quaternary bg-surface-raised'
+									} flex-shrink-0">
+										{bill.position}
+									</span>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<p class="text-xs text-text-quaternary">No bills watched yet.</p>
+				{/if}
+			</div>
+		</div>
+	{/if}
 
 	<!-- ===== SECTIONS 2+3: Verification Pipeline & Engagement Tiers (collapsed) ===== -->
 	<details class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)]">

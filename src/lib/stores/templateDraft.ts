@@ -160,8 +160,8 @@ function createTemplateDraftStore(): TemplateDraftStore {
 							reasoning: dm.reasoning ?? '',
 							source_url: dm.source_url ?? '',
 							confidence: dm.confidence ?? 0,
-							// Critical: these fields are needed for email extraction
-							email: dm.email ?? '',
+							// F-R6-09: Strip DM email from localStorage — fetched from server at send time
+							email: '',
 							source: dm.source ?? '',
 							isAiResolved: dm.isAiResolved ?? true,
 							provenance: dm.provenance ?? ''

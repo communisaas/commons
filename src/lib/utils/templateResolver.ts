@@ -56,20 +56,44 @@ export function isValidEmailServiceUser(user: unknown): user is EmailServiceUser
 // Type for _representative objects with stronger typing
 import type { Representative } from '$lib/core/legislative/types';
 
-// Type guard for a single _representative
+/**
+ * Derive chamber from a DecisionMaker title string.
+ * Returns 'senate' if title contains Senator/Senate, 'house' otherwise.
+ */
+function deriveChamber(rep: Record<string, unknown>): string {
+	if (typeof rep.chamber === 'string' && rep.chamber.trim() !== '') return rep.chamber;
+	if (typeof rep.title === 'string') {
+		const t = rep.title.toLowerCase();
+		if (t.includes('senator') || t.includes('senate')) return 'senate';
+	}
+	return 'house';
+}
+
+// Type guard for a single representative (supports DecisionMaker shapes)
 function isValidRepresentative(rep: unknown): rep is Representative {
 	if (typeof rep !== 'object' || rep === null) return false;
 	const r = rep as Record<string, unknown>;
 
-	return (
-		typeof r.name === 'string' &&
-		r.name.trim() !== '' &&
-		typeof r.party === 'string' &&
-		typeof r.chamber === 'string' &&
-		r.chamber.trim() !== '' &&
-		typeof r.state === 'string' &&
-		typeof r.district === 'string'
-	);
+	// Must have a name
+	if (typeof r.name !== 'string' || r.name.trim() === '') return false;
+
+	// Must have party (can be empty string for non-partisan DMs)
+	if (typeof r.party !== 'string') return false;
+
+	// Chamber can come from `chamber` field or be derived from `title`
+	const hasChamber = typeof r.chamber === 'string' && r.chamber.trim() !== '';
+	const hasTitle = typeof r.title === 'string' && r.title.trim() !== '';
+	if (!hasChamber && !hasTitle) return false;
+
+	// State can come from `state` or `jurisdiction` (DM shape)
+	const hasState = typeof r.state === 'string';
+	const hasJurisdiction = typeof r.jurisdiction === 'string';
+	if (!hasState && !hasJurisdiction) return false;
+
+	// District: required for legacy, optional for DM
+	if (typeof r.district !== 'string' && typeof r.district !== 'undefined') return false;
+
+	return true;
 }
 
 // Type guard for representatives array with enhanced validation
@@ -165,8 +189,9 @@ export function resolveTemplate(
 		// Congressional _representative resolution with type safety
 		if (user.representatives && isValidRepresentativesArray(user.representatives)) {
 			// Primary _representative (House member or first in list)
+			// deriveChamber handles both legacy `chamber` field and DM `title` field
 			const primaryRep =
-				user.representatives.find((r) => r.chamber === 'house') || user.representatives[0];
+				user.representatives.find((r) => deriveChamber(r as unknown as Record<string, unknown>) === 'house') || user.representatives[0];
 			if (primaryRep) {
 				replacements['[Representative Name]'] = primaryRep.name;
 				replacements['[Rep Name]'] = primaryRep.name;
@@ -178,7 +203,7 @@ export function resolveTemplate(
 			}
 
 			// Senate representatives
-			const senators = user.representatives.filter((r) => r.chamber === 'senate');
+			const senators = user.representatives.filter((r) => deriveChamber(r as unknown as Record<string, unknown>) === 'senate');
 			if (senators.length > 0) {
 				replacements['[Senator Name]'] = senators[0].name;
 				replacements['[Senator]'] = `Sen. ${senators[0].name}`;

@@ -104,8 +104,8 @@ export const load: LayoutServerLoad = async ({ params, locals: _locals, request 
 		},
 
 		delivery_config: template.delivery_config,
-		recipient_config: template.recipient_config,
-		recipientEmails: extractRecipientEmails(template.recipient_config),
+		recipient_config: null,
+		recipientEmails: [],
 		author: template.user
 			? {
 					name: template.user.name,

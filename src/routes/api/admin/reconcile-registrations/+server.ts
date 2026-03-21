@@ -20,6 +20,7 @@ import { json } from '@sveltejs/kit';
 import { prisma } from '$lib/core/db';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
+import { verifyCronSecret } from '$lib/server/cron-auth';
 
 const SHADOW_ATLAS_URL = env.SHADOW_ATLAS_API_URL || 'http://localhost:3000';
 const SHADOW_ATLAS_REGISTRATION_TOKEN = env.SHADOW_ATLAS_REGISTRATION_TOKEN || '';
@@ -36,9 +37,9 @@ function atlasHeaders(): Record<string, string> {
 export const POST: RequestHandler = async (event) => {
 	// Authenticate with CRON_SECRET
 	const authHeader = event.request.headers.get('Authorization');
-	const cronSecret = process.env.CRON_SECRET;
+	const cronSecret = env.CRON_SECRET;
 
-	if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+	if (!cronSecret || !verifyCronSecret(authHeader, cronSecret)) {
 		return json({ error: 'Unauthorized' }, { status: 401 });
 	}
 

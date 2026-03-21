@@ -46,6 +46,7 @@ export function traceEvent(
 		success?: boolean;
 		durationMs?: number;
 		costUsd?: number;
+		waitUntil?: (promise: Promise<unknown>) => void;
 	}
 ): void {
 	if (!isEnabled()) return;
@@ -62,7 +63,7 @@ export function traceEvent(
 		expiresAt: expiresAt()
 	};
 
-	db.agentTrace.create({ data }).catch((err: Error) => {
+	const writePromise = db.agentTrace.create({ data }).catch((err: Error) => {
 		// Prisma 6.x PG adapter surfaces SocketTimeout when the pool
 		// connection idles out — a variant the WASM engine doesn't
 		// recognize. Retry once; the pool establishes a fresh connection.
@@ -74,6 +75,10 @@ export function traceEvent(
 			console.warn('[agent-trace] Write failed:', err?.message);
 		}
 	});
+
+	if (opts?.waitUntil) {
+		opts.waitUntil(writePromise);
+	}
 }
 
 /**
@@ -93,6 +98,7 @@ export function traceCompletion(
 		outputTokens?: number;
 		thoughtsTokens?: number;
 		totalTokens?: number;
+		waitUntil?: (promise: Promise<unknown>) => void;
 	}
 ): void {
 	traceEvent(
@@ -110,7 +116,8 @@ export function traceCompletion(
 			userId: opts.userId,
 			success: opts.success,
 			durationMs: opts.durationMs,
-			costUsd: opts.costUsd
+			costUsd: opts.costUsd,
+			waitUntil: opts.waitUntil
 		}
 	);
 }
@@ -128,7 +135,10 @@ export function traceRequest(
 		metadata: Record<string, unknown>;
 		content?: Record<string, unknown>;
 	},
-	opts?: { userId?: string | null }
+	opts?: {
+		userId?: string | null;
+		waitUntil?: (promise: Promise<unknown>) => void;
+	}
 ): void {
 	if (!isEnabled()) return;
 

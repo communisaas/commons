@@ -4,7 +4,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
-import { loadOrgContext } from '$lib/server/org';
+import { loadOrgContext, requireRole } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 
@@ -12,7 +12,8 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!FEATURES.AUTOMATION) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	// Verify workflow belongs to this org
 	const workflow = await db.workflow.findFirst({
@@ -45,7 +46,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 			completedAt: true,
 			nextRunAt: true,
 			supporter: {
-				select: { id: true, name: true, email: true }
+				select: { id: true, name: true }
 			}
 		}
 	};
@@ -71,7 +72,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 			triggerEvent: e.triggerEvent,
 			error: e.error,
 			supporter: e.supporter
-				? { id: e.supporter.id, name: e.supporter.name, email: e.supporter.email }
+				? { id: e.supporter.id, name: e.supporter.name }
 				: null,
 			createdAt: e.createdAt.toISOString(),
 			updatedAt: e.updatedAt.toISOString(),

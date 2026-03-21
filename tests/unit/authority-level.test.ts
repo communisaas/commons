@@ -47,12 +47,24 @@ describe('deriveAuthorityLevel', () => {
 		expect(deriveAuthorityLevel(user)).toBe(5);
 	});
 
-	it('should return 3 for identity commitment without passport', () => {
+	it('should return 3 for identity commitment with trust_tier >= 3', () => {
 		const user = {
 			identity_commitment: '0xabc',
-			trust_score: 0
+			trust_score: 0,
+			trust_tier: 3
 		};
 		expect(deriveAuthorityLevel(user)).toBe(3);
+	});
+
+	it('should NOT return 3 for address-verified user (trust_tier=2) with identity_commitment', () => {
+		const user = {
+			identity_commitment: '0xabc',
+			trust_score: 0,
+			trust_tier: 2
+		};
+		// Address-verified users set identity_commitment but should only get level 2 (via trust_score)
+		// or level 1 (if trust_score < 100)
+		expect(deriveAuthorityLevel(user)).toBe(1);
 	});
 
 	it('should return 2 for email verified (trust_score >= 100)', () => {

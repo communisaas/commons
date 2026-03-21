@@ -1,10 +1,15 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let selectedTargets = $state<Set<string>>(new Set());
+	let logResponseDeliveryId = $state<string | null>(null);
+	let logResponseType = $state('replied');
+	let logResponseDetail = $state('');
+	let logResponseLoading = $state(false);
 
 	const selectedCount = $derived(selectedTargets.size);
 	const hasTargets = $derived(data.targets.length > 0);
@@ -48,6 +53,57 @@
 		}
 	}
 
+	function eventDotColor(type: string): string {
+		switch (type) {
+			case 'opened':
+				return 'bg-emerald-400';
+			case 'clicked_verify':
+				return 'bg-teal-400';
+			case 'replied':
+				return 'bg-blue-400';
+			case 'meeting_requested':
+				return 'bg-purple-400';
+			case 'vote_cast':
+				return 'bg-amber-400';
+			case 'public_statement':
+				return 'bg-rose-400';
+			default:
+				return 'bg-zinc-400';
+		}
+	}
+
+	function eventLabel(type: string): string {
+		switch (type) {
+			case 'opened':
+				return 'Opened';
+			case 'clicked_verify':
+				return 'Clicked verify link';
+			case 'replied':
+				return 'Replied';
+			case 'meeting_requested':
+				return 'Meeting requested';
+			case 'vote_cast':
+				return 'Vote cast';
+			case 'public_statement':
+				return 'Public statement';
+			default:
+				return type;
+		}
+	}
+
+	function confidenceBadge(confidence: string): string {
+		switch (confidence) {
+			case 'observed':
+				return 'text-emerald-500';
+			case 'inferred':
+				return 'text-amber-500';
+			case 'reported':
+				return 'text-blue-400';
+			default:
+				return 'text-text-tertiary';
+		}
+	}
+
 	function formatDate(iso: string): string {
 		const d = new Date(iso);
 		return d.toLocaleDateString('en-US', {
@@ -57,6 +113,30 @@
 			hour: 'numeric',
 			minute: '2-digit'
 		});
+	}
+
+	async function submitLogResponse() {
+		if (!logResponseDeliveryId) return;
+		logResponseLoading = true;
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/campaigns/${data.campaign.id}/responses`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					deliveryId: logResponseDeliveryId,
+					type: logResponseType,
+					detail: logResponseDetail || undefined
+				})
+			});
+			if (res.ok) {
+				logResponseDeliveryId = null;
+				logResponseDetail = '';
+				logResponseType = 'replied';
+				await invalidateAll();
+			}
+		} finally {
+			logResponseLoading = false;
+		}
 	}
 </script>
 
@@ -219,63 +299,143 @@
 		{/if}
 	</form>
 
-	<!-- Past Deliveries -->
+	<!-- Delivery Timeline -->
 	{#if data.pastDeliveries.length > 0}
-		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-6">
 			<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Proof delivery arc</p>
 
-			<div class="overflow-x-auto">
-				<table class="w-full text-sm">
-					<thead>
-						<tr class="border-b border-surface-border">
-							<th class="text-left text-xs font-mono text-text-quaternary pb-2 pr-4">Recipient</th>
-							<th class="text-left text-xs font-mono text-text-quaternary pb-2 pr-4">Status</th>
-							<th class="text-left text-xs font-mono text-text-quaternary pb-2 pr-4">Proof strength</th>
-							<th class="text-left text-xs font-mono text-text-quaternary pb-2 pr-4">Sent</th>
-							<th class="text-left text-xs font-mono text-text-quaternary pb-2">District</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each data.pastDeliveries as delivery}
-							<tr class="border-b border-surface-border">
-								<td class="py-2.5 pr-4">
-									<div class="text-text-primary truncate max-w-[200px]">
-										{delivery.targetName ?? delivery.targetEmail}
-									</div>
-									{#if delivery.targetName}
-										<div class="text-xs font-mono text-text-tertiary truncate max-w-[200px]">
-											{delivery.targetEmail}
-										</div>
+			{#each data.pastDeliveries as delivery}
+				<div class="rounded-lg border border-surface-border bg-surface-raised p-4 space-y-3">
+					<!-- Delivery header -->
+					<div class="flex items-start justify-between gap-4">
+						<div class="min-w-0">
+							<div class="flex items-center gap-2">
+								<span class="text-sm text-text-primary font-medium truncate">
+									{delivery.targetName ?? delivery.targetEmail}
+								</span>
+								<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-mono {statusBadgeClass(delivery.status)}">
+									{delivery.status}
+								</span>
+							</div>
+							<div class="flex items-center gap-3 mt-0.5">
+								{#if delivery.targetName}
+									<span class="text-xs font-mono text-text-tertiary">{delivery.targetEmail}</span>
+								{/if}
+								{#if delivery.targetTitle}
+									<span class="text-xs text-text-quaternary">{delivery.targetTitle}</span>
+								{/if}
+								{#if delivery.targetDistrict}
+									<span class="text-xs text-teal-500/60">{delivery.targetDistrict}</span>
+								{/if}
+							</div>
+						</div>
+						<div class="flex items-center gap-2 shrink-0">
+							{#if delivery.proofStrength}
+								<span class="text-xs font-mono tabular-nums text-emerald-400">{delivery.proofStrength.verified.toLocaleString('en-US')}</span>
+								<span class="text-xs text-text-quaternary">/</span>
+								<span class="text-xs font-mono tabular-nums text-teal-400">{delivery.proofStrength.districtCount}d</span>
+							{/if}
+						</div>
+					</div>
+
+					<!-- Timeline -->
+					<div class="relative ml-2 border-l border-surface-border pl-4 space-y-2">
+						<!-- Sent event (always present) -->
+						<div class="relative flex items-start gap-2">
+							<div class="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-teal-400 ring-2 ring-surface-raised"></div>
+							<div class="flex-1">
+								<span class="text-xs text-text-secondary">Sent</span>
+								<span class="text-xs font-mono tabular-nums text-text-quaternary ml-2">
+									{delivery.sentAt ? formatDate(delivery.sentAt) : formatDate(delivery.createdAt)}
+								</span>
+							</div>
+						</div>
+
+						<!-- Response events -->
+						{#each delivery.responses as response}
+							<div class="relative flex items-start gap-2">
+								<div class="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full {eventDotColor(response.type)} ring-2 ring-surface-raised"></div>
+								<div class="flex-1">
+									<span class="text-xs text-text-secondary">{eventLabel(response.type)}</span>
+									<span class="text-xs font-mono {confidenceBadge(response.confidence)} ml-1">
+										{response.confidence}
+									</span>
+									<span class="text-xs font-mono tabular-nums text-text-quaternary ml-2">
+										{formatDate(response.occurredAt)}
+									</span>
+									{#if response.detail}
+										<p class="text-xs text-text-tertiary mt-0.5 italic">{response.detail}</p>
 									{/if}
-								</td>
-								<td class="py-2.5 pr-4">
-									<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-mono {statusBadgeClass(delivery.status)}">
-										{delivery.status}
-									</span>
-								</td>
-								<td class="py-2.5 pr-4">
-									{#if delivery.proofStrength}
-										<span class="text-xs font-mono tabular-nums text-emerald-400">{delivery.proofStrength.verified.toLocaleString('en-US')}</span>
-										<span class="text-xs text-text-quaternary mx-0.5">/</span>
-										<span class="text-xs font-mono tabular-nums text-teal-400">{delivery.proofStrength.districtCount}d</span>
-									{:else}
-										<span class="text-xs text-text-quaternary">{'\u2014'}</span>
-									{/if}
-								</td>
-								<td class="py-2.5 pr-4">
-									<span class="text-xs font-mono tabular-nums text-text-tertiary">
-										{delivery.sentAt ? formatDate(delivery.sentAt) : '\u2014'}
-									</span>
-								</td>
-								<td class="py-2.5">
-									<span class="text-xs text-teal-500/60">
-										{delivery.targetDistrict ?? '\u2014'}
-									</span>
-								</td>
-							</tr>
+								</div>
+							</div>
 						{/each}
-					</tbody>
-				</table>
+					</div>
+
+					<!-- Log Response button -->
+					<div class="pt-1">
+						<button
+							type="button"
+							onclick={() => { logResponseDeliveryId = delivery.id; }}
+							class="text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+						>
+							+ Log response
+						</button>
+					</div>
+				</div>
+			{/each}
+		</div>
+	{/if}
+
+	<!-- Log Response Modal -->
+	{#if logResponseDeliveryId}
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true">
+			<div class="rounded-xl border border-surface-border bg-surface-base p-6 w-full max-w-md space-y-4">
+				<h3 class="text-sm font-semibold text-text-primary">Log Decision-Maker Response</h3>
+
+				<div class="space-y-3">
+					<div>
+						<label for="response-type" class="block text-xs font-mono text-text-tertiary mb-1">Response type</label>
+						<select
+							id="response-type"
+							bind:value={logResponseType}
+							class="w-full rounded-lg border border-surface-border bg-surface-raised px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-teal-500/40"
+						>
+							<option value="replied">Replied</option>
+							<option value="meeting_requested">Meeting Requested</option>
+							<option value="vote_cast">Vote Cast</option>
+							<option value="public_statement">Public Statement</option>
+						</select>
+					</div>
+
+					<div>
+						<label for="response-detail" class="block text-xs font-mono text-text-tertiary mb-1">Detail (optional)</label>
+						<textarea
+							id="response-detail"
+							bind:value={logResponseDetail}
+							rows="3"
+							placeholder="e.g., Reply excerpt, vote direction, statement summary..."
+							class="w-full rounded-lg border border-surface-border bg-surface-raised px-3 py-2 text-sm text-text-primary placeholder:text-text-quaternary focus:outline-none focus:ring-1 focus:ring-teal-500/40 resize-none"
+						></textarea>
+					</div>
+				</div>
+
+				<div class="flex items-center gap-3 justify-end">
+					<button
+						type="button"
+						onclick={() => { logResponseDeliveryId = null; }}
+						class="rounded-lg px-4 py-2 text-sm text-text-tertiary hover:text-text-secondary transition-colors"
+					>
+						Cancel
+					</button>
+					<button
+						type="button"
+						disabled={logResponseLoading}
+						onclick={submitLogResponse}
+						class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500 transition-colors disabled:opacity-40"
+					>
+						{logResponseLoading ? 'Saving...' : 'Log Response'}
+					</button>
+				</div>
 			</div>
 		</div>
 	{/if}

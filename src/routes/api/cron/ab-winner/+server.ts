@@ -9,6 +9,7 @@ import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
 import { pickAbWinner, sendWinnerBlast, type AbTestConfig } from '$lib/server/email/ab-winner';
+import { verifyCronSecretRaw } from '$lib/server/cron-auth';
 
 export const GET: RequestHandler = async ({ request }) => {
 	// Fail-closed: require CRON_SECRET to be configured
@@ -16,7 +17,7 @@ export const GET: RequestHandler = async ({ request }) => {
 	if (!secret) {
 		return json({ error: 'CRON_SECRET not configured' }, { status: 500 });
 	}
-	if (request.headers.get('x-cron-secret') !== secret) {
+	if (!verifyCronSecretRaw(request.headers.get('x-cron-secret'), secret)) {
 		return json({ error: 'Unauthorized' }, { status: 401 });
 	}
 
@@ -34,7 +35,8 @@ export const GET: RequestHandler = async ({ request }) => {
 			abParentId: true,
 			abTestConfig: true,
 			sentAt: true
-		}
+		},
+		take: 100
 	});
 
 	let picked = 0;

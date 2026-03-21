@@ -139,6 +139,12 @@ async function rateLimit(): Promise<void> {
 // ── Core fetch ───────────────────────────────────────────────
 
 async function anFetch<T>(url: string, apiKey: string): Promise<ANPageResponse<T>> {
+	// F-R6-05: Prevent SSRF — only send API key to Action Network domains
+	const parsed = new URL(url);
+	if (!parsed.hostname.endsWith('.actionnetwork.org') && parsed.hostname !== 'actionnetwork.org') {
+		throw new Error(`AN client: refusing to fetch non-AN URL: ${parsed.hostname}`);
+	}
+
 	await rateLimit();
 
 	const response = await fetch(url, {

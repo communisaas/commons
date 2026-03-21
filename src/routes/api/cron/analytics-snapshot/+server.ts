@@ -26,6 +26,8 @@ import { materializeNoisySnapshot, getRemainingBudget } from '$lib/core/analytic
 import { PrivacyBudgetExhaustedError } from '$lib/core/analytics/budget';
 import { getDaysAgoUTC, isDPEnabled } from '$lib/core/analytics/aggregate';
 import { cleanupOldRateLimits, isDBRateLimitEnabled } from '$lib/core/analytics/rate-limit-db';
+import { env } from '$env/dynamic/private';
+import { verifyCronSecret } from '$lib/server/cron-auth';
 
 /**
  * GET /api/cron/analytics-snapshot
@@ -36,13 +38,13 @@ import { cleanupOldRateLimits, isDBRateLimitEnabled } from '$lib/core/analytics/
  */
 export const GET: RequestHandler = async ({ request }) => {
 	// Verify cron secret — fail-closed if not configured
-	const cronSecret = process.env.CRON_SECRET;
+	const cronSecret = env.CRON_SECRET;
 	if (!cronSecret) {
 		return json({ error: 'CRON_SECRET not configured' }, { status: 500 });
 	}
 
 	const authHeader = request.headers.get('authorization');
-	if (authHeader !== `Bearer ${cronSecret}`) {
+	if (!verifyCronSecret(authHeader, cronSecret)) {
 		return json({ error: 'Unauthorized' }, { status: 401 });
 	}
 

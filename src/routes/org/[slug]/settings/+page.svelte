@@ -6,6 +6,7 @@
 	let { data }: { data: PageData } = $props();
 
 	const isOwner = $derived(data.membership.role === 'owner');
+	const canEdit = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
 	const canInvite = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
 	const planName = $derived(data.subscription?.plan ?? 'free');
 
@@ -202,6 +203,97 @@
 			day: 'numeric',
 			year: 'numeric'
 		});
+	}
+
+	// Issue domain state
+	let domainLabel = $state('');
+	let domainDescription = $state('');
+	let domainWeight = $state(1.0);
+	let domainSaving = $state(false);
+	let domainMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
+	let editingDomainId = $state<string | null>(null);
+	let deletingDomainId = $state<string | null>(null);
+
+	const domainCount = $derived(data.issueDomains.length);
+	const atDomainLimit = $derived(domainCount >= 20);
+
+	function startEditDomain(domain: typeof data.issueDomains[0]) {
+		editingDomainId = domain.id;
+		domainLabel = domain.label;
+		domainDescription = domain.description ?? '';
+		domainWeight = domain.weight;
+		domainMessage = null;
+	}
+
+	function cancelEditDomain() {
+		editingDomainId = null;
+		domainLabel = '';
+		domainDescription = '';
+		domainWeight = 1.0;
+		domainMessage = null;
+	}
+
+	async function saveDomain() {
+		if (!domainLabel.trim() || domainSaving) return;
+		domainSaving = true;
+		domainMessage = null;
+
+		const isEdit = !!editingDomainId;
+		const method = isEdit ? 'PATCH' : 'POST';
+		const body: Record<string, unknown> = {
+			label: domainLabel.trim(),
+			description: domainDescription.trim() || undefined,
+			weight: domainWeight
+		};
+		if (isEdit) body.id = editingDomainId;
+
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/issue-domains`, {
+				method,
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(body)
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ message: `Failed to ${isEdit ? 'update' : 'create'} issue domain` }));
+				domainMessage = { type: 'error', text: err.message ?? `Failed to ${isEdit ? 'update' : 'create'} issue domain` };
+				return;
+			}
+			domainMessage = { type: 'success', text: isEdit ? 'Issue domain updated' : 'Issue domain created' };
+			domainLabel = '';
+			domainDescription = '';
+			domainWeight = 1.0;
+			editingDomainId = null;
+			await invalidateAll();
+		} catch {
+			domainMessage = { type: 'error', text: 'Network error. Please try again.' };
+		} finally {
+			domainSaving = false;
+		}
+	}
+
+	async function deleteDomain(id: string) {
+		if (deletingDomainId) return;
+		deletingDomainId = id;
+		domainMessage = null;
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/issue-domains`, {
+				method: 'DELETE',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ id })
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ message: 'Failed to delete issue domain' }));
+				domainMessage = { type: 'error', text: err.message ?? 'Failed to delete issue domain' };
+				return;
+			}
+			domainMessage = { type: 'success', text: 'Issue domain removed' };
+			if (editingDomainId === id) cancelEditDomain();
+			await invalidateAll();
+		} catch {
+			domainMessage = { type: 'error', text: 'Network error. Please try again.' };
+		} finally {
+			deletingDomainId = null;
+		}
 	}
 </script>
 
@@ -435,6 +527,130 @@
 						</div>
 					{/each}
 				</div>
+			</div>
+		{/if}
+	</section>
+
+	<!-- Issue Domains -->
+	<section class="space-y-4">
+		<div class="flex items-center justify-between">
+			<div>
+				<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Issue Domains</h2>
+				<p class="text-xs text-text-tertiary mt-1">Define your organization's focus areas for legislative tracking.</p>
+			</div>
+			<span class="text-xs text-text-tertiary font-mono tabular-nums">{domainCount} of 20</span>
+		</div>
+
+		<!-- Existing domains list -->
+		{#if data.issueDomains.length > 0}
+			<div class="rounded-xl border border-surface-border bg-surface-base divide-y divide-surface-border">
+				{#each data.issueDomains as domain}
+					<div class="px-5 py-3">
+						<div class="flex items-center justify-between">
+							<div class="min-w-0 flex-1">
+								<p class="text-sm text-text-primary font-medium">{domain.label}</p>
+								{#if domain.description}
+									<p class="text-xs text-text-tertiary mt-0.5 truncate">{domain.description}</p>
+								{/if}
+							</div>
+							<div class="flex items-center gap-3 ml-3 shrink-0">
+								<span class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-tertiary font-mono tabular-nums">
+									{domain.weight.toFixed(1)}x
+								</span>
+								{#if canEdit}
+									<button
+										onclick={() => startEditDomain(domain)}
+										disabled={!!deletingDomainId}
+										class="text-xs px-2 py-1 rounded border border-surface-border-strong text-text-secondary hover:text-text-primary hover:bg-surface-overlay transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+									>
+										Edit
+									</button>
+									<button
+										onclick={() => deleteDomain(domain.id)}
+										disabled={deletingDomainId === domain.id}
+										class="text-xs px-2 py-1 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+									>
+										{deletingDomainId === domain.id ? 'Removing...' : 'Remove'}
+									</button>
+								{/if}
+							</div>
+						</div>
+					</div>
+				{/each}
+			</div>
+		{/if}
+
+		<!-- Add/Edit domain form (editor+ only) -->
+		{#if canEdit}
+			<div class="rounded-xl border border-surface-border bg-surface-base p-5 space-y-3">
+				<h3 class="text-sm font-medium text-text-primary">
+					{editingDomainId ? 'Edit issue domain' : 'Add an issue domain'}
+				</h3>
+				{#if atDomainLimit && !editingDomainId}
+					<p class="text-xs text-amber-400">Maximum of 20 issue domains reached.</p>
+				{/if}
+				<form
+					onsubmit={(e) => { e.preventDefault(); saveDomain(); }}
+					class="space-y-3"
+				>
+					<div class="flex flex-col sm:flex-row gap-3">
+						<input
+							type="text"
+							bind:value={domainLabel}
+							placeholder="e.g. water rights, school safety, transit equity"
+							maxlength={100}
+							disabled={domainSaving || (atDomainLimit && !editingDomainId)}
+							class="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 disabled:opacity-50"
+						/>
+					</div>
+					<textarea
+						bind:value={domainDescription}
+						placeholder="Optional description (helps match legislation more accurately)"
+						maxlength={500}
+						rows={2}
+						disabled={domainSaving || (atDomainLimit && !editingDomainId)}
+						class="w-full px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 disabled:opacity-50 resize-none"
+					></textarea>
+					<div class="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+						<div class="flex items-center gap-2">
+							<label for="domain-weight" class="text-xs text-text-tertiary whitespace-nowrap">Priority weight</label>
+							<input
+								id="domain-weight"
+								type="range"
+								bind:value={domainWeight}
+								min={0.5}
+								max={2.0}
+								step={0.1}
+								disabled={domainSaving || (atDomainLimit && !editingDomainId)}
+								class="w-24 accent-teal-500"
+							/>
+							<span class="text-xs text-text-secondary font-mono tabular-nums w-8">{domainWeight.toFixed(1)}</span>
+						</div>
+						<div class="flex gap-2 sm:ml-auto">
+							{#if editingDomainId}
+								<button
+									type="button"
+									onclick={cancelEditDomain}
+									class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors"
+								>
+									Cancel
+								</button>
+							{/if}
+							<button
+								type="submit"
+								disabled={!domainLabel.trim() || domainSaving || (atDomainLimit && !editingDomainId)}
+								class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+							>
+								{domainSaving ? 'Saving...' : editingDomainId ? 'Update Domain' : 'Add Domain'}
+							</button>
+						</div>
+					</div>
+				</form>
+				{#if domainMessage}
+					<p class="text-xs {domainMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}">
+						{domainMessage.text}
+					</p>
+				{/if}
 			</div>
 		{/if}
 	</section>

@@ -147,7 +147,9 @@ export const actions: Actions = {
 		}
 
 		const formData = await request.formData();
-		const subject = formData.get('subject')?.toString().trim();
+		const rawSubject = formData.get('subject')?.toString().trim();
+		// Strip control characters (CRLF injection) and cap length (RFC 2822)
+		const subject = rawSubject?.replace(/[\r\n\x00-\x1f\x7f]/g, '').slice(0, 998);
 		const rawBodyHtml = formData.get('bodyHtml')?.toString();
 		const rawFromName = formData.get('fromName')?.toString().trim() || org.name;
 		// Strip control characters (CRLF injection) and angle brackets (display name spoofing)
@@ -241,8 +243,8 @@ export const actions: Actions = {
 		}
 
 		const formData = await request.formData();
-		const subjectA = formData.get('subjectA')?.toString().trim();
-		const subjectB = formData.get('subjectB')?.toString().trim();
+		const subjectA = formData.get('subjectA')?.toString().trim()?.replace(/[\r\n\x00-\x1f\x7f]/g, '').slice(0, 998);
+		const subjectB = formData.get('subjectB')?.toString().trim()?.replace(/[\r\n\x00-\x1f\x7f]/g, '').slice(0, 998);
 		const rawBodyHtmlA = formData.get('bodyHtmlA')?.toString();
 		const rawBodyHtmlB = formData.get('bodyHtmlB')?.toString();
 		const rawFromName = formData.get('fromName')?.toString().trim() || org.name;

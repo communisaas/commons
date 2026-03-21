@@ -24,7 +24,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		const body = await request.json();
-		const { templateId, stance, identityCommitment, districtCode } = body;
+		const { templateId, stance } = body;
 
 		// Validate required fields
 		if (!templateId || typeof templateId !== 'string') {
@@ -35,9 +35,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			return json({ error: "stance must be 'support' or 'oppose'" }, { status: 400 });
 		}
 
-		if (!identityCommitment || typeof identityCommitment !== 'string') {
-			return json({ error: 'Missing required field: identityCommitment' }, { status: 400 });
+		// Derive identity commitment server-side — never trust client input
+		const user = await prisma.user.findUnique({
+			where: { id: session.userId },
+			select: { identity_commitment: true }
+		});
+		if (!user?.identity_commitment) {
+			return json({ error: 'Identity verification required to register positions' }, { status: 403 });
 		}
+		const identityCommitment = user.identity_commitment;
 
 		// Validate template exists
 		const template = await prisma.template.findUnique({
@@ -49,18 +55,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			return json({ error: 'Template not found' }, { status: 404 });
 		}
 
-		// Auto-fill district_code from ShadowAtlasRegistration if not provided
-		let resolvedDistrictCode = districtCode;
-		if (!resolvedDistrictCode) {
-			const atlas = await prisma.shadowAtlasRegistration
-				.findFirst({
-					where: { identity_commitment: identityCommitment },
-					select: { congressional_district: true }
-				})
-				.catch(() => null);
-			if (atlas?.congressional_district) {
-				resolvedDistrictCode = atlas.congressional_district;
-			}
+		// Derive district_code from ShadowAtlasRegistration using server-derived commitment
+		let resolvedDistrictCode: string | undefined;
+		const atlas = await prisma.shadowAtlasRegistration
+			.findFirst({
+				where: { identity_commitment: identityCommitment },
+				select: { congressional_district: true }
+			})
+			.catch(() => null);
+		if (atlas?.congressional_district) {
+			resolvedDistrictCode = atlas.congressional_district;
 		}
 
 		// Register position (upsert — duplicates return existing)

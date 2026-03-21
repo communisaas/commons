@@ -43,6 +43,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	// Attempt semantic search first, fall back to keyword
 	try {
 		const queryEmbedding = await generateEmbedding(query, { taskType: 'RETRIEVAL_QUERY' });
+		if (!queryEmbedding.every(Number.isFinite)) throw error(502, 'Invalid embedding from AI model');
 		const vectorStr = `[${queryEmbedding.join(',')}]`;
 
 		// Fetch candidates with pgvector cosine distance, blending 70% topic + 30% location.

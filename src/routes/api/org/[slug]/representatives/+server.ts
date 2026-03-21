@@ -1,6 +1,6 @@
 /**
- * POST /api/org/[slug]/representatives — Import international representatives.
- * GET  /api/org/[slug]/representatives — List representatives by country + constituency.
+ * POST /api/org/[slug]/representatives — Import international decision-makers.
+ * GET  /api/org/[slug]/representatives — List decision-makers by country + constituency.
  * Requires editor+ role for POST, member+ for GET. Organization+ plan for POST.
  */
 
@@ -31,6 +31,12 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'Maximum 100 representatives per request');
 	}
 
+	const SAFE_URL_RE = /^https?:\/\/.{1,2048}$/i;
+	const sanitizeUrl = (url: unknown): string | null => {
+		if (typeof url !== 'string' || !url) return null;
+		return SAFE_URL_RE.test(url) ? url : null;
+	};
+
 	let imported = 0;
 
 	for (const rep of representatives) {
@@ -42,38 +48,65 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			continue;
 		}
 
-		await db.internationalRepresentative.upsert({
+		// Upsert DecisionMaker by matching via ExternalId (constituency system)
+		const existingExt = await db.externalId.findFirst({
 			where: {
-				countryCode_constituencyId_name: {
-					countryCode: rep.countryCode,
-					constituencyId: rep.constituencyId,
-					name: rep.name
+				system: 'constituency',
+				value: rep.constituencyId,
+				decisionMaker: {
+					name: rep.name,
+					jurisdiction: rep.countryCode
 				}
 			},
-			create: {
-				countryCode: rep.countryCode,
-				constituencyId: rep.constituencyId,
-				constituencyName: rep.constituencyName,
-				name: rep.name,
-				party: rep.party || null,
-				chamber: rep.chamber || null,
-				office: rep.office || null,
-				phone: rep.phone || null,
-				email: rep.email || null,
-				websiteUrl: rep.websiteUrl || null,
-				photoUrl: rep.photoUrl || null
-			},
-			update: {
-				constituencyName: rep.constituencyName,
-				party: rep.party || null,
-				chamber: rep.chamber || null,
-				office: rep.office || null,
-				phone: rep.phone || null,
-				email: rep.email || null,
-				websiteUrl: rep.websiteUrl || null,
-				photoUrl: rep.photoUrl || null
-			}
+			select: { decisionMakerId: true }
 		});
+
+		if (existingExt) {
+			// Update existing decision-maker
+			await db.decisionMaker.update({
+				where: { id: existingExt.decisionMakerId },
+				data: {
+					district: rep.constituencyName,
+					party: rep.party || null,
+					title: rep.office || null,
+					phone: rep.phone || null,
+					email: rep.email || null,
+					websiteUrl: sanitizeUrl(rep.websiteUrl),
+					photoUrl: sanitizeUrl(rep.photoUrl)
+				}
+			});
+		} else {
+			// Create new decision-maker + external ID
+			// Parse name into first/last for required lastName field
+			const nameParts = rep.name.trim().split(/\s+/);
+			const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : rep.name;
+			const firstName = nameParts.length > 1 ? nameParts.slice(0, -1).join(' ') : null;
+
+			await db.decisionMaker.create({
+				data: {
+					type: 'legislator',
+					name: rep.name,
+					firstName,
+					lastName,
+					jurisdiction: rep.countryCode,
+					jurisdictionLevel: 'international',
+					district: rep.constituencyName,
+					party: rep.party || null,
+					title: rep.office || null,
+					phone: rep.phone || null,
+					email: rep.email || null,
+					websiteUrl: sanitizeUrl(rep.websiteUrl),
+					photoUrl: sanitizeUrl(rep.photoUrl),
+					active: true,
+					externalIds: {
+						create: {
+							system: 'constituency',
+							value: rep.constituencyId
+						}
+					}
+				}
+			});
+		}
 
 		imported++;
 	}
@@ -91,18 +124,26 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	const cursor = url.searchParams.get('cursor');
 	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 100);
 
-	const where: Record<string, unknown> = {};
-	if (countryCode) where.countryCode = countryCode;
-	if (constituencyId) where.constituencyId = constituencyId;
+	const where: Record<string, unknown> = { jurisdictionLevel: 'international' };
+	if (countryCode) where.jurisdiction = countryCode;
+	if (constituencyId) {
+		where.externalIds = { some: { system: 'constituency', value: constituencyId } };
+	}
 
 	const findArgs: Record<string, unknown> = {
 		where,
 		take: limit + 1,
 		orderBy: [
-			{ countryCode: 'asc' as const },
-			{ constituencyName: 'asc' as const },
+			{ jurisdiction: 'asc' as const },
+			{ district: 'asc' as const },
 			{ name: 'asc' as const }
-		]
+		],
+		include: {
+			externalIds: {
+				where: { system: 'constituency' },
+				select: { value: true }
+			}
+		}
 	};
 
 	if (cursor) {
@@ -110,8 +151,8 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		findArgs.skip = 1;
 	}
 
-	const reps = await db.internationalRepresentative.findMany(
-		findArgs as Parameters<typeof db.internationalRepresentative.findMany>[0]
+	const reps = await db.decisionMaker.findMany(
+		findArgs as Parameters<typeof db.decisionMaker.findMany>[0]
 	);
 
 	const hasMore = reps.length > limit;
@@ -120,15 +161,14 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 
 	return json({
 		success: true,
-		data: items.map((r) => ({
+		data: items.map((r: any) => ({
 			id: r.id,
-			countryCode: r.countryCode,
-			constituencyId: r.constituencyId,
-			constituencyName: r.constituencyName,
+			countryCode: r.jurisdiction,
+			constituencyId: r.externalIds?.[0]?.value ?? null,
+			constituencyName: r.district,
 			name: r.name,
 			party: r.party,
-			chamber: r.chamber,
-			office: r.office,
+			title: r.title,
 			phone: r.phone,
 			email: r.email,
 			websiteUrl: r.websiteUrl,

@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import { LinkedIn } from 'arctic';
 import { generateState, validateReturnTo } from '$lib/core/auth/oauth';
 import type { RequestHandler } from './$types';
@@ -23,7 +24,7 @@ export const GET: RequestHandler = async ({ cookies, url }) => {
 	// Store state in cookies for verification
 	cookies.set('oauth_state', state, {
 		path: '/',
-		secure: process.env.NODE_ENV === 'production',
+		secure: !dev,
 		httpOnly: true,
 		maxAge: 60 * 10, // 10 minutes
 		sameSite: 'lax'
@@ -34,7 +35,7 @@ export const GET: RequestHandler = async ({ cookies, url }) => {
 	if (returnTo !== '/') {
 		cookies.set('oauth_return_to', returnTo, {
 			path: '/',
-			secure: process.env.NODE_ENV === 'production',
+			secure: !dev,
 			httpOnly: true,
 			maxAge: 60 * 10, // 10 minutes
 			sameSite: 'lax'

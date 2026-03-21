@@ -1,7 +1,6 @@
 import type { PageServerLoad } from './$types';
 import { db } from '$lib/core/db';
 import { TEMPLATE_LIST_SELECT } from '$lib/core/db/template-select';
-import { extractRecipientEmails } from '$lib/types/templateConfig';
 import { z } from 'zod';
 import { FEATURES } from '$lib/config/features';
 
@@ -143,30 +142,8 @@ export const load: PageServerLoad = async () => {
 
 				// Config
 				delivery_config: template.delivery_config,
-				recipient_config: template.recipient_config,
-				recipientEmails: (() => {
-					// Validate and parse recipient_config
-					const RecipientConfigSchema = z.unknown();
-					let recipientConfig = null;
-
-					if (typeof template.recipient_config === 'string') {
-						try {
-							const parsed = JSON.parse(template.recipient_config);
-							const result = RecipientConfigSchema.safeParse(parsed);
-							recipientConfig = result.success ? result.data : null;
-						} catch (error) {
-							console.warn(
-								`[Browse Page] Failed to parse recipient_config for template ${template.id}:`,
-								error
-							);
-						}
-					} else {
-						const result = RecipientConfigSchema.safeParse(template.recipient_config);
-						recipientConfig = result.success ? result.data : null;
-					}
-
-					return extractRecipientEmails(recipientConfig);
-				})(),
+				recipient_config: null,
+				recipientEmails: [],
 
 				// Metadata
 				is_public: template.is_public,

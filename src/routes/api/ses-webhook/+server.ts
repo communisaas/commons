@@ -44,11 +44,17 @@ interface SESClickMessage {
 	mail: { messageId: string; destination: string[] };
 }
 
+interface SESDeliveryMessage {
+	notificationType: 'Delivery';
+	mail: { messageId: string; destination: string[] };
+}
+
 type SESMessage =
 	| SESBounceMessage
 	| SESComplaintMessage
 	| SESOpenMessage
 	| SESClickMessage
+	| SESDeliveryMessage
 	| { notificationType: string };
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -107,6 +113,23 @@ export const POST: RequestHandler = async ({ request }) => {
 		return json({ ok: false, error: 'invalid Message JSON' }, { status: 400 });
 	}
 
+	// Extract SES mail.messageId for CampaignDelivery correlation.
+	// SES events (Delivery, Bounce, Open, Click) all carry mail.messageId.
+	const mailMessageId = ('mail' in message && (message as { mail?: { messageId?: string } }).mail?.messageId) || null;
+
+	// Try to route to CampaignDelivery first (report delivery tracking)
+	if (mailMessageId) {
+		const delivery = await db.campaignDelivery.findFirst({
+			where: { sesMessageId: mailMessageId }
+		});
+
+		if (delivery) {
+			await handleReportDeliveryEvent(delivery.id, message);
+			return json({ ok: true });
+		}
+	}
+
+	// Fall through to existing EmailBlast logic
 	if (message.notificationType === 'Bounce') {
 		const bounce = (message as SESBounceMessage).bounce;
 
@@ -148,13 +171,16 @@ export const POST: RequestHandler = async ({ request }) => {
 		const openMsg = message as SESOpenMessage;
 		const email = openMsg.mail.destination[0]?.toLowerCase();
 		if (email) {
-			// Find the most recent blast that was sent to this recipient.
-			// We look for blasts where this email already has a prior event (e.g. the
-			// initial "send" was tracked), or fall back to the most recent sent blast
-			// that doesn't already have an open event for this recipient (dedup).
+			// Scope blast lookup via supporter's org to prevent cross-org misattribution
+			const supporter = await db.supporter.findFirst({
+				where: { email },
+				orderBy: { updatedAt: 'desc' },
+				select: { orgId: true }
+			});
 			const blast = await db.emailBlast.findFirst({
 				where: {
 					status: 'sent',
+					...(supporter ? { orgId: supporter.orgId } : {}),
 					batches: { some: {} },
 					events: { none: { recipientEmail: email, eventType: 'open' } }
 				},
@@ -176,19 +202,27 @@ export const POST: RequestHandler = async ({ request }) => {
 		const clickMsg = message as SESClickMessage;
 		const email = clickMsg.mail.destination[0]?.toLowerCase();
 		if (email) {
-			// Attribute click to the blast that already recorded an open for this
-			// recipient (most reliable correlation). Fall back to the most recent
-			// sent blast if no open event exists yet.
+			// Scope blast lookup via supporter's org to prevent cross-org misattribution
+			const supporter = await db.supporter.findFirst({
+				where: { email },
+				orderBy: { updatedAt: 'desc' },
+				select: { orgId: true }
+			});
 			let blast = await db.emailBlast.findFirst({
 				where: {
 					status: 'sent',
+					...(supporter ? { orgId: supporter.orgId } : {}),
 					events: { some: { recipientEmail: email, eventType: 'open' } }
 				},
 				orderBy: { sentAt: 'desc' }
 			});
 			if (!blast) {
 				blast = await db.emailBlast.findFirst({
-					where: { status: 'sent', batches: { some: {} } },
+					where: {
+						status: 'sent',
+						...(supporter ? { orgId: supporter.orgId } : {}),
+						batches: { some: {} }
+					},
 					orderBy: { sentAt: 'desc' }
 				});
 			}
@@ -213,3 +247,67 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	return json({ ok: true });
 };
+
+/**
+ * Handle SES events for CampaignDelivery (proof report tracking).
+ * Maps SES notification types to ReportResponse rows and delivery status updates.
+ */
+async function handleReportDeliveryEvent(deliveryId: string, message: SESMessage): Promise<void> {
+	const now = new Date();
+
+	switch (message.notificationType) {
+		case 'Delivery':
+			await db.campaignDelivery.update({
+				where: { id: deliveryId },
+				data: { status: 'delivered' }
+			});
+			break;
+
+		case 'Bounce':
+			await db.campaignDelivery.update({
+				where: { id: deliveryId },
+				data: { status: 'bounced' }
+			});
+			break;
+
+		case 'Open':
+			// Dedup: only create one "opened" response per delivery
+			{
+				const existing = await db.reportResponse.findFirst({
+					where: { deliveryId, type: 'opened' }
+				});
+				if (!existing) {
+					await Promise.all([
+						db.reportResponse.create({
+							data: {
+								deliveryId,
+								type: 'opened',
+								confidence: 'observed',
+								occurredAt: now
+							}
+						}),
+						db.campaignDelivery.update({
+							where: { id: deliveryId },
+							data: { status: 'opened' }
+						})
+					]);
+				}
+			}
+			break;
+
+		case 'Click': {
+			const clickMsg = message as SESClickMessage;
+			const isVerifyClick = clickMsg.click.link.includes('/verify/');
+			await db.reportResponse.create({
+				data: {
+					deliveryId,
+					type: isVerifyClick ? 'clicked_verify' : 'opened',
+					detail: isVerifyClick ? clickMsg.click.link : undefined,
+					confidence: 'observed',
+					occurredAt: now
+				}
+			});
+			break;
+		}
+	}
+}

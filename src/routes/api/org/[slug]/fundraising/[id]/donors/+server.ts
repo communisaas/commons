@@ -4,7 +4,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
-import { loadOrgContext } from '$lib/server/org';
+import { loadOrgContext, requireRole } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 
@@ -12,7 +12,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!FEATURES.FUNDRAISING) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	// Verify campaign belongs to org and is a fundraiser
 	const campaign = await db.campaign.findFirst({

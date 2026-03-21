@@ -39,6 +39,7 @@ export type TrustTier = 0 | 1 | 2 | 3 | 4 | 5;
 export function deriveAuthorityLevel(user: {
 	identity_commitment?: string | null;
 	trust_score: number;
+	trust_tier?: number | null;
 	verification_method?: string | null;
 	document_type?: string | null;
 }): AuthorityLevel {
@@ -57,8 +58,10 @@ export function deriveAuthorityLevel(user: {
 		return 4;
 	}
 
-	// Level 3: ID card / drivers license (verified identity but not passport)
-	if (user.identity_commitment) {
+	// Level 3: ID card / drivers license (verified identity, not just address)
+	// verify-address also sets identity_commitment (synthetic SHA-256) at trust_tier=2,
+	// so we require trust_tier >= 3 to distinguish real ID verification from address-only.
+	if (user.identity_commitment && (user.trust_tier ?? 0) >= 3) {
 		return 3;
 	}
 
@@ -98,6 +101,7 @@ export function deriveTrustTier(user: {
 	district_verified?: boolean;
 	address_verified_at?: Date | string | null;
 	identity_commitment?: string | null;
+	trust_tier?: number | null;
 	verification_method?: string | null;
 	document_type?: string | null;
 	trust_score?: number;
@@ -118,7 +122,9 @@ export function deriveTrustTier(user: {
 	}
 
 	// Tier 3: Identity-verified (ID card / drivers license)
-	if (user.identity_commitment) {
+	// verify-address sets a synthetic identity_commitment at trust_tier=2,
+	// so require trust_tier >= 3 to distinguish real ID verification from address-only.
+	if (user.identity_commitment && (user.trust_tier ?? 0) >= 3) {
 		return 3;
 	}
 

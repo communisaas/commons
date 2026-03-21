@@ -1,6 +1,15 @@
 import { json } from '@sveltejs/kit';
+import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
+
+// F-R8-02: Zod schema replaces unvalidated destructuring
+const ProfileSchema = z.object({
+	role: z.string().min(1).max(100),
+	organization: z.string().max(200).optional(),
+	location: z.string().max(200).optional(),
+	connection: z.string().min(1).max(100)
+});
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
@@ -9,11 +18,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			return json({ error: 'Unauthorized' }, { status: 401 });
 		}
 
-		const { role, organization, location, connection, connectionDetails } = await request.json();
-
-		if (!role || !connection) {
-			return json({ error: 'Role and connection are required' }, { status: 400 });
+		let parsed: z.infer<typeof ProfileSchema>;
+		try {
+			const body = await request.json();
+			parsed = ProfileSchema.parse(body);
+		} catch (e) {
+			if (e instanceof z.ZodError) {
+				return json({ error: e.errors.map((err) => err.message).join(', ') }, { status: 400 });
+			}
+			return json({ error: 'Invalid request body' }, { status: 400 });
 		}
+
+		const { role, organization, location, connection } = parsed;
 
 		// Update user with profile information using proper fields
 		// Note: connection_details removed - field does not exist in schema

@@ -1,6 +1,8 @@
 import { db } from '$lib/core/db';
 import { computeVerificationPacket, type VerificationPacket } from './verification';
 import { sendEmail } from '$lib/server/email/ses';
+import { maskEmail } from '$lib/server/org/mask';
+import { FEATURES } from '$lib/config/features';
 
 export interface DeliveryTarget {
 	email: string;
@@ -16,6 +18,14 @@ export interface ReportPreview {
 	renderedHtml: string;
 }
 
+interface PastDeliveryResponse {
+	id: string;
+	type: string;
+	detail: string | null;
+	confidence: string;
+	occurredAt: string;
+}
+
 interface PastDelivery {
 	id: string;
 	targetEmail: string;
@@ -26,6 +36,19 @@ interface PastDelivery {
 	sentAt: string | null;
 	createdAt: string;
 	proofStrength: { verified: number; districtCount: number } | null;
+	responses: PastDeliveryResponse[];
+}
+
+/** Debate data passed to the report renderer when a campaign has a linked debate. */
+export interface ReportDebateData {
+	debateId: string;
+	proposition: string;
+	status: string;
+	argumentCount: number;
+	participantCount: number;
+	winningStance: string | null;
+	winningExcerpt: string | null;
+	consensus: number | null;
 }
 
 // --- HTML Rendering ---
@@ -132,6 +155,55 @@ function scoreRow(key: string, val: number | null): string {
 	</td>`;
 }
 
+const STANCE_COLORS: Record<string, string> = {
+	SUPPORT: '#10b981',
+	OPPOSE: '#ef4444',
+	AMEND: '#f59e0b'
+};
+
+function renderDebateSection(debate: ReportDebateData): string {
+	if (debate.status === 'resolved' && debate.winningStance) {
+		const stanceColor = STANCE_COLORS[debate.winningStance] ?? '#71717a';
+		const stance = debate.winningStance.charAt(0) + debate.winningStance.slice(1).toLowerCase();
+		const excerpt = debate.winningExcerpt
+			? escapeHtml(debate.winningExcerpt.length > 200 ? debate.winningExcerpt.slice(0, 200) : debate.winningExcerpt)
+			: '';
+		const consensus = debate.consensus !== null ? `${Math.round(debate.consensus * 100)}%` : 'N/A';
+
+		return `
+					<tr><td style="height: 16px;"></td></tr>
+					<tr>
+						<td style="padding: 16px; background-color: rgba(24,24,27,0.8); border: 1px solid rgba(63,63,70,0.4); border-radius: 8px;">
+							<div style="font-size: 10px; font-family: monospace; text-transform: uppercase; letter-spacing: 0.1em; color: #71717a; margin-bottom: 8px;">
+								Structured Deliberation
+							</div>
+							<p style="font-style: italic; margin: 0 0 12px 0; color: #d4d4d8; font-size: 14px;">&ldquo;${escapeHtml(debate.proposition)}&rdquo;</p>
+							<div style="margin-bottom: 8px;">
+								<span style="display: inline-block; padding: 2px 8px; border-radius: 4px; background: ${stanceColor}; color: white; font-size: 12px; font-weight: 600;">${escapeHtml(stance)}</span>
+							</div>
+							${excerpt ? `<p style="margin: 0 0 8px 0; color: #a1a1aa; font-size: 14px;">&ldquo;${excerpt}&hellip;&rdquo;</p>` : ''}
+							<div style="font-size: 12px; color: #71717a;">
+								${debate.argumentCount} arguments from ${debate.participantCount} participants &middot; AI Consensus: ${consensus}
+							</div>
+						</td>
+					</tr>`;
+	}
+
+	// Active / non-resolved debate
+	return `
+					<tr><td style="height: 16px;"></td></tr>
+					<tr>
+						<td style="padding: 16px; background-color: rgba(24,24,27,0.8); border: 1px solid rgba(63,63,70,0.4); border-radius: 8px;">
+							<div style="font-size: 10px; font-family: monospace; text-transform: uppercase; letter-spacing: 0.1em; color: #71717a; margin-bottom: 8px;">
+								Structured Deliberation
+							</div>
+							<div style="font-size: 14px; color: #d4d4d8;">
+								Deliberation in progress: ${debate.argumentCount} arguments from ${debate.participantCount} participants
+							</div>
+						</td>
+					</tr>`;
+}
+
 /**
  * Render the report email HTML for a specific target.
  * Personalizes the campaign body with merge fields:
@@ -140,7 +212,9 @@ function scoreRow(key: string, val: number | null): string {
 export function renderReportHtml(
 	campaign: { id: string; title: string; body: string | null },
 	packet: VerificationPacket,
-	target: DeliveryTarget
+	target: DeliveryTarget,
+	deliveryId?: string,
+	debate?: ReportDebateData | null
 ): string {
 	// Personalize campaign body with merge fields
 	let body = campaign.body ?? '';
@@ -151,7 +225,8 @@ export function renderReportHtml(
 	// Convert newlines to <br> for email
 	const bodyHtml = escapeHtml(body).replace(/\n/g, '<br />');
 
-	const verifyUrl = `https://commons.email/verify/${campaign.id}`;
+	// Per-delivery verify URL when available, falls back to campaign-level
+	const verifyUrl = `https://commons.email/verify/${deliveryId ?? campaign.id}`;
 
 	return `<!DOCTYPE html>
 <html lang="en">
@@ -251,6 +326,10 @@ export function renderReportHtml(
 						</td>
 					</tr>
 
+					${debate ? `
+					<!-- Section 2b: Structured Deliberation -->
+					${renderDebateSection(debate)}` : ''}
+
 					<tr><td style="height: 16px;"></td></tr>
 
 					<!-- Section 3: Verify Link -->
@@ -287,6 +366,53 @@ export function renderReportHtml(
 }
 
 /**
+ * Load debate data for report rendering. Returns null if no debate is linked
+ * or the DEBATE feature flag is off.
+ */
+async function loadDebateForReport(debateId: string | null): Promise<ReportDebateData | null> {
+	if (!FEATURES.DEBATE || !debateId) return null;
+
+	const debate = await db.debate.findUnique({
+		where: { id: debateId },
+		select: {
+			id: true,
+			proposition_text: true,
+			status: true,
+			argument_count: true,
+			unique_participants: true,
+			winning_stance: true,
+			ai_panel_consensus: true
+		}
+	});
+
+	if (!debate) return null;
+
+	// For resolved debates, find the winning argument excerpt
+	let winningExcerpt: string | null = null;
+	if (debate.status === 'resolved' && debate.winning_stance) {
+		const winningArg = await db.debateArgument.findFirst({
+			where: { debate_id: debateId, stance: debate.winning_stance },
+			orderBy: { weighted_score: 'desc' },
+			select: { body: true }
+		});
+		if (winningArg) {
+			winningExcerpt = winningArg.body.slice(0, 200);
+		}
+	}
+
+	return {
+		debateId: debate.id,
+		proposition: debate.proposition_text,
+		status: debate.status,
+		argumentCount: debate.argument_count,
+		participantCount: debate.unique_participants,
+		winningStance: debate.winning_stance,
+		winningExcerpt,
+		consensus: debate.ai_panel_consensus
+	};
+}
+
+/**
  * Load report preview: campaign, targets, live packet, rendered HTML.
  */
 export async function loadReportPreview(
@@ -319,6 +445,9 @@ export async function loadReportPreview(
 		}
 	}
 
+	// Load debate data if linked
+	const debate = await loadDebateForReport(campaign.debateId);
+
 	// Render preview HTML for first target (or generic placeholder)
 	const previewTarget: DeliveryTarget = targets[0] ?? {
 		email: 'preview@example.com',
@@ -330,7 +459,9 @@ export async function loadReportPreview(
 	const renderedHtml = renderReportHtml(
 		{ id: campaign.id, title: campaign.title, body: campaign.body },
 		packet,
-		previewTarget
+		previewTarget,
+		undefined,
+		debate
 	);
 
 	return {
@@ -369,82 +500,175 @@ export async function sendReport(
 		return { deliveryIds: [], error: 'Campaign must be active, paused, or complete to send reports' };
 	}
 
-	// Resolve targets from campaign JSON
-	const rawTargets = campaign.targets as unknown;
-	const allTargets: DeliveryTarget[] = [];
+	// Atomic idempotency guard: prevent double-send from concurrent clicks
+	const updated = await db.campaign.updateMany({
+		where: { id: campaignId, status: { not: 'SENDING' } },
+		data: { status: 'SENDING' }
+	});
+	if (updated.count === 0) {
+		return { deliveryIds: [], error: 'Report already being sent' };
+	}
+	const previousStatus = campaign.status;
 
-	if (Array.isArray(rawTargets)) {
-		for (const t of rawTargets) {
-			if (t && typeof t === 'object' && 'email' in t && typeof t.email === 'string') {
-				allTargets.push({
-					email: t.email,
-					name: typeof t.name === 'string' ? t.name : null,
-					title: typeof t.title === 'string' ? t.title : null,
-					district: typeof t.district === 'string' ? t.district : null
-				});
+	let sendSucceeded = false;
+	try {
+		// Resolve targets from campaign JSON
+		const rawTargets = campaign.targets as unknown;
+		const allTargets: DeliveryTarget[] = [];
+
+		if (Array.isArray(rawTargets)) {
+			for (const t of rawTargets) {
+				if (t && typeof t === 'object' && 'email' in t && typeof t.email === 'string') {
+					allTargets.push({
+						email: t.email,
+						name: typeof t.name === 'string' ? t.name : null,
+						title: typeof t.title === 'string' ? t.title : null,
+						district: typeof t.district === 'string' ? t.district : null
+					});
+				}
 			}
 		}
-	}
 
-	// Filter to selected targets only
-	const selectedSet = new Set(selectedEmails);
-	const targets = allTargets.filter((t) => selectedSet.has(t.email));
+		// Filter to selected targets only
+		const selectedSet = new Set(selectedEmails);
+		const targets = allTargets.filter((t) => selectedSet.has(t.email));
 
-	if (targets.length === 0) {
-		return { deliveryIds: [], error: 'No valid targets selected' };
-	}
+		if (targets.length === 0) {
+			return { deliveryIds: [], error: 'No valid targets selected' };
+		}
 
-	// Freeze the packet at send time
-	const packet = await computeVerificationPacket(campaignId, orgId);
-	const packetSnapshot = JSON.parse(JSON.stringify(packet));
+		// Freeze the packet at send time
+		const packet = await computeVerificationPacket(campaignId, orgId);
+		const packetSnapshot = JSON.parse(JSON.stringify(packet));
 
-	// Load org for sender info
-	const org = await db.organization.findUnique({
-		where: { id: orgId },
-		select: { name: true, slug: true }
-	});
-
-	// Create delivery rows and send via SES
-	const deliveryIds: string[] = [];
-
-	for (const target of targets) {
-		const delivery = await db.campaignDelivery.create({
-			data: {
-				campaignId,
-				targetEmail: target.email,
-				targetName: target.name,
-				targetTitle: target.title,
-				targetDistrict: target.district,
-				status: 'queued',
-				packetSnapshot
-			}
+		// Precompute digest and proof weight for receipt generation
+		const { sha256Hex } = await import('$lib/server/legislation/receipts/attestation');
+		const { computeProofWeight } = await import('$lib/server/legislation/receipts/proof-weight');
+		const packetDigest = await sha256Hex(JSON.stringify(packetSnapshot));
+		const proofWeight = computeProofWeight({
+			verified: packet.verified,
+			gds: packet.gds,
+			ald: packet.ald,
+			cai: packet.cai,
+			temporalEntropy: packet.temporalEntropy
 		});
-		deliveryIds.push(delivery.id);
 
-		// Render and send
-		const html = renderReportHtml(
-			{ id: campaign.id, title: campaign.title, body: campaign.body },
-			packet,
-			target
-		);
-		const result = await sendEmail(
-			target.email,
-			`${org!.slug}@commons.email`,
-			org!.name,
-			`Campaign Report: ${campaign.title}`,
-			html
-		);
+		// Load org for sender info
+		const org = await db.organization.findUnique({
+			where: { id: orgId },
+			select: { name: true, slug: true }
+		});
 
-		await db.campaignDelivery.update({
-			where: { id: delivery.id },
-			data: {
-				status: result.success ? 'sent' : 'failed',
-				sentAt: result.success ? new Date() : undefined
+		// Load debate data if linked
+		const debate = await loadDebateForReport(campaign.debateId);
+
+		// Create delivery rows and send via SES
+		const deliveryIds: string[] = [];
+
+		const BATCH_SIZE = 10;
+		for (let i = 0; i < targets.length; i += BATCH_SIZE) {
+			const batch = targets.slice(i, i + BATCH_SIZE);
+			await Promise.all(batch.map(async (target) => {
+				try {
+					const delivery = await db.campaignDelivery.create({
+						data: {
+							campaignId,
+							targetEmail: target.email,
+							targetName: target.name,
+							targetTitle: target.title,
+							targetDistrict: target.district,
+							status: 'queued',
+							packetSnapshot,
+							packetDigest,
+							proofWeight
+						}
+					});
+					deliveryIds.push(delivery.id);
+
+					// Render and send — use delivery ID for per-delivery verify URL
+					const html = renderReportHtml(
+						{ id: campaign.id, title: campaign.title, body: campaign.body },
+						packet,
+						target,
+						delivery.id,
+						debate
+					);
+					// Sanitize org name for email display name (strip control chars + angle brackets)
+					const safeOrgName = org!.name.replace(/[\x00-\x1f\x7f<>"]/g, '').slice(0, 64) || 'Commons';
+					const emailResult = await sendEmail(
+						target.email,
+						`${org!.slug}@commons.email`,
+						safeOrgName,
+						`Campaign Report: ${campaign.title}`,
+						html
+					);
+
+					await db.campaignDelivery.update({
+						where: { id: delivery.id },
+						data: {
+							status: emailResult.success ? 'sent' : 'failed',
+							sentAt: emailResult.success ? new Date() : undefined,
+							sesMessageId: emailResult.messageId ?? undefined
+						}
+					});
+				} catch (err) {
+					console.error(`[report] Failed to send to ${maskEmail(target.email)}:`, err);
+				}
+			}));
+		}
+
+		// Fire-and-forget: auto-follow decision-makers matched by delivery target email,
+		// and auto-watch the linked bill if the campaign has one
+		const targetEmails = targets.map((t) => t.email);
+		(async () => {
+			const dms = await db.decisionMaker.findMany({
+				where: { email: { in: targetEmails } },
+				select: { id: true }
+			});
+
+			if (dms.length > 0) {
+				const dmIds = dms.map(d => d.id);
+				await db.$executeRaw`
+					INSERT INTO "org_dm_follow" ("id", "org_id", "decision_maker_id", "reason", "followed_at")
+					SELECT gen_random_uuid(), ${orgId}, dm.id, 'campaign_delivery', NOW()
+					FROM unnest(${dmIds}::text[]) AS dm(id)
+					ON CONFLICT ("org_id", "decision_maker_id") DO NOTHING
+				`;
 			}
+
+			// Auto-watch the bill if this campaign is linked to one
+			if (campaign.billId) {
+				await db.orgBillWatch.upsert({
+					where: {
+						orgId_billId: {
+							orgId,
+							billId: campaign.billId
+						}
+					},
+					create: {
+						orgId,
+						billId: campaign.billId,
+						reason: 'campaign',
+						position: campaign.position
+					},
+					update: {} // no-op if already watching
+				});
+			}
+		})().catch(() => {
+			// Auto-follow/watch is best-effort — don't break delivery flow
+		});
+
+		sendSucceeded = true;
+		return { deliveryIds };
+	} finally {
+		// Reset status: COMPLETE after success, restore previous status on error so user can retry
+		await db.campaign.update({
+			where: { id: campaignId },
+			data: { status: sendSucceeded ? 'COMPLETE' : previousStatus }
+		}).catch(() => {
+			// Best-effort status reset — don't mask the original error
 		});
 	}
-
-	return { deliveryIds };
 }
 
 /**
@@ -464,14 +688,19 @@ export async function loadPastDeliveries(
 
 	const deliveries = await db.campaignDelivery.findMany({
 		where: { campaignId },
-		orderBy: { createdAt: 'desc' }
+		orderBy: { createdAt: 'desc' },
+		include: {
+			responses: {
+				orderBy: { occurredAt: 'asc' }
+			}
+		}
 	});
 
 	return deliveries.map((d) => {
 		const snap = d.packetSnapshot as Record<string, unknown> | null;
 		return {
 			id: d.id,
-			targetEmail: d.targetEmail,
+			targetEmail: maskEmail(d.targetEmail),
 			targetName: d.targetName,
 			targetTitle: d.targetTitle,
 			targetDistrict: d.targetDistrict,
@@ -481,7 +710,14 @@ export async function loadPastDeliveries(
 			proofStrength:
 				snap && typeof snap.verified === 'number' && typeof snap.districtCount === 'number'
 					? { verified: snap.verified, districtCount: snap.districtCount }
-					: null
+					: null,
+			responses: d.responses.map((r) => ({
+				id: r.id,
+				type: r.type,
+				detail: r.detail,
+				confidence: r.confidence,
+				occurredAt: r.occurredAt.toISOString()
+			}))
 		};
 	});
 }

@@ -1,6 +1,6 @@
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
-import { extractRecipientEmails, extractTemplateMetrics } from '$lib/types/templateConfig';
+import { extractTemplateMetrics } from '$lib/types/templateConfig';
 import type { PageServerLoad } from './$types';
 import { FEATURES } from '$lib/config/features';
 
@@ -52,8 +52,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		preview: template.preview,
 		metrics: extractTemplateMetrics(template.metrics),
 		delivery_config: template.delivery_config,
-		recipient_config: (template.recipient_config as Record<string, unknown>) ?? undefined,
-		recipientEmails: extractRecipientEmails(template.recipient_config),
+		recipient_config: null,
+		recipientEmails: [],
 		author: template.user
 			? {
 					name: template.user.name,
@@ -65,7 +65,10 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	return {
 		template: formattedTemplate,
-		user: locals.user,
+		user: locals.user ? {
+			id: locals.user.id,
+			name: locals.user.name
+		} : null,
 		modalMode: true
 	};
 };

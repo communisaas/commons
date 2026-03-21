@@ -49,9 +49,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			}
 		}
 
-		// Verify the registration exists
-		const registration = await prisma.positionRegistration.findUnique({
-			where: { id: registrationId },
+		// Verify the registration exists and belongs to the caller
+		const user = await prisma.user.findUnique({
+			where: { id: session.userId },
+			select: { identity_commitment: true }
+		});
+		if (!user?.identity_commitment) {
+			return json({ error: 'Identity verification required' }, { status: 403 });
+		}
+
+		const registration = await prisma.positionRegistration.findFirst({
+			where: { id: registrationId, identity_commitment: user.identity_commitment },
 			select: { id: true }
 		});
 

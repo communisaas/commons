@@ -31,6 +31,7 @@ export interface IdentityBindingResult {
 	linkedToExisting: boolean;
 	userId: string;
 	previousUserId?: string;
+	requireReauth?: boolean;
 	mergeDetails?: {
 		accountsMoved: number;
 		sourceEmail: string;
@@ -72,9 +73,9 @@ export function computeIdentityCommitment(
 	// Without salt, an attacker with passport databases could precompute
 	// all commitments and link them to on-chain nullifiers.
 	const COMMITMENT_SALT = process.env.IDENTITY_COMMITMENT_SALT;
-	if (!COMMITMENT_SALT) {
+	if (!COMMITMENT_SALT || !/^[0-9a-f]{64}$/i.test(COMMITMENT_SALT)) {
 		throw new Error(
-			'IDENTITY_COMMITMENT_SALT environment variable not configured. ' +
+			'IDENTITY_COMMITMENT_SALT must be 64 hex characters (32 bytes). ' +
 				'Generate with: openssl rand -hex 32'
 		);
 	}
@@ -131,176 +132,263 @@ export async function bindIdentityCommitment(
 	currentUserId: string,
 	identityCommitment: string
 ): Promise<IdentityBindingResult> {
-	// Check if this commitment is already bound to another user
-	const existingUser = await prisma.user.findUnique({
-		where: { identity_commitment: identityCommitment },
-		select: {
-			id: true,
-			email: true
-		}
-	});
+	const result = await prisma.$transaction(async (tx) => {
+		// Lock the current user row to serialize concurrent bindings (F-R3-12: TOCTOU fix)
+		await tx.$queryRaw`SELECT id FROM "user" WHERE id = ${currentUserId} FOR UPDATE`;
 
-	if (existingUser && existingUser.id !== currentUserId) {
-		// Commitment belongs to different user - merge accounts
-		console.debug(
-			`[IdentityBinding] Detected duplicate identity. Merging user ${currentUserId} into ${existingUser.id}`
-		);
-
-		// Get current user info for logging
-		const currentUser = await prisma.user.findUnique({
+		// F-R3-20: Idempotency guard — if currentUserId was already merged away,
+		// look up the canonical user by commitment instead of throwing RecordNotFound
+		const currentUser = await tx.user.findUnique({
 			where: { id: currentUserId },
-			select: { email: true }
+			select: { id: true, email: true, identity_commitment: true }
+		});
+		if (!currentUser) {
+			const canonicalUser = await tx.user.findUnique({
+				where: { identity_commitment: identityCommitment },
+				select: { id: true }
+			});
+			if (canonicalUser) {
+				return { success: true, linkedToExisting: true, userId: canonicalUser.id, requireReauth: true };
+			}
+			throw new Error('User not found and no existing identity binding');
+		}
+
+		// Check if this commitment is already bound to another user
+		// FOR UPDATE lock prevents a concurrent transaction from binding the same commitment
+		const existingUsers = await tx.$queryRaw<Array<{ id: string; email: string }>>`
+			SELECT id, email FROM "user"
+			WHERE identity_commitment = ${identityCommitment}
+			FOR UPDATE
+		`;
+		const existingUser = existingUsers[0] ?? null;
+
+		if (existingUser && existingUser.id !== currentUserId) {
+			// Commitment belongs to different user - merge accounts
+			console.debug(
+				`[IdentityBinding] Detected duplicate identity. Merging user ${currentUserId} into ${existingUser.id}`
+			);
+
+			const mergeResult = await mergeAccountsInTx(tx, currentUserId, existingUser.id);
+
+			return {
+				success: true,
+				linkedToExisting: true,
+				userId: existingUser.id,
+				previousUserId: currentUserId,
+				requireReauth: true,
+				mergeDetails: {
+					accountsMoved: mergeResult.accountsMoved,
+					sourceEmail: currentUser.email || 'unknown',
+					targetEmail: existingUser.email
+				}
+			};
+		}
+
+		// Check if current user already has a different commitment bound
+		if (currentUser.identity_commitment && currentUser.identity_commitment !== identityCommitment) {
+			// User is trying to bind a different identity - security violation
+			console.error(
+				`[IdentityBinding] SECURITY: User ${currentUserId} attempted to bind different identity commitment`
+			);
+			throw new Error('Cannot bind different identity to already verified user');
+		}
+
+		// Bind commitment to current user
+		await tx.user.update({
+			where: { id: currentUserId },
+			data: {
+				identity_commitment: identityCommitment
+			}
 		});
 
-		const mergeResult = await mergeAccounts(currentUserId, existingUser.id);
+		console.debug(`[IdentityBinding] Bound identity commitment to user ${currentUserId}`);
 
 		return {
 			success: true,
-			linkedToExisting: true,
-			userId: existingUser.id,
-			previousUserId: currentUserId,
-			mergeDetails: {
-				accountsMoved: mergeResult.accountsMoved,
-				sourceEmail: currentUser?.email || 'unknown',
-				targetEmail: existingUser.email
-			}
+			linkedToExisting: false,
+			userId: currentUserId
 		};
-	}
-
-	// Check if current user already has a different commitment bound
-	const currentUserData = await prisma.user.findUnique({
-		where: { id: currentUserId },
-		select: { identity_commitment: true }
 	});
 
-	if (currentUserData?.identity_commitment && currentUserData.identity_commitment !== identityCommitment) {
-		// User is trying to bind a different identity - security violation
-		console.error(
-			`[IdentityBinding] SECURITY: User ${currentUserId} attempted to bind different identity commitment`
-		);
-		throw new Error('Cannot bind different identity to already verified user');
-	}
-
-	// Bind commitment to current user
-	await prisma.user.update({
-		where: { id: currentUserId },
-		data: {
-			identity_commitment: identityCommitment
-		}
-	});
-
-	console.debug(`[IdentityBinding] Bound identity commitment to user ${currentUserId}`);
-
-	return {
-		success: true,
-		linkedToExisting: false,
-		userId: currentUserId
-	};
+	return result;
 }
 
 /**
- * Merge accounts when same identity is detected
+ * Merge accounts within an existing transaction.
  *
- * Moves all OAuth accounts from sourceUserId to targetUserId,
- * then deletes the source user. This consolidates all login
- * methods under a single verified identity.
- *
- * Uses a transaction to ensure atomic operation.
- *
- * @param sourceUserId - User to merge FROM (will be deleted)
- * @param targetUserId - User to merge INTO (will be kept)
+ * Moves all related records from sourceUserId to targetUserId,
+ * then deletes the source user. Caller must provide the transaction client
+ * to avoid nested $transaction calls.
  */
-async function mergeAccounts(sourceUserId: string, targetUserId: string): Promise<MergeAccountsResult> {
-	const result = await prisma.$transaction(async (tx) => {
-		// Count accounts being moved for logging
-		const accountCount = await tx.account.count({
-			where: { user_id: sourceUserId }
-		});
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function mergeAccountsInTx(tx: any, sourceUserId: string, targetUserId: string): Promise<MergeAccountsResult> {
+	// Count accounts being moved for logging
+	const accountCount = await tx.account.count({
+		where: { user_id: sourceUserId }
+	});
 
-		// Move all OAuth accounts to target user
-		await tx.account.updateMany({
-			where: { user_id: sourceUserId },
-			data: { user_id: targetUserId }
-		});
+	// Move all OAuth accounts to target user
+	await tx.account.updateMany({
+		where: { user_id: sourceUserId },
+		data: { user_id: targetUserId }
+	});
 
-		// Move verification sessions (if any pending)
-		await tx.verificationSession.updateMany({
-			where: { user_id: sourceUserId },
-			data: { user_id: targetUserId }
-		});
+	// Move verification sessions (if any pending)
+	await tx.verificationSession.updateMany({
+		where: { user_id: sourceUserId },
+		data: { user_id: targetUserId }
+	});
 
-		// Move verification audits for compliance trail
-		await tx.verificationAudit.updateMany({
-			where: { user_id: sourceUserId },
-			data: { user_id: targetUserId }
-		});
+	// Move verification audits for compliance trail
+	await tx.verificationAudit.updateMany({
+		where: { user_id: sourceUserId },
+		data: { user_id: targetUserId }
+	});
 
-		// Move templates created by source user
-		await tx.template.updateMany({
-			where: { userId: sourceUserId },
-			data: { userId: targetUserId }
-		});
+	// Move templates created by source user
+	await tx.template.updateMany({
+		where: { userId: sourceUserId },
+		data: { userId: targetUserId }
+	});
 
-		// Move template campaigns
-		await tx.template_campaign.updateMany({
-			where: { user_id: sourceUserId },
-			data: { user_id: targetUserId }
-		});
+	// Move template campaigns
+	await tx.template_campaign.updateMany({
+		where: { user_id: sourceUserId },
+		data: { user_id: targetUserId }
+	});
 
-		// Move user representatives
-		// Note: May cause unique constraint violations if both users have same rep
-		// BR6-006: Only catch P2002 (unique constraint), re-throw unexpected errors
-		try {
-			await tx.user_representatives.updateMany({
-				where: { user_id: sourceUserId },
-				data: { user_id: targetUserId }
-			});
-		} catch (e: unknown) {
-			const isPrismaUniqueViolation =
-				e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002';
-			if (isPrismaUniqueViolation) {
-				// Both users have same rep — delete source user's duplicates
-				await tx.user_representatives.deleteMany({
-					where: { user_id: sourceUserId }
-				});
+	// Move UserDMRelation records — per-row merge to avoid updateMany aborting
+	// on ANY unique violation and subsequent deleteMany losing non-conflicting rows
+	{
+		const sourceRels = await tx.userDMRelation.findMany({ where: { userId: sourceUserId } });
+		const targetDmIds = new Set(
+			(await tx.userDMRelation.findMany({
+				where: { userId: targetUserId },
+				select: { decisionMakerId: true }
+			})).map((r: { decisionMakerId: string }) => r.decisionMakerId)
+		);
+		for (const rel of sourceRels) {
+			if (targetDmIds.has(rel.decisionMakerId)) {
+				await tx.userDMRelation.delete({ where: { id: rel.id } });
 			} else {
-				throw e;
+				await tx.userDMRelation.update({ where: { id: rel.id }, data: { userId: targetUserId } });
 			}
 		}
+	}
 
-		// Move Shadow Atlas registrations (NUL-001: preserve nullifier continuity)
-		try {
-			await tx.shadowAtlasRegistration.updateMany({
-				where: { user_id: sourceUserId },
-				data: { user_id: targetUserId }
-			});
-		} catch (e: unknown) {
-			const isPrismaUniqueViolation =
-				e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002';
-			if (isPrismaUniqueViolation) {
+	// Move Shadow Atlas registrations (NUL-001: preserve nullifier continuity)
+	// ShadowAtlasRegistration is @unique on user_id — per-row merge
+	{
+		const sourceReg = await tx.shadowAtlasRegistration.findFirst({ where: { user_id: sourceUserId } });
+		if (sourceReg) {
+			const targetReg = await tx.shadowAtlasRegistration.findFirst({ where: { user_id: targetUserId } });
+			if (targetReg) {
 				// Both users registered — keep target's registration, delete source's
-				await tx.shadowAtlasRegistration.deleteMany({
-					where: { user_id: sourceUserId }
-				});
+				await tx.shadowAtlasRegistration.delete({ where: { id: sourceReg.id } });
 			} else {
-				throw e;
+				await tx.shadowAtlasRegistration.update({
+					where: { id: sourceReg.id },
+					data: { user_id: targetUserId }
+				});
 			}
 		}
+	}
 
-		// Delete the duplicate user
-		// Cascades will handle any remaining relations
-		await tx.user.delete({
-			where: { id: sourceUserId }
-		});
+	// Move Segments — createdBy has no onDelete (RESTRICT), would cause FK violation
+	await tx.segment.updateMany({
+		where: { createdBy: sourceUserId },
+		data: { createdBy: targetUserId }
+	});
 
-		return { accountsMoved: accountCount, sourceDeleted: true };
+	// Move OrgMembership — @@unique([userId, orgId]), onDelete: Cascade
+	// If both users are in same org, keep the higher-privilege role
+	{
+		const ROLE_RANK: Record<string, number> = { owner: 3, editor: 2, member: 1 };
+		const sourceMemberships = await tx.orgMembership.findMany({ where: { userId: sourceUserId } });
+		const targetOrgIds = new Map<string, { orgId: string; id: string; role: string }>(
+			(await tx.orgMembership.findMany({
+				where: { userId: targetUserId },
+				select: { orgId: true, id: true, role: true }
+			})).map((m: { orgId: string; id: string; role: string }) => [m.orgId, m] as const)
+		);
+		for (const mem of sourceMemberships) {
+			const existing = targetOrgIds.get(mem.orgId);
+			if (existing) {
+				// Both in same org — keep higher role on target, delete source
+				if ((ROLE_RANK[mem.role] ?? 0) > (ROLE_RANK[existing.role] ?? 0)) {
+					await tx.orgMembership.update({ where: { id: existing.id }, data: { role: mem.role } });
+				}
+				await tx.orgMembership.delete({ where: { id: mem.id } });
+			} else {
+				await tx.orgMembership.update({ where: { id: mem.id }, data: { userId: targetUserId } });
+			}
+		}
+	}
+
+	// Move Subscription — @unique userId, onDelete: Cascade
+	// Transfer source's subscription if target doesn't have one; otherwise keep higher-value
+	{
+		const sourceSub = await tx.subscription.findFirst({ where: { userId: sourceUserId } });
+		if (sourceSub) {
+			const targetSub = await tx.subscription.findFirst({ where: { userId: targetUserId } });
+			if (targetSub) {
+				// Both have subscriptions — keep the one with higher price, delete the other
+				if (sourceSub.price_cents > targetSub.price_cents) {
+					await tx.subscription.delete({ where: { id: targetSub.id } });
+					await tx.subscription.update({ where: { id: sourceSub.id }, data: { userId: targetUserId } });
+				} else {
+					await tx.subscription.delete({ where: { id: sourceSub.id } });
+				}
+			} else {
+				await tx.subscription.update({ where: { id: sourceSub.id }, data: { userId: targetUserId } });
+			}
+		}
+	}
+
+	// Move EncryptedDeliveryData — @unique user_id, onDelete: Cascade
+	// Transfer if target doesn't have one; if both exist, keep target's (more recent identity)
+	{
+		const sourceEdd = await tx.encryptedDeliveryData.findFirst({ where: { user_id: sourceUserId } });
+		if (sourceEdd) {
+			const targetEdd = await tx.encryptedDeliveryData.findFirst({ where: { user_id: targetUserId } });
+			if (targetEdd) {
+				// Both have encrypted delivery data — keep target's, delete source's
+				await tx.encryptedDeliveryData.delete({ where: { id: sourceEdd.id } });
+			} else {
+				await tx.encryptedDeliveryData.update({
+					where: { id: sourceEdd.id },
+					data: { user_id: targetUserId }
+				});
+			}
+		}
+	}
+
+	// Move DistrictCredential — @unique user_id, onDelete: Cascade
+	{
+		const sourceCreds = await tx.districtCredential.findMany({ where: { user_id: sourceUserId } });
+		if (sourceCreds.length > 0) {
+			const targetCred = await tx.districtCredential.findFirst({ where: { user_id: targetUserId } });
+			if (targetCred) {
+				// Both have credentials — keep target's (more recent verification), delete source's
+				await tx.districtCredential.deleteMany({ where: { user_id: sourceUserId } });
+			} else {
+				// Transfer source's credential to target
+				await tx.districtCredential.updateMany({ where: { user_id: sourceUserId }, data: { user_id: targetUserId } });
+			}
+		}
+	}
+
+	// Delete the duplicate user
+	// Cascades will handle any remaining relations
+	await tx.user.delete({
+		where: { id: sourceUserId }
 	});
 
 	console.debug(
-		`[IdentityBinding] Merged user ${sourceUserId} into ${targetUserId}: ${result.accountsMoved} accounts moved`
+		`[IdentityBinding] Merged user ${sourceUserId} into ${targetUserId}: ${accountCount} accounts moved`
 	);
 
-	return result;
+	return { accountsMoved: accountCount, sourceDeleted: true };
 }
 
 // =============================================================================

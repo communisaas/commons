@@ -69,10 +69,10 @@ export async function authenticateApiKey(
 		return apiError('UNAUTHORIZED', 'API key has expired', 401);
 	}
 
-	// Fire-and-forget: update lastUsedAt and increment requestCount
+	// Fire-and-forget: update lastUsedAt and increment requestCount (skip if revoked mid-request)
 	db.apiKey
-		.update({
-			where: { id: apiKey.id },
+		.updateMany({
+			where: { id: apiKey.id, revokedAt: null },
 			data: {
 				lastUsedAt: new Date(),
 				requestCount: { increment: 1 }

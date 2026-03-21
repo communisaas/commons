@@ -1,6 +1,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
+import { maskEmail } from '$lib/server/org/mask';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -65,13 +66,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			attendeeCount: event.attendeeCount,
 			verifiedAttendees: event.verifiedAttendees,
 			status: event.status,
-			checkinCode: event.checkinCode,
+			checkinCode: ['editor', 'admin', 'owner'].includes(membership.role) ? event.checkinCode : null,
 			requireVerification: event.requireVerification
 		},
 		rsvps: event.rsvps.map((r) => ({
 			id: r.id,
 			name: r.name,
-			email: r.email,
+			email: r.email ? maskEmail(r.email) : null,
 			status: r.status,
 			districtHash: r.districtHash ? r.districtHash.slice(0, 8) + '...' : null,
 			engagementTier: r.engagementTier,

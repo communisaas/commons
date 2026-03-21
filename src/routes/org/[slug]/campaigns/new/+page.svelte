@@ -6,9 +6,11 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
+	const prefill = data.alertPrefill;
 	let debateEnabled = $state(false);
 	let targetCountry = $state(form?.targetCountry ?? 'US');
 	let targetJurisdiction = $state(form?.targetJurisdiction ?? '');
+	let position = $state<string>('');
 </script>
 
 <div class="space-y-6">
@@ -34,6 +36,48 @@
 	{/if}
 
 	<form method="POST" use:enhance class="space-y-6">
+		{#if prefill}
+			<input type="hidden" name="fromAlertId" value={prefill.alertId} />
+			<input type="hidden" name="billId" value={prefill.billId} />
+			<input type="hidden" name="position" value={position} />
+
+			<!-- Alert context banner -->
+			<div class="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+				<p class="text-[10px] font-mono uppercase tracking-wider text-amber-400/70 mb-1">Responding to legislative alert</p>
+				<p class="text-sm font-medium text-text-primary">{prefill.billTitle}</p>
+				{#if prefill.billSummary}
+					<p class="text-xs text-text-tertiary mt-1 line-clamp-2">{prefill.billSummary}</p>
+				{/if}
+
+				{#if prefill.billJurisdictionLevel === 'state'}
+					<div class="mt-2 rounded border border-amber-500/10 bg-amber-500/5 px-3 py-2">
+						<p class="text-[10px] text-amber-400/80">State bill -- you may need to manually add your target legislators after creating this campaign.</p>
+					</div>
+				{/if}
+
+				<!-- Position selector -->
+				<div class="mt-3">
+					<p class="text-xs font-medium text-text-secondary mb-1.5">Your organization's position on this bill</p>
+					<div class="flex gap-3">
+						<button
+							type="button"
+							class="flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors {position === 'support' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' : 'border-surface-border bg-surface-raised text-text-tertiary hover:text-text-secondary'}"
+							onclick={() => { position = 'support'; }}
+						>
+							Support
+						</button>
+						<button
+							type="button"
+							class="flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors {position === 'oppose' ? 'border-red-500/40 bg-red-500/10 text-red-400' : 'border-surface-border bg-surface-raised text-text-tertiary hover:text-text-secondary'}"
+							onclick={() => { position = 'oppose'; }}
+						>
+							Oppose
+						</button>
+					</div>
+				</div>
+			</div>
+		{/if}
+
 		<!-- Section 1: Who should see this proof? -->
 		<div class="rounded-lg bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 space-y-4">
 			<div>
@@ -76,7 +120,7 @@
 					id="title"
 					name="title"
 					required
-					value={form?.title ?? ''}
+					value={form?.title ?? prefill?.billTitle ?? ''}
 					placeholder="e.g., District 5 Zoning Letter Drive"
 					class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
 				/>
@@ -91,7 +135,7 @@
 					required
 					class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
 				>
-					<option value="LETTER" selected={form?.type === 'LETTER'}>Letter</option>
+					<option value="LETTER" selected={form?.type === 'LETTER' || !!prefill}>Letter</option>
 					<option value="EVENT" selected={form?.type === 'EVENT'}>Event</option>
 					<option value="FORM" selected={form?.type === 'FORM'}>Form</option>
 				</select>
@@ -109,7 +153,7 @@
 					rows="4"
 					placeholder="What civic action are supporters being asked to prove?"
 					class="w-full rounded-lg participation-input text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors resize-y"
-				>{form?.body ?? ''}</textarea>
+				>{form?.body ?? prefill?.billSummary ?? ''}</textarea>
 			</div>
 
 			<!-- Template -->

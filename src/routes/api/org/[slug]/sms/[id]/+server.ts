@@ -4,12 +4,19 @@
  */
 
 import { json, error } from '@sveltejs/kit';
+import { z } from 'zod';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
 import { SMS_MAX_LENGTH } from '$lib/server/sms/types';
 import { sendSmsBlast } from '$lib/server/sms/send-blast';
 import type { RequestHandler } from './$types';
+
+const RecipientFilterSchema = z.object({
+	tags: z.array(z.string()).max(20).optional(),
+	segments: z.array(z.string()).max(10).optional(),
+	excludeTags: z.array(z.string()).max(20).optional()
+}).strict();
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
@@ -59,7 +66,16 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	if (body.recipientFilter !== undefined) {
-		data.recipientFilter = body.recipientFilter;
+		if (body.recipientFilter) {
+			try {
+				data.recipientFilter = RecipientFilterSchema.parse(body.recipientFilter);
+			} catch (e) {
+				if (e instanceof z.ZodError) throw error(400, `Invalid recipient filter: ${e.errors[0]?.message ?? 'validation failed'}`);
+				throw e;
+			}
+		} else {
+			data.recipientFilter = null;
+		}
 	}
 
 	if (body.fromNumber !== undefined) {

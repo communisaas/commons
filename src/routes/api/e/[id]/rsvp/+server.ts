@@ -61,12 +61,23 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// Engagement tier: district-verified = 2, postal = 1, none = 0
 	const engagementTier = districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? 2 : postalCode ? 1 : 0;
 
-	// Determine RSVP status (waitlist if at capacity)
+	// Determine RSVP status — atomic capacity claim to prevent TOCTOU oversubscription
 	let rsvpStatus: 'GOING' | 'WAITLISTED' = 'GOING';
-	if (event.capacity && event.rsvpCount >= event.capacity && event.waitlistEnabled) {
-		rsvpStatus = 'WAITLISTED';
-	} else if (event.capacity && event.rsvpCount >= event.capacity && !event.waitlistEnabled) {
-		throw error(400, 'Event is at capacity');
+	let claimedSlot = false;
+	if (event.capacity) {
+		const claimed = await db.event.updateMany({
+			where: { id: event.id, rsvpCount: { lt: event.capacity } },
+			data: { rsvpCount: { increment: 1 } }
+		});
+		if (claimed.count === 0) {
+			if (event.waitlistEnabled) {
+				rsvpStatus = 'WAITLISTED';
+			} else {
+				throw error(400, 'Event is at capacity');
+			}
+		} else {
+			claimedSlot = true;
+		}
 	}
 
 	// Find or create supporter if org exists
@@ -115,8 +126,17 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 		}
 	});
 
-	// Increment rsvpCount (only for new RSVPs — check if created just now)
-	if (rsvp.createdAt.getTime() >= Date.now() - 1000) {
+	// Handle rsvpCount correctness after upsert
+	const isNewRsvp = rsvp.createdAt.getTime() >= Date.now() - 1000;
+	if (!isNewRsvp && event.capacity && claimedSlot) {
+		// We atomically incremented but this was an existing RSVP — undo
+		await db.event.update({
+			where: { id: event.id },
+			data: { rsvpCount: { decrement: 1 } }
+		});
+	}
+	// For no-capacity events, only increment on new RSVPs
+	if (!event.capacity && isNewRsvp) {
 		await db.event.update({
 			where: { id: event.id },
 			data: { rsvpCount: { increment: 1 } }

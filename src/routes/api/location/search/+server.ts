@@ -144,6 +144,13 @@ export const GET: RequestHandler = async ({ url }) => {
 		);
 	}
 
+	if (q.length > 200) {
+		return json(
+			{ error: 'Query too long (200 character maximum)' },
+			{ status: 400 }
+		);
+	}
+
 	if (!['country', 'state', 'city', 'any'].includes(scope)) {
 		return json(
 			{ error: 'Invalid scope. Must be one of: country, state, city, any' },

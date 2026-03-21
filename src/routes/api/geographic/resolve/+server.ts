@@ -32,6 +32,10 @@ export const POST: RequestHandler = async ({ request }) => {
 		);
 	}
 
+	if (typeof input !== 'string' || input.length > 20) {
+		return json({ error: 'Input must be a string of 20 characters or fewer' }, { status: 400 });
+	}
+
 	try {
 		const { resolveDistrict } = await import('$lib/core/location/resolvers');
 		const result = await resolveDistrict(countryCode, input);
@@ -46,8 +50,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				representatives
 			}
 		});
-	} catch (err) {
-		const message = err instanceof Error ? err.message : 'Resolution failed';
-		return json({ error: message }, { status: 422 });
+	} catch {
+		return json({ error: 'Could not resolve district for the given input' }, { status: 422 });
 	}
 };

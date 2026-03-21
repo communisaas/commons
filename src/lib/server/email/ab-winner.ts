@@ -91,56 +91,63 @@ export async function sendWinnerBlast(parentId: string, winner: 'A' | 'B'): Prom
 
 	if (!winnerBlast) throw new Error(`A/B test ${parentId}: winner blast not found`);
 
-	// Check if winner already sent
-	const existing = await db.emailBlast.findFirst({
-		where: { abParentId: parentId, abVariant: null, status: { not: 'failed' } }
-	});
-	if (existing) return; // already dispatched
+	// Atomic winner dispatch — transaction with FOR UPDATE prevents double-send race
+	const remainderBlast = await db.$transaction(async (tx) => {
+		// Lock the parent blast to serialize concurrent winner dispatches
+		await tx.$queryRaw`SELECT id FROM "email_blast" WHERE id = ${parentId} FOR UPDATE`;
 
-	// Mark winner picked on both variant blasts
-	await db.emailBlast.updateMany({
-		where: { abParentId: parentId, abVariant: { in: ['A', 'B'] } },
-		data: { abWinnerPickedAt: new Date() }
-	});
+		// Check if winner already sent
+		const existing = await tx.emailBlast.findFirst({
+			where: { abParentId: parentId, abVariant: null, status: { not: 'failed' } }
+		});
+		if (existing) return null; // already dispatched
 
-	// Get all recipient IDs already sent to in test groups
-	const testBlasts = await db.emailBlast.findMany({
-		where: { abParentId: parentId, abVariant: { in: ['A', 'B'] } },
-		select: { recipientFilter: true }
-	});
+		// Mark winner picked on both variant blasts
+		await tx.emailBlast.updateMany({
+			where: { abParentId: parentId, abVariant: { in: ['A', 'B'] } },
+			data: { abWinnerPickedAt: new Date() }
+		});
 
-	// Collect test recipient IDs from recipientFilter.testRecipientIds
-	const excludeIds: string[] = [];
-	for (const tb of testBlasts) {
-		const filter = tb.recipientFilter as Record<string, unknown> | null;
-		if (filter && Array.isArray(filter.testRecipientIds)) {
-			excludeIds.push(...(filter.testRecipientIds as string[]));
+		// Get all recipient IDs already sent to in test groups
+		const testBlasts = await tx.emailBlast.findMany({
+			where: { abParentId: parentId, abVariant: { in: ['A', 'B'] } },
+			select: { recipientFilter: true }
+		});
+
+		// Collect test recipient IDs from recipientFilter.testRecipientIds
+		const excludeIds: string[] = [];
+		for (const tb of testBlasts) {
+			const filter = tb.recipientFilter as Record<string, unknown> | null;
+			if (filter && Array.isArray(filter.testRecipientIds)) {
+				excludeIds.push(...(filter.testRecipientIds as string[]));
+			}
 		}
-	}
 
-	// Create the winner blast targeting remaining recipients
-	const remainderBlast = await db.emailBlast.create({
-		data: {
-			orgId: winnerBlast.orgId,
-			campaignId: winnerBlast.campaignId,
-			subject: winnerBlast.subject,
-			bodyHtml: winnerBlast.bodyHtml,
-			fromName: winnerBlast.fromName,
-			fromEmail: winnerBlast.fromEmail,
-			status: 'draft',
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			recipientFilter: {
-				...((winnerBlast.recipientFilter as Record<string, unknown> | null) ?? {}),
-				excludeIds
-			} as any,
-			totalRecipients: 0,
-			isAbTest: true,
-			abParentId: parentId,
-			abVariant: null,
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			abTestConfig: winnerBlast.abTestConfig as any
-		}
+		// Create the winner blast targeting remaining recipients
+		return await tx.emailBlast.create({
+			data: {
+				orgId: winnerBlast.orgId,
+				campaignId: winnerBlast.campaignId,
+				subject: winnerBlast.subject,
+				bodyHtml: winnerBlast.bodyHtml,
+				fromName: winnerBlast.fromName,
+				fromEmail: winnerBlast.fromEmail,
+				status: 'draft',
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				recipientFilter: {
+					...((winnerBlast.recipientFilter as Record<string, unknown> | null) ?? {}),
+					excludeIds
+				} as any,
+				totalRecipients: 0,
+				isAbTest: true,
+				abParentId: parentId,
+				abVariant: null,
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				abTestConfig: winnerBlast.abTestConfig as any
+			}
+		});
 	});
+	if (!remainderBlast) return; // already dispatched by another process
 
 	// Billing usage check — skip send if org has exceeded email limits
 	const usage = await getOrgUsage(winnerBlast.orgId);

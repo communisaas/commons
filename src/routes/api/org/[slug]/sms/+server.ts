@@ -4,12 +4,19 @@
  */
 
 import { json, error } from '@sveltejs/kit';
+import { z } from 'zod';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { FEATURES } from '$lib/config/features';
 import { SMS_MAX_LENGTH, VALID_BLAST_STATUSES } from '$lib/server/sms/types';
 import type { RequestHandler } from './$types';
+
+const RecipientFilterSchema = z.object({
+	tags: z.array(z.string()).max(20).optional(),
+	segments: z.array(z.string()).max(10).optional(),
+	excludeTags: z.array(z.string()).max(20).optional()
+}).strict();
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
@@ -32,12 +39,37 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, `SMS body must not exceed ${SMS_MAX_LENGTH} characters`);
 	}
 
+	let parsedFilter = null;
+	if (recipientFilter) {
+		try {
+			parsedFilter = RecipientFilterSchema.parse(recipientFilter);
+		} catch (e) {
+			if (e instanceof z.ZodError) throw error(400, `Invalid recipient filter: ${e.errors[0]?.message ?? 'validation failed'}`);
+			throw e;
+		}
+	}
+
+	// Validate fromNumber if provided (E.164 format)
+	if (fromNumber && typeof fromNumber === 'string') {
+		if (!/^\+[1-9]\d{1,14}$/.test(fromNumber)) {
+			throw error(400, 'fromNumber must be in E.164 format (e.g., +15551234567)');
+		}
+	}
+
+	// Validate campaignId belongs to this org (prevent IDOR)
+	if (campaignId) {
+		const campaign = await db.campaign.findFirst({
+			where: { id: campaignId, orgId: org.id }
+		});
+		if (!campaign) throw error(400, 'Campaign not found in this organization');
+	}
+
 	const blast = await db.smsBlast.create({
 		data: {
 			orgId: org.id,
 			body: smsBody.trim(),
 			fromNumber: fromNumber || null,
-			recipientFilter: recipientFilter || null,
+			recipientFilter: parsedFilter,
 			campaignId: campaignId || null,
 			status: 'draft'
 		}

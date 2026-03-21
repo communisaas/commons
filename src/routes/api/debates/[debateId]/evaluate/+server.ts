@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 import { prisma } from '$lib/core/db';
 import { escalateToGovernance, readChainResolution } from '$lib/core/blockchain/debate-market-client';
+import { verifyCronSecret } from '$lib/server/cron-auth';
 
 // ── Rate limiting ────────────────────────────────────────────────────────
 // Guards against accidental double-triggers and runaway cron jobs.
@@ -63,7 +64,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	// Auth: operator-only via CRON_SECRET header
 	const authHeader = request.headers.get('Authorization');
 	const cronSecret = env.CRON_SECRET;
-	if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+	if (!cronSecret || !verifyCronSecret(authHeader, cronSecret)) {
 		throw error(403, 'Operator access required');
 	}
 

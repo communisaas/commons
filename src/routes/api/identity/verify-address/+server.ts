@@ -38,6 +38,12 @@ const BN254_MODULUS = 2188824287183927522224640574525727508854836440041603434369
 /** Matches "XX-NN" (state abbreviation + district number) or "XX-AL" (at-large). */
 const DISTRICT_FORMAT = /^[A-Z]{2}-(\d{2}|AL)$/;
 
+/** Bioguide IDs are a single uppercase letter followed by 6 digits (e.g., "B001297"). */
+const BIOGUIDE_FORMAT = /^[A-Z]\d{6}$/;
+
+/** Maximum officials per request — no district has more than 3 reps. */
+const MAX_OFFICIALS = 10;
+
 interface OfficialInput {
 	name: string;
 	chamber: 'house' | 'senate';
@@ -84,13 +90,29 @@ function validateInput(body: unknown): VerifyAddressInput {
 	let officials: OfficialInput[] | undefined;
 	if (Array.isArray(b.officials)) {
 		officials = (b.officials as Record<string, unknown>[])
-			.filter(
-				(o) =>
-					typeof o.bioguide_id === 'string' &&
-					typeof o.name === 'string' &&
-					typeof o.chamber === 'string' &&
-					typeof o.party === 'string'
-			)
+			.filter((o) => {
+				if (typeof o.name !== 'string' || typeof o.party !== 'string') return false;
+
+				// Validate bioguide_id format
+				if (typeof o.bioguide_id !== 'string' || !BIOGUIDE_FORMAT.test(o.bioguide_id)) {
+					console.warn(`[verify-address] Skipping official with invalid bioguide_id: ${String(o.bioguide_id)}`);
+					return false;
+				}
+
+				// Validate chamber value
+				if (o.chamber !== 'house' && o.chamber !== 'senate') {
+					console.warn(`[verify-address] Skipping official "${o.name}" with invalid chamber: ${String(o.chamber)}`);
+					return false;
+				}
+
+				// Validate state: must be 2-letter uppercase abbreviation
+				if (!/^[A-Z]{2}$/.test(o.state as string)) return false;
+				// Validate district for House members (1-2 digits)
+				if (o.chamber === 'house' && !/^\d{1,2}$/.test((o.district as string) || '')) return false;
+
+				return true;
+			})
+			.slice(0, MAX_OFFICIALS)
 			.map((o) => ({
 				name: o.name as string,
 				chamber: o.chamber as 'house' | 'senate',
@@ -145,7 +167,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Fetch user's did_key for the credential subject ID
 		const user = await db.user.findUniqueOrThrow({
 			where: { id: userId },
-			select: { did_key: true, trust_tier: true }
+			select: { did_key: true }
 		});
 
 		// 3. Issue the VC
@@ -177,6 +199,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// 8. Database transaction: insert DistrictCredential + update User + upsert representatives
 		await db.$transaction(async (tx) => {
+			// Revoke existing unexpired credentials before issuing new one
+			await tx.districtCredential.updateMany({
+				where: { user_id: userId, revoked_at: null },
+				data: { revoked_at: now }
+			});
+
 			// Insert credential record
 			await tx.districtCredential.create({
 				data: {
@@ -192,83 +220,111 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				}
 			});
 
-			// Update user: upgrade trust tier (never downgrade), set district flags
-			// Also set verified_at + identity_commitment so submission endpoint accepts
-			// this user and ZKP proof generation can proceed
-			await tx.user.update({
-				where: { id: userId },
-				data: {
-					trust_tier: Math.max(user.trust_tier, 2),
-					district_verified: true,
-					address_verified_at: now,
-					address_verification_method: input.verification_method,
-					district_hash: districtHash,
-					verified_at: now,
-					verification_method: input.verification_method,
-					is_verified: true,
-					identity_commitment: identityCommitment
-				}
-			});
+			// Atomic user update: GREATEST prevents trust_tier downgrade without TOCTOU race
+			await tx.$executeRaw`
+				UPDATE "user"
+				SET trust_tier = GREATEST(trust_tier, 2),
+				    district_verified = true,
+				    address_verified_at = ${now},
+				    address_verification_method = ${input.verification_method},
+				    district_hash = ${districtHash},
+				    verified_at = ${now},
+				    verification_method = ${input.verification_method},
+				    is_verified = true,
+				    identity_commitment = COALESCE(identity_commitment, ${identityCommitment})
+				WHERE id = ${userId}
+			`;
 
 			// Upsert representatives and create junction records
 			if (input.officials && input.officials.length > 0) {
-				// Deactivate existing user_representatives (district may have changed)
-				await tx.user_representatives.updateMany({
-					where: { user_id: userId },
-					data: { is_active: false }
+				// Deactivate existing UserDMRelation rows (district may have changed)
+				await tx.userDMRelation.updateMany({
+					where: { userId },
+					data: { isActive: false }
 				});
+				// Ensure Institution rows exist for chamber lookup
+				const [house, senate] = await Promise.all([
+					tx.institution.upsert({
+						where: { type_name_jurisdiction: { type: 'legislature', name: 'U.S. House of Representatives', jurisdiction: 'US' } },
+						create: { type: 'legislature', name: 'U.S. House of Representatives', jurisdiction: 'US', jurisdictionLevel: 'federal' },
+						update: {}
+					}),
+					tx.institution.upsert({
+						where: { type_name_jurisdiction: { type: 'legislature', name: 'U.S. Senate', jurisdiction: 'US' } },
+						create: { type: 'legislature', name: 'U.S. Senate', jurisdiction: 'US', jurisdictionLevel: 'federal' },
+						update: {}
+					})
+				]);
 
 				for (const official of input.officials) {
-					// Upsert the representative record (by bioguide_id)
-					const rep = await tx.representative.upsert({
-						where: { bioguide_id: official.bioguide_id },
-						create: {
-							bioguide_id: official.bioguide_id,
-							name: official.name,
-							party: official.party,
-							state: official.state,
-							district: official.district,
-							chamber: official.chamber,
-							office_code: official.office_code || `${official.chamber}-${official.state}`,
-							phone: official.phone,
-							is_active: true,
-							data_source: 'congress_api',
-							source_updated_at: now
-						},
-						update: {
-							name: official.name,
-							party: official.party,
-							state: official.state,
-							district: official.district,
-							chamber: official.chamber,
-							phone: official.phone,
-							is_active: true,
-							last_updated: now,
-							data_source: 'congress_api',
-							source_updated_at: now
-						}
+					const chamber = official.chamber;
+					const title = chamber === 'senate' ? 'Senator' : 'Representative';
+					const institutionId = chamber === 'house' ? house.id : senate.id;
+					const nameParts = official.name.split(' ');
+					const lastName = nameParts.pop() || official.name;
+					const firstName = nameParts.join(' ') || null;
+
+					// Look up existing DecisionMaker via ExternalId (bioguide)
+					const existing = await tx.externalId.findUnique({
+						where: { system_value: { system: 'bioguide', value: official.bioguide_id } },
+						select: { decisionMakerId: true }
 					});
 
-					// Upsert junction record
-					await tx.user_representatives.upsert({
+					let dmId: string;
+					if (existing) {
+						// Trust server-side ingestion (congress-gov sync) for DM data — do NOT update from client
+						dmId = existing.decisionMakerId;
+					} else {
+						// Create new DecisionMaker + ExternalId
+						const dm = await tx.decisionMaker.create({
+							data: {
+								type: 'legislator',
+								name: official.name,
+								firstName,
+								lastName,
+								party: official.party,
+								jurisdiction: official.state,
+								jurisdictionLevel: 'federal',
+								district: official.district,
+								title,
+								institutionId,
+								phone: official.phone,
+								active: true,
+								lastSyncedAt: now
+							},
+							select: { id: true }
+						});
+						await tx.externalId.create({
+							data: {
+								decisionMakerId: dm.id,
+								system: 'bioguide',
+								value: official.bioguide_id
+							}
+						});
+						dmId = dm.id;
+					}
+
+					// Upsert UserDMRelation
+					await tx.userDMRelation.upsert({
 						where: {
-							user_id_representative_id: {
-								user_id: userId,
-								representative_id: rep.id
+							userId_decisionMakerId: {
+								userId,
+								decisionMakerId: dmId
 							}
 						},
 						create: {
-							user_id: userId,
-							representative_id: rep.id,
+							userId,
+							decisionMakerId: dmId,
 							relationship: 'constituent',
-							is_active: true,
-							last_validated: now
+							isActive: true,
+							lastValidated: now
 						},
 						update: {
-							is_active: true,
-							last_validated: now
+							isActive: true,
+							lastValidated: now
 						}
 					});
+
 				}
 			}
 		});

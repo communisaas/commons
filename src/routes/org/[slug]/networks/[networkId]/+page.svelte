@@ -182,6 +182,72 @@
 			{/if}
 		</div>
 
+		<!-- Proof Pressure -->
+		{#if data.proofPressure.length > 0}
+			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+				<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary">Cross-Org Proof Pressure</p>
+
+				<div class="overflow-x-auto rounded-lg border border-surface-border">
+					<table class="w-full text-left text-sm">
+						<thead>
+							<tr class="border-b border-surface-border text-xs text-text-tertiary">
+								<th class="px-4 py-3 font-medium">Decision-Maker</th>
+								<th class="px-4 py-3 font-medium">Orgs</th>
+								<th class="px-4 py-3 font-medium">Proof Weight</th>
+								<th class="px-4 py-3 font-medium">Verified</th>
+								<th class="px-4 py-3 font-medium">Bills</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each data.proofPressure as dm (dm.decisionMakerId)}
+								{@const maxWeight = data.proofPressure[0]?.combinedProofWeight ?? 1}
+								{@const barWidth = Math.max(4, (dm.combinedProofWeight / maxWeight) * 100)}
+								<tr class="border-b border-surface-border last:border-0">
+									<td class="px-4 py-3">
+										<a href="/accountability/{dm.decisionMakerId}" class="text-text-primary hover:text-teal-400 transition-colors font-medium">
+											{dm.dmName}
+										</a>
+										<span class="block text-xs text-text-quaternary font-mono">{dm.decisionMakerId}</span>
+									</td>
+									<td class="px-4 py-3 text-text-secondary">{dm.orgCount} org{dm.orgCount !== 1 ? 's' : ''}</td>
+									<td class="px-4 py-3 min-w-[140px]">
+										<div class="flex items-center gap-2">
+											<div class="h-2 rounded-full bg-emerald-500/20 flex-1 max-w-[100px]">
+												<div class="h-full rounded-full bg-emerald-500" style="width: {barWidth}%"></div>
+											</div>
+											<span class="font-mono tabular-nums text-xs text-text-secondary">{dm.combinedProofWeight.toFixed(2)}</span>
+										</div>
+									</td>
+									<td class="px-4 py-3 font-mono tabular-nums text-text-secondary text-xs">
+										{dm.totalVerifiedConstituents.toLocaleString('en-US')}
+										<span class="text-text-quaternary">across {dm.totalDistricts} district{dm.totalDistricts !== 1 ? 's' : ''}</span>
+									</td>
+									<td class="px-4 py-3">
+										<div class="flex flex-wrap gap-1">
+											{#each dm.bills as bill (bill.billId)}
+												{@const alignColor = bill.alignment > 0 ? 'text-emerald-400' : bill.alignment < 0 ? 'text-red-400' : 'text-text-quaternary'}
+												<span class="inline-flex items-center gap-1 rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-mono">
+													<span class={alignColor}>{bill.alignment > 0 ? '+' : ''}{bill.alignment.toFixed(1)}</span>
+													<span class="text-text-tertiary truncate max-w-[120px]" title={bill.billTitle}>{bill.billTitle}</span>
+													{#if bill.dmAction}
+														<span class="text-teal-400">{bill.dmAction}</span>
+													{/if}
+												</span>
+											{/each}
+										</div>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+
+				<p class="text-[10px] text-text-quaternary">
+					Proof weight uses MAX across orgs to prevent inflation from sub-org splitting. {data.proofPressure.reduce((s, d) => s + d.receiptCount, 0)} total receipts across {data.proofPressure.length} decision-makers.
+				</p>
+			</div>
+		{/if}
+
 		<!-- Coalition Report CTA + Report -->
 		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
 			<div class="flex items-center justify-between">

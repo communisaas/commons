@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import { validateReturnTo } from '$lib/core/auth/oauth';
 import type { RequestHandler } from './$types';
 
@@ -12,7 +13,7 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 
 		cookies.set('oauth_return_to', safeReturnTo, {
 			path: '/',
-			secure: process.env.NODE_ENV === 'production',
+			secure: !dev,
 			httpOnly: true,
 			maxAge: 60 * 10,
 			sameSite: 'lax'

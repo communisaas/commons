@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { env } from '$env/dynamic/private';
+import { verifyCronSecret } from '$lib/server/cron-auth';
 
 /**
  * POST /api/debates/[debateId]/governance-resolve
@@ -18,7 +19,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	// Auth check — operator-level for now
 	const authHeader = request.headers.get('authorization');
 	const cronSecret = env.CRON_SECRET;
-	if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+	if (!cronSecret || !verifyCronSecret(authHeader, cronSecret)) {
 		throw error(401, 'Unauthorized — governance credential required');
 	}
 

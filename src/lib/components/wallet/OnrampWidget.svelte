@@ -100,11 +100,11 @@
 
 	// ── Transak postMessage listener ──────────────────────────────────────────
 
+	const TRANSAK_ORIGINS = ['https://global.transak.com', 'https://global-stg.transak.com'];
+
 	function handleMessage(event: MessageEvent) {
-		// Only accept messages from Transak origins
-		if (
-			!event.origin.includes('transak.com')
-		) {
+		// Only accept messages from exact Transak origins (not substring match)
+		if (!TRANSAK_ORIGINS.includes(event.origin)) {
 			return;
 		}
 

@@ -29,6 +29,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { dev } from '$app/environment';
+import { z } from 'zod';
 import { sessionCookieName } from '$lib/core/auth/auth';
 import {
 	generatePasskeyAuthOptions,
@@ -36,36 +37,58 @@ import {
 } from '$lib/core/identity/passkey-authentication';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 
+const AuthOptionsSchema = z.object({
+	action: z.literal('options'),
+	email: z.string().email().min(1)
+});
+
+const AuthVerifySchema = z.object({
+	action: z.literal('verify'),
+	response: z.object({
+		id: z.string().min(1),
+		rawId: z.string().min(1),
+		response: z.record(z.unknown()),
+		type: z.literal('public-key'),
+		clientExtensionResults: z.record(z.unknown()).optional(),
+		authenticatorAttachment: z.string().optional()
+	}),
+	sessionId: z.string().min(1).max(128)
+});
+
 export const POST: RequestHandler = async ({ request, cookies }) => {
 	const body = await request.json();
-	const action = body.action;
+	const action = body?.action;
 
-	if (!action || typeof action !== 'string') {
-		throw error(400, 'Missing or invalid "action" field. Expected "options" or "verify".');
+	if (action === 'options') {
+		let input;
+		try {
+			input = AuthOptionsSchema.parse(body);
+		} catch (e) {
+			if (e instanceof z.ZodError) throw error(400, `Invalid request: ${e.errors[0]?.message ?? 'validation failed'}`);
+			throw e;
+		}
+		return handleOptions(input.email);
 	}
 
-	switch (action) {
-		case 'options':
-			return handleOptions(body.email);
-
-		case 'verify':
-			return handleVerification(body.response, body.sessionId, cookies);
-
-		default:
-			throw error(400, `Unknown action "${action}". Expected "options" or "verify".`);
+	if (action === 'verify') {
+		let input;
+		try {
+			input = AuthVerifySchema.parse(body);
+		} catch (e) {
+			if (e instanceof z.ZodError) throw error(400, `Invalid request: ${e.errors[0]?.message ?? 'validation failed'}`);
+			throw e;
+		}
+		return handleVerification(input.response as unknown as AuthenticationResponseJSON, input.sessionId, cookies);
 	}
+
+	throw error(400, `Unknown action "${action}". Expected "options" or "verify".`);
 };
 
 // ---------------------------------------------------------------------------
 // Step 1: Generate authentication options
 // ---------------------------------------------------------------------------
 
-async function handleOptions(email?: string): Promise<Response> {
-	// Email is required for Phase 1 (usernameless flow deferred to Phase 2)
-	if (!email || typeof email !== 'string' || email.length === 0) {
-		throw error(400, 'Email is required for passkey authentication');
-	}
-
+async function handleOptions(email: string): Promise<Response> {
 	try {
 		const { options, sessionId } = await generatePasskeyAuthOptions(email);
 
@@ -95,23 +118,10 @@ async function handleOptions(email?: string): Promise<Response> {
 // ---------------------------------------------------------------------------
 
 async function handleVerification(
-	response: AuthenticationResponseJSON | undefined,
-	sessionId: string | undefined,
+	response: AuthenticationResponseJSON,
+	sessionId: string,
 	cookies: Parameters<RequestHandler>[0]['cookies']
 ): Promise<Response> {
-	// Validate required fields
-	if (!response) {
-		throw error(400, 'Missing "response" field with authentication response');
-	}
-
-	if (!response.id || !response.rawId || !response.response || !response.type) {
-		throw error(400, 'Invalid authentication response format');
-	}
-
-	if (!sessionId || typeof sessionId !== 'string') {
-		throw error(400, 'Missing or invalid "sessionId"');
-	}
-
 	try {
 		const result = await verifyPasskeyAuth(response, sessionId);
 

@@ -44,7 +44,11 @@ export const POST: RequestHandler = async ({ request, url }) => {
 		'no-answer': 'no-answer'
 	};
 
-	const mappedStatus = statusMap[callStatus] || callStatus;
+	const mappedStatus = statusMap[callStatus];
+	if (!mappedStatus) {
+		console.warn(`[call-status] Unknown Twilio status: ${callStatus}`);
+		return json({ ok: true }); // Acknowledge but don't persist unknown status
+	}
 	const isTerminal = ['completed', 'failed', 'busy', 'no-answer'].includes(mappedStatus);
 
 	await db.patchThroughCall.updateMany({

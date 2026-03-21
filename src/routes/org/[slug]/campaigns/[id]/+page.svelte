@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { browser } from '$app/environment';
+	import { FEATURES } from '$lib/config/features';
 	import VerificationPacket from '$lib/components/org/VerificationPacket.svelte';
 	import DeliveryMetrics from '$lib/components/org/DeliveryMetrics.svelte';
 	import VerificationTimeline from '$lib/components/org/VerificationTimeline.svelte';
@@ -135,6 +136,35 @@
 			minute: '2-digit'
 		});
 	}
+
+	function debateStatusBadge(status: string): { label: string; classes: string } {
+		switch (status) {
+			case 'active':
+				return { label: 'Active', classes: 'bg-blue-500/15 text-blue-400 border-blue-500/20' };
+			case 'resolving':
+				return { label: 'Resolving', classes: 'bg-amber-500/15 text-amber-400 border-amber-500/20' };
+			case 'resolved':
+				return { label: 'Resolved', classes: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20' };
+			default:
+				return { label: status, classes: 'bg-text-tertiary/15 text-text-tertiary border-text-tertiary/20' };
+		}
+	}
+
+	function timeRemaining(deadline: string): string {
+		const diff = new Date(deadline).getTime() - Date.now();
+		if (diff <= 0) return 'Expired';
+		const hours = Math.floor(diff / (1000 * 60 * 60));
+		const days = Math.floor(hours / 24);
+		if (days > 0) return `${days}d ${hours % 24}h remaining`;
+		const mins = Math.floor((diff / (1000 * 60)) % 60);
+		return `${hours}h ${mins}m remaining`;
+	}
+
+	const debateThresholdPct = $derived(
+		data.actionCount != null && data.campaign.debateThreshold
+			? Math.min(100, Math.round((data.actionCount / data.campaign.debateThreshold) * 100))
+			: 0
+	);
 </script>
 
 <div class="space-y-6">
@@ -211,6 +241,77 @@
 			{/if}
 		{/snippet}
 	</VerificationPacket>
+
+	<!-- Inline Debate Section -->
+	{#if FEATURES.DEBATE}
+		{#if data.debate}
+			{@const badge = debateStatusBadge(data.debate.status)}
+			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+				<div class="flex items-center justify-between">
+					<h3 class="text-sm font-medium text-text-secondary">Adversarial Debate</h3>
+					<span class="inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-mono {badge.classes}">
+						{badge.label}
+					</span>
+				</div>
+
+				<p class="text-sm text-text-tertiary leading-relaxed">{data.debate.propositionText}</p>
+
+				<div class="flex items-center gap-4 text-xs text-text-tertiary font-mono">
+					<span>{data.debate.argumentCount} argument{data.debate.argumentCount === 1 ? '' : 's'}</span>
+					<span class="text-text-quaternary">&middot;</span>
+					<span>{data.debate.uniqueParticipants} participant{data.debate.uniqueParticipants === 1 ? '' : 's'}</span>
+					{#if data.debate.status === 'active'}
+						<span class="text-text-quaternary">&middot;</span>
+						<span class="text-blue-400">{timeRemaining(data.debate.deadline)}</span>
+					{/if}
+				</div>
+
+				{#if data.debate.status === 'resolved' && data.debate.winningStance}
+					<div class="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-2">
+						<div class="flex items-center gap-2">
+							<span class="text-xs font-medium text-emerald-400">Winning stance: {data.debate.winningStance}</span>
+							{#if data.debate.aiPanelConsensus != null}
+								<span class="text-xs text-text-quaternary">&middot;</span>
+								<span class="text-xs font-mono text-text-tertiary">
+									{Math.round(data.debate.aiPanelConsensus * 100)}% AI consensus
+								</span>
+							{/if}
+						</div>
+						{#if data.debate.winningArgument}
+							<p class="text-sm text-text-tertiary leading-relaxed">
+								{data.debate.winningArgument.body.length > 200
+									? data.debate.winningArgument.body.slice(0, 200) + '...'
+									: data.debate.winningArgument.body}
+							</p>
+						{/if}
+					</div>
+				{/if}
+
+				<a
+					href="/s/{data.debate.templateSlug}/debate/{data.debate.id}"
+					class="inline-flex items-center gap-2 text-sm text-teal-400 hover:text-teal-300 transition-colors"
+				>
+					View full debate
+					<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+					</svg>
+				</a>
+			</div>
+		{:else if data.campaign.debateEnabled && !data.campaign.debateId && data.actionCount != null}
+			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-3">
+				<h3 class="text-sm font-medium text-text-secondary">Adversarial Debate</h3>
+				<p class="text-sm text-text-tertiary">
+					{data.actionCount} of {data.campaign.debateThreshold} verified actions — debate activates at threshold
+				</p>
+				<div class="h-1.5 rounded-full bg-surface-raised overflow-hidden">
+					<div
+						class="h-full rounded-full bg-teal-600/60 transition-all"
+						style="width: {debateThresholdPct}%"
+					></div>
+				</div>
+			</div>
+		{/if}
+	{/if}
 
 	<!-- Decision-Maker Targets -->
 	<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">

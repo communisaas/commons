@@ -14,6 +14,7 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 			db.user.findUnique({
 				where: { id: locals.user.id },
 				include: {
+					// DUAL-WRITE: Remove in S1-07
 					representatives: {
 						include: {
 							representative: {
@@ -29,6 +30,24 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 						},
 						where: {
 							is_active: true
+						}
+					},
+					// New DecisionMaker path via UserDMRelation
+					dmRelations: {
+						include: {
+							decisionMaker: {
+								select: {
+									name: true,
+									party: true,
+									title: true,
+									jurisdiction: true,
+									district: true,
+									active: true
+								}
+							}
+						},
+						where: {
+							isActive: true
 						}
 					}
 				}
@@ -55,8 +74,9 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 			})
 		]);
 
-		// Transform representatives data to simple format for frontend
-		const representatives =
+		// DUAL-WRITE: Read from both sources, prefer DM if populated, fall back to legacy
+		// Transform legacy representatives to simple format
+		const legacyReps =
 			userWithRepresentatives?.representatives?.map((ur) => ({
 				name: ur.representative.name,
 				party: ur.representative.party,
@@ -64,6 +84,25 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				state: ur.representative.state,
 				district: ur.representative.district
 			})) || [];
+
+		// Transform DM relations — derive chamber from title, state from jurisdiction
+		const dmReps =
+			userWithRepresentatives?.dmRelations?.map((dr) => {
+				const title = dr.decisionMaker.title ?? '';
+				const isSenate = title.toLowerCase().includes('senator') || title.toLowerCase().includes('senate');
+				return {
+					name: dr.decisionMaker.name,
+					party: dr.decisionMaker.party ?? '',
+					chamber: isSenate ? 'senate' : 'house',
+					state: dr.decisionMaker.jurisdiction ?? '',
+					district: dr.decisionMaker.district ?? '',
+					title,
+					jurisdiction: dr.decisionMaker.jurisdiction ?? ''
+				};
+			}) || [];
+
+		// Prefer DM path when populated; fall back to legacy. Remove in S1-07.
+		const representatives = dmReps.length > 0 ? dmReps : legacyReps;
 
 		// Transform org memberships for the header bridge
 		const userOrgMemberships = orgMemberships.map((m) => ({
@@ -86,16 +125,13 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				is_verified: locals.user.is_verified || false,
 				verification_method: locals.user.verification_method,
 				verified_at: locals.user.verified_at,
-				// Passkey status (needed for PasskeyUpgrade component)
-				passkey_credential_id: userWithRepresentatives?.passkey_credential_id ?? null,
+				// Passkey status (boolean — credential ID is PII, not sent to client)
+				hasPasskey: Boolean(userWithRepresentatives?.passkey_credential_id),
 				// Privacy-preserving district (hash only)
 				district_hash: locals.user.district_hash,
 				district_verified: locals.user.district_verified,
-				// Wallet integration
-				wallet_address: userWithRepresentatives?.wallet_address ?? null,
-				wallet_type: userWithRepresentatives?.wallet_type ?? null,
-				near_account_id: userWithRepresentatives?.near_account_id ?? null,
-				near_derived_scroll_address: userWithRepresentatives?.near_derived_scroll_address ?? null,
+				// Wallet integration (boolean flags — addresses are PII, not sent to client)
+				hasWallet: Boolean(userWithRepresentatives?.wallet_address),
 				// Representatives data for template resolution
 				representatives: representatives,
 				// Org layer bridge
@@ -115,14 +151,11 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				is_verified: locals.user.is_verified || false,
 				verification_method: locals.user.verification_method,
 				verified_at: locals.user.verified_at,
-				passkey_credential_id: null, // Not available in fallback path
+				hasPasskey: false,
 				district_hash: locals.user.district_hash,
 				district_verified: locals.user.district_verified,
-				// Wallet integration
-				wallet_address: locals.user.wallet_address ?? null,
-				wallet_type: locals.user.wallet_type ?? null,
-				near_account_id: locals.user.near_account_id ?? null,
-				near_derived_scroll_address: locals.user.near_derived_scroll_address ?? null,
+				// Wallet integration (boolean flags — addresses are PII, not sent to client)
+				hasWallet: false,
 				representatives: [],
 				orgMemberships: []
 			}

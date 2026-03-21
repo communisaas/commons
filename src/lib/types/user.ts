@@ -98,13 +98,17 @@ export interface EmailServiceUser {
 	/** Legacy address field for backward compatibility */
 	address?: string | null;
 
-	/** Congressional representatives for template variable resolution */
+	/** Congressional representatives / decision makers for template variable resolution */
 	representatives?: Array<{
 		name: string;
 		party: string;
 		chamber: string;
 		state: string;
 		district: string;
+		/** DecisionMaker title — used to derive chamber when coming from DM model */
+		title?: string;
+		/** DecisionMaker jurisdiction — maps to state in legacy shape */
+		jurisdiction?: string;
 	}>;
 
 	/** Identity verification status for enhanced delivery */
@@ -184,6 +188,8 @@ export function toEmailServiceUser(
 				chamber: string;
 				state: string;
 				district: string;
+				title?: string;
+				jurisdiction?: string;
 			}>) || [],
 
 		// Identity verification

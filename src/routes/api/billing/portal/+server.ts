@@ -9,7 +9,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { loadOrgContext, requireRole } from '$lib/server/org';
+import { loadOrgContext, loadOrgBilling, requireRole } from '$lib/server/org';
 import { getStripe } from '$lib/server/billing/stripe';
 import type { RequestHandler } from './$types';
 
@@ -24,13 +24,14 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 	const { org, membership } = await loadOrgContext(orgSlug, locals.user.id);
 	requireRole(membership.role, 'owner');
 
-	if (!org.stripe_customer_id) {
+	const billing = await loadOrgBilling(org.id);
+	if (!billing.stripe_customer_id) {
 		throw error(400, 'No billing account. Subscribe to a plan first.');
 	}
 
 	const stripe = getStripe();
 	const session = await stripe.billingPortal.sessions.create({
-		customer: org.stripe_customer_id,
+		customer: billing.stripe_customer_id,
 		return_url: `${url.origin}/org/${orgSlug}/settings`
 	});
 

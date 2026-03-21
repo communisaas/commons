@@ -1,7 +1,5 @@
 import type {
-	template_campaign as TemplateCampaign,
-	user_representatives as _UserRepresentatives,
-	representative as _Representative
+	template_campaign as TemplateCampaign
 } from '@prisma/client';
 
 declare module '@prisma/client' {

@@ -14,15 +14,18 @@ export interface OrgContext {
 		max_templates_month: number;
 		dm_cache_ttl_days: number;
 		identity_commitment: string | null;
-		wallet_address: string | null;
-		billing_email: string | null;
-		stripe_customer_id: string | null;
 		createdAt: Date;
 	};
 	membership: {
 		role: OrgRole;
 		joinedAt: Date;
 	};
+}
+
+export interface OrgBilling {
+	stripe_customer_id: string | null;
+	billing_email: string | null;
+	wallet_address: string | null;
 }
 
 /**
@@ -60,9 +63,6 @@ export async function loadOrgContext(slug: string, userId: string): Promise<OrgC
 			max_templates_month: org.max_templates_month,
 			dm_cache_ttl_days: org.dm_cache_ttl_days,
 			identity_commitment: org.identity_commitment,
-			wallet_address: org.wallet_address,
-			billing_email: org.billing_email,
-			stripe_customer_id: org.stripe_customer_id,
 			createdAt: org.createdAt
 		},
 		membership: {
@@ -73,12 +73,29 @@ export async function loadOrgContext(slug: string, userId: string): Promise<OrgC
 }
 
 /**
+ * Load billing-sensitive fields for an org. Use only where needed.
+ */
+export async function loadOrgBilling(orgId: string): Promise<OrgBilling> {
+	const org = await db.organization.findUnique({
+		where: { id: orgId },
+		select: { stripe_customer_id: true, billing_email: true, wallet_address: true }
+	});
+	if (!org) throw error(404, 'Organization not found');
+	return {
+		stripe_customer_id: org.stripe_customer_id,
+		billing_email: org.billing_email,
+		wallet_address: org.wallet_address
+	};
+}
+
+/**
  * Require a minimum role level. Throws 403 if insufficient.
  * Hierarchy: owner > editor > member
  */
 export function requireRole(current: OrgRole, minimum: OrgRole): void {
 	const hierarchy: Record<OrgRole, number> = { member: 0, editor: 1, owner: 2 };
-	if (hierarchy[current] < hierarchy[minimum]) {
+	const currentLevel = hierarchy[current] ?? -1;
+	if (currentLevel < hierarchy[minimum]) {
 		throw error(403, `Requires ${minimum} role or higher`);
 	}
 }

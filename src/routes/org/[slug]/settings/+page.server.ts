@@ -3,9 +3,9 @@ import { getOrgUsage } from '$lib/server/billing/usage';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ parent }) => {
-	const { org } = await parent();
+	const { org, membership } = await parent();
 
-	const [subscription, usage, members, invites] = await Promise.all([
+	const [subscription, usage, members, invites, issueDomains] = await Promise.all([
 		db.subscription.findUnique({ where: { orgId: org.id } }),
 		getOrgUsage(org.id),
 		db.orgMembership.findMany({
@@ -17,7 +17,14 @@ export const load: PageServerLoad = async ({ parent }) => {
 		}),
 		db.orgInvite.findMany({
 			where: { orgId: org.id, accepted: false, expiresAt: { gt: new Date() } },
-			orderBy: { expiresAt: 'asc' }
+			orderBy: { expiresAt: 'asc' },
+			take: 200
+		}),
+		db.orgIssueDomain.findMany({
+			where: { orgId: org.id },
+			select: { id: true, label: true, description: true, weight: true, createdAt: true, updatedAt: true },
+			orderBy: { createdAt: 'asc' },
+			take: 500
 		})
 	]);
 
@@ -45,11 +52,21 @@ export const load: PageServerLoad = async ({ parent }) => {
 			role: m.role,
 			joinedAt: m.joinedAt.toISOString()
 		})),
-		invites: invites.map((i) => ({
-			id: i.id,
-			email: i.email,
-			role: i.role,
-			expiresAt: i.expiresAt.toISOString()
+		invites: ['editor', 'owner'].includes(membership.role)
+			? invites.map((i) => ({
+					id: i.id,
+					email: i.email,
+					role: i.role,
+					expiresAt: i.expiresAt.toISOString()
+				}))
+			: [],
+		issueDomains: issueDomains.map((d) => ({
+			id: d.id,
+			label: d.label,
+			description: d.description,
+			weight: d.weight,
+			createdAt: d.createdAt.toISOString(),
+			updatedAt: d.updatedAt.toISOString()
 		}))
 	};
 };

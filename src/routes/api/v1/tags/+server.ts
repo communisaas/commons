@@ -44,6 +44,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!name || typeof name !== 'string' || !name.trim()) {
 		return apiError('BAD_REQUEST', 'Tag name is required', 400);
 	}
+	if (name.trim().length > 100) {
+		return apiError('BAD_REQUEST', 'Tag name must be 100 characters or fewer', 400);
+	}
 
 	const existing = await db.tag.findUnique({
 		where: { orgId_name: { orgId: auth.orgId, name: name.trim() } }

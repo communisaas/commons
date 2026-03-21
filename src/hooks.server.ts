@@ -210,11 +210,26 @@ const handleCsrfGuard: Handle = async ({ event, resolve }) => {
 
 // Add cross-origin isolation + security headers for ZK proving
 const handleSecurityHeaders: Handle = async ({ event, resolve }) => {
+	const isEmbed = event.url.pathname.startsWith('/embed/');
 	const response = await resolve(event);
 
 	// Set COOP/COEP headers for all responses (SharedArrayBuffer support for ZK proving)
+	// Skip COEP for embed routes — require-corp prevents embedded pages from loading cross-origin resources
 	response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
-	response.headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+	if (!isEmbed) {
+		response.headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+	}
+
+	// For embed routes, override frame-ancestors to allow framing
+	if (isEmbed) {
+		const existingCsp = response.headers.get('Content-Security-Policy');
+		if (existingCsp) {
+			response.headers.set(
+				'Content-Security-Policy',
+				existingCsp.replace(/frame-ancestors\s+[^;]+;?/i, 'frame-ancestors *;')
+			);
+		}
+	}
 
 	// CSP is now managed by SvelteKit's kit.csp in svelte.config.js.
 	// SvelteKit auto-injects nonces for its inline scripts (mode: 'auto').
@@ -269,11 +284,6 @@ const handleRateLimit: Handle = async ({ event, resolve }) => {
 	const { request, url, locals } = event;
 	const method = request.method;
 	const pathname = url.pathname;
-
-	// Bypass rate limiting for demo user
-	if (locals.user?.id === 'user-seed-1') {
-		return resolve(event);
-	}
 
 	// Skip HEAD/OPTIONS entirely
 	if (method === 'HEAD' || method === 'OPTIONS') {

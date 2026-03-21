@@ -5,8 +5,6 @@
 
 	let {
 		templateId,
-		identityCommitment,
-		districtCode = undefined,
 		onRegistered = undefined,
 		recipientCount = 0,
 		isCongressional = false,
@@ -16,8 +14,6 @@
 		onVerifyForChallenge = undefined
 	}: {
 		templateId: string;
-		identityCommitment: string;
-		districtCode?: string;
 		onRegistered?: (stance: 'support' | 'oppose') => void;
 		recipientCount?: number;
 		isCongressional?: boolean;
@@ -42,7 +38,7 @@
 
 		// Minimum 200ms delay so the registering state feels intentional
 		const [success] = await Promise.all([
-			positionState.register(selectedStance, identityCommitment, districtCode),
+			positionState.register(selectedStance),
 			new Promise((resolve) => setTimeout(resolve, 200))
 		]);
 

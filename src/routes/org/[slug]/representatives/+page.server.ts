@@ -1,49 +1,70 @@
+import { error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
-import { requireRole } from '$lib/server/org';
+import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ parent }) => {
-	const { org, membership } = await parent();
-	requireRole(membership.role, 'viewer');
+const PAGE_SIZE = 20;
 
-	// Find distinct countries used by this org's campaigns
-	const campaigns = await db.campaign.findMany({
-		where: { orgId: org.id },
-		select: { targetCountry: true },
-		distinct: ['targetCountry']
-	});
+export const load: PageServerLoad = async ({ parent, url }) => {
+	if (!FEATURES.LEGISLATION) {
+		throw error(404, 'Legislation features not enabled');
+	}
 
-	const countryCodes = campaigns
-		.map((c) => c.targetCountry)
-		.filter((c): c is string => c !== null && c !== 'US');
+	const { org } = await parent();
 
-	// Load international reps for those countries (global table)
-	const representatives =
-		countryCodes.length > 0
-			? await db.internationalRepresentative.findMany({
-					where: { countryCode: { in: countryCodes } },
-					orderBy: [
-						{ countryCode: 'asc' },
-						{ constituencyName: 'asc' },
-						{ name: 'asc' }
-					],
-					take: 200
-				})
-			: [];
+	const cursor = url.searchParams.get('cursor') || '';
+
+	const dmSelect = {
+		id: true,
+		type: true,
+		title: true,
+		name: true,
+		firstName: true,
+		lastName: true,
+		party: true,
+		jurisdiction: true,
+		district: true,
+		photoUrl: true,
+		active: true
+	} as const;
+
+	const [rawFollowed, followedCount, discover] = await Promise.all([
+		db.orgDMFollow.findMany({
+			where: { orgId: org.id },
+			take: PAGE_SIZE + 1,
+			orderBy: { followedAt: 'desc' },
+			...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+			include: {
+				decisionMaker: { select: dmSelect }
+			}
+		}),
+		db.orgDMFollow.count({ where: { orgId: org.id } }),
+		db.decisionMaker.findMany({
+			where: {
+				active: true,
+				followers: { none: { orgId: org.id } }
+			},
+			orderBy: { updatedAt: 'desc' },
+			take: 12,
+			select: dmSelect
+		})
+	]);
+
+	const hasMore = rawFollowed.length > PAGE_SIZE;
+	const followed = rawFollowed.slice(0, PAGE_SIZE);
+	const nextCursor = hasMore ? followed[followed.length - 1]?.id ?? null : null;
 
 	return {
-		representatives: representatives.map((r) => ({
-			id: r.id,
-			name: r.name,
-			party: r.party,
-			constituencyId: r.constituencyId,
-			constituencyName: r.constituencyName,
-			chamber: r.chamber,
-			office: r.office,
-			phone: r.phone,
-			email: r.email,
-			websiteUrl: r.websiteUrl,
-			countryCode: r.countryCode
-		}))
+		followed: followed.map((f) => ({
+			id: f.id,
+			reason: f.reason,
+			alertsEnabled: f.alertsEnabled,
+			followedAt: f.followedAt.toISOString(),
+			decisionMaker: f.decisionMaker
+		})),
+		followedCount,
+		hasMore,
+		nextCursor,
+		discover
 	};
 };

@@ -14,7 +14,10 @@
  */
 
 import type { PrismaClient } from '@prisma/client';
+import { maskEmail } from '$lib/server/org/mask';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
+import { spawnDebateForCampaign } from '$lib/server/debates/spawn';
+import { FEATURES } from '$lib/config/features';
 import {
 	fetchPeople,
 	fetchTags,
@@ -411,9 +414,10 @@ async function processPeopleBatch(
 				imported++;
 			}
 		} catch (err) {
-			const email = person.email_addresses?.[0]?.address ?? 'unknown';
+			const email = person.email_addresses?.[0]?.address;
+			const maskedEmail = email ? maskEmail(email) : 'unknown';
 			const msg = err instanceof Error ? err.message : String(err);
-			errors.push(`Person ${email}: ${msg}`);
+			errors.push(`Person ${maskedEmail}: ${msg}`);
 			skipped++;
 		}
 	}
@@ -573,6 +577,29 @@ async function syncActions(
 									sentAt
 								}
 							});
+
+							// Check debate auto-spawn threshold (parent runSync is already inside waitUntil)
+							if (FEATURES.DEBATE) {
+								void (async () => {
+									try {
+										const c = await prisma.campaign.findUnique({
+											where: { id: campaign.id },
+											select: { debateEnabled: true, debateThreshold: true, debateId: true }
+										});
+										if (!c?.debateEnabled || c.debateId) return;
+
+										const count = await prisma.campaignAction.count({
+											where: { campaignId: campaign.id, verified: true }
+										});
+										if (count >= (c.debateThreshold ?? 50)) {
+											await spawnDebateForCampaign(campaign.id);
+											console.log(`[debate-auto-spawn] Spawned debate for campaign ${campaign.id} at ${count} actions`);
+										}
+									} catch (e) {
+										console.error('[debate-auto-spawn] Failed:', e);
+									}
+								})();
+							}
 						}
 					}
 				} catch (err) {

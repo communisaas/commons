@@ -8,8 +8,25 @@ import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { FEATURES } from '$lib/config/features';
-import { VALID_TRIGGER_TYPES, VALID_STEP_TYPES } from '$lib/server/automation/types';
+import { z } from 'zod';
 import type { RequestHandler } from './$types';
+
+const TriggerSchema = z.discriminatedUnion('type', [
+	z.object({ type: z.literal('supporter_created') }),
+	z.object({ type: z.literal('campaign_action'), campaignId: z.string().optional() }),
+	z.object({ type: z.literal('event_rsvp') }),
+	z.object({ type: z.literal('event_checkin') }),
+	z.object({ type: z.literal('donation_completed') }),
+	z.object({ type: z.literal('tag_added'), tagId: z.string().min(1) }),
+]);
+
+const StepSchema = z.discriminatedUnion('type', [
+	z.object({ type: z.literal('send_email'), emailSubject: z.string().min(1).max(200), emailBody: z.string().min(1).max(10000) }),
+	z.object({ type: z.literal('add_tag'), tagId: z.string().min(1) }),
+	z.object({ type: z.literal('remove_tag'), tagId: z.string().min(1) }),
+	z.object({ type: z.literal('delay'), delayMinutes: z.number().int().min(1).max(43200) }),
+	z.object({ type: z.literal('condition'), field: z.enum(['engagementTier', 'verified', 'hasTag']), operator: z.enum(['eq', 'gte', 'lte', 'exists']), value: z.union([z.string(), z.number(), z.boolean()]), thenStepIndex: z.number().int().min(0), elseStepIndex: z.number().int().min(0) }),
+]);
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.AUTOMATION) throw error(404, 'Not found');
@@ -30,25 +47,21 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	// Validate trigger
-	if (!trigger || typeof trigger !== 'object' || !trigger.type) {
-		throw error(400, 'Trigger is required and must have a type');
-	}
-	if (!VALID_TRIGGER_TYPES.includes(trigger.type)) {
-		throw error(400, `Invalid trigger type. Must be one of: ${VALID_TRIGGER_TYPES.join(', ')}`);
+	let parsedTrigger;
+	try {
+		parsedTrigger = TriggerSchema.parse(trigger);
+	} catch (e) {
+		if (e instanceof z.ZodError) throw error(400, `Invalid trigger: ${e.errors[0]?.message ?? 'validation failed'}`);
+		throw e;
 	}
 
 	// Validate steps
-	if (!Array.isArray(steps) || steps.length < 1) {
-		throw error(400, 'At least one step is required');
-	}
-	for (let i = 0; i < steps.length; i++) {
-		const step = steps[i];
-		if (!step || typeof step !== 'object' || !step.type) {
-			throw error(400, `Step ${i} must have a type`);
-		}
-		if (!VALID_STEP_TYPES.includes(step.type)) {
-			throw error(400, `Step ${i} has invalid type. Must be one of: ${VALID_STEP_TYPES.join(', ')}`);
-		}
+	let parsedSteps;
+	try {
+		parsedSteps = z.array(StepSchema).min(1).max(20).parse(steps);
+	} catch (e) {
+		if (e instanceof z.ZodError) throw error(400, `Invalid steps: ${e.errors[0]?.message ?? 'validation failed'}`);
+		throw e;
 	}
 
 	const workflow = await db.workflow.create({
@@ -56,8 +69,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			orgId: org.id,
 			name: name.trim(),
 			description: description?.trim() || null,
-			trigger,
-			steps,
+			trigger: parsedTrigger,
+			steps: parsedSteps,
 			enabled: false
 		}
 	});
