@@ -1,0 +1,361 @@
+name: Intelligence Loop Crons
+
+on:
+  schedule:
+    # Federal legislation sync: every 6 hours
+    - cron: '0 */6 * * *'
+    # State legislation sync: daily at 06:00 UTC
+    - cron: '0 6 * * *'
+    # Alert digest: Monday 14:00 UTC
+    - cron: '0 14 * * 1'
+    # Vote tracker: every 2 hours
+    - cron: '0 */2 * * *'
+    # Scorecard recompute: daily at 03:00 UTC
+    - cron: '0 3 * * *'
+
+  repository_dispatch:
+    types:
+      - legislation-sync-federal
+      - legislation-sync-state
+      - alert-digest
+      - vote-tracker
+      - scorecard-recompute
+      - anchor-receipts
+
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Which job to run'
+        required: true
+        type: choice
+        options:
+          - legislation-sync-federal
+          - legislation-sync-state
+          - alert-digest
+          - vote-tracker
+          - scorecard-recompute
+          - anchor-receipts
+          - all
+
+env:
+  PRODUCTION_URL: ${{ secrets.PRODUCTION_URL || 'https://commons.email' }}
+
+jobs:
+  legislation-sync-federal:
+    if: >-
+      github.event_name == 'repository_dispatch' && github.event.action == 'legislation-sync-federal' ||
+      github.event_name == 'workflow_dispatch' && (github.event.inputs.job == 'legislation-sync-federal' || github.event.inputs.job == 'all') ||
+      github.event_name == 'schedule' && github.event.schedule == '0 */6 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download previous cursor
+        id: download-cursor
+        uses: actions/download-artifact@v4
+        with:
+          name: legislation-cursor-federal
+          path: /tmp/cursor
+        continue-on-error: true
+
+      - name: Read cursor
+        id: cursor
+        run: |
+          if [ -f /tmp/cursor/cursor-federal.json ]; then
+            CURSOR=$(cat /tmp/cursor/cursor-federal.json)
+            echo "value=$CURSOR" >> $GITHUB_OUTPUT
+            echo "Found cursor: $CURSOR"
+          else
+            echo "value=" >> $GITHUB_OUTPUT
+            echo "No previous cursor found — starting fresh"
+          fi
+
+      - name: Sync federal legislation
+        id: sync
+        run: |
+          echo "Triggering federal legislation sync at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+          CURSOR_PARAM=""
+          if [ -n "${{ steps.cursor.outputs.value }}" ]; then
+            CURSOR_PARAM="&cursor=${{ steps.cursor.outputs.value }}"
+          fi
+
+          response=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "User-Agent: GitHub-Actions-Cron" \
+            --max-time 300 \
+            "${{ env.PRODUCTION_URL }}/api/cron/legislation-sync?source=federal&limit=50${CURSOR_PARAM}")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | head -n-1)
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+          echo "http_code=$http_code" >> $GITHUB_OUTPUT
+          echo "response=$body" >> $GITHUB_OUTPUT
+
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Federal sync failed with HTTP $http_code"
+            exit 1
+          fi
+
+          # Extract and save next cursor
+          next_cursor=$(echo "$body" | jq -r '.next_cursor // empty')
+          mkdir -p /tmp/cursor-out
+          if [ -n "$next_cursor" ] && [ "$next_cursor" != "null" ]; then
+            echo "$next_cursor" > /tmp/cursor-out/cursor-federal.json
+          fi
+
+      - name: Upload cursor artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legislation-cursor-federal
+          path: /tmp/cursor-out/cursor-federal.json
+          retention-days: 7
+          overwrite: true
+        continue-on-error: true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Federal Legislation Sync" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**HTTP Status:** ${{ steps.sync.outputs.http_code }}" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.sync.outputs.response }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  legislation-sync-state:
+    if: >-
+      github.event_name == 'repository_dispatch' && github.event.action == 'legislation-sync-state' ||
+      github.event_name == 'workflow_dispatch' && (github.event.inputs.job == 'legislation-sync-state' || github.event.inputs.job == 'all') ||
+      github.event_name == 'schedule' && github.event.schedule == '0 6 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download previous cursor
+        id: download-cursor
+        uses: actions/download-artifact@v4
+        with:
+          name: legislation-cursor-state
+          path: /tmp/cursor
+        continue-on-error: true
+
+      - name: Read cursor
+        id: cursor
+        run: |
+          if [ -f /tmp/cursor/cursor-state.json ]; then
+            CURSOR=$(cat /tmp/cursor/cursor-state.json)
+            echo "value=$CURSOR" >> $GITHUB_OUTPUT
+          else
+            echo "value=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Sync state legislation
+        id: sync
+        run: |
+          echo "Triggering state legislation sync at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+          CURSOR_PARAM=""
+          if [ -n "${{ steps.cursor.outputs.value }}" ]; then
+            CURSOR_PARAM="&cursor=${{ steps.cursor.outputs.value }}"
+          fi
+
+          response=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "User-Agent: GitHub-Actions-Cron" \
+            --max-time 300 \
+            "${{ env.PRODUCTION_URL }}/api/cron/legislation-sync?source=state&limit=50${CURSOR_PARAM}")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | head -n-1)
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+          echo "http_code=$http_code" >> $GITHUB_OUTPUT
+          echo "response=$body" >> $GITHUB_OUTPUT
+
+          if [ "$http_code" != "200" ]; then
+            echo "::error::State sync failed with HTTP $http_code"
+            exit 1
+          fi
+
+          next_cursor=$(echo "$body" | jq -r '.next_cursor // empty')
+          mkdir -p /tmp/cursor-out
+          if [ -n "$next_cursor" ] && [ "$next_cursor" != "null" ]; then
+            echo "$next_cursor" > /tmp/cursor-out/cursor-state.json
+          fi
+
+      - name: Upload cursor artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legislation-cursor-state
+          path: /tmp/cursor-out/cursor-state.json
+          retention-days: 7
+          overwrite: true
+        continue-on-error: true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## State Legislation Sync" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**HTTP Status:** ${{ steps.sync.outputs.http_code }}" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.sync.outputs.response }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  alert-digest:
+    if: >-
+      github.event_name == 'repository_dispatch' && github.event.action == 'alert-digest' ||
+      github.event_name == 'workflow_dispatch' && (github.event.inputs.job == 'alert-digest' || github.event.inputs.job == 'all') ||
+      github.event_name == 'schedule' && github.event.schedule == '0 14 * * 1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send alert digests
+        id: digest
+        run: |
+          echo "Triggering alert digest at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+          response=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "User-Agent: GitHub-Actions-Cron" \
+            --max-time 120 \
+            "${{ env.PRODUCTION_URL }}/api/cron/alert-digest")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | head -n-1)
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+          echo "http_code=$http_code" >> $GITHUB_OUTPUT
+          echo "response=$body" >> $GITHUB_OUTPUT
+
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Alert digest failed with HTTP $http_code"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Alert Digest" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**HTTP Status:** ${{ steps.digest.outputs.http_code }}" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.digest.outputs.response }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  vote-tracker:
+    if: >-
+      github.event_name == 'repository_dispatch' && github.event.action == 'vote-tracker' ||
+      github.event_name == 'workflow_dispatch' && (github.event.inputs.job == 'vote-tracker' || github.event.inputs.job == 'all') ||
+      github.event_name == 'schedule' && github.event.schedule == '0 */2 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Track votes
+        id: track
+        run: |
+          echo "Triggering vote tracker at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+          response=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "User-Agent: GitHub-Actions-Cron" \
+            --max-time 300 \
+            "${{ env.PRODUCTION_URL }}/api/cron/vote-tracker")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | head -n-1)
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+          echo "http_code=$http_code" >> $GITHUB_OUTPUT
+          echo "response=$body" >> $GITHUB_OUTPUT
+
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Vote tracker failed with HTTP $http_code"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Vote Tracker" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**HTTP Status:** ${{ steps.track.outputs.http_code }}" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.track.outputs.response }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  scorecard-recompute:
+    if: >-
+      github.event_name == 'repository_dispatch' && github.event.action == 'scorecard-recompute' ||
+      github.event_name == 'workflow_dispatch' && (github.event.inputs.job == 'scorecard-recompute' || github.event.inputs.job == 'all') ||
+      github.event_name == 'schedule' && github.event.schedule == '0 3 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Recompute scorecards
+        id: recompute
+        run: |
+          echo "Triggering scorecard recompute at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+          response=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "User-Agent: GitHub-Actions-Cron" \
+            --max-time 120 \
+            "${{ env.PRODUCTION_URL }}/api/cron/scorecard-recompute")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | head -n-1)
+
+          echo "HTTP Status: $http_code"
+          echo "Response: $body"
+          echo "http_code=$http_code" >> $GITHUB_OUTPUT
+          echo "response=$body" >> $GITHUB_OUTPUT
+
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Scorecard recompute failed with HTTP $http_code"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Scorecard Recompute" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**HTTP Status:** ${{ steps.recompute.outputs.http_code }}" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.recompute.outputs.response }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  anchor-receipts:
+    name: Anchor accountability receipts
+    if: >-
+      github.event_name == 'repository_dispatch' && github.event.action == 'anchor-receipts' ||
+      github.event_name == 'workflow_dispatch' && (github.event.inputs.job == 'anchor-receipts' || github.event.inputs.job == 'all') ||
+      github.event_name == 'schedule' && github.event.schedule == '0 */2 * * *'
+    needs: [vote-tracker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx prisma generate
+      - name: Anchor receipts
+        id: anchor
+        run: npx tsx scripts/anchor-receipts.ts
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Anchor Receipts" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
