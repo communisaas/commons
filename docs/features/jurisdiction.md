@@ -706,7 +706,7 @@ async function searchCounties(query: string): Promise<JurisdictionSuggestion[]> 
 
 ### Dependencies
 1. **Database Connection** (from Phase 0 audit)
-   - Supabase connection string needed for Prisma operations
+   - PostgreSQL connection string needed for Prisma operations
    - Development can continue without database (components work standalone)
 
 2. **Template Creator Refactor**

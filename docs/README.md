@@ -16,7 +16,7 @@
 **"How do I build frontend features?"** → `frontend.md`
 **"How do I test?"** → `development/testing.md`
 **"Voice and design language?"** → `design/voice.md`
-**"What changed and why?"** → `DOCUMENTATION-AUDIT.md`
+**"What changed and why?"** → `archive/2026-03-documentation-audit/DOCUMENTATION-AUDIT.md`
 
 ---
 
@@ -37,7 +37,7 @@ The org layer is what directly competes with Action Network, EveryAction, and Qu
 | File | Purpose |
 |------|---------|
 | `README.md` | This documentation map |
-| `DOCUMENTATION-AUDIT.md` | Documentation health audit and cleanup tracker |
+| `archive/.../DOCUMENTATION-AUDIT.md` | Documentation health audit and cleanup tracker (completed 2026-03-09) |
 | `implementation-status.md` | What's done, in progress, blocked |
 | `architecture.md` | Commons/voter-protocol separation, privacy architecture |
 | `integration.md` | CWC API, OAuth, voter-protocol, identity verification |
@@ -68,7 +68,7 @@ Business strategy, pricing, and launch planning.
 - `launch.md` — Historical: Jan 2025 launch planning
 - `index.md` — Strategy reading guide
 
-### `features/` (11 files)
+### `features/` (14 files)
 Feature-specific documentation (person-facing).
 
 - `templates.md` — Template system (creation, customization, moderation)
@@ -81,6 +81,8 @@ Feature-specific documentation (person-facing).
 - `search.md` — Template search (Gemini embeddings + pgvector)
 - `sharing.md` — Sharing and social proof
 - `abstraction.md` — Legislative body abstraction layer
+- `coordination-integrity.md` — 5 coordination integrity metrics (GDS, ALD, entropy, burst, CAI)
+- `live-updates.md` — Campaign SSE stream architecture
 - `index.md` — Feature implementation guide
 
 ### `specs/` (18 files + analytics/)
@@ -146,16 +148,28 @@ Architectural deep-dives.
 - `subscription-cost-model.md` — Subscription pricing model
 - `decision-record.md` — Architecture decision log
 
-### `design/` (7 files + patterns/)
-Design system and voice.
+### `design/` (20+ files + patterns/)
+Design system, voice, architecture plans, and security hardening.
 
-- `voice.md` — Pragmatic cypherpunk voice guide
-- `design-system.md` — Component design system
-- `TYPOGRAPHY-SYSTEM.md` — Typography standards
-- `PERCEPTUAL-BRIDGE.md` — Person-layer / org-layer design bridge
+**Core design:**
+- `design-system.md`, `voice.md`, `TYPOGRAPHY-SYSTEM.md` — Design system, voice, typography
+- `PERCEPTUAL-BRIDGE.md` — Person/org layer design bridge
 - `jurisdiction-ux-strategy.md` — Jurisdiction UX patterns
-- `index.md` — Design documentation index
 - `patterns/` — UX patterns (4 files): identity-verification, location-filtering, privacy-governance, template-discovery
+
+**Architecture & intelligence:**
+- `INTELLIGENCE-LOOP-PLAN.md`, `INTELLIGENCE-LOOP-DEPTH.md` — 6-phase DM intelligence loop
+- `ACCOUNTABILITY-RECEIPT.md` — Proof-weighted DM tracking with cryptographic receipts
+- `ORG-UX-AUDIT.md`, `ORG-REDESIGN-THESIS.md` — Org layer audit + redesign (COMPLETE)
+- `SEAM-RESOLUTION-PLAN.md` — CongressionalRep→DecisionMaker migration (COMPLETE)
+
+**Security:**
+- `SECURITY-HARDENING-LOG.md` — 27 brutalist audit rounds, 180+ findings categorized
+
+**Future plans:**
+- `AUTOMATION-UI-PLAN.md`, `DEBATE-CAMPAIGN-PLAN.md`, `SMS-RENABLE-PLAN.md`, `CROSS-BORDER-PLAN.md`
+
+**Index:** `index.md` — Full design documentation guide
 
 ### `research/` (6 files)
 Research and analysis.
@@ -174,7 +188,7 @@ Research and analysis.
 | `congressional/` | 3 | Delivery system spec, congressional submit implementation, index |
 | `adr/` | 5 | Architecture Decision Records (006, 007, 010, 011, WP-008) |
 | `outreach/` | 2 | IACA gap tracker, request emails |
-| `archive/` | 12+ | Superseded specs, completed migrations, historical planning |
+| `archive/` | 50+ | Superseded specs, completed migrations, historical planning, brutalist round docs |
 
 ---
 
@@ -189,6 +203,8 @@ Research and analysis.
 | Org Platform Extension | `architecture/platform-extension.md` |
 | Agentic Civic Infrastructure | `specs/agentic-civic-infrastructure.md` |
 | Chain Abstraction | `specs/chain-abstraction-architecture.md` |
+| Intelligence Loop | `design/INTELLIGENCE-LOOP-DEPTH.md` |
+| Security Hardening | `design/SECURITY-HARDENING-LOG.md` |
 | Integration Remediation | `specs/INTEGRATION-REMEDIATION-PLAN.md` |
 | Vision & Design Thesis | `strategy/vision.md` |
 | Pricing & Economics | `strategy/economics.md` |
@@ -204,4 +220,4 @@ Research and analysis.
 
 ---
 
-*Commons | Documentation Map | 2026-03-09*
+*Commons | Documentation Map | 2026-03-19*

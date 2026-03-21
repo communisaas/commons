@@ -34,7 +34,7 @@ User query: "my landlord won't fix heating"
     ↓
 Text embedding (Gemini Embedding API - FREE)
     ↓
-Vector similarity search (Supabase pgvector)
+Vector similarity search (pgvector)
     ↓
 Matching templates:
   1. "Report housing code violations" (0.89 similarity)
@@ -48,7 +48,7 @@ Matching templates:
 
 ### Existing Implementation (See: `docs/GOOGLE-GEMINI-EMBEDDING-INTEGRATION.md`):
 1. ✅ Gemini Embedding API integration (`gemini-embedding-001`)
-2. ✅ Supabase pgvector extension enabled
+2. ✅ pgvector extension enabled
 3. ✅ `template_embeddings` table with vector storage
 4. ✅ Scripts for generating/migrating embeddings:
    - `scripts/generate-template-embeddings.ts`

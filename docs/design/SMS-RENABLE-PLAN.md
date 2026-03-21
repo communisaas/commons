@@ -1,7 +1,7 @@
 # SMS / Calling Re-Enablement Plan
 
 **Date**: 2026-03-17
-**Status**: Plan (not yet implemented)
+**Status**: Partially implemented — SMS consent model (smsStatus field, blast filter, STOP webhook) DONE. Remaining P0-P2 gaps documented below.
 
 ---
 
@@ -46,7 +46,7 @@ The implementation is code-complete but **not operationally live** because:
 
 | # | Gap | Risk | Effort |
 |---|-----|------|--------|
-| 1 | **SMS consent field on Supporter** | TCPA violation. Sending SMS without express consent is a legal risk and can result in $500-$1,500 per message in statutory damages. | Add `smsStatus` enum field (`opted_in`, `opted_out`, `unknown`) to Supporter model. Default `unknown`. Blast engine must filter on `smsStatus: 'opted_in'` instead of `emailStatus`. |
+| 1 | ~~**SMS consent field on Supporter**~~ | ~~TCPA violation.~~ | **DONE** — `smsStatus` field added (`none\|subscribed\|unsubscribed\|stopped`, default `none`). Blast engine filters on `smsStatus: 'subscribed'`. Migration: `20260317_add_sms_consent_status`. |
 | 2 | **STOP keyword processing** | Twilio handles carrier-level STOP, but the app needs to update `smsStatus` to `opted_out` when Twilio sends an opt-out webhook. Otherwise the app will keep queueing messages that Twilio silently drops (wasting money). | Add inbound message webhook at `/api/sms/inbound` that checks for STOP/UNSUBSCRIBE keywords and updates `supporter.smsStatus`. |
 | 3 | **Twilio credentials in production** | Without them, every SMS/call attempt throws `TWILIO_ACCOUNT_SID env var is required`. | Set via `wrangler pages secret put` for each of the three env vars. |
 | 4 | **10DLC registration** | US carriers block or throttle A2P (application-to-person) SMS from unregistered numbers. Without 10DLC brand + campaign registration, messages will be filtered at 1 msg/sec and many will be silently dropped. | Register brand in Twilio Console, create A2P 10DLC campaign (typically $4/mo + one-time $4 registration fee per campaign). This is a Twilio Console task, not code. |
@@ -125,10 +125,10 @@ Required for A2P SMS in the US since 2023:
 
 ### Minimum viable (P0 — blocks first real SMS)
 
-- [ ] Add `smsStatus` field to Supporter model (`opted_in | opted_out | unknown`, default `unknown`)
-- [ ] Run Prisma migration
-- [ ] Update `send-blast.ts` to filter on `smsStatus: 'opted_in'` instead of `emailStatus: 'subscribed'`
-- [ ] Add inbound SMS webhook (`/api/sms/inbound`) to process STOP keywords and update `smsStatus`
+- [x] Add `smsStatus` field to Supporter model (`none|subscribed|unsubscribed|stopped`, default `none`)
+- [x] Run Prisma migration (`20260317_add_sms_consent_status`)
+- [x] Update `send-blast.ts` to filter on `smsStatus: 'subscribed'`
+- [x] Add STOP webhook processing (6 keywords) and update `smsStatus`
 - [ ] Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` in Cloudflare Pages secrets
 - [ ] Register 10DLC brand + campaign in Twilio Console
 - [ ] Test with a single supporter (team member) end-to-end: opt-in, send blast, receive SMS, STOP, verify opt-out

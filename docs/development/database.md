@@ -173,7 +173,7 @@ The schema contains ~40 models. Grouped by domain:
 
 | Model | Purpose |
 |-------|---------|
-| `Intelligence` | News/legislative/regulatory intelligence with pgvector embeddings (`vector(1024)`). |
+| `Intelligence` | News/legislative/regulatory intelligence with pgvector embeddings (`vector(768)`). |
 | `ParsedDocumentCache` | Cached parsed documents (JSONB) with TTL and hit counting. |
 | `ResolvedContact` | Global resolved contact cache with 14-day TTL. |
 
@@ -184,7 +184,7 @@ The schema contains ~40 models. Grouped by domain:
 The `Intelligence` model uses pgvector for semantic search:
 
 ```prisma
-embedding Unsupported("vector(1024)")?
+embedding Unsupported("vector(768)")?
 ```
 
 The HNSW index, GIN indexes on `topics`, and full-text search tsvector column are added via raw SQL migrations (not expressible in Prisma schema). The local Docker image is `pgvector/pgvector:pg16`, which ships with the extension pre-installed.

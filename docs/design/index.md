@@ -1,6 +1,6 @@
 # Design Documentation
 
-**Design system and voice for Commons.**
+**Design system, voice, architecture plans, and security hardening for Commons.**
 
 ---
 
@@ -24,17 +24,58 @@ Start here. Everything else references this.
 
 **How one verified action appears in three worlds.** The design philosophy connecting the person-facing experience (built) to the org-facing experience (building). Read this before designing any org-layer surface.
 
-### [ORG-UX-AUDIT.md](ORG-UX-AUDIT.md) — Org Layer UX Audit (2026-03-17)
+### [ORG-UX-AUDIT.md](ORG-UX-AUDIT.md) — Org Layer UX Audit (COMPLETE)
 
-**Critical finding: the org layer implementation diverged from PERCEPTUAL-BRIDGE.md.** Multi-agent critique (Claude, Codex, Gemini) + adversarial debate. 13 findings, all validated. The interface makes verification a feature of a CRM instead of making CRM a consequence of verification. Read this before any org-layer work.
+Multi-agent critique found the org layer diverged from PERCEPTUAL-BRIDGE.md — built CRM patterns instead of verification-first. 13 findings, all validated. Redesign completed 2026-03-17.
 
-### [ORG-REDESIGN-THESIS.md](ORG-REDESIGN-THESIS.md) — Org Layer Redesign Direction
+### [ORG-REDESIGN-THESIS.md](ORG-REDESIGN-THESIS.md) — Org Layer Redesign (COMPLETE)
 
-**The fix: invert the information hierarchy.** Every screen opens with proof/power/verification state, arrives at operational tools secondarily. Prioritized implementation plan (P0-P3). Derived from the audit findings + the original PERCEPTUAL-BRIDGE.md vision.
+Inverted information hierarchy: proof/power/verification state leads every screen. 18 tasks, 4 review gates, all passed. The canonical reference for org-layer design philosophy.
 
 ### [jurisdiction-ux-strategy.md](jurisdiction-ux-strategy.md) — Jurisdiction UX
 
 **Plain language to structured geospatial data.** Agent-assisted jurisdiction assignment for template creators.
+
+---
+
+## Intelligence & Accountability
+
+### [INTELLIGENCE-LOOP-PLAN.md](INTELLIGENCE-LOOP-PLAN.md) — Decision-Maker Intelligence Loop
+
+**The 6-phase feedback loop: monitor → alert → mobilize → deliver → track → score.** Implemented 2026-03-17/18. Phases A-F with 3 review gates. Federal + state bill ingestion, pgvector relevance, SES delivery tracking, vote correlation, per-DM scorecards.
+
+### [INTELLIGENCE-LOOP-DEPTH.md](INTELLIGENCE-LOOP-DEPTH.md) — Intelligence Loop Depth Expansion
+
+**From campaign-scoped to relationship-scoped.** Canonical Representative entity, bill full-text search, org→DM follow/watch, activity feed, org discovery. The missing layers that make this an intelligence platform rather than a campaign tool with analytics.
+
+### [ACCOUNTABILITY-RECEIPT.md](ACCOUNTABILITY-RECEIPT.md) — Proof-Weighted Decision-Maker Tracking
+
+**What did the decision-maker do given what they provably knew?** Cryptographic accountability receipts: proof weight, temporal causality chains, SHA-256 attestations, cross-org proof pressure, Merkle anchoring. Implemented 2026-03-17.
+
+---
+
+## Completed Architecture Plans
+
+### [SEAM-RESOLUTION-PLAN.md](SEAM-RESOLUTION-PLAN.md) — Seam Resolution (COMPLETE)
+
+3 seams, 19 tasks, 3 review gates. CongressionalRep→DecisionMaker migration, batch ingestion optimization, debate integration.
+
+### [PROCEED-PLAN.md](PROCEED-PLAN.md) — Post-Redesign Work (COMPLETE)
+
+Usage enforcement (6 surfaces), OG images, campaign SSE stream, report hints, /about/integrity page.
+
+### [SECURITY-HARDENING-LOG.md](SECURITY-HARDENING-LOG.md) — Security Hardening Log
+
+27 rounds of brutalist security auditing. 180+ findings across PII projection, input validation, authorization, race conditions, authentication, and infrastructure. Comprehensive accepted risk register.
+
+---
+
+## Future Plans
+
+### [AUTOMATION-UI-PLAN.md](AUTOMATION-UI-PLAN.md) — Automation UI (~695 LoC)
+### [DEBATE-CAMPAIGN-PLAN.md](DEBATE-CAMPAIGN-PLAN.md) — Debate Integration (~5 days)
+### [SMS-RENABLE-PLAN.md](SMS-RENABLE-PLAN.md) — SMS Re-enablement (~6 hours + TCPA)
+### [CROSS-BORDER-PLAN.md](CROSS-BORDER-PLAN.md) — Cross-Border Coalitions (~5 weeks, Canada first)
 
 ---
 

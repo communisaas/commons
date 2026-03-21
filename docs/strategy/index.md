@@ -10,10 +10,10 @@
 
 The authoritative plan. Phase 0-3 feature sequence, key flows, competitive positioning against the entire landscape. Updated March 2026.
 
-- **Phase 0**: Ship the Verification Loop (current — 4-6 weeks)
-- **Phase 1**: Compete on Verification, Not Features (months 2-4)
-- **Phase 2**: Transcend the Landscape (months 4-8) — not just AN, the entire competitive field
-- **Phase 3**: Transcend the Paradigm (months 8-14) — debates, agentic delegation, international, cross-border coalitions
+- **Phase 0**: Ship the Verification Loop — COMPLETE (2026-03-11)
+- **Phase 1**: Compete on Verification, Not Features — COMPLETE (2026-03-11)
+- **Phase 2**: Transcend the Landscape — COMPLETE (2026-03-13)
+- **Phase 3**: Transcend the Paradigm (next) — debates, agentic delegation, international, cross-border coalitions
 
 ### [economics.md](economics.md) — Unit Economics
 
@@ -43,7 +43,7 @@ Commons serves **two audiences** through shared verification infrastructure:
 - Politically neutral: serves progressive, conservative, nonpartisan, and domain-obsessed orgs equally
 - Described in: `product-roadmap.md`, `economics.md`
 
-Both layers ship in Phase 1. The org layer is what competes with the entire advocacy landscape. The person layer is what makes competition structurally impossible — verification infrastructure that took years to build and cannot be bolted on after the fact.
+Both layers are shipped and deployed. The org layer is what competes with the entire advocacy landscape. The person layer is what makes competition structurally impossible — verification infrastructure that took years to build and cannot be bolted on after the fact.
 
 ---
 

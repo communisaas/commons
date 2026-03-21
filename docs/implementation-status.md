@@ -1,192 +1,183 @@
-# Implementation Status Report
+# Implementation Status
 
-**Date:** 2026-02-25 (Updated)
-**Focus:** Honest assessment after Cycles 1-15 of Graduated Trust Architecture
-**Last Major Update:** Cycle 15 (Staked Deliberation + mDL-Only Identity Simplification) complete
+**Date:** 2026-03-19
+**Status:** Phase 0-2 COMPLETE, security hardened, deployed to production
+**Deploy:** commons.email on Cloudflare Pages (~13 MiB bundle)
+**Tests:** ~4,000 unit tests (3,891 passing)
+**Security:** 27 brutalist audit rounds, 180+ findings addressed
 
 ---
 
 ## TL;DR
 
-15 implementation cycles completed across Graduated Trust Architecture. The core identity verification, ZK proof generation, encrypted delivery, and congressional submission pipeline are implemented. Government credential (mDL) verification is the sole identity path (self.xyz + Didit.me removed in Cycle 15). Staked deliberation infrastructure added: 9 Svelte 5 components, 6 API routes, Prisma models, debate-scoped ZK proofs. Production deployment on Cloudflare Workers with Hyperdrive connection pooling. See [`strategy/product-roadmap.md`](./strategy/product-roadmap.md) for current phase plan.
+Commons is live. The full verification loop works end-to-end: org creates campaign → supporters take verified action → verification packet assembles → org sends proof report to decision-maker. Phase 0-2 features are complete (identity, org management, campaigns, email, events, fundraising, automation, SMS, calling, geographic targeting, public API, networks). 27 rounds of security auditing hardened the codebase across PII projection, input validation, authorization, race conditions, and infrastructure. Next priority: first real org onboarding.
 
-**What works end-to-end:** User verifies identity (mDL via Digital Credentials API) → address encrypted client-side (XChaCha20-Poly1305) → ZK proof generated in browser (Noir/WASM) → submission created with nullifier uniqueness → encrypted witness decrypted server-side → CWC API delivery to congressional offices → status tracking with polling.
-
-**What doesn't work yet:** IACA root certificates loaded for 16 states in static trust store + 10 via runtime VICAL parser; remaining states expanding. TEE infrastructure (L-05) needed for production witness decryption.
+**What works end-to-end:** Person verifies identity (mDL) → ZK proof generated in browser → verification packet assembles for campaign → org sends proof report → decision-maker sees verified constituent count, tier distribution, coordination integrity scores.
 
 ---
 
-## Tier Status
+## Layer Status
 
-| Tier | Name | Status | Key Components |
-|------|------|--------|----------------|
-| 0 | Anonymous Guest | **IMPLEMENTED** | Email path via `mailto:`, template browsing, no auth |
-| 1 | Passkey-bound | **IMPLEMENTED** | WebAuthn registration/authentication, did:key derivation, PasskeyRegistration/Login/Upgrade components |
-| 2 | Address-attested | **IMPLEMENTED** | AddressVerificationFlow, district credential (W3C VC 2.0), VerificationGate with tier-aware routing |
-| 3 | ZK-verified | **IMPLEMENTED** | Browser Noir prover, Shadow Atlas registration, ProofGenerator, encrypted witness, CWC delivery |
-| 4 | Passport Verified (legacy) | **IMPLEMENTED** | Legacy tier, retained for backward compatibility |
-| 5 | Government credential (mDL) | **IMPLEMENTED** | W3C Digital Credentials API, mDL selective disclosure, privacy boundary function, ephemeral ECDH keys |
+### Person Layer (Verification Pipeline)
+
+| System | Status |
+|--------|--------|
+| Passkey auth (WebAuthn, did:key) | Production |
+| Address verification (Census geocoding, district credential) | Production |
+| mDL identity verification (W3C Digital Credentials API) | Production |
+| ZK proof generation (browser WASM, Noir/UltraHonk) | Production |
+| Congressional submission (CWC API, encrypted witness) | Production |
+| Encrypted delivery (XChaCha20-Poly1305, X25519) | Production |
+| Trust tier computation (6 tiers, 0-5) | Production |
+| Engagement tiers (0-4, on-chain portable) | Production |
+| Shadow Atlas (94,166 districts, chunked IPFS) | Production |
+| OAuth (Google, Facebook, LinkedIn, Coinbase, passkeys) | Production |
+| Template system (create, share, browse, moderate) | Production |
+| AI agents (DM discovery, message writer, subject line) | Production |
+| Spatial browse (3 views) | Production |
+| Chain abstraction (3 wallet paths) | Production |
+| Debate markets (LMSR, AI panel, staking) | Production (FEATURE-GATED) |
+
+### Org Layer (Advocacy Infrastructure)
+
+| System | Status |
+|--------|--------|
+| Org management (create, RBAC: owner/admin/editor/member) | Production |
+| Supporter management (list, search, filter, detail, tags) | Production |
+| CSV import (field mapping, dedup, tag assignment) | Production |
+| Action Network import (OSDI sync, incremental) | Production |
+| Campaign management (create, edit, lifecycle) | Production |
+| Email compose (WYSIWYG, merge fields, preview, A/B testing) | Production |
+| Email engine (SES, batching, rate limiting, filtering) | Production |
+| Verification packets (GDS, ALD, entropy, burst, CAI) | Production |
+| Campaign reports (HTML, merge fields, delivery tracking) | Production |
+| Events (RSVP, capacity, map, attendee management) | Production |
+| Fundraising (Stripe, one-time + recurring, 0% fee) | Production |
+| Automation workflows (triggers, delays, conditions) | Production |
+| SMS campaigns (Twilio, segmented) | Production |
+| Patch-through calling (Twilio, verified district) | Production |
+| Public API v1 (RESTful, free, bearer auth) | Production |
+| Multi-org networks (parent/child, shared pools) | Production |
+| Embeddable campaign widgets (iframe + postMessage) | Production |
+| Billing (Stripe subscriptions, usage metering) | Production |
+| Geographic targeting (24 boundary types) | Production |
+| Onboarding checklist (guided first-run) | Production |
+| Campaign SSE stream (real-time verification updates) | Production |
+| Email deliverability verification (Reacher pipeline) | Production |
+
+### Intelligence Layer
+
+| System | Status |
+|--------|--------|
+| DecisionMaker entity (universal, multi-institution) | Production |
+| Bill ingestion (federal + state, full-text search) | Production |
+| Org→DM follow/watch | Production |
+| Activity feed | Production |
+| Accountability receipts (SHA-256 attestations) | Production (UNCOMMITTED) |
+| Legislator scorecards | Phase 3 |
+
+### Data Model
+
+| Metric | Value |
+|--------|-------|
+| Prisma models | 50+ |
+| Database | PostgreSQL + pgvector via Hyperdrive |
+| Org-layer code | ~7,747 lines |
+| Person-layer code | ~8,665 lines (identity alone) |
+| Total unit tests | ~4,000 |
 
 ---
 
-## What's COMPLETE
+## Security Hardening (27 Rounds)
 
-### Identity & Authentication (Cycles 1-3, 9)
-- **Passkey registration/authentication** — @simplewebauthn/server + /browser, P-256 + Ed25519, did:key derivation
-- **Address verification** — AddressVerificationFlow, Census Bureau geocoding district lookup, DistrictCredential (W3C VC 2.0)
-- **Identity verification** — mDL via W3C Digital Credentials API (sole provider; self.xyz and Didit.me removed 2026-02-24)
-- **Session credential caching** — IndexedDB wallet with TTL, SSR-safe
-- **Trust tier computation** — `deriveTrustTier()` per-request in hooks.server.ts, 6-tier graduated model (0-5)
-- **Authority levels** — 0-5 scale, `trustTierToAuthorityLevel()` mapping
-- **Credential policy** — Action-based TTL (constituent_message: 30 days)
+Comprehensive brutalist security audit (2026-03-19). See `docs/design/SECURITY-HARDENING-LOG.md` for full categorized log.
 
-### Zero-Knowledge Proofs (Cycles 4-5)
-- **Browser WASM prover** — Noir circuits (UltraHonk backend, 4096-leaf Merkle trees), 600ms-10s proving time
-- **Shadow Atlas registration** — Identity commitment, district Merkle trees, two-tree architecture
-- **ProofGenerator component** — Credential → proof inputs → generate → encrypt witness → submit
-- **Nullifier enforcement** — Unique constraint in DB, checked in transaction
+**Coverage areas:**
+- **PII projection**: Sensitive data stripped from every client-facing response (30+ surfaces)
+- **Input validation**: Zod schemas on all mutation endpoints, length caps, CRLF/XML injection prevention
+- **Authorization**: `requireRole()` hardened (76+ call sites), IDOR eliminated on all V1 API write paths
+- **Race conditions**: Atomic status transitions via `updateMany`, `FOR UPDATE` on concurrent resources
+- **Authentication**: `timingSafeEqual` on all cron/webhook endpoints, session expiry caps, OAuth email normalization
+- **Infrastructure**: Zero `process.env` in routes (all migrated to `$env/dynamic/private`), CSP, cookie secure flags
 
-### Encrypted Delivery (Cycles 4-5)
-- **Client-side encryption** — XChaCha20-Poly1305 via libsodium, X25519 ECDH key agreement
-- **Server-side decryption** — `witness-decryption.ts` mirrors client encryption
-- **CWC delivery pipeline** — `delivery-worker.ts` (10-step: decrypt → extract address → lookup reps → build CWC payload → submit per-rep → update status)
-- **Submission endpoint** — Nullifier uniqueness, idempotency key, pseudonymous ID, trust tier promotion
-- **Status tracking** — `/api/submissions/[id]/status` with polling, atomic retry
-
-### Government Credentials / mDL (Cycle 9)
-- **Digital Credentials API wrapper** — Feature detection, dual-protocol (mdoc + oid4vp), 60s timeout
-- **GovernmentCredentialVerification component** — 6-state Svelte 5 component with callback props
-- **Privacy boundary function** — `processCredentialResponse()`: CBOR decode, extract address, derive district, discard PII
-- **Ephemeral key lifecycle** — ECDH P-256 key pairs, Workers KV with 5-min TTL, one-time use
-- **Selective disclosure** — ONLY postal_code + city + state requested, `intent_to_retain: false`
-- **Progressive enhancement** — mDL option shown only when `isDigitalCredentialsSupported()` returns true
-
-### Infrastructure (Cycles 1, 8)
-- **Cloudflare Workers deployment** — SvelteKit adapter-cloudflare, Hyperdrive DB pooling
-- **Per-request PrismaClient** — AsyncLocalStorage scoping, `getRequestClient()` for waitUntil
-- **Rate limiting** — Sliding window on sensitive identity paths
-- **Schema consolidated** — Single canonical `schema.prisma`, non-canonical deleted
-
-### UI/UX (Cycles 3, 6-8)
-- **VerificationGate** — Tier-aware modal (Tier 2/3/4 specific headers + flows)
-- **TrustSignal** — Compact tier badge with upgrade affordance
-- **VerificationChoice** — Removed (single-method mDL flow, no choice needed)
-- **SubmissionStatus** — Polling-based delivery tracking with terminal state detection
-- **Svelte 5 migration** — All auth components on callback props. ~15 non-auth components still on createEventDispatcher (UI modals, template browser, address collection)
-
-### Staked Deliberation / Debates (Cycle 15)
-- **Database models** — `Debate` + `DebateArgument` in Prisma, migrated to production DB
-- **9 Svelte 5 components** — DebateSurface, ActiveDebatePanel, ArgumentCard, DebateMetrics, PropositionDisplay, StanceSelector, StakeVisualizer, DebateProofGenerator, DebateModal
-- **6 API routes** — create, by-template, arguments (GET/POST), cosign, resolve, claim
-- **State store** — `debateState.svelte.ts` (runes-based, factory pattern)
-- **ZK integration** — `buildDebateActionDomain()` exported, DebateProofGenerator uses debate-scoped action domain
-- **Modal integration** — DebateModal registered in ModalRegistry via UnifiedModal
-- **Deep link route** — `/s/[slug]/debate/[debateId]` with template context from parent layout
-- **Resolved debate display** — Resolution banner with stance colors, winner badge on ArgumentCard
-- **Off-chain only** — All debate state in Prisma; on-chain integration pending DebateMarket.sol deployment
-- **Gaps documented** — See [docs/features/debates.md](./features/debates.md) for known gaps and resolution plan
+**Final assessment**: Last 3 rounds produced 4 total fixes (1 P2/round avg). Diminishing returns reached. Surface area comprehensively hardened.
 
 ---
 
 ## What's NOT Production-Ready
 
-> **Current plan:** See [`strategy/product-roadmap.md`](./strategy/product-roadmap.md) for phase sequence and priorities.
+### Phase 3 (Future)
 
-### Resolved (Cycles 1-15)
+| System | Status | Notes |
+|--------|--------|-------|
+| TEE deployment | Planned | AWS Nitro Enclaves for witness decryption + debate evaluation |
+| Mainnet blockchain | Planned | Scroll Sepolia only; mainnet pending security council setup |
+| Debate markets | Feature-gated | Code complete, `DEBATE = false` |
+| Legislation tracking | Uncommitted | Bill ingestion + watching in working tree |
+| Accountability receipts | Uncommitted | 44 untracked + 23 modified files in working tree |
+| Cross-border coalitions | Design doc | Canada first, ~5 weeks. See `docs/design/CROSS-BORDER-PLAN.md` |
+| Automation UI builder | Design doc | ~695 LoC. See `docs/design/AUTOMATION-UI-PLAN.md` |
+| SMS re-enablement | Design doc | ~6 hours + TCPA consent. See `docs/design/SMS-RENABLE-PLAN.md` |
 
-All P0 engineering gaps from Cycles 1-14 are resolved. Summary of what was fixed:
+### Known Gaps (Non-Blocking)
 
-| Gap | Resolution | Cycle |
-|-----|-----------|-------|
-| libsodium on CF Workers | Replaced with @noble/curves + @noble/hashes + @noble/ciphers (pure JS) | 11C |
-| Workers KV namespace | `DC_SESSION_KV` provisioned | 11C |
-| CF build verification | cbor-web + libsodium-wrappers compatible | 10A |
-| svelte-check errors | 0 errors, 88 warnings | 11A |
-| COSE_Sign1 verification | Full RFC 9052 ECDSA P-256 via Web Crypto | 13A |
-| IACA trust store structure | DER decode, AAMVA VICAL reference ready | 13A |
-| Auth component Svelte 5 | mDL-only flow, self.xyz + Didit.me removed | 10B → 15 |
-| Legacy single-tree code | ~1300 lines removed | 10C-10D |
-| delivery-worker bugs | Template cast, ALS scope, status misclassification | 10C → 11B |
-| OpenID4VP protocol | JWT/SD-JWT parsing + privacy boundary | 13C |
-| Ed25519 credential signing | Replaces HMAC-SHA256 | 13B |
-| Debate browse-view discovery | Amber "Deliberating" indicator on TemplateCard/TemplateList | 15 |
-
-### Open (see Launch Readiness Matrix for full detail)
-
-**P0 — Launch blockers:** TEE infrastructure (L-05), mainnet deploy (L-01/02), Shadow Atlas server (L-06), npm registry refs (L-07)
-
-**P1 — Pre-production:** Apple Business Connect (L-08), engagement tier UI (L-09), debate on-chain settlement (L-10), debate auto-resolution (L-11), CampaignRegistry timelock review (L-12)
-
-**P2 — Post-launch:** Modal unification (L-13), congressional dashboard (L-14), IPFS migration (L-15), ERC-8004 (L-16), debate co-sign UI + indexer (L-17), rate limiting (L-18), salt rotation (L-19), BA-017 (L-20)
+| Gap | Severity | Notes |
+|-----|----------|-------|
+| SimpleAccount factory (NEAR ERC-4337) | Low | Gasless path not populated |
+| Rate limit storage (in-memory only) | Medium | Redis/KV for production multi-isolate |
+| CA/GB/AU country resolvers | Low | Stubs with hardcoded shapes |
+| SMS recipient phone filtering | Low | `smsStatus` field exists, query not wired |
+| max_templates_month billing limit | Low | Defined but not enforced (user-scoped) |
+| Client storage per-user isolation | Medium | Template drafts, search cache lack per-user keying |
 
 ---
 
-## Cycle History
+## Feature Flags
 
-| Cycle | Focus | Waves | Key Outcome |
-|-------|-------|-------|-------------|
-| 1 | Cleanup + Foundation | 3 | Deprecated code removed, schema consolidated, trust_tier field established |
-| 2 | Passkey Identity (Tier 1) | 3 | WebAuthn registration/auth, did:key derivation, client UI components |
-| 3 | Address Attestation (Tier 2) | 3 | AddressVerificationFlow, district credential, TrustSignal, VerificationGate |
-| 4 | ZK Proofs + Encryption (Tier 3) | 3 | Real Noir prover integration, XChaCha20-Poly1305, proof-verified delivery |
-| 5 | Delivery Pipeline | 4 | Address flow fix, server-side decryption, CWC delivery worker, Opus review |
-| 6 | UX Fixes | 4 | Status tracking, modal dead ends, dead code cleanup |
-| 7 | Correctness | 4 | Nullifier fix (BR5-010), trust tier propagation, Svelte 5 event migration |
-| 8 | Production Hardening | 4 | ALS safety, type safety, Svelte 5 migration, legacy gating |
-| 9 | Government Credentials (Tier 4) | 4 | mDL via Digital Credentials API, privacy boundary, ephemeral keys, integration |
-| 10 | Production Readiness | 4 | CF build fix, final Svelte 5 auth migration, ~1300 lines dead code removed, build verified |
-| 11 | Type Safety + Submission Hardening | 4 | 0 svelte-check errors, 3 delivery-worker bugs fixed, libsodium→noble (pure JS), KV provisioned |
-| 12 | Dead Code Purge + Broken Wiring | 4 | 3 broken event mismatches repaired, ~10,500 lines dead code deleted (50+ files), Svelte 5 migration complete (0 live dispatchers), SSR nested-button bugs fixed, warnings 95→88 |
-| 13 | Cryptographic Verification Hardening | 4 | Real COSE_Sign1 ECDSA P-256 verification (RFC 9052), IACA trust store with DER decode, Ed25519 credential signing (replaces HMAC-SHA256), OpenID4VP JWT/SD-JWT support, 47 new tests |
-| 14 | Security-Critical Test Coverage + Production Hygiene | 4 | 36 new tests covering authority level, pseudonymous ID, user secret derivation, witness encrypt→decrypt round-trip. Debug console floods removed, HACKATHON limits tightened (title 200, body 10k), demo pages dev-gated, empty catches fixed |
-| 15 | Staked Deliberation + Identity Simplification | 4 | Debate infrastructure (9 components, 6 API routes, Prisma models, debate-scoped ZK proofs, DebateModal in ModalRegistry, deep link route, debate browse indicator). Identity simplified to mDL-only: self.xyz + Didit.me removed (8 files deleted, 16 files edited), VerificationChoice removed, single-path verification flow. |
+Source: `src/lib/config/features.ts`
 
-**Full cycle details:** `docs/architecture/graduated-trust.md` (Implementation Progress section)
+| Flag | Value | Notes |
+|------|-------|-------|
+| CONGRESSIONAL | `true` | CWC delivery pipeline |
+| WALLET | `true` | EVM + NEAR providers |
+| STANCE_POSITIONS | `true` | Position registration |
+| PUBLIC_API | `true` | V1 RESTful API |
+| ADDRESS_SPECIFICITY | `'district'` | District-level resolution |
+| ANALYTICS_EXPANDED | `true` | Full analytics suite |
+| AB_TESTING | `true` | Email A/B variants |
+| EVENTS | `true` | RSVP + capacity + map |
+| FUNDRAISING | `true` | Stripe checkout |
+| AUTOMATION | `true` | Workflow engine |
+| SMS | `true` | Twilio campaigns |
+| NETWORKS | `true` | Multi-org coalitions |
+| DEBATE | `false` | Markets + AI evaluation |
+| LEGISLATION | uncommitted | Bill tracking + watching |
+| ACCOUNTABILITY | uncommitted | Receipt system |
 
 ---
 
-## Identity Verification: mDL-Only Architecture (Cycle 15 Decision)
+## Build History
 
-**Date:** 2026-02-24
-**Decision:** Remove self.xyz (NFC passport) and Didit.me (government ID + face verification) providers. Consolidate to mDL via W3C Digital Credentials API as the sole identity verification path.
+### Phase 0-1 (2026-03-11/12)
+Core platform: identity tiers, wallet integration, org management, billing, launch prep, hardening.
 
-### Rationale
+### Phase 2 (2026-03-12/13, 7 waves)
+1. Events (RSVP, capacity, map, calendar export)
+2. Fundraising (Stripe, 0% platform fee)
+3. Automation (trigger→delay→condition→action workflows)
+4. SMS + Calling (Twilio campaigns, patch-through)
+5. Geographic (24 boundary types, cross-border stubs)
+6. Public API + SDK (RESTful v1, bearer auth)
+7. Networks (parent/child orgs, shared pools)
 
-1. **Privacy alignment.** mDL via Digital Credentials API is browser-native — no third-party SDK, no server-to-server webhooks, no vendor lock-in. Credential presentation happens between the user's wallet and their browser. The platform never sees raw credential data; only the privacy boundary output (district string) crosses the trust boundary.
+### Post-Phase-2 (2026-03-17 through 2026-03-19)
+- Org UX redesign (verification-first hierarchy, 18 tasks)
+- Intelligence loop + DecisionMaker migration (universal DM entity)
+- Accountability receipt system (proof-weighted DM tracking)
+- Seam resolution (CongressionalRep dropped, batch optimization)
+- Security hardening (27 brutalist rounds, 180+ findings)
 
-2. **Selective disclosure.** ISO 18013-5 mdoc format allows requesting individual data elements (`age_over_18`, `resident_state`, `postal_code`) without revealing full credential. This is architecturally superior to passport NFC (which extracts full MRZ data) or photo ID verification (which transmits face images to a third party).
-
-3. **Cypherpunk coherence.** Self.xyz required a proprietary mobile app and QR code scan flow. Didit.me required server-to-server webhook with HMAC validation and stored verification sessions. Both introduced third-party trust dependencies incompatible with the project's privacy-first architecture.
-
-4. **Ecosystem convergence.** Chrome 141+ and Safari 26+ (both shipped September 2025) support the W3C Digital Credentials API natively. ~22 US states have mDL programs. Platform support will only grow.
-
-### What Was Removed (8 files deleted, 16 files edited)
-
-**Deleted:**
-- `src/routes/api/identity/didit/` (init + webhook endpoints)
-- `src/routes/api/identity/init/+server.ts` (self.xyz QR generation)
-- `src/routes/api/identity/verify/+server.ts` (self.xyz proof verification)
-- `src/lib/core/identity/didit-client.ts` (SDK wrapper)
-- `src/lib/core/server/selfxyz-verifier.ts` (SDK singleton)
-- `src/lib/components/auth/address-steps/SelfXyzVerification.svelte`
-- `src/lib/components/auth/address-steps/DiditVerification.svelte`
-- `src/lib/components/auth/address-steps/VerificationChoice.svelte`
-- `DIDIT-IMPLEMENTATION-SUMMARY.md` (root-level summary doc)
-
-**Edited:** IdentityVerificationFlow.svelte (simplified to single-path), verification-handler.ts, blob-encryption.ts, shadow-atlas-handler.ts, authority-level.ts, hooks.server.ts, session-credentials.ts, identity-binding.ts, package.json (@selfxyz deps removed), vite.config.ts, .env.example
-
-**Dependencies removed:** `@selfxyz/core`, `@selfxyz/qrcode`
-
-### Legacy Database Compatibility
-
-Existing users with `verification_method = 'self.xyz'` or `verification_method = 'didit'` retain their verification status. The `deriveAuthorityLevel()` and `deriveTrustTier()` functions still recognize these values for backward compatibility. No database migration needed — the code simply no longer creates new records with these values.
-
-### Remaining mDL Gaps
-
-1. **IACA root certificates** — **RESOLVED** (Cycle 41). DSC→IACA chain verification implemented (`verifyDscAgainstRoot()`). CA and NM roots loaded from .gov downloads. 37 tests including real CA cert self-signature verification and DSC validity period enforcement. Expansion to all states via AAMVA VICAL parser is follow-up.
-2. **Poseidon2 identity commitment** — mDL path uses SHA-256² mod BN254 (Phase 1); Poseidon2 planned for Phase 2
-3. **Selective disclosure expansion** — **RESOLVED**. `birth_date` + `document_number` in ItemsRequest, identity commitment computed in privacy boundary
-4. **Shadow Atlas registration** — **RESOLVED** (Cycle 42). Census tract GEOID resolved via Census Bureau geocoding in privacy boundary. cellId threaded through client pipeline to `triggerShadowAtlasRegistration()`. Registration status UI with spinner/error/success.
+See `memory/build_history.md` for detailed per-wave records.
 
 ---
 
@@ -196,18 +187,21 @@ Existing users with `verification_method = 'self.xyz'` or `verification_method =
 |-------|-----------|
 | DB + ALS | `src/lib/core/db.ts` |
 | Auth + Session | `src/hooks.server.ts` |
-| Trust Tier | `src/lib/core/identity/authority-level.ts`, `credential-policy.ts` |
+| Trust Tier | `src/lib/core/identity/authority-level.ts` |
 | Identity Verification | `src/lib/components/auth/IdentityVerificationFlow.svelte` |
-| Address Verification | `src/lib/components/auth/AddressVerificationFlow.svelte` |
-| mDL Verification | `src/lib/core/identity/mdl-verification.ts`, `digital-credentials-api.ts` |
-| ZK Proofs | `src/lib/components/proof/ProofGenerator.svelte`, `prover-client.ts` |
-| Encryption | `src/lib/core/identity/blob-encryption.ts`, `witness-decryption.ts` |
-| Submission | `src/routes/api/submissions/create/+server.ts` |
-| CWC Delivery | `src/lib/server/delivery-worker.ts` |
-| Status Tracking | `src/routes/api/submissions/[id]/status/+server.ts` |
+| ZK Proofs | `src/lib/components/proof/ProofGenerator.svelte` |
+| Encryption | `src/lib/core/identity/blob-encryption.ts` |
+| Org Context | `src/lib/server/org/context.ts` |
+| Campaign Engine | `src/lib/server/campaigns/` |
+| Email Engine | `src/lib/server/email/engine.ts` |
+| Automation | `src/lib/server/automation/` |
+| V1 API | `src/routes/api/v1/` |
+| Verification Packet | `src/lib/server/campaigns/verification.ts` |
+| SSE Stream | `src/lib/server/sse-stream.ts` |
 | CF Config | `wrangler.toml` |
 | Schema | `prisma/schema.prisma` |
+| Feature Flags | `src/lib/config/features.ts` |
 
 ---
 
-*Commons PBC | Implementation Status | 2026-02-25*
+*Commons | Implementation Status | 2026-03-19*

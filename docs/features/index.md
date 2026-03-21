@@ -114,9 +114,49 @@ Geographic targeting for templates (city council, state legislature, congression
 
 ---
 
-## Advanced Features
+## Org Layer Features
 
-### 8. Gemini Embeddings (integrated into search.md)
+### 8. [coordination-integrity.md](coordination-integrity.md) - Coordination Integrity Scores
+
+Five metrics (GDS, ALD, temporal entropy, burst velocity, CAI) that measure whether campaign participation is organic and diverse. Appears on campaign dashboards, proof reports, and public verification pages.
+
+**What it does**: Computes geographic diversity, message authenticity, timing patterns, action rate, and engagement depth — with k-anonymity privacy.
+
+**Dependencies**: Campaign actions, supporter engagement tiers
+
+**Implementation**: `src/lib/server/campaigns/verification.ts`
+
+---
+
+### 9. [live-updates.md](live-updates.md) - Live Updates Architecture
+
+Campaign action SSE stream for real-time verification packet updates.
+
+**What it does**: Server-Sent Events push verification packet changes to org dashboards every 30s.
+
+**Dependencies**: `createSSEStream()` in `src/lib/server/sse-stream.ts`
+
+**Implementation**: `/api/org/[slug]/campaigns/[campaignId]/stream` (P0 DONE), KV cache pending (P1)
+
+---
+
+### 10. [debates.md](debates.md) - Debate Markets
+
+> STATUS: FEATURE-GATED (`DEBATE = false`)
+
+LMSR-based debate markets where verified participants stake on SUPPORT/OPPOSE/AMEND with structured arguments.
+
+**What it does**: Campaign-linked debates with AI evaluation, cosigning, resolution.
+
+**Dependencies**: Debate smart contracts (voter-protocol), engagement tiers
+
+**Implementation**: 9 Svelte 5 components, 6 API routes, debate-scoped ZK proofs
+
+---
+
+## Discovery & Advanced
+
+### 11. Gemini Embeddings (integrated into search.md)
 
 Google Gemini integration for semantic search and template discovery.
 
@@ -128,7 +168,7 @@ Google Gemini integration for semantic search and template discovery.
 
 ---
 
-### 9. [sharing.md](sharing.md) - Universal Sharing
+### 12. [sharing.md](sharing.md) - Universal Sharing
 
 Native share API (mobile) + clipboard (desktop). Platform-agnostic sharing patterns.
 
@@ -140,7 +180,7 @@ Native share API (mobile) + clipboard (desktop). Platform-agnostic sharing patte
 
 ---
 
-### 10. [abstraction.md](abstraction.md) - Legislative Abstraction
+### 13. [abstraction.md](abstraction.md) - Legislative Abstraction
 
 Adapter pattern for different legislative bodies (US Congress, state legislatures, city councils).
 
@@ -202,6 +242,9 @@ Adapter pattern for different legislative bodies (US Congress, state legislature
 | jurisdiction.md | ✅ Complete | P1 | Commons |
 | sharing.md | ✅ Complete | P1 | Commons |
 | abstraction.md | ✅ Complete (US) | P1 | Commons |
+| coordination-integrity.md | ✅ Complete | P0 (core) | Commons |
+| live-updates.md | ✅ P0 done, P1 pending | P0/P1 | Commons |
+| debates.md | ✅ Complete (FEATURE-GATED) | P2 | Commons |
 | search.md | ✅ Complete | P2 | Commons |
 | ~~embeddings.md~~ (merged into search.md) | ✅ Complete | P2 | Commons |
 | **Decision-maker enrichment** | ✅ Complete (3-phase AI pipeline) | P0 (core) | Commons |

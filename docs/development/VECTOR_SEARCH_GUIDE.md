@@ -424,7 +424,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
 This runs automatically via `docker/init-db.sql` when using `docker-compose`.
-For managed Postgres (Supabase), enable pgvector from the dashboard.
+For managed Postgres, enable pgvector from the provider dashboard.
 
 ### HNSW Index Not Created
 
@@ -448,8 +448,8 @@ SELECT indexname FROM pg_indexes WHERE tablename = 'intelligence';
 **Error:** `ERROR: different vector dimensions`
 
 **Solution:**
-- Ensure all embeddings use the same model (voyage-3/4 = 1024 dimensions)
-- Check the `Unsupported("vector(1024)")` type in Prisma schema matches
+- Ensure all embeddings use the same model (Gemini embedding-001 = 768 dimensions)
+- Check the `Unsupported("vector(768)")` type in Prisma schema matches
 - Regenerate embeddings if the model was changed
 
 ### No Results Returned

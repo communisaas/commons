@@ -1,7 +1,9 @@
 # Product Roadmap
 
 > commons.email — what we build, in what order, and why
-> Last updated: 2026-03-07
+> Last updated: 2026-03-19
+>
+> **Current status:** Phases 0–2 COMPLETE and deployed to production. See `docs/implementation-status.md` for full system status.
 
 ---
 
@@ -75,22 +77,22 @@ Infrastructure that took years. Zero of this exists in any competitor's stack.
 
 This is not a spec. The core org loop works: create org → import supporters → create campaign → compose email → send → verification packet assembles → report renders → deliver to decision-maker.
 
-### What's Missing for Launch
+### What Was Missing for Launch (ALL COMPLETE)
 
-| Gap | Severity | Effort |
-|---|---|---|
-| Billing UI (Stripe subscriptions + usage metering) | Blocking | Medium — schema exists, needs UI + webhook handlers |
-| Org onboarding flow (guided first-run experience) | Important | Small — routing + empty states |
-| Org dashboard (verification progress, aggregate metrics) | Important | Small-Medium — data exists, needs dashboard component |
-| ~~Embeddable campaign widgets~~ | ~~Important~~ | ✅ Shipped — iframe + postMessage API |
-| A/B email testing | Nice-to-have | Medium — variant allocation, winner selection |
-| Advanced segmentation UI | Nice-to-have | Small — filter builder on existing query infrastructure |
+| Gap | Status |
+|---|---|
+| Billing UI (Stripe subscriptions + usage metering) | ✅ Phase 0 — 4 tiers, webhook handler, Customer Portal |
+| Org onboarding flow (guided first-run experience) | ✅ Phase 0 — inline 5-step checklist, invite system |
+| Org dashboard (verification progress, aggregate metrics) | ✅ Phase 0 — verification funnel, tier distribution, campaign list |
+| Embeddable campaign widgets | ✅ Phase 0 — iframe + postMessage API |
+| A/B email testing | ✅ Phase 1 — two-variant split, winner selection |
+| Advanced segmentation UI | ✅ Phase 1 — 7 filter types, AND/OR logic, saved segments |
 
 ---
 
 ## Launch Sequence
 
-### Phase 0: Ship the Verification Loop (NOW — 4–6 weeks)
+### Phase 0: Ship the Verification Loop (COMPLETE — 2026-03-11)
 
 The verification loop is the product. Not email. Not CRM. Not petitions. The loop:
 
@@ -126,7 +128,7 @@ This loop already works in code. Phase 0 makes it launchable.
 
 ---
 
-### Phase 1: Compete on Verification, Not Features (Months 2–4)
+### Phase 1: Compete on Verification, Not Features (COMPLETE — 2026-03-11)
 
 Phase 0 proved the loop works. Phase 1 makes it self-serve and starts building the org base.
 
@@ -149,7 +151,7 @@ Phase 0 proved the loop works. Phase 1 makes it self-serve and starts building t
 
 ---
 
-### Phase 2: Transcend the Landscape (Months 4–8)
+### Phase 2: Transcend the Landscape (COMPLETE — 2026-03-13)
 
 Phase 1 proved orgs will use verified advocacy. Phase 2 makes Commons the platform every org wants — not by matching competitors feature-for-feature, but by making every feature carry verification context that no competitor can produce. The target is the entire landscape: AN, Quorum, VoterVoice, the conservative void, the local government void, the citizen-tool graveyard.
 

@@ -396,7 +396,7 @@ This covers:
 | Reducto parsing (10K pages) | $150 |
 | Voyage AI embeddings (5M tokens) | $100-300 |
 | NewsAPI Business | $449 |
-| Supabase Pro + Medium compute | $85 |
+| Managed PostgreSQL + pgvector | $85 |
 | **Total** | **$784-1,084/mo** |
 
 **Self-hosted saves 84-88%** ($125 vs $784-1,084).
@@ -557,7 +557,7 @@ At scale, the intelligence pipeline costs half a cent per user per month.
 - [Currents API Pricing](https://currentsapi.services/en/product/price) — Best cost/request news API
 - [GNews Pricing](https://gnews.io/pricing) — Alternative news API
 - [Exa Pricing](https://exa.ai/pricing) — Neural search
-- [Supabase Pricing](https://supabase.com/pricing) — Managed Postgres + pgvector
+- Managed PostgreSQL + pgvector (via Cloudflare Hyperdrive in production)
 - [Google Gemini API Pricing](https://ai.google.dev/gemini-api/docs/pricing) — Embeddings
 
 ### Technical References

@@ -64,10 +64,10 @@ openssl rand -hex 32
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | PostgreSQL connection string (Neon/Supabase) |
+| **Purpose** | PostgreSQL connection string (via Hyperdrive in production) |
 | **Used In** | `src/lib/core/db.ts`, Prisma |
 | **Format** | PostgreSQL connection string with SSL |
-| **Obtain** | Neon/Supabase dashboard |
+| **Obtain** | Database provider dashboard (Hyperdrive-wrapped in production) |
 
 ```
 postgresql://user:password@ep-xxx.region.aws.neon.tech/database?sslmode=require
@@ -398,7 +398,7 @@ wrangler pages secret put VOTER_API_KEY
 
 ### Critical (Must Have)
 
-- [ ] `DATABASE_URL` - Neon/Supabase PostgreSQL connection string
+- [ ] `DATABASE_URL` - PostgreSQL connection string (Hyperdrive-wrapped in production)
 - [ ] `IDENTITY_HASH_SALT` - Generated with `openssl rand -hex 32`
 - [ ] `IP_HASH_SALT` - Generated with `openssl rand -hex 32`
 - [ ] `JWT_SECRET` - Generated with `openssl rand -base64 32`

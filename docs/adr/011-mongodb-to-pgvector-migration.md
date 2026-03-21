@@ -69,7 +69,7 @@ model Intelligence {
   snippet         String
   topics          String[]
   entities        String[]
-  embedding       Unsupported("vector(1024)")?
+  embedding       Unsupported("vector(768)")?
   relevance_score Float?
   sentiment       String?
   geographic_scope String?

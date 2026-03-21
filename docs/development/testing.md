@@ -99,7 +99,7 @@ it('should save address with individual components', async () => {
 it('should store representatives with snake_case field names', async () => {
   await saveAddress(addressData);
 
-  const rep = await db.representative.findFirst({
+  const rep = await db.congressionalRep.findFirst({
     where: { bioguide_id: 'N000147' }
   });
 
@@ -192,7 +192,7 @@ it('[CONTRACT] verify → save data pipeline', async () => {
 ```typescript
 // Check schema before writing test
 const user = await db.user.findFirst(); // Uses snake_case
-const rep = await db.representative.findFirst(); // NOT _representative
+const rep = await db.congressionalRep.findFirst(); // Legacy table (table: representative)
 
 // Test should match schema exactly
 expect(savedUser.congressional_district).toBe('DC-AL');

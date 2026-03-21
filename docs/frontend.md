@@ -814,4 +814,4 @@ Trust comes from transparency WHEN ASKED, not from forcing users to understand N
 
 ---
 
-*Commons PBC | Frontend for VOTER Protocol | 2025*
+*Commons | Frontend Architecture | 2026-03*

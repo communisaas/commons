@@ -52,10 +52,10 @@ The original version of this document incorrectly listed billing UI and the publ
 
 | Capability | Why Wait | Effort |
 |-----------|----------|--------|
-| KV packet cache | Required before multi-viewer scale, not for first org | ~30 LoC |
+| ~~KV packet cache~~ | ~~Required before multi-viewer scale~~ | **Done** (30s TTL, tenant-isolated) |
 | Supporter verification stream | Nice-to-have germination animation | ~40 LoC |
 | Shadow Atlas Merkle snapshot | District lookup works without it | Config change |
-| Migration landing pages | Need first org success story before "why switch" messaging | Content + routes |
+| ~~Migration landing pages~~ | ~~Need first org success story~~ | **Done** (`/migrate` route) |
 | Debate markets on campaigns | Feature-gated OFF, ship after real campaign data exists | Integration |
 | A/B email testing | Already implemented, gated to Starter+ plan | — |
 | Advanced segmentation UI | Filter infra exists, ship after orgs have data to segment | ~1 week |
@@ -103,8 +103,8 @@ The original version of this document incorrectly listed billing UI and the publ
 | 2026-03-17 | Tier 2: Migration landing page | **Done** — `/migrate` with 4-step flow, feature comparison, FAQ, CTA. Design tokens match project. |
 | 2026-03-17 | Tier 3: Automation workflow UI plan | **Planned** — `docs/design/AUTOMATION-UI-PLAN.md`. Routes already exist. 6 new components, ~695 LoC, no new deps. |
 | 2026-03-17 | Tier 3: Debate-campaign integration plan | **Planned** — `docs/design/DEBATE-CAMPAIGN-PLAN.md`. 5 days, 3 phases: auto-spawn (inline), campaign UI, report integration, settlement UX. |
-| 2026-03-17 | Tier 3: SMS re-enablement plan | **Planned** — `docs/design/SMS-RENABLE-PLAN.md`. **CRITICAL**: No smsStatus field — blasts use emailStatus as proxy (TCPA violation risk). 4 P0 blockers before go-live. ~6 hours. |
-| 2026-03-17 | Org launch P0: SMS consent model | **Done** — `smsStatus` field + indexed migration, blast filter (subscribed-only), STOP webhook (6 keywords), import consent mapping. TCPA-safe defaults (none). |
+| 2026-03-17 | Tier 3: SMS re-enablement plan | **Partially done** — `docs/design/SMS-RENABLE-PLAN.md`. Consent model (smsStatus field) implemented. Remaining: Twilio credentials, 10DLC registration, billing limits, nav links, opt-in UI. |
+| 2026-03-17 | Org launch P0: SMS consent model | **Done** — `smsStatus` field (`none\|subscribed\|unsubscribed\|stopped`) + indexed migration, blast filter (subscribed-only), STOP webhook (6 keywords), import consent mapping. TCPA-safe defaults (none). |
 | 2026-03-17 | Org launch P0: Team invite form | **Done** — email + role input, seat limit indicator, POST endpoint with 7-day token expiry. Email delivery TODO (non-blocking). |
 | 2026-03-17 | Org launch P0: Tag management UI | **Done** — create/rename/delete with form actions, duplicate prevention, editor+ gating, supporter counts. |
 | 2026-03-17 | Org launch P0: Bounce dashboard | **Done** — color-coded bounce rate badge, masked recipient list (last 100), A/B variant aggregation. |
