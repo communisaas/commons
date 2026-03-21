@@ -40,7 +40,7 @@ model User {
   // Cryptographic identity commitment from self.xyz/Didit.me verification
   // Used to link multiple OAuth providers to the same verified person
   // When a verified user logs in with a new OAuth provider, accounts are merged
-  identity_commitment    String?   @unique @map("identity_commitment")
+  identity_commitment String? @unique @map("identity_commitment")
 
   // === DOCUMENT TYPE (Wave 14R: authority level differentiation) ===
   // Stored at verification time to differentiate passport (L4) from ID card/license (L3)
@@ -72,21 +72,21 @@ model User {
   address_verified_at         DateTime? @map("address_verified_at")
 
   // === WALLET & ACCOUNT FIELDS ===
-  wallet_address  String? @unique @map("wallet_address") // EVM wallet (MetaMask/WC binding)
-  wallet_type     String? @map("wallet_type")             // 'evm' | 'near' | null
-  district_hash   String? @map("district_hash")
+  wallet_address String? @unique @map("wallet_address") // EVM wallet (MetaMask/WC binding)
+  wallet_type    String? @map("wallet_type") // 'evm' | 'near' | null
+  district_hash  String? @map("district_hash")
 
   // === NEAR ACCOUNT (Paths 1 + 3: invisible account for non-crypto / non-EVM users) ===
-  near_account_id            String? @unique @map("near_account_id")             // Implicit account ID (64-char hex pubkey)
-  near_public_key            String?         @map("near_public_key")             // Ed25519 public key (base58 or hex)
-  encrypted_near_private_key String?         @map("encrypted_near_private_key")  // AES-256-GCM encrypted primary key
-  near_recovery_public_key   String?         @map("near_recovery_public_key")    // FunctionCall recovery key (server-held)
-  near_derived_scroll_address String?        @map("near_derived_scroll_address") // Scroll address from Chain Signatures
-  trust_score     Int     @default(0) @map("trust_score")
-  reputation_tier String  @default("novice") @map("reputation_tier")
+  near_account_id             String? @unique @map("near_account_id") // Implicit account ID (64-char hex pubkey)
+  near_public_key             String? @map("near_public_key") // Ed25519 public key (base58 or hex)
+  encrypted_near_private_key  String? @map("encrypted_near_private_key") // AES-256-GCM encrypted primary key
+  near_recovery_public_key    String? @map("near_recovery_public_key") // FunctionCall recovery key (server-held)
+  near_derived_scroll_address String? @map("near_derived_scroll_address") // Scroll address from Chain Signatures
+  trust_score                 Int     @default(0) @map("trust_score")
+  reputation_tier             String  @default("novice") @map("reputation_tier")
 
   // === ZERO-KNOWLEDGE VERIFICATION (Phase 1) ===
-  district_verified    Boolean   @default(false) @map("district_verified") // ZK proof verification status
+  district_verified Boolean @default(false) @map("district_verified") // ZK proof verification status
 
   // === PHASE 1 REPUTATION FIELDS (Concrete Signals Only) ===
   templates_contributed  Int   @default(0) @map("templates_contributed") // Count
@@ -103,11 +103,11 @@ model User {
   profile_visibility   String    @default("private") @map("profile_visibility")
 
   // === RELATIONS (keep existing) ===
-  account                   account[]
-  sessions                  Session[]
-  templates                 Template[]
-  campaigns                 template_campaign[]        @relation("UserCampaigns")
-  representatives           user_representatives[] // Keep this relation
+  account         account[]
+  sessions        Session[]
+  templates       Template[]
+  campaigns       template_campaign[]    @relation("UserCampaigns")
+  dmRelations     UserDMRelation[]       @relation("UserDMRelations")
 
   // === ORG LAYER ===
   memberships  OrgMembership[]
@@ -124,11 +124,11 @@ model User {
   // === POSTAL BUBBLE (Privacy-preserving location approximation) ===
   // The bubble is the user's privacy boundary — server stores only the bubble, never exact location.
   // All fields nullable: bubble is optional until user enters a postal code.
-  bubble_lat     Float?    @map("bubble_lat")     // Bubble center latitude
-  bubble_lng     Float?    @map("bubble_lng")     // Bubble center longitude
-  bubble_radius  Float?    @map("bubble_radius")  // Radius in meters
+  bubble_lat     Float?    @map("bubble_lat") // Bubble center latitude
+  bubble_lng     Float?    @map("bubble_lng") // Bubble center longitude
+  bubble_radius  Float?    @map("bubble_radius") // Radius in meters
   bubble_updated DateTime? @map("bubble_updated") // Last bubble update
-  bubble_seed    String?   @map("bubble_seed")    // Postal code that seeded the bubble
+  bubble_seed    String?   @map("bubble_seed") // Postal code that seeded the bubble
 
   // === SHADOW ATLAS REGISTRATION (Three-Tree ZK Architecture) ===
   shadow_atlas_registration ShadowAtlasRegistration?
@@ -153,27 +153,27 @@ model Session {
 }
 
 model Template {
-  id               String  @id @default(cuid())
-  slug             String  @unique
+  id               String    @id @default(cuid())
+  slug             String    @unique
   title            String
   description      String
   category         String
-  topics           Json?   @default("[]") // Topic tags for search/filtering (1-5 lowercase strings)
+  topics           Json?     @default("[]") // Topic tags for search/filtering (1-5 lowercase strings)
   type             String
-  deliveryMethod   String  @map("delivery_method")
+  deliveryMethod   String    @map("delivery_method")
   preview          String
   message_body     String
-  sources          Json?   @default("[]") // Citation sources from message generation agent
-  research_log     Json?   @default("[]") @map("research_log") // Agent's research process log
-  cachedSources    Json?     @map("cached_sources")    // Evaluated source pool from first generation
+  sources          Json?     @default("[]") // Citation sources from message generation agent
+  research_log     Json?     @default("[]") @map("research_log") // Agent's research process log
+  cachedSources    Json?     @map("cached_sources") // Evaluated source pool from first generation
   sourcesCachedAt  DateTime? @map("sources_cached_at") // Cache timestamp (72h TTL)
   delivery_config  Json
   cwc_config       Json?
   recipient_config Json
   metrics          Json
   campaign_id      String?
-  status           String  @default("draft")
-  is_public        Boolean @default(false)
+  status           String    @default("draft")
+  is_public        Boolean   @default(false)
 
   // Aggregate community metrics (NO individual user tracking)
   verified_sends   Int    @default(0) @map("verified_sends") // Total verified messages sent
@@ -182,10 +182,10 @@ model Template {
 
   // Semantic embeddings for pgvector HNSW search (768-dim Gemini vectors)
   // Indexes: HNSW on topic_embedding + location_embedding — added via raw SQL
-  location_embedding    Unsupported("vector(768)")?     @map("location_embedding")
-  topic_embedding       Unsupported("vector(768)")?     @map("topic_embedding")
-  embedding_version     String    @default("v1") @map("embedding_version")
-  embeddings_updated_at DateTime? @map("embeddings_updated_at")
+  location_embedding    Unsupported("vector(768)")? @map("location_embedding")
+  topic_embedding       Unsupported("vector(768)")? @map("topic_embedding")
+  embedding_version     String                      @default("v1") @map("embedding_version")
+  embeddings_updated_at DateTime?                   @map("embeddings_updated_at")
 
   // === STATUS AND TRACKING ===
   verification_status String?   @default("pending") @map("verification_status") // 'pending', 'approved', 'rejected'
@@ -217,7 +217,7 @@ model Template {
   org   Organization? @relation("OrgTemplates", fields: [orgId], references: [id])
 
   // === EXISTING RELATIONS (preserve all) ===
-  template_campaign         template_campaign[]
+  template_campaign template_campaign[]
 
   // Power Landscape: position registrations (Cycle 37)
   positionRegistrations PositionRegistration[]
@@ -436,61 +436,22 @@ model template_campaign {
   user            User      @relation("UserCampaigns", fields: [user_id], references: [id], onDelete: Cascade)
 }
 
-model representative {
-  id          String  @id @default(cuid())
-  bioguide_id String  @unique
-  name        String
-  party       String
-  state       String
-  district    String
-  chamber     String
-  office_code String
-  phone       String?
-  email       String?
+model UserDMRelation {
+  id              String    @id @default(cuid())
+  userId          String    @map("user_id")
+  decisionMakerId String    @map("decision_maker_id")
+  relationship    String    // "constituent" | "voter" | "resident"
+  isActive        Boolean   @default(true) @map("is_active")
+  assignedAt      DateTime  @default(now()) @map("assigned_at")
+  lastValidated   DateTime? @map("last_validated")
 
-  // === ENHANCED OFFICE INFORMATION (from congressional_office) ===
-  member_name    String? @map("member_name") // From congressional_office (may differ from name)
-  office_address String? @map("office_address")
-  office_city    String? @map("office_city")
-  office_state   String? @map("office_state")
-  office_zip     String? @map("office_zip")
+  user          User          @relation("UserDMRelations", fields: [userId], references: [id], onDelete: Cascade)
+  decisionMaker DecisionMaker @relation(fields: [decisionMakerId], references: [id], onDelete: Cascade)
 
-  // === ENHANCED TERM INFORMATION ===
-  term_start   DateTime? @map("term_start")
-  term_end     DateTime? @map("term_end")
-  current_term Int?      @map("current_term") // Term number
-
-  // === STATUS AND METADATA ===
-  is_active    Boolean  @default(true)
-  last_updated DateTime @default(now()) @map("last_updated")
-
-  // === DATA SOURCE TRACKING ===
-  data_source       String?   @map("data_source") // 'congress_api', 'bioguide', 'manual'
-  source_updated_at DateTime? @map("source_updated_at")
-
-  // === RELATIONS (preserve all) ===
-  user_representatives user_representatives[]
-
-  @@index([state, district])
-  @@index([chamber, is_active])
-  @@index([bioguide_id])
-  @@index([office_code])
-  @@map("representative")
-}
-
-model user_representatives {
-  id                String         @id @default(cuid())
-  user_id           String         @map("user_id")
-  representative_id String         @map("representative_id")
-  relationship      String
-  is_active         Boolean        @default(true)
-  assigned_at       DateTime       @default(now()) @map("assigned_at")
-  last_validated    DateTime?      @map("last_validated")
-  representative    representative @relation(fields: [representative_id], references: [id], onDelete: Cascade)
-  user              User           @relation(fields: [user_id], references: [id], onDelete: Cascade)
-
-  @@unique([user_id, representative_id])
-  @@map("user_representatives")
+  @@unique([userId, decisionMakerId])
+  @@index([userId])
+  @@index([decisionMakerId])
+  @@map("user_dm_relation")
 }
 
 // ===================================================================
@@ -863,7 +824,7 @@ model RateLimit {
 // ============================================================================
 
 model Intelligence {
-  id               String                       @id @default(cuid())
+  id               String                      @id @default(cuid())
   category         String // 'news' | 'legislative' | 'regulatory' | 'corporate' | 'social'
   title            String
   source           String
@@ -872,11 +833,11 @@ model Intelligence {
   snippet          String
   topics           String[] // Postgres array
   entities         String[] // Postgres array
-  embedding        Unsupported("vector(1024)")?
+  embedding        Unsupported("vector(768)")?
   relevance_score  Float?
   sentiment        String? // 'positive' | 'negative' | 'neutral' | 'mixed'
   geographic_scope String?
-  created_at       DateTime                     @default(now())
+  created_at       DateTime                    @default(now())
   expires_at       DateTime?
 
   // Full-text search: generated tsvector column added via raw SQL migration
@@ -939,15 +900,15 @@ model ResolvedContact {
 // ============================================================================
 
 model SuppressedEmail {
-  id         String   @id @default(cuid())
-  email      String   @unique
-  domain     String
-  reason     String // "smtp_invalid" | "smtp_disabled" | "full_inbox" | "bounce_report" | "dns_no_mx"
-  source     String // "verification" | "user_report"
-  reportedBy String?  @map("reported_by")
-  reacherData Json?   @map("reacher_data")
-  createdAt  DateTime @default(now()) @map("created_at")
-  expiresAt  DateTime @map("expires_at")
+  id          String   @id @default(cuid())
+  email       String   @unique
+  domain      String
+  reason      String // "smtp_invalid" | "smtp_disabled" | "full_inbox" | "bounce_report" | "dns_no_mx"
+  source      String // "verification" | "user_report"
+  reportedBy  String?  @map("reported_by")
+  reacherData Json?    @map("reacher_data")
+  createdAt   DateTime @default(now()) @map("created_at")
+  expiresAt   DateTime @map("expires_at")
 
   @@index([domain])
   @@index([expiresAt])
@@ -989,65 +950,65 @@ model AgentTrace {
 // ============================================================================
 
 model Debate {
-  id                  String   @id @default(cuid())
-  template_id         String   @map("template_id")
+  id          String @id @default(cuid())
+  template_id String @map("template_id")
 
   // On-chain identifiers
-  debate_id_onchain   String   @unique @map("debate_id_onchain") // bytes32 from proposeDebate()
-  action_domain       String   @map("action_domain") // Derived debate action domain (BN254)
-  proposition_hash    String   @map("proposition_hash") // keccak256(proposition_text)
+  debate_id_onchain String @unique @map("debate_id_onchain") // bytes32 from proposeDebate()
+  action_domain     String @map("action_domain") // Derived debate action domain (BN254)
+  proposition_hash  String @map("proposition_hash") // keccak256(proposition_text)
 
   // Proposition content (stored off-chain, hash on-chain)
-  proposition_text    String   @map("proposition_text")
+  proposition_text String @map("proposition_text")
 
   // Debate parameters
-  deadline            DateTime
-  jurisdiction_size   Int      @default(0) @map("jurisdiction_size")
-  status              String   @default("active") // 'active' | 'resolving' | 'resolved' | 'awaiting_governance' | 'under_appeal'
+  deadline          DateTime
+  jurisdiction_size Int      @default(0) @map("jurisdiction_size")
+  status            String   @default("active") // 'active' | 'resolving' | 'resolved' | 'awaiting_governance' | 'under_appeal'
 
   // Aggregate metrics (mirrors on-chain, updated via event indexer)
-  argument_count       Int     @default(0) @map("argument_count")
-  unique_participants  Int     @default(0) @map("unique_participants")
-  total_stake          BigInt  @default(0) @map("total_stake")
+  argument_count      Int    @default(0) @map("argument_count")
+  unique_participants Int    @default(0) @map("unique_participants")
+  total_stake         BigInt @default(0) @map("total_stake")
 
   // Resolution (populated after resolveDebate())
-  winning_argument_index  Int?    @map("winning_argument_index")
-  winning_stance          String? @map("winning_stance")
-  resolved_at             DateTime? @map("resolved_at")
-  resolved_from_chain     Boolean @default(false) @map("resolved_from_chain") // True when winner confirmed by on-chain read
+  winning_argument_index Int?      @map("winning_argument_index")
+  winning_stance         String?   @map("winning_stance")
+  resolved_at            DateTime? @map("resolved_at")
+  resolved_from_chain    Boolean   @default(false) @map("resolved_from_chain") // True when winner confirmed by on-chain read
 
   // AI Resolution (Phase 3: AI-Augmented Resolution)
-  ai_resolution           Json?     @map("ai_resolution") // Full AIResolutionData blob
-  ai_signature_count      Int?      @map("ai_signature_count")
-  ai_panel_consensus      Float?    @map("ai_panel_consensus") // Model agreement 0-1
-  resolution_method       String?   @map("resolution_method") // 'ai_community' | 'governance_override'
-  appeal_deadline         DateTime? @map("appeal_deadline")
-  governance_justification String?  @map("governance_justification")
+  ai_resolution            Json?     @map("ai_resolution") // Full AIResolutionData blob
+  ai_signature_count       Int?      @map("ai_signature_count")
+  ai_panel_consensus       Float?    @map("ai_panel_consensus") // Model agreement 0-1
+  resolution_method        String?   @map("resolution_method") // 'ai_community' | 'governance_override'
+  appeal_deadline          DateTime? @map("appeal_deadline")
+  governance_justification String?   @map("governance_justification")
 
   // Transaction (populated when created on-chain)
-  tx_hash             String?  @map("tx_hash") // proposeDebate() transaction hash
+  tx_hash String? @map("tx_hash") // proposeDebate() transaction hash
 
   // Proposer (pseudonymous — wallet address, not identity)
-  proposer_address    String   @map("proposer_address")
-  proposer_bond       BigInt   @map("proposer_bond")
+  proposer_address String @map("proposer_address")
+  proposer_bond    BigInt @map("proposer_bond")
 
   // LMSR market state (populated after first epoch)
-  market_status       String   @default("pre_market") @map("market_status") // 'pre_market' | 'active' | 'resolved'
-  market_liquidity    BigInt?  @map("market_liquidity") // LMSR b parameter (SD59x18 raw)
-  current_prices      Json?    @map("current_prices") // { "0": "0.333", "1": "0.333", "2": "0.333" }
-  current_epoch       Int      @default(0) @map("current_epoch")
+  market_status       String    @default("pre_market") @map("market_status") // 'pre_market' | 'active' | 'resolved'
+  market_liquidity    BigInt?   @map("market_liquidity") // LMSR b parameter (SD59x18 raw)
+  current_prices      Json?     @map("current_prices") // { "0": "0.333", "1": "0.333", "2": "0.333" }
+  current_epoch       Int       @default(0) @map("current_epoch")
   trade_deadline      DateTime? @map("trade_deadline") // current epoch commit deadline
   resolution_deadline DateTime? @map("resolution_deadline") // market resolution deadline
 
   // Timestamps
-  created_at          DateTime @default(now()) @map("created_at")
-  updated_at          DateTime @updatedAt @map("updated_at")
+  created_at DateTime @default(now()) @map("created_at")
+  updated_at DateTime @updatedAt @map("updated_at")
 
   // Relations
-  template            Template @relation(fields: [template_id], references: [id], onDelete: Cascade)
-  arguments           DebateArgument[]
-  nullifiers          DebateNullifier[]
-  campaign            Campaign?
+  template   Template          @relation(fields: [template_id], references: [id], onDelete: Cascade)
+  arguments  DebateArgument[]
+  nullifiers DebateNullifier[]
+  campaign   Campaign?
 
   @@index([template_id])
   @@index([status])
@@ -1056,46 +1017,46 @@ model Debate {
 }
 
 model DebateArgument {
-  id              String   @id @default(cuid())
-  debate_id       String   @map("debate_id")
-  argument_index  Int      @map("argument_index") // On-chain index in debate.arguments[]
+  id             String @id @default(cuid())
+  debate_id      String @map("debate_id")
+  argument_index Int    @map("argument_index") // On-chain index in debate.arguments[]
 
   // Content (stored off-chain, bodyHash on-chain)
-  stance          String   // 'SUPPORT' | 'OPPOSE' | 'AMEND'
-  body            String
-  body_hash       String   @map("body_hash") // keccak256(body)
-  amendment_text  String?  @map("amendment_text") // Only for AMEND stance
-  amendment_hash  String?  @map("amendment_hash")
-  nullifier_hash  String?  @map("nullifier_hash")
+  stance         String // 'SUPPORT' | 'OPPOSE' | 'AMEND'
+  body           String
+  body_hash      String  @map("body_hash") // keccak256(body)
+  amendment_text String? @map("amendment_text") // Only for AMEND stance
+  amendment_hash String? @map("amendment_hash")
+  nullifier_hash String? @map("nullifier_hash")
 
   // Scoring (from on-chain events, updated by indexer)
-  stake_amount     BigInt   @map("stake_amount")
-  engagement_tier  Int      @map("engagement_tier")
-  weighted_score   BigInt   @map("weighted_score") // sqrt(stake) * 2^tier
-  total_stake      BigInt   @default(0) @map("total_stake") // Including co-signs
-  co_sign_count    Int      @default(0) @map("co_sign_count")
+  stake_amount    BigInt @map("stake_amount")
+  engagement_tier Int    @map("engagement_tier")
+  weighted_score  BigInt @map("weighted_score") // sqrt(stake) * 2^tier
+  total_stake     BigInt @default(0) @map("total_stake") // Including co-signs
+  co_sign_count   Int    @default(0) @map("co_sign_count")
 
   // LMSR pricing (updated by chain event indexer)
-  current_price    String?  @map("current_price") // "0.42" (decimal string)
-  price_history    Json?    @map("price_history") // [{ epoch: 0, price: "0.333", timestamp: "..." }, ...]
-  position_count   Int      @default(0) @map("position_count") // total unique traders on this argument
+  current_price  String? @map("current_price") // "0.42" (decimal string)
+  price_history  Json?   @map("price_history") // [{ epoch: 0, price: "0.333", timestamp: "..." }, ...]
+  position_count Int     @default(0) @map("position_count") // total unique traders on this argument
 
   // AI evaluation scores (Phase 3: AI-Augmented Resolution)
-  ai_scores        Json?    @map("ai_scores") // { reasoning, accuracy, evidence, constructiveness, feasibility }
-  ai_weighted      Int?     @map("ai_weighted") // Dimension-weighted AI score (0-10000 bp)
-  final_score      Int?     @map("final_score") // α-blended final score (0-10000 bp)
-  model_agreement  Float?   @map("model_agreement") // Fraction of models within 20% of median (0-1)
+  ai_scores       Json?  @map("ai_scores") // { reasoning, accuracy, evidence, constructiveness, feasibility }
+  ai_weighted     Int?   @map("ai_weighted") // Dimension-weighted AI score (0-10000 bp)
+  final_score     Int?   @map("final_score") // α-blended final score (0-10000 bp)
+  model_agreement Float? @map("model_agreement") // Fraction of models within 20% of median (0-1)
 
   // On-chain verification status (Q1 integrity fix — prevents unverified
   // data from influencing resolution or display)
-  verification_status  String    @default("pending") @map("verification_status") // 'pending' | 'verified' | 'rejected'
-  verified_at          DateTime? @map("verified_at")
+  verification_status String    @default("pending") @map("verification_status") // 'pending' | 'verified' | 'rejected'
+  verified_at         DateTime? @map("verified_at")
 
   // Timestamps
-  created_at       DateTime @default(now()) @map("created_at")
+  created_at DateTime @default(now()) @map("created_at")
 
   // Relations
-  debate           Debate   @relation(fields: [debate_id], references: [id], onDelete: Cascade)
+  debate Debate @relation(fields: [debate_id], references: [id], onDelete: Cascade)
 
   @@unique([debate_id, argument_index])
   @@unique([debate_id, nullifier_hash])
@@ -1113,20 +1074,20 @@ model DebateArgument {
 // =============================================================================
 
 model DebateNullifier {
-  id              String   @id @default(cuid())
-  debate_id       String   @map("debate_id")
-  nullifier_hash  String   @map("nullifier_hash")
-  action_type     String   @map("action_type") // 'argument' | 'cosign'
+  id             String @id @default(cuid())
+  debate_id      String @map("debate_id")
+  nullifier_hash String @map("nullifier_hash")
+  action_type    String @map("action_type") // 'argument' | 'cosign'
 
   // On-chain verification (Q1 integrity fix)
-  verification_status  String    @default("pending") @map("verification_status") // 'pending' | 'verified' | 'rejected'
-  cosign_weight        BigInt?   @map("cosign_weight") // Weight contributed by this cosign (for rollback)
-  argument_id          String?   @map("argument_id") // Target argument (for cosign weight rollback)
-  tx_hash              String?   @map("tx_hash") // Transaction hash for async verification
+  verification_status String  @default("pending") @map("verification_status") // 'pending' | 'verified' | 'rejected'
+  cosign_weight       BigInt? @map("cosign_weight") // Weight contributed by this cosign (for rollback)
+  argument_id         String? @map("argument_id") // Target argument (for cosign weight rollback)
+  tx_hash             String? @map("tx_hash") // Transaction hash for async verification
 
-  created_at      DateTime @default(now()) @map("created_at")
+  created_at DateTime @default(now()) @map("created_at")
 
-  debate          Debate   @relation(fields: [debate_id], references: [id], onDelete: Cascade)
+  debate Debate @relation(fields: [debate_id], references: [id], onDelete: Cascade)
 
   @@unique([debate_id, nullifier_hash])
   @@index([debate_id])
@@ -1142,22 +1103,22 @@ model DebateNullifier {
 /// The leaf hash is Poseidon2_H4(user_secret, cell_id, registration_salt, authority_level),
 /// computed entirely in the browser. Only the leaf hash and Merkle proof are stored here.
 model ShadowAtlasRegistration {
-  id                    String   @id @default(cuid())
-  user_id               String   @unique @map("user_id")
-  congressional_district String  @map("congressional_district")
-  identity_commitment   String   @map("identity_commitment")
-  leaf_index            Int      @map("leaf_index")
-  merkle_root           String   @map("merkle_root")
-  merkle_path           Json     @map("merkle_path") // string[] of sibling hashes
-  credential_type       String   @map("credential_type") // 'three-tree'
-  cell_id               String?  @map("cell_id") // Census block GEOID (nullable for privacy)
-  verification_method   String   @map("verification_method") // 'mdl' | 'digital-credentials-api'
-  verification_id       String   @map("verification_id")
+  id                     String   @id @default(cuid())
+  user_id                String   @unique @map("user_id")
+  congressional_district String   @map("congressional_district")
+  identity_commitment    String   @map("identity_commitment")
+  leaf_index             Int      @map("leaf_index")
+  merkle_root            String   @map("merkle_root")
+  merkle_path            Json     @map("merkle_path") // string[] of sibling hashes
+  credential_type        String   @map("credential_type") // 'three-tree'
+  cell_id                String?  @map("cell_id") // Census block GEOID (nullable for privacy)
+  verification_method    String   @map("verification_method") // 'mdl' | 'digital-credentials-api'
+  verification_id        String   @map("verification_id")
   verification_timestamp DateTime @map("verification_timestamp")
-  registration_status   String   @default("registered") @map("registration_status")
-  expires_at            DateTime @map("expires_at")
-  created_at            DateTime @default(now()) @map("created_at")
-  updated_at            DateTime @updatedAt @map("updated_at")
+  registration_status    String   @default("registered") @map("registration_status")
+  expires_at             DateTime @map("expires_at")
+  created_at             DateTime @default(now()) @map("created_at")
+  updated_at             DateTime @updatedAt @map("updated_at")
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
@@ -1195,18 +1156,18 @@ model VerificationAudit {
 // Idempotency via nullifier check against on-chain state.
 
 model SubmissionRetry {
-  id              String   @id @default(cuid())
-  submission_id   String   @unique @map("submission_id")
-  nullifier       String   @map("nullifier")
-  proof_hex       String   @map("proof_hex")
-  public_inputs   Json     @map("public_inputs") // string[] — 31 field elements (three-tree circuit)
-  verifier_depth  Int      @map("verifier_depth")
-  retry_count     Int      @default(0) @map("retry_count")
-  next_retry_at   DateTime @map("next_retry_at")
-  status          String   @default("pending") @map("status") // 'pending' | 'succeeded' | 'exhausted'
-  last_error      String?  @map("last_error")
-  created_at      DateTime @default(now()) @map("created_at")
-  updated_at      DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(cuid())
+  submission_id  String   @unique @map("submission_id")
+  nullifier      String   @map("nullifier")
+  proof_hex      String   @map("proof_hex")
+  public_inputs  Json     @map("public_inputs") // string[] — 31 field elements (three-tree circuit)
+  verifier_depth Int      @map("verifier_depth")
+  retry_count    Int      @default(0) @map("retry_count")
+  next_retry_at  DateTime @map("next_retry_at")
+  status         String   @default("pending") @map("status") // 'pending' | 'succeeded' | 'exhausted'
+  last_error     String?  @map("last_error")
+  created_at     DateTime @default(now()) @map("created_at")
+  updated_at     DateTime @updatedAt @map("updated_at")
 
   submission Submission @relation(fields: [submission_id], references: [id], onDelete: Cascade)
 
@@ -1223,15 +1184,15 @@ model SubmissionRetry {
 // One position per identity per template (enforced by unique constraint).
 
 model PositionRegistration {
-  id                   String   @id @default(cuid())
-  template_id          String   @map("template_id")
-  identity_commitment  String   @map("identity_commitment")
-  stance               String   // 'support' | 'oppose'
-  district_code        String?  @map("district_code")
-  registered_at        DateTime @default(now()) @map("registered_at")
+  id                  String   @id @default(cuid())
+  template_id         String   @map("template_id")
+  identity_commitment String   @map("identity_commitment")
+  stance              String // 'support' | 'oppose'
+  district_code       String?  @map("district_code")
+  registered_at       DateTime @default(now()) @map("registered_at")
 
-  deliveries           PositionDelivery[]
-  template             Template @relation(fields: [template_id], references: [id], onDelete: Cascade)
+  deliveries PositionDelivery[]
+  template   Template           @relation(fields: [template_id], references: [id], onDelete: Cascade)
 
   @@unique([template_id, identity_commitment])
   @@index([template_id])
@@ -1239,15 +1200,15 @@ model PositionRegistration {
 }
 
 model PositionDelivery {
-  id                   String    @id @default(cuid())
-  registration_id      String    @map("registration_id")
-  recipient_name       String    @map("recipient_name")
-  recipient_email      String?   @map("recipient_email")
-  delivery_method      String    @map("delivery_method") // 'cwc' | 'email' | 'recorded'
-  delivery_status      String    @default("pending") @map("delivery_status") // 'pending' | 'delivered' | 'failed'
-  delivered_at         DateTime? @map("delivered_at")
+  id              String    @id @default(cuid())
+  registration_id String    @map("registration_id")
+  recipient_name  String    @map("recipient_name")
+  recipient_email String?   @map("recipient_email")
+  delivery_method String    @map("delivery_method") // 'cwc' | 'email' | 'recorded'
+  delivery_status String    @default("pending") @map("delivery_status") // 'pending' | 'delivered' | 'failed'
+  delivered_at    DateTime? @map("delivered_at")
 
-  registration         PositionRegistration @relation(fields: [registration_id], references: [id], onDelete: Cascade)
+  registration PositionRegistration @relation(fields: [registration_id], references: [id], onDelete: Cascade)
 
   @@index([registration_id])
   @@map("position_delivery")
@@ -1263,10 +1224,10 @@ model PositionDelivery {
 
 model CommunityFieldContribution {
   id                  String   @id @default(cuid())
-  epoch_date          String   @map("epoch_date")             // "2026-03-02" (daily epoch)
-  epoch_nullifier     String   @map("epoch_nullifier")        // H2(identity_commitment, epoch_domain)
-  cell_tree_root      String   @map("cell_tree_root")         // Poseidon Merkle root over H3 cells
-  proof_hash          String   @map("proof_hash")             // SHA-256(proof) for reference
+  epoch_date          String   @map("epoch_date") // "2026-03-02" (daily epoch)
+  epoch_nullifier     String   @map("epoch_nullifier") // H2(identity_commitment, epoch_domain)
+  cell_tree_root      String   @map("cell_tree_root") // Poseidon Merkle root over H3 cells
+  proof_hash          String   @map("proof_hash") // SHA-256(proof) for reference
   verification_status String   @default("pending") @map("verification_status") // 'pending' | 'verified' | 'rejected'
   created_at          DateTime @default(now()) @map("created_at")
 
@@ -1301,11 +1262,17 @@ model Organization {
   wallet_address      String? @unique @map("wallet_address")
   wallet_type         String? @map("wallet_type")
 
+  // Public profile (org discovery)
+  mission    String?
+  websiteUrl String? @map("website_url")
+  logoUrl    String? @map("logo_url")
+  isPublic   Boolean @default(false) @map("is_public")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   memberships       OrgMembership[]
-  templates         Template[]         @relation("OrgTemplates")
+  templates         Template[]            @relation("OrgTemplates")
   endorsements      TemplateEndorsement[]
   resolved_contacts OrgResolvedContact[]
   invites           OrgInvite[]
@@ -1323,8 +1290,16 @@ model Organization {
   smsBlasts         SmsBlast[]
   patchThroughCalls PatchThroughCall[]
 
-  ownedNetworks      OrgNetwork[]         @relation("NetworkOwner")
+  ownedNetworks      OrgNetwork[]       @relation("NetworkOwner")
   networkMemberships OrgNetworkMember[]
+
+  // Intelligence loop
+  issueDomains   OrgIssueDomain[]
+  billRelevances OrgBillRelevance[]
+  alerts         LegislativeAlert[]
+  receipts       AccountabilityReceipt[]
+  dmFollows      OrgDMFollow[]
+  billWatches    OrgBillWatch[]
 
   @@map("organization")
 }
@@ -1398,7 +1373,7 @@ model OrgNetwork {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  ownerOrg Organization        @relation("NetworkOwner", fields: [ownerOrgId], references: [id], onDelete: Cascade)
+  ownerOrg Organization       @relation("NetworkOwner", fields: [ownerOrgId], references: [id], onDelete: Cascade)
   members  OrgNetworkMember[]
 
   @@index([ownerOrgId])
@@ -1445,11 +1420,11 @@ model Supporter {
   id    String @id @default(cuid())
   orgId String @map("org_id")
 
-  email       String
-  name        String?
-  postalCode  String? @map("postal_code")
-  country     String? @default("US")
-  phone       String?
+  email      String
+  name       String?
+  postalCode String? @map("postal_code")
+  country    String? @default("US")
+  phone      String?
 
   // ZK identity binding (links to protocol layer without revealing credential)
   identityCommitment String? @map("identity_commitment")
@@ -1469,9 +1444,9 @@ model Supporter {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  org     Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  tags    SupporterTag[]
-  actions CampaignAction[]
+  org                Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  tags               SupporterTag[]
+  actions            CampaignAction[]
   rsvps              EventRsvp[]
   donations          Donation[]
   workflowExecutions WorkflowExecution[]
@@ -1513,17 +1488,17 @@ model SupporterTag {
 }
 
 model Segment {
-  id    String @id @default(cuid())
-  orgId String @map("org_id")
-  name  String
+  id          String  @id @default(cuid())
+  orgId       String  @map("org_id")
+  name        String
   description String?
 
   // JSON filter definition (SegmentFilter type)
   filters Json // { logic: 'AND'|'OR', conditions: SegmentCondition[] }
 
   // Cached count (refreshed on access if stale > 5 min)
-  cachedCount Int?       @map("cached_count")
-  countedAt   DateTime?  @map("counted_at")
+  cachedCount Int?      @map("cached_count")
+  countedAt   DateTime? @map("counted_at")
 
   createdBy String   @map("created_by")
   createdAt DateTime @default(now()) @map("created_at")
@@ -1544,7 +1519,7 @@ model Campaign {
   type   String // 'LETTER' | 'EVENT' | 'FORM'
   title  String
   body   String?
-  status String @default("DRAFT") // 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETE'
+  status String  @default("DRAFT") // 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETE'
 
   // Target resolution
   targets Json? // Resolved decision-maker targets
@@ -1558,23 +1533,28 @@ model Campaign {
   debateId        String? @unique @map("debate_id")
 
   // Fundraising
-  goalAmountCents    Int?     @map("goal_amount_cents")
-  raisedAmountCents  Int      @default(0) @map("raised_amount_cents")
-  donorCount         Int      @default(0) @map("donor_count")
-  donationCurrency   String?  @default("usd") @map("donation_currency")
+  goalAmountCents   Int?    @map("goal_amount_cents")
+  raisedAmountCents Int     @default(0) @map("raised_amount_cents")
+  donorCount        Int     @default(0) @map("donor_count")
+  donationCurrency  String? @default("usd") @map("donation_currency")
 
   // Geographic targeting (Phase 2 Wave 5)
   targetJurisdiction String? @map("target_jurisdiction") // null = congressional (default)
   targetCountry      String  @default("US") @map("target_country")
 
+  // Intelligence loop (bill linkage + org position)
+  billId   String? @map("bill_id") // nullable — not all campaigns are bill-triggered
+  position String? // "support" | "oppose" | null — required for scorecard alignment
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  org        Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  debate     Debate?            @relation(fields: [debateId], references: [id])
-  actions    CampaignAction[]
-  deliveries CampaignDelivery[]
-  events     Event[]
+  org               Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  debate            Debate?            @relation(fields: [debateId], references: [id])
+  bill              Bill?              @relation(fields: [billId], references: [id])
+  actions           CampaignAction[]
+  deliveries        CampaignDelivery[]
+  events            Event[]
   donations         Donation[]
   smsBlasts         SmsBlast[]
   patchThroughCalls PatchThroughCall[]
@@ -1585,14 +1565,14 @@ model Campaign {
 }
 
 model CampaignAction {
-  id         String  @id @default(cuid())
-  campaignId String  @map("campaign_id")
+  id          String  @id @default(cuid())
+  campaignId  String  @map("campaign_id")
   supporterId String? @map("supporter_id")
 
   verified       Boolean @default(false)
   engagementTier Int     @default(0) @map("engagement_tier") // 0=New, 1=Active, 2=Established, 3=Veteran, 4=Pillar
   districtHash   String? @map("district_hash") // SHA-256(district) for geographic aggregate
-  messageHash    String? @map("message_hash")  // SHA-256(message) for ALD uniqueness
+  messageHash    String? @map("message_hash") // SHA-256(message) for ALD uniqueness
 
   sentAt    DateTime @default(now()) @map("sent_at")
   createdAt DateTime @default(now()) @map("created_at")
@@ -1607,22 +1587,30 @@ model CampaignAction {
 }
 
 model CampaignDelivery {
-  id             String   @id @default(cuid())
-  campaignId     String   @map("campaign_id")
-  targetEmail    String   @map("target_email")
-  targetName     String?  @map("target_name")
-  targetTitle    String?  @map("target_title")
-  targetDistrict String?  @map("target_district")
+  id             String  @id @default(cuid())
+  campaignId     String  @map("campaign_id")
+  targetEmail    String  @map("target_email")
+  targetName     String? @map("target_name")
+  targetTitle    String? @map("target_title")
+  targetDistrict String? @map("target_district")
 
-  status   String    @default("queued") // queued | sent | delivered | bounced | opened
-  sentAt   DateTime? @map("sent_at")
+  status String    @default("queued") // queued | sent | delivered | bounced | opened
+  sentAt DateTime? @map("sent_at")
+
+  // SES event correlation
+  sesMessageId String? @map("ses_message_id") // SES MessageId for SNS event correlation
 
   // Frozen verification packet at send time
   packetSnapshot Json @map("packet_snapshot")
 
+  // Precomputed at delivery time for receipt generation
+  packetDigest   String? @map("packet_digest")
+  proofWeight    Float?  @map("proof_weight")
+
   createdAt DateTime @default(now()) @map("created_at")
 
-  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaign  Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  responses ReportResponse[]
 
   @@index([campaignId])
   @@index([campaignId, status])
@@ -1630,45 +1618,45 @@ model CampaignDelivery {
 }
 
 model EmailBlast {
-  id            String   @id @default(cuid())
-  orgId         String   @map("org_id")
-  campaignId    String?  @map("campaign_id") // optional campaign linkage
+  id         String  @id @default(cuid())
+  orgId      String  @map("org_id")
+  campaignId String? @map("campaign_id") // optional campaign linkage
 
-  subject       String
-  bodyHtml      String   @map("body_html")
-  fromName      String   @map("from_name")
-  fromEmail     String   @map("from_email")
+  subject   String
+  bodyHtml  String @map("body_html")
+  fromName  String @map("from_name")
+  fromEmail String @map("from_email")
 
-  status        String   @default("draft") // draft | sending | sent | failed
+  status String @default("draft") // draft | sending | sent | failed
 
   // Recipient targeting
-  recipientFilter Json?  @map("recipient_filter") // tag/verification/tier filters
-  totalRecipients Int    @default(0) @map("total_recipients")
+  recipientFilter Json? @map("recipient_filter") // tag/verification/tier filters
+  totalRecipients Int   @default(0) @map("total_recipients")
 
   // Verification context (computed at send time, injected into every email)
   verificationContext Json? @map("verification_context")
 
   // Aggregate metrics
-  totalSent       Int    @default(0) @map("total_sent")
-  totalBounced    Int    @default(0) @map("total_bounced")
-  totalOpened     Int    @default(0) @map("total_opened")
-  totalClicked    Int    @default(0) @map("total_clicked")
-  totalComplained Int    @default(0) @map("total_complained")
+  totalSent       Int @default(0) @map("total_sent")
+  totalBounced    Int @default(0) @map("total_bounced")
+  totalOpened     Int @default(0) @map("total_opened")
+  totalClicked    Int @default(0) @map("total_clicked")
+  totalComplained Int @default(0) @map("total_complained")
 
-  sentAt        DateTime? @map("sent_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  sentAt    DateTime? @map("sent_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
 
   // A/B testing
-  isAbTest          Boolean   @default(false) @map("is_ab_test")
-  abTestConfig      Json?     @map("ab_test_config")      // { splitPct, winnerMetric, testDurationMs, testGroupPct }
-  abVariant         String?   @map("ab_variant")           // 'A' | 'B' | null (winner send)
-  abParentId        String?   @map("ab_parent_id")         // Correlation ID linking A/B/winner blasts
-  abWinnerPickedAt  DateTime? @map("ab_winner_picked_at")
+  isAbTest         Boolean   @default(false) @map("is_ab_test")
+  abTestConfig     Json?     @map("ab_test_config") // { splitPct, winnerMetric, testDurationMs, testGroupPct }
+  abVariant        String?   @map("ab_variant") // 'A' | 'B' | null (winner send)
+  abParentId       String?   @map("ab_parent_id") // Correlation ID linking A/B/winner blasts
+  abWinnerPickedAt DateTime? @map("ab_winner_picked_at")
 
-  org           Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  batches       EmailBatch[]
-  events        EmailEvent[]
+  org     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  batches EmailBatch[]
+  events  EmailEvent[]
 
   @@index([orgId])
   @@index([status])
@@ -1677,17 +1665,17 @@ model EmailBlast {
 }
 
 model EmailBatch {
-  id            String   @id @default(cuid())
-  blastId       String   @map("blast_id")
-  batchIndex    Int      @map("batch_index")
+  id         String @id @default(cuid())
+  blastId    String @map("blast_id")
+  batchIndex Int    @map("batch_index")
 
-  status        String   @default("pending") // pending | sending | sent | failed
-  sentCount     Int      @default(0) @map("sent_count")
-  failedCount   Int      @default(0) @map("failed_count")
-  error         String?
-  sentAt        DateTime? @map("sent_at")
+  status      String    @default("pending") // pending | sending | sent | failed
+  sentCount   Int       @default(0) @map("sent_count")
+  failedCount Int       @default(0) @map("failed_count")
+  error       String?
+  sentAt      DateTime? @map("sent_at")
 
-  blast         EmailBlast @relation(fields: [blastId], references: [id], onDelete: Cascade)
+  blast EmailBlast @relation(fields: [blastId], references: [id], onDelete: Cascade)
 
   @@index([blastId])
   @@map("email_batch")
@@ -1718,20 +1706,20 @@ model AnSync {
   id    String @id @default(cuid())
   orgId String @map("org_id")
 
-  apiKey    String @map("api_key") // encrypted AN OSDI-API-Token
-  status    String @default("idle") // idle | running | completed | failed
-  syncType  String @map("sync_type") // 'full' | 'incremental'
+  apiKey   String @map("api_key") // encrypted AN OSDI-API-Token
+  status   String @default("idle") // idle | running | completed | failed
+  syncType String @map("sync_type") // 'full' | 'incremental'
 
   // Progress tracking
-  totalResources     Int @default(0) @map("total_resources")
-  processedResources Int @default(0) @map("processed_resources")
+  totalResources     Int     @default(0) @map("total_resources")
+  processedResources Int     @default(0) @map("processed_resources")
   currentResource    String? @map("current_resource") // 'people' | 'petitions' | 'events' etc.
 
   // Results
-  imported   Int @default(0)
-  updated    Int @default(0)
-  skipped    Int @default(0)
-  errors     Json? // array of error strings
+  imported Int   @default(0)
+  updated  Int   @default(0)
+  skipped  Int   @default(0)
+  errors   Json? // array of error strings
 
   lastSyncAt  DateTime? @map("last_sync_at")
   startedAt   DateTime? @map("started_at")
@@ -1791,12 +1779,12 @@ model ApiKey {
   // First 8 chars of plaintext for display ("ck_live_a1b2c3d4...")
   keyPrefix String @map("key_prefix")
 
-  name      String   @default("Default")
-  scopes    String[] @default(["read"]) // 'read' | 'write'
+  name   String   @default("Default")
+  scopes String[] @default(["read"]) // 'read' | 'write'
 
   // Usage tracking
-  lastUsedAt DateTime? @map("last_used_at")
-  requestCount Int     @default(0) @map("request_count")
+  lastUsedAt   DateTime? @map("last_used_at")
+  requestCount Int       @default(0) @map("request_count")
 
   // Lifecycle
   revokedAt DateTime? @map("revoked_at")
@@ -1834,52 +1822,52 @@ enum RsvpStatus {
 }
 
 model Event {
-  id         String      @id @default(cuid())
-  orgId      String      @map("org_id")
-  campaignId String?     @map("campaign_id")
+  id         String  @id @default(cuid())
+  orgId      String  @map("org_id")
+  campaignId String? @map("campaign_id")
 
   title       String
-  description String?    @db.Text
-  eventType   EventType  @default(IN_PERSON) @map("event_type")
+  description String?   @db.Text
+  eventType   EventType @default(IN_PERSON) @map("event_type")
 
   // When
-  startAt    DateTime    @map("start_at")
-  endAt      DateTime?   @map("end_at")
-  timezone   String      @default("America/New_York")
+  startAt  DateTime  @map("start_at")
+  endAt    DateTime? @map("end_at")
+  timezone String    @default("America/New_York")
 
   // Where (physical)
   venue      String?
   address    String?
   city       String?
   state      String?
-  postalCode String?     @map("postal_code")
+  postalCode String? @map("postal_code")
   latitude   Float?
   longitude  Float?
 
   // Where (virtual)
-  virtualUrl String?     @map("virtual_url")
+  virtualUrl String? @map("virtual_url")
 
   // Capacity
   capacity        Int?
   waitlistEnabled Boolean @default(false) @map("waitlist_enabled")
 
   // Aggregate counters (denormalized for read performance)
-  rsvpCount       Int     @default(0) @map("rsvp_count")
-  attendeeCount   Int     @default(0) @map("attendee_count")
-  verifiedAttendees Int   @default(0) @map("verified_attendees")
+  rsvpCount         Int @default(0) @map("rsvp_count")
+  attendeeCount     Int @default(0) @map("attendee_count")
+  verifiedAttendees Int @default(0) @map("verified_attendees")
 
   // Verification
-  checkinCode         String?  @unique @map("checkin_code")
-  requireVerification Boolean  @default(false) @map("require_verification")
+  checkinCode         String? @unique @map("checkin_code")
+  requireVerification Boolean @default(false) @map("require_verification")
 
-  status    EventStatus @default(DRAFT)
+  status EventStatus @default(DRAFT)
 
-  createdAt DateTime    @default(now()) @map("created_at")
-  updatedAt DateTime    @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  org        Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  campaign   Campaign?      @relation(fields: [campaignId], references: [id])
-  rsvps      EventRsvp[]
+  org         Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  campaign    Campaign?         @relation(fields: [campaignId], references: [id])
+  rsvps       EventRsvp[]
   attendances EventAttendance[]
 
   @@index([orgId])
@@ -1889,9 +1877,9 @@ model Event {
 }
 
 model EventRsvp {
-  id          String     @id @default(cuid())
-  eventId     String     @map("event_id")
-  supporterId String?    @map("supporter_id")
+  id          String  @id @default(cuid())
+  eventId     String  @map("event_id")
+  supporterId String? @map("supporter_id")
 
   email      String
   name       String
@@ -1905,8 +1893,8 @@ model EventRsvp {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  event      Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  supporter  Supporter?   @relation(fields: [supporterId], references: [id], onDelete: SetNull)
+  event      Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  supporter  Supporter?       @relation(fields: [supporterId], references: [id], onDelete: SetNull)
   attendance EventAttendance?
 
   @@unique([eventId, email])
@@ -1920,15 +1908,15 @@ model EventAttendance {
   eventId String  @map("event_id")
   rsvpId  String? @unique @map("rsvp_id")
 
-  verified            Boolean  @default(false)
-  verificationMethod  String?  @map("verification_method") // 'mdl' | 'passkey' | 'checkin_code'
-  identityCommitment  String?  @map("identity_commitment")
-  districtHash        String?  @map("district_hash")
+  verified           Boolean @default(false)
+  verificationMethod String? @map("verification_method") // 'mdl' | 'passkey' | 'checkin_code'
+  identityCommitment String? @map("identity_commitment")
+  districtHash       String? @map("district_hash")
 
   checkedInAt DateTime @default(now()) @map("checked_in_at")
 
-  event Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  rsvp  EventRsvp?  @relation(fields: [rsvpId], references: [id], onDelete: SetNull)
+  event Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  rsvp  EventRsvp? @relation(fields: [rsvpId], references: [id], onDelete: SetNull)
 
   @@index([eventId])
   @@map("event_attendance")
@@ -2048,7 +2036,7 @@ model SmsBlast {
   campaignId String? @map("campaign_id")
 
   body       String
-  fromNumber String  @map("from_number")
+  fromNumber String @map("from_number")
 
   recipientFilter Json? @map("recipient_filter")
   totalRecipients Int   @default(0) @map("total_recipients")
@@ -2127,38 +2115,15 @@ model PatchThroughCall {
 }
 
 // ── International Geographic Expansion (Phase 2 Wave 5) ──
-
-model InternationalRepresentative {
-  id              String  @id @default(cuid())
-  countryCode     String  @map("country_code") // 'GB' | 'CA' | 'AU'
-  constituencyId  String  @map("constituency_id") // e.g., 'E14000530' (UK), '24001' (CA)
-  constituencyName String @map("constituency_name")
-
-  name       String
-  party      String?
-  chamber    String?  // 'commons' | 'senate' | 'house' etc.
-  office     String?
-  phone      String?
-  email      String?
-  websiteUrl String? @map("website_url")
-  photoUrl   String? @map("photo_url")
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@unique([countryCode, constituencyId, name])
-  @@index([countryCode])
-  @@index([countryCode, constituencyId])
-  @@map("international_representatives")
-}
+// InternationalRepresentative removed — subsumed by DecisionMaker + ExternalId
 
 model ScopeCorrection {
   id         String @id @default(cuid())
   templateId String @map("template_id")
 
-  aiExtracted   Json   @map("ai_extracted")
-  aiConfidence  Float  @map("ai_confidence")
-  aiMethod      String @map("ai_method") // 'regex' | 'fuzzy' | 'geocoder' | 'llm'
+  aiExtracted  Json   @map("ai_extracted")
+  aiConfidence Float  @map("ai_confidence")
+  aiMethod     String @map("ai_method") // 'regex' | 'fuzzy' | 'geocoder' | 'llm'
 
   userCorrected  Json   @map("user_corrected")
   correctionType String @map("correction_type") // 'wrong_country' | 'wrong_region' | 'wrong_district' | 'too_broad' | 'too_specific'
@@ -2171,4 +2136,336 @@ model ScopeCorrection {
   @@index([aiMethod, correctionType])
   @@index([createdAt])
   @@map("scope_corrections")
+}
+
+// ============================================================================
+// Intelligence Loop: Legislative Monitoring & Scorecards
+// ============================================================================
+
+// Bill / legislative item tracked by the intelligence loop
+model Bill {
+  id                String   @id @default(cuid())
+  externalId        String   @unique @map("external_id") // e.g. "hr-1234-119" or "ca-sb-567-2026"
+  jurisdiction      String // "us-federal" | "us-state-ca" | "uk-parliament" | etc.
+  jurisdictionLevel String   @map("jurisdiction_level") // "federal" | "state" | "local"
+  chamber           String? // "house" | "senate" | "council" | null
+  title             String
+  summary           String?
+  status            String   @default("introduced") // introduced | committee | floor | passed | failed | signed | vetoed
+  statusDate        DateTime @map("status_date")
+  sponsors          Json? // [{name, externalId, party}]
+  committees        String[] // committee names
+  sourceUrl         String   @map("source_url")
+  fullTextUrl       String?  @map("full_text_url")
+
+  // Relevance scoring (computed per-org via OrgBillRelevance)
+  topicEmbedding Unsupported("vector(768)")? @map("topic_embedding")
+  topics         String[]
+  entities       String[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  campaigns  Campaign[]
+  alerts     LegislativeAlert[]
+  relevances OrgBillRelevance[]
+  actions    LegislativeAction[]
+  receipts   AccountabilityReceipt[]
+  watchers   OrgBillWatch[]
+
+  // Note: bill.fts tsvector column added via raw SQL in migration:
+  // ALTER TABLE "bill" ADD COLUMN IF NOT EXISTS fts tsvector
+  //   GENERATED ALWAYS AS (to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, ''))) STORED;
+  // CREATE INDEX IF NOT EXISTS bill_fts_gin ON bill USING gin(fts);
+
+  @@index([jurisdiction, status])
+  @@index([statusDate])
+  @@index([externalId])
+  @@map("bill")
+}
+
+// Per-org relevance score for a bill (avoids N*M recomputation)
+model OrgBillRelevance {
+  id        String   @id @default(cuid())
+  orgId     String   @map("org_id")
+  billId    String   @map("bill_id")
+  score     Float // 0.0-1.0 cosine similarity between bill embedding and org issue domains
+  matchedOn String[] @map("matched_on") // which org topics matched
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  bill Bill         @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, billId])
+  @@index([orgId, score])
+  @@map("org_bill_relevance")
+}
+
+// Alert generated when a bill is relevant to an org
+model LegislativeAlert {
+  id          String  @id @default(cuid())
+  orgId       String  @map("org_id")
+  billId      String  @map("bill_id")
+  type        String // "new_bill" | "status_change" | "vote_scheduled" | "amendment"
+  title       String
+  summary     String
+  urgency     String  @default("normal") // "low" | "normal" | "high" | "critical"
+  status      String  @default("pending") // "pending" | "seen" | "acted" | "dismissed"
+  actionTaken String? @map("action_taken") // "created_campaign" | "sent_email" | null
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  seenAt    DateTime? @map("seen_at")
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  bill Bill         @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, billId, type])
+  @@index([orgId, status])
+  @@index([orgId, createdAt])
+  @@map("legislative_alert")
+}
+
+// Tracks what a decision-maker did after receiving a report
+model ReportResponse {
+  id         String   @id @default(cuid())
+  deliveryId String   @map("delivery_id")
+  type       String // "opened" | "clicked_verify" | "replied" | "forwarded" | "meeting_requested" | "vote_cast" | "public_statement"
+  detail     String? // free-text: reply excerpt, vote direction, etc.
+  confidence String   @default("observed") // "observed" (SES events) | "inferred" (timing correlation) | "reported" (org manually logs)
+  occurredAt DateTime @map("occurred_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  delivery CampaignDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId])
+  @@index([occurredAt])
+  @@map("report_response")
+}
+
+// Decision-maker action on a bill (vote, sponsorship, statement)
+model LegislativeAction {
+  id              String   @id @default(cuid())
+  billId          String   @map("bill_id")
+  decisionMakerId String?  @map("decision_maker_id") // nullable: not all officials are in our DB
+  externalId      String?  @map("external_id") // bioguide_id, openstates_id, etc.
+  name            String
+  action          String // "voted_yes" | "voted_no" | "abstained" | "sponsored" | "co-sponsored" | "statement"
+  detail          String?
+  sourceUrl       String?  @map("source_url")
+  occurredAt      DateTime @map("occurred_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  bill            Bill           @relation(fields: [billId], references: [id], onDelete: Cascade)
+  decisionMaker   DecisionMaker? @relation(fields: [decisionMakerId], references: [id])
+
+  @@index([billId])
+  @@index([decisionMakerId])
+  @@index([occurredAt])
+  @@index([decisionMakerId, occurredAt])
+  @@map("legislative_action")
+}
+
+// Accountability Receipt: proof-weighted decision-maker tracking
+model AccountabilityReceipt {
+  id                String   @id @default(cuid())
+
+  // Decision-maker (canonical FK)
+  decisionMakerId   String   @map("decision_maker_id")
+  dmName            String   @map("dm_name")
+
+  // Bill
+  billId            String   @map("bill_id")
+
+  // Org that delivered the proof
+  orgId             String   @map("org_id")
+
+  // Specific delivery (nullable for aggregate receipts)
+  deliveryId        String?  @unique @map("delivery_id")
+
+  // Proof weight components (frozen from packetSnapshot)
+  verifiedCount     Int      @map("verified_count")
+  totalCount        Int      @map("total_count")
+  gds               Float?
+  ald               Float?
+  cai               Float?
+  temporalEntropy   Float?   @map("temporal_entropy")
+  districtCount     Int      @map("district_count")
+  proofWeight       Float    @map("proof_weight")
+
+  // Cryptographic binding (SHA-256 hot path; Poseidon2 at anchor time)
+  attestationDigest String   @map("attestation_digest")
+  packetDigest      String   @map("packet_digest")
+
+  // Temporal chain
+  proofDeliveredAt  DateTime @map("proof_delivered_at")
+  proofVerifiedAt   DateTime? @map("proof_verified_at")
+  actionOccurredAt  DateTime? @map("action_occurred_at")
+  causalityClass    String   @default("pending") @map("causality_class")
+
+  // Decision-maker action
+  dmAction          String?  @map("dm_action")
+  alignment         Float    @default(0)
+  actionSourceUrl   String?  @map("action_source_url")
+
+  // Anchoring (set by Phase 4 anchoring script)
+  anchorCid         String?  @map("anchor_cid")
+  anchorRoot        String?  @map("anchor_root")
+
+  // Metadata
+  status            String   @default("pending")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  decisionMaker     DecisionMaker @relation(fields: [decisionMakerId], references: [id])
+  bill              Bill          @relation(fields: [billId], references: [id], onDelete: Cascade)
+  org               Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, billId, decisionMakerId])
+  @@index([decisionMakerId])
+  @@index([decisionMakerId, proofDeliveredAt])
+  @@index([billId])
+  @@index([orgId])
+  @@index([status])
+  @@index([causalityClass])
+  @@map("accountability_receipt")
+}
+
+// Org's declared issue domains (used for bill relevance scoring)
+model OrgIssueDomain {
+  id          String                      @id @default(cuid())
+  orgId       String                      @map("org_id")
+  label       String // "water rights", "school safety", "transit equity"
+  embedding   Unsupported("vector(768)")? // precomputed from label + description
+  description String?
+  weight      Float                       @default(1.0) // org can prioritize domains
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, label])
+  @@index([orgId])
+  @@map("org_issue_domain")
+}
+
+// ============================================================================
+// Decision Maker: Universal accountability target
+// ============================================================================
+
+model DecisionMaker {
+	id                String    @id @default(cuid())
+	type              String    // "legislator" | "executive" | "board_member" | "appointed_official" | "corporate_officer" | "administrator" | "judicial" | "custom"
+	title             String?   // "Senator", "CEO", "Commissioner", "Board Member"
+	name              String
+	firstName         String?   @map("first_name")
+	lastName          String    @map("last_name")
+	party             String?
+	jurisdiction      String?   // geographic scope: "US", "California", "Austin, TX", "UK"
+	jurisdictionLevel String?   @map("jurisdiction_level") // "federal" | "state" | "county" | "municipal" | "international" | "private"
+	district          String?   // constituency/ward/district within jurisdiction
+	phone             String?
+	email             String?
+	websiteUrl        String?   @map("website_url")
+	officeAddress     String?   @map("office_address")
+	photoUrl          String?   @map("photo_url")
+	active            Boolean   @default(true)
+	termStart         DateTime? @map("term_start")
+	termEnd           DateTime? @map("term_end")
+	lastSyncedAt      DateTime? @map("last_synced_at")
+	createdAt         DateTime  @default(now()) @map("created_at")
+	updatedAt         DateTime  @updatedAt @map("updated_at")
+
+	institutionId     String?   @map("institution_id")
+	institution       Institution? @relation(fields: [institutionId], references: [id])
+
+	externalIds       ExternalId[]
+	actions           LegislativeAction[]
+	receipts          AccountabilityReceipt[]
+	followers         OrgDMFollow[]
+	userRelations     UserDMRelation[]
+
+	@@index([type])
+	@@index([jurisdiction, jurisdictionLevel])
+	@@index([party])
+	@@index([lastName])
+	@@index([institutionId])
+	@@index([active])
+	@@map("decision_maker")
+}
+
+model Institution {
+	id                String    @id @default(cuid())
+	type              String    // "legislature" | "executive_branch" | "agency" | "corporation" | "university" | "nonprofit" | "judicial" | "international_body" | "municipal_body"
+	name              String
+	jurisdiction      String?
+	jurisdictionLevel String?   @map("jurisdiction_level")
+	parentId          String?   @map("parent_id")
+	websiteUrl        String?   @map("website_url")
+	createdAt         DateTime  @default(now()) @map("created_at")
+	updatedAt         DateTime  @updatedAt @map("updated_at")
+
+	parent            Institution?  @relation("InstitutionHierarchy", fields: [parentId], references: [id])
+	children          Institution[] @relation("InstitutionHierarchy")
+	members           DecisionMaker[]
+
+	@@unique([type, name, jurisdiction])
+	@@index([type])
+	@@index([jurisdictionLevel])
+	@@index([parentId])
+	@@map("institution")
+}
+
+model ExternalId {
+	id              String   @id @default(cuid())
+	decisionMakerId String   @map("decision_maker_id")
+	system          String   // "bioguide" | "openstates" | "wikidata" | "linkedin" | "fec" | "votesmart" | "icma" | "constituency" | "manual"
+	value           String
+	createdAt       DateTime @default(now()) @map("created_at")
+
+	decisionMaker   DecisionMaker @relation(fields: [decisionMakerId], references: [id], onDelete: Cascade)
+
+	@@unique([decisionMakerId, system])
+	@@unique([system, value])
+	@@index([system, value])
+	@@map("external_id")
+}
+
+model OrgDMFollow {
+	id              String   @id @default(cuid())
+	orgId           String   @map("org_id")
+	decisionMakerId String   @map("decision_maker_id")
+	reason          String   @default("manual")
+	alertsEnabled   Boolean  @default(true) @map("alerts_enabled")
+	note            String?
+	followedBy      String?  @map("followed_by")
+	followedAt      DateTime @default(now()) @map("followed_at")
+
+	org             Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+	decisionMaker   DecisionMaker @relation(fields: [decisionMakerId], references: [id], onDelete: Cascade)
+
+	@@unique([orgId, decisionMakerId])
+	@@index([orgId])
+	@@index([decisionMakerId])
+	@@map("org_dm_follow")
+}
+
+// Org watches a bill for manual tracking / watchlist
+model OrgBillWatch {
+  id        String   @id @default(cuid())
+  orgId     String   @map("org_id")
+  billId    String   @map("bill_id")
+  reason    String   @default("manual") // "manual" | "alert" | "campaign"
+  position  String?  // "support" | "oppose" | null
+  addedBy   String?  @map("added_by")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  bill      Bill         @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, billId])
+  @@index([orgId])
+  @@map("org_bill_watch")
 }

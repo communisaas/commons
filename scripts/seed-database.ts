@@ -178,8 +178,10 @@ async function teardownDatabase() {
 		{ name: 'privacy_budget', fn: () => db.privacy_budget.deleteMany({}) },
 		{ name: 'analytics_snapshot', fn: () => db.analytics_snapshot.deleteMany({}) },
 		{ name: 'analytics_aggregate', fn: () => db.analytics_aggregate.deleteMany({}) },
-		{ name: 'user_representatives', fn: () => db.user_representatives.deleteMany({}) },
-		{ name: 'representative', fn: () => db.representative.deleteMany({}) },
+		{ name: 'user_dm_relation', fn: () => db.userDMRelation.deleteMany({}) },
+		{ name: 'org_dm_follow', fn: () => db.orgDMFollow.deleteMany({}) },
+		{ name: 'external_id', fn: () => db.externalId.deleteMany({}) },
+		{ name: 'decision_maker', fn: () => db.decisionMaker.deleteMany({}) },
 		{ name: 'legislative_channel', fn: () => db.legislative_channel.deleteMany({}) },
 		{ name: 'template_campaign', fn: () => db.template_campaign.deleteMany({}) },
 		{ name: 'template_jurisdiction', fn: () => db.templateJurisdiction.deleteMany({}) },
@@ -4159,6 +4161,113 @@ async function main() {
 			console.log(`  Created user: "${userData.name}" (${userData.email})`);
 		}
 
+		// ── Create DecisionMakers + UserDMRelation ──
+		console.log('\nSeeding decision makers + user relations...');
+
+		const SEED_DECISION_MAKERS = [
+			{
+				id: 'dm-seed-sen-co-1',
+				type: 'legislator',
+				title: 'Senator',
+				name: 'John Hickenlooper',
+				firstName: 'John',
+				lastName: 'Hickenlooper',
+				party: 'Democratic',
+				jurisdiction: 'CO',
+				jurisdictionLevel: 'federal',
+				district: null,
+				phone: '202-224-5941',
+				email: null,
+				active: true,
+				bioguideId: 'H001110'
+			},
+			{
+				id: 'dm-seed-sen-co-2',
+				type: 'legislator',
+				title: 'Senator',
+				name: 'Michael Bennet',
+				firstName: 'Michael',
+				lastName: 'Bennet',
+				party: 'Democratic',
+				jurisdiction: 'CO',
+				jurisdictionLevel: 'federal',
+				district: null,
+				phone: '202-224-5852',
+				email: null,
+				active: true,
+				bioguideId: 'B001267'
+			},
+			{
+				id: 'dm-seed-rep-co-1',
+				type: 'legislator',
+				title: 'Representative',
+				name: 'Diana DeGette',
+				firstName: 'Diana',
+				lastName: 'DeGette',
+				party: 'Democratic',
+				jurisdiction: 'CO',
+				jurisdictionLevel: 'federal',
+				district: '01',
+				phone: '202-225-4431',
+				email: null,
+				active: true,
+				bioguideId: 'D000197'
+			}
+		];
+
+		for (const dm of SEED_DECISION_MAKERS) {
+			await db.decisionMaker.create({
+				data: {
+					id: dm.id,
+					type: dm.type,
+					title: dm.title,
+					name: dm.name,
+					firstName: dm.firstName,
+					lastName: dm.lastName,
+					party: dm.party,
+					jurisdiction: dm.jurisdiction,
+					jurisdictionLevel: dm.jurisdictionLevel,
+					district: dm.district,
+					phone: dm.phone,
+					email: dm.email,
+					active: dm.active
+				}
+			});
+
+			// Create ExternalId for bioguide mapping
+			if (dm.bioguideId) {
+				await db.externalId.create({
+					data: {
+						decisionMakerId: dm.id,
+						system: 'bioguide',
+						value: dm.bioguideId
+					}
+				});
+			}
+
+			console.log(`  Created DM: ${dm.title} ${dm.name} (${dm.jurisdiction}${dm.district ? '-' + dm.district : ''})`);
+		}
+
+		// Link user-seed-1 (Alex Rivera, Denver CO) to all three CO decision makers
+		const USER_DM_RELATIONS = [
+			{ userId: 'user-seed-1', decisionMakerId: 'dm-seed-sen-co-1', relationship: 'constituent' },
+			{ userId: 'user-seed-1', decisionMakerId: 'dm-seed-sen-co-2', relationship: 'constituent' },
+			{ userId: 'user-seed-1', decisionMakerId: 'dm-seed-rep-co-1', relationship: 'constituent' }
+		];
+
+		for (const rel of USER_DM_RELATIONS) {
+			await db.userDMRelation.create({
+				data: {
+					userId: rel.userId,
+					decisionMakerId: rel.decisionMakerId,
+					relationship: rel.relationship,
+					isActive: true,
+					lastValidated: new Date()
+				}
+			});
+			console.log(`  Linked ${rel.userId} → ${rel.decisionMakerId} (${rel.relationship})`);
+		}
+
 		// ── Create Templates ──────────────────────────────────────
 		console.log('\nSeeding templates...');
 		for (const t of TEMPLATES) {
@@ -4334,6 +4443,8 @@ async function main() {
 			jurisdictions: await db.templateJurisdiction.count(),
 			debates: await db.debate.count(),
 			debateArgs: await db.debateArgument.count(),
+			decisionMakers: await db.decisionMaker.count(),
+			dmRelations: await db.userDMRelation.count(),
 		};
 
 		console.log('');
@@ -4341,6 +4452,7 @@ async function main() {
 		console.log('SEED COMPLETE');
 		console.log('='.repeat(60));
 		console.log(`Users:          ${counts.users}`);
+		console.log(`DecisionMakers: ${counts.decisionMakers} (${counts.dmRelations} user relations)`);
 		console.log(`Templates:      ${counts.templates} (${counts.published} published, ${counts.drafts} drafts)`);
 		console.log(`Scopes:         ${counts.scopes}`);
 		console.log(`Jurisdictions:  ${counts.jurisdictions}`);

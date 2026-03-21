@@ -135,7 +135,7 @@ async function teardownPhase2() {
 		{ name: 'email_blast', fn: () => db.emailBlast.deleteMany({}) },
 		{ name: 'campaign', fn: () => db.campaign.deleteMany({}) },
 		{ name: 'scope_correction', fn: () => db.scopeCorrection.deleteMany({}) },
-		{ name: 'international_rep', fn: () => db.internationalRepresentative.deleteMany({}) },
+		{ name: 'international_dm', fn: () => db.decisionMaker.deleteMany({ where: { jurisdictionLevel: 'international' } }) },
 		{ name: 'org_network_member', fn: () => db.orgNetworkMember.deleteMany({}) },
 		{ name: 'org_network', fn: () => db.orgNetwork.deleteMany({}) },
 		{ name: 'api_key', fn: () => db.apiKey.deleteMany({}) },
@@ -1197,21 +1197,38 @@ async function main() {
 	}
 	console.log(`  Created ${resolvedCount} org resolved contacts`);
 
-	// ── International Representatives ───────────────────────────
-	console.log('\nSeeding international representatives...');
-	const intlReps = [
-		{ countryCode: 'GB', constituencyId: 'E14000530', constituencyName: 'Cities of London and Westminster', name: 'Nickie Aiken', party: 'Conservative', chamber: 'commons', email: 'nickie.aiken.mp@parliament.uk' },
-		{ countryCode: 'GB', constituencyId: 'E14000639', constituencyName: 'Hackney South and Shoreditch', name: 'Meg Hillier', party: 'Labour', chamber: 'commons', email: 'meg.hillier.mp@parliament.uk' },
-		{ countryCode: 'CA', constituencyId: '24001', constituencyName: 'Papineau', name: 'Justin Trudeau', party: 'Liberal', chamber: 'house', email: 'justin.trudeau@parl.gc.ca' },
-		{ countryCode: 'CA', constituencyId: '59034', constituencyName: 'Vancouver Centre', name: 'Hedy Fry', party: 'Liberal', chamber: 'house', email: 'hedy.fry@parl.gc.ca' },
-		{ countryCode: 'AU', constituencyId: '197', constituencyName: 'Grayndler', name: 'Anthony Albanese', party: 'Labor', chamber: 'house', email: 'a.albanese.mp@aph.gov.au' },
-		{ countryCode: 'AU', constituencyId: '179', constituencyName: 'Kooyong', name: 'Monique Ryan', party: 'Independent', chamber: 'house', email: 'monique.ryan.mp@aph.gov.au' },
+	// ── International Decision-Makers ───────────────────────────
+	console.log('\nSeeding international decision-makers...');
+	const intlDMs = [
+		{ jurisdiction: 'GB', constituencyId: 'E14000530', district: 'Cities of London and Westminster', name: 'Nickie Aiken', party: 'Conservative', email: 'nickie.aiken.mp@parliament.uk' },
+		{ jurisdiction: 'GB', constituencyId: 'E14000639', district: 'Hackney South and Shoreditch', name: 'Meg Hillier', party: 'Labour', email: 'meg.hillier.mp@parliament.uk' },
+		{ jurisdiction: 'CA', constituencyId: '24001', district: 'Papineau', name: 'Justin Trudeau', party: 'Liberal', email: 'justin.trudeau@parl.gc.ca' },
+		{ jurisdiction: 'CA', constituencyId: '59034', district: 'Vancouver Centre', name: 'Hedy Fry', party: 'Liberal', email: 'hedy.fry@parl.gc.ca' },
+		{ jurisdiction: 'AU', constituencyId: '197', district: 'Grayndler', name: 'Anthony Albanese', party: 'Labor', email: 'a.albanese.mp@aph.gov.au' },
+		{ jurisdiction: 'AU', constituencyId: '179', district: 'Kooyong', name: 'Monique Ryan', party: 'Independent', email: 'monique.ryan.mp@aph.gov.au' },
 	];
 
-	for (const rep of intlReps) {
-		await db.internationalRepresentative.create({ data: rep });
+	for (const dm of intlDMs) {
+		await db.decisionMaker.create({
+			data: {
+				type: 'legislator',
+				name: dm.name,
+				jurisdiction: dm.jurisdiction,
+				jurisdictionLevel: 'international',
+				district: dm.district,
+				party: dm.party,
+				email: dm.email,
+				active: true,
+				externalIds: {
+					create: {
+						system: 'constituency',
+						value: dm.constituencyId
+					}
+				}
+			}
+		});
 	}
-	console.log(`  Created ${intlReps.length} international representatives (UK, CA, AU)`);
+	console.log(`  Created ${intlDMs.length} international decision-makers (UK, CA, AU)`);
 
 	// ── Org Invites ─────────────────────────────────────────────
 	console.log('\nSeeding org invites...');
@@ -1371,7 +1388,7 @@ async function main() {
 		workflowExecutions: await db.workflowExecution.count(),
 		networks: await db.orgNetwork.count(),
 		networkMembers: await db.orgNetworkMember.count(),
-		intlReps: await db.internationalRepresentative.count(),
+		intlDMs: await db.decisionMaker.count({ where: { jurisdictionLevel: 'international' } }),
 		campaignDeliveries: await db.campaignDelivery.count(),
 		emailBlasts: await db.emailBlast.count(),
 		emailBatches: await db.emailBatch.count(),
