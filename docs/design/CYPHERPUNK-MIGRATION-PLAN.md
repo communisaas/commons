@@ -846,4 +846,20 @@ All creation paths dual-write: plaintext `email` + `encrypted_email` + `email_ha
 
 #### Status After Cycles 4+5
 
-All 6 pre-scrub blockers resolved. Plaintext columns can now be nulled (Cycle 6) once backfill reaches sufficient coverage. The system is fully dual-write: encrypted columns populated on all new writes, progressive backfill on re-login (S-4). Phase B and C review gates upgraded from PARTIAL to PASSED.
+All 6 pre-scrub blockers resolved. Plaintext scrub completed in Cycle 6 (2026-03-23).
+
+### 2026-03-23 — Cycle 6 (Final Plaintext Scrub)
+
+Drops all plaintext PII columns. The crypto layer is now the only source of truth.
+
+**Schema changes:** Dropped `email`/`name` from User, `email` from Supporter, `email` from OrgInvite, `access_token`/`refresh_token`/`id_token` from Account. Made `encrypted_email`/`email_hash` NOT NULL on User, Supporter, OrgInvite.
+
+**Read paths:** All plaintext fallbacks removed. `decryptUserPii()` and `tryDecryptSupporterEmail()` throw if encrypted columns missing. `findSupporterByEmail()` is hash-only. SES webhook, supporter search, invite matching all converted to hash-based.
+
+**Write paths:** All plaintext writes removed from OAuth callback, supporter creation (5 paths), invite creation.
+
+**Backfill scripts:** `scripts/backfill-encrypt-{users,supporters,org-invites,oauth-tokens}.ts` + `scripts/verify-backfill-coverage.ts`.
+
+**Deferred:** EventRsvp email encryption (separate task), User profile field scrub (low sensitivity).
+
+**Test results:** 1,348/1,349 pass. Net -411 lines of code.
