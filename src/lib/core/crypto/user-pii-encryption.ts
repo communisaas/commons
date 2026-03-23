@@ -245,7 +245,14 @@ export async function decryptUserPii(
 	}
 ): Promise<{ email: string; name: string | null }> {
 	if (!user.encrypted_email) {
-		throw new Error(`[PII] User ${user.id} missing encrypted_email — backfill incomplete`);
+		// Pre-backfill user: read plaintext from DB (column still exists, just not in schema)
+		const { db } = await import('$lib/core/db');
+		const rows = await (db as unknown as { $queryRaw: (sql: TemplateStringsArray, ...values: unknown[]) => Promise<{ email: string; name: string | null }[]> })
+			.$queryRaw`SELECT email, name FROM "user" WHERE id = ${user.id} LIMIT 1`;
+		if (rows[0]) {
+			return { email: rows[0].email, name: rows[0].name };
+		}
+		throw new Error(`[PII] User ${user.id} missing encrypted_email and plaintext fallback`);
 	}
 
 	const encEmail: EncryptedPii = JSON.parse(user.encrypted_email);
