@@ -134,19 +134,10 @@ async function main() {
 
 	// eslint-disable-next-line no-constant-condition
 	while (true) {
-		const supporters = await db.supporter.findMany({
-			where: {
-				encrypted_email: null,
-				email: { not: '' }
-			},
-			select: {
-				id: true,
-				email: true
-			},
-			take: BATCH_SIZE,
-			orderBy: { id: 'asc' },
-			...(cursor ? { skip: 1, cursor: { id: cursor } } : {})
-		});
+		// Use raw query because plaintext email column is no longer in the Prisma schema
+		const supporters: { id: string; email: string }[] = cursor
+			? await db.$queryRaw`SELECT id, email FROM "supporter" WHERE encrypted_email IS NULL AND email IS NOT NULL AND email != '' AND id > ${cursor} ORDER BY id ASC LIMIT ${BATCH_SIZE}`
+			: await db.$queryRaw`SELECT id, email FROM "supporter" WHERE encrypted_email IS NULL AND email IS NOT NULL AND email != '' ORDER BY id ASC LIMIT ${BATCH_SIZE}`;
 
 		if (supporters.length === 0) break;
 

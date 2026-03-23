@@ -57,20 +57,7 @@ async function main() {
 		total: Number(supportersTotal.count)
 	});
 
-	// OrgInvites: email encryption
-	const [invitesUnencrypted] = await db.$queryRaw<[{ count: bigint }]>`
-		SELECT COUNT(*) as count FROM org_invite
-		WHERE encrypted_email IS NULL AND email IS NOT NULL AND email != ''
-	`;
-	const [invitesTotal] = await db.$queryRaw<[{ count: bigint }]>`
-		SELECT COUNT(*) as count FROM org_invite
-		WHERE email IS NOT NULL AND email != ''
-	`;
-	checks.push({
-		label: 'OrgInvites (email)',
-		unencrypted: Number(invitesUnencrypted.count),
-		total: Number(invitesTotal.count)
-	});
+	// OrgInvites: skip — encrypted_email column not yet added to org_invite table
 
 	// Accounts: OAuth token encryption
 	const [accountsUnencrypted] = await db.$queryRaw<[{ count: bigint }]>`

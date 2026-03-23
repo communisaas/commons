@@ -133,24 +133,10 @@ async function main() {
 
 	// eslint-disable-next-line no-constant-condition
 	while (true) {
-		const users = await db.user.findMany({
-			where: {
-				encrypted_email: null,
-				email: { not: '' }
-			},
-			select: {
-				id: true,
-				email: true,
-				name: true,
-				role: true,
-				organization: true,
-				location: true,
-				connection: true
-			},
-			take: BATCH_SIZE,
-			orderBy: { id: 'asc' },
-			...(cursor ? { skip: 1, cursor: { id: cursor } } : {})
-		});
+		// Use raw query because plaintext email/name columns are no longer in the Prisma schema
+		const users: { id: string; email: string; name: string | null; role: string | null; organization: string | null; location: string | null; connection: string | null }[] = cursor
+			? await db.$queryRaw`SELECT id, email, name, role, organization, location, connection FROM "user" WHERE encrypted_email IS NULL AND email IS NOT NULL AND email != '' AND id > ${cursor} ORDER BY id ASC LIMIT ${BATCH_SIZE}`
+			: await db.$queryRaw`SELECT id, email, name, role, organization, location, connection FROM "user" WHERE encrypted_email IS NULL AND email IS NOT NULL AND email != '' ORDER BY id ASC LIMIT ${BATCH_SIZE}`;
 
 		if (users.length === 0) break;
 

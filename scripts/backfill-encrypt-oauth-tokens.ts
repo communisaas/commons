@@ -15,7 +15,7 @@
  * Usage: npx tsx scripts/backfill-encrypt-oauth-tokens.ts
  */
 
-import { Prisma, PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 
 const db = new PrismaClient();
 const BATCH_SIZE = 100;
@@ -116,23 +116,10 @@ async function main() {
 
 	// eslint-disable-next-line no-constant-condition
 	while (true) {
-		const accounts = await db.account.findMany({
-			where: {
-				access_token: { not: null },
-				encrypted_access_token: { equals: Prisma.DbNull }
-			},
-			select: {
-				id: true,
-				provider: true,
-				provider_account_id: true,
-				access_token: true,
-				refresh_token: true,
-				id_token: true
-			},
-			take: BATCH_SIZE,
-			orderBy: { id: 'asc' },
-			...(cursor ? { skip: 1, cursor: { id: cursor } } : {})
-		});
+		// Use raw query because plaintext token columns are no longer in the Prisma schema
+		const accounts: { id: string; provider: string; provider_account_id: string; access_token: string | null; refresh_token: string | null; id_token: string | null }[] = cursor
+			? await db.$queryRaw`SELECT id, provider, provider_account_id, access_token, refresh_token, id_token FROM "account" WHERE access_token IS NOT NULL AND encrypted_access_token IS NULL AND id > ${cursor} ORDER BY id ASC LIMIT ${BATCH_SIZE}`
+			: await db.$queryRaw`SELECT id, provider, provider_account_id, access_token, refresh_token, id_token FROM "account" WHERE access_token IS NOT NULL AND encrypted_access_token IS NULL ORDER BY id ASC LIMIT ${BATCH_SIZE}`;
 
 		if (accounts.length === 0) break;
 
