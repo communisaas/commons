@@ -17,6 +17,7 @@ import type { PrismaClient } from '@prisma/client';
 import { maskEmail } from '$lib/server/org/mask';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
 import { spawnDebateForCampaign } from '$lib/server/debates/spawn';
+import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import { FEATURES } from '$lib/config/features';
 import {
 	fetchPeople,
@@ -389,6 +390,11 @@ async function processPeopleBatch(
 				updated++;
 			} else {
 				// Create new supporter
+				// C-5: Encrypt email at rest
+				const [eHash, eEnc] = await Promise.all([
+					computeEmailHash(mapped.email).catch(() => null),
+					encryptPii(mapped.email, `supporter:${orgId}:${mapped.email}`).catch(() => null)
+				]);
 				const supporter = await prisma.supporter.create({
 					data: {
 						orgId,
@@ -400,6 +406,8 @@ async function processPeopleBatch(
 						emailStatus: mapped.emailStatus,
 						source: 'action_network',
 						importedAt: new Date(),
+						encrypted_email: eEnc ? JSON.stringify(eEnc) : undefined,
+						email_hash: eHash ?? undefined,
 						// eslint-disable-next-line @typescript-eslint/no-explicit-any
 						customFields: Object.keys(mapped.customFields).length > 0 ? (mapped.customFields as any) : undefined
 					}

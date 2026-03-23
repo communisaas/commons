@@ -229,7 +229,7 @@ export async function storeSessionCredential(credential: SessionCredential): Pro
 			expiresAt: credential.expiresAt
 		};
 
-		console.debug('[Session Cache] Stored encrypted credential for user:', credential.userId);
+		console.debug('[Session Cache] Stored encrypted credential for user:', credential.userId.slice(0, 8));
 
 		return new Promise((resolve, reject) => {
 			const request = store.put(storedCredential);
@@ -273,7 +273,7 @@ export async function getSessionCredential(userId: string): Promise<SessionCrede
 				const stored = request.result as StoredCredential | undefined;
 
 				if (!stored) {
-					console.debug('[Session Cache] No credential found for user:', userId);
+					console.debug('[Session Cache] No credential found for user:', userId.slice(0, 8));
 					resolve(null);
 					return;
 				}
@@ -283,7 +283,7 @@ export async function getSessionCredential(userId: string): Promise<SessionCrede
 				const now = new Date();
 
 				if (expiresAt < now) {
-					console.debug('[Session Cache] Credential expired for user:', userId);
+					console.debug('[Session Cache] Credential expired for user:', userId.slice(0, 8));
 					// Auto-delete expired credential
 					deleteSessionCredential(userId);
 					resolve(null);
@@ -297,7 +297,7 @@ export async function getSessionCredential(userId: string): Promise<SessionCrede
 					try {
 						const decrypted = await decryptCredential<Record<string, unknown>>(stored.encrypted, userId);
 						credential = deserializeAfterDecryption(decrypted);
-						console.debug('[Session Cache] Retrieved encrypted credential for user:', userId);
+						console.debug('[Session Cache] Retrieved encrypted credential for user:', userId.slice(0, 8));
 					} catch (decryptError) {
 						console.error('[Session Cache] Decryption failed:', decryptError);
 						// Key may have been rotated or device changed - clear invalid credential
@@ -314,12 +314,12 @@ export async function getSessionCredential(userId: string): Promise<SessionCrede
 						storeSessionCredential(credential).catch((error) => {
 							console.error('[Session Cache] Migration failed:', error);
 						});
-						console.debug('[Session Cache] Migrating to encrypted format:', userId);
+						console.debug('[Session Cache] Migrating to encrypted format:', userId.slice(0, 8));
 					}
 
-					console.debug('[Session Cache] Retrieved plaintext credential for user:', userId);
+					console.debug('[Session Cache] Retrieved plaintext credential for user:', userId.slice(0, 8));
 				} else {
-					console.error('[Session Cache] Invalid stored format for user:', userId);
+					console.error('[Session Cache] Invalid stored format for user:', userId.slice(0, 8));
 					resolve(null);
 					return;
 				}
@@ -355,7 +355,7 @@ export async function deleteSessionCredential(userId: string): Promise<void> {
 			const request = store.delete(userId);
 
 			request.onsuccess = () => {
-				console.debug('[Session Cache] Deleted credential for user:', userId);
+				console.debug('[Session Cache] Deleted credential for user:', userId.slice(0, 8));
 				resolve();
 			};
 

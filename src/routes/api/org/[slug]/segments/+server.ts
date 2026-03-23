@@ -5,6 +5,7 @@ import { buildSegmentWhere } from '$lib/server/segments/query-builder';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
 import type { RequestHandler } from './$types';
+import { safeUserId } from '$lib/core/server/security';
 
 function csvEscape(value: string): string {
 	let escaped = value;
@@ -166,7 +167,7 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			});
 		}
 
-		console.info(`[bulk] ${action} org=${org.id} user=${locals.user.id} tag=${tagId} affected=${supporters.length}`);
+		console.info(`[bulk] ${action} org=${org.id} user=${safeUserId(locals.user.id)} tag=${tagId} affected=${supporters.length}`);
 		return json({ affected: supporters.length });
 	}
 
@@ -206,7 +207,7 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			].join(',');
 		});
 
-		console.info(`[bulk] export_csv org=${org.id} user=${locals.user.id} rows=${supporters.length}`);
+		console.info(`[bulk] export_csv org=${org.id} user=${safeUserId(locals.user.id)} rows=${supporters.length}`);
 		const csv = [header, ...rows].join('\n');
 		return new Response(csv, {
 			headers: {

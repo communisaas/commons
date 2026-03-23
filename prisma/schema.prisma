@@ -26,7 +26,6 @@ model User {
   // === VERIFICATION FIELDS ===
   is_verified         Boolean   @default(false) @map("is_verified")
   verification_method String?   @map("verification_method")
-  verification_data   Json?     @map("verification_data")
   verified_at         DateTime? @map("verified_at")
 
   // === SYBIL RESISTANCE FIELDS (Phase 1A Identity Verification) ===
@@ -74,7 +73,13 @@ model User {
   // === WALLET & ACCOUNT FIELDS ===
   wallet_address String? @unique @map("wallet_address") // EVM wallet (MetaMask/WC binding)
   wallet_type    String? @map("wallet_type") // 'evm' | 'near' | null
-  district_hash  String? @map("district_hash")
+  district_hash     String? @map("district_hash") // HMAC-SHA256(district, DISTRICT_HASH_KEY) — rainbow-table resistant
+
+  // === PII ENCRYPTION AT REST (C-3) ===
+  encrypted_email   String? @map("encrypted_email") // AES-256-GCM JSON { ciphertext, iv }
+  encrypted_name    String? @map("encrypted_name")  // AES-256-GCM JSON { ciphertext, iv }
+  email_hash        String? @unique @map("email_hash") // HMAC-SHA256(normalize(email), EMAIL_LOOKUP_KEY)
+  encrypted_profile String? @map("encrypted_profile") // C-4: AES-256-GCM JSON blob { role, organization, location, connection }
 
   // === NEAR ACCOUNT (Paths 1 + 3: invisible account for non-crypto / non-EVM users) ===
   near_account_id             String? @unique @map("near_account_id") // Implicit account ID (64-char hex pubkey)
@@ -120,15 +125,6 @@ model User {
   district_credentials DistrictCredential[]
 
   verification_sessions VerificationSession[]
-
-  // === POSTAL BUBBLE (Privacy-preserving location approximation) ===
-  // The bubble is the user's privacy boundary — server stores only the bubble, never exact location.
-  // All fields nullable: bubble is optional until user enters a postal code.
-  bubble_lat     Float?    @map("bubble_lat") // Bubble center latitude
-  bubble_lng     Float?    @map("bubble_lng") // Bubble center longitude
-  bubble_radius  Float?    @map("bubble_radius") // Radius in meters
-  bubble_updated DateTime? @map("bubble_updated") // Last bubble update
-  bubble_seed    String?   @map("bubble_seed") // Postal code that seeded the bubble
 
   // === SHADOW ATLAS REGISTRATION (Three-Tree ZK Architecture) ===
   shadow_atlas_registration ShadowAtlasRegistration?
@@ -404,6 +400,14 @@ model account {
   scope               String?
   id_token            String?
   session_state       String?
+
+  // Encrypted token columns (AES-256-GCM via HKDF-derived per-account keys)
+  // Stores { ciphertext: string, iv: string } JSON objects
+  // Plaintext columns retained during transition; encrypted columns preferred when present
+  encrypted_access_token  Json?
+  encrypted_refresh_token Json?
+  encrypted_id_token      Json?
+
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -422,6 +426,7 @@ model template_campaign {
   id              String    @id
   template_id     String
   user_id         String
+  pseudonym_id    String?   @map("pseudonym_id") // HMAC-SHA256(user_id, CAMPAIGN_PSEUDONYM_KEY)
   delivery_type   String
   recipient_id    String?
   cwc_delivery_id String?
@@ -434,6 +439,8 @@ model template_campaign {
   updated_at      DateTime  @updatedAt
   template        Template  @relation(fields: [template_id], references: [id], onDelete: Cascade)
   user            User      @relation("UserCampaigns", fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([pseudonym_id])
 }
 
 model UserDMRelation {
@@ -761,14 +768,18 @@ model DistrictCredential {
   id                      String    @id @default(cuid())
   user_id                 String    @map("user_id")
   credential_type         String    @default("district_residency") @map("credential_type")
-  congressional_district  String    @map("congressional_district")
-  state_senate_district   String?   @map("state_senate_district")
-  state_assembly_district String?   @map("state_assembly_district")
+  congressional_district  String    @map("congressional_district") // Plaintext — kept during transition, drop after TTL
+  state_senate_district   String?   @map("state_senate_district")  // Plaintext — kept during transition
+  state_assembly_district String?   @map("state_assembly_district") // Plaintext — kept during transition
   verification_method     String    @map("verification_method") // 'civic_api' | 'postal'
   issued_at               DateTime  @default(now()) @map("issued_at")
   expires_at              DateTime  @map("expires_at")
   revoked_at              DateTime? @map("revoked_at")
   credential_hash         String    @map("credential_hash") // SHA-256 of the VC JSON
+
+  // B-2: Privacy-preserving district storage (replaces plaintext columns after TTL)
+  district_commitment     String?   @map("district_commitment") // Poseidon2_sponge_24(districts[0..24])
+  slot_count              Int?      @map("slot_count")          // How many of 24 slots are non-zero
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
@@ -1426,6 +1437,10 @@ model Supporter {
   country    String? @default("US")
   phone      String?
 
+  // C-5: Encrypted PII at rest
+  encrypted_email String? @map("encrypted_email") // AES-256-GCM JSON { ciphertext, iv }
+  email_hash      String? @map("email_hash") // HMAC-SHA256 for dedup lookups
+
   // ZK identity binding (links to protocol layer without revealing credential)
   identityCommitment String? @map("identity_commitment")
 
@@ -1454,6 +1469,7 @@ model Supporter {
   patchThroughCalls  PatchThroughCall[]
 
   @@unique([orgId, email])
+  @@unique([orgId, email_hash])
   @@index([orgId])
   @@index([emailStatus])
   @@index([smsStatus])

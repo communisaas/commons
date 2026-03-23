@@ -3,6 +3,7 @@ import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { parseCSV } from '$lib/server/csv';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
+import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ parent }) => {
@@ -332,6 +333,11 @@ export const actions: Actions = {
 								updated++;
 							} else {
 								// Create new supporter
+								// C-5: Encrypt email at rest
+								const [eHash, eEnc] = await Promise.all([
+									computeEmailHash(mapped.email).catch(() => null),
+									encryptPii(mapped.email, `supporter:${org.id}:${mapped.email}`).catch(() => null)
+								]);
 								const supporter = await tx.supporter.create({
 									data: {
 										orgId: org.id,
@@ -343,7 +349,9 @@ export const actions: Actions = {
 										emailStatus: mapped.emailStatus,
 										smsStatus: mapped.smsStatus,
 										source: 'csv',
-										importedAt: new Date()
+										importedAt: new Date(),
+										encrypted_email: eEnc ? JSON.stringify(eEnc) : undefined,
+										email_hash: eHash ?? undefined
 									}
 								});
 

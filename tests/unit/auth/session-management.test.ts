@@ -75,7 +75,6 @@ function makeUser(overrides: Partial<User> = {}): User {
 		updatedAt: new Date('2025-01-01'),
 		is_verified: false,
 		verification_method: null,
-		verification_data: null,
 		verified_at: null,
 		passkey_credential_id: null,
 		did_key: null,
@@ -523,27 +522,7 @@ describe('session-management (auth.ts)', () => {
 				expect(result.user!.did_key).toBe('did:key:z6Mkf...');
 			});
 
-			it('should cast verification_data as UnknownRecord | null', async () => {
-				const sessionData = makeSessionWithUser(
-					{},
-					{ verification_data: { method: 'passkey', score: 95 } }
-				);
-				mockSessionFindUnique.mockResolvedValue(sessionData);
-
-				const result = await validateSession(sessionData.id);
-
-				expect(result.user!.verification_data).toEqual({ method: 'passkey', score: 95 });
 			});
-
-			it('should handle null verification_data', async () => {
-				const sessionData = makeSessionWithUser({}, { verification_data: null });
-				mockSessionFindUnique.mockResolvedValue(sessionData);
-
-				const result = await validateSession(sessionData.id);
-
-				expect(result.user!.verification_data).toBeNull();
-			});
-		});
 
 		describe('error handling', () => {
 			it('should propagate database errors from findUnique', async () => {

@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
+import { encryptPii } from '$lib/core/crypto/user-pii-encryption';
 
 // F-R8-02: Zod schema replaces unvalidated destructuring
 const ProfileSchema = z.object({
@@ -31,6 +32,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		const { role, organization, location, connection } = parsed;
 
+		// C-4: Encrypt profile blob at rest (plaintext fields retained during transition)
+		const profileBlob = JSON.stringify({ role, organization: organization || null, location: location || null, connection });
+		const encProfile = await encryptPii(profileBlob, locals.user.id).catch(() => null);
+
 		// Update user with profile information using proper fields
 		// Note: connection_details removed - field does not exist in schema
 		const updatedUser = await db.user.update({
@@ -40,6 +45,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				organization: organization || null,
 				location: location || null,
 				connection,
+				encrypted_profile: encProfile ? JSON.stringify(encProfile) : undefined,
 				profile_completed_at: new Date(),
 				updatedAt: new Date()
 			}

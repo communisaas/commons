@@ -11,6 +11,7 @@ import { processSubmissionDelivery } from '$lib/server/delivery-worker';
 import { registerEngagement } from '$lib/core/shadow-atlas/client';
 import { verifyOnChain } from '$lib/core/blockchain/district-gate-client';
 import { queueForRetry } from '$lib/core/blockchain/submission-retry-queue';
+import { safeUserId } from '$lib/core/server/security';
 
 /**
  * Submission Creation Endpoint
@@ -199,7 +200,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			})
 			.then((result: { count: number }) => {
 				if (result.count > 0) {
-					console.log('[Submission] User promoted to trust_tier 2:', userId);
+					console.log('[Submission] User promoted to trust_tier 2:', safeUserId(userId));
 				}
 			})
 			.catch((err: unknown) => {

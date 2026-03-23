@@ -324,14 +324,32 @@ export async function hashCredential(
 }
 
 /**
- * Compute SHA-256 hash of a district string for privacy-preserving storage.
+ * Compute HMAC-SHA256 hash of a district string for privacy-preserving storage.
  *
- * Used for the User.district_hash field — stores a hash of the congressional
- * district so that the plaintext district is not persisted on the user record.
+ * Used for User.district_hash — rainbow-table resistant (requires ENV key),
+ * deterministic across users (same district → same hash for aggregate queries).
  *
  * Returns a lowercase hex string.
  */
 export async function hashDistrict(district: string): Promise<string> {
+	const key = process.env.DISTRICT_HASH_KEY;
+	if (key) {
+		// HMAC with server-side key — rainbow-table resistant
+		const keyBytes = encoder.encode(key);
+		const cryptoKey = await crypto.subtle.importKey(
+			'raw',
+			keyBytes,
+			{ name: 'HMAC', hash: 'SHA-256' },
+			false,
+			['sign']
+		);
+		const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(district));
+		const arr = new Uint8Array(sig);
+		return Array.from(arr)
+			.map((b) => b.toString(16).padStart(2, '0'))
+			.join('');
+	}
+	// Fallback: plain SHA-256 (dev environments without DISTRICT_HASH_KEY)
 	const bytes = encoder.encode(district);
 	const digest = await crypto.subtle.digest('SHA-256', bytes);
 	const arr = new Uint8Array(digest);

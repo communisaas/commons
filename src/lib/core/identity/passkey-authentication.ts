@@ -32,6 +32,7 @@ import { createSession } from '$lib/core/auth/auth';
 import type { Session } from '$lib/core/auth/auth';
 import { getPasskeyRPConfig } from './passkey-rp-config';
 import { uint8ArrayToBase64url, base64urlToUint8Array } from './passkey-registration';
+import { computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 
 // ---------------------------------------------------------------------------
 // Authentication: Step 1 — Generate options
@@ -57,11 +58,20 @@ export async function generatePasskeyAuthOptions(email: string): Promise<{
 }> {
 	const { rpID } = getPasskeyRPConfig();
 
-	// Look up user and their passkey credential
-	const user = await db.user.findUnique({
-		where: { email },
-		select: { id: true, passkey_credential_id: true }
-	});
+	// C-3: Look up user by email_hash first, fallback to plaintext during transition
+	const emailHash = await computeEmailHash(email);
+	let user = emailHash
+		? await db.user.findUnique({
+				where: { email_hash: emailHash },
+				select: { id: true, passkey_credential_id: true }
+			})
+		: null;
+	if (!user) {
+		user = await db.user.findUnique({
+			where: { email },
+			select: { id: true, passkey_credential_id: true }
+		});
+	}
 
 	if (!user) {
 		throw new Error('User not found');

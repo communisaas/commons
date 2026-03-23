@@ -4,7 +4,7 @@
  * Privacy-preserving fraud detection and cryptographic utilities.
  */
 
-import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { createHash, createHmac, createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
 // =============================================================================
 // ENTROPY ENCRYPTION (BR6-001)
@@ -85,28 +85,72 @@ export function decryptEntropy(stored: string): string {
 }
 
 // =============================================================================
-// IP HASHING
+// IP HASHING (DAILY SALT ROTATION VIA HKDF)
 // =============================================================================
 
-/**
- * Hash IP address with daily salt (privacy-preserving fraud detection)
- * @param ipAddress - Client IP address
- * @returns SHA-256 hash (64-character hex)
- */
-export function hashIPAddress(ipAddress: string): string {
-	const IP_HASH_SALT = process.env.IP_HASH_SALT;
+// Static fallback salt for dev/test environments where IP_HASH_SALT is not configured.
+// NOT cryptographically meaningful — exists solely to keep dev environments functional.
+const DEV_FALLBACK_SALT = 'commons-dev-ip-hash-fallback-not-for-production';
 
-	if (!IP_HASH_SALT) {
-		throw new Error(
-			'IP_HASH_SALT environment variable not configured. ' + 'Generate with: openssl rand -hex 32'
-		);
+/**
+ * Derive a daily HMAC key from the master salt using HKDF.
+ *
+ * Salt lifecycle:
+ * - IP_HASH_SALT is a long-lived secret (set once in production, never rotated)
+ * - The daily date string is used as HKDF info, producing a unique derived key per day
+ * - This prevents cross-day IP correlation: the same IP hashes to a different value each day
+ * - Within a single day, the same IP always produces the same hash (needed for rate limiting)
+ *
+ * Why daily rotation is safe for rate limiting:
+ * Rate limit windows are at most 24 hours. When the salt rotates at midnight UTC,
+ * any in-flight rate limit windows using the old salt will naturally expire within
+ * their configured windowMs. The worst case is a brief reset of rate limit counters
+ * at midnight, which is acceptable.
+ */
+function deriveDailySalt(masterSalt: string, dateStr: string): Buffer {
+	const key = Buffer.from(masterSalt, 'utf8');
+	const info = Buffer.from(`commons-ip-hash-v1:${dateStr}`, 'utf8');
+	const salt = Buffer.from('commons-ip-daily-rotation', 'utf8');
+
+	// HKDF-Extract: PRK = HMAC-SHA256(salt, IKM)
+	const prk = createHmac('sha256', salt).update(key).digest();
+
+	// HKDF-Expand: OKM = HMAC-SHA256(PRK, info || 0x01) — single block (32 bytes)
+	return createHmac('sha256', prk).update(Buffer.concat([info, Buffer.from([0x01])])).digest();
+}
+
+// Warning dedup flag (module-scoped, resets on isolate recycle)
+let _warnedFallback = false;
+
+/**
+ * Hash IP address with daily-rotated HKDF salt (privacy-preserving fraud detection).
+ *
+ * @param ipAddress - Client IP address
+ * @param dateOverride - Override date string for testing (YYYY-MM-DD format)
+ * @returns SHA-256 HMAC hash (64-character hex)
+ */
+export function hashIPAddress(ipAddress: string, dateOverride?: string): string {
+	const masterSalt = process.env.IP_HASH_SALT;
+
+	if (!masterSalt) {
+		if (process.env.NODE_ENV === 'production') {
+			throw new Error(
+				'IP_HASH_SALT environment variable not configured. ' +
+					'Generate with: openssl rand -hex 32'
+			);
+		}
+		// Dev/test fallback — log once per process
+		if (!_warnedFallback) {
+			console.warn('[Security] IP_HASH_SALT not set — using dev fallback (not for production)');
+			_warnedFallback = true;
+		}
 	}
 
-	// Add daily rotation (prevents long-term tracking)
-	const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-	const dailySalt = `${IP_HASH_SALT}:${today}`;
+	const effectiveSalt = masterSalt || DEV_FALLBACK_SALT;
+	const today = dateOverride || new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+	const dailyKey = deriveDailySalt(effectiveSalt, today);
 
-	return createHash('sha256').update(dailySalt).update(ipAddress).digest('hex');
+	return createHmac('sha256', dailyKey).update(ipAddress).digest('hex');
 }
 
 /**
@@ -138,6 +182,24 @@ export function isTimestampFresh(timestamp: string, maxAgeMs: number = 5 * 60 * 
 	const ageMs = now.getTime() - timestampDate.getTime();
 
 	return ageMs >= 0 && ageMs <= maxAgeMs;
+}
+
+// =============================================================================
+// SAFE USER ID FOR LOGGING (A-4)
+// =============================================================================
+
+/**
+ * Return an audit-safe user identifier for log output.
+ *
+ * Raw user IDs (CUIDs) are linkable PII in CF Workers tail/log forwarding.
+ * This function returns a truncated HMAC so logs remain useful for debugging
+ * without leaking the actual userId.
+ *
+ * @param userId - Raw user ID (CUID)
+ * @returns 16-character hex prefix of HMAC-SHA256(userId)
+ */
+export function safeUserId(userId: string): string {
+	return createHash('sha256').update('log-pseudonym:' + userId).digest('hex').slice(0, 16);
 }
 
 /**

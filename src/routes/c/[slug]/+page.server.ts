@@ -7,6 +7,7 @@ import { FEATURES } from '$lib/config/features';
 import { hashDistrict } from '$lib/core/identity/district-credential';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
 import { spawnDebateForCampaign } from '$lib/server/debates/spawn';
+import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -209,13 +210,20 @@ export const actions: Actions = {
 		});
 
 		if (!supporter) {
+			// C-5: Encrypt email at rest
+			const [eHash, eEnc] = await Promise.all([
+				computeEmailHash(email).catch(() => null),
+				encryptPii(email, `supporter:${campaign.orgId}:${email}`).catch(() => null)
+			]);
 			supporter = await db.supporter.create({
 				data: {
 					orgId: campaign.orgId,
 					email,
 					name,
 					postalCode,
-					source: 'campaign'
+					source: 'campaign',
+					encrypted_email: eEnc ? JSON.stringify(eEnc) : undefined,
+					email_hash: eHash ?? undefined
 				}
 			});
 		} else {

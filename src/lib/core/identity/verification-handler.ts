@@ -198,7 +198,7 @@ export async function checkVerificationStatus(userId: string): Promise<SessionCr
 		const now = new Date();
 
 		if (expiresAt < now) {
-			console.debug('[Verification] Session expired for user:', userId);
+			console.debug('[Verification] Session expired for user:', userId.slice(0, 8));
 			return null;
 		}
 
@@ -218,7 +218,7 @@ export async function clearVerificationSession(userId: string): Promise<void> {
 	try {
 		const { deleteSessionCredential } = await import('./session-cache');
 		await deleteSessionCredential(userId);
-		console.debug('[Verification] Session cleared for user:', userId);
+		console.debug('[Verification] Session cleared for user:', userId.slice(0, 8));
 	} catch (error) {
 		console.error('[Verification] Session clear failed:', error);
 		throw error;

@@ -11,6 +11,7 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
+import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
 // F-R8-03: Zod schema replaces manual email validation with includes('@')
@@ -159,15 +160,25 @@ export const POST: RequestHandler = async ({ request }) => {
 		}));
 	}
 
+	// C-5: Encrypt supporter email at rest (fire-and-forget on failure)
+	const normalizedEmail = email.toLowerCase();
+	const [emailHash, encEmail] = await Promise.all([
+		computeEmailHash(normalizedEmail).catch(() => null),
+		encryptPii(normalizedEmail, `supporter:${auth.orgId}:${normalizedEmail}`).catch(() => null)
+	]);
+
 	const supporter = await db.supporter.create({
 		data: {
 			orgId: auth.orgId,
-			email: email.toLowerCase(),
+			email: normalizedEmail,
 			name: name || null,
 			postalCode: postalCode || null,
 			country: country || 'US',
 			phone: phone || null,
 			source: source || 'api',
+			// C-5: Encrypted PII (plaintext retained during transition)
+			encrypted_email: encEmail ? JSON.stringify(encEmail) : undefined,
+			email_hash: emailHash ?? undefined,
 			customFields: customFields ? JSON.parse(JSON.stringify(customFields)) : undefined,
 			tags: tagConnects.length > 0 ? { create: tagConnects } : undefined
 		},

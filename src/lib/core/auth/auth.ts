@@ -1,7 +1,8 @@
 import { sha256 } from '@oslojs/crypto/sha2';
 import { encodeBase32LowerCaseNoPadding, encodeHexLowerCase } from '@oslojs/encoding';
 import { db } from '$lib/core/db';
-import type { UnknownRecord } from '$lib/types/any-replacements';
+import { decryptUserPii } from '$lib/core/crypto/user-pii-encryption';
+
 
 const DAY_IN_MS = 1000 * 60 * 60 * 24;
 
@@ -30,7 +31,6 @@ export interface User {
 	// Verification status
 	is_verified: boolean;
 	verification_method: string | null;
-	verification_data: UnknownRecord | null;
 	verified_at: Date | null;
 	// Graduated trust
 	passkey_credential_id: string | null;
@@ -38,7 +38,7 @@ export interface User {
 	address_verified_at: Date | null;
 	identity_commitment: string | null;
 	document_type: string | null;
-	// Privacy-preserving district (hash only, no plaintext)
+	// Privacy-preserving district (HMAC hash only, no plaintext)
 	district_hash: string | null;
 	district_verified: boolean;
 	// Wallet integration
@@ -147,11 +147,16 @@ export async function validateSession(
 		});
 	}
 
+	// C-3: Decrypt PII if encrypted columns exist, fallback to plaintext during transition
+	const pii = await decryptUserPii(user);
+
 	return {
 		session,
 		user: {
 			...user,
-			verification_data: user.verification_data as UnknownRecord | null,
+			// C-3: Use decrypted PII (or plaintext fallback)
+			email: pii.email,
+			name: pii.name,
 			// Ensure all new fields are explicitly included for type safety
 			passkey_credential_id: user.passkey_credential_id ?? null,
 			did_key: user.did_key ?? null,

@@ -705,7 +705,7 @@ export async function getSessionCredential(userId: string): Promise<SessionCrede
 		]);
 
 		if (!identityRecord?.encrypted || !treeStateRecord?.encrypted) {
-			console.debug('[Session Credentials] Not found:', { userId });
+			console.debug('[Session Credentials] Not found:', { userId: userId.slice(0, 8) });
 			return null;
 		}
 
@@ -716,7 +716,7 @@ export async function getSessionCredential(userId: string): Promise<SessionCrede
 				: new Date(treeStateRecord.expiresAt);
 			if (expiresAt < new Date()) {
 				console.debug('[Session Credentials] Tree state expired:', {
-					userId,
+					userId: userId.slice(0, 8),
 					expiredAt: expiresAt.toISOString()
 				});
 				// Delete only tree state, keep identity secrets
@@ -748,7 +748,7 @@ export async function getSessionCredential(userId: string): Promise<SessionCrede
 
 		const now = new Date();
 		console.debug('[Session Credentials] Retrieved:', {
-			userId,
+			userId: userId.slice(0, 8),
 			district: credential.congressionalDistrict,
 			remainingDays: Math.floor(
 				(credential.expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
@@ -845,7 +845,7 @@ export async function updateTreeState(userId: string, treeState: TreeState): Pro
 		expiresAt: treeState.expiresAt
 	});
 
-	console.debug('[Session Credentials] Tree state updated:', { userId });
+	console.debug('[Session Credentials] Tree state updated:', { userId: userId.slice(0, 8) });
 }
 
 /**
@@ -883,7 +883,7 @@ export async function clearSessionCredential(userId: string): Promise<void> {
 		tx.store.delete(tsRecordId);
 		await tx.done;
 
-		console.debug('[Session Credentials] Cleared:', { userId });
+		console.debug('[Session Credentials] Cleared:', { userId: userId.slice(0, 8) });
 	} catch (error) {
 		console.error('[Session Credentials] Clear failed:', error);
 		throw new Error('Failed to clear session credential');
@@ -898,7 +898,7 @@ export async function clearTreeState(userId: string): Promise<void> {
 		const db = await getDB();
 		const recordId = await treeStateRecordId(userId);
 		await db.delete(STORE_NAME, recordId);
-		console.debug('[Session Credentials] Tree state cleared:', { userId });
+		console.debug('[Session Credentials] Tree state cleared:', { userId: userId.slice(0, 8) });
 	} catch (error) {
 		console.error('[Session Credentials] clearTreeState failed:', error);
 		throw new Error('Failed to clear tree state');

@@ -26,6 +26,7 @@ import {
 	relayDelegateAction
 } from '$lib/core/near/meta-transactions';
 import { NEAR_MPC_SIGNER } from '$lib/core/near/account';
+import { safeUserId } from '$lib/core/server/security';
 
 // =============================================================================
 // Constants
@@ -178,7 +179,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		userNearAccountId = user.near_account_id;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : 'Unknown error';
-		console.error(`${LOG_PREFIX} DB error looking up user ${userId}:`, message);
+		console.error(`${LOG_PREFIX} DB error looking up user ${safeUserId(userId)}:`, message);
 		return json(
 			{ success: false, error: 'Failed to verify user account' },
 			{ status: 500 }

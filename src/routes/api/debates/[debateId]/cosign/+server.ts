@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { verifyTransactionAsync } from '$lib/core/blockchain/tx-verifier';
+import { safeUserId } from '$lib/core/server/security';
 
 /** Returns true for a valid Ethereum address (0x-prefixed, 42 hex chars). */
 function isValidEthAddress(addr: unknown): addr is string {
@@ -172,7 +173,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 	const coSignerTier = Math.min(claimedTier, Math.min(serverTier, 4));
 	if (claimedTier > serverTier) {
-		console.warn(`[debates/cosign] Tier inflation attempt: claimed=${claimedTier}, actual=${serverTier}, user=${session.userId}`);
+		console.warn(`[debates/cosign] Tier inflation attempt: claimed=${claimedTier}, actual=${serverTier}, user=${safeUserId(session.userId)}`);
 	}
 
 	// Compute the co-signer's individual weight contribution

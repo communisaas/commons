@@ -5,6 +5,7 @@ import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
 import { spawnDebateForCampaign } from '$lib/server/debates/spawn';
 import { FEATURES } from '$lib/config/features';
+import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -90,6 +91,11 @@ export const actions: Actions = {
 
 		let isNewSupporter = false;
 		if (!supporter) {
+			// C-5: Encrypt email at rest
+			const [eHash, eEnc] = await Promise.all([
+				computeEmailHash(email).catch(() => null),
+				encryptPii(email, `supporter:${campaign.orgId}:${email}`).catch(() => null)
+			]);
 			supporter = await db.supporter.create({
 				data: {
 					orgId: campaign.orgId,
@@ -97,7 +103,9 @@ export const actions: Actions = {
 					name,
 					postalCode,
 					phone,
-					source: 'widget'
+					source: 'widget',
+					encrypted_email: eEnc ? JSON.stringify(eEnc) : undefined,
+					email_hash: eHash ?? undefined
 				}
 			});
 			isNewSupporter = true;

@@ -18,7 +18,6 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { createHash } from 'crypto';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
 import {
@@ -27,9 +26,6 @@ import {
 	hashDistrict
 } from '$lib/core/identity/district-credential';
 import { TIER_CREDENTIAL_TTL } from '$lib/core/identity/credential-policy';
-
-/** BN254 scalar field modulus — identity commitments must be valid circuit inputs */
-const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 // ============================================================================
 // Input Validation
@@ -64,6 +60,9 @@ interface VerifyAddressInput {
 	state_assembly_district?: string;
 	verification_method: 'civic_api' | 'postal';
 	officials?: OfficialInput[];
+	// B-2: Client-computed district commitment (replaces plaintext after transition)
+	district_commitment?: string; // Poseidon2_sponge_24(districts[0..24]) hex string
+	slot_count?: number;          // How many of 24 district slots are non-zero
 }
 
 function validateInput(body: unknown): VerifyAddressInput {
@@ -128,6 +127,20 @@ function validateInput(body: unknown): VerifyAddressInput {
 			}));
 	}
 
+	// B-2: Validate optional client-computed district commitment
+	let districtCommitment: string | undefined;
+	let slotCount: number | undefined;
+	if (typeof b.district_commitment === 'string') {
+		// Must be a valid hex string (64 chars = 32 bytes Poseidon2 output)
+		if (!/^(0x)?[0-9a-fA-F]{64}$/.test(b.district_commitment)) {
+			throw new Error('Invalid district_commitment format. Expected 64-char hex string.');
+		}
+		districtCommitment = b.district_commitment;
+		slotCount = typeof b.slot_count === 'number' && b.slot_count >= 1 && b.slot_count <= 24
+			? b.slot_count
+			: undefined;
+	}
+
 	return {
 		district: b.district as string,
 		state_senate_district:
@@ -135,7 +148,9 @@ function validateInput(body: unknown): VerifyAddressInput {
 		state_assembly_district:
 			typeof b.state_assembly_district === 'string' ? b.state_assembly_district : undefined,
 		verification_method: b.verification_method as 'civic_api' | 'postal',
-		officials
+		officials,
+		district_commitment: districtCommitment,
+		slot_count: slotCount
 	};
 }
 
@@ -183,21 +198,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// 4. Compute integrity hash
 		const credentialHash = await hashCredential(credential);
 
-		// 5. Compute privacy-preserving district hash
+		// 5. Compute privacy-preserving district hash (HMAC with server key)
 		const districtHash = await hashDistrict(input.district);
 
 		// 6. Compute TTL-based expiration
 		const now = new Date();
 		const expiresAt = new Date(now.getTime() + TIER_CREDENTIAL_TTL[2]);
 
-		// 7. Generate deterministic identity_commitment for ZKP pipeline
-		// Derived from userId + district — unique per user, enables nullifier scheme
-		const raw = `address-attestation:${userId}:${input.district}`;
-		const inner = createHash('sha256').update(raw).digest();
-		const outer = createHash('sha256').update(inner).digest('hex');
-		const identityCommitment = (BigInt('0x' + outer) % BN254_MODULUS).toString(16).padStart(64, '0');
-
-		// 8. Database transaction: insert DistrictCredential + update User + upsert representatives
+		// 7. Database transaction: insert DistrictCredential + update User + upsert representatives
 		await db.$transaction(async (tx) => {
 			// Revoke existing unexpired credentials before issuing new one
 			await tx.districtCredential.updateMany({
@@ -216,7 +224,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					verification_method: input.verification_method,
 					issued_at: now,
 					expires_at: expiresAt,
-					credential_hash: credentialHash
+					credential_hash: credentialHash,
+					// B-2: Store client-computed commitment alongside plaintext (transition period)
+					district_commitment: input.district_commitment ?? null,
+					slot_count: input.slot_count ?? null
 				}
 			});
 
@@ -230,8 +241,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				    district_hash = ${districtHash},
 				    verified_at = ${now},
 				    verification_method = ${input.verification_method},
-				    is_verified = true,
-				    identity_commitment = COALESCE(identity_commitment, ${identityCommitment})
+				    is_verified = true
 				WHERE id = ${userId}
 			`;
 
@@ -329,13 +339,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			}
 		});
 
-		// 9. Return credential + identity_commitment to client
-		// Client uses identity_commitment to bootstrap session credential for ZKP
+		// 8. Return credential to client
 		return json({
 			success: true,
 			credential,
-			credentialHash,
-			identity_commitment: identityCommitment
+			credentialHash
 		});
 	} catch (err) {
 		console.error('[verify-address] Credential issuance failed:', err);

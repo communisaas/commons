@@ -73,13 +73,13 @@
 		try {
 			// Fast path: server-side trust tier already meets requirement
 			if (userTrustTier >= minimumTier) {
-				console.log('[Verification Gate] Trust tier check passed:', { userId, userTrustTier, minimumTier });
+				console.log('[Verification Gate] Trust tier check passed:', { userTrustTier, minimumTier });
 				return true;
 			}
 
 			// Fallback: check IndexedDB session credential (legacy Tier 3 flow)
 			const isVerified = await hasValidSession(userId);
-			console.log('[Verification Gate] Session check:', { userId, isVerified, userTrustTier, minimumTier });
+			console.log('[Verification Gate] Session check:', { isVerified, userTrustTier, minimumTier });
 			return isVerified;
 		} catch (error) {
 			console.error('[Verification Gate] Session check failed:', error);

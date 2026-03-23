@@ -19,6 +19,8 @@ import { db } from '$lib/core/db';
 import { createSession, sessionCookieName } from '$lib/core/auth/auth';
 import { validateReturnTo } from '$lib/core/auth/oauth';
 import { createNearAccount } from '$lib/core/near/account';
+import { encryptOAuthToken } from '$lib/core/crypto/oauth-token-encryption';
+import { encryptUserPii, computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 
 /**
  * NEAR IMPLICIT ACCOUNT CREATION (fire-and-forget)
@@ -251,6 +253,16 @@ export class OAuthCallbackHandler {
 		// Default to true for backwards compatibility (most providers verify email)
 		const emailVerified = userData.emailVerified !== false;
 
+		// Encrypt tokens at rest (fire-and-forget on failure — plaintext columns are fallback)
+		const [encAccessToken, encRefreshToken] = await Promise.all([
+			tokenData.accessToken
+				? encryptOAuthToken(tokenData.accessToken, config.provider, userData.id).catch(() => null)
+				: null,
+			tokenData.refreshToken
+				? encryptOAuthToken(tokenData.refreshToken, config.provider, userData.id).catch(() => null)
+				: null
+		]);
+
 		// Check for existing OAuth account
 		const existingAccount = await db.account.findUnique({
 			where: {
@@ -270,6 +282,9 @@ export class OAuthCallbackHandler {
 					access_token: tokenData.accessToken,
 					refresh_token: tokenData.refreshToken,
 					expires_at: tokenData.expiresAt,
+					// Encrypted token columns (plaintext retained during transition)
+					encrypted_access_token: encAccessToken ?? undefined,
+					encrypted_refresh_token: encRefreshToken ?? undefined,
 					// ISSUE-002: Update email_verified status on each login
 					// (in case user verified their email since last login)
 					email_verified: emailVerified
@@ -279,10 +294,15 @@ export class OAuthCallbackHandler {
 			return existingAccount.user;
 		}
 
-		// Check for existing user by email
-		const existingUser = await db.user.findUnique({
-			where: { email: userData.email }
-		});
+		// Check for existing user by email_hash (C-3), with plaintext fallback during transition
+		const emailHash = await computeEmailHash(userData.email);
+		let existingUser = emailHash
+			? await db.user.findUnique({ where: { email_hash: emailHash } })
+			: null;
+		if (!existingUser) {
+			// Fallback: pre-backfill users may not have email_hash yet
+			existingUser = await db.user.findUnique({ where: { email: userData.email } });
+		}
 
 		if (existingUser) {
 			// Link OAuth account to existing user
@@ -298,6 +318,9 @@ export class OAuthCallbackHandler {
 					expires_at: tokenData.expiresAt,
 					token_type: 'Bearer',
 					scope: config.scope,
+					// Encrypted token columns (plaintext retained during transition)
+					encrypted_access_token: encAccessToken ?? undefined,
+					encrypted_refresh_token: encRefreshToken ?? undefined,
 					// ISSUE-002: Track email verification status for Sybil resistance
 					email_verified: emailVerified
 				}
@@ -314,12 +337,26 @@ export class OAuthCallbackHandler {
 		const baseTrustScore = emailVerified ? 100 : 50;
 		const baseReputationTier = emailVerified ? 'verified' : 'novice';
 
+		// C-3: Encrypt PII before storage (email_hash computed above, reuse it)
+		// Generate a temporary ID for key derivation — Prisma will assign the real cuid
+		const tempUserId = crypto.randomUUID();
+		const piiData = await encryptUserPii(userData.email, userData.name, tempUserId).catch(() => ({
+			encrypted_email: null,
+			encrypted_name: null,
+			email_hash: emailHash
+		}));
+
 		// Create new user with OAuth account
 		const newUser = await db.user.create({
 			data: {
+				id: tempUserId,
 				email: userData.email,
 				name: userData.name,
 				avatar: userData.avatar,
+				// C-3: Encrypted PII (plaintext retained during transition)
+				encrypted_email: piiData.encrypted_email ?? undefined,
+				encrypted_name: piiData.encrypted_name ?? undefined,
+				email_hash: piiData.email_hash ?? emailHash ?? undefined,
 				// ISSUE-002: Apply trust_score based on email verification
 				trust_score: baseTrustScore,
 				reputation_tier: baseReputationTier,
@@ -334,6 +371,9 @@ export class OAuthCallbackHandler {
 						expires_at: tokenData.expiresAt,
 						token_type: 'Bearer',
 						scope: config.scope,
+						// Encrypted token columns (plaintext retained during transition)
+						encrypted_access_token: encAccessToken ?? undefined,
+						encrypted_refresh_token: encRefreshToken ?? undefined,
 						// ISSUE-002: Track email verification status for Sybil resistance
 						email_verified: emailVerified
 					}
@@ -346,12 +386,12 @@ export class OAuthCallbackHandler {
 			console.warn('[OAuth] NEAR account creation failed (non-blocking):', err);
 		});
 
-		// Log Sybil resistance action for audit
+		// Log Sybil resistance action for audit (no plaintext PII in logs)
 		if (!emailVerified) {
 			console.debug('[OAuth Sybil Resistance] New user created with unverified email:', {
 				provider: config.provider,
 				userId: newUser.id,
-				email: userData.email,
+				email_hash: piiData.email_hash?.slice(0, 12) ?? 'none',
 				trust_score: baseTrustScore,
 				reputation_tier: baseReputationTier
 			});

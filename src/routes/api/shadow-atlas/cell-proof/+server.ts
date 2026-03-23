@@ -16,13 +16,9 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getCellProof } from '$lib/core/shadow-atlas/client';
 
-export const GET: RequestHandler = async ({ url, locals }) => {
-	const session = locals.session;
-
-	if (!session) {
-		return json({ error: 'Unauthorized' }, { status: 401 });
-	}
-
+export const GET: RequestHandler = async ({ url }) => {
+	// B-4: Sessionless endpoint — cell→district mapping is public geographic data.
+	// No auth check so the server cannot correlate cell_id to a user identity.
 	const cellId = url.searchParams.get('cell_id');
 
 	if (!cellId) {

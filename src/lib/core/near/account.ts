@@ -22,7 +22,7 @@ import { KeyPairSigner } from '@near-js/signers';
 import { Account } from '@near-js/accounts';
 import { JsonRpcProvider } from '@near-js/providers';
 import { actionCreators } from '@near-js/transactions';
-import { encryptEntropy, decryptEntropy } from '$lib/core/server/security';
+import { encryptEntropy, decryptEntropy, safeUserId } from '$lib/core/server/security';
 import { db } from '$lib/core/db';
 import { NEAR_RPC_TESTNET, NEAR_RPC_MAINNET } from '$lib/core/near/chain-signatures';
 
@@ -307,13 +307,13 @@ export async function createNearAccount(
 		});
 
 		if (!existingUser) {
-			console.error(`${LOG_PREFIX} User not found: ${userId}`);
+			console.error(`${LOG_PREFIX} User not found: ${safeUserId(userId)}`);
 			return { success: false, account: null, error: 'User not found' };
 		}
 
 		if (existingUser.near_account_id) {
 			console.warn(
-				`${LOG_PREFIX} User ${userId} already has NEAR account: ${existingUser.near_account_id}`
+				`${LOG_PREFIX} User ${safeUserId(userId)} already has NEAR account: ${existingUser.near_account_id}`
 			);
 			return {
 				success: false,
@@ -349,7 +349,7 @@ export async function createNearAccount(
 		});
 
 		console.log(
-			`${LOG_PREFIX} Created NEAR implicit account for user ${userId}: ${accountId}`
+			`${LOG_PREFIX} Created NEAR implicit account for user ${safeUserId(userId)}: ${accountId}`
 		);
 
 		return {
@@ -363,7 +363,7 @@ export async function createNearAccount(
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Unknown error';
-		console.error(`${LOG_PREFIX} Failed to create NEAR account for user ${userId}:`, message);
+		console.error(`${LOG_PREFIX} Failed to create NEAR account for user ${safeUserId(userId)}:`, message);
 		return { success: false, account: null, error: message };
 	}
 }
@@ -409,7 +409,7 @@ export async function getNearKeypair(userId: string): Promise<NearKeypairResult>
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Unknown error';
-		console.error(`${LOG_PREFIX} Failed to get NEAR keypair for user ${userId}:`, message);
+		console.error(`${LOG_PREFIX} Failed to get NEAR keypair for user ${safeUserId(userId)}:`, message);
 		return { success: false, keypair: null, accountId: null, error: message };
 	}
 }
@@ -457,7 +457,7 @@ export async function getNearAccountInfo(
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Unknown error';
-		console.error(`${LOG_PREFIX} Failed to get NEAR account info for user ${userId}:`, message);
+		console.error(`${LOG_PREFIX} Failed to get NEAR account info for user ${safeUserId(userId)}:`, message);
 		return null;
 	}
 }
@@ -532,7 +532,7 @@ export async function rotateNearPrimaryKey(
 		const recoveryPublicKeyString = recoveryKeypair.getPublicKey().toString();
 		if (recoveryPublicKeyString !== recoveryBundle.publicKey) {
 			console.error(
-				`${LOG_PREFIX} Recovery key mismatch for user ${userId}: ` +
+				`${LOG_PREFIX} Recovery key mismatch for user ${safeUserId(userId)}: ` +
 					`expected ${recoveryBundle.publicKey}, got ${recoveryPublicKeyString}`
 			);
 			return {
@@ -560,7 +560,7 @@ export async function rotateNearPrimaryKey(
 		});
 
 		console.log(
-			`${LOG_PREFIX} Rotating primary key for user ${userId}. ` +
+			`${LOG_PREFIX} Rotating primary key for user ${safeUserId(userId)}. ` +
 				`Old: ${user.near_public_key}, New: ${newPublicKeyString}`
 		);
 
@@ -580,7 +580,7 @@ export async function rotateNearPrimaryKey(
 		} catch (onChainError) {
 			const detail = onChainError instanceof Error ? onChainError.message : String(onChainError);
 			console.error(
-				`${LOG_PREFIX} On-chain key rotation failed for user ${userId}: ${detail}`
+				`${LOG_PREFIX} On-chain key rotation failed for user ${safeUserId(userId)}: ${detail}`
 			);
 			return {
 				success: false,
@@ -599,7 +599,7 @@ export async function rotateNearPrimaryKey(
 			}
 		});
 
-		console.log(`${LOG_PREFIX} Key rotation complete for user ${userId}`);
+		console.log(`${LOG_PREFIX} Key rotation complete for user ${safeUserId(userId)}`);
 
 		return {
 			success: true,
@@ -608,7 +608,7 @@ export async function rotateNearPrimaryKey(
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Unknown error';
 		console.error(
-			`${LOG_PREFIX} Failed to rotate NEAR primary key for user ${userId}:`,
+			`${LOG_PREFIX} Failed to rotate NEAR primary key for user ${safeUserId(userId)}:`,
 			message
 		);
 		return { success: false, newPublicKey: null, error: message };
@@ -631,7 +631,7 @@ export async function hasNearAccount(userId: string): Promise<boolean> {
 		});
 		return user?.near_account_id != null;
 	} catch (error) {
-		console.error(`${LOG_PREFIX} Failed to check NEAR account for user ${userId}:`, error);
+		console.error(`${LOG_PREFIX} Failed to check NEAR account for user ${safeUserId(userId)}:`, error);
 		return false;
 	}
 }

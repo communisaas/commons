@@ -43,6 +43,7 @@ import {
 } from '$lib/core/gas/pimlico';
 import type { UserOperation } from '$lib/core/gas/types';
 import { DEBATE_MARKET_ADDRESS } from '$lib/core/contracts';
+import { safeUserId } from '$lib/core/server/security';
 
 // =============================================================================
 // Constants
@@ -200,7 +201,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	// 2. Rate limit (log-only for now — full enforcement in Phase 2 via KV)
 	const withinLimit = checkSponsorshipRateLimit(userId);
 	if (!withinLimit) {
-		console.warn(`${LOG_PREFIX} Rate limit reached for user ${userId} (${RATE_MAX_OPS} ops/24h)`);
+		console.warn(`${LOG_PREFIX} Rate limit reached for user ${safeUserId(userId)} (${RATE_MAX_OPS} ops/24h)`);
 		return json(
 			{
 				success: false,
@@ -240,11 +241,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		userOp = deserializeUserOp(rawUserOp as UserOperationWire);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		console.warn(`${LOG_PREFIX} UserOp deserialization failed for user ${userId}:`, message);
+		console.warn(`${LOG_PREFIX} UserOp deserialization failed for user ${safeUserId(userId)}:`, message);
 		return json({ success: false, error: `Invalid UserOp: ${message}` }, { status: 400 });
 	}
 
-	console.debug(`${LOG_PREFIX} Sponsorship request from user ${userId}`, {
+	console.debug(`${LOG_PREFIX} Sponsorship request from user ${safeUserId(userId)}`, {
 		sender: userOp.sender,
 		nonce: userOp.nonce?.toString(),
 		callDataLength: userOp.callData?.length
@@ -275,7 +276,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		sponsorship = await sponsorUserOperation(pimlicoClient, userOp, policy);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		console.error(`${LOG_PREFIX} Sponsorship call threw for user ${userId}:`, message);
+		console.error(`${LOG_PREFIX} Sponsorship call threw for user ${safeUserId(userId)}:`, message);
 		return json(
 			{ success: false, error: `Sponsorship failed: ${message}` },
 			{ status: 502 }
@@ -284,7 +285,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	if (!sponsorship.sponsored) {
 		console.warn(
-			`${LOG_PREFIX} Sponsorship denied for user ${userId}: ${sponsorship.reason}`
+			`${LOG_PREFIX} Sponsorship denied for user ${safeUserId(userId)}: ${sponsorship.reason}`
 		);
 		return json(
 			{ success: false, error: 'Gas sponsorship denied', reason: sponsorship.reason },
@@ -340,7 +341,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		userOpHash = await sendUserOperation(pimlicoClient, fullUserOp);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		console.error(`${LOG_PREFIX} sendUserOperation failed for user ${userId}:`, message);
+		console.error(`${LOG_PREFIX} sendUserOperation failed for user ${safeUserId(userId)}:`, message);
 		return json(
 			{ success: false, error: `Bundler submission failed: ${message}` },
 			{ status: 502 }

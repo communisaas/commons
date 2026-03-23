@@ -54,7 +54,6 @@ export interface UserFactoryData {
 	// Verification status
 	is_verified?: boolean;
 	verification_method?: string;
-	verification_data?: unknown;
 	verified_at?: Date;
 
 	// VOTER Protocol blockchain identity
@@ -94,7 +93,6 @@ export class UserFactory extends Factory<UserFactoryData> {
 			// Verification status
 			is_verified: false,
 			verification_method: undefined,
-			verification_data: undefined,
 			verified_at: undefined,
 
 			// VOTER Protocol blockchain identity

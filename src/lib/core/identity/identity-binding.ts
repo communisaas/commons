@@ -21,6 +21,7 @@
 import { prisma } from '$lib/core/db';
 import { createHash } from 'crypto';
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
+import { computeCampaignPseudonym } from '$lib/core/crypto/campaign-pseudonym';
 
 // =============================================================================
 // TYPES
@@ -255,6 +256,12 @@ async function mergeAccountsInTx(tx: any, sourceUserId: string, targetUserId: st
 	await tx.template_campaign.updateMany({
 		where: { user_id: sourceUserId },
 		data: { user_id: targetUserId }
+	});
+
+	// Recompute pseudonym_id for merged campaigns (C-1: pseudonymous campaign records)
+	await tx.template_campaign.updateMany({
+		where: { user_id: targetUserId, pseudonym_id: null },
+		data: { pseudonym_id: computeCampaignPseudonym(targetUserId) }
 	});
 
 	// Move UserDMRelation records — per-row merge to avoid updateMany aborting
