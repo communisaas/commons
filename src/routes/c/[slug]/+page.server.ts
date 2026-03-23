@@ -8,6 +8,7 @@ import { hashDistrict } from '$lib/core/identity/district-credential';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
 import { spawnDebateForCampaign } from '$lib/server/debates/spawn';
 import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
+import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -204,19 +205,19 @@ export const actions: Actions = {
 			return fail(400, { error: 'Please enter a valid email address' });
 		}
 
-		// Find or create supporter (dedup on orgId + email)
-		let supporter = await db.supporter.findUnique({
-			where: { orgId_email: { orgId: campaign.orgId, email } }
-		});
+		// Find or create supporter (dedup on orgId + email_hash, plaintext fallback)
+		let supporter = await findSupporterByEmail(campaign.orgId, email);
 
 		if (!supporter) {
 			// C-5: Encrypt email at rest
+			const supId = crypto.randomUUID();
 			const [eHash, eEnc] = await Promise.all([
 				computeEmailHash(email).catch(() => null),
-				encryptPii(email, `supporter:${campaign.orgId}:${email}`).catch(() => null)
+				encryptPii(email, `supporter:${supId}`).catch(() => null)
 			]);
 			supporter = await db.supporter.create({
 				data: {
+					id: supId,
 					orgId: campaign.orgId,
 					email,
 					name,

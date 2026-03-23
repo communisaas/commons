@@ -291,6 +291,26 @@ export class OAuthCallbackHandler {
 				}
 			});
 
+			// Progressive backfill: encrypt PII for pre-migration users on login
+			if (!existingAccount.user.encrypted_email) {
+				encryptUserPii(existingAccount.user.email, existingAccount.user.name, existingAccount.user.id)
+					.then((piiData) => {
+						if (piiData.encrypted_email) {
+							return db.user.update({
+								where: { id: existingAccount.user.id },
+								data: {
+									encrypted_email: piiData.encrypted_email,
+									encrypted_name: piiData.encrypted_name ?? undefined,
+									email_hash: piiData.email_hash ?? undefined
+								}
+							});
+						}
+					})
+					.catch((err) => {
+						console.warn('[OAuth] PII backfill failed (non-blocking):', err);
+					});
+			}
+
 			return existingAccount.user;
 		}
 
@@ -325,6 +345,26 @@ export class OAuthCallbackHandler {
 					email_verified: emailVerified
 				}
 			});
+
+			// Progressive backfill: encrypt PII for pre-migration users on login
+			if (!existingUser.encrypted_email) {
+				encryptUserPii(existingUser.email, existingUser.name, existingUser.id)
+					.then((piiData) => {
+						if (piiData.encrypted_email) {
+							return db.user.update({
+								where: { id: existingUser.id },
+								data: {
+									encrypted_email: piiData.encrypted_email,
+									encrypted_name: piiData.encrypted_name ?? undefined,
+									email_hash: piiData.email_hash ?? undefined
+								}
+							});
+						}
+					})
+					.catch((err) => {
+						console.warn('[OAuth] PII backfill failed (non-blocking):', err);
+					});
+			}
 
 			return existingUser;
 		}

@@ -18,6 +18,7 @@ import { maskEmail } from '$lib/server/org/mask';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
 import { spawnDebateForCampaign } from '$lib/server/debates/spawn';
 import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
+import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
 import { FEATURES } from '$lib/config/features';
 import {
 	fetchPeople,
@@ -336,10 +337,11 @@ async function processPeopleBatch(
 				continue;
 			}
 
-			// Check for existing supporter
-			const existing = await prisma.supporter.findUnique({
-				where: { orgId_email: { orgId, email: mapped.email } },
-				select: {
+			// Check for existing supporter (email_hash first, plaintext fallback)
+			const existing = await findSupporterByEmail(
+				orgId,
+				mapped.email,
+				{
 					id: true,
 					name: true,
 					postalCode: true,
@@ -348,8 +350,9 @@ async function processPeopleBatch(
 					emailStatus: true,
 					customFields: true,
 					source: true
-				}
-			});
+				},
+				prisma.supporter
+			);
 
 			if (existing) {
 				// Update: fill nulls + strictest email status + merge custom fields
@@ -391,12 +394,14 @@ async function processPeopleBatch(
 			} else {
 				// Create new supporter
 				// C-5: Encrypt email at rest
+				const supId = crypto.randomUUID();
 				const [eHash, eEnc] = await Promise.all([
 					computeEmailHash(mapped.email).catch(() => null),
-					encryptPii(mapped.email, `supporter:${orgId}:${mapped.email}`).catch(() => null)
+					encryptPii(mapped.email, `supporter:${supId}`).catch(() => null)
 				]);
 				const supporter = await prisma.supporter.create({
 					data: {
+						id: supId,
 						orgId,
 						email: mapped.email,
 						name: mapped.name,

@@ -18,7 +18,9 @@ const {
 	mockDbEventUpdate,
 	mockDbEventRsvpUpsert,
 	mockDbSupporterFindFirst,
+	mockDbSupporterFindUnique,
 	mockDbSupporterCreate,
+	mockFindSupporterByEmail,
 	mockDbEventRsvpCount
 } = vi.hoisted(() => ({
 	mockFeatures: {
@@ -32,7 +34,9 @@ const {
 	mockDbEventUpdate: vi.fn(),
 	mockDbEventRsvpUpsert: vi.fn(),
 	mockDbSupporterFindFirst: vi.fn(),
+	mockDbSupporterFindUnique: vi.fn(),
 	mockDbSupporterCreate: vi.fn(),
+	mockFindSupporterByEmail: vi.fn(),
 	mockDbEventRsvpCount: vi.fn()
 }));
 
@@ -42,12 +46,16 @@ vi.mock('$lib/core/db', () => ({
 	db: {
 		event: { findUnique: mockDbEventFindUnique, update: mockDbEventUpdate },
 		eventRsvp: { upsert: mockDbEventRsvpUpsert, count: mockDbEventRsvpCount },
-		supporter: { findFirst: mockDbSupporterFindFirst, create: mockDbSupporterCreate }
+		supporter: { findFirst: mockDbSupporterFindFirst, findUnique: mockDbSupporterFindUnique, create: mockDbSupporterCreate }
 	}
 }));
 
 vi.mock('$lib/core/security/rate-limiter', () => ({
 	getRateLimiter: () => ({ check: mockRateLimiterCheck })
+}));
+
+vi.mock('$lib/server/supporters/find-by-email', () => ({
+	findSupporterByEmail: mockFindSupporterByEmail
 }));
 
 vi.mock('@sveltejs/kit', () => ({
@@ -98,6 +106,7 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 			.mockResolvedValueOnce(PUBLISHED_EVENT) // findUnique for event
 			.mockResolvedValueOnce({ rsvpCount: 1 }); // findUnique after increment
 		mockDbSupporterFindFirst.mockResolvedValue(null);
+		mockFindSupporterByEmail.mockResolvedValue(null);
 		mockDbSupporterCreate.mockResolvedValue({ id: 'sup-1' });
 		mockDbEventRsvpUpsert.mockResolvedValue({
 			id: 'rsvp-1', status: 'GOING', createdAt: new Date()
@@ -197,7 +206,7 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 	});
 
 	it('uses existing supporter if found', async () => {
-		mockDbSupporterFindFirst.mockResolvedValue({ id: 'existing-sup' });
+		mockFindSupporterByEmail.mockResolvedValue({ id: 'existing-sup' });
 		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
 		await POST(makeArgs({ email: 'existing@test.com', name: 'Existing' }));
 		expect(mockDbSupporterCreate).not.toHaveBeenCalled();

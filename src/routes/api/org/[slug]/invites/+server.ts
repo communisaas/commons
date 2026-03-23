@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
+import { encryptPii, computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
 /** Send invites to join an organization. */
@@ -52,8 +53,12 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 	const emails = cleaned.map((c) => c.email);
 
-	// Batch lookups: 3 queries instead of up to 60
-	const [existingUsers, existingInvites] = await Promise.all([
+	// Compute email hashes for hash-based lookups
+	const emailHashes = await Promise.all(emails.map((e) => computeEmailHash(e)));
+	const validHashes = emailHashes.filter((h): h is string => h !== null);
+
+	// Batch lookups: hash-based with plaintext fallback
+	const [existingUsers, existingInvitesByHash, existingInvitesByEmail] = await Promise.all([
 		db.user.findMany({
 			where: { email: { in: emails } },
 			select: {
@@ -65,6 +70,17 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 				}
 			}
 		}),
+		validHashes.length > 0
+			? db.orgInvite.findMany({
+					where: {
+						orgId: org.id,
+						email_hash: { in: validHashes },
+						accepted: false,
+						expiresAt: { gt: new Date() }
+					},
+					select: { email: true, email_hash: true }
+				})
+			: Promise.resolve([]),
 		db.orgInvite.findMany({
 			where: {
 				orgId: org.id,
@@ -80,7 +96,10 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const alreadyMemberEmails = new Set(
 		existingUsers.filter((u) => u.orgMemberships.length > 0).map((u) => u.email)
 	);
-	const alreadyInvitedEmails = new Set(existingInvites.map((i) => i.email));
+	const alreadyInvitedEmails = new Set([
+		...existingInvitesByEmail.map((i) => i.email),
+		...existingInvitesByHash.map((i) => i.email)
+	]);
 
 	const results: Array<{ email: string; status: 'sent' | 'skipped' }> = [];
 	const expiresAt = new Date();
@@ -93,11 +112,21 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		}
 
 		const token = generateToken();
+		const inviteId = crypto.randomUUID();
+
+		// Encrypt email for at-rest protection (dual-write: plaintext stays during transition)
+		const [encEmail, invEmailHash] = await Promise.all([
+			encryptPii(inv.email, 'org-invite:' + inviteId).catch(() => null),
+			computeEmailHash(inv.email)
+		]);
 
 		await db.orgInvite.create({
 			data: {
+				id: inviteId,
 				orgId: org.id,
 				email: inv.email,
+				encrypted_email: encEmail ? JSON.stringify(encEmail) : undefined,
+				email_hash: invEmailHash ?? undefined,
 				role: inv.role,
 				token,
 				expiresAt,

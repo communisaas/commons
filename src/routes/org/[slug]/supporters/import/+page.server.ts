@@ -4,6 +4,7 @@ import { loadOrgContext, requireRole } from '$lib/server/org';
 import { parseCSV } from '$lib/server/csv';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
 import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
+import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ parent }) => {
@@ -273,10 +274,11 @@ export const actions: Actions = {
 				await db.$transaction(async (tx) => {
 					for (const { mapped, rowNum } of batch) {
 						try {
-							// Check if supporter exists
-							const existing = await tx.supporter.findUnique({
-								where: { orgId_email: { orgId: org.id, email: mapped.email } },
-								select: {
+							// Check if supporter exists (email_hash first, plaintext fallback)
+							const existing = await findSupporterByEmail(
+								org.id,
+								mapped.email,
+								{
 									id: true,
 									name: true,
 									postalCode: true,
@@ -285,8 +287,9 @@ export const actions: Actions = {
 									emailStatus: true,
 									smsStatus: true,
 									source: true
-								}
-							});
+								},
+								tx.supporter
+							);
 
 							if (existing) {
 								// Update: only fill in null fields, apply strictest email status
@@ -334,12 +337,14 @@ export const actions: Actions = {
 							} else {
 								// Create new supporter
 								// C-5: Encrypt email at rest
+								const supId = crypto.randomUUID();
 								const [eHash, eEnc] = await Promise.all([
 									computeEmailHash(mapped.email).catch(() => null),
-									encryptPii(mapped.email, `supporter:${org.id}:${mapped.email}`).catch(() => null)
+									encryptPii(mapped.email, `supporter:${supId}`).catch(() => null)
 								]);
 								const supporter = await tx.supporter.create({
 									data: {
+										id: supId,
 										orgId: org.id,
 										email: mapped.email,
 										name: mapped.name,

@@ -11,7 +11,8 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
-import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
+import { computeEmailHash, encryptPii, tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
+import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
 import type { RequestHandler } from './$types';
 
 // F-R8-03: Zod schema replaces manual email validation with includes('@')
@@ -88,11 +89,11 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const items = raw.slice(0, limit);
 	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
 
-	const data = items.map((s) => {
+	const data = await Promise.all(items.map(async (s) => {
 		const sup = s as typeof s & { tags: Array<{ tag: { id: string; name: string } }> };
 		return {
 			id: sup.id,
-			email: sup.email,
+			email: await tryDecryptSupporterEmail(sup as { id: string; email: string; encrypted_email?: string | null }),
 			name: sup.name,
 			postalCode: sup.postalCode,
 			country: sup.country,
@@ -105,7 +106,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			updatedAt: sup.updatedAt.toISOString(),
 			tags: sup.tags.map((st) => ({ id: st.tag.id, name: st.tag.name }))
 		};
-	});
+	}));
 
 	return apiOk(data, { cursor: nextCursor, hasMore, total });
 };
@@ -139,10 +140,8 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const { email, name, postalCode, country, phone, source, customFields, tags } = parsed;
 
-	// Check for duplicate
-	const existing = await db.supporter.findUnique({
-		where: { orgId_email: { orgId: auth.orgId, email: email.toLowerCase() } }
-	});
+	// Check for duplicate (email_hash first, plaintext fallback)
+	const existing = await findSupporterByEmail(auth.orgId, email);
 
 	if (existing) {
 		return apiError('CONFLICT', 'A supporter with this email already exists', 409);
@@ -162,13 +161,15 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	// C-5: Encrypt supporter email at rest (fire-and-forget on failure)
 	const normalizedEmail = email.toLowerCase();
+	const supporterId = crypto.randomUUID();
 	const [emailHash, encEmail] = await Promise.all([
 		computeEmailHash(normalizedEmail).catch(() => null),
-		encryptPii(normalizedEmail, `supporter:${auth.orgId}:${normalizedEmail}`).catch(() => null)
+		encryptPii(normalizedEmail, `supporter:${supporterId}`).catch(() => null)
 	]);
 
 	const supporter = await db.supporter.create({
 		data: {
+			id: supporterId,
 			orgId: auth.orgId,
 			email: normalizedEmail,
 			name: name || null,

@@ -6,6 +6,7 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
+import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
 import crypto from 'node:crypto';
 import type { RequestHandler } from './$types';
 
@@ -83,9 +84,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// Find or create supporter if org exists
 	let supporterId: string | null = null;
 	if (event.orgId) {
-		const existing = await db.supporter.findFirst({
-			where: { orgId: event.orgId, email: email.toLowerCase() }
-		});
+		const existing = await findSupporterByEmail(event.orgId, email);
 		if (existing) {
 			supporterId = existing.id;
 		} else {

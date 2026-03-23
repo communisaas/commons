@@ -1,5 +1,6 @@
 import { redirect, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
+import { computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -57,8 +58,12 @@ export const actions: Actions = {
 			throw error(400, 'This invite is no longer valid');
 		}
 
-		// Check email match
-		if (invite.email !== locals.user.email) {
+		// Hash-based email comparison with plaintext fallback
+		const emailHash = await computeEmailHash(locals.user.email);
+		const emailMatches =
+			(invite.email_hash && emailHash && invite.email_hash === emailHash) ||
+			invite.email === locals.user.email;
+		if (!emailMatches) {
 			throw error(403, 'This invite was sent to a different email address');
 		}
 

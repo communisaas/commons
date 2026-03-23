@@ -452,6 +452,9 @@ model UserDMRelation {
   assignedAt      DateTime  @default(now()) @map("assigned_at")
   lastValidated   DateTime? @map("last_validated")
 
+  // Cycle 5 C-2d: Track origin of DM relationship
+  source String @default("legacy") // "legacy" | "shadow_atlas" | "civic_api"
+
   user          User          @relation("UserDMRelations", fields: [userId], references: [id], onDelete: Cascade)
   decisionMaker DecisionMaker @relation(fields: [decisionMakerId], references: [id], onDelete: Cascade)
 
@@ -1343,10 +1346,15 @@ model OrgInvite {
   accepted  Boolean  @default(false)
   invitedBy String   @map("invited_by")
 
+  // Cycle 4 S-5: PII encryption at rest
+  encrypted_email String? @map("encrypted_email") // AES-256-GCM JSON { ciphertext, iv }
+  email_hash      String? @map("email_hash")      // HMAC-SHA256 for hash-based lookups
+
   org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@index([orgId])
   @@index([email])
+  @@index([email_hash])
   @@map("org_invite")
 }
 

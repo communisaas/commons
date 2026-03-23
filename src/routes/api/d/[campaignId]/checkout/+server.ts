@@ -7,6 +7,7 @@ import { db } from '$lib/core/db';
 import { getStripe } from '$lib/server/billing/stripe';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
+import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
 import crypto from 'node:crypto';
 import type { RequestHandler } from './$types';
 
@@ -80,9 +81,7 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 	// Find or create supporter
 	let supporterId: string | null = null;
 	if (campaign.orgId) {
-		const existing = await db.supporter.findFirst({
-			where: { orgId: campaign.orgId, email: email.toLowerCase() }
-		});
+		const existing = await findSupporterByEmail(campaign.orgId, email);
 		if (existing) {
 			supporterId = existing.id;
 		} else {

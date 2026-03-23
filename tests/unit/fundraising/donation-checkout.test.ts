@@ -22,8 +22,10 @@ const {
 	mockDbDonationCreate,
 	mockDbDonationUpdate,
 	mockDbSupporterFindFirst,
+	mockDbSupporterFindUnique,
 	mockDbSupporterCreate,
-	mockStripeSessionCreate
+	mockStripeSessionCreate,
+	mockFindSupporterByEmail
 } = vi.hoisted(() => ({
 	mockFeatures: {
 		FUNDRAISING: true as boolean,
@@ -38,8 +40,10 @@ const {
 	mockDbDonationCreate: vi.fn(),
 	mockDbDonationUpdate: vi.fn(),
 	mockDbSupporterFindFirst: vi.fn(),
+	mockDbSupporterFindUnique: vi.fn(),
 	mockDbSupporterCreate: vi.fn(),
-	mockStripeSessionCreate: vi.fn()
+	mockStripeSessionCreate: vi.fn(),
+	mockFindSupporterByEmail: vi.fn()
 }));
 
 vi.mock('$lib/config/features', () => ({ FEATURES: mockFeatures }));
@@ -48,12 +52,16 @@ vi.mock('$lib/core/db', () => ({
 	db: {
 		campaign: { findUnique: mockDbCampaignFindUnique, update: mockDbCampaignUpdate },
 		donation: { create: mockDbDonationCreate, update: mockDbDonationUpdate },
-		supporter: { findFirst: mockDbSupporterFindFirst, create: mockDbSupporterCreate }
+		supporter: { findFirst: mockDbSupporterFindFirst, findUnique: mockDbSupporterFindUnique, create: mockDbSupporterCreate }
 	}
 }));
 
 vi.mock('$lib/core/security/rate-limiter', () => ({
 	getRateLimiter: () => ({ check: mockRateLimiterCheck })
+}));
+
+vi.mock('$lib/server/supporters/find-by-email', () => ({
+	findSupporterByEmail: mockFindSupporterByEmail
 }));
 
 vi.mock('$lib/server/billing/stripe', () => ({
@@ -125,6 +133,7 @@ describe('Donation Checkout - POST /api/d/[campaignId]/checkout', () => {
 		mockRateLimiterCheck.mockResolvedValue({ allowed: true, remaining: 9, limit: 10, reset: Date.now() });
 		mockDbCampaignFindUnique.mockResolvedValue(ACTIVE_FUNDRAISER);
 		mockDbSupporterFindFirst.mockResolvedValue(null);
+		mockFindSupporterByEmail.mockResolvedValue(null);
 		mockDbSupporterCreate.mockResolvedValue({ id: 'sup-1' });
 		mockDbDonationCreate.mockResolvedValue({ id: 'don-1', amountCents: 5000 });
 		mockDbDonationUpdate.mockResolvedValue({});
@@ -225,7 +234,7 @@ describe('Donation Checkout - POST /api/d/[campaignId]/checkout', () => {
 	});
 
 	it('finds existing supporter instead of creating new one', async () => {
-		mockDbSupporterFindFirst.mockResolvedValue({ id: 'existing-sup' });
+		mockFindSupporterByEmail.mockResolvedValue({ id: 'existing-sup' });
 		const { POST } = await import('../../../src/routes/api/d/[campaignId]/checkout/+server');
 		await POST(makeCheckoutArgs(VALID_BODY));
 		expect(mockDbSupporterCreate).not.toHaveBeenCalled();

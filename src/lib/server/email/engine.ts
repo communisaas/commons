@@ -8,6 +8,7 @@ import {
 } from './compiler';
 import { buildUnsubscribeUrl } from './unsubscribe';
 import { computeVerificationPacket, computeOrgVerificationPacket } from '$lib/server/campaigns/verification';
+import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 
 const BATCH_SIZE = 100;
 const SES_CONCURRENCY = 10;
@@ -36,6 +37,7 @@ type Recipient = {
 	postalCode: string | null;
 	verified: boolean;
 	identityCommitment: string | null;
+	encrypted_email: string | null;
 };
 
 const RECIPIENT_SELECT = {
@@ -44,7 +46,8 @@ const RECIPIENT_SELECT = {
 	name: true,
 	postalCode: true,
 	verified: true,
-	identityCommitment: true
+	identityCommitment: true,
+	encrypted_email: true
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -238,6 +241,7 @@ async function compileAndSendToRecipient(
 	blast: { fromEmail: string; fromName: string; subject: string; bodyHtml: string; orgId: string },
 	verificationBlock: VerificationBlock
 ): Promise<{ success: boolean; error?: string }> {
+	const decryptedEmail = await tryDecryptSupporterEmail(recipient);
 	const { firstName, lastName } = splitName(recipient.name);
 	const verificationStatus = deriveVerificationStatus(
 		recipient.verified,
@@ -248,7 +252,7 @@ async function compileAndSendToRecipient(
 	const merge: MergeContext = {
 		firstName,
 		lastName,
-		email: recipient.email,
+		email: decryptedEmail,
 		postalCode: recipient.postalCode,
 		verificationStatus,
 		tierLabel: null,
@@ -258,7 +262,7 @@ async function compileAndSendToRecipient(
 	const unsubscribeUrl = buildUnsubscribeUrl(recipient.id, blast.orgId);
 	const htmlBody = compileEmail(blast.bodyHtml, merge, verificationBlock, unsubscribeUrl);
 	return sendEmail(
-		recipient.email,
+		decryptedEmail,
 		blast.fromEmail,
 		blast.fromName,
 		blast.subject,

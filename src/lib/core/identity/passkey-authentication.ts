@@ -32,7 +32,7 @@ import { createSession } from '$lib/core/auth/auth';
 import type { Session } from '$lib/core/auth/auth';
 import { getPasskeyRPConfig } from './passkey-rp-config';
 import { uint8ArrayToBase64url, base64urlToUint8Array } from './passkey-registration';
-import { computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
+import { computeEmailHash, decryptUserPii } from '$lib/core/crypto/user-pii-encryption';
 
 // ---------------------------------------------------------------------------
 // Authentication: Step 1 — Generate options
@@ -183,6 +183,8 @@ export async function verifyPasskeyAuth(
 			id: true,
 			email: true,
 			name: true,
+			encrypted_email: true,
+			encrypted_name: true,
 			trust_tier: true,
 			passkey_credential_id: true,
 			passkey_public_key_jwk: true
@@ -252,12 +254,15 @@ export async function verifyPasskeyAuth(
 		})
 	]);
 
+	// C-3: Decrypt PII if encrypted columns exist, fallback to plaintext during transition
+	const pii = await decryptUserPii(user);
+
 	return {
 		session,
 		user: {
 			id: user.id,
-			email: user.email,
-			name: user.name,
+			email: pii.email,
+			name: pii.name,
 			trust_tier: user.trust_tier
 		}
 	};

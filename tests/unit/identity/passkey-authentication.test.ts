@@ -398,6 +398,8 @@ describe('verifyPasskeyAuth', () => {
 					id: true,
 					email: true,
 					name: true,
+					encrypted_email: true,
+					encrypted_name: true,
 					trust_tier: true,
 					passkey_credential_id: true,
 					passkey_public_key_jwk: true

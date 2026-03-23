@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
+import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
 
 const PAGE_SIZE = 50;
@@ -99,23 +100,26 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		]);
 
 	const hasMore = rawSupporters.length > PAGE_SIZE;
-	const supporters = rawSupporters.slice(0, PAGE_SIZE).map((s) => ({
-		id: s.id,
-		email: s.email,
-		name: s.name,
-		postalCode: s.postalCode,
-		country: s.country,
-		phone: s.phone,
-		identityVerified: !!(s.identityCommitment && s.verified),
-		verified: s.verified,
-		emailStatus: s.emailStatus,
-		source: s.source,
-		createdAt: s.createdAt.toISOString(),
-		tags: s.tags.map((st: { tag: { id: string; name: string } }) => ({
-			id: st.tag.id,
-			name: st.tag.name
+	const sliced = rawSupporters.slice(0, PAGE_SIZE);
+	const supporters = await Promise.all(
+		sliced.map(async (s) => ({
+			id: s.id,
+			email: await tryDecryptSupporterEmail(s as { id: string; email: string; encrypted_email?: string | null }),
+			name: s.name,
+			postalCode: s.postalCode,
+			country: s.country,
+			phone: s.phone,
+			identityVerified: !!(s.identityCommitment && s.verified),
+			verified: s.verified,
+			emailStatus: s.emailStatus,
+			source: s.source,
+			createdAt: s.createdAt.toISOString(),
+			tags: s.tags.map((st: { tag: { id: string; name: string } }) => ({
+				id: st.tag.id,
+				name: st.tag.name
+			}))
 		}))
-	}));
+	);
 
 	const nextCursor = hasMore ? supporters[supporters.length - 1]?.id ?? null : null;
 

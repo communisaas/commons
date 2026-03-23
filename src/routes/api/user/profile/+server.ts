@@ -84,8 +84,6 @@ export const GET: RequestHandler = async ({ locals }) => {
 			where: { id: locals.user.id },
 			select: {
 				id: true,
-				name: true,
-				email: true,
 				avatar: true,
 				role: true,
 				organization: true,
@@ -106,8 +104,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 		return json({
 			user: {
 				id: user.id,
-				name: user.name,
-				email: user.email,
+				name: locals.user.name,
+				email: locals.user.email,
 				avatar: user.avatar,
 				// Note: address and phone removed per privacy architecture
 				// PII is encrypted in EncryptedDeliveryData, not exposed via API

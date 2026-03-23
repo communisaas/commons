@@ -2,6 +2,7 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
+import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params, parent }) => {
@@ -30,10 +31,12 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 		take: 1000
 	});
 
+	const decryptedEmail = await tryDecryptSupporterEmail(supporter);
+
 	return {
 		supporter: {
 			id: supporter.id,
-			email: supporter.email,
+			email: decryptedEmail,
 			name: supporter.name,
 			postalCode: supporter.postalCode,
 			country: supporter.country,

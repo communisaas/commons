@@ -9,6 +9,7 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
+import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, params }) => {
@@ -27,9 +28,11 @@ export const GET: RequestHandler = async ({ request, params }) => {
 
 	if (!supporter) return apiError('NOT_FOUND', 'Supporter not found', 404);
 
+	const decryptedEmail = await tryDecryptSupporterEmail(supporter);
+
 	return apiOk({
 		id: supporter.id,
-		email: supporter.email,
+		email: decryptedEmail,
 		name: supporter.name,
 		postalCode: supporter.postalCode,
 		country: supporter.country,

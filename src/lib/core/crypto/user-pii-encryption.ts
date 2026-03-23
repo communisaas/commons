@@ -269,6 +269,30 @@ export async function decryptUserPii(
 }
 
 // =============================================================================
+// CONVENIENCE: Decrypt supporter email (info string = "supporter:{id}")
+// =============================================================================
+
+/**
+ * Decrypt a supporter's encrypted email, falling back to plaintext.
+ * Info string for supporter encryption is "supporter:{supporterId}".
+ */
+export async function tryDecryptSupporterEmail(supporter: {
+	id: string;
+	email: string;
+	encrypted_email?: string | null;
+}): Promise<string> {
+	if (!supporter.encrypted_email) return supporter.email;
+
+	try {
+		const enc: EncryptedPii = JSON.parse(supporter.encrypted_email);
+		return await decryptPii(enc, 'supporter:' + supporter.id);
+	} catch {
+		// Decryption failed (wrong key, pre-migration data, corrupted) — fall back to plaintext
+		return supporter.email;
+	}
+}
+
+// =============================================================================
 // BYTE UTILITIES (no Node.js Buffer — CF Workers compatible)
 // =============================================================================
 
