@@ -245,7 +245,7 @@ export async function registerThreeTree(
 			leafIndex: tree1Data.leafIndex,
 			merklePath: tree1Data.userPath, // Tree 1 siblings
 			merkleRoot: tree1Data.userRoot, // Tree 1 root
-			congressionalDistrict: 'three-tree', // Districts come from Tree 2
+			congressionalDistrict: tree2Data.districts[0] ?? 'unknown',
 
 			// Three-tree specific fields
 			credentialType: 'three-tree',
@@ -377,7 +377,7 @@ export async function recoverThreeTree(
 			leafIndex: tree1Data.leafIndex,
 			merklePath: tree1Data.userPath,
 			merkleRoot: tree1Data.userRoot,
-			congressionalDistrict: 'three-tree',
+			congressionalDistrict: tree2Data.districts[0] ?? 'unknown',
 
 			credentialType: 'three-tree',
 			cellId: request.cellId,

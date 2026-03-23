@@ -2,8 +2,14 @@
   AddressVerificationFlow.svelte
 
   Dual-path Tier 2 verification flow: geolocation OR address-based.
-  Path A: Browser geolocation → /api/location/resolve (Shadow Atlas server-side)
-  Path B: Manual address → Shadow Atlas (server-side) → district + representatives
+
+  When SHADOW_ATLAS_VERIFICATION is enabled (client-side path):
+    Path A: Browser geolocation → IPFS district lookup (no server call) → commitment
+    Path B: Manual address → server geocode only → IPFS district lookup → commitment
+
+  When disabled (legacy server-side path):
+    Path A: Browser geolocation → /api/location/resolve
+    Path B: Manual address → /api/location/resolve-address
 
   Flow: path-select → [geolocating | address-input] → resolving → confirm-district → issuing-credential → complete
 -->
@@ -14,6 +20,13 @@
 	import { getBrowserGeolocation } from '$lib/core/location/browser-location';
 	import { storeConstituentAddress } from '$lib/core/identity/constituent-address';
 	import { addVerifiedLocationSignal } from '$lib/core/location/inference-engine';
+	import { FEATURES } from '$lib/config/features';
+	import {
+		lookupDistrictsFromBrowser,
+		getOfficialsFromBrowser,
+		computeDistrictCommitment
+	} from '$lib/core/shadow-atlas/browser-client';
+	import { convertDistrictId } from '$lib/core/shadow-atlas/district-format';
 
 	type FlowStep = 'path-select' | 'geolocating' | 'address-input' | 'resolving' | 'confirm-district' | 'issuing-credential' | 'complete';
 
@@ -55,6 +68,11 @@
 	// Which verification path was chosen
 	let verificationMethod: 'browser' | 'address' = $state('browser');
 
+	// B-3: Client-side district commitment (when SHADOW_ATLAS_VERIFICATION enabled)
+	const clientSideEnabled = FEATURES.SHADOW_ATLAS_VERIFICATION;
+	let districtCommitment: string = $state('');
+	let districtSlotCount: number = $state(0);
+
 	// Derived: form validation
 	let isFormValid: boolean = $derived(
 		street.trim().length > 0 &&
@@ -90,6 +108,48 @@
 	}
 
 	/**
+	 * B-3: Client-side district resolution from lat/lng via IPFS.
+	 * Returns true if resolution succeeded, false to fall through to server path.
+	 */
+	async function resolveClientSide(lat: number, lng: number): Promise<boolean> {
+		try {
+			const cellDistricts = await lookupDistrictsFromBrowser(lat, lng);
+			if (!cellDistricts || !cellDistricts.slots[0]) return false;
+
+			// Slot 0 = congressional district (substrate FIPS format → display format)
+			const rawDistrict = cellDistricts.slots[0];
+			verifiedDistrict = convertDistrictId(rawDistrict);
+
+			// Compute commitment for privacy-preserving server submission
+			const commitResult = await computeDistrictCommitment(cellDistricts);
+			districtCommitment = commitResult.commitment;
+			districtSlotCount = commitResult.slotCount;
+
+			// Fetch officials from IPFS for UI display
+			const officials = await getOfficialsFromBrowser(verifiedDistrict);
+			if (officials) {
+				representatives = officials.officials.map(o => ({
+					name: o.name,
+					office: o.office_address || '',
+					chamber: o.chamber,
+					party: o.party,
+					district: o.chamber === 'house' ? verifiedDistrict : o.state
+				}));
+			} else {
+				representatives = [];
+			}
+
+			verifiedStateSenate = '';
+			verifiedStateAssembly = '';
+			flowStep = 'confirm-district';
+			return true;
+		} catch (err) {
+			console.warn('[AddressVerificationFlow] Client-side resolution failed, falling back:', err);
+			return false;
+		}
+	}
+
+	/**
 	 * Path A: Browser geolocation flow
 	 */
 	async function handleGeolocationPath() {
@@ -120,6 +180,13 @@
 			}
 
 			flowStep = 'resolving';
+
+			// B-3: Client-side resolution (no server call) when feature flag enabled
+			if (clientSideEnabled) {
+				const resolved = await resolveClientSide(lat, lng);
+				if (resolved) return;
+				// Fall through to server path if client-side fails
+			}
 
 			// Server resolves cell_id + district + officials via Shadow Atlas
 			const response = await fetch('/api/location/resolve', {
@@ -185,6 +252,14 @@
 				district: data.district?.code || ''
 			});
 
+			// B-3: Use server-geocoded coordinates for client-side district resolution
+			if (clientSideEnabled && data.coordinates?.lat != null && data.coordinates?.lng != null) {
+				correctedAddress = data.address?.matched || '';
+				const resolved = await resolveClientSide(data.coordinates.lat, data.coordinates.lng);
+				if (resolved) return;
+				// Fall through to server response if client-side fails
+			}
+
 			// Process response (same as geolocation path)
 			processResolveResponse(data, response.ok);
 		} catch (err) {
@@ -210,7 +285,12 @@
 					state_senate_district: verifiedStateSenate || undefined,
 					state_assembly_district: verifiedStateAssembly || undefined,
 					verification_method: 'civic_api',
-					officials: representatives
+					officials: representatives,
+					// B-3: Include client-computed commitment when available
+					...(districtCommitment ? {
+						district_commitment: districtCommitment,
+						slot_count: districtSlotCount
+					} : {})
 				})
 			});
 

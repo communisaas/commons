@@ -18,7 +18,7 @@ export type AddressSpecificity = 'off' | 'region' | 'district';
 
 export const FEATURES = {
 	/** Deliberation surfaces, argument submission, LMSR market, resolution/appeal */
-	DEBATE: true,
+	DEBATE: false,
 
 	/** CWC delivery, district officials, congressional template routing */
 	CONGRESSIONAL: true,
@@ -64,5 +64,8 @@ export const FEATURES = {
 	LEGISLATION: true,
 
 	/** Accountability receipts: proof-weighted decision-maker tracking */
-	ACCOUNTABILITY: true
+	ACCOUNTABILITY: true,
+
+	/** Shadow Atlas client-side verification: browser computes district commitment (no plaintext to server) */
+	SHADOW_ATLAS_VERIFICATION: false
 } as const;

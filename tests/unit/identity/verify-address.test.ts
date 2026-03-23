@@ -12,7 +12,7 @@
  * Security contract:
  *   - Only authenticated users may issue credentials
  *   - District format strictly validated: /^[A-Z]{2}-(\d{2}|AL)$/
- *   - verification_method must be 'civic_api' or 'postal'
+ *   - verification_method must be 'civic_api', 'postal', or 'shadow_atlas'
  *   - Trust tier is NEVER downgraded (Math.max(current, 2))
  *   - Credential + user update are atomic ($transaction)
  *   - identity_commitment is NOT set by Tier 2 (only Tier 3+ mDL sets it)
@@ -764,15 +764,15 @@ describe('POST /api/identity/verify-address', () => {
 							party: 'Democratic',
 							state: 'IL',
 							district: 'IL',
-							bioguide_id: 'ILS001'
+							bioguide_id: 'I000001'
 						},
 						{
 							name: 'Representative (Illinois-18)',
 							chamber: 'house',
 							party: 'Republican',
 							state: 'IL',
-							district: 'IL-18',
-							bioguide_id: 'ILH018',
+							district: '18',
+							bioguide_id: 'H000018',
 							phone: '202-555-0100',
 							office_code: 'IL18'
 						}
@@ -832,15 +832,15 @@ describe('POST /api/identity/verify-address', () => {
 							party: 'Democratic',
 							state: 'IL',
 							district: 'IL',
-							bioguide_id: 'ILS001'
+							bioguide_id: 'I000001'
 						},
 						{
 							name: 'Rep Test',
 							chamber: 'house',
 							party: 'Republican',
 							state: 'IL',
-							district: 'IL-18',
-							bioguide_id: 'ILH018'
+							district: '18',
+							bioguide_id: 'H000018'
 						}
 					]
 				}
@@ -952,7 +952,9 @@ describe('POST /api/identity/verify-address', () => {
 							name: 'Valid Rep',
 							chamber: 'house',
 							party: 'Democratic',
-							bioguide_id: 'CAH012'
+							state: 'CA',
+							district: '12',
+							bioguide_id: 'C000012'
 						},
 						// Missing bioguide_id — should be filtered out
 						{
@@ -964,7 +966,7 @@ describe('POST /api/identity/verify-address', () => {
 						{
 							chamber: 'senate',
 							party: 'Democratic',
-							bioguide_id: 'CAS001'
+							bioguide_id: 'S000001'
 						}
 					]
 				}
@@ -1017,8 +1019,8 @@ describe('POST /api/identity/verify-address', () => {
 							chamber: 'house',
 							party: 'Democratic',
 							state: 'CA',
-							district: 'CA-12',
-							bioguide_id: 'CAH012'
+							district: '12',
+							bioguide_id: 'C000012'
 						},
 						{
 							name: 'Senate Rep',
@@ -1026,7 +1028,7 @@ describe('POST /api/identity/verify-address', () => {
 							party: 'Republican',
 							state: 'CA',
 							district: 'CA',
-							bioguide_id: 'CAS001'
+							bioguide_id: 'S000001'
 						}
 					]
 				}
@@ -1126,6 +1128,430 @@ describe('POST /api/identity/verify-address', () => {
 			expect(response.status).toBe(400);
 			expect(data.success).toBe(false);
 			expect(data.error).toBeDefined();
+		});
+	});
+
+	// ============================================================================
+	// B-3c: shadow_atlas Verification Method
+	// ============================================================================
+
+	describe('shadow_atlas verification method (B-3c)', () => {
+		const VALID_COMMITMENT = 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
+
+		it('should accept shadow_atlas as valid verification_method', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district_commitment: VALID_COMMITMENT,
+					slot_count: 3
+				}
+			});
+
+			const response = await POST(event);
+			const data = await response.json();
+
+			expect(response.status).toBe(200);
+			expect(data.success).toBe(true);
+			expect(data.commitment).toBe(VALID_COMMITMENT);
+		});
+
+		it('should accept shadow_atlas commitment-only (no district)', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district_commitment: VALID_COMMITMENT,
+					slot_count: 3
+				}
+			});
+
+			const response = await POST(event);
+			const data = await response.json();
+
+			expect(response.status).toBe(200);
+			expect(data.success).toBe(true);
+			expect(data.commitment).toBe(VALID_COMMITMENT);
+			// No W3C VC in commitment-only path
+			expect(data.credential).toBeUndefined();
+			expect(data.credentialHash).toBeUndefined();
+		});
+
+		it('should reject shadow_atlas without commitment', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas'
+				}
+			});
+
+			const response = await POST(event);
+			const data = await response.json();
+
+			expect(response.status).toBe(400);
+			expect(data.error).toContain('shadow_atlas verification requires a valid district_commitment');
+		});
+
+		it('should reject shadow_atlas with invalid commitment format', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district_commitment: 'not-valid-hex'
+				}
+			});
+
+			const response = await POST(event);
+
+			expect(response.status).toBe(400);
+		});
+
+		it('should not call issueDistrictCredential in shadow_atlas commitment-only path', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district_commitment: VALID_COMMITMENT
+				}
+			});
+
+			await POST(event);
+
+			expect(mockIssueDistrictCredential).not.toHaveBeenCalled();
+			expect(mockHashCredential).not.toHaveBeenCalled();
+			expect(mockHashDistrict).not.toHaveBeenCalled();
+		});
+
+		it('should execute transaction in shadow_atlas commitment-only path', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district_commitment: VALID_COMMITMENT
+				}
+			});
+
+			await POST(event);
+
+			expect(mockDbTransaction).toHaveBeenCalledTimes(1);
+		});
+
+		it('should store commitment in districtCredential create', async () => {
+			let txCredentialCreateData: any;
+			mockDbTransaction.mockImplementation(async (fn: any) => {
+				const tx = {
+					districtCredential: {
+						create: vi.fn().mockImplementation((args: any) => {
+							txCredentialCreateData = args;
+							return {};
+						}),
+						updateMany: vi.fn().mockResolvedValue({})
+					},
+					$executeRaw: vi.fn().mockResolvedValue(1)
+				};
+				return fn(tx);
+			});
+
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district_commitment: VALID_COMMITMENT,
+					slot_count: 5
+				}
+			});
+
+			await POST(event);
+
+			expect(txCredentialCreateData.data.congressional_district).toBeNull();
+			expect(txCredentialCreateData.data.district_commitment).toBe(VALID_COMMITMENT);
+			expect(txCredentialCreateData.data.slot_count).toBe(5);
+			expect(txCredentialCreateData.data.credential_hash).toBeNull();
+			expect(txCredentialCreateData.data.verification_method).toBe('shadow_atlas');
+		});
+
+		it('should not set district_hash in user update for shadow_atlas commitment-only', async () => {
+			let executeRawArgs: any;
+			mockDbTransaction.mockImplementation(async (fn: any) => {
+				const tx = {
+					districtCredential: {
+						create: vi.fn().mockResolvedValue({}),
+						updateMany: vi.fn().mockResolvedValue({})
+					},
+					$executeRaw: vi.fn().mockImplementation((...args: any[]) => {
+						executeRawArgs = args;
+						return 1;
+					})
+				};
+				return fn(tx);
+			});
+
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district_commitment: VALID_COMMITMENT
+				}
+			});
+
+			await POST(event);
+
+			// The raw SQL should NOT contain district_hash
+			const sqlTemplate = executeRawArgs[0];
+			const sqlStr = Array.isArray(sqlTemplate) ? sqlTemplate.join('') : String(sqlTemplate);
+			expect(sqlStr).not.toContain('district_hash');
+		});
+
+		it('should skip UserDMRelation writes for shadow_atlas even with officials', async () => {
+			const dmRelationUpsertCalls: any[] = [];
+			const deactivateCalls: any[] = [];
+
+			mockDbTransaction.mockImplementation(async (fn: any) => {
+				const tx = {
+					districtCredential: { create: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({}) },
+					$executeRaw: vi.fn().mockResolvedValue(1),
+					userDMRelation: {
+						updateMany: vi.fn().mockImplementation((args: any) => {
+							deactivateCalls.push(args);
+							return {};
+						}),
+						upsert: vi.fn().mockImplementation((args: any) => {
+							dmRelationUpsertCalls.push(args);
+							return {};
+						})
+					},
+					externalId: {
+						findUnique: vi.fn().mockResolvedValue(null),
+						create: vi.fn().mockResolvedValue({})
+					},
+					decisionMaker: {
+						create: vi.fn().mockResolvedValue({ id: 'dm-1' })
+					},
+					institution: {
+						upsert: vi.fn().mockResolvedValue({ id: 'inst-mock' })
+					}
+				};
+				return fn(tx);
+			});
+
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district_commitment: VALID_COMMITMENT,
+					officials: [
+						{
+							name: 'Senator Test',
+							chamber: 'senate',
+							party: 'Democratic',
+							state: 'IL',
+							district: 'IL',
+							bioguide_id: 'I000001'
+						}
+					]
+				}
+			});
+
+			const response = await POST(event);
+			expect(response.status).toBe(200);
+
+			// shadow_atlas is commitment-only — officials should be skipped
+			expect(deactivateCalls).toHaveLength(0);
+			expect(dmRelationUpsertCalls).toHaveLength(0);
+		});
+
+		it('should accept shadow_atlas with optional district for display', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district: 'CA-12',
+					district_commitment: VALID_COMMITMENT
+				}
+			});
+
+			const response = await POST(event);
+			const data = await response.json();
+
+			expect(response.status).toBe(200);
+			expect(data.success).toBe(true);
+			// With district provided, VC is issued
+			expect(data.credential).toBeDefined();
+			expect(data.credentialHash).toBeDefined();
+		});
+
+		it('should reject shadow_atlas with invalid district format', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district: 'invalid',
+					district_commitment: VALID_COMMITMENT
+				}
+			});
+
+			const response = await POST(event);
+
+			expect(response.status).toBe(400);
+		});
+
+		it('should accept commitment with 0x prefix', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district_commitment: '0x' + VALID_COMMITMENT
+				}
+			});
+
+			const response = await POST(event);
+			const data = await response.json();
+
+			expect(response.status).toBe(200);
+			expect(data.success).toBe(true);
+		});
+
+		it('should return 500 on transaction failure in shadow_atlas path', async () => {
+			mockDbTransaction.mockRejectedValue(new Error('DB connection lost'));
+
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'shadow_atlas',
+					district_commitment: VALID_COMMITMENT
+				}
+			});
+
+			const response = await POST(event);
+			const data = await response.json();
+
+			expect(response.status).toBe(500);
+			expect(data.success).toBe(false);
+		});
+	});
+
+	// ============================================================================
+	// B-3c: civic_api/postal still require district
+	// ============================================================================
+
+	describe('civic_api/postal district requirement (B-3c)', () => {
+		it('should reject civic_api without district', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'civic_api'
+				}
+			});
+
+			const response = await POST(event);
+			const data = await response.json();
+
+			expect(response.status).toBe(400);
+			expect(data.error).toContain('Invalid district format');
+		});
+
+		it('should reject postal without district', async () => {
+			const event = makeRequestEvent({
+				body: {
+					verification_method: 'postal'
+				}
+			});
+
+			const response = await POST(event);
+
+			expect(response.status).toBe(400);
+		});
+
+		it('should accept civic_api with both district and optional commitment', async () => {
+			const VALID_COMMITMENT = 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
+			const event = makeRequestEvent({
+				body: {
+					district: 'CA-12',
+					verification_method: 'civic_api',
+					district_commitment: VALID_COMMITMENT
+				}
+			});
+
+			const response = await POST(event);
+			const data = await response.json();
+
+			expect(response.status).toBe(200);
+			expect(data.success).toBe(true);
+			// Standard path returns credential, not just commitment
+			expect(data.credential).toBeDefined();
+			expect(data.credentialHash).toBeDefined();
+		});
+
+		it('should reject civic_api with invalid commitment format', async () => {
+			const event = makeRequestEvent({
+				body: {
+					district: 'CA-12',
+					verification_method: 'civic_api',
+					district_commitment: 'not-valid-hex'
+				}
+			});
+
+			const response = await POST(event);
+
+			expect(response.status).toBe(400);
+		});
+
+		it('should still require verification_method', async () => {
+			const VALID_COMMITMENT = 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
+			const event = makeRequestEvent({
+				body: {
+					district_commitment: VALID_COMMITMENT
+				}
+			});
+
+			const response = await POST(event);
+
+			expect(response.status).toBe(400);
+		});
+	});
+
+	// ============================================================================
+	// UserDMRelation source tracking
+	// ============================================================================
+
+	describe('UserDMRelation source tracking (B-3c)', () => {
+		it('should set source to verification_method on UserDMRelation upsert', async () => {
+			const dmRelationUpsertCalls: any[] = [];
+
+			mockDbTransaction.mockImplementation(async (fn: any) => {
+				const tx = {
+					districtCredential: { create: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({}) },
+					$executeRaw: vi.fn().mockResolvedValue(1),
+					userDMRelation: {
+						updateMany: vi.fn().mockResolvedValue({}),
+						upsert: vi.fn().mockImplementation((args: any) => {
+							dmRelationUpsertCalls.push(args);
+							return {};
+						})
+					},
+					externalId: {
+						findUnique: vi.fn().mockResolvedValue(null),
+						create: vi.fn().mockResolvedValue({})
+					},
+					decisionMaker: {
+						create: vi.fn().mockResolvedValue({ id: 'dm-1' })
+					},
+					institution: {
+						upsert: vi.fn().mockResolvedValue({ id: 'inst-mock' })
+					}
+				};
+				return fn(tx);
+			});
+
+			const event = makeRequestEvent({
+				body: {
+					district: 'CA-12',
+					verification_method: 'civic_api',
+					officials: [
+						{
+							name: 'Rep Test',
+							chamber: 'house',
+							party: 'Democratic',
+							state: 'CA',
+							district: '12',
+							bioguide_id: 'T000001'
+						}
+					]
+				}
+			});
+
+			const response = await POST(event);
+			expect(response.status).toBe(200);
+
+			expect(dmRelationUpsertCalls).toHaveLength(1);
+			expect(dmRelationUpsertCalls[0].create.source).toBe('civic_api');
+			expect(dmRelationUpsertCalls[0].update.source).toBe('civic_api');
 		});
 	});
 });

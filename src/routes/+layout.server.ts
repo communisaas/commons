@@ -14,7 +14,8 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 			db.user.findUnique({
 				where: { id: locals.user.id },
 				include: {
-					// DUAL-WRITE: Remove in S1-07
+					// Legacy path — kept as server-side fallback until client-rep-resolver
+					// is wired into all consumer components. Remove in S1-07.
 					representatives: {
 						include: {
 							representative: {
@@ -31,25 +32,10 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 						where: {
 							is_active: true
 						}
-					},
-					// New DecisionMaker path via UserDMRelation
-					dmRelations: {
-						include: {
-							decisionMaker: {
-								select: {
-									name: true,
-									party: true,
-									title: true,
-									jurisdiction: true,
-									district: true,
-									active: true
-								}
-							}
-						},
-						where: {
-							isActive: true
-						}
 					}
+					// DM relations removed — reps now resolved client-side via
+					// client-rep-resolver.ts (IndexedDB credential + IPFS officials).
+					// Client uses district_verified flag to know when to call resolver.
 				}
 			}),
 			// Org memberships: lightweight query for the identity bridge
@@ -74,9 +60,9 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 			})
 		]);
 
-		// DUAL-WRITE: Read from both sources, prefer DM if populated, fall back to legacy
-		// Transform legacy representatives to simple format
-		const legacyReps =
+		// Legacy representatives — server-side fallback until all consumers
+		// migrate to client-rep-resolver.ts. Remove in S1-07.
+		const representatives =
 			userWithRepresentatives?.representatives?.map((ur) => ({
 				name: ur.representative.name,
 				party: ur.representative.party,
@@ -84,25 +70,6 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				state: ur.representative.state,
 				district: ur.representative.district
 			})) || [];
-
-		// Transform DM relations — derive chamber from title, state from jurisdiction
-		const dmReps =
-			userWithRepresentatives?.dmRelations?.map((dr) => {
-				const title = dr.decisionMaker.title ?? '';
-				const isSenate = title.toLowerCase().includes('senator') || title.toLowerCase().includes('senate');
-				return {
-					name: dr.decisionMaker.name,
-					party: dr.decisionMaker.party ?? '',
-					chamber: isSenate ? 'senate' : 'house',
-					state: dr.decisionMaker.jurisdiction ?? '',
-					district: dr.decisionMaker.district ?? '',
-					title,
-					jurisdiction: dr.decisionMaker.jurisdiction ?? ''
-				};
-			}) || [];
-
-		// Prefer DM path when populated; fall back to legacy. Remove in S1-07.
-		const representatives = dmReps.length > 0 ? dmReps : legacyReps;
 
 		// Transform org memberships for the header bridge
 		const userOrgMemberships = orgMemberships.map((m) => ({
@@ -132,7 +99,10 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				district_verified: locals.user.district_verified,
 				// Wallet integration (boolean flags — addresses are PII, not sent to client)
 				hasWallet: Boolean(userWithRepresentatives?.wallet_address),
-				// Representatives data for template resolution
+				// Client-side rep resolution signal — when true, components use
+				// resolveRepsFromCredential() instead of server-provided reps
+				hasDistrictCredential: Boolean(userWithRepresentatives?.district_verified),
+				// Legacy representatives — server-side fallback. Remove in S1-07.
 				representatives: representatives,
 				// Org layer bridge
 				orgMemberships: userOrgMemberships
@@ -156,6 +126,7 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				district_verified: locals.user.district_verified,
 				// Wallet integration (boolean flags — addresses are PII, not sent to client)
 				hasWallet: false,
+				hasDistrictCredential: false,
 				representatives: [],
 				orgMemberships: []
 			}

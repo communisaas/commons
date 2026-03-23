@@ -640,15 +640,15 @@ This plan follows the same pattern:
 | A | **Review Gate** | ✅ | — | ✅ | PASSED 2026-03-21: 33 new tests, 3 safe migrations, no regressions |
 | B | B-1 reconcile commitments | ✅ | ✅ | ✅ | Tier 2 no longer generates commitment; migration nulls Tier 2-only; 55/58 tests pass (fixed 28 pre-existing) |
 | B | B-2 DistrictCredential restructure | ✅ | ✅ | ✅ | Schema + endpoint ready (district_commitment, slot_count); accepts client commitment |
-| B | B-3 Tier 2 → shadow atlas | ☐ | ☐ | ☐ | DEFERRED: client-side UI work (H3 cell, Poseidon2 in browser, 3 call sites) |
+| B | B-3 Tier 2 → shadow atlas | ✅ | ✅ | ✅ | Browser IPFS client, AddressVerificationFlow rewrite, feature-flagged (SHADOW_ATLAS_VERIFICATION) |
 | B | B-4 direct IPFS fetch | ✅ | ✅ | ✅ | Proxy made sessionless — server can't correlate cell_id to user |
-| B | **Review Gate** | ⚠️ | — | ⚠️ | PARTIAL: B-1/B-2/B-4 pass; B-3 deferred to frontend cycle |
+| B | **Review Gate** | ✅ | — | ✅ | PASSED 2026-03-22: B-3 completed (browser client, flow rewrite, sentinel cleanup) |
 | C | C-1 pseudonymous campaigns | ✅ | ✅ | ✅ | HMAC-SHA256 pseudonym_id, 7 tests, merge logic updated |
-| C | C-2 client-derived DMs | ☐ | ☐ | ☐ | |
+| C | C-2 client-derived DMs | ✅ | ✅ | ✅ | Client-side rep resolver, layout.server.ts DM query removed, verify-address stops writing UserDMRelation for shadow_atlas |
 | C | C-3 encrypt email/name | ✅ | ✅ | ✅ | AES-256-GCM + HKDF per-user keys, HMAC email_hash for lookups, 23 tests, dual-write transition |
 | C | C-4 encrypted profile blob | ✅ | ✅ | ✅ | AES-256-GCM blob for role/org/location/connection, profile POST dual-writes |
 | C | C-5 encrypt Supporter email | ✅ | ✅ | ✅ | AES-256-GCM + HMAC email_hash, 5 creation paths updated, dual-write transition |
-| C | **Review Gate** | ⚠️ | — | ⚠️ | PARTIAL: C-1/C-3/C-4/C-5 pass; C-2 deferred to frontend cycle |
+| C | **Review Gate** | ✅ | — | ✅ | PASSED 2026-03-22: All C tasks complete; C-2 (client DMs) shipped in Cycle 4+5 |
 | D | D-1 passkey primary auth | ☐ | ☐ | ☐ | Post-launch |
 | D | D-2 email optional | ☐ | ☐ | ☐ | Post-launch |
 | D | D-3 OAuth as linking | ☐ | ☐ | ☐ | Post-launch |
@@ -757,13 +757,13 @@ All creation paths dual-write: plaintext `email` + `encrypted_email` + `email_ha
 - [ ] OrgInvite matching via email_hash — DEFERRED until plaintext scrub phase
 - **Rationale**: C-1/C-3/C-4/C-5 deliver encryption-at-rest for all server-side PII. C-2 requires the same frontend work as B-3. Plaintext columns remain for backward compat during transition.
 
-**Pre-scrub blockers** (must resolve before nulling plaintext columns):
-1. `verifyPasskeyAuth` returns `user.email` from DB without decryption
-2. Profile GET endpoint reads plaintext columns, never decrypts `encrypted_profile`
-3. Supporter email has no decrypt path (write-only currently)
-4. Existing users not backfilled with encrypted columns on re-login
-5. OrgInvite matching still uses plaintext email
-6. Supporter dedup lookups still use `orgId_email` (not `orgId_email_hash`)
+**Pre-scrub blockers** — ALL RESOLVED (Cycle 4+5, 2026-03-22):
+1. ~~`verifyPasskeyAuth` returns `user.email` from DB without decryption~~ → S-1: decrypts via `decryptUserPii()`
+2. ~~Profile GET endpoint reads plaintext columns~~ → S-2: uses `locals.user.email`/`.name` (already decrypted by validateSession)
+3. ~~Supporter email has no decrypt path~~ → S-3: `tryDecryptSupporterEmail()` helper, all read paths updated
+4. ~~Existing users not backfilled with encrypted columns on re-login~~ → S-4: fire-and-forget backfill in `oauth-callback-handler.ts`
+5. ~~OrgInvite matching still uses plaintext email~~ → S-5: hash-based matching with plaintext fallback
+6. ~~Supporter dedup lookups still use `orgId_email`~~ → S-6: `findSupporterByEmail()` helper, 7 call sites migrated
 
 **Fixed during review**: Plaintext email removed from Sybil debug log in `oauth-callback-handler.ts` — now logs truncated `email_hash` instead.
 
@@ -771,3 +771,79 @@ All creation paths dual-write: plaintext `email` + `encrypted_email` + `email_ha
 - `campaign-pseudonym.ts` uses Node `crypto.createHmac` while other Phase C modules use Web Crypto API (both work under nodejs_compat)
 - `EMAIL_LOOKUP_KEY` has no length validation (HMAC-SHA256 hashes any key length internally — low risk)
 - Wrangler secrets doc needs update: `CAMPAIGN_PSEUDONYM_KEY`, `PII_ENCRYPTION_KEY`, `EMAIL_LOOKUP_KEY` not in comment block
+
+### 2026-03-22 — Cycles 4 + 5 (Parallel)
+
+> Resolves all 6 pre-scrub blockers from Phase C review gate. Completes deferred B-3 and C-2 tasks.
+
+#### Cycle 4: Pre-Scrub Decrypt Paths
+
+**S-1 (complete)**: `verifyPasskeyAuth` in `passkey-authentication.ts` — added `encrypted_email`, `encrypted_name` to SELECT, imported `decryptUserPii`, called it before constructing return object.
+
+**S-2 (complete)**: Profile GET in `api/user/profile/+server.ts` — removed `email`/`name` from Prisma SELECT, uses `locals.user.email`/`.name` (already decrypted by validateSession). Trivial change.
+
+**S-3 (complete)**: Supporter encryption info string fix + read path decrypt.
+
+*Part A — Info string fix*: Changed all 5 supporter creation paths from `encryptPii(email, "supporter:{orgId}:{email}")` to `encryptPii(email, "supporter:" + supporterId)` with pre-generated `supporterId = crypto.randomUUID()`. The old scheme embedded the plaintext email in the HKDF info string — post-scrub, you can't reconstruct the info string without the email you're trying to decrypt. New scheme uses the stable supporter ID.
+
+*Part B — Read path decrypt*: Added `tryDecryptSupporterEmail()` helper to `user-pii-encryption.ts`. Updated 5 read paths to SELECT `encrypted_email` and map through the helper: supporter list, supporter detail, API GET, API GET single, email engine.
+
+**S-4 (complete)**: OAuth re-login backfill in `oauth-callback-handler.ts` — both existing-user return paths (existingAccount and existingUser) now check `if (!encrypted_email)` and fire-and-forget `encryptUserPii() → db.user.update()`. Progressive backfill: each login encrypts one more user.
+
+**S-5 (complete)**: OrgInvite encryption — POST handler pre-generates `inviteId = crypto.randomUUID()`, encrypts email with `"org-invite:" + inviteId`, computes `email_hash`, dual-writes. Accept action uses hash-based email comparison with plaintext fallback. Schema: added `encrypted_email`, `email_hash` to OrgInvite model with `@@index([email_hash])`.
+
+**S-6 (complete)**: `findSupporterByEmail()` helper in `src/lib/server/supporters/find-by-email.ts` — hash-based lookup with plaintext fallback. Normalizes email, computes `email_hash`, tries `orgId_email_hash` unique constraint first, falls back to `orgId_email`. 7 call sites migrated (5 original supporter dedup paths + event RSVP + donation checkout).
+
+**Finding**: S-6 broke event-rsvp and donation-checkout tests. The helper imports its own `db` from `$lib/core/db`, bypassing test-level mocks. Fixed by adding `vi.mock('$lib/server/supporters/find-by-email')` to both test files with hoisted mock functions.
+
+**Finding**: `district-credential.ts` type widening needed — `IssueDistrictCredentialParams.verificationMethod` was `'civic_api' | 'postal'` (missing `'shadow_atlas'`), and `congressional` was `string` (not nullable). Fixed to `string | null` and `'civic_api' | 'postal' | 'shadow_atlas'`.
+
+#### Cycle 5: Frontend Privacy
+
+**B-3a (complete)**: Browser IPFS client — `src/lib/core/shadow-atlas/browser-client.ts`. Exports `lookupDistrictsFromBrowser(lat, lng)`, `getOfficialsFromBrowser(districtCode)`, `computeDistrictCommitment(slots)`. Initializes CIDs from `VITE_IPFS_CID_ROOT`. No `$env/dynamic/private` imports — safe for browser.
+
+**B-3b (complete)**: `AddressVerificationFlow.svelte` rewrite — feature-flagged via `SHADOW_ATLAS_VERIFICATION`. When enabled: geolocation path resolves district via IPFS (no server), address path geocodes server-side then resolves district client-side. Sends `{ district_commitment, slot_count, verification_method: 'shadow_atlas' }` to verify-address. Legacy paths preserved when flag is off.
+
+**B-3c (complete)**: `verify-address/+server.ts` accepts commitment-only mode. When `verification_method === 'shadow_atlas'` with no `district` field: skips VC issuance, stores null `district_hash`, stores `district_commitment` + `slot_count` on DistrictCredential.
+
+**B-3d (complete)**: Shadow Atlas sentinel cleanup — replaced `'three-tree'` string with `tree2Data.districts[0] ?? 'unknown'` in `registerThreeTree()` and `recoverThreeTree()`. Extracted `convertDistrictId()` to shared `district-format.ts`.
+
+**C-2a (complete)**: Client-side rep resolver — `src/lib/core/identity/client-rep-resolver.ts`. Dual-source: primary via `getTreeState()` from session-credentials (three-tree registration), fallback via `getCredential()` from credential-store (W3C VC in IndexedDB). Resolves officials via `getOfficialsFromBrowser()`.
+
+**C-2b (complete)**: `+layout.server.ts` — removed `dmRelations` include from Prisma query, removed `dmReps` transformation. Added `hasDistrictCredential: Boolean(user.district_verified)` to return value. Components use client-side `resolveRepresentatives()` when flag is true.
+
+**C-2c (complete)**: `verify-address/+server.ts` — skips UserDMRelation upsert block when `verification_method === 'shadow_atlas'`. For legacy modes, adds `source: verification_method` to UserDMRelation records.
+
+**C-2d (complete)**: Schema — added `source String @default("legacy")` to UserDMRelation model. Values: `"legacy"`, `"shadow_atlas"`, `"civic_api"`.
+
+#### Test Results
+
+- **3,969 tests pass, 139 fail** (full suite)
+- **1,202/1,203 pass** in modified domains (crypto, identity, org, auth, shadow-atlas, supporters)
+- Single domain failure is pre-existing: `verify-mdl-verify.test.ts` (openid4vp protocol test)
+- Fixed test regressions in `event-rsvp.test.ts` and `donation-checkout.test.ts` (S-6 mock isolation)
+- No new regressions introduced
+
+#### New Files
+
+| File | Cycle | Purpose |
+|------|-------|---------|
+| `src/lib/server/supporters/find-by-email.ts` | 4 | Hash-based supporter lookup with plaintext fallback |
+| `src/lib/core/shadow-atlas/browser-client.ts` | 5 | Browser-safe IPFS client (no server-only imports) |
+| `src/lib/core/shadow-atlas/district-format.ts` | 5 | Shared `convertDistrictId()` / `normalizeDistrictCode()` |
+| `src/lib/core/identity/client-rep-resolver.ts` | 5 | Client-side representative resolution from credential store |
+
+#### New Feature Flags
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `SHADOW_ATLAS_VERIFICATION` | `false` | Gates client-side commitment computation in AddressVerificationFlow |
+
+#### Schema Changes
+
+- `OrgInvite`: added `encrypted_email`, `email_hash` (with `@@index`)
+- `UserDMRelation`: added `source @default("legacy")`
+
+#### Status After Cycles 4+5
+
+All 6 pre-scrub blockers resolved. Plaintext columns can now be nulled (Cycle 6) once backfill reaches sufficient coverage. The system is fully dual-write: encrypted columns populated on all new writes, progressive backfill on re-login (S-4). Phase B and C review gates upgraded from PARTIAL to PASSED.

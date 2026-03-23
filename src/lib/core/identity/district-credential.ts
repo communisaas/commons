@@ -54,10 +54,10 @@ export interface DistrictResidencyCredential {
 export interface IssueDistrictCredentialParams {
 	userId: string;
 	didKey: string | null;
-	congressional: string;
+	congressional: string | null;
 	stateSenate?: string;
 	stateAssembly?: string;
-	verificationMethod: 'civic_api' | 'postal';
+	verificationMethod: 'civic_api' | 'postal' | 'shadow_atlas';
 }
 
 // ============================================================================

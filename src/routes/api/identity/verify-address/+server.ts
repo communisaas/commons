@@ -15,6 +15,10 @@
  *
  * Privacy: The plaintext address never reaches this endpoint. Only the geocoded
  * district identifier is received and stored as a SHA-256 hash on the User record.
+ *
+ * B-3c: shadow_atlas verification method allows commitment-only requests
+ * (no plaintext district). The client computes a Poseidon2 commitment over
+ * 24 district slots and sends that instead.
  */
 
 import { json } from '@sveltejs/kit';
@@ -40,6 +44,9 @@ const BIOGUIDE_FORMAT = /^[A-Z]\d{6}$/;
 /** Maximum officials per request — no district has more than 3 reps. */
 const MAX_OFFICIALS = 10;
 
+/** Valid verification methods */
+type VerificationMethod = 'civic_api' | 'postal' | 'shadow_atlas';
+
 interface OfficialInput {
 	name: string;
 	chamber: 'house' | 'senate';
@@ -55,10 +62,10 @@ interface OfficialInput {
 }
 
 interface VerifyAddressInput {
-	district: string;
+	district?: string;
 	state_senate_district?: string;
 	state_assembly_district?: string;
-	verification_method: 'civic_api' | 'postal';
+	verification_method: VerificationMethod;
 	officials?: OfficialInput[];
 	// B-2: Client-computed district commitment (replaces plaintext after transition)
 	district_commitment?: string; // Poseidon2_sponge_24(districts[0..24]) hex string
@@ -72,17 +79,56 @@ function validateInput(body: unknown): VerifyAddressInput {
 
 	const b = body as Record<string, unknown>;
 
-	if (typeof b.district !== 'string' || !DISTRICT_FORMAT.test(b.district)) {
-		throw new Error(
-			'Invalid district format. Expected "XX-NN" (e.g., "CA-12") or "XX-AL" for at-large districts.'
-		);
-	}
-
 	if (
 		b.verification_method !== 'civic_api' &&
-		b.verification_method !== 'postal'
+		b.verification_method !== 'postal' &&
+		b.verification_method !== 'shadow_atlas'
 	) {
-		throw new Error('verification_method must be "civic_api" or "postal"');
+		throw new Error('verification_method must be "civic_api", "postal", or "shadow_atlas"');
+	}
+
+	const verificationMethod = b.verification_method as VerificationMethod;
+
+	// B-3c: Validate district + commitment based on verification method
+	let district: string | undefined;
+	let districtCommitment: string | undefined;
+	let slotCount: number | undefined;
+
+	if (verificationMethod === 'shadow_atlas') {
+		// shadow_atlas: commitment is required, district is optional
+		if (typeof b.district_commitment !== 'string' || !/^(0x)?[0-9a-fA-F]{64}$/.test(b.district_commitment)) {
+			throw new Error('shadow_atlas verification requires a valid district_commitment');
+		}
+		districtCommitment = b.district_commitment;
+		slotCount = typeof b.slot_count === 'number' && b.slot_count >= 1 && b.slot_count <= 24
+			? b.slot_count
+			: undefined;
+		// district is optional for shadow_atlas — may be provided for display
+		if (b.district && (typeof b.district !== 'string' || !DISTRICT_FORMAT.test(b.district))) {
+			throw new Error('Invalid district format when provided. Expected "XX-NN" or "XX-AL".');
+		}
+		if (typeof b.district === 'string' && DISTRICT_FORMAT.test(b.district)) {
+			district = b.district;
+		}
+	} else {
+		// civic_api/postal: district is required
+		if (typeof b.district !== 'string' || !DISTRICT_FORMAT.test(b.district)) {
+			throw new Error(
+				'Invalid district format. Expected "XX-NN" (e.g., "CA-12") or "XX-AL" for at-large districts.'
+			);
+		}
+		district = b.district;
+
+		// Optional commitment for civic_api/postal (B-2 transition period)
+		if (typeof b.district_commitment === 'string') {
+			if (!/^(0x)?[0-9a-fA-F]{64}$/.test(b.district_commitment)) {
+				throw new Error('Invalid district_commitment format. Expected 64-char hex string.');
+			}
+			districtCommitment = b.district_commitment;
+			slotCount = typeof b.slot_count === 'number' && b.slot_count >= 1 && b.slot_count <= 24
+				? b.slot_count
+				: undefined;
+		}
 	}
 
 	// Validate officials array if present
@@ -127,27 +173,13 @@ function validateInput(body: unknown): VerifyAddressInput {
 			}));
 	}
 
-	// B-2: Validate optional client-computed district commitment
-	let districtCommitment: string | undefined;
-	let slotCount: number | undefined;
-	if (typeof b.district_commitment === 'string') {
-		// Must be a valid hex string (64 chars = 32 bytes Poseidon2 output)
-		if (!/^(0x)?[0-9a-fA-F]{64}$/.test(b.district_commitment)) {
-			throw new Error('Invalid district_commitment format. Expected 64-char hex string.');
-		}
-		districtCommitment = b.district_commitment;
-		slotCount = typeof b.slot_count === 'number' && b.slot_count >= 1 && b.slot_count <= 24
-			? b.slot_count
-			: undefined;
-	}
-
 	return {
-		district: b.district as string,
+		district,
 		state_senate_district:
 			typeof b.state_senate_district === 'string' ? b.state_senate_district : undefined,
 		state_assembly_district:
 			typeof b.state_assembly_district === 'string' ? b.state_assembly_district : undefined,
-		verification_method: b.verification_method as 'civic_api' | 'postal',
+		verification_method: verificationMethod,
 		officials,
 		district_commitment: districtCommitment,
 		slot_count: slotCount
@@ -179,31 +211,33 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}
 
 	try {
+		const now = new Date();
+		const expiresAt = new Date(now.getTime() + TIER_CREDENTIAL_TTL[2]);
+		const isCommitmentOnly = input.verification_method === 'shadow_atlas' && !!input.district_commitment;
+
 		// Fetch user's did_key for the credential subject ID
 		const user = await db.user.findUniqueOrThrow({
 			where: { id: userId },
 			select: { did_key: true }
 		});
 
-		// 3. Issue the VC
-		const credential = await issueDistrictCredential({
-			userId,
-			didKey: user.did_key,
-			congressional: input.district,
-			stateSenate: input.state_senate_district,
-			stateAssembly: input.state_assembly_district,
-			verificationMethod: input.verification_method
-		});
+		// 3. Issue the VC — use district if available, null for commitment-only
+		const credential = input.district
+			? await issueDistrictCredential({
+				userId,
+				didKey: user.did_key,
+				congressional: input.district,
+				stateSenate: input.state_senate_district,
+				stateAssembly: input.state_assembly_district,
+				verificationMethod: input.verification_method
+			})
+			: null;
 
 		// 4. Compute integrity hash
-		const credentialHash = await hashCredential(credential);
+		const credentialHash = credential ? await hashCredential(credential) : null;
 
-		// 5. Compute privacy-preserving district hash (HMAC with server key)
-		const districtHash = await hashDistrict(input.district);
-
-		// 6. Compute TTL-based expiration
-		const now = new Date();
-		const expiresAt = new Date(now.getTime() + TIER_CREDENTIAL_TTL[2]);
+		// 5. Compute privacy-preserving district hash — skip for commitment-only
+		const districtHash = input.district ? await hashDistrict(input.district) : null;
 
 		// 7. Database transaction: insert DistrictCredential + update User + upsert representatives
 		await db.$transaction(async (tx) => {
@@ -218,35 +252,49 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				data: {
 					user_id: userId,
 					credential_type: 'district_residency',
-					congressional_district: input.district,
+					congressional_district: input.district ?? null,
 					state_senate_district: input.state_senate_district ?? null,
 					state_assembly_district: input.state_assembly_district ?? null,
 					verification_method: input.verification_method,
 					issued_at: now,
 					expires_at: expiresAt,
 					credential_hash: credentialHash,
-					// B-2: Store client-computed commitment alongside plaintext (transition period)
 					district_commitment: input.district_commitment ?? null,
 					slot_count: input.slot_count ?? null
 				}
 			});
 
 			// Atomic user update: GREATEST prevents trust_tier downgrade without TOCTOU race
-			await tx.$executeRaw`
-				UPDATE "user"
-				SET trust_tier = GREATEST(trust_tier, 2),
-				    district_verified = true,
-				    address_verified_at = ${now},
-				    address_verification_method = ${input.verification_method},
-				    district_hash = ${districtHash},
-				    verified_at = ${now},
-				    verification_method = ${input.verification_method},
-				    is_verified = true
-				WHERE id = ${userId}
-			`;
+			if (districtHash) {
+				await tx.$executeRaw`
+					UPDATE "user"
+					SET trust_tier = GREATEST(trust_tier, 2),
+					    district_verified = true,
+					    address_verified_at = ${now},
+					    address_verification_method = ${input.verification_method},
+					    district_hash = ${districtHash},
+					    verified_at = ${now},
+					    verification_method = ${input.verification_method},
+					    is_verified = true
+					WHERE id = ${userId}
+				`;
+			} else {
+				await tx.$executeRaw`
+					UPDATE "user"
+					SET trust_tier = GREATEST(trust_tier, 2),
+					    district_verified = true,
+					    address_verified_at = ${now},
+					    address_verification_method = ${input.verification_method},
+					    verified_at = ${now},
+					    verification_method = ${input.verification_method},
+					    is_verified = true
+					WHERE id = ${userId}
+				`;
+			}
 
 			// Upsert representatives and create junction records
-			if (input.officials && input.officials.length > 0) {
+			// B-3c: Skip officials/UserDMRelation for shadow_atlas (client resolved from IPFS)
+			if (!isCommitmentOnly && input.officials && input.officials.length > 0) {
 				// Deactivate existing UserDMRelation rows (district may have changed)
 				await tx.userDMRelation.updateMany({
 					where: { userId },
@@ -314,7 +362,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 						dmId = dm.id;
 					}
 
-					// Upsert UserDMRelation
+					// Upsert UserDMRelation with source tracking
 					await tx.userDMRelation.upsert({
 						where: {
 							userId_decisionMakerId: {
@@ -327,11 +375,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 							decisionMakerId: dmId,
 							relationship: 'constituent',
 							isActive: true,
-							lastValidated: now
+							lastValidated: now,
+							source: input.verification_method
 						},
 						update: {
 							isActive: true,
-							lastValidated: now
+							lastValidated: now,
+							source: input.verification_method
 						}
 					});
 
@@ -340,10 +390,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		});
 
 		// 8. Return credential to client
+		if (credential && credentialHash) {
+			return json({
+				success: true,
+				credential,
+				credentialHash
+			});
+		}
+
+		// Commitment-only response
 		return json({
 			success: true,
-			credential,
-			credentialHash
+			commitment: input.district_commitment
 		});
 	} catch (err) {
 		console.error('[verify-address] Credential issuance failed:', err);
