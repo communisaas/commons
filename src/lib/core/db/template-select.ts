@@ -32,7 +32,7 @@ export const TEMPLATE_LIST_SELECT = {
 	createdAt: true,
 	updatedAt: true,
 	jurisdictions: true,
-	user: { select: { name: true, avatar: true } },
+	user: { select: { id: true, encrypted_name: true, avatar: true } },
 	org: { select: { name: true, slug: true, avatar: true } },
 	endorsements: {
 		select: {

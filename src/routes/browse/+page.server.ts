@@ -3,6 +3,7 @@ import { db } from '$lib/core/db';
 import { TEMPLATE_LIST_SELECT } from '$lib/core/db/template-select';
 import { z } from 'zod';
 import { FEATURES } from '$lib/config/features';
+import { tryDecryptPii } from '$lib/core/crypto/user-pii-encryption';
 
 export const load: PageServerLoad = async () => {
 	try {
@@ -57,7 +58,7 @@ export const load: PageServerLoad = async () => {
 			})
 			.passthrough();
 
-		const templates = dbTemplates.map((template) => {
+		const templates = await Promise.all(dbTemplates.map(async (template) => {
 			// Extract metrics from JSON field with validation
 			let jsonMetrics = {};
 			if (typeof template.metrics === 'string') {
@@ -148,17 +149,20 @@ export const load: PageServerLoad = async () => {
 				// Metadata
 				is_public: template.is_public,
 
-				// Author
+				// Author (C-3: decrypt encrypted_name)
 				author: template.user
 					? {
-							name: template.user.name,
+							name: await tryDecryptPii(
+								template.user.encrypted_name ? JSON.parse(template.user.encrypted_name) : null,
+								template.user.id
+							) || 'User',
 							avatar: template.user.avatar
 						}
 					: null,
 
 				createdAt: template.createdAt.toISOString()
 			};
-		});
+		}));
 
 		return {
 			templates
