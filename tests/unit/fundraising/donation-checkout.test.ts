@@ -248,7 +248,8 @@ describe('Donation Checkout - POST /api/d/[campaignId]/checkout', () => {
 		expect(mockDbSupporterCreate).toHaveBeenCalledOnce();
 		const createCall = mockDbSupporterCreate.mock.calls[0][0];
 		expect(createCall.data.orgId).toBe('org-1');
-		expect(createCall.data.email).toBe('donor@example.com');
+		expect(createCall.data.encrypted_email).toEqual(expect.any(String));
+		expect(createCall.data.email_hash).toEqual(expect.any(String));
 		expect(createCall.data.source).toBe('donation');
 	});
 

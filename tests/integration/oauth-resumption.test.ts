@@ -62,7 +62,8 @@ describe('OAuth Resumption Flow', () => {
 			// Create a test user
 			const user = await createTestUser({
 				id: 'auth-user-123',
-				email: 'test@example.com',
+				encrypted_email: 'encrypted-test@example.com',
+				email_hash: 'hash-auth-user-123',
 				is_verified: false
 			});
 
@@ -72,7 +73,7 @@ describe('OAuth Resumption Flow', () => {
 				method: 'POST',
 				locals: {
 					session: { userId: user.id, id: 'session-123', expiresAt: new Date(Date.now() + 86400000) },
-					user: { id: user.id, email: user.email, is_verified: false }
+					user: { id: user.id, is_verified: false }
 				}
 			}) as unknown as RequestEvent;
 
@@ -86,7 +87,8 @@ describe('OAuth Resumption Flow', () => {
 			// Create a verified test user
 			const user = await createTestUser({
 				id: 'verified-user-123',
-				email: 'verified@example.com',
+				encrypted_email: 'encrypted-verified@example.com',
+				email_hash: 'hash-verified-user-123',
 				is_verified: true
 			});
 
@@ -96,7 +98,7 @@ describe('OAuth Resumption Flow', () => {
 				method: 'POST',
 				locals: {
 					session: { userId: user.id, id: 'session-123', expiresAt: new Date(Date.now() + 86400000) },
-					user: { id: user.id, email: user.email, is_verified: true, trust_tier: 2 }
+					user: { id: user.id, is_verified: true, trust_tier: 2 }
 				}
 			}) as unknown as RequestEvent;
 
@@ -111,7 +113,7 @@ describe('OAuth Resumption Flow', () => {
 	describe('Rate Limiting After OAuth', () => {
 		it('should allow decision-maker resolution for authenticated users', async () => {
 			// Create a test user (simulating post-OAuth state)
-			const user = await createTestUser({ email: 'oauth-user@example.com' });
+			const user = await createTestUser({ encrypted_email: 'encrypted-oauth-user@example.com', email_hash: 'hash-oauth-user' });
 
 			// Simulate authenticated user context
 			const context = {
@@ -149,7 +151,7 @@ describe('OAuth Resumption Flow', () => {
 		});
 
 		it('should include correct tier in rate limit response', async () => {
-			const user = await createTestUser({ email: 'tier-test@example.com' });
+			const user = await createTestUser({ encrypted_email: 'encrypted-tier-test@example.com', email_hash: 'hash-tier-test' });
 
 			const context = {
 				userId: user.id,

@@ -75,7 +75,7 @@ export async function computeEmailHash(email: string): Promise<string | null> {
 	const keyBytes = hexToBytes(keyHex);
 	const cryptoKey = await crypto.subtle.importKey(
 		'raw',
-		keyBytes,
+		keyBytes as BufferSource,
 		{ name: 'HMAC', hash: 'SHA-256' },
 		false,
 		['sign']
@@ -98,7 +98,7 @@ async function importPiiMasterKey(hexKey: string): Promise<CryptoKey> {
 	if (keyBytes.length !== 32) {
 		throw new Error('PII_ENCRYPTION_KEY must be exactly 32 bytes (64 hex characters)');
 	}
-	return crypto.subtle.importKey('raw', keyBytes, 'HKDF', false, ['deriveKey']);
+	return crypto.subtle.importKey('raw', keyBytes as BufferSource, 'HKDF', false, ['deriveKey']);
 }
 
 /**
@@ -180,7 +180,8 @@ export async function decryptPii(encrypted: EncryptedPii, userId: string): Promi
 	const ciphertext = base64ToBytes(encrypted.ciphertext);
 	const iv = base64ToBytes(encrypted.iv);
 
-	const plaintextBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, userKey, ciphertext);
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- TS lib mismatch: Uint8Array<ArrayBufferLike> vs BufferSource
+	const plaintextBuf = await (crypto.subtle.decrypt as any)({ name: 'AES-GCM', iv }, userKey, ciphertext);
 	return decoder.decode(plaintextBuf);
 }
 
@@ -234,38 +235,29 @@ export async function encryptUserPii(
 
 /**
  * Decrypt user PII from database row.
- * Falls back to plaintext columns during transition.
+ * Post-backfill: encrypted columns are authoritative — no plaintext fallback.
  */
 export async function decryptUserPii(
 	user: {
 		id: string;
-		email: string;
-		name: string | null;
 		encrypted_email?: string | null;
 		encrypted_name?: string | null;
 	}
 ): Promise<{ email: string; name: string | null }> {
-	// If no encrypted data, return plaintext (pre-backfill row)
 	if (!user.encrypted_email) {
-		return { email: user.email, name: user.name };
+		throw new Error(`[PII] User ${user.id} missing encrypted_email — backfill incomplete`);
 	}
 
-	// Try to decrypt
-	try {
-		const encEmail: EncryptedPii = JSON.parse(user.encrypted_email);
-		const decryptedEmail = await decryptPii(encEmail, user.id);
+	const encEmail: EncryptedPii = JSON.parse(user.encrypted_email);
+	const decryptedEmail = await decryptPii(encEmail, user.id);
 
-		let decryptedName: string | null = null;
-		if (user.encrypted_name) {
-			const encName: EncryptedPii = JSON.parse(user.encrypted_name);
-			decryptedName = await decryptPii(encName, user.id);
-		}
-
-		return { email: decryptedEmail, name: decryptedName };
-	} catch {
-		// Decryption failed — fall back to plaintext
-		return { email: user.email, name: user.name };
+	let decryptedName: string | null = null;
+	if (user.encrypted_name) {
+		const encName: EncryptedPii = JSON.parse(user.encrypted_name);
+		decryptedName = await decryptPii(encName, user.id);
 	}
+
+	return { email: decryptedEmail, name: decryptedName };
 }
 
 // =============================================================================
@@ -273,23 +265,20 @@ export async function decryptUserPii(
 // =============================================================================
 
 /**
- * Decrypt a supporter's encrypted email, falling back to plaintext.
+ * Decrypt a supporter's encrypted email.
+ * Post-backfill: encrypted_email is authoritative — no plaintext fallback.
  * Info string for supporter encryption is "supporter:{supporterId}".
  */
 export async function tryDecryptSupporterEmail(supporter: {
 	id: string;
-	email: string;
 	encrypted_email?: string | null;
 }): Promise<string> {
-	if (!supporter.encrypted_email) return supporter.email;
-
-	try {
-		const enc: EncryptedPii = JSON.parse(supporter.encrypted_email);
-		return await decryptPii(enc, 'supporter:' + supporter.id);
-	} catch {
-		// Decryption failed (wrong key, pre-migration data, corrupted) — fall back to plaintext
-		return supporter.email;
+	if (!supporter.encrypted_email) {
+		throw new Error(`[PII] Supporter ${supporter.id} missing encrypted_email — backfill incomplete`);
 	}
+
+	const enc: EncryptedPii = JSON.parse(supporter.encrypted_email);
+	return await decryptPii(enc, 'supporter:' + supporter.id);
 }
 
 // =============================================================================

@@ -4,7 +4,7 @@
  * Validates:
  * - Info string is "supporter:{id}" (not orgId:email)
  * - tryDecryptSupporterEmail round-trips correctly
- * - Plaintext fallback when encrypted_email is absent or decryption fails
+ * - Throws when encrypted_email is absent (post-backfill — no plaintext fallback)
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -82,60 +82,54 @@ describe('Supporter PII Encryption', () => {
 
 			const result = await tryDecryptSupporterEmail({
 				id: supporterId,
-				email: 'supporter@test.org',
 				encrypted_email: JSON.stringify(encrypted)
 			});
 
 			expect(result).toBe(email);
 		});
 
-		it('should fall back to plaintext when encrypted_email is null', async () => {
-			const result = await tryDecryptSupporterEmail({
-				id: crypto.randomUUID(),
-				email: 'plain@example.com',
-				encrypted_email: null
-			});
-
-			expect(result).toBe('plain@example.com');
+		it('should throw when encrypted_email is null (backfill incomplete)', async () => {
+			await expect(
+				tryDecryptSupporterEmail({
+					id: crypto.randomUUID(),
+					encrypted_email: null
+				})
+			).rejects.toThrow('missing encrypted_email');
 		});
 
-		it('should fall back to plaintext when encrypted_email is undefined', async () => {
-			const result = await tryDecryptSupporterEmail({
-				id: crypto.randomUUID(),
-				email: 'plain@example.com'
-			});
-
-			expect(result).toBe('plain@example.com');
+		it('should throw when encrypted_email is undefined (backfill incomplete)', async () => {
+			await expect(
+				tryDecryptSupporterEmail({
+					id: crypto.randomUUID()
+				})
+			).rejects.toThrow('missing encrypted_email');
 		});
 
-		it('should fall back to plaintext when decryption fails (wrong key)', async () => {
+		it('should throw when decryption fails (wrong key)', async () => {
 			const supporterId = crypto.randomUUID();
 			const email = 'supporter@test.org';
 
 			// Encrypt with a different supporter ID (simulating corrupted data)
 			const encrypted = await encryptPii(email, `supporter:${crypto.randomUUID()}`);
 
-			const result = await tryDecryptSupporterEmail({
-				id: supporterId,
-				email: 'supporter@test.org',
-				encrypted_email: JSON.stringify(encrypted)
-			});
-
-			// Falls back to plaintext because decryption with wrong key fails
-			expect(result).toBe('supporter@test.org');
+			await expect(
+				tryDecryptSupporterEmail({
+					id: supporterId,
+					encrypted_email: JSON.stringify(encrypted)
+				})
+			).rejects.toThrow();
 		});
 
-		it('should fall back to plaintext when encrypted_email is invalid JSON', async () => {
-			const result = await tryDecryptSupporterEmail({
-				id: crypto.randomUUID(),
-				email: 'plain@example.com',
-				encrypted_email: 'not-valid-json'
-			});
-
-			expect(result).toBe('plain@example.com');
+		it('should throw when encrypted_email is invalid JSON', async () => {
+			await expect(
+				tryDecryptSupporterEmail({
+					id: crypto.randomUUID(),
+					encrypted_email: 'not-valid-json'
+				})
+			).rejects.toThrow();
 		});
 
-		it('should fall back to plaintext when PII_ENCRYPTION_KEY is missing', async () => {
+		it('should throw when PII_ENCRYPTION_KEY is missing', async () => {
 			const supporterId = crypto.randomUUID();
 			const email = 'supporter@test.org';
 
@@ -145,14 +139,12 @@ describe('Supporter PII Encryption', () => {
 			// Remove the key
 			delete process.env.PII_ENCRYPTION_KEY;
 
-			const result = await tryDecryptSupporterEmail({
-				id: supporterId,
-				email: 'supporter@test.org',
-				encrypted_email: JSON.stringify(encrypted)
-			});
-
-			// Falls back to plaintext
-			expect(result).toBe('supporter@test.org');
+			await expect(
+				tryDecryptSupporterEmail({
+					id: supporterId,
+					encrypted_email: JSON.stringify(encrypted)
+				})
+			).rejects.toThrow('PII_ENCRYPTION_KEY not set');
 		});
 	});
 

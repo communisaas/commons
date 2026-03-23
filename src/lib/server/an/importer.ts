@@ -403,7 +403,6 @@ async function processPeopleBatch(
 					data: {
 						id: supId,
 						orgId,
-						email: mapped.email,
 						name: mapped.name,
 						postalCode: mapped.postalCode,
 						phone: mapped.phone,
@@ -411,8 +410,8 @@ async function processPeopleBatch(
 						emailStatus: mapped.emailStatus,
 						source: 'action_network',
 						importedAt: new Date(),
-						encrypted_email: eEnc ? JSON.stringify(eEnc) : undefined,
-						email_hash: eHash ?? undefined,
+						encrypted_email: eEnc ? JSON.stringify(eEnc) : '',
+						email_hash: eHash ?? '',
 						// eslint-disable-next-line @typescript-eslint/no-explicit-any
 						customFields: Object.keys(mapped.customFields).length > 0 ? (mapped.customFields as any) : undefined
 					}

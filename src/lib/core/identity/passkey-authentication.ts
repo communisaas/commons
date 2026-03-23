@@ -58,20 +58,14 @@ export async function generatePasskeyAuthOptions(email: string): Promise<{
 }> {
 	const { rpID } = getPasskeyRPConfig();
 
-	// C-3: Look up user by email_hash first, fallback to plaintext during transition
+	// C-3: Look up user by email_hash — post-backfill, all users have email_hash
 	const emailHash = await computeEmailHash(email);
-	let user = emailHash
+	const user = emailHash
 		? await db.user.findUnique({
 				where: { email_hash: emailHash },
 				select: { id: true, passkey_credential_id: true }
 			})
 		: null;
-	if (!user) {
-		user = await db.user.findUnique({
-			where: { email },
-			select: { id: true, passkey_credential_id: true }
-		});
-	}
 
 	if (!user) {
 		throw new Error('User not found');
@@ -181,8 +175,6 @@ export async function verifyPasskeyAuth(
 		where: { passkey_credential_id: credentialId },
 		select: {
 			id: true,
-			email: true,
-			name: true,
 			encrypted_email: true,
 			encrypted_name: true,
 			trust_tier: true,
@@ -254,7 +246,7 @@ export async function verifyPasskeyAuth(
 		})
 	]);
 
-	// C-3: Decrypt PII if encrypted columns exist, fallback to plaintext during transition
+	// C-3: Decrypt PII from encrypted columns (post-backfill — no plaintext fallback)
 	const pii = await decryptUserPii(user);
 
 	return {

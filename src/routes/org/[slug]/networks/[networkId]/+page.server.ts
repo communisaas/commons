@@ -66,11 +66,11 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 	// Aggregate stats
 	const totalSupporters = supporterCounts.reduce((sum, s) => sum + s._count.id, 0);
 
-	// Unique supporters by email across member orgs
+	// Unique supporters by email_hash across member orgs
 	const uniqueResult = await db.supporter.groupBy({
-		by: ['email'],
+		by: ['email_hash'],
 		where: { orgId: { in: activeMemberOrgIds } },
-		_count: { email: true }
+		_count: { email_hash: true }
 	});
 	const uniqueSupporters = uniqueResult.length;
 

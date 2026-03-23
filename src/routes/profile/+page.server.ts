@@ -13,8 +13,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		where: { id: locals.user.id },
 		select: {
 			id: true,
-			name: true,
-			email: true,
 			avatar: true,
 			// Profile fields
 			role: true,
@@ -100,32 +98,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 			return { templates, templateStats };
 		});
 
-	// Stream representatives data separately
-	// DUAL-WRITE: Read from both legacy and DM paths; prefer DM when populated. Remove legacy in S1-07.
+	// Stream representatives data separately (DecisionMaker path only — legacy representatives removed)
 	const representativesPromise = db.user
 		.findUnique({
 			where: { id: locals.user.id },
 			select: {
-				// DUAL-WRITE: Remove in S1-07
-				representatives: {
-					where: { is_active: true },
-					select: {
-						relationship: true,
-						representative: {
-							select: {
-								id: true,
-								name: true,
-								party: true,
-								state: true,
-								district: true,
-								chamber: true,
-								phone: true,
-								email: true
-							}
-						}
-					}
-				},
-				// New DecisionMaker path
 				dmRelations: {
 					where: { isActive: true },
 					select: {
@@ -149,8 +126,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.then((result) => {
 			if (!result) return [];
 
-			// Transform DM relations to match the expected shape
-			const dmReps = result.dmRelations.map((dr: { relationship: string; decisionMaker: Record<string, unknown> }) => {
+			return result.dmRelations.map((dr: { relationship: string; decisionMaker: Record<string, unknown> }) => {
 				const title = (dr.decisionMaker.title as string) ?? '';
 				const isSenate = title.toLowerCase().includes('senator') || title.toLowerCase().includes('senate');
 				return {
@@ -167,14 +143,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 					jurisdiction: dr.decisionMaker.jurisdiction ?? ''
 				};
 			});
-
-			// Prefer DM path when populated; fall back to legacy. Remove in S1-07.
-			if (dmReps.length > 0) return dmReps;
-
-			return result.representatives.map((ur: { relationship: string; representative: Record<string, unknown> }) => ({
-				relationship: ur.relationship,
-				...(ur.representative as object)
-			}));
 		});
 
 	// Return immediately — user from locals (no DB hit), everything else streamed
@@ -192,8 +160,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 					if (!user) return null;
 					return {
 						id: user.id,
-						name: user.name,
-						email: user.email,
+						name: locals.user!.name,
+						email: locals.user!.email,
 						avatar: user.avatar,
 						profile: {
 							role: user.role,

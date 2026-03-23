@@ -8,6 +8,7 @@ import { getStripe } from '$lib/server/billing/stripe';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
+import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import crypto from 'node:crypto';
 import type { RequestHandler } from './$types';
 
@@ -85,12 +86,20 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 		if (existing) {
 			supporterId = existing.id;
 		} else {
+			// C-5: Encrypt email at rest
+			const supId = crypto.randomUUID();
+			const [eHash, eEnc] = await Promise.all([
+				computeEmailHash(email.toLowerCase()).catch(() => null),
+				encryptPii(email.toLowerCase(), `supporter:${supId}`).catch(() => null)
+			]);
 			const supporter = await db.supporter.create({
 				data: {
+					id: supId,
 					orgId: campaign.orgId,
-					email: email.toLowerCase(),
 					name: name.trim(),
-					source: 'donation'
+					source: 'donation',
+					encrypted_email: eEnc ? JSON.stringify(eEnc) : '',
+					email_hash: eHash ?? ''
 				}
 			});
 			supporterId = supporter.id;

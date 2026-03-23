@@ -12,31 +12,9 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 	try {
 		const [userWithRepresentatives, orgMemberships] = await Promise.all([
 			db.user.findUnique({
-				where: { id: locals.user.id },
-				include: {
-					// Legacy path — kept as server-side fallback until client-rep-resolver
-					// is wired into all consumer components. Remove in S1-07.
-					representatives: {
-						include: {
-							representative: {
-								select: {
-									name: true,
-									party: true,
-									chamber: true,
-									state: true,
-									district: true,
-									is_active: true
-								}
-							}
-						},
-						where: {
-							is_active: true
-						}
-					}
-					// DM relations removed — reps now resolved client-side via
-					// client-rep-resolver.ts (IndexedDB credential + IPFS officials).
-					// Client uses district_verified flag to know when to call resolver.
-				}
+				where: { id: locals.user.id }
+				// Representatives resolved client-side via client-rep-resolver.ts
+				// (IndexedDB credential + IPFS officials). Legacy representatives relation removed.
 			}),
 			// Org memberships: lightweight query for the identity bridge
 			db.orgMembership.findMany({
@@ -59,17 +37,6 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				}
 			})
 		]);
-
-		// Legacy representatives — server-side fallback until all consumers
-		// migrate to client-rep-resolver.ts. Remove in S1-07.
-		const representatives =
-			userWithRepresentatives?.representatives?.map((ur) => ({
-				name: ur.representative.name,
-				party: ur.representative.party,
-				chamber: ur.representative.chamber,
-				state: ur.representative.state,
-				district: ur.representative.district
-			})) || [];
 
 		// Transform org memberships for the header bridge
 		const userOrgMemberships = orgMemberships.map((m) => ({
@@ -102,8 +69,6 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				// Client-side rep resolution signal — when true, components use
 				// resolveRepsFromCredential() instead of server-provided reps
 				hasDistrictCredential: Boolean(userWithRepresentatives?.district_verified),
-				// Legacy representatives — server-side fallback. Remove in S1-07.
-				representatives: representatives,
 				// Org layer bridge
 				orgMemberships: userOrgMemberships
 			}
@@ -127,7 +92,6 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				// Wallet integration (boolean flags — addresses are PII, not sent to client)
 				hasWallet: false,
 				hasDistrictCredential: false,
-				representatives: [],
 				orgMemberships: []
 			}
 		};

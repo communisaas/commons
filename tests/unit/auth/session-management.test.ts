@@ -50,6 +50,11 @@ vi.mock('@oslojs/encoding', () => ({
 	encodeHexLowerCase: vi.fn(() => 'mock-hex-session-id')
 }));
 
+const mockDecryptUserPii = vi.fn();
+vi.mock('$lib/core/crypto/user-pii-encryption', () => ({
+	decryptUserPii: (...args: unknown[]) => mockDecryptUserPii(...args)
+}));
+
 import {
 	createSession,
 	validateSession,
@@ -95,8 +100,11 @@ function makeUser(overrides: Partial<User> = {}): User {
 		connection: null,
 		profile_completed_at: null,
 		profile_visibility: 'public',
+		encrypted_email: 'enc-test@example.com',
+		email_hash: 'hash-test',
+		encrypted_name: 'enc-Test User',
 		...overrides
-	};
+	} as User;
 }
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -127,6 +135,7 @@ describe('session-management (auth.ts)', () => {
 		vi.clearAllMocks();
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-02-15T12:00:00.000Z'));
+		mockDecryptUserPii.mockResolvedValue({ email: 'test@example.com', name: 'Test User' });
 	});
 
 	afterEach(() => {
@@ -424,12 +433,11 @@ describe('session-management (auth.ts)', () => {
 
 		describe('user field mapping', () => {
 			it('should pass through standard user fields', async () => {
+				mockDecryptUserPii.mockResolvedValue({ email: 'alice@example.com', name: 'Alice' });
 				const sessionData = makeSessionWithUser(
 					{},
 					{
 						id: 'user-123',
-						email: 'alice@example.com',
-						name: 'Alice',
 						trust_score: 100,
 						reputation_tier: 'verified'
 					}

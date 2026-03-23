@@ -35,16 +35,7 @@ export async function validateOAuthSession(request: Request): Promise<SessionVal
 
 		// Validate session in database
 		const session = await db.session.findUnique({
-			where: { id: sessionId },
-			include: {
-				user: {
-					select: {
-						id: true,
-						email: true,
-						name: true
-					}
-				}
-			}
+			where: { id: sessionId }
 		});
 
 		if (!session) {
@@ -58,7 +49,6 @@ export async function validateOAuthSession(request: Request): Promise<SessionVal
 		return {
 			valid: true,
 			user_id: session.userId,
-			user_email: session.user.email,
 			session_expires: session.expiresAt
 		};
 	} catch {

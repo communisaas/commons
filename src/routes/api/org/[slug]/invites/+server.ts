@@ -1,8 +1,19 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
-import { encryptPii, computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
+import { encryptPii, computeEmailHash, tryDecryptPii, type EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
+
+/** Decrypt an invite's email from encrypted_email (authoritative post-Cycle 6). */
+async function decryptInviteEmail(invite: {
+	id: string;
+	encrypted_email: string;
+}): Promise<string> {
+	const enc: EncryptedPii = JSON.parse(invite.encrypted_email);
+	const decrypted = await tryDecryptPii(enc, 'org-invite:' + invite.id);
+	if (!decrypted) throw new Error(`[PII] Invite ${invite.id} decryption failed`);
+	return decrypted;
+}
 
 /** Send invites to join an organization. */
 export const POST: RequestHandler = async ({ params, locals, request }) => {
@@ -57,19 +68,28 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const emailHashes = await Promise.all(emails.map((e) => computeEmailHash(e)));
 	const validHashes = emailHashes.filter((h): h is string => h !== null);
 
-	// Batch lookups: hash-based with plaintext fallback
-	const [existingUsers, existingInvitesByHash, existingInvitesByEmail] = await Promise.all([
-		db.user.findMany({
-			where: { email: { in: emails } },
-			select: {
-				id: true,
-				email: true,
-				orgMemberships: {
-					where: { orgId: org.id },
-					select: { id: true }
-				}
-			}
-		}),
+	// Build email-to-hash map for skip-set resolution
+	const emailToHash = new Map<string, string>();
+	for (let i = 0; i < emails.length; i++) {
+		const h = emailHashes[i];
+		if (h) emailToHash.set(emails[i], h);
+	}
+
+	// Batch lookups: hash-based for both users and invites
+	const [existingUsers, existingInvitesByHash] = await Promise.all([
+		validHashes.length > 0
+			? db.user.findMany({
+					where: { email_hash: { in: validHashes } },
+					select: {
+						id: true,
+						email_hash: true,
+						memberships: {
+							where: { orgId: org.id },
+							select: { id: true }
+						}
+					}
+				})
+			: Promise.resolve([]),
 		validHashes.length > 0
 			? db.orgInvite.findMany({
 					where: {
@@ -78,28 +98,28 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 						accepted: false,
 						expiresAt: { gt: new Date() }
 					},
-					select: { email: true, email_hash: true }
+					select: { email_hash: true }
 				})
-			: Promise.resolve([]),
-		db.orgInvite.findMany({
-			where: {
-				orgId: org.id,
-				email: { in: emails },
-				accepted: false,
-				expiresAt: { gt: new Date() }
-			},
-			select: { email: true }
-		})
+			: Promise.resolve([])
 	]);
 
-	// Build skip sets
-	const alreadyMemberEmails = new Set(
-		existingUsers.filter((u) => u.orgMemberships.length > 0).map((u) => u.email)
+	// Build skip sets using hashes
+	const memberHashes = new Set(
+		existingUsers.filter((u) => u.memberships.length > 0).map((u) => u.email_hash)
 	);
-	const alreadyInvitedEmails = new Set([
-		...existingInvitesByEmail.map((i) => i.email),
-		...existingInvitesByHash.map((i) => i.email)
-	]);
+	const alreadyMemberEmails = new Set(
+		emails.filter((e) => {
+			const h = emailToHash.get(e);
+			return h && memberHashes.has(h);
+		})
+	);
+	const invitedHashes = new Set(existingInvitesByHash.map((i) => i.email_hash));
+	const alreadyInvitedEmails = new Set(
+		emails.filter((e) => {
+			const h = emailToHash.get(e);
+			return h && invitedHashes.has(h);
+		})
+	);
 
 	const results: Array<{ email: string; status: 'sent' | 'skipped' }> = [];
 	const expiresAt = new Date();
@@ -124,9 +144,8 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			data: {
 				id: inviteId,
 				orgId: org.id,
-				email: inv.email,
-				encrypted_email: encEmail ? JSON.stringify(encEmail) : undefined,
-				email_hash: invEmailHash ?? undefined,
+				encrypted_email: encEmail ? JSON.stringify(encEmail) : '',
+				email_hash: invEmailHash ?? '',
 				role: inv.role,
 				token,
 				expiresAt,
@@ -154,7 +173,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 
-	const invites = await db.orgInvite.findMany({
+	const rawInvites = await db.orgInvite.findMany({
 		where: {
 			orgId: org.id,
 			accepted: false,
@@ -162,12 +181,21 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		},
 		select: {
 			id: true,
-			email: true,
+			encrypted_email: true,
 			role: true,
 			expiresAt: true
 		},
 		orderBy: { expiresAt: 'desc' }
 	});
+
+	const invites = await Promise.all(
+		rawInvites.map(async (inv) => ({
+			id: inv.id,
+			email: await decryptInviteEmail(inv),
+			role: inv.role,
+			expiresAt: inv.expiresAt
+		}))
+	);
 
 	return json({ invites });
 };
@@ -232,10 +260,17 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	const updated = await db.orgInvite.update({
 		where: { id: inviteId },
 		data: { token, expiresAt },
-		select: { id: true, email: true, role: true, expiresAt: true }
+		select: { id: true, encrypted_email: true, role: true, expiresAt: true }
 	});
 
-	return json({ invite: updated });
+	return json({
+		invite: {
+			id: updated.id,
+			email: await decryptInviteEmail(updated),
+			role: updated.role,
+			expiresAt: updated.expiresAt
+		}
+	});
 };
 
 function generateToken(): string {

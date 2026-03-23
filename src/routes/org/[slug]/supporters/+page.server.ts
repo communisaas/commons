@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
-import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
+import { tryDecryptSupporterEmail, computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
 
 const PAGE_SIZE = 50;
@@ -21,10 +21,18 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 	const where: Record<string, unknown> = { orgId: org.id };
 
 	if (q) {
-		where.OR = [
-			{ email: { contains: q, mode: 'insensitive' } },
-			{ name: { contains: q, mode: 'insensitive' } }
-		];
+		if (q.includes('@')) {
+			// Email search: exact hash match (LIKE impossible on encrypted data)
+			const qHash = await computeEmailHash(q);
+			if (qHash) {
+				where.email_hash = qHash;
+			} else {
+				// Hash unavailable — no results possible for email search
+				where.id = '__no_match__';
+			}
+		} else {
+			where.name = { contains: q, mode: 'insensitive' };
+		}
 	}
 
 	if (status && ['subscribed', 'unsubscribed', 'bounced', 'complained'].includes(status)) {
@@ -104,7 +112,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 	const supporters = await Promise.all(
 		sliced.map(async (s) => ({
 			id: s.id,
-			email: await tryDecryptSupporterEmail(s as { id: string; email: string; encrypted_email?: string | null }),
+			email: await tryDecryptSupporterEmail(s as { id: string; encrypted_email?: string | null }),
 			name: s.name,
 			postalCode: s.postalCode,
 			country: s.country,

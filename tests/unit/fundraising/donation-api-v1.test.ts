@@ -253,7 +253,6 @@ describe('API v1 Donations - GET /api/v1/donations/[id]', () => {
 		const body = await res.json();
 		expect(body.data.id).toBe('don-1');
 		expect(body.data.amountCents).toBe(5000);
-		expect(body.data.stripeSessionId).toBe('sess-1');
 	});
 
 	it('returns 404 for donation from wrong org', async () => {

@@ -44,7 +44,7 @@ const TEST_ADDRESS = {
 // ---------------------------------------------------------------------------
 
 describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
-	let testUser: { id: string; email: string; did_key: string | null };
+	let testUser: { id: string; did_key: string | null };
 	const uniqueSuffix = `addr-e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 	beforeAll(async () => {
@@ -56,8 +56,9 @@ describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
 		// Create test user
 		testUser = await db.user.create({
 			data: {
-				email: `${uniqueSuffix}@test.commons.email`,
-				name: 'E2E Test User',
+				encrypted_email: `encrypted-${uniqueSuffix}@test.commons.email`,
+				email_hash: `hash-${uniqueSuffix}`,
+				encrypted_name: 'encrypted-E2E Test User',
 				did_key: `did:key:z${uniqueSuffix}`,
 				trust_tier: 0,
 				trust_score: 0,
@@ -99,7 +100,7 @@ describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
 				url: '/api/location/resolve-address',
 				method: 'POST',
 				body: JSON.stringify(TEST_ADDRESS),
-				locals: { user: { id: testUser.id, email: testUser.email } }
+				locals: { user: { id: testUser.id } }
 			});
 
 			const response = await resolveAddress(event as any);
@@ -140,7 +141,7 @@ describe.runIf(dbAvailable)('Address Verification E2E Flow', () => {
 				url: '/api/location/resolve-address',
 				method: 'POST',
 				body: JSON.stringify(TEST_ADDRESS),
-				locals: { user: { id: testUser.id, email: testUser.email } }
+				locals: { user: { id: testUser.id } }
 			});
 
 			const resolveResponse = await resolveAddress(resolveEvent as any);

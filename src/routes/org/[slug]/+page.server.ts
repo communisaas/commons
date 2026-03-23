@@ -2,6 +2,7 @@ import { db } from '$lib/core/db';
 import { computeOrgVerificationPacket } from '$lib/server/campaigns/verification';
 import { FEATURES } from '$lib/config/features';
 import { maskEmail } from '$lib/server/org/mask';
+import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import { loadOrgBilling } from '$lib/server/org';
 import type { PageServerLoad } from './$types';
 
@@ -131,11 +132,11 @@ export const load: PageServerLoad = async ({ parent }) => {
 				engagementTier: true,
 				createdAt: true,
 				campaign: { select: { title: true } },
-				supporter: { select: { name: true, email: true } }
+				supporter: { select: { id: true, name: true, encrypted_email: true } }
 			}
 		}),
 
-		// B1: Recent supporter signups — select only name, mask email server-side
+		// B1: Recent supporter signups — select only name, decrypt email server-side
 		db.supporter.findMany({
 			where: { orgId: org.id },
 			orderBy: { createdAt: 'desc' },
@@ -143,7 +144,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 			select: {
 				id: true,
 				name: true,
-				email: true,
+				encrypted_email: true,
 				source: true,
 				verified: true,
 				createdAt: true
@@ -351,27 +352,46 @@ export const load: PageServerLoad = async ({ parent }) => {
 		// Packet
 		packet,
 
-		// B1: Recent activity — emails masked server-side, never sent raw to client
-		recentActivity: [
-			...recentActions.map(a => ({
-				type: 'action' as const,
-				id: a.id,
-				label: a.supporter?.name ?? (a.supporter?.email ? maskEmail(a.supporter.email) : 'Anonymous'),
-				detail: a.campaign.title,
-				verified: a.verified,
-				tier: a.engagementTier,
-				timestamp: a.createdAt.toISOString()
-			})),
-			...recentSupporters.map(s => ({
-				type: 'signup' as const,
-				id: s.id,
-				label: s.name ?? maskEmail(s.email),
-				detail: s.source ?? 'organic',
-				verified: s.verified,
-				tier: 0,
-				timestamp: s.createdAt.toISOString()
-			}))
-		].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10),
+		// B1: Recent activity — emails decrypted and masked server-side, never sent raw to client
+		recentActivity: await (async () => {
+			const actionItems = await Promise.all(recentActions.map(async a => {
+				let label = 'Anonymous';
+				if (a.supporter?.name) {
+					label = a.supporter.name;
+				} else if (a.supporter?.encrypted_email) {
+					const email = await tryDecryptSupporterEmail(a.supporter).catch(() => null);
+					if (email) label = maskEmail(email);
+				}
+				return {
+					type: 'action' as const,
+					id: a.id,
+					label,
+					detail: a.campaign.title,
+					verified: a.verified,
+					tier: a.engagementTier,
+					timestamp: a.createdAt.toISOString()
+				};
+			}));
+			const signupItems = await Promise.all(recentSupporters.map(async s => {
+				let label = s.name ?? 'Anonymous';
+				if (!s.name && s.encrypted_email) {
+					const email = await tryDecryptSupporterEmail(s).catch(() => null);
+					if (email) label = maskEmail(email);
+				}
+				return {
+					type: 'signup' as const,
+					id: s.id,
+					label,
+					detail: s.source ?? 'organic',
+					verified: s.verified,
+					tier: 0,
+					timestamp: s.createdAt.toISOString()
+				};
+			}));
+			return [...actionItems, ...signupItems]
+				.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+				.slice(0, 10);
+		})(),
 
 		// Endorsed templates
 		endorsedTemplates: endorsedTemplates.map(e => ({

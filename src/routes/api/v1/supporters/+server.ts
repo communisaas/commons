@@ -43,7 +43,15 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const where: Record<string, unknown> = { orgId: auth.orgId };
 
 	const email = url.searchParams.get('email');
-	if (email) where.email = { equals: email.toLowerCase(), mode: 'insensitive' };
+	if (email) {
+		const emailHash = await computeEmailHash(email.toLowerCase());
+		if (emailHash) {
+			where.email_hash = emailHash;
+		} else {
+			// Hash unavailable — no results possible
+			where.id = '__no_match__';
+		}
+	}
 
 	const verified = url.searchParams.get('verified');
 	if (verified === 'true') where.verified = true;
@@ -93,7 +101,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		const sup = s as typeof s & { tags: Array<{ tag: { id: string; name: string } }> };
 		return {
 			id: sup.id,
-			email: await tryDecryptSupporterEmail(sup as { id: string; email: string; encrypted_email?: string | null }),
+			email: await tryDecryptSupporterEmail(sup as { id: string; encrypted_email?: string | null }),
 			name: sup.name,
 			postalCode: sup.postalCode,
 			country: sup.country,
@@ -171,15 +179,13 @@ export const POST: RequestHandler = async ({ request }) => {
 		data: {
 			id: supporterId,
 			orgId: auth.orgId,
-			email: normalizedEmail,
 			name: name || null,
 			postalCode: postalCode || null,
 			country: country || 'US',
 			phone: phone || null,
 			source: source || 'api',
-			// C-5: Encrypted PII (plaintext retained during transition)
-			encrypted_email: encEmail ? JSON.stringify(encEmail) : undefined,
-			email_hash: emailHash ?? undefined,
+			encrypted_email: encEmail ? JSON.stringify(encEmail) : '',
+			email_hash: emailHash ?? '',
 			customFields: customFields ? JSON.parse(JSON.stringify(customFields)) : undefined,
 			tags: tagConnects.length > 0 ? { create: tagConnects } : undefined
 		},
@@ -192,7 +198,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	return apiOk(
 		{
 			id: created.id,
-			email: created.email,
+			email: normalizedEmail,
 			name: created.name,
 			postalCode: created.postalCode,
 			country: created.country,

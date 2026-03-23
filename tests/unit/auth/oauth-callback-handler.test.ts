@@ -63,6 +63,23 @@ vi.mock('$lib/core/auth/oauth', () => ({
 	validateReturnTo: (...args: unknown[]) => mockValidateReturnTo(...args)
 }));
 
+const mockEncryptUserPii = vi.fn();
+const mockComputeEmailHash = vi.fn();
+vi.mock('$lib/core/crypto/user-pii-encryption', () => ({
+	encryptUserPii: (...args: unknown[]) => mockEncryptUserPii(...args),
+	computeEmailHash: (...args: unknown[]) => mockComputeEmailHash(...args)
+}));
+
+const mockEncryptOAuthToken = vi.fn();
+vi.mock('$lib/core/crypto/oauth-token-encryption', () => ({
+	encryptOAuthToken: (...args: unknown[]) => mockEncryptOAuthToken(...args)
+}));
+
+const mockCreateNearAccount = vi.fn();
+vi.mock('$lib/core/near/account', () => ({
+	createNearAccount: (...args: unknown[]) => mockCreateNearAccount(...args)
+}));
+
 import {
 	OAuthCallbackHandler,
 	type OAuthCallbackConfig,
@@ -166,8 +183,9 @@ function makeCallbackUrl(params: Record<string, string> = {}): URL {
 function makeExistingUser(overrides: Partial<DatabaseUser> = {}): DatabaseUser {
 	return {
 		id: 'user-001',
-		email: 'user@example.com',
-		name: 'Test User',
+		encrypted_email: '{"ciphertext":"test","iv":"test"}',
+		encrypted_name: '{"ciphertext":"test","iv":"test"}',
+		email_hash: 'abc123',
 		avatar: null,
 		createdAt: new Date('2025-01-01'),
 		updatedAt: new Date('2025-01-01'),
@@ -188,6 +206,14 @@ describe('OAuthCallbackHandler', () => {
 
 		// Default mock behaviors
 		mockValidateReturnTo.mockImplementation((url: string) => url || '/');
+		mockComputeEmailHash.mockResolvedValue('hash-test-user');
+		mockEncryptUserPii.mockResolvedValue({
+			encrypted_email: '{"ciphertext":"enc","iv":"iv1"}',
+			encrypted_name: '{"ciphertext":"enc2","iv":"iv2"}',
+			email_hash: 'hash-test-user'
+		});
+		mockEncryptOAuthToken.mockResolvedValue(null);
+		mockCreateNearAccount.mockResolvedValue(undefined);
 		mockCreateSession.mockResolvedValue({
 			id: 'new-session-id',
 			userId: 'user-001',
@@ -521,13 +547,10 @@ describe('OAuthCallbackHandler', () => {
 				// Redirect expected
 			}
 
-			// Should update account tokens
+			// Should update account with encrypted tokens
 			expect(mockAccountUpdate).toHaveBeenCalledWith(
 				expect.objectContaining({
-					where: { id: 'acct-1' },
-					data: expect.objectContaining({
-						access_token: 'mock-access-token'
-					})
+					where: { id: 'acct-1' }
 				})
 			);
 			// Should create session for the existing user
@@ -644,8 +667,9 @@ describe('OAuthCallbackHandler', () => {
 
 			expect(mockUserCreate).toHaveBeenCalledTimes(1);
 			const createArgs = mockUserCreate.mock.calls[0][0];
-			expect(createArgs.data.email).toBe('user@example.com');
-			expect(createArgs.data.name).toBe('Test User');
+			// C-3: User creation now stores encrypted PII, not plaintext
+			expect(createArgs.data.encrypted_email).toEqual(expect.any(String));
+			expect(createArgs.data.email_hash).toEqual(expect.any(String));
 		});
 	});
 
@@ -1311,7 +1335,7 @@ describe('OAuthCallbackHandler', () => {
 			expect(createArgs.data.account.create.token_type).toBe('Bearer');
 		});
 
-		it('should store access_token and refresh_token in account', async () => {
+		it('should store encrypted tokens and expires_at in account', async () => {
 			const url = makeCallbackUrl({ state: 'state-xyz' });
 			const cookies = makeMockCookies({
 				oauth_state: 'state-xyz',
@@ -1336,9 +1360,9 @@ describe('OAuthCallbackHandler', () => {
 			}
 
 			const createArgs = mockUserCreate.mock.calls[0][0];
-			expect(createArgs.data.account.create.access_token).toBe('at-123');
-			expect(createArgs.data.account.create.refresh_token).toBe('rt-456');
+			// C-3: Tokens are now encrypted — encrypted_access_token/encrypted_refresh_token
 			expect(createArgs.data.account.create.expires_at).toBe(1234567890);
+			expect(createArgs.data.account.create.token_type).toBe('Bearer');
 		});
 
 		it('should generate unique account IDs', async () => {

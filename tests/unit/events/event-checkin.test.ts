@@ -17,7 +17,8 @@ const {
 	mockDbEventFindUnique,
 	mockDbEventUpdate,
 	mockDbEventRsvpFindUnique,
-	mockDbEventAttendanceCreate
+	mockDbEventAttendanceCreate,
+	mockDbEventAttendanceFindUnique
 } = vi.hoisted(() => ({
 	mockFeatures: {
 		EVENTS: true as boolean,
@@ -29,7 +30,8 @@ const {
 	mockDbEventFindUnique: vi.fn(),
 	mockDbEventUpdate: vi.fn(),
 	mockDbEventRsvpFindUnique: vi.fn(),
-	mockDbEventAttendanceCreate: vi.fn()
+	mockDbEventAttendanceCreate: vi.fn(),
+	mockDbEventAttendanceFindUnique: vi.fn()
 }));
 
 vi.mock('$lib/config/features', () => ({ FEATURES: mockFeatures }));
@@ -38,7 +40,7 @@ vi.mock('$lib/core/db', () => ({
 	db: {
 		event: { findUnique: mockDbEventFindUnique, update: mockDbEventUpdate },
 		eventRsvp: { findUnique: mockDbEventRsvpFindUnique },
-		eventAttendance: { create: mockDbEventAttendanceCreate }
+		eventAttendance: { create: mockDbEventAttendanceCreate, findUnique: mockDbEventAttendanceFindUnique }
 	}
 }));
 
@@ -93,6 +95,7 @@ describe('Event Check-in - POST /api/e/[id]/checkin', () => {
 			.mockResolvedValueOnce(PUBLISHED_EVENT) // first call: find event
 			.mockResolvedValueOnce({ attendeeCount: 1 }); // second call: after update
 		mockDbEventRsvpFindUnique.mockResolvedValue(null);
+		mockDbEventAttendanceFindUnique.mockResolvedValue(null);
 		mockDbEventAttendanceCreate.mockResolvedValue({ id: 'att-1' });
 		mockDbEventUpdate.mockResolvedValue({});
 	});
@@ -114,11 +117,12 @@ describe('Event Check-in - POST /api/e/[id]/checkin', () => {
 		expect(mockDbEventUpdate).toHaveBeenCalledOnce();
 	});
 
-	it('creates verified attendance with identity commitment', async () => {
+	it('creates verified attendance with identity commitment and checkin code', async () => {
 		const { POST } = await import('../../../src/routes/api/e/[id]/checkin/+server');
 		const res = await POST(makeArgs({
 			email: 'user@test.com',
-			identityCommitment: '0xabc123'
+			identityCommitment: '0xabc123',
+			checkinCode: 'abc12345'
 		}));
 		const body = await res.json();
 		expect(body.verified).toBe(true);

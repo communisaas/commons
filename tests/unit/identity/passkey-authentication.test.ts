@@ -67,6 +67,13 @@ vi.mock('$lib/core/identity/passkey-rp-config', () => ({
 	})
 }));
 
+const mockDecryptUserPii = vi.hoisted(() => vi.fn());
+const mockComputeEmailHash = vi.hoisted(() => vi.fn());
+vi.mock('$lib/core/crypto/user-pii-encryption', () => ({
+	decryptUserPii: mockDecryptUserPii,
+	computeEmailHash: mockComputeEmailHash
+}));
+
 // Mock the passkey-registration module (for uint8ArrayToBase64url / base64urlToUint8Array)
 // We need the REAL implementations, not mocks. Use vi.mock with passthrough.
 // Actually, passkey-authentication imports from passkey-registration, which itself
@@ -94,6 +101,8 @@ const TEST_USER = {
 	id: 'user-auth-001',
 	email: TEST_EMAIL,
 	name: 'Alice',
+	encrypted_email: 'enc-alice@example.com',
+	encrypted_name: 'enc-Alice',
 	trust_tier: 1,
 	passkey_credential_id: 'cred-id-base64url-abc',
 	passkey_public_key_jwk: uint8ArrayToBase64url(new Uint8Array([10, 20, 30, 40, 50]))
@@ -157,7 +166,7 @@ beforeEach(() => {
 
 	mockDbUser.findUnique.mockImplementation(async (args: any) => {
 		// Route based on which findUnique call this is
-		if (args.where?.email) {
+		if (args.where?.email_hash) {
 			return {
 				id: TEST_USER.id,
 				passkey_credential_id: TEST_USER.passkey_credential_id
@@ -193,6 +202,9 @@ beforeEach(() => {
 
 	mockCreateSession.mockResolvedValue(MOCK_SESSION);
 
+	mockDecryptUserPii.mockResolvedValue({ email: TEST_EMAIL, name: 'Alice' });
+	mockComputeEmailHash.mockResolvedValue('hash-alice');
+
 	mockDbUser.update.mockResolvedValue({});
 	mockDbVerificationSession.update.mockResolvedValue({});
 });
@@ -216,11 +228,12 @@ describe('generatePasskeyAuthOptions', () => {
 			expect(result.sessionId).toBe('vsession-auth-001');
 		});
 
-		it('should look up user by email', async () => {
+		it('should look up user by email_hash', async () => {
 			await generatePasskeyAuthOptions(TEST_EMAIL);
 
+			expect(mockComputeEmailHash).toHaveBeenCalledWith(TEST_EMAIL);
 			expect(mockDbUser.findUnique).toHaveBeenCalledWith({
-				where: { email: TEST_EMAIL },
+				where: { email_hash: 'hash-alice' },
 				select: { id: true, passkey_credential_id: true }
 			});
 		});
@@ -396,8 +409,6 @@ describe('verifyPasskeyAuth', () => {
 				where: { passkey_credential_id: TEST_USER.passkey_credential_id },
 				select: {
 					id: true,
-					email: true,
-					name: true,
 					encrypted_email: true,
 					encrypted_name: true,
 					trust_tier: true,
@@ -831,8 +842,10 @@ describe('verifyPasskeyAuth', () => {
 		it('should handle null user name', async () => {
 			mockDbUser.findUnique.mockResolvedValue({
 				...TEST_USER,
-				name: null
+				name: null,
+				encrypted_name: null
 			});
+			mockDecryptUserPii.mockResolvedValue({ email: TEST_EMAIL, name: null });
 
 			const result = await verifyPasskeyAuth(
 				makeMockAuthResponse() as any,

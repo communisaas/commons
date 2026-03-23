@@ -20,6 +20,7 @@ const {
 	mockDbDonationFindUnique,
 	mockDbDonationFindFirst,
 	mockDbDonationUpdate,
+	mockDbDonationUpdateMany,
 	mockDbCampaignUpdate,
 	mockDbSubscriptionUpsert,
 	mockDbSubscriptionFindUnique,
@@ -31,6 +32,7 @@ const {
 	mockDbDonationFindUnique: vi.fn(),
 	mockDbDonationFindFirst: vi.fn(),
 	mockDbDonationUpdate: vi.fn(),
+	mockDbDonationUpdateMany: vi.fn(),
 	mockDbCampaignUpdate: vi.fn(),
 	mockDbSubscriptionUpsert: vi.fn(),
 	mockDbSubscriptionFindUnique: vi.fn(),
@@ -54,7 +56,7 @@ vi.mock('$lib/server/billing/plans', () => ({
 
 vi.mock('$lib/core/db', () => ({
 	db: {
-		donation: { findUnique: mockDbDonationFindUnique, findFirst: mockDbDonationFindFirst, update: mockDbDonationUpdate },
+		donation: { findUnique: mockDbDonationFindUnique, findFirst: mockDbDonationFindFirst, update: mockDbDonationUpdate, updateMany: mockDbDonationUpdateMany },
 		campaign: { update: mockDbCampaignUpdate },
 		subscription: {
 			upsert: mockDbSubscriptionUpsert,
@@ -137,18 +139,18 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 			campaignId: 'camp-1'
 		});
 		mockStripeConstructEvent.mockReturnValue(event);
+		mockDbDonationUpdateMany.mockResolvedValue({ count: 1 });
 		mockDbDonationFindUnique.mockResolvedValue({
-			id: 'don-1', status: 'pending', amountCents: 5000
+			id: 'don-1', status: 'completed', amountCents: 5000
 		});
-		mockDbDonationUpdate.mockResolvedValue({});
 		mockDbCampaignUpdate.mockResolvedValue({});
 
 		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		const res = await POST({ request: makeWebhookRequest() } as any);
 		expect(res.status).toBe(200);
 
-		expect(mockDbDonationUpdate).toHaveBeenCalledWith({
-			where: { id: 'don-1' },
+		expect(mockDbDonationUpdateMany).toHaveBeenCalledWith({
+			where: { id: 'don-1', status: 'pending' },
 			data: expect.objectContaining({
 				status: 'completed',
 				stripePaymentIntentId: 'pi_test',
@@ -165,10 +167,10 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 			campaignId: 'camp-1'
 		});
 		mockStripeConstructEvent.mockReturnValue(event);
+		mockDbDonationUpdateMany.mockResolvedValue({ count: 1 });
 		mockDbDonationFindUnique.mockResolvedValue({
-			id: 'don-1', status: 'pending', amountCents: 5000
+			id: 'don-1', status: 'completed', amountCents: 5000
 		});
-		mockDbDonationUpdate.mockResolvedValue({});
 		mockDbCampaignUpdate.mockResolvedValue({});
 
 		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
@@ -191,15 +193,13 @@ describe('Donation Webhook - POST /api/billing/webhook', () => {
 			campaignId: 'camp-1'
 		});
 		mockStripeConstructEvent.mockReturnValue(event);
-		mockDbDonationFindUnique.mockResolvedValue({
-			id: 'don-1', status: 'completed', amountCents: 5000
-		});
+		mockDbDonationUpdateMany.mockResolvedValue({ count: 0 });
 
 		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
 		const res = await POST({ request: makeWebhookRequest() } as any);
 		expect(res.status).toBe(200);
 
-		expect(mockDbDonationUpdate).not.toHaveBeenCalled();
+		// updateMany returns count: 0, so campaign counters should not be incremented
 		expect(mockDbCampaignUpdate).not.toHaveBeenCalled();
 	});
 

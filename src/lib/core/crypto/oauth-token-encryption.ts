@@ -23,7 +23,7 @@ async function importMasterKey(hexKey: string): Promise<CryptoKey> {
 	if (keyBytes.length !== 32) {
 		throw new Error('OAUTH_ENCRYPTION_KEY must be exactly 32 bytes (64 hex characters)');
 	}
-	return crypto.subtle.importKey('raw', keyBytes, 'HKDF', false, ['deriveKey']);
+	return crypto.subtle.importKey('raw', keyBytes as BufferSource, 'HKDF', false, ['deriveKey']);
 }
 
 /**
@@ -130,7 +130,8 @@ export async function decryptOAuthToken(
 	const ciphertext = base64ToBytes(encrypted.ciphertext);
 	const iv = base64ToBytes(encrypted.iv);
 
-	const plaintextBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, accountKey, ciphertext);
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- TS lib mismatch: Uint8Array<ArrayBufferLike> vs BufferSource
+	const plaintextBuf = await (crypto.subtle.decrypt as any)({ name: 'AES-GCM', iv }, accountKey, ciphertext);
 
 	return new TextDecoder().decode(plaintextBuf);
 }

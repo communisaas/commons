@@ -57,11 +57,6 @@ function makeSessionRecord(overrides: Record<string, unknown> = {}) {
 		id: 'session-abc-123',
 		userId: 'user-001',
 		expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24), // 1 day from now
-		user: {
-			id: 'user-001',
-			email: 'test@example.com',
-			name: 'Test User'
-		},
 		...overrides
 	};
 }
@@ -69,8 +64,6 @@ function makeSessionRecord(overrides: Record<string, unknown> = {}) {
 function makeUserRecord(overrides: Record<string, unknown> = {}) {
 	return {
 		id: 'user-001',
-		email: 'test@example.com',
-		name: 'Test User',
 		templates: [],
 		campaigns: [],
 		...overrides
@@ -151,12 +144,7 @@ describe('oauth-security', () => {
 				await validateOAuthSession(request);
 
 				expect(mockSessionFindUnique).toHaveBeenCalledWith({
-					where: { id: 'my-session-id-123' },
-					include: {
-						user: {
-							select: { id: true, email: true, name: true }
-						}
-					}
+					where: { id: 'my-session-id-123' }
 				});
 			});
 
@@ -271,12 +259,7 @@ describe('oauth-security', () => {
 				const sessionRecord = makeSessionRecord({
 					id: 'valid-session',
 					userId: 'user-42',
-					expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
-					user: {
-						id: 'user-42',
-						email: 'alice@example.com',
-						name: 'Alice'
-					}
+					expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30)
 				});
 				mockSessionFindUnique.mockResolvedValue(sessionRecord);
 
@@ -284,7 +267,6 @@ describe('oauth-security', () => {
 
 				expect(result.valid).toBe(true);
 				expect(result.user_id).toBe('user-42');
-				expect(result.user_email).toBe('alice@example.com');
 				expect(result.session_expires).toEqual(sessionRecord.expiresAt);
 				expect(result.error).toBeUndefined();
 			});

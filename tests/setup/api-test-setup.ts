@@ -78,8 +78,9 @@ export async function createTestUser(overrides?: Partial<any>) {
   return await db.user.create({
     data: {
       id: 'test-user-123',
-      email: 'test@example.com',
-      name: 'Test User',
+      encrypted_email: 'encrypted-test@example.com',
+      email_hash: `hash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      encrypted_name: 'encrypted-Test User',
       trust_score: 100,
       // NO PII FIELDS - address data never stored in database per privacy architecture
       is_verified: true,

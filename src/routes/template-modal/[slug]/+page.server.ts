@@ -3,6 +3,7 @@ import { db } from '$lib/core/db';
 import { extractTemplateMetrics } from '$lib/types/templateConfig';
 import type { PageServerLoad } from './$types';
 import { FEATURES } from '$lib/config/features';
+import { decryptUserPii } from '$lib/core/crypto/user-pii-encryption';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	const { slug } = params;
@@ -16,7 +17,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		include: {
 			user: {
 				select: {
-					name: true,
+					id: true,
+					encrypted_name: true,
+					encrypted_email: true,
 					avatar: true
 				}
 			}
@@ -55,10 +58,11 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		recipient_config: null,
 		recipientEmails: [],
 		author: template.user
-			? {
-					name: template.user.name,
-					avatar: template.user.avatar
-				}
+			? await (async () => {
+					const u = template.user!;
+					const pii = await decryptUserPii(u).catch(() => ({ email: '', name: null }));
+					return { name: pii.name, avatar: u.avatar };
+				})()
 			: null,
 		createdAt: template.createdAt.toISOString()
 	};

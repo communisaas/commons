@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
 import { verifySNSSignature } from '$lib/core/security/sns-verify';
+import { computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 
 interface SNSMessage {
 	Type: 'SubscriptionConfirmation' | 'Notification' | 'UnsubscribeConfirmation';
@@ -144,14 +145,18 @@ export const POST: RequestHandler = async ({ request }) => {
 		if (emails.length > 0) {
 			// Cross-org update is intentional: a bounced address is bounced everywhere,
 			// and complaints are the strongest suppression signal regardless of org.
-			await db.supporter.updateMany({
-				where: {
-					email: { in: emails },
-					// Don't downgrade a complaint to a bounce
-					emailStatus: { not: 'complained' }
-				},
-				data: { emailStatus: 'bounced' }
-			});
+			const hashes = (await Promise.all(emails.map((e) => computeEmailHash(e)))).filter(
+				(h): h is string => h !== null
+			);
+			if (hashes.length > 0) {
+				await db.supporter.updateMany({
+					where: {
+						email_hash: { in: hashes },
+						emailStatus: { not: 'complained' }
+					},
+					data: { emailStatus: 'bounced' }
+				});
+			}
 		}
 	} else if (message.notificationType === 'Complaint') {
 		const complaint = (message as SESComplaintMessage).complaint;
@@ -162,21 +167,29 @@ export const POST: RequestHandler = async ({ request }) => {
 			// Cross-org update is intentional: a bounced address is bounced everywhere,
 			// and complaints are the strongest suppression signal regardless of org.
 			// Complaints always win — once complained, never re-emailed
-			await db.supporter.updateMany({
-				where: { email: { in: emails } },
-				data: { emailStatus: 'complained' }
-			});
+			const hashes = (await Promise.all(emails.map((e) => computeEmailHash(e)))).filter(
+				(h): h is string => h !== null
+			);
+			if (hashes.length > 0) {
+				await db.supporter.updateMany({
+					where: { email_hash: { in: hashes } },
+					data: { emailStatus: 'complained' }
+				});
+			}
 		}
 	} else if (message.notificationType === 'Open') {
 		const openMsg = message as SESOpenMessage;
 		const email = openMsg.mail.destination[0]?.toLowerCase();
 		if (email) {
 			// Scope blast lookup via supporter's org to prevent cross-org misattribution
-			const supporter = await db.supporter.findFirst({
-				where: { email },
-				orderBy: { updatedAt: 'desc' },
-				select: { orgId: true }
-			});
+			const emailHash = await computeEmailHash(email);
+			const supporter = emailHash
+				? await db.supporter.findFirst({
+						where: { email_hash: emailHash },
+						orderBy: { updatedAt: 'desc' },
+						select: { orgId: true }
+					})
+				: null;
 			const blast = await db.emailBlast.findFirst({
 				where: {
 					status: 'sent',
@@ -203,11 +216,14 @@ export const POST: RequestHandler = async ({ request }) => {
 		const email = clickMsg.mail.destination[0]?.toLowerCase();
 		if (email) {
 			// Scope blast lookup via supporter's org to prevent cross-org misattribution
-			const supporter = await db.supporter.findFirst({
-				where: { email },
-				orderBy: { updatedAt: 'desc' },
-				select: { orgId: true }
-			});
+			const emailHash = await computeEmailHash(email);
+			const supporter = emailHash
+				? await db.supporter.findFirst({
+						where: { email_hash: emailHash },
+						orderBy: { updatedAt: 'desc' },
+						select: { orgId: true }
+					})
+				: null;
 			let blast = await db.emailBlast.findFirst({
 				where: {
 					status: 'sent',

@@ -121,11 +121,19 @@ describe('deriveTrustTier', () => {
 		expect(deriveTrustTier(user)).toBe(5);
 	});
 
-	it('should return 3 for identity-verified (ID card / license)', () => {
+	it('should return 3 for identity-verified (ID card / license) with trust_tier >= 3', () => {
+		const user = {
+			identity_commitment: '0xabc',
+			trust_tier: 3
+		};
+		expect(deriveTrustTier(user)).toBe(3);
+	});
+
+	it('should return 1 for identity_commitment without trust_tier >= 3', () => {
 		const user = {
 			identity_commitment: '0xabc'
 		};
-		expect(deriveTrustTier(user)).toBe(3);
+		expect(deriveTrustTier(user)).toBe(1);
 	});
 
 	it('should return 2 for address-attested (district verified with timestamp)', () => {

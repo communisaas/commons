@@ -1,5 +1,6 @@
 import { db } from '$lib/core/db';
 import { getOrgUsage } from '$lib/server/billing/usage';
+import { decryptUserPii, tryDecryptPii, type EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ parent }) => {
@@ -11,7 +12,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 		db.orgMembership.findMany({
 			where: { orgId: org.id },
 			include: {
-				user: { select: { id: true, name: true, email: true, avatar: true } }
+				user: { select: { id: true, encrypted_email: true, encrypted_name: true, avatar: true } }
 			},
 			orderBy: { joinedAt: 'asc' }
 		}),
@@ -43,21 +44,33 @@ export const load: PageServerLoad = async ({ parent }) => {
 			emailsSent: usage.emailsSent,
 			maxEmails: usage.limits.maxEmails
 		},
-		members: members.map((m) => ({
-			id: m.id,
-			userId: m.user.id,
-			name: m.user.name,
-			email: m.user.email,
-			avatar: m.user.avatar,
-			role: m.role,
-			joinedAt: m.joinedAt.toISOString()
+		members: await Promise.all(members.map(async (m) => {
+			const pii = await decryptUserPii(m.user).catch(() => ({ email: '[encrypted]', name: null }));
+			return {
+				id: m.id,
+				userId: m.user.id,
+				name: pii.name,
+				email: pii.email,
+				avatar: m.user.avatar,
+				role: m.role,
+				joinedAt: m.joinedAt.toISOString()
+			};
 		})),
 		invites: ['editor', 'owner'].includes(membership.role)
-			? invites.map((i) => ({
-					id: i.id,
-					email: i.email,
-					role: i.role,
-					expiresAt: i.expiresAt.toISOString()
+			? await Promise.all(invites.map(async (i) => {
+					let email = '[encrypted]';
+					if (i.encrypted_email) {
+						try {
+							const enc: EncryptedPii = JSON.parse(i.encrypted_email);
+							email = await tryDecryptPii(enc, 'org-invite:' + i.id) ?? '[encrypted]';
+						} catch { /* decryption failed */ }
+					}
+					return {
+						id: i.id,
+						email,
+						role: i.role,
+						expiresAt: i.expiresAt.toISOString()
+					};
 				}))
 			: [],
 		issueDomains: issueDomains.map((d) => ({

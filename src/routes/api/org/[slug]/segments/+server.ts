@@ -4,6 +4,7 @@ import { loadOrgContext, requireRole } from '$lib/server/org';
 import { buildSegmentWhere } from '$lib/server/segments/query-builder';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
+import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 import { safeUserId } from '$lib/core/server/security';
 
@@ -188,7 +189,8 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		const supporters = await db.supporter.findMany({
 			where: where as any,
 			select: {
-				email: true,
+				id: true,
+				encrypted_email: true,
 				name: true,
 				phone: true,
 				tags: { select: { tag: { select: { name: true } } } }
@@ -197,15 +199,16 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		});
 
 		const header = 'email,name,phone,tags';
-		const rows = supporters.map((s) => {
+		const rows = await Promise.all(supporters.map(async (s) => {
 			const tagNames = s.tags.map((t) => t.tag.name).join('; ');
+			const email = await tryDecryptSupporterEmail(s).catch(() => '[encrypted]');
 			return [
-				csvEscape(s.email),
+				csvEscape(email),
 				csvEscape(s.name ?? ''),
 				csvEscape(s.phone ?? ''),
 				csvEscape(tagNames)
 			].join(',');
-		});
+		}));
 
 		console.info(`[bulk] export_csv org=${org.id} user=${safeUserId(locals.user.id)} rows=${supporters.length}`);
 		const csv = [header, ...rows].join('\n');

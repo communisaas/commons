@@ -346,7 +346,6 @@ export const actions: Actions = {
 									data: {
 										id: supId,
 										orgId: org.id,
-										email: mapped.email,
 										name: mapped.name,
 										postalCode: mapped.postalCode,
 										phone: mapped.phone,
@@ -355,8 +354,8 @@ export const actions: Actions = {
 										smsStatus: mapped.smsStatus,
 										source: 'csv',
 										importedAt: new Date(),
-										encrypted_email: eEnc ? JSON.stringify(eEnc) : undefined,
-										email_hash: eHash ?? undefined
+										encrypted_email: eEnc ? JSON.stringify(eEnc) : '',
+										email_hash: eHash ?? ''
 									}
 								});
 

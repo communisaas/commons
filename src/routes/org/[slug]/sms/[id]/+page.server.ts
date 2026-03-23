@@ -28,7 +28,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 				orderBy: { createdAt: 'desc' },
 				take: 20,
 				include: {
-					supporter: { select: { name: true, email: true } }
+					supporter: { select: { name: true } }
 				}
 			}
 		}

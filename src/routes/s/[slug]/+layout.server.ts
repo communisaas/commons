@@ -6,6 +6,7 @@ import { detectCountryFromHeaders, resolveChannel } from '$lib/services/channelR
 import { FEATURES } from '$lib/config/features';
 import { queryNoisySnapshots } from '$lib/core/analytics/snapshot';
 import { getDaysAgoUTC, getTodayUTC } from '$lib/core/analytics/aggregate';
+import { decryptUserPii } from '$lib/core/crypto/user-pii-encryption';
 
 export const load: LayoutServerLoad = async ({ params, locals: _locals, request }) => {
 	const { slug } = params;
@@ -19,7 +20,9 @@ export const load: LayoutServerLoad = async ({ params, locals: _locals, request 
 		include: {
 			user: {
 				select: {
-					name: true,
+					id: true,
+					encrypted_name: true,
+					encrypted_email: true,
 					avatar: true
 				}
 			}
@@ -107,10 +110,11 @@ export const load: LayoutServerLoad = async ({ params, locals: _locals, request 
 		recipient_config: null,
 		recipientEmails: [],
 		author: template.user
-			? {
-					name: template.user.name,
-					avatar: template.user.avatar
-				}
+			? await (async () => {
+					const u = template.user!;
+					const pii = await decryptUserPii(u).catch(() => ({ email: '', name: null }));
+					return { name: pii.name, avatar: u.avatar };
+				})()
 			: null,
 		createdAt: template.createdAt.toISOString()
 	};

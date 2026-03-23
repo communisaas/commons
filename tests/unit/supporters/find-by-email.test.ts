@@ -1,7 +1,7 @@
 /**
  * Tests for findSupporterByEmail helper (S-6)
  *
- * Verifies email_hash-first lookup with plaintext fallback.
+ * Verifies email_hash-only lookup (post-backfill — no plaintext fallback).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -68,7 +68,7 @@ afterEach(() => {
 // ============================================================================
 
 describe('findSupporterByEmail', () => {
-	describe('email_hash primary lookup', () => {
+	describe('email_hash lookup', () => {
 		it('should find supporter by orgId + email_hash', async () => {
 			mockDbSupporter.findUnique.mockResolvedValueOnce(SUPPORTER);
 
@@ -78,7 +78,6 @@ describe('findSupporterByEmail', () => {
 			expect(mockDbSupporter.findUnique).toHaveBeenCalledWith({
 				where: { orgId_email_hash: { orgId: ORG_ID, email_hash: EMAIL_HASH } }
 			});
-			// Should NOT fall back to plaintext
 			expect(mockDbSupporter.findUnique).toHaveBeenCalledTimes(1);
 		});
 
@@ -91,42 +90,24 @@ describe('findSupporterByEmail', () => {
 		});
 	});
 
-	describe('plaintext fallback', () => {
-		it('should fall back to orgId_email when hash lookup returns null', async () => {
-			mockDbSupporter.findUnique
-				.mockResolvedValueOnce(null) // hash lookup
-				.mockResolvedValueOnce(SUPPORTER); // plaintext lookup
-
-			const result = await findSupporterByEmail(ORG_ID, EMAIL);
-
-			expect(result).toBe(SUPPORTER);
-			expect(mockDbSupporter.findUnique).toHaveBeenCalledTimes(2);
-			expect(mockDbSupporter.findUnique).toHaveBeenNthCalledWith(2, {
-				where: { orgId_email: { orgId: ORG_ID, email: 'alice@example.com' } }
-			});
-		});
-
-		it('should skip hash lookup when computeEmailHash returns null', async () => {
+	describe('missing EMAIL_LOOKUP_KEY', () => {
+		it('should throw when computeEmailHash returns null', async () => {
 			mockComputeEmailHash.mockResolvedValue(null);
-			mockDbSupporter.findUnique.mockResolvedValueOnce(SUPPORTER);
 
-			const result = await findSupporterByEmail(ORG_ID, EMAIL);
-
-			expect(result).toBe(SUPPORTER);
-			// Only plaintext lookup, no hash lookup
-			expect(mockDbSupporter.findUnique).toHaveBeenCalledTimes(1);
-			expect(mockDbSupporter.findUnique).toHaveBeenCalledWith({
-				where: { orgId_email: { orgId: ORG_ID, email: 'alice@example.com' } }
-			});
+			await expect(findSupporterByEmail(ORG_ID, EMAIL)).rejects.toThrow(
+				'EMAIL_LOOKUP_KEY not set'
+			);
+			// No DB lookup should be attempted
+			expect(mockDbSupporter.findUnique).not.toHaveBeenCalled();
 		});
 	});
 
 	describe('not found', () => {
-		it('should return null when neither lookup finds a supporter', async () => {
+		it('should return null when hash lookup finds nothing', async () => {
 			const result = await findSupporterByEmail(ORG_ID, EMAIL);
 
 			expect(result).toBeNull();
-			expect(mockDbSupporter.findUnique).toHaveBeenCalledTimes(2);
+			expect(mockDbSupporter.findUnique).toHaveBeenCalledTimes(1);
 		});
 	});
 
@@ -139,20 +120,6 @@ describe('findSupporterByEmail', () => {
 
 			expect(mockDbSupporter.findUnique).toHaveBeenCalledWith({
 				where: { orgId_email_hash: { orgId: ORG_ID, email_hash: EMAIL_HASH } },
-				select
-			});
-		});
-
-		it('should pass select to plaintext fallback', async () => {
-			const select = { id: true } as const;
-			mockDbSupporter.findUnique
-				.mockResolvedValueOnce(null)
-				.mockResolvedValueOnce({ id: 'sup-001' });
-
-			await findSupporterByEmail(ORG_ID, EMAIL, select);
-
-			expect(mockDbSupporter.findUnique).toHaveBeenNthCalledWith(2, {
-				where: { orgId_email: { orgId: ORG_ID, email: 'alice@example.com' } },
 				select
 			});
 		});
@@ -170,19 +137,6 @@ describe('findSupporterByEmail', () => {
 				where: { orgId_email_hash: { orgId: ORG_ID, email_hash: EMAIL_HASH } }
 			});
 			// Default db should NOT have been called
-			expect(mockDbSupporter.findUnique).not.toHaveBeenCalled();
-		});
-
-		it('should fall back to plaintext on custom client', async () => {
-			const txSupporter = { findUnique: vi.fn() };
-			txSupporter.findUnique
-				.mockResolvedValueOnce(null)
-				.mockResolvedValueOnce(SUPPORTER);
-
-			const result = await findSupporterByEmail(ORG_ID, EMAIL, undefined, txSupporter);
-
-			expect(result).toBe(SUPPORTER);
-			expect(txSupporter.findUnique).toHaveBeenCalledTimes(2);
 			expect(mockDbSupporter.findUnique).not.toHaveBeenCalled();
 		});
 	});

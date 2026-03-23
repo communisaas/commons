@@ -66,17 +66,16 @@ export interface TokenData {
 
 export interface DatabaseUser {
 	id: string;
-	email: string;
-	name: string | null;
 	avatar: string | null;
-	// NOTE: PII fields (street, city, state, zip, phone, congressional_district) removed
-	// per CYPHERPUNK-ARCHITECTURE.md - address data is encrypted in EncryptedDeliveryData
+	// PII fields (email, name) are encrypted — access via decryptUserPii()
+	encrypted_email: string;
+	encrypted_name: string | null;
+	email_hash: string;
 	is_verified?: boolean;
 	role?: string | null;
 	organization?: string | null;
 	location?: string | null;
 	connection?: string | null;
-	// NOTE: connection_details field removed - does not exist in schema
 	profile_completed_at?: Date | null;
 	profile_visibility?: string;
 	verification_method?: string | null;
@@ -279,50 +278,24 @@ export class OAuthCallbackHandler {
 			await db.account.update({
 				where: { id: existingAccount.id },
 				data: {
-					access_token: tokenData.accessToken,
-					refresh_token: tokenData.refreshToken,
 					expires_at: tokenData.expiresAt,
-					// Encrypted token columns (plaintext retained during transition)
-					encrypted_access_token: encAccessToken ?? undefined,
-					encrypted_refresh_token: encRefreshToken ?? undefined,
+					// Encrypted token columns (plaintext columns dropped in Cycle 6)
+					encrypted_access_token: encAccessToken ? JSON.parse(JSON.stringify(encAccessToken)) : undefined,
+					encrypted_refresh_token: encRefreshToken ? JSON.parse(JSON.stringify(encRefreshToken)) : undefined,
 					// ISSUE-002: Update email_verified status on each login
 					// (in case user verified their email since last login)
 					email_verified: emailVerified
 				}
 			});
 
-			// Progressive backfill: encrypt PII for pre-migration users on login
-			if (!existingAccount.user.encrypted_email) {
-				encryptUserPii(existingAccount.user.email, existingAccount.user.name, existingAccount.user.id)
-					.then((piiData) => {
-						if (piiData.encrypted_email) {
-							return db.user.update({
-								where: { id: existingAccount.user.id },
-								data: {
-									encrypted_email: piiData.encrypted_email,
-									encrypted_name: piiData.encrypted_name ?? undefined,
-									email_hash: piiData.email_hash ?? undefined
-								}
-							});
-						}
-					})
-					.catch((err) => {
-						console.warn('[OAuth] PII backfill failed (non-blocking):', err);
-					});
-			}
-
 			return existingAccount.user;
 		}
 
-		// Check for existing user by email_hash (C-3), with plaintext fallback during transition
+		// Check for existing user by email_hash (C-3) — post-backfill, all users have email_hash
 		const emailHash = await computeEmailHash(userData.email);
-		let existingUser = emailHash
+		const existingUser = emailHash
 			? await db.user.findUnique({ where: { email_hash: emailHash } })
 			: null;
-		if (!existingUser) {
-			// Fallback: pre-backfill users may not have email_hash yet
-			existingUser = await db.user.findUnique({ where: { email: userData.email } });
-		}
 
 		if (existingUser) {
 			// Link OAuth account to existing user
@@ -333,38 +306,16 @@ export class OAuthCallbackHandler {
 					type: 'oauth',
 					provider: config.provider,
 					provider_account_id: userData.id,
-					access_token: tokenData.accessToken,
-					refresh_token: tokenData.refreshToken,
 					expires_at: tokenData.expiresAt,
 					token_type: 'Bearer',
 					scope: config.scope,
-					// Encrypted token columns (plaintext retained during transition)
-					encrypted_access_token: encAccessToken ?? undefined,
-					encrypted_refresh_token: encRefreshToken ?? undefined,
+					// Encrypted token columns (plaintext columns dropped in Cycle 6)
+					encrypted_access_token: encAccessToken ? JSON.parse(JSON.stringify(encAccessToken)) : undefined,
+					encrypted_refresh_token: encRefreshToken ? JSON.parse(JSON.stringify(encRefreshToken)) : undefined,
 					// ISSUE-002: Track email verification status for Sybil resistance
 					email_verified: emailVerified
 				}
 			});
-
-			// Progressive backfill: encrypt PII for pre-migration users on login
-			if (!existingUser.encrypted_email) {
-				encryptUserPii(existingUser.email, existingUser.name, existingUser.id)
-					.then((piiData) => {
-						if (piiData.encrypted_email) {
-							return db.user.update({
-								where: { id: existingUser.id },
-								data: {
-									encrypted_email: piiData.encrypted_email,
-									encrypted_name: piiData.encrypted_name ?? undefined,
-									email_hash: piiData.email_hash ?? undefined
-								}
-							});
-						}
-					})
-					.catch((err) => {
-						console.warn('[OAuth] PII backfill failed (non-blocking):', err);
-					});
-			}
 
 			return existingUser;
 		}
@@ -386,17 +337,19 @@ export class OAuthCallbackHandler {
 			email_hash: emailHash
 		}));
 
+		// encrypted_email and email_hash are NOT NULL — must always be provided
+		const finalEncryptedEmail = piiData.encrypted_email ?? '';
+		const finalEmailHash = piiData.email_hash ?? emailHash ?? '';
+
 		// Create new user with OAuth account
 		const newUser = await db.user.create({
 			data: {
 				id: tempUserId,
-				email: userData.email,
-				name: userData.name,
 				avatar: userData.avatar,
-				// C-3: Encrypted PII (plaintext retained during transition)
-				encrypted_email: piiData.encrypted_email ?? undefined,
+				// C-3: Encrypted PII (plaintext columns dropped in Cycle 6)
+				encrypted_email: finalEncryptedEmail,
 				encrypted_name: piiData.encrypted_name ?? undefined,
-				email_hash: piiData.email_hash ?? emailHash ?? undefined,
+				email_hash: finalEmailHash,
 				// ISSUE-002: Apply trust_score based on email verification
 				trust_score: baseTrustScore,
 				reputation_tier: baseReputationTier,
@@ -406,14 +359,12 @@ export class OAuthCallbackHandler {
 						type: 'oauth',
 						provider: config.provider,
 						provider_account_id: userData.id,
-						access_token: tokenData.accessToken,
-						refresh_token: tokenData.refreshToken,
 						expires_at: tokenData.expiresAt,
 						token_type: 'Bearer',
 						scope: config.scope,
-						// Encrypted token columns (plaintext retained during transition)
-						encrypted_access_token: encAccessToken ?? undefined,
-						encrypted_refresh_token: encRefreshToken ?? undefined,
+						// Encrypted token columns (plaintext columns dropped in Cycle 6)
+						encrypted_access_token: encAccessToken ? JSON.parse(JSON.stringify(encAccessToken)) : undefined,
+						encrypted_refresh_token: encRefreshToken ? JSON.parse(JSON.stringify(encRefreshToken)) : undefined,
 						// ISSUE-002: Track email verification status for Sybil resistance
 						email_verified: emailVerified
 					}

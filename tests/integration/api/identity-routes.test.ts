@@ -39,8 +39,8 @@ beforeAll(async () => {
 });
 
 describe.runIf(dbAvailable)('Identity API Routes', () => {
-	let testUser: { id: string; email: string };
-	let testUser2: { id: string; email: string };
+	let testUser: { id: string; encrypted_email: string; email_hash: string };
+	let testUser2: { id: string; encrypted_email: string; email_hash: string };
 	let testSession: { id: string; userId: string };
 
 	beforeAll(async () => {
@@ -54,15 +54,17 @@ describe.runIf(dbAvailable)('Identity API Routes', () => {
 
 		testUser = await db.user.create({
 			data: {
-				email: `test-${uniqueSuffix}@example.com`,
-				name: 'Test User Identity'
+				encrypted_email: `encrypted-test-${uniqueSuffix}@example.com`,
+				email_hash: `hash-${uniqueSuffix}`,
+				encrypted_name: 'encrypted-Test User Identity'
 			}
 		});
 
 		testUser2 = await db.user.create({
 			data: {
-				email: `test-${uniqueSuffix}-2@example.com`,
-				name: 'Test User Identity 2'
+				encrypted_email: `encrypted-test-${uniqueSuffix}-2@example.com`,
+				email_hash: `hash-${uniqueSuffix}-2`,
+				encrypted_name: 'encrypted-Test User Identity 2'
 			}
 		});
 
@@ -93,14 +95,14 @@ describe.runIf(dbAvailable)('Identity API Routes', () => {
 
 	beforeEach(async () => {
 		// Ensure test users exist with robust retry logic for parallel test interference
-		const ensureUser = async (userId: string, email: string, name: string) => {
+		const ensureUser = async (userId: string, encryptedEmail: string, emailHash: string, encryptedName: string) => {
 			const maxRetries = 3;
 			for (let i = 0; i < maxRetries; i++) {
 				try {
 					await db.user.upsert({
 						where: { id: userId },
-						update: { email },
-						create: { id: userId, email, name }
+						update: { encrypted_email: encryptedEmail },
+						create: { id: userId, encrypted_email: encryptedEmail, email_hash: emailHash, encrypted_name: encryptedName }
 					});
 					return;
 				} catch {
@@ -109,13 +111,13 @@ describe.runIf(dbAvailable)('Identity API Routes', () => {
 					await db.encryptedDeliveryData.deleteMany({ where: { user_id: userId } });
 					await db.verificationSession.deleteMany({ where: { user_id: userId } });
 					await db.session.deleteMany({ where: { userId } });
-					await db.user.deleteMany({ where: { OR: [{ id: userId }, { email }] } });
+					await db.user.deleteMany({ where: { id: userId } });
 				}
 			}
 		};
 
-		await ensureUser(testUser.id, testUser.email, 'Test User Identity');
-		await ensureUser(testUser2.id, testUser2.email, 'Test User Identity 2');
+		await ensureUser(testUser.id, testUser.encrypted_email, testUser.email_hash, 'encrypted-Test User Identity');
+		await ensureUser(testUser2.id, testUser2.encrypted_email, testUser2.email_hash, 'encrypted-Test User Identity 2');
 
 		// Clear verification-related data between tests
 		await db.encryptedDeliveryData.deleteMany({
@@ -316,15 +318,15 @@ describe.runIf(dbAvailable)('Identity API Routes', () => {
 					// Try upsert first
 					await db.user.upsert({
 						where: { id: testUser.id },
-						update: { email: testUser.email },
-						create: { id: testUser.id, email: testUser.email, name: 'Test User Identity' }
+						update: { encrypted_email: testUser.encrypted_email },
+						create: { id: testUser.id, encrypted_email: testUser.encrypted_email, email_hash: testUser.email_hash, encrypted_name: 'encrypted-Test User Identity' }
 					});
 					break;
 				} catch {
 					if (i === maxRetries - 1) throw new Error('Failed to ensure test user exists');
 					// Clean up and retry
 					await db.encryptedDeliveryData.deleteMany({ where: { user_id: testUser.id } });
-					await db.user.deleteMany({ where: { OR: [{ id: testUser.id }, { email: testUser.email }] } });
+					await db.user.deleteMany({ where: { id: testUser.id } });
 				}
 			}
 
@@ -422,26 +424,26 @@ describe.runIf(dbAvailable)('Identity API Routes', () => {
 
 		beforeEach(async () => {
 			// Ensure users exist with robust retry logic for parallel test interference
-			const ensureUser = async (userId: string, email: string, name: string) => {
+			const ensureUser = async (userId: string, encryptedEmail: string, emailHash: string, encryptedName: string) => {
 				const maxRetries = 3;
 				for (let i = 0; i < maxRetries; i++) {
 					try {
 						await db.user.upsert({
 							where: { id: userId },
-							update: { email },
-							create: { id: userId, email, name }
+							update: { encrypted_email: encryptedEmail },
+							create: { id: userId, encrypted_email: encryptedEmail, email_hash: emailHash, encrypted_name: encryptedName }
 						});
 						return;
 					} catch {
 						if (i === maxRetries - 1) throw new Error(`Failed to ensure user ${userId} exists`);
 						await db.encryptedDeliveryData.deleteMany({ where: { user_id: userId } });
-						await db.user.deleteMany({ where: { OR: [{ id: userId }, { email }] } });
+						await db.user.deleteMany({ where: { id: userId } });
 					}
 				}
 			};
 
-			await ensureUser(testUser.id, testUser.email, 'Test User Identity');
-			await ensureUser(testUser2.id, testUser2.email, 'Test User Identity 2');
+			await ensureUser(testUser.id, testUser.encrypted_email, testUser.email_hash, 'encrypted-Test User Identity');
+			await ensureUser(testUser2.id, testUser2.encrypted_email, testUser2.email_hash, 'encrypted-Test User Identity 2');
 
 			// Clean up any existing blobs first to avoid unique constraint violation
 			await db.encryptedDeliveryData.deleteMany({

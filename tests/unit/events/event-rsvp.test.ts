@@ -16,6 +16,7 @@ const {
 	mockRateLimiterCheck,
 	mockDbEventFindUnique,
 	mockDbEventUpdate,
+	mockDbEventUpdateMany,
 	mockDbEventRsvpUpsert,
 	mockDbSupporterFindFirst,
 	mockDbSupporterFindUnique,
@@ -32,6 +33,7 @@ const {
 	mockRateLimiterCheck: vi.fn(),
 	mockDbEventFindUnique: vi.fn(),
 	mockDbEventUpdate: vi.fn(),
+	mockDbEventUpdateMany: vi.fn(),
 	mockDbEventRsvpUpsert: vi.fn(),
 	mockDbSupporterFindFirst: vi.fn(),
 	mockDbSupporterFindUnique: vi.fn(),
@@ -44,7 +46,7 @@ vi.mock('$lib/config/features', () => ({ FEATURES: mockFeatures }));
 
 vi.mock('$lib/core/db', () => ({
 	db: {
-		event: { findUnique: mockDbEventFindUnique, update: mockDbEventUpdate },
+		event: { findUnique: mockDbEventFindUnique, update: mockDbEventUpdate, updateMany: mockDbEventUpdateMany },
 		eventRsvp: { upsert: mockDbEventRsvpUpsert, count: mockDbEventRsvpCount },
 		supporter: { findFirst: mockDbSupporterFindFirst, findUnique: mockDbSupporterFindUnique, create: mockDbSupporterCreate }
 	}
@@ -169,6 +171,7 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 				...PUBLISHED_EVENT, capacity: 10, rsvpCount: 10, waitlistEnabled: true
 			})
 			.mockResolvedValueOnce({ rsvpCount: 11 });
+		mockDbEventUpdateMany.mockResolvedValue({ count: 0 });
 		mockDbEventRsvpUpsert.mockResolvedValue({
 			id: 'rsvp-2', status: 'WAITLISTED', createdAt: new Date()
 		});
@@ -199,8 +202,9 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 		expect(mockDbSupporterCreate).toHaveBeenCalledWith({
 			data: expect.objectContaining({
 				orgId: 'org-1',
-				email: 'new@test.com',
-				source: 'event_rsvp'
+				source: 'event_rsvp',
+				encrypted_email: expect.any(String),
+				email_hash: expect.any(String)
 			})
 		});
 	});

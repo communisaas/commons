@@ -141,7 +141,7 @@ export async function bindIdentityCommitment(
 		// look up the canonical user by commitment instead of throwing RecordNotFound
 		const currentUser = await tx.user.findUnique({
 			where: { id: currentUserId },
-			select: { id: true, email: true, identity_commitment: true }
+			select: { id: true, encrypted_email: true, identity_commitment: true }
 		});
 		if (!currentUser) {
 			const canonicalUser = await tx.user.findUnique({
@@ -156,8 +156,8 @@ export async function bindIdentityCommitment(
 
 		// Check if this commitment is already bound to another user
 		// FOR UPDATE lock prevents a concurrent transaction from binding the same commitment
-		const existingUsers = await tx.$queryRaw<Array<{ id: string; email: string }>>`
-			SELECT id, email FROM "user"
+		const existingUsers = await tx.$queryRaw<Array<{ id: string; encrypted_email: string }>>`
+			SELECT id, encrypted_email FROM "user"
 			WHERE identity_commitment = ${identityCommitment}
 			FOR UPDATE
 		`;
@@ -179,8 +179,8 @@ export async function bindIdentityCommitment(
 				requireReauth: true,
 				mergeDetails: {
 					accountsMoved: mergeResult.accountsMoved,
-					sourceEmail: currentUser.email || 'unknown',
-					targetEmail: existingUser.email
+					sourceEmail: currentUser.encrypted_email || 'unknown',
+					targetEmail: existingUser.encrypted_email
 				}
 			};
 		}

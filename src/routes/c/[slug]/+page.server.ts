@@ -219,12 +219,11 @@ export const actions: Actions = {
 				data: {
 					id: supId,
 					orgId: campaign.orgId,
-					email,
 					name,
 					postalCode,
 					source: 'campaign',
-					encrypted_email: eEnc ? JSON.stringify(eEnc) : undefined,
-					email_hash: eHash ?? undefined
+					encrypted_email: eEnc ? JSON.stringify(eEnc) : '',
+					email_hash: eHash ?? ''
 				}
 			});
 		} else {

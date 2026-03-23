@@ -178,8 +178,6 @@ describe('User PII Encryption', () => {
 			const pii = await encryptUserPii('carol@example.com', 'Carol', 'user-300');
 			const user = {
 				id: 'user-300',
-				email: 'carol@example.com',
-				name: 'Carol' as string | null,
 				encrypted_email: pii.encrypted_email,
 				encrypted_name: pii.encrypted_name
 			};
@@ -189,32 +187,24 @@ describe('User PII Encryption', () => {
 			expect(result.name).toBe('Carol');
 		});
 
-		it('falls back to plaintext when no encrypted data', async () => {
+		it('throws when encrypted_email is missing (backfill incomplete)', async () => {
 			const user = {
 				id: 'user-400',
-				email: 'dave@example.com',
-				name: 'Dave' as string | null,
 				encrypted_email: null,
 				encrypted_name: null
 			};
 
-			const result = await decryptUserPii(user);
-			expect(result.email).toBe('dave@example.com');
-			expect(result.name).toBe('Dave');
+			await expect(decryptUserPii(user)).rejects.toThrow('missing encrypted_email');
 		});
 
-		it('falls back to plaintext on decryption error', async () => {
+		it('throws on decryption error (no plaintext fallback)', async () => {
 			const user = {
 				id: 'user-500',
-				email: 'eve@example.com',
-				name: 'Eve' as string | null,
 				encrypted_email: '{"ciphertext":"invalid","iv":"invalid"}',
 				encrypted_name: null
 			};
 
-			const result = await decryptUserPii(user);
-			expect(result.email).toBe('eve@example.com');
-			expect(result.name).toBe('Eve');
+			await expect(decryptUserPii(user)).rejects.toThrow();
 		});
 	});
 

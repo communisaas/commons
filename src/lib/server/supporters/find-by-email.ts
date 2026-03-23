@@ -1,12 +1,8 @@
 /**
  * Supporter Email Lookup Helper (S-6)
  *
- * Looks up a supporter by (orgId, email) using email_hash first,
- * falling back to plaintext during the transition period.
- *
- * Once all supporters have email_hash backfilled, the plaintext
- * fallback can be removed and the @@unique([orgId, email]) constraint
- * can be dropped.
+ * Looks up a supporter by (orgId, email) using email_hash.
+ * Post-backfill: all supporters have email_hash — no plaintext fallback.
  */
 
 import { db as defaultDb } from '$lib/core/db';
@@ -16,11 +12,7 @@ type SupporterClient = { findUnique: typeof defaultDb.supporter.findUnique };
 type SupporterSelect = Parameters<typeof defaultDb.supporter.findUnique>[0]['select'];
 
 /**
- * Find a supporter by (orgId, email) using email_hash-first lookup.
- *
- * 1. Compute HMAC email_hash
- * 2. Try @@unique([orgId, email_hash])
- * 3. Fall back to @@unique([orgId, email]) for pre-backfill rows
+ * Find a supporter by (orgId, email) using email_hash lookup.
  *
  * @param orgId - Organization ID
  * @param email - Raw email (will be normalized internally)
@@ -38,19 +30,12 @@ export async function findSupporterByEmail(
 	const normalizedEmail = email.toLowerCase().trim();
 	const emailHash = await computeEmailHash(normalizedEmail);
 
-	// Primary: lookup by email_hash (privacy-preserving)
-	if (emailHash) {
-		const found = await supporter.findUnique({
-			where: { orgId_email_hash: { orgId, email_hash: emailHash } },
-			...(select ? { select } : {})
-		});
-		if (found) return found;
+	if (!emailHash) {
+		throw new Error('[PII] EMAIL_LOOKUP_KEY not set — cannot compute email_hash for lookup');
 	}
 
-	// Fallback: plaintext lookup (transition period — pre-backfill rows)
-	const found = await supporter.findUnique({
-		where: { orgId_email: { orgId, email: normalizedEmail } },
+	return supporter.findUnique({
+		where: { orgId_email_hash: { orgId, email_hash: emailHash } },
 		...(select ? { select } : {})
 	});
-	return found;
 }

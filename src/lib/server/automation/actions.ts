@@ -8,6 +8,7 @@ import { sendEmail } from '$lib/server/email/ses';
 import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import { dispatchTrigger } from './trigger';
 import { env } from '$env/dynamic/private';
+import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import type { EmailStep, TagStep, ConditionStep } from './types';
 
 /**
@@ -22,7 +23,7 @@ export async function processEmailAction(
 
 	const supporter = await db.supporter.findUnique({
 		where: { id: supporterId },
-		select: { email: true, name: true, emailStatus: true, orgId: true }
+		select: { id: true, encrypted_email: true, name: true, emailStatus: true, orgId: true }
 	});
 
 	if (!supporter) return { success: false, error: 'Supporter not found' };
@@ -39,8 +40,9 @@ export async function processEmailAction(
 	const fromEmail = env.EMAIL_FROM || 'noreply@commons.app';
 	const fromName = env.EMAIL_FROM_NAME || 'Commons';
 
+	const decryptedEmail = await tryDecryptSupporterEmail(supporter);
 	const result = await sendEmail(
-		supporter.email,
+		decryptedEmail,
 		fromEmail,
 		fromName,
 		step.emailSubject,
