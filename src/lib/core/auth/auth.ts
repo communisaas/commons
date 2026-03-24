@@ -147,14 +147,27 @@ export async function validateSession(
 		});
 	}
 
-	// C-3: Decrypt PII if encrypted columns exist, fallback to plaintext during transition
-	const pii = await decryptUserPii(user);
+	// C-3: Decrypt PII if encrypted columns exist, fallback to plaintext during transition.
+	// CRITICAL: Decryption failure must NOT invalidate the session. The user is authenticated
+	// (session token is valid) — PII is cosmetic. Failing here would silently null out
+	// locals.user in hooks.server.ts, breaking district lookup and recipient resolution.
+	let pii: { email: string; name: string | null };
+	try {
+		pii = await decryptUserPii(user);
+	} catch (err) {
+		console.error('[Auth] PII decryption failed — session preserved with masked PII:', {
+			userId: user.id,
+			hasEncryptedEmail: !!user.encrypted_email,
+			error: err instanceof Error ? err.message : String(err)
+		});
+		pii = { email: `user-${user.id.slice(0, 8)}@encrypted.local`, name: null };
+	}
 
 	return {
 		session,
 		user: {
 			...user,
-			// C-3: Use decrypted PII (or plaintext fallback)
+			// C-3: Use decrypted PII (or masked fallback on decryption failure)
 			email: pii.email,
 			name: pii.name,
 			// Ensure all new fields are explicitly included for type safety
