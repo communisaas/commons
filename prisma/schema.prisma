@@ -76,9 +76,9 @@ model User {
   district_hash     String? @map("district_hash") // HMAC-SHA256(district, DISTRICT_HASH_KEY) — rainbow-table resistant
 
   // === PII ENCRYPTION AT REST (C-3, scrubbed Cycle 6) ===
-  encrypted_email   String? @map("encrypted_email") // AES-256-GCM JSON { ciphertext, iv } — nullable until backfill complete
+  encrypted_email   String  @map("encrypted_email") // AES-256-GCM JSON { ciphertext, iv }
   encrypted_name    String? @map("encrypted_name")  // AES-256-GCM JSON { ciphertext, iv }
-  email_hash        String? @unique @map("email_hash") // HMAC-SHA256(normalize(email), EMAIL_LOOKUP_KEY) — nullable until backfill complete
+  email_hash        String  @unique @map("email_hash") // HMAC-SHA256(normalize(email), EMAIL_LOOKUP_KEY)
   encrypted_profile String? @map("encrypted_profile") // C-4: AES-256-GCM JSON blob { role, organization, location, connection }
 
   // === NEAR ACCOUNT (Paths 1 + 3: invisible account for non-crypto / non-EVM users) ===
@@ -915,7 +915,8 @@ model ResolvedContact {
 
 model SuppressedEmail {
   id          String   @id @default(cuid())
-  email       String   @unique
+  email       String   @unique // plaintext — retained during transition, drop after backfill
+  email_hash  String?  @unique @map("email_hash") // HMAC-SHA256 for lookup (nullable until backfill)
   domain      String
   reason      String // "smtp_invalid" | "smtp_disabled" | "full_inbox" | "bounce_report" | "dns_no_mx"
   source      String // "verification" | "user_report"
@@ -936,15 +937,18 @@ model SuppressedEmail {
 // ============================================================================
 
 model BounceReport {
-  id         String   @id @default(cuid())
-  email      String
-  domain     String
-  reportedBy String   @map("reported_by")
-  probeResult String? @map("probe_result") // "deliverable" | "undeliverable" | "risky" | "unknown" | "probe_failed"
-  resolved   Boolean  @default(false) // true once triaged (suppressed or dismissed)
-  createdAt  DateTime @default(now()) @map("created_at")
+  id              String   @id @default(cuid())
+  email           String   // plaintext — retained during transition, drop after backfill
+  email_hash      String?  @map("email_hash") // HMAC-SHA256 for lookup (nullable until backfill)
+  encrypted_email String?  @map("encrypted_email") // AES-256-GCM — for cron worker to decrypt for SMTP probe
+  domain          String
+  reportedBy      String   @map("reported_by")
+  probeResult     String?  @map("probe_result") // "deliverable" | "undeliverable" | "risky" | "unknown" | "probe_failed"
+  resolved        Boolean  @default(false) // true once triaged (suppressed or dismissed)
+  createdAt       DateTime @default(now()) @map("created_at")
 
   @@index([email, resolved])
+  @@index([email_hash, resolved])
   @@index([reportedBy])
   @@map("bounce_report")
 }
@@ -1982,8 +1986,11 @@ model Donation {
   campaignId  String  @map("campaign_id")
   supporterId String? @map("supporter_id")
 
-  email String
-  name  String
+  email String // plaintext — retained during transition, drop after backfill
+  name  String // plaintext — retained during transition, drop after backfill
+  email_hash      String?  @map("email_hash") // HMAC-SHA256 for lookup (nullable until backfill)
+  encrypted_email String?  @map("encrypted_email") // AES-256-GCM (nullable until backfill)
+  encrypted_name  String?  @map("encrypted_name") // AES-256-GCM (nullable until backfill)
 
   amountCents       Int     @map("amount_cents")
   currency          String  @default("usd")

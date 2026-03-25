@@ -32,9 +32,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		const { role, organization, location, connection } = parsed;
 
-		// C-4: Encrypt profile blob at rest (plaintext fields retained during transition)
+		// C-4: Encrypt profile blob at rest (fail-closed — no silent fallback)
 		const profileBlob = JSON.stringify({ role, organization: organization || null, location: location || null, connection });
-		const encProfile = await encryptPii(profileBlob, locals.user.id, 'profile').catch(() => null);
+		const encProfileRaw = await encryptPii(profileBlob, locals.user.id, 'profile');
+		if (!encProfileRaw) {
+			return json({ error: 'Profile encryption failed — PII_ENCRYPTION_KEY not configured' }, { status: 500 });
+		}
 
 		// Update user with profile information using proper fields
 		// Note: connection_details removed - field does not exist in schema
@@ -45,7 +48,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				organization: organization || null,
 				location: location || null,
 				connection,
-				encrypted_profile: encProfile ? JSON.stringify(encProfile) : undefined,
+				encrypted_profile: JSON.stringify(encProfileRaw),
 				profile_completed_at: new Date(),
 				updatedAt: new Date()
 			}

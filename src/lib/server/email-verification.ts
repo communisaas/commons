@@ -8,6 +8,7 @@
 
 import { prisma } from '$lib/core/db';
 import { checkEmail, checkEmailBatch, type ReacherResult } from '$lib/server/reacher-client';
+import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 
 export type EmailVerdict = 'deliverable' | 'undeliverable' | 'risky' | 'unknown';
 
@@ -57,11 +58,13 @@ function maskEmail(email: string): string {
 async function suppressEmail(email: string, reason: string, source: 'verification' | 'user_report', reacherData?: ReacherResult, reportedBy?: string): Promise<void> {
 	const at = email.indexOf('@');
 	const domain = at > 0 ? email.slice(at + 1).toLowerCase() : '';
+	const emailHash = await computeEmailHash(email).catch(() => null);
 	try {
 		await prisma.suppressedEmail.upsert({
 			where: { email },
 			create: {
 				email,
+				email_hash: emailHash,
 				domain,
 				reason,
 				source,
@@ -72,6 +75,7 @@ async function suppressEmail(email: string, reason: string, source: 'verificatio
 			update: {
 				reason,
 				source,
+				email_hash: emailHash,
 				reportedBy: reportedBy ?? null,
 				reacherData: reacherData ? (JSON.parse(JSON.stringify(reacherData)) as object) : undefined,
 				expiresAt: suppressionExpiry(source)
@@ -86,15 +90,19 @@ async function suppressEmail(email: string, reason: string, source: 'verificatio
  * Verify a single email address.
  */
 export async function verifyEmail(email: string): Promise<VerificationResult> {
-	// 1. Suppression check
+	// 1. Suppression check (prefer email_hash, fall back to plaintext during transition)
 	try {
-		const suppressed = await prisma.suppressedEmail.findUnique({ where: { email } });
+		const emailHash = await computeEmailHash(email).catch(() => null);
+		const suppressed = emailHash
+			? await prisma.suppressedEmail.findUnique({ where: { email_hash: emailHash } })
+				?? await prisma.suppressedEmail.findUnique({ where: { email } }) // fallback for pre-backfill rows
+			: await prisma.suppressedEmail.findUnique({ where: { email } });
 		if (suppressed) {
 			if (suppressed.expiresAt > new Date()) {
 				return { email, verdict: 'undeliverable', reason: suppressed.reason, source: 'suppression_list' };
 			}
 			// Expired — clean up and re-verify
-			await prisma.suppressedEmail.delete({ where: { email } }).catch(() => {});
+			await prisma.suppressedEmail.delete({ where: { id: suppressed.id } }).catch(() => {});
 		}
 	} catch (err) {
 		console.warn(`[email-verification] Suppression lookup failed for ${maskEmail(email)}:`, err);
@@ -244,9 +252,23 @@ export async function reportBounce(email: string, reportedBy: string): Promise<B
 	const domain = at > 0 ? email.slice(at + 1).toLowerCase() : '';
 	const protectedDomain = isProtectedDomain(domain);
 
-	// Store the report
+	// Compute email_hash + encrypted_email for at-rest protection
+	const reportId = crypto.randomUUID();
+	const [emailHash, encEmailRaw] = await Promise.all([
+		computeEmailHash(email).catch(() => null),
+		encryptPii(email, `bounce-report:${reportId}`)
+	]);
+
+	// Store the report (dual-write: plaintext + hash + encrypted)
 	await prisma.bounceReport.create({
-		data: { email, domain, reportedBy }
+		data: {
+			id: reportId,
+			email,
+			email_hash: emailHash,
+			encrypted_email: encEmailRaw ? JSON.stringify(encEmailRaw) : null,
+			domain,
+			reportedBy
+		}
 	});
 
 	// Count independent reporters (distinct users, unresolved)
@@ -262,11 +284,13 @@ export async function reportBounce(email: string, reportedBy: string): Promise<B
 		return { suppressed: false, protectedDomain: true, reportCount };
 	}
 
-	// Non-protected domains: suppress only if threshold met AND a prior probe confirmed undeliverable
+	// Non-protected domains: suppress only if threshold met AND a recent probe confirmed undeliverable
 	if (reportCount >= REPORT_THRESHOLD) {
-		// Check if ANY prior report for this email has a confirmed undeliverable probe
+		// Check for a recent undeliverable probe (within 90 days — stale probes are not reliable evidence)
+		const probeMaxAge = new Date();
+		probeMaxAge.setDate(probeMaxAge.getDate() - 90);
 		const probeCorroboration = await prisma.bounceReport.findFirst({
-			where: { email, probeResult: 'undeliverable' }
+			where: { email, probeResult: 'undeliverable', createdAt: { gte: probeMaxAge } }
 		});
 
 		if (probeCorroboration) {

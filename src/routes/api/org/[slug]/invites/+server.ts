@@ -134,18 +134,20 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		const token = generateToken();
 		const inviteId = crypto.randomUUID();
 
-		// Encrypt email for at-rest protection (dual-write: plaintext stays during transition)
-		const [encEmail, invEmailHash] = await Promise.all([
-			encryptPii(inv.email, 'org-invite:' + inviteId).catch(() => null),
+		// Encrypt email for at-rest protection (fail-closed — no empty-string poison pills)
+		const [encEmailRaw, invEmailHash] = await Promise.all([
+			encryptPii(inv.email, 'org-invite:' + inviteId),
 			computeEmailHash(inv.email)
 		]);
+		if (!encEmailRaw || !invEmailHash) throw error(500, 'Invite email encryption failed');
+		const encEmail = JSON.stringify(encEmailRaw);
 
 		await db.orgInvite.create({
 			data: {
 				id: inviteId,
 				orgId: org.id,
-				encrypted_email: encEmail ? JSON.stringify(encEmail) : '',
-				email_hash: invEmailHash ?? '',
+				encrypted_email: encEmail,
+				email_hash: invEmailHash,
 				role: inv.role,
 				token,
 				expiresAt,
@@ -188,14 +190,19 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		orderBy: { expiresAt: 'desc' }
 	});
 
-	const invites = await Promise.all(
-		rawInvites.map(async (inv) => ({
-			id: inv.id,
-			email: await decryptInviteEmail(inv),
-			role: inv.role,
-			expiresAt: inv.expiresAt
-		}))
+	const inviteResults = await Promise.all(
+		rawInvites.map(async (inv) => {
+			const email = await decryptInviteEmail(inv).catch(() => null);
+			if (!email) return null; // skip corrupted invite rows
+			return {
+				id: inv.id,
+				email,
+				role: inv.role,
+				expiresAt: inv.expiresAt
+			};
+		})
 	);
+	const invites = inviteResults.filter((i): i is NonNullable<typeof i> => i !== null);
 
 	return json({ invites });
 };
@@ -263,10 +270,12 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 		select: { id: true, encrypted_email: true, role: true, expiresAt: true }
 	});
 
+	const resendEmail = await decryptInviteEmail(updated).catch(() => '[decryption failed]');
+
 	return json({
 		invite: {
 			id: updated.id,
-			email: await decryptInviteEmail(updated),
+			email: resendEmail,
 			role: updated.role,
 			expiresAt: updated.expiresAt
 		}
