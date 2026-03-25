@@ -60,8 +60,12 @@ async function suppressEmail(email: string, reason: string, source: 'verificatio
 	const domain = at > 0 ? email.slice(at + 1).toLowerCase() : '';
 	const emailHash = await computeEmailHash(email).catch(() => null);
 	try {
+		// Prefer email_hash as upsert key (survives plaintext drop), fall back to plaintext
+		const upsertWhere = emailHash
+			? { email_hash: emailHash }
+			: { email };
 		await prisma.suppressedEmail.upsert({
-			where: { email },
+			where: upsertWhere,
 			create: {
 				email,
 				email_hash: emailHash,
@@ -136,18 +140,39 @@ export async function verifyEmailBatch(emails: string[]): Promise<Map<string, Ve
 	const unique = [...new Set(emails)].slice(0, MAX_BATCH_SIZE);
 	const toProbe: string[] = [];
 
-	// 1. Bulk suppression check
+	// 1. Bulk suppression check (hash-first with plaintext fallback during transition)
 	try {
+		const hashes = await Promise.all(unique.map(e => computeEmailHash(e).catch(() => null)));
+		const validHashes = hashes.filter((h): h is string => h !== null);
+
+		// Query both hash and plaintext to catch pre-backfill and post-backfill rows
 		const suppressed = await prisma.suppressedEmail.findMany({
-			where: { email: { in: unique } }
+			where: {
+				OR: [
+					...(validHashes.length > 0 ? [{ email_hash: { in: validHashes } }] : []),
+					{ email: { in: unique } }
+				]
+			}
 		});
+
+		// Build hash→email reverse map for result keying
+		const hashToEmail = new Map<string, string>();
+		for (let i = 0; i < unique.length; i++) {
+			if (hashes[i]) hashToEmail.set(hashes[i]!, unique[i]);
+		}
 
 		const now = new Date();
 		const expiredIds: string[] = [];
+		const seen = new Set<string>(); // dedup in case both hash and plaintext match same row
 
 		for (const s of suppressed) {
+			// Resolve the original email for this suppression entry
+			const email = s.email || (s.email_hash ? hashToEmail.get(s.email_hash) : null);
+			if (!email || seen.has(email)) continue;
+			seen.add(email);
+
 			if (s.expiresAt > now) {
-				results.set(s.email, { email: s.email, verdict: 'undeliverable', reason: s.reason, source: 'suppression_list' });
+				results.set(email, { email, verdict: 'undeliverable', reason: s.reason, source: 'suppression_list' });
 			} else {
 				expiredIds.push(s.id);
 			}
@@ -271,9 +296,14 @@ export async function reportBounce(email: string, reportedBy: string): Promise<B
 		}
 	});
 
+	// Build hash-first predicate for querying by email (survives plaintext drop)
+	const emailPredicate = emailHash
+		? { email_hash: emailHash }
+		: { email };
+
 	// Count independent reporters (distinct users, unresolved)
 	const distinctReporters = await prisma.bounceReport.findMany({
-		where: { email, resolved: false },
+		where: { ...emailPredicate, resolved: false },
 		distinct: ['reportedBy'],
 		select: { reportedBy: true }
 	});
@@ -290,13 +320,13 @@ export async function reportBounce(email: string, reportedBy: string): Promise<B
 		const probeMaxAge = new Date();
 		probeMaxAge.setDate(probeMaxAge.getDate() - 90);
 		const probeCorroboration = await prisma.bounceReport.findFirst({
-			where: { email, probeResult: 'undeliverable', createdAt: { gte: probeMaxAge } }
+			where: { ...emailPredicate, probeResult: 'undeliverable', createdAt: { gte: probeMaxAge } }
 		});
 
 		if (probeCorroboration) {
 			await suppressEmail(email, 'bounce_report', 'user_report', undefined, reportedBy);
 			await prisma.bounceReport.updateMany({
-				where: { email, resolved: false },
+				where: { ...emailPredicate, resolved: false },
 				data: { resolved: true }
 			}).catch(() => {});
 			return { suppressed: true, protectedDomain: false, reportCount };
@@ -331,6 +361,9 @@ export async function processPendingBounceReports(batchSize = 6): Promise<{ proc
 	});
 
 	// 2. Find unresolved reports that need probing (null OR prior 'unknown' for retry)
+	// NOTE: distinct uses plaintext 'email' during transition (pre-backfill rows have null email_hash,
+	// and Prisma distinct treats all NULLs as one value, collapsing different emails into one row).
+	// Switch to distinct: ['email_hash'] as part of T21-drop pre-requisites after backfill.
 	const pending = await prisma.bounceReport.findMany({
 		where: {
 			resolved: false,
@@ -358,12 +391,17 @@ export async function processPendingBounceReports(batchSize = 6): Promise<{ proc
 
 	for (const report of uniqueEmails) {
 		processed++;
+		// Build hash-first predicate for this report's email
+		const predicate = report.email_hash
+			? { email_hash: report.email_hash }
+			: { email: report.email };
+
 		const probeResult = probeResults.get(report.email);
 		const verdict = probeResult ? mapVerdict(probeResult).verdict : 'unknown';
 
 		// Annotate ALL unresolved reports for this email with the probe result
 		await prisma.bounceReport.updateMany({
-			where: { email: report.email, resolved: false },
+			where: { ...predicate, resolved: false },
 			data: { probeResult: verdict }
 		});
 
@@ -377,7 +415,7 @@ export async function processPendingBounceReports(batchSize = 6): Promise<{ proc
 				report.reportedBy
 			);
 			await prisma.bounceReport.updateMany({
-				where: { email: report.email, resolved: false },
+				where: { ...predicate, resolved: false },
 				data: { resolved: true }
 			});
 			suppressed++;
@@ -386,7 +424,7 @@ export async function processPendingBounceReports(batchSize = 6): Promise<{ proc
 		// If probe confirms deliverable → auto-resolve (dismiss reports)
 		if (verdict === 'deliverable') {
 			await prisma.bounceReport.updateMany({
-				where: { email: report.email, resolved: false },
+				where: { ...predicate, resolved: false },
 				data: { resolved: true }
 			});
 		}

@@ -108,14 +108,15 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 		}
 	}
 
-	// Encrypt donation PII (dual-write: plaintext retained during transition)
+	// Encrypt donation PII (fail-closed: match supporter path above)
 	const donationId = crypto.randomUUID();
 	const normalizedDonorEmail = email.toLowerCase();
 	const [donorEmailHash, donorEncEmail, donorEncName] = await Promise.all([
-		computeEmailHash(normalizedDonorEmail).catch(() => null),
-		encryptPii(normalizedDonorEmail, `donation:${donationId}`).catch(() => null),
-		encryptPii(name.trim(), `donation:${donationId}`, 'name').catch(() => null)
+		computeEmailHash(normalizedDonorEmail),
+		encryptPii(normalizedDonorEmail, `donation:${donationId}`),
+		encryptPii(name.trim(), `donation:${donationId}`, 'name')
 	]);
+	if (!donorEmailHash || !donorEncEmail) throw error(500, 'Donation PII encryption failed');
 
 	// Create donation record (pending)
 	const donation = await db.donation.create({
@@ -127,7 +128,7 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 			email: normalizedDonorEmail,
 			name: name.trim(),
 			email_hash: donorEmailHash,
-			encrypted_email: donorEncEmail ? JSON.stringify(donorEncEmail) : null,
+			encrypted_email: JSON.stringify(donorEncEmail),
 			encrypted_name: donorEncName ? JSON.stringify(donorEncName) : null,
 			amountCents,
 			currency: campaign.donationCurrency || 'usd',

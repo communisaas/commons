@@ -270,7 +270,10 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 		select: { id: true, encrypted_email: true, role: true, expiresAt: true }
 	});
 
-	const resendEmail = await decryptInviteEmail(updated).catch(() => '[decryption failed]');
+	const resendEmail = await decryptInviteEmail(updated).catch(() => null);
+	if (!resendEmail) {
+		throw error(500, 'Invite PII decryption failed — cannot confirm resend');
+	}
 
 	return json({
 		invite: {

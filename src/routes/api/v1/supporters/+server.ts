@@ -97,10 +97,11 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const items = raw.slice(0, limit);
 	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
 
+	let decryptionFailures = 0;
 	const dataResults = await Promise.all(items.map(async (s) => {
 		const sup = s as typeof s & { tags: Array<{ tag: { id: string; name: string } }> };
 		const email = await tryDecryptSupporterEmail(sup as { id: string; encrypted_email: string }).catch(() => null);
-		if (!email) return null; // skip rows with corrupted encryption
+		if (!email) { decryptionFailures++; return null; }
 		return {
 			id: sup.id,
 			email,
@@ -119,7 +120,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	}));
 	const data = dataResults.filter((d): d is NonNullable<typeof d> => d !== null);
 
-	return apiOk(data, { cursor: nextCursor, hasMore, total });
+	return apiOk(data, { cursor: nextCursor, hasMore, total, decryptionFailures });
 };
 
 export const POST: RequestHandler = async ({ request }) => {

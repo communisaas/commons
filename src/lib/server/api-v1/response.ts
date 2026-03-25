@@ -10,6 +10,7 @@ export interface ApiEnvelope<T = unknown> {
 		cursor?: string | null;
 		hasMore?: boolean;
 		total?: number;
+		decryptionFailures?: number;
 	};
 	error?: undefined;
 }
