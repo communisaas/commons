@@ -37,7 +37,7 @@ type Recipient = {
 	postalCode: string | null;
 	verified: boolean;
 	identityCommitment: string | null;
-	encrypted_email: string | null;
+	encrypted_email: string;
 };
 
 const RECIPIENT_SELECT = {
@@ -241,7 +241,10 @@ async function compileAndSendToRecipient(
 	blast: { fromEmail: string; fromName: string; subject: string; bodyHtml: string; orgId: string },
 	verificationBlock: VerificationBlock
 ): Promise<{ success: boolean; error?: string }> {
-	const decryptedEmail = await tryDecryptSupporterEmail(recipient);
+	const decryptedEmail = await tryDecryptSupporterEmail(recipient).catch(() => null);
+	if (!decryptedEmail) {
+		return { success: false, error: `decrypt_failed:${recipient.id}` };
+	}
 	const { firstName, lastName } = splitName(recipient.name);
 	const verificationStatus = deriveVerificationStatus(
 		recipient.verified,

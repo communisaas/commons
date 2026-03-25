@@ -97,11 +97,13 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const items = raw.slice(0, limit);
 	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
 
-	const data = await Promise.all(items.map(async (s) => {
+	const dataResults = await Promise.all(items.map(async (s) => {
 		const sup = s as typeof s & { tags: Array<{ tag: { id: string; name: string } }> };
+		const email = await tryDecryptSupporterEmail(sup as { id: string; encrypted_email: string }).catch(() => null);
+		if (!email) return null; // skip rows with corrupted encryption
 		return {
 			id: sup.id,
-			email: await tryDecryptSupporterEmail(sup as { id: string; encrypted_email?: string | null }),
+			email,
 			name: sup.name,
 			postalCode: sup.postalCode,
 			country: sup.country,
@@ -115,6 +117,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			tags: sup.tags.map((st) => ({ id: st.tag.id, name: st.tag.name }))
 		};
 	}));
+	const data = dataResults.filter((d): d is NonNullable<typeof d> => d !== null);
 
 	return apiOk(data, { cursor: nextCursor, hasMore, total });
 };
@@ -167,13 +170,15 @@ export const POST: RequestHandler = async ({ request }) => {
 		}));
 	}
 
-	// C-5: Encrypt supporter email at rest (fire-and-forget on failure)
+	// C-5: Encrypt supporter email at rest (fail-closed — no empty-string poison pills)
 	const normalizedEmail = email.toLowerCase();
 	const supporterId = crypto.randomUUID();
-	const [emailHash, encEmail] = await Promise.all([
-		computeEmailHash(normalizedEmail).catch(() => null),
-		encryptPii(normalizedEmail, `supporter:${supporterId}`).catch(() => null)
+	const [emailHash, encEmailRaw] = await Promise.all([
+		computeEmailHash(normalizedEmail),
+		encryptPii(normalizedEmail, `supporter:${supporterId}`)
 	]);
+	if (!emailHash || !encEmailRaw) return apiError('INTERNAL', 'Supporter email encryption failed', 500);
+	const encEmail = JSON.stringify(encEmailRaw);
 
 	const supporter = await db.supporter.create({
 		data: {
@@ -184,8 +189,8 @@ export const POST: RequestHandler = async ({ request }) => {
 			country: country || 'US',
 			phone: phone || null,
 			source: source || 'api',
-			encrypted_email: encEmail ? JSON.stringify(encEmail) : '',
-			email_hash: emailHash ?? '',
+			encrypted_email: encEmail,
+			email_hash: emailHash,
 			customFields: customFields ? JSON.parse(JSON.stringify(customFields)) : undefined,
 			tags: tagConnects.length > 0 ? { create: tagConnects } : undefined
 		},

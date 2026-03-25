@@ -40,7 +40,10 @@ export async function processEmailAction(
 	const fromEmail = env.EMAIL_FROM || 'noreply@commons.app';
 	const fromName = env.EMAIL_FROM_NAME || 'Commons';
 
-	const decryptedEmail = await tryDecryptSupporterEmail(supporter);
+	const decryptedEmail = await tryDecryptSupporterEmail(supporter).catch(() => null);
+	if (!decryptedEmail) {
+		return { success: false, error: `decrypt_failed:${supporter.id}` };
+	}
 	const result = await sendEmail(
 		decryptedEmail,
 		fromEmail,

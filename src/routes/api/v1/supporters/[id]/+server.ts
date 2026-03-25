@@ -28,7 +28,8 @@ export const GET: RequestHandler = async ({ request, params }) => {
 
 	if (!supporter) return apiError('NOT_FOUND', 'Supporter not found', 404);
 
-	const decryptedEmail = await tryDecryptSupporterEmail(supporter);
+	const decryptedEmail = await tryDecryptSupporterEmail(supporter).catch(() => null);
+	if (!decryptedEmail) return apiError('INTERNAL', `Supporter ${params.id} PII decryption failed`, 500);
 
 	return apiOk({
 		id: supporter.id,

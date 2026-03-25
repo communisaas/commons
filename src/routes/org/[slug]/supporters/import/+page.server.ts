@@ -338,10 +338,12 @@ export const actions: Actions = {
 								// Create new supporter
 								// C-5: Encrypt email at rest
 								const supId = crypto.randomUUID();
-								const [eHash, eEnc] = await Promise.all([
-									computeEmailHash(mapped.email).catch(() => null),
-									encryptPii(mapped.email, `supporter:${supId}`).catch(() => null)
+								const [eHash, eEncRaw] = await Promise.all([
+									computeEmailHash(mapped.email),
+									encryptPii(mapped.email, `supporter:${supId}`)
 								]);
+								if (!eHash || !eEncRaw) throw new Error('Supporter email encryption failed');
+								const eEnc = JSON.stringify(eEncRaw);
 								const supporter = await tx.supporter.create({
 									data: {
 										id: supId,
@@ -354,8 +356,8 @@ export const actions: Actions = {
 										smsStatus: mapped.smsStatus,
 										source: 'csv',
 										importedAt: new Date(),
-										encrypted_email: eEnc ? JSON.stringify(eEnc) : '',
-										email_hash: eHash ?? ''
+										encrypted_email: eEnc,
+										email_hash: eHash
 									}
 								});
 

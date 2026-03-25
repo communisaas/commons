@@ -247,7 +247,10 @@ export async function verifyPasskeyAuth(
 	]);
 
 	// C-3: Decrypt PII from encrypted columns (post-backfill — no plaintext fallback)
-	const pii = await decryptUserPii(user);
+	const pii = await decryptUserPii(user).catch(() => null);
+	if (!pii) {
+		throw new Error(`[Passkey] PII decryption failed for user ${user.id} — login cannot complete`);
+	}
 
 	return {
 		session,

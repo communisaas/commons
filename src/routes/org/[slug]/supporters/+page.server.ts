@@ -109,27 +109,33 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
 	const hasMore = rawSupporters.length > PAGE_SIZE;
 	const sliced = rawSupporters.slice(0, PAGE_SIZE);
-	const supporters = await Promise.all(
-		sliced.map(async (s) => ({
-			id: s.id,
-			email: await tryDecryptSupporterEmail(s as { id: string; encrypted_email?: string | null }),
-			name: s.name,
-			postalCode: s.postalCode,
-			country: s.country,
-			phone: s.phone,
-			identityVerified: !!(s.identityCommitment && s.verified),
-			verified: s.verified,
-			emailStatus: s.emailStatus,
-			source: s.source,
-			createdAt: s.createdAt.toISOString(),
-			tags: s.tags.map((st: { tag: { id: string; name: string } }) => ({
-				id: st.tag.id,
-				name: st.tag.name
-			}))
-		}))
+	const supporterResults = await Promise.all(
+		sliced.map(async (s) => {
+			const email = await tryDecryptSupporterEmail(s as { id: string; encrypted_email: string }).catch(() => null);
+			if (!email) return null; // skip rows with corrupted encryption — don't crash entire page
+			return {
+				id: s.id,
+				email,
+					name: s.name,
+				postalCode: s.postalCode,
+				country: s.country,
+				phone: s.phone,
+				identityVerified: !!(s.identityCommitment && s.verified),
+				verified: s.verified,
+				emailStatus: s.emailStatus,
+				source: s.source,
+				createdAt: s.createdAt.toISOString(),
+				tags: s.tags.map((st: { tag: { id: string; name: string } }) => ({
+					id: st.tag.id,
+					name: st.tag.name
+				}))
+			};
+		})
 	);
+	const supporters = supporterResults.filter((s): s is NonNullable<typeof s> => s !== null);
 
-	const nextCursor = hasMore ? supporters[supporters.length - 1]?.id ?? null : null;
+	// Use raw slice for cursor (not filtered) to avoid pagination desync from skipped decrypt failures
+	const nextCursor = hasMore ? sliced[sliced.length - 1]?.id ?? null : null;
 
 	// Imported = total in org minus verified minus postal-resolved
 	const totalInOrg = statusCounts.reduce((sum, row) => sum + row._count.id, 0);

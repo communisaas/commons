@@ -393,12 +393,14 @@ async function processPeopleBatch(
 				updated++;
 			} else {
 				// Create new supporter
-				// C-5: Encrypt email at rest
+				// C-5: Encrypt email at rest (fail-closed — no empty-string poison pills)
 				const supId = crypto.randomUUID();
-				const [eHash, eEnc] = await Promise.all([
-					computeEmailHash(mapped.email).catch(() => null),
-					encryptPii(mapped.email, `supporter:${supId}`).catch(() => null)
+				const [eHash, eEncRaw] = await Promise.all([
+					computeEmailHash(mapped.email),
+					encryptPii(mapped.email, `supporter:${supId}`)
 				]);
+				if (!eHash || !eEncRaw) throw new Error('Supporter email encryption failed');
+				const eEnc = JSON.stringify(eEncRaw);
 				const supporter = await prisma.supporter.create({
 					data: {
 						id: supId,
@@ -410,8 +412,8 @@ async function processPeopleBatch(
 						emailStatus: mapped.emailStatus,
 						source: 'action_network',
 						importedAt: new Date(),
-						encrypted_email: eEnc ? JSON.stringify(eEnc) : '',
-						email_hash: eHash ?? '',
+						encrypted_email: eEnc,
+						email_hash: eHash,
 						// eslint-disable-next-line @typescript-eslint/no-explicit-any
 						customFields: Object.keys(mapped.customFields).length > 0 ? (mapped.customFields as any) : undefined
 					}
