@@ -101,11 +101,8 @@ async function handleOptions(email: string): Promise<Response> {
 		console.error('[passkey/authenticate] Options generation failed:', err);
 
 		if (err instanceof Error) {
-			if (err.message.includes('User not found')) {
-				throw error(404, 'No account found with that email');
-			}
-			if (err.message.includes('no registered passkey')) {
-				throw error(404, 'This account has no registered passkey. Log in with OAuth and register a passkey first.');
+			if (err.message.includes('User not found') || err.message.includes('no registered passkey')) {
+				throw error(400, 'Invalid email or passkey');
 			}
 			throw error(500, `Failed to generate authentication options: ${err.message}`);
 		}
@@ -158,11 +155,8 @@ async function handleVerification(
 			if (message.includes('expired')) {
 				throw error(410, 'Authentication session expired');
 			}
-			if (message.includes('No user found')) {
-				throw error(404, 'No account found for this passkey. Register a passkey first.');
-			}
-			if (message.includes('no stored public key')) {
-				throw error(500, 'Account passkey data is corrupted');
+			if (message.includes('No user found') || message.includes('no stored public key')) {
+				throw error(400, 'Invalid email or passkey');
 			}
 			if (message.includes('verification failed')) {
 				throw error(401, 'Passkey authentication failed');

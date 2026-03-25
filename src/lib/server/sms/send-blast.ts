@@ -6,6 +6,7 @@
  */
 import { db } from '$lib/core/db';
 import { sendSms } from './twilio';
+import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 
 /**
  * Send an SMS blast to all matching supporters with phone numbers.
@@ -26,14 +27,43 @@ export async function sendSmsBlast(blastId: string): Promise<void> {
 	if (!blast) return;
 
 	try {
+		// Check SMS billing quota before sending
+		const usage = await getOrgUsage(blast.orgId);
+		const limits = isOverLimit(usage);
+		if (limits.sms) {
+			await db.smsBlast.update({
+				where: { id: blastId },
+				data: { status: 'failed' }
+			});
+			console.warn(`[SMS] Blast ${blastId} failed: org ${blast.orgId} over SMS quota (${usage.smsSent}/${usage.limits.maxSms})`);
+			return;
+		}
+
+		// Count recipients to check if this blast would exceed the quota
+		const recipientFilter = {
+			orgId: blast.orgId,
+			phone: { not: null },
+			smsStatus: 'subscribed' as const // TCPA: only send to explicitly consented supporters
+		};
+
+		const estimatedRecipients = await db.supporter.count({
+			where: recipientFilter
+		});
+
+		if (usage.smsSent + estimatedRecipients > usage.limits.maxSms) {
+			await db.smsBlast.update({
+				where: { id: blastId },
+				data: { status: 'failed' }
+			});
+			const remaining = Math.max(0, usage.limits.maxSms - usage.smsSent);
+			console.warn(`[SMS] Blast ${blastId} failed: would send ~${estimatedRecipients} messages but org ${blast.orgId} only has ${remaining} SMS remaining (${usage.smsSent}/${usage.limits.maxSms})`);
+			return;
+		}
+
 		// Find supporters with phone numbers in this org
 		// TODO: Apply recipientFilter when segment query builder supports phone filtering
 		const supporters = await db.supporter.findMany({
-			where: {
-				orgId: blast.orgId,
-				phone: { not: null },
-				smsStatus: 'subscribed' // TCPA: only send to explicitly consented supporters
-			},
+			where: recipientFilter,
 			select: { id: true, phone: true, name: true }
 		});
 

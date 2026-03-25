@@ -63,6 +63,17 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// Engagement tier: district-verified = 2, postal = 1, none = 0
 	const engagementTier = districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? 2 : postalCode ? 1 : 0;
 
+	// Compute email hash + encrypt for storage
+	const emailLower = email.toLowerCase();
+	const rsvpId = crypto.randomUUID();
+	const [emailHash, encryptedEmail] = await Promise.all([
+		computeEmailHash(emailLower),
+		encryptPii(emailLower, `event-rsvp:${rsvpId}`).then(e => JSON.stringify(e))
+	]);
+
+	if (!emailHash) throw error(500, 'Email processing failed');
+	if (!encryptedEmail) throw error(500, 'Email encryption failed');
+
 	// Determine RSVP status — atomic capacity claim to prevent TOCTOU oversubscription
 	let rsvpStatus: 'GOING' | 'WAITLISTED' = 'GOING';
 	let claimedSlot = false;
@@ -89,30 +100,31 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 		if (existing) {
 			supporterId = existing.id;
 		} else {
-			// C-5: Encrypt email at rest
+			// Encrypt email at rest
 			const supId = crypto.randomUUID();
 			const [eHash, eEnc] = await Promise.all([
-				computeEmailHash(email.toLowerCase()).catch(() => null),
-				encryptPii(email.toLowerCase(), `supporter:${supId}`).catch(() => null)
+				computeEmailHash(emailLower),
+				encryptPii(emailLower, `supporter:${supId}`).then(e => JSON.stringify(e))
 			]);
+			if (!eHash || !eEnc) throw error(500, 'Supporter email encryption failed');
 			const supporter = await db.supporter.create({
 				data: {
 					id: supId,
 					orgId: event.orgId,
 					name: name.trim(),
 					source: 'event_rsvp',
-					encrypted_email: eEnc ? JSON.stringify(eEnc) : '',
-					email_hash: eHash ?? ''
+					encrypted_email: eEnc,
+					email_hash: eHash
 				}
 			});
 			supporterId = supporter.id;
 		}
 	}
 
-	// Upsert RSVP (dedup on eventId + email)
+	// Upsert RSVP (dedup on eventId + email_hash)
 	const rsvp = await db.eventRsvp.upsert({
 		where: {
-			eventId_email: { eventId: event.id, email: email.toLowerCase() }
+			eventId_email_hash: { eventId: event.id, email_hash: emailHash }
 		},
 		update: {
 			status: 'GOING',
@@ -123,8 +135,10 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 			supporterId
 		},
 		create: {
+			id: rsvpId,
 			eventId: event.id,
-			email: email.toLowerCase(),
+			encrypted_email: encryptedEmail,
+			email_hash: emailHash,
 			name: name.trim(),
 			status: rsvpStatus,
 			guestCount: typeof guestCount === 'number' && guestCount >= 0 ? guestCount : 0,

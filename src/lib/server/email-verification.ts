@@ -184,28 +184,192 @@ export async function verifyEmailBatch(emails: string[]): Promise<Map<string, Ve
 }
 
 /**
- * Report a bounce from a user. Suppresses the email for 1 year.
- * Unlike suppressEmail (which swallows errors for graceful degradation in the
- * verification pipeline), this throws on DB failure so the endpoint can return 500.
+ * Threshold for independent user reports before auto-suppression.
+ * Count-only suppression also requires at least one probe confirming
+ * "undeliverable" across any prior report for this email.
  */
-export async function reportBounce(email: string, reportedBy: string): Promise<void> {
+const REPORT_THRESHOLD = 3;
+
+/**
+ * Protected government domains — never auto-suppressed by user reports alone.
+ * These require admin review regardless of report count or probe result.
+ */
+const PROTECTED_DOMAINS = new Set([
+	// Broad government TLDs — catches all subdomains (e.g., state.gov, ca.gov, ny.gov)
+	'gov', 'mil',
+	// UK government (gov.uk covers parliament.uk subdomains too)
+	'gov.uk', 'parliament.uk', 'parliament.scot', 'senedd.wales',
+	// Canada
+	'gc.ca', 'parl.gc.ca',
+	// Australia
+	'gov.au',
+	// New Zealand
+	'govt.nz',
+	// EU (future-proofing)
+	'europa.eu',
+]);
+
+/** Check if an email domain is a protected government domain */
+function isProtectedDomain(domain: string): boolean {
+	const lower = domain.toLowerCase();
+	for (const pd of PROTECTED_DOMAINS) {
+		if (lower === pd || lower.endsWith('.' + pd)) return true;
+	}
+	return false;
+}
+
+export interface BounceReportResult {
+	/** Whether the email was suppressed as a result of this report */
+	suppressed: boolean;
+	/** Whether the email is on a protected domain (requires admin review) */
+	protectedDomain: boolean;
+	/** How many independent users have reported this email */
+	reportCount: number;
+}
+
+/**
+ * Report a bounce from a user. Does NOT immediately suppress.
+ *
+ * Flow:
+ * 1. Record the report in BounceReport (triage table), return immediately.
+ * 2. SMTP probe is NOT run in the request path — it is deferred to
+ *    `processPendingBounceReports()` which runs on a scheduled worker.
+ * 3. Protected government domains (.gov, .parliament.uk, etc.) are NEVER
+ *    auto-suppressed — they require admin review.
+ *
+ * Throws on DB failure so the endpoint can return 500.
+ */
+export async function reportBounce(email: string, reportedBy: string): Promise<BounceReportResult> {
 	const at = email.indexOf('@');
 	const domain = at > 0 ? email.slice(at + 1).toLowerCase() : '';
-	await prisma.suppressedEmail.upsert({
-		where: { email },
-		create: {
-			email,
-			domain,
-			reason: 'bounce_report',
-			source: 'user_report',
-			reportedBy,
-			expiresAt: suppressionExpiry('user_report')
-		},
-		update: {
-			reason: 'bounce_report',
-			source: 'user_report',
-			reportedBy,
-			expiresAt: suppressionExpiry('user_report')
-		}
+	const protectedDomain = isProtectedDomain(domain);
+
+	// Store the report
+	await prisma.bounceReport.create({
+		data: { email, domain, reportedBy }
 	});
+
+	// Count independent reporters (distinct users, unresolved)
+	const distinctReporters = await prisma.bounceReport.findMany({
+		where: { email, resolved: false },
+		distinct: ['reportedBy'],
+		select: { reportedBy: true }
+	});
+	const reportCount = distinctReporters.length;
+
+	// Protected domains: never auto-suppress, always require admin review
+	if (protectedDomain) {
+		return { suppressed: false, protectedDomain: true, reportCount };
+	}
+
+	// Non-protected domains: suppress only if threshold met AND a prior probe confirmed undeliverable
+	if (reportCount >= REPORT_THRESHOLD) {
+		// Check if ANY prior report for this email has a confirmed undeliverable probe
+		const probeCorroboration = await prisma.bounceReport.findFirst({
+			where: { email, probeResult: 'undeliverable' }
+		});
+
+		if (probeCorroboration) {
+			await suppressEmail(email, 'bounce_report', 'user_report', undefined, reportedBy);
+			await prisma.bounceReport.updateMany({
+				where: { email, resolved: false },
+				data: { resolved: true }
+			}).catch(() => {});
+			return { suppressed: true, protectedDomain: false, reportCount };
+		}
+	}
+
+	// Not enough evidence — report stored, probe will run asynchronously
+	return { suppressed: false, protectedDomain: false, reportCount };
+}
+
+/** Max age before unresolved reports are auto-resolved (prevents permanent cap exhaustion) */
+const STALE_REPORT_DAYS = 30;
+
+/**
+ * Process pending bounce reports — runs off the request path (scheduled worker/cron).
+ * Probes unresolved reports, annotates with result, and suppresses if confirmed.
+ *
+ * Retries reports where probe returned 'unknown' (transient Reacher failure).
+ * Uses batch probing with concurrency for throughput.
+ *
+ * @param batchSize Max unique emails to probe per invocation (default 6 —
+ *   constrained by CF Workers: 6 emails / concurrency 3 = 2 rounds * 15s timeout = 30s worst case)
+ */
+export async function processPendingBounceReports(batchSize = 6): Promise<{ processed: number; suppressed: number; staleResolved: number }> {
+	// 1. Auto-resolve stale reports (prevents permanent cap exhaustion)
+	const staleThreshold = new Date();
+	staleThreshold.setDate(staleThreshold.getDate() - STALE_REPORT_DAYS);
+
+	const { count: staleResolved } = await prisma.bounceReport.updateMany({
+		where: { resolved: false, createdAt: { lt: staleThreshold } },
+		data: { resolved: true, probeResult: 'expired' }
+	});
+
+	// 2. Find unresolved reports that need probing (null OR prior 'unknown' for retry)
+	const pending = await prisma.bounceReport.findMany({
+		where: {
+			resolved: false,
+			OR: [
+				{ probeResult: null },
+				{ probeResult: 'unknown' },
+			],
+		},
+		orderBy: { createdAt: 'asc' },
+		take: batchSize * 3, // Over-fetch to get enough distinct emails
+		distinct: ['email'],
+	});
+
+	const uniqueEmails = pending.slice(0, batchSize);
+	if (uniqueEmails.length === 0) {
+		return { processed: 0, suppressed: 0, staleResolved };
+	}
+
+	// 3. Batch probe with concurrency (uses existing checkEmailBatch)
+	const emailList = uniqueEmails.map(r => r.email);
+	const probeResults = await checkEmailBatch(emailList);
+
+	let processed = 0;
+	let suppressed = 0;
+
+	for (const report of uniqueEmails) {
+		processed++;
+		const probeResult = probeResults.get(report.email);
+		const verdict = probeResult ? mapVerdict(probeResult).verdict : 'unknown';
+
+		// Annotate ALL unresolved reports for this email with the probe result
+		await prisma.bounceReport.updateMany({
+			where: { email: report.email, resolved: false },
+			data: { probeResult: verdict }
+		});
+
+		// If probe confirms undeliverable AND domain is not protected → suppress
+		if (verdict === 'undeliverable' && !isProtectedDomain(report.domain)) {
+			await suppressEmail(
+				report.email,
+				probeResult ? mapVerdict(probeResult).reason : 'bounce_report',
+				'user_report',
+				probeResult ?? undefined,
+				report.reportedBy
+			);
+			await prisma.bounceReport.updateMany({
+				where: { email: report.email, resolved: false },
+				data: { resolved: true }
+			});
+			suppressed++;
+		}
+
+		// If probe confirms deliverable → auto-resolve (dismiss reports)
+		if (verdict === 'deliverable') {
+			await prisma.bounceReport.updateMany({
+				where: { email: report.email, resolved: false },
+				data: { resolved: true }
+			});
+		}
+
+		// 'unknown' and 'risky' stay unresolved for retry on next worker run
+		// (but will be auto-resolved by stale TTL after STALE_REPORT_DAYS)
+	}
+
+	return { processed, suppressed, staleResolved };
 }

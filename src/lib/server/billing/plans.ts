@@ -12,6 +12,7 @@ export interface PlanLimits {
 	stripePriceId: string;
 	maxVerifiedActions: number;
 	maxEmails: number;
+	maxSms: number;
 	maxSeats: number;
 	maxTemplatesMonth: number;
 }
@@ -24,6 +25,7 @@ export const PLANS: Record<string, PlanLimits> = {
 		stripePriceId: '',
 		maxVerifiedActions: 100,
 		maxEmails: 1_000,
+		maxSms: 0,
 		maxSeats: 2,
 		maxTemplatesMonth: 10
 	},
@@ -36,6 +38,7 @@ export const PLANS: Record<string, PlanLimits> = {
 		},
 		maxVerifiedActions: 1_000,
 		maxEmails: 20_000,
+		maxSms: 1_000,
 		maxSeats: 5,
 		maxTemplatesMonth: 100
 	},
@@ -48,6 +51,7 @@ export const PLANS: Record<string, PlanLimits> = {
 		},
 		maxVerifiedActions: 5_000,
 		maxEmails: 100_000,
+		maxSms: 10_000,
 		maxSeats: 10,
 		maxTemplatesMonth: 500
 	},
@@ -60,6 +64,7 @@ export const PLANS: Record<string, PlanLimits> = {
 		},
 		maxVerifiedActions: 10_000,
 		maxEmails: 250_000,
+		maxSms: 50_000,
 		maxSeats: 25,
 		maxTemplatesMonth: 1_000
 	}

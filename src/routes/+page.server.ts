@@ -1,6 +1,7 @@
 import type { PageServerLoad } from './$types';
 import { db } from '$lib/core/db';
 import { TEMPLATE_LIST_SELECT } from '$lib/core/db/template-select';
+import { extractRecipientEmails } from '$lib/types/templateConfig';
 import type { UnknownRecord } from '$lib/types/any-replacements';
 import { z } from 'zod';
 import { FEATURES } from '$lib/config/features';
@@ -158,14 +159,14 @@ export const load: PageServerLoad = async ({ depends }) => {
 				},
 				delivery_config: template.delivery_config,
 				cwc_config: template.cwc_config,
-				recipient_config: null,
+				recipient_config: template.recipient_config,
 				campaign_id: template.campaign_id,
 				status: template.status,
 				is_public: template.is_public,
 				jurisdictions: template.jurisdictions || [],
 				scope: (scopesByTemplateId.get(template.id) ?? [])[0] || null,
 				scopes: scopesByTemplateId.get(template.id) ?? [],
-				recipientEmails: [],
+				recipientEmails: extractRecipientEmails(template.recipient_config),
 				createdAt: template.createdAt.toISOString(),
 			};
 		});

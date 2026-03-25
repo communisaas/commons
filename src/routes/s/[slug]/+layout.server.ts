@@ -107,8 +107,8 @@ export const load: LayoutServerLoad = async ({ params, locals: _locals, request 
 		},
 
 		delivery_config: template.delivery_config,
-		recipient_config: null,
-		recipientEmails: [],
+		recipient_config: template.recipient_config,
+		recipientEmails: extractRecipientEmails(template.recipient_config),
 		author: template.user
 			? await (async () => {
 					const u = template.user!;

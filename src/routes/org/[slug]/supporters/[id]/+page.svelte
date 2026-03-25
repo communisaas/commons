@@ -110,6 +110,39 @@
 			<span class="text-xs text-text-tertiary">Phone</span>
 			<span class="text-sm text-text-primary">{data.supporter.phone || '\u2014'}</span>
 		</div>
+		{#if data.supporter.phone}
+			<div class="px-5 py-4 flex items-center justify-between">
+				<span class="text-xs text-text-tertiary">SMS Status</span>
+				<div class="flex items-center gap-2">
+					{#if data.supporter.smsStatus === 'stopped'}
+						<span class="inline-block w-1.5 h-1.5 rounded-full bg-red-500"></span>
+						<span class="text-sm text-text-primary">Stopped</span>
+						<span class="text-xs text-text-quaternary">(via STOP keyword)</span>
+					{:else if canEdit}
+						<form method="POST" action="?/updateSmsStatus" use:enhance class="flex items-center gap-2">
+							<select
+								name="smsStatus"
+								class="rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-1.5 text-xs text-text-secondary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
+							>
+								{#each ['none', 'subscribed', 'unsubscribed'] as status}
+									<option value={status} selected={data.supporter.smsStatus === status}>
+										{status.charAt(0).toUpperCase() + status.slice(1)}
+									</option>
+								{/each}
+							</select>
+							<button
+								type="submit"
+								class="rounded-lg bg-surface-overlay px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-border-strong transition-colors"
+							>
+								Update
+							</button>
+						</form>
+					{:else}
+						<span class="text-sm text-text-primary capitalize">{data.supporter.smsStatus}</span>
+					{/if}
+				</div>
+			</div>
+		{/if}
 		<div class="px-5 py-4 flex items-center justify-between">
 			<span class="text-xs text-text-tertiary">Source</span>
 			<span class="text-sm text-text-primary">{sourceLabel(data.supporter.source)}</span>

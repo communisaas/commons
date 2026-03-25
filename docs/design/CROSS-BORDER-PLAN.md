@@ -434,7 +434,63 @@ The UK and Australia can follow as fast-follows once the Canada pipeline proves 
 
 ---
 
-## 8. Open Questions
+## 8. File-Level Implementation Paths (Commons Codebase)
+
+### 8.1 Schema Changes
+
+| File | Change | Lines |
+|------|--------|-------|
+| `prisma/schema.prisma` | Add `country_code String @default("US")` to `Organization` | ~1 line near existing model |
+| `prisma/schema.prisma` | Add `applicable_countries String[] @default([])` to `OrgNetwork` | ~1 line near existing model |
+
+### 8.2 Runtime — District Resolution
+
+| File | Change |
+|------|--------|
+| `src/lib/core/shadow-atlas/ipfs-store.ts` | Change `manifestCache` from single object to `Map<string, ManifestCacheEntry>`. LRU keys already country-aware (`${country}/${parentCell}`). |
+| `src/lib/core/shadow-atlas/client.ts` | Add `country` parameter to `lookupDistrict()`. Route through chunked IPFS path when atlas data available for country. |
+| `src/lib/core/shadow-atlas/browser-client.ts` | Add `country` parameter to `lookupDistrictsFromBrowser()`. Load country-specific manifest CIDs from `VITE_IPFS_CID_ROOT`. |
+| `src/lib/core/geographic/resolvers/index.ts` | `resolveDistrict()` — add `resolveDistrictFromAtlas(country, lat, lng)` path that uses chunked IPFS instead of external API resolvers. External APIs become fallbacks. |
+| `src/lib/core/geographic/resolvers/canada-postal.ts` | Existing stub → keep as fallback for postal code lookups when atlas unavailable |
+| `src/lib/core/geographic/resolvers/uk-postcodes.ts` | Existing stub → keep as fallback |
+| `src/lib/core/geographic/resolvers/australia-aec.ts` | Existing stub → keep as fallback |
+
+### 8.3 Verification Packet
+
+| File | Change |
+|------|--------|
+| `src/lib/server/campaigns/verification.ts` | `computeVerificationPacket()` — add `countries` breakdown: group actions by org country, compute per-country GDS/tier/district stats. Add `countryCount` and inter-country GDS. |
+| `src/lib/server/campaigns/report.ts` | `renderReportHtml()` — add country breakdown section when `countryCount > 1`. Per-country action counts, districts, inter-country GDS label. |
+
+### 8.4 Organization Country
+
+| File | Change |
+|------|--------|
+| `src/routes/org/new/+page.svelte` | Add country selector dropdown (ISO 3166-1 alpha-2) to org creation form |
+| `src/routes/org/[slug]/settings/+page.svelte` | Show country in org settings (read-only after creation, or editable with migration) |
+| `src/routes/org/[slug]/networks/[networkId]/+page.server.ts` | Add per-country supporter count breakdown via `groupBy` + org country join |
+| `src/routes/org/[slug]/networks/[networkId]/+page.svelte` | Render country breakdown in network stats |
+
+### 8.5 Pipeline Scripts (voter-protocol or shadow-atlas repos)
+
+| File | Change |
+|------|--------|
+| `scripts/build-chunked-mapping.ts` | Add `--country` flag. Country-specific boundary loader, geographic extent, slot registry. |
+| `scripts/export-officials.ts` | Country-specific importer functions (CA: ourcommons.ca, GB: Parliament API, AU: aph.gov.au) |
+| `scripts/validate-build.ts` | Per-country cell count floors and officials completeness checks |
+
+### 8.6 Test Plan
+
+| Test File | What to Test |
+|-----------|-------------|
+| `tests/unit/geographic/cross-border-resolution.test.ts` (new) | `resolveDistrictFromAtlas('CA', lat, lng)` returns Canadian riding |
+| `tests/unit/campaigns/cross-border-verification.test.ts` (new) | `computeVerificationPacket()` with multi-country actions produces country breakdown |
+| `tests/unit/campaigns/cross-border-report.test.ts` (new) | `renderReportHtml()` with country breakdown renders per-country sections |
+| `tests/integration/shadow-atlas/multi-country.test.ts` (new) | End-to-end: load CA manifest → resolve cell → get officials |
+
+---
+
+## 9. Open Questions
 
 1. **Provincial/state legislatures.** When do we add sub-national layers? Recommendation: defer until at least one country has federal-level adoption. Sub-national data is country-specific and multiplies maintenance burden.
 2. **Bilingual support (CA).** French-language riding names and MP data. The pipeline stores both — UI localization is a separate concern.

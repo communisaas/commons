@@ -14,6 +14,7 @@
 export interface EncryptedPii {
 	ciphertext: string; // base64
 	iv: string; // base64
+	aad?: boolean; // true if encrypted with AAD binding (post-R28)
 }
 
 const encoder = new TextEncoder();
@@ -122,13 +123,19 @@ async function derivePiiKey(masterKey: CryptoKey, userId: string): Promise<Crypt
 /**
  * Encrypt a PII field (email or name) for database storage.
  *
+ * Uses AES-256-GCM with Additional Authenticated Data (AAD) to bind ciphertext
+ * to a specific entity and field, preventing column-confusion and cross-entity
+ * ciphertext relocation attacks.
+ *
  * @param plaintext - The raw PII string
  * @param userId - User ID for per-user key derivation
+ * @param fieldName - Field identifier for AAD binding (e.g. 'email', 'name')
  * @returns Encrypted PII object, or null if encryption unavailable
  */
 export async function encryptPii(
 	plaintext: string,
-	userId: string
+	userId: string,
+	fieldName: string = 'email'
 ): Promise<EncryptedPii | null> {
 	const masterKeyHex = getPiiEncryptionKey();
 	if (!masterKeyHex) {
@@ -146,26 +153,37 @@ export async function encryptPii(
 	const userKey = await derivePiiKey(masterKey, userId);
 
 	const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV for AES-GCM
+	// AAD binds ciphertext to entity+field, preventing column/entity swaps
+	const aad = encoder.encode(`${userId}:${fieldName}`);
 	const ciphertextBuf = await crypto.subtle.encrypt(
-		{ name: 'AES-GCM', iv },
+		{ name: 'AES-GCM', iv, additionalData: aad },
 		userKey,
 		encoder.encode(plaintext)
 	);
 
 	return {
 		ciphertext: bytesToBase64(new Uint8Array(ciphertextBuf)),
-		iv: bytesToBase64(iv)
+		iv: bytesToBase64(iv),
+		aad: true
 	};
 }
 
 /**
  * Decrypt a PII field from database storage.
  *
- * @param encrypted - The encrypted PII object (ciphertext + IV)
+ * Supports both legacy (no AAD) and new (AAD-bound) ciphertexts.
+ * The `aad` flag in the encrypted object determines whether to use AAD.
+ *
+ * @param encrypted - The encrypted PII object (ciphertext + IV + optional AAD flag)
  * @param userId - User ID for per-user key derivation
+ * @param fieldName - Field identifier for AAD verification (must match encryption)
  * @returns Decrypted plaintext string
  */
-export async function decryptPii(encrypted: EncryptedPii, userId: string): Promise<string> {
+export async function decryptPii(
+	encrypted: EncryptedPii,
+	userId: string,
+	fieldName: string = 'email'
+): Promise<string> {
 	const masterKeyHex = getPiiEncryptionKey();
 	if (!masterKeyHex) {
 		throw new Error(
@@ -180,8 +198,14 @@ export async function decryptPii(encrypted: EncryptedPii, userId: string): Promi
 	const ciphertext = base64ToBytes(encrypted.ciphertext);
 	const iv = base64ToBytes(encrypted.iv);
 
+	// Use AAD for post-R28 data; legacy data has no AAD binding
+	const params: AesGcmParams = { name: 'AES-GCM', iv };
+	if (encrypted.aad) {
+		params.additionalData = encoder.encode(`${userId}:${fieldName}`);
+	}
+
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- TS lib mismatch: Uint8Array<ArrayBufferLike> vs BufferSource
-	const plaintextBuf = await (crypto.subtle.decrypt as any)({ name: 'AES-GCM', iv }, userKey, ciphertext);
+	const plaintextBuf = await (crypto.subtle.decrypt as any)(params, userKey, ciphertext);
 	return decoder.decode(plaintextBuf);
 }
 
@@ -191,11 +215,12 @@ export async function decryptPii(encrypted: EncryptedPii, userId: string): Promi
  */
 export async function tryDecryptPii(
 	encrypted: EncryptedPii | null | undefined,
-	userId: string
+	userId: string,
+	fieldName: string = 'email'
 ): Promise<string | null> {
 	if (!encrypted?.ciphertext || !encrypted?.iv) return null;
 	try {
-		return await decryptPii(encrypted, userId);
+		return await decryptPii(encrypted, userId, fieldName);
 	} catch {
 		return null;
 	}
@@ -221,8 +246,8 @@ export async function encryptUserPii(
 	userId: string
 ): Promise<UserPiiEncrypted> {
 	const [encEmail, encName, emailHash] = await Promise.all([
-		encryptPii(email, userId),
-		name ? encryptPii(name, userId) : Promise.resolve(null),
+		encryptPii(email, userId, 'email'),
+		name ? encryptPii(name, userId, 'name') : Promise.resolve(null),
 		computeEmailHash(email)
 	]);
 
@@ -245,23 +270,17 @@ export async function decryptUserPii(
 	}
 ): Promise<{ email: string; name: string | null }> {
 	if (!user.encrypted_email) {
-		// Pre-backfill user: read plaintext from DB (column still exists, just not in schema)
-		const { db } = await import('$lib/core/db');
-		const rows = await (db as unknown as { $queryRaw: (sql: TemplateStringsArray, ...values: unknown[]) => Promise<{ email: string; name: string | null }[]> })
-			.$queryRaw`SELECT email, name FROM "user" WHERE id = ${user.id} LIMIT 1`;
-		if (rows[0]) {
-			return { email: rows[0].email, name: rows[0].name };
-		}
-		throw new Error(`[PII] User ${user.id} missing encrypted_email and plaintext fallback`);
+		// Post-Cycle 6: plaintext columns are dropped. No fallback path exists.
+		throw new Error(`[PII] User ${user.id} missing encrypted_email — backfill incomplete or encryption failed at creation`);
 	}
 
 	const encEmail: EncryptedPii = JSON.parse(user.encrypted_email);
-	const decryptedEmail = await decryptPii(encEmail, user.id);
+	const decryptedEmail = await decryptPii(encEmail, user.id, 'email');
 
 	let decryptedName: string | null = null;
 	if (user.encrypted_name) {
 		const encName: EncryptedPii = JSON.parse(user.encrypted_name);
-		decryptedName = await decryptPii(encName, user.id);
+		decryptedName = await decryptPii(encName, user.id, 'name');
 	}
 
 	return { email: decryptedEmail, name: decryptedName };
@@ -285,7 +304,7 @@ export async function tryDecryptSupporterEmail(supporter: {
 	}
 
 	const enc: EncryptedPii = JSON.parse(supporter.encrypted_email);
-	return await decryptPii(enc, 'supporter:' + supporter.id);
+	return await decryptPii(enc, 'supporter:' + supporter.id, 'email');
 }
 
 // =============================================================================

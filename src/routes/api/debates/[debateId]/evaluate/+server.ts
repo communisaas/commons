@@ -4,6 +4,7 @@ import { env } from '$env/dynamic/private';
 import { prisma } from '$lib/core/db';
 import { escalateToGovernance, readChainResolution } from '$lib/core/blockchain/debate-market-client';
 import { verifyCronSecret } from '$lib/server/cron-auth';
+import { FEATURES } from '$lib/config/features';
 
 // ── Rate limiting ────────────────────────────────────────────────────────
 // Guards against accidental double-triggers and runaway cron jobs.
@@ -59,6 +60,10 @@ function checkRateLimit(debateId: string): string | null {
  * in the voter-protocol monorepo, not the commons workspace.
  */
 export const POST: RequestHandler = async ({ params, request }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
+
 	const { debateId } = params;
 
 	// Auth: operator-only via CRON_SECRET header

@@ -52,6 +52,7 @@ describe('PLANS', () => {
 			priceCents: 0,
 			maxVerifiedActions: 100,
 			maxEmails: 1_000,
+			maxSms: 0,
 			maxSeats: 2,
 			maxTemplatesMonth: 10
 		});
@@ -60,8 +61,16 @@ describe('PLANS', () => {
 	it('coalition tier should have the highest limits', () => {
 		expect(PLANS.coalition.maxVerifiedActions).toBe(10_000);
 		expect(PLANS.coalition.maxEmails).toBe(250_000);
+		expect(PLANS.coalition.maxSms).toBe(50_000);
 		expect(PLANS.coalition.maxSeats).toBe(25);
 		expect(PLANS.coalition.maxTemplatesMonth).toBe(1_000);
+	});
+
+	it('should have increasing SMS limits across tiers', () => {
+		const limits = PLAN_ORDER.map((slug) => PLANS[slug].maxSms);
+		for (let i = 1; i < limits.length; i++) {
+			expect(limits[i]).toBeGreaterThan(limits[i - 1]);
+		}
 	});
 });
 

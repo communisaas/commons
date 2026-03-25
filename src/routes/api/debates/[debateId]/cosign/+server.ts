@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { verifyTransactionAsync } from '$lib/core/blockchain/tx-verifier';
 import { safeUserId } from '$lib/core/server/security';
+import { FEATURES } from '$lib/config/features';
 
 /** Returns true for a valid Ethereum address (0x-prefixed, 42 hex chars). */
 function isValidEthAddress(addr: unknown): addr is string {
@@ -27,6 +28,10 @@ function isValidEthAddress(addr: unknown): addr is string {
  * vars are not set.
  */
 export const POST: RequestHandler = async ({ params, request, locals }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
+
 	const { debateId } = params;
 
 	// Check authentication

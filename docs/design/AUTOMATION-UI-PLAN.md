@@ -361,7 +361,56 @@ This eliminates the TRIGGER_LABELS duplication across `WorkflowCard`, `new/+page
 
 ---
 
-## 9. Out of Scope (Deferred)
+## 9. Test Plan
+
+### 9.1 Unit Tests
+
+| Test File | What to Test |
+|-----------|-------------|
+| `tests/unit/automation/workflow-builder.test.ts` | `transformSteps()`: delay unit conversion, condition field validation, email subject/body mapping |
+| `tests/unit/automation/workflow-builder.test.ts` | `reverseTransformSteps()`: delayMinutes → best-fit unit, stepIndex → readable labels |
+| `tests/unit/automation/trigger-selector.test.ts` | Trigger type dropdown renders all 6 types; tag trigger shows tag selector; campaign trigger shows campaign dropdown |
+| `tests/unit/automation/step-card.test.ts` | Each step type renders correct fields; condition step shows field/operator/value with correct backend-aligned options |
+
+### 9.2 Integration Tests
+
+| Test | What to Verify |
+|------|---------------|
+| Create workflow end-to-end | Fill builder → save → verify API receives correctly transformed steps |
+| Condition branching | Set then/else step indices → verify thenStepIndex/elseStepIndex in saved data |
+| Delay conversion | Enter "2 hours" → verify API receives delayMinutes: 120 |
+| Validation | Submit empty steps → verify 400 with error message |
+
+### 9.3 Existing Test Coverage
+
+The 4 existing test files (`workflow-crud.test.ts`, `workflow-engine.test.ts`, etc.) cover backend CRUD and execution. The new tests cover the **builder transform layer** — the gap between UI-friendly types and backend types.
+
+---
+
+## 10. Accessibility
+
+### 10.1 Keyboard Navigation
+
+- **Step chain**: Tab navigates between step cards; Enter opens/focuses the step editor
+- **Step reorder**: Up/Down buttons are focusable and announce new position via `aria-live`
+- **Add step**: Focusable dashed button at chain bottom; new step receives focus after insertion
+- **Condition pills**: "If true" and "If false" dropdowns are standard `<select>` elements (not custom dropdowns)
+
+### 10.2 Screen Reader Announcements
+
+- Step cards: `role="group"` with `aria-label="Step {n}: {type label}"`
+- Trigger card: `role="group"` with `aria-label="Trigger: {type label}"`
+- Connector lines: `aria-hidden="true"` (decorative)
+- Reorder: `aria-live="polite"` region announces "Step moved to position {n}"
+- Add step: announces "Step {n} added: {type}"
+
+### 10.3 Color Contrast
+
+All step type accent colors (blue, emerald, red, amber, purple) meet WCAG AA contrast ratio (4.5:1) against the `bg-surface-base` card background. The border-left accent is decorative — step type is also conveyed via icon and label text.
+
+---
+
+## 11. Out of Scope (Deferred)
 
 - **Drag-to-reorder** steps — keep Up/Down buttons for now
 - **Rich text email editor** — plain textarea is sufficient; rich editor is an emails feature, not automation-specific

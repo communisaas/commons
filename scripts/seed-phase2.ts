@@ -926,7 +926,8 @@ async function main() {
 			data: {
 				eventId: EVENT_IDS.townHall,
 				supporterId: supporterIds[ORG_IDS.climatAction][i],
-				email: s.email,
+				encrypted_email: s.email,
+				email_hash: sha256(s.email.toLowerCase()),
 				name: s.name,
 				status: rsvpStatuses[i % rsvpStatuses.length],
 				guestCount: i % 3,
@@ -942,7 +943,8 @@ async function main() {
 				data: {
 					eventId: EVENT_IDS.webinar,
 					supporterId: i < 6 ? supporterIds[ORG_IDS.voterRights][i % supporterIds[ORG_IDS.voterRights].length] : null,
-					email: s.email,
+					encrypted_email: s.email,
+					email_hash: sha256(s.email.toLowerCase()),
 					name: s.name,
 					status: 'GOING',
 					engagementTier: i,
@@ -1209,10 +1211,15 @@ async function main() {
 	];
 
 	for (const dm of intlDMs) {
+		const nameParts = dm.name.split(' ');
+		const firstName = nameParts.slice(0, -1).join(' ');
+		const lastName = nameParts[nameParts.length - 1];
 		await db.decisionMaker.create({
 			data: {
 				type: 'legislator',
 				name: dm.name,
+				firstName,
+				lastName,
 				jurisdiction: dm.jurisdiction,
 				jurisdictionLevel: 'international',
 				district: dm.district,

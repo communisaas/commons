@@ -428,6 +428,46 @@ function createDebateState() {
 				}
 			});
 
+			// Debate activity events (argument/participant changes)
+			source.addEventListener('debate:argument', (e: MessageEvent) => {
+				try {
+					const data = JSON.parse(e.data);
+					if (currentDebate && typeof data.argumentCount === 'number') {
+						currentDebate = {
+							...currentDebate,
+							argumentCount: data.argumentCount,
+							uniqueParticipants: data.uniqueParticipants ?? currentDebate.uniqueParticipants
+						};
+					}
+				} catch { /* skip */ }
+			});
+
+			source.addEventListener('debate:position', (e: MessageEvent) => {
+				try {
+					const data = JSON.parse(e.data);
+					if (currentDebate && typeof data.uniqueParticipants === 'number') {
+						currentDebate = {
+							...currentDebate,
+							uniqueParticipants: data.uniqueParticipants
+						};
+					}
+				} catch { /* skip */ }
+			});
+
+			// Org settlement event
+			source.addEventListener('debate:settled', (e: MessageEvent) => {
+				try {
+					const data = JSON.parse(e.data);
+					if (currentDebate) {
+						currentDebate = {
+							...currentDebate,
+							status: 'resolved',
+							winningStance: data.winningStance ?? currentDebate.winningStance
+						};
+					}
+				} catch { /* skip */ }
+			});
+
 			source.onerror = () => {
 				// Reconnect after 5s on error
 				this.disconnectSSE();

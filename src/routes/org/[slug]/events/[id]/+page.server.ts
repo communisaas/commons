@@ -2,6 +2,8 @@ import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
 import { maskEmail } from '$lib/server/org/mask';
+import { tryDecryptPii } from '$lib/core/crypto/user-pii-encryption';
+import type { EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -31,7 +33,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 				select: {
 					id: true,
 					name: true,
-					email: true,
+					encrypted_email: true,
 					status: true,
 					districtHash: true,
 					engagementTier: true,
@@ -69,17 +71,27 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			checkinCode: ['editor', 'admin', 'owner'].includes(membership.role) ? event.checkinCode : null,
 			requireVerification: event.requireVerification
 		},
-		rsvps: event.rsvps.map((r) => ({
-			id: r.id,
-			name: r.name,
-			email: r.email ? maskEmail(r.email) : null,
-			status: r.status,
-			districtHash: r.districtHash ? r.districtHash.slice(0, 8) + '...' : null,
-			engagementTier: r.engagementTier,
-			createdAt: r.createdAt.toISOString(),
-			checkedIn: !!r.attendance,
-			verified: r.attendance?.verified ?? false,
-			checkedInAt: r.attendance?.checkedInAt?.toISOString() ?? null
+		rsvps: await Promise.all(event.rsvps.map(async (r) => {
+			let email: string | null = null;
+			if (r.encrypted_email) {
+				try {
+					const enc: EncryptedPii = JSON.parse(r.encrypted_email);
+					const plain = await tryDecryptPii(enc, `event-rsvp:${r.id}`);
+					if (plain) email = maskEmail(plain);
+				} catch { /* corrupted or pre-migration row */ }
+			}
+			return {
+				id: r.id,
+				name: r.name,
+				email,
+				status: r.status,
+				districtHash: r.districtHash ? r.districtHash.slice(0, 8) + '...' : null,
+				engagementTier: r.engagementTier,
+				createdAt: r.createdAt.toISOString(),
+				checkedIn: !!r.attendance,
+				verified: r.attendance?.verified ?? false,
+				checkedInAt: r.attendance?.checkedInAt?.toISOString() ?? null
+			};
 		}))
 	};
 };

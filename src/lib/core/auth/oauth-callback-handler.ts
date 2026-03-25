@@ -345,8 +345,10 @@ export class OAuthCallbackHandler {
 		const newUser = await db.user.create({
 			data: {
 				id: tempUserId,
+				email: userData.email,
+				name: userData.name,
 				avatar: userData.avatar,
-				// C-3: Encrypted PII (plaintext columns dropped in Cycle 6)
+				// C-3: Encrypted PII (plaintext fallback kept until column drop migration runs)
 				encrypted_email: finalEncryptedEmail,
 				encrypted_name: piiData.encrypted_name ?? undefined,
 				email_hash: finalEmailHash,

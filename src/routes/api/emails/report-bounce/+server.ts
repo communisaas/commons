@@ -3,11 +3,16 @@
  *
  * POST /api/emails/report-bounce
  *
- * Allows authenticated users to report a bounced email address.
- * Suppresses the address for 1 year so it won't appear in future results.
+ * Allows verified users (trust_tier >= 2) to report a suspected bounce.
+ * The report is triaged — NOT immediately suppressed. An async worker probes
+ * the email via SMTP; suppression only occurs when:
+ *   (a) SMTP probe confirms undeliverable (non-protected domains only), OR
+ *   (b) 3+ independent verified users report + at least one probe corroborates
  *
- * Rate limited: 5 req/min per user (rate-limiter.ts pattern '/api/emails/')
- * Per-user cap: 20 active bounce reports max (prevents mass suppression)
+ * Protected government domains (.gov, .parliament.uk, etc.) are NEVER
+ * auto-suppressed — they always require admin review.
+ *
+ * Rate limited: 5 req/min (external middleware), 10 active reports per user cap
  */
 
 import type { RequestHandler } from './$types';
@@ -16,15 +21,26 @@ import { prisma } from '$lib/core/db';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_EMAIL_LENGTH = 254; // RFC 5321
-const MAX_ACTIVE_REPORTS_PER_USER = 20;
+const MAX_ACTIVE_REPORTS_PER_USER = 10;
+const MIN_TRUST_TIER = 2; // Require address-verified identity
 
 export const POST: RequestHandler = async (event) => {
 	const session = event.locals.session;
-	if (!session?.userId) {
+	const user = event.locals.user;
+
+	if (!session?.userId || !user) {
 		return new Response(JSON.stringify({ error: 'Authentication required' }), {
 			status: 401,
 			headers: { 'Content-Type': 'application/json' }
 		});
+	}
+
+	// Trust tier gate — only verified users can submit reports
+	if ((user.trust_tier ?? 0) < MIN_TRUST_TIER) {
+		return new Response(
+			JSON.stringify({ error: 'Account verification required to report bounces' }),
+			{ status: 403, headers: { 'Content-Type': 'application/json' } }
+		);
 	}
 
 	let body: { email?: string };
@@ -45,13 +61,9 @@ export const POST: RequestHandler = async (event) => {
 		});
 	}
 
-	// Per-user cap — prevent mass suppression by a single user
-	const activeReports = await prisma.suppressedEmail.count({
-		where: {
-			reportedBy: session.userId,
-			source: 'user_report',
-			expiresAt: { gt: new Date() }
-		}
+	// Per-user cap — prevent mass reporting
+	const activeReports = await prisma.bounceReport.count({
+		where: { reportedBy: session.userId, resolved: false }
 	});
 
 	if (activeReports >= MAX_ACTIVE_REPORTS_PER_USER) {
@@ -61,17 +73,36 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
+	// Deduplicate: same user can't report same email twice while unresolved
+	// Returns identical 202 to prevent resolution-state oracle
+	const existing = await prisma.bounceReport.findFirst({
+		where: { email, reportedBy: session.userId, resolved: false }
+	});
+	if (existing) {
+		return new Response(
+			JSON.stringify({
+				status: 'reported',
+				message: 'Report received. We will investigate and take action if confirmed.',
+			}),
+			{ status: 202, headers: { 'Content-Type': 'application/json' } }
+		);
+	}
+
 	try {
-		await reportBounce(email, session.userId);
+		const result = await reportBounce(email, session.userId);
+
+		// Opaque response — never leak domain classification, probe state, or report count
+		return new Response(
+			JSON.stringify({
+				status: 'reported',
+				message: 'Report received. We will investigate and take action if confirmed.',
+			}),
+			{ status: 202, headers: { 'Content-Type': 'application/json' } }
+		);
 	} catch {
 		return new Response(
 			JSON.stringify({ error: 'Failed to record bounce report' }),
 			{ status: 500, headers: { 'Content-Type': 'application/json' } }
 		);
 	}
-
-	return new Response(JSON.stringify({ success: true }), {
-		status: 200,
-		headers: { 'Content-Type': 'application/json' }
-	});
 };

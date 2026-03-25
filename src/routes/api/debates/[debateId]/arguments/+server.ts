@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { solidityPackedKeccak256 } from 'ethers';
 import { verifyTransactionAsync } from '$lib/core/blockchain/tx-verifier';
+import { FEATURES } from '$lib/config/features';
 
 /** Returns true for a valid Ethereum address (0x-prefixed, 42 hex chars). */
 function isValidEthAddress(addr: unknown): addr is string {
@@ -15,6 +16,9 @@ function isValidEthAddress(addr: unknown): addr is string {
  * List arguments for a debate, sorted by weighted score.
  */
 export const GET: RequestHandler = async ({ params, url }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
 	const { debateId } = params;
 
 	const debate = await prisma.debate.findUnique({
@@ -87,6 +91,10 @@ export const GET: RequestHandler = async ({ params, url }) => {
  * Currently stores off-chain only for frontend development.
  */
 export const POST: RequestHandler = async ({ params, request, locals }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
+
 	const { debateId } = params;
 
 	// Check authentication

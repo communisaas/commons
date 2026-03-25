@@ -6,6 +6,7 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
+import { computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
@@ -43,12 +44,15 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 		throw error(403, 'Invalid check-in code');
 	}
 
-	// Find RSVP (optional — walk-ins allowed)
-	const rsvp = await db.eventRsvp.findUnique({
-		where: {
-			eventId_email: { eventId: event.id, email: email.toLowerCase() }
-		}
-	});
+	// Find RSVP by email hash (optional — walk-ins allowed)
+	const emailHash = await computeEmailHash(email.toLowerCase());
+	const rsvp = emailHash
+		? await db.eventRsvp.findUnique({
+				where: {
+					eventId_email_hash: { eventId: event.id, email_hash: emailHash }
+				}
+			})
+		: null;
 
 	// Only trust the server-validated checkin code for verification on an unauthenticated route
 	const verified = Boolean(checkinCode && checkinCode === event.checkinCode);

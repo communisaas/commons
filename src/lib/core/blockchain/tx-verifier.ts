@@ -14,6 +14,7 @@
 import { env } from '$env/dynamic/private';
 import { JsonRpcProvider } from 'ethers';
 import { prisma } from '$lib/core/db';
+import { captureWithContext } from '$lib/server/monitoring/sentry';
 
 /** Public fallback RPC for Scroll Sepolia when env var is not set. */
 const SCROLL_SEPOLIA_PUBLIC_RPC = 'https://sepolia-rpc.scroll.io';
@@ -86,6 +87,7 @@ async function _verify(txHash: string, context: VerificationContext): Promise<vo
 			`[tx-verifier] Error checking ${txHash} for ${context.type} in debate ${context.debateId}:`,
 			err
 		);
+		captureWithContext(err, { action: 'tx-verify', orgId: context.debateId });
 	}
 }
 

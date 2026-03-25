@@ -44,6 +44,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 			identityVerified: !!(supporter.identityCommitment && supporter.verified),
 			verified: supporter.verified,
 			emailStatus: supporter.emailStatus,
+			smsStatus: supporter.smsStatus,
 			source: supporter.source,
 			importedAt: supporter.importedAt?.toISOString() ?? null,
 			customFields: supporter.customFields,
@@ -129,5 +130,38 @@ export const actions: Actions = {
 		});
 
 		return { success: true, action: 'removeTag' };
+	},
+
+	updateSmsStatus: async ({ request, params, locals }) => {
+		if (!locals.user) {
+			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/supporters/${params.id}`);
+		}
+		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+		requireRole(membership.role, 'editor');
+
+		const formData = await request.formData();
+		const smsStatus = formData.get('smsStatus')?.toString();
+
+		const ALLOWED_STATUSES = ['none', 'subscribed', 'unsubscribed'];
+		if (!smsStatus || !ALLOWED_STATUSES.includes(smsStatus)) {
+			return fail(400, { error: 'Invalid SMS status. Cannot manually set to "stopped".' });
+		}
+
+		const supporter = await db.supporter.findFirst({ where: { id: params.id, orgId: org.id } });
+		if (!supporter) {
+			throw error(404, 'Supporter not found');
+		}
+
+		// Cannot override a STOP keyword opt-out manually
+		if (supporter.smsStatus === 'stopped') {
+			return fail(400, { error: 'Cannot override STOP keyword opt-out. Supporter must text START to re-subscribe.' });
+		}
+
+		await db.supporter.update({
+			where: { id: supporter.id },
+			data: { smsStatus }
+		});
+
+		return { success: true, action: 'updateSmsStatus' };
 	}
 };

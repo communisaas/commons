@@ -1,8 +1,13 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
+import { FEATURES } from '$lib/config/features';
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
+
 	const session = locals.session;
 	if (!session?.userId) {
 		throw error(401, 'Authentication required');

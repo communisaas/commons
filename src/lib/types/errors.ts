@@ -43,6 +43,9 @@ export const ERROR_CODES = {
 	SERVER_NOT_IMPLEMENTED: 'SERVER_NOT_IMPLEMENTED',
 	MODERATION_FAILED: 'MODERATION_FAILED',
 
+	// Billing errors
+	TEMPLATE_QUOTA_EXCEEDED: 'TEMPLATE_QUOTA_EXCEEDED',
+
 	// Auth errors
 	AUTH_REQUIRED: 'AUTH_REQUIRED',
 	AUTH_INVALID_TOKEN: 'AUTH_INVALID_TOKEN',
@@ -69,6 +72,8 @@ export const ERROR_MESSAGES = {
 	[ERROR_CODES.SERVER_RATE_LIMIT]: 'Too many requests. Please wait a moment and try again.',
 	[ERROR_CODES.SERVER_NOT_IMPLEMENTED]: 'Feature not implemented yet.',
 	[ERROR_CODES.MODERATION_FAILED]: 'Content moderation failed',
+
+	[ERROR_CODES.TEMPLATE_QUOTA_EXCEEDED]: 'Monthly template quota exceeded. Please upgrade your plan.',
 
 	[ERROR_CODES.AUTH_REQUIRED]: 'Please sign in to continue',
 	[ERROR_CODES.AUTH_INVALID_TOKEN]: 'Your session has expired. Please sign in again.',

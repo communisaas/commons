@@ -1,6 +1,6 @@
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
-import { extractTemplateMetrics } from '$lib/types/templateConfig';
+import { extractRecipientEmails, extractTemplateMetrics } from '$lib/types/templateConfig';
 import type { PageServerLoad } from './$types';
 import { FEATURES } from '$lib/config/features';
 import { decryptUserPii } from '$lib/core/crypto/user-pii-encryption';
@@ -55,8 +55,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		preview: template.preview,
 		metrics: extractTemplateMetrics(template.metrics),
 		delivery_config: template.delivery_config,
-		recipient_config: null,
-		recipientEmails: [],
+		recipient_config: template.recipient_config,
+		recipientEmails: extractRecipientEmails(template.recipient_config),
 		author: template.user
 			? await (async () => {
 					const u = template.user!;

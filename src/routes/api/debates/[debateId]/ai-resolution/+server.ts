@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
+import { FEATURES } from '$lib/config/features';
 
 /**
  * GET /api/debates/[debateId]/ai-resolution
@@ -10,6 +11,10 @@ import { prisma } from '$lib/core/db';
  * and resolution metadata.
  */
 export const GET: RequestHandler = async ({ params }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
+
 	const { debateId } = params;
 
 	const debate = await prisma.debate.findUnique({

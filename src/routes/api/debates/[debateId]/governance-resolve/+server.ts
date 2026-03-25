@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { env } from '$env/dynamic/private';
 import { verifyCronSecret } from '$lib/server/cron-auth';
+import { FEATURES } from '$lib/config/features';
 
 /**
  * POST /api/debates/[debateId]/governance-resolve
@@ -14,6 +15,10 @@ import { verifyCronSecret } from '$lib/server/cron-auth';
  * governance multisig verification or on-chain tx confirmation.
  */
 export const POST: RequestHandler = async ({ params, request }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
+
 	const { debateId } = params;
 
 	// Auth check — operator-level for now

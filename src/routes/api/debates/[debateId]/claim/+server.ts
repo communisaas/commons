@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { claimSettlement, settlePrivatePosition } from '$lib/core/blockchain/debate-market-client';
+import { FEATURES } from '$lib/config/features';
 
 /** Returns true for a valid Ethereum address (0x-prefixed, 42 hex chars). */
 function isValidEthAddress(addr: unknown): addr is string {
@@ -34,6 +35,10 @@ function isValidEthAddress(addr: unknown): addr is string {
  * tracked via structured server logs and on-chain transaction receipts.
  */
 export const POST: RequestHandler = async ({ params, locals, request }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
+
 	const { debateId } = params;
 
 	const session = locals.session;

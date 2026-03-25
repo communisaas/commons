@@ -11,10 +11,13 @@ import {
 import type { Prisma as _Prisma, Prisma } from '@prisma/client';
 import type { InputJsonValue } from '@prisma/client/runtime/library';
 import type { UnknownRecord } from '$lib/types/any-replacements';
+import { extractRecipientEmails } from '$lib/types/templateConfig';
 import { moderateTemplate } from '$lib/core/server/moderation';
 import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
 import { z } from 'zod';
 import { createHash } from 'crypto';
+import { getMonthlyTemplateCount } from '$lib/server/billing/usage';
+import { captureWithContext } from '$lib/server/monitoring/sentry';
 
 // Import GeoScope for agent-extracted geographic scope
 import type { GeoScope } from '$lib/core/agents/types';
@@ -349,7 +352,8 @@ export const GET: RequestHandler = async () => {
 				// Scopes array for ClientSideTemplateFilter hierarchical matching
 				scopes: scopesByTemplateId.get(template.id) ?? [],
 
-				recipientEmails: []
+				recipient_config: template.recipient_config,
+				recipientEmails: extractRecipientEmails(template.recipient_config)
 			};
 		});
 
@@ -518,6 +522,12 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				return json(response, { status: 403 });
 			}
 
+			// Look up org membership for quota check (performed inside transaction below)
+			const orgMembership = await db.orgMembership.findFirst({
+				where: { userId: user.id },
+				select: { orgId: true }
+			});
+
 			// Authenticated user - save to database
 			try {
 				// Content-addressable identity: same author + same content = same template
@@ -611,6 +621,20 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 				// Create template with optional TemplateScope in a transaction
 				const newTemplate = await db.$transaction(async (tx) => {
+					// Billing quota check inside transaction to prevent race condition
+					if (orgMembership) {
+						const org = await tx.organization.findUnique({
+							where: { id: orgMembership.orgId },
+							select: { max_templates_month: true }
+						});
+						if (org) {
+							const count = await getMonthlyTemplateCount(tx as unknown as typeof db, orgMembership.orgId);
+							if (count >= org.max_templates_month) {
+								throw new Error('TEMPLATE_QUOTA_EXCEEDED');
+							}
+						}
+					}
+
 					// Step 1: Create the template
 					const template = await tx.template.create({
 						data: {
@@ -754,7 +778,10 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						platform.context.waitUntil(deferredWork);
 					} else {
 						// Local dev / non-Vercel: fire-and-forget is fine
-						deferredWork.catch(err => console.error('[deferred] Background work failed:', err));
+						deferredWork.catch(err => {
+							console.error('[deferred] Background work failed:', err);
+							captureWithContext(err, { action: 'template-deferred-work' });
+						});
 					}
 				}
 
@@ -813,6 +840,19 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 				return json(response);
 			} catch (error) {
+				// Handle quota exceeded thrown from inside transaction
+				if (error instanceof Error && error.message === 'TEMPLATE_QUOTA_EXCEEDED') {
+					const response: StructuredApiResponse = {
+						success: false,
+						error: createApiError(
+							'authorization',
+							'TEMPLATE_QUOTA_EXCEEDED',
+							'Monthly template quota exceeded'
+						)
+					};
+					return json(response, { status: 403 });
+				}
+
 				console.error('Database error creating template:', error);
 				console.error('Template creation error details:', {
 					message: error instanceof Error ? error.message : 'Unknown error',

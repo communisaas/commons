@@ -18,7 +18,8 @@ const {
 	mockDbEventUpdate,
 	mockDbEventRsvpFindUnique,
 	mockDbEventAttendanceCreate,
-	mockDbEventAttendanceFindUnique
+	mockDbEventAttendanceFindUnique,
+	mockComputeEmailHash
 } = vi.hoisted(() => ({
 	mockFeatures: {
 		EVENTS: true as boolean,
@@ -31,7 +32,8 @@ const {
 	mockDbEventUpdate: vi.fn(),
 	mockDbEventRsvpFindUnique: vi.fn(),
 	mockDbEventAttendanceCreate: vi.fn(),
-	mockDbEventAttendanceFindUnique: vi.fn()
+	mockDbEventAttendanceFindUnique: vi.fn(),
+	mockComputeEmailHash: vi.fn()
 }));
 
 vi.mock('$lib/config/features', () => ({ FEATURES: mockFeatures }));
@@ -46,6 +48,10 @@ vi.mock('$lib/core/db', () => ({
 
 vi.mock('$lib/core/security/rate-limiter', () => ({
 	getRateLimiter: () => ({ check: mockRateLimiterCheck })
+}));
+
+vi.mock('$lib/core/crypto/user-pii-encryption', () => ({
+	computeEmailHash: mockComputeEmailHash
 }));
 
 vi.mock('@sveltejs/kit', () => ({
@@ -98,6 +104,7 @@ describe('Event Check-in - POST /api/e/[id]/checkin', () => {
 		mockDbEventAttendanceFindUnique.mockResolvedValue(null);
 		mockDbEventAttendanceCreate.mockResolvedValue({ id: 'att-1' });
 		mockDbEventUpdate.mockResolvedValue({});
+		mockComputeEmailHash.mockResolvedValue('hash_of_email');
 	});
 
 	it('returns 404 when FEATURES.EVENTS is false', async () => {

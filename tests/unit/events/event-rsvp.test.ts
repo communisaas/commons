@@ -22,7 +22,9 @@ const {
 	mockDbSupporterFindUnique,
 	mockDbSupporterCreate,
 	mockFindSupporterByEmail,
-	mockDbEventRsvpCount
+	mockDbEventRsvpCount,
+	mockComputeEmailHash,
+	mockEncryptPii
 } = vi.hoisted(() => ({
 	mockFeatures: {
 		EVENTS: true as boolean,
@@ -39,7 +41,9 @@ const {
 	mockDbSupporterFindUnique: vi.fn(),
 	mockDbSupporterCreate: vi.fn(),
 	mockFindSupporterByEmail: vi.fn(),
-	mockDbEventRsvpCount: vi.fn()
+	mockDbEventRsvpCount: vi.fn(),
+	mockComputeEmailHash: vi.fn(),
+	mockEncryptPii: vi.fn()
 }));
 
 vi.mock('$lib/config/features', () => ({ FEATURES: mockFeatures }));
@@ -58,6 +62,11 @@ vi.mock('$lib/core/security/rate-limiter', () => ({
 
 vi.mock('$lib/server/supporters/find-by-email', () => ({
 	findSupporterByEmail: mockFindSupporterByEmail
+}));
+
+vi.mock('$lib/core/crypto/user-pii-encryption', () => ({
+	computeEmailHash: mockComputeEmailHash,
+	encryptPii: mockEncryptPii
 }));
 
 vi.mock('@sveltejs/kit', () => ({
@@ -114,6 +123,8 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 			id: 'rsvp-1', status: 'GOING', createdAt: new Date()
 		});
 		mockDbEventUpdate.mockResolvedValue({});
+		mockComputeEmailHash.mockResolvedValue('hash_of_email');
+		mockEncryptPii.mockResolvedValue({ ciphertext: 'encrypted', iv: 'iv123', tag: 'tag123' });
 	});
 
 	it('returns 404 when FEATURES.EVENTS is false', async () => {
@@ -131,7 +142,19 @@ describe('Event RSVP - POST /api/e/[id]/rsvp', () => {
 		expect(mockDbEventRsvpUpsert).toHaveBeenCalledOnce();
 	});
 
-	it('deduplicates on email — upsert updates existing', async () => {
+	it('uses email_hash for dedup in upsert', async () => {
+		const { POST } = await import('../../../src/routes/api/e/[id]/rsvp/+server');
+		await POST(makeArgs({ email: 'user@test.com', name: 'Jane' }));
+		const upsertCall = mockDbEventRsvpUpsert.mock.calls[0][0];
+		expect(upsertCall.where.eventId_email_hash).toEqual({
+			eventId: 'evt-1',
+			email_hash: 'hash_of_email'
+		});
+		expect(upsertCall.create.encrypted_email).toBeTruthy();
+		expect(upsertCall.create.email_hash).toBe('hash_of_email');
+	});
+
+	it('deduplicates on email_hash — upsert updates existing', async () => {
 		mockDbEventRsvpUpsert.mockResolvedValue({
 			id: 'rsvp-1', status: 'GOING',
 			createdAt: new Date(Date.now() - 100000) // old = already existed

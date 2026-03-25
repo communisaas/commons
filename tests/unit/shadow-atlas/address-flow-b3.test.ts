@@ -24,10 +24,10 @@ describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 	});
 
 	describe('feature flag gating', () => {
-		it('SHADOW_ATLAS_VERIFICATION flag exists and is boolean false', async () => {
+		it('SHADOW_ATLAS_VERIFICATION flag exists and is boolean true', async () => {
 			const { FEATURES } = await import('$lib/config/features');
 			expect(typeof FEATURES.SHADOW_ATLAS_VERIFICATION).toBe('boolean');
-			expect(FEATURES.SHADOW_ATLAS_VERIFICATION).toBe(false);
+			expect(FEATURES.SHADOW_ATLAS_VERIFICATION).toBe(true);
 		});
 	});
 

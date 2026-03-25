@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
+import { FEATURES } from '$lib/config/features';
 
 /**
  * GET /api/debates/by-template/[templateId]
@@ -11,6 +12,10 @@ import { prisma } from '$lib/core/db';
  * Response: { debate: DebateData | null }
  */
 export const GET: RequestHandler = async ({ params }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
+
 	const { templateId } = params;
 
 	if (!templateId) {

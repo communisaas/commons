@@ -67,5 +67,8 @@ export const FEATURES = {
 	ACCOUNTABILITY: true,
 
 	/** Shadow Atlas client-side verification: browser computes district commitment (no plaintext to server) */
-	SHADOW_ATLAS_VERIFICATION: false
+	SHADOW_ATLAS_VERIFICATION: true,
+
+	/** Agentic delegation: AI proxy civic actions under user-defined policy constraints (Tier 3+) */
+	DELEGATION: false
 } as const;

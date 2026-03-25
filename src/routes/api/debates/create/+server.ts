@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { solidityPackedKeccak256 } from 'ethers';
 import { proposeDebate, deriveDomain } from '$lib/core/blockchain/debate-market-client';
+import { FEATURES } from '$lib/config/features';
 
 /**
  * POST /api/debates/create
@@ -16,6 +17,9 @@ import { proposeDebate, deriveDomain } from '$lib/core/blockchain/debate-market-
  * If blockchain is not configured (local dev), falls back to off-chain-only mode.
  */
 export const POST: RequestHandler = async ({ request, locals }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
 	// Check authentication
 	const session = locals.session;
 	if (!session?.userId) {

@@ -65,6 +65,8 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 				winning_stance: true,
 				winning_argument_index: true,
 				ai_panel_consensus: true,
+				resolution_method: true,
+				governance_justification: true,
 				template: { select: { slug: true } },
 				arguments: {
 					select: { body: true, stance: true, argument_index: true }
@@ -121,6 +123,8 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 					uniqueParticipants: debate.unique_participants,
 					winningStance: debate.winning_stance,
 					aiPanelConsensus: debate.ai_panel_consensus,
+					resolutionMethod: debate.resolution_method,
+					governanceJustification: debate.governance_justification,
 					templateSlug: debate.template.slug,
 					winningArgument: debate.winningArg
 						? { body: debate.winningArg.body, stance: debate.winningArg.stance }

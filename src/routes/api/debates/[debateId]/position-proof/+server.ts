@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
+import { FEATURES } from '$lib/config/features';
 
 /**
  * GET /api/debates/[debateId]/position-proof?positionIndex=N
@@ -26,6 +27,10 @@ import type { RequestHandler } from './$types';
  * Returns 502 if shadow-atlas is unreachable or returns an error.
  */
 export const GET: RequestHandler = async ({ params, url }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
+
 	const { debateId } = params;
 
 	const rawIndex = url.searchParams.get('positionIndex');

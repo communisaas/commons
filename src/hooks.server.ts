@@ -12,8 +12,22 @@ import { createRequestClient, runWithDb } from '$lib/core/db';
 import { deriveTrustTier } from '$lib/core/identity/authority-level';
 import { trackForRejection } from '$lib/services/rejectionMonitor';
 import { setCIDs } from '$lib/core/shadow-atlas/ipfs-store';
+import {
+	initCloudflareSentryHandle,
+	sentryHandle,
+	handleErrorWithSentry
+} from '@sentry/sveltekit';
 
 // MongoDB removed — intelligence data now lives in Postgres via pgvector
+
+/**
+ * Sentry error handler — captures unhandled errors with PII scrubbing.
+ * Must be exported as `handleError` for SvelteKit to pick it up.
+ */
+export const handleError = handleErrorWithSentry((input) => {
+	const { error: err } = input;
+	console.error('[handleError]', err);
+});
 
 // On Cloudflare Workers, process.env is empty. Secrets are only available
 // via event.platform.env. This shim copies them to process.env once so that
@@ -420,15 +434,41 @@ const handleRejectionMonitoring: Handle = async ({ event, resolve }) => {
 };
 
 /**
+ * Sentry init handle — initializes the SDK on Cloudflare Workers using
+ * platform.env.SENTRY_DSN. Runs FIRST so all subsequent handles are traced.
+ * No-ops gracefully when SENTRY_DSN is not set (dev without Sentry).
+ */
+const handleSentryInit: Handle = async ({ event, resolve }) => {
+	const dsn = event.platform?.env?.SENTRY_DSN as string | undefined;
+	if (!dsn) return resolve(event);
+
+	const env = (event.platform?.env?.ENVIRONMENT as string) || 'development';
+	return initCloudflareSentryHandle({
+		dsn,
+		environment: env,
+		tracesSampleRate: env === 'production' ? 0.1 : 1.0,
+		// PII masking — replace entire user object with redacted stub
+		beforeSend(sentryEvent) {
+			if (sentryEvent.user) {
+				sentryEvent.user = { id: '[redacted]' };
+			}
+			return sentryEvent;
+		}
+	})({ event, resolve });
+};
+
+/**
  * Hook execution order:
- * 1. handlePlatformEnv - Copy platform.env to process.env + init per-request Prisma
- * 2. handleAuth - Populate session/user in locals (needed for user-based rate limits)
- * 3. handleRateLimit - Check rate limits (can use user ID from auth)
- * 4. handleCsrfGuard - CSRF protection for sensitive endpoints
- * 5. handleSecurityHeaders - Add COOP/COEP + CSP headers
- * 6. handleRejectionMonitoring - Track rejection rates (async, zero latency impact)
+ * 1. handleSentryInit - Initialize Sentry SDK from platform.env
+ * 2. handlePlatformEnv - Copy platform.env to process.env + init per-request Prisma
+ * 3. sentryHandle - Wrap request for Sentry error/trace capture
+ * 4. handleAuth - Populate session/user in locals (needed for user-based rate limits)
+ * 5. handleRateLimit - Check rate limits (can use user ID from auth)
+ * 6. handleCsrfGuard - CSRF protection for sensitive endpoints
+ * 7. handleSecurityHeaders - Add COOP/COEP + CSP headers
+ * 8. handleRejectionMonitoring - Track rejection rates (async, zero latency impact)
  *
  * Note: Auth runs first so rate limiting can use user ID for user-keyed limits.
  * Rejection monitoring runs last so it observes the final response status.
  */
-export const handle = sequence(handlePlatformEnv, handleAuth, handleRateLimit, handleCsrfGuard, handleSecurityHeaders, handleRejectionMonitoring);
+export const handle = sequence(handleSentryInit, handlePlatformEnv, sentryHandle(), handleAuth, handleRateLimit, handleCsrfGuard, handleSecurityHeaders, handleRejectionMonitoring);

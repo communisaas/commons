@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { resolveDebate as resolveDebateOnChain, readChainResolution } from '$lib/core/blockchain/debate-market-client';
+import { FEATURES } from '$lib/config/features';
 
 /**
  * POST /api/debates/[debateId]/resolve
@@ -13,6 +14,9 @@ import { resolveDebate as resolveDebateOnChain, readChainResolution } from '$lib
  * Currently resolves off-chain only for frontend development.
  */
 export const POST: RequestHandler = async ({ params, locals }) => {
+	if (!FEATURES.DEBATE) {
+		throw error(404, 'Not found');
+	}
 	const { debateId } = params;
 
 	const session = locals.session;

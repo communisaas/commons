@@ -6,6 +6,7 @@ function makeUsage(overrides: Partial<UsagePeriod> = {}): UsagePeriod {
 	return {
 		verifiedActions: 0,
 		emailsSent: 0,
+		smsSent: 0,
 		periodStart: new Date('2026-03-01'),
 		periodEnd: new Date('2026-03-31'),
 		limits: PLANS.free,

@@ -9,6 +9,7 @@
 	import CoordinationIntegrity from '$lib/components/org/CoordinationIntegrity.svelte';
 	import CountrySelector from '$lib/components/geographic/CountrySelector.svelte';
 	import JurisdictionPicker from '$lib/components/geographic/JurisdictionPicker.svelte';
+	import DebateSettlement from '$lib/components/debate/DebateSettlement.svelte';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -34,6 +35,64 @@
 
 		es.addEventListener('error', () => {
 			// SSE disconnected — browser will auto-reconnect
+		});
+
+		return () => es.close();
+	});
+
+	// Live debate data — starts from server, updates via SSE
+	let liveDebate = $state(data.debate);
+
+	// Debate SSE connection for real-time updates
+	$effect(() => {
+		if (!browser) return;
+		if (!FEATURES.DEBATE) return;
+		if (!liveDebate?.id) return;
+		if (liveDebate.status === 'resolved') return;
+
+		const es = new EventSource(`/api/debates/${liveDebate.id}/stream`);
+
+		es.addEventListener('debate:argument', (e: MessageEvent) => {
+			try {
+				const d = JSON.parse(e.data);
+				if (liveDebate && typeof d.argumentCount === 'number') {
+					liveDebate = { ...liveDebate, argumentCount: d.argumentCount, uniqueParticipants: d.uniqueParticipants ?? liveDebate.uniqueParticipants };
+				}
+			} catch { /* skip */ }
+		});
+
+		es.addEventListener('debate:position', (e: MessageEvent) => {
+			try {
+				const d = JSON.parse(e.data);
+				if (liveDebate && typeof d.uniqueParticipants === 'number') {
+					liveDebate = { ...liveDebate, uniqueParticipants: d.uniqueParticipants };
+				}
+			} catch { /* skip */ }
+		});
+
+		es.addEventListener('debate:settled', (e: MessageEvent) => {
+			try {
+				const d = JSON.parse(e.data);
+				if (liveDebate) {
+					liveDebate = { ...liveDebate, status: 'resolved', winningStance: d.winningStance ?? liveDebate.winningStance };
+				}
+			} catch { /* skip */ }
+		});
+
+		// Also handle other resolution events
+		for (const evt of ['resolved_with_ai', 'resolution_finalized']) {
+			es.addEventListener(evt, (e: MessageEvent) => {
+				try {
+					const d = JSON.parse(e.data);
+					if (liveDebate) {
+						liveDebate = { ...liveDebate, status: 'resolved', winningStance: d.winningStance ?? liveDebate.winningStance };
+					}
+				} catch { /* skip */ }
+			});
+		}
+
+		es.addEventListener('error', () => {
+			// Browser auto-reconnects SSE
 		});
 
 		return () => es.close();
@@ -244,8 +303,8 @@
 
 	<!-- Inline Debate Section -->
 	{#if FEATURES.DEBATE}
-		{#if data.debate}
-			{@const badge = debateStatusBadge(data.debate.status)}
+		{#if liveDebate}
+			{@const badge = debateStatusBadge(liveDebate.status)}
 			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
 				<div class="flex items-center justify-between">
 					<h3 class="text-sm font-medium text-text-secondary">Adversarial Debate</h3>
@@ -254,41 +313,55 @@
 					</span>
 				</div>
 
-				<p class="text-sm text-text-tertiary leading-relaxed">{data.debate.propositionText}</p>
+				<p class="text-sm text-text-tertiary leading-relaxed">{liveDebate.propositionText}</p>
 
 				<div class="flex items-center gap-4 text-xs text-text-tertiary font-mono">
-					<span>{data.debate.argumentCount} argument{data.debate.argumentCount === 1 ? '' : 's'}</span>
+					<span>{liveDebate.argumentCount} argument{liveDebate.argumentCount === 1 ? '' : 's'}</span>
 					<span class="text-text-quaternary">&middot;</span>
-					<span>{data.debate.uniqueParticipants} participant{data.debate.uniqueParticipants === 1 ? '' : 's'}</span>
-					{#if data.debate.status === 'active'}
+					<span>{liveDebate.uniqueParticipants} participant{liveDebate.uniqueParticipants === 1 ? '' : 's'}</span>
+					{#if liveDebate.status === 'active'}
 						<span class="text-text-quaternary">&middot;</span>
-						<span class="text-blue-400">{timeRemaining(data.debate.deadline)}</span>
+						<span class="text-blue-400">{timeRemaining(liveDebate.deadline)}</span>
 					{/if}
 				</div>
 
-				{#if data.debate.status === 'resolved' && data.debate.winningStance}
+				{#if liveDebate.status === 'resolved' && liveDebate.winningStance}
 					<div class="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-2">
 						<div class="flex items-center gap-2">
-							<span class="text-xs font-medium text-emerald-400">Winning stance: {data.debate.winningStance}</span>
-							{#if data.debate.aiPanelConsensus != null}
+							<span class="text-xs font-medium text-emerald-400">Winning stance: {liveDebate.winningStance}</span>
+							{#if liveDebate.aiPanelConsensus != null}
 								<span class="text-xs text-text-quaternary">&middot;</span>
 								<span class="text-xs font-mono text-text-tertiary">
-									{Math.round(data.debate.aiPanelConsensus * 100)}% AI consensus
+									{Math.round(liveDebate.aiPanelConsensus * 100)}% AI consensus
 								</span>
 							{/if}
 						</div>
-						{#if data.debate.winningArgument}
+						{#if liveDebate.winningArgument}
 							<p class="text-sm text-text-tertiary leading-relaxed">
-								{data.debate.winningArgument.body.length > 200
-									? data.debate.winningArgument.body.slice(0, 200) + '...'
-									: data.debate.winningArgument.body}
+								{liveDebate.winningArgument.body.length > 200
+									? liveDebate.winningArgument.body.slice(0, 200) + '...'
+									: liveDebate.winningArgument.body}
 							</p>
 						{/if}
 					</div>
 				{/if}
 
+				<!-- Settlement controls (org admins only, active debates) -->
+				<DebateSettlement
+					debateId={liveDebate.id}
+					debateStatus={liveDebate.status}
+					winningStance={liveDebate.winningStance}
+					reasoning={liveDebate.governanceJustification ?? null}
+					canSettle={canEdit}
+					onSettled={(result) => {
+						if (liveDebate) {
+							liveDebate = { ...liveDebate, status: 'resolved', winningStance: result.outcome.toUpperCase() };
+						}
+					}}
+				/>
+
 				<a
-					href="/s/{data.debate.templateSlug}/debate/{data.debate.id}"
+					href="/s/{liveDebate.templateSlug}/debate/{liveDebate.id}"
 					class="inline-flex items-center gap-2 text-sm text-teal-400 hover:text-teal-300 transition-colors"
 				>
 					View full debate

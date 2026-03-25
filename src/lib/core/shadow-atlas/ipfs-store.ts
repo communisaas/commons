@@ -203,8 +203,8 @@ const chunkCache = new LRUCache<ChunkFile>(100, CACHE_TTL_MS);
 /** Officials file cache: ~2 KB per file, max 50 = ~100 KB */
 const officialsFileCache = new LRUCache<OfficialsFileIPFS>(50, CACHE_TTL_MS);
 
-/** Manifest cache — one per root CID, refreshed when CID changes */
-let manifestCache: { rootCid: string; data: ChunkManifest; fetchedAt: number } | null = null;
+/** Manifest cache — keyed by country code, refreshed when root CID changes */
+const manifestCacheMap = new Map<string, { rootCid: string; data: ChunkManifest; fetchedAt: number }>();
 
 // ============================================================================
 // IPFS Fetch
@@ -377,16 +377,17 @@ export async function getManifest(country = 'US'): Promise<ChunkManifest> {
 	const rootCid = IPFS_CIDS.root;
 	if (!rootCid) throw new Error('Root CID not configured — chunked mode not available');
 
+	const cached = manifestCacheMap.get(country);
 	if (
-		manifestCache &&
-		manifestCache.rootCid === rootCid &&
-		(Date.now() - manifestCache.fetchedAt) < CACHE_TTL_MS
+		cached &&
+		cached.rootCid === rootCid &&
+		(Date.now() - cached.fetchedAt) < CACHE_TTL_MS
 	) {
-		return manifestCache.data;
+		return cached.data;
 	}
 
 	const data = await fetchFromRootCID<ChunkManifest>(`${country}/manifest.json`);
-	manifestCache = { rootCid, data, fetchedAt: Date.now() };
+	manifestCacheMap.set(country, { rootCid, data, fetchedAt: Date.now() });
 	return data;
 }
 
@@ -486,7 +487,7 @@ export async function clearCache(): Promise<void> {
 	memoryStore.delete('merkle-snapshot');
 	chunkCache.clear();
 	officialsFileCache.clear();
-	manifestCache = null;
+	manifestCacheMap.clear();
 }
 
 /**

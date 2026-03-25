@@ -26,6 +26,7 @@
  */
 
 import { env } from '$env/dynamic/private';
+import { captureWithContext } from '$lib/server/monitoring/sentry';
 
 /**
  * Result of a rate limit check
@@ -209,6 +210,7 @@ class RedisStore implements RateLimitStore {
 
 			client.on('error', (err: Error) => {
 				console.error('[RateLimiter] Redis error:', err);
+				captureWithContext(err, { action: 'redis-rate-limiter' });
 			});
 
 			await client.connect();
@@ -218,6 +220,7 @@ class RedisStore implements RateLimitStore {
 			return this.client;
 		} catch (error) {
 			console.error('[RateLimiter] Failed to connect to Redis:', error);
+			captureWithContext(error, { action: 'redis-connect' });
 			throw error;
 		}
 	}

@@ -34,7 +34,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// C-4: Encrypt profile blob at rest (plaintext fields retained during transition)
 		const profileBlob = JSON.stringify({ role, organization: organization || null, location: location || null, connection });
-		const encProfile = await encryptPii(profileBlob, locals.user.id).catch(() => null);
+		const encProfile = await encryptPii(profileBlob, locals.user.id, 'profile').catch(() => null);
 
 		// Update user with profile information using proper fields
 		// Note: connection_details removed - field does not exist in schema

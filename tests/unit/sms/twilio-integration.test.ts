@@ -16,6 +16,10 @@ const {
 	mockEnv,
 	mockDbSmsBlastFindUnique,
 	mockDbSmsBlastUpdate,
+	mockDbSmsBlastUpdateMany,
+	mockGetOrgUsage,
+	mockIsOverLimit,
+	mockDbSupporterCount,
 	mockDbSupporterFindMany,
 	mockDbSmsMessageCreate,
 	mockDbSmsMessageFindFirst,
@@ -32,6 +36,10 @@ const {
 	},
 	mockDbSmsBlastFindUnique: vi.fn(),
 	mockDbSmsBlastUpdate: vi.fn(),
+	mockDbSmsBlastUpdateMany: vi.fn(),
+	mockGetOrgUsage: vi.fn(),
+	mockIsOverLimit: vi.fn(),
+	mockDbSupporterCount: vi.fn(),
 	mockDbSupporterFindMany: vi.fn(),
 	mockDbSmsMessageCreate: vi.fn(),
 	mockDbSmsMessageFindFirst: vi.fn(),
@@ -63,9 +71,11 @@ vi.mock('$lib/core/db', () => ({
 	db: {
 		smsBlast: {
 			findUnique: (...args: any[]) => mockDbSmsBlastFindUnique(...args),
-			update: (...args: any[]) => mockDbSmsBlastUpdate(...args)
+			update: (...args: any[]) => mockDbSmsBlastUpdate(...args),
+			updateMany: (...args: any[]) => mockDbSmsBlastUpdateMany(...args)
 		},
 		supporter: {
+			count: (...args: any[]) => mockDbSupporterCount(...args),
 			findMany: (...args: any[]) => mockDbSupporterFindMany(...args)
 		},
 		smsMessage: {
@@ -77,6 +87,11 @@ vi.mock('$lib/core/db', () => ({
 			updateMany: (...args: any[]) => mockDbPatchThroughCallUpdateMany(...args)
 		}
 	}
+}));
+
+vi.mock('$lib/server/billing/usage', () => ({
+	getOrgUsage: (...args: any[]) => mockGetOrgUsage(...args),
+	isOverLimit: (...args: any[]) => mockIsOverLimit(...args)
 }));
 
 vi.mock('$lib/server/sms/twilio', async (importOriginal) => {
@@ -448,16 +463,20 @@ describe('sendSmsBlast', () => {
 		vi.clearAllMocks();
 		mockFetch = vi.fn();
 		globalThis.fetch = mockFetch;
+		mockDbSmsBlastUpdateMany.mockResolvedValue({ count: 1 });
 		mockDbSmsBlastFindUnique.mockResolvedValue({
 			id: 'blast-1',
 			orgId: 'org-1',
 			body: 'Campaign update!',
 			fromNumber: null,
-			status: 'draft',
+			status: 'sending',
 			org: { id: 'org-1' }
 		});
 		mockDbSmsBlastUpdate.mockResolvedValue({});
 		mockDbSmsMessageCreate.mockResolvedValue({});
+		mockGetOrgUsage.mockResolvedValue({ smsSent: 0, limits: { maxSms: 1000 } });
+		mockIsOverLimit.mockReturnValue({ sms: false, actions: false, emails: false });
+		mockDbSupporterCount.mockResolvedValue(2); // default: 2 recipients, well within quota
 	});
 
 	afterEach(() => {
@@ -479,10 +498,10 @@ describe('sendSmsBlast', () => {
 		);
 		await sendSmsBlast('blast-1');
 
-		// Should update status to 'sending' first
-		expect(mockDbSmsBlastUpdate).toHaveBeenCalledWith(
+		// Should atomically transition status to 'sending'
+		expect(mockDbSmsBlastUpdateMany).toHaveBeenCalledWith(
 			expect.objectContaining({
-				where: { id: 'blast-1' },
+				where: { id: 'blast-1', status: 'draft' },
 				data: expect.objectContaining({ status: 'sending' })
 			})
 		);
@@ -507,23 +526,20 @@ describe('sendSmsBlast', () => {
 		);
 	});
 
-	it('returns early if blast is not draft', async () => {
-		mockDbSmsBlastFindUnique.mockResolvedValue({
-			id: 'blast-1',
-			orgId: 'org-1',
-			status: 'sent'
-		});
+	it('returns early if blast is not draft (atomic updateMany returns 0)', async () => {
+		mockDbSmsBlastUpdateMany.mockResolvedValue({ count: 0 });
 
 		const { sendSmsBlast } = await import(
 			'../../../src/lib/server/sms/send-blast.ts'
 		);
 		await sendSmsBlast('blast-1');
 
-		expect(mockDbSmsBlastUpdate).not.toHaveBeenCalled();
+		expect(mockDbSmsBlastFindUnique).not.toHaveBeenCalled();
 		expect(mockDbSupporterFindMany).not.toHaveBeenCalled();
 	});
 
-	it('returns early if blast not found', async () => {
+	it('returns early if blast not found after atomic transition', async () => {
+		mockDbSmsBlastUpdateMany.mockResolvedValue({ count: 1 });
 		mockDbSmsBlastFindUnique.mockResolvedValue(null);
 
 		const { sendSmsBlast } = await import(
@@ -535,6 +551,7 @@ describe('sendSmsBlast', () => {
 	});
 
 	it('handles empty recipient list', async () => {
+		mockDbSupporterCount.mockResolvedValue(0);
 		mockDbSupporterFindMany.mockResolvedValue([]);
 
 		const { sendSmsBlast } = await import(
@@ -571,6 +588,55 @@ describe('sendSmsBlast', () => {
 				data: { status: 'failed' }
 			})
 		);
+	});
+
+	it('fails blast when projected usage would exceed SMS quota', async () => {
+		// Org has sent 950 of 1000 allowed, and blast targets 100 recipients
+		mockGetOrgUsage.mockResolvedValue({ smsSent: 950, limits: { maxSms: 1000 } });
+		mockIsOverLimit.mockReturnValue({ sms: false, actions: false, emails: false });
+		mockDbSupporterCount.mockResolvedValue(100);
+
+		const { sendSmsBlast } = await import(
+			'../../../src/lib/server/sms/send-blast.ts'
+		);
+		await sendSmsBlast('blast-1');
+
+		// Should mark as failed due to projected overage
+		expect(mockDbSmsBlastUpdate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				where: { id: 'blast-1' },
+				data: { status: 'failed' }
+			})
+		);
+
+		// Should NOT attempt to fetch or send to supporters
+		expect(mockDbSupporterFindMany).not.toHaveBeenCalled();
+	});
+
+	it('allows blast when projected usage is exactly at the limit', async () => {
+		// 900 sent + 100 recipients = 1000 limit exactly
+		mockGetOrgUsage.mockResolvedValue({ smsSent: 900, limits: { maxSms: 1000 } });
+		mockIsOverLimit.mockReturnValue({ sms: false, actions: false, emails: false });
+		mockDbSupporterCount.mockResolvedValue(100);
+		mockDbSupporterFindMany.mockResolvedValue([
+			{ id: 'sup-1', phone: '+15551111111', name: 'Alice' }
+		]);
+
+		const mockFetchLocal = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ sid: 'SM_1' }), {
+				status: 200,
+				headers: { 'Content-Type': 'application/json' }
+			})
+		);
+		globalThis.fetch = mockFetchLocal;
+
+		const { sendSmsBlast } = await import(
+			'../../../src/lib/server/sms/send-blast.ts'
+		);
+		await sendSmsBlast('blast-1');
+
+		// Should proceed to send — findMany should have been called
+		expect(mockDbSupporterFindMany).toHaveBeenCalled();
 	});
 });
 

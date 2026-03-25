@@ -1,6 +1,7 @@
 import type { PageServerLoad } from './$types';
 import { db } from '$lib/core/db';
 import { TEMPLATE_LIST_SELECT } from '$lib/core/db/template-select';
+import { extractRecipientEmails } from '$lib/types/templateConfig';
 import { z } from 'zod';
 import { FEATURES } from '$lib/config/features';
 import { tryDecryptPii } from '$lib/core/crypto/user-pii-encryption';
@@ -143,8 +144,8 @@ export const load: PageServerLoad = async () => {
 
 				// Config
 				delivery_config: template.delivery_config,
-				recipient_config: null,
-				recipientEmails: [],
+				recipient_config: template.recipient_config,
+				recipientEmails: extractRecipientEmails(template.recipient_config),
 
 				// Metadata
 				is_public: template.is_public,

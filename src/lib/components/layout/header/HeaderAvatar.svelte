@@ -6,7 +6,7 @@
 	 * No verbose "Welcome back, X!" - the avatar speaks for itself.
 	 * Dropdown reveals secondary actions only on demand.
 	 */
-	import { User, LogOut, ChevronDown, Wallet } from '@lucide/svelte';
+	import { User, LogOut, ChevronDown, Wallet, ShieldCheck } from '@lucide/svelte';
 	import type { HeaderUser } from '$lib/types/any-replacements';
 	import { performLogout } from '$lib/core/identity/cache-invalidation';
 	import { walletState } from '$lib/stores/walletState.svelte';
@@ -110,6 +110,10 @@
 			<a href="/profile" class="header-dropdown-item" role="menuitem">
 				<User class="header-dropdown-item-icon" />
 				<span>Profile</span>
+			</a>
+			<a href="/profile/security" class="header-dropdown-item" role="menuitem">
+				<ShieldCheck class="header-dropdown-item-icon" />
+				<span>Security</span>
 			</a>
 			{#if orgMemberships.length > 0}
 				<div class="header-dropdown-divider"></div>

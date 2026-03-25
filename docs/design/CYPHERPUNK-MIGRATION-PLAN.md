@@ -522,51 +522,30 @@ C-5 (encrypt Supporter email)
 ## Phase D: Key-First Identity
 
 > **Priority**: P2 — long-term, post-launch
-> **Nature**: Passkey/DID becomes primary auth. Email becomes encrypted contact method.
+> **Nature**: Passkey as additional auth factor. Email REMAINS REQUIRED (anti-sybil).
 > **Depends on**: Phase C complete, passkey browser adoption maturity
-
-### Hypergraph
-
-```
-D-1 (passkey as primary auth)
-  ├─needs─→ C-3 complete (email no longer identity anchor)
-  └─blocks─→ D-2, D-3
-
-D-2 (email becomes optional)
-  ├─needs─→ D-1 complete
-  └─blocks─→ D-3
-
-D-3 (OAuth becomes linking method)
-  ├─needs─→ D-1, D-2 complete
-  └─blocks─→ nothing (terminal)
-
-  ┌──────────────────────────────────────┐
-  │ Phase D is post-launch               │
-  │ Requires passkey UX to be robust     │
-  │ Schema groundwork already exists     │
-  │ (passkey_credential_id, did_key)     │
-  └──────────────────────────────────────┘
-```
+>
+> **REVISED 2026-03-23**: Email is an anti-sybil measure. Requiring a verified email from an OAuth provider (Google, Twitter, etc.) is the cheapest sybil barrier. Making email optional would allow passkey-only account creation at scale with no cost. D-2 (email optional) is CANCELLED. Passkeys are an additional auth factor for stronger security, not a replacement for email-based identity.
 
 ### Tasks
 
-#### D-1: Passkey as primary auth — ☐ implement · ☐ review
+#### D-1: Passkey as additional auth factor — ☐ implement · ☐ review
 
-**Change**: WebAuthn/passkey registration offered first for new users. OAuth as fallback. Existing users prompted to register passkey. `did_key` becomes canonical public identifier.
+**Change**: Existing users can register a passkey for stronger auth. Passkey login bypasses OAuth redirect. `did_key` becomes canonical public identifier alongside `email_hash`. Email remains required — passkey is additive.
 
 **Existing schema support**: `passkey_credential_id`, `passkey_public_key_jwk`, `did_key`, `passkey_created_at`, `passkey_last_used_at` — all already exist.
 
 ---
 
-#### D-2: Email becomes optional — ☐ implement · ☐ review
+#### ~~D-2: Email becomes optional~~ — CANCELLED
 
-**Change**: Once passkey is primary, email is no longer required for auth. Becomes an encrypted contact method. `email` (or `email_hash`) unique constraint relaxed — users without email are valid.
+**Reason**: Email is anti-sybil. Verified OAuth email is the cheapest barrier against mass account creation. `email_hash` unique constraint stays.
 
 ---
 
-#### D-3: OAuth becomes a linking method — ☐ implement · ☐ review
+#### D-3: Multi-provider account linking — ☐ implement · ☐ review
 
-**Change**: OAuth callback creates a passkey-less account (as today) but prompts for passkey registration. Identity commitment comes from mDL, not OAuth email.
+**Change**: Users can link multiple OAuth providers + passkey to one account. `identity_commitment` (from mDL) is the merge key for cross-provider dedup. Email remains the primary sybil gate.
 
 ---
 
@@ -860,6 +839,174 @@ Drops all plaintext PII columns. The crypto layer is now the only source of trut
 
 **Backfill scripts:** `scripts/backfill-encrypt-{users,supporters,org-invites,oauth-tokens}.ts` + `scripts/verify-backfill-coverage.ts`.
 
-**Deferred:** EventRsvp email encryption (separate task), User profile field scrub (low sensitivity).
+**Deferred:** User profile field scrub (low sensitivity).
 
 **Test results:** 1,348/1,349 pass. Net -411 lines of code.
+
+### 2026-03-23 — Cycle 7 (EventRsvp Email Encryption)
+
+Last plaintext email column in the schema. EventRsvp `email` replaced with `encrypted_email` + `email_hash`.
+
+**Schema changes:** Dropped `email` from EventRsvp. Added `encrypted_email String` and `email_hash String`. Unique constraint changed from `@@unique([eventId, email])` to `@@unique([eventId, email_hash])`.
+
+**Code changes:**
+- `src/routes/api/e/[id]/rsvp/+server.ts` — RSVP upsert uses `eventId_email_hash` for dedup, encrypts email with `event-rsvp:{rsvpId}` info string
+- `src/routes/api/e/[id]/checkin/+server.ts` — Check-in RSVP lookup by `email_hash` instead of plaintext
+- `scripts/seed-phase2.ts` — Seed data uses `encrypted_email`/`email_hash` for EventRsvp creation
+
+**Backfill script:** `scripts/backfill-encrypt-event-rsvps.ts` — cursor-paginated, idempotent.
+
+**Test results:** 40/40 event tests pass. No regressions.
+
+---
+
+## SHADOW_ATLAS_VERIFICATION Enablement Checklist
+
+> **Status**: ENABLED (2026-03-23) — all pre-enablement requirements verified, 224/224 tests pass
+> **Flag**: `FEATURES.SHADOW_ATLAS_VERIFICATION` in `src/lib/config/features.ts` (currently `true`)
+> **Effect**: Gates client-side district commitment computation in AddressVerificationFlow.svelte
+
+### Files Gated on This Flag
+
+| File | What changes when flag is `true` |
+|------|----------------------------------|
+| `src/lib/components/auth/AddressVerificationFlow.svelte` | Uses `lookupDistrictsFromBrowser()` instead of server API; sends `district_commitment` instead of `district` |
+| `src/routes/api/identity/verify-address/+server.ts` | Accepts commitment-only payloads; skips `hashDistrict()` and UserDMRelation writes |
+
+### Pre-Enablement Requirements
+
+1. **IPFS CID root deployed**: `VITE_IPFS_CID_ROOT` env var must be set in Cloudflare Pages build. This is a **public** Vite env var (embedded in client bundle). Value: the CID of the pinned shadow-atlas-v3 directory.
+
+2. **IPFS gateway accessible**: The browser client fetches chunks from `https://dweb.link/ipfs/{cid}/...`. Verify:
+   - Gateway responds with CORS headers for `commons.email`
+   - Chunk files are present at expected paths: `{root}/US/districts/cd/{parentCell}.json`
+   - Officials files are present: `{root}/US/officials/{districtCode}.json`
+
+3. **Browser client graceful fallback**: `lookupDistrictsFromBrowser()` returns `null` if IPFS unreachable. AddressVerificationFlow falls back to legacy server path. Verified in `tests/unit/shadow-atlas/address-flow-b3.test.ts`.
+
+4. **Commitment computation works**: `computeDistrictCommitment(slots)` produces deterministic Poseidon2 hash. Verify against known test vector from voter-protocol.
+
+5. **verify-address endpoint accepts commitments**: When receiving `{ district_commitment, slot_count, verification_method: 'shadow_atlas' }`, the endpoint stores commitment in DistrictCredential without computing district_hash. Verified in test suite.
+
+### Rollback Procedure
+
+Set `SHADOW_ATLAS_VERIFICATION: false` in `src/lib/config/features.ts` and deploy. The flag is compile-time — Svelte dead-code eliminates the client-side IPFS path. No data migration needed for rollback.
+
+### Go-Live Steps
+
+```
+1. Pin shadow-atlas-v3 to IPFS (scripts/pin-to-ipfs.ts in voter-protocol repo)
+2. Set VITE_IPFS_CID_ROOT={root_cid} in CF Pages env
+3. Deploy with flag still false — verify IPFS loads in browser DevTools network tab
+4. Set SHADOW_ATLAS_VERIFICATION: true, deploy to staging
+5. Test: geolocation path (Path A) — verify commitment sent, no plaintext district
+6. Test: address path (Path B) — verify geocode-only, then client-side IPFS lookup
+7. Test: fallback — disconnect IPFS gateway, verify legacy path works
+8. Promote to production
+```
+
+---
+
+## Phase D-1: Passkey as Additional Auth Factor
+
+> **Status**: DESIGN (requires enablement plan, not new code — infrastructure exists)
+> **Key constraint**: Email remains required (anti-sybil). Passkey is additive, never replaces email.
+> **Revised from**: Original Phase D-2 (email optional) CANCELLED.
+
+### Current Infrastructure
+
+| Component | File | Status |
+|-----------|------|--------|
+| Registration endpoint | `src/routes/api/auth/passkey/register/+server.ts` | Complete — requires OAuth session first |
+| Authentication endpoint | `src/routes/api/auth/passkey/authenticate/+server.ts` | Complete — verifies credential, decrypts PII |
+| Registration logic | `src/lib/core/identity/passkey-registration.ts` | Complete — `@simplewebauthn/server` integration |
+| Authentication logic | `src/lib/core/identity/passkey-authentication.ts` | Complete — challenge-response with 5-min TTL |
+| RP config | `src/lib/core/identity/passkey-rp-config.ts` | Complete — configures relying party |
+| Schema | `User` model: `passkey_credential_id`, `passkey_public_key_jwk`, `passkey_created_at`, `passkey_last_used_at` | On User directly (single passkey per user) |
+| Challenge storage | `VerificationSession` model | Complete — 5-minute TTL, nonce-based |
+
+### What's Missing
+
+#### D-1a: Settings UI for Passkey Management
+
+**New file:** `src/routes/settings/security/+page.svelte`
+
+```
+SecuritySettingsPage
+├── PasskeySection
+│   ├── If no passkey: "Add a passkey for faster login"
+│   │   └── [Register Passkey] button → triggers registration flow
+│   ├── If passkey exists:
+│   │   ├── Created: {passkey_created_at}
+│   │   ├── Last used: {passkey_last_used_at}
+│   │   └── [Remove Passkey] button (confirmation dialog)
+│   └── "Passkeys let you log in with biometrics instead of OAuth"
+└── SessionSection (existing — move from profile page if needed)
+```
+
+**New file:** `src/routes/settings/security/+page.server.ts` — loads passkey status from session.
+
+#### D-1b: Multi-Passkey Support (Future)
+
+Current schema stores one passkey on User. For multi-device support, extract to a separate model:
+
+```prisma
+model Passkey {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  credentialId    String   @unique @map("credential_id")
+  publicKeyJwk    Json     @map("public_key_jwk")
+  displayName     String?  @map("display_name") // "iPhone", "Yubikey", etc.
+  createdAt       DateTime @default(now()) @map("created_at")
+  lastUsedAt      DateTime? @map("last_used_at")
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("passkey")
+}
+```
+
+**Defer until**: Real user demand for multi-device passkeys. Current single-passkey model works for v1.
+
+#### D-1c: Trust Tier Interaction
+
+Current: registration upgrades trust_tier from 0 to 1. Revised policy:
+- Passkey registration does NOT change trust tier (email verification is tier 1, not passkey)
+- Passkey is an **auth convenience factor**, not an identity verification step
+- Trust tier progression: 0 (guest) → 1 (OAuth + email verified) → 2 (address verified) → 3+ (mDL)
+- Passkey adds **session security** (phishing-resistant), not **identity assurance**
+
+#### D-1d: Login Flow Integration
+
+The existing OAuth flow remains primary. Passkey adds a fast-login option:
+
+```
+Login Page
+├── [Sign in with Google] (primary — existing)
+├── [Sign in with GitHub] (existing)
+├── ── or ──
+└── [Sign in with Passkey] (new — only shown if browser supports WebAuthn)
+```
+
+**File:** `src/routes/login/+page.svelte` — add passkey button, conditional on `PublicKeyCredential` availability.
+
+**Flow:**
+1. User clicks "Sign in with Passkey"
+2. `POST /api/auth/passkey/authenticate` (step 1) → get challenge
+3. `navigator.credentials.get()` → browser biometric prompt
+4. `POST /api/auth/passkey/authenticate` (step 2, with assertion) → session cookie
+5. Redirect to home
+
+**Key invariant:** User must have registered via OAuth first (email verified). Passkey-only account creation is impossible — `email_hash` NOT NULL on User.
+
+### Implementation Order
+
+```
+D-1a: Security settings page + passkey management UI     [1.5 days]
+D-1c: Remove trust tier upgrade from registration        [0.5 day]
+D-1d: Login page passkey button + flow                    [1 day]
+D-1b: Multi-passkey model (deferred)                      [—]
+```
+
+**Total: ~3 days**
