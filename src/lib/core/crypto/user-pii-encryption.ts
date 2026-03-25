@@ -265,15 +265,13 @@ export async function encryptUserPii(
 export async function decryptUserPii(
 	user: {
 		id: string;
-		encrypted_email?: string | null;
+		encrypted_email: string;
 		encrypted_name?: string | null;
 	}
 ): Promise<{ email: string; name: string | null }> {
-	if (!user.encrypted_email) {
-		// Post-Cycle 6: plaintext columns are dropped. No fallback path exists.
-		throw new Error(`[PII] User ${user.id} missing encrypted_email — backfill incomplete or encryption failed at creation`);
+	if (!user.encrypted_email || user.encrypted_email === '') {
+		throw new Error(`[PII] User ${user.id} has empty encrypted_email — encryption failed at creation or migration corrupted`);
 	}
-
 	const encEmail: EncryptedPii = JSON.parse(user.encrypted_email);
 	const decryptedEmail = await decryptPii(encEmail, user.id, 'email');
 
@@ -297,12 +295,11 @@ export async function decryptUserPii(
  */
 export async function tryDecryptSupporterEmail(supporter: {
 	id: string;
-	encrypted_email?: string | null;
+	encrypted_email: string;
 }): Promise<string> {
-	if (!supporter.encrypted_email) {
-		throw new Error(`[PII] Supporter ${supporter.id} missing encrypted_email — backfill incomplete`);
+	if (!supporter.encrypted_email || supporter.encrypted_email === '') {
+		throw new Error(`[PII] Supporter ${supporter.id} has empty encrypted_email — encryption failed at creation`);
 	}
-
 	const enc: EncryptedPii = JSON.parse(supporter.encrypted_email);
 	return await decryptPii(enc, 'supporter:' + supporter.id, 'email');
 }

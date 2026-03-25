@@ -88,21 +88,13 @@ describe('Supporter PII Encryption', () => {
 			expect(result).toBe(email);
 		});
 
-		it('should throw when encrypted_email is null (backfill incomplete)', async () => {
+		it('should throw clear error on empty string encrypted_email (poison pill guard)', async () => {
 			await expect(
 				tryDecryptSupporterEmail({
 					id: crypto.randomUUID(),
-					encrypted_email: null
+					encrypted_email: ''
 				})
-			).rejects.toThrow('missing encrypted_email');
-		});
-
-		it('should throw when encrypted_email is undefined (backfill incomplete)', async () => {
-			await expect(
-				tryDecryptSupporterEmail({
-					id: crypto.randomUUID()
-				})
-			).rejects.toThrow('missing encrypted_email');
+			).rejects.toThrow('empty encrypted_email');
 		});
 
 		it('should throw when decryption fails (wrong key)', async () => {

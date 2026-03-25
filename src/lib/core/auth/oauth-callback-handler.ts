@@ -331,27 +331,22 @@ export class OAuthCallbackHandler {
 		// C-3: Encrypt PII before storage (email_hash computed above, reuse it)
 		// Generate a temporary ID for key derivation — Prisma will assign the real cuid
 		const tempUserId = crypto.randomUUID();
-		const piiData = await encryptUserPii(userData.email, userData.name, tempUserId).catch(() => ({
-			encrypted_email: null,
-			encrypted_name: null,
-			email_hash: emailHash
-		}));
+		const piiData = await encryptUserPii(userData.email, userData.name, tempUserId);
 
-		// encrypted_email and email_hash are NOT NULL — must always be provided
-		const finalEncryptedEmail = piiData.encrypted_email ?? '';
-		const finalEmailHash = piiData.email_hash ?? emailHash ?? '';
+		// Encryption is mandatory — empty/null encrypted_email is a poison pill (JSON.parse crashes)
+		if (!piiData.encrypted_email || !piiData.email_hash) {
+			throw new Error('[OAuth] PII encryption failed — cannot create user without encrypted_email and email_hash');
+		}
 
 		// Create new user with OAuth account
 		const newUser = await db.user.create({
 			data: {
 				id: tempUserId,
-				email: userData.email,
-				name: userData.name,
 				avatar: userData.avatar,
-				// C-3: Encrypted PII (plaintext fallback kept until column drop migration runs)
-				encrypted_email: finalEncryptedEmail,
+				// Encrypted PII only — no plaintext email/name written
+				encrypted_email: piiData.encrypted_email,
 				encrypted_name: piiData.encrypted_name ?? undefined,
-				email_hash: finalEmailHash,
+				email_hash: piiData.email_hash,
 				// ISSUE-002: Apply trust_score based on email verification
 				trust_score: baseTrustScore,
 				reputation_tier: baseReputationTier,

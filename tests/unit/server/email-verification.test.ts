@@ -9,9 +9,15 @@ vi.mock('$lib/core/db', () => {
 		deleteMany: vi.fn(),
 		upsert: vi.fn()
 	};
+	const bounceReport = {
+		create: vi.fn(),
+		findFirst: vi.fn(),
+		findMany: vi.fn(),
+		updateMany: vi.fn()
+	};
 	return {
-		prisma: { suppressedEmail },
-		db: { suppressedEmail }
+		prisma: { suppressedEmail, bounceReport },
+		db: { suppressedEmail, bounceReport }
 	};
 });
 
@@ -20,17 +26,24 @@ vi.mock('$lib/server/reacher-client', () => ({
 	checkEmailBatch: vi.fn()
 }));
 
-import { verifyEmail, verifyEmailBatch, reportBounce } from '$lib/server/email-verification';
+import { verifyEmail, verifyEmailBatch, reportBounce, processPendingBounceReports } from '$lib/server/email-verification';
 import { prisma } from '$lib/core/db';
 import { checkEmail, checkEmailBatch } from '$lib/server/reacher-client';
 import type { ReacherResult } from '$lib/server/reacher-client';
 
-const mockDb = prisma.suppressedEmail as unknown as {
+const mockSuppressed = prisma.suppressedEmail as unknown as {
 	findUnique: ReturnType<typeof vi.fn>;
 	findMany: ReturnType<typeof vi.fn>;
 	delete: ReturnType<typeof vi.fn>;
 	deleteMany: ReturnType<typeof vi.fn>;
 	upsert: ReturnType<typeof vi.fn>;
+};
+
+const mockBounce = prisma.bounceReport as unknown as {
+	create: ReturnType<typeof vi.fn>;
+	findFirst: ReturnType<typeof vi.fn>;
+	findMany: ReturnType<typeof vi.fn>;
+	updateMany: ReturnType<typeof vi.fn>;
 };
 
 const mockCheckEmail = checkEmail as ReturnType<typeof vi.fn>;
@@ -63,16 +76,20 @@ function makeReacherResult(
 describe('email-verification', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mockDb.findUnique.mockResolvedValue(null);
-		mockDb.findMany.mockResolvedValue([]);
-		mockDb.delete.mockResolvedValue({});
-		mockDb.deleteMany.mockResolvedValue({ count: 0 });
-		mockDb.upsert.mockResolvedValue({});
+		mockSuppressed.findUnique.mockResolvedValue(null);
+		mockSuppressed.findMany.mockResolvedValue([]);
+		mockSuppressed.delete.mockResolvedValue({});
+		mockSuppressed.deleteMany.mockResolvedValue({ count: 0 });
+		mockSuppressed.upsert.mockResolvedValue({});
+		mockBounce.create.mockResolvedValue({});
+		mockBounce.findFirst.mockResolvedValue(null);
+		mockBounce.findMany.mockResolvedValue([]);
+		mockBounce.updateMany.mockResolvedValue({ count: 0 });
 	});
 
 	describe('verifyEmail', () => {
 		it('short-circuits on suppressed email', async () => {
-			mockDb.findUnique.mockResolvedValueOnce({
+			mockSuppressed.findUnique.mockResolvedValueOnce({
 				email: 'bad@example.com',
 				reason: 'smtp_invalid',
 				expiresAt: new Date(Date.now() + 86400000)
@@ -86,7 +103,7 @@ describe('email-verification', () => {
 		});
 
 		it('re-verifies expired suppression', async () => {
-			mockDb.findUnique.mockResolvedValueOnce({
+			mockSuppressed.findUnique.mockResolvedValueOnce({
 				email: 'expired@example.com',
 				reason: 'smtp_invalid',
 				expiresAt: new Date(Date.now() - 86400000)
@@ -97,7 +114,7 @@ describe('email-verification', () => {
 
 			expect(result.verdict).toBe('deliverable');
 			expect(result.source).toBe('smtp_probe');
-			expect(mockDb.delete).toHaveBeenCalled();
+			expect(mockSuppressed.delete).toHaveBeenCalled();
 		});
 
 		it('returns unknown when Reacher is unavailable', async () => {
@@ -110,7 +127,7 @@ describe('email-verification', () => {
 		});
 
 		it('falls through to probe when suppression lookup fails', async () => {
-			mockDb.findUnique.mockRejectedValueOnce(new Error('DB down'));
+			mockSuppressed.findUnique.mockRejectedValueOnce(new Error('DB down'));
 			mockCheckEmail.mockResolvedValueOnce(makeReacherResult('db-fail@example.com', 'safe'));
 
 			const result = await verifyEmail('db-fail@example.com');
@@ -134,7 +151,7 @@ describe('email-verification', () => {
 			const result = await verifyEmail('dead@example.com');
 
 			expect(result.verdict).toBe('undeliverable');
-			expect(mockDb.upsert).toHaveBeenCalledWith(
+			expect(mockSuppressed.upsert).toHaveBeenCalledWith(
 				expect.objectContaining({
 					where: { email: 'dead@example.com' },
 					create: expect.objectContaining({
@@ -168,7 +185,7 @@ describe('email-verification', () => {
 			expect(result.verdict).toBe('risky');
 			expect(result.reason).toBe('full_inbox');
 			// Should NOT suppress — temporary condition
-			expect(mockDb.upsert).not.toHaveBeenCalled();
+			expect(mockSuppressed.upsert).not.toHaveBeenCalled();
 		});
 
 		it('maps dns_no_mx to undeliverable', async () => {
@@ -213,7 +230,7 @@ describe('email-verification', () => {
 
 		it('still returns result when suppression write fails', async () => {
 			mockCheckEmail.mockResolvedValueOnce(makeReacherResult('bad@example.com', 'invalid'));
-			mockDb.upsert.mockRejectedValueOnce(new Error('DB write failed'));
+			mockSuppressed.upsert.mockRejectedValueOnce(new Error('DB write failed'));
 
 			const result = await verifyEmail('bad@example.com');
 
@@ -225,7 +242,7 @@ describe('email-verification', () => {
 
 	describe('verifyEmailBatch', () => {
 		it('skips suppressed emails in batch probe', async () => {
-			mockDb.findMany.mockResolvedValueOnce([
+			mockSuppressed.findMany.mockResolvedValueOnce([
 				{
 					id: '1',
 					email: 'suppressed@example.com',
@@ -246,7 +263,7 @@ describe('email-verification', () => {
 		});
 
 		it('cleans expired suppressions and re-probes', async () => {
-			mockDb.findMany.mockResolvedValueOnce([
+			mockSuppressed.findMany.mockResolvedValueOnce([
 				{
 					id: 'exp-1',
 					email: 'old@example.com',
@@ -262,13 +279,13 @@ describe('email-verification', () => {
 			const results = await verifyEmailBatch(['old@example.com']);
 
 			expect(results.get('old@example.com')?.verdict).toBe('deliverable');
-			expect(mockDb.deleteMany).toHaveBeenCalledWith({
+			expect(mockSuppressed.deleteMany).toHaveBeenCalledWith({
 				where: { id: { in: ['exp-1'] } }
 			});
 		});
 
 		it('falls through to probe when bulk suppression check fails', async () => {
-			mockDb.findMany.mockRejectedValueOnce(new Error('DB down'));
+			mockSuppressed.findMany.mockRejectedValueOnce(new Error('DB down'));
 			mockCheckEmailBatch.mockResolvedValueOnce(
 				new Map([['test@example.com', makeReacherResult('test@example.com', 'safe')]])
 			);
@@ -295,35 +312,299 @@ describe('email-verification', () => {
 		});
 	});
 
-	describe('reportBounce', () => {
-		it('suppresses email with user_report source and 1yr TTL', async () => {
-			await reportBounce('bounced@example.com', 'user-123');
+	describe('reportBounce (triage architecture)', () => {
+		it('stores report in BounceReport table without immediate suppression', async () => {
+			// Single reporter — should NOT suppress
+			mockBounce.findMany.mockResolvedValueOnce([{ reportedBy: 'user-1' }]);
 
-			expect(mockDb.upsert).toHaveBeenCalledWith(
+			const result = await reportBounce('test@example.com', 'user-1');
+
+			expect(mockBounce.create).toHaveBeenCalledWith({
+				data: expect.objectContaining({
+					email: 'test@example.com',
+					domain: 'example.com',
+					reportedBy: 'user-1'
+				})
+			});
+			expect(result.suppressed).toBe(false);
+			expect(result.reportCount).toBe(1);
+			// Should NOT touch suppression table
+			expect(mockSuppressed.upsert).not.toHaveBeenCalled();
+		});
+
+		it('returns protectedDomain=true for .gov emails', async () => {
+			mockBounce.findMany.mockResolvedValueOnce([{ reportedBy: 'user-1' }]);
+
+			const result = await reportBounce('official@senate.gov', 'user-1');
+
+			expect(result.protectedDomain).toBe(true);
+			expect(result.suppressed).toBe(false);
+			expect(mockSuppressed.upsert).not.toHaveBeenCalled();
+		});
+
+		it('returns protectedDomain=true for .gov.uk subdomains', async () => {
+			mockBounce.findMany.mockResolvedValueOnce([{ reportedBy: 'user-1' }]);
+
+			const result = await reportBounce('mp@parliament.gov.uk', 'user-1');
+
+			expect(result.protectedDomain).toBe(true);
+		});
+
+		it('does NOT flag fakegov.com as protected (suffix matching)', async () => {
+			mockBounce.findMany.mockResolvedValueOnce([{ reportedBy: 'user-1' }]);
+
+			const result = await reportBounce('phish@fakegov.com', 'user-1');
+
+			expect(result.protectedDomain).toBe(false);
+		});
+
+		it('never auto-suppresses protected domains even with 3+ reporters + probe', async () => {
+			// 3 distinct reporters
+			mockBounce.findMany.mockResolvedValueOnce([
+				{ reportedBy: 'user-1' },
+				{ reportedBy: 'user-2' },
+				{ reportedBy: 'user-3' }
+			]);
+			// Prior probe confirmed undeliverable
+			mockBounce.findFirst.mockResolvedValueOnce({ probeResult: 'undeliverable' });
+
+			const result = await reportBounce('senator@senate.gov', 'user-3');
+
+			expect(result.protectedDomain).toBe(true);
+			expect(result.suppressed).toBe(false);
+			// Protected domain check short-circuits before threshold logic
+			expect(mockBounce.findFirst).not.toHaveBeenCalled();
+		});
+
+		it('does NOT suppress with 3 reporters but no probe corroboration', async () => {
+			mockBounce.findMany.mockResolvedValueOnce([
+				{ reportedBy: 'user-1' },
+				{ reportedBy: 'user-2' },
+				{ reportedBy: 'user-3' }
+			]);
+			// No prior probe result
+			mockBounce.findFirst.mockResolvedValueOnce(null);
+
+			const result = await reportBounce('disputed@example.com', 'user-3');
+
+			expect(result.suppressed).toBe(false);
+			expect(result.reportCount).toBe(3);
+			expect(mockSuppressed.upsert).not.toHaveBeenCalled();
+		});
+
+		it('does NOT suppress when probe corroboration is stale (>90 days)', async () => {
+			mockBounce.findMany.mockResolvedValueOnce([
+				{ reportedBy: 'user-1' },
+				{ reportedBy: 'user-2' },
+				{ reportedBy: 'user-3' }
+			]);
+			// findFirst with recency filter returns null (no recent probe)
+			mockBounce.findFirst.mockResolvedValueOnce(null);
+
+			const result = await reportBounce('stale-probe@example.com', 'user-3');
+
+			expect(result.suppressed).toBe(false);
+			// Verify the query includes a createdAt filter
+			expect(mockBounce.findFirst).toHaveBeenCalledWith({
+				where: expect.objectContaining({
+					email: 'stale-probe@example.com',
+					probeResult: 'undeliverable',
+					createdAt: expect.objectContaining({ gte: expect.any(Date) })
+				})
+			});
+		});
+
+		it('suppresses when 3+ reporters AND probe corroboration exists', async () => {
+			mockBounce.findMany.mockResolvedValueOnce([
+				{ reportedBy: 'user-1' },
+				{ reportedBy: 'user-2' },
+				{ reportedBy: 'user-3' }
+			]);
+			mockBounce.findFirst.mockResolvedValueOnce({ probeResult: 'undeliverable' });
+
+			const result = await reportBounce('dead@example.com', 'user-3');
+
+			expect(result.suppressed).toBe(true);
+			expect(result.protectedDomain).toBe(false);
+			expect(mockSuppressed.upsert).toHaveBeenCalledWith(
 				expect.objectContaining({
-					where: { email: 'bounced@example.com' },
+					where: { email: 'dead@example.com' },
 					create: expect.objectContaining({
-						email: 'bounced@example.com',
-						domain: 'example.com',
-						reason: 'bounce_report',
 						source: 'user_report',
-						reportedBy: 'user-123'
+						reason: 'bounce_report',
+						reportedBy: 'user-3'
 					})
 				})
 			);
+			// Should resolve all reports for this email
+			expect(mockBounce.updateMany).toHaveBeenCalledWith({
+				where: { email: 'dead@example.com', resolved: false },
+				data: { resolved: true }
+			});
+		});
 
-			// Verify TTL is ~365 days
-			const createArg = mockDb.upsert.mock.calls[0][0].create;
-			const daysDiff = Math.round((createArg.expiresAt.getTime() - Date.now()) / 86400000);
-			expect(daysDiff).toBeGreaterThanOrEqual(364);
-			expect(daysDiff).toBeLessThanOrEqual(366);
+		it('does NOT suppress with only 2 reporters even with probe', async () => {
+			mockBounce.findMany.mockResolvedValueOnce([
+				{ reportedBy: 'user-1' },
+				{ reportedBy: 'user-2' }
+			]);
+
+			const result = await reportBounce('maybe@example.com', 'user-2');
+
+			expect(result.suppressed).toBe(false);
+			expect(result.reportCount).toBe(2);
+			// Threshold not met — should not even check probe corroboration
+			expect(mockBounce.findFirst).not.toHaveBeenCalled();
 		});
 
 		it('propagates DB errors to caller', async () => {
-			mockDb.upsert.mockRejectedValueOnce(new Error('DB down'));
+			mockBounce.create.mockRejectedValueOnce(new Error('DB down'));
 
-			// reportBounce throws on failure (unlike suppressEmail which swallows for graceful degradation)
 			await expect(reportBounce('fail@example.com', 'user-1')).rejects.toThrow('DB down');
+		});
+
+		it('protects parliament.scot and senedd.wales', async () => {
+			mockBounce.findMany.mockResolvedValueOnce([{ reportedBy: 'u1' }]);
+			const r1 = await reportBounce('msp@parliament.scot', 'u1');
+			expect(r1.protectedDomain).toBe(true);
+
+			mockBounce.findMany.mockResolvedValueOnce([{ reportedBy: 'u1' }]);
+			const r2 = await reportBounce('ms@senedd.wales', 'u1');
+			expect(r2.protectedDomain).toBe(true);
+		});
+
+		it('protects gc.ca and govt.nz', async () => {
+			mockBounce.findMany.mockResolvedValueOnce([{ reportedBy: 'u1' }]);
+			const r1 = await reportBounce('mp@parl.gc.ca', 'u1');
+			expect(r1.protectedDomain).toBe(true);
+
+			mockBounce.findMany.mockResolvedValueOnce([{ reportedBy: 'u1' }]);
+			const r2 = await reportBounce('minister@dept.govt.nz', 'u1');
+			expect(r2.protectedDomain).toBe(true);
+		});
+	});
+
+	describe('processPendingBounceReports', () => {
+		it('auto-resolves stale reports (>30 days)', async () => {
+			mockBounce.updateMany
+				.mockResolvedValueOnce({ count: 5 }) // stale resolve
+				;
+			mockBounce.findMany.mockResolvedValueOnce([]); // no pending
+
+			const result = await processPendingBounceReports();
+
+			expect(result.staleResolved).toBe(5);
+			expect(result.processed).toBe(0);
+			expect(result.suppressed).toBe(0);
+		});
+
+		it('probes pending reports and annotates with verdict', async () => {
+			mockBounce.updateMany.mockResolvedValue({ count: 0 });
+			mockBounce.findMany.mockResolvedValueOnce([
+				{ email: 'probe-me@example.com', domain: 'example.com', reportedBy: 'user-1' }
+			]);
+			mockCheckEmailBatch.mockResolvedValueOnce(
+				new Map([['probe-me@example.com', makeReacherResult('probe-me@example.com', 'safe')]])
+			);
+
+			const result = await processPendingBounceReports();
+
+			expect(result.processed).toBe(1);
+			// Deliverable → auto-resolve (dismiss)
+			expect(mockBounce.updateMany).toHaveBeenCalledWith({
+				where: { email: 'probe-me@example.com', resolved: false },
+				data: { probeResult: 'deliverable' }
+			});
+			// Deliverable reports get resolved
+			expect(mockBounce.updateMany).toHaveBeenCalledWith({
+				where: { email: 'probe-me@example.com', resolved: false },
+				data: { resolved: true }
+			});
+		});
+
+		it('suppresses undeliverable non-protected domain', async () => {
+			mockBounce.updateMany.mockResolvedValue({ count: 0 });
+			mockBounce.findMany.mockResolvedValueOnce([
+				{ email: 'dead@example.com', domain: 'example.com', reportedBy: 'user-1' }
+			]);
+			mockCheckEmailBatch.mockResolvedValueOnce(
+				new Map([['dead@example.com', makeReacherResult('dead@example.com', 'invalid')]])
+			);
+
+			const result = await processPendingBounceReports();
+
+			expect(result.suppressed).toBe(1);
+			expect(mockSuppressed.upsert).toHaveBeenCalledWith(
+				expect.objectContaining({
+					where: { email: 'dead@example.com' }
+				})
+			);
+		});
+
+		it('does NOT suppress undeliverable protected domain', async () => {
+			mockBounce.updateMany.mockResolvedValue({ count: 0 });
+			mockBounce.findMany.mockResolvedValueOnce([
+				{ email: 'rep@house.gov', domain: 'house.gov', reportedBy: 'user-1' }
+			]);
+			mockCheckEmailBatch.mockResolvedValueOnce(
+				new Map([['rep@house.gov', makeReacherResult('rep@house.gov', 'invalid')]])
+			);
+
+			const result = await processPendingBounceReports();
+
+			expect(result.processed).toBe(1);
+			expect(result.suppressed).toBe(0);
+			expect(mockSuppressed.upsert).not.toHaveBeenCalled();
+		});
+
+		it('leaves unknown/risky reports unresolved for retry', async () => {
+			mockBounce.updateMany.mockResolvedValue({ count: 0 });
+			mockBounce.findMany.mockResolvedValueOnce([
+				{ email: 'maybe@example.com', domain: 'example.com', reportedBy: 'user-1' }
+			]);
+			mockCheckEmailBatch.mockResolvedValueOnce(
+				new Map([['maybe@example.com', makeReacherResult('maybe@example.com', 'unknown')]])
+			);
+
+			const result = await processPendingBounceReports();
+
+			expect(result.processed).toBe(1);
+			expect(result.suppressed).toBe(0);
+			// Annotated with 'unknown' but NOT resolved
+			expect(mockBounce.updateMany).toHaveBeenCalledWith({
+				where: { email: 'maybe@example.com', resolved: false },
+				data: { probeResult: 'unknown' }
+			});
+		});
+
+		it('handles Reacher unavailable gracefully (unknown verdict)', async () => {
+			mockBounce.updateMany.mockResolvedValue({ count: 0 });
+			mockBounce.findMany.mockResolvedValueOnce([
+				{ email: 'down@example.com', domain: 'example.com', reportedBy: 'user-1' }
+			]);
+			mockCheckEmailBatch.mockResolvedValueOnce(
+				new Map([['down@example.com', null]])
+			);
+
+			const result = await processPendingBounceReports();
+
+			expect(result.processed).toBe(1);
+			expect(result.suppressed).toBe(0);
+			// Annotated with 'unknown' (null probe → unknown)
+			expect(mockBounce.updateMany).toHaveBeenCalledWith({
+				where: { email: 'down@example.com', resolved: false },
+				data: { probeResult: 'unknown' }
+			});
+		});
+
+		it('returns early when no pending reports', async () => {
+			mockBounce.updateMany.mockResolvedValueOnce({ count: 0 });
+			mockBounce.findMany.mockResolvedValueOnce([]);
+
+			const result = await processPendingBounceReports();
+
+			expect(result.processed).toBe(0);
+			expect(mockCheckEmailBatch).not.toHaveBeenCalled();
 		});
 	});
 });

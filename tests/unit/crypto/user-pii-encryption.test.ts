@@ -176,25 +176,16 @@ describe('User PII Encryption', () => {
 	describe('decryptUserPii', () => {
 		it('decrypts encrypted fields', async () => {
 			const pii = await encryptUserPii('carol@example.com', 'Carol', 'user-300');
+			expect(pii.encrypted_email).not.toBeNull();
 			const user = {
 				id: 'user-300',
-				encrypted_email: pii.encrypted_email,
+				encrypted_email: pii.encrypted_email!,
 				encrypted_name: pii.encrypted_name
 			};
 
 			const result = await decryptUserPii(user);
 			expect(result.email).toBe('carol@example.com');
 			expect(result.name).toBe('Carol');
-		});
-
-		it('throws when encrypted_email is missing (backfill incomplete)', async () => {
-			const user = {
-				id: 'user-400',
-				encrypted_email: null,
-				encrypted_name: null
-			};
-
-			await expect(decryptUserPii(user)).rejects.toThrow('missing encrypted_email');
 		});
 
 		it('throws on decryption error (no plaintext fallback)', async () => {
@@ -205,6 +196,11 @@ describe('User PII Encryption', () => {
 			};
 
 			await expect(decryptUserPii(user)).rejects.toThrow();
+		});
+
+		it('throws clear error on empty string encrypted_email (poison pill guard)', async () => {
+			const user = { id: 'user-600', encrypted_email: '', encrypted_name: null };
+			await expect(decryptUserPii(user)).rejects.toThrow('empty encrypted_email');
 		});
 	});
 
