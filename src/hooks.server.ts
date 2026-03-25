@@ -74,8 +74,12 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			return resolve(event);
 		}
 
-		const { session, user } = await auth.validateSession(sessionId);
-		if (session) {
+		const { session, user, renewed } = await auth.validateSession(sessionId);
+		if (session && renewed) {
+			// Only re-set the cookie when the session was actually renewed.
+			// Re-setting on every request creates a race: if another tab has a
+			// request in-flight, its response re-writes the cookie AFTER a
+			// logout request deletes it — undoing the logout.
 			event.cookies.set(auth.sessionCookieName, session.id, {
 				path: '/',
 				sameSite: 'lax',
@@ -83,7 +87,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 				expires: session.expiresAt,
 				secure: !dev
 			});
-		} else {
+		} else if (!session) {
 			event.cookies.delete(auth.sessionCookieName, { path: '/' });
 		}
 

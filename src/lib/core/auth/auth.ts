@@ -61,11 +61,14 @@ export interface User {
 export interface SessionValidationSuccess {
 	session: Session;
 	user: User;
+	/** True when the session expiry was extended (cookie needs refresh) */
+	renewed: boolean;
 }
 
 export interface SessionValidationFailure {
 	session: null;
 	user: null;
+	renewed: false;
 }
 
 function generateSessionToken(): string {
@@ -120,14 +123,14 @@ export async function validateSession(
 	});
 
 	if (!result) {
-		return { session: null, user: null };
+		return { session: null, user: null, renewed: false };
 	}
 	const { user, ...session } = result;
 
 	const sessionExpired = Date.now() >= session.expiresAt.getTime();
 	if (sessionExpired) {
 		await db.session.delete({ where: { id: session.id } });
-		return { session: null, user: null };
+		return { session: null, user: null, renewed: false };
 	}
 
 	// F-R4B-02: Absolute session lifetime cap — prevents indefinite renewal of stolen tokens
@@ -135,7 +138,7 @@ export async function validateSession(
 	const sessionAge = Date.now() - session.createdAt.getTime();
 	if (sessionAge > MAX_SESSION_LIFETIME_MS) {
 		await db.session.delete({ where: { id: session.id } });
-		return { session: null, user: null };
+		return { session: null, user: null, renewed: false };
 	}
 
 	const renewSession = Date.now() >= session.expiresAt.getTime() - DAY_IN_MS * 15;
@@ -165,6 +168,7 @@ export async function validateSession(
 
 	return {
 		session,
+		renewed: renewSession,
 		user: {
 			...user,
 			// C-3: Use decrypted PII (or masked fallback on decryption failure)

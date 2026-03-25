@@ -260,7 +260,7 @@ describe('session-management (auth.ts)', () => {
 
 				const result = await validateSession('nonexistent-id');
 
-				expect(result).toEqual({ session: null, user: null });
+				expect(result).toEqual({ session: null, user: null, renewed: false });
 			});
 
 			it('should query by the provided session ID', async () => {
@@ -286,7 +286,7 @@ describe('session-management (auth.ts)', () => {
 
 				const result = await validateSession('expired-session');
 
-				expect(result).toEqual({ session: null, user: null });
+				expect(result).toEqual({ session: null, user: null, renewed: false });
 				expect(mockSessionDelete).toHaveBeenCalledWith({
 					where: { id: 'expired-session' }
 				});
@@ -302,7 +302,7 @@ describe('session-management (auth.ts)', () => {
 
 				const result = await validateSession('exact-expiry');
 
-				expect(result).toEqual({ session: null, user: null });
+				expect(result).toEqual({ session: null, user: null, renewed: false });
 				expect(mockSessionDelete).toHaveBeenCalledTimes(1);
 			});
 
@@ -316,7 +316,7 @@ describe('session-management (auth.ts)', () => {
 
 				const result = await validateSession('long-expired');
 
-				expect(result).toEqual({ session: null, user: null });
+				expect(result).toEqual({ session: null, user: null, renewed: false });
 			});
 		});
 

@@ -504,6 +504,17 @@ async function getDB(): Promise<IDBPDatabase<SessionCredentialDB>> {
 	return dbInstance;
 }
 
+/**
+ * Close the held IndexedDB connection so deleteDatabase() isn't blocked.
+ * Called by performLogout() before clearing caches.
+ */
+export function closeDatabase(): void {
+	if (dbInstance) {
+		dbInstance.close();
+		dbInstance = null;
+	}
+}
+
 // ============================================================================
 // Record ID Helpers
 // ============================================================================

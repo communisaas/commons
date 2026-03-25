@@ -9,6 +9,7 @@
 	 *   desktop: wider field, zones spread to use the space
 	 */
 	import { ArrowLeft, LogOut as LogOutIcon } from '@lucide/svelte';
+	import { performLogout } from '$lib/core/identity/cache-invalidation';
 	import type { LayoutData } from './$types';
 	import type { Snippet } from 'svelte';
 
@@ -49,14 +50,15 @@
 
 		<div class="flex items-center gap-4">
 			<span class="text-sm text-slate-500">{user?.name?.split(' ')[0] || ''}</span>
-			<a
-				href="/auth/logout"
-				class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-slate-500 transition-colors hover:bg-slate-100/60 hover:text-slate-700"
+			<button
+				type="button"
+				onclick={(e) => { e.preventDefault(); performLogout(); }}
+				class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-slate-500 transition-colors hover:bg-slate-100/60 hover:text-slate-700 border-none bg-transparent cursor-pointer"
 				title="Sign out"
 			>
 				<LogOutIcon class="h-3.5 w-3.5" />
 				<span class="hidden sm:inline">Sign out</span>
-			</a>
+			</button>
 		</div>
 	</nav>
 

@@ -228,9 +228,21 @@ async function clearDatabase(dbName: string): Promise<void> {
 export async function performLogout(): Promise<void> {
 	if (!browser) return;
 
-	// Clear all client caches first
-	await clearAllClientCaches();
+	// Close held IndexedDB connections FIRST so deleteDatabase() isn't blocked.
+	// The root layout's $effect holds commons-session open via getSessionCredential().
+	try {
+		const { closeDatabase } = await import('$lib/core/identity/session-credentials');
+		closeDatabase();
+	} catch {
+		// Module may not be loaded yet — safe to skip
+	}
 
-	// Then redirect to server-side logout
+	// Best-effort cache clearing with a hard timeout.
+	// Navigation MUST happen even if IndexedDB ops hang.
+	const cacheClearing = clearAllClientCaches();
+	const timeout = new Promise<void>((resolve) => setTimeout(resolve, 2000));
+	await Promise.race([cacheClearing, timeout]);
+
+	// Redirect to server-side logout
 	window.location.href = '/auth/logout';
 }
