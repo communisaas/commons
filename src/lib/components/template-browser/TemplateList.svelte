@@ -6,6 +6,7 @@
 	import MessageMetrics from './MessageMetrics.svelte';
 	import SkeletonTemplate from '$lib/components/ui/SkeletonTemplate.svelte';
 	import { deriveTargetPresentation } from '$lib/utils/deriveTargetPresentation';
+	import { topicHue } from '$lib/utils/topic-hue';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
 	import { FEATURES } from '$lib/config/features';
 
@@ -354,85 +355,64 @@
 					{@const globalIndex = allTemplates.findIndex((t) => t.id === template.id)}
 					{@const targetInfo = deriveTargetPresentation(template)}
 					{@const isNewlyRevealed = templateIndex >= INITIAL_VISIBLE}
+					{@const hue = topicHue(template.category, template.topics)}
 					<button
 						type="button"
 						data-template-button
 						data-template-id={template.id}
 						data-testid="template-button-{template.id}"
-						class="template-card relative flex w-full items-start justify-between gap-3 rounded-xl border border-l-4 bg-white/80 p-3 text-left shadow-atmospheric-card backdrop-blur-sm transition-all duration-300 hover:scale-[1.02] hover:shadow-atmospheric-card-hover md:p-4"
+						class="template-card card-topic relative flex w-full items-start justify-between gap-3 rounded-xl p-3 text-left backdrop-blur-sm transition-all duration-300 hover:scale-[1.02] motion-reduce:transition-none motion-reduce:hover:scale-100 md:p-4 {isCongressional
+							? 'card-weight-heavy'
+							: 'card-weight-light'}"
 						class:newly-revealed={isNewlyRevealed}
 						class:initial-reveal={justLoaded}
-						class:!bg-direct-50={selectedId === template.id && !isCongressional}
-						class:!bg-congressional-50={selectedId === template.id && isCongressional}
-						style="will-change: transform; backface-visibility: hidden; border-width: 1px; border-left-width: 4px;{justLoaded ? ` animation-delay: ${templateIndex * 60}ms;` : ''}"
+						class:card-selected={selectedId === template.id}
+						style="--card-hue: {hue}; will-change: transform; backface-visibility: hidden;{justLoaded ? ` animation-delay: ${templateIndex * 60}ms;` : ''}"
 						class:cursor-pointer={selectedId !== template.id}
 						class:cursor-default={selectedId === template.id}
-						class:border-direct-400={selectedId === template.id && !isCongressional}
-						class:border-congressional-400={selectedId === template.id && isCongressional}
-						class:border-slate-200={selectedId !== template.id && !isHovered}
-						class:border-violet-200={selectedId !== template.id && isHovered}
-						class:border-l-congressional-500={isCongressional}
-						class:border-l-direct-500={!isCongressional}
 						onmouseenter={() => handleTemplateHover(template.id, true)}
 						onmouseleave={() => handleTemplateHover(template.id, false)}
 						onclick={() => onSelect(template.id)}
 						onkeydown={(e) => handleKeydown(e, template.id, globalIndex)}
 					>
 						<div class="min-w-0 flex-1">
-							<!-- Perceptual Decision-Maker Representation -->
 							{#if targetInfo.type === 'multi-level'}
-								<!-- Multi-Level Coordination: Vertical Stack -->
-								<!-- Peripheral detection: 2 rows = broader coordination scope -->
-								<div class="mb-2 space-y-1">
+								<!-- Multi-Level: Stacked jurisdiction lines -->
+								<div class="mb-1.5 space-y-0.5">
 									{#each targetInfo.targets as target}
-										<div class="flex items-center gap-2">
-											{#if target.icon === 'Capitol'}
-												<Landmark class="h-4 w-4 text-congressional-600" />
-											{:else if target.icon === 'Building'}
-												<Building2 class="h-4 w-4 text-emerald-600" />
-											{:else if target.icon === 'Users'}
-												<Users class="h-4 w-4 text-slate-600" />
+										<div class="flex items-center gap-1.5">
+											{#if target.emphasis === 'federal'}
+												<Landmark class="h-3.5 w-3.5 shrink-0 card-icon" />
+												<span class="font-brand text-xs font-medium card-label">{target.primary}</span>
 											{:else}
-												<Mail class="h-4 w-4 text-slate-600" />
+												<Building2 class="h-3.5 w-3.5 shrink-0 card-icon" />
+												<span class="font-brand text-xs font-semibold card-label">{target.primary}</span>
 											{/if}
-											<span
-												class="text-sm font-medium"
-												class:text-congressional-700={target.emphasis === 'federal'}
-												class:text-blue-700={target.emphasis === 'state'}
-												class:text-emerald-700={target.emphasis === 'local'}
-												class:text-slate-700={target.emphasis === 'neutral'}
-											>
-												{target.primary}
-											</span>
 											{#if target.secondary}
-												<span class="text-xs text-slate-500">{target.secondary}</span>
+												<span class="text-xs text-slate-400">{target.secondary}</span>
 											{/if}
 										</div>
 									{/each}
 								</div>
+							{:else if isCongressional}
+								<!-- Congressional -->
+								<div class="mb-1.5 flex items-center gap-1.5">
+									<Landmark class="h-3.5 w-3.5 shrink-0 card-icon" />
+									<span class="font-brand text-xs font-medium card-label">{targetInfo.primary}</span>
+								</div>
 							{:else}
-								<!-- Single-Level Coordination -->
-								<div class="mb-2 flex items-center gap-2">
-									{#if targetInfo.icon === 'Capitol'}
-										<Landmark class="h-4 w-4 text-congressional-600" />
-									{:else if targetInfo.icon === 'Building'}
-										<Building2 class="h-4 w-4 text-emerald-600" />
+								<!-- Direct/Universal: Name-forward -->
+								<div class="mb-1.5 flex items-center gap-1.5">
+									{#if targetInfo.icon === 'Building'}
+										<Building2 class="h-3.5 w-3.5 shrink-0 card-icon" />
 									{:else if targetInfo.icon === 'Users'}
-										<Users class="h-4 w-4 text-slate-600" />
+										<Users class="h-3.5 w-3.5 shrink-0 card-icon-muted" />
 									{:else}
-										<Mail class="h-4 w-4 text-slate-600" />
+										<Mail class="h-3.5 w-3.5 shrink-0 card-icon-muted" />
 									{/if}
-									<span
-										class="text-sm font-medium"
-										class:text-congressional-700={targetInfo.emphasis === 'federal'}
-										class:text-blue-700={targetInfo.emphasis === 'state'}
-										class:text-emerald-700={targetInfo.emphasis === 'local'}
-										class:text-slate-700={targetInfo.emphasis === 'neutral'}
-									>
-										{targetInfo.primary}
-									</span>
+									<span class="font-brand text-sm font-bold card-label">{targetInfo.primary}</span>
 									{#if targetInfo.secondary}
-										<span class="text-xs text-slate-500">{targetInfo.secondary}</span>
+										<span class="text-xs text-slate-400">{targetInfo.secondary}</span>
 									{/if}
 								</div>
 							{/if}
@@ -641,4 +621,19 @@
 			opacity: 1;
 		}
 	}
+
+	/* Respect vestibular preferences */
+	@media (prefers-reduced-motion: reduce) {
+		.template-card.newly-revealed,
+		.template-card.initial-reveal {
+			animation: none;
+			opacity: 1;
+		}
+
+		.debate-pulse,
+		.pulse-dot {
+			animation: none;
+		}
+	}
+
 </style>

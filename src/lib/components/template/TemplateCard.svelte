@@ -2,6 +2,7 @@
 	import { Send, Users, MapPin, ChevronRight, Building2, Landmark, Mail } from '@lucide/svelte';
 	import type { Template } from '$lib/types/template';
 	import { deriveTargetPresentation } from '$lib/utils/deriveTargetPresentation';
+	import { topicHue } from '$lib/utils/topic-hue';
 	import SimpleTooltip from '$lib/components/ui/SimpleTooltip.svelte';
 	import { z } from 'zod';
 	import { FEATURES } from '$lib/config/features';
@@ -108,14 +109,17 @@
 	// Subtle scale transformation: 1.0 (baseline) to 1.15 (high coordination)
 	// Logarithmic encoding makes peripheral detection possible before reading text
 	const cardScale = $derived(1.0 + template.coordinationScale * 0.15);
+
+	// === TOPIC COLOR: Per-template atmospheric hue from content domain ===
+	const hue = $derived(topicHue(template.category, template.topics));
 </script>
 
 <button
 	type="button"
-	class="group relative flex w-full flex-col overflow-hidden rounded-xl border-l-4 bg-white/80 text-left shadow-atmospheric-card backdrop-blur-sm transition-all duration-300 hover:shadow-atmospheric-card-hover {isCongressional
-		? 'border-congressional-200/50 border-l-congressional-500 hover:border-congressional-200/80'
-		: 'border-direct-200/50 border-l-direct-500 hover:border-direct-200/80'}"
-	style="transform: scale({cardScale}); transform-origin: center; will-change: transform; backface-visibility: hidden; border-width: 1px; border-left-width: 4px;"
+	class="card-topic group relative flex w-full flex-col overflow-hidden rounded-xl text-left backdrop-blur-sm transition-all duration-300 motion-reduce:transition-none {isCongressional
+		? 'card-weight-heavy'
+		: 'card-weight-light'}"
+	style="--card-hue: {hue}; transform: scale({cardScale}); transform-origin: center; will-change: transform; backface-visibility: hidden;"
 	onclick={onSelect}
 	data-testid="template-card-{template.id}"
 >
@@ -129,38 +133,57 @@
 	{/if}
 
 	<!-- Header Section -->
-	<div class="flex flex-col gap-3 p-4">
-		<!-- Power Topology: Decision-maker names (recognition > categorization) -->
-		<div
-			class="flex items-center gap-2 text-sm"
-			class:text-blue-600={targetInfo.emphasis === 'federal'}
-			class:text-green-600={targetInfo.emphasis === 'local'}
-			class:text-slate-600={targetInfo.emphasis === 'neutral'}
-		>
-			{#if targetInfo.icon === 'Capitol'}
-				<Landmark class="h-4 w-4 shrink-0 opacity-70" />
-			{:else if targetInfo.icon === 'Building'}
-				<Building2 class="h-4 w-4 shrink-0 opacity-70" />
-			{:else if targetInfo.icon === 'Mail'}
-				<Mail class="h-4 w-4 shrink-0 opacity-70" />
-			{:else}
-				<Users class="h-4 w-4 shrink-0 opacity-70" />
-			{/if}
-			<span class="font-brand font-medium">{targetInfo.primary}</span>
-			{#if targetInfo.secondary}
-				<span class="font-brand text-xs opacity-70">{targetInfo.secondary}</span>
-			{/if}
-		</div>
+	<div class="flex flex-col p-4 {isCongressional ? 'gap-2 pb-0' : 'gap-3'}">
+		{#if targetInfo.type === 'multi-level'}
+			<!-- Multi-Level: Two jurisdiction lines stacked -->
+			{#each targetInfo.targets as target, i}
+				<div class="flex items-center gap-2" class:mt-0.5={i > 0}>
+					{#if target.emphasis === 'federal'}
+						<Landmark class="h-4 w-4 shrink-0 card-icon" />
+						<span class="font-brand text-sm font-semibold card-label">{target.primary}</span>
+					{:else}
+						<Building2 class="h-4 w-4 shrink-0 card-icon" />
+						<span class="font-brand text-sm font-semibold card-label">{target.primary}</span>
+					{/if}
+					{#if target.secondary}
+						<span class="font-brand text-xs text-slate-400">{target.secondary}</span>
+					{/if}
+				</div>
+			{/each}
+			<div class="card-rule" aria-hidden="true"></div>
+		{:else if isCongressional}
+			<!-- Congressional: Icon + human label, rule below -->
+			<div class="flex items-center gap-2">
+				<Landmark class="h-4 w-4 shrink-0 card-icon" />
+				<span class="font-brand text-sm font-semibold card-label">{targetInfo.primary}</span>
+			</div>
+			<div class="card-rule" aria-hidden="true"></div>
+		{:else}
+			<!-- Direct/Universal: Name-forward -->
+			<div class="flex items-center gap-2">
+				{#if targetInfo.icon === 'Building'}
+					<Building2 class="h-4 w-4 shrink-0 card-icon" />
+				{:else if targetInfo.icon === 'Mail'}
+					<Mail class="h-4 w-4 shrink-0 card-icon-muted" />
+				{:else}
+					<Users class="h-4 w-4 shrink-0 card-icon-muted" />
+				{/if}
+				<span class="font-brand text-sm font-semibold card-label">{targetInfo.primary}</span>
+				{#if targetInfo.secondary}
+					<span class="font-brand text-sm card-label-muted">{targetInfo.secondary}</span>
+				{/if}
+			</div>
+		{/if}
 
-		<!-- Title: Satoshi Bold for distinctive brand voice -->
+		<!-- Title: Satoshi Bold — brand voice -->
 		<h3
-			class="line-clamp-2 font-brand text-lg font-bold text-gray-900 group-hover:text-gray-700 md:text-xl"
+			class="line-clamp-2 font-brand font-bold text-gray-900 group-hover:text-gray-700 {isCongressional ? 'text-lg md:text-xl' : 'text-base md:text-lg'}"
 		>
 			{template.title}
 		</h3>
 
-		<!-- Description: Satoshi Regular for readable body text -->
-		<p class="line-clamp-3 font-brand text-sm text-gray-600 md:text-base">
+		<!-- Description: spacing tracks card density -->
+		<p class="line-clamp-3 font-brand text-sm text-gray-600 {isCongressional ? '' : 'md:text-base'}">
 			{template.description}
 		</p>
 

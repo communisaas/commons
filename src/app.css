@@ -2,6 +2,13 @@
 @import 'tailwindcss/components';
 @import 'tailwindcss/utilities';
 
+/* Register --card-hue as typed property — provides fallback default (55 = warm gold) */
+@property --card-hue {
+	syntax: '<number>';
+	inherits: true;
+	initial-value: 55;
+}
+
 /* Import JetBrains Mono for data/metrics */
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
@@ -418,6 +425,103 @@
 		box-shadow: var(--shadow-lg);
 	}
 
+	/*
+	=== TEMPLATE CARD — Topic-Driven Color ===
+
+	Each template derives a hue from its content domain (category/topics).
+	Set --card-hue inline per card. Three chroma tiers:
+	  Surface  → 0.03   — visible atmospheric tint
+	  Border   → 0.05   — structural accent
+	  Rule     → 0.10   — clear accent line
+	  Icon     → 0.16   — focal anchor, unmistakable
+	  Label    → 0.10   — readable colored text
+
+	Delivery type (congressional vs. direct) is weight-only (shadow depth).
+	*/
+
+	/* Topic-tinted surface: visible, not theoretical */
+	.card-topic {
+		background: oklch(0.98 0.03 var(--card-hue) / 0.95);
+		border: 1px solid oklch(0.85 0.05 var(--card-hue) / 0.4);
+	}
+
+	.card-topic:hover {
+		background: oklch(0.975 0.04 var(--card-hue) / 0.97);
+		border-color: oklch(0.8 0.07 var(--card-hue) / 0.5);
+	}
+
+	/* Weight: congressional = heavier shadow, direct = lighter */
+	.card-weight-heavy {
+		box-shadow:
+			inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
+			0 1px 3px 0 rgba(0, 0, 0, 0.04),
+			0 6px 16px -6px rgba(0, 0, 0, 0.06);
+	}
+
+	.card-weight-heavy:hover {
+		box-shadow:
+			inset 0 1px 0 0 rgba(255, 255, 255, 0.75),
+			0 2px 4px 0 rgba(0, 0, 0, 0.04),
+			0 12px 24px -8px rgba(0, 0, 0, 0.08);
+	}
+
+	.card-weight-light {
+		box-shadow:
+			inset 0 1px 0 0 rgba(255, 255, 255, 0.5),
+			0 1px 2px 0 rgba(0, 0, 0, 0.03);
+	}
+
+	.card-weight-light:hover {
+		box-shadow:
+			inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
+			0 4px 12px -4px rgba(0, 0, 0, 0.06);
+	}
+
+	/* Selected state: topic-colored ring */
+	.card-selected {
+		border-color: oklch(0.65 0.1 var(--card-hue) / 0.6) !important;
+		box-shadow:
+			inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
+			0 0 0 2px oklch(0.7 0.08 var(--card-hue) / 0.2),
+			0 1px 3px 0 rgba(0, 0, 0, 0.04) !important;
+	}
+
+	/* Icon: high-chroma topic focal point */
+	.card-icon {
+		color: oklch(0.48 0.16 var(--card-hue));
+	}
+
+	.card-icon-muted {
+		color: oklch(0.55 0.1 var(--card-hue));
+	}
+
+	/* Label: readable topic-colored text */
+	.card-label {
+		color: oklch(0.38 0.1 var(--card-hue));
+	}
+
+	.card-label-muted {
+		color: oklch(0.5 0.06 var(--card-hue));
+	}
+
+	/* Rule: visible accent line */
+	.card-rule {
+		width: 100%;
+		height: 1px;
+		background: linear-gradient(
+			90deg,
+			oklch(0.75 0.1 var(--card-hue) / 0.5) 0%,
+			oklch(0.75 0.1 var(--card-hue) / 0.15) 70%,
+			transparent 100%
+		);
+	}
+
+	/* Focus: visible ring for keyboard navigation */
+	.card-topic:focus-visible {
+		outline: 2px solid oklch(0.45 0.18 var(--card-hue));
+		outline-offset: 2px;
+	}
+
 	/* Form Elements—Accessible Participation Input */
 	.participation-input {
 		@apply w-full rounded-lg border px-4 py-3;
@@ -616,12 +720,18 @@
 	}
 }
 
-/* Reduced motion — disable all org transitions */
+/* Reduced motion — disable transitions, transforms, and animations */
 @media (prefers-reduced-motion: reduce) {
 	.org-card,
 	.org-card:hover,
 	.org-card:active {
 		transition: none;
 		transform: none;
+	}
+
+	.card-topic,
+	.card-topic:hover {
+		transition: none;
+		transform: none !important;
 	}
 }
