@@ -12,6 +12,8 @@ datasource db {
 
 model User {
   id        String   @id @default(cuid())
+  email     String?  @unique // kept nullable — encrypted_email+email_hash are canonical post-C3
+  name      String?          // kept nullable — encrypted_name is canonical post-C3
   avatar    String?
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -928,6 +930,26 @@ model SuppressedEmail {
 }
 
 // ============================================================================
+// Bounce Reports — User-submitted bounce signals, triaged before suppression.
+// Suppression only occurs when: (a) SMTP probe confirms undeliverable, OR
+// (b) REPORT_THRESHOLD independent users report the same email.
+// ============================================================================
+
+model BounceReport {
+  id         String   @id @default(cuid())
+  email      String
+  domain     String
+  reportedBy String   @map("reported_by")
+  probeResult String? @map("probe_result") // "deliverable" | "undeliverable" | "risky" | "unknown" | "probe_failed"
+  resolved   Boolean  @default(false) // true once triaged (suppressed or dismissed)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([email, resolved])
+  @@index([reportedBy])
+  @@map("bounce_report")
+}
+
+// ============================================================================
 // Agent Trace — Fire-and-forget observability for LLM agent pipelines
 // Tracks requests, completions, costs, and errors per traceId.
 // TTL-based: AGENT_TRACE_TTL_DAYS (default 30), purged by daily cron.
@@ -1215,6 +1237,7 @@ model PositionDelivery {
   id              String    @id @default(cuid())
   registration_id String    @map("registration_id")
   recipient_name  String    @map("recipient_name")
+  recipient_key   String?   @map("recipient_key") // slugified name for stable client-side matching
   recipient_email String?   @map("recipient_email")
   delivery_method String    @map("delivery_method") // 'cwc' | 'email' | 'recorded'
   delivery_status String    @default("pending") @map("delivery_status") // 'pending' | 'delivered' | 'failed'

@@ -24,7 +24,7 @@
 	import { positionState } from '$lib/stores/positionState.svelte';
 	import CommunityEngagementCard from '$lib/components/action/CommunityEngagementCard.svelte';
 	import type { EngagementData } from '$lib/components/action/CommunityEngagementCard.svelte';
-	import { mergeLandscape, type LandscapeMember, type DistrictOfficialInput } from '$lib/utils/landscapeMerge';
+	import { mergeLandscape, slugify, type LandscapeMember, type DistrictOfficialInput } from '$lib/utils/landscapeMerge';
 	import type { ProcessedDecisionMaker } from '$lib/types/template';
 	import { generateShareMessage } from '$lib/utils/share-messages';
 
@@ -238,7 +238,7 @@
 	let reportedBounces = $state(new Set<string>());
 	let reportingBounce = $state<string | null>(null);
 
-	// Contextual share message — shifts from recruiting to movement-building after send
+	// Contextual share message — shifts from recruiting to movement-building after email handoff
 	const shareMessage = $derived(
 		generateShareMessage(
 			{
@@ -300,10 +300,11 @@
 		const counts = pl.positionCounts;
 		const isCreatorArrival = browser && ($page.state as Record<string, unknown>)?.fromPublish;
 
-		if (!FEATURES.STANCE_POSITIONS || isCreatorArrival) {
+		const hasDirectRecipients = (pl.recipientConfig?.decisionMakers ?? []).length > 0 && !isCongressional;
+		if (!FEATURES.STANCE_POSITIONS || isCreatorArrival || hasDirectRecipients) {
 			// No stance gate — show decision-makers immediately.
-			// Creator arrivals skip the gate: they authored this template,
-			// so landscapeRevealed without auto-registering their stance.
+			// Creator arrivals skip the gate: they authored this template.
+			// Direct outreach templates show named recipients without requiring a stance.
 			landscapeRevealed = true;
 		} else if (existing) {
 			// Returning user — restore registered state, skip stance buttons
@@ -320,7 +321,8 @@
 		}
 
 		// Restore sent recipients from delivery records
-		contactedRecipients = new Set(pl.deliveredRecipients ?? []);
+		// Server stores raw recipient_name; client keys by slugify(name)
+		contactedRecipients = new Set((pl.deliveredRecipients ?? []).map(slugify));
 	});
 
 	// Auto-scroll to PowerLandscape on creator arrival (separate effect for reactivity isolation)
@@ -405,7 +407,7 @@
 			});
 
 			if ('url' in result) {
-				// Measurement before action — the click is the outreach event
+				// Track email handoff — we know the mail app was opened, not that it was sent
 				contactedRecipients = new Set([...contactedRecipients, member.id]);
 				departingRecipients = new Set([...departingRecipients, member.id]);
 				trackDeliveryAttempt(template.id, 'email');
@@ -479,17 +481,17 @@
 				departingRecipients = new Set([...departingRecipients, ...emailMembers.map(m => m.id)]);
 				trackDeliveryAttempt(template.id, 'email');
 
-				// Persist delivery records (fire-and-forget)
+				// Persist delivery records only for members who actually got a mailto (fire-and-forget)
 				if (positionState.registrationId) {
 					fetch('/api/positions/batch-register', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
 							registrationId: positionState.registrationId,
-							recipients: members.map((m) => ({
+							recipients: emailMembers.map((m) => ({
 								name: m.name,
 								email: m.email ?? undefined,
-								deliveryMethod: m.deliveryRoute === 'cwc' ? 'cwc' : m.deliveryRoute === 'email' ? 'email' : 'recorded'
+								deliveryMethod: 'email' as const
 							}))
 						}),
 						keepalive: true

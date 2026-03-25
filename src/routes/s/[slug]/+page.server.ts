@@ -233,10 +233,13 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		existingPosition
 			? prisma.positionDelivery
 					.findMany({
-						where: { registration_id: existingPosition.registrationId },
-						select: { recipient_name: true }
+						where: {
+							registration_id: existingPosition.registrationId,
+							delivery_method: 'email'
+						},
+						select: { recipient_name: true, recipient_key: true }
 					})
-					.then((deliveries) => deliveries.map((d) => d.recipient_name))
+					.then((deliveries) => deliveries.map((d) => d.recipient_key ?? d.recipient_name))
 					.catch(() => [])
 			: Promise.resolve([]),
 

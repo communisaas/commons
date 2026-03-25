@@ -7,6 +7,7 @@
  */
 
 import { prisma } from '$lib/core/db';
+import { slugify } from '$lib/utils/landscapeMerge';
 
 /**
  * Register a position (support/oppose) on a template.
@@ -240,6 +241,7 @@ export async function batchRegisterDeliveries(params: {
 		data: recipients.map((r) => ({
 			registration_id: registrationId,
 			recipient_name: r.name,
+			recipient_key: slugify(r.name),
 			recipient_email: r.email ?? null,
 			delivery_method: r.deliveryMethod,
 			delivery_status: 'pending'
