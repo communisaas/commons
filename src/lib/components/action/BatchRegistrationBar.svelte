@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Check, Loader2 } from '@lucide/svelte';
+	import { Mail, Loader2 } from '@lucide/svelte';
 
 	let {
 		emailRemainingCount,
@@ -18,9 +18,9 @@
 	{#if registrationState === 'complete'}
 		<!-- Completed state -->
 		<div class="flex min-h-[44px] items-center justify-center gap-2 py-2">
-			<Check class="h-5 w-5 text-channel-verified-600" />
-			<span class="text-sm font-medium text-channel-verified-600">
-				All contacted
+			<Mail class="h-5 w-5 text-slate-500" />
+			<span class="text-sm font-medium text-slate-500">
+				All emails started
 			</span>
 		</div>
 	{:else}

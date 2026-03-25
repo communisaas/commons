@@ -49,7 +49,7 @@
 </script>
 
 {#if totalCount > 0}
-	<div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-400" role="status" aria-label="{contactedCount} of {totalCount} decision-makers contacted">
+	<div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-400" role="status" aria-label="{contactedCount} of {totalCount} emails started">
 		<!-- Per-category dots -->
 		{#each groupStats as group}
 			<div class="flex items-center gap-1.5">
@@ -58,7 +58,7 @@
 					{#each group.members as member}
 						<span
 							class="spine-dot h-2 w-2 rounded-full transition-colors duration-300 ease-out
-								{contactedRecipients.has(member.id) ? 'bg-channel-verified-500' : 'bg-slate-200'}"
+								{contactedRecipients.has(member.id) ? 'bg-participation-primary-500' : 'bg-slate-200'}"
 							aria-hidden="true"
 						></span>
 					{/each}
@@ -73,7 +73,7 @@
 					{#each districtStats.members as member}
 						<span
 							class="spine-dot h-2 w-2 rounded-full transition-colors duration-300 ease-out
-								{contactedRecipients.has(member.id) ? 'bg-channel-verified-500' : 'bg-slate-200'}"
+								{contactedRecipients.has(member.id) ? 'bg-participation-primary-500' : 'bg-slate-200'}"
 							aria-hidden="true"
 						></span>
 					{/each}
@@ -82,7 +82,7 @@
 		{/if}
 
 		<!-- Summary count -->
-		<span class="ml-auto tabular-nums {contactedCount === totalCount ? 'text-channel-verified-600 font-medium' : ''}">
+		<span class="ml-auto tabular-nums {contactedCount === totalCount ? 'text-participation-primary-600 font-medium' : ''}">
 			{contactedCount} of {totalCount}
 		</span>
 	</div>
@@ -93,7 +93,7 @@
 	.spine-dot {
 		transition: background-color 300ms ease-out, transform 200ms ease-out;
 	}
-	:global(.spine-dot[class*="bg-channel-verified"]) {
+	:global(.spine-dot[class*="bg-participation-primary"]) {
 		animation: dotFill 300ms ease-out;
 	}
 	@keyframes dotFill {
@@ -103,6 +103,6 @@
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.spine-dot { transition: none; }
-		:global(.spine-dot[class*="bg-channel-verified"]) { animation: none; }
+		:global(.spine-dot[class*="bg-participation-primary"]) { animation: none; }
 	}
 </style>

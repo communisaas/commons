@@ -138,7 +138,7 @@
 			medium: `Coordinating on ${category}.\n\n"${template.title}"\n\n${actionCount > 0 ? `${actionCount.toLocaleString()} people already sent. ` : ''}Takes 2 minutes: ${shareUrl}`,
 
 			// Long (Email, Reddit)
-			long: `I'm sending this.\n\n"${template.title}"\n\n${template.description}\n\n${actionCount > 1000 ? `${actionCount.toLocaleString()}+ people already sent this. ` : actionCount > 100 ? `${actionCount.toLocaleString()} people acted. ` : ''}Takes 2 minutes.\n\n${shareUrl}`,
+			long: `I sent this.\n\n"${template.title}"\n\n${template.description}\n\n${actionCount > 1000 ? `${actionCount.toLocaleString()}+ people already sent this. ` : actionCount > 100 ? `${actionCount.toLocaleString()} people acted. ` : ''}Takes 2 minutes.\n\n${shareUrl}`,
 
 			// SMS-friendly (under 160 chars)
 			sms:
@@ -942,11 +942,9 @@
 
 <!-- Modal Content (no backdrop - UnifiedModal handles that) -->
 <div
-	class="flex max-h-[90vh] w-full flex-col"
+	class="flex max-h-[90vh] w-full flex-col overflow-clip"
 	role="document"
 	tabindex="-1"
-	in:scale={{ duration: 300, start: 0.9, easing: backOut }}
-	out:scale={{ duration: 200, start: 1, easing: quintOut }}
 >
 	<!-- Dynamic Content Based on State -->
 	{#if currentState === 'loading'}
@@ -1071,7 +1069,7 @@
 						</div>
 						<div>
 							<h2 class="text-lg font-semibold text-slate-900">🎉 Mission Accomplished!</h2>
-							<p class="text-sm text-slate-600">Your message has been delivered</p>
+							<p class="text-sm text-slate-600">Your message has been sent</p>
 						</div>
 					</div>
 					<button

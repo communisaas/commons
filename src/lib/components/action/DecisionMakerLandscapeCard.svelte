@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Check, ChevronRight, ExternalLink } from '@lucide/svelte';
+	import { Mail, ChevronRight, ExternalLink } from '@lucide/svelte';
 	import type { LandscapeMember } from '$lib/utils/landscapeMerge';
 
 	function extractDomain(url: string): string {
@@ -82,9 +82,9 @@
 					Opening mail&hellip;
 				</span>
 			{:else if contacted}
-				<span class="flex items-center gap-1 text-sm font-medium text-channel-verified-600">
-					<Check class="h-4 w-4" />
-					Contacted
+				<span class="flex items-center gap-1 text-sm font-medium text-slate-500">
+					<Mail class="h-4 w-4" />
+					Email started
 				</span>
 			{:else}
 				<span class="action-label flex items-center gap-0.5 text-sm font-medium text-participation-primary-600">

@@ -2,7 +2,7 @@
 	import { mergeLandscape, type LandscapeMember, type DistrictOfficialInput } from '$lib/utils/landscapeMerge';
 	import RoleGroup from './RoleGroup.svelte';
 	import type { ProcessedDecisionMaker, Template } from '$lib/types/template';
-	import { MapPin, ChevronRight, Check, Loader2 } from '@lucide/svelte';
+	import { MapPin, ChevronRight, Mail, Loader2 } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 
 	let {
@@ -133,9 +133,9 @@
 						<ChevronRight class="h-4 w-4 transition-transform group-hover/batch:translate-x-0.5" />
 					</button>
 				{:else if totalCount > 0}
-					<span class="flex items-center gap-1.5 text-sm font-medium text-channel-verified-600">
-						<Check class="h-4 w-4" />
-						All {totalCount} contacted
+					<span class="flex items-center gap-1.5 text-sm font-medium text-slate-500">
+						<Mail class="h-4 w-4" />
+						All {totalCount} emails started
 					</span>
 				{/if}
 				{#if contactedInLandscape > 0 && remainingCount > 0}

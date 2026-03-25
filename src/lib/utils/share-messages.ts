@@ -83,20 +83,20 @@ function preSendSms(ctx: ShareMessageContext): string {
 }
 
 // ---------------------------------------------------------------------------
-// Post-send variants (creator has sent, now recruiting)
+// Post-send variants (user has started emails, now recruiting)
 // ---------------------------------------------------------------------------
 
 function postSendShort(ctx: ShareMessageContext): string {
 	// Target: <280 chars. First-person. Name the decision-makers. Invitational.
 	const recipients = formatRecipients(ctx.contactedNames, ctx.totalRecipients);
-	return `I just wrote to ${recipients} about "${ctx.template.title}". Send the same message: ${ctx.shareUrl}`;
+	return `I reached out to ${recipients} about "${ctx.template.title}". Send the same message: ${ctx.shareUrl}`;
 }
 
 function postSendMedium(ctx: ShareMessageContext): string {
 	// Target: ~500 chars. First-person account, invitational close, URL in flow.
 	const recipients = formatRecipients(ctx.contactedNames, ctx.totalRecipients);
 	const category = normalizeCategory(ctx.template.category);
-	return `I just wrote to ${recipients} about ${category} — specifically: "${ctx.template.title}".\n\nThe template is here: ${ctx.shareUrl}\n\nSame message, your name. Add your voice.`;
+	return `I reached out to ${recipients} about ${category} — specifically: "${ctx.template.title}".\n\nThe template is here: ${ctx.shareUrl}\n\nSame message, your name. Add your voice.`;
 }
 
 function postSendLong(ctx: ShareMessageContext): string {
@@ -105,14 +105,13 @@ function postSendLong(ctx: ShareMessageContext): string {
 	const category = normalizeCategory(ctx.template.category);
 	const description = ctx.template.description?.trim();
 	const descParagraph = description ? `\n\n${description}\n` : '\n';
-	return `I just sent a message to ${recipients} about "${ctx.template.title}"${descParagraph}\nThe issue is ${category}. I used a direct-contact template — no petition, no form letter to an inbox nobody monitors. It goes to the people with actual authority to act on it.\n\nIf you agree this matters, send the same message with your name on it: ${ctx.shareUrl}\n\nTakes 2 minutes. The more people who send it, the harder it is to ignore.`;
+	return `I reached out to ${recipients} about "${ctx.template.title}"${descParagraph}\nThe issue is ${category}. I used a direct-contact template — no petition, no form letter to an inbox nobody monitors. It goes to the people with actual authority to act on it.\n\nIf you agree this matters, send the same message with your name on it: ${ctx.shareUrl}\n\nTakes 2 minutes. The more people who send it, the harder it is to ignore.`;
 }
 
 function postSendSms(ctx: ShareMessageContext): string {
 	// Target: <160 chars. First-person, name(s), direct CTA.
 	const recipients = formatRecipients(ctx.contactedNames, ctx.totalRecipients);
-	// Truncate gracefully: "I wrote to Mayor X about [title]. Add your voice: url"
-	return `I wrote to ${recipients} about "${ctx.template.title}". Add your voice: ${ctx.shareUrl}`;
+	return `I reached out to ${recipients} about "${ctx.template.title}". Add your voice: ${ctx.shareUrl}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,12 +132,9 @@ function postSendSms(ctx: ShareMessageContext): string {
  *   sms    → <160 chars (SMS)
  */
 export function generateShareMessage(ctx: ShareMessageContext, variant: ShareVariant): string {
-	// Disambiguate: post-send requires either named contacts OR an explicit
-	// totalRecipients that came from an actual send action. The caller signals
-	// post-send state by populating contactedNames; a non-zero totalRecipients
-	// with an empty contactedNames array means the send happened but names
-	// weren't surfaced to this layer.
-	const postSend = ctx.contactedNames.length > 0 || ctx.totalRecipients > 0;
+	// Post-send copy requires actual contacted names — a non-zero totalRecipients
+	// alone is not evidence of action (the page always passes landscape count).
+	const postSend = ctx.contactedNames.length > 0;
 
 	if (postSend) {
 		switch (variant) {
