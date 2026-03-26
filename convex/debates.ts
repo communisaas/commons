@@ -237,6 +237,73 @@ export const getPublicDetail = query({
   },
 });
 
+/**
+ * Get the full debate (with arguments) for a template.
+ * Used by s/[slug]/+page.server.ts — returns debate + arguments sorted by weightedScore desc.
+ * Unlike getByTemplateId which returns debate only, this includes the full argument list.
+ */
+export const getFullByTemplateId = query({
+  args: { templateId: v.id("templates") },
+  handler: async (ctx, { templateId }) => {
+    const debate = await ctx.db
+      .query("debates")
+      .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
+      .first();
+
+    if (!debate) return null;
+
+    const allArgs = await ctx.db
+      .query("debateArguments")
+      .withIndex("by_debateId", (idx) => idx.eq("debateId", debate._id))
+      .collect();
+
+    allArgs.sort((a, b) => b.weightedScore - a.weightedScore);
+
+    return {
+      _id: debate._id,
+      _creationTime: debate._creationTime,
+      templateId: debate.templateId,
+      debateIdOnchain: debate.debateIdOnchain,
+      actionDomain: debate.actionDomain,
+      propositionText: debate.propositionText,
+      propositionHash: debate.propositionHash,
+      deadline: debate.deadline,
+      jurisdictionSize: debate.jurisdictionSize,
+      status: debate.status,
+      argumentCount: debate.argumentCount,
+      uniqueParticipants: debate.uniqueParticipants,
+      totalStake: debate.totalStake,
+      winningStance: debate.winningStance ?? null,
+      winningArgumentIndex: debate.winningArgumentIndex ?? null,
+      resolvedAt: debate.resolvedAt ?? null,
+      resolutionMethod: debate.resolutionMethod ?? null,
+      aiResolution: debate.aiResolution ?? null,
+      aiSignatureCount: debate.aiSignatureCount ?? null,
+      aiPanelConsensus: debate.aiPanelConsensus ?? null,
+      appealDeadline: debate.appealDeadline ?? null,
+      governanceJustification: debate.governanceJustification ?? null,
+      updatedAt: debate.updatedAt,
+      arguments: allArgs.map((arg) => ({
+        _id: arg._id,
+        _creationTime: arg._creationTime,
+        argumentIndex: arg.argumentIndex,
+        stance: arg.stance,
+        body: arg.body,
+        amendmentText: arg.amendmentText ?? null,
+        stakeAmount: arg.stakeAmount,
+        engagementTier: arg.engagementTier,
+        weightedScore: arg.weightedScore,
+        totalStake: arg.totalStake,
+        coSignCount: arg.coSignCount,
+        aiScores: arg.aiScores ?? null,
+        aiWeighted: arg.aiWeighted ?? null,
+        finalScore: arg.finalScore ?? null,
+        modelAgreement: arg.modelAgreement ?? null,
+      })),
+    };
+  },
+});
+
 // =============================================================================
 // MUTATIONS
 // =============================================================================

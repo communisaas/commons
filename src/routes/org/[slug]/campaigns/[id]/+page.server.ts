@@ -1,11 +1,15 @@
-// CONVEX: Keep SvelteKit — complex campaign detail with verification packet, analytics, debate data + 4 form actions (update/addTarget/removeTarget/updateStatus)
 import { error, fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { computeVerificationPacketCached } from '$lib/server/campaigns/verification';
 import { loadCampaignAnalytics } from '$lib/server/campaigns/analytics';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import type { PageServerLoad, Actions } from './$types';
+
+// Convex dual-stack imports
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 /** Valid status transitions */
 const VALID_TRANSITIONS: Record<string, string[]> = {

@@ -1,4 +1,4 @@
-// CONVEX: Blocked — needs 6+ Convex queries (messages, positions, debates, positionDelivery, userDMRelation, engagementByDistrict)
+// CONVEX: Queries available (templatePage.*, positions.*, debates.getFullByTemplateId) — dual-stack deferred due to complex transform logic
 import type { PageServerLoad } from './$types';
 import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
 import { prisma } from '$lib/core/db';

@@ -1,8 +1,8 @@
-// CONVEX: Keep SvelteKit — security-critical invite acceptance ($transaction, PII decryption, email hash comparison)
 import { redirect, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { computeEmailHash, tryDecryptPii, type EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
+// Note: form action (accept) stays Prisma — security-critical $transaction + PII hash comparison
 
 /** Decrypt an invite's email (authoritative post-Cycle 6). */
 async function decryptInviteEmail(invite: {

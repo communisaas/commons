@@ -154,6 +154,34 @@ export const listAlerts = query({
 });
 
 /**
+ * Get a single alert with its bill data (for campaign prefill).
+ * Used by: src/routes/org/[slug]/campaigns/new/+page.server.ts
+ */
+export const getAlertWithBill = query({
+  args: {
+    slug: v.string(),
+    alertId: v.id("legislativeAlerts"),
+  },
+  handler: async (ctx, { slug, alertId }) => {
+    const { org } = await requireOrgRole(ctx, slug, "member");
+
+    const alert = await ctx.db.get(alertId);
+    if (!alert || alert.orgId !== org._id) return null;
+
+    const bill = await ctx.db.get(alert.billId);
+    if (!bill) return null;
+
+    return {
+      alertId: alert._id,
+      billId: bill._id,
+      billTitle: bill.title,
+      billSummary: bill.summary ?? null,
+      billJurisdictionLevel: bill.jurisdictionLevel,
+    };
+  },
+});
+
+/**
  * Get scorecard snapshots for a decision-maker.
  */
 export const getScorecard = query({

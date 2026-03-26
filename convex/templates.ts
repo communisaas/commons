@@ -518,3 +518,66 @@ export const textSearch = internalQuery({
     return results;
   },
 });
+
+/**
+ * Authenticated: List templates belonging to the current user.
+ * Used by: src/routes/api/user/templates/+server.ts
+ */
+export const listByUser = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Authentication required");
+
+    // Resolve userId from identity
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", identity.email!))
+      .first();
+    if (!user) return [];
+
+    const templates = await ctx.db
+      .query("templates")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .order("desc")
+      .collect();
+
+    return templates.map((t) => ({
+      _id: t._id,
+      _creationTime: t._creationTime,
+      slug: t.slug,
+      title: t.title,
+      description: t.description,
+      category: t.category,
+      status: t.status,
+      isPublic: t.isPublic,
+      verifiedSends: t.verifiedSends,
+      updatedAt: t.updatedAt,
+    }));
+  },
+});
+
+/**
+ * Authenticated: List templates belonging to an org (title + id only).
+ * Used by: src/routes/org/[slug]/campaigns/new/+page.server.ts
+ */
+export const listByOrg = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { loadOrg } = await import("./_authHelpers");
+    const org = await loadOrg(ctx, slug);
+
+    const templates = await ctx.db
+      .query("templates")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .collect();
+
+    // Sort alphabetically by title
+    templates.sort((a, b) => a.title.localeCompare(b.title));
+
+    return templates.map((t) => ({
+      _id: t._id,
+      title: t.title,
+    }));
+  },
+});

@@ -352,6 +352,120 @@ export const update = mutation({
 });
 
 /**
+ * Authenticated query: settings page payload.
+ * Returns subscription, usage summary, members (with user join), invites, issue domains.
+ * Used by: src/routes/org/[slug]/settings/+page.server.ts
+ */
+export const getSettingsData = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { org, membership } = await requireOrgRole(ctx, slug, "member");
+
+    // Subscription
+    const sub = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
+      .first();
+
+    // Members with user data
+    const memberships = await ctx.db
+      .query("orgMemberships")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .collect();
+
+    // Sort by joinedAt ascending
+    memberships.sort((a, b) => a.joinedAt - b.joinedAt);
+
+    const members = await Promise.all(
+      memberships.map(async (m) => {
+        const user = await ctx.db.get(m.userId);
+        return {
+          _id: m._id,
+          userId: m.userId,
+          name: user?.name ?? null,
+          email: user?.email ?? null,
+          avatar: user?.avatar ?? null,
+          role: m.role,
+          joinedAt: m.joinedAt,
+        };
+      }),
+    );
+
+    // Invites (active only: not accepted, not expired)
+    const now = Date.now();
+    const allInvites = await ctx.db
+      .query("orgInvites")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
+      .collect();
+
+    const activeInvites = allInvites
+      .filter((i) => !i.accepted && i.expiresAt > now)
+      .sort((a, b) => a.expiresAt - b.expiresAt)
+      .slice(0, 200);
+
+    // Only show invite emails to editors/owners
+    const invites =
+      membership.role === "editor" || membership.role === "owner"
+        ? activeInvites.map((i) => ({
+            _id: i._id,
+            encryptedEmail: i.encryptedEmail,
+            role: i.role,
+            expiresAt: i.expiresAt,
+          }))
+        : [];
+
+    // Issue domains
+    const issueDomains = await ctx.db
+      .query("orgIssueDomains")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
+      .collect();
+
+    // Sort by creation time ascending
+    issueDomains.sort((a, b) => a._creationTime - b._creationTime);
+
+    // Usage counts (approximate — counts from denormalized fields + queries)
+    // Verified actions: count campaignActions with verified=true for this org's campaigns
+    const campaigns = await ctx.db
+      .query("campaigns")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .collect();
+
+    let verifiedActions = 0;
+    for (const c of campaigns) {
+      verifiedActions += c.verifiedActionCount ?? 0;
+    }
+
+    return {
+      subscription: sub
+        ? {
+            plan: sub.plan,
+            status: sub.status,
+            priceCents: sub.priceCents,
+            currentPeriodEnd: sub.currentPeriodEnd,
+          }
+        : null,
+
+      usage: {
+        verifiedActions,
+        emailsSent: org.sentEmailCount ?? 0,
+      },
+
+      members,
+      invites,
+
+      issueDomains: issueDomains.slice(0, 500).map((d) => ({
+        _id: d._id,
+        _creationTime: d._creationTime,
+        label: d.label,
+        description: d.description ?? null,
+        weight: d.weight,
+        updatedAt: d.updatedAt,
+      })),
+    };
+  },
+});
+
+/**
  * Internal mutation: update onboarding state from other modules.
  * Called when supporters are added, campaigns created, emails sent, etc.
  */

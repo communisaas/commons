@@ -1,4 +1,4 @@
-// CONVEX: Keep SvelteKit — email engine integration (send/preview/A/B test mutations, rate limiting, billing, SES)
+// Note: form actions (send/preview/A/B test) stay Prisma — SES engine, billing, rate limiting
 import { fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
@@ -14,11 +14,54 @@ import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import type { PageServerLoad, Actions } from './$types';
 
-export const load: PageServerLoad = async ({ parent }) => {
+// Convex dual-stack imports
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+
+export const load: PageServerLoad = async ({ parent, params }) => {
 	const { org } = await parent();
 
+	// ─── DUAL-STACK: Try Convex first ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const [convexCampaigns, convexSupporterStats] = await Promise.all([
+				serverQuery(api.campaigns.list, {
+					slug: params.slug,
+					paginationOpts: { numItems: 50, cursor: null }
+				}),
+				serverQuery(api.supporters.getSummaryStats, { orgSlug: params.slug })
+			]);
+
+			// A/B testing still needs Prisma billing check
+			const abTestingAllowed = FEATURES.AB_TESTING && await orgMeetsPlan(org.id, 'starter');
+
+			// Tags still from Prisma (no Convex tags query yet)
+			const tags = await db.tag.findMany({
+				where: { orgId: org.id },
+				select: { id: true, name: true },
+				orderBy: { name: 'asc' }
+			});
+
+			return {
+				campaigns: convexCampaigns.page.map((c: Record<string, unknown>) => ({
+					id: c._id,
+					title: c.title,
+					status: c.status
+				})),
+				tags,
+				subscribedCount: convexSupporterStats.emailHealth?.subscribed ?? 0,
+				abTestingAllowed
+			};
+		} catch (err) {
+			if (err && typeof err === 'object' && 'status' in err) throw err;
+			console.error('[EmailCompose] Convex load failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const [campaigns, tags, subscribedCount] = await Promise.all([
 		db.campaign.findMany({
 			where: { orgId: org.id },

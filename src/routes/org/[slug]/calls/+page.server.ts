@@ -1,14 +1,58 @@
-// CONVEX: Blocked — needs Convex patchThroughCall query (list calls by org with campaign join)
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ params, locals }) => {
-	if (!FEATURES.SMS) throw error(404, 'Not found');
+// Convex dual-stack imports
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
+export const load: PageServerLoad = async ({ params, locals, parent }) => {
+	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw redirect(302, '/auth/login');
 
+	// ─── DUAL-STACK: Try Convex first ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const { org } = await parent();
+			const [convexCalls, convexCampaigns] = await Promise.all([
+				serverQuery(api.calls.listCalls, { slug: params.slug }),
+				serverQuery(api.campaigns.list, {
+					slug: params.slug,
+					paginationOpts: { numItems: 50, cursor: null }
+				})
+			]);
+
+			return {
+				org: { name: org.name, slug: org.slug },
+				campaigns: convexCampaigns.page.map((c: { _id: string; title: string }) => ({
+					id: c._id,
+					title: c.title
+				})),
+				calls: convexCalls.map((c: Record<string, unknown>) => ({
+					id: c._id,
+					supporterName: c.supporterName ?? 'Unknown',
+					targetPhone: c.targetPhone,
+					targetName: c.targetName,
+					status: c.status,
+					duration: c.duration,
+					campaignId: c.campaignId,
+					createdAt: typeof c._creationTime === 'number'
+						? new Date(c._creationTime as number).toISOString()
+						: String(c._creationTime),
+					completedAt: c.completedAt
+						? new Date(c.completedAt as number).toISOString()
+						: null
+				}))
+			};
+		} catch (err) {
+			if (err && typeof err === 'object' && 'status' in err) throw err;
+			console.error('[Calls] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const org = await db.organization.findUnique({
 		where: { slug: params.slug },
 		select: { id: true, name: true, slug: true }

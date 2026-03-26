@@ -1,20 +1,52 @@
-// CONVEX: Blocked — needs Convex campaign create mutation + template/bill/alert validation queries
 import { redirect, fail } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import type { PageServerLoad, Actions } from './$types';
 
-export const load: PageServerLoad = async ({ parent, url }) => {
+// Convex dual-stack imports
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+
+export const load: PageServerLoad = async ({ parent, url, params }) => {
 	const { org, membership } = await parent();
 	requireRole(membership.role, 'editor');
 
+	// ─── DUAL-STACK: Try Convex first ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const fromAlertId = url.searchParams.get('fromAlert');
+
+			const [templates, alertPrefill] = await Promise.all([
+				serverQuery(api.templates.listByOrg, { slug: params.slug }),
+				fromAlertId
+					? serverQuery(api.legislation.getAlertWithBill, {
+						slug: params.slug,
+						alertId: fromAlertId
+					}).catch(() => null)
+					: Promise.resolve(null)
+			]);
+
+			return {
+				templates: templates.map((t: { _id: string; title: string }) => ({
+					id: t._id,
+					title: t.title
+				})),
+				alertPrefill
+			};
+		} catch (err) {
+			if (err && typeof err === 'object' && 'status' in err) throw err;
+			console.error('[CampaignNew] Convex load failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const templates = await db.template.findMany({
 		where: { orgId: org.id },
 		select: { id: true, title: true },
 		orderBy: { title: 'asc' }
 	});
 
-	// Pre-populate from legislative alert if fromAlert param present
 	let alertPrefill: {
 		alertId: string;
 		billId: string;
@@ -86,7 +118,6 @@ export const actions: Actions = {
 			return fail(400, { error: 'Debate threshold must be at least 1', title, type, body, targetCountry, targetJurisdiction });
 		}
 
-		// If linking to a bill, require position
 		if (billId && !position) {
 			return fail(400, { error: 'Position (support/oppose) is required when linking to a bill', title, type, body, targetCountry, targetJurisdiction });
 		}
@@ -94,7 +125,40 @@ export const actions: Actions = {
 			return fail(400, { error: 'Position must be "support" or "oppose"', title, type, body, targetCountry, targetJurisdiction });
 		}
 
-		// Validate billId exists if provided
+		// ─── DUAL-STACK: Try Convex mutation first ───
+		if (PUBLIC_CONVEX_URL) {
+			try {
+				const campaignId = await serverMutation(api.campaigns.create, {
+					slug: params.slug,
+					title,
+					type,
+					body: body ?? undefined,
+					templateId: templateId ?? undefined,
+					debateEnabled,
+					debateThreshold,
+					targetCountry,
+					targetJurisdiction: targetJurisdiction ?? undefined,
+					billId: billId ?? undefined,
+					position: position ?? undefined
+				});
+
+				// Mark alert as acted upon if applicable
+				if (fromAlertId) {
+					await serverMutation(api.legislation.dismissAlert, {
+						slug: params.slug,
+						alertId: fromAlertId,
+						status: 'acted'
+					}).catch(() => {});
+				}
+
+				throw redirect(303, `/org/${params.slug}/campaigns/${campaignId}`);
+			} catch (err) {
+				if (err && typeof err === 'object' && 'status' in err) throw err;
+				console.error('[CampaignNew] Convex create failed, falling back to Prisma:', err);
+			}
+		}
+
+		// ─── PRISMA FALLBACK ───
 		if (billId) {
 			const bill = await db.bill.findUnique({ where: { id: billId }, select: { id: true } });
 			if (!bill) {
@@ -102,7 +166,6 @@ export const actions: Actions = {
 			}
 		}
 
-		// Validate templateId belongs to this org if provided
 		if (templateId) {
 			const template = await db.template.findFirst({
 				where: { id: templateId, orgId: org.id }
@@ -129,14 +192,11 @@ export const actions: Actions = {
 			}
 		});
 
-		// If created from an alert, mark it as acted upon
 		if (fromAlertId) {
 			await db.legislativeAlert.updateMany({
 				where: { id: fromAlertId, orgId: org.id },
 				data: { status: 'acted', actionTaken: 'created_campaign' }
-			}).catch(() => {
-				// Non-critical — campaign was already created successfully
-			});
+			}).catch(() => {});
 		}
 
 		throw redirect(303, `/org/${params.slug}/campaigns/${campaign.id}`);
