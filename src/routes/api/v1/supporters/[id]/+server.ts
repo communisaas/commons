@@ -10,7 +10,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { internal } from '$lib/convex';
-import { decryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
+import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, params }) => {
@@ -27,7 +27,7 @@ export const GET: RequestHandler = async ({ request, params }) => {
 
 	let decryptedEmail: string | null = null;
 	try {
-		decryptedEmail = await decryptSupporterEmail(supporter.encryptedEmail);
+		decryptedEmail = await tryDecryptSupporterEmail(supporter).catch(() => null);
 	} catch {
 		return apiError('INTERNAL', `Supporter ${params.id} PII decryption failed`, 500);
 	}

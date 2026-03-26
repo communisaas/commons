@@ -11,7 +11,7 @@ import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { internal } from '$lib/convex';
-import { decryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
+import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
 const CreateSupporterSchema = z.object({
@@ -67,7 +67,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	let decryptionFailures = 0;
 	const dataResults = await Promise.all(result.items.map(async (s: any) => {
 		try {
-			const decrypted = await decryptSupporterEmail(s.encryptedEmail);
+			const decrypted = await tryDecryptSupporterEmail(s).catch(() => null);
 			return {
 				id: s._id,
 				email: decrypted,
