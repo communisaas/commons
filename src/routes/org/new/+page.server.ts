@@ -1,3 +1,4 @@
+// CONVEX: No DB dependency — no migration needed
 import { redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 

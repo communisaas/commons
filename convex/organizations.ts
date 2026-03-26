@@ -185,6 +185,76 @@ export const getMembers = query({
   },
 });
 
+/**
+ * Authenticated query: org context (org + membership) for layout loading.
+ * Lighter than getDashboard — returns only what loadOrgContext() provides.
+ */
+export const getOrgContext = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { org, membership } = await requireOrgRole(ctx, slug, "member");
+
+    return {
+      org: {
+        _id: org._id,
+        name: org.name,
+        slug: org.slug,
+        description: org.description ?? null,
+        avatar: org.avatar ?? null,
+        maxSeats: org.maxSeats,
+        maxTemplatesMonth: org.maxTemplatesMonth,
+        dmCacheTtlDays: org.dmCacheTtlDays ?? 7,
+        identityCommitment: org.identityCommitment ?? null,
+        _creationTime: org._creationTime,
+      },
+      membership: {
+        role: membership.role,
+        joinedAt: membership.joinedAt,
+      },
+    };
+  },
+});
+
+/**
+ * Authenticated query: current user's org memberships for the identity bridge.
+ * Used by the root layout to populate user.orgMemberships.
+ */
+export const getMyMemberships = query({
+  args: {},
+  handler: async (ctx) => {
+    const { userId } = await requireAuth(ctx);
+
+    const memberships = await ctx.db
+      .query("orgMemberships")
+      .withIndex("by_userId_orgId", (q) => q.eq("userId", userId))
+      .collect();
+
+    return await Promise.all(
+      memberships.map(async (m) => {
+        const org = await ctx.db.get(m.orgId);
+        if (!org) return null;
+
+        // Count active campaigns for this org
+        const campaigns = await ctx.db
+          .query("campaigns")
+          .withIndex("by_orgId", (q) => q.eq("orgId", m.orgId))
+          .collect();
+        const activeCampaignCount = campaigns.filter(
+          (c) => c.status === "ACTIVE" || c.status === "PAUSED",
+        ).length;
+
+        return {
+          orgSlug: org.slug,
+          orgName: org.name,
+          orgAvatar: org.avatar ?? null,
+          role: m.role,
+          activeCampaignCount,
+        };
+      }),
+    ).then((results) => results.filter(Boolean));
+  },
+});
+
 // =============================================================================
 // MUTATIONS
 // =============================================================================

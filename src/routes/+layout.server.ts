@@ -1,5 +1,11 @@
 import type { LayoutServerLoad } from './$types';
 import { db } from '$lib/core/db';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+
+// Convex dual-stack imports (primary data source when available)
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+
 export const load: LayoutServerLoad = async ({ locals, depends }) => {
 	// Cache user data across navigations — only re-fetch when explicitly invalidated
 	depends('data:user');
@@ -8,6 +14,42 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 		return { user: null };
 	}
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const [convexProfile, convexMemberships] = await Promise.all([
+				serverQuery(api.users.getProfile, {}),
+				serverQuery(api.organizations.getMyMemberships, {})
+			]);
+
+			if (convexProfile) {
+				console.log('[Layout] Convex: loaded user profile + org memberships');
+				return {
+					user: {
+						id: locals.user.id,
+						email: convexProfile.email ?? locals.user.email,
+						name: convexProfile.name ?? locals.user.name,
+						avatar: convexProfile.avatar ?? locals.user.avatar,
+						trust_tier: convexProfile.trustTier ?? 0,
+						is_verified: convexProfile.isVerified || false,
+						verification_method: convexProfile.verificationMethod,
+						verified_at: convexProfile.verifiedAt,
+						hasPasskey: convexProfile.hasPasskey,
+						district_hash: convexProfile.districtHash,
+						district_verified: convexProfile.districtVerified,
+						hasWallet: convexProfile.hasWallet,
+						hasDistrictCredential: Boolean(convexProfile.districtVerified),
+						orgMemberships: convexMemberships ?? []
+					}
+				};
+			}
+		} catch (err) {
+			console.error('[Layout] Convex load failed, falling back to Prisma:', err);
+			// Fall through to Prisma below
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	// Fetch user with representatives data + org memberships in parallel
 	try {
 		const [userWithRepresentatives, orgMemberships] = await Promise.all([
