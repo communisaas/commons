@@ -2,6 +2,9 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /**
@@ -22,6 +25,17 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.legislation.listOrgDmFollows, { slug: params.slug });
+			return json({ follows: result, total: result.length, limit: 50, offset: 0 });
+		} catch (err) {
+			console.error('[DMFollowing] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org } = await loadOrgContext(params.slug, locals.user.id);
 
 	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '20', 10) || 20, 1), 50);

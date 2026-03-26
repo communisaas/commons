@@ -29,6 +29,22 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'Invalid actionTaken value');
 	}
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			await serverMutation(api.legislation.dismissAlert, {
+				alertId: params.id,
+				slug: params.slug
+			});
+			return json({ id: params.id, status, actionTaken: actionTaken ?? null, seenAt: status === 'seen' ? new Date().toISOString() : null });
+		} catch (err) {
+			console.error('[AlertUpdate] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org } = await loadOrgContext(params.slug, locals.user.id);
+
 	// Verify alert belongs to this org
 	const alert = await db.legislativeAlert.findFirst({
 		where: { id: params.id, orgId: org.id },
