@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — count/apply_tag/remove_tag/export_csv use buildSegmentWhere (Prisma query builder) + PII decryption
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';

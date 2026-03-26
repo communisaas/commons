@@ -1,4 +1,4 @@
-// CONVEX: skip — no Convex tag list query yet (workflows.ts has workflow CRUD but not tag listing for new-workflow form)
+// CONVEX: Keep SvelteKit — needs Prisma tag listing for new-workflow form (no Convex tags query)
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';

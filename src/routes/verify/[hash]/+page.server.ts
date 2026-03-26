@@ -1,4 +1,4 @@
-// CONVEX: skip — security-critical verification flow (delivery + credential lookup, public endpoint)
+// CONVEX: Keep SvelteKit — security-critical verification flow (delivery + credential lookup, public endpoint)
 import type { PageServerLoad } from './$types';
 import { db } from '$lib/core/db';
 

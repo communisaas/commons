@@ -1,4 +1,4 @@
-// CONVEX: skip — security-critical unsubscribe mutation flow (HMAC token verification + emailStatus update)
+// CONVEX: Keep SvelteKit — security-critical HMAC token verification + emailStatus update
 import { db } from '$lib/core/db';
 import { verifyUnsubscribeToken } from '$lib/server/email/unsubscribe';
 import type { PageServerLoad, Actions } from './$types';

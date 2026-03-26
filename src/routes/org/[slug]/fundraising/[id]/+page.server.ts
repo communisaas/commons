@@ -1,4 +1,4 @@
-// CONVEX: skip — auth-gated page with role-based PII masking (maskEmail); needs Convex action with server-side email decryption
+// CONVEX: Keep SvelteKit — role-based PII masking (maskEmail), donation list with server-side decryption
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';

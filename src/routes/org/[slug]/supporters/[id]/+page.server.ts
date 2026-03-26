@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — form actions (addTag/removeTag/updateSmsStatus) use Prisma supporter mutations
 import { error, fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';

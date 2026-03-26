@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — OG image generation with campaign DB lookup
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import type { RequestHandler } from './$types';

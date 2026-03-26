@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — deep auth check (debate→campaign→org→membership), blockchain state verification
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';

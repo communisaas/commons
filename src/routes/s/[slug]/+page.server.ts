@@ -1,4 +1,4 @@
-// CONVEX: Queries available (templatePage.*, positions.*, debates.getFullByTemplateId) — dual-stack deferred due to complex transform logic
+// CONVEX: Keep SvelteKit — complex 2-batch Prisma load (positions, debates, officials, engagement), BigInt transforms
 import type { PageServerLoad } from './$types';
 import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
 import { prisma } from '$lib/core/db';

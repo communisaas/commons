@@ -1,4 +1,4 @@
-// CONVEX: skip — public receipt verification; no Convex getReceipt query, plus server-only narrative generation
+// CONVEX: Keep SvelteKit — no Convex getReceipt query, server-only narrative generation
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';

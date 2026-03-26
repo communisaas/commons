@@ -218,6 +218,35 @@ export const setEnabled = mutation({
 });
 
 /**
+ * Delete a workflow and its executions. Requires editor+ role.
+ */
+export const remove = mutation({
+  args: {
+    slug: v.string(),
+    workflowId: v.id("workflows"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const workflow = await ctx.db.get(args.workflowId);
+    if (!workflow || workflow.orgId !== org._id) {
+      throw new Error("Workflow not found");
+    }
+
+    // Delete executions first (cascade)
+    const executions = await ctx.db
+      .query("workflowExecutions")
+      .withIndex("by_workflowId", (q) => q.eq("workflowId", args.workflowId))
+      .collect();
+    for (const exec of executions) {
+      await ctx.db.delete(exec._id);
+    }
+
+    await ctx.db.delete(args.workflowId);
+  },
+});
+
+/**
  * Create a workflow execution. Internal — called by trigger dispatch.
  */
 export const createExecution = internalMutation({

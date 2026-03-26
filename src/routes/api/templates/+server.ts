@@ -1,30 +1,22 @@
+// CONVEX: Keep SvelteKit — POST uses Groq moderation, Gemini embeddings, content hashing, billing quota, $transaction
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
-import { TEMPLATE_LIST_SELECT } from '$lib/core/db/template-select';
 import {
 	createApiError,
 	createValidationError,
 	type StructuredApiResponse,
 	type ApiError
 } from '$lib/types/errors';
-import type { Prisma as _Prisma, Prisma } from '@prisma/client';
 import type { InputJsonValue } from '@prisma/client/runtime/library';
 import type { UnknownRecord } from '$lib/types/any-replacements';
-import { extractRecipientEmails } from '$lib/types/templateConfig';
 import { moderateTemplate } from '$lib/core/server/moderation';
 import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
-import { z } from 'zod';
 import { createHash } from 'crypto';
 import { getMonthlyTemplateCount } from '$lib/server/billing/usage';
 import { captureWithContext } from '$lib/server/monitoring/sentry';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-// CONVEX: POST is Keep SvelteKit — calls moderateTemplate (Groq), generateBatchEmbeddings (Gemini),
-// CWC verification, content hashing, billing quota check. Too complex for Convex migration.
-// GET is dual-stacked below → templates.listPublic
-
-// Import GeoScope for agent-extracted geographic scope
 import type { GeoScope } from '$lib/core/agents/types';
 
 /** Content-addressable fingerprint: same title + body = same template */
@@ -43,17 +35,17 @@ function sanitizeSlug(slug: string | undefined): string | undefined {
 		.slice(0, 100) || undefined;
 }
 
-// Validation schema for template creation - matches Prisma schema field names
+// Validation schema for template creation
 interface CreateTemplateRequest {
 	title: string;
-	slug?: string; // AI-generated slug (sanitized before use)
+	slug?: string;
 	message_body: string;
-	sources?: Array<{ num: number; title: string; url: string; type: string }>; // Citation sources from AI agent
-	research_log?: string[]; // Agent's research process log
+	sources?: Array<{ num: number; title: string; url: string; type: string }>;
+	research_log?: string[];
 	category?: string;
-	topics?: string[]; // Topic tags from AI (1-5 lowercase strings for search/filtering)
+	topics?: string[];
 	type: string;
-	deliveryMethod: string; // Prisma field name (mapped to delivery_method in database)
+	deliveryMethod: string;
 	preview: string;
 	description?: string;
 	status?: string;
@@ -62,7 +54,7 @@ interface CreateTemplateRequest {
 	cwc_config?: UnknownRecord;
 	recipient_config?: UnknownRecord;
 	metrics?: UnknownRecord;
-	geographic_scope?: GeoScope; // Agent-extracted geographic scope for TemplateScope creation
+	geographic_scope?: GeoScope;
 }
 
 type ValidationError = ApiError;
@@ -81,7 +73,6 @@ function validateTemplateData(data: unknown): {
 
 	const templateData = data as Record<string, unknown>;
 
-	// Required fields validation
 	if (!templateData.title || typeof templateData.title !== 'string' || !templateData.title.trim()) {
 		errors.push(
 			createValidationError('title', 'VALIDATION_REQUIRED', 'Template title is required')
@@ -146,7 +137,6 @@ function validateTemplateData(data: unknown): {
 		return { isValid: false, errors };
 	}
 
-	// Return valid data with defaults
 	const validData: CreateTemplateRequest = {
 		title: templateData.title as string,
 		slug: sanitizeSlug(templateData.slug as string) || undefined,
@@ -181,218 +171,20 @@ function validateTemplateData(data: unknown): {
 }
 
 export const GET: RequestHandler = async () => {
-			const templates = await serverQuery(api.templates.listPublic, {});
-			const response: StructuredApiResponse = { success: true, data: templates };
-			return json(response);
-	}
-
-		const dbTemplates = await db.template.findMany({
-			where: { is_public: true },
-			orderBy: { createdAt: 'desc' },
-			select: TEMPLATE_LIST_SELECT,
-		});
-
-		const templateIds = dbTemplates.map((t) => t.id);
-
-		// Parallelize independent queries
-		const [activeDebates, rawScopes] = await Promise.all([
-			(db as unknown as {
-				debate: { findMany: (params: unknown) => Promise<{ template_id: string }[]> };
-			}).debate.findMany({
-				where: { status: 'active' },
-				select: { template_id: true },
-				distinct: ['template_id']
-			}).catch(() => [] as { template_id: string }[]),
-
-			(db as unknown as {
-				templateScope: { findMany: (params: unknown) => Promise<UnknownRecord[]> };
-			}).templateScope.findMany({
-				where: { template_id: { in: templateIds } }
-			}).catch(() => [] as UnknownRecord[]),
-		]);
-
-		const activeDebateTemplateIds = new Set(activeDebates.map((d) => d.template_id));
-
-		// Group by template_id (a template may have multiple scopes)
-		const scopesByTemplateId = new Map<string, UnknownRecord[]>();
-		for (const s of rawScopes) {
-			const tid = s.template_id as string;
-			const arr = scopesByTemplateId.get(tid);
-			if (arr) {
-				arr.push(s);
-			} else {
-				scopesByTemplateId.set(tid, [s]);
-			}
-		}
-
-		// Zod schema for metrics validation
-		const MetricsSchema = z
-			.object({
-				opened: z.number().optional(),
-				clicked: z.number().optional(),
-				responded: z.number().optional(),
-				total_districts: z.number().optional(),
-				district_coverage_percent: z.number().optional(),
-				personalization_rate: z.number().optional(),
-				effectiveness_score: z.number().optional(),
-				cascade_depth: z.number().optional(),
-				viral_coefficient: z.number().optional(),
-				onboarding_starts: z.number().optional(),
-				onboarding_completes: z.number().optional(),
-				auth_completions: z.number().optional(),
-				shares: z.number().optional()
-			})
-			.passthrough();
-
-		const formattedTemplates = dbTemplates.map((template) => {
-			// Extract metrics from JSON field with validation
-			let jsonMetrics = {};
-			if (typeof template.metrics === 'string') {
-					const parsed = JSON.parse(template.metrics);
-					const result = MetricsSchema.safeParse(parsed);
-					if (result.success) {
-						jsonMetrics = result.data;
-					} else {
-						console.warn(
-							`[Templates API] Invalid metrics for template ${template.id}:`,
-							result.error.flatten()
-						);
-					}
-				} catch (error) {
-					console.warn(`[Templates API] Failed to parse metrics for template ${template.id}:`, error);
-				}
-			} else {
-				const result = MetricsSchema.safeParse(template.metrics || {});
-				if (result.success) {
-					jsonMetrics = result.data;
-				} else {
-					console.warn(
-						`[Templates API] Invalid metrics object for template ${template.id}:`,
-						result.error.flatten()
-					);
-				}
-			}
-
-			// Calculate coordination scale (0-1 range, logarithmic for perceptual encoding)
-			// 1 send = 0.0, 10 sends = 0.33, 100 sends = 0.67, 1000+ sends = 1.0
-			const sendCount = template.verified_sends || 0;
-			const coordinationScale = Math.min(1.0, Math.log10(Math.max(1, sendCount)) / 3);
-
-			// Determine if template is "new" (created in last 7 days)
-			const createdAt = new Date(template.createdAt);
-			const now = new Date();
-			const daysSinceCreation = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
-			const isNew = daysSinceCreation <= 7;
-
-			return {
-				id: template.id,
-				slug: template.slug,
-				title: template.title,
-				description: template.description,
-				category: template.category,
-				topics: (template.topics as string[]) || [],
-				type: template.type,
-				deliveryMethod: template.deliveryMethod,
-				subject: template.title,
-				message_body: template.message_body,
-				preview: template.preview,
-				// Org endorsement: institutional provenance for the perceptual bridge
-				endorsingOrg: template.org
-					? { name: template.org.name, slug: template.org.slug, avatar: template.org.avatar }
-					: null,
-				endorsingOrgs: (template.endorsements ?? [])
-					.filter((e: { org: { slug: string } }) => e.org.slug !== template.org?.slug)
-					.map((e: { org: { name: string; slug: string; avatar: string | null } }) => ({
-						name: e.org.name, slug: e.org.slug, avatar: e.org.avatar
-					})),
-
-				// === PERCEPTUAL ENCODING PROPERTIES ===
-				coordinationScale, // 0-1 scale for visual weight (card size)
-				isNew, // Temporal signal for "New" badge
-				hasActiveDebate: activeDebateTemplateIds.has(template.id), // Status signal for deliberation
-
-				// === AGGREGATE METRICS (consistent with schema) ===
-				verified_sends: template.verified_sends, // Integer field from schema
-				unique_districts: template.unique_districts, // Integer field from schema
-				send_count: template.verified_sends, // Frontend compatibility (mapped from verified_sends)
-
-				// === METRICS OBJECT (backward compatibility + JSON fields) ===
-				metrics: {
-					// Aggregate fields (single source of truth)
-					sent: template.verified_sends, // Use schema field as source of truth
-					districts_covered: template.unique_districts, // Use schema field as source of truth
-
-					// JSON-only metrics (not in schema as integers)
-					opened: (jsonMetrics as { opened?: number }).opened || 0,
-					clicked: (jsonMetrics as { clicked?: number }).clicked || 0,
-					responded: (jsonMetrics as { responded?: number }).responded || 0,
-
-					// Congressional-specific (fallback to JSON if not in aggregate)
-					total_districts: (jsonMetrics as { total_districts?: number }).total_districts || 435,
-					district_coverage_percent:
-						(jsonMetrics as { district_coverage_percent?: number }).district_coverage_percent ||
-						(template.unique_districts ? Math.round((template.unique_districts / 435) * 100) : 0),
-
-					// AI/Analytics metrics from JSON
-					personalization_rate:
-						(jsonMetrics as { personalization_rate?: number }).personalization_rate || 0,
-					effectiveness_score: (jsonMetrics as { effectiveness_score?: number })
-						.effectiveness_score,
-					cascade_depth: (jsonMetrics as { cascade_depth?: number }).cascade_depth,
-					viral_coefficient: (jsonMetrics as { viral_coefficient?: number }).viral_coefficient,
-
-					onboarding_starts: (jsonMetrics as { onboarding_starts?: number }).onboarding_starts,
-					onboarding_completes: (jsonMetrics as { onboarding_completes?: number })
-						.onboarding_completes,
-					auth_completions: (jsonMetrics as { auth_completions?: number }).auth_completions,
-					shares: (jsonMetrics as { shares?: number }).shares
-				},
-
-				campaign_id: template.campaign_id,
-				status: template.status,
-				is_public: template.is_public,
-
-				// Jurisdictions for location filtering (Phase 3)
-				jurisdictions: template.jurisdictions || [],
-
-				// Scope from TemplateScope table (singular — first scope for backward compat)
-				scope: (scopesByTemplateId.get(template.id) ?? [])[0] || null,
-				// Scopes array for ClientSideTemplateFilter hierarchical matching
-				scopes: scopesByTemplateId.get(template.id) ?? [],
-
-				recipient_config: template.recipient_config,
-				recipientEmails: extractRecipientEmails(template.recipient_config)
-			};
-		});
-
-		const response: StructuredApiResponse = {
-			success: true,
-			data: formattedTemplates
-		};
-
-		return json(response);
-	} catch (error) {
-		console.error('Templates API error:', error);
-		console.error('Error details:', {
-			message: error instanceof Error ? error.message : 'Unknown error',
-			stack: error instanceof Error ? error.stack : undefined,
-			name: error instanceof Error ? error.name : undefined
-		});
-
-		const response: StructuredApiResponse = {
-			success: false,
-			error: createApiError('server', 'SERVER_DATABASE', 'Failed to fetch templates')
-		};
-
-		return json(response, { status: 500 });
-	}
+	const templates = await serverQuery(api.templates.listPublic, {});
+	const response: StructuredApiResponse = { success: true, data: templates };
+	return json(response);
 };
 
+// TODO: migrate POST to Convex — currently uses Prisma for moderation (Groq),
+// embeddings (Gemini), content hashing, billing quota, CWC verification
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
+	try {
 		// Parse request body
 		let requestData: unknown;
+		try {
 			requestData = await request.json();
-		} catch (error) {
+		} catch {
 			const response: StructuredApiResponse = {
 				success: false,
 				error: createApiError(
@@ -414,7 +206,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			return json(response, { status: 400 });
 		}
 
-		// validData is guaranteed to exist when isValid is true
 		if (!validation.validData) {
 			const response: StructuredApiResponse = {
 				success: false,
@@ -425,13 +216,9 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		const validData = validation.validData;
 
 		// === 2-LAYER CONTENT MODERATION (Llama Guard 4 + Gemini) ===
-		// Layer 1: Llama Guard 4 (MLCommons S1-S14 hazard taxonomy)
-		//   - Elections (S13), Defamation (S5), specialized for civic content
-		//   - 14,400 free requests/day via GROQ
-		// Layer 2: Gemini 3 Flash (quality assessment)
-		//   - Policy relevance, professionalism, congressional appropriateness
 		let consensusResult;
 
+		try {
 			const moderationResult = await moderateTemplate({
 				title: validData.title,
 				message_body: validData.message_body
@@ -452,7 +239,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				return json(response, { status: 400 });
 			}
 
-			// Convert to legacy format for backward compatibility with DB storage
 			const votes = [];
 			if (moderationResult.prompt_guard) {
 				votes.push({
@@ -493,8 +279,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			});
 		} catch (moderationError) {
 			console.error('Content moderation error:', moderationError);
-			// Atomic: if moderation fails, don't create the template
-			// This prevents slug consumption on failed publishes
 			const errorMessage =
 				moderationError instanceof Error ? moderationError.message : 'Content moderation failed';
 			const response: StructuredApiResponse = {
@@ -511,8 +295,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		const user = locals.user;
 
 		if (user) {
-			// Anti-astroturf gate: require verified identity OR sufficient reputation (G-03)
-			// Prevents unverified accounts from flooding the template pool
 			const isVerified = user.is_verified === true;
 			const hasSufficientReputation = (user.trust_score ?? 0) >= 100;
 			if (!isVerified && !hasSufficientReputation) {
@@ -527,14 +309,12 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				return json(response, { status: 403 });
 			}
 
-			// Look up org membership for quota check (performed inside transaction below)
 			const orgMembership = await db.orgMembership.findFirst({
 				where: { userId: user.id },
 				select: { orgId: true }
 			});
 
-			// Authenticated user - save to database
-				// Content-addressable identity: same author + same content = same template
+			try {
 				const hash = contentHash(validData.title, validData.message_body);
 
 				const existingByContent = await db.template.findFirst({
@@ -542,8 +322,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				});
 
 				if (existingByContent) {
-					// Idempotent: return the existing template as a success.
-					// The user's intent was to publish, and it's published.
 					const jsonMetrics =
 						typeof existingByContent.metrics === 'object' && existingByContent.metrics !== null
 							? (existingByContent.metrics as Record<string, number>)
@@ -598,7 +376,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					return json(response);
 				}
 
-				// Use pre-sanitized slug if provided, otherwise generate from title
 				const slug = validData.slug?.trim()
 					? validData.slug.trim()
 					: validData.title
@@ -623,9 +400,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					return json(response, { status: 400 });
 				}
 
-				// Create template with optional TemplateScope in a transaction
 				const newTemplate = await db.$transaction(async (tx) => {
-					// Billing quota check inside transaction to prevent race condition
 					if (orgMembership) {
 						const org = await tx.organization.findUnique({
 							where: { id: orgMembership.orgId },
@@ -639,7 +414,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						}
 					}
 
-					// Step 1: Create the template
 					const template = await tx.template.create({
 						data: {
 							title: validData.title,
@@ -656,27 +430,21 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 							cwc_config: (validData.cwc_config || {}) as InputJsonValue,
 							recipient_config: (validData.recipient_config || {}) as InputJsonValue,
 							metrics: (validData.metrics || {}) as InputJsonValue,
-							// Auto-publish if moderation passes - no manual review needed
 							status: consensusResult?.approved ? 'published' : 'draft',
 							is_public: consensusResult?.approved ?? false,
 							slug,
 							content_hash: hash,
-							// Use Prisma relation connect syntax instead of scalar userId
 							user: { connect: { id: user.id } },
-							// Consolidated verification fields with defaults
 							verification_status: consensusResult?.approved ? 'approved' : 'pending',
 							country_code: 'US',
 							reputation_applied: false,
-							// Multi-agent consensus tracking via consensus_approved boolean
 							consensus_approved: consensusResult?.approved ?? false
 						}
 					});
 
-					// Step 2: Create TemplateScope if geographic_scope was extracted
 					if (validData.geographic_scope && validData.geographic_scope.type !== 'international') {
 						const geo = validData.geographic_scope;
 
-						// Derive DB fields from GeoScope discriminated union
 						let countryCode = 'US';
 						let regionCode: string | null = null;
 						let localityCode: string | null = null;
@@ -721,19 +489,14 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					return template;
 				});
 
-				// Deferred work: CWC verification + embeddings run after response is sent.
-				// These are non-user-facing side effects that inflate response latency
-				// and cause client timeouts when external APIs (Gemini, GROQ) are slow.
 				const templateId = newTemplate.id;
 				const isPublic = newTemplate.is_public;
 				const isCwc = validData.deliveryMethod === 'cwc';
 
 				if (isCwc || isPublic) {
-					// Deferred work: runs after response is sent.
-					// On Vercel, waitUntil keeps the function alive until the promise resolves.
-					// Without it, the serverless function may terminate before Gemini returns.
 					const deferredWork = (async () => {
 						if (isCwc) {
+							try {
 								await db.template.update({
 									where: { id: templateId },
 									data: {
@@ -749,6 +512,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						}
 
 						if (isPublic) {
+							try {
 								const locationText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.category}`;
 								const topicText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.message_body}`;
 
@@ -779,7 +543,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					if (platform?.context?.waitUntil) {
 						platform.context.waitUntil(deferredWork);
 					} else {
-						// Local dev / non-Vercel: fire-and-forget is fine
 						deferredWork.catch(err => {
 							console.error('[deferred] Background work failed:', err);
 							captureWithContext(err, { action: 'template-deferred-work' });
@@ -790,7 +553,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				const response: StructuredApiResponse = {
 					success: true,
 					data: { template: (() => {
-					// Transform to match GET response shape — client validates computed fields
 					const jsonMetrics =
 						typeof newTemplate.metrics === 'object' && newTemplate.metrics !== null
 							? (newTemplate.metrics as Record<string, number>)
@@ -842,7 +604,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 				return json(response);
 			} catch (error) {
-				// Handle quota exceeded thrown from inside transaction
 				if (error instanceof Error && error.message === 'TEMPLATE_QUOTA_EXCEEDED') {
 					const response: StructuredApiResponse = {
 						success: false,
@@ -856,10 +617,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				}
 
 				console.error('Database error creating template:', error);
-				console.error('Template creation error details:', {
-					message: error instanceof Error ? error.message : 'Unknown error',
-					stack: error instanceof Error ? error.stack : undefined
-				});
 
 				const response: StructuredApiResponse = {
 					success: false,
@@ -869,7 +626,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				return json(response, { status: 500 });
 			}
 		} else {
-			// Guest users cannot create templates - require authentication
 			const response: StructuredApiResponse = {
 				success: false,
 				error: createApiError('auth', 'AUTH_REQUIRED', 'Authentication required to create templates')
@@ -878,10 +634,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		}
 	} catch (error) {
 		console.error('Template POST error:', error);
-		console.error('POST error details:', {
-			message: error instanceof Error ? error.message : 'Unknown error',
-			stack: error instanceof Error ? error.stack : undefined
-		});
 
 		const response: StructuredApiResponse = {
 			success: false,

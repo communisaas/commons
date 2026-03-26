@@ -1,4 +1,4 @@
-// CONVEX: skip — Convex subscriptions.getByOrg exists but page only needs plan gate check; needs small adapter
+// CONVEX: Keep SvelteKit — subscription plan gate check (Prisma subscription lookup)
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';

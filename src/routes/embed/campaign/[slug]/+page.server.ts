@@ -1,4 +1,4 @@
-// Note: form action (default) stays Prisma — PII encryption, billing, rate limiting, debate auto-spawn, waitUntil
+// CONVEX: Keep SvelteKit — form action uses PII encryption, billing, rate limiting, debate auto-spawn, waitUntil
 import { error, fail } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
@@ -6,63 +6,28 @@ import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
 import { spawnDebateForCampaign } from '$lib/server/debates/spawn';
 import { FEATURES } from '$lib/config/features';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
 import type { PageServerLoad, Actions } from './$types';
 
-// Convex dual-stack imports
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
 export const load: PageServerLoad = async ({ params }) => {
-	// ─── DUAL-STACK: Try Convex first ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			const campaign = await serverQuery(api.campaigns.getPublic, { campaignId: params.slug });
-			if (!campaign || campaign.status !== 'ACTIVE') {
-				throw error(404, 'Campaign not found or inactive');
-			}
-
-			return {
-				campaign: {
-					id: campaign._id,
-					title: campaign.title,
-					body: campaign.body ?? null,
-					type: campaign.type,
-					orgName: campaign.orgName ?? '',
-					orgSlug: campaign.orgSlug ?? '',
-					verifiedActions: campaign.verifiedActionCount ?? 0
-				}
-			};
-		} catch (err) {
-			if (err && typeof err === 'object' && 'status' in err) throw err;
-			console.error('[EmbedCampaign] Convex load failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const campaign = await db.campaign.findFirst({
-		where: { id: params.slug, status: 'ACTIVE' },
-		include: {
-			org: { select: { name: true, slug: true } },
-			_count: { select: { actions: { where: { verified: true } } } }
-		}
-	});
-
-	if (!campaign) {
+	const campaign = await serverQuery(api.campaigns.getPublic, { campaignId: params.slug });
+	if (!campaign || campaign.status !== 'ACTIVE') {
 		throw error(404, 'Campaign not found or inactive');
 	}
 
 	return {
 		campaign: {
-			id: campaign.id,
+			id: campaign._id,
 			title: campaign.title,
-			body: campaign.body,
+			body: campaign.body ?? null,
 			type: campaign.type,
-			orgName: campaign.org.name,
-			orgSlug: campaign.org.slug,
-			verifiedActions: campaign._count.actions
+			orgName: campaign.orgName ?? '',
+			orgSlug: campaign.orgSlug ?? '',
+			verifiedActions: campaign.verifiedActionCount ?? 0
 		}
 	};
 };

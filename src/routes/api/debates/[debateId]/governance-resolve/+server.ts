@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — CRON_SECRET auth, debate status validation + argument index verification
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';

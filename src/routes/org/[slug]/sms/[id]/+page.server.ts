@@ -1,4 +1,4 @@
-// CONVEX: skip — no Convex smsBlast query yet
+// CONVEX: Keep SvelteKit — SMS/Twilio integration, no Convex smsBlast table
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';

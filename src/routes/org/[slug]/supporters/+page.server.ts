@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — form actions (createTag/renameTag/deleteTag) use Prisma tag mutations
 import { fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';

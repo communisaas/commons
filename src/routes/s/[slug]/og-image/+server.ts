@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — server-only OG image generation (satori+sharp), template DB lookup
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import satori, { type SatoriOptions } from 'satori';

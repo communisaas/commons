@@ -1,21 +1,16 @@
-// Note: form action (default) stays Prisma — PII encryption, district verification, billing, debate auto-spawn
+// CONVEX: Keep SvelteKit — complex load (debate chain, groupBy stats), form action (PII encryption, district verification, billing, debate auto-spawn)
 import { error, fail } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { env } from '$env/dynamic/private';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import { FEATURES } from '$lib/config/features';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { hashDistrict } from '$lib/core/identity/district-credential';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
 import { spawnDebateForCampaign } from '$lib/server/debates/spawn';
 import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
 import type { PageServerLoad, Actions } from './$types';
-
-// Convex dual-stack imports
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
 
 export const load: PageServerLoad = async ({ params }) => {
 	const campaign = await db.campaign.findFirst({

@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — POST uses blockchain (submitArgument), solidityPackedKeccak256, tx-verifier, $transaction
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
@@ -6,8 +7,6 @@ import { verifyTransactionAsync } from '$lib/core/blockchain/tx-verifier';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-// CONVEX: POST is Keep SvelteKit — calls blockchain (submitArgument), solidityPackedKeccak256, tx-verifier.
-// GET is dual-stacked below → debates.listArguments
 
 /** Returns true for a valid Ethereum address (0x-prefixed, 42 hex chars). */
 function isValidEthAddress(addr: unknown): addr is string {
@@ -29,62 +28,13 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50'), 100);
 	const offset = parseInt(url.searchParams.get('offset') ?? '0');
 
-			const result = await serverQuery(api.debates.listArguments, {
-				debateId: debateId as any,
-				stance: stance ?? undefined,
-				limit,
-				offset
-			});
-			return json(result);
-	}
-
-	const debate = await prisma.debate.findUnique({
-		where: { id: debateId },
-		select: { id: true, proposition_text: true }
+	const result = await serverQuery(api.debates.listArguments, {
+		debateId: debateId as any,
+		stance: stance ?? undefined,
+		limit,
+		offset
 	});
-
-	if (!debate) {
-		throw error(404, 'Debate not found');
-	}
-
-	const where: Record<string, unknown> = { debate_id: debateId };
-	if (stance && ['SUPPORT', 'OPPOSE', 'AMEND'].includes(stance)) {
-		where.stance = stance;
-	}
-
-	const arguments_ = await prisma.debateArgument.findMany({
-		where,
-		orderBy: { weighted_score: 'desc' },
-		take: limit,
-		skip: offset
-	});
-
-	return json({
-		proposition: debate.proposition_text,
-		arguments: arguments_.map((arg) => ({
-			id: arg.id,
-			argumentIndex: arg.argument_index,
-			stance: arg.stance,
-			body: arg.body,
-			amendmentText: arg.amendment_text,
-			stakeAmount: arg.stake_amount.toString(),
-			engagementTier: arg.engagement_tier,
-			weightedScore: arg.weighted_score.toString(),
-			totalStake: arg.total_stake.toString(),
-			coSignCount: arg.co_sign_count,
-			createdAt: arg.created_at.toISOString(),
-			verificationStatus: arg.verification_status,
-			// LMSR pricing (optional)
-			currentPrice: arg.current_price ?? undefined,
-			priceHistory: arg.price_history ?? undefined,
-			positionCount: arg.position_count ?? undefined,
-			// AI evaluation (optional, populated after resolution)
-			aiScore: arg.ai_scores as Record<string, number> | undefined,
-			weightedAIScore: arg.ai_weighted ?? undefined,
-			finalScore: arg.final_score ?? undefined,
-			modelAgreement: arg.model_agreement ?? undefined,
-		}))
-	});
+	return json(result);
 };
 
 /**
