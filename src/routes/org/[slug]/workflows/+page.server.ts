@@ -14,12 +14,15 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
 	if (PUBLIC_CONVEX_URL) {
 		try {
-			const convexWorkflows = await serverQuery(api.workflows.list, { slug: params.slug });
+			const [convexWorkflows, convexOrg] = await Promise.all([
+				serverQuery(api.workflows.list, { slug: params.slug }),
+				serverQuery(api.organizations.getBySlug, { slug: params.slug })
+			]);
 
 			console.log(`[Workflows] Convex: loaded ${convexWorkflows.length} workflows for ${params.slug}`);
 
 			return {
-				org: { name: params.slug, slug: params.slug },
+				org: { name: convexOrg?.name ?? params.slug, slug: params.slug },
 				workflows: convexWorkflows.map((w: Record<string, unknown>) => ({
 					id: w._id,
 					name: w.name,
@@ -27,7 +30,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 					trigger: w.trigger as { type: string; tagId?: string; campaignId?: string },
 					stepCount: Array.isArray(w.steps) ? (w.steps as unknown[]).length : 0,
 					enabled: w.enabled,
-					executionCount: 0, // Convex list doesn't include execution count
+					// TODO: add executionCount to convex/workflows.list (requires joining workflowExecutions)
+					executionCount: 0,
 					createdAt: typeof w._creationTime === 'number'
 						? new Date(w._creationTime as number).toISOString()
 						: String(w._creationTime),

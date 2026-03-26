@@ -36,15 +36,25 @@ export const load: PageServerLoad = async ({ parent }) => {
 
 			const activeCampaignCount = campaigns.filter((c: { status: string }) => c.status === 'ACTIVE').length;
 
+			// Use real member data from Convex getDashboard
+			const membersFromConvex = (dashboard.members ?? []).map((m: Record<string, unknown>) => ({
+				id: m._id,
+				role: m.role,
+				userName: m.userName ?? null,
+				userEmail: m.userEmail ?? null,
+				userAvatar: m.userAvatar ?? null,
+				joinedAt: m.joinedAt
+			}));
+
 			return {
-				// Verification funnel — Convex doesn't carry full funnel, use stats
+				// TODO: enhance convex/organizations.getDashboard to include funnel detail (postalResolved, identityVerified, districtVerified)
 				funnel: {
 					imported: dashboard.stats?.supporters ?? 0,
 					postalResolved: 0,
 					identityVerified: 0,
 					districtVerified: 0
 				},
-				// Tier distribution — not in Convex yet
+				// TODO: enhance convex/organizations.getDashboard to include tier distribution
 				tiers: [0, 1, 2, 3, 4].map(tier => ({
 					tier,
 					label: ['New', 'Active', 'Established', 'Veteran', 'Pillar'][tier],
@@ -55,9 +65,13 @@ export const load: PageServerLoad = async ({ parent }) => {
 				stats: {
 					supporters: dashboard.stats?.supporters ?? 0,
 					campaigns: dashboard.stats?.campaigns ?? 0,
-					templates: 0, // not tracked in Convex yet
-					activeCampaigns: activeCampaignCount
+					// TODO: enhance convex/organizations.getDashboard to include template count
+					templates: 0,
+					activeCampaigns: activeCampaignCount,
+					members: dashboard.stats?.members ?? membersFromConvex.length,
+					sentEmails: dashboard.stats?.sentEmails ?? 0
 				},
+				// TODO: enhance convex/organizations.getDashboard to include email reach breakdown
 				emailReach: {
 					subscribed: 0,
 					unsubscribed: 0,
@@ -65,7 +79,8 @@ export const load: PageServerLoad = async ({ parent }) => {
 					complained: 0,
 					total: dashboard.stats?.supporters ?? 0
 				},
-				packet: null, // verification packet not in Convex
+				// TODO: enhance convex/organizations.getDashboard to include verification packet
+				packet: null,
 				recentActivity: (dashboard.recentSupporters ?? []).map((s: Record<string, unknown>) => ({
 					type: 'signup' as const,
 					id: s._id,
@@ -77,7 +92,9 @@ export const load: PageServerLoad = async ({ parent }) => {
 						? new Date(s._creationTime as number).toISOString()
 						: String(s._creationTime)
 				})),
+				// TODO: enhance convex/organizations.getDashboard to include endorsed templates
 				endorsedTemplates: [],
+				// TODO: enhance convex/organizations.getDashboard to include growth (thisWeek/lastWeek verified actions)
 				growth: { thisWeek: 0, lastWeek: 0 },
 				billingEmail: dashboard.billingEmail ?? null,
 				onboardingState: {
@@ -92,8 +109,11 @@ export const load: PageServerLoad = async ({ parent }) => {
 					topCampaignId: (campaigns.find((c: { status: string }) => c.status === 'ACTIVE') || campaigns[0])?.id ?? null
 				},
 				onboardingComplete: dashboard.onboardingComplete ?? false,
+				// TODO: enhance convex/organizations.getDashboard to include followed reps
 				followedReps: { count: 0, top: [] },
+				// TODO: enhance convex/organizations.getDashboard to include watched bills
 				watchedBills: { count: 0, top: [] },
+				// TODO: enhance convex/organizations.getDashboard to include legislative alerts
 				legislativeAlerts: []
 			};
 		} catch (error) {

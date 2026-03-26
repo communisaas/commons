@@ -17,15 +17,18 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
 	if (PUBLIC_CONVEX_URL) {
 		try {
-			const convexResult = await serverQuery(api.events.list, {
-				orgSlug: params.slug,
-				paginationOpts: { numItems: 50, cursor: null }
-			});
+			const [convexResult, convexOrg] = await Promise.all([
+				serverQuery(api.events.list, {
+					orgSlug: params.slug,
+					paginationOpts: { numItems: 50, cursor: null }
+				}),
+				serverQuery(api.organizations.getBySlug, { slug: params.slug })
+			]);
 
 			console.log(`[Events] Convex: loaded ${convexResult.page.length} events for ${params.slug}`);
 
 			return {
-				org: { name: params.slug, slug: params.slug },
+				org: { name: convexOrg?.name ?? params.slug, slug: params.slug },
 				events: convexResult.page.map((e: Record<string, unknown>) => ({
 					id: e._id,
 					title: e.title,

@@ -14,7 +14,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
 	if (PUBLIC_CONVEX_URL) {
 		try {
-			const [convexWorkflow, convexExecutions] = await Promise.all([
+			const [convexWorkflow, convexExecutions, convexOrg] = await Promise.all([
 				serverQuery(api.workflows.get, {
 					slug: params.slug,
 					workflowId: params.id as any
@@ -23,7 +23,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 					slug: params.slug,
 					workflowId: params.id as any,
 					limit: 20
-				})
+				}),
+				serverQuery(api.organizations.getBySlug, { slug: params.slug })
 			]);
 
 			if (!convexWorkflow) throw error(404, 'Workflow not found');
@@ -31,7 +32,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			console.log(`[Workflow Detail] Convex: loaded workflow ${params.id} for ${params.slug}`);
 
 			return {
-				org: { name: params.slug, slug: params.slug },
+				org: { name: convexOrg?.name ?? params.slug, slug: params.slug },
 				workflow: {
 					id: convexWorkflow._id,
 					name: convexWorkflow.name,
@@ -49,8 +50,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 				},
 				executions: convexExecutions.map((e: Record<string, unknown>) => ({
 					id: e._id,
-					supporterName: 'Unknown',
-					supporterEmail: '',
+					// TODO: enhance convex/workflows.getExecutions to join supporter name from supporters table
+					supporterName: (e.supporterName as string) ?? 'Unknown',
+					supporterEmail: (e.supporterEmail as string) ?? '',
 					status: e.status,
 					currentStep: e.currentStep,
 					error: e.error ?? null,

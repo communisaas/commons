@@ -17,10 +17,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
 	if (PUBLIC_CONVEX_URL) {
 		try {
-			const convexResult = await serverQuery(api.campaigns.list, {
-				slug: params.slug,
-				paginationOpts: { numItems: 100, cursor: null }
-			});
+			const [convexResult, convexOrg] = await Promise.all([
+				serverQuery(api.campaigns.list, {
+					slug: params.slug,
+					paginationOpts: { numItems: 100, cursor: null }
+				}),
+				serverQuery(api.organizations.getBySlug, { slug: params.slug })
+			]);
 
 			// Filter to FUNDRAISER type campaigns (Convex campaigns.list returns all types)
 			const fundraisers = convexResult.page.filter(
@@ -30,7 +33,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			console.log(`[Fundraising] Convex: loaded ${fundraisers.length} fundraiser campaigns for ${params.slug}`);
 
 			return {
-				org: { name: params.slug, slug: params.slug },
+				org: { name: convexOrg?.name ?? params.slug, slug: params.slug },
 				campaigns: fundraisers.map((c: Record<string, unknown>) => ({
 					id: c._id,
 					title: c.title,

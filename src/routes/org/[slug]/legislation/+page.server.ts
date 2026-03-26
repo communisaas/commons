@@ -37,10 +37,11 @@ export const load: PageServerLoad = async ({ parent }) => {
 						? {
 								...(w.bill as Record<string, unknown>),
 								id: (w.bill as Record<string, unknown>)._id,
-								statusDate:
-									typeof (w.bill as Record<string, unknown>).statusDate === 'number'
+								statusDate: (w.bill as Record<string, unknown>).statusDate != null
+									? (typeof (w.bill as Record<string, unknown>).statusDate === 'number'
 										? new Date((w.bill as Record<string, unknown>).statusDate as number).toISOString()
-										: String((w.bill as Record<string, unknown>).statusDate)
+										: String((w.bill as Record<string, unknown>).statusDate))
+									: null
 							}
 						: null
 				})),
@@ -53,10 +54,11 @@ export const load: PageServerLoad = async ({ parent }) => {
 						? {
 								...(r.bill as Record<string, unknown>),
 								id: (r.bill as Record<string, unknown>)._id,
-								statusDate:
-									typeof (r.bill as Record<string, unknown>).statusDate === 'number'
+								statusDate: (r.bill as Record<string, unknown>).statusDate != null
+									? (typeof (r.bill as Record<string, unknown>).statusDate === 'number'
 										? new Date((r.bill as Record<string, unknown>).statusDate as number).toISOString()
-										: String((r.bill as Record<string, unknown>).statusDate)
+										: String((r.bill as Record<string, unknown>).statusDate))
+									: null
 							}
 						: null
 				}))

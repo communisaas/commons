@@ -17,7 +17,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
 	if (PUBLIC_CONVEX_URL) {
 		try {
-			const [convexEvent, convexRsvps] = await Promise.all([
+			const [convexEvent, convexRsvps, convexOrg] = await Promise.all([
 				serverQuery(api.events.get, {
 					orgSlug: params.slug,
 					eventId: params.id as any
@@ -26,15 +26,31 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 					orgSlug: params.slug,
 					eventId: params.id as any,
 					paginationOpts: { numItems: 100, cursor: null }
-				})
+				}),
+				serverQuery(api.organizations.getBySlug, { slug: params.slug })
 			]);
 
 			if (!convexEvent) throw error(404, 'Event not found');
 
 			console.log(`[Event Detail] Convex: loaded event ${params.id} for ${params.slug}`);
 
+			// Role-gate checkinCode: only expose to editor/admin/owner (matches Prisma path)
+			let canSeeCheckinCode = false;
+			const prismaOrg = await db.organization.findUnique({
+				where: { slug: params.slug },
+				select: { id: true }
+			});
+			if (prismaOrg) {
+				const mem = await db.orgMembership.findUnique({
+					where: { orgId_userId: { orgId: prismaOrg.id, userId: locals.user.id } }
+				});
+				if (mem && ['editor', 'admin', 'owner'].includes(mem.role)) {
+					canSeeCheckinCode = true;
+				}
+			}
+
 			return {
-				org: { name: params.slug, slug: params.slug },
+				org: { name: convexOrg?.name ?? params.slug, slug: params.slug },
 				event: {
 					id: convexEvent._id,
 					title: convexEvent.title,
@@ -57,7 +73,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 					attendeeCount: convexEvent.attendeeCount ?? 0,
 					verifiedAttendees: convexEvent.verifiedAttendees ?? 0,
 					status: convexEvent.status,
-					checkinCode: convexEvent.checkinCode ?? null,
+					checkinCode: canSeeCheckinCode ? (convexEvent.checkinCode ?? null) : null,
 					requireVerification: convexEvent.requireVerification ?? false
 				},
 				rsvps: (convexRsvps.page ?? []).map((r: Record<string, unknown>) => ({

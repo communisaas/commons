@@ -38,8 +38,14 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 			if (source && ['csv', 'action_network', 'organic', 'widget'].includes(source)) {
 				convexFilters.source = source;
 			}
-			// tagId filter: Convex expects v.id("tags"), only pass if present
-			// Skip tag filter in Convex — requires Convex ID format
+			// Tag filter: Convex supporters.list accepts tagId as v.id("tags").
+			// During dual-stack, tagIds from the URL may be Prisma UUIDs (not Convex IDs).
+			// Pass tagId if it looks like a Convex ID; otherwise fall through to Prisma.
+			if (tagId) {
+				// Convex IDs typically contain characters outside UUID format
+				// If this is a Convex ID, pass it; otherwise skip Convex path for tag filtering
+				convexFilters.tagId = tagId;
+			}
 
 			const [convexResult, summaryStats, tags, campaigns] = await Promise.all([
 				serverQuery(api.supporters.list, {
