@@ -14,13 +14,10 @@ import {
 	type StructuredApiResponse,
 	type ApiError
 } from '$lib/types/errors';
-import type { InputJsonValue } from '@prisma/client/runtime/library'; // KEEP: Prisma JSON type for template fields
 import type { UnknownRecord } from '$lib/types/any-replacements';
 import { moderateTemplate } from '$lib/core/server/moderation'; // KEEP: Groq moderation (external API)
 import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings'; // KEEP: Gemini embeddings (external API)
 import { createHash } from 'crypto'; // KEEP: content hash for dedup
-import { getMonthlyTemplateCount } from '$lib/server/billing/usage'; // KEEP: billing quota in $transaction
-import { captureWithContext } from '$lib/server/monitoring/sentry';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { GeoScope } from '$lib/core/agents/types';

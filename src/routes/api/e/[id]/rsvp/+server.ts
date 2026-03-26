@@ -12,7 +12,6 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
-import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
 import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import crypto from 'node:crypto';
 import type { RequestHandler } from './$types';
@@ -179,7 +178,6 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// Fire-and-forget: trigger automation workflows
 	void (async () => {
 		try {
-			const { dispatchTrigger } = await import('$lib/server/automation/trigger');
 			if (event.orgId) {
 				await dispatchTrigger(event.orgId, 'event_rsvp', {
 					entityId: rsvp.id,

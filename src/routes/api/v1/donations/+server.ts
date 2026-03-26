@@ -6,7 +6,6 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
-import { maskEmail } from '$lib/server/org/mask';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';

@@ -15,7 +15,6 @@ import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { confirmMailtoSend } from '$lib/services/positionService';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');
@@ -33,40 +32,28 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			return json({ error: 'Missing required field: templateId' }, { status: 400 });
 		}
 
-		// Verify template exists
-		const template = await prisma.template.findUnique({
-			where: { id: templateId },
-			select: { id: true, title: true }
-		});
-
-		if (!template) {
-			return json({ error: 'Template not found' }, { status: 404 });
-		}
-
 		// Derive identity_commitment from DB — require real verification
-		const user = await serverQuery(api.users.getById, { id: session.userId  as any });
+		const user = await serverQuery(api.users.getById, { id: session.userId as any });
 		if (!user?.identity_commitment) {
 			return json({ error: 'Identity verification required to confirm send' }, { status: 403 });
 		}
 		const identityCommitment = user.identity_commitment;
 
 		// Auto-fill district_code from ShadowAtlasRegistration
-		let districtCode: string | undefined;
-		const atlas = await prisma.shadowAtlasRegistration
-			.findFirst({
-				where: { identity_commitment: identityCommitment },
-				select: { congressional_district: true }
-			})
-			.catch(() => null);
-		if (atlas?.congressional_district) {
-			districtCode = atlas.congressional_district;
-		}
+		const atlas = await serverQuery(api.users.getShadowAtlasRegistration, {
+			identityCommitment
+		});
+		const districtCode = atlas?.congressionalDistrict ?? undefined;
 
-		const result = await confirmMailtoSend({
-			templateId,
+		// Get template title for delivery record
+		const template = await serverQuery(api.templates.getBySlug, { slug: templateId });
+		const templateTitle = template?.title;
+
+		const result = await serverMutation(api.positions.confirmMailtoSend, {
+			templateId: templateId as any,
 			identityCommitment,
 			districtCode,
-			templateTitle: template.title
+			templateTitle
 		});
 
 		return json({

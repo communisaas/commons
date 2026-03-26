@@ -13,8 +13,7 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
-import { getEngagementByDistrict } from '$lib/services/positionService';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
 export const GET: RequestHandler = async ({ params, url }) => {
@@ -27,21 +26,18 @@ export const GET: RequestHandler = async ({ params, url }) => {
 			return json({ error: 'Missing templateId' }, { status: 400 });
 		}
 
-		// Verify template exists and is public
-		const template = await prisma.template.findUnique({
-			where: { id: templateId },
-			select: { id: true, is_public: true }
+		const userDistrict = url.searchParams.get('userDistrict') ?? undefined;
+		const engagement = await serverQuery(api.positions.getFullEngagementByDistrict, {
+			templateId: templateId as any,
+			userDistrictCode: userDistrict
 		});
 
-		if (!template) {
-			return json({ error: 'Template not found' }, { status: 404 });
-		}
-
-		const userDistrict = url.searchParams.get('userDistrict');
-		const engagement = await getEngagementByDistrict(templateId);
-
 		if (!engagement) {
-			return json({ template_id: templateId, districts: [], aggregate: { total_districts: 0, total_positions: 0, total_support: 0, total_oppose: 0 } });
+			return json({
+				template_id: templateId,
+				districts: [],
+				aggregate: { total_districts: 0, total_positions: 0, total_support: 0, total_oppose: 0 }
+			});
 		}
 
 		// Tag user's district if provided

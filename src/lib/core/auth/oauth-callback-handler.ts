@@ -273,24 +273,15 @@ export class OAuthCallbackHandler {
 			expiresAt: tokenData.expiresAt ?? undefined,
 		});
 
-		// Fire-and-forget NEAR account creation for new users
-		if (result.isNew) {
-			import('$lib/core/near/account').then(({ createNearAccount }) => {
-				createNearAccount(result.userId as string).catch((err) => {
-					console.warn('[OAuth] NEAR account creation failed (non-blocking):', err);
-				});
-			}).catch(() => {});
-
-			// Log Sybil resistance action for audit (no plaintext PII in logs)
-			if (!emailVerified) {
-				console.debug('[OAuth Sybil Resistance] New user created with unverified email:', {
-					provider: config.provider,
-					userId: result.userId,
-					email_hash: piiData.email_hash?.slice(0, 12) ?? 'none',
-					trust_score: emailVerified ? 100 : 50,
-					reputation_tier: emailVerified ? 'verified' : 'novice'
-				});
-			}
+		// Log Sybil resistance action for audit (no plaintext PII in logs)
+		if (result.isNew && !emailVerified) {
+			console.debug('[OAuth Sybil Resistance] New user created with unverified email:', {
+				provider: config.provider,
+				userId: result.userId,
+				email_hash: piiData.email_hash?.slice(0, 12) ?? 'none',
+				trust_score: emailVerified ? 100 : 50,
+				reputation_tier: emailVerified ? 'verified' : 'novice'
+			});
 		}
 
 		return result.userId as string;

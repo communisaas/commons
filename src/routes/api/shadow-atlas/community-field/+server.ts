@@ -71,16 +71,10 @@ export const POST: RequestHandler = async (event) => {
 	const cellSetRoot = publicInputs[2] as string;
 	const epochNullifier = publicInputs[3] as string;
 
-	const prisma = db;
-
 	// Check epoch nullifier dedup locally first (fast reject)
-	const existing = await prisma.communityFieldContribution.findUnique({
-		where: {
-			epoch_date_epoch_nullifier: {
-				epoch_date: epochDate,
-				epoch_nullifier: epochNullifier
-			}
-		}
+	const existing = await serverQuery(api.users.checkCommunityFieldContribution, {
+		epochDate: epochDate as string,
+		epochNullifier: epochNullifier as string,
 	});
 
 	if (existing) {
@@ -131,14 +125,12 @@ export const POST: RequestHandler = async (event) => {
 		// Store local contribution record for tracking
 		const proofHash = '0x' + await hashHex(proof);
 
-		await prisma.communityFieldContribution.create({
-			data: {
-				epoch_date: epochDate,
-				epoch_nullifier: epochNullifier,
-				cell_tree_root: cellSetRoot,
-				proof_hash: proofHash,
-				verification_status: 'verified' // Shadow Atlas verified the proof
-			}
+		await serverMutation(api.users.createCommunityFieldContribution, {
+			epochDate: epochDate as string,
+			epochNullifier: epochNullifier as string,
+			cellTreeRoot: cellSetRoot,
+			proofHash: proofHash,
+			verificationStatus: 'verified', // Shadow Atlas verified the proof
 		});
 
 		return json({

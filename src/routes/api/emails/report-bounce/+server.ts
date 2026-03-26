@@ -18,7 +18,6 @@
  */
 
 import type { RequestHandler } from './$types';
-import { reportBounce } from '$lib/server/email-verification';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 

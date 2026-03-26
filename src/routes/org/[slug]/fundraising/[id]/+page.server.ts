@@ -3,7 +3,6 @@ import { error, redirect } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
-import { maskEmail } from '$lib/server/org/mask';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {

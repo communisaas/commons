@@ -755,3 +755,37 @@ export const updateSmsStatus = mutation({
     return { updated: true };
   },
 });
+
+/**
+ * Public: get supporter email status for unsubscribe page (no auth required).
+ * Returns minimal fields only — no PII.
+ */
+export const getEmailStatus = query({
+  args: { supporterId: v.id("supporters") },
+  handler: async (ctx, { supporterId }) => {
+    const supporter = await ctx.db.get(supporterId);
+    if (!supporter) return null;
+    return {
+      _id: supporter._id,
+      orgId: supporter.orgId,
+      emailStatus: supporter.emailStatus,
+    };
+  },
+});
+
+/**
+ * Public: unsubscribe a supporter by ID (called from unsubscribe page action).
+ * HMAC token verification happens in the SvelteKit route before calling this.
+ */
+export const unsubscribe = mutation({
+  args: { supporterId: v.id("supporters") },
+  handler: async (ctx, { supporterId }) => {
+    const supporter = await ctx.db.get(supporterId);
+    if (!supporter) throw new Error("Supporter not found");
+    await ctx.db.patch(supporterId, {
+      emailStatus: "unsubscribed",
+      updatedAt: Date.now(),
+    });
+    return { success: true };
+  },
+});

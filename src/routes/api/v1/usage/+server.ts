@@ -6,7 +6,6 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk } from '$lib/server/api-v1/response';
-import { getOrgUsage } from '$lib/server/billing/usage';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {

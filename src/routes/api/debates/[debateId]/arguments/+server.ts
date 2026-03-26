@@ -1,13 +1,10 @@
-// CONVEX: Keep SvelteKit — POST uses blockchain (submitArgument), solidityPackedKeccak256, tx-verifier, $transaction
+// CONVEX: Keep SvelteKit — POST uses blockchain (submitArgument), solidityPackedKeccak256, tx-verifier
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { solidityPackedKeccak256 } from 'ethers';
-import { verifyTransactionAsync } from '$lib/core/blockchain/tx-verifier';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
 
 /** Returns true for a valid Ethereum address (0x-prefixed, 42 hex chars). */
 function isValidEthAddress(addr: unknown): addr is string {
@@ -42,17 +39,6 @@ export const GET: RequestHandler = async ({ params, url }) => {
  * POST /api/debates/[debateId]/arguments
  *
  * Submit a new argument to a debate. Requires Tier 3+ and ZK proof.
- *
- * Body: {
- *   stance, body, amendmentText?, stakeAmount, proofHex, publicInputs, nullifierHex,
- *   walletAddress?  — the user's Ethereum wallet address; stored as beneficiary in
- *                     the on-chain StakeRecord so settlement tokens flow directly to
- *                     the user rather than the relayer. Optional — defaults to address(0)
- *                     (relayer fallback) if omitted or invalid.
- * }
- *
- * NOTE: In production, calls DebateMarket.submitArgument() on-chain.
- * Currently stores off-chain only for frontend development.
  */
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.DEBATE) {
@@ -61,7 +47,6 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	const { debateId } = params;
 
-	// Check authentication
 	const session = locals.session;
 	if (!session?.userId) {
 		throw error(401, 'Authentication required');
@@ -72,28 +57,25 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(403, 'Tier 3+ verification required to submit arguments');
 	}
 
-	await serverQuery(api.debates.get, { debateId: debateId as any });
-
+	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
 	if (!debate) {
 		throw error(404, 'Debate not found');
 	}
 	if (debate.status !== 'active') {
 		throw error(400, 'Debate is not active');
 	}
-	if (new Date() > debate.deadline) {
+	if (new Date() > new Date(debate.deadline)) {
 		throw error(400, 'Debate deadline has passed');
 	}
 
 	const body = await request.json();
 	const { stance, body: argumentBody, amendmentText, stakeAmount, proofHex, publicInputs, nullifierHex, walletAddress } = body;
 
-	// Validate stake amount: must be a positive number within bounds
 	const stakeNum = Number(stakeAmount);
 	if (!stakeAmount || isNaN(stakeNum) || stakeNum <= 0 || stakeNum > 100_000_000_000) {
 		throw error(400, 'stakeAmount must be a positive number up to 100 billion (micro-units)');
 	}
 
-	// Validate stance
 	if (!['SUPPORT', 'OPPOSE', 'AMEND'].includes(stance)) {
 		throw error(400, 'stance must be SUPPORT, OPPOSE, or AMEND');
 	}
@@ -107,23 +89,17 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'ZK proof data is required');
 	}
 
-	// Check for nullifier dedup — same identity can't submit twice to the same debate
+	// Nullifier dedup
 	if (nullifierHex) {
 		const existingNullifier = await serverQuery(api.debates.findNullifier, {
-			where: {
-				debate_id: debateId,
-				nullifier_hash: nullifierHex
-			},
-			select: { id: true }
+			debateId: debateId as any,
+			nullifierHash: nullifierHex
 		});
 		if (existingNullifier) {
 			throw error(409, 'You have already submitted an argument to this debate');
 		}
 	}
 
-	// Validate beneficiary wallet address when provided.
-	// walletAddress is optional — if absent or invalid we pass undefined and the
-	// client defaults to address(0), which the contract treats as "pay relayer".
 	if (walletAddress !== undefined && walletAddress !== null && !isValidEthAddress(walletAddress)) {
 		throw error(400, 'walletAddress must be a valid Ethereum address (0x-prefixed, 42 chars)');
 	}
@@ -133,154 +109,75 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	const bodyHash = solidityPackedKeccak256(['string'], [argumentBody]);
 	const amendmentHash = amendmentText
 		? solidityPackedKeccak256(['string'], [amendmentText])
-		: null;
+		: undefined;
 
-	// Compute weighted score: sqrt(stake) * 2^engagementTier
-	// Engagement tier (civic participation, 0-4) comes from the ZK circuit's publicInputs[30],
-	// NOT trust tier (identity verification, 0-5). The circuit proves the tier against the
-	// engagement Merkle tree, so it's cryptographically verified and can't be inflated.
-	const stakeInDollars = Number(stakeAmount) / 1e6;
-	let engagementTier = 0;
-	if (publicInputs && Array.isArray(publicInputs) && publicInputs.length > 30) {
-		const provenTier = Number(publicInputs[30]);
-		if (Number.isInteger(provenTier) && provenTier >= 0 && provenTier <= 4) {
-			engagementTier = provenTier;
-		}
-	}
-
-	const weightedScore = Math.floor(Math.sqrt(stakeInDollars) * Math.pow(2, engagementTier) * 1e6);
-
-	const argumentIndex = debate.argument_count;
-
-	// Submit argument on-chain via DebateMarket contract
-	const STANCE_MAP: Record<string, number> = { SUPPORT: 0, OPPOSE: 1, AMEND: 2 };
+	// ── On-chain submission ──────────────────────────────────────────
 	let txHash: string | undefined;
-	// Track whether the server already confirmed the tx receipt (relayer path).
-	// Client-submitted txs need async verification; server-relayed txs are already confirmed.
 	let serverVerified = false;
 
-	// Accept client-submitted tx hash (from connected EVM wallet).
-	// If present and valid, skip the server-side on-chain submission.
 	const clientTxHash = body.txHash;
 	if (clientTxHash && typeof clientTxHash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(clientTxHash)) {
-		// Client already submitted the transaction via their wallet.
-		// No server-side on-chain submission needed.
 		txHash = clientTxHash;
-		console.debug('[debates/arguments] Client-submitted tx:', {
-			txHash: txHash.slice(0, 12) + '...',
-			userId: session.userId
-		});
 	} else {
-		// Legacy path: server relayer submits on-chain
+		try {
 			const { submitArgument } = await import('$lib/core/blockchain/debate-market-client');
 
 			const onchainResult = await submitArgument({
-				debateId: debate.debate_id_onchain,
-				stance: STANCE_MAP[stance],
+				debateId: debate.debateIdOnchain,
+				stance: { SUPPORT: 0, OPPOSE: 1, AMEND: 2 }[stance as string]!,
 				bodyHash,
 				amendmentHash: amendmentHash ?? '0x' + '0'.repeat(64),
 				stakeAmount: BigInt(stakeAmount),
 				proof: proofHex,
 				publicInputs,
 				verifierDepth: body.verifierDepth ?? 20,
-				beneficiary  // user's wallet — receives settlement tokens directly (R-01)
+				beneficiary
 			});
 
 			if (onchainResult.success) {
 				txHash = onchainResult.txHash;
-				serverVerified = true; // Receipt already confirmed by server relayer
+				serverVerified = true;
 			} else if (onchainResult.error?.includes('not configured')) {
 				console.warn('[debates/arguments] Blockchain not configured, creating off-chain only');
-				serverVerified = true; // No chain to verify against — treat as verified
+				serverVerified = true;
 			} else {
 				throw error(502, `On-chain argument submission failed: ${onchainResult.error}`);
 			}
 		} catch (err: unknown) {
-			// Re-throw SvelteKit errors (our own 502 above)
 			if (err && typeof err === 'object' && 'status' in err) {
 				throw err;
 			}
-			// Import failure or unexpected error — treat as blockchain not configured
 			console.warn('[debates/arguments] Blockchain not available, creating off-chain only:', err);
-			serverVerified = true; // No chain — treat as verified
+			serverVerified = true;
 		}
 	}
 
-	// Determine initial verification status:
-	// - Server relayer path: already confirmed by receipt → 'verified'
-	// - Client-submitted tx: needs async verification → 'pending'
-	const initialStatus = serverVerified ? 'verified' : 'pending';
-
-	// Create argument, record nullifier, and update debate counts atomically.
-	// unique_participants only increments when a new nullifier is recorded
-	// (the dedup check above already threw 409 if the nullifier was seen before).
-	const createArg = prisma.debateArgument.create({
-		data: {
-			debate_id: debateId,
-			argument_index: argumentIndex,
-			stance,
-			body: argumentBody,
-			body_hash: bodyHash,
-			amendment_text: amendmentText || null,
-			amendment_hash: amendmentHash,
-			nullifier_hash: nullifierHex || null,
-			stake_amount: BigInt(stakeAmount),
-			engagement_tier: engagementTier,
-			weighted_score: BigInt(weightedScore),
-			total_stake: BigInt(stakeAmount),
-			verification_status: initialStatus,
-			...(serverVerified && { verified_at: new Date() })
-		}
+	// ── Convex DB write (atomic) ─────────────────────────────────────
+	const argId = await serverMutation(api.debates.createArgument, {
+		debateId: debateId as any,
+		stance,
+		body: argumentBody,
+		bodyHash,
+		amendmentText: amendmentText || undefined,
+		amendmentHash: amendmentHash || undefined,
+		nullifierHash: nullifierHex || undefined,
+		stakeAmount: stakeNum,
+		txHash: txHash
 	});
 
-	const updateDebate = prisma.debate.update({
-		where: { id: debateId },
-		data: {
-			argument_count: { increment: 1 },
-			unique_participants: { increment: 1 },
-			total_stake: { increment: BigInt(stakeAmount) }
-		}
-	});
-
-	// Record the nullifier for cross-action dedup (arguments + co-signs).
-	// If nullifierHex is present, include it in the transaction.
-	const txResult = nullifierHex
-		? await prisma.$transaction([
-				createArg,
-				updateDebate,
-				prisma.debateNullifier.create({
-					data: {
-						debate_id: debateId,
-						nullifier_hash: nullifierHex,
-						action_type: 'argument',
-						verification_status: initialStatus,
-						tx_hash: txHash ?? null
-					}
-				})
-			])
-		: await prisma.$transaction([createArg, updateDebate]);
-
-	const argument = txResult[0];
-	const nullifier = nullifierHex ? txResult[2] : null;
-
-	// Fire-and-forget: verify client-submitted tx actually succeeded on-chain.
-	// Passes argumentId + nullifierId so the verifier can update verification_status
-	// and rollback on failure.
+	// Fire-and-forget: verify client-submitted tx
 	if (clientTxHash && txHash) {
 		verifyTransactionAsync(txHash, {
 			debateId,
 			type: 'argument',
-			argumentId: argument.id,
-			nullifierId: (nullifier as { id: string } | null)?.id,
+			argumentId: argId,
 			userId: session.userId
 		});
 	}
 
 	return json({
-		argumentId: argument.id,
-		argumentIndex: argument.argument_index,
-		weightedScore: argument.weighted_score.toString(),
-		verificationStatus: argument.verification_status,
+		argumentId: argId,
+		verificationStatus: serverVerified ? 'verified' : 'pending',
 		...(txHash ? { txHash } : {})
 	});
 };

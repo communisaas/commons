@@ -42,11 +42,6 @@ PUBLIC_SCROLL_RPC_URL = "https://rpc.scroll.io"
 # Wallet — Fiat Onramp:
 #   PUBLIC_TRANSAK_API_KEY   - Transak API key for fiat onramp widget
 
-[[hyperdrive]]
-binding = "HYPERDRIVE"
-id = "870ed0ebca654838bc0df0d83c4e2645"
-localConnectionString = "postgresql://commons:commons@localhost:5432/commons"
-
 # DC_SESSION_KV: KV namespace for DC (district-confirmed) session state
 # Used to store ephemeral session data during the congressional contact flow
 # Create the namespace before deploying:

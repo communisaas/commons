@@ -1,6 +1,6 @@
-// CONVEX: Keep SvelteKit — security-critical verification flow (delivery + credential lookup, public endpoint)
+// CONVEX: Keep SvelteKit — security-critical verification flow (public endpoint)
 import type { PageServerLoad } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
 /**
@@ -9,12 +9,6 @@ import { api } from '$lib/convex';
  * Handles two URL patterns:
  * 1. /verify/{deliveryId} — per-delivery report verification (new)
  * 2. /verify/{credentialHash} — individual credential verification (legacy)
- *
- * For delivery verification: shows campaign title, frozen packet stats, and
- * the district-level breakdown without revealing any constituent PII.
- *
- * For credential verification: displays "This message was sent by a verified
- * constituent of [district]" without revealing user identity.
  */
 export const load: PageServerLoad = async ({ params }) => {
 	const { hash } = params;
@@ -25,39 +19,25 @@ export const load: PageServerLoad = async ({ params }) => {
 
 	try {
 		// Try CampaignDelivery lookup first (per-delivery verify URLs)
-		const delivery = await db.campaignDelivery.findUnique({
-			where: { id: hash },
-			select: {
-				id: true,
-				targetDistrict: true,
-				packetSnapshot: true,
-				sentAt: true,
-				campaign: {
-					select: { title: true }
-				}
-			}
-		});
+		const delivery = await serverQuery(api.verify.getDelivery, { deliveryId: hash });
 
 		if (delivery) {
 			const snap = delivery.packetSnapshot as Record<string, unknown> | null;
 			return {
 				credential: null,
 				delivery: {
-					campaignTitle: delivery.campaign.title,
+					campaignTitle: delivery.campaignTitle,
 					district: delivery.targetDistrict,
 					verified: typeof snap?.verified === 'number' ? snap.verified : null,
 					districtCount: typeof snap?.districtCount === 'number' ? snap.districtCount : null,
-					sentAt: delivery.sentAt?.toISOString() ?? null
+					sentAt: delivery.sentAt ? new Date(delivery.sentAt).toISOString() : null
 				},
 				error: null
 			};
 		}
 
 		// Try Campaign lookup (backward compat for campaign-level verify URLs)
-		const campaign = await db.campaign.findUnique({
-			where: { id: hash },
-			select: { id: true, title: true }
-		});
+		const campaign = await serverQuery(api.verify.getCampaignForVerify, { campaignId: hash });
 
 		if (campaign) {
 			return {
@@ -74,32 +54,23 @@ export const load: PageServerLoad = async ({ params }) => {
 		}
 
 		// Fall back to legacy credential hash verification
-		const credential = await db.districtCredential.findFirst({
-			where: { credential_hash: hash },
-			select: {
-				congressional_district: true,
-				verification_method: true,
-				issued_at: true,
-				expires_at: true,
-				revoked_at: true
-			}
-		});
+		const credential = await serverQuery(api.verify.getCredentialByHash, { credentialHash: hash });
 
 		if (!credential) {
 			return { credential: null, delivery: null, error: 'Credential not found' };
 		}
 
-		if (credential.revoked_at) {
+		if (credential.revokedAt) {
 			return { credential: null, delivery: null, error: 'This credential has been revoked' };
 		}
 
-		const isExpired = new Date() > credential.expires_at;
+		const isExpired = credential.expiresAt ? Date.now() > credential.expiresAt : false;
 
 		return {
 			credential: {
-				district: credential.congressional_district,
-				method: credential.verification_method,
-				issuedAt: credential.issued_at.toISOString(),
+				district: credential.congressionalDistrict,
+				method: credential.verificationMethod,
+				issuedAt: credential.issuedAt ? new Date(credential.issuedAt).toISOString() : null,
 				expired: isExpired
 			},
 			delivery: null,

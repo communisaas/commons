@@ -25,7 +25,6 @@ import {
 	logLLMOperation
 } from '$lib/server/llm-cost-protection';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
-import { traceRequest, traceEvent } from '$lib/server/agent-trace';
 
 interface RequestBody {
 	subject_line: string;

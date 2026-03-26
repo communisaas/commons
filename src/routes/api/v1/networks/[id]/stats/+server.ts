@@ -10,7 +10,6 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
-import { getNetworkStats } from '$lib/server/networks/aggregation';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params, request }) => {

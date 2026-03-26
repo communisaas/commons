@@ -3,7 +3,7 @@
  * Used by: src/routes/s/[slug]/+page.server.ts (Power Landscape)
  */
 
-import { query } from "./_generated/server";
+import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 
@@ -116,6 +116,210 @@ export const getEngagementByDistrict = query({
       districts: sorted.map(([code, count]) => ({ code, count })),
       totalDistricts: Object.keys(byDistrict).length,
       userDistrictCount,
+    };
+  },
+});
+
+/**
+ * Register a position (upsert). Returns existing if duplicate.
+ */
+export const register = mutation({
+  args: {
+    templateId: v.id("templates"),
+    identityCommitment: v.string(),
+    stance: v.string(),
+    districtCode: v.optional(v.string()),
+  },
+  handler: async (ctx, { templateId, identityCommitment, stance, districtCode }) => {
+    // Check template exists
+    const template = await ctx.db.get(templateId);
+    if (!template) throw new Error("Template not found");
+
+    // Check for existing registration (upsert)
+    const existing = await ctx.db
+      .query("positionRegistrations")
+      .withIndex("by_templateId_identityCommitment", (idx) =>
+        idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
+      )
+      .first();
+
+    if (existing) {
+      return { _id: existing._id, isNew: false };
+    }
+
+    const id = await ctx.db.insert("positionRegistrations", {
+      templateId,
+      identityCommitment,
+      stance,
+      districtCode: districtCode ?? undefined,
+      registeredAt: Date.now(),
+    });
+
+    return { _id: id, isNew: true };
+  },
+});
+
+/**
+ * Confirm a mailto send — upserts position + creates delivery record.
+ */
+export const confirmMailtoSend = mutation({
+  args: {
+    templateId: v.id("templates"),
+    identityCommitment: v.string(),
+    districtCode: v.optional(v.string()),
+    templateTitle: v.optional(v.string()),
+  },
+  handler: async (ctx, { templateId, identityCommitment, districtCode, templateTitle }) => {
+    // Upsert position (support implied by sending)
+    const existing = await ctx.db
+      .query("positionRegistrations")
+      .withIndex("by_templateId_identityCommitment", (idx) =>
+        idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
+      )
+      .first();
+
+    let registrationId: Id<"positionRegistrations">;
+    let isNewPosition = false;
+    if (existing) {
+      registrationId = existing._id;
+    } else {
+      registrationId = await ctx.db.insert("positionRegistrations", {
+        templateId,
+        identityCommitment,
+        stance: "support",
+        districtCode: districtCode ?? undefined,
+        registeredAt: Date.now(),
+      });
+      isNewPosition = true;
+    }
+
+    // Create delivery record
+    await ctx.db.insert("positionDeliveries", {
+      registrationId,
+      recipientName: templateTitle ?? "mailto recipient",
+      deliveryMethod: "mailto_confirmed",
+      deliveryStatus: "user_confirmed",
+      deliveredAt: Date.now(),
+    });
+
+    return { registrationId, isNewPosition };
+  },
+});
+
+/**
+ * Batch-create delivery records for a position registration.
+ */
+export const batchRegisterDeliveries = mutation({
+  args: {
+    registrationId: v.id("positionRegistrations"),
+    identityCommitment: v.string(),
+    recipients: v.array(v.object({
+      name: v.string(),
+      email: v.optional(v.string()),
+      deliveryMethod: v.string(),
+    })),
+  },
+  handler: async (ctx, { registrationId, identityCommitment, recipients }) => {
+    // Verify registration exists and belongs to caller
+    const reg = await ctx.db.get(registrationId);
+    if (!reg || reg.identityCommitment !== identityCommitment) {
+      throw new Error("Registration not found");
+    }
+
+    let created = 0;
+    for (const r of recipients) {
+      await ctx.db.insert("positionDeliveries", {
+        registrationId,
+        recipientName: r.name,
+        recipientKey: slugify(r.name),
+        recipientEmail: r.email,
+        deliveryMethod: r.deliveryMethod,
+        deliveryStatus: "pending",
+      });
+      created++;
+    }
+
+    return { created };
+  },
+});
+
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+/**
+ * Get full engagement by district with privacy threshold.
+ */
+export const getFullEngagementByDistrict = query({
+  args: {
+    templateId: v.id("templates"),
+    userDistrictCode: v.optional(v.string()),
+  },
+  handler: async (ctx, { templateId, userDistrictCode }) => {
+    const PRIVACY_THRESHOLD = 3;
+
+    const registrations = await ctx.db
+      .query("positionRegistrations")
+      .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
+      .collect();
+
+    if (registrations.length === 0) return null;
+
+    // Aggregate by district + stance
+    const byDistrict = new Map<string, { support: number; oppose: number }>();
+    for (const r of registrations) {
+      if (r.districtCode) {
+        const entry = byDistrict.get(r.districtCode) ?? { support: 0, oppose: 0 };
+        if (r.stance === "support") entry.support++;
+        else if (r.stance === "oppose") entry.oppose++;
+        byDistrict.set(r.districtCode, entry);
+      }
+    }
+
+    const districts: Array<{
+      district_code: string;
+      support: number;
+      oppose: number;
+      total: number;
+      support_percent: number;
+      is_user_district: boolean;
+    }> = [];
+
+    let totalPositions = 0;
+    let totalSupport = 0;
+    let totalOppose = 0;
+
+    for (const [code, counts] of byDistrict) {
+      const total = counts.support + counts.oppose;
+      totalPositions += total;
+      totalSupport += counts.support;
+      totalOppose += counts.oppose;
+
+      if (total >= PRIVACY_THRESHOLD) {
+        districts.push({
+          district_code: code,
+          support: counts.support,
+          oppose: counts.oppose,
+          total,
+          support_percent: total > 0 ? Math.round((counts.support / total) * 100) : 0,
+          is_user_district: code === userDistrictCode,
+        });
+      }
+    }
+
+    districts.sort((a, b) => b.total - a.total);
+
+    if (districts.length === 0 && totalPositions === 0) return null;
+
+    return {
+      template_id: templateId,
+      districts,
+      aggregate: {
+        total_districts: byDistrict.size,
+        total_positions: totalPositions,
+        total_support: totalSupport,
+        total_oppose: totalOppose,
+      },
     };
   },
 });

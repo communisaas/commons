@@ -1,34 +1,18 @@
-// CONVEX: Keep SvelteKit — SMS/Twilio integration, no Convex smsBlast table
+// CONVEX: Keep SvelteKit — SMS/Twilio integration
 import { error, redirect } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
-
 	if (!locals.user) throw redirect(302, '/auth/login');
 
-	const org = await db.organization.findUnique({
-		where: { slug: params.slug },
-		select: { id: true, name: true, slug: true }
-	});
+	const campaigns = await serverQuery(api.campaigns.list, { slug: params.slug });
 
-	if (!org) throw error(404, 'Organization not found');
-
-	const membership = await db.orgMembership.findUnique({
-		where: { orgId_userId: { orgId: org.id, userId: locals.user.id } }
-	});
-
-	if (!membership) throw error(403, 'Not a member');
-
-	const campaigns = await db.campaign.findMany({
-		where: { orgId: org.id },
-		select: { id: true, title: true },
-		orderBy: { createdAt: 'desc' },
-		take: 50
-	});
-
-	return { org: { name: org.name, slug: org.slug }, campaigns };
+	return {
+		org: { name: params.slug, slug: params.slug },
+		campaigns: campaigns.map((c) => ({ id: c._id, title: c.title }))
+	};
 };

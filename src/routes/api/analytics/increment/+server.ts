@@ -16,7 +16,6 @@
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { processBatch, checkContributionLimit } from '$lib/core/analytics/aggregate';
 import {
 	checkContributionLimitHybrid,
 	isDBRateLimitEnabled

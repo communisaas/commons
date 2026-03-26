@@ -1,6 +1,6 @@
-// CONVEX: Keep SvelteKit — no Convex getReceipt query, server-only narrative generation
+// CONVEX: Keep SvelteKit — server-only narrative generation
 import { error } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { generateNarrative } from '$lib/server/legislation/receipts/narrative';
@@ -11,20 +11,7 @@ export const load: PageServerLoad = async ({ params }) => {
 		throw error(404, 'Not found');
 	}
 
-	const receipt = await db.accountabilityReceipt.findUnique({
-		where: { id: params.id },
-		include: {
-			bill: {
-				select: {
-					externalId: true,
-					title: true,
-					status: true,
-					jurisdiction: true,
-					chamber: true
-				}
-			}
-		}
-	});
+	const receipt = await serverQuery(api.verify.getReceipt, { receiptId: params.id });
 
 	if (!receipt) {
 		throw error(404, 'Receipt not found');
@@ -38,7 +25,7 @@ export const load: PageServerLoad = async ({ params }) => {
 	const narrative = generateNarrative({
 		dmName: receipt.dmName,
 		dmAction: receipt.dmAction,
-		proofVerifiedAt: receipt.proofVerifiedAt,
+		proofVerifiedAt: receipt.proofVerifiedAt ? new Date(receipt.proofVerifiedAt) : null,
 		verifiedCount: safeVerifiedCount,
 		districtCount: safeDistrictCount,
 		proofWeight: receipt.proofWeight,
@@ -47,7 +34,7 @@ export const load: PageServerLoad = async ({ params }) => {
 
 	return {
 		receipt: {
-			id: receipt.id,
+			id: receipt._id,
 			dmName: receipt.dmName,
 			decisionMakerId: receipt.decisionMakerId,
 			proofWeight: receipt.proofWeight,
@@ -58,9 +45,9 @@ export const load: PageServerLoad = async ({ params }) => {
 			ald: receipt.ald,
 			cai: receipt.cai,
 			attestationDigest: receipt.attestationDigest,
-			proofDeliveredAt: receipt.proofDeliveredAt.toISOString(),
-			proofVerifiedAt: receipt.proofVerifiedAt?.toISOString() ?? null,
-			actionOccurredAt: receipt.actionOccurredAt?.toISOString() ?? null,
+			proofDeliveredAt: receipt.proofDeliveredAt ? new Date(receipt.proofDeliveredAt).toISOString() : null,
+			proofVerifiedAt: receipt.proofVerifiedAt ? new Date(receipt.proofVerifiedAt).toISOString() : null,
+			actionOccurredAt: receipt.actionOccurredAt ? new Date(receipt.actionOccurredAt).toISOString() : null,
 			causalityClass: receipt.causalityClass,
 			dmAction: receipt.dmAction,
 			alignment: receipt.alignment,

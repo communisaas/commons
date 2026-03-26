@@ -10,7 +10,6 @@ import { api } from '$lib/convex';
 import { getStripe } from '$lib/server/billing/stripe';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
-import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
 import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import crypto from 'node:crypto';
 import type { RequestHandler } from './$types';

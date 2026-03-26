@@ -1,55 +1,35 @@
-// CONVEX: Keep SvelteKit — security-critical $transaction + PII hash comparison (invite accept)
+// CONVEX: Keep SvelteKit — security-critical PII hash comparison (invite accept)
 import { redirect, error } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { computeEmailHash, tryDecryptPii, type EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
+import { computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
 
-/** Decrypt an invite's email (authoritative post-Cycle 6). */
-async function decryptInviteEmail(invite: {
-	id: string;
-	encrypted_email: string;
-}): Promise<string> {
-	const enc: EncryptedPii = JSON.parse(invite.encrypted_email);
-	const decrypted = await tryDecryptPii(enc, 'org-invite:' + invite.id);
-	if (!decrypted) throw new Error(`[PII] Invite ${invite.id} decryption failed`);
-	return decrypted;
-}
-
 export const load: PageServerLoad = async ({ params, locals }) => {
-	const invite = await db.orgInvite.findUnique({
-		where: { token: params.token },
-		include: {
-			org: {
-				select: { name: true, slug: true, avatar: true }
-			}
-		}
-	});
+	const invite = await serverQuery(api.invites.getByToken, { token: params.token });
 
 	if (!invite) {
 		throw error(404, 'Invite not found');
 	}
 
 	if (invite.accepted) {
-		throw redirect(302, `/org/${invite.org.slug}`);
+		throw redirect(302, `/org/${invite.orgSlug}`);
 	}
 
-	if (invite.expiresAt < new Date()) {
+	if (invite.expiresAt < Date.now()) {
 		return {
 			expired: true,
-			orgName: invite.org.name,
-			orgSlug: invite.org.slug
+			orgName: invite.orgName,
+			orgSlug: invite.orgSlug
 		};
 	}
 
-	const inviteEmail = await decryptInviteEmail(invite);
-
 	return {
 		expired: false,
-		orgName: invite.org.name,
-		orgSlug: invite.org.slug,
-		orgAvatar: invite.org.avatar,
-		inviteEmail,
+		orgName: invite.orgName,
+		orgSlug: invite.orgSlug,
+		orgAvatar: invite.orgAvatar,
+		inviteEmail: invite.email,
 		inviteRole: invite.role,
 		isAuthenticated: !!locals.user,
 		userEmail: locals.user?.email ?? null
@@ -62,56 +42,31 @@ export const actions: Actions = {
 			throw redirect(302, `/auth/google?returnTo=/org/invite/${params.token}`);
 		}
 
-		const invite = await db.orgInvite.findUnique({
-			where: { token: params.token },
-			include: {
-				org: { select: { id: true, slug: true } }
-			}
-		});
+		const invite = await serverQuery(api.invites.getByToken, { token: params.token });
 
-		if (!invite || invite.accepted || invite.expiresAt < new Date()) {
+		if (!invite || invite.accepted || invite.expiresAt < Date.now()) {
 			throw error(400, 'This invite is no longer valid');
 		}
 
-		// Hash-based email comparison (post-Cycle 6: no plaintext fallback)
+		// Hash-based email comparison
 		const emailHash = await computeEmailHash(locals.user.email);
-		const emailMatches = !!(invite.email_hash && emailHash && invite.email_hash === emailHash);
+		const emailMatches = !!(invite.emailHash && emailHash && invite.emailHash === emailHash);
 		if (!emailMatches) {
 			throw error(403, 'This invite was sent to a different email address');
 		}
 
-		// Check if already a member
-		const existing = await db.orgMembership.findUnique({
-			where: {
-				userId_orgId: { userId: locals.user.id, orgId: invite.org.id }
+		// Accept invite via Convex mutation (handles membership creation + invite marking atomically)
+		try {
+			await serverMutation(api.invites.accept, { token: params.token });
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			if (msg.includes('already a member')) {
+				// Already a member — just redirect
+			} else {
+				throw error(500, msg);
 			}
-		});
-
-		if (existing) {
-			// Already a member, mark invite as accepted and redirect
-			await db.orgInvite.update({
-				where: { id: invite.id },
-				data: { accepted: true }
-			});
-			throw redirect(302, `/org/${invite.org.slug}`);
 		}
 
-		// Create membership and mark invite as accepted
-		await db.$transaction([
-			db.orgMembership.create({
-				data: {
-					userId: locals.user.id,
-					orgId: invite.org.id,
-					role: invite.role,
-					invitedBy: invite.invitedBy
-				}
-			}),
-			db.orgInvite.update({
-				where: { id: invite.id },
-				data: { accepted: true }
-			})
-		]);
-
-		throw redirect(302, `/org/${invite.org.slug}`);
+		throw redirect(302, `/org/${invite.orgSlug}`);
 	}
 };

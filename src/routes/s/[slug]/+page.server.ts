@@ -3,7 +3,6 @@ import type { PageServerLoad } from './$types';
 import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { getPositionCounts, getEngagementByDistrict } from '$lib/services/positionService';
 import { parseRecipientConfig } from '$lib/types/template';
 import { getOfficials } from '$lib/core/shadow-atlas/client';
 import type { DistrictOfficialInput } from '$lib/utils/landscapeMerge';

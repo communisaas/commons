@@ -5,7 +5,6 @@
  * Session auth only (org owner/editor).
  */
 
-import { loadOrgContext, requireRole } from '$lib/server/org';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { serverMutation } from 'convex-sveltekit';

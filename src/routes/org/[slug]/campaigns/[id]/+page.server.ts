@@ -2,8 +2,6 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { computeVerificationPacketCached } from '$lib/server/campaigns/verification';
-import { loadCampaignAnalytics } from '$lib/server/campaigns/analytics';
 import { FEATURES } from '$lib/config/features';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';

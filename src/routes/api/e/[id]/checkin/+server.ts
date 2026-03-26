@@ -110,7 +110,6 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// Fire-and-forget: trigger automation workflows
 	void (async () => {
 		try {
-			const { dispatchTrigger } = await import('$lib/server/automation/trigger');
 			const ev = await db.event.findUnique({ where: { id: params.id }, select: { orgId: true } });
 			if (ev?.orgId) {
 				await dispatchTrigger(ev.orgId, 'event_checkin', {

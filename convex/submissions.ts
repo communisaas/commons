@@ -1,11 +1,14 @@
 import {
   action,
+  mutation,
+  query,
   internalAction,
   internalMutation,
   internalQuery,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { requireAuth } from "./_authHelpers";
 
 // =============================================================================
 // SUBMISSIONS — ZK proof creation + congressional delivery
@@ -480,5 +483,60 @@ export const cleanupExpiredWitnesses = internalMutation({
 
     console.log(`[cleanup-witness] Cleaned ${cleaned} expired witness records`);
     return { cleaned };
+  },
+});
+
+/**
+ * Get submission by ID (public query — used for retry ownership check).
+ * Returns minimal fields only.
+ */
+export const getPublicById = query({
+  args: { submissionId: v.id("submissions") },
+  handler: async (ctx, { submissionId }) => {
+    const sub = await ctx.db.get(submissionId);
+    if (!sub) return null;
+    return {
+      _id: sub._id,
+      pseudonymousId: sub.pseudonymousId,
+      deliveryStatus: sub.deliveryStatus,
+    };
+  },
+});
+
+/**
+ * Retry a failed submission — reset delivery status to pending
+ * and re-trigger the delivery pipeline.
+ */
+export const retryDelivery = action({
+  args: { submissionId: v.id("submissions") },
+  handler: async (ctx, { submissionId }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Authentication required");
+
+    const sub = await ctx.runQuery(internal.submissions.getById, { id: submissionId });
+    if (!sub) throw new Error("Submission not found");
+
+    // Verify ownership via pseudonymous ID
+    const callerPseudoId = await computePseudonymousId(identity.subject);
+    if (sub.pseudonymousId !== callerPseudoId) {
+      throw new Error("Access denied");
+    }
+
+    if (sub.deliveryStatus !== "failed") {
+      throw new Error("Submission is not in a retryable state");
+    }
+
+    // Reset status
+    await ctx.runMutation(internal.submissions.updateDeliveryStatus, {
+      submissionId,
+      deliveryStatus: "pending",
+    });
+
+    // Re-trigger delivery
+    await ctx.scheduler.runAfter(0, internal.submissions.deliverToCongress, {
+      submissionId,
+    });
+
+    return { status: "retrying" };
   },
 });

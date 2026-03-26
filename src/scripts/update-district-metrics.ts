@@ -8,7 +8,6 @@
  * Or: npx tsx src/scripts/update-district-metrics.ts
  */
 
-import { updateAllCongressionalTemplateMetrics } from '$lib/core/server/district-metrics';
 
 async function main() {
 	try {

@@ -14,7 +14,6 @@ import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { batchRegisterDeliveries } from '$lib/services/positionService';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');
@@ -52,27 +51,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		// Verify the registration exists and belongs to the caller
-		const user = await serverQuery(api.users.getById, { id: session.userId  as any });
+		const user = await serverQuery(api.users.getById, { id: session.userId as any });
 		if (!user?.identity_commitment) {
 			return json({ error: 'Identity verification required' }, { status: 403 });
 		}
 
-		const registration = await prisma.positionRegistration.findFirst({
-			where: { id: registrationId, identity_commitment: user.identity_commitment },
-			select: { id: true }
-		});
-
-		if (!registration) {
-			return json({ error: 'Registration not found' }, { status: 404 });
-		}
-
-		// Create delivery records
-		const result = await batchRegisterDeliveries({
-			registrationId,
+		// Create delivery records (mutation verifies ownership via identityCommitment)
+		const result = await serverMutation(api.positions.batchRegisterDeliveries, {
+			registrationId: registrationId as any,
+			identityCommitment: user.identity_commitment,
 			recipients: recipients.map((r: { name: string; email?: string; deliveryMethod: string }) => ({
 				name: r.name,
 				email: r.email,
-				deliveryMethod: r.deliveryMethod as 'cwc' | 'email' | 'recorded'
+				deliveryMethod: r.deliveryMethod
 			}))
 		});
 

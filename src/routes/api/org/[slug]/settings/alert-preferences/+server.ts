@@ -10,11 +10,9 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { loadOrgContext, requireRole } from '$lib/server/org';
 import {
 	getAlertPreferences,
 	saveAlertPreferences
-} from '$lib/server/legislation/alerts/preferences';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';

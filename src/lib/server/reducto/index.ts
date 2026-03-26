@@ -7,9 +7,6 @@
  * @module reducto
  */
 
-// Client
-export { ReductoClient, getReductoClient, resetReductoClient } from './client';
-
 // Types
 export type {
 	DocumentType,
@@ -24,5 +21,3 @@ export type {
 	AnalyzeOptions,
 	AnalysisResult
 } from './types';
-
-// ParsedDocumentCache is now a Prisma model — import from @prisma/client if needed

@@ -1,5 +1,4 @@
 import { dev } from '$app/environment';
-import * as auth from '$lib/core/auth/auth.js';
 import type { Handle } from '@sveltejs/kit';
 import { error } from '@sveltejs/kit';
 import {
@@ -8,7 +7,6 @@ import {
 	createRateLimitHeaders,
 	SlidingWindowRateLimiter
 } from '$lib/core/security/rate-limiter';
-import { createRequestClient, runWithDb } from '$lib/core/db';
 import { deriveTrustTier } from '$lib/core/identity/authority-level';
 import { trackForRejection } from '$lib/services/rejectionMonitor';
 import { setCIDs } from '$lib/core/shadow-atlas/ipfs-store';
@@ -17,11 +15,11 @@ import {
 	sentryHandle,
 	handleErrorWithSentry
 } from '@sentry/sveltekit';
-import { initConvex } from 'convex-sveltekit';
+import { initConvex, serverQuery, serverMutation } from 'convex-sveltekit';
 import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { mintConvexToken } from '$lib/server/convex-jwt';
-
-// MongoDB removed — intelligence data now lives in Postgres via pgvector
+import { api } from '$lib/convex';
+import { decryptUserPii } from '$lib/core/crypto/user-pii-encryption';
 
 // ─── DUAL-STACK: Initialize Convex server-side client ───
 // Stores the deployment URL so serverQuery()/serverMutation()/serverAction()
@@ -56,106 +54,115 @@ const handlePlatformEnv: Handle = async ({ event, resolve }) => {
 		envShimApplied = true;
 
 		// Wire IPFS CIDs from env vars so Shadow Atlas reads go live.
-		// In dev: process.env is populated by Vite from .env.
-		// On Workers: platform.env was just copied to process.env above.
 		setCIDs({
 			root: process.env.IPFS_CID_ROOT || '',
 			merkleSnapshot: process.env.IPFS_CID_MERKLE_SNAPSHOT || '',
 		});
 	}
-	// Initialize per-request PrismaClient with Hyperdrive connection.
-	// On Workers, Hyperdrive provides a local connection string to its pool.
-	// In dev, wrangler.toml's localConnectionString populates Hyperdrive but
-	// points to a local DB that may not exist — prefer DIRECT_URL from .env.
-	const hyperdrive = dev ? undefined : event.platform?.env?.HYPERDRIVE;
-	const connectionString = hyperdrive?.connectionString || process.env.DIRECT_URL || process.env.DATABASE_URL || '';
-	const client = createRequestClient(connectionString);
-
-	// Wrap the entire request in AsyncLocalStorage so all `db.xxx()` calls
-	// throughout the request lifecycle resolve to this per-request client.
-	return runWithDb(client, () => resolve(event));
+	return resolve(event);
 };
+
+const SESSION_COOKIE = 'auth-session';
 
 const handleAuth: Handle = async ({ event, resolve }) => {
 	try {
-		const sessionId = event.cookies.get(auth.sessionCookieName);
+		const sessionId = event.cookies.get(SESSION_COOKIE);
 		if (!sessionId) {
 			event.locals.user = null;
 			event.locals.session = null;
 			return resolve(event);
 		}
 
-		const { session, user, renewed } = await auth.validateSession(sessionId);
-		if (session && renewed) {
-			// Only re-set the cookie when the session was actually renewed.
-			// Re-setting on every request creates a race: if another tab has a
-			// request in-flight, its response re-writes the cookie AFTER a
-			// logout request deletes it — undoing the logout.
-			event.cookies.set(auth.sessionCookieName, session.id, {
+		const result = await serverQuery(api.authOps.validateSession, { sessionId });
+
+		if (!result) {
+			event.cookies.delete(SESSION_COOKIE, { path: '/' });
+			event.locals.user = null;
+			event.locals.session = null;
+			return resolve(event);
+		}
+
+		const { session, user, renewed } = result;
+
+		if (renewed) {
+			// Extend cookie expiry to match renewed session
+			event.cookies.set(SESSION_COOKIE, session.id, {
 				path: '/',
 				sameSite: 'lax',
 				httpOnly: true,
-				expires: session.expiresAt,
+				expires: new Date(session.expiresAt),
 				secure: !dev
 			});
-		} else if (!session) {
-			event.cookies.delete(auth.sessionCookieName, { path: '/' });
+			// Fire-and-forget: persist the renewal in Convex
+			serverMutation(api.authOps.renewSession, { sessionId }).catch(() => {});
 		}
 
-		event.locals.user = user
-			? {
-					id: user.id,
-					email: user.email,
-					name: user.name,
-					avatar: user.avatar,
-					// Verification status
-					is_verified: user.is_verified,
-					verification_method: user.verification_method ?? null,
-					verified_at: user.verified_at ?? null,
-					// Graduated trust - derived from user verification state
-					trust_tier: deriveTrustTier({
-						passkey_credential_id: user.passkey_credential_id,
-						district_verified: user.district_verified,
-						address_verified_at: user.address_verified_at,
-						identity_commitment: user.identity_commitment,
-						document_type: user.document_type,
-						trust_score: user.trust_score
-					}),
-					// Passkey (security upgrade within Tier 1)
-					passkey_credential_id: user.passkey_credential_id ?? null,
-					// did:key from WebAuthn public key
-					did_key: user.did_key ?? null,
-					// Cryptographic identity commitment (Semaphore/ZK)
-					identity_commitment: user.identity_commitment ?? null,
-					// Privacy-preserving district (hash only, no PII)
-					district_hash: user.district_hash ?? null,
-					district_verified: user.district_verified ?? false,
-					// Profile fields
-					role: user.role ?? null,
-					organization: user.organization ?? null,
-					location: user.location ?? null,
-					connection: user.connection ?? null,
-					profile_completed_at: user.profile_completed_at ?? null,
-					profile_visibility: user.profile_visibility ?? 'private',
-					// Reputation
-					trust_score: user.trust_score ?? 0,
-					reputation_tier: user.reputation_tier ?? 'novice',
-					// Wallet integration
-					wallet_address: user.wallet_address ?? null,
-					wallet_type: user.wallet_type ?? null,
-					near_account_id: user.near_account_id ?? null,
-					near_derived_scroll_address: user.near_derived_scroll_address ?? null,
-					// Timestamps
-					createdAt: user.createdAt,
-					updatedAt: user.updatedAt
-				}
-			: null;
+		// Decrypt PII from encrypted fields
+		let pii: { email: string; name: string | null };
+		try {
+			pii = await decryptUserPii({
+				id: user._id as string,
+				encrypted_email: user.encryptedEmail,
+				encrypted_name: user.encryptedName ?? null,
+				email: user.email ?? null,
+				name: user.name ?? null,
+			});
+		} catch (err) {
+			console.error('[Auth] PII decryption failed — session preserved with masked PII:', {
+				userId: user._id,
+				error: err instanceof Error ? err.message : String(err)
+			});
+			pii = { email: `user-${(user._id as string).slice(0, 8)}@encrypted.local`, name: null };
+		}
+
+		event.locals.user = {
+			id: user._id as string,
+			email: pii.email,
+			name: pii.name,
+			avatar: user.avatar ?? null,
+			// Verification status
+			is_verified: user.isVerified,
+			verification_method: user.verificationMethod ?? null,
+			verified_at: user.verifiedAt ? new Date(user.verifiedAt) : null,
+			// Graduated trust
+			trust_tier: deriveTrustTier({
+				passkey_credential_id: user.passkeyCredentialId ?? null,
+				district_verified: user.districtVerified ?? false,
+				address_verified_at: user.addressVerifiedAt ? new Date(user.addressVerifiedAt) : null,
+				identity_commitment: user.identityCommitment ?? null,
+				document_type: user.documentType ?? null,
+				trust_score: user.trustScore ?? 0
+			}),
+			// Passkey
+			passkey_credential_id: user.passkeyCredentialId ?? null,
+			did_key: user.didKey ?? null,
+			// ZK identity
+			identity_commitment: user.identityCommitment ?? null,
+			// District
+			district_hash: user.districtHash ?? null,
+			district_verified: user.districtVerified ?? false,
+			// Profile
+			role: user.role ?? null,
+			organization: user.organization ?? null,
+			location: user.location ?? null,
+			connection: user.connection ?? null,
+			profile_completed_at: user.profileCompletedAt ? new Date(user.profileCompletedAt) : null,
+			profile_visibility: user.profileVisibility ?? 'private',
+			// Reputation
+			trust_score: user.trustScore ?? 0,
+			reputation_tier: user.reputationTier ?? 'novice',
+			// Wallet
+			wallet_address: user.walletAddress ?? null,
+			wallet_type: user.walletType ?? null,
+			near_account_id: user.nearAccountId ?? null,
+			near_derived_scroll_address: user.nearDerivedScrollAddress ?? null,
+			// Timestamps
+			createdAt: new Date(user._creationTime),
+			updatedAt: new Date(user.updatedAt)
+		};
 		event.locals.session = session;
 
-		// ─── Convex auth bridge: mint JWT for server-side Convex queries ───
-		// convex-sveltekit's serverQuery() reads locals.convexToken and sends
-		// it to Convex, where ctx.auth.getUserIdentity() verifies the JWT
-		// against our JWKS endpoint (/.well-known/jwks.json).
+		// Mint Convex JWT for authenticated server-side queries
 		if (event.locals.user && PUBLIC_CONVEX_URL) {
 			try {
 				const token = await mintConvexToken(event.locals.user);
@@ -163,21 +170,16 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 					event.locals.convexToken = token;
 				}
 			} catch (err) {
-				// Non-fatal: Convex queries fall to Prisma fallback without auth
 				console.warn('[Hooks] Convex JWT minting failed:', err instanceof Error ? err.message : String(err));
 			}
 		}
 
 		return resolve(event);
-	} catch (error) {
-		// Transient error (DB unreachable, Hyperdrive hiccup, etc.)
-		// CRITICAL: Do NOT delete the session cookie here. The session may still
-		// be valid — we just couldn't verify it right now. Deleting the cookie
-		// would permanently log out the user due to a temporary glitch.
-		// Proceed without auth; endpoints handle unauthenticated state gracefully.
+	} catch (err) {
+		// Transient error — do NOT delete the session cookie.
 		console.error('[Hooks] Session validation error (transient):', {
 			path: event.url.pathname,
-			error: error instanceof Error ? error.message : String(error)
+			error: err instanceof Error ? err.message : String(err)
 		});
 		event.locals.user = null;
 		event.locals.session = null;
@@ -491,15 +493,12 @@ const handleSentryInit: Handle = async ({ event, resolve }) => {
 /**
  * Hook execution order:
  * 1. handleSentryInit - Initialize Sentry SDK from platform.env
- * 2. handlePlatformEnv - Copy platform.env to process.env + init per-request Prisma
+ * 2. handlePlatformEnv - Copy platform.env to process.env + init IPFS CIDs
  * 3. sentryHandle - Wrap request for Sentry error/trace capture
- * 4. handleAuth - Populate session/user in locals (needed for user-based rate limits)
+ * 4. handleAuth - Validate session via Convex, populate locals.user/session
  * 5. handleRateLimit - Check rate limits (can use user ID from auth)
  * 6. handleCsrfGuard - CSRF protection for sensitive endpoints
  * 7. handleSecurityHeaders - Add COOP/COEP + CSP headers
  * 8. handleRejectionMonitoring - Track rejection rates (async, zero latency impact)
- *
- * Note: Auth runs first so rate limiting can use user ID for user-keyed limits.
- * Rejection monitoring runs last so it observes the final response status.
  */
 export const handle = sequence(handleSentryInit, handlePlatformEnv, sentryHandle(), handleAuth, handleRateLimit, handleCsrfGuard, handleSecurityHeaders, handleRejectionMonitoring);

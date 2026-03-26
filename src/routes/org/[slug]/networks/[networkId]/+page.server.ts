@@ -1,6 +1,5 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { getNetworkProofPressure } from '$lib/server/legislation/receipts/aggregation';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';

@@ -14,7 +14,6 @@ import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { registerPosition, getPositionCounts } from '$lib/services/positionService';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');
@@ -38,47 +37,33 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		// Derive identity commitment server-side — never trust client input
-		const user = await serverQuery(api.users.getById, { id: session.userId  as any });
+		const user = await serverQuery(api.users.getById, { id: session.userId as any });
 		if (!user?.identity_commitment) {
 			return json({ error: 'Identity verification required to register positions' }, { status: 403 });
 		}
 		const identityCommitment = user.identity_commitment;
 
-		// Validate template exists
-		const template = await prisma.template.findUnique({
-			where: { id: templateId },
-			select: { id: true }
-		});
-
-		if (!template) {
-			return json({ error: 'Template not found' }, { status: 404 });
-		}
-
 		// Derive district_code from ShadowAtlasRegistration using server-derived commitment
-		let resolvedDistrictCode: string | undefined;
-		const atlas = await prisma.shadowAtlasRegistration
-			.findFirst({
-				where: { identity_commitment: identityCommitment },
-				select: { congressional_district: true }
-			})
-			.catch(() => null);
-		if (atlas?.congressional_district) {
-			resolvedDistrictCode = atlas.congressional_district;
-		}
+		const atlas = await serverQuery(api.users.getShadowAtlasRegistration, {
+			identityCommitment
+		});
+		const resolvedDistrictCode = atlas?.congressionalDistrict ?? undefined;
 
 		// Register position (upsert — duplicates return existing)
-		const registration = await registerPosition({
-			templateId,
+		const registration = await serverMutation(api.positions.register, {
+			templateId: templateId as any,
 			identityCommitment,
 			stance,
 			districtCode: resolvedDistrictCode
 		});
 
 		// Always return fresh counts
-		const count = await getPositionCounts(templateId);
+		const count = await serverQuery(api.positions.getCounts, {
+			templateId: templateId as any
+		});
 
 		return json({
-			registrationId: registration.id,
+			registrationId: registration._id,
 			isNew: registration.isNew,
 			count
 		});

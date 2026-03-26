@@ -1,7 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { loadOrgContext } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
-import { computeScorecards } from '$lib/server/legislation/scorecard/compute';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';

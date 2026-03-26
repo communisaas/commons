@@ -11,8 +11,6 @@
 import { json, error } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { loadOrgContext, requireRole } from '$lib/server/org';
-import { scoreBillRelevance } from '$lib/server/legislation/relevance/scorer';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 

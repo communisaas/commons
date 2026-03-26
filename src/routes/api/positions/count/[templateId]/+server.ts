@@ -9,7 +9,6 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
-import { getPositionCounts } from '$lib/services/positionService';
 
 export const GET: RequestHandler = async ({ params }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');

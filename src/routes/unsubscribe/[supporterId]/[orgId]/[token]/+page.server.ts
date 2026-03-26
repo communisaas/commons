@@ -13,9 +13,8 @@ export const load: PageServerLoad = async ({ params }) => {
 	}
 
 	// Token valid — check supporter status
-	const supporter = await db.supporter.findUnique({
-		where: { id: supporterId },
-		select: { id: true, orgId: true, emailStatus: true }
+	const supporter = await serverQuery(api.supporters.getEmailStatus, {
+		supporterId: supporterId as any
 	});
 
 	if (!supporter || supporter.orgId !== orgId) {
@@ -38,9 +37,8 @@ export const actions: Actions = {
 			return { done: false, error: 'Invalid unsubscribe link.' };
 		}
 
-		const supporter = await db.supporter.findUnique({
-			where: { id: supporterId },
-			select: { id: true, orgId: true, emailStatus: true }
+		const supporter = await serverQuery(api.supporters.getEmailStatus, {
+			supporterId: supporterId as any
 		});
 
 		if (!supporter || supporter.orgId !== orgId) {
@@ -51,9 +49,8 @@ export const actions: Actions = {
 			return { done: true };
 		}
 
-		await db.supporter.update({
-			where: { id: supporterId },
-			data: { emailStatus: 'unsubscribed' }
+		await serverMutation(api.supporters.unsubscribe, {
+			supporterId: supporterId as any
 		});
 
 		return { done: true };

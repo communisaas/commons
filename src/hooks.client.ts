@@ -19,8 +19,8 @@ if (dsn) {
 	});
 }
 
-// DUAL-STACK: Initialize Convex client early so transport.decode can subscribe
-// before any component mounts. Prisma remains the primary data layer.
+// Initialize Convex client early so transport.decode can subscribe
+// before any component mounts.
 if (PUBLIC_CONVEX_URL) {
 	initConvex(PUBLIC_CONVEX_URL);
 }

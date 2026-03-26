@@ -1,7 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
-import { cwcClient } from '$lib/core/legislative/cwc-client';
 import { CWCXmlGenerator } from '$lib/core/legislative/cwc-xml';
 import type { Template } from '$lib/types/template';
 

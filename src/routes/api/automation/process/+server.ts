@@ -9,7 +9,6 @@
 import { json, error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { timingSafeEqual } from 'crypto';
-import { processScheduledWorkflows } from '$lib/server/automation/scheduler';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 

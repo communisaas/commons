@@ -26,7 +26,6 @@ import {
 	deserializeSignedDelegate,
 	relayDelegateAction
 } from '$lib/core/near/meta-transactions';
-import { NEAR_MPC_SIGNER } from '$lib/core/near/account';
 import { safeUserId } from '$lib/core/server/security';
 
 // =============================================================================

@@ -25,9 +25,8 @@ if (browser) {
 
 import type { LayoutLoad } from './$types';
 
-// DUAL-STACK: Convex client is initialized via hooks.client.ts + layout.svelte.
-// User data still comes from Prisma via +layout.server.ts.
-// Cycle 2+ will switch to convexLoad(api.users.getProfile, {}).
+// Convex client is initialized via hooks.client.ts + layout.svelte.
+// User data comes from Convex via hooks.server.ts session validation.
 
 export const load: LayoutLoad = async ({ data }) => {
 	return { ...data };

@@ -3,10 +3,7 @@ import { json, error } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
-import { requireRole } from '$lib/server/org';
-import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
-import { spawnDebateForCampaign } from '$lib/server/debates/spawn';
 import type { RequestHandler } from './$types';
 
 /**

@@ -1,6 +1,5 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { detectCountryFromHeaders, resolveChannel } from '$lib/services/channelResolver';
 import type { LayoutServerLoad } from './$types';
 
 import { serverQuery } from 'convex-sveltekit';

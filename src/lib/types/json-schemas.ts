@@ -4,7 +4,8 @@
  * and provides type-safe access patterns for JsonValue data.
  */
 
-import type { Prisma } from '@prisma/client';
+/** JSON value type — replaces JsonValue after migration */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 // ============= ANALYTICS SCHEMA TYPES =============
 
@@ -437,7 +438,7 @@ export function isJsonTemplateMetrics(value: unknown): value is JsonTemplateMetr
 
 // ============= SAFE ACCESS HELPERS =============
 
-export function getSessionMetrics(jsonValue: Prisma.JsonValue): AnalyticsSessionMetrics {
+export function getSessionMetrics(jsonValue: JsonValue): AnalyticsSessionMetrics {
 	if (isAnalyticsSessionMetrics(jsonValue)) {
 		return jsonValue;
 	}
@@ -464,7 +465,7 @@ export function getSessionMetrics(jsonValue: Prisma.JsonValue): AnalyticsSession
 	};
 }
 
-export function getDeviceData(jsonValue: Prisma.JsonValue): AnalyticsDeviceData {
+export function getDeviceData(jsonValue: JsonValue): AnalyticsDeviceData {
 	if (isAnalyticsDeviceData(jsonValue)) {
 		return jsonValue;
 	}
@@ -486,14 +487,14 @@ export function getDeviceData(jsonValue: Prisma.JsonValue): AnalyticsDeviceData 
 	};
 }
 
-export function getEventProperties(jsonValue: Prisma.JsonValue): AnalyticsEventProperties {
+export function getEventProperties(jsonValue: JsonValue): AnalyticsEventProperties {
 	if (isAnalyticsEventProperties(jsonValue)) {
 		return jsonValue as AnalyticsEventProperties;
 	}
 	return {};
 }
 
-export function getComputedMetrics(jsonValue: Prisma.JsonValue): AnalyticsComputedMetrics {
+export function getComputedMetrics(jsonValue: JsonValue): AnalyticsComputedMetrics {
 	if (isAnalyticsComputedMetrics(jsonValue)) {
 		return jsonValue;
 	}
@@ -530,7 +531,7 @@ export function getComputedMetrics(jsonValue: Prisma.JsonValue): AnalyticsComput
 	};
 }
 
-export function getExperimentConfig(jsonValue: Prisma.JsonValue): AnalyticsExperimentConfig {
+export function getExperimentConfig(jsonValue: JsonValue): AnalyticsExperimentConfig {
 	if (isAnalyticsExperimentConfig(jsonValue)) {
 		return jsonValue as AnalyticsExperimentConfig;
 	}
@@ -538,7 +539,7 @@ export function getExperimentConfig(jsonValue: Prisma.JsonValue): AnalyticsExper
 }
 
 export function getExperimentMetricsCache(
-	jsonValue: Prisma.JsonValue
+	jsonValue: JsonValue
 ): AnalyticsExperimentMetricsCache {
 	if (isAnalyticsExperimentMetricsCache(jsonValue)) {
 		return jsonValue;
@@ -550,7 +551,7 @@ export function getExperimentMetricsCache(
 	};
 }
 
-export function getAgentDecisionMultipliers(jsonValue: Prisma.JsonValue): AgentDecisionMultipliers {
+export function getAgentDecisionMultipliers(jsonValue: JsonValue): AgentDecisionMultipliers {
 	if (isAgentDecisionMultipliers(jsonValue)) {
 		return jsonValue;
 	}
@@ -565,7 +566,7 @@ export function getAgentDecisionMultipliers(jsonValue: Prisma.JsonValue): AgentD
 	};
 }
 
-export function getJsonTemplateMetrics(jsonValue: Prisma.JsonValue): JsonTemplateMetrics {
+export function getJsonTemplateMetrics(jsonValue: JsonValue): JsonTemplateMetrics {
 	if (isJsonTemplateMetrics(jsonValue)) {
 		return jsonValue;
 	}
@@ -594,7 +595,7 @@ export function getJsonTemplateMetrics(jsonValue: Prisma.JsonValue): JsonTemplat
 /**
  * Safely access nested properties in JSON data
  */
-export function safeJsonAccess<T>(jsonValue: Prisma.JsonValue, path: string, defaultValue: T): T {
+export function safeJsonAccess<T>(jsonValue: JsonValue, path: string, defaultValue: T): T {
 	try {
 		if (!jsonValue || typeof jsonValue !== 'object' || jsonValue === null) {
 			return defaultValue;
@@ -621,7 +622,7 @@ export function safeJsonAccess<T>(jsonValue: Prisma.JsonValue, path: string, def
  * Safely update nested properties in JSON data
  */
 export function safeJsonUpdate<T extends Record<string, unknown>>(
-	jsonValue: Prisma.JsonValue,
+	jsonValue: JsonValue,
 	updates: Partial<T>
 ): T {
 	const base = (typeof jsonValue === 'object' && jsonValue !== null ? jsonValue : {}) as T;

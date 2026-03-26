@@ -752,6 +752,60 @@ export const getExpiredDebates = internalQuery({
 });
 
 /**
+ * Find a nullifier by debateId + nullifierHash. Used for dedup checks from SvelteKit routes.
+ */
+export const findNullifier = query({
+  args: {
+    debateId: v.id("debates"),
+    nullifierHash: v.string(),
+  },
+  handler: async (ctx, { debateId, nullifierHash }) => {
+    const existing = await ctx.db
+      .query("debateNullifiers")
+      .withIndex("by_debateId_nullifierHash", (idx) =>
+        idx.eq("debateId", debateId).eq("nullifierHash", nullifierHash),
+      )
+      .first();
+    return existing ? { _id: existing._id } : null;
+  },
+});
+
+/**
+ * Update per-argument AI evaluation scores (after AI panel resolution).
+ */
+export const updateArgumentScores = mutation({
+  args: {
+    debateId: v.id("debates"),
+    scores: v.array(v.object({
+      argumentIndex: v.number(),
+      aiScores: v.any(),
+      aiWeighted: v.float64(),
+      finalScore: v.float64(),
+      modelAgreement: v.float64(),
+    })),
+  },
+  handler: async (ctx, { debateId, scores }) => {
+    for (const score of scores) {
+      const arg = await ctx.db
+        .query("debateArguments")
+        .withIndex("by_debateId_argumentIndex", (idx) =>
+          idx.eq("debateId", debateId).eq("argumentIndex", score.argumentIndex),
+        )
+        .first();
+      if (arg) {
+        await ctx.db.patch(arg._id, {
+          aiScores: score.aiScores,
+          aiWeighted: score.aiWeighted,
+          finalScore: score.finalScore,
+          modelAgreement: score.modelAgreement,
+        });
+      }
+    }
+    return { success: true };
+  },
+});
+
+/**
  * Minimal debate snapshot for SSE stream change detection.
  */
 export const getSnapshot = query({

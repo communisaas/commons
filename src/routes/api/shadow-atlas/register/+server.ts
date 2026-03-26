@@ -85,19 +85,18 @@ export const POST: RequestHandler = async (event) => {
 
 		// NUL-001: Look up canonical identity commitment (set during verification).
 		// Required for nullifier binding — prevents Sybil via re-registration.
-		const user = await prisma.user.findUnique({
-			where: { id: session.userId },
-			select: { identity_commitment: true, verification_method: true, authority_level: true },
+		const user = await serverQuery(api.users.getIdentityForAtlas, {
+			userId: session.userId as any,
 		});
 
-		if (!user?.identity_commitment) {
+		if (!user?.identityCommitment) {
 			return json(
 				{ error: 'Identity verification required before Shadow Atlas registration' },
 				{ status: 403 }
 			);
 		}
 
-		const identityCommitment = user.identity_commitment;
+		const identityCommitment = user.identityCommitment;
 
 		const body = await request.json();
 		const { leaf, replace: isReplace } = body;
@@ -131,8 +130,8 @@ export const POST: RequestHandler = async (event) => {
 		}
 
 		// Check if user is already registered
-		const existingRegistration = await prisma.shadowAtlasRegistration.findUnique({
-			where: { user_id: session.userId },
+		const existingRegistration = await serverQuery(api.users.getShadowAtlasRegistration, {
+			userId: session.userId as any,
 		});
 
 		if (existingRegistration) {
@@ -141,7 +140,7 @@ export const POST: RequestHandler = async (event) => {
 				const replaceIdempotencyKey = crypto.randomUUID();
 				let replacementResult;
 				try {
-					replacementResult = await replaceLeaf(leaf, existingRegistration.leaf_index, { idempotencyKey: replaceIdempotencyKey });
+					replacementResult = await replaceLeaf(leaf, existingRegistration.leafIndex, { idempotencyKey: replaceIdempotencyKey });
 				} catch (error) {
 					const msg = error instanceof Error ? error.message : String(error);
 					console.error('[Shadow Atlas] Registration service failed:', msg);
@@ -151,24 +150,22 @@ export const POST: RequestHandler = async (event) => {
 					);
 				}
 
-				// Update Postgres record with new leaf data
-				// NOTE: pathIndices not stored — derived from leaf_index on read
+				// Update Convex record with new leaf data
+				// NOTE: pathIndices not stored — derived from leafIndex on read
 				try {
-					await prisma.shadowAtlasRegistration.update({
-						where: { user_id: session.userId },
-						data: {
-							identity_commitment: identityCommitment,
-							leaf_index: replacementResult.leafIndex,
-							merkle_root: replacementResult.userRoot,
-							merkle_path: replacementResult.userPath,
-						},
+					await serverMutation(api.users.updateShadowAtlasRegistration, {
+						userId: session.userId as any,
+						identityCommitment,
+						leafIndex: replacementResult.leafIndex,
+						merkleRoot: replacementResult.userRoot,
+						merklePath: replacementResult.userPath,
 					});
 				} catch (dbError) {
-					// CRITICAL: Shadow Atlas tree was mutated but Postgres failed.
+					// CRITICAL: Shadow Atlas tree was mutated but DB failed.
 					// Queue for retry via KV — reconciliation job will repair.
-					console.error('[CRITICAL] Postgres update failed after Shadow Atlas replacement', {
+					console.error('[CRITICAL] DB update failed after Shadow Atlas replacement', {
 						userId: session.userId,
-						oldIndex: existingRegistration.leaf_index,
+						oldIndex: existingRegistration.leafIndex,
 						newIndex: replacementResult.leafIndex,
 						idempotencyKey: replaceIdempotencyKey,
 						error: dbError,
@@ -176,7 +173,7 @@ export const POST: RequestHandler = async (event) => {
 					await queueRegistrationRetry(event, {
 						userId: session.userId,
 						identityCommitment,
-						verificationMethod: user.verification_method || 'unknown',
+						verificationMethod: user.verificationMethod || 'unknown',
 						atlasResult: replacementResult,
 						isReplace: true,
 					});
@@ -192,24 +189,24 @@ export const POST: RequestHandler = async (event) => {
 					userPath: replacementResult.userPath,
 					pathIndices: replacementResult.pathIndices,
 					identityCommitment,
-					authorityLevel: user.authority_level ?? 1,
+					authorityLevel: user.authorityLevel ?? 1,
 				});
 			}
 
 			// Normal already-registered: return cached proof
-			const depth = (existingRegistration.merkle_path as string[]).length;
+			const depth = (existingRegistration.merklePath as string[]).length;
 			const pathIndices = Array.from({ length: depth }, (_, i) =>
-				(existingRegistration.leaf_index >> i) & 1,
+				(existingRegistration.leafIndex >> i) & 1,
 			);
 
 			return json({
-				leafIndex: existingRegistration.leaf_index,
-				userRoot: existingRegistration.merkle_root,
-				userPath: existingRegistration.merkle_path as string[],
+				leafIndex: existingRegistration.leafIndex,
+				userRoot: existingRegistration.merkleRoot,
+				userPath: existingRegistration.merklePath as string[],
 				pathIndices,
 				alreadyRegistered: true,
 				identityCommitment,
-				authorityLevel: user.authority_level ?? 1,
+				authorityLevel: user.authorityLevel ?? 1,
 			});
 		}
 
@@ -236,32 +233,24 @@ export const POST: RequestHandler = async (event) => {
 			);
 		}
 
-		// Store registration metadata in Postgres
+		// Store registration metadata in Convex
 		// NOTE: We store the leaf hash (not private inputs) and the Merkle proof
 		try {
-			await prisma.shadowAtlasRegistration.create({
-				data: {
-					user_id: session.userId,
-					congressional_district: 'three-tree', // District comes from Tree 2, not registration
-					identity_commitment: identityCommitment, // NUL-001: canonical commitment from verification
-					leaf_index: registrationResult.leafIndex,
-					merkle_root: registrationResult.userRoot,
-					merkle_path: registrationResult.userPath,
-					credential_type: 'three-tree',
-					cell_id: null, // PRIVACY: cell_id never sent to this endpoint
-					verification_method: user.verification_method || 'unknown', // BR6-005: use actual method, not hardcoded
-					verification_id: session.userId, // Link to auth session
-					verification_timestamp: new Date(),
-					registration_status: 'registered',
-					expires_at: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000), // 6 months
-				},
+			await serverMutation(api.users.createShadowAtlasRegistration, {
+				userId: session.userId as any,
+				identityCommitment, // NUL-001: canonical commitment from verification
+				leafIndex: registrationResult.leafIndex,
+				merkleRoot: registrationResult.userRoot,
+				merklePath: registrationResult.userPath,
+				verificationMethod: user.verificationMethod || 'unknown', // BR6-005: use actual method, not hardcoded
+				verificationId: session.userId, // Link to auth session
 			});
 		} catch (dbError) {
-			// CRITICAL: Shadow Atlas tree was mutated but Postgres write failed.
+			// CRITICAL: Shadow Atlas tree was mutated but DB write failed.
 			// Queue the atlas response in KV for retry — the idempotency key
 			// means the client can safely retry, but we also need to persist the
 			// atlas response so the reconciliation job can repair the mismatch.
-			console.error('[CRITICAL] Postgres create failed after Shadow Atlas registration', {
+			console.error('[CRITICAL] DB create failed after Shadow Atlas registration', {
 				userId: session.userId,
 				leafIndex: registrationResult.leafIndex,
 				idempotencyKey,
@@ -270,7 +259,7 @@ export const POST: RequestHandler = async (event) => {
 			await queueRegistrationRetry(event, {
 				userId: session.userId,
 				identityCommitment,
-				verificationMethod: user.verification_method || 'unknown',
+				verificationMethod: user.verificationMethod || 'unknown',
 				atlasResult: registrationResult,
 			});
 			return json(
@@ -285,7 +274,7 @@ export const POST: RequestHandler = async (event) => {
 			userPath: registrationResult.userPath,
 			pathIndices: registrationResult.pathIndices,
 			identityCommitment,
-			authorityLevel: user.authority_level ?? 1,
+			authorityLevel: user.authorityLevel ?? 1,
 			receipt: registrationResult.receipt, // Signed registration receipt
 		});
 	} catch (error) {

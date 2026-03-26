@@ -57,6 +57,43 @@ export const list = query({
   },
 });
 
+/**
+ * Get invite by token (for public invite acceptance page).
+ * Does NOT require auth — needed before user logs in.
+ */
+export const getByToken = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    const invite = await ctx.db
+      .query("orgInvites")
+      .withIndex("by_token", (q) => q.eq("token", token))
+      .first();
+
+    if (!invite) return null;
+
+    const org = await ctx.db.get(invite.orgId);
+    if (!org) return null;
+
+    // Decrypt email for display
+    const enc: EncryptedPii = JSON.parse(invite.encryptedEmail);
+    const email = await tryDecryptPii(enc, "org-invite:" + invite._id);
+
+    return {
+      _id: invite._id,
+      token: invite.token,
+      accepted: invite.accepted,
+      expiresAt: invite.expiresAt,
+      role: invite.role,
+      emailHash: invite.emailHash,
+      email: email ?? null,
+      orgName: org.name,
+      orgSlug: org.slug,
+      orgAvatar: org.avatar ?? null,
+      orgId: org._id,
+    };
+  },
+});
+
 // =============================================================================
 // ACTIONS (non-deterministic PII encryption — random IV)
 // =============================================================================

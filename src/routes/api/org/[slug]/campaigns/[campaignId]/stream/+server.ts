@@ -1,6 +1,5 @@
 import { error } from '@sveltejs/kit';
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
-import { computeVerificationPacketCached } from '$lib/server/campaigns/verification';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';

@@ -55,25 +55,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		// Look up canonical identity commitment and signer address
-		const user = await prisma.user.findUnique({
-			where: { id: session.userId },
-			select: {
-				identity_commitment: true,
-				wallet_address: true,
-			},
+		const user = await serverQuery(api.users.getIdentityForEngagement, {
+			userId: session.userId as any,
 		});
 
-		if (!user?.identity_commitment) {
+		if (!user?.identityCommitment) {
 			return json(
 				{ error: 'Identity verification required before engagement registration' },
 				{ status: 403 }
 			);
 		}
 
-		const identityCommitment = user.identity_commitment;
+		const identityCommitment = user.identityCommitment;
 
 		// Determine signer address from wallet_address
-		const signerAddress = user.wallet_address;
+		const signerAddress = user.walletAddress;
 		if (!signerAddress) {
 			// No signer address available -- return tier-0 defaults.
 			// Engagement registration requires an Ethereum address for Sybil mapping.

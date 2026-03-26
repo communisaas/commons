@@ -8,9 +8,7 @@
 	import { setupConvex } from 'convex-sveltekit';
 	import { PUBLIC_CONVEX_URL } from '$env/static/public';
 
-	// DUAL-STACK: Initialize Convex context alongside Prisma.
-	// This enables convexQuery/convexForm/convexLoad in child components.
-	// User data still comes from Prisma — Convex auth bridge is a later cycle.
+	// Initialize Convex context for convexQuery/convexForm/convexLoad in child components.
 	if (PUBLIC_CONVEX_URL) {
 		setupConvex(PUBLIC_CONVEX_URL);
 	}

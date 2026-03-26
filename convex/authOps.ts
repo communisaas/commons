@@ -9,7 +9,7 @@
  * because they ARE the auth creation path.
  */
 
-import { mutation } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
 // =============================================================================
@@ -193,5 +193,76 @@ export const invalidateSession = mutation({
     for (const session of sessions) {
       await ctx.db.delete(session._id);
     }
+  },
+});
+
+// =============================================================================
+// SESSION VALIDATION (used by hooks.server.ts on every request)
+// =============================================================================
+
+const DAY_MS = 1000 * 60 * 60 * 24;
+const MAX_SESSION_LIFETIME_MS = 90 * DAY_MS;
+
+/**
+ * Validate a session and return the associated user.
+ * Returns null if the session is invalid, expired, or the user doesn't exist.
+ * Handles session renewal (extends expiry when within 15 days of expiration).
+ */
+export const validateSession = query({
+  args: { sessionId: v.string() },
+  handler: async (ctx, { sessionId }) => {
+    const session = await ctx.db
+      .query("sessions")
+      .filter((q) => q.eq(q.field("_id"), sessionId))
+      .first();
+
+    if (!session) return null;
+
+    const now = Date.now();
+
+    // Check expiration
+    if (now >= session.expiresAt) {
+      return null;
+    }
+
+    // Check absolute lifetime cap (90 days from creation)
+    const sessionAge = now - session._creationTime;
+    if (sessionAge > MAX_SESSION_LIFETIME_MS) {
+      return null;
+    }
+
+    const user = await ctx.db.get(session.userId);
+    if (!user) return null;
+
+    // Check if renewal is needed (within 15 days of expiry)
+    const renewed = now >= session.expiresAt - DAY_MS * 15;
+
+    return {
+      session: {
+        id: session._id,
+        userId: session.userId as string,
+        expiresAt: renewed ? now + DAY_MS * 30 : session.expiresAt,
+      },
+      user,
+      renewed,
+    };
+  },
+});
+
+/**
+ * Renew a session's expiry. Called from hooks.server.ts when validateSession
+ * indicates renewal is needed. Separated from the query to keep reads fast.
+ */
+export const renewSession = mutation({
+  args: { sessionId: v.string() },
+  handler: async (ctx, { sessionId }) => {
+    const session = await ctx.db
+      .query("sessions")
+      .filter((q) => q.eq(q.field("_id"), sessionId))
+      .first();
+    if (!session) return;
+    await ctx.db.patch(session._id, {
+      expiresAt: Date.now() + DAY_MS * 30,
+    });
   },
 });

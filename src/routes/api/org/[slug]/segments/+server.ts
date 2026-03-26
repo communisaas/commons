@@ -5,8 +5,6 @@
 import { json, error } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex'; // KEEP: bulk operations use buildSegmentWhere (Prisma query builder)
-import { loadOrgContext, requireRole } from '$lib/server/org';
-import { buildSegmentWhere } from '$lib/server/segments/query-builder'; // KEEP: Prisma-only query builder
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
 import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption'; // KEEP: PII decryption for CSV export

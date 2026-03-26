@@ -7,8 +7,6 @@
 import { json, error } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { loadOrgContext, requireRole } from '$lib/server/org';
-import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { FEATURES } from '$lib/config/features';
 import { isValidE164, initiatePatchThroughCall } from '$lib/server/sms/twilio';
 import { VALID_CALL_STATUSES } from '$lib/server/sms/types';

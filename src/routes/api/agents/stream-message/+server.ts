@@ -31,7 +31,6 @@ import {
 } from '$lib/server/llm-cost-protection';
 import type { DecisionMaker } from '$lib/core/agents';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
-import { traceRequest, traceEvent } from '$lib/server/agent-trace';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { EvaluatedSource } from '$lib/core/agents/types';
@@ -173,22 +172,21 @@ export const POST: RequestHandler = async (event) => {
 
 			if (body.template_id) {
 				try {
-					const template = await db.template.findUnique({
-						where: { id: body.template_id },
-						select: { cachedSources: true, sourcesCachedAt: true }
+					const template = await serverQuery(api.templates.getSourceCache, {
+						templateId: body.template_id as any,
 					});
 
 					if (
 						template?.cachedSources &&
 						template.sourcesCachedAt &&
-						(Date.now() - template.sourcesCachedAt.getTime()) < SOURCE_CACHE_TTL_MS
+						(Date.now() - template.sourcesCachedAt) < SOURCE_CACHE_TTL_MS
 					) {
 						cacheHit = true;
 						verifiedSources = template.cachedSources as unknown as EvaluatedSource[];
 						console.log('[stream-message] Source cache hit:', {
 							templateId: body.template_id,
 							sourceCount: verifiedSources.length,
-							cachedAge: Math.round((Date.now() - template.sourcesCachedAt.getTime()) / 60000) + 'min'
+							cachedAge: Math.round((Date.now() - template.sourcesCachedAt) / 60000) + 'min'
 						});
 					}
 				} catch (cacheErr) {
@@ -238,12 +236,10 @@ export const POST: RequestHandler = async (event) => {
 			// Cache miss + template_id + non-empty sources → write cache
 			// ================================================================
 			if (body.template_id && !cacheHit && result.evaluatedSources && result.evaluatedSources.length > 0) {
-				db.template.update({
-					where: { id: body.template_id },
-					data: {
-						cachedSources: result.evaluatedSources as unknown as import('@prisma/client').Prisma.InputJsonValue,
-						sourcesCachedAt: new Date()
-					}
+				serverMutation(api.templates.updateSourceCache, {
+					templateId: body.template_id as any,
+					cachedSources: result.evaluatedSources,
+					sourcesCachedAt: Date.now(),
 				}).catch((err: unknown) => {
 					console.warn('[stream-message] Source cache write failed:', err);
 				});

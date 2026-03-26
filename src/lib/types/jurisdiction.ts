@@ -1,5 +1,15 @@
 import type { GeoFence } from './location';
-import type { TemplateJurisdiction } from '@prisma/client';
+
+/** Local replacement for Prisma's TemplateJurisdiction after migration */
+export interface TemplateJurisdiction {
+	id: string;
+	templateId: string;
+	jurisdictionType: string;
+	jurisdictionCode: string;
+	jurisdictionName: string;
+	stateCode?: string | null;
+	countryCode: string;
+}
 
 export type JurisdictionType =
 	| 'country'

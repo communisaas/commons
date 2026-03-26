@@ -4,7 +4,6 @@
  * Requires session auth (org owner/editor), NOT API key auth.
  */
 
-import { loadOrgContext, requireRole } from '$lib/server/org';
 import { generateApiKey } from '$lib/core/security/api-key';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
