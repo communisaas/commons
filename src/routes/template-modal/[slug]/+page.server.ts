@@ -4,9 +4,53 @@ import { extractRecipientEmails, extractTemplateMetrics } from '$lib/types/templ
 import type { PageServerLoad } from './$types';
 import { FEATURES } from '$lib/config/features';
 import { decryptUserPii } from '$lib/core/crypto/user-pii-encryption';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	const { slug } = params;
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const convexTemplate = await serverQuery(api.templates.getBySlugPublic, { slug });
+
+			if (convexTemplate) {
+				console.log(`[TemplateModal] Convex: loaded template ${slug}`);
+
+				return {
+					template: {
+						id: convexTemplate.id,
+						slug: convexTemplate.slug,
+						title: convexTemplate.title,
+						description: convexTemplate.description,
+						category: convexTemplate.category,
+						type: convexTemplate.type,
+						deliveryMethod: convexTemplate.deliveryMethod,
+						subject: convexTemplate.title,
+						message_body: convexTemplate.message_body,
+						preview: convexTemplate.preview,
+						metrics: convexTemplate.metrics,
+						delivery_config: convexTemplate.delivery_config,
+						recipient_config: convexTemplate.recipient_config,
+						recipientEmails: convexTemplate.recipientEmails ?? [],
+						author: convexTemplate.author,
+						createdAt: convexTemplate.createdAt
+					},
+					user: locals.user ? {
+						id: locals.user.id,
+						name: locals.user.name
+					} : null,
+					modalMode: true
+				};
+			}
+		} catch (err) {
+			console.error('[TemplateModal] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 
 	// Look up template by slug
 	const template = await db.template.findUnique({

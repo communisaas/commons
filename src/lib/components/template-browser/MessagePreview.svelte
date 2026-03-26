@@ -738,42 +738,42 @@
 							<span class="text-slate-400">{segment.content}</span>
 						{/if}
 					{:else if segment.name && isLongFormVariable(segment.name)}
-						<!-- Long-form variable: inline expansion within the letter flow -->
+						<!-- Long-form variable: interstitial within the letter flow -->
 						{#if activeInlineEditor === segment.instanceId}
-							<div class="my-3 whitespace-normal" transition:slide={{ duration: 200 }}>
-								<div class="rounded-xl border border-participation-primary-200/80 bg-white/95 shadow-sm">
-									<div class="flex items-center gap-1.5 px-3 pt-2.5 pb-1 sm:px-4 sm:pt-3">
+							<!-- Editing: the letter opens up here -->
+							<div class="my-4 whitespace-normal" transition:slide={{ duration: 200 }}>
+								<div class="border-l-2 border-participation-primary-300 pl-4">
+									<div class="mb-2 flex items-center gap-1.5">
 										<Edit3 class="h-3 w-3 text-participation-primary-400" />
-										<span class="text-xs font-medium text-slate-500">
-											{(segment.name && variableHints[segment.name]?.prompt) || segment.name}
+										<span class="text-xs font-medium text-[var(--text-tertiary)]">
+											{(segment.name && variableHints[segment.name]?.prompt) || 'Your perspective'}
 										</span>
 									</div>
-									<div class="px-3 pb-2.5 sm:px-4 sm:pb-3">
-										<textarea
-											use:autofocusAction
-											value={variableValues[segment.name] || ''}
-											oninput={(e) => handleInlineInput(e, segment.name || '')}
-											onfocusout={handleInlineBlur}
-											onfocusin={handleInlineFocus}
-											onkeydown={handleInlineKeydown}
-											placeholder={(segment.name && variableHints[segment.name]?.placeholder) ||
-												`Share why this issue matters to you — your story, your reasoning, your perspective...`}
-											class="w-full resize-none border-0 bg-transparent p-0 pt-1
-												font-sans text-sm leading-relaxed text-slate-700
-												placeholder:text-slate-300/80
-												focus:ring-0 focus:outline-none"
-											rows="3"
-										></textarea>
-									</div>
+									<textarea
+										use:autofocusAction
+										value={variableValues[segment.name] || ''}
+										oninput={(e) => handleInlineInput(e, segment.name || '')}
+										onfocusout={handleInlineBlur}
+										onfocusin={handleInlineFocus}
+										onkeydown={handleInlineKeydown}
+										placeholder={(segment.name && variableHints[segment.name]?.placeholder) ||
+											`Why this matters to you — your experience, your reasoning...`}
+										class="w-full resize-none border-0 bg-transparent p-0
+											font-sans text-sm leading-relaxed text-[var(--text-secondary)]
+											placeholder:text-[var(--text-quaternary)]
+											focus:ring-0 focus:outline-none"
+										rows="3"
+									></textarea>
 								</div>
 							</div>
 						{:else if variableValues[segment.name]}
-							<!-- Filled: text becomes part of the letter -->
+							<!-- Filled: flows into the letter, left border marks it as the writer's voice -->
 							<span
-								class="cursor-pointer rounded-sm
-									border-b border-dotted border-participation-primary-200/50
-									transition-colors duration-200
-									hover:border-participation-primary-300 hover:bg-participation-primary-50/30"
+								class="my-3 block cursor-pointer whitespace-normal
+									border-l-2 border-participation-primary-200/60 pl-4
+									text-[var(--text-secondary)]
+									transition-all duration-200
+									hover:border-participation-primary-300"
 								role="button"
 								tabindex="0"
 								onclick={() => openInlineEditor(segment.instanceId || '')}
@@ -781,16 +781,23 @@
 								aria-label={`Edit your ${segment.name}`}
 							>{variableValues[segment.name]}</span>
 						{:else}
-							<!-- Unfilled: invitation token -->
-							<button
-								class={getVariableClasses(segment.name || '')}
+							<!-- Empty: an open interstitial — room for the writer's voice -->
+							<div
+								class="my-4 block cursor-pointer whitespace-normal
+									border-l-2 border-dashed border-participation-primary-200/50
+									py-3 pl-4
+									transition-all duration-200
+									hover:border-participation-primary-300 hover:border-solid"
+								role="button"
+								tabindex="0"
 								onclick={() => openInlineEditor(segment.instanceId || '')}
+								onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openInlineEditor(segment.instanceId || ''); } }}
 								aria-label={`Add your ${segment.name}`}
-								type="button"
 							>
-								<Edit3 class="h-3 w-3 text-participation-primary-500" />
-								<span>{segment.name}</span>
-							</button>
+								<span class="text-sm text-[var(--text-quaternary)]">
+									Your perspective — why this matters to you
+								</span>
+							</div>
 						{/if}
 					{:else if segment.name}
 						<span class="relative inline-block">

@@ -3,6 +3,8 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import { browser } from '$app/environment';
 	import { type Spring } from 'svelte/motion';
+	import { extractRecipientEmails } from '$lib/types/templateConfig';
+	import { parseRecipientConfig } from '$lib/utils/deriveTargetPresentation';
 
 	let {
 		template,
@@ -35,19 +37,29 @@
 	const isVerifiedConstituent = $derived(userTrustTier >= 2);
 	const isCwcTemplate = $derived(template.deliveryMethod === 'cwc');
 
+	// Recipient count from template config
+	const recipientCount = $derived.by(() => {
+		const config = parseRecipientConfig(template?.recipient_config);
+		const dms = config?.decisionMakers?.length ?? 0;
+		const emails = extractRecipientEmails(template?.recipient_config)?.length ?? 0;
+		return dms || emails;
+	});
+
 	// Button text and variant based on trust tier + delivery method
 	const buttonVariant = $derived(
 		isCwcTemplate && isVerifiedConstituent ? 'verified' : 'primary'
 	);
-	const buttonText = $derived(
-		isModerating
-			? 'Checking...'
-			: isCwcTemplate && isVerifiedConstituent
-				? 'Send as Verified Constituent'
-				: isCwcTemplate
-					? 'Send to Congress'
-					: 'Send to Decision-Makers'
-	);
+	const buttonText = $derived.by(() => {
+		if (isModerating) return 'Checking...';
+		const count = recipientCount;
+		if (isCwcTemplate && isVerifiedConstituent) {
+			return count > 0 ? `Deliver as verified constituent to ${count}` : 'Deliver as verified constituent';
+		}
+		if (isCwcTemplate) {
+			return 'Deliver to Congress';
+		}
+		return count > 0 ? `Deliver to ${count} decision-maker${count !== 1 ? 's' : ''}` : 'Send to Decision-Makers';
+	});
 
 	// Circuit breaker for moderation service (CI-004 hardening)
 	// Fail-closed: block sends when moderation is unavailable, unless circuit trips open

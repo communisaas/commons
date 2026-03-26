@@ -5,8 +5,29 @@ import { extractRecipientEmails } from '$lib/types/templateConfig';
 import { z } from 'zod';
 import { FEATURES } from '$lib/config/features';
 import { tryDecryptPii } from '$lib/core/crypto/user-pii-encryption';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 export const load: PageServerLoad = async () => {
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const convexTemplates = await serverQuery(api.templates.listPublic, {
+				excludeCwc: !FEATURES.CONGRESSIONAL
+			});
+
+			console.log(`[Browse] Convex: loaded ${convexTemplates.length} public templates`);
+
+			return {
+				templates: convexTemplates
+			};
+		} catch (err) {
+			console.error('[Browse] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	try {
 		const dbTemplates = await db.template.findMany({
 			where: {
