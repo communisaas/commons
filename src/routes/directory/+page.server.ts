@@ -1,3 +1,4 @@
+// CONVEX: skip — no Convex listPublicOrgs query yet (getBySlug exists but no paginated public directory)
 import { db } from '$lib/core/db';
 import type { PageServerLoad } from './$types';
 

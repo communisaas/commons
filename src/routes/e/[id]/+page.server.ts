@@ -1,3 +1,4 @@
+// CONVEX: skip — public event page; Convex events.get requires orgSlug + auth, needs new public query
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';

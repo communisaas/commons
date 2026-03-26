@@ -1,3 +1,4 @@
+// CONVEX: skip — mutation-heavy CSV import with transactions, PII encryption, tag upserts; needs Convex action
 import { redirect, fail } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';

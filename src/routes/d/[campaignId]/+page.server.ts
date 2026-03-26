@@ -1,3 +1,4 @@
+// CONVEX: skip — public donation page; Convex campaigns.get requires auth, needs new public query
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';

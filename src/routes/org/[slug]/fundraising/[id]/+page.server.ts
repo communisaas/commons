@@ -1,3 +1,4 @@
+// CONVEX: skip — Convex donations.listByCampaign exists but scoped differently (no PII masking logic); needs dedicated query
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
