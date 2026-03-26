@@ -69,7 +69,11 @@ export const listByCampaign = query({
     }),
   },
   handler: async (ctx, args) => {
-    await requireOrgRole(ctx, args.orgSlug, "member");
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+
+    // Verify campaign belongs to this org — prevents cross-tenant donation leakage
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.orgId !== org._id) throw new Error("Campaign not found in this organization");
 
     return await ctx.db
       .query("donations")

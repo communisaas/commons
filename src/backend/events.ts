@@ -78,7 +78,11 @@ export const getRsvps = query({
     }),
   },
   handler: async (ctx, args) => {
-    await requireOrgRole(ctx, args.orgSlug, "member");
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+
+    // Verify event belongs to this org — prevents cross-tenant RSVP leakage
+    const event = await ctx.db.get(args.eventId);
+    if (!event || event.orgId !== org._id) throw new Error("Event not found in this organization");
 
     let q;
     if (args.status) {

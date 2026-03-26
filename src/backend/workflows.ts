@@ -43,13 +43,18 @@ export const list = query({
 });
 
 /**
- * Get a single workflow by ID.
+ * Get a single workflow by ID. Requires org membership.
  */
 export const get = query({
-  args: { workflowId: v.id("workflows") },
-  handler: async (ctx, { workflowId }) => {
+  args: {
+    slug: v.string(),
+    workflowId: v.id("workflows"),
+  },
+  handler: async (ctx, { slug, workflowId }) => {
+    const { org } = await requireOrgRole(ctx, slug, "member");
+
     const workflow = await ctx.db.get(workflowId);
-    if (!workflow) return null;
+    if (!workflow || workflow.orgId !== org._id) return null;
 
     return {
       _id: workflow._id,
@@ -66,14 +71,23 @@ export const get = query({
 });
 
 /**
- * Get executions for a workflow, most recent first.
+ * Get executions for a workflow, most recent first. Requires org membership.
  */
 export const getExecutions = query({
   args: {
+    slug: v.string(),
     workflowId: v.id("workflows"),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "member");
+
+    // Verify workflow belongs to this org
+    const workflow = await ctx.db.get(args.workflowId);
+    if (!workflow || workflow.orgId !== org._id) {
+      throw new Error("Workflow not found in this organization");
+    }
+
     const executions = await ctx.db
       .query("workflowExecutions")
       .withIndex("by_workflowId", (q) => q.eq("workflowId", args.workflowId))

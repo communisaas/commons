@@ -368,10 +368,23 @@ export const updateStatus = mutation({
     appealDeadline: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
+    const user = await requireAuth(ctx);
 
     const debate = await ctx.db.get(args.debateId);
     if (!debate) throw new Error("Debate not found");
+
+    // Verify caller has org editor/owner role if debate is tied to a template with an org
+    if (debate.templateId) {
+      const template = await ctx.db.get(debate.templateId);
+      if (template?.orgId) {
+        const membership = await ctx.db.query("orgMemberships")
+          .withIndex("by_userId_orgId", (q) => q.eq("userId", user.userId).eq("orgId", template.orgId))
+          .unique();
+        if (!membership || (membership.role !== "owner" && membership.role !== "editor")) {
+          throw new Error("Only org editors/owners can change debate status");
+        }
+      }
+    }
 
     const validStatuses = [
       "active",

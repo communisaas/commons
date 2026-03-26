@@ -81,13 +81,60 @@ http.route({
     // Read raw body for signature verification
     const body = await request.text();
 
-    // Stripe signature verification requires the STRIPE_WEBHOOK_SECRET env var.
-    // In the Convex runtime, we verify using the Stripe library in an action.
-    // For now, we parse the event and delegate to the subscription action.
-    //
-    // IMPORTANT: In production, signature verification MUST happen before
-    // processing. This is a scaffold — the actual Stripe SDK verification
-    // will be added when the Stripe npm package is bundled into Convex.
+    // --- Stripe HMAC-SHA256 signature verification ---
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      return new Response("Webhook secret not configured", { status: 500 });
+    }
+
+    // Parse signature header: t=timestamp,v1=signature
+    const parts = Object.fromEntries(
+      signature.split(",").map((p) => {
+        const [k, v] = p.split("=");
+        return [k, v];
+      }),
+    );
+    const timestamp = parts["t"];
+    const sig = parts["v1"];
+    if (!timestamp || !sig) {
+      return new Response(
+        JSON.stringify({ error: "Invalid signature format" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    // Compute expected signature
+    const payload = `${timestamp}.${body}`;
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(webhookSecret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const mac = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(payload),
+    );
+    const expected = Array.from(new Uint8Array(mac))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    if (sig !== expected) {
+      return new Response(
+        JSON.stringify({ error: "Invalid signature" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    // Verify timestamp is within 5 minutes (prevent replay attacks)
+    if (Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) {
+      return new Response(
+        JSON.stringify({ error: "Timestamp too old" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
 
     let event: { type: string; data: { object: unknown } };
     try {

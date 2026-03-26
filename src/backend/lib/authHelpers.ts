@@ -121,3 +121,19 @@ export async function requireOrgRole(
 
   return { org, membership, userId };
 }
+
+/**
+ * Verify a resource belongs to an org. Prevents cross-tenant access
+ * where auth checks pass on slug but raw IDs bypass org scoping.
+ */
+export async function requireResourceOwnership(
+  ctx: QueryCtx | MutationCtx,
+  table: string,
+  resourceId: any,
+  orgId: any,
+  orgIdField: string = "orgId"
+): Promise<void> {
+  const doc = await ctx.db.get(resourceId);
+  if (!doc) throw new Error("Resource not found");
+  if ((doc as any)[orgIdField] !== orgId) throw new Error("Access denied — resource belongs to another organization");
+}

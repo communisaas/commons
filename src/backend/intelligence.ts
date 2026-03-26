@@ -7,6 +7,7 @@ import {
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { requireAuth } from "./lib/authHelpers";
 
 // =============================================================================
 // QUERIES
@@ -22,6 +23,7 @@ export const queryItems = query({
     cursor: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
+    await requireAuth(ctx);
     const limit = args.limit ?? 20;
 
     let q;
@@ -71,6 +73,7 @@ export const getRecent = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    await requireAuth(ctx);
     const days = args.days ?? 7;
     const limit = args.limit ?? 50;
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;

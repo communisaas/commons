@@ -1,7 +1,6 @@
 import {
   query,
   mutation,
-  action,
   internalMutation,
   internalAction,
   internalQuery,
@@ -82,7 +81,11 @@ export const getBlastEvents = query({
     }),
   },
   handler: async (ctx, args) => {
-    await requireOrgRole(ctx, args.orgSlug, "member");
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+
+    // Verify blast belongs to this org — prevents cross-tenant event leakage
+    const blast = await ctx.db.get(args.blastId);
+    if (!blast || blast.orgId !== org._id) throw new Error("Blast not found in this organization");
 
     let q;
     if (args.eventType) {
@@ -290,7 +293,12 @@ export const getBlastRecipients = internalQuery({
 });
 
 /**
- * Action: Send an email blast.
+ * Send an email blast.
+ *
+ * Auth boundary: This is an internalAction — callers (SvelteKit UI layer,
+ * other internal functions) must validate the user's session and org
+ * membership before invoking. The blast's orgId is verified against the
+ * resolved org to prevent cross-tenant sends.
  *
  * Pipeline:
  *   1. Transition draft → sending (atomic)
@@ -300,15 +308,12 @@ export const getBlastRecipients = internalQuery({
  * Each batch processes up to 100 recipients then schedules the next batch,
  * avoiding action timeouts for large recipient lists.
  */
-export const sendBlast = action({
+export const sendBlast = internalAction({
   args: {
     orgSlug: v.string(),
     blastId: v.id("emailBlasts"),
   },
   handler: async (ctx, args) => {
-    // Auth check
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required");
 
     // Transition to sending (the mutation enforces draft → sending)
     await ctx.runMutation(internal.email.updateBlastStatus, {
