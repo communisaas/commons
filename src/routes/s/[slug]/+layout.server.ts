@@ -7,10 +7,49 @@ import { FEATURES } from '$lib/config/features';
 import { queryNoisySnapshots } from '$lib/core/analytics/snapshot';
 import { getDaysAgoUTC, getTodayUTC } from '$lib/core/analytics/aggregate';
 import { decryptUserPii } from '$lib/core/crypto/user-pii-encryption';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+
+// Convex dual-stack imports (primary data source when available)
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 export const load: LayoutServerLoad = async ({ params, locals: _locals, request }) => {
 	const { slug } = params;
 
+	// Detect country and resolve channel (needed regardless of data source)
+	const detectedCountry = detectCountryFromHeaders(request.headers) || 'US';
+	const channelInfo = await resolveChannel(detectedCountry);
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const convexTemplate = await serverQuery(api.templates.getBySlugPublic, { slug });
+
+			if (!convexTemplate) {
+				throw error(404, 'Template not found');
+			}
+
+			// Gate CWC templates behind CONGRESSIONAL feature flag
+			if (!FEATURES.CONGRESSIONAL && convexTemplate.deliveryMethod === 'cwc') {
+				throw error(404, 'Template not found');
+			}
+
+			console.log(`[TemplateDetail] Convex: loaded template "${convexTemplate.slug}"`);
+			return {
+				template: convexTemplate,
+				channel: channelInfo
+			};
+		} catch (err) {
+			// Re-throw SvelteKit errors (404s) — don't fall back for those
+			if (err && typeof err === 'object' && 'status' in err) {
+				throw err;
+			}
+			console.error('[TemplateDetail] Convex load failed, falling back to Prisma:', err);
+			// Fall through to Prisma below
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	// Look up template by slug
 	const template = await db.template.findUnique({
 		where: {
@@ -37,10 +76,6 @@ export const load: LayoutServerLoad = async ({ params, locals: _locals, request 
 	if (!FEATURES.CONGRESSIONAL && template.deliveryMethod === 'cwc') {
 		throw error(404, 'Template not found');
 	}
-
-	// Detect country and resolve channel
-	const detectedCountry = detectCountryFromHeaders(request.headers) || 'US';
-	const channelInfo = await resolveChannel(detectedCountry);
 
 	// DP snapshots (historical, Laplace-noised) + today's LDP-corrected aggregate
 	const today = getTodayUTC();

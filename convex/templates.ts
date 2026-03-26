@@ -1,6 +1,7 @@
 import { query, action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 
 // =============================================================================
 // TEMPLATES — Queries & Actions
@@ -50,6 +51,280 @@ export const getBySlug = query({
     return template;
   },
 });
+
+/**
+ * Public: List public templates with enriched data for the homepage.
+ * Returns org endorsement info, debate summary, scopes, and computed metrics.
+ * DUAL-STACK: This is the Convex primary path; Prisma is the fallback.
+ */
+export const listPublic = query({
+  args: {
+    excludeCwc: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    // Fetch all published public templates
+    let templates = await ctx.db
+      .query("templates")
+      .withIndex("by_status", (q) => q.eq("status", "published"))
+      .order("desc")
+      .collect();
+
+    // Filter to public only + optional CWC exclusion
+    templates = templates.filter((t) => {
+      if (!t.isPublic) return false;
+      if (args.excludeCwc && t.deliveryMethod === "cwc") return false;
+      return true;
+    });
+
+    // Cap at 50 for homepage
+    templates = templates.slice(0, 50);
+
+    const templateIds = templates.map((t) => t._id);
+
+    // Batch-fetch related data in parallel
+    const [allDebates, allEndorsements, orgMap] = await Promise.all([
+      // Debates for these templates
+      Promise.all(
+        templateIds.map((tid) =>
+          ctx.db
+            .query("debates")
+            .withIndex("by_templateId", (q) => q.eq("templateId", tid))
+            .order("desc")
+            .first()
+        )
+      ),
+      // Endorsements for these templates
+      Promise.all(
+        templateIds.map((tid) =>
+          ctx.db
+            .query("templateEndorsements")
+            .withIndex("by_templateId", (q) => q.eq("templateId", tid))
+            .collect()
+        )
+      ),
+      // Collect unique orgIds and batch-fetch orgs
+      (async () => {
+        const orgIds = new Set<Id<"organizations">>();
+        for (const t of templates) {
+          if (t.orgId) orgIds.add(t.orgId);
+        }
+        const orgs = await Promise.all(
+          [...orgIds].map((id) => ctx.db.get(id))
+        );
+        const map = new Map<string, { name: string; slug: string; avatar: string | null }>();
+        for (const org of orgs) {
+          if (org) {
+            map.set(org._id, { name: org.name, slug: org.slug, avatar: org.avatar ?? null });
+          }
+        }
+        return map;
+      })(),
+    ]);
+
+    // Also fetch orgs from endorsements
+    const endorsementOrgIds = new Set<Id<"organizations">>();
+    for (const endorsements of allEndorsements) {
+      for (const e of endorsements) {
+        endorsementOrgIds.add(e.orgId);
+      }
+    }
+    // Remove already-fetched orgIds
+    for (const key of orgMap.keys()) {
+      endorsementOrgIds.delete(key as Id<"organizations">);
+    }
+    // Fetch remaining endorsement orgs
+    const extraOrgs = await Promise.all(
+      [...endorsementOrgIds].map((id) => ctx.db.get(id))
+    );
+    for (const org of extraOrgs) {
+      if (org) {
+        orgMap.set(org._id, { name: org.name, slug: org.slug, avatar: org.avatar ?? null });
+      }
+    }
+
+    // Build enriched results
+    return templates.map((template, i) => {
+      const debate = allDebates[i];
+      const endorsements = allEndorsements[i] ?? [];
+
+      // Endorsing org (template owner)
+      const endorsingOrg = template.orgId ? orgMap.get(template.orgId) ?? null : null;
+
+      // Additional endorsing orgs (excluding the template owner)
+      const endorsingOrgs = endorsements
+        .filter((e) => e.orgId !== template.orgId)
+        .map((e) => orgMap.get(e.orgId))
+        .filter((o): o is NonNullable<typeof o> => o != null);
+
+      // Debate summary
+      const hasActiveDebate = debate?.status === "active";
+      const debateSummary = debate && debate.status !== "cancelled"
+        ? {
+            status: debate.status as "active" | "resolving" | "resolved" | "awaiting_governance" | "under_appeal",
+            winningStance: debate.winningStance ?? undefined,
+            uniqueParticipants: debate.uniqueParticipants ?? 0,
+            argumentCount: debate.argumentCount ?? 0,
+            deadline: debate.deadline ? new Date(debate.deadline).toISOString() : undefined,
+          }
+        : undefined;
+
+      // Coordination scale
+      const sendCount = template.verifiedSends || 0;
+      const coordinationScale = Math.min(1.0, Math.log10(Math.max(1, sendCount)) / 3);
+      const creationTime = template._creationTime;
+      const daysSinceCreation = (Date.now() - creationTime) / (1000 * 60 * 60 * 24);
+      const isNew = daysSinceCreation <= 7;
+
+      // Metrics
+      const rawMetrics = (template.metrics ?? {}) as Record<string, number | undefined>;
+
+      return {
+        id: template._id,
+        slug: template.slug,
+        title: template.title,
+        description: template.description,
+        category: template.category,
+        topics: template.topics ?? [],
+        type: template.type,
+        deliveryMethod: template.deliveryMethod,
+        subject: template.title,
+        message_body: template.messageBody,
+        preview: template.preview,
+        endorsingOrg,
+        endorsingOrgs,
+        coordinationScale,
+        isNew,
+        hasActiveDebate,
+        debateSummary,
+        verified_sends: template.verifiedSends,
+        unique_districts: template.uniqueDistricts,
+        send_count: template.verifiedSends,
+        metrics: {
+          sent: template.verifiedSends,
+          districts_covered: template.uniqueDistricts,
+          opened: rawMetrics.opened || 0,
+          clicked: rawMetrics.clicked || 0,
+          responded: rawMetrics.responded || 0,
+          total_districts: rawMetrics.total_districts || 435,
+          district_coverage_percent: rawMetrics.district_coverage_percent ||
+            (template.uniqueDistricts ? Math.round((template.uniqueDistricts / 435) * 100) : 0),
+          personalization_rate: rawMetrics.personalization_rate || 0,
+          effectiveness_score: rawMetrics.effectiveness_score,
+          cascade_depth: rawMetrics.cascade_depth,
+          viral_coefficient: rawMetrics.viral_coefficient,
+          onboarding_starts: rawMetrics.onboarding_starts,
+          onboarding_completes: rawMetrics.onboarding_completes,
+          auth_completions: rawMetrics.auth_completions,
+          shares: rawMetrics.shares,
+        },
+        delivery_config: template.deliveryConfig,
+        cwc_config: template.cwcConfig ?? null,
+        recipient_config: template.recipientConfig,
+        campaign_id: template.campaignId ?? null,
+        status: template.status,
+        is_public: template.isPublic,
+        jurisdictions: template.jurisdictions ?? [],
+        scope: (template.scopes ?? [])[0] ?? null,
+        scopes: template.scopes ?? [],
+        recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
+        createdAt: new Date(creationTime).toISOString(),
+      };
+    });
+  },
+});
+
+/**
+ * Public: Get a single public template by slug with enriched data.
+ * Returns the full template shape expected by the detail page layout.
+ * DUAL-STACK: This is the Convex primary path; Prisma is the fallback.
+ */
+export const getBySlugPublic = query({
+  args: { slug: v.string() },
+  handler: async (ctx, args) => {
+    const template = await ctx.db
+      .query("templates")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+
+    if (!template || !template.isPublic) return null;
+
+    // Fetch author info
+    let author: { name: string | null; avatar: string | null } | null = null;
+    if (template.userId) {
+      const user = await ctx.db.get(template.userId);
+      if (user) {
+        // Note: In Convex schema, user name may be plain or encrypted.
+        // For the detail page we expose name + avatar only.
+        author = { name: (user as any).name ?? null, avatar: (user as any).avatar ?? null };
+      }
+    }
+
+    // Metrics
+    const rawMetrics = (template.metrics ?? {}) as Record<string, number | undefined>;
+
+    return {
+      id: template._id,
+      slug: template.slug,
+      title: template.title,
+      description: template.description,
+      category: template.category,
+      type: template.type,
+      deliveryMethod: template.deliveryMethod,
+      subject: template.title,
+      message_body: template.messageBody,
+      sources: template.sources ?? [],
+      research_log: template.researchLog ?? [],
+      preview: template.preview,
+      is_public: template.isPublic,
+      verified_sends: template.verifiedSends,
+      unique_districts: template.uniqueDistricts,
+      metrics: {
+        sent: template.verifiedSends,
+        districts_covered: template.uniqueDistricts,
+        total_districts: rawMetrics.total_districts || 435,
+        district_coverage_percent: rawMetrics.district_coverage_percent ||
+          (template.uniqueDistricts ? Math.round((template.uniqueDistricts / 435) * 100) : 0),
+        opened: rawMetrics.opened || 0,
+        clicked: rawMetrics.clicked || 0,
+        responded: rawMetrics.responded || 0,
+        views: 0, // DP snapshots are Prisma-only during migration
+      },
+      delivery_config: template.deliveryConfig,
+      recipient_config: template.recipientConfig,
+      recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
+      author,
+      createdAt: new Date(template._creationTime).toISOString(),
+    };
+  },
+});
+
+/**
+ * Extract recipient emails from recipient_config JSON.
+ * Mirrors the Prisma-side extractRecipientEmails utility.
+ */
+function extractRecipientEmailsConvex(recipientConfig: unknown): string[] {
+  if (!recipientConfig || typeof recipientConfig !== "object") return [];
+  const config = recipientConfig as Record<string, unknown>;
+  const emails: string[] = [];
+
+  // Handle various recipient config shapes
+  if (Array.isArray(config.recipients)) {
+    for (const r of config.recipients) {
+      if (typeof r === "string") emails.push(r);
+      else if (r && typeof r === "object" && typeof (r as any).email === "string") {
+        emails.push((r as any).email);
+      }
+    }
+  }
+  if (typeof config.email === "string") emails.push(config.email);
+  if (Array.isArray(config.emails)) {
+    for (const e of config.emails) {
+      if (typeof e === "string") emails.push(e);
+    }
+  }
+
+  return emails;
+}
 
 /**
  * Internal: Batch lookup templates by IDs.

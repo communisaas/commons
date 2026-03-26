@@ -5,6 +5,11 @@ import { extractRecipientEmails } from '$lib/types/templateConfig';
 import type { UnknownRecord } from '$lib/types/any-replacements';
 import { z } from 'zod';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+
+// Convex dual-stack imports (primary data source when available)
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 const MetricsSchema = z
 	.object({
@@ -28,6 +33,21 @@ export const load: PageServerLoad = async ({ depends }) => {
 	// Cache across client-side navigations — only re-fetch when invalidated
 	depends('data:templates');
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const templates = await serverQuery(api.templates.listPublic, {
+				excludeCwc: !FEATURES.CONGRESSIONAL
+			});
+			console.log(`[Homepage] Convex: loaded ${templates.length} templates`);
+			return { templates };
+		} catch (error) {
+			console.error('[Homepage] Convex template load failed, falling back to Prisma:', error);
+			// Fall through to Prisma below
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	try {
 		const dbTemplates = await db.template.findMany({
 			where: {
