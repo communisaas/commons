@@ -90,3 +90,7 @@ prisma/dev.db
 svelte-check-baseline.txt
 .planning/
 commons-desktop-a11y.md
+
+# Convex generated files
+convex/_generated/
+!convex/_generated/.gitkeep
