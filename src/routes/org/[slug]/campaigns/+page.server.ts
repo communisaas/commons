@@ -1,8 +1,52 @@
 import { db } from '$lib/core/db';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+
+// Convex dual-stack imports (primary data source when available)
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ parent }) => {
 	const { org } = await parent();
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const [convexResult, statusCounts] = await Promise.all([
+				serverQuery(api.campaigns.list, {
+					slug: org.slug,
+					paginationOpts: { numItems: 100, cursor: null }
+				}),
+				serverQuery(api.campaigns.getStatusCounts, { slug: org.slug })
+			]);
+
+			console.log(`[Campaigns] Convex: loaded ${convexResult.page.length} campaigns for ${org.slug}`);
+
+			return {
+				campaigns: convexResult.page.map((c: Record<string, unknown>) => ({
+					id: c._id,
+					title: c.title,
+					type: c.type,
+					status: c.status,
+					body: c.body ?? null,
+					templateId: c.templateId ?? null,
+					templateTitle: c.templateTitle ?? null,
+					debateEnabled: c.debateEnabled ?? false,
+					debateThreshold: c.debateThreshold ?? 50,
+					updatedAt: typeof c.updatedAt === 'number'
+						? new Date(c.updatedAt as number).toISOString()
+						: String(c.updatedAt)
+				})),
+				counts: statusCounts
+			};
+		} catch (error) {
+			console.error('[Campaigns] Convex failed, falling back to Prisma:', error);
+			// Fall through to Prisma below
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 
 	const [campaigns, statusCounts] = await Promise.all([
 		db.campaign.findMany({

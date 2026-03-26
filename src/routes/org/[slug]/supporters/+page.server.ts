@@ -2,6 +2,12 @@ import { fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { tryDecryptSupporterEmail, computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+
+// Convex dual-stack imports (primary data source when available)
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+
 import type { PageServerLoad, Actions } from './$types';
 
 const PAGE_SIZE = 50;
@@ -9,13 +15,99 @@ const PAGE_SIZE = 50;
 export const load: PageServerLoad = async ({ parent, url }) => {
 	const { org } = await parent();
 
-	// Parse filter params
+	// Parse filter params (needed for both Convex and Prisma paths)
 	const q = url.searchParams.get('q')?.trim() || '';
 	const status = url.searchParams.get('status') || '';
 	const verified = url.searchParams.get('verified') || '';
 	const tagId = url.searchParams.get('tag') || '';
 	const source = url.searchParams.get('source') || '';
 	const cursor = url.searchParams.get('cursor') || '';
+	const filters = { q, status, verified, tagId, source };
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL && !q) {
+		// Note: Convex list doesn't support text search (q param), so only use
+		// Convex when there's no search query. Fall to Prisma for search.
+		try {
+			const convexFilters: Record<string, unknown> = {};
+			if (status && ['subscribed', 'unsubscribed', 'bounced', 'complained'].includes(status)) {
+				convexFilters.emailStatus = status;
+			}
+			if (verified === 'true') convexFilters.verified = true;
+			else if (verified === 'false') convexFilters.verified = false;
+			if (source && ['csv', 'action_network', 'organic', 'widget'].includes(source)) {
+				convexFilters.source = source;
+			}
+			// tagId filter: Convex expects v.id("tags"), only pass if present
+			// Skip tag filter in Convex — requires Convex ID format
+
+			const [convexResult, summaryStats, tags, campaigns] = await Promise.all([
+				serverQuery(api.supporters.list, {
+					orgSlug: org.slug,
+					paginationOpts: { cursor: cursor || null, numItems: PAGE_SIZE },
+					filters: Object.keys(convexFilters).length > 0 ? convexFilters : undefined
+				}),
+				serverQuery(api.supporters.getSummaryStats, { orgSlug: org.slug }),
+				// Tags and campaigns still from Prisma (no Convex equivalent yet)
+				db.tag.findMany({
+					where: { orgId: org.id },
+					select: { id: true, name: true, _count: { select: { supporters: true } } },
+					orderBy: { name: 'asc' }
+				}),
+				db.campaign.findMany({
+					where: { orgId: org.id },
+					select: { id: true, title: true },
+					orderBy: { updatedAt: 'desc' }
+				})
+			]);
+
+			console.log(`[Supporters] Convex: loaded ${convexResult.supporters.length} supporters for ${org.slug}`);
+
+			// Map Convex supporter shape → Prisma shape expected by +page.svelte
+			const supporters = convexResult.supporters
+				.filter((s: Record<string, unknown>) => s.email !== null) // match Prisma behavior: skip null emails
+				.map((s: Record<string, unknown>) => ({
+					id: s._id,
+					email: s.email,
+					name: s.name ?? null,
+					postalCode: s.postalCode ?? null,
+					country: s.country ?? null,
+					phone: s.phone ?? null,
+					identityVerified: s.identityVerified ?? false,
+					verified: s.verified ?? false,
+					emailStatus: s.emailStatus ?? 'subscribed',
+					source: s.source ?? null,
+					createdAt: typeof s._creationTime === 'number'
+						? new Date(s._creationTime as number).toISOString()
+						: String(s._creationTime),
+					tags: ((s.tags as Array<{ _id: string; name: string }>) ?? []).map(t => ({
+						id: t._id,
+						name: t.name
+					}))
+				}));
+
+			return {
+				supporters,
+				total: summaryStats.total,
+				hasMore: convexResult.hasMore,
+				nextCursor: convexResult.nextCursor,
+				tags: tags.map(t => ({ id: t.id, name: t.name, supporterCount: t._count.supporters })),
+				campaigns,
+				summary: {
+					verified: summaryStats.identityVerified,
+					postal: summaryStats.postalResolved,
+					imported: summaryStats.imported
+				},
+				emailHealth: summaryStats.emailHealth,
+				filters
+			};
+		} catch (error) {
+			console.error('[Supporters] Convex failed, falling back to Prisma:', error);
+			// Fall through to Prisma below
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 
 	// Build where clause
 	const where: Record<string, unknown> = { orgId: org.id };

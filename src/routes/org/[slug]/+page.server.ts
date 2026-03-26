@@ -4,10 +4,105 @@ import { FEATURES } from '$lib/config/features';
 import { maskEmail } from '$lib/server/org/mask';
 import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import { loadOrgBilling } from '$lib/server/org';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+
+// Convex dual-stack imports (primary data source when available)
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ parent }) => {
 	const { org, membership } = await parent();
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const dashboard = await serverQuery(api.organizations.getDashboard, { slug: org.slug });
+			console.log(`[OrgDashboard] Convex: loaded dashboard for ${org.slug}`);
+
+			// Map Convex denormalized payload → shape +page.svelte expects.
+			// Fields that Convex doesn't carry yet get safe defaults so the
+			// frontend handles them gracefully.
+			const campaigns = (dashboard.recentCampaigns ?? []).map((c: Record<string, unknown>) => ({
+				id: c._id,
+				title: c.title,
+				type: c.type,
+				status: c.status,
+				totalActions: c.actionCount ?? 0,
+				verifiedActions: c.verifiedActionCount ?? 0,
+				updatedAt: typeof c.updatedAt === 'number' ? new Date(c.updatedAt as number).toISOString() : c.updatedAt
+			}));
+
+			const activeCampaignCount = campaigns.filter((c: { status: string }) => c.status === 'ACTIVE').length;
+
+			return {
+				// Verification funnel — Convex doesn't carry full funnel, use stats
+				funnel: {
+					imported: dashboard.stats?.supporters ?? 0,
+					postalResolved: 0,
+					identityVerified: 0,
+					districtVerified: 0
+				},
+				// Tier distribution — not in Convex yet
+				tiers: [0, 1, 2, 3, 4].map(tier => ({
+					tier,
+					label: ['New', 'Active', 'Established', 'Veteran', 'Pillar'][tier],
+					count: 0
+				})),
+				campaigns,
+				topCampaignId: (campaigns.find((c: { status: string }) => c.status === 'ACTIVE') || campaigns[0])?.id ?? null,
+				stats: {
+					supporters: dashboard.stats?.supporters ?? 0,
+					campaigns: dashboard.stats?.campaigns ?? 0,
+					templates: 0, // not tracked in Convex yet
+					activeCampaigns: activeCampaignCount
+				},
+				emailReach: {
+					subscribed: 0,
+					unsubscribed: 0,
+					bounced: 0,
+					complained: 0,
+					total: dashboard.stats?.supporters ?? 0
+				},
+				packet: null, // verification packet not in Convex
+				recentActivity: (dashboard.recentSupporters ?? []).map((s: Record<string, unknown>) => ({
+					type: 'signup' as const,
+					id: s._id,
+					label: (s.name as string) ?? 'Anonymous',
+					detail: (s.source as string) ?? 'organic',
+					verified: s.verified,
+					tier: 0,
+					timestamp: typeof s._creationTime === 'number'
+						? new Date(s._creationTime as number).toISOString()
+						: String(s._creationTime)
+				})),
+				endorsedTemplates: [],
+				growth: { thisWeek: 0, lastWeek: 0 },
+				billingEmail: dashboard.billingEmail ?? null,
+				onboardingState: {
+					hasDescription: dashboard.onboardingState?.hasDescription ?? false,
+					hasIssueDomains: dashboard.onboardingState?.hasIssueDomains ?? false,
+					hasSupporters: dashboard.onboardingState?.hasSupporters ?? false,
+					hasCampaigns: dashboard.onboardingState?.hasCampaigns ?? false,
+					hasTeam: dashboard.onboardingState?.hasTeam ?? false,
+					hasSentEmail: dashboard.onboardingState?.hasSentEmail ?? false,
+					postalResolvedCount: 0,
+					totalSupporters: dashboard.stats?.supporters ?? 0,
+					topCampaignId: (campaigns.find((c: { status: string }) => c.status === 'ACTIVE') || campaigns[0])?.id ?? null
+				},
+				onboardingComplete: dashboard.onboardingComplete ?? false,
+				followedReps: { count: 0, top: [] },
+				watchedBills: { count: 0, top: [] },
+				legislativeAlerts: []
+			};
+		} catch (error) {
+			console.error('[OrgDashboard] Convex failed, falling back to Prisma:', error);
+			// Fall through to Prisma below
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 
 	const [
 		// Verification funnel counts
