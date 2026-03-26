@@ -1,7 +1,7 @@
 import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { requireAuth, requireOrgRole, loadOrg } from "./lib/authHelpers";
-import { Doc, Id } from "./_generated/dataModel";
+import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
+import type { Doc, Id } from "./_generated/dataModel";
 
 // =============================================================================
 // QUERIES

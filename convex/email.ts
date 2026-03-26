@@ -7,8 +7,8 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { requireOrgRole } from "./lib/authHelpers";
-import { decryptSupporterEmail } from "./lib/pii";
+import { requireOrgRole } from "./_authHelpers";
+import { decryptSupporterEmail } from "./_pii";
 
 // =============================================================================
 // EMAIL BLASTS — Queries, Mutations, Actions

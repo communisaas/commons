@@ -8,7 +8,7 @@
 import { query, mutation, internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { requireAuth, requireOrgRole } from "./lib/authHelpers";
+import { requireAuth, requireOrgRole } from "./_authHelpers";
 
 // Plan limits — mirrored from src/lib/server/billing/plans.ts
 const PLANS: Record<string, { priceCents: number; maxSeats: number; maxTemplatesMonth: number }> = {

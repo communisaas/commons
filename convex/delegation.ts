@@ -13,9 +13,9 @@
 import { query, mutation, action, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { requireAuth } from "./lib/authHelpers";
-import { encryptPii, decryptPii } from "./lib/pii";
-import type { EncryptedPii } from "./lib/pii";
+import { requireAuth } from "./_authHelpers";
+import { encryptPii, decryptPii } from "./_pii";
+import type { EncryptedPii } from "./_pii";
 import type { Id } from "./_generated/dataModel";
 
 const MAX_ACTIVE_GRANTS = 3;

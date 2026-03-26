@@ -7,7 +7,7 @@
 
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { requireOrgRole, loadOrg } from "./lib/authHelpers";
+import { requireOrgRole, loadOrg } from "./_authHelpers";
 
 // =============================================================================
 // QUERIES

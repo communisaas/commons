@@ -1,7 +1,7 @@
 import { query, mutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
-import { tryDecryptPii, type EncryptedPii } from "./lib/pii";
-import { requireAuth } from "./lib/authHelpers";
+import { tryDecryptPii, type EncryptedPii } from "./_pii";
+import { requireAuth } from "./_authHelpers";
 
 // =============================================================================
 // USERS — Queries & Mutations

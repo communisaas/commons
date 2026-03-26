@@ -10,12 +10,12 @@ import { query, mutation, action, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { requireOrgRole } from "./lib/authHelpers";
+import { requireOrgRole } from "./_authHelpers";
 import {
   decryptSupporterEmail,
   encryptSupporterEmail,
   computeEmailHash,
-} from "./lib/pii";
+} from "./_pii";
 
 // =============================================================================
 // QUERIES (deterministic PII decryption — safe)
