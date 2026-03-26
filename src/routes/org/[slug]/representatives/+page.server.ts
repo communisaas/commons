@@ -1,6 +1,12 @@
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { FEATURES } from '$lib/config/features';
+
+// Convex dual-stack imports (primary data source when available)
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+
 import type { PageServerLoad } from './$types';
 
 const PAGE_SIZE = 20;
@@ -11,6 +17,47 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 	}
 
 	const { org } = await parent();
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const [followResult, discover] = await Promise.all([
+				serverQuery(api.legislation.listOrgDmFollows, { slug: org.slug, limit: PAGE_SIZE }),
+				serverQuery(api.legislation.discoverDms, { slug: org.slug, limit: 12 })
+			]);
+
+			console.log(`[Representatives] Convex: loaded ${followResult.followed.length} follows, ${discover.length} discover for ${org.slug}`);
+
+			return {
+				followed: followResult.followed.map((f: Record<string, unknown>) => ({
+					id: f._id,
+					reason: f.reason,
+					alertsEnabled: f.alertsEnabled,
+					followedAt: typeof f.followedAt === 'number'
+						? new Date(f.followedAt as number).toISOString()
+						: String(f.followedAt),
+					decisionMaker: f.decisionMaker
+						? {
+								...(f.decisionMaker as Record<string, unknown>),
+								id: (f.decisionMaker as Record<string, unknown>)._id
+							}
+						: null
+				})),
+				followedCount: followResult.followedCount,
+				hasMore: followResult.hasMore,
+				nextCursor: followResult.nextCursor,
+				discover: discover.map((dm: Record<string, unknown>) => ({
+					...dm,
+					id: dm._id
+				}))
+			};
+		} catch (error) {
+			console.error('[Representatives] Convex failed, falling back to Prisma:', error);
+			// Fall through to Prisma below
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 
 	const cursor = url.searchParams.get('cursor') || '';
 
