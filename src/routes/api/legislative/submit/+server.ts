@@ -1,5 +1,5 @@
 // CONVEX: Keep SvelteKit — blockchain ZK proof submission (handleSubmission),
-// billing plan gate (getPlanForOrg), nullifier uniqueness, CWC delivery pipeline.
+// billing plan gate (getUserOrgPlan), nullifier uniqueness, CWC delivery pipeline.
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import {
@@ -7,27 +7,14 @@ import {
 	type SubmissionRequest
 } from '$lib/core/legislative/submission';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { getPlanForOrg } from '$lib/server/billing/plans';
 
 /**
  * Legislative Submit Endpoint
  *
  * Accepts ZK proofs from browser and submits them to the blockchain for verification.
  * After verification succeeds, delivers the message to CWC (wired in submission handler).
- *
- * Flow:
- * 1. Gate behind FEATURES.CONGRESSIONAL
- * 2. Authenticate user
- * 3. Validate billing plan (Starter+)
- * 4. Validate proof structure
- * 5. Check nullifier uniqueness (prevent double-actions)
- * 6. Store submission in Postgres
- * 7. Queue blockchain submission (async)
- * 8. After blockchain verification, deliver to CWC (async, fire-and-forget)
- *
- * Rate limit: 3 req/hour per user (configured in ROUTE_RATE_LIMITS)
  */
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!FEATURES.CONGRESSIONAL) {
@@ -74,26 +61,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		// Billing gate: requires Starter plan or above
-		const membership = await db.orgMembership.findFirst({
-			where: { userId: session.userId },
-			select: {
-				org: {
-					select: {
-						subscription: { select: { plan: true } }
-					}
-				}
-			}
-		});
+		const orgPlan = await serverQuery(api.organizations.getUserOrgPlan, {});
 
-		if (!membership) {
+		if (!orgPlan) {
 			return json(
 				{ error: 'Legislative delivery requires an organization membership.' },
 				{ status: 403 }
 			);
 		}
 
-		const plan = getPlanForOrg(membership.org.subscription);
-		if (plan.slug === 'free') {
+		if (orgPlan.plan === 'free') {
 			return json(
 				{ error: 'Legislative delivery requires a Starter plan or above.' },
 				{ status: 403 }

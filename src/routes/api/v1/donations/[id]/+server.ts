@@ -11,6 +11,12 @@ import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
+function maskEmail(email: string): string {
+	const [local, domain] = email.split('@');
+	if (!domain) return '***';
+	return `${local.charAt(0)}***@${domain}`;
+}
+
 export const GET: RequestHandler = async ({ params, request }) => {
 	if (!FEATURES.FUNDRAISING) return apiError('NOT_FOUND', 'Not found', 404);
 	requirePublicApi();

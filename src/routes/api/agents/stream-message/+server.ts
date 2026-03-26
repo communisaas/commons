@@ -92,25 +92,16 @@ export const POST: RequestHandler = async (event) => {
 
 	const traceId = crypto.randomUUID();
 
-	traceRequest(traceId, 'message-generation', {
-		metadata: {
-			subjectLength: body.subject_line.length,
-			coreMessageLength: body.core_message.length,
-			topicCount: body.topics?.length || 0,
-			topics: body.topics || [],
-			decisionMakerCount: body.decision_makers?.length || 0,
-			hasVoiceSample: !!body.voice_sample,
-			hasRawInput: !!body.raw_input,
-			geographicScopeType: body.geographic_scope?.type || null
-		},
-		content: {
-			subjectLine: body.subject_line,
-			coreMessage: body.core_message,
-			voiceSample: body.voice_sample,
-			rawInput: body.raw_input,
-			decisionMakerNames: body.decision_makers?.map((dm) => dm.name).filter(Boolean)
-		}
-	}, { userId: session.userId });
+	console.log('[stream-message] trace:', {
+		traceId,
+		userId: session.userId,
+		subjectLength: body.subject_line.length,
+		coreMessageLength: body.core_message.length,
+		topicCount: body.topics?.length || 0,
+		decisionMakerCount: body.decision_makers?.length || 0,
+		hasVoiceSample: !!body.voice_sample,
+		geographicScopeType: body.geographic_scope?.type || null
+	});
 
 	// Prompt injection detection
 	// Content includes AI-refined text (core_message, voice_sample) which can contain
@@ -194,11 +185,12 @@ export const POST: RequestHandler = async (event) => {
 					console.warn('[stream-message] Source cache lookup failed:', cacheErr);
 				}
 
-				traceEvent(traceId, 'message-generation', 'source-cache', {
+				console.log('[stream-message] source-cache:', {
+					traceId,
 					cacheHit,
 					templateId: body.template_id,
 					sourceCount: verifiedSources?.length ?? 0
-				}, { userId: session.userId });
+				});
 			}
 
 			const result = await generateMessage({

@@ -23,28 +23,6 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
-			const result = await serverQuery(api.legislation.listOrgScorecards, { slug: params.slug });
-			return json(result);
-	}
-
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
-
-	// Parse query params
-	const sortParam = url.searchParams.get('sort') ?? 'score';
-	const validSorts = ['score', 'name', 'alignment'];
-	if (!validSorts.includes(sortParam)) {
-		throw error(400, `Invalid sort. Must be one of: ${validSorts.join(', ')}`);
-	}
-
-	const minReports = Math.max(
-		1,
-		parseInt(url.searchParams.get('min_reports') ?? '1', 10) || 1
-	);
-
-	const result = await computeScorecards(org.id, {
-		sortBy: sortParam as 'score' | 'name' | 'alignment',
-		minReports
-	});
-
+	const result = await serverQuery(api.legislation.listOrgScorecards, { slug: params.slug });
 	return json(result);
 };

@@ -1,7 +1,6 @@
-// CONVEX: Keep SvelteKit — aggregation queries (count, groupBy) not expressible
-// as single Convex query. Rate limited (IP-based). Cache-Control headers.
+// CONVEX: Keep SvelteKit — rate limiting (IP-based), Cache-Control headers
 import { json } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import type { RequestHandler } from './$types';
@@ -15,22 +14,12 @@ export const GET: RequestHandler = async ({ params, getClientAddress }) => {
 		return json({ error: 'Too many requests' }, { status: 429 });
 	}
 
-	const [verifiedCount, totalCount, districtCounts] = await Promise.all([
-		db.campaignAction.count({
-			where: { campaignId: params.slug, verified: true }
-		}),
-		db.campaignAction.count({
-			where: { campaignId: params.slug }
-		}),
-		db.campaignAction.groupBy({
-			by: ['districtHash'],
-			where: { campaignId: params.slug, verified: true, districtHash: { not: null } },
-			_count: true
-		})
-	]);
+	const stats = await serverQuery(api.campaigns.getStats, {
+		campaignId: params.slug as any
+	});
 
 	return json(
-		{ verifiedActions: verifiedCount, totalActions: totalCount, uniqueDistricts: districtCounts.length },
+		stats ?? { verifiedActions: 0, totalActions: 0, uniqueDistricts: 0 },
 		{ headers: { 'Cache-Control': 'public, max-age=10' } }
 	);
 };

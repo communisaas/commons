@@ -4,6 +4,13 @@ import type { PageServerLoad, Actions } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
+function requireRole(role: string, required: string): void {
+	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
+	if (hierarchy.indexOf(role) < hierarchy.indexOf(required)) {
+		throw new Error(`Role '${required}' required, got '${role}'`);
+	}
+}
+
 export const load: PageServerLoad = async ({ parent, url, params }) => {
 	const { membership } = await parent();
 	requireRole(membership.role, 'editor');
@@ -34,8 +41,8 @@ export const actions: Actions = {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/campaigns/new`);
 		}
-		const { membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
+		const ctx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
+		requireRole(ctx.membership.role, 'editor');
 
 		const formData = await request.formData();
 		const title = formData.get('title')?.toString().trim();

@@ -49,16 +49,13 @@ export const POST: RequestHandler = async (event) => {
 		return json({ error: 'Message is required' }, { status: 400 });
 	}
 
-	traceRequest(traceId, 'subject-line', {
-		metadata: {
-			messageLength: body.message.length,
-			hasConversationContext: !!body.conversationContext,
-			turn: body.conversationContext ? 2 : 1
-		},
-		content: {
-			message: body.message
-		}
-	}, { userId: userContext.userId });
+	console.log('[generate-subject] trace:', {
+		traceId,
+		userId: userContext.userId,
+		messageLength: body.message.length,
+		hasConversationContext: !!body.conversationContext,
+		turn: body.conversationContext ? 2 : 1
+	});
 
 	// Prompt injection detection
 	const injectionCheck = await moderatePromptOnly(body.message);
@@ -82,14 +79,13 @@ export const POST: RequestHandler = async (event) => {
 
 		const durationMs = Date.now() - startTime;
 
-		traceEvent(traceId, 'subject-line', 'generation', {
-			subject_line: result.data.subject_line,
-			core_message: result.data.core_message,
-			topics: result.data.topics,
-			url_slug: result.data.url_slug,
-			needs_clarification: result.data.needs_clarification,
-			turn: body.conversationContext ? 2 : 1
-		}, { userId: userContext.userId, success: true, durationMs });
+		console.log('[generate-subject] generation:', {
+			traceId,
+			hasSubjectLine: !!result.data.subject_line,
+			needsClarification: result.data.needs_clarification,
+			turn: body.conversationContext ? 2 : 1,
+			durationMs
+		});
 
 		logLLMOperation('subject-line', userContext, {
 			durationMs,

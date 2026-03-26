@@ -3,7 +3,7 @@
  */
 // CONVEX: Keep SvelteKit — uses getNetworkStats which aggregates across multiple server modules
 
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
@@ -24,12 +24,9 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	if (scopeErr) return scopeErr;
 
 	// Verify the requesting org is an active member
-	const membership = await db.orgNetworkMember.findFirst({
-		where: {
-			networkId: params.id,
-			orgId: auth.orgId,
-			status: 'active'
-		}
+	const membership = await serverQuery(api.networks.checkMembership, {
+		networkId: params.id as any,
+		orgId: auth.orgId as any
 	});
 
 	if (!membership) {

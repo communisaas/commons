@@ -1,63 +1,41 @@
-// CONVEX: Keep SvelteKit — SMS/Twilio integration, no Convex smsBlast table
+// CONVEX: Keep SvelteKit — SMS/Twilio integration
 import { error, redirect } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
-
 	if (!locals.user) throw redirect(302, '/auth/login');
 
-	const org = await db.organization.findUnique({
-		where: { slug: params.slug },
-		select: { id: true, name: true, slug: true }
+	const result = await serverQuery(api.sms.getBlast, {
+		slug: params.slug,
+		blastId: params.id as any
 	});
 
-	if (!org) throw error(404, 'Organization not found');
-
-	const membership = await db.orgMembership.findUnique({
-		where: { orgId_userId: { orgId: org.id, userId: locals.user.id } }
-	});
-
-	if (!membership) throw error(403, 'Not a member of this organization');
-
-	const blast = await db.smsBlast.findUnique({
-		where: { id: params.id },
-		include: {
-			messages: {
-				orderBy: { createdAt: 'desc' },
-				take: 20,
-				include: {
-					supporter: { select: { name: true } }
-				}
-			}
-		}
-	});
-
-	if (!blast || blast.orgId !== org.id) throw error(404, 'SMS campaign not found');
+	if (!result) throw error(404, 'SMS campaign not found');
 
 	return {
-		org: { name: org.name, slug: org.slug },
+		org: { name: params.slug, slug: params.slug },
 		blast: {
-			id: blast.id,
-			body: blast.body,
-			status: blast.status,
-			sentCount: blast.sentCount,
-			deliveredCount: blast.deliveredCount,
-			failedCount: blast.failedCount,
-			totalRecipients: blast.totalRecipients,
-			createdAt: blast.createdAt.toISOString(),
-			sentAt: blast.sentAt?.toISOString() ?? null
+			id: result.blast._id,
+			body: result.blast.body,
+			status: result.blast.status,
+			sentCount: result.blast.sentCount,
+			deliveredCount: result.blast.deliveredCount,
+			failedCount: result.blast.failedCount,
+			totalRecipients: result.blast.totalRecipients,
+			createdAt: new Date(result.blast._creationTime).toISOString(),
+			sentAt: result.blast.sentAt ? new Date(result.blast.sentAt).toISOString() : null
 		},
-		messages: blast.messages.map((m) => ({
-			id: m.id,
-			recipientName: m.supporter?.name ?? 'Unknown',
+		messages: result.messages.map((m) => ({
+			id: m._id,
+			recipientName: m.recipientName,
 			to: m.to,
 			status: m.status,
 			errorCode: m.errorCode,
-			createdAt: m.createdAt.toISOString()
+			createdAt: new Date(m._creationTime).toISOString()
 		}))
 	};
 };

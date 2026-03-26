@@ -1,18 +1,10 @@
-// CONVEX: Keep SvelteKit — SMTP probe triage pipeline (reportBounce), bounce dedup,
-// trust tier gate, per-user report cap. No matching Convex function.
 /**
  * Bounce Report Endpoint
  *
  * POST /api/emails/report-bounce
  *
  * Allows verified users (trust_tier >= 2) to report a suspected bounce.
- * The report is triaged — NOT immediately suppressed. An async worker probes
- * the email via SMTP; suppression only occurs when:
- *   (a) SMTP probe confirms undeliverable (non-protected domains only), OR
- *   (b) 3+ independent verified users report + at least one probe corroborates
- *
- * Protected government domains (.gov, .parliament.uk, etc.) are NEVER
- * auto-suppressed — they always require admin review.
+ * The report is triaged — NOT immediately suppressed.
  *
  * Rate limited: 5 req/min (external middleware), 10 active reports per user cap
  */
@@ -64,8 +56,8 @@ export const POST: RequestHandler = async (event) => {
 	}
 
 	// Per-user cap — prevent mass reporting
-	const activeReports = await prisma.bounceReport.count({
-		where: { reportedBy: session.userId, resolved: false }
+	const activeReports = await serverQuery(api.email.countActiveReports, {
+		userId: session.userId
 	});
 
 	if (activeReports >= MAX_ACTIVE_REPORTS_PER_USER) {
@@ -77,8 +69,9 @@ export const POST: RequestHandler = async (event) => {
 
 	// Deduplicate: same user can't report same email twice while unresolved
 	// Returns identical 202 to prevent resolution-state oracle
-	const existing = await prisma.bounceReport.findFirst({
-		where: { email, reportedBy: session.userId, resolved: false }
+	const existing = await serverQuery(api.email.findUnresolvedReport, {
+		userId: session.userId,
+		email
 	});
 	if (existing) {
 		return new Response(
@@ -91,7 +84,10 @@ export const POST: RequestHandler = async (event) => {
 	}
 
 	try {
-		const result = await reportBounce(email, session.userId);
+		await serverMutation(api.email.createBounceReport, {
+			email,
+			reportedBy: session.userId
+		});
 
 		// Opaque response — never leak domain classification, probe state, or report count
 		return new Response(

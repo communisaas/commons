@@ -1,14 +1,13 @@
-// CONVEX: Keep SvelteKit — complex 2-batch Prisma load (positions, debates, officials, engagement), BigInt transforms
 import type { PageServerLoad } from './$types';
 import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { parseRecipientConfig } from '$lib/types/template';
 import { getOfficials } from '$lib/core/shadow-atlas/client';
 import type { DistrictOfficialInput } from '$lib/utils/landscapeMerge';
 
 /**
- * Transform Prisma debate row into store-compatible AIResolutionData.
+ * Transform Convex debate row into store-compatible AIResolutionData.
  */
 function buildAIResolution(
 	dbDebate: {
@@ -16,7 +15,7 @@ function buildAIResolution(
 		ai_signature_count: number | null;
 		ai_panel_consensus: number | null;
 		resolution_method: string | null;
-		appeal_deadline: Date | null;
+		appeal_deadline: number | null;
 		governance_justification: string | null;
 		arguments: Array<{
 			argument_index: number;
@@ -68,7 +67,7 @@ function buildAIResolution(
 		source: source as AIResolutionData['source'],
 		minerCount,
 		minerEvaluations: rawMinerEvals,
-		appealDeadline: dbDebate.appeal_deadline?.toISOString(),
+		appealDeadline: dbDebate.appeal_deadline ? new Date(dbDebate.appeal_deadline).toISOString() : undefined,
 		hasAppeal: false,
 		governanceJustification: dbDebate.governance_justification ?? undefined
 	};
@@ -93,138 +92,100 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		existingPositionResult,
 		userRepResult
 	] = await Promise.all([
-		// District message aggregates
+		// District message aggregates via Convex
 		templateId
-			? prisma.message
-					.findMany({
-						where: { template_id: templateId, delivery_status: 'delivered' },
-						select: { district_hash: true }
-					})
-					.catch(() => [])
-			: Promise.resolve([]),
+			? serverQuery(api.templatePage.getMessageDistrictCounts, { templateId })
+					.catch(() => ({ districtCounts: {} as Record<string, number> }))
+			: Promise.resolve({ districtCounts: {} as Record<string, number> }),
 
-		// Total active states (via DecisionMaker)
-		prisma.decisionMaker
-			.findMany({
-				where: { active: true, type: 'legislator', jurisdictionLevel: 'federal' },
-				select: { jurisdiction: true },
-				distinct: ['jurisdiction']
-			})
-			.catch(() => []),
+		// Total active states via Convex
+		serverQuery(api.templatePage.getTotalStates, {})
+			.catch(() => ({ count: 50 })),
 
-		// Active debate with arguments
+		// Active debate with arguments via Convex
 		templateId
-			? prisma.debate
-					.findFirst({
-						where: { template_id: templateId },
-						orderBy: [{ status: 'asc' }, { created_at: 'desc' }],
-						include: { arguments: { orderBy: { weighted_score: 'desc' } } }
-					})
+			? serverQuery(api.debates.getFullByTemplateId, { templateId })
 					.catch(() => null)
 			: Promise.resolve(null),
 
-		// Position counts
+		// Position counts via Convex
 		templateId
-			? getPositionCounts(templateId).catch(() => ({ support: 0, oppose: 0, districts: 0 }))
+			? serverQuery(api.positions.getCounts, { templateId })
+					.catch(() => ({ support: 0, oppose: 0, districts: 0 }))
 			: Promise.resolve({ support: 0, oppose: 0, districts: 0 }),
 
-		// Existing user position
+		// Existing user position via Convex
 		templateId && identityCommitment
-			? prisma.positionRegistration
-					.findUnique({
-						where: {
-							template_id_identity_commitment: {
-								template_id: templateId,
-								identity_commitment: identityCommitment
-							}
-						},
-						select: { id: true, stance: true }
-					})
+			? serverQuery(api.positions.getExisting, { templateId, identityCommitment })
 					.catch(() => null)
 			: Promise.resolve(null),
 
-		// User representative (for district code)
+		// User representative (for district code) via Convex
 		userId && userDistrictHash
-			? prisma.userDMRelation
-					.findFirst({
-						where: { userId, isActive: true },
-						select: { decisionMaker: { select: { jurisdiction: true, district: true } } }
-					})
-					.then((dmRel) => {
-						if (dmRel?.decisionMaker?.jurisdiction && dmRel.decisionMaker.district) {
-							return `${dmRel.decisionMaker.jurisdiction}-${dmRel.decisionMaker.district}`;
-						}
-						return null;
-					})
+			? serverQuery(api.templatePage.getUserDmRelation, { userId })
 					.catch(() => null)
 			: Promise.resolve(null)
 	]);
 
 	// Process Batch 1 results
-	const districtCounts = (messagesResult as { district_hash: string | null }[]).reduce(
-		(acc, msg) => {
-			if (msg.district_hash) acc[msg.district_hash] = (acc[msg.district_hash] || 0) + 1;
-			return acc;
-		},
-		{} as Record<string, number>
-	);
+	const districtCounts = (messagesResult as { districtCounts: Record<string, number> }).districtCounts ?? {};
 	const totalDistricts = Object.keys(districtCounts).length;
-	const totalStates = totalStatesResult.length || 50;
+	const totalStates = (totalStatesResult as { count: number }).count || 50;
 	const userDistrictCount =
 		userDistrictHash && districtCounts[userDistrictHash]
 			? districtCounts[userDistrictHash]
 			: 0;
-	const userDistrictCode = userRepResult;
+	const userDistrictCode = userRepResult as string | null;
 	const positionCounts = positionCountsResult;
 
 	const existingPosition = existingPositionResult
-		? { stance: existingPositionResult.stance, registrationId: existingPositionResult.id }
+		? { stance: (existingPositionResult as any).stance, registrationId: (existingPositionResult as any)._id }
 		: null;
 
 	// Build debate object (same transform logic as original)
 	let debate = null;
 	if (debateResult) {
-		const dbDebate = debateResult;
+		const dbDebate = debateResult as any;
 		const aiResolution = dbDebate.ai_resolution ? buildAIResolution(dbDebate) : undefined;
 
 		debate = {
-			id: dbDebate.id,
-			debateIdOnchain: dbDebate.debate_id_onchain,
-			templateId: dbDebate.template_id,
-			propositionText: dbDebate.proposition_text,
-			propositionHash: dbDebate.proposition_hash,
-			actionDomain: dbDebate.action_domain,
-			deadline: dbDebate.deadline.toISOString(),
-			jurisdictionSize: dbDebate.jurisdiction_size,
+			id: dbDebate._id ?? dbDebate.id,
+			debateIdOnchain: dbDebate.debateIdOnchain ?? dbDebate.debate_id_onchain,
+			templateId: dbDebate.templateId ?? dbDebate.template_id,
+			propositionText: dbDebate.propositionText ?? dbDebate.proposition_text,
+			propositionHash: dbDebate.propositionHash ?? dbDebate.proposition_hash,
+			actionDomain: dbDebate.actionDomain ?? dbDebate.action_domain,
+			deadline: typeof dbDebate.deadline === 'number' ? new Date(dbDebate.deadline).toISOString() : dbDebate.deadline,
+			jurisdictionSize: dbDebate.jurisdictionSize ?? dbDebate.jurisdiction_size,
 			status: dbDebate.status as
 				| 'active'
 				| 'resolving'
 				| 'resolved'
 				| 'awaiting_governance'
 				| 'under_appeal',
-			argumentCount: dbDebate.argument_count,
-			uniqueParticipants: dbDebate.unique_participants,
-			totalStake: dbDebate.total_stake.toString(),
-			winningArgumentIndex: dbDebate.winning_argument_index,
-			winningStance: dbDebate.winning_stance,
-			resolvedAt: dbDebate.resolved_at?.toISOString(),
+			argumentCount: dbDebate.argumentCount ?? dbDebate.argument_count,
+			uniqueParticipants: dbDebate.uniqueParticipants ?? dbDebate.unique_participants,
+			totalStake: String(dbDebate.totalStake ?? dbDebate.total_stake),
+			winningArgumentIndex: dbDebate.winningArgumentIndex ?? dbDebate.winning_argument_index,
+			winningStance: dbDebate.winningStance ?? dbDebate.winning_stance,
+			resolvedAt: dbDebate.resolvedAt ? new Date(dbDebate.resolvedAt).toISOString() : (dbDebate.resolved_at?.toISOString?.() ?? null),
 			aiResolution,
-			arguments: dbDebate.arguments.map((arg) => ({
-				id: arg.id,
-				argumentIndex: arg.argument_index,
+			arguments: (dbDebate.arguments ?? []).map((arg: any) => ({
+				id: arg._id ?? arg.id,
+				argumentIndex: arg.argumentIndex ?? arg.argument_index,
 				stance: arg.stance,
 				body: arg.body,
-				amendmentText: arg.amendment_text,
-				stakeAmount: arg.stake_amount.toString(),
-				engagementTier: arg.engagement_tier,
-				weightedScore: arg.weighted_score.toString(),
-				totalStake: arg.total_stake.toString(),
-				coSignCount: arg.co_sign_count,
-				createdAt: arg.created_at.toISOString(),
-				aiScore: arg.ai_scores as Record<string, number> | undefined,
-				weightedAIScore: arg.ai_weighted ?? undefined,
-				finalScore: arg.final_score ?? undefined,
-				modelAgreement: arg.model_agreement ?? undefined
+				amendmentText: arg.amendmentText ?? arg.amendment_text,
+				stakeAmount: String(arg.stakeAmount ?? arg.stake_amount),
+				engagementTier: arg.engagementTier ?? arg.engagement_tier,
+				weightedScore: String(arg.weightedScore ?? arg.weighted_score),
+				totalStake: String(arg.totalStake ?? arg.total_stake),
+				coSignCount: arg.coSignCount ?? arg.co_sign_count,
+				createdAt: typeof arg.createdAt === 'number' ? new Date(arg.createdAt).toISOString() : (arg.created_at?.toISOString?.() ?? new Date(arg._creationTime ?? 0).toISOString()),
+				aiScore: (arg.aiScores ?? arg.ai_scores) as Record<string, number> | undefined,
+				weightedAIScore: arg.aiWeighted ?? arg.ai_weighted ?? undefined,
+				finalScore: arg.finalScore ?? arg.final_score ?? undefined,
+				modelAgreement: arg.modelAgreement ?? arg.model_agreement ?? undefined
 			}))
 		};
 	}
@@ -232,15 +193,11 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 	// Batch 2: Queries depending on Batch 1 results
 	const [deliveredRecipients, districtOfficials, engagementByDistrict] = await Promise.all([
 		existingPosition
-			? prisma.positionDelivery
-					.findMany({
-						where: {
-							registration_id: existingPosition.registrationId,
-							delivery_method: 'email'
-						},
-						select: { recipient_name: true, recipient_key: true }
+			? serverQuery(api.positions.getDeliveries, {
+						registrationId: existingPosition.registrationId,
+						deliveryMethod: 'email'
 					})
-					.then((deliveries) => deliveries.map((d) => d.recipient_key ?? d.recipient_name))
+					.then((deliveries: any[]) => deliveries.map((d) => d.recipientKey ?? d.recipientName))
 					.catch(() => [])
 			: Promise.resolve([]),
 
@@ -265,9 +222,12 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 					.catch(() => [])
 			: Promise.resolve([]),
 
-		// Engagement by district (coordination visibility)
+		// Engagement by district (coordination visibility) via Convex
 		templateId
-			? getEngagementByDistrict(templateId, userDistrictCode).catch(() => null)
+			? serverQuery(api.positions.getEngagementByDistrict, {
+						templateId,
+						userDistrictCode: userDistrictCode ?? undefined
+					}).catch(() => null)
 			: Promise.resolve(null)
 	]);
 

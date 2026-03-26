@@ -3,8 +3,6 @@ import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
 
 /**
  * POST /api/debates/[debateId]/settle

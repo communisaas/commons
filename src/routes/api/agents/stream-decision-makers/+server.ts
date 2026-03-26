@@ -89,24 +89,16 @@ export const POST: RequestHandler = async (event) => {
 	const userId = session.userId;
 	const traceId = crypto.randomUUID();
 
-	traceRequest(traceId, 'decision-makers', {
-		metadata: {
-			subjectLength: subject_line.length,
-			coreMessageLength: core_message.length,
-			topicCount: topics.length,
-			topics,
-			hasVoiceSample: !!voice_sample,
-			hasAudienceGuidance: !!audience_guidance,
-			targetType: body.target_type || 'local_government',
-			targetEntity: body.target_entity || null
-		},
-		content: {
-			subjectLine: subject_line,
-			coreMessage: core_message,
-			voiceSample: voice_sample,
-			audienceGuidance: audience_guidance
-		}
-	}, { userId });
+	console.log('[stream-decision-makers] trace:', {
+		traceId,
+		userId,
+		subjectLength: subject_line.length,
+		coreMessageLength: core_message.length,
+		topicCount: topics.length,
+		hasVoiceSample: !!voice_sample,
+		hasAudienceGuidance: !!audience_guidance,
+		targetType: body.target_type || 'local_government'
+	});
 
 	// Prompt injection detection
 	// NOTE: core_message is AI-refined (from subject-line agent), not raw user input.
@@ -232,25 +224,13 @@ export const POST: RequestHandler = async (event) => {
 			});
 
 			// Trace resolution outcome — the data SSE streams vanish after delivery
-			traceEvent(traceId, 'decision-makers', 'result', {
-				decisionMakers: result.decisionMakers.map(dm => ({
-					name: dm.name,
-					title: dm.title,
-					organization: dm.organization,
-					email: dm.email || null,
-					emailGrounded: dm.emailGrounded ?? null,
-					emailSource: dm.emailSource || null,
-					emailVerified: dm.emailVerified ?? null,
-					discovered: dm.discovered || false,
-					source: dm.source || null,
-					reasoning: dm.reasoning?.slice(0, 300) || null,
-					contactNotes: dm.contactNotes || null,
-				})),
+			console.log('[stream-decision-makers] result:', {
+				traceId,
+				contactable: result.decisionMakers.length,
 				droppedEmailless: (result.metadata?.droppedEmailless as number) || 0,
 				provider: result.provider,
 				latencyMs: result.latencyMs,
-				metadata: result.metadata || null,
-			}, { userId, success: true, durationMs: Date.now() - startTime });
+			});
 		} catch (error) {
 			console.error('[stream-decision-makers] Resolution failed:', error);
 			emitter.error(error instanceof Error ? error.message : 'Resolution failed');

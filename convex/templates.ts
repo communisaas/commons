@@ -702,3 +702,240 @@ export const updateSourceCache = mutation({
     });
   },
 });
+
+/**
+ * List published templates missing embeddings (for backfill).
+ */
+export const listMissingEmbeddings = query({
+  args: {},
+  handler: async (ctx) => {
+    const templates = await ctx.db
+      .query("templates")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("isPublic"), true),
+          q.eq(q.field("status"), "published"),
+        ),
+      )
+      .collect();
+    // Filter to those without topic_embedding
+    return templates
+      .filter((t) => !(t as any).topicEmbedding)
+      .sort((a, b) => b._creationTime - a._creationTime)
+      .map((t) => ({
+        _id: t._id,
+        title: t.title,
+        description: t.description ?? null,
+        category: t.category ?? "General",
+        messageBody: t.messageBody,
+      }));
+  },
+});
+
+/**
+ * Update template embeddings (for backfill).
+ */
+export const updateEmbeddings = mutation({
+  args: {
+    templateId: v.id("templates"),
+    locationEmbedding: v.array(v.float64()),
+    topicEmbedding: v.array(v.float64()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.templateId, {
+      locationEmbedding: args.locationEmbedding,
+      topicEmbedding: args.topicEmbedding,
+      embeddingVersion: "v1",
+      embeddingsUpdatedAt: Date.now(),
+    } as any);
+  },
+});
+
+/**
+ * Find template by content hash (dedup check).
+ */
+export const findByContentHash = query({
+  args: { userId: v.string(), contentHash: v.string() },
+  handler: async (ctx, { userId, contentHash }) => {
+    const templates = await ctx.db
+      .query("templates")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("userId"), userId),
+          q.eq(q.field("contentHash"), contentHash),
+        ),
+      )
+      .first();
+    return templates;
+  },
+});
+
+/**
+ * Find template by slug (uniqueness check).
+ */
+export const findBySlug = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    return await ctx.db
+      .query("templates")
+      .withIndex("by_slug", (q) => q.eq("slug", slug))
+      .first();
+  },
+});
+
+/**
+ * Get user's org membership (for quota check).
+ */
+export const getUserOrgId = query({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    const membership = await ctx.db
+      .query("orgMemberships")
+      .filter((q) => q.eq(q.field("userId"), userId))
+      .first();
+    return membership ? { orgId: membership.orgId } : null;
+  },
+});
+
+/**
+ * Create a template (with quota check and geographic scope).
+ */
+export const createTemplate = mutation({
+  args: {
+    userId: v.string(),
+    title: v.string(),
+    slug: v.string(),
+    description: v.string(),
+    messageBody: v.string(),
+    preview: v.string(),
+    type: v.string(),
+    deliveryMethod: v.string(),
+    category: v.string(),
+    topics: v.array(v.string()),
+    sources: v.optional(v.any()),
+    researchLog: v.optional(v.any()),
+    contentHash: v.string(),
+    status: v.string(),
+    isPublic: v.boolean(),
+    deliveryConfig: v.optional(v.any()),
+    cwcConfig: v.optional(v.any()),
+    recipientConfig: v.optional(v.any()),
+    metrics: v.optional(v.any()),
+    consensusApproved: v.boolean(),
+    geographicScope: v.optional(v.any()),
+  },
+  handler: async (ctx, args) => {
+    // Check org quota
+    const membership = await ctx.db
+      .query("orgMemberships")
+      .filter((q) => q.eq(q.field("userId"), args.userId))
+      .first();
+
+    if (membership) {
+      const org = await ctx.db.get(membership.orgId);
+      if (org && (org as any).maxTemplatesMonth) {
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
+        const templates = await ctx.db
+          .query("templates")
+          .withIndex("by_orgId", (q) => q.eq("orgId", membership.orgId))
+          .filter((q) => q.gte(q.field("_creationTime"), startOfMonth.getTime()))
+          .collect();
+        if (templates.length >= (org as any).maxTemplatesMonth) {
+          throw new Error("TEMPLATE_QUOTA_EXCEEDED");
+        }
+      }
+    }
+
+    const templateId = await ctx.db.insert("templates", {
+      userId: args.userId as any,
+      orgId: membership?.orgId,
+      title: args.title,
+      slug: args.slug,
+      description: args.description,
+      messageBody: args.messageBody,
+      preview: args.preview,
+      type: args.type,
+      deliveryMethod: args.deliveryMethod,
+      category: args.category,
+      topics: args.topics,
+      sources: args.sources ?? [],
+      researchLog: args.researchLog ?? [],
+      contentHash: args.contentHash,
+      status: args.status,
+      isPublic: args.isPublic,
+      deliveryConfig: args.deliveryConfig ?? {},
+      cwcConfig: args.cwcConfig ?? {},
+      recipientConfig: args.recipientConfig ?? {},
+      metrics: args.metrics ?? {},
+      verificationStatus: args.consensusApproved ? "approved" : "pending",
+      countryCode: "US",
+      reputationApplied: false,
+      consensusApproved: args.consensusApproved,
+      verifiedSends: 0,
+      uniqueDistricts: 0,
+      updatedAt: Date.now(),
+    } as any);
+
+    // Create geographic scope if provided
+    if (args.geographicScope && args.geographicScope.type !== "international") {
+      const geo = args.geographicScope;
+      let countryCode = "US";
+      let regionCode: string | null = null;
+      let localityCode: string | null = null;
+      let scopeLevel = "country";
+      let displayText = "Nationwide";
+
+      if (geo.type === "nationwide") {
+        countryCode = geo.country;
+        displayText = geo.country;
+      } else if (geo.type === "subnational") {
+        countryCode = geo.country;
+        if (geo.subdivision) {
+          regionCode = geo.subdivision;
+          scopeLevel = "region";
+          displayText = geo.subdivision;
+        }
+        if (geo.locality) {
+          localityCode = geo.locality;
+          scopeLevel = "locality";
+          displayText = geo.locality + (geo.subdivision ? `, ${geo.subdivision}` : "");
+        }
+      }
+
+      await ctx.db.insert("templateScopes", {
+        templateId,
+        countryCode,
+        regionCode,
+        localityCode,
+        displayText,
+        scopeLevel,
+        confidence: 1.0,
+        extractionMethod: "gemini_inline",
+      } as any);
+    }
+
+    const template = await ctx.db.get(templateId);
+    return template;
+  },
+});
+
+/**
+ * Set CWC verification status on a template.
+ */
+export const setCwcVerification = mutation({
+  args: {
+    templateId: v.id("templates"),
+    verificationStatus: v.string(),
+    countryCode: v.string(),
+    reputationApplied: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.templateId, {
+      verificationStatus: args.verificationStatus,
+      countryCode: args.countryCode,
+      reputationApplied: args.reputationApplied,
+    } as any);
+  },
+});

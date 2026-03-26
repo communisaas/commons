@@ -7,9 +7,16 @@
 import { generateApiKey } from '$lib/core/security/api-key';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
-import { serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
+
+function requireRole(role: string, required: string): void {
+	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
+	if (hierarchy.indexOf(role) < hierarchy.indexOf(required)) {
+		throw new Error(`Role '${required}' required, got '${role}'`);
+	}
+}
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	requirePublicApi();
@@ -21,8 +28,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const { orgSlug, name, scopes } = body as { orgSlug?: string; name?: string; scopes?: string[] };
 	if (!orgSlug) return apiError('BAD_REQUEST', 'orgSlug is required', 400);
 
-	const { org, membership } = await loadOrgContext(orgSlug, locals.user.id);
-	requireRole(membership.role, 'editor');
+	const ctx = await serverQuery(api.organizations.getOrgContext, { slug: orgSlug });
+	requireRole(ctx.membership.role, 'editor');
 
 	const validScopes = ['read', 'write'];
 	const keyScopes = scopes?.filter((s) => validScopes.includes(s)) ?? ['read'];

@@ -823,3 +823,106 @@ export const getSnapshot = query({
     };
   },
 });
+
+/**
+ * Get campaign + org membership for debate creation flow.
+ */
+export const getCampaignForDebate = query({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const { userId } = await requireAuth(ctx);
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign) return null;
+
+    // Look up org membership
+    const membership = await ctx.db
+      .query("orgMemberships")
+      .withIndex("by_userId_orgId", (q) =>
+        q.eq("userId", userId).eq("orgId", campaign.orgId),
+      )
+      .first();
+
+    if (!membership) return null;
+
+    // Get org slug
+    const org = await ctx.db.get(campaign.orgId);
+
+    return {
+      _id: campaign._id,
+      orgId: campaign.orgId,
+      orgSlug: org?.slug ?? "",
+      templateId: campaign.templateId ?? null,
+      debateEnabled: campaign.debateEnabled,
+      debateId: campaign.debateId ?? null,
+      memberRole: membership.role,
+    };
+  },
+});
+
+/**
+ * List debates awaiting governance review — with arguments and template info.
+ */
+export const listAwaitingGovernance = query({
+  args: {},
+  handler: async (ctx) => {
+    const debates = await ctx.db
+      .query("debates")
+      .filter((q) => q.eq(q.field("status"), "awaiting_governance"))
+      .collect();
+
+    // Sort by updatedAt descending
+    debates.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+    return await Promise.all(
+      debates.map(async (d) => {
+        const args = await ctx.db
+          .query("debateArguments")
+          .withIndex("by_debateId", (idx) => idx.eq("debateId", d._id))
+          .collect();
+
+        args.sort((a, b) => (b.weightedScore ?? 0) - (a.weightedScore ?? 0));
+
+        let templateTitle = "Unknown Template";
+        let templateSlug = "";
+        if (d.templateId) {
+          const t = await ctx.db.get(d.templateId);
+          if (t) {
+            templateTitle = t.title;
+            templateSlug = t.slug ?? "";
+          }
+        }
+
+        return {
+          _id: d._id,
+          debateIdOnchain: d.debateIdOnchain,
+          templateId: d.templateId,
+          templateTitle,
+          templateSlug,
+          propositionText: d.propositionText,
+          actionDomain: d.actionDomain,
+          deadline: d.deadline,
+          totalStake: d.totalStake?.toString() ?? "0",
+          argumentCount: d.argumentCount,
+          uniqueParticipants: d.uniqueParticipants,
+          aiPanelConsensus: d.aiPanelConsensus ?? null,
+          updatedAt: d.updatedAt,
+          aiResolution: d.aiResolution ?? null,
+          aiSignatureCount: d.aiSignatureCount ?? null,
+          arguments: args.map((a) => ({
+            argumentIndex: a.argumentIndex,
+            stance: a.stance,
+            body: a.body,
+            amendmentText: a.amendmentText ?? null,
+            stakeAmount: a.stakeAmount?.toString() ?? "0",
+            weightedScore: a.weightedScore?.toString() ?? "0",
+            coSignCount: a.coSignCount,
+            aiScores: a.aiScores ?? null,
+            aiWeighted: a.aiWeighted ?? null,
+            finalScore: a.finalScore ?? null,
+            modelAgreement: a.modelAgreement ?? null,
+          })),
+        };
+      }),
+    );
+  },
+});

@@ -1,7 +1,7 @@
 // CONVEX: Keep SvelteKit — Shadow Atlas proxy (resolveAddress: self-hosted Nominatim geocoding
 // + R-tree district lookup), rate limiting (IP-based), address validation (zod).
 import { json } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
@@ -46,9 +46,8 @@ export const POST: RequestHandler = async ({ request, params, getClientAddress }
 	}
 
 	// Validate campaign exists (prevents blind address enumeration)
-	const campaign = await db.campaign.findFirst({
-		where: { id: params.slug, status: 'ACTIVE' },
-		select: { id: true }
+	const campaign = await serverQuery(api.campaigns.getPublicActive, {
+		campaignId: params.slug as any
 	});
 
 	if (!campaign) {

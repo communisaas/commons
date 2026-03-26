@@ -691,3 +691,42 @@ export const pickAbWinners = internalAction({
     return { checked: 0, picked: 0 };
   },
 });
+
+/**
+ * Count unresolved bounce reports for a user (per-user cap).
+ */
+export const countActiveReports = query({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    const reports = await ctx.db
+      .query("bounceReports")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("reportedBy"), userId),
+          q.eq(q.field("resolved"), false),
+        ),
+      )
+      .collect();
+    return reports.length;
+  },
+});
+
+/**
+ * Find unresolved bounce report for same user + email (dedup).
+ */
+export const findUnresolvedReport = query({
+  args: { userId: v.string(), email: v.string() },
+  handler: async (ctx, { userId, email }) => {
+    const report = await ctx.db
+      .query("bounceReports")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("reportedBy"), userId),
+          q.eq(q.field("email"), email),
+          q.eq(q.field("resolved"), false),
+        ),
+      )
+      .first();
+    return report ? { _id: report._id } : null;
+  },
+});

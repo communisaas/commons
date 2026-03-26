@@ -1,5 +1,5 @@
 /**
- * Position Count Endpoint — Power Landscape (Cycle 37)
+ * Position Count Endpoint — Power Landscape
  *
  * GET: Return aggregate position counts for a template.
  * Public endpoint — no authentication required.
@@ -8,6 +8,8 @@
 
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params }) => {
@@ -20,7 +22,7 @@ export const GET: RequestHandler = async ({ params }) => {
 			return json({ error: 'Missing templateId' }, { status: 400 });
 		}
 
-		const counts = await getPositionCounts(templateId);
+		const counts = await serverQuery(api.positions.getCounts, { templateId: templateId as any });
 
 		return json(counts);
 	} catch (err) {

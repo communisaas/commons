@@ -499,3 +499,66 @@ export const checkIn = mutation({
     await ctx.db.patch(args.eventId, patch);
   },
 });
+
+/**
+ * Public check-in (no org auth required — used by the unauthenticated checkin route).
+ * Finds RSVP by email hash, creates attendance record, increments counters.
+ */
+export const publicCheckIn = mutation({
+  args: {
+    eventId: v.id("events"),
+    emailHash: v.optional(v.string()),
+    verified: v.boolean(),
+    verificationMethod: v.optional(v.string()),
+    identityCommitment: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const event = await ctx.db.get(args.eventId);
+    if (!event) throw new Error("Event not found");
+
+    // Find RSVP by email hash (optional — walk-ins allowed)
+    let rsvp = null;
+    if (args.emailHash) {
+      rsvp = await ctx.db
+        .query("eventRsvps")
+        .withIndex("by_eventId_emailHash", (idx) =>
+          idx.eq("eventId", args.eventId).eq("emailHash", args.emailHash!)
+        )
+        .first();
+    }
+
+    // Dedup: if this RSVP already checked in, return early
+    if (rsvp?.checkedInAt) {
+      return {
+        attendeeCount: event.attendeeCount,
+        alreadyCheckedIn: true,
+      };
+    }
+
+    // Mark RSVP as checked in (if found)
+    if (rsvp) {
+      await ctx.db.patch(rsvp._id, {
+        checkedInAt: Date.now(),
+        attendanceVerified: args.verified,
+        attendanceVerificationMethod: args.verificationMethod,
+        attendanceIdentityCommitment: args.identityCommitment,
+        updatedAt: Date.now(),
+      });
+    }
+
+    // Increment event counters
+    const newCount = (event.attendeeCount ?? 0) + 1;
+    const countPatch: Record<string, unknown> = {
+      attendeeCount: newCount,
+    };
+    if (args.verified) {
+      countPatch.verifiedAttendees = (event.verifiedAttendees ?? 0) + 1;
+    }
+    await ctx.db.patch(args.eventId, countPatch);
+
+    return {
+      attendeeCount: newCount,
+      alreadyCheckedIn: false,
+    };
+  },
+});

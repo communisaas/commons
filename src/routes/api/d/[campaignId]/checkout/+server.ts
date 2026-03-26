@@ -5,7 +5,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation, serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { getStripe } from '$lib/server/billing/stripe';
 import { FEATURES } from '$lib/config/features';
@@ -54,17 +54,9 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 		throw error(400, 'Recurring interval must be one of: month, year, week');
 	}
 
-	// Fetch campaign
-	const campaign = await db.campaign.findUnique({
-		where: { id: params.campaignId },
-		select: {
-			id: true,
-			orgId: true,
-			title: true,
-			type: true,
-			status: true,
-			donationCurrency: true
-		}
+	// Fetch campaign via Convex
+	const campaign = await serverQuery(api.campaigns.getPublicAny, {
+		campaignId: params.campaignId as any
 	});
 
 	if (!campaign) throw error(404, 'Campaign not found');
@@ -81,65 +73,18 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 
 	const engagementTier = districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? 2 : postalCode ? 1 : 0;
 
-	// Find or create supporter
-	let supporterId: string | null = null;
-	if (campaign.orgId) {
-		const existing = await findSupporterByEmail(campaign.orgId, email);
-		if (existing) {
-			supporterId = existing.id;
-		} else {
-			// C-5: Encrypt email at rest (fail-closed — no empty-string poison pills)
-			const supId = crypto.randomUUID();
-			const [eHash, eEncRaw] = await Promise.all([
-				computeEmailHash(email.toLowerCase()),
-				encryptPii(email.toLowerCase(), `supporter:${supId}`)
-			]);
-			if (!eHash || !eEncRaw) throw error(500, 'Supporter email encryption failed');
-			const eEnc = JSON.stringify(eEncRaw);
-			const supporter = await db.supporter.create({
-				data: {
-					id: supId,
-					orgId: campaign.orgId,
-					name: name.trim(),
-					source: 'donation',
-					encrypted_email: eEnc,
-					email_hash: eHash
-				}
-			});
-			supporterId = supporter.id;
-		}
-	}
-
-	// Encrypt donation PII (fail-closed: match supporter path above)
-	const donationId = crypto.randomUUID();
-	const normalizedDonorEmail = email.toLowerCase();
-	const [donorEmailHash, donorEncEmail, donorEncName] = await Promise.all([
-		computeEmailHash(normalizedDonorEmail),
-		encryptPii(normalizedDonorEmail, `donation:${donationId}`),
-		encryptPii(name.trim(), `donation:${donationId}`, 'name')
-	]);
-	if (!donorEmailHash || !donorEncEmail) throw error(500, 'Donation PII encryption failed');
-
-	// Create donation record (pending)
-	const donation = await db.donation.create({
-		data: {
-			id: donationId,
-			campaignId: campaign.id,
-			orgId: campaign.orgId,
-			supporterId,
-			email: normalizedDonorEmail,
-			name: name.trim(),
-			email_hash: donorEmailHash,
-			encrypted_email: JSON.stringify(donorEncEmail),
-			encrypted_name: donorEncName ? JSON.stringify(donorEncName) : null,
-			amountCents,
-			currency: campaign.donationCurrency || 'usd',
-			recurring: Boolean(recurring),
-			recurringInterval: recurring ? (recurringInterval || 'month') : null,
-			districtHash: dHash,
-			engagementTier,
-			status: 'pending'
-		}
+	// Process donation through Convex action (handles supporter find-or-create, PII encryption, donation record)
+	const donationResult = await serverAction(api.donations.processCheckout, {
+		campaignId: params.campaignId as any,
+		email: email.toLowerCase(),
+		name: name.trim(),
+		amountCents,
+		currency: campaign.donationCurrency || 'usd',
+		recurring: Boolean(recurring),
+		recurringInterval: recurring ? (recurringInterval || 'month') : null,
+		districtHash: dHash,
+		engagementTier,
+		postalCode: postalCode || null
 	});
 
 	// Build Stripe Checkout Session
@@ -162,20 +107,20 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 		line_items: [{ price_data: priceData as Parameters<typeof stripe.checkout.sessions.create>[0]['line_items'][0]['price_data'], quantity: 1 }],
 		metadata: {
 			type: 'donation',
-			donationId: donation.id,
+			donationId: donationResult.donationId,
 			orgId: campaign.orgId || '',
-			campaignId: campaign.id
+			campaignId: params.campaignId
 		},
-		success_url: `${url.origin}/d/${params.campaignId}?success=true&donation=${donation.id}`,
+		success_url: `${url.origin}/d/${params.campaignId}?success=true&donation=${donationResult.donationId}`,
 		cancel_url: `${url.origin}/d/${params.campaignId}?canceled=true`,
 		customer_email: email.toLowerCase()
 	});
 
-	// Update donation with session ID
-	await db.donation.update({
-		where: { id: donation.id },
-		data: { stripeSessionId: session.id }
+	// Update donation with session ID via Convex
+	await serverMutation(api.donations.setStripeSessionId, {
+		donationId: donationResult.donationId as any,
+		stripeSessionId: session.id!
 	});
 
-	return json({ url: session.url, donationId: donation.id });
+	return json({ url: session.url, donationId: donationResult.donationId });
 };

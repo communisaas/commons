@@ -1,5 +1,3 @@
-// CONVEX: Keep SvelteKit — Stripe session creation (getStripe, stripe.checkout.sessions.create,
-// stripe.customers.create), plan validation, org billing context.
 /**
  * Create a Stripe Checkout Session for plan subscription.
  *
@@ -26,14 +24,13 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 	if (!orgSlug || !plan) throw error(400, 'orgSlug and plan required');
 	if (!PLANS[plan] || plan === 'free') throw error(400, 'Invalid plan');
 
-	const { org, membership } = await loadOrgContext(orgSlug, locals.user.id);
-	requireRole(membership.role, 'owner');
+	// Get org context + subscription + billing info via Convex (requires owner role)
+	const billing = await serverQuery(api.organizations.getBillingContext, { slug: orgSlug });
+	if (!billing) throw error(404, 'Organization not found or insufficient permissions');
 
 	// Prevent duplicate checkout for same plan or downgrade via checkout
-	// (downgrades should go through the Stripe Customer Portal instead)
-	const existing = await db.subscription.findUnique({ where: { orgId: org.id } });
-	if (existing && existing.status !== 'canceled') {
-		const currentIdx = PLAN_ORDER.indexOf(existing.plan as (typeof PLAN_ORDER)[number]);
+	if (billing.subscription && billing.subscription.status !== 'canceled') {
+		const currentIdx = PLAN_ORDER.indexOf(billing.subscription.plan as (typeof PLAN_ORDER)[number]);
 		const targetIdx = PLAN_ORDER.indexOf(plan as (typeof PLAN_ORDER)[number]);
 		if (targetIdx >= 0 && currentIdx >= 0 && targetIdx <= currentIdx) {
 			throw error(
@@ -53,17 +50,16 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 	}
 
 	// Find or create Stripe customer
-	const billing = await loadOrgBilling(org.id);
-	let customerId = billing.stripe_customer_id;
+	let customerId = billing.org.stripeCustomerId;
 	if (!customerId) {
 		const customer = await stripe.customers.create({
-			email: billing.billing_email ?? locals.user.email,
-			metadata: { orgId: org.id, orgSlug: org.slug }
+			email: billing.org.billingEmail ?? locals.user.email,
+			metadata: { orgId: billing.org._id, orgSlug: billing.org.slug }
 		});
 		customerId = customer.id;
-		await db.organization.update({
-			where: { id: org.id },
-			data: { stripe_customer_id: customerId }
+		await serverMutation(api.organizations.updateStripeCustomerId, {
+			orgId: billing.org._id,
+			stripeCustomerId: customerId
 		});
 	}
 
@@ -73,7 +69,7 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 		line_items: [{ price: planDef.stripePriceId, quantity: 1 }],
 		success_url: `${url.origin}/org/${orgSlug}/settings?billing=success`,
 		cancel_url: `${url.origin}/org/${orgSlug}/settings?billing=canceled`,
-		metadata: { orgId: org.id, plan }
+		metadata: { orgId: billing.org._id, plan }
 	});
 
 	return json({ url: session.url });

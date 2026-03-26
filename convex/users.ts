@@ -704,3 +704,94 @@ export const createCommunityFieldContribution = mutation({
     });
   },
 });
+
+// =============================================================================
+// ADMIN: SHADOW ATLAS RECONCILIATION
+// =============================================================================
+
+/**
+ * Count all shadow atlas registrations.
+ */
+export const countRegistrations = query({
+  args: {},
+  handler: async (ctx) => {
+    const regs = await ctx.db.query("shadowAtlasRegistrations").collect();
+    return regs.length;
+  },
+});
+
+/**
+ * List recent shadow atlas registrations (for spot-check reconciliation).
+ */
+export const listRecentRegistrations = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    const max = Math.min(limit ?? 50, 100);
+    const regs = await ctx.db
+      .query("shadowAtlasRegistrations")
+      .order("desc")
+      .take(max);
+    return regs.map((r) => ({
+      _id: r._id,
+      userId: r.userId,
+      leafIndex: r.leafIndex,
+      merkleRoot: r.merkleRoot,
+    }));
+  },
+});
+
+/**
+ * Upsert a shadow atlas registration (for retry queue processing).
+ */
+export const upsertRegistration = mutation({
+  args: {
+    userId: v.string(),
+    identityCommitment: v.string(),
+    leafIndex: v.number(),
+    merkleRoot: v.string(),
+    merklePath: v.any(),
+    isReplace: v.boolean(),
+    verificationMethod: v.string(),
+    queuedAt: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("shadowAtlasRegistrations")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId as any))
+      .first();
+
+    if (args.isReplace && existing) {
+      await ctx.db.patch(existing._id, {
+        identityCommitment: args.identityCommitment,
+        leafIndex: args.leafIndex,
+        merkleRoot: args.merkleRoot,
+        merklePath: args.merklePath,
+        updatedAt: Date.now(),
+      });
+    } else if (existing) {
+      await ctx.db.patch(existing._id, {
+        identityCommitment: args.identityCommitment,
+        leafIndex: args.leafIndex,
+        merkleRoot: args.merkleRoot,
+        merklePath: args.merklePath,
+        updatedAt: Date.now(),
+      });
+    } else {
+      await ctx.db.insert("shadowAtlasRegistrations", {
+        userId: args.userId as any,
+        congressionalDistrict: "three-tree",
+        identityCommitment: args.identityCommitment,
+        leafIndex: args.leafIndex,
+        merkleRoot: args.merkleRoot,
+        merklePath: args.merklePath,
+        credentialType: "three-tree",
+        verificationMethod: args.verificationMethod,
+        verificationId: args.userId,
+        verificationTimestamp: new Date(args.queuedAt).getTime(),
+        registrationStatus: "registered",
+        expiresAt: Date.now() + 180 * 24 * 60 * 60 * 1000,
+        updatedAt: Date.now(),
+      });
+    }
+  },
+});

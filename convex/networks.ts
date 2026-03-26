@@ -460,3 +460,18 @@ export const remove = mutation({
     return { deleted: true };
   },
 });
+
+/**
+ * Check if an org is an active member of a network (for public API stats).
+ */
+export const checkMembership = query({
+  args: { networkId: v.id("orgNetworks"), orgId: v.id("organizations") },
+  handler: async (ctx, { networkId, orgId }) => {
+    const member = await ctx.db
+      .query("orgNetworkMembers")
+      .withIndex("by_networkId", (idx) => idx.eq("networkId", networkId))
+      .filter((q) => q.and(q.eq(q.field("orgId"), orgId), q.eq(q.field("status"), "active")))
+      .first();
+    return member ? { _id: member._id } : null;
+  },
+});

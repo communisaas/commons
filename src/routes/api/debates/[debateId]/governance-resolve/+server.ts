@@ -5,8 +5,6 @@ import { api } from '$lib/convex';
 import { env } from '$env/dynamic/private';
 import { verifyCronSecret } from '$lib/server/cron-auth';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
 
 /**
  * POST /api/debates/[debateId]/governance-resolve

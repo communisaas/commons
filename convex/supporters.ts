@@ -789,3 +789,130 @@ export const unsubscribe = mutation({
     return { success: true };
   },
 });
+
+/**
+ * Ensure tags exist for an org — returns a map of tag name → tag ID.
+ * Creates any missing tags.
+ */
+export const ensureTags = mutation({
+  args: { slug: v.string(), tagNames: v.array(v.string()) },
+  handler: async (ctx, { slug, tagNames }) => {
+    const { org } = await requireOrgRole(ctx, slug, "editor");
+
+    const tagMap: Record<string, string> = {};
+    for (const name of tagNames) {
+      // Check existing
+      const existing = await ctx.db
+        .query("tags")
+        .withIndex("by_orgId_name", (idx) => idx.eq("orgId", org._id).eq("name", name))
+        .first();
+      if (existing) {
+        tagMap[name] = existing._id;
+      } else {
+        const id = await ctx.db.insert("tags", { orgId: org._id, name });
+        tagMap[name] = id;
+      }
+    }
+    return { tagMap, tagsCreated: tagNames.length - Object.keys(tagMap).length };
+  },
+});
+
+/**
+ * Import a batch of supporters (CSV import).
+ * Returns counts of imported, updated, skipped.
+ */
+export const importBatch = mutation({
+  args: {
+    slug: v.string(),
+    supporters: v.array(
+      v.object({
+        encryptedEmail: v.string(),
+        emailHash: v.string(),
+        name: v.optional(v.string()),
+        postalCode: v.optional(v.string()),
+        phone: v.optional(v.string()),
+        country: v.optional(v.string()),
+        emailStatus: v.string(),
+        smsStatus: v.string(),
+        tagIds: v.array(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, { slug, supporters }) => {
+    const { org } = await requireOrgRole(ctx, slug, "editor");
+    let imported = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const s of supporters) {
+      try {
+        // Check if supporter exists by email hash
+        const existing = await ctx.db
+          .query("supporters")
+          .withIndex("by_orgId_emailHash", (idx) =>
+            idx.eq("orgId", org._id).eq("emailHash", s.emailHash),
+          )
+          .first();
+
+        if (existing) {
+          // Update: only fill in null fields
+          const patch: Record<string, unknown> = {};
+          if (s.name && !existing.name) patch.name = s.name;
+          if (s.postalCode && !existing.postalCode) patch.postalCode = s.postalCode;
+          if (s.phone && !existing.phone) patch.phone = s.phone;
+          if (s.country && !existing.country) patch.country = s.country;
+
+          if (Object.keys(patch).length > 0) {
+            patch.updatedAt = Date.now();
+            await ctx.db.patch(existing._id, patch);
+          }
+
+          // Add tags (skip duplicates)
+          for (const tagId of s.tagIds) {
+            const existingTag = await ctx.db
+              .query("supporterTags")
+              .withIndex("by_supporterId_tagId", (idx) =>
+                idx.eq("supporterId", existing._id).eq("tagId", tagId as any),
+              )
+              .first();
+            if (!existingTag) {
+              await ctx.db.insert("supporterTags", {
+                supporterId: existing._id,
+                tagId: tagId as any,
+              });
+            }
+          }
+          updated++;
+        } else {
+          // Create new supporter
+          const id = await ctx.db.insert("supporters", {
+            orgId: org._id,
+            name: s.name ?? null,
+            postalCode: s.postalCode ?? null,
+            phone: s.phone ?? null,
+            country: s.country ?? null,
+            emailStatus: s.emailStatus,
+            smsStatus: s.smsStatus,
+            source: "csv",
+            encryptedEmail: s.encryptedEmail,
+            emailHash: s.emailHash,
+            updatedAt: Date.now(),
+          });
+
+          // Add tags
+          for (const tagId of s.tagIds) {
+            await ctx.db.insert("supporterTags", {
+              supporterId: id,
+              tagId: tagId as any,
+            });
+          }
+          imported++;
+        }
+      } catch {
+        skipped++;
+      }
+    }
+
+    return { imported, updated, skipped };
+  },
+});

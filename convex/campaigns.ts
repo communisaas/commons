@@ -943,3 +943,148 @@ export const getDebateId = query({
     return { debateId: campaign.debateId ?? null };
   },
 });
+
+/**
+ * Get campaign for org detail page — includes template list and debate data.
+ * Auth: org member.
+ */
+export const getForOrgPage = query({
+  args: { slug: v.string(), campaignId: v.id("campaigns") },
+  handler: async (ctx, { slug, campaignId }) => {
+    const { org, membership } = await requireOrgRole(ctx, slug, "member");
+
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign || campaign.orgId !== org._id) return null;
+
+    // Get org templates
+    const templates = await ctx.db
+      .query("templates")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .collect();
+
+    const sortedTemplates = templates
+      .map((t) => ({ _id: t._id, title: t.title }))
+      .sort((a, b) => a.title.localeCompare(b.title));
+
+    // Resolve current template title
+    let templateTitle: string | null = null;
+    if (campaign.templateId) {
+      const tmpl = sortedTemplates.find((t) => t._id === campaign.templateId);
+      templateTitle = tmpl?.title ?? null;
+    }
+
+    // Load debate data if campaign has a linked debate
+    let debate = null;
+    if (campaign.debateId) {
+      const dbDebate = await ctx.db.get(campaign.debateId);
+      if (dbDebate) {
+        const args = await ctx.db
+          .query("debateArguments")
+          .withIndex("by_debateId", (idx) => idx.eq("debateId", dbDebate._id))
+          .collect();
+
+        const winningArg =
+          dbDebate.winningArgumentIndex != null
+            ? args.find((a) => a.argumentIndex === dbDebate.winningArgumentIndex)
+            : null;
+
+        // Get template slug for debate
+        let debateTemplateSlug = "";
+        if (dbDebate.templateId) {
+          const t = await ctx.db.get(dbDebate.templateId);
+          if (t) debateTemplateSlug = t.slug ?? "";
+        }
+
+        debate = {
+          _id: dbDebate._id,
+          propositionText: dbDebate.propositionText,
+          status: dbDebate.status,
+          deadline: dbDebate.deadline,
+          argumentCount: dbDebate.argumentCount,
+          uniqueParticipants: dbDebate.uniqueParticipants,
+          winningStance: dbDebate.winningStance ?? null,
+          aiPanelConsensus: dbDebate.aiPanelConsensus ?? null,
+          resolutionMethod: dbDebate.resolutionMethod ?? null,
+          governanceJustification: dbDebate.governanceJustification ?? null,
+          templateSlug: debateTemplateSlug,
+          winningArgument: winningArg
+            ? { body: winningArg.body, stance: winningArg.stance }
+            : null,
+        };
+      }
+    }
+
+    // Action count for pre-threshold debate progress
+    const isActive = campaign.status !== "DRAFT";
+    let actionCount: number | null = null;
+    if (isActive && campaign.debateEnabled && !campaign.debateId) {
+      const actions = await ctx.db
+        .query("campaignActions")
+        .withIndex("by_campaignId", (idx) => idx.eq("campaignId", campaign._id))
+        .collect();
+      actionCount = actions.filter((a) => a.verified).length;
+    }
+
+    return {
+      campaign: {
+        _id: campaign._id,
+        title: campaign.title,
+        type: campaign.type,
+        status: campaign.status,
+        body: campaign.body ?? null,
+        templateId: campaign.templateId ?? null,
+        templateTitle,
+        debateEnabled: campaign.debateEnabled,
+        debateThreshold: campaign.debateThreshold,
+        debateId: campaign.debateId ?? null,
+        targets: campaign.targets ?? null,
+        targetCountry: campaign.targetCountry,
+        targetJurisdiction: campaign.targetJurisdiction ?? null,
+        createdAt: campaign._creationTime,
+        updatedAt: campaign.updatedAt,
+      },
+      templates: sortedTemplates,
+      debate,
+      actionCount,
+      memberRole: membership.role,
+    };
+  },
+});
+
+/**
+ * Public campaign lookup — used for verify-district (no auth).
+ */
+export const getPublicActive = query({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign || campaign.status !== "ACTIVE") return null;
+    return { _id: campaign._id };
+  },
+});
+
+/**
+ * Public campaign stats — action counts and district breakdown.
+ */
+export const getStats = query({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const actions = await ctx.db
+      .query("campaignActions")
+      .withIndex("by_campaignId", (idx) => idx.eq("campaignId", campaignId))
+      .collect();
+
+    const verified = actions.filter((a) => a.verified);
+    const districtSet = new Set(
+      verified
+        .filter((a) => a.districtHash)
+        .map((a) => a.districtHash!),
+    );
+
+    return {
+      verifiedActions: verified.length,
+      totalActions: actions.length,
+      uniqueDistricts: districtSet.size,
+    };
+  },
+});

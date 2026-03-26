@@ -785,3 +785,150 @@ export const deleteIssueDomain = mutation({
     return { ok: true };
   },
 });
+
+// =============================================================================
+// ACTION NETWORK SYNC
+// =============================================================================
+
+/**
+ * Get AN sync state from org document.
+ */
+export const getAnSync = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { org } = await requireOrgRole(ctx, slug, "editor");
+    return org.anSync ?? null;
+  },
+});
+
+/**
+ * Save AN sync connection (initial API key store).
+ */
+export const connectAnSync = mutation({
+  args: { slug: v.string(), encryptedApiKey: v.string() },
+  handler: async (ctx, { slug, encryptedApiKey }) => {
+    const { org } = await requireOrgRole(ctx, slug, "editor");
+    await ctx.db.patch(org._id, {
+      anSync: {
+        apiKey: encryptedApiKey,
+        status: "idle",
+        syncType: "full",
+        connected: true,
+        createdAt: Date.now(),
+      },
+    });
+    return { connected: true };
+  },
+});
+
+/**
+ * Start AN sync — set status to running, return API key.
+ */
+export const startAnSync = mutation({
+  args: { slug: v.string(), syncType: v.string() },
+  handler: async (ctx, { slug, syncType }) => {
+    const { org } = await requireOrgRole(ctx, slug, "editor");
+    const existing = org.anSync;
+    if (!existing) throw new Error("No API key configured. Please connect first.");
+    if (existing.status === "running") throw new Error("A sync is already in progress.");
+
+    await ctx.db.patch(org._id, {
+      anSync: {
+        ...existing,
+        status: "running",
+        syncType,
+        startedAt: Date.now(),
+      },
+    });
+    return { apiKey: existing.apiKey, lastSyncAt: existing.lastSyncAt ?? null };
+  },
+});
+
+/**
+ * Disconnect AN sync — remove sync config from org.
+ */
+export const disconnectAnSync = mutation({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { org } = await requireOrgRole(ctx, slug, "owner");
+    await ctx.db.patch(org._id, { anSync: undefined });
+    return { disconnected: true };
+  },
+});
+
+// =============================================================================
+// ORG MEMBERSHIP LOOKUP (for billing plan checks)
+// =============================================================================
+
+/**
+ * Get user's org membership with subscription plan.
+ */
+export const getUserOrgPlan = query({
+  args: {},
+  handler: async (ctx) => {
+    const { userId } = await requireAuth(ctx);
+    const membership = await ctx.db
+      .query("orgMemberships")
+      .withIndex("by_userId", (idx) => idx.eq("userId", userId))
+      .first();
+    if (!membership) return null;
+    const org = await ctx.db.get(membership.orgId);
+    if (!org) return null;
+    // Get subscription
+    const sub = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
+      .first();
+    return {
+      orgId: org._id,
+      orgSlug: org.slug,
+      plan: sub?.plan ?? "free",
+    };
+  },
+});
+
+// =============================================================================
+// BILLING — Checkout helpers
+// =============================================================================
+
+/**
+ * Get org context for billing checkout (org + membership + subscription + billing info).
+ * Requires owner role.
+ */
+export const getBillingContext = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { org, membership } = await requireOrgRole(ctx, slug, "owner");
+
+    const sub = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
+      .first();
+
+    return {
+      org: {
+        _id: org._id,
+        slug: org.slug,
+        stripeCustomerId: (org as any).stripeCustomerId ?? null,
+        billingEmail: (org as any).billingEmail ?? null,
+      },
+      membership: { role: membership.role },
+      subscription: sub
+        ? { plan: sub.plan, status: sub.status }
+        : null,
+    };
+  },
+});
+
+/**
+ * Update Stripe customer ID on org.
+ */
+export const updateStripeCustomerId = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    stripeCustomerId: v.string(),
+  },
+  handler: async (ctx, { orgId, stripeCustomerId }) => {
+    await ctx.db.patch(orgId, { stripeCustomerId } as any);
+  },
+});

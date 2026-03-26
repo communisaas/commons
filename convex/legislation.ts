@@ -2431,3 +2431,42 @@ export const getPendingAlertsByOrgId = query({
   },
 });
 
+/**
+ * List recent bills that have embeddings (for rescore endpoint).
+ */
+export const listRecentBills = query({
+  args: { slug: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, { slug, limit }) => {
+    await requireOrgRole(ctx, slug, "editor");
+    const max = Math.min(limit ?? 100, 200);
+    const bills = await ctx.db
+      .query("bills")
+      .order("desc")
+      .take(max * 2);
+    const withEmbeddings = bills
+      .filter((b) => (b as any).topicEmbedding != null)
+      .slice(0, max);
+    return withEmbeddings.map((b) => ({ _id: b._id }));
+  },
+});
+
+/**
+ * Public action: rescore bills against org issue domains.
+ */
+export const rescoreBills = action({
+  args: { slug: v.string(), billIds: v.array(v.id("bills")) },
+  handler: async (ctx, { slug, billIds }) => {
+    let rowsUpserted = 0;
+    const errors: string[] = [];
+    for (const billId of billIds) {
+      try {
+        const result = await ctx.runAction(internal.legislation.scoreBillRelevance, { billId });
+        rowsUpserted += result.rowsUpserted;
+      } catch (err) {
+        errors.push(`${billId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return { billsScored: billIds.length, rowsUpserted, errors: errors.length > 0 ? errors : undefined };
+  },
+});
+

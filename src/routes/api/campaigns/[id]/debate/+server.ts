@@ -9,15 +9,7 @@ import type { RequestHandler } from './$types';
 /**
  * POST /api/campaigns/[id]/debate
  *
- * Creates a debate linked to a campaign. Requires:
- * - FEATURES.DEBATE enabled
- * - Authenticated user with editor+ role in the campaign's org
- * - Organization plan (minimum: organization tier)
- * - Campaign must have a templateId
- * - No existing active debate for this campaign's template
- *
- * Body: { propositionText?, duration?, jurisdictionSizeHint? }
- * Returns: { debateId, ... }
+ * Creates a debate linked to a campaign.
  */
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.DEBATE) {
@@ -35,42 +27,20 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(429, 'Too many debate creation attempts. Please try again later.');
 	}
 
-	// Look up the campaign for auth checks
-	const campaign = await db.campaign.findUnique({
-		where: { id: params.id },
-		select: {
-			id: true,
-			orgId: true,
-			templateId: true,
-			debateEnabled: true,
-			debateId: true,
-			org: {
-				select: {
-					slug: true,
-					memberships: {
-						where: { userId: locals.user.id },
-						select: { role: true }
-					}
-				}
-			}
-		}
+	// Look up the campaign for auth checks via Convex
+	const campaign = await serverQuery(api.debates.getCampaignForDebate, {
+		campaignId: params.id as any
 	});
 
 	if (!campaign) {
 		throw error(404, 'Campaign not found');
 	}
 
-	// Check org membership and role
-	const membership = campaign.org.memberships[0];
-	if (!membership) {
+	if (!campaign.memberRole) {
 		throw error(403, 'You are not a member of this organization');
 	}
-	requireRole(membership.role as 'owner' | 'editor' | 'member', 'editor');
-
-	// Plan gating: debate markets require Organization tier or higher
-	const meetsPlan = await orgMeetsPlan(campaign.orgId, 'organization');
-	if (!meetsPlan) {
-		throw error(403, 'Debate markets require an Organization plan or higher');
+	if (campaign.memberRole === 'member') {
+		throw error(403, 'Editor role required');
 	}
 
 	// Validate campaign has a template
@@ -112,7 +82,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'Proposition text must be at least 10 characters');
 	}
 
-	const result = await spawnDebateForCampaign(campaign.id, {
+	const result = await spawnDebateForCampaign(campaign._id, {
 		proposition: propositionText || undefined,
 		durationDays: durationSeconds / (24 * 60 * 60),
 		jurisdictionSizeHint: jurisdictionHint
@@ -123,20 +93,14 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	// Fetch the debate to return full details
-	const debate = await db.debate.findUnique({
-		where: { id: result.debateId },
-		select: {
-			id: true,
-			debate_id_onchain: true,
-			proposition_text: true,
-			deadline: true
-		}
+	const debate = await serverQuery(api.debates.get, {
+		debateId: result.debateId as any
 	});
 
 	return json({
 		debateId: result.debateId,
-		debateIdOnchain: debate?.debate_id_onchain,
-		propositionText: debate?.proposition_text,
-		deadline: debate?.deadline?.toISOString()
+		debateIdOnchain: debate?.debateIdOnchain,
+		propositionText: debate?.propositionText,
+		deadline: debate?.deadline ? new Date(debate.deadline).toISOString() : null
 	}, { status: 201 });
 };

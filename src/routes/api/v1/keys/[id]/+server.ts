@@ -7,9 +7,16 @@
 
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
-import { serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
+
+function requireRole(role: string, required: string): void {
+	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
+	if (hierarchy.indexOf(role) < hierarchy.indexOf(required)) {
+		throw new Error(`Role '${required}' required, got '${role}'`);
+	}
+}
 
 async function resolveKeyOrg(locals: App.Locals, url: URL): Promise<{ error: Response } | { orgId: string }> {
 	if (!locals.user) return { error: apiError('UNAUTHORIZED', 'Authentication required', 401) };
@@ -17,10 +24,10 @@ async function resolveKeyOrg(locals: App.Locals, url: URL): Promise<{ error: Res
 	const orgSlug = url.searchParams.get('orgSlug');
 	if (!orgSlug) return { error: apiError('BAD_REQUEST', 'orgSlug query param is required', 400) };
 
-	const { org, membership } = await loadOrgContext(orgSlug, locals.user.id);
-	requireRole(membership.role, 'editor');
+	const ctx = await serverQuery(api.organizations.getOrgContext, { slug: orgSlug });
+	requireRole(ctx.membership.role, 'editor');
 
-	return { orgId: org.id };
+	return { orgId: ctx.org._id };
 }
 
 export const PATCH: RequestHandler = async ({ request, params, locals, url }) => {

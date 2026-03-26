@@ -3,18 +3,15 @@
  * Registration Reconciliation Endpoint
  *
  * Two responsibilities:
- * 1. Process KV retry queue — re-attempt Postgres writes for registrations
- *    where Shadow Atlas succeeded but Postgres failed.
- * 2. Verify Postgres records match Shadow Atlas leaf state — detect and flag
+ * 1. Process KV retry queue — re-attempt Convex writes for registrations
+ *    where Shadow Atlas succeeded but Convex failed.
+ * 2. Verify Convex records match Shadow Atlas leaf state — detect and flag
  *    mismatches from any cause (network glitch, partial failure, corruption).
  *
- * Protected by CRON_SECRET. Intended to be called by an external cron
- * (e.g., CF Worker cron trigger, or cron-job.org) on an hourly schedule.
+ * Protected by CRON_SECRET. Intended to be called by an external cron.
  *
  * POST /api/admin/reconcile-registrations
  * Headers: Authorization: Bearer <CRON_SECRET>
- *
- * Response: { retriesProcessed, reconciled, mismatches }
  */
 
 import { json } from '@sveltejs/kit';
@@ -78,44 +75,16 @@ export const POST: RequestHandler = async (event) => {
 						queuedAt: string;
 					};
 
-					if (data.isReplace) {
-						// Replace: update existing record
-						await prisma.shadowAtlasRegistration.update({
-							where: { user_id: data.userId },
-							data: {
-								identity_commitment: data.identityCommitment,
-								leaf_index: data.atlasResult.leafIndex,
-								merkle_root: data.atlasResult.userRoot,
-								merkle_path: data.atlasResult.userPath,
-							},
-						});
-					} else {
-						// New registration: upsert (may have been retried by client)
-						await prisma.shadowAtlasRegistration.upsert({
-							where: { user_id: data.userId },
-							update: {
-								identity_commitment: data.identityCommitment,
-								leaf_index: data.atlasResult.leafIndex,
-								merkle_root: data.atlasResult.userRoot,
-								merkle_path: data.atlasResult.userPath,
-							},
-							create: {
-								user_id: data.userId,
-								congressional_district: 'three-tree',
-								identity_commitment: data.identityCommitment,
-								leaf_index: data.atlasResult.leafIndex,
-								merkle_root: data.atlasResult.userRoot,
-								merkle_path: data.atlasResult.userPath,
-								credential_type: 'three-tree',
-								cell_id: null,
-								verification_method: data.verificationMethod,
-								verification_id: data.userId,
-								verification_timestamp: new Date(data.queuedAt),
-								registration_status: 'registered',
-								expires_at: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000),
-							},
-						});
-					}
+					await serverMutation(api.users.upsertRegistration, {
+						userId: data.userId,
+						identityCommitment: data.identityCommitment,
+						leafIndex: data.atlasResult.leafIndex,
+						merkleRoot: data.atlasResult.userRoot,
+						merklePath: data.atlasResult.userPath,
+						isReplace: data.isReplace ?? false,
+						verificationMethod: data.verificationMethod,
+						queuedAt: data.queuedAt
+					});
 
 					// Success — remove from retry queue
 					await kv.delete(key.name);
@@ -137,8 +106,7 @@ export const POST: RequestHandler = async (event) => {
 		}
 	}
 
-	// Phase 2: Spot-check Postgres records against Shadow Atlas
-	// Quick sanity: compare record count against tree size
+	// Phase 2: Spot-check Convex records against Shadow Atlas
 	try {
 		const treeInfoResponse = await fetch(`${SHADOW_ATLAS_URL}/v1/tree/info`, {
 			headers: atlasHeaders(),
@@ -147,7 +115,7 @@ export const POST: RequestHandler = async (event) => {
 
 		if (treeInfoResponse.ok) {
 			const treeInfo = await treeInfoResponse.json() as { treeSize: number };
-			const pgCount = await prisma.shadowAtlasRegistration.count();
+			const pgCount = await serverQuery(api.users.countRegistrations, {});
 
 			// Tree size >= pg count is expected (tree has padding/replaced zeros).
 			// pg count > tree size is a bug.
@@ -155,25 +123,19 @@ export const POST: RequestHandler = async (event) => {
 				results.mismatches.push({
 					userId: 'GLOBAL',
 					leafIndex: -1,
-					reason: `Postgres has ${pgCount} records but atlas tree has only ${treeInfo.treeSize} leaves`,
+					reason: `Convex has ${pgCount} records but atlas tree has only ${treeInfo.treeSize} leaves`,
 				});
 			}
 
 			// Spot-check a sample of recent registrations (max 50 per run)
-			const recentRegistrations = await prisma.shadowAtlasRegistration.findMany({
-				orderBy: { verification_timestamp: 'desc' },
-				take: 50,
-				select: {
-					user_id: true,
-					leaf_index: true,
-					merkle_root: true,
-				},
+			const recentRegistrations = await serverQuery(api.users.listRecentRegistrations, {
+				limit: 50
 			});
 
 			for (const reg of recentRegistrations) {
 				try {
 					const leafResponse = await fetch(
-						`${SHADOW_ATLAS_URL}/v1/tree/leaf/${reg.leaf_index}`,
+						`${SHADOW_ATLAS_URL}/v1/tree/leaf/${reg.leafIndex}`,
 						{
 							headers: atlasHeaders(),
 							signal: AbortSignal.timeout(5_000),
@@ -187,16 +149,12 @@ export const POST: RequestHandler = async (event) => {
 						};
 
 						if (leafData.isEmpty) {
-							// Leaf was zeroed (replaced) — check if we have a newer record
 							results.mismatches.push({
-								userId: reg.user_id,
-								leafIndex: reg.leaf_index,
-								reason: 'Postgres points to zeroed leaf (may need replacement record update)',
+								userId: reg.userId,
+								leafIndex: reg.leafIndex,
+								reason: 'Convex points to zeroed leaf (may need replacement record update)',
 							});
 						}
-						// Leaf value comparison would require storing the leaf hash in Postgres.
-						// Currently we store the Merkle proof but not the leaf itself.
-						// Mark as reconciled — the leaf exists and isn't empty.
 						results.reconciled++;
 					}
 				} catch {

@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-// CONVEX: Keep SvelteKit
+// CONVEX: Keep SvelteKit — Gemini embeddings external API
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
@@ -15,7 +15,7 @@ const ADMIN_USER_IDS = new Set((env.ADMIN_USER_IDS || '').split(',').filter(Bool
 /**
  * POST /api/admin/backfill-embeddings
  *
- * Finds all templates where topic_embedding IS NULL and regenerates
+ * Finds all templates where topicEmbedding is missing and regenerates
  * embeddings via Gemini batch API. Processes in batches of 20.
  *
  * Requires authentication + admin role.
@@ -39,23 +39,8 @@ export const POST: RequestHandler = async ({ locals }) => {
 	backfillRunning = true;
 
 	try {
-		// Find templates missing embeddings
-		type MissingRow = {
-			id: string;
-			title: string;
-			description: string | null;
-			category: string;
-			message_body: string;
-		};
-
-		const missing = await db.$queryRaw<MissingRow[]>`
-			SELECT id, title, description, category, message_body
-			FROM "Template"
-			WHERE is_public = true
-				AND status = 'published'
-				AND topic_embedding IS NULL
-			ORDER BY "createdAt" DESC
-		`;
+		// Find templates missing embeddings via Convex
+		const missing = await serverQuery(api.templates.listMissingEmbeddings, {});
 
 		if (missing.length === 0) {
 			return json({ processed: 0, message: 'All templates have embeddings' });
@@ -72,7 +57,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 			const texts: string[] = [];
 			for (const t of batch) {
 				const locationText = `${t.title} ${t.description || ''} ${t.category}`;
-				const topicText = `${t.title} ${t.description || ''} ${t.message_body}`;
+				const topicText = `${t.title} ${t.description || ''} ${t.messageBody}`;
 				texts.push(locationText, topicText);
 			}
 
@@ -81,21 +66,16 @@ export const POST: RequestHandler = async ({ locals }) => {
 					taskType: 'RETRIEVAL_DOCUMENT'
 				});
 
-				// Write embeddings back in individual updates
+				// Write embeddings back via Convex
 				for (let j = 0; j < batch.length; j++) {
-					const templateId = batch[j].id;
-					const locationVec = `[${embeddings[j * 2].join(',')}]`;
-					const topicVec = `[${embeddings[j * 2 + 1].join(',')}]`;
+					const templateId = batch[j]._id;
 
 					try {
-						await db.$executeRaw`
-							UPDATE "Template"
-							SET location_embedding = ${locationVec}::vector,
-								topic_embedding = ${topicVec}::vector,
-								embedding_version = 'v1',
-								embeddings_updated_at = NOW()
-							WHERE id = ${templateId}
-						`;
+						await serverMutation(api.templates.updateEmbeddings, {
+							templateId: templateId as any,
+							locationEmbedding: embeddings[j * 2],
+							topicEmbedding: embeddings[j * 2 + 1]
+						});
 						totalProcessed++;
 					} catch (writeErr) {
 						errors.push({
@@ -108,7 +88,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 				// Entire batch failed (Gemini API error)
 				for (const t of batch) {
 					errors.push({
-						id: t.id,
+						id: t._id,
 						error: batchErr instanceof Error ? batchErr.message : String(batchErr)
 					});
 				}

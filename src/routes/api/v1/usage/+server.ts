@@ -6,6 +6,8 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk } from '$lib/server/api-v1/response';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
@@ -17,12 +19,12 @@ export const GET: RequestHandler = async ({ request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const usage = await getOrgUsage(auth.orgId);
+	const usage = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: auth.orgId });
 
 	return apiOk({
-		verifiedActions: usage.verifiedActions,
-		maxVerifiedActions: usage.limits.maxVerifiedActions,
-		emailsSent: usage.emailsSent,
-		maxEmails: usage.limits.maxEmails
+		verifiedActions: (usage as any)?.current?.verifiedActions ?? 0,
+		maxVerifiedActions: (usage as any)?.limits?.maxVerifiedActions ?? 0,
+		emailsSent: (usage as any)?.current?.emailsSent ?? 0,
+		maxEmails: (usage as any)?.limits?.maxEmails ?? 0
 	});
 };

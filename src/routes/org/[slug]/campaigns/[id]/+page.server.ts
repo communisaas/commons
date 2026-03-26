@@ -3,33 +3,21 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params, parent, platform }) => {
 	const { org, membership } = await parent();
 
-	const campaign = await db.campaign.findFirst({
-		where: { id: params.id, orgId: org.id }
+	const result = await serverQuery(api.campaigns.getForOrgPage, {
+		slug: params.slug,
+		campaignId: params.id as any
 	});
 
-	if (!campaign) {
+	if (!result) {
 		throw error(404, 'Campaign not found');
 	}
 
-	const templates = await db.template.findMany({
-		where: { orgId: org.id },
-		select: { id: true, title: true },
-		orderBy: { title: 'asc' }
-	});
-
-	// Resolve current template title
-	let templateTitle: string | null = null;
-	if (campaign.templateId) {
-		const tmpl = templates.find((t) => t.id === campaign.templateId);
-		templateTitle = tmpl?.title ?? null;
-	}
+	const { campaign, templates, debate, actionCount, memberRole } = result;
 
 	// Compute verification packet and analytics for non-draft campaigns
 	const packetKV = platform?.env?.PACKET_CACHE_KV as
@@ -37,91 +25,53 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 		| undefined;
 	const isActive = campaign.status !== 'DRAFT';
 	const [packet, analytics] = await Promise.all([
-		isActive ? computeVerificationPacketCached(campaign.id, org.id, packetKV) : null,
+		isActive ? computeVerificationPacketCached(campaign._id, org.id, packetKV) : null,
 		isActive && FEATURES.ANALYTICS_EXPANDED
-			? loadCampaignAnalytics(campaign.id, org.id)
+			? loadCampaignAnalytics(campaign._id, org.id)
 			: null
 	]);
 
-	// Load debate data if campaign has a linked debate
-	let debate = null;
-	if (campaign.debateId) {
-		const dbDebate = await db.debate.findUnique({
-			where: { id: campaign.debateId },
-			select: {
-				id: true,
-				proposition_text: true,
-				status: true,
-				deadline: true,
-				argument_count: true,
-				unique_participants: true,
-				winning_stance: true,
-				winning_argument_index: true,
-				ai_panel_consensus: true,
-				resolution_method: true,
-				governance_justification: true,
-				template: { select: { slug: true } },
-				arguments: {
-					select: { body: true, stance: true, argument_index: true }
-				}
-			}
-		});
-		if (dbDebate) {
-			const winningArg = dbDebate.winning_argument_index != null
-				? dbDebate.arguments.find((a) => a.argument_index === dbDebate.winning_argument_index)
-				: null;
-			debate = { ...dbDebate, winningArg };
-		}
-	}
-
-	// Action count for pre-threshold debate progress
-	const actionCount = isActive && campaign.debateEnabled && !campaign.debateId
-		? await db.campaignAction.count({ where: { campaignId: campaign.id, verified: true } })
-		: null;
-
 	// Strip target emails for non-editor members (PII minimization)
 	const rawTargets = campaign.targets;
-	const safeTargets = membership.role === 'member' && Array.isArray(rawTargets)
+	const safeTargets = memberRole === 'member' && Array.isArray(rawTargets)
 		? rawTargets.map((t: Record<string, unknown>) => ({ name: t.name, title: t.title, district: t.district }))
 		: rawTargets;
 
 	return {
 		campaign: {
-			id: campaign.id,
+			id: campaign._id,
 			title: campaign.title,
 			type: campaign.type,
 			status: campaign.status,
 			body: campaign.body,
 			templateId: campaign.templateId,
-			templateTitle,
+			templateTitle: campaign.templateTitle,
 			debateEnabled: campaign.debateEnabled,
 			debateThreshold: campaign.debateThreshold,
 			debateId: campaign.debateId,
 			targets: safeTargets,
 			targetCountry: campaign.targetCountry,
 			targetJurisdiction: campaign.targetJurisdiction,
-			createdAt: campaign.createdAt.toISOString(),
-			updatedAt: campaign.updatedAt.toISOString()
+			createdAt: new Date(campaign.createdAt).toISOString(),
+			updatedAt: new Date(campaign.updatedAt).toISOString()
 		},
 		templates,
 		packet,
 		analytics,
 		debate: debate
 			? {
-					id: debate.id,
-					propositionText: debate.proposition_text,
+					id: debate._id,
+					propositionText: debate.propositionText,
 					status: debate.status,
-					deadline: debate.deadline.toISOString(),
-					argumentCount: debate.argument_count,
-					uniqueParticipants: debate.unique_participants,
-					winningStance: debate.winning_stance,
-					aiPanelConsensus: debate.ai_panel_consensus,
-					resolutionMethod: debate.resolution_method,
-					governanceJustification: debate.governance_justification,
-					templateSlug: debate.template.slug,
-					winningArgument: debate.winningArg
-						? { body: debate.winningArg.body, stance: debate.winningArg.stance }
-						: null
+					deadline: new Date(debate.deadline).toISOString(),
+					argumentCount: debate.argumentCount,
+					uniqueParticipants: debate.uniqueParticipants,
+					winningStance: debate.winningStance,
+					aiPanelConsensus: debate.aiPanelConsensus,
+					resolutionMethod: debate.resolutionMethod,
+					governanceJustification: debate.governanceJustification,
+					templateSlug: debate.templateSlug,
+					winningArgument: debate.winningArgument
 				}
 			: null,
 		actionCount

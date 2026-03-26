@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
-import { SMS_MAX_LENGTH, VALID_BLAST_STATUSES } from '$lib/server/sms/types';
+import { SMS_MAX_LENGTH } from '$lib/server/sms/types';
 import type { RequestHandler } from './$types';
 
 const RecipientFilterSchema = z.object({
@@ -21,12 +21,6 @@ const RecipientFilterSchema = z.object({
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
-
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
-	const meetsPlan = await orgMeetsPlan(org.id, 'starter');
-	if (!meetsPlan) throw error(403, 'SMS campaigns require a Starter plan or higher');
 
 	const body = await request.json();
 	const { body: smsBody, fromNumber, recipientFilter, campaignId } = body;
@@ -58,30 +52,29 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	// Validate campaignId belongs to this org (prevent IDOR)
 	if (campaignId) {
-		const campaign = await db.campaign.findFirst({
-			where: { id: campaignId, orgId: org.id }
+		const campaign = await serverQuery(api.calls.validateCampaign, {
+			slug: params.slug,
+			campaignId: campaignId as any
 		});
 		if (!campaign) throw error(400, 'Campaign not found in this organization');
 	}
 
-	const blast = await db.smsBlast.create({
-		data: {
-			orgId: org.id,
-			body: smsBody.trim(),
-			fromNumber: fromNumber || null,
-			recipientFilter: parsedFilter,
-			campaignId: campaignId || null,
-			status: 'draft'
-		}
+	const blast = await serverMutation(api.sms.createBlast, {
+		slug: params.slug,
+		body: smsBody.trim(),
+		fromNumber: fromNumber || '',
+		campaignId: campaignId ? (campaignId as any) : undefined,
+		recipientFilter: parsedFilter,
+		totalRecipients: 0
 	});
 
 	return json(
 		{
-			id: blast.id,
-			body: blast.body,
-			fromNumber: blast.fromNumber,
-			status: blast.status,
-			createdAt: blast.createdAt.toISOString()
+			id: blast._id,
+			body: smsBody.trim(),
+			fromNumber: fromNumber || null,
+			status: 'draft',
+			createdAt: new Date().toISOString()
 		},
 		{ status: 201 }
 	);
@@ -91,55 +84,25 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
-
 	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 100);
-	const cursor = url.searchParams.get('cursor') || null;
-	const statusFilter = url.searchParams.get('status');
 
-	const where: Record<string, unknown> = { orgId: org.id };
-	if (statusFilter && VALID_BLAST_STATUSES.includes(statusFilter as any)) {
-		where.status = statusFilter;
-	}
-
-	const findArgs: Record<string, unknown> = {
-		where,
-		take: limit + 1,
-		orderBy: { createdAt: 'desc' as const },
-		select: {
-			id: true,
-			body: true,
-			fromNumber: true,
-			status: true,
-			totalRecipients: true,
-			sentCount: true,
-			failedCount: true,
-			sentAt: true,
-			createdAt: true,
-			updatedAt: true,
-			campaignId: true,
-			_count: { select: { messages: true } }
-		}
-	};
-
-	if (cursor) {
-		findArgs.cursor = { id: cursor };
-		findArgs.skip = 1;
-	}
-
-	const blasts = await db.smsBlast.findMany(findArgs as Parameters<typeof db.smsBlast.findMany>[0]);
-
-	const hasMore = blasts.length > limit;
-	const items = blasts.slice(0, limit);
-	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
+	const blasts = await serverQuery(api.sms.listBlasts, {
+		slug: params.slug,
+		limit
+	});
 
 	return json({
-		data: items.map((b) => ({
-			...b,
-			createdAt: b.createdAt.toISOString(),
-			updatedAt: b.updatedAt.toISOString(),
-			sentAt: b.sentAt?.toISOString() ?? null
+		data: blasts.map((b) => ({
+			id: b._id,
+			body: b.body,
+			status: b.status,
+			totalRecipients: b.totalRecipients,
+			sentCount: b.sentCount,
+			failedCount: b.failedCount,
+			messageCount: b.messageCount,
+			sentAt: b.sentAt ? new Date(b.sentAt).toISOString() : null,
+			createdAt: new Date(b._creationTime).toISOString()
 		})),
-		meta: { cursor: nextCursor, hasMore }
+		meta: { hasMore: false }
 	});
 };

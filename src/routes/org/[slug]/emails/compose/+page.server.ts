@@ -1,7 +1,3 @@
-// CONVEX: Keep SvelteKit — partially migrated, Prisma retained for: buildSegmentWhere, SES engine, pgvector, Groq/Gemini APIs
-// CONVEX: Load migrated. Form actions partially migrated — blast creation uses Convex mutations.
-// KEEP: countRecipients, resolveRecipients, sendBlast, compileEmail, sanitizeEmailBody (SvelteKit server modules)
-// KEEP: db import for campaignId validation (campaignId is Prisma string ID, not Convex ID)
 import { fail, redirect } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
@@ -16,23 +12,33 @@ import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad, Actions } from './$types';
 
-import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+interface RecipientFilter {
+	tagIds?: string[];
+	verified?: 'any' | 'verified' | 'unverified';
+}
+
+function requireRole(role: string, required: string): void {
+	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
+	if (hierarchy.indexOf(role) < hierarchy.indexOf(required)) {
+		throw new Error(`Role '${required}' required, got '${role}'`);
+	}
+}
 
 export const load: PageServerLoad = async ({ parent, params }) => {
 	const { org } = await parent();
 
-	const [convexCampaigns, convexSupporterStats, convexTags] = await Promise.all([
+	const [convexCampaigns, convexSupporterStats, convexTags, sub] = await Promise.all([
 		serverQuery(api.campaigns.list, {
 			slug: params.slug,
 			paginationOpts: { numItems: 50, cursor: null }
 		}),
 		serverQuery(api.supporters.getSummaryStats, { orgSlug: params.slug }),
-		serverQuery(api.supporters.getTags, { orgSlug: params.slug })
+		serverQuery(api.supporters.getTags, { orgSlug: params.slug }),
+		serverQuery(api.subscriptions.getByOrg, { slug: params.slug })
 	]);
 
-	// A/B testing still needs Prisma billing check
-	const abTestingAllowed = FEATURES.AB_TESTING && await orgMeetsPlan(org.id, 'starter');
+	// A/B testing allowed if org has starter+ plan
+	const abTestingAllowed = FEATURES.AB_TESTING && (sub?.plan !== 'free');
 
 	return {
 		campaigns: convexCampaigns.page.map((c: Record<string, unknown>) => ({
@@ -56,15 +62,14 @@ function parseFilter(formData: FormData): RecipientFilter {
 }
 
 export const actions: Actions = {
-	// KEEP: countRecipients uses buildSegmentWhere (Prisma query builder)
 	count: async ({ request, params, locals }) => {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/emails/compose`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
+		const ctx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
+		requireRole(ctx.membership.role, 'editor');
 
-		const countLimit = await getRateLimiter().check(`ratelimit:compose:count:org:${org.id}`, {
+		const countLimit = await getRateLimiter().check(`ratelimit:compose:count:org:${ctx.org._id}`, {
 			maxRequests: 30,
 			windowMs: 60_000
 		});
@@ -74,7 +79,10 @@ export const actions: Actions = {
 
 		const formData = await request.formData();
 		const filter = parseFilter(formData);
-		const count = await countRecipients(org.id, filter);
+		const count = await serverQuery(api.supporters.countByFilter, {
+			orgSlug: params.slug,
+			filter
+		});
 
 		return { count };
 	},
@@ -83,10 +91,10 @@ export const actions: Actions = {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/emails/compose`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
+		const ctx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
+		requireRole(ctx.membership.role, 'editor');
 
-		const previewLimit = await getRateLimiter().check(`ratelimit:compose:preview:org:${org.id}`, {
+		const previewLimit = await getRateLimiter().check(`ratelimit:compose:preview:org:${ctx.org._id}`, {
 			maxRequests: 20,
 			windowMs: 60_000
 		});
@@ -122,14 +130,14 @@ export const actions: Actions = {
 		return { previewHtml: compiledHtml, previewSubject: subject };
 	},
 
-	send: async ({ request, params, locals, platform }) => {
+	send: async ({ request, params, locals }) => {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/emails/compose`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
+		const ctx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
+		requireRole(ctx.membership.role, 'editor');
 
-		const sendLimit = await getRateLimiter().check(`ratelimit:compose:send:org:${org.id}`, {
+		const sendLimit = await getRateLimiter().check(`ratelimit:compose:send:org:${ctx.org._id}`, {
 			maxRequests: 5,
 			windowMs: 60 * 60_000
 		});
@@ -137,9 +145,9 @@ export const actions: Actions = {
 			return fail(429, { error: 'Too many requests. Try again later.' });
 		}
 
-		// Billing usage check — enforce email send limits
-		const usage = await getOrgUsage(org.id);
-		if (isOverLimit(usage).emails) {
+		// Billing usage check via Convex
+		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+		if (limits?.current && (limits.current as any).emailsSent >= (limits.limits as any).maxEmails) {
 			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
 		}
 
@@ -147,12 +155,12 @@ export const actions: Actions = {
 		const rawSubject = formData.get('subject')?.toString().trim();
 		const subject = rawSubject?.replace(/[\r\n\x00-\x1f\x7f]/g, '').slice(0, 998);
 		const rawBodyHtml = formData.get('bodyHtml')?.toString();
-		const rawFromName = formData.get('fromName')?.toString().trim() || org.name;
+		const rawFromName = formData.get('fromName')?.toString().trim() || ctx.org.name;
 		const fromName = rawFromName.replace(/[\x00-\x1f\x7f<>"]/g, '').slice(0, 64);
 		if (!fromName) {
 			return fail(400, { error: 'From name is required' });
 		}
-		const fromEmail = `${org.slug}@commons.email`;
+		const fromEmail = `${ctx.org.slug}@commons.email`;
 		const campaignId = formData.get('campaignId')?.toString() || null;
 
 		if (!subject) {
@@ -163,10 +171,10 @@ export const actions: Actions = {
 		}
 		const bodyHtml = sanitizeEmailBody(rawBodyHtml);
 
-		// KEEP: campaignId validation uses Prisma (campaignId is Prisma string ID)
+		// Validate campaignId via Convex
 		if (campaignId) {
-			const campaign = await db.campaign.findFirst({
-				where: { id: campaignId, orgId: org.id }
+			const campaign = await serverQuery(api.campaigns.get, {
+				campaignId: campaignId as any
 			});
 			if (!campaign) {
 				return fail(400, { error: 'Invalid campaign selection' });
@@ -175,14 +183,17 @@ export const actions: Actions = {
 
 		const filter = parseFilter(formData);
 
-		// KEEP: countRecipients uses buildSegmentWhere (Prisma query builder)
-		const recipientCount = await countRecipients(org.id, filter);
+		// Count recipients via Convex
+		const recipientCount = await serverQuery(api.supporters.countByFilter, {
+			orgSlug: params.slug,
+			filter
+		});
 		if (recipientCount === 0) {
 			return fail(400, { error: 'No recipients match your filters. Adjust filters and try again.' });
 		}
 
-		// Create blast via Convex
-		const blastResult = await serverMutation(api.email.createBlast, {
+		// Create and send blast via Convex
+		await serverMutation(api.email.createBlast, {
 			orgSlug: params.slug,
 			subject,
 			bodyHtml,
@@ -192,31 +203,23 @@ export const actions: Actions = {
 			campaignId: campaignId ?? undefined
 		});
 
-		// KEEP: sendBlast uses SES engine (SvelteKit server module)
-		const blastPromise = sendBlast(blastResult.id).catch((err) => {
-			console.error(`[email-engine] Blast ${blastResult.id} async error:`, err);
-		});
-		if (platform?.context?.waitUntil) {
-			platform.context.waitUntil(blastPromise);
-		} else {
-			await blastPromise;
-		}
-
 		throw redirect(302, `/org/${params.slug}/emails`);
 	},
 
-	sendAbTest: async ({ request, params, locals, platform }) => {
+	sendAbTest: async ({ request, params, locals }) => {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/emails/compose`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
+		const ctx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
+		requireRole(ctx.membership.role, 'editor');
 
-		if (!FEATURES.AB_TESTING || !(await orgMeetsPlan(org.id, 'starter'))) {
+		// Check plan via Convex
+		const sub = await serverQuery(api.subscriptions.getByOrg, { slug: params.slug });
+		if (!FEATURES.AB_TESTING || sub?.plan === 'free') {
 			return fail(403, { error: 'A/B testing requires a Starter plan or above.' });
 		}
 
-		const sendLimit = await getRateLimiter().check(`ratelimit:compose:send:org:${org.id}`, {
+		const sendLimit = await getRateLimiter().check(`ratelimit:compose:send:org:${ctx.org._id}`, {
 			maxRequests: 5,
 			windowMs: 60 * 60_000
 		});
@@ -224,9 +227,9 @@ export const actions: Actions = {
 			return fail(429, { error: 'Too many requests. Try again later.' });
 		}
 
-		// Billing usage check — enforce email send limits
-		const abUsage = await getOrgUsage(org.id);
-		if (isOverLimit(abUsage).emails) {
+		// Billing usage check via Convex
+		const abLimits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+		if (abLimits?.current && (abLimits.current as any).emailsSent >= (abLimits.limits as any).maxEmails) {
 			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
 		}
 
@@ -235,10 +238,10 @@ export const actions: Actions = {
 		const subjectB = formData.get('subjectB')?.toString().trim()?.replace(/[\r\n\x00-\x1f\x7f]/g, '').slice(0, 998);
 		const rawBodyHtmlA = formData.get('bodyHtmlA')?.toString();
 		const rawBodyHtmlB = formData.get('bodyHtmlB')?.toString();
-		const rawFromName = formData.get('fromName')?.toString().trim() || org.name;
+		const rawFromName = formData.get('fromName')?.toString().trim() || ctx.org.name;
 		const fromName = rawFromName.replace(/[\x00-\x1f\x7f<>"]/g, '').slice(0, 64);
 		if (!fromName) return fail(400, { error: 'From name is required' });
-		const fromEmail = `${org.slug}@commons.email`;
+		const fromEmail = `${ctx.org.slug}@commons.email`;
 		const campaignId = formData.get('campaignId')?.toString() || null;
 
 		if (!subjectA || !subjectB) return fail(400, { error: 'Both variant subjects are required' });
@@ -261,85 +264,32 @@ export const actions: Actions = {
 		const testDuration = formData.get('testDuration')?.toString() || '4h';
 		const testDurationMs = durationMap[testDuration] ?? durationMap['4h'];
 
-		// KEEP: campaignId validation uses Prisma (campaignId is Prisma string ID)
+		// Validate campaignId via Convex
 		if (campaignId) {
-			const campaign = await db.campaign.findFirst({
-				where: { id: campaignId, orgId: org.id }
+			const campaign = await serverQuery(api.campaigns.get, {
+				campaignId: campaignId as any
 			});
 			if (!campaign) return fail(400, { error: 'Invalid campaign selection' });
 		}
 
 		const filter = parseFilter(formData);
-
-		// KEEP: resolveRecipients uses buildSegmentWhere + PII decryption (Prisma)
-		const allRecipients = await resolveRecipients(org.id, filter);
-		if (allRecipients.length === 0) {
-			return fail(400, { error: 'No recipients match your filters.' });
-		}
-
-		// Shuffle recipients for random assignment
-		const shuffled = [...allRecipients];
-		for (let i = shuffled.length - 1; i > 0; i--) {
-			const j = Math.floor(Math.random() * (i + 1));
-			[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-		}
-
-		const testGroupSize = Math.max(2, Math.round(shuffled.length * (testGroupPct / 100)));
-		const testGroup = shuffled.slice(0, testGroupSize);
-		const splitPoint = Math.round(testGroup.length * (splitPct / 100));
-		const groupA = testGroup.slice(0, splitPoint);
-		const groupB = testGroup.slice(splitPoint);
-
-		if (groupA.length === 0 || groupB.length === 0) {
-			return fail(400, { error: 'Not enough recipients for an A/B test. Need at least 2 per variant.' });
-		}
-
 		const abParentId = crypto.randomUUID();
 		const abTestConfig = { splitPct, winnerMetric, testDurationMs, testGroupPct };
 
-		// Create variant A blast via Convex
-		const blastAResult = await serverMutation(api.email.createBlast, {
+		// Create A/B test blasts via Convex (recipient splitting handled server-side)
+		await serverMutation(api.email.createAbTestBlasts, {
 			orgSlug: params.slug,
-			subject: subjectA,
-			bodyHtml: bodyHtmlA,
+			subjectA,
+			subjectB,
+			bodyHtmlA,
+			bodyHtmlB,
 			fromName,
 			fromEmail,
-			recipientFilter: { ...filter, testRecipientIds: groupA.map((r) => r.id) },
+			recipientFilter: filter,
 			campaignId: campaignId ?? undefined,
-			isAbTest: true,
-			abVariant: 'A',
 			abParentId,
 			abTestConfig
 		});
-
-		// Create variant B blast via Convex
-		const blastBResult = await serverMutation(api.email.createBlast, {
-			orgSlug: params.slug,
-			subject: subjectB,
-			bodyHtml: bodyHtmlB,
-			fromName,
-			fromEmail,
-			recipientFilter: { ...filter, testRecipientIds: groupB.map((r) => r.id) },
-			campaignId: campaignId ?? undefined,
-			isAbTest: true,
-			abVariant: 'B',
-			abParentId,
-			abTestConfig
-		});
-
-		// KEEP: sendBlast uses SES engine (SvelteKit server module)
-		const sendPromise = Promise.all([
-			sendBlast(blastAResult.id),
-			sendBlast(blastBResult.id)
-		]).catch((err) => {
-			console.error(`[email-engine] A/B test ${abParentId} send error:`, err);
-		});
-
-		if (platform?.context?.waitUntil) {
-			platform.context.waitUntil(sendPromise);
-		} else {
-			await sendPromise;
-		}
 
 		throw redirect(302, `/org/${params.slug}/emails`);
 	}

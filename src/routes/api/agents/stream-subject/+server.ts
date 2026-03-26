@@ -67,14 +67,11 @@ export const POST: RequestHandler = async (event) => {
 		});
 	}
 
-	traceRequest(traceId, 'subject-line', {
-		metadata: {
-			messageLength: body.message.length
-		},
-		content: {
-			message: body.message
-		}
-	}, { userId: userContext.userId });
+	console.log('[stream-subject] trace:', {
+		traceId,
+		userId: userContext.userId,
+		messageLength: body.message.length
+	});
 
 	// Prompt injection detection
 	const injectionCheck = await moderatePromptOnly(body.message);
@@ -171,26 +168,17 @@ export const POST: RequestHandler = async (event) => {
 
 					if (data.needs_clarification) {
 						emitter.send('clarification', { data });
-						traceEvent(traceId, 'subject-line', 'clarification', {
-							needs_clarification: true,
-							question_count: data.clarification_questions?.length ?? 0,
-							questions: data.clarification_questions?.map((q) => ({
-								id: q.id,
-								type: q.type,
-								question: q.question,
-								options: q.options
-							})),
-							inferred_context: data.inferred_context
-						}, { userId: userContext.userId, success: true });
+						console.log('[stream-subject] clarification:', {
+							traceId,
+							questionCount: data.clarification_questions?.length ?? 0
+						});
 					} else {
 						emitter.complete({ data });
-						traceEvent(traceId, 'subject-line', 'generation', {
-							subject_line: data.subject_line,
-							core_message: data.core_message,
-							topics: data.topics,
-							url_slug: data.url_slug,
-							inferred_context: data.inferred_context
-						}, { userId: userContext.userId, success: true });
+						console.log('[stream-subject] generation:', {
+							traceId,
+							hasSubjectLine: !!data.subject_line,
+							topicCount: data.topics?.length ?? 0
+						});
 					}
 					streamSuccess = true;
 				} else {

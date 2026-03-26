@@ -1,7 +1,7 @@
-// CONVEX: Keep SvelteKit — needs listAwaitingGovernance query (debates filtered by status + template join + BigInt transforms)
+// CONVEX: Fully migrated — debates awaiting governance via Convex query
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
@@ -26,7 +26,7 @@ interface GovernanceCase {
 	argumentCount: number;
 	uniqueParticipants: number;
 	aiPanelConsensus: number | null;
-	escalatedAt: string; // updatedAt as proxy
+	escalatedAt: string;
 	arguments: {
 		argumentIndex: number;
 		stance: string;
@@ -46,12 +46,12 @@ interface GovernanceCase {
 function buildResolutionData(
 	blob: Record<string, unknown>,
 	args: Array<{
-		argument_index: number;
-		ai_scores: unknown;
-		ai_weighted: number | null;
-		final_score: number | null;
-		model_agreement: number | null;
-		weighted_score: unknown;
+		argumentIndex: number;
+		aiScores: unknown;
+		aiWeighted: number | null;
+		finalScore: number | null;
+		modelAgreement: number | null;
+		weightedScore: string;
 	}>,
 	signatureCount: number | null
 ): AIResolutionData {
@@ -59,13 +59,13 @@ function buildResolutionData(
 	const source = (blob.source as string) ?? 'ai_panel';
 	const minerCount = (blob.minerCount as number) ?? undefined;
 
-	const scoredArgs = args.filter((a) => a.ai_scores != null);
-	const maxWeightedScore = Math.max(...scoredArgs.map((a) => Number(a.weighted_score ?? 0)), 1);
+	const scoredArgs = args.filter((a) => a.aiScores != null);
+	const maxWeightedScore = Math.max(...scoredArgs.map((a) => Number(a.weightedScore ?? 0)), 1);
 
 	const argumentScores: ArgumentAIScore[] = scoredArgs.map((a) => {
-		const dims = (a.ai_scores ?? {}) as Record<string, number>;
+		const dims = (a.aiScores ?? {}) as Record<string, number>;
 		return {
-			argumentIndex: a.argument_index,
+			argumentIndex: a.argumentIndex,
 			dimensions: {
 				reasoning: dims.reasoning ?? 0,
 				accuracy: dims.accuracy ?? 0,
@@ -73,10 +73,10 @@ function buildResolutionData(
 				constructiveness: dims.constructiveness ?? 0,
 				feasibility: dims.feasibility ?? 0
 			},
-			weightedAIScore: a.ai_weighted ?? 0,
-			communityScore: Math.round((Number(a.weighted_score ?? 0) / maxWeightedScore) * 10000),
-			finalScore: a.final_score ?? 0,
-			modelAgreement: a.model_agreement ?? 0
+			weightedAIScore: a.aiWeighted ?? 0,
+			communityScore: Math.round((Number(a.weightedScore ?? 0) / maxWeightedScore) * 10000),
+			finalScore: a.finalScore ?? 0,
+			modelAgreement: a.modelAgreement ?? 0
 		};
 	});
 
@@ -103,47 +103,28 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 
 	const focusDebateId = url.searchParams.get('debate');
 
-	const debates = await prisma.debate.findMany({
-		where: { status: 'awaiting_governance' },
-		include: {
-			arguments: { orderBy: { weighted_score: 'desc' } },
-			template: { select: { id: true, title: true, slug: true } }
-		},
-		orderBy: { updated_at: 'desc' }
-	});
+	const debates = await serverQuery(api.debates.listAwaitingGovernance, {});
 
 	const cases: GovernanceCase[] = debates.map((d) => {
-		const blob = (d.ai_resolution ?? {}) as Record<string, unknown>;
+		const blob = (d.aiResolution ?? {}) as Record<string, unknown>;
 
 		return {
-			id: d.id,
-			debateIdOnchain: d.debate_id_onchain,
-			templateId: d.template_id,
-			templateTitle: d.template?.title ?? 'Unknown Template',
-			templateSlug: d.template?.slug ?? '',
-			propositionText: d.proposition_text,
-			actionDomain: d.action_domain,
-			deadline: d.deadline.toISOString(),
-			totalStake: d.total_stake.toString(),
-			argumentCount: d.argument_count,
-			uniqueParticipants: d.unique_participants,
-			aiPanelConsensus: d.ai_panel_consensus,
-			escalatedAt: d.updated_at.toISOString(),
-			arguments: d.arguments.map((a) => ({
-				argumentIndex: a.argument_index,
-				stance: a.stance,
-				body: a.body,
-				amendmentText: a.amendment_text,
-				stakeAmount: a.stake_amount.toString(),
-				weightedScore: a.weighted_score.toString(),
-				coSignCount: a.co_sign_count,
-				aiScores: a.ai_scores as Record<string, number> | null,
-				aiWeighted: a.ai_weighted,
-				finalScore: a.final_score,
-				modelAgreement: a.model_agreement
-			})),
-			aiResolution: d.ai_resolution
-				? buildResolutionData(blob, d.arguments, d.ai_signature_count)
+			id: d._id,
+			debateIdOnchain: d.debateIdOnchain,
+			templateId: d.templateId,
+			templateTitle: d.templateTitle,
+			templateSlug: d.templateSlug,
+			propositionText: d.propositionText,
+			actionDomain: d.actionDomain,
+			deadline: new Date(d.deadline).toISOString(),
+			totalStake: d.totalStake,
+			argumentCount: d.argumentCount,
+			uniqueParticipants: d.uniqueParticipants,
+			aiPanelConsensus: d.aiPanelConsensus,
+			escalatedAt: new Date(d.updatedAt).toISOString(),
+			arguments: d.arguments,
+			aiResolution: d.aiResolution
+				? buildResolutionData(blob, d.arguments, d.aiSignatureCount)
 				: null
 		};
 	});

@@ -1,18 +1,15 @@
-// CONVEX: Keep SvelteKit — complex pipeline: PII encryption (computeEmailHash, encryptPii),
-// rate limiting (IP-based), atomic capacity claiming (TOCTOU prevention via updateMany),
-// supporter find-or-create, upsert dedup on email_hash, fire-and-forget automation triggers.
-// Convex equivalent: events.createRsvp (simplified, no PII encryption or capacity atomics).
+// CONVEX: Keep SvelteKit — rate limiting (IP-based), validation.
+// PII encryption and capacity claiming handled by Convex action.
 
 /**
  * POST /api/e/[id]/rsvp — Public RSVP to an event
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
-import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import crypto from 'node:crypto';
 import type { RequestHandler } from './$types';
 
@@ -42,23 +39,8 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 		throw error(400, 'Name is required');
 	}
 
-	const event = await db.event.findUnique({
-		where: { id: params.id },
-		select: {
-			id: true,
-			orgId: true,
-			status: true,
-			capacity: true,
-			waitlistEnabled: true,
-			rsvpCount: true
-		}
-	});
-
-	if (!event) throw error(404, 'Event not found');
-	if (event.status !== 'PUBLISHED') throw error(400, 'Event is not accepting RSVPs');
-
 	// Compute district hash
-	let dHash: string | null = null;
+	let dHash: string | undefined;
 	if (districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district') {
 		dHash = hashDistrict(districtCode);
 	} else if (postalCode) {
@@ -68,129 +50,27 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// Engagement tier: district-verified = 2, postal = 1, none = 0
 	const engagementTier = districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? 2 : postalCode ? 1 : 0;
 
-	// Compute email hash + encrypt for storage
-	const emailLower = email.toLowerCase();
-	const rsvpId = crypto.randomUUID();
-	const [emailHash, encryptedEmail] = await Promise.all([
-		computeEmailHash(emailLower),
-		encryptPii(emailLower, `event-rsvp:${rsvpId}`).then(e => JSON.stringify(e))
-	]);
-
-	if (!emailHash) throw error(500, 'Email processing failed');
-	if (!encryptedEmail) throw error(500, 'Email encryption failed');
-
-	// Determine RSVP status — atomic capacity claim to prevent TOCTOU oversubscription
-	let rsvpStatus: 'GOING' | 'WAITLISTED' = 'GOING';
-	let claimedSlot = false;
-	if (event.capacity) {
-		const claimed = await db.event.updateMany({
-			where: { id: event.id, rsvpCount: { lt: event.capacity } },
-			data: { rsvpCount: { increment: 1 } }
-		});
-		if (claimed.count === 0) {
-			if (event.waitlistEnabled) {
-				rsvpStatus = 'WAITLISTED';
-			} else {
-				throw error(400, 'Event is at capacity');
-			}
-		} else {
-			claimedSlot = true;
-		}
-	}
-
-	// Find or create supporter if org exists
-	let supporterId: string | null = null;
-	if (event.orgId) {
-		const existing = await findSupporterByEmail(event.orgId, email);
-		if (existing) {
-			supporterId = existing.id;
-		} else {
-			// Encrypt email at rest
-			const supId = crypto.randomUUID();
-			const [eHash, eEnc] = await Promise.all([
-				computeEmailHash(emailLower),
-				encryptPii(emailLower, `supporter:${supId}`).then(e => JSON.stringify(e))
-			]);
-			if (!eHash || !eEnc) throw error(500, 'Supporter email encryption failed');
-			const supporter = await db.supporter.create({
-				data: {
-					id: supId,
-					orgId: event.orgId,
-					name: name.trim(),
-					source: 'event_rsvp',
-					encrypted_email: eEnc,
-					email_hash: eHash
-				}
-			});
-			supporterId = supporter.id;
-		}
-	}
-
-	// Upsert RSVP (dedup on eventId + email_hash)
-	const rsvp = await db.eventRsvp.upsert({
-		where: {
-			eventId_email_hash: { eventId: event.id, email_hash: emailHash }
-		},
-		update: {
-			status: 'GOING',
+	try {
+		// Convex action handles: event validation, capacity claiming, PII encryption, upsert dedup, rsvpCount
+		const result = await serverAction(api.events.createRsvp, {
+			eventId: params.id as any,
+			email: email.toLowerCase(),
 			name: name.trim(),
 			guestCount: typeof guestCount === 'number' && guestCount >= 0 ? guestCount : 0,
 			districtHash: dHash,
-			engagementTier,
-			supporterId
-		},
-		create: {
-			id: rsvpId,
-			eventId: event.id,
-			encrypted_email: encryptedEmail,
-			email_hash: emailHash,
-			name: name.trim(),
-			status: rsvpStatus,
-			guestCount: typeof guestCount === 'number' && guestCount >= 0 ? guestCount : 0,
-			districtHash: dHash,
-			engagementTier,
-			supporterId
-		}
-	});
-
-	// Handle rsvpCount correctness after upsert
-	const isNewRsvp = rsvp.createdAt.getTime() >= Date.now() - 1000;
-	if (!isNewRsvp && event.capacity && claimedSlot) {
-		// We atomically incremented but this was an existing RSVP — undo
-		await db.event.update({
-			where: { id: event.id },
-			data: { rsvpCount: { decrement: 1 } }
+			engagementTier
 		});
-	}
-	// For no-capacity events, only increment on new RSVPs
-	if (!event.capacity && isNewRsvp) {
-		await db.event.update({
-			where: { id: event.id },
-			data: { rsvpCount: { increment: 1 } }
+
+		return json({
+			success: true,
+			rsvpCount: result.rsvpCount ?? 0,
+			status: result.status ?? 'GOING'
 		});
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		if (msg.includes('Event not found')) throw error(404, 'Event not found');
+		if (msg.includes('not accepting RSVPs')) throw error(400, 'Event is not accepting RSVPs');
+		if (msg.includes('at capacity')) throw error(400, 'Event is at capacity');
+		throw error(500, 'Failed to process RSVP');
 	}
-
-	const updatedEvent = await db.event.findUnique({
-		where: { id: event.id },
-		select: { rsvpCount: true }
-	});
-
-	// Fire-and-forget: trigger automation workflows
-	void (async () => {
-		try {
-			if (event.orgId) {
-				await dispatchTrigger(event.orgId, 'event_rsvp', {
-					entityId: rsvp.id,
-					supporterId: supporterId ?? undefined,
-					metadata: { eventId: event.id }
-				});
-			}
-		} catch {}
-	})();
-
-	return json({
-		success: true,
-		rsvpCount: updatedEvent?.rsvpCount ?? event.rsvpCount + 1,
-		status: rsvp.status
-	});
 };

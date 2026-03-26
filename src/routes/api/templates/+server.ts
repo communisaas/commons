@@ -1,13 +1,9 @@
-// CONVEX: Keep SvelteKit — partially migrated, Prisma retained for: buildSegmentWhere, SES engine, pgvector, Groq/Gemini APIs
-// CONVEX: GET fully migrated. POST KEEP on Prisma — uses moderateTemplate (Groq external API),
-// generateBatchEmbeddings (Gemini external API), $transaction with org quota check,
-// raw SQL for pgvector UPDATE (location_embedding, topic_embedding), content hash dedup.
-// These cannot move to Convex without rewriting moderation, embedding generation,
-// and vector storage as Convex actions with separate internal mutations.
+// CONVEX: Fully migrated — moderation (Groq) + embeddings (Gemini) stay in SvelteKit,
+// all DB operations go through Convex serverQuery/serverMutation.
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex'; // KEEP: POST uses $transaction, raw SQL for pgvector, content hash dedup
+import { api } from '$lib/convex';
 import {
 	createApiError,
 	createValidationError,
@@ -15,11 +11,9 @@ import {
 	type ApiError
 } from '$lib/types/errors';
 import type { UnknownRecord } from '$lib/types/any-replacements';
-import { moderateTemplate } from '$lib/core/server/moderation'; // KEEP: Groq moderation (external API)
-import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings'; // KEEP: Gemini embeddings (external API)
-import { createHash } from 'crypto'; // KEEP: content hash for dedup
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { moderateTemplate } from '$lib/core/server/moderation';
+import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
+import { createHash } from 'crypto';
 import type { GeoScope } from '$lib/core/agents/types';
 
 /** Content-addressable fingerprint: same title + body = same template */
@@ -173,22 +167,13 @@ function validateTemplateData(data: unknown): {
 	return { isValid: true, errors: [], validData };
 }
 
-// CONVEX: GET fully migrated
+// GET fully migrated to Convex
 export const GET: RequestHandler = async () => {
 	const templates = await serverQuery(api.templates.listPublic, {});
 	const response: StructuredApiResponse = { success: true, data: templates };
 	return json(response);
 };
 
-// KEEP on Prisma: POST uses moderateTemplate (Groq external API call with consensus voting),
-// generateBatchEmbeddings (Gemini external API for pgvector), $transaction (quota check + template
-// + templateScope insert), raw SQL for pgvector UPDATE ($executeRaw with ::vector cast),
-// content hash dedup (findFirst by content_hash). Moving this to Convex would require:
-// 1. A Convex action for moderation + embedding API calls
-// 2. Convex vector index instead of pgvector (different embedding format)
-// 3. Internal mutations for quota check + template insert
-// 4. Rewriting the geographic scope insert
-// This is a large rewrite with no functional benefit during migration.
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
 	try {
 		// Parse request body
@@ -226,8 +211,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		}
 		const validData = validation.validData;
 
-		// === KEEP: 2-LAYER CONTENT MODERATION (Llama Guard 4 + Gemini) ===
-		// Uses Groq external API — cannot run in Convex mutation (must be action)
+		// === 2-LAYER CONTENT MODERATION (Llama Guard 4 + Gemini) ===
 		let consensusResult;
 
 		try {
@@ -321,18 +305,13 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				return json(response, { status: 403 });
 			}
 
-			// KEEP: orgMembership lookup via Prisma (needed for $transaction quota check)
-			const orgMembership = await db.orgMembership.findFirst({
-				where: { userId: user.id },
-				select: { orgId: true }
-			});
-
 			try {
 				const hash = contentHash(validData.title, validData.message_body);
 
-				// KEEP: content hash dedup via Prisma (findFirst by content_hash)
-				const existingByContent = await db.template.findFirst({
-					where: { userId: user.id, content_hash: hash }
+				// Content hash dedup via Convex
+				const existingByContent = await serverQuery(api.templates.findByContentHash, {
+					userId: user.id,
+					contentHash: hash
 				});
 
 				if (existingByContent) {
@@ -344,7 +323,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					const response: StructuredApiResponse = {
 						success: true,
 						data: { template: {
-							id: existingByContent.id,
+							id: existingByContent._id,
 							slug: existingByContent.slug,
 							title: existingByContent.title,
 							description: existingByContent.description,
@@ -353,12 +332,12 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 							type: existingByContent.type,
 							deliveryMethod: existingByContent.deliveryMethod,
 							subject: existingByContent.title,
-							message_body: existingByContent.message_body,
+							message_body: existingByContent.messageBody,
 							preview: existingByContent.preview,
 							coordinationScale: 0,
 							isNew: false,
-							verified_sends: existingByContent.verified_sends,
-							unique_districts: existingByContent.unique_districts,
+							verified_sends: existingByContent.verifiedSends ?? 0,
+							unique_districts: existingByContent.uniqueDistricts ?? 0,
 							send_count: jsonMetrics.sent || 0,
 							metrics: {
 								sent: jsonMetrics.sent || 0,
@@ -370,19 +349,19 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 								district_coverage_percent: jsonMetrics.district_coverage_percent || 0,
 								personalization_rate: 0
 							},
-							delivery_config: existingByContent.delivery_config,
-							cwc_config: existingByContent.cwc_config,
-							recipient_config: existingByContent.recipient_config,
-							campaign_id: existingByContent.campaign_id,
+							delivery_config: existingByContent.deliveryConfig,
+							cwc_config: existingByContent.cwcConfig,
+							recipient_config: existingByContent.recipientConfig,
+							campaign_id: existingByContent.campaignId ?? null,
 							status: existingByContent.status,
-							is_public: existingByContent.is_public,
+							is_public: existingByContent.isPublic,
 							jurisdiction_level: null,
 							applicable_countries: null,
 							specific_locations: null,
 							jurisdictions: [],
 							scope: null,
 							scopes: [],
-							createdAt: existingByContent.createdAt,
+							createdAt: existingByContent._creationTime,
 							updatedAt: existingByContent.updatedAt
 						} }
 					};
@@ -398,10 +377,8 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 							.replace(/\s+/g, '-')
 							.substring(0, 100);
 
-				// KEEP: slug uniqueness check via Prisma
-				const existingTemplate = await db.template.findUnique({
-					where: { slug }
-				});
+				// Slug uniqueness check via Convex
+				const existingTemplate = await serverQuery(api.templates.findBySlug, { slug });
 
 				if (existingTemplate) {
 					const response: StructuredApiResponse = {
@@ -415,112 +392,45 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					return json(response, { status: 400 });
 				}
 
-				// KEEP: $transaction with quota check + template + templateScope insert
-				const newTemplate = await db.$transaction(async (tx) => {
-					if (orgMembership) {
-						const org = await tx.organization.findUnique({
-							where: { id: orgMembership.orgId },
-							select: { max_templates_month: true }
-						});
-						if (org) {
-							const count = await getMonthlyTemplateCount(tx as unknown as typeof db, orgMembership.orgId);
-							if (count >= org.max_templates_month) {
-								throw new Error('TEMPLATE_QUOTA_EXCEEDED');
-							}
-						}
-					}
-
-					const template = await tx.template.create({
-						data: {
-							title: validData.title,
-							description: validData.description || '',
-							message_body: validData.message_body,
-							sources: validData.sources || [],
-							research_log: validData.research_log || [],
-							category: validData.category || 'General',
-							topics: validData.topics || [],
-							type: validData.type,
-							deliveryMethod: validData.deliveryMethod,
-							preview: validData.preview,
-							delivery_config: (validData.delivery_config || {}) as InputJsonValue,
-							cwc_config: (validData.cwc_config || {}) as InputJsonValue,
-							recipient_config: (validData.recipient_config || {}) as InputJsonValue,
-							metrics: (validData.metrics || {}) as InputJsonValue,
-							status: consensusResult?.approved ? 'published' : 'draft',
-							is_public: consensusResult?.approved ?? false,
-							slug,
-							content_hash: hash,
-							user: { connect: { id: user.id } },
-							verification_status: consensusResult?.approved ? 'approved' : 'pending',
-							country_code: 'US',
-							reputation_applied: false,
-							consensus_approved: consensusResult?.approved ?? false
-						}
-					});
-
-					if (validData.geographic_scope && validData.geographic_scope.type !== 'international') {
-						const geo = validData.geographic_scope;
-
-						let countryCode = 'US';
-						let regionCode: string | null = null;
-						let localityCode: string | null = null;
-						let scopeLevel = 'country';
-						let displayText = 'Nationwide';
-
-						if (geo.type === 'nationwide') {
-							countryCode = geo.country;
-							displayText = geo.country;
-						} else if (geo.type === 'subnational') {
-							countryCode = geo.country;
-							if (geo.subdivision) {
-								regionCode = geo.subdivision;
-								scopeLevel = 'region';
-								displayText = geo.subdivision;
-							}
-							if (geo.locality) {
-								localityCode = geo.locality;
-								scopeLevel = 'locality';
-								displayText = geo.locality + (geo.subdivision ? `, ${geo.subdivision}` : '');
-							}
-						}
-
-						await tx.templateScope.create({
-							data: {
-								template_id: template.id,
-								country_code: countryCode,
-								region_code: regionCode,
-								locality_code: localityCode,
-								display_text: displayText,
-								scope_level: scopeLevel,
-								confidence: 1.0,
-								extraction_method: 'gemini_inline',
-								power_structure_type: null,
-								audience_filter: null,
-								scope_notes: null,
-								validated_against: null
-							}
-						});
-					}
-
-					return template;
+				// Create template via Convex (includes quota check + geographic scope)
+				const newTemplate = await serverMutation(api.templates.createTemplate, {
+					userId: user.id,
+					title: validData.title,
+					slug,
+					description: validData.description || '',
+					messageBody: validData.message_body,
+					preview: validData.preview,
+					type: validData.type,
+					deliveryMethod: validData.deliveryMethod,
+					category: validData.category || 'General',
+					topics: validData.topics || [],
+					sources: validData.sources || [],
+					researchLog: validData.research_log || [],
+					contentHash: hash,
+					status: consensusResult?.approved ? 'published' : 'draft',
+					isPublic: consensusResult?.approved ?? false,
+					deliveryConfig: validData.delivery_config || {},
+					cwcConfig: validData.cwc_config || {},
+					recipientConfig: validData.recipient_config || {},
+					metrics: validData.metrics || {},
+					consensusApproved: consensusResult?.approved ?? false,
+					geographicScope: validData.geographic_scope
 				});
 
-				const templateId = newTemplate.id;
-				const isPublic = newTemplate.is_public;
+				const templateId = newTemplate._id;
+				const isPublic = newTemplate.isPublic;
 				const isCwc = validData.deliveryMethod === 'cwc';
 
-				// KEEP: Deferred work uses Prisma — CWC verification update + pgvector embedding generation
+				// Deferred work: CWC verification + embedding generation
 				if (isCwc || isPublic) {
 					const deferredWork = (async () => {
 						if (isCwc) {
 							try {
-								await db.template.update({
-									where: { id: templateId },
-									data: {
-										verification_status: 'pending',
-										country_code: 'US',
-										reputation_applied: false
-									}
+								await serverMutation(api.templates.setCwcVerification, {
+									templateId: templateId as any,
+									verificationStatus: 'pending',
+									countryCode: 'US',
+									reputationApplied: false
 								});
 								console.log(`[deferred] CWC verification set for template ${templateId}`);
 							} catch (error) {
@@ -528,28 +438,22 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 							}
 						}
 
-						// KEEP: pgvector embedding generation — raw SQL UPDATE with ::vector cast
+						// Embedding generation via Gemini, then write to Convex
 						if (isPublic) {
 							try {
 								const locationText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.category}`;
-								const topicText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.message_body}`;
+								const topicText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.messageBody}`;
 
 								const embeddings = await generateBatchEmbeddings(
 									[locationText, topicText],
 									{ taskType: 'RETRIEVAL_DOCUMENT' }
 								);
 
-								const locationVec = `[${embeddings[0].join(',')}]`;
-								const topicVec = `[${embeddings[1].join(',')}]`;
-
-								await db.$executeRaw`
-									UPDATE "Template"
-									SET location_embedding = ${locationVec}::vector,
-										topic_embedding = ${topicVec}::vector,
-										embedding_version = 'v1',
-										embeddings_updated_at = NOW()
-									WHERE id = ${templateId}
-								`;
+								await serverMutation(api.templates.updateEmbeddings, {
+									templateId: templateId as any,
+									locationEmbedding: embeddings[0],
+									topicEmbedding: embeddings[1]
+								});
 
 								console.log(`[deferred] Embeddings generated for template ${templateId}`);
 							} catch (embeddingError) {
@@ -563,20 +467,19 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					} else {
 						deferredWork.catch(err => {
 							console.error('[deferred] Background work failed:', err);
-							captureWithContext(err, { action: 'template-deferred-work' });
 						});
 					}
 				}
 
+				const jsonMetrics =
+					typeof newTemplate.metrics === 'object' && newTemplate.metrics !== null
+						? (newTemplate.metrics as Record<string, number>)
+						: ({} as Record<string, number>);
+
 				const response: StructuredApiResponse = {
 					success: true,
-					data: { template: (() => {
-					const jsonMetrics =
-						typeof newTemplate.metrics === 'object' && newTemplate.metrics !== null
-							? (newTemplate.metrics as Record<string, number>)
-							: ({} as Record<string, number>);
-					return {
-						id: newTemplate.id,
+					data: { template: {
+						id: newTemplate._id,
 						slug: newTemplate.slug,
 						title: newTemplate.title,
 						description: newTemplate.description,
@@ -585,7 +488,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						type: newTemplate.type,
 						deliveryMethod: newTemplate.deliveryMethod,
 						subject: newTemplate.title,
-						message_body: newTemplate.message_body,
+						message_body: newTemplate.messageBody,
 						preview: newTemplate.preview,
 						coordinationScale: 0,
 						isNew: true,
@@ -602,22 +505,21 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 							district_coverage_percent: 0,
 							personalization_rate: 0
 						},
-						delivery_config: newTemplate.delivery_config,
-						cwc_config: newTemplate.cwc_config,
-						recipient_config: newTemplate.recipient_config,
-						campaign_id: newTemplate.campaign_id,
+						delivery_config: newTemplate.deliveryConfig,
+						cwc_config: newTemplate.cwcConfig,
+						recipient_config: newTemplate.recipientConfig,
+						campaign_id: newTemplate.campaignId ?? null,
 						status: newTemplate.status,
-						is_public: newTemplate.is_public,
+						is_public: newTemplate.isPublic,
 						jurisdiction_level: null,
 						applicable_countries: null,
 						specific_locations: null,
 						jurisdictions: [],
 						scope: null,
 						scopes: [],
-						createdAt: newTemplate.createdAt,
+						createdAt: newTemplate._creationTime,
 						updatedAt: newTemplate.updatedAt
-					};
-				})() }
+					} }
 				};
 
 				return json(response);
