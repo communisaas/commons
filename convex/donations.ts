@@ -1,5 +1,6 @@
 import {
   query,
+  mutation,
   action,
   internalMutation,
   internalQuery,
@@ -459,6 +460,234 @@ export const setStripeSessionId = internalMutation({
       stripeSessionId: args.stripeSessionId,
       updatedAt: Date.now(),
     });
+  },
+});
+
+// =============================================================================
+// FUNDRAISING — Org-scoped fundraiser CRUD
+// =============================================================================
+
+/**
+ * List fundraiser campaigns for an org, with aggregated donor counts.
+ * No PII — amounts only.
+ */
+export const listByOrgWithDonors = query({
+  args: {
+    orgSlug: v.string(),
+    status: v.optional(v.string()),
+    limit: v.optional(v.number()),
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+    const limit = Math.min(args.limit ?? 20, 100);
+
+    const campaigns = await ctx.db
+      .query("campaigns")
+      .withIndex("by_orgId", (qb) => qb.eq("orgId", org._id))
+      .order("desc")
+      .collect();
+
+    // Filter to fundraisers + optional status
+    let fundraisers = campaigns.filter((c) => c.type === "FUNDRAISER");
+    if (args.status) {
+      fundraisers = fundraisers.filter((c) => c.status === args.status);
+    }
+
+    const items = fundraisers.slice(0, limit);
+    const hasMore = fundraisers.length > limit;
+
+    return {
+      data: items.map((c) => ({
+        _id: c._id,
+        title: c.title,
+        description: c.body ?? null,
+        status: c.status,
+        goalAmountCents: c.goalAmountCents ?? null,
+        raisedAmountCents: c.raisedAmountCents,
+        donorCount: c.donorCount,
+        donationCurrency: c.donationCurrency ?? "usd",
+        createdAt: new Date(c._creationTime).toISOString(),
+        updatedAt: new Date(c.updatedAt).toISOString(),
+      })),
+      meta: { hasMore },
+    };
+  },
+});
+
+/**
+ * Create a fundraiser campaign. Requires editor role.
+ */
+export const createFundraiser = mutation({
+  args: {
+    orgSlug: v.string(),
+    title: v.string(),
+    description: v.optional(v.string()),
+    goalAmountCents: v.optional(v.number()),
+    currency: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+
+    if (!args.title || args.title.trim().length < 3) {
+      throw new Error("Title is required (minimum 3 characters)");
+    }
+
+    if (args.goalAmountCents !== undefined && args.goalAmountCents !== null) {
+      if (!Number.isInteger(args.goalAmountCents) || args.goalAmountCents <= 0) {
+        throw new Error("Goal amount must be a positive integer (in cents)");
+      }
+    }
+
+    const id = await ctx.db.insert("campaigns", {
+      orgId: org._id,
+      title: args.title.trim(),
+      body: args.description?.trim() || undefined,
+      type: "FUNDRAISER",
+      status: "DRAFT",
+      goalAmountCents: args.goalAmountCents ?? undefined,
+      raisedAmountCents: 0,
+      donorCount: 0,
+      donationCurrency: args.currency || "usd",
+      updatedAt: Date.now(),
+    });
+
+    return { id };
+  },
+});
+
+/**
+ * Update a fundraiser campaign. Requires editor role.
+ */
+export const updateFundraiser = mutation({
+  args: {
+    orgSlug: v.string(),
+    campaignId: v.id("campaigns"),
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    status: v.optional(v.string()),
+    goalAmountCents: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.orgId !== org._id || campaign.type !== "FUNDRAISER") {
+      throw new Error("Fundraiser not found");
+    }
+
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+
+    if (args.title !== undefined) {
+      if (typeof args.title !== "string" || args.title.trim().length < 3) {
+        throw new Error("Title must be at least 3 characters");
+      }
+      patch.title = args.title.trim();
+    }
+
+    if (args.description !== undefined) {
+      patch.body = args.description?.trim() || undefined;
+    }
+
+    if (args.status !== undefined) {
+      const VALID_STATUSES = ["DRAFT", "ACTIVE", "COMPLETE"];
+      if (!VALID_STATUSES.includes(args.status)) {
+        throw new Error("Status must be one of: DRAFT, ACTIVE, COMPLETE");
+      }
+      patch.status = args.status;
+    }
+
+    if (args.goalAmountCents !== undefined) {
+      if (
+        args.goalAmountCents !== null &&
+        (!Number.isInteger(args.goalAmountCents) || args.goalAmountCents <= 0)
+      ) {
+        throw new Error("Goal amount must be a positive integer (in cents)");
+      }
+      patch.goalAmountCents = args.goalAmountCents ?? undefined;
+    }
+
+    await ctx.db.patch(args.campaignId, patch);
+
+    const updated = await ctx.db.get(args.campaignId);
+    return {
+      _id: updated!._id,
+      title: updated!.title,
+      description: updated!.body ?? null,
+      status: updated!.status,
+      goalAmountCents: updated!.goalAmountCents ?? null,
+      raisedAmountCents: updated!.raisedAmountCents,
+      donorCount: updated!.donorCount,
+      donationCurrency: updated!.donationCurrency ?? "usd",
+      updatedAt: new Date(updated!.updatedAt).toISOString(),
+    };
+  },
+});
+
+/**
+ * Delete (soft-delete) a fundraiser. Sets status to COMPLETE. Requires editor role.
+ */
+export const deleteFundraiser = mutation({
+  args: {
+    orgSlug: v.string(),
+    campaignId: v.id("campaigns"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.orgId !== org._id || campaign.type !== "FUNDRAISER") {
+      throw new Error("Fundraiser not found");
+    }
+
+    await ctx.db.patch(args.campaignId, {
+      status: "COMPLETE",
+      updatedAt: Date.now(),
+    });
+
+    return { success: true };
+  },
+});
+
+/**
+ * List donors for a fundraiser. No PII in public response (amounts only).
+ * Editor role required for name/email access.
+ */
+export const listDonors = query({
+  args: {
+    orgSlug: v.string(),
+    campaignId: v.id("campaigns"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.orgId !== org._id || campaign.type !== "FUNDRAISER") {
+      throw new Error("Fundraiser not found");
+    }
+
+    const donations = await ctx.db
+      .query("donations")
+      .withIndex("by_campaignId", (qb) => qb.eq("campaignId", args.campaignId))
+      .order("desc")
+      .collect();
+
+    const completed = donations
+      .filter((d) => d.status === "completed")
+      .slice(0, 100);
+
+    return {
+      data: completed.map((d) => ({
+        _id: d._id,
+        name: d.name,
+        email: d.email,
+        amountCents: d.amountCents,
+        recurring: d.recurring,
+        engagementTier: d.engagementTier,
+        districtHash: d.districtHash ? d.districtHash.slice(0, 12) : null,
+        completedAt: d.completedAt ? new Date(d.completedAt).toISOString() : null,
+      })),
+    };
   },
 });
 

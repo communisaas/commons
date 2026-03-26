@@ -8,6 +8,9 @@ import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 const VALID_STATUSES = ['DRAFT', 'ACTIVE', 'COMPLETE'];
@@ -15,12 +18,6 @@ const VALID_STATUSES = ['DRAFT', 'ACTIVE', 'COMPLETE'];
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.FUNDRAISING) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
-
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
-	const meetsPlan = await orgMeetsPlan(org.id, 'starter');
-	if (!meetsPlan) throw error(403, 'Fundraising requires a Starter plan or higher');
 
 	const body = await request.json();
 	const { title, description, goalAmountCents, currency } = body;
@@ -34,6 +31,29 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			throw error(400, 'Goal amount must be a positive integer (in cents)');
 		}
 	}
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverMutation(api.donations.createFundraiser, {
+				orgSlug: params.slug,
+				title,
+				description: description ?? undefined,
+				goalAmountCents: goalAmountCents ?? undefined,
+				currency: currency ?? undefined
+			});
+			return json({ id: result.id }, { status: 201 });
+		} catch (err) {
+			console.error('[Fundraising.POST] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
+
+	const meetsPlan = await orgMeetsPlan(org.id, 'starter');
+	if (!meetsPlan) throw error(403, 'Fundraising requires a Starter plan or higher');
 
 	const campaign = await db.campaign.create({
 		data: {
@@ -54,10 +74,25 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!FEATURES.FUNDRAISING) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
-
 	const status = url.searchParams.get('status');
 	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 100);
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.donations.listByOrgWithDonors, {
+				orgSlug: params.slug,
+				status: status && VALID_STATUSES.includes(status) ? status : undefined,
+				limit
+			});
+			return json(result);
+		} catch (err) {
+			console.error('[Fundraising.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org } = await loadOrgContext(params.slug, locals.user.id);
 	const cursor = url.searchParams.get('cursor') || null;
 
 	const where: Record<string, unknown> = { orgId: org.id, type: 'FUNDRAISER' };

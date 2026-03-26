@@ -1,4 +1,5 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, action, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -498,5 +499,289 @@ export const updateOnboardingState = internalMutation({
       onboardingState: { ...current, ...patch },
       updatedAt: Date.now(),
     });
+  },
+});
+
+// =============================================================================
+// ORG CREATE
+// =============================================================================
+
+/**
+ * Create a new organization. The authenticated user becomes the owner.
+ */
+export const create = mutation({
+  args: {
+    name: v.string(),
+    slug: v.string(),
+    description: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { userId } = await requireAuth(ctx);
+
+    if (!args.name || !args.slug) {
+      throw new Error("name and slug are required");
+    }
+
+    if (!/^[a-z0-9-]+$/.test(args.slug) || args.slug.length < 2 || args.slug.length > 48) {
+      throw new Error("slug must be 2-48 lowercase alphanumeric characters or hyphens");
+    }
+
+    // Check slug uniqueness
+    const existing = await ctx.db
+      .query("organizations")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+
+    if (existing) {
+      throw new Error("An organization with this slug already exists");
+    }
+
+    const now = Date.now();
+
+    const orgId = await ctx.db.insert("organizations", {
+      name: args.name,
+      slug: args.slug,
+      description: args.description ?? undefined,
+      maxSeats: 10,
+      maxTemplatesMonth: 50,
+      dmCacheTtlDays: 7,
+      countryCode: "US",
+      isPublic: false,
+      supporterCount: 0,
+      campaignCount: 0,
+      memberCount: 1,
+      sentEmailCount: 0,
+      updatedAt: now,
+    });
+
+    // Create owner membership
+    await ctx.db.insert("orgMemberships", {
+      userId,
+      orgId,
+      role: "owner",
+      joinedAt: now,
+    });
+
+    return { _id: orgId, slug: args.slug };
+  },
+});
+
+// =============================================================================
+// ISSUE DOMAINS
+// =============================================================================
+
+const MAX_DOMAINS_PER_ORG = 20;
+const RESERVED_LABELS = ["__alert_preferences__"];
+
+/**
+ * List issue domains for an org.
+ */
+export const listIssueDomains = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { org } = await requireOrgRole(ctx, slug, "member");
+
+    const domains = await ctx.db
+      .query("orgIssueDomains")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .collect();
+
+    // Sort by _creationTime ascending
+    domains.sort((a, b) => a._creationTime - b._creationTime);
+
+    return {
+      domains: domains.map((d) => ({
+        _id: d._id,
+        label: d.label,
+        description: d.description ?? null,
+        weight: d.weight,
+        createdAt: d._creationTime,
+        updatedAt: d.updatedAt,
+      })),
+    };
+  },
+});
+
+/**
+ * Create a new issue domain. Requires editor+ role.
+ */
+export const createIssueDomain = mutation({
+  args: {
+    slug: v.string(),
+    label: v.string(),
+    description: v.optional(v.string()),
+    weight: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const label = args.label?.trim();
+    if (!label || label.length > 100) {
+      throw new Error("Label is required (max 100 chars)");
+    }
+
+    if (RESERVED_LABELS.some((r) => label.startsWith(r))) {
+      throw new Error("This label is reserved");
+    }
+
+    const weight = args.weight ?? 1.0;
+    if (weight < 0.5 || weight > 2.0) {
+      throw new Error("Weight must be between 0.5 and 2.0");
+    }
+
+    // Check domain count limit
+    const existingDomains = await ctx.db
+      .query("orgIssueDomains")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .collect();
+
+    if (existingDomains.length >= MAX_DOMAINS_PER_ORG) {
+      throw new Error(
+        `Maximum of ${MAX_DOMAINS_PER_ORG} issue domains per organization`,
+      );
+    }
+
+    // Check for duplicate label
+    const duplicate = await ctx.db
+      .query("orgIssueDomains")
+      .withIndex("by_orgId_label", (q) =>
+        q.eq("orgId", org._id).eq("label", label),
+      )
+      .first();
+
+    if (duplicate) {
+      throw new Error("An issue domain with this label already exists");
+    }
+
+    const now = Date.now();
+    const domainId = await ctx.db.insert("orgIssueDomains", {
+      orgId: org._id,
+      label,
+      description: args.description || undefined,
+      weight,
+      updatedAt: now,
+    });
+
+    // Update onboarding state
+    const onboarding = org.onboardingState ?? {
+      hasDescription: false,
+      hasIssueDomains: false,
+      hasSupporters: false,
+      hasCampaigns: false,
+      hasTeam: false,
+      hasSentEmail: false,
+    };
+    await ctx.db.patch(org._id, {
+      onboardingState: { ...onboarding, hasIssueDomains: true },
+      updatedAt: now,
+    });
+
+    const domain = await ctx.db.get(domainId);
+    return {
+      _id: domainId,
+      label: domain!.label,
+      description: domain!.description ?? null,
+      weight: domain!.weight,
+      createdAt: domain!._creationTime,
+      updatedAt: domain!.updatedAt,
+    };
+  },
+});
+
+/**
+ * Update an issue domain. Requires editor+ role.
+ */
+export const updateIssueDomain = mutation({
+  args: {
+    slug: v.string(),
+    domainId: v.id("orgIssueDomains"),
+    label: v.optional(v.string()),
+    description: v.optional(v.string()),
+    weight: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const existing = await ctx.db.get(args.domainId);
+    if (!existing || existing.orgId !== org._id) {
+      throw new Error("Issue domain not found");
+    }
+
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+
+    if (args.label !== undefined) {
+      const label = args.label.trim();
+      if (!label || label.length > 100) {
+        throw new Error("Label is required (max 100 chars)");
+      }
+      if (RESERVED_LABELS.some((r) => label.startsWith(r))) {
+        throw new Error("This label is reserved");
+      }
+      // Check duplicate on label change
+      if (label !== existing.label) {
+        const dup = await ctx.db
+          .query("orgIssueDomains")
+          .withIndex("by_orgId_label", (q) =>
+            q.eq("orgId", org._id).eq("label", label),
+          )
+          .first();
+        if (dup) {
+          throw new Error("An issue domain with this label already exists");
+        }
+      }
+      patch.label = label;
+    }
+
+    if (args.description !== undefined) {
+      patch.description = args.description || undefined;
+    }
+
+    if (args.weight !== undefined) {
+      if (args.weight < 0.5 || args.weight > 2.0) {
+        throw new Error("Weight must be between 0.5 and 2.0");
+      }
+      patch.weight = args.weight;
+    }
+
+    if (Object.keys(patch).length <= 1) {
+      throw new Error("No fields to update");
+    }
+
+    await ctx.db.patch(args.domainId, patch);
+
+    const updated = await ctx.db.get(args.domainId);
+    return {
+      _id: args.domainId,
+      label: updated!.label,
+      description: updated!.description ?? null,
+      weight: updated!.weight,
+      createdAt: updated!._creationTime,
+      updatedAt: updated!.updatedAt,
+    };
+  },
+});
+
+/**
+ * Delete an issue domain. Requires editor+ role.
+ */
+export const deleteIssueDomain = mutation({
+  args: {
+    slug: v.string(),
+    domainId: v.id("orgIssueDomains"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const existing = await ctx.db.get(args.domainId);
+    if (!existing || existing.orgId !== org._id) {
+      throw new Error("Issue domain not found");
+    }
+
+    if (RESERVED_LABELS.some((r) => existing.label.startsWith(r))) {
+      throw new Error("Cannot delete reserved domain");
+    }
+
+    await ctx.db.delete(args.domainId);
+    return { ok: true };
   },
 });

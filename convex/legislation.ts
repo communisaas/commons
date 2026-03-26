@@ -1414,6 +1414,223 @@ export const listOrgScorecards = query({
 });
 
 // =============================================================================
+// ALERT PREFERENCES — stored in orgIssueDomains with reserved label
+// =============================================================================
+
+const ALERT_PREFS_LABEL = "__alert_preferences__";
+
+const ALERT_PREF_DEFAULTS = {
+  minRelevanceScore: 0.6,
+  digestOnly: false,
+  autoArchiveDays: 30,
+};
+
+/**
+ * Get alert preferences for an org.
+ */
+export const getAlertPreferences = query({
+  args: { slug: v.string() },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "member");
+
+    const row = await ctx.db
+      .query("orgIssueDomains")
+      .withIndex("by_orgId_label", (q) =>
+        q.eq("orgId", org._id).eq("label", ALERT_PREFS_LABEL),
+      )
+      .first();
+
+    if (!row?.description) return { ...ALERT_PREF_DEFAULTS };
+
+    try {
+      const parsed = JSON.parse(row.description);
+      return {
+        minRelevanceScore:
+          typeof parsed.minRelevanceScore === "number"
+            ? Math.min(1.0, Math.max(0.5, parsed.minRelevanceScore))
+            : ALERT_PREF_DEFAULTS.minRelevanceScore,
+        digestOnly:
+          typeof parsed.digestOnly === "boolean"
+            ? parsed.digestOnly
+            : ALERT_PREF_DEFAULTS.digestOnly,
+        autoArchiveDays:
+          typeof parsed.autoArchiveDays === "number"
+            ? Math.max(1, Math.round(parsed.autoArchiveDays))
+            : ALERT_PREF_DEFAULTS.autoArchiveDays,
+      };
+    } catch {
+      return { ...ALERT_PREF_DEFAULTS };
+    }
+  },
+});
+
+/**
+ * Update alert preferences for an org. Requires editor role.
+ */
+export const updateAlertPreferences = mutation({
+  args: {
+    slug: v.string(),
+    minRelevanceScore: v.optional(v.number()),
+    digestOnly: v.optional(v.boolean()),
+    autoArchiveDays: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    // Load current preferences
+    const row = await ctx.db
+      .query("orgIssueDomains")
+      .withIndex("by_orgId_label", (q) =>
+        q.eq("orgId", org._id).eq("label", ALERT_PREFS_LABEL),
+      )
+      .first();
+
+    let current = { ...ALERT_PREF_DEFAULTS };
+    if (row?.description) {
+      try {
+        const parsed = JSON.parse(row.description);
+        current = {
+          minRelevanceScore:
+            typeof parsed.minRelevanceScore === "number"
+              ? parsed.minRelevanceScore
+              : ALERT_PREF_DEFAULTS.minRelevanceScore,
+          digestOnly:
+            typeof parsed.digestOnly === "boolean"
+              ? parsed.digestOnly
+              : ALERT_PREF_DEFAULTS.digestOnly,
+          autoArchiveDays:
+            typeof parsed.autoArchiveDays === "number"
+              ? parsed.autoArchiveDays
+              : ALERT_PREF_DEFAULTS.autoArchiveDays,
+        };
+      } catch {
+        // Use defaults
+      }
+    }
+
+    // Apply updates
+    if (typeof args.minRelevanceScore === "number" && Number.isFinite(args.minRelevanceScore)) {
+      current.minRelevanceScore = Math.min(1.0, Math.max(0.5, args.minRelevanceScore));
+    }
+    if (typeof args.digestOnly === "boolean") {
+      current.digestOnly = args.digestOnly;
+    }
+    if (typeof args.autoArchiveDays === "number" && Number.isFinite(args.autoArchiveDays)) {
+      current.autoArchiveDays = Math.min(365, Math.max(1, Math.round(args.autoArchiveDays)));
+    }
+
+    const serialized = JSON.stringify(current);
+
+    if (row) {
+      await ctx.db.patch(row._id, { description: serialized });
+    } else {
+      await ctx.db.insert("orgIssueDomains", {
+        orgId: org._id,
+        label: ALERT_PREFS_LABEL,
+        description: serialized,
+        weight: 0,
+        updatedAt: Date.now(),
+      });
+    }
+
+    return current;
+  },
+});
+
+// =============================================================================
+// SCORECARD EXPORT — CSV-ready data for the SvelteKit route to format
+// =============================================================================
+
+/**
+ * Export scorecard data for an org. Returns structured data (not CSV).
+ * The SvelteKit route handles CSV formatting.
+ */
+export const exportScorecards = query({
+  args: {
+    slug: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "member");
+
+    // Get all DMs followed by org
+    const follows = await ctx.db
+      .query("orgDmFollows")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .collect();
+
+    const scorecards = await Promise.all(
+      follows.map(async (f) => {
+        const dm = await ctx.db.get(f.decisionMakerId);
+        if (!dm) return null;
+
+        const latest = await ctx.db
+          .query("scorecardSnapshots")
+          .withIndex("by_decisionMakerId", (q) =>
+            q.eq("decisionMakerId", f.decisionMakerId),
+          )
+          .order("desc")
+          .first();
+
+        // Count accountability receipts for this DM + org
+        const receipts = await ctx.db
+          .query("accountabilityReceipts")
+          .withIndex("by_orgId_billId_decisionMakerId", (q) =>
+            q.eq("orgId", org._id),
+          )
+          .collect();
+        const dmReceipts = receipts.filter(
+          (r) => r.decisionMakerId === f.decisionMakerId,
+        );
+
+        if (!latest && dmReceipts.length === 0) return null;
+
+        return {
+          name: dm.name,
+          title: dm.title ?? "",
+          district: dm.district ?? "",
+          reportsReceived: latest?.deliveriesSent ?? 0,
+          reportsOpened: latest?.deliveriesOpened ?? 0,
+          verifyLinksClicked: latest?.deliveriesVerified ?? 0,
+          repliesLogged: latest?.repliesReceived ?? 0,
+          relevantVotes: latest?.totalScoredVotes ?? 0,
+          alignedVotes: latest?.alignedVotes ?? 0,
+          alignmentRate: latest?.alignment ?? null,
+          avgResponseTime: latest?.responsiveness != null
+            ? Math.round((1 - latest.responsiveness) * 168 * 10) / 10
+            : null,
+          lastContactDate: null as string | null,
+          score: latest?.composite != null ? Math.round(latest.composite * 100) : 0,
+        };
+      }),
+    );
+
+    const filtered = scorecards.filter(
+      (s): s is NonNullable<typeof s> => s !== null,
+    );
+
+    // Sort by score descending
+    filtered.sort((a, b) => b.score - a.score);
+
+    const avgScore =
+      filtered.length > 0
+        ? Math.round(
+            filtered.reduce((sum, s) => sum + s.score, 0) / filtered.length,
+          )
+        : 0;
+
+    return {
+      scorecards: filtered,
+      meta: {
+        orgId: org._id as string,
+        computedAt: new Date().toISOString(),
+        decisionMakers: filtered.length,
+        avgScore,
+      },
+    };
+  },
+});
+
+// =============================================================================
 // CRON STUBS — internal actions called by convex/crons.ts
 // =============================================================================
 

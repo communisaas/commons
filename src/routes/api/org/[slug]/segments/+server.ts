@@ -5,6 +5,9 @@ import { buildSegmentWhere } from '$lib/server/segments/query-builder';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
 import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 import { safeUserId } from '$lib/core/server/security';
 
@@ -25,6 +28,18 @@ function csvEscape(value: string): string {
  */
 export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.segments.list, { slug: params.slug });
+			return json(result);
+		} catch (err) {
+			console.error('[Segments.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org } = await loadOrgContext(params.slug, locals.user.id);
 
 	const segments = await db.segment.findMany({
@@ -91,6 +106,31 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			throw error(400, validationError);
 		}
 
+		// ─── DUAL-STACK: Try Convex for save, fallback to Prisma ───
+		if (PUBLIC_CONVEX_URL) {
+			try {
+				if (body.id) {
+					const result = await serverMutation(api.segments.update, {
+						slug: params.slug,
+						segmentId: body.id,
+						name,
+						filters
+					});
+					return json(result);
+				} else {
+					const result = await serverMutation(api.segments.create, {
+						slug: params.slug,
+						name,
+						filters
+					});
+					return json(result, { status: 201 });
+				}
+			} catch (err) {
+				console.error('[Segments.save] Convex failed, falling back to Prisma:', err);
+			}
+		}
+
+		// ─── PRISMA FALLBACK ───
 		if (body.id) {
 			// Update existing
 			const existing = await db.segment.findFirst({
@@ -228,11 +268,26 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
  */
 export const DELETE: RequestHandler = async ({ url, params, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
 
 	const segmentId = url.searchParams.get('id');
 	if (!segmentId) throw error(400, 'Missing segment id');
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			await serverMutation(api.segments.remove, {
+				slug: params.slug,
+				segmentId
+			});
+			return json({ ok: true });
+		} catch (err) {
+			console.error('[Segments.DELETE] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	const existing = await db.segment.findFirst({
 		where: { id: segmentId, orgId: org.id }

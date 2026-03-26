@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — Twilio external service integration
 /**
  * POST /api/org/[slug]/sms — Create SMS blast
  * GET  /api/org/[slug]/sms — List SMS blasts

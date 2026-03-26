@@ -2,6 +2,9 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { encryptPii, computeEmailHash, tryDecryptPii, type EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery, serverAction, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /** Decrypt an invite's email from encrypted_email (authoritative post-Cycle 6). */
@@ -21,13 +24,30 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
 	const body = await request.json();
 	const { invites } = body as {
 		invites?: Array<{ email: string; role?: string }>;
 	};
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverAction(api.invites.create, {
+				slug: params.slug,
+				invites: (invites ?? []).map((inv) => ({
+					email: inv.email,
+					role: inv.role
+				}))
+			});
+			return json(result, { status: 201 });
+		} catch (err) {
+			console.error('[Invites.POST] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	if (!invites || !Array.isArray(invites) || invites.length === 0) {
 		throw error(400, 'invites array is required');
@@ -172,6 +192,17 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.invites.list, { slug: params.slug });
+			return json(result);
+		} catch (err) {
+			console.error('[Invites.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 
@@ -213,15 +244,29 @@ export const DELETE: RequestHandler = async ({ params, locals, request }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
 	const body = await request.json();
 	const { inviteId } = body as { inviteId?: string };
 
 	if (!inviteId) {
 		throw error(400, 'inviteId is required');
 	}
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			await serverMutation(api.invites.remove, {
+				slug: params.slug,
+				inviteId
+			});
+			return json({ ok: true });
+		} catch (err) {
+			console.error('[Invites.DELETE] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	const invite = await db.orgInvite.findFirst({
 		where: { id: inviteId, orgId: org.id }
@@ -242,15 +287,29 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
 	const body = await request.json();
 	const { inviteId } = body as { inviteId?: string };
 
 	if (!inviteId) {
 		throw error(400, 'inviteId is required');
 	}
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverAction(api.invites.resend, {
+				slug: params.slug,
+				inviteId
+			});
+			return json(result);
+		} catch (err) {
+			console.error('[Invites.PATCH] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	const invite = await db.orgInvite.findFirst({
 		where: { id: inviteId, orgId: org.id, accepted: false }

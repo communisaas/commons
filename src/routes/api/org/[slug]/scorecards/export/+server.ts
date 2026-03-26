@@ -2,6 +2,9 @@ import { error } from '@sveltejs/kit';
 import { loadOrgContext } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
 import { computeScorecards } from '$lib/server/legislation/scorecard/compute';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /**
@@ -19,14 +22,35 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
-
 	const format = url.searchParams.get('format') ?? 'csv';
 	if (format !== 'csv') {
 		throw error(400, 'Only CSV format is supported');
 	}
 
-	const result = await computeScorecards(org.id);
+	let result: { scorecards: Array<{
+		name: string; title: string; district: string;
+		reportsReceived: number; reportsOpened: number;
+		verifyLinksClicked: number; repliesLogged: number;
+		relevantVotes: number; alignedVotes: number;
+		alignmentRate: number | null; avgResponseTime: number | null;
+		lastContactDate: string | null; score: number;
+	}>; meta: { orgId: string; computedAt: string; decisionMakers: number; avgScore: number } };
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			result = await serverQuery(api.legislation.exportScorecards, {
+				slug: params.slug
+			});
+		} catch (err) {
+			console.error('[ScorecardExport] Convex failed, falling back to Prisma:', err);
+			const { org } = await loadOrgContext(params.slug, locals.user.id);
+			result = await computeScorecards(org.id);
+		}
+	} else {
+		const { org } = await loadOrgContext(params.slug, locals.user.id);
+		result = await computeScorecards(org.id);
+	}
 
 	// Build CSV
 	const headers = [
@@ -68,7 +92,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	return new Response(csv, {
 		headers: {
 			'Content-Type': 'text/csv; charset=utf-8',
-			'Content-Disposition': `attachment; filename="${org.slug}-scorecards-${new Date().toISOString().slice(0, 10)}.csv"`
+			'Content-Disposition': `attachment; filename="${params.slug}-scorecards-${new Date().toISOString().slice(0, 10)}.csv"`
 		}
 	});
 };

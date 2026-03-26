@@ -15,13 +15,29 @@ import {
 	getAlertPreferences,
 	saveAlertPreferences
 } from '$lib/server/legislation/alerts/preferences';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /** GET /api/org/[slug]/settings/alert-preferences */
 export const GET: RequestHandler = async ({ locals, params }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const prefs = await serverQuery(api.legislation.getAlertPreferences, {
+				slug: params.slug
+			});
+			return json(prefs);
+		} catch (err) {
+			console.error('[AlertPrefs.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org } = await loadOrgContext(params.slug, locals.user.id);
 	const prefs = await getAlertPreferences(org.id);
 	return json(prefs);
 };
@@ -29,10 +45,28 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 /** PATCH /api/org/[slug]/settings/alert-preferences */
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
+
+	const body = await request.json();
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverMutation(api.legislation.updateAlertPreferences, {
+				slug: params.slug,
+				minRelevanceScore: body.minRelevanceScore ?? undefined,
+				digestOnly: body.digestOnly ?? undefined,
+				autoArchiveDays: body.autoArchiveDays ?? undefined
+			});
+			return json(result);
+		} catch (err) {
+			console.error('[AlertPrefs.PATCH] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 
-	const body = await request.json();
 	const current = await getAlertPreferences(org.id);
 
 	if (typeof body.minRelevanceScore === 'number' && Number.isFinite(body.minRelevanceScore)) {

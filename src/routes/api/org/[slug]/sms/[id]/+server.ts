@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — Twilio external service integration
 /**
  * PATCH /api/org/[slug]/sms/[id] — Update blast or trigger send
  * DELETE /api/org/[slug]/sms/[id] — Delete blast

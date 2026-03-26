@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { db, getRequestClient } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { generateEmbedding } from '$lib/core/search/gemini-embeddings';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 const MAX_DOMAINS_PER_ORG = 20;
@@ -17,6 +20,18 @@ const IssueDomainSchema = z.object({
 /** List all issue domains for this org. */
 export const GET: RequestHandler = async ({ locals, params }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.organizations.listIssueDomains, { slug: params.slug });
+			return json(result);
+		} catch (err) {
+			console.error('[IssueDomains.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org } = await loadOrgContext(params.slug, locals.user.id);
 
 	const domains = await db.orgIssueDomain.findMany({
@@ -37,8 +52,6 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 /** Create a new issue domain. Requires editor role. */
 export const POST: RequestHandler = async ({ locals, params, request, platform }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
 
 	let parsed: z.infer<typeof IssueDomainSchema>;
 	try {
@@ -53,6 +66,25 @@ export const POST: RequestHandler = async ({ locals, params, request, platform }
 
 	const { label, description, weight } = parsed;
 	const parsedWeight = weight ?? 1.0;
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverMutation(api.organizations.createIssueDomain, {
+				slug: params.slug,
+				label,
+				description: description ?? undefined,
+				weight: parsedWeight
+			});
+			return json(result, { status: 201 });
+		} catch (err) {
+			console.error('[IssueDomains.POST] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	if (RESERVED_LABELS.some(r => label.startsWith(r))) {
 		throw error(400, 'This label is reserved');
@@ -127,8 +159,6 @@ export const POST: RequestHandler = async ({ locals, params, request, platform }
 /** Update an issue domain. Requires editor role. */
 export const PATCH: RequestHandler = async ({ locals, params, request, platform }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
 
 	const PatchSchema = z.object({ id: z.string().min(1) }).merge(IssueDomainSchema.partial());
 
@@ -146,6 +176,26 @@ export const PATCH: RequestHandler = async ({ locals, params, request, platform 
 		}
 		throw error(400, 'Invalid JSON body');
 	}
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverMutation(api.organizations.updateIssueDomain, {
+				slug: params.slug,
+				domainId: id as any,
+				label: fields.label,
+				description: fields.description ?? undefined,
+				weight: fields.weight
+			});
+			return json(result);
+		} catch (err) {
+			console.error('[IssueDomains.PATCH] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	const existing = await db.orgIssueDomain.findFirst({
 		where: { id, orgId: org.id }
@@ -224,13 +274,28 @@ export const PATCH: RequestHandler = async ({ locals, params, request, platform 
 /** Delete an issue domain. Requires editor role. */
 export const DELETE: RequestHandler = async ({ locals, params, request }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
 
 	const body = await request.json();
 	const { id } = body as { id?: string };
 
 	if (!id) throw error(400, 'id is required');
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			await serverMutation(api.organizations.deleteIssueDomain, {
+				slug: params.slug,
+				domainId: id as any
+			});
+			return json({ ok: true });
+		} catch (err) {
+			console.error('[IssueDomains.DELETE] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
 
 	const existing = await db.orgIssueDomain.findFirst({
 		where: { id, orgId: org.id }

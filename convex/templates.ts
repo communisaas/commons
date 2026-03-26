@@ -1,7 +1,8 @@
-import { query, action, internalQuery } from "./_generated/server";
+import { query, mutation, action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { requireOrgRole } from "./_authHelpers";
 
 // =============================================================================
 // TEMPLATES — Queries & Actions
@@ -579,5 +580,89 @@ export const listByOrg = query({
       _id: t._id,
       title: t.title,
     }));
+  },
+});
+
+// =============================================================================
+// ENDORSEMENTS — Org endorses/un-endorses a template
+// =============================================================================
+
+/**
+ * Endorse a template on behalf of an org. Requires editor role.
+ * Upserts to handle duplicate endorsement gracefully.
+ */
+export const endorse = mutation({
+  args: {
+    orgSlug: v.string(),
+    templateId: v.id("templates"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+
+    // Verify template exists and is public
+    const template = await ctx.db.get(args.templateId);
+    if (!template) throw new Error("Template not found");
+    if (!template.isPublic) throw new Error("Cannot endorse a private template");
+
+    // Check if already endorsed (upsert behavior)
+    const existing = await ctx.db
+      .query("templateEndorsements")
+      .withIndex("by_templateId_orgId", (q) =>
+        q.eq("templateId", args.templateId).eq("orgId", org._id),
+      )
+      .first();
+
+    if (existing) {
+      return { id: existing._id };
+    }
+
+    const id = await ctx.db.insert("templateEndorsements", {
+      templateId: args.templateId,
+      orgId: org._id,
+      endorsedAt: Date.now(),
+    });
+
+    // Increment endorsementCount on template
+    const currentCount = template.endorsementCount ?? 0;
+    await ctx.db.patch(args.templateId, {
+      endorsementCount: currentCount + 1,
+    });
+
+    return { id };
+  },
+});
+
+/**
+ * Remove an endorsement. Requires editor role.
+ */
+export const removeEndorsement = mutation({
+  args: {
+    orgSlug: v.string(),
+    templateId: v.id("templates"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+
+    const existing = await ctx.db
+      .query("templateEndorsements")
+      .withIndex("by_templateId_orgId", (q) =>
+        q.eq("templateId", args.templateId).eq("orgId", org._id),
+      )
+      .first();
+
+    if (existing) {
+      await ctx.db.delete(existing._id);
+
+      // Decrement endorsementCount on template
+      const template = await ctx.db.get(args.templateId);
+      if (template) {
+        const currentCount = template.endorsementCount ?? 0;
+        await ctx.db.patch(args.templateId, {
+          endorsementCount: Math.max(0, currentCount - 1),
+        });
+      }
+    }
+
+    return { ok: true };
   },
 });
