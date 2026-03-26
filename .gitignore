@@ -92,5 +92,5 @@ svelte-check-baseline.txt
 commons-desktop-a11y.md
 
 # Convex generated files
-convex/_generated/
-!convex/_generated/.gitkeep
+src/backend/_generated/
+!src/backend/_generated/.gitkeep
