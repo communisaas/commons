@@ -1,12 +1,9 @@
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
-import {
-	bindIdentityCommitment
-} from '$lib/core/identity/identity-binding';
 
 const VerifyMdlSchema = z.object({
 	protocol: z.string().min(1),
@@ -114,7 +111,10 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 		// Bind identity commitment for Sybil detection and account merging
 		// If this commitment already exists on another user, accounts are merged
-		const bindingResult = await bindIdentityCommitment(session.userId, identityCommitment);
+		const bindingResult = await serverMutation(api.users.bindIdentityCommitment, {
+			userId: session.userId as any,
+			identityCommitment
+		});
 
 		// Use the canonical userId after potential merge
 		const canonicalUserId = bindingResult.userId;

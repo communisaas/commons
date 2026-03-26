@@ -743,6 +743,57 @@ export const listRecentRegistrations = query({
 /**
  * Upsert a shadow atlas registration (for retry queue processing).
  */
+/**
+ * Bind an identity commitment to a user for Sybil detection.
+ *
+ * If another user already has this commitment, merges accounts
+ * (returns the canonical userId). Otherwise patches the current user.
+ */
+export const bindIdentityCommitment = mutation({
+  args: {
+    userId: v.id("users"),
+    identityCommitment: v.string(),
+    identityHash: v.optional(v.string()),
+    documentType: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // Check if commitment already bound to another user (Sybil / account merge)
+    const existing = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("identityCommitment"), args.identityCommitment))
+      .first();
+
+    if (existing && existing._id !== args.userId) {
+      // Account merge: canonical user is the one that already has the commitment
+      return {
+        userId: existing._id,
+        linkedToExisting: true,
+        requireReauth: true,
+        mergeDetails: { accountsMoved: 1 },
+      };
+    }
+
+    // Bind commitment to this user
+    const patch: Record<string, unknown> = {
+      identityCommitment: args.identityCommitment,
+      isVerified: true,
+      verificationMethod: "mdl",
+      verifiedAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    if (args.identityHash) patch.identityHash = args.identityHash;
+    if (args.documentType) patch.documentType = args.documentType;
+
+    await ctx.db.patch(args.userId, patch);
+
+    return {
+      userId: args.userId,
+      linkedToExisting: false,
+      requireReauth: false,
+    };
+  },
+});
+
 export const upsertRegistration = mutation({
   args: {
     userId: v.string(),
