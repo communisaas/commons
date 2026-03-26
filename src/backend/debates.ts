@@ -189,12 +189,10 @@ export const createArgument = mutation({
     amendmentHash: v.optional(v.string()),
     nullifierHash: v.optional(v.string()),
     stakeAmount: v.number(),
-    engagementTier: v.number(),
     txHash: v.optional(v.string()),
-    verificationStatus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
+    const { userId } = await requireAuth(ctx);
 
     const debate = await ctx.db.get(args.debateId);
     if (!debate) throw new Error("Debate not found");
@@ -221,15 +219,22 @@ export const createArgument = mutation({
       }
     }
 
+    // Server-side: look up user's trust tier (never trust client-provided tier)
+    const user = await ctx.db.get(userId);
+    const engagementTier = user?.trustTier ?? 0;
+
+    // TODO: On-chain stake verification is Phase B. Cap client-provided stakeAmount for now.
+    const MAX_STAKE = 1_000_000; // $1 in micro-units
+    const stakeAmount = Math.min(Math.max(0, args.stakeAmount), MAX_STAKE);
+
     // Compute weighted score: sqrt(stake/1e6) * 2^tier * 1e6
-    const stakeInDollars = args.stakeAmount / 1e6;
-    const tier = Math.max(0, Math.min(args.engagementTier, 4));
+    const stakeInDollars = stakeAmount / 1e6;
+    const tier = Math.max(0, Math.min(engagementTier, 4));
     const weightedScore = Math.floor(
       Math.sqrt(stakeInDollars) * Math.pow(2, tier) * 1e6,
     );
 
     const argumentIndex = debate.argumentCount;
-    const initialStatus = args.verificationStatus ?? "pending";
 
     const argId = await ctx.db.insert("debateArguments", {
       debateId: args.debateId,
@@ -240,14 +245,13 @@ export const createArgument = mutation({
       amendmentText: args.amendmentText,
       amendmentHash: args.amendmentHash,
       nullifierHash: args.nullifierHash,
-      stakeAmount: args.stakeAmount,
+      stakeAmount,
       engagementTier: tier,
       weightedScore,
-      totalStake: args.stakeAmount,
+      totalStake: stakeAmount,
       coSignCount: 0,
       positionCount: 0,
-      verificationStatus: initialStatus,
-      ...(initialStatus === "verified" ? { verifiedAt: Date.now() } : {}),
+      verificationStatus: "pending",
     });
 
     // Record nullifier
@@ -256,7 +260,7 @@ export const createArgument = mutation({
         debateId: args.debateId,
         nullifierHash: args.nullifierHash,
         actionType: "argument",
-        verificationStatus: initialStatus,
+        verificationStatus: "pending",
         argumentId: argId,
         txHash: args.txHash,
       });
@@ -266,7 +270,7 @@ export const createArgument = mutation({
     await ctx.db.patch(args.debateId, {
       argumentCount: debate.argumentCount + 1,
       uniqueParticipants: debate.uniqueParticipants + 1,
-      totalStake: debate.totalStake + args.stakeAmount,
+      totalStake: debate.totalStake + stakeAmount,
       updatedAt: Date.now(),
     });
 
@@ -283,12 +287,10 @@ export const cosign = mutation({
     argumentIndex: v.number(),
     stakeAmount: v.number(),
     nullifierHash: v.string(),
-    engagementTier: v.number(),
     txHash: v.optional(v.string()),
-    verificationStatus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
+    const { userId } = await requireAuth(ctx);
 
     const debate = await ctx.db.get(args.debateId);
     if (!debate) throw new Error("Debate not found");
@@ -315,17 +317,23 @@ export const cosign = mutation({
       .first();
     if (!argument) throw new Error("Argument not found");
 
-    const tier = Math.max(0, Math.min(args.engagementTier, 4));
-    const cosignWeight = Math.floor(
-      Math.sqrt(args.stakeAmount / 1e6) * Math.pow(2, tier) * 1e6,
-    );
+    // Server-side: look up user's trust tier (never trust client-provided tier)
+    const user = await ctx.db.get(userId);
+    const engagementTier = user?.trustTier ?? 0;
 
-    const initialStatus = args.verificationStatus ?? "pending";
+    // TODO: On-chain stake verification is Phase B. Cap client-provided stakeAmount for now.
+    const MAX_STAKE = 1_000_000; // $1 in micro-units
+    const stakeAmount = Math.min(Math.max(0, args.stakeAmount), MAX_STAKE);
+
+    const tier = Math.max(0, Math.min(engagementTier, 4));
+    const cosignWeight = Math.floor(
+      Math.sqrt(stakeAmount / 1e6) * Math.pow(2, tier) * 1e6,
+    );
 
     // Update argument
     await ctx.db.patch(argument._id, {
       coSignCount: argument.coSignCount + 1,
-      totalStake: argument.totalStake + args.stakeAmount,
+      totalStake: argument.totalStake + stakeAmount,
       weightedScore: argument.weightedScore + cosignWeight,
     });
 
@@ -334,7 +342,7 @@ export const cosign = mutation({
       debateId: args.debateId,
       nullifierHash: args.nullifierHash,
       actionType: "cosign",
-      verificationStatus: initialStatus,
+      verificationStatus: "pending",
       cosignWeight: cosignWeight,
       argumentId: argument._id,
       txHash: args.txHash,
@@ -343,7 +351,7 @@ export const cosign = mutation({
     // Update debate counters
     await ctx.db.patch(args.debateId, {
       uniqueParticipants: debate.uniqueParticipants + 1,
-      totalStake: debate.totalStake + args.stakeAmount,
+      totalStake: debate.totalStake + stakeAmount,
       updatedAt: Date.now(),
     });
 

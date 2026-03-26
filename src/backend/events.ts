@@ -3,6 +3,7 @@ import {
   mutation,
   action,
   internalMutation,
+  internalQuery,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
@@ -326,6 +327,31 @@ export const insertRsvp = internalMutation({
 });
 
 /**
+ * Internal query: get event by ID (for action-side validation).
+ */
+export const getEventInternal = internalQuery({
+  args: { eventId: v.id("events") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.eventId);
+  },
+});
+
+/**
+ * Internal mutation: patch RSVP with encrypted email after insert.
+ */
+export const patchRsvpEmail = internalMutation({
+  args: {
+    rsvpId: v.id("eventRsvps"),
+    encryptedEmail: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.rsvpId, {
+      encryptedEmail: args.encryptedEmail,
+    });
+  },
+});
+
+/**
  * Action: Create RSVP (encrypts email then calls internalMutation).
  * Encryption requires random IV — must run in an action, not mutation.
  */
@@ -341,27 +367,38 @@ export const createRsvp = action({
     supporterId: v.optional(v.id("supporters")),
   },
   handler: async (ctx, args) => {
-    // Encrypt email at rest
-    const rsvpId = crypto.randomUUID();
-    const [encrypted, emailHash] = await Promise.all([
-      encryptPii(args.email.toLowerCase(), `rsvp:${rsvpId}`, "email"),
-      computeEmailHash(args.email.toLowerCase()),
-    ]);
+    // Verify event exists and is accepting RSVPs
+    const event = await ctx.runQuery(internal.events.getEventInternal, { eventId: args.eventId });
+    if (!event) throw new Error("Event not found");
+    if (event.status !== "PUBLISHED") throw new Error("Event is not accepting RSVPs");
+    if (event.capacity && event.rsvpCount >= event.capacity && !event.waitlistEnabled) {
+      throw new Error("Event is at capacity");
+    }
 
+    // Compute email hash first
+    const emailHash = await computeEmailHash(args.email.toLowerCase());
     if (!emailHash) {
       throw new Error("EMAIL_LOOKUP_KEY not configured — cannot create RSVP");
     }
 
+    // Insert with placeholder, encrypt with real _id, then patch (same pattern as supporters)
     const result = await ctx.runMutation(internal.events.insertRsvp, {
       eventId: args.eventId,
       supporterId: args.supporterId,
-      encryptedEmail: JSON.stringify(encrypted),
+      encryptedEmail: "",  // placeholder — patched below
       emailHash,
       name: args.name.trim(),
       status: args.status || "GOING",
       guestCount: args.guestCount ?? 1,
       districtHash: args.districtHash,
       engagementTier: args.engagementTier ?? 0,
+    });
+
+    // Now encrypt with the real Convex _id as key context
+    const encrypted = await encryptPii(args.email.toLowerCase(), `rsvp:${result.id}`, "email");
+    await ctx.runMutation(internal.events.patchRsvpEmail, {
+      rsvpId: result.id,
+      encryptedEmail: JSON.stringify(encrypted),
     });
 
     return result;

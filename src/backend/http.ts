@@ -121,11 +121,18 @@ http.route({
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
 
-    if (sig !== expected) {
-      return new Response(
-        JSON.stringify({ error: "Invalid signature" }),
-        { status: 400, headers: { "Content-Type": "application/json" } },
-      );
+    // Constant-time comparison to prevent timing oracle
+    const sigBytes = new TextEncoder().encode(sig);
+    const expectedBytes = new TextEncoder().encode(expected);
+    if (sigBytes.length !== expectedBytes.length) {
+      return new Response("Invalid signature", { status: 400 });
+    }
+    let mismatch = 0;
+    for (let i = 0; i < sigBytes.length; i++) {
+      mismatch |= sigBytes[i] ^ expectedBytes[i];
+    }
+    if (mismatch !== 0) {
+      return new Response("Invalid signature", { status: 400 });
     }
 
     // Verify timestamp is within 5 minutes (prevent replay attacks)

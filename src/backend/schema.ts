@@ -126,7 +126,8 @@ export default defineSchema({
     userId: v.id("users"),
     expiresAt: v.number(),
   })
-    .index("by_userId", ["userId"]),
+    .index("by_userId", ["userId"])
+    .index("by_expiresAt", ["expiresAt"]),
 
   accounts: defineTable({
     userId: v.id("users"),
@@ -696,6 +697,7 @@ export default defineSchema({
   })
     .index("by_templateId", ["templateId"])
     .index("by_status", ["status"])
+    .index("by_status_deadline", ["status", "deadline"])
     .index("by_debateIdOnchain", ["debateIdOnchain"]),
 
   debateArguments: defineTable({
@@ -990,7 +992,9 @@ export default defineSchema({
   })
     .index("by_networkId", ["networkId"])
     .index("by_orgId", ["orgId"])
-    .index("by_networkId_orgId", ["networkId", "orgId"]),
+    .index("by_networkId_orgId", ["networkId", "orgId"])
+    .index("by_orgId_status", ["orgId", "status"])
+    .index("by_networkId_status", ["networkId", "status"]),
 
   templateEndorsements: defineTable({
     templateId: v.id("templates"),
@@ -1431,7 +1435,8 @@ export default defineSchema({
     .index("by_workflowId", ["workflowId"])
     .index("by_supporterId", ["supporterId"])
     .index("by_status", ["status"])
-    .index("by_nextRunAt", ["nextRunAt"]),
+    .index("by_nextRunAt", ["nextRunAt"])
+    .index("by_status_nextRunAt", ["status", "nextRunAt"]),
 
   workflowActionLogs: defineTable({
     executionId: v.id("workflowExecutions"),

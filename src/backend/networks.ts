@@ -359,6 +359,17 @@ export const updateMemberStatus = mutation({
       throw new Error("Membership not found");
     }
 
+    if (isSelfAction) {
+      // Self-actions: can only accept (pending→active) or leave (active→removed)
+      if (membership.status === "pending" && args.status === "active") {
+        // Accept invitation — allowed
+      } else if (membership.status === "active" && args.status === "removed") {
+        // Leave network — allowed
+      } else {
+        throw new Error(`Self-action not allowed: ${membership.status} → ${args.status}`);
+      }
+    }
+
     await ctx.db.patch(membership._id, { status: args.status });
     return { success: true };
   },

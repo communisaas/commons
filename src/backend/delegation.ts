@@ -378,7 +378,7 @@ export const revokeGrant = mutation({
 /**
  * Record a delegated action (called by the automation engine).
  */
-export const recordAction = mutation({
+export const recordAction = internalMutation({
   args: {
     grantId: v.id("delegationGrants"),
     actionType: v.string(),
