@@ -1,6 +1,5 @@
 import {
   query,
-  mutation,
   action,
   internalMutation,
   internalQuery,
@@ -85,8 +84,9 @@ export const listByCampaign = query({
 
 /**
  * Create a donation record (typically from Stripe webhook after payment).
+ * Internal-only: called from webhook processing, not exposed to clients.
  */
-export const create = mutation({
+export const create = internalMutation({
   args: {
     campaignId: v.id("campaigns"),
     orgId: v.id("organizations"),
@@ -137,8 +137,9 @@ export const create = mutation({
 
 /**
  * Update donation status (from Stripe webhook events).
+ * Internal-only: called from webhook processing, not exposed to clients.
  */
-export const updateStatus = mutation({
+export const updateStatus = internalMutation({
   args: {
     donationId: v.id("donations"),
     status: v.string(),

@@ -5,7 +5,7 @@
  * These must stay in sync with src/lib/server/billing/plans.ts.
  */
 
-import { query, mutation, action, internalMutation } from "./_generated/server";
+import { query, mutation, internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireAuth, requireOrgRole } from "./lib/authHelpers";
@@ -126,6 +126,7 @@ export const checkPlanLimits = query({
  */
 export const create = mutation({
   args: {
+    orgSlug: v.optional(v.string()),
     orgId: v.optional(v.id("organizations")),
     userId: v.optional(v.id("users")),
     plan: v.string(),
@@ -137,10 +138,16 @@ export const create = mutation({
     currentPeriodEnd: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
-
     if (!args.orgId && !args.userId) {
       throw new Error("Either orgId or userId is required");
+    }
+
+    // If org-scoped, require owner role
+    if (args.orgId) {
+      if (!args.orgSlug) throw new Error("orgSlug is required for org subscriptions");
+      await requireOrgRole(ctx, args.orgSlug, "owner");
+    } else {
+      await requireAuth(ctx);
     }
 
     return await ctx.db.insert("subscriptions", {
@@ -171,10 +178,18 @@ export const update = mutation({
     currentPeriodEnd: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
-
     const sub = await ctx.db.get(args.subscriptionId);
     if (!sub) throw new Error("Subscription not found");
+
+    // Verify ownership: require owner role if org-scoped, or auth if user-scoped
+    if (sub.orgId) {
+      const org = await ctx.db.get(sub.orgId);
+      if (!org) throw new Error("Organization not found");
+      await requireOrgRole(ctx, org.slug, "owner");
+    } else {
+      const { userId } = await requireAuth(ctx);
+      if (sub.userId !== userId) throw new Error("Not authorized");
+    }
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.plan !== undefined) patch.plan = args.plan;
@@ -198,10 +213,18 @@ export const cancel = mutation({
     subscriptionId: v.id("subscriptions"),
   },
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
-
     const sub = await ctx.db.get(args.subscriptionId);
     if (!sub) throw new Error("Subscription not found");
+
+    // Verify ownership: require owner role if org-scoped, or auth if user-scoped
+    if (sub.orgId) {
+      const org = await ctx.db.get(sub.orgId);
+      if (!org) throw new Error("Organization not found");
+      await requireOrgRole(ctx, org.slug, "owner");
+    } else {
+      const { userId } = await requireAuth(ctx);
+      if (sub.userId !== userId) throw new Error("Not authorized");
+    }
 
     await ctx.db.patch(args.subscriptionId, {
       status: "canceled",
@@ -230,7 +253,7 @@ export const cancel = mutation({
  * Process a Stripe webhook event. Called from the HTTP router.
  * Signature verification happens in the httpAction before calling this.
  */
-export const processStripeWebhook = action({
+export const processStripeWebhook = internalAction({
   args: {
     eventType: v.string(),
     data: v.any(),

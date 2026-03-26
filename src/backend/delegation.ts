@@ -16,6 +16,7 @@ import { v } from "convex/values";
 import { requireAuth } from "./lib/authHelpers";
 import { encryptPii, decryptPii } from "./lib/pii";
 import type { EncryptedPii } from "./lib/pii";
+import type { Id } from "./_generated/dataModel";
 
 const MAX_ACTIVE_GRANTS = 3;
 const VALID_SCOPES = [
@@ -268,11 +269,14 @@ export const createGrant = action({
     }
 
     // Encrypt policy text (non-deterministic — random IV)
-    // We need the userId for the entity binding, but we don't have ctx.db in actions.
-    // Pass the encrypted text to the internal mutation which has auth context.
+    // Look up the user's Convex _id to match the key used for decryption (grant.userId)
+    const user = await ctx.runQuery(internal.users.getByEmail, { email: identity.email! });
+    if (!user) throw new Error("User not found");
+    const entityId: string = user._id as Id<"users">;
+
     const encryptedPolicy = await encryptPii(
       args.policyText.trim(),
-      identity.tokenIdentifier,
+      entityId,
       "policy",
     );
     const storedPolicyText = JSON.stringify(encryptedPolicy);
@@ -313,9 +317,14 @@ export const updateGrant = action({
 
     let encryptedPolicy: string | undefined;
     if (args.policyText !== undefined) {
+      // Look up the user's Convex _id to match the key used for decryption (grant.userId)
+      const user = await ctx.runQuery(internal.users.getByEmail, { email: identity.email! });
+      if (!user) throw new Error("User not found");
+      const entityId: string = user._id as Id<"users">;
+
       const encrypted = await encryptPii(
         args.policyText.trim(),
-        identity.tokenIdentifier,
+        entityId,
         "policy",
       );
       encryptedPolicy = JSON.stringify(encrypted);

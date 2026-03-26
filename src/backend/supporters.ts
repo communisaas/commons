@@ -45,12 +45,14 @@ export const list = query({
     const { cursor, numItems } = args.paginationOpts;
     const filters = args.filters;
 
-    // All filters post-process in memory; org scope is always the primary index
+    // All filters post-process in memory; org scope is always the primary index.
+    // Use .take() with a bounded cap to prevent unbounded memory usage.
     const limit = Math.min(numItems, 100);
+    const MAX_SCAN = 10_000;
     const allDocs = await ctx.db
       .query("supporters")
       .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
+      .take(MAX_SCAN);
 
     // Apply filters in memory (Convex indexes are limited to equality prefixes)
     let filtered = allDocs;
@@ -259,7 +261,7 @@ export const getSummaryStats = query({
     const allSupporters = await ctx.db
       .query("supporters")
       .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
+      .take(10_001);
 
     const total = org.supporterCount ?? allSupporters.length;
 

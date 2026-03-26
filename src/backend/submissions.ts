@@ -330,7 +330,7 @@ export const deliverToCongress = internalAction({
  */
 export const registerEngagement = internalAction({
   args: { userSubject: v.string() },
-  handler: async (ctx) => {
+  handler: async (ctx, args) => {
     try {
       // Look up user's wallet + identity commitment
       // userSubject is the auth token subject — need to find user by email
@@ -340,7 +340,7 @@ export const registerEngagement = internalAction({
       const response = await fetch(`${saUrl}/api/engagement/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userSubject: ctx }),
+        body: JSON.stringify({ userSubject: args.userSubject }),
       });
 
       if (!response.ok) {
@@ -417,7 +417,8 @@ export const getTemplateForDelivery = internalQuery({
  * authenticated identity and on-chain proof submission.
  */
 async function computePseudonymousId(userId: string): Promise<string> {
-  const salt = process.env.PSEUDONYMOUS_ID_SALT || "commons-pseudonymous-v1";
+  const salt = process.env.PSEUDONYMOUS_ID_SALT;
+  if (!salt) throw new Error("PSEUDONYMOUS_ID_SALT must be set");
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",

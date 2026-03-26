@@ -30,20 +30,25 @@ export const listBlasts = query({
   handler: async (ctx, args) => {
     const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
 
-    let q = ctx.db
+    // Always use by_orgId index to enforce org scoping; filter status post-query
+    const q = ctx.db
       .query("emailBlasts")
       .withIndex("by_orgId", (qb) => qb.eq("orgId", org._id));
 
-    if (args.status) {
-      q = ctx.db
-        .query("emailBlasts")
-        .withIndex("by_status", (qb) => qb.eq("status", args.status!));
-    }
-
-    return await q.order("desc").paginate({
+    const results = await q.order("desc").paginate({
       numItems: Math.min(args.paginationOpts.numItems, 50),
       cursor: args.paginationOpts.cursor ?? null,
     });
+
+    // Post-filter by status if specified (index only covers orgId)
+    if (args.status) {
+      return {
+        ...results,
+        page: results.page.filter((b) => b.status === args.status),
+      };
+    }
+
+    return results;
   },
 });
 
@@ -189,8 +194,9 @@ export const updateBlast = mutation({
 
 /**
  * Record an email event (open, click, bounce, complaint) from webhook.
+ * Internal-only: called from webhook processing, not exposed to clients.
  */
-export const recordEmailEvent = mutation({
+export const recordEmailEvent = internalMutation({
   args: {
     blastId: v.id("emailBlasts"),
     recipientEmail: v.string(),
@@ -288,9 +294,11 @@ export const getBlastRecipients = internalQuery({
  *
  * Pipeline:
  *   1. Transition draft → sending (atomic)
- *   2. Stream recipients in batches
- *   3. For each batch: decrypt emails, compile, send via SES
- *   4. Update counters and finalize
+ *   2. Count recipients, update blast
+ *   3. Schedule first batch via sendBlastBatch
+ *
+ * Each batch processes up to 100 recipients then schedules the next batch,
+ * avoiding action timeouts for large recipient lists.
  */
 export const sendBlast = action({
   args: {
@@ -314,121 +322,172 @@ export const sendBlast = action({
     });
     if (!blast) throw new Error("Blast not found");
 
+    // Get recipients to count them
+    const recipients = await ctx.runQuery(internal.email.getBlastRecipients, {
+      orgId: blast.orgId,
+      limit: 10000,
+    });
+
+    await ctx.runMutation(internal.email.updateBlastStatus, {
+      blastId: args.blastId,
+      status: "sending",
+      totalRecipients: recipients.length,
+    });
+
+    if (recipients.length === 0) {
+      await ctx.runMutation(internal.email.updateBlastStatus, {
+        blastId: args.blastId,
+        status: "sent",
+        totalSent: 0,
+        sentAt: Date.now(),
+      });
+      return { sent: 0 };
+    }
+
+    // Schedule the first batch (offset 0)
+    await ctx.scheduler.runAfter(0, internal.email.sendBlastBatch, {
+      blastId: args.blastId,
+      offset: 0,
+    });
+
+    return { scheduled: true, totalRecipients: recipients.length };
+  },
+});
+
+/**
+ * Internal action: Process one batch of email blast recipients,
+ * then schedule the next batch if more remain.
+ */
+export const sendBlastBatch = internalAction({
+  args: {
+    blastId: v.id("emailBlasts"),
+    offset: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const BATCH_SIZE = 100;
+
+    // Load blast
+    const blast = await ctx.runQuery(internal.email.getBlastById, {
+      blastId: args.blastId,
+    });
+    if (!blast) {
+      console.error(`[sendBlastBatch] Blast not found: ${args.blastId}`);
+      return;
+    }
+    if (blast.status !== "sending") {
+      console.warn(`[sendBlastBatch] Blast ${args.blastId} status is ${blast.status}, skipping`);
+      return;
+    }
+
+    // SES credentials
+    const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
+    const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+    const awsRegion = process.env.AWS_REGION || "us-east-1";
+
+    if (!awsAccessKeyId || !awsSecretAccessKey) {
+      await ctx.runMutation(internal.email.updateBlastStatus, {
+        blastId: args.blastId,
+        status: "failed",
+      });
+      throw new Error("AWS SES credentials not configured");
+    }
+
     try {
-      // Get recipients
-      const recipients = await ctx.runQuery(internal.email.getBlastRecipients, {
+      // Get all recipients (bounded by getBlastRecipients limit)
+      const allRecipients = await ctx.runQuery(internal.email.getBlastRecipients, {
         orgId: blast.orgId,
         limit: 10000,
       });
 
-      await ctx.runMutation(internal.email.updateBlastStatus, {
-        blastId: args.blastId,
-        status: "sending",
-        totalRecipients: recipients.length,
-      });
-
-      if (recipients.length === 0) {
+      const batch = allRecipients.slice(args.offset, args.offset + BATCH_SIZE);
+      if (batch.length === 0) {
+        // No more recipients — finalize
         await ctx.runMutation(internal.email.updateBlastStatus, {
           blastId: args.blastId,
           status: "sent",
-          totalSent: 0,
           sentAt: Date.now(),
         });
-        return { sent: 0 };
+        return;
       }
 
-      // SES credentials
-      const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
-      const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-      const awsRegion = process.env.AWS_REGION || "us-east-1";
+      let batchSent = 0;
+      let batchFailed = 0;
 
-      if (!awsAccessKeyId || !awsSecretAccessKey) {
-        throw new Error("AWS SES credentials not configured");
-      }
-
-      let totalSent = 0;
-      let totalFailed = 0;
-      const batchRecords: Array<{
-        batchIndex: number;
-        status: string;
-        sentCount: number;
-        failedCount: number;
-        error?: string;
-        sentAt?: number;
-      }> = [];
-
-      // Process in batches of 100
-      const BATCH_SIZE = 100;
-      for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-        const batch = recipients.slice(i, i + BATCH_SIZE);
-        const batchIndex = Math.floor(i / BATCH_SIZE);
-        let batchSent = 0;
-        let batchFailed = 0;
-        let lastError: string | undefined;
-
-        for (const recipient of batch) {
-          try {
-            // Decrypt email
-            const email = await decryptSupporterEmail(recipient);
-
-            // Send via SES (raw HTTP to avoid SDK dependency)
-            const success = await sendViaSes(
-              email,
-              blast.fromEmail,
-              blast.fromName,
-              blast.subject,
-              blast.bodyHtml,
-              awsAccessKeyId,
-              awsSecretAccessKey,
-              awsRegion,
-            );
-
-            if (success) {
-              batchSent++;
-            } else {
-              batchFailed++;
-            }
-          } catch (err) {
+      for (const recipient of batch) {
+        try {
+          const email = await decryptSupporterEmail(recipient);
+          const success = await sendViaSes(
+            email,
+            blast.fromEmail,
+            blast.fromName,
+            blast.subject,
+            blast.bodyHtml,
+            awsAccessKeyId,
+            awsSecretAccessKey,
+            awsRegion,
+          );
+          if (success) {
+            batchSent++;
+          } else {
             batchFailed++;
-            lastError = err instanceof Error ? err.message : "Unknown error";
           }
+        } catch {
+          batchFailed++;
         }
-
-        totalSent += batchSent;
-        totalFailed += batchFailed;
-
-        batchRecords.push({
-          batchIndex,
-          status: batchFailed === batch.length ? "failed" : "sent",
-          sentCount: batchSent,
-          failedCount: batchFailed,
-          error: lastError,
-          sentAt: Date.now(),
-        });
       }
 
-      // Finalize
-      await ctx.runMutation(internal.email.updateBlastStatus, {
+      // Update running counters
+      await ctx.runMutation(internal.email.incrementBlastCounters, {
         blastId: args.blastId,
-        status: "sent",
-        totalSent,
-        totalBounced: totalFailed,
-        sentAt: Date.now(),
-        batches: batchRecords,
+        sentDelta: batchSent,
+        bouncedDelta: batchFailed,
       });
 
-      return { sent: totalSent, failed: totalFailed };
+      // Schedule next batch if more recipients remain
+      const nextOffset = args.offset + BATCH_SIZE;
+      if (nextOffset < allRecipients.length) {
+        await ctx.scheduler.runAfter(0, internal.email.sendBlastBatch, {
+          blastId: args.blastId,
+          offset: nextOffset,
+        });
+      } else {
+        // All done — finalize
+        await ctx.runMutation(internal.email.updateBlastStatus, {
+          blastId: args.blastId,
+          status: "sent",
+          sentAt: Date.now(),
+        });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      console.error(`[sendBlast] Blast ${args.blastId} failed:`, message);
+      console.error(`[sendBlastBatch] Blast ${args.blastId} batch at offset ${args.offset} failed:`, message);
 
       await ctx.runMutation(internal.email.updateBlastStatus, {
         blastId: args.blastId,
         status: "failed",
       });
-
-      throw err;
     }
+  },
+});
+
+/**
+ * Internal mutation: Increment running sent/bounced counters for a blast batch.
+ */
+export const incrementBlastCounters = internalMutation({
+  args: {
+    blastId: v.id("emailBlasts"),
+    sentDelta: v.number(),
+    bouncedDelta: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const blast = await ctx.db.get(args.blastId);
+    if (!blast) return;
+
+    await ctx.db.patch(args.blastId, {
+      totalSent: (blast.totalSent || 0) + args.sentDelta,
+      totalBounced: (blast.totalBounced || 0) + args.bouncedDelta,
+      updatedAt: Date.now(),
+    });
   },
 });
 
