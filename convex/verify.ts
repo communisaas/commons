@@ -4,6 +4,7 @@
 
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 
 /**
  * Get campaign delivery by ID for verification page.
@@ -11,9 +12,7 @@ import { v } from "convex/values";
 export const getDelivery = query({
   args: { deliveryId: v.string() },
   handler: async (ctx, { deliveryId }) => {
-    // Try looking up by _id
-    const allDeliveries = await ctx.db.query("campaignDeliveries").collect();
-    const delivery = allDeliveries.find(d => d._id === deliveryId);
+    const delivery = await ctx.db.get(deliveryId as Id<"campaignDeliveries">);
     if (!delivery) return null;
 
     const campaign = delivery.campaignId ? await ctx.db.get(delivery.campaignId) : null;
@@ -34,8 +33,7 @@ export const getDelivery = query({
 export const getCampaignForVerify = query({
   args: { campaignId: v.string() },
   handler: async (ctx, { campaignId }) => {
-    const campaigns = await ctx.db.query("campaigns").collect();
-    const campaign = campaigns.find(c => c._id === campaignId);
+    const campaign = await ctx.db.get(campaignId as Id<"campaigns">);
     if (!campaign) return null;
     return { _id: campaign._id, title: campaign.title };
   },
@@ -68,8 +66,7 @@ export const getCredentialByHash = query({
 export const getReceipt = query({
   args: { receiptId: v.string() },
   handler: async (ctx, { receiptId }) => {
-    const receipts = await ctx.db.query("accountabilityReceipts").collect();
-    const receipt = receipts.find(r => r._id === receiptId);
+    const receipt = await ctx.db.get(receiptId as Id<"accountabilityReceipts">);
     if (!receipt) return null;
 
     // Get associated bill if any

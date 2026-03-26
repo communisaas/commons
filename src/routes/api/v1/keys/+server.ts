@@ -8,7 +8,7 @@ import { generateApiKey } from '$lib/core/security/api-key';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { api, internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 function requireRole(role: string, required: string): void {
@@ -37,7 +37,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const { plaintext, hash, prefix } = await generateApiKey();
 
-	const apiKey = await serverMutation(api.v1api.createApiKey, {
+	const apiKey = await serverMutation(internal.v1api.createApiKey, {
 		orgSlug,
 		keyHash: hash,
 		keyPrefix: prefix,

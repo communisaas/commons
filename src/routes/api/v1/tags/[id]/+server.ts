@@ -8,7 +8,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const PATCH: RequestHandler = async ({ request, params }) => {
@@ -27,7 +27,7 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (!name || typeof name !== 'string' || !name.trim()) return apiError('BAD_REQUEST', 'Tag name is required', 400);
 	if (name.trim().length > 100) return apiError('BAD_REQUEST', 'Tag name must be 100 characters or fewer', 400);
 
-	const result = await serverMutation(api.v1api.updateTag, { tagId: params.id, orgId: auth.orgId, name: name.trim() });
+	const result = await serverMutation(internal.v1api.updateTag, { tagId: params.id, orgId: auth.orgId, name: name.trim() });
 	if (!result) return apiError('NOT_FOUND', 'Tag not found', 404);
 	if ('duplicate' in result && result.duplicate) return apiError('CONFLICT', 'A tag with this name already exists', 409);
 
@@ -43,7 +43,7 @@ export const DELETE: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'write');
 	if (scopeErr) return scopeErr;
 
-	const deleted = await serverMutation(api.v1api.deleteTag, { tagId: params.id, orgId: auth.orgId });
+	const deleted = await serverMutation(internal.v1api.deleteTag, { tagId: params.id, orgId: auth.orgId });
 	if (!deleted) return apiError('NOT_FOUND', 'Tag not found', 404);
 
 	return apiOk({ deleted: true });

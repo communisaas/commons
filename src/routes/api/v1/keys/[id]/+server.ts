@@ -8,7 +8,7 @@
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { api, internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 function requireRole(role: string, required: string): void {
@@ -42,7 +42,7 @@ export const PATCH: RequestHandler = async ({ request, params, locals, url }) =>
 	if (!name?.trim()) return apiError('BAD_REQUEST', 'Name is required', 400);
 	if (name.trim().length > 200) return apiError('BAD_REQUEST', 'Name must be 200 characters or fewer', 400);
 
-	const updated = await serverMutation(api.v1api.renameApiKey, { keyId: params.id, orgId: result.orgId, name: name.trim() });
+	const updated = await serverMutation(internal.v1api.renameApiKey, { keyId: params.id, orgId: result.orgId, name: name.trim() });
 	if (!updated) return apiError('NOT_FOUND', 'API key not found', 404);
 	return apiOk({ id: updated._id, name: updated.name });
 };
@@ -52,7 +52,7 @@ export const DELETE: RequestHandler = async ({ params, locals, url }) => {
 	const result = await resolveKeyOrg(locals, url);
 	if ('error' in result) return result.error;
 
-	const revoked = await serverMutation(api.v1api.revokeApiKey, { keyId: params.id, orgId: result.orgId });
+	const revoked = await serverMutation(internal.v1api.revokeApiKey, { keyId: params.id, orgId: result.orgId });
 	if (!revoked) return apiError('NOT_FOUND', 'API key not found', 404);
 	return apiOk({ revoked: true });
 };

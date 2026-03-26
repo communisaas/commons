@@ -2,7 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
 import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 
 /**
  * Submission Status Endpoint
@@ -21,7 +21,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 	}
 
 	const callerPseudoId = computePseudonymousId(locals.user.id);
-	const result = await serverQuery(api.v1api.getSubmissionStatus, {
+	const result = await serverQuery(internal.v1api.getSubmissionStatus, {
 		submissionId: id,
 		pseudonymousId: callerPseudoId
 	});

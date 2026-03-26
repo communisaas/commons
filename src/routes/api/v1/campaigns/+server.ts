@@ -9,7 +9,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { VALID_JURISDICTIONS, VALID_COUNTRY_CODES } from '$lib/server/geographic/types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import type { JurisdictionType, CountryCode } from '$lib/server/geographic/types';
 import type { RequestHandler } from './$types';
 
@@ -27,7 +27,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const status = url.searchParams.get('status');
 	const type = url.searchParams.get('type');
 
-	const result = await serverQuery(api.v1api.listCampaigns, {
+	const result = await serverQuery(internal.v1api.listCampaigns, {
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
@@ -95,7 +95,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		return apiError('BAD_REQUEST', `Invalid country code: ${targetCountry}`, 400);
 	}
 
-	const campaign = await serverMutation(api.v1api.createCampaign, {
+	const campaign = await serverMutation(internal.v1api.createCampaign, {
 		orgId: auth.orgId,
 		title: title.trim(),
 		type,

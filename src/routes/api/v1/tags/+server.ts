@@ -8,7 +8,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
@@ -20,7 +20,7 @@ export const GET: RequestHandler = async ({ request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const tags = await serverQuery(api.v1api.listTags, { orgId: auth.orgId });
+	const tags = await serverQuery(internal.v1api.listTags, { orgId: auth.orgId });
 
 	return apiOk(tags);
 };
@@ -45,7 +45,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		return apiError('BAD_REQUEST', 'Tag name must be 100 characters or fewer', 400);
 	}
 
-	const result = await serverMutation(api.v1api.createTag, { orgId: auth.orgId, name: name.trim() });
+	const result = await serverMutation(internal.v1api.createTag, { orgId: auth.orgId, name: name.trim() });
 	if (result.duplicate) return apiError('CONFLICT', 'A tag with this name already exists', 409);
 
 	return apiOk({ id: result.tag!._id, name: result.tag!.name }, undefined, 201);

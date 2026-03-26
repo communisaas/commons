@@ -5,7 +5,7 @@
  * pre-validated orgId from the SvelteKit API key auth middleware.
  */
 
-import { query, mutation } from "./_generated/server";
+import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 
@@ -17,7 +17,7 @@ import type { Id } from "./_generated/dataModel";
  * Authenticate an API key by its hash.
  * Returns the key's org, scopes, and plan — or null if invalid/revoked/expired.
  */
-export const authenticateApiKey = query({
+export const authenticateApiKey = internalQuery({
   args: { keyHash: v.string() },
   handler: async (ctx, { keyHash }) => {
     const apiKey = await ctx.db
@@ -50,7 +50,7 @@ export const authenticateApiKey = query({
 /**
  * Fire-and-forget usage tracking for API key.
  */
-export const trackApiKeyUsage = mutation({
+export const trackApiKeyUsage = internalMutation({
   args: { keyId: v.id("apiKeys") },
   handler: async (ctx, { keyId }) => {
     const key = await ctx.db.get(keyId);
@@ -66,7 +66,7 @@ export const trackApiKeyUsage = mutation({
 // API KEY MANAGEMENT (session-auth, not API key auth)
 // =============================================================================
 
-export const createApiKey = mutation({
+export const createApiKey = internalMutation({
   args: {
     orgSlug: v.string(),
     keyHash: v.string(),
@@ -97,7 +97,7 @@ export const createApiKey = mutation({
   },
 });
 
-export const renameApiKey = mutation({
+export const renameApiKey = internalMutation({
   args: {
     keyId: v.string(),
     orgId: v.string(),
@@ -116,7 +116,7 @@ export const renameApiKey = mutation({
   },
 });
 
-export const revokeApiKey = mutation({
+export const revokeApiKey = internalMutation({
   args: {
     keyId: v.string(),
     orgId: v.string(),
@@ -137,7 +137,7 @@ export const revokeApiKey = mutation({
 // SUPPORTERS (v1 API)
 // =============================================================================
 
-export const listSupporters = query({
+export const listSupporters = internalQuery({
   args: {
     orgId: v.id("organizations"),
     limit: v.number(),
@@ -214,7 +214,7 @@ export const listSupporters = query({
   },
 });
 
-export const getSupporterById = query({
+export const getSupporterById = internalQuery({
   args: { supporterId: v.string(), orgId: v.id("organizations") },
   handler: async (ctx, { supporterId, orgId }) => {
     const supporters = await ctx.db
@@ -239,7 +239,7 @@ export const getSupporterById = query({
   },
 });
 
-export const updateSupporter = mutation({
+export const updateSupporter = internalMutation({
   args: {
     supporterId: v.string(),
     orgId: v.id("organizations"),
@@ -271,7 +271,7 @@ export const updateSupporter = mutation({
   },
 });
 
-export const deleteSupporter = mutation({
+export const deleteSupporter = internalMutation({
   args: { supporterId: v.string(), orgId: v.id("organizations") },
   handler: async (ctx, { supporterId, orgId }) => {
     const supporters = await ctx.db
@@ -285,7 +285,7 @@ export const deleteSupporter = mutation({
   },
 });
 
-export const createSupporter = mutation({
+export const createSupporter = internalMutation({
   args: {
     orgId: v.id("organizations"),
     encryptedEmail: v.string(),
@@ -345,7 +345,7 @@ export const createSupporter = mutation({
 // TAGS (v1 API)
 // =============================================================================
 
-export const listTags = query({
+export const listTags = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, { orgId }) => {
     const tags = await ctx.db
@@ -367,7 +367,7 @@ export const listTags = query({
   },
 });
 
-export const createTag = mutation({
+export const createTag = internalMutation({
   args: { orgId: v.id("organizations"), name: v.string() },
   handler: async (ctx, { orgId, name }) => {
     // Check for duplicate
@@ -387,7 +387,7 @@ export const createTag = mutation({
   },
 });
 
-export const updateTag = mutation({
+export const updateTag = internalMutation({
   args: { tagId: v.string(), orgId: v.id("organizations"), name: v.string() },
   handler: async (ctx, { tagId, orgId, name }) => {
     const tags = await ctx.db
@@ -406,7 +406,7 @@ export const updateTag = mutation({
   },
 });
 
-export const deleteTag = mutation({
+export const deleteTag = internalMutation({
   args: { tagId: v.string(), orgId: v.id("organizations") },
   handler: async (ctx, { tagId, orgId }) => {
     const tags = await ctx.db
@@ -434,7 +434,7 @@ export const deleteTag = mutation({
 // CAMPAIGNS (v1 API)
 // =============================================================================
 
-export const listCampaigns = query({
+export const listCampaigns = internalQuery({
   args: {
     orgId: v.id("organizations"),
     limit: v.number(),
@@ -483,7 +483,7 @@ export const listCampaigns = query({
   },
 });
 
-export const getCampaignById = query({
+export const getCampaignById = internalQuery({
   args: { campaignId: v.string(), orgId: v.id("organizations") },
   handler: async (ctx, { campaignId, orgId }) => {
     const campaigns = await ctx.db
@@ -506,7 +506,7 @@ export const getCampaignById = query({
   },
 });
 
-export const createCampaign = mutation({
+export const createCampaign = internalMutation({
   args: {
     orgId: v.id("organizations"),
     title: v.string(),
@@ -540,7 +540,7 @@ export const createCampaign = mutation({
   },
 });
 
-export const updateCampaign = mutation({
+export const updateCampaign = internalMutation({
   args: {
     campaignId: v.string(),
     orgId: v.id("organizations"),
@@ -576,7 +576,7 @@ export const updateCampaign = mutation({
 // CAMPAIGN ACTIONS (v1 API)
 // =============================================================================
 
-export const listCampaignActions = query({
+export const listCampaignActions = internalQuery({
   args: {
     campaignId: v.string(),
     orgId: v.id("organizations"),
@@ -622,7 +622,7 @@ export const listCampaignActions = query({
 // CALLS (v1 API)
 // =============================================================================
 
-export const listCallsV1 = query({
+export const listCallsV1 = internalQuery({
   args: {
     orgId: v.id("organizations"),
     limit: v.number(),
@@ -659,7 +659,7 @@ export const listCallsV1 = query({
 // DONATIONS (v1 API)
 // =============================================================================
 
-export const listDonationsV1 = query({
+export const listDonationsV1 = internalQuery({
   args: {
     orgId: v.id("organizations"),
     limit: v.number(),
@@ -692,7 +692,7 @@ export const listDonationsV1 = query({
   },
 });
 
-export const getDonationById = query({
+export const getDonationById = internalQuery({
   args: { donationId: v.string(), orgId: v.id("organizations") },
   handler: async (ctx, { donationId, orgId }) => {
     const donations = await ctx.db
@@ -707,7 +707,7 @@ export const getDonationById = query({
 // SMS BLASTS (v1 API)
 // =============================================================================
 
-export const listSmsBlastsV1 = query({
+export const listSmsBlastsV1 = internalQuery({
   args: {
     orgId: v.id("organizations"),
     limit: v.number(),
@@ -742,7 +742,7 @@ export const listSmsBlastsV1 = query({
 // EVENTS (v1 API)
 // =============================================================================
 
-export const listEventsV1 = query({
+export const listEventsV1 = internalQuery({
   args: {
     orgId: v.id("organizations"),
     limit: v.number(),
@@ -775,7 +775,7 @@ export const listEventsV1 = query({
   },
 });
 
-export const getEventById = query({
+export const getEventById = internalQuery({
   args: { eventId: v.string(), orgId: v.id("organizations") },
   handler: async (ctx, { eventId, orgId }) => {
     const events = await ctx.db
@@ -790,7 +790,7 @@ export const getEventById = query({
 // WORKFLOWS (v1 API)
 // =============================================================================
 
-export const listWorkflowsV1 = query({
+export const listWorkflowsV1 = internalQuery({
   args: {
     orgId: v.id("organizations"),
     limit: v.number(),
@@ -821,7 +821,7 @@ export const listWorkflowsV1 = query({
   },
 });
 
-export const getWorkflowById = query({
+export const getWorkflowById = internalQuery({
   args: { workflowId: v.string(), orgId: v.id("organizations") },
   handler: async (ctx, { workflowId, orgId }) => {
     const workflows = await ctx.db
@@ -836,7 +836,7 @@ export const getWorkflowById = query({
 // NETWORKS (v1 API)
 // =============================================================================
 
-export const listNetworksV1 = query({
+export const listNetworksV1 = internalQuery({
   args: {
     orgId: v.id("organizations"),
     limit: v.number(),
@@ -891,7 +891,7 @@ export const listNetworksV1 = query({
   },
 });
 
-export const getNetworkByIdV1 = query({
+export const getNetworkByIdV1 = internalQuery({
   args: { networkId: v.string(), orgId: v.id("organizations") },
   handler: async (ctx, { networkId, orgId }) => {
     // Check membership
@@ -950,7 +950,7 @@ export const getNetworkByIdV1 = query({
 // REPRESENTATIVES (v1 API — international DMs)
 // =============================================================================
 
-export const listRepresentativesV1 = query({
+export const listRepresentativesV1 = internalQuery({
   args: {
     limit: v.number(),
     cursor: v.optional(v.string()),
@@ -1015,7 +1015,7 @@ export const listRepresentativesV1 = query({
 // ORG (v1 API — org detail)
 // =============================================================================
 
-export const getOrgForApiKey = query({
+export const getOrgForApiKey = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, { orgId }) => {
     const org = await ctx.db.get(orgId);
@@ -1054,7 +1054,7 @@ export const getOrgForApiKey = query({
 // SCORECARDS (public, no auth)
 // =============================================================================
 
-export const getDmScorecard = query({
+export const getDmScorecard = internalQuery({
   args: { dmId: v.string() },
   handler: async (ctx, { dmId }) => {
     const dm = await ctx.db.get(dmId as Id<"decisionMakers">);
@@ -1112,7 +1112,7 @@ export const getDmScorecard = query({
   },
 });
 
-export const compareDmScorecards = query({
+export const compareDmScorecards = internalQuery({
   args: { dmIds: v.array(v.string()) },
   handler: async (ctx, { dmIds }) => {
     const results = await Promise.all(
@@ -1161,7 +1161,7 @@ export const compareDmScorecards = query({
 // CAMPAIGN STATS (public, no auth)
 // =============================================================================
 
-export const getCampaignStats = query({
+export const getCampaignStats = internalQuery({
   args: { campaignId: v.id("campaigns") },
   handler: async (ctx, { campaignId }) => {
     const campaign = await ctx.db.get(campaignId);
@@ -1179,7 +1179,7 @@ export const getCampaignStats = query({
 // EVENT STATS (public, no auth)
 // =============================================================================
 
-export const getEventStats = query({
+export const getEventStats = internalQuery({
   args: { eventId: v.string() },
   handler: async (ctx, { eventId }) => {
     const event = await ctx.db.get(eventId as Id<"events">);
@@ -1207,7 +1207,7 @@ export const getEventStats = query({
 // SUBMISSION STATUS (authenticated)
 // =============================================================================
 
-export const getSubmissionStatus = query({
+export const getSubmissionStatus = internalQuery({
   args: { submissionId: v.string(), pseudonymousId: v.string() },
   handler: async (ctx, { submissionId, pseudonymousId }) => {
     const submission = await ctx.db.get(submissionId as Id<"submissions">);
@@ -1234,7 +1234,7 @@ export const getSubmissionStatus = query({
 // EMAIL CONFIRMATION
 // =============================================================================
 
-export const confirmEmailDelivery = mutation({
+export const confirmEmailDelivery = internalMutation({
   args: { templateId: v.string() },
   handler: async (ctx, { templateId }) => {
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
@@ -1273,7 +1273,7 @@ export const confirmEmailDelivery = mutation({
 // DELEGATION (authenticated)
 // =============================================================================
 
-export const getDelegationGrant = query({
+export const getDelegationGrant = internalQuery({
   args: { grantId: v.string() },
   handler: async (ctx, { grantId }) => {
     const grant = await ctx.db.get(grantId as Id<"delegationGrants">);
@@ -1295,7 +1295,7 @@ export const getDelegationGrant = query({
   },
 });
 
-export const updateDelegationGrant = mutation({
+export const updateDelegationGrant = internalMutation({
   args: {
     grantId: v.string(),
     userId: v.string(),
@@ -1327,7 +1327,7 @@ export const updateDelegationGrant = mutation({
   },
 });
 
-export const submitDelegationReview = mutation({
+export const submitDelegationReview = internalMutation({
   args: {
     reviewId: v.string(),
     userId: v.string(),

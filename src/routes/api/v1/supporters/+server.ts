@@ -10,7 +10,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import { decryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
@@ -53,7 +53,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const source = url.searchParams.get('source');
 	const tagId = url.searchParams.get('tag');
 
-	const result = await serverQuery(api.v1api.listSupporters, {
+	const result = await serverQuery(internal.v1api.listSupporters, {
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
@@ -130,7 +130,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!emailHashResult || !encEmailRaw) return apiError('INTERNAL', 'Supporter email encryption failed', 500);
 	const encEmail = JSON.stringify(encEmailRaw);
 
-	const result = await serverMutation(api.v1api.createSupporter, {
+	const result = await serverMutation(internal.v1api.createSupporter, {
 		orgId: auth.orgId,
 		encryptedEmail: encEmail,
 		emailHash: emailHashResult,

@@ -5,13 +5,13 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params }) => {
 	if (!FEATURES.FUNDRAISING) throw error(404, 'Not found');
 
-	const result = await serverQuery(api.v1api.getCampaignStats, { campaignId: params.campaignId });
+	const result = await serverQuery(internal.v1api.getCampaignStats, { campaignId: params.campaignId });
 	if (!result) throw error(404, 'Campaign not found');
 
 	return json(result);

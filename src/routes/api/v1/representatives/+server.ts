@@ -7,7 +7,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, parsePagination } from '$lib/server/api-v1/response';
 import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, url }) => {
@@ -24,7 +24,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const countryCode = url.searchParams.get('country');
 	const constituencyId = url.searchParams.get('constituency');
 
-	const result = await serverQuery(api.v1api.listRepresentativesV1, {
+	const result = await serverQuery(internal.v1api.listRepresentativesV1, {
 		limit,
 		cursor: cursor ?? undefined,
 		country: countryCode ?? undefined,

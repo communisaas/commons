@@ -2,7 +2,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 
 import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { api, internal } from '$lib/convex';
 
 import type { PageServerLoad, Actions } from './$types';
 
@@ -105,7 +105,7 @@ export const actions: Actions = {
 			return fail(404, { error: 'Organization not found', action: 'createTag' });
 		}
 
-		const result = await serverMutation(api.v1api.createTag, {
+		const result = await serverMutation(internal.v1api.createTag, {
 			orgId: org._id,
 			name
 		});
@@ -135,7 +135,7 @@ export const actions: Actions = {
 			return fail(404, { error: 'Organization not found', action: 'renameTag' });
 		}
 
-		const result = await serverMutation(api.v1api.updateTag, {
+		const result = await serverMutation(internal.v1api.updateTag, {
 			tagId,
 			orgId: org._id,
 			name
@@ -168,7 +168,7 @@ export const actions: Actions = {
 			return fail(404, { error: 'Organization not found', action: 'deleteTag' });
 		}
 
-		const deleted = await serverMutation(api.v1api.deleteTag, {
+		const deleted = await serverMutation(internal.v1api.deleteTag, {
 			tagId,
 			orgId: org._id
 		});

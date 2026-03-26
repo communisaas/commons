@@ -316,6 +316,15 @@ export const processCheckout = action({
     cancelUrl: v.string(),
   },
   handler: async (ctx, args) => {
+    // Rate limit: 5 checkouts per minute per campaign (Stripe cost)
+    const rlKey = `donations.processCheckout:${args.campaignId}`;
+    const rl = await ctx.runMutation(internal._rateLimit.check, {
+      key: rlKey,
+      windowMs: 60_000,
+      maxRequests: 5,
+    });
+    if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
+
     // Validate amount
     if (args.amountCents < 100 || args.amountCents > 100_000_000) {
       throw new Error("Amount must be between $1.00 and $1,000,000.00");

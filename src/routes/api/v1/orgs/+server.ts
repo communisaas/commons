@@ -7,7 +7,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
@@ -20,7 +20,7 @@ export const GET: RequestHandler = async ({ request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const org = await serverQuery(api.v1api.getOrgForApiKey, { orgId: auth.orgId });
+	const org = await serverQuery(internal.v1api.getOrgForApiKey, { orgId: auth.orgId });
 	if (!org) {
 		console.error(`[API v1] Org not found for valid API key. orgId=${auth.orgId}, keyId=${auth.keyId}`);
 		return apiError('INTERNAL_ERROR', 'Organization could not be resolved', 500);

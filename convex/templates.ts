@@ -402,6 +402,15 @@ export const search = action({
     countryCode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Rate limit: 30 searches per minute per IP/session (Gemini API cost)
+    const rlKey = `templates.search:${args.query.slice(0, 20)}`;
+    const rl = await ctx.runMutation(internal._rateLimit.check, {
+      key: rlKey,
+      windowMs: 60_000,
+      maxRequests: 30,
+    });
+    if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
+
     const queryText = args.query.trim();
     if (queryText.length < 2) {
       throw new Error("Query must be at least 2 characters");

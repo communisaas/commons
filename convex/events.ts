@@ -410,6 +410,15 @@ export const createRsvp = action({
     supporterId: v.optional(v.id("supporters")),
   },
   handler: async (ctx, args) => {
+    // Rate limit: 10 RSVPs per minute per event (spam prevention)
+    const rlKey = `events.createRsvp:${args.eventId}`;
+    const rl = await ctx.runMutation(internal._rateLimit.check, {
+      key: rlKey,
+      windowMs: 60_000,
+      maxRequests: 10,
+    });
+    if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
+
     // Verify event exists and is accepting RSVPs
     const event = await ctx.runQuery(internal.events.getEventInternal, { eventId: args.eventId });
     if (!event) throw new Error("Event not found");

@@ -8,6 +8,7 @@
 import { internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { computeEmailHash } from "./_pii";
 
 // =============================================================================
 // SES WEBHOOK — INTERNAL MUTATIONS
@@ -266,23 +267,16 @@ export const processSesWebhook = internalAction({
       );
 
       if (emails.length > 0) {
-        // Compute email hashes in action context (can't import crypto in mutations)
-        // For now, pass emails through and let mutation handle lookup
-        // We need the hashes — compute via SHA-256
-        const hashes = await Promise.all(
-          emails.map(async (email: string) => {
-            const data = new TextEncoder().encode(email);
-            const hashBuf = await crypto.subtle.digest("SHA-256", data);
-            return Array.from(new Uint8Array(hashBuf))
-              .map((b) => b.toString(16).padStart(2, "0"))
-              .join("");
-          }),
-        );
+        const hashes = (
+          await Promise.all(emails.map((email: string) => computeEmailHash(email)))
+        ).filter((h): h is string => h !== null);
 
-        await ctx.runMutation(internal.webhooks.updateSupporterEmailStatus, {
-          emailHashes: hashes,
-          status: "bounced",
-        });
+        if (hashes.length > 0) {
+          await ctx.runMutation(internal.webhooks.updateSupporterEmailStatus, {
+            emailHashes: hashes,
+            status: "bounced",
+          });
+        }
       }
     } else if (notificationType === "Complaint") {
       const complaint = message.complaint;
@@ -291,20 +285,16 @@ export const processSesWebhook = internalAction({
       );
 
       if (emails.length > 0) {
-        const hashes = await Promise.all(
-          emails.map(async (email: string) => {
-            const data = new TextEncoder().encode(email);
-            const hashBuf = await crypto.subtle.digest("SHA-256", data);
-            return Array.from(new Uint8Array(hashBuf))
-              .map((b) => b.toString(16).padStart(2, "0"))
-              .join("");
-          }),
-        );
+        const hashes = (
+          await Promise.all(emails.map((email: string) => computeEmailHash(email)))
+        ).filter((h): h is string => h !== null);
 
-        await ctx.runMutation(internal.webhooks.updateSupporterEmailStatus, {
-          emailHashes: hashes,
-          status: "complained",
-        });
+        if (hashes.length > 0) {
+          await ctx.runMutation(internal.webhooks.updateSupporterEmailStatus, {
+            emailHashes: hashes,
+            status: "complained",
+          });
+        }
       }
     } else if (notificationType === "Open") {
       const email = message.mail?.destination?.[0]?.toLowerCase();

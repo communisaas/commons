@@ -9,7 +9,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { VALID_JURISDICTIONS, VALID_COUNTRY_CODES } from '$lib/server/geographic/types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import type { JurisdictionType, CountryCode } from '$lib/server/geographic/types';
 import type { RequestHandler } from './$types';
 
@@ -22,7 +22,7 @@ export const GET: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const campaign = await serverQuery(api.v1api.getCampaignById, { campaignId: params.id, orgId: auth.orgId });
+	const campaign = await serverQuery(internal.v1api.getCampaignById, { campaignId: params.id, orgId: auth.orgId });
 	if (!campaign) return apiError('NOT_FOUND', 'Campaign not found', 404);
 
 	return apiOk({
@@ -86,7 +86,7 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 
 	if (Object.keys(data).length === 0) return apiError('BAD_REQUEST', 'No fields to update', 400);
 
-	const result = await serverMutation(api.v1api.updateCampaign, { campaignId: params.id, orgId: auth.orgId, data });
+	const result = await serverMutation(internal.v1api.updateCampaign, { campaignId: params.id, orgId: auth.orgId, data });
 	if (!result) return apiError('NOT_FOUND', 'Campaign not found', 404);
 	return apiOk({ id: result.id, updatedAt: new Date(result.updatedAt).toISOString() });
 };

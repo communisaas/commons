@@ -9,7 +9,7 @@
  * because they ARE the auth creation path.
  */
 
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 
 // =============================================================================
@@ -151,7 +151,7 @@ export const upsertFromOAuth = mutation({
  * Create a session for a user. Called from SvelteKit after OAuth upsert.
  * No auth check: this IS the session creation path.
  */
-export const createSession = mutation({
+export const createSession = internalMutation({
   args: {
     userId: v.string(), // Convex ID as string (from upsertFromOAuth result)
     expiresAt: v.number(),
@@ -180,7 +180,7 @@ export const createSession = mutation({
  * Invalidate (delete) a session. Called from SvelteKit logout route.
  * Accepts session ID as string for cross-system compatibility.
  */
-export const invalidateSession = mutation({
+export const invalidateSession = internalMutation({
   args: {
     sessionId: v.string(),
   },
@@ -253,7 +253,7 @@ export const validateSession = query({
  * Renew a session's expiry. Called from hooks.server.ts when validateSession
  * indicates renewal is needed. Separated from the query to keep reads fast.
  */
-export const renewSession = mutation({
+export const renewSession = internalMutation({
   args: { sessionId: v.string() },
   handler: async (ctx, { sessionId }) => {
     const session = await ctx.db
