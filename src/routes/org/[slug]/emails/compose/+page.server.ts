@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — email engine integration (send/preview/A/B test mutations, rate limiting, billing, SES)
 import { fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';

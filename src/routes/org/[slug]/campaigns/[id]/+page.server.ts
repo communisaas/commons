@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — complex campaign detail with verification packet, analytics, debate data + 4 form actions (update/addTarget/removeTarget/updateStatus)
 import { error, fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';

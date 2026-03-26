@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — security-critical invite acceptance ($transaction, PII decryption, email hash comparison)
 import { redirect, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { computeEmailHash, tryDecryptPii, type EncryptedPii } from '$lib/core/crypto/user-pii-encryption';

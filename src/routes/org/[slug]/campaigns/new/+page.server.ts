@@ -1,3 +1,4 @@
+// CONVEX: Blocked — needs Convex campaign create mutation + template/bill/alert validation queries
 import { redirect, fail } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';

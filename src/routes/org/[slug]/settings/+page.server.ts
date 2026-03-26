@@ -1,3 +1,4 @@
+// CONVEX: Blocked — needs Convex queries for subscription, usage, members (with PII decrypt), invites (with PII decrypt), issueDomains
 import { db } from '$lib/core/db';
 import { getOrgUsage } from '$lib/server/billing/usage';
 import { decryptUserPii, tryDecryptPii, type EncryptedPii } from '$lib/core/crypto/user-pii-encryption';

@@ -1,3 +1,4 @@
+// CONVEX: Blocked — needs Convex patchThroughCall query (list calls by org with campaign join)
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';

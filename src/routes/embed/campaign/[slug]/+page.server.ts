@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — mutation-heavy campaign action form (supporter PII encryption, billing, rate limiting, debate auto-spawn, waitUntil)
 import { error, fail } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';

@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — mutation-heavy campaign action form (supporter PII encryption, district verification, billing, debate auto-spawn, waitUntil)
 import { error, fail } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { env } from '$env/dynamic/private';

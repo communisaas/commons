@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — external Action Network API integration with encrypted key storage and background sync
 import { fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { getRequestClient } from '$lib/core/db';
