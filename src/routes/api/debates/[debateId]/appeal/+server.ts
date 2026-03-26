@@ -1,7 +1,7 @@
-// CONVEX: Keep SvelteKit — calls blockchain (appealResolution). On-chain governance operation.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { appealResolution } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
 
@@ -22,10 +22,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 	const { debateId } = params;
 	if (!debateId) throw error(400, 'Missing debateId');
 
-	const debate = await prisma.debate.findUnique({
-		where: { id: debateId },
-		select: { id: true, status: true }
-	});
+	await serverQuery(api.debates.get, { debateId: debateId as any });
 	if (!debate) throw error(404, 'Debate not found');
 	if (debate.status !== 'resolved' && debate.status !== 'resolving') {
 		throw error(400, 'Can only appeal resolved or resolving debates');

@@ -1,6 +1,7 @@
 // CONVEX: Keep SvelteKit — role-based PII masking (maskEmail), donation list with server-side decryption
 import { error, redirect } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { maskEmail } from '$lib/server/org/mask';
 import type { PageServerLoad } from './$types';

@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Wallet Connection Verification Endpoint
  *
  * Verifies an EIP-191 personal_sign signature against a previously-issued nonce,
@@ -20,7 +19,8 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { verifyMessage, getAddress, isAddress } from 'ethers';
-import { db } from '$lib/core/db';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { nonceStore, cleanupExpiredNonces } from '../_nonce-store';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -96,27 +96,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		return json({ error: 'Signature does not match the provided address' }, { status: 400 });
 	}
 
-	// Check if this wallet is already bound to a different user
+	// Bind wallet via Convex mutation (handles uniqueness check)
 	try {
-		const existingUser = await db.user.findUnique({
-			where: { wallet_address: checksummedAddress },
-			select: { id: true }
-		});
-
-		if (existingUser && existingUser.id !== locals.user.id) {
-			return json(
-				{ error: 'This wallet is already connected to another account' },
-				{ status: 409 }
-			);
-		}
-
-		// Bind wallet to user
-		await db.user.update({
-			where: { id: locals.user.id },
-			data: {
-				wallet_address: checksummedAddress,
-				wallet_type: 'evm'
-			}
+		const result = await serverMutation(api.users.connectWallet, {
+			address: checksummedAddress,
+			walletType: 'evm',
 		});
 
 		return json({
@@ -124,13 +108,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			address: checksummedAddress
 		});
 	} catch (err) {
-		// Handle unique constraint violation (race condition)
-		const isPrismaUniqueViolation =
-			err != null &&
-			typeof err === 'object' &&
-			'code' in err &&
-			(err as { code: string }).code === 'P2002';
-		if (isPrismaUniqueViolation) {
+		const message = err instanceof Error ? err.message : String(err);
+		if (message.includes('already connected')) {
 			return json(
 				{ error: 'This wallet is already connected to another account' },
 				{ status: 409 }

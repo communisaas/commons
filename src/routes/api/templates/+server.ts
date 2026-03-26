@@ -6,7 +6,8 @@
 // and vector storage as Convex actions with separate internal mutations.
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { db } from '$lib/core/db'; // KEEP: POST uses $transaction, raw SQL for pgvector, content hash dedup
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex'; // KEEP: POST uses $transaction, raw SQL for pgvector, content hash dedup
 import {
 	createApiError,
 	createValidationError,

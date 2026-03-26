@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Delete Encrypted Identity Blob
  *
  * Removes encrypted blob from storage (user requested deletion).
@@ -10,7 +9,8 @@
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 export const DELETE: RequestHandler = async ({ locals }) => {
 	// Authentication check
@@ -22,9 +22,9 @@ export const DELETE: RequestHandler = async ({ locals }) => {
 	const userId = locals.user.id;
 
 	try {
-		// Delete encrypted blob
-		await prisma.encryptedDeliveryData.delete({
-			where: { user_id: userId }
+		// Delete encrypted blob via Convex
+		await serverMutation(api.users.deleteEncryptedBlob, {
+			userId: userId as any,
 		});
 
 		return json({
@@ -32,8 +32,8 @@ export const DELETE: RequestHandler = async ({ locals }) => {
 			message: 'Encrypted blob deleted successfully'
 		});
 	} catch (error) {
-		// Handle case where blob doesn't exist
-		if (error && typeof error === 'object' && 'code' in error && error.code === 'P2025') {
+		const message = error instanceof Error ? error.message : String(error);
+		if (message.includes('NOT_FOUND')) {
 			return json({ error: 'No encrypted blob found for user' }, { status: 404 });
 		}
 
@@ -41,7 +41,7 @@ export const DELETE: RequestHandler = async ({ locals }) => {
 		return json(
 			{
 				error: 'Failed to delete encrypted blob',
-				details: error instanceof Error ? error.message : 'Unknown error'
+				details: message
 			},
 			{ status: 500 }
 		);

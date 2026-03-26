@@ -606,11 +606,9 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
  */
 export const RATE_LIMIT_EXEMPT_PATHS = [
 	'/api/identity/didit/webhook', // HMAC-authenticated webhook
-	'/api/billing/webhook', // Stripe signature-verified webhook
 	'/api/health', // Health checks
 	'/api/cron/', // Cron jobs (authenticated separately)
-	'/api/sms/webhook', // Twilio signature-verified SMS webhook
-	'/api/sms/call-status' // Twilio signature-verified call status webhook
+	// Stripe, SES, and Twilio webhooks moved to Convex HTTP actions (/webhooks/*)
 ];
 
 /**

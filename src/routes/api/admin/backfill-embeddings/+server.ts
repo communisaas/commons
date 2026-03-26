@@ -1,7 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 // CONVEX: Keep SvelteKit
 import type { RequestHandler } from './$types';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
 import { env } from '$env/dynamic/private';
 

@@ -1,7 +1,8 @@
 // CONVEX: Keep SvelteKit — calls blockchain (commitTrade). On-chain LMSR market operation.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
@@ -28,10 +29,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	// Validate debate exists and is active
-	const debate = await prisma.debate.findUnique({
-		where: { id: debateId },
-		select: { id: true, status: true, current_epoch: true, debate_id_onchain: true }
-	});
+	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
 
 	if (!debate) throw error(404, 'Debate not found');
 	if (debate.status !== 'active') throw error(400, 'Debate is not active');
@@ -43,7 +41,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		const { commitTrade } = await import('$lib/core/blockchain/debate-market-client');
 
 		const onchainResult = await commitTrade({
-			debateId: debate.debate_id_onchain,
+			debateId: debate.debateIdOnchain,
 			commitHash,
 			proof,
 			publicInputs: publicInputs ?? [],
@@ -71,7 +69,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		success: true,
 		debateId,
 		commitHash,
-		epoch: debate.current_epoch,
+		epoch: debate.currentEpoch,
 		...(txHash ? { txHash } : {})
 	});
 };

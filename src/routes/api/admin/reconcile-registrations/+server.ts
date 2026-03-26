@@ -18,7 +18,8 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 import { verifyCronSecret } from '$lib/server/cron-auth';

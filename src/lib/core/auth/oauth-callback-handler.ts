@@ -4,10 +4,13 @@
  * Consolidates 85% of duplicate OAuth callback logic across 5 providers
  * while maintaining provider-specific customizations.
  *
+ * DB operations use Convex via serverMutation() — no Prisma.
+ * Cookie management uses SvelteKit's Cookies API.
+ *
  * Features:
  * - Unified token exchange and validation
- * - Common user creation/update logic
- * - Standardized session management
+ * - Common user creation/update logic (via Convex)
+ * - Standardized session management (via Convex)
  * - Consistent address collection flows
  * - Provider-specific API handling through configuration
  */
@@ -15,12 +18,11 @@
 import type { Cookies } from '@sveltejs/kit';
 import { error, redirect } from '@sveltejs/kit';
 import { dev } from '$app/environment';
-import { db } from '$lib/core/db';
-import { createSession, sessionCookieName } from '$lib/core/auth/auth';
 import { validateReturnTo } from '$lib/core/auth/oauth';
-import { createNearAccount } from '$lib/core/near/account';
 import { encryptOAuthToken } from '$lib/core/crypto/oauth-token-encryption';
 import { encryptUserPii, computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 /**
  * NEAR IMPLICIT ACCOUNT CREATION (fire-and-forget)
@@ -28,7 +30,7 @@ import { encryptUserPii, computeEmailHash } from '$lib/core/crypto/user-pii-encr
  * New users automatically get a NEAR implicit account at signup.
  * createNearAccount() generates Ed25519 keypairs, encrypts private keys,
  * stores in DB, and derives a Scroll address via Chain Signatures MPC.
- * Called fire-and-forget after db.user.create() — the OAuth redirect
+ * Called fire-and-forget after user creation — the OAuth redirect
  * does NOT wait for it. Failures are logged but never block auth.
  *
  * See: /src/lib/core/near/account.ts
@@ -155,8 +157,6 @@ export class OAuthCallbackHandler {
 			const tokenData = config.extractTokenData(tokens);
 
 			// Token exchange succeeded — safe to delete OAuth state cookies now.
-			// Before this point, a transient failure leaves cookies intact so the
-			// user can refresh the callback URL to retry.
 			this.cleanupOAuthCookies(cookies, config.requiresCodeVerifier);
 
 			// Step 3: Fetch user information from provider
@@ -171,12 +171,10 @@ export class OAuthCallbackHandler {
 			// Normalize email to prevent case-sensitivity duplicates
 			userData.email = userData.email.toLowerCase();
 
-			// Step 4: Find or create user in database
-			const user = await this.findOrCreateUser(config, userData, tokenData);
+			// Step 4: Find or create user via Convex
+			const userId = await this.findOrCreateUser(config, userData, tokenData);
 
 			// Step 4.5: Store OAuth location data for client-side inference
-			// Note: This is stored in a client-accessible cookie for browser-side location inference
-			// Server NEVER stores location data - only passes it to client via cookie
 			if (userData.location || userData.locale || userData.timezone) {
 				this.storeOAuthLocationCookie(
 					cookies,
@@ -188,7 +186,7 @@ export class OAuthCallbackHandler {
 			}
 
 			// Step 5: Create session and handle redirects
-			return await this.handleSessionAndRedirect(user, returnTo, config.provider, cookies);
+			return await this.handleSessionAndRedirect(userId, returnTo, config.provider, cookies);
 		} catch (err) {
 			return this.handleError(err, config.provider);
 		}
@@ -214,10 +212,6 @@ export class OAuthCallbackHandler {
 		const returnTo = cookies.get('oauth_return_to') || '/profile';
 		const codeVerifier = requiresCodeVerifier ? cookies.get('oauth_code_verifier') : undefined;
 
-		// NOTE: Cookie cleanup deferred to after successful token exchange.
-		// If token exchange fails transiently, preserving cookies lets the user
-		// refresh the callback URL to retry instead of restarting the entire flow.
-
 		// Validate required parameters
 		if (!code || !state || !storedState) {
 			throw error(400, 'Missing required OAuth parameters');
@@ -235,24 +229,18 @@ export class OAuthCallbackHandler {
 	}
 
 	/**
-	 * Find existing user or create new one with OAuth account
+	 * Find existing user or create new one with OAuth account via Convex.
 	 *
-	 * ISSUE-002: Sybil Resistance for Unverified Emails
-	 * Twitter accounts without verified email get synthetic emails (username@twitter.local)
-	 * These accounts receive lower trust_score to prevent Sybil attacks:
-	 * - Verified email: trust_score = 100 (socially vouched)
-	 * - Unverified/synthetic email: trust_score = 50 (location-hinted tier)
+	 * Returns the Convex user ID (string).
 	 */
 	private async findOrCreateUser(
 		config: OAuthCallbackConfig,
 		userData: UserData,
 		tokenData: TokenData
-	): Promise<DatabaseUser> {
-		// ISSUE-002: Determine email verification status
-		// Default to true for backwards compatibility (most providers verify email)
+	): Promise<string> {
 		const emailVerified = userData.emailVerified !== false;
 
-		// Encrypt tokens at rest (fire-and-forget on failure — plaintext columns are fallback)
+		// Encrypt tokens at rest
 		const [encAccessToken, encRefreshToken] = await Promise.all([
 			tokenData.accessToken
 				? encryptOAuthToken(tokenData.accessToken, config.provider, userData.id).catch(() => null)
@@ -262,164 +250,83 @@ export class OAuthCallbackHandler {
 				: null
 		]);
 
-		// Check for existing OAuth account
-		const existingAccount = await db.account.findUnique({
-			where: {
-				provider_provider_account_id: {
-					provider: config.provider,
-					provider_account_id: userData.id
-				}
-			},
-			include: { user: true }
-		});
-
-		// Update existing account tokens and email verification status
-		if (existingAccount) {
-			await db.account.update({
-				where: { id: existingAccount.id },
-				data: {
-					expires_at: tokenData.expiresAt,
-					// Encrypted token columns (plaintext columns dropped in Cycle 6)
-					encrypted_access_token: encAccessToken ? JSON.parse(JSON.stringify(encAccessToken)) : undefined,
-					encrypted_refresh_token: encRefreshToken ? JSON.parse(JSON.stringify(encRefreshToken)) : undefined,
-					// ISSUE-002: Update email_verified status on each login
-					// (in case user verified their email since last login)
-					email_verified: emailVerified
-				}
-			});
-
-			return existingAccount.user;
-		}
-
-		// Check for existing user by email_hash (C-3) — post-backfill, all users have email_hash
-		const emailHash = await computeEmailHash(userData.email);
-		const existingUser = emailHash
-			? await db.user.findUnique({ where: { email_hash: emailHash } })
-			: null;
-
-		if (existingUser) {
-			// Link OAuth account to existing user
-			await db.account.create({
-				data: {
-					id: this.generateAccountId(),
-					user_id: existingUser.id,
-					type: 'oauth',
-					provider: config.provider,
-					provider_account_id: userData.id,
-					expires_at: tokenData.expiresAt,
-					token_type: 'Bearer',
-					scope: config.scope,
-					// Encrypted token columns (plaintext columns dropped in Cycle 6)
-					encrypted_access_token: encAccessToken ? JSON.parse(JSON.stringify(encAccessToken)) : undefined,
-					encrypted_refresh_token: encRefreshToken ? JSON.parse(JSON.stringify(encRefreshToken)) : undefined,
-					// ISSUE-002: Track email verification status for Sybil resistance
-					email_verified: emailVerified
-				}
-			});
-
-			return existingUser;
-		}
-
-		// ISSUE-002: Apply lower trust_score for accounts with unverified/synthetic email
-		// This creates a Sybil-resistant trust tier:
-		// - trust_score 100: Verified email (socially vouched tier)
-		// - trust_score 50: Unverified/synthetic email (location-hinted tier)
-		// Users can still use basic functionality but are restricted from sensitive operations
-		const baseTrustScore = emailVerified ? 100 : 50;
-		const baseReputationTier = emailVerified ? 'verified' : 'novice';
-
-		// C-3: Encrypt PII before storage (email_hash computed above, reuse it)
-		// Generate a temporary ID for key derivation — Prisma will assign the real cuid
+		// Encrypt PII
 		const tempUserId = crypto.randomUUID();
 		const piiData = await encryptUserPii(userData.email, userData.name, tempUserId);
 
-		// Encryption is mandatory — empty/null encrypted_email is a poison pill (JSON.parse crashes)
 		if (!piiData.encrypted_email || !piiData.email_hash) {
 			throw new Error('[OAuth] PII encryption failed — cannot create user without encrypted_email and email_hash');
 		}
 
-		// Create new user with OAuth account
-		const newUser = await db.user.create({
-			data: {
-				id: tempUserId,
-				avatar: userData.avatar,
-				// Encrypted PII only — no plaintext email/name written
-				encrypted_email: piiData.encrypted_email,
-				encrypted_name: piiData.encrypted_name ?? undefined,
-				email_hash: piiData.email_hash,
-				// ISSUE-002: Apply trust_score based on email verification
-				trust_score: baseTrustScore,
-				reputation_tier: baseReputationTier,
-				account: {
-					create: {
-						id: this.generateAccountId(),
-						type: 'oauth',
-						provider: config.provider,
-						provider_account_id: userData.id,
-						expires_at: tokenData.expiresAt,
-						token_type: 'Bearer',
-						scope: config.scope,
-						// Encrypted token columns (plaintext columns dropped in Cycle 6)
-						encrypted_access_token: encAccessToken ? JSON.parse(JSON.stringify(encAccessToken)) : undefined,
-						encrypted_refresh_token: encRefreshToken ? JSON.parse(JSON.stringify(encRefreshToken)) : undefined,
-						// ISSUE-002: Track email verification status for Sybil resistance
-						email_verified: emailVerified
-					}
-				}
+		// Call Convex mutation to upsert user + account
+		const result = await serverMutation(api.authOps.upsertFromOAuth, {
+			provider: config.provider,
+			providerAccountId: userData.id,
+			scope: config.scope,
+			encryptedEmail: piiData.encrypted_email,
+			encryptedName: piiData.encrypted_name ?? undefined,
+			emailHash: piiData.email_hash,
+			avatar: userData.avatar,
+			emailVerified,
+			encryptedAccessToken: encAccessToken ? JSON.parse(JSON.stringify(encAccessToken)) : undefined,
+			encryptedRefreshToken: encRefreshToken ? JSON.parse(JSON.stringify(encRefreshToken)) : undefined,
+			expiresAt: tokenData.expiresAt ?? undefined,
+		});
+
+		// Fire-and-forget NEAR account creation for new users
+		if (result.isNew) {
+			import('$lib/core/near/account').then(({ createNearAccount }) => {
+				createNearAccount(result.userId as string).catch((err) => {
+					console.warn('[OAuth] NEAR account creation failed (non-blocking):', err);
+				});
+			}).catch(() => {});
+
+			// Log Sybil resistance action for audit (no plaintext PII in logs)
+			if (!emailVerified) {
+				console.debug('[OAuth Sybil Resistance] New user created with unverified email:', {
+					provider: config.provider,
+					userId: result.userId,
+					email_hash: piiData.email_hash?.slice(0, 12) ?? 'none',
+					trust_score: emailVerified ? 100 : 50,
+					reputation_tier: emailVerified ? 'verified' : 'novice'
+				});
 			}
-		});
-
-		// Fire-and-forget NEAR account creation — invisible wallet for non-crypto users
-		createNearAccount(newUser.id).catch((err) => {
-			console.warn('[OAuth] NEAR account creation failed (non-blocking):', err);
-		});
-
-		// Log Sybil resistance action for audit (no plaintext PII in logs)
-		if (!emailVerified) {
-			console.debug('[OAuth Sybil Resistance] New user created with unverified email:', {
-				provider: config.provider,
-				userId: newUser.id,
-				email_hash: piiData.email_hash?.slice(0, 12) ?? 'none',
-				trust_score: baseTrustScore,
-				reputation_tier: baseReputationTier
-			});
 		}
 
-		return newUser;
+		return result.userId as string;
 	}
 
 	/**
-	 * Create session and redirect back to origin
-	 *
-	 * DESIGN PRINCIPLE: OAuth callback does ONE thing - authenticate.
-	 * Address collection happens contextually in the template flow, not as a wall.
-	 *
-	 * From docs/design/friction.md:
-	 * "One-click democracy: From link to sent message in seconds."
-	 *
-	 * From docs/strategy/coordination.md:
-	 * "The address wall SCATTERS our users. It breaks coordination momentum."
+	 * Create session via Convex and redirect back to origin.
 	 */
 	private async handleSessionAndRedirect(
-		user: DatabaseUser,
+		userId: string,
 		returnTo: string,
 		provider: string,
 		cookies: Cookies
 	): Promise<Response> {
+		const DAY_IN_MS = 1000 * 60 * 60 * 24;
+
 		// Determine session type based on funnel
 		const isFromSocialFunnel =
 			returnTo.includes('template-modal') ||
 			returnTo.includes('auth=required') ||
-			returnTo.includes('/s/'); // Template pages
+			returnTo.includes('/s/');
 
-		// Create session with appropriate duration
-		const session = await createSession(user.id, isFromSocialFunnel);
-		const cookieMaxAge = isFromSocialFunnel
-			? 60 * 60 * 24 * 90 // 90 days for social funnel
-			: 60 * 60 * 24 * 30; // 30 days standard
+		const sessionDurationMs = isFromSocialFunnel
+			? DAY_IN_MS * 90 // 90 days for social funnel
+			: DAY_IN_MS * 30; // 30 days standard
+
+		const cookieMaxAge = sessionDurationMs / 1000; // seconds
+
+		// Create session via Convex
+		const session = await serverMutation(api.authOps.createSession, {
+			userId,
+			expiresAt: Date.now() + sessionDurationMs,
+		});
 
 		// Set session cookie
-		cookies.set(sessionCookieName, session.id, {
+		cookies.set('auth-session', session.sessionId, {
 			path: '/',
 			secure: !dev,
 			httpOnly: true,
@@ -428,11 +335,6 @@ export class OAuthCallbackHandler {
 		});
 
 		// Store OAuth completion signal for client-side detection
-		// This lets the template page know OAuth just completed → open modal immediately
-		// BA-013: httpOnly intentionally false — this cookie is read by client-side JS:
-		//   - src/routes/s/[slug]/+page.svelte (reads via document.cookie to detect OAuth return)
-		//   - src/routes/onboarding/profile/+page.svelte (reads/writes via document.cookie)
-		// Contains only non-sensitive flow-control data (provider name, returnTo path, timestamp).
 		cookies.set(
 			'oauth_completion',
 			JSON.stringify({
@@ -443,36 +345,20 @@ export class OAuthCallbackHandler {
 			}),
 			{
 				path: '/',
-				secure: !dev, // Secure in production
-				httpOnly: false, // Client JS reads this — see BA-013 comment above
+				secure: !dev,
+				httpOnly: false, // Client JS reads this — see BA-013 comment
 				maxAge: 60 * 5, // 5 minutes
 				sameSite: 'lax'
 			}
 		);
 
-		// SIMPLE: Just redirect back to where they came from
-		// The template page will handle:
-		// - Opening the modal
-		// - Collecting address IF needed (congressional templates only)
-		// - All other template-specific logic
-		//
-		// NO MORE FORCED REDIRECTS TO /onboarding/address
-		// NO MORE ADDRESS WALLS
-		// LET THEM SEND THE FUCKING MESSAGE
-		//
 		// BA-004: Validate returnTo at the redirect point (defense in depth)
-		// This is the critical enforcement point — even if a malicious value
-		// was stored in the cookie, it gets sanitized before redirect.
 		const safeReturnTo = validateReturnTo(returnTo);
 		return redirect(302, safeReturnTo);
 	}
 
 	/**
 	 * Handle errors consistently across all providers
-	 *
-	 * IMPORTANT: This method THROWS errors for test compatibility.
-	 * SvelteKit's error() function creates an HttpError that must be thrown,
-	 * and redirect() creates a redirect Response that must be thrown.
 	 */
 	private handleError(err: unknown, provider: string): never {
 		// Don't log SvelteKit redirects as errors - just re-throw
@@ -487,11 +373,9 @@ export class OAuthCallbackHandler {
 			}
 		}
 
-		// If this is already an HttpError with a specific status (like 400 validation errors),
-		// preserve the original error instead of wrapping it in a 500
+		// If this is already an HttpError with a specific status, preserve it
 		if (err && typeof err === 'object' && 'status' in err && 'body' in err) {
 			const status = err.status as number;
-			// Re-throw 4xx client errors (validation, auth failures, etc.) as-is
 			if (status >= 400 && status < 500) {
 				throw err;
 			}
@@ -510,7 +394,6 @@ export class OAuthCallbackHandler {
 			}
 		});
 
-		// Throw appropriate error
 		const errorMessage =
 			process.env.NODE_ENV === 'production'
 				? 'Authentication failed'
@@ -521,8 +404,6 @@ export class OAuthCallbackHandler {
 
 	/**
 	 * Remove OAuth state cookies after successful token exchange.
-	 * Called only after the token exchange succeeds — preserving cookies on
-	 * transient failure lets the user refresh the callback URL to retry.
 	 */
 	private cleanupOAuthCookies(cookies: Cookies, requiresCodeVerifier: boolean): void {
 		cookies.delete('oauth_state', { path: '/' });
@@ -533,16 +414,7 @@ export class OAuthCallbackHandler {
 	}
 
 	/**
-	 * Generate unique account ID
-	 */
-	private generateAccountId(): string {
-		const bytes = crypto.getRandomValues(new Uint8Array(20));
-		return Array.from(bytes, (byte: number) => byte.toString(16).padStart(2, '0')).join('');
-	}
-
-	/**
 	 * Store OAuth location data in client-accessible cookie
-	 * This enables browser-side location inference WITHOUT server-side tracking
 	 */
 	private storeOAuthLocationCookie(
 		cookies: Cookies,
@@ -560,24 +432,14 @@ export class OAuthCallbackHandler {
 				timestamp: Date.now()
 			};
 
-			// Store in client-accessible cookie (expires in 7 days)
-			// Client will read this cookie and add OAuth location signal to IndexedDB
 			cookies.set('oauth_location', JSON.stringify(locationData), {
 				path: '/',
-				secure: !dev, // Secure in production
-				httpOnly: false, // Allow client-side access
-				maxAge: 7 * 24 * 60 * 60, // 7 days
+				secure: !dev,
+				httpOnly: false,
+				maxAge: 7 * 24 * 60 * 60,
 				sameSite: 'lax'
 			});
-
-			console.debug('[OAuth Location] Stored location cookie for client-side inference:', {
-				provider,
-				hasLocation: !!location,
-				hasLocale: !!locale,
-				hasTimezone: !!timezone
-			});
 		} catch (error) {
-			// Log error but don't block OAuth flow
 			console.error('[OAuth Location] Failed to store location cookie:', error);
 		}
 	}

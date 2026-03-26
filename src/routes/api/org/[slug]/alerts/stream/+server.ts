@@ -1,8 +1,7 @@
 import { error } from '@sveltejs/kit';
-// CONVEX: Keep SvelteKit
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
-import { loadOrgContext } from '$lib/server/org';
-import { db } from '$lib/core/db';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /**
@@ -19,7 +18,12 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
+	// Validate org membership via Convex
+	const orgContext = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
+	if (!orgContext) {
+		throw error(404, 'Organization not found');
+	}
+	const orgId = orgContext.org._id;
 
 	const { stream, emitter } = createSSEStream({
 		traceId: crypto.randomUUID(),
@@ -30,46 +34,18 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	let closed = false;
 	let lastAlertIds = '';
 
-	// Fetch pending alerts helper
+	// Fetch pending alerts helper via Convex
 	async function fetchPendingAlerts() {
-		return db.legislativeAlert.findMany({
-			where: { orgId: org.id, status: 'pending' },
-			orderBy: [{ createdAt: 'desc' }],
-			take: 10,
-			select: {
-				id: true,
-				type: true,
-				title: true,
-				summary: true,
-				urgency: true,
-				createdAt: true,
-				bill: {
-					select: {
-						id: true,
-						title: true,
-						status: true
-					}
-				}
-			}
-		});
+		return serverQuery(api.legislation.getPendingAlertsByOrgId, { orgId, limit: 10 });
 	}
 
 	// Send initial state immediately
 	try {
 		const alerts = await fetchPendingAlerts();
-		lastAlertIds = alerts.map((a) => a.id).join(',');
+		lastAlertIds = alerts.map((a: { id: string }) => a.id).join(',');
 		emitter.send('alerts', {
 			count: alerts.length,
-			alerts: alerts.map((a) => ({
-				id: a.id,
-				type: a.type,
-				title: a.title,
-				summary: a.summary,
-				urgency: a.urgency,
-				createdAt: a.createdAt.toISOString(),
-				billTitle: a.bill.title,
-				billStatus: a.bill.status
-			}))
+			alerts
 		});
 	} catch {
 		emitter.error('Failed to fetch initial alerts', 'INIT_ERROR');
@@ -80,25 +56,16 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		if (closed) return;
 		try {
 			const alerts = await fetchPendingAlerts();
-			const ids = alerts.map((a) => a.id).join(',');
+			const ids = alerts.map((a: { id: string }) => a.id).join(',');
 			if (ids !== lastAlertIds) {
 				lastAlertIds = ids;
 				emitter.send('alerts', {
 					count: alerts.length,
-					alerts: alerts.map((a) => ({
-						id: a.id,
-						type: a.type,
-						title: a.title,
-						summary: a.summary,
-						urgency: a.urgency,
-						createdAt: a.createdAt.toISOString(),
-						billTitle: a.bill.title,
-						billStatus: a.bill.status
-					}))
+					alerts
 				});
 			}
 		} catch {
-			// DB error — skip this poll, don't kill the stream
+			// Query error — skip this poll, don't kill the stream
 		}
 	}, 30_000);
 

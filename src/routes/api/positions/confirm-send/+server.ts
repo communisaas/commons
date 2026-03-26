@@ -13,7 +13,8 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { confirmMailtoSend } from '$lib/services/positionService';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -43,10 +44,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		// Derive identity_commitment from DB — require real verification
-		const user = await prisma.user.findUnique({
-			where: { id: session.userId },
-			select: { identity_commitment: true }
-		});
+		const user = await serverQuery(api.users.getById, { id: session.userId  as any });
 		if (!user?.identity_commitment) {
 			return json({ error: 'Identity verification required to confirm send' }, { status: 403 });
 		}

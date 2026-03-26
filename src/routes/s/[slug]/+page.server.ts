@@ -1,7 +1,8 @@
 // CONVEX: Keep SvelteKit — complex 2-batch Prisma load (positions, debates, officials, engagement), BigInt transforms
 import type { PageServerLoad } from './$types';
 import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { getPositionCounts, getEngagementByDistrict } from '$lib/services/positionService';
 import { parseRecipientConfig } from '$lib/types/template';
 import { getOfficials } from '$lib/core/shadow-atlas/client';

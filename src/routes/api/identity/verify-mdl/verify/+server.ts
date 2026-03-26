@@ -1,8 +1,8 @@
 import { json, error } from '@sveltejs/kit';
-// CONVEX: Keep SvelteKit
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 import {
 	bindIdentityCommitment
@@ -129,22 +129,12 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 		// Update user record with mDL verification
 		// Always set verification metadata; only upgrade trust_tier (never downgrade)
-		const now = new Date();
-		const user = await prisma.user.findUnique({
-			where: { id: canonicalUserId },
-			select: { trust_tier: true }
-		});
-
-		await prisma.user.update({
-			where: { id: canonicalUserId },
-			data: {
-				verified_at: now,
-				address_verification_method: 'mdl',
-				address_verified_at: now,
-				document_type: 'mdl',
-				// Only upgrade trust_tier, never downgrade
-				...((!user?.trust_tier || user.trust_tier < 5) ? { trust_tier: 5 } : {})
-			}
+		const now = Date.now();
+		await serverMutation(api.users.updateMdlVerification, {
+			userId: canonicalUserId as any,
+			verifiedAt: now,
+			addressVerificationMethod: 'mdl',
+			documentType: 'mdl',
 		});
 
 		console.log('[mDL Verify] Success:', {

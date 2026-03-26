@@ -2396,3 +2396,38 @@ export const computeScorecards = internalAction({
   },
 });
 
+/**
+ * Get pending alerts for an org (used by SSE alert stream).
+ * Takes orgId directly — auth is handled by the SvelteKit route.
+ */
+export const getPendingAlertsByOrgId = query({
+  args: { orgId: v.id("organizations"), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 10;
+    const alerts = await ctx.db
+      .query("legislativeAlerts")
+      .withIndex("by_orgId_status", (idx) =>
+        idx.eq("orgId", args.orgId).eq("status", "pending"),
+      )
+      .order("desc")
+      .take(limit);
+
+    const enriched = await Promise.all(
+      alerts.map(async (a) => {
+        const bill = await ctx.db.get(a.billId);
+        return {
+          id: a._id,
+          type: a.type,
+          title: a.title,
+          summary: a.summary,
+          urgency: a.urgency,
+          createdAt: a._creationTime,
+          billTitle: bill?.title ?? "",
+          billStatus: bill?.status ?? "",
+        };
+      }),
+    );
+    return enriched;
+  },
+});
+

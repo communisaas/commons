@@ -1,5 +1,5 @@
 /**
- * Passkey Authentication Endpoint (Graduated Trust)
+ * Passkey Authentication Endpoint (Graduated Trust) — no DB (delegates to passkey-authentication module)
  *
  * Two-step WebAuthn authentication flow:
  *

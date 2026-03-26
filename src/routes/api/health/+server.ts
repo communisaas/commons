@@ -1,27 +1,30 @@
 import { json } from '@sveltejs/kit';
-// CONVEX: Keep SvelteKit
 import type { RequestHandler } from './$types';
-import { db } from '$lib/core/db';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 const startTime = Date.now();
 
 export const GET: RequestHandler = async () => {
-	let postgres = false;
+	let convex = false;
 
 	try {
-		await db.$queryRaw`SELECT 1`;
-		postgres = true;
+		// Ping Convex with a lightweight paginated query (1 item, no data needed)
+		await serverQuery(api.templates.list, {
+			paginationOpts: { numItems: 1, cursor: null }
+		});
+		convex = true;
 	} catch {
-		// postgres unreachable
+		// If Convex is unreachable, convex stays false
 	}
 
-	const status = postgres ? 'ok' : 'down';
-	const code = postgres ? 200 : 503;
+	const status = convex ? 'ok' : 'down';
+	const code = convex ? 200 : 503;
 
 	return json(
 		{
 			status,
-			postgres,
+			convex,
 			uptime: Math.floor((Date.now() - startTime) / 1000)
 		},
 		{ status: code }

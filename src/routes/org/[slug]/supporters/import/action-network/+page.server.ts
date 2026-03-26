@@ -1,7 +1,8 @@
 // CONVEX: Keep SvelteKit — external Action Network API + encrypted key storage + background sync (no Convex anSync table)
 import { fail, redirect } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
-import { getRequestClient } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+import { serverAction } from 'convex-sveltekit';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { encryptApiKey, decryptApiKey } from '$lib/server/an/crypto';
 import { validateApiKey } from '$lib/server/an/client';

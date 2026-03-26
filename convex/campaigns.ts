@@ -927,3 +927,19 @@ export const submitAction = action({
     };
   },
 });
+
+// =============================================================================
+// Campaign stream helpers (for SSE polling replacement)
+// =============================================================================
+
+/**
+ * Get campaign debateId (for SSE stream polling).
+ */
+export const getDebateId = query({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, args) => {
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign) return null;
+    return { debateId: campaign.debateId ?? null };
+  },
+});

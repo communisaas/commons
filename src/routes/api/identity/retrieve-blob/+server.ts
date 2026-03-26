@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Retrieve Encrypted Identity Blob
  *
  * Fetches encrypted blob from Postgres.
@@ -11,7 +10,8 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { EncryptedBlob } from '$lib/core/identity/blob-encryption';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -32,9 +32,9 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 			throw error(403, 'Access denied: Cannot retrieve another user\'s encrypted data');
 		}
 
-		// Fetch encrypted blob
-		const encryptedData = await prisma.encryptedDeliveryData.findUnique({
-			where: { user_id: userId }
+		// Fetch encrypted blob from Convex
+		const encryptedData = await serverQuery(api.users.getEncryptedBlob, {
+			userId: userId as any,
 		});
 
 		if (!encryptedData) {
@@ -45,19 +45,18 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		const blob: EncryptedBlob = {
 			ciphertext: encryptedData.ciphertext,
 			nonce: encryptedData.nonce,
-			publicKey: encryptedData.ephemeral_public_key,
-			version: encryptedData.encryption_version,
-			timestamp: encryptedData.created_at.getTime()
+			publicKey: encryptedData.ephemeralPublicKey,
+			version: encryptedData.encryptionVersion,
+			timestamp: encryptedData._creationTime
 		};
 
 		return json({
 			success: true,
 			blob,
 			metadata: {
-				created_at: encryptedData.created_at,
-				updated_at: encryptedData.updated_at,
-				last_used_at: encryptedData.last_used_at,
-				tee_key_id: encryptedData.tee_key_id
+				created_at: encryptedData._creationTime,
+				updated_at: encryptedData.updatedAt,
+				tee_key_id: encryptedData.teeKeyId
 			}
 		});
 	} catch (err) {

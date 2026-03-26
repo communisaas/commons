@@ -7,7 +7,8 @@ import {
 	type SubmissionRequest
 } from '$lib/core/legislative/submission';
 import { FEATURES } from '$lib/config/features';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { getPlanForOrg } from '$lib/server/billing/plans';
 
 /**

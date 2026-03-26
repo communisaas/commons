@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Shadow Atlas Registration Endpoint (Three-Tree Architecture)
  *
  * Registers a user's precomputed leaf hash with Shadow Atlas Tree 1.
@@ -25,7 +24,8 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler, RequestEvent } from './$types';
 import { registerLeaf, replaceLeaf, type RegistrationResult } from '$lib/core/shadow-atlas/client';
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';

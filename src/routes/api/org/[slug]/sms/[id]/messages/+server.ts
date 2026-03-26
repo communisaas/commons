@@ -4,7 +4,8 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
 import { VALID_SMS_STATUSES } from '$lib/server/sms/types';

@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Shadow Atlas Engagement Endpoint (Tree 3)
  *
  * Registers a user's identity in the engagement tree, fetches their Merkle
@@ -22,7 +21,8 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 import {
 	registerEngagement,

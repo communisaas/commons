@@ -8,7 +8,8 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';

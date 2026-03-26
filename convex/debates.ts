@@ -750,3 +750,22 @@ export const getExpiredDebates = internalQuery({
     return debates.filter((d) => d.deadline < now);
   },
 });
+
+/**
+ * Minimal debate snapshot for SSE stream change detection.
+ */
+export const getSnapshot = query({
+  args: { debateId: v.id("debates") },
+  handler: async (ctx, args) => {
+    const debate = await ctx.db.get(args.debateId);
+    if (!debate) return null;
+    return {
+      id: debate._id,
+      status: debate.status,
+      argumentCount: debate.argumentCount,
+      uniqueParticipants: debate.uniqueParticipants,
+      winningStance: debate.winningStance ?? null,
+      aiPanelConsensus: debate.aiPanelConsensus ?? null,
+    };
+  },
+});

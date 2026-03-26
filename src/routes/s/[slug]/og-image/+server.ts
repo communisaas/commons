@@ -1,22 +1,13 @@
-// CONVEX: Keep SvelteKit — server-only OG image generation (satori+sharp), template DB lookup
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import satori, { type SatoriOptions } from 'satori';
 import sharp from 'sharp';
 
 export const GET: RequestHandler = async ({ params }) => {
 	try {
-		// Fetch template with metrics
-		const template = await prisma.template.findFirst({
-			where: { slug: params.slug, is_public: true },
-			select: {
-				title: true,
-				description: true,
-				category: true,
-				verified_sends: true,
-				metrics: true
-			}
-		});
+		// Fetch template from Convex
+		const template = await serverQuery(api.templates.getBySlug, { slug: params.slug });
 
 		if (!template) {
 			return new Response('Template not found', { status: 404 });
@@ -26,7 +17,7 @@ export const GET: RequestHandler = async ({ params }) => {
 		const metrics = typeof template.metrics === 'object' && template.metrics !== null
 			? (template.metrics as Record<string, unknown>)
 			: {};
-		const actionCount = template.verified_sends || (metrics.sent as number) || 0;
+		const actionCount = template.verifiedSends || (metrics.sent as number) || 0;
 
 		// Category-specific colors
 		const categoryColors: Record<string, { bg: string; accent: string }> = {

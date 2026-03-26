@@ -6,7 +6,8 @@
 
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
 import { SMS_MAX_LENGTH } from '$lib/server/sms/types';

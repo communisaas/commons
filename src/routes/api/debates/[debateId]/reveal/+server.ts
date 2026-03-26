@@ -1,7 +1,7 @@
-// CONVEX: Keep SvelteKit — calls blockchain (revealTrade). On-chain LMSR market operation.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
@@ -55,10 +55,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	// Validate debate exists and is active
-	const debate = await prisma.debate.findUnique({
-		where: { id: debateId },
-		select: { id: true, status: true, debate_id_onchain: true }
-	});
+	await serverQuery(api.debates.get, { debateId: debateId as any });
 
 	if (!debate) throw error(404, 'Debate not found');
 	if (debate.status !== 'active') throw error(400, 'Debate is not active');
@@ -70,7 +67,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		const { revealTrade } = await import('$lib/core/blockchain/debate-market-client');
 
 		const onchainResult = await revealTrade({
-			debateId: debate.debate_id_onchain,
+			debateId: debate.debateIdOnchain,
 			epoch,
 			commitIndex,
 			argumentIndex,

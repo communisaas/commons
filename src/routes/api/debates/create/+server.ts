@@ -1,10 +1,10 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { solidityPackedKeccak256 } from 'ethers';
 import { proposeDebate, deriveDomain } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
-// CONVEX: Keep SvelteKit — calls blockchain (proposeDebate, deriveDomain), solidityPackedKeccak256.
 // Convex equivalent: debates.spawnDebate (off-chain fallback only). Blockchain path must stay here.
 
 /**
@@ -53,10 +53,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}
 
 	// Check for existing active debate
-	const existingDebate = await prisma.debate.findFirst({
-		where: { template_id: templateId, status: 'active' },
-		select: { id: true }
-	});
+	await serverQuery(api.debates.get, { debateId: debateId as any });
 	if (existingDebate) {
 		throw error(409, 'An active debate already exists for this template');
 	}
@@ -124,27 +121,27 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const deadline = new Date(Date.now() + durationMs);
 
 	// Create debate record
-	const debate = await prisma.debate.create({
+	const debate = await serverMutation(api.debates.insertDebate, {
 		data: {
-			template_id: templateId,
-			debate_id_onchain: debateIdOnchain!,
-			action_domain: actionDomain!,
-			proposition_hash: propositionHash,
-			proposition_text: propositionText,
+			templateId: templateId,
+			debateIdOnchain: debateIdOnchain!,
+			actionDomain: actionDomain!,
+			propositionHash: propositionHash,
+			propositionText: propositionText,
 			deadline,
-			jurisdiction_size: jurisdictionHint,
+			jurisdictionSize: jurisdictionHint,
 			status: 'active',
-			proposer_address: '0x0000000000000000000000000000000000000000',
-			proposer_bond: bond,
-			tx_hash: txHash ?? null
+			proposerAddress: '0x0000000000000000000000000000000000000000',
+			proposerBond: bond,
+			txHash: txHash ?? null
 		}
 	});
 
 	return json({
 		debateId: debate.id,
-		debateIdOnchain: debate.debate_id_onchain,
-		actionDomain: debate.action_domain,
-		propositionHash: debate.proposition_hash,
+		debateIdOnchain: debate.debateIdOnchain,
+		actionDomain: debate.actionDomain,
+		propositionHash: debate.propositionHash,
 		deadline: debate.deadline.toISOString(),
 		txHash: txHash ?? null
 	});

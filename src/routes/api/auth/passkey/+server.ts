@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Passkey Management Endpoint
  *
  * DELETE: Remove the user's registered passkey.
@@ -10,32 +9,23 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { db } from '$lib/core/db';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$convex/_generated/api';
 
 export const DELETE: RequestHandler = async ({ locals }) => {
 	if (!locals.user) {
 		throw error(401, 'Authentication required');
 	}
 
-	const user = await db.user.findUnique({
-		where: { id: locals.user.id },
-		select: { passkey_credential_id: true }
-	});
-
-	if (!user?.passkey_credential_id) {
-		throw error(404, 'No passkey registered');
-	}
-
-	await db.user.update({
-		where: { id: locals.user.id },
-		data: {
-			passkey_credential_id: null,
-			passkey_public_key_jwk: null,
-			passkey_created_at: null,
-			passkey_last_used_at: null,
-			did_key: null
+	try {
+		await serverMutation(api.users.clearPasskey, { userId: locals.user.id });
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		if (msg.includes('No passkey registered')) {
+			throw error(404, 'No passkey registered');
 		}
-	});
+		throw error(500, 'Failed to remove passkey');
+	}
 
 	return json({ success: true });
 };

@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Store Encrypted Identity Blob
  *
  * Stores XChaCha20-Poly1305 encrypted identity data in Postgres.
@@ -12,7 +11,8 @@
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 const StoreBlobSchema = z.object({
 	blob: z.object({
@@ -42,30 +42,19 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		}
 		const { blob } = input;
 
-		// Store or update encrypted blob
-		const encryptedData = await prisma.encryptedDeliveryData.upsert({
-			where: { user_id: userId },
-			create: {
-				user_id: userId,
-				ciphertext: blob.ciphertext,
-				nonce: blob.nonce,
-				ephemeral_public_key: blob.publicKey,
-				tee_key_id: 'phase1-v1', // Phase 1: Static key ID
-				encryption_version: blob.version
-			},
-			update: {
-				ciphertext: blob.ciphertext,
-				nonce: blob.nonce,
-				ephemeral_public_key: blob.publicKey,
-				tee_key_id: 'phase1-v1',
-				encryption_version: blob.version,
-				updated_at: new Date()
-			}
+		// Store or update encrypted blob via Convex
+		const blobId = await serverMutation(api.users.upsertEncryptedBlob, {
+			userId: userId as any,
+			ciphertext: blob.ciphertext,
+			nonce: blob.nonce,
+			ephemeralPublicKey: blob.publicKey,
+			teeKeyId: 'phase1-v1',
+			encryptionVersion: blob.version ?? 'v1',
 		});
 
 		return json({
 			success: true,
-			blobId: encryptedData.id,
+			blobId,
 			message: 'Encrypted blob stored successfully'
 		});
 	} catch (error) {

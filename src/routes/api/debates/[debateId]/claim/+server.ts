@@ -1,8 +1,8 @@
-// CONVEX: Keep SvelteKit — calls blockchain (claimSettlement, settlePrivatePosition).
 // Settlement requires on-chain tx execution. Cannot move to Convex.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { claimSettlement, settlePrivatePosition } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
 
@@ -48,17 +48,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const debate = await prisma.debate.findUnique({
-		where: { id: debateId },
-		select: {
-			id: true,
-			status: true,
-			winning_argument_index: true,
-			winning_stance: true,
-			total_stake: true,
-			debate_id_onchain: true
-		}
-	});
+	await serverQuery(api.debates.get, { debateId: debateId as any });
 
 	if (!debate) {
 		throw error(404, 'Debate not found');
@@ -100,11 +90,11 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const claimantWallet: string | null = isValidEthAddress(walletAddress) ? walletAddress : null;
 
 	// Attempt on-chain settlement if the debate has been registered on-chain
-	if (debate.debate_id_onchain) {
+	if (debate.debateIdOnchain) {
 		if (isPrivateSettlement) {
 			// Path 2: ZK private position settlement
 			const onchainResult = await settlePrivatePosition(
-				debate.debate_id_onchain,
+				debate.debateIdOnchain,
 				positionProof as string,
 				positionPublicInputs as [string, string, string, string, string]
 			);
@@ -112,10 +102,10 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			if (onchainResult.success) {
 				console.info('[debates/claim] Private position settled on-chain', {
 					debateId: debate.id,
-					debateIdOnchain: debate.debate_id_onchain,
+					debateIdOnchain: debate.debateIdOnchain,
 					positionRoot: (positionPublicInputs as string[])[0].slice(0, 16) + '...',
 					txHash: onchainResult.txHash,
-					winningStance: debate.winning_stance,
+					winningStance: debate.winningStance,
 					...(claimantWallet ? { beneficiaryWallet: claimantWallet } : {})
 				});
 
@@ -124,7 +114,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 					status: 'settlement_claimed',
 					settlementPath: 'private_position',
 					txHash: onchainResult.txHash,
-					winningStance: debate.winning_stance
+					winningStance: debate.winningStance
 				});
 			} else if (onchainResult.error?.includes('not configured')) {
 				console.warn('[debates/claim] Blockchain not configured, returning stub');
@@ -134,15 +124,15 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			}
 		} else {
 			// Path 1: Simple nullifier-based claim
-			const onchainResult = await claimSettlement(debate.debate_id_onchain, nullifierHex);
+			const onchainResult = await claimSettlement(debate.debateIdOnchain, nullifierHex);
 
 			if (onchainResult.success) {
 				console.info('[debates/claim] Settlement claimed on-chain', {
 					debateId: debate.id,
-					debateIdOnchain: debate.debate_id_onchain,
+					debateIdOnchain: debate.debateIdOnchain,
 					nullifier: nullifierHex.slice(0, 16) + '...',
 					txHash: onchainResult.txHash,
-					winningStance: debate.winning_stance,
+					winningStance: debate.winningStance,
 					...(claimantWallet ? { beneficiaryWallet: claimantWallet } : {})
 				});
 
@@ -151,7 +141,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 					status: 'settlement_claimed',
 					settlementPath: 'simple_claim',
 					txHash: onchainResult.txHash,
-					winningStance: debate.winning_stance
+					winningStance: debate.winningStance
 				});
 			} else if (onchainResult.error?.includes('not configured')) {
 				console.warn('[debates/claim] Blockchain not configured, returning stub');
@@ -168,7 +158,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		debateId: debate.id,
 		settlementPath,
 		nullifier: nullifierHex.slice(0, 16) + '...',
-		winningStance: debate.winning_stance,
+		winningStance: debate.winningStance,
 		note: 'Off-chain only — no on-chain settlement executed',
 		...(claimantWallet ? { beneficiaryWallet: claimantWallet } : {})
 	});
@@ -177,7 +167,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		debateId: debate.id,
 		status: 'claim_recorded',
 		settlementPath,
-		winningStance: debate.winning_stance,
+		winningStance: debate.winningStance,
 		message: 'Settlement claim recorded. On-chain execution pending contract integration.'
 	});
 };

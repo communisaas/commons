@@ -1,7 +1,7 @@
-// CONVEX: Keep SvelteKit — OG image generation with campaign DB lookup
 import { error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
 import type { RequestHandler } from './$types';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 /**
  * Dynamic OG image for campaign social sharing.
@@ -9,13 +9,8 @@ import type { RequestHandler } from './$types';
  * Cached for 1 hour at the edge.
  */
 export const GET: RequestHandler = async ({ params }) => {
-	const campaign = await db.campaign.findFirst({
-		where: { id: params.id, status: 'ACTIVE' },
-		select: {
-			title: true,
-			org: { select: { name: true } },
-			_count: { select: { actions: { where: { verified: true } } } }
-		}
+	const campaign = await serverQuery(api.campaigns.getPublicAny, {
+		campaignId: params.id,
 	});
 
 	if (!campaign) {
@@ -23,8 +18,8 @@ export const GET: RequestHandler = async ({ params }) => {
 	}
 
 	const title = truncate(campaign.title, 80);
-	const orgName = truncate(campaign.org.name, 40);
-	const verified = campaign._count.actions;
+	const orgName = truncate(campaign.orgName ?? '', 40);
+	const verified = campaign.verifiedActionCount ?? 0;
 
 	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
   <defs>

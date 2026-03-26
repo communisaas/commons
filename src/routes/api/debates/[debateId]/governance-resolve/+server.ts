@@ -1,7 +1,7 @@
-// CONVEX: Keep SvelteKit — CRON_SECRET auth, debate status validation + argument index verification
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { env } from '$env/dynamic/private';
 import { verifyCronSecret } from '$lib/server/cron-auth';
 import { FEATURES } from '$lib/config/features';
@@ -41,10 +41,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	}
 
 	// Load debate
-	const debate = await prisma.debate.findUnique({
-		where: { id: debateId },
-		include: { arguments: true }
-	});
+	await serverQuery(api.debates.get, { debateId: debateId as any });
 
 	if (!debate) throw error(404, 'Debate not found');
 	if (debate.status !== 'awaiting_governance') {
@@ -53,7 +50,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
 	// Verify the argument index exists
 	const winnerArg = debate.arguments.find(
-		(a) => a.argument_index === body.winningArgumentIndex
+		(a) => a.argumentIndex === body.winningArgumentIndex
 	);
 	if (!winnerArg) {
 		throw error(400, `Argument index ${body.winningArgumentIndex} not found`);
@@ -83,16 +80,16 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	const now = new Date();
 	const appealDeadline = new Date(appealDeadlineMs);
 
-	await prisma.debate.update({
+	await serverMutation(api.debates.updateStatus, {
 		where: { id: debateId },
 		data: {
 			status: 'resolved',
-			winning_argument_index: body.winningArgumentIndex,
-			winning_stance: winnerArg.stance,
-			resolved_at: now,
-			resolution_method: 'governance_override',
-			governance_justification: body.justification.trim(),
-			appeal_deadline: appealDeadline
+			winningArgumentIndex: body.winningArgumentIndex,
+			winningStance: winnerArg.stance,
+			resolvedAt: now,
+			resolutionMethod: 'governance_override',
+			governanceJustification: body.justification.trim(),
+			appealDeadline: appealDeadline
 		}
 	});
 

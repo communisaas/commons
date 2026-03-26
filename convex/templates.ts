@@ -666,3 +666,39 @@ export const removeEndorsement = mutation({
     return { ok: true };
   },
 });
+
+// =============================================================================
+// Template source cache (for stream-message LLM pipeline)
+// =============================================================================
+
+/**
+ * Get cached sources for a template (72h TTL checked by caller).
+ */
+export const getSourceCache = query({
+  args: { templateId: v.id("templates") },
+  handler: async (ctx, args) => {
+    const template = await ctx.db.get(args.templateId);
+    if (!template) return null;
+    return {
+      cachedSources: template.cachedSources ?? null,
+      sourcesCachedAt: template.sourcesCachedAt ?? null,
+    };
+  },
+});
+
+/**
+ * Update cached sources on a template (fire-and-forget from stream-message).
+ */
+export const updateSourceCache = mutation({
+  args: {
+    templateId: v.id("templates"),
+    cachedSources: v.any(),
+    sourcesCachedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.templateId, {
+      cachedSources: args.cachedSources,
+      sourcesCachedAt: args.sourcesCachedAt,
+    });
+  },
+});

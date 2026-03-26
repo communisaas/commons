@@ -6,7 +6,8 @@
 
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { FEATURES } from '$lib/config/features';

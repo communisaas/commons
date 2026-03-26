@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Tier 2 Credential Issuance Endpoint
  *
  * Receives the district result (from a prior /api/location/resolve call)
@@ -24,7 +23,8 @@
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import {
 	issueDistrictCredential,
 	hashCredential,
@@ -212,21 +212,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}
 
 	try {
-		const now = new Date();
-		const expiresAt = new Date(now.getTime() + TIER_CREDENTIAL_TTL[2]);
+		const now = Date.now();
+		const expiresAt = now + TIER_CREDENTIAL_TTL[2];
 		const isCommitmentOnly = input.verification_method === 'shadow_atlas' && !!input.district_commitment;
 
 		// Fetch user's did_key for the credential subject ID
-		const user = await db.user.findUniqueOrThrow({
-			where: { id: userId },
-			select: { did_key: true }
-		});
+		const userDidKey = await serverQuery(api.users.getDidKey, { userId: userId as any });
 
 		// 3. Issue the VC — use district if available, null for commitment-only
 		const credential = input.district
 			? await issueDistrictCredential({
 				userId,
-				didKey: user.did_key,
+				didKey: userDidKey?.didKey ?? null,
 				congressional: input.district,
 				stateSenate: input.state_senate_district,
 				stateAssembly: input.state_assembly_district,
@@ -240,154 +237,32 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// 5. Compute privacy-preserving district hash — skip for commitment-only
 		const districtHash = input.district ? await hashDistrict(input.district) : null;
 
-		// 7. Database transaction: insert DistrictCredential + update User + upsert representatives
-		await db.$transaction(async (tx) => {
-			// Revoke existing unexpired credentials before issuing new one
-			await tx.districtCredential.updateMany({
-				where: { user_id: userId, revoked_at: null },
-				data: { revoked_at: now }
-			});
-
-			// Insert credential record
-			await tx.districtCredential.create({
-				data: {
-					user_id: userId,
-					credential_type: 'district_residency',
-					congressional_district: input.district ?? null,
-					state_senate_district: input.state_senate_district ?? null,
-					state_assembly_district: input.state_assembly_district ?? null,
-					verification_method: input.verification_method,
-					issued_at: now,
-					expires_at: expiresAt,
-					credential_hash: credentialHash,
-					district_commitment: input.district_commitment ?? null,
-					slot_count: input.slot_count ?? null
-				}
-			});
-
-			// Atomic user update: GREATEST prevents trust_tier downgrade without TOCTOU race
-			if (districtHash) {
-				await tx.$executeRaw`
-					UPDATE "user"
-					SET trust_tier = GREATEST(trust_tier, 2),
-					    district_verified = true,
-					    address_verified_at = ${now},
-					    address_verification_method = ${input.verification_method},
-					    district_hash = ${districtHash},
-					    verified_at = ${now},
-					    verification_method = ${input.verification_method},
-					    is_verified = true
-					WHERE id = ${userId}
-				`;
-			} else {
-				await tx.$executeRaw`
-					UPDATE "user"
-					SET trust_tier = GREATEST(trust_tier, 2),
-					    district_verified = true,
-					    address_verified_at = ${now},
-					    address_verification_method = ${input.verification_method},
-					    verified_at = ${now},
-					    verification_method = ${input.verification_method},
-					    is_verified = true
-					WHERE id = ${userId}
-				`;
-			}
-
-			// Upsert representatives and create junction records
-			// B-3c: Skip officials/UserDMRelation for shadow_atlas (client resolved from IPFS)
-			if (!isCommitmentOnly && input.officials && input.officials.length > 0) {
-				// Deactivate existing UserDMRelation rows (district may have changed)
-				await tx.userDMRelation.updateMany({
-					where: { userId },
-					data: { isActive: false }
-				});
-				// Ensure Institution rows exist for chamber lookup
-				const [house, senate] = await Promise.all([
-					tx.institution.upsert({
-						where: { type_name_jurisdiction: { type: 'legislature', name: 'U.S. House of Representatives', jurisdiction: 'US' } },
-						create: { type: 'legislature', name: 'U.S. House of Representatives', jurisdiction: 'US', jurisdictionLevel: 'federal' },
-						update: {}
-					}),
-					tx.institution.upsert({
-						where: { type_name_jurisdiction: { type: 'legislature', name: 'U.S. Senate', jurisdiction: 'US' } },
-						create: { type: 'legislature', name: 'U.S. Senate', jurisdiction: 'US', jurisdictionLevel: 'federal' },
-						update: {}
-					})
-				]);
-
-				for (const official of input.officials) {
-					const chamber = official.chamber;
-					const title = chamber === 'senate' ? 'Senator' : 'Representative';
-					const institutionId = chamber === 'house' ? house.id : senate.id;
-					const nameParts = official.name.split(' ');
-					const lastName = nameParts.pop() || official.name;
-					const firstName = nameParts.join(' ') || null;
-
-					// Look up existing DecisionMaker via ExternalId (bioguide)
-					const existing = await tx.externalId.findUnique({
-						where: { system_value: { system: 'bioguide', value: official.bioguide_id } },
-						select: { decisionMakerId: true }
-					});
-
-					let dmId: string;
-					if (existing) {
-						// Trust server-side ingestion (congress-gov sync) for DM data — do NOT update from client
-						dmId = existing.decisionMakerId;
-					} else {
-						// Create new DecisionMaker + ExternalId
-						const dm = await tx.decisionMaker.create({
-							data: {
-								type: 'legislator',
-								name: official.name,
-								firstName,
-								lastName,
-								party: official.party,
-								jurisdiction: official.state,
-								jurisdictionLevel: 'federal',
-								district: official.district,
-								title,
-								institutionId,
-								phone: official.phone,
-								active: true,
-								lastSyncedAt: now
-							},
-							select: { id: true }
-						});
-						await tx.externalId.create({
-							data: {
-								decisionMakerId: dm.id,
-								system: 'bioguide',
-								value: official.bioguide_id
-							}
-						});
-						dmId = dm.id;
-					}
-
-					// Upsert UserDMRelation with source tracking
-					await tx.userDMRelation.upsert({
-						where: {
-							userId_decisionMakerId: {
-								userId,
-								decisionMakerId: dmId
-							}
-						},
-						create: {
-							userId,
-							decisionMakerId: dmId,
-							relationship: 'constituent',
-							isActive: true,
-							lastValidated: now,
-							source: input.verification_method
-						},
-						update: {
-							isActive: true,
-							lastValidated: now,
-							source: input.verification_method
-						}
-					});
-
-				}
-			}
+		// 7. Convex mutation: revoke old credentials, create new one, update user, upsert DM relations
+		await serverMutation(api.users.verifyAddress, {
+			userId: userId as any,
+			district: input.district,
+			stateSenateDistrict: input.state_senate_district,
+			stateAssemblyDistrict: input.state_assembly_district,
+			verificationMethod: input.verification_method,
+			credentialHash: credentialHash ?? undefined,
+			districtHash: districtHash ?? undefined,
+			districtCommitment: input.district_commitment,
+			slotCount: input.slot_count,
+			expiresAt,
+			isCommitmentOnly,
+			officials: (!isCommitmentOnly && input.officials && input.officials.length > 0)
+				? input.officials.map((o) => ({
+					name: o.name,
+					chamber: o.chamber,
+					party: o.party,
+					state: o.state,
+					district: o.district,
+					bioguideId: o.bioguide_id,
+					isVotingMember: o.is_voting_member,
+					delegateType: o.delegate_type ?? undefined,
+					phone: o.phone,
+				}))
+				: undefined,
 		});
 
 		// 8. Return credential to client

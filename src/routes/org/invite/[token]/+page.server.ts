@@ -1,6 +1,7 @@
 // CONVEX: Keep SvelteKit — security-critical $transaction + PII hash comparison (invite accept)
 import { redirect, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { computeEmailHash, tryDecryptPii, type EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
 

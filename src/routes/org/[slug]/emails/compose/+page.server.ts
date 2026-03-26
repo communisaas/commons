@@ -3,7 +3,8 @@
 // KEEP: countRecipients, resolveRecipients, sendBlast, compileEmail, sanitizeEmailBody (SvelteKit server modules)
 // KEEP: db import for campaignId validation (campaignId is Prisma string ID, not Convex ID)
 import { fail, redirect } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { countRecipients, resolveRecipients, sendBlast, type RecipientFilter } from '$lib/server/email/engine';
 import {

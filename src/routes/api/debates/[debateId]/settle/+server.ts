@@ -1,7 +1,7 @@
-// CONVEX: Keep SvelteKit — deep auth check (debate→campaign→org→membership), blockchain state verification
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
@@ -31,37 +31,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	const { debateId } = params;
 
 	// Load debate with campaign relation to verify org membership
-	const debate = await prisma.debate.findUnique({
-		where: { id: debateId },
-		select: {
-			id: true,
-			status: true,
-			arguments: {
-				where: { verification_status: 'verified' },
-				orderBy: { weighted_score: 'desc' },
-				select: {
-					argument_index: true,
-					stance: true,
-					weighted_score: true
-				}
-			},
-			campaign: {
-				select: {
-					id: true,
-					orgId: true,
-					org: {
-						select: {
-							slug: true,
-							memberships: {
-								where: { userId: locals.user.id },
-								select: { role: true }
-							}
-						}
-					}
-				}
-			}
-		}
-	});
+	await serverQuery(api.debates.get, { debateId: debateId as any });
 
 	if (!debate) {
 		throw error(404, 'Debate not found');
@@ -116,7 +86,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	const matchingArg = debate.arguments.find(
 		(a) => a.stance === winningStance
 	);
-	const winningArgumentIndex = matchingArg?.argument_index ?? null;
+	const winningArgumentIndex = matchingArg?.argumentIndex ?? null;
 
 			await serverMutation(api.debates.updateStatus, {
 				debateId: debateId as any,
@@ -139,15 +109,15 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	const now = new Date();
 
-		const resolved = await prisma.debate.update({
+		const resolved = await serverMutation(api.debates.updateStatus, {
 			where: { id: debateId, status: { not: 'resolved' } },
 			data: {
 				status: 'resolved',
-				winning_stance: winningStance,
-				winning_argument_index: winningArgumentIndex,
-				resolved_at: now,
-				resolution_method: 'org_settlement',
-				governance_justification: reasoning.trim()
+				winningStance: winningStance,
+				winningArgumentIndex: winningArgumentIndex,
+				resolvedAt: now,
+				resolutionMethod: 'org_settlement',
+				governanceJustification: reasoning.trim()
 			}
 		});
 

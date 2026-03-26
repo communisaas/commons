@@ -3,7 +3,8 @@
 // Prisma $transaction with idempotency. Convex equivalent: submissions.create (simplified).
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma, getRequestClient } from '$lib/core/db';
+import { serverQuery, serverMutation, serverAction } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import {
 	isCredentialValidForAction,
 	formatValidationError,

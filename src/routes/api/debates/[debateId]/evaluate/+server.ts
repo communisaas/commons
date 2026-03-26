@@ -1,9 +1,9 @@
-// CONVEX: Keep SvelteKit — calls external AI evaluator + blockchain (escalateToGovernance,
 // readChainResolution, submitAndResolve). Uses $env/dynamic/private, CRON_SECRET auth.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { escalateToGovernance, readChainResolution } from '$lib/core/blockchain/debate-market-client';
 import { verifyCronSecret } from '$lib/server/cron-auth';
 import { FEATURES } from '$lib/config/features';
@@ -81,29 +81,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 		throw error(429, rateLimitError);
 	}
 
-	const debate = await prisma.debate.findUnique({
-		where: { id: debateId },
-		select: {
-			id: true,
-			status: true,
-			deadline: true,
-			debate_id_onchain: true,
-			proposition_text: true,
-			arguments: {
-				where: { verification_status: 'verified' },
-				orderBy: { argument_index: 'asc' },
-				select: {
-					argument_index: true,
-					stance: true,
-					body: true,
-					amendment_text: true,
-					stake_amount: true,
-					engagement_tier: true,
-					weighted_score: true
-				}
-			}
-		}
-	});
+	await serverQuery(api.debates.get, { debateId: debateId as any });
 
 	if (!debate) {
 		throw error(404, 'Debate not found');
@@ -117,7 +95,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	if (debate.arguments.length === 0) {
 		throw error(400, 'Cannot evaluate a debate with no verified arguments');
 	}
-	if (!debate.debate_id_onchain) {
+	if (!debate.debateIdOnchain) {
 		throw error(400, 'Debate has no on-chain ID');
 	}
 
@@ -149,10 +127,10 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
 	// Format arguments for the evaluator
 	const debateArguments = debate.arguments.map((arg) => ({
-		index: arg.argument_index,
+		index: arg.argumentIndex,
 		stance: arg.stance,
 		bodyText: arg.body,
-		amendmentText: arg.amendment_text ?? undefined
+		amendmentText: arg.amendmentText ?? undefined
 	}));
 
 	// Step 1: Run 5-model evaluation panel
@@ -173,7 +151,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
 	try {
 		evaluationResult = await aiEvaluator.evaluateDebate(
-			debate.debate_id_onchain,
+			debate.debateIdOnchain,
 			debateArguments,
 			{ providers, timeoutMs: 90_000 }
 		);
@@ -187,19 +165,19 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	if (!evaluationResult.quorumMet || !evaluationResult.consensusAchieved) {
 		console.warn('[evaluate] AI consensus not reached, escalating to governance');
 
-		const escResult = await escalateToGovernance(debate.debate_id_onchain);
+		const escResult = await escalateToGovernance(debate.debateIdOnchain);
 
-		await prisma.debate.update({
+		await serverMutation(api.debates.updateStatus, {
 			where: { id: debateId },
 			data: {
 				status: 'awaiting_governance',
-				ai_resolution: {
+				aiResolution: {
 					scores: evaluationResult.aggregatedScores,
 					consensusAchieved: false,
 					quorumMet: evaluationResult.quorumMet,
 					evaluatedAt: new Date().toISOString()
 				} as object,
-				ai_panel_consensus: Math.min(
+				aiPanelConsensus: Math.min(
 					...evaluationResult.aggregatedScores.map((a) => a.modelAgreement)
 				)
 			}
@@ -243,7 +221,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 			rpcProvider,
 			submitterKey,
 			debateMarketAddress,
-			debate.debate_id_onchain,
+			debate.debateIdOnchain,
 			evaluationResult.aggregatedScores,
 			modelConfigs,
 			eip712Domain,
@@ -269,11 +247,11 @@ export const POST: RequestHandler = async ({ params, request }) => {
 			winnerIndex = agg.argumentIndex;
 		}
 	}
-	let winnerStance = debate.arguments.find((a) => a.argument_index === winnerIndex)?.stance ?? null;
+	let winnerStance = debate.arguments.find((a) => a.argumentIndex === winnerIndex)?.stance ?? null;
 	let resolvedFromChain = false;
 
 	// Defense in depth: read authoritative winner from chain after resolveDebateWithAI()
-	const chainState = await readChainResolution(debate.debate_id_onchain);
+	const chainState = await readChainResolution(debate.debateIdOnchain);
 	if (chainState.success && chainState.winningArgumentIndex !== undefined) {
 		const stanceMap: Record<number, string> = { 0: 'SUPPORT', 1: 'OPPOSE', 2: 'AMEND' };
 
@@ -294,11 +272,11 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	}
 
 	// Step 6: Update Prisma with resolution data
-	await prisma.debate.update({
+	await serverMutation(api.debates.updateStatus, {
 		where: { id: debateId },
 		data: {
 			status: 'resolved',
-			ai_resolution: {
+			aiResolution: {
 				scores: evaluationResult.aggregatedScores,
 				models: evaluationResult.modelEvaluations.map((m) => ({
 					provider: m.provider,
@@ -311,13 +289,13 @@ export const POST: RequestHandler = async ({ params, request }) => {
 				resolveTxHash: submissionResult.resolveTxHash,
 				gasUsed: submissionResult.gasUsed.toString()
 			} as object,
-			ai_signature_count: modelConfigs.length,
-			ai_panel_consensus: overallAgreement,
-			resolution_method: 'ai_community',
-			winning_argument_index: winnerIndex,
-			winning_stance: winnerStance,
-			resolved_at: new Date(),
-			resolved_from_chain: resolvedFromChain,
+			aiSignatureCount: modelConfigs.length,
+			aiPanelConsensus: overallAgreement,
+			resolutionMethod: 'ai_community',
+			winningArgumentIndex: winnerIndex,
+			winningStance: winnerStance,
+			resolvedAt: new Date(),
+			resolvedFromChain: resolvedFromChain,
 		}
 	});
 
@@ -325,8 +303,8 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	for (const agg of evaluationResult.aggregatedScores) {
 		await prisma.debateArgument.updateMany({
 			where: {
-				debate_id: debateId,
-				argument_index: agg.argumentIndex
+				debateId: debateId,
+				argumentIndex: agg.argumentIndex
 			},
 			data: {
 				ai_scores: agg.medianScores as object,

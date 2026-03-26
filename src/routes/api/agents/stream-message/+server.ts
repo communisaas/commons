@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Streaming Message Generation API — Two-Phase Source Verification
  *
  * POST /api/agents/stream-message
@@ -33,7 +32,8 @@ import {
 import type { DecisionMaker } from '$lib/core/agents';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
 import { traceRequest, traceEvent } from '$lib/server/agent-trace';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { EvaluatedSource } from '$lib/core/agents/types';
 
 /** 72-hour cache TTL for template source cache */

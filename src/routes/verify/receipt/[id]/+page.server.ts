@@ -1,6 +1,7 @@
 // CONVEX: Keep SvelteKit — no Convex getReceipt query, server-only narrative generation
 import { error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { generateNarrative } from '$lib/server/legislation/receipts/narrative';
 import type { PageServerLoad } from './$types';

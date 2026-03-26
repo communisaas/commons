@@ -1,7 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 // CONVEX: Keep SvelteKit
 import type { RequestHandler } from './$types';
-import { prisma, getRequestClient } from '$lib/core/db';
+import { serverQuery, serverMutation, serverAction } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
 import { processSubmissionDelivery } from '$lib/server/delivery-worker';
 
@@ -22,7 +23,7 @@ export const POST: RequestHandler = async ({ locals, params, platform }) => {
 	}
 
 	// Verify submission exists and caller owns it
-	const submission = await prisma.submission.findUnique({
+	const submission = await serverQuery(api.submissions.getById, {
 		where: { id },
 		select: {
 			id: true,

@@ -1,7 +1,8 @@
 // CONVEX: Keep SvelteKit — needs listAwaitingGovernance query (debates filtered by status + template join + BigInt transforms)
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
 

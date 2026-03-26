@@ -1,6 +1,7 @@
 // CONVEX: Keep SvelteKit — complex load (verification packets, analytics, debate chain). Form actions use Convex mutations.
 import { error, fail, redirect } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { computeVerificationPacketCached } from '$lib/server/campaigns/verification';
 import { loadCampaignAnalytics } from '$lib/server/campaigns/analytics';
 import { FEATURES } from '$lib/config/features';

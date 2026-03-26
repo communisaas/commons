@@ -1,7 +1,8 @@
 // CONVEX: Keep SvelteKit — Shadow Atlas proxy (resolveAddress: self-hosted Nominatim geocoding
 // + R-tree district lookup), rate limiting (IP-based), address validation (zod).
 import { json } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
 import { z } from 'zod';

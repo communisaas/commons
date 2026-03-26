@@ -1,7 +1,8 @@
 // CONVEX: Keep SvelteKit — POST uses blockchain (submitArgument), solidityPackedKeccak256, tx-verifier, $transaction
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { solidityPackedKeccak256 } from 'ethers';
 import { verifyTransactionAsync } from '$lib/core/blockchain/tx-verifier';
 import { FEATURES } from '$lib/config/features';
@@ -71,10 +72,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(403, 'Tier 3+ verification required to submit arguments');
 	}
 
-	const debate = await prisma.debate.findUnique({
-		where: { id: debateId },
-		select: { id: true, status: true, argument_count: true, deadline: true, debate_id_onchain: true }
-	});
+	await serverQuery(api.debates.get, { debateId: debateId as any });
 
 	if (!debate) {
 		throw error(404, 'Debate not found');
@@ -111,7 +109,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	// Check for nullifier dedup — same identity can't submit twice to the same debate
 	if (nullifierHex) {
-		const existingNullifier = await prisma.debateNullifier.findFirst({
+		const existingNullifier = await serverQuery(api.debates.findNullifier, {
 			where: {
 				debate_id: debateId,
 				nullifier_hash: nullifierHex

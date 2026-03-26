@@ -1,8 +1,8 @@
-// CONVEX: Keep SvelteKit — calls blockchain (coSignArgument), tx-verifier, tier enforcement.
 // Convex equivalent: debates.cosign (off-chain only, no blockchain or tx verification).
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { verifyTransactionAsync } from '$lib/core/blockchain/tx-verifier';
 import { safeUserId } from '$lib/core/server/security';
 import { FEATURES } from '$lib/config/features';
@@ -47,10 +47,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(403, 'Tier 3+ verification required to co-sign arguments');
 	}
 
-	const debate = await prisma.debate.findUnique({
-		where: { id: debateId },
-		select: { id: true, status: true, deadline: true, debate_id_onchain: true }
-	});
+	await serverQuery(api.debates.get, { debateId: debateId as any });
 
 	if (!debate) {
 		throw error(404, 'Debate not found');
@@ -82,10 +79,10 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	// Checks the unified DebateNullifier table, so this also prevents
 	// co-signing if you already submitted an argument (and vice versa).
 	if (nullifierHex) {
-		const existingNullifier = await prisma.debateNullifier.findFirst({
+		const existingNullifier = await serverQuery(api.debates.findNullifier, {
 			where: {
-				debate_id: debateId,
-				nullifier_hash: nullifierHex
+				debateId: debateId,
+				nullifierHash: nullifierHex
 			},
 			select: { id: true }
 		});
@@ -105,9 +102,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	// Find the argument
 	const argument = await prisma.debateArgument.findUnique({
 		where: {
-			debate_id_argument_index: {
-				debate_id: debateId,
-				argument_index: argumentIndex
+			debateId_argumentIndex: {
+				debateId: debateId,
+				argumentIndex: argumentIndex
 			}
 		}
 	});
@@ -137,7 +134,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			const { coSignArgument } = await import('$lib/core/blockchain/debate-market-client');
 
 			const onchainResult = await coSignArgument({
-				debateId: debate.debate_id_onchain!,
+				debateId: debate.debateIdOnchain!,
 				argumentIndex,
 				stakeAmount: BigInt(stakeAmount),
 				proof: proofHex,
@@ -194,24 +191,24 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	);
 
 	// Update argument with co-sign data, record nullifier, and update debate totals atomically.
-	// unique_participants only increments when a new nullifier is recorded
+	// uniqueParticipants only increments when a new nullifier is recorded
 	// (the dedup check above already threw 409 if the nullifier was seen before).
 	const updateArg = prisma.debateArgument.update({
 		where: { id: argument.id },
 		data: {
-			co_sign_count: { increment: 1 },
-			total_stake: { increment: BigInt(stakeAmount) },
-			// Increment weighted_score by the co-signer's individual contribution
+			coSignCount: { increment: 1 },
+			totalStake: { increment: BigInt(stakeAmount) },
+			// Increment weightedScore by the co-signer's individual contribution
 			// Each co-signer contributes sqrt(their_stake) * 2^(their_tier)
-			weighted_score: { increment: coSignerWeight }
+			weightedScore: { increment: coSignerWeight }
 		}
 	});
 
 	const updateDebate = prisma.debate.update({
 		where: { id: debateId },
 		data: {
-			unique_participants: { increment: 1 },
-			total_stake: { increment: BigInt(stakeAmount) }
+			uniqueParticipants: { increment: 1 },
+			totalStake: { increment: BigInt(stakeAmount) }
 		}
 	});
 
@@ -225,13 +222,13 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			updateDebate,
 			prisma.debateNullifier.create({
 				data: {
-					debate_id: debateId,
-					nullifier_hash: nullifierHex,
-					action_type: 'cosign',
-					verification_status: initialStatus,
+					debateId: debateId,
+					nullifierHash: nullifierHex,
+					actionType: 'cosign',
+					verificationStatus: initialStatus,
 					cosign_weight: coSignerWeight,
 					argument_id: argument.id,
-					tx_hash: txHash ?? null
+					txHash: txHash ?? null
 				}
 			})
 		]);

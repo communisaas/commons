@@ -1,15 +1,19 @@
 import { redirect } from '@sveltejs/kit';
-import { invalidateSession, sessionCookieName } from '$lib/core/auth/auth';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
+const sessionCookieName = 'auth-session';
+
 async function logout(locals: App.Locals, cookies: import('@sveltejs/kit').Cookies): Promise<never> {
-	// Always delete the cookie, even if session validation failed in handleAuth
-	// (transient DB errors set locals.session = null but leave the cookie intact)
+	// Invalidate session in Convex if we have one
 	if (locals.session) {
 		try {
-			await invalidateSession(locals.session.id);
+			await serverMutation(api.authOps.invalidateSession, {
+				sessionId: locals.session.id
+			});
 		} catch (err) {
-			console.error('[Logout] Failed to invalidate session in DB:', err);
+			console.error('[Logout] Failed to invalidate session in Convex:', err);
 		}
 	}
 

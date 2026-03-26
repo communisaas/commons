@@ -3,7 +3,8 @@
 // KEEP on Prisma: buildSegmentWhere is a Prisma query builder that generates complex WHERE clauses.
 // These operations cannot be replicated in Convex without rewriting the entire filter engine in JS.
 import { json, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db'; // KEEP: bulk operations use buildSegmentWhere (Prisma query builder)
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex'; // KEEP: bulk operations use buildSegmentWhere (Prisma query builder)
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { buildSegmentWhere } from '$lib/server/segments/query-builder'; // KEEP: Prisma-only query builder
 import { getRateLimiter } from '$lib/core/security/rate-limiter';

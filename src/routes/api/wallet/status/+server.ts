@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Wallet Status Endpoint
  *
  * GET /api/wallet/status
@@ -11,29 +10,19 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { db } from '$lib/core/db';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 export const GET: RequestHandler = async ({ locals }) => {
 	if (!locals.user) {
 		throw error(401, 'Unauthorized');
 	}
 
-	const user = await db.user.findUnique({
-		where: { id: locals.user.id },
-		select: {
-			wallet_address: true,
-			wallet_type: true,
-			near_derived_scroll_address: true
-		}
-	});
+	const result = await serverQuery(api.users.getWalletStatus, {});
 
-	if (!user) {
+	if (!result) {
 		throw error(404, 'User not found');
 	}
 
-	return json({
-		wallet_address: user.wallet_address ?? null,
-		wallet_type: user.wallet_type ?? null,
-		near_derived_scroll_address: user.near_derived_scroll_address ?? null
-	});
+	return json(result);
 };

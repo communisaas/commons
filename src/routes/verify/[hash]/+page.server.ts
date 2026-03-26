@@ -1,6 +1,7 @@
 // CONVEX: Keep SvelteKit — security-critical verification flow (delivery + credential lookup, public endpoint)
 import type { PageServerLoad } from './$types';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 /**
  * Privacy-preserving verification endpoint.

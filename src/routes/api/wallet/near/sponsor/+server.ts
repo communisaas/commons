@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Meta-Transaction Relay Endpoint (NEP-366)
  *
  * POST /api/wallet/near/sponsor
@@ -21,7 +20,8 @@
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { db } from '$lib/core/db';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import {
 	deserializeSignedDelegate,
 	relayDelegateAction
@@ -165,19 +165,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	// 5. Validate sender_id matches user's NEAR account
 	let userNearAccountId: string | null = null;
 	try {
-		const user = await db.user.findUnique({
-			where: { id: userId },
-			select: { near_account_id: true }
-		});
-
-		if (!user) {
-			return json(
-				{ success: false, error: 'User not found' },
-				{ status: 404 }
-			);
-		}
-
-		userNearAccountId = user.near_account_id;
+		const result = await serverQuery(api.users.getNearAccountId, {});
+		userNearAccountId = result?.nearAccountId ?? null;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : 'Unknown error';
 		console.error(`${LOG_PREFIX} DB error looking up user ${safeUserId(userId)}:`, message);

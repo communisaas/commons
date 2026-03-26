@@ -3,7 +3,8 @@
  */
 // CONVEX: Keep SvelteKit — uses getNetworkStats which aggregates across multiple server modules
 
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';

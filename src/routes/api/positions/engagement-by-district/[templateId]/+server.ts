@@ -14,7 +14,8 @@ import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 import { getEngagementByDistrict } from '$lib/services/positionService';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 export const GET: RequestHandler = async ({ params, url }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');

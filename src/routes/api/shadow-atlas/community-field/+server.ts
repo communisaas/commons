@@ -1,5 +1,4 @@
 /**
-// CONVEX: Keep SvelteKit
  * Shadow Atlas Community Field Contribution Proxy
  *
  * Proxies POST requests to Shadow Atlas /v1/community-field/contribute.
@@ -19,7 +18,8 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
-import { db } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 const SHADOW_ATLAS_URL = env.SHADOW_ATLAS_API_URL || 'http://localhost:3000';
 const WRITE_RELAY_URL = env.WRITE_RELAY_URL || SHADOW_ATLAS_URL;

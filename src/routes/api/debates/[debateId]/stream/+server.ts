@@ -1,8 +1,8 @@
-// CONVEX: Keep SvelteKit — SSE streaming with shadow-atlas proxy + Prisma polling.
 // Cannot move to Convex: uses createSSEStream, ReadableStream piping, setInterval polling.
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
 import { env } from '$env/dynamic/private';
-import { prisma } from '$lib/core/db';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
 import { error } from '@sveltejs/kit';
@@ -17,14 +17,14 @@ import { error } from '@sveltejs/kit';
  *
  * Events emitted locally via Prisma polling:
  *   - evaluating: AI evaluation in progress (status → resolving)
- *   - ai_scores_submitted: Scores submitted on-chain (ai_signature_count populated)
+ *   - ai_scores_submitted: Scores submitted on-chain (aiSignatureCount populated)
  *   - resolved_with_ai: Debate resolved via AI+community blend
  *   - governance_escalated: Consensus failed, awaiting governance
  *   - appeal_started: Resolution under appeal
  *   - resolution_finalized: Appeal resolved or governance resolution finalized
- *   - debate:argument: New argument submitted (argument_count changed)
- *   - debate:position: New participant (unique_participants changed)
- *   - debate:settled: Debate settled by org admin (resolution_method = org_settlement)
+ *   - debate:argument: New argument submitted (argumentCount changed)
+ *   - debate:position: New participant (uniqueParticipants changed)
+ *   - debate:settled: Debate settled by org admin (resolutionMethod = org_settlement)
  */
 export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!FEATURES.DEBATE) {
@@ -53,37 +53,18 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 	/**
 	 * Poll Prisma for AI resolution state changes.
-	 * Emits SSE events when status or ai_signature_count changes.
+	 * Emits SSE events when status or aiSignatureCount changes.
 	 */
 	async function pollResolutionState() {
 		if (closed) return;
 
 		try {
-			const debate = await prisma.debate.findFirst({
-				where: {
-					OR: [
-						{ id: debateId },
-						{ debate_id_onchain: debateId }
-					]
-				},
-				select: {
-					status: true,
-					ai_signature_count: true,
-					ai_panel_consensus: true,
-					resolution_method: true,
-					winning_argument_index: true,
-					winning_stance: true,
-					appeal_deadline: true,
-					argument_count: true,
-					unique_participants: true,
-					governance_justification: true
-				}
-			});
+			await serverQuery(api.debates.get, { debateId: debateId as any });
 
 			if (!debate || closed) return;
 
 			const currentStatus = debate.status;
-			const currentSigCount = debate.ai_signature_count;
+			const currentSigCount = debate.aiSignatureCount;
 
 			// Detect AI signature count change (scores submitted)
 			if (
@@ -94,7 +75,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 				emitter.send('ai_scores_submitted', {
 					debateId,
 					signatureCount: currentSigCount,
-					panelConsensus: debate.ai_panel_consensus
+					panelConsensus: debate.aiPanelConsensus
 				});
 				lastSignatureCount = currentSigCount;
 			}
@@ -102,27 +83,27 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 			// Detect argument count changes
 			if (
 				lastArgumentCount !== null &&
-				debate.argument_count !== lastArgumentCount
+				debate.argumentCount !== lastArgumentCount
 			) {
 				emitter.send('debate:argument', {
 					debateId,
-					argumentCount: debate.argument_count,
-					uniqueParticipants: debate.unique_participants
+					argumentCount: debate.argumentCount,
+					uniqueParticipants: debate.uniqueParticipants
 				});
 			}
-			lastArgumentCount = debate.argument_count;
+			lastArgumentCount = debate.argumentCount;
 
 			// Detect participant count changes
 			if (
 				lastParticipantCount !== null &&
-				debate.unique_participants !== lastParticipantCount
+				debate.uniqueParticipants !== lastParticipantCount
 			) {
 				emitter.send('debate:position', {
 					debateId,
-					uniqueParticipants: debate.unique_participants
+					uniqueParticipants: debate.uniqueParticipants
 				});
 			}
-			lastParticipantCount = debate.unique_participants;
+			lastParticipantCount = debate.uniqueParticipants;
 
 			// Detect status transitions
 			if (currentStatus !== lastStatus) {
@@ -138,26 +119,26 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 						break;
 
 					case 'resolved':
-						if (debate.resolution_method === 'org_settlement') {
+						if (debate.resolutionMethod === 'org_settlement') {
 							emitter.send('debate:settled', {
 								debateId,
-								winningStance: debate.winning_stance,
+								winningStance: debate.winningStance,
 								resolutionMethod: 'org_settlement',
-								reasoning: debate.governance_justification
+								reasoning: debate.governanceJustification
 							});
-						} else if (debate.resolution_method === 'ai_community') {
+						} else if (debate.resolutionMethod === 'ai_community') {
 							emitter.send('resolved_with_ai', {
 								debateId,
-								winningArgumentIndex: debate.winning_argument_index,
-								winningStance: debate.winning_stance,
-								resolutionMethod: debate.resolution_method
+								winningArgumentIndex: debate.winningArgumentIndex,
+								winningStance: debate.winningStance,
+								resolutionMethod: debate.resolutionMethod
 							});
 						} else {
 							emitter.send('resolution_finalized', {
 								debateId,
-								winningArgumentIndex: debate.winning_argument_index,
-								winningStance: debate.winning_stance,
-								resolutionMethod: debate.resolution_method
+								winningArgumentIndex: debate.winningArgumentIndex,
+								winningStance: debate.winningStance,
+								resolutionMethod: debate.resolutionMethod
 							});
 						}
 						// Stop polling once resolved
@@ -170,14 +151,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 					case 'awaiting_governance':
 						emitter.send('governance_escalated', {
 							debateId,
-							panelConsensus: debate.ai_panel_consensus
+							panelConsensus: debate.aiPanelConsensus
 						});
 						break;
 
 					case 'under_appeal':
 						emitter.send('appeal_started', {
 							debateId,
-							appealDeadline: debate.appeal_deadline?.toISOString() ?? null
+							appealDeadline: debate.appealDeadline?.toISOString() ?? null
 						});
 						break;
 				}
@@ -189,25 +170,12 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 	// Initialize: fetch current state so we only emit on transitions
 	try {
-		const initial = await prisma.debate.findFirst({
-			where: {
-				OR: [
-					{ id: debateId },
-					{ debate_id_onchain: debateId }
-				]
-			},
-			select: {
-				status: true,
-				ai_signature_count: true,
-				argument_count: true,
-				unique_participants: true
-			}
-		});
+		await serverQuery(api.debates.get, { debateId: debateId as any });
 		if (initial) {
 			lastStatus = initial.status;
-			lastSignatureCount = initial.ai_signature_count;
-			lastArgumentCount = initial.argument_count;
-			lastParticipantCount = initial.unique_participants;
+			lastSignatureCount = initial.aiSignatureCount;
+			lastArgumentCount = initial.argumentCount;
+			lastParticipantCount = initial.uniqueParticipants;
 		}
 	} catch {
 		// If DB is down, still proceed with upstream proxy
