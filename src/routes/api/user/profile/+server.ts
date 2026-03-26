@@ -3,7 +3,6 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
 import { encryptPii } from '$lib/core/crypto/user-pii-encryption';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
@@ -16,14 +15,12 @@ const ProfileSchema = z.object({
 });
 
 export const POST: RequestHandler = async ({ request, locals }) => {
-	try {
 		// Ensure user is authenticated
 		if (!locals.user) {
 			return json({ error: 'Unauthorized' }, { status: 401 });
 		}
 
 		let parsed: z.infer<typeof ProfileSchema>;
-		try {
 			const body = await request.json();
 			parsed = ProfileSchema.parse(body);
 		} catch (e) {
@@ -35,9 +32,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		const { role, organization, location, connection } = parsed;
 
-		// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-		if (PUBLIC_CONVEX_URL) {
-			try {
 				await serverMutation(api.users.updateProfile, {
 					role,
 					organization: organization || undefined,
@@ -52,12 +46,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 						profileComplete: true
 					}
 				});
-			} catch (err) {
-				console.error('[UserProfile.POST] Convex failed, falling back to Prisma:', err);
-			}
 		}
 
-		// ─── PRISMA FALLBACK ───
 		// C-4: Encrypt profile blob at rest (fail-closed — no silent fallback)
 		const profileBlob = JSON.stringify({ role, organization: organization || null, location: location || null, connection });
 		const encProfileRaw = await encryptPii(profileBlob, locals.user.id, 'profile');
@@ -99,14 +89,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 };
 
 export const GET: RequestHandler = async ({ locals }) => {
-	try {
 		if (!locals.user) {
 			return json({ error: 'Unauthorized' }, { status: 401 });
 		}
 
-		// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-		if (PUBLIC_CONVEX_URL) {
-			try {
 				const profile = await serverQuery(api.users.getProfile, {});
 				return json({
 					user: {
@@ -131,12 +117,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 						}
 					}
 				});
-			} catch (err) {
-				console.error('[UserProfile.GET] Convex failed, falling back to Prisma:', err);
-			}
 		}
 
-		// ─── PRISMA FALLBACK ───
 		const user = await db.user.findUnique({
 			where: { id: locals.user.id },
 			select: {

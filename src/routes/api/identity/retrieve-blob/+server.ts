@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Retrieve Encrypted Identity Blob
  *
  * Fetches encrypted blob from Postgres.

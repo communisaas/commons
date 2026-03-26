@@ -1,4 +1,5 @@
 import { json, error } from '@sveltejs/kit';
+// CONVEX: Keep SvelteKit
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
 import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';

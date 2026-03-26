@@ -2,13 +2,14 @@
  * GET /api/v1/calls — List patch-through calls for org (API key determines org)
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
 import { VALID_CALL_STATUSES } from '$lib/server/sms/types';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, url }) => {
@@ -24,40 +25,19 @@ export const GET: RequestHandler = async ({ request, url }) => {
 
 	const { cursor, limit } = parsePagination(url);
 
-	const where: Record<string, unknown> = { orgId: auth.orgId };
-
 	const statusFilter = url.searchParams.get('status');
-	if (statusFilter && VALID_CALL_STATUSES.includes(statusFilter as any)) {
-		where.status = statusFilter;
-	}
-
 	const campaignIdFilter = url.searchParams.get('campaignId');
-	if (campaignIdFilter) {
-		where.campaignId = campaignIdFilter;
-	}
 
-	const findArgs: Record<string, unknown> = {
-		where,
-		take: limit + 1,
-		orderBy: { createdAt: 'desc' as const }
-	};
+	const result = await serverQuery(api.v1api.listCallsV1, {
+		orgId: auth.orgId,
+		limit,
+		cursor: cursor ?? undefined,
+		status: statusFilter && VALID_CALL_STATUSES.includes(statusFilter as any) ? statusFilter : undefined,
+		campaignId: campaignIdFilter ?? undefined
+	});
 
-	if (cursor) {
-		findArgs.cursor = { id: cursor };
-		findArgs.skip = 1;
-	}
-
-	const [raw, total] = await Promise.all([
-		db.patchThroughCall.findMany(findArgs as Parameters<typeof db.patchThroughCall.findMany>[0]),
-		db.patchThroughCall.count({ where })
-	]);
-
-	const hasMore = raw.length > limit;
-	const items = raw.slice(0, limit);
-	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
-
-	const data = items.map((c) => ({
-		id: c.id,
+	const data = result.items.map((c: any) => ({
+		id: c._id,
 		callerPhone: c.callerPhone ? '***' + c.callerPhone.slice(-4) : null,
 		targetPhone: c.targetPhone ? '***' + c.targetPhone.slice(-4) : null,
 		targetName: c.targetName,
@@ -65,9 +45,9 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		duration: c.duration,
 		campaignId: c.campaignId,
 		districtHash: c.districtHash,
-		createdAt: c.createdAt.toISOString(),
-		updatedAt: c.updatedAt.toISOString()
+		createdAt: new Date(c._creationTime).toISOString(),
+		updatedAt: new Date(c.completedAt ?? c._creationTime).toISOString()
 	}));
 
-	return apiOk(data, { cursor: nextCursor, hasMore, total });
+	return apiOk(data, { cursor: result.cursor, hasMore: result.hasMore, total: result.total });
 };

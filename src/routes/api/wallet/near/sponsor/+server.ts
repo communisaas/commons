@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Meta-Transaction Relay Endpoint (NEP-366)
  *
  * POST /api/wallet/near/sponsor

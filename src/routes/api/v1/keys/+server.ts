@@ -2,14 +2,14 @@
  * POST /api/v1/keys — Create a new API key. Returns the full key ONCE.
  *
  * Requires session auth (org owner/editor), NOT API key auth.
- * This is the only endpoint that uses session auth in the v1 namespace.
  */
 
-import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { generateApiKey } from '$lib/core/security/api-key';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -25,30 +25,27 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const { org, membership } = await loadOrgContext(orgSlug, locals.user.id);
 	requireRole(membership.role, 'editor');
 
-	// Validate scopes
 	const validScopes = ['read', 'write'];
 	const keyScopes = scopes?.filter((s) => validScopes.includes(s)) ?? ['read'];
 	if (keyScopes.length === 0) keyScopes.push('read');
 
 	const { plaintext, hash, prefix } = await generateApiKey();
 
-	const apiKey = await db.apiKey.create({
-		data: {
-			orgId: org.id,
-			keyHash: hash,
-			keyPrefix: prefix,
-			name: name?.trim() || 'Default',
-			scopes: keyScopes,
-			createdBy: locals.user.id
-		}
+	const apiKey = await serverMutation(api.v1api.createApiKey, {
+		orgSlug,
+		keyHash: hash,
+		keyPrefix: prefix,
+		name: name?.trim() || 'Default',
+		scopes: keyScopes,
+		createdBy: locals.user.id
 	});
 
 	return apiOk({
-		id: apiKey.id,
-		key: plaintext, // Shown ONCE — never stored or returned again
-		prefix: apiKey.keyPrefix,
-		name: apiKey.name,
-		scopes: apiKey.scopes,
-		createdAt: apiKey.createdAt.toISOString()
+		id: apiKey!._id,
+		key: plaintext,
+		prefix: apiKey!.keyPrefix,
+		name: apiKey!.name,
+		scopes: apiKey!.scopes,
+		createdAt: new Date(apiKey!._creationTime).toISOString()
 	}, undefined, 201);
 };

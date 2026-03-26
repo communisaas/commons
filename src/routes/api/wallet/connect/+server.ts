@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Wallet Connection Verification Endpoint
  *
  * Verifies an EIP-191 personal_sign signature against a previously-issued nonce,

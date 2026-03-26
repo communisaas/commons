@@ -1,4 +1,5 @@
 import { json, error } from '@sveltejs/kit';
+// CONVEX: Keep SvelteKit
 import type { RequestHandler } from './$types';
 import { prisma, getRequestClient } from '$lib/core/db';
 import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';

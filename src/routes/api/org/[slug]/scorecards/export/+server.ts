@@ -1,8 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { loadOrgContext } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
-import { computeScorecards } from '$lib/server/legislation/scorecard/compute';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
@@ -27,30 +24,9 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		throw error(400, 'Only CSV format is supported');
 	}
 
-	let result: { scorecards: Array<{
-		name: string; title: string; district: string;
-		reportsReceived: number; reportsOpened: number;
-		verifyLinksClicked: number; repliesLogged: number;
-		relevantVotes: number; alignedVotes: number;
-		alignmentRate: number | null; avgResponseTime: number | null;
-		lastContactDate: string | null; score: number;
-	}>; meta: { orgId: string; computedAt: string; decisionMakers: number; avgScore: number } };
-
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			result = await serverQuery(api.legislation.exportScorecards, {
-				slug: params.slug
-			});
-		} catch (err) {
-			console.error('[ScorecardExport] Convex failed, falling back to Prisma:', err);
-			const { org } = await loadOrgContext(params.slug, locals.user.id);
-			result = await computeScorecards(org.id);
-		}
-	} else {
-		const { org } = await loadOrgContext(params.slug, locals.user.id);
-		result = await computeScorecards(org.id);
-	}
+	const result = await serverQuery(api.legislation.exportScorecards, {
+		slug: params.slug
+	});
 
 	// Build CSV
 	const headers = [
@@ -69,23 +45,23 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		'Score'
 	];
 
-	const rows = result.scorecards.map((s) => [
-		csvEscape(s.name),
-		csvEscape(s.title),
-		csvEscape(s.district),
+	const rows = result.scorecards.map((s: Record<string, unknown>) => [
+		csvEscape(s.name as string),
+		csvEscape(s.title as string),
+		csvEscape(s.district as string),
 		s.reportsReceived,
 		s.reportsOpened,
 		s.verifyLinksClicked,
 		s.repliesLogged,
 		s.relevantVotes,
 		s.alignedVotes,
-		s.alignmentRate !== null ? (s.alignmentRate * 100).toFixed(1) + '%' : '',
-		s.avgResponseTime !== null ? s.avgResponseTime.toFixed(1) : '',
-		s.lastContactDate ?? '',
+		s.alignmentRate !== null ? ((s.alignmentRate as number) * 100).toFixed(1) + '%' : '',
+		s.avgResponseTime !== null ? (s.avgResponseTime as number).toFixed(1) : '',
+		(s.lastContactDate as string) ?? '',
 		s.score
 	]);
 
-	const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join(
+	const csv = [headers.join(','), ...rows.map((r: unknown[]) => r.join(','))].join(
 		'\n'
 	);
 

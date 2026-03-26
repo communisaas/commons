@@ -1,4 +1,5 @@
 import { json, error } from '@sveltejs/kit';
+// CONVEX: Keep SvelteKit
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';

@@ -2,7 +2,6 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
@@ -118,9 +117,6 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	);
 	const winningArgumentIndex = matchingArg?.argument_index ?? null;
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
 			await serverMutation(api.debates.updateStatus, {
 				debateId: debateId as any,
 				status: 'resolved',
@@ -138,15 +134,10 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 				reasoning: reasoning.trim(),
 				resolvedAt: new Date().toISOString()
 			});
-		} catch (err) {
-			console.error('[Debates.settle] Convex failed, falling back to Prisma:', err);
-		}
 	}
 
-	// ─── PRISMA FALLBACK ───
 	const now = new Date();
 
-	try {
 		const resolved = await prisma.debate.update({
 			where: { id: debateId, status: { not: 'resolved' } },
 			data: {

@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /**
@@ -26,46 +27,6 @@ export const GET: RequestHandler = async ({ url }) => {
 		throw error(400, 'Cannot compare more than 5 decision-makers');
 	}
 
-	// Validate all IDs exist
-	const dms = await db.decisionMaker.findMany({
-		where: { id: { in: ids } },
-		select: {
-			id: true,
-			name: true,
-			title: true,
-			party: true,
-			district: true,
-			jurisdiction: true
-		}
-	});
-
-	// For each DM, fetch latest snapshot
-	const results = await Promise.all(
-		dms.map(async (dm) => {
-			const latest = await db.scorecardSnapshot.findFirst({
-				where: { decisionMakerId: dm.id },
-				orderBy: { periodEnd: 'desc' }
-			});
-
-			return {
-				decisionMaker: dm,
-				current: latest
-					? {
-							responsiveness: latest.responsiveness,
-							alignment: latest.alignment,
-							composite: latest.composite,
-							proofWeightTotal: latest.proofWeightTotal,
-							period: {
-								start: latest.periodStart.toISOString().slice(0, 10),
-								end: latest.periodEnd.toISOString().slice(0, 10)
-							},
-							attestationHash: latest.snapshotHash,
-							methodologyVersion: latest.methodologyVersion
-						}
-					: null
-			};
-		})
-	);
-
+	const results = await serverQuery(api.v1api.compareDmScorecards, { dmIds: ids });
 	return json(results);
 };

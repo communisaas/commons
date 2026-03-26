@@ -1,4 +1,5 @@
 import { error } from '@sveltejs/kit';
+// CONVEX: Keep SvelteKit
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
 import { loadOrgContext } from '$lib/server/org';
 import { db } from '$lib/core/db';

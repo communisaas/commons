@@ -3,12 +3,13 @@
  * PATCH /api/v1/campaigns/:id — Update campaign.
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { VALID_JURISDICTIONS, VALID_COUNTRY_CODES } from '$lib/server/geographic/types';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { JurisdictionType, CountryCode } from '$lib/server/geographic/types';
 import type { RequestHandler } from './$types';
 
@@ -21,37 +22,23 @@ export const GET: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const campaign = await db.campaign.findFirst({
-		where: { id: params.id, orgId: auth.orgId },
-		include: {
-			_count: { select: { actions: true, deliveries: true } }
-		}
-	});
-
+	const campaign = await serverQuery(api.v1api.getCampaignById, { campaignId: params.id, orgId: auth.orgId });
 	if (!campaign) return apiError('NOT_FOUND', 'Campaign not found', 404);
 
 	return apiOk({
-		id: campaign.id,
+		id: campaign._id,
 		type: campaign.type,
 		title: campaign.title,
 		body: campaign.body,
 		status: campaign.status,
-		targets: Array.isArray(campaign.targets)
-			? (campaign.targets as Record<string, unknown>[]).map(t => ({
-				name: t.name,
-				title: t.title,
-				district: t.district,
-				state: t.state,
-				party: t.party
-			}))
-			: campaign.targets,
+		targets: campaign.targets,
 		templateId: campaign.templateId,
 		debateEnabled: campaign.debateEnabled,
 		debateThreshold: campaign.debateThreshold,
 		targetJurisdiction: campaign.targetJurisdiction,
 		targetCountry: campaign.targetCountry,
-		createdAt: campaign.createdAt.toISOString(),
-		updatedAt: campaign.updatedAt.toISOString(),
+		createdAt: new Date(campaign._creationTime).toISOString(),
+		updatedAt: new Date(campaign.updatedAt).toISOString(),
 		counts: {
 			actions: campaign._count.actions,
 			deliveries: campaign._count.deliveries
@@ -99,8 +86,7 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 
 	if (Object.keys(data).length === 0) return apiError('BAD_REQUEST', 'No fields to update', 400);
 
-	const result = await db.campaign.updateMany({ where: { id: params.id, orgId: auth.orgId }, data });
-	if (result.count === 0) return apiError('NOT_FOUND', 'Campaign not found', 404);
-	const updated = await db.campaign.findUnique({ where: { id: params.id } });
-	return apiOk({ id: updated!.id, updatedAt: updated!.updatedAt.toISOString() });
+	const result = await serverMutation(api.v1api.updateCampaign, { campaignId: params.id, orgId: auth.orgId, data });
+	if (!result) return apiError('NOT_FOUND', 'Campaign not found', 404);
+	return apiOk({ id: result.id, updatedAt: new Date(result.updatedAt).toISOString() });
 };

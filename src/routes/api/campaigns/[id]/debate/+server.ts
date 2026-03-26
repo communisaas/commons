@@ -1,4 +1,5 @@
 import { json, error } from '@sveltejs/kit';
+// CONVEX: Keep SvelteKit
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
 import { requireRole } from '$lib/server/org';

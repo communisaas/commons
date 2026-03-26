@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Passkey Management Endpoint
  *
  * DELETE: Remove the user's registered passkey.

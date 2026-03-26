@@ -2,8 +2,6 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { dispatchTrigger } from '$lib/server/automation/trigger';
-import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { PageServerLoad, Actions } from './$types';
@@ -11,116 +9,49 @@ import type { PageServerLoad, Actions } from './$types';
 export const load: PageServerLoad = async ({ params, parent }) => {
 	const { org } = await parent();
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			const [convexSupporter, allTags] = await Promise.all([
-				serverQuery(api.supporters.get, {
-					orgSlug: org.slug,
-					supporterId: params.id as any
-				}),
-				// Tags still from Prisma (no Convex tag listing yet)
-				db.tag.findMany({
-					where: { orgId: org.id },
-					select: { id: true, name: true },
-					orderBy: { name: 'asc' },
-					take: 1000
-				})
-			]);
+	const [convexSupporter, allTags] = await Promise.all([
+		serverQuery(api.supporters.get, {
+			orgSlug: org.slug,
+			supporterId: params.id as any
+		}),
+		serverQuery(api.supporters.getTags, { orgSlug: org.slug })
+	]);
 
-			if (!convexSupporter) throw error(404, 'Supporter not found');
-
-			console.log(`[Supporter Detail] Convex: loaded supporter ${params.id} for ${org.slug}`);
-
-			return {
-				supporter: {
-					id: convexSupporter._id,
-					email: convexSupporter.email,
-					name: convexSupporter.name ?? null,
-					postalCode: convexSupporter.postalCode ?? null,
-					country: convexSupporter.country ?? null,
-					phone: convexSupporter.phone ?? null,
-					identityVerified: convexSupporter.identityVerified ?? false,
-					verified: convexSupporter.verified ?? false,
-					emailStatus: convexSupporter.emailStatus ?? 'subscribed',
-					smsStatus: convexSupporter.smsStatus ?? 'none',
-					source: convexSupporter.source ?? null,
-					importedAt: typeof convexSupporter.importedAt === 'number'
-						? new Date(convexSupporter.importedAt).toISOString()
-						: convexSupporter.importedAt ?? null,
-					customFields: convexSupporter.customFields ?? null,
-					createdAt: typeof convexSupporter._creationTime === 'number'
-						? new Date(convexSupporter._creationTime).toISOString()
-						: String(convexSupporter._creationTime),
-					updatedAt: typeof convexSupporter.updatedAt === 'number'
-						? new Date(convexSupporter.updatedAt as number).toISOString()
-						: String(convexSupporter.updatedAt),
-					tags: ((convexSupporter.tags as Array<{ _id: string; name: string }>) ?? []).map(t => ({
-						id: t._id,
-						name: t.name
-					}))
-				},
-				allTags
-			};
-		} catch (err) {
-			if (err && typeof err === 'object' && 'status' in err) throw err;
-			console.error('[Supporter Detail] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-
-	const supporter = await db.supporter.findFirst({
-		where: { id: params.id, orgId: org.id },
-		include: {
-			tags: {
-				include: {
-					tag: { select: { id: true, name: true } }
-				}
-			}
-		}
-	});
-
-	if (!supporter) {
-		throw error(404, 'Supporter not found');
-	}
-
-	// Get all org tags for the tag management dropdown
-	const allTags = await db.tag.findMany({
-		where: { orgId: org.id },
-		select: { id: true, name: true },
-		orderBy: { name: 'asc' },
-		take: 1000
-	});
-
-	const decryptedEmail = await tryDecryptSupporterEmail(supporter);
+	if (!convexSupporter) throw error(404, 'Supporter not found');
 
 	return {
 		supporter: {
-			id: supporter.id,
-			email: decryptedEmail,
-			name: supporter.name,
-			postalCode: supporter.postalCode,
-			country: supporter.country,
-			phone: supporter.phone,
-			identityVerified: !!(supporter.identityCommitment && supporter.verified),
-			verified: supporter.verified,
-			emailStatus: supporter.emailStatus,
-			smsStatus: supporter.smsStatus,
-			source: supporter.source,
-			importedAt: supporter.importedAt?.toISOString() ?? null,
-			customFields: supporter.customFields,
-			createdAt: supporter.createdAt.toISOString(),
-			updatedAt: supporter.updatedAt.toISOString(),
-			tags: supporter.tags.map((st) => ({
-				id: st.tag.id,
-				name: st.tag.name
+			id: convexSupporter._id,
+			email: convexSupporter.email,
+			name: convexSupporter.name ?? null,
+			postalCode: convexSupporter.postalCode ?? null,
+			country: convexSupporter.country ?? null,
+			phone: convexSupporter.phone ?? null,
+			identityVerified: convexSupporter.identityVerified ?? false,
+			verified: convexSupporter.verified ?? false,
+			emailStatus: convexSupporter.emailStatus ?? 'subscribed',
+			smsStatus: convexSupporter.smsStatus ?? 'none',
+			source: convexSupporter.source ?? null,
+			importedAt: typeof convexSupporter.importedAt === 'number'
+				? new Date(convexSupporter.importedAt).toISOString()
+				: convexSupporter.importedAt ?? null,
+			customFields: convexSupporter.customFields ?? null,
+			createdAt: typeof convexSupporter._creationTime === 'number'
+				? new Date(convexSupporter._creationTime).toISOString()
+				: String(convexSupporter._creationTime),
+			updatedAt: typeof convexSupporter.updatedAt === 'number'
+				? new Date(convexSupporter.updatedAt as number).toISOString()
+				: String(convexSupporter.updatedAt),
+			tags: ((convexSupporter.tags as Array<{ _id: string; name: string }>) ?? []).map(t => ({
+				id: t._id,
+				name: t.name
 			}))
 		},
-		allTags
+		allTags: (allTags ?? []).map((t: Record<string, unknown>) => ({ id: t._id ?? t.id, name: t.name }))
 	};
 };
 
+// TODO: migrate form actions to Convex
 export const actions: Actions = {
 	addTag: async ({ request, params, locals }) => {
 		if (!locals.user) {

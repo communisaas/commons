@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit';
+// CONVEX: Keep SvelteKit
 import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';

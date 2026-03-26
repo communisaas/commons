@@ -4,12 +4,13 @@
  * DELETE /api/v1/supporters/:id — Remove supporter.
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
-import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+import { decryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, params }) => {
@@ -21,18 +22,18 @@ export const GET: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const supporter = await db.supporter.findFirst({
-		where: { id: params.id, orgId: auth.orgId },
-		include: { tags: { include: { tag: { select: { id: true, name: true } } } } }
-	});
-
+	const supporter = await serverQuery(api.v1api.getSupporterById, { supporterId: params.id, orgId: auth.orgId });
 	if (!supporter) return apiError('NOT_FOUND', 'Supporter not found', 404);
 
-	const decryptedEmail = await tryDecryptSupporterEmail(supporter).catch(() => null);
-	if (!decryptedEmail) return apiError('INTERNAL', `Supporter ${params.id} PII decryption failed`, 500);
+	let decryptedEmail: string | null = null;
+	try {
+		decryptedEmail = await decryptSupporterEmail(supporter.encryptedEmail);
+	} catch {
+		return apiError('INTERNAL', `Supporter ${params.id} PII decryption failed`, 500);
+	}
 
 	return apiOk({
-		id: supporter.id,
+		id: supporter._id,
 		email: decryptedEmail,
 		name: supporter.name,
 		postalCode: supporter.postalCode,
@@ -42,9 +43,9 @@ export const GET: RequestHandler = async ({ request, params }) => {
 		emailStatus: supporter.emailStatus,
 		source: supporter.source,
 		customFields: supporter.customFields,
-		createdAt: supporter.createdAt.toISOString(),
-		updatedAt: supporter.updatedAt.toISOString(),
-		tags: supporter.tags.map((st: { tag: { id: string; name: string } }) => ({ id: st.tag.id, name: st.tag.name }))
+		createdAt: new Date(supporter._creationTime).toISOString(),
+		updatedAt: new Date(supporter.updatedAt).toISOString(),
+		tags: supporter.tags
 	});
 };
 
@@ -88,10 +89,9 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 
 	if (Object.keys(data).length === 0) return apiError('BAD_REQUEST', 'No fields to update', 400);
 
-	const result = await db.supporter.updateMany({ where: { id: params.id, orgId: auth.orgId }, data });
-	if (result.count === 0) return apiError('NOT_FOUND', 'Supporter not found', 404);
-	const updated = await db.supporter.findUnique({ where: { id: params.id } });
-	return apiOk({ id: updated!.id, updatedAt: updated!.updatedAt.toISOString() });
+	const result = await serverMutation(api.v1api.updateSupporter, { supporterId: params.id, orgId: auth.orgId, data });
+	if (!result) return apiError('NOT_FOUND', 'Supporter not found', 404);
+	return apiOk({ id: result.id, updatedAt: new Date(result.updatedAt).toISOString() });
 };
 
 export const DELETE: RequestHandler = async ({ request, params }) => {
@@ -103,7 +103,7 @@ export const DELETE: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'write');
 	if (scopeErr) return scopeErr;
 
-	const result = await db.supporter.deleteMany({ where: { id: params.id, orgId: auth.orgId } });
-	if (result.count === 0) return apiError('NOT_FOUND', 'Supporter not found', 404);
+	const deleted = await serverMutation(api.v1api.deleteSupporter, { supporterId: params.id, orgId: auth.orgId });
+	if (!deleted) return apiError('NOT_FOUND', 'Supporter not found', 404);
 	return apiOk({ deleted: true });
 };

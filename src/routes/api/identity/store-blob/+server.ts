@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Store Encrypted Identity Blob
  *
  * Stores XChaCha20-Poly1305 encrypted identity data in Postgres.

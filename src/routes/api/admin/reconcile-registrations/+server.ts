@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Registration Reconciliation Endpoint
  *
  * Two responsibilities:

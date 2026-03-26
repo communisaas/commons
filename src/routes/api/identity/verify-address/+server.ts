@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Tier 2 Credential Issuance Endpoint
  *
  * Receives the district result (from a prior /api/location/resolve call)

@@ -1,15 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
-import { db, getRequestClient } from '$lib/core/db';
-import { loadOrgContext, requireRole } from '$lib/server/org';
-import { generateEmbedding } from '$lib/core/search/gemini-embeddings';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
-
-const MAX_DOMAINS_PER_ORG = 20;
-const RESERVED_LABELS = ['__alert_preferences__'];
 
 const IssueDomainSchema = z.object({
 	label: z.string().trim().min(1, 'Label is required').max(100, 'Label must be 100 characters or fewer'),
@@ -21,36 +14,12 @@ const IssueDomainSchema = z.object({
 export const GET: RequestHandler = async ({ locals, params }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			const result = await serverQuery(api.organizations.listIssueDomains, { slug: params.slug });
-			return json(result);
-		} catch (err) {
-			console.error('[IssueDomains.GET] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
-
-	const domains = await db.orgIssueDomain.findMany({
-		where: { orgId: org.id },
-		select: { id: true, label: true, description: true, weight: true, createdAt: true, updatedAt: true },
-		orderBy: { createdAt: 'asc' }
-	});
-
-	return json({
-		domains: domains.map((d) => ({
-			...d,
-			createdAt: d.createdAt.toISOString(),
-			updatedAt: d.updatedAt.toISOString()
-		}))
-	});
+	const result = await serverQuery(api.organizations.listIssueDomains, { slug: params.slug });
+	return json(result);
 };
 
 /** Create a new issue domain. Requires editor role. */
-export const POST: RequestHandler = async ({ locals, params, request, platform }) => {
+export const POST: RequestHandler = async ({ locals, params, request }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	let parsed: z.infer<typeof IssueDomainSchema>;
@@ -67,97 +36,17 @@ export const POST: RequestHandler = async ({ locals, params, request, platform }
 	const { label, description, weight } = parsed;
 	const parsedWeight = weight ?? 1.0;
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			const result = await serverMutation(api.organizations.createIssueDomain, {
-				slug: params.slug,
-				label,
-				description: description ?? undefined,
-				weight: parsedWeight
-			});
-			return json(result, { status: 201 });
-		} catch (err) {
-			console.error('[IssueDomains.POST] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
-	if (RESERVED_LABELS.some(r => label.startsWith(r))) {
-		throw error(400, 'This label is reserved');
-	}
-
-	// Check domain count limit
-	const count = await db.orgIssueDomain.count({ where: { orgId: org.id } });
-	if (count >= MAX_DOMAINS_PER_ORG) {
-		throw error(400, `Maximum of ${MAX_DOMAINS_PER_ORG} issue domains per organization`);
-	}
-
-	// Check for duplicate label
-	const existing = await db.orgIssueDomain.findUnique({
-		where: { orgId_label: { orgId: org.id, label } }
+	const result = await serverMutation(api.organizations.createIssueDomain, {
+		slug: params.slug,
+		label,
+		description: description ?? undefined,
+		weight: parsedWeight
 	});
-	if (existing) {
-		throw error(409, 'An issue domain with this label already exists');
-	}
-
-	const domain = await db.orgIssueDomain.create({
-		data: {
-			orgId: org.id,
-			label,
-			description: description || null,
-			weight: parsedWeight
-		}
-	});
-
-	// Fire-and-forget embedding generation
-	const domainId = domain.id;
-	const embeddingInput = description
-		? `${label} — ${description}`
-		: label;
-	const client = getRequestClient();
-
-	const embeddingWork = async () => {
-		try {
-			const embedding = await generateEmbedding(embeddingInput, {
-				taskType: 'RETRIEVAL_DOCUMENT'
-			});
-			const vectorStr = `[${embedding.join(',')}]`;
-			await client.$queryRaw`
-				UPDATE org_issue_domain
-				SET embedding = ${vectorStr}::vector(768)
-				WHERE id = ${domainId}
-			`;
-		} catch (err) {
-			console.warn(`[IssueDomain] Failed to generate embedding for domain ${domainId}:`, err);
-		}
-	};
-
-	if (platform?.context?.waitUntil) {
-		platform.context.waitUntil(embeddingWork());
-	} else {
-		// Dev: fire-and-forget IIFE
-		embeddingWork();
-	}
-
-	return json(
-		{
-			id: domain.id,
-			label: domain.label,
-			description: domain.description,
-			weight: domain.weight,
-			createdAt: domain.createdAt.toISOString(),
-			updatedAt: domain.updatedAt.toISOString()
-		},
-		{ status: 201 }
-	);
+	return json(result, { status: 201 });
 };
 
 /** Update an issue domain. Requires editor role. */
-export const PATCH: RequestHandler = async ({ locals, params, request, platform }) => {
+export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	const PatchSchema = z.object({ id: z.string().min(1) }).merge(IssueDomainSchema.partial());
@@ -177,98 +66,14 @@ export const PATCH: RequestHandler = async ({ locals, params, request, platform 
 		throw error(400, 'Invalid JSON body');
 	}
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			const result = await serverMutation(api.organizations.updateIssueDomain, {
-				slug: params.slug,
-				domainId: id as any,
-				label: fields.label,
-				description: fields.description ?? undefined,
-				weight: fields.weight
-			});
-			return json(result);
-		} catch (err) {
-			console.error('[IssueDomains.PATCH] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
-	const existing = await db.orgIssueDomain.findFirst({
-		where: { id, orgId: org.id }
+	const result = await serverMutation(api.organizations.updateIssueDomain, {
+		slug: params.slug,
+		domainId: id as any,
+		label: fields.label,
+		description: fields.description ?? undefined,
+		weight: fields.weight
 	});
-	if (!existing) throw error(404, 'Issue domain not found');
-
-	const data: Record<string, unknown> = {};
-	if (fields.label !== undefined) {
-		if (RESERVED_LABELS.some(r => fields.label!.startsWith(r))) {
-			throw error(400, 'This label is reserved');
-		}
-		// Check duplicate on label change
-		if (fields.label !== existing.label) {
-			const dup = await db.orgIssueDomain.findUnique({
-				where: { orgId_label: { orgId: org.id, label: fields.label } }
-			});
-			if (dup) throw error(409, 'An issue domain with this label already exists');
-		}
-		data.label = fields.label;
-	}
-	if (fields.description !== undefined) {
-		data.description = fields.description || null;
-	}
-	if (fields.weight !== undefined) {
-		data.weight = fields.weight;
-	}
-
-	if (Object.keys(data).length === 0) throw error(400, 'No fields to update');
-
-	const updated = await db.orgIssueDomain.update({
-		where: { id },
-		data
-	});
-
-	// Re-compute embedding if label or description changed
-	if ('label' in data || 'description' in data) {
-		const newLabel = (data.label as string) ?? existing.label;
-		const newDesc = (data.description as string | null) ?? existing.description;
-		const embeddingInput = newDesc ? `${newLabel} — ${newDesc}` : newLabel;
-		const domainId = id;
-		const client = getRequestClient();
-
-		const embeddingWork = async () => {
-			try {
-				const embedding = await generateEmbedding(embeddingInput, {
-					taskType: 'RETRIEVAL_DOCUMENT'
-				});
-				const vectorStr = `[${embedding.join(',')}]`;
-				await client.$queryRaw`
-					UPDATE org_issue_domain
-					SET embedding = ${vectorStr}::vector(768)
-					WHERE id = ${domainId}
-				`;
-			} catch (err) {
-				console.warn(`[IssueDomain] Failed to update embedding for domain ${domainId}:`, err);
-			}
-		};
-
-		if (platform?.context?.waitUntil) {
-			platform.context.waitUntil(embeddingWork());
-		} else {
-			embeddingWork();
-		}
-	}
-
-	return json({
-		id: updated.id,
-		label: updated.label,
-		description: updated.description,
-		weight: updated.weight,
-		createdAt: updated.createdAt.toISOString(),
-		updatedAt: updated.updatedAt.toISOString()
-	});
+	return json(result);
 };
 
 /** Delete an issue domain. Requires editor role. */
@@ -280,32 +85,9 @@ export const DELETE: RequestHandler = async ({ locals, params, request }) => {
 
 	if (!id) throw error(400, 'id is required');
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			await serverMutation(api.organizations.deleteIssueDomain, {
-				slug: params.slug,
-				domainId: id as any
-			});
-			return json({ ok: true });
-		} catch (err) {
-			console.error('[IssueDomains.DELETE] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
-	const existing = await db.orgIssueDomain.findFirst({
-		where: { id, orgId: org.id }
+	await serverMutation(api.organizations.deleteIssueDomain, {
+		slug: params.slug,
+		domainId: id as any
 	});
-	if (!existing) throw error(404, 'Issue domain not found');
-	if (RESERVED_LABELS.some(r => existing.label.startsWith(r))) {
-		throw error(400, 'Cannot delete reserved domain');
-	}
-
-	await db.orgIssueDomain.delete({ where: { id } });
-
 	return json({ ok: true });
 };

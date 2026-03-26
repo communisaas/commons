@@ -3,11 +3,12 @@
  * POST /api/v1/tags — Create a tag.
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
@@ -19,13 +20,9 @@ export const GET: RequestHandler = async ({ request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const tags = await db.tag.findMany({
-		where: { orgId: auth.orgId },
-		select: { id: true, name: true, _count: { select: { supporters: true } } },
-		orderBy: { name: 'asc' }
-	});
+	const tags = await serverQuery(api.v1api.listTags, { orgId: auth.orgId });
 
-	return apiOk(tags.map((t) => ({ id: t.id, name: t.name, supporterCount: t._count.supporters })));
+	return apiOk(tags);
 };
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -48,11 +45,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		return apiError('BAD_REQUEST', 'Tag name must be 100 characters or fewer', 400);
 	}
 
-	const existing = await db.tag.findUnique({
-		where: { orgId_name: { orgId: auth.orgId, name: name.trim() } }
-	});
-	if (existing) return apiError('CONFLICT', 'A tag with this name already exists', 409);
+	const result = await serverMutation(api.v1api.createTag, { orgId: auth.orgId, name: name.trim() });
+	if (result.duplicate) return apiError('CONFLICT', 'A tag with this name already exists', 409);
 
-	const tag = await db.tag.create({ data: { orgId: auth.orgId, name: name.trim() } });
-	return apiOk({ id: tag.id, name: tag.name }, undefined, 201);
+	return apiOk({ id: result.tag!._id, name: result.tag!.name }, undefined, 201);
 };

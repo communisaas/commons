@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Position Registration Endpoint — Power Landscape (Cycle 37)
  *
  * POST: Register a support/oppose position on a template.

@@ -1,15 +1,13 @@
 /**
  * GET /api/v1/orgs — Return the org associated with the API key.
- *
- * Unlike AN's API, this returns the single org bound to the key.
- * No multi-org access via a single key.
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
@@ -22,25 +20,7 @@ export const GET: RequestHandler = async ({ request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const org = await db.organization.findUnique({
-		where: { id: auth.orgId },
-		select: {
-			id: true,
-			name: true,
-			slug: true,
-			description: true,
-			avatar: true,
-			createdAt: true,
-			_count: {
-				select: {
-					supporters: true,
-					campaigns: true,
-					templates: true
-				}
-			}
-		}
-	});
-
+	const org = await serverQuery(api.v1api.getOrgForApiKey, { orgId: auth.orgId });
 	if (!org) {
 		console.error(`[API v1] Org not found for valid API key. orgId=${auth.orgId}, keyId=${auth.keyId}`);
 		return apiError('INTERNAL_ERROR', 'Organization could not be resolved', 500);
@@ -52,11 +32,7 @@ export const GET: RequestHandler = async ({ request }) => {
 		slug: org.slug,
 		description: org.description,
 		avatar: org.avatar,
-		createdAt: org.createdAt.toISOString(),
-		counts: {
-			supporters: org._count.supporters,
-			campaigns: org._count.campaigns,
-			templates: org._count.templates
-		}
+		createdAt: new Date(org.createdAt).toISOString(),
+		counts: org.counts
 	});
 };

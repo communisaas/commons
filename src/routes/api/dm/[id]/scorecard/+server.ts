@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /**
@@ -11,69 +12,10 @@ import type { RequestHandler } from './$types';
 export const GET: RequestHandler = async ({ params }) => {
 	const { id } = params;
 
-	const dm = await db.decisionMaker.findUnique({
-		where: { id },
-		select: {
-			id: true,
-			name: true,
-			title: true,
-			party: true,
-			district: true,
-			jurisdiction: true
-		}
-	});
-
-	if (!dm) {
+	const result = await serverQuery(api.v1api.getDmScorecard, { dmId: id });
+	if (!result) {
 		throw error(404, 'Decision-maker not found');
 	}
 
-	// Latest snapshot
-	const latest = await db.scorecardSnapshot.findFirst({
-		where: { decisionMakerId: id },
-		orderBy: { periodEnd: 'desc' }
-	});
-
-	// Last 12 periods (excluding latest to avoid duplication)
-	const history = await db.scorecardSnapshot.findMany({
-		where: {
-			decisionMakerId: id,
-			...(latest ? { id: { not: latest.id } } : {})
-		},
-		orderBy: { periodEnd: 'desc' },
-		take: 12
-	});
-
-	return json({
-		decisionMaker: dm,
-		current: latest
-			? {
-					responsiveness: latest.responsiveness,
-					alignment: latest.alignment,
-					composite: latest.composite,
-					proofWeightTotal: latest.proofWeightTotal,
-					period: {
-						start: latest.periodStart.toISOString().slice(0, 10),
-						end: latest.periodEnd.toISOString().slice(0, 10)
-					},
-					attestationHash: latest.snapshotHash,
-					methodologyVersion: latest.methodologyVersion
-				}
-			: null,
-		history: history.map((s) => ({
-			period: s.periodEnd.toISOString().slice(0, 7),
-			responsiveness: s.responsiveness,
-			alignment: s.alignment,
-			composite: s.composite
-		})),
-		transparency: latest
-			? {
-					deliveriesSent: latest.deliveriesSent,
-					deliveriesOpened: latest.deliveriesOpened,
-					deliveriesVerified: latest.deliveriesVerified,
-					repliesReceived: latest.repliesReceived,
-					alignedVotes: latest.alignedVotes,
-					totalScoredVotes: latest.totalScoredVotes
-				}
-			: null
-	});
+	return json(result);
 };

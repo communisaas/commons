@@ -1,12 +1,13 @@
 /**
- * Public API v1 — Bearer token authentication.
+ * Public API v1 — Bearer token authentication (Convex backend).
  *
  * Validates API keys from the Authorization header, resolves the owning org,
  * and updates last-used tracking (fire-and-forget).
  */
 
-import { db } from '$lib/core/db';
 import { hashApiKey } from '$lib/core/security/api-key';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { apiError } from './response';
 
 export interface ApiKeyContext {
@@ -39,54 +40,22 @@ export async function authenticateApiKey(
 
 	const keyHash = await hashApiKey(plaintext);
 
-	const apiKey = await db.apiKey.findUnique({
-		where: { keyHash },
-		select: {
-			id: true,
-			orgId: true,
-			scopes: true,
-			revokedAt: true,
-			expiresAt: true,
-			org: {
-				select: {
-					subscription: {
-						select: { plan: true }
-					}
-				}
-			}
-		}
-	});
+	const result = await serverQuery(api.v1api.authenticateApiKey, { keyHash });
 
-	if (!apiKey) {
+	if (!result) {
 		return apiError('UNAUTHORIZED', 'Invalid API key', 401);
 	}
 
-	if (apiKey.revokedAt) {
-		return apiError('UNAUTHORIZED', 'API key has been revoked', 401);
-	}
-
-	if (apiKey.expiresAt && apiKey.expiresAt < new Date()) {
-		return apiError('UNAUTHORIZED', 'API key has expired', 401);
-	}
-
-	// Fire-and-forget: update lastUsedAt and increment requestCount (skip if revoked mid-request)
-	db.apiKey
-		.updateMany({
-			where: { id: apiKey.id, revokedAt: null },
-			data: {
-				lastUsedAt: new Date(),
-				requestCount: { increment: 1 }
-			}
-		})
-		.catch(() => {
-			// Swallow — usage tracking is non-critical
-		});
+	// Fire-and-forget: update lastUsedAt and increment requestCount
+	serverMutation(api.v1api.trackApiKeyUsage, { keyId: result.keyId }).catch(() => {
+		// Swallow — usage tracking is non-critical
+	});
 
 	return {
-		orgId: apiKey.orgId,
-		keyId: apiKey.id,
-		scopes: apiKey.scopes,
-		planSlug: apiKey.org?.subscription?.plan ?? 'free'
+		orgId: result.orgId,
+		keyId: result.keyId,
+		scopes: result.scopes,
+		planSlug: result.planSlug
 	};
 }
 

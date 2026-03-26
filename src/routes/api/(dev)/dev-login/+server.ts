@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * DEV-ONLY: Create a session for the first user in the database.
  * GET /api/dev-login — sets auth-session cookie and redirects to /
  *

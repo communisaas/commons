@@ -1,8 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
-import { loadOrgContext } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
@@ -10,13 +7,9 @@ import type { RequestHandler } from './$types';
 /**
  * GET /api/org/[slug]/bills/watching
  *
- * List all bills this org watches, with pagination.
- *
- * Query params:
- *   ?limit=<number>   (default 20, max 50)
- *   ?offset=<number>  (default 0)
+ * List all bills this org watches.
  */
-export const GET: RequestHandler = async ({ params, url, locals }) => {
+export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!FEATURES.LEGISLATION) {
 		throw error(404, 'Legislation features not enabled');
 	}
@@ -25,71 +18,6 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			const result = await serverQuery(api.legislation.listWatchedBills, { slug: params.slug });
-			return json({ watches: result, total: result.length, limit: 50, offset: 0 });
-		} catch (err) {
-			console.error('[BillsWatching] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
-
-	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '20', 10) || 20, 1), 50);
-	const offset = Math.max(parseInt(url.searchParams.get('offset') ?? '0', 10) || 0, 0);
-
-	const [watches, total] = await Promise.all([
-		db.orgBillWatch.findMany({
-			where: { orgId: org.id },
-			orderBy: { createdAt: 'desc' },
-			take: limit,
-			skip: offset,
-			include: {
-				bill: {
-					select: {
-						id: true,
-						externalId: true,
-						title: true,
-						summary: true,
-						status: true,
-						statusDate: true,
-						jurisdiction: true,
-						jurisdictionLevel: true,
-						chamber: true,
-						sponsors: true,
-						sourceUrl: true
-					}
-				}
-			}
-		}),
-		db.orgBillWatch.count({ where: { orgId: org.id } })
-	]);
-
-	return json({
-		watches: watches.map((w) => ({
-			id: w.id,
-			bill: {
-				id: w.bill.id,
-				externalId: w.bill.externalId,
-				title: w.bill.title,
-				summary: w.bill.summary,
-				status: w.bill.status,
-				statusDate: w.bill.statusDate.toISOString(),
-				jurisdiction: w.bill.jurisdiction,
-				jurisdictionLevel: w.bill.jurisdictionLevel,
-				chamber: w.bill.chamber,
-				sponsors: w.bill.sponsors,
-				sourceUrl: w.bill.sourceUrl
-			},
-			reason: w.reason,
-			position: w.position,
-			createdAt: w.createdAt.toISOString()
-		})),
-		total,
-		limit,
-		offset
-	});
+	const result = await serverQuery(api.legislation.listWatchedBills, { slug: params.slug });
+	return json({ watches: result, total: result.length, limit: 50, offset: 0 });
 };

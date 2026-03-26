@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Shadow Atlas Registration Endpoint (Three-Tree Architecture)
  *
  * Registers a user's precomputed leaf hash with Shadow Atlas Tree 1.

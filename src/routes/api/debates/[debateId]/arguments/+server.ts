@@ -4,7 +4,6 @@ import { prisma } from '$lib/core/db';
 import { solidityPackedKeccak256 } from 'ethers';
 import { verifyTransactionAsync } from '$lib/core/blockchain/tx-verifier';
 import { FEATURES } from '$lib/config/features';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 // CONVEX: POST is Keep SvelteKit — calls blockchain (submitArgument), solidityPackedKeccak256, tx-verifier.
@@ -30,9 +29,6 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50'), 100);
 	const offset = parseInt(url.searchParams.get('offset') ?? '0');
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
 			const result = await serverQuery(api.debates.listArguments, {
 				debateId: debateId as any,
 				stance: stance ?? undefined,
@@ -40,12 +36,8 @@ export const GET: RequestHandler = async ({ params, url }) => {
 				offset
 			});
 			return json(result);
-		} catch (err) {
-			console.error('[Debates.arguments.GET] Convex failed, falling back to Prisma:', err);
-		}
 	}
 
-	// ─── PRISMA FALLBACK ───
 	const debate = await prisma.debate.findUnique({
 		where: { id: debateId },
 		select: { id: true, proposition_text: true }
@@ -232,7 +224,6 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		});
 	} else {
 		// Legacy path: server relayer submits on-chain
-		try {
 			const { submitArgument } = await import('$lib/core/blockchain/debate-market-client');
 
 			const onchainResult = await submitArgument({

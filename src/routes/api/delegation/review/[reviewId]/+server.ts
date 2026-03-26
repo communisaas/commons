@@ -1,7 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 /**
  * PATCH /api/delegation/review/[reviewId]
@@ -29,34 +30,15 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, "Decision must be 'approve' or 'reject'");
 	}
 
-	const review = await prisma.delegationReview.findUnique({
-		where: { id: params.reviewId },
-		include: {
-			grant: {
-				select: { userId: true }
-			}
-		}
+	const result = await serverMutation(api.v1api.submitDelegationReview, {
+		reviewId: params.reviewId,
+		userId: session.userId,
+		decision
 	});
 
-	if (!review) {
-		throw error(404, 'Review not found');
-	}
+	if (!result) throw error(404, 'Review not found');
+	if ('forbidden' in result && result.forbidden) throw error(403, 'Not authorized to review this action');
+	if ('alreadyDecided' in result && result.alreadyDecided) throw error(400, 'Review already decided');
 
-	if (review.grant.userId !== session.userId) {
-		throw error(403, 'Not authorized to review this action');
-	}
-
-	if (review.decision !== null) {
-		throw error(400, 'Review already decided');
-	}
-
-	await prisma.delegationReview.update({
-		where: { id: params.reviewId },
-		data: {
-			decision,
-			decidedAt: new Date()
-		}
-	});
-
-	return json({ message: `Review ${decision}d` });
+	return json(result);
 };

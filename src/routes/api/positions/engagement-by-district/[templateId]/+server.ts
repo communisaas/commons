@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Engagement by District Endpoint — Community Field MVP
  *
  * GET: Return per-district position breakdown for a template.

@@ -2,12 +2,13 @@
  * GET /api/v1/networks/[id] — Network detail
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params, request }) => {
@@ -21,62 +22,28 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	// Verify the requesting org is an active member
-	const membership = await db.orgNetworkMember.findFirst({
-		where: {
-			networkId: params.id,
-			orgId: auth.orgId,
-			status: 'active'
-		}
-	});
+	const result = await serverQuery(api.v1api.getNetworkByIdV1, { networkId: params.id, orgId: auth.orgId });
+	if (!result) return apiError('NOT_FOUND', 'Network not found', 404);
+	if (result.forbidden) return apiError('FORBIDDEN', 'Organization is not an active member of this network', 403);
 
-	if (!membership) {
-		return apiError('FORBIDDEN', 'Organization is not an active member of this network', 403);
-	}
-
-	const network = await db.orgNetwork.findUnique({
-		where: { id: params.id },
-		include: {
-			ownerOrg: {
-				select: { id: true, name: true, slug: true }
-			},
-			members: {
-				where: { status: 'active' },
-				include: {
-					org: {
-						select: { id: true, name: true, slug: true }
-					}
-				},
-				orderBy: { joinedAt: 'asc' }
-			}
-		}
-	});
-
-	if (!network) {
-		return apiError('NOT_FOUND', 'Network not found', 404);
-	}
-
+	const n = result.network!;
 	return apiOk({
-		id: network.id,
-		name: network.name,
-		slug: network.slug,
-		description: network.description,
-		status: network.status,
-		ownerOrgId: network.ownerOrgId,
-		memberCount: network.members.length,
-		ownerOrg: {
-			id: network.ownerOrg.id,
-			name: network.ownerOrg.name,
-			slug: network.ownerOrg.slug
-		},
-		members: network.members.map((m) => ({
-			orgId: m.org.id,
-			orgName: m.org.name,
-			orgSlug: m.org.slug,
+		id: n.id,
+		name: n.name,
+		slug: n.slug,
+		description: n.description,
+		status: n.status,
+		ownerOrgId: n.ownerOrgId,
+		memberCount: n.memberCount,
+		ownerOrg: n.ownerOrg,
+		members: n.members.map((m: any) => ({
+			orgId: m.orgId,
+			orgName: m.orgName,
+			orgSlug: m.orgSlug,
 			role: m.role,
-			joinedAt: m.joinedAt.toISOString()
+			joinedAt: new Date(m.joinedAt).toISOString()
 		})),
-		createdAt: network.createdAt.toISOString(),
-		updatedAt: network.updatedAt.toISOString()
+		createdAt: new Date(n.createdAt).toISOString(),
+		updatedAt: new Date(n.updatedAt).toISOString()
 	});
 };

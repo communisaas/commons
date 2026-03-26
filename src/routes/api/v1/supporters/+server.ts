@@ -1,21 +1,19 @@
 /**
  * GET /api/v1/supporters — List supporters with cursor pagination.
  * POST /api/v1/supporters — Create a new supporter.
- *
- * Filters: email, verified, emailStatus, source, tag
  */
 
 import { z } from 'zod';
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
-import { computeEmailHash, encryptPii, tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
-import { findSupporterByEmail } from '$lib/server/supporters/find-by-email';
+import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+import { decryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
-// F-R8-03: Zod schema replaces manual email validation with includes('@')
 const CreateSupporterSchema = z.object({
 	email: z.string().email('A valid email address is required'),
 	name: z.string().max(200).optional(),
@@ -39,88 +37,60 @@ export const GET: RequestHandler = async ({ request, url }) => {
 
 	const { cursor, limit } = parsePagination(url);
 
-	// Build where clause
-	const where: Record<string, unknown> = { orgId: auth.orgId };
-
 	const email = url.searchParams.get('email');
+	let emailHash: string | undefined;
 	if (email) {
-		const emailHash = await computeEmailHash(email.toLowerCase());
-		if (emailHash) {
-			where.email_hash = emailHash;
+		const hash = await computeEmailHash(email.toLowerCase());
+		if (hash) {
+			emailHash = hash;
 		} else {
-			// Hash unavailable — no results possible
-			where.id = '__no_match__';
+			return apiOk([], { cursor: null, hasMore: false, total: 0 });
 		}
 	}
 
 	const verified = url.searchParams.get('verified');
-	if (verified === 'true') where.verified = true;
-	else if (verified === 'false') where.verified = false;
-
 	const emailStatus = url.searchParams.get('email_status');
-	if (emailStatus && ['subscribed', 'unsubscribed', 'bounced', 'complained'].includes(emailStatus)) {
-		where.emailStatus = emailStatus;
-	}
-
 	const source = url.searchParams.get('source');
-	if (source && ['csv', 'action_network', 'organic', 'widget'].includes(source)) {
-		where.source = source;
-	}
-
 	const tagId = url.searchParams.get('tag');
-	if (tagId) {
-		where.tags = { some: { tagId } };
-	}
 
-	const findArgs: Record<string, unknown> = {
-		where,
-		take: limit + 1,
-		orderBy: { createdAt: 'desc' as const },
-		include: {
-			tags: {
-				include: { tag: { select: { id: true, name: true } } }
-			}
-		}
-	};
-
-	if (cursor) {
-		findArgs.cursor = { id: cursor };
-		findArgs.skip = 1;
-	}
-
-	const [raw, total] = await Promise.all([
-		db.supporter.findMany(findArgs as Parameters<typeof db.supporter.findMany>[0]),
-		db.supporter.count({ where })
-	]);
-
-	const hasMore = raw.length > limit;
-	const items = raw.slice(0, limit);
-	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
+	const result = await serverQuery(api.v1api.listSupporters, {
+		orgId: auth.orgId,
+		limit,
+		cursor: cursor ?? undefined,
+		emailHash,
+		verified: verified === 'true' ? true : verified === 'false' ? false : undefined,
+		emailStatus: emailStatus && ['subscribed', 'unsubscribed', 'bounced', 'complained'].includes(emailStatus) ? emailStatus : undefined,
+		source: source && ['csv', 'action_network', 'organic', 'widget'].includes(source) ? source : undefined,
+		tagId: tagId ?? undefined
+	});
 
 	let decryptionFailures = 0;
-	const dataResults = await Promise.all(items.map(async (s) => {
-		const sup = s as typeof s & { tags: Array<{ tag: { id: string; name: string } }> };
-		const email = await tryDecryptSupporterEmail(sup as { id: string; encrypted_email: string }).catch(() => null);
-		if (!email) { decryptionFailures++; return null; }
-		return {
-			id: sup.id,
-			email,
-			name: sup.name,
-			postalCode: sup.postalCode,
-			country: sup.country,
-			phone: sup.phone,
-			verified: sup.verified,
-			emailStatus: sup.emailStatus,
-			source: sup.source,
-			customFields: sup.customFields,
-			createdAt: sup.createdAt.toISOString(),
-			updatedAt: sup.updatedAt.toISOString(),
-			tags: sup.tags.map((st) => ({ id: st.tag.id, name: st.tag.name }))
-		};
+	const dataResults = await Promise.all(result.items.map(async (s: any) => {
+		try {
+			const decrypted = await decryptSupporterEmail(s.encryptedEmail);
+			return {
+				id: s._id,
+				email: decrypted,
+				name: s.name,
+				postalCode: s.postalCode,
+				country: s.country,
+				phone: s.phone,
+				verified: s.verified,
+				emailStatus: s.emailStatus,
+				source: s.source,
+				customFields: s.customFields,
+				createdAt: new Date(s._creationTime).toISOString(),
+				updatedAt: new Date(s.updatedAt).toISOString(),
+				tags: s.tags
+			};
+		} catch {
+			decryptionFailures++;
+			return null;
+		}
 	}));
-	const data = dataResults.filter((d): d is NonNullable<typeof d> => d !== null);
+	const data = dataResults.filter((d: any): d is NonNullable<typeof d> => d !== null);
 
-	return apiOk(data, { cursor: nextCursor, hasMore, total, decryptionFailures });
+	return apiOk(data, { cursor: result.cursor, hasMore: result.hasMore, total: result.total, decryptionFailures });
 };
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -151,71 +121,48 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const { email, name, postalCode, country, phone, source, customFields, tags } = parsed;
+	const normalizedEmail = email.toLowerCase();
 
-	// Check for duplicate (email_hash first, plaintext fallback)
-	const existing = await findSupporterByEmail(auth.orgId, email);
+	const [emailHashResult, encEmailRaw] = await Promise.all([
+		computeEmailHash(normalizedEmail),
+		encryptPii(normalizedEmail, `supporter:${crypto.randomUUID()}`)
+	]);
+	if (!emailHashResult || !encEmailRaw) return apiError('INTERNAL', 'Supporter email encryption failed', 500);
+	const encEmail = JSON.stringify(encEmailRaw);
 
-	if (existing) {
+	const result = await serverMutation(api.v1api.createSupporter, {
+		orgId: auth.orgId,
+		encryptedEmail: encEmail,
+		emailHash: emailHashResult,
+		name: name || undefined,
+		postalCode: postalCode || undefined,
+		country: country || 'US',
+		phone: phone || undefined,
+		source: source || 'api',
+		customFields: customFields ? JSON.parse(JSON.stringify(customFields)) : undefined,
+		tagIds: tags
+	});
+
+	if (result.duplicate) {
 		return apiError('CONFLICT', 'A supporter with this email already exists', 409);
 	}
 
-	// Resolve tag IDs if provided
-	let tagConnects: Array<{ tag: { connect: { id: string } } }> = [];
-	if (tags && Array.isArray(tags) && tags.length > 0) {
-		const validTags = await db.tag.findMany({
-			where: { orgId: auth.orgId, id: { in: tags } },
-			select: { id: true }
-		});
-		tagConnects = validTags.map((t) => ({
-			tag: { connect: { id: t.id } }
-		}));
-	}
-
-	// C-5: Encrypt supporter email at rest (fail-closed — no empty-string poison pills)
-	const normalizedEmail = email.toLowerCase();
-	const supporterId = crypto.randomUUID();
-	const [emailHash, encEmailRaw] = await Promise.all([
-		computeEmailHash(normalizedEmail),
-		encryptPii(normalizedEmail, `supporter:${supporterId}`)
-	]);
-	if (!emailHash || !encEmailRaw) return apiError('INTERNAL', 'Supporter email encryption failed', 500);
-	const encEmail = JSON.stringify(encEmailRaw);
-
-	const supporter = await db.supporter.create({
-		data: {
-			id: supporterId,
-			orgId: auth.orgId,
-			name: name || null,
-			postalCode: postalCode || null,
-			country: country || 'US',
-			phone: phone || null,
-			source: source || 'api',
-			encrypted_email: encEmail,
-			email_hash: emailHash,
-			customFields: customFields ? JSON.parse(JSON.stringify(customFields)) : undefined,
-			tags: tagConnects.length > 0 ? { create: tagConnects } : undefined
-		},
-		include: {
-			tags: { include: { tag: { select: { id: true, name: true } } } }
-		}
-	});
-
-	const created = supporter as typeof supporter & { tags: Array<{ tag: { id: string; name: string } }> };
+	const s = result.supporter;
 	return apiOk(
 		{
-			id: created.id,
+			id: s._id,
 			email: normalizedEmail,
-			name: created.name,
-			postalCode: created.postalCode,
-			country: created.country,
-			phone: created.phone,
-			verified: created.verified,
-			emailStatus: created.emailStatus,
-			source: created.source,
-			customFields: created.customFields,
-			createdAt: created.createdAt.toISOString(),
-			updatedAt: created.updatedAt.toISOString(),
-			tags: created.tags.map((st) => ({ id: st.tag.id, name: st.tag.name }))
+			name: s.name,
+			postalCode: s.postalCode,
+			country: s.country,
+			phone: s.phone,
+			verified: s.verified,
+			emailStatus: s.emailStatus,
+			source: s.source,
+			customFields: s.customFields,
+			createdAt: new Date(s._creationTime).toISOString(),
+			updatedAt: new Date(s.updatedAt).toISOString(),
+			tags: []
 		},
 		undefined,
 		201

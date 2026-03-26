@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Delete Encrypted Identity Blob
  *
  * Removes encrypted blob from storage (user requested deletion).

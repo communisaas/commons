@@ -2,12 +2,13 @@
  * GET /api/v1/workflows/[id] — Workflow detail
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params, request }) => {
@@ -21,21 +22,18 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const workflow = await db.workflow.findFirst({
-		where: { id: params.id, orgId: auth.orgId }
-	});
-
+	const workflow = await serverQuery(api.v1api.getWorkflowById, { workflowId: params.id, orgId: auth.orgId });
 	if (!workflow) return apiError('NOT_FOUND', 'Workflow not found', 404);
 
 	return apiOk({
-		id: workflow.id,
+		id: workflow._id,
 		name: workflow.name,
 		description: workflow.description,
 		trigger: workflow.trigger,
 		steps: workflow.steps,
 		stepCount: Array.isArray(workflow.steps) ? workflow.steps.length : 0,
 		enabled: workflow.enabled,
-		createdAt: workflow.createdAt.toISOString(),
-		updatedAt: workflow.updatedAt.toISOString()
+		createdAt: new Date(workflow._creationTime).toISOString(),
+		updatedAt: new Date(workflow.updatedAt).toISOString()
 	});
 };

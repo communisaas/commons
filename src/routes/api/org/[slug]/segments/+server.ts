@@ -5,7 +5,6 @@ import { buildSegmentWhere } from '$lib/server/segments/query-builder';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
 import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
@@ -29,32 +28,8 @@ function csvEscape(value: string): string {
 export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			const result = await serverQuery(api.segments.list, { slug: params.slug });
-			return json(result);
-		} catch (err) {
-			console.error('[Segments.GET] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
-
-	const segments = await db.segment.findMany({
-		where: { orgId: org.id },
-		orderBy: { updatedAt: 'desc' },
-		select: {
-			id: true,
-			name: true,
-			filters: true,
-			createdAt: true,
-			updatedAt: true
-		}
-	});
-
-	return json({ segments });
+	const result = await serverQuery(api.segments.list, { slug: params.slug });
+	return json(result);
 };
 
 /**
@@ -86,6 +61,7 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			throw error(400, validationError);
 		}
 
+		// TODO: migrate segment count to Convex
 		const where = buildSegmentWhere(org.id, filters);
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const count = await db.supporter.count({ where: where as any });
@@ -106,62 +82,25 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			throw error(400, validationError);
 		}
 
-		// ─── DUAL-STACK: Try Convex for save, fallback to Prisma ───
-		if (PUBLIC_CONVEX_URL) {
-			try {
-				if (body.id) {
-					const result = await serverMutation(api.segments.update, {
-						slug: params.slug,
-						segmentId: body.id,
-						name,
-						filters
-					});
-					return json(result);
-				} else {
-					const result = await serverMutation(api.segments.create, {
-						slug: params.slug,
-						name,
-						filters
-					});
-					return json(result, { status: 201 });
-				}
-			} catch (err) {
-				console.error('[Segments.save] Convex failed, falling back to Prisma:', err);
-			}
-		}
-
-		// ─── PRISMA FALLBACK ───
 		if (body.id) {
-			// Update existing
-			const existing = await db.segment.findFirst({
-				where: { id: body.id, orgId: org.id }
-			});
-			if (!existing) throw error(404, 'Segment not found');
-
-			const updated = await db.segment.update({
-				where: { id: body.id },
-				data: {
-					name,
-					// eslint-disable-next-line @typescript-eslint/no-explicit-any
-					filters: filters as any
-				}
-			});
-			return json({ segment: updated });
-		}
-
-		// Create new
-		const segment = await db.segment.create({
-			data: {
-				orgId: org.id,
+			const result = await serverMutation(api.segments.update, {
+				slug: params.slug,
+				segmentId: body.id,
 				name,
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				filters: filters as any,
-				createdBy: locals.user.id
-			}
-		});
-		return json({ segment }, { status: 201 });
+				filters
+			});
+			return json(result);
+		} else {
+			const result = await serverMutation(api.segments.create, {
+				slug: params.slug,
+				name,
+				filters
+			});
+			return json(result, { status: 201 });
+		}
 	}
 
+	// TODO: migrate bulk tag operations to Convex
 	if (action === 'apply_tag' || action === 'remove_tag') {
 		requireRole(membership.role, 'editor');
 
@@ -194,7 +133,6 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		}
 
 		if (action === 'apply_tag') {
-			// Batch upsert — skip duplicates via the unique constraint
 			await db.supporterTag.createMany({
 				data: supporters.map((s) => ({ supporterId: s.id, tagId })),
 				skipDuplicates: true
@@ -212,6 +150,7 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		return json({ affected: supporters.length });
 	}
 
+	// TODO: migrate export_csv to Convex
 	if (action === 'export_csv') {
 		requireRole(membership.role, 'editor');
 		const filters = body.filters as SegmentFilter;
@@ -272,28 +211,9 @@ export const DELETE: RequestHandler = async ({ url, params, locals }) => {
 	const segmentId = url.searchParams.get('id');
 	if (!segmentId) throw error(400, 'Missing segment id');
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			await serverMutation(api.segments.remove, {
-				slug: params.slug,
-				segmentId
-			});
-			return json({ ok: true });
-		} catch (err) {
-			console.error('[Segments.DELETE] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
-	const existing = await db.segment.findFirst({
-		where: { id: segmentId, orgId: org.id }
+	await serverMutation(api.segments.remove, {
+		slug: params.slug,
+		segmentId
 	});
-	if (!existing) throw error(404, 'Segment not found');
-
-	await db.segment.delete({ where: { id: segmentId } });
 	return json({ ok: true });
 };

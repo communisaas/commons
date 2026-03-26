@@ -1,6 +1,7 @@
 /**
  * GET /api/v1/networks/[id]/stats — Coalition stats
  */
+// CONVEX: Keep SvelteKit — uses getNetworkStats which aggregates across multiple server modules
 
 import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';

@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Wallet Status Endpoint
  *
  * GET /api/wallet/status

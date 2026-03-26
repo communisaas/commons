@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Shadow Atlas Engagement Endpoint (Tree 3)
  *
  * Registers a user's identity in the engagement tree, fetches their Merkle

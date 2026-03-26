@@ -3,12 +3,13 @@
  * POST /api/v1/campaigns — Create a new campaign.
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { VALID_JURISDICTIONS, VALID_COUNTRY_CODES } from '$lib/server/geographic/types';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { JurisdictionType, CountryCode } from '$lib/server/geographic/types';
 import type { RequestHandler } from './$types';
 
@@ -23,70 +24,37 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	if (scopeErr) return scopeErr;
 
 	const { cursor, limit } = parsePagination(url);
-
-	const where: Record<string, unknown> = { orgId: auth.orgId };
-
 	const status = url.searchParams.get('status');
-	if (status && ['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETE'].includes(status)) {
-		where.status = status;
-	}
-
 	const type = url.searchParams.get('type');
-	if (type && ['LETTER', 'EVENT', 'FORM'].includes(type)) {
-		where.type = type;
-	}
 
-	const findArgs: Record<string, unknown> = {
-		where,
-		take: limit + 1,
-		orderBy: { createdAt: 'desc' as const },
-		include: {
-			_count: {
-				select: {
-					actions: true,
-					deliveries: true
-				}
-			}
-		}
-	};
-
-	if (cursor) {
-		findArgs.cursor = { id: cursor };
-		findArgs.skip = 1;
-	}
-
-	const [raw, total] = await Promise.all([
-		db.campaign.findMany(findArgs as Parameters<typeof db.campaign.findMany>[0]),
-		db.campaign.count({ where })
-	]);
-
-	const hasMore = raw.length > limit;
-	const items = raw.slice(0, limit);
-	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
-
-	const data = items.map((c) => {
-		const campaign = c as typeof c & { _count: { actions: number; deliveries: number } };
-		return {
-			id: campaign.id,
-			type: campaign.type,
-			title: campaign.title,
-			body: campaign.body,
-			status: campaign.status,
-			templateId: campaign.templateId,
-			debateEnabled: campaign.debateEnabled,
-			debateThreshold: campaign.debateThreshold,
-			targetJurisdiction: campaign.targetJurisdiction,
-			targetCountry: campaign.targetCountry,
-			createdAt: campaign.createdAt.toISOString(),
-			updatedAt: campaign.updatedAt.toISOString(),
-			counts: {
-				actions: campaign._count.actions,
-				deliveries: campaign._count.deliveries
-			}
-		};
+	const result = await serverQuery(api.v1api.listCampaigns, {
+		orgId: auth.orgId,
+		limit,
+		cursor: cursor ?? undefined,
+		status: status && ['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETE'].includes(status) ? status : undefined,
+		type: type && ['LETTER', 'EVENT', 'FORM'].includes(type) ? type : undefined
 	});
 
-	return apiOk(data, { cursor: nextCursor, hasMore, total });
+	const data = result.items.map((c: any) => ({
+		id: c._id,
+		type: c.type,
+		title: c.title,
+		body: c.body,
+		status: c.status,
+		templateId: c.templateId,
+		debateEnabled: c.debateEnabled,
+		debateThreshold: c.debateThreshold,
+		targetJurisdiction: c.targetJurisdiction,
+		targetCountry: c.targetCountry,
+		createdAt: new Date(c._creationTime).toISOString(),
+		updatedAt: new Date(c.updatedAt).toISOString(),
+		counts: {
+			actions: c._count.actions,
+			deliveries: c._count.deliveries
+		}
+	}));
+
+	return apiOk(data, { cursor: result.cursor, hasMore: result.hasMore, total: result.total });
 };
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -107,37 +75,19 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const { title, type, body: campaignBody, templateId, targetJurisdiction, targetCountry } = body as {
-		title?: string;
-		type?: string;
-		body?: string;
-		templateId?: string;
-		targetJurisdiction?: string;
-		targetCountry?: string;
+		title?: string; type?: string; body?: string; templateId?: string; targetJurisdiction?: string; targetCountry?: string;
 	};
 
 	if (!title || typeof title !== 'string' || !title.trim()) {
 		return apiError('BAD_REQUEST', 'Title is required', 400);
 	}
-	if (title.length > 200) {
-		return apiError('BAD_REQUEST', 'Title must be 200 characters or fewer', 400);
-	}
+	if (title.length > 200) return apiError('BAD_REQUEST', 'Title must be 200 characters or fewer', 400);
 	if (campaignBody && typeof campaignBody === 'string' && campaignBody.length > 50000) {
 		return apiError('BAD_REQUEST', 'Body must be 50,000 characters or fewer', 400);
 	}
-
 	if (!type || !['LETTER', 'EVENT', 'FORM'].includes(type)) {
 		return apiError('BAD_REQUEST', 'Type must be one of: LETTER, EVENT, FORM', 400);
 	}
-
-	if (templateId) {
-		const template = await db.template.findFirst({
-			where: { id: templateId, orgId: auth.orgId }
-		});
-		if (!template) {
-			return apiError('BAD_REQUEST', 'Invalid template selection', 400);
-		}
-	}
-
 	if (targetJurisdiction && !VALID_JURISDICTIONS.includes(targetJurisdiction as JurisdictionType)) {
 		return apiError('BAD_REQUEST', `Invalid jurisdiction: ${targetJurisdiction}`, 400);
 	}
@@ -145,31 +95,28 @@ export const POST: RequestHandler = async ({ request }) => {
 		return apiError('BAD_REQUEST', `Invalid country code: ${targetCountry}`, 400);
 	}
 
-	const campaign = await db.campaign.create({
-		data: {
-			orgId: auth.orgId,
-			title: title.trim(),
-			type,
-			body: campaignBody?.trim() || null,
-			templateId: templateId || null,
-			targetJurisdiction: targetJurisdiction || null,
-			targetCountry: targetCountry?.toUpperCase() || 'US',
-			status: 'DRAFT'
-		}
+	const campaign = await serverMutation(api.v1api.createCampaign, {
+		orgId: auth.orgId,
+		title: title.trim(),
+		type,
+		body: campaignBody?.trim() || undefined,
+		templateId: templateId || undefined,
+		targetJurisdiction: targetJurisdiction || undefined,
+		targetCountry: targetCountry?.toUpperCase() || 'US'
 	});
 
 	return apiOk(
 		{
-			id: campaign.id,
-			type: campaign.type,
-			title: campaign.title,
-			body: campaign.body,
-			status: campaign.status,
-			templateId: campaign.templateId,
-			targetJurisdiction: campaign.targetJurisdiction,
-			targetCountry: campaign.targetCountry,
-			createdAt: campaign.createdAt.toISOString(),
-			updatedAt: campaign.updatedAt.toISOString()
+			id: campaign!._id,
+			type: campaign!.type,
+			title: campaign!.title,
+			body: campaign!.body,
+			status: campaign!.status,
+			templateId: campaign!.templateId,
+			targetJurisdiction: campaign!.targetJurisdiction,
+			targetCountry: campaign!.targetCountry,
+			createdAt: new Date(campaign!._creationTime).toISOString(),
+			updatedAt: new Date(campaign!.updatedAt).toISOString()
 		},
 		undefined,
 		201

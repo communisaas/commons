@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Wallet Disconnect Endpoint
  *
  * Unbinds the EVM wallet from the authenticated user's account by clearing

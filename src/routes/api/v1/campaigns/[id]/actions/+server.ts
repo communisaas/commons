@@ -2,11 +2,12 @@
  * GET /api/v1/campaigns/:campaignId/actions — List campaign actions with cursor pagination.
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, params, url }) => {
@@ -18,46 +19,29 @@ export const GET: RequestHandler = async ({ request, params, url }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	// Verify campaign belongs to this org
-	const campaign = await db.campaign.findFirst({
-		where: { id: params.id, orgId: auth.orgId },
-		select: { id: true }
-	});
-	if (!campaign) return apiError('NOT_FOUND', 'Campaign not found', 404);
-
 	const { cursor, limit } = parsePagination(url);
-	const where: Record<string, unknown> = { campaignId: params.id };
-
 	const verified = url.searchParams.get('verified');
-	if (verified === 'true') where.verified = true;
-	else if (verified === 'false') where.verified = false;
 
-	const findArgs: Record<string, unknown> = {
-		where,
-		take: limit + 1,
-		orderBy: { createdAt: 'desc' as const }
-	};
-	if (cursor) { findArgs.cursor = { id: cursor }; findArgs.skip = 1; }
+	const result = await serverQuery(api.v1api.listCampaignActions, {
+		campaignId: params.id,
+		orgId: auth.orgId,
+		limit,
+		cursor: cursor ?? undefined,
+		verified: verified === 'true' ? true : verified === 'false' ? false : undefined
+	});
 
-	const [raw, total] = await Promise.all([
-		db.campaignAction.findMany(findArgs as Parameters<typeof db.campaignAction.findMany>[0]),
-		db.campaignAction.count({ where })
-	]);
+	if (!result) return apiError('NOT_FOUND', 'Campaign not found', 404);
 
-	const hasMore = raw.length > limit;
-	const items = raw.slice(0, limit);
-	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
-
-	const data = items.map((a) => ({
-		id: a.id,
+	const data = result.items.map((a: any) => ({
+		id: a._id,
 		campaignId: a.campaignId,
 		supporterId: a.supporterId,
 		verified: a.verified,
 		engagementTier: a.engagementTier,
 		districtHash: a.districtHash,
-		sentAt: a.sentAt.toISOString(),
-		createdAt: a.createdAt.toISOString()
+		sentAt: new Date(a.sentAt).toISOString(),
+		createdAt: new Date(a._creationTime).toISOString()
 	}));
 
-	return apiOk(data, { cursor: nextCursor, hasMore, total });
+	return apiOk(data, { cursor: result.cursor, hasMore: result.hasMore, total: result.total });
 };

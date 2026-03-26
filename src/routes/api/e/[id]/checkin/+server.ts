@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * POST /api/e/[id]/checkin — Attendance check-in
  */
 

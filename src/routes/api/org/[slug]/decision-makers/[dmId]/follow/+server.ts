@@ -1,8 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
-import { loadOrgContext, requireRole } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
@@ -14,199 +11,46 @@ import type { RequestHandler } from './$types';
  */
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
-	if (!FEATURES.LEGISLATION) {
-		throw error(404, 'Legislation features not enabled');
-	}
-
-	if (!locals.user) {
-		throw error(401, 'Authentication required');
-	}
+	if (!FEATURES.LEGISLATION) throw error(404, 'Legislation features not enabled');
+	if (!locals.user) throw error(401, 'Authentication required');
 
 	const body = await request.json().catch(() => ({}));
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			const result = await serverMutation(api.legislation.followDm, {
-				slug: params.slug,
-				decisionMakerId: params.dmId as any,
-				reason: typeof body.reason === 'string' ? body.reason.slice(0, 100) : 'manual',
-				note: typeof body.note === 'string' ? body.note.slice(0, 1000) : undefined,
-				alertsEnabled: typeof body.alertsEnabled === 'boolean' ? body.alertsEnabled : true
-			});
-			return json(result, { status: result.created ? 201 : 200 });
-		} catch (err) {
-			console.error('[DmFollow.POST] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
-	// Verify decision-maker exists
-	const dm = await db.decisionMaker.findUnique({
-		where: { id: params.dmId },
-		select: { id: true }
+	const result = await serverMutation(api.legislation.followDm, {
+		slug: params.slug,
+		decisionMakerId: params.dmId as any,
+		reason: typeof body.reason === 'string' ? body.reason.slice(0, 100) : 'manual',
+		note: typeof body.note === 'string' ? body.note.slice(0, 1000) : undefined,
+		alertsEnabled: typeof body.alertsEnabled === 'boolean' ? body.alertsEnabled : true
 	});
-
-	if (!dm) {
-		throw error(404, 'Decision-maker not found');
-	}
-
-	const VALID_REASONS = ['manual', 'research', 'constituent', 'coalition'];
-	const rawReason = typeof body.reason === 'string' ? body.reason.slice(0, 100) : 'manual';
-	const reason = VALID_REASONS.includes(rawReason) ? rawReason : 'manual';
-	const note = typeof body.note === 'string' ? body.note.slice(0, 1000) : null;
-	const alertsEnabled = typeof body.alertsEnabled === 'boolean' ? body.alertsEnabled : true;
-
-	// Check if already following — return 200 if so, create and return 201 if not
-	const existing = await db.orgDMFollow.findUnique({
-		where: {
-			orgId_decisionMakerId: {
-				orgId: org.id,
-				decisionMakerId: params.dmId
-			}
-		}
-	});
-
-	if (existing) {
-		return json({
-			id: existing.id,
-			orgId: existing.orgId,
-			decisionMakerId: existing.decisionMakerId,
-			reason: existing.reason,
-			note: existing.note,
-			alertsEnabled: existing.alertsEnabled,
-			followedBy: existing.followedBy,
-			followedAt: existing.followedAt.toISOString(),
-			created: false
-		});
-	}
-
-	const follow = await db.orgDMFollow.create({
-		data: {
-			orgId: org.id,
-			decisionMakerId: params.dmId,
-			reason,
-			note,
-			alertsEnabled,
-			followedBy: locals.user.id
-		}
-	});
-
-	return json({
-		id: follow.id,
-		orgId: follow.orgId,
-		decisionMakerId: follow.decisionMakerId,
-		reason: follow.reason,
-		note: follow.note,
-		alertsEnabled: follow.alertsEnabled,
-		followedBy: follow.followedBy,
-		followedAt: follow.followedAt.toISOString(),
-		created: true
-	}, { status: 201 });
+	return json(result, { status: result.created ? 201 : 200 });
 };
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
-	if (!FEATURES.LEGISLATION) {
-		throw error(404, 'Legislation features not enabled');
-	}
-
-	if (!locals.user) {
-		throw error(401, 'Authentication required');
-	}
+	if (!FEATURES.LEGISLATION) throw error(404, 'Legislation features not enabled');
+	if (!locals.user) throw error(401, 'Authentication required');
 
 	const body = await request.json().catch(() => null);
 	if (!body || typeof body !== 'object') {
 		throw error(400, 'Invalid JSON body');
 	}
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			const result = await serverMutation(api.legislation.updateDmFollow, {
-				slug: params.slug,
-				decisionMakerId: params.dmId as any,
-				alertsEnabled: typeof body.alertsEnabled === 'boolean' ? body.alertsEnabled : undefined,
-				note: typeof body.note === 'string' ? body.note.slice(0, 1000) : undefined
-			});
-			return json(result);
-		} catch (err) {
-			console.error('[DmFollow.PATCH] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
-	const existing = await db.orgDMFollow.findUnique({
-		where: {
-			orgId_decisionMakerId: {
-				orgId: org.id,
-				decisionMakerId: params.dmId
-			}
-		}
+	const result = await serverMutation(api.legislation.updateDmFollow, {
+		slug: params.slug,
+		decisionMakerId: params.dmId as any,
+		alertsEnabled: typeof body.alertsEnabled === 'boolean' ? body.alertsEnabled : undefined,
+		note: typeof body.note === 'string' ? body.note.slice(0, 1000) : undefined
 	});
-
-	if (!existing) {
-		throw error(404, 'Not following this decision-maker');
-	}
-
-	const data: Record<string, unknown> = {};
-	if (typeof body.alertsEnabled === 'boolean') data.alertsEnabled = body.alertsEnabled;
-	if (typeof body.note === 'string') data.note = body.note.slice(0, 1000);
-
-	const updated = await db.orgDMFollow.update({
-		where: { id: existing.id },
-		data
-	});
-
-	return json({
-		id: updated.id,
-		orgId: updated.orgId,
-		decisionMakerId: updated.decisionMakerId,
-		reason: updated.reason,
-		note: updated.note,
-		alertsEnabled: updated.alertsEnabled,
-		followedBy: updated.followedBy,
-		followedAt: updated.followedAt.toISOString()
-	});
+	return json(result);
 };
 
 export const DELETE: RequestHandler = async ({ params, locals }) => {
-	if (!FEATURES.LEGISLATION) {
-		throw error(404, 'Legislation features not enabled');
-	}
+	if (!FEATURES.LEGISLATION) throw error(404, 'Legislation features not enabled');
+	if (!locals.user) throw error(401, 'Authentication required');
 
-	if (!locals.user) {
-		throw error(401, 'Authentication required');
-	}
-
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
-			const result = await serverMutation(api.legislation.unfollowDm, {
-				slug: params.slug,
-				decisionMakerId: params.dmId as any
-			});
-			return json(result);
-		} catch (err) {
-			console.error('[DmFollow.DELETE] Convex failed, falling back to Prisma:', err);
-		}
-	}
-
-	// ─── PRISMA FALLBACK ───
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
-	await db.orgDMFollow.deleteMany({
-		where: {
-			orgId: org.id,
-			decisionMakerId: params.dmId
-		}
+	const result = await serverMutation(api.legislation.unfollowDm, {
+		slug: params.slug,
+		decisionMakerId: params.dmId as any
 	});
-
-	return json({ success: true });
+	return json(result);
 };

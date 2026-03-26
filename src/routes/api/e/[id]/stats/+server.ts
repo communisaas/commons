@@ -3,35 +3,16 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
 
-	const event = await db.event.findUnique({
-		where: { id: params.id },
-		select: {
-			rsvpCount: true,
-			attendeeCount: true,
-			verifiedAttendees: true
-		}
-	});
+	const result = await serverQuery(api.v1api.getEventStats, { eventId: params.id });
+	if (!result) throw error(404, 'Event not found');
 
-	if (!event) throw error(404, 'Event not found');
-
-	// Get breakdown of RSVP statuses
-	const [goingCount, maybeCount] = await Promise.all([
-		db.eventRsvp.count({ where: { eventId: params.id, status: 'GOING' } }),
-		db.eventRsvp.count({ where: { eventId: params.id, status: 'MAYBE' } })
-	]);
-
-	return json({
-		rsvpCount: event.rsvpCount,
-		attendeeCount: event.attendeeCount,
-		verifiedAttendees: event.verifiedAttendees,
-		goingCount,
-		maybeCount
-	});
+	return json(result);
 };

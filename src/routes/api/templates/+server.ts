@@ -18,7 +18,6 @@ import { z } from 'zod';
 import { createHash } from 'crypto';
 import { getMonthlyTemplateCount } from '$lib/server/billing/usage';
 import { captureWithContext } from '$lib/server/monitoring/sentry';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 // CONVEX: POST is Keep SvelteKit — calls moderateTemplate (Groq), generateBatchEmbeddings (Gemini),
@@ -182,19 +181,11 @@ function validateTemplateData(data: unknown): {
 }
 
 export const GET: RequestHandler = async () => {
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
 			const templates = await serverQuery(api.templates.listPublic, {});
 			const response: StructuredApiResponse = { success: true, data: templates };
 			return json(response);
-		} catch (err) {
-			console.error('[Templates.GET] Convex failed, falling back to Prisma:', err);
-		}
 	}
 
-	// ─── PRISMA FALLBACK ───
-	try {
 		const dbTemplates = await db.template.findMany({
 			where: { is_public: true },
 			orderBy: { createdAt: 'desc' },
@@ -257,7 +248,6 @@ export const GET: RequestHandler = async () => {
 			// Extract metrics from JSON field with validation
 			let jsonMetrics = {};
 			if (typeof template.metrics === 'string') {
-				try {
 					const parsed = JSON.parse(template.metrics);
 					const result = MetricsSchema.safeParse(parsed);
 					if (result.success) {
@@ -399,10 +389,8 @@ export const GET: RequestHandler = async () => {
 };
 
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
-	try {
 		// Parse request body
 		let requestData: unknown;
-		try {
 			requestData = await request.json();
 		} catch (error) {
 			const response: StructuredApiResponse = {
@@ -444,7 +432,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		//   - Policy relevance, professionalism, congressional appropriateness
 		let consensusResult;
 
-		try {
 			const moderationResult = await moderateTemplate({
 				title: validData.title,
 				message_body: validData.message_body
@@ -547,7 +534,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			});
 
 			// Authenticated user - save to database
-			try {
 				// Content-addressable identity: same author + same content = same template
 				const hash = contentHash(validData.title, validData.message_body);
 
@@ -748,7 +734,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					// Without it, the serverless function may terminate before Gemini returns.
 					const deferredWork = (async () => {
 						if (isCwc) {
-							try {
 								await db.template.update({
 									where: { id: templateId },
 									data: {
@@ -764,7 +749,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						}
 
 						if (isPublic) {
-							try {
 								const locationText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.category}`;
 								const topicText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.message_body}`;
 

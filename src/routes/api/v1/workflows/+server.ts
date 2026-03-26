@@ -2,12 +2,13 @@
  * GET /api/v1/workflows — List workflows for org (API key determines org)
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, url }) => {
@@ -22,43 +23,25 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	if (scopeErr) return scopeErr;
 
 	const { cursor, limit } = parsePagination(url);
-
-	const where: Record<string, unknown> = { orgId: auth.orgId };
-
 	const enabledFilter = url.searchParams.get('enabled');
-	if (enabledFilter === 'true') where.enabled = true;
-	if (enabledFilter === 'false') where.enabled = false;
 
-	const findArgs: Record<string, unknown> = {
-		where,
-		take: limit + 1,
-		orderBy: { createdAt: 'desc' as const }
-	};
+	const result = await serverQuery(api.v1api.listWorkflowsV1, {
+		orgId: auth.orgId,
+		limit,
+		cursor: cursor ?? undefined,
+		enabled: enabledFilter === 'true' ? true : enabledFilter === 'false' ? false : undefined
+	});
 
-	if (cursor) {
-		findArgs.cursor = { id: cursor };
-		findArgs.skip = 1;
-	}
-
-	const [raw, total] = await Promise.all([
-		db.workflow.findMany(findArgs as Parameters<typeof db.workflow.findMany>[0]),
-		db.workflow.count({ where })
-	]);
-
-	const hasMore = raw.length > limit;
-	const items = raw.slice(0, limit);
-	const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
-
-	const data = items.map((w) => ({
-		id: w.id,
+	const data = result.items.map((w: any) => ({
+		id: w._id,
 		name: w.name,
 		description: w.description,
 		trigger: w.trigger,
 		stepCount: Array.isArray(w.steps) ? w.steps.length : 0,
 		enabled: w.enabled,
-		createdAt: w.createdAt.toISOString(),
-		updatedAt: w.updatedAt.toISOString()
+		createdAt: new Date(w._creationTime).toISOString(),
+		updatedAt: new Date(w.updatedAt).toISOString()
 	}));
 
-	return apiOk(data, { cursor: nextCursor, hasMore, total });
+	return apiOk(data, { cursor: result.cursor, hasMore: result.hasMore, total: result.total });
 };

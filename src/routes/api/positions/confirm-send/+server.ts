@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Mailto Send Confirmation Endpoint — Tier 2 Delivery Tracking
  *
  * POST: Record that user confirmed sending a mailto message.

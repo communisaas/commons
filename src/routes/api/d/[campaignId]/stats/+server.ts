@@ -3,29 +3,16 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params }) => {
 	if (!FEATURES.FUNDRAISING) throw error(404, 'Not found');
 
-	const campaign = await db.campaign.findUnique({
-		where: { id: params.campaignId },
-		select: {
-			raisedAmountCents: true,
-			donorCount: true,
-			goalAmountCents: true,
-			donationCurrency: true
-		}
-	});
+	const result = await serverQuery(api.v1api.getCampaignStats, { campaignId: params.campaignId });
+	if (!result) throw error(404, 'Campaign not found');
 
-	if (!campaign) throw error(404, 'Campaign not found');
-
-	return json({
-		raisedAmountCents: campaign.raisedAmountCents,
-		donorCount: campaign.donorCount,
-		goalAmountCents: campaign.goalAmountCents,
-		currency: campaign.donationCurrency
-	});
+	return json(result);
 };

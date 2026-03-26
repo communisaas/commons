@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Stripe webhook handler.
  *
  * Security:

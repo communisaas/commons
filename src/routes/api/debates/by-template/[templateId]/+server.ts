@@ -2,7 +2,6 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
@@ -25,19 +24,12 @@ export const GET: RequestHandler = async ({ params }) => {
 		throw error(400, 'templateId is required');
 	}
 
-	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
-	if (PUBLIC_CONVEX_URL) {
-		try {
 			const result = await serverQuery(api.debates.getFullByTemplateId, {
 				templateId: templateId as any
 			});
 			return json({ debate: result ?? null });
-		} catch (err) {
-			console.error('[Debates.byTemplate.GET] Convex failed, falling back to Prisma:', err);
-		}
 	}
 
-	// ─── PRISMA FALLBACK ───
 	// Verify template exists
 	const template = await prisma.template.findUnique({
 		where: { id: templateId },

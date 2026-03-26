@@ -2,13 +2,14 @@
  * GET /api/v1/donations/[id] — Single donation detail
  */
 
-import { db } from '$lib/core/db';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { maskEmail } from '$lib/server/org/mask';
 import { FEATURES } from '$lib/config/features';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params, request }) => {
@@ -22,14 +23,11 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const donation = await db.donation.findFirst({
-		where: { id: params.id, orgId: auth.orgId }
-	});
-
+	const donation = await serverQuery(api.v1api.getDonationById, { donationId: params.id, orgId: auth.orgId });
 	if (!donation) return apiError('NOT_FOUND', 'Donation not found', 404);
 
 	return apiOk({
-		id: donation.id,
+		id: donation._id,
 		campaignId: donation.campaignId,
 		email: maskEmail(donation.email),
 		name: donation.name,
@@ -40,7 +38,7 @@ export const GET: RequestHandler = async ({ params, request }) => {
 		status: donation.status,
 		engagementTier: donation.engagementTier,
 		districtHash: donation.districtHash,
-		completedAt: donation.completedAt?.toISOString() ?? null,
-		createdAt: donation.createdAt.toISOString()
+		completedAt: donation.completedAt ? new Date(donation.completedAt).toISOString() : null,
+		createdAt: new Date(donation._creationTime).toISOString()
 	});
 };

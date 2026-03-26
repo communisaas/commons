@@ -1,4 +1,5 @@
 /**
+// CONVEX: Keep SvelteKit
  * Streaming Message Generation API — Two-Phase Source Verification
  *
  * POST /api/agents/stream-message
