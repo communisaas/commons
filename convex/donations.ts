@@ -317,7 +317,8 @@ export const processCheckout = action({
   },
   handler: async (ctx, args) => {
     // Rate limit: 5 checkouts per minute per campaign (Stripe cost)
-    const rlKey = `donations.processCheckout:${args.campaignId}`;
+    // Rate limit per email+campaign (not shared across all users)
+    const rlKey = `donations.processCheckout:${args.campaignId}:${args.email?.slice(0, 10) ?? 'anon'}`;
     const rl = await ctx.runMutation(internal._rateLimit.check, {
       key: rlKey,
       windowMs: 60_000,

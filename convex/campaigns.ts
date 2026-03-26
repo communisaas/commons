@@ -807,7 +807,8 @@ export const submitAction = action({
   },
   handler: async (ctx, args) => {
     // Rate limit: 10 actions per minute per campaign (spam prevention)
-    const rlKey = `campaigns.submitAction:${args.campaignId}`;
+    // Rate limit per email+campaign (not shared across all users)
+    const rlKey = `campaigns.submitAction:${args.campaignId}:${args.email?.slice(0, 10) ?? 'anon'}`;
     const rl = await ctx.runMutation(internal._rateLimit.check, {
       key: rlKey,
       windowMs: 60_000,

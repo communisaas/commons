@@ -411,7 +411,8 @@ export const createRsvp = action({
   },
   handler: async (ctx, args) => {
     // Rate limit: 10 RSVPs per minute per event (spam prevention)
-    const rlKey = `events.createRsvp:${args.eventId}`;
+    // Rate limit per email+event (not shared across all users)
+    const rlKey = `events.createRsvp:${args.eventId}:${args.email?.slice(0, 10) ?? 'anon'}`;
     const rl = await ctx.runMutation(internal._rateLimit.check, {
       key: rlKey,
       windowMs: 60_000,

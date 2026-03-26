@@ -403,7 +403,9 @@ export const search = action({
   },
   handler: async (ctx, args) => {
     // Rate limit: 30 searches per minute per IP/session (Gemini API cost)
-    const rlKey = `templates.search:${args.query.slice(0, 20)}`;
+    // Rate limit per user (authenticated search)
+    const identity = await ctx.auth.getUserIdentity();
+    const rlKey = `templates.search:${identity?.subject ?? 'anon'}:${args.query.slice(0, 20)}`;
     const rl = await ctx.runMutation(internal._rateLimit.check, {
       key: rlKey,
       windowMs: 60_000,
