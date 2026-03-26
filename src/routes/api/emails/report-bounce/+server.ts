@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — SMTP probe triage pipeline (reportBounce), bounce dedup,
+// trust tier gate, per-user report cap. No matching Convex function.
 /**
  * Bounce Report Endpoint
  *

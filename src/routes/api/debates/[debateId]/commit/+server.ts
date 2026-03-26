@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — calls blockchain (commitTrade). On-chain LMSR market operation.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';

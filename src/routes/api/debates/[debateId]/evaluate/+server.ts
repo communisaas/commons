@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — calls external AI evaluator + blockchain (escalateToGovernance,
+// readChainResolution, submitAndResolve). Uses $env/dynamic/private, CRON_SECRET auth.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';

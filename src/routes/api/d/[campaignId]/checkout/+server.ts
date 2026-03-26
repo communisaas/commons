@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — Stripe session creation (getStripe, stripe.checkout.sessions.create),
+// PII encryption (computeEmailHash, encryptPii), rate limiting, supporter find-or-create.
 /**
  * POST /api/d/[campaignId]/checkout — Create Stripe Checkout Session for donation
  */

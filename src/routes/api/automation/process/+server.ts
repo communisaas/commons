@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — server-secret auth (AUTOMATION_SECRET via timingSafeEqual),
+// processScheduledWorkflows calls complex Prisma workflow engine.
 /**
  * POST /api/automation/process — Process scheduled workflows
  *

@@ -2,6 +2,9 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 /**
  * GET /api/debates/[debateId]/ai-resolution
@@ -17,6 +20,34 @@ export const GET: RequestHandler = async ({ params }) => {
 
 	const { debateId } = params;
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const debate = await serverQuery(api.debates.get, {
+				debateId: debateId as any
+			});
+			if (!debate.aiResolution && !debate.aiSignatureCount) {
+				return json({ aiResolution: null });
+			}
+			return json({
+				aiResolution: {
+					...(debate.aiResolution as Record<string, unknown> ?? {}),
+					signatureCount: debate.aiSignatureCount,
+					panelConsensus: debate.aiPanelConsensus,
+					resolutionMethod: debate.resolutionMethod,
+					appealDeadline: debate.appealDeadline ? new Date(debate.appealDeadline).toISOString() : null,
+					governanceJustification: debate.governanceJustification,
+					winningArgumentIndex: debate.winningArgumentIndex,
+					winningStance: debate.winningStance,
+					resolvedAt: debate.resolvedAt ? new Date(debate.resolvedAt).toISOString() : null
+				}
+			});
+		} catch (err) {
+			console.error('[Debates.aiResolution.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const debate = await prisma.debate.findUnique({
 		where: { id: debateId },
 		select: {

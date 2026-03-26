@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — proxies to shadow-atlas external service via raw fetch.
 import { json, error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';

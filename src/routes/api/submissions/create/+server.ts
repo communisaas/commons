@@ -1,3 +1,6 @@
+// CONVEX: Keep SvelteKit — complex pipeline: credential TTL validation, blockchain verification
+// (verifyOnChain), TEE delivery (processSubmissionDelivery), engagement registration,
+// Prisma $transaction with idempotency. Convex equivalent: submissions.create (simplified).
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma, getRequestClient } from '$lib/core/db';

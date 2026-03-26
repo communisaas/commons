@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — Stripe portal session creation (getStripe,
+// stripe.billingPortal.sessions.create), org billing context.
 /**
  * Create a Stripe Customer Portal session.
  *

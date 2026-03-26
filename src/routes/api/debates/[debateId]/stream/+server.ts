@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — SSE streaming with shadow-atlas proxy + Prisma polling.
+// Cannot move to Convex: uses createSSEStream, ReadableStream piping, setInterval polling.
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
 import { env } from '$env/dynamic/private';
 import { prisma } from '$lib/core/db';

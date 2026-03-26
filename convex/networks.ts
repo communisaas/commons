@@ -316,7 +316,7 @@ export const updateMemberStatus = mutation({
   args: {
     orgSlug: v.string(),
     networkId: v.id("orgNetworks"),
-    targetOrgId: v.id("organizations"),
+    targetOrgId: v.optional(v.id("organizations")),
     status: v.string(),
   },
   handler: async (ctx, args) => {
@@ -327,8 +327,9 @@ export const updateMemberStatus = mutation({
       throw new Error(`Invalid status: ${args.status}`);
     }
 
-    // If accepting/declining own invitation, the target org must match caller org
-    const isSelfAction = args.targetOrgId === org._id;
+    // If no targetOrgId provided, it's a self-action on the caller's org
+    const effectiveTargetOrgId = args.targetOrgId ?? org._id;
+    const isSelfAction = effectiveTargetOrgId === org._id;
 
     if (!isSelfAction) {
       // Modifying another org requires admin
@@ -351,7 +352,7 @@ export const updateMemberStatus = mutation({
     const membership = await ctx.db
       .query("orgNetworkMembers")
       .withIndex("by_networkId_orgId", (idx) =>
-        idx.eq("networkId", args.networkId).eq("orgId", args.targetOrgId),
+        idx.eq("networkId", args.networkId).eq("orgId", effectiveTargetOrgId),
       )
       .first();
 
@@ -372,6 +373,59 @@ export const updateMemberStatus = mutation({
 
     await ctx.db.patch(membership._id, { status: args.status });
     return { success: true };
+  },
+});
+
+/**
+ * Update network name/description. Requires admin role in the network.
+ */
+export const update = mutation({
+  args: {
+    orgSlug: v.string(),
+    networkId: v.id("orgNetworks"),
+    name: v.optional(v.string()),
+    description: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+
+    if (args.name === undefined && args.description === undefined) {
+      throw new Error("At least one field (name or description) is required");
+    }
+
+    // Verify caller is admin
+    const callerMembership = await ctx.db
+      .query("orgNetworkMembers")
+      .withIndex("by_networkId_orgId", (idx) =>
+        idx.eq("networkId", args.networkId).eq("orgId", org._id),
+      )
+      .first();
+
+    if (
+      !callerMembership ||
+      callerMembership.status !== "active" ||
+      callerMembership.role !== "admin"
+    ) {
+      throw new Error("Network admin role required");
+    }
+
+    const updates: Record<string, unknown> = { updatedAt: Date.now() };
+    if (args.name !== undefined) {
+      if (args.name.length < 3 || args.name.length > 100) {
+        throw new Error("Name must be 3-100 characters");
+      }
+      updates.name = args.name;
+    }
+    if (args.description !== undefined) updates.description = args.description;
+
+    await ctx.db.patch(args.networkId, updates);
+
+    const network = await ctx.db.get(args.networkId);
+    return {
+      _id: args.networkId,
+      name: network!.name,
+      description: network!.description ?? null,
+    };
   },
 });
 

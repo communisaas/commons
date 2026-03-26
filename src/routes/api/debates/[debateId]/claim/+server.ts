@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — calls blockchain (claimSettlement, settlePrivatePosition).
+// Settlement requires on-chain tx execution. Cannot move to Convex.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';

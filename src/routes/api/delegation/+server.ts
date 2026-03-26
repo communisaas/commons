@@ -4,6 +4,9 @@ import { prisma } from '$lib/core/db';
 import { encryptPii, decryptPii } from '$lib/core/crypto/user-pii-encryption';
 import type { EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery, serverAction } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 const MAX_ACTIVE_GRANTS = 3;
 const VALID_SCOPES = ['campaign_sign', 'debate_position', 'message_generate', 'full'] as const;
@@ -25,6 +28,17 @@ export const GET: RequestHandler = async ({ locals }) => {
 		throw error(403, 'Trust Tier 3+ required for delegation');
 	}
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.delegation.listGrants, {});
+			return json({ grants: result });
+		} catch (err) {
+			console.error('[Delegation.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const grants = await prisma.delegationGrant.findMany({
 		where: { userId: session.userId },
 		include: {
@@ -123,6 +137,26 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(400, 'Policy text must not exceed 5000 characters');
 	}
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverAction(api.delegation.createGrant, {
+				scope,
+				policyText: policyText.trim(),
+				issueFilter: issueFilter || undefined,
+				orgFilter: orgFilter || undefined,
+				stanceProfileId: stanceProfileId || undefined,
+				maxActionsPerDay: maxActionsPerDay ?? undefined,
+				requireReviewAbove: requireReviewAbove ?? undefined,
+				expiresAt: expiresAt ? new Date(expiresAt).getTime() : undefined
+			});
+			return json({ grant: result }, { status: 201 });
+		} catch (err) {
+			console.error('[Delegation.POST] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	// Check active grants limit
 	const activeCount = await prisma.delegationGrant.count({
 		where: {

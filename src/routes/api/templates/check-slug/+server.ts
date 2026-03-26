@@ -1,6 +1,9 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 // Helper to generate creative variations
 function generateSuggestions(baseSlug: string, title: string): string[] {
@@ -74,6 +77,24 @@ export const GET: RequestHandler = async ({ url }) => {
 			);
 		}
 
+		// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+		if (PUBLIC_CONVEX_URL) {
+			try {
+				const template = await serverQuery(api.templates.getBySlug, { slug });
+				const available = !template;
+				let suggestions: string[] = [];
+				if (!available) {
+					const candidateSuggestions = generateSuggestions(slug, title);
+					// For Convex path, still check suggestions against Prisma (Convex has no slug-uniqueness check batch query)
+					suggestions = await getAvailableSuggestions(candidateSuggestions);
+				}
+				return json({ success: true, data: { available, suggestions } });
+			} catch (err) {
+				console.error('[CheckSlug.GET] Convex failed, falling back to Prisma:', err);
+			}
+		}
+
+		// ─── PRISMA FALLBACK ───
 		// Check if slug exists in database
 		const existingTemplate = await db.template.findUnique({
 			where: { slug },

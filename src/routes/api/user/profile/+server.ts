@@ -3,6 +3,9 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
 import { encryptPii } from '$lib/core/crypto/user-pii-encryption';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 // F-R8-02: Zod schema replaces unvalidated destructuring
 const ProfileSchema = z.object({
@@ -32,6 +35,29 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		const { role, organization, location, connection } = parsed;
 
+		// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+		if (PUBLIC_CONVEX_URL) {
+			try {
+				await serverMutation(api.users.updateProfile, {
+					role,
+					organization: organization || undefined,
+					location: location || undefined,
+					connection
+				});
+				return json({
+					success: true,
+					message: 'Profile saved successfully',
+					user: {
+						id: locals.user.id,
+						profileComplete: true
+					}
+				});
+			} catch (err) {
+				console.error('[UserProfile.POST] Convex failed, falling back to Prisma:', err);
+			}
+		}
+
+		// ─── PRISMA FALLBACK ───
 		// C-4: Encrypt profile blob at rest (fail-closed — no silent fallback)
 		const profileBlob = JSON.stringify({ role, organization: organization || null, location: location || null, connection });
 		const encProfileRaw = await encryptPii(profileBlob, locals.user.id, 'profile');
@@ -74,15 +100,43 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 export const GET: RequestHandler = async ({ locals }) => {
 	try {
-		// CVE-INTERNAL-004 FIX: Corrected parameter name from _locals to locals
-		// Ensure user is authenticated
 		if (!locals.user) {
 			return json({ error: 'Unauthorized' }, { status: 401 });
 		}
 
-		// Get user's profile information
-		// Note: PII fields (street, city, state, zip, phone) removed per privacy architecture
-		// Address data is encrypted in EncryptedDeliveryData, not stored on User
+		// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+		if (PUBLIC_CONVEX_URL) {
+			try {
+				const profile = await serverQuery(api.users.getProfile, {});
+				return json({
+					user: {
+						id: profile._id,
+						name: profile.name,
+						email: profile.email,
+						avatar: profile.avatar,
+						profile: {
+							role: profile.role,
+							organization: profile.organization,
+							location: profile.location,
+							connection: profile.connection,
+							completed_at: profile.profileCompletedAt,
+							visibility: profile.profileVisibility
+						},
+						verification: {
+							is_verified: profile.isVerified
+						},
+						timestamps: {
+							created_at: null,
+							updated_at: null
+						}
+					}
+				});
+			} catch (err) {
+				console.error('[UserProfile.GET] Convex failed, falling back to Prisma:', err);
+			}
+		}
+
+		// ─── PRISMA FALLBACK ───
 		const user = await db.user.findUnique({
 			where: { id: locals.user.id },
 			select: {

@@ -4,6 +4,8 @@ import { prisma } from '$lib/core/db';
 import { solidityPackedKeccak256 } from 'ethers';
 import { proposeDebate, deriveDomain } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
+// CONVEX: Keep SvelteKit — calls blockchain (proposeDebate, deriveDomain), solidityPackedKeccak256.
+// Convex equivalent: debates.spawnDebate (off-chain fallback only). Blockchain path must stay here.
 
 /**
  * POST /api/debates/create

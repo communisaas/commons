@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — calls blockchain (resolveDebateOnChain, readChainResolution).
+// Chain is authoritative for winner determination. Cannot move to Convex.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';

@@ -2,13 +2,15 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /**
  * GET /api/org/[slug]/bills/search
  *
- * Full-text search over bills using PostgreSQL tsvector.
- * Requires the `fts` generated column + GIN index on the bill table.
+ * Full-text search over bills using PostgreSQL tsvector (Prisma) or Convex search index.
  *
  * Query params:
  *   ?q=<search text>         (required)
@@ -25,8 +27,6 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!locals.user) {
 		throw error(401, 'Authentication required');
 	}
-
-	await loadOrgContext(params.slug, locals.user.id);
 
 	const q = url.searchParams.get('q')?.trim();
 	if (!q) {
@@ -45,6 +45,25 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (status && !validStatuses.includes(status)) {
 		throw error(400, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
 	}
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.legislation.searchBills, {
+				slug: params.slug,
+				q,
+				jurisdiction: jurisdiction ?? undefined,
+				status: status ?? undefined,
+				limit
+			});
+			return json({ ...result, limit, offset });
+		} catch (err) {
+			console.error('[BillSearch.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	await loadOrgContext(params.slug, locals.user.id);
 
 	// Build tsquery: split on whitespace, prefix-match each term, AND them together
 	const tsQuery = q

@@ -9,16 +9,13 @@ import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { VALID_COUNTRY_CODES } from '$lib/server/geographic/types';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
-
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'editor');
-
-	const meetsPlan = await orgMeetsPlan(org.id, 'organization');
-	if (!meetsPlan) throw error(403, 'International representatives require an Organization plan or higher');
 
 	const body = await request.json();
 	const { representatives } = body;
@@ -30,6 +27,37 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (representatives.length > 100) {
 		throw error(400, 'Maximum 100 representatives per request');
 	}
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverMutation(api.legislation.importRepresentatives, {
+				slug: params.slug,
+				representatives: representatives.map((r: any) => ({
+					countryCode: r.countryCode ?? '',
+					constituencyId: r.constituencyId ?? '',
+					constituencyName: r.constituencyName ?? '',
+					name: r.name ?? '',
+					party: r.party || undefined,
+					office: r.office || undefined,
+					phone: r.phone || undefined,
+					email: r.email || undefined,
+					websiteUrl: r.websiteUrl || undefined,
+					photoUrl: r.photoUrl || undefined
+				}))
+			});
+			return json({ success: true, data: result }, { status: 201 });
+		} catch (err) {
+			console.error('[Representatives.POST] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'editor');
+
+	const meetsPlan = await orgMeetsPlan(org.id, 'organization');
+	if (!meetsPlan) throw error(403, 'International representatives require an Organization plan or higher');
 
 	const SAFE_URL_RE = /^https?:\/\/.{1,2048}$/i;
 	const sanitizeUrl = (url: unknown): string | null => {
@@ -117,12 +145,37 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	await loadOrgContext(params.slug, locals.user.id);
-
 	const countryCode = url.searchParams.get('country');
 	const constituencyId = url.searchParams.get('constituency');
 	const cursor = url.searchParams.get('cursor');
 	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 100);
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.legislation.listRepresentatives, {
+				slug: params.slug,
+				country: countryCode ?? undefined,
+				constituency: constituencyId ?? undefined,
+				limit,
+				cursor: cursor ?? undefined
+			});
+			return json({
+				success: true,
+				data: result.data,
+				meta: {
+					count: result.data.length,
+					cursor: result.cursor ?? null,
+					hasMore: result.hasMore
+				}
+			});
+		} catch (err) {
+			console.error('[Representatives.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	await loadOrgContext(params.slug, locals.user.id);
 
 	const where: Record<string, unknown> = { jurisdictionLevel: 'international' };
 	if (countryCode) where.jurisdiction = countryCode;

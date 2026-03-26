@@ -18,6 +18,12 @@ import { z } from 'zod';
 import { createHash } from 'crypto';
 import { getMonthlyTemplateCount } from '$lib/server/billing/usage';
 import { captureWithContext } from '$lib/server/monitoring/sentry';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+// CONVEX: POST is Keep SvelteKit — calls moderateTemplate (Groq), generateBatchEmbeddings (Gemini),
+// CWC verification, content hashing, billing quota check. Too complex for Convex migration.
+// GET is dual-stacked below → templates.listPublic
 
 // Import GeoScope for agent-extracted geographic scope
 import type { GeoScope } from '$lib/core/agents/types';
@@ -176,6 +182,18 @@ function validateTemplateData(data: unknown): {
 }
 
 export const GET: RequestHandler = async () => {
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const templates = await serverQuery(api.templates.listPublic, {});
+			const response: StructuredApiResponse = { success: true, data: templates };
+			return json(response);
+		} catch (err) {
+			console.error('[Templates.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	try {
 		const dbTemplates = await db.template.findMany({
 			where: { is_public: true },

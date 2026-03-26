@@ -367,3 +367,65 @@ export const remove = mutation({
     return args.campaignId;
   },
 });
+
+/**
+ * Record a manual response from a decision-maker on a campaign delivery.
+ * Appends to the accountability receipt's responses array.
+ */
+export const recordResponse = mutation({
+  args: {
+    slug: v.string(),
+    campaignId: v.id("campaigns"),
+    deliveryId: v.string(),
+    type: v.string(), // 'replied' | 'meeting_requested' | 'vote_cast' | 'public_statement'
+    detail: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const VALID_TYPES = ["replied", "meeting_requested", "vote_cast", "public_statement"];
+    if (!VALID_TYPES.includes(args.type)) {
+      throw new Error(`type must be one of: ${VALID_TYPES.join(", ")}`);
+    }
+
+    // Verify campaign belongs to org
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.orgId !== org._id) {
+      throw new Error("Campaign not found");
+    }
+
+    // Find the delivery
+    const deliveries = await ctx.db
+      .query("campaignDeliveries")
+      .withIndex("by_campaignId", (q) => q.eq("campaignId", args.campaignId))
+      .collect();
+
+    const matchedDelivery = deliveries.find((d) => d._id === args.deliveryId);
+    if (!matchedDelivery) {
+      throw new Error("Delivery not found for this campaign");
+    }
+
+    // Find the accountability receipt for this delivery
+    const receipt = await ctx.db
+      .query("accountabilityReceipts")
+      .withIndex("by_deliveryId", (q) => q.eq("deliveryId", args.deliveryId))
+      .first();
+
+    if (receipt) {
+      // Append to responses array
+      const responses = receipt.responses ?? [];
+      responses.push({
+        type: args.type,
+        detail: args.detail?.trim()?.slice(0, 2000),
+        confidence: "reported",
+        occurredAt: Date.now(),
+      });
+
+      await ctx.db.patch(receipt._id, { responses, updatedAt: Date.now() });
+      return { receiptId: receipt._id };
+    }
+
+    // No receipt yet — record acknowledged
+    return { deliveryId: args.deliveryId, recorded: true };
+  },
+});

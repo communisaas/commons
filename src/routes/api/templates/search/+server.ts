@@ -2,6 +2,9 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/core/db';
 import { generateEmbedding } from '$lib/core/search/gemini-embeddings';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverAction } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 /**
  * Server-side semantic template search using pgvector HNSW index.
@@ -40,6 +43,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(400, 'Query too long (max 200 characters)');
 	}
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverAction(api.templates.search, {
+				query,
+				limit
+			});
+			return json(result);
+		} catch (err) {
+			console.error('[TemplateSearch.POST] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	// Attempt semantic search first, fall back to keyword
 	try {
 		const queryEmbedding = await generateEmbedding(query, { taskType: 'RETRIEVAL_QUERY' });

@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — Stripe session creation (getStripe, stripe.checkout.sessions.create,
+// stripe.customers.create), plan validation, org billing context.
 /**
  * Create a Stripe Checkout Session for plan subscription.
  *

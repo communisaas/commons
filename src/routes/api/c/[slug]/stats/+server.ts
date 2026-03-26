@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — aggregation queries (count, groupBy) not expressible
+// as single Convex query. Rate limited (IP-based). Cache-Control headers.
 import { json } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';

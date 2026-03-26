@@ -1,5 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /**
@@ -11,6 +14,42 @@ import type { RequestHandler } from './$types';
 export const GET: RequestHandler = async ({ params, url }) => {
 	const { id } = params;
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.legislation.getDmScorecard, {
+				dmId: id as any
+			});
+			if (!result) throw error(404, 'Decision-maker not found');
+
+			const baseUrl = `${url.protocol}//${url.host}`;
+			return json({
+				decisionMaker: {
+					id: result.decisionMaker._id,
+					name: result.decisionMaker.name,
+					title: result.decisionMaker.title,
+					party: result.decisionMaker.party,
+					district: result.decisionMaker.district
+				},
+				composite: result.current?.composite ?? null,
+				responsiveness: result.current?.responsiveness ?? null,
+				alignment: result.current?.alignment ?? null,
+				period: result.current
+					? {
+							start: new Date(result.current.period.start).toISOString().slice(0, 10),
+							end: new Date(result.current.period.end).toISOString().slice(0, 10)
+						}
+					: null,
+				scorecardUrl: `${baseUrl}/dm/${id}/scorecard`,
+				poweredBy: 'Commons'
+			});
+		} catch (err) {
+			if (err && typeof err === 'object' && 'status' in err) throw err;
+			console.error('[EmbedScorecard.GET] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const dm = await db.decisionMaker.findUnique({
 		where: { id },
 		select: {

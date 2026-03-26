@@ -1,3 +1,6 @@
+// CONVEX: Keep SvelteKit — fire-and-forget analytics with IP-based rate limiting (hashed IP,
+// in-memory or Postgres), batch processing via processBatch/checkContributionLimit.
+// No matching Convex function — analytics pipeline is SvelteKit-native.
 /**
  * POST /api/analytics/increment
  *

@@ -4,6 +4,9 @@ import { prisma } from '$lib/core/db';
 import { env } from '$env/dynamic/private';
 import { verifyCronSecret } from '$lib/server/cron-auth';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 /**
  * POST /api/debates/[debateId]/governance-resolve
@@ -56,9 +59,36 @@ export const POST: RequestHandler = async ({ params, request }) => {
 		throw error(400, `Argument index ${body.winningArgumentIndex} not found`);
 	}
 
-	// Update debate with governance resolution
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	const appealDeadlineMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
+
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			await serverMutation(api.debates.updateStatus, {
+				debateId: debateId as any,
+				status: 'resolved',
+				winningStance: winnerArg.stance,
+				winningArgumentIndex: body.winningArgumentIndex,
+				resolutionMethod: 'governance_override',
+				governanceJustification: body.justification.trim(),
+				appealDeadline: appealDeadlineMs
+			});
+			return json({
+				success: true,
+				debateId,
+				winningArgumentIndex: body.winningArgumentIndex,
+				winningStance: winnerArg.stance,
+				resolutionMethod: 'governance_override',
+				appealDeadline: new Date(appealDeadlineMs).toISOString()
+			});
+		} catch (err) {
+			console.error('[Debates.governanceResolve] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const now = new Date();
-	const appealDeadline = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
+	const appealDeadline = new Date(appealDeadlineMs);
 
 	await prisma.debate.update({
 		where: { id: debateId },

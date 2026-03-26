@@ -263,6 +263,733 @@ export const listActions = query({
 });
 
 // =============================================================================
+// DM FOLLOW / ACTIVITY / FEED QUERIES
+// =============================================================================
+
+/**
+ * Follow a decision-maker on behalf of an org. Upserts.
+ */
+export const followDm = mutation({
+  args: {
+    slug: v.string(),
+    decisionMakerId: v.id("decisionMakers"),
+    reason: v.optional(v.string()),
+    note: v.optional(v.string()),
+    alertsEnabled: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const { org, userId } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const dm = await ctx.db.get(args.decisionMakerId);
+    if (!dm) throw new Error("Decision-maker not found");
+
+    const VALID_REASONS = ["manual", "research", "constituent", "coalition"];
+    const reason = args.reason && VALID_REASONS.includes(args.reason) ? args.reason : "manual";
+
+    // Check existing
+    const existing = await ctx.db
+      .query("orgDmFollows")
+      .withIndex("by_orgId_decisionMakerId", (q) =>
+        q.eq("orgId", org._id).eq("decisionMakerId", args.decisionMakerId),
+      )
+      .first();
+
+    if (existing) {
+      return { _id: existing._id, created: false, ...existing };
+    }
+
+    const now = Date.now();
+    const id = await ctx.db.insert("orgDmFollows", {
+      orgId: org._id,
+      decisionMakerId: args.decisionMakerId,
+      reason,
+      note: args.note?.slice(0, 1000),
+      alertsEnabled: args.alertsEnabled ?? true,
+      followedBy: userId as any,
+      followedAt: now,
+    });
+
+    return { _id: id, created: true };
+  },
+});
+
+/**
+ * Update follow settings (alertsEnabled, note).
+ */
+export const updateDmFollow = mutation({
+  args: {
+    slug: v.string(),
+    decisionMakerId: v.id("decisionMakers"),
+    alertsEnabled: v.optional(v.boolean()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const existing = await ctx.db
+      .query("orgDmFollows")
+      .withIndex("by_orgId_decisionMakerId", (q) =>
+        q.eq("orgId", org._id).eq("decisionMakerId", args.decisionMakerId),
+      )
+      .first();
+
+    if (!existing) throw new Error("Not following this decision-maker");
+
+    const updates: Record<string, unknown> = {};
+    if (args.alertsEnabled !== undefined) updates.alertsEnabled = args.alertsEnabled;
+    if (args.note !== undefined) updates.note = args.note.slice(0, 1000);
+
+    await ctx.db.patch(existing._id, updates);
+    return { _id: existing._id };
+  },
+});
+
+/**
+ * Unfollow a decision-maker.
+ */
+export const unfollowDm = mutation({
+  args: {
+    slug: v.string(),
+    decisionMakerId: v.id("decisionMakers"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const existing = await ctx.db
+      .query("orgDmFollows")
+      .withIndex("by_orgId_decisionMakerId", (q) =>
+        q.eq("orgId", org._id).eq("decisionMakerId", args.decisionMakerId),
+      )
+      .first();
+
+    if (existing) {
+      await ctx.db.delete(existing._id);
+    }
+
+    return { success: true };
+  },
+});
+
+/**
+ * Get DM activity timeline (legislative actions + accountability receipts).
+ */
+export const getDmActivity = query({
+  args: {
+    slug: v.string(),
+    decisionMakerId: v.id("decisionMakers"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "member");
+    const limit = Math.min(args.limit ?? 20, 50);
+
+    const dm = await ctx.db.get(args.decisionMakerId);
+    if (!dm) throw new Error("Decision-maker not found");
+
+    // Fetch legislative actions
+    const actions = await ctx.db
+      .query("legislativeActions")
+      .withIndex("by_decisionMakerId_occurredAt", (q) =>
+        q.eq("decisionMakerId", args.decisionMakerId),
+      )
+      .order("desc")
+      .take(limit);
+
+    // Fetch accountability receipts scoped to org
+    const receipts = await ctx.db
+      .query("accountabilityReceipts")
+      .withIndex("by_decisionMakerId_proofDeliveredAt", (q) =>
+        q.eq("decisionMakerId", args.decisionMakerId),
+      )
+      .order("desc")
+      .take(limit);
+
+    // Filter receipts by org
+    const orgReceipts = receipts.filter((r) => r.orgId === org._id);
+
+    // Normalize into timeline items
+    type TimelineItem = {
+      type: "vote" | "sponsor" | "receipt";
+      id: string;
+      date: number;
+      [key: string]: unknown;
+    };
+
+    const items: TimelineItem[] = [];
+
+    for (const a of actions) {
+      const bill = await ctx.db.get(a.billId);
+      const isVote = a.action.startsWith("voted_") || a.action === "abstained";
+      items.push({
+        type: isVote ? "vote" : "sponsor",
+        id: a._id,
+        date: a.occurredAt,
+        actionId: a._id,
+        billId: a.billId,
+        billExternalId: bill?.externalId ?? null,
+        billTitle: bill?.title ?? null,
+        value: a.action,
+        detail: a.detail ?? null,
+        sourceUrl: a.sourceUrl ?? null,
+      });
+    }
+
+    for (const r of orgReceipts) {
+      const bill = await ctx.db.get(r.billId);
+      items.push({
+        type: "receipt",
+        id: r._id,
+        date: r.proofDeliveredAt,
+        receiptId: r._id,
+        billId: r.billId,
+        billExternalId: bill?.externalId ?? null,
+        billTitle: bill?.title ?? null,
+        proofWeight: r.proofWeight,
+        dmAction: r.dmAction ?? null,
+        alignment: r.alignment,
+        causalityClass: r.causalityClass,
+        status: r.status,
+      });
+    }
+
+    // Sort by date DESC
+    items.sort((a, b) => b.date - a.date);
+    const page = items.slice(0, limit);
+
+    return { items: page, total: actions.length + orgReceipts.length };
+  },
+});
+
+/**
+ * Get feed of activity across all followed decision-makers.
+ */
+export const getDmFeed = query({
+  args: {
+    slug: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "member");
+    const limit = Math.min(args.limit ?? 20, 50);
+
+    // Get followed DM IDs
+    const follows = await ctx.db
+      .query("orgDmFollows")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .collect();
+
+    const followedDmIds = follows.map((f) => f.decisionMakerId);
+
+    if (followedDmIds.length === 0) {
+      return { items: [], total: 0 };
+    }
+
+    // Fetch recent actions across all followed DMs
+    type FeedItem = {
+      type: "vote" | "sponsor" | "receipt";
+      id: string;
+      date: number;
+      [key: string]: unknown;
+    };
+
+    const items: FeedItem[] = [];
+
+    for (const dmId of followedDmIds) {
+      const dm = await ctx.db.get(dmId);
+
+      const actions = await ctx.db
+        .query("legislativeActions")
+        .withIndex("by_decisionMakerId_occurredAt", (q) =>
+          q.eq("decisionMakerId", dmId),
+        )
+        .order("desc")
+        .take(limit);
+
+      for (const a of actions) {
+        const bill = await ctx.db.get(a.billId);
+        const isVote = a.action.startsWith("voted_") || a.action === "abstained";
+        items.push({
+          type: isVote ? "vote" : "sponsor",
+          id: a._id,
+          date: a.occurredAt,
+          actionId: a._id,
+          billId: a.billId,
+          billExternalId: bill?.externalId ?? null,
+          billTitle: bill?.title ?? null,
+          value: a.action,
+          detail: a.detail ?? null,
+          decisionMaker: dm ? {
+            _id: dm._id,
+            type: dm.type,
+            title: dm.title ?? null,
+            name: dm.name,
+            party: dm.party ?? null,
+            jurisdiction: dm.jurisdiction ?? null,
+            district: dm.district ?? null,
+            photoUrl: dm.photoUrl ?? null,
+          } : null,
+        });
+      }
+
+      const receipts = await ctx.db
+        .query("accountabilityReceipts")
+        .withIndex("by_decisionMakerId_proofDeliveredAt", (q) =>
+          q.eq("decisionMakerId", dmId),
+        )
+        .order("desc")
+        .take(limit);
+
+      const orgReceipts = receipts.filter((r) => r.orgId === org._id);
+
+      for (const r of orgReceipts) {
+        const bill = await ctx.db.get(r.billId);
+        items.push({
+          type: "receipt",
+          id: r._id,
+          date: r.proofDeliveredAt,
+          receiptId: r._id,
+          billId: r.billId,
+          billExternalId: bill?.externalId ?? null,
+          billTitle: bill?.title ?? null,
+          proofWeight: r.proofWeight,
+          dmAction: r.dmAction ?? null,
+          alignment: r.alignment,
+          causalityClass: r.causalityClass,
+          status: r.status,
+          decisionMaker: dm ? {
+            _id: dm._id,
+            type: dm.type,
+            title: dm.title ?? null,
+            name: dm.name,
+            party: dm.party ?? null,
+            jurisdiction: dm.jurisdiction ?? null,
+            district: dm.district ?? null,
+            photoUrl: dm.photoUrl ?? null,
+          } : null,
+        });
+      }
+    }
+
+    // Sort by date DESC, take limit
+    items.sort((a, b) => b.date - a.date);
+    const page = items.slice(0, limit);
+
+    return { items: page, total: items.length };
+  },
+});
+
+// =============================================================================
+// BILL WATCH CRUD
+// =============================================================================
+
+/**
+ * Watch a bill on behalf of an org. Upserts.
+ */
+export const watchBill = mutation({
+  args: {
+    slug: v.string(),
+    billId: v.id("bills"),
+    reason: v.optional(v.string()),
+    position: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { org, userId } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const bill = await ctx.db.get(args.billId);
+    if (!bill) throw new Error("Bill not found");
+
+    const existing = await ctx.db
+      .query("orgBillWatches")
+      .withIndex("by_orgId_billId", (q) =>
+        q.eq("orgId", org._id).eq("billId", args.billId),
+      )
+      .first();
+
+    if (existing) {
+      return { _id: existing._id, created: false };
+    }
+
+    const validPositions = ["support", "oppose"];
+    const position = args.position && validPositions.includes(args.position) ? args.position : undefined;
+
+    const id = await ctx.db.insert("orgBillWatches", {
+      orgId: org._id,
+      billId: args.billId,
+      reason: args.reason ?? "manual",
+      position,
+      addedBy: userId as any,
+    });
+
+    return { _id: id, created: true };
+  },
+});
+
+/**
+ * Update position on a watched bill.
+ */
+export const updateBillWatch = mutation({
+  args: {
+    slug: v.string(),
+    billId: v.id("bills"),
+    position: v.string(), // 'support' | 'oppose' | 'neutral'
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const validPositions = ["support", "oppose", "neutral"];
+    if (!validPositions.includes(args.position)) {
+      throw new Error('position must be "support", "oppose", or "neutral"');
+    }
+
+    const existing = await ctx.db
+      .query("orgBillWatches")
+      .withIndex("by_orgId_billId", (q) =>
+        q.eq("orgId", org._id).eq("billId", args.billId),
+      )
+      .first();
+
+    if (!existing) throw new Error("Bill is not being watched");
+
+    const position = args.position === "neutral" ? undefined : args.position;
+    await ctx.db.patch(existing._id, { position });
+
+    return { _id: existing._id, position: position ?? null };
+  },
+});
+
+/**
+ * Unwatch a bill.
+ */
+export const unwatchBill = mutation({
+  args: {
+    slug: v.string(),
+    billId: v.id("bills"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const existing = await ctx.db
+      .query("orgBillWatches")
+      .withIndex("by_orgId_billId", (q) =>
+        q.eq("orgId", org._id).eq("billId", args.billId),
+      )
+      .first();
+
+    if (existing) {
+      await ctx.db.delete(existing._id);
+    }
+
+    return { success: true };
+  },
+});
+
+// =============================================================================
+// BILL BROWSE + SEARCH QUERIES
+// =============================================================================
+
+/**
+ * Browse bills by org relevance score (pre-computed cosine similarity).
+ */
+export const browseBills = query({
+  args: {
+    slug: v.string(),
+    limit: v.optional(v.number()),
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "member");
+    const limit = Math.min(args.limit ?? 20, 50);
+
+    const results = await ctx.db
+      .query("orgBillRelevances")
+      .withIndex("by_orgId_score", (q) => q.eq("orgId", org._id))
+      .order("desc")
+      .paginate({ numItems: limit, cursor: args.cursor ?? null });
+
+    const bills = await Promise.all(
+      results.page.map(async (r) => {
+        const bill = await ctx.db.get(r.billId);
+        if (!bill) return null;
+        return {
+          _id: bill._id,
+          externalId: bill.externalId,
+          title: bill.title,
+          summary: bill.summary ?? null,
+          status: bill.status,
+          statusDate: bill.statusDate,
+          jurisdiction: bill.jurisdiction,
+          jurisdictionLevel: bill.jurisdictionLevel,
+          chamber: bill.chamber ?? null,
+          sourceUrl: bill.sourceUrl,
+          relevanceScore: r.score,
+          matchedDomains: r.matchedOn,
+        };
+      }),
+    );
+
+    return {
+      bills: bills.filter((b): b is NonNullable<typeof b> => b !== null),
+      isDone: results.isDone,
+      continueCursor: results.continueCursor,
+    };
+  },
+});
+
+/**
+ * Search bills using Convex full-text search.
+ */
+export const searchBills = query({
+  args: {
+    slug: v.string(),
+    q: v.string(),
+    jurisdiction: v.optional(v.string()),
+    status: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "member");
+    const limit = Math.min(args.limit ?? 20, 50);
+
+    if (!args.q.trim()) throw new Error('Query parameter "q" is required');
+    if (args.q.length > 200) throw new Error("Search query must be 200 characters or fewer");
+
+    let searchQuery = ctx.db
+      .query("bills")
+      .withSearchIndex("search_bills", (q) => {
+        let search = q.search("title", args.q);
+        if (args.jurisdiction) search = search.eq("jurisdiction", args.jurisdiction);
+        if (args.status) search = search.eq("status", args.status);
+        return search;
+      });
+
+    const results = await searchQuery.take(limit);
+
+    return {
+      bills: results.map((b) => ({
+        _id: b._id,
+        externalId: b.externalId,
+        title: b.title,
+        summary: b.summary ?? null,
+        status: b.status,
+        statusDate: b.statusDate,
+        jurisdiction: b.jurisdiction,
+        jurisdictionLevel: b.jurisdictionLevel,
+        chamber: b.chamber ?? null,
+        sourceUrl: b.sourceUrl,
+      })),
+      total: results.length,
+    };
+  },
+});
+
+// =============================================================================
+// REPRESENTATIVES (DM import + lookup)
+// =============================================================================
+
+/**
+ * Import international representatives (decision-makers).
+ */
+export const importRepresentatives = mutation({
+  args: {
+    slug: v.string(),
+    representatives: v.array(
+      v.object({
+        countryCode: v.string(),
+        constituencyId: v.string(),
+        constituencyName: v.string(),
+        name: v.string(),
+        party: v.optional(v.string()),
+        office: v.optional(v.string()),
+        phone: v.optional(v.string()),
+        email: v.optional(v.string()),
+        websiteUrl: v.optional(v.string()),
+        photoUrl: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    if (args.representatives.length > 100) {
+      throw new Error("Maximum 100 representatives per request");
+    }
+
+    const SAFE_URL_RE = /^https?:\/\/.{1,2048}$/i;
+    const sanitizeUrl = (url: string | undefined): string | undefined => {
+      if (!url) return undefined;
+      return SAFE_URL_RE.test(url) ? url : undefined;
+    };
+
+    let imported = 0;
+
+    for (const rep of args.representatives) {
+      // Look up existing by constituency system
+      const existingExt = await ctx.db
+        .query("externalIds")
+        .withIndex("by_system_value", (q) =>
+          q.eq("system", "constituency").eq("value", rep.constituencyId),
+        )
+        .first();
+
+      if (existingExt) {
+        const dm = await ctx.db.get(existingExt.decisionMakerId);
+        if (dm && dm.name === rep.name && dm.jurisdiction === rep.countryCode) {
+          await ctx.db.patch(dm._id, {
+            district: rep.constituencyName,
+            party: rep.party,
+            title: rep.office,
+            phone: rep.phone,
+            email: rep.email,
+            websiteUrl: sanitizeUrl(rep.websiteUrl),
+            photoUrl: sanitizeUrl(rep.photoUrl),
+            updatedAt: Date.now(),
+          });
+          imported++;
+          continue;
+        }
+      }
+
+      // Create new DM
+      const nameParts = rep.name.trim().split(/\s+/);
+      const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : rep.name;
+      const firstName = nameParts.length > 1 ? nameParts.slice(0, -1).join(" ") : undefined;
+
+      const dmId = await ctx.db.insert("decisionMakers", {
+        type: "legislator",
+        name: rep.name,
+        firstName,
+        lastName,
+        jurisdiction: rep.countryCode,
+        jurisdictionLevel: "international",
+        district: rep.constituencyName,
+        party: rep.party,
+        title: rep.office,
+        phone: rep.phone,
+        email: rep.email,
+        websiteUrl: sanitizeUrl(rep.websiteUrl),
+        photoUrl: sanitizeUrl(rep.photoUrl),
+        active: true,
+        updatedAt: Date.now(),
+      });
+
+      await ctx.db.insert("externalIds", {
+        decisionMakerId: dmId,
+        system: "constituency",
+        value: rep.constituencyId,
+      });
+
+      imported++;
+    }
+
+    return { imported };
+  },
+});
+
+/**
+ * List international representatives with cursor pagination.
+ */
+export const listRepresentatives = query({
+  args: {
+    slug: v.string(),
+    country: v.optional(v.string()),
+    constituency: v.optional(v.string()),
+    limit: v.optional(v.number()),
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  handler: async (ctx, args) => {
+    await requireOrgRole(ctx, args.slug, "member");
+    const limit = Math.min(args.limit ?? 50, 100);
+
+    // If filtering by constituency, look up external IDs first
+    if (args.constituency) {
+      const extIds = await ctx.db
+        .query("externalIds")
+        .withIndex("by_system_value", (q) =>
+          q.eq("system", "constituency").eq("value", args.constituency!),
+        )
+        .collect();
+
+      const dms = await Promise.all(
+        extIds.map(async (ext) => {
+          const dm = await ctx.db.get(ext.decisionMakerId);
+          if (!dm) return null;
+          if (args.country && dm.jurisdiction !== args.country) return null;
+          return {
+            _id: dm._id,
+            countryCode: dm.jurisdiction ?? null,
+            constituencyId: ext.value,
+            constituencyName: dm.district ?? null,
+            name: dm.name,
+            party: dm.party ?? null,
+            title: dm.title ?? null,
+            phone: dm.phone ?? null,
+            email: dm.email ?? null,
+            websiteUrl: dm.websiteUrl ?? null,
+            photoUrl: dm.photoUrl ?? null,
+          };
+        }),
+      );
+
+      return {
+        data: dms.filter((d): d is NonNullable<typeof d> => d !== null),
+        hasMore: false,
+        cursor: null,
+      };
+    }
+
+    // General listing by jurisdiction level
+    let q = ctx.db
+      .query("decisionMakers")
+      .withIndex("by_jurisdiction_jurisdictionLevel", (idx) => {
+        if (args.country) {
+          return idx.eq("jurisdiction", args.country).eq("jurisdictionLevel", "international");
+        }
+        return idx;
+      });
+
+    const results = await q
+      .order("asc")
+      .paginate({ numItems: limit, cursor: args.cursor ?? null });
+
+    // Filter to international only if no country specified
+    const filtered = args.country
+      ? results.page
+      : results.page.filter((dm) => dm.jurisdictionLevel === "international");
+
+    const data = await Promise.all(
+      filtered.map(async (dm) => {
+        const ext = await ctx.db
+          .query("externalIds")
+          .withIndex("by_decisionMakerId_system", (q) =>
+            q.eq("decisionMakerId", dm._id).eq("system", "constituency"),
+          )
+          .first();
+
+        return {
+          _id: dm._id,
+          countryCode: dm.jurisdiction ?? null,
+          constituencyId: ext?.value ?? null,
+          constituencyName: dm.district ?? null,
+          name: dm.name,
+          party: dm.party ?? null,
+          title: dm.title ?? null,
+          phone: dm.phone ?? null,
+          email: dm.email ?? null,
+          websiteUrl: dm.websiteUrl ?? null,
+          photoUrl: dm.photoUrl ?? null,
+        };
+      }),
+    );
+
+    return {
+      data,
+      hasMore: !results.isDone,
+      cursor: results.continueCursor,
+    };
+  },
+});
+
+// =============================================================================
 // MUTATIONS
 // =============================================================================
 

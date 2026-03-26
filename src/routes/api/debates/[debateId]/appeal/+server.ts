@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — calls blockchain (appealResolution). On-chain governance operation.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';

@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — calls blockchain (coSignArgument), tx-verifier, tier enforcement.
+// Convex equivalent: debates.cosign (off-chain only, no blockchain or tx verification).
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { prisma } from '$lib/core/db';

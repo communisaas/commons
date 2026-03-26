@@ -1,3 +1,5 @@
+// CONVEX: Keep SvelteKit — blockchain ZK proof submission (handleSubmission),
+// billing plan gate (getPlanForOrg), nullifier uniqueness, CWC delivery pipeline.
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import {

@@ -2,6 +2,9 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /**
@@ -19,6 +22,25 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
+	const body = await request.json().catch(() => ({}));
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverMutation(api.legislation.followDm, {
+				slug: params.slug,
+				decisionMakerId: params.dmId as any,
+				reason: typeof body.reason === 'string' ? body.reason.slice(0, 100) : 'manual',
+				note: typeof body.note === 'string' ? body.note.slice(0, 1000) : undefined,
+				alertsEnabled: typeof body.alertsEnabled === 'boolean' ? body.alertsEnabled : true
+			});
+			return json(result, { status: result.created ? 201 : 200 });
+		} catch (err) {
+			console.error('[DmFollow.POST] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 
@@ -32,7 +54,6 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(404, 'Decision-maker not found');
 	}
 
-	const body = await request.json().catch(() => ({}));
 	const VALID_REASONS = ['manual', 'research', 'constituent', 'coalition'];
 	const rawReason = typeof body.reason === 'string' ? body.reason.slice(0, 100) : 'manual';
 	const reason = VALID_REASONS.includes(rawReason) ? rawReason : 'manual';
@@ -96,6 +117,27 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
+	const body = await request.json().catch(() => null);
+	if (!body || typeof body !== 'object') {
+		throw error(400, 'Invalid JSON body');
+	}
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverMutation(api.legislation.updateDmFollow, {
+				slug: params.slug,
+				decisionMakerId: params.dmId as any,
+				alertsEnabled: typeof body.alertsEnabled === 'boolean' ? body.alertsEnabled : undefined,
+				note: typeof body.note === 'string' ? body.note.slice(0, 1000) : undefined
+			});
+			return json(result);
+		} catch (err) {
+			console.error('[DmFollow.PATCH] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 
@@ -112,10 +154,6 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		throw error(404, 'Not following this decision-maker');
 	}
 
-	const body = await request.json().catch(() => null);
-	if (!body || typeof body !== 'object') {
-		throw error(400, 'Invalid JSON body');
-	}
 	const data: Record<string, unknown> = {};
 	if (typeof body.alertsEnabled === 'boolean') data.alertsEnabled = body.alertsEnabled;
 	if (typeof body.note === 'string') data.note = body.note.slice(0, 1000);
@@ -146,6 +184,20 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverMutation(api.legislation.unfollowDm, {
+				slug: params.slug,
+				decisionMakerId: params.dmId as any
+			});
+			return json(result);
+		} catch (err) {
+			console.error('[DmFollow.DELETE] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 

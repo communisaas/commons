@@ -6,6 +6,9 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 
@@ -16,18 +19,6 @@ const InviteSchema = z.object({
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.NETWORKS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
-
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
-
-	// Verify requesting org is admin in the network
-	const callerMembership = await db.orgNetworkMember.findUnique({
-		where: {
-			networkId_orgId: { networkId: params.networkId, orgId: org.id }
-		}
-	});
-	if (!callerMembership || callerMembership.status !== 'active' || callerMembership.role !== 'admin') {
-		throw error(403, 'Network admin role required');
-	}
 
 	let body: unknown;
 	try {
@@ -42,6 +33,33 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	const { orgSlug } = parsed.data;
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverMutation(api.networks.invite, {
+				orgSlug: params.slug,
+				networkId: params.networkId as any,
+				targetOrgSlug: orgSlug
+			});
+			return json({ data: { id: result } }, { status: 201 });
+		} catch (err) {
+			console.error('[NetworkInvite.POST] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org } = await loadOrgContext(params.slug, locals.user.id);
+
+	// Verify requesting org is admin in the network
+	const callerMembership = await db.orgNetworkMember.findUnique({
+		where: {
+			networkId_orgId: { networkId: params.networkId, orgId: org.id }
+		}
+	});
+	if (!callerMembership || callerMembership.status !== 'active' || callerMembership.role !== 'admin') {
+		throw error(403, 'Network admin role required');
+	}
 
 	// Find target org
 	const targetOrg = await db.organization.findUnique({

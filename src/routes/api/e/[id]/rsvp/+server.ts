@@ -1,3 +1,8 @@
+// CONVEX: Keep SvelteKit — complex pipeline: PII encryption (computeEmailHash, encryptPii),
+// rate limiting (IP-based), atomic capacity claiming (TOCTOU prevention via updateMany),
+// supporter find-or-create, upsert dedup on email_hash, fire-and-forget automation triggers.
+// Convex equivalent: events.createRsvp (simplified, no PII encryption or capacity atomics).
+
 /**
  * POST /api/e/[id]/rsvp — Public RSVP to an event
  */
