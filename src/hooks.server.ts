@@ -17,8 +17,19 @@ import {
 	sentryHandle,
 	handleErrorWithSentry
 } from '@sentry/sveltekit';
+import { initConvex } from 'convex-sveltekit';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { mintConvexToken } from '$lib/server/convex-jwt';
 
 // MongoDB removed — intelligence data now lives in Postgres via pgvector
+
+// ─── DUAL-STACK: Initialize Convex server-side client ───
+// Stores the deployment URL so serverQuery()/serverMutation()/serverAction()
+// can create ConvexHttpClient instances. The ConvexClient itself is disabled
+// (IS_BROWSER=false) — only the URL is needed for HTTP calls.
+if (typeof PUBLIC_CONVEX_URL === 'string' && PUBLIC_CONVEX_URL) {
+	initConvex(PUBLIC_CONVEX_URL);
+}
 
 /**
  * Sentry error handler — captures unhandled errors with PII scrubbing.
@@ -140,6 +151,22 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 				}
 			: null;
 		event.locals.session = session;
+
+		// ─── Convex auth bridge: mint JWT for server-side Convex queries ───
+		// convex-sveltekit's serverQuery() reads locals.convexToken and sends
+		// it to Convex, where ctx.auth.getUserIdentity() verifies the JWT
+		// against our JWKS endpoint (/.well-known/jwks.json).
+		if (event.locals.user && PUBLIC_CONVEX_URL) {
+			try {
+				const token = await mintConvexToken(event.locals.user);
+				if (token) {
+					event.locals.convexToken = token;
+				}
+			} catch (err) {
+				// Non-fatal: Convex queries fall to Prisma fallback without auth
+				console.warn('[Hooks] Convex JWT minting failed:', err instanceof Error ? err.message : String(err));
+			}
+		}
 
 		return resolve(event);
 	} catch (error) {

@@ -144,6 +144,7 @@
 		"exa-js": "^2.3.0",
 		"h3-js": "^4.4.0",
 		"idb": "^8.0.3",
+		"jose": "^4.15.9",
 		"jsonwebtoken": "^9.0.2",
 		"libsodium-wrappers": "^0.7.15",
 		"mailparser": "^3.7.1",
