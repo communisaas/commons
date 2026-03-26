@@ -1,4 +1,6 @@
-// CONVEX: Keep SvelteKit — form actions (send/preview/A/B test) use SES engine, billing, rate limiting
+// CONVEX: Load migrated. Form actions partially migrated — blast creation uses Convex mutations.
+// KEEP: countRecipients, resolveRecipients, sendBlast, compileEmail, sanitizeEmailBody (SvelteKit server modules)
+// KEEP: db import for campaignId validation (campaignId is Prisma string ID, not Convex ID)
 import { fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
@@ -16,7 +18,7 @@ import { getOrgUsage, isOverLimit } from '$lib/server/billing/usage';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad, Actions } from './$types';
 
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
 export const load: PageServerLoad = async ({ parent, params }) => {
@@ -56,6 +58,7 @@ function parseFilter(formData: FormData): RecipientFilter {
 }
 
 export const actions: Actions = {
+	// KEEP: countRecipients uses buildSegmentWhere (Prisma query builder)
 	count: async ({ request, params, locals }) => {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/emails/compose`);
@@ -128,7 +131,6 @@ export const actions: Actions = {
 		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 		requireRole(membership.role, 'editor');
 
-		// NOTE: Rate limit is per-isolate on CF Workers without Redis. Configure REDIS_URL for global enforcement.
 		const sendLimit = await getRateLimiter().check(`ratelimit:compose:send:org:${org.id}`, {
 			maxRequests: 5,
 			windowMs: 60 * 60_000
@@ -145,16 +147,13 @@ export const actions: Actions = {
 
 		const formData = await request.formData();
 		const rawSubject = formData.get('subject')?.toString().trim();
-		// Strip control characters (CRLF injection) and cap length (RFC 2822)
 		const subject = rawSubject?.replace(/[\r\n\x00-\x1f\x7f]/g, '').slice(0, 998);
 		const rawBodyHtml = formData.get('bodyHtml')?.toString();
 		const rawFromName = formData.get('fromName')?.toString().trim() || org.name;
-		// Strip control characters (CRLF injection) and angle brackets (display name spoofing)
 		const fromName = rawFromName.replace(/[\x00-\x1f\x7f<>"]/g, '').slice(0, 64);
 		if (!fromName) {
 			return fail(400, { error: 'From name is required' });
 		}
-		// Force from email to org slug — prevent local-part spoofing
 		const fromEmail = `${org.slug}@commons.email`;
 		const campaignId = formData.get('campaignId')?.toString() || null;
 
@@ -166,7 +165,7 @@ export const actions: Actions = {
 		}
 		const bodyHtml = sanitizeEmailBody(rawBodyHtml);
 
-		// Validate campaignId belongs to org if provided
+		// KEEP: campaignId validation uses Prisma (campaignId is Prisma string ID)
 		if (campaignId) {
 			const campaign = await db.campaign.findFirst({
 				where: { id: campaignId, orgId: org.id }
@@ -178,36 +177,30 @@ export const actions: Actions = {
 
 		const filter = parseFilter(formData);
 
-		// Count recipients before creating blast
+		// KEEP: countRecipients uses buildSegmentWhere (Prisma query builder)
 		const recipientCount = await countRecipients(org.id, filter);
 		if (recipientCount === 0) {
 			return fail(400, { error: 'No recipients match your filters. Adjust filters and try again.' });
 		}
 
-		// Create blast
-		const blast = await db.emailBlast.create({
-			data: {
-				orgId: org.id,
-				campaignId,
-				subject,
-				bodyHtml,
-				fromName,
-				fromEmail,
-				status: 'draft',
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			recipientFilter: filter as any,
-				totalRecipients: recipientCount
-			}
+		// Create blast via Convex
+		const blastResult = await serverMutation(api.email.createBlast, {
+			orgSlug: params.slug,
+			subject,
+			bodyHtml,
+			fromName,
+			fromEmail,
+			recipientFilter: filter,
+			campaignId: campaignId ?? undefined
 		});
 
-		// Send pipeline runs async -- use waitUntil on CF Workers to keep alive
-		const blastPromise = sendBlast(blast.id).catch((err) => {
-			console.error(`[email-engine] Blast ${blast.id} async error:`, err);
+		// KEEP: sendBlast uses SES engine (SvelteKit server module)
+		const blastPromise = sendBlast(blastResult.id).catch((err) => {
+			console.error(`[email-engine] Blast ${blastResult.id} async error:`, err);
 		});
 		if (platform?.context?.waitUntil) {
 			platform.context.waitUntil(blastPromise);
 		} else {
-			// Non-CF: await inline so the blast actually runs (blocks redirect but doesn't silently drop)
 			await blastPromise;
 		}
 
@@ -270,6 +263,7 @@ export const actions: Actions = {
 		const testDuration = formData.get('testDuration')?.toString() || '4h';
 		const testDurationMs = durationMap[testDuration] ?? durationMap['4h'];
 
+		// KEEP: campaignId validation uses Prisma (campaignId is Prisma string ID)
 		if (campaignId) {
 			const campaign = await db.campaign.findFirst({
 				where: { id: campaignId, orgId: org.id }
@@ -279,7 +273,7 @@ export const actions: Actions = {
 
 		const filter = parseFilter(formData);
 
-		// Resolve all recipients and split into test/remainder pools
+		// KEEP: resolveRecipients uses buildSegmentWhere + PII decryption (Prisma)
 		const allRecipients = await resolveRecipients(org.id, filter);
 		if (allRecipients.length === 0) {
 			return fail(400, { error: 'No recipients match your filters.' });
@@ -305,52 +299,40 @@ export const actions: Actions = {
 		const abParentId = crypto.randomUUID();
 		const abTestConfig = { splitPct, winnerMetric, testDurationMs, testGroupPct };
 
-		// Create variant A blast
-		const blastA = await db.emailBlast.create({
-			data: {
-				orgId: org.id,
-				campaignId,
-				subject: subjectA,
-				bodyHtml: bodyHtmlA,
-				fromName,
-				fromEmail,
-				status: 'draft',
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				recipientFilter: { ...filter, testRecipientIds: groupA.map((r) => r.id) } as any,
-				totalRecipients: groupA.length,
-				isAbTest: true,
-				abVariant: 'A',
-				abParentId,
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				abTestConfig: abTestConfig as any
-			}
+		// Create variant A blast via Convex
+		const blastAResult = await serverMutation(api.email.createBlast, {
+			orgSlug: params.slug,
+			subject: subjectA,
+			bodyHtml: bodyHtmlA,
+			fromName,
+			fromEmail,
+			recipientFilter: { ...filter, testRecipientIds: groupA.map((r) => r.id) },
+			campaignId: campaignId ?? undefined,
+			isAbTest: true,
+			abVariant: 'A',
+			abParentId,
+			abTestConfig
 		});
 
-		// Create variant B blast
-		const blastB = await db.emailBlast.create({
-			data: {
-				orgId: org.id,
-				campaignId,
-				subject: subjectB,
-				bodyHtml: bodyHtmlB,
-				fromName,
-				fromEmail,
-				status: 'draft',
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				recipientFilter: { ...filter, testRecipientIds: groupB.map((r) => r.id) } as any,
-				totalRecipients: groupB.length,
-				isAbTest: true,
-				abVariant: 'B',
-				abParentId,
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				abTestConfig: abTestConfig as any
-			}
+		// Create variant B blast via Convex
+		const blastBResult = await serverMutation(api.email.createBlast, {
+			orgSlug: params.slug,
+			subject: subjectB,
+			bodyHtml: bodyHtmlB,
+			fromName,
+			fromEmail,
+			recipientFilter: { ...filter, testRecipientIds: groupB.map((r) => r.id) },
+			campaignId: campaignId ?? undefined,
+			isAbTest: true,
+			abVariant: 'B',
+			abParentId,
+			abTestConfig
 		});
 
-		// Send both variants async
+		// KEEP: sendBlast uses SES engine (SvelteKit server module)
 		const sendPromise = Promise.all([
-			sendBlast(blastA.id),
-			sendBlast(blastB.id)
+			sendBlast(blastAResult.id),
+			sendBlast(blastBResult.id)
 		]).catch((err) => {
 			console.error(`[email-engine] A/B test ${abParentId} send error:`, err);
 		});

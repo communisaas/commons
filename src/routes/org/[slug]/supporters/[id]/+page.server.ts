@@ -1,9 +1,6 @@
-// CONVEX: Keep SvelteKit — form actions (addTag/removeTag/updateSmsStatus) use Prisma supporter mutations
+// CONVEX: Fully migrated — form actions use Convex supporter mutations
 import { error, fail, redirect } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
-import { loadOrgContext, requireRole } from '$lib/server/org';
-import { dispatchTrigger } from '$lib/server/automation/trigger';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -52,14 +49,11 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 	};
 };
 
-// TODO: migrate form actions to Convex
 export const actions: Actions = {
 	addTag: async ({ request, params, locals }) => {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/supporters/${params.id}`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
 
 		const formData = await request.formData();
 		const tagId = formData.get('tagId')?.toString();
@@ -68,33 +62,18 @@ export const actions: Actions = {
 			return fail(400, { error: 'Tag is required' });
 		}
 
-		// Verify tag belongs to org
-		const tag = await db.tag.findFirst({ where: { id: tagId, orgId: org.id } });
-		if (!tag) {
-			return fail(400, { error: 'Invalid tag' });
+		try {
+			await serverMutation(api.supporters.addTag, {
+				orgSlug: params.slug,
+				supporterId: params.id as any,
+				tagId: tagId as any
+			});
+		} catch (e: any) {
+			if (e.message?.includes('not found')) {
+				return fail(400, { error: 'Invalid tag or supporter' });
+			}
+			throw e;
 		}
-
-		// Verify supporter belongs to org
-		const supporter = await db.supporter.findFirst({ where: { id: params.id, orgId: org.id } });
-		if (!supporter) {
-			throw error(404, 'Supporter not found');
-		}
-
-		// Upsert to avoid duplicate errors
-		await db.supporterTag.upsert({
-			where: {
-				supporterId_tagId: { supporterId: params.id, tagId }
-			},
-			create: { supporterId: params.id, tagId },
-			update: {}
-		});
-
-		// Fire-and-forget: dispatch tag_added trigger
-		void dispatchTrigger(org.id, 'tag_added', {
-			entityId: tagId,
-			supporterId: params.id,
-			metadata: { tagId }
-		});
 
 		return { success: true, action: 'addTag' };
 	},
@@ -103,8 +82,6 @@ export const actions: Actions = {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/supporters/${params.id}`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
 
 		const formData = await request.formData();
 		const tagId = formData.get('tagId')?.toString();
@@ -113,15 +90,18 @@ export const actions: Actions = {
 			return fail(400, { error: 'Tag is required' });
 		}
 
-		// Verify supporter belongs to org
-		const supporter = await db.supporter.findFirst({ where: { id: params.id, orgId: org.id } });
-		if (!supporter) {
-			throw error(404, 'Supporter not found');
+		try {
+			await serverMutation(api.supporters.removeTag, {
+				orgSlug: params.slug,
+				supporterId: params.id as any,
+				tagId: tagId as any
+			});
+		} catch (e: any) {
+			if (e.message?.includes('not found')) {
+				throw error(404, 'Supporter not found');
+			}
+			throw e;
 		}
-
-		await db.supporterTag.deleteMany({
-			where: { supporterId: params.id, tagId }
-		});
 
 		return { success: true, action: 'removeTag' };
 	},
@@ -130,8 +110,6 @@ export const actions: Actions = {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/supporters/${params.id}`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
 
 		const formData = await request.formData();
 		const smsStatus = formData.get('smsStatus')?.toString();
@@ -141,20 +119,21 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid SMS status. Cannot manually set to "stopped".' });
 		}
 
-		const supporter = await db.supporter.findFirst({ where: { id: params.id, orgId: org.id } });
-		if (!supporter) {
-			throw error(404, 'Supporter not found');
+		try {
+			await serverMutation(api.supporters.updateSmsStatus, {
+				orgSlug: params.slug,
+				supporterId: params.id as any,
+				smsStatus
+			});
+		} catch (e: any) {
+			if (e.message?.includes('STOP keyword')) {
+				return fail(400, { error: 'Cannot override STOP keyword opt-out. Supporter must text START to re-subscribe.' });
+			}
+			if (e.message?.includes('not found')) {
+				throw error(404, 'Supporter not found');
+			}
+			throw e;
 		}
-
-		// Cannot override a STOP keyword opt-out manually
-		if (supporter.smsStatus === 'stopped') {
-			return fail(400, { error: 'Cannot override STOP keyword opt-out. Supporter must text START to re-subscribe.' });
-		}
-
-		await db.supporter.update({
-			where: { id: supporter.id },
-			data: { smsStatus }
-		});
 
 		return { success: true, action: 'updateSmsStatus' };
 	}

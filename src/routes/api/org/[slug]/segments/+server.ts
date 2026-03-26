@@ -1,11 +1,13 @@
-// CONVEX: Keep SvelteKit — count/apply_tag/remove_tag/export_csv use buildSegmentWhere (Prisma query builder) + PII decryption
+// CONVEX: CRUD (list/save/update/delete) fully migrated. Bulk operations (count/apply_tag/remove_tag/export_csv)
+// KEEP on Prisma: buildSegmentWhere is a Prisma query builder that generates complex WHERE clauses.
+// These operations cannot be replicated in Convex without rewriting the entire filter engine in JS.
 import { json, error } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
+import { db } from '$lib/core/db'; // KEEP: bulk operations use buildSegmentWhere (Prisma query builder)
 import { loadOrgContext, requireRole } from '$lib/server/org';
-import { buildSegmentWhere } from '$lib/server/segments/query-builder';
+import { buildSegmentWhere } from '$lib/server/segments/query-builder'; // KEEP: Prisma-only query builder
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
-import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
+import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption'; // KEEP: PII decryption for CSV export
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
@@ -24,7 +26,7 @@ function csvEscape(value: string): string {
 }
 
 /**
- * GET /api/org/[slug]/segments — List saved segments
+ * GET /api/org/[slug]/segments — List saved segments (Convex)
  */
 export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
@@ -49,6 +51,10 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 	const body = await request.json();
 	const action = body.action as string;
 
+	// KEEP: count uses buildSegmentWhere (Prisma query builder — generates complex WHERE clauses
+	// with tag joins, date ranges, email status, verified flags, custom field JSON operators).
+	// Replicating this in Convex would require rewriting the entire filter engine in JS with
+	// in-memory filtering, which is not feasible for large supporter sets.
 	if (action === 'count') {
 		const limit = await getRateLimiter().check(
 			`ratelimit:segment:count:org:${org.id}`,
@@ -62,13 +68,13 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			throw error(400, validationError);
 		}
 
-		// TODO: migrate segment count to Convex
 		const where = buildSegmentWhere(org.id, filters);
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const count = await db.supporter.count({ where: where as any });
 		return json({ count });
 	}
 
+	// CONVEX: save/update fully migrated
 	if (action === 'save') {
 		requireRole(membership.role, 'editor');
 
@@ -101,7 +107,8 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		}
 	}
 
-	// TODO: migrate bulk tag operations to Convex
+	// KEEP: bulk tag operations use buildSegmentWhere (Prisma query builder) + Prisma createMany/deleteMany.
+	// These need the full Prisma WHERE clause to identify matching supporters, then bulk tag link operations.
 	if (action === 'apply_tag' || action === 'remove_tag') {
 		requireRole(membership.role, 'editor');
 
@@ -151,7 +158,9 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		return json({ affected: supporters.length });
 	}
 
-	// TODO: migrate export_csv to Convex
+	// KEEP: export_csv uses buildSegmentWhere (Prisma query builder) + PII decryption.
+	// CSV export needs full supporter data with encrypted email decryption — not feasible
+	// to move to Convex without a dedicated export action with PII handling.
 	if (action === 'export_csv') {
 		requireRole(membership.role, 'editor');
 		const filters = body.filters as SegmentFilter;
@@ -204,7 +213,7 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 };
 
 /**
- * DELETE /api/org/[slug]/segments?id=xxx — Delete a segment
+ * DELETE /api/org/[slug]/segments?id=xxx — Delete a segment (Convex)
  */
 export const DELETE: RequestHandler = async ({ url, params, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');

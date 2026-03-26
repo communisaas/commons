@@ -1,9 +1,7 @@
-// CONVEX: Keep SvelteKit — form actions (createTag/renameTag/deleteTag) use Prisma tag mutations
+// CONVEX: Fully migrated — form actions use Convex tag mutations
 import { fail, redirect } from '@sveltejs/kit';
-import { db } from '$lib/core/db';
-import { loadOrgContext, requireRole } from '$lib/server/org';
 
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
 import type { PageServerLoad, Actions } from './$types';
@@ -89,14 +87,11 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 	};
 };
 
-// TODO: migrate form actions to Convex
 export const actions: Actions = {
 	createTag: async ({ request, params, locals }) => {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/supporters`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
 
 		const formData = await request.formData();
 		const name = formData.get('name')?.toString()?.trim();
@@ -105,14 +100,20 @@ export const actions: Actions = {
 			return fail(400, { error: 'Tag name is required', action: 'createTag' });
 		}
 
-		const existing = await db.tag.findUnique({
-			where: { orgId_name: { orgId: org.id, name } }
+		const org = await serverQuery(api.organizations.getBySlug, { slug: params.slug });
+		if (!org) {
+			return fail(404, { error: 'Organization not found', action: 'createTag' });
+		}
+
+		const result = await serverMutation(api.v1api.createTag, {
+			orgId: org._id,
+			name
 		});
-		if (existing) {
+
+		if (result && 'duplicate' in result && result.duplicate) {
 			return fail(409, { error: 'A tag with this name already exists', action: 'createTag' });
 		}
 
-		await db.tag.create({ data: { orgId: org.id, name } });
 		return { success: true, action: 'createTag' };
 	},
 
@@ -120,8 +121,6 @@ export const actions: Actions = {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/supporters`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
 
 		const formData = await request.formData();
 		const tagId = formData.get('tagId')?.toString();
@@ -131,19 +130,24 @@ export const actions: Actions = {
 			return fail(400, { error: 'Tag ID and name are required', action: 'renameTag' });
 		}
 
-		const tag = await db.tag.findFirst({ where: { id: tagId, orgId: org.id } });
-		if (!tag) {
-			return fail(404, { error: 'Tag not found', action: 'renameTag' });
+		const org = await serverQuery(api.organizations.getBySlug, { slug: params.slug });
+		if (!org) {
+			return fail(404, { error: 'Organization not found', action: 'renameTag' });
 		}
 
-		const conflict = await db.tag.findUnique({
-			where: { orgId_name: { orgId: org.id, name } }
+		const result = await serverMutation(api.v1api.updateTag, {
+			tagId,
+			orgId: org._id,
+			name
 		});
-		if (conflict && conflict.id !== tagId) {
+
+		if (!result) {
+			return fail(404, { error: 'Tag not found', action: 'renameTag' });
+		}
+		if ('duplicate' in result && result.duplicate) {
 			return fail(409, { error: 'A tag with this name already exists', action: 'renameTag' });
 		}
 
-		await db.tag.update({ where: { id: tagId }, data: { name } });
 		return { success: true, action: 'renameTag' };
 	},
 
@@ -151,8 +155,6 @@ export const actions: Actions = {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/supporters`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
 
 		const formData = await request.formData();
 		const tagId = formData.get('tagId')?.toString();
@@ -161,12 +163,20 @@ export const actions: Actions = {
 			return fail(400, { error: 'Tag ID is required', action: 'deleteTag' });
 		}
 
-		const tag = await db.tag.findFirst({ where: { id: tagId, orgId: org.id } });
-		if (!tag) {
+		const org = await serverQuery(api.organizations.getBySlug, { slug: params.slug });
+		if (!org) {
+			return fail(404, { error: 'Organization not found', action: 'deleteTag' });
+		}
+
+		const deleted = await serverMutation(api.v1api.deleteTag, {
+			tagId,
+			orgId: org._id
+		});
+
+		if (!deleted) {
 			return fail(404, { error: 'Tag not found', action: 'deleteTag' });
 		}
 
-		await db.tag.delete({ where: { id: tagId } });
 		return { success: true, action: 'deleteTag' };
 	}
 };

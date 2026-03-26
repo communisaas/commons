@@ -299,6 +299,27 @@ export const getSummaryStats = query({
   },
 });
 
+/**
+ * List tags for an org.
+ */
+export const getTags = query({
+  args: { orgSlug: v.string() },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+
+    const tags = await ctx.db
+      .query("tags")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
+      .collect();
+
+    return tags.map((t) => ({
+      _id: t._id,
+      id: t._id,
+      name: t.name,
+    }));
+  },
+});
+
 // =============================================================================
 // ACTIONS (non-deterministic PII encryption — random IV)
 // =============================================================================
@@ -620,5 +641,117 @@ export const remove = mutation({
     });
 
     return { deleted: true };
+  },
+});
+
+/**
+ * Add a tag to a supporter. Idempotent (upsert-like).
+ */
+export const addTag = mutation({
+  args: {
+    orgSlug: v.string(),
+    supporterId: v.id("supporters"),
+    tagId: v.id("tags"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+
+    // Verify supporter belongs to org
+    const supporter = await ctx.db.get(args.supporterId);
+    if (!supporter || supporter.orgId !== org._id) {
+      throw new Error("Supporter not found");
+    }
+
+    // Verify tag belongs to org
+    const tag = await ctx.db.get(args.tagId);
+    if (!tag || tag.orgId !== org._id) {
+      throw new Error("Tag not found");
+    }
+
+    // Check if link already exists (idempotent)
+    const existing = await ctx.db
+      .query("supporterTags")
+      .withIndex("by_supporterId_tagId", (idx) =>
+        idx.eq("supporterId", args.supporterId).eq("tagId", args.tagId),
+      )
+      .first();
+
+    if (existing) return existing._id;
+
+    return await ctx.db.insert("supporterTags", {
+      supporterId: args.supporterId,
+      tagId: args.tagId,
+    });
+  },
+});
+
+/**
+ * Remove a tag from a supporter.
+ */
+export const removeTag = mutation({
+  args: {
+    orgSlug: v.string(),
+    supporterId: v.id("supporters"),
+    tagId: v.id("tags"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+
+    // Verify supporter belongs to org
+    const supporter = await ctx.db.get(args.supporterId);
+    if (!supporter || supporter.orgId !== org._id) {
+      throw new Error("Supporter not found");
+    }
+
+    const link = await ctx.db
+      .query("supporterTags")
+      .withIndex("by_supporterId_tagId", (idx) =>
+        idx.eq("supporterId", args.supporterId).eq("tagId", args.tagId),
+      )
+      .first();
+
+    if (link) {
+      await ctx.db.delete(link._id);
+    }
+
+    return { removed: true };
+  },
+});
+
+/**
+ * Update SMS status on a supporter. Enforces STOP keyword opt-out protection.
+ */
+export const updateSmsStatus = mutation({
+  args: {
+    orgSlug: v.string(),
+    supporterId: v.id("supporters"),
+    smsStatus: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+
+    const ALLOWED_STATUSES = ["none", "subscribed", "unsubscribed"];
+    if (!ALLOWED_STATUSES.includes(args.smsStatus)) {
+      throw new Error("Invalid SMS status. Cannot manually set to 'stopped'.");
+    }
+
+    const supporter = await ctx.db.get(args.supporterId);
+    if (!supporter || supporter.orgId !== org._id) {
+      throw new Error("Supporter not found");
+    }
+
+    // Cannot override a STOP keyword opt-out manually
+    if (supporter.smsStatus === "stopped") {
+      throw new Error(
+        "Cannot override STOP keyword opt-out. Supporter must text START to re-subscribe.",
+      );
+    }
+
+    await ctx.db.patch(args.supporterId, {
+      smsStatus: args.smsStatus,
+      updatedAt: Date.now(),
+    });
+
+    return { updated: true };
   },
 });

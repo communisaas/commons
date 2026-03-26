@@ -1,19 +1,12 @@
-// CONVEX: Keep SvelteKit — complex load (verification packets, analytics, debate chain), form actions (update/addTarget/removeTarget/updateStatus)
+// CONVEX: Keep SvelteKit — complex load (verification packets, analytics, debate chain). Form actions use Convex mutations.
 import { error, fail, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
-import { loadOrgContext, requireRole } from '$lib/server/org';
 import { computeVerificationPacketCached } from '$lib/server/campaigns/verification';
 import { loadCampaignAnalytics } from '$lib/server/campaigns/analytics';
 import { FEATURES } from '$lib/config/features';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { PageServerLoad, Actions } from './$types';
-
-/** Valid status transitions */
-const VALID_TRANSITIONS: Record<string, string[]> = {
-	DRAFT: ['ACTIVE'],
-	ACTIVE: ['PAUSED', 'COMPLETE'],
-	PAUSED: ['ACTIVE', 'COMPLETE'],
-	COMPLETE: []
-};
 
 export const load: PageServerLoad = async ({ params, parent, platform }) => {
 	const { org, membership } = await parent();
@@ -141,8 +134,6 @@ export const actions: Actions = {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/campaigns/${params.id}`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
 
 		const formData = await request.formData();
 		const title = formData.get('title')?.toString().trim();
@@ -167,37 +158,25 @@ export const actions: Actions = {
 			return fail(400, { error: 'Debate threshold must be at least 1' });
 		}
 
-		// Verify campaign belongs to org
-		const existing = await db.campaign.findFirst({
-			where: { id: params.id, orgId: org.id }
-		});
-		if (!existing) {
-			throw error(404, 'Campaign not found');
-		}
-
-		// Validate templateId if provided
-		if (templateId) {
-			const template = await db.template.findFirst({
-				where: { id: templateId, orgId: org.id }
-			});
-			if (!template) {
-				return fail(400, { error: 'Invalid template selection' });
-			}
-		}
-
-		await db.campaign.update({
-			where: { id: params.id },
-			data: {
+		try {
+			await serverMutation(api.campaigns.update, {
+				campaignId: params.id as any,
+				slug: params.slug,
 				title,
 				type,
-				body,
-				templateId,
+				body: body ?? undefined,
+				templateId: templateId ?? undefined,
 				debateEnabled,
 				debateThreshold,
 				targetCountry,
-				targetJurisdiction
+				targetJurisdiction: targetJurisdiction ?? undefined
+			});
+		} catch (e: any) {
+			if (e.message?.includes('not found')) {
+				throw error(404, 'Campaign not found');
 			}
-		});
+			throw e;
+		}
 
 		return { success: true };
 	},
@@ -206,8 +185,6 @@ export const actions: Actions = {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/campaigns/${params.id}`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
 
 		const formData = await request.formData();
 		const name = formData.get('name')?.toString().trim();
@@ -222,29 +199,24 @@ export const actions: Actions = {
 			return fail(400, { error: 'A valid email address is required' });
 		}
 
-		const campaign = await db.campaign.findFirst({
-			where: { id: params.id, orgId: org.id }
-		});
-		if (!campaign) {
-			throw error(404, 'Campaign not found');
+		try {
+			await serverMutation(api.campaigns.addTarget, {
+				campaignId: params.id as any,
+				slug: params.slug,
+				target: { name, email, title, district }
+			});
+		} catch (e: any) {
+			if (e.message?.includes('not found')) {
+				throw error(404, 'Campaign not found');
+			}
+			if (e.message?.includes('Maximum of 50')) {
+				return fail(400, { error: 'Maximum of 50 targets per campaign' });
+			}
+			if (e.message?.includes('already exists')) {
+				return fail(400, { error: 'A target with this email already exists' });
+			}
+			throw e;
 		}
-
-		const targets = Array.isArray(campaign.targets) ? (campaign.targets as Array<{ name: string; email: string; title?: string; district?: string }>) : [];
-
-		if (targets.length >= 50) {
-			return fail(400, { error: 'Maximum of 50 targets per campaign' });
-		}
-
-		if (targets.some((t) => t.email === email)) {
-			return fail(400, { error: 'A target with this email already exists' });
-		}
-
-		targets.push({ name, email, title, district });
-
-		await db.campaign.update({
-			where: { id: params.id },
-			data: { targets }
-		});
 
 		return { success: true };
 	},
@@ -253,8 +225,6 @@ export const actions: Actions = {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/campaigns/${params.id}`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
 
 		const formData = await request.formData();
 		const email = formData.get('email')?.toString().trim().toLowerCase();
@@ -263,20 +233,18 @@ export const actions: Actions = {
 			return fail(400, { error: 'Target email is required' });
 		}
 
-		const campaign = await db.campaign.findFirst({
-			where: { id: params.id, orgId: org.id }
-		});
-		if (!campaign) {
-			throw error(404, 'Campaign not found');
+		try {
+			await serverMutation(api.campaigns.removeTarget, {
+				campaignId: params.id as any,
+				slug: params.slug,
+				email
+			});
+		} catch (e: any) {
+			if (e.message?.includes('not found')) {
+				throw error(404, 'Campaign not found');
+			}
+			throw e;
 		}
-
-		const targets = Array.isArray(campaign.targets) ? (campaign.targets as Array<{ name: string; email: string; title?: string; district?: string }>) : [];
-		const filtered = targets.filter((t) => t.email !== email);
-
-		await db.campaign.update({
-			where: { id: params.id },
-			data: { targets: filtered }
-		});
 
 		return { success: true };
 	},
@@ -285,8 +253,6 @@ export const actions: Actions = {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/campaigns/${params.id}`);
 		}
-		const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-		requireRole(membership.role, 'editor');
 
 		const formData = await request.formData();
 		const newStatus = formData.get('status')?.toString();
@@ -295,24 +261,21 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid status' });
 		}
 
-		const campaign = await db.campaign.findFirst({
-			where: { id: params.id, orgId: org.id }
-		});
-		if (!campaign) {
-			throw error(404, 'Campaign not found');
-		}
-
-		const allowed = VALID_TRANSITIONS[campaign.status] ?? [];
-		if (!allowed.includes(newStatus)) {
-			return fail(400, {
-				error: `Cannot transition from ${campaign.status} to ${newStatus}`
+		try {
+			await serverMutation(api.campaigns.updateStatus, {
+				campaignId: params.id as any,
+				slug: params.slug,
+				status: newStatus
 			});
+		} catch (e: any) {
+			if (e.message?.includes('not found')) {
+				throw error(404, 'Campaign not found');
+			}
+			if (e.message?.includes('Cannot transition')) {
+				return fail(400, { error: e.message });
+			}
+			throw e;
 		}
-
-		await db.campaign.update({
-			where: { id: params.id },
-			data: { status: newStatus }
-		});
 
 		return { success: true, newStatus };
 	}

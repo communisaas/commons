@@ -1,7 +1,9 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole, loadOrg, requireAuth } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
+import { encryptSupporterEmail, computeEmailHash } from "./_pii";
 import { internal } from "./_generated/api";
 
 // =============================================================================
@@ -66,6 +68,38 @@ export const list = query({
       page: campaigns,
       isDone: results.isDone,
       continueCursor: results.continueCursor,
+    };
+  },
+});
+
+/**
+ * Public campaign by ID (any type). No auth required.
+ * Returns public-safe fields. Used by submission pages (c/[slug], embed/campaign/[slug]).
+ */
+export const getPublicAny = query({
+  args: { campaignId: v.string() },
+  handler: async (ctx, { campaignId }) => {
+    let campaign;
+    try {
+      campaign = await ctx.db.get(campaignId as Id<"campaigns">);
+    } catch {
+      return null;
+    }
+    if (!campaign || campaign.status !== "ACTIVE") return null;
+
+    const org = await ctx.db.get(campaign.orgId);
+
+    return {
+      _id: campaign._id,
+      title: campaign.title,
+      type: campaign.type,
+      status: campaign.status,
+      body: campaign.body ?? null,
+      orgName: org?.name ?? null,
+      orgSlug: org?.slug ?? null,
+      orgAvatar: org?.avatar ?? null,
+      verifiedActionCount: campaign.verifiedActionCount ?? 0,
+      targets: campaign.targets ?? null,
     };
   },
 });
@@ -276,10 +310,13 @@ export const update = mutation({
     campaignId: v.id("campaigns"),
     slug: v.string(),
     title: v.optional(v.string()),
+    type: v.optional(v.string()),
     body: v.optional(v.string()),
     status: v.optional(v.string()),
+    templateId: v.optional(v.string()),
     debateEnabled: v.optional(v.boolean()),
     debateThreshold: v.optional(v.number()),
+    targetCountry: v.optional(v.string()),
     targetJurisdiction: v.optional(v.string()),
     position: v.optional(v.string()),
   },
@@ -299,6 +336,13 @@ export const update = mutation({
       if (!args.title.trim()) throw new Error("Title is required");
       updates.title = args.title.trim();
     }
+    if (args.type !== undefined) {
+      const validTypes = ["LETTER", "EVENT", "FORM"];
+      if (!validTypes.includes(args.type)) {
+        throw new Error("Invalid campaign type");
+      }
+      updates.type = args.type;
+    }
     if (args.body !== undefined) updates.body = args.body.trim() || undefined;
     if (args.status !== undefined) {
       const validStatuses = ["DRAFT", "ACTIVE", "PAUSED", "COMPLETE"];
@@ -307,8 +351,10 @@ export const update = mutation({
       }
       updates.status = args.status;
     }
+    if (args.templateId !== undefined) updates.templateId = args.templateId || undefined;
     if (args.debateEnabled !== undefined) updates.debateEnabled = args.debateEnabled;
     if (args.debateThreshold !== undefined) updates.debateThreshold = args.debateThreshold;
+    if (args.targetCountry !== undefined) updates.targetCountry = args.targetCountry;
     if (args.targetJurisdiction !== undefined) updates.targetJurisdiction = args.targetJurisdiction;
     if (args.position !== undefined) updates.position = args.position;
 
@@ -427,5 +473,457 @@ export const recordResponse = mutation({
 
     // No receipt yet — record acknowledged
     return { deliveryId: args.deliveryId, recorded: true };
+  },
+});
+
+/** Valid status transitions */
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  DRAFT: ["ACTIVE"],
+  ACTIVE: ["PAUSED", "COMPLETE"],
+  PAUSED: ["ACTIVE", "COMPLETE"],
+  COMPLETE: [],
+};
+
+/**
+ * Update campaign status with transition validation. Requires editor+ role.
+ */
+export const updateStatus = mutation({
+  args: {
+    campaignId: v.id("campaigns"),
+    slug: v.string(),
+    status: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.orgId !== org._id) {
+      throw new Error("Campaign not found");
+    }
+
+    const validStatuses = ["DRAFT", "ACTIVE", "PAUSED", "COMPLETE"];
+    if (!validStatuses.includes(args.status)) {
+      throw new Error("Invalid status");
+    }
+
+    const allowed = VALID_TRANSITIONS[campaign.status] ?? [];
+    if (!allowed.includes(args.status)) {
+      throw new Error(
+        `Cannot transition from ${campaign.status} to ${args.status}`,
+      );
+    }
+
+    await ctx.db.patch(args.campaignId, {
+      status: args.status,
+      updatedAt: Date.now(),
+    });
+
+    return args.campaignId;
+  },
+});
+
+/**
+ * Add a target to a campaign's targets JSON array. Requires editor+ role.
+ */
+export const addTarget = mutation({
+  args: {
+    campaignId: v.id("campaigns"),
+    slug: v.string(),
+    target: v.object({
+      name: v.string(),
+      email: v.string(),
+      title: v.optional(v.string()),
+      district: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.orgId !== org._id) {
+      throw new Error("Campaign not found");
+    }
+
+    const targets = Array.isArray(campaign.targets)
+      ? (campaign.targets as Array<{
+          name: string;
+          email: string;
+          title?: string;
+          district?: string;
+        }>)
+      : [];
+
+    if (targets.length >= 50) {
+      throw new Error("Maximum of 50 targets per campaign");
+    }
+
+    const email = args.target.email.trim().toLowerCase();
+    if (targets.some((t) => t.email === email)) {
+      throw new Error("A target with this email already exists");
+    }
+
+    targets.push({
+      name: args.target.name.trim(),
+      email,
+      title: args.target.title?.trim() || undefined,
+      district: args.target.district?.trim() || undefined,
+    });
+
+    await ctx.db.patch(args.campaignId, {
+      targets,
+      updatedAt: Date.now(),
+    });
+
+    return args.campaignId;
+  },
+});
+
+/**
+ * Remove a target from a campaign by email. Requires editor+ role.
+ */
+export const removeTarget = mutation({
+  args: {
+    campaignId: v.id("campaigns"),
+    slug: v.string(),
+    email: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.orgId !== org._id) {
+      throw new Error("Campaign not found");
+    }
+
+    const targets = Array.isArray(campaign.targets)
+      ? (campaign.targets as Array<{
+          name: string;
+          email: string;
+          title?: string;
+          district?: string;
+        }>)
+      : [];
+
+    const email = args.email.trim().toLowerCase();
+    const filtered = targets.filter((t) => t.email !== email);
+
+    await ctx.db.patch(args.campaignId, {
+      targets: filtered,
+      updatedAt: Date.now(),
+    });
+
+    return args.campaignId;
+  },
+});
+
+// =============================================================================
+// SUBMISSION — Public campaign action submission (no auth required)
+// =============================================================================
+
+/**
+ * Internal query: Get an active campaign by ID (any type, not just FUNDRAISER).
+ * Used by the submitAction action.
+ */
+export const getActiveCampaign = internalQuery({
+  args: { campaignId: v.string() },
+  handler: async (ctx, { campaignId }) => {
+    // Try direct ID lookup first
+    try {
+      const campaign = await ctx.db.get(campaignId as Id<"campaigns">);
+      if (campaign && campaign.status === "ACTIVE") {
+        const org = await ctx.db.get(campaign.orgId);
+        return {
+          _id: campaign._id,
+          orgId: campaign.orgId,
+          orgSlug: org?.slug ?? "",
+          type: campaign.type,
+          title: campaign.title,
+          debateEnabled: campaign.debateEnabled,
+          debateThreshold: campaign.debateThreshold,
+          debateId: campaign.debateId ?? null,
+          actionCount: campaign.actionCount ?? 0,
+          verifiedActionCount: campaign.verifiedActionCount ?? 0,
+        };
+      }
+    } catch {
+      // Not a valid Convex ID — fall through
+    }
+    return null;
+  },
+});
+
+/**
+ * Internal mutation: Find or create a supporter for a campaign submission.
+ * Returns the supporter ID and whether it was newly created.
+ */
+export const findOrCreateSupporter = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    emailHash: v.string(),
+    encryptedEmail: v.string(),
+    name: v.optional(v.string()),
+    postalCode: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    source: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Check for existing supporter by email hash
+    const existing = await ctx.db
+      .query("supporters")
+      .withIndex("by_orgId_emailHash", (idx) =>
+        idx.eq("orgId", args.orgId).eq("emailHash", args.emailHash),
+      )
+      .first();
+
+    if (existing) {
+      // Update fields if not already set
+      const patch: Record<string, unknown> = {};
+      if (args.name && !existing.name) patch.name = args.name;
+      if (args.postalCode && !existing.postalCode) patch.postalCode = args.postalCode;
+      if (args.phone && !existing.phone) patch.phone = args.phone;
+      if (Object.keys(patch).length > 0) {
+        patch.updatedAt = Date.now();
+        await ctx.db.patch(existing._id, patch);
+      }
+      return { supporterId: existing._id, isNew: false };
+    }
+
+    // Create new supporter
+    const now = Date.now();
+    const supporterId = await ctx.db.insert("supporters", {
+      orgId: args.orgId,
+      encryptedEmail: args.encryptedEmail,
+      emailHash: args.emailHash,
+      name: args.name,
+      postalCode: args.postalCode,
+      country: "US",
+      phone: args.phone,
+      source: args.source,
+      verified: false,
+      emailStatus: "subscribed",
+      smsStatus: "none",
+      updatedAt: now,
+    });
+
+    // Increment org supporterCount
+    const org = await ctx.db.get(args.orgId);
+    if (org) {
+      const newCount = (org.supporterCount ?? 0) + 1;
+      const onboarding = org.onboardingState ?? {
+        hasDescription: false,
+        hasIssueDomains: false,
+        hasSupporters: false,
+        hasCampaigns: false,
+        hasTeam: false,
+        hasSentEmail: false,
+      };
+      await ctx.db.patch(args.orgId, {
+        supporterCount: newCount,
+        onboardingState: { ...onboarding, hasSupporters: true },
+        updatedAt: now,
+      });
+    }
+
+    return { supporterId, isNew: true };
+  },
+});
+
+/**
+ * Internal mutation: Create a campaign action (dedup on supporter+campaign).
+ * Returns action count and whether it was a duplicate.
+ */
+export const createCampaignAction = internalMutation({
+  args: {
+    campaignId: v.id("campaigns"),
+    supporterId: v.id("supporters"),
+    verified: v.boolean(),
+    engagementTier: v.number(),
+    districtHash: v.optional(v.string()),
+    messageHash: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // Deduplicate: one action per supporter per campaign
+    const existing = await ctx.db
+      .query("campaignActions")
+      .withIndex("by_campaignId", (q) => q.eq("campaignId", args.campaignId))
+      .collect();
+
+    const alreadySubmitted = existing.find(
+      (a) => a.supporterId === args.supporterId,
+    );
+    if (alreadySubmitted) {
+      const verifiedCount = existing.filter((a) => a.verified).length;
+      return { alreadySubmitted: true, actionCount: verifiedCount };
+    }
+
+    await ctx.db.insert("campaignActions", {
+      campaignId: args.campaignId,
+      supporterId: args.supporterId,
+      verified: args.verified,
+      engagementTier: args.engagementTier,
+      districtHash: args.districtHash,
+      messageHash: args.messageHash,
+      delegated: false,
+      sentAt: Date.now(),
+    });
+
+    // Update campaign counters
+    const campaign = await ctx.db.get(args.campaignId);
+    if (campaign) {
+      const newActionCount = (campaign.actionCount ?? 0) + 1;
+      const newVerifiedCount = args.verified
+        ? (campaign.verifiedActionCount ?? 0) + 1
+        : campaign.verifiedActionCount ?? 0;
+      await ctx.db.patch(args.campaignId, {
+        actionCount: newActionCount,
+        verifiedActionCount: newVerifiedCount,
+        updatedAt: Date.now(),
+      });
+    }
+
+    // Count for return value
+    const verifiedCount = existing.filter((a) => a.verified).length + (args.verified ? 1 : 0);
+    const totalCount = existing.length + 1;
+
+    return { alreadySubmitted: false, actionCount: verifiedCount, totalCount };
+  },
+});
+
+/**
+ * Public action: Submit a campaign action (sign a letter, etc.).
+ * No auth required — supporters identify by email.
+ * Handles PII encryption (random IV → action), supporter dedup, action dedup.
+ */
+export const submitAction = action({
+  args: {
+    campaignId: v.string(),
+    email: v.string(),
+    name: v.string(),
+    postalCode: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    message: v.optional(v.string()),
+    districtCode: v.optional(v.string()),
+    source: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // Get campaign
+    const campaign = await ctx.runQuery(internal.campaigns.getActiveCampaign, {
+      campaignId: args.campaignId,
+    });
+    if (!campaign) {
+      throw new Error("Campaign not found or inactive");
+    }
+
+    // Validate
+    if (!args.email) throw new Error("Email is required");
+    if (!args.name) throw new Error("Name is required");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.email)) {
+      throw new Error("Please enter a valid email address");
+    }
+    if (args.message && args.message.length > 5000) {
+      throw new Error("Message too long (5000 character maximum)");
+    }
+
+    const normalizedEmail = args.email.trim().toLowerCase();
+
+    // Encrypt email (random IV → must be in action)
+    const emailHash = await computeEmailHash(normalizedEmail);
+    if (!emailHash) throw new Error("Encryption service not available");
+
+    // Step 1: Find or create supporter with placeholder email
+    const { supporterId, isNew } = await ctx.runMutation(
+      internal.campaigns.findOrCreateSupporter,
+      {
+        orgId: campaign.orgId,
+        emailHash,
+        encryptedEmail: "", // placeholder
+        name: args.name,
+        postalCode: args.postalCode,
+        phone: args.phone,
+        source: args.source ?? "campaign",
+      },
+    );
+
+    // Step 2: If new, encrypt email with real ID and patch
+    if (isNew) {
+      const { encryptedEmail } = await encryptSupporterEmail(
+        normalizedEmail,
+        supporterId,
+      );
+      await ctx.runMutation(internal.supporters.patchEncryptedEmail, {
+        supporterId: supporterId as Id<"supporters">,
+        encryptedEmail,
+      });
+    }
+
+    // Compute district hash
+    let districtHash: string | undefined;
+    let districtVerified = false;
+    const districtCodePattern = /^[A-Z]{2}-(\d{2}|AL)$/;
+    if (args.districtCode && districtCodePattern.test(args.districtCode)) {
+      const encoder = new TextEncoder();
+      const salt = "commons-district-v1";
+      const hashBuffer = await crypto.subtle.digest(
+        "SHA-256",
+        encoder.encode(`${salt}:${args.districtCode.toLowerCase()}`),
+      );
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      districtHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+      districtVerified = true;
+    } else if (args.postalCode) {
+      const encoder = new TextEncoder();
+      const salt = "commons-district-v1";
+      const hashBuffer = await crypto.subtle.digest(
+        "SHA-256",
+        encoder.encode(`${salt}:${args.postalCode.toLowerCase()}`),
+      );
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      districtHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    // Compute message hash
+    let messageHash: string | undefined;
+    if (args.message) {
+      const encoder = new TextEncoder();
+      const hashBuffer = await crypto.subtle.digest(
+        "SHA-256",
+        encoder.encode(args.message),
+      );
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      messageHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    // Create campaign action (dedup inside mutation)
+    const verified = districtVerified || !!args.postalCode;
+    const engagementTier = districtVerified ? 2 : args.postalCode ? 1 : 0;
+
+    const result = await ctx.runMutation(
+      internal.campaigns.createCampaignAction,
+      {
+        campaignId: campaign._id as Id<"campaigns">,
+        supporterId: supporterId as Id<"supporters">,
+        verified,
+        engagementTier,
+        districtHash,
+        messageHash,
+      },
+    );
+
+    if (result.alreadySubmitted) {
+      return {
+        success: true,
+        actionCount: result.actionCount,
+        supporterName: args.name,
+        alreadySubmitted: true,
+      };
+    }
+
+    return {
+      success: true,
+      actionCount: result.actionCount,
+      totalCount: result.totalCount,
+      supporterName: args.name,
+      verified,
+    };
   },
 });

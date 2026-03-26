@@ -1,19 +1,23 @@
-// CONVEX: Keep SvelteKit — POST uses Groq moderation, Gemini embeddings, content hashing, billing quota, $transaction
+// CONVEX: GET fully migrated. POST KEEP on Prisma — uses moderateTemplate (Groq external API),
+// generateBatchEmbeddings (Gemini external API), $transaction with org quota check,
+// raw SQL for pgvector UPDATE (location_embedding, topic_embedding), content hash dedup.
+// These cannot move to Convex without rewriting moderation, embedding generation,
+// and vector storage as Convex actions with separate internal mutations.
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { db } from '$lib/core/db';
+import { db } from '$lib/core/db'; // KEEP: POST uses $transaction, raw SQL for pgvector, content hash dedup
 import {
 	createApiError,
 	createValidationError,
 	type StructuredApiResponse,
 	type ApiError
 } from '$lib/types/errors';
-import type { InputJsonValue } from '@prisma/client/runtime/library';
+import type { InputJsonValue } from '@prisma/client/runtime/library'; // KEEP: Prisma JSON type for template fields
 import type { UnknownRecord } from '$lib/types/any-replacements';
-import { moderateTemplate } from '$lib/core/server/moderation';
-import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
-import { createHash } from 'crypto';
-import { getMonthlyTemplateCount } from '$lib/server/billing/usage';
+import { moderateTemplate } from '$lib/core/server/moderation'; // KEEP: Groq moderation (external API)
+import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings'; // KEEP: Gemini embeddings (external API)
+import { createHash } from 'crypto'; // KEEP: content hash for dedup
+import { getMonthlyTemplateCount } from '$lib/server/billing/usage'; // KEEP: billing quota in $transaction
 import { captureWithContext } from '$lib/server/monitoring/sentry';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
@@ -170,14 +174,22 @@ function validateTemplateData(data: unknown): {
 	return { isValid: true, errors: [], validData };
 }
 
+// CONVEX: GET fully migrated
 export const GET: RequestHandler = async () => {
 	const templates = await serverQuery(api.templates.listPublic, {});
 	const response: StructuredApiResponse = { success: true, data: templates };
 	return json(response);
 };
 
-// TODO: migrate POST to Convex — currently uses Prisma for moderation (Groq),
-// embeddings (Gemini), content hashing, billing quota, CWC verification
+// KEEP on Prisma: POST uses moderateTemplate (Groq external API call with consensus voting),
+// generateBatchEmbeddings (Gemini external API for pgvector), $transaction (quota check + template
+// + templateScope insert), raw SQL for pgvector UPDATE ($executeRaw with ::vector cast),
+// content hash dedup (findFirst by content_hash). Moving this to Convex would require:
+// 1. A Convex action for moderation + embedding API calls
+// 2. Convex vector index instead of pgvector (different embedding format)
+// 3. Internal mutations for quota check + template insert
+// 4. Rewriting the geographic scope insert
+// This is a large rewrite with no functional benefit during migration.
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
 	try {
 		// Parse request body
@@ -215,7 +227,8 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		}
 		const validData = validation.validData;
 
-		// === 2-LAYER CONTENT MODERATION (Llama Guard 4 + Gemini) ===
+		// === KEEP: 2-LAYER CONTENT MODERATION (Llama Guard 4 + Gemini) ===
+		// Uses Groq external API — cannot run in Convex mutation (must be action)
 		let consensusResult;
 
 		try {
@@ -309,6 +322,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				return json(response, { status: 403 });
 			}
 
+			// KEEP: orgMembership lookup via Prisma (needed for $transaction quota check)
 			const orgMembership = await db.orgMembership.findFirst({
 				where: { userId: user.id },
 				select: { orgId: true }
@@ -317,6 +331,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			try {
 				const hash = contentHash(validData.title, validData.message_body);
 
+				// KEEP: content hash dedup via Prisma (findFirst by content_hash)
 				const existingByContent = await db.template.findFirst({
 					where: { userId: user.id, content_hash: hash }
 				});
@@ -384,6 +399,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 							.replace(/\s+/g, '-')
 							.substring(0, 100);
 
+				// KEEP: slug uniqueness check via Prisma
 				const existingTemplate = await db.template.findUnique({
 					where: { slug }
 				});
@@ -400,6 +416,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					return json(response, { status: 400 });
 				}
 
+				// KEEP: $transaction with quota check + template + templateScope insert
 				const newTemplate = await db.$transaction(async (tx) => {
 					if (orgMembership) {
 						const org = await tx.organization.findUnique({
@@ -493,6 +510,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				const isPublic = newTemplate.is_public;
 				const isCwc = validData.deliveryMethod === 'cwc';
 
+				// KEEP: Deferred work uses Prisma — CWC verification update + pgvector embedding generation
 				if (isCwc || isPublic) {
 					const deferredWork = (async () => {
 						if (isCwc) {
@@ -511,6 +529,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 							}
 						}
 
+						// KEEP: pgvector embedding generation — raw SQL UPDATE with ::vector cast
 						if (isPublic) {
 							try {
 								const locationText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.category}`;
