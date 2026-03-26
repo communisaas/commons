@@ -37,6 +37,7 @@ export default defineSchema({
 
   users: defineTable({
     // Auth (email kept as optional legacy — encrypted_email + email_hash canonical)
+    tokenIdentifier: v.optional(v.string()),
     email: v.optional(v.string()),
     name: v.optional(v.string()),
     avatar: v.optional(v.string()),
@@ -113,6 +114,7 @@ export default defineSchema({
     profileCompletedAt: v.optional(v.number()),
     profileVisibility: v.string(), // 'private' | 'public'
   })
+    .index("by_tokenIdentifier", ["tokenIdentifier"])
     .index("by_email", ["email"])
     .index("by_emailHash", ["emailHash"])
     .index("by_identityHash", ["identityHash"])

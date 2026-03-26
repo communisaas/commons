@@ -131,6 +131,13 @@ export const create = mutation({
       throw new Error("Workflow name is required");
     }
 
+    const triggerStr = JSON.stringify(args.trigger);
+    const stepsStr = JSON.stringify(args.steps);
+    if (triggerStr.length > 10_000) throw new Error("Trigger definition too large");
+    if (stepsStr.length > 100_000) throw new Error("Steps definition too large");
+    if (!Array.isArray(args.steps)) throw new Error("Steps must be an array");
+    if (args.steps.length > 50) throw new Error("Maximum 50 steps per workflow");
+
     return await ctx.db.insert("workflows", {
       orgId: org._id,
       name: args.name.trim(),
@@ -161,6 +168,17 @@ export const update = mutation({
     const workflow = await ctx.db.get(args.workflowId);
     if (!workflow || workflow.orgId !== org._id) {
       throw new Error("Workflow not found");
+    }
+
+    if (args.trigger !== undefined) {
+      const triggerStr = JSON.stringify(args.trigger);
+      if (triggerStr.length > 10_000) throw new Error("Trigger definition too large");
+    }
+    if (args.steps !== undefined) {
+      const stepsStr = JSON.stringify(args.steps);
+      if (stepsStr.length > 100_000) throw new Error("Steps definition too large");
+      if (!Array.isArray(args.steps)) throw new Error("Steps must be an array");
+      if (args.steps.length > 50) throw new Error("Maximum 50 steps per workflow");
     }
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };

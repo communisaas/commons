@@ -28,25 +28,22 @@ export async function requireAuth(
     throw new Error("Not authenticated");
   }
 
-  // Look up user by email from the auth identity
-  const email = identity.email;
-  if (!email) {
-    throw new Error("Auth identity has no email");
-  }
-
+  // Prefer tokenIdentifier (guaranteed by Convex), fall back to email
   const user = await ctx.db
     .query("users")
-    .withIndex("by_email", (q) => q.eq("email", email))
-    .first();
+    .withIndex("by_tokenIdentifier", (q) => q.eq("tokenIdentifier", identity.tokenIdentifier))
+    .unique();
+  if (user) return { userId: user._id, tokenIdentifier: identity.tokenIdentifier };
 
-  if (!user) {
-    throw new Error("User not found");
+  // Fallback: legacy email lookup (for migration period)
+  if (identity.email) {
+    const userByEmail = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", identity.email))
+      .unique();
+    if (userByEmail) return { userId: userByEmail._id, tokenIdentifier: identity.tokenIdentifier };
   }
-
-  return {
-    userId: user._id,
-    tokenIdentifier: identity.tokenIdentifier,
-  };
+  throw new Error("User not found");
 }
 
 /**

@@ -218,7 +218,8 @@ export const deliverToCongress = internalAction({
       // Decrypt witness via TEE resolver
       const teeUrl = process.env.TEE_RESOLVER_URL;
       if (!teeUrl) {
-        throw new Error("TEE_RESOLVER_URL not configured");
+        console.error("[submissions] TEE_RESOLVER_URL not configured");
+        throw new Error("Service configuration error");
       }
 
       const resolveResponse = await fetch(`${teeUrl}/resolve`, {
@@ -232,7 +233,8 @@ export const deliverToCongress = internalAction({
       });
 
       if (!resolveResponse.ok) {
-        throw new Error(`TEE resolver failed: ${resolveResponse.status}`);
+        console.error(`[submissions] TEE resolver failed: ${resolveResponse.status}`);
+        throw new Error("Delivery service error — please retry");
       }
 
       const resolved = await resolveResponse.json();
@@ -249,7 +251,8 @@ export const deliverToCongress = internalAction({
       const saUrl = process.env.SHADOW_ATLAS_URL || "https://atlas.commons.email";
       const saResponse = await fetch(`${saUrl}/api/officials/${districtCode}`);
       if (!saResponse.ok) {
-        throw new Error(`Shadow Atlas lookup failed: ${saResponse.status}`);
+        console.error(`[submissions] Shadow Atlas lookup failed: ${saResponse.status}`);
+        throw new Error("Delivery service error — please retry");
       }
       const { officials } = await saResponse.json();
 
@@ -418,7 +421,10 @@ export const getTemplateForDelivery = internalQuery({
  */
 async function computePseudonymousId(userId: string): Promise<string> {
   const salt = process.env.PSEUDONYMOUS_ID_SALT;
-  if (!salt) throw new Error("PSEUDONYMOUS_ID_SALT must be set");
+  if (!salt) {
+    console.error("[submissions] PSEUDONYMOUS_ID_SALT not configured");
+    throw new Error("Service configuration error");
+  }
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",

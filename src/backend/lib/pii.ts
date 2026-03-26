@@ -171,10 +171,8 @@ export async function decryptPii(
 ): Promise<string> {
   const masterKeyHex = getPiiEncryptionKey();
   if (!masterKeyHex) {
-    throw new Error(
-      "PII_ENCRYPTION_KEY not set — cannot decrypt PII. " +
-        "Set the same key that was used to encrypt.",
-    );
+    console.error("[PII] PII_ENCRYPTION_KEY not set — cannot decrypt PII");
+    throw new Error("Encryption service not available");
   }
 
   const masterKey = await importPiiMasterKey(masterKeyHex);
@@ -228,10 +226,8 @@ export async function encryptPii(
 ): Promise<EncryptedPii> {
   const masterKeyHex = getPiiEncryptionKey();
   if (!masterKeyHex) {
-    throw new Error(
-      "PII_ENCRYPTION_KEY not set — cannot encrypt PII. " +
-        "Generate with: openssl rand -hex 32",
-    );
+    console.error("[PII] PII_ENCRYPTION_KEY not set — cannot encrypt PII");
+    throw new Error("Encryption service not available");
   }
 
   const masterKey = await importPiiMasterKey(masterKeyHex);
@@ -272,9 +268,8 @@ export async function encryptSupporterEmail(
   ]);
 
   if (!hash) {
-    throw new Error(
-      "EMAIL_LOOKUP_KEY not set — cannot compute email hash for supporter",
-    );
+    console.error("[PII] EMAIL_LOOKUP_KEY not set — cannot compute email hash for supporter");
+    throw new Error("Encryption service not available");
   }
 
   return {

@@ -124,9 +124,8 @@ export const checkPlanLimits = query({
 /**
  * Create a subscription record (typically called from Stripe webhook).
  */
-export const create = mutation({
+export const create = internalMutation({
   args: {
-    orgSlug: v.optional(v.string()),
     orgId: v.optional(v.id("organizations")),
     userId: v.optional(v.id("users")),
     plan: v.string(),
@@ -140,14 +139,6 @@ export const create = mutation({
   handler: async (ctx, args) => {
     if (!args.orgId && !args.userId) {
       throw new Error("Either orgId or userId is required");
-    }
-
-    // If org-scoped, require owner role
-    if (args.orgId) {
-      if (!args.orgSlug) throw new Error("orgSlug is required for org subscriptions");
-      await requireOrgRole(ctx, args.orgSlug, "owner");
-    } else {
-      await requireAuth(ctx);
     }
 
     return await ctx.db.insert("subscriptions", {
@@ -168,7 +159,7 @@ export const create = mutation({
 /**
  * Update a subscription (status, period, plan changes).
  */
-export const update = mutation({
+export const update = internalMutation({
   args: {
     subscriptionId: v.id("subscriptions"),
     plan: v.optional(v.string()),
@@ -180,16 +171,6 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const sub = await ctx.db.get(args.subscriptionId);
     if (!sub) throw new Error("Subscription not found");
-
-    // Verify ownership: require owner role if org-scoped, or auth if user-scoped
-    if (sub.orgId) {
-      const org = await ctx.db.get(sub.orgId);
-      if (!org) throw new Error("Organization not found");
-      await requireOrgRole(ctx, org.slug, "owner");
-    } else {
-      const { userId } = await requireAuth(ctx);
-      if (sub.userId !== userId) throw new Error("Not authorized");
-    }
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.plan !== undefined) patch.plan = args.plan;

@@ -84,7 +84,8 @@ http.route({
     // --- Stripe HMAC-SHA256 signature verification ---
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
     if (!webhookSecret) {
-      return new Response("Webhook secret not configured", { status: 500 });
+      console.error("[webhooks/stripe] STRIPE_WEBHOOK_SECRET not configured");
+      return new Response("Internal server error", { status: 500 });
     }
 
     // Parse signature header: t=timestamp,v1=signature

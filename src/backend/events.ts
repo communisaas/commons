@@ -378,7 +378,8 @@ export const createRsvp = action({
     // Compute email hash first
     const emailHash = await computeEmailHash(args.email.toLowerCase());
     if (!emailHash) {
-      throw new Error("EMAIL_LOOKUP_KEY not configured — cannot create RSVP");
+      console.error("[events.createRsvp] EMAIL_LOOKUP_KEY not configured");
+      throw new Error("Encryption service not available");
     }
 
     // Insert with placeholder, encrypt with real _id, then patch (same pattern as supporters)

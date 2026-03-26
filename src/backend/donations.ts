@@ -334,7 +334,8 @@ export const processCheckout = action({
     // Create Stripe Checkout Session
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) {
-      throw new Error("STRIPE_SECRET_KEY not configured");
+      console.error("[donations.processCheckout] STRIPE_SECRET_KEY not configured");
+      throw new Error("Service configuration error");
     }
 
     const mode = args.recurring ? "subscription" : "payment";
@@ -379,7 +380,8 @@ export const processCheckout = action({
 
     if (!stripeResponse.ok) {
       const errText = await stripeResponse.text();
-      throw new Error(`Stripe Checkout failed: ${errText}`);
+      console.error(`[donations.processCheckout] Stripe Checkout failed: ${errText}`);
+      throw new Error("Payment processing failed — please try again");
     }
 
     const session = await stripeResponse.json();

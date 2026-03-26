@@ -95,7 +95,8 @@ async function generateQueryEmbedding(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Gemini embedding API error ${response.status}: ${text}`);
+    console.error(`[templates.search] Gemini error ${response.status}: ${text}`);
+    throw new Error("Search service temporarily unavailable");
   }
 
   const data = await response.json();

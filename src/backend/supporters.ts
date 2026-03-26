@@ -207,7 +207,8 @@ export const searchByEmail = query({
 
     const emailHash = await computeEmailHash(args.email);
     if (!emailHash) {
-      throw new Error("EMAIL_LOOKUP_KEY not configured");
+      console.error("[supporters.searchByEmail] EMAIL_LOOKUP_KEY not configured");
+      throw new Error("Encryption service not available");
     }
 
     const supporter = await ctx.db
@@ -331,7 +332,8 @@ export const create = action({
     // Compute email hash for duplicate checking (deterministic)
     const emailHash = await computeEmailHash(normalizedEmail);
     if (!emailHash) {
-      throw new Error("EMAIL_LOOKUP_KEY not configured — cannot create supporter");
+      console.error("[supporters.create] EMAIL_LOOKUP_KEY not configured");
+      throw new Error("Encryption service not available");
     }
 
     // Step 1: Insert with placeholder encrypted email, get _id back
@@ -391,7 +393,8 @@ export const update = action({
       const normalizedEmail = args.email.trim().toLowerCase();
       const emailHash = await computeEmailHash(normalizedEmail);
       if (!emailHash) {
-        throw new Error("EMAIL_LOOKUP_KEY not configured");
+        console.error("[supporters.update] EMAIL_LOOKUP_KEY not configured");
+        throw new Error("Encryption service not available");
       }
 
       const { encryptedEmail } = await encryptSupporterEmail(
