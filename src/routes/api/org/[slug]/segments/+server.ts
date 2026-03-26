@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — partially migrated, Prisma retained for: buildSegmentWhere, SES engine, pgvector, Groq/Gemini APIs
 // CONVEX: CRUD (list/save/update/delete) fully migrated. Bulk operations (count/apply_tag/remove_tag/export_csv)
 // KEEP on Prisma: buildSegmentWhere is a Prisma query builder that generates complex WHERE clauses.
 // These operations cannot be replicated in Convex without rewriting the entire filter engine in JS.

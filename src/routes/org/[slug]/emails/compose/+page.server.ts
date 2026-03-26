@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — partially migrated, Prisma retained for: buildSegmentWhere, SES engine, pgvector, Groq/Gemini APIs
 // CONVEX: Load migrated. Form actions partially migrated — blast creation uses Convex mutations.
 // KEEP: countRecipients, resolveRecipients, sendBlast, compileEmail, sanitizeEmailBody (SvelteKit server modules)
 // KEEP: db import for campaignId validation (campaignId is Prisma string ID, not Convex ID)

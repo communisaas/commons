@@ -1,3 +1,4 @@
+// CONVEX: Keep SvelteKit — partially migrated, Prisma retained for: buildSegmentWhere, SES engine, pgvector, Groq/Gemini APIs
 // CONVEX: GET fully migrated. POST KEEP on Prisma — uses moderateTemplate (Groq external API),
 // generateBatchEmbeddings (Gemini external API), $transaction with org quota check,
 // raw SQL for pgvector UPDATE (location_embedding, topic_embedding), content hash dedup.
