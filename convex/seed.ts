@@ -160,10 +160,10 @@ export const seedAll = internalAction({
     await ctx.runMutation(internal.seed.insertMemberships, { userIds, orgIds });
 
     console.log("[seed] Phase 4: Inserting templates...");
-    await ctx.runMutation(internal.seed.insertTemplates, { userIds, orgIds });
+    const templateIds = await ctx.runMutation(internal.seed.insertTemplates, { userIds, orgIds });
 
     console.log("[seed] Phase 5: Inserting campaigns...");
-    await ctx.runMutation(internal.seed.insertCampaigns, { orgIds });
+    await ctx.runMutation(internal.seed.insertCampaigns, { orgIds, templateIds });
 
     console.log("[seed] Phase 6: Inserting supporters...");
     await ctx.runMutation(internal.seed.insertSupporters, { orgIds });
@@ -199,7 +199,8 @@ export const insertUsers = internalMutation({
     const now = Date.now();
     const ids: Id<"users">[] = [];
 
-    for (const u of SEED_USERS) {
+    for (let i = 0; i < SEED_USERS.length; i++) {
+      const u = SEED_USERS[i];
       const id = await ctx.db.insert("users", {
         tokenIdentifier: u.tokenIdentifier,
         email: u.email,
@@ -231,7 +232,7 @@ export const insertUsers = internalMutation({
 
         // PII placeholders (plaintext email used for dev)
         encryptedEmail: "",
-        emailHash: "",
+        emailHash: `seed-user-${i}`,
       });
       ids.push(id);
     }
@@ -345,12 +346,13 @@ export const insertTemplates = internalMutation({
     userIds: v.array(v.id("users")),
     orgIds: v.array(v.id("organizations")),
   },
-  handler: async (ctx, { userIds, orgIds }) => {
+  handler: async (ctx, { userIds, orgIds }): Promise<Id<"templates">[]> => {
     const now = Date.now();
+    const ids: Id<"templates">[] = [];
 
     for (let i = 0; i < SEED_TEMPLATES.length; i++) {
       const t = SEED_TEMPLATES[i];
-      await ctx.db.insert("templates", {
+      const id = await ctx.db.insert("templates", {
         slug: t.slug,
         title: t.title,
         description: t.description,
@@ -386,7 +388,13 @@ export const insertTemplates = internalMutation({
 
         updatedAt: now,
       });
+      ids.push(id);
+
+      // Fix 5: Update templatesContributed on the author
+      await ctx.db.patch(userIds[i], { templatesContributed: 1 });
     }
+
+    return ids;
   },
 });
 
@@ -397,8 +405,9 @@ export const insertTemplates = internalMutation({
 export const insertCampaigns = internalMutation({
   args: {
     orgIds: v.array(v.id("organizations")),
+    templateIds: v.array(v.id("templates")),
   },
-  handler: async (ctx, { orgIds }): Promise<Id<"campaigns">[]> => {
+  handler: async (ctx, { orgIds, templateIds }): Promise<Id<"campaigns">[]> => {
     const now = Date.now();
     const ids: Id<"campaigns">[] = [];
 
@@ -420,6 +429,7 @@ export const insertCampaigns = internalMutation({
     for (let i = 0; i < orgIds.length; i++) {
       const id = await ctx.db.insert("campaigns", {
         orgId: orgIds[i],
+        templateId: templateIds[i] as string,
         type: "LETTER",
         title: campaignDefs[i].title,
         body: campaignDefs[i].body,
@@ -482,7 +492,7 @@ export const insertSupporters = internalMutation({
 
           // PII placeholders
           encryptedEmail: "",
-          emailHash: "",
+          emailHash: `seed-supporter-${orgIdx * 10 + i}`,
 
           // Status
           verified: i < 7, // 70% verified
@@ -494,8 +504,18 @@ export const insertSupporters = internalMutation({
         });
       }
 
-      // Update supporterCount
-      await ctx.db.patch(orgId, { supporterCount: 10 });
+      // Update supporterCount and set final onboardingState
+      await ctx.db.patch(orgId, {
+        supporterCount: 10,
+        onboardingState: {
+          hasDescription: true,
+          hasIssueDomains: false,
+          hasSupporters: true,
+          hasCampaigns: true,
+          hasTeam: true,
+          hasSentEmail: false,
+        },
+      });
     }
   },
 });
