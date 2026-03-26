@@ -6,6 +6,12 @@ const config = {
 	preprocess: [vitePreprocess()],
 
 	kit: {
+		// $convex alias: allows `import { api } from '$convex/_generated/api'`
+		// in component code. The convex/ directory is at the project root (outside src/),
+		// so SvelteKit needs an explicit alias to resolve it.
+		alias: {
+			'$convex': 'convex'
+		},
 		adapter: adapterCloudflare({
 			prerender: {
 				handleHttpError: 'warn',
@@ -36,7 +42,10 @@ const config = {
 					'https://rpc.scroll.io',
 					// F4: NEAR RPC — chain-signatures.ts via near-provider.ts (browser-side MPC signing)
 					'https://rpc.testnet.near.org',
-					'https://rpc.mainnet.near.org'
+					'https://rpc.mainnet.near.org',
+					// Convex: HTTP queries + WebSocket subscriptions (dual-stack, Cycle 1)
+					'https://*.convex.cloud',
+					'wss://*.convex.cloud'
 				],
 				'worker-src': ['self', 'blob:'],
 				'object-src': ['none'],

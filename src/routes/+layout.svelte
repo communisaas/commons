@@ -5,6 +5,15 @@
 	import { browser } from '$app/environment';
 	// Note: `browser` import restored — needed for credential loading (not route detection)
 	import '../app.css';
+	import { setupConvex } from 'convex-sveltekit';
+	import { PUBLIC_CONVEX_URL } from '$env/static/public';
+
+	// DUAL-STACK: Initialize Convex context alongside Prisma.
+	// This enables convexQuery/convexForm/convexLoad in child components.
+	// User data still comes from Prisma — Convex auth bridge is a later cycle.
+	if (PUBLIC_CONVEX_URL) {
+		setupConvex(PUBLIC_CONVEX_URL);
+	}
 	import Footer from '$lib/components/layout/Footer.svelte';
 	import HeaderSystem from '$lib/components/layout/HeaderSystem.svelte';
 	import CredentialExpiryNudge from '$lib/components/identity/CredentialExpiryNudge.svelte';
