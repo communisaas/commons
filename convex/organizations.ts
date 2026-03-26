@@ -37,6 +37,50 @@ export const getBySlug = query({
 });
 
 /**
+ * Public paginated list of orgs (isPublic: true). No auth required.
+ * Returns public-safe fields only. Manual offset pagination (no cursor).
+ * Used by: src/routes/directory/+page.server.ts
+ */
+export const listPublic = query({
+  args: {
+    limit: v.optional(v.number()),
+    offset: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(args.limit ?? 20, 50);
+    const offset = Math.max(args.offset ?? 0, 0);
+
+    // Collect all public orgs (filtered in-memory since there's no by_isPublic index)
+    const allOrgs = await ctx.db.query("organizations").collect();
+    const publicOrgs = allOrgs.filter((o) => o.isPublic);
+
+    // Sort alphabetically by name
+    publicOrgs.sort((a, b) => a.name.localeCompare(b.name));
+
+    const total = publicOrgs.length;
+    const page = publicOrgs.slice(offset, offset + limit);
+
+    return {
+      orgs: page.map((o) => ({
+        _id: o._id,
+        name: o.name,
+        slug: o.slug,
+        description: o.description ?? null,
+        mission: o.mission ?? null,
+        avatar: o.avatar ?? null,
+        logoUrl: o.logoUrl ?? null,
+        supporterCount: o.supporterCount ?? 0,
+        campaignCount: o.campaignCount ?? 0,
+        memberCount: o.memberCount ?? 0,
+      })),
+      total,
+      limit,
+      offset,
+    };
+  },
+});
+
+/**
  * Authenticated query: full dashboard payload.
  * Reads denormalized counters from org doc + recent campaigns/supporters/members.
  */

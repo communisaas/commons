@@ -1,6 +1,9 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext } from '$lib/server/org';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /**
@@ -13,8 +16,6 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	if (!locals.user) {
 		throw error(401, 'Authentication required');
 	}
-
-	const { org } = await loadOrgContext(params.slug, locals.user.id);
 
 	const body = await request.json();
 	const { status, actionTaken } = body;

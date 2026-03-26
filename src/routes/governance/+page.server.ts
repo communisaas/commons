@@ -1,3 +1,4 @@
+// CONVEX: skip — needs new listAwaitingGovernance query (debates filtered by status + template join); getPublicDetail is per-debate only
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import { prisma } from '$lib/core/db';

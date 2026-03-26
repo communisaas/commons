@@ -9,6 +9,9 @@ import { loadOrgContext, requireRole } from '$lib/server/org';
 import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { FEATURES } from '$lib/config/features';
 import { z } from 'zod';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 const TriggerSchema = z.discriminatedUnion('type', [
@@ -32,14 +35,31 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.AUTOMATION) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
+	const body = await request.json();
+	const { name, description, trigger, steps } = body;
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const workflowId = await serverMutation(api.workflows.create, {
+				slug: params.slug,
+				name: name?.trim(),
+				description: description?.trim() || undefined,
+				trigger,
+				steps
+			});
+			return json({ id: workflowId }, { status: 201 });
+		} catch (err) {
+			console.error('[WorkflowCreate] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 
 	const meetsPlan = await orgMeetsPlan(org.id, 'starter');
 	if (!meetsPlan) throw error(403, 'Automation requires a Starter plan or higher');
-
-	const body = await request.json();
-	const { name, description, trigger, steps } = body;
 
 	// Validate name
 	if (!name || typeof name !== 'string' || name.trim().length < 3) {
@@ -82,6 +102,20 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!FEATURES.AUTOMATION) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.workflows.list, { slug: params.slug });
+			return json({
+				data: result,
+				meta: { cursor: null, hasMore: false }
+			});
+		} catch (err) {
+			console.error('[WorkflowList] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org } = await loadOrgContext(params.slug, locals.user.id);
 
 	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 100);

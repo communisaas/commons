@@ -7,6 +7,9 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 const VALID_EVENT_TYPES = ['IN_PERSON', 'VIRTUAL', 'HYBRID'];
@@ -15,6 +18,25 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
+	const body = await request.json();
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			await serverMutation(api.events.update, {
+				eventId: params.id,
+				slug: params.slug,
+				...body,
+				startAt: body.startAt ? new Date(body.startAt).getTime() : undefined,
+				endAt: body.endAt !== undefined ? (body.endAt ? new Date(body.endAt).getTime() : null) : undefined
+			});
+			return json({ id: params.id, updatedAt: new Date().toISOString() });
+		} catch (err) {
+			console.error('[EventUpdate] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 
@@ -25,7 +47,6 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	if (!event) throw error(404, 'Event not found');
 	if (event.status === 'COMPLETED') throw error(400, 'Cannot update a completed event');
 
-	const body = await request.json();
 	const data: Record<string, unknown> = {};
 
 	if (body.title !== undefined) {
@@ -100,6 +121,21 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			await serverMutation(api.events.update, {
+				eventId: params.id,
+				slug: params.slug,
+				status: 'CANCELLED'
+			});
+			return json({ success: true });
+		} catch (err) {
+			console.error('[EventDelete] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 

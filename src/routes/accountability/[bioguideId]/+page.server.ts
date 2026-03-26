@@ -1,7 +1,10 @@
-// CONVEX: skip — public cross-org aggregate page; Convex getDmDetail is org-scoped, needs new public query
+// CONVEX: dual-stack — api.legislation.getDmPublicProfile (primary), Prisma fallback
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -10,6 +13,44 @@ export const load: PageServerLoad = async ({ params }) => {
 	}
 
 	const { bioguideId } = params;
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.legislation.getDmPublicProfile, { identifier: bioguideId });
+
+			if (!result) throw error(404, 'No accountability records found');
+
+			console.log(`[Accountability] Convex: loaded profile for ${result.dmName}`);
+
+			return {
+				decisionMakerId: result.decisionMakerId,
+				dmName: result.dmName,
+				summary: result.summary,
+				bills: result.bills.map((b: Record<string, unknown>) => ({
+					bill: b.bill,
+					receipts: (b.receipts as Array<Record<string, unknown>>).map((r) => ({
+						...r,
+						id: r._id,
+						proofDeliveredAt: typeof r.proofDeliveredAt === 'number'
+							? new Date(r.proofDeliveredAt as number).toISOString()
+							: r.proofDeliveredAt,
+						actionOccurredAt: typeof r.actionOccurredAt === 'number'
+							? new Date(r.actionOccurredAt as number).toISOString()
+							: r.actionOccurredAt
+					})),
+					maxProofWeight: b.maxProofWeight,
+					totalVerified: b.totalVerified,
+					latestAction: b.latestAction
+				}))
+			};
+		} catch (err) {
+			if (err && typeof err === 'object' && 'status' in err) throw err;
+			console.error('[Accountability] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 
 	// Resolve the route param to a decisionMakerId.
 	// The param may be a bioguide ID (legacy) or a decisionMakerId directly.

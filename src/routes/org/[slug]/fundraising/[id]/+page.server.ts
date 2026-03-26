@@ -1,4 +1,4 @@
-// CONVEX: skip — Convex donations.listByCampaign exists but scoped differently (no PII masking logic); needs dedicated query
+// CONVEX: skip — auth-gated page with role-based PII masking (maskEmail); needs Convex action with server-side email decryption
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { FEATURES } from '$lib/config/features';

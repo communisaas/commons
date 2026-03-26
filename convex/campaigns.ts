@@ -71,6 +71,42 @@ export const list = query({
 });
 
 /**
+ * Public campaign by ID. No auth required.
+ * Returns public-safe fields only. Includes org name/slug.
+ * Used by: src/routes/d/[campaignId]/+page.server.ts
+ */
+export const getPublic = query({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign) return null;
+
+    // Only expose active fundraisers publicly
+    if (campaign.type !== "FUNDRAISER" || campaign.status !== "ACTIVE") {
+      return null;
+    }
+
+    const org = await ctx.db.get(campaign.orgId);
+
+    return {
+      _id: campaign._id,
+      title: campaign.title,
+      type: campaign.type,
+      status: campaign.status,
+      body: campaign.body ?? null,
+      goalAmountCents: campaign.goalAmountCents ?? null,
+      raisedAmountCents: campaign.raisedAmountCents,
+      donorCount: campaign.donorCount,
+      donationCurrency: campaign.donationCurrency ?? "usd",
+      targetCountry: campaign.targetCountry,
+      orgName: org?.name ?? null,
+      orgSlug: org?.slug ?? null,
+      orgAvatar: org?.avatar ?? null,
+    };
+  },
+});
+
+/**
  * Single campaign by ID. Requires org membership.
  */
 export const get = query({

@@ -50,6 +50,49 @@ export const list = query({
 });
 
 /**
+ * Public event by ID. No auth required.
+ * Returns public-safe fields only (no checkinCode).
+ * Used by: src/routes/e/[id]/+page.server.ts
+ */
+export const getPublic = query({
+  args: { eventId: v.id("events") },
+  handler: async (ctx, { eventId }) => {
+    const event = await ctx.db.get(eventId);
+    if (!event || event.status === "DRAFT") return null;
+
+    // Resolve org name/slug for display
+    const org = await ctx.db.get(event.orgId);
+
+    return {
+      _id: event._id,
+      title: event.title,
+      description: event.description ?? null,
+      eventType: event.eventType,
+      startAt: event.startAt,
+      endAt: event.endAt ?? null,
+      timezone: event.timezone,
+      venue: event.venue ?? null,
+      address: event.address ?? null,
+      city: event.city ?? null,
+      state: event.state ?? null,
+      latitude: event.latitude ?? null,
+      longitude: event.longitude ?? null,
+      virtualUrl: event.virtualUrl ?? null,
+      capacity: event.capacity ?? null,
+      rsvpCount: event.rsvpCount,
+      attendeeCount: event.attendeeCount,
+      verifiedAttendees: event.verifiedAttendees,
+      status: event.status,
+      requireVerification: event.requireVerification,
+      waitlistEnabled: event.waitlistEnabled,
+      orgName: org?.name ?? null,
+      orgSlug: org?.slug ?? null,
+      orgAvatar: org?.avatar ?? null,
+    };
+  },
+});
+
+/**
  * Get a single event by ID.
  */
 export const get = query({

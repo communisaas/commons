@@ -1064,6 +1064,173 @@ export const getDmDetail = query({
 });
 
 /**
+ * Public DM profile by bioguide ID or direct DM ID. No auth required.
+ * Returns: name, party, jurisdiction, district, photoUrl + cross-org
+ * accountability receipt summaries with k-anonymity thresholds.
+ * Used by: src/routes/accountability/[bioguideId]/+page.server.ts
+ */
+export const getDmPublicProfile = query({
+  args: { identifier: v.string() },
+  handler: async (ctx, { identifier }) => {
+    let decisionMakerId: Id<"decisionMakers"> | null = null;
+
+    // Try ExternalId lookup first (bioguide -> decisionMakerId)
+    const externalId = await ctx.db
+      .query("externalIds")
+      .withIndex("by_system_value", (q) =>
+        q.eq("system", "bioguide").eq("value", identifier),
+      )
+      .first();
+
+    if (externalId) {
+      decisionMakerId = externalId.decisionMakerId;
+    } else {
+      // Fallback: treat identifier as a direct decisionMakerId
+      try {
+        const dm = await ctx.db.get(identifier as Id<"decisionMakers">);
+        if (dm) decisionMakerId = dm._id;
+      } catch {
+        // Invalid ID format — not found
+      }
+    }
+
+    if (!decisionMakerId) return null;
+
+    const dm = await ctx.db.get(decisionMakerId);
+    if (!dm) return null;
+
+    // All accountability receipts for this DM (cross-org aggregate)
+    const receipts = await ctx.db
+      .query("accountabilityReceipts")
+      .withIndex("by_decisionMakerId_proofDeliveredAt", (q) =>
+        q.eq("decisionMakerId", decisionMakerId!),
+      )
+      .order("desc")
+      .collect();
+
+    if (receipts.length === 0) return null;
+
+    // Enrich with bill info
+    const enrichedReceipts = await Promise.all(
+      receipts.map(async (r) => {
+        const bill = await ctx.db.get(r.billId);
+        return { ...r, bill };
+      }),
+    );
+
+    // Aggregate stats
+    const totalWeight = receipts.reduce((sum, r) => sum + r.proofWeight, 0);
+    const weightedAlignment =
+      totalWeight > 0
+        ? receipts.reduce((sum, r) => sum + r.alignment * r.proofWeight, 0) /
+          totalWeight
+        : 0;
+
+    const causalReceipts = receipts.filter(
+      (r) =>
+        r.causalityClass === "strong" || r.causalityClass === "moderate",
+    );
+
+    const totalVerified = receipts.reduce(
+      (sum, r) => sum + r.verifiedCount,
+      0,
+    );
+    const uniqueBills = new Set(receipts.map((r) => r.billId)).size;
+
+    // Group by bill for display
+    const billMap = new Map<
+      string,
+      {
+        bill: {
+          _id: Id<"bills">;
+          externalId: string;
+          title: string;
+          status: string;
+          jurisdiction: string;
+        } | null;
+        receipts: Array<{
+          _id: Id<"accountabilityReceipts">;
+          proofWeight: number;
+          verifiedCount: number | null;
+          districtCount: number | null;
+          causalityClass: string;
+          dmAction: string | null;
+          alignment: number;
+          proofDeliveredAt: number;
+          actionOccurredAt: number | null;
+        }>;
+        maxProofWeight: number;
+        totalVerified: number;
+        latestAction: string | null;
+      }
+    >();
+
+    for (const r of enrichedReceipts) {
+      const billIdStr = r.billId as string;
+      if (!billMap.has(billIdStr)) {
+        billMap.set(billIdStr, {
+          bill: r.bill
+            ? {
+                _id: r.bill._id,
+                externalId: r.bill.externalId,
+                title: r.bill.title,
+                status: r.bill.status,
+                jurisdiction: r.bill.jurisdiction,
+              }
+            : null,
+          receipts: [],
+          maxProofWeight: 0,
+          totalVerified: 0,
+          latestAction: null,
+        });
+      }
+      const entry = billMap.get(billIdStr)!;
+      entry.receipts.push({
+        _id: r._id,
+        proofWeight: r.proofWeight,
+        verifiedCount: r.verifiedCount >= 5 ? r.verifiedCount : null, // k-anonymity
+        districtCount: r.districtCount >= 3 ? r.districtCount : null,
+        causalityClass: r.causalityClass,
+        dmAction: r.dmAction ?? null,
+        alignment: r.alignment,
+        proofDeliveredAt: r.proofDeliveredAt,
+        actionOccurredAt: r.actionOccurredAt ?? null,
+      });
+      entry.maxProofWeight = Math.max(entry.maxProofWeight, r.proofWeight);
+      entry.totalVerified += r.verifiedCount;
+      if (r.dmAction) entry.latestAction = r.dmAction;
+    }
+
+    return {
+      decisionMakerId: dm._id,
+      dmName: dm.name,
+      decisionMaker: {
+        _id: dm._id,
+        name: dm.name,
+        title: dm.title ?? null,
+        party: dm.party ?? null,
+        jurisdiction: dm.jurisdiction ?? null,
+        district: dm.district ?? null,
+        photoUrl: dm.photoUrl ?? null,
+      },
+      summary: {
+        accountabilityScore: Math.round((weightedAlignment + 1) * 50),
+        weightedAlignment,
+        totalReceipts: receipts.length,
+        totalVerifiedConstituents:
+          totalVerified >= 5 ? totalVerified : null,
+        uniqueBills,
+        causalityRate: causalReceipts.length / receipts.length,
+        avgProofWeight: totalWeight / receipts.length,
+      },
+      bills: Array.from(billMap.values()).sort(
+        (a, b) => b.maxProofWeight - a.maxProofWeight,
+      ),
+    };
+  },
+});
+
+/**
  * Get DM + scorecard snapshots (public, no org auth needed).
  */
 export const getDmScorecard = query({

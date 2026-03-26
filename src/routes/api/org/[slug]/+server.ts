@@ -2,6 +2,9 @@ import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 // F-R8-02: Zod schema replaces unsafe `body as { ... }` cast
@@ -14,8 +17,6 @@ const OrgUpdateSchema = z.object({
 /** Update organization details. Requires owner role. */
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'owner');
 
 	let parsed: z.infer<typeof OrgUpdateSchema>;
 	try {
@@ -36,6 +37,25 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	if (Object.keys(data).length === 0) {
 		throw error(400, 'No fields to update');
 	}
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			await serverMutation(api.organizations.update, {
+				slug: params.slug,
+				description: parsed.description,
+				billingEmail: parsed.billing_email,
+				avatar: parsed.avatar
+			});
+			return json({ ok: true });
+		} catch (err) {
+			console.error('[OrgUpdate] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'owner');
 
 	await db.organization.update({ where: { id: org.id }, data });
 	return json({ ok: true });

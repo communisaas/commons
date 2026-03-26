@@ -87,6 +87,46 @@ export const listByCampaign = query({
 });
 
 /**
+ * Public donation list for a campaign. No auth required.
+ * Returns completed donations only, no PII (no email, no name).
+ * Used by: src/routes/d/[campaignId]/+page.server.ts
+ */
+export const listPublicByCampaign = query({
+  args: {
+    campaignId: v.id("campaigns"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(args.limit ?? 50, 100);
+
+    // Verify campaign exists and is a public active fundraiser
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.type !== "FUNDRAISER" || campaign.status !== "ACTIVE") {
+      return [];
+    }
+
+    const donations = await ctx.db
+      .query("donations")
+      .withIndex("by_campaignId", (qb) => qb.eq("campaignId", args.campaignId))
+      .order("desc")
+      .collect();
+
+    // Only completed donations, no PII
+    return donations
+      .filter((d) => d.status === "completed")
+      .slice(0, limit)
+      .map((d) => ({
+        _id: d._id,
+        amountCents: d.amountCents,
+        currency: d.currency,
+        recurring: d.recurring,
+        completedAt: d.completedAt ?? null,
+        _creationTime: d._creationTime,
+      }));
+  },
+});
+
+/**
  * Create a donation record (typically from Stripe webhook after payment).
  * Internal-only: called from webhook processing, not exposed to clients.
  */

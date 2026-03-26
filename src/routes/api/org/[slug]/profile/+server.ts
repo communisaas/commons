@@ -5,13 +5,13 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
-
-	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
-	requireRole(membership.role, 'owner');
 
 	const body = await request.json();
 	const { mission, websiteUrl, logoUrl, isPublic } = body as {
@@ -77,6 +77,25 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	if (Object.keys(data).length === 0) {
 		throw error(400, 'No fields to update');
 	}
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			await serverMutation(api.organizations.update, {
+				slug: params.slug,
+				mission: typeof mission === 'string' ? mission : undefined,
+				websiteUrl: typeof websiteUrl === 'string' ? websiteUrl : undefined,
+				logoUrl: typeof logoUrl === 'string' ? logoUrl : undefined
+			});
+			return json({ data: { mission: data.mission, websiteUrl: data.websiteUrl, logoUrl: data.logoUrl, isPublic: data.isPublic } });
+		} catch (err) {
+			console.error('[OrgProfile] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
+	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
+	requireRole(membership.role, 'owner');
 
 	const updated = await db.organization.update({
 		where: { id: org.id },

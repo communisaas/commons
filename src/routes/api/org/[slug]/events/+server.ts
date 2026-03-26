@@ -9,6 +9,9 @@ import { loadOrgContext, requireRole } from '$lib/server/org';
 import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { FEATURES } from '$lib/config/features';
 import crypto from 'node:crypto';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 const VALID_EVENT_TYPES = ['IN_PERSON', 'VIRTUAL', 'HYBRID'];
@@ -18,14 +21,45 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
+	const body = await request.json();
+	const { title, description, eventType, startAt, endAt, timezone, venue, address, city, state, postalCode, latitude, longitude, virtualUrl, capacity, waitlistEnabled, requireVerification, campaignId } = body;
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const eventId = await serverMutation(api.events.create, {
+				slug: params.slug,
+				title,
+				description: description?.trim() || undefined,
+				eventType: eventType || 'IN_PERSON',
+				startAt: new Date(startAt).getTime(),
+				endAt: endAt ? new Date(endAt).getTime() : undefined,
+				timezone: timezone || 'America/New_York',
+				venue: venue?.trim() || undefined,
+				address: address?.trim() || undefined,
+				city: city?.trim() || undefined,
+				state: state?.trim() || undefined,
+				postalCode: postalCode?.trim() || undefined,
+				latitude: typeof latitude === 'number' ? latitude : undefined,
+				longitude: typeof longitude === 'number' ? longitude : undefined,
+				virtualUrl: virtualUrl?.trim() || undefined,
+				capacity: typeof capacity === 'number' && capacity > 0 ? capacity : undefined,
+				waitlistEnabled: Boolean(waitlistEnabled),
+				requireVerification: Boolean(requireVerification),
+				campaignId: campaignId || undefined
+			});
+			return json({ id: eventId }, { status: 201 });
+		} catch (err) {
+			console.error('[EventCreate] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 
 	const meetsPlan = await orgMeetsPlan(org.id, 'starter');
 	if (!meetsPlan) throw error(403, 'Events require a Starter plan or higher');
-
-	const body = await request.json();
-	const { title, description, eventType, startAt, endAt, timezone, venue, address, city, state, postalCode, latitude, longitude, virtualUrl, capacity, waitlistEnabled, requireVerification, campaignId } = body;
 
 	if (!title || typeof title !== 'string' || title.trim().length < 3) {
 		throw error(400, 'Title is required (minimum 3 characters)');
@@ -122,6 +156,20 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			const result = await serverQuery(api.events.list, { slug: params.slug });
+			return json({
+				data: result,
+				meta: { cursor: null, hasMore: false }
+			});
+		} catch (err) {
+			console.error('[EventList] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org } = await loadOrgContext(params.slug, locals.user.id);
 
 	const status = url.searchParams.get('status');

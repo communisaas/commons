@@ -9,6 +9,9 @@ import { db } from '$lib/core/db';
 import { loadOrgContext, requireRole } from '$lib/server/org';
 import { orgMeetsPlan } from '$lib/server/billing/plan-check';
 import { FEATURES } from '$lib/config/features';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 const TriggerSchema = z.discriminatedUnion('type', [
@@ -32,6 +35,27 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.AUTOMATION) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
+	const body = await request.json();
+
+	// ─── DUAL-STACK: Try Convex first, fallback to Prisma ───
+	if (PUBLIC_CONVEX_URL) {
+		try {
+			await serverMutation(api.workflows.update, {
+				workflowId: params.id,
+				slug: params.slug,
+				name: body.name,
+				description: body.description,
+				trigger: body.trigger,
+				steps: body.steps,
+				enabled: body.enabled
+			});
+			return json({ id: params.id, updatedAt: new Date().toISOString() });
+		} catch (err) {
+			console.error('[WorkflowUpdate] Convex failed, falling back to Prisma:', err);
+		}
+	}
+
+	// ─── PRISMA FALLBACK ───
 	const { org, membership } = await loadOrgContext(params.slug, locals.user.id);
 	requireRole(membership.role, 'editor');
 
@@ -43,8 +67,6 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		where: { id: params.id, orgId: org.id }
 	});
 	if (!existing) throw error(404, 'Workflow not found');
-
-	const body = await request.json();
 	const data: Record<string, unknown> = {};
 
 	if (body.name !== undefined) {
