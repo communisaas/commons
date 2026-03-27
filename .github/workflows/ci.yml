@@ -17,6 +17,7 @@ jobs:
     env:
       NODE_ENV: test
       CI: true
+      PUBLIC_CONVEX_URL: https://placeholder.convex.cloud
       # OAuth test credentials — safe for CI
       OAUTH_REDIRECT_BASE_URL: http://localhost:5173
       GOOGLE_CLIENT_ID: test-google-client-id
