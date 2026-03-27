@@ -5,6 +5,7 @@ pages_build_output_dir = ".svelte-kit/cloudflare"
 
 
 [vars]
+PUBLIC_CONVEX_URL = "https://outstanding-firefly-831.convex.cloud"
 PUBLIC_SCROLL_RPC_URL = "https://rpc.scroll.io"
 # IDENTITY_SIGNING_KEY = "set in Cloudflare dashboard (openssl rand -hex 32)"
 
