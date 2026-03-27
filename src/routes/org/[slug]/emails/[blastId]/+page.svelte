@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { FEATURES } from '$lib/config/features';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -87,7 +88,7 @@
 					{data.blast.subject}
 				</p>
 			</div>
-			{#if totalSent > 0}
+			{#if FEATURES.ENGAGEMENT_METRICS && totalSent > 0}
 				<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-mono {bounceRateColor(rate)}">
 					{rate.toFixed(1)}% bounced
 				</span>
@@ -125,27 +126,29 @@
 
 						<p class="text-sm text-text-secondary truncate">{variant.subject}</p>
 
-						<div class="grid grid-cols-2 gap-3">
-							<div class="rounded-lg bg-surface-overlay px-3 py-2.5">
-								<p class="text-xs text-text-tertiary">Sent</p>
-								<p class="text-lg font-mono tabular-nums text-text-primary">{variant.totalSent.toLocaleString()}</p>
+						{#if FEATURES.ENGAGEMENT_METRICS}
+							<div class="grid grid-cols-2 gap-3">
+								<div class="rounded-lg bg-surface-overlay px-3 py-2.5">
+									<p class="text-xs text-text-tertiary">Sent</p>
+									<p class="text-lg font-mono tabular-nums text-text-primary">{variant.totalSent.toLocaleString()}</p>
+								</div>
+								<div class="rounded-lg bg-surface-overlay px-3 py-2.5">
+									<p class="text-xs text-text-tertiary">Opened</p>
+									<p class="text-lg font-mono tabular-nums text-text-primary">{variant.totalOpened.toLocaleString()}</p>
+									<p class="text-xs font-mono text-text-tertiary">{pct(variant.totalOpened, variant.totalSent)}</p>
+								</div>
+								<div class="rounded-lg bg-surface-overlay px-3 py-2.5">
+									<p class="text-xs text-text-tertiary">Clicked</p>
+									<p class="text-lg font-mono tabular-nums text-text-primary">{variant.totalClicked.toLocaleString()}</p>
+									<p class="text-xs font-mono text-text-tertiary">{pct(variant.totalClicked, variant.totalSent)}</p>
+								</div>
+								<div class="rounded-lg bg-surface-overlay px-3 py-2.5">
+									<p class="text-xs text-text-tertiary">Bounced</p>
+									<p class="text-lg font-mono tabular-nums text-text-primary">{variant.totalBounced.toLocaleString()}</p>
+									<p class="text-xs font-mono text-text-tertiary">{pct(variant.totalBounced, variant.totalSent)}</p>
+								</div>
 							</div>
-							<div class="rounded-lg bg-surface-overlay px-3 py-2.5">
-								<p class="text-xs text-text-tertiary">Opened</p>
-								<p class="text-lg font-mono tabular-nums text-text-primary">{variant.totalOpened.toLocaleString()}</p>
-								<p class="text-xs font-mono text-text-tertiary">{pct(variant.totalOpened, variant.totalSent)}</p>
-							</div>
-							<div class="rounded-lg bg-surface-overlay px-3 py-2.5">
-								<p class="text-xs text-text-tertiary">Clicked</p>
-								<p class="text-lg font-mono tabular-nums text-text-primary">{variant.totalClicked.toLocaleString()}</p>
-								<p class="text-xs font-mono text-text-tertiary">{pct(variant.totalClicked, variant.totalSent)}</p>
-							</div>
-							<div class="rounded-lg bg-surface-overlay px-3 py-2.5">
-								<p class="text-xs text-text-tertiary">Bounced</p>
-								<p class="text-lg font-mono tabular-nums text-text-primary">{variant.totalBounced.toLocaleString()}</p>
-								<p class="text-xs font-mono text-text-tertiary">{pct(variant.totalBounced, variant.totalSent)}</p>
-							</div>
-						</div>
+						{/if}
 
 						<p class="text-xs text-text-quaternary">Sent {formatDate(variant.sentAt)}</p>
 					</div>
@@ -154,7 +157,7 @@
 		</div>
 
 		<!-- Winner send info -->
-		{#if data.winnerBlast}
+		{#if FEATURES.ENGAGEMENT_METRICS && data.winnerBlast}
 			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-2">
 				<h3 class="text-sm font-medium text-text-secondary">Winner Send</h3>
 				<p class="text-sm text-text-tertiary">
@@ -169,33 +172,35 @@
 		{/if}
 	{:else}
 		<!-- Non-A/B blast detail -->
-		<div class="rounded-xl border border-surface-border bg-surface-base p-6">
-			<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-				<div>
-					<p class="text-xs text-text-tertiary">Sent</p>
-					<p class="text-xl font-mono tabular-nums text-text-primary">{data.blast.totalSent.toLocaleString()}</p>
-				</div>
-				<div>
-					<p class="text-xs text-text-tertiary">Opened</p>
-					<p class="text-xl font-mono tabular-nums text-text-primary">{data.blast.totalOpened.toLocaleString()}</p>
-					<p class="text-xs font-mono text-text-tertiary">{pct(data.blast.totalOpened, data.blast.totalSent)}</p>
-				</div>
-				<div>
-					<p class="text-xs text-text-tertiary">Clicked</p>
-					<p class="text-xl font-mono tabular-nums text-text-primary">{data.blast.totalClicked.toLocaleString()}</p>
-					<p class="text-xs font-mono text-text-tertiary">{pct(data.blast.totalClicked, data.blast.totalSent)}</p>
-				</div>
-				<div>
-					<p class="text-xs text-text-tertiary">Bounced</p>
-					<p class="text-xl font-mono tabular-nums text-text-primary">{data.blast.totalBounced.toLocaleString()}</p>
-					<p class="text-xs font-mono text-text-tertiary">{pct(data.blast.totalBounced, data.blast.totalSent)}</p>
+		{#if FEATURES.ENGAGEMENT_METRICS}
+			<div class="rounded-xl border border-surface-border bg-surface-base p-6">
+				<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+					<div>
+						<p class="text-xs text-text-tertiary">Sent</p>
+						<p class="text-xl font-mono tabular-nums text-text-primary">{data.blast.totalSent.toLocaleString()}</p>
+					</div>
+					<div>
+						<p class="text-xs text-text-tertiary">Opened</p>
+						<p class="text-xl font-mono tabular-nums text-text-primary">{data.blast.totalOpened.toLocaleString()}</p>
+						<p class="text-xs font-mono text-text-tertiary">{pct(data.blast.totalOpened, data.blast.totalSent)}</p>
+					</div>
+					<div>
+						<p class="text-xs text-text-tertiary">Clicked</p>
+						<p class="text-xl font-mono tabular-nums text-text-primary">{data.blast.totalClicked.toLocaleString()}</p>
+						<p class="text-xs font-mono text-text-tertiary">{pct(data.blast.totalClicked, data.blast.totalSent)}</p>
+					</div>
+					<div>
+						<p class="text-xs text-text-tertiary">Bounced</p>
+						<p class="text-xl font-mono tabular-nums text-text-primary">{data.blast.totalBounced.toLocaleString()}</p>
+						<p class="text-xs font-mono text-text-tertiary">{pct(data.blast.totalBounced, data.blast.totalSent)}</p>
+					</div>
 				</div>
 			</div>
-		</div>
+		{/if}
 	{/if}
 
 	<!-- Bounced Recipients -->
-	{#if data.bounceEvents.length > 0}
+	{#if FEATURES.ENGAGEMENT_METRICS && data.bounceEvents.length > 0}
 		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-3">
 			<h3 class="text-sm font-medium text-text-secondary">
 				Bounced Recipients

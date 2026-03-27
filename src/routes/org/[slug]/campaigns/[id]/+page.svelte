@@ -693,7 +693,9 @@
 			</summary>
 			<div class="mt-2 space-y-6">
 				<!-- Email Delivery Metrics -->
-				<DeliveryMetrics metrics={data.analytics.delivery} />
+				{#if FEATURES.ENGAGEMENT_METRICS}
+					<DeliveryMetrics metrics={data.analytics.delivery} />
+				{/if}
 
 				<!-- Verification Timeline -->
 				<VerificationTimeline timeline={data.analytics.timeline} />

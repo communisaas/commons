@@ -14,6 +14,7 @@
 	import GroundCard from '$lib/components/profile/GroundCard.svelte';
 	import VerificationGate from '$lib/components/auth/VerificationGate.svelte';
 	import { invalidateAll } from '$app/navigation';
+	import { FEATURES } from '$lib/config/features';
 	import type { PageData } from './$types';
 
 	interface ProfileRepresentative {
@@ -305,18 +306,20 @@
 		{#if templatesData}
 			<!-- Impact numbers — spread across the width on large screens -->
 			<div class="mt-5 grid grid-cols-2 gap-y-5 sm:flex sm:flex-wrap sm:items-baseline sm:gap-x-12 lg:gap-x-16">
-				<div>
-					<span class="font-mono text-3xl font-bold text-participation-primary-600 lg:text-4xl">
-						{templatesData.templateStats.totalSent}
-					</span>
-					<span class="block text-xs font-medium text-slate-500">sent</span>
-				</div>
-				<div>
-					<span class="font-mono text-3xl font-bold text-emerald-600 lg:text-4xl">
-						{templatesData.templateStats.totalDelivered}
-					</span>
-					<span class="block text-xs font-medium text-slate-500">delivered</span>
-				</div>
+				{#if FEATURES.ENGAGEMENT_METRICS}
+					<div>
+						<span class="font-mono text-3xl font-bold text-participation-primary-600 lg:text-4xl">
+							{templatesData.templateStats.totalSent}
+						</span>
+						<span class="block text-xs font-medium text-slate-500">sent</span>
+					</div>
+					<div>
+						<span class="font-mono text-3xl font-bold text-emerald-600 lg:text-4xl">
+							{templatesData.templateStats.totalDelivered}
+						</span>
+						<span class="block text-xs font-medium text-slate-500">delivered</span>
+					</div>
+				{/if}
 				<div>
 					<span class="font-mono text-3xl font-bold text-slate-800 lg:text-4xl">
 						{templatesData.templateStats.total}

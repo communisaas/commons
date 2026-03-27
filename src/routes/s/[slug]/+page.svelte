@@ -647,13 +647,13 @@
 					Enhanced Credibility
 				</span>
 			{/if}
-			{#if (template.metrics?.sent || 0) >= 5}
+			{#if FEATURES.ENGAGEMENT_METRICS && (template.metrics?.sent || 0) >= 5}
 				<span class="flex items-center gap-1.5 text-slate-400">
 					<Users class="h-3.5 w-3.5" />
 					{template.metrics.sent.toLocaleString()} acted on this
 				</span>
 			{/if}
-			{#if (template.metrics?.views || 0) >= 20}
+			{#if FEATURES.ENGAGEMENT_METRICS && (template.metrics?.views || 0) >= 20}
 				<span class="flex items-center gap-1.5 text-slate-400">
 					<Eye class="h-3.5 w-3.5" />
 					{template.metrics.views.toLocaleString()} views

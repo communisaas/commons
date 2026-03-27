@@ -288,14 +288,16 @@
 
 			<h1 class="text-2xl font-bold text-slate-900 sm:text-3xl">Action Recorded</h1>
 
-			{#if form?.verified}
-				<p class="mt-2 text-lg text-emerald-700">
-					You are verified constituent #{displayCount}
-				</p>
-			{:else}
-				<p class="mt-2 text-lg text-slate-600">
-					You are participant #{displayCount + 1}
-				</p>
+			{#if FEATURES.ENGAGEMENT_METRICS}
+				{#if form?.verified}
+					<p class="mt-2 text-lg text-emerald-700">
+						You are verified constituent #{displayCount}
+					</p>
+				{:else}
+					<p class="mt-2 text-lg text-slate-600">
+						You are participant #{displayCount + 1}
+					</p>
+				{/if}
 			{/if}
 
 			<p class="mt-1 text-sm text-slate-500">
@@ -339,15 +341,17 @@
 				<p class="text-xs font-medium uppercase tracking-wider text-slate-400">Verified Action</p>
 				<h3 class="mt-1 text-base font-bold text-slate-900">{data.campaign.title}</h3>
 				<p class="text-sm text-slate-500">via {data.campaign.orgName}</p>
-				<div class="mt-3 border-t border-slate-200 pt-3">
-					<p class="font-mono text-3xl font-bold text-slate-900">{displayCount}</p>
-					<p class="text-sm text-slate-500">verified actions taken</p>
-					{#if displayDistricts > 0}
-						<p class="mt-1 text-xs text-slate-400">
-							across {displayDistricts} {displayDistricts === 1 ? 'district' : 'districts'}
-						</p>
-					{/if}
-				</div>
+				{#if FEATURES.ENGAGEMENT_METRICS}
+					<div class="mt-3 border-t border-slate-200 pt-3">
+						<p class="font-mono text-3xl font-bold text-slate-900">{displayCount}</p>
+						<p class="text-sm text-slate-500">verified actions taken</p>
+						{#if displayDistricts > 0}
+							<p class="mt-1 text-xs text-slate-400">
+								across {displayDistricts} {displayDistricts === 1 ? 'district' : 'districts'}
+							</p>
+						{/if}
+					</div>
+				{/if}
 			</div>
 
 			<!-- Share -->
@@ -390,24 +394,26 @@
 		{/if}
 
 		<!-- Social proof bar -->
-		<div class="mt-6 flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-			<div class="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100">
-				<svg class="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128H5.228A2 2 0 015 17.128V15.5a4.5 4.5 0 014.5-4.5h0a4.5 4.5 0 014.5 4.5v1.628M12 11.25h.008v.008H12v-.008zM12 7.5a2.25 2.25 0 100-4.5 2.25 2.25 0 000 4.5z" />
-				</svg>
+		{#if FEATURES.ENGAGEMENT_METRICS}
+			<div class="mt-6 flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+				<div class="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100">
+					<svg class="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128H5.228A2 2 0 015 17.128V15.5a4.5 4.5 0 014.5-4.5h0a4.5 4.5 0 014.5 4.5v1.628M12 11.25h.008v.008H12v-.008zM12 7.5a2.25 2.25 0 100-4.5 2.25 2.25 0 000 4.5z" />
+					</svg>
+				</div>
+				<div>
+					<p class="font-mono text-lg font-bold text-slate-900">{displayCount}</p>
+					<p class="text-xs text-slate-500">
+						verified {displayCount === 1 ? 'action' : 'actions'} taken
+						{#if displayDistricts > 0}
+							<span class="ml-1 text-slate-400">
+								across {displayDistricts} {displayDistricts === 1 ? 'district' : 'districts'}
+							</span>
+						{/if}
+					</p>
+				</div>
 			</div>
-			<div>
-				<p class="font-mono text-lg font-bold text-slate-900">{displayCount}</p>
-				<p class="text-xs text-slate-500">
-					verified {displayCount === 1 ? 'action' : 'actions'} taken
-					{#if displayDistricts > 0}
-						<span class="ml-1 text-slate-400">
-							across {displayDistricts} {displayDistricts === 1 ? 'district' : 'districts'}
-						</span>
-					{/if}
-				</p>
-			</div>
-		</div>
+		{/if}
 
 		<!-- Debate signal (read-only market consensus) -->
 		{#if FEATURES.DEBATE && data.debateSignal}

@@ -70,5 +70,8 @@ export const FEATURES = {
 	SHADOW_ATLAS_VERIFICATION: true,
 
 	/** Agentic delegation: AI proxy civic actions under user-defined policy constraints (Tier 3+) */
-	DELEGATION: false
+	DELEGATION: false,
+
+	/** Send/engagement counters: "X acted on this", district coverage, open/click metrics */
+	ENGAGEMENT_METRICS: false
 } as const;

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { FEATURES } from '$lib/config/features';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -97,14 +98,16 @@
 									</span>
 								{/if}
 
-								<span class="font-mono tabular-nums">
-									{blast.totalSent.toLocaleString()} sent
-								</span>
-
-								{#if blast.totalBounced > 0}
-									<span class="font-mono tabular-nums text-red-400">
-										{blast.totalBounced.toLocaleString()} bounced
+								{#if FEATURES.ENGAGEMENT_METRICS}
+									<span class="font-mono tabular-nums">
+										{blast.totalSent.toLocaleString()} sent
 									</span>
+
+									{#if blast.totalBounced > 0}
+										<span class="font-mono tabular-nums text-red-400">
+											{blast.totalBounced.toLocaleString()} bounced
+										</span>
+									{/if}
 								{/if}
 
 								<span class="font-mono tabular-nums">

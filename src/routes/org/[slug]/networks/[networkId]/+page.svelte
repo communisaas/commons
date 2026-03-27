@@ -1,5 +1,6 @@
 <script lang="ts">
 	import CoalitionReport from '$lib/components/networks/CoalitionReport.svelte';
+	import { FEATURES } from '$lib/config/features';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -170,7 +171,7 @@
 				</span>
 			</div>
 
-			{#if reportStats}
+			{#if FEATURES.ENGAGEMENT_METRICS && reportStats}
 				<div class="flex flex-wrap gap-6 text-sm text-text-tertiary pt-2 border-t border-surface-border">
 					<span>
 						<span class="font-mono tabular-nums text-emerald-400">{reportStats.totalVerifiedActions.toLocaleString('en-US')}</span> verified actions

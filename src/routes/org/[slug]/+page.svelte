@@ -2,6 +2,7 @@
 	import VerificationPacket from '$lib/components/org/VerificationPacket.svelte';
 	import OnboardingChecklist from '$lib/components/org/OnboardingChecklist.svelte';
 	import LegislativeActivity from '$lib/components/org/LegislativeActivity.svelte';
+	import { FEATURES } from '$lib/config/features';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -599,9 +600,11 @@
 								<a href="/s/{item.slug}" class="text-sm font-medium text-text-primary hover:text-teal-500 transition-colors line-clamp-1">
 									{item.title}
 								</a>
-								<p class="text-xs text-text-quaternary mt-0.5">
-									<span class="font-mono tabular-nums">{fmt(item.sends)}</span> sends &middot; <span class="font-mono tabular-nums">{fmt(item.districts)}</span> districts
-								</p>
+								{#if FEATURES.ENGAGEMENT_METRICS}
+									<p class="text-xs text-text-quaternary mt-0.5">
+										<span class="font-mono tabular-nums">{fmt(item.sends)}</span> sends &middot; <span class="font-mono tabular-nums">{fmt(item.districts)}</span> districts
+									</p>
+								{/if}
 							</div>
 							<button
 								class="text-xs text-text-quaternary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
@@ -634,13 +637,15 @@
 							>
 								<div class="min-w-0 flex-1">
 									<p class="text-sm text-text-primary line-clamp-1">{t.title}</p>
-									<p class="text-xs text-text-quaternary mt-0.5">
-										<span class="font-mono tabular-nums">{fmt(t.verified_sends)}</span> sends
-										{#if t.similarity != null}
-											<span class="text-surface-border-strong mx-1">&middot;</span>
-											<span class="text-teal-600">{Math.round(t.similarity * 100)}% match</span>
-										{/if}
-									</p>
+									{#if FEATURES.ENGAGEMENT_METRICS}
+										<p class="text-xs text-text-quaternary mt-0.5">
+											<span class="font-mono tabular-nums">{fmt(t.verified_sends)}</span> sends
+											{#if t.similarity != null}
+												<span class="text-surface-border-strong mx-1">&middot;</span>
+												<span class="text-teal-600">{Math.round(t.similarity * 100)}% match</span>
+											{/if}
+										</p>
+									{/if}
 								</div>
 								<span class="text-xs font-medium text-teal-500 flex-shrink-0">Endorse</span>
 							</button>

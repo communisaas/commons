@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import { FEATURES } from '$lib/config/features';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -177,8 +178,10 @@
 		</p>
 		{#if data.packet}
 			<p class="text-sm text-text-tertiary mt-1">
-				This packet contains <span class="font-mono tabular-nums text-emerald-400 font-semibold">{data.packet.verified.toLocaleString('en-US')}</span> verified actions
-				across <span class="font-mono tabular-nums text-teal-400">{data.packet.districtCount}</span> districts.
+				{#if FEATURES.ENGAGEMENT_METRICS}
+					This packet contains <span class="font-mono tabular-nums text-emerald-400 font-semibold">{data.packet.verified.toLocaleString('en-US')}</span> verified actions
+					across <span class="font-mono tabular-nums text-teal-400">{data.packet.districtCount}</span> districts.
+				{/if}
 				Each recipient will see verification they cannot fabricate or dismiss.
 			</p>
 		{/if}
