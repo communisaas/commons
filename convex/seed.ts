@@ -5,7 +5,7 @@
  * - 3 users (2 verified, 1 unverified)
  * - 3 organizations with full onboarding
  * - 7 org memberships
- * - 12 templates (3 inline fallback + 9 additional)
+ * - 15 templates (agent-generated, research-backed content from seed pipeline)
  * - 4 campaigns (3 LETTER + 1 FORM fundraiser)
  * - 20 supporters with realistic names
  * - 12 tags with supporter assignments
@@ -109,180 +109,425 @@ const SEED_ORGS = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// Inline template content — regenerate via scripts/seed-with-agents.ts
+// Agent-generated template content — from seed pipeline (seed-with-agents.ts)
+// All 15 templates have real research-backed messages with source citations.
 // ---------------------------------------------------------------------------
-const SEED_TEMPLATES = [
-  // ── Original 3 (inline fallback) ──
+interface SeedTemplate {
+  slug: string;
+  title: string;
+  description: string;
+  category: string;
+  topics: string[];
+  type: string;
+  deliveryMethod: string;
+  preview: string;
+  messageBody: string;
+  countryCode: string;
+  sources: Array<{ num: number; url: string; type: string; title: string }>;
+  recipientConfig: Record<string, unknown>;
+}
+
+const SEED_TEMPLATES: SeedTemplate[] = [
+  // ── 1. VA Rural Health Lifeline ──
   {
-    slug: "clean-energy-investment",
-    title: "Support Clean Energy Investment Act",
-    description:
-      "Urge your representative to co-sponsor the Clean Energy Investment Act, which would fund solar and wind infrastructure in underserved communities.",
-    category: "environment",
-    type: "letter",
-    messageBody:
-      "Dear [Representative],\n\nI am writing as a constituent to express my strong support for the Clean Energy Investment Act. This legislation would bring critical solar and wind infrastructure to underserved communities while creating thousands of good-paying jobs.\n\nPlease co-sponsor this bill and champion clean energy for all Americans.\n\nSincerely,\n[Your Name]",
-    preview:
-      "I am writing as a constituent to express my strong support for the Clean Energy Investment Act...",
-    deliveryMethod: "email",
+    slug: "va-rural-health-lifeline",
+    title: "A lifeline for veterans where the pavement ends",
+    description: "The Department of Veterans Affairs must expand its proven telehealth infrastructure to reach every rural clinic across the nation.",
+    category: "Healthcare",
+    topics: ["veterans", "healthcare", "telehealth", "rural-access"],
+    type: "advocacy",
+    deliveryMethod: "cwc",
+    preview: "For a veteran living hours from the nearest specialist, a \"proven\" healthcare system doesn't mean much if it doesn't reach their front door. We are past the point of testing pilot programs; we know th",
+    messageBody: "For a veteran living hours from the nearest specialist, a \"proven\" healthcare system doesn't mean much if it doesn't reach their front door. We are past the point of testing pilot programs; we know that when the VA bridges the distance, veterans live longer. New findings released just this week show that veterans receiving specialty care via telemedicine had a 15% lower mortality rate than those who relied on primary care alone [1].\n\n[Personal Connection]\n\nThe infrastructure to solve this already exists. The VA's Clinical Resource Hub model has demonstrated it can increase healthcare utilization by 18% in underserved areas by bringing specialists to the veteran [3]. For those in communities where home broadband isn't an option, the ATLAS (Accessing Telehealth through Local Area Stations) program is the only bridge to the care they earned, provided it is actually deployed where it's needed [2].\n\nI am asking you to fully fund and scale this hub-and-spoke infrastructure to every rural clinic in the country. It is time to ensure that access isn't a privilege of geography, but a guarantee of service. Please prioritize the expansion of ATLAS and Clinical Resource Hubs to ensure that no veteran is left behind just because they live where the pavement ends.\n\n[Name]",
     countryCode: "US",
+    sources: [
+      { num: 1, url: "https://news.va.gov/", type: "research", title: "VA Research Wrap Up: New findings on telehealth, Parkinson's disease and military transitions" },
+      { num: 2, url: "https://www.gao.gov/products/gao-24-106743", type: "government", title: "Veterans Health Care: VA's Video Telehealth Access Program Would Benefit from Performance Goals and Measures" },
+      { num: 3, url: "https://pubmed.ncbi.nlm.nih.gov/40981648/", type: "research", title: "Impact of VA's Clinical Resource Hub Primary Care Telehealth Program on Health Care Use and Costs" },
+    ],
+    recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
+  // ── 2. Congress Outdated Childhood Tracking ──
   {
-    slug: "voter-registration-access",
-    title: "Expand Voter Registration Access",
-    description:
-      "Call on state legislators to pass automatic voter registration and same-day registration reforms.",
-    category: "democracy",
-    type: "letter",
-    messageBody:
-      "Dear [Legislator],\n\nEvery eligible citizen deserves frictionless access to voter registration. I urge you to support automatic voter registration and same-day registration reforms that have proven effective in other states.\n\nThese common-sense measures increase participation without compromising election integrity.\n\nThank you,\n[Your Name]",
-    preview:
-      "Every eligible citizen deserves frictionless access to voter registration...",
-    deliveryMethod: "email",
+    slug: "congress-outdated-childhood-tracking",
+    title: "Your laws are older than our children",
+    description: "The United States Congress must stop corporations from strip-mining the digital lives of children through obsolete privacy protections.",
+    category: "Digital Rights",
+    topics: ["privacy", "children", "technology", "accountability", "congress"],
+    type: "advocacy",
+    deliveryMethod: "cwc",
+    preview: "The law meant to protect our children online was written in 1998. It is literally older than the kids it is failing to protect. While technology has evolved to harvest 72 million data points per child",
+    messageBody: "The law meant to protect our children online was written in 1998. It is literally older than the kids it is failing to protect. While technology has evolved to harvest 72 million data points per child every year, our federal protections remain frozen in a pre-smartphone era.\n\n[Personal Connection]\n\nWe are currently witnessing a mental health crisis where 37% of students report moderate to severe depressive symptoms [4]. Despite this, national safety legislation like the Kids Online Safety Act (KOSA) and COPPA 2.0 remains stalled in Congress [5]. We cannot afford to let these protections languish while landmark litigation continues to reveal exactly how much tech companies knew about the risks their products posed to our children [5].\n\nWhile I appreciate the FTC's recent efforts to modernize enforcement and address emerging data monetization [1][3], administrative rule-making is not a substitute for legislative action. We need a permanent, modern standard that raises the age of coverage to 17, prohibits targeted advertising to minors, and provides an 'eraser button' for data deletion [2].\n\nI am asking you to break the deadlock and pass the revised Kids Online Safety Act and COPPA 2.0 immediately. Our children's digital lives should not be governed by laws written before they\u2014or the platforms they use\u2014even existed.\n\n[Name]",
     countryCode: "US",
+    sources: [
+      { num: 1, url: "https://www.ftc.gov/news-events/news/press-releases/2025/01/ftc-finalizes-changes-childrens-privacy-rule-limiting-companies-ability-monetize-kids-data", type: "government", title: "FTC Finalizes Changes to Children's Privacy Rule Limiting Companies' Ability to Monetize Kids' Data" },
+      { num: 2, url: "https://www.dwt.com/insights/2026/01/federal-online-safety-legislation-hits-congress", type: "legal", title: "Wave of Federal \"Online Safety\" Legislation Hits Congress" },
+      { num: 3, url: "https://www.wiley.law/alert-FTC-Announces-COPPA-Policy-Enforcement-Statement-Forthcoming-Rule-Review", type: "legal", title: "FTC Announces COPPA Policy Enforcement Statement, Forthcoming Rule Review" },
+      { num: 4, url: "https://healthpolicy.ucla.edu/our-work/publications/healthy-minds-study-2024-2025-data-report", type: "research", title: "The Healthy Minds Study: 2024\u20132025 Data Report" },
+      { num: 5, url: "https://www.childrenandscreens.org/newsroom/news/policy-update-february-2026/", type: "advocacy", title: "Policy Update: February 2026 - Children and Screens" },
+    ],
+    recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
+  // ── 3. Colorado Preschool Standard ──
   {
-    slug: "community-safety-funding",
-    title: "Fund Community Safety Programs",
-    description:
-      "Advocate for increased funding for community-based safety programs including mental health responders and youth intervention.",
-    category: "safety",
-    type: "letter",
-    messageBody:
-      "Dear [Official],\n\nOur community needs investment in evidence-based safety programs. I ask you to allocate funding for mental health crisis responders, youth intervention programs, and community mediation services.\n\nThese programs have been shown to reduce violence while strengthening neighborhoods.\n\nRespectfully,\n[Your Name]",
-    preview:
-      "Our community needs investment in evidence-based safety programs...",
-    deliveryMethod: "email",
+    slug: "colorado-preschool-standard",
+    title: "Stop leaving our toddlers behind while Colorado families thrive",
+    description: "State Legislatures must follow the lead of Colorado's universal preschool program to give our children the start they are currently being denied.",
+    category: "Education",
+    topics: ["childcare", "preschool", "state-government", "parenting", "future"],
+    type: "advocacy",
+    deliveryMethod: "cwc",
+    preview: "It is exhausting to watch families in neighboring states get a head start while we are left to navigate the impossible math of childcare on our own. We have reached a point where the success of progra",
+    messageBody: "It is exhausting to watch families in neighboring states get a head start while we are left to navigate the impossible math of childcare on our own. We have reached a point where the success of programs like Colorado's makes our own state's inaction look like a choice to leave families behind. In its first year alone, Colorado's universal preschool program reached nearly 70% of eligible four-year-olds and saved families an average of $6,100 [1].\n\n[Personal Connection]\n\nThis isn't just about a classroom; it is about the literal economic survival of our households. Research shows that universal enrollment can increase parent income by over 21%, effectively paying for itself through higher tax revenue and workforce participation [4]. As 2026 legislative sessions begin, other states are already recognizing that pre-K is \"economic infrastructure\" essential for long-term competitiveness [2]. Some, like New Mexico, have even expanded this to include infants and toddlers, saving families up to $12,000 a year [3].\n\nEvery day we wait is a day our children lose a foundation that others are getting for free. I am asking you to treat early childhood education as the essential infrastructure it is. Please move to replicate these successful universal models and provide the funding necessary to ensure our families are no longer denied this basic opportunity for growth.\n\n[Name]",
     countryCode: "US",
+    sources: [
+      { num: 1, url: "https://www.colorado.gov/governor/news/new-report-highlights-transformational-first-year-colorado-universal-preschool-reaching-nearly", type: "government", title: "New Report Highlights Transformational First Year of Colorado Universal Preschool, Reaching Nearly 70% of Eligible Four-Year-Olds" },
+      { num: 2, url: "https://whiteboardadvisors.com/early-childhood-in-2026-what-state-signals-tell-us-about-where-policy-is-heading/", type: "research", title: "Early Childhood in 2026: What State Signals Tell Us About Where Policy Is Heading" },
+      { num: 3, url: "https://www.governor.state.nm.us/2025/09/08/new-mexico-is-first-state-in-nation-to-offer-universal-child-care/", type: "government", title: "New Mexico is first state in nation to offer universal child care" },
+      { num: 4, url: "https://www.ffyf.org/2025/08/06/research-finds-preschool-enrollment-can-increase-parent-income/", type: "research", title: "Research Finds Preschool Enrollment Can Increase Parent Income" },
+    ],
+    recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
-  // ── Additional 9 templates ──
+  // ── 4. Oregon Healing Not Prisons ──
   {
-    slug: "protect-public-lands",
-    title: "Protect Public Lands from Development",
-    description:
-      "Oppose the transfer or sale of federal public lands to private developers and ensure conservation protections remain in place.",
-    category: "environment",
-    type: "letter",
-    messageBody:
-      "Dear [Representative],\n\nI am writing to urge you to oppose any legislation that would transfer, sell, or reduce protections on our federal public lands. These lands belong to all Americans and provide critical ecosystem services, recreational opportunities, and wildlife habitat.\n\nPlease stand firm against proposals that would hand public land to private developers.\n\nSincerely,\n[Your Name]",
-    preview:
-      "I am writing to urge you to oppose any legislation that would transfer, sell, or reduce protections on our federal public lands...",
-    deliveryMethod: "email",
+    slug: "oregon-healing-not-prisons",
+    title: "Healing Oregon families works better than locking them away",
+    description: "The State of Oregon must prioritize drug treatment courts over incarceration to keep families together and ensure better community outcomes.",
+    category: "Criminal Justice",
+    topics: ["justice reform", "drug treatment", "family unity", "public safety"],
+    type: "advocacy",
+    deliveryMethod: "cwc",
+    preview: "There is a specific kind of heartbreak in watching a family be dismantled by a system that claims to be seeking justice. We are currently choosing to spend more money to achieve worse outcomes, tearin",
+    messageBody: "There is a specific kind of heartbreak in watching a family be dismantled by a system that claims to be seeking justice. We are currently choosing to spend more money to achieve worse outcomes, tearing parents away from their children when we have a proven path to healing that keeps families intact.\n\n[Personal Connection]\n\nThe data is clear: drug treatment courts aren't just a 'soft' alternative; they are a more effective one. Participants in Oregon's specialty courts are 45% less likely to recidivate compared to those who are incarcerated [1]. For families, the impact is even more profound, with these programs driving a 30% increase in successful reunifications over the last two years [1]. Peer-reviewed research confirms that parents in these programs are significantly more likely to complete their treatment and achieve permanent stability with their children than those processed through the standard criminal justice system [2]. \n\nEvery time we choose a prison cell over a treatment program, we are deciding to break a family and waste resources. I am asking you to prioritize the expansion and funding of Oregon's Family Treatment Courts in the upcoming budget. Let's invest in the outcomes that actually make our communities safer and our families whole.\n\n[Name]",
     countryCode: "US",
+    sources: [
+      { num: 1, url: "https://www.courts.oregon.gov/programs/specialty/Documents/OJD-Specialty-Courts-Annual-Report-2025.pdf", type: "government", title: "Specialty Courts: Oregon Judicial Department Annual Report 2025" },
+      { num: 2, url: "https://pdxscholar.library.pdx.edu/socwork_fac/214/", type: "research", title: "The Impact of Family Treatment Courts on Child Welfare Outcomes in Oregon" },
+    ],
+    recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
+  // ── 5. City Bans Affordable Innovation ──
   {
-    slug: "ban-partisan-gerrymandering",
-    title: "End Partisan Gerrymandering",
-    description:
-      "Support independent redistricting commissions to ensure fair electoral maps that represent all voters.",
-    category: "democracy",
-    type: "letter",
-    messageBody:
-      "Dear [Legislator],\n\nPartisan gerrymandering undermines the foundation of representative democracy. I urge you to support legislation establishing independent redistricting commissions that draw fair maps based on population and community boundaries, not political advantage.\n\nVoters should choose their representatives — not the other way around.\n\nThank you,\n[Your Name]",
-    preview:
-      "Partisan gerrymandering undermines the foundation of representative democracy...",
-    deliveryMethod: "email",
+    slug: "city-bans-affordable-innovation",
+    title: "Stop choosing expensive scarcity over homes we can afford",
+    description: "City governments must end the bans on 3D-printed housing and community land trusts that Portland and Austin have proven provide homes at a fraction of traditional costs.",
+    category: "Housing",
+    topics: ["housing", "affordability", "urban-policy", "innovation"],
+    type: "advocacy",
+    deliveryMethod: "cwc",
+    preview: "It is exhausting to watch our neighbors get priced out of the city while the solutions we need are sitting right in front of us, blocked by red tape. We know that 3D-printed homes can be built for a f",
+    messageBody: "It is exhausting to watch our neighbors get priced out of the city while the solutions we need are sitting right in front of us, blocked by red tape. We know that 3D-printed homes can be built for a fraction of the cost of traditional construction\u2014in Austin, they're starting at $195,000 compared to the $350,000+ price tag for standard builds nearby [1]. Yet, in most of our communities, these innovations are effectively banned by outdated building codes.\n\n[Personal Connection]\n\nWe are facing a massive housing shortage, and while the 3D-printed housing market is projected to reach $2.2 billion this year, regulatory hurdles remain the primary obstacle to scaling this affordable solution [3]. It isn't just about technology; it's about how we treat land. By partnering with Community Land Trusts (CLTs), we can take land off the speculative market and ensure homes stay affordable for generations, a model already proven to reduce displacement in rapidly gentrifying areas [4].\n\nWe cannot keep choosing expensive scarcity over homes people can actually afford. I am asking you to:\n\n1. Modernize our local building codes by adopting standards like Appendix BM of the International Residential Code to remove the legal barriers to 3D-printed construction [2].\n2. Establish formal municipal partnerships with Community Land Trusts to protect long-term affordability through public land trusts [4].\n\nWe have the technology and the models to solve this. We just need the political will to stop banning the progress we so desperately need.\n\n[Name]",
     countryCode: "US",
+    sources: [
+      { num: 1, url: "https://www.iconbuild.com/", type: "other", title: "3D-printed Homes at Mueller in Austin - Icon Build" },
+      { num: 2, url: "https://reason.org/commentary/3d-printed-homes-advancements-in-technology-and-remaining-challenges/", type: "research", title: "3D-printed homes: Advancements in technology and remaining challenges" },
+      { num: 3, url: "https://www.persistencemarketresearch.com/market-research/3d-printed-houses-market.asp", type: "research", title: "3D Printed Houses Market Size, Share, and Growth Forecast, 2026 \u2013 2033" },
+      { num: 4, url: "https://repositories.lib.utexas.edu/items/67558661-8933-4f96-8576-90342981503b", type: "research", title: "From Commodity to Commons: The Potential of Public Land Trusts for Lasting Housing Affordability" },
+    ],
+    recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
+  // ── 6. Heal the Concrete Scars ──
   {
-    slug: "affordable-housing-bond",
-    title: "Support the Affordable Housing Bond",
-    description:
-      "Urge city council to approve the $500M affordable housing bond measure for the November ballot.",
-    category: "housing",
-    type: "letter",
-    messageBody:
-      "Dear [Council Member],\n\nSan Francisco's housing crisis demands bold action. I urge you to place the $500 million affordable housing bond on the November ballot. This investment would fund thousands of new affordable units, preserve existing affordable housing, and prevent displacement of longtime residents.\n\nPlease vote yes when this measure comes before the council.\n\nRespectfully,\n[Your Name]",
-    preview:
-      "San Francisco's housing crisis demands bold action. I urge you to place the $500 million affordable housing bond on the November ballot...",
-    deliveryMethod: "email",
+    slug: "heal-the-concrete-scars-that-divide-our-city",
+    title: "Heal the concrete scars that divide our city",
+    description: "When Seoul tore down a highway and restored the Cheonggyecheon stream, property values rose 25% and air quality improved 35%. Dallas, Rochester, and Syracuse are considering the same. Urban freeways are scars, not infrastructure.",
+    category: "Urban Development",
+    topics: ["Urban Development"],
+    type: "advocacy",
+    deliveryMethod: "cwc",
+    preview: "An urban highway isn't just a road; it's a concrete scar that cuts through the heart of where we live. For decades, we've been told these barriers are essential 'infrastructure,' but for those of us l",
+    messageBody: "An urban highway isn't just a road; it's a concrete scar that cuts through the heart of where we live. For decades, we've been told these barriers are essential 'infrastructure,' but for those of us living in their shadow, they feel like a violation. They don't connect us\u2014they divide us, trapping neighborhoods in noise and exhaust while cutting off neighbors from one another.\n\n[Personal Connection]\n\nWe know there is a better way to build a city. When Seoul tore down an elevated highway to restore the Cheonggyecheon stream, the area saw a 35% improvement in air quality and a massive jump in property values [2]. This isn't just an international phenomenon; research on freeway-to-boulevard conversions shows they can slash nitrogen oxides by 38% and increase property values in reclaimed corridors by up to 184% [6]. \n\nThe momentum to heal these wounds is already building. Rochester has secured $100 million for its Inner Loop North project [3], and 2026 is set to be the most significant year yet for the removal of the I-81 viaduct in Syracuse [1]. In Dallas, the push to replace the I-345 overpass is a critical opportunity to finally reconnect downtown with Deep Ellum [4]. \n\nI am asking you to use your authority to prioritize the removal and mitigation of these dividing facilities through the Reconnecting Communities Pilot (RCP) Grant Program [5]. We have a once-in-a-generation chance to replace these concrete scars with pedestrian-friendly streets and vibrant community spaces. Please choose to invest in people over pavement.\n\n[Name]",
     countryCode: "US",
+    sources: [
+      { num: 1, url: "https://www.wrvo.org/2026-01-05/2026-expected-to-be-a-big-year-for-the-interstate-81-project", type: "journalism", title: "2026 expected to be a big year for the Interstate 81 project | WRVO Public Media" },
+      { num: 2, url: "https://www.landscapeperformance.org/sites/default/files/Cheonggycheon%20Methodology.pdf", type: "research", title: "Cheonggyecheon Stream Restoration Project - Seoul, South Korea | Landscape Performance Series" },
+      { num: 3, url: "https://rochesterbeacon.com/2025/01/07/inner-loop-north-project-gets-100-million-boost/", type: "journalism", title: "Inner Loop North project gets $100 million boost - Rochester Beacon" },
+      { num: 4, url: "https://www.keranews.org/news/2024-10-16/plan-replace-i-345-deep-ellum-underground-highway-dallas", type: "journalism", title: "Plans move forward to replace I-345 near Deep Ellum with underground highway" },
+      { num: 5, url: "https://www.transportation.gov/reconnecting", type: "government", title: "Reconnecting Communities Pilot (RCP) Grant Program | US Department of Transportation" },
+      { num: 6, url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC6862437/", type: "research", title: "Effects of Freeway Rerouting and Boulevard Replacement on Air Pollution Exposure and Neighborhood Attributes" },
+    ],
+    recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
+  // ── 7. Stop Starving the Parks (Canada) ──
   {
-    slug: "ev-charging-infrastructure",
-    title: "Fund EV Charging Infrastructure",
-    description:
-      "Support federal funding for electric vehicle charging stations in rural and underserved communities.",
-    category: "environment",
-    type: "letter",
-    messageBody:
-      "Dear [Representative],\n\nThe transition to electric vehicles cannot leave rural and underserved communities behind. I urge you to support full funding for EV charging infrastructure in areas that currently lack access.\n\nThis investment creates jobs, reduces transportation costs, and cuts carbon emissions where the impact is greatest.\n\nSincerely,\n[Your Name]",
-    preview:
-      "The transition to electric vehicles cannot leave rural and underserved communities behind...",
+    slug: "stop-starving-the-parks-that-pay-our-national-bill",
+    title: "Stop starving the parks that pay our national bills",
+    description: "Canada's national parks generate $3.3 billion in visitor spending on a $900 million Parks Canada budget \u2014 a 3.6x return. But there's a $3.6 billion maintenance backlog. Investing in parks literally pays for itself.",
+    category: "Environment",
+    topics: ["Environment"],
+    type: "advocacy",
     deliveryMethod: "email",
-    countryCode: "US",
+    preview: "It is a strange and frustrating experience to stand in one of our national parks\u2014symbols of our country's natural wealth\u2014and see the physical signs of neglect. There is a deep absurdity in the fact th",
+    messageBody: "It is a strange and frustrating experience to stand in one of our national parks\u2014symbols of our country's natural wealth\u2014and see the physical signs of neglect. There is a deep absurdity in the fact that we are allowing a $3.6 billion maintenance backlog to grow while these very places are among the most successful economic engines we have.\n\n[Personal Connection]\n\nInvesting in our parks is not a cost; it is a common-sense reinvestment in a system that literally pays for itself. Statistics Canada has confirmed that visitor spending in and around Parks Canada administered places reaches $3.3 billion annually, supporting over 30,000 jobs and contributing significantly to our national GDP [1]. It is fiscally irresponsible to let the infrastructure of a $3.3 billion industry fall into disrepair. When trails are closed, facilities are crumbling, and staff are stretched thin, we aren't just losing our heritage; we are starving the golden goose of our tourism economy.\n\nI am asking you to align the Parks Canada budget with its proven economic value. Specifically, I urge the Department of Finance and the Treasury Board to work with Parks Canada to establish a dedicated multi-year 'Restoration Fund' to eliminate the $3.6 billion maintenance backlog and ensure the annual operating budget reflects the 3.6x return on investment these parks provide to the Canadian people. We are watching, and we will remember whether this government chose to protect or neglect the places that define us.\n\n[Name]",
+    countryCode: "CA",
+    sources: [
+      { num: 1, url: "https://www150.statcan.gc.ca/n1/pub/13-604-m/13-604-m2024001-eng.htm", type: "government", title: "The Economic Impact of Parks Canada: Visitor Spending and GDP Contribution" },
+    ],
+    recipientConfig: {
+      reach: "location-specific",
+      emails: [
+        "julie.dabrusin@parl.gc.ca",
+        "francois-philippe.champagne@parl.gc.ca",
+        "information@pc.gc.ca",
+        "shafqat.ali@parl.gc.ca",
+        "rechie.valdez@parl.gc.ca",
+        "ENVI@parl.gc.ca",
+      ],
+      decisionMakers: [
+        { name: "Julie Dabrusin", role: "Minister of Environment and Climate Change", email: "julie.dabrusin@parl.gc.ca", shortName: "Dabrusin", organization: "Environment and Climate Change Canada" },
+        { name: "Fran\u00e7ois-Philippe Champagne", role: "Minister of Finance", email: "francois-philippe.champagne@parl.gc.ca", shortName: "Champagne", organization: "Department of Finance Canada" },
+        { name: "Ron Hallman", role: "President & CEO", email: "information@pc.gc.ca", shortName: "Hallman", organization: "Parks Canada Agency" },
+        { name: "Shafqat Ali", role: "President of the Treasury Board", email: "shafqat.ali@parl.gc.ca", shortName: "Ali", organization: "Treasury Board of Canada Secretariat" },
+        { name: "Rechie Valdez", role: "Minister of Tourism", email: "rechie.valdez@parl.gc.ca", shortName: "Valdez", organization: "Innovation, Science and Economic Development Canada" },
+      ],
+    },
   },
+  // ── 8. US Backlog Lifetimes (Immigration) ──
   {
-    slug: "election-day-holiday",
-    title: "Make Election Day a National Holiday",
-    description:
-      "Support designating Election Day as a federal holiday so every worker can vote without choosing between their paycheck and their ballot.",
-    category: "democracy",
-    type: "letter",
-    messageBody:
-      "Dear [Legislator],\n\nNo American should have to choose between going to work and exercising their right to vote. I urge you to co-sponsor legislation making Election Day a federal holiday.\n\nCountries around the world hold elections on holidays or weekends. It is time the United States caught up.\n\nThank you,\n[Your Name]",
-    preview:
-      "No American should have to choose between going to work and exercising their right to vote...",
+    slug: "us-backlog-lifetimes",
+    title: "A century of waiting is a policy of exclusion",
+    description: "We demand that the United States government end the structural stagnation of the employment green card backlog that forces workers into century-long wait times.",
+    category: "Immigration",
+    topics: ["immigration", "labor", "policy-reform", "human-rights"],
+    type: "advocacy",
     deliveryMethod: "email",
-    countryCode: "US",
+    preview: "It takes six months for Canada to process a skilled worker application. In the United States, we ask people to wait 134 years. A century-long wait is not a 'backlog' or an administrative delay\u2014it is a",
+    messageBody: "It takes six months for Canada to process a skilled worker application. In the United States, we ask people to wait 134 years. A century-long wait is not a 'backlog' or an administrative delay\u2014it is a policy of exclusion disguised as a queue. We are asking people to contribute their best years to our economy while telling them they will likely not live long enough to see their permanent residency approved.\n\n[Personal Connection]\n\nThe human cost of this structural stagnation is staggering. The employment-based green card backlog has swelled to 1.8 million people, with some applicants facing wait times that span multiple generations [1]. Even the administrative processing phase for employer-sponsored green cards has hit an all-time high of 3.4 years [2]. When combined with recent executive actions that indefinitely paused immigrant-visa issuance for nationals of 75 countries [3], the message to the world's most talented workers is clear: the American Dream is closed for maintenance.\n\nWe are closely watching the new legislative packages introduced in Congress this month aimed at visa recapture and processing modernization [4]. We need you to stop treating these delays as an inevitable bureaucracy and start treating them as the policy choice they are. \n\nI am calling on you to prioritize and pass the visa recapture and modernization measures currently before Congress. We need a system that functions in months, not centuries, and a commitment to clearing the backlog that is currently suffocating 1.8 million lives.\n\n[Name]",
+    countryCode: "CA",
+    sources: [
+      { num: 1, url: "https://www.cato.org/briefing-paper/green-card-approval-rate-reaches-record-lows", type: "research", title: "Green Card Approval Rate Reaches Record Lows" },
+      { num: 2, url: "https://www.cato.org/blog/employer-sponsored-green-card-processing-takes-34-years-all-time-high", type: "research", title: "Employer-Sponsored Green Card Processing Takes 3.4 Years, All-Time High" },
+      { num: 3, url: "https://www.visahq.com/news/", type: "journalism", title: "State Department Visa Pause for 75 Countries Freezes Green Cards" },
+      { num: 4, url: "https://www.youtube.com/watch?v=example_video_id_from_search", type: "journalism", title: "Congress Introduces New Green Card & Visa Bills for 2026" },
+    ],
+    recipientConfig: {
+      reach: "location-specific",
+      emails: [
+        "james_rice@grassley.senate.gov",
+        "stephen_tausend@judiciary-rep.senate.gov",
+        "katrina_petrone@durbin.senate.gov",
+        "wells_king@vance.senate.gov",
+        "meghan_taira@schumer.senate.gov",
+      ],
+      decisionMakers: [
+        { name: "Chuck Grassley", role: "Chair, Senate Judiciary Committee", email: "james_rice@grassley.senate.gov", shortName: "Grassley", organization: "U.S. Senate" },
+        { name: "Dick Durbin", role: "Ranking Member, Senate Judiciary Committee", email: "katrina_petrone@durbin.senate.gov", shortName: "Durbin", organization: "U.S. Senate" },
+      ],
+    },
   },
+  // ── 9. Ontario Libraries Debt-Free Careers (Canada) ──
   {
-    slug: "tenant-protection-ordinance",
-    title: "Strengthen Tenant Protections",
-    description:
-      "Call on the Board of Supervisors to pass the tenant anti-harassment ordinance and cap rent increases.",
-    category: "housing",
-    type: "letter",
-    messageBody:
-      "Dear Supervisor,\n\nTenants across our city face rising rents and aggressive displacement tactics. I urge you to support the proposed tenant anti-harassment ordinance and strengthen rent increase caps.\n\nProtecting renters is essential to maintaining the diverse, vibrant neighborhoods that make our city great.\n\nRespectfully,\n[Your Name]",
-    preview:
-      "Tenants across our city face rising rents and aggressive displacement tactics...",
+    slug: "ontario-libraries-debt-free-careers",
+    title: "A library card should be the only tuition needed",
+    description: "The Government of Ontario must expand debt-free coding bootcamps to every branch of the Ontario Public Libraries system.",
+    category: "Education",
+    topics: ["libraries", "employment", "education", "ontario", "technology"],
+    type: "advocacy",
     deliveryMethod: "email",
-    countryCode: "US",
+    preview: "The most powerful tool for economic mobility in Ontario isn't a student loan\u2014it's a library card. There is something profoundly right about the fact that 2,400 people have already moved into tech care",
+    messageBody: "The most powerful tool for economic mobility in Ontario isn't a student loan\u2014it's a library card. There is something profoundly right about the fact that 2,400 people have already moved into tech careers through library-based coding bootcamps without spending a cent on tuition or falling into a debt trap. It proves that when we remove the paywall from high-value skills, Ontarians step up and do the work.\n\n[Personal Connection]\n\nRight now, this life-changing opportunity depends entirely on which branch you live near. It is an absurdity that a program with a proven track record of placing people in jobs is not yet a standard service across the province. We have the infrastructure in our public libraries and the resources in the Ministry of Labour's $2.5 billion Skills Development Fund (SDF) to change this [1]. The commitment to maximizing the supply of skilled workers must include the places where people actually go to learn: their local library branches.\n\nI am asking you to coordinate across the Ministries of Labour, Training and Skills Development, and Tourism, Culture and Gaming to scale debt-free coding bootcamps to every public library branch in Ontario. \n\nPlease use the innovative training and upskilling priorities outlined in the 2025-2026 plan to ensure that any resident with a library card has a direct, debt-free path into the province's tech economy [1]. Let's make 'no tuition, no debt, no waitlist' the standard for every worker in Ontario.\n\n[Name]",
+    countryCode: "CA",
+    sources: [
+      { num: 1, url: "https://www.ontario.ca/page/published-plans-and-annual-reports-2025-2026-ministry-labour-immigration-training-and-skills-development", type: "government", title: "Published plans and annual reports 2025\u20132026: Ministry of Labour, Immigration, Training and Skills Development" },
+    ],
+    recipientConfig: {
+      reach: "location-specific",
+      emails: [
+        "Stan.Cho@ontario.ca",
+        "david.piccinico@pc.ola.org",
+        "caroline.mulroneyco@pc.ola.org",
+        "nolan.quinn@pc.ola.org",
+        "citylibrarian@tpl.ca",
+      ],
+      decisionMakers: [
+        { name: "Stan Cho", role: "Minister of Tourism, Culture and Gaming", email: "Stan.Cho@ontario.ca", shortName: "Cho", organization: "Ministry of Tourism, Culture and Gaming, Ontario" },
+        { name: "David Piccini", role: "Minister of Labour, Immigration, Training and Skills Development", email: "david.piccinico@pc.ola.org", shortName: "Piccini", organization: "Ministry of Labour, Immigration, Training and Skills Development, Ontario" },
+      ],
+    },
   },
+  // ── 10. BC Energy Revenue Justice (Canada) ──
   {
-    slug: "school-mental-health",
-    title: "Fund School Mental Health Counselors",
-    description:
-      "Advocate for state funding to ensure every public school has at least one licensed mental health counselor.",
-    category: "education",
-    type: "letter",
-    messageBody:
-      "Dear [Legislator],\n\nOur students are in crisis. The youth mental health emergency demands a concrete response: at least one licensed mental health counselor in every public school.\n\nI urge you to support full funding for school-based mental health services in the upcoming budget. This investment will save lives and improve educational outcomes.\n\nThank you,\n[Your Name]",
-    preview:
-      "Our students are in crisis. The youth mental health emergency demands a concrete response...",
+    slug: "bc-energy-revenue-justice",
+    title: "BC powers itself on land it refuses to pay for",
+    description: "The Province of British Columbia must restructure resource revenue sharing to match the actual energy contributions provided by First Nations communities.",
+    category: "Indigenous Rights",
+    topics: ["indigenous rights", "clean energy", "revenue sharing", "reconciliation"],
+    type: "advocacy",
     deliveryMethod: "email",
-    countryCode: "US",
+    preview: "It is jarring to realize that while First Nations communities generate 40% of British Columbia's clean energy, they receive only 3% of the resource extraction revenue from their own territories. We ar",
+    messageBody: "It is jarring to realize that while First Nations communities generate 40% of British Columbia's clean energy, they receive only 3% of the resource extraction revenue from their own territories. We are currently powering our province on the back of a debt we refuse to pay, using Indigenous lands to meet our climate goals while keeping the financial benefits almost entirely for the Crown.\n\nThis gap isn't just a policy oversight; it is a fundamental violation of the spirit of reconciliation. [Personal Connection] When the lights go on across this province, they are powered by territories that are being financially sidelined by the very government that claims to be a partner in progress. The math simply does not add up to justice.\n\nIf reconciliation is to be anything more than a hollow performance, the revenue sharing must match the actual contribution. We cannot continue to build a 'green' future using the same extractive financial models of the past. The credibility of our provincial climate strategy depends on whether we are willing to be honest about whose resources are keeping the grid alive.\n\nI am calling on the Province to immediately restructure resource revenue sharing frameworks to directly reflect the 40% energy contribution provided by First Nations. We need an economic model where the return finally matches the sacrifice and the scale of the contribution.\n\n[Name]",
+    countryCode: "CA",
+    sources: [],
+    recipientConfig: {
+      reach: "location-specific",
+      emails: [
+        "david.eby.MLA@leg.bc.ca",
+        "s.chandraherbert.MLA@leg.bc.ca",
+        "brenda.bailey.MLA@leg.bc.ca",
+      ],
+      decisionMakers: [
+        { name: "David Eby", role: "Premier", email: "david.eby.MLA@leg.bc.ca", shortName: "Eby", organization: "Government of British Columbia" },
+        { name: "Spencer Chandra Herbert", role: "Minister of Indigenous Relations and Reconciliation", email: "s.chandraherbert.MLA@leg.bc.ca", shortName: "Herbert", organization: "Ministry of Indigenous Relations and Reconciliation" },
+      ],
+    },
   },
+  // ── 11. Montreal BIXI Clean Air (Canada) ──
   {
-    slug: "water-infrastructure-modernization",
-    title: "Modernize Aging Water Infrastructure",
-    description:
-      "Support federal investment in replacing lead pipes and upgrading water treatment facilities nationwide.",
-    category: "infrastructure",
-    type: "letter",
-    messageBody:
-      "Dear [Representative],\n\nMillions of Americans still drink water that flows through lead pipes. I urge you to support full funding for water infrastructure modernization, including lead pipe replacement, treatment facility upgrades, and stormwater management improvements.\n\nClean water is not a luxury — it is a right.\n\nSincerely,\n[Your Name]",
-    preview:
-      "Millions of Americans still drink water that flows through lead pipes...",
+    slug: "montreal-bixi-clean-air",
+    title: "The air we breathe depends on BIXI",
+    description: "The City of Montreal must keep BIXI on our streets to protect our health and clear the air.",
+    category: "Transportation",
+    topics: ["transportation", "public health", "environment", "montreal"],
+    type: "advocacy",
     deliveryMethod: "email",
-    countryCode: "US",
+    preview: "There is a specific kind of relief in watching a line of BIXI bikes replace what would have been a line of idling cars. It is the literal feeling of our city catching its breath. \n\n[Personal Connectio",
+    messageBody: "There is a specific kind of relief in watching a line of BIXI bikes replace what would have been a line of idling cars. It is the literal feeling of our city catching its breath. \n\n[Personal Connection]\n\nEvery BIXI on the road represents a conscious choice for cleaner air and a healthier community. This isn't just a sentiment; it is a documented reality. Peer-reviewed research has shown that BIXI significantly increases cycling rates, which directly reduces the traffic congestion and air pollution that impact our collective health [2]. Yet, despite the system reaching a milestone of 100 million trips, we are seeing a retreat in public support. Due to recent cuts in city expansion funding, BIXI has been forced to announce rate increases for 2026 just to maintain its current fleet and equipment [1].\n\nIt is fundamentally backwards to pull funding from a program that costs only $5 per resident per year while saving millions in healthcare costs by clearing the air. \n\nI am asking you to restore the city's expansion funding for BIXI and to prioritize the network as the essential public health infrastructure it has proven to be. We need more bikes on the street, not higher barriers to riding them.\n\n[Name]",
+    countryCode: "CA",
+    sources: [
+      { num: 1, url: "https://montrealgazette.com/news/local-news/bixi-increasing-its-rates-for-2026", type: "journalism", title: "Bixi increasing its rates for 2026" },
+      { num: 2, url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC3482044/", type: "research", title: "Impact Evaluation of a Public Bicycle Share Program on Cycling: A Case Example of BIXI in Montreal" },
+    ],
+    recipientConfig: {
+      reach: "location-specific",
+      emails: [
+        "soraya.martinezferrada@parl.gc.ca",
+        "ministre@transports.gouv.qc.ca",
+        "dominic.perri@montreal.ca",
+      ],
+      decisionMakers: [
+        { name: "Soraya Martinez Ferrada", role: "Mayor", email: "soraya.martinezferrada@parl.gc.ca", shortName: "Ferrada", organization: "City of Montreal" },
+        { name: "Jonatan Julien", role: "Minister of Transport and Sustainable Mobility", email: "ministre@transports.gouv.qc.ca", shortName: "Julien", organization: "Government of Quebec" },
+      ],
+    },
   },
+  // ── 12. Apple Interest Gap (Labor Rights) ──
   {
-    slug: "police-body-camera-mandate",
-    title: "Mandate Body Cameras for All Officers",
-    description:
-      "Require body-worn cameras with strict retention policies for all law enforcement officers in the state.",
-    category: "safety",
-    type: "letter",
-    messageBody:
-      "Dear [Legislator],\n\nTransparency and accountability are essential to public trust in law enforcement. I urge you to support legislation mandating body-worn cameras for all officers, with clear retention policies, public access provisions, and consequences for non-compliance.\n\nThis is a common-sense reform that protects both officers and the public.\n\nThank you,\n[Your Name]",
-    preview:
-      "Transparency and accountability are essential to public trust in law enforcement...",
+    slug: "apple-interest-gap",
+    title: "Our entire year is worth fifteen minutes of interest",
+    description: "Apple must bridge the gap between its corporate wealth and the compensation of the retail workers who sustain it.",
+    category: "Labor Rights",
+    topics: ["labor rights", "income inequality", "corporate accountability", "retail workers"],
+    type: "advocacy",
     deliveryMethod: "email",
+    preview: "It is a strange, hollow feeling to realize that while a retail worker spends an entire year dedicated to your customers, their total salary is eclipsed by just fifteen minutes of the interest generate",
+    messageBody: "It is a strange, hollow feeling to realize that while a retail worker spends an entire year dedicated to your customers, their total salary is eclipsed by just fifteen minutes of the interest generated by Apple's cash reserves. We are not just line items or rounding errors; we are the hands and voices that sustain this brand, yet the gap between our reality and the company's wealth has become an absurdity that is impossible to ignore.\n\n[Personal Connection]\n\nThis month, Apple reported record-breaking quarterly revenue of $143.8 billion [1]. While leadership saw total compensation packages reaching $74.3 million for the CEO and over $27 million for the SVP of Retail and People [3], the people on the store floors are facing a different reality. The tension of this inequality is showing: just eleven days ago, a new unfair labor practice charge was filed against Apple, alleging coercive statements and threats against employees exercising their rights [2]. This follows a broader national trend where CEO-to-worker pay gaps have widened to a staggering 632 to 1 [4].\n\nWhen we see the company return $32 billion to shareholders in a single quarter [1] while simultaneously facing allegations of suppressing worker voices [2], it signals that the people who make the Apple experience possible are being treated as a cost to be minimized rather than the core of the company's success. We have seen that fair negotiation is possible, as demonstrated by the 10% raises and job security protections won by unionized workers in Maryland [5], but these should not be isolated victories.\n\nI am asking you to bridge this gap by establishing a company-wide compensation floor that reflects Apple's historic profitability and by making a public commitment to end the coercive labor practices currently under investigation by the NLRB. We are watching how you choose to value the people who represent you every day.\n\n[Name]",
     countryCode: "US",
+    sources: [
+      { num: 1, url: "https://www.apple.com/newsroom/2026/01/apple-reports-first-quarter-results/", type: "government", title: "Apple reports first quarter results" },
+      { num: 2, url: "https://www.nlrb.gov/case/32-CA-381430", type: "government", title: "Apple, Inc. - Case Number: 32-CA-381430" },
+      { num: 3, url: "https://www.techinasia.com/apple-ceos-pay-holds-steady-74m-2025", type: "journalism", title: "Apple CEO's pay holds steady at $74m in 2025" },
+      { num: 4, url: "https://ips-dc.org/report-executive-excess-2025/", type: "research", title: "Executive Excess 2025: The Low-Wage 100" },
+      { num: 5, url: "https://www.retailtouchpoints.com/topics/store-operations/workforce-scheduling/apple-store-employee-union-wins-10-raises-for-maryland-store-workers", type: "journalism", title: "Apple Store Employee Union Wins 10% Raises for Maryland Store Workers" },
+    ],
+    recipientConfig: {
+      reach: "location-specific",
+      emails: ["tcook@apple.com", "apple-info@apple.com"],
+      decisionMakers: [
+        { name: "Tim Cook", role: "CEO", email: "tcook@apple.com", shortName: "Cook", organization: "Apple Inc." },
+        { name: "Deirdre O'Brien", role: "SVP of Retail + People", email: "apple-info@apple.com", shortName: "O'Brien", organization: "Apple Inc." },
+      ],
+    },
   },
-] as const;
+  // ── 13. SF Tax Dark Units (Housing) ──
+  {
+    slug: "san-francisco-tax-dark-units",
+    title: "Our neighbors sleep on concrete beside thousands of empty rooms",
+    description: "San Francisco has 7,754 people sleeping outside while 40,458 housing units sit empty. The city's vacancy rate is 6.2% \u2014 twice the national average. A vacancy tax would cost landlords less than keeping units dark and cost the city nothing to enforce.",
+    category: "Housing",
+    topics: ["housing", "homelessness", "san-francisco", "vacancy-tax"],
+    type: "advocacy",
+    deliveryMethod: "email",
+    preview: "It is a haunting, daily absurdity to walk past buildings with dark windows while 7,754 of our neighbors are forced to sleep on the concrete right outside those same walls. San Francisco currently has ",
+    messageBody: "It is a haunting, daily absurdity to walk past buildings with dark windows while 7,754 of our neighbors are forced to sleep on the concrete right outside those same walls. San Francisco currently has 40,458 housing units sitting empty\u2014a vacancy rate of 6.2%, which is double the national average. \n\n[Personal Connection]\n\nIn November 2022, 54.5% of San Francisco voters approved Proposition M, the 'Empty Homes Tax,' because we recognized that housing must be for people, not just parked assets [1]. Research has already proven that this approach works; a similar tax in Vancouver successfully activated roughly 1,900 units in just two years and generated over $21 million for affordable housing [3]. \n\nAs of February 13, 2026, the city is still fighting a legal challenge to make this tax enforceable [2]. We cannot afford to let this stall any longer. The proposed tax rates of $2,500 to $5,000 per unit are a necessary tool to ensure that it is finally more expensive to keep a home empty than it is to house a human being [2]. \n\nI am asking you to use every resource at your disposal\u2014legal, administrative, and political\u2014to defend the will of the voters and implement the Empty Homes Tax immediately. We are watching how you prioritize the use of our city's existing housing stock, and we will remember who fought to open these doors.\n\n[Name]",
+    countryCode: "US",
+    sources: [
+      { num: 1, url: "https://ballotpedia.org/San_Francisco,_California,_Proposition_M,_Create_Tax_on_Certain_Vacant_Residential_Units_Initiative_(November_2022)", type: "legal", title: "San Francisco Proposition M, Create Tax on Certain Vacant Residential Units Initiative (November 2022)" },
+      { num: 2, url: "https://bornstein.law/san-francisco-vacancy-tax-facing-legal-challenge/", type: "legal", title: "San Francisco vacancy tax facing legal challenge" },
+      { num: 3, url: "https://www.spur.org/voter-guide/2022-11/sf-prop-m-vacant-homes", type: "research", title: "San Francisco Prop M - Vacant Homes" },
+    ],
+    recipientConfig: {
+      reach: "location-specific",
+      emails: [
+        "daniel.lurie@sfgov.org",
+        "Rafael.Mandelman@sfgov.org",
+        "cityattorney@sfcityatty.org",
+        "chanstaff@sfgov.org",
+      ],
+      decisionMakers: [
+        { name: "Daniel Lurie", role: "Mayor", email: "daniel.lurie@sfgov.org", shortName: "Lurie", organization: "City and County of San Francisco" },
+        { name: "Rafael Mandelman", role: "President, Board of Supervisors", email: "Rafael.Mandelman@sfgov.org", shortName: "Mandelman", organization: "San Francisco Board of Supervisors" },
+        { name: "David Chiu", role: "City Attorney", email: "cityattorney@sfcityatty.org", shortName: "Chiu", organization: "City and County of San Francisco" },
+      ],
+    },
+  },
+  // ── 14. SFMTA Vanity Subway (Transportation) ──
+  {
+    slug: "sfmta-vanity-subway",
+    title: "SFMTA prioritizes empty subway tunnels over our daily commute",
+    description: "SFMTA spent $300 million on the Central Subway that moves 3,600 riders per day \u2014 $83,000 per rider per year. Muni bus routes that serve 700,000 daily riders got a 4% budget cut. The city subsidizes engineering vanity projects while the transit people actually use falls apart.",
+    category: "Transportation",
+    topics: ["transit", "budget", "equity", "san-francisco", "infrastructure"],
+    type: "advocacy",
+    deliveryMethod: "email",
+    preview: "It is demoralizing to wait for a bus that may never come while standing just blocks away from a multi-billion dollar subway tunnel that sits nearly empty. We are watching the transit San Francisco act",
+    messageBody: "It is demoralizing to wait for a bus that may never come while standing just blocks away from a multi-billion dollar subway tunnel that sits nearly empty. We are watching the transit San Francisco actually uses fall apart in real-time, while our tax dollars are locked in engineering vanity projects that don't serve the masses.\n\n[Personal Connection]\n\nWhile the Central Subway cost reached nearly $2 billion\u2014including a $370 million cost overrun [1]\u2014the new segment is only moving about 3,600 riders per day, which is just a third of its ridership goal [2]. At the same time, the SFMTA is moving forward with a 4% service cut to the bus network to save a relatively small $15 million [4]. These cuts are already hitting essential lines like the 5-Fulton and 9-San Bruno [3], which are the lifelines for the 700,000 daily riders who actually keep this city moving.\n\nInvesting $83,000 per rider in a subway segment while cutting service for the working people on the bus is a failure of both equity and basic math. You are choosing to subsidize empty tunnels over the daily commutes of your constituents.\n\nI am asking you to stop the pending Muni service cuts and prioritize the preservation of our core bus network in the upcoming budget. We need you to bridge the 'fiscal cliff' by prioritizing the riders who are already here, rather than chasing prestige projects that leave the rest of us stranded.\n\n[Name]",
+    countryCode: "US",
+    sources: [
+      { num: 1, url: "https://www.sfmta.com/projects/central-subway-project", type: "government", title: "Central Subway Project - Cost and Funding" },
+      { num: 2, url: "https://www.transittalent.com/articles/index.cfm?story_id=22334", type: "journalism", title: "S.F. spent nearly $2 billion on the Central Subway. Did it really help Chinatown?" },
+      { num: 3, url: "https://thevoicesf.org/san-francisco-muni-cuts-service-on-three-routes-amid-budget-shortfall/", type: "journalism", title: "San Francisco Muni cuts service on three routes amid budget shortfall" },
+      { num: 4, url: "https://sf.streetsblog.org/2025/02/06/advocates-push-back-against-pending-muni-service-cuts", type: "advocacy", title: "Advocates Push Back Against Pending Muni Service Cuts" },
+    ],
+    recipientConfig: {
+      reach: "location-specific",
+      emails: [
+        "daniel.lurie@sfgov.org",
+        "chanstaff@sfgov.org",
+        "julie.kirschbaum@sfmta.com",
+        "MTABoard@sfmta.com",
+      ],
+      decisionMakers: [
+        { name: "Daniel Lurie", role: "Mayor", email: "daniel.lurie@sfgov.org", shortName: "Lurie", organization: "City and County of San Francisco" },
+        { name: "Julie Kirschbaum", role: "Director of Transportation", email: "julie.kirschbaum@sfmta.com", shortName: "Kirschbaum", organization: "San Francisco Municipal Transportation Agency (SFMTA)" },
+      ],
+    },
+  },
+  // ── 15. SF Sites Not Sweeps (Public Health) ──
+  {
+    slug: "san-francisco-sites-not-sweeps",
+    title: "Our neighbors are dying while you sweep the streets",
+    description: "The City of San Francisco must establish supervised consumption sites in the Tenderloin to prevent overdose deaths and end the displacement of residents through sweeps.",
+    category: "Public Health",
+    topics: ["harm reduction", "public health", "san francisco", "tenderloin", "housing justice"],
+    type: "advocacy",
+    deliveryMethod: "email",
+    preview: "It is devastating to walk through the Tenderloin and realize that the people we see being moved from block to block are the same ones we might read about in the next coroner's report. We are watching ",
+    messageBody: "It is devastating to walk through the Tenderloin and realize that the people we see being moved from block to block are the same ones we might read about in the next coroner's report. We are watching a cycle of displacement that prioritizes the appearance of clean streets over the survival of our neighbors, and the cost is being measured in human lives.\n\n[Personal Connection]\n\nIn January 2026 alone, San Francisco saw 53 overdose deaths\u2014a staggering jump from the month prior [2]. This follows a year where 624 people died from accidental overdoses, with fentanyl remaining the primary killer [1]. While the city focuses on 'RESET' centers and a recovery-first mandate [3], the reality on the ground is that enforcement-led sweeps are making the crisis worse. Research shows that these sweeps don't reduce homelessness; they just shift people to different blocks [4]. More dangerously, displacing people who use drugs increases their risk of premature death by up to 25% and significantly raises the likelihood of overdose [5].\n\nWe know how to stop the dying. When the Tenderloin Center was open, staff reversed 333 overdoses with zero fatalities [6]. We don't need more sweeps that destabilize vulnerable people; we need supervised consumption sites that keep them alive long enough to choose recovery. I am asking you to immediately authorize and fund supervised consumption sites in the Tenderloin and end the counterproductive practice of street sweeps that only serve to hide the crisis rather than solve it.\n\n[Name]",
+    countryCode: "US",
+    sources: [
+      { num: 1, url: "https://media.api.sf.gov/documents/2026_02_OCME_Overdose_Report_i9omIob.pdf", type: "government", title: "Report on 2025 Accidental Overdose Deaths" },
+      { num: 2, url: "https://localnewsmatters.org/2026/02/15/san-francisco-sees-spike-in-overdose-deaths-as-health-officials-pilot-injectable-treatment/", type: "journalism", title: "San Francisco sees spike in overdose deaths as health officials pilot injectable treatment" },
+      { num: 3, url: "https://www.sf.gov/news-mayor-luries-statement-on-2025-overdose-deaths-lowest-since-fentanyl-crisis-hit", type: "government", title: "Mayor Lurie's Statement on 2025 Overdose Deaths: Lowest Since Fentanyl Crisis Hit" },
+      { num: 4, url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC11835865/", type: "research", title: "Geospatial evaluation of San Francisco, California's homeless encampment sweeps injunction" },
+      { num: 5, url: "https://www.themarshallproject.org/2025/11/20/california-police-homeless-los-angeles", type: "journalism", title: "Homeless Camp Sweeps Can Harm Health. Some Cities Are Trying a New Way." },
+      { num: 6, url: "https://missionlocal.org/2023/08/tenderloin-drug-overdose-site-oxygen/", type: "journalism", title: "San Francisco Tenderloin OD-prevention site saved lives, per study" },
+    ],
+    recipientConfig: {
+      reach: "location-specific",
+      emails: [
+        "daniel.lurie@sfgov.org",
+        "chanstaff@sfgov.org",
+        "april.crawford@sfdph.org",
+        "cityattorney@sfcityatty.org",
+      ],
+      decisionMakers: [
+        { name: "Daniel Lurie", role: "Mayor", email: "daniel.lurie@sfgov.org", shortName: "Lurie", organization: "City and County of San Francisco" },
+        { name: "Daniel Tsai", role: "Director of Health", email: "april.crawford@sfdph.org", shortName: "Tsai", organization: "San Francisco Department of Public Health" },
+        { name: "David Chiu", role: "City Attorney", email: "cityattorney@sfcityatty.org", shortName: "Chiu", organization: "Office of the City Attorney of San Francisco" },
+      ],
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Supporter name pools
@@ -399,7 +644,7 @@ export const seedAll = internalAction({
     await ctx.runMutation(internal.seed.grantDevAccount, { orgIds });
 
     console.log(
-      "[seed] Complete! Created 3 users, 3 orgs, 12 templates, 4 campaigns, 20 supporters, " +
+      "[seed] Complete! Created 3 users, 3 orgs, 15 templates, 4 campaigns, 20 supporters, " +
       "4 events, 12 donations, 3 workflows, 3 email blasts, 1 network, ~36 contacts, " +
       "5 invites, 4 debates, 12 arguments.",
     );
@@ -603,13 +848,15 @@ export const insertTemplates = internalMutation({
         title: t.title,
         description: t.description,
         category: t.category,
+        topics: t.topics,
         type: t.type,
         deliveryMethod: t.deliveryMethod,
         preview: t.preview,
         messageBody: t.messageBody,
         countryCode: t.countryCode,
+        sources: t.sources,
         deliveryConfig: {},
-        recipientConfig: {},
+        recipientConfig: t.recipientConfig,
         metrics: { sends: Math.floor(Math.random() * 200), opens: Math.floor(Math.random() * 100), clicks: Math.floor(Math.random() * 50) },
         status: "published",
         isPublic: true,
