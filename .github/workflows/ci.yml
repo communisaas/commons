@@ -1,7 +1,7 @@
 name: CI Tests
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
     branches: [main]
 
@@ -14,24 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    services:
-      postgres:
-        image: pgvector/pgvector:pg15
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
-      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/test
       CI: true
       # OAuth test credentials — safe for CI
       OAUTH_REDIRECT_BASE_URL: http://localhost:5173
@@ -58,17 +42,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Generate Prisma client
-        run: npm run db:generate
-
-      - name: Enable pgvector extension
-        run: PGPASSWORD=postgres psql -h localhost -U postgres -d test -c 'CREATE EXTENSION IF NOT EXISTS vector;'
-
-      - name: Push database schema
-        run: npx prisma db push --accept-data-loss
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
 
       - name: Run tests with coverage
         run: npm run test:coverage

@@ -26,6 +26,7 @@ import {
 	deserializeSignedDelegate,
 	relayDelegateAction
 } from '$lib/core/near/meta-transactions';
+import { MPC_SIGNER_TESTNET } from '$lib/core/near/chain-signatures';
 import { safeUserId } from '$lib/core/server/security';
 
 // =============================================================================
@@ -41,7 +42,7 @@ const LOG_PREFIX = '[near/meta-tx]';
  */
 const ALLOWED_RECEIVERS = new Set<string>([
 	// MPC signer for Chain Signatures (testnet)
-	NEAR_MPC_SIGNER,
+	MPC_SIGNER_TESTNET,
 	// MPC signer for Chain Signatures (mainnet) — add when deploying to mainnet
 	// 'v1.signer.near',
 ]);
