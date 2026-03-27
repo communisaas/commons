@@ -1772,3 +1772,40 @@ export const grantDevAccount = internalMutation({
 // org[0] which has a completed email blast). The insertSupporters mutation
 // runs before insertEmailBlasts in the seedAll orchestrator.
 // =============================================================================
+
+// =============================================================================
+// CLEAR SEED — wipe all seeded data so seedAll can re-run
+// =============================================================================
+
+const SEED_TABLES = [
+  "debateArguments", "debates", "campaignDeliveries", "campaignActions",
+  "orgInvites", "orgResolvedContacts", "orgNetworkMembers", "orgNetworks",
+  "emailEvents", "emailBlasts", "workflowActionLogs", "workflowExecutions",
+  "workflows", "donations", "eventRsvps", "events", "segments",
+  "supporterTags", "tags", "supporters", "campaigns", "templateEndorsements",
+  "templates", "orgMemberships", "organizations", "sessions", "accounts", "users",
+] as const;
+
+export const clearSeed = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    for (const table of SEED_TABLES) {
+      await ctx.runMutation(internal.seed.clearTable, { table });
+    }
+    console.log("[seed] All seed data cleared.");
+  },
+});
+
+export const clearTable = internalMutation({
+  args: { table: v.string() },
+  handler: async (ctx, { table }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const docs = await (ctx.db as any).query(table).collect();
+    let count = 0;
+    for (const doc of docs) {
+      await ctx.db.delete(doc._id);
+      count++;
+    }
+    if (count > 0) console.log(`  Cleared ${count} ${table}`);
+  },
+});
