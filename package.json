@@ -30,7 +30,10 @@
 		"test:smoke:live": "SMOKE_CWC_LIVE=true vitest --run tests/smoke --config=vitest.config.ts",
 		"test:congressional": "vitest --run tests/integration/congressional-delivery-e2e.test.ts --config=vitest.config.ts",
 		"test:e2e:voter": "vitest --run tests/unit/voter-protocol --config=vitest.config.ts",
-		"postinstall": "svelte-kit sync || true"
+		"postinstall": "svelte-kit sync || true",
+		"seed": "npx convex run seed:seedAll",
+		"seed:agents": "npx tsx scripts/seed-with-agents.ts",
+		"seed:org": "npx tsx scripts/seed-org-templates.ts"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.56.1",
