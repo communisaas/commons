@@ -92,5 +92,4 @@ svelte-check-baseline.txt
 commons-desktop-a11y.md
 
 # Convex generated files
-convex/_generated/
-!convex/_generated/.gitkeep
+# convex/_generated/ is committed — needed for CI build and tests (24K, schema-derived)

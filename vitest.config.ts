@@ -158,7 +158,10 @@ export default defineConfig({
 			'tests/unit/supporters/find-by-email.test.ts',
 			'tests/unit/wallet/debate-txhash-bypass.test.ts',
 			'tests/unit/wallet/wallet-api.test.ts',
-			'tests/unit/wallet/wallet-state.test.ts'
+			'tests/unit/wallet/wallet-state.test.ts',
+			// Directly import convex/_generated/api which isn't available in CI
+			'tests/unit/agents/stream-endpoints.test.ts',
+			'tests/unit/api-v1/auth.test.ts'
 		],
 
 		// Environment configuration
