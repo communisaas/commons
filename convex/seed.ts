@@ -1777,13 +1777,32 @@ export const grantDevAccount = internalMutation({
 // CLEAR SEED — wipe all seeded data so seedAll can re-run
 // =============================================================================
 
+// Every table in the schema, ordered children-first to avoid dangling refs
 const SEED_TABLES = [
-  "debateArguments", "debates", "campaignDeliveries", "campaignActions",
+  // Leaf tables (no dependents)
+  "delegationReviews", "delegatedActions", "delegationGrants",
+  "scorecardSnapshots", "orgDmFollows", "orgBillWatches", "orgBillRelevances",
+  "externalIds", "decisionMakers", "orgIssueDomains",
+  "accountabilityReceipts", "legislativeActions", "legislativeAlerts", "bills",
+  "scopeCorrections", "patchThroughCalls", "smsMessages", "smsBlasts",
+  "workflowActionLogs", "workflowExecutions", "workflows",
+  "donations", "eventRsvps", "events",
+  "emailEvents", "emailBlasts",
+  "campaignDeliveries", "campaignActions",
+  "debateArguments", "debateNullifiers", "debates",
+  "positionDeliveries", "positionRegistrations", "communityFieldContributions",
+  "templateEndorsements", "segments", "supporterTags", "tags", "supporters",
   "orgInvites", "orgResolvedContacts", "orgNetworkMembers", "orgNetworks",
-  "emailEvents", "emailBlasts", "workflowActionLogs", "workflowExecutions",
-  "workflows", "donations", "eventRsvps", "events", "segments",
-  "supporterTags", "tags", "supporters", "campaigns", "templateEndorsements",
-  "templates", "orgMemberships", "organizations", "sessions", "accounts", "users",
+  "apiKeys", "subscriptions",
+  "campaigns", "templates", "messages", "userDmRelations",
+  "orgMemberships", "organizations",
+  // Auth + identity
+  "shadowAtlasRegistrations", "verificationAudits", "submissionRetries",
+  "submissions", "encryptedDeliveryData", "districtCredentials",
+  "verificationSessions", "privacyBudgets", "analytics",
+  "agentTraces", "intelligence", "parsedDocumentCache",
+  "resolvedContacts", "suppressedEmails", "bounceReports", "rateLimits",
+  "sessions", "accounts", "users",
 ] as const;
 
 export const clearSeed = internalAction({
