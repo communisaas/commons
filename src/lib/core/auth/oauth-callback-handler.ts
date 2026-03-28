@@ -250,12 +250,12 @@ export class OAuthCallbackHandler {
 				: null
 		]);
 
-		// Encrypt PII
-		const tempUserId = crypto.randomUUID();
-		const piiData = await encryptUserPii(userData.email, userData.name, tempUserId);
+		// Compute email hash for Sybil dedup — no server-side PII encryption.
+		// PII is encrypted client-side with the user's device key (see +layout.svelte).
+		const piiData = await encryptUserPii(userData.email, userData.name, 'hash-only');
 
-		if (!piiData.encrypted_email || !piiData.email_hash) {
-			throw new Error('[OAuth] PII encryption failed — cannot create user without encrypted_email and email_hash');
+		if (!piiData.email_hash) {
+			throw new Error('[OAuth] Email hash computation failed');
 		}
 
 		// Call Convex mutation to upsert user + account
@@ -263,8 +263,8 @@ export class OAuthCallbackHandler {
 			provider: config.provider,
 			providerAccountId: userData.id,
 			scope: config.scope,
-			encryptedEmail: piiData.encrypted_email,
-			encryptedName: piiData.encrypted_name ?? undefined,
+			encryptedEmail: '', // placeholder — client overwrites with device-encrypted blob
+			encryptedName: undefined,
 			emailHash: piiData.email_hash,
 			avatar: userData.avatar,
 			emailVerified,

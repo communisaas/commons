@@ -1,6 +1,5 @@
 import { query, mutation, action, internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { tryDecryptPii, type EncryptedPii } from "./_pii";
 import { requireAuth } from "./_authHelpers";
 
 // =============================================================================
@@ -41,79 +40,34 @@ export const getProfile = query({
   handler: async (ctx) => {
     const { userId } = await requireAuth(ctx);
     const user = await ctx.db.get(userId);
-    if (!user) {
-      throw new Error("User not found");
-    }
+    if (!user) throw new Error("User not found");
 
-    const custodyMode = user.custodyMode ?? "server";
-
-    // Shared non-PII fields
-    const base = {
+    // Always return encrypted blobs — client decrypts locally.
+    // Server never decrypts PII. No dual-mode, no fallback.
+    return {
+      _id: user._id,
+      email: null,
+      name: null,
+      encryptedEmail: user.encryptedEmail ?? null,
+      encryptedName: user.encryptedName ?? null,
+      custodyMode: "client",
       avatar: user.avatar ?? null,
-      trustTier: user.trustTier,
-      isVerified: user.isVerified,
+      trustTier: user.trustTier ?? 0,
+      isVerified: user.isVerified ?? false,
       verificationMethod: user.verificationMethod ?? null,
       verifiedAt: user.verifiedAt ?? null,
       hasPasskey: Boolean(user.passkeyCredentialId),
       districtHash: user.districtHash ?? null,
-      districtVerified: user.districtVerified,
+      districtVerified: user.districtVerified ?? false,
       hasWallet: Boolean(user.walletAddress),
-      trustScore: user.trustScore,
-      reputationTier: user.reputationTier,
+      trustScore: user.trustScore ?? 0,
+      reputationTier: user.reputationTier ?? "novice",
       role: user.role ?? null,
       organization: user.organization ?? null,
       location: user.location ?? null,
       connection: user.connection ?? null,
-      profileVisibility: user.profileVisibility,
+      profileVisibility: user.profileVisibility ?? "private",
       profileCompletedAt: user.profileCompletedAt ?? null,
-    };
-
-    if (custodyMode === "client") {
-      // Client custody: return encrypted blobs — client decrypts locally
-      return {
-        _id: user._id,
-        email: null,
-        name: null,
-        encryptedEmail: user.encryptedEmail,
-        encryptedName: user.encryptedName ?? null,
-        custodyMode: "client" as const,
-        ...base,
-      };
-    }
-
-    // Server custody: decrypt server-side
-    let email: string | null = null;
-    let name: string | null = null;
-
-    try {
-      const encEmail: EncryptedPii | null = user.encryptedEmail
-        ? JSON.parse(user.encryptedEmail)
-        : null;
-      email = await tryDecryptPii(encEmail, user._id, "email");
-    } catch {
-      // Fall through
-    }
-
-    try {
-      const encName: EncryptedPii | null = user.encryptedName
-        ? JSON.parse(user.encryptedName)
-        : null;
-      name = await tryDecryptPii(encName, user._id, "name");
-    } catch {
-      // Fall through
-    }
-
-    // No plaintext fallback — if server decryption fails, return null.
-    // Legacy plaintext columns are cleared on client custody transition.
-
-    return {
-      _id: user._id,
-      email,
-      name,
-      encryptedEmail: null,
-      encryptedName: null,
-      custodyMode: "server" as const,
-      ...base,
     };
   },
 });

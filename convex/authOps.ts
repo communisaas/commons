@@ -319,6 +319,26 @@ export const validateSession = query({
 });
 
 /**
+ * Backfill tokenIdentifier for users created before the JWT auth bridge.
+ * Called fire-and-forget from hooks.server.ts when a valid session exists
+ * but the user doc has no tokenIdentifier.
+ */
+export const backfillTokenIdentifier = mutation({
+  args: { userId: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("_id"), args.userId))
+      .first();
+    if (user && !user.tokenIdentifier) {
+      await ctx.db.patch(user._id, {
+        tokenIdentifier: `https://commons.email|${user._id}`,
+      });
+    }
+  },
+});
+
+/**
  * Renew a session's expiry. Called from hooks.server.ts when validateSession
  * indicates renewal is needed. Separated from the query to keep reads fast.
  */

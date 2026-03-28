@@ -65,43 +65,22 @@
 		syncDecryptedUser(data.user as Parameters<typeof syncDecryptedUser>[0]);
 	});
 
-	// ── Client-side PII custody: encrypt on first login + device recovery ──
+	// ── Client-side PII custody: encrypt from OAuth seed on login/device recovery ──
 	$effect(() => {
 		const user = data.user as Record<string, unknown> | null;
 		if (!browser || !user?.id) return;
 
-		const custodyMode = user.custodyMode ?? user.custody_mode;
-		const userId = user.id as string;
 		const oauthSeed = user.oauthPiiSeed as { email: string; name: string | null } | null;
+		if (!oauthSeed?.email) return; // no seed = no work (already encrypted or no PII)
 
-		// Determine PII source:
-		// 1. Server custody → plaintext from server (user.email/name)
-		// 2. Client custody + oauthSeed → device recovery (re-encrypt with new key)
-		// 3. Client custody + no seed → already encrypted, nothing to do
-		let email: string | null = null;
-		let name: string | null = null;
-
-		if (custodyMode !== 'client') {
-			// First-time transition — prefer oauthSeed (server decryption may fail
-			// due to tempUserId key mismatch), fall back to server-provided plaintext
-			email = oauthSeed?.email ?? (user.email as string | null);
-			name = oauthSeed?.name ?? (user.name as string | null);
-		} else if (oauthSeed) {
-			// Device recovery — OAuth provider gave fresh PII
-			email = oauthSeed.email;
-			name = oauthSeed.name;
-		} else {
-			return; // already client-custodied, same device — nothing to do
-		}
-
-		if (!email) return;
+		const userId = user.id as string;
 
 		let cancelled = false;
 		(async () => {
 			const { isClientPiiAvailable, encryptUserPiiClient } = await import('$lib/core/crypto/client-pii');
 			if (cancelled || !isClientPiiAvailable()) return;
 
-			const encrypted = await encryptUserPiiClient(email!, name, userId);
+			const encrypted = await encryptUserPiiClient(oauthSeed.email, oauthSeed.name, userId);
 
 			const { getConvexClient } = await import('convex-sveltekit');
 			const { api } = await import('$lib/convex');

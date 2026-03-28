@@ -97,31 +97,17 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			serverMutation(api.authOps.renewSession, { sessionId }).catch(() => {});
 		}
 
-		// PII decryption: skip entirely for client-custody users (client decrypts locally)
-		let pii: { email: string | null; name: string | null };
-		const custodyMode = user.custodyMode ?? 'server';
-
-		if (custodyMode === 'client') {
-			// Client holds the key — server has no standing decrypt capability
-			pii = { email: null, name: null };
-		} else {
-			// Server custody (migration period) — decrypt server-side
-			try {
-				pii = await decryptUserPii({
-					id: user._id as string,
-					encrypted_email: user.encryptedEmail,
-					encrypted_name: user.encryptedName ?? null,
-					email: user.email ?? null,
-					name: user.name ?? null,
-				});
-			} catch (err) {
-				console.error('[Auth] PII decryption failed — session preserved with masked PII:', {
-					userId: user._id,
-					error: err instanceof Error ? err.message : String(err)
-				});
-				pii = { email: null, name: null };
-			}
+		// Backfill tokenIdentifier for sessions created before the fix.
+		// Fire-and-forget — doesn't block the request.
+		if (!user.tokenIdentifier) {
+			serverMutation(api.authOps.backfillTokenIdentifier, {
+				userId: user._id as string,
+			}).catch(() => {});
 		}
+
+		// No server-side PII decryption — client decrypts locally with device key.
+		// Server never holds standing decrypt capability.
+		const pii = { email: null as string | null, name: null as string | null };
 
 		event.locals.user = {
 			id: user._id as string,
