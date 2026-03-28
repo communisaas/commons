@@ -552,6 +552,17 @@
 		color: var(--text-quaternary);
 	}
 
+	/* Correspondence scroll — hidden scrollbar, no scroll chaining */
+	.correspondence-scroll {
+		scrollbar-width: none;
+		-ms-overflow-style: none;
+		overscroll-behavior: contain;
+	}
+
+	.correspondence-scroll::-webkit-scrollbar {
+		display: none;
+	}
+
 	/* Verified vs Community Input Variants */
 	.participation-input-verified:focus {
 		border-color: var(--channel-verified-500);

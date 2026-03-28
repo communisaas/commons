@@ -632,29 +632,23 @@
 	<!-- Subject/Title Header - Hide on template page to avoid duplication -->
 	{#if context !== 'page'}
 		{#if template?.subject || template?.title}
-			<div
-				class="mb-3 rounded-md border border-participation-primary-200 bg-participation-primary-50 px-3 py-2"
-			>
-				<div class="flex items-center justify-between">
-					<div
-						class="mb-1 flex items-center gap-2 text-xs font-medium text-participation-primary-700"
-					>
-						<Mail class="h-3 w-3" />
-						Subject Line
-					</div>
+			<div class="mb-5 sm:mb-6">
+				<div class="flex items-start justify-between gap-3">
+					<h2 class="font-brand text-xl font-bold leading-snug tracking-tight text-[var(--text-primary)] sm:text-2xl">
+						{template.title || template.subject}
+					</h2>
 					{#if user?.is_verified}
-						<VerificationBadge size="sm" />
+						<div class="mt-1 shrink-0">
+							<VerificationBadge size="sm" />
+						</div>
 					{/if}
 				</div>
-				<div class="text-sm font-medium text-participation-primary-900">
-					{template.title || template.title}
-				</div>
+				<div class="card-rule mt-3"></div>
 			</div>
 		{:else}
-			<!-- Fallback header when no subject/title -->
-			<div class="mb-2 flex shrink-0 items-center gap-2">
-				<Mail class="h-4 w-4 shrink-0 text-slate-500" />
-				<h3 class="text-sm font-medium text-slate-900 sm:text-base">Message Preview</h3>
+			<div class="mb-4 flex shrink-0 items-center gap-2">
+				<Mail class="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
+				<h3 class="font-brand text-base font-medium text-[var(--text-primary)]">Message Preview</h3>
 				{#if user?.is_verified}
 					<VerificationBadge size="sm" />
 				{/if}
@@ -664,11 +658,9 @@
 
 	<div class="relative {expandToContent ? '' : 'flex-1'} min-h-[16rem]">
 		<div
-			class="styled-scrollbar-track scrollbar-thumb-slate-300 scrollbar-track-slate-100/10 {expandToContent
-				? ''
-				: 'absolute inset-0 overflow-y-auto'} {expandToContent
+			class="correspondence-scroll {expandToContent
 				? 'overflow-visible'
-				: ''} max-w-prose whitespace-pre-wrap rounded-lg bg-slate-50/70 p-3 sm:p-4"
+				: 'absolute inset-0 overflow-y-auto'} max-w-[65ch] whitespace-pre-wrap"
 			bind:this={scrollContainer}
 			onscroll={expandToContent ? undefined : handleScroll}
 			ontouchstart={expandToContent ? undefined : handleTouchStart}
@@ -676,7 +668,7 @@
 			ontouchend={expandToContent ? undefined : handleTouchEnd}
 			data-scrollable={expandToContent ? false : isScrollable}
 		>
-			<div class="min-h-[12rem] font-sans text-sm leading-relaxed text-slate-700">
+			<div class="min-h-[12rem] font-sans text-sm leading-relaxed text-[var(--text-secondary)] sm:text-[15px] sm:leading-7">
 				{#each templateSegments as segment}
 					{#if segment.type === 'text'}
 						{segment.content}
@@ -741,7 +733,7 @@
 						<!-- Long-form variable: interstitial within the letter flow -->
 						{#if activeInlineEditor === segment.instanceId}
 							<!-- Editing: the letter opens up here -->
-							<div class="my-4 whitespace-normal" transition:slide={{ duration: 200 }}>
+							<div class="whitespace-normal" transition:slide={{ duration: 200 }}>
 								<div class="border-l-2 border-participation-primary-300 pl-4">
 									<div class="mb-2 flex items-center gap-1.5">
 										<Edit3 class="h-3 w-3 text-participation-primary-400" />
@@ -769,7 +761,7 @@
 						{:else if variableValues[segment.name]}
 							<!-- Filled: flows into the letter, left border marks it as the writer's voice -->
 							<span
-								class="my-3 block cursor-pointer whitespace-normal
+								class="block cursor-pointer whitespace-normal
 									border-l-2 border-participation-primary-200/60 pl-4
 									text-[var(--text-secondary)]
 									transition-all duration-200
@@ -783,9 +775,9 @@
 						{:else}
 							<!-- Empty: an open interstitial — room for the writer's voice -->
 							<div
-								class="my-4 block cursor-pointer whitespace-normal
+								class="block cursor-pointer whitespace-normal
 									border-l-2 border-dashed border-participation-primary-200/50
-									py-3 pl-4
+									py-1.5 pl-4
 									transition-all duration-200
 									hover:border-participation-primary-300 hover:border-solid"
 								role="button"
@@ -891,5 +883,21 @@
 				{/each}
 			</div>
 		</div>
+
+		<!-- Scroll fades — the letter trails off at edges -->
+		{#if !expandToContent && isScrollable && !isAtTop}
+			<div
+				class="pointer-events-none absolute inset-x-0 top-0 z-10 h-12
+					bg-gradient-to-b from-[oklch(0.98_0.03_var(--card-hue)_/_0.95)] to-transparent"
+				aria-hidden="true"
+			></div>
+		{/if}
+		{#if !expandToContent && isScrollable && !isAtBottom}
+			<div
+				class="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-16
+					bg-gradient-to-t from-[oklch(0.98_0.03_var(--card-hue)_/_0.95)] to-transparent"
+				aria-hidden="true"
+			></div>
+		{/if}
 	</div>
 </div>

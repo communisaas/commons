@@ -15,7 +15,7 @@
 -->
 
 <script lang="ts">
-	import { MapPin, CheckCircle2, Loader2, AlertCircle, Building2, ChevronRight, Navigation, Lock } from '@lucide/svelte';
+	import { MapPin, CheckCircle2, Loader2, AlertCircle, Building2, ChevronRight, Navigation, Lock, Map } from '@lucide/svelte';
 	import { storeCredential } from '$lib/core/identity/credential-store';
 	import { getBrowserGeolocation } from '$lib/core/location/browser-location';
 	import { storeConstituentAddress } from '$lib/core/identity/constituent-address';
@@ -27,8 +27,9 @@
 		computeDistrictCommitment
 	} from '$lib/core/shadow-atlas/browser-client';
 	import { convertDistrictId } from '$lib/core/shadow-atlas/district-format';
+	import MapPinSelector from './MapPinSelector.svelte';
 
-	type FlowStep = 'path-select' | 'geolocating' | 'address-input' | 'resolving' | 'confirm-district' | 'issuing-credential' | 'complete';
+	type FlowStep = 'path-select' | 'geolocating' | 'address-input' | 'map-pin' | 'resolving' | 'confirm-district' | 'issuing-credential' | 'complete';
 
 	let { userId, onComplete, onCancel }: {
 		userId: string;
@@ -185,10 +186,13 @@
 			if (clientSideEnabled) {
 				const resolved = await resolveClientSide(lat, lng);
 				if (resolved) return;
-				// Fall through to server path if client-side fails
+				// Client-side failed — show error instead of leaking to server
+				errorMessage = 'Could not resolve your district from IPFS data. Please try the map pin option.';
+				flowStep = 'path-select';
+				return;
 			}
 
-			// Server resolves cell_id + district + officials via Shadow Atlas
+			// Legacy server path (only when SHADOW_ATLAS_VERIFICATION is off)
 			const response = await fetch('/api/location/resolve', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -345,7 +349,23 @@
 	function handleSelectAddressPath() {
 		verificationMethod = 'address';
 		geoPermissionDenied = false;
-		flowStep = 'address-input';
+		flowStep = clientSideEnabled ? 'map-pin' : 'address-input';
+	}
+
+	/**
+	 * Path B (client-side): Map pin selection flow.
+	 * User drops a pin on the map — no address string ever leaves the browser.
+	 */
+	async function handleMapPinSelect(coords: { lat: number; lng: number }) {
+		verificationMethod = 'address';
+		flowStep = 'resolving';
+		errorMessage = '';
+
+		const resolved = await resolveClientSide(coords.lat, coords.lng);
+		if (!resolved) {
+			errorMessage = 'Could not determine your district from this location. Please try a different spot or use device location.';
+			flowStep = 'map-pin';
+		}
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
@@ -433,18 +453,27 @@
 					<ChevronRight class="mt-2.5 h-4 w-4 shrink-0 text-slate-400" />
 				</button>
 
-				<!-- Option B: Enter my address -->
+				<!-- Option B: Choose on map (client-side) or Enter address (legacy) -->
 				<button
 					type="button"
 					class="flex w-full items-start gap-4 rounded-xl border border-slate-200 p-5 text-left cursor-pointer transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
 					onclick={handleSelectAddressPath}
 				>
 					<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100">
-						<Building2 class="h-5 w-5 text-emerald-600" />
+						{#if clientSideEnabled}
+							<Map class="h-5 w-5 text-emerald-600" />
+						{:else}
+							<Building2 class="h-5 w-5 text-emerald-600" />
+						{/if}
 					</div>
 					<div class="min-w-0 flex-1">
-						<p class="text-sm font-semibold text-slate-900">Enter my address</p>
-						<p class="mt-0.5 text-xs text-slate-500">Verify with your home address for constituency proof</p>
+						{#if clientSideEnabled}
+							<p class="text-sm font-semibold text-slate-900">Choose on map</p>
+							<p class="mt-0.5 text-xs text-slate-500">Drop a pin on your location — nothing leaves your browser</p>
+						{:else}
+							<p class="text-sm font-semibold text-slate-900">Enter my address</p>
+							<p class="mt-0.5 text-xs text-slate-500">Verify with your home address for constituency proof</p>
+						{/if}
 					</div>
 					<ChevronRight class="mt-2.5 h-4 w-4 shrink-0 text-slate-400" />
 				</button>
@@ -454,7 +483,11 @@
 			<div class="flex items-center justify-center gap-1.5">
 				<Lock class="h-3 w-3 text-emerald-700" />
 				<p class="text-xs font-medium text-emerald-700">
-					Your address is matched to a district, then forgotten. Nothing is stored.
+					{#if clientSideEnabled}
+						Your location never leaves your browser. District data fetched from decentralized storage.
+					{:else}
+						Your address is matched to a district, then forgotten. Nothing is stored.
+					{/if}
 				</p>
 			</div>
 
@@ -479,6 +512,15 @@
 			<p class="mt-2 text-sm text-slate-600">
 				Please allow location access when prompted...
 			</p>
+		</div>
+
+	<!-- MAP PIN STEP (client-side, privacy-preserving) -->
+	{:else if flowStep === 'map-pin'}
+		<div class="space-y-4">
+			<MapPinSelector
+				onSelect={handleMapPinSelect}
+				onCancel={handleBack}
+			/>
 		</div>
 
 	<!-- ADDRESS INPUT STEP -->

@@ -1,6 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import { serverMutation } from 'convex-sveltekit';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 const sessionCookieName = 'auth-session';
@@ -9,7 +9,7 @@ async function logout(locals: App.Locals, cookies: import('@sveltejs/kit').Cooki
 	// Invalidate session in Convex if we have one
 	if (locals.session) {
 		try {
-			await serverMutation(internal.authOps.invalidateSession, {
+			await serverMutation(api.authOps.invalidateSession, {
 				sessionId: locals.session.id
 			});
 		} catch (err) {

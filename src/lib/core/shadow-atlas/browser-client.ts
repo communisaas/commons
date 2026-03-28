@@ -8,12 +8,16 @@
  */
 
 import { latLngToCell } from 'h3-js';
+import { cellToParent } from 'h3-js';
 import {
 	getChunkForCell,
 	getOfficialsForDistrict,
+	getCellChunkByParent,
+	getManifest,
 	setCIDs,
 	isIPFSConfigured,
 	type CellDistricts,
+	type CellEntry,
 	type OfficialsFileIPFS,
 } from './ipfs-store';
 
@@ -98,4 +102,88 @@ export async function computeDistrictCommitment(
 			.join('');
 		return { commitment: hex, slotCount };
 	}
+}
+
+// ============================================================================
+// Client-Side Tree 2 Proof (Zero Server Leaks)
+// ============================================================================
+
+/**
+ * Result of a full client-side cell data lookup.
+ * Contains everything needed for ZK proof generation without any server contact.
+ */
+export interface ClientCellProofResult {
+	cellMapRoot: string;
+	cellMapPath: string[];
+	cellMapPathBits: number[];
+	districts: string[];
+}
+
+/**
+ * Fetch full cell data (districts + Tree 2 SMT proof) entirely from IPFS.
+ *
+ * This is the privacy-critical function that replaces the server-side
+ * `GET /api/shadow-atlas/cell-proof?cell_id=X` call. The server never
+ * learns which cell the user belongs to.
+ *
+ * Flow:
+ *   1. Compute H3 res-3 parent from the user's H3 cell (or GEOID)
+ *   2. Fetch the combined cell chunk from IPFS (~60 KB gzipped)
+ *   3. Extract the user's cell entry (districts + SMT proof)
+ *   4. Return circuit-ready data
+ *
+ * @param cellId - Cell identifier (GEOID as string, matching tree's cellId.toString())
+ * @param h3CellIndex - Optional H3 cell index for parent grouping. If provided,
+ *   used to compute the H3 res-3 parent for chunk lookup. If omitted, falls back
+ *   to the manifest-based lookup.
+ * @param country - ISO 3166-1 alpha-2 country code (default: "US")
+ * @returns ClientCellProofResult with circuit-ready data, or null if not found
+ */
+export async function getFullCellDataFromBrowser(
+	cellId: string,
+	h3CellIndex?: string,
+	country = 'US',
+): Promise<ClientCellProofResult | null> {
+	if (!isIPFSConfigured()) {
+		console.warn('[browser-client] IPFS not configured — cannot fetch cell proof');
+		return null;
+	}
+
+	// Determine the parent chunk key
+	let parentKey: string | undefined;
+	if (h3CellIndex) {
+		parentKey = cellToParent(h3CellIndex, 3);
+	}
+
+	// Fetch the cell chunk
+	let entry: CellEntry | undefined;
+	let cellMapRoot: string | undefined;
+
+	if (parentKey) {
+		// Fast path: we know the parent key from H3
+		const chunk = await getCellChunkByParent(parentKey, country);
+		if (chunk) {
+			entry = chunk.cells[cellId];
+			cellMapRoot = chunk.cellMapRoot;
+		}
+	}
+
+	if (!entry) {
+		// Slow path: try manifest-based lookup
+		const { getCellProofFromIPFS } = await import('./ipfs-store');
+		const result = await getCellProofFromIPFS(cellId, country);
+		if (result) {
+			entry = result.entry;
+			cellMapRoot = result.cellMapRoot;
+		}
+	}
+
+	if (!entry || !cellMapRoot) return null;
+
+	return {
+		cellMapRoot,
+		cellMapPath: [...entry.p],
+		cellMapPathBits: [...entry.b],
+		districts: [...entry.d],
+	};
 }

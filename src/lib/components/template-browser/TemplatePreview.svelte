@@ -6,6 +6,7 @@
 	import { spring } from 'svelte/motion';
 	import { isMobile } from '$lib/utils/browserUtils';
 	import { coordinated, useTimerCleanup } from '$lib/utils/timerCoordinator';
+	import { topicHue } from '$lib/utils/topic-hue';
 	import { PreviewContent, ActionBar } from './parts';
 
 	const componentId = 'TemplatePreview_' + Math.random().toString(36).substr(2, 9);
@@ -41,6 +42,8 @@
 		debateResolution?: { winningStance: string; participants: number } | null;
 		personalConnectionValue?: string;
 	} = $props();
+
+	const hue = $derived(topicHue(template?.category ?? '', template?.topics));
 
 	let localShowEmailModal = $state(false);
 	const showEmailModal = $derived(externalShowEmailModal || localShowEmailModal);
@@ -191,9 +194,10 @@
 <div
 	bind:this={previewContainer}
 	data-testid="template-preview"
-	class="border-slate-200 bg-white
-               {inModal ? 'h-full border-0' : 'rounded-xl border'} 
-               {inModal ? 'p-4 sm:p-6' : 'p-3 sm:p-4 md:p-5 lg:p-6'} 
+	style="--card-hue: {hue}"
+	class="card-topic card-weight-heavy
+               {inModal ? 'h-full' : 'rounded-xl'}
+               {inModal ? 'p-5 sm:p-8' : 'p-4 sm:p-5 md:p-6 lg:p-8'}
                {inModal ? '' : expandToContent ? '' : 'sm:sticky sm:top-8'}
                {inModal ? '' : expandToContent ? '' : 'h-[calc(100vh-4rem)]'}
                {!inModal && onOpenModal ? 'cursor-pointer md:cursor-default' : ''}

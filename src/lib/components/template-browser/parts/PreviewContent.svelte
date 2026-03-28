@@ -133,23 +133,13 @@
 	</div>
 {/if}
 
-{#if template.type === 'certified' || context !== 'page'}
-	<div class="relative mb-4 shrink-0 space-y-4 overflow-visible">
-		<TemplateTips isCertified={template.type === 'certified'} />
-
-		<!-- Share Button - shown in list/modal context only (page context has share in header) -->
-		{#if context !== 'page'}
-			<ShareButton
-				url={`${typeof window !== 'undefined' ? window.location.origin : ''}/s/${template.slug}`}
-				_title={template.title || template.title}
-				variant="primary"
-				size="default"
-			/>
-		{/if}
+{#if template.type === 'certified'}
+	<div class="relative mb-4 shrink-0 overflow-visible">
+		<TemplateTips isCertified={true} />
 	</div>
 {/if}
 
-{#if context !== 'page' && recipientCount > 0}
+{#if context !== 'page' && (recipientCount > 0 || targetInfo.type === 'district-based')}
 	<div class="mb-4 flex shrink-0 items-center gap-2 text-sm">
 		{#if targetInfo.type === 'multi-level'}
 			<!-- Multi-Level: Compact vertical stack -->

@@ -210,26 +210,40 @@ export async function registerThreeTree(
 			};
 		}
 
-		// Step 2: Fetch Tree 2 cell proof (server proxies to Shadow Atlas)
-		const tree2Response = await fetchWithRetry(
-			`/api/shadow-atlas/cell-proof?cell_id=${encodeURIComponent(request.cellId)}`
-		);
+		// Step 2: Fetch Tree 2 cell proof from IPFS (zero server leaks)
+		// The server never learns the user's cell_id — all data fetched from
+		// content-addressed IPFS via Cloudflare CDN.
+		const { getFullCellDataFromBrowser } = await import('../shadow-atlas/browser-client');
+		const ipfsTree2 = await getFullCellDataFromBrowser(request.cellId);
 
-		if (!tree2Response.ok) {
-			const errorData = await tree2Response.json().catch(() => ({ error: 'Unknown error' }));
-			return {
-				success: false,
-				error: errorData.error || `Tree 2 cell proof failed (${tree2Response.status})`,
-			};
-		}
+		let tree2Data: { cellMapRoot: string; cellMapPath: string[]; cellMapPathBits: number[]; districts: string[] };
 
-		const tree2Data = await tree2Response.json();
+		if (ipfsTree2) {
+			tree2Data = ipfsTree2;
+		} else {
+			// Fallback: server endpoint (legacy path, leaks cell_id — will be removed
+			// once IPFS cell chunks are published for all jurisdictions)
+			console.warn('[Shadow Atlas] IPFS cell proof not available, falling back to server');
+			const tree2Response = await fetchWithRetry(
+				`/api/shadow-atlas/cell-proof?cell_id=${encodeURIComponent(request.cellId)}`
+			);
 
-		if (!tree2Data.cellMapRoot || !tree2Data.cellMapPath || !tree2Data.districts) {
-			return {
-				success: false,
-				error: 'Invalid Tree 2 cell proof response',
-			};
+			if (!tree2Response.ok) {
+				const errorData = await tree2Response.json().catch(() => ({ error: 'Unknown error' }));
+				return {
+					success: false,
+					error: errorData.error || `Tree 2 cell proof failed (${tree2Response.status})`,
+				};
+			}
+
+			const serverData = await tree2Response.json();
+			if (!serverData.cellMapRoot || !serverData.cellMapPath || !serverData.districts) {
+				return {
+					success: false,
+					error: 'Invalid Tree 2 cell proof response',
+				};
+			}
+			tree2Data = serverData;
 		}
 
 		// Step 2b: Fetch Tree 3 engagement data (non-blocking — defaults to tier 0 on failure)
@@ -342,26 +356,37 @@ export async function recoverThreeTree(
 			};
 		}
 
-		// Step 2: Fetch Tree 2 cell proof (same as registration)
-		const tree2Response = await fetchWithRetry(
-			`/api/shadow-atlas/cell-proof?cell_id=${encodeURIComponent(request.cellId)}`
-		);
+		// Step 2: Fetch Tree 2 cell proof from IPFS (zero server leaks)
+		const { getFullCellDataFromBrowser: getFullCellDataRecover } = await import('../shadow-atlas/browser-client');
+		const ipfsTree2Recover = await getFullCellDataRecover(request.cellId);
 
-		if (!tree2Response.ok) {
-			const errorData = await tree2Response.json().catch(() => ({ error: 'Unknown error' }));
-			return {
-				success: false,
-				error: errorData.error || `Tree 2 cell proof failed (${tree2Response.status})`,
-			};
-		}
+		let tree2Data: { cellMapRoot: string; cellMapPath: string[]; cellMapPathBits: number[]; districts: string[] };
 
-		const tree2Data = await tree2Response.json();
+		if (ipfsTree2Recover) {
+			tree2Data = ipfsTree2Recover;
+		} else {
+			// Fallback: server endpoint (legacy, leaks cell_id)
+			console.warn('[Shadow Atlas] IPFS cell proof not available, falling back to server');
+			const tree2Response = await fetchWithRetry(
+				`/api/shadow-atlas/cell-proof?cell_id=${encodeURIComponent(request.cellId)}`
+			);
 
-		if (!tree2Data.cellMapRoot || !tree2Data.cellMapPath || !tree2Data.districts) {
-			return {
-				success: false,
-				error: 'Invalid Tree 2 cell proof response',
-			};
+			if (!tree2Response.ok) {
+				const errorData = await tree2Response.json().catch(() => ({ error: 'Unknown error' }));
+				return {
+					success: false,
+					error: errorData.error || `Tree 2 cell proof failed (${tree2Response.status})`,
+				};
+			}
+
+			const serverData = await tree2Response.json();
+			if (!serverData.cellMapRoot || !serverData.cellMapPath || !serverData.districts) {
+				return {
+					success: false,
+					error: 'Invalid Tree 2 cell proof response',
+				};
+			}
+			tree2Data = serverData;
 		}
 
 		// Step 2b: Fetch Tree 3 engagement data (non-blocking — defaults to tier 0 on failure)

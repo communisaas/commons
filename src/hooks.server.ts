@@ -18,7 +18,7 @@ import {
 import { initConvex, serverQuery, serverMutation } from 'convex-sveltekit';
 import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { mintConvexToken } from '$lib/server/convex-jwt';
-import { api, internal } from '$lib/convex';
+import { api } from '$lib/convex';
 import { decryptUserPii } from '$lib/core/crypto/user-pii-encryption';
 
 // ─── DUAL-STACK: Initialize Convex server-side client ───
@@ -94,7 +94,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 				secure: !dev
 			});
 			// Fire-and-forget: persist the renewal in Convex
-			serverMutation(internal.authOps.renewSession, { sessionId }).catch(() => {});
+			serverMutation(api.authOps.renewSession, { sessionId }).catch(() => {});
 		}
 
 		// Decrypt PII from encrypted fields

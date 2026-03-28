@@ -22,7 +22,7 @@ import { validateReturnTo } from '$lib/core/auth/oauth';
 import { encryptOAuthToken } from '$lib/core/crypto/oauth-token-encryption';
 import { encryptUserPii, computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 import { serverMutation } from 'convex-sveltekit';
-import { api, internal } from '$lib/convex';
+import { api } from '$lib/convex';
 
 /**
  * NEAR IMPLICIT ACCOUNT CREATION (fire-and-forget)
@@ -311,7 +311,7 @@ export class OAuthCallbackHandler {
 		const cookieMaxAge = sessionDurationMs / 1000; // seconds
 
 		// Create session via Convex
-		const session = await serverMutation(internal.authOps.createSession, {
+		const session = await serverMutation(api.authOps.createSession, {
 			userId,
 			expiresAt: Date.now() + sessionDurationMs,
 		});
