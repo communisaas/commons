@@ -661,6 +661,8 @@ export const upsertEncryptedBlob = mutation({
 export const getEncryptedBlob = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     return await ctx.db
       .query("encryptedDeliveryData")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
@@ -689,6 +691,8 @@ export const deleteEncryptedBlob = mutation({
 export const getShadowAtlasRegistration = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     return await ctx.db
       .query("shadowAtlasRegistrations")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
@@ -778,7 +782,9 @@ export const createCommunityFieldContribution = mutation({
     verificationStatus: v.string(),
   },
   handler: async (ctx, args) => {
+    const { userId } = await requireAuth(ctx);
     return await ctx.db.insert("communityFieldContributions", {
+      userId,
       epochDate: args.epochDate,
       epochNullifier: args.epochNullifier,
       cellTreeRoot: args.cellTreeRoot,

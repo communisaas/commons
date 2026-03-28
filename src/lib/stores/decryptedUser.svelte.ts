@@ -76,16 +76,20 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 	}
 
 	state.decrypting = true;
+	const capturedId = user.id;
 	lastUserId = user.id;
 	lastCustodyMode = 'client';
 
-	// Async decrypt — updates state when done
+	// Async decrypt — updates state when done, guards against user change mid-flight
 	(async () => {
 		const { decryptUserPiiClient, isClientPiiAvailable } = await import('$lib/core/crypto/client-pii');
 
+		if (capturedId !== lastUserId) return; // user changed during import
+
 		if (!isClientPiiAvailable()) {
-			state.email = user.email; // fallback to whatever server sent
-			state.name = user.name;
+			if (capturedId !== lastUserId) return;
+			state.email = null;
+			state.name = null;
 			state.decrypting = false;
 			return;
 		}
@@ -96,12 +100,14 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 			user.id
 		);
 
+		if (capturedId !== lastUserId) return; // user changed during decrypt
 		state.email = email;
 		state.name = name;
 		state.decrypting = false;
 	})().catch(() => {
-		state.email = user.email;
-		state.name = user.name;
+		if (capturedId !== lastUserId) return;
+		state.email = null;
+		state.name = null;
 		state.decrypting = false;
 	});
 }

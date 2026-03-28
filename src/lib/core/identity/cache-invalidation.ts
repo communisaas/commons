@@ -169,8 +169,14 @@ export async function clearAllClientCaches(): Promise<void> {
 	// Clear location storage
 	await invalidateLocationCaches();
 
-	// Clear session credentials
+	// Clear session credentials + derived key material from memory
 	await invalidateSessionCredentials();
+	try {
+		const { discardDerivedKeys } = await import('./credential-encryption');
+		discardDerivedKeys();
+	} catch {
+		// credential-encryption may not be loaded — safe to ignore
+	}
 
 	// Clear guest state entirely
 	try {
