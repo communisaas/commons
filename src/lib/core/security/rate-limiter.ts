@@ -400,16 +400,6 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		windowMs: 60 * 1000, // 1 minute
 		keyStrategy: 'user'
 	},
-	// BR5-016: Rate limit cell-proof endpoint to prevent cell ID enumeration
-	// and Shadow Atlas DoS. Uses user-based limiting since the endpoint
-	// requires authentication (29M-003: changed from ip to user per review).
-	{
-		pattern: '/api/shadow-atlas/cell-proof',
-		maxRequests: 10,
-		windowMs: 60 * 1000, // 10 req/min per user — enough for normal flow, blocks enumeration
-		keyStrategy: 'user',
-		includeGet: true
-	},
 	{
 		pattern: '/api/legislative/submit',
 		maxRequests: 3,
