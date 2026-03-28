@@ -34,12 +34,11 @@ export interface ThreeTreeRegistrationRequest {
 	userId: string;
 	/** Precomputed leaf hash (hex with 0x prefix) */
 	leaf: string;
-	/** Census tract cell ID (for Tree 2 proof lookup and circuit input) */
+	/** Census tract cell ID (for Tree 2 proof lookup and circuit input).
+	 *  Resolved from IPFS when district is provided. */
 	cellId: string;
-	/** Latitude for client-side IPFS cell proof resolution */
-	lat?: number;
-	/** Longitude for client-side IPFS cell proof resolution */
-	lng?: number;
+	/** Verified congressional district code (e.g., "CA-12") for IPFS cell resolution */
+	district?: string;
 	/** User secret (stored client-side only, never sent to server) */
 	userSecret: string;
 	/** Registration salt (stored client-side only, never sent to server) */
@@ -61,10 +60,8 @@ export interface ThreeTreeRecoveryRequest {
 	leaf: string;
 	/** Cell ID derived from re-entered address */
 	cellId: string;
-	/** Latitude for client-side IPFS cell proof resolution */
-	lat?: number;
-	/** Longitude for client-side IPFS cell proof resolution */
-	lng?: number;
+	/** Verified congressional district code for IPFS cell resolution */
+	district?: string;
 	/** New random user secret */
 	userSecret: string;
 	/** New random registration salt */
@@ -226,25 +223,25 @@ export async function registerThreeTree(
 			cellMapPath: string[]; cellMapPathBits: number[]; districts: string[];
 		};
 
-		if (request.lat != null && request.lng != null) {
-			// Client-side path: resolve from IPFS using lat/lng
+		if (request.district) {
+			// Client-side path: resolve from IPFS using verified district code.
+			// No location disclosed — picks any valid cell in the district.
 			const { getFullCellDataFromBrowser } = await import('../shadow-atlas/browser-client');
-			const ipfsResult = await getFullCellDataFromBrowser(request.lat, request.lng);
+			const ipfsResult = await getFullCellDataFromBrowser({ district: request.district });
 
 			if (ipfsResult) {
 				tree2Data = ipfsResult;
-				// The IPFS chunk provides the canonical cell_id (GEOID as field element).
-				// Override request.cellId so the session credential stores the correct value.
+				// IPFS chunk provides the canonical cell_id (GEOID as field element).
 				request.cellId = ipfsResult.cellId;
 			} else {
 				return {
 					success: false,
-					error: 'Could not resolve cell proof from IPFS. Check your location and try again.',
+					error: 'Could not resolve cell proof from IPFS for your district.',
 				};
 			}
 		} else {
 			// Fallback: server endpoint (legacy path, leaks cell_id)
-			console.warn('[Shadow Atlas] No lat/lng provided, falling back to server cell-proof');
+			console.warn('[Shadow Atlas] No district provided, falling back to server cell-proof');
 			const tree2Response = await fetchWithRetry(
 				`/api/shadow-atlas/cell-proof?cell_id=${encodeURIComponent(request.cellId)}`
 			);
@@ -383,9 +380,9 @@ export async function recoverThreeTree(
 			cellMapPath: string[]; cellMapPathBits: number[]; districts: string[];
 		};
 
-		if (request.lat != null && request.lng != null) {
+		if (request.district) {
 			const { getFullCellDataFromBrowser } = await import('../shadow-atlas/browser-client');
-			const ipfsResult = await getFullCellDataFromBrowser(request.lat, request.lng);
+			const ipfsResult = await getFullCellDataFromBrowser({ district: request.district });
 
 			if (ipfsResult) {
 				tree2Data = ipfsResult;
@@ -393,12 +390,12 @@ export async function recoverThreeTree(
 			} else {
 				return {
 					success: false,
-					error: 'Could not resolve cell proof from IPFS. Check your location and try again.',
+					error: 'Could not resolve cell proof from IPFS for your district.',
 				};
 			}
 		} else {
 			// Fallback: server endpoint (legacy, leaks cell_id)
-			console.warn('[Shadow Atlas] No lat/lng provided, falling back to server cell-proof');
+			console.warn('[Shadow Atlas] No district provided, falling back to server cell-proof');
 			const tree2Response = await fetchWithRetry(
 				`/api/shadow-atlas/cell-proof?cell_id=${encodeURIComponent(request.cellId)}`
 			);

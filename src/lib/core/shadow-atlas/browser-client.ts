@@ -126,46 +126,119 @@ export interface ClientCellProofResult {
 }
 
 /**
- * Fetch full cell data (districts + Tree 2 SMT proof) entirely from IPFS.
+ * Fetch cell proof data entirely from IPFS — zero server contact.
  *
- * This is the privacy-critical function that replaces the server-side
- * `GET /api/shadow-atlas/cell-proof?cell_id=X` call. The server never
- * learns which cell the user belongs to.
+ * Accepts EITHER a district code (preferred, most private) or lat/lng coordinates.
  *
- * Flow:
- *   1. Browser has lat/lng from geolocation or map pin
- *   2. Compute H3 cell index → H3 res-3 parent
- *   3. Fetch cell chunk from IPFS by parent key (~60 KB gzipped)
- *   4. Look up the H3 cell → get GEOID (cell_id), districts, SMT proof
- *   5. Return circuit-ready data
+ * District code path (recommended):
+ *   User already verified their district in Tier 2. We just need ANY valid cell
+ *   in that district for the ZKP. Scans IPFS chunks to find a matching cell.
+ *   The user discloses nothing beyond their already-verified district.
  *
- * @param lat - Latitude
- * @param lng - Longitude
- * @param country - ISO 3166-1 alpha-2 country code (default: "US")
- * @returns ClientCellProofResult with circuit-ready data, or null if not found
+ * Lat/lng path (fallback):
+ *   Direct H3 cell lookup. Used when the caller has coordinates and wants
+ *   the exact cell for that location.
+ *
+ * @param options.district - Congressional district code (e.g., "CA-12"). Preferred.
+ * @param options.lat - Latitude (alternative to district)
+ * @param options.lng - Longitude (alternative to district)
+ * @param options.country - ISO 3166-1 alpha-2 (default: "US")
  */
-export async function getFullCellDataFromBrowser(
-	lat: number,
-	lng: number,
-	country = 'US',
-): Promise<ClientCellProofResult | null> {
+export async function getFullCellDataFromBrowser(options: {
+	district?: string;
+	lat?: number;
+	lng?: number;
+	country?: string;
+}): Promise<ClientCellProofResult | null> {
 	if (!isIPFSConfigured()) {
 		console.warn('[browser-client] IPFS not configured — cannot fetch cell proof');
 		return null;
 	}
 
-	// Step 1: Compute H3 cell and parent chunk key
+	const country = options.country ?? 'US';
+
+	// Path A: District code → find any valid cell in that district
+	if (options.district) {
+		return findCellForDistrict(options.district, country);
+	}
+
+	// Path B: Lat/lng → specific H3 cell
+	if (options.lat != null && options.lng != null) {
+		return findCellByLocation(options.lat, options.lng, country);
+	}
+
+	console.warn('[browser-client] Neither district nor lat/lng provided');
+	return null;
+}
+
+/**
+ * Find a valid cell in the given district by scanning IPFS chunks.
+ * Returns the first cell whose slot 0 (congressional district) matches.
+ * The cell is essentially random within the district — maximum anonymity.
+ */
+async function findCellForDistrict(
+	districtCode: string,
+	country: string,
+): Promise<ClientCellProofResult | null> {
+	// Encode the district code as a BN254 field element for comparison.
+	// District codes in cell chunks are stored as 0x-hex field elements,
+	// encoded the same way as the tree builder (UTF-8 bytes → bigint).
+	const districtHex = encodeDistrictToHex(districtCode);
+
+	// Get the manifest to iterate chunk keys
+	const manifest = await getManifest(country);
+	if (!manifest.cells?.chunks) return null;
+
+	const chunkKeys = Object.keys(manifest.cells.chunks);
+
+	// Shuffle chunk keys so we don't always pick the same cell
+	for (let i = chunkKeys.length - 1; i > 0; i--) {
+		const j = Math.floor(Math.random() * (i + 1));
+		[chunkKeys[i], chunkKeys[j]] = [chunkKeys[j], chunkKeys[i]];
+	}
+
+	// Scan chunks until we find a cell with matching district in slot 0
+	for (const key of chunkKeys) {
+		// Skip virtual/fallback chunks — they don't have H3 keys
+		if (key.startsWith('virtual-') || key.startsWith('geoid-')) continue;
+
+		const chunk = await getCellChunkByParent(key, country);
+		if (!chunk) continue;
+
+		for (const [_h3Key, entry] of Object.entries(chunk.cells)) {
+			// Check if slot 0 (congressional district) matches
+			if (entry.d[0] === districtHex) {
+				return {
+					cellMapRoot: chunk.cellMapRoot,
+					cellId: entry.c,
+					cellMapPath: [...entry.p],
+					cellMapPathBits: [...entry.b],
+					districts: [...entry.d],
+				};
+			}
+		}
+	}
+
+	console.warn(`[browser-client] No cell found for district ${districtCode}`);
+	return null;
+}
+
+/**
+ * Find cell by exact H3 location.
+ */
+async function findCellByLocation(
+	lat: number,
+	lng: number,
+	country: string,
+): Promise<ClientCellProofResult | null> {
 	const h3Cell = latLngToCell(lat, lng, H3_RESOLUTION);
 	const parentKey = cellToParent(h3Cell, 3);
 
-	// Step 2: Fetch the chunk from IPFS
 	const chunk = await getCellChunkByParent(parentKey, country);
 	if (!chunk) return null;
 
-	// Step 3: Look up by H3 cell index (chunks are keyed by H3, not GEOID)
 	const entry = chunk.cells[h3Cell];
 	if (!entry) {
-		// H3 cell not in this chunk — might be at a boundary. Try neighboring cells.
 		console.warn(`[browser-client] H3 cell ${h3Cell} not found in chunk ${parentKey}`);
 		return null;
 	}
@@ -177,4 +250,15 @@ export async function getFullCellDataFromBrowser(
 		cellMapPathBits: [...entry.b],
 		districts: [...entry.d],
 	};
+}
+
+/**
+ * Encode a district code string to a 0x-hex BN254 field element,
+ * matching the tree builder's encoding (UTF-8 bytes → bigint → hex).
+ */
+function encodeDistrictToHex(code: string): string {
+	const bytes = new TextEncoder().encode(code);
+	let val = 0n;
+	for (const b of bytes) val = (val << 8n) | BigInt(b);
+	return '0x' + val.toString(16).padStart(64, '0');
 }
