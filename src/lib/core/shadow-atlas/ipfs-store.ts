@@ -619,6 +619,7 @@ export async function clearCache(): Promise<void> {
 	chunkCache.clear();
 	officialsFileCache.clear();
 	cellChunkCache.clear();
+	districtIndexCache.clear();
 	manifestCacheMap.clear();
 }
 
