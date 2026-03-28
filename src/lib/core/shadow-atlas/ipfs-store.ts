@@ -179,9 +179,12 @@ export interface CellChunkFile {
 
 /**
  * Per-cell entry: circuit-ready districts + SMT proof.
+ * Keyed by H3 cell index (what the browser knows from latLngToCell).
  * Single-letter keys minimize JSON size on IPFS.
  */
 export interface CellEntry {
+	/** cell_id as 0x-hex BN254 field element (GEOID encoded — circuit private input) */
+	c: string;
 	/** districts[24] as 0x-hex BN254 field elements */
 	d: string[];
 	/** SMT siblings from leaf to root (length = depth) */

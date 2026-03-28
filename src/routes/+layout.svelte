@@ -3,10 +3,10 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { browser } from '$app/environment';
-	// Note: `browser` import restored — needed for credential loading (not route detection)
 	import '../app.css';
 	import { setupConvex } from 'convex-sveltekit';
 	import { PUBLIC_CONVEX_URL } from '$env/static/public';
+	import { syncDecryptedUser } from '$lib/stores/decryptedUser.svelte';
 
 	// Initialize Convex context for convexQuery/convexForm/convexLoad in child components.
 	if (PUBLIC_CONVEX_URL) {
@@ -60,7 +60,6 @@
 	});
 
 	// ── Decrypt PII from client-custodied blobs ──
-	import { syncDecryptedUser } from '$lib/stores/decryptedUser.svelte';
 	$effect(() => {
 		syncDecryptedUser(data.user as Parameters<typeof syncDecryptedUser>[0]);
 	});

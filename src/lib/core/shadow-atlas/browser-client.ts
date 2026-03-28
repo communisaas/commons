@@ -113,9 +113,15 @@ export async function computeDistrictCommitment(
  * Contains everything needed for ZK proof generation without any server contact.
  */
 export interface ClientCellProofResult {
+	/** Tree 2 SMT root (0x-hex BN254) */
 	cellMapRoot: string;
+	/** The cell_id field element for the circuit (GEOID encoded as 0x-hex BN254) */
+	cellId: string;
+	/** SMT siblings from leaf to root */
 	cellMapPath: string[];
+	/** SMT direction bits */
 	cellMapPathBits: number[];
+	/** All 24 district IDs as 0x-hex field elements */
 	districts: string[];
 }
 
@@ -127,21 +133,20 @@ export interface ClientCellProofResult {
  * learns which cell the user belongs to.
  *
  * Flow:
- *   1. Compute H3 res-3 parent from the user's H3 cell (or GEOID)
- *   2. Fetch the combined cell chunk from IPFS (~60 KB gzipped)
- *   3. Extract the user's cell entry (districts + SMT proof)
- *   4. Return circuit-ready data
+ *   1. Browser has lat/lng from geolocation or map pin
+ *   2. Compute H3 cell index → H3 res-3 parent
+ *   3. Fetch cell chunk from IPFS by parent key (~60 KB gzipped)
+ *   4. Look up the H3 cell → get GEOID (cell_id), districts, SMT proof
+ *   5. Return circuit-ready data
  *
- * @param cellId - Cell identifier (GEOID as string, matching tree's cellId.toString())
- * @param h3CellIndex - Optional H3 cell index for parent grouping. If provided,
- *   used to compute the H3 res-3 parent for chunk lookup. If omitted, falls back
- *   to the manifest-based lookup.
+ * @param lat - Latitude
+ * @param lng - Longitude
  * @param country - ISO 3166-1 alpha-2 country code (default: "US")
  * @returns ClientCellProofResult with circuit-ready data, or null if not found
  */
 export async function getFullCellDataFromBrowser(
-	cellId: string,
-	h3CellIndex?: string,
+	lat: number,
+	lng: number,
 	country = 'US',
 ): Promise<ClientCellProofResult | null> {
 	if (!isIPFSConfigured()) {
@@ -149,39 +154,25 @@ export async function getFullCellDataFromBrowser(
 		return null;
 	}
 
-	// Determine the parent chunk key
-	let parentKey: string | undefined;
-	if (h3CellIndex) {
-		parentKey = cellToParent(h3CellIndex, 3);
-	}
+	// Step 1: Compute H3 cell and parent chunk key
+	const h3Cell = latLngToCell(lat, lng, H3_RESOLUTION);
+	const parentKey = cellToParent(h3Cell, 3);
 
-	// Fetch the cell chunk
-	let entry: CellEntry | undefined;
-	let cellMapRoot: string | undefined;
+	// Step 2: Fetch the chunk from IPFS
+	const chunk = await getCellChunkByParent(parentKey, country);
+	if (!chunk) return null;
 
-	if (parentKey) {
-		// Fast path: we know the parent key from H3
-		const chunk = await getCellChunkByParent(parentKey, country);
-		if (chunk) {
-			entry = chunk.cells[cellId];
-			cellMapRoot = chunk.cellMapRoot;
-		}
-	}
-
+	// Step 3: Look up by H3 cell index (chunks are keyed by H3, not GEOID)
+	const entry = chunk.cells[h3Cell];
 	if (!entry) {
-		// Slow path: try manifest-based lookup
-		const { getCellProofFromIPFS } = await import('./ipfs-store');
-		const result = await getCellProofFromIPFS(cellId, country);
-		if (result) {
-			entry = result.entry;
-			cellMapRoot = result.cellMapRoot;
-		}
+		// H3 cell not in this chunk — might be at a boundary. Try neighboring cells.
+		console.warn(`[browser-client] H3 cell ${h3Cell} not found in chunk ${parentKey}`);
+		return null;
 	}
-
-	if (!entry || !cellMapRoot) return null;
 
 	return {
-		cellMapRoot,
+		cellMapRoot: chunk.cellMapRoot,
+		cellId: entry.c,
 		cellMapPath: [...entry.p],
 		cellMapPathBits: [...entry.b],
 		districts: [...entry.d],

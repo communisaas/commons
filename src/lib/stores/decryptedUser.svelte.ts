@@ -46,29 +46,29 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 
 	// Skip if already decrypted for this user
 	if (user.id === lastUserId && state.email !== null) {
+		console.debug('[decryptedUser] skip — already decrypted for', user.id);
 		return;
 	}
 
 	if (!browser) {
-		// SSR — can't decrypt, return nulls (client will hydrate)
 		state.email = null;
 		state.name = null;
 		state.decrypting = true;
 		return;
 	}
 
+	console.debug('[decryptedUser] decrypting for', user.id, 'encEmail:', user.encryptedEmail?.slice(0, 30) ?? 'NULL');
 	state.decrypting = true;
 	const capturedId = user.id;
 	lastUserId = user.id;
 
-	// Async decrypt — updates state when done, guards against user change mid-flight
 	(async () => {
 		const { decryptUserPiiClient, isClientPiiAvailable } = await import('$lib/core/crypto/client-pii');
 
-		if (capturedId !== lastUserId) return; // user changed during import
+		if (capturedId !== lastUserId) return;
 
 		if (!isClientPiiAvailable()) {
-			if (capturedId !== lastUserId) return;
+			console.warn('[decryptedUser] client PII not available');
 			state.email = null;
 			state.name = null;
 			state.decrypting = false;
@@ -81,11 +81,13 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 			user.id
 		);
 
-		if (capturedId !== lastUserId) return; // user changed during decrypt
+		console.debug('[decryptedUser] result:', { email: email ? 'OK' : 'NULL', name: name ? 'OK' : 'NULL' });
+		if (capturedId !== lastUserId) return;
 		state.email = email;
 		state.name = name;
 		state.decrypting = false;
-	})().catch(() => {
+	})().catch((err) => {
+		console.error('[decryptedUser] decrypt error:', err);
 		if (capturedId !== lastUserId) return;
 		state.email = null;
 		state.name = null;
