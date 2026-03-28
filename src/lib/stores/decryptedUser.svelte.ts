@@ -1,13 +1,9 @@
 /**
- * Reactive decrypted user store — transparently handles PII custody modes.
+ * Reactive decrypted user store — client-side PII decryption.
  *
- * When custodyMode is "client": decrypts email/name from encrypted blobs
- * using the device-held key in IndexedDB.
- *
- * When custodyMode is "server" (or unset): uses plaintext from server response.
- *
- * Components read `decryptedUser.email` / `decryptedUser.name` — they never
- * need to know which custody mode is active.
+ * PII is always encrypted with the user's device key. The server returns
+ * opaque blobs. This store decrypts them locally and exposes plaintext
+ * reactively to components via `decryptedUser.email` / `decryptedUser.name`.
  */
 
 import { browser } from '$app/environment';
@@ -16,7 +12,6 @@ interface LayoutUser {
 	id: string;
 	email: string | null;
 	name: string | null;
-	custodyMode?: string;
 	encryptedEmail?: string | null;
 	encryptedName?: string | null;
 	[key: string]: unknown;
@@ -35,7 +30,6 @@ let state = $state<DecryptedUserState>({
 });
 
 let lastUserId: string | null = null;
-let lastCustodyMode: string | null = null;
 
 /**
  * Update the decrypted user state from layout data.
@@ -47,23 +41,11 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 		state.name = null;
 		state.decrypting = false;
 		lastUserId = null;
-		lastCustodyMode = null;
 		return;
 	}
 
-	// Server custody — plaintext already available
-	if (user.custodyMode !== 'client') {
-		state.email = user.email;
-		state.name = user.name;
-		state.decrypting = false;
-		lastUserId = user.id;
-		lastCustodyMode = user.custodyMode ?? 'server';
-		return;
-	}
-
-	// Client custody — need to decrypt
 	// Skip if already decrypted for this user
-	if (user.id === lastUserId && lastCustodyMode === 'client' && state.email !== null) {
+	if (user.id === lastUserId && state.email !== null) {
 		return;
 	}
 
@@ -78,7 +60,6 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 	state.decrypting = true;
 	const capturedId = user.id;
 	lastUserId = user.id;
-	lastCustodyMode = 'client';
 
 	// Async decrypt — updates state when done, guards against user change mid-flight
 	(async () => {

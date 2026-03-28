@@ -115,7 +115,6 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			name: pii.name,
 			avatar: user.avatar ?? null,
 			// PII custody
-			custody_mode: custodyMode,
 			email_hash: user.emailHash ?? null,
 			// Verification status
 			is_verified: user.isVerified,

@@ -34,10 +34,10 @@ export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
 	}
 
 	if (convexProfile) {
-		// Delete recovery seed once custody transition is confirmed
-		if (seedCookie && convexProfile.custodyMode === 'client') {
+		// Delete recovery seed once encrypted blobs are stored
+		if (seedCookie && convexProfile.encryptedEmail) {
 			cookies.delete('oauth_pii_seed', { path: '/' });
-			oauthPiiSeed = null; // don't pass stale seed to client
+			oauthPiiSeed = null;
 		}
 
 		return {
@@ -57,7 +57,6 @@ export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
 				hasDistrictCredential: Boolean(convexProfile.districtVerified),
 				orgMemberships: convexMemberships ?? [],
 				// Client-side PII custody
-				custodyMode: convexProfile.custodyMode ?? 'server',
 				encryptedEmail: convexProfile.encryptedEmail ?? null,
 				// One-time OAuth PII for device recovery re-encryption
 				oauthPiiSeed: oauthPiiSeed,

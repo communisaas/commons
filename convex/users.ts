@@ -50,7 +50,6 @@ export const getProfile = query({
       name: null,
       encryptedEmail: user.encryptedEmail ?? null,
       encryptedName: user.encryptedName ?? null,
-      custodyMode: "client",
       avatar: user.avatar ?? null,
       trustTier: user.trustTier ?? 0,
       isVerified: user.isVerified ?? false,
