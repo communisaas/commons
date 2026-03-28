@@ -82,9 +82,10 @@
 		let name: string | null = null;
 
 		if (custodyMode !== 'client') {
-			// First-time transition from server custody
-			email = user.email as string | null;
-			name = user.name as string | null;
+			// First-time transition — prefer oauthSeed (server decryption may fail
+			// due to tempUserId key mismatch), fall back to server-provided plaintext
+			email = oauthSeed?.email ?? (user.email as string | null);
+			name = oauthSeed?.name ?? (user.name as string | null);
 		} else if (oauthSeed) {
 			// Device recovery — OAuth provider gave fresh PII
 			email = oauthSeed.email;

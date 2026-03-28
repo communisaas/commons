@@ -11,6 +11,7 @@
 
 import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { requireAuth } from "./_authHelpers";
 
 // =============================================================================
 // OAUTH USER UPSERT
@@ -251,12 +252,14 @@ export const invalidateSession = mutation({
     sessionId: v.string(),
   },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
     const sessions = await ctx.db
       .query("sessions")
       .filter((q) => q.eq(q.field("_id"), args.sessionId))
       .collect();
 
     for (const session of sessions) {
+      if (session.userId !== authUserId) throw new Error("Unauthorized");
       await ctx.db.delete(session._id);
     }
   },
@@ -322,11 +325,13 @@ export const validateSession = query({
 export const renewSession = mutation({
   args: { sessionId: v.string() },
   handler: async (ctx, { sessionId }) => {
+    const { userId: authUserId } = await requireAuth(ctx);
     const session = await ctx.db
       .query("sessions")
       .filter((q) => q.eq(q.field("_id"), sessionId))
       .first();
     if (!session) return;
+    if (session.userId !== authUserId) throw new Error("Unauthorized");
     await ctx.db.patch(session._id, {
       expiresAt: Date.now() + DAY_MS * 30,
     });

@@ -354,6 +354,8 @@ export const getByWalletAddress = internalQuery({
 export const getPasskeyStatus = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     const user = await ctx.db.get(args.userId);
     if (!user) return null;
     return { hasPasskey: Boolean(user.passkeyCredentialId) };
@@ -366,6 +368,8 @@ export const getPasskeyStatus = query({
 export const clearPasskey = mutation({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("User not found");
     if (!user.passkeyCredentialId) throw new Error("No passkey registered");
@@ -395,6 +399,8 @@ export const updateMdlVerification = mutation({
     documentType: v.string(),
   },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("User not found");
     const patch: Record<string, unknown> = {
@@ -440,6 +446,8 @@ export const verifyAddress = mutation({
     }))),
   },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("User not found");
     const now = Date.now();
@@ -621,6 +629,8 @@ export const upsertEncryptedBlob = mutation({
     encryptionVersion: v.string(),
   },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     const existing = await ctx.db
       .query("encryptedDeliveryData")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
@@ -661,6 +671,8 @@ export const getEncryptedBlob = query({
 export const deleteEncryptedBlob = mutation({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     const existing = await ctx.db
       .query("encryptedDeliveryData")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
@@ -695,6 +707,8 @@ export const createShadowAtlasRegistration = mutation({
     verificationId: v.string(),
   },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     return await ctx.db.insert("shadowAtlasRegistrations", {
       userId: args.userId,
       congressionalDistrict: "three-tree",
@@ -722,6 +736,8 @@ export const updateShadowAtlasRegistration = mutation({
     merklePath: v.any(),
   },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     const existing = await ctx.db
       .query("shadowAtlasRegistrations")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
@@ -824,6 +840,8 @@ export const bindIdentityCommitment = mutation({
     documentType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== authUserId) throw new Error("Unauthorized");
     // Check if commitment already bound to another user (Sybil / account merge)
     const existing = await ctx.db
       .query("users")
@@ -873,6 +891,8 @@ export const upsertRegistration = mutation({
     queuedAt: v.string(),
   },
   handler: async (ctx, args) => {
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (args.userId !== (authUserId as string)) throw new Error("Unauthorized");
     const existing = await ctx.db
       .query("shadowAtlasRegistrations")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId as any))
