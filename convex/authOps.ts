@@ -205,15 +205,22 @@ export const createSession = mutation({
       return bytes;
     }
 
+    // Proof is bound to userId + expiresAt to prevent replay
     const valid = await crypto.subtle.verify(
       "HMAC",
       key,
       hexToBytes(args.proof),
-      encoder.encode(args.userId)
+      encoder.encode(`${args.userId}|${args.expiresAt}`)
     );
 
     if (!valid) {
       throw new Error("Invalid session creation proof");
+    }
+
+    // Validate expiresAt is within 90 days
+    const maxExpiry = Date.now() + 90 * 24 * 60 * 60 * 1000;
+    if (args.expiresAt > maxExpiry || args.expiresAt < Date.now()) {
+      throw new Error("Invalid session expiry");
     }
 
     // Validate the userId refers to an actual user

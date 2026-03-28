@@ -11,15 +11,15 @@ export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
 		return { user: null };
 	}
 
-	// Consume one-time OAuth PII seed for device recovery re-encryption.
-	// The cookie is set by the OAuth callback and consumed on the first page load.
+	// Read OAuth PII seed for device recovery re-encryption.
+	// Deleted only AFTER custody transition succeeds (custodyMode already "client")
+	// to prevent seed loss on transient Convex failures during first load.
 	let oauthPiiSeed: { email: string; name: string | null } | null = null;
 	const seedCookie = cookies.get('oauth_pii_seed');
 	if (seedCookie) {
 		try {
 			oauthPiiSeed = JSON.parse(seedCookie);
 		} catch { /* malformed — ignore */ }
-		cookies.delete('oauth_pii_seed', { path: '/' });
 	}
 
 	let convexProfile = null;
@@ -34,6 +34,12 @@ export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
 	}
 
 	if (convexProfile) {
+		// Delete recovery seed once custody transition is confirmed
+		if (seedCookie && convexProfile.custodyMode === 'client') {
+			cookies.delete('oauth_pii_seed', { path: '/' });
+			oauthPiiSeed = null; // don't pass stale seed to client
+		}
+
 		return {
 			user: {
 				id: locals.user.id,

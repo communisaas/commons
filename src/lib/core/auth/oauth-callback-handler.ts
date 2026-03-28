@@ -186,7 +186,7 @@ export class OAuthCallbackHandler {
 			}
 
 			// Step 5: Create session and handle redirects
-			return await this.handleSessionAndRedirect(userId, returnTo, config.provider, cookies);
+			return await this.handleSessionAndRedirect(userId, returnTo, config.provider, cookies, userData);
 		} catch (err) {
 			return this.handleError(err, config.provider);
 		}
@@ -294,7 +294,8 @@ export class OAuthCallbackHandler {
 		userId: string,
 		returnTo: string,
 		provider: string,
-		cookies: Cookies
+		cookies: Cookies,
+		userData: UserData
 	): Promise<Response> {
 		const DAY_IN_MS = 1000 * 60 * 60 * 24;
 
@@ -323,14 +324,15 @@ export class OAuthCallbackHandler {
 			false,
 			['sign']
 		);
+		const expiresAt = Date.now() + sessionDurationMs;
 		const proofBytes = new Uint8Array(
-			await crypto.subtle.sign('HMAC', hmacKey, encoder.encode(userId))
+			await crypto.subtle.sign('HMAC', hmacKey, encoder.encode(`${userId}|${expiresAt}`))
 		);
 		const proof = Array.from(proofBytes).map(b => b.toString(16).padStart(2, '0')).join('');
 
 		const session = await serverMutation(api.authOps.createSession, {
 			userId,
-			expiresAt: Date.now() + sessionDurationMs,
+			expiresAt,
 			proof,
 		});
 
