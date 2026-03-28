@@ -44,7 +44,7 @@
 	let registrationComplete = $state(false);
 	let registrationError = $state<string | null>(null);
 	let oncompletePending = $state(false);
-	let savedCellId = $state<string | null>(null);
+	let savedDistrict = $state<string | null>(null);
 	let verificationData = $state<{
 		verified: boolean;
 		method: string;
@@ -101,11 +101,8 @@
 		// Trigger Shadow Atlas three-tree registration (blocking)
 		// This registers the user's leaf hash in Tree 1 and fetches Tree 2/3 proofs,
 		// enabling ZK proof generation for congressional submissions.
-		// cellId sources: mDL Census geocoding (data.cell_id) > parent prop (cellId)
-		const resolvedCellId = data.cell_id ?? cellId;
-		if (resolvedCellId) {
-			savedCellId = resolvedCellId;
-			await triggerShadowAtlasRegistration(resolvedCellId);
+		if (data.district) {
+			await triggerShadowAtlasRegistration(data.district);
 
 			// If registration succeeded, fire oncomplete immediately
 			if (registrationComplete) {
@@ -115,8 +112,8 @@
 				oncompletePending = true;
 			}
 		} else {
-			console.warn('[Verification] No cellId available — Shadow Atlas registration deferred');
-			// No cell ID means no registration possible — fire oncomplete directly
+			console.warn('[Verification] No district available — Shadow Atlas registration deferred');
+			// No district means no registration possible — fire oncomplete directly
 			oncomplete?.({ ...data, userId });
 		}
 	}
@@ -124,19 +121,40 @@
 	/**
 	 * Register in Shadow Atlas three-tree architecture after identity verification.
 	 *
-	 * Generates client-side secrets (userSecret, registrationSalt) that NEVER
-	 * leave the browser. Only the leaf hash (H4 of secrets + cellId + authorityLevel)
-	 * is sent to the server.
+	 * Flow:
+	 *   1. Resolve district hex from display format via district index
+	 *   2. Fetch full cell data from IPFS (Tree 2 proof + cellId as BN254 field element)
+	 *   3. Generate client-side secrets (userSecret, registrationSalt) — NEVER leave browser
+	 *   4. Compute leaf hash using IPFS-resolved cellId
+	 *   5. Call registerThreeTree with tree2 data
+	 *
+	 * @param verifiedDistrict - Display format district code from mDL verification (e.g. "CA-12")
 	 */
-	async function triggerShadowAtlasRegistration(resolvedCellId: string) {
+	async function triggerShadowAtlasRegistration(verifiedDistrict: string) {
 		registrationInProgress = true;
 		registrationError = null;
+		// Save district for retry
+		savedDistrict = verifiedDistrict;
 
 		try {
+			const { findDistrictHex, getFullCellDataFromBrowser } = await import('$lib/core/shadow-atlas/browser-client');
 			const { registerThreeTree } = await import('$lib/core/identity/shadow-atlas-handler');
 			const { poseidon2Hash4 } = await import('$lib/core/crypto/poseidon');
 
-			// Generate client-side secrets (never sent to server)
+			// Step 1: Resolve district hex from display format (e.g. "CA-12" → field element)
+			const districtHex = await findDistrictHex(verifiedDistrict, 0);
+			if (!districtHex) {
+				throw new Error(`District "${verifiedDistrict}" not found in Shadow Atlas index`);
+			}
+
+			// Step 2: Fetch full cell data from IPFS (Tree 2 proof + cellId)
+			// This is zero-server-contact — data comes from content-addressed IPFS via Storacha CDN
+			const cellData = await getFullCellDataFromBrowser({ districtHex, slot: 0 });
+			if (!cellData) {
+				throw new Error('Failed to fetch cell proof data from IPFS');
+			}
+
+			// Step 3: Generate client-side secrets (never sent to server)
 			const userSecretBytes = new Uint8Array(32);
 			const registrationSaltBytes = new Uint8Array(32);
 			crypto.getRandomValues(userSecretBytes);
@@ -153,22 +171,25 @@
 					.map((b) => b.toString(16).padStart(2, '0'))
 					.join('');
 
-			// Encode cellId (Census GEOID like "060750102001001") as a BN254 field element
-			const cellIdBigInt = BigInt(resolvedCellId);
-			const cellIdHex = '0x' + cellIdBigInt.toString(16).padStart(64, '0');
-
-			// Encode authority level as a field element
+			// Step 4: Compute leaf using IPFS-resolved cellId (already 0x-hex BN254 field element)
 			const authorityLevel = 5; // mDL = highest authority
 			const authorityHex = '0x' + authorityLevel.toString(16).padStart(64, '0');
 
-			// Compute leaf: Poseidon2_H4(userSecret, cellId, registrationSalt, authorityLevel)
+			// leaf = Poseidon2_H4(userSecret, cellId, registrationSalt, authorityLevel)
 			// Uses 2-round sponge with DOMAIN_HASH4 — matches Noir circuit exactly
-			const leaf = await poseidon2Hash4(userSecret, cellIdHex, registrationSalt, authorityHex);
+			const leaf = await poseidon2Hash4(userSecret, cellData.cellId, registrationSalt, authorityHex);
 
+			// Step 5: Register with tree2 data from IPFS
 			const result = await registerThreeTree({
 				userId,
 				leaf,
-				cellId: resolvedCellId,
+				cellId: cellData.cellId,
+				tree2: {
+					cellMapRoot: cellData.cellMapRoot,
+					cellMapPath: cellData.cellMapPath,
+					cellMapPathBits: cellData.cellMapPathBits,
+					districts: cellData.districts,
+				},
 				userSecret,
 				registrationSalt,
 				verificationMethod: 'digital-credentials-api'
@@ -336,10 +357,10 @@
 							<AlertTriangle class="h-4 w-4" />
 							<span>Proof setup failed — your messages won't include cryptographic proof. You can retry or continue.</span>
 						</div>
-						{#if savedCellId}
+						{#if savedDistrict}
 							<button
 								type="button"
-								onclick={() => triggerShadowAtlasRegistration(savedCellId!)}
+								onclick={() => triggerShadowAtlasRegistration(savedDistrict!)}
 								disabled={registrationInProgress}
 								class="mt-2 rounded-md border border-amber-300 bg-amber-100 px-3 py-1.5 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-200 disabled:opacity-50"
 							>

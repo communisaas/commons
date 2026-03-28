@@ -54,3 +54,30 @@ export function convertDistrictId(substrateId: string): string {
 export function normalizeDistrictCode(code: string): string {
 	return convertDistrictId(code).toUpperCase().trim();
 }
+
+/**
+ * Two-letter postal abbreviation to FIPS state codes (reverse of FIPS_TO_STATE).
+ */
+const STATE_TO_FIPS: Record<string, string> = Object.fromEntries(
+	Object.entries(FIPS_TO_STATE).map(([fips, state]) => [state, fips])
+);
+
+/**
+ * Convert display district format to raw GEOID.
+ * "CA-12" → "0612", "VT-AL" → "5000"
+ *
+ * Returns null if the state abbreviation is unknown.
+ */
+export function displayDistrictToGEOID(display: string): string | null {
+	const match = display.match(/^([A-Z]{2})-(.+)$/);
+	if (!match) return null;
+
+	const stateAbbr = match[1];
+	const districtPart = match[2];
+	const fips = STATE_TO_FIPS[stateAbbr];
+	if (!fips) return null;
+
+	// At-large: "AL" → "00"
+	const districtNum = districtPart === 'AL' ? '00' : districtPart.padStart(2, '0');
+	return `${fips}${districtNum}`;
+}

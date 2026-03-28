@@ -251,3 +251,47 @@ export async function getDistrictsForSlot(
 		label: index.labels[hex] ?? hex,
 	}));
 }
+
+/**
+ * Find the field element hex for a verified district in display format (e.g. "CA-12").
+ *
+ * Converts the display format to raw GEOID, then searches the district index
+ * labels to find the matching field element hex.
+ *
+ * @param verifiedDistrict - Display format district code (e.g. "CA-12", "VT-AL")
+ * @param slot - Slot number (0=congressional, 2=state senate, etc.)
+ * @param country - ISO 3166-1 alpha-2 (default: "US")
+ * @returns The field element hex string, or null if not found
+ */
+export async function findDistrictHex(
+	verifiedDistrict: string,
+	slot = 0,
+	country = 'US',
+): Promise<string | null> {
+	const { displayDistrictToGEOID } = await import('./district-format');
+	const geoid = displayDistrictToGEOID(verifiedDistrict);
+	if (!geoid) {
+		console.warn(`[browser-client] Cannot convert district "${verifiedDistrict}" to GEOID`);
+		return null;
+	}
+
+	const index = await getDistrictIndex(country);
+	if (!index) {
+		console.warn('[browser-client] District index not available');
+		return null;
+	}
+
+	// Search labels: fieldElementHex → raw GEOID string
+	for (const [hex, label] of Object.entries(index.labels)) {
+		if (label === geoid) {
+			// Verify this hex exists in the requested slot
+			const slotIndex = index.slots[String(slot)];
+			if (slotIndex && slotIndex[hex]) {
+				return hex;
+			}
+		}
+	}
+
+	console.warn(`[browser-client] No district hex found for GEOID "${geoid}" in slot ${slot}`);
+	return null;
+}
