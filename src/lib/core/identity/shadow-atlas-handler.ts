@@ -54,6 +54,8 @@ export interface ThreeTreeRegistrationRequest {
 	registrationSalt: string;
 	/** Verification method used */
 	verificationMethod: 'digital-credentials-api';
+	/** Human-readable district code for display (e.g., "CA-12") */
+	verifiedDistrict?: string;
 }
 
 export interface ThreeTreeRegistrationResult {
@@ -83,6 +85,8 @@ export interface ThreeTreeRecoveryRequest {
 	registrationSalt: string;
 	/** Verification method (carried from original registration) */
 	verificationMethod: 'digital-credentials-api';
+	/** Human-readable district code for display (e.g., "CA-12") */
+	verifiedDistrict?: string;
 }
 
 // ============================================================================
@@ -223,6 +227,17 @@ export async function registerThreeTree(
 
 		const tree1Data = await tree1Response.json();
 
+		// Bug 4 fix: If already registered, the server returns the OLD proof for the
+		// old leaf. Storing new secrets alongside the old proof would corrupt the
+		// credential — the secrets wouldn't match the leaf in the tree, causing
+		// circuit verification to fail. Return an error instead.
+		if (tree1Data.alreadyRegistered) {
+			return {
+				success: false,
+				error: 'Already registered. Your existing credential is still valid. Use recovery to re-register with new secrets.',
+			};
+		}
+
 		if (tree1Data.leafIndex === undefined || !tree1Data.userRoot || !tree1Data.userPath || !tree1Data.pathIndices || !tree1Data.identityCommitment) {
 			return {
 				success: false,
@@ -248,7 +263,8 @@ export async function registerThreeTree(
 			leafIndex: tree1Data.leafIndex,
 			merklePath: tree1Data.userPath, // Tree 1 siblings
 			merkleRoot: tree1Data.userRoot, // Tree 1 root
-			congressionalDistrict: tree2Data.districts[0] ?? 'unknown',
+			// Use human-readable district code (e.g. "CA-12"), not the hex field element
+			congressionalDistrict: request.verifiedDistrict ?? 'unknown',
 
 			// Three-tree specific fields
 			credentialType: 'three-tree',
@@ -271,7 +287,7 @@ export async function registerThreeTree(
 			registrationSalt: request.registrationSalt,
 
 			verificationMethod: request.verificationMethod,
-			// Server-derived authority level (from User.authority_level via deriveAuthorityLevel)
+			// Server-derived authority level (from trustTier via getIdentityForAtlas)
 			authorityLevel: tree1Data.authorityLevel as 1 | 2 | 3 | 4 | 5 | undefined,
 			// Signed receipt from operator (anti-censorship proof)
 			receipt: tree1Data.receipt,
@@ -361,7 +377,8 @@ export async function recoverThreeTree(
 			leafIndex: tree1Data.leafIndex,
 			merklePath: tree1Data.userPath,
 			merkleRoot: tree1Data.userRoot,
-			congressionalDistrict: tree2Data.districts[0] ?? 'unknown',
+			// Use human-readable district code (e.g. "CA-12"), not the hex field element
+			congressionalDistrict: request.verifiedDistrict ?? 'unknown',
 
 			credentialType: 'three-tree',
 			cellId: request.cellId,
