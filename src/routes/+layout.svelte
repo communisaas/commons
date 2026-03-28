@@ -1,4 +1,5 @@
 <script lang="ts">
+	console.log('[LAYOUT] client script loaded');
 
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
