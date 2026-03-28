@@ -54,14 +54,17 @@
 		data: LayoutData;
 	} = $props();
 
+	console.log('[LAYOUT] component setup, data.user:', data.user ? 'present' : 'null');
+
 	// Hydrate wallet state from server-provided user data.
-	// Runs reactively so wallet state updates if the user changes (login/logout).
 	$effect(() => {
+		console.log('[LAYOUT] wallet effect fired');
 		walletState.initFromPageData(data.user as PageUser | null);
 	});
 
 	// ── Decrypt PII from client-custodied blobs ──
 	$effect(() => {
+		console.log('[LAYOUT] syncDecryptedUser effect fired, user:', data.user?.id ?? 'null');
 		syncDecryptedUser(data.user as Parameters<typeof syncDecryptedUser>[0]);
 	});
 
