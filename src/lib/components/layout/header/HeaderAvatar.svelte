@@ -63,20 +63,19 @@
 		};
 	});
 
-	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
+	// Identity decryption state — name comes from client-side decryption only
+	const displayName = $derived(user.name);
+	const identityResolved = $derived(!!displayName);
+	const firstName = $derived(displayName?.split(' ')[0] ?? null);
 
-	// Extract first name for display — prefer client-decrypted PII
-	const displayName = $derived(decryptedUser.name || user.name);
-	const firstName = $derived(displayName?.split(' ')[0] ?? 'User');
-
-	// Generate initials for fallback avatar
+	// Generate initials — null when identity unresolved
 	const initials = $derived.by(() => {
-		if (!displayName) return 'U';
+		if (!displayName) return null;
 		const parts = displayName.split(' ');
 		if (parts.length >= 2) {
 			return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
 		}
-		return parts[0][0]?.toUpperCase() ?? 'U';
+		return parts[0][0]?.toUpperCase() ?? null;
 	});
 
 	// Org memberships — the bridge between individual and org layers
@@ -95,16 +94,20 @@
 		onclick={toggleDropdown}
 		aria-expanded={isOpen}
 		aria-haspopup="menu"
-		aria-label="Account menu for {firstName}"
+		aria-label={firstName ? `Account menu for ${firstName}` : 'Account menu'}
 	>
 		{#if user.picture}
 			<img src={user.picture} alt="" class="header-avatar" />
-		{:else}
+		{:else if initials}
 			<div class="header-avatar header-avatar--fallback">
 				{initials}
 			</div>
+		{:else}
+			<div class="header-avatar header-avatar--unlocking"></div>
 		{/if}
-		<span class="header-avatar-name">{firstName}</span>
+		{#if firstName}
+			<span class="header-avatar-name header-avatar-name--resolved">{firstName}</span>
+		{/if}
 		<ChevronDown class="header-avatar-chevron" />
 	</button>
 
@@ -221,11 +224,30 @@
 		font-weight: 600;
 	}
 
+	.header-avatar--unlocking {
+		background: oklch(0.92 0.02 250);
+		animation: identity-pulse 1.8s ease-in-out infinite;
+	}
+
+	@keyframes identity-pulse {
+		0%, 100% { opacity: 0.5; }
+		50% { opacity: 0.9; }
+	}
+
 	.header-avatar-name {
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.875rem;
 		font-weight: 500;
 		color: var(--header-text-primary);
+	}
+
+	.header-avatar-name--resolved {
+		animation: identity-resolve 300ms ease-out;
+	}
+
+	@keyframes identity-resolve {
+		from { opacity: 0; transform: translateY(2px); }
+		to { opacity: 1; transform: translateY(0); }
 	}
 
 	/* Hide name on very small screens */
