@@ -846,6 +846,7 @@ export default defineSchema({
   // ===========================================================================
 
   communityFieldContributions: defineTable({
+    userId: v.id("users"),
     epochDate: v.string(), // "2026-03-02"
     epochNullifier: v.string(),
     cellTreeRoot: v.string(),

@@ -1,8 +1,8 @@
-import { query, mutation, action, internalQuery } from "./_generated/server";
+import { query, mutation, action, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { requireOrgRole } from "./_authHelpers";
+import { requireAuth, requireOrgRole } from "./_authHelpers";
 
 // =============================================================================
 // TEMPLATES — Queries & Actions
@@ -707,6 +707,7 @@ export const updateSourceCache = mutation({
     sourcesCachedAt: v.number(),
   },
   handler: async (ctx, args) => {
+    await requireAuth(ctx);
     await ctx.db.patch(args.templateId, {
       cachedSources: args.cachedSources,
       sourcesCachedAt: args.sourcesCachedAt,
@@ -753,6 +754,7 @@ export const updateEmbeddings = mutation({
     topicEmbedding: v.array(v.float64()),
   },
   handler: async (ctx, args) => {
+    await requireAuth(ctx);
     await ctx.db.patch(args.templateId, {
       locationEmbedding: args.locationEmbedding,
       topicEmbedding: args.topicEmbedding,
@@ -943,6 +945,7 @@ export const setCwcVerification = mutation({
     reputationApplied: v.boolean(),
   },
   handler: async (ctx, args) => {
+    await requireAuth(ctx);
     await ctx.db.patch(args.templateId, {
       verificationStatus: args.verificationStatus,
       countryCode: args.countryCode,
