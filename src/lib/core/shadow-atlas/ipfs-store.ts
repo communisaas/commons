@@ -12,7 +12,27 @@
  * This module has NO server-only imports ($env/dynamic/private).
  */
 
-import { validateBN254Hex, validateBN254HexArray, clearCachedTree } from './client';
+// BN254 validation — inlined here to keep ipfs-store browser-safe.
+// client.ts imports $env/dynamic/private and cannot be imported from browser code.
+const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+function validateBN254Hex(value: string, label: string): void {
+	if (typeof value !== 'string' || !/^0x[0-9a-fA-F]+$/.test(value)) {
+		throw new Error(`Invalid ${label}: expected 0x-hex, got "${String(value).slice(0, 20)}"`);
+	}
+	if (BigInt(value) >= BN254_MODULUS) {
+		throw new Error(`${label} exceeds BN254 field modulus`);
+	}
+}
+
+function validateBN254HexArray(values: string[], label: string): void {
+	if (!Array.isArray(values)) {
+		throw new Error(`${label} must be an array`);
+	}
+	for (let i = 0; i < values.length; i++) {
+		validateBN254Hex(values[i], `${label}[${i}]`);
+	}
+}
 
 // ============================================================================
 // Configuration
@@ -679,7 +699,6 @@ export async function clearCache(): Promise<void> {
 	cellChunkCache.clear();
 	districtIndexCache.clear();
 	manifestCacheMap.clear();
-	clearCachedTree();
 }
 
 /**
