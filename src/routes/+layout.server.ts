@@ -11,10 +11,16 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 		return { user: null };
 	}
 
-	const [convexProfile, convexMemberships] = await Promise.all([
-		serverQuery(api.users.getProfile, {}),
-		serverQuery(api.organizations.getMyMemberships, {})
-	]);
+	let convexProfile = null;
+	let convexMemberships = null;
+	try {
+		[convexProfile, convexMemberships] = await Promise.all([
+			serverQuery(api.users.getProfile, {}),
+			serverQuery(api.organizations.getMyMemberships, {})
+		]);
+	} catch (err) {
+		console.error('[Layout] Convex profile query failed:', err instanceof Error ? err.message : String(err));
+	}
 
 	if (convexProfile) {
 		return {
@@ -37,7 +43,7 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 		};
 	}
 
-	// Profile not found in Convex — return minimal user data from session
+	// Profile not found in Convex or query failed — return minimal user data from session
 	return {
 		user: {
 			id: locals.user.id,

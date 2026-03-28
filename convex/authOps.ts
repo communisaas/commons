@@ -67,6 +67,14 @@ export const upsertFromOAuth = mutation({
         updatedAt: now,
       });
 
+      // Backfill tokenIdentifier if missing (migration from pre-JWT era)
+      const existingUser0 = await ctx.db.get(existingAccount.userId);
+      if (existingUser0 && !existingUser0.tokenIdentifier) {
+        await ctx.db.patch(existingAccount.userId, {
+          tokenIdentifier: `https://commons.email|${existingAccount.userId}`,
+        });
+      }
+
       return { userId: existingAccount.userId, isNew: false };
     }
 
@@ -91,6 +99,13 @@ export const upsertFromOAuth = mutation({
         emailVerified: args.emailVerified,
         updatedAt: now,
       });
+
+      // Backfill tokenIdentifier if missing (migration from pre-JWT era)
+      if (!existingUser.tokenIdentifier) {
+        await ctx.db.patch(existingUser._id, {
+          tokenIdentifier: `https://commons.email|${existingUser._id}`,
+        });
+      }
 
       return { userId: existingUser._id, isNew: false };
     }
@@ -122,6 +137,12 @@ export const upsertFromOAuth = mutation({
       peerEndorsements: 0,
       activeMonths: 0,
       profileVisibility: "private",
+    });
+
+    // Store tokenIdentifier so requireAuth() can resolve JWT identity → user.
+    // Format matches Convex's `<issuer>|<sub>` convention for custom JWT providers.
+    await ctx.db.patch(userId, {
+      tokenIdentifier: `https://commons.email|${userId}`,
     });
 
     // Create linked account

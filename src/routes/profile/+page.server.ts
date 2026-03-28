@@ -8,11 +8,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 		throw redirect(302, '/');
 	}
 
-	const [convexProfile, convexTemplates, convexReps] = await Promise.all([
-		serverQuery(api.users.getProfile, {}),
-		serverQuery(api.users.getMyTemplates, {}),
-		serverQuery(api.users.getMyRepresentatives, {})
-	]);
+	let convexProfile = null;
+	let convexTemplates = null;
+	let convexReps = null;
+	try {
+		[convexProfile, convexTemplates, convexReps] = await Promise.all([
+			serverQuery(api.users.getProfile, {}),
+			serverQuery(api.users.getMyTemplates, {}),
+			serverQuery(api.users.getMyRepresentatives, {})
+		]);
+	} catch (err) {
+		console.error('[Profile Page] Convex query failed:', err instanceof Error ? err.message : String(err));
+	}
 
 	const templates = (convexTemplates ?? []).map((t: Record<string, unknown>) => t);
 	const templateStats = templates.reduce(

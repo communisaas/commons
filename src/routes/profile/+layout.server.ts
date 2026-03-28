@@ -9,7 +9,12 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		throw redirect(302, '/');
 	}
 
-	const convexProfile = await serverQuery(api.users.getProfile, {});
+	let convexProfile = null;
+	try {
+		convexProfile = await serverQuery(api.users.getProfile, {});
+	} catch (err) {
+		console.error('[Profile Layout] Convex query failed:', err instanceof Error ? err.message : String(err));
+	}
 
 	if (convexProfile) {
 		return {

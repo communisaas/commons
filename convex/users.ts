@@ -109,6 +109,39 @@ export const getProfile = query({
 });
 
 /**
+ * Authenticated query: Returns templates created by the current user.
+ */
+export const getMyTemplates = query({
+  args: {},
+  handler: async (ctx) => {
+    const { userId } = await requireAuth(ctx);
+    return await ctx.db
+      .query("templates")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect();
+  },
+});
+
+/**
+ * Authenticated query: Returns the current user's linked representatives.
+ */
+export const getMyRepresentatives = query({
+  args: {},
+  handler: async (ctx) => {
+    const { userId } = await requireAuth(ctx);
+    const relations = await ctx.db
+      .query("userDmRelations")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect();
+    if (relations.length === 0) return [];
+    const reps = await Promise.all(
+      relations.map((r) => ctx.db.get(r.decisionMakerId))
+    );
+    return reps.filter(Boolean);
+  },
+});
+
+/**
  * Update user profile fields.
  * Sets updatedAt, and profileCompletedAt if all profile fields are present.
  */
