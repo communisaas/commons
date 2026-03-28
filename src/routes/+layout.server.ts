@@ -34,11 +34,9 @@ export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
 	}
 
 	if (convexProfile) {
-		// Delete recovery seed once encrypted blobs are stored
-		if (seedCookie && convexProfile.encryptedEmail) {
-			cookies.delete('oauth_pii_seed', { path: '/' });
-			oauthPiiSeed = null;
-		}
+		// Don't delete the seed here — let the client consume it.
+		// The cookie has a 5-minute TTL and expires naturally.
+		// Deleting based on DB state breaks device recovery (old blobs from previous key).
 
 		return {
 			user: {
