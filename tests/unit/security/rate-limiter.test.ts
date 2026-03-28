@@ -555,11 +555,9 @@ describe('findRateLimitConfig', () => {
 		expect(config!.pattern).toBe('/api/email/');
 	});
 
-	it('should find config for shadow-atlas cell-proof with includeGet', () => {
+	it('should not find config for removed shadow-atlas cell-proof endpoint', () => {
 		const config = findRateLimitConfig('/api/shadow-atlas/cell-proof');
-		expect(config).toBeDefined();
-		expect(config!.includeGet).toBe(true);
-		expect(config!.keyStrategy).toBe('user');
+		expect(config).toBeUndefined();
 	});
 });
 
