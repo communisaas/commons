@@ -24,6 +24,20 @@ import {
 	calculateExpirationDate,
 	type SessionCredential
 } from './session-credentials';
+import { BN254_MODULUS } from '$lib/core/crypto/bn254';
+
+// ============================================================================
+// BN254 Validation (browser-safe — cannot import from server-only client.ts)
+// ============================================================================
+
+function isValidBN254Hex(value: string): boolean {
+	if (typeof value !== 'string' || !/^0x[0-9a-fA-F]+$/.test(value)) return false;
+	try { return BigInt(value) < BN254_MODULUS; } catch { return false; }
+}
+
+function isValidBN254HexArray(values: string[]): boolean {
+	return Array.isArray(values) && values.every(isValidBN254Hex);
+}
 
 // ============================================================================
 // Types
@@ -251,7 +265,20 @@ export async function registerThreeTree(
 		const tree2Data = request.tree2;
 
 		// Step 2b: Fetch Tree 3 engagement data (non-blocking — defaults to tier 0 on failure)
-		const engagementData = await fetchEngagementData(tree1Data.identityCommitment);
+		let engagementData = await fetchEngagementData(tree1Data.identityCommitment);
+
+		// Validate Tree 3 BN254 field elements (engagement data comes from untrusted proxy)
+		if (!isValidBN254Hex(engagementData.engagementRoot) || !isValidBN254HexArray(engagementData.engagementPath)) {
+			console.warn('[Shadow Atlas] Engagement data failed BN254 validation, using tier-0 defaults');
+			engagementData = {
+				engagementRoot: ZERO_HASH,
+				engagementPath: Array(DEFAULT_ENGAGEMENT_DEPTH).fill(ZERO_HASH),
+				engagementIndex: 0,
+				engagementTier: 0,
+				actionCount: '0',
+				diversityScore: '0',
+			};
+		}
 
 		// Step 3: Construct session credential with ALL three tree proofs
 		const now = new Date();
@@ -365,7 +392,20 @@ export async function recoverThreeTree(
 		const tree2Data = request.tree2;
 
 		// Step 2b: Fetch Tree 3 engagement data (non-blocking — defaults to tier 0 on failure)
-		const engagementData = await fetchEngagementData(tree1Data.identityCommitment);
+		let engagementData = await fetchEngagementData(tree1Data.identityCommitment);
+
+		// Validate Tree 3 BN254 field elements (engagement data comes from untrusted proxy)
+		if (!isValidBN254Hex(engagementData.engagementRoot) || !isValidBN254HexArray(engagementData.engagementPath)) {
+			console.warn('[Shadow Atlas] Engagement data failed BN254 validation, using tier-0 defaults');
+			engagementData = {
+				engagementRoot: ZERO_HASH,
+				engagementPath: Array(DEFAULT_ENGAGEMENT_DEPTH).fill(ZERO_HASH),
+				engagementIndex: 0,
+				engagementTier: 0,
+				actionCount: '0',
+				diversityScore: '0',
+			};
+		}
 
 		// Step 3: Construct session credential with ALL three tree proofs
 		const now = new Date();
@@ -399,6 +439,8 @@ export async function recoverThreeTree(
 			registrationSalt: request.registrationSalt,
 
 			verificationMethod: request.verificationMethod,
+			// Server-derived authority level (from trustTier via getIdentityForAtlas)
+			authorityLevel: tree1Data.authorityLevel as 1 | 2 | 3 | 4 | 5 | undefined,
 			// W40-010: Thread receipt from recovery path
 			receipt: tree1Data.receipt,
 			createdAt: now,
