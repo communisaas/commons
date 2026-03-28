@@ -12,7 +12,7 @@
  * This module has NO server-only imports ($env/dynamic/private).
  */
 
-import { validateBN254Hex, validateBN254HexArray } from './client';
+import { validateBN254Hex, validateBN254HexArray, clearCachedTree } from './client';
 
 // ============================================================================
 // Configuration
@@ -624,6 +624,20 @@ export async function getCellChunkByParent(
 			validateBN254Hex(entry.c, `cells[${cellKey}].c`);
 			validateBN254HexArray(entry.d, `cells[${cellKey}].d`);
 			validateBN254HexArray(entry.p, `cells[${cellKey}].p`);
+
+			// Structural validation: catch malformed gateway responses at fetch boundary
+			if (entry.d.length !== 24) {
+				throw new Error(`cells[${cellKey}].d has ${entry.d.length} slots, expected 24`);
+			}
+			if (entry.p.length !== chunk.depth) {
+				throw new Error(`cells[${cellKey}].p has ${entry.p.length} siblings, expected ${chunk.depth}`);
+			}
+			if (entry.b.length !== chunk.depth) {
+				throw new Error(`cells[${cellKey}].b has ${entry.b.length} bits, expected ${chunk.depth}`);
+			}
+			if (!entry.b.every((bit) => bit === 0 || bit === 1)) {
+				throw new Error(`cells[${cellKey}].b contains non-binary values`);
+			}
 		}
 
 		cellChunkCache.set(cacheKey, chunk);
@@ -665,6 +679,7 @@ export async function clearCache(): Promise<void> {
 	cellChunkCache.clear();
 	districtIndexCache.clear();
 	manifestCacheMap.clear();
+	clearCachedTree();
 }
 
 /**

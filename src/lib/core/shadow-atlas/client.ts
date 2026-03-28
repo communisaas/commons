@@ -635,8 +635,18 @@ export interface CellProofResult {
 /**
  * Deserialized cell tree snapshot — cached per session.
  * Survives page navigations in SPA. Cleared on tab close/reload.
+ * Cleared by clearCachedTree() during quarterly CID rotation.
  */
 let cachedTree: CellTreeSnapshot | null = null;
+
+/**
+ * Clear the cached cell tree snapshot.
+ * Called from ipfs-store.ts clearCache() to ensure quarterly CID rotation
+ * doesn't leave a stale snapshot in memory.
+ */
+export function clearCachedTree(): void {
+	cachedTree = null;
+}
 
 /**
  * Get the Tree 2 SMT proof for a cell_id.
