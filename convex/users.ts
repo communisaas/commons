@@ -103,8 +103,8 @@ export const getProfile = query({
       // Fall through
     }
 
-    if (!email) email = user.email ?? null;
-    if (!name) name = user.name ?? null;
+    // No plaintext fallback — if server decryption fails, return null.
+    // Legacy plaintext columns are cleared on client custody transition.
 
     return {
       _id: user._id,

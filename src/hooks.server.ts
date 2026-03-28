@@ -97,22 +97,30 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			serverMutation(api.authOps.renewSession, { sessionId }).catch(() => {});
 		}
 
-		// Decrypt PII from encrypted fields
-		let pii: { email: string; name: string | null };
-		try {
-			pii = await decryptUserPii({
-				id: user._id as string,
-				encrypted_email: user.encryptedEmail,
-				encrypted_name: user.encryptedName ?? null,
-				email: user.email ?? null,
-				name: user.name ?? null,
-			});
-		} catch (err) {
-			console.error('[Auth] PII decryption failed — session preserved with masked PII:', {
-				userId: user._id,
-				error: err instanceof Error ? err.message : String(err)
-			});
-			pii = { email: `user-${(user._id as string).slice(0, 8)}@encrypted.local`, name: null };
+		// PII decryption: skip entirely for client-custody users (client decrypts locally)
+		let pii: { email: string | null; name: string | null };
+		const custodyMode = user.custodyMode ?? 'server';
+
+		if (custodyMode === 'client') {
+			// Client holds the key — server has no standing decrypt capability
+			pii = { email: null, name: null };
+		} else {
+			// Server custody (migration period) — decrypt server-side
+			try {
+				pii = await decryptUserPii({
+					id: user._id as string,
+					encrypted_email: user.encryptedEmail,
+					encrypted_name: user.encryptedName ?? null,
+					email: user.email ?? null,
+					name: user.name ?? null,
+				});
+			} catch (err) {
+				console.error('[Auth] PII decryption failed — session preserved with masked PII:', {
+					userId: user._id,
+					error: err instanceof Error ? err.message : String(err)
+				});
+				pii = { email: null, name: null };
+			}
 		}
 
 		event.locals.user = {
@@ -120,6 +128,9 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			email: pii.email,
 			name: pii.name,
 			avatar: user.avatar ?? null,
+			// PII custody
+			custody_mode: custodyMode,
+			email_hash: user.emailHash ?? null,
 			// Verification status
 			is_verified: user.isVerified,
 			verification_method: user.verificationMethod ?? null,

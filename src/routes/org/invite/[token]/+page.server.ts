@@ -48,8 +48,10 @@ export const actions: Actions = {
 			throw error(400, 'This invite is no longer valid');
 		}
 
-		// Hash-based email comparison
-		const emailHash = await computeEmailHash(locals.user.email);
+		// Hash-based email comparison — use stored hash (works for both custody modes)
+		const emailHash = locals.user.email
+			? await computeEmailHash(locals.user.email)
+			: locals.user.email_hash ?? null;
 		const emailMatches = !!(invite.emailHash && emailHash && invite.emailHash === emailHash);
 		if (!emailMatches) {
 			throw error(403, 'This invite was sent to a different email address');
