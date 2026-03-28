@@ -36,6 +36,7 @@ let lastUserId: string | null = null;
  * Call this reactively from the root layout's $effect.
  */
 export function syncDecryptedUser(user: LayoutUser | null): void {
+	console.log('[decryptedUser] called, user:', user ? user.id : 'NULL');
 	if (!user) {
 		state.email = null;
 		state.name = null;
