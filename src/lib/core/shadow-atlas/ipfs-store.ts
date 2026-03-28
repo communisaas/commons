@@ -12,6 +12,8 @@
  * This module has NO server-only imports ($env/dynamic/private).
  */
 
+import { validateBN254Hex, validateBN254HexArray } from './client';
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -57,6 +59,26 @@ export const IPFS_CIDS = {
 export function setCIDs(cids: Partial<Record<keyof typeof IPFS_CIDS, string>>): void {
 	if (cids.root) (IPFS_CIDS as Record<string, string>).root = cids.root;
 	if (cids.merkleSnapshot) (IPFS_CIDS as Record<string, string>).merkleSnapshot = cids.merkleSnapshot;
+}
+
+// ============================================================================
+// Path Sanitization
+// ============================================================================
+
+/**
+ * Validate and return an IPFS path segment (country code, parentKey, districtCode, etc.).
+ * Rejects traversal attacks and empty strings.
+ *
+ * @throws {Error} if segment contains `..`, `/`, `\`, or is empty
+ */
+export function sanitizePathSegment(s: string): string {
+	if (!s || typeof s !== 'string') {
+		throw new Error('IPFS path segment must be a non-empty string');
+	}
+	if (s.includes('..') || s.includes('/') || s.includes('\\')) {
+		throw new Error(`IPFS path segment contains illegal characters: "${s}"`);
+	}
+	return s;
 }
 
 // ============================================================================
@@ -443,10 +465,11 @@ export function isChunkedMode(): boolean {
  * Cached in memory — refreshed when root CID changes or TTL expires.
  */
 export async function getManifest(country = 'US'): Promise<ChunkManifest> {
+	const safeCountry = sanitizePathSegment(country);
 	const rootCid = IPFS_CIDS.root;
 	if (!rootCid) throw new Error('Root CID not configured — chunked mode not available');
 
-	const cached = manifestCacheMap.get(country);
+	const cached = manifestCacheMap.get(safeCountry);
 	if (
 		cached &&
 		cached.rootCid === rootCid &&
@@ -455,8 +478,8 @@ export async function getManifest(country = 'US'): Promise<ChunkManifest> {
 		return cached.data;
 	}
 
-	const data = await fetchFromRootCID<ChunkManifest>(`${country}/manifest.json`);
-	manifestCacheMap.set(country, { rootCid, data, fetchedAt: Date.now() });
+	const data = await fetchFromRootCID<ChunkManifest>(`${safeCountry}/manifest.json`);
+	manifestCacheMap.set(safeCountry, { rootCid, data, fetchedAt: Date.now() });
 	return data;
 }
 
@@ -475,12 +498,14 @@ export async function getChunkForCell(
 	cellIndex: string,
 	country = 'US',
 ): Promise<(string | null)[] | null> {
+	const safeCountry = sanitizePathSegment(country);
+
 	// Dynamic import keeps h3-js out of this module's static dependency graph.
 	// client.ts imports h3-js directly; ipfs-store stays lean.
 	const { cellToParent } = await import('h3-js');
-	const parentCell = cellToParent(cellIndex, 3);
+	const parentCell = sanitizePathSegment(cellToParent(cellIndex, 3));
 
-	const cacheKey = `${country}/${parentCell}`;
+	const cacheKey = `${safeCountry}/${parentCell}`;
 	const cached = chunkCache.get(cacheKey);
 	if (cached) {
 		return cached.cells[cellIndex] ?? null;
@@ -488,7 +513,7 @@ export async function getChunkForCell(
 
 	try {
 		const chunk = await fetchFromRootCID<ChunkFile>(
-			`${country}/districts/${parentCell}.json`,
+			`${safeCountry}/districts/${parentCell}.json`,
 		);
 		chunkCache.set(cacheKey, chunk);
 		return chunk.cells[cellIndex] ?? null;
@@ -510,13 +535,16 @@ export async function getOfficialsForDistrict(
 	districtCode: string,
 	country = 'US',
 ): Promise<OfficialsFileIPFS | null> {
-	const cacheKey = `${country}/${districtCode}`;
+	const safeCountry = sanitizePathSegment(country);
+	const safeDistrict = sanitizePathSegment(districtCode);
+
+	const cacheKey = `${safeCountry}/${safeDistrict}`;
 	const cached = officialsFileCache.get(cacheKey);
 	if (cached) return cached;
 
 	try {
 		const data = await fetchFromRootCID<OfficialsFileIPFS>(
-			`${country}/officials/${districtCode}.json`,
+			`${safeCountry}/officials/${safeDistrict}.json`,
 		);
 		officialsFileCache.set(cacheKey, data);
 		return data;
@@ -541,14 +569,15 @@ export async function getOfficialsForDistrict(
  */
 export async function getDistrictIndex(country = 'US'): Promise<DistrictIndex | null> {
 	if (!IPFS_CIDS.root) return null;
+	const safeCountry = sanitizePathSegment(country);
 
-	const cacheKey = `district-index:${country}`;
+	const cacheKey = `district-index:${safeCountry}`;
 	const cached = districtIndexCache.get(cacheKey);
 	if (cached) return cached;
 
 	try {
 		const index = await fetchFromRootCID<DistrictIndex>(
-			`${country}/district-index.json`,
+			`${safeCountry}/district-index.json`,
 		);
 		districtIndexCache.set(cacheKey, index);
 		return index;
@@ -573,15 +602,28 @@ export async function getCellChunkByParent(
 	country = 'US',
 ): Promise<CellChunkFile | null> {
 	if (!IPFS_CIDS.root) return null;
+	const safeCountry = sanitizePathSegment(country);
+	const safeParent = sanitizePathSegment(parentKey);
 
-	const cacheKey = `cell:${country}/${parentKey}`;
+	const cacheKey = `cell:${safeCountry}/${safeParent}`;
 	const cached = cellChunkCache.get(cacheKey);
 	if (cached) return cached;
 
 	try {
 		const chunk = await fetchFromRootCID<CellChunkFile>(
-			`${country}/cells/${parentKey}.json`,
+			`${safeCountry}/cells/${safeParent}.json`,
 		);
+
+		// BR5-009: Validate all BN254 field elements before caching.
+		// A compromised IPFS gateway could serve values >= BN254_MODULUS,
+		// causing circuit failures or field aliasing attacks.
+		validateBN254Hex(chunk.cellMapRoot, 'cellMapRoot');
+		for (const [cellKey, entry] of Object.entries(chunk.cells)) {
+			validateBN254Hex(entry.c, `cells[${cellKey}].c`);
+			validateBN254HexArray(entry.d, `cells[${cellKey}].d`);
+			validateBN254HexArray(entry.p, `cells[${cellKey}].p`);
+		}
+
 		cellChunkCache.set(cacheKey, chunk);
 		return chunk;
 	} catch (err) {

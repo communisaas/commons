@@ -61,50 +61,6 @@ export async function getOfficialsFromBrowser(
 	return getOfficialsForDistrict(districtCode);
 }
 
-/**
- * Compute a district commitment from the 24 jurisdiction slots.
- * Uses Poseidon2 sponge hash if available, falls back to SHA-256.
- *
- * This is the privacy-preserving commitment that replaces sending
- * plaintext district codes to the server.
- */
-export async function computeDistrictCommitment(
-	slots: CellDistricts,
-): Promise<{ commitment: string; slotCount: number }> {
-	// Count non-empty slots
-	const slotCount = slots.slots.filter(s => s !== '' && s !== null && s !== undefined).length;
-
-	// Pad/truncate to exactly 24 elements for the sponge
-	const padded: (string | null)[] = [...slots.slots];
-	while (padded.length < 24) padded.push(null);
-
-	// Try Poseidon2 sponge (crypto module — requires WASM, browser-only)
-	try {
-		const { poseidon2Sponge24 } = await import('../crypto/poseidon');
-		// BN254 scalar field order
-		const BN254_ORDER = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-		// Convert district strings to hex field elements
-		const hexInputs = padded.slice(0, 24).map(s => {
-			if (!s) return '0x' + '0'.repeat(64);
-			const bytes = new TextEncoder().encode(s);
-			let val = 0n;
-			for (const b of bytes) val = (val << 8n) | BigInt(b);
-			val = val % BN254_ORDER;
-			return '0x' + val.toString(16).padStart(64, '0');
-		});
-		const commitment = await poseidon2Sponge24(hexInputs);
-		return { commitment, slotCount };
-	} catch {
-		// Fallback: SHA-256 of concatenated slots
-		const data = new TextEncoder().encode(slots.slots.join('|'));
-		const hash = await crypto.subtle.digest('SHA-256', data);
-		const hex = Array.from(new Uint8Array(hash))
-			.map(b => b.toString(16).padStart(2, '0'))
-			.join('');
-		return { commitment: hex, slotCount };
-	}
-}
-
 // ============================================================================
 // Client-Side Tree 2 Proof (Zero Server Leaks)
 // ============================================================================

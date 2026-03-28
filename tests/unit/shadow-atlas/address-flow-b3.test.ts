@@ -5,7 +5,6 @@
  * SHADOW_ATLAS_VERIFICATION is enabled:
  * - lookupDistrictsFromBrowser → district slots from IPFS
  * - convertDistrictId → substrate FIPS → display format
- * - computeDistrictCommitment → privacy-preserving commitment
  * - getOfficialsFromBrowser → officials for UI display
  *
  * Also verifies the feature flag gating in features.ts.
@@ -32,7 +31,7 @@ describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 	});
 
 	describe('end-to-end client-side resolution flow', () => {
-		it('resolves lat/lng → districts → commitment → officials (simulating component flow)', async () => {
+		it('resolves lat/lng → districts → officials (simulating component flow)', async () => {
 			const mockSlots = ['cd-0612', 'CA', null, null, ...Array(20).fill(null)];
 			const mockOfficials = {
 				version: 1,
@@ -64,11 +63,7 @@ describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 			vi.doMock('h3-js', () => ({
 				latLngToCell: vi.fn().mockReturnValue('872830828ffffff'),
 			}));
-			vi.doMock('$lib/core/crypto/poseidon', () => {
-				throw new Error('WASM not available');
-			});
-
-			const { lookupDistrictsFromBrowser, getOfficialsFromBrowser, computeDistrictCommitment } =
+			const { lookupDistrictsFromBrowser, getOfficialsFromBrowser } =
 				await import('$lib/core/shadow-atlas/browser-client');
 			const { convertDistrictId } = await import('$lib/core/shadow-atlas/district-format');
 
@@ -81,12 +76,7 @@ describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 			const districtCode = convertDistrictId(cellDistricts!.slots[0]!);
 			expect(districtCode).toBe('CA-12');
 
-			// Step 3: Compute commitment (component sends this to server)
-			const commitment = await computeDistrictCommitment(cellDistricts!);
-			expect(commitment.commitment).toHaveLength(64);
-			expect(commitment.slotCount).toBe(2);
-
-			// Step 4: Fetch officials for UI (component displays these)
+			// Step 3: Fetch officials for UI (component displays these)
 			const officials = await getOfficialsFromBrowser(districtCode);
 			expect(officials).not.toBeNull();
 			expect(officials!.officials).toHaveLength(1);
@@ -131,28 +121,4 @@ describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 		});
 	});
 
-	describe('commitment submission shape', () => {
-		it('commitment matches verify-address validation (64-char hex)', async () => {
-			vi.doMock('$lib/core/crypto/poseidon', () => {
-				throw new Error('WASM not available');
-			});
-			vi.doMock('$lib/core/shadow-atlas/ipfs-store', () => ({
-				isIPFSConfigured: () => false,
-				getChunkForCell: vi.fn(),
-				getOfficialsForDistrict: vi.fn(),
-				setCIDs: vi.fn(),
-			}));
-
-			const { computeDistrictCommitment } =
-				await import('$lib/core/shadow-atlas/browser-client');
-
-			const slots = { slots: ['CA-12', 'CA', null, ...Array(21).fill(null)] };
-			const result = await computeDistrictCommitment(slots);
-
-			// verify-address validates: /^(0x)?[0-9a-fA-F]{64}$/
-			expect(result.commitment).toMatch(/^[0-9a-f]{64}$/);
-			expect(result.slotCount).toBeGreaterThanOrEqual(1);
-			expect(result.slotCount).toBeLessThanOrEqual(24);
-		});
-	});
 });

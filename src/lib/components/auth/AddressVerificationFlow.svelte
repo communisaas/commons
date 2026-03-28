@@ -24,7 +24,6 @@
 	import {
 		lookupDistrictsFromBrowser,
 		getOfficialsFromBrowser,
-		computeDistrictCommitment
 	} from '$lib/core/shadow-atlas/browser-client';
 	import { convertDistrictId } from '$lib/core/shadow-atlas/district-format';
 	import MapPinSelector from './MapPinSelector.svelte';
@@ -69,10 +68,8 @@
 	// Which verification path was chosen
 	let verificationMethod: 'browser' | 'address' = $state('browser');
 
-	// B-3: Client-side district commitment (when SHADOW_ATLAS_VERIFICATION enabled)
+	// B-3: Client-side district resolution (when SHADOW_ATLAS_VERIFICATION enabled)
 	const clientSideEnabled = FEATURES.SHADOW_ATLAS_VERIFICATION;
-	let districtCommitment: string = $state('');
-	let districtSlotCount: number = $state(0);
 
 	// Derived: form validation
 	let isFormValid: boolean = $derived(
@@ -120,11 +117,6 @@
 			// Slot 0 = congressional district (substrate FIPS format → display format)
 			const rawDistrict = cellDistricts.slots[0];
 			verifiedDistrict = convertDistrictId(rawDistrict);
-
-			// Compute commitment for privacy-preserving server submission
-			const commitResult = await computeDistrictCommitment(cellDistricts);
-			districtCommitment = commitResult.commitment;
-			districtSlotCount = commitResult.slotCount;
 
 			// Fetch officials from IPFS for UI display
 			const officials = await getOfficialsFromBrowser(verifiedDistrict);
@@ -290,11 +282,6 @@
 					state_assembly_district: verifiedStateAssembly || undefined,
 					verification_method: 'civic_api',
 					officials: representatives,
-					// B-3: Include client-computed commitment when available
-					...(districtCommitment ? {
-						district_commitment: districtCommitment,
-						slot_count: districtSlotCount
-					} : {})
 				})
 			});
 
