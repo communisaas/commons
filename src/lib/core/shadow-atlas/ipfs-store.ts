@@ -19,13 +19,12 @@
 /** Local IPFS gateway for development (Docker commons-ipfs container) */
 const LOCAL_IPFS_GATEWAY = 'http://localhost:8080/ipfs';
 
-/** Primary IPFS gateway (Cloudflare — no rate limits, global CDN) */
-const IPFS_GATEWAY = 'https://cloudflare-ipfs.com/ipfs';
+/** Primary IPFS gateway (Storacha — our pinning provider) */
+const IPFS_GATEWAY = 'https://storacha.link/ipfs';
 
-/** Fallback gateways (tried in order if primary fails) */
+/** Fallback gateway (w3s.link is Storacha's CDN alias) */
 const FALLBACK_GATEWAYS = [
-	'https://dweb.link/ipfs',
-	'https://storacha.link/ipfs',
+	'https://w3s.link/ipfs',
 ];
 
 /** Cache TTL: 7 days (quarterly updates with comfortable margin) */

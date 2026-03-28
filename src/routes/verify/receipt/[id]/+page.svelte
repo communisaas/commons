@@ -259,7 +259,7 @@
 			<div class="mt-3">
 				<p class="mb-1 text-xs text-slate-400">IPFS Anchor</p>
 				<a
-					href="https://dweb.link/ipfs/{r.anchorCid}"
+					href="https://storacha.link/ipfs/{r.anchorCid}"
 					target="_blank"
 					rel="noopener noreferrer"
 					class="inline-flex items-center gap-1 font-mono text-xs text-blue-600 hover:text-blue-800"
