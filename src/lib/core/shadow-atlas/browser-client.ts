@@ -186,6 +186,10 @@ async function findCellForDistrict(
 
 /**
  * Find cell by exact H3 location.
+ *
+ * Cell chunks are keyed by cellId (GEOID string). The optional `h3Index`
+ * field provides O(1) H3 res-7 → cellId reverse lookup. Falls back to
+ * direct key lookup for backwards compatibility with H3-keyed chunks.
  */
 async function findCellByLocation(
 	lat: number,
@@ -198,7 +202,19 @@ async function findCellByLocation(
 	const chunk = await getCellChunkByParent(parentKey, country);
 	if (!chunk) return null;
 
-	const entry = chunk.cells[h3Cell];
+	// Try h3Index reverse lookup (cellId-keyed chunks)
+	const h3Idx = (chunk as { h3Index?: Record<string, string> }).h3Index;
+	let entry: CellEntry | undefined;
+	if (h3Idx) {
+		const cellKey = h3Idx[h3Cell];
+		if (cellKey) entry = chunk.cells[cellKey];
+	}
+
+	// Fall back to direct key lookup (backwards compat with H3-keyed chunks)
+	if (!entry) {
+		entry = chunk.cells[h3Cell];
+	}
+
 	if (!entry) {
 		console.warn(`[browser-client] H3 cell ${h3Cell} not found in chunk ${parentKey}`);
 		return null;

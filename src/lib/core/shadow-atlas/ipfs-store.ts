@@ -197,11 +197,13 @@ export interface CellChunkFile {
 	generated: string;
 	cells: Record<string, CellEntry>;
 	cellCount: number;
+	/** Optional H3 res-7 → cellId reverse index for lat/lng lookups */
+	h3Index?: Record<string, string>;
 }
 
 /**
  * Per-cell entry: circuit-ready districts + SMT proof.
- * Keyed by H3 cell index (what the browser knows from latLngToCell).
+ * Keyed by cellId (GEOID string). H3 → cellId reverse lookup via h3Index.
  * Single-letter keys minimize JSON size on IPFS.
  */
 export interface CellEntry {
