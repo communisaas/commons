@@ -54,43 +54,51 @@
 		data: LayoutData;
 	} = $props();
 
-	console.log('[LAYOUT] component setup, data.user:', data.user ? 'present' : 'null');
+	// Decrypted PII — local reactive state, triggers re-render in child components
+	let piiEmail: string | null = $state(null);
+	let piiName: string | null = $state(null);
 
-	// Hydrate wallet state from server-provided user data.
+	// Reactive user object with decrypted PII overlaid
+	const user = $derived(data.user ? {
+		...(data.user as Record<string, unknown>),
+		email: piiEmail ?? (data.user as Record<string, unknown>).email,
+		name: piiName ?? (data.user as Record<string, unknown>).name,
+	} : null);
+
+	// Hydrate wallet state
 	$effect(() => {
-		console.log('[LAYOUT] wallet effect fired');
 		walletState.initFromPageData(data.user as PageUser | null);
 	});
 
 	// ── Decrypt PII from client-custodied blobs ──
 	$effect(() => {
-		const user = data.user as Record<string, unknown> | null;
-		if (!browser || !user?.id || !user.encryptedEmail) return;
+		const u = data.user as Record<string, unknown> | null;
+		if (!browser || !u?.id || !u.encryptedEmail) return;
 
 		(async () => {
 			const { decryptUserPiiClient, isClientPiiAvailable } = await import('$lib/core/crypto/client-pii');
 			if (!isClientPiiAvailable()) return;
 
 			const { email, name } = await decryptUserPiiClient(
-				user.encryptedEmail as string,
-				user.encryptedName as string | null,
-				user.id as string
+				u.encryptedEmail as string,
+				u.encryptedName as string | null,
+				u.id as string
 			);
 
-			if (email) (data.user as Record<string, unknown>).email = email;
-			if (name) (data.user as Record<string, unknown>).name = name;
+			if (email) piiEmail = email;
+			if (name) piiName = name;
 		})().catch(() => {});
 	});
 
 	// ── Client-side PII custody: encrypt from OAuth seed on login/device recovery ──
 	$effect(() => {
-		const user = data.user as Record<string, unknown> | null;
-		if (!browser || !user?.id) return;
+		const authUser = data.user as Record<string, unknown> | null;
+		if (!browser || !authUser?.id) return;
 
-		const oauthSeed = user.oauthPiiSeed as { email: string; name: string | null } | null;
+		const oauthSeed = authUser.oauthPiiSeed as { email: string; name: string | null } | null;
 		if (!oauthSeed?.email) return; // no seed = no work (already encrypted or no PII)
 
-		const userId = user.id as string;
+		const userId = authUser.id as string;
 
 		let cancelled = false;
 		(async () => {
@@ -179,7 +187,7 @@
 	{#if !isOrgPage}
 		<!-- HeaderSystem handles context-aware header rendering -->
 		<!-- HeaderTemplate is a structural subset of Template — handler only reads common fields at runtime -->
-		<HeaderSystem user={data.user as HeaderUser | null} template={(data as Record<string, unknown>).template as HeaderTemplate | null} onTemplateUse={handleTemplateUse} />
+		<HeaderSystem user={user as HeaderUser | null} template={(data as Record<string, unknown>).template as HeaderTemplate | null} onTemplateUse={handleTemplateUse} />
 
 		<!-- Credential expiry nudge: fixed banner below header, shows when credential nears expiration -->
 		<CredentialExpiryNudge

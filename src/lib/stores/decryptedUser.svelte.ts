@@ -96,4 +96,8 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 	});
 }
 
-export const decryptedUser = state;
+export const decryptedUser = {
+	get email() { return state.email; },
+	get name() { return state.name; },
+	get decrypting() { return state.decrypting; },
+};
