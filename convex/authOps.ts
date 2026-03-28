@@ -218,9 +218,9 @@ export const createSession = mutation({
       throw new Error("Invalid session creation proof");
     }
 
-    // Validate expiresAt is within 90 days
-    const maxExpiry = Date.now() + 90 * 24 * 60 * 60 * 1000;
-    if (args.expiresAt > maxExpiry || args.expiresAt < Date.now()) {
+    // Validate expiresAt is reasonable (within 95 days — buffer for cross-server clock skew)
+    const maxExpiry = Date.now() + 95 * 24 * 60 * 60 * 1000;
+    if (args.expiresAt > maxExpiry || args.expiresAt < Date.now() - 60000) {
       throw new Error("Invalid session expiry");
     }
 
