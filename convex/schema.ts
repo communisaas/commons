@@ -87,6 +87,8 @@ export default defineSchema({
     encryptedName: v.optional(v.string()),
     emailHash: v.string(),
     encryptedProfile: v.optional(v.string()),
+    // PII custody mode: "server" (operator-held key) or "client" (user-held key in IndexedDB)
+    custodyMode: v.optional(v.string()),
 
     // NEAR account
     nearAccountId: v.optional(v.string()),

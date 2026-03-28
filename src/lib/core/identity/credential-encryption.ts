@@ -125,7 +125,7 @@ const derivedKeyCache = new Map<string, CryptoKey>();
  * Stored as raw bytes in IndexedDB. Unlike v1's CryptoKey, raw bytes can be
  * imported as HKDF key material for per-user derivation.
  */
-async function getOrCreateMasterBytes(): Promise<ArrayBuffer> {
+export async function getOrCreateMasterBytes(): Promise<ArrayBuffer> {
 	if (cachedMasterBytes) {
 		return cachedMasterBytes;
 	}

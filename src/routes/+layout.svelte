@@ -59,6 +59,53 @@
 		walletState.initFromPageData(data.user as PageUser | null);
 	});
 
+	// ── Decrypt PII from client-custodied blobs ──
+	import { syncDecryptedUser } from '$lib/stores/decryptedUser.svelte';
+	$effect(() => {
+		syncDecryptedUser(data.user as Parameters<typeof syncDecryptedUser>[0]);
+	});
+
+	// ── Client-side PII custody: encrypt on first login, re-encrypt on device recovery ──
+	$effect(() => {
+		const user = data.user as Record<string, unknown> | null;
+		if (!browser || !user?.id) return;
+
+		// Only act when custody hasn't been claimed by this device yet
+		const custodyMode = user.custodyMode ?? user.custody_mode;
+		if (custodyMode === 'client') return; // already encrypted with client key
+
+		// User has server-encrypted PII (or fresh OAuth) — transition to client custody
+		const email = user.email as string | null;
+		const name = user.name as string | null;
+		const userId = user.id as string;
+		if (!email) return; // no PII to encrypt
+
+		let cancelled = false;
+		(async () => {
+			const { isClientPiiAvailable, encryptUserPiiClient } = await import('$lib/core/crypto/client-pii');
+			if (cancelled || !isClientPiiAvailable()) return;
+
+			const encrypted = await encryptUserPiiClient(email, name, userId);
+
+			// Upload encrypted blobs via client-side Convex mutation
+			const { getConvexClient } = await import('convex-sveltekit');
+			const { api } = await import('$lib/convex');
+			const client = getConvexClient();
+			await client.mutation(api.users.storeClientEncryptedPii, {
+				encryptedEmail: encrypted.encryptedEmail,
+				encryptedName: encrypted.encryptedName ?? undefined,
+			});
+
+			// Force SvelteKit to re-fetch layout data so custodyMode updates
+			const { invalidate } = await import('$app/navigation');
+			invalidate('data:user');
+		})().catch((err) => {
+			console.error('[PII Custody] Client-side encryption failed:', err);
+		});
+
+		return () => { cancelled = true; };
+	});
+
 	// ── Session credential for CredentialExpiryNudge (async, client-only) ──
 	let layoutCredential: SessionCredentialForPolicy | null = $state(null);
 

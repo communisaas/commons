@@ -45,7 +45,43 @@ export const getProfile = query({
       throw new Error("User not found");
     }
 
-    // Decrypt PII — fail gracefully (session is still valid)
+    const custodyMode = user.custodyMode ?? "server";
+
+    // Shared non-PII fields
+    const base = {
+      avatar: user.avatar ?? null,
+      trustTier: user.trustTier,
+      isVerified: user.isVerified,
+      verificationMethod: user.verificationMethod ?? null,
+      verifiedAt: user.verifiedAt ?? null,
+      hasPasskey: Boolean(user.passkeyCredentialId),
+      districtHash: user.districtHash ?? null,
+      districtVerified: user.districtVerified,
+      hasWallet: Boolean(user.walletAddress),
+      trustScore: user.trustScore,
+      reputationTier: user.reputationTier,
+      role: user.role ?? null,
+      organization: user.organization ?? null,
+      location: user.location ?? null,
+      connection: user.connection ?? null,
+      profileVisibility: user.profileVisibility,
+      profileCompletedAt: user.profileCompletedAt ?? null,
+    };
+
+    if (custodyMode === "client") {
+      // Client custody: return encrypted blobs — client decrypts locally
+      return {
+        _id: user._id,
+        email: null,
+        name: null,
+        encryptedEmail: user.encryptedEmail,
+        encryptedName: user.encryptedName ?? null,
+        custodyMode: "client" as const,
+        ...base,
+      };
+    }
+
+    // Server custody: decrypt server-side
     let email: string | null = null;
     let name: string | null = null;
 
@@ -55,7 +91,7 @@ export const getProfile = query({
         : null;
       email = await tryDecryptPii(encEmail, user._id, "email");
     } catch {
-      // Fall through — email stays null
+      // Fall through
     }
 
     try {
@@ -64,10 +100,9 @@ export const getProfile = query({
         : null;
       name = await tryDecryptPii(encName, user._id, "name");
     } catch {
-      // Fall through — name stays null
+      // Fall through
     }
 
-    // Fallback to legacy plaintext fields
     if (!email) email = user.email ?? null;
     if (!name) name = user.name ?? null;
 
@@ -75,36 +110,32 @@ export const getProfile = query({
       _id: user._id,
       email,
       name,
-      avatar: user.avatar ?? null,
-
-      // Trust & verification
-      trustTier: user.trustTier,
-      isVerified: user.isVerified,
-      verificationMethod: user.verificationMethod ?? null,
-      verifiedAt: user.verifiedAt ?? null,
-
-      // Passkey (boolean only — credential ID is PII)
-      hasPasskey: Boolean(user.passkeyCredentialId),
-
-      // District
-      districtHash: user.districtHash ?? null,
-      districtVerified: user.districtVerified,
-
-      // Wallet (boolean only — address is PII)
-      hasWallet: Boolean(user.walletAddress),
-
-      // Reputation
-      trustScore: user.trustScore,
-      reputationTier: user.reputationTier,
-
-      // Profile
-      role: user.role ?? null,
-      organization: user.organization ?? null,
-      location: user.location ?? null,
-      connection: user.connection ?? null,
-      profileVisibility: user.profileVisibility,
-      profileCompletedAt: user.profileCompletedAt ?? null,
+      encryptedEmail: null,
+      encryptedName: null,
+      custodyMode: "server" as const,
+      ...base,
     };
+  },
+});
+
+/**
+ * Store client-encrypted PII blobs, transitioning custody to the user's device.
+ * The server never sees plaintext — it receives opaque AES-256-GCM ciphertext
+ * encrypted with HKDF(userSecret, "commons-pii-v1", userId).
+ */
+export const storeClientEncryptedPii = mutation({
+  args: {
+    encryptedEmail: v.string(),
+    encryptedName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { userId } = await requireAuth(ctx);
+    await ctx.db.patch(userId, {
+      encryptedEmail: args.encryptedEmail,
+      encryptedName: args.encryptedName,
+      custodyMode: "client",
+      updatedAt: Date.now(),
+    });
   },
 });
 

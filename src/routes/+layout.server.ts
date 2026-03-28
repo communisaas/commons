@@ -38,7 +38,11 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				district_verified: convexProfile.districtVerified,
 				hasWallet: convexProfile.hasWallet,
 				hasDistrictCredential: Boolean(convexProfile.districtVerified),
-				orgMemberships: convexMemberships ?? []
+				orgMemberships: convexMemberships ?? [],
+				// Client-side PII custody fields — client decrypts locally
+				custodyMode: convexProfile.custodyMode ?? 'server',
+				encryptedEmail: convexProfile.encryptedEmail ?? null,
+				encryptedName: convexProfile.encryptedName ?? null,
 			}
 		};
 	}
