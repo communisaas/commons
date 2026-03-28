@@ -184,7 +184,6 @@
 					<IdentityVerificationFlow
 						{userId}
 						{templateSlug}
-						{cellId}
 						skipValueProp={true}
 						oncomplete={handleVerificationComplete}
 						oncancel={handleCancel}

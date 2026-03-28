@@ -169,7 +169,7 @@ async function findCellForDistrict(
 
 	// Find a cell with matching district in the specified slot
 	for (const entry of Object.values(chunk.cells)) {
-		if (entry.d[slot] === districtHex) {
+		if (entry.d[slot].toLowerCase() === districtHex.toLowerCase()) {
 			return {
 				cellMapRoot: chunk.cellMapRoot,
 				cellId: entry.c,
@@ -283,7 +283,7 @@ export async function findDistrictHex(
 
 	// Search labels: fieldElementHex → raw GEOID string
 	for (const [hex, label] of Object.entries(index.labels)) {
-		if (label === geoid) {
+		if (label.toLowerCase() === geoid.toLowerCase()) {
 			// Verify this hex exists in the requested slot
 			const slotIndex = index.slots[String(slot)];
 			if (slotIndex && slotIndex[hex]) {

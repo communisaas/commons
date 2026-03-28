@@ -10,11 +10,6 @@
 		templateSlug?: string;
 		/** Skip value proposition (if already shown earlier in flow) */
 		skipValueProp?: boolean;
-		/**
-		 * Census Block GEOID (15-digit cell identifier) for three-tree ZK architecture
-		 * PRIVACY: Neighborhood-level precision (600-3000 people)
-		 */
-		cellId?: string;
 		oncomplete?: (data: {
 			verified: boolean;
 			method: string;
@@ -34,7 +29,7 @@
 		onback?: () => void;
 	}
 
-	let { userId, templateSlug, skipValueProp = false, cellId, oncomplete, oncancel, onback }: Props = $props();
+	let { userId, templateSlug, skipValueProp = false, oncomplete, oncancel, onback }: Props = $props();
 
 	type FlowStep = 'value-prop' | 'verify-mdl' | 'complete';
 
@@ -44,6 +39,7 @@
 	let registrationComplete = $state(false);
 	let registrationError = $state<string | null>(null);
 	let oncompletePending = $state(false);
+	let retryDisabled = $state(false);
 	let savedDistrict = $state<string | null>(null);
 	let verificationData = $state<{
 		verified: boolean;
@@ -364,8 +360,12 @@
 						{#if savedDistrict}
 							<button
 								type="button"
-								onclick={() => triggerShadowAtlasRegistration(savedDistrict!)}
-								disabled={registrationInProgress}
+								onclick={() => {
+									retryDisabled = true;
+									setTimeout(() => { retryDisabled = false; }, 3000);
+									triggerShadowAtlasRegistration(savedDistrict!);
+								}}
+								disabled={registrationInProgress || retryDisabled}
 								class="mt-2 rounded-md border border-amber-300 bg-amber-100 px-3 py-1.5 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-200 disabled:opacity-50"
 							>
 								{#if registrationInProgress}
