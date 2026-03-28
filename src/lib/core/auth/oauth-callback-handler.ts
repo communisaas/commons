@@ -310,10 +310,28 @@ export class OAuthCallbackHandler {
 
 		const cookieMaxAge = sessionDurationMs / 1000; // seconds
 
-		// Create session via Convex
+		// Create session via Convex (HMAC proof prevents arbitrary session forging)
+		const sessionSecret = process.env.SESSION_CREATION_SECRET;
+		if (!sessionSecret) {
+			throw new Error('SESSION_CREATION_SECRET not configured');
+		}
+		const encoder = new TextEncoder();
+		const hmacKey = await crypto.subtle.importKey(
+			'raw',
+			encoder.encode(sessionSecret),
+			{ name: 'HMAC', hash: 'SHA-256' },
+			false,
+			['sign']
+		);
+		const proofBytes = new Uint8Array(
+			await crypto.subtle.sign('HMAC', hmacKey, encoder.encode(userId))
+		);
+		const proof = Array.from(proofBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+
 		const session = await serverMutation(api.authOps.createSession, {
 			userId,
 			expiresAt: Date.now() + sessionDurationMs,
+			proof,
 		});
 
 		// Set session cookie

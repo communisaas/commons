@@ -133,6 +133,9 @@ export const storeClientEncryptedPii = mutation({
     await ctx.db.patch(userId, {
       encryptedEmail: args.encryptedEmail,
       encryptedName: args.encryptedName,
+      // Clear legacy plaintext columns — DB breach can't read cleartext alongside client blobs
+      email: undefined,
+      name: undefined,
       custodyMode: "client",
       updatedAt: Date.now(),
     });

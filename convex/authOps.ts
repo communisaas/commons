@@ -170,14 +170,52 @@ export const upsertFromOAuth = mutation({
 
 /**
  * Create a session for a user. Called from SvelteKit after OAuth upsert.
- * No auth check: this IS the session creation path.
+ *
+ * Requires an HMAC proof: HMAC-SHA256(userId, SESSION_CREATION_SECRET).
+ * Only the SvelteKit server knows SESSION_CREATION_SECRET, preventing
+ * arbitrary clients from forging sessions via the public Convex API.
  */
 export const createSession = mutation({
   args: {
-    userId: v.string(), // Convex ID as string (from upsertFromOAuth result)
+    userId: v.string(),
     expiresAt: v.number(),
+    proof: v.string(), // HMAC-SHA256(userId, SESSION_CREATION_SECRET) — hex
   },
   handler: async (ctx, args) => {
+    // Verify the caller knows SESSION_CREATION_SECRET
+    const secret = process.env.SESSION_CREATION_SECRET;
+    if (!secret) {
+      throw new Error("SESSION_CREATION_SECRET not configured");
+    }
+
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+
+    function hexToBytes(hex: string): Uint8Array {
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+      }
+      return bytes;
+    }
+
+    const valid = await crypto.subtle.verify(
+      "HMAC",
+      key,
+      hexToBytes(args.proof),
+      encoder.encode(args.userId)
+    );
+
+    if (!valid) {
+      throw new Error("Invalid session creation proof");
+    }
+
     // Validate the userId refers to an actual user
     const user = await ctx.db
       .query("users")
