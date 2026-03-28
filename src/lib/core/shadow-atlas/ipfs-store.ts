@@ -290,8 +290,8 @@ const chunkCache = new LRUCache<ChunkFile>(100, CACHE_TTL_MS);
 /** Officials file cache: ~2 KB per file, max 50 = ~100 KB */
 const officialsFileCache = new LRUCache<OfficialsFileIPFS>(50, CACHE_TTL_MS);
 
-/** Cell chunk cache (districts + SMT proofs): ~70 KB gzipped per chunk, max 10 = ~700 KB */
-const cellChunkCache = new LRUCache<CellChunkFile>(10, CACHE_TTL_MS);
+/** Cell chunk cache (districts + SMT proofs): ~70 KB gzipped per chunk, max 50 = ~3.5 MB */
+const cellChunkCache = new LRUCache<CellChunkFile>(50, CACHE_TTL_MS);
 
 /** District index cache — one per country, ~50-200 KB */
 const districtIndexCache = new LRUCache<DistrictIndex>(5, CACHE_TTL_MS);
