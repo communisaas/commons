@@ -2,6 +2,7 @@
 	import { X as _X, User, Building, Save, Loader2 } from '@lucide/svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import SimpleModal from '$lib/components/modals/SimpleModal.svelte';
+	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 	import type { UserProfileData, ProfileUpdateData } from '$lib/types/any-replacements.js';
 
 	// NOTE: 'address' section removed per CYPHERPUNK-ARCHITECTURE.md
@@ -28,8 +29,8 @@
 		switch (section) {
 			case 'basic':
 				return {
-					name: user.name || '',
-					email: user.email || ''
+					name: decryptedUser.name || user.name || '',
+					email: decryptedUser.email || user.email || ''
 				};
 			case 'profile':
 				return {

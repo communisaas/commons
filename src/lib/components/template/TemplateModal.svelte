@@ -6,6 +6,7 @@
 	import { quintOut, backOut, elasticOut } from 'svelte/easing';
 	import { spring } from 'svelte/motion';
 	import { page } from '$app/stores';
+	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 	import { coordinated, useTimerCleanup } from '$lib/utils/timerCoordinator';
 	import {
 		X,
@@ -1508,8 +1509,8 @@
 							})()
 						}}
 						deliveryAddress={verifiedAddress ? {
-							name: user.name || 'Constituent',
-							email: $page.data?.user?.email || '',
+							name: decryptedUser.name || user.name || 'Constituent',
+							email: decryptedUser.email || $page.data?.user?.email || '',
 							street: verifiedAddress.street,
 							city: verifiedAddress.city,
 							state: verifiedAddress.state,

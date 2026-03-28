@@ -63,13 +63,16 @@
 		};
 	});
 
-	// Extract first name for display
-	const firstName = $derived(user.name?.split(' ')[0] ?? 'User');
+	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
+
+	// Extract first name for display — prefer client-decrypted PII
+	const displayName = $derived(decryptedUser.name || user.name);
+	const firstName = $derived(displayName?.split(' ')[0] ?? 'User');
 
 	// Generate initials for fallback avatar
 	const initials = $derived.by(() => {
-		if (!user.name) return 'U';
-		const parts = user.name.split(' ');
+		if (!displayName) return 'U';
+		const parts = displayName.split(' ');
 		if (parts.length >= 2) {
 			return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
 		}
