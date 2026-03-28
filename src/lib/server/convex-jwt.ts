@@ -43,7 +43,8 @@ async function getPrivateKey(): Promise<KeyLike | null> {
 
 	// The env var may have literal \n instead of newlines (common in .env files)
 	const normalizedPem = pem.replace(/\\n/g, '\n');
-	_privateKey = await importPKCS8(normalizedPem, ALG);
+	// extractable: true required on CF Workers so exportJWK can derive the public key for JWKS
+	_privateKey = await importPKCS8(normalizedPem, ALG, { extractable: true });
 	return _privateKey;
 }
 
