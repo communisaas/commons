@@ -256,10 +256,13 @@ const handleSecurityHeaders: Handle = async ({ event, resolve }) => {
 	const isEmbed = event.url.pathname.startsWith('/embed/');
 	const response = await resolve(event);
 
-	// Set COOP/COEP headers for all responses (SharedArrayBuffer support for ZK proving)
-	// Skip COEP for embed routes — require-corp prevents embedded pages from loading cross-origin resources
+	// COOP/COEP for SharedArrayBuffer (ZK proving) — only on routes that need it.
+	// Setting COEP: require-corp globally blocks JS module loading because CF Pages
+	// serves static assets without Cross-Origin-Resource-Policy headers.
+	const needsCrossOriginIsolation = event.url.pathname.startsWith('/s/') ||
+		event.url.pathname.startsWith('/profile');
 	response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
-	if (!isEmbed) {
+	if (needsCrossOriginIsolation && !isEmbed) {
 		response.headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
 	}
 
