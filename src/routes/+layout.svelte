@@ -64,8 +64,22 @@
 
 	// ── Decrypt PII from client-custodied blobs ──
 	$effect(() => {
-		console.log('[LAYOUT] syncDecryptedUser effect fired, user:', data.user?.id ?? 'null');
-		syncDecryptedUser(data.user as Parameters<typeof syncDecryptedUser>[0]);
+		const user = data.user as Record<string, unknown> | null;
+		if (!browser || !user?.id || !user.encryptedEmail) return;
+
+		(async () => {
+			const { decryptUserPiiClient, isClientPiiAvailable } = await import('$lib/core/crypto/client-pii');
+			if (!isClientPiiAvailable()) return;
+
+			const { email, name } = await decryptUserPiiClient(
+				user.encryptedEmail as string,
+				user.encryptedName as string | null,
+				user.id as string
+			);
+
+			if (email) (data.user as Record<string, unknown>).email = email;
+			if (name) (data.user as Record<string, unknown>).name = name;
+		})().catch(() => {});
 	});
 
 	// ── Client-side PII custody: encrypt from OAuth seed on login/device recovery ──
