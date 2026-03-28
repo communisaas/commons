@@ -545,10 +545,15 @@ export const getIdentityForAtlas = query({
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
     if (!user) return null;
+    // Derive authority from trustTier so leaf computation matches client-side value.
+    // authorityLevel in the DB is set to 1 at creation and never updated on mDL verify,
+    // so we must derive it here to stay consistent with the client's leaf hash.
+    const trustTier = user.trustTier ?? 0;
+    const derivedAuthority = trustTier >= 5 ? 5 : trustTier >= 3 ? 3 : 1;
     return {
       identityCommitment: user.identityCommitment ?? null,
       verificationMethod: user.verificationMethod ?? null,
-      authorityLevel: user.authorityLevel,
+      authorityLevel: derivedAuthority,
     };
   },
 });
