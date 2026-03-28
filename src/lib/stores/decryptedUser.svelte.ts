@@ -46,7 +46,7 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 
 	// Skip if already decrypted for this user
 	if (user.id === lastUserId && state.email !== null) {
-		console.debug('[decryptedUser] skip — already decrypted for', user.id);
+		console.log('[decryptedUser] skip — already decrypted for', user.id);
 		return;
 	}
 
@@ -57,7 +57,7 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 		return;
 	}
 
-	console.debug('[decryptedUser] decrypting for', user.id, 'encEmail:', user.encryptedEmail?.slice(0, 30) ?? 'NULL');
+	console.log('[decryptedUser] decrypting for', user.id, 'encEmail:', user.encryptedEmail?.slice(0, 30) ?? 'NULL');
 	state.decrypting = true;
 	const capturedId = user.id;
 	lastUserId = user.id;
@@ -68,7 +68,7 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 		if (capturedId !== lastUserId) return;
 
 		if (!isClientPiiAvailable()) {
-			console.warn('[decryptedUser] client PII not available');
+			console.log('[decryptedUser] client PII not available');
 			state.email = null;
 			state.name = null;
 			state.decrypting = false;
@@ -81,7 +81,7 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 			user.id
 		);
 
-		console.debug('[decryptedUser] result:', { email: email ? 'OK' : 'NULL', name: name ? 'OK' : 'NULL' });
+		console.log('[decryptedUser] result:', { email: email ? 'OK' : 'NULL', name: name ? 'OK' : 'NULL' });
 		if (capturedId !== lastUserId) return;
 		state.email = email;
 		state.name = name;
