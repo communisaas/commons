@@ -82,13 +82,16 @@
 
 			const encrypted = await encryptUserPiiClient(oauthSeed.email, oauthSeed.name, userId);
 
-			const { getConvexClient } = await import('convex-sveltekit');
-			const { api } = await import('$lib/convex');
-			const client = getConvexClient();
-			await client.mutation(api.users.storeClientEncryptedPii, {
-				encryptedEmail: encrypted.encryptedEmail,
-				encryptedName: encrypted.encryptedName ?? undefined,
+			// Route through server endpoint (has authenticated Convex JWT)
+			const res = await fetch('/api/pii/encrypt', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					encryptedEmail: encrypted.encryptedEmail,
+					encryptedName: encrypted.encryptedName,
+				}),
 			});
+			if (!res.ok) throw new Error(`PII upload failed: ${res.status}`);
 
 			const { invalidate } = await import('$app/navigation');
 			invalidate('data:user');
