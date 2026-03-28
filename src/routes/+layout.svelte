@@ -65,29 +65,43 @@
 		syncDecryptedUser(data.user as Parameters<typeof syncDecryptedUser>[0]);
 	});
 
-	// ── Client-side PII custody: encrypt on first login, re-encrypt on device recovery ──
+	// ── Client-side PII custody: encrypt on first login + device recovery ──
 	$effect(() => {
 		const user = data.user as Record<string, unknown> | null;
 		if (!browser || !user?.id) return;
 
-		// Only act when custody hasn't been claimed by this device yet
 		const custodyMode = user.custodyMode ?? user.custody_mode;
-		if (custodyMode === 'client') return; // already encrypted with client key
-
-		// User has server-encrypted PII (or fresh OAuth) — transition to client custody
-		const email = user.email as string | null;
-		const name = user.name as string | null;
 		const userId = user.id as string;
-		if (!email) return; // no PII to encrypt
+		const oauthSeed = user.oauthPiiSeed as { email: string; name: string | null } | null;
+
+		// Determine PII source:
+		// 1. Server custody → plaintext from server (user.email/name)
+		// 2. Client custody + oauthSeed → device recovery (re-encrypt with new key)
+		// 3. Client custody + no seed → already encrypted, nothing to do
+		let email: string | null = null;
+		let name: string | null = null;
+
+		if (custodyMode !== 'client') {
+			// First-time transition from server custody
+			email = user.email as string | null;
+			name = user.name as string | null;
+		} else if (oauthSeed) {
+			// Device recovery — OAuth provider gave fresh PII
+			email = oauthSeed.email;
+			name = oauthSeed.name;
+		} else {
+			return; // already client-custodied, same device — nothing to do
+		}
+
+		if (!email) return;
 
 		let cancelled = false;
 		(async () => {
 			const { isClientPiiAvailable, encryptUserPiiClient } = await import('$lib/core/crypto/client-pii');
 			if (cancelled || !isClientPiiAvailable()) return;
 
-			const encrypted = await encryptUserPiiClient(email, name, userId);
+			const encrypted = await encryptUserPiiClient(email!, name, userId);
 
-			// Upload encrypted blobs via client-side Convex mutation
 			const { getConvexClient } = await import('convex-sveltekit');
 			const { api } = await import('$lib/convex');
 			const client = getConvexClient();
@@ -96,7 +110,6 @@
 				encryptedName: encrypted.encryptedName ?? undefined,
 			});
 
-			// Force SvelteKit to re-fetch layout data so custodyMode updates
 			const { invalidate } = await import('$app/navigation');
 			invalidate('data:user');
 		})().catch((err) => {

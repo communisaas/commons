@@ -343,6 +343,21 @@ export class OAuthCallbackHandler {
 			sameSite: 'lax'
 		});
 
+		// Store fresh OAuth PII for client-side re-encryption on device recovery.
+		// httpOnly: true — only the SvelteKit server reads it on the next request,
+		// passes it to the client via page data, then deletes the cookie.
+		cookies.set(
+			'oauth_pii_seed',
+			JSON.stringify({ email: userData.email, name: userData.name }),
+			{
+				path: '/',
+				secure: !dev,
+				httpOnly: true,
+				maxAge: 60 * 5, // 5 minutes — consumed on first page load
+				sameSite: 'lax'
+			}
+		);
+
 		// Store OAuth completion signal for client-side detection
 		cookies.set(
 			'oauth_completion',

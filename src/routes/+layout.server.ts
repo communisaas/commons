@@ -3,12 +3,23 @@ import type { LayoutServerLoad } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
-export const load: LayoutServerLoad = async ({ locals, depends }) => {
+export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
 	// Cache user data across navigations — only re-fetch when explicitly invalidated
 	depends('data:user');
 
 	if (!locals.user) {
 		return { user: null };
+	}
+
+	// Consume one-time OAuth PII seed for device recovery re-encryption.
+	// The cookie is set by the OAuth callback and consumed on the first page load.
+	let oauthPiiSeed: { email: string; name: string | null } | null = null;
+	const seedCookie = cookies.get('oauth_pii_seed');
+	if (seedCookie) {
+		try {
+			oauthPiiSeed = JSON.parse(seedCookie);
+		} catch { /* malformed — ignore */ }
+		cookies.delete('oauth_pii_seed', { path: '/' });
 	}
 
 	let convexProfile = null;
@@ -39,9 +50,11 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				hasWallet: convexProfile.hasWallet,
 				hasDistrictCredential: Boolean(convexProfile.districtVerified),
 				orgMemberships: convexMemberships ?? [],
-				// Client-side PII custody fields — client decrypts locally
+				// Client-side PII custody
 				custodyMode: convexProfile.custodyMode ?? 'server',
 				encryptedEmail: convexProfile.encryptedEmail ?? null,
+				// One-time OAuth PII for device recovery re-encryption
+				oauthPiiSeed: oauthPiiSeed,
 				encryptedName: convexProfile.encryptedName ?? null,
 			}
 		};
