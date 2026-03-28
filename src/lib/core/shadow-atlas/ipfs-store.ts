@@ -196,6 +196,24 @@ export interface CellEntry {
 }
 
 // ============================================================================
+// District Index Types
+// ============================================================================
+
+/**
+ * District index: maps (slot, fieldElementHex) → chunk keys.
+ * One fetch replaces the O(n) chunk scan.
+ * Published at `{rootCID}/{country}/district-index.json`.
+ */
+export interface DistrictIndex {
+	version: 1;
+	generated: string;
+	/** slot number (string) → { fieldElementHex → chunkKey[] } */
+	slots: Record<string, Record<string, string[]>>;
+	/** fieldElementHex → raw GEOID string (for display/matching) */
+	labels: Record<string, string>;
+}
+
+// ============================================================================
 // In-Memory Cache (CF Workers — per-isolate, cleared on redeploy)
 // ============================================================================
 
@@ -250,6 +268,9 @@ const officialsFileCache = new LRUCache<OfficialsFileIPFS>(50, CACHE_TTL_MS);
 
 /** Cell chunk cache (districts + SMT proofs): ~70 KB gzipped per chunk, max 10 = ~700 KB */
 const cellChunkCache = new LRUCache<CellChunkFile>(10, CACHE_TTL_MS);
+
+/** District index cache — one per country, ~50-200 KB */
+const districtIndexCache = new LRUCache<DistrictIndex>(5, CACHE_TTL_MS);
 
 /** Manifest cache — keyed by country code, refreshed when root CID changes */
 const manifestCacheMap = new Map<string, { rootCid: string; data: ChunkManifest; fetchedAt: number }>();
@@ -508,100 +529,38 @@ export async function getOfficialsForDistrict(
 }
 
 // ============================================================================
-// Cell Chunk API (client-side ZKP — districts + SMT proofs)
+// District Index API (O(1) district → chunk lookup)
 // ============================================================================
 
 /**
- * Fetch a cell's district data + Tree 2 SMT proof from IPFS cell chunks.
+ * Fetch the district index for a country.
+ * One fetch gives the browser a map from every district value (across all 24 slots)
+ * to the chunk keys containing cells for that district.
  *
- * This eliminates the cell_id privacy leak: the client fetches from
- * content-addressed IPFS (via Cloudflare CDN) instead of sending cell_id
- * to the Shadow Atlas server.
- *
- * Returns the CellEntry for the given cell, or null if not found.
- * The entry contains districts[24], SMT siblings, path bits, and attempt counter.
- *
- * @param cellId - Cell identifier (GEOID as string, matching the tree's cellId.toString())
- * @param country - ISO 3166-1 alpha-2 country code (default: "US")
- * @returns CellEntry with circuit-ready proof data, or null
+ * Cached per country. ~50-200 KB gzipped.
  */
-export async function getCellProofFromIPFS(
-	cellId: string,
-	country = 'US',
-): Promise<{ entry: CellEntry; cellMapRoot: string } | null> {
+export async function getDistrictIndex(country = 'US'): Promise<DistrictIndex | null> {
 	if (!IPFS_CIDS.root) return null;
 
-	// Determine the group key for this cell.
-	// The cell chunks are grouped by H3 res-3 parent (for H3-indexed cells)
-	// or by GEOID prefix (for Census-based cells).
-	// We check the manifest to find which chunk contains this cell.
-	const manifest = await getManifest(country);
-	if (!manifest.cells) return null;
+	const cacheKey = `district-index:${country}`;
+	const cached = districtIndexCache.get(cacheKey);
+	if (cached) return cached;
 
-	// Look up the parent chunk from the manifest's cells section
-	const parentKey = findParentChunkForCell(cellId, manifest);
-	if (!parentKey) return null;
-
-	const cacheKey = `cell:${country}/${parentKey}`;
-	let chunk = cellChunkCache.get(cacheKey);
-	if (!chunk) {
-		try {
-			chunk = await fetchFromRootCID<CellChunkFile>(
-				`${country}/cells/${parentKey}.json`,
-			);
-			cellChunkCache.set(cacheKey, chunk);
-		} catch (err) {
-			if (err instanceof IPFSNotFoundError) return null;
-			throw err;
-		}
+	try {
+		const index = await fetchFromRootCID<DistrictIndex>(
+			`${country}/district-index.json`,
+		);
+		districtIndexCache.set(cacheKey, index);
+		return index;
+	} catch (err) {
+		if (err instanceof IPFSNotFoundError) return null;
+		throw err;
 	}
-
-	const entry = chunk.cells[cellId];
-	if (!entry) return null;
-
-	return { entry, cellMapRoot: chunk.cellMapRoot };
 }
 
-/**
- * Find which parent chunk contains a given cell ID.
- *
- * Searches the manifest's cells.chunks entries to find the chunk that
- * should contain this cell. For most lookups, this is a direct mapping
- * via the cell's geographic parent group.
- */
-function findParentChunkForCell(
-	cellId: string,
-	manifest: ChunkManifest,
-): string | null {
-	if (!manifest.cells?.chunks) return null;
-
-	// Fast path: if there's only one chunk, use it
-	const chunkKeys = Object.keys(manifest.cells.chunks);
-	if (chunkKeys.length === 1) return chunkKeys[0];
-
-	// The manifest lists all parent keys. The build pipeline grouped cells
-	// by H3 res-3 parent or GEOID prefix. We need to determine which group
-	// this cell belongs to.
-	//
-	// Strategy: Try H3 parent derivation if h3-js is available (browser-client
-	// already imports it). Fall back to iterating chunks if needed.
-	//
-	// For now: use the manifest's chunk list. If the cellId matches a known
-	// parent prefix pattern, use that. Otherwise, we'll need the chunk's cell
-	// map to be checked.
-	//
-	// Since cell chunks are small enough (~10 per LRU cache), we can
-	// try the most likely parent first. For Census GEOIDs, the first 5 digits
-	// are the county FIPS code, but chunks are grouped by H3 parent.
-	//
-	// The most robust approach: the caller (browser-client.ts) computes the
-	// H3 parent and passes it directly. See getFullCellDataFromBrowser().
-	// This function serves as a fallback for direct callers.
-
-	// Return null — callers should use getFullCellDataFromBrowser() which
-	// computes the parent key directly.
-	return null;
-}
+// ============================================================================
+// Cell Chunk API (client-side ZKP — districts + SMT proofs)
+// ============================================================================
 
 /**
  * Fetch a cell chunk by its known parent key (H3 res-3 parent or GEOID prefix).

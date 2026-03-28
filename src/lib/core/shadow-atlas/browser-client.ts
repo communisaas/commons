@@ -13,11 +13,12 @@ import {
 	getChunkForCell,
 	getOfficialsForDistrict,
 	getCellChunkByParent,
-	getManifest,
+	getDistrictIndex,
 	setCIDs,
 	isIPFSConfigured,
 	type CellDistricts,
 	type CellEntry,
+	type DistrictIndex,
 	type OfficialsFileIPFS,
 } from './ipfs-store';
 
@@ -128,24 +129,26 @@ export interface ClientCellProofResult {
 /**
  * Fetch cell proof data entirely from IPFS — zero server contact.
  *
- * Accepts EITHER a district code (preferred, most private) or lat/lng coordinates.
+ * Two paths:
  *
- * District code path (recommended):
- *   User already verified their district in Tier 2. We just need ANY valid cell
- *   in that district for the ZKP. Scans IPFS chunks to find a matching cell.
- *   The user discloses nothing beyond their already-verified district.
+ * **District path (recommended, most private):**
+ *   User already verified their district at Tier 2. Pass the district's field
+ *   element hex (from the district index) and slot number. The function fetches
+ *   exactly one chunk via the index — O(1), no scanning.
+ *   User discloses nothing beyond their verified district type.
  *
- * Lat/lng path (fallback):
- *   Direct H3 cell lookup. Used when the caller has coordinates and wants
- *   the exact cell for that location.
+ * **Lat/lng path (fallback):**
+ *   Direct H3 cell lookup. Used when the caller has coordinates.
  *
- * @param options.district - Congressional district code (e.g., "CA-12"). Preferred.
+ * @param options.districtHex - District field element hex (from district index). Use with `slot`.
+ * @param options.slot - District slot number (0=congressional, 2=state senate, etc.)
  * @param options.lat - Latitude (alternative to district)
  * @param options.lng - Longitude (alternative to district)
  * @param options.country - ISO 3166-1 alpha-2 (default: "US")
  */
 export async function getFullCellDataFromBrowser(options: {
-	district?: string;
+	districtHex?: string;
+	slot?: number;
 	lat?: number;
 	lng?: number;
 	country?: string;
@@ -157,9 +160,9 @@ export async function getFullCellDataFromBrowser(options: {
 
 	const country = options.country ?? 'US';
 
-	// Path A: District code → find any valid cell in that district
-	if (options.district) {
-		return findCellForDistrict(options.district, country);
+	// Path A: District hex + slot → O(1) index lookup → one chunk fetch
+	if (options.districtHex != null && options.slot != null) {
+		return findCellForDistrict(options.districtHex, options.slot, country);
 	}
 
 	// Path B: Lat/lng → specific H3 cell
@@ -172,54 +175,56 @@ export async function getFullCellDataFromBrowser(options: {
 }
 
 /**
- * Find a valid cell in the given district by scanning IPFS chunks.
- * Returns the first cell whose slot 0 (congressional district) matches.
- * The cell is essentially random within the district — maximum anonymity.
+ * Find a valid cell for a district using the district index.
+ *
+ * The district index maps (slot, fieldElementHex) → chunk keys.
+ * One manifest fetch + one index fetch + one chunk fetch = O(1).
+ *
+ * @param districtHex - The field element hex from the district index
+ * @param slot - The slot number (0=congressional, 2=state senate, etc.)
  */
 async function findCellForDistrict(
-	districtCode: string,
+	districtHex: string,
+	slot: number,
 	country: string,
 ): Promise<ClientCellProofResult | null> {
-	// Encode the district code as a BN254 field element for comparison.
-	// District codes in cell chunks are stored as 0x-hex field elements,
-	// encoded the same way as the tree builder (UTF-8 bytes → bigint).
-	const districtHex = encodeDistrictToHex(districtCode);
-
-	// Get the manifest to iterate chunk keys
-	const manifest = await getManifest(country);
-	if (!manifest.cells?.chunks) return null;
-
-	const chunkKeys = Object.keys(manifest.cells.chunks);
-
-	// Shuffle chunk keys so we don't always pick the same cell
-	for (let i = chunkKeys.length - 1; i > 0; i--) {
-		const j = Math.floor(Math.random() * (i + 1));
-		[chunkKeys[i], chunkKeys[j]] = [chunkKeys[j], chunkKeys[i]];
+	const index = await getDistrictIndex(country);
+	if (!index) {
+		console.warn('[browser-client] District index not available');
+		return null;
 	}
 
-	// Scan chunks until we find a cell with matching district in slot 0
-	for (const key of chunkKeys) {
-		// Skip virtual/fallback chunks — they don't have H3 keys
-		if (key.startsWith('virtual-') || key.startsWith('geoid-')) continue;
+	const slotIndex = index.slots[String(slot)];
+	if (!slotIndex) {
+		console.warn(`[browser-client] No index data for slot ${slot}`);
+		return null;
+	}
 
-		const chunk = await getCellChunkByParent(key, country);
-		if (!chunk) continue;
+	const chunkKeys = slotIndex[districtHex];
+	if (!chunkKeys || chunkKeys.length === 0) {
+		console.warn(`[browser-client] No chunks for district ${districtHex} in slot ${slot}`);
+		return null;
+	}
 
-		for (const [_h3Key, entry] of Object.entries(chunk.cells)) {
-			// Check if slot 0 (congressional district) matches
-			if (entry.d[0] === districtHex) {
-				return {
-					cellMapRoot: chunk.cellMapRoot,
-					cellId: entry.c,
-					cellMapPath: [...entry.p],
-					cellMapPathBits: [...entry.b],
-					districts: [...entry.d],
-				};
-			}
+	// Pick a random chunk to maximize anonymity
+	const randomKey = chunkKeys[Math.floor(Math.random() * chunkKeys.length)];
+	const chunk = await getCellChunkByParent(randomKey, country);
+	if (!chunk) return null;
+
+	// Find a cell with matching district in the specified slot
+	for (const entry of Object.values(chunk.cells)) {
+		if (entry.d[slot] === districtHex) {
+			return {
+				cellMapRoot: chunk.cellMapRoot,
+				cellId: entry.c,
+				cellMapPath: [...entry.p],
+				cellMapPathBits: [...entry.b],
+				districts: [...entry.d],
+			};
 		}
 	}
 
-	console.warn(`[browser-client] No cell found for district ${districtCode}`);
+	console.warn(`[browser-client] Chunk ${randomKey} had no matching cell for slot ${slot}`);
 	return null;
 }
 
@@ -253,12 +258,24 @@ async function findCellByLocation(
 }
 
 /**
- * Encode a district code string to a 0x-hex BN254 field element,
- * matching the tree builder's encoding (UTF-8 bytes → bigint → hex).
+ * Look up available districts for a given slot from the district index.
+ * Returns a list of { hex, label } pairs the browser can display.
+ *
+ * @param slot - Slot number (0=congressional, 2=state senate, etc.)
+ * @param country - ISO 3166-1 alpha-2 (default: "US")
  */
-function encodeDistrictToHex(code: string): string {
-	const bytes = new TextEncoder().encode(code);
-	let val = 0n;
-	for (const b of bytes) val = (val << 8n) | BigInt(b);
-	return '0x' + val.toString(16).padStart(64, '0');
+export async function getDistrictsForSlot(
+	slot: number,
+	country = 'US',
+): Promise<{ hex: string; label: string }[] | null> {
+	const index = await getDistrictIndex(country);
+	if (!index) return null;
+
+	const slotIndex = index.slots[String(slot)];
+	if (!slotIndex) return null;
+
+	return Object.keys(slotIndex).map(hex => ({
+		hex,
+		label: index.labels[hex] ?? hex,
+	}));
 }
