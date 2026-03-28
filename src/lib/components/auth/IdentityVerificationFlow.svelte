@@ -155,24 +155,27 @@
 			}
 
 			// Step 3: Generate client-side secrets (never sent to server)
-			const userSecretBytes = new Uint8Array(32);
-			const registrationSaltBytes = new Uint8Array(32);
-			crypto.getRandomValues(userSecretBytes);
-			crypto.getRandomValues(registrationSaltBytes);
+			// Values MUST be valid BN254 field elements (< modulus, ~254 bits).
+			// Raw 32-byte randoms are 256 bits and exceed the modulus ~75% of the time,
+			// causing poseidon hexToFr to throw. Reduce modulo BN254 after generation.
+			const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
-			const userSecret =
-				'0x' +
-				Array.from(userSecretBytes)
-					.map((b) => b.toString(16).padStart(2, '0'))
-					.join('');
-			const registrationSalt =
-				'0x' +
-				Array.from(registrationSaltBytes)
-					.map((b) => b.toString(16).padStart(2, '0'))
-					.join('');
+			function generateFieldElement(): string {
+				const bytes = crypto.getRandomValues(new Uint8Array(32));
+				let value = 0n;
+				for (const b of bytes) value = (value << 8n) | BigInt(b);
+				value = value % BN254_MODULUS;
+				return '0x' + value.toString(16).padStart(64, '0');
+			}
+
+			const userSecret = generateFieldElement();
+			const registrationSalt = generateFieldElement();
 
 			// Step 4: Compute leaf using IPFS-resolved cellId (already 0x-hex BN254 field element)
-			const authorityLevel = 5; // mDL = highest authority
+			// Authority level 5 = mDL verified. This flow only runs after mDL verification
+			// which sets trustTier=5. The server derives authorityLevel from trustTier via
+			// getIdentityForAtlas, so both sides agree on the value used in the leaf hash.
+			const authorityLevel = 5;
 			const authorityHex = '0x' + authorityLevel.toString(16).padStart(64, '0');
 
 			// leaf = Poseidon2_H4(userSecret, cellId, registrationSalt, authorityLevel)
@@ -192,7 +195,8 @@
 				},
 				userSecret,
 				registrationSalt,
-				verificationMethod: 'digital-credentials-api'
+				verificationMethod: 'digital-credentials-api',
+				verifiedDistrict,
 			});
 
 			if (result.success) {
