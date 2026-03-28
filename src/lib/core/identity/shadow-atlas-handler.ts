@@ -32,13 +32,22 @@ import {
 export interface ThreeTreeRegistrationRequest {
 	/** User ID */
 	userId: string;
-	/** Precomputed leaf hash (hex with 0x prefix) */
+	/** Precomputed leaf hash (hex with 0x prefix).
+	 *  MUST be computed using the same cellId provided below:
+	 *  leaf = H4(userSecret, cellId, registrationSalt, authorityLevel) */
 	leaf: string;
-	/** Census tract cell ID (for Tree 2 proof lookup and circuit input).
-	 *  Resolved from IPFS when district is provided. */
+	/** Cell ID as 0x-hex BN254 field element (from IPFS cell chunk `c` field).
+	 *  The caller resolves this via getFullCellDataFromBrowser() BEFORE
+	 *  computing the leaf, ensuring consistency across Tree 1 and Tree 2. */
 	cellId: string;
-	/** Verified congressional district code (e.g., "CA-12") for IPFS cell resolution */
-	district?: string;
+	/** Pre-resolved Tree 2 proof data from IPFS.
+	 *  Must be resolved via getFullCellDataFromBrowser() before calling. */
+	tree2: {
+		cellMapRoot: string;
+		cellMapPath: string[];
+		cellMapPathBits: number[];
+		districts: string[];
+	};
 	/** User secret (stored client-side only, never sent to server) */
 	userSecret: string;
 	/** Registration salt (stored client-side only, never sent to server) */
@@ -58,10 +67,16 @@ export interface ThreeTreeRecoveryRequest {
 	userId: string;
 	/** Fresh leaf hash (new random inputs) */
 	leaf: string;
-	/** Cell ID derived from re-entered address */
+	/** Cell ID as 0x-hex BN254 field element */
 	cellId: string;
-	/** Verified congressional district code for IPFS cell resolution */
-	district?: string;
+	/** Pre-resolved Tree 2 proof data from IPFS.
+	 *  Must be resolved via getFullCellDataFromBrowser() before calling. */
+	tree2: {
+		cellMapRoot: string;
+		cellMapPath: string[];
+		cellMapPathBits: number[];
+		districts: string[];
+	};
 	/** New random user secret */
 	userSecret: string;
 	/** New random registration salt */
@@ -215,54 +230,10 @@ export async function registerThreeTree(
 			};
 		}
 
-		// Step 2: Fetch Tree 2 cell proof from IPFS (zero server leaks)
+		// Step 2: Use pre-resolved Tree 2 cell proof from IPFS (zero server leaks)
 		// The server never learns the user's cell_id — all data fetched from
 		// content-addressed IPFS via Storacha CDN.
-		let tree2Data: {
-			cellMapRoot: string; cellId?: string;
-			cellMapPath: string[]; cellMapPathBits: number[]; districts: string[];
-		};
-
-		if (request.district) {
-			// Client-side path: resolve from IPFS using verified district code.
-			// No location disclosed — picks any valid cell in the district.
-			const { getFullCellDataFromBrowser } = await import('../shadow-atlas/browser-client');
-			const ipfsResult = await getFullCellDataFromBrowser({ district: request.district });
-
-			if (ipfsResult) {
-				tree2Data = ipfsResult;
-				// IPFS chunk provides the canonical cell_id (GEOID as field element).
-				request.cellId = ipfsResult.cellId;
-			} else {
-				return {
-					success: false,
-					error: 'Could not resolve cell proof from IPFS for your district.',
-				};
-			}
-		} else {
-			// Fallback: server endpoint (legacy path, leaks cell_id)
-			console.warn('[Shadow Atlas] No district provided, falling back to server cell-proof');
-			const tree2Response = await fetchWithRetry(
-				`/api/shadow-atlas/cell-proof?cell_id=${encodeURIComponent(request.cellId)}`
-			);
-
-			if (!tree2Response.ok) {
-				const errorData = await tree2Response.json().catch(() => ({ error: 'Unknown error' }));
-				return {
-					success: false,
-					error: errorData.error || `Tree 2 cell proof failed (${tree2Response.status})`,
-				};
-			}
-
-			const serverData = await tree2Response.json();
-			if (!serverData.cellMapRoot || !serverData.cellMapPath || !serverData.districts) {
-				return {
-					success: false,
-					error: 'Invalid Tree 2 cell proof response',
-				};
-			}
-			tree2Data = serverData;
-		}
+		const tree2Data = request.tree2;
 
 		// Step 2b: Fetch Tree 3 engagement data (non-blocking — defaults to tier 0 on failure)
 		const engagementData = await fetchEngagementData(tree1Data.identityCommitment);
@@ -374,49 +345,8 @@ export async function recoverThreeTree(
 			};
 		}
 
-		// Step 2: Fetch Tree 2 cell proof from IPFS (zero server leaks)
-		let tree2Data: {
-			cellMapRoot: string; cellId?: string;
-			cellMapPath: string[]; cellMapPathBits: number[]; districts: string[];
-		};
-
-		if (request.district) {
-			const { getFullCellDataFromBrowser } = await import('../shadow-atlas/browser-client');
-			const ipfsResult = await getFullCellDataFromBrowser({ district: request.district });
-
-			if (ipfsResult) {
-				tree2Data = ipfsResult;
-				request.cellId = ipfsResult.cellId;
-			} else {
-				return {
-					success: false,
-					error: 'Could not resolve cell proof from IPFS for your district.',
-				};
-			}
-		} else {
-			// Fallback: server endpoint (legacy, leaks cell_id)
-			console.warn('[Shadow Atlas] No district provided, falling back to server cell-proof');
-			const tree2Response = await fetchWithRetry(
-				`/api/shadow-atlas/cell-proof?cell_id=${encodeURIComponent(request.cellId)}`
-			);
-
-			if (!tree2Response.ok) {
-				const errorData = await tree2Response.json().catch(() => ({ error: 'Unknown error' }));
-				return {
-					success: false,
-					error: errorData.error || `Tree 2 cell proof failed (${tree2Response.status})`,
-				};
-			}
-
-			const serverData = await tree2Response.json();
-			if (!serverData.cellMapRoot || !serverData.cellMapPath || !serverData.districts) {
-				return {
-					success: false,
-					error: 'Invalid Tree 2 cell proof response',
-				};
-			}
-			tree2Data = serverData;
-		}
+		// Step 2: Use pre-resolved Tree 2 proof from IPFS (zero server leaks)
+		const tree2Data = request.tree2;
 
 		// Step 2b: Fetch Tree 3 engagement data (non-blocking — defaults to tier 0 on failure)
 		const engagementData = await fetchEngagementData(tree1Data.identityCommitment);
