@@ -106,9 +106,9 @@
 			if (!credential) {
 				proofState = {
 					status: 'error',
-					message: 'Your verification session has expired. Please re-verify your identity.',
+					message: 'Your proof credentials need to be restored. This takes one quick verification.',
 					recoverable: true,
-					retryLabel: 'Re-verify Identity',
+					retryLabel: 'Restore Credentials',
 					retryAction: () => {
 						onreverify?.();
 					}
