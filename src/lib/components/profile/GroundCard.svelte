@@ -10,16 +10,19 @@
 	 * Modes: card (default) | embedded (no wrapper, for document layout)
 	 */
 	import { onMount } from 'svelte';
-	import { Lock, MapPin, ShieldAlert, ArrowRight } from '@lucide/svelte';
+	import { Lock, MapPin, ShieldAlert, ArrowRight, RefreshCw } from '@lucide/svelte';
 	import { getConstituentAddress } from '$lib/core/identity/constituent-address';
 	import { getSessionCredential } from '$lib/core/identity/session-credentials';
+	import { needsCredentialRecovery } from '$lib/core/identity/recovery-detector';
 
 	let {
 		userId,
+		trustTier = 0,
 		embedded = false,
 		onVerifyAddress
 	}: {
 		userId: string;
+		trustTier?: number;
 		embedded?: boolean;
 		onVerifyAddress?: () => void;
 	} = $props();
@@ -34,6 +37,7 @@
 	} | null>(null);
 	let congressionalDistrict = $state<string | null>(null);
 	let expired = $state(false);
+	let needsRecovery = $state(false);
 
 	onMount(async () => {
 		try {
@@ -50,6 +54,11 @@
 
 			if (!stored && !credential) {
 				expired = false;
+			}
+
+			// Check if tier-5 user needs credential recovery
+			if (!credential && trustTier >= 5) {
+				needsRecovery = await needsCredentialRecovery(userId, trustTier);
 			}
 		} catch (e) {
 			console.warn('[GroundCard] Failed to load address:', e);
@@ -134,7 +143,18 @@
 {:else}
 	{#if embedded}
 		<!-- Embedded no-address: inline text -->
-		{#if expired}
+		{#if needsRecovery}
+			<p class="text-sm text-slate-600">
+				<RefreshCw class="mr-1.5 inline h-3.5 w-3.5 text-amber-500" />
+				Your proof credentials were cleared from this device.
+				{#if onVerifyAddress}
+					<button
+						class="ml-1 font-medium text-amber-600 transition-colors hover:text-amber-700"
+						onclick={() => onVerifyAddress?.()}
+					>Restore Credentials &rarr;</button>
+				{/if}
+			</p>
+		{:else if expired}
 			<p class="text-sm text-slate-600">
 				<ShieldAlert class="mr-1.5 inline h-3.5 w-3.5 text-amber-500" />
 				Address verification expired.
@@ -166,7 +186,31 @@
 			</span>
 
 			<div class="mt-3">
-				{#if expired}
+				{#if needsRecovery}
+					<div class="flex items-start gap-3">
+						<RefreshCw class="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
+						<div>
+							<p class="text-sm font-medium text-slate-700">Proof credentials cleared</p>
+							<p class="mt-0.5 text-[13px] text-slate-500">
+								Your proof credentials were cleared from this device.
+								A quick re-verification will restore them.
+							</p>
+						</div>
+					</div>
+
+					{#if onVerifyAddress}
+						<button
+							class="group mt-3 flex w-full items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/50 px-3 py-2 text-left text-sm font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100/50"
+							onclick={() => onVerifyAddress?.()}
+						>
+							<RefreshCw class="h-3.5 w-3.5" />
+							<span>Restore Credentials</span>
+							<ArrowRight
+								class="h-3.5 w-3.5 text-amber-400 transition-transform group-hover:translate-x-0.5"
+							/>
+						</button>
+					{/if}
+				{:else if expired}
 					<div class="flex items-start gap-3">
 						<ShieldAlert class="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
 						<div>
@@ -176,6 +220,18 @@
 							</p>
 						</div>
 					</div>
+
+					{#if onVerifyAddress}
+						<button
+							class="group mt-3 flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:border-emerald-300 hover:bg-emerald-50/50 hover:text-emerald-700"
+							onclick={() => onVerifyAddress?.()}
+						>
+							<span>Re-verify address</span>
+							<ArrowRight
+								class="h-3.5 w-3.5 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-emerald-500"
+							/>
+						</button>
+					{/if}
 				{:else}
 					<div class="flex items-start gap-3">
 						<MapPin class="mt-0.5 h-4 w-4 flex-shrink-0 text-slate-400" />
@@ -187,18 +243,18 @@
 							</p>
 						</div>
 					</div>
-				{/if}
 
-				{#if onVerifyAddress}
-					<button
-						class="group mt-3 flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:border-emerald-300 hover:bg-emerald-50/50 hover:text-emerald-700"
-						onclick={() => onVerifyAddress?.()}
-					>
-						<span>{expired ? 'Re-verify address' : 'Verify your address'}</span>
-						<ArrowRight
-							class="h-3.5 w-3.5 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-emerald-500"
-						/>
-					</button>
+					{#if onVerifyAddress}
+						<button
+							class="group mt-3 flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:border-emerald-300 hover:bg-emerald-50/50 hover:text-emerald-700"
+							onclick={() => onVerifyAddress?.()}
+						>
+							<span>Verify your address</span>
+							<ArrowRight
+								class="h-3.5 w-3.5 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-emerald-500"
+							/>
+						</button>
+					{/if}
 				{/if}
 			</div>
 		</div>
