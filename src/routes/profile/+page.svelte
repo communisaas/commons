@@ -248,7 +248,7 @@
 			<span class="section-label">Your ground</span>
 			<div class="mt-3">
 				{#if user}
-					<GroundCard userId={user.id} embedded={true} onVerifyAddress={handleVerifyAddress} />
+					<GroundCard userId={user.id} {trustTier} embedded={true} onVerifyAddress={handleVerifyAddress} />
 				{/if}
 			</div>
 		</div>
