@@ -134,7 +134,7 @@
 
 		try {
 			const { findDistrictHex, getFullCellDataFromBrowser } = await import('$lib/core/shadow-atlas/browser-client');
-			const { registerThreeTree } = await import('$lib/core/identity/shadow-atlas-handler');
+			const { registerThreeTree, recoverThreeTree } = await import('$lib/core/identity/shadow-atlas-handler');
 			const { poseidon2Hash4 } = await import('$lib/core/crypto/poseidon');
 
 			// Step 1: Resolve district hex from display format (e.g. "CA-12" → field element)
@@ -206,6 +206,42 @@
 				if (oncompletePending && verificationData) {
 					oncompletePending = false;
 					oncomplete?.({ ...verificationData, userId });
+				}
+			} else if (result.error && result.error.includes('Already registered')) {
+				// Pivot to recovery: user was previously registered but lost local credentials.
+				// Re-use the same inputs (secrets, tree2 data, cellId) — recoverThreeTree
+				// sends replace: true so the Shadow Atlas zeros the old leaf and inserts the new one.
+				console.info('[Identity] Already registered \u2014 pivoting to recovery');
+				const recoveryResult = await recoverThreeTree({
+					userId,
+					leaf,
+					cellId: cellData.cellId,
+					tree2: {
+						cellMapRoot: cellData.cellMapRoot,
+						cellMapPath: cellData.cellMapPath,
+						cellMapPathBits: cellData.cellMapPathBits,
+						districts: cellData.districts,
+					},
+					userSecret,
+					registrationSalt,
+					verificationMethod: 'digital-credentials-api',
+					verifiedDistrict,
+				});
+
+				if (recoveryResult.success) {
+					registrationComplete = true;
+					console.log('[Verification] Shadow Atlas recovery complete:', {
+						leafIndex: recoveryResult.sessionCredential?.leafIndex,
+						districts: recoveryResult.sessionCredential?.districts?.length ?? 0,
+						engagementTier: recoveryResult.sessionCredential?.engagementTier ?? 0
+					});
+					if (oncompletePending && verificationData) {
+						oncompletePending = false;
+						oncomplete?.({ ...verificationData, userId });
+					}
+				} else {
+					console.error('[Verification] Shadow Atlas recovery also failed:', recoveryResult.error);
+					registrationError = recoveryResult.error ?? 'Recovery failed';
 				}
 			} else {
 				console.error('[Verification] Shadow Atlas registration failed:', result.error);
