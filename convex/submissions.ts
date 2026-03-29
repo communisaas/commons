@@ -22,7 +22,7 @@ const WITNESS_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
  * Pipeline:
  *   1. Validate required fields
  *   2. Atomic insert via internalMutation (idempotency + nullifier check)
- *   3. Schedule background tasks: deliverToCongress, registerEngagement, promoteTier
+ *   3. Schedule background tasks: deliverToCongress, registerEngagement
  */
 export const create = action({
   args: {
@@ -84,9 +84,9 @@ export const create = action({
       userSubject: identity.subject,
     });
 
-    await ctx.scheduler.runAfter(0, internal.submissions.promoteTier, {
-      userEmail: identity.email!,
-    });
+    // promoteTier removed: trust tier escalation must wait until
+    // verificationStatus === 'verified' (ZKP-INTEGRITY-TASK-GRAPH.md § S1/2E).
+    // Re-enable in Cycle 2 after verification status lifecycle is wired.
 
     return {
       success: true,
@@ -358,26 +358,9 @@ export const registerEngagement = internalAction({
   },
 });
 
-/**
- * Internal mutation: Promote user to trust tier 2 on first submission.
- * ZKP submission proves district membership → Tier 2 (address-attested).
- */
-export const promoteTier = internalMutation({
-  args: { userEmail: v.string() },
-  handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_email", (q) => q.eq("email", args.userEmail))
-      .first();
-
-    if (user && user.trustTier < 2) {
-      await ctx.db.patch(user._id, {
-        trustTier: 2,
-        updatedAt: Date.now(),
-      });
-    }
-  },
-});
+// promoteTier DELETED (S1): unconditional tier escalation.
+// Re-implement in Cycle 2 (task 2E) gated on verificationStatus === 'verified'.
+// See docs/design/ZKP-INTEGRITY-TASK-GRAPH.md § S1/2E.
 
 /**
  * Internal query: Get submission by ID (for delivery worker).
