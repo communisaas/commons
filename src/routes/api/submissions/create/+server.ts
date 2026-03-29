@@ -1,4 +1,4 @@
-// CONVEX: Keep SvelteKit — credential TTL validation, blockchain verification (verifyOnChain)
+// CONVEX: Keep SvelteKit — credential TTL validation, proof validation, blockchain verification (verifyOnChain)
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverAction } from 'convex-sveltekit';
@@ -8,6 +8,7 @@ import {
 	formatValidationError,
 	type SessionCredentialForPolicy
 } from '$lib/core/identity/credential-policy';
+import { BN254_MODULUS } from '$lib/core/crypto/bn254';
 
 /**
  * Submission Creation Endpoint
@@ -73,13 +74,68 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			throw error(400, 'Missing required fields');
 		}
 
+		// ── S2: Structural proof validation (ZKP-INTEGRITY-TASK-GRAPH.md § S2) ──
+		// Blocks garbage proofs at the door. Does NOT verify ZK math (Cycle 2).
+
+		// Proof must be non-empty valid hex
+		if (typeof proof !== 'string' || !/^(0x)?[0-9a-fA-F]+$/.test(proof)) {
+			throw error(400, 'Invalid proof: must be hex-encoded');
+		}
+		const proofHex = proof.startsWith('0x') ? proof.slice(2) : proof;
+		if (proofHex.length < 2048 || proofHex.length > 131072) {
+			throw error(400, 'Invalid proof: unexpected length');
+		}
+
+		// Extract publicInputsArray from payload.
+		// ProofGenerator sends publicInputs as an object with named fields + publicInputsArray.
+		// We validate the raw array (31 BN254 field elements).
+		const rawInputsArray: unknown[] | undefined =
+			Array.isArray(publicInputs) ? publicInputs :
+			(publicInputs && typeof publicInputs === 'object' && 'publicInputsArray' in publicInputs)
+				? (publicInputs as Record<string, unknown>).publicInputsArray as unknown[]
+				: undefined;
+
+		if (!Array.isArray(rawInputsArray) || rawInputsArray.length !== 31) {
+			throw error(400, `Invalid publicInputs: expected 31 elements, got ${Array.isArray(rawInputsArray) ? rawInputsArray.length : typeof publicInputs}`);
+		}
+		for (let i = 0; i < rawInputsArray.length; i++) {
+			try {
+				const val = BigInt(rawInputsArray[i] as string | number | bigint);
+				if (val < 0n || val >= BN254_MODULUS) {
+					throw error(400, `publicInputs[${i}] out of BN254 field range`);
+				}
+			} catch (e) {
+				if (e && typeof e === 'object' && 'status' in e) throw e;
+				throw error(400, `publicInputs[${i}] is not a valid field element`);
+			}
+		}
+
+		// Nullifier must be a valid BN254 field element.
+		// Canonicalize to decimal string to prevent "0xFF" vs "255" dedup bypass.
+		let canonicalNullifier: string;
+		try {
+			const nullVal = BigInt(nullifier);
+			if (nullVal < 0n || nullVal >= BN254_MODULUS) {
+				throw error(400, 'Nullifier out of BN254 field range');
+			}
+			canonicalNullifier = nullVal.toString(10);
+		} catch (e) {
+			if (e && typeof e === 'object' && 'status' in e) throw e;
+			throw error(400, 'Nullifier is not a valid field element');
+		}
+
+		// Cross-check: nullifier in body must match publicInputsArray[26]
+		if (BigInt(nullifier) !== BigInt(rawInputsArray[26] as string | number | bigint)) {
+			throw error(400, 'Nullifier does not match publicInputs[26]');
+		}
+
 		// Use Convex action — handles atomic insert, idempotency, nullifier dedup,
-		// and schedules background tasks (delivery, engagement, tier promotion)
+		// and schedules background tasks (delivery, engagement)
 		const result = await serverAction(api.submissions.create, {
 			templateId,
 			proof,
 			publicInputs,
-			nullifier,
+			nullifier: canonicalNullifier,
 			encryptedWitness,
 			witnessNonce,
 			ephemeralPublicKey,
