@@ -25,8 +25,10 @@
 	import { quintOut } from 'svelte/easing';
 	import { X } from '@lucide/svelte';
 	import IdentityVerificationFlow from './IdentityVerificationFlow.svelte';
+	import IdentityRecoveryFlow from './IdentityRecoveryFlow.svelte';
 	import AddressVerificationFlow from './AddressVerificationFlow.svelte';
 	import { hasValidSession } from '$lib/core/identity/session-cache';
+	import { needsCredentialRecovery } from '$lib/core/identity/recovery-detector';
 
 	interface Props {
 		userId: string;
@@ -56,6 +58,20 @@
 		onverified,
 		oncancel
 	}: Props = $props();
+
+	// Recovery state: tier-5 user with missing local credentials
+	let showRecovery = $state(false);
+
+	// Check recovery state when modal opens
+	$effect(() => {
+		if (showModal && userTrustTier >= 5) {
+			needsCredentialRecovery(userId, userTrustTier).then((needs) => {
+				showRecovery = needs;
+			});
+		} else if (!showModal) {
+			showRecovery = false;
+		}
+	});
 
 	// Derived: which verification flow to show
 	let needsTier2: boolean = $derived(minimumTier <= 2 && userTrustTier < 2);
@@ -110,8 +126,21 @@
 		});
 	}
 
+	function handleRecoveryComplete(
+		data: { verified: boolean; method: string; userId: string; district?: string }
+	) {
+		console.log('[Verification Gate] Recovery complete:', data);
+		showRecovery = false;
+		showModal = false;
+		onverified?.({
+			userId: data.userId,
+			method: data.method
+		});
+	}
+
 	function handleCancel() {
 		showModal = false;
+		showRecovery = false;
 		oncancel?.();
 	}
 </script>
@@ -140,7 +169,16 @@
 			</button>
 
 			<!-- Header (tier-aware) -->
-			{#if needsTier4Plus}
+			{#if showRecovery}
+				<div class="border-b border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-8 py-6">
+					<h2 id="verification-gate-title" class="text-2xl font-bold text-slate-900">
+						Restore Proof Credentials
+					</h2>
+					<p class="mt-2 text-slate-600">
+						Your credentials were cleared from this device. A quick re-verification will restore them.
+					</p>
+				</div>
+			{:else if needsTier4Plus}
 				<div class="border-b border-indigo-200 bg-gradient-to-r from-indigo-50 to-blue-50 px-8 py-6">
 					<h2 id="verification-gate-title" class="text-2xl font-bold text-slate-900">
 						Verify with Passport or Government Credential
@@ -174,7 +212,13 @@
 
 			<!-- Verification Flow Content (tier-aware) -->
 			<div class="max-h-[calc(100vh-12rem)] overflow-y-auto p-8">
-				{#if needsTier2}
+				{#if showRecovery}
+					<IdentityRecoveryFlow
+						{userId}
+						oncomplete={handleRecoveryComplete}
+						oncancel={handleCancel}
+					/>
+				{:else if needsTier2}
 					<AddressVerificationFlow
 						{userId}
 						onComplete={handleAddressVerificationComplete}
