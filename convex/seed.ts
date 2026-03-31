@@ -755,8 +755,8 @@ export const insertUsers = internalMutation({
       const u = SEED_USERS[i];
       const id = await ctx.db.insert("users", {
         tokenIdentifier: u.tokenIdentifier,
-        email: u.email,
-        name: u.name,
+        encryptedEmail: "",
+        emailHash: `seed-user-${i}`,
         updatedAt: now,
 
         // Verification

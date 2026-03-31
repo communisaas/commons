@@ -184,7 +184,7 @@ export const getDashboard = query({
 
       recentSupporters: recentSupporters.map((s) => ({
         _id: s._id,
-        name: s.name ?? null,
+        encryptedName: s.encryptedName ?? null,
         source: s.source ?? null,
         verified: s.verified,
         emailStatus: s.emailStatus,

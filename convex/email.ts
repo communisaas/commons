@@ -767,18 +767,8 @@ export const findUnresolvedReport = query({
       return report ? { _id: report._id } : null;
     }
 
-    // Fallback to plaintext if EMAIL_LOOKUP_KEY not configured
-    const report = await ctx.db
-      .query("bounceReports")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("reportedBy"), userId),
-          q.eq(q.field("email"), email),
-          q.eq(q.field("resolved"), false),
-        ),
-      )
-      .first();
-    return report ? { _id: report._id } : null;
+    // EMAIL_LOOKUP_KEY not configured — cannot look up by hash
+    return null;
   },
 });
 

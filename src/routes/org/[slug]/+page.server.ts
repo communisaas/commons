@@ -73,7 +73,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 		recentActivity: (dashboard.recentSupporters ?? []).map((s: Record<string, unknown>) => ({
 			type: 'signup' as const,
 			id: s._id,
-			label: (s.name as string) ?? 'Anonymous',
+			label: 'Supporter',
 			detail: (s.source as string) ?? 'organic',
 			verified: s.verified,
 			tier: 0,

@@ -330,8 +330,6 @@ export const exportMatching = query({
       encryptedEmail: string | null;
       encryptedName: string | null;
       encryptedPhone: string | null;
-      name: string | null;
-      phone: string | null;
       tagNames: string[];
     }> = [];
 
@@ -353,8 +351,6 @@ export const exportMatching = query({
           encryptedEmail: (s as any).encryptedEmail ?? null,
           encryptedName: (s as any).encryptedName ?? null,
           encryptedPhone: (s as any).encryptedPhone ?? null,
-          name: s.name ?? null,
-          phone: s.phone ?? null,
           tagNames,
         });
       }
