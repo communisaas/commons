@@ -337,12 +337,12 @@ export const sendBlast = internalAction({
   },
   handler: async (ctx, args) => {
     // Defense-in-depth: check email quota before sending
-    const blast = await ctx.runQuery(internal.email.getBlastById, {
+    const blastForQuota = await ctx.runQuery(internal.email.getBlastById, {
       blastId: args.blastId,
     });
-    if (blast?.orgId) {
+    if (blastForQuota?.orgId) {
       const limits = await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
-        orgId: blast.orgId,
+        orgId: blastForQuota.orgId,
       });
       if (limits && limits.current.emailsSent >= limits.limits.maxEmails) {
         throw new Error("EMAIL_QUOTA_EXCEEDED");
