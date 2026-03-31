@@ -1049,9 +1049,6 @@ export default defineSchema({
     source: v.optional(v.string()), // 'csv' | 'action_network' | 'organic' | 'widget'
     importedAt: v.optional(v.number()),
 
-    // Flexible data (encrypted at rest)
-    encryptedCustomFields: v.optional(v.string()),
-
     updatedAt: v.number(),
   })
     .index("by_orgId", ["orgId"])
