@@ -3,8 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole, loadOrg, requireAuth } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
-import { encryptSupporterEmail, computeEmailHash } from "./_pii";
-import { internal } from "./_generated/api";
+import { encryptSupporterEmail, computeEmailHash, tryDecryptPii, type EncryptedPii } from "./_pii";
 
 // =============================================================================
 // QUERIES
@@ -661,9 +660,10 @@ export const findOrCreateSupporter = internalMutation({
     orgId: v.id("organizations"),
     emailHash: v.string(),
     encryptedEmail: v.string(),
-    name: v.optional(v.string()),
+    encryptedName: v.optional(v.string()),
     postalCode: v.optional(v.string()),
-    phone: v.optional(v.string()),
+    encryptedPhone: v.optional(v.string()),
+    phoneHash: v.optional(v.string()),
     source: v.string(),
   },
   handler: async (ctx, args) => {
@@ -678,9 +678,10 @@ export const findOrCreateSupporter = internalMutation({
     if (existing) {
       // Update fields if not already set
       const patch: Record<string, unknown> = {};
-      if (args.name && !existing.name) patch.name = args.name;
+      if (args.encryptedName && !existing.encryptedName) patch.encryptedName = args.encryptedName;
       if (args.postalCode && !existing.postalCode) patch.postalCode = args.postalCode;
-      if (args.phone && !existing.phone) patch.phone = args.phone;
+      if (args.encryptedPhone && !existing.encryptedPhone) patch.encryptedPhone = args.encryptedPhone;
+      if (args.phoneHash && !existing.phoneHash) patch.phoneHash = args.phoneHash;
       if (Object.keys(patch).length > 0) {
         patch.updatedAt = Date.now();
         await ctx.db.patch(existing._id, patch);
@@ -694,10 +695,11 @@ export const findOrCreateSupporter = internalMutation({
       orgId: args.orgId,
       encryptedEmail: args.encryptedEmail,
       emailHash: args.emailHash,
-      name: args.name,
+      encryptedName: args.encryptedName,
       postalCode: args.postalCode,
       country: "US",
-      phone: args.phone,
+      encryptedPhone: args.encryptedPhone,
+      phoneHash: args.phoneHash,
       source: args.source,
       verified: false,
       emailStatus: "subscribed",
@@ -756,8 +758,13 @@ export const createCampaignAction = internalMutation({
       return { alreadySubmitted: true, actionCount: verifiedCount };
     }
 
+    // Denormalize orgId from campaign for billing query performance
+    const campaign = await ctx.db.get(args.campaignId);
+    const orgId = campaign?.orgId;
+
     await ctx.db.insert("campaignActions", {
       campaignId: args.campaignId,
+      orgId,
       supporterId: args.supporterId,
       verified: args.verified,
       engagementTier: args.engagementTier,
@@ -767,8 +774,7 @@ export const createCampaignAction = internalMutation({
       sentAt: Date.now(),
     });
 
-    // Update campaign counters
-    const campaign = await ctx.db.get(args.campaignId);
+    // Update campaign counters (reuse campaign from orgId lookup above)
     if (campaign) {
       const newActionCount = (campaign.actionCount ?? 0) + 1;
       const newVerifiedCount = args.verified
@@ -806,9 +812,24 @@ export const submitAction = action({
     source: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Rate limit: 10 actions per minute per campaign (spam prevention)
-    // Rate limit per email+campaign (not shared across all users)
-    const rlKey = `campaigns.submitAction:${args.campaignId}:${args.email?.slice(0, 10) ?? 'anon'}`;
+    // Validate early
+    if (!args.email) throw new Error("Email is required");
+    if (!args.name) throw new Error("Name is required");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.email)) {
+      throw new Error("Please enter a valid email address");
+    }
+    if (args.message && args.message.length > 5000) {
+      throw new Error("Message too long (5000 character maximum)");
+    }
+
+    const normalizedEmail = args.email.trim().toLowerCase();
+
+    // Compute email hash first (deterministic HMAC — needed for rate limit key)
+    const emailHash = await computeEmailHash(normalizedEmail);
+    if (!emailHash) throw new Error("Encryption service not available");
+
+    // Rate limit: 10 actions per minute per campaign+donor (uses hash, not plaintext)
+    const rlKey = `campaigns.submitAction:${args.campaignId}:${emailHash.slice(0, 16)}`;
     const rl = await ctx.runMutation(internal._rateLimit.check, {
       key: rlKey,
       windowMs: 60_000,
@@ -824,22 +845,6 @@ export const submitAction = action({
       throw new Error("Campaign not found or inactive");
     }
 
-    // Validate
-    if (!args.email) throw new Error("Email is required");
-    if (!args.name) throw new Error("Name is required");
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.email)) {
-      throw new Error("Please enter a valid email address");
-    }
-    if (args.message && args.message.length > 5000) {
-      throw new Error("Message too long (5000 character maximum)");
-    }
-
-    const normalizedEmail = args.email.trim().toLowerCase();
-
-    // Encrypt email (random IV → must be in action)
-    const emailHash = await computeEmailHash(normalizedEmail);
-    if (!emailHash) throw new Error("Encryption service not available");
-
     // Step 1: Find or create supporter with placeholder email
     const { supporterId, isNew } = await ctx.runMutation(
       internal.campaigns.findOrCreateSupporter,
@@ -847,22 +852,25 @@ export const submitAction = action({
         orgId: campaign.orgId,
         emailHash,
         encryptedEmail: "", // placeholder
-        name: args.name,
         postalCode: args.postalCode,
-        phone: args.phone,
         source: args.source ?? "campaign",
       },
     );
 
-    // Step 2: If new, encrypt email with real ID and patch
+    // Step 2: Encrypt PII with real supporter ID and patch
     if (isNew) {
-      const { encryptedEmail } = await encryptSupporterEmail(
-        normalizedEmail,
-        supporterId,
-      );
-      await ctx.runMutation(internal.supporters.patchEncryptedEmail, {
+      const { encryptSupporterName, encryptSupporterPhone } = await import("./_pii");
+      const encryptionResults = await Promise.all([
+        encryptSupporterEmail(normalizedEmail, supporterId),
+        args.name ? encryptSupporterName(args.name.trim(), supporterId) : null,
+        args.phone ? encryptSupporterPhone(args.phone.trim(), supporterId) : null,
+      ]);
+      await ctx.runMutation(internal.supporters.patchEncryptedPii, {
         supporterId: supporterId as Id<"supporters">,
-        encryptedEmail,
+        encryptedEmail: encryptionResults[0].encryptedEmail,
+        encryptedName: encryptionResults[1] ?? undefined,
+        encryptedPhone: encryptionResults[2]?.encryptedPhone ?? undefined,
+        phoneHash: encryptionResults[2]?.phoneHash ?? undefined,
       });
     }
 
@@ -1096,5 +1104,64 @@ export const getStats = query({
       totalActions: actions.length,
       uniqueDistricts: districtSet.size,
     };
+  },
+});
+
+/**
+ * Get past deliveries for a campaign. Requires org membership.
+ * Decrypts targetEmail/targetName from encrypted fields with plaintext fallback.
+ */
+export const getPastDeliveries = query({
+  args: {
+    campaignId: v.id("campaigns"),
+    orgSlug: v.string(),
+  },
+  handler: async (ctx, { campaignId, orgSlug }) => {
+    const { org } = await requireOrgRole(ctx, orgSlug, "member");
+
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign || campaign.orgId !== org._id) return null;
+
+    const deliveries = await ctx.db
+      .query("campaignDeliveries")
+      .withIndex("by_campaignId", (q) => q.eq("campaignId", campaignId))
+      .collect();
+
+    return await Promise.all(
+      deliveries.map(async (d) => {
+        // Decrypt targetEmail from encrypted field if available, fall back to plaintext
+        let targetEmail = d.targetEmail;
+        if (d.encryptedTargetEmail) {
+          const decrypted = await tryDecryptPii(
+            JSON.parse(d.encryptedTargetEmail) as EncryptedPii,
+            "delivery:" + d._id,
+            "targetEmail",
+          );
+          if (decrypted) targetEmail = decrypted;
+        }
+
+        // Decrypt targetName from encrypted field if available, fall back to plaintext
+        let targetName = d.targetName;
+        if (d.encryptedTargetName) {
+          const decrypted = await tryDecryptPii(
+            JSON.parse(d.encryptedTargetName) as EncryptedPii,
+            "delivery:" + d._id,
+            "targetName",
+          );
+          if (decrypted) targetName = decrypted;
+        }
+
+        return {
+          _id: d._id,
+          targetEmail,
+          targetName,
+          targetTitle: d.targetTitle,
+          targetDistrict: d.targetDistrict ?? null,
+          status: d.status,
+          sentAt: d.sentAt ?? null,
+          proofWeight: d.proofWeight ?? null,
+        };
+      }),
+    );
   },
 });

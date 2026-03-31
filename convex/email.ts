@@ -8,7 +8,7 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
-import { decryptSupporterEmail } from "./_pii";
+import { decryptSupporterEmail, computeEmailHash } from "./_pii";
 
 // =============================================================================
 // EMAIL BLASTS — Queries, Mutations, Actions
@@ -209,9 +209,12 @@ export const recordEmailEvent = internalMutation({
     timestamp: v.number(),
   },
   handler: async (ctx, args) => {
+    // Compute deterministic email hash for dedup lookups (HMAC — safe in mutations)
+    const recipientEmailHash = await computeEmailHash(args.recipientEmail) ?? undefined;
+
     await ctx.db.insert("emailEvents", {
       blastId: args.blastId,
-      recipientEmail: args.recipientEmail,
+      recipientEmailHash,
       eventType: args.eventType,
       linkUrl: args.linkUrl,
       linkIndex: args.linkIndex,
@@ -253,6 +256,9 @@ export const updateBlastStatus = internalMutation({
     batches: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
+    const blast = await ctx.db.get(args.blastId);
+    if (!blast) return;
+
     const patch: Record<string, unknown> = {
       status: args.status,
       updatedAt: Date.now(),
@@ -265,6 +271,22 @@ export const updateBlastStatus = internalMutation({
     if (args.batches !== undefined) patch.batches = args.batches;
 
     await ctx.db.patch(args.blastId, patch);
+
+    // When blast transitions to "sent", increment org-level email counter.
+    // Idempotent: only increment on actual status transition (not re-finalization).
+    // Note: org.sentEmailCount is a convenience counter for onboarding state;
+    // billing enforcement uses period-scoped aggregation from emailBlasts table.
+    if (args.status === "sent" && blast.status !== "sent" && blast.orgId) {
+      const org = await ctx.db.get(blast.orgId);
+      if (org) {
+        const currentCount = (org as any).sentEmailCount ?? 0;
+        const blastSent = args.totalSent ?? blast.totalSent ?? 0;
+        await ctx.db.patch(blast.orgId, {
+          sentEmailCount: currentCount + blastSent,
+          updatedAt: Date.now(),
+        } as any);
+      }
+    }
   },
 });
 
@@ -314,6 +336,18 @@ export const sendBlast = internalAction({
     blastId: v.id("emailBlasts"),
   },
   handler: async (ctx, args) => {
+    // Defense-in-depth: check email quota before sending
+    const blast = await ctx.runQuery(internal.email.getBlastById, {
+      blastId: args.blastId,
+    });
+    if (blast?.orgId) {
+      const limits = await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
+        orgId: blast.orgId,
+      });
+      if (limits && limits.current.emailsSent >= limits.limits.maxEmails) {
+        throw new Error("EMAIL_QUOTA_EXCEEDED");
+      }
+    }
 
     // Transition to sending (the mutation enforces draft → sending)
     await ctx.runMutation(internal.email.updateBlastStatus, {
@@ -713,10 +747,27 @@ export const countActiveReports = query({
 
 /**
  * Find unresolved bounce report for same user + email (dedup).
+ * Uses emailHash for lookup instead of plaintext email.
  */
 export const findUnresolvedReport = query({
   args: { userId: v.string(), email: v.string() },
   handler: async (ctx, { userId, email }) => {
+    // Compute deterministic hash from email (HMAC — safe in queries)
+    const emailHash = await computeEmailHash(email);
+
+    if (emailHash) {
+      // Prefer hash-based lookup via index
+      const report = await ctx.db
+        .query("bounceReports")
+        .withIndex("by_emailHash_resolved", (q) =>
+          q.eq("emailHash", emailHash).eq("resolved", false),
+        )
+        .filter((q) => q.eq(q.field("reportedBy"), userId))
+        .first();
+      return report ? { _id: report._id } : null;
+    }
+
+    // Fallback to plaintext if EMAIL_LOOKUP_KEY not configured
     const report = await ctx.db
       .query("bounceReports")
       .filter((q) =>
@@ -728,5 +779,32 @@ export const findUnresolvedReport = query({
       )
       .first();
     return report ? { _id: report._id } : null;
+  },
+});
+
+/**
+ * Create a bounce report with emailHash for hash-primary lookups.
+ * Called from /api/emails/report-bounce route.
+ */
+export const createBounceReport = mutation({
+  args: {
+    email: v.string(),
+    reportedBy: v.string(),
+  },
+  handler: async (ctx, { email, reportedBy }) => {
+    // Compute deterministic hash (HMAC — safe in mutations)
+    const emailHash = await computeEmailHash(email) ?? undefined;
+
+    // Extract domain from email
+    const domain = email.split("@")[1] ?? "";
+
+    const id = await ctx.db.insert("bounceReports", {
+      emailHash: emailHash ?? "",
+      domain,
+      reportedBy,
+      resolved: false,
+    });
+
+    return { id };
   },
 });

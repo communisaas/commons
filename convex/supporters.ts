@@ -13,8 +13,15 @@ import type { Id } from "./_generated/dataModel";
 import { requireOrgRole } from "./_authHelpers";
 import {
   decryptSupporterEmail,
+  decryptSupporterName,
+  decryptSupporterPhone,
   encryptSupporterEmail,
+  encryptSupporterName,
+  encryptSupporterPhone,
+  encryptPii,
+  tryDecryptPii,
   computeEmailHash,
+  type EncryptedPii,
 } from "./_pii";
 
 // =============================================================================
@@ -112,19 +119,33 @@ export const list = query({
           }),
         );
 
+        // Decrypt name + phone (encrypted-only — no plaintext fallback)
+        const name = await decryptSupporterName(s);
+        const phone = await decryptSupporterPhone(s);
+
+        // Decrypt customFields
+        let customFields: unknown = null;
+        if (s.encryptedCustomFields) {
+          try {
+            const enc: EncryptedPii = JSON.parse(s.encryptedCustomFields);
+            const raw = await tryDecryptPii(enc, "supporter:" + s._id, "customFields");
+            if (raw) customFields = JSON.parse(raw);
+          } catch { /* corrupted — return null */ }
+        }
+
         return {
           _id: s._id,
           _creationTime: s._creationTime,
           email,
-          name: s.name ?? null,
+          name,
           postalCode: s.postalCode ?? null,
           country: s.country ?? null,
-          phone: s.phone ?? null,
+          phone,
           verified: s.verified,
           identityVerified: !!(s.identityCommitment && s.verified),
           emailStatus: s.emailStatus,
           source: s.source ?? null,
-          customFields: s.customFields ?? null,
+          customFields,
           updatedAt: s.updatedAt,
           tags: tags.filter((t): t is NonNullable<typeof t> => t !== null),
         };
@@ -172,21 +193,35 @@ export const get = query({
       }),
     );
 
+    // Decrypt name + phone (encrypted-only — no plaintext fallback)
+    const name = await decryptSupporterName(supporter);
+    const phone = await decryptSupporterPhone(supporter);
+
+    // Decrypt customFields
+    let customFields: unknown = null;
+    if (supporter.encryptedCustomFields) {
+      try {
+        const enc: EncryptedPii = JSON.parse(supporter.encryptedCustomFields);
+        const raw = await tryDecryptPii(enc, "supporter:" + supporter._id, "customFields");
+        if (raw) customFields = JSON.parse(raw);
+      } catch { /* corrupted — return null */ }
+    }
+
     return {
       _id: supporter._id,
       _creationTime: supporter._creationTime,
       email,
-      name: supporter.name ?? null,
+      name,
       postalCode: supporter.postalCode ?? null,
       country: supporter.country ?? null,
-      phone: supporter.phone ?? null,
+      phone,
       verified: supporter.verified,
       identityVerified: !!(supporter.identityCommitment && supporter.verified),
       identityCommitment: supporter.identityCommitment ?? null,
       emailStatus: supporter.emailStatus,
       smsStatus: supporter.smsStatus,
       source: supporter.source ?? null,
-      customFields: supporter.customFields ?? null,
+      customFields,
       importedAt: supporter.importedAt ?? null,
       updatedAt: supporter.updatedAt,
       tags: tags.filter((t): t is NonNullable<typeof t> => t !== null),
@@ -235,11 +270,12 @@ export const searchByEmail = query({
       }),
     );
 
+    const name = await decryptSupporterName(supporter);
     return {
       _id: supporter._id,
       _creationTime: supporter._creationTime,
       email,
-      name: supporter.name ?? null,
+      name,
       verified: supporter.verified,
       emailStatus: supporter.emailStatus,
       tags: tags.filter((t): t is NonNullable<typeof t> => t !== null),
@@ -364,26 +400,33 @@ export const create = action({
         orgSlug: args.orgSlug,
         emailHash,
         encryptedEmail: "", // placeholder — will be patched
-        name: args.name,
         postalCode: args.postalCode,
         country: args.country ?? "US",
-        phone: args.phone,
         source: args.source ?? "organic",
-        customFields: args.customFields,
         tagIds: args.tagIds,
       },
     );
 
-    // Step 2: Encrypt with the real supporter _id
-    const { encryptedEmail } = await encryptSupporterEmail(
-      normalizedEmail,
-      supporterId,
-    );
+    // Step 2: Encrypt PII with the real supporter _id
+    const encryptionResults = await Promise.all([
+      encryptSupporterEmail(normalizedEmail, supporterId),
+      args.name ? encryptSupporterName(args.name.trim(), supporterId) : null,
+      args.phone ? encryptSupporterPhone(args.phone.trim(), supporterId) : null,
+      args.customFields
+        ? encryptPii(JSON.stringify(args.customFields), "supporter:" + supporterId, "customFields")
+        : null,
+    ]);
 
-    // Step 3: Patch the record with the real encrypted email
-    await ctx.runMutation(internal.supporters.patchEncryptedEmail, {
+    // Step 3: Patch the record with encrypted PII
+    await ctx.runMutation(internal.supporters.patchEncryptedPii, {
       supporterId: supporterId as Id<"supporters">,
-      encryptedEmail,
+      encryptedEmail: encryptionResults[0].encryptedEmail,
+      encryptedName: encryptionResults[1] ?? undefined,
+      encryptedPhone: encryptionResults[2]?.encryptedPhone ?? undefined,
+      phoneHash: encryptionResults[2]?.phoneHash ?? undefined,
+      encryptedCustomFields: encryptionResults[3]
+        ? JSON.stringify(encryptionResults[3])
+        : undefined,
     });
 
     return supporterId;
@@ -409,43 +452,82 @@ export const update = action({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
+    // Encrypt PII fields that changed
+    const encryptionWork: Promise<unknown>[] = [];
+    let encryptedEmail: string | undefined;
+    let emailHash: string | undefined;
+    let encryptedName: string | undefined;
+    let encryptedPhone: string | undefined;
+    let phoneHash: string | undefined;
+
     if (args.email) {
-      // Email changed — re-encrypt
       const normalizedEmail = args.email.trim().toLowerCase();
-      const emailHash = await computeEmailHash(normalizedEmail);
-      if (!emailHash) {
-        console.error("[supporters.update] EMAIL_LOOKUP_KEY not configured");
-        throw new Error("Encryption service not available");
-      }
-
-      const { encryptedEmail } = await encryptSupporterEmail(
-        normalizedEmail,
-        args.supporterId,
+      encryptionWork.push(
+        computeEmailHash(normalizedEmail).then((h) => {
+          if (!h) throw new Error("Encryption service not available");
+          emailHash = h;
+        }),
+        encryptSupporterEmail(normalizedEmail, args.supporterId).then((r) => {
+          encryptedEmail = r.encryptedEmail;
+        }),
       );
-
-      await ctx.runMutation(internal.supporters.updateSupporterFields, {
-        orgSlug: args.orgSlug,
-        supporterId: args.supporterId,
-        encryptedEmail,
-        emailHash,
-        name: args.name,
-        postalCode: args.postalCode,
-        country: args.country,
-        phone: args.phone,
-        customFields: args.customFields,
-      });
-    } else {
-      // No email change — direct mutation for non-PII fields
-      await ctx.runMutation(internal.supporters.updateSupporterFields, {
-        orgSlug: args.orgSlug,
-        supporterId: args.supporterId,
-        name: args.name,
-        postalCode: args.postalCode,
-        country: args.country,
-        phone: args.phone,
-        customFields: args.customFields,
-      });
     }
+    if (args.name !== undefined) {
+      if (args.name) {
+        encryptionWork.push(
+          encryptSupporterName(args.name.trim(), args.supporterId).then((r) => {
+            encryptedName = r;
+          }),
+        );
+      } else {
+        encryptedName = undefined; // clearing name
+      }
+    }
+    if (args.phone !== undefined) {
+      if (args.phone) {
+        encryptionWork.push(
+          encryptSupporterPhone(args.phone.trim(), args.supporterId).then((r) => {
+            encryptedPhone = r.encryptedPhone;
+            phoneHash = r.phoneHash;
+          }),
+        );
+      } else {
+        encryptedPhone = undefined; // clearing phone
+        phoneHash = undefined;
+      }
+    }
+
+    let encryptedCustomFields: string | undefined;
+    if (args.customFields !== undefined) {
+      if (args.customFields) {
+        encryptionWork.push(
+          encryptPii(
+            JSON.stringify(args.customFields),
+            "supporter:" + args.supporterId,
+            "customFields",
+          ).then((enc) => {
+            encryptedCustomFields = JSON.stringify(enc);
+          }),
+        );
+      } else {
+        encryptedCustomFields = undefined; // clearing custom fields
+      }
+    }
+
+    await Promise.all(encryptionWork);
+
+    await ctx.runMutation(internal.supporters.updateSupporterFields, {
+      orgSlug: args.orgSlug,
+      supporterId: args.supporterId,
+      encryptedEmail,
+      emailHash,
+      encryptedName,
+      encryptedPhone,
+      phoneHash,
+      postalCode: args.postalCode,
+      country: args.country,
+      encryptedCustomFields: args.customFields !== undefined ? encryptedCustomFields : undefined,
+    });
   },
 });
 
@@ -462,12 +544,10 @@ export const insertSupporter = internalMutation({
     orgSlug: v.string(),
     emailHash: v.string(),
     encryptedEmail: v.string(),
-    name: v.optional(v.string()),
     postalCode: v.optional(v.string()),
     country: v.optional(v.string()),
-    phone: v.optional(v.string()),
     source: v.optional(v.string()),
-    customFields: v.optional(v.any()),
+    encryptedCustomFields: v.optional(v.string()),
     tagIds: v.optional(v.array(v.id("tags"))),
   },
   handler: async (ctx, args) => {
@@ -491,12 +571,10 @@ export const insertSupporter = internalMutation({
       orgId: org._id,
       encryptedEmail: args.encryptedEmail,
       emailHash: args.emailHash,
-      name: args.name,
       postalCode: args.postalCode,
       country: args.country ?? "US",
-      phone: args.phone,
       source: args.source ?? "organic",
-      customFields: args.customFields,
+      encryptedCustomFields: args.encryptedCustomFields,
       verified: false,
       emailStatus: "subscribed",
       smsStatus: "none",
@@ -538,8 +616,35 @@ export const insertSupporter = internalMutation({
 });
 
 /**
- * Patch the encrypted email on a supporter (called after action encrypts with real _id).
+ * Patch encrypted PII on a supporter (called after action encrypts with real _id).
  */
+export const patchEncryptedPii = internalMutation({
+  args: {
+    supporterId: v.id("supporters"),
+    encryptedEmail: v.string(),
+    encryptedName: v.optional(v.string()),
+    encryptedPhone: v.optional(v.string()),
+    phoneHash: v.optional(v.string()),
+    encryptedCustomFields: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const supporter = await ctx.db.get(args.supporterId);
+    if (!supporter) throw new Error("Supporter not found");
+
+    const patch: Record<string, unknown> = {
+      encryptedEmail: args.encryptedEmail,
+      updatedAt: Date.now(),
+    };
+    if (args.encryptedName !== undefined) patch.encryptedName = args.encryptedName;
+    if (args.encryptedPhone !== undefined) patch.encryptedPhone = args.encryptedPhone;
+    if (args.phoneHash !== undefined) patch.phoneHash = args.phoneHash;
+    if (args.encryptedCustomFields !== undefined) patch.encryptedCustomFields = args.encryptedCustomFields;
+
+    await ctx.db.patch(args.supporterId, patch);
+  },
+});
+
+/** @deprecated Use patchEncryptedPii instead */
 export const patchEncryptedEmail = internalMutation({
   args: {
     supporterId: v.id("supporters"),
@@ -566,11 +671,12 @@ export const updateSupporterFields = internalMutation({
     supporterId: v.id("supporters"),
     encryptedEmail: v.optional(v.string()),
     emailHash: v.optional(v.string()),
-    name: v.optional(v.string()),
+    encryptedName: v.optional(v.string()),
+    encryptedPhone: v.optional(v.string()),
+    phoneHash: v.optional(v.string()),
     postalCode: v.optional(v.string()),
     country: v.optional(v.string()),
-    phone: v.optional(v.string()),
-    customFields: v.optional(v.any()),
+    encryptedCustomFields: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
@@ -582,17 +688,14 @@ export const updateSupporterFields = internalMutation({
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
 
-    if (args.encryptedEmail !== undefined) {
-      patch.encryptedEmail = args.encryptedEmail;
-    }
-    if (args.emailHash !== undefined) {
-      patch.emailHash = args.emailHash;
-    }
-    if (args.name !== undefined) patch.name = args.name;
+    if (args.encryptedEmail !== undefined) patch.encryptedEmail = args.encryptedEmail;
+    if (args.emailHash !== undefined) patch.emailHash = args.emailHash;
+    if (args.encryptedName !== undefined) patch.encryptedName = args.encryptedName;
+    if (args.encryptedPhone !== undefined) patch.encryptedPhone = args.encryptedPhone;
+    if (args.phoneHash !== undefined) patch.phoneHash = args.phoneHash;
     if (args.postalCode !== undefined) patch.postalCode = args.postalCode;
     if (args.country !== undefined) patch.country = args.country;
-    if (args.phone !== undefined) patch.phone = args.phone;
-    if (args.customFields !== undefined) patch.customFields = args.customFields;
+    if (args.encryptedCustomFields !== undefined) patch.encryptedCustomFields = args.encryptedCustomFields;
 
     await ctx.db.patch(args.supporterId, patch);
   },
@@ -828,9 +931,10 @@ export const importBatch = mutation({
       v.object({
         encryptedEmail: v.string(),
         emailHash: v.string(),
-        name: v.optional(v.string()),
+        encryptedName: v.optional(v.string()),
         postalCode: v.optional(v.string()),
-        phone: v.optional(v.string()),
+        encryptedPhone: v.optional(v.string()),
+        phoneHash: v.optional(v.string()),
         country: v.optional(v.string()),
         emailStatus: v.string(),
         smsStatus: v.string(),
@@ -857,9 +961,10 @@ export const importBatch = mutation({
         if (existing) {
           // Update: only fill in null fields
           const patch: Record<string, unknown> = {};
-          if (s.name && !existing.name) patch.name = s.name;
+          if (s.encryptedName && !existing.encryptedName) patch.encryptedName = s.encryptedName;
           if (s.postalCode && !existing.postalCode) patch.postalCode = s.postalCode;
-          if (s.phone && !existing.phone) patch.phone = s.phone;
+          if (s.encryptedPhone && !existing.encryptedPhone) patch.encryptedPhone = s.encryptedPhone;
+          if (s.phoneHash && !existing.phoneHash) patch.phoneHash = s.phoneHash;
           if (s.country && !existing.country) patch.country = s.country;
 
           if (Object.keys(patch).length > 0) {
@@ -887,10 +992,11 @@ export const importBatch = mutation({
           // Create new supporter
           const id = await ctx.db.insert("supporters", {
             orgId: org._id,
-            name: s.name ?? null,
-            postalCode: s.postalCode ?? null,
-            phone: s.phone ?? null,
-            country: s.country ?? null,
+            encryptedName: s.encryptedName,
+            postalCode: s.postalCode ?? undefined,
+            encryptedPhone: s.encryptedPhone,
+            phoneHash: s.phoneHash,
+            country: s.country ?? undefined,
             emailStatus: s.emailStatus,
             smsStatus: s.smsStatus,
             source: "csv",

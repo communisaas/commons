@@ -36,10 +36,8 @@ export default defineSchema({
   // ===========================================================================
 
   users: defineTable({
-    // Auth (email kept as optional legacy — encrypted_email + email_hash canonical)
+    // Auth
     tokenIdentifier: v.optional(v.string()),
-    email: v.optional(v.string()),
-    name: v.optional(v.string()),
     avatar: v.optional(v.string()),
     updatedAt: v.number(),
 
@@ -117,7 +115,6 @@ export default defineSchema({
     profileVisibility: v.string(), // 'private' | 'public'
   })
     .index("by_tokenIdentifier", ["tokenIdentifier"])
-    .index("by_email", ["email"])
     .index("by_emailHash", ["emailHash"])
     .index("by_identityHash", ["identityHash"])
     .index("by_identityCommitment", ["identityCommitment"])
@@ -177,14 +174,14 @@ export default defineSchema({
     deliveryConfig: v.any(),
     cwcConfig: v.optional(v.any()),
     recipientConfig: v.any(),
-    metrics: v.any(),
     campaignId: v.optional(v.string()),
     status: v.string(), // 'draft' | 'published' | etc.
     isPublic: v.boolean(),
 
-    // Community metrics
+    // Civic reach counters (incremented on delivery)
     verifiedSends: v.number(),
     uniqueDistricts: v.number(),
+    deliveredDistricts: v.optional(v.array(v.string())), // bounded: max 435 congressional districts
     avgReputation: v.optional(v.float64()),
     endorsementCount: v.optional(v.number()),
 
@@ -348,6 +345,7 @@ export default defineSchema({
 
     // Metric dimensions
     metric: v.optional(v.string()),
+    dimensionKey: v.optional(v.string()), // composite: "templateId|jurisdiction|deliveryMethod|utmSource|errorType"
     templateId: v.optional(v.string()),
     jurisdiction: v.optional(v.string()),
     deliveryMethod: v.optional(v.string()),
@@ -369,6 +367,7 @@ export default defineSchema({
     .index("by_recordType", ["recordType"])
     .index("by_date", ["date"])
     .index("by_metric_date", ["metric", "date"])
+    .index("by_metric_date_dimension", ["metric", "date", "dimensionKey"])
     .index("by_templateId_date", ["templateId", "date"])
     .index("by_jurisdiction_date", ["jurisdiction", "date"])
     .index("by_snapshotDate", ["snapshotDate"]),
@@ -378,15 +377,16 @@ export default defineSchema({
   // ===========================================================================
 
   privacyBudgets: defineTable({
-    userId: v.id("users"),
-    metric: v.string(),
-    epsilon: v.number(),
-    consumed: v.number(),
-    windowStart: v.number(),
-    windowEnd: v.number(),
+    userId: v.optional(v.id("users")), // null for system-level budget (cron snapshots)
+    metric: v.string(), // "system" for global budget, or specific metric
+    epsilon: v.number(), // budget limit for this window
+    consumed: v.number(), // epsilon spent so far
+    windowStart: v.number(), // epoch ms
+    windowEnd: v.number(), // epoch ms
     updatedAt: v.number(),
   })
-    .index("by_userId_metric", ["userId", "metric"]),
+    .index("by_userId_metric", ["userId", "metric"])
+    .index("by_windowStart_metric", ["windowStart", "metric"]),
 
   // ===========================================================================
   // ENCRYPTED DELIVERY DATA
@@ -440,6 +440,7 @@ export default defineSchema({
     deliveryStatus: v.string(), // 'pending' | 'processing' | 'delivered' | 'partial' | 'failed'
     deliveryError: v.optional(v.string()),
     deliveredAt: v.optional(v.number()),
+    resolvedDistrict: v.optional(v.string()), // congressional district from TEE resolve
 
     // Blockchain verification
     verificationTxHash: v.optional(v.string()),
@@ -591,8 +592,7 @@ export default defineSchema({
   // ===========================================================================
 
   suppressedEmails: defineTable({
-    email: v.string(),
-    emailHash: v.optional(v.string()),
+    emailHash: v.string(),
     domain: v.string(),
     reason: v.string(), // 'smtp_invalid' | 'smtp_disabled' | 'full_inbox' | 'bounce_report' | 'dns_no_mx'
     source: v.string(), // 'verification' | 'user_report'
@@ -600,7 +600,6 @@ export default defineSchema({
     reacherData: v.optional(v.any()),
     expiresAt: v.number(),
   })
-    .index("by_email", ["email"])
     .index("by_emailHash", ["emailHash"])
     .index("by_domain", ["domain"])
     .index("by_expiresAt", ["expiresAt"]),
@@ -610,15 +609,13 @@ export default defineSchema({
   // ===========================================================================
 
   bounceReports: defineTable({
-    email: v.string(),
-    emailHash: v.optional(v.string()),
+    emailHash: v.string(),
     encryptedEmail: v.optional(v.string()),
     domain: v.string(),
     reportedBy: v.string(),
     probeResult: v.optional(v.string()),
     resolved: v.boolean(),
   })
-    .index("by_email_resolved", ["email", "resolved"])
     .index("by_emailHash_resolved", ["emailHash", "resolved"])
     .index("by_reportedBy", ["reportedBy"]),
 
@@ -833,8 +830,11 @@ export default defineSchema({
   positionDeliveries: defineTable({
     registrationId: v.id("positionRegistrations"),
     recipientName: v.string(),
+    encryptedRecipientName: v.optional(v.string()),
     recipientKey: v.optional(v.string()),
     recipientEmail: v.optional(v.string()),
+    encryptedRecipientEmail: v.optional(v.string()),
+    recipientEmailHash: v.optional(v.string()),
     deliveryMethod: v.string(), // 'cwc' | 'email' | 'recorded'
     deliveryStatus: v.string(), // 'pending' | 'delivered' | 'failed'
     deliveredAt: v.optional(v.number()),
@@ -868,8 +868,9 @@ export default defineSchema({
     description: v.optional(v.string()),
     avatar: v.optional(v.string()),
 
-    // Billing
-    billingEmail: v.optional(v.string()),
+    // Billing (PII encrypted)
+    encryptedBillingEmail: v.optional(v.string()), // JSON-serialized EncryptedPii
+    billingEmailHash: v.optional(v.string()),      // HMAC-SHA256 for lookup
     stripeCustomerId: v.optional(v.string()),
 
     // Limits
@@ -890,6 +891,7 @@ export default defineSchema({
     campaignCount: v.optional(v.number()),
     memberCount: v.optional(v.number()),
     sentEmailCount: v.optional(v.number()),
+    smsSentCount: v.optional(v.number()),
     onboardingState: v.optional(v.object({
       hasDescription: v.boolean(),
       hasIssueDomains: v.boolean(),
@@ -1017,14 +1019,15 @@ export default defineSchema({
 
   supporters: defineTable({
     orgId: v.id("organizations"),
-    name: v.optional(v.string()),
     postalCode: v.optional(v.string()),
     country: v.optional(v.string()),
-    phone: v.optional(v.string()),
 
     // PII encryption at rest
     encryptedEmail: v.string(),
     emailHash: v.string(),
+    encryptedName: v.optional(v.string()),
+    encryptedPhone: v.optional(v.string()),
+    phoneHash: v.optional(v.string()),
 
     // ZK identity binding
     identityCommitment: v.optional(v.string()),
@@ -1038,13 +1041,14 @@ export default defineSchema({
     source: v.optional(v.string()), // 'csv' | 'action_network' | 'organic' | 'widget'
     importedAt: v.optional(v.number()),
 
-    // Flexible data
-    customFields: v.optional(v.any()),
+    // Flexible data (encrypted at rest)
+    encryptedCustomFields: v.optional(v.string()),
 
     updatedAt: v.number(),
   })
     .index("by_orgId", ["orgId"])
     .index("by_orgId_emailHash", ["orgId", "emailHash"])
+    .index("by_orgId_phoneHash", ["orgId", "phoneHash"])
     .index("by_emailStatus", ["emailStatus"])
     .index("by_smsStatus", ["smsStatus"])
     .index("by_source", ["source"])
@@ -1130,6 +1134,7 @@ export default defineSchema({
 
   campaignActions: defineTable({
     campaignId: v.id("campaigns"),
+    orgId: v.optional(v.id("organizations")), // Denormalized for billing queries
     supporterId: v.optional(v.id("supporters")),
 
     verified: v.boolean(),
@@ -1145,13 +1150,17 @@ export default defineSchema({
   })
     .index("by_campaignId", ["campaignId"])
     .index("by_campaignId_verified", ["campaignId", "verified"])
-    .index("by_campaignId_districtHash", ["campaignId", "districtHash"]),
+    .index("by_campaignId_districtHash", ["campaignId", "districtHash"])
+    .index("by_orgId_verified", ["orgId", "verified"]),
 
   campaignDeliveries: defineTable({
     campaignId: v.id("campaigns"),
     actionId: v.optional(v.id("campaignActions")),
     targetEmail: v.string(),
     targetName: v.string(),
+    encryptedTargetEmail: v.optional(v.string()),
+    targetEmailHash: v.optional(v.string()),
+    encryptedTargetName: v.optional(v.string()),
     targetTitle: v.string(),
     targetDistrict: v.optional(v.string()),
     status: v.string(), // 'queued' | 'sent' | 'delivered' | 'bounced' | 'opened'
@@ -1222,7 +1231,8 @@ export default defineSchema({
 
   emailEvents: defineTable({
     blastId: v.id("emailBlasts"),
-    recipientEmail: v.string(),
+    encryptedRecipientEmail: v.optional(v.string()),
+    recipientEmailHash: v.string(),
     eventType: v.string(), // 'open' | 'click' | 'bounce' | 'complaint'
     linkUrl: v.optional(v.string()),
     linkIndex: v.optional(v.number()),
@@ -1230,7 +1240,7 @@ export default defineSchema({
   })
     .index("by_blastId", ["blastId"])
     .index("by_blastId_eventType", ["blastId", "eventType"])
-    .index("by_recipientEmail", ["recipientEmail"]),
+    .index("by_blastId_recipientEmailHash", ["blastId", "recipientEmailHash"]),
 
   // ===========================================================================
   // SUBSCRIPTIONS
@@ -1261,6 +1271,9 @@ export default defineSchema({
     paymentToken: v.optional(v.string()),
     lastTxHash: v.optional(v.string()),
     lastVerifiedAt: v.optional(v.number()),
+
+    // Grace period tracking: set on first transition to past_due, cleared on recovery
+    pastDueSince: v.optional(v.number()),
 
     updatedAt: v.number(),
   })
@@ -1349,7 +1362,7 @@ export default defineSchema({
 
     encryptedEmail: v.string(),
     emailHash: v.string(),
-    name: v.string(),
+    encryptedRsvpName: v.optional(v.string()),
     status: v.string(), // 'GOING' | 'MAYBE' | 'NOT_GOING' | 'WAITLISTED'
     guestCount: v.number(),
 
@@ -1380,10 +1393,9 @@ export default defineSchema({
     campaignId: v.id("campaigns"),
     supporterId: v.optional(v.id("supporters")),
 
-    email: v.string(), // plaintext during transition
-    name: v.string(), // plaintext during transition
-    emailHash: v.optional(v.string()),
-    encryptedEmail: v.optional(v.string()),
+    // PII encryption at rest
+    emailHash: v.string(),
+    encryptedEmail: v.string(),
     encryptedName: v.optional(v.string()),
 
     amountCents: v.number(),
@@ -1481,7 +1493,8 @@ export default defineSchema({
   smsMessages: defineTable({
     blastId: v.id("smsBlasts"),
     supporterId: v.id("supporters"),
-    to: v.string(),
+    encryptedTo: v.string(),
+    toHash: v.optional(v.string()),
     body: v.string(),
     twilioSid: v.optional(v.string()),
     status: v.string(), // 'queued' | 'sent' | 'delivered' | 'failed'
@@ -1496,8 +1509,10 @@ export default defineSchema({
     campaignId: v.optional(v.id("campaigns")),
     supporterId: v.id("supporters"),
 
-    callerPhone: v.string(),
-    targetPhone: v.string(),
+    encryptedCallerPhone: v.string(),
+    encryptedTargetPhone: v.string(),
+    callerPhoneHash: v.optional(v.string()),
+    targetPhoneHash: v.optional(v.string()),
     targetName: v.optional(v.string()),
     targetTitle: v.optional(v.string()),
 

@@ -285,6 +285,68 @@ export async function decryptUserPii(
 }
 
 // =============================================================================
+// PHONE HASH (deterministic — same phone = same hash for lookups)
+// =============================================================================
+
+/**
+ * Normalize phone for consistent hashing.
+ * Requires E.164-ish format: leading '+', digits only, 7-15 digits.
+ * "+1 (555) 123-4567" → "+15551234567"
+ *
+ * Throws on invalid input to prevent silent hash divergence.
+ */
+function normalizePhone(phone: string): string {
+	const trimmed = phone.trim();
+	if (!trimmed.startsWith('+')) {
+		throw new Error(
+			`[PII] Phone must start with '+' country code for consistent hashing: got "${trimmed.slice(0, 4)}..."`
+		);
+	}
+	// Strip everything except digits after the leading '+'
+	const digits = trimmed.slice(1).replace(/\D/g, '');
+	if (digits.length < 7 || digits.length > 15) {
+		throw new Error(
+			`[PII] Phone has ${digits.length} digits after '+' — expected 7-15 for E.164`
+		);
+	}
+	return '+' + digits;
+}
+
+/**
+ * Compute a deterministic phone hash for database lookups.
+ * HMAC-SHA256("phone:" + normalize(phone), EMAIL_LOOKUP_KEY)
+ *
+ * Domain-separated from email hashes ("phone:" prefix) to prevent
+ * cross-type collisions despite sharing the same HMAC key.
+ *
+ * Returns null if EMAIL_LOOKUP_KEY is not configured.
+ */
+export async function computePhoneHash(phone: string): Promise<string | null> {
+	const keyHex = getEmailLookupKey();
+	if (!keyHex) {
+		if (!_warnedEmailKey) {
+			console.warn('[PII] EMAIL_LOOKUP_KEY not set — phone hash not computed');
+			_warnedEmailKey = true;
+		}
+		return null;
+	}
+
+	const keyBytes = hexToBytes(keyHex);
+	const cryptoKey = await crypto.subtle.importKey(
+		'raw',
+		keyBytes as BufferSource,
+		{ name: 'HMAC', hash: 'SHA-256' },
+		false,
+		['sign']
+	);
+
+	const normalized = normalizePhone(phone);
+	// Domain-separated: "phone:" prefix ensures no collision with email hashes
+	const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode('phone:' + normalized));
+	return bytesToHex(new Uint8Array(sig));
+}
+
+// =============================================================================
 // CONVENIENCE: Decrypt supporter email (info string = "supporter:{id}")
 // =============================================================================
 

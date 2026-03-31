@@ -36,6 +36,13 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		if (existing.blast.status !== 'draft') {
 			throw error(400, 'Only draft blasts can be sent');
 		}
+
+		// Check SMS quota before sending
+		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+		if (limits && limits.current.smsSent >= limits.limits.maxSms) {
+			throw error(403, 'SMS send limit reached for the current billing period. Upgrade your plan to send more.');
+		}
+
 		// Fire-and-forget
 		void sendSmsBlast(params.id);
 

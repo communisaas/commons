@@ -8,6 +8,7 @@
 import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { tryDecryptPii, type EncryptedPii } from "./_pii";
 
 // =============================================================================
 // API KEY AUTH
@@ -193,7 +194,7 @@ export const listSupporters = internalQuery({
     const items = page.slice(0, args.limit);
     const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
 
-    // Get tags for each supporter
+    // Get tags for each supporter + decrypt customFields
     const supportersWithTags = await Promise.all(
       items.map(async (s) => {
         const tagLinks = await ctx.db
@@ -206,7 +207,18 @@ export const listSupporters = internalQuery({
             return tag ? { id: tag._id, name: tag.name } : null;
           })
         );
-        return { ...s, tags: tags.filter(Boolean) };
+
+        // Decrypt customFields from encrypted blob
+        let customFields: unknown = null;
+        if (s.encryptedCustomFields) {
+          try {
+            const enc: EncryptedPii = JSON.parse(s.encryptedCustomFields);
+            const raw = await tryDecryptPii(enc, "supporter:" + s._id, "customFields");
+            if (raw) customFields = JSON.parse(raw);
+          } catch { /* corrupted — return null */ }
+        }
+
+        return { ...s, customFields, tags: tags.filter(Boolean) };
       })
     );
 
@@ -235,7 +247,17 @@ export const getSupporterById = internalQuery({
       })
     );
 
-    return { ...supporter, tags: tags.filter(Boolean) };
+    // Decrypt customFields from encrypted blob
+    let customFields: unknown = null;
+    if (supporter.encryptedCustomFields) {
+      try {
+        const enc: EncryptedPii = JSON.parse(supporter.encryptedCustomFields);
+        const raw = await tryDecryptPii(enc, "supporter:" + supporter._id, "customFields");
+        if (raw) customFields = JSON.parse(raw);
+      } catch { /* corrupted — return null */ }
+    }
+
+    return { ...supporter, customFields, tags: tags.filter(Boolean) };
   },
 });
 
@@ -244,11 +266,9 @@ export const updateSupporter = internalMutation({
     supporterId: v.string(),
     orgId: v.id("organizations"),
     data: v.object({
-      name: v.optional(v.string()),
       postalCode: v.optional(v.string()),
       country: v.optional(v.string()),
-      phone: v.optional(v.string()),
-      customFields: v.optional(v.any()),
+      encryptedCustomFields: v.optional(v.string()),
     }),
   },
   handler: async (ctx, { supporterId, orgId, data }) => {
@@ -260,11 +280,9 @@ export const updateSupporter = internalMutation({
     if (!supporter) return null;
 
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
-    if (data.name !== undefined) updates.name = data.name;
     if (data.postalCode !== undefined) updates.postalCode = data.postalCode;
     if (data.country !== undefined) updates.country = data.country;
-    if (data.phone !== undefined) updates.phone = data.phone;
-    if (data.customFields !== undefined) updates.customFields = data.customFields;
+    if (data.encryptedCustomFields !== undefined) updates.encryptedCustomFields = data.encryptedCustomFields;
 
     await ctx.db.patch(supporter._id, updates);
     return { id: supporter._id, updatedAt: Date.now() };
@@ -290,12 +308,13 @@ export const createSupporter = internalMutation({
     orgId: v.id("organizations"),
     encryptedEmail: v.string(),
     emailHash: v.string(),
-    name: v.optional(v.string()),
+    encryptedName: v.optional(v.string()),
     postalCode: v.optional(v.string()),
     country: v.string(),
-    phone: v.optional(v.string()),
+    encryptedPhone: v.optional(v.string()),
+    phoneHash: v.optional(v.string()),
     source: v.string(),
-    customFields: v.optional(v.any()),
+    encryptedCustomFields: v.optional(v.string()),
     tagIds: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
@@ -311,15 +330,16 @@ export const createSupporter = internalMutation({
       orgId: args.orgId,
       encryptedEmail: args.encryptedEmail,
       emailHash: args.emailHash,
-      name: args.name ?? null,
+      encryptedName: args.encryptedName,
       postalCode: args.postalCode ?? null,
       country: args.country,
-      phone: args.phone ?? null,
+      encryptedPhone: args.encryptedPhone,
+      phoneHash: args.phoneHash,
       source: args.source,
       verified: false,
       emailStatus: "subscribed",
       engagementTier: 0,
-      customFields: args.customFields ?? null,
+      encryptedCustomFields: args.encryptedCustomFields,
       updatedAt: Date.now(),
     });
 
@@ -688,7 +708,28 @@ export const listDonationsV1 = internalQuery({
     const items = page.slice(0, args.limit);
     const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
 
-    return { items, cursor: nextCursor, hasMore, total };
+    // Decrypt PII from encrypted fields — no plaintext fallback
+    const decryptedItems = await Promise.all(
+      items.map(async (d) => {
+        let email: string | null = null;
+        if (d.encryptedEmail) {
+          try {
+            const enc: EncryptedPii = JSON.parse(d.encryptedEmail);
+            email = await tryDecryptPii(enc, d._id, "email");
+          } catch { /* decryption failed */ }
+        }
+        let name: string | null = null;
+        if (d.encryptedName) {
+          try {
+            const enc: EncryptedPii = JSON.parse(d.encryptedName);
+            name = await tryDecryptPii(enc, d._id, "name");
+          } catch { /* decryption failed */ }
+        }
+        return { ...d, email, name };
+      }),
+    );
+
+    return { items: decryptedItems, cursor: nextCursor, hasMore, total };
   },
 });
 
@@ -699,7 +740,26 @@ export const getDonationById = internalQuery({
       .query("donations")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .take(10_000);
-    return donations.find((d) => d._id === donationId) ?? null;
+    const d = donations.find((d) => d._id === donationId) ?? null;
+    if (!d) return null;
+
+    // Decrypt PII from encrypted fields — no plaintext fallback
+    let email: string | null = null;
+    if (d.encryptedEmail) {
+      try {
+        const enc: EncryptedPii = JSON.parse(d.encryptedEmail);
+        email = await tryDecryptPii(enc, d._id, "email");
+      } catch { /* decryption failed */ }
+    }
+    let name: string | null = null;
+    if (d.encryptedName) {
+      try {
+        const enc: EncryptedPii = JSON.parse(d.encryptedName);
+        name = await tryDecryptPii(enc, d._id, "name");
+      } catch { /* decryption failed */ }
+    }
+
+    return { ...d, email, name };
   },
 });
 

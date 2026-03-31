@@ -230,7 +230,9 @@ describe('Donation Checkout - POST /api/d/[campaignId]/checkout', () => {
 		const createArgs = mockDbDonationCreate.mock.calls[0][0];
 		expect(createArgs.data.status).toBe('pending');
 		expect(createArgs.data.amountCents).toBe(5000);
-		expect(createArgs.data.email).toBe('donor@example.com');
+		// Email is encrypted at rest — plaintext field is empty, encrypted field is populated
+		expect(createArgs.data.email).toBe('');
+		expect(createArgs.data.encryptedEmail).toBeDefined();
 	});
 
 	it('finds existing supporter instead of creating new one', async () => {

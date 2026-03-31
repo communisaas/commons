@@ -8,11 +8,39 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
-import { encryptPii, computeEmailHash } from "./_pii";
+import { encryptPii, computeEmailHash, tryDecryptPii, type EncryptedPii } from "./_pii";
 
 // =============================================================================
 // DONATIONS — Queries, Mutations, Actions
 // =============================================================================
+
+/**
+ * Decrypt email and name from encrypted fields.
+ * No plaintext fallback — encrypted fields are the sole source of truth.
+ */
+async function decryptDonationPii(donation: {
+  _id: string;
+  encryptedEmail?: string | null;
+  encryptedName?: string | null;
+}): Promise<{ email: string | null; name: string | null }> {
+  let email: string | null = null;
+  if (donation.encryptedEmail) {
+    try {
+      const enc: EncryptedPii = JSON.parse(donation.encryptedEmail);
+      email = await tryDecryptPii(enc, donation._id, "email");
+    } catch { /* decryption failed */ }
+  }
+
+  let name: string | null = null;
+  if (donation.encryptedName) {
+    try {
+      const enc: EncryptedPii = JSON.parse(donation.encryptedName);
+      name = await tryDecryptPii(enc, donation._id, "name");
+    } catch { /* decryption failed */ }
+  }
+
+  return { email, name };
+}
 
 /**
  * List donations for an org.
@@ -46,14 +74,20 @@ export const listByOrg = query({
     });
 
     // Post-filter by status if specified (index only covers orgId)
+    let page = results.page;
     if (args.status) {
-      return {
-        ...results,
-        page: results.page.filter((d) => d.status === args.status),
-      };
+      page = page.filter((d) => d.status === args.status);
     }
 
-    return results;
+    // Decrypt PII from encrypted fields, falling back to plaintext
+    const decryptedPage = await Promise.all(
+      page.map(async (d) => {
+        const { email, name } = await decryptDonationPii(d);
+        return { ...d, email, name };
+      }),
+    );
+
+    return { ...results, page: decryptedPage };
   },
 });
 
@@ -76,7 +110,7 @@ export const listByCampaign = query({
     const campaign = await ctx.db.get(args.campaignId);
     if (!campaign || campaign.orgId !== org._id) throw new Error("Campaign not found in this organization");
 
-    return await ctx.db
+    const results = await ctx.db
       .query("donations")
       .withIndex("by_campaignId", (qb) => qb.eq("campaignId", args.campaignId))
       .order("desc")
@@ -84,6 +118,16 @@ export const listByCampaign = query({
         numItems: Math.min(args.paginationOpts.numItems, 100),
         cursor: args.paginationOpts.cursor ?? null,
       });
+
+    // Decrypt PII from encrypted fields, falling back to plaintext
+    const decryptedPage = await Promise.all(
+      results.page.map(async (d) => {
+        const { email, name } = await decryptDonationPii(d);
+        return { ...d, email, name };
+      }),
+    );
+
+    return { ...results, page: decryptedPage };
   },
 });
 
@@ -136,8 +180,8 @@ export const create = internalMutation({
     campaignId: v.id("campaigns"),
     orgId: v.id("organizations"),
     supporterId: v.optional(v.id("supporters")),
-    email: v.string(),
-    name: v.string(),
+    email: v.optional(v.string()),
+    name: v.optional(v.string()),
     emailHash: v.optional(v.string()),
     encryptedEmail: v.optional(v.string()),
     encryptedName: v.optional(v.string()),
@@ -157,8 +201,8 @@ export const create = internalMutation({
       campaignId: args.campaignId,
       orgId: args.orgId,
       supporterId: args.supporterId,
-      email: args.email,
-      name: args.name,
+      email: "",  // PII: use encryptedEmail for reads
+      name: "",   // PII: use encryptedName for reads
       emailHash: args.emailHash,
       encryptedEmail: args.encryptedEmail,
       encryptedName: args.encryptedName,
@@ -239,8 +283,6 @@ export const insertDonation = internalMutation({
     campaignId: v.id("campaigns"),
     orgId: v.id("organizations"),
     supporterId: v.optional(v.id("supporters")),
-    email: v.string(),
-    name: v.string(),
     emailHash: v.string(),
     encryptedEmail: v.string(),
     encryptedName: v.optional(v.string()),
@@ -257,8 +299,8 @@ export const insertDonation = internalMutation({
       campaignId: args.campaignId,
       orgId: args.orgId,
       supporterId: args.supporterId,
-      email: args.email,
-      name: args.name,
+      email: "",  // PII: use encryptedEmail for reads
+      name: "",   // PII: use encryptedName for reads
       emailHash: args.emailHash,
       encryptedEmail: args.encryptedEmail,
       encryptedName: args.encryptedName,
@@ -316,16 +358,6 @@ export const processCheckout = action({
     cancelUrl: v.string(),
   },
   handler: async (ctx, args) => {
-    // Rate limit: 5 checkouts per minute per campaign (Stripe cost)
-    // Rate limit per email+campaign (not shared across all users)
-    const rlKey = `donations.processCheckout:${args.campaignId}:${args.email?.slice(0, 10) ?? 'anon'}`;
-    const rl = await ctx.runMutation(internal._rateLimit.check, {
-      key: rlKey,
-      windowMs: 60_000,
-      maxRequests: 5,
-    });
-    if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
-
     // Validate amount
     if (args.amountCents < 100 || args.amountCents > 100_000_000) {
       throw new Error("Amount must be between $1.00 and $1,000,000.00");
@@ -353,26 +385,27 @@ export const processCheckout = action({
 
     const engagementTier = args.districtCode ? 2 : args.postalCode ? 1 : 0;
 
-    // Encrypt PII
-    const donationId = crypto.randomUUID();
+    // Compute email hash first (deterministic HMAC — safe before insert)
     const normalizedEmail = args.email.toLowerCase();
-    const [emailHash, encryptedEmail, encryptedName] = await Promise.all([
-      computeEmailHash(normalizedEmail),
-      encryptPii(normalizedEmail, `donation:${donationId}`, "email"),
-      encryptPii(args.name.trim(), `donation:${donationId}`, "name"),
-    ]);
-
+    const emailHash = await computeEmailHash(normalizedEmail);
     if (!emailHash) throw new Error("Email encryption failed");
 
-    // Create donation record (pending)
+    // Rate limit: 5 checkouts per minute per campaign+donor (Stripe cost)
+    const rlKey = `donations.processCheckout:${args.campaignId}:${emailHash.slice(0, 16)}`;
+    const rl = await ctx.runMutation(internal._rateLimit.check, {
+      key: rlKey,
+      windowMs: 60_000,
+      maxRequests: 5,
+    });
+    if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
+
+    // Step 1: Insert with placeholder encrypted fields, get real _id
     const { id: donationDocId } = await ctx.runMutation(internal.donations.insertDonation, {
       campaignId: args.campaignId,
       orgId: campaign.orgId,
-      email: normalizedEmail,
-      name: args.name.trim(),
       emailHash,
-      encryptedEmail: JSON.stringify(encryptedEmail),
-      encryptedName: JSON.stringify(encryptedName),
+      encryptedEmail: "", // placeholder — will be patched with real _id binding
+      encryptedName: "",
       amountCents: args.amountCents,
       currency: campaign.donationCurrency || "usd",
       recurring: args.recurring,
@@ -380,6 +413,19 @@ export const processCheckout = action({
       districtHash,
       engagementTier,
       status: "pending",
+    });
+
+    // Step 2: Encrypt PII with real doc _id (AAD binding must match decrypt path)
+    const [encryptedEmail, encryptedName] = await Promise.all([
+      encryptPii(normalizedEmail, donationDocId, "email"),
+      encryptPii(args.name.trim(), donationDocId, "name"),
+    ]);
+
+    // Step 3: Patch with correctly-bound ciphertext
+    await ctx.runMutation(internal.donations.patchEncryptedPii, {
+      donationId: donationDocId,
+      encryptedEmail: JSON.stringify(encryptedEmail),
+      encryptedName: JSON.stringify(encryptedName),
     });
 
     // Create Stripe Checkout Session
@@ -454,6 +500,25 @@ export const getCampaign = internalQuery({
   args: { campaignId: v.id("campaigns") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.campaignId);
+  },
+});
+
+/**
+ * Internal mutation: Patch encrypted PII on donation after insert-then-encrypt.
+ */
+export const patchEncryptedPii = internalMutation({
+  args: {
+    donationId: v.id("donations"),
+    encryptedEmail: v.string(),
+    encryptedName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const patch: Record<string, unknown> = {
+      encryptedEmail: args.encryptedEmail,
+      updatedAt: Date.now(),
+    };
+    if (args.encryptedName !== undefined) patch.encryptedName = args.encryptedName;
+    await ctx.db.patch(args.donationId, patch);
   },
 });
 
@@ -686,18 +751,23 @@ export const listDonors = query({
       .filter((d) => d.status === "completed")
       .slice(0, 100);
 
-    return {
-      data: completed.map((d) => ({
-        _id: d._id,
-        name: d.name,
-        email: d.email,
-        amountCents: d.amountCents,
-        recurring: d.recurring,
-        engagementTier: d.engagementTier,
-        districtHash: d.districtHash ? d.districtHash.slice(0, 12) : null,
-        completedAt: d.completedAt ? new Date(d.completedAt).toISOString() : null,
-      })),
-    };
+    const data = await Promise.all(
+      completed.map(async (d) => {
+        const { email, name } = await decryptDonationPii(d);
+        return {
+          _id: d._id,
+          name,
+          email,
+          amountCents: d.amountCents,
+          recurring: d.recurring,
+          engagementTier: d.engagementTier,
+          districtHash: d.districtHash ? d.districtHash.slice(0, 12) : null,
+          completedAt: d.completedAt ? new Date(d.completedAt).toISOString() : null,
+        };
+      }),
+    );
+
+    return { data };
   },
 });
 

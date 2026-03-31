@@ -86,7 +86,6 @@ const SEED_ORGS = [
     name: "Climate Action Now",
     slug: "climate-action-now",
     description: "Grassroots climate advocacy for evidence-based policy.",
-    billingEmail: "billing@climateactionnow.org",
     mission: "Building a movement for climate justice through verified civic action.",
     websiteUrl: "https://climateactionnow.org",
   },
@@ -94,7 +93,6 @@ const SEED_ORGS = [
     name: "Voter Rights Coalition",
     slug: "voter-rights-coalition",
     description: "Protecting and expanding access to the ballot box.",
-    billingEmail: "billing@voterrightscoalition.org",
     mission: "Every eligible citizen deserves frictionless access to the ballot.",
     websiteUrl: "https://voterrightscoalition.org",
   },
@@ -102,7 +100,6 @@ const SEED_ORGS = [
     name: "Local First SF",
     slug: "local-first-sf",
     description: "Strengthening San Francisco neighborhoods through local policy.",
-    billingEmail: "billing@localfirstsf.org",
     mission: "Empowering neighborhood voices in city governance.",
     websiteUrl: "https://localfirstsf.org",
   },
@@ -112,6 +109,16 @@ const SEED_ORGS = [
 // Agent-generated template content — from seed pipeline (seed-with-agents.ts)
 // All 15 templates have real research-backed messages with source citations.
 // ---------------------------------------------------------------------------
+interface SeedScope {
+  countryCode: string;
+  regionCode?: string;
+  localityCode?: string;
+  displayText: string;
+  scopeLevel: "country" | "region" | "locality" | "district";
+  confidence: number;
+  extractionMethod: string;
+}
+
 interface SeedTemplate {
   slug: string;
   title: string;
@@ -125,6 +132,7 @@ interface SeedTemplate {
   countryCode: string;
   sources: Array<{ num: number; url: string; type: string; title: string }>;
   recipientConfig: Record<string, unknown>;
+  scopes?: SeedScope[];
 }
 
 const SEED_TEMPLATES: SeedTemplate[] = [
@@ -145,6 +153,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
       { num: 2, url: "https://www.gao.gov/products/gao-24-106743", type: "government", title: "Veterans Health Care: VA's Video Telehealth Access Program Would Benefit from Performance Goals and Measures" },
       { num: 3, url: "https://pubmed.ncbi.nlm.nih.gov/40981648/", type: "research", title: "Impact of VA's Clinical Resource Hub Primary Care Telehealth Program on Health Care Use and Costs" },
     ],
+    scopes: [{ countryCode: "US", displayText: "United States", scopeLevel: "country", confidence: 1.0, extractionMethod: "manual" }],
     recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
   // ── 2. Congress Outdated Childhood Tracking ──
@@ -166,6 +175,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
       { num: 4, url: "https://healthpolicy.ucla.edu/our-work/publications/healthy-minds-study-2024-2025-data-report", type: "research", title: "The Healthy Minds Study: 2024\u20132025 Data Report" },
       { num: 5, url: "https://www.childrenandscreens.org/newsroom/news/policy-update-february-2026/", type: "advocacy", title: "Policy Update: February 2026 - Children and Screens" },
     ],
+    scopes: [{ countryCode: "US", displayText: "United States", scopeLevel: "country", confidence: 1.0, extractionMethod: "manual" }],
     recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
   // ── 3. Colorado Preschool Standard ──
@@ -186,6 +196,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
       { num: 3, url: "https://www.governor.state.nm.us/2025/09/08/new-mexico-is-first-state-in-nation-to-offer-universal-child-care/", type: "government", title: "New Mexico is first state in nation to offer universal child care" },
       { num: 4, url: "https://www.ffyf.org/2025/08/06/research-finds-preschool-enrollment-can-increase-parent-income/", type: "research", title: "Research Finds Preschool Enrollment Can Increase Parent Income" },
     ],
+    scopes: [{ countryCode: "US", regionCode: "US-CO", displayText: "Colorado", scopeLevel: "region", confidence: 1.0, extractionMethod: "manual" }],
     recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
   // ── 4. Oregon Healing Not Prisons ──
@@ -204,6 +215,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
       { num: 1, url: "https://www.courts.oregon.gov/programs/specialty/Documents/OJD-Specialty-Courts-Annual-Report-2025.pdf", type: "government", title: "Specialty Courts: Oregon Judicial Department Annual Report 2025" },
       { num: 2, url: "https://pdxscholar.library.pdx.edu/socwork_fac/214/", type: "research", title: "The Impact of Family Treatment Courts on Child Welfare Outcomes in Oregon" },
     ],
+    scopes: [{ countryCode: "US", regionCode: "US-OR", displayText: "Oregon", scopeLevel: "region", confidence: 1.0, extractionMethod: "manual" }],
     recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
   // ── 5. City Bans Affordable Innovation ──
@@ -224,6 +236,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
       { num: 3, url: "https://www.persistencemarketresearch.com/market-research/3d-printed-houses-market.asp", type: "research", title: "3D Printed Houses Market Size, Share, and Growth Forecast, 2026 \u2013 2033" },
       { num: 4, url: "https://repositories.lib.utexas.edu/items/67558661-8933-4f96-8576-90342981503b", type: "research", title: "From Commodity to Commons: The Potential of Public Land Trusts for Lasting Housing Affordability" },
     ],
+    scopes: [{ countryCode: "US", displayText: "United States", scopeLevel: "country", confidence: 1.0, extractionMethod: "manual" }],
     recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
   // ── 6. Heal the Concrete Scars ──
@@ -246,6 +259,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
       { num: 5, url: "https://www.transportation.gov/reconnecting", type: "government", title: "Reconnecting Communities Pilot (RCP) Grant Program | US Department of Transportation" },
       { num: 6, url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC6862437/", type: "research", title: "Effects of Freeway Rerouting and Boulevard Replacement on Air Pollution Exposure and Neighborhood Attributes" },
     ],
+    scopes: [{ countryCode: "US", displayText: "United States", scopeLevel: "country", confidence: 1.0, extractionMethod: "manual" }],
     recipientConfig: { reach: "district-based", chambers: ["house", "senate"], cwcRouting: true },
   },
   // ── 7. Stop Starving the Parks (Canada) ──
@@ -281,6 +295,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
         { name: "Rechie Valdez", role: "Minister of Tourism", email: "rechie.valdez@parl.gc.ca", shortName: "Valdez", organization: "Innovation, Science and Economic Development Canada" },
       ],
     },
+    scopes: [{ countryCode: "CA", displayText: "Canada", scopeLevel: "country", confidence: 1.0, extractionMethod: "manual" }],
   },
   // ── 8. US Backlog Lifetimes (Immigration) ──
   {
@@ -314,6 +329,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
         { name: "Dick Durbin", role: "Ranking Member, Senate Judiciary Committee", email: "katrina_petrone@durbin.senate.gov", shortName: "Durbin", organization: "U.S. Senate" },
       ],
     },
+    scopes: [{ countryCode: "US", displayText: "United States", scopeLevel: "country", confidence: 1.0, extractionMethod: "manual" }],
   },
   // ── 9. Ontario Libraries Debt-Free Careers (Canada) ──
   {
@@ -344,6 +360,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
         { name: "David Piccini", role: "Minister of Labour, Immigration, Training and Skills Development", email: "david.piccinico@pc.ola.org", shortName: "Piccini", organization: "Ministry of Labour, Immigration, Training and Skills Development, Ontario" },
       ],
     },
+    scopes: [{ countryCode: "CA", regionCode: "CA-ON", displayText: "Ontario", scopeLevel: "region", confidence: 1.0, extractionMethod: "manual" }],
   },
   // ── 10. BC Energy Revenue Justice (Canada) ──
   {
@@ -370,6 +387,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
         { name: "Spencer Chandra Herbert", role: "Minister of Indigenous Relations and Reconciliation", email: "s.chandraherbert.MLA@leg.bc.ca", shortName: "Herbert", organization: "Ministry of Indigenous Relations and Reconciliation" },
       ],
     },
+    scopes: [{ countryCode: "CA", regionCode: "CA-BC", displayText: "British Columbia", scopeLevel: "region", confidence: 1.0, extractionMethod: "manual" }],
   },
   // ── 11. Montreal BIXI Clean Air (Canada) ──
   {
@@ -399,6 +417,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
         { name: "Jonatan Julien", role: "Minister of Transport and Sustainable Mobility", email: "ministre@transports.gouv.qc.ca", shortName: "Julien", organization: "Government of Quebec" },
       ],
     },
+    scopes: [{ countryCode: "CA", regionCode: "CA-QC", localityCode: "montreal", displayText: "Montreal, QC", scopeLevel: "locality", confidence: 1.0, extractionMethod: "manual" }],
   },
   // ── 12. Apple Interest Gap (Labor Rights) ──
   {
@@ -427,6 +446,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
         { name: "Deirdre O'Brien", role: "SVP of Retail + People", email: "apple-info@apple.com", shortName: "O'Brien", organization: "Apple Inc." },
       ],
     },
+    scopes: [{ countryCode: "US", displayText: "United States", scopeLevel: "country", confidence: 1.0, extractionMethod: "manual" }],
   },
   // ── 13. SF Tax Dark Units (Housing) ──
   {
@@ -459,6 +479,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
         { name: "David Chiu", role: "City Attorney", email: "cityattorney@sfcityatty.org", shortName: "Chiu", organization: "City and County of San Francisco" },
       ],
     },
+    scopes: [{ countryCode: "US", regionCode: "US-CA", localityCode: "san-francisco", displayText: "San Francisco, CA", scopeLevel: "locality", confidence: 1.0, extractionMethod: "manual" }],
   },
   // ── 14. SFMTA Vanity Subway (Transportation) ──
   {
@@ -491,6 +512,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
         { name: "Julie Kirschbaum", role: "Director of Transportation", email: "julie.kirschbaum@sfmta.com", shortName: "Kirschbaum", organization: "San Francisco Municipal Transportation Agency (SFMTA)" },
       ],
     },
+    scopes: [{ countryCode: "US", regionCode: "US-CA", localityCode: "san-francisco", displayText: "San Francisco, CA", scopeLevel: "locality", confidence: 1.0, extractionMethod: "manual" }],
   },
   // ── 15. SF Sites Not Sweeps (Public Health) ──
   {
@@ -526,6 +548,7 @@ const SEED_TEMPLATES: SeedTemplate[] = [
         { name: "David Chiu", role: "City Attorney", email: "cityattorney@sfcityatty.org", shortName: "Chiu", organization: "Office of the City Attorney of San Francisco" },
       ],
     },
+    scopes: [{ countryCode: "US", regionCode: "US-CA", localityCode: "san-francisco", displayText: "San Francisco, CA", scopeLevel: "locality", confidence: 1.0, extractionMethod: "manual" }],
   },
 ];
 
@@ -652,16 +675,68 @@ export const seedAll = internalAction({
 });
 
 // =============================================================================
+// PERSON-LAYER SEED — users + templates + debates, no org data
+// =============================================================================
+
+export const seedPublic = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Guard: skip if seed users already exist
+    const existing = await ctx.runQuery(internal.seed.checkSeeded);
+    if (existing) {
+      console.log("Seed users already exist — skipping.");
+      return;
+    }
+
+    console.log("[seedPublic] Phase 1: Inserting users...");
+    const userIds = await ctx.runMutation(internal.seed.insertUsers);
+
+    console.log("[seedPublic] Phase 2: Inserting templates (no org assignment)...");
+    const templateIds = await ctx.runMutation(internal.seed.insertTemplatesPublic, { userIds });
+
+    console.log("[seedPublic] Phase 3: Inserting debates + arguments...");
+    await ctx.runMutation(internal.seed.insertDebates, { templateIds });
+
+    console.log(
+      "[seedPublic] Complete! Created 3 users, 15 templates (public, no org), 4 debates, 12 arguments.",
+    );
+  },
+});
+
+// =============================================================================
+// ONE-SHOT: Zero all template send metrics
+// =============================================================================
+
+export const zeroTemplateMetrics = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const templates = await ctx.db.query("templates").collect();
+    for (const t of templates) {
+      await ctx.db.patch(t._id, {
+        verifiedSends: 0,
+        uniqueDistricts: 0,
+        deliveredDistricts: [],
+      });
+    }
+    console.log(`Zeroed metrics on ${templates.length} templates.`);
+  },
+});
+
+// =============================================================================
 // GUARD QUERY — idempotency check
 // =============================================================================
 
 export const checkSeeded = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_email", (q) => q.eq("email", "seed-1@commons.email"))
-      .first();
+    const { computeEmailHash } = await import("./_pii");
+    const seedHash = await computeEmailHash("seed-1@commons.email");
+    const user = seedHash
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_emailHash", (q) => q.eq("emailHash", seedHash))
+          .first()
+      : null;
     return user !== null;
   },
 });
@@ -733,7 +808,6 @@ export const insertOrgs = internalMutation({
         name: o.name,
         slug: o.slug,
         description: o.description,
-        billingEmail: o.billingEmail,
         mission: o.mission,
         websiteUrl: o.websiteUrl,
         maxSeats: 10,
@@ -857,13 +931,13 @@ export const insertTemplates = internalMutation({
         sources: t.sources,
         deliveryConfig: {},
         recipientConfig: t.recipientConfig,
-        metrics: { sends: Math.floor(Math.random() * 200), opens: Math.floor(Math.random() * 100), clicks: Math.floor(Math.random() * 50) },
+        scopes: t.scopes,
         status: "published",
         isPublic: true,
 
         // Community metrics
-        verifiedSends: Math.floor(Math.random() * 50),
-        uniqueDistricts: Math.floor(Math.random() * 15) + 1,
+        verifiedSends: 0,
+        uniqueDistricts: 0,
 
         // Embeddings
         embeddingVersion: "none",
@@ -881,6 +955,76 @@ export const insertTemplates = internalMutation({
         orgId: orgIds[orgIdx],
 
         updatedAt: now - (SEED_TEMPLATES.length - i) * 86_400_000, // stagger creation times
+      });
+      ids.push(id);
+    }
+
+    // Update templatesContributed counts
+    const countByUser = [0, 0, 0];
+    for (let i = 0; i < SEED_TEMPLATES.length; i++) {
+      countByUser[i % userIds.length]++;
+    }
+    for (let i = 0; i < userIds.length; i++) {
+      await ctx.db.patch(userIds[i], { templatesContributed: countByUser[i] });
+    }
+
+    return ids;
+  },
+});
+
+// =============================================================================
+// PHASE 3-ALT: INSERT TEMPLATES (PUBLIC — no org assignment)
+// =============================================================================
+
+export const insertTemplatesPublic = internalMutation({
+  args: {
+    userIds: v.array(v.id("users")),
+  },
+  handler: async (ctx, { userIds }): Promise<Id<"templates">[]> => {
+    const now = Date.now();
+    const ids: Id<"templates">[] = [];
+
+    for (let i = 0; i < SEED_TEMPLATES.length; i++) {
+      const t = SEED_TEMPLATES[i];
+      const userIdx = i % userIds.length;
+
+      const id = await ctx.db.insert("templates", {
+        slug: t.slug,
+        title: t.title,
+        description: t.description,
+        category: t.category,
+        topics: t.topics,
+        type: t.type,
+        deliveryMethod: t.deliveryMethod,
+        preview: t.preview,
+        messageBody: t.messageBody,
+        countryCode: t.countryCode,
+        sources: t.sources,
+        deliveryConfig: {},
+        recipientConfig: t.recipientConfig,
+        scopes: t.scopes,
+        status: "published",
+        isPublic: true,
+
+        // Community metrics
+        verifiedSends: 0,
+        uniqueDistricts: 0,
+
+        // Embeddings
+        embeddingVersion: "none",
+
+        // Moderation
+        flaggedByModeration: false,
+        consensusApproved: true,
+
+        // Reputation
+        reputationDelta: 0,
+        reputationApplied: false,
+
+        // Relationships — user only, no org
+        userId: userIds[userIdx],
+
+        updatedAt: now - (SEED_TEMPLATES.length - i) * 86_400_000,
       });
       ids.push(id);
     }
@@ -1011,10 +1155,11 @@ export const insertSupporters = internalMutation({
 
         const id = await ctx.db.insert("supporters", {
           orgId,
-          name,
+          // Seed data: plaintext name stored in encryptedName for convenience
+          // (not real encryption — seed only)
+          encryptedName: name,
           postalCode,
           country: "US",
-          phone: hasSms ? `+1555${String(globalIdx).padStart(7, "0")}` : undefined,
           encryptedEmail: "",
           emailHash: `seed-supporter-${globalIdx}`,
           verified: globalIdx % 4 !== 3, // 75% verified
@@ -1980,10 +2125,14 @@ export const grantDevAccount = internalMutation({
   },
   handler: async (ctx, { orgIds }) => {
     // Check if dev account exists
-    const devUser = await ctx.db
-      .query("users")
-      .withIndex("by_email", (q) => q.eq("email", "mock7ee@gmail.com"))
-      .first();
+    const { computeEmailHash } = await import("./_pii");
+    const devHash = await computeEmailHash("mock7ee@gmail.com");
+    const devUser = devHash
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_emailHash", (q) => q.eq("emailHash", devHash))
+          .first()
+      : null;
 
     if (!devUser) {
       console.log("[seed] Dev account mock7ee@gmail.com not found — skipping dev grants.");
@@ -2073,5 +2222,30 @@ export const clearTable = internalMutation({
       count++;
     }
     if (count > 0) console.log(`  Cleared ${count} ${table}`);
+  },
+});
+
+// =============================================================================
+// BACKFILL SCOPES — patch existing templates with scope data from seed definitions
+// =============================================================================
+
+export const backfillScopes = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const scopesBySlug = new Map<string, typeof SEED_TEMPLATES[number]["scopes"]>();
+    for (const t of SEED_TEMPLATES) {
+      if (t.scopes) scopesBySlug.set(t.slug, t.scopes);
+    }
+
+    const templates = await ctx.db.query("templates").collect();
+    let patched = 0;
+    for (const template of templates) {
+      const scopes = scopesBySlug.get(template.slug);
+      if (scopes && (!template.scopes || template.scopes.length === 0)) {
+        await ctx.db.patch(template._id, { scopes });
+        patched++;
+      }
+    }
+    console.log(`[seed] Backfilled scopes on ${patched}/${templates.length} templates.`);
   },
 });

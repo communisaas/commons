@@ -148,9 +148,6 @@ describe.runIf(dbAvailable)('Templates API', () => {
       expect(data.data[0].coordinationScale).toBeGreaterThan(0);
       expect(data.data[0].verified_sends).toBe(500);
       expect(data.data[0].unique_districts).toBe(100);
-      expect(data.data[0].metrics).toBeDefined();
-      expect(data.data[0].metrics.sent).toBe(500);
-      expect(data.data[0].metrics.districts_covered).toBe(100);
     });
 
     it('should mark templates created within 7 days as new', async () => {
@@ -275,10 +272,6 @@ describe.runIf(dbAvailable)('Templates API', () => {
 
       // Required enum field (isTemplate lines 62-66)
       expect(['cwc', 'email']).toContain(template.deliveryMethod);
-
-      // Required object field (isTemplate lines 88-93)
-      expect(typeof template.metrics).toBe('object');
-      expect(template.metrics).not.toBeNull();
 
       // Computed values for a fresh template
       expect(template.send_count).toBe(0);
@@ -723,8 +716,11 @@ describe.runIf(dbAvailable)('User API', () => {
       expect(response.status).toBe(200);
       expect(data.user).toBeDefined();
       expect(data.user.id).toBe(user.id);
-      expect(data.user.name).toBe('Test User');
-      expect(data.user.email).toBe('test@example.com');
+      // Profile endpoint returns encrypted blobs — client decrypts locally
+      // Server never holds standing plaintext, so name/email are null
+      expect(data.user.name).toBeNull();
+      expect(data.user.email).toBeNull();
+      expect(data.user.encryptedEmail).toBeDefined();
       expect(data.user.profile).toBeDefined();
       expect(data.user.profile.role).toBe('constituent');
       expect(data.user.profile.organization).toBe('Test Org');

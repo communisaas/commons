@@ -8,7 +8,7 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
-import { encryptPii, computeEmailHash } from "./_pii";
+import { encryptPii, computeEmailHash, tryDecryptPii, type EncryptedPii } from "./_pii";
 
 // =============================================================================
 // EVENTS — Queries, Mutations, Actions
@@ -141,10 +141,28 @@ export const getRsvps = query({
         .withIndex("by_eventId", (qb) => qb.eq("eventId", args.eventId));
     }
 
-    return await q.order("desc").paginate({
+    const results = await q.order("desc").paginate({
       numItems: Math.min(args.paginationOpts.numItems, 100),
       cursor: args.paginationOpts.cursor ?? null,
     });
+
+    // Decrypt names from encryptedRsvpName — no plaintext fallback
+    const decryptedPage = await Promise.all(
+      results.page.map(async (rsvp) => {
+        if (rsvp.encryptedRsvpName) {
+          try {
+            const enc: EncryptedPii = JSON.parse(rsvp.encryptedRsvpName);
+            const decryptedName = await tryDecryptPii(enc, `rsvp:${rsvp._id}`, "name");
+            return { ...rsvp, name: decryptedName ?? null };
+          } catch {
+            // JSON parse failure — name stays null
+          }
+        }
+        return { ...rsvp, name: null };
+      }),
+    );
+
+    return { ...results, page: decryptedPage };
   },
 });
 
@@ -314,6 +332,7 @@ export const insertRsvp = internalMutation({
     encryptedEmail: v.string(),
     emailHash: v.string(),
     name: v.string(),
+    encryptedRsvpName: v.optional(v.string()),
     status: v.string(),
     guestCount: v.number(),
     districtHash: v.optional(v.string()),
@@ -344,7 +363,7 @@ export const insertRsvp = internalMutation({
       supporterId: args.supporterId,
       encryptedEmail: args.encryptedEmail,
       emailHash: args.emailHash,
-      name: args.name,
+      encryptedRsvpName: args.encryptedRsvpName,
       status: args.status,
       guestCount: args.guestCount,
       districtHash: args.districtHash,
@@ -386,11 +405,16 @@ export const patchRsvpEmail = internalMutation({
   args: {
     rsvpId: v.id("eventRsvps"),
     encryptedEmail: v.string(),
+    encryptedRsvpName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.rsvpId, {
+    const patch: Record<string, unknown> = {
       encryptedEmail: args.encryptedEmail,
-    });
+    };
+    if (args.encryptedRsvpName !== undefined) {
+      patch.encryptedRsvpName = args.encryptedRsvpName;
+    }
+    await ctx.db.patch(args.rsvpId, patch);
   },
 });
 
@@ -412,7 +436,9 @@ export const createRsvp = action({
   handler: async (ctx, args) => {
     // Rate limit: 10 RSVPs per minute per event (spam prevention)
     // Rate limit per email+event (not shared across all users)
-    const rlKey = `events.createRsvp:${args.eventId}:${args.email?.slice(0, 10) ?? 'anon'}`;
+    // Compute email hash for rate limit key (no plaintext in stored keys)
+    const rlEmailHash = args.email ? await computeEmailHash(args.email) : null;
+    const rlKey = `events.createRsvp:${args.eventId}:${rlEmailHash?.slice(0, 16) ?? 'anon'}`;
     const rl = await ctx.runMutation(internal._rateLimit.check, {
       key: rlKey,
       windowMs: 60_000,
@@ -435,6 +461,10 @@ export const createRsvp = action({
       throw new Error("Encryption service not available");
     }
 
+    // Pre-encrypt name in action context (random IV requires action)
+    const encryptedNameObj = await encryptPii(args.name.trim(), `rsvp:placeholder`, "name");
+    const encryptedRsvpName = JSON.stringify(encryptedNameObj);
+
     // Insert with placeholder, encrypt with real _id, then patch (same pattern as supporters)
     const result = await ctx.runMutation(internal.events.insertRsvp, {
       eventId: args.eventId,
@@ -442,6 +472,7 @@ export const createRsvp = action({
       encryptedEmail: "",  // placeholder — patched below
       emailHash,
       name: args.name.trim(),
+      encryptedRsvpName,
       status: args.status || "GOING",
       guestCount: args.guestCount ?? 1,
       districtHash: args.districtHash,
@@ -450,9 +481,11 @@ export const createRsvp = action({
 
     // Now encrypt with the real Convex _id as key context
     const encrypted = await encryptPii(args.email.toLowerCase(), `rsvp:${result.id}`, "email");
+    const encryptedNameFinal = await encryptPii(args.name.trim(), `rsvp:${result.id}`, "name");
     await ctx.runMutation(internal.events.patchRsvpEmail, {
       rsvpId: result.id,
       encryptedEmail: JSON.stringify(encrypted),
+      encryptedRsvpName: JSON.stringify(encryptedNameFinal),
     });
 
     return result;

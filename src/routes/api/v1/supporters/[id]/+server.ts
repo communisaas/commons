@@ -10,7 +10,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { internal } from '$lib/convex';
-import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
+import { tryDecryptSupporterEmail, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, params }) => {
@@ -61,15 +61,14 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	let body: Record<string, unknown>;
 	try { body = await request.json(); } catch { return apiError('BAD_REQUEST', 'Invalid JSON body', 400); }
 
-	const { name, postalCode, country, phone, customFields } = body as {
-		name?: string; postalCode?: string; country?: string; phone?: string; customFields?: Record<string, unknown>;
+	const { postalCode, country, customFields } = body as {
+		postalCode?: string; country?: string; customFields?: Record<string, unknown>;
 	};
 
+	// Note: name and phone updates must go through the encrypted PII path
+	// (supporters.update action), not this plaintext mutation.
+
 	const data: Record<string, unknown> = {};
-	if (typeof name === 'string') {
-		if (name.length > 200) return apiError('BAD_REQUEST', 'Name must be 200 characters or fewer', 400);
-		data.name = name;
-	}
 	if (typeof postalCode === 'string') {
 		if (postalCode.length > 20) return apiError('BAD_REQUEST', 'Postal code must be 20 characters or fewer', 400);
 		data.postalCode = postalCode;
@@ -78,13 +77,10 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		if (country.length > 10) return apiError('BAD_REQUEST', 'Country code must be 10 characters or fewer', 400);
 		data.country = country;
 	}
-	if (typeof phone === 'string') {
-		if (phone.length > 30) return apiError('BAD_REQUEST', 'Phone must be 30 characters or fewer', 400);
-		data.phone = phone;
-	}
 	if (customFields && typeof customFields === 'object') {
 		if (JSON.stringify(customFields).length > 10000) return apiError('BAD_REQUEST', 'Custom fields too large (10KB max)', 400);
-		data.customFields = customFields;
+		const encCf = await encryptPii(JSON.stringify(customFields), `supporter:${params.id}`, 'customFields');
+		data.encryptedCustomFields = JSON.stringify(encCf);
 	}
 
 	if (Object.keys(data).length === 0) return apiError('BAD_REQUEST', 'No fields to update', 400);

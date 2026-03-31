@@ -217,6 +217,10 @@ export const batchRegisterDeliveries = mutation({
       name: v.string(),
       email: v.optional(v.string()),
       deliveryMethod: v.string(),
+      // Optional pre-encrypted fields (caller encrypts before calling)
+      encryptedRecipientEmail: v.optional(v.string()),
+      recipientEmailHash: v.optional(v.string()),
+      encryptedRecipientName: v.optional(v.string()),
     })),
   },
   handler: async (ctx, { registrationId, identityCommitment, recipients }) => {
@@ -228,14 +232,16 @@ export const batchRegisterDeliveries = mutation({
 
     let created = 0;
     for (const r of recipients) {
-      await ctx.db.insert("positionDeliveries", {
+      const doc: Record<string, unknown> = {
         registrationId,
-        recipientName: r.name,
         recipientKey: slugify(r.name),
-        recipientEmail: r.email,
         deliveryMethod: r.deliveryMethod,
         deliveryStatus: "pending",
-      });
+      };
+      if (r.encryptedRecipientEmail) doc.encryptedRecipientEmail = r.encryptedRecipientEmail;
+      if (r.recipientEmailHash) doc.recipientEmailHash = r.recipientEmailHash;
+      if (r.encryptedRecipientName) doc.encryptedRecipientName = r.encryptedRecipientName;
+      await ctx.db.insert("positionDeliveries", doc as any);
       created++;
     }
 

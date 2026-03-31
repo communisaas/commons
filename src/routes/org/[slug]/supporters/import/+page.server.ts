@@ -234,19 +234,36 @@ export const actions: Actions = {
 				const encryptedBatch = await Promise.all(
 					batch.map(async ({ mapped, rowNum }) => {
 						try {
+							// NOTE: Batch import encrypts email with a synthetic UUID as entity ID.
+							// This is a known pre-existing pattern — the Convex _id is only assigned
+							// at insert time. Name/phone are stored as plaintext during transition;
+							// a backfill action will re-encrypt with real _ids later.
 							const supId = crypto.randomUUID();
-							const [eHash, eEncRaw] = await Promise.all([
-								computeEmailHash(mapped.email),
-								encryptPii(mapped.email, `supporter:${supId}`)
-							]);
+							const encryptionWork: Promise<unknown>[] = [];
+							let eHash: string | null = null;
+							let eEncRaw: unknown = null;
+							let pHash: string | undefined;
+
+							encryptionWork.push(
+								computeEmailHash(mapped.email).then((h) => { eHash = h; }),
+								encryptPii(mapped.email, `supporter:${supId}`).then((e) => { eEncRaw = e; })
+							);
+							// Compute phone hash (deterministic — correct regardless of entity ID)
+							if (mapped.phone) {
+								const { computePhoneHash } = await import('$lib/core/crypto/user-pii-encryption');
+								encryptionWork.push(
+									computePhoneHash(mapped.phone).then((h) => { pHash = h ?? undefined; })
+								);
+							}
+
+							await Promise.all(encryptionWork);
 							if (!eHash || !eEncRaw) throw new Error('Email encryption failed');
 
 							return {
 								encryptedEmail: JSON.stringify(eEncRaw),
 								emailHash: eHash,
-								name: mapped.name || undefined,
 								postalCode: mapped.postalCode || undefined,
-								phone: mapped.phone || undefined,
+								phoneHash: pHash,
 								country: mapped.country || undefined,
 								emailStatus: mapped.emailStatus,
 								smsStatus: mapped.smsStatus,

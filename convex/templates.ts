@@ -1,4 +1,4 @@
-import { query, mutation, action, internalQuery, internalMutation } from "./_generated/server";
+import { query, mutation, action, internalAction, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
@@ -176,9 +176,6 @@ export const listPublic = query({
       const daysSinceCreation = (Date.now() - creationTime) / (1000 * 60 * 60 * 24);
       const isNew = daysSinceCreation <= 7;
 
-      // Metrics
-      const rawMetrics = (template.metrics ?? {}) as Record<string, number | undefined>;
-
       return {
         id: template._id,
         slug: template.slug,
@@ -200,33 +197,58 @@ export const listPublic = query({
         verified_sends: template.verifiedSends,
         unique_districts: template.uniqueDistricts,
         send_count: template.verifiedSends,
-        metrics: {
-          sent: template.verifiedSends,
-          districts_covered: template.uniqueDistricts,
-          opened: rawMetrics.opened || 0,
-          clicked: rawMetrics.clicked || 0,
-          responded: rawMetrics.responded || 0,
-          total_districts: rawMetrics.total_districts || 435,
-          district_coverage_percent: rawMetrics.district_coverage_percent ||
-            (template.uniqueDistricts ? Math.round((template.uniqueDistricts / 435) * 100) : 0),
-          personalization_rate: rawMetrics.personalization_rate || 0,
-          effectiveness_score: rawMetrics.effectiveness_score,
-          cascade_depth: rawMetrics.cascade_depth,
-          viral_coefficient: rawMetrics.viral_coefficient,
-          onboarding_starts: rawMetrics.onboarding_starts,
-          onboarding_completes: rawMetrics.onboarding_completes,
-          auth_completions: rawMetrics.auth_completions,
-          shares: rawMetrics.shares,
-        },
         delivery_config: template.deliveryConfig,
         cwc_config: template.cwcConfig ?? null,
         recipient_config: template.recipientConfig,
         campaign_id: template.campaignId ?? null,
         status: template.status,
         is_public: template.isPublic,
-        jurisdictions: template.jurisdictions ?? [],
-        scope: (template.scopes ?? [])[0] ?? null,
-        scopes: template.scopes ?? [],
+        jurisdictions: (template.jurisdictions ?? []).map((j, ji) => ({
+          id: template._id + "_j" + ji,
+          template_id: template._id,
+          jurisdiction_type: j.jurisdictionType,
+          congressional_district: j.congressionalDistrict ?? null,
+          senate_class: j.senateClass ?? null,
+          state_code: j.stateCode ?? null,
+          state_senate_district: j.stateSenateDistrict ?? null,
+          state_house_district: j.stateHouseDistrict ?? null,
+          county_fips: j.countyFips ?? null,
+          county_name: j.countyName ?? null,
+          city_name: j.cityName ?? null,
+          city_fips: j.cityFips ?? null,
+          school_district_id: j.schoolDistrictId ?? null,
+          school_district_name: j.schoolDistrictName ?? null,
+          latitude: j.latitude ?? null,
+          longitude: j.longitude ?? null,
+          estimated_population: j.estimatedPopulation ?? null,
+          coverage_notes: j.coverageNotes ?? null,
+        })),
+        scope: (template.scopes ?? []).length > 0
+          ? {
+              id: template._id + "_s0",
+              template_id: template._id,
+              country_code: template.scopes![0].countryCode,
+              region_code: template.scopes![0].regionCode ?? null,
+              locality_code: template.scopes![0].localityCode ?? null,
+              district_code: template.scopes![0].districtCode ?? null,
+              display_text: template.scopes![0].displayText,
+              scope_level: template.scopes![0].scopeLevel,
+              confidence: template.scopes![0].confidence,
+              extraction_method: template.scopes![0].extractionMethod,
+            }
+          : null,
+        scopes: (template.scopes ?? []).map((s, si) => ({
+          id: template._id + "_s" + si,
+          template_id: template._id,
+          country_code: s.countryCode,
+          region_code: s.regionCode ?? null,
+          locality_code: s.localityCode ?? null,
+          district_code: s.districtCode ?? null,
+          display_text: s.displayText,
+          scope_level: s.scopeLevel,
+          confidence: s.confidence,
+          extraction_method: s.extractionMethod,
+        })),
         recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
         createdAt: new Date(creationTime).toISOString(),
       };
@@ -254,14 +276,10 @@ export const getBySlugPublic = query({
     if (template.userId) {
       const user = await ctx.db.get(template.userId);
       if (user) {
-        // Note: In Convex schema, user name may be plain or encrypted.
-        // For the detail page we expose name + avatar only.
-        author = { name: (user as any).name ?? null, avatar: (user as any).avatar ?? null };
+        // Return encrypted name blob — client decrypts locally
+        author = { name: null, avatar: user.avatar ?? null, encryptedName: user.encryptedName ?? null };
       }
     }
-
-    // Metrics
-    const rawMetrics = (template.metrics ?? {}) as Record<string, number | undefined>;
 
     return {
       id: template._id,
@@ -279,17 +297,7 @@ export const getBySlugPublic = query({
       is_public: template.isPublic,
       verified_sends: template.verifiedSends,
       unique_districts: template.uniqueDistricts,
-      metrics: {
-        sent: template.verifiedSends,
-        districts_covered: template.uniqueDistricts,
-        total_districts: rawMetrics.total_districts || 435,
-        district_coverage_percent: rawMetrics.district_coverage_percent ||
-          (template.uniqueDistricts ? Math.round((template.uniqueDistricts / 435) * 100) : 0),
-        opened: rawMetrics.opened || 0,
-        clicked: rawMetrics.clicked || 0,
-        responded: rawMetrics.responded || 0,
-        views: 0, // DP snapshots are Prisma-only during migration
-      },
+      send_count: template.verifiedSends,
       delivery_config: template.deliveryConfig,
       recipient_config: template.recipientConfig,
       recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
@@ -541,11 +549,15 @@ export const listByUser = query({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Authentication required");
 
-    // Resolve userId from identity
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_email", (q) => q.eq("email", identity.email!))
-      .first();
+    // Resolve userId from identity via emailHash
+    const { computeEmailHash } = await import("./_pii");
+    const emailHash = await computeEmailHash(identity.email!);
+    const user = emailHash
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_emailHash", (q) => q.eq("emailHash", emailHash))
+          .first()
+      : null;
     if (!user) return [];
 
     const templates = await ctx.db
@@ -833,7 +845,6 @@ export const createTemplate = mutation({
     deliveryConfig: v.optional(v.any()),
     cwcConfig: v.optional(v.any()),
     recipientConfig: v.optional(v.any()),
-    metrics: v.optional(v.any()),
     consensusApproved: v.boolean(),
     geographicScope: v.optional(v.any()),
   },
@@ -881,7 +892,6 @@ export const createTemplate = mutation({
       deliveryConfig: args.deliveryConfig ?? {},
       cwcConfig: args.cwcConfig ?? {},
       recipientConfig: args.recipientConfig ?? {},
-      metrics: args.metrics ?? {},
       verificationStatus: args.consensusApproved ? "approved" : "pending",
       countryCode: "US",
       reputationApplied: false,
@@ -950,6 +960,95 @@ export const setCwcVerification = mutation({
       verificationStatus: args.verificationStatus,
       countryCode: args.countryCode,
       reputationApplied: args.reputationApplied,
+    } as any);
+  },
+});
+
+// =============================================================================
+// BACKFILL: Generate embeddings via Gemini (no auth — internal only)
+// =============================================================================
+
+export const backfillEmbeddings = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const missing = await ctx.runQuery(internal.templates.listMissingEmbeddings);
+
+    if (missing.length === 0) {
+      console.log("[backfill] All templates have embeddings.");
+      return { processed: 0 };
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.error("[backfill] GEMINI_API_KEY not configured in Convex env vars.");
+      return { processed: 0, error: "GEMINI_API_KEY missing" };
+    }
+
+    let processed = 0;
+
+    async function embed(text: string): Promise<number[] | null> {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content: { parts: [{ text }] },
+            taskType: "RETRIEVAL_DOCUMENT",
+            outputDimensionality: 768,
+          }),
+        },
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.embedding?.values ?? null;
+    }
+
+    for (const t of missing) {
+      const locationText = `${t.title} ${t.description || ""} ${t.category}`;
+      const topicText = `${t.title} ${t.description || ""} ${t.messageBody}`;
+
+      try {
+        const [locEmb, topEmb] = await Promise.all([embed(locationText), embed(topicText)]);
+
+        if (!locEmb || !topEmb) {
+          console.error(`[backfill] Gemini returned null embeddings for ${t._id}`);
+          continue;
+        }
+
+        await ctx.runMutation(internal.templates.patchEmbeddings, {
+          templateId: t._id,
+          locationEmbedding: locEmb,
+          topicEmbedding: topEmb,
+        });
+
+        processed++;
+        console.log(`[backfill] Embedded ${t._id} (${t.title.slice(0, 40)}...)`);
+      } catch (err) {
+        console.error(`[backfill] Failed for ${t._id}:`, err);
+      }
+    }
+
+    console.log(`[backfill] Done: ${processed}/${missing.length} templates embedded.`);
+    return { processed, total: missing.length };
+  },
+});
+
+/**
+ * Internal mutation: Patch embeddings without auth check (for backfill action).
+ */
+export const patchEmbeddings = internalMutation({
+  args: {
+    templateId: v.id("templates"),
+    locationEmbedding: v.array(v.float64()),
+    topicEmbedding: v.array(v.float64()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.templateId, {
+      locationEmbedding: args.locationEmbedding,
+      topicEmbedding: args.topicEmbedding,
+      embeddingVersion: "gemini-001-768",
+      embeddingsUpdatedAt: Date.now(),
     } as any);
   },
 });

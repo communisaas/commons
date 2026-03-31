@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
+import { tryDecryptPii, type EncryptedPii } from "./_pii";
 
 // =============================================================================
 // QUERIES
@@ -118,8 +119,10 @@ export const getDashboard = query({
           userId: m.userId,
           role: m.role,
           joinedAt: m.joinedAt,
-          userName: user?.name ?? null,
-          userEmail: user?.email ?? null,
+          userName: null as string | null,
+          userEmail: null as string | null,
+          encryptedUserName: user?.encryptedName ?? null,
+          encryptedUserEmail: user?.encryptedEmail ?? null,
           userAvatar: user?.avatar ?? null,
         };
       }),
@@ -191,7 +194,17 @@ export const getDashboard = query({
       members,
 
       billingEmail:
-        membership.role === "owner" ? (org.billingEmail ?? null) : null,
+        membership.role === "owner"
+          ? await (async () => {
+              if (!org.encryptedBillingEmail) return null;
+              try {
+                const enc: EncryptedPii = JSON.parse(org.encryptedBillingEmail);
+                return await tryDecryptPii(enc, `org:${org._id}`, "billingEmail");
+              } catch {
+                return null;
+              }
+            })()
+          : null,
 
       onboardingState,
       onboardingComplete,
@@ -221,8 +234,10 @@ export const getMembers = query({
           role: m.role,
           joinedAt: m.joinedAt,
           invitedBy: m.invitedBy ?? null,
-          userName: user?.name ?? null,
-          userEmail: user?.email ?? null,
+          userName: null as string | null,
+          userEmail: null as string | null,
+          encryptedUserName: user?.encryptedName ?? null,
+          encryptedUserEmail: user?.encryptedEmail ?? null,
           userAvatar: user?.avatar ?? null,
         };
       }),
@@ -311,7 +326,8 @@ export const update = mutation({
   args: {
     slug: v.string(),
     description: v.optional(v.string()),
-    billingEmail: v.optional(v.string()),
+    encryptedBillingEmail: v.optional(v.string()),
+    billingEmailHash: v.optional(v.string()),
     avatar: v.optional(v.string()),
     mission: v.optional(v.string()),
     websiteUrl: v.optional(v.string()),
@@ -325,7 +341,12 @@ export const update = mutation({
     };
 
     if (args.description !== undefined) updates.description = args.description;
-    if (args.billingEmail !== undefined) updates.billingEmail = args.billingEmail;
+    if (args.encryptedBillingEmail !== undefined) {
+      updates.encryptedBillingEmail = args.encryptedBillingEmail;
+    }
+    if (args.billingEmailHash !== undefined) {
+      updates.billingEmailHash = args.billingEmailHash;
+    }
     if (args.avatar !== undefined) updates.avatar = args.avatar;
     if (args.mission !== undefined) updates.mission = args.mission;
     if (args.websiteUrl !== undefined) updates.websiteUrl = args.websiteUrl;
@@ -383,8 +404,10 @@ export const getSettingsData = query({
         return {
           _id: m._id,
           userId: m.userId,
-          name: user?.name ?? null,
-          email: user?.email ?? null,
+          name: null as string | null,
+          email: null as string | null,
+          encryptedName: user?.encryptedName ?? null,
+          encryptedEmail: user?.encryptedEmail ?? null,
           avatar: user?.avatar ?? null,
           role: m.role,
           joinedAt: m.joinedAt,
@@ -542,8 +565,8 @@ export const create = mutation({
       name: args.name,
       slug: args.slug,
       description: args.description ?? undefined,
-      maxSeats: 10,
-      maxTemplatesMonth: 50,
+      maxSeats: 2,
+      maxTemplatesMonth: 10,
       dmCacheTtlDays: 7,
       countryCode: "US",
       isPublic: false,
@@ -551,6 +574,7 @@ export const create = mutation({
       campaignCount: 0,
       memberCount: 1,
       sentEmailCount: 0,
+      smsSentCount: 0,
       updatedAt: now,
     });
 
@@ -905,12 +929,23 @@ export const getBillingContext = query({
       .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
       .first();
 
+    // Decrypt billing email for Stripe customer creation
+    let billingEmail: string | null = null;
+    if (org.encryptedBillingEmail) {
+      try {
+        const enc: EncryptedPii = JSON.parse(org.encryptedBillingEmail);
+        billingEmail = await tryDecryptPii(enc, `org:${org._id}`, "billingEmail");
+      } catch {
+        // decryption failure — leave null
+      }
+    }
+
     return {
       org: {
         _id: org._id,
         slug: org.slug,
         stripeCustomerId: (org as any).stripeCustomerId ?? null,
-        billingEmail: (org as any).billingEmail ?? null,
+        billingEmail,
       },
       membership: { role: membership.role },
       subscription: sub
@@ -923,12 +958,21 @@ export const getBillingContext = query({
 /**
  * Update Stripe customer ID on org.
  */
+/**
+ * Update Stripe customer ID on org. Requires owner role.
+ * Called from the checkout route after creating a Stripe customer.
+ */
 export const updateStripeCustomerId = mutation({
   args: {
     orgId: v.id("organizations"),
     stripeCustomerId: v.string(),
   },
   handler: async (ctx, { orgId, stripeCustomerId }) => {
+    // Security: verify the caller is an owner of this org
+    const org = await ctx.db.get(orgId);
+    if (!org) throw new Error("Organization not found");
+    await requireOrgRole(ctx, org.slug, "owner");
+
     await ctx.db.patch(orgId, { stripeCustomerId } as any);
   },
 });

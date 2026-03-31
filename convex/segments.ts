@@ -328,6 +328,8 @@ export const exportMatching = query({
     const results: Array<{
       _id: string;
       encryptedEmail: string | null;
+      encryptedName: string | null;
+      encryptedPhone: string | null;
       name: string | null;
       phone: string | null;
       tagNames: string[];
@@ -349,6 +351,8 @@ export const exportMatching = query({
         results.push({
           _id: s._id as string,
           encryptedEmail: (s as any).encryptedEmail ?? null,
+          encryptedName: (s as any).encryptedName ?? null,
+          encryptedPhone: (s as any).encryptedPhone ?? null,
           name: s.name ?? null,
           phone: s.phone ?? null,
           tagNames,

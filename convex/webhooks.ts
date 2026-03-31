@@ -49,6 +49,9 @@ export const recordEmailOpen = internalMutation({
     emailHash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Compute email hash for dedup lookups (HMAC is deterministic — safe in mutations)
+    const emailHash = args.emailHash ?? await computeEmailHash(args.email);
+
     // Find the most recent sent blast that hasn't already recorded an open for this email
     const blasts = await ctx.db
       .query("emailBlasts")
@@ -57,19 +60,22 @@ export const recordEmailOpen = internalMutation({
       .take(20);
 
     for (const blast of blasts) {
-      // Check if we already have an open event for this email
-      const existingOpen = await ctx.db
-        .query("emailEvents")
-        .withIndex("by_blastId_eventType", (q) =>
-          q.eq("blastId", blast._id).eq("eventType", "open"),
-        )
-        .filter((q) => q.eq(q.field("recipientEmail"), args.email))
-        .first();
+      // Dedup: check via recipientEmailHash only — no plaintext fallback
+      let existingOpen;
+      if (emailHash) {
+        existingOpen = await ctx.db
+          .query("emailEvents")
+          .withIndex("by_blastId_recipientEmailHash", (q) =>
+            q.eq("blastId", blast._id).eq("recipientEmailHash", emailHash),
+          )
+          .filter((q) => q.eq(q.field("eventType"), "open"))
+          .first();
+      }
 
       if (!existingOpen && blast.batches && blast.batches.length > 0) {
         await ctx.db.insert("emailEvents", {
           blastId: blast._id,
-          recipientEmail: args.email,
+          recipientEmailHash: emailHash ?? undefined,
           eventType: "open",
           timestamp: Date.now(),
         });
@@ -92,6 +98,9 @@ export const recordEmailClick = internalMutation({
     linkUrl: v.string(),
   },
   handler: async (ctx, args) => {
+    // Compute email hash (HMAC is deterministic — safe in mutations)
+    const emailHash = await computeEmailHash(args.email);
+
     // Find the most recent sent blast
     const blasts = await ctx.db
       .query("emailBlasts")
@@ -100,19 +109,22 @@ export const recordEmailClick = internalMutation({
       .take(20);
 
     for (const blast of blasts) {
-      // Prefer blast with open event for this email, else any sent blast
-      const hasOpen = await ctx.db
-        .query("emailEvents")
-        .withIndex("by_blastId_eventType", (q) =>
-          q.eq("blastId", blast._id).eq("eventType", "open"),
-        )
-        .filter((q) => q.eq(q.field("recipientEmail"), args.email))
-        .first();
+      // Check for open event via hash — no plaintext fallback
+      let hasOpen;
+      if (emailHash) {
+        hasOpen = await ctx.db
+          .query("emailEvents")
+          .withIndex("by_blastId_recipientEmailHash", (q) =>
+            q.eq("blastId", blast._id).eq("recipientEmailHash", emailHash),
+          )
+          .filter((q) => q.eq(q.field("eventType"), "open"))
+          .first();
+      }
 
       if (hasOpen || (blast.batches && blast.batches.length > 0)) {
         await ctx.db.insert("emailEvents", {
           blastId: blast._id,
-          recipientEmail: args.email,
+          recipientEmailHash: emailHash ?? undefined,
           eventType: "click",
           linkUrl: args.linkUrl,
           timestamp: Date.now(),
@@ -366,11 +378,15 @@ export const handleInboundSms = internalMutation({
 
     const body = args.body.trim().toLowerCase();
 
+    // Compute phone hash for lookup (phone field is encrypted now)
+    const fromPhoneHash = await computePhoneHash(args.from).catch(() => null);
+
     if (STOP_KEYWORDS.has(body)) {
       // Mark all supporters with this phone as stopped
+      if (!fromPhoneHash) return;
       const supporters = await ctx.db
         .query("supporters")
-        .filter((q) => q.eq(q.field("phone"), args.from))
+        .filter((q) => q.eq(q.field("phoneHash"), fromPhoneHash))
         .collect();
 
       for (const s of supporters) {
@@ -378,11 +394,12 @@ export const handleInboundSms = internalMutation({
       }
     } else if (START_KEYWORDS.has(body)) {
       // Re-subscribe supporters that were previously stopped
+      if (!fromPhoneHash) return;
       const supporters = await ctx.db
         .query("supporters")
         .filter((q) =>
           q.and(
-            q.eq(q.field("phone"), args.from),
+            q.eq(q.field("phoneHash"), fromPhoneHash),
             q.eq(q.field("smsStatus"), "stopped"),
           ),
         )

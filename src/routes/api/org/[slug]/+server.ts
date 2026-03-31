@@ -1,7 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { encryptPii, computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
 // F-R8-02: Zod schema replaces unsafe `body as { ... }` cast
@@ -35,10 +36,24 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 		throw error(400, 'No fields to update');
 	}
 
+	// Encrypt billing email before sending to Convex mutation
+	let encryptedBillingEmail: string | undefined;
+	let billingEmailHash: string | undefined;
+	if (parsed.billing_email) {
+		const orgData = await serverQuery(api.organizations.getBySlug, { slug: params.slug });
+		if (!orgData) throw error(404, 'Organization not found');
+
+		const entityId = `org:${orgData._id}`;
+		const enc = await encryptPii(parsed.billing_email, entityId, 'billingEmail');
+		encryptedBillingEmail = JSON.stringify(enc);
+		billingEmailHash = (await computeEmailHash(parsed.billing_email)) ?? undefined;
+	}
+
 	await serverMutation(api.organizations.update, {
 		slug: params.slug,
 		description: parsed.description,
-		billingEmail: parsed.billing_email,
+		encryptedBillingEmail,
+		billingEmailHash,
 		avatar: parsed.avatar
 	});
 	return json({ ok: true });

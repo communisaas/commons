@@ -249,6 +249,72 @@ export async function encryptPii(
 }
 
 // =============================================================================
+// PHONE HASH (deterministic — same phone = same hash for lookups)
+// =============================================================================
+
+/**
+ * Normalize phone for consistent hashing.
+ * Requires E.164-ish format: leading '+', digits only, 8-15 digits.
+ * "+1 (555) 123-4567" → "+15551234567"
+ *
+ * Throws on invalid input to prevent silent hash divergence.
+ */
+function normalizePhone(phone: string): string {
+  const trimmed = phone.trim();
+  if (!trimmed.startsWith("+")) {
+    throw new Error(
+      `[PII] Phone must start with '+' country code for consistent hashing: got "${trimmed.slice(0, 4)}..."`,
+    );
+  }
+  // Strip everything except digits after the leading '+'
+  const digits = trimmed.slice(1).replace(/\D/g, "");
+  if (digits.length < 7 || digits.length > 15) {
+    throw new Error(
+      `[PII] Phone has ${digits.length} digits after '+' — expected 7-15 for E.164`,
+    );
+  }
+  return "+" + digits;
+}
+
+/**
+ * Compute a deterministic phone hash for database lookups.
+ * HMAC-SHA256("phone:" + normalize(phone), EMAIL_LOOKUP_KEY)
+ *
+ * Domain-separated from email hashes ("phone:" prefix) to prevent
+ * cross-type collisions despite sharing the same HMAC key.
+ *
+ * Returns null if EMAIL_LOOKUP_KEY is not configured.
+ */
+export async function computePhoneHash(
+  phone: string,
+): Promise<string | null> {
+  const keyHex = getEmailLookupKey();
+  if (!keyHex) {
+    console.warn("[PII] EMAIL_LOOKUP_KEY not set — phone hash not computed");
+    return null;
+  }
+
+  const keyBytes = hexToBytes(keyHex);
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    keyBytes as BufferSource,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+
+  const normalized = normalizePhone(phone);
+  // Domain-separated: "phone:" prefix ensures no collision with email hashes
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sig = await (crypto.subtle.sign as any)(
+    "HMAC",
+    cryptoKey,
+    encoder.encode("phone:" + normalized),
+  );
+  return bytesToHex(new Uint8Array(sig));
+}
+
+// =============================================================================
 // CONVENIENCE: Supporter email helpers
 // =============================================================================
 
@@ -295,4 +361,81 @@ export async function decryptSupporterEmail(supporter: {
   }
   const enc: EncryptedPii = JSON.parse(supporter.encryptedEmail);
   return await decryptPii(enc, "supporter:" + supporter._id, "email");
+}
+
+// =============================================================================
+// CONVENIENCE: Supporter name helpers
+// =============================================================================
+
+/**
+ * Encrypt a supporter's name.
+ * Uses entity prefix "supporter:{supporterId}" with fieldName "name".
+ *
+ * Non-deterministic — use only in Actions.
+ */
+export async function encryptSupporterName(
+  name: string,
+  supporterId: string,
+): Promise<string> {
+  const enc = await encryptPii(name, "supporter:" + supporterId, "name");
+  return JSON.stringify(enc);
+}
+
+/**
+ * Decrypt a supporter's encrypted name.
+ * Returns null if encryptedName is empty/missing.
+ *
+ * Deterministic — safe in queries and mutations.
+ */
+export async function decryptSupporterName(supporter: {
+  _id: string;
+  encryptedName?: string | null;
+}): Promise<string | null> {
+  if (!supporter.encryptedName) return null;
+  const enc: EncryptedPii = JSON.parse(supporter.encryptedName);
+  return await decryptPii(enc, "supporter:" + supporter._id, "name");
+}
+
+// =============================================================================
+// CONVENIENCE: Supporter phone helpers
+// =============================================================================
+
+/**
+ * Encrypt a supporter's phone and compute the phone hash.
+ * Uses entity prefix "supporter:{supporterId}" with fieldName "phone".
+ *
+ * Non-deterministic — use only in Actions.
+ */
+export async function encryptSupporterPhone(
+  phone: string,
+  supporterId: string,
+): Promise<{ encryptedPhone: string; phoneHash: string }> {
+  const [enc, hash] = await Promise.all([
+    encryptPii(phone, "supporter:" + supporterId, "phone"),
+    computePhoneHash(phone),
+  ]);
+
+  if (!hash) {
+    throw new Error("Encryption service not available — cannot compute phone hash");
+  }
+
+  return {
+    encryptedPhone: JSON.stringify(enc),
+    phoneHash: hash,
+  };
+}
+
+/**
+ * Decrypt a supporter's encrypted phone.
+ * Returns null if encryptedPhone is empty/missing.
+ *
+ * Deterministic — safe in queries and mutations.
+ */
+export async function decryptSupporterPhone(supporter: {
+  _id: string;
+  encryptedPhone?: string | null;
+}): Promise<string | null> {
+  if (!supporter.encryptedPhone) return null;
+  const enc: EncryptedPii = JSON.parse(supporter.encryptedPhone);
+  return await decryptPii(enc, "supporter:" + supporter._id, "phone");
 }

@@ -8,7 +8,7 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
-import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
+import { computeEmailHash, computePhoneHash, encryptPii, tryDecryptPii, type EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { internal } from '$lib/convex';
 import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
@@ -68,13 +68,28 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const dataResults = await Promise.all(result.items.map(async (s: any) => {
 		try {
 			const decrypted = await tryDecryptSupporterEmail(s).catch(() => null);
+			// Decrypt name + phone from encrypted fields, fall back to plaintext
+			let name = s.name;
+			if (s.encryptedName) {
+				try {
+					const enc: EncryptedPii = JSON.parse(s.encryptedName);
+					name = await tryDecryptPii(enc, 'supporter:' + s._id, 'name') ?? s.name;
+				} catch { /* use plaintext fallback */ }
+			}
+			let phone = s.phone;
+			if (s.encryptedPhone) {
+				try {
+					const enc: EncryptedPii = JSON.parse(s.encryptedPhone);
+					phone = await tryDecryptPii(enc, 'supporter:' + s._id, 'phone') ?? s.phone;
+				} catch { /* use plaintext fallback */ }
+			}
 			return {
 				id: s._id,
 				email: decrypted,
-				name: s.name,
+				name,
 				postalCode: s.postalCode,
 				country: s.country,
-				phone: s.phone,
+				phone,
 				verified: s.verified,
 				emailStatus: s.emailStatus,
 				source: s.source,
@@ -123,23 +138,55 @@ export const POST: RequestHandler = async ({ request }) => {
 	const { email, name, postalCode, country, phone, source, customFields, tags } = parsed;
 	const normalizedEmail = email.toLowerCase();
 
-	const [emailHashResult, encEmailRaw] = await Promise.all([
-		computeEmailHash(normalizedEmail),
-		encryptPii(normalizedEmail, `supporter:${crypto.randomUUID()}`)
-	]);
+	const supId = crypto.randomUUID();
+	const encryptionWork: Promise<unknown>[] = [];
+	let emailHashResult: string | null = null;
+	let encEmailRaw: unknown = null;
+	let encNameStr: string | undefined;
+	let encPhoneStr: string | undefined;
+	let phoneHashResult: string | undefined;
+
+	encryptionWork.push(
+		computeEmailHash(normalizedEmail).then((h) => { emailHashResult = h; }),
+		encryptPii(normalizedEmail, `supporter:${supId}`).then((e) => { encEmailRaw = e; })
+	);
+	if (name) {
+		encryptionWork.push(
+			encryptPii(name.trim(), `supporter:${supId}`, 'name').then((e) => {
+				if (e) encNameStr = JSON.stringify(e);
+			})
+		);
+	}
+	if (phone) {
+		encryptionWork.push(
+			encryptPii(phone.trim(), `supporter:${supId}`, 'phone').then((e) => {
+				if (e) encPhoneStr = JSON.stringify(e);
+			}),
+			computePhoneHash(phone.trim()).then((h) => { phoneHashResult = h ?? undefined; })
+		);
+	}
+	await Promise.all(encryptionWork);
 	if (!emailHashResult || !encEmailRaw) return apiError('INTERNAL', 'Supporter email encryption failed', 500);
 	const encEmail = JSON.stringify(encEmailRaw);
+
+	// Encrypt customFields if present
+	let encCustomFieldsStr: string | undefined;
+	if (customFields) {
+		const encCf = await encryptPii(JSON.stringify(customFields), `supporter:${supId}`, 'customFields');
+		encCustomFieldsStr = JSON.stringify(encCf);
+	}
 
 	const result = await serverMutation(internal.v1api.createSupporter, {
 		orgId: auth.orgId,
 		encryptedEmail: encEmail,
 		emailHash: emailHashResult,
-		name: name || undefined,
+		encryptedName: encNameStr,
 		postalCode: postalCode || undefined,
 		country: country || 'US',
-		phone: phone || undefined,
+		encryptedPhone: encPhoneStr,
+		phoneHash: phoneHashResult,
 		source: source || 'api',
-		customFields: customFields ? JSON.parse(JSON.stringify(customFields)) : undefined,
+		encryptedCustomFields: encCustomFieldsStr,
 		tagIds: tags
 	});
 

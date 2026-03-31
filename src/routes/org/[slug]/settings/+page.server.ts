@@ -43,16 +43,33 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			emailsSent: data.usage.emailsSent,
 			maxEmails: 10000
 		},
-		members: data.members.map((m: Record<string, unknown>) => ({
-			id: m._id,
-			userId: m.userId,
-			name: m.name,
-			email: m.email,
-			avatar: m.avatar,
-			role: m.role,
-			joinedAt: typeof m.joinedAt === 'number'
-				? new Date(m.joinedAt as number).toISOString()
-				: String(m.joinedAt)
+		members: await Promise.all(data.members.map(async (m: Record<string, unknown>) => {
+			let name = m.name as string | null;
+			let email = m.email as string | null;
+			// Decrypt encrypted PII blobs server-side (encryption keys are server-only)
+			if (!name && m.encryptedName) {
+				try {
+					const enc: EncryptedPii = JSON.parse(m.encryptedName as string);
+					name = await tryDecryptPii(enc, m.userId as string, 'name') ?? null;
+				} catch { /* decryption failed */ }
+			}
+			if (!email && m.encryptedEmail) {
+				try {
+					const enc: EncryptedPii = JSON.parse(m.encryptedEmail as string);
+					email = await tryDecryptPii(enc, m.userId as string, 'email') ?? null;
+				} catch { /* decryption failed */ }
+			}
+			return {
+				id: m._id,
+				userId: m.userId,
+				name,
+				email,
+				avatar: m.avatar,
+				role: m.role,
+				joinedAt: typeof m.joinedAt === 'number'
+					? new Date(m.joinedAt as number).toISOString()
+					: String(m.joinedAt)
+			};
 		})),
 		invites,
 		issueDomains: (data.issueDomains ?? []).map((d: Record<string, unknown>) => ({

@@ -6,6 +6,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
+import { tryDecryptPii, decryptSupporterName, type EncryptedPii } from "./_pii";
 
 /**
  * List SMS blasts for an org.
@@ -66,11 +67,23 @@ export const getBlast = query({
     const enrichedMessages = await Promise.all(
       messages.map(async (m) => {
         const supporter = await ctx.db.get(m.supporterId);
+        // Decrypt phone from encryptedTo — no plaintext fallback
+        let phone: string | null = null;
+        if (m.encryptedTo) {
+          const decrypted = await tryDecryptPii(
+            JSON.parse(m.encryptedTo) as EncryptedPii,
+            "smsMsg:" + m._id,
+            "to",
+          );
+          if (decrypted) phone = decrypted;
+        }
         return {
           _id: m._id,
           _creationTime: m._creationTime,
-          recipientName: supporter?.name ?? "Unknown",
-          to: m.to,
+          recipientName: supporter
+            ? (await decryptSupporterName(supporter) ?? "Unknown")
+            : "Unknown",
+          to: phone,
           status: m.status,
           errorCode: m.errorCode ?? null,
         };
@@ -120,11 +133,23 @@ export const getBlastMessages = query({
     return await Promise.all(
       messages.map(async (m) => {
         const supporter = await ctx.db.get(m.supporterId);
+        // Decrypt phone from encryptedTo — no plaintext fallback
+        let phone: string | null = null;
+        if (m.encryptedTo) {
+          const decrypted = await tryDecryptPii(
+            JSON.parse(m.encryptedTo) as EncryptedPii,
+            "smsMsg:" + m._id,
+            "to",
+          );
+          if (decrypted) phone = decrypted;
+        }
         return {
           _id: m._id,
           _creationTime: m._creationTime,
-          recipientName: supporter?.name ?? "Unknown",
-          to: m.to,
+          recipientName: supporter
+            ? (await decryptSupporterName(supporter) ?? "Unknown")
+            : "Unknown",
+          to: phone,
           body: m.body,
           status: m.status,
           errorCode: m.errorCode ?? null,

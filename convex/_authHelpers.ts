@@ -7,6 +7,7 @@
 
 import { QueryCtx, MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { computeEmailHash } from "./_pii";
 
 export type OrgRole = "owner" | "editor" | "member";
 
@@ -35,13 +36,16 @@ export async function requireAuth(
     .unique();
   if (user) return { userId: user._id, tokenIdentifier: identity.tokenIdentifier };
 
-  // Fallback: legacy email lookup (for migration period)
+  // Fallback: email hash lookup (tokenIdentifier may not be set yet for legacy users)
   if (identity.email) {
-    const userByEmail = await ctx.db
-      .query("users")
-      .withIndex("by_email", (q) => q.eq("email", identity.email))
-      .unique();
-    if (userByEmail) return { userId: userByEmail._id, tokenIdentifier: identity.tokenIdentifier };
+    const emailHash = await computeEmailHash(identity.email);
+    if (emailHash) {
+      const userByHash = await ctx.db
+        .query("users")
+        .withIndex("by_emailHash", (q) => q.eq("emailHash", emailHash))
+        .unique();
+      if (userByHash) return { userId: userByHash._id, tokenIdentifier: identity.tokenIdentifier };
+    }
   }
   throw new Error("User not found");
 }
