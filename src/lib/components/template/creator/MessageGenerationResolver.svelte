@@ -32,9 +32,11 @@
 		isPublishing = false
 	}: Props = $props();
 
-	type Stage = 'generating' | 'results' | 'editing' | 'error' | 'auth-required';
+	type Stage = 'generating' | 'results' | 'editing' | 'error' | 'auth-required' | 'rate-limited';
 	let stage = $state<Stage>('generating');
 	let errorMessage = $state<string | null>(null);
+	let rateLimitResetAt = $state<string | null>(null);
+	let rateLimitMessage = $state<string | null>(null);
 	let isGenerating = $state(false);
 
 	// Streaming state
@@ -51,7 +53,6 @@
 				msg.includes('requires an account') ||
 				msg.includes('sign in') ||
 				msg.includes('authentication required') ||
-				msg.includes('rate limit') ||
 				msg.includes('401')
 			);
 		}
@@ -272,10 +273,17 @@
 				})
 			});
 
-			// Check for auth errors
+			// Check for auth / rate-limit errors
 			if (response.status === 429 || response.status === 401) {
 				const errorData = await response.json().catch(() => ({}));
-				throw new Error(errorData.error || 'Authentication required');
+
+				// Guest with zero quota or 401 → auth gate
+				if (response.status === 401 || errorData.tier === 'guest') {
+					throw { _kind: 'auth-required' };
+				}
+
+				// Authenticated/verified user who exhausted quota → rate-limited
+				throw { _kind: 'rate-limited', resetAt: errorData.resetAt, message: errorData.error };
 			}
 
 			if (!response.ok) {
@@ -332,12 +340,16 @@
 						);
 				}
 			}
-		} catch (err) {
+		} catch (err: any) {
 			console.error('[MessageGenerationResolver] Error:', err);
 
-			if (isAuthRequiredError(err)) {
+			if (err?._kind === 'auth-required' || isAuthRequiredError(err)) {
 				console.log('[MessageGenerationResolver] Auth required, showing overlay');
 				stage = 'auth-required';
+			} else if (err?._kind === 'rate-limited') {
+				rateLimitResetAt = err.resetAt ?? null;
+				rateLimitMessage = err.message ?? null;
+				stage = 'rate-limited';
 			} else {
 				errorMessage =
 					err instanceof Error ? err.message : 'Failed to generate message. Please try again.';
@@ -548,6 +560,33 @@
 					Try again
 				</button>
 
+				<button
+					type="button"
+					onclick={onback}
+					class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+				>
+					Go back
+				</button>
+			</div>
+		</div>
+	{:else if stage === 'rate-limited'}
+		<!-- Rate limit reached — friendly, non-blocking -->
+		<div class="space-y-6 py-8">
+			<div class="rounded-lg border border-amber-200 bg-amber-50 p-6 text-center">
+				<p class="text-base font-semibold text-amber-900">
+					Generation limit reached
+				</p>
+				<p class="mt-2 text-sm text-amber-700">
+					{rateLimitMessage || 'You\'ve used your available message generations for now.'}
+				</p>
+				{#if rateLimitResetAt}
+					<p class="mt-2 text-xs text-amber-600">
+						Resets at {new Date(rateLimitResetAt).toLocaleTimeString()}
+					</p>
+				{/if}
+			</div>
+
+			<div class="flex items-center justify-center gap-4">
 				<button
 					type="button"
 					onclick={onback}

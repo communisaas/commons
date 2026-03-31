@@ -125,7 +125,7 @@
 
 	// Pre-written share messages for different contexts
 	const shareMessages = $derived(() => {
-		const actionCount = template.metrics?.sent || 0;
+		const actionCount = template.send_count || 0;
 		const category = template.category?.toLowerCase() || 'advocacy';
 
 		return {
@@ -1085,8 +1085,8 @@
 			<!-- Enhanced Celebration Content -->
 			<div class="flex-1 space-y-6 overflow-y-auto p-6">
 				<!-- Pioneer Badge (first 10 users) or Impact Counter -->
-				{#if (template.metrics?.sent ?? 0) <= 10}
-					{@const sentCount = template.metrics?.sent ?? 0}
+				{#if (template.send_count ?? 0) <= 10}
+					{@const sentCount = template.send_count ?? 0}
 					<!-- Pioneer Badge -->
 					<div
 						class="rounded-lg border-2 border-orange-300 bg-gradient-to-br from-orange-50 via-amber-50 to-yellow-50 p-6"
@@ -1118,7 +1118,7 @@
 						</div>
 					</div>
 				{:else}
-					{@const sentCount = template.metrics?.sent ?? 0}
+					{@const sentCount = template.send_count ?? 0}
 					<!-- Standard Impact Counter -->
 					<div class="rounded-lg border border-slate-200 bg-white p-4">
 						<div class="text-center">

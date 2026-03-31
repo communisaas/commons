@@ -117,3 +117,15 @@ Verified actions are the primary metered unit. Email is secondary.
 The growth line is verified actions, not email volume. As orgs discover that verified constituent contacts produce 3-10x the legislative response rate of unverified email blasts, they move up tiers to unlock more verified actions — not more emails. Email overage revenue is noise. Verified action overage at $1.50-$3.00/1K against $0.01 COGS is the margin engine.
 
 Agentic layer adds ~$4,500/month (with model tiering + shared screening optimizations). Legislative monitoring is the largest agentic cost center — bill screening across all district types for every org. Included at Organization tier and above, not Free/Starter. LLM inference costs falling ~50% annually. Full cost breakdown: `specs/agentic-civic-infrastructure.md`.
+
+---
+
+## Person-Layer Cost Structure
+
+Individual civic action is free. See [`monetization-policy.md`](monetization-policy.md) for full rationale.
+
+AI operations (Gemini + Exa + Firecrawl) are the real per-person cost center. One complete letter (subject + decision-makers + message) costs ~$0.12-0.22 in AI inference. LLM rate limits bound this to ~$0.75/day worst-case per verified user. At realistic usage (2-3 letters/week), COGS per individual: ~$0.72-1.08/month.
+
+Verification is the upgrade path, not payment. Verified users (trust tier 2+) get 15 AI ops/day; authenticated users get 10. This aligns incentives: the behavior that earns higher limits (identity verification) is exactly what makes the org product more valuable.
+
+All subscription revenue comes from organizations metering verified actions. Individuals are supply-side assets, not a revenue extraction surface.

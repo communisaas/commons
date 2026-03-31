@@ -13,7 +13,7 @@ The commons platform has 6 production hardening gaps blocking org onboarding. Th
 
 | Gap | Current | Target | Complexity | Blocker |
 |-----|---------|--------|-----------|---------|
-| Billing enforcement | Field defined, not enforced | Quota gate in template creation | M | YES |
+| Billing enforcement | **COMPLETE** (03-30) | All quotas enforced, period-scoped, 7-day grace. See `BILLING-ENFORCEMENT-ROADMAP.md` | M | NO |
 | Error monitoring | Manual logging | Sentry for CF Workers | L | YES |
 | Backup/restore | No procedures | Encrypted backup automation | L | YES |
 | Storage isolation | Shared across users on same device | Per-user keying + cleanup | M | NO |

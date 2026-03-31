@@ -331,7 +331,7 @@
 
 	.headline {
 		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 2rem;
+		font-size: clamp(1.5rem, 4vw + 0.5rem, 2.25rem);
 		font-weight: 700;
 		line-height: 1.15;
 		letter-spacing: -0.02em;
@@ -339,15 +339,14 @@
 		margin: 0;
 	}
 
-	@media (min-width: 640px) {
+	/*
+	 * Container-aware type: when .creation-column has container-type: inline-size,
+	 * cqi units size relative to the column (340-480px), not the viewport.
+	 * 6.5cqi at 420px = 27px — proportionate to the narrow column.
+	 */
+	@container creation (min-width: 0px) {
 		.headline {
-			font-size: 2.5rem;
-		}
-	}
-
-	@media (min-width: 1024px) {
-		.headline {
-			font-size: 2.75rem;
+			font-size: clamp(1.5rem, 6.5cqi, 2rem);
 		}
 	}
 
@@ -358,16 +357,16 @@
 
 	.subhead {
 		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 1rem;
+		font-size: clamp(0.875rem, 2.5vw + 0.25rem, 1.0625rem);
 		font-weight: 500;
 		line-height: 1.5;
-		color: oklch(0.25 0.02 250);
+		color: oklch(0.42 0.04 250);
 		margin: 0.25rem 0 0 0;
 	}
 
-	@media (min-width: 640px) {
+	@container creation (min-width: 0px) {
 		.subhead {
-			font-size: 1.125rem;
+			font-size: clamp(0.8125rem, 3.5cqi, 0.9375rem);
 		}
 	}
 

@@ -130,12 +130,6 @@ function isTemplate(obj: unknown): obj is Template {
 				? 'array'
 				: typeof template.specific_locations
 		},
-		// Required object fields (Json fields in database)
-		{
-			field: 'metrics',
-			valid: typeof template.metrics === 'object' && template.metrics !== null,
-			actual: typeof template.metrics
-		},
 		{
 			field: 'delivery_config',
 			valid: typeof template.delivery_config !== 'undefined',

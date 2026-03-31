@@ -90,6 +90,16 @@ crons.daily(
 crons.daily(
   "analytics-snapshot",
   { hourUTC: 0, minuteUTC: 5 },
+  internal.analytics.materializeSnapshot,
+);
+
+// ---------------------------------------------------------------------------
+// 7b. Intelligence Cleanup — expire old intelligence items
+//     Was previously in the analytics-snapshot slot; now its own entry.
+// ---------------------------------------------------------------------------
+crons.daily(
+  "intelligence-cleanup",
+  { hourUTC: 0, minuteUTC: 15 },
   internal.intelligence.markExpired,
 );
 

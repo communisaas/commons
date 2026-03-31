@@ -35,33 +35,53 @@ export type LLMTrustTier = 'guest' | 'authenticated' | 'verified';
  * Format: [requests, windowMs]
  * Window is in milliseconds (1 hour = 3600000)
  */
+/**
+ * COGS-protective rate limits, NOT revenue gates.
+ * See docs/strategy/monetization-policy.md for rationale.
+ *
+ * Calibrated against real civic engagement data:
+ * - Resistbot lifetime avg: 5 letters/user (50M letters / 10M users)
+ * - M+R Benchmarks: 0.13 advocacy actions/subscriber/year
+ * - 15 ops/day verified = ~5 letters/day, covers 99%+ of real usage
+ * - Worst-case COGS: 15 ops/day * $0.22 = $3.30/day per verified user
+ *
+ * Verification is the upgrade path, not payment.
+ * Per-isolate in-memory enforcement — known limitation at current scale.
+ */
 const QUOTAS: Record<string, Record<LLMTrustTier, [number, number]>> = {
-	// Subject line: exploration-friendly, but not infinite
+	// Subject line: cheapest op (~$0.01-0.02)
 	'subject-line': {
-		guest: [5, 3600000], // 5 per hour (matches client expectation)
-		authenticated: [15, 3600000], // 15 per hour
-		verified: [30, 3600000] // 30 per hour
+		guest: [3, 3600000], // 3 per hour
+		authenticated: [5, 3600000], // 5 per hour
+		verified: [5, 3600000] // 5 per hour
 	},
 
-	// Decision-makers: expensive, requires accountability
+	// Decision-makers: most expensive op (~$0.08-0.15)
 	'decision-makers': {
 		guest: [0, 3600000], // BLOCKED for guests (require auth)
-		authenticated: [3, 3600000], // 3 per hour
-		verified: [10, 3600000] // 10 per hour
+		authenticated: [2, 3600000], // 2 per hour
+		verified: [3, 3600000] // 3 per hour
 	},
 
-	// Message generation: already requires auth, add quotas
+	// Message generation: moderate cost (~$0.03-0.05)
 	'message-generation': {
 		guest: [0, 3600000], // BLOCKED (endpoint already requires auth)
-		authenticated: [10, 3600000], // 10 per hour
-		verified: [30, 3600000] // 30 per hour
+		authenticated: [3, 3600000], // 3 per hour
+		verified: [5, 3600000] // 5 per hour
+	},
+
+	// Embeddings: cheap (~$0.001) but should still be bounded
+	'embeddings': {
+		guest: [0, 3600000], // BLOCKED
+		authenticated: [20, 3600000], // 20 per hour
+		verified: [20, 3600000] // 20 per hour
 	},
 
 	// Global daily limit across all operations (circuit breaker)
 	'daily-global': {
-		guest: [10, 86400000], // 10 per day total
-		authenticated: [50, 86400000], // 50 per day total
-		verified: [150, 86400000] // 150 per day total
+		guest: [3, 86400000], // 3 per day total
+		authenticated: [10, 86400000], // 10 per day total
+		verified: [15, 86400000] // 15 per day total
 	}
 };
 
@@ -187,20 +207,37 @@ export async function checkRateLimit(
 	const key = `llm:${operation}:${context.identifier}`;
 	const result = await rateLimiter.limit(key, max, windowMs);
 
+	// Short-circuit: don't consume daily token if operation already rejected
+	if (!result.success) {
+		return {
+			allowed: false,
+			remaining: 0,
+			limit: max,
+			resetAt: new Date(result.reset),
+			tier: context.tier,
+			reason: getRateLimitReason(operation, context.tier, result, { success: true, reset: 0, remaining: 0 })
+		};
+	}
+
 	// Also check daily global limit (circuit breaker)
 	const dailyQuota = QUOTAS['daily-global'][context.tier];
 	const dailyKey = `llm:daily:${context.identifier}`;
 	const dailyResult = await rateLimiter.limit(dailyKey, dailyQuota[0], dailyQuota[1]);
 
 	// Use the more restrictive of the two
-	const allowed = result.success && dailyResult.success;
+	const allowed = dailyResult.success;
 	const remaining = Math.min(result.remaining, dailyResult.remaining);
+
+	// When daily limit trips, show daily reset time (not operation reset)
+	const effectiveResetAt = !dailyResult.success
+		? new Date(dailyResult.reset)
+		: new Date(result.reset);
 
 	return {
 		allowed,
 		remaining,
 		limit: max,
-		resetAt: new Date(result.reset),
+		resetAt: effectiveResetAt,
 		tier: context.tier,
 		reason: allowed ? undefined : getRateLimitReason(operation, context.tier, result, dailyResult)
 	};
@@ -232,22 +269,27 @@ function getRateLimitReason(
 	opResult: { success: boolean; reset: number },
 	dailyResult: { success: boolean; reset: number }
 ): string {
+	const verifyHint =
+		tier === 'authenticated'
+			? ' Verify your identity for higher limits.'
+			: '';
+
 	if (!dailyResult.success) {
 		const resetTime = new Date(dailyResult.reset).toLocaleTimeString();
-		return `Daily limit reached. Resets at ${resetTime}. Verify your identity for higher limits.`;
+		return `Daily limit reached. Resets at ${resetTime}.${verifyHint}`;
 	}
 
 	const resetTime = new Date(opResult.reset).toLocaleTimeString();
 
 	switch (operation) {
 		case 'subject-line':
-			return `Subject line limit reached (${tier} tier). Try again after ${resetTime}.`;
+			return `Subject line limit reached. Try again after ${resetTime}.${verifyHint}`;
 		case 'decision-makers':
-			return `Decision-maker lookup limit reached. Try again after ${resetTime}.`;
+			return `Decision-maker lookup limit reached. Try again after ${resetTime}.${verifyHint}`;
 		case 'message-generation':
-			return `Message generation limit reached. Try again after ${resetTime}.`;
+			return `Message generation limit reached. Try again after ${resetTime}.${verifyHint}`;
 		default:
-			return `Rate limit exceeded. Try again after ${resetTime}.`;
+			return `Rate limit exceeded. Try again after ${resetTime}.${verifyHint}`;
 	}
 }
 

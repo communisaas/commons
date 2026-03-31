@@ -344,12 +344,6 @@
 				decisionMakers: formData.audience.decisionMakers,
 				cwcRouting: formData.audience.includesCongress || undefined
 			},
-			metrics: {
-				sent: 0,
-				delivered: 0,
-				opened: 0,
-				clicked: 0
-			},
 			campaign_id: null,
 			status: 'published',
 			is_public: true,

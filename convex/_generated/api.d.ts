@@ -11,6 +11,7 @@
 import type * as _authHelpers from "../_authHelpers.js";
 import type * as _pii from "../_pii.js";
 import type * as _rateLimit from "../_rateLimit.js";
+import type * as analytics from "../analytics.js";
 import type * as authOps from "../authOps.js";
 import type * as calls from "../calls.js";
 import type * as campaigns from "../campaigns.js";
@@ -51,6 +52,7 @@ declare const fullApi: ApiFromModules<{
   _authHelpers: typeof _authHelpers;
   _pii: typeof _pii;
   _rateLimit: typeof _rateLimit;
+  analytics: typeof analytics;
   authOps: typeof authOps;
   calls: typeof calls;
   campaigns: typeof campaigns;

@@ -264,16 +264,17 @@ export default {
 					'inset 0 2px 0 0 rgba(255, 255, 255, 0.8), 0 12px 24px -8px rgba(139, 92, 246, 0.12)'
 			},
 
-			// Typography Scale - Information Hierarchy
+			// Typography Scale — Fluid (clamp-based, 320px–1600px viewport range)
+			// Overrides standard Tailwind sizes so text-lg, text-xl, etc. scale fluidly.
+			// Line-heights are unitless ratios so they scale with the fluid font-size.
+			// xs/sm/base stay fixed — body text shouldn't shrink below 16px (iOS zoom prevention).
 			fontSize: {
-				'participation-xs': ['0.75rem', { lineHeight: '1rem' }], // 12px
-				'participation-sm': ['0.875rem', { lineHeight: '1.25rem' }], // 14px
-				'participation-base': ['1rem', { lineHeight: '1.5rem' }], // 16px
-				'participation-lg': ['1.125rem', { lineHeight: '1.75rem' }], // 18px
-				'participation-xl': ['1.25rem', { lineHeight: '1.75rem' }], // 20px
-				'participation-2xl': ['1.5rem', { lineHeight: '2rem' }], // 24px
-				'participation-3xl': ['1.875rem', { lineHeight: '2.25rem' }], // 30px
-				'participation-4xl': ['2.25rem', { lineHeight: '2.5rem' }] // 36px
+				lg: ['var(--fluid-lg, 1.125rem)', { lineHeight: '1.55' }],
+				xl: ['var(--fluid-xl, 1.25rem)', { lineHeight: '1.4' }],
+				'2xl': ['var(--fluid-2xl, 1.5rem)', { lineHeight: '1.33' }],
+				'3xl': ['var(--fluid-3xl, 1.875rem)', { lineHeight: '1.2' }],
+				'4xl': ['var(--fluid-4xl, 2.25rem)', { lineHeight: '1.15' }],
+				'5xl': ['var(--fluid-display, 2.5rem)', { lineHeight: '1.1' }]
 			},
 
 			// Animations - Participation Interaction Feedback

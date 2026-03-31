@@ -61,7 +61,7 @@
 
 	// Enhanced description with social proof for Open Graph
 	const socialProofDescription = $derived((() => {
-		const sent = template.metrics?.sent || 0;
+		const sent = template.send_count || 0;
 		if (sent > 1000) {
 			return `Join ${sent.toLocaleString()}+ constituents who took action. ${template.description}`;
 		} else if (sent > 100) {
@@ -647,18 +647,13 @@
 					Enhanced Credibility
 				</span>
 			{/if}
-			{#if FEATURES.ENGAGEMENT_METRICS && (template.metrics?.sent || 0) >= 5}
+			{#if FEATURES.ENGAGEMENT_METRICS && (template.send_count || 0) >= 5}
 				<span class="flex items-center gap-1.5 text-slate-400">
 					<Users class="h-3.5 w-3.5" />
-					{template.metrics.sent.toLocaleString()} acted on this
+					{template.send_count.toLocaleString()} acted on this
 				</span>
 			{/if}
-			{#if FEATURES.ENGAGEMENT_METRICS && (template.metrics?.views || 0) >= 20}
-				<span class="flex items-center gap-1.5 text-slate-400">
-					<Eye class="h-3.5 w-3.5" />
-					{template.metrics.views.toLocaleString()} views
-				</span>
-			{/if}
+			<!-- Views: pending DP analytics pipeline (tasks #31-32) -->
 		</div>
 	</div>
 

@@ -1,12 +1,14 @@
 /**
- * Rate Limiter — Stub
+ * Rate Limiter — LLM Cost Protection Backend
  *
- * Lightweight in-memory sliding-window rate limiter.
+ * Delegates to the core SlidingWindowRateLimiter which auto-selects:
+ * - Redis backend when REDIS_URL is configured (production, multi-instance)
+ * - In-memory Map when REDIS_URL is absent (development, single-instance)
+ *
  * Used by llm-cost-protection.ts for per-user LLM quota enforcement.
- *
- * Production note: Replace with Redis/KV-backed implementation
- * when multi-instance rate limiting is needed.
  */
+
+import { SlidingWindowRateLimiter } from '$lib/core/security/rate-limiter';
 
 // ============================================================================
 // Types
@@ -22,14 +24,21 @@ export interface RateLimitResult {
 }
 
 // ============================================================================
-// In-Memory Sliding Window
+// Singleton — lazy init to avoid import-time side effects
 // ============================================================================
 
-interface WindowEntry {
-	timestamps: number[];
+let _limiter: SlidingWindowRateLimiter | null = null;
+
+function getLimiter(): SlidingWindowRateLimiter {
+	if (!_limiter) {
+		_limiter = new SlidingWindowRateLimiter();
+	}
+	return _limiter;
 }
 
-const windows = new Map<string, WindowEntry>();
+// ============================================================================
+// Adapter — maps core limiter interface to LLM cost protection interface
+// ============================================================================
 
 /**
  * Check and consume a rate limit token.
@@ -39,37 +48,15 @@ const windows = new Map<string, WindowEntry>();
  * @param windowMs - Window duration in milliseconds
  * @returns Rate limit result
  */
-function limit(key: string, max: number, windowMs: number): RateLimitResult {
-	const now = Date.now();
-	const windowStart = now - windowMs;
-
-	let entry = windows.get(key);
-	if (!entry) {
-		entry = { timestamps: [] };
-		windows.set(key, entry);
-	}
-
-	// Prune expired timestamps
-	entry.timestamps = entry.timestamps.filter((ts) => ts > windowStart);
-
-	const reset = entry.timestamps.length > 0
-		? entry.timestamps[0] + windowMs
-		: now + windowMs;
-
-	if (entry.timestamps.length >= max) {
-		return {
-			success: false,
-			remaining: 0,
-			reset
-		};
-	}
-
-	entry.timestamps.push(now);
+async function limit(key: string, max: number, windowMs: number): Promise<RateLimitResult> {
+	const limiter = getLimiter();
+	const result = await limiter.check(key, { maxRequests: max, windowMs });
 
 	return {
-		success: true,
-		remaining: max - entry.timestamps.length,
-		reset
+		success: result.allowed,
+		remaining: result.remaining,
+		// Core limiter returns reset in seconds; convert to ms for consistency
+		reset: result.reset * 1000
 	};
 }
 
@@ -78,15 +65,5 @@ function limit(key: string, max: number, windowMs: number): RateLimitResult {
 // ============================================================================
 
 export const rateLimiter = {
-	limit: (key: string, max: number, windowMs: number): Promise<RateLimitResult> => {
-		return Promise.resolve(limit(key, max, windowMs));
-	}
+	limit
 };
-
-export function checkRateLimit(_key: string, _limit: number): { allowed: boolean; remaining: number } {
-	return { allowed: true, remaining: 999 };
-}
-
-export function getRateLimiter() {
-	return { check: checkRateLimit, limit };
-}

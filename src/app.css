@@ -58,6 +58,20 @@
 		min-height: 100vh;
 		/* Fallback for browsers without oklch support */
 		background-color: #fdfcfa;
+
+		/*
+		 * Fluid root font-size: everything using rem compresses at laptop viewports.
+		 * 1280px: 14.5px, 1440px: 15.3px, 1600px+: 16px.
+		 * Mobile stays at 16px (prevents iOS input zoom).
+		 * The hero headline uses cqi (container units) so is unaffected.
+		 */
+		font-size: 16px; /* Mobile default — prevents iOS zoom */
+	}
+
+	@media (min-width: 1280px) {
+		html {
+			font-size: clamp(14.5px, 0.5rem + 0.5vw, 16px);
+		}
 	}
 
 	body {
@@ -263,6 +277,26 @@
 		--org-sidebar-text-dim: oklch(0.45 0.01 55);
 		--org-sidebar-hover: oklch(0.22 0.02 55);
 		--org-sidebar-active: oklch(0.25 0.02 55);
+
+		/*
+		=== FLUID TYPE SCALE ===
+		Smooth interpolation between 320px and 1600px viewport width.
+		Below 320px: clamp to minimum. Above 1600px: clamp to maximum.
+		Extended range ensures scaling continues on laptops (1440px+).
+
+		Formula: clamp(min, yIntercept + slope×vw, max)
+		  slope = (maxPx − minPx) / (1600 − 320) × 100 / 16
+		  yIntercept = min − slope × 320 / 16
+		*/
+		--fluid-xs: 0.75rem;
+		--fluid-sm: 0.875rem;
+		--fluid-base: 1rem;
+		--fluid-lg: clamp(1rem, 0.969rem + 0.16vw, 1.125rem);
+		--fluid-xl: clamp(1.063rem, 1.016rem + 0.23vw, 1.25rem);
+		--fluid-2xl: clamp(1.25rem, 1.188rem + 0.31vw, 1.5rem);
+		--fluid-3xl: clamp(1.5rem, 1.406rem + 0.47vw, 1.875rem);
+		--fluid-4xl: clamp(1.75rem, 1.625rem + 0.63vw, 2.25rem);
+		--fluid-display: clamp(1.75rem, 1.563rem + 0.94vw, 2.5rem);
 	}
 }
 
@@ -439,10 +473,13 @@
 	Delivery type (congressional vs. direct) is weight-only (shadow depth).
 	*/
 
-	/* Topic-tinted surface: visible, not theoretical */
+	/* Topic-tinted surface: visible, not theoretical
+	   Transition matches voice-card timing so parent and child breathe as one. */
 	.card-topic {
 		background: oklch(0.98 0.03 var(--card-hue) / 0.95);
 		border: 1px solid oklch(0.85 0.05 var(--card-hue) / 0.4);
+		transition: background 300ms cubic-bezier(0.4, 0, 0.2, 1),
+			border-color 300ms cubic-bezier(0.4, 0, 0.2, 1);
 	}
 
 	.card-topic:hover {
@@ -456,6 +493,7 @@
 			inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
 			0 1px 3px 0 rgba(0, 0, 0, 0.04),
 			0 6px 16px -6px rgba(0, 0, 0, 0.06);
+		transition: box-shadow 300ms cubic-bezier(0.4, 0, 0.2, 1);
 	}
 
 	.card-weight-heavy:hover {
@@ -469,6 +507,7 @@
 		box-shadow:
 			inset 0 1px 0 0 rgba(255, 255, 255, 0.5),
 			0 1px 2px 0 rgba(0, 0, 0, 0.03);
+		transition: box-shadow 300ms cubic-bezier(0.4, 0, 0.2, 1);
 	}
 
 	.card-weight-light:hover {
@@ -520,6 +559,77 @@
 	.card-topic:focus-visible {
 		outline: 2px solid oklch(0.45 0.18 var(--card-hue));
 		outline-offset: 2px;
+	}
+
+	/*
+	=== VOICE CARD — Topic-Harmonized Personal Connection ===
+
+	The voice card lives inside a topic-tinted template card.
+	Its colors derive from --card-hue so it reads as part of the
+	same visual world, not a foreign element dropped inside.
+
+	Chroma is one tier above the parent card surface — visible
+	as a distinct zone without breaking the topic atmosphere.
+
+	Three intensities: resting (invitation), active (writing),
+	spoken (filled). CSS transitions handle state morphing.
+	*/
+	.voice-card {
+		transition: background 300ms cubic-bezier(0.4, 0, 0.2, 1),
+			border-color 300ms cubic-bezier(0.4, 0, 0.2, 1),
+			box-shadow 300ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+
+	/* Resting: solid border at low opacity — no dashed→solid snap.
+	   The invitation quality comes from the label and lower background
+	   intensity, not from a border-style that can't interpolate. */
+	.voice-card--resting {
+		background: oklch(0.96 0.04 var(--card-hue) / 0.6);
+		border: 1px solid oklch(0.75 0.07 var(--card-hue) / 0.25);
+	}
+
+	.voice-card--resting:hover {
+		background: oklch(0.96 0.04 var(--card-hue) / 0.85);
+		border-color: oklch(0.7 0.08 var(--card-hue) / 0.55);
+		box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04);
+	}
+
+	.voice-card--active {
+		background: oklch(0.96 0.04 var(--card-hue) / 0.9);
+		border: 1px solid oklch(0.7 0.08 var(--card-hue) / 0.55);
+		box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+	}
+
+	.voice-card--spoken {
+		background: oklch(0.96 0.04 var(--card-hue) / 0.7);
+		border: 1px solid oklch(0.75 0.07 var(--card-hue) / 0.35);
+		box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+	}
+
+	.voice-card--spoken:hover {
+		background: oklch(0.96 0.04 var(--card-hue) / 0.9);
+		border-color: oklch(0.7 0.08 var(--card-hue) / 0.55);
+		box-shadow: 0 2px 6px -2px rgba(0, 0, 0, 0.06);
+	}
+
+	/* Accent bar: topic-colored gradient */
+	.voice-card__bar {
+		background: linear-gradient(
+			90deg,
+			oklch(0.55 0.14 var(--card-hue)) 0%,
+			oklch(0.7 0.08 var(--card-hue) / 0.3) 100%
+		);
+	}
+
+	/* Label & icon: topic-colored, same timing as shell */
+	.voice-card__label {
+		color: oklch(0.42 0.12 var(--card-hue));
+		transition: color 300ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+
+	.voice-card__label--active {
+		color: oklch(0.35 0.14 var(--card-hue));
+		transition: color 300ms cubic-bezier(0.4, 0, 0.2, 1);
 	}
 
 	/* Form Elements—Accessible Participation Input */
@@ -744,5 +854,11 @@
 	.card-topic:hover {
 		transition: none;
 		transform: none !important;
+	}
+
+	.voice-card,
+	.voice-card__label,
+	.voice-card__label--active {
+		transition: none;
 	}
 }

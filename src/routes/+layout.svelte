@@ -71,23 +71,26 @@
 	});
 
 	// ── Decrypt PII from client-custodied blobs ──
+	// Feeds the decryptedUser store (available to all components) AND local state (for layout user).
 	$effect(() => {
 		const u = data.user as Record<string, unknown> | null;
-		if (!browser || !u?.id || !u.encryptedEmail) return;
+		if (!browser) return;
 
-		(async () => {
-			const { decryptUserPiiClient, isClientPiiAvailable } = await import('$lib/core/crypto/client-pii');
-			if (!isClientPiiAvailable()) return;
+		syncDecryptedUser(u ? {
+			id: u.id as string,
+			email: u.email as string | null,
+			name: u.name as string | null,
+			encryptedEmail: u.encryptedEmail as string | null,
+			encryptedName: u.encryptedName as string | null,
+		} : null);
+	});
 
-			const { email, name } = await decryptUserPiiClient(
-				u.encryptedEmail as string,
-				u.encryptedName as string | null,
-				u.id as string
-			);
+	// Bridge store → local state for layout's derived user object
+	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 
-			if (email) piiEmail = email;
-			if (name) piiName = name;
-		})().catch(() => {});
+	$effect(() => {
+		if (decryptedUser.email) piiEmail = decryptedUser.email;
+		if (decryptedUser.name) piiName = decryptedUser.name;
 	});
 
 	// ── Client-side PII custody: encrypt from OAuth seed on login/device recovery ──

@@ -50,7 +50,6 @@ interface CreateTemplateRequest {
 	delivery_config?: UnknownRecord;
 	cwc_config?: UnknownRecord;
 	recipient_config?: UnknownRecord;
-	metrics?: UnknownRecord;
 	geographic_scope?: GeoScope;
 }
 
@@ -156,11 +155,6 @@ function validateTemplateData(data: unknown): {
 		delivery_config: (templateData.delivery_config as UnknownRecord) || {},
 		cwc_config: (templateData.cwc_config as UnknownRecord) || {},
 		recipient_config: (templateData.recipient_config as UnknownRecord) || {},
-		metrics: (templateData.metrics as UnknownRecord) || {
-			sent: 0,
-			opened: 0,
-			clicked: 0
-		},
 		geographic_scope: (templateData.geographic_scope as GeoScope) || undefined
 	};
 
@@ -315,11 +309,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				});
 
 				if (existingByContent) {
-					const jsonMetrics =
-						typeof existingByContent.metrics === 'object' && existingByContent.metrics !== null
-							? (existingByContent.metrics as Record<string, number>)
-							: ({} as Record<string, number>);
-
 					const response: StructuredApiResponse = {
 						success: true,
 						data: { template: {
@@ -338,17 +327,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 							isNew: false,
 							verified_sends: existingByContent.verifiedSends ?? 0,
 							unique_districts: existingByContent.uniqueDistricts ?? 0,
-							send_count: jsonMetrics.sent || 0,
-							metrics: {
-								sent: jsonMetrics.sent || 0,
-								districts_covered: jsonMetrics.districts_covered || 0,
-								opened: jsonMetrics.opened || 0,
-								clicked: jsonMetrics.clicked || 0,
-								responded: jsonMetrics.responded || 0,
-								total_districts: jsonMetrics.total_districts || 435,
-								district_coverage_percent: jsonMetrics.district_coverage_percent || 0,
-								personalization_rate: 0
-							},
+							send_count: existingByContent.verifiedSends ?? 0,
 							delivery_config: existingByContent.deliveryConfig,
 							cwc_config: existingByContent.cwcConfig,
 							recipient_config: existingByContent.recipientConfig,
@@ -412,7 +391,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					deliveryConfig: validData.delivery_config || {},
 					cwcConfig: validData.cwc_config || {},
 					recipientConfig: validData.recipient_config || {},
-					metrics: validData.metrics || {},
 					consensusApproved: consensusResult?.approved ?? false,
 					geographicScope: validData.geographic_scope
 				});
@@ -471,11 +449,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					}
 				}
 
-				const jsonMetrics =
-					typeof newTemplate.metrics === 'object' && newTemplate.metrics !== null
-						? (newTemplate.metrics as Record<string, number>)
-						: ({} as Record<string, number>);
-
 				const response: StructuredApiResponse = {
 					success: true,
 					data: { template: {
@@ -495,16 +468,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						verified_sends: 0,
 						unique_districts: 0,
 						send_count: 0,
-						metrics: {
-							sent: 0,
-							districts_covered: 0,
-							opened: jsonMetrics.opened || 0,
-							clicked: jsonMetrics.clicked || 0,
-							responded: jsonMetrics.responded || 0,
-							total_districts: 435,
-							district_coverage_percent: 0,
-							personalization_rate: 0
-						},
 						delivery_config: newTemplate.deliveryConfig,
 						cwc_config: newTemplate.cwcConfig,
 						recipient_config: newTemplate.recipientConfig,

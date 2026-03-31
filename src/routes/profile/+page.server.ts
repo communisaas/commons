@@ -62,7 +62,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 					tier: convexProfile.reputationTier, authority_level: null, active_months: null,
 					templates_contributed: null, template_adoption_rate: null, peer_endorsements: null
 				},
-				timestamps: { created_at: null, updated_at: null }
+				timestamps: { created_at: convexProfile._creationTime ?? null, updated_at: null }
 			} : null),
 			templatesData: Promise.resolve({ templates, templateStats }),
 			representatives: Promise.resolve(convexReps ?? [])

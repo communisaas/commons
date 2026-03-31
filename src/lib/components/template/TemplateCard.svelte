@@ -4,7 +4,6 @@
 	import { deriveTargetPresentation } from '$lib/utils/deriveTargetPresentation';
 	import { topicHue } from '$lib/utils/topic-hue';
 	import SimpleTooltip from '$lib/components/ui/SimpleTooltip.svelte';
-	import { z } from 'zod';
 	import { FEATURES } from '$lib/config/features';
 
 	interface Props {
@@ -18,91 +17,18 @@
 	// Derive perceptual representation
 	const targetInfo = $derived(deriveTargetPresentation(template));
 
-	// Zod schema for metrics validation
-	const MetricsSchema = z
-		.object({
-			sent: z.number().optional(),
-			districts_covered: z.number().optional(),
-			total_districts: z.number().optional(),
-			district_coverage_percent: z.number().optional()
-		})
-		.passthrough();
-
-	// Normalize metrics data - handle both object and JSON string formats
-	function normalizeMetrics(rawMetrics: unknown): {
-		sent?: number;
-		districts_covered?: number;
-		total_districts?: number;
-		district_coverage_percent?: number;
-	} {
-		if (!rawMetrics) return {};
-
-		// If it's already an object, validate and return it
-		if (typeof rawMetrics === 'object') {
-			const result = MetricsSchema.safeParse(rawMetrics);
-			if (result.success) {
-				return result.data;
-			} else {
-				console.warn('[TemplateCard] Invalid metrics object:', result.error.flatten());
-				return {};
-			}
-		}
-
-		// If it's a JSON string, parse and validate it
-		try {
-			const parsed = JSON.parse(rawMetrics as string);
-			const result = MetricsSchema.safeParse(parsed);
-			if (result.success) {
-				return result.data;
-			} else {
-				console.warn('[TemplateCard] Invalid metrics JSON:', result.error.flatten());
-				return {};
-			}
-		} catch (error) {
-			console.warn('[TemplateCard] Failed to parse metrics:', error);
-			return {};
-		}
-	}
-
-	const metrics = $derived(normalizeMetrics(template.metrics));
 	const isCongressional = $derived(targetInfo.type === 'district-based');
 
-	// Format numbers with commas
 	function formatNumber(num: number | undefined | null): string {
-		if (num === undefined || num === null || isNaN(num)) {
-			return '0';
-		}
+		if (num === undefined || num === null || isNaN(num)) return '0';
 		return num.toLocaleString();
 	}
 
-	// Calculate district coverage percentage
-	function getDistrictCoverage(): string {
-		// Use pre-calculated percentage if available
-		if (metrics.district_coverage_percent !== undefined) {
-			return `${metrics.district_coverage_percent}%`;
-		}
-
-		// Fallback: calculate from districts_covered and total_districts
-		if (metrics.districts_covered && metrics.total_districts) {
-			const percentage = Math.round((metrics.districts_covered / metrics.total_districts) * 100);
-			return `${percentage}%`;
-		}
-
-		return '0%';
-	}
-
-	// Tooltip state
 	let hoveredMetric = $state<'sent' | 'districts' | null>(null);
 
-	// For use with verified_sends aggregate metric (Phase 1: mock data)
-	const verifiedSends = $derived(template.send_count || metrics.sent || 0);
-	const uniqueDistricts = $derived(metrics.districts_covered || 0);
-
-	// Pre-launch: Hide engagement metrics when zero (no negative social proof)
-	// Post-launch: Remove this check to reveal real engagement data
+	const verifiedSends = $derived(template.send_count || 0);
+	const uniqueDistricts = $derived(template.unique_districts || 0);
 	const hasEngagement = $derived(verifiedSends > 0 || uniqueDistricts > 0);
-
-	// High-activity threshold for atmospheric effects
 	const isHighActivity = $derived(verifiedSends > 100);
 
 	// === PERCEPTUAL ENCODING: Visual weight based on coordination magnitude ===
@@ -318,7 +244,7 @@
 						</span>
 
 						<SimpleTooltip
-							content="{getDistrictCoverage()} of congressional districts reached"
+							content="{uniqueDistricts > 0 ? Math.round((uniqueDistricts / 435) * 100) + '%' : '0%'} of congressional districts reached"
 							placement="top"
 							show={hoveredMetric === 'districts'}
 						/>

@@ -7,7 +7,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk } from '$lib/server/api-v1/response';
 import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
@@ -19,12 +19,23 @@ export const GET: RequestHandler = async ({ request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const usage = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: auth.orgId });
+	// auth.orgId is a Convex document ID, not a slug — use internal query
+	const usage = await serverQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
+		orgId: auth.orgId
+	});
+
+	if (!usage) {
+		return apiOk({ verifiedActions: 0, maxVerifiedActions: 0, emailsSent: 0, maxEmails: 0 });
+	}
 
 	return apiOk({
-		verifiedActions: (usage as any)?.current?.verifiedActions ?? 0,
-		maxVerifiedActions: (usage as any)?.limits?.maxVerifiedActions ?? 0,
-		emailsSent: (usage as any)?.current?.emailsSent ?? 0,
-		maxEmails: (usage as any)?.limits?.maxEmails ?? 0
+		plan: usage.plan,
+		periodStart: new Date(usage.periodStart).toISOString(),
+		verifiedActions: usage.current.verifiedActions,
+		maxVerifiedActions: usage.limits.maxVerifiedActions,
+		emailsSent: usage.current.emailsSent,
+		maxEmails: usage.limits.maxEmails,
+		smsSent: usage.current.smsSent,
+		maxSms: usage.limits.maxSms,
 	});
 };

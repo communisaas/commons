@@ -93,15 +93,17 @@
 		};
 	});
 
-	// User info
-	const firstName = $derived(user?.name?.split(' ')[0] ?? 'User');
+	// Identity decryption state — name comes from client-side decryption only
+	const displayName = $derived(user?.name ?? null);
+	const identityResolved = $derived(!!displayName);
+	const firstName = $derived(displayName?.split(' ')[0] ?? null);
 	const initials = $derived.by(() => {
-		if (!user?.name) return 'U';
-		const parts = user.name.split(' ');
+		if (!displayName) return null;
+		const parts = displayName.split(' ');
 		if (parts.length >= 2) {
 			return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
 		}
-		return parts[0][0]?.toUpperCase() ?? 'U';
+		return parts[0][0]?.toUpperCase() ?? null;
 	});
 
 	function handleSignIn(): void {
@@ -137,16 +139,20 @@
 				onclick={() => (isDropdownOpen = !isDropdownOpen)}
 				aria-expanded={isDropdownOpen}
 				aria-haspopup="menu"
-				aria-label="Account menu for {firstName}"
+				aria-label={firstName ? `Account menu for ${firstName}` : 'Account menu'}
 			>
 				{#if user.picture}
 					<img src={user.picture} alt="" class="ambient-user-avatar" />
-				{:else}
+				{:else if initials}
 					<div class="ambient-user-avatar ambient-user-avatar--fallback">
 						{initials}
 					</div>
+				{:else}
+					<div class="ambient-user-avatar ambient-user-avatar--unlocking"></div>
 				{/if}
-				<span class="ambient-user-name">{firstName}</span>
+				{#if firstName}
+					<span class="ambient-user-name ambient-user-name--resolved">{firstName}</span>
+				{/if}
 				<ChevronDown class="ambient-user-chevron" />
 			</button>
 
@@ -311,6 +317,25 @@
 		font-weight: 600;
 	}
 
+	.ambient-user-avatar--unlocking {
+		background: oklch(0.92 0.02 250);
+		animation: identity-pulse 1.8s ease-in-out infinite;
+	}
+
+	@keyframes identity-pulse {
+		0%, 100% { opacity: 0.5; }
+		50% { opacity: 0.9; }
+	}
+
+	.ambient-user-name--resolved {
+		animation: identity-resolve 300ms ease-out;
+	}
+
+	@keyframes identity-resolve {
+		from { opacity: 0; transform: translateY(2px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+
 	.ambient-user-name {
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.875rem;
@@ -467,7 +492,9 @@
 			transition: none;
 		}
 
-		.ambient-dropdown {
+		.ambient-dropdown,
+		.ambient-user-avatar--unlocking,
+		.ambient-user-name--resolved {
 			animation: none;
 		}
 

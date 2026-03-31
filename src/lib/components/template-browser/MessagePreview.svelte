@@ -3,7 +3,6 @@
 	import { Mail, Sparkles, User, Edit3, ExternalLink } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import { browser } from '$app/environment';
-	import { slide } from 'svelte/transition';
 	import AnimatedPopover from '$lib/components/ui/AnimatedPopover.svelte';
 	import VerificationBadge from '$lib/components/ui/VerificationBadge.svelte';
 	import type { Template } from '$lib/types/template';
@@ -123,8 +122,8 @@
 	// Contextual hints and suggestions
 	const variableHints: Record<string, { prompt: string; placeholder: string }> = {
 		'Personal Connection': {
-			prompt: 'Personal Connection',
-			placeholder: 'Share why this issue matters to you - your story, reasoning, or perspective...'
+			prompt: 'Your voice',
+			placeholder: 'Why this matters to you — your experience, your reasoning...'
 		}
 	};
 
@@ -259,6 +258,22 @@
 				type: 'text',
 				content: text.slice(currentIndex)
 			});
+		}
+
+		// Normalize whitespace around long-form variables:
+		// The letter container is whitespace-pre-wrap, so any "\n" in text segments
+		// adjacent to the voice card stacks with the card's own margin.
+		// Strip all trailing/leading newlines — the card's my-* handles spacing.
+		for (let i = 0; i < segments.length; i++) {
+			const seg = segments[i];
+			if (seg.type === 'variable' && seg.name && isLongFormVariable(seg.name)) {
+				if (i > 0 && segments[i - 1].type === 'text') {
+					segments[i - 1].content = segments[i - 1].content.replace(/\n+$/, '');
+				}
+				if (i < segments.length - 1 && segments[i + 1].type === 'text') {
+					segments[i + 1].content = segments[i + 1].content.replace(/^\n+/, '');
+				}
+			}
 		}
 
 		return segments;
@@ -730,67 +745,68 @@
 							<span class="text-slate-400">{segment.content}</span>
 						{/if}
 					{:else if segment.name && isLongFormVariable(segment.name)}
-						<!-- Long-form variable: interstitial within the letter flow -->
-						{#if activeInlineEditor === segment.instanceId}
-							<!-- Editing: the letter opens up here -->
-							<div class="whitespace-normal" transition:slide={{ duration: 200 }}>
-								<div class="border-l-2 border-participation-primary-300 pl-4">
-									<div class="mb-2 flex items-center gap-1.5">
-										<Edit3 class="h-3 w-3 text-participation-primary-400" />
-										<span class="text-xs font-medium text-[var(--text-tertiary)]">
-											{(segment.name && variableHints[segment.name]?.prompt) || 'Your perspective'}
-										</span>
-									</div>
-									<textarea
-										use:autofocusAction
-										value={variableValues[segment.name] || ''}
-										oninput={(e) => handleInlineInput(e, segment.name || '')}
-										onfocusout={handleInlineBlur}
-										onfocusin={handleInlineFocus}
-										onkeydown={handleInlineKeydown}
-										placeholder={(segment.name && variableHints[segment.name]?.placeholder) ||
-											`Why this matters to you — your experience, your reasoning...`}
-										class="w-full resize-none border-0 bg-transparent p-0
-											font-sans text-sm leading-relaxed text-[var(--text-secondary)]
-											placeholder:text-[var(--text-quaternary)]
-											focus:ring-0 focus:outline-none"
-										rows="3"
-									></textarea>
+						<!--
+							Voice card — one persistent element, three intensities.
+							No mount/unmount between states. The card deepens when
+							activated, settles when filled. CSS transitions handle the
+							morphing so the person experiences continuity, not replacement.
+						-->
+						{@const isEditing = activeInlineEditor === segment.instanceId}
+						{@const isFilled = !!(segment.name && variableValues[segment.name])}
+						<div
+							class="voice-card my-3 whitespace-normal rounded-xl px-5 py-4
+								{isEditing
+									? 'voice-card--active'
+									: isFilled
+										? 'voice-card--spoken cursor-pointer'
+										: 'voice-card--resting cursor-pointer'
+								}"
+							role={isEditing ? undefined : 'button'}
+							tabindex={isEditing ? undefined : 0}
+							onclick={isEditing ? undefined : () => openInlineEditor(segment.instanceId || '')}
+							onkeydown={isEditing ? undefined : (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openInlineEditor(segment.instanceId || ''); } }}
+							aria-label={isEditing ? undefined : isFilled ? `Edit your ${segment.name}` : `Add your ${segment.name}`}
+						>
+							<!-- Gradient accent bar — topic-colored -->
+							<div class="voice-card__bar h-[3px] w-12 rounded-full mb-3"></div>
+
+							<!-- Label — persistent across resting/editing, hidden when spoken -->
+							{#if !isFilled || isEditing}
+								<div class="mb-2 flex items-center gap-1.5">
+									<Edit3 class="h-3.5 w-3.5 {isEditing ? 'voice-card__label--active' : 'voice-card__label'}" />
+									<span class="text-[11px] font-semibold uppercase tracking-wider
+										{isEditing ? 'voice-card__label--active' : 'voice-card__label'}">
+										{(segment.name && variableHints[segment.name]?.prompt) || 'Your voice'}
+									</span>
 								</div>
-							</div>
-						{:else if variableValues[segment.name]}
-							<!-- Filled: flows into the letter, left border marks it as the writer's voice -->
-							<span
-								class="block cursor-pointer whitespace-normal
-									border-l-2 border-participation-primary-200/60 pl-4
-									text-[var(--text-secondary)]
-									transition-all duration-200
-									hover:border-participation-primary-300"
-								role="button"
-								tabindex="0"
-								onclick={() => openInlineEditor(segment.instanceId || '')}
-								onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openInlineEditor(segment.instanceId || ''); } }}
-								aria-label={`Edit your ${segment.name}`}
-							>{variableValues[segment.name]}</span>
-						{:else}
-							<!-- Empty: an open interstitial — room for the writer's voice -->
-							<div
-								class="block cursor-pointer whitespace-normal
-									border-l-2 border-dashed border-participation-primary-200/50
-									py-1.5 pl-4
-									transition-all duration-200
-									hover:border-participation-primary-300 hover:border-solid"
-								role="button"
-								tabindex="0"
-								onclick={() => openInlineEditor(segment.instanceId || '')}
-								onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openInlineEditor(segment.instanceId || ''); } }}
-								aria-label={`Add your ${segment.name}`}
-							>
-								<span class="text-sm text-[var(--text-quaternary)]">
+							{/if}
+
+							<!-- Content swaps instantly — the card shell's CSS transition is the animation -->
+							{#if isEditing}
+								<textarea
+									use:autofocusAction
+									value={variableValues[segment.name] || ''}
+									oninput={(e) => handleInlineInput(e, segment.name || '')}
+									onfocusout={handleInlineBlur}
+									onfocusin={handleInlineFocus}
+									onkeydown={handleInlineKeydown}
+									placeholder={(segment.name && variableHints[segment.name]?.placeholder) ||
+										`Why this matters to you — your experience, your reasoning...`}
+									class="w-full resize-none border-0 bg-transparent p-0
+										font-sans text-sm leading-relaxed sm:text-[15px] sm:leading-7
+										text-[var(--text-primary)]
+										placeholder:text-[var(--text-tertiary)]
+										focus:ring-0 focus:outline-none"
+									rows="3"
+								></textarea>
+							{:else if isFilled}
+								<span class="text-[var(--text-primary)]">{variableValues[segment.name]}</span>
+							{:else}
+								<span class="text-sm text-[var(--text-secondary)]">
 									Your perspective — why this matters to you
 								</span>
-							</div>
-						{/if}
+							{/if}
+						</div>
 					{:else if segment.name}
 						<span class="relative inline-block">
 							<AnimatedPopover id={segment.instanceId || ''}>

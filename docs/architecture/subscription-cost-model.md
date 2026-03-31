@@ -1,9 +1,10 @@
 # Subscription Cost Model
 
-> **Status:** Architecture document (February 2026)
-> **Scope:** Unit economics for Free / Pro / Org tiers. Every external API call traced from code, priced at current rates, projected against realistic usage.
+> **Status:** Architecture document (February 2026, pricing updated March 2026)
+> **Scope:** Unit economics for Free / Starter / Organization / Coalition tiers. Every external API call traced from code, priced at current rates, projected against realistic usage.
 > **Companion:** `org-data-model.md` (data model), `civic-intelligence-cost-model.md` (intelligence pipeline costs)
-> **Last verified:** February 2026. Costs traced from actual code paths, not estimates.
+> **Policy:** Individual users are free. All subscription revenue comes from organizations. See [`docs/strategy/monetization-policy.md`](../strategy/monetization-policy.md).
+> **Last verified:** February 2026 (costs), March 2026 (pricing alignment).
 
 ---
 
@@ -163,7 +164,7 @@ Layer 2 fires ~70% of the time (only when Layers 0+1 pass). No thinking tokens �
 | Gemini embedding (~500 tokens) | gemini-embedding-001 (768 dim) | $0.0001 |
 | **Total** | | **$0.0001** |
 
-Note: An OpenAI embedding module exists (`openai-embeddings.ts`) but is not imported by any route. Template publish uses Gemini embeddings exclusively.
+Template publish uses Gemini embeddings exclusively.
 
 ### Action 5: Decision-maker discovery
 
@@ -242,7 +243,7 @@ Everything that fires when a user creates and publishes a new template (with 3 n
 | Subject line generation | 1 Gemini call (thinking: high) | $0.025 |
 | DM discovery (3 DMs, uncached) | 6 Exa + 6 Firecrawl + 5 Gemini | $0.132 |
 | Moderation pipeline | 2 Groq + 1 Gemini | $0.0005 |
-| Embeddings | 1 Gemini + 1 OpenAI | $0.0002 |
+| Embeddings | 1 Gemini embedding | $0.0001 |
 | **Total template creation** | | **$0.158** |
 
 Then each person who generates a message from that template:
@@ -280,82 +281,56 @@ The previous model had message generation at $0.004. **The real cost is $0.055 �
 
 ---
 
-## User Personas — Corrected Projections
+## Persona Projections — Corrected March 2026
 
-### Free user
+> **Policy change**: Individual users are free forever. There is no "Pro individual" tier.
+> All subscription revenue comes from organizations. See `docs/strategy/monetization-policy.md`.
+> Individual COGS are bounded by LLM rate limits (15 ops/day verified, 10/day authenticated).
+
+### Free individual (no subscription)
 
 | Action | Frequency | Unit cost | Monthly cost |
 |---|---|---|---|
-| Message generation | 3/mo | $0.041 (within grounding free tier) | $0.12 |
+| Message generation | 3/mo (typical) | $0.041 | $0.12 |
 | **Total per free user** | | | **$0.12** |
+| **Worst-case (15 ops/day verified × 30 days)** | | | **$99/mo** |
+| **Realistic ceiling (2-3 letters/week)** | | | **$0.72-1.08/mo** |
 
-### Pro individual ($10/mo)
+Individual COGS are bounded by rate limits, not billing. The 15 ops/day verified ceiling makes worst-case COGS $3.30/day. Resistbot lifetime average is 5 letters per user total.
+
+### Starter org ($10/mo, 5 seats)
 
 | Action | Frequency | Unit cost | Monthly cost |
 |---|---|---|---|
-| Message generation | 100/mo | $0.055 | $5.50 |
+| Message generation | 100/mo across team | $0.055 | $5.50 |
 | Template creation (2 novel DM runs) | 5/mo | $0.026 base + 2 × $0.132 DM | $0.39 |
 | **Total COGS** | | | **$5.89** |
 | **Revenue** | | | **$10.00** |
 | **Gross margin** | | | **$4.11 (41%)** |
 
-### Pro power user ($10/mo)
+### Organization ($75/mo, 10 seats)
 
 | Action | Frequency | Unit cost | Monthly cost |
 |---|---|---|---|
-| Message generation | 300/mo | $0.055 | $16.50 |
-| Template creation (5 novel DM runs) | 10/mo | $0.026 base + 5 × $0.132 DM | $0.92 |
-| **Total COGS** | | | **$17.42** |
-| **Revenue** | | | **$10.00** |
-| **Gross margin** | | | **-$7.42 (LOSS)** |
+| Message generation | 1,000/mo across team | $0.055 | $55.00 |
+| Template creation (5 novel DM runs) | 20/mo | varies | $1.50 |
+| **Total COGS** | | | **$56.50** |
+| **Revenue** | | | **$75.00** |
+| **Gross margin** | | | **$18.50 (25%)** |
 
-**At 300 messages/month, a $10 pro user is unprofitable.** Break-even is ~170 messages/month at $0.055/message. This is the critical finding the previous model missed.
+At high usage (2,000 messages/mo), COGS reach $110 — revenue must cover. Verified action metering ($1.50-3.00/1K overage) is the margin lever.
 
-### Break-even analysis for Pro tier
-
-| Messages/mo | COGS (messages only) | Margin at $10 |
-|---|---|---|
-| 50 | $2.75 | $7.25 (73%) |
-| 100 | $5.50 | $4.50 (45%) |
-| 150 | $8.25 | $1.75 (18%) |
-| 182 | $10.00 | $0 (break-even) |
-| 300 | $16.50 | -$6.50 (loss) |
-
-### Small org ($40–60/mo custom, 5 members)
+### Coalition ($200/mo, 25 seats)
 
 | Action | Frequency | Unit cost | Monthly cost |
 |---|---|---|---|
-| Message generation | 500/mo across team | $0.055 | $27.50 |
-| Template creation | 15/mo (3 novel DM runs) | varies | $0.79 |
-| **Total COGS** | | | **$28.29** |
-| **Revenue (low end)** | | | **$40.00** |
-| **Gross margin** | | | **$11.71 (29%)** |
-
-At $60: margin is $31.71 (53%). The DM cache helps on discovery, but message generation is the dominant cost.
-
-### Mid org ($100–150/mo custom, 12 members)
-
-| Action | Frequency | Unit cost | Monthly cost |
-|---|---|---|---|
-| Message generation | 2,000/mo | $0.055 | $110.00 |
-| Template creation | 30/mo (8 novel DM runs) | varies | $1.81 |
-| **Total COGS** | | | **$111.81** |
-| **Revenue** | | | **$150.00** |
-| **Gross margin** | | | **$38.19 (25%)** |
-
-At $100 revenue this is a **loss**. Need to price at $150+ or reduce per-message cost.
-
-### Large org ($200–300/mo custom, 25+ members)
-
-| Action | Frequency | Unit cost | Monthly cost |
-|---|---|---|---|
-| Message generation | 5,000/mo | $0.055 | $275.00 |
+| Message generation | 5,000/mo across team | $0.055 | $275.00 |
 | Template creation | 50/mo | varies | $3.50 |
 | **Total COGS** | | | **$278.50** |
-| **Revenue** | | | **$300.00** |
-| **Gross margin** | | | **$21.50 (7%)** |
+| **Revenue** | | | **$200.00 + overage** |
+| **Gross margin** | | | **Depends on overage billing** |
 
-Thin margins. At 5,000 messages/month, revenue must be $350+ for healthy economics.
+At 5,000+ messages/month, base subscription alone doesn't cover COGS. Verified action overage ($1.50-3.00/1K) is structurally necessary at this tier.
 
 ---
 
@@ -426,40 +401,40 @@ Using blended $0.016/message after optimization.
 
 | Segment | Count | Revenue/ea | Total revenue | Total COGS |
 |---|---|---|---|---|
-| Free users | 500 | $0 | $0 | $10 |
-| Pro (Stripe) | 30 | $10 | $300 | $65 |
-| Pro (crypto) | 5 | $10 | $50 | $11 |
-| Small org | 2 | $50 avg | $100 | $18 |
-| **Total** | 537 | | **$450** | **$104** |
+| Free individuals | 500 | $0 | $0 | $60 |
+| Starter orgs | 10 | $10 | $100 | $59 |
+| Organization orgs | 2 | $75 | $150 | $57 |
+| **Total** | 512 | | **$250** | **$176** |
 | **Infrastructure** | | | | **$55** |
-| **Net margin** | | | | **$291 (65%)** |
+| **Net margin** | | | | **$19 (8%)** |
 
 ### Scenario B: Growing (Month 12)
 
 | Segment | Count | Revenue/ea | Total revenue | Total COGS |
 |---|---|---|---|---|
-| Free users | 3,000 | $0 | $0 | $58 |
-| Pro (Stripe) | 150 | $10 | $1,500 | $320 |
-| Pro (crypto) | 25 | $10 | $250 | $53 |
-| Small org | 8 | $50 avg | $400 | $70 |
-| Mid org | 3 | $150 avg | $450 | $102 |
-| **Total** | 3,186 | | **$2,600** | **$603** |
+| Free individuals | 3,000 | $0 | $0 | $360 |
+| Starter orgs | 50 | $10 | $500 | $295 |
+| Organization orgs | 10 | $75 | $750 | $565 |
+| Coalition orgs | 2 | $200 | $400 | $557 |
+| **Total** | 3,062 | | **$1,650** | **$1,777** |
 | **Infrastructure** | | | | **$100** |
-| **Net margin** | | | | **$1,897 (73%)** |
+| **Net margin** | | | | **-$227 (loss without overage)** |
+
+Note: At this scale, verified action overage billing ($1.50-3.00/1K) becomes the critical margin lever. Even modest overage converts this to profitable.
 
 ### Scenario C: Established (Month 24)
 
 | Segment | Count | Revenue/ea | Total revenue | Total COGS |
 |---|---|---|---|---|
-| Free users | 15,000 | $0 | $0 | $288 |
-| Pro (Stripe) | 600 | $10 | $6,000 | $1,284 |
-| Pro (crypto) | 100 | $10 | $1,000 | $214 |
-| Small org | 25 | $50 avg | $1,250 | $220 |
-| Mid org | 10 | $150 avg | $1,500 | $338 |
-| Large org | 3 | $350 avg | $1,050 | $445 |
-| **Total** | 15,738 | | **$10,800** | **$2,789** |
+| Free individuals | 15,000 | $0 | $0 | $1,800 |
+| Starter orgs | 200 | $10 | $2,000 | $1,178 |
+| Organization orgs | 30 | $75 | $2,250 | $1,695 |
+| Coalition orgs | 8 | $200 | $1,600 | $2,228 |
+| **Total** | 15,238 | | **$5,850** | **$6,901** |
 | **Infrastructure** | | | | **$200** |
-| **Net margin** | | | | **$7,811 (72%)** |
+| **Net margin** | | | | **-$1,251 before overage** |
+
+**Critical**: Base subscription revenue alone does not cover COGS at scale. The business depends on verified action overage billing. At $2.00/1K overage and 50K monthly overage actions across all orgs, overage revenue is $100 — still insufficient. This model needs either (a) higher base pricing, (b) thinking-level optimization to cut per-message cost to $0.030, or (c) much higher overage volume.
 
 ---
 

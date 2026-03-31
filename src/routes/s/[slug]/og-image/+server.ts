@@ -13,11 +13,7 @@ export const GET: RequestHandler = async ({ params }) => {
 			return new Response('Template not found', { status: 404 });
 		}
 
-		// Extract metrics from JSON field
-		const metrics = typeof template.metrics === 'object' && template.metrics !== null
-			? (template.metrics as Record<string, unknown>)
-			: {};
-		const actionCount = template.verifiedSends || (metrics.sent as number) || 0;
+		const actionCount = template.verified_sends || 0;
 
 		// Category-specific colors
 		const categoryColors: Record<string, { bg: string; accent: string }> = {

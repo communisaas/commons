@@ -92,7 +92,6 @@ describe('CWC Smoke Tests', () => {
 			coordinationScale: 0,
 			isNew: true,
 			send_count: 0,
-			metrics: {},
 			status: 'active',
 			is_public: true,
 			applicable_countries: ['US'],

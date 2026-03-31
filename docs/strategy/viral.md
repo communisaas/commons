@@ -1,10 +1,10 @@
 # Commons Growth Strategy: From Civic Tool to Viral Movement
 
 **Date**: 2025-01-08
-**Status**: Strategic Planning (All Phases Future)
+**Status**: HISTORICAL / PARTIALLY SUPERSEDED
 **Goal**: Transform grassroots civic action into self-sustaining viral growth
 
-> **STATUS: ASPIRATIONAL** — No viral growth features are currently implemented. ShareableCard model does not exist in schema. All phases (1-4) are strategic planning for future development.
+> **STATUS: HISTORICAL** — Written January 2025, before ZK infrastructure, debate markets, and voter-protocol existed. Core sharing thesis remains directionally valid. Revenue projections (Phase 2: "token appreciation", "challenge markets", "platform fees") are **superseded** by [`economics.md`](economics.md) and [`monetization-policy.md`](monetization-policy.md). Gamification proposals contradict the current design thesis: "Engagement tiers are structural, not gamified. Earned through civic labor, not badges" (`product-roadmap.md`). Read for the sharing/viral loop ideas; ignore the revenue and gamification sections.
 
 ---
 
@@ -627,10 +627,10 @@ Still not viral, but sustainable growth.
 - 80% of users return within 30 days
 - 40% of users invite friends
 
-**Revenue (Phase 2)**:
-- $1M monthly transaction volume (challenge markets)
-- $50K monthly revenue (platform fees)
-- $200K monthly revenue (token appreciation)
+**Revenue (Phase 2)** — *SUPERSEDED: See [`economics.md`](economics.md) for current revenue model. No token exists. Revenue comes from org subscriptions metered on verified actions.*:
+- ~~$1M monthly transaction volume (challenge markets)~~
+- ~~$50K monthly revenue (platform fees)~~
+- ~~$200K monthly revenue (token appreciation)~~
 
 ---
 
@@ -741,12 +741,12 @@ By making every action shareable, we transform Commons from a tool into a moveme
 - 1M Americans using Commons
 - 100K civic messages sent per month
 - Reputation as trusted civic infrastructure
-- Foundation for token-based governance (Phase 2)
+- ~~Foundation for token-based governance (Phase 2)~~ *SUPERSEDED: No token. See [`monetization-policy.md`](monetization-policy.md).*
 
 **This is how we make democracy participatory again.**
 
 Not through top-down campaigns.
 Not through guilt-based appeals.
-But through social proof, gamification, and network effects.
+But through social proof, verified identity, and network effects.
 
-**Let's build the civic action platform that finally goes viral.**
+*Note: Original text referenced "gamification" — current design thesis explicitly rejects gamification in favor of structural engagement tiers earned through civic labor.*

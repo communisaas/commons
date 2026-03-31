@@ -190,7 +190,7 @@ export function formatCoordinationContext(
 	template: Template,
 	targetInfo: TargetPresentation
 ): string {
-	const count = template.metrics?.sent || template.send_count || 0;
+	const count = template.send_count || 0;
 
 	if (count === 0) {
 		// Multi-level uses coordinationContext from the union type

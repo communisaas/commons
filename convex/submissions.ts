@@ -46,6 +46,19 @@ export const create = action({
     // Compute pseudonymous ID (HMAC-SHA256 of userId)
     const pseudonymousId = await computePseudonymousId(identity.subject);
 
+    // Check org verified action quota (if template belongs to an org)
+    const template = await ctx.runQuery(internal.submissions.getTemplateForDelivery, {
+      templateId: args.templateId,
+    });
+    if (template?.orgId) {
+      const limits = await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
+        orgId: template.orgId,
+      });
+      if (limits && limits.current.verifiedActions >= limits.limits.maxVerifiedActions) {
+        throw new Error("VERIFIED_ACTION_QUOTA_EXCEEDED");
+      }
+    }
+
     // Extract action_id from public inputs
     const publicInputsTyped = args.publicInputs as Record<string, unknown> | undefined;
     const actionId = (publicInputsTyped?.actionDomain as string) ?? args.templateId;
@@ -278,6 +291,19 @@ export const deliverToCongress = internalAction({
           cwcSubmissionId: `demo-${String(args.submissionId).slice(0, 8)}`,
           deliveredAt: Date.now(),
         });
+        // Persist district + increment template reach (non-fatal)
+        try {
+          await ctx.runMutation(internal.submissions.updateResolvedDistrict, {
+            submissionId: args.submissionId,
+            districtCode,
+          });
+          await ctx.runMutation(internal.submissions.incrementTemplateReach, {
+            templateId: submission.templateId,
+            districtCode,
+          });
+        } catch (counterErr) {
+          console.error("[deliverToCongress] Counter update failed (demo delivery unaffected):", counterErr);
+        }
         return;
       }
 
@@ -318,6 +344,23 @@ export const deliverToCongress = internalAction({
         deliveredAt: anySuccess ? Date.now() : undefined,
         deliveryError: errors.length > 0 ? errors.join("; ") : undefined,
       });
+
+      // On any successful delivery, persist district + increment template reach
+      // Wrapped in own try/catch: counter failures must never revert delivery status
+      if (anySuccess) {
+        try {
+          await ctx.runMutation(internal.submissions.updateResolvedDistrict, {
+            submissionId: args.submissionId,
+            districtCode,
+          });
+          await ctx.runMutation(internal.submissions.incrementTemplateReach, {
+            templateId: submission.templateId,
+            districtCode,
+          });
+        } catch (counterErr) {
+          console.error("[deliverToCongress] Counter update failed (delivery unaffected):", counterErr);
+        }
+      }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Unknown error";
       console.error("[deliverToCongress] Fatal error:", errorMsg);
@@ -363,6 +406,68 @@ export const registerEngagement = internalAction({
 // See docs/design/ZKP-INTEGRITY-TASK-GRAPH.md § S1/2E.
 
 /**
+ * Internal mutation: Persist the resolved congressional district on a submission.
+ * Called from deliverToCongress after TEE resolve returns districtCode.
+ */
+export const updateResolvedDistrict = internalMutation({
+  args: {
+    submissionId: v.id("submissions"),
+    districtCode: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.submissionId, {
+      resolvedDistrict: args.districtCode,
+    });
+  },
+});
+
+/**
+ * Internal mutation: Increment template civic reach counters after delivery.
+ *
+ * - verifiedSends: always +1
+ * - uniqueDistricts: +1 only if districtCode is new for this template
+ * - deliveredDistricts: bounded array (max 435 congressional districts)
+ *
+ * Non-throwing: counter failures must never break the delivery path.
+ */
+export const incrementTemplateReach = internalMutation({
+  args: {
+    templateId: v.string(),
+    districtCode: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Resolve template by slug (same pattern as getTemplateForDelivery)
+    const template = await ctx.db
+      .query("templates")
+      .withIndex("by_slug", (q) => q.eq("slug", args.templateId))
+      .first();
+
+    if (!template) {
+      console.warn(`[incrementTemplateReach] Template not found: ${args.templateId}`);
+      return;
+    }
+
+    const districts = template.deliveredDistricts ?? [];
+    const isNewDistrict = !districts.includes(args.districtCode);
+
+    // Hard cap: 500 districts (435 congressional + territories + safety margin)
+    const shouldTrackDistrict = isNewDistrict && districts.length < 500;
+
+    const newDistricts = shouldTrackDistrict ? [...districts, args.districtCode] : districts;
+
+    await ctx.db.patch(template._id, {
+      verifiedSends: (template.verifiedSends || 0) + 1,
+      ...(shouldTrackDistrict
+        ? {
+            deliveredDistricts: newDistricts,
+            uniqueDistricts: newDistricts.length,
+          }
+        : {}),
+    });
+  },
+});
+
+/**
  * Internal query: Get submission by ID (for delivery worker).
  */
 export const getById = internalQuery({
@@ -390,6 +495,7 @@ export const getTemplateForDelivery = internalQuery({
         title: results.title,
         description: results.description,
         messageBody: results.messageBody,
+        orgId: (results as any).orgId ?? null,
       };
     }
 

@@ -14,7 +14,7 @@
 			description: string;
 			slug: string;
 			deliveryMethod?: string;
-			metrics: { sent?: number };
+			send_count?: number;
 		};
 		source?: 'social-link' | 'direct-link' | 'share';
 		onauth: (provider: string) => void;
@@ -40,7 +40,7 @@
 		if (congressional) {
 			return {
 				'social-link': {
-					headline: `You're joining ${template.metrics?.sent || 0} others on this`,
+					headline: `You're joining ${template.send_count || 0} others on this`,
 					subtext: 'They shared this because groups move decisions.',
 					cta: 'Send your message'
 				},
@@ -51,7 +51,7 @@
 				},
 				share: {
 					headline: 'Pressure is building',
-					subtext: `Add yours to ${template.metrics?.sent || 0} others.`,
+					subtext: `Add yours to ${template.send_count || 0} others.`,
 					cta: 'Join them'
 				}
 			};
@@ -225,11 +225,11 @@
 			<div class="flex items-center gap-3 text-xs text-slate-500">
 				<div class="flex items-center gap-1">
 					<Users class="h-3 w-3" />
-					<span>{(template.metrics?.sent || 0).toLocaleString()} sent</span>
+					<span>{(template.send_count || 0).toLocaleString()} sent</span>
 				</div>
-				{#if (template.metrics?.sent || 0) > 100}
+				{#if (template.send_count || 0) > 100}
 					<span class="font-medium text-blue-600">📈 Growing momentum</span>
-				{:else if (template.metrics?.sent || 0) > 50}
+				{:else if (template.send_count || 0) > 50}
 					<span class="font-medium text-green-600">🎯 Building pressure</span>
 				{:else}
 					<span class="font-medium text-amber-600">🚀 Early adopter</span>

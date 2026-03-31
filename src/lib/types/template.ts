@@ -89,27 +89,14 @@ export interface Template {
 	// Lightweight debate summary for card-level rendering
 	debateSummary?: DebateSummary;
 
-	metrics: {
-		sent?: number;
-		delivered?: number; // Number of messages successfully delivered
-		opened?: number; // Deprecated - not trackable for direct email
-		clicked?: number; // For direct: recipient count; for congressional: not used
-		responded?: number; // For congressional: delivery confirmations; for direct: not used
-		views?: number; // Number of times the template has been viewed via deep link
-		responses?: number; // Alternative field name used in some seed data
-		// New congressional-specific metrics
-		districts_covered?: number; // Number of unique districts reached
-		total_districts?: number; // Total districts in the target area (for calculating coverage %)
-		district_coverage_percent?: number; // Calculated: districts_covered / total_districts * 100
-	}; // Json field in database, never null
-	campaign_id?: string | null; // String? field in database - was missing
+	campaign_id?: string | null;
 	status: string; // String field with default "draft" - was missing
 	is_public: boolean;
 
-	// Usage tracking - AGGREGATE METRICS ONLY (privacy-preserving)
-	// Backend: verified_sends (Prisma field)
-	// Frontend: send_count (mapped from verified_sends for compatibility)
-	send_count: number; // Total verified sends (aggregate pool metric)
+	// Civic reach counters (aggregate, privacy-preserving)
+	send_count: number; // Verified sends
+	verified_sends?: number; // Alias (Convex field name)
+	unique_districts?: number; // Unique congressional districts reached
 
 	// Geographic scope (populated by scope-filtering, not in Prisma Template model)
 	applicable_countries?: string[];

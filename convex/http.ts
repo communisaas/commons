@@ -160,10 +160,11 @@ http.route({
       );
     }
 
-    try {
-      const eventData = event.data.object as Record<string, unknown>;
+    const eventData = event.data.object as Record<string, unknown>;
 
-      // Handle donation checkouts and refunds via webhooks module
+    // Handle donation checkouts and refunds via webhooks module
+    // Donations use upsert-by-paymentIntentId, so retries are safe (idempotent).
+    try {
       if (event.type === "checkout.session.completed") {
         const metadata = eventData.metadata as Record<string, string> | undefined;
         if (metadata?.type === "donation" && metadata.donationId) {
@@ -193,15 +194,21 @@ http.route({
           });
         }
       }
+    } catch (err) {
+      console.error("[webhooks/stripe] Donation processing failed:", err);
+      return new Response("donation processing error", { status: 500 });
+    }
 
-      // Handle subscription events via subscriptions module
+    // Handle subscription events via subscriptions module.
+    // Return 500 on failure so Stripe retries with exponential backoff (up to 72h).
+    try {
       await ctx.runAction(internal.subscriptions.processStripeWebhook, {
         eventType: event.type,
         data: eventData,
       });
     } catch (err) {
-      console.error("[webhooks/stripe] Processing failed:", err);
-      // Always return 200 to acknowledge receipt — Stripe retries on non-2xx
+      console.error("[webhooks/stripe] Subscription processing failed:", err);
+      return new Response("subscription processing error", { status: 500 });
     }
 
     return new Response("ok", { status: 200 });

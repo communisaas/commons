@@ -15,6 +15,7 @@
 	import VerificationGate from '$lib/components/auth/VerificationGate.svelte';
 	import { invalidateAll } from '$app/navigation';
 	import { FEATURES } from '$lib/config/features';
+	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 	import type { PageData } from './$types';
 
 	interface ProfileRepresentative {
@@ -35,6 +36,8 @@
 	let showVerificationGate = $state(false);
 
 	const user = $derived(data.user);
+	const displayName = $derived(decryptedUser.name ?? user?.name ?? null);
+	const displayEmail = $derived(decryptedUser.email ?? user?.email ?? null);
 	const userDetailsPromise = $derived(data.streamed?.userDetails);
 	const templatesDataPromise = $derived(data.streamed?.templatesData);
 	const representativesPromise = $derived(data.streamed?.representatives);
@@ -171,10 +174,22 @@
 			</div>
 		{/if}
 		<div>
-			<h1 class="text-xl font-bold text-slate-900 sm:text-2xl lg:text-3xl" style="font-family: 'Satoshi', system-ui, sans-serif">
-				{user?.name || 'Your Profile'}
-			</h1>
-			<p class="text-sm text-slate-500 lg:text-base">{user?.email}</p>
+			{#if displayName}
+				<h1 class="text-xl font-bold text-slate-900 sm:text-2xl lg:text-3xl" style="font-family: 'Satoshi', system-ui, sans-serif">
+					{displayName}
+				</h1>
+			{:else if decryptedUser.decrypting}
+				<div class="h-8 w-48 animate-pulse rounded bg-slate-200/40 sm:h-9 lg:h-10"></div>
+			{:else}
+				<h1 class="text-xl font-bold text-slate-900 sm:text-2xl lg:text-3xl" style="font-family: 'Satoshi', system-ui, sans-serif">
+					Your Profile
+				</h1>
+			{/if}
+			{#if displayEmail}
+				<p class="text-sm text-slate-500 lg:text-base">{displayEmail}</p>
+			{:else if decryptedUser.decrypting}
+				<div class="mt-1 h-4 w-36 animate-pulse rounded bg-slate-200/30"></div>
+			{/if}
 		</div>
 	</div>
 
@@ -427,7 +442,7 @@
 			<p class="text-sm text-slate-500 lg:text-base">No profile details yet.</p>
 		{/if}
 
-		{#if userDetails?.timestamps}
+		{#if userDetails?.timestamps?.created_at}
 			<p class="mt-2 text-xs text-slate-500">
 				Member since {formatDate(userDetails.timestamps.created_at)}
 			</p>

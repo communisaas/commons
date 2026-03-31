@@ -134,7 +134,6 @@ export interface TemplateFactoryData {
 	delivery_config: unknown;
 	cwc_config?: unknown;
 	recipient_config: unknown;
-	metrics: unknown;
 	campaign_id?: string;
 	status: string;
 	is_public: boolean;
@@ -193,7 +192,6 @@ export class TemplateFactory extends Factory<TemplateFactoryData> {
 			delivery_config: { method: 'cwc', target: 'congress' },
 			cwc_config: { house: true, senate: true },
 			recipient_config: { auto_lookup: true },
-			metrics: { opens: 0, clicks: 0, responses: 0 },
 			campaign_id: undefined,
 			status: 'draft',
 			is_public: true,

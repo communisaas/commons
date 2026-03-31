@@ -20,7 +20,7 @@
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { goto, preloadData, onNavigate } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import type { Template, TemplateCreationContext, TemplateGroup } from '$lib/types/template';
 	import type { PageData } from './$types';
 	import { coordinated } from '$lib/utils/timerCoordinator';
@@ -39,7 +39,8 @@
 		scoreTemplatesByRelevance,
 		geoScopeToInferredLocation,
 		inferredLocationToGeoScope,
-		groupByPrecision
+		groupByPrecision,
+		type GeographicScope
 	} from '$lib/core/location/template-filter';
 	import { getUserLocation } from '$lib/core/location/inference-engine';
 	import type { TemplateWithJurisdictions } from '$lib/core/location/types';
@@ -80,6 +81,15 @@
 
 	let selectedScope = $state<GeoScope | null>(null);
 	let scopeIsInferred = $state(false); // true when auto-resolved from IP/timezone
+
+	function geoScopeToGeographicScope(scope: GeoScope | null): GeographicScope {
+		if (!scope) return null;
+		if (scope.type === 'nationwide') return 'nationwide';
+		if (scope.type === 'subnational') {
+			return scope.locality ? 'city' : 'state';
+		}
+		return null;
+	}
 
 	function handleScopeChange(scope: GeoScope | null) {
 		selectedScope = scope;
@@ -224,6 +234,13 @@
 
 		if (isMobile()) {
 			showMobilePreview = true;
+		} else {
+			// Scroll the template preview into view on desktop
+			tick().then(() => {
+				document
+					.querySelector('.template-preview-column')
+					?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+			});
 		}
 	}
 
@@ -342,7 +359,8 @@
 		// Score templates against the selected location
 		const scored = scoreTemplatesByRelevance(
 			allTemplates as unknown as TemplateWithJurisdictions[],
-			inferredLocation
+			inferredLocation,
+			geoScopeToGeographicScope(selectedScope)
 		);
 
 		const groups = groupByPrecision(scored);
@@ -442,7 +460,7 @@
 </script>
 
 <svelte:head>
-	<title>Commons | Write once, send together</title>
+	<title>Commons</title>
 	<meta
 		name="description"
 		content="Write once, share the link, everyone can send it. Coordinated messages make impact."
@@ -800,6 +818,9 @@
 
 	/* Creation Column */
 	.creation-column {
+		/* Container queries: children size relative to column width, not viewport */
+		container-type: inline-size;
+		container-name: creation;
 		/* Mobile/Tablet: show as expandable card */
 		padding: 1.5rem;
 		border-radius: 16px;
@@ -830,6 +851,8 @@
 		flex-direction: column;
 		gap: 0.5rem;
 		min-width: 0;
+		container-type: inline-size;
+		container-name: stream;
 	}
 
 	@media (min-width: 1280px) {

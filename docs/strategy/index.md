@@ -19,6 +19,10 @@ The authoritative plan. Phase 0-3 feature sequence, key flows, competitive posit
 
 Pricing tiers, revenue projections, cost structure. Verified actions as primary metered unit.
 
+### [monetization-policy.md](monetization-policy.md) — Monetization Policy
+
+Why individuals are free, why orgs pay, LLM rate limit rationale, research-backed decision log. The definitive document on person-layer vs org-layer economics.
+
 ### [competitive-analysis.md](../research/competitive-analysis.md) — Market Landscape
 
 $191M grassroots segment. Commons occupies the only quadrant no competitor can reach: high verification at low cost.
@@ -67,9 +71,9 @@ What organizing victories look like, why organizing fails, class struggle infras
 
 ## Growth & Delivery
 
-### [viral.md](viral.md) — Viral Growth Strategy
+### [viral.md](viral.md) — Viral Growth Strategy (Historical)
 
-Shareable impact cards, social proof, gamification. Phase 1 (shareable cards) partially shipped. Phases 2-4 are speculative.
+Shareable impact cards, social proof, network effects. Written January 2025 — sharing thesis still directionally valid, but revenue projections (token, platform fees) and gamification proposals are superseded by `economics.md` and `monetization-policy.md`.
 
 ### [delivery-verification.md](delivery-verification.md) — Delivery Verification
 
@@ -92,5 +96,6 @@ Original 3-month launch plan. Context for how the project started.
 - **Current plan?** → `product-roadmap.md`
 - **Market position?** → `../research/competitive-analysis.md`
 - **Pricing?** → `economics.md`
+- **Why individuals are free?** → `monetization-policy.md`
 - **Why we exist?** → `vision.md`
 - **How coordination works?** → `coordination.md`

@@ -1,11 +1,17 @@
 /**
  * POST /api/analytics/increment
  *
- * Receives batched increments from client and processes them.
+ * Receives batched increments from client and persists them to Convex.
  * Fire-and-forget semantics — always returns success.
  *
  * Rate Limiting:
  * - In-memory per-IP contribution bounding (single instance)
+ *
+ * Pipeline:
+ * 1. Parse + validate increments
+ * 2. Check rate limits (per-IP)
+ * 3. Call Convex mutation analytics.incrementBatch to persist to DB
+ * 4. Return success (regardless of persistence outcome)
  *
  * @see docs/architecture/rate-limiting.md for design rationale
  */
@@ -20,6 +26,8 @@ import {
 	type Metric
 } from '$lib/types/analytics';
 import { createHash } from 'crypto';
+import { serverMutation } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 // ============================================================================
 // In-Memory Rate Limiting
@@ -81,24 +89,33 @@ function checkContributionLimit(hashedIP: string, _metric: Metric): boolean {
 }
 
 // ============================================================================
-// In-Memory Batch Processing
+// Convex Persistence
 // ============================================================================
 
-/** Simple in-memory counters — replace with Convex/DB writes when needed */
-const counters = new Map<string, number>();
-
-function processBatch(
+/**
+ * Persist batch to Convex analytics table
+ * Fire-and-forget: errors are logged but don't fail the response
+ */
+async function persistBatch(
 	increments: Array<{ metric: Metric; dimensions?: Dimensions }>
-): { processed: number } {
-	let processed = 0;
-	for (const inc of increments) {
-		const key = inc.dimensions
-			? `${inc.metric}:${JSON.stringify(inc.dimensions)}`
-			: inc.metric;
-		counters.set(key, (counters.get(key) ?? 0) + 1);
-		processed++;
+): Promise<{ written: number }> {
+	try {
+		const result = await serverMutation(api.analytics.incrementBatch, {
+			increments: increments.map((inc) => ({
+				metric: inc.metric,
+				templateId: inc.dimensions?.template_id as string | undefined,
+				jurisdiction: inc.dimensions?.jurisdiction as string | undefined,
+				deliveryMethod: inc.dimensions?.delivery_method as string | undefined,
+				utmSource: inc.dimensions?.utm_source as string | undefined,
+				errorType: inc.dimensions?.error_type as string | undefined,
+			})),
+		});
+		return result;
+	} catch (error) {
+		// Log error server-side but don't expose to client
+		console.error('[analytics] Convex persistence failed:', error);
+		return { written: 0 };
 	}
-	return { processed };
 }
 
 // ============================================================================
@@ -140,13 +157,13 @@ export const POST: RequestHandler = async ({ request }) => {
 			// Invalid increments are silently dropped (privacy > completeness)
 		}
 
-		// Process batch
-		const { processed } = processBatch(valid);
+		// Persist to Convex (fire-and-forget)
+		const { written } = await persistBatch(valid);
 
 		const response: IncrementResponse = {
 			success: true,
-			processed,
-			dropped: increments.length - processed
+			processed: written,
+			dropped: increments.length - written
 		};
 
 		return json(response);

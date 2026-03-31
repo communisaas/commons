@@ -62,6 +62,15 @@ function normalizeStateCode(code: string): string {
 	return dashIndex >= 0 ? code.slice(dashIndex + 1) : code;
 }
 
+/**
+ * Normalize locality names for comparison.
+ * Handles slug vs display name mismatches:
+ * "San Francisco" → "san francisco", "san-francisco" → "san francisco"
+ */
+function normalizeLocality(name: string): string {
+	return name.toLowerCase().replace(/-/g, ' ').trim();
+}
+
 // ============================================================================
 // Hierarchical Scope Matching
 // ============================================================================
@@ -125,10 +134,10 @@ function getHierarchicalMatch(
 			return 'district';
 		}
 
-		// Locality-level exact match
+		// Locality-level exact match (normalize: DB may store slug "san-francisco", user has "San Francisco")
 		if (
 			templateScope.scope_level === 'locality' &&
-			templateScope.locality_code === userLocation.locality_code
+			normalizeLocality(templateScope.locality_code || '') === normalizeLocality(userLocation.locality_code || '')
 		) {
 			return 'locality';
 		}

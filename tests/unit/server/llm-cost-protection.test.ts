@@ -250,7 +250,7 @@ describe('llm-cost-protection', () => {
 
 	describe('checkRateLimit', () => {
 		it('allows subject-line for authenticated user within quota', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 14, 15));
+			mockLimit.mockResolvedValue(mockLimitResult(true, 4, 5));
 
 			const ctx = {
 				userId: 'user_001',
@@ -300,8 +300,8 @@ describe('llm-cost-protection', () => {
 			expect(result.reason).toContain('Generating messages requires an account');
 		});
 
-		it('allows subject-line for guest users (5/hr quota)', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 4, 5));
+		it('allows subject-line for guest users (3/hr quota)', async () => {
+			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
 
 			const ctx = {
 				userId: null,
@@ -314,11 +314,11 @@ describe('llm-cost-protection', () => {
 			const result = await checkRateLimit('subject-line', ctx);
 
 			expect(result.allowed).toBe(true);
-			expect(result.limit).toBe(5);
+			expect(result.limit).toBe(3);
 		});
 
-		it('verified users get 30/hr quota for subject-line', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 29, 30));
+		it('verified users get 5/hr quota for subject-line', async () => {
+			mockLimit.mockResolvedValue(mockLimitResult(true, 4, 5));
 
 			const ctx = {
 				userId: 'user_v1',
@@ -331,11 +331,11 @@ describe('llm-cost-protection', () => {
 			const result = await checkRateLimit('subject-line', ctx);
 
 			expect(result.allowed).toBe(true);
-			expect(result.limit).toBe(30);
+			expect(result.limit).toBe(5);
 		});
 
-		it('verified users get 10/hr quota for decision-makers', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 9, 10));
+		it('verified users get 3/hr quota for decision-makers', async () => {
+			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
 
 			const ctx = {
 				userId: 'user_v2',
@@ -348,7 +348,7 @@ describe('llm-cost-protection', () => {
 			const result = await checkRateLimit('decision-makers', ctx);
 
 			expect(result.allowed).toBe(true);
-			expect(result.limit).toBe(10);
+			expect(result.limit).toBe(3);
 		});
 
 		it('fails closed for unknown operations', async () => {
@@ -397,8 +397,8 @@ describe('llm-cost-protection', () => {
 			// First call (operation limit) - EXHAUSTED
 			// Second call (daily limit) - still OK
 			mockLimit
-				.mockResolvedValueOnce(mockLimitResult(false, 0, 15))
-				.mockResolvedValueOnce(mockLimitResult(true, 40, 50));
+				.mockResolvedValueOnce(mockLimitResult(false, 0, 5))
+				.mockResolvedValueOnce(mockLimitResult(true, 9, 10));
 
 			const ctx = {
 				userId: 'user_001',
@@ -418,8 +418,8 @@ describe('llm-cost-protection', () => {
 			// First call (operation limit) - OK
 			// Second call (daily limit) - EXHAUSTED
 			mockLimit
-				.mockResolvedValueOnce(mockLimitResult(true, 10, 15))
-				.mockResolvedValueOnce(mockLimitResult(false, 0, 50));
+				.mockResolvedValueOnce(mockLimitResult(true, 4, 5))
+				.mockResolvedValueOnce(mockLimitResult(false, 0, 10));
 
 			const ctx = {
 				userId: 'user_001',
@@ -439,8 +439,8 @@ describe('llm-cost-protection', () => {
 			// Operation limit: 3 remaining
 			// Daily limit: 1 remaining
 			mockLimit
-				.mockResolvedValueOnce(mockLimitResult(true, 3, 15))
-				.mockResolvedValueOnce(mockLimitResult(true, 1, 50));
+				.mockResolvedValueOnce(mockLimitResult(true, 3, 5))
+				.mockResolvedValueOnce(mockLimitResult(true, 1, 10));
 
 			const ctx = {
 				userId: 'user_001',
@@ -457,7 +457,7 @@ describe('llm-cost-protection', () => {
 		});
 
 		it('constructs correct rate limit key with userId', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 10, 15));
+			mockLimit.mockResolvedValue(mockLimitResult(true, 4, 5));
 
 			const ctx = {
 				userId: 'user_key_test',
@@ -472,19 +472,19 @@ describe('llm-cost-protection', () => {
 			// Operation-specific key
 			expect(mockLimit).toHaveBeenCalledWith(
 				'llm:subject-line:user_key_test',
-				15,
+				5,
 				3600000
 			);
 			// Daily global key
 			expect(mockLimit).toHaveBeenCalledWith(
 				'llm:daily:user_key_test',
-				50,
+				10,
 				86400000
 			);
 		});
 
 		it('constructs correct rate limit key with IP for guests', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 4, 5));
+			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
 
 			const ctx = {
 				userId: null,
@@ -498,20 +498,20 @@ describe('llm-cost-protection', () => {
 
 			expect(mockLimit).toHaveBeenCalledWith(
 				'llm:subject-line:ip:10.0.0.1',
-				5,
+				3,
 				3600000
 			);
 			expect(mockLimit).toHaveBeenCalledWith(
 				'llm:daily:ip:10.0.0.1',
-				10,
+				3,
 				86400000
 			);
 		});
 
 		it('decision-makers rate limit reason mentions lookup', async () => {
 			mockLimit
-				.mockResolvedValueOnce(mockLimitResult(false, 0, 3))
-				.mockResolvedValueOnce(mockLimitResult(true, 40, 50));
+				.mockResolvedValueOnce(mockLimitResult(false, 0, 2))
+				.mockResolvedValueOnce(mockLimitResult(true, 9, 10));
 
 			const ctx = {
 				userId: 'user_001',
@@ -528,8 +528,8 @@ describe('llm-cost-protection', () => {
 
 		it('message-generation rate limit reason mentions generation', async () => {
 			mockLimit
-				.mockResolvedValueOnce(mockLimitResult(false, 0, 10))
-				.mockResolvedValueOnce(mockLimitResult(true, 40, 50));
+				.mockResolvedValueOnce(mockLimitResult(false, 0, 3))
+				.mockResolvedValueOnce(mockLimitResult(true, 9, 10));
 
 			const ctx = {
 				userId: 'user_001',
@@ -570,7 +570,7 @@ describe('llm-cost-protection', () => {
 
 	describe('enforceLLMRateLimit', () => {
 		it('combines getUserContext and checkRateLimit', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 14, 15));
+			mockLimit.mockResolvedValue(mockLimitResult(true, 4, 5));
 
 			const event = createMockEvent({ userId: 'user_enforce', trustTier: 1 });
 
@@ -622,7 +622,7 @@ describe('llm-cost-protection', () => {
 			const check: RateLimitCheck = {
 				allowed: false,
 				remaining: 0,
-				limit: 15,
+				limit: 5,
 				resetAt: new Date('2026-02-23T12:00:00Z'),
 				tier: 'authenticated',
 				reason: 'Rate limit exceeded'
@@ -637,7 +637,7 @@ describe('llm-cost-protection', () => {
 			const check: RateLimitCheck = {
 				allowed: false,
 				remaining: 0,
-				limit: 15,
+				limit: 5,
 				resetAt: new Date('2026-02-23T12:00:00Z'),
 				tier: 'authenticated',
 				reason: 'Rate limit exceeded'
@@ -653,7 +653,7 @@ describe('llm-cost-protection', () => {
 			const check: RateLimitCheck = {
 				allowed: false,
 				remaining: 0,
-				limit: 30,
+				limit: 5,
 				resetAt,
 				tier: 'verified',
 				reason: 'Subject line limit reached'
@@ -665,7 +665,7 @@ describe('llm-cost-protection', () => {
 			expect(body.error).toBe('Subject line limit reached');
 			expect(body.tier).toBe('verified');
 			expect(body.remaining).toBe(0);
-			expect(body.limit).toBe(30);
+			expect(body.limit).toBe(5);
 			expect(body.resetAt).toBe('2026-02-23T15:30:00.000Z');
 		});
 
@@ -711,16 +711,16 @@ describe('llm-cost-protection', () => {
 			const resetAt = new Date('2026-02-23T14:00:00Z');
 			const check: RateLimitCheck = {
 				allowed: true,
-				remaining: 12,
-				limit: 15,
+				remaining: 4,
+				limit: 5,
 				resetAt,
 				tier: 'authenticated'
 			};
 
 			addRateLimitHeaders(headers, check);
 
-			expect(headers.get('X-RateLimit-Limit')).toBe('15');
-			expect(headers.get('X-RateLimit-Remaining')).toBe('12');
+			expect(headers.get('X-RateLimit-Limit')).toBe('5');
+			expect(headers.get('X-RateLimit-Remaining')).toBe('4');
 			expect(headers.get('X-RateLimit-Reset')).toBe('2026-02-23T14:00:00.000Z');
 			expect(headers.get('X-RateLimit-Tier')).toBe('authenticated');
 		});
@@ -929,8 +929,8 @@ describe('llm-cost-protection', () => {
 	// -----------------------------------------------------------------------
 
 	describe('tiered quota verification', () => {
-		it('guest subject-line quota is 5/hr', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 4, 5));
+		it('guest subject-line quota is 3/hr', async () => {
+			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
 
 			const ctx = {
 				userId: null,
@@ -942,16 +942,16 @@ describe('llm-cost-protection', () => {
 
 			await checkRateLimit('subject-line', ctx);
 
-			// Verify the rate limiter was called with max=5 and 1-hour window
+			// Verify the rate limiter was called with max=3 and 1-hour window
 			expect(mockLimit).toHaveBeenCalledWith(
 				expect.stringContaining('subject-line'),
-				5,
+				3,
 				3600000
 			);
 		});
 
-		it('authenticated daily global quota is 50/day', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 10, 15));
+		it('authenticated daily global quota is 10/day', async () => {
+			mockLimit.mockResolvedValue(mockLimitResult(true, 4, 5));
 
 			const ctx = {
 				userId: 'user_daily',
@@ -963,16 +963,16 @@ describe('llm-cost-protection', () => {
 
 			await checkRateLimit('subject-line', ctx);
 
-			// Second call should be daily global with max=50, 24-hour window
+			// Second call should be daily global with max=10, 24-hour window
 			expect(mockLimit).toHaveBeenCalledWith(
 				'llm:daily:user_daily',
-				50,
+				10,
 				86400000
 			);
 		});
 
-		it('verified daily global quota is 150/day', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 20, 30));
+		it('verified daily global quota is 15/day', async () => {
+			mockLimit.mockResolvedValue(mockLimitResult(true, 4, 5));
 
 			const ctx = {
 				userId: 'user_verified',
@@ -986,13 +986,13 @@ describe('llm-cost-protection', () => {
 
 			expect(mockLimit).toHaveBeenCalledWith(
 				'llm:daily:user_verified',
-				150,
+				15,
 				86400000
 			);
 		});
 
-		it('guest daily global quota is 10/day', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 3, 5));
+		it('guest daily global quota is 3/day', async () => {
+			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
 
 			const ctx = {
 				userId: null,
@@ -1006,13 +1006,13 @@ describe('llm-cost-protection', () => {
 
 			expect(mockLimit).toHaveBeenCalledWith(
 				'llm:daily:ip:1.2.3.4',
-				10,
+				3,
 				86400000
 			);
 		});
 
-		it('authenticated message-generation quota is 10/hr', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 9, 10));
+		it('authenticated message-generation quota is 3/hr', async () => {
+			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
 
 			const ctx = {
 				userId: 'user_msg',
@@ -1026,13 +1026,13 @@ describe('llm-cost-protection', () => {
 
 			expect(mockLimit).toHaveBeenCalledWith(
 				'llm:message-generation:user_msg',
-				10,
+				3,
 				3600000
 			);
 		});
 
-		it('authenticated decision-makers quota is 3/hr', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
+		it('authenticated decision-makers quota is 2/hr', async () => {
+			mockLimit.mockResolvedValue(mockLimitResult(true, 1, 2));
 
 			const ctx = {
 				userId: 'user_dm',
@@ -1046,13 +1046,13 @@ describe('llm-cost-protection', () => {
 
 			expect(mockLimit).toHaveBeenCalledWith(
 				'llm:decision-makers:user_dm',
-				3,
+				2,
 				3600000
 			);
 		});
 
-		it('verified message-generation quota is 30/hr', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 29, 30));
+		it('verified message-generation quota is 5/hr', async () => {
+			mockLimit.mockResolvedValue(mockLimitResult(true, 4, 5));
 
 			const ctx = {
 				userId: 'user_v_msg',
@@ -1066,7 +1066,7 @@ describe('llm-cost-protection', () => {
 
 			expect(mockLimit).toHaveBeenCalledWith(
 				'llm:message-generation:user_v_msg',
-				30,
+				5,
 				3600000
 			);
 		});
