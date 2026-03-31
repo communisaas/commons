@@ -38,8 +38,6 @@ export default defineSchema({
   users: defineTable({
     // Auth
     tokenIdentifier: v.optional(v.string()),
-    email: v.optional(v.string()), // DEPRECATED: cleared by backfill, drop after
-    name: v.optional(v.string()), // DEPRECATED: cleared by backfill, drop after
     avatar: v.optional(v.string()),
     updatedAt: v.number(),
 
@@ -594,7 +592,6 @@ export default defineSchema({
   // ===========================================================================
 
   suppressedEmails: defineTable({
-    email: v.optional(v.string()), // DEPRECATED: cleared by backfill
     emailHash: v.optional(v.string()),
     domain: v.string(),
     reason: v.string(), // 'smtp_invalid' | 'smtp_disabled' | 'full_inbox' | 'bounce_report' | 'dns_no_mx'
@@ -612,7 +609,6 @@ export default defineSchema({
   // ===========================================================================
 
   bounceReports: defineTable({
-    email: v.optional(v.string()), // DEPRECATED: cleared by backfill
     emailHash: v.optional(v.string()),
     encryptedEmail: v.optional(v.string()),
     domain: v.string(),
@@ -1023,11 +1019,8 @@ export default defineSchema({
 
   supporters: defineTable({
     orgId: v.id("organizations"),
-    name: v.optional(v.string()), // DEPRECATED: cleared by backfill
     postalCode: v.optional(v.string()),
     country: v.optional(v.string()),
-    phone: v.optional(v.string()), // DEPRECATED: cleared by backfill
-    customFields: v.optional(v.any()), // DEPRECATED: cleared by backfill
 
     // PII encryption at rest
     encryptedEmail: v.string(),
@@ -1236,7 +1229,6 @@ export default defineSchema({
 
   emailEvents: defineTable({
     blastId: v.id("emailBlasts"),
-    recipientEmail: v.optional(v.string()), // DEPRECATED: cleared by backfill
     encryptedRecipientEmail: v.optional(v.string()),
     recipientEmailHash: v.optional(v.string()),
     eventType: v.string(), // 'open' | 'click' | 'bounce' | 'complaint'
@@ -1368,7 +1360,6 @@ export default defineSchema({
 
     encryptedEmail: v.string(),
     emailHash: v.string(),
-    name: v.optional(v.string()), // DEPRECATED: cleared by backfill
     encryptedRsvpName: v.optional(v.string()),
     status: v.string(), // 'GOING' | 'MAYBE' | 'NOT_GOING' | 'WAITLISTED'
     guestCount: v.number(),
@@ -1400,8 +1391,6 @@ export default defineSchema({
     campaignId: v.id("campaigns"),
     supporterId: v.optional(v.id("supporters")),
 
-    email: v.optional(v.string()), // DEPRECATED: cleared by backfill
-    name: v.optional(v.string()), // DEPRECATED: cleared by backfill
 
     // PII encryption at rest
     emailHash: v.optional(v.string()),
@@ -1503,7 +1492,6 @@ export default defineSchema({
   smsMessages: defineTable({
     blastId: v.id("smsBlasts"),
     supporterId: v.id("supporters"),
-    to: v.optional(v.string()), // DEPRECATED: cleared by backfill
     encryptedTo: v.optional(v.string()),
     toHash: v.optional(v.string()),
     body: v.string(),
@@ -1520,8 +1508,6 @@ export default defineSchema({
     campaignId: v.optional(v.id("campaigns")),
     supporterId: v.id("supporters"),
 
-    callerPhone: v.optional(v.string()), // DEPRECATED: cleared by backfill
-    targetPhone: v.optional(v.string()), // DEPRECATED: cleared by backfill
     encryptedCallerPhone: v.optional(v.string()),
     encryptedTargetPhone: v.optional(v.string()),
     callerPhoneHash: v.optional(v.string()),
