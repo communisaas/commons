@@ -101,9 +101,6 @@ declare global {
 			NODE_ENV: 'development' | 'production' | 'test';
 			ORIGIN?: string;
 
-			// Database
-			DATABASE_URL?: string;
-
 			// Security & Authentication
 			JWT_SECRET?: string; // Used for token signing
 			EMAIL_VERIFICATION_SECRET?: string; // Optional, falls back to JWT_SECRET

@@ -6,37 +6,10 @@
 #   docker compose down      - Stop all services
 #   docker compose down -v   - Stop and remove volumes (full reset)
 #
-# After first start, run:
-#   npx prisma db push       - Apply schema to dev database
-#   npx prisma generate      - Generate Prisma client
-#
-# Databases created automatically:
-#   commons  - Development (DATABASE_URL)
-#   test     - Integration tests (TEST_DATABASE_URL)
-#
-# pgvector extension is enabled on all databases automatically.
+# Backend: Convex (cloud-hosted, no local container needed)
+#   npx convex dev           - Start Convex dev server
 
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: commons-postgres
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: commons
-      POSTGRES_PASSWORD: commons
-      POSTGRES_DB: commons
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U commons"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-    restart: unless-stopped
-
   ipfs:
     image: ipfs/kubo:latest
     container_name: commons-ipfs
@@ -56,7 +29,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  pgdata:
-    driver: local
   ipfs-data:
     driver: local

@@ -5,12 +5,16 @@ import type { LayoutServerLoad } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
-export const load: LayoutServerLoad = async ({ params, locals: _locals, request }) => {
+export const load: LayoutServerLoad = async ({ params, request }) => {
 	const { slug } = params;
 
-	// Detect country and resolve channel (needed regardless of data source)
-	const detectedCountry = detectCountryFromHeaders(request.headers) || 'US';
-	const channelInfo = await resolveChannel(detectedCountry);
+	// Country detection from CF / Vercel / generic headers — US default
+	const headers = request.headers;
+	const detectedCountry =
+		headers.get('cf-ipcountry') ||
+		headers.get('x-vercel-ip-country') ||
+		headers.get('x-country') ||
+		'US';
 
 	const convexTemplate = await serverQuery(api.templates.getBySlugPublic, { slug });
 
@@ -25,6 +29,6 @@ export const load: LayoutServerLoad = async ({ params, locals: _locals, request 
 
 	return {
 		template: convexTemplate,
-		channel: channelInfo
+		channel: { country: detectedCountry, locale: 'en-US' }
 	};
 };
