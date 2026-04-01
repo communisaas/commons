@@ -5,6 +5,9 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import type { AddressVerificationResult, Representative } from '$lib/types/any-replacements.js';
 	import type { Representative as ProviderRepresentative } from '$lib/core/legislative/types';
+	import { FEATURES } from '$lib/config/features';
+	import { getFullCellDataFromBrowser } from '$lib/core/shadow-atlas/browser-client';
+	import { poseidon2Sponge24 } from '$lib/core/crypto/poseidon';
 	let {
 		_template,
 		oncomplete
@@ -36,6 +39,10 @@
 	let isSaving = $state(false);
 	let verificationResult = $state<AddressVerificationResult | null>(null);
 	let selectedAddress = $state('');
+
+	// ZKP: Poseidon2 commitment over 24 district slots (computed client-side)
+	let districtCommitment = $state<string | null>(null);
+	let commitmentSlotCount = $state(0);
 
 	function validateAddress(): boolean {
 		addressError = '';
@@ -91,6 +98,26 @@
 
 			const officials = (data.officials ?? []) as Representative[];
 
+			// Client-side ZKP: use geocoded coordinates to fetch circuit-ready district
+			// slots from IPFS (BN254 field elements), compute Poseidon2 commitment.
+			// Server never learns which districts the user belongs to.
+			if (FEATURES.SHADOW_ATLAS_VERIFICATION && data.coordinates?.lat != null && data.coordinates?.lng != null) {
+				try {
+					const cellData = await getFullCellDataFromBrowser({
+						lat: data.coordinates.lat,
+						lng: data.coordinates.lng,
+					});
+					if (cellData?.districts?.length === 24) {
+						districtCommitment = await poseidon2Sponge24(cellData.districts);
+						commitmentSlotCount = cellData.districts.filter(
+							(s: string) => s !== '0x' + '0'.repeat(64)
+						).length;
+					}
+				} catch (err) {
+					console.warn('[AddressCollectionForm] ZKP commitment failed, proceeding without:', err);
+				}
+			}
+
 			verificationResult = {
 				verified: true,
 				correctedAddress: data.address.matched,
@@ -111,10 +138,8 @@
 	}
 
 	function acceptAddress() {
-		console.log('[AddressForm] acceptAddress called, address:', selectedAddress);
 		isSaving = true;
 		if (oncomplete) {
-			console.log('[AddressForm] Calling oncomplete callback...');
 			oncomplete({
 				address: selectedAddress,
 				verified: true,
@@ -128,7 +153,10 @@
 						(item) => typeof item === 'object' && item !== null
 					)
 						? (verificationResult.representatives as Representative[])
-						: undefined
+						: undefined,
+				// ZKP: pass commitment so parent can send shadow_atlas instead of civic_api
+				districtCommitment: districtCommitment ?? undefined,
+				commitmentSlotCount: districtCommitment ? commitmentSlotCount : undefined
 			});
 		} else {
 			console.warn('[AddressForm] No oncomplete callback registered!');

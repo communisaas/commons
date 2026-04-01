@@ -24,8 +24,10 @@
 	import {
 		lookupDistrictsFromBrowser,
 		getOfficialsFromBrowser,
+		getFullCellDataFromBrowser,
 	} from '$lib/core/shadow-atlas/browser-client';
 	import { convertDistrictId } from '$lib/core/shadow-atlas/district-format';
+	import { poseidon2Sponge24 } from '$lib/core/crypto/poseidon';
 	import MapPinSelector from './MapPinSelector.svelte';
 
 	type FlowStep = 'path-select' | 'geolocating' | 'address-input' | 'map-pin' | 'resolving' | 'confirm-district' | 'issuing-credential' | 'complete';
@@ -67,6 +69,9 @@
 
 	// Which verification path was chosen
 	let verificationMethod: 'browser' | 'address' = $state('browser');
+
+	// B-3: 24 district slots from IPFS (for Poseidon2 commitment)
+	let districtSlots: string[] = $state([]);
 
 	// B-3: Client-side district resolution (when SHADOW_ATLAS_VERIFICATION enabled)
 	const clientSideEnabled = FEATURES.SHADOW_ATLAS_VERIFICATION;
@@ -113,6 +118,12 @@
 		try {
 			const cellDistricts = await lookupDistrictsFromBrowser(lat, lng);
 			if (!cellDistricts || !cellDistricts.slots[0]) return false;
+
+			// Fetch circuit-ready BN254 field elements for Poseidon2 commitment
+			const cellData = await getFullCellDataFromBrowser({ lat, lng });
+			if (cellData?.districts?.length === 24) {
+				districtSlots = cellData.districts;
+			}
 
 			// Slot 0 = congressional district (substrate FIPS format → display format)
 			const rawDistrict = cellDistricts.slots[0];
@@ -273,16 +284,34 @@
 		errorMessage = '';
 
 		try {
-			const response = await fetch('/api/identity/verify-address', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
+			// Compute Poseidon2 commitment over 24 district slots (client-side ZKP)
+			// Server never sees which districts the user belongs to — only the commitment
+			let requestBody: Record<string, unknown>;
+
+			if (districtSlots.length === 24) {
+				const commitment = await poseidon2Sponge24(districtSlots);
+				const nonZeroSlots = districtSlots.filter(s => s !== '0x' + '0'.repeat(64)).length;
+
+				requestBody = {
+					district_commitment: commitment,
+					slot_count: nonZeroSlots,
+					verification_method: 'shadow_atlas',
+				};
+			} else {
+				// Fallback: no IPFS data available (client-side resolution failed)
+				requestBody = {
 					district: verifiedDistrict,
 					state_senate_district: verifiedStateSenate || undefined,
 					state_assembly_district: verifiedStateAssembly || undefined,
 					verification_method: 'civic_api',
 					officials: representatives,
-				})
+				};
+			}
+
+			const response = await fetch('/api/identity/verify-address', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(requestBody)
 			});
 
 			const data = await response.json();
@@ -323,8 +352,9 @@
 			flowStep = 'complete';
 
 			// Notify parent after a brief delay to show success state
+			const method = districtSlots.length === 24 ? 'shadow_atlas' : 'civic_api';
 			setTimeout(() => {
-				onComplete?.({ district: verifiedDistrict, method: 'civic_api' });
+				onComplete?.({ district: verifiedDistrict, method });
 			}, 1500);
 		} catch (err) {
 			console.error('[AddressVerificationFlow] Credential issuance error:', err);

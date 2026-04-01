@@ -438,15 +438,57 @@
 				user: data.user,
 				onComplete: async (detail: OnCompleteDetail) => {
 					if (detail?.address) {
-						// Client-side caching only - Cypherpunk ethos
 						guestState.setAddress(detail.address);
+					}
+
+					// Verify address (ZKP commitment or fallback) before navigating
+					if (data.user) {
+						try {
+							if ((detail as Record<string, unknown>).districtCommitment) {
+								await fetch('/api/identity/verify-address', {
+									method: 'POST',
+									headers: { 'Content-Type': 'application/json' },
+									body: JSON.stringify({
+										district_commitment: (detail as Record<string, unknown>).districtCommitment,
+										slot_count: (detail as Record<string, unknown>).commitmentSlotCount,
+										verification_method: 'shadow_atlas',
+									})
+								});
+							} else if (detail?.address) {
+								// Fallback: resolve + verify with plaintext
+								const resolveRes = await fetch('/api/location/resolve-address', {
+									method: 'POST',
+									headers: { 'Content-Type': 'application/json' },
+									body: JSON.stringify({
+										street: (detail as Record<string, unknown>).streetAddress,
+										city: (detail as Record<string, unknown>).city,
+										state: (detail as Record<string, unknown>).state,
+										zip: (detail as Record<string, unknown>).zip
+									})
+								});
+								if (resolveRes.ok) {
+									const resolved = await resolveRes.json();
+									if (resolved.resolved && resolved.district?.code) {
+										await fetch('/api/identity/verify-address', {
+											method: 'POST',
+											headers: { 'Content-Type': 'application/json' },
+											body: JSON.stringify({
+												district: resolved.district.code,
+												verification_method: 'civic_api',
+												officials: resolved.officials ?? []
+											})
+										});
+									}
+								}
+							}
+						} catch {
+							// Non-fatal: navigate anyway
+						}
 					}
 
 					const templateUrl = `/s/${template.slug}`;
 					preloadData(templateUrl);
-					setTimeout(() => {
-						goto(templateUrl);
-					}, 500);
+					goto(templateUrl);
 				}
 			});
 		} else {
@@ -631,7 +673,25 @@
 						modalActions.openModal('address-modal', 'address', {
 							template: selectedTemplate,
 							source: 'mobile',
-							user: data.user
+							user: data.user,
+							onComplete: async (detail: OnCompleteDetail) => {
+								if (data.user && (detail as Record<string, unknown>).districtCommitment) {
+									try {
+										await fetch('/api/identity/verify-address', {
+											method: 'POST',
+											headers: { 'Content-Type': 'application/json' },
+											body: JSON.stringify({
+												district_commitment: (detail as Record<string, unknown>).districtCommitment,
+												slot_count: (detail as Record<string, unknown>).commitmentSlotCount,
+												verification_method: 'shadow_atlas',
+											})
+										});
+									} catch { /* non-fatal */ }
+								}
+								const templateUrl = `/s/${selectedTemplate.slug}`;
+								preloadData(templateUrl);
+								goto(templateUrl);
+							}
 						});
 						showMobilePreview = false;
 					} else {

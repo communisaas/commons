@@ -72,8 +72,11 @@
 
 	// Check if user has complete address for congressional templates
 	// Note: Address fields removed from User model per CYPHERPUNK-ARCHITECTURE.md
+	// For logged-in users, trust_tier >= 2 is the canonical signal (set by verify-address).
+	// _addressSubmitted bridges the gap between submit and invalidateAll() completing.
+	let _addressSubmitted = $state(false);
 	const hasCompleteAddress = $derived(
-		guestState.state?.address
+		_addressSubmitted || guestState.state?.address || (data.user?.trust_tier ?? 0) >= 2
 	);
 	const isCongressional = $derived(
 		FEATURES.CONGRESSIONAL && (
@@ -545,39 +548,60 @@
 			const { invalidateLocationCaches } = await import('$lib/core/identity/cache-invalidation');
 			await invalidateLocationCaches(data.user?.id);
 
-			// Cache address locally (Cypherpunk: no PII on User model)
+			// Signal address submitted immediately — UI reacts before invalidateAll() completes
+			_addressSubmitted = true;
+
+			// Cache address locally for guest users (logged-in users get trust_tier bump instead)
 			guestState.setAddress(detail.address);
 
-			// Bump trust_tier to 2 (Constituent) on the server via real address verification
-			if (data.user && detail.streetAddress && detail.city && detail.state && detail.zip) {
+			// Bump trust_tier to 2 (Constituent) via address verification
+			if (data.user) {
 				try {
-					// Resolve address to get district code
-					const resolveRes = await fetch('/api/location/resolve-address', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							street: detail.streetAddress,
-							city: detail.city,
-							state: detail.state,
-							zip: detail.zip
-						})
-					});
-					if (resolveRes.ok) {
-						const resolved = await resolveRes.json();
-						if (resolved.resolved && resolved.district?.code) {
-							await fetch('/api/identity/verify-address', {
-								method: 'POST',
-								headers: { 'Content-Type': 'application/json' },
-								body: JSON.stringify({
-									district: resolved.district.code,
-									verification_method: 'civic_api',
-									officials: resolved.officials ?? []
-								})
-							});
+					if (detail.districtCommitment) {
+						// ZKP path: commitment already computed client-side by AddressCollectionForm.
+						// Server never sees raw address or district — only the Poseidon2 commitment.
+						const verifyRes = await fetch('/api/identity/verify-address', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({
+								district_commitment: detail.districtCommitment,
+								slot_count: detail.commitmentSlotCount,
+								verification_method: 'shadow_atlas',
+							})
+						});
+						if (!verifyRes.ok) {
+							const err = await verifyRes.json().catch(() => ({}));
+							console.error('[TemplateFlow] verify-address (shadow_atlas) failed:', verifyRes.status, err);
+						}
+					} else if (detail.streetAddress && detail.city && detail.state && detail.zip) {
+						// Fallback: IPFS unavailable, resolve server-side
+						const resolveRes = await fetch('/api/location/resolve-address', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({
+								street: detail.streetAddress,
+								city: detail.city,
+								state: detail.state,
+								zip: detail.zip
+							})
+						});
+						if (resolveRes.ok) {
+							const resolved = await resolveRes.json();
+							if (resolved.resolved && resolved.district?.code) {
+								await fetch('/api/identity/verify-address', {
+									method: 'POST',
+									headers: { 'Content-Type': 'application/json' },
+									body: JSON.stringify({
+										district: resolved.district.code,
+										verification_method: 'civic_api',
+										officials: resolved.officials ?? []
+									})
+								});
+							}
 						}
 					}
-				} catch {
-					// Non-fatal: tier bump failed, proceed with local cache
+				} catch (verifyErr) {
+					console.error('[TemplateFlow] verify-address failed:', verifyErr);
 				}
 			}
 

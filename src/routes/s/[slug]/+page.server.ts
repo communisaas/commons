@@ -135,7 +135,9 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		userDistrictHash && districtCounts[userDistrictHash]
 			? districtCounts[userDistrictHash]
 			: 0;
-	const userDistrictCode = userRepResult as string | null;
+	const userDistrictCode = userRepResult && typeof userRepResult === 'object' && 'districtCode' in userRepResult
+		? (userRepResult as { districtCode: string | null }).districtCode
+		: null;
 	const positionCounts = positionCountsResult;
 
 	const existingPosition = existingPositionResult
