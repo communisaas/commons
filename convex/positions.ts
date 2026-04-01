@@ -97,25 +97,51 @@ export const getEngagementByDistrict = query({
       .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
       .collect();
 
-    // Group by district
-    const byDistrict: Record<string, number> = {};
+    // Group by district: track support/oppose separately
+    const byDistrict: Record<string, { support: number; oppose: number }> = {};
+    let totalSupport = 0;
+    let totalOppose = 0;
+
     for (const r of registrations) {
       if (r.districtCode) {
-        byDistrict[r.districtCode] = (byDistrict[r.districtCode] || 0) + 1;
+        if (!byDistrict[r.districtCode]) {
+          byDistrict[r.districtCode] = { support: 0, oppose: 0 };
+        }
+        if (r.stance === "support") {
+          byDistrict[r.districtCode].support++;
+          totalSupport++;
+        } else {
+          byDistrict[r.districtCode].oppose++;
+          totalOppose++;
+        }
       }
     }
 
-    // Sort by count descending, take top 20
-    const sorted = Object.entries(byDistrict)
-      .sort(([, a], [, b]) => b - a)
+    // Build per-district engagement, sorted by total descending, top 20
+    const districts = Object.entries(byDistrict)
+      .map(([code, counts]) => {
+        const total = counts.support + counts.oppose;
+        return {
+          district_code: code,
+          support: counts.support,
+          oppose: counts.oppose,
+          total,
+          support_percent: total > 0 ? Math.round((counts.support / total) * 100) : 0,
+          is_user_district: code === userDistrictCode,
+        };
+      })
+      .sort((a, b) => b.total - a.total)
       .slice(0, 20);
 
-    const userDistrictCount = userDistrictCode ? (byDistrict[userDistrictCode] ?? 0) : 0;
-
     return {
-      districts: sorted.map(([code, count]) => ({ code, count })),
-      totalDistricts: Object.keys(byDistrict).length,
-      userDistrictCount,
+      template_id: templateId,
+      districts,
+      aggregate: {
+        total_districts: Object.keys(byDistrict).length,
+        total_positions: registrations.length,
+        total_support: totalSupport,
+        total_oppose: totalOppose,
+      },
     };
   },
 });
