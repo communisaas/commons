@@ -53,14 +53,14 @@ export function deriveTargetPresentation(
 			emphasis: 'federal' as const
 		});
 
-		// Local level
-		const displayNames = config.decisionMakers?.slice(0, 2).map((dm) => dm.shortName || dm.name) || [];
-		const hasMore = (config.decisionMakers?.length || 0) > 2;
-		const moreCount = (config.decisionMakers?.length || 0) - 2;
+		// Local level — show roles, not names
+		const dms = config.decisionMakers || [];
+		const primaryRole = dms[0]?.role || dms[0]?.shortName || dms[0]?.name || 'Decision-maker';
+		const remaining = dms.length - 1;
 
 		targets.push({
-			primary: displayNames.join(', '),
-			secondary: hasMore ? `+${moreCount} more` : null,
+			primary: primaryRole,
+			secondary: remaining > 0 ? `+${remaining} more` : null,
 			icon: 'Building' as const,
 			emphasis: 'local' as const
 		});
@@ -88,19 +88,17 @@ export function deriveTargetPresentation(
 		};
 	}
 
-	// Single-Level Local: Recognition-Based
-	// Show names directly, not categories
-	// "Mayor Breed" is instantly recognizable
+	// Single-Level Local: Role-forward
+	// "Mayor" communicates power topology; names are secondary
 	if (hasLocalDecisionMakers) {
-		const displayNames = config.decisionMakers?.slice(0, 2).map((dm) => dm.shortName || dm.name) || [];
-
-		const hasMore = (config.decisionMakers?.length || 0) > 2;
-		const moreCount = (config.decisionMakers?.length || 0) - 2;
+		const dms = config.decisionMakers || [];
+		const primaryRole = dms[0]?.role || dms[0]?.shortName || dms[0]?.name || 'Decision-maker';
+		const remaining = dms.length - 1;
 
 		return {
 			type: 'location-specific',
-			primary: displayNames.join(', '),
-			secondary: hasMore ? `+${moreCount} more` : null,
+			primary: primaryRole,
+			secondary: remaining > 0 ? `+${remaining} more` : null,
 			icon: 'Building',
 			coordinationContext: config.location?.city || config.location?.jurisdiction,
 			emphasis: 'local'

@@ -163,7 +163,7 @@
 								{target.primary}
 							</span>
 							{#if target.secondary}
-								<span class="shrink-0 text-xs text-slate-400">{target.secondary}</span>
+								<span class="shrink-0 text-xs font-medium text-slate-500">{target.secondary}</span>
 							{/if}
 						</div>
 					{/each}
@@ -190,7 +190,7 @@
 				{targetInfo.primary}
 			</span>
 			{#if targetInfo.secondary}
-				<span class="shrink-0 text-xs text-slate-400">{targetInfo.secondary}</span>
+				<span class="shrink-0 text-xs font-medium text-slate-500">{targetInfo.secondary}</span>
 			{/if}
 		{/if}
 
@@ -309,6 +309,9 @@
 					</div>
 				{/snippet}
 			</AnimatedPopover>
+		{/if}
+		{#if template.category}
+			<span class="ml-auto shrink-0 text-xs text-slate-500">{template.category}</span>
 		{/if}
 	</div>
 {/if}

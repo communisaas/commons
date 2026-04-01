@@ -389,7 +389,7 @@
 												<span class="font-brand text-xs font-semibold card-label">{target.primary}</span>
 											{/if}
 											{#if target.secondary}
-												<span class="text-xs text-slate-400">{target.secondary}</span>
+												<span class="text-xs font-medium text-slate-500">{target.secondary}</span>
 											{/if}
 										</div>
 									{/each}
@@ -412,7 +412,7 @@
 									{/if}
 									<span class="font-brand text-sm font-bold card-label">{targetInfo.primary}</span>
 									{#if targetInfo.secondary}
-										<span class="text-xs text-slate-400">{targetInfo.secondary}</span>
+										<span class="text-xs font-medium text-slate-500">{targetInfo.secondary}</span>
 									{/if}
 								</div>
 							{/if}
@@ -432,6 +432,10 @@
 									<span class="debate-pulse h-2 w-2 shrink-0 rounded-full bg-amber-500"></span>
 									<span class="font-brand text-amber-600">Deliberating</span>
 								</div>
+							{/if}
+
+							{#if template.category}
+								<span class="topic-ground">{template.category}</span>
 							{/if}
 						</div>
 
@@ -519,6 +523,26 @@
 		font-size: 0.875rem;
 		color: oklch(0.45 0.02 250);
 		font-style: italic;
+	}
+
+	/*
+	 * Topic Ground — anchoring context at the card's base.
+	 *
+	 * Sits below metrics, flush to the card's bottom edge.
+	 * Reads as provenance — like a postmark or a colophon.
+	 * The eye catches it at the end of a downward scan,
+	 * confirming domain after the content has spoken.
+	 *
+	 * Normal case, 500 weight, neutral — editorial, not decorative.
+	 */
+	.topic-ground {
+		display: block;
+		font-size: 0.6875rem;
+		color: oklch(0.55 0 0);
+		font-weight: 400;
+		letter-spacing: 0.01em;
+		line-height: 1;
+		margin-top: 0.375rem;
 	}
 
 	/**
