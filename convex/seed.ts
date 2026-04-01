@@ -33,6 +33,7 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { computeEmailHash } from "./_pii";
 
 // =============================================================================
 // TIME HELPERS
@@ -729,7 +730,7 @@ export const zeroTemplateMetrics = internalMutation({
 export const checkSeeded = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const { computeEmailHash } = await import("./_pii");
+    // computeEmailHash imported at top level
     const seedHash = await computeEmailHash("seed-1@commons.email");
     const user = seedHash
       ? await ctx.db
@@ -1468,7 +1469,7 @@ export const insertEventRsvps = internalMutation({
         supporterId,
         encryptedEmail: "",
         emailHash: `seed-rsvp-completed-${i}`,
-        name: SUPPORTER_NAMES[i % SUPPORTER_NAMES.length],
+        encryptedRsvpName: SUPPORTER_NAMES[i % SUPPORTER_NAMES.length],
         status: "GOING",
         guestCount: 1,
         engagementTier: i < 3 ? 2 : 1,
@@ -1491,7 +1492,7 @@ export const insertEventRsvps = internalMutation({
           supporterId: supporterIds[sIdx],
           encryptedEmail: "",
           emailHash: `seed-rsvp-${eIdx}-${i}`,
-          name: SUPPORTER_NAMES[sIdx % SUPPORTER_NAMES.length],
+          encryptedRsvpName: SUPPORTER_NAMES[sIdx % SUPPORTER_NAMES.length],
           status: statuses[i % statuses.length],
           guestCount: i % 3 === 0 ? 2 : 1,
           engagementTier: i < 2 ? 2 : 1,
@@ -1541,8 +1542,9 @@ export const insertDonations = internalMutation({
         orgId: orgIds[d.orgIdx],
         campaignId: campaignIds[d.campaignIdx],
         supporterId,
-        email: `${supporterName.toLowerCase().replace(/[^a-z]/g, "")}@example.com`,
-        name: supporterName,
+        encryptedEmail: "",
+        emailHash: `seed-donation-${d.sIdx}-${d.campaignIdx}`,
+        encryptedName: supporterName,
         amountCents: d.amount,
         currency: "USD",
         recurring: d.recurring,
@@ -2125,7 +2127,7 @@ export const grantDevAccount = internalMutation({
   },
   handler: async (ctx, { orgIds }) => {
     // Check if dev account exists
-    const { computeEmailHash } = await import("./_pii");
+    // computeEmailHash imported at top level
     const devHash = await computeEmailHash("mock7ee@gmail.com");
     const devUser = devHash
       ? await ctx.db

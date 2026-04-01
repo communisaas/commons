@@ -13,6 +13,7 @@ import type * as _pii from "../_pii.js";
 import type * as _rateLimit from "../_rateLimit.js";
 import type * as analytics from "../analytics.js";
 import type * as authOps from "../authOps.js";
+import type * as backfill from "../backfill.js";
 import type * as calls from "../calls.js";
 import type * as campaigns from "../campaigns.js";
 import type * as crons from "../crons.js";
@@ -54,6 +55,7 @@ declare const fullApi: ApiFromModules<{
   _rateLimit: typeof _rateLimit;
   analytics: typeof analytics;
   authOps: typeof authOps;
+  backfill: typeof backfill;
   calls: typeof calls;
   campaigns: typeof campaigns;
   crons: typeof crons;
