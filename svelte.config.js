@@ -43,6 +43,12 @@ const config = {
 					// F4: NEAR RPC — chain-signatures.ts via near-provider.ts (browser-side MPC signing)
 					'https://rpc.testnet.near.org',
 					'https://rpc.mainnet.near.org',
+					// Storacha IPFS: client-side ZKP district lookup (Shadow Atlas cell chunks)
+					// Bare domain for path-style fetch, wildcard for subdomain redirect
+					'https://storacha.link',
+					'https://*.storacha.link',
+					'https://w3s.link',
+					'https://*.w3s.link',
 					// Convex: HTTP queries + WebSocket subscriptions (dual-stack, Cycle 1)
 					'https://*.convex.cloud',
 					'wss://*.convex.cloud'

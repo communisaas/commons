@@ -4,6 +4,9 @@ import wasm from 'vite-plugin-wasm';
 import alias from '@rollup/plugin-alias';
 import { fileURLToPath } from 'url';
 
+// Suppress spurious MaxListenersExceededWarning from SvelteKit HMR child processes
+process.setMaxListeners(20);
+
 // Resolve paths for alias configuration
 const bufferShimPath = fileURLToPath(
 	new URL('./src/lib/core/proof/buffer-shim.ts', import.meta.url)
@@ -16,7 +19,7 @@ const voterProtocolStubPath = fileURLToPath(
 export default defineConfig({
 	plugins: [
 		// Client-only buffer/pino shims for @aztec/bb.js ZK proving.
-		// CRITICAL: Must NOT apply to SSR — server-side pg/Prisma needs real Node.js buffer.
+		// CRITICAL: Must NOT apply to SSR — server-side Node.js needs real buffer.
 		{
 			name: 'client-only-shims',
 			enforce: 'pre',
@@ -74,7 +77,7 @@ export default defineConfig({
 	// Polyfill Node.js globals for browser (needed for @aztec/bb.js)
 	// NOTE: buffer/pino aliases are applied ONLY via the alias() plugin (client + workers).
 	// resolve.alias is NOT used because it also applies to SSR, which breaks pg/Prisma
-	// (they need the real Node.js buffer, not the browser shim).
+	// (SSR needs the real Node.js buffer, not the browser shim).
 	resolve: {},
 
 	optimizeDeps: {
@@ -134,7 +137,7 @@ export default defineConfig({
 			allow: ['..', './node_modules']
 		},
 		watch: {
-			ignored: ['**/prisma/schema.prisma']
+			ignored: ['**/convex/_generated/**']
 		}
 	},
 
