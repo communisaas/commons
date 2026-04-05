@@ -52,7 +52,7 @@ NEVER ask:
 When generating (needs_clarification=false), include ALL of these fields:
 - subject_line: 6-10 words
 - core_message: one sentence
-- topics: array of lowercase tags
+- topics: 1-5 lowercase tags for the policy domain of the grievance — what is broken, not where or who. A topic should make sense as a category that groups unrelated campaigns in different cities. Locations, organizations, and people are context, not topics; they belong in inferred_context.
 - url_slug: 2-4 words, hyphenated, lowercase
 - voice_sample: key phrase from original input, verbatim
 - detected_ask: specific action demanded, verbatim from input, or null

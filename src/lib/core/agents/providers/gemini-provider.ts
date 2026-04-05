@@ -1,33 +1,29 @@
 /**
- * Gemini Decision-Maker Provider — Parallel Orchestration
+ * Gemini Decision-Maker Provider — 4-Stage Deterministic Pipeline
  *
- * Three-phase resolution using Gemini + Exa Search + Firecrawl:
+ * Resolution using Gemini + Exa Search + Firecrawl:
  * - Phase 1: Role Discovery (structural reasoning, no search)
  * - Phase 2a: Parallel Identity Resolution (direct Exa searches + 1 extraction call)
- * - Phase 2b: Per-Identity Parallel Contact Hunting (N concurrent mini-agents)
+ * - Stage 1: Parallel Contact Searches (Exa, no Gemini)
+ * - Stage 2: Batch Page Selection (1 Gemini call)
+ * - Stage 3: Parallel Page Reads (Firecrawl, no Gemini)
+ * - Stage 4: Chunked Contact Synthesis (N Gemini calls, 3 identities per chunk)
  *
- * Phase 2a is NOT agentic — search queries are derived from Phase 1 roles,
- * run as direct parallel Exa API calls, then a single Gemini extraction call
- * pulls names from search result titles.
- *
- * Phase 2b fans out one mini-agent per uncached identity. Each gets its own
- * isolated AgenticToolContext (1 search + 2 reads) and ThoughtEmitter.
- * Promise.allSettled runs them concurrently; results are merged for email verification.
+ * Stage 4 uses generate() with responseSchema for guaranteed JSON structure.
+ * Each chunk retries via generate()'s built-in 3x retry, then falls back to
+ * pre-extracted page email hints on failure. Partial success is preserved.
  *
  * Includes a ResolvedContact cache (14-day TTL) to skip repeat lookups.
  */
 
-import type { GenerateContentConfig, Content, Part } from '@google/genai';
-import { getGeminiClient, generateWithThoughts, GEMINI_CONFIG, extractTokenUsage } from '../gemini-client';
+import { z } from 'zod';
+import { generate, generateWithThoughts, GEMINI_CONFIG, extractTokenUsage } from '../gemini-client';
 import { sumTokenUsage, emptyExternalCounts, sumExternalCounts, type TokenUsage, type ExternalApiCounts } from '../types';
 import {
 	ROLE_DISCOVERY_PROMPT,
 	buildRoleDiscoveryPrompt,
 	IDENTITY_EXTRACTION_PROMPT,
 	buildIdentityExtractionPrompt,
-	SINGLE_CONTACT_PROMPT,
-	buildSingleContactPrompt,
-	generateDomainHintForOrg,
 	type ResolvedIdentity,
 	type CachedContactInfo,
 	PAGE_SELECTION_PROMPT,
@@ -37,17 +33,13 @@ import {
 	detectOrgTypes,
 	generateDomainContext,
 } from '../prompts/decision-maker';
-import { getCachedContacts, upsertResolvedContacts } from '../utils/contact-cache';
+import { getCachedContacts, upsertResolvedContacts, normalizeOrgKey } from '../utils/contact-cache';
 import { extractJsonFromGroundingResponse, isSuccessfulExtraction } from '../utils/grounding-json';
 import { searchWeb, readPage, prunePageContent, type ExaPageContent } from '../exa-search';
 import {
-	getAgentToolDeclarations,
-	processGeminiFunctionCall,
 	classifyUrl,
 	extractContactHints,
 } from '../agents/decision-maker';
-import type { AgenticToolContext } from '../agents/decision-maker';
-import { ThoughtEmitter } from '$lib/core/thoughts/emitter';
 import type { ProcessedDecisionMaker } from '$lib/types/template';
 import type {
 	DecisionMakerProvider,
@@ -105,12 +97,6 @@ interface IdentityResolutionResponse {
 	}>;
 }
 
-/** Result from function calling execution */
-interface FunctionCallingResult {
-	text: string;
-	tokenUsage?: TokenUsage;
-}
-
 interface PersonLookupResponse {
 	decision_makers: Candidate[];
 	research_summary: string;
@@ -127,269 +113,108 @@ interface PageSelectionResponse {
 }
 
 // ============================================================================
-// Function Calling Loop
+// Zod Validation Schemas — runtime type guards for LLM JSON output
 // ============================================================================
 
-/**
- * Maximum iterations for function calling loop to prevent infinite loops
- */
-const MAX_FUNCTION_CALL_ITERATIONS = 20;
+const CandidateSchema = z.object({
+	name: z.string(),
+	title: z.string(),
+	organization: z.string(),
+	reasoning: z.string(),
+	email: z.string(),
+	email_source: z.string().optional(),
+	source_url: z.string().optional(),
+	recency_check: z.string(),
+	contact_notes: z.string().optional(),
+	discovered: z.boolean().optional(),
+});
+
+const PersonLookupResponseSchema = z.object({
+	decision_makers: z.array(CandidateSchema),
+	research_summary: z.string(),
+});
+
+const PageSelectionResponseSchema = z.object({
+	page_selections: z.array(z.object({
+		identity_index: z.number(),
+		person_name: z.string(),
+		organization: z.string(),
+		selected_pages: z.array(z.object({
+			url: z.string(),
+			reason: z.string(),
+			url_hint: z.string(),
+		})),
+	})),
+});
 
 /**
- * Execute a Gemini request with function calling support.
- *
- * This function handles the agentic loop:
- * 1. Send request to Gemini with tool declarations
- * 2. If response contains function calls, execute them
- * 3. Send function results back to Gemini
- * 4. Repeat until Gemini produces final text response
- *
- * @param prompt - User prompt to generate from
- * @param config - Gemini generation config (will add tools if not present)
- * @param emitter - ThoughtEmitter for streaming document analysis updates
- * @param onThought - Callback for streaming thoughts to the user
- * @param toolContext - Optional agentic tool context for budget tracking (search_web/read_page)
- * @param toolMode - Which tool set to use: 'research' for search_web/read_page, 'document' for analyze_document
- * @returns Final response text after all function calls resolved
+ * Gemini-native responseSchema for Stage 4 synthesis.
+ * Used with generate() for API-guaranteed JSON structure.
  */
-async function executeWithFunctionCalling(
-	prompt: string,
-	config: GenerateContentConfig,
-	emitter: ThoughtEmitter,
-	onThought?: (thought: string) => void,
-	toolContext?: AgenticToolContext,
-	toolMode: 'research' | 'search-only' | 'document' = 'document',
-	signal?: AbortSignal
-): Promise<FunctionCallingResult> {
-	const ai = getGeminiClient();
+const PERSON_LOOKUP_RESPONSE_SCHEMA = {
+	type: 'object' as const,
+	properties: {
+		decision_makers: {
+			type: 'array' as const,
+			items: {
+				type: 'object' as const,
+				properties: {
+					name: { type: 'string' as const },
+					title: { type: 'string' as const },
+					organization: { type: 'string' as const },
+					reasoning: { type: 'string' as const },
+					email: { type: 'string' as const },
+					email_source: { type: 'string' as const },
+					source_url: { type: 'string' as const },
+					recency_check: { type: 'string' as const },
+					contact_notes: { type: 'string' as const },
+					discovered: { type: 'boolean' as const },
+				},
+				required: ['name', 'title', 'organization', 'reasoning', 'email', 'recency_check'],
+			},
+		},
+		research_summary: { type: 'string' as const },
+	},
+	required: ['decision_makers', 'research_summary'],
+};
 
-	// Get tool declarations for the appropriate mode
-	const agentTools = getAgentToolDeclarations(toolMode);
-
-	// Build tools array: preserve existing tools and add function declarations
-	const existingTools = config.tools || [];
-	const toolsWithFunctions = [
-		...existingTools,
-		{ functionDeclarations: agentTools }
-	] as GenerateContentConfig['tools'];
-
-	const baseConfig: GenerateContentConfig = {
-		...config,
-		thinkingConfig: {
-			includeThoughts: true,
-			thinkingBudget: 4096
-		}
-	};
-
-	const configWithTools: GenerateContentConfig = {
-		...baseConfig,
-		tools: toolsWithFunctions
-	};
-
-	// Config without tools — forces the model to produce text output
-	const configWithoutTools: GenerateContentConfig = { ...baseConfig };
-
-	// Build conversation history for multi-turn function calling
-	const contents: Content[] = [
-		{
-			role: 'user',
-			parts: [{ text: prompt }]
-		}
-	];
-
-	let iterations = 0;
-	let lastTextResponse = ''; // Accumulate fallback — always have something to return
-	const functionCallUsages: (TokenUsage | undefined)[] = [];
-
-	/**
-	 * Determine whether to stop providing tools and force text output.
-	 *
-	 * Three triggers:
-	 * 1. Page read budget exhausted — searching is pointless if we can't read results
-	 * 2. Both budgets exhausted
-	 * 3. Approaching iteration limit — reserve last 2 iterations for output
-	 */
-	function shouldForceOutput(): boolean {
-		// Near iteration limit — always force output to guarantee we get JSON
-		if (iterations >= MAX_FUNCTION_CALL_ITERATIONS - 2) return true;
-
-		if (!toolContext) return false;
-
-		// Search-only mode: force output when searches exhausted
-		if (toolContext.maxPageReads === 0) {
-			return toolContext.searchCount >= toolContext.maxSearches;
-		}
-
-		// Page reads exhausted — can't read any more pages, so searching is pointless
-		if (toolContext.pageReadCount >= toolContext.maxPageReads) return true;
-
-		// Both exhausted
-		if (toolContext.searchCount >= toolContext.maxSearches &&
-			toolContext.pageReadCount >= toolContext.maxPageReads) return true;
-
-		return false;
-	}
-
-	while (iterations < MAX_FUNCTION_CALL_ITERATIONS) {
-		// Check abort signal at top of each iteration
-		if (signal?.aborted) {
-			console.warn(`[gemini-provider] Aborted at iteration ${iterations} — attempting forced output`);
-			// Attempt one final call WITHOUT tools to salvage results from conversation context.
-			// The Gemini API itself doesn't use AbortSignal, so this call still works.
-			try {
-				const finalResponse = await ai.models.generateContent({
-					model: GEMINI_CONFIG.model,
-					contents,
-					config: configWithoutTools
-				});
-				functionCallUsages.push(extractTokenUsage(finalResponse));
-				const salvaged = finalResponse.text || lastTextResponse || '{}';
-				console.debug(`[gemini-provider] Forced output after abort: ${salvaged.length} chars`);
-				return { text: salvaged, tokenUsage: sumTokenUsage(...functionCallUsages) };
-			} catch (e) {
-				console.warn('[gemini-provider] Forced output after abort failed:', e);
-				return { text: lastTextResponse || '{}', tokenUsage: sumTokenUsage(...functionCallUsages) };
+/**
+ * Gemini-native responseSchema for Phase 2b query planning.
+ * Produces per-identity search strategies — a natural-language query
+ * plus an optional list of domains to scope the Exa search to.
+ */
+const QUERY_PLAN_SCHEMA = {
+	type: 'object' as const,
+	properties: {
+		plans: {
+			type: 'array' as const,
+			items: {
+				type: 'object' as const,
+				properties: {
+					identity_index: { type: 'integer' as const },
+					search_query: { type: 'string' as const },
+					include_domains: {
+						type: 'array' as const,
+						items: { type: 'string' as const }
+					},
+					reasoning: { type: 'string' as const }
+				},
+				required: ['identity_index', 'search_query', 'include_domains', 'reasoning']
 			}
 		}
+	},
+	required: ['plans']
+};
 
-		iterations++;
+interface QueryPlan {
+	identity_index: number;
+	search_query: string;
+	include_domains: string[];
+	reasoning: string;
+}
 
-		// Remove tools when budget is spent or we're near the iteration limit
-		const forceOutput = shouldForceOutput();
-		const effectiveConfig = forceOutput ? configWithoutTools : configWithTools;
-
-		if (forceOutput && toolContext) {
-			console.debug(`[gemini-provider] Forcing output — iteration ${iterations}/${MAX_FUNCTION_CALL_ITERATIONS}, searches: ${toolContext.searchCount}/${toolContext.maxSearches}, reads: ${toolContext.pageReadCount}/${toolContext.maxPageReads}`);
-		}
-
-		console.debug(`[gemini-provider] Function calling iteration ${iterations}/${MAX_FUNCTION_CALL_ITERATIONS}`);
-
-		try {
-			const response = await ai.models.generateContent({
-				model: GEMINI_CONFIG.model,
-				contents,
-				config: effectiveConfig
-			});
-			functionCallUsages.push(extractTokenUsage(response));
-
-			// Extract intermediate text (reasoning) from response parts.
-			// Thought parts (thinking) get priority; plain text parts are the fallback.
-			if (response.candidates?.[0]?.content?.parts) {
-				for (const part of response.candidates[0].content.parts) {
-					const isThought = 'thought' in part && (part as Record<string, unknown>).thought === true;
-					if (isThought && 'text' in part && part.text) {
-						onThought?.(part.text);
-					} else if ('text' in part && part.text && !('functionCall' in part)) {
-						onThought?.(part.text);
-					}
-				}
-			}
-
-			// Save any text as fallback for graceful degradation
-			if (response.text) {
-				lastTextResponse = response.text;
-			}
-
-			// Check if response contains function calls using SDK's built-in getter
-			const functionCalls = response.functionCalls;
-
-			if (functionCalls && functionCalls.length > 0) {
-				console.debug(`[gemini-provider] Received ${functionCalls.length} function call(s):`,
-					functionCalls.map(fc => fc.name).filter(Boolean));
-
-				// Add the model's response (with function calls) to history
-				if (response.candidates?.[0]?.content) {
-					contents.push(response.candidates[0].content);
-				}
-
-				// Process all function calls concurrently
-				const callPromises = functionCalls
-					.filter(fc => {
-						if (!fc.name) {
-							console.warn('[gemini-provider] Function call missing name, skipping');
-							return false;
-						}
-						return true;
-					})
-					.map(async (functionCall) => {
-						try {
-							const result = await processGeminiFunctionCall(
-								{ name: functionCall.name!, args: functionCall.args || {} },
-								emitter,
-								toolContext
-							);
-							console.debug(`[gemini-provider] Function ${functionCall.name} completed successfully`);
-							return { name: functionCall.name!, response: result };
-						} catch (error) {
-							console.error(`[gemini-provider] Function ${functionCall.name} failed:`, error);
-							return {
-								name: functionCall.name!,
-								response: {
-									success: false,
-									error: error instanceof Error ? error.message : 'Function execution failed'
-								}
-							};
-						}
-					});
-
-				const settled = await Promise.allSettled(callPromises);
-
-				const functionResponseParts: Part[] = settled
-					.filter((r): r is PromiseFulfilledResult<{ name: string; response: unknown }> =>
-						r.status === 'fulfilled')
-					.map(r => ({
-						functionResponse: {
-							name: r.value.name,
-							response: r.value.response
-						}
-					} as Part));
-
-				// Add function results to conversation history
-				// Function responses should come from the "function" role according to Gemini API
-				contents.push({
-					role: 'user',
-					parts: functionResponseParts
-				});
-
-				// Continue loop to get next response from Gemini
-				continue;
-			}
-
-			// No function calls - this is the final response
-			const finalText = response.text || '';
-			console.debug(`[gemini-provider] Function calling complete after ${iterations} iteration(s)`);
-
-			return { text: finalText, tokenUsage: sumTokenUsage(...functionCallUsages) };
-
-		} catch (error) {
-			console.error(`[gemini-provider] Error in function calling iteration ${iterations}:`, error);
-			// Don't throw on individual iteration failures — continue if we have budget left
-			if (iterations < MAX_FUNCTION_CALL_ITERATIONS) {
-				continue;
-			}
-		}
-	}
-
-	// Max iterations reached — make one final call WITHOUT tools to force output.
-	// This function NEVER throws — always returns something parseable.
-	console.warn(`[gemini-provider] Max iterations (${MAX_FUNCTION_CALL_ITERATIONS}) reached — forcing final output without tools`);
-
-	try {
-		const finalResponse = await ai.models.generateContent({
-			model: GEMINI_CONFIG.model,
-			contents,
-			config: configWithoutTools
-		});
-		functionCallUsages.push(extractTokenUsage(finalResponse));
-
-		const finalText = finalResponse.text || lastTextResponse || '{}';
-		console.debug(`[gemini-provider] Forced final output: ${finalText.length} chars`);
-		return { text: finalText, tokenUsage: sumTokenUsage(...functionCallUsages) };
-	} catch (error) {
-		// Even the forced call failed — return accumulated text or empty JSON
-		console.error(`[gemini-provider] Forced final output also failed — returning fallback:`, error);
-		return { text: lastTextResponse || '{}', tokenUsage: sumTokenUsage(...functionCallUsages) };
-	}
+interface QueryPlanResponse {
+	plans: QueryPlan[];
 }
 
 // ============================================================================
@@ -495,109 +320,9 @@ async function resolveIdentitiesFromSearch(
 }
 
 // ============================================================================
-// Phase 2b: Per-Identity Parallel Contact Hunting
+// Helpers — Shared utilities
 // ============================================================================
 
-/**
- * Hunt for ONE person's email. Runs executeWithFunctionCalling with a tiny
- * budget (1 search + 2 reads) in an isolated context.
- *
- * Failures are per-identity — they don't take down the pipeline.
- */
-async function huntSingleContact(
-	identity: ResolvedIdentity,
-	reasoning: string,
-	streaming?: StreamingCallbacks,
-	signal?: AbortSignal
-): Promise<{
-	candidates: Candidate[];
-	fetchedPages: Map<string, ExaPageContent>;
-	tokenUsage?: TokenUsage;
-}> {
-	const currentDate = new Date().toLocaleDateString('en-US', {
-		year: 'numeric', month: 'long', day: 'numeric'
-	});
-	const domainHint = generateDomainHintForOrg(identity.organization);
-
-	// UNKNOWN identities get a bigger budget — they need to identify the person first
-	const isUnknown = identity.name === 'UNKNOWN';
-	const MAX_SEARCHES = isUnknown ? 2 : 1;
-	const MAX_PAGE_READS = 2;
-
-	// Isolated context — each mini-agent gets its own counters and page map
-	const toolContext: AgenticToolContext = {
-		fetchedPages: new Map<string, ExaPageContent>(),
-		searchCount: 0,
-		pageReadCount: 0,
-		maxSearches: MAX_SEARCHES,
-		maxPageReads: MAX_PAGE_READS
-	};
-
-	// Isolated emitter — forwards to shared streaming callback
-	const emitter = new ThoughtEmitter((segment) => {
-		if (streaming?.onThought && segment.content) {
-			streaming.onThought(segment.content, 'contact');
-		}
-	});
-
-	const systemPrompt = SINGLE_CONTACT_PROMPT
-		.replace(/{MAX_SEARCHES}/g, String(MAX_SEARCHES))
-		.replace(/{MAX_PAGE_READS}/g, String(MAX_PAGE_READS))
-		.replace(/{DOMAIN_HINT}/g, domainHint)
-		.replace(/{CURRENT_DATE}/g, currentDate);
-
-	const userPrompt = buildSingleContactPrompt(identity, reasoning);
-
-	console.debug(`[gemini-provider] Mini-agent [${identity.name}]: starting (${MAX_SEARCHES} search${MAX_SEARCHES > 1 ? 'es' : ''}, ${MAX_PAGE_READS} reads${isUnknown ? ', identity resolution mode' : ''})`);
-
-	const result = await executeWithFunctionCalling(
-		userPrompt,
-		{
-			systemInstruction: systemPrompt,
-			temperature: 0.2,
-			maxOutputTokens: 8192
-		},
-		emitter,
-		undefined, // onThought already handled by emitter
-		toolContext,
-		'research',
-		signal
-	);
-
-	console.debug(`[gemini-provider] Mini-agent [${identity.name}]: done — ${toolContext.searchCount} searches, ${toolContext.pageReadCount} reads`);
-
-	// Parse the mini-agent's JSON output
-	const extraction = extractJsonFromGroundingResponse<PersonLookupResponse>(result.text || '{}');
-
-	if (isSuccessfulExtraction(extraction) && extraction.data?.decision_makers?.length > 0) {
-		return {
-			candidates: extraction.data.decision_makers,
-			fetchedPages: toolContext.fetchedPages,
-			tokenUsage: result.tokenUsage
-		};
-	}
-
-	// Parse failure — return empty candidates (per-identity degradation, not pipeline failure)
-	console.warn(`[gemini-provider] Mini-agent [${identity.name}]: JSON parse failed, returning empty`);
-	return {
-		candidates: [],
-		fetchedPages: toolContext.fetchedPages,
-		tokenUsage: result.tokenUsage
-	};
-}
-
-// ============================================================================
-// Helpers — Shared by huntContactsFanOutSynthesize and legacy
-// ============================================================================
-
-/** Inline org key normalization (mirrors contact-cache.ts normalizeOrgKey) */
-function normalizeOrgKeyInline(org: string): string {
-	return org.toLowerCase()
-		.replace(/^the\s+/, '')
-		.replace(/['']/g, '')
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-|-$/g, '');
-}
 
 /** Match Phase 1 reasoning to an identity by position+org, then org, then index */
 function matchRoleReasoning(identity: ResolvedIdentity, roles: DiscoveredRole[], index: number): string {
@@ -613,8 +338,65 @@ function matchRoleReasoning(identity: ResolvedIdentity, roles: DiscoveredRole[],
 }
 
 // ============================================================================
-// Phase 2b (v2): Fan-Out + Synthesize — 4 deterministic stages, 2 Gemini calls
+// Phase 2b (v2): Fan-Out + Synthesize — 4 deterministic stages
 // ============================================================================
+
+/**
+ * Fallback: assign best-available email from pre-extracted page hints.
+ * Used when synthesis parse fails for a chunk after retry.
+ */
+function fallbackFromPageHints(
+	identity: ResolvedIdentity,
+	globalIdx: number,
+	reasoning: string,
+	pages: Array<{
+		url: string;
+		title: string;
+		text: string;
+		contactHints: { emails: string[]; phones: string[]; socialUrls: string[] };
+		attributedTo: number[];
+	}>
+): Candidate {
+	// Primary: emails from pages attributed to this identity
+	const hintEmails: string[] = [];
+	for (const page of pages) {
+		if (page.attributedTo.includes(globalIdx) && page.contactHints.emails.length > 0) {
+			hintEmails.push(...page.contactHints.emails);
+		}
+	}
+	// Secondary: emails from pages whose domain matches significant org words
+	if (hintEmails.length === 0) {
+		const orgWords = identity.organization.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+		for (const page of pages) {
+			if (page.contactHints.emails.length > 0) {
+				let hostname = '';
+				try { hostname = new URL(page.url).hostname.replace(/^www\./, ''); } catch { /* skip */ }
+				const domainMatch = orgWords.some(w => hostname.includes(w)) ||
+					hostname.split('.').some(part => part.length > 3 && orgWords.some(w => w.includes(part)));
+				if (domainMatch) {
+					hintEmails.push(...page.contactHints.emails);
+				}
+			}
+		}
+	}
+	const bestEmail = hintEmails[0] || '';
+	const emailSource = bestEmail
+		? pages.find(p => p.contactHints.emails.includes(bestEmail))?.url || ''
+		: '';
+
+	return {
+		name: identity.name,
+		title: identity.title,
+		organization: identity.organization,
+		reasoning,
+		email: bestEmail,
+		email_source: emailSource,
+		recency_check: '',
+		contact_notes: bestEmail
+			? 'Contact extracted from page hints (synthesis fallback)'
+			: 'Contact synthesis failed — no emails found in page hints'
+	};
+}
 
 /**
  * Deterministic contact resolution pipeline.
@@ -623,9 +405,9 @@ function matchRoleReasoning(identity: ResolvedIdentity, roles: DiscoveredRole[],
  * 1. Parallel contact searches (Exa, no Gemini)
  * 2. Batch page selection (1 Gemini call)
  * 3. Parallel page reads (Firecrawl, no Gemini)
- * 4. Batch contact synthesis (1 Gemini call)
+ * 4. Chunked contact synthesis (N Gemini calls, 3 identities per chunk)
  *
- * Same signature and return type as huntContactsParallel_legacy for drop-in replacement.
+ * Primary contact resolution pipeline.
  */
 async function huntContactsFanOutSynthesize(
 	identities: ResolvedIdentity[],
@@ -671,7 +453,7 @@ async function huntContactsFanOutSynthesize(
 
 	for (let i = 0; i < identities.length; i++) {
 		const identity = identities[i];
-		const orgKey = normalizeOrgKeyInline(identity.organization);
+		const orgKey = normalizeOrgKey(identity.organization);
 		const cached = cacheMap.get(`${orgKey}::${identity.title.toLowerCase()}`);
 		const roleReasoning = matchRoleReasoning(identity, roles, i);
 
@@ -723,16 +505,122 @@ async function huntContactsFanOutSynthesize(
 	onThought?.(`Searching for contact information across ${uncached.length} positions...`);
 	console.debug(`[gemini-provider] Stage 1: ${uncached.length} parallel contact searches`);
 
-	const searchQueries = uncached.map(({ identity }) => {
+	// Template fallback query builder — used when planning fails or a plan is malformed
+	const buildFallbackQuery = (identity: ResolvedIdentity): string => {
 		const isUnknown = identity.name === 'UNKNOWN';
 		if (isUnknown) {
 			return `"${identity.title}" "${identity.organization}" contact email ${currentYear}`;
 		}
 		return `"${identity.name}" "${identity.organization}" contact email`;
+	};
+
+	// ================================================================
+	// Phase 2b: Query Planning (1 Gemini call)
+	// ================================================================
+	// Ask the model to compose per-identity search queries + optional
+	// domain filters based on how each organization type surfaces
+	// contact information. Falls back to the rigid template on failure.
+
+	const planningSystem = `You plan web searches that will surface a decision-maker's official contact email.
+
+For each identity, produce:
+- search_query: a natural-language query tuned to how THIS organization type publishes contact info. Can include the person's name + context. Freed from the rigid "contact email" phrasing when a different phrasing fits better (e.g. "contact the senator", "office staff", "media inquiries").
+- include_domains: an OPTIONAL list of domains to scope the search to. Return an empty array when unsure — the domain filter is optional, not mandatory.
+- reasoning: one sentence on why this strategy fits.
+
+How different organization types surface contact info:
+- US senators: personal {firstname}{lastname}.senate.gov subdomains have /contact pages. Use include_domains like ["{lastname}.senate.gov", "senate.gov"].
+- US House reps: {lastname}.house.gov subdomains. Use include_domains like ["{lastname}.house.gov", "house.gov"].
+- US federal agencies (EPA, DOJ, HHS, etc.): leadership pages on the main .gov site. Use include_domains like ["epa.gov"] or the agency's domain.
+- US state governors / state legislators: official state government sites (e.g. "governor.state.xx.us", "state.xx.us", "{state}legislature.gov").
+- Canadian MPs / federal Ministers: parl.gc.ca has member contact pages. Use include_domains like ["ourcommons.ca", "parl.gc.ca"].
+- Canadian provincial officials (MLAs, MPPs, MNAs): provincial legislature sites.
+- UK MPs: parliament.uk member pages. Use include_domains like ["parliament.uk"].
+- Corporate execs: company investor relations, SEC filings (sec.gov), LinkedIn. Use include_domains like ["{company}.com", "sec.gov"] when confident.
+- Nonprofits: the org's own /about/leadership or /team page. Use the org's domain when you can infer it confidently.
+- University officials: the institution's .edu domain.
+- Journalists / editors: the publication's own domain.
+
+Rules:
+- Return EXACTLY one plan per identity, in order, with identity_index matching the input index (0-based).
+- When you are NOT confident about the specific domain, return an empty include_domains array. A bad domain filter is worse than no filter.
+- Keep search_query concise (under 120 chars).`;
+
+	const planningUser = `Plan search queries for these ${uncached.length} identities:\n\n` +
+		uncached.map((entry, i) => {
+			const { identity } = entry;
+			const nameStr = identity.name === 'UNKNOWN' ? '(name unknown)' : identity.name;
+			return `[${i}] ${nameStr} — ${identity.title} @ ${identity.organization}`;
+		}).join('\n');
+
+	const planByIndex = new Map<number, QueryPlan>();
+	try {
+		const planResponse = await generate(planningUser, {
+			systemInstruction: planningSystem,
+			temperature: 0.3,
+			maxOutputTokens: 4096,
+			responseSchema: QUERY_PLAN_SCHEMA
+		});
+		tokenUsages.push(extractTokenUsage(planResponse));
+
+		const planText = planResponse.text || '{}';
+		const parsedPlan = JSON.parse(planText) as QueryPlanResponse;
+
+		if (Array.isArray(parsedPlan.plans)) {
+			for (const plan of parsedPlan.plans) {
+				// Validate each plan shape — malformed entries are dropped, not fatal
+				if (
+					plan &&
+					Number.isInteger(plan.identity_index) &&
+					plan.identity_index >= 0 &&
+					plan.identity_index < uncached.length &&
+					typeof plan.search_query === 'string' &&
+					plan.search_query.trim().length > 0 &&
+					Array.isArray(plan.include_domains)
+				) {
+					planByIndex.set(plan.identity_index, plan);
+				}
+			}
+		}
+
+		console.debug(
+			`[gemini-provider] Phase 2b: planned ${planByIndex.size}/${uncached.length} queries`,
+			Array.from(planByIndex.entries()).map(([idx, p]) => ({
+				idx,
+				identity: `${uncached[idx].identity.name} @ ${uncached[idx].identity.organization}`,
+				query: p.search_query,
+				domains: p.include_domains,
+				reasoning: p.reasoning
+			}))
+		);
+	} catch (err) {
+		console.warn('[gemini-provider] Phase 2b query planning failed, falling back to template queries', err);
+	}
+
+	// Build per-identity search queries — use plan when available, template otherwise
+	const searchPlans = uncached.map((entry, i) => {
+		const plan = planByIndex.get(i);
+		if (plan) {
+			const includeDomains = plan.include_domains.filter(d => typeof d === 'string' && d.trim().length > 0);
+			return {
+				query: plan.search_query,
+				includeDomains: includeDomains.length > 0 ? includeDomains : undefined
+			};
+		}
+		return {
+			query: buildFallbackQuery(entry.identity),
+			includeDomains: undefined as string[] | undefined
+		};
 	});
+	const searchQueries = searchPlans.map(p => p.query);
 
 	const searchResults = await Promise.allSettled(
-		searchQueries.map(q => searchWeb(q, { maxResults: 25 }))
+		searchPlans.map(p =>
+			searchWeb(p.query, p.includeDomains
+				? { maxResults: 25, includeDomains: p.includeDomains }
+				: { maxResults: 25 }
+			)
+		)
 	);
 
 	// Pair search results with identity info, classify URLs
@@ -795,7 +683,8 @@ async function huntContactsFanOutSynthesize(
 	tokenUsages.push(selectionResult.tokenUsage);
 
 	const selectionExtraction = extractJsonFromGroundingResponse<PageSelectionResponse>(
-		selectionResult.rawText || '{}'
+		selectionResult.rawText || '{}',
+		PageSelectionResponseSchema
 	);
 
 	// Build URL → identity indices map (same page attributed to multiple identities, fetched once)
@@ -944,68 +833,118 @@ async function huntContactsFanOutSynthesize(
 	}
 
 	// ================================================================
-	// Stage 4: Synthesis (1 Gemini call, ~5-8s)
+	// Stage 4: Chunked Synthesis (N Gemini calls, ~5-8s each)
 	// ================================================================
 
 	if (signal?.aborted) {
 		return { candidates: cachedCandidates, fetchedPages, tokenUsage: sumTokenUsage(...tokenUsages), externalCounts: extCounts };
 	}
 
+	const SYNTHESIS_CHUNK_SIZE = 3;
 	const domainContext = generateDomainContext(detectOrgTypes(uncached.map(u => u.identity.organization)));
-
 	const synthesisSystem = CONTACT_SYNTHESIS_PROMPT
 		.replace(/{CURRENT_DATE}/g, currentDate)
 		.replace(/{DOMAIN_CONTEXT}/g, domainContext || '');
-	const synthesisUser = buildContactSynthesisPrompt(
-		uncached.map(u => ({ identity: u.identity, reasoning: u.reasoning })),
-		pagesForSynthesis,
-		issueContext
-	);
 
-	console.debug('[gemini-provider] Stage 4: Contact synthesis call');
-
-	const synthesisResult = await generateWithThoughts<PersonLookupResponse>(
-		synthesisUser,
-		{
-			systemInstruction: synthesisSystem,
-			temperature: 0.2,
-			thinkingLevel: 'medium',
-			maxOutputTokens: 32768
-		},
-		onThought
-	);
-	tokenUsages.push(synthesisResult.tokenUsage);
-
-	const synthesisExtraction = extractJsonFromGroundingResponse<PersonLookupResponse>(
-		synthesisResult.rawText || '{}'
-	);
-
-	let synthesizedCandidates: Candidate[];
-
-	if (isSuccessfulExtraction(synthesisExtraction) && synthesisExtraction.data?.decision_makers?.length > 0) {
-		synthesizedCandidates = synthesisExtraction.data.decision_makers;
-		console.debug(`[gemini-provider] Stage 4: Synthesized ${synthesizedCandidates.length} candidates`);
-	} else {
-		// Fallback on parse failure
-		console.warn('[gemini-provider] Stage 4: Synthesis parse failed, returning no-email candidates');
-		synthesizedCandidates = uncached.map(({ identity, reasoning }) => ({
-			name: identity.name,
-			title: identity.title,
-			organization: identity.organization,
-			reasoning,
-			email: '',
-			recency_check: '',
-			contact_notes: 'Contact synthesis failed — try again.'
-		}));
+	// Partition uncached identities into chunks
+	const chunks: Array<typeof uncached> = [];
+	for (let i = 0; i < uncached.length; i += SYNTHESIS_CHUNK_SIZE) {
+		chunks.push(uncached.slice(i, i + SYNTHESIS_CHUNK_SIZE));
 	}
 
-	// Emit ALL synthesized candidates via onCandidateProcessed
-	if (onCandidateProcessed) {
-		const allPages = Array.from(fetchedPages.values());
-		for (const candidate of synthesizedCandidates) {
-			onCandidateProcessed(candidate, allPages);
-		}
-	}
+	console.debug(`[gemini-provider] Stage 4: ${chunks.length} parallel synthesis chunk(s) for ${uncached.length} identities`);
+
+	const allPages = Array.from(fetchedPages.values());
+
+	// Build per-chunk work items (prompt + page subset + identity mapping)
+	const chunkWork = chunks.map((chunk, chunkIdx) => {
+		const globalStartIdx = chunkIdx * SYNTHESIS_CHUNK_SIZE;
+		const chunkGlobalIndices = chunk.map((_, i) => globalStartIdx + i);
+
+		const chunkPages = pagesForSynthesis
+			.filter(p =>
+				p.attributedTo.length === 0 ||
+				p.attributedTo.some(idx => chunkGlobalIndices.includes(idx))
+			)
+			.map(p => ({
+				...p,
+				attributedTo: p.attributedTo
+					.filter(idx => chunkGlobalIndices.includes(idx))
+					.map(idx => idx - globalStartIdx)
+			}));
+
+		const synthesisUser = buildContactSynthesisPrompt(
+			chunk.map(u => ({ identity: u.identity, reasoning: u.reasoning })),
+			chunkPages,
+			issueContext
+		);
+
+		return { chunk, chunkIdx, globalStartIdx, chunkPages, synthesisUser };
+	});
+
+	// Fire all chunks in parallel — each emits candidates immediately on completion
+	const synthesizedCandidates: Candidate[] = [];
+	let chunksComplete = 0;
+
+	onThought?.(`Verifying contact details across ${pagesForSynthesis.length} sources...`);
+
+	await Promise.allSettled(
+		chunkWork.map(async ({ chunk, chunkIdx, globalStartIdx, synthesisUser }) => {
+			if (signal?.aborted) return;
+
+			console.debug(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}/${chunks.length}: ${chunk.length} identities`);
+
+			let candidates: Candidate[];
+
+			try {
+				const response = await generate(synthesisUser, {
+					systemInstruction: synthesisSystem,
+					temperature: 0.2,
+					maxOutputTokens: 32768,
+					responseSchema: PERSON_LOOKUP_RESPONSE_SCHEMA
+				});
+				tokenUsages.push(extractTokenUsage(response));
+
+				const responseText = response.text || '{}';
+				const parsed = JSON.parse(responseText) as PersonLookupResponse;
+
+				if (parsed.decision_makers?.length > 0) {
+					console.debug(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: synthesized ${parsed.decision_makers.length} candidates`);
+					candidates = parsed.decision_makers;
+				} else {
+					console.debug(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: model returned 0 candidates`);
+					candidates = [];
+				}
+			} catch (err) {
+				console.warn(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: generate() failed`, err);
+				candidates = chunk.map(({ identity, reasoning }, localIdx) => {
+					const globalIdx = globalStartIdx + localIdx;
+					return fallbackFromPageHints(identity, globalIdx, reasoning, pagesForSynthesis);
+				});
+				const hintRecovered = candidates.filter(c => c.email).length;
+				console.debug(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1} fallback: ${hintRecovered}/${candidates.length} recovered from page hints`);
+			}
+
+			// Emit immediately — don't wait for other chunks
+			synthesizedCandidates.push(...candidates);
+			if (onCandidateProcessed) {
+				for (const candidate of candidates) {
+					onCandidateProcessed(candidate, allPages);
+				}
+			}
+
+			// Progress update after each chunk completes
+			chunksComplete++;
+			const withEmail = candidates.filter(c => c.email?.includes('@')).length;
+			const names = candidates.filter(c => c.email?.includes('@')).map(c => c.name).join(', ');
+			if (withEmail > 0) {
+				onThought?.(`Found contact details for ${names}.`);
+			}
+			if (chunksComplete < chunks.length) {
+				onThought?.(`Resolving remaining contacts (${chunks.length - chunksComplete} of ${chunks.length} groups left)...`);
+			}
+		})
+	);
 
 	// ================================================================
 	// Return: merge cached + synthesized
@@ -1022,179 +961,13 @@ async function huntContactsFanOutSynthesize(
 	};
 }
 
-/**
- * @deprecated Use huntContactsFanOutSynthesize instead. Kept for rollback.
- *
- * Fan out per-identity parallel contact hunting mini-agents.
- *
- * Cached identities skip agent calls entirely and become pre-verified candidates.
- * Uncached identities each get a dedicated mini-agent via huntSingleContact().
- * Promise.allSettled ensures one failure doesn't kill the batch.
- *
- * Results are merged: all candidates + all fetchedPages for email grounding.
- */
-async function huntContactsParallel_legacy(
-	identities: ResolvedIdentity[],
-	cachedContacts: CachedContactInfo[],
-	roles: DiscoveredRole[],
-	streaming?: StreamingCallbacks,
-	signal?: AbortSignal,
-	/** Called per-identity as each mini-agent completes (for progressive UI streaming) */
-	onCandidateProcessed?: (candidate: Candidate, fetchedPages: ExaPageContent[]) => void
-): Promise<{
-	candidates: Candidate[];
-	fetchedPages: Map<string, ExaPageContent>;
-	tokenUsage?: TokenUsage;
-}> {
-	// Build cache lookup map: orgKey::title → cached contact
-	const cacheMap = new Map<string, CachedContactInfo>();
-	for (const c of cachedContacts) {
-		if (c.title && c.email) {
-			cacheMap.set(`${c.orgKey}::${c.title.toLowerCase()}`, c);
-		}
-	}
+// ============================================================================
+// Gemini Provider Implementation
+// ============================================================================
 
-	// Separate cached vs uncached identities
-	const uncached: Array<{ identity: ResolvedIdentity; reasoning: string }> = [];
-	const cachedCandidates: Candidate[] = [];
-
-	for (let i = 0; i < identities.length; i++) {
-		const identity = identities[i];
-		const orgKey = identity.organization
-			.toLowerCase()
-			.replace(/^the\s+/, '')
-			.replace(/['']/g, '')
-			.replace(/[^a-z0-9]+/g, '-')
-			.replace(/^-|-$/g, '');
-
-		const cached = cacheMap.get(`${orgKey}::${identity.title.toLowerCase()}`);
-
-		// Match Phase 1 reasoning: try exact match first, then org-only match,
-		// then fall back to index correspondence (roles and identities are 1:1
-		// from the extraction prompt, though the model may reorder).
-		const roleReasoning =
-			roles.find(r =>
-				r.position.toLowerCase() === identity.position.toLowerCase() &&
-				r.organization.toLowerCase() === identity.organization.toLowerCase()
-			)?.reasoning ||
-			roles.find(r =>
-				r.organization.toLowerCase() === identity.organization.toLowerCase()
-			)?.reasoning ||
-			roles[i]?.reasoning ||
-			'';
-
-		if (cached?.email) {
-			// Inject cached contact as pre-verified candidate
-			cachedCandidates.push({
-				name: cached.name || identity.name,
-				title: cached.title || identity.title,
-				organization: identity.organization,
-				reasoning: roleReasoning,
-				email: cached.email,
-				email_source: cached.emailSource || undefined,
-				recency_check: `Cached contact (verified in prior run)`,
-				contact_notes: ''
-			});
-		} else {
-			uncached.push({ identity, reasoning: roleReasoning });
-		}
-	}
-
-	console.debug(`[gemini-provider] Phase 2b: ${cachedCandidates.length} cached, ${uncached.length} uncached → launching ${uncached.length} parallel mini-agents`);
-
-	// Emit cached contacts immediately — no agent call needed
-	if (onCandidateProcessed) {
-		for (const cached of cachedCandidates) {
-			onCandidateProcessed(cached, []);
-		}
-	}
-
-	// Fan out mini-agents — each emits its candidate immediately on completion.
-	// Per-agent timeout prevents one slow Firecrawl/Gemini call from blocking the batch.
-	const MINI_AGENT_TIMEOUT_MS = 45_000;
-
-	const settled = await Promise.allSettled(
-		uncached.map(async ({ identity, reasoning }) => {
-			let result: Awaited<ReturnType<typeof huntSingleContact>>;
-
-			try {
-				let timer: ReturnType<typeof setTimeout>;
-				const timeout = new Promise<never>((_, reject) => {
-					timer = setTimeout(
-						() => reject(new Error('timeout')),
-						MINI_AGENT_TIMEOUT_MS
-					);
-				});
-				result = await Promise.race([
-					huntSingleContact(identity, reasoning, streaming, signal),
-					timeout
-				]).finally(() => clearTimeout(timer!));
-			} catch (err) {
-				// Timeout or other failure — emit a placeholder so UI cards update
-				const reason = err instanceof Error ? err.message : 'failed';
-				console.warn(`[gemini-provider] Mini-agent [${identity.name}]: ${reason}`);
-				if (onCandidateProcessed) {
-					onCandidateProcessed({
-						name: identity.name,
-						title: identity.title,
-						organization: identity.organization,
-						reasoning,
-						email: '',
-						recency_check: '',
-						contact_notes: reason === 'timeout'
-							? 'Search timed out — try again later.'
-							: 'Contact search failed.'
-					}, []);
-				}
-				return {
-					candidates: [] as Candidate[],
-					fetchedPages: new Map<string, ExaPageContent>(),
-					tokenUsage: undefined
-				};
-			}
-
-			// Always inject Phase 1 reasoning — the mini-agent's prompt doesn't ask
-			// for reasoning (it only hunts contacts), so this field is the sole source
-			// of "why this person matters to the issue."
-			for (const candidate of result.candidates) {
-				candidate.reasoning = reasoning || candidate.reasoning || '';
-			}
-			// Immediately emit this candidate to the UI
-			if (onCandidateProcessed && result.candidates.length > 0) {
-				const pages = Array.from(result.fetchedPages.values());
-				for (const candidate of result.candidates) {
-					onCandidateProcessed(candidate, pages);
-				}
-			}
-			return result;
-		})
-	);
-
-	// Merge results (still needed for batch email grounding in resolve())
-	const allCandidates: Candidate[] = [...cachedCandidates];
-	const mergedPages = new Map<string, ExaPageContent>();
-	const tokenUsages: (TokenUsage | undefined)[] = [];
-
-	for (const result of settled) {
-		if (result.status === 'fulfilled') {
-			allCandidates.push(...result.value.candidates);
-			for (const [url, page] of result.value.fetchedPages) {
-				mergedPages.set(url, page);
-			}
-			tokenUsages.push(result.value.tokenUsage);
-		} else {
-			console.warn('[gemini-provider] Mini-agent failed:', result.reason);
-		}
-	}
-
-	console.debug(`[gemini-provider] Phase 2b merged: ${allCandidates.length} candidates, ${mergedPages.size} pages`);
-
-	return {
-		candidates: allCandidates,
-		fetchedPages: mergedPages,
-		tokenUsage: sumTokenUsage(...tokenUsages)
-	};
-}
+// NOTE: huntContactsParallel_legacy and huntSingleContact were deleted.
+// The fan-out-synthesize pipeline (4-stage) replaced N parallel ReAct loops.
+// If rollback is needed, retrieve from git history.
 
 // ============================================================================
 // Gemini Provider Implementation
@@ -1310,7 +1083,8 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				organization: id.organization,
 				title: id.title
 			}));
-			const cachedContacts = await getCachedContacts(orgTitlePairs);
+			const cachedContactsRaw = await getCachedContacts(orgTitlePairs);
+			const cachedContacts = Array.isArray(cachedContactsRaw) ? cachedContactsRaw : [];
 
 			if (cachedContacts.length > 0) {
 				const withEmail = cachedContacts.filter(c => c.email);
@@ -1320,12 +1094,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			// Emit identity placeholders to UI — cards appear before contact hunting starts
 			if (streaming?.onIdentitiesFound) {
 				const placeholders = identities.map(id => {
-					const orgKey = id.organization
-						.toLowerCase()
-						.replace(/^the\s+/, '')
-						.replace(/['']/g, '')
-						.replace(/[^a-z0-9]+/g, '-')
-						.replace(/^-|-$/g, '');
+					const orgKey = normalizeOrgKey(id.organization);
 					const cached = cachedContacts.find(
 						c => c.email && c.orgKey === orgKey && c.title?.toLowerCase() === id.title.toLowerCase()
 					);
@@ -1675,6 +1444,14 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			...(candidate.recency_check ? ['', candidate.recency_check] : [])
 		].join('\n');
 
+		const confidence = Math.min(1.0,
+			0.4
+			+ (emailGrounded ? 0.3 : 0)
+			+ (candidate.recency_check ? 0.15 : 0)
+			+ (candidate.cacheHit ? 0.1 : 0)
+			+ (verifiedPersonSource ? 0.05 : 0)
+		);
+
 		return {
 			name: candidate.name,
 			title: candidate.title,
@@ -1689,7 +1466,8 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			emailSource: emailGrounded ? emailSource : undefined,
 			emailSourceTitle: emailGrounded ? emailSourceTitle : undefined,
 			contactNotes: candidate.contact_notes || undefined,
-			discovered: candidate.discovered || false
+			discovered: candidate.discovered || false,
+			confidence
 		};
 	}
 

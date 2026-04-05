@@ -105,7 +105,8 @@ export const SUBJECT_LINE_SCHEMA = {
 			type: 'array',
 			items: { type: 'string' },
 			maxItems: 5,
-			description: '1-5 lowercase topic tags'
+			description:
+				'1-5 lowercase issue-domain tags (e.g. "transportation", "housing", "education"). Locations are not topics.'
 		},
 		url_slug: {
 			type: 'string',

@@ -112,7 +112,7 @@ export class DecisionMakerRouter {
 	private async resolveWithTimeout(
 		provider: DecisionMakerProvider,
 		context: ResolveContext,
-		timeoutMs: number = 300000 // 5 minutes — staged orchestration (Phase 2a + 2b) runs 90-150s typical
+		timeoutMs: number = 600_000 // 10 minutes — 4-stage pipeline with parallel chunks runs 120-240s typical
 	): Promise<DecisionMakerResult> {
 		const controller = new AbortController();
 		const timeout = setTimeout(

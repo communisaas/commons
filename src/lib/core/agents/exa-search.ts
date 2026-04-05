@@ -11,7 +11,7 @@
  * @module agents/exa-search
  */
 
-import { getExaClient, getSearchRateLimiter } from '$lib/server/exa';
+import { getExaClient, getSearchRateLimiter, getContentsRateLimiter } from '$lib/server/exa';
 import { getFirecrawlClient, getFirecrawlRateLimiter } from '$lib/server/firecrawl';
 import { extractContactHints } from '$lib/core/agents/agents/decision-maker';
 import type { ProvenanceSignals } from '$lib/core/agents/types';
@@ -33,7 +33,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 const SEARCH_TIMEOUT_MS = 15_000;
-const SCRAPE_TIMEOUT_MS = 20_000;
+const SCRAPE_TIMEOUT_MS = 45_000;
 
 /** Extract email addresses from raw HTML, filtering common false positives */
 function extractEmailsFromHtml(html: string): string[] {
@@ -177,6 +177,68 @@ const PAGE_CONTENT_HARD_CAP = 200_000;
  * @param url - URL to fetch content from
  * @returns Page content or null if fetch failed
  */
+/**
+ * Exa contents fallback — used when Firecrawl fails or returns empty.
+ * Loses Firecrawl's unique capabilities (mailto: links, JS rendering, raw HTML)
+ * but recovers text content for pages Firecrawl can't reach.
+ */
+async function fetchViaExaFallback(url: string): Promise<ExaPageContent | null> {
+	try {
+		const exa = getExaClient();
+		const rateLimiter = getContentsRateLimiter();
+
+		const result = await rateLimiter.execute(
+			async () => withTimeout(
+				exa.getContents([url], { text: true, highlights: true }),
+				SEARCH_TIMEOUT_MS,
+				`exa-contents "${url.slice(0, 60)}"`
+			),
+			`exa-contents-${url.slice(0, 60)}`
+		);
+
+		if (!result.success) {
+			console.debug(`[page-fetch] Exa fallback failed for ${url}:`, result.error);
+			return null;
+		}
+
+		const results = result.data?.results;
+		if (!results || results.length === 0) {
+			console.debug(`[page-fetch] Exa fallback: no results for ${url}`);
+			return null;
+		}
+
+		const first = results[0];
+		const text = (first.text || '').slice(0, PAGE_CONTENT_HARD_CAP);
+		if (!text) {
+			console.debug(`[page-fetch] Exa fallback: empty text for ${url}`);
+			return null;
+		}
+
+		// Extract emails from Exa text as a best-effort (no structured mailto: access)
+		const htmlEmails = extractEmailsFromHtml(text);
+		const highlights = Array.isArray(first.highlights) ? first.highlights : [];
+
+		let enrichedText = text;
+		if (htmlEmails.length > 0) {
+			enrichedText += '\n\n--- CONTACT EMAILS (regex-extracted) ---\n' + htmlEmails.join('\n');
+		}
+
+		console.debug(`[page-fetch] Exa fallback: recovered ${enrichedText.length} chars from "${(first.title || '').slice(0, 60)}"`);
+
+		return {
+			url,
+			title: first.title || '',
+			text: enrichedText,
+			highlights: [...highlights, ...htmlEmails],
+			publishedDate: first.publishedDate,
+			statusCode: undefined
+		};
+	} catch (err) {
+		console.debug(`[page-fetch] Exa fallback threw for ${url}:`, err instanceof Error ? err.message : err);
+		return null;
+	}
+}
+
 export async function readPage(
 	url: string,
 	_options?: { maxCharacters?: number }
@@ -196,14 +258,14 @@ export async function readPage(
 	);
 
 	if (!result.success) {
-		console.error(`[page-fetch] readPage failed for ${url}:`, result.error);
-		return null;
+		console.warn(`[page-fetch] Firecrawl failed for ${url}: ${result.error} — trying Exa fallback`);
+		return await fetchViaExaFallback(url);
 	}
 
 	const scrapeData = result.data;
 	if (!scrapeData?.success || !scrapeData.markdown) {
-		console.debug(`[page-fetch] readPage: no content for ${url}`);
-		return null;
+		console.debug(`[page-fetch] Firecrawl empty for ${url} — trying Exa fallback`);
+		return await fetchViaExaFallback(url);
 	}
 
 	// Start with the rendered markdown (apply safety cap to prevent pathological pages)
