@@ -14,7 +14,7 @@
 	import { trackTemplateView, trackDeliveryAttempt } from '$lib/core/analytics/client';
 	import ShareButton from '$lib/components/ui/ShareButton.svelte';
 	import ActionBar from '$lib/components/template-browser/parts/ActionBar.svelte';
-	import TrustJourney from '$lib/components/trust/TrustJourney.svelte';
+	// TrustJourney removed — proof now lives inline in message preview footer
 	import DebateSurface from '$lib/components/debate/DebateSurface.svelte';
 	import DebateSignal from '$lib/components/debate/DebateSignal.svelte';
 	import MobileDebateBanner from '$lib/components/debate/MobileDebateBanner.svelte';
@@ -22,7 +22,7 @@
 	import StanceRegistration from '$lib/components/action/StanceRegistration.svelte';
 	import PowerLandscape from '$lib/components/action/PowerLandscape.svelte';
 	import { positionState } from '$lib/stores/positionState.svelte';
-	import CommunityEngagementCard from '$lib/components/action/CommunityEngagementCard.svelte';
+	// CommunityEngagementCard removed — coordination weight is inline after landscape
 	import type { EngagementData } from '$lib/components/action/CommunityEngagementCard.svelte';
 	import { mergeLandscape, slugify, type LandscapeMember, type DistrictOfficialInput } from '$lib/utils/landscapeMerge';
 	import type { ProcessedDecisionMaker } from '$lib/types/template';
@@ -47,6 +47,16 @@
 	// Template modal reference
 
 	const template: TemplateType = $derived(data.template as unknown as TemplateType);
+
+	/** Build proof footer for email attestation based on user verification tier */
+	function buildProofFooter(trustTier: number, districtCode?: string | null): string | undefined {
+		const parts: string[] = [];
+		if (trustTier >= 2 && districtCode) parts.push(`Verified resident · ${districtCode}`);
+		else if (trustTier >= 1) parts.push('Verified sender');
+		if (trustTier >= 3) parts[0] += ' · Gov ID';
+		if (data.user?.id) parts.push(`commons.email/v/${data.user.id.slice(0, 8)}`);
+		return parts.length > 0 ? parts.join('\n') : undefined;
+	}
 	// Simplified - no query parameters needed, default to direct-link
 	const source = 'direct-link';
 	const shareUrl = $derived(
@@ -384,9 +394,7 @@
 			const subject = template.subject || template.title;
 
 			const trustTier = data.user?.trust_tier ?? 0;
-			const attestation = trustTier >= 2
-				? `Verified resident, ${districtName}\nCryptographic proof of residency`
-				: undefined;
+			const attestation = buildProofFooter(trustTier, districtName || data.userDistrictCode);
 
 			// Inject personal connection before resolveTemplate strips the placeholder
 			const pc = personalConnectionValue?.trim();
@@ -460,9 +468,7 @@
 			const subject = template.subject || template.title;
 
 			const trustTier = data.user?.trust_tier ?? 0;
-			const attestation = trustTier >= 2
-				? `Verified resident, ${districtName}\nCryptographic proof of residency`
-				: undefined;
+			const attestation = buildProofFooter(trustTier, districtName || data.userDistrictCode);
 
 			const resolved = resolveTemplate(template as any, data.user as any ?? null);
 			const resolvedBody = resolved.body.replace(/\[District\]/g, districtName).trim();
@@ -782,7 +788,7 @@
 	{/if}
 
 	<!-- ACT: Two-column field — message as sticky reference, landscape as primary workspace -->
-	<div class="lg:grid lg:grid-cols-[2fr_3fr] lg:gap-8 lg:items-start overflow-x-clip">
+	<div class="lg:grid lg:gap-8 lg:items-start overflow-x-clip {landscape.totalCount > 3 ? 'lg:grid-cols-[2fr_3fr]' : 'lg:grid-cols-[3fr_2fr]'}">
 		<!-- LEFT: Message preview — sticky reference while landscape scrolls -->
 		<div class="min-w-0 lg:sticky lg:top-6 lg:self-start">
 			<div class="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -827,7 +833,12 @@
 				<TemplatePreview
 					{template}
 					context="page"
-					user={data.user as { id: string; name: string | null; trust_tier?: number } | null}
+					user={data.user ? {
+						id: data.user.id,
+						name: data.user.name,
+						trust_tier: data.user.trust_tier,
+						district_code: data.userDistrictCode ?? undefined
+					} : null}
 					showEmailModal={false}
 					{debateResolution}
 					bind:personalConnectionValue
@@ -850,55 +861,31 @@
 						await tick();
 						document.getElementById('power-landscape')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 					}}
+					onVerifyAddress={FEATURES.ADDRESS_SPECIFICITY === 'district' ? () => {
+						modalActions.openModal('address-modal', 'address', {
+							template,
+							source,
+							mode: 'collection',
+							onComplete: async (detail: AddressModalDetail) => {
+								await _handleAddressSubmit(detail);
+							}
+						});
+					} : undefined}
+					onVerifyIdentity={data.user ? () => {
+						modalActions.openModal('identity-verification-modal', 'identity-verification', {
+							userId: data.user!.id,
+							templateSlug: template.slug,
+							onComplete: async () => {
+								await invalidateAll();
+							}
+						});
+					} : undefined}
 				/>
 			</div>
 		</div>
 
-		<!-- RIGHT (PRIMARY): Power Landscape + Signal strength + Deliberation -->
+		<!-- RIGHT: Relational field — who you're writing to, who's with you, what's been contested -->
 		<div class="mt-8 lg:mt-0 space-y-8 min-w-0">
-			<!-- Trust Journey — signal strength contextualizes the action space below -->
-			{#if FEATURES.STANCE_POSITIONS && data.user}
-				<TrustJourney
-					trustTier={data.user.trust_tier ?? 1}
-					onVerifyAddress={FEATURES.ADDRESS_SPECIFICITY === 'district' ? () => {
-					modalActions.openModal('address-modal', 'address', {
-						template,
-						source,
-						mode: 'collection',
-						onComplete: async (detail: AddressModalDetail) => {
-							await _handleAddressSubmit(detail);
-						}
-					});
-				} : undefined}
-				onVerifyIdentity={data.user ? () => {
-					modalActions.openModal('identity-verification-modal', 'identity-verification', {
-						userId: data.user!.id,
-						templateSlug: template.slug,
-						onComplete: async () => {
-							await invalidateAll();
-						}
-					});
-				} : undefined}
-					onGenerateProof={FEATURES.CONGRESSIONAL ? () => {
-						modalActions.openModal('template-modal', 'template_modal', {
-							template,
-							user: data.user,
-							initialState: 'cwc-submission'
-						});
-					} : undefined}
-				/>
-			{/if}
-
-			<!-- Coordination field — "{N} coordinating across {M} districts" -->
-			<CommunityEngagementCard
-				engagement={pl.engagementByDistrict ?? null}
-				userDistrict={data.userDistrictCode}
-				onAddPosition={!positionState.isRegistered ? () => {
-					const stanceSection = document.querySelector('.border-y.border-slate-200\\/80');
-					stanceSection?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-				} : undefined}
-			/>
-
 			<!-- Power Landscape: visible after position registration -->
 			{#if landscapeRevealed}
 				<div id="power-landscape">
@@ -923,6 +910,27 @@
 					} : undefined}
 					registrationState={batchRegistrationState}
 				/>
+
+				<!-- Coordination weight — numbers as substance, before utility chrome -->
+				{#if pl.engagementByDistrict && pl.engagementByDistrict.aggregate && pl.engagementByDistrict.aggregate.total_positions > 0}
+					{@const agg = pl.engagementByDistrict.aggregate}
+					{@const districts = pl.engagementByDistrict.districts ?? []}
+					{@const userDist = districts.find((d) => d.is_user_district)}
+					<div class="mt-6 pt-4 border-t border-slate-200/60">
+						<div class="flex items-baseline gap-1.5">
+							<span class="font-mono text-base font-bold tabular-nums text-slate-800">{agg.total_positions.toLocaleString()}</span>
+							<span class="text-sm text-slate-500">coordinating across</span>
+							<span class="font-mono text-base font-bold tabular-nums text-slate-800">{agg.total_districts}</span>
+							<span class="text-sm text-slate-500">{agg.total_districts === 1 ? 'district' : 'districts'}</span>
+						</div>
+						{#if userDist}
+							<div class="mt-1 flex items-baseline gap-1.5">
+								<span class="font-mono text-sm font-semibold tabular-nums text-emerald-700">{userDist.total}</span>
+								<span class="text-xs text-slate-500">in your district</span>
+							</div>
+						{/if}
+					</div>
+				{/if}
 
 				{#if contactedMembers.length > 0}
 					<div class="mt-3 text-xs text-slate-400">

@@ -297,12 +297,18 @@ export function generateMailtoUrl(
 				`[Template: ${template.slug || template.id}]\n` +
 				`[From: ${user?.email || 'Guest'}]`;
 
-			// District attestation footer for Tier 2+ verified constituents
-			// Only include verify URL when a real credential hash is available
-			if (trustTier >= 2 && user?.credentialHash) {
-				footer += `\n[District: Verified Constituent | commons.email/verify/${user.credentialHash}]`;
-			} else if (trustTier >= 2) {
-				footer += '\n[District: Verified Constituent]';
+			// Proof footer — what the recipient sees
+			if (trustTier >= 2) {
+				const proofLine = trustTier >= 3 ? 'Verified sender · Gov ID' : 'Verified resident';
+				footer += `\n${proofLine}`;
+				if (user?.credentialHash) {
+					footer += `\ncommons.email/v/${user.credentialHash}`;
+				} else if (user?.id) {
+					footer += `\ncommons.email/v/${user.id.slice(0, 8)}`;
+				}
+			} else if (trustTier >= 1) {
+				footer += '\nVerified sender';
+				if (user?.id) footer += `\ncommons.email/v/${user.id.slice(0, 8)}`;
 			}
 
 			const enhancedBody =

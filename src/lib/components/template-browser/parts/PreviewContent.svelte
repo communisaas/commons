@@ -35,12 +35,14 @@
 		onTouchStateChange,
 		componentId,
 		expandToContent = false,
-		debateResolution = null
+		debateResolution = null,
+		onVerifyAddress,
+		onVerifyIdentity
 	}: {
 		template: Template;
 		inModal: boolean;
 		context?: 'list' | 'page' | 'modal';
-		user: { id: string; name: string | null } | null;
+		user: { id: string; name: string | null; trust_tier?: number; district_code?: string } | null;
 		onScroll: (isAtBottom: boolean, scrollProgress?: number) => void;
 		personalConnectionValue: string;
 		onScrollStateChange?: (scrollState: unknown) => void;
@@ -48,7 +50,20 @@
 		componentId: string;
 		expandToContent?: boolean;
 		debateResolution?: { winningStance: string; participants: number } | null;
+		onVerifyAddress?: () => void;
+		onVerifyIdentity?: () => void;
 	} = $props();
+
+	// Proof footer: what verification the message carries
+	const trustTier = $derived(user?.trust_tier ?? 0);
+	const proofLocation = $derived(trustTier >= 2 && user?.district_code ? user.district_code : null);
+	const proofLabel = $derived.by(() => {
+		if (trustTier >= 2) return 'Verified resident';
+		if (trustTier >= 1) return 'Verified sender';
+		return null;
+	});
+	const hasGovId = $derived(trustTier >= 3);
+	const proofHash = $derived(user?.id ? user.id.slice(0, 8) : null);
 
 	const recipients = $derived(extractRecipientEmails(template?.recipient_config));
 	const recipientConfig = $derived(parseRecipientConfig(template?.recipient_config));
@@ -360,6 +375,51 @@
 	{#if hasResearchLog}
 		<div class="mt-3">
 			<ResearchLog researchLog={template.research_log || []} bind:expanded={showResearchLog} />
+		</div>
+	{/if}
+
+	<!-- Proof footer: attestation carried by the message -->
+	{#if context === 'page' && user}
+		<div class="proof-footer mt-8">
+			<div class="h-px bg-slate-300/50 mb-4"></div>
+			<div class="flex items-baseline gap-1.5 text-[13px]">
+				{#if proofLabel}
+					<span class="font-medium text-emerald-700">{proofLabel}</span>
+					{#if proofLocation}
+						<span class="text-slate-300">·</span>
+						<span class="text-slate-600">{proofLocation}</span>
+					{/if}
+					{#if hasGovId}
+						<span class="text-slate-300">·</span>
+						<span class="text-slate-500">Gov ID</span>
+					{/if}
+				{/if}
+			</div>
+			{#if proofHash}
+				<a
+					href="/v/{proofHash}"
+					class="mt-0.5 block font-mono text-xs text-slate-400 hover:text-slate-600 transition-colors"
+				>
+					commons.email/v/{proofHash}
+				</a>
+			{/if}
+
+			<!-- Inline verification CTA — only when there's a gap to fill -->
+			{#if trustTier < 2 && onVerifyAddress}
+				<button
+					onclick={onVerifyAddress}
+					class="mt-3 min-h-[44px] flex items-center text-[13px] text-emerald-600 hover:text-emerald-700 transition-colors"
+				>
+					Verify your address for district proof →
+				</button>
+			{:else if trustTier >= 2 && trustTier < 3 && onVerifyIdentity}
+				<button
+					onclick={onVerifyIdentity}
+					class="mt-3 min-h-[44px] flex items-center text-[13px] text-emerald-600 hover:text-emerald-700 transition-colors"
+				>
+					Add government ID for unforgeable proof →
+				</button>
+			{/if}
 		</div>
 	{/if}
 </div>

@@ -215,7 +215,7 @@ export interface ProcessedDecisionMaker {
 	recencyCheck?: string; // Explicit recency verification text
 	positionSourceDate?: string; // Date of verification source
 	confidence?: number; // Confidence score 0.0-1.0 based on verification
-	// Email grounding verification
+	// Email verification
 	emailGrounded?: boolean; // true = email found in grounded search results
 	emailSource?: string; // Specific URL where email was found (if grounded)
 	emailSourceTitle?: string; // Title of email source page
@@ -237,8 +237,8 @@ export interface ProcessedDecisionMaker {
 	personalPrompt?: string | null;
 
 	// === Email Deliverability Verification ===
-	/** SMTP verification status from Reacher probe */
-	emailVerified?: 'deliverable' | 'risky' | 'unknown';
+	/** Email verification status from MX check */
+	emailVerified?: 'deliverable' | 'risky';
 }
 
 /**
@@ -353,20 +353,12 @@ export interface RecipientLocation {
 	jurisdiction?: string;
 }
 
-/**
- * Perceptual recipient configuration
- * Encodes power topology for direct recognition
- */
-export interface PerceptualRecipientConfig {
-	/** Power reach type */
+/** Recipient config shape used by the display/card layer. */
+export interface DisplayRecipientConfig {
 	reach: PowerReach;
-	/** Decision-maker identities (for recognition) */
 	decisionMakers?: DecisionMaker[];
-	/** Geographic context (spatial grounding) */
 	location?: RecipientLocation;
-	/** Email addresses (implementation detail) */
 	emails?: string[];
-	/** CWC API routing (congressional) */
 	cwcRouting?: boolean;
 }
 

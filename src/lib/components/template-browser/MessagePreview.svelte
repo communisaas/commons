@@ -4,7 +4,6 @@
 	import { onMount } from 'svelte';
 	import { browser } from '$app/environment';
 	import AnimatedPopover from '$lib/components/ui/AnimatedPopover.svelte';
-	import VerificationBadge from '$lib/components/ui/VerificationBadge.svelte';
 	import type { Template } from '$lib/types/template';
 	import { popover as popoverStore } from '$lib/stores/popover.svelte';
 	import { coordinated, useTimerCleanup } from '$lib/utils/timerCoordinator';
@@ -648,25 +647,15 @@
 	{#if context !== 'page'}
 		{#if template?.subject || template?.title}
 			<div class="mb-5 sm:mb-6">
-				<div class="flex items-start justify-between gap-3">
-					<h2 class="font-brand text-xl font-bold leading-snug tracking-tight text-[var(--text-primary)] sm:text-2xl">
-						{template.title || template.subject}
-					</h2>
-					{#if user?.is_verified}
-						<div class="mt-1 shrink-0">
-							<VerificationBadge size="sm" />
-						</div>
-					{/if}
-				</div>
+				<h2 class="font-brand text-xl font-bold leading-snug tracking-tight text-[var(--text-primary)] sm:text-2xl">
+					{template.title || template.subject}
+				</h2>
 				<div class="card-rule mt-3"></div>
 			</div>
 		{:else}
 			<div class="mb-4 flex shrink-0 items-center gap-2">
 				<Mail class="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
 				<h3 class="font-brand text-base font-medium text-[var(--text-primary)]">Message Preview</h3>
-				{#if user?.is_verified}
-					<VerificationBadge size="sm" />
-				{/if}
 			</div>
 		{/if}
 	{/if}
