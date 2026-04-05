@@ -898,6 +898,9 @@ export const createTemplate = mutation({
       consensusApproved: args.consensusApproved,
       verifiedSends: 0,
       uniqueDistricts: 0,
+      embeddingVersion: "gemini-001",
+      flaggedByModeration: !args.consensusApproved,
+      reputationDelta: 0.0,
       updatedAt: Date.now(),
     } as any);
 
@@ -941,6 +944,14 @@ export const createTemplate = mutation({
 
     const template = await ctx.db.get(templateId);
     return template;
+  },
+});
+
+/** Delete a template by ID (internal only). */
+export const deleteTemplate = internalMutation({
+  args: { templateId: v.id("templates") },
+  handler: async (ctx, { templateId }) => {
+    await ctx.db.delete(templateId);
   },
 });
 
