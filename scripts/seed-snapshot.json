@@ -1,0 +1,2991 @@
+{
+  "va-rural-telehealth-expansion": {
+    "slug": "va-rural-telehealth-expansion",
+    "title": "Bring the telehealth that works to rural clinics",
+    "description": "The Department of Veterans Affairs must fund the expansion of its proven telehealth program to every rural clinic in the country.",
+    "messageBody": "It is frustrating to know that a solution to the rural healthcare crisis already exists, yet it remains out of reach for so many who served. We know that VA telehealth works—it has already served millions and drastically cut wait times—but for a veteran in a remote town, a proven program doesn't matter if it isn't available at their local clinic.\n\n[Personal Connection]\n\nRecent developments show that the technology is ready. In rural Texas, 'hands-on' telehealth is already allowing technicians to use stethoscopes and otoscopes so physicians can hear heart and lung sounds from miles away, removing the burden from veterans who are often older or less tech-savvy [3]. This isn't a pilot project; it is a lifeline that needs to be standard equipment.\n\nThe pressure to close this gap is growing. Just two days ago, the Senate Veterans’ Affairs Committee passed bipartisan legislation that would require the VA to establish these exact types of agreements between VA medical centers and civilian facilities in rural areas [2]. Over 80 members of Congress have already signaled to the Secretary that they expect the Office of Rural Health to prioritize these creative public-private partnerships [4].\n\nYou have the authority to move this forward now. I am asking you to fully implement the proposed telehealth grant program to fund access points in non-VA facilities and eliminate copayments for these vital services [1]. Please don't wait for a mandate to do what we already know works. Expand these partnerships to every rural clinic so that a veteran's zip code no longer determines the quality of their care.\n\n[Name]",
+    "preview": "It is frustrating to know that a solution to the rural healthcare crisis already exists, yet it remains out of reach for so many who served. We know that VA telehealth works—it has already served mill",
+    "category": "healthcare",
+    "topics": [
+      "healthcare",
+      "veterans",
+      "rural-access",
+      "technology"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "cwc",
+    "countryCode": "US",
+    "sources": [
+      {
+        "num": 1,
+        "title": "VA Proposes Expanded Access to Telehealth for Rural Veterans",
+        "url": "https://www.porh.psu.edu/va-proposes-expanded-access-to-telehealth-for-rural-veterans/",
+        "type": "government"
+      },
+      {
+        "num": 2,
+        "title": "Blackburn, Duckworth Bill to Improve Access to Care for Rural Veterans Passes Committee",
+        "url": "https://www.blackburn.senate.gov/2026/4/health%20care/veterans/blackburn-duckworth-bill-to-improve-access-to-care-for-rural-veterans-passes-committee",
+        "type": "legal"
+      },
+      {
+        "num": 3,
+        "title": "Hands-on telehealth helps reach rural Texas communities",
+        "url": "https://www.ksat.com/news/texas/2026/04/02/hands-on-telehealth-helps-reach-rural-texas-communities/",
+        "type": "journalism"
+      },
+      {
+        "num": 4,
+        "title": "Lucas Joins Rep. Jackson Urging Support of Rural Veterans",
+        "url": "https://lucas.house.gov/posts/lucas-joins-rep-jackson-urging-support-of-rural-veterans",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "US healthcare veterans rural-access 2026",
+      "US Bring the telehealth that works to rural clinics",
+      "The Department of Veterans Affairs must fund the expansion of its proven telehealth program to every rural clinic in the"
+    ],
+    "recipientConfig": {
+      "reach": "district-based",
+      "chambers": [
+        "house",
+        "senate"
+      ],
+      "cwcRouting": true,
+      "decisionMakers": [
+        {
+          "name": "Peter Kaboli",
+          "role": "Executive Director, Office of Rural Health",
+          "shortName": "Kaboli",
+          "organization": "U.S. Department of Veterans Affairs",
+          "email": "VAQS@va.gov"
+        },
+        {
+          "name": "M. Christopher Saslo, DNS, ARNP-BC, FAAN",
+          "role": "Assistant Under Secretary for Health for Patient Care Services/Chief Nursing Officer",
+          "shortName": "FAAN",
+          "organization": "Veterans Health Administration",
+          "email": "vhaonsinfo@va.gov"
+        },
+        {
+          "name": "Cynthia Murray, BN, RN, AMB-BC",
+          "role": "VA Nurse President of AAACN, Office of Primary Care",
+          "shortName": "AMB-BC",
+          "organization": "VA Office of Primary Care",
+          "email": "vhaonsinfo@va.gov"
+        }
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "cwc",
+      "formFill": true
+    },
+    "cwcConfig": {
+      "enabled": true,
+      "priority": "normal",
+      "tracking_enabled": true
+    },
+    "contentHash": "d03a4bea4fbfe4874c953a952b0f21818f01639e",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Peter Kaboli",
+        "title": "Executive Director, Office of Rural Health",
+        "organization": "U.S. Department of Veterans Affairs",
+        "email": "VAQS@va.gov",
+        "reasoning": "He leads the VA's portfolio of partnerships and innovation programs specifically designed to increase healthcare access for rural Veterans. His role involves fulfilling a legislative mandate to create and disseminate innovative solutions for rural access challenges system-wide.",
+        "confidence": 0.9
+      },
+      {
+        "name": "M. Christopher Saslo, DNS, ARNP-BC, FAAN",
+        "title": "Assistant Under Secretary for Health for Patient Care Services/Chief Nursing Officer",
+        "organization": "Veterans Health Administration",
+        "email": "vhaonsinfo@va.gov",
+        "reasoning": "Dr. Saslo serves as the principal executive for oversight of both Nursing and Connected Care, the office responsible for VA telehealth. His authority over these two departments makes him the primary decision-maker for integrating telehealth expansion into rural nursing workflows.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Cynthia Murray, BN, RN, AMB-BC",
+        "title": "VA Nurse President of AAACN, Office of Primary Care",
+        "organization": "VA Office of Primary Care",
+        "email": "vhaonsinfo@va.gov",
+        "reasoning": "As a leader in the Office of Primary Care and President of the AAACN, Murray influences the clinical standards for ambulatory and outpatient nursing. Her role is critical for the successful adoption of telehealth technologies in rural community-based clinics.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "US",
+        "displayText": "United States",
+        "scopeLevel": "country",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "federal"
+      }
+    ]
+  },
+  "modernize-coppa-protections": {
+    "slug": "modernize-coppa-protections",
+    "title": "Our children's privacy is still stuck in 1998",
+    "description": "Kids spend 7 hours a day online. Companies harvest 72 million data points per child per year. Federal privacy law hasn't updated since 1998 — COPPA is older than the kids it's supposed to protect.",
+    "messageBody": "It is a disturbing absurdity that the law meant to protect our children online was written in 1998—an era before smartphones, social media, and the constant harvesting of their digital lives. As the FTC recently acknowledged, there has been an 'explosion' in internet-connected technology since COPPA was enacted nearly thirty years ago [1]. Today, COPPA is literally older than the children it is supposed to protect.\n\n[Personal Connection]\n\nWe are currently witnessing the consequences of this frozen-in-time policy. Just last month, legal analysis highlighted how 'kidfluencers' are being pushed to produce hundreds of videos, sometimes working twelve hours a day, seven days a week, with zero compensation and no privacy [2]. Because our frameworks haven't kept pace, we are allowing a new generation of digital exploitation to flourish under the guise of 'content creation.'\n\nThis isn't just about screen time; it is about the mass collection of 'personally identifiable sensitive data,' including geolocation and biometric information, by entities that view our children as data mines rather than people [3]. While the FTC has begun looking into age-verification technologies to bridge this gap [4], the pace of regulation is still losing to the pace of extraction.\n\nI am asking you to move beyond 'reminders' and policy statements. We need aggressive enforcement of existing labor and privacy codes against those exploiting minors for profit, and a modernized federal standard that recognizes the digital realities of 2026. Our children should not be forced to rely on 20th-century protections for 21st-century violations.\n\n[Name]",
+    "preview": "It is a disturbing absurdity that the law meant to protect our children online was written in 1998—an era before smartphones, social media, and the constant harvesting of their digital lives. As the F",
+    "category": "technology",
+    "topics": [
+      "privacy",
+      "internet-safety",
+      "consumer-protection",
+      "technology"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "cwc",
+    "countryCode": "US",
+    "sources": [
+      {
+        "num": 1,
+        "title": "FTC Issues COPPA Policy Statement to Incentivize the Use of Age Verification Technologies to Protect Children Online",
+        "url": "https://www.ftc.gov/news-events/news/press-releases/2026/02/ftc-issues-coppa-policy-statement-incentivize-use-age-verification-technologies-protect-children",
+        "type": "government"
+      },
+      {
+        "num": 2,
+        "title": "Quis Custodiet Ipsos Custodes: Labor & Privacy in the Age of Kidfluencers and the Internet’s Stage Mothers",
+        "url": "https://southerncalifornialawreview.com/2026/03/23/quis-custodiet-ipsos-custodes-labor-privacy-in-the-age-of-kidfluencers-and-the-internets-stage-mothers/",
+        "type": "legal"
+      },
+      {
+        "num": 3,
+        "title": "FTC Reminds Data Brokers of Their Obligations to Comply with PADFAA",
+        "url": "http://ftc.gov/news-events/news/press-releases/2026/02/ftc-reminds-data-brokers-their-obligations-comply-padfaa",
+        "type": "government"
+      },
+      {
+        "num": 4,
+        "title": "Enforcement Policy Statement Promoting the Adoption of Age-Verification Technology",
+        "url": "http://www.business.ftc.gov/legal-library/browse/enforcement-policy-statement-promoting-adoption-age-verification-technology",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "US privacy internet-safety consumer-protection 2026",
+      "US Our children's privacy is still stuck in 1998",
+      "Kids spend 7 hours a day online. Companies harvest 72 million data points per child per year. Federal privacy law hasn't"
+    ],
+    "recipientConfig": {
+      "reach": "district-based",
+      "chambers": [
+        "house",
+        "senate"
+      ],
+      "cwcRouting": true,
+      "decisionMakers": [
+        {
+          "name": "Rob Bonta",
+          "role": "Attorney General",
+          "shortName": "Bonta",
+          "organization": "California Department of Justice",
+          "email": "EERROffice@doj.ca.gov"
+        },
+        {
+          "name": "Linda E. McMahon",
+          "role": "Secretary of Education",
+          "shortName": "McMahon",
+          "organization": "U.S. Department of Education",
+          "email": "SAOP@ed.gov"
+        },
+        {
+          "name": "Russell Vought",
+          "role": "Acting Director",
+          "shortName": "Vought",
+          "organization": "Consumer Financial Protection Bureau",
+          "email": "invitations2cfpb@consumerfinance.gov"
+        },
+        {
+          "name": "Geoffrey Gradler",
+          "role": "Deputy Director",
+          "shortName": "Gradler",
+          "organization": "Consumer Financial Protection Bureau",
+          "email": "invitations2cfpb@consumerfinance.gov"
+        },
+        {
+          "name": "Deborah Morris",
+          "role": "Principal Deputy Enforcement Director",
+          "shortName": "Morris",
+          "organization": "Consumer Financial Protection Bureau",
+          "email": "invitations2cfpb@consumerfinance.gov"
+        },
+        {
+          "name": "Chris Chilbert",
+          "role": "Chief Information Officer",
+          "shortName": "Chilbert",
+          "organization": "Consumer Financial Protection Bureau",
+          "email": "invitations2cfpb@consumerfinance.gov"
+        },
+        {
+          "name": "Ann Epstein",
+          "role": "Assistant Director, Office of Competition and Innovation",
+          "shortName": "Epstein",
+          "organization": "Consumer Financial Protection Bureau",
+          "email": "invitations2cfpb@consumerfinance.gov"
+        },
+        {
+          "name": "Arielle Roth",
+          "role": "Assistant Secretary of Commerce for Communications and Information",
+          "shortName": "Roth",
+          "organization": "National Telecommunications and Information Administration (NTIA)",
+          "email": "press@ntia.gov"
+        },
+        {
+          "name": "Office of the Surgeon General",
+          "role": "U.S. Surgeon General",
+          "shortName": "General",
+          "organization": "U.S. Department of Health and Human Services (HHS)",
+          "email": "surgeongeneral@hhs.gov"
+        },
+        {
+          "name": "Andrew N. Ferguson",
+          "role": "Chairman",
+          "shortName": "Ferguson",
+          "organization": "Federal Trade Commission",
+          "email": "opa@ftc.gov"
+        },
+        {
+          "name": "Mark R. Meador",
+          "role": "Commissioner",
+          "shortName": "Meador",
+          "organization": "Federal Trade Commission",
+          "email": "opa@ftc.gov"
+        }
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "cwc",
+      "formFill": true
+    },
+    "cwcConfig": {
+      "enabled": true,
+      "priority": "normal",
+      "tracking_enabled": true
+    },
+    "contentHash": "8f50867f647479a6cffa78cb519bdc73c4997cfd",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Rob Bonta",
+        "title": "Attorney General",
+        "organization": "California Department of Justice",
+        "email": "EERROffice@doj.ca.gov",
+        "reasoning": "As the Attorney General of California, he oversees the enforcement of the California Consumer Privacy Act and the Age-Appropriate Design Code. His office holds unique leverage over major tech companies headquartered in his state, effectively setting national standards for children's digital safety.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Linda E. McMahon",
+        "title": "Secretary of Education",
+        "organization": "U.S. Department of Education",
+        "email": "SAOP@ed.gov",
+        "reasoning": "She leads the federal department responsible for the Family Educational Rights and Privacy Act, which protects student data in schools. Her authority is central to regulating how educational technology companies harvest and use data from children in the classroom.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Russell Vought",
+        "title": "Acting Director",
+        "organization": "Consumer Financial Protection Bureau",
+        "email": "invitations2cfpb@consumerfinance.gov",
+        "reasoning": "He directs the agency responsible for protecting consumers from unfair data practices and digital surveillance. His leadership determines how the bureau addresses the commercialization of personal data by data brokers and tech firms.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Geoffrey Gradler",
+        "title": "Deputy Director",
+        "organization": "Consumer Financial Protection Bureau",
+        "email": "invitations2cfpb@consumerfinance.gov",
+        "reasoning": "As the Deputy Director and Private Education Loan Ombudsman, he has direct oversight of financial products and data practices affecting students and young consumers. He serves as a critical gatekeeper for policies involving the digital lives of younger populations.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Deborah Morris",
+        "title": "Principal Deputy Enforcement Director",
+        "organization": "Consumer Financial Protection Bureau",
+        "email": "invitations2cfpb@consumerfinance.gov",
+        "reasoning": "She holds a senior leadership role in the Enforcement division, which is responsible for investigating and prosecuting companies that violate consumer privacy laws. Her authority is essential for holding tech companies accountable for illegal data harvesting.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Chris Chilbert",
+        "title": "Chief Information Officer",
+        "organization": "Consumer Financial Protection Bureau",
+        "email": "invitations2cfpb@consumerfinance.gov",
+        "reasoning": "He leads the Office of Technology and Innovation, providing the technical expertise necessary to regulate digital surveillance and data harvesting. His office is central to the bureau's ability to understand and mitigate modern technological threats to privacy.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Ann Epstein",
+        "title": "Assistant Director, Office of Competition and Innovation",
+        "organization": "Consumer Financial Protection Bureau",
+        "email": "invitations2cfpb@consumerfinance.gov",
+        "reasoning": "Her office focuses on the intersection of market competition and technological innovation, where data harvesting is often used to gain unfair advantages. She influences how the bureau regulates the data-driven business models of major technology firms.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Arielle Roth",
+        "title": "Assistant Secretary of Commerce for Communications and Information",
+        "organization": "National Telecommunications and Information Administration (NTIA)",
+        "email": "press@ntia.gov",
+        "reasoning": "As the Administrator of the NTIA, Roth is the President's principal advisor on internet and communications policy. She oversees studies and policy recommendations regarding data use and digital privacy standards.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Office of the Surgeon General",
+        "title": "U.S. Surgeon General",
+        "organization": "U.S. Department of Health and Human Services (HHS)",
+        "email": "surgeongeneral@hhs.gov",
+        "reasoning": "The Surgeon General's office frames data harvesting and digital privacy as a national public health issue, particularly regarding youth mental health. This role provides high-level amplification and influences executive branch policy priorities.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Andrew N. Ferguson",
+        "title": "Chairman",
+        "organization": "Federal Trade Commission",
+        "email": "opa@ftc.gov",
+        "reasoning": "As the Chairman of the FTC, Ferguson leads the primary agency responsible for enforcing COPPA and protecting children's digital privacy. He has the authority to initiate rulemaking to modernize privacy standards for tech platforms and oversee investigations into data harvesting practices.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Mark R. Meador",
+        "title": "Commissioner",
+        "organization": "Federal Trade Commission",
+        "email": "opa@ftc.gov",
+        "reasoning": "Meador is an FTC Commissioner who works alongside the Chairman to vote on enforcement actions and policy statements regarding consumer protection. His role gives him direct authority over the agency's strategy for addressing the data privacy gap for minors.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "US",
+        "displayText": "United States",
+        "scopeLevel": "country",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "federal"
+      }
+    ]
+  },
+  "oregon-treatment-not-prison": {
+    "slug": "oregon-treatment-not-prison",
+    "title": "Choose treatment that works over the high cost of prison",
+    "description": "The State of Oregon must prioritize investment in drug treatment courts over incarceration to save taxpayer money and keep families together.",
+    "messageBody": "It is heartbreaking to watch our state choose the most expensive way to fail families. When we send someone to prison for a drug-related offense, we aren’t just spending taxpayer dollars; we are paying a premium to ensure a family is broken and a cycle of recidivism continues, even when a cheaper, more effective path is right in front of us.\n\n[Personal Connection]\n\nThe fiscal reality is staggering. In Oregon, it costs approximately $184 per day—$67,273 a year—to incarcerate one person [1]. By contrast, the Family Sentencing Alternative Program (FSAP) operates at just $27 per day, or $9,855 annually [1]. We are choosing to spend nearly seven times more money for a process that often yields worse outcomes. Even new digital recovery ecosystems supported by courts can deliver results for as little as $1,800 per year, compared to the $36,500 to $73,000 we waste on a single year of jail time [2].\n\nEven those who prioritize traditional law enforcement and 'stopping crime' acknowledge that the 'poison of fentanyl and addiction' must be confronted directly [4]. The federal government is already moving to provide resources to combat this crisis [3], but Oregon must decide how to use its own power. We cannot afford—morally or financially—to keep choosing incarceration over the treatment courts that actually keep our neighbors stable and our families together.\n\nI am asking you to prioritize and expand funding for drug treatment courts and alternative sentencing programs like FSAP in the current budget. Please choose the investment that saves both money and lives.\n\n[Name]",
+    "preview": "It is heartbreaking to watch our state choose the most expensive way to fail families. When we send someone to prison for a drug-related offense, we aren’t just spending taxpayer dollars; we are payin",
+    "category": "criminal-justice",
+    "topics": [
+      "addiction",
+      "criminal justice",
+      "public spending"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "email",
+    "countryCode": "US",
+    "sources": [
+      {
+        "num": 1,
+        "title": "2026 Legislative Priorities - Partnership for Safety and Justice",
+        "url": "https://safetyandjustice.org/2026priorities/",
+        "type": "advocacy"
+      },
+      {
+        "num": 2,
+        "title": "New Analysis Shows Court-Supported Digital Recovery Delivers Outcomes at a Fraction of the Cost of Traditional Care - Wellness News Today - EIN Presswire",
+        "url": "https://wellness.einnews.com/pr_news/889138780/new-analysis-shows-court-supported-digital-recovery-delivers-outcomes-at-a-fraction-of-the-cost-of-traditional-care",
+        "type": "journalism"
+      },
+      {
+        "num": 3,
+        "title": "Majority News Release | Majority News Releases | News | United States Senate Committee on Appropriations",
+        "url": "https://www.appropriations.senate.gov/news/majority/congress-approves-fy-2026-commerce-justice-and-science-appropriations-bill",
+        "type": "government"
+      },
+      {
+        "num": 4,
+        "title": "Committee Releases FY26 Commerce, Justice, Science, and Related Agencies Appropriations Bill | House Committee on Appropriations - Republicans",
+        "url": "http://appropriations.house.gov/news/press-releases/committee-releases-fy26-commerce-justice-science-and-related-agencies",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "OR addiction criminal justice public spending 2026",
+      "OR Choose treatment that works over the high cost of prison",
+      "The State of Oregon must prioritize investment in drug treatment courts over incarceration to save taxpayer money and ke"
+    ],
+    "recipientConfig": {
+      "reach": "location-specific",
+      "decisionMakers": [
+        {
+          "name": "Nathan Vasquez",
+          "role": "District Attorney",
+          "shortName": "Vasquez",
+          "organization": "Multnomah County District Attorney's Office",
+          "email": "DA@mcda.us"
+        },
+        {
+          "name": "John Wentworth",
+          "role": "President",
+          "shortName": "Wentworth",
+          "organization": "Oregon District Attorneys Association",
+          "email": "ExecutiveDirector@oregonda.org"
+        },
+        {
+          "name": "Bryan Brock",
+          "role": "Executive Director",
+          "shortName": "Brock",
+          "organization": "Oregon District Attorneys Association",
+          "email": "ExecutiveDirector@oregonda.org"
+        },
+        {
+          "name": "Kevin Barton",
+          "role": "Director",
+          "shortName": "Barton",
+          "organization": "Oregon District Attorneys Association",
+          "email": "ExecutiveDirector@oregonda.org"
+        },
+        {
+          "name": "Paige Clarkson",
+          "role": "Director",
+          "shortName": "Clarkson",
+          "organization": "Oregon District Attorneys Association",
+          "email": "ExecutiveDirector@oregonda.org"
+        },
+        {
+          "name": "Tina Kotek",
+          "role": "Governor",
+          "shortName": "Kotek",
+          "organization": "State of Oregon",
+          "email": "Governor.Kotek@oregon.gov"
+        },
+        {
+          "name": "Sejal Hathi",
+          "role": "Director",
+          "shortName": "Hathi",
+          "organization": "Oregon Health Authority",
+          "email": "OHA.DirectorsOffice@odhsoha.oregon.gov"
+        },
+        {
+          "name": "Floyd Prozanski",
+          "role": "Chair, Senate Judiciary Committee",
+          "shortName": "Prozanski",
+          "organization": "Oregon State Senate",
+          "email": "Sen.FloydProzanski@oregonlegislature.gov"
+        },
+        {
+          "name": "Mike Reese",
+          "role": "Director",
+          "shortName": "Reese",
+          "organization": "Oregon Department of Corrections",
+          "email": "DOC.Info@doc.oregon.gov"
+        },
+        {
+          "name": "Heidi Steward",
+          "role": "Deputy Director",
+          "shortName": "Steward",
+          "organization": "Oregon Department of Corrections",
+          "email": "DOC.Info@doc.oregon.gov"
+        },
+        {
+          "name": "Jason Kropf",
+          "role": "Chair, House Judiciary Committee",
+          "shortName": "Kropf",
+          "organization": "Oregon House of Representatives",
+          "email": "leg.helpdesk@oregonlegislature.gov"
+        }
+      ],
+      "emails": [
+        "DA@mcda.us",
+        "ExecutiveDirector@oregonda.org",
+        "ExecutiveDirector@oregonda.org",
+        "ExecutiveDirector@oregonda.org",
+        "ExecutiveDirector@oregonda.org",
+        "Governor.Kotek@oregon.gov",
+        "OHA.DirectorsOffice@odhsoha.oregon.gov",
+        "Sen.FloydProzanski@oregonlegislature.gov",
+        "DOC.Info@doc.oregon.gov",
+        "DOC.Info@doc.oregon.gov",
+        "leg.helpdesk@oregonlegislature.gov"
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "email"
+    },
+    "contentHash": "97f07388af1761e4290c78fe299be3075f14089b",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Nathan Vasquez",
+        "title": "District Attorney",
+        "organization": "Multnomah County District Attorney's Office",
+        "email": "DA@mcda.us",
+        "reasoning": "He serves as the top prosecutor for Oregon's most populous county and acts as a primary gatekeeper for deciding whether to pursue incarceration or offer treatment-based diversions. His office's budget priorities specifically emphasize the use of specialty courts to address the root causes of criminal behavior like addiction.",
+        "confidence": 0.9
+      },
+      {
+        "name": "John Wentworth",
+        "title": "President",
+        "organization": "Oregon District Attorneys Association",
+        "email": "ExecutiveDirector@oregonda.org",
+        "reasoning": "In his role as President, he leads the collective advocacy efforts of state prosecutors and influences legislative policy regarding sentencing and treatment. He also serves as the District Attorney for Clackamas County, giving him direct authority over local diversion programs and resource allocation.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Bryan Brock",
+        "title": "Executive Director",
+        "organization": "Oregon District Attorneys Association",
+        "email": "ExecutiveDirector@oregonda.org",
+        "reasoning": "He manages the daily operations and advocacy missions of the state's district attorney association, serving as a critical gatekeeper for policy communications and legislative engagement. His role is central to coordinating the association's stance on criminal justice spending and treatment-first initiatives.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Kevin Barton",
+        "title": "Director",
+        "organization": "Oregon District Attorneys Association",
+        "email": "ExecutiveDirector@oregonda.org",
+        "reasoning": "As the District Attorney for Washington County and a director of the state association, he holds significant jurisdictional power over one of Oregon's largest metropolitan areas. His decisions on prosecution and diversion directly impact the state's balance between incarceration and treatment.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Paige Clarkson",
+        "title": "Director",
+        "organization": "Oregon District Attorneys Association",
+        "email": "ExecutiveDirector@oregonda.org",
+        "reasoning": "She serves as the District Attorney for Marion County, the seat of the state government, and influences statewide prosecutorial policy through her leadership role in the ODAA. Her office is a key stakeholder in implementing treatment-focused reforms that align with state legislative goals.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Tina Kotek",
+        "title": "Governor",
+        "organization": "State of Oregon",
+        "email": "Governor.Kotek@oregon.gov",
+        "reasoning": "As the state's chief executive, she sets the executive budget priorities and has the authority to shift the state's criminal justice philosophy toward treatment. Her office oversees the Behavioral Health Initiative, which is central to providing alternatives to incarceration.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Sejal Hathi",
+        "title": "Director",
+        "organization": "Oregon Health Authority",
+        "email": "OHA.DirectorsOffice@odhsoha.oregon.gov",
+        "reasoning": "As Director of the Oregon Health Authority, she oversees the funding and certification of addiction treatment providers that drug courts rely on to be effective alternatives to prison. Her leadership is essential for scaling the healthcare infrastructure needed to support a treatment-first approach to criminal justice.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Floyd Prozanski",
+        "title": "Chair, Senate Judiciary Committee",
+        "organization": "Oregon State Senate",
+        "email": "Sen.FloydProzanski@oregonlegislature.gov",
+        "reasoning": "He chairs the Senate Judiciary Committee, making him a primary gatekeeper for legislation regarding sentencing guidelines and the legal framework for specialty courts. His influence determines the legislative priority given to criminal justice reforms that favor treatment over incarceration.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Mike Reese",
+        "title": "Director",
+        "organization": "Oregon Department of Corrections",
+        "email": "DOC.Info@doc.oregon.gov",
+        "reasoning": "As the head of the state's prison system, he manages the costs of incarceration and has a direct interest in reducing institutional overcrowding through diversion programs. His advocacy for drug courts can shift departmental resources toward rehabilitation and community-based alternatives.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Heidi Steward",
+        "title": "Deputy Director",
+        "organization": "Oregon Department of Corrections",
+        "email": "DOC.Info@doc.oregon.gov",
+        "reasoning": "As a top executive at the Department of Corrections, she is responsible for implementing evidence-based practices and presenting system assessments to legislative committees. Her role is pivotal in transitioning the department's focus toward gender-responsive and trauma-informed treatment models.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Jason Kropf",
+        "title": "Chair, House Judiciary Committee",
+        "organization": "Oregon House of Representatives",
+        "email": "leg.helpdesk@oregonlegislature.gov",
+        "reasoning": "As Chair of the House Judiciary Committee, he oversees the legislative process for criminal justice bills and receives direct testimony on the effectiveness of prison alternatives. His committee's approval is necessary for any statutory changes that prioritize treatment funding over incarceration.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "US",
+        "regionCode": "OR",
+        "displayText": "Oregon",
+        "scopeLevel": "region",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "state",
+        "stateCode": "OR"
+      }
+    ]
+  },
+  "portland-affordable-home-bans": {
+    "slug": "portland-affordable-home-bans",
+    "title": "Stop blocking the homes we can actually afford",
+    "description": "The City of Portland must remove the regulatory barriers to 3D-printed housing and community land trusts to provide homes at a fraction of traditional construction costs.",
+    "messageBody": "It is exhausting to watch the cost of a standard home climb toward half a million dollars while knowing that 3D-printed homes can be built for a fraction of that cost. We are living through a housing crisis where the technology to solve it exists, but the rules to allow it don't. It feels like we are choosing bureaucratic inertia over actual roofs. \n\n[Personal Connection]\n\nLast month, the City Council took a vital step by voting unanimously to rezone properties specifically to support the community land trust model [1]. As the city noted, these zoning map changes are essential to 'avoid going through a lengthy and uncertain and expensive land use process and get to construction faster' [1]. But rezoning is only half the battle if the building codes themselves remain a barrier to innovation.\n\nThe city's ongoing Affordable Housing Opportunities Project aims to support non-profit partners by 'reducing zoning designation barriers' [2], and the Housing Bonus Alignment Project is currently proposing code changes to increase production [4]. However, we need to move faster. Even at the federal level, recent guidance directs officials to eliminate 'arbitrary or unreasonable building code standards' that hinder alternative construction methods [3].\n\nMayor Wilson, Director Kutch, and Ms. Didion: I am asking you to proactively clear the path for 3D-printed housing and expand the land trust model. Please ensure that our permitting and development standards reflect the urgency of this crisis. We have the tools to make Portland affordable; we just need you to stop the regulations from blocking them.\n\n[Name]",
+    "preview": "It is exhausting to watch the cost of a standard home climb toward half a million dollars while knowing that 3D-printed homes can be built for a fraction of that cost. We are living through a housing",
+    "category": "housing",
+    "topics": [
+      "housing",
+      "zoning",
+      "affordability"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "email",
+    "countryCode": "US",
+    "sources": [
+      {
+        "num": 1,
+        "title": "City Council votes unanimously to rezone select properties to support affordable housing production",
+        "url": "https://www.portland.gov/bps/planning/affordable-housing/news/2026/2/25/city-council-votes-unanimously-rezone-select",
+        "type": "government"
+      },
+      {
+        "num": 2,
+        "title": "Affordable Housing Opportunities Project",
+        "url": "https://www.portland.gov/bps/planning/affordable-housing",
+        "type": "government"
+      },
+      {
+        "num": 3,
+        "title": "Executive Order Aims to Remove Regulatory Barriers to Affordable Housing Development",
+        "url": "https://www.lmc.org/news-publications/news/all/executive-order-aims-to-remove-regulatory-barriers-to-affordable-housing-development/",
+        "type": "government"
+      },
+      {
+        "num": 4,
+        "title": "Housing Bonus Alignment Project",
+        "url": "https://www.portland.gov/bps/planning/housing-bonus-alignment",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "Portland OR housing zoning affordability 2026",
+      "Portland OR Stop blocking the homes we can actually afford",
+      "The City of Portland must remove the regulatory barriers to 3D-printed housing and community land trusts to provide home"
+    ],
+    "recipientConfig": {
+      "reach": "location-specific",
+      "decisionMakers": [
+        {
+          "name": "Eric Kutch",
+          "role": "Director",
+          "shortName": "Kutch",
+          "organization": "Portland Permitting & Development",
+          "email": "ppd@portlandoregon.gov"
+        },
+        {
+          "name": "Natalie Didion",
+          "role": "City Building Official",
+          "shortName": "Didion",
+          "organization": "Portland Permitting & Development",
+          "email": "311@portlandoregon.gov"
+        },
+        {
+          "name": "Keith Wilson",
+          "role": "Mayor",
+          "shortName": "Wilson",
+          "organization": "City of Portland",
+          "email": "Mayor@portlandoregon.gov"
+        }
+      ],
+      "emails": [
+        "ppd@portlandoregon.gov",
+        "311@portlandoregon.gov",
+        "Mayor@portlandoregon.gov"
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "email"
+    },
+    "contentHash": "55d6cb0cbfd65dcda9c151dddee4d595d4cb6f12",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Eric Kutch",
+        "title": "Director",
+        "organization": "Portland Permitting & Development",
+        "email": "ppd@portlandoregon.gov",
+        "reasoning": "As the Director of the bureau responsible for building codes and permit approvals, Kutch has the authority to streamline the regulatory path for non-traditional construction methods like 3D printing. His leadership is central to modernizing the permitting system to support innovative housing and economic development goals.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Natalie Didion",
+        "title": "City Building Official",
+        "organization": "Portland Permitting & Development",
+        "email": "311@portlandoregon.gov",
+        "reasoning": "As the City Building Official, she holds the ultimate technical authority to approve non-standard building materials and construction methods like 3D-printed concrete. Her office evaluates whether these innovations meet safety standards, making her the primary gatekeeper for scaling affordable 3D-printed housing in Portland.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Keith Wilson",
+        "title": "Mayor",
+        "organization": "City of Portland",
+        "email": "Mayor@portlandoregon.gov",
+        "reasoning": "The Mayor sets the city's overall housing agenda and directs bureau priorities, holding the executive authority to champion emergency ordinances for alternative housing technologies. He is currently focused on ending unsheltered homelessness through innovative shelter and housing models.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "US",
+        "regionCode": "OR",
+        "localityCode": "Portland",
+        "displayText": "Portland, OR",
+        "scopeLevel": "locality",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "city",
+        "stateCode": "OR",
+        "cityName": "Portland"
+      }
+    ]
+  },
+  "parks-canada-maintenance-neglect": {
+    "slug": "parks-canada-maintenance-neglect",
+    "title": "Our parks pay for themselves yet continue to decay",
+    "description": "The federal government must reinvest the massive revenue generated by visitors into fixing the crumbling infrastructure across Parks Canada sites.",
+    "messageBody": "It is difficult to reconcile the fact that Canada’s national parks generate $3.3 billion in visitor spending on a $900 million budget—a 3.6x return—while the government allows a $3.6 billion maintenance backlog to persist. We are witnessing a fiscal absurdity: a premier national asset that literally pays for itself is being left to crumble. \n\n[Personal Connection]\n\nWhen I see the state of our facilities, it doesn’t just feel like a lack of funding; it feels like a lack of vision. While Canada manages a staggering backlog of repairs, other jurisdictions are treating nature as the critical infrastructure it is. For example, the Wildlife Conservation Board in California recently approved nearly $60 million in grants specifically to protect biodiversity and improve public access [2]. They are also utilizing dedicated funding streams to award over $54 million for coastal resilience and restoration projects [3]. \n\nEven in the realm of transportation and conservation, our competitors are moving forward while we stall. California is currently completing the world’s largest wildlife crossing with an $18.8 million allocation from a program designed specifically to mitigate the environmental impacts of infrastructure [1]. These are the investments of a country that understands its natural assets are its most valuable economic engine.\n\nI am asking you to address this imbalance by creating a dedicated reinvestment strategy that directs visitor-generated revenue back into the parks themselves. We cannot continue to treat our parks as a revenue source while neglecting the very foundations that make them accessible. Please prioritize the elimination of the maintenance backlog in the next budget cycle to ensure our parks remain viable for both the environment and our economy.\n\n[Name]",
+    "preview": "It is difficult to reconcile the fact that Canada’s national parks generate $3.3 billion in visitor spending on a $900 million budget—a 3.6x return—while the government allows a $3.6 billion maintenan",
+    "category": "environment",
+    "topics": [
+      "conservation",
+      "infrastructure",
+      "public lands",
+      "tourism"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "email",
+    "countryCode": "CA",
+    "sources": [
+      {
+        "num": 1,
+        "title": "California closes in on completing the world’s largest wildlife crossing | Governor of California",
+        "url": "https://www.gov.ca.gov/2026/02/02/california-closes-in-on-completing-the-worlds-largest-wildlife-crossing/",
+        "type": "government"
+      },
+      {
+        "num": 2,
+        "title": "California approves $60 million for biodiversity projects and public access to nature | Governor of California",
+        "url": "https://www.gov.ca.gov/2026/02/27/california-approves-60-million-for-biodiversity-projects-and-public-access-to-nature/",
+        "type": "government"
+      },
+      {
+        "num": 3,
+        "title": "News Release: Coastal Conservancy awards over $54 million for Coastal Resilience, Restoration, and Public Access – California State Coastal Conservancy",
+        "url": "https://scc.ca.gov/2026/02/19/news-release-coastal-conservancy-awards-over-54-million-for-coastal-resilience-restoration-and-public-access/",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "CA conservation infrastructure public lands 2026",
+      "CA Our parks pay for themselves yet continue to decay",
+      "The federal government must reinvest the massive revenue generated by visitors into fixing the crumbling infrastructure"
+    ],
+    "recipientConfig": {
+      "reach": "location-specific",
+      "decisionMakers": [
+        {
+          "name": "Karen Hogan",
+          "role": "Auditor General of Canada",
+          "shortName": "Hogan",
+          "organization": "Office of the Auditor General of Canada",
+          "email": "sonia.ianni-lucio@oag-bvg.gc.ca"
+        },
+        {
+          "name": "Sébastien Benedict",
+          "role": "President and CEO",
+          "shortName": "Benedict",
+          "organization": "Tourism Industry Association of Canada",
+          "email": "contact@tiac-aitc.ca"
+        },
+        {
+          "name": "Sandra Schwartz",
+          "role": "National Executive Director",
+          "shortName": "Schwartz",
+          "organization": "Canadian Parks and Wilderness Society",
+          "email": "info@cpaws.org"
+        },
+        {
+          "name": "Jerry V. DeMarco",
+          "role": "Commissioner of the Environment and Sustainable Development",
+          "shortName": "DeMarco",
+          "organization": "Office of the Auditor General of Canada",
+          "email": "communications@oag-bvg.gc.ca"
+        },
+        {
+          "name": "Chris Rider",
+          "role": "National Director, Conservation",
+          "shortName": "Rider",
+          "organization": "Canadian Parks and Wilderness Society",
+          "email": "info@cpaws.org"
+        },
+        {
+          "name": "Christopher Jones",
+          "role": "Vice-President Public Affairs",
+          "shortName": "Jones",
+          "organization": "Tourism Industry Association of Canada",
+          "email": "contact@tiac-aitc.ca"
+        },
+        {
+          "name": "Andrew Hayes",
+          "role": "Deputy Auditor General",
+          "shortName": "Hayes",
+          "organization": "Office of the Auditor General of Canada",
+          "email": "communications@oag-bvg.gc.ca"
+        },
+        {
+          "name": "Jennifer-Lee Thomas",
+          "role": "National Director, Communications & Philanthropy",
+          "shortName": "Thomas",
+          "organization": "Canadian Parks and Wilderness Society",
+          "email": "info@cpaws.org"
+        },
+        {
+          "name": "Shafqat Ali",
+          "role": "President of the Treasury Board",
+          "shortName": "Ali",
+          "organization": "Treasury Board of Canada Secretariat",
+          "email": "mohammad.kamal@tbs-sct.gc.ca"
+        },
+        {
+          "name": "Shannon Miedema",
+          "role": "Chair, Standing Committee on Environment and Sustainable Development",
+          "shortName": "Miedema",
+          "organization": "House of Commons",
+          "email": "ENVI@parl.gc.ca"
+        },
+        {
+          "name": "Rechie Valdez",
+          "role": "Minister of Tourism",
+          "shortName": "Valdez",
+          "organization": "Innovation, Science and Economic Development Canada",
+          "email": "rechie.valdez@parl.gc.ca"
+        },
+        {
+          "name": "Tom Osborne",
+          "role": "Parliamentary Secretary to the President of the Treasury Board",
+          "shortName": "Osborne",
+          "organization": "Treasury Board of Canada Secretariat",
+          "email": "media@tbs-sct.gc.ca"
+        },
+        {
+          "name": "Ellis Ross",
+          "role": "Vice-Chair, Standing Committee on Environment and Sustainable Development",
+          "shortName": "Ross",
+          "organization": "House of Commons",
+          "email": "ENVI@parl.gc.ca"
+        },
+        {
+          "name": "Julie Aviva Dabrusin",
+          "role": "Minister of Environment, Climate Change and Nature",
+          "shortName": "Dabrusin",
+          "organization": "Environment and Climate Change Canada",
+          "email": "julie.dabrusin@parl.gc.ca"
+        }
+      ],
+      "emails": [
+        "sonia.ianni-lucio@oag-bvg.gc.ca",
+        "contact@tiac-aitc.ca",
+        "info@cpaws.org",
+        "communications@oag-bvg.gc.ca",
+        "info@cpaws.org",
+        "contact@tiac-aitc.ca",
+        "communications@oag-bvg.gc.ca",
+        "info@cpaws.org",
+        "mohammad.kamal@tbs-sct.gc.ca",
+        "ENVI@parl.gc.ca",
+        "rechie.valdez@parl.gc.ca",
+        "media@tbs-sct.gc.ca",
+        "ENVI@parl.gc.ca",
+        "julie.dabrusin@parl.gc.ca"
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "email"
+    },
+    "contentHash": "c2cef62ce2c902bcee46b5ccf8e8d0d677ffccca",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Karen Hogan",
+        "title": "Auditor General of Canada",
+        "organization": "Office of the Auditor General of Canada",
+        "email": "sonia.ianni-lucio@oag-bvg.gc.ca",
+        "reasoning": "As the independent officer of Parliament, she has the authority to conduct performance audits on Parks Canada's infrastructure management. Her findings provide the objective evidence required to hold the government accountable for the state of park decay and the use of visitor revenue.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Sébastien Benedict",
+        "title": "President and CEO",
+        "organization": "Tourism Industry Association of Canada",
+        "email": "contact@tiac-aitc.ca",
+        "reasoning": "He leads the primary advocacy body for Canada's tourism sector, which relies heavily on the quality of national park infrastructure to attract visitors. He serves as a critical coalition partner to lobby the federal government for reinvestment based on the economic return generated by these sites.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Sandra Schwartz",
+        "title": "National Executive Director",
+        "organization": "Canadian Parks and Wilderness Society",
+        "email": "info@cpaws.org",
+        "reasoning": "She directs the leading non-profit dedicated to wilderness protection and is a key voice in linking infrastructure maintenance to ecological integrity. Her organization mobilizes public support to pressure the government to prioritize conservation-focused reinvestment in the park system.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Jerry V. DeMarco",
+        "title": "Commissioner of the Environment and Sustainable Development",
+        "organization": "Office of the Auditor General of Canada",
+        "email": "communications@oag-bvg.gc.ca",
+        "reasoning": "He is the primary official responsible for auditing the federal government's environmental performance and sustainable development strategies. His specific mandate includes evaluating how well Parks Canada protects ecological integrity while managing public infrastructure.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Chris Rider",
+        "title": "National Director, Conservation",
+        "organization": "Canadian Parks and Wilderness Society",
+        "email": "info@cpaws.org",
+        "reasoning": "He oversees the technical conservation strategies for CPAWS and advocates for the protection of public lands. He is a key decision-maker in determining which infrastructure projects align with or threaten conservation goals within the national park system.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Christopher Jones",
+        "title": "Vice-President Public Affairs",
+        "organization": "Tourism Industry Association of Canada",
+        "email": "contact@tiac-aitc.ca",
+        "reasoning": "As a senior lobbyist for TIAC, he specifically advocates for improvements to physical infrastructure and travel facilitation at federal sites. He is directly involved in negotiating for infrastructure funding to ensure Canadian tourism products remain modern and attractive.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Andrew Hayes",
+        "title": "Deputy Auditor General",
+        "organization": "Office of the Auditor General of Canada",
+        "email": "communications@oag-bvg.gc.ca",
+        "reasoning": "He leads the legal and audit teams that investigate government program delivery and has previously directed performance audits on the environment. His institutional knowledge of federal sustainable development mandates makes him a critical gatekeeper for infrastructure audits.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Jennifer-Lee Thomas",
+        "title": "National Director, Communications & Philanthropy",
+        "organization": "Canadian Parks and Wilderness Society",
+        "email": "info@cpaws.org",
+        "reasoning": "She controls the public messaging and branding that highlights the decay of park infrastructure to the Canadian public. Her role is essential for amplifying advocacy efforts and building the public pressure needed to influence federal reinvestment decisions.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Shafqat Ali",
+        "title": "President of the Treasury Board",
+        "organization": "Treasury Board of Canada Secretariat",
+        "email": "mohammad.kamal@tbs-sct.gc.ca",
+        "reasoning": "He holds the ultimate authority over the approval of capital expenditures and the allocation of federal funds for infrastructure projects. His decisions directly determine whether Parks Canada receives the necessary reinvestment to address its maintenance backlog.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Shannon Miedema",
+        "title": "Chair, Standing Committee on Environment and Sustainable Development",
+        "organization": "House of Commons",
+        "email": "ENVI@parl.gc.ca",
+        "reasoning": "She leads the parliamentary committee with direct oversight of Parks Canada's operations and environmental conservation efforts. Her leadership is essential for launching formal inquiries into the state of park infrastructure and recommending funding increases.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Rechie Valdez",
+        "title": "Minister of Tourism",
+        "organization": "Innovation, Science and Economic Development Canada",
+        "email": "rechie.valdez@parl.gc.ca",
+        "reasoning": "She represents the tourism sector's interests within the cabinet and advocates for the infrastructure that supports Canada's competitive edge in global tourism. Her support is necessary to link park conservation with economic growth and visitor revenue.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Tom Osborne",
+        "title": "Parliamentary Secretary to the President of the Treasury Board",
+        "organization": "Treasury Board of Canada Secretariat",
+        "email": "media@tbs-sct.gc.ca",
+        "reasoning": "He assists the President of the Treasury Board in managing government spending and infrastructure approvals. He serves as a key point of contact for parliamentary matters related to the Secretariat's budget decisions.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Ellis Ross",
+        "title": "Vice-Chair, Standing Committee on Environment and Sustainable Development",
+        "organization": "House of Commons",
+        "email": "ENVI@parl.gc.ca",
+        "reasoning": "As a Vice-Chair from the opposition, he has significant influence over the committee's agenda and can push for investigations into the decay of federal park infrastructure. He represents a critical voice in holding the government accountable for public land management.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Julie Aviva Dabrusin",
+        "title": "Minister of Environment, Climate Change and Nature",
+        "organization": "Environment and Climate Change Canada",
+        "email": "julie.dabrusin@parl.gc.ca",
+        "reasoning": "As the cabinet minister with direct portfolio responsibility for Parks Canada, she oversees the agency's strategic direction and conservation mandate. She is the primary decision-maker regarding the agency's funding requests and infrastructure priorities presented to the federal cabinet.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "CA",
+        "displayText": "Canada",
+        "scopeLevel": "country",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "federal"
+      }
+    ]
+  },
+  "ontario-libraries-debt-free-careers": {
+    "slug": "ontario-libraries-debt-free-careers",
+    "title": "No tuition, no debt, just an Ontario library card",
+    "description": "The Government of Ontario must scale the debt-free coding bootcamp model to every public library in the province.",
+    "messageBody": "There is a profound sense of relief in the idea that the path to a stable career doesn't have to begin with a mountain of debt. The most powerful tool for economic mobility in Ontario isn't a private loan or a restricted grant—it is a library card. The fact that our public libraries have already placed 2,400 people into tech jobs without tuition or waitlists proves that the 'gatekeepers' of education are no longer necessary.\n\n[Personal Connection]\n\nRight now, the average cost for a private coding bootcamp in Canada ranges from $12,000 to over $17,000 [2]. For many of us, that price tag is a dead end. We are told that 50% of modern jobs require skills beyond a high school diploma but different from a traditional degree, yet the path to those 'middle skills' is often blocked by these high costs [3]. Our libraries are already bridging this gap. As recently as last month, the Toronto Public Library demonstrated its unique ability to manage complex economic programs, having helped residents access more than $5.3 million in refunds and benefits through its financial empowerment services [1].\n\nWe don't need to reinvent the wheel; we need to fuel the one that is already turning. I am asking the Ministry of Education, the Ministry of Economic Development, and the Ministry of Tourism, Culture and Gaming to coordinate with the Federation of Ontario Public Libraries to scale this debt-free coding bootcamp model to every branch in the province. \n\nPlease invest in a system where the only requirement for a better life is a library card.\n\n[Name]",
+    "preview": "There is a profound sense of relief in the idea that the path to a stable career doesn't have to begin with a mountain of debt. The most powerful tool for economic mobility in Ontario isn't a private",
+    "category": "education",
+    "topics": [
+      "education",
+      "labor",
+      "libraries",
+      "technology"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "email",
+    "countryCode": "CA",
+    "sources": [
+      {
+        "num": 1,
+        "title": "TPL offers free tax help this season – plus free financial support year-round",
+        "url": "https://tpl.ca/news/tpl-offers-free-tax-help-this-season-plus-free-financial-support-year-round/",
+        "type": "journalism"
+      },
+      {
+        "num": 2,
+        "title": "Coding Courses with Certification Recognised in Canada: The Complete Guide",
+        "url": "https://algocademy.com/blog/coding-courses-with-certification-recognised-in-canada-the-complete-guide/",
+        "type": "other"
+      },
+      {
+        "num": 3,
+        "title": "New Dems Release Workforce & Education Agenda to Empower the Next Generation",
+        "url": "https://olszewski.house.gov/media/press-releases/new-dems-release-workforce-education-agenda-empower-next-generation",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "ON education labor libraries 2026",
+      "ON No tuition, no debt, just an Ontario library card",
+      "The Government of Ontario must scale the debt-free coding bootcamp model to every public library in the province."
+    ],
+    "recipientConfig": {
+      "reach": "location-specific",
+      "decisionMakers": [
+        {
+          "name": "Moe Hosseini-Ara",
+          "role": "City Librarian & CEO",
+          "shortName": "Hosseini-Ara",
+          "organization": "Toronto Public Library",
+          "email": "citylibrarian@tpl.ca"
+        },
+        {
+          "name": "Steve Clark",
+          "role": "Chair, Standing Committee on Social Policy",
+          "shortName": "Clark",
+          "organization": "Legislative Assembly of Ontario",
+          "email": "steve.clark@pc.ola.org"
+        },
+        {
+          "name": "Hon. Paul Calandra",
+          "role": "Minister of Education",
+          "shortName": "Calandra",
+          "organization": "Government of Ontario",
+          "email": "paul.calandra@pc.ola.org"
+        },
+        {
+          "name": "Hon. Victor Fedeli",
+          "role": "Minister of Economic Development, Job Creation, and Trade",
+          "shortName": "Fedeli",
+          "organization": "Government of Ontario",
+          "email": "vic.fedeli@pc.ola.org"
+        },
+        {
+          "name": "Hon. Stan Cho",
+          "role": "Minister of Tourism, Culture and Gaming",
+          "shortName": "Cho",
+          "organization": "Government of Ontario",
+          "email": "stan.cho@pc.ola.org"
+        },
+        {
+          "name": "Steve Till-Rogers",
+          "role": "Director, Digital Strategy & Chief Information Officer",
+          "shortName": "Till-Rogers",
+          "organization": "Toronto Public Library",
+          "email": "stillrogers@tpl.ca"
+        },
+        {
+          "name": "Alim Remtulla",
+          "role": "Board Chair",
+          "shortName": "Remtulla",
+          "organization": "Toronto Public Library",
+          "email": "saratavakolian@tpl.ca"
+        },
+        {
+          "name": "Stan Cho",
+          "role": "Minister of Tourism, Culture and Gaming",
+          "shortName": "Cho",
+          "organization": "Ministry of Tourism, Culture and Gaming (Ontario)",
+          "email": "stan.cho@pc.ola.org"
+        },
+        {
+          "name": "Ben Liu",
+          "role": "Chair of the Board of Directors",
+          "shortName": "Liu",
+          "organization": "Federation of Ontario Public Libraries (FOPL)",
+          "email": "admin@fopl.ca"
+        },
+        {
+          "name": "Lita Barrie",
+          "role": "President",
+          "shortName": "Barrie",
+          "organization": "Ontario Library Association (OLA)",
+          "email": "info@accessola.com"
+        },
+        {
+          "name": "Dina Stevens",
+          "role": "Executive Director",
+          "shortName": "Stevens",
+          "organization": "Federation of Ontario Public Libraries (FOPL)",
+          "email": "dinastevens@fopl.ca"
+        },
+        {
+          "name": "Michelle Arbuckle",
+          "role": "Executive Director",
+          "shortName": "Arbuckle",
+          "organization": "Ontario Library Association (OLA)",
+          "email": "mmarbuckle@accessola.com"
+        }
+      ],
+      "emails": [
+        "citylibrarian@tpl.ca",
+        "steve.clark@pc.ola.org",
+        "paul.calandra@pc.ola.org",
+        "vic.fedeli@pc.ola.org",
+        "stan.cho@pc.ola.org",
+        "stillrogers@tpl.ca",
+        "saratavakolian@tpl.ca",
+        "stan.cho@pc.ola.org",
+        "admin@fopl.ca",
+        "info@accessola.com",
+        "dinastevens@fopl.ca",
+        "mmarbuckle@accessola.com"
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "email"
+    },
+    "contentHash": "1413b719aff2d326e3533d1dcd4433d1a5e0b9d5",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Moe Hosseini-Ara",
+        "title": "City Librarian & CEO",
+        "organization": "Toronto Public Library",
+        "email": "citylibrarian@tpl.ca",
+        "reasoning": "As the head of the largest library system in Ontario, he manages the institutional infrastructure required to pilot and prove the viability of library-based coding bootcamps. His leadership is essential for creating the operational framework that other Ontario libraries would eventually adopt.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Steve Clark",
+        "title": "Chair, Standing Committee on Social Policy",
+        "organization": "Legislative Assembly of Ontario",
+        "email": "steve.clark@pc.ola.org",
+        "reasoning": "He chairs the legislative committee responsible for social policy, including education and training matters. His committee has the power to hold public hearings on the library bootcamp model and advocate for its inclusion in provincial budget priorities.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Hon. Paul Calandra",
+        "title": "Minister of Education",
+        "organization": "Government of Ontario",
+        "email": "paul.calandra@pc.ola.org",
+        "reasoning": "As the Minister of Education, he holds the primary decision-making power regarding provincial curriculum and the allocation of funds for alternative learning models. His approval is required to integrate coding bootcamps into the broader provincial education strategy.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Hon. Victor Fedeli",
+        "title": "Minister of Economic Development, Job Creation, and Trade",
+        "organization": "Government of Ontario",
+        "email": "vic.fedeli@pc.ola.org",
+        "reasoning": "His ministry focuses on job creation and economic competitiveness, making him a vital ally for any program that addresses the tech skills gap. He controls the economic development grants that could fund the expansion of these bootcamps across Ontario.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Hon. Stan Cho",
+        "title": "Minister of Tourism, Culture and Gaming",
+        "organization": "Government of Ontario",
+        "email": "stan.cho@pc.ola.org",
+        "reasoning": "He oversees the provincial ministry responsible for libraries, giving him direct jurisdiction over their mandate and provincial funding levels. His support is necessary to redefine the role of libraries as centers for technical vocational training.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Steve Till-Rogers",
+        "title": "Director, Digital Strategy & Chief Information Officer",
+        "organization": "Toronto Public Library",
+        "email": "stillrogers@tpl.ca",
+        "reasoning": "As the Chief Information Officer for TPL, he is the primary architect of the library's digital strategy and technology infrastructure. He would be responsible for the technical implementation and scalability of coding education platforms across the system.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Alim Remtulla",
+        "title": "Board Chair",
+        "organization": "Toronto Public Library",
+        "email": "saratavakolian@tpl.ca",
+        "reasoning": "As the Chair of the Toronto Public Library Board, he sets the strategic priorities and governs the policies that allow for innovative service models like debt-free coding bootcamps. He acts as the primary link between the library's executive leadership and the municipal government.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Stan Cho",
+        "title": "Minister of Tourism, Culture and Gaming",
+        "organization": "Ministry of Tourism, Culture and Gaming (Ontario)",
+        "email": "stan.cho@pc.ola.org",
+        "reasoning": "This individual oversees the Public Libraries Act and administers provincial funding for the public library system. Their authority is required to implement and scale new educational models like coding bootcamps across Ontario's library network.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Ben Liu",
+        "title": "Chair of the Board of Directors",
+        "organization": "Federation of Ontario Public Libraries (FOPL)",
+        "email": "admin@fopl.ca",
+        "reasoning": "He represents the collective interests of Ontario's public library boards to the provincial government and acts as a key gatekeeper for implementing new province-wide services. His leadership is necessary to ensure local library systems adopt and support the standardized coding curriculum.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Lita Barrie",
+        "title": "President",
+        "organization": "Ontario Library Association (OLA)",
+        "email": "info@accessola.com",
+        "reasoning": "As the leader of the largest library advocacy group in the province, she can mobilize library professionals and build the necessary institutional momentum to adopt a standardized coding curriculum. Her role is vital for aligning professional standards and advocacy efforts with the bootcamp initiative.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Dina Stevens",
+        "title": "Executive Director",
+        "organization": "Federation of Ontario Public Libraries (FOPL)",
+        "email": "dinastevens@fopl.ca",
+        "reasoning": "As Executive Director, she is the primary operational lead for FOPL and would be responsible for the logistical rollout of any province-wide library service. She serves as the main point of contact for coordinating between individual library systems and provincial initiatives.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Michelle Arbuckle",
+        "title": "Executive Director",
+        "organization": "Ontario Library Association (OLA)",
+        "email": "mmarbuckle@accessola.com",
+        "reasoning": "She leads the OLA's advocacy and professional development programs, making her essential for training library staff and ensuring they have the resources to facilitate technical education. Her office coordinates the sector-wide response to provincial policy changes and funding opportunities.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "CA",
+        "regionCode": "ON",
+        "displayText": "Ontario",
+        "scopeLevel": "region",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "state",
+        "stateCode": "ON"
+      }
+    ]
+  },
+  "bc-energy-revenue-parity": {
+    "slug": "bc-energy-revenue-parity",
+    "title": "Our land powers BC while we receive crumbs",
+    "description": "The Government of British Columbia must ensure resource revenue sharing matches the scale of clean energy contribution from First Nations communities.",
+    "messageBody": "It is a jarring reality to live in a community that powers the rest of British Columbia while receiving only a tiny fraction of the revenue generated from our own territories. If reconciliation is going to mean anything in this province, the revenue sharing must finally match the contribution. We are providing the energy that runs BC, yet we are left with the crumbs of the economic benefit.\n\n[Personal Connection]\n\nThe disparity is becoming impossible to ignore, especially as the federal government moves toward a true nation-to-nation relationship. The recent šxʷq̓ʷal̕təl̕tən agreement with the Musqueam formally recognizes unextinguished rights and title [1], setting a precedent that the provincial government cannot continue to overlook. While Indigenous Services Canada is planning to spend over $23.7 billion on Indigenous well-being and self-determination this year alone [4], BC's provincial resource-sharing models remain stuck in an era of extraction rather than partnership.\n\nWith Canada’s clean energy GDP projected to reach $107 billion over the next five years [2], First Nations should be leading this growth, not watching from the sidelines. Research into community energy models shows that localized credit redistribution can reduce energy costs by up to 35% [3], proving that First Nations are high-value partners capable of driving the grid’s efficiency. \n\nI am asking you to immediately redesign the provincial resource revenue sharing model to reflect the actual scale of clean energy contributions from First Nations. We are looking for a commitment that matches the federal government's shift toward genuine self-determination and recognizes our title as the foundation of BC's energy future [1][4].\n\n[Name]",
+    "preview": "It is a jarring reality to live in a community that powers the rest of British Columbia while receiving only a tiny fraction of the revenue generated from our own territories. If reconciliation is goi",
+    "category": "indigenous-rights",
+    "topics": [
+      "clean-energy",
+      "indigenous-rights",
+      "economic-justice"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "email",
+    "countryCode": "CA",
+    "sources": [
+      {
+        "num": 1,
+        "title": "What the Musqueam rights recognition agreement means and what it doesn’t",
+        "url": "https://cbc.ca/news/canada/british-columbia/musqueam-rights-recognition-agreement-explained-9.7128504",
+        "type": "journalism"
+      },
+      {
+        "num": 2,
+        "title": "Powering Canada’s Future: A Clean Electricity Strategy",
+        "url": "https://prod-natural-resources.azure.cloud.nrcan-rncan.gc.ca/energy-sources/powering-canada-s-future-clean-electricity-strategy",
+        "type": "government"
+      },
+      {
+        "num": 3,
+        "title": "Energy remuneration mechanisms for renewable energy communities",
+        "url": "https://www.sciencedirect.com/science/article/pii/S0360132325010169",
+        "type": "research"
+      },
+      {
+        "num": 4,
+        "title": "Indigenous Services Canada's 2026-2027 Departmental Plan",
+        "url": "https://www.sac-isc.gc.ca/eng/1767990598033/1773090600238",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "BC clean-energy indigenous-rights economic-justice 2026",
+      "BC Our land powers BC while we receive crumbs",
+      "The Government of British Columbia must ensure resource revenue sharing matches the scale of clean energy contribution f"
+    ],
+    "recipientConfig": {
+      "reach": "location-specific",
+      "decisionMakers": [
+        {
+          "name": "David Eby",
+          "role": "Premier",
+          "shortName": "Eby",
+          "organization": "Province of British Columbia",
+          "email": "premier@gov.bc.ca"
+        },
+        {
+          "name": "Spencer Chandra Herbert",
+          "role": "Minister of Indigenous Relations and Reconciliation",
+          "shortName": "Herbert",
+          "organization": "Ministry of Indigenous Relations and Reconciliation, British Columbia",
+          "email": "s.chandraherbert.MLA@leg.bc.ca"
+        },
+        {
+          "name": "Adrian Dix",
+          "role": "Minister of Energy and Climate Solutions",
+          "shortName": "Dix",
+          "organization": "Ministry of Energy and Climate Solutions, British Columbia",
+          "email": "adrian.dix.MLA@leg.bc.ca"
+        },
+        {
+          "name": "Brittny Anderson",
+          "role": "Minister of State for Local Governments and Rural Communities",
+          "shortName": "Anderson",
+          "organization": "Office of the Premier",
+          "email": "brittny.anderson.MLA@leg.bc.ca"
+        },
+        {
+          "name": "Shannon Salter",
+          "role": "Deputy Minister to the Premier and Cabinet Secretary",
+          "shortName": "Salter",
+          "organization": "Office of the Premier",
+          "email": "premier@gov.bc.ca"
+        },
+        {
+          "name": "Joan Phillip",
+          "role": "MLA",
+          "shortName": "Phillip",
+          "organization": "Legislative Assembly of British Columbia",
+          "email": "Joan.Phillip.MLA@leg.bc.ca"
+        },
+        {
+          "name": "Josie Osborne",
+          "role": "Minister",
+          "shortName": "Osborne",
+          "organization": "Government of British Columbia",
+          "email": "josie.osborne.MLA@leg.bc.ca"
+        }
+      ],
+      "emails": [
+        "premier@gov.bc.ca",
+        "s.chandraherbert.MLA@leg.bc.ca",
+        "adrian.dix.MLA@leg.bc.ca",
+        "brittny.anderson.MLA@leg.bc.ca",
+        "premier@gov.bc.ca",
+        "Joan.Phillip.MLA@leg.bc.ca",
+        "josie.osborne.MLA@leg.bc.ca"
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "email"
+    },
+    "contentHash": "77b7af8c6b74af09ae1bdd4058289e133aa1d456",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "David Eby",
+        "title": "Premier",
+        "organization": "Province of British Columbia",
+        "email": "premier@gov.bc.ca",
+        "reasoning": "As Premier, he holds ultimate executive authority over cabinet priorities and provincial budget allocations. He is responsible for ensuring that the implementation of the Declaration on the Rights of Indigenous Peoples Act results in meaningful economic justice for First Nations.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Spencer Chandra Herbert",
+        "title": "Minister of Indigenous Relations and Reconciliation",
+        "organization": "Ministry of Indigenous Relations and Reconciliation, British Columbia",
+        "email": "s.chandraherbert.MLA@leg.bc.ca",
+        "reasoning": "This role is directly responsible for negotiating resource revenue sharing agreements and ensuring provincial policies align with reconciliation goals. He acts as the primary negotiator between the government and Indigenous communities regarding the scale of clean energy contributions.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Adrian Dix",
+        "title": "Minister of Energy and Climate Solutions",
+        "organization": "Ministry of Energy and Climate Solutions, British Columbia",
+        "email": "adrian.dix.MLA@leg.bc.ca",
+        "reasoning": "He oversees the province's energy policy and the transition to clean energy, holding the power to mandate Indigenous participation and equity in new projects. His ministry determines the financial frameworks that govern how First Nations are compensated for powering the province.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Brittny Anderson",
+        "title": "Minister of State for Local Governments and Rural Communities",
+        "organization": "Office of the Premier",
+        "email": "brittny.anderson.MLA@leg.bc.ca",
+        "reasoning": "Her focus on rural communities makes her a key decision-maker for the local economic impacts of clean energy infrastructure. She bridges the gap between provincial energy goals and the needs of communities providing the land.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Shannon Salter",
+        "title": "Deputy Minister to the Premier and Cabinet Secretary",
+        "organization": "Office of the Premier",
+        "email": "premier@gov.bc.ca",
+        "reasoning": "As the highest-ranking non-elected official, she is responsible for the administrative execution of cabinet decisions regarding resource revenue. She acts as a primary gatekeeper for the Premier's policy agenda and the Public Service.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Joan Phillip",
+        "title": "MLA",
+        "organization": "Legislative Assembly of British Columbia",
+        "email": "Joan.Phillip.MLA@leg.bc.ca",
+        "reasoning": "As an Indigenous MLA, she provides critical perspective and leverage on Indigenous rights and economic justice within the legislative process. Her advocacy is central to ensuring resource sharing matches community contributions.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Josie Osborne",
+        "title": "Minister",
+        "organization": "Government of British Columbia",
+        "email": "josie.osborne.MLA@leg.bc.ca",
+        "reasoning": "Her role involves resource stewardship, making her a key gatekeeper for land use and resource revenue discussions. She has direct influence over the frameworks that define how resource-rich lands are utilized and compensated.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "CA",
+        "regionCode": "BC",
+        "displayText": "British Columbia",
+        "scopeLevel": "region",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "state",
+        "stateCode": "BC"
+      }
+    ]
+  },
+  "montreal-bixi-savings": {
+    "slug": "montreal-bixi-savings",
+    "title": "Montreal’s BIXI program saves more in health than it costs",
+    "description": "Montreal's BIXI bike-share program cut downtown car trips by 12% and saves $14 million per year in healthcare costs from reduced pollution. It costs the city $5 per resident per year.",
+    "messageBody": "When the BIXI stations return to our streets each spring, it is more than just a change in season—it is the moment Montreal feels like itself again. This program is a source of pride because it represents the first time North America saw what a modern, active city could look like, and it started right here with us. We aren't just moving from point A to point B; we are participating in a collective achievement that makes our neighborhoods quieter, our air cleaner, and our residents healthier.\n\n[Personal Connection]\n\nWe are currently at a critical juncture for urban mobility. National data shows that transit recovery rates have slipped to 82.2% of 2019 volumes, down from the previous year [4]. In this environment, BIXI is not a luxury; it is a vital necessity. Peer-reviewed research specifically focused on Montreal confirms that access to high-comfort cycling infrastructure increases the odds of residents choosing to bike by 28% [1]. By cutting downtown car trips by 12%, BIXI does the heavy lifting that major infrastructure projects strive for. For comparison, the REM is valued for its ability to remove 30,000 cars from the road daily [3]; BIXI achieves similar goals at the remarkably low cost of just $5 per resident per year.\n\nThe math is undeniable. Recent studies on bike-sharing ROI show that every dollar spent generates a 10% annual return in positive externalities, preventing chronic diseases and creating massive healthcare savings [2]. For Montreal, this translates to a $14 million annual dividend in public health. To let this program stagnate is to ignore a primary tool for sustainable development and fiscal responsibility.\n\nI am calling on the Commission and the City of Montreal to secure BIXI’s long-term funding and accelerate the expansion of high-comfort cycling paths. We need to treat BIXI as the essential public health infrastructure it is. Please ensure that this symbol of Montreal’s innovation remains a robust, accessible, and permanent part of our identity.\n\n[Name]",
+    "preview": "When the BIXI stations return to our streets each spring, it is more than just a change in season—it is the moment Montreal feels like itself again. This program is a source of pride because it repres",
+    "category": "transportation",
+    "topics": [
+      "transportation",
+      "public health",
+      "environment",
+      "infrastructure"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "email",
+    "countryCode": "CA",
+    "sources": [
+      {
+        "num": 1,
+        "title": "Cycling infrastructure as a determinant of cycling for recreation and transportation in Montréal, Canada: a natural experiment using the longitudinal national population health survey - PubMed",
+        "url": "https://pubmed.ncbi.nlm.nih.gov/40495159/",
+        "type": "research"
+      },
+      {
+        "num": 2,
+        "title": "New study reveals bike-sharing delivers €305 million in annual benefits for Europe - EIT Urban Mobility",
+        "url": "https://www.eiturbanmobility.eu/new-study-reveals-bike-sharing-delivers-e305-million-in-annual-benefits-for-europe/",
+        "type": "research"
+      },
+      {
+        "num": 3,
+        "title": "Prime Minister Carney opens the second phase of REM: Québec’s largest public transit project in 50 years | Prime Minister of Canada",
+        "url": "https://www.pm.gc.ca/en/news/news-releases/2025/11/14/prime-minister-carney-opens-second-phase-rem-quebecs-largest",
+        "type": "government"
+      },
+      {
+        "num": 4,
+        "title": "The Daily — Urban public transit, December 2025",
+        "url": "https://www150.statcan.gc.ca/n1/daily-quotidien/260216/dq260216b-eng.htm",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "Montreal QC transportation public health environment 2026",
+      "Montreal QC Montreal’s BIXI program saves more in health than it costs",
+      "Montreal's BIXI bike-share program cut downtown car trips by 12% and saves $14 million per year in healthcare costs from"
+    ],
+    "recipientConfig": {
+      "reach": "location-specific",
+      "decisionMakers": [
+        {
+          "name": "Dominic Perri",
+          "role": "Chair, Commission sur le transport et les travaux publics",
+          "shortName": "Perri",
+          "organization": "Ville de Montréal",
+          "email": "commissions@montreal.ca"
+        },
+        {
+          "name": "Sarah V. Doyon",
+          "role": "Vice-chair, Commission sur le transport et les travaux publics",
+          "shortName": "Doyon",
+          "organization": "Ville de Montréal",
+          "email": "commissions@montreal.ca"
+        },
+        {
+          "name": "Michel Gibson",
+          "role": "Vice-chair, Commission sur le transport et les travaux publics",
+          "shortName": "Gibson",
+          "organization": "Ville de Montréal",
+          "email": "commissions@montreal.ca"
+        },
+        {
+          "name": "Kristine Marsolais",
+          "role": "Member, Commission sur le transport et les travaux publics",
+          "shortName": "Marsolais",
+          "organization": "Ville de Montréal",
+          "email": "commissions@montreal.ca"
+        },
+        {
+          "name": "Amélie Cliche",
+          "role": "Member, Commission sur le transport et les travaux publics",
+          "shortName": "Cliche",
+          "organization": "Ville de Montréal",
+          "email": "commissions@montreal.ca"
+        },
+        {
+          "name": "Christopher Little",
+          "role": "Member, Commission sur le transport et les travaux publics",
+          "shortName": "Little",
+          "organization": "Ville de Montréal",
+          "email": "commissions@montreal.ca"
+        },
+        {
+          "name": "Linda Paquin",
+          "role": "Member, Commission sur le transport et les travaux publics",
+          "shortName": "Paquin",
+          "organization": "Ville de Montréal",
+          "email": "commissions@montreal.ca"
+        },
+        {
+          "name": "Milany Thiagarajah",
+          "role": "Member, Commission sur le transport et les travaux publics",
+          "shortName": "Thiagarajah",
+          "organization": "Ville de Montréal",
+          "email": "commissions@montreal.ca"
+        },
+        {
+          "name": "Jacques Filion",
+          "role": "Member, Commission sur le transport et les travaux publics",
+          "shortName": "Filion",
+          "organization": "Ville de Montréal",
+          "email": "commissions@montreal.ca"
+        },
+        {
+          "name": "David Tordjman",
+          "role": "Member, Commission sur le transport et les travaux publics",
+          "shortName": "Tordjman",
+          "organization": "Ville de Montréal",
+          "email": "commissions@montreal.ca"
+        },
+        {
+          "name": "Soraya Martinez Ferrada",
+          "role": "Mayor of Montréal",
+          "shortName": "Ferrada",
+          "organization": "City of Montreal",
+          "email": "info@ensemblemtl.org"
+        },
+        {
+          "name": "Alan DeSousa",
+          "role": "Executive Committee Member (Mobility and Infrastructure)",
+          "shortName": "DeSousa",
+          "organization": "City of Montreal",
+          "email": "webmestre@montreal.ca"
+        },
+        {
+          "name": "Christian Vermette",
+          "role": "General Manager",
+          "shortName": "Vermette",
+          "organization": "BIXI Montréal",
+          "email": "communications@biximontreal.com"
+        },
+        {
+          "name": "Aref Salem",
+          "role": "Executive Committee Vice-chair & STM Board Chair",
+          "shortName": "Salem",
+          "organization": "City of Montreal",
+          "email": "webmestre@montreal.ca"
+        },
+        {
+          "name": "Gabrielle Rousseau-Bélanger",
+          "role": "Executive Committee Member (Environment)",
+          "shortName": "Rousseau-Bélanger",
+          "organization": "City of Montreal",
+          "email": "webmestre@montreal.ca"
+        },
+        {
+          "name": "Minister of Transport and Sustainable Mobility (Name Unknown)",
+          "role": "Minister of Transport and Sustainable Mobility",
+          "shortName": "Unknown)",
+          "organization": "Gouvernement du Québec",
+          "email": "info@quebec.ca"
+        },
+        {
+          "name": "Sonia Bélanger",
+          "role": "Minister of Health",
+          "shortName": "Bélanger",
+          "organization": "Gouvernement du Québec",
+          "email": "ministre@msss.gouv.qc.ca"
+        },
+        {
+          "name": "Dre Caroline Quach-Thanh",
+          "role": "Directrice nationale de santé publique",
+          "shortName": "Quach-Thanh",
+          "organization": "Ministère de la Santé et des Services sociaux",
+          "email": "santepubliquequebec@msss.gouv.qc.ca"
+        },
+        {
+          "name": "Dr Horacio Arruda",
+          "role": "Directeur de santé publique par intérim (Mauricie et Centre-du-Québec)",
+          "shortName": "Arruda",
+          "organization": "CIUSSS de la Mauricie-et-du-Centre-du-Québec",
+          "email": "santepubliquequebec@msss.gouv.qc.ca"
+        }
+      ],
+      "emails": [
+        "commissions@montreal.ca",
+        "commissions@montreal.ca",
+        "commissions@montreal.ca",
+        "commissions@montreal.ca",
+        "commissions@montreal.ca",
+        "commissions@montreal.ca",
+        "commissions@montreal.ca",
+        "commissions@montreal.ca",
+        "commissions@montreal.ca",
+        "commissions@montreal.ca",
+        "info@ensemblemtl.org",
+        "webmestre@montreal.ca",
+        "communications@biximontreal.com",
+        "webmestre@montreal.ca",
+        "webmestre@montreal.ca",
+        "info@quebec.ca",
+        "ministre@msss.gouv.qc.ca",
+        "santepubliquequebec@msss.gouv.qc.ca",
+        "santepubliquequebec@msss.gouv.qc.ca"
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "email"
+    },
+    "contentHash": "32cd97f516d2f3c3b70872207e423b54acf78858",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Dominic Perri",
+        "title": "Chair, Commission sur le transport et les travaux publics",
+        "organization": "Ville de Montréal",
+        "email": "commissions@montreal.ca",
+        "reasoning": "As Chair of the commission overseeing active transportation and mobility, he has direct authority over the evaluation and strategic direction of the BIXI program. His leadership determines which infrastructure projects and transit initiatives are recommended to the city council for funding.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Sarah V. Doyon",
+        "title": "Vice-chair, Commission sur le transport et les travaux publics",
+        "organization": "Ville de Montréal",
+        "email": "commissions@montreal.ca",
+        "reasoning": "As Vice-chair, she holds significant gatekeeping power over transportation policy and infrastructure decisions in Montreal. She is a key decision-maker in the committee that reviews the health and environmental impacts of active transit programs like BIXI.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Michel Gibson",
+        "title": "Vice-chair, Commission sur le transport et les travaux publics",
+        "organization": "Ville de Montréal",
+        "email": "commissions@montreal.ca",
+        "reasoning": "He shares leadership of the commission responsible for public mobility and transportation infrastructure, giving him direct influence over the expansion of bike-share networks. His role involves consulting the population to inform city-wide transit and environmental policies.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Kristine Marsolais",
+        "title": "Member, Commission sur le transport et les travaux publics",
+        "organization": "Ville de Montréal",
+        "email": "commissions@montreal.ca",
+        "reasoning": "As a member of the commission, she participates in the decision-making process for active transportation and public transit infrastructure. Her vote and input directly affect the city's commitment to programs that reduce car dependency and improve public health.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Amélie Cliche",
+        "title": "Member, Commission sur le transport et les travaux publics",
+        "organization": "Ville de Montréal",
+        "email": "commissions@montreal.ca",
+        "reasoning": "She is part of the committee that examines issues related to public mobility and transportation infrastructure, including the BIXI program. Her role involves reviewing the environmental and health benefits of transit projects to inform city council decisions.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Christopher Little",
+        "title": "Member, Commission sur le transport et les travaux publics",
+        "organization": "Ville de Montréal",
+        "email": "commissions@montreal.ca",
+        "reasoning": "As a member of the commission, he has the authority to review and recommend transportation policies that prioritize active transit. His influence extends to the city's infrastructure work and the integration of technology in public mobility.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Linda Paquin",
+        "title": "Member, Commission sur le transport et les travaux publics",
+        "organization": "Ville de Montréal",
+        "email": "commissions@montreal.ca",
+        "reasoning": "She serves on the commission that consults on active transportation and public transit, providing her with leverage over the city's mobility strategy. Her participation is key to advancing programs that demonstrate significant healthcare savings and pollution reduction.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Milany Thiagarajah",
+        "title": "Member, Commission sur le transport et les travaux publics",
+        "organization": "Ville de Montréal",
+        "email": "commissions@montreal.ca",
+        "reasoning": "Her role on the commission involves evaluating transportation infrastructure and its impact on the population's mobility. She is a relevant decision-maker for the BIXI program due to her oversight of active transit initiatives.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Jacques Filion",
+        "title": "Member, Commission sur le transport et les travaux publics",
+        "organization": "Ville de Montréal",
+        "email": "commissions@montreal.ca",
+        "reasoning": "As a member of this standing committee, he helps shape the city's approach to transportation infrastructure and active transit. His decisions impact the long-term viability and expansion of cost-effective public health initiatives like bike-sharing.",
+        "confidence": 0.9
+      },
+      {
+        "name": "David Tordjman",
+        "title": "Member, Commission sur le transport et les travaux publics",
+        "organization": "Ville de Montréal",
+        "email": "commissions@montreal.ca",
+        "reasoning": "He is a member of the commission that informs city council on mobility and transportation infrastructure. His role is crucial for supporting active transportation projects that offer high returns on investment for public health and the environment.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Soraya Martinez Ferrada",
+        "title": "Mayor of Montréal",
+        "organization": "City of Montreal",
+        "email": "info@ensemblemtl.org",
+        "reasoning": "As Mayor, she holds ultimate budget authority and sets the strategic vision for Montreal's investment in active transportation and the BIXI program. Her administration is responsible for maintaining the program's low cost to residents while maximizing its significant public health and environmental benefits.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Alan DeSousa",
+        "title": "Executive Committee Member (Mobility and Infrastructure)",
+        "organization": "City of Montreal",
+        "email": "webmestre@montreal.ca",
+        "reasoning": "He holds the Mobility and Infrastructure portfolio on the Executive Committee, giving him direct authority over the integration of bike-sharing into the city's transit network. His decisions directly influence the expansion of stations and the infrastructure support required for the BIXI system to thrive.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Christian Vermette",
+        "title": "General Manager",
+        "organization": "BIXI Montréal",
+        "email": "communications@biximontreal.com",
+        "reasoning": "As General Manager, he has direct operational control over the BIXI system and is responsible for its expansion into new territories and year-round availability. He is the primary executive responsible for executing the mission to improve quality of life through accessible and sustainable active transit.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Aref Salem",
+        "title": "Executive Committee Vice-chair & STM Board Chair",
+        "organization": "City of Montreal",
+        "email": "webmestre@montreal.ca",
+        "reasoning": "As Chair of the STM and a Vice-chair of the Executive Committee, he oversees the coordination between Montreal's primary transit agency and the BIXI network. He is a key gatekeeper for policies that treat bike-sharing as a fundamental and integrated component of the broader public transportation system.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Gabrielle Rousseau-Bélanger",
+        "title": "Executive Committee Member (Environment)",
+        "organization": "City of Montreal",
+        "email": "webmestre@montreal.ca",
+        "reasoning": "She is responsible for the environment and ecological transition, making her a primary advocate for the BIXI program's role in reducing car dependency and urban pollution. Her portfolio directly manages the sustainable development goals that the BIXI program's health and environmental savings help achieve.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Minister of Transport and Sustainable Mobility (Name Unknown)",
+        "title": "Minister of Transport and Sustainable Mobility",
+        "organization": "Gouvernement du Québec",
+        "email": "info@quebec.ca",
+        "reasoning": "This office provides critical grant funding for active transportation and sets the legal framework for road safety and vehicle-sharing regulations. Their support is necessary for the continued expansion and financial viability of the BIXI program.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Sonia Bélanger",
+        "title": "Minister of Health",
+        "organization": "Gouvernement du Québec",
+        "email": "ministre@msss.gouv.qc.ca",
+        "reasoning": "As Minister of Health, she oversees the provincial health budget and public health initiatives. The $14 million in annual healthcare savings generated by BIXI directly supports her ministry's mandate to reduce pollution-related illnesses and improve fiscal efficiency.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Dre Caroline Quach-Thanh",
+        "title": "Directrice nationale de santé publique",
+        "organization": "Ministère de la Santé et des Services sociaux",
+        "email": "santepubliquequebec@msss.gouv.qc.ca",
+        "reasoning": "As the National Director of Public Health, she has the authority to integrate active transportation into the provincial health strategy. Her endorsement of bike-sharing as a health-saving infrastructure would influence provincial funding and policy across all regions.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Dr Horacio Arruda",
+        "title": "Directeur de santé publique par intérim (Mauricie et Centre-du-Québec)",
+        "organization": "CIUSSS de la Mauricie-et-du-Centre-du-Québec",
+        "email": "santepubliquequebec@msss.gouv.qc.ca",
+        "reasoning": "As a former National Director and current regional lead, he is a high-profile scientific voice in Quebec. His expertise in public health policy makes him a powerful advocate for infrastructure that reduces healthcare costs and improves urban living environments.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "CA",
+        "regionCode": "QC",
+        "localityCode": "Montreal",
+        "displayText": "Montreal, QC",
+        "scopeLevel": "locality",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "city",
+        "stateCode": "QC",
+        "cityName": "Montreal"
+      }
+    ]
+  },
+  "apple-fifteen-minutes": {
+    "slug": "apple-fifteen-minutes",
+    "title": "Our year of work is just fifteen minutes of interest",
+    "description": "Apple must raise retail wages to reflect the company's vast wealth and interest income.",
+    "messageBody": "It is a staggering reality that fifteen minutes of Apple’s daily interest income is equivalent to the entire annual salary of a retail worker. For those of us on the front lines of the brand, knowing that the company’s idle cash is working harder than we are creates a sense of profound disconnection.\n\n[Personal Connection]\n\nThis isn't just a grievance; it’s a reflection of an economy where 60% of Americans are living paycheck to paycheck while CEOs earn 290 times more than their average worker [3]. When a company holds $162 billion in cash reserves, a starting wage of $22/hour isn't a market rate—it is a choice to keep the people who build the brand in a state of constant financial anxiety.\n\nThere is a growing, bipartisan consensus that this level of inequality is unsustainable. Currently, 62% of Americans—including 52% of Republicans—favor capping CEO pay relative to worker pay [1]. The Tax Excessive CEO Pay Act (H.R. 5298) would create a direct financial consequence for this disparity, increasing corporate tax rates by up to 5% for companies with pay ratios exceeding 500 to 1 [2]. As we have seen with similar proposals, the potential tax liability for major corporations could reach $100 billion over the next decade [4].\n\nWe are asking for a correction before this gap becomes a permanent rupture:\n\n- For Apple: Substantially increase retail wages to reflect the company’s immense wealth and the value provided by its workforce.\n- For the Senate HELP Committee: Support the Tax Excessive CEO Pay Act to ensure that corporate tax structures encourage fair pay.\n- For Bloomberg News: Provide rigorous coverage of the financial and social risks inherent in a business model that prioritizes interest income over human labor.\n\nWe are watching how these resources are allocated, and we will remember who chose to value people as much as they value their reserves.\n\n[Name]",
+    "preview": "It is a staggering reality that fifteen minutes of Apple’s daily interest income is equivalent to the entire annual salary of a retail worker. For those of us on the front lines of the brand, knowing",
+    "category": "labor",
+    "topics": [
+      "labor",
+      "wages",
+      "corporate accountability"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "email",
+    "countryCode": "US",
+    "sources": [
+      {
+        "num": 1,
+        "title": "Tlaib and Colleagues Introduce Legislation to Combat Corporate Greed and End Outrageous CEO Pay",
+        "url": "https://tlaib.house.gov/posts/tlaib-and-colleagues-introduce-legislation-to-combat-corporate-greed-and-end-outrageous-ceo-pay",
+        "type": "government"
+      },
+      {
+        "num": 2,
+        "title": "Tax Excessive CEO Pay Act - H.R. 5298 | Endorsed Bills | Congressional Progressive Caucus",
+        "url": "https://progressives.house.gov/2025/12/tax-excessive-ceo-pay-act-h-r-5298",
+        "type": "government"
+      },
+      {
+        "num": 3,
+        "title": "Tlaib, Sanders Introduce Bill to End Outrageous CEO Pay and Combat Corporate Greed",
+        "url": "https://tlaib.house.gov/posts/tlaib-sanders-introduce-bill-to-end-outrageous-ceo-pay-and-combat-corporate-greed",
+        "type": "government"
+      },
+      {
+        "num": 4,
+        "title": "Michigan Advance: Tlaib, Sanders introduce CEO pay bill to tax excessive CEO salaries",
+        "url": "https://tlaib.house.gov/posts/michigan-advance-tlaib-sanders-introduce-ceo-pay-bill-to-tax-excessive-ceo-salaries",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "US labor wages corporate accountability 2026",
+      "US Our year of work is just fifteen minutes of interest",
+      "Apple must raise retail wages to reflect the company's vast wealth and interest income."
+    ],
+    "recipientConfig": {
+      "reach": "location-specific",
+      "decisionMakers": [
+        {
+          "name": "Bill Cassidy",
+          "role": "Chair, Senate HELP Committee",
+          "shortName": "Cassidy",
+          "organization": "United States Senate",
+          "email": "stephen_lewerenz@help.senate.gov"
+        },
+        {
+          "name": "John Micklethwait",
+          "role": "Editor-in-Chief",
+          "shortName": "Micklethwait",
+          "organization": "Bloomberg News",
+          "email": "econstanti14@bloomberg.net"
+        },
+        {
+          "name": "Peggy Collins",
+          "role": "Washington Bureau Chief and Executive Editor",
+          "shortName": "Collins",
+          "organization": "Bloomberg News",
+          "email": "econstanti14@bloomberg.net"
+        },
+        {
+          "name": "Emily Chang",
+          "role": "Host and Executive Producer, Bloomberg Originals",
+          "shortName": "Chang",
+          "organization": "Bloomberg News",
+          "email": "econstanti14@bloomberg.net"
+        },
+        {
+          "name": "Christine Harper",
+          "role": "Editor-in-Chief, Bloomberg Markets",
+          "shortName": "Harper",
+          "organization": "Bloomberg News",
+          "email": "econstanti14@bloomberg.net"
+        },
+        {
+          "name": "Tim Cook",
+          "role": "CEO",
+          "shortName": "Cook",
+          "organization": "Apple Inc.",
+          "email": "tcook@apple.com"
+        }
+      ],
+      "emails": [
+        "stephen_lewerenz@help.senate.gov",
+        "econstanti14@bloomberg.net",
+        "econstanti14@bloomberg.net",
+        "econstanti14@bloomberg.net",
+        "econstanti14@bloomberg.net",
+        "tcook@apple.com"
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "email"
+    },
+    "contentHash": "9cfd5bafca894a79e64f8d91f38cd26583a65e30",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Bill Cassidy",
+        "title": "Chair, Senate HELP Committee",
+        "organization": "United States Senate",
+        "email": "stephen_lewerenz@help.senate.gov",
+        "reasoning": "As Chair of the Senate HELP Committee, Cassidy has direct jurisdiction over federal labor standards and workforce protections. He possesses the authority to launch investigations or hold public hearings into the wage practices of major corporations like Apple, creating significant pressure for reform.",
+        "confidence": 0.9
+      },
+      {
+        "name": "John Micklethwait",
+        "title": "Editor-in-Chief",
+        "organization": "Bloomberg News",
+        "email": "econstanti14@bloomberg.net",
+        "reasoning": "Micklethwait oversees all editorial content for Bloomberg, a primary news source for the global financial community. By prioritizing coverage of the wealth gap between Apple's corporate earnings and its retail workforce, he can influence the narrative among investors and the public.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Peggy Collins",
+        "title": "Washington Bureau Chief and Executive Editor",
+        "organization": "Bloomberg News",
+        "email": "econstanti14@bloomberg.net",
+        "reasoning": "Collins leads Bloomberg's coverage of the U.S. economy and government, making her a key gatekeeper for stories regarding labor policy and corporate accountability. Her bureau's reporting directly influences the national discourse on wage inequality and legislative responses to corporate labor practices.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Emily Chang",
+        "title": "Host and Executive Producer, Bloomberg Originals",
+        "organization": "Bloomberg News",
+        "email": "econstanti14@bloomberg.net",
+        "reasoning": "Chang specializes in the intersection of technology and business, frequently interviewing top tech executives and covering Apple's corporate culture. Her platform is ideal for amplifying worker concerns regarding the disparity between Apple's wealth and retail wages to a broad audience.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Christine Harper",
+        "title": "Editor-in-Chief, Bloomberg Markets",
+        "organization": "Bloomberg News",
+        "email": "econstanti14@bloomberg.net",
+        "reasoning": "Harper leads Bloomberg Markets, which is read by professional investors and financial decision-makers. Her editorial focus on market dynamics and corporate performance is a critical channel for highlighting how Apple's wage policies impact its long-term valuation and social responsibility profile.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Tim Cook",
+        "title": "CEO",
+        "organization": "Apple Inc.",
+        "email": "tcook@apple.com",
+        "reasoning": "As CEO and a board member, Cook holds the ultimate decision-making authority over Apple's corporate strategy and capital allocation. His leadership determines the company's stance on labor compensation and the distribution of its significant interest income.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "US",
+        "displayText": "United States",
+        "scopeLevel": "country",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "federal"
+      }
+    ]
+  },
+  "preschool-success-model": {
+    "slug": "preschool-success-model",
+    "title": "Preschool for every child pays for itself and our future",
+    "description": "Our state must adopt the model of Colorado's universal preschool program to deliver immediate savings for families and lasting economic benefits.",
+    "messageBody": "It is rare to find a policy where the math is so overwhelmingly on the side of the people, yet the struggle to access it remains so difficult. We know that every dollar invested in universal preschool returns $4.30 in reduced remediation and increased lifetime earnings. This isn't just a budget line item; it is a fundamental economic engine that pays for itself by allowing parents to work while ensuring our children don't start their lives behind an invisible finish line.\n\n[Personal Connection]\n\nAcross the country, we are seeing the recognition that childcare is essential infrastructure. Just this week, Adams County launched a program providing up to 100% property tax relief for childcare providers, specifically to keep families 'healthy, strong, and thriving' [2]. This follows the clear mandate from voters in Larimer County who approved a sales tax specifically to stabilize the early childhood workforce and expand provider capacity [1].\n\nWe cannot afford to ignore the success of these models. In Pennsylvania, the administration is scaling recruitment and retention bonuses to a $35 million total investment because they recognize that access is impossible without a supported workforce [3]. Even as we look at benchmarks for subsidized care, like the 85% of state median income threshold used to determine eligibility [4], it is clear that the middle class is being squeezed out of the opportunity to give their children a head start.\n\nI am asking you to champion a universal preschool model that mirrors the success we are seeing in Colorado. We need a system that offers immediate savings to families and long-term economic stability for our state. Please prioritize the expansion of these slots and the direct support of the early childhood workforce. We are watching how you choose to invest in our future, and we will remember who stood up for our families.\n\n[Name]",
+    "preview": "It is rare to find a policy where the math is so overwhelmingly on the side of the people, yet the struggle to access it remains so difficult. We know that every dollar invested in universal preschool",
+    "category": "education",
+    "topics": [
+      "education",
+      "childcare",
+      "economy",
+      "family-support"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "email",
+    "countryCode": "US",
+    "sources": [
+      {
+        "num": 1,
+        "title": "Larimer County and Northern Colorado Kids Thrive sign agreement to implement voter-approved childcare tax revenue",
+        "url": "https://www.larimer.gov/spotlights/2026/02/10/larimer-county-and-northern-colorado-kids-thrive-sign-agreement-implement-voter-approved-childcare",
+        "type": "government"
+      },
+      {
+        "num": 2,
+        "title": "Adams County Launches New Efforts to Invest in Communities and Expand Access to Child Care",
+        "url": "https://adamscountyco.gov/about-adams-county/news/adams-county-launches-new-efforts-to-invest-in-communities-and-expand-access-to-child-care/",
+        "type": "government"
+      },
+      {
+        "num": 3,
+        "title": "Shapiro Administration is Making Child Care More Affordable & Available, Proposing Additional $10 Million to Increase Bonuses for Child Care Workers",
+        "url": "https://www.pa.gov/agencies/dhs/newsroom/shapiro-administration-is-making-child-care-more-affordable-and-",
+        "type": "government"
+      },
+      {
+        "num": 4,
+        "title": "The 2026-27 Budget: Child Care and State Preschool",
+        "url": "https://lao.ca.gov/Publications/Report/5168",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "CO education childcare economy 2026",
+      "CO Preschool for every child pays for itself and our future",
+      "Our state must adopt the model of Colorado's universal preschool program to deliver immediate savings for families and l"
+    ],
+    "recipientConfig": {
+      "reach": "location-specific",
+      "decisionMakers": [
+        {
+          "name": "Jared Polis",
+          "role": "Governor",
+          "shortName": "Polis",
+          "organization": "State of Colorado",
+          "email": "cdec_communications@state.co.us"
+        },
+        {
+          "name": "Dr. Lisa Roy",
+          "role": "Executive Director",
+          "shortName": "Roy",
+          "organization": "Colorado Department of Early Childhood",
+          "email": "cdec_communications@state.co.us"
+        },
+        {
+          "name": "Stephanie Beasley",
+          "role": "Deputy Executive Director",
+          "shortName": "Beasley",
+          "organization": "Colorado Department of Early Childhood",
+          "email": "cdec_communications@state.co.us"
+        },
+        {
+          "name": "Mary Alice Cohen",
+          "role": "Office of Program Delivery Director",
+          "shortName": "Cohen",
+          "organization": "Colorado Department of Early Childhood",
+          "email": "cdec_communications@state.co.us"
+        },
+        {
+          "name": "T Vail Shoultz-McCole",
+          "role": "Rules Advisory Council (RAC) Vice Chair",
+          "shortName": "Shoultz-McCole",
+          "organization": "Colorado Department of Early Childhood",
+          "email": "cdec_communications@state.co.us"
+        },
+        {
+          "name": "Caitlin Jensen",
+          "role": "Executive Director",
+          "shortName": "Jensen",
+          "organization": "Zero to Five Montana",
+          "email": "caitlinj@zerotofive.org"
+        },
+        {
+          "name": "Alex DuBois",
+          "role": "Policy & Engagement Director",
+          "shortName": "DuBois",
+          "organization": "Zero to Five Montana",
+          "email": "alexd@zerotofive.org"
+        },
+        {
+          "name": "Sarah Froehlke",
+          "role": "Early Childhood Policy Analyst",
+          "shortName": "Froehlke",
+          "organization": "Zero to Five Montana",
+          "email": "sarahf@zerotofive.org"
+        },
+        {
+          "name": "Melissa Winger",
+          "role": "Early Childhood Policy Manager",
+          "shortName": "Winger",
+          "organization": "Zero to Five Montana",
+          "email": "melissaw@zerotofive.org"
+        },
+        {
+          "name": "Karen Gilbert",
+          "role": "Communications Director",
+          "shortName": "Gilbert",
+          "organization": "Zero to Five Montana",
+          "email": "kareng@zerotofive.org"
+        },
+        {
+          "name": "Callie Parr",
+          "role": "Early Childhood Tribal Coordinator",
+          "shortName": "Parr",
+          "organization": "Zero to Five Montana",
+          "email": "calliep@zerotofive.org"
+        },
+        {
+          "name": "Stephanie Ingram",
+          "role": "President",
+          "shortName": "Ingram",
+          "organization": "Delaware State Education Association",
+          "email": "membershipsupport@dsea.org"
+        },
+        {
+          "name": "Thomas Bracken",
+          "role": "President and CEO",
+          "shortName": "Bracken",
+          "organization": "New Jersey Chamber of Commerce",
+          "email": "Tom.Bracken@njchamber.com"
+        },
+        {
+          "name": "Jeff Taschner",
+          "role": "Executive Director",
+          "shortName": "Taschner",
+          "organization": "Delaware State Education Association",
+          "email": "membershipsupport@dsea.org"
+        },
+        {
+          "name": "Jon Neubauer",
+          "role": "Director of Education Policy",
+          "shortName": "Neubauer",
+          "organization": "Delaware State Education Association",
+          "email": "membershipsupport@dsea.org"
+        },
+        {
+          "name": "Michael Egenton",
+          "role": "Executive Vice President, Government Relations",
+          "shortName": "Egenton",
+          "organization": "New Jersey Chamber of Commerce",
+          "email": "theresa@njchamber.com"
+        },
+        {
+          "name": "Lynda Schlegel Culver",
+          "role": "Chair at Pennsylvania Senate Education Committee",
+          "shortName": "Culver",
+          "organization": "Pennsylvania State Senate",
+          "email": "lculver@pasen.gov"
+        }
+      ],
+      "emails": [
+        "cdec_communications@state.co.us",
+        "cdec_communications@state.co.us",
+        "cdec_communications@state.co.us",
+        "cdec_communications@state.co.us",
+        "cdec_communications@state.co.us",
+        "caitlinj@zerotofive.org",
+        "alexd@zerotofive.org",
+        "sarahf@zerotofive.org",
+        "melissaw@zerotofive.org",
+        "kareng@zerotofive.org",
+        "calliep@zerotofive.org",
+        "membershipsupport@dsea.org",
+        "Tom.Bracken@njchamber.com",
+        "membershipsupport@dsea.org",
+        "membershipsupport@dsea.org",
+        "theresa@njchamber.com",
+        "lculver@pasen.gov"
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "email"
+    },
+    "contentHash": "d46a0f287ce81163d392f9b067f22858ca3bc45f",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Jared Polis",
+        "title": "Governor",
+        "organization": "State of Colorado",
+        "email": "cdec_communications@state.co.us",
+        "reasoning": "Governor Polis established the Colorado Department of Early Childhood and championed the universal preschool program that serves as the model for this initiative. He holds the ultimate executive authority over the state's budget and educational priorities.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Dr. Lisa Roy",
+        "title": "Executive Director",
+        "organization": "Colorado Department of Early Childhood",
+        "email": "cdec_communications@state.co.us",
+        "reasoning": "As the Executive Director of the Colorado Department of Early Childhood, Dr. Roy manages the state's Universal Preschool Program and all services for young children. Her leadership is central to the operational success and regulatory framework of the model being advocated for adoption.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Stephanie Beasley",
+        "title": "Deputy Executive Director",
+        "organization": "Colorado Department of Early Childhood",
+        "email": "cdec_communications@state.co.us",
+        "reasoning": "As Deputy Executive Director, Beasley supports the high-level administration of Colorado's early childhood programs. She serves as a key gatekeeper and operational leader for the department's strategic initiatives.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Mary Alice Cohen",
+        "title": "Office of Program Delivery Director",
+        "organization": "Colorado Department of Early Childhood",
+        "email": "cdec_communications@state.co.us",
+        "reasoning": "Cohen directs the Office of Program Delivery, which is responsible for the actual implementation and execution of preschool services. Her role is critical for ensuring that the universal preschool model is effectively delivered to families.",
+        "confidence": 0.9
+      },
+      {
+        "name": "T Vail Shoultz-McCole",
+        "title": "Rules Advisory Council (RAC) Vice Chair",
+        "organization": "Colorado Department of Early Childhood",
+        "email": "cdec_communications@state.co.us",
+        "reasoning": "As Vice Chair of the Rules Advisory Council, Shoultz-McCole has significant influence over the regulatory standards and rulemaking process for early childhood programs. This council shapes the policies that govern how preschool providers operate within the state system.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Caitlin Jensen",
+        "title": "Executive Director",
+        "organization": "Zero to Five Montana",
+        "email": "caitlinj@zerotofive.org",
+        "reasoning": "As the leader of Montana's primary early childhood advocacy organization, she directs the policy strategy and governmental relations necessary to implement universal preschool. Her role involves coordinating with state and federal leadership to address systemic childcare issues and economic support for families.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Alex DuBois",
+        "title": "Policy & Engagement Director",
+        "organization": "Zero to Five Montana",
+        "email": "alexd@zerotofive.org",
+        "reasoning": "She manages state advocacy and community engagement efforts, making her a key gatekeeper for grassroots mobilization around preschool legislation. Her focus on systems building and family-forward initiatives directly influences how universal preschool models are promoted to the public and lawmakers.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Sarah Froehlke",
+        "title": "Early Childhood Policy Analyst",
+        "organization": "Zero to Five Montana",
+        "email": "sarahf@zerotofive.org",
+        "reasoning": "She provides the technical analysis and data required to justify the economic benefits of universal preschool to state legislators. Her research likely forms the basis for the economic arguments central to the advocacy campaign.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Melissa Winger",
+        "title": "Early Childhood Policy Manager",
+        "organization": "Zero to Five Montana",
+        "email": "melissaw@zerotofive.org",
+        "reasoning": "She oversees the execution of policy initiatives and manages the day-to-day legislative tracking and advocacy coordination. Her role is critical for ensuring that the proposed preschool model aligns with existing state regulations and funding structures.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Karen Gilbert",
+        "title": "Communications Director",
+        "organization": "Zero to Five Montana",
+        "email": "kareng@zerotofive.org",
+        "reasoning": "She controls the messaging and public narrative regarding the economic and social benefits of early childhood education. Her background in the Montana Legislature's Fiscal Division provides her with unique leverage in framing fiscal arguments to policymakers.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Callie Parr",
+        "title": "Early Childhood Tribal Coordinator",
+        "organization": "Zero to Five Montana",
+        "email": "calliep@zerotofive.org",
+        "reasoning": "She ensures that universal preschool initiatives are inclusive of and effective for Montana's tribal communities. Her role is essential for building the broad, statewide coalition needed to pass significant education reform.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Stephanie Ingram",
+        "title": "President",
+        "organization": "Delaware State Education Association",
+        "email": "membershipsupport@dsea.org",
+        "reasoning": "She leads the primary union representing Delaware educators, making her a vital coalition partner for implementing universal preschool. Her support ensures the labor force and political mobilization needed to sustain such a program are in place.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Thomas Bracken",
+        "title": "President and CEO",
+        "organization": "New Jersey Chamber of Commerce",
+        "email": "Tom.Bracken@njchamber.com",
+        "reasoning": "He represents the business community's interests and can amplify the economic argument that preschool supports the current workforce and future talent pipeline. His endorsement validates the program as a driver of state-wide prosperity and job growth.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Jeff Taschner",
+        "title": "Executive Director",
+        "organization": "Delaware State Education Association",
+        "email": "membershipsupport@dsea.org",
+        "reasoning": "He manages the operational and advocacy strategies for the state's largest educator union. He holds significant gatekeeping power over the organization's policy priorities and legislative engagement regarding early childhood education.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Jon Neubauer",
+        "title": "Director of Education Policy",
+        "organization": "Delaware State Education Association",
+        "email": "membershipsupport@dsea.org",
+        "reasoning": "He is responsible for developing the union's stance on educational reforms and would be the primary staffer analyzing the Colorado preschool model's applicability to Delaware. His expertise influences the technical details of any proposed universal preschool legislation.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Michael Egenton",
+        "title": "Executive Vice President, Government Relations",
+        "organization": "New Jersey Chamber of Commerce",
+        "email": "theresa@njchamber.com",
+        "reasoning": "He leads the Chamber's legislative advocacy efforts and directly engages with state lawmakers on economic policy. His role is crucial for navigating the political landscape and securing business-friendly support for childcare and education funding.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Lynda Schlegel Culver",
+        "title": "Chair at Pennsylvania Senate Education Committee",
+        "organization": "Pennsylvania State Senate",
+        "email": "lculver@pasen.gov",
+        "reasoning": "As the Chair of the Senate Education Committee, she has direct authority over the legislative progress of preschool initiatives and education funding in Pennsylvania. Her leadership is essential for moving any universal preschool model through the upper chamber and reconciling policy differences.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "US",
+        "displayText": "Colorado",
+        "scopeLevel": "country",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "federal"
+      }
+    ]
+  },
+  "heal-the-highway-scar": {
+    "slug": "heal-the-highway-scar",
+    "title": "Tear down the highway scar and heal our city",
+    "description": "The City Councils of Dallas, Rochester, and Syracuse must commit to removing urban freeways to restore the health and connection of our neighborhoods.",
+    "messageBody": "A highway is not just a road; it is a wound that never healed. For decades, these concrete barriers have functioned as scars across Dallas, Rochester, and Syracuse, severing neighborhoods and cutting off the lifeblood of our local economies. We have lived with the noise, the pollution, and the division for long enough. It is time to treat these freeways as the mistakes they are and begin the work of healing our cities.\n\n[Personal Connection]\n\nWe already have the blueprint for what happens when we prioritize people over pavement. In Rochester, replacing the below-grade Inner Loop with a street-level boulevard catalyzed the 'Neighborhood of Play,' anchored by a $75 million museum expansion and new residential developments [1]. This transformation proves that removing a scar creates room for a community to breathe and grow. Furthermore, the U.S. Department of Transportation has set a clear goal to reduce roadway fatalities to 36,458 or fewer by 2026 [3]; eliminating dangerous, aging urban freeways is a direct path to achieving that safety milestone.\n\nThe resources to act are available now. Congress has approved $64.3 billion for the Federal Highway Administration for FY 2026, including $350 million specifically for bridge repair and rehabilitation [2]. Even the House Appropriations Committee’s call for fiscal discipline and an 'America First' agenda acknowledges the urgent need to reprioritize transportation funding to meet the nation's actual infrastructure needs [4]. \n\nI am asking you to commit to the removal of urban freeways in our cities. Use the authorized federal funding to replace these scars with human-scale infrastructure that restores our health, our property values, and our connection to one another. We are watching how these billions are spent, and we will remember who chose to keep us divided and who chose to lead us toward recovery.\n\n[Name]",
+    "preview": "A highway is not just a road; it is a wound that never healed. For decades, these concrete barriers have functioned as scars across Dallas, Rochester, and Syracuse, severing neighborhoods and cutting",
+    "category": "infrastructure",
+    "topics": [
+      "transportation",
+      "urban-planning",
+      "environment",
+      "public-health"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "email",
+    "countryCode": "US",
+    "sources": [
+      {
+        "num": 1,
+        "title": "Rochester Shows Possible Future for Former Highways",
+        "url": "https://www.planetizen.com/news/2024/04/128481-rochester-shows-possible-future-former-highways",
+        "type": "journalism"
+      },
+      {
+        "num": 2,
+        "title": "Congress Approves FY 2026 Transportation, Housing and Urban Development Appropriations Bill",
+        "url": "https://www.appropriations.senate.gov/news/majority/congress-approves-fy-2026-transportation-housing-and-urban-development-appropriations-bill",
+        "type": "government"
+      },
+      {
+        "num": 3,
+        "title": "U.S. Department of Transportation FY 2026 Annual Performance Plan",
+        "url": "https://www.transportation.gov/sites/dot.gov/files/DOT_FY%202026_Annual_Performance_Plan-508.pdf",
+        "type": "government"
+      },
+      {
+        "num": 4,
+        "title": "Committee Approves FY26 Transportation, Housing and Urban Development Appropriations Act",
+        "url": "http://appropriations.house.gov/news/press-releases/committee-approves-fy26-transportation-housing-and-urban-development",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "US transportation urban-planning environment 2026",
+      "US Tear down the highway scar and heal our city",
+      "The City Councils of Dallas, Rochester, and Syracuse must commit to removing urban freeways to restore the health and co"
+    ],
+    "recipientConfig": {
+      "reach": "location-specific",
+      "decisionMakers": [
+        {
+          "name": "Sean Duffy",
+          "role": "Secretary of Transportation",
+          "shortName": "Duffy",
+          "organization": "U.S. Department of Transportation",
+          "email": "pressoffice@dot.gov"
+        },
+        {
+          "name": "Sean McMaster",
+          "role": "Administrator",
+          "shortName": "McMaster",
+          "organization": "Federal Highway Administration",
+          "email": "FHWA.pressoffice@dot.gov"
+        },
+        {
+          "name": "Eric L. Johnson",
+          "role": "Mayor",
+          "shortName": "Johnson",
+          "organization": "City of Dallas",
+          "email": "maddy.madrazo@dallas.gov"
+        },
+        {
+          "name": "Ryan McCormack",
+          "role": "Under Secretary of Transportation for Policy",
+          "shortName": "McCormack",
+          "organization": "U.S. Department of Transportation",
+          "email": "pressoffice@dot.gov"
+        },
+        {
+          "name": "Maddy Madrazo",
+          "role": "Chief of Policy & Communications",
+          "shortName": "Madrazo",
+          "organization": "Office of the Mayor, City of Dallas",
+          "email": "maddy.madrazo@dallas.gov"
+        },
+        {
+          "name": "Steven G. Bradbury",
+          "role": "Deputy Secretary of Transportation",
+          "shortName": "Bradbury",
+          "organization": "U.S. Department of Transportation",
+          "email": "pressoffice@dot.gov"
+        },
+        {
+          "name": "Charles Peterson Meachum",
+          "role": "Chief of Staff",
+          "shortName": "Meachum",
+          "organization": "U.S. Department of Transportation",
+          "email": "pressoffice@dot.gov"
+        },
+        {
+          "name": "Sharon F. Owens",
+          "role": "Mayor",
+          "shortName": "Owens",
+          "organization": "City of Syracuse",
+          "email": "mayor@syr.gov"
+        },
+        {
+          "name": "Malik Evans",
+          "role": "Mayor",
+          "shortName": "Evans",
+          "organization": "City of Rochester",
+          "email": "info@cityofrochester.gov"
+        },
+        {
+          "name": "Marie Therese Dominguez",
+          "role": "Commissioner",
+          "shortName": "Dominguez",
+          "organization": "New York State Department of Transportation",
+          "email": "Glenn.Blain@dot.ny.gov"
+        },
+        {
+          "name": "Rita Paniagua",
+          "role": "President of the Syracuse Common Council",
+          "shortName": "Paniagua",
+          "organization": "City of Syracuse",
+          "email": "RPaniagua@syr.gov"
+        },
+        {
+          "name": "Miguel Melendez",
+          "role": "City Council President",
+          "shortName": "Melendez",
+          "organization": "City of Rochester",
+          "email": "info@cityofrochester.gov"
+        },
+        {
+          "name": "Dana K. Miller",
+          "role": "Commissioner of Neighborhood and Business Development",
+          "shortName": "Miller",
+          "organization": "City of Rochester",
+          "email": "info@cityofrochester.gov"
+        },
+        {
+          "name": "Kabutey Ocansey",
+          "role": "Commissioner of Environmental Services",
+          "shortName": "Ocansey",
+          "organization": "City of Rochester",
+          "email": "info@cityofrochester.gov"
+        },
+        {
+          "name": "Alexander Marion",
+          "role": "City Auditor",
+          "shortName": "Marion",
+          "organization": "City of Syracuse",
+          "email": "audit@syr.gov"
+        },
+        {
+          "name": "Chol Majok",
+          "role": "Common Councilor At-Large",
+          "shortName": "Majok",
+          "organization": "City of Syracuse",
+          "email": "CMajok@syr.gov"
+        },
+        {
+          "name": "Rasheada Caldwell",
+          "role": "Common Councilor At-Large",
+          "shortName": "Caldwell",
+          "organization": "City of Syracuse",
+          "email": "RCaldwell@syr.gov"
+        },
+        {
+          "name": "Travis Campbell",
+          "role": "District Engineer",
+          "shortName": "Campbell",
+          "organization": "Texas Department of Transportation",
+          "email": "James.Campbell@txdot.gov"
+        },
+        {
+          "name": "Chadwick Dabbs",
+          "role": "Fort Worth District Contact",
+          "shortName": "Dabbs",
+          "organization": "Texas Department of Transportation",
+          "email": "Chadwick.Dabbs@txdot.gov"
+        },
+        {
+          "name": "Michelle Meaux",
+          "role": "Austin District Contact",
+          "shortName": "Meaux",
+          "organization": "Texas Department of Transportation",
+          "email": "Michelle.Meaux@txdot.gov"
+        },
+        {
+          "name": "Catherine McCreight",
+          "role": "Houston District Contact",
+          "shortName": "McCreight",
+          "organization": "Texas Department of Transportation",
+          "email": "Catherine.McCreight@txdot.gov"
+        }
+      ],
+      "emails": [
+        "pressoffice@dot.gov",
+        "FHWA.pressoffice@dot.gov",
+        "maddy.madrazo@dallas.gov",
+        "pressoffice@dot.gov",
+        "maddy.madrazo@dallas.gov",
+        "pressoffice@dot.gov",
+        "pressoffice@dot.gov",
+        "mayor@syr.gov",
+        "info@cityofrochester.gov",
+        "Glenn.Blain@dot.ny.gov",
+        "RPaniagua@syr.gov",
+        "info@cityofrochester.gov",
+        "info@cityofrochester.gov",
+        "info@cityofrochester.gov",
+        "audit@syr.gov",
+        "CMajok@syr.gov",
+        "RCaldwell@syr.gov",
+        "James.Campbell@txdot.gov",
+        "Chadwick.Dabbs@txdot.gov",
+        "Michelle.Meaux@txdot.gov",
+        "Catherine.McCreight@txdot.gov"
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "email"
+    },
+    "contentHash": "6a2688645e588f413a6b116fe758baad01ea0965",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Sean Duffy",
+        "title": "Secretary of Transportation",
+        "organization": "U.S. Department of Transportation",
+        "email": "pressoffice@dot.gov",
+        "reasoning": "As the head of the DOT, he oversees the 'Reconnecting Communities' pilot program and controls the discretionary grant funding necessary for large-scale urban freeway removal. His office sets the national agenda for infrastructure projects that prioritize neighborhood reconnection and urban health.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Sean McMaster",
+        "title": "Administrator",
+        "organization": "Federal Highway Administration",
+        "email": "FHWA.pressoffice@dot.gov",
+        "reasoning": "He leads the agency responsible for the regulatory approval of changes to the Interstate Highway System and manages the environmental review processes required to decommission urban highways. His authority is critical for the technical and legal transition of highway land back to city use.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Eric L. Johnson",
+        "title": "Mayor",
+        "organization": "City of Dallas",
+        "email": "maddy.madrazo@dallas.gov",
+        "reasoning": "He serves as the primary executive champion for Dallas infrastructure and is the lead negotiator with state authorities regarding the future of the I-345 corridor. His support is essential for local legislative commitment to removing urban freeway scars.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Ryan McCormack",
+        "title": "Under Secretary of Transportation for Policy",
+        "organization": "U.S. Department of Transportation",
+        "email": "pressoffice@dot.gov",
+        "reasoning": "He directs the office responsible for the development of transportation policy, which includes the criteria and strategic goals for urban planning and neighborhood restoration projects. His office influences how federal policy treats highway removal as a public health and connectivity issue.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Maddy Madrazo",
+        "title": "Chief of Policy & Communications",
+        "organization": "Office of the Mayor, City of Dallas",
+        "email": "maddy.madrazo@dallas.gov",
+        "reasoning": "As the Chief of Policy for the Mayor's office, she acts as a primary gatekeeper and advisor on infrastructure and urban planning initiatives. She is the direct point of contact for policy inquiries and media regarding the Mayor's stance on highway removal.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Steven G. Bradbury",
+        "title": "Deputy Secretary of Transportation",
+        "organization": "U.S. Department of Transportation",
+        "email": "pressoffice@dot.gov",
+        "reasoning": "As the second-highest official at the DOT, he assists in managing the department's budget and operational priorities, including the allocation of infrastructure grants for urban renewal. He provides institutional leverage over the implementation of large-scale transportation shifts.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Charles Peterson Meachum",
+        "title": "Chief of Staff",
+        "organization": "U.S. Department of Transportation",
+        "email": "pressoffice@dot.gov",
+        "reasoning": "He manages the Secretary's daily agenda and coordinates high-level decision-making across the department's various administrations. He is a critical gatekeeper for projects seeking the Secretary's direct attention or approval.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Sharon F. Owens",
+        "title": "Mayor",
+        "organization": "City of Syracuse",
+        "email": "mayor@syr.gov",
+        "reasoning": "As the lead local advocate for the I-81 viaduct removal, she coordinates neighborhood land-use and community health initiatives. Her administration is responsible for the city's housing strategy and regional manufacturing partnerships linked to urban renewal.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Malik Evans",
+        "title": "Mayor",
+        "organization": "City of Rochester",
+        "email": "info@cityofrochester.gov",
+        "reasoning": "He directs city planning resources toward the Inner Loop North transformation project to complete the city's highway removal circuit. He oversees the Office of Financial Empowerment and transformative capital programs aimed at neighborhood reinvestment.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Marie Therese Dominguez",
+        "title": "Commissioner",
+        "organization": "New York State Department of Transportation",
+        "email": "Glenn.Blain@dot.ny.gov",
+        "reasoning": "She holds ultimate operational control over the I-81 and Inner Loop assets, making her approval mandatory for any physical removal. She is currently leading the state's Active Transportation Strategic Plan to improve walking and cycling infrastructure.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Rita Paniagua",
+        "title": "President of the Syracuse Common Council",
+        "organization": "City of Syracuse",
+        "email": "RPaniagua@syr.gov",
+        "reasoning": "As the legislative leader of the council, she has the authority to approve city-level commitments and funding for highway removal projects. She oversees the council's role in delivering city services and infrastructure policy.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Miguel Melendez",
+        "title": "City Council President",
+        "organization": "City of Rochester",
+        "email": "info@cityofrochester.gov",
+        "reasoning": "He leads the legislative body that must approve the budget and zoning changes necessary for the Inner Loop North transformation. His office is a primary gatekeeper for city-wide infrastructure legislation.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Dana K. Miller",
+        "title": "Commissioner of Neighborhood and Business Development",
+        "organization": "City of Rochester",
+        "email": "info@cityofrochester.gov",
+        "reasoning": "He oversees the department responsible for zoning, permitting, and planning the transformation of reclaimed highway land. His role is critical for ensuring highway removal leads to equitable neighborhood revitalization.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Kabutey Ocansey",
+        "title": "Commissioner of Environmental Services",
+        "organization": "City of Rochester",
+        "email": "info@cityofrochester.gov",
+        "reasoning": "He manages the city's engineering, street design, and utility permits, which are essential for the physical removal of highway infrastructure. His department handles the technical execution of street-level connectivity projects.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Alexander Marion",
+        "title": "City Auditor",
+        "organization": "City of Syracuse",
+        "email": "audit@syr.gov",
+        "reasoning": "He provides oversight on the value and resource allocation of major city infrastructure projects like the I-81 removal. His independent voice ensures fiscal accountability for large-scale urban planning investments.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Chol Majok",
+        "title": "Common Councilor At-Large",
+        "organization": "City of Syracuse",
+        "email": "CMajok@syr.gov",
+        "reasoning": "As an at-large councilor, he votes on city-wide infrastructure commitments and the legislative framework for neighborhood reconnection. He represents the entire city's interest in the I-81 viaduct project.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Rasheada Caldwell",
+        "title": "Common Councilor At-Large",
+        "organization": "City of Syracuse",
+        "email": "RCaldwell@syr.gov",
+        "reasoning": "She participates in the legislative approval process for urban planning and community development projects. Her vote is necessary for authorizing the city's participation in highway removal initiatives.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Travis Campbell",
+        "title": "District Engineer",
+        "organization": "Texas Department of Transportation",
+        "email": "James.Campbell@txdot.gov",
+        "reasoning": "Manages the regional highway portfolio and serves as the primary technical gatekeeper for any proposed decommissioning of state-owned highway segments in Dallas. His technical approval is required for any structural changes to these urban corridors.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Chadwick Dabbs",
+        "title": "Fort Worth District Contact",
+        "organization": "Texas Department of Transportation",
+        "email": "Chadwick.Dabbs@txdot.gov",
+        "reasoning": "As the contact for the Fort Worth District, he manages transportation infrastructure in the western half of the DFW metroplex. His coordination is essential for regional traffic flow and any large-scale highway removals that impact the broader North Texas network.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Michelle Meaux",
+        "title": "Austin District Contact",
+        "organization": "Texas Department of Transportation",
+        "email": "Michelle.Meaux@txdot.gov",
+        "reasoning": "She oversees the Austin District, which is currently implementing major urban highway projects like the I-35 transformation. Her experience with urban freeway capping and removal provides institutional precedent for similar initiatives in Dallas.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Catherine McCreight",
+        "title": "Houston District Contact",
+        "organization": "Texas Department of Transportation",
+        "email": "Catherine.McCreight@txdot.gov",
+        "reasoning": "She serves as the contact for the Houston District, managing one of the most complex urban highway systems in the country. Her office's approach to urban mobility and highway expansion vs. removal sets a significant policy benchmark for other Texas cities.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "US",
+        "displayText": "United States",
+        "scopeLevel": "country",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "federal"
+      }
+    ]
+  },
+  "us-green-card-century-wait": {
+    "slug": "us-green-card-century-wait",
+    "title": "Skilled workers shouldn't wait a century for green cards",
+    "description": "The United States government must eliminate the century-long US employment green card backlog.",
+    "messageBody": "A 134-year wait is not a queue; it is a life sentence in a backlog. We are asking the world’s most talented professionals to move here, build businesses, and raise families, all while knowing the current statutory country caps mean many will likely die before their application is even reviewed [1]. \n\n[Personal Connection]\n\nThis level of dysfunction is a policy choice, not a necessity. Your own agency data confirms the system is failing to keep pace with reality, as USCIS reached the H-2B statutory cap for the entire second half of fiscal year 2026 by March 10th—just ten days into the period [3]. When we project wait times that span over a century for Indian H-1B holders due to the 7% per-country limit, we are effectively telling the people our economy needs most that they will never truly belong here [1].\n\nThere is a clear path forward that has already earned the support of the U.S. Chamber of Commerce and bipartisan leadership. The Dignity Act of 2025 is designed to modernize these failing pathways and address the workforce shortages that these backlogs exacerbate [2].\n\nI am asking you to use your administrative and oversight authority to champion the elimination of the per-country caps and support the immediate reforms proposed in the Dignity Act. We need an immigration system that functions on a human timeline, not a centennial one.\n\n[Name]",
+    "preview": "A 134-year wait is not a queue; it is a life sentence in a backlog. We are asking the world’s most talented professionals to move here, build businesses, and raise families, all while knowing the curr",
+    "category": "immigration",
+    "topics": [
+      "immigration",
+      "labor"
+    ],
+    "type": "campaign",
+    "deliveryMethod": "cwc",
+    "countryCode": "US",
+    "sources": [
+      {
+        "num": 1,
+        "title": "134-year US green card wait for Indian H-1Bs: Why backlog keeps growing",
+        "url": "https://www.business-standard.com/immigration/134-year-us-green-card-wait-for-indian-h-1bs-why-backlog-keeps-growing-126031900743_1.html",
+        "type": "journalism"
+      },
+      {
+        "num": 2,
+        "title": "The DIGNIDAD (Dignity) Act of 2025 Seeks to Transform U.S. Immigration",
+        "url": "https://www.gtlaw-insidebusinessimmigration.com/immigration-and-compliance/the-dignidad-dignity-act-of-2025-seeks-to-transform-u-s-immigration/",
+        "type": "legal"
+      },
+      {
+        "num": 3,
+        "title": "H-2B Temporary Non-Agricultural Workers | USCIS",
+        "url": "https://www.uscis.gov/working-united-states/temporary-workers/h-2b-temporary-non-agricultural-workers",
+        "type": "government"
+      }
+    ],
+    "researchLog": [
+      "US immigration labor 2026",
+      "US Skilled workers shouldn't wait a century for green cards",
+      "The United States government must eliminate the century-long US employment green card backlog."
+    ],
+    "recipientConfig": {
+      "reach": "district-based",
+      "chambers": [
+        "house",
+        "senate"
+      ],
+      "cwcRouting": true,
+      "decisionMakers": [
+        {
+          "name": "Joseph B. Edlow",
+          "role": "Director",
+          "shortName": "Edlow",
+          "organization": "U.S. Citizenship and Immigration Services",
+          "email": "usciscongressionalinquiries@uscis.dhs.gov"
+        },
+        {
+          "name": "Mora Namdar",
+          "role": "Assistant Secretary for Consular Affairs",
+          "shortName": "Namdar",
+          "organization": "U.S. Department of State",
+          "email": "212ewaiver@state.gov"
+        },
+        {
+          "name": "Brian Gottstein",
+          "role": "Associate Director, External Affairs Directorate",
+          "shortName": "Gottstein",
+          "organization": "U.S. Citizenship and Immigration Services",
+          "email": "usciscongressionalinquiries@uscis.dhs.gov"
+        },
+        {
+          "name": "Markwayne Mullin",
+          "role": "Secretary of Homeland Security",
+          "shortName": "Mullin",
+          "organization": "U.S. Department of Homeland Security",
+          "email": "CongresstoDHS@hq.dhs.gov"
+        },
+        {
+          "name": "Eric Ruark",
+          "role": "Assistant Secretary for Border and Immigration",
+          "shortName": "Ruark",
+          "organization": "U.S. Department of Homeland Security",
+          "email": "CongresstoDHS@hq.dhs.gov"
+        },
+        {
+          "name": "Regan Williams",
+          "role": "Director, Oversight and Judiciary",
+          "shortName": "Williams",
+          "organization": "U.S. Department of Homeland Security",
+          "email": "CongresstoDHS@hq.dhs.gov"
+        }
+      ]
+    },
+    "deliveryConfig": {
+      "provider": "cwc",
+      "formFill": true
+    },
+    "cwcConfig": {
+      "enabled": true,
+      "priority": "normal",
+      "tracking_enabled": true
+    },
+    "contentHash": "2a1a54c9504e9f60164263e83d9e89e48d148c04",
+    "approved": true,
+    "decisionMakers": [
+      {
+        "name": "Joseph B. Edlow",
+        "title": "Director",
+        "organization": "U.S. Citizenship and Immigration Services",
+        "email": "usciscongressionalinquiries@uscis.dhs.gov",
+        "reasoning": "As the Director of USCIS, he oversees the administrative processing of all employment-based green card applications and has the authority to implement policy changes that reduce technical backlogs. His leadership determines how agency resources are allocated to address the multi-decade wait times faced by skilled workers.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Mora Namdar",
+        "title": "Assistant Secretary for Consular Affairs",
+        "organization": "U.S. Department of State",
+        "email": "212ewaiver@state.gov",
+        "reasoning": "This role is responsible for the Bureau of Consular Affairs, which manages the issuance of visas at embassies and publishes the monthly Visa Bulletin. This bulletin is the primary mechanism that controls the movement of priority dates for the green card backlog.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Brian Gottstein",
+        "title": "Associate Director, External Affairs Directorate",
+        "organization": "U.S. Citizenship and Immigration Services",
+        "email": "usciscongressionalinquiries@uscis.dhs.gov",
+        "reasoning": "He leads the directorate responsible for all external communications and legislative affairs, making him a key gatekeeper for policy advocacy regarding green card backlogs. His office manages the relationship between USCIS and Congress, influencing how legislative proposals are interpreted and implemented by the agency.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Markwayne Mullin",
+        "title": "Secretary of Homeland Security",
+        "organization": "U.S. Department of Homeland Security",
+        "email": "CongresstoDHS@hq.dhs.gov",
+        "reasoning": "He oversees the entire immigration apparatus and has the authority to issue executive guidance or regulations that can provide relief to those in the backlog. His department manages the agencies responsible for adjudicating green card applications and setting processing priorities.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Eric Ruark",
+        "title": "Assistant Secretary for Border and Immigration",
+        "organization": "U.S. Department of Homeland Security",
+        "email": "CongresstoDHS@hq.dhs.gov",
+        "reasoning": "Within the Office of Strategy, Policy, and Plans, he is responsible for the policy framework governing immigration. He is a key decision-maker in developing the regulatory solutions required to manage visa caps and backlog relief.",
+        "confidence": 0.9
+      },
+      {
+        "name": "Regan Williams",
+        "title": "Director, Oversight and Judiciary",
+        "organization": "U.S. Department of Homeland Security",
+        "email": "CongresstoDHS@hq.dhs.gov",
+        "reasoning": "As the primary liaison for the Judiciary committees within the Office of Legislative Affairs, they manage the department's interaction with the legislative bodies that control green card reform. This role is a critical gatekeeper for coordinating policy changes between the executive and legislative branches.",
+        "confidence": 0.9
+      }
+    ],
+    "scopes": [
+      {
+        "countryCode": "US",
+        "displayText": "United States",
+        "scopeLevel": "country",
+        "confidence": 1,
+        "extractionMethod": "agent-pipeline"
+      }
+    ],
+    "jurisdictions": [
+      {
+        "jurisdictionType": "federal"
+      }
+    ]
+  }
+}
