@@ -579,7 +579,7 @@ export default defineSchema({
     title: v.optional(v.string()),
     email: v.optional(v.string()),
     emailSource: v.optional(v.string()),
-    verificationStatus: v.optional(v.string()),
+    verificationStatus: v.optional(v.union(v.literal("deliverable"), v.literal("risky"), v.literal("undeliverable"))),
     verifiedAt: v.optional(v.number()),
     resolvedAt: v.number(),
     expiresAt: v.number(),

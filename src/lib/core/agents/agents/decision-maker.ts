@@ -31,7 +31,7 @@ import { ThoughtEmitter } from '$lib/core/thoughts/emitter';
 import { decisionMakerRouter } from '../providers';
 import { sumTokenUsage } from '../types';
 import { verifyEmailBatch, type EmailVerdict } from '$lib/server/email-verification';
-import { upsertResolvedContacts } from '../utils/contact-cache';
+import { updateContactVerification } from '../utils/contact-cache';
 import { generateAccountabilityOpeners } from './decision-maker-accountability';
 import {
 	documentToolDefinition,
@@ -692,7 +692,7 @@ export async function resolveDecisionMakers(
 
 					// Write verification status back to contact cache (awaited for ALS scope)
 					if (cacheUpdates.length > 0) {
-						await upsertResolvedContacts(cacheUpdates).catch((err) =>
+						await updateContactVerification(cacheUpdates).catch((err) =>
 							console.warn('[decision-maker] Phase 3.5 cache writeback failed:', err)
 						);
 					}

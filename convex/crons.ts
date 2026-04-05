@@ -133,4 +133,14 @@ crons.interval(
   internal.workflows.processScheduled,
 );
 
+// ---------------------------------------------------------------------------
+// 11. Contact Cache Cleanup — expire stale resolved contacts (14-day TTL)
+//     Runs daily at 01:30 UTC.
+// ---------------------------------------------------------------------------
+crons.daily(
+  "contact-cache-cleanup",
+  { hourUTC: 1, minuteUTC: 30 },
+  internal.resolvedContacts.cleanupExpired,
+);
+
 export default crons;

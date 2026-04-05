@@ -46,7 +46,8 @@ vi.mock('$lib/core/agents/exa-search', () => ({
 // Mock contact cache
 vi.mock('$lib/core/agents/utils/contact-cache', () => ({
 	getCachedContacts: vi.fn().mockResolvedValue([]),
-	upsertResolvedContacts: vi.fn().mockResolvedValue(undefined)
+	upsertResolvedContacts: vi.fn().mockResolvedValue(undefined),
+	normalizeOrgKey: (key: string) => key.trim().toUpperCase().replace(/\s+/g, ':'),
 }));
 
 // Mock thought emitter
