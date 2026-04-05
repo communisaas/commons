@@ -93,3 +93,6 @@ commons-desktop-a11y.md
 
 # Convex generated files
 # convex/_generated/ is committed — needed for CI build and tests (24K, schema-derived)
+
+# Playwright MCP artifacts
+.playwright-mcp/
