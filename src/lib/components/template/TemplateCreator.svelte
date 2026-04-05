@@ -403,6 +403,13 @@
 
 	// Auto-save setup (onMount needed for cleanup lifecycle)
 	onMount(() => {
+		// Hydrate encrypted DM emails from prior resolution (async, fast)
+		if (_loadedDraft && formData.audience?.decisionMakers?.length > 0) {
+			templateDraftStore.hydrateEmails(draftId, formData).catch(() => {
+				// Decryption failed (different device, cleared keys) — emails stay empty
+			});
+		}
+
 		// Draft was already loaded synchronously above for initialDraftId.
 		// Only handle the recovery modal path here (no initialDraftId).
 		if (!_loadedDraft && !initialDraftId) {
@@ -490,6 +497,10 @@
 			formData = draft.data;
 			currentStep = draft.currentStep as 'objective' | 'audience' | 'content';
 			lastSaved = draft.lastSaved;
+			// Hydrate encrypted DM emails
+			if (formData.audience?.decisionMakers?.length > 0) {
+				templateDraftStore.hydrateEmails(draftId, formData).catch(() => {});
+			}
 		}
 		showDraftRecovery = false;
 	}

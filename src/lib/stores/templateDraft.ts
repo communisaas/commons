@@ -1,6 +1,12 @@
 import { writable, type Writable } from 'svelte/store';
 import type { TemplateFormData } from '$lib/types/template';
 import { z } from 'zod';
+import {
+	encryptPiiClient,
+	decryptPiiClient,
+	isClientPiiAvailable,
+	type ClientEncryptedPii
+} from '$lib/core/crypto/client-pii';
 
 interface PendingSuggestion {
 	subject_line: string;
@@ -41,6 +47,8 @@ interface TemplateDraftStore {
 		currentStep: string;
 		pendingSuggestion?: PendingSuggestion | null;
 	} | null;
+	/** Hydrate encrypted DM emails back into a draft's data. Call after getDraft. */
+	hydrateEmails: (draftId: string, data: TemplateFormData) => Promise<void>;
 	deleteDraft: (draftId: string) => void;
 	startAutoSave: (
 		draftId: string,
@@ -114,14 +122,75 @@ function createTemplateDraftStore(): TemplateDraftStore {
 		return {};
 	}
 
-	// Save drafts to localStorage
+	// Save drafts to localStorage.
+	// DM emails are stripped from the main blob and encrypted separately.
 	function saveDrafts(drafts: DraftStorage) {
 		if (typeof localStorage === 'undefined') return;
 
+		// Extract emails before writing, replace with empty strings in the persisted copy
+		const emailsByDraft = new Map<string, Array<{ idx: number; email: string }>>();
+		const sanitized = JSON.parse(JSON.stringify(drafts)) as DraftStorage;
+
+		for (const [draftId, draft] of Object.entries(sanitized)) {
+			const dms = (draft.data as TemplateFormData)?.audience?.decisionMakers;
+			if (!Array.isArray(dms)) continue;
+			const emails: Array<{ idx: number; email: string }> = [];
+			for (let i = 0; i < dms.length; i++) {
+				if (dms[i].email) {
+					emails.push({ idx: i, email: dms[i].email as string });
+					dms[i].email = ''; // strip from main blob
+				}
+			}
+			if (emails.length > 0) emailsByDraft.set(draftId, emails);
+		}
+
 		try {
-			localStorage.setItem(STORAGE_KEY, JSON.stringify(drafts));
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
 		} catch {
 			console.warn('Failed to save template drafts to localStorage');
+		}
+
+		// Encrypt emails async — best-effort, non-blocking
+		if (emailsByDraft.size > 0 && isClientPiiAvailable()) {
+			encryptDraftEmails(emailsByDraft);
+		}
+	}
+
+	/** Encrypt DM emails and store in a separate localStorage key per draft. */
+	async function encryptDraftEmails(emailsByDraft: Map<string, Array<{ idx: number; email: string }>>) {
+		for (const [draftId, emails] of emailsByDraft) {
+			try {
+				const plaintext = JSON.stringify(emails);
+				const encrypted = await encryptPiiClient(plaintext, draftId, 'dm-emails');
+				localStorage.setItem(`${STORAGE_KEY}_emails_${draftId}`, JSON.stringify(encrypted));
+			} catch {
+				// Encryption unavailable — emails already stripped from main blob
+			}
+		}
+	}
+
+	/** Decrypt DM emails and merge back into draft data. */
+	async function decryptDraftEmails(draftId: string, data: TemplateFormData): Promise<void> {
+		if (!isClientPiiAvailable()) return;
+		const stored = localStorage.getItem(`${STORAGE_KEY}_emails_${draftId}`);
+		if (!stored) return;
+
+		try {
+			const encrypted: ClientEncryptedPii = JSON.parse(stored);
+			const plaintext = await decryptPiiClient(encrypted, draftId, 'dm-emails');
+			if (!plaintext) return;
+
+			const emails: Array<{ idx: number; email: string }> = JSON.parse(plaintext);
+			const dms = data.audience?.decisionMakers;
+			if (!Array.isArray(dms)) return;
+
+			for (const { idx, email } of emails) {
+				if (dms[idx]) {
+					dms[idx].email = email;
+				}
+			}
+		} catch {
+			// Decryption failed (different device, cleared keys) — emails stay empty
 		}
 	}
 
@@ -151,7 +220,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 				recipientEmails: Array.isArray(data.audience?.recipientEmails)
 					? [...data.audience.recipientEmails]
 					: [],
-				// Decision makers from AI resolution - preserve ALL fields including email
+				// Decision makers from AI resolution — emails encrypted at localStorage boundary
 				decisionMakers: Array.isArray(data.audience?.decisionMakers)
 					? data.audience.decisionMakers.map((dm) => ({
 							name: dm.name ?? '',
@@ -160,8 +229,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 							reasoning: dm.reasoning ?? '',
 							source_url: dm.source_url ?? '',
 							confidence: dm.confidence ?? 0,
-							// F-R6-09: Strip DM email from localStorage — fetched from server at send time
-							email: '',
+							email: dm.email ?? '',
 							source: dm.source ?? '',
 							isAiResolved: dm.isAiResolved ?? true,
 							provenance: dm.provenance ?? ''
@@ -248,6 +316,9 @@ function createTemplateDraftStore(): TemplateDraftStore {
 			delete updated[draftId];
 			saveDrafts(updated);
 
+			// Clear encrypted emails
+			try { localStorage.removeItem(`${STORAGE_KEY}_emails_${draftId}`); } catch { /* */ }
+
 			// Clear any auto-save timer
 			const timerId = autoSaveTimers.get(draftId);
 			if (timerId) {
@@ -317,6 +388,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 		subscribe,
 		saveDraft,
 		getDraft,
+		hydrateEmails: decryptDraftEmails,
 		deleteDraft,
 		startAutoSave,
 		hasDraft,
