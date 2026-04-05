@@ -4,7 +4,11 @@ import wasm from 'vite-plugin-wasm';
 import alias from '@rollup/plugin-alias';
 import { fileURLToPath } from 'url';
 
-// Suppress spurious MaxListenersExceededWarning from SvelteKit HMR child processes
+// Suppress spurious MaxListenersExceededWarning from SvelteKit HMR child processes.
+// process.setMaxListeners covers the global process EventEmitter;
+// events.defaultMaxListeners covers ChildProcess instances spawned by Vite/SvelteKit.
+import { EventEmitter } from 'events';
+EventEmitter.defaultMaxListeners = 20;
 process.setMaxListeners(20);
 
 // Resolve paths for alias configuration

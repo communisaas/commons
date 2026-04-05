@@ -1,26 +1,31 @@
 # Commons Design System
 
-**The weight of numbers.**
+**Verified voice, directed.**
 
 ---
 
 ## Philosophy
 
-Commons is infrastructure for organized pressure. One complaint gets buried. Five thousand coordinated messages force a response.
+Commons is civic infrastructure for verified voice. One person writes to a decision-maker. Their identity is verified. Their message arrives. Others join. The coordination accumulates weight.
 
-The design system exists to make collective action feel inevitable.
+The design system exists to make civic action feel **real**.
 
-Every pixel answers one question: **does this make coordination feel heavier?**
+Every pixel answers one question: **does this make the action feel real?**
+
+"Real" means three things simultaneously:
+- **For the sender:** conviction — my message carries proof, is directed at a specific person, and will arrive
+- **For the collective:** substance — the coordination numbers have gravity, not decoration
+- **For the recipient:** credibility — this sender is verified, and I can check
 
 ---
 
 ## What We're Not
 
-We're not a SaaS product. We're not a "platform." We're not trying to look like Stripe or Linear or Vercel.
+We're not a SaaS product. We're not a consumer app. We're not a petition platform.
 
-Those are tools for individual productivity. Commons is a weapon for collective action.
+We're civic infrastructure. The design should feel like a well-made envelope — professional, solid, carrying something real. Not a weapon. Not a dashboard. Not a game.
 
-**We don't design for "credibility." We design for momentum.**
+**We design for conviction, not momentum. Credibility, not polish. Gravity, not weight.**
 
 ---
 
@@ -183,11 +188,53 @@ Numbers should tick like scoreboards—weighted, inevitable. Not bouncy or playf
 
 ---
 
+## Spatial Rhythm: The Primary Structural Tool
+
+Figure-ground without cards. Entities are text clusters, not containers.
+
+### The Proximity Ratio
+
+Internal spacing within an entity must be dramatically tighter than the void between entities. When the ratio is 1:4 or more, the visual system chunks each cluster as a unit — no border needed.
+
+```
+Entity (tight cluster)          ← name + title + action, 4-8px internal gaps
+                                ← 40px of composed silence
+Entity (tight cluster)          ← next cluster
+```
+
+The void IS the boundary. It has positive shape — defined by the clusters above and below.
+
+### Typographic Topography
+
+Entity names at text-xl (20px) create **topographic peaks** on the continuous surface. Your eye hops from peak to peak when scanning. Everything between peaks (titles, actions) is valley — detail you dip into when you've found the entity you want.
+
+```svelte
+<!-- Peak: the entity IS this name -->
+<h4 class="text-xl font-bold font-brand">Chuck Grassley</h4>
+<!-- Valley: subordinate, tight to name -->
+<p class="mt-0.5 text-sm text-slate-500">Chair, Senate Judiciary Committee</p>
+<!-- Latent: activates on hover -->
+<span class="text-sm text-slate-400 group-hover:text-teal">Write to them</span>
+```
+
+### Containment Policy
+
+Use the minimum structure the task requires for the user to perceive, chunk, and act. No pattern is ideologically forbidden; every pattern must earn its place.
+
+- **Proximity ratio** — default for entity lists. No borders, no backgrounds.
+- **Cards** — reserved for the message preview artifact (it IS a bounded object — an email).
+- **Borders** — reserved for major section breaks, not entity separation.
+- **Background shifts** — reserved for interactive states (hover, active), not resting state.
+
+### Action Affordances
+
+Action links are latent at rest (slate-400) and activate on hover (teal). The chevron appears with the color. This means the entity feels like information at rest and becomes interactive when you engage. No hover backgrounds — the text itself activates.
+
 ## Components
 
 ### Nodes (from RelayLoom)
 
-The node card is the base unit. White with slight blur, subtle border, soft shadow.
+The node card is the visualization unit. White with slight blur, subtle border, soft shadow. Used in RelayLoom and template browser cards — contexts where items are browsable objects.
 
 ```css
 .node {
@@ -216,23 +263,6 @@ The node card is the base unit. White with slight blur, subtle border, soft shad
 ```
 
 The paper plane animation is sophisticated. Keep it. It's earned.
-
-### Cards
-
-Gentle lift on hover. Shadow intensifies. No color change.
-
-```css
-.card {
-  border: 1px solid var(--border-node);
-  border-radius: 12px;
-  transition: transform 150ms, box-shadow 150ms;
-}
-
-.card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 30px -10px rgba(15, 23, 42, 0.2);
-}
-```
 
 ### Edges (Connection Lines)
 
@@ -358,13 +388,13 @@ Already covered. All animations respect `prefers-reduced-motion`.
 
 When reviewing design work, ask:
 
-1. Does this make coordination feel heavier?
+1. **Does this make the action feel real?** — conviction for the sender, substance for the collective, credibility for the recipient
 2. Is the animation communicating information or just decorating?
 3. Would this work if we removed all color except teal and emerald?
-4. Is the typography hierarchy clear at a glance?
-5. Does this feel like infrastructure or like a consumer app?
+4. Can you scan this surface by hopping between typographic peaks?
+5. **Does this feel honest?** — not "infrastructure vs. consumer app" but does every element earn its place?
 
-If it feels like a consumer app, it's wrong.
+If it manipulates rather than serves, it's wrong. If it decorates rather than communicates, it's wrong. If it gamifies rather than informs, it's wrong.
 
 ---
 

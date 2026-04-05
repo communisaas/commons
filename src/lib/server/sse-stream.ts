@@ -14,11 +14,19 @@ export function createSSEStream(traceConfig?: {
 	traceId: string;
 	endpoint: string;
 	userId?: string | null;
+	/** When provided, abort() is called on client disconnect so server-side work can stop. */
+	abortController?: AbortController;
 }) {
 	const encoder = new TextEncoder();
 	const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
 	const writer = writable.getWriter();
 	let closed = false;
+
+	function handleDisconnect() {
+		if (closed) return;
+		closed = true;
+		traceConfig?.abortController?.abort();
+	}
 
 	const emitter = {
 		/**
@@ -31,7 +39,7 @@ export function createSSEStream(traceConfig?: {
 				writer.write(encoder.encode(event));
 			} catch {
 				// Stream already closed by client disconnect or timeout
-				closed = true;
+				handleDisconnect();
 				return;
 			}
 		},

@@ -137,10 +137,22 @@ export const POST: RequestHandler = async (event) => {
 		hasAudienceGuidance: !!audience_guidance
 	});
 
+	// Abort on client disconnect OR 8-minute server ceiling.
+	// request.signal fires when the client closes the connection (refresh/navigate away).
+	// 8 minutes accommodates: Phase 1 (~15s) + Phase 2a (~20s) + Stage 1-3 (~60s)
+	// + Stage 4 parallel chunks (~30s) + verification (~15s) + margin.
+	const abortController = new AbortController();
+	const serverTimeout = setTimeout(() => abortController.abort(), 480_000);
+	event.request.signal.addEventListener('abort', () => {
+		console.debug(`[stream-decision-makers] Client disconnected, aborting resolution (trace: ${traceId})`);
+		abortController.abort();
+	});
+
 	const { stream, emitter } = createSSEStream({
 		traceId,
 		endpoint: 'decision-makers',
-		userId
+		userId,
+		abortController
 	});
 
 	(async () => {
@@ -148,10 +160,13 @@ export const POST: RequestHandler = async (event) => {
 		let resultTokenUsage: import('$lib/core/agents/types').TokenUsage | undefined;
 		let resultExternalCounts: import('$lib/core/agents/types').ExternalApiCounts | undefined;
 
-		// Server-side abort: 4-minute ceiling prevents runaway resolutions
-		// from holding the SSE connection (and Worker CPU) indefinitely.
-		const abortController = new AbortController();
-		const serverTimeout = setTimeout(() => abortController.abort(), 240_000);
+		// Heartbeat: send a keepalive every 30s so the client idle timer resets.
+		// Stage 4 parallel synthesis can be silent for 30-60s during generate() calls.
+		const heartbeat = setInterval(() => {
+			if (!abortController.signal.aborted) {
+				emitter.send('segment', { content: '' });
+			}
+		}, 30_000);
 
 		try {
 			const context = {
@@ -235,6 +250,7 @@ export const POST: RequestHandler = async (event) => {
 			console.error('[stream-decision-makers] Resolution failed:', error);
 			emitter.error(error instanceof Error ? error.message : 'Resolution failed');
 		} finally {
+			clearInterval(heartbeat);
 			clearTimeout(serverTimeout);
 			logLLMOperation(
 				'decision-makers',

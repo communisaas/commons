@@ -97,10 +97,17 @@
 		pendingIdentities = [];
 		identitiesRevealed = false;
 
-		// Client-side timeout: 3 minutes. Prevents the SSE connection from
-		// hanging indefinitely if the server stalls.
+		// Client-side idle timeout: aborts if no SSE event received for 3 minutes.
+		// Resets on each event, so long-running research that's making progress
+		// won't be killed. Only fires if the server truly stalls.
+		// 3 minutes accommodates parallel Gemini synthesis chunks (~30-60s each)
+		// which produce no intermediate events.
 		const controller = new AbortController();
-		const clientTimeout = setTimeout(() => controller.abort(), 180_000);
+		let clientTimeout = setTimeout(() => controller.abort(), 180_000);
+		function resetIdleTimeout() {
+			clearTimeout(clientTimeout);
+			clientTimeout = setTimeout(() => controller.abort(), 180_000);
+		}
 
 		try {
 			// Resolve decision-makers via streaming endpoint
@@ -179,6 +186,7 @@
 
 			// Process SSE stream — includes progressive reveal events
 			for await (const event of parseSSEStream<Record<string, unknown>>(response)) {
+				resetIdleTimeout();
 				switch (event.type) {
 					case 'segment': {
 						const segment = event.data as { content?: string };

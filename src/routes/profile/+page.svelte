@@ -369,7 +369,7 @@
 									</Badge>
 								</div>
 								<div class="mt-0.5 flex items-center gap-3 text-xs text-slate-500">
-									<span>{formatDate(template.createdAt)}</span>
+									<span>{formatDate(template.createdAt || template._creationTime)}</span>
 									<span>{template.template_campaign?.length || 0} uses</span>
 								</div>
 							</div>

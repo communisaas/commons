@@ -7,7 +7,7 @@
  * Principle: Show power topology directly, don't force categorization
  */
 
-import type { Template, PerceptualRecipientConfig, TargetPresentation } from '$lib/types/template';
+import type { Template, DisplayRecipientConfig, TargetPresentation } from '$lib/types/template';
 
 interface UserContext {
 	district?: string;
@@ -33,7 +33,6 @@ export function deriveTargetPresentation(
 	template: Template,
 	userContext?: UserContext
 ): TargetPresentation {
-	// Parse recipient_config (could be PerceptualRecipientConfig or legacy format)
 	const config = parseRecipientConfig(template.recipient_config);
 
 	const hasCongressional = template.deliveryMethod === 'cwc' || config?.cwcRouting;
@@ -139,10 +138,9 @@ export function deriveTargetPresentation(
 }
 
 /**
- * Parse recipient_config from unknown JSON
- * Handles both new PerceptualRecipientConfig and legacy formats
+ * Parse recipient_config from unknown JSON into the display-layer shape.
  */
-export function parseRecipientConfig(recipientConfig: unknown): PerceptualRecipientConfig | null {
+export function parseRecipientConfig(recipientConfig: unknown): DisplayRecipientConfig | null {
 	if (!recipientConfig || typeof recipientConfig !== 'object') {
 		return null;
 	}
@@ -151,7 +149,7 @@ export function parseRecipientConfig(recipientConfig: unknown): PerceptualRecipi
 
 	// Handle new perceptual format
 	if ('reach' in config || 'decisionMakers' in config) {
-		return config as unknown as PerceptualRecipientConfig;
+		return config as unknown as DisplayRecipientConfig;
 	}
 
 	// Handle legacy format - try to extract what we can

@@ -48,7 +48,8 @@ export function isValidEmailServiceUser(user: unknown): user is EmailServiceUser
 
 	return (
 		typeof u.id === 'string' &&
-		typeof u.email === 'string' &&
+		// Email may be null when PII is client-side decrypted (cypherpunk architecture)
+		(typeof u.email === 'string' || u.email === null || u.email === undefined) &&
 		(u.name === undefined || u.name === null || typeof u.name === 'string')
 	);
 }

@@ -431,7 +431,9 @@
 			}
 			return false;
 		}) as Representative | undefined;
-		const districtNumber = houseRep?.district ?? 'AL';
+		const rawDistrict = houseRep?.district ?? 'AL';
+		// district may already be a full code like "CA-11" — extract the number suffix
+		const districtNumber = rawDistrict.includes('-') ? rawDistrict.split('-').pop()! : rawDistrict;
 		const district = `${data.state}-${districtNumber.toString().padStart(2, '0')}`;
 
 		// Persist encrypted in IndexedDB — survives modal remounts and sessions

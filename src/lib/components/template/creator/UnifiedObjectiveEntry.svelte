@@ -51,19 +51,7 @@
 		slugReady?: boolean | null;
 	}
 
-	/**
-	 * Normalize topics to lowercase, hyphenated format
-	 * "Tuition Hikes" → "tuition-hikes"
-	 */
-	function normalizeTopics(topics: string[]): string[] {
-		return topics.map((t) =>
-			t
-				.toLowerCase()
-				.trim()
-				.replace(/\s+/g, '-')
-				.replace(/[^a-z0-9-]/g, '')
-		);
-	}
+	import { normalizeTopics, deriveCategory } from '$lib/utils/topic-normalization';
 
 	let {
 		data = $bindable(),
@@ -95,6 +83,7 @@
 		url_slug: string;
 		voice_sample: string;
 		interactionId?: string;
+		detected_location?: string | null;
 	}
 
 	/** Shape of response data when agent needs clarification */
@@ -338,7 +327,12 @@
 
 						case 'complete':
 							if (event.data.data) {
-								const newSuggestion = event.data.data as AISuggestion;
+								const raw = event.data.data as Record<string, unknown>;
+								const ctx = raw.inferred_context as Record<string, unknown> | undefined;
+								const newSuggestion: AISuggestion = {
+									...(raw as unknown as AISuggestion),
+									detected_location: (ctx?.detected_location as string) ?? null,
+								};
 								suggestionCache.set(text.trim().toLowerCase(), newSuggestion);
 								suggestionHistory = [...suggestionHistory, newSuggestion];
 								selectedIterationIndex = suggestionHistory.length - 1;
@@ -495,20 +489,17 @@
 
 	function acceptSuggestion() {
 		if (currentSuggestion) {
-			const { subject_line, core_message, url_slug, topics, voice_sample } = currentSuggestion;
+			const { subject_line, core_message, url_slug, topics, voice_sample, detected_location } = currentSuggestion;
 			data.title = subject_line || '';
 			// Fallback chain for core_message: use raw input if agent didn't provide one
 			data.description = core_message || data.rawInput || '';
 			data.slug = url_slug || '';
 			// Fallback chain for voice_sample: prefer agent-extracted, then raw input
 			data.voiceSample = voice_sample || data.rawInput || '';
-			// Normalize and store all topics
-			const normalized = normalizeTopics(topics || []);
+			// Normalize topics, filtering out any leaked location names
+			const normalized = normalizeTopics(topics || [], detected_location);
 			data.topics = normalized;
-			// Use primary topic as category (capitalize first letter of first word)
-			const primaryTopic = normalized[0] || 'general';
-			data.category =
-				primaryTopic.split('-')[0].charAt(0).toUpperCase() + primaryTopic.split('-')[0].slice(1);
+			data.category = deriveCategory(topics || [], detected_location);
 			data.aiGenerated = true;
 			data.audienceGuidance = audienceGuidance.trim() || undefined;
 			showAISuggest = false;
@@ -808,7 +799,12 @@
 
 						case 'complete':
 							if (event.data.data) {
-								const newSuggestion = event.data.data as AISuggestion;
+								const raw = event.data.data as Record<string, unknown>;
+								const ctx = raw.inferred_context as Record<string, unknown> | undefined;
+								const newSuggestion: AISuggestion = {
+									...(raw as unknown as AISuggestion),
+									detected_location: (ctx?.detected_location as string) ?? null,
+								};
 								suggestionCache.set(data.rawInput.trim().toLowerCase(), newSuggestion);
 								suggestionHistory = [...suggestionHistory, newSuggestion];
 								selectedIterationIndex = suggestionHistory.length - 1;

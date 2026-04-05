@@ -1,4 +1,15 @@
 <script lang="ts">
+	/**
+	 * Decision-Maker Entity — typographic presence, not a card.
+	 *
+	 * Figure-ground through proximity ratio:
+	 * - Tight internal clustering (name + title + action = one dense island)
+	 * - Generous void between entities (parent handles this via space-y)
+	 * - Name at text-xl creates a topographic peak for scanning
+	 * - Action link latent at rest, activates on hover
+	 *
+	 * The entity is a cluster, not a container.
+	 */
 	import { Mail, ChevronRight, ExternalLink } from '@lucide/svelte';
 	import type { LandscapeMember } from '$lib/utils/landscapeMerge';
 
@@ -33,29 +44,33 @@
 	}
 </script>
 
-{#snippet cardContent()}
-	<!-- Accountability opener — WHY this person matters (center of gravity) -->
+{#snippet entityContent()}
+	<!-- Accountability opener — contextual sentence above the name -->
 	{#if member.accountabilityOpener}
-		<p class="text-sm font-medium leading-snug text-participation-primary-700 mb-2.5 line-clamp-3">
+		<p class="text-sm leading-snug text-participation-primary-700 mb-1">
 			{member.accountabilityOpener}
 		</p>
 	{/if}
 
-	<!-- Identity: name + title + org -->
-	<div class="mb-1.5">
-		<h4 class="text-sm font-semibold text-slate-900">{member.name}</h4>
-		<p class="text-xs text-slate-500">
-			{member.title}{member.organization ? `, ${member.organization}` : ''}
-		</p>
-	</div>
+	<!-- Name: the topographic peak. The entity IS this name. -->
+	<h4 class="text-xl font-bold text-slate-900 font-brand leading-tight">{member.name}</h4>
 
-	<!-- Email provenance (grounded source) -->
+	<!-- Title + org: tight to name, clearly subordinate -->
+	<p class="mt-0.5 text-sm text-slate-500 leading-snug">
+		{#if member.title && member.organization}
+			{member.title}, {member.organization}
+		{:else}
+			{member.title || member.organization || ''}
+		{/if}
+	</p>
+
+	<!-- Email provenance -->
 	{#if member.emailGrounded && member.emailSource}
 		<a
 			href={member.emailSource}
 			target="_blank"
 			rel="noopener noreferrer"
-			class="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 transition-colors"
+			class="mt-1 inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 transition-colors"
 			onclick={(e) => e.stopPropagation()}
 		>
 			<ExternalLink class="h-3 w-3" />
@@ -63,7 +78,7 @@
 		</a>
 	{/if}
 
-	<!-- Public actions (compact supporting evidence) -->
+	<!-- Public actions -->
 	{#if member.publicActions.length > 0}
 		<ul class="mt-1.5 space-y-0.5">
 			{#each member.publicActions.slice(0, 2) as action}
@@ -74,22 +89,22 @@
 		</ul>
 	{/if}
 
-	<!-- Action affordance -->
+	<!-- Action: latent at rest, activates on hover -->
 	{#if canAct}
-		<div class="mt-3 flex items-center justify-end">
+		<div class="mt-3">
 			{#if departing}
-				<span class="departing-pulse text-sm font-medium text-slate-400">
+				<span class="departing-pulse text-sm text-slate-400">
 					Opening mail&hellip;
 				</span>
 			{:else if contacted}
-				<span class="flex items-center gap-1 text-sm font-medium text-slate-500">
-					<Mail class="h-4 w-4" />
+				<span class="flex items-center gap-1 text-sm text-slate-400">
+					<Mail class="h-3.5 w-3.5" />
 					Email started
 				</span>
 			{:else}
-				<span class="action-label flex items-center gap-0.5 text-sm font-medium text-participation-primary-600">
+				<span class="action-link flex items-center gap-0.5 text-sm text-slate-400 transition-colors duration-150">
 					Write to them
-					<ChevronRight class="h-4 w-4 transition-transform duration-150" />
+					<ChevronRight class="h-4 w-4 transition-all duration-150 opacity-0 -translate-x-1" />
 				</span>
 			{/if}
 		</div>
@@ -100,64 +115,43 @@
 	<button
 		type="button"
 		aria-label="Write to {member.name}"
-		class="group w-full text-left rounded-xl border border-slate-200 bg-white shadow-sm p-4
-			transition-[transform,box-shadow,border-color] duration-150 ease-out cursor-pointer
-			hover:-translate-y-0.5 hover:shadow-md hover:border-participation-primary-200
-			active:translate-y-0 active:shadow-sm
-			min-h-[44px]"
+		class="entity group w-full text-left min-h-[44px] cursor-pointer"
 		onclick={handleClick}
 	>
-		{@render cardContent()}
+		{@render entityContent()}
 	</button>
 {:else}
 	<div
-		class="rounded-xl border shadow-sm p-4 min-h-[44px] transition-[border-color,background-color] duration-300 ease-out
-			{departing ? 'departing-card border-participation-primary-200 bg-white' : contacted ? 'contacted-card border-slate-100 bg-slate-50/60' : 'border-slate-200 bg-white'}"
+		class="entity min-h-[44px]
+			{departing ? 'departing-entity' : contacted ? 'entity--contacted' : ''}"
 	>
-		{@render cardContent()}
+		{@render entityContent()}
 	</div>
 {/if}
 
 <style>
-	/* Hover: chevron nudges right when card is hovered */
-	:global(.group:hover) .action-label :global(svg) {
-		transform: translateX(2px);
+	/* Hover activates the action link — the entity comes alive through its text */
+	:global(.group:hover) .action-link {
+		color: var(--coord-route-solid);
 	}
-	.departing-card {
-		position: relative;
-		overflow: hidden;
+	:global(.group:hover) .action-link :global(svg) {
+		opacity: 1;
+		transform: translateX(0);
 	}
-	.departing-card::after {
-		content: '';
-		position: absolute;
-		inset: 0;
-		background: linear-gradient(
-			90deg,
-			transparent 0%,
-			rgba(120, 100, 200, 0.03) 40%,
-			rgba(120, 100, 200, 0.03) 60%,
-			transparent 100%
-		);
-		animation: sweep 2s ease-in-out infinite;
-		pointer-events: none;
-	}
+	/* Contacted: the entity settles — quieter, done */
+	.entity--contacted :global(h4) { color: var(--color-slate-400); }
+	.entity--contacted :global(p) { color: var(--color-slate-300); }
+
+	/* Departing */
+	.departing-entity { position: relative; }
 	.departing-pulse {
 		animation: breathe 1.5s ease-in-out infinite;
-	}
-	@keyframes sweep {
-		0% { transform: translateX(-100%); }
-		100% { transform: translateX(100%); }
 	}
 	@keyframes breathe {
 		0%, 100% { opacity: 0.4; }
 		50% { opacity: 1; }
 	}
-	/* Contacted: reduce content contrast so card settles visually */
-	.contacted-card :global(h4) { color: var(--color-slate-500); }
-	.contacted-card :global(p) { color: var(--color-slate-400); }
-	.contacted-card :global(ul li) { color: var(--color-slate-300); }
 	@media (prefers-reduced-motion: reduce) {
-		.departing-card::after { animation: none; opacity: 0; }
 		.departing-pulse { animation: none; opacity: 0.7; }
 	}
 </style>

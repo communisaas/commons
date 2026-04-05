@@ -27,12 +27,14 @@
 		},
 		expandToContent = false,
 		debateResolution = null,
-		personalConnectionValue = $bindable('')
+		personalConnectionValue = $bindable(''),
+		onVerifyAddress,
+		onVerifyIdentity
 	}: {
 		template: Template;
 		inModal?: boolean;
 		context?: 'list' | 'page' | 'modal';
-		user?: { id: string; name: string | null; trust_tier?: number } | null;
+		user?: { id: string; name: string | null; trust_tier?: number; district_code?: string } | null;
 		onScroll?: (isAtBottom: boolean, scrollProgress?: number) => void;
 		onOpenModal?: (() => void) | null;
 		onSendMessage?: (() => void) | null;
@@ -41,6 +43,8 @@
 		expandToContent?: boolean;
 		debateResolution?: { winningStance: string; participants: number } | null;
 		personalConnectionValue?: string;
+		onVerifyAddress?: () => void;
+		onVerifyIdentity?: () => void;
 	} = $props();
 
 	const hue = $derived(topicHue(template?.category ?? '', template?.topics));
@@ -225,6 +229,8 @@
 				{componentId}
 				{expandToContent}
 				{debateResolution}
+				{onVerifyAddress}
+				{onVerifyIdentity}
 			/>
 
 			<!-- Only show ActionBar in list/modal contexts, not on page -->

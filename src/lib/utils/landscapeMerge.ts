@@ -150,7 +150,7 @@ export function mergeLandscape(
     const member: LandscapeMember = {
       id: slugify(dm.name),
       name: dm.name,
-      title: dm.title,
+      title: dm.title || (dm as Record<string, unknown>).role as string || '',
       organization: dm.organization,
       email: dm.email || null,
       accountabilityOpener: dm.accountabilityOpener || null,

@@ -69,47 +69,42 @@
 	{#if landscape.totalCount === 0}
 		<!-- Empty state: contextual based on delivery method -->
 		{#if isCwc && onVerifyAddress}
-			<!-- CWC template without district — the user needs to verify address -->
-			<div class="rounded-xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-5">
-				<h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">
+			<!-- CWC template without district — verify to reveal -->
+			<div class="py-4">
+				<h2 class="font-mono text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
 					Your representatives
 				</h2>
-				<p class="text-sm text-slate-600 leading-relaxed mb-4">
-					Congressional offices prioritize messages from their own constituents. Verify your address to see who represents you and send your position directly.
+				<p class="text-sm text-slate-500 leading-relaxed mb-4">
+					Congressional offices prioritize messages from their own constituents. Verify your address to see who represents you.
 				</p>
 				<button
 					type="button"
-					class="group flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white p-3.5 text-left transition-colors hover:border-participation-primary-300 hover:bg-participation-primary-50 cursor-pointer min-h-[44px]"
+					class="group flex items-center gap-2 text-sm font-medium text-[var(--coord-route-solid)] hover:opacity-80 cursor-pointer min-h-[44px] transition-colors"
 					onclick={onVerifyAddress}
 				>
-					<div class="flex h-9 w-9 items-center justify-center rounded-full bg-participation-primary-50 text-participation-primary-600 transition-colors group-hover:bg-participation-primary-100">
-						<MapPin class="h-4.5 w-4.5" />
-					</div>
-					<div class="flex-1 min-w-0">
-						<span class="text-sm font-medium text-slate-900">Verify your address</span>
-						<span class="block text-xs text-slate-500">Unlocks direct congressional delivery</span>
-					</div>
-					<ChevronRight class="h-4 w-4 text-slate-400 transition-transform group-hover:translate-x-0.5" />
+					<MapPin class="h-4 w-4" />
+					Verify your address
+					<ChevronRight class="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
 				</button>
 			</div>
 		{:else if isCwc}
-			<!-- Congressional template without verify handler (guest/unauthenticated) -->
-			<div class="rounded-xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-5">
-				<h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">
+			<!-- Congressional template — guest -->
+			<div class="py-4">
+				<h2 class="font-mono text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
 					Your representatives
 				</h2>
-				<p class="text-sm text-slate-600 leading-relaxed">
-					Sign in and verify your address to see who represents you and send your message directly.
+				<p class="text-sm text-slate-500 leading-relaxed">
+					Sign in and verify your address to see who represents you.
 				</p>
 			</div>
 		{:else}
 			<!-- Non-CWC template — generic empty -->
-			<div class="rounded-xl border border-slate-200 bg-white p-5">
-				<h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-2">
+			<div class="py-4">
+				<h2 class="font-mono text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
 					Who decides
 				</h2>
 				<p class="text-sm text-slate-500">
-					Decision-makers for this issue will appear here as they're identified.
+					Decision-makers for this issue will appear here.
 				</p>
 			</div>
 		{/if}
@@ -182,15 +177,17 @@
 
 			<!-- Hybrid: DMs visible but congress requires address verification -->
 			{#if isCwc && !landscape.districtGroup && onVerifyAddress}
-				<button
-					type="button"
-					class="group flex w-full items-center gap-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-left transition-colors hover:border-participation-primary-300 hover:bg-participation-primary-50 cursor-pointer"
-					onclick={onVerifyAddress}
-				>
-					<MapPin class="h-4 w-4 text-slate-400 transition-colors group-hover:text-participation-primary-600" />
-					<span class="flex-1 text-sm text-slate-600 group-hover:text-slate-700">Verify your address to also contact your representatives</span>
-					<ChevronRight class="h-4 w-4 text-slate-400 transition-transform group-hover:translate-x-0.5" />
-				</button>
+				<div class="pt-4 border-t border-slate-100">
+					<button
+						type="button"
+						class="group flex items-center gap-2 text-sm text-slate-500 hover:text-[var(--coord-route-solid)] cursor-pointer min-h-[44px] transition-colors"
+						onclick={onVerifyAddress}
+					>
+						<MapPin class="h-4 w-4" />
+						Verify your address to also contact your representatives
+						<ChevronRight class="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+					</button>
+				</div>
 			{/if}
 		</div>
 	{/if}
