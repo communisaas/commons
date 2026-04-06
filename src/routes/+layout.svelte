@@ -15,6 +15,7 @@
 	}
 	import Footer from '$lib/components/layout/Footer.svelte';
 	import HeaderSystem from '$lib/components/layout/HeaderSystem.svelte';
+	import NavigationProgress from '$lib/components/layout/NavigationProgress.svelte';
 	import CredentialExpiryNudge from '$lib/components/identity/CredentialExpiryNudge.svelte';
 	import ErrorBoundary from '$lib/components/error/ErrorBoundary.svelte';
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
@@ -45,6 +46,7 @@
 	const isOrgPage = $derived(($page.url?.pathname === '/org' || $page.url?.pathname?.startsWith('/org/')) ?? false);
 	const isEmbedPage = $derived($page.url?.pathname?.startsWith('/embed/') ?? false);
 	const isCampaignPage = $derived($page.url?.pathname?.startsWith('/c/') ?? false);
+	const isVerificationPage = $derived($page.url?.pathname?.startsWith('/v/') ?? false);
 
 	let {
 		children,
@@ -183,6 +185,8 @@
 	}
 </script>
 
+<NavigationProgress />
+
 {#if isEmbedPage || isCampaignPage}
 	<!-- Embed and campaign pages: Own layout, no root chrome -->
 	{@render children()}
@@ -219,6 +223,13 @@
 	{:else if isHomepage}
 		<!-- Homepage: No wrapper padding - page manages its own spacing for sticky behavior -->
 		<div class="relative min-h-screen">
+			<ErrorBoundary fallback="detailed" showRetry={true}>
+				{@render children()}
+			</ErrorBoundary>
+		</div>
+	{:else if isVerificationPage}
+		<!-- Verification certificate: standalone, no wrapper padding, no footer -->
+		<div class="pt-[48px]">
 			<ErrorBoundary fallback="detailed" showRetry={true}>
 				{@render children()}
 			</ErrorBoundary>
