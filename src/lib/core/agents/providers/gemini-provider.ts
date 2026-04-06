@@ -298,7 +298,7 @@ async function resolveIdentitiesFromSearch(
 	);
 
 	if (isSuccessfulExtraction(extraction) && extraction.data?.identities?.length > 0) {
-		const identities = extraction.data.identities;
+		const identities = normalizeIdentityNames(extraction.data.identities);
 		console.debug(`[gemini-provider] Phase 2a extracted ${identities.length} identities:`,
 			identities.map(id => `${id.name} (${id.title} at ${id.organization})`));
 		return { identities, tokenUsage: extractionResult.tokenUsage, exaSearchCount: queries.length };
@@ -323,6 +323,30 @@ async function resolveIdentitiesFromSearch(
 // Helpers — Shared utilities
 // ============================================================================
 
+/** Sentinel names that LLMs return instead of the instructed "UNKNOWN" string. */
+const SENTINEL_NAMES = new Set([
+	'vacant', 'tbd', 'n/a', 'none', 'open', 'unfilled', 'position open',
+	'to be determined', 'not available', 'not found', 'pending', 'empty',
+]);
+
+/** Returns true if a name is a sentinel / non-person value that should be treated as UNKNOWN. */
+export function isSentinelName(name: string): boolean {
+	const normalized = name.toLowerCase().replace(/\s+/g, ' ').trim();
+	return !normalized || normalized === 'unknown' || SENTINEL_NAMES.has(normalized);
+}
+
+/** Normalize extracted identities: coerce sentinel names to "UNKNOWN". */
+function normalizeIdentityNames(identities: ResolvedIdentity[]): ResolvedIdentity[] {
+	return identities.map(id => {
+		if (isSentinelName(id.name)) {
+			if (id.name !== 'UNKNOWN') {
+				console.debug(`[gemini-provider] Normalizing sentinel name "${id.name}" → "UNKNOWN" for ${id.title}`);
+			}
+			return { ...id, name: 'UNKNOWN' };
+		}
+		return id;
+	});
+}
 
 /** Match Phase 1 reasoning to an identity by position+org, then org, then index */
 function matchRoleReasoning(identity: ResolvedIdentity, roles: DiscoveredRole[], index: number): string {
@@ -925,6 +949,20 @@ Rules:
 				console.debug(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1} fallback: ${hintRecovered}/${candidates.length} recovered from page hints`);
 			}
 
+			// Backfill: if synthesis still has a sentinel name, try to recover from input
+			for (const candidate of candidates) {
+				if (isSentinelName(candidate.name)) {
+					const matchingInput = chunk.find(u =>
+						u.identity.title.toLowerCase() === candidate.title.toLowerCase() &&
+						u.identity.organization.toLowerCase() === candidate.organization.toLowerCase()
+					);
+					if (matchingInput && !isSentinelName(matchingInput.identity.name)) {
+						console.debug(`[gemini-provider] Name backfill: "${candidate.name}" → "${matchingInput.identity.name}" for ${candidate.title}`);
+						candidate.name = matchingInput.identity.name;
+					}
+				}
+			}
+
 			// Emit immediately — don't wait for other chunks
 			synthesizedCandidates.push(...candidates);
 			if (onCandidateProcessed) {
@@ -1123,8 +1161,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				streaming, context.signal,
 				// Per-identity streaming callback — emit as each mini-agent completes
 				(candidate, pages) => {
-					const nameLower = (candidate.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
-					if (!nameLower || nameLower === 'unknown' || nameLower === 'n/a') return;
+					if (isSentinelName(candidate.name || '')) return;
 
 					// Skip duplicate person (same person resolved for multiple positions)
 					if (emittedNames.has(nameLower)) return;
@@ -1351,8 +1388,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 	): ProcessedDecisionMaker[] {
 		return candidates
 			.filter((c) => {
-				const nameLower = (c.name || '').toLowerCase().trim();
-				if (!nameLower || nameLower === 'unknown' || nameLower === 'n/a') {
+				if (isSentinelName(c.name || '')) {
 					console.debug(`[gemini-provider] Dropping unnamed candidate: ${c.title} at ${c.organization}`);
 					return false;
 				}

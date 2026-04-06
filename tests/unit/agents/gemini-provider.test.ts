@@ -88,7 +88,7 @@ import {
 	extractTokenUsage,
 	GEMINI_CONFIG
 } from '$lib/core/agents/gemini-client';
-import { GeminiDecisionMakerProvider } from '$lib/core/agents/providers/gemini-provider';
+import { GeminiDecisionMakerProvider, isSentinelName } from '$lib/core/agents/providers/gemini-provider';
 import type { ResolveContext } from '$lib/core/agents/providers/types';
 
 // ============================================================================
@@ -1211,5 +1211,89 @@ describe('Safety & Edge Cases', () => {
 		const result = iterResult.value;
 		expect(result.parseSuccess).toBe(true);
 		expect(result.data?.result).toBe('found');
+	});
+});
+
+// ============================================================================
+// isSentinelName — sentinel name detection
+// ============================================================================
+
+describe('isSentinelName', () => {
+	it('recognizes "UNKNOWN" as sentinel', () => {
+		expect(isSentinelName('UNKNOWN')).toBe(true);
+	});
+
+	it('recognizes "Vacant" (the bug that triggered this fix)', () => {
+		expect(isSentinelName('Vacant')).toBe(true);
+		expect(isSentinelName('VACANT')).toBe(true);
+		expect(isSentinelName('vacant')).toBe(true);
+	});
+
+	it('recognizes other common sentinel strings', () => {
+		expect(isSentinelName('TBD')).toBe(true);
+		expect(isSentinelName('N/A')).toBe(true);
+		expect(isSentinelName('None')).toBe(true);
+		expect(isSentinelName('Open')).toBe(true);
+		expect(isSentinelName('Unfilled')).toBe(true);
+		expect(isSentinelName('Position Open')).toBe(true);
+		expect(isSentinelName('Pending')).toBe(true);
+	});
+
+	it('treats empty/whitespace as sentinel', () => {
+		expect(isSentinelName('')).toBe(true);
+		expect(isSentinelName('   ')).toBe(true);
+	});
+
+	it('does NOT flag real person names', () => {
+		expect(isSentinelName('Cynthia Chono')).toBe(false);
+		expect(isSentinelName('Jane Doe')).toBe(false);
+		expect(isSentinelName('Mike Johnston')).toBe(false);
+	});
+
+	it('is case-insensitive and whitespace-tolerant', () => {
+		expect(isSentinelName('  vacant  ')).toBe(true);
+		expect(isSentinelName('TO BE DETERMINED')).toBe(true);
+	});
+});
+
+// ============================================================================
+// processDecisionMakers — sentinel filtering (extended)
+// ============================================================================
+
+describe('processDecisionMakers — sentinel filtering', () => {
+	let provider: GeminiDecisionMakerProvider;
+	beforeEach(() => {
+		provider = new GeminiDecisionMakerProvider('test-key');
+	});
+
+	function processDecisionMakers(candidates: Array<Record<string, unknown>>, pages: Array<{ url: string; title: string; text: string }>) {
+		return (provider as any).processDecisionMakers(candidates, pages);
+	}
+
+	it('filters out "Vacant" named candidates', () => {
+		const candidates = [
+			{ name: 'Vacant', title: 'Superintendent', organization: 'SFDPW', reasoning: '', email: 'someone@sfdpw.org', recency_check: '' }
+		];
+		const result = processDecisionMakers(candidates, []);
+		expect(result).toHaveLength(0);
+	});
+
+	it('filters out "TBD" and "Pending" named candidates', () => {
+		const candidates = [
+			{ name: 'TBD', title: 'CEO', organization: 'Corp', reasoning: '', email: '', recency_check: '' },
+			{ name: 'Pending', title: 'CTO', organization: 'Corp', reasoning: '', email: '', recency_check: '' }
+		];
+		const result = processDecisionMakers(candidates, []);
+		expect(result).toHaveLength(0);
+	});
+
+	it('keeps real names while filtering sentinels', () => {
+		const candidates = [
+			{ name: 'Vacant', title: 'Superintendent', organization: 'SFDPW', reasoning: '', email: '', recency_check: '' },
+			{ name: 'Cynthia Chono', title: 'Deputy Director', organization: 'SFDPW', reasoning: 'Oversees ops', email: 'cynthia.chono@sfdpw.org', recency_check: 'Current' }
+		];
+		const result = processDecisionMakers(candidates, []);
+		expect(result).toHaveLength(1);
+		expect(result[0].name).toBe('Cynthia Chono');
 	});
 });

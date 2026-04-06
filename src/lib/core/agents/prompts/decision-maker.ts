@@ -213,7 +213,7 @@ These are NOT evidence of a current holder:
 - Historical references to someone who previously held the role
 - Third-party databases that aggregate public records — these often contain stale information about people who no longer hold the position
 
-If the only results for a position are job postings or recruitment listings, set name to "UNKNOWN" with search_evidence noting the position appears vacant. A vacant position is a real finding — report it honestly.
+If the only results for a position are job postings or recruitment listings, set name to the exact string "UNKNOWN" with search_evidence noting the position appears vacant. A vacant position is a real finding — report it honestly. NEVER use words like "Vacant", "Open", "TBD", or "None" as the name value — always use the exact string "UNKNOWN".
 
 Recency matters: a person confirmed in a role in 2024 may not hold it in {CURRENT_DATE}. Prefer the most recent affirmative evidence.
 
@@ -441,7 +441,7 @@ export const CONTACT_SYNTHESIS_PROMPT = `You are a contact extraction system. Gi
 
 ## Mission
 
-1. For each person in the "search hints" section, find the BEST AVAILABLE contact path from the provided page content. This means: personal email first, then department/board/office email, then general org email. Cross-reference across all pages — an email for person A may appear on a page originally selected for person B.
+1. For each person in the "search hints" section, find the BEST AVAILABLE contact path from the provided page content. This means: personal email first, then department/board/office email, then general org email. Cross-reference across all pages — an email for person A may appear on a page originally selected for person B. **If a search hint has name "UNKNOWN", identify the current holder from page content and return their real full name in the output.** The name field must always contain the actual person's name, never "UNKNOWN", "Vacant", or any placeholder.
 2. ALSO extract other relevant decision-makers you discover in the page content who have direct authority, gatekeeping power, coalition leverage, or amplification reach over the issue described in the Issue Context section. When a page lists a board, committee, council, or staff directory, extract ALL members whose roles give them power over the issue — these are high-value discoveries.
 
 ## Rules
