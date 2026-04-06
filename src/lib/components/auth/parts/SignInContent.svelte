@@ -3,6 +3,7 @@
 	import { startAuthentication } from '@simplewebauthn/browser';
 	import { modalActions } from '$lib/stores/modalSystem.svelte';
 	import { browser } from '$app/environment';
+	import { FEATURES } from '$lib/config/features';
 	import AuthButtons from './AuthButtons.svelte';
 
 	let { onauth, onclose } = $props();
@@ -115,7 +116,7 @@
 <div class="px-8 pb-6">
 	<AuthButtons onAuth={handleAuth} />
 
-	{#if passkeySupported}
+	{#if FEATURES.PASSKEY && passkeySupported}
 		<!-- Passkey sign-in -->
 		<div class="mt-4">
 			<div class="flex items-center gap-3">

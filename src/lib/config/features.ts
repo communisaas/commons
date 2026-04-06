@@ -73,5 +73,8 @@ export const FEATURES = {
 	DELEGATION: false,
 
 	/** Send/engagement counters: "X acted on this", district coverage, open/click metrics */
-	ENGAGEMENT_METRICS: false
+	ENGAGEMENT_METRICS: false,
+
+	/** Passkey (WebAuthn) sign-in option on the login screen */
+	PASSKEY: false
 } as const;
