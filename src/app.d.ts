@@ -15,6 +15,8 @@ declare global {
 				email: string;
 				name: string | null;
 				avatar: string | null;
+				// PII custody — server-computed HMAC for lookups
+				email_hash?: string | null;
 				// Verification status
 				is_verified: boolean;
 				verification_method: string | null;
@@ -108,6 +110,7 @@ declare global {
 			IP_HASH_SALT?: string; // Privacy-preserving IP anonymization (daily rotation)
 			OAUTH_ENCRYPTION_KEY?: string; // AES-256-GCM key for OAuth token encryption at rest
 			PII_ENCRYPTION_KEY?: string; // AES-256-GCM master key for user PII encryption (C-3)
+			BRIDGE_ENCRYPTION_KEY?: string; // AES-256-GCM key for bridge session encryption (falls back to PII_ENCRYPTION_KEY)
 			EMAIL_LOOKUP_KEY?: string; // HMAC key for email hash lookups (C-3)
 			CONVEX_JWT_PRIVATE_KEY?: string; // RSA private key (PKCS#8 PEM) for minting Convex auth JWTs
 			CONVEX_AUTH_ISSUER?: string; // JWT issuer URL (defaults to https://commons.email)

@@ -17,8 +17,9 @@
 	import { Check, Loader2, AlertTriangle } from '@lucide/svelte';
 	import GovernmentCredentialVerification from './GovernmentCredentialVerification.svelte';
 
-	let { userId, oncomplete, oncancel }: {
+	let { userId, userEmail, oncomplete, oncancel }: {
 		userId: string;
+		userEmail?: string;
 		oncomplete?: (data: { verified: boolean; method: string; userId: string; district?: string }) => void;
 		oncancel?: () => void;
 	} = $props();
@@ -265,6 +266,7 @@
 			<!-- mDL Verification -->
 			<GovernmentCredentialVerification
 				{userId}
+				{userEmail}
 				oncomplete={handleMdlComplete}
 				onerror={handleMdlError}
 				oncancel={handleMdlCancel}

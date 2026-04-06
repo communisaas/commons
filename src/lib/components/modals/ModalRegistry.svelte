@@ -203,6 +203,7 @@
 		{#if data?.userId}
 			<GovernmentCredentialVerification
 				userId={data.userId as string}
+				userEmail={data.userEmail as string | undefined}
 				templateSlug={data.templateSlug as string | undefined}
 				oncomplete={async () => {
 					const onComplete = getCallback<() => void>(data, 'onComplete');

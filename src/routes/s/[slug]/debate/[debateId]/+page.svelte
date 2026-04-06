@@ -8,6 +8,7 @@
 	import { untrack } from 'svelte';
 	import { ArrowLeft } from '@lucide/svelte';
 	import { FEATURES } from '$lib/config/features';
+	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 
 	let appealPending = $state(false);
 	let appealError = $state<string | null>(null);
@@ -137,6 +138,8 @@
 				// Tier 2+: open real mDL identity verification
 				modalActions.openModal('identity-verification-modal', 'identity-verification', {
 					userId: data.user!.id,
+					userEmail: decryptedUser.email ?? undefined,
+					templateSlug: template?.slug,
 					onComplete: async () => {
 						await invalidateAll();
 					}

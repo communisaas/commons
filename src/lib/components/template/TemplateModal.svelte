@@ -1207,6 +1207,7 @@
 								if (user?.id) {
 									modalActions.openModal('identity-verification-modal', 'identity-verification', {
 										userId: user.id,
+										userEmail: decryptedUser.email ?? undefined,
 										templateSlug: template.slug,
 										onComplete: async () => {
 											await invalidateAll();

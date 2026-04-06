@@ -7,6 +7,8 @@
 
 	interface Props {
 		userId: string;
+		/** User's email (for cross-device bridge anti-phishing) */
+		userEmail?: string;
 		templateSlug?: string;
 		/** Skip value proposition (if already shown earlier in flow) */
 		skipValueProp?: boolean;
@@ -29,7 +31,7 @@
 		onback?: () => void;
 	}
 
-	let { userId, templateSlug, skipValueProp = false, oncomplete, oncancel, onback }: Props = $props();
+	let { userId, userEmail, templateSlug, skipValueProp = false, oncomplete, oncancel, onback }: Props = $props();
 
 	type FlowStep = 'value-prop' | 'verify-mdl' | 'complete';
 
@@ -341,6 +343,7 @@
 			<!-- mDL / Digital ID Verification (Svelte 5 callback props) -->
 			<GovernmentCredentialVerification
 				{userId}
+				{userEmail}
 				{templateSlug}
 				oncomplete={handleMdlComplete}
 				onerror={handleMdlError}
