@@ -48,16 +48,6 @@ export function deriveAuthorityLevel(user: {
 		return 5;
 	}
 
-	// Level 4: Passport-verified (legacy — users verified via removed providers Didit/self.xyz)
-	// Kept for backward compatibility with existing database records
-	if (
-		user.identity_commitment &&
-		(user.verification_method === 'didit' || user.verification_method === 'self.xyz') &&
-		user.document_type === 'passport'
-	) {
-		return 4;
-	}
-
 	// Level 3: ID card / drivers license (verified identity, not just address)
 	// identity_commitment is only set by Tier 3+ verification (mDL/passport),
 	// never by Tier 2 (address-only). Guard on trust_tier >= 3 for defense in depth.
@@ -109,16 +99,6 @@ export function deriveTrustTier(user: {
 	// Tier 5: Government credential (mDL / EUDIW via Digital Credentials API)
 	if (user.document_type === 'mdl' && user.identity_commitment) {
 		return 5;
-	}
-
-	// Tier 4: Passport-verified (legacy — users verified via removed providers Didit/self.xyz)
-	// Kept for backward compatibility with existing database records
-	if (
-		user.identity_commitment &&
-		(user.verification_method === 'didit' || user.verification_method === 'self.xyz') &&
-		user.document_type === 'passport'
-	) {
-		return 4;
 	}
 
 	// Tier 3: Identity-verified (ID card / drivers license)

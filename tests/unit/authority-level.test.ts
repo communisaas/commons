@@ -15,26 +15,17 @@ describe('deriveAuthorityLevel', () => {
 		expect(deriveAuthorityLevel(user)).toBe(5);
 	});
 
-	// Legacy backward compatibility: 'didit' values still exist in the database
-	it('should return 4 for passport-verified via Didit (legacy db records)', () => {
+	// Legacy didit/self.xyz providers were removed. Users with those verification_methods
+	// now fall through to Level 1 (OAuth-only) since they lack trust_tier >= 3.
+	// If they re-verify via mDL, they'll get the correct tier.
+	it('should return 1 for legacy didit users without trust_tier (providers removed)', () => {
 		const user = {
 			verification_method: 'didit',
 			document_type: 'passport',
 			identity_commitment: '0xabc',
 			trust_score: 0
 		};
-		expect(deriveAuthorityLevel(user)).toBe(4);
-	});
-
-	// Legacy backward compatibility: 'self.xyz' values still exist in the database
-	it('should return 4 for passport-verified via self.xyz (legacy db records)', () => {
-		const user = {
-			verification_method: 'self.xyz',
-			document_type: 'passport',
-			identity_commitment: '0xabc',
-			trust_score: 0
-		};
-		expect(deriveAuthorityLevel(user)).toBe(4);
+		expect(deriveAuthorityLevel(user)).toBe(1);
 	});
 
 	it('should return 5 for mDL-verified via digital-credentials-api', () => {
@@ -92,24 +83,15 @@ describe('deriveTrustTier', () => {
 		expect(deriveTrustTier(user)).toBe(5);
 	});
 
-	// Legacy backward compatibility: 'self.xyz' values still exist in the database
-	it('should return 4 for passport-verified (passport via self.xyz, legacy db records)', () => {
+	// Legacy didit/self.xyz providers removed. These users now fall to Tier 1
+	// (no trust_tier field → defaults to 0 → Tier 1 authenticated).
+	it('should return 1 for legacy passport users without trust_tier (providers removed)', () => {
 		const user = {
 			identity_commitment: '0xabc',
 			verification_method: 'self.xyz',
 			document_type: 'passport'
 		};
-		expect(deriveTrustTier(user)).toBe(4);
-	});
-
-	// Legacy backward compatibility: 'didit' values still exist in the database
-	it('should return 4 for passport-verified (passport via didit, legacy db records)', () => {
-		const user = {
-			identity_commitment: '0xabc',
-			verification_method: 'didit',
-			document_type: 'passport'
-		};
-		expect(deriveTrustTier(user)).toBe(4);
+		expect(deriveTrustTier(user)).toBe(1);
 	});
 
 	it('should return 5 for mDL-verified via digital-credentials-api', () => {
