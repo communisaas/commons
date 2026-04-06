@@ -114,10 +114,26 @@ export async function requestCredential(
 			};
 		}
 
+		// Normalize response data to a JSON-safe string.
+		// org-iso-mdoc returns ArrayBuffer (CBOR); must encode to base64.
+		// openid4vp returns a string or object; stringify if needed.
+		let responseData: unknown = credential.data;
+		if (responseData instanceof ArrayBuffer) {
+			const bytes = new Uint8Array(responseData);
+			// Binary → base64 for JSON transport
+			let binary = '';
+			for (let i = 0; i < bytes.length; i++) {
+				binary += String.fromCharCode(bytes[i]);
+			}
+			responseData = btoa(binary);
+		} else if (typeof responseData === 'object' && responseData !== null) {
+			responseData = JSON.stringify(responseData);
+		}
+
 		return {
 			success: true,
 			protocol: credential.protocol,
-			data: credential.data
+			data: responseData
 		};
 	} catch (err) {
 		clearTimeout(timeoutId);

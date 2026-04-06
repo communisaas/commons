@@ -91,23 +91,11 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			}, { status: 422 });
 		}
 
-		// Identity commitment was computed INSIDE the privacy boundary
-		// (mdl-verification.ts). Raw document_number and birth_date never reach this endpoint.
-		let identityCommitment: string;
-		if (result.identityCommitment) {
-			identityCommitment = result.identityCommitment;
-		} else {
-			// Wallet did not disclose birth_date / document_number — derive from credentialHash
-			// Reduce mod BN254 to ensure valid field element (~25% of raw SHA-256 exceed modulus)
-			const BN254_MODULUS =
-				21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-			const hashValue = BigInt('0x' + result.credentialHash);
-			const reduced = hashValue % BN254_MODULUS;
-			identityCommitment = reduced.toString(16).padStart(64, '0');
-			console.warn(
-				'[mDL Verify] Identity fields not disclosed — using reduced credentialHash as fallback commitment'
-			);
+		// Identity commitment is guaranteed present on success (missing fields = hard failure)
+		if (!result.identityCommitment) {
+			return json({ error: 'missing_identity_fields', message: 'Wallet must disclose birth date and document number' }, { status: 422 });
 		}
+		const identityCommitment = result.identityCommitment;
 
 		// Bind identity commitment for Sybil detection and account merging
 		// If this commitment already exists on another user, accounts are merged

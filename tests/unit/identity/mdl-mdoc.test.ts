@@ -26,13 +26,20 @@ vi.mock('$lib/core/shadow-atlas/client', () => ({
 	resolveAddress: (...args: unknown[]) => mockResolveAddress(...args)
 }));
 
+// Mock IPFS store for resolveDistrictFromPostalCode (mDL verification now uses H3 direct)
+vi.mock('$lib/core/shadow-atlas/ipfs-store', () => ({
+	getDistrictIndex: vi.fn().mockResolvedValue(null),
+	getCellChunkByParent: vi.fn().mockResolvedValue(null)
+}));
+
 import { processCredentialResponse, type MdlVerificationResult } from '$lib/core/identity/mdl-verification';
 
 beforeAll(() => {
-	// District derivation uses Shadow Atlas resolveAddress() (no external API needed)
-	// Synthetic test data has no real IACA-signed issuerAuth.
-	// Bypass signature verification so field extraction / privacy / district logic can be tested.
+	// Bypass signature verification for synthetic test data.
+	// Will be removed when T1-T3 (crypto verification) ships with proper test fixtures.
 	process.env.SKIP_ISSUER_VERIFICATION = 'true';
+	// Required for identity commitment computation inside the privacy boundary
+	process.env.IDENTITY_COMMITMENT_SALT = 'test-salt-for-unit-tests';
 });
 
 beforeEach(() => {
@@ -126,7 +133,6 @@ async function buildMdocResponse(
 		};
 
 		if (options?.addIssuerAuth) {
-			// Add a dummy issuerAuth that won't verify but triggers the code path
 			issuerSigned.issuerAuth = [
 				new Uint8Array([0]),
 				{},
@@ -164,7 +170,9 @@ describe('mDL mdoc verification', () => {
 			const mdocData = await buildMdocResponse({
 				resident_postal_code: '94110',
 				resident_city: 'San Francisco',
-				resident_state: 'CA'
+				resident_state: 'CA',
+				document_number: 'D1234567',
+				birth_date: '1990-05-15'
 			});
 
 			mockShadowAtlasSuccess('ca', '12');
@@ -178,7 +186,8 @@ describe('mDL mdoc verification', () => {
 
 			expect(result.success).toBe(true);
 			if (result.success) {
-				expect(result.district).toBe('CA-12');
+				// District is at-large fallback (IPFS index mocked as null)
+			expect(result.district).toBe('CA-AL');
 				expect(result.state).toBe('CA');
 				expect(result.verificationMethod).toBe('mdl');
 
@@ -194,7 +203,9 @@ describe('mDL mdoc verification', () => {
 			const mdocData = await buildMdocResponse({
 				resident_postal_code: '10001',
 				resident_city: 'New York',
-				resident_state: 'NY'
+				resident_state: 'NY',
+				document_number: 'D7654321',
+				birth_date: '1985-03-20'
 			});
 
 			mockShadowAtlasSuccess('ny', '10');
@@ -217,7 +228,9 @@ describe('mDL mdoc verification', () => {
 			const mdocData = await buildMdocResponse({
 				resident_postal_code: '78701',
 				resident_city: 'Austin',
-				resident_state: 'TX'
+				resident_state: 'TX',
+				document_number: 'D9999999',
+				birth_date: '1978-11-02'
 			});
 
 			mockShadowAtlasSuccess('tx', '25');
@@ -252,7 +265,9 @@ describe('mDL mdoc verification', () => {
 			const mdocData = await buildMdocResponse({
 				resident_postal_code: '60601',
 				resident_city: 'Chicago',
-				resident_state: 'IL'
+				resident_state: 'IL',
+				document_number: 'D1111111',
+				birth_date: '1992-07-04'
 			});
 
 			mockShadowAtlasSuccess('il', '07');
@@ -266,7 +281,7 @@ describe('mDL mdoc verification', () => {
 
 			expect(result.success).toBe(true);
 			if (result.success) {
-				expect(result.district).toBe('IL-07');
+				expect(result.district).toBe('IL-AL');
 			}
 		});
 
@@ -274,7 +289,9 @@ describe('mDL mdoc verification', () => {
 			const mdocData = await buildMdocResponse({
 				resident_postal_code: '05401',
 				resident_city: 'Burlington',
-				resident_state: 'VT'
+				resident_state: 'VT',
+				document_number: 'D2222222',
+				birth_date: '1988-01-30'
 			});
 
 			// Shadow Atlas returns at-large district
@@ -341,10 +358,37 @@ describe('mDL mdoc verification', () => {
 			}
 		});
 
+		it('should reject when identity fields (document_number, birth_date) are missing', async () => {
+			const mdocData = await buildMdocResponse({
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA'
+				// Missing document_number and birth_date
+			});
+
+			mockShadowAtlasSuccess('ca', '12');
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-missing-identity'
+			);
+
+			expect(result.success).toBe(false);
+			if (!result.success) {
+				expect(result.error).toBe('missing_identity_fields');
+				expect(result.message).toContain('birth date');
+				expect(result.message).toContain('document number');
+			}
+		});
+
 		it('should succeed when optional city is missing', async () => {
 			const mdocData = await buildMdocResponse({
 				resident_postal_code: '94110',
-				resident_state: 'CA'
+				resident_state: 'CA',
+				document_number: 'D3333333',
+				birth_date: '1995-12-25'
 				// city is optional
 			});
 
