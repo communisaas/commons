@@ -116,6 +116,16 @@ export interface SnapshotDecisionMaker {
 	email: string;
 	reasoning: string;
 	confidence: number;
+	// Phase 4: Accountability & Classification
+	roleCategory?: string;
+	relevanceRank?: number;
+	accountabilityOpener?: string;
+	publicActions?: string[];
+	personalPrompt?: string;
+	// Email provenance
+	emailGrounded?: boolean;
+	emailSource?: string;
+	emailSourceTitle?: string;
 }
 
 // ============================================================================
@@ -167,7 +177,17 @@ function buildRecipientConfig(
 		role: dm.title,
 		shortName: dm.name.split(' ').pop(),
 		organization: dm.organization,
-		email: dm.email
+		email: dm.email,
+		// Phase 4: Accountability & Classification
+		...(dm.roleCategory ? { roleCategory: dm.roleCategory } : {}),
+		...(dm.relevanceRank != null ? { relevanceRank: dm.relevanceRank } : {}),
+		...(dm.accountabilityOpener ? { accountabilityOpener: dm.accountabilityOpener } : {}),
+		...(dm.publicActions?.length ? { publicActions: dm.publicActions } : {}),
+		...(dm.personalPrompt ? { personalPrompt: dm.personalPrompt } : {}),
+		// Email provenance
+		...(dm.emailGrounded ? { emailGrounded: dm.emailGrounded } : {}),
+		...(dm.emailSource ? { emailSource: dm.emailSource } : {}),
+		...(dm.emailSourceTitle ? { emailSourceTitle: dm.emailSourceTitle } : {}),
 	}));
 
 	if (deliveryMethod === 'cwc') {
@@ -322,7 +342,17 @@ export async function processVibe({ vibe, label }: ProcessVibeOptions): Promise<
 		organization: dm.organization || '',
 		email: dm.email || '',
 		reasoning: dm.reasoning || '',
-		confidence: dm.confidence ?? 0.5
+		confidence: dm.confidence ?? 0.5,
+		// Phase 4: Accountability & Classification
+		roleCategory: dm.roleCategory || undefined,
+		relevanceRank: dm.relevanceRank ?? undefined,
+		accountabilityOpener: dm.accountabilityOpener || undefined,
+		publicActions: dm.publicActions?.length ? dm.publicActions : undefined,
+		personalPrompt: dm.personalPrompt || undefined,
+		// Email provenance
+		emailGrounded: dm.emailGrounded || undefined,
+		emailSource: dm.emailSource || undefined,
+		emailSourceTitle: dm.emailSourceTitle || undefined
 	}));
 
 	console.log(`${label}   Resolved ${decisionMakers.length} decision makers`);

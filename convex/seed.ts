@@ -1797,6 +1797,68 @@ export const clearTable = internalMutation({
 // BACKFILL SCOPES — patch existing templates with scope data from seed definitions
 // =============================================================================
 
+export const reseedTemplates = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // 1. Delete debates + arguments (they reference template IDs)
+    await ctx.runMutation(internal.seed.clearTable, { table: "debateArguments" });
+    await ctx.runMutation(internal.seed.clearTable, { table: "debateNullifiers" });
+    await ctx.runMutation(internal.seed.clearTable, { table: "debates" });
+    // 2. Delete campaigns + dependents
+    await ctx.runMutation(internal.seed.clearTable, { table: "campaignDeliveries" });
+    await ctx.runMutation(internal.seed.clearTable, { table: "campaignActions" });
+    await ctx.runMutation(internal.seed.clearTable, { table: "campaigns" });
+    // 3. Delete position data
+    await ctx.runMutation(internal.seed.clearTable, { table: "positionDeliveries" });
+    await ctx.runMutation(internal.seed.clearTable, { table: "positionRegistrations" });
+    // 4. Delete templates
+    await ctx.runMutation(internal.seed.clearTable, { table: "templates" });
+
+    // 5. Get existing user + org IDs to reassign templates
+    const userIds = await ctx.runQuery(internal.seed.getSeedUserIds);
+    const orgIds = await ctx.runQuery(internal.seed.getSeedOrgIds);
+
+    if (userIds.length === 0) {
+      console.log("[reseedTemplates] No seed users found — cannot reseed.");
+      return;
+    }
+
+    // 6. Reinsert templates
+    let templateIds: Id<"templates">[];
+    if (orgIds.length > 0) {
+      templateIds = await ctx.runMutation(internal.seed.insertTemplates, { userIds, orgIds });
+    } else {
+      templateIds = await ctx.runMutation(internal.seed.insertTemplatesPublic, { userIds });
+    }
+
+    // 7. Reinsert debates
+    await ctx.runMutation(internal.seed.insertDebates, { templateIds });
+
+    // 8. Reinsert campaigns (only if orgs exist)
+    if (orgIds.length > 0) {
+      await ctx.runMutation(internal.seed.insertCampaigns, { orgIds, templateIds });
+    }
+
+    console.log(`[reseedTemplates] Done: ${templateIds.length} templates, debates, campaigns reseeded.`);
+  },
+});
+
+export const getSeedUserIds = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<Id<"users">[]> => {
+    const users = await ctx.db.query("users").collect();
+    return users.map((u) => u._id);
+  },
+});
+
+export const getSeedOrgIds = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<Id<"organizations">[]> => {
+    const orgs = await ctx.db.query("organizations").collect();
+    return orgs.map((o) => o._id);
+  },
+});
+
 export const backfillScopes = internalMutation({
   args: {},
   handler: async (ctx) => {

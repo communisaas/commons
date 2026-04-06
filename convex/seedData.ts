@@ -120,6 +120,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Kaboli",
           organization: "U.S. Department of Veterans Affairs",
           email: "VAQS@va.gov",
+          roleCategory: "executes",
         },
         {
           name: "M. Christopher Saslo, DNS, ARNP-BC, FAAN",
@@ -127,6 +128,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "FAAN",
           organization: "Veterans Health Administration",
           email: "vhaonsinfo@va.gov",
+          roleCategory: "executes",
         },
         {
           name: "Cynthia Murray, BN, RN, AMB-BC",
@@ -134,6 +136,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "AMB-BC",
           organization: "VA Office of Primary Care",
           email: "vhaonsinfo@va.gov",
+          roleCategory: "shapes",
         },
       ],
     },
@@ -224,6 +227,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Bonta",
           organization: "California Department of Justice",
           email: "EERROffice@doj.ca.gov",
+          roleCategory: "executes",
         },
         {
           name: "Linda E. McMahon",
@@ -231,6 +235,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "McMahon",
           organization: "U.S. Department of Education",
           email: "SAOP@ed.gov",
+          roleCategory: "executes",
         },
         {
           name: "Russell Vought",
@@ -238,6 +243,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Vought",
           organization: "Consumer Financial Protection Bureau",
           email: "invitations2cfpb@consumerfinance.gov",
+          roleCategory: "executes",
         },
         {
           name: "Geoffrey Gradler",
@@ -245,6 +251,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Gradler",
           organization: "Consumer Financial Protection Bureau",
           email: "invitations2cfpb@consumerfinance.gov",
+          roleCategory: "executes",
         },
         {
           name: "Deborah Morris",
@@ -252,6 +259,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Morris",
           organization: "Consumer Financial Protection Bureau",
           email: "invitations2cfpb@consumerfinance.gov",
+          roleCategory: "executes",
         },
         {
           name: "Chris Chilbert",
@@ -259,6 +267,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Chilbert",
           organization: "Consumer Financial Protection Bureau",
           email: "invitations2cfpb@consumerfinance.gov",
+          roleCategory: "executes",
         },
         {
           name: "Ann Epstein",
@@ -266,6 +275,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Epstein",
           organization: "Consumer Financial Protection Bureau",
           email: "invitations2cfpb@consumerfinance.gov",
+          roleCategory: "executes",
         },
         {
           name: "Arielle Roth",
@@ -273,6 +283,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Roth",
           organization: "National Telecommunications and Information Administration (NTIA)",
           email: "press@ntia.gov",
+          roleCategory: "executes",
         },
         {
           name: "Office of the Surgeon General",
@@ -280,6 +291,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "General",
           organization: "U.S. Department of Health and Human Services (HHS)",
           email: "surgeongeneral@hhs.gov",
+          roleCategory: "shapes",
         },
         {
           name: "Andrew N. Ferguson",
@@ -287,6 +299,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Ferguson",
           organization: "Federal Trade Commission",
           email: "opa@ftc.gov",
+          roleCategory: "executes",
         },
         {
           name: "Mark R. Meador",
@@ -294,6 +307,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Meador",
           organization: "Federal Trade Commission",
           email: "opa@ftc.gov",
+          roleCategory: "votes",
         },
       ],
     },
@@ -378,6 +392,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Vasquez",
           organization: "Multnomah County District Attorney's Office",
           email: "DA@mcda.us",
+          roleCategory: "executes",
         },
         {
           name: "John Wentworth",
@@ -385,6 +400,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Wentworth",
           organization: "Oregon District Attorneys Association",
           email: "ExecutiveDirector@oregonda.org",
+          roleCategory: "shapes",
         },
         {
           name: "Bryan Brock",
@@ -392,6 +408,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Brock",
           organization: "Oregon District Attorneys Association",
           email: "ExecutiveDirector@oregonda.org",
+          roleCategory: "shapes",
         },
         {
           name: "Kevin Barton",
@@ -399,6 +416,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Barton",
           organization: "Oregon District Attorneys Association",
           email: "ExecutiveDirector@oregonda.org",
+          roleCategory: "shapes",
         },
         {
           name: "Paige Clarkson",
@@ -406,6 +424,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Clarkson",
           organization: "Oregon District Attorneys Association",
           email: "ExecutiveDirector@oregonda.org",
+          roleCategory: "shapes",
         },
         {
           name: "Tina Kotek",
@@ -413,6 +432,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Kotek",
           organization: "State of Oregon",
           email: "Governor.Kotek@oregon.gov",
+          roleCategory: "executes",
         },
         {
           name: "Sejal Hathi",
@@ -420,6 +440,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Hathi",
           organization: "Oregon Health Authority",
           email: "OHA.DirectorsOffice@odhsoha.oregon.gov",
+          roleCategory: "executes",
         },
         {
           name: "Floyd Prozanski",
@@ -427,6 +448,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Prozanski",
           organization: "Oregon State Senate",
           email: "Sen.FloydProzanski@oregonlegislature.gov",
+          roleCategory: "votes",
         },
         {
           name: "Mike Reese",
@@ -434,6 +456,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Reese",
           organization: "Oregon Department of Corrections",
           email: "DOC.Info@doc.oregon.gov",
+          roleCategory: "executes",
         },
         {
           name: "Heidi Steward",
@@ -441,6 +464,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Steward",
           organization: "Oregon Department of Corrections",
           email: "DOC.Info@doc.oregon.gov",
+          roleCategory: "executes",
         },
         {
           name: "Jason Kropf",
@@ -448,6 +472,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Kropf",
           organization: "Oregon House of Representatives",
           email: "leg.helpdesk@oregonlegislature.gov",
+          roleCategory: "votes",
         },
       ],
       emails: [
@@ -541,6 +566,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Kutch",
           organization: "Portland Permitting & Development",
           email: "ppd@portlandoregon.gov",
+          roleCategory: "executes",
         },
         {
           name: "Natalie Didion",
@@ -548,6 +574,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Didion",
           organization: "Portland Permitting & Development",
           email: "311@portlandoregon.gov",
+          roleCategory: "executes",
         },
         {
           name: "Keith Wilson",
@@ -555,6 +582,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Wilson",
           organization: "City of Portland",
           email: "Mayor@portlandoregon.gov",
+          roleCategory: "executes",
         },
       ],
       emails: [
@@ -637,6 +665,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Hogan",
           organization: "Office of the Auditor General of Canada",
           email: "sonia.ianni-lucio@oag-bvg.gc.ca",
+          roleCategory: "oversees",
         },
         {
           name: "Sébastien Benedict",
@@ -644,6 +673,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Benedict",
           organization: "Tourism Industry Association of Canada",
           email: "contact@tiac-aitc.ca",
+          roleCategory: "shapes",
         },
         {
           name: "Sandra Schwartz",
@@ -651,6 +681,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Schwartz",
           organization: "Canadian Parks and Wilderness Society",
           email: "info@cpaws.org",
+          roleCategory: "shapes",
         },
         {
           name: "Jerry V. DeMarco",
@@ -658,6 +689,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "DeMarco",
           organization: "Office of the Auditor General of Canada",
           email: "communications@oag-bvg.gc.ca",
+          roleCategory: "oversees",
         },
         {
           name: "Chris Rider",
@@ -665,6 +697,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Rider",
           organization: "Canadian Parks and Wilderness Society",
           email: "info@cpaws.org",
+          roleCategory: "shapes",
         },
         {
           name: "Christopher Jones",
@@ -672,6 +705,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Jones",
           organization: "Tourism Industry Association of Canada",
           email: "contact@tiac-aitc.ca",
+          roleCategory: "shapes",
         },
         {
           name: "Andrew Hayes",
@@ -679,6 +713,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Hayes",
           organization: "Office of the Auditor General of Canada",
           email: "communications@oag-bvg.gc.ca",
+          roleCategory: "oversees",
         },
         {
           name: "Jennifer-Lee Thomas",
@@ -686,6 +721,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Thomas",
           organization: "Canadian Parks and Wilderness Society",
           email: "info@cpaws.org",
+          roleCategory: "shapes",
         },
         {
           name: "Shafqat Ali",
@@ -693,6 +729,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Ali",
           organization: "Treasury Board of Canada Secretariat",
           email: "mohammad.kamal@tbs-sct.gc.ca",
+          roleCategory: "funds",
         },
         {
           name: "Shannon Miedema",
@@ -700,6 +737,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Miedema",
           organization: "House of Commons",
           email: "ENVI@parl.gc.ca",
+          roleCategory: "votes",
         },
         {
           name: "Rechie Valdez",
@@ -707,6 +745,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Valdez",
           organization: "Innovation, Science and Economic Development Canada",
           email: "rechie.valdez@parl.gc.ca",
+          roleCategory: "executes",
         },
         {
           name: "Tom Osborne",
@@ -714,6 +753,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Osborne",
           organization: "Treasury Board of Canada Secretariat",
           email: "media@tbs-sct.gc.ca",
+          roleCategory: "funds",
         },
         {
           name: "Ellis Ross",
@@ -721,6 +761,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Ross",
           organization: "House of Commons",
           email: "ENVI@parl.gc.ca",
+          roleCategory: "votes",
         },
         {
           name: "Julie Aviva Dabrusin",
@@ -728,6 +769,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Dabrusin",
           organization: "Environment and Climate Change Canada",
           email: "julie.dabrusin@parl.gc.ca",
+          roleCategory: "executes",
         },
       ],
       emails: [
@@ -817,6 +859,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Hosseini-Ara",
           organization: "Toronto Public Library",
           email: "citylibrarian@tpl.ca",
+          roleCategory: "executes",
         },
         {
           name: "Steve Clark",
@@ -824,6 +867,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Clark",
           organization: "Legislative Assembly of Ontario",
           email: "steve.clark@pc.ola.org",
+          roleCategory: "votes",
         },
         {
           name: "Hon. Paul Calandra",
@@ -831,6 +875,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Calandra",
           organization: "Government of Ontario",
           email: "paul.calandra@pc.ola.org",
+          roleCategory: "executes",
         },
         {
           name: "Hon. Victor Fedeli",
@@ -838,6 +883,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Fedeli",
           organization: "Government of Ontario",
           email: "vic.fedeli@pc.ola.org",
+          roleCategory: "executes",
         },
         {
           name: "Hon. Stan Cho",
@@ -845,6 +891,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Cho",
           organization: "Government of Ontario",
           email: "stan.cho@pc.ola.org",
+          roleCategory: "executes",
         },
         {
           name: "Steve Till-Rogers",
@@ -852,6 +899,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Till-Rogers",
           organization: "Toronto Public Library",
           email: "stillrogers@tpl.ca",
+          roleCategory: "executes",
         },
         {
           name: "Alim Remtulla",
@@ -859,6 +907,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Remtulla",
           organization: "Toronto Public Library",
           email: "saratavakolian@tpl.ca",
+          roleCategory: "oversees",
         },
         {
           name: "Stan Cho",
@@ -866,6 +915,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Cho",
           organization: "Ministry of Tourism, Culture and Gaming (Ontario)",
           email: "stan.cho@pc.ola.org",
+          roleCategory: "executes",
         },
         {
           name: "Ben Liu",
@@ -873,6 +923,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Liu",
           organization: "Federation of Ontario Public Libraries (FOPL)",
           email: "admin@fopl.ca",
+          roleCategory: "oversees",
         },
         {
           name: "Lita Barrie",
@@ -880,6 +931,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Barrie",
           organization: "Ontario Library Association (OLA)",
           email: "info@accessola.com",
+          roleCategory: "shapes",
         },
         {
           name: "Dina Stevens",
@@ -887,6 +939,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Stevens",
           organization: "Federation of Ontario Public Libraries (FOPL)",
           email: "dinastevens@fopl.ca",
+          roleCategory: "shapes",
         },
         {
           name: "Michelle Arbuckle",
@@ -894,6 +947,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Arbuckle",
           organization: "Ontario Library Association (OLA)",
           email: "mmarbuckle@accessola.com",
+          roleCategory: "shapes",
         },
       ],
       emails: [
@@ -988,6 +1042,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Eby",
           organization: "Province of British Columbia",
           email: "premier@gov.bc.ca",
+          roleCategory: "executes",
         },
         {
           name: "Spencer Chandra Herbert",
@@ -995,6 +1050,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Herbert",
           organization: "Ministry of Indigenous Relations and Reconciliation, British Columbia",
           email: "s.chandraherbert.MLA@leg.bc.ca",
+          roleCategory: "executes",
         },
         {
           name: "Adrian Dix",
@@ -1002,6 +1058,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Dix",
           organization: "Ministry of Energy and Climate Solutions, British Columbia",
           email: "adrian.dix.MLA@leg.bc.ca",
+          roleCategory: "executes",
         },
         {
           name: "Brittny Anderson",
@@ -1009,6 +1066,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Anderson",
           organization: "Office of the Premier",
           email: "brittny.anderson.MLA@leg.bc.ca",
+          roleCategory: "executes",
         },
         {
           name: "Shannon Salter",
@@ -1016,6 +1074,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Salter",
           organization: "Office of the Premier",
           email: "premier@gov.bc.ca",
+          roleCategory: "executes",
         },
         {
           name: "Joan Phillip",
@@ -1023,6 +1082,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Phillip",
           organization: "Legislative Assembly of British Columbia",
           email: "Joan.Phillip.MLA@leg.bc.ca",
+          roleCategory: "votes",
         },
         {
           name: "Josie Osborne",
@@ -1030,6 +1090,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Osborne",
           organization: "Government of British Columbia",
           email: "josie.osborne.MLA@leg.bc.ca",
+          roleCategory: "executes",
         },
       ],
       emails: [
@@ -1120,6 +1181,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Perri",
           organization: "Ville de Montréal",
           email: "commissions@montreal.ca",
+          roleCategory: "votes",
         },
         {
           name: "Sarah V. Doyon",
@@ -1127,6 +1189,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Doyon",
           organization: "Ville de Montréal",
           email: "commissions@montreal.ca",
+          roleCategory: "votes",
         },
         {
           name: "Michel Gibson",
@@ -1134,6 +1197,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Gibson",
           organization: "Ville de Montréal",
           email: "commissions@montreal.ca",
+          roleCategory: "votes",
         },
         {
           name: "Kristine Marsolais",
@@ -1141,6 +1205,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Marsolais",
           organization: "Ville de Montréal",
           email: "commissions@montreal.ca",
+          roleCategory: "votes",
         },
         {
           name: "Amélie Cliche",
@@ -1148,6 +1213,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Cliche",
           organization: "Ville de Montréal",
           email: "commissions@montreal.ca",
+          roleCategory: "votes",
         },
         {
           name: "Christopher Little",
@@ -1155,6 +1221,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Little",
           organization: "Ville de Montréal",
           email: "commissions@montreal.ca",
+          roleCategory: "votes",
         },
         {
           name: "Linda Paquin",
@@ -1162,6 +1229,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Paquin",
           organization: "Ville de Montréal",
           email: "commissions@montreal.ca",
+          roleCategory: "votes",
         },
         {
           name: "Milany Thiagarajah",
@@ -1169,6 +1237,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Thiagarajah",
           organization: "Ville de Montréal",
           email: "commissions@montreal.ca",
+          roleCategory: "votes",
         },
         {
           name: "Jacques Filion",
@@ -1176,6 +1245,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Filion",
           organization: "Ville de Montréal",
           email: "commissions@montreal.ca",
+          roleCategory: "votes",
         },
         {
           name: "David Tordjman",
@@ -1183,6 +1253,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Tordjman",
           organization: "Ville de Montréal",
           email: "commissions@montreal.ca",
+          roleCategory: "votes",
         },
         {
           name: "Soraya Martinez Ferrada",
@@ -1190,6 +1261,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Ferrada",
           organization: "City of Montreal",
           email: "info@ensemblemtl.org",
+          roleCategory: "executes",
         },
         {
           name: "Alan DeSousa",
@@ -1197,6 +1269,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "DeSousa",
           organization: "City of Montreal",
           email: "webmestre@montreal.ca",
+          roleCategory: "executes",
         },
         {
           name: "Christian Vermette",
@@ -1204,6 +1277,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Vermette",
           organization: "BIXI Montréal",
           email: "communications@biximontreal.com",
+          roleCategory: "executes",
         },
         {
           name: "Aref Salem",
@@ -1211,6 +1285,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Salem",
           organization: "City of Montreal",
           email: "webmestre@montreal.ca",
+          roleCategory: "oversees",
         },
         {
           name: "Gabrielle Rousseau-Bélanger",
@@ -1218,6 +1293,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Rousseau-Bélanger",
           organization: "City of Montreal",
           email: "webmestre@montreal.ca",
+          roleCategory: "executes",
         },
         {
           name: "Minister of Transport and Sustainable Mobility (Name Unknown)",
@@ -1225,6 +1301,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Unknown)",
           organization: "Gouvernement du Québec",
           email: "info@quebec.ca",
+          roleCategory: "executes",
         },
         {
           name: "Sonia Bélanger",
@@ -1232,6 +1309,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Bélanger",
           organization: "Gouvernement du Québec",
           email: "ministre@msss.gouv.qc.ca",
+          roleCategory: "executes",
         },
         {
           name: "Dre Caroline Quach-Thanh",
@@ -1239,6 +1317,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Quach-Thanh",
           organization: "Ministère de la Santé et des Services sociaux",
           email: "santepubliquequebec@msss.gouv.qc.ca",
+          roleCategory: "shapes",
         },
         {
           name: "Dr Horacio Arruda",
@@ -1246,6 +1325,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Arruda",
           organization: "CIUSSS de la Mauricie-et-du-Centre-du-Québec",
           email: "santepubliquequebec@msss.gouv.qc.ca",
+          roleCategory: "shapes",
         },
       ],
       emails: [
@@ -1349,6 +1429,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Cassidy",
           organization: "United States Senate",
           email: "stephen_lewerenz@help.senate.gov",
+          roleCategory: "votes",
         },
         {
           name: "John Micklethwait",
@@ -1356,6 +1437,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Micklethwait",
           organization: "Bloomberg News",
           email: "econstanti14@bloomberg.net",
+          roleCategory: "shapes",
         },
         {
           name: "Peggy Collins",
@@ -1363,6 +1445,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Collins",
           organization: "Bloomberg News",
           email: "econstanti14@bloomberg.net",
+          roleCategory: "shapes",
         },
         {
           name: "Emily Chang",
@@ -1370,6 +1453,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Chang",
           organization: "Bloomberg News",
           email: "econstanti14@bloomberg.net",
+          roleCategory: "shapes",
         },
         {
           name: "Christine Harper",
@@ -1377,6 +1461,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Harper",
           organization: "Bloomberg News",
           email: "econstanti14@bloomberg.net",
+          roleCategory: "shapes",
         },
         {
           name: "Tim Cook",
@@ -1384,6 +1469,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Cook",
           organization: "Apple Inc.",
           email: "tcook@apple.com",
+          roleCategory: "executes",
         },
       ],
       emails: [
@@ -1471,6 +1557,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Polis",
           organization: "State of Colorado",
           email: "cdec_communications@state.co.us",
+          roleCategory: "executes",
         },
         {
           name: "Dr. Lisa Roy",
@@ -1478,6 +1565,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Roy",
           organization: "Colorado Department of Early Childhood",
           email: "cdec_communications@state.co.us",
+          roleCategory: "executes",
         },
         {
           name: "Stephanie Beasley",
@@ -1485,6 +1573,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Beasley",
           organization: "Colorado Department of Early Childhood",
           email: "cdec_communications@state.co.us",
+          roleCategory: "executes",
         },
         {
           name: "Mary Alice Cohen",
@@ -1492,6 +1581,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Cohen",
           organization: "Colorado Department of Early Childhood",
           email: "cdec_communications@state.co.us",
+          roleCategory: "executes",
         },
         {
           name: "T Vail Shoultz-McCole",
@@ -1499,6 +1589,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Shoultz-McCole",
           organization: "Colorado Department of Early Childhood",
           email: "cdec_communications@state.co.us",
+          roleCategory: "shapes",
         },
         {
           name: "Caitlin Jensen",
@@ -1506,6 +1597,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Jensen",
           organization: "Zero to Five Montana",
           email: "caitlinj@zerotofive.org",
+          roleCategory: "shapes",
         },
         {
           name: "Alex DuBois",
@@ -1513,6 +1605,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "DuBois",
           organization: "Zero to Five Montana",
           email: "alexd@zerotofive.org",
+          roleCategory: "shapes",
         },
         {
           name: "Sarah Froehlke",
@@ -1520,6 +1613,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Froehlke",
           organization: "Zero to Five Montana",
           email: "sarahf@zerotofive.org",
+          roleCategory: "shapes",
         },
         {
           name: "Melissa Winger",
@@ -1527,6 +1621,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Winger",
           organization: "Zero to Five Montana",
           email: "melissaw@zerotofive.org",
+          roleCategory: "shapes",
         },
         {
           name: "Karen Gilbert",
@@ -1534,6 +1629,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Gilbert",
           organization: "Zero to Five Montana",
           email: "kareng@zerotofive.org",
+          roleCategory: "shapes",
         },
         {
           name: "Callie Parr",
@@ -1541,6 +1637,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Parr",
           organization: "Zero to Five Montana",
           email: "calliep@zerotofive.org",
+          roleCategory: "shapes",
         },
         {
           name: "Stephanie Ingram",
@@ -1548,6 +1645,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Ingram",
           organization: "Delaware State Education Association",
           email: "membershipsupport@dsea.org",
+          roleCategory: "shapes",
         },
         {
           name: "Thomas Bracken",
@@ -1555,6 +1653,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Bracken",
           organization: "New Jersey Chamber of Commerce",
           email: "Tom.Bracken@njchamber.com",
+          roleCategory: "executes",
         },
         {
           name: "Jeff Taschner",
@@ -1562,6 +1661,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Taschner",
           organization: "Delaware State Education Association",
           email: "membershipsupport@dsea.org",
+          roleCategory: "executes",
         },
         {
           name: "Jon Neubauer",
@@ -1569,6 +1669,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Neubauer",
           organization: "Delaware State Education Association",
           email: "membershipsupport@dsea.org",
+          roleCategory: "executes",
         },
         {
           name: "Michael Egenton",
@@ -1576,6 +1677,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Egenton",
           organization: "New Jersey Chamber of Commerce",
           email: "theresa@njchamber.com",
+          roleCategory: "shapes",
         },
         {
           name: "Lynda Schlegel Culver",
@@ -1583,6 +1685,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Culver",
           organization: "Pennsylvania State Senate",
           email: "lculver@pasen.gov",
+          roleCategory: "shapes",
         },
       ],
       emails: [
@@ -1681,6 +1784,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Duffy",
           organization: "U.S. Department of Transportation",
           email: "pressoffice@dot.gov",
+          roleCategory: "executes",
         },
         {
           name: "Sean McMaster",
@@ -1688,6 +1792,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "McMaster",
           organization: "Federal Highway Administration",
           email: "FHWA.pressoffice@dot.gov",
+          roleCategory: "executes",
         },
         {
           name: "Eric L. Johnson",
@@ -1695,6 +1800,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Johnson",
           organization: "City of Dallas",
           email: "maddy.madrazo@dallas.gov",
+          roleCategory: "executes",
         },
         {
           name: "Ryan McCormack",
@@ -1702,6 +1808,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "McCormack",
           organization: "U.S. Department of Transportation",
           email: "pressoffice@dot.gov",
+          roleCategory: "executes",
         },
         {
           name: "Maddy Madrazo",
@@ -1709,6 +1816,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Madrazo",
           organization: "Office of the Mayor, City of Dallas",
           email: "maddy.madrazo@dallas.gov",
+          roleCategory: "shapes",
         },
         {
           name: "Steven G. Bradbury",
@@ -1716,6 +1824,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Bradbury",
           organization: "U.S. Department of Transportation",
           email: "pressoffice@dot.gov",
+          roleCategory: "executes",
         },
         {
           name: "Charles Peterson Meachum",
@@ -1723,6 +1832,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Meachum",
           organization: "U.S. Department of Transportation",
           email: "pressoffice@dot.gov",
+          roleCategory: "executes",
         },
         {
           name: "Sharon F. Owens",
@@ -1730,6 +1840,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Owens",
           organization: "City of Syracuse",
           email: "mayor@syr.gov",
+          roleCategory: "executes",
         },
         {
           name: "Malik Evans",
@@ -1737,6 +1848,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Evans",
           organization: "City of Rochester",
           email: "info@cityofrochester.gov",
+          roleCategory: "executes",
         },
         {
           name: "Marie Therese Dominguez",
@@ -1744,6 +1856,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Dominguez",
           organization: "New York State Department of Transportation",
           email: "Glenn.Blain@dot.ny.gov",
+          roleCategory: "executes",
         },
         {
           name: "Rita Paniagua",
@@ -1751,6 +1864,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Paniagua",
           organization: "City of Syracuse",
           email: "RPaniagua@syr.gov",
+          roleCategory: "votes",
         },
         {
           name: "Miguel Melendez",
@@ -1758,6 +1872,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Melendez",
           organization: "City of Rochester",
           email: "info@cityofrochester.gov",
+          roleCategory: "votes",
         },
         {
           name: "Dana K. Miller",
@@ -1765,6 +1880,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Miller",
           organization: "City of Rochester",
           email: "info@cityofrochester.gov",
+          roleCategory: "executes",
         },
         {
           name: "Kabutey Ocansey",
@@ -1772,6 +1888,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Ocansey",
           organization: "City of Rochester",
           email: "info@cityofrochester.gov",
+          roleCategory: "executes",
         },
         {
           name: "Alexander Marion",
@@ -1779,6 +1896,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Marion",
           organization: "City of Syracuse",
           email: "audit@syr.gov",
+          roleCategory: "oversees",
         },
         {
           name: "Chol Majok",
@@ -1786,6 +1904,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Majok",
           organization: "City of Syracuse",
           email: "CMajok@syr.gov",
+          roleCategory: "votes",
         },
         {
           name: "Rasheada Caldwell",
@@ -1793,6 +1912,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Caldwell",
           organization: "City of Syracuse",
           email: "RCaldwell@syr.gov",
+          roleCategory: "votes",
         },
         {
           name: "Travis Campbell",
@@ -1800,6 +1920,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Campbell",
           organization: "Texas Department of Transportation",
           email: "James.Campbell@txdot.gov",
+          roleCategory: "executes",
         },
         {
           name: "Chadwick Dabbs",
@@ -1807,6 +1928,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Dabbs",
           organization: "Texas Department of Transportation",
           email: "Chadwick.Dabbs@txdot.gov",
+          roleCategory: "executes",
         },
         {
           name: "Michelle Meaux",
@@ -1814,6 +1936,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Meaux",
           organization: "Texas Department of Transportation",
           email: "Michelle.Meaux@txdot.gov",
+          roleCategory: "executes",
         },
         {
           name: "Catherine McCreight",
@@ -1821,6 +1944,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "McCreight",
           organization: "Texas Department of Transportation",
           email: "Catherine.McCreight@txdot.gov",
+          roleCategory: "executes",
         },
       ],
       emails: [
@@ -1920,6 +2044,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Edlow",
           organization: "U.S. Citizenship and Immigration Services",
           email: "usciscongressionalinquiries@uscis.dhs.gov",
+          roleCategory: "executes",
         },
         {
           name: "Mora Namdar",
@@ -1927,6 +2052,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Namdar",
           organization: "U.S. Department of State",
           email: "212ewaiver@state.gov",
+          roleCategory: "executes",
         },
         {
           name: "Brian Gottstein",
@@ -1934,6 +2060,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Gottstein",
           organization: "U.S. Citizenship and Immigration Services",
           email: "usciscongressionalinquiries@uscis.dhs.gov",
+          roleCategory: "shapes",
         },
         {
           name: "Markwayne Mullin",
@@ -1941,6 +2068,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Mullin",
           organization: "U.S. Department of Homeland Security",
           email: "CongresstoDHS@hq.dhs.gov",
+          roleCategory: "executes",
         },
         {
           name: "Eric Ruark",
@@ -1948,6 +2076,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Ruark",
           organization: "U.S. Department of Homeland Security",
           email: "CongresstoDHS@hq.dhs.gov",
+          roleCategory: "executes",
         },
         {
           name: "Regan Williams",
@@ -1955,6 +2084,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           shortName: "Williams",
           organization: "U.S. Department of Homeland Security",
           email: "CongresstoDHS@hq.dhs.gov",
+          roleCategory: "oversees",
         },
       ],
     },
