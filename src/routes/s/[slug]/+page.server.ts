@@ -5,6 +5,7 @@ import { api } from '$lib/convex';
 import { parseRecipientConfig } from '$lib/types/template';
 import { getOfficials } from '$lib/core/shadow-atlas/client';
 import type { DistrictOfficialInput } from '$lib/utils/landscapeMerge';
+import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
 
 /**
  * Transform Convex debate row into store-compatible AIResolutionData.
@@ -194,14 +195,27 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 
 	// Batch 2: Queries depending on Batch 1 results
 	const [deliveredRecipients, districtOfficials, engagementByDistrict] = await Promise.all([
-		existingPosition
-			? serverQuery(api.positions.getDeliveries, {
-						registrationId: existingPosition.registrationId,
-						deliveryMethod: 'email'
-					})
-					.then((deliveries: any[]) => deliveries.map((d) => d.recipientKey ?? d.recipientName))
-					.catch(() => [])
-			: Promise.resolve([]),
+		// Deliveries persist across both paths: stance-agnostic (keyed on
+		// pseudonymousId) and stance-linked (tier-3+, via identityCommitment).
+		// pseudonymousId is available at tier 1+ — every authenticated user.
+		// computePseudonymousId throws if salt is missing — degrade gracefully
+		// rather than crashing the page load.
+		((): Promise<string[]> => {
+			if (!templateId || !userId) return Promise.resolve([]);
+			try {
+				const pseudoId = computePseudonymousId(userId);
+				return serverQuery(api.positions.getUserDeliveries, {
+							templateId,
+							pseudonymousId: pseudoId,
+							identityCommitment: identityCommitment ?? undefined,
+							deliveryMethod: 'email'
+						})
+						.then((deliveries: any[]) => deliveries.map((d) => d.recipientKey ?? d.recipientName))
+						.catch(() => []);
+			} catch {
+				return Promise.resolve([]);
+			}
+		})(),
 
 		userDistrictCode
 			? getOfficials(userDistrictCode)

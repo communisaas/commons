@@ -83,6 +83,67 @@ export const getDeliveries = query({
 });
 
 /**
+ * Get all deliveries a user has made for a template, across both
+ * stance-agnostic (direct, keyed on pseudonymousId) and stance-linked
+ * (keyed on positionRegistrations.identityCommitment) paths.
+ *
+ * pseudonymousId covers the tier-1+ civic-action path (direct mailto, etc).
+ * identityCommitment (optional) covers the tier-3+ stance-linked path used
+ * when DEBATE market mechanics apply.
+ */
+export const getUserDeliveries = query({
+  args: {
+    templateId: v.id("templates"),
+    pseudonymousId: v.string(),
+    identityCommitment: v.optional(v.string()),
+    deliveryMethod: v.optional(v.string()),
+  },
+  handler: async (ctx, { templateId, pseudonymousId, identityCommitment, deliveryMethod }) => {
+    // Direct (stance-agnostic) deliveries, keyed on pseudonymousId
+    const direct = await ctx.db
+      .query("positionDeliveries")
+      .withIndex("by_templateId_pseudonymousId", (idx) =>
+        idx.eq("templateId", templateId).eq("pseudonymousId", pseudonymousId),
+      )
+      .collect();
+
+    // Stance-linked deliveries: look up via user's registration for this template.
+    // Only runs when identityCommitment is provided (tier-3+ users with ZK identity).
+    let linked: typeof direct = [];
+    if (identityCommitment) {
+      const reg = await ctx.db
+        .query("positionRegistrations")
+        .withIndex("by_templateId_identityCommitment", (idx) =>
+          idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
+        )
+        .first();
+      if (reg) {
+        linked = await ctx.db
+          .query("positionDeliveries")
+          .withIndex("by_registrationId", (idx) => idx.eq("registrationId", reg._id))
+          .collect();
+      }
+    }
+
+    const all = [...direct, ...linked];
+    const filtered = deliveryMethod
+      ? all.filter((d) => d.deliveryMethod === deliveryMethod)
+      : all;
+
+    // Dedupe by recipientKey (new-path records always have a key; old-path may not)
+    const seen = new Set<string>();
+    const out: Array<{ recipientName: string; recipientKey: string | null }> = [];
+    for (const d of filtered) {
+      const key = d.recipientKey ?? d.recipientName;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ recipientName: d.recipientName, recipientKey: d.recipientKey ?? null });
+    }
+    return out;
+  },
+});
+
+/**
  * Get engagement by district for a template (coordination visibility).
  * Returns per-district action counts grouped by district code.
  */
@@ -278,6 +339,78 @@ export const batchRegisterDeliveries = mutation({
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
+
+/**
+ * Record delivery events directly, keyed on pseudonymousId + templateId, with
+ * NO stance registration required. This is the stance-agnostic civic-action
+ * pathway: writing to a decision-maker is a first-class civic event, not an
+ * overlay on a public support/oppose tally.
+ *
+ * pseudonymousId = HMAC-SHA256(user.id, salt) per voter-protocol G-07
+ * (ANTI-ASTROTURF-IMPLEMENTATION-PLAN.md). Matches the primitive used by the
+ * submissions table so tier 1+ users can persist civic actions without
+ * exposing raw user_id or requiring identity_commitment (tier 3+).
+ *
+ * Stance registration (positionRegistrations) remains meaningful when DEBATE
+ * markets provide truth-testing mechanics for support/oppose claims. Until
+ * then, deliveries stand on their own and do not fabricate stances from
+ * civic actions.
+ *
+ * Idempotent: if a delivery exists for this (pseudonymousId, templateId,
+ * recipientKey) tuple, no duplicate is created.
+ */
+export const recordDirectDeliveries = mutation({
+  args: {
+    pseudonymousId: v.string(),
+    templateId: v.id("templates"),
+    districtCode: v.optional(v.string()),
+    recipients: v.array(v.object({
+      name: v.string(),
+      email: v.optional(v.string()),
+      deliveryMethod: v.string(),
+      // Optional pre-encrypted fields (caller encrypts before calling)
+      encryptedRecipientEmail: v.optional(v.string()),
+      recipientEmailHash: v.optional(v.string()),
+      encryptedRecipientName: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, { pseudonymousId, templateId, districtCode, recipients }) => {
+    const now = Date.now();
+    // Pre-fetch the user's existing deliveries for this template to deduplicate
+    const existing = await ctx.db
+      .query("positionDeliveries")
+      .withIndex("by_templateId_pseudonymousId", (idx) =>
+        idx.eq("templateId", templateId).eq("pseudonymousId", pseudonymousId),
+      )
+      .collect();
+    const existingKeys = new Set(existing.map((d) => d.recipientKey).filter(Boolean));
+
+    let created = 0;
+    for (const r of recipients) {
+      const recipientKey = slugify(r.name);
+      if (existingKeys.has(recipientKey)) continue;
+
+      const doc: Record<string, unknown> = {
+        pseudonymousId,
+        templateId,
+        recipientKey,
+        recipientName: r.name,
+        deliveryMethod: r.deliveryMethod,
+        deliveryStatus: "pending",
+        deliveredAt: now,
+      };
+      if (districtCode) doc.districtCode = districtCode;
+      if (r.encryptedRecipientEmail) doc.encryptedRecipientEmail = r.encryptedRecipientEmail;
+      if (r.recipientEmailHash) doc.recipientEmailHash = r.recipientEmailHash;
+      if (r.encryptedRecipientName) doc.encryptedRecipientName = r.encryptedRecipientName;
+      await ctx.db.insert("positionDeliveries", doc as any);
+      existingKeys.add(recipientKey);
+      created++;
+    }
+
+    return { created };
+  },
+});
 
 /**
  * Get full engagement by district with privacy threshold.

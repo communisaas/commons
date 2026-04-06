@@ -828,7 +828,17 @@ export default defineSchema({
     .index("by_templateId_identityCommitment", ["templateId", "identityCommitment"]),
 
   positionDeliveries: defineTable({
-    registrationId: v.id("positionRegistrations"),
+    // Primary civic event keys — a delivery is a first-class action, independent
+    // of stance declaration. Keyed on pseudonymousId per voter-protocol G-07
+    // (ANTI-ASTROTURF-IMPLEMENTATION-PLAN.md): HMAC-SHA256(user.id, salt) breaks
+    // the deanonymization vector while maintaining auditability. Stance
+    // (positionRegistrations) is an optional overlay that becomes meaningful
+    // when DEBATE markets provide truth-testing.
+    pseudonymousId: v.optional(v.string()),
+    templateId: v.optional(v.id("templates")),
+    // Optional linkage to a stance registration — populated only when the user
+    // has also declared a stance (DEBATE-era accountability weight).
+    registrationId: v.optional(v.id("positionRegistrations")),
     recipientName: v.string(),
     encryptedRecipientName: v.optional(v.string()),
     recipientKey: v.optional(v.string()),
@@ -838,8 +848,13 @@ export default defineSchema({
     deliveryMethod: v.string(), // 'cwc' | 'email' | 'recorded'
     deliveryStatus: v.string(), // 'pending' | 'delivered' | 'failed'
     deliveredAt: v.optional(v.number()),
+    // Optional district attribution for coordination display, backfilled from
+    // the user's Shadow Atlas registration at write time.
+    districtCode: v.optional(v.string()),
   })
-    .index("by_registrationId", ["registrationId"]),
+    .index("by_registrationId", ["registrationId"])
+    .index("by_templateId_pseudonymousId", ["templateId", "pseudonymousId"])
+    .index("by_templateId", ["templateId"]),
 
   // ===========================================================================
   // COMMUNITY FIELD CONTRIBUTIONS

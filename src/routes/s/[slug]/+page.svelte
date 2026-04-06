@@ -14,7 +14,7 @@
 	import { trackTemplateView, trackDeliveryAttempt } from '$lib/core/analytics/client';
 	import ShareButton from '$lib/components/ui/ShareButton.svelte';
 	import ActionBar from '$lib/components/template-browser/parts/ActionBar.svelte';
-	// TrustJourney removed — proof now lives inline in message preview footer
+	// Proof footer lives inline in message preview (PreviewContent.svelte)
 	import DebateSurface from '$lib/components/debate/DebateSurface.svelte';
 	import DebateSignal from '$lib/components/debate/DebateSignal.svelte';
 	import MobileDebateBanner from '$lib/components/debate/MobileDebateBanner.svelte';
@@ -22,8 +22,7 @@
 	import StanceRegistration from '$lib/components/action/StanceRegistration.svelte';
 	import PowerLandscape from '$lib/components/action/PowerLandscape.svelte';
 	import { positionState } from '$lib/stores/positionState.svelte';
-	// CommunityEngagementCard removed — coordination weight is inline after landscape
-	import type { EngagementData } from '$lib/components/action/CommunityEngagementCard.svelte';
+	import type { EngagementData } from '$lib/types/engagement';
 	import { mergeLandscape, slugify, type LandscapeMember, type DistrictOfficialInput } from '$lib/utils/landscapeMerge';
 	import type { ProcessedDecisionMaker } from '$lib/types/template';
 	import { generateShareMessage } from '$lib/utils/share-messages';
@@ -34,6 +33,7 @@
 	import type { PageData } from './$types';
 	import type { Template as TemplateType } from '$lib/types/template';
 	import { FEATURES } from '$lib/config/features';
+	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -242,7 +242,6 @@
 	);
 
 	// UI state
-	let landscapeRevealed = $state(false);
 	let contactedRecipients = $state(new Set<string>());
 	let departingRecipients = $state(new Set<string>());
 	let batchRegistrationState = $state<'idle' | 'registering' | 'complete'>('idle');
@@ -311,26 +310,25 @@
 		const tmplId = template.id;
 		const existing = pl.existingPosition ?? null;
 		const counts = pl.positionCounts;
-		const isCreatorArrival = browser && ($page.state as Record<string, unknown>)?.fromPublish;
 
-		const hasDirectRecipients = (pl.recipientConfig?.decisionMakers ?? []).length > 0 && !isCongressional;
-		if (!FEATURES.STANCE_POSITIONS || isCreatorArrival || hasDirectRecipients) {
-			// No stance gate — show decision-makers immediately.
-			// Creator arrivals skip the gate: they authored this template.
-			// Direct outreach templates show named recipients without requiring a stance.
-			landscapeRevealed = true;
-		} else if (existing) {
-			// Returning user — restore registered state, skip stance buttons
+		// Recipients are present from first render — the landscape is the strong center
+		// of this surface, not something unlocked by stance. Users arrive with momentum
+		// from a directional template title; their stance is already embedded in the
+		// click. Stance registration (when DEBATE is on) is subsidiary coordination
+		// signal, not a gate.
+		//
+		// Populate positionState for stance UI + count display (used by
+		// StanceRegistration when DEBATE is enabled, and restored for returning users
+		// who already registered a position).
+		if (existing) {
 			positionState.restore(
 				tmplId,
 				existing.stance as 'support' | 'oppose',
 				existing.registrationId,
 				counts ?? { support: 0, oppose: 0, districts: 0 }
 			);
-			landscapeRevealed = true;
 		} else {
 			positionState.init(tmplId, counts);
-			landscapeRevealed = false;
 		}
 
 		// Restore sent recipients from delivery records
@@ -340,7 +338,7 @@
 
 	// Auto-scroll to PowerLandscape on creator arrival (separate effect for reactivity isolation)
 	$effect(() => {
-		if (browser && ($page.state as Record<string, unknown>)?.fromPublish && landscapeRevealed) {
+		if (browser && ($page.state as Record<string, unknown>)?.fromPublish) {
 			tick().then(() => {
 				document.getElementById('power-landscape')?.scrollIntoView({
 					behavior: 'smooth',
@@ -351,12 +349,8 @@
 	});
 
 	function handleRegistered(stance: 'support' | 'oppose') {
-		if (stance === 'support') {
-			// Support → reveal Power Landscape for direct action
-			landscapeRevealed = true;
-		} else {
+		if (stance === 'oppose') {
 			// Oppose → route into deliberation
-			landscapeRevealed = true;
 			const userTier = data.user?.trust_tier ?? 0;
 			const hasDebate = !!(data.debate as DebateData | null);
 
@@ -423,13 +417,13 @@
 				departingRecipients = new Set([...departingRecipients, member.id]);
 				trackDeliveryAttempt(template.id, 'email');
 
-				// Persist outreach record (fire-and-forget)
-				if (positionState.registrationId) {
-					fetch('/api/positions/batch-register', {
+				// Persist delivery record — stance-agnostic civic action (fire-and-forget)
+				if (data.user?.id) {
+					fetch('/api/deliveries/record', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
-							registrationId: positionState.registrationId,
+							templateId: template.id,
 							recipients: [{
 								name: member.name,
 								email: member.email,
@@ -490,13 +484,13 @@
 				departingRecipients = new Set([...departingRecipients, ...emailMembers.map(m => m.id)]);
 				trackDeliveryAttempt(template.id, 'email');
 
-				// Persist delivery records only for members who actually got a mailto (fire-and-forget)
-				if (positionState.registrationId) {
-					fetch('/api/positions/batch-register', {
+				// Persist delivery records — stance-agnostic civic action (fire-and-forget)
+				if (data.user?.id) {
+					fetch('/api/deliveries/record', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
-							registrationId: positionState.registrationId,
+							templateId: template.id,
 							recipients: emailMembers.map((m) => ({
 								name: m.name,
 								email: m.email ?? undefined,
@@ -687,7 +681,15 @@
 		</div>
 	</div>
 
-	<!-- COMMIT: Stance registration / action — the page's experiential pivot -->
+	<!-- COMMIT: Stance registration — pre-grid position is intentional.
+	     Stance is intrinsically linked to DEBATE market mechanics: support/
+	     oppose only have truth-consequence when staked as claims in an LMSR
+	     market that resolves. In that world, stance is a bifurcating routing
+	     decision (support→act on landscape; oppose→deliberate in debate), which
+	     legitimately precedes the landscape grid. TODO(DEBATE): when flipping
+	     FEATURES.DEBATE on, re-validate this positioning against the felt
+	     arc — users should still perceive recipients as primary, with stance
+	     as a meaningful market-entry act, not a poll gate. -->
 	{#if FEATURES.DEBATE && FEATURES.STANCE_POSITIONS}
 		<div class="border-y border-slate-200/80 py-4 my-6">
 			<!-- Debate signal — contextualizes the support/oppose decision -->
@@ -733,6 +735,7 @@
 						} else {
 							modalActions.openModal('identity-verification-modal', 'identity-verification', {
 								userId: data.user!.id,
+								userEmail: decryptedUser.email ?? undefined,
 								templateSlug: template.slug,
 								onComplete: async () => {
 									await invalidateAll();
@@ -792,7 +795,7 @@
 		<!-- LEFT: Message preview — sticky reference while landscape scrolls -->
 		<div class="min-w-0 lg:sticky lg:top-6 lg:self-start">
 			<div class="rounded-xl border border-slate-200 bg-white shadow-sm">
-				{#if addressRequired && !landscapeRevealed}
+				{#if addressRequired}
 					<!-- Address Required Notice -->
 					<div class="border-b border-amber-200 bg-amber-50 px-6 py-4">
 						<div class="flex items-center gap-3">
@@ -856,8 +859,7 @@
 						}
 					}}
 					onSendMessage={async () => {
-						// Reveal the Power Landscape and scroll to it — no batch mailto
-						landscapeRevealed = true;
+						// Scroll to Power Landscape — no batch mailto
 						await tick();
 						document.getElementById('power-landscape')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 					}}
@@ -874,6 +876,7 @@
 					onVerifyIdentity={data.user ? () => {
 						modalActions.openModal('identity-verification-modal', 'identity-verification', {
 							userId: data.user!.id,
+							userEmail: decryptedUser.email ?? undefined,
 							templateSlug: template.slug,
 							onComplete: async () => {
 								await invalidateAll();
@@ -886,9 +889,8 @@
 
 		<!-- RIGHT: Relational field — who you're writing to, who's with you, what's been contested -->
 		<div class="mt-8 lg:mt-0 space-y-8 min-w-0">
-			<!-- Power Landscape: visible after position registration -->
-			{#if landscapeRevealed}
-				<div id="power-landscape">
+			<!-- Power Landscape: the strong center — who holds power, present from first render -->
+			<div id="power-landscape">
 				<PowerLandscape
 					{template}
 					decisionMakers={pl.recipientConfig?.decisionMakers ?? []}
@@ -911,8 +913,13 @@
 					registrationState={batchRegistrationState}
 				/>
 
-				<!-- Coordination weight — numbers as substance, before utility chrome -->
-				{#if pl.engagementByDistrict && pl.engagementByDistrict.aggregate && pl.engagementByDistrict.aggregate.total_positions > 0}
+				<!-- Coordination weight — stance tallies are category-error theater without
+				     debate market truth-testing mechanics. When DEBATE flips on, support/
+				     oppose counts gain meaning (staked claims in an LMSR market). Until
+				     then, this block stays dark. A stance-agnostic delivery-count signal
+				     is the correct replacement when we want civic-action coordination
+				     visibility without the stance overlay. -->
+				{#if FEATURES.DEBATE && pl.engagementByDistrict && pl.engagementByDistrict.aggregate && pl.engagementByDistrict.aggregate.total_positions > 0}
 					{@const agg = pl.engagementByDistrict.aggregate}
 					{@const districts = pl.engagementByDistrict.districts ?? []}
 					{@const userDist = districts.find((d) => d.is_user_district)}
@@ -952,8 +959,7 @@
 						Noted — {reportedBounces.size === 1 ? 'this address' : 'these addresses'} won't appear in future results.
 					</p>
 				{/if}
-				</div>
-			{/if}
+			</div>
 
 			<!-- Debate surface -->
 			{#if FEATURES.DEBATE}
@@ -997,6 +1003,7 @@
 							// Tier 2+: open real mDL identity verification
 							modalActions.openModal('identity-verification-modal', 'identity-verification', {
 								userId: data.user!.id,
+								userEmail: decryptedUser.email ?? undefined,
 								templateSlug: template.slug,
 								onComplete: async () => {
 									await invalidateAll();
