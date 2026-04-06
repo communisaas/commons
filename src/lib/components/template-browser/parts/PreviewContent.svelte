@@ -71,6 +71,14 @@
 	const recipientCount = $derived(decisionMakers.length || recipients.length);
 	const targetInfo = $derived(deriveTargetPresentation(template));
 
+	// When all DMs share the same org, hoist it to the header instead of repeating per-row
+	const sharedOrg = $derived.by(() => {
+		if (decisionMakers.length === 0) return null;
+		const first = decisionMakers[0].organization;
+		if (!first) return null;
+		return decisionMakers.every((dm) => dm.organization === first) ? first : null;
+	});
+
 	let copied = $state(false);
 	let copyTimeout: string | null = null;
 	let showResearchLog = $state(false);
@@ -177,7 +185,43 @@
 							>
 								{target.primary}
 							</span>
-							{#if target.secondary}
+							{#if target.secondary && (decisionMakers.length > 0 || recipients.length > 0)}
+								<AnimatedPopover id="recipients-multi-{template?.id || 'preview'}-{target.primary}">
+									{#snippet trigger(_params)}
+										<button class="shrink-0 cursor-help text-xs font-medium text-slate-500 transition-colors hover:text-slate-700">
+											{target.secondary}
+										</button>
+									{/snippet}
+									{#snippet children(_props)}
+										<div class="w-[300px] max-w-[calc(100vw-2rem)] cursor-default">
+											{#if decisionMakers.length > 0}
+												<div class="mb-2">
+													<h3 class="text-sm font-semibold text-slate-900">
+														Decision-Makers ({decisionMakers.length})
+													</h3>
+													{#if sharedOrg}
+														<div class="truncate text-xs text-slate-500">{sharedOrg}</div>
+													{/if}
+												</div>
+												<div class="space-y-1">
+													{#each decisionMakers as dm}
+														<div class="min-w-0 py-0.5">
+															<div class="truncate text-sm font-medium text-slate-900">
+																{dm.name}
+															</div>
+															{#if dm.title || (!sharedOrg && dm.organization)}
+																<div class="truncate text-xs text-slate-500">
+																	{dm.title || ''}{#if !sharedOrg && dm.organization}{dm.title ? ' · ' : ''}{dm.organization}{/if}
+																</div>
+															{/if}
+														</div>
+													{/each}
+												</div>
+											{/if}
+										</div>
+									{/snippet}
+								</AnimatedPopover>
+							{:else if target.secondary}
 								<span class="shrink-0 text-xs font-medium text-slate-500">{target.secondary}</span>
 							{/if}
 						</div>
@@ -204,24 +248,16 @@
 			>
 				{targetInfo.primary}
 			</span>
-			{#if targetInfo.secondary}
-				<span class="shrink-0 text-xs font-medium text-slate-500">{targetInfo.secondary}</span>
-			{/if}
 		{/if}
 
-		<!-- Detail popover -->
-		{#if decisionMakers.length > 0 || recipients.length > 0}
+		<!-- Detail popover as "+N more" trigger (single-level only, multi-level handled inline) -->
+		{#if targetInfo.type !== 'multi-level' && recipientCount > 1 && (decisionMakers.length > 0 || recipients.length > 0)}
 			<AnimatedPopover id="recipients-{template?.id || 'preview'}">
 				{#snippet trigger(_params)}
 					<button
-						class="inline-flex shrink-0 cursor-help items-center rounded-md bg-slate-100
-                               px-1.5 py-0.5 text-xs font-medium
-                               text-slate-500 transition-colors
-                               duration-200
-                               hover:bg-slate-200 hover:text-slate-700"
+						class="shrink-0 cursor-help text-xs font-medium text-slate-500 transition-colors hover:text-slate-700"
 					>
-						{recipientCount}
-						{recipientCount === 1 ? 'recipient' : 'recipients'}
+						+{recipientCount - 1} more
 					</button>
 				{/snippet}
 
@@ -229,10 +265,15 @@
 					<div class="w-[300px] max-w-[calc(100vw-2rem)] cursor-default">
 						{#if decisionMakers.length > 0}
 							<!-- Rich decision-maker view -->
-							<div class="mb-3 flex items-center justify-between">
-								<h3 class="text-sm font-semibold text-slate-900">
-									Decision-Makers ({decisionMakers.length})
-								</h3>
+							<div class="mb-2 flex items-center justify-between gap-2">
+								<div class="min-w-0">
+									<h3 class="text-sm font-semibold text-slate-900">
+										Decision-Makers ({decisionMakers.length})
+									</h3>
+									{#if sharedOrg}
+										<div class="truncate text-xs text-slate-500">{sharedOrg}</div>
+									{/if}
+								</div>
 								{#if recipients.length > 0}
 									<button
 										onclick={(e) => {
@@ -255,34 +296,17 @@
 									</button>
 								{/if}
 							</div>
-							<div class="space-y-2.5">
+							<div class="space-y-1">
 								{#each decisionMakers as dm}
-									<div class="flex items-start gap-2.5">
-										<div
-											class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
-											class:bg-congressional-100={targetInfo.type === 'district-based' || (targetInfo.type === 'multi-level')}
-											class:text-congressional-700={targetInfo.type === 'district-based' || (targetInfo.type === 'multi-level')}
-											class:bg-emerald-100={targetInfo.type === 'location-specific'}
-											class:text-emerald-700={targetInfo.type === 'location-specific'}
-											class:bg-slate-100={targetInfo.type === 'universal'}
-											class:text-slate-600={targetInfo.type === 'universal'}
-										>
-											{dm.name.charAt(0)}
+									<div class="min-w-0 py-0.5">
+										<div class="truncate text-sm font-medium text-slate-900">
+											{dm.name}
 										</div>
-										<div class="min-w-0 flex-1">
-											<div class="truncate text-sm font-medium text-slate-900">
-												{dm.name}
+										{#if dm.title || (!sharedOrg && dm.organization)}
+											<div class="truncate text-xs text-slate-500">
+												{dm.title || ''}{#if !sharedOrg && dm.organization}{dm.title ? ' · ' : ''}{dm.organization}{/if}
 											</div>
-											{#if dm.role || dm.organization}
-												<div class="truncate text-xs text-slate-500">
-													{#if dm.role && dm.organization}
-														{dm.role}, {dm.organization}
-													{:else}
-														{dm.role || dm.organization}
-													{/if}
-												</div>
-											{/if}
-										</div>
+										{/if}
 									</div>
 								{/each}
 							</div>
@@ -404,15 +428,11 @@
 				</a>
 			{/if}
 
-			<!-- Inline verification CTA — only when there's a gap to fill -->
-			{#if trustTier < 2 && onVerifyAddress}
-				<button
-					onclick={onVerifyAddress}
-					class="mt-3 min-h-[44px] flex items-center text-[13px] text-emerald-600 hover:text-emerald-700 transition-colors"
-				>
-					Verify your address for district proof →
-				</button>
-			{:else if trustTier >= 2 && trustTier < 3 && onVerifyIdentity}
+			<!-- Identity verification CTA — gov ID is a distinct action from address
+			     verification; address CTAs live on the page-level amber banner and in
+			     the landscape's verify-to-see-reps nudge, so this footer focuses only
+			     on the tier-2→3 upgrade path. -->
+			{#if trustTier >= 2 && trustTier < 3 && onVerifyIdentity}
 				<button
 					onclick={onVerifyIdentity}
 					class="mt-3 min-h-[44px] flex items-center text-[13px] text-emerald-600 hover:text-emerald-700 transition-colors"

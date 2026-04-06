@@ -52,13 +52,13 @@ export function deriveTargetPresentation(
 			emphasis: 'federal' as const
 		});
 
-		// Local level — show roles, not names
+		// Local level — show organizations, not roles
 		const dms = config.decisionMakers || [];
-		const primaryRole = dms[0]?.role || dms[0]?.shortName || dms[0]?.name || 'Decision-maker';
+		const primaryOrg = dms[0]?.organization || dms[0]?.role || dms[0]?.shortName || dms[0]?.name || 'Decision-maker';
 		const remaining = dms.length - 1;
 
 		targets.push({
-			primary: primaryRole,
+			primary: primaryOrg,
 			secondary: remaining > 0 ? `+${remaining} more` : null,
 			icon: 'Building' as const,
 			emphasis: 'local' as const
@@ -87,16 +87,16 @@ export function deriveTargetPresentation(
 		};
 	}
 
-	// Single-Level Local: Role-forward
-	// "Mayor" communicates power topology; names are secondary
+	// Single-Level Local: Organization-forward
+	// "SF Dept of Public Works" communicates institutional context
 	if (hasLocalDecisionMakers) {
 		const dms = config.decisionMakers || [];
-		const primaryRole = dms[0]?.role || dms[0]?.shortName || dms[0]?.name || 'Decision-maker';
+		const primaryOrg = dms[0]?.organization || dms[0]?.role || dms[0]?.shortName || dms[0]?.name || 'Decision-maker';
 		const remaining = dms.length - 1;
 
 		return {
 			type: 'location-specific',
-			primary: primaryRole,
+			primary: primaryOrg,
 			secondary: remaining > 0 ? `+${remaining} more` : null,
 			icon: 'Building',
 			coordinationContext: config.location?.city || config.location?.jurisdiction,

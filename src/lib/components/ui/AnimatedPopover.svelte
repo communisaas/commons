@@ -194,15 +194,34 @@
 		const GAP = 6;
 
 		const innerCard = popoverElement.querySelector('.popover-card') as HTMLElement;
-		const cardHeight = innerCard?.offsetHeight || 50;
+		// scrollHeight gives natural content height even when max-height is constraining
+		const cardHeight = innerCard?.scrollHeight || 50;
 		const popoverWidth = innerCard?.offsetWidth || popoverElement.offsetWidth || 250;
-		const totalHeight = cardHeight + GAP;
 
-		const spaceBelow = viewportHeight - triggerRect.bottom;
-		const spaceAbove = triggerRect.top;
+		const spaceBelow = viewportHeight - triggerRect.bottom - GAP - margin;
+		const spaceAbove = triggerRect.top - GAP - margin;
 
 		const verticalPosition: 'top' | 'bottom' =
-			spaceBelow >= totalHeight + margin || spaceBelow > spaceAbove ? 'bottom' : 'top';
+			spaceBelow >= cardHeight || spaceBelow >= spaceAbove ? 'bottom' : 'top';
+
+		const availableHeight = verticalPosition === 'bottom' ? spaceBelow : spaceAbove;
+
+		// Constrain card height when content exceeds available viewport space
+		let effectiveCardHeight = cardHeight;
+		if (innerCard) {
+			if (cardHeight > availableHeight && availableHeight > 0) {
+				effectiveCardHeight = Math.max(availableHeight, 100);
+				innerCard.style.maxHeight = `${effectiveCardHeight}px`;
+				innerCard.style.overflowY = 'auto';
+				innerCard.style.overscrollBehavior = 'contain';
+			} else {
+				innerCard.style.maxHeight = '';
+				innerCard.style.overflowY = '';
+				innerCard.style.overscrollBehavior = '';
+			}
+		}
+
+		const totalHeight = effectiveCardHeight + GAP;
 
 		let top: number;
 		if (verticalPosition === 'bottom') {
