@@ -146,7 +146,7 @@
 					</a>
 				{/each}
 			{/if}
-			{#if FEATURES.WALLET}
+			{#if FEATURES.DEBATE && FEATURES.WALLET}
 				<div class="header-dropdown-divider"></div>
 				{#if walletState.connected}
 					<div class="header-dropdown-item header-dropdown-item--info" role="menuitem">

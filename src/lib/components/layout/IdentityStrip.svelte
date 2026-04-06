@@ -113,12 +113,14 @@
 		<!-- Right: Trust tier + wallet + avatar -->
 		<div class="identity-strip__right">
 			{#if user}
-				<TrustTierIndicator
-					tier={trustTier}
-					{credential}
-					onUpgrade={() => goto('/profile')}
-				/>
-				{#if FEATURES.WALLET}
+				{#if FEATURES.CONGRESSIONAL}
+					<TrustTierIndicator
+						tier={trustTier}
+						{credential}
+						onUpgrade={() => goto('/profile')}
+					/>
+				{/if}
+				{#if FEATURES.DEBATE && FEATURES.WALLET}
 					<div class="identity-strip__wallet-group">
 						{#if walletState.connected}
 							<span class="identity-strip__balance-wrap">

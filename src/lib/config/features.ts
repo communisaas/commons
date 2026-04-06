@@ -21,7 +21,7 @@ export const FEATURES = {
 	DEBATE: false,
 
 	/** CWC delivery, district officials, congressional template routing */
-	CONGRESSIONAL: true,
+	CONGRESSIONAL: false,
 
 	/**
 	 * Address verification specificity level.
@@ -30,7 +30,7 @@ export const FEATURES = {
 	 */
 	ADDRESS_SPECIFICITY: 'district' as AddressSpecificity,
 
-	/** Stance registration (support/oppose), TrustJourney signal strength, verified positions */
+	/** Stance registration (support/oppose), inline proof footer, verified positions */
 	STANCE_POSITIONS: true,
 
 	/** Wallet connect, balance display, on-chain identity */
