@@ -1,11 +1,12 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import type { TemplateFormData } from '$lib/types/template';
+	import { onMount, tick } from 'svelte';
+	import type { TemplateFormData, Source } from '$lib/types/template';
 	import { cleanHtmlFormatting } from '$lib/utils/message-processing';
 	import { parseSSEStream } from '$lib/utils/sse-stream';
 	import AgentThinking from '$lib/components/ui/AgentThinking.svelte';
 	import MessageResults from './MessageResults.svelte';
 	import AuthGateOverlay from './AuthGateOverlay.svelte';
+	import SourceEditor from './SourceEditor.svelte';
 	import { FileText } from '@lucide/svelte';
 
 	interface Props {
@@ -92,9 +93,13 @@
 		return items;
 	}
 
-	// Store original AI-generated message for "start fresh"
+	// Store original AI-generated content for "start fresh"
 	let originalMessage = $state('');
 	let originalSubject = $state('');
+	let originalSources = $state<Source[]>([]);
+
+	// Textarea ref for cursor-position insertion
+	let editTextarea: HTMLTextAreaElement;
 
 	/**
 	 * Build topics array with robust fallback chain
@@ -314,6 +319,7 @@
 						// Store original for "start fresh"
 						originalMessage = cleanedMessage;
 						originalSubject = formData.objective.title;
+						originalSources = [...((result.sources as Source[]) || [])];
 
 						// Update formData — subject is already set by the subject-line agent
 						formData.content.preview = cleanedMessage;
@@ -379,6 +385,9 @@
 			generateMessage();
 		} else {
 			// Already have a message for the current subject, go straight to results
+			originalMessage = formData.content.preview;
+			originalSubject = formData.objective.title;
+			originalSources = [...(formData.content.sources || [])];
 			stage = 'results';
 		}
 	});
@@ -390,9 +399,10 @@
 	}
 
 	function handleStartFresh() {
-		// Reset to original AI-generated message
+		// Reset to original AI-generated message + sources
 		formData.content.preview = originalMessage;
 		formData.objective.title = originalSubject;
+		formData.content.sources = [...originalSources];
 		formData.content.edited = false;
 		stage = 'results';
 	}
@@ -400,6 +410,21 @@
 	function handleSaveEdit() {
 		// User finished editing, back to results
 		stage = 'results';
+	}
+
+	function handleInsertAtCursor(text: string) {
+		if (!editTextarea) return;
+		const start = editTextarea.selectionStart ?? formData.content.preview.length;
+		const end = editTextarea.selectionEnd ?? start;
+		const before = formData.content.preview.slice(0, start);
+		const after = formData.content.preview.slice(end);
+		formData.content.preview = before + text + after;
+		tick().then(() => {
+			if (editTextarea) {
+				editTextarea.selectionStart = editTextarea.selectionEnd = start + text.length;
+				editTextarea.focus();
+			}
+		});
 	}
 
 	function handleNext() {
@@ -493,9 +518,9 @@
 				<h3 class="text-lg font-semibold text-slate-900">Edit your message</h3>
 				<p class="mt-1 text-sm text-slate-600">
 					{#if formData.content.sources && formData.content.sources.length > 0}
-						Citations [1][2][3] will be preserved and linked to sources
+						Sources and citations stay linked as you edit
 					{:else}
-						Edit the message to match your voice while keeping the research-backed content
+						Edit the message to match your voice. Add sources with [n] references.
 					{/if}
 				</p>
 			</div>
@@ -517,13 +542,23 @@
 				<textarea
 					id="edit-message"
 					bind:value={formData.content.preview}
+					bind:this={editTextarea}
 					rows={16}
 					class="mt-1 w-full rounded-lg border border-slate-300 px-4 py-2 font-mono text-sm focus:border-participation-primary-500 focus:ring-2 focus:ring-participation-primary-500"
 				></textarea>
-				<p class="mt-1 text-xs text-slate-600">
-					Keep citations like [1][2][3] to maintain source links
+				<p class="mt-1 text-xs text-slate-500">
+					Type [1], [2], etc. to reference sources
 				</p>
 			</div>
+
+			<!-- Source management -->
+			<SourceEditor
+				sources={formData.content.sources || []}
+				message={formData.content.preview}
+				onSourcesChange={(s) => { formData.content.sources = s; }}
+				onMessageChange={(m) => { formData.content.preview = m; }}
+				onInsertAtCursor={handleInsertAtCursor}
+			/>
 
 			<!-- Actions -->
 			<div class="flex items-center justify-end gap-3">
