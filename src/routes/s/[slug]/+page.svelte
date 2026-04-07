@@ -34,6 +34,7 @@
 	import type { Template as TemplateType } from '$lib/types/template';
 	import { FEATURES } from '$lib/config/features';
 	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
+	import { topicHue } from '$lib/utils/topic-hue';
 
 	let { data }: { data: PageData } = $props();
 
@@ -47,6 +48,7 @@
 	// Template modal reference
 
 	const template: TemplateType = $derived(data.template as unknown as TemplateType);
+	const hue = $derived(topicHue(template?.domain ?? '', template?.topics));
 
 	/** Build proof footer for email attestation based on user verification tier */
 	function buildProofFooter(trustTier: number, districtCode?: string | null): string | undefined {
@@ -256,7 +258,7 @@
 			{
 				template: {
 					title: template.title,
-					category: template.category || 'advocacy',
+					domain: template.domain || 'advocacy',
 					description: template.description
 				},
 				contactedNames: [...contactedRecipients]
@@ -664,7 +666,17 @@
 			<Badge variant={isCongressional ? 'congressional' : 'direct'}>
 				{isCongressional ? 'Congressional Delivery' : 'Direct Outreach'}
 			</Badge>
-			<span class="text-slate-500">{template.category}</span>
+			{#if template.domain}
+				<span class="font-brand text-sm font-medium" style="color: oklch(0.45 0.08 {hue})">{template.domain}</span>
+			{/if}
+			{#if template.topics?.length}
+				{#each template.topics.slice(0, 3) as topic}
+					<span class="topic-pill" style="--card-hue: {hue}">{topic}</span>
+				{/each}
+				{#if template.topics.length > 3}
+					<span class="topic-pill-overflow" style="--card-hue: {hue}">+{template.topics.length - 3}</span>
+				{/if}
+			{/if}
 			{#if FEATURES.CONGRESSIONAL && (data.user?.trust_tier ?? 0) >= 2 && template.deliveryMethod === 'cwc'}
 				<span class="flex items-center gap-1 text-green-600">
 					<VerificationBadge showText={false} />

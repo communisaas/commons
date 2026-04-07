@@ -23,6 +23,7 @@
 	import SourceCard from '$lib/components/template/creator/SourceCard.svelte';
 	import ResearchLog from '$lib/components/template/creator/ResearchLog.svelte';
 	import { hasCitations } from '$lib/utils/message-processing';
+	import { topicHue } from '$lib/utils/topic-hue';
 
 	let {
 		template,
@@ -349,9 +350,18 @@
 				{/snippet}
 			</AnimatedPopover>
 		{/if}
-		{#if template.category}
-			<span class="ml-auto shrink-0 text-xs text-slate-500">{template.category}</span>
+		{#if template.domain}
+			{@const previewHue = topicHue(template.domain, template.topics)}
+			<span class="ml-auto shrink-0 font-brand text-xs font-medium" style="color: oklch(0.45 0.08 {previewHue})">{template.domain}</span>
 		{/if}
+	</div>
+{/if}
+
+{#if template.topics?.length}
+	<div class="flex flex-wrap items-center gap-1 px-4 pb-2" style="--card-hue: {topicHue(template.domain ?? '', template.topics)}">
+		{#each template.topics as topic}
+			<span class="topic-pill">{topic}</span>
+		{/each}
 	</div>
 {/if}
 

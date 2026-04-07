@@ -65,7 +65,7 @@
 			{
 				template: {
 					title: template.title,
-					category: template.category || 'advocacy',
+					domain: template.domain || 'advocacy',
 					description: template.description || template.preview
 				},
 				contactedNames: [],
@@ -222,7 +222,7 @@
 					<span
 						class="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700"
 					>
-						{template.category || 'General'}
+						{template.domain}
 					</span>
 					<span
 						class="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600"

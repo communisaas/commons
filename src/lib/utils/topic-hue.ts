@@ -30,16 +30,16 @@
  */
 const DOMAIN_HUES: Array<{ keywords: string[]; hue: number }> = [
 	{ keywords: ['health', 'medical', 'telehealth', 'wellness'], hue: 240 },
-	{ keywords: ['environment', 'climate', 'energy', 'clean'], hue: 150 },
-	{ keywords: ['housing', 'urban', 'homelessness', 'vacancy', 'affordab'], hue: 55 },
-	{ keywords: ['education', 'school', 'childcare', 'preschool', 'librar'], hue: 290 },
-	{ keywords: ['labor', 'worker', 'wage', 'employ', 'union', 'retail'], hue: 180 },
-	{ keywords: ['immigra', 'human rights', 'refugee', 'asylum'], hue: 270 },
-	{ keywords: ['justice', 'criminal', 'police', 'incarcerat'], hue: 320 },
+	{ keywords: ['environment', 'climate', 'energy', 'clean', 'park', 'conservation'], hue: 150 },
+	{ keywords: ['housing', 'urban', 'homelessness', 'vacancy', 'affordab', 'zoning'], hue: 55 },
+	{ keywords: ['education', 'school', 'childcare', 'preschool', 'librar', 'tuition'], hue: 290 },
+	{ keywords: ['labor', 'worker', 'wage', 'employ', 'union', 'retail', 'pay dispar'], hue: 180 },
+	{ keywords: ['immigra', 'human rights', 'refugee', 'asylum', 'green card', 'visa'], hue: 270 },
+	{ keywords: ['justice', 'criminal', 'police', 'incarcerat', 'sentenc', 'prison'], hue: 320 },
 	{ keywords: ['govern', 'legislat', 'congress', 'policy', 'veteran'], hue: 85 },
 	{ keywords: ['digital', 'privacy', 'technolog', 'ai ', 'artificial', 'data', 'cyber'], hue: 160 },
-	{ keywords: ['transport', 'transit', 'infrastruc', 'road', 'rail'], hue: 35 },
-	{ keywords: ['indigenous', 'reconcili', 'tribal', 'first nation'], hue: 25 },
+	{ keywords: ['transport', 'transit', 'infrastruc', 'road', 'rail', 'parking', 'bike', 'bicycle', 'freeway', 'highway'], hue: 35 },
+	{ keywords: ['indigenous', 'reconcili', 'tribal', 'first nation', 'revenue sharing'], hue: 25 },
 ];
 
 /**
@@ -74,14 +74,14 @@ function matchDomain(text: string): number | null {
 /**
  * Derive an oklch hue angle for a template's content domain.
  *
- * @param category - The template's category string (e.g., "Healthcare", "Housing")
- * @param topics - Optional topic tags (e.g., ["housing", "affordability"])
+ * @param domain - The template's civic domain (e.g., "Parking & Municipal Revenue", "School Facilities")
+ * @param topics - Optional topic tags (e.g., ["parking-enforcement", "municipal-revenue"])
  * @returns Hue angle 0-360
  */
-export function topicHue(category: string, topics?: string[]): number {
-	// Try category first (strongest signal)
-	if (category) {
-		const hit = matchDomain(category);
+export function topicHue(domain: string, topics?: string[]): number {
+	// Try domain first (strongest signal — model-synthesized civic space name)
+	if (domain) {
+		const hit = matchDomain(domain);
 		if (hit !== null) return hit;
 	}
 
@@ -93,8 +93,8 @@ export function topicHue(category: string, topics?: string[]): number {
 		}
 	}
 
-	// Fallback: hash the category (or first topic, or 'unknown')
-	const seed = category || topics?.[0] || 'unknown';
+	// Fallback: hash the domain (or first topic, or 'unknown')
+	const seed = domain || topics?.[0] || 'unknown';
 	return hashToHue(seed);
 }
 

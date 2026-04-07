@@ -15,21 +15,25 @@ export const GET: RequestHandler = async ({ params }) => {
 
 		const actionCount = template.verified_sends || 0;
 
-		// Category-specific colors
-		const categoryColors: Record<string, { bg: string; accent: string }> = {
-			Housing: { bg: '#FEF3C7', accent: '#F59E0B' },
-			Climate: { bg: '#D1FAE5', accent: '#10B981' },
-			Healthcare: { bg: '#DBEAFE', accent: '#3B82F6' },
-			Labor: { bg: '#FCE7F3', accent: '#EC4899' },
-			Voting: { bg: '#E0E7FF', accent: '#6366F1' },
-			Education: { bg: '#FED7AA', accent: '#EA580C' },
-			Justice: { bg: '#E9D5FF', accent: '#A855F7' }
-		};
+		// Domain-aware color selection via keyword matching
+		const domainColors: Array<{ keywords: string[]; bg: string; accent: string }> = [
+			{ keywords: ['housing', 'zoning', 'affordab'], bg: '#FEF3C7', accent: '#F59E0B' },
+			{ keywords: ['climate', 'environment', 'energy', 'park'], bg: '#D1FAE5', accent: '#10B981' },
+			{ keywords: ['health', 'medical', 'telehealth'], bg: '#DBEAFE', accent: '#3B82F6' },
+			{ keywords: ['labor', 'wage', 'worker', 'retail'], bg: '#FCE7F3', accent: '#EC4899' },
+			{ keywords: ['voting', 'election', 'democra'], bg: '#E0E7FF', accent: '#6366F1' },
+			{ keywords: ['education', 'school', 'preschool', 'librar'], bg: '#FED7AA', accent: '#EA580C' },
+			{ keywords: ['justice', 'criminal', 'police', 'sentenc'], bg: '#E9D5FF', accent: '#A855F7' },
+			{ keywords: ['transport', 'parking', 'bike', 'transit', 'highway'], bg: '#FFEDD5', accent: '#EA580C' },
+			{ keywords: ['immigra', 'green card', 'visa'], bg: '#E0E7FF', accent: '#6366F1' },
+			{ keywords: ['indigenous', 'first nation', 'tribal'], bg: '#FEF3C7', accent: '#B45309' },
+		];
 
-		const colors = categoryColors[template.category] || {
-			bg: '#F1F5F9',
-			accent: '#64748B'
-		};
+		const domainLower = (template.domain || '').toLowerCase();
+		const matchedColor = domainColors.find((d) =>
+			d.keywords.some((k) => domainLower.includes(k))
+		);
+		const colors = matchedColor || { bg: '#F1F5F9', accent: '#64748B' };
 
 		// Generate SVG using Satori
 		const svg = await satori(
@@ -65,7 +69,7 @@ export const GET: RequestHandler = async ({ params }) => {
 												fontSize: '20px',
 												fontWeight: 600
 											},
-											children: template.category
+											children: template.domain
 										}
 									},
 									...(actionCount > 0

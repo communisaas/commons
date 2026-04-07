@@ -126,7 +126,7 @@
 	// Pre-written share messages for different contexts
 	const shareMessages = $derived(() => {
 		const actionCount = template.send_count || 0;
-		const category = template.category?.toLowerCase() || 'advocacy';
+		const domain = template.domain?.toLowerCase() || 'advocacy';
 
 		return {
 			// Short & urgent (Twitter, Discord) - <280 chars
@@ -136,7 +136,7 @@
 					: `"${template.title}"\n\n${shareUrl}`,
 
 			// Medium (Slack, group chats)
-			medium: `Coordinating on ${category}.\n\n"${template.title}"\n\n${actionCount > 0 ? `${actionCount.toLocaleString()} people already sent. ` : ''}Takes 2 minutes: ${shareUrl}`,
+			medium: `Coordinating on ${domain}.\n\n"${template.title}"\n\n${actionCount > 0 ? `${actionCount.toLocaleString()} people already sent. ` : ''}Takes 2 minutes: ${shareUrl}`,
 
 			// Long (Email, Reddit)
 			long: `I sent this.\n\n"${template.title}"\n\n${template.description}\n\n${actionCount > 1000 ? `${actionCount.toLocaleString()}+ people already sent this. ` : actionCount > 100 ? `${actionCount.toLocaleString()} people acted. ` : ''}Takes 2 minutes.\n\n${shareUrl}`,

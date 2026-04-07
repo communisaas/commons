@@ -37,7 +37,7 @@
 	const cardScale = $derived(1.0 + template.coordinationScale * 0.15);
 
 	// === TOPIC COLOR: Per-template atmospheric hue from content domain ===
-	const hue = $derived(topicHue(template.category, template.topics));
+	const hue = $derived(topicHue(template.domain, template.topics));
 </script>
 
 <button
@@ -148,11 +148,16 @@
 				</span>
 			</div>
 		{/if}
+
+		<!-- Domain Postmark: confirms civic space after content has spoken -->
+		{#if template.domain}
+			<span class="domain-postmark mt-auto">{template.domain}</span>
+		{/if}
 	</div>
 
 	<!-- Footer Section: Action arrow always visible, metrics only when meaningful -->
 	<div
-		class="mt-auto border-t border-slate-100/50 bg-gradient-to-br from-slate-50/30 to-violet-50/10 p-4"
+		class="border-t border-slate-100/50 bg-gradient-to-br from-slate-50/30 to-violet-50/10 p-4"
 	>
 		{#if FEATURES.DEBATE && template.debateSummary}
 			{@const ds = template.debateSummary}
@@ -347,6 +352,29 @@
 		font-size: 0.5rem;
 		font-weight: 700;
 		flex-shrink: 0;
+	}
+
+	/*
+	 * Domain Postmark — low-weight contextual confirmation.
+	 *
+	 * Encountered at the end of the downward scan, after title and description.
+	 * Participates in the card's atmospheric hue at very low chroma (0.04),
+	 * so it tints without competing for focal attention.
+	 */
+	.domain-postmark {
+		display: block;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.6875rem;
+		font-weight: 400;
+		letter-spacing: 0.01em;
+		line-height: 1.3;
+		margin-top: 0.375rem;
+		color: oklch(0.58 0.04 var(--card-hue));
+		/* Prevent long domain names from becoming a second description */
+		overflow: hidden;
+		display: -webkit-box;
+		-webkit-line-clamp: 1;
+		-webkit-box-orient: vertical;
 	}
 
 	.org-provenance-name {

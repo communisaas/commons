@@ -100,7 +100,7 @@
 					(t) =>
 						t.title.toLowerCase().includes(query) ||
 						t.description?.toLowerCase().includes(query) ||
-						t.category?.toLowerCase().includes(query)
+						t.domain?.toLowerCase().includes(query)
 				)
 			}))
 			.filter((group) => group.templates.length > 0); // Remove empty groups
@@ -355,7 +355,7 @@
 					{@const globalIndex = allTemplates.findIndex((t) => t.id === template.id)}
 					{@const targetInfo = deriveTargetPresentation(template)}
 					{@const isNewlyRevealed = templateIndex >= INITIAL_VISIBLE}
-					{@const hue = topicHue(template.category, template.topics)}
+					{@const hue = topicHue(template.domain, template.topics)}
 					<button
 						type="button"
 						data-template-button
@@ -434,8 +434,18 @@
 								</div>
 							{/if}
 
-							{#if template.category}
-								<span class="topic-ground">{template.category}</span>
+							{#if template.domain}
+								<span class="topic-ground">{template.domain}</span>
+							{/if}
+							{#if template.topics?.length}
+								<div class="mt-1 flex flex-wrap items-center gap-1">
+									{#each template.topics.slice(0, 3) as topic}
+										<span class="topic-pill">{topic}</span>
+									{/each}
+									{#if template.topics.length > 3}
+										<span class="topic-pill-overflow">+{template.topics.length - 3}</span>
+									{/if}
+								</div>
 							{/if}
 						</div>
 
@@ -538,10 +548,10 @@
 	.topic-ground {
 		display: block;
 		font-size: 0.6875rem;
-		color: oklch(0.55 0 0);
+		color: oklch(0.58 0.04 var(--card-hue));
 		font-weight: 400;
 		letter-spacing: 0.01em;
-		line-height: 1;
+		line-height: 1.3;
 		margin-top: 0.375rem;
 	}
 

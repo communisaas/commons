@@ -10,16 +10,16 @@
 
 	// State management with Svelte 5 runes
 	let searchQuery = $state<string>('');
-	let selectedCategory = $state<string>('all');
+	let selectedDomain = $state<string>('all');
 
-	// Available categories derived from server data
-	const categories = $derived(['all', ...new Set(data.templates.map((t) => t.category))]);
+	// Available domains derived from server data
+	const domains = $derived(['all', ...new Set(data.templates.map((t) => t.domain).filter(Boolean))]);
 
-	// Filtered templates based on search and category
+	// Filtered templates based on search and domain
 	const filteredTemplates = $derived(
 		data.templates.filter((template) => {
-			// Category filter
-			if (selectedCategory !== 'all' && template.category !== selectedCategory) {
+			// Domain filter
+			if (selectedDomain !== 'all' && template.domain !== selectedDomain) {
 				return false;
 			}
 
@@ -29,13 +29,31 @@
 				return (
 					template.title.toLowerCase().includes(query) ||
 					template.description.toLowerCase().includes(query) ||
-					template.category.toLowerCase().includes(query)
+					template.domain.toLowerCase().includes(query)
 				);
 			}
 
 			return true;
 		})
 	);
+
+	// Overflow detection for domain filter scroll masks
+	let scrollWrapper: HTMLDivElement | undefined = $state();
+	let hasOverflow = $state(false);
+
+	function checkOverflow() {
+		if (!scrollWrapper) return;
+		const scrollEl = scrollWrapper.querySelector('.domain-filter-scroll');
+		if (scrollEl) {
+			hasOverflow = scrollEl.scrollWidth > scrollEl.clientWidth;
+		}
+	}
+
+	$effect(() => {
+		checkOverflow();
+		window.addEventListener('resize', checkOverflow);
+		return () => window.removeEventListener('resize', checkOverflow);
+	});
 
 	// Handle template selection
 	function handleTemplateSelect(slug: string) {
@@ -79,27 +97,29 @@
 				/>
 			</div>
 
-			<!-- Category Filter -->
-			<div class="flex items-center gap-2">
-				<Filter class="h-5 w-5 text-gray-500" aria-hidden="true" />
-				<div class="flex flex-wrap gap-2">
-					{#each categories as category}
-						<button
-							type="button"
-							class="rounded-full border px-4 py-1.5 text-sm font-medium transition-colors"
-							class:border-congressional-400={selectedCategory === category}
-							class:bg-congressional-50={selectedCategory === category}
-							class:text-congressional-700={selectedCategory === category}
-							class:border-gray-300={selectedCategory !== category}
-							class:bg-white={selectedCategory !== category}
-							class:text-gray-700={selectedCategory !== category}
-							class:hover:border-gray-400={selectedCategory !== category}
-							onclick={() => (selectedCategory = category)}
-							aria-pressed={selectedCategory === category}
-						>
-							{category === 'all' ? 'All' : category}
-						</button>
-					{/each}
+			<!-- Domain Filter -->
+			<div class="flex min-w-0 flex-1 items-center gap-2">
+				<Filter class="h-5 w-5 shrink-0 text-gray-500" aria-hidden="true" />
+				<div bind:this={scrollWrapper} class="domain-filter-scroll-wrapper relative min-w-0 flex-1" class:has-overflow={hasOverflow}>
+					<div class="domain-filter-scroll flex gap-2 overflow-x-auto py-1">
+						{#each domains as domain}
+							<button
+								type="button"
+								class="whitespace-nowrap rounded-full border px-4 py-1.5 text-sm font-medium transition-colors"
+								class:border-congressional-400={selectedDomain === domain}
+								class:bg-congressional-50={selectedDomain === domain}
+								class:text-congressional-700={selectedDomain === domain}
+								class:border-gray-300={selectedDomain !== domain}
+								class:bg-white={selectedDomain !== domain}
+								class:text-gray-700={selectedDomain !== domain}
+								class:hover:border-gray-400={selectedDomain !== domain}
+								onclick={() => (selectedDomain = domain)}
+								aria-pressed={selectedDomain === domain}
+							>
+								{domain === 'all' ? 'All' : domain}
+							</button>
+						{/each}
+					</div>
 				</div>
 			</div>
 		</div>
@@ -109,13 +129,13 @@
 			<p class="text-sm text-gray-600">
 				{filteredTemplates.length}
 				{filteredTemplates.length === 1 ? 'template' : 'templates'}
-				{#if searchQuery || selectedCategory !== 'all'}
+				{#if searchQuery || selectedDomain !== 'all'}
 					<span class="text-gray-500">
 						{#if searchQuery}
 							matching "{searchQuery}"
 						{/if}
-						{#if selectedCategory !== 'all'}
-							in {selectedCategory}
+						{#if selectedDomain !== 'all'}
+							in {selectedDomain}
 						{/if}
 					</span>
 				{/if}
@@ -138,7 +158,7 @@
 					class="mt-4 rounded-lg bg-congressional-500 px-4 py-2 text-sm font-medium text-white hover:bg-congressional-600"
 					onclick={() => {
 						searchQuery = '';
-						selectedCategory = 'all';
+						selectedDomain = 'all';
 					}}
 				>
 					Clear filters
@@ -158,3 +178,42 @@
 		{/if}
 	</div>
 </div>
+
+<style>
+	.domain-filter-scroll {
+		scroll-snap-type: x mandatory;
+		scrollbar-width: none;
+	}
+
+	.domain-filter-scroll::-webkit-scrollbar {
+		display: none;
+	}
+
+	.domain-filter-scroll > :global(button) {
+		scroll-snap-align: start;
+	}
+
+	/* Fade masks appear only when the scroll container overflows.
+	   Uses CSS containment: the wrapper clips, masks sit at edges.
+	   Color matches bg-gray-50 (rgb(249,250,251) ≈ oklch(0.98 0.002 247)). */
+	.domain-filter-scroll-wrapper.has-overflow::before,
+	.domain-filter-scroll-wrapper.has-overflow::after {
+		content: '';
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 1.5rem;
+		pointer-events: none;
+		z-index: 1;
+	}
+
+	.domain-filter-scroll-wrapper.has-overflow::before {
+		left: 0;
+		background: linear-gradient(to right, rgb(249 250 251), transparent);
+	}
+
+	.domain-filter-scroll-wrapper.has-overflow::after {
+		right: 0;
+		background: linear-gradient(to left, rgb(249 250 251), transparent);
+	}
+</style>
