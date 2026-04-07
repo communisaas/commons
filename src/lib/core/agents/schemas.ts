@@ -106,7 +106,12 @@ export const SUBJECT_LINE_SCHEMA = {
 			items: { type: 'string' },
 			maxItems: 5,
 			description:
-				'1-5 lowercase issue-domain tags (e.g. "transportation", "housing", "education"). Locations are not topics.'
+				'1-5 lowercase issue-domain tags — the specific facets of the grievance (e.g. "parking-enforcement", "municipal-revenue", "predatory-fines"). Locations are not topics.'
+		},
+		domain: {
+			type: 'string',
+			description:
+				'The civic domain that unifies these topics — a short phrase naming the civic space they share (e.g. "Parking & Municipal Revenue", "School Facilities", "Housing Affordability"). Should group this campaign with similar campaigns in other cities.'
 		},
 		url_slug: {
 			type: 'string',

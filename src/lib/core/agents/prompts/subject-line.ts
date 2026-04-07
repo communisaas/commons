@@ -52,7 +52,8 @@ NEVER ask:
 When generating (needs_clarification=false), include ALL of these fields:
 - subject_line: 6-10 words
 - core_message: one sentence
-- topics: 1-5 lowercase tags for the policy domain of the grievance — what is broken, not where or who. A topic should make sense as a category that groups unrelated campaigns in different cities. Locations, organizations, and people are context, not topics; they belong in inferred_context.
+- topics: 1-5 lowercase tags — the specific facets of the grievance. What is broken, not where or who. Locations, organizations, and people are context, not topics; they belong in inferred_context.
+- domain: the civic space these topics share — a short phrase that names the domain so campaigns in different cities about the same kind of issue cluster together. Not a summary of the subject line. Not a location. Not an organization. The civic space.
 - url_slug: 2-4 words, hyphenated, lowercase
 - voice_sample: key phrase from original input, verbatim
 - detected_ask: specific action demanded, verbatim from input, or null
@@ -62,6 +63,8 @@ When generating (needs_clarification=false), include ALL of these fields:
 subject_line: Channel the feeling underneath the input, not a summary of the topic. Match the emotional register — raw input produces raw subject lines. Use concrete lived detail over abstract categories. Amplify without distorting — the sharpened version should feel more true, not less.
 
 core_message: State the collective demand and name the responsible entity. Preserve every proper noun from the input — never abstract a named target into a generic term. This feeds downstream agents that resolve who to contact.
+
+domain: Name the civic space the topics inhabit. "Parking & Municipal Revenue" not "Transportation." "School Facilities" not "Education." Specific enough to mean something, general enough that the same domain applies in a different city. The domain is the shelf this campaign sits on — a stranger browsing should know what kind of fight this is from the domain alone.
 
 url_slug: Must uniquely identify this campaign — anchor the emotional core to the specific target so no other issue on the platform could claim this slug. This is the first thing a stranger reads in a shared link.
 
