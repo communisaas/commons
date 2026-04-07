@@ -15,37 +15,44 @@
 {#if variantProp === 'list'}
 	<!-- Template List Item Skeleton -->
 	<div
-		class="template-skeleton rounded-lg border-2 border-l-4 border-slate-200 p-3 md:p-4 {classNames}"
+		class="template-skeleton rounded-xl p-3 md:p-4 {classNames}"
 	>
 		<div class="flex items-start justify-between gap-3">
-			<div class="min-w-0 flex-1 space-y-3">
-				<!-- Badges -->
-				<div class="flex items-center gap-2">
-					<div class="h-6 w-24 rounded-full bg-slate-200 {animate ? 'animate-pulse' : ''}"></div>
-					<div class="h-6 w-16 rounded bg-slate-100 {animate ? 'animate-pulse' : ''}"></div>
+			<div class="min-w-0 flex-1">
+				<!-- Target badge row (icon + label) -->
+				<div class="mb-1.5 flex items-center gap-1.5">
+					<div class="h-3.5 w-3.5 shrink-0 rounded bg-slate-200 {animate ? 'animate-pulse' : ''}"></div>
+					<div class="h-3 w-28 rounded bg-slate-200 {animate ? 'animate-pulse' : ''}"></div>
 				</div>
 
 				<!-- Title -->
-				<SkeletonText lines={1} width="75%" lineHeight="h-5" {animate} />
+				<SkeletonText lines={1} width="70%" lineHeight="h-5" {animate} />
 
-				<!-- Description -->
-				<SkeletonText lines={2} width={['100%', '85%']} lineHeight="h-3" spacing="mb-1" {animate} />
+				<!-- Description (2-line clamp) -->
+				<div class="mb-2 mt-1 md:mb-3">
+					<SkeletonText lines={2} width={['100%', '80%']} lineHeight="h-3 md:h-3.5" spacing="mb-1" {animate} />
+				</div>
 
-				<!-- Metrics -->
-				<div class="flex items-center gap-4 pt-2">
-					<div class="flex items-center gap-1">
-						<div class="h-3 w-3 rounded-full bg-slate-200 {animate ? 'animate-pulse' : ''}"></div>
-						<div class="h-3 w-8 rounded bg-slate-100 {animate ? 'animate-pulse' : ''}"></div>
+				<!-- MessageMetrics: 2 rows (send count + secondary metric) -->
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<div class="h-4 w-4 shrink-0 rounded bg-slate-200 {animate ? 'animate-pulse' : ''}"></div>
+						<div class="h-3.5 w-16 rounded bg-slate-100 {animate ? 'animate-pulse' : ''}"></div>
 					</div>
-					<div class="flex items-center gap-1">
-						<div class="h-3 w-3 rounded-full bg-slate-200 {animate ? 'animate-pulse' : ''}"></div>
-						<div class="h-3 w-12 rounded bg-slate-100 {animate ? 'animate-pulse' : ''}"></div>
+					<div class="flex items-center gap-2">
+						<div class="h-4 w-4 shrink-0 rounded bg-slate-200 {animate ? 'animate-pulse' : ''}"></div>
+						<div class="h-3.5 w-24 rounded bg-slate-100 {animate ? 'animate-pulse' : ''}"></div>
 					</div>
 				</div>
+
+				<!-- Domain tag -->
+				<div class="mt-1.5 h-3 w-16 rounded bg-slate-100 {animate ? 'animate-pulse' : ''}"></div>
 			</div>
 
-			<!-- Chevron for mobile -->
-			<div class="h-5 w-5 rounded bg-slate-200 md:hidden {animate ? 'animate-pulse' : ''}"></div>
+			<!-- Mobile chevron -->
+			<div class="shrink-0 md:hidden">
+				<div class="h-5 w-5 rounded bg-slate-200 {animate ? 'animate-pulse' : ''}"></div>
+			</div>
 		</div>
 	</div>
 {:else if variantProp === 'preview'}
@@ -87,6 +94,7 @@
 
 <style>
 	.template-skeleton {
-		border-left-color: theme('colors.slate.300');
+		border: 1px solid oklch(0.9 0.01 250);
+		background: oklch(0.98 0.005 250 / 0.5);
 	}
 </style>
