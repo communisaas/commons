@@ -33,16 +33,3 @@ export function normalizeTopics(topics: string[], detectedLocation?: string | nu
 	});
 }
 
-/**
- * Derive a display category from normalized topics.
- * Title-cases the first topic ("public-health" → "Public Health").
- * Falls back to "General" if no topics remain.
- */
-export function deriveCategory(topics: string[], detectedLocation?: string | null): string {
-	const normalized = normalizeTopics(topics, detectedLocation);
-	const primaryTopic = normalized[0] || 'general';
-	return primaryTopic
-		.split('-')
-		.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-		.join(' ');
-}

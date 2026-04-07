@@ -50,18 +50,18 @@
 	/**
 	 * Build topics array with robust fallback chain
 	 * 1. Use topics array if populated with valid entries
-	 * 2. Fall back to category (normalized)
-	 * 3. Ultimate fallback - 'general'
+	 * 2. Fall back to domain (lowercased)
+	 * 3. Ultimate fallback - empty array (domain carries the signal now)
 	 */
 	function buildTopics(): string[] {
 		if (Array.isArray(formData.objective.topics) && formData.objective.topics.length > 0) {
 			const valid = formData.objective.topics.filter((t) => t && t.trim());
 			if (valid.length > 0) return valid;
 		}
-		if (formData.objective.category && formData.objective.category.trim()) {
-			return [formData.objective.category.toLowerCase().trim()];
+		if (formData.objective.domain && formData.objective.domain.trim()) {
+			return [formData.objective.domain.toLowerCase().trim()];
 		}
-		return ['general'];
+		return [];
 	}
 
 	/**

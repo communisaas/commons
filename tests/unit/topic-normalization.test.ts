@@ -1,13 +1,13 @@
 /**
  * Unit Tests — Topic Normalization + Location Filtering
  *
- * Tests normalizeTopics and deriveCategory from the shared utility module.
+ * Tests normalizeTopics from the shared utility module.
  * Verifies that location names leaked by the LLM into topics are stripped
  * when detected_location is available.
  */
 
 import { describe, it, expect } from 'vitest';
-import { normalizeTopics, deriveCategory } from '$lib/utils/topic-normalization';
+import { normalizeTopics } from '$lib/utils/topic-normalization';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -104,38 +104,6 @@ describe('normalizeTopics', () => {
 				'Washington, DC'
 			);
 			expect(result).toEqual(['healthcare', 'drug-pricing', 'insulin']);
-		});
-	});
-
-	describe('category derivation (title-casing)', () => {
-		it('produces "Transportation" not "San" for SF towing template', () => {
-			// The exact bug we fixed: agent returns ["san-francisco", "transportation", "towing"]
-			const category = deriveCategory(
-				['san-francisco', 'transportation', 'towing'],
-				'San Francisco, CA'
-			);
-			expect(category).toBe('Transportation');
-		});
-
-		it('produces "Education" not "Portland" for Portland schools template', () => {
-			const category = deriveCategory(
-				['portland', 'education', 'budget'],
-				'Portland, OR'
-			);
-			expect(category).toBe('Education');
-		});
-
-		it('title-cases multi-word topics correctly', () => {
-			const category = deriveCategory(['public-health'], null);
-			expect(category).toBe('Public Health');
-		});
-
-		it('falls back to "General" when all topics are location names', () => {
-			const category = deriveCategory(
-				['san-francisco', 'ca'],
-				'San Francisco, CA'
-			);
-			expect(category).toBe('General');
 		});
 	});
 });

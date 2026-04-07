@@ -95,7 +95,7 @@ export class EmbeddingSearch {
 					slug: sr.slug,
 					title: sr.title,
 					description: sr.description,
-					category: '',
+					domain: '',
 					location_embedding: null,
 					topic_embedding: null,
 					embedding_version: '',

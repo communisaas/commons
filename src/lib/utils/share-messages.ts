@@ -1,5 +1,5 @@
 export interface ShareMessageContext {
-	template: { title: string; category: string; description: string };
+	template: { title: string; domain: string; description: string };
 	/** Empty array signals pre-send state. Populated signals post-send. */
 	contactedNames: string[];
 	/** Used when contactedNames is empty but recipients were still addressed. */
@@ -38,11 +38,10 @@ function formatRecipients(names: string[], total: number): string {
 }
 
 /**
- * Returns a lowercase, article-appropriate category string.
- * Strips trailing "s" from plural forms where the variant reads better singular.
- * Falls back to "advocacy" when the category is absent.
+ * Returns a lowercase domain string for use in share messages.
+ * Falls back to "advocacy" when the domain is absent.
  */
-function normalizeCategory(raw: string): string {
+function normalizeDomain(raw: string): string {
 	return raw.trim().toLowerCase() || 'advocacy';
 }
 
@@ -53,33 +52,33 @@ function normalizeCategory(raw: string): string {
 function preSendShort(ctx: ShareMessageContext): string {
 	// Target: <280 chars. Action-first. URL at end.
 	// Example: "Need people to pressure the city council on housing? Template's ready. Takes 2 min. https://..."
-	const category = normalizeCategory(ctx.template.category);
+	const domain = normalizeDomain(ctx.template.domain);
 	// ~130 chars base + URL
-	return `Working on ${category}. I put together a template to contact the right people directly.\n\n"${ctx.template.title}"\n\nTakes 2 minutes. ${ctx.shareUrl}`;
+	return `Working on ${domain}. I put together a template to contact the right people directly.\n\n"${ctx.template.title}"\n\nTakes 2 minutes. ${ctx.shareUrl}`;
 }
 
 function preSendMedium(ctx: ShareMessageContext): string {
 	// Target: ~500 chars. Conversational, URL in flow.
-	const category = normalizeCategory(ctx.template.category);
+	const domain = normalizeDomain(ctx.template.domain);
 	const description = ctx.template.description?.trim();
 	const descLine = description ? `\n\n${description}` : '';
-	return `I put together a direct-contact template on ${category}: "${ctx.template.title}"${descLine}\n\nIt pre-writes the message and routes it to the right decision-makers. ${ctx.shareUrl} — you fill in your name and send. Takes about 2 minutes.`;
+	return `I put together a direct-contact template on ${domain}: "${ctx.template.title}"${descLine}\n\nIt pre-writes the message and routes it to the right decision-makers. ${ctx.shareUrl} — you fill in your name and send. Takes about 2 minutes.`;
 }
 
 function preSendLong(ctx: ShareMessageContext): string {
 	// Target: unlimited. Full context, persuasive framing, URL with clear CTA.
-	const category = normalizeCategory(ctx.template.category);
+	const domain = normalizeDomain(ctx.template.domain);
 	const description = ctx.template.description?.trim();
 	const descParagraph = description ? `\n\n${description}\n` : '\n';
-	return `On ${category}: "${ctx.template.title}"${descParagraph}\nI built a contact template that writes the message for you and sends it directly to the decision-makers who can act on it — no petitions, no intermediaries.\n\nIf this issue matters to you, this is the most direct path: ${ctx.shareUrl}\n\nIt takes about 2 minutes. The message goes to the right people.`;
+	return `On ${domain}: "${ctx.template.title}"${descParagraph}\nI built a contact template that writes the message for you and sends it directly to the decision-makers who can act on it — no petitions, no intermediaries.\n\nIf this issue matters to you, this is the most direct path: ${ctx.shareUrl}\n\nIt takes about 2 minutes. The message goes to the right people.`;
 }
 
 function preSendSms(ctx: ShareMessageContext): string {
 	// Target: <160 chars. Compressed, direct, URL only.
 	// "On housing: direct message template to city council. 2 min: https://..."
-	const category = normalizeCategory(ctx.template.category);
+	const domain = normalizeDomain(ctx.template.domain);
 	// Keep well under 160: category + short hook + URL
-	return `On ${category}: "${ctx.template.title}" — write to decision-makers directly. 2 min: ${ctx.shareUrl}`;
+	return `On ${domain}: "${ctx.template.title}" — write to decision-makers directly. 2 min: ${ctx.shareUrl}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,17 +94,17 @@ function postSendShort(ctx: ShareMessageContext): string {
 function postSendMedium(ctx: ShareMessageContext): string {
 	// Target: ~500 chars. First-person account, invitational close, URL in flow.
 	const recipients = formatRecipients(ctx.contactedNames, ctx.totalRecipients);
-	const category = normalizeCategory(ctx.template.category);
-	return `I reached out to ${recipients} about ${category} — specifically: "${ctx.template.title}".\n\nThe template is here: ${ctx.shareUrl}\n\nSame message, your name. Add your voice.`;
+	const domain = normalizeDomain(ctx.template.domain);
+	return `I reached out to ${recipients} about ${domain} — specifically: "${ctx.template.title}".\n\nThe template is here: ${ctx.shareUrl}\n\nSame message, your name. Add your voice.`;
 }
 
 function postSendLong(ctx: ShareMessageContext): string {
 	// Target: unlimited. Full account of what happened, why it matters, clear ask.
 	const recipients = formatRecipients(ctx.contactedNames, ctx.totalRecipients);
-	const category = normalizeCategory(ctx.template.category);
+	const domain = normalizeDomain(ctx.template.domain);
 	const description = ctx.template.description?.trim();
 	const descParagraph = description ? `\n\n${description}\n` : '\n';
-	return `I reached out to ${recipients} about "${ctx.template.title}"${descParagraph}\nThe issue is ${category}. I used a direct-contact template — no petition, no form letter to an inbox nobody monitors. It goes to the people with actual authority to act on it.\n\nIf you agree this matters, send the same message with your name on it: ${ctx.shareUrl}\n\nTakes 2 minutes. The more people who send it, the harder it is to ignore.`;
+	return `I reached out to ${recipients} about "${ctx.template.title}"${descParagraph}\nThe issue is ${domain}. I used a direct-contact template — no petition, no form letter to an inbox nobody monitors. It goes to the people with actual authority to act on it.\n\nIf you agree this matters, send the same message with your name on it: ${ctx.shareUrl}\n\nTakes 2 minutes. The more people who send it, the harder it is to ignore.`;
 }
 
 function postSendSms(ctx: ShareMessageContext): string {

@@ -119,7 +119,7 @@ export const POST: RequestHandler = async (event) => {
 			const generator = generateStreamWithThoughts<SubjectLineResponseWithClarification>(prompt, {
 				systemInstruction: systemPrompt,
 				temperature: 0.4,
-				thinkingLevel: 'high'
+				thinkingLevel: 'medium'
 			});
 
 			let iterResult = await generator.next();
@@ -177,6 +177,8 @@ export const POST: RequestHandler = async (event) => {
 						console.log('[stream-subject] generation:', {
 							traceId,
 							hasSubjectLine: !!data.subject_line,
+							domain: data.domain ?? null,
+							topics: data.topics ?? [],
 							topicCount: data.topics?.length ?? 0
 						});
 					}

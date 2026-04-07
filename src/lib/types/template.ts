@@ -60,8 +60,8 @@ export interface Template {
 	slug: string; // Required in database with unique constraint
 	title: string;
 	description: string;
-	category: string;
-	topics?: string[]; // Topic tags for search/filtering (1-5 lowercase strings)
+	domain: string; // Civic domain synthesized from topics (e.g. "Parking & Municipal Revenue")
+	topics?: string[]; // Topic tags — specific facets of the grievance (1-5 lowercase strings)
 	type: string;
 	deliveryMethod: 'email' | 'email_attested' | 'certified' | 'direct' | 'cwc';
 	subject?: string | null;
@@ -170,8 +170,8 @@ export interface TemplateFormData {
 		rawInput: string; // User's unstructured initial input
 		title: string;
 		description: string;
-		category: string;
-		topics?: string[]; // Topic tags from AI or manual entry (1-5 lowercase strings)
+		domain: string; // Civic domain from AI (e.g. "School Facilities", "Parking & Municipal Revenue")
+		topics?: string[]; // Topic tags from AI — specific facets (1-5 lowercase strings)
 		slug?: string;
 		voiceSample?: string; // Emotional peak from rawInput - flows to downstream agents
 		audienceGuidance?: string; // Optional user guidance for decision-maker targeting

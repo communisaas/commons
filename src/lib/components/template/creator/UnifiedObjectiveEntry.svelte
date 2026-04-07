@@ -21,7 +21,7 @@
 			rawInput: string;
 			title: string;
 			description: string;
-			category: string;
+			domain: string;
 			topics?: string[];
 			slug?: string;
 			voiceSample?: string;
@@ -36,6 +36,7 @@
 			subject_line: string;
 			core_message: string;
 			topics: string[];
+			domain: string;
 			url_slug: string;
 			voice_sample: string;
 		} | null;
@@ -44,6 +45,7 @@
 			subject_line: string;
 			core_message: string;
 			topics: string[];
+			domain: string;
 			url_slug: string;
 			voice_sample: string;
 		} | null;
@@ -51,7 +53,7 @@
 		slugReady?: boolean | null;
 	}
 
-	import { normalizeTopics, deriveCategory } from '$lib/utils/topic-normalization';
+	import { normalizeTopics } from '$lib/utils/topic-normalization';
 
 	let {
 		data = $bindable(),
@@ -80,6 +82,7 @@
 		subject_line: string;
 		core_message: string;
 		topics: string[];
+		domain: string;
 		url_slug: string;
 		voice_sample: string;
 		interactionId?: string;
@@ -208,7 +211,13 @@
 				data.voiceSample = currentSuggestion.voice_sample;
 			}
 			if (currentSuggestion.topics?.length) {
-				data.topics = currentSuggestion.topics;
+				data.topics = normalizeTopics(
+					currentSuggestion.topics,
+					currentSuggestion.detected_location
+				);
+			}
+			if (currentSuggestion.domain) {
+				data.domain = currentSuggestion.domain;
 			}
 		}
 	});
@@ -489,7 +498,7 @@
 
 	function acceptSuggestion() {
 		if (currentSuggestion) {
-			const { subject_line, core_message, url_slug, topics, voice_sample, detected_location } = currentSuggestion;
+			const { subject_line, core_message, url_slug, topics, domain, voice_sample, detected_location } = currentSuggestion;
 			data.title = subject_line || '';
 			// Fallback chain for core_message: use raw input if agent didn't provide one
 			data.description = core_message || data.rawInput || '';
@@ -499,7 +508,7 @@
 			// Normalize topics, filtering out any leaked location names
 			const normalized = normalizeTopics(topics || [], detected_location);
 			data.topics = normalized;
-			data.category = deriveCategory(topics || [], detected_location);
+			data.domain = domain || '';
 			data.aiGenerated = true;
 			data.audienceGuidance = audienceGuidance.trim() || undefined;
 			showAISuggest = false;

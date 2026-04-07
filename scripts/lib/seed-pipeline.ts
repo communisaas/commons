@@ -91,7 +91,7 @@ export interface TemplateSnapshot {
 	description: string;
 	messageBody: string;
 	preview: string;
-	category: string;
+	domain: string;
 	topics: string[];
 	type: string;
 	deliveryMethod: string;

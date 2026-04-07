@@ -87,6 +87,7 @@
 		subject_line: string;
 		core_message: string;
 		topics: string[];
+		domain: string;
 		url_slug: string;
 		voice_sample: string;
 	} | null>(null);
@@ -136,7 +137,7 @@
 						rawInput: _initialText,
 						title: '',
 						description: '',
-						category: '',
+						domain: '',
 						slug: '',
 						topics: [],
 						voiceSample: '',
@@ -325,7 +326,8 @@
 			slug: formData.objective.slug || '',
 			title: formData.objective.title,
 			description: formData.objective.description || formData.content.preview.substring(0, 160),
-			category: formData.objective.category || 'General',
+			domain: formData.objective.domain,
+			topics: formData.objective.topics || [],
 			type: context.channelId === 'certified' ? 'certified' : 'direct',
 			deliveryMethod: context.channelId === 'certified'
 				? 'certified'

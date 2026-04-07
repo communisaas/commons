@@ -12,6 +12,7 @@ interface PendingSuggestion {
 	subject_line: string;
 	core_message: string;
 	topics: string[];
+	domain: string;
 	url_slug: string;
 	voice_sample: string;
 }
@@ -70,6 +71,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 			subject_line: z.string(),
 			core_message: z.string(),
 			topics: z.array(z.string()),
+			domain: z.string().optional().default(''),
 			url_slug: z.string(),
 			voice_sample: z.string()
 		})
@@ -208,7 +210,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 			objective: {
 				title: data.objective?.title ?? '',
 				description: data.objective?.description ?? '',
-				category: data.objective?.category ?? '',
+				domain: data.objective?.domain ?? '',
 				slug: data.objective?.slug ?? '',
 				// Voice pipeline fields
 				topics: Array.isArray(data.objective?.topics) ? [...data.objective.topics] : [],

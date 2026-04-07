@@ -161,7 +161,8 @@ export default defineSchema({
     slug: v.string(),
     title: v.string(),
     description: v.string(),
-    category: v.string(),
+    domain: v.optional(v.string()), // Civic domain synthesized from topics — optional for pre-migration documents
+    category: v.optional(v.string()), // DEPRECATED: pre-migration field, replaced by domain. Kept for schema compat with existing documents.
     topics: v.optional(v.any()), // JSON array of topic tags
     type: v.string(),
     deliveryMethod: v.string(),
@@ -266,12 +267,12 @@ export default defineSchema({
     .index("by_status", ["status"])
     .searchIndex("search_templates", {
       searchField: "title",
-      filterFields: ["category", "status", "countryCode"],
+      filterFields: ["domain", "status", "countryCode"],
     })
     .vectorIndex("by_topicEmbedding", {
       vectorField: "topicEmbedding",
       dimensions: 768,
-      filterFields: ["category", "countryCode"],
+      filterFields: ["domain", "countryCode"],
     })
     .vectorIndex("by_locationEmbedding", {
       vectorField: "locationEmbedding",

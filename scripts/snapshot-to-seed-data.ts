@@ -95,7 +95,7 @@ function templateToTS(t: TemplateSnapshot, index: number): string {
 	lines.push(`    slug: "${escapeString(t.slug)}",`);
 	lines.push(`    title: "${escapeString(t.title)}",`);
 	lines.push(`    description: "${escapeString(t.description)}",`);
-	lines.push(`    category: "${escapeString(t.category)}",`);
+	lines.push(`    domain: "${escapeString(t.domain)}",`);
 	lines.push(`    topics: ${toJsonLiteral(t.topics, 2)},`);
 	lines.push(`    type: "${t.type}",`);
 	lines.push(`    deliveryMethod: "${t.deliveryMethod}",`);

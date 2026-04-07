@@ -41,7 +41,7 @@ function makeDraftObjective(overrides: Partial<TemplateFormData['objective']> = 
 			rawInput: '',
 			title: '',
 			description: '',
-			category: '',
+			domain: '',
 			slug: '',
 			topics: [],
 			voiceSample: '',

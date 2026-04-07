@@ -32,6 +32,15 @@ function sanitizeSlug(slug: string | undefined): string | undefined {
 		.slice(0, 100) || undefined;
 }
 
+/** Validate and sanitize topics at the API boundary. */
+function sanitizeTopics(raw: unknown): string[] {
+	if (!Array.isArray(raw)) return [];
+	return raw
+		.filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+		.map((t) => t.trim().toLowerCase().slice(0, 100))
+		.slice(0, 5);
+}
+
 // Validation schema for template creation
 interface CreateTemplateRequest {
 	title: string;
@@ -39,7 +48,7 @@ interface CreateTemplateRequest {
 	message_body: string;
 	sources?: Array<{ num: number; title: string; url: string; type: string }>;
 	research_log?: string[];
-	category?: string;
+	domain?: string;
 	topics?: string[];
 	type: string;
 	deliveryMethod: string;
@@ -144,8 +153,8 @@ function validateTemplateData(data: unknown): {
 		preview: templateData.preview as string,
 		type: templateData.type as string,
 		deliveryMethod: templateData.deliveryMethod as string,
-		category: (templateData.category as string) || 'General',
-		topics: (templateData.topics as string[]) || [],
+		domain: (templateData.domain as string) || '',
+		topics: sanitizeTopics(templateData.topics),
 		description:
 			(templateData.description as string) ||
 			(templateData.preview as string)?.substring(0, 160) ||
@@ -309,6 +318,26 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				});
 
 				if (existingByContent) {
+					// Patch stale metadata if the new submission has richer domain/topics
+					const incomingDomain = validData.domain || '';
+					const incomingTopics = validData.topics || [];
+					const existingDomain = existingByContent.domain || '';
+					const existingTopics = (existingByContent.topics as string[]) || [];
+					const needsMetadataPatch =
+						(incomingDomain && incomingDomain !== existingDomain) ||
+						(incomingTopics.length > 0 && existingTopics.length === 0);
+
+					if (needsMetadataPatch) {
+						await serverMutation(api.templates.patchMetadata, {
+							templateId: existingByContent._id as any,
+							...(incomingDomain ? { domain: incomingDomain } : {}),
+							...(incomingTopics.length > 0 ? { topics: incomingTopics } : {}),
+						});
+					}
+
+					const finalDomain = incomingDomain || existingDomain || (existingByContent.category !== 'General' ? existingByContent.category : '') || '';
+					const finalTopics = incomingTopics.length > 0 ? incomingTopics : existingTopics;
+
 					const response: StructuredApiResponse = {
 						success: true,
 						data: { template: {
@@ -316,8 +345,8 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 							slug: existingByContent.slug,
 							title: existingByContent.title,
 							description: existingByContent.description,
-							category: existingByContent.category,
-							topics: (existingByContent.topics as string[]) || [],
+							domain: finalDomain,
+							topics: finalTopics,
 							type: existingByContent.type,
 							deliveryMethod: existingByContent.deliveryMethod,
 							subject: existingByContent.title,
@@ -381,7 +410,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					preview: validData.preview,
 					type: validData.type,
 					deliveryMethod: validData.deliveryMethod,
-					category: validData.category || 'General',
+					domain: validData.domain || '',
 					topics: validData.topics || [],
 					sources: validData.sources || [],
 					researchLog: validData.research_log || [],
@@ -419,7 +448,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						// Embedding generation via Gemini, then write to Convex
 						if (isPublic) {
 							try {
-								const locationText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.category}`;
+								const locationText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.domain}`;
 								const topicText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.messageBody}`;
 
 								const embeddings = await generateBatchEmbeddings(
@@ -456,7 +485,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						slug: newTemplate.slug,
 						title: newTemplate.title,
 						description: newTemplate.description,
-						category: newTemplate.category,
+						domain: newTemplate.domain,
 						topics: (newTemplate.topics as string[]) || [],
 						type: newTemplate.type,
 						deliveryMethod: newTemplate.deliveryMethod,

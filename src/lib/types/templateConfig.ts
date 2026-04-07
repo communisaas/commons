@@ -53,7 +53,7 @@ export interface TypedTemplate {
 	slug?: string;
 	title: string;
 	description: string;
-	category: string;
+	domain: string;
 	type: string;
 	deliveryMethod: 'email' | 'certified';
 	subject?: string;

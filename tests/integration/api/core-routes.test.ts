@@ -256,7 +256,7 @@ describe.runIf(dbAvailable)('Templates API', () => {
       expect(typeof template.slug).toBe('string');
       expect(typeof template.title).toBe('string');
       expect(typeof template.description).toBe('string');
-      expect(typeof template.category).toBe('string');
+      expect(typeof template.domain).toBe('string');
       expect(typeof template.type).toBe('string');
       expect(typeof template.message_body).toBe('string');
       expect(typeof template.preview).toBe('string');

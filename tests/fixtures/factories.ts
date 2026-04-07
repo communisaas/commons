@@ -125,7 +125,7 @@ export interface TemplateFactoryData {
 	slug: string;
 	title: string;
 	description: string;
-	category: string;
+	domain: string;
 	type: string;
 	deliveryMethod: string;
 	subject?: string;
@@ -182,7 +182,7 @@ export class TemplateFactory extends Factory<TemplateFactoryData> {
 			slug,
 			title: `Test Template ${id.slice(-4)}`,
 			description: 'A test template for integration testing',
-			category: 'advocacy',
+			domain: 'Legislative Advocacy',
 			type: 'congressional',
 			deliveryMethod: 'cwc',
 			subject: 'Important Legislative Issue',

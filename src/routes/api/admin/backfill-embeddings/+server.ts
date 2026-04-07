@@ -56,7 +56,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 			// Build text pairs: [location0, topic0, location1, topic1, ...]
 			const texts: string[] = [];
 			for (const t of batch) {
-				const locationText = `${t.title} ${t.description || ''} ${t.category}`;
+				const locationText = `${t.title} ${t.description || ''} ${t.domain}`;
 				const topicText = `${t.title} ${t.description || ''} ${t.messageBody}`;
 				texts.push(locationText, topicText);
 			}

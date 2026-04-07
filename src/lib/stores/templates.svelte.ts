@@ -65,9 +65,9 @@ function isTemplate(obj: unknown): obj is Template {
 			actual: typeof template.description
 		},
 		{
-			field: 'category',
-			valid: typeof template.category === 'string',
-			actual: typeof template.category
+			field: 'domain',
+			valid: typeof template.domain === 'string',
+			actual: typeof template.domain
 		},
 		{ field: 'type', valid: typeof template.type === 'string', actual: typeof template.type },
 		{

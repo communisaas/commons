@@ -81,7 +81,7 @@ describe('CWC Smoke Tests', () => {
 			slug: 'smoke-test',
 			title: 'Smoke Test - Climate Action',
 			description: 'Smoke test template',
-			category: 'climate',
+			domain: 'Climate Action',
 			type: 'advocacy',
 			deliveryMethod: 'cwc',
 			subject: 'Support Climate Action',

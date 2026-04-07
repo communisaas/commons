@@ -8,6 +8,15 @@ import { requireAuth, requireOrgRole } from "./_authHelpers";
 // TEMPLATES — Queries & Actions
 // =============================================================================
 
+/** Resolve domain from document, falling back to pre-migration category field.
+ *  Filters out "General" — the old meaningless deriveCategory() default. */
+function resolveDomain(doc: any): string {
+  if (doc.domain) return doc.domain;
+  const cat = doc.category;
+  if (cat && cat !== 'General') return cat;
+  return '';
+}
+
 /**
  * Public: List published templates, ordered by creation time (newest first).
  * Paginated via Convex's built-in pagination.
@@ -181,7 +190,7 @@ export const listPublic = query({
         slug: template.slug,
         title: template.title,
         description: template.description,
-        category: template.category,
+        domain: resolveDomain(template),
         topics: template.topics ?? [],
         type: template.type,
         deliveryMethod: template.deliveryMethod,
@@ -286,7 +295,7 @@ export const getBySlugPublic = query({
       slug: template.slug,
       title: template.title,
       description: template.description,
-      category: template.category,
+      domain: resolveDomain(template),
       type: template.type,
       deliveryMethod: template.deliveryMethod,
       subject: template.title,
@@ -301,6 +310,7 @@ export const getBySlugPublic = query({
       delivery_config: template.deliveryConfig,
       recipient_config: template.recipientConfig,
       recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
+      topics: template.topics ?? [],
       author,
       createdAt: new Date(template._creationTime).toISOString(),
     };
@@ -406,7 +416,7 @@ export const search = action({
   args: {
     query: v.string(),
     limit: v.optional(v.number()),
-    category: v.optional(v.string()),
+    domain: v.optional(v.string()),
     countryCode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -442,7 +452,7 @@ export const search = action({
 
       // Build filter for vector search
       const filter: Record<string, string> = {};
-      if (args.category) filter.category = args.category;
+      if (args.domain) filter.domain = args.domain;
       if (args.countryCode) filter.countryCode = args.countryCode;
 
       // Fetch more candidates to allow for quality filtering
@@ -501,7 +511,7 @@ export const search = action({
       const textResults = await ctx.runQuery(internal.templates.textSearch, {
         query: queryText,
         limit,
-        category: args.category,
+        domain: args.domain,
         countryCode: args.countryCode,
       });
 
@@ -520,7 +530,7 @@ export const textSearch = internalQuery({
   args: {
     query: v.string(),
     limit: v.number(),
-    category: v.optional(v.string()),
+    domain: v.optional(v.string()),
     countryCode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -528,7 +538,7 @@ export const textSearch = internalQuery({
       .query("templates")
       .withSearchIndex("search_templates", (s) => {
         let search = s.search("title", args.query);
-        if (args.category) search = search.eq("category", args.category);
+        if (args.domain) search = search.eq("domain", args.domain);
         search = search.eq("status", "published");
         if (args.countryCode) search = search.eq("countryCode", args.countryCode);
         return search;
@@ -572,7 +582,7 @@ export const listByUser = query({
       slug: t.slug,
       title: t.title,
       description: t.description,
-      category: t.category,
+      domain: resolveDomain(t),
       status: t.status,
       isPublic: t.isPublic,
       verifiedSends: t.verifiedSends,
@@ -750,7 +760,7 @@ export const listMissingEmbeddings = query({
         _id: t._id,
         title: t.title,
         description: t.description ?? null,
-        category: t.category ?? "General",
+        domain: resolveDomain(t),
         messageBody: t.messageBody,
       }));
   },
@@ -835,7 +845,7 @@ export const createTemplate = mutation({
     preview: v.string(),
     type: v.string(),
     deliveryMethod: v.string(),
-    category: v.string(),
+    domain: v.string(),
     topics: v.array(v.string()),
     sources: v.optional(v.any()),
     researchLog: v.optional(v.any()),
@@ -882,7 +892,7 @@ export const createTemplate = mutation({
       preview: args.preview,
       type: args.type,
       deliveryMethod: args.deliveryMethod,
-      category: args.category,
+      domain: args.domain,
       topics: args.topics,
       sources: args.sources ?? [],
       researchLog: args.researchLog ?? [],
@@ -956,6 +966,24 @@ export const deleteTemplate = internalMutation({
 });
 
 /**
+ * Patch domain + topics on an existing template (dedupe metadata refresh).
+ * Called when content-hash matches an existing document but metadata has changed.
+ */
+export const patchMetadata = mutation({
+  args: {
+    templateId: v.id("templates"),
+    domain: v.optional(v.string()),
+    topics: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    if (args.domain !== undefined) patch.domain = args.domain;
+    if (args.topics !== undefined) patch.topics = args.topics;
+    await ctx.db.patch(args.templateId, patch as any);
+  },
+});
+
+/**
  * Set CWC verification status on a template.
  */
 export const setCwcVerification = mutation({
@@ -1016,7 +1044,7 @@ export const backfillEmbeddings = internalAction({
     }
 
     for (const t of missing) {
-      const locationText = `${t.title} ${t.description || ""} ${t.category}`;
+      const locationText = `${t.title} ${t.description || ""} ${resolveDomain(t)}`;
       const topicText = `${t.title} ${t.description || ""} ${t.messageBody}`;
 
       try {
