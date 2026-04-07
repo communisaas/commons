@@ -37,7 +37,7 @@
 	const cardScale = $derived(1.0 + template.coordinationScale * 0.15);
 
 	// === TOPIC COLOR: Per-template atmospheric hue from content domain ===
-	const hue = $derived(topicHue(template.domain, template.topics));
+	const hue = $derived(topicHue(template.domain, template.topics, template.domainHue));
 </script>
 
 <button

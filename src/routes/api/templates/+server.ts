@@ -13,6 +13,7 @@ import {
 import type { UnknownRecord } from '$lib/types/any-replacements';
 import { moderateTemplate } from '$lib/core/server/moderation';
 import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
+import { projectToHue } from '$lib/utils/domain-hue-projection';
 import { createHash } from 'crypto';
 import type { GeoScope } from '$lib/core/agents/types';
 
@@ -456,13 +457,16 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 									{ taskType: 'RETRIEVAL_DOCUMENT' }
 								);
 
+								const domainHue = projectToHue(embeddings[1]);
+
 								await serverMutation(api.templates.updateEmbeddings, {
 									templateId: templateId as any,
 									locationEmbedding: embeddings[0],
-									topicEmbedding: embeddings[1]
+									topicEmbedding: embeddings[1],
+									domainHue
 								});
 
-								console.log(`[deferred] Embeddings generated for template ${templateId}`);
+								console.log(`[deferred] Embeddings generated for template ${templateId} (domainHue=${domainHue.toFixed(1)})`);
 							} catch (embeddingError) {
 								console.error('[deferred] Embedding generation failed:', embeddingError);
 							}

@@ -3,6 +3,42 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { requireAuth, requireOrgRole } from "./_authHelpers";
+import anchorsData from "./domain-anchors.json";
+
+// ── Domain hue projection (cosine similarity → circular hue interpolation) ──
+
+interface DomainAnchor { label: string; hue: number; embedding: number[] }
+const DOMAIN_ANCHORS: DomainAnchor[] = anchorsData as DomainAnchor[];
+
+function cosineSim(a: number[], b: number[]): number {
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(magA) * Math.sqrt(magB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+function projectToHue(embedding: number[], topK = 3): number {
+  if (!embedding?.length || DOMAIN_ANCHORS.length === 0) return 0;
+  const scored = DOMAIN_ANCHORS.map((a) => ({ hue: a.hue, similarity: cosineSim(embedding, a.embedding) }));
+  scored.sort((a, b) => b.similarity - a.similarity);
+  const top = scored.slice(0, topK);
+  const minSim = Math.min(...top.map((t) => t.similarity));
+  const shifted = top.map((t) => ({ hue: t.hue, weight: Math.max(0, t.similarity - minSim + 0.01) }));
+  let sinSum = 0, cosSum = 0, weightSum = 0;
+  for (const s of shifted) {
+    const rad = (s.hue * Math.PI) / 180;
+    sinSum += s.weight * Math.sin(rad);
+    cosSum += s.weight * Math.cos(rad);
+    weightSum += s.weight;
+  }
+  if (weightSum === 0) return 0;
+  const angle = (Math.atan2(sinSum / weightSum, cosSum / weightSum) * 180) / Math.PI;
+  return ((angle % 360) + 360) % 360;
+}
 
 // =============================================================================
 // TEMPLATES — Queries & Actions
@@ -191,6 +227,7 @@ export const listPublic = query({
         title: template.title,
         description: template.description,
         domain: resolveDomain(template),
+        domainHue: (template as any).domainHue ?? undefined,
         topics: template.topics ?? [],
         type: template.type,
         deliveryMethod: template.deliveryMethod,
@@ -296,6 +333,7 @@ export const getBySlugPublic = query({
       title: template.title,
       description: template.description,
       domain: resolveDomain(template),
+      domainHue: (template as any).domainHue ?? undefined,
       type: template.type,
       deliveryMethod: template.deliveryMethod,
       subject: template.title,
@@ -583,6 +621,7 @@ export const listByUser = query({
       title: t.title,
       description: t.description,
       domain: resolveDomain(t),
+      domainHue: (t as any).domainHue ?? undefined,
       status: t.status,
       isPublic: t.isPublic,
       verifiedSends: t.verifiedSends,
@@ -774,6 +813,7 @@ export const updateEmbeddings = mutation({
     templateId: v.id("templates"),
     locationEmbedding: v.array(v.float64()),
     topicEmbedding: v.array(v.float64()),
+    domainHue: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
     await requireAuth(ctx);
@@ -782,6 +822,7 @@ export const updateEmbeddings = mutation({
       topicEmbedding: args.topicEmbedding,
       embeddingVersion: "v1",
       embeddingsUpdatedAt: Date.now(),
+      ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
     } as any);
   },
 });
@@ -857,6 +898,7 @@ export const createTemplate = mutation({
     recipientConfig: v.optional(v.any()),
     consensusApproved: v.boolean(),
     geographicScope: v.optional(v.any()),
+    domainHue: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
     // Check org quota
@@ -1055,14 +1097,17 @@ export const backfillEmbeddings = internalAction({
           continue;
         }
 
+        const domainHue = projectToHue(topEmb);
+
         await ctx.runMutation(internal.templates.patchEmbeddings, {
           templateId: t._id,
           locationEmbedding: locEmb,
           topicEmbedding: topEmb,
+          domainHue,
         });
 
         processed++;
-        console.log(`[backfill] Embedded ${t._id} (${t.title.slice(0, 40)}...)`);
+        console.log(`[backfill] Embedded ${t._id} (hue=${domainHue.toFixed(1)}, ${t.title.slice(0, 40)}...)`);
       } catch (err) {
         console.error(`[backfill] Failed for ${t._id}:`, err);
       }
@@ -1081,6 +1126,7 @@ export const patchEmbeddings = internalMutation({
     templateId: v.id("templates"),
     locationEmbedding: v.array(v.float64()),
     topicEmbedding: v.array(v.float64()),
+    domainHue: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.templateId, {
@@ -1088,6 +1134,112 @@ export const patchEmbeddings = internalMutation({
       topicEmbedding: args.topicEmbedding,
       embeddingVersion: "gemini-001-768",
       embeddingsUpdatedAt: Date.now(),
+      ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
     } as any);
+  },
+});
+
+// =============================================================================
+// DOMAIN HUE BACKFILL
+// =============================================================================
+
+/** Cosine similarity between two equal-length vectors. */
+function _cosine(a: number[], b: number[]): number {
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  const denom = Math.sqrt(magA) * Math.sqrt(magB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/** Circular weighted mean of hue angles (handles 350° + 10° → 0°). */
+function _circularMean(hues: number[], weights: number[]): number {
+  let sinSum = 0, cosSum = 0, weightSum = 0;
+  for (let i = 0; i < hues.length; i++) {
+    const rad = (hues[i] * Math.PI) / 180;
+    sinSum += weights[i] * Math.sin(rad);
+    cosSum += weights[i] * Math.cos(rad);
+    weightSum += weights[i];
+  }
+  if (weightSum === 0) return 0;
+  const angle = (Math.atan2(sinSum / weightSum, cosSum / weightSum) * 180) / Math.PI;
+  return ((angle % 360) + 360) % 360;
+}
+
+/** Project embedding onto anchors → hue angle. */
+function _projectToHue(embedding: number[], anchors: Array<{ hue: number; embedding: number[] }>, topK = 3): number {
+  const scored = anchors.map((a) => ({
+    hue: a.hue,
+    similarity: _cosine(embedding, a.embedding),
+  }));
+  scored.sort((a, b) => b.similarity - a.similarity);
+  const top = scored.slice(0, topK);
+  const minSim = Math.min(...top.map((t) => t.similarity));
+  const shifted = top.map((t) => ({
+    hue: t.hue,
+    weight: Math.max(0, t.similarity - minSim + 0.01),
+  }));
+  return _circularMean(
+    shifted.map((s) => s.hue),
+    shifted.map((s) => s.weight),
+  );
+}
+
+/**
+ * Backfill domainHue on templates that have topicEmbedding but no domainHue.
+ *
+ * Usage: npx convex run templates:backfillDomainHue '{"anchors": <contents of domain-anchors.json>}'
+ */
+export const backfillDomainHue = internalAction({
+  args: {
+    anchors: v.array(v.object({
+      hue: v.float64(),
+      embedding: v.array(v.float64()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const candidates = await ctx.runQuery(internal.templates._listMissingDomainHue, {});
+    console.log(`[backfillDomainHue] ${candidates.length} templates need domainHue`);
+
+    let processed = 0;
+    for (const t of candidates) {
+      const hue = _projectToHue(t.topicEmbedding, args.anchors);
+      await ctx.runMutation(internal.templates._patchDomainHue, {
+        templateId: t._id,
+        domainHue: hue,
+      });
+      processed++;
+      console.log(`[backfillDomainHue] ${t._id} → hue ${hue.toFixed(1)}`);
+    }
+
+    return { processed, total: candidates.length };
+  },
+});
+
+/** Internal query: find templates with topicEmbedding but no domainHue. */
+export const _listMissingDomainHue = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("templates").collect();
+    return all
+      .filter((t) => (t as any).topicEmbedding && !(t as any).domainHue)
+      .map((t) => ({
+        _id: t._id,
+        topicEmbedding: (t as any).topicEmbedding as number[],
+      }));
+  },
+});
+
+/** Internal mutation: set domainHue on a single template. */
+export const _patchDomainHue = internalMutation({
+  args: {
+    templateId: v.id("templates"),
+    domainHue: v.float64(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.templateId, { domainHue: args.domainHue } as any);
   },
 });

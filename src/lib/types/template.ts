@@ -61,6 +61,7 @@ export interface Template {
 	title: string;
 	description: string;
 	domain: string; // Civic domain synthesized from topics (e.g. "Parking & Municipal Revenue")
+	domainHue?: number; // LLM-assigned hue angle (0-360) for domain color encoding
 	topics?: string[]; // Topic tags — specific facets of the grievance (1-5 lowercase strings)
 	type: string;
 	deliveryMethod: 'email' | 'email_attested' | 'certified' | 'direct' | 'cwc';

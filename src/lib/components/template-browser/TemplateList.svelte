@@ -355,7 +355,7 @@
 					{@const globalIndex = allTemplates.findIndex((t) => t.id === template.id)}
 					{@const targetInfo = deriveTargetPresentation(template)}
 					{@const isNewlyRevealed = templateIndex >= INITIAL_VISIBLE}
-					{@const hue = topicHue(template.domain, template.topics)}
+					{@const hue = topicHue(template.domain, template.topics, template.domainHue)}
 					<button
 						type="button"
 						data-template-button
@@ -436,16 +436,6 @@
 
 							{#if template.domain}
 								<span class="topic-ground">{template.domain}</span>
-							{/if}
-							{#if template.topics?.length}
-								<div class="mt-1 flex flex-wrap items-center gap-1">
-									{#each template.topics.slice(0, 3) as topic}
-										<span class="topic-pill">{topic}</span>
-									{/each}
-									{#if template.topics.length > 3}
-										<span class="topic-pill-overflow">+{template.topics.length - 3}</span>
-									{/if}
-								</div>
 							{/if}
 						</div>
 

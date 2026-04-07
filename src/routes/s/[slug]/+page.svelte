@@ -48,7 +48,7 @@
 	// Template modal reference
 
 	const template: TemplateType = $derived(data.template as unknown as TemplateType);
-	const hue = $derived(topicHue(template?.domain ?? '', template?.topics));
+	const hue = $derived(topicHue(template?.domain ?? '', template?.topics, template?.domainHue));
 
 	/** Build proof footer for email attestation based on user verification tier */
 	function buildProofFooter(trustTier: number, districtCode?: string | null): string | undefined {

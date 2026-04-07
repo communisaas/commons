@@ -351,19 +351,12 @@
 			</AnimatedPopover>
 		{/if}
 		{#if template.domain}
-			{@const previewHue = topicHue(template.domain, template.topics)}
+			{@const previewHue = topicHue(template.domain, template.topics, template.domainHue)}
 			<span class="ml-auto shrink-0 font-brand text-xs font-medium" style="color: oklch(0.45 0.08 {previewHue})">{template.domain}</span>
 		{/if}
 	</div>
 {/if}
 
-{#if template.topics?.length}
-	<div class="flex flex-wrap items-center gap-1 px-4 pb-2" style="--card-hue: {topicHue(template.domain ?? '', template.topics)}">
-		{#each template.topics as topic}
-			<span class="topic-pill">{topic}</span>
-		{/each}
-	</div>
-{/if}
 
 <div
 	class={inModal

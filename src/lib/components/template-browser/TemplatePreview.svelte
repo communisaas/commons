@@ -47,7 +47,7 @@
 		onVerifyIdentity?: () => void;
 	} = $props();
 
-	const hue = $derived(topicHue(template?.domain ?? '', template?.topics));
+	const hue = $derived(topicHue(template?.domain ?? '', template?.topics, template?.domainHue));
 
 	let localShowEmailModal = $state(false);
 	const showEmailModal = $derived(externalShowEmailModal || localShowEmailModal);

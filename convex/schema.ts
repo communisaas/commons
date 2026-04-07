@@ -191,6 +191,7 @@ export default defineSchema({
     topicEmbedding: v.optional(v.array(v.float64())),
     embeddingVersion: v.string(),
     embeddingsUpdatedAt: v.optional(v.number()),
+    domainHue: v.optional(v.float64()), // oklch hue angle (0-360) projected from topicEmbedding
 
     // Status & tracking
     verificationStatus: v.optional(v.string()), // 'pending' | 'approved' | 'rejected'

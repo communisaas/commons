@@ -78,7 +78,10 @@ function matchDomain(text: string): number | null {
  * @param topics - Optional topic tags (e.g., ["parking-enforcement", "municipal-revenue"])
  * @returns Hue angle 0-360
  */
-export function topicHue(domain: string, topics?: string[]): number {
+export function topicHue(domain: string, topics?: string[], domainHue?: number): number {
+	// Prefer stored embedding-projected hue (semantically continuous)
+	if (domainHue !== undefined && domainHue >= 0 && domainHue <= 360) return domainHue;
+
 	// Try domain first (strongest signal — model-synthesized civic space name)
 	if (domain) {
 		const hit = matchDomain(domain);
