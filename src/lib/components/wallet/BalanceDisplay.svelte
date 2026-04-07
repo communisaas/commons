@@ -203,8 +203,8 @@
 
 	.bal__skeleton {
 		display: inline-block;
-		width: 52px;
-		height: 14px;
+		width: 56px;
+		height: 13px;
 		border-radius: 4px;
 		background: oklch(0.88 0.01 250 / 0.6);
 		animation: bal-pulse 1.5s ease-in-out infinite;
@@ -268,8 +268,8 @@
 
 	.bal-card__skeleton {
 		display: inline-block;
-		width: 120px;
-		height: 28px;
+		width: 100px;
+		height: 34px;
 		border-radius: 6px;
 		background: oklch(0.88 0.01 250 / 0.6);
 		animation: bal-pulse 1.5s ease-in-out infinite;

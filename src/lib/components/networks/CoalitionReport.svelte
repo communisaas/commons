@@ -31,20 +31,44 @@
 
 {#if loading}
 	<!-- Loading skeleton -->
-	<div class="space-y-3">
-		<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+	<div class="animate-pulse">
+		<!-- Stats grid: matches rounded-lg bg-zinc-900/50 p-3, label + value -->
+		<div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
 			{#each Array(4) as _}
-				<div class="animate-pulse rounded-lg bg-zinc-800/40 p-4">
-					<div class="mb-2 h-3 w-16 rounded bg-zinc-700/50"></div>
-					<div class="h-7 w-12 rounded bg-zinc-700/50"></div>
+				<div class="rounded-lg bg-zinc-900/50 p-3">
+					<div class="h-3 w-20 rounded bg-zinc-700/50"></div>
+					<div class="mt-1 h-6 w-10 rounded bg-zinc-700/50"></div>
 				</div>
 			{/each}
 		</div>
-		<div class="animate-pulse rounded-lg bg-zinc-800/40 p-4">
-			<div class="mb-3 h-3 w-24 rounded bg-zinc-700/50"></div>
-			{#each Array(4) as _}
-				<div class="mb-2 h-4 w-full rounded bg-zinc-700/50"></div>
-			{/each}
+
+		<!-- Tier distribution: label + bar rows -->
+		<div class="mb-4">
+			<div class="mb-2 h-3 w-24 rounded bg-zinc-700/50"></div>
+			<div class="space-y-1.5">
+				{#each Array(4) as _, i}
+					<div class="flex items-center gap-2">
+						<div class="h-3 w-28 shrink-0 rounded bg-zinc-700/50"></div>
+						<div class="h-2 flex-1 overflow-hidden rounded-full bg-zinc-800">
+							<div class="h-full rounded-full bg-zinc-700/50" style="width: {80 - i * 15}%"></div>
+						</div>
+						<div class="h-3 w-10 shrink-0 rounded bg-zinc-700/50"></div>
+					</div>
+				{/each}
+			</div>
+		</div>
+
+		<!-- State distribution: 2-3 col grid -->
+		<div>
+			<div class="mb-2 h-3 w-28 rounded bg-zinc-700/50"></div>
+			<div class="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-3">
+				{#each Array(6) as _}
+					<div class="flex items-center justify-between">
+						<div class="h-3 w-6 rounded bg-zinc-700/50"></div>
+						<div class="h-3 w-8 rounded bg-zinc-700/50"></div>
+					</div>
+				{/each}
+			</div>
 		</div>
 	</div>
 {:else if stats}

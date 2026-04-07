@@ -72,20 +72,43 @@
 
 {#if loading}
 	{#if embedded}
-		<!-- Embedded loading: inline text skeleton -->
-		<div class="animate-pulse space-y-2">
-			<div class="h-4 w-44 rounded bg-slate-100/60"></div>
-			<div class="h-4 w-32 rounded bg-slate-100/60"></div>
+		<!-- Embedded loading: matches address block + district bar + encryption footer -->
+		<div class="animate-pulse">
+			<div class="space-y-1">
+				<div class="h-[15px] w-44 rounded bg-slate-100/60"></div>
+				<div class="h-[15px] w-32 rounded bg-slate-100/60"></div>
+			</div>
+			<div class="mt-2.5 flex items-center gap-2 border-l-2 border-slate-200 pl-3">
+				<div class="h-3.5 w-20 rounded bg-slate-100/60"></div>
+			</div>
+			<div class="mt-2.5 flex items-center gap-1.5">
+				<div class="h-3 w-3 rounded bg-slate-100/60"></div>
+				<div class="h-[11px] w-32 rounded bg-slate-100/60"></div>
+			</div>
 		</div>
 	{:else}
 		<div
 			class="rounded-xl border border-slate-200/60 bg-white/80 p-5 backdrop-blur-sm"
 			style="box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.6), 0 1px 2px 0 rgba(0,0,0,0.05)"
 		>
-			<div class="animate-pulse space-y-3">
-				<div class="h-3 w-24 rounded bg-slate-100"></div>
-				<div class="h-4 w-48 rounded bg-slate-100"></div>
-				<div class="h-4 w-36 rounded bg-slate-100"></div>
+			<div class="animate-pulse">
+				<!-- "Your ground" header -->
+				<div class="h-[11px] w-20 rounded bg-slate-100"></div>
+				<!-- Address lines -->
+				<div class="mt-3 space-y-1">
+					<div class="h-[15px] w-44 rounded bg-slate-100"></div>
+					<div class="h-[15px] w-36 rounded bg-slate-100"></div>
+				</div>
+				<!-- District row (icon + label) -->
+				<div class="mt-3 flex items-center gap-2">
+					<div class="h-3.5 w-3.5 rounded bg-slate-100"></div>
+					<div class="h-3.5 w-20 rounded bg-slate-100"></div>
+				</div>
+				<!-- Encryption footer (icon + text) -->
+				<div class="mt-3 flex items-center gap-1.5">
+					<div class="h-3 w-3 rounded bg-slate-100"></div>
+					<div class="h-[11px] w-32 rounded bg-slate-100"></div>
+				</div>
 			</div>
 		</div>
 	{/if}
