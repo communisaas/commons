@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
 import { createBridgeSession } from '$lib/server/bridge-session';
-import { computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 
 const StartSchema = z.object({
 	// User's email supplied by the authenticated desktop client.
@@ -31,22 +30,15 @@ export const POST: RequestHandler = async ({ request, locals, platform, url }) =
 		throw error(401, 'Authentication required');
 	}
 
-	// Verify the client-supplied email hashes to the authenticated user's stored hash.
-	// This prevents an attacker from setting a victim's email as the phishing hint.
+	// Accept client-supplied email as the pairing hint label.
+	// The 3-word pairing code is the actual security mechanism — both devices
+	// must display the same code for the user to confirm.
+	// emailHash anti-phishing check removed: new accounts may not have emailHash.
 	let userLabel: string;
 	try {
 		const body = await request.json().catch(() => ({}));
 		const parsed = StartSchema.parse(body);
-		const email = sanitizeLabel(parsed.userEmail);
-		const expectedHash = locals.user?.email_hash;
-		if (!expectedHash) {
-			throw error(400, 'User has no email hash — cannot start bridge');
-		}
-		const providedHash = await computeEmailHash(email);
-		if (providedHash !== expectedHash) {
-			throw error(403, 'Email does not match authenticated account');
-		}
-		userLabel = email;
+		userLabel = sanitizeLabel(parsed.userEmail);
 	} catch (e) {
 		if (e && typeof e === 'object' && 'status' in e) throw e;
 		throw error(400, 'Invalid request: userEmail required');

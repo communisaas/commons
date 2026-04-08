@@ -19,7 +19,7 @@ import { initConvex, serverQuery, serverMutation } from 'convex-sveltekit';
 import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { mintConvexToken } from '$lib/server/convex-jwt';
 import { api } from '$lib/convex';
-import { decryptUserPii } from '$lib/core/crypto/user-pii-encryption';
+
 
 // ─── DUAL-STACK: Initialize Convex server-side client ───
 // Stores the deployment URL so serverQuery()/serverMutation()/serverAction()
@@ -105,8 +105,9 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			}).catch(() => {});
 		}
 
-		// No server-side PII decryption — client decrypts locally with device key.
-		// Server never holds standing decrypt capability.
+		// Person-layer PII: client-custodied encryption (device key in IndexedDB).
+		// Org-layer PII: org-custodied encryption (passphrase-derived key, client decrypts).
+		// Server holds no PII decryption keys.
 		const pii = { email: null as string | null, name: null as string | null };
 
 		event.locals.user = {

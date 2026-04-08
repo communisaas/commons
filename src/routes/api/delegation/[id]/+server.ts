@@ -1,11 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { decryptPii } from '$lib/core/crypto/user-pii-encryption';
-import type { EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api, internal } from '$lib/convex';
-import { encryptPii } from '$lib/core/crypto/user-pii-encryption';
 
 /**
  * GET /api/delegation/[id]
@@ -28,18 +25,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		throw error(403, 'Not authorized to view this grant');
 	}
 
-	// Decrypt policy text
-	let policyText = grant.policyText;
-	try {
-		const parsed = JSON.parse(grant.policyText) as EncryptedPii;
-		if (parsed.ciphertext && parsed.iv) {
-			policyText = await decryptPii(parsed, String(grant.userId), 'policy');
-		}
-	} catch {
-		policyText = '[encrypted]';
-	}
-
-	return json({ grant: { ...grant, policyText } });
+	// Policy text is client-encrypted — return as-is for client-side decryption
+	return json({ grant });
 };
 
 /**
@@ -80,12 +67,8 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 			.filter(Boolean);
 	}
 	if (body.policyText !== undefined && typeof body.policyText === 'string') {
-		let storedPolicyText = body.policyText.trim();
-		const encrypted = await encryptPii(storedPolicyText, session.userId, 'policy');
-		if (encrypted) {
-			storedPolicyText = JSON.stringify(encrypted);
-		}
-		data.policyText = storedPolicyText;
+		// Client sends pre-encrypted policy blob — store as-is
+		data.policyText = body.policyText.trim();
 	}
 
 	if (Object.keys(data).length === 0) {

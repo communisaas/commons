@@ -20,7 +20,6 @@ import { error, redirect } from '@sveltejs/kit';
 import { dev } from '$app/environment';
 import { validateReturnTo } from '$lib/core/auth/oauth';
 import { encryptOAuthToken } from '$lib/core/crypto/oauth-token-encryption';
-import { encryptUserPii, computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
@@ -72,7 +71,7 @@ export interface DatabaseUser {
 	// PII fields (email, name) are encrypted — access via decryptUserPii()
 	encrypted_email: string;
 	encrypted_name: string | null;
-	email_hash: string;
+	email_hash?: string;
 	is_verified?: boolean;
 	role?: string | null;
 	organization?: string | null;
@@ -250,13 +249,10 @@ export class OAuthCallbackHandler {
 				: null
 		]);
 
-		// Compute email hash for Sybil dedup — no server-side PII encryption.
+		// New users no longer need server-computed emailHash — dedup uses
+		// identityCommitment (set at mDL verification). Existing users keep
+		// their emailHash for backward-compat lookups.
 		// PII is encrypted client-side with the user's device key (see +layout.svelte).
-		const piiData = await encryptUserPii(userData.email, userData.name, 'hash-only');
-
-		if (!piiData.email_hash) {
-			throw new Error('[OAuth] Email hash computation failed');
-		}
 
 		// Call Convex mutation to upsert user + account
 		const result = await serverMutation(api.authOps.upsertFromOAuth, {
@@ -265,7 +261,6 @@ export class OAuthCallbackHandler {
 			scope: config.scope,
 			encryptedEmail: '', // placeholder — client overwrites with device-encrypted blob
 			encryptedName: undefined,
-			emailHash: piiData.email_hash,
 			avatar: userData.avatar,
 			emailVerified,
 			encryptedAccessToken: encAccessToken ? JSON.parse(JSON.stringify(encAccessToken)) : undefined,
@@ -278,7 +273,6 @@ export class OAuthCallbackHandler {
 			console.debug('[OAuth Sybil Resistance] New user created with unverified email:', {
 				provider: config.provider,
 				userId: result.userId,
-				email_hash: piiData.email_hash?.slice(0, 12) ?? 'none',
 				trust_score: emailVerified ? 100 : 50,
 				reputation_tier: emailVerified ? 'verified' : 'novice'
 			});

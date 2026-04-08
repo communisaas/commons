@@ -8,6 +8,8 @@
  * Follows the same pattern as user-pii-encryption.ts.
  */
 
+import { dev } from '$app/environment';
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -66,7 +68,8 @@ async function deriveSessionKey(masterKey: CryptoKey, sessionId: string): Promis
 
 /**
  * Encrypt sensitive bridge session fields for KV storage.
- * Returns null if no encryption key is configured (dev passthrough).
+ * Returns null in dev if no encryption key is configured.
+ * Throws in production — bridge sessions must never be stored in plaintext.
  */
 export async function encryptBridgeFields(
 	sessionId: string,
@@ -74,14 +77,16 @@ export async function encryptBridgeFields(
 ): Promise<EncryptedBlob | null> {
 	const masterKeyHex = getMasterKeyHex();
 	if (!masterKeyHex) {
-		if (!_warnedKey) {
-			console.warn(
-				'[bridge-crypto] BRIDGE_ENCRYPTION_KEY / PII_ENCRYPTION_KEY not set — ' +
-					'bridge sessions stored in plaintext. Generate with: openssl rand -hex 32'
-			);
-			_warnedKey = true;
+		if (dev) {
+			if (!_warnedKey) {
+				console.warn(
+					'[bridge-crypto] No encryption key — bridge sessions stored in plaintext (dev only)'
+				);
+				_warnedKey = true;
+			}
+			return null;
 		}
-		return null;
+		throw new Error('[bridge-crypto] BRIDGE_ENCRYPTION_KEY required in production');
 	}
 
 	const masterKey = await importMasterKey(masterKeyHex);

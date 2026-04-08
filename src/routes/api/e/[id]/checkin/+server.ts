@@ -7,7 +7,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
-import { computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
+import { computeOrgScopedEmailHash } from '$lib/core/crypto/org-scoped-hash';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
@@ -40,13 +40,13 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// Only trust the server-validated checkin code for verification on an unauthenticated route
 	const verified = Boolean(checkinCode && checkinCode === event.checkinCode);
 
-	// Compute email hash for RSVP lookup
-	const emailHash = await computeEmailHash(email.toLowerCase());
+	// Org-scoped email hash for RSVP lookup — no server-held key
+	const emailHash = await computeOrgScopedEmailHash(String(event.orgId), email.toLowerCase());
 
 	// Perform checkin via Convex mutation
 	const result = await serverMutation(api.events.publicCheckIn, {
 		eventId: params.id as any,
-		emailHash: emailHash ?? undefined,
+		emailHash,
 		verified,
 		verificationMethod: verificationMethod || (checkinCode ? 'checkin_code' : undefined),
 		identityCommitment: identityCommitment || undefined,

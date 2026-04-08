@@ -1,14 +1,12 @@
 /**
- * PII Encryption/Decryption for Convex Functions
+ * @deprecated Server-held PII encryption — migrating to client-custodied encryption.
  *
- * Standalone port of src/lib/core/crypto/user-pii-encryption.ts
- * Uses Web Crypto API (available in Convex runtime).
+ * Person-layer PII: client-custodied encryption (device key in IndexedDB).
+ * Org-layer PII: org-custodied encryption (passphrase-derived key, client decrypts).
  *
- * Key derivation: HKDF(PII_ENCRYPTION_KEY, entityId, "commons-pii-encryption-v1")
- * Email lookup:   HMAC-SHA256(normalize(email), EMAIL_LOOKUP_KEY)
- *
- * IMPORTANT: Byte-identical with the SvelteKit implementation so existing
- * ciphertexts from Prisma can be decrypted in Convex during migration.
+ * All functions in this file are deprecated and will be removed once all
+ * callers are migrated to client-side or org-scoped encryption.
+ * New code should use `_orgHash.ts` for org-scoped hashing.
  */
 
 /** Encrypted PII field stored as JSON string in the database */
@@ -87,6 +85,7 @@ function normalizeEmail(email: string): string {
 }
 
 /**
+ * @deprecated Use `computeOrgScopedEmailHash` from `./_orgHash` for org-layer entities.
  * Compute a deterministic email hash for database lookups.
  * HMAC-SHA256(normalize(email), EMAIL_LOOKUP_KEY)
  *
@@ -159,6 +158,7 @@ async function derivePiiKey(
 }
 
 /**
+ * @deprecated Server decryption being replaced by client-custodied encryption.
  * Decrypt a PII field from database storage.
  * Supports both legacy (no AAD) and new (AAD-bound) ciphertexts.
  *
@@ -196,6 +196,7 @@ export async function decryptPii(
 }
 
 /**
+ * @deprecated Server decryption being replaced by client-custodied encryption.
  * Try to decrypt a PII field, returning null on failure.
  *
  * Deterministic — safe in queries and mutations.
@@ -214,6 +215,7 @@ export async function tryDecryptPii(
 }
 
 /**
+ * @deprecated Server encryption being replaced by client-custodied encryption.
  * Encrypt a PII field for database storage.
  * Uses AES-256-GCM with AAD binding to entity+field.
  *
@@ -277,6 +279,7 @@ function normalizePhone(phone: string): string {
 }
 
 /**
+ * @deprecated Server-held HMAC being replaced by org-scoped hashing.
  * Compute a deterministic phone hash for database lookups.
  * HMAC-SHA256("phone:" + normalize(phone), EMAIL_LOOKUP_KEY)
  *
@@ -319,6 +322,7 @@ export async function computePhoneHash(
 // =============================================================================
 
 /**
+ * @deprecated Server encryption being replaced by org-custodied encryption.
  * Encrypt a supporter's email and compute the email hash.
  * Info string for supporter key derivation is "supporter:{supporterId}".
  *
@@ -345,6 +349,7 @@ export async function encryptSupporterEmail(
 }
 
 /**
+ * @deprecated Server decryption being replaced by org-custodied encryption.
  * Decrypt a supporter's encrypted email.
  * Info string for supporter key derivation is "supporter:{supporterId}".
  *
@@ -368,6 +373,7 @@ export async function decryptSupporterEmail(supporter: {
 // =============================================================================
 
 /**
+ * @deprecated Server encryption being replaced by org-custodied encryption.
  * Encrypt a supporter's name.
  * Uses entity prefix "supporter:{supporterId}" with fieldName "name".
  *
@@ -382,6 +388,7 @@ export async function encryptSupporterName(
 }
 
 /**
+ * @deprecated Server decryption being replaced by org-custodied encryption.
  * Decrypt a supporter's encrypted name.
  * Returns null if encryptedName is empty/missing.
  *
@@ -401,6 +408,7 @@ export async function decryptSupporterName(supporter: {
 // =============================================================================
 
 /**
+ * @deprecated Server encryption being replaced by org-custodied encryption.
  * Encrypt a supporter's phone and compute the phone hash.
  * Uses entity prefix "supporter:{supporterId}" with fieldName "phone".
  *
@@ -426,6 +434,7 @@ export async function encryptSupporterPhone(
 }
 
 /**
+ * @deprecated Server decryption being replaced by org-custodied encryption.
  * Decrypt a supporter's encrypted phone.
  * Returns null if encryptedPhone is empty/missing.
  *

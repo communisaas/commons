@@ -2,13 +2,14 @@ import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { encryptPii, computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 import type { RequestHandler } from './$types';
 
 // F-R8-02: Zod schema replaces unsafe `body as { ... }` cast
 const OrgUpdateSchema = z.object({
 	description: z.string().max(1000).optional(),
 	billing_email: z.string().email().optional(),
+	encryptedBillingEmail: z.string().optional(),
+	billingEmailHash: z.string().optional(),
 	avatar: z.string().max(2048).optional()
 });
 
@@ -32,22 +33,13 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	if (typeof parsed.billing_email === 'string') data.billing_email = parsed.billing_email;
 	if (typeof parsed.avatar === 'string') data.avatar = parsed.avatar;
 
-	if (Object.keys(data).length === 0) {
+	if (Object.keys(data).length === 0 && !parsed.encryptedBillingEmail) {
 		throw error(400, 'No fields to update');
 	}
 
-	// Encrypt billing email before sending to Convex mutation
-	let encryptedBillingEmail: string | undefined;
-	let billingEmailHash: string | undefined;
-	if (parsed.billing_email) {
-		const orgData = await serverQuery(api.organizations.getBySlug, { slug: params.slug });
-		if (!orgData) throw error(404, 'Organization not found');
-
-		const entityId = `org:${orgData._id}`;
-		const enc = await encryptPii(parsed.billing_email, entityId, 'billingEmail');
-		encryptedBillingEmail = JSON.stringify(enc);
-		billingEmailHash = (await computeEmailHash(parsed.billing_email)) ?? undefined;
-	}
+	// Client sends pre-encrypted billing email blob + org-scoped hash
+	const encryptedBillingEmail = parsed.encryptedBillingEmail;
+	const billingEmailHash = parsed.billingEmailHash;
 
 	await serverMutation(api.organizations.update, {
 		slug: params.slug,

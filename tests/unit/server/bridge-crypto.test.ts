@@ -98,8 +98,8 @@ describe('bridge-crypto', () => {
 		});
 	});
 
-	describe('dev passthrough (no encryption key)', () => {
-		it('returns null when neither BRIDGE_ENCRYPTION_KEY nor PII_ENCRYPTION_KEY is set', async () => {
+	describe('dev passthrough (no encryption key — throws in production)', () => {
+		it('returns null in dev when neither BRIDGE_ENCRYPTION_KEY nor PII_ENCRYPTION_KEY is set', async () => {
 			delete process.env.BRIDGE_ENCRYPTION_KEY;
 			delete process.env.PII_ENCRYPTION_KEY;
 

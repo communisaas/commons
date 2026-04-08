@@ -11,13 +11,18 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 	const body = await request.json();
 	const { invites } = body as {
-		invites?: Array<{ email: string; role?: string }>;
+		invites?: Array<{ emailHash: string; encryptedEmail: string; role?: string }>;
 	};
+
+	if (!invites?.length) {
+		throw error(400, 'invites array is required');
+	}
 
 	const result = await serverAction(api.invites.create, {
 		slug: params.slug,
-		invites: (invites ?? []).map((inv) => ({
-			email: inv.email,
+		invites: invites.map((inv) => ({
+			emailHash: inv.emailHash,
+			encryptedEmail: inv.encryptedEmail,
 			role: inv.role
 		}))
 	});

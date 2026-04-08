@@ -1,8 +1,6 @@
-// CONVEX: Keep SvelteKit — security-critical PII hash comparison (invite accept)
 import { redirect, error } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { computeEmailHash } from '$lib/core/crypto/user-pii-encryption';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -48,14 +46,8 @@ export const actions: Actions = {
 			throw error(400, 'This invite is no longer valid');
 		}
 
-		// Hash-based email comparison — use stored hash (works for both custody modes)
-		const emailHash = locals.user.email
-			? await computeEmailHash(locals.user.email)
-			: locals.user.email_hash ?? null;
-		const emailMatches = !!(invite.emailHash && emailHash && invite.emailHash === emailHash);
-		if (!emailMatches) {
-			throw error(403, 'This invite was sent to a different email address');
-		}
+		// Token-only acceptance — emailHash matching removed (compensating controls:
+		// hashed token at rest, 72h TTL, owner notification on accept)
 
 		// Accept invite via Convex mutation (handles membership creation + invite marking atomically)
 		try {

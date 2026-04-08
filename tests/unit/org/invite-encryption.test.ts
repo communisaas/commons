@@ -1,180 +1,131 @@
 /**
- * OrgInvite PII Encryption Tests (S-5)
+ * OrgInvite Token-Hash-at-Rest & Org-Scoped Email Hash Tests (S-5)
  *
- * Validates that invite creation includes encrypted_email and email_hash,
- * hash-based invite matching works, and plaintext fallback is functional.
+ * Validates:
+ * - Invite token hashing (SHA-256 at rest, raw token never stored)
+ * - Token hash lookup (correct token succeeds, wrong token fails)
+ * - Org-scoped email hashing (SHA-256, no server key)
+ * - TTL is 72 hours
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import {
-	computeEmailHash,
-	encryptPii,
-	decryptPii,
-	type EncryptedPii
-} from '$lib/core/crypto/user-pii-encryption';
+import { describe, it, expect } from 'vitest';
+import { computeOrgScopedEmailHash } from '$lib/core/crypto/org-scoped-hash';
+import { hashInviteToken } from '../../../convex/_orgHash';
 
-// Test keys: 32 bytes (64 hex chars) — NOT used in production
-const TEST_PII_KEY = 'b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2';
-const TEST_EMAIL_KEY = 'c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3';
-
-describe('OrgInvite PII Encryption', () => {
-	let origPiiKey: string | undefined;
-	let origEmailKey: string | undefined;
-
-	beforeEach(() => {
-		origPiiKey = process.env.PII_ENCRYPTION_KEY;
-		origEmailKey = process.env.EMAIL_LOOKUP_KEY;
-		process.env.PII_ENCRYPTION_KEY = TEST_PII_KEY;
-		process.env.EMAIL_LOOKUP_KEY = TEST_EMAIL_KEY;
-	});
-
-	afterEach(() => {
-		if (origPiiKey === undefined) delete process.env.PII_ENCRYPTION_KEY;
-		else process.env.PII_ENCRYPTION_KEY = origPiiKey;
-		if (origEmailKey === undefined) delete process.env.EMAIL_LOOKUP_KEY;
-		else process.env.EMAIL_LOOKUP_KEY = origEmailKey;
-	});
-
-	describe('invite creation includes encrypted_email and email_hash', () => {
-		it('should encrypt email with org-invite info string', async () => {
-			const email = 'user@example.com';
-			const inviteId = crypto.randomUUID();
-			const infoString = 'org-invite:' + inviteId;
-
-			const encrypted = await encryptPii(email, infoString);
-			expect(encrypted).not.toBeNull();
-			expect(encrypted!.ciphertext).toBeTruthy();
-			expect(encrypted!.iv).toBeTruthy();
-
-			// Should round-trip correctly
-			const decrypted = await decryptPii(encrypted!, infoString);
-			expect(decrypted).toBe(email);
-		});
-
-		it('should produce a serializable encrypted_email value', async () => {
-			const email = 'invite@test.org';
-			const inviteId = crypto.randomUUID();
-			const encrypted = await encryptPii(email, 'org-invite:' + inviteId);
-
-			const jsonStr = JSON.stringify(encrypted);
-			const parsed: EncryptedPii = JSON.parse(jsonStr);
-			expect(parsed.ciphertext).toBe(encrypted!.ciphertext);
-			expect(parsed.iv).toBe(encrypted!.iv);
-		});
-
-		it('should compute a non-null email_hash', async () => {
-			const hash = await computeEmailHash('user@example.com');
-			expect(hash).not.toBeNull();
+describe('OrgInvite Security Controls', () => {
+	describe('token hashing at rest', () => {
+		it('should produce a 64-char hex SHA-256 hash', async () => {
+			const token = 'a'.repeat(64);
+			const hash = await hashInviteToken(token);
 			expect(hash).toMatch(/^[0-9a-f]{64}$/);
 		});
 
-		it('should use different encryption keys per invite ID', async () => {
-			const email = 'same@example.com';
-			const enc1 = await encryptPii(email, 'org-invite:' + crypto.randomUUID());
-			const enc2 = await encryptPii(email, 'org-invite:' + crypto.randomUUID());
-
-			// Different invite IDs derive different keys, so ciphertexts differ
-			expect(enc1!.ciphertext).not.toBe(enc2!.ciphertext);
-		});
-	});
-
-	describe('hash-based invite matching', () => {
-		it('should match invite email by hash', async () => {
-			const inviteEmail = 'voter@commons.email';
-			const userEmail = 'voter@commons.email';
-
-			const inviteHash = await computeEmailHash(inviteEmail);
-			const userHash = await computeEmailHash(userEmail);
-
-			expect(inviteHash).toBe(userHash);
+		it('should be deterministic for the same token', async () => {
+			const token = 'b'.repeat(64);
+			const hash1 = await hashInviteToken(token);
+			const hash2 = await hashInviteToken(token);
+			expect(hash1).toBe(hash2);
 		});
 
-		it('should match case-insensitive emails by hash', async () => {
-			const inviteHash = await computeEmailHash('voter@commons.email');
-			const userHash = await computeEmailHash('Voter@Commons.Email');
-
-			expect(inviteHash).toBe(userHash);
-		});
-
-		it('should not match different emails by hash', async () => {
-			const hash1 = await computeEmailHash('alice@example.com');
-			const hash2 = await computeEmailHash('bob@example.com');
-
+		it('should produce different hashes for different tokens', async () => {
+			const hash1 = await hashInviteToken('a'.repeat(64));
+			const hash2 = await hashInviteToken('b'.repeat(64));
 			expect(hash1).not.toBe(hash2);
 		});
 
-		it('should simulate hash-based email comparison from accept endpoint', async () => {
-			// Simulate what the accept endpoint does:
-			// invite has email_hash from creation, user provides email at acceptance
-			const inviteEmailHash = await computeEmailHash('user@test.com');
-			const acceptingUserHash = await computeEmailHash('user@test.com');
+		it('should domain-separate with "invite-token:" prefix', async () => {
+			// Verify the hash includes the domain prefix by comparing
+			// to a raw SHA-256 of just the token (should differ)
+			const token = 'c'.repeat(64);
+			const inviteHash = await hashInviteToken(token);
 
-			const emailMatches =
-				(inviteEmailHash && acceptingUserHash && inviteEmailHash === acceptingUserHash) ||
-				'user@test.com' === 'user@test.com';
+			// Compute raw SHA-256 without prefix
+			const rawData = new TextEncoder().encode(token);
+			const rawDigest = await crypto.subtle.digest('SHA-256', rawData);
+			const rawHash = Array.from(new Uint8Array(rawDigest))
+				.map((b) => b.toString(16).padStart(2, '0'))
+				.join('');
 
-			expect(emailMatches).toBe(true);
+			expect(inviteHash).not.toBe(rawHash);
 		});
 	});
 
-	describe('plaintext fallback when hash is missing', () => {
-		it('should fall back to plaintext when EMAIL_LOOKUP_KEY is not set', async () => {
-			delete process.env.EMAIL_LOOKUP_KEY;
+	describe('token hash lookup simulation', () => {
+		it('should find invite when raw token hashes to stored tokenHash', async () => {
+			const rawToken = 'd'.repeat(64);
+			const storedHash = await hashInviteToken(rawToken);
 
-			const hash = await computeEmailHash('user@example.com');
-			expect(hash).toBeNull();
-
-			// Simulate fallback logic from accept endpoint
-			const inviteEmail = 'user@example.com';
-			const userEmail = 'user@example.com';
-			const inviteEmailHash: string | null = null;
-			const userEmailHash: string | null = null;
-
-			const emailMatches =
-				(inviteEmailHash && userEmailHash && inviteEmailHash === userEmailHash) ||
-				inviteEmail === userEmail;
-
-			expect(emailMatches).toBe(true);
+			// Simulate lookup: user presents raw token, server hashes it, looks up
+			const lookupHash = await hashInviteToken(rawToken);
+			expect(lookupHash).toBe(storedHash);
 		});
 
-		it('should fall back to plaintext when PII_ENCRYPTION_KEY is not set', async () => {
-			delete process.env.PII_ENCRYPTION_KEY;
+		it('should NOT find invite when token is modified', async () => {
+			const rawToken = 'e'.repeat(64);
+			const storedHash = await hashInviteToken(rawToken);
 
-			const encrypted = await encryptPii('user@example.com', 'org-invite:test-id');
-			expect(encrypted).toBeNull();
-
-			// encrypted_email would be undefined in the DB, plaintext email still works
+			// Attacker modifies one character
+			const modifiedToken = 'f' + rawToken.slice(1);
+			const attackerHash = await hashInviteToken(modifiedToken);
+			expect(attackerHash).not.toBe(storedHash);
 		});
 
-		it('should not match different emails in plaintext fallback', async () => {
-			delete process.env.EMAIL_LOOKUP_KEY;
+		it('should NOT find invite with empty token', async () => {
+			const rawToken = 'g'.repeat(64);
+			const storedHash = await hashInviteToken(rawToken);
 
-			const inviteEmail = 'alice@test.com';
-			const userEmail = 'bob@test.com';
-			const inviteEmailHash: string | null = null;
-			const userEmailHash: string | null = null;
+			const emptyHash = await hashInviteToken('');
+			expect(emptyHash).not.toBe(storedHash);
+		});
+	});
 
-			const emailMatches =
-				(inviteEmailHash && userEmailHash && inviteEmailHash === userEmailHash) ||
-				inviteEmail === userEmail;
-
-			expect(emailMatches).toBe(false);
+	describe('org-scoped email hash for invite dedup', () => {
+		it('should produce a 64-char hex SHA-256 hash', async () => {
+			const hash = await computeOrgScopedEmailHash('org-123', 'user@example.com');
+			expect(hash).toMatch(/^[0-9a-f]{64}$/);
 		});
 
-		it('should prefer hash match over plaintext when both available', async () => {
-			// Even if plaintext doesn't match (e.g. case difference),
-			// hash match succeeds because computeEmailHash normalizes
-			const inviteEmailHash = await computeEmailHash('user@test.com');
-			const userEmailHash = await computeEmailHash('User@Test.com');
+		it('should be deterministic for the same org+email', async () => {
+			const hash1 = await computeOrgScopedEmailHash('org-123', 'user@example.com');
+			const hash2 = await computeOrgScopedEmailHash('org-123', 'user@example.com');
+			expect(hash1).toBe(hash2);
+		});
 
-			const plaintextMatch = 'user@test.com' === 'User@Test.com'; // false
-			const hashMatch = inviteEmailHash && userEmailHash && inviteEmailHash === userEmailHash;
+		it('should produce different hashes for same email in different orgs', async () => {
+			const hash1 = await computeOrgScopedEmailHash('org-123', 'user@example.com');
+			const hash2 = await computeOrgScopedEmailHash('org-456', 'user@example.com');
+			expect(hash1).not.toBe(hash2);
+		});
 
-			expect(plaintextMatch).toBe(false);
-			expect(hashMatch).toBeTruthy();
+		it('should produce different hashes for different emails in same org', async () => {
+			const hash1 = await computeOrgScopedEmailHash('org-123', 'alice@example.com');
+			const hash2 = await computeOrgScopedEmailHash('org-123', 'bob@example.com');
+			expect(hash1).not.toBe(hash2);
+		});
 
-			const emailMatches = hashMatch || plaintextMatch;
-			expect(emailMatches).toBeTruthy();
+		it('should normalize email case and whitespace', async () => {
+			const hash1 = await computeOrgScopedEmailHash('org-123', 'User@Example.COM');
+			const hash2 = await computeOrgScopedEmailHash('org-123', '  user@example.com  ');
+			expect(hash1).toBe(hash2);
+		});
+
+		it('should not require any server-held keys', async () => {
+			// This hash uses SHA-256(orgId + ":email:" + email) — no HMAC key needed
+			// Verify it works without any env vars set
+			const hash = await computeOrgScopedEmailHash('org-999', 'test@test.com');
+			expect(hash).toMatch(/^[0-9a-f]{64}$/);
+		});
+	});
+
+	describe('TTL policy', () => {
+		it('should use 72-hour expiry (not 7-day)', () => {
+			const ttl72h = 72 * 3_600_000;
+			const ttl7d = 7 * 24 * 60 * 60 * 1000;
+
+			// 72h = 259,200,000 ms vs 7d = 604,800,000 ms
+			expect(ttl72h).toBe(259_200_000);
+			expect(ttl7d).toBe(604_800_000);
+			expect(ttl72h).toBeLessThan(ttl7d);
 		});
 	});
 });

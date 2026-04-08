@@ -1,10 +1,8 @@
 /**
- * Supporter PII Encryption Tests (S-3)
+ * DEPRECATED: Supporter PII Encryption Tests (S-3)
  *
- * Validates:
- * - Info string is "supporter:{id}" (not orgId:email)
- * - tryDecryptSupporterEmail round-trips correctly
- * - Throws when encrypted_email is absent (post-backfill — no plaintext fallback)
+ * These test deprecated server-held PII encryption functions.
+ * Will be removed once all callers migrate to org-custodied encryption.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

@@ -18,6 +18,15 @@ const MAX_EMAIL_LENGTH = 254; // RFC 5321
 const MAX_ACTIVE_REPORTS_PER_USER = 10;
 const MIN_TRUST_TIER = 2; // Require address-verified identity
 
+/** Deterministic SHA-256 hash for bounce report dedup — no server-held key needed */
+async function hashEmail(email: string): Promise<string> {
+	const data = new TextEncoder().encode(email.trim().toLowerCase());
+	const hash = await crypto.subtle.digest('SHA-256', data);
+	return Array.from(new Uint8Array(hash))
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('');
+}
+
 export const POST: RequestHandler = async (event) => {
 	const session = event.locals.session;
 	const user = event.locals.user;
@@ -67,11 +76,15 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
+	// Compute deterministic hash for dedup — no server-held key
+	const emailHash = await hashEmail(email);
+	const domain = email.split('@')[1] ?? '';
+
 	// Deduplicate: same user can't report same email twice while unresolved
 	// Returns identical 202 to prevent resolution-state oracle
 	const existing = await serverQuery(api.email.findUnresolvedReport, {
 		userId: session.userId,
-		email
+		emailHash
 	});
 	if (existing) {
 		return new Response(
@@ -85,7 +98,8 @@ export const POST: RequestHandler = async (event) => {
 
 	try {
 		await serverMutation(api.email.createBounceReport, {
-			email,
+			emailHash,
+			domain,
 			reportedBy: session.userId
 		});
 

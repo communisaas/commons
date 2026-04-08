@@ -1,13 +1,12 @@
 /**
- * User PII Encryption at Rest (C-3)
+ * @deprecated Server-held PII encryption — migrating to client-custodied encryption.
  *
- * Encrypts email and name before storing in Postgres.
- * Uses Web Crypto API (CF Workers compatible) — AES-256-GCM with HKDF-derived per-user keys.
+ * Person-layer PII: client-custodied encryption (device key in IndexedDB).
+ * Org-layer PII: org-custodied encryption (passphrase-derived key, client decrypts).
  *
- * Key derivation: HKDF(PII_ENCRYPTION_KEY, userId, "commons-pii-encryption-v1")
- * Email lookup:   HMAC-SHA256(normalize(email), EMAIL_LOOKUP_KEY)
- *
- * Same pattern as oauth-token-encryption.ts but scoped to User PII.
+ * All functions in this file are deprecated. New code should use:
+ * - `client-pii.ts` for person-layer PII (client-side)
+ * - `org-scoped-hash.ts` for org-layer hashing
  */
 
 /** Encrypted PII field stored as JSON string in the database */
@@ -55,6 +54,7 @@ function normalizeEmail(email: string): string {
 }
 
 /**
+ * @deprecated Use org-scoped hashing. See `org-scoped-hash.ts`.
  * Compute a deterministic email hash for database lookups.
  * HMAC-SHA256(normalize(email), EMAIL_LOOKUP_KEY)
  *
@@ -121,11 +121,8 @@ async function derivePiiKey(masterKey: CryptoKey, userId: string): Promise<Crypt
 }
 
 /**
+ * @deprecated Server encryption being replaced by client-custodied encryption.
  * Encrypt a PII field (email or name) for database storage.
- *
- * Uses AES-256-GCM with Additional Authenticated Data (AAD) to bind ciphertext
- * to a specific entity and field, preventing column-confusion and cross-entity
- * ciphertext relocation attacks.
  *
  * @param plaintext - The raw PII string
  * @param userId - User ID for per-user key derivation
@@ -169,10 +166,8 @@ export async function encryptPii(
 }
 
 /**
+ * @deprecated Server decryption being replaced by client-custodied encryption.
  * Decrypt a PII field from database storage.
- *
- * Supports both legacy (no AAD) and new (AAD-bound) ciphertexts.
- * The `aad` flag in the encrypted object determines whether to use AAD.
  *
  * @param encrypted - The encrypted PII object (ciphertext + IV + optional AAD flag)
  * @param userId - User ID for per-user key derivation
@@ -210,8 +205,8 @@ export async function decryptPii(
 }
 
 /**
+ * @deprecated Server decryption being replaced by client-custodied encryption.
  * Try to decrypt a PII field, returning null on failure (wrong key, corrupted data).
- * Used during transition when some rows may have stale or invalid encrypted data.
  */
 export async function tryDecryptPii(
 	encrypted: EncryptedPii | null | undefined,
@@ -237,8 +232,8 @@ export interface UserPiiEncrypted {
 }
 
 /**
+ * @deprecated Server encryption being replaced by client-custodied encryption.
  * Encrypt user PII fields for database storage.
- * Returns JSON-serialized encrypted values ready for Prisma.
  */
 export async function encryptUserPii(
 	email: string,
@@ -259,8 +254,8 @@ export async function encryptUserPii(
 }
 
 /**
+ * @deprecated Server decryption being replaced by client-custodied encryption.
  * Decrypt user PII from database row.
- * Post-backfill: encrypted columns are authoritative — no plaintext fallback.
  */
 export async function decryptUserPii(
 	user: {
@@ -313,11 +308,9 @@ function normalizePhone(phone: string): string {
 }
 
 /**
+ * @deprecated Server-held HMAC being replaced by org-scoped hashing.
  * Compute a deterministic phone hash for database lookups.
  * HMAC-SHA256("phone:" + normalize(phone), EMAIL_LOOKUP_KEY)
- *
- * Domain-separated from email hashes ("phone:" prefix) to prevent
- * cross-type collisions despite sharing the same HMAC key.
  *
  * Returns null if EMAIL_LOOKUP_KEY is not configured.
  */
@@ -351,9 +344,8 @@ export async function computePhoneHash(phone: string): Promise<string | null> {
 // =============================================================================
 
 /**
+ * @deprecated Server decryption being replaced by org-custodied encryption.
  * Decrypt a supporter's encrypted email.
- * Post-backfill: encrypted_email is authoritative — no plaintext fallback.
- * Info string for supporter encryption is "supporter:{supporterId}".
  */
 export async function tryDecryptSupporterEmail(supporter: {
 	id: string;

@@ -1,8 +1,8 @@
 /**
- * User PII Encryption Tests (C-3)
+ * DEPRECATED: User PII Encryption Tests (C-3)
  *
- * Validates AES-256-GCM encryption at rest for user email/name,
- * and HMAC-SHA256 email hashing for lookups.
+ * These test deprecated server-held PII encryption functions.
+ * Will be removed once all callers migrate to client-custodied encryption.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
