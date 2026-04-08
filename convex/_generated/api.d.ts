@@ -9,11 +9,15 @@
  */
 
 import type * as _authHelpers from "../_authHelpers.js";
+import type * as _orgHash from "../_orgHash.js";
+import type * as _orgKey from "../_orgKey.js";
 import type * as _pii from "../_pii.js";
 import type * as _rateLimit from "../_rateLimit.js";
 import type * as analytics from "../analytics.js";
 import type * as authOps from "../authOps.js";
 import type * as backfill from "../backfill.js";
+import type * as blastCleanup from "../blastCleanup.js";
+import type * as blasts from "../blasts.js";
 import type * as calls from "../calls.js";
 import type * as campaigns from "../campaigns.js";
 import type * as crons from "../crons.js";
@@ -53,11 +57,15 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   _authHelpers: typeof _authHelpers;
+  _orgHash: typeof _orgHash;
+  _orgKey: typeof _orgKey;
   _pii: typeof _pii;
   _rateLimit: typeof _rateLimit;
   analytics: typeof analytics;
   authOps: typeof authOps;
   backfill: typeof backfill;
+  blastCleanup: typeof blastCleanup;
+  blasts: typeof blasts;
   calls: typeof calls;
   campaigns: typeof campaigns;
   crons: typeof crons;

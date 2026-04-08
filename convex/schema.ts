@@ -83,7 +83,8 @@ export default defineSchema({
     // PII encryption at rest
     encryptedEmail: v.string(),
     encryptedName: v.optional(v.string()),
-    emailHash: v.string(),
+    // Legacy — new accounts use identityCommitment for dedup
+    emailHash: v.optional(v.string()),
     encryptedProfile: v.optional(v.string()),
     // PII custody mode: "server" (operator-held key) or "client" (user-held key in IndexedDB)
     custodyMode: v.optional(v.string()),
@@ -924,6 +925,10 @@ export default defineSchema({
     logoUrl: v.optional(v.string()),
     isPublic: v.boolean(),
 
+    // Org-level PII encryption (passphrase-derived, multi-admin)
+    orgKeyVerifier: v.optional(v.string()),        // Sentinel encrypted with org key — verifies passphrase
+    recoveryWrappedOrgKey: v.optional(v.string()),  // Org key wrapped with recovery key — emergency recovery
+
     updatedAt: v.number(),
 
     // ── FLATTENED: AnSync settings ──
@@ -966,7 +971,7 @@ export default defineSchema({
   orgInvites: defineTable({
     orgId: v.id("organizations"),
     role: v.string(),
-    token: v.string(),
+    tokenHash: v.string(),
     expiresAt: v.number(),
     accepted: v.boolean(),
     invitedBy: v.string(),
@@ -976,7 +981,7 @@ export default defineSchema({
     emailHash: v.string(),
   })
     .index("by_orgId", ["orgId"])
-    .index("by_token", ["token"])
+    .index("by_tokenHash", ["tokenHash"])
     .index("by_emailHash", ["emailHash"]),
 
   orgResolvedContacts: defineTable({
@@ -1221,6 +1226,11 @@ export default defineSchema({
 
     sentAt: v.optional(v.number()),
     updatedAt: v.number(),
+
+    // Scheduled / TEE-sealed sends
+    scheduledAt: v.optional(v.number()),       // Future send time (epoch ms)
+    sealedOrgKey: v.optional(v.string()),      // Org key sealed to TEE public key, deleted after send
+    sendMode: v.optional(v.string()),          // 'client-direct' | 'tee-sealed'
 
     // A/B testing
     isAbTest: v.boolean(),
@@ -1915,6 +1925,16 @@ export default defineSchema({
     status: v.string(), // 'completed' | 'reviewed' | 'rejected' | 'failed'
   })
     .index("by_grantId", ["grantId"]),
+
+  notifications: defineTable({
+    userId: v.id("users"),
+    type: v.string(),
+    orgId: v.optional(v.id("organizations")),
+    message: v.string(),
+    read: v.boolean(),
+    createdAt: v.number(),
+  })
+    .index("by_userId", ["userId"]),
 
   delegationReviews: defineTable({
     grantId: v.id("delegationGrants"),

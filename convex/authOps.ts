@@ -38,7 +38,7 @@ export const upsertFromOAuth = mutation({
     // User data from provider
     encryptedEmail: v.string(),
     encryptedName: v.optional(v.string()),
-    emailHash: v.string(),
+    emailHash: v.optional(v.string()),
     avatar: v.optional(v.string()),
     emailVerified: v.boolean(),
 
@@ -79,11 +79,13 @@ export const upsertFromOAuth = mutation({
       return { userId: existingAccount.userId, isNew: false };
     }
 
-    // Step 2: Check for existing user by emailHash
-    const existingUser = await ctx.db
-      .query("users")
-      .withIndex("by_emailHash", (q) => q.eq("emailHash", args.emailHash))
-      .first();
+    // Step 2: Check for existing user by emailHash (legacy dedup for existing accounts)
+    const existingUser = args.emailHash
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_emailHash", (q) => q.eq("emailHash", args.emailHash))
+          .first()
+      : null;
 
     if (existingUser) {
       // Link OAuth account to existing user
@@ -119,7 +121,7 @@ export const upsertFromOAuth = mutation({
       avatar: args.avatar,
       encryptedEmail: args.encryptedEmail,
       encryptedName: args.encryptedName,
-      emailHash: args.emailHash,
+      ...(args.emailHash ? { emailHash: args.emailHash } : {}),
       updatedAt: now,
 
       // Verification
