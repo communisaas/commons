@@ -194,7 +194,7 @@ export const listSupporters = internalQuery({
     const items = page.slice(0, args.limit);
     const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
 
-    // Get tags for each supporter + decrypt customFields
+    // Get tags for each supporter — return encrypted blobs as-is (client decrypts)
     const supportersWithTags = await Promise.all(
       items.map(async (s) => {
         const tagLinks = await ctx.db
@@ -208,17 +208,7 @@ export const listSupporters = internalQuery({
           })
         );
 
-        // Decrypt customFields from encrypted blob
-        let customFields: unknown = null;
-        if (s.encryptedCustomFields) {
-          try {
-            const enc: EncryptedPii = JSON.parse(s.encryptedCustomFields);
-            const raw = await tryDecryptPii(enc, "supporter:" + s._id, "customFields");
-            if (raw) customFields = JSON.parse(raw);
-          } catch { /* corrupted — return null */ }
-        }
-
-        return { ...s, customFields, tags: tags.filter(Boolean) };
+        return { ...s, tags: tags.filter(Boolean) };
       })
     );
 
@@ -247,17 +237,8 @@ export const getSupporterById = internalQuery({
       })
     );
 
-    // Decrypt customFields from encrypted blob
-    let customFields: unknown = null;
-    if (supporter.encryptedCustomFields) {
-      try {
-        const enc: EncryptedPii = JSON.parse(supporter.encryptedCustomFields);
-        const raw = await tryDecryptPii(enc, "supporter:" + supporter._id, "customFields");
-        if (raw) customFields = JSON.parse(raw);
-      } catch { /* corrupted — return null */ }
-    }
-
-    return { ...supporter, customFields, tags: tags.filter(Boolean) };
+    // Return encrypted blobs as-is — client decrypts with org key
+    return { ...supporter, tags: tags.filter(Boolean) };
   },
 });
 

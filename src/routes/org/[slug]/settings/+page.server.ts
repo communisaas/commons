@@ -9,24 +9,13 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 
 	const data = await serverQuery(api.organizations.getSettingsData, { slug: params.slug });
 
-	// PII decryption for invites happens on SvelteKit side (encryption keys are server-only)
-	const invites = await Promise.all(
-		(data.invites ?? []).map(async (i: { _id: string; encryptedEmail: string; role: string; expiresAt: number }) => {
-			let email = '[encrypted]';
-			if (i.encryptedEmail) {
-				try {
-					const enc: EncryptedPii = JSON.parse(i.encryptedEmail);
-					email = await tryDecryptPii(enc, 'org-invite:' + i._id) ?? '[encrypted]';
-				} catch { /* decryption failed */ }
-			}
-			return {
-				id: i._id,
-				email,
-				role: i.role,
-				expiresAt: new Date(i.expiresAt).toISOString()
-			};
-		})
-	);
+	// Invite emails are client-encrypted — pass through as-is for client-side decryption
+	const invites = (data.invites ?? []).map((i: { _id: string; encryptedEmail: string; role: string; expiresAt: number }) => ({
+		id: i._id,
+		encryptedEmail: i.encryptedEmail,
+		role: i.role,
+		expiresAt: new Date(i.expiresAt).toISOString()
+	}));
 
 	return {
 		subscription: data.subscription

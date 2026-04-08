@@ -8,7 +8,8 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
-import { decryptSupporterEmail, computeEmailHash } from "./_pii";
+import { decryptSupporterEmail } from "./_pii";
+import { computeOrgScopedEmailHash } from "./_orgHash";
 
 // =============================================================================
 // EMAIL BLASTS — Queries, Mutations, Actions
@@ -119,6 +120,7 @@ export const createBlast = mutation({
     fromEmail: v.string(),
     recipientFilter: v.optional(v.any()),
     campaignId: v.optional(v.string()),
+    sendMode: v.optional(v.string()),
     isAbTest: v.optional(v.boolean()),
     abTestConfig: v.optional(v.any()),
     abVariant: v.optional(v.string()),
@@ -145,6 +147,7 @@ export const createBlast = mutation({
       totalComplained: 0,
       sentAt: undefined,
       updatedAt: Date.now(),
+      sendMode: args.sendMode,
       isAbTest: args.isAbTest ?? false,
       abTestConfig: args.abTestConfig,
       abVariant: args.abVariant,
@@ -209,8 +212,12 @@ export const recordEmailEvent = internalMutation({
     timestamp: v.number(),
   },
   handler: async (ctx, args) => {
-    // Compute deterministic email hash for dedup lookups (HMAC — safe in mutations)
-    const recipientEmailHash = await computeEmailHash(args.recipientEmail) ?? undefined;
+    // Org-scoped email hash for dedup — no server-held key
+    const blast = await ctx.db.get(args.blastId);
+    const orgId = blast?.orgId ? String(blast.orgId) : "";
+    const recipientEmailHash = orgId
+      ? await computeOrgScopedEmailHash(orgId, args.recipientEmail)
+      : undefined;
 
     await ctx.db.insert("emailEvents", {
       blastId: args.blastId,
@@ -221,14 +228,14 @@ export const recordEmailEvent = internalMutation({
       timestamp: args.timestamp,
     });
 
-    // Update aggregate counters on the blast
-    const blast = await ctx.db.get(args.blastId);
-    if (blast) {
+    // Update aggregate counters on the blast (re-fetch for latest counters)
+    const blastForCounters = await ctx.db.get(args.blastId);
+    if (blastForCounters) {
       const patch: Record<string, unknown> = {};
-      if (args.eventType === "open") patch.totalOpened = (blast.totalOpened || 0) + 1;
-      if (args.eventType === "click") patch.totalClicked = (blast.totalClicked || 0) + 1;
-      if (args.eventType === "bounce") patch.totalBounced = (blast.totalBounced || 0) + 1;
-      if (args.eventType === "complaint") patch.totalComplained = (blast.totalComplained || 0) + 1;
+      if (args.eventType === "open") patch.totalOpened = (blastForCounters.totalOpened || 0) + 1;
+      if (args.eventType === "click") patch.totalClicked = (blastForCounters.totalClicked || 0) + 1;
+      if (args.eventType === "bounce") patch.totalBounced = (blastForCounters.totalBounced || 0) + 1;
+      if (args.eventType === "complaint") patch.totalComplained = (blastForCounters.totalComplained || 0) + 1;
 
       if (Object.keys(patch).length > 0) {
         await ctx.db.patch(args.blastId, patch);
@@ -750,25 +757,17 @@ export const countActiveReports = query({
  * Uses emailHash for lookup instead of plaintext email.
  */
 export const findUnresolvedReport = query({
-  args: { userId: v.string(), email: v.string() },
-  handler: async (ctx, { userId, email }) => {
-    // Compute deterministic hash from email (HMAC — safe in queries)
-    const emailHash = await computeEmailHash(email);
-
-    if (emailHash) {
-      // Prefer hash-based lookup via index
-      const report = await ctx.db
-        .query("bounceReports")
-        .withIndex("by_emailHash_resolved", (q) =>
-          q.eq("emailHash", emailHash).eq("resolved", false),
-        )
-        .filter((q) => q.eq(q.field("reportedBy"), userId))
-        .first();
-      return report ? { _id: report._id } : null;
-    }
-
-    // EMAIL_LOOKUP_KEY not configured — cannot look up by hash
-    return null;
+  args: { userId: v.string(), emailHash: v.string() },
+  handler: async (ctx, { userId, emailHash }) => {
+    // Client sends pre-computed hash — no server-held key needed
+    const report = await ctx.db
+      .query("bounceReports")
+      .withIndex("by_emailHash_resolved", (q) =>
+        q.eq("emailHash", emailHash).eq("resolved", false),
+      )
+      .filter((q) => q.eq(q.field("reportedBy"), userId))
+      .first();
+    return report ? { _id: report._id } : null;
   },
 });
 
@@ -778,18 +777,13 @@ export const findUnresolvedReport = query({
  */
 export const createBounceReport = mutation({
   args: {
-    email: v.string(),
+    emailHash: v.string(),
+    domain: v.string(),
     reportedBy: v.string(),
   },
-  handler: async (ctx, { email, reportedBy }) => {
-    // Compute deterministic hash (HMAC — safe in mutations)
-    const emailHash = await computeEmailHash(email) ?? undefined;
-
-    // Extract domain from email
-    const domain = email.split("@")[1] ?? "";
-
+  handler: async (ctx, { emailHash, domain, reportedBy }) => {
     const id = await ctx.db.insert("bounceReports", {
-      emailHash: emailHash ?? "",
+      emailHash,
       domain,
       reportedBy,
       resolved: false,

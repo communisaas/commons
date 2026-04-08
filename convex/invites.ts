@@ -1,17 +1,17 @@
 /**
  * Org Invite CRUD — Convex queries, mutations, and actions.
  *
- * PII rules:
- *   READS  → decryptPii (deterministic) → safe in queries
- *   WRITES → encryptPii (random IV)     → must use actions
+ * PII model:
+ *   - Email hashing: org-scoped SHA-256, computed CLIENT-SIDE (no server key)
+ *   - Email encryption: client-provided blob (encrypted with org/device key)
+ *   - Server never sees plaintext email — only emailHash + encryptedEmail
  */
 
 import { query, mutation, action, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole, requireAuth } from "./_authHelpers";
-import { decryptPii, tryDecryptPii, encryptPii, computeEmailHash } from "./_pii";
-import type { EncryptedPii } from "./_pii";
+import { hashInviteToken } from "./_orgHash";
 
 // =============================================================================
 // QUERIES
@@ -19,7 +19,8 @@ import type { EncryptedPii } from "./_pii";
 
 /**
  * List pending (non-accepted, non-expired) invites for an org.
- * Decrypts email from PII. Requires editor+ role.
+ * Returns encrypted email blob as-is — org admin decrypts client-side.
+ * Requires editor+ role.
  */
 export const list = query({
   args: { slug: v.string() },
@@ -39,34 +40,29 @@ export const list = query({
     // Sort by expiresAt descending (newest first)
     activeInvites.sort((a, b) => b.expiresAt - a.expiresAt);
 
-    const invites = await Promise.all(
-      activeInvites.map(async (inv) => {
-        const enc: EncryptedPii = JSON.parse(inv.encryptedEmail);
-        const email = await tryDecryptPii(enc, "org-invite:" + inv._id);
-        if (!email) return null; // skip corrupted rows
-        return {
-          _id: inv._id,
-          email,
-          role: inv.role,
-          expiresAt: inv.expiresAt,
-        };
-      }),
-    );
-
-    return { invites: invites.filter((i): i is NonNullable<typeof i> => i !== null) };
+    return {
+      invites: activeInvites.map((inv) => ({
+        _id: inv._id,
+        encryptedEmail: inv.encryptedEmail,
+        role: inv.role,
+        expiresAt: inv.expiresAt,
+      })),
+    };
   },
 });
 
 /**
  * Get invite by token (for public invite acceptance page).
  * Does NOT require auth — needed before user logs in.
+ * Returns encrypted email blob — client decrypts if they have the key.
  */
 export const getByToken = query({
   args: { token: v.string() },
   handler: async (ctx, { token }) => {
+    const tokenH = await hashInviteToken(token);
     const invite = await ctx.db
       .query("orgInvites")
-      .withIndex("by_token", (q) => q.eq("token", token))
+      .withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenH))
       .first();
 
     if (!invite) return null;
@@ -74,18 +70,13 @@ export const getByToken = query({
     const org = await ctx.db.get(invite.orgId);
     if (!org) return null;
 
-    // Decrypt email for display
-    const enc: EncryptedPii = JSON.parse(invite.encryptedEmail);
-    const email = await tryDecryptPii(enc, "org-invite:" + invite._id);
-
     return {
       _id: invite._id,
-      token: invite.token,
       accepted: invite.accepted,
       expiresAt: invite.expiresAt,
       role: invite.role,
       emailHash: invite.emailHash,
-      email: email ?? null,
+      encryptedEmail: invite.encryptedEmail,
       orgName: org.name,
       orgSlug: org.slug,
       orgAvatar: org.avatar ?? null,
@@ -95,7 +86,7 @@ export const getByToken = query({
 });
 
 // =============================================================================
-// ACTIONS (non-deterministic PII encryption — random IV)
+// ACTIONS (non-deterministic token generation)
 // =============================================================================
 
 function generateToken(): string {
@@ -105,15 +96,18 @@ function generateToken(): string {
 }
 
 /**
- * Create invites for an org. Action because email encryption uses random IV.
- * Three-step: action encrypts → internalMutation inserts.
+ * Create invites for an org. Action because token generation is non-deterministic.
+ *
+ * Client sends pre-computed { emailHash, encryptedEmail, role } — no plaintext
+ * email reaches the server. emailHash is org-scoped SHA-256 for dedup.
  */
 export const create = action({
   args: {
     slug: v.string(),
     invites: v.array(
       v.object({
-        email: v.string(),
+        emailHash: v.string(),
+        encryptedEmail: v.string(),
         role: v.optional(v.string()),
       }),
     ),
@@ -132,60 +126,67 @@ export const create = action({
     const validRoles = ["editor", "member"];
     const cleaned = args.invites
       .map((inv) => ({
-        email: inv.email?.trim().toLowerCase() ?? "",
+        emailHash: inv.emailHash,
+        encryptedEmail: inv.encryptedEmail,
         role: validRoles.includes(inv.role ?? "") ? inv.role! : "member",
       }))
-      .filter((inv) => inv.email && inv.email.includes("@"));
+      .filter((inv) => inv.emailHash && inv.encryptedEmail);
 
     if (cleaned.length === 0) {
-      throw new Error("No valid email addresses provided");
+      throw new Error("No valid invites provided");
     }
 
-    // Compute email hashes for all invites
-    const emailHashes = await Promise.all(
-      cleaned.map((inv) => computeEmailHash(inv.email)),
-    );
-
-    // Encrypt each invite email
-    const encryptedInvites: Array<{
-      email: string;
-      role: string;
-      encryptedEmail: string;
+    // Generate tokens, hash for at-rest storage
+    const prepared: Array<{
       emailHash: string;
-      token: string;
+      encryptedEmail: string;
+      role: string;
+      tokenHash: string;
+      rawToken: string;
     }> = [];
 
-    for (let i = 0; i < cleaned.length; i++) {
-      const inv = cleaned[i];
-      const hash = emailHashes[i];
-      if (!hash) throw new Error("Encryption service not available");
-
-      const inviteId = crypto.randomUUID();
-      const enc = await encryptPii(inv.email, "org-invite:" + inviteId);
+    for (const inv of cleaned) {
       const token = generateToken();
+      const tokenH = await hashInviteToken(token);
 
-      encryptedInvites.push({
-        email: inv.email,
+      prepared.push({
+        emailHash: inv.emailHash,
+        encryptedEmail: inv.encryptedEmail,
         role: inv.role,
-        encryptedEmail: JSON.stringify(enc),
-        emailHash: hash,
-        token,
+        tokenHash: tokenH,
+        rawToken: token,
       });
     }
 
     // Delegate to internal mutation for the actual inserts
     const results = await ctx.runMutation(internal.invites.insertInvites, {
       slug: args.slug,
-      invites: encryptedInvites,
+      invites: prepared.map((inv) => ({
+        emailHash: inv.emailHash,
+        encryptedEmail: inv.encryptedEmail,
+        role: inv.role,
+        tokenHash: inv.tokenHash,
+      })),
     });
 
-    return results;
+    // Return raw tokens to the admin for invite URLs
+    return {
+      ...results,
+      tokens: prepared
+        .filter((inv) =>
+          results.results.some(
+            (r: { emailHash: string; status: string }) =>
+              r.emailHash === inv.emailHash && r.status === "sent",
+          ),
+        )
+        .map((inv) => ({ emailHash: inv.emailHash, token: inv.rawToken })),
+    };
   },
 });
 
 /**
  * Resend a pending invite (regenerate token + reset expiry). Action because
- * we need to decrypt email for the response.
+ * token generation is non-deterministic.
  */
 export const resend = action({
   args: {
@@ -197,26 +198,23 @@ export const resend = action({
     if (!identity) throw new Error("Not authenticated");
 
     const token = generateToken();
-    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
+    const tokenH = await hashInviteToken(token);
+    const expiresAt = Date.now() + 72 * 3_600_000; // 72 hours
 
     const invite = await ctx.runMutation(internal.invites.resendInvite, {
       slug: args.slug,
       inviteId: args.inviteId,
-      token,
+      tokenHash: tokenH,
       expiresAt,
     });
-
-    // Decrypt email for response
-    const enc: EncryptedPii = JSON.parse(invite.encryptedEmail);
-    const email = await tryDecryptPii(enc, "org-invite:" + invite._id);
-    if (!email) throw new Error("Invite PII decryption failed — cannot confirm resend");
 
     return {
       invite: {
         _id: invite._id,
-        email,
+        encryptedEmail: invite.encryptedEmail,
         role: invite.role,
         expiresAt: invite.expiresAt,
+        token, // raw token for the new invite URL
       },
     };
   },
@@ -257,6 +255,32 @@ export const remove = mutation({
 });
 
 /**
+ * Revoke a pending invite by ID. Requires editor+ role.
+ * Hard-deletes the invite row — the hashed token becomes unlookupable.
+ */
+export const revoke = mutation({
+  args: { inviteId: v.id("orgInvites") },
+  handler: async (ctx, args) => {
+    await requireAuth(ctx);
+
+    const invite = await ctx.db.get(args.inviteId);
+    if (!invite) throw new Error("Invite not found");
+
+    // Verify caller has editor+ role on the invite's org
+    const org = await ctx.db.get(invite.orgId);
+    if (!org) throw new Error("Organization not found");
+    await requireOrgRole(ctx, org.slug, "editor");
+
+    if (invite.accepted) {
+      throw new Error("Cannot revoke an already-accepted invite");
+    }
+
+    await ctx.db.delete(invite._id);
+    return { ok: true };
+  },
+});
+
+/**
  * Accept an invite. Creates orgMembership, marks invite accepted.
  */
 export const accept = mutation({
@@ -266,9 +290,10 @@ export const accept = mutation({
   handler: async (ctx, { token }) => {
     const { userId } = await requireAuth(ctx);
 
+    const tokenH = await hashInviteToken(token);
     const invite = await ctx.db
       .query("orgInvites")
-      .withIndex("by_token", (q) => q.eq("token", token))
+      .withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenH))
       .first();
 
     if (!invite) throw new Error("Invite not found");
@@ -319,6 +344,23 @@ export const accept = mutation({
       });
     }
 
+    // Notify org owners of new member
+    const orgMembers = await ctx.db
+      .query("orgMemberships")
+      .withIndex("by_orgId", (q) => q.eq("orgId", invite.orgId))
+      .collect();
+    const owners = orgMembers.filter((m) => m.role === "owner");
+    for (const owner of owners) {
+      await ctx.db.insert("notifications", {
+        userId: owner.userId,
+        type: "invite_accepted",
+        orgId: invite.orgId,
+        message: "A new member joined your organization",
+        read: false,
+        createdAt: now,
+      });
+    }
+
     return { ok: true };
   },
 });
@@ -328,18 +370,22 @@ export const accept = mutation({
 // =============================================================================
 
 /**
- * Insert invite rows after action has encrypted emails.
+ * Insert invite rows after action has generated token hashes.
+ *
+ * Dedup: checks new invites against existing pending invites by emailHash.
+ * Member dedup is skipped — existing members use the old HMAC format which
+ * won't match org-scoped SHA-256 hashes. Will be fixed when member emailHash
+ * is migrated to org-scoped format.
  */
 export const insertInvites = internalMutation({
   args: {
     slug: v.string(),
     invites: v.array(
       v.object({
-        email: v.string(),
-        role: v.string(),
-        encryptedEmail: v.string(),
         emailHash: v.string(),
-        token: v.string(),
+        encryptedEmail: v.string(),
+        role: v.string(),
+        tokenHash: v.string(),
       }),
     ),
   },
@@ -370,43 +416,41 @@ export const insertInvites = internalMutation({
       );
     }
 
-    // Build skip sets from existing members and invites by email hash
-    const memberEmailHashes = new Set<string>();
-    // We need to look up users for their email hashes
-    for (const m of memberships) {
-      const user = await ctx.db.get(m.userId);
-      if (user?.emailHash) memberEmailHashes.add(user.emailHash);
-    }
-
+    // Dedup against existing pending invites by org-scoped emailHash
     const invitedEmailHashes = new Set(
       pendingInvites.map((i) => i.emailHash),
     );
 
-    const expiresAt = now + 7 * 24 * 60 * 60 * 1000; // 7 days
+    // Also dedup within the current batch
+    const batchSeen = new Set<string>();
 
-    const results: Array<{ email: string; status: "sent" | "skipped" }> = [];
+    const expiresAt = now + 72 * 3_600_000; // 72 hours
+
+    const results: Array<{ emailHash: string; status: "sent" | "skipped" }> = [];
 
     for (const inv of args.invites) {
       if (
-        memberEmailHashes.has(inv.emailHash) ||
-        invitedEmailHashes.has(inv.emailHash)
+        invitedEmailHashes.has(inv.emailHash) ||
+        batchSeen.has(inv.emailHash)
       ) {
-        results.push({ email: inv.email, status: "skipped" });
+        results.push({ emailHash: inv.emailHash, status: "skipped" });
         continue;
       }
+
+      batchSeen.add(inv.emailHash);
 
       await ctx.db.insert("orgInvites", {
         orgId: org._id,
         encryptedEmail: inv.encryptedEmail,
         emailHash: inv.emailHash,
         role: inv.role,
-        token: inv.token,
+        tokenHash: inv.tokenHash,
         expiresAt,
         accepted: false,
         invitedBy: String(userId),
       });
 
-      results.push({ email: inv.email, status: "sent" });
+      results.push({ emailHash: inv.emailHash, status: "sent" });
     }
 
     const sent = results.filter((r) => r.status === "sent").length;
@@ -421,7 +465,7 @@ export const resendInvite = internalMutation({
   args: {
     slug: v.string(),
     inviteId: v.string(),
-    token: v.string(),
+    tokenHash: v.string(),
     expiresAt: v.number(),
   },
   handler: async (ctx, args) => {
@@ -441,7 +485,7 @@ export const resendInvite = internalMutation({
     if (!invite) throw new Error("Invite not found");
 
     await ctx.db.patch(invite._id, {
-      token: args.token,
+      tokenHash: args.tokenHash,
       expiresAt: args.expiresAt,
     });
 

@@ -976,3 +976,16 @@ export const updateStripeCustomerId = mutation({
     await ctx.db.patch(orgId, { stripeCustomerId } as any);
   },
 });
+
+/**
+ * Get the org key verifier for passphrase validation.
+ * Used by client-direct blast flow to verify the admin's passphrase.
+ * Requires editor+ role.
+ */
+export const getOrgKeyVerifier = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { org } = await requireOrgRole(ctx, slug, "editor");
+    return { orgKeyVerifier: org.orgKeyVerifier ?? null };
+  },
+});

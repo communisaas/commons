@@ -8,7 +8,7 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
-import { encryptPii, computeEmailHash, tryDecryptPii, type EncryptedPii } from "./_pii";
+import { computeOrgScopedEmailHash } from "./_orgHash";
 
 // =============================================================================
 // EVENTS — Queries, Mutations, Actions
@@ -65,6 +65,7 @@ export const getPublic = query({
 
     return {
       _id: event._id,
+      orgId: event.orgId,
       title: event.title,
       description: event.description ?? null,
       eventType: event.eventType,
@@ -146,23 +147,8 @@ export const getRsvps = query({
       cursor: args.paginationOpts.cursor ?? null,
     });
 
-    // Decrypt names from encryptedRsvpName — no plaintext fallback
-    const decryptedPage = await Promise.all(
-      results.page.map(async (rsvp) => {
-        if (rsvp.encryptedRsvpName) {
-          try {
-            const enc: EncryptedPii = JSON.parse(rsvp.encryptedRsvpName);
-            const decryptedName = await tryDecryptPii(enc, `rsvp:${rsvp._id}`, "name");
-            return { ...rsvp, name: decryptedName ?? null };
-          } catch {
-            // JSON parse failure — name stays null
-          }
-        }
-        return { ...rsvp, name: null };
-      }),
-    );
-
-    return { ...results, page: decryptedPage };
+    // Names are client-encrypted blobs — return as-is for client-side decryption
+    return results;
   },
 });
 
@@ -434,18 +420,6 @@ export const createRsvp = action({
     supporterId: v.optional(v.id("supporters")),
   },
   handler: async (ctx, args) => {
-    // Rate limit: 10 RSVPs per minute per event (spam prevention)
-    // Rate limit per email+event (not shared across all users)
-    // Compute email hash for rate limit key (no plaintext in stored keys)
-    const rlEmailHash = args.email ? await computeEmailHash(args.email) : null;
-    const rlKey = `events.createRsvp:${args.eventId}:${rlEmailHash?.slice(0, 16) ?? 'anon'}`;
-    const rl = await ctx.runMutation(internal._rateLimit.check, {
-      key: rlKey,
-      windowMs: 60_000,
-      maxRequests: 10,
-    });
-    if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
-
     // Verify event exists and is accepting RSVPs
     const event = await ctx.runQuery(internal.events.getEventInternal, { eventId: args.eventId });
     if (!event) throw new Error("Event not found");
@@ -454,38 +428,32 @@ export const createRsvp = action({
       throw new Error("Event is at capacity");
     }
 
-    // Compute email hash first
-    const emailHash = await computeEmailHash(args.email.toLowerCase());
-    if (!emailHash) {
-      console.error("[events.createRsvp] EMAIL_LOOKUP_KEY not configured");
-      throw new Error("Encryption service not available");
-    }
+    // Org-scoped email hash for dedup — no server-held key
+    const orgId = String(event.orgId);
+    const emailHash = await computeOrgScopedEmailHash(orgId, args.email);
 
-    // Pre-encrypt name in action context (random IV requires action)
-    const encryptedNameObj = await encryptPii(args.name.trim(), `rsvp:placeholder`, "name");
-    const encryptedRsvpName = JSON.stringify(encryptedNameObj);
+    // Rate limit per email+event (use org-scoped hash prefix, no plaintext in stored keys)
+    const rlKey = `events.createRsvp:${args.eventId}:${emailHash.slice(0, 16)}`;
+    const rl = await ctx.runMutation(internal._rateLimit.check, {
+      key: rlKey,
+      windowMs: 60_000,
+      maxRequests: 10,
+    });
+    if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
 
-    // Insert with placeholder, encrypt with real _id, then patch (same pattern as supporters)
+    // Public RSVP flow — no device keys available.
+    // Store org-scoped hash only; org already has the RSVP list.
     const result = await ctx.runMutation(internal.events.insertRsvp, {
       eventId: args.eventId,
       supporterId: args.supporterId,
-      encryptedEmail: "",  // placeholder — patched below
+      encryptedEmail: "",  // no server encryption — org-scoped hash is sufficient for public RSVPs
       emailHash,
       name: args.name.trim(),
-      encryptedRsvpName,
+      encryptedRsvpName: undefined,
       status: args.status || "GOING",
       guestCount: args.guestCount ?? 1,
       districtHash: args.districtHash,
       engagementTier: args.engagementTier ?? 0,
-    });
-
-    // Now encrypt with the real Convex _id as key context
-    const encrypted = await encryptPii(args.email.toLowerCase(), `rsvp:${result.id}`, "email");
-    const encryptedNameFinal = await encryptPii(args.name.trim(), `rsvp:${result.id}`, "name");
-    await ctx.runMutation(internal.events.patchRsvpEmail, {
-      rsvpId: result.id,
-      encryptedEmail: JSON.stringify(encrypted),
-      encryptedRsvpName: JSON.stringify(encryptedNameFinal),
     });
 
     return result;

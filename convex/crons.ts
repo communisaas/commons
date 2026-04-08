@@ -143,4 +143,24 @@ crons.daily(
   internal.resolvedContacts.cleanupExpired,
 );
 
+// ---------------------------------------------------------------------------
+// 12. Process Scheduled Blasts — trigger TEE-sealed blasts whose time has come
+//     Runs every 1 minute.
+// ---------------------------------------------------------------------------
+crons.interval(
+  "process-scheduled-blasts",
+  { minutes: 1 },
+  internal.blasts.processScheduledBlasts,
+);
+
+// ---------------------------------------------------------------------------
+// 13. Cleanup Stale Sealed Keys — clear sealedOrgKey on stuck blasts (24h TTL)
+//     Runs every 1 hour.
+// ---------------------------------------------------------------------------
+crons.interval(
+  "cleanup-sealed-keys",
+  { hours: 1 },
+  internal.blastCleanup.cleanupStaleSealedKeys,
+);
+
 export default crons;

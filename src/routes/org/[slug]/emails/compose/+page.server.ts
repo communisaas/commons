@@ -27,14 +27,15 @@ function requireRole(role: string, required: string): void {
 export const load: PageServerLoad = async ({ parent, params }) => {
 	const { org } = await parent();
 
-	const [convexCampaigns, convexSupporterStats, convexTags, sub] = await Promise.all([
+	const [convexCampaigns, convexSupporterStats, convexTags, sub, orgKeyResult] = await Promise.all([
 		serverQuery(api.campaigns.list, {
 			slug: params.slug,
 			paginationOpts: { numItems: 50, cursor: null }
 		}),
 		serverQuery(api.supporters.getSummaryStats, { orgSlug: params.slug }),
 		serverQuery(api.supporters.getTags, { orgSlug: params.slug }),
-		serverQuery(api.subscriptions.getByOrg, { slug: params.slug })
+		serverQuery(api.subscriptions.getByOrg, { slug: params.slug }),
+		serverQuery(api.organizations.getOrgKeyVerifier, { slug: params.slug })
 	]);
 
 	// A/B testing allowed if org has starter+ plan
@@ -48,7 +49,8 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 		})),
 		tags: (convexTags ?? []).map((t: Record<string, unknown>) => ({ id: t._id ?? t.id, name: t.name })),
 		subscribedCount: convexSupporterStats.emailHealth?.subscribed ?? 0,
-		abTestingAllowed
+		abTestingAllowed,
+		orgKeyVerifier: orgKeyResult?.orgKeyVerifier ?? null
 	};
 };
 
@@ -292,5 +294,66 @@ export const actions: Actions = {
 		});
 
 		throw redirect(302, `/org/${params.slug}/emails`);
+	},
+
+	createClientDraft: async ({ request, params, locals }) => {
+		if (!locals.user) {
+			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/emails/compose`);
+		}
+		const ctx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
+		requireRole(ctx.membership.role, 'editor');
+
+		const sendLimit = await getRateLimiter().check(`ratelimit:compose:send:org:${ctx.org._id}`, {
+			maxRequests: 5,
+			windowMs: 60 * 60_000
+		});
+		if (!sendLimit.allowed) {
+			return fail(429, { error: 'Too many requests. Try again later.' });
+		}
+
+		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+		if (limits?.current && (limits.current as any).emailsSent >= (limits.limits as any).maxEmails) {
+			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
+		}
+
+		const formData = await request.formData();
+		const rawSubject = formData.get('subject')?.toString().trim();
+		const subject = rawSubject?.replace(/[\r\n\x00-\x1f\x7f]/g, '').slice(0, 998);
+		const rawBodyHtml = formData.get('bodyHtml')?.toString();
+		const rawFromName = formData.get('fromName')?.toString().trim() || ctx.org.name;
+		const fromName = rawFromName.replace(/[\x00-\x1f\x7f<>"]/g, '').slice(0, 64);
+		if (!fromName) return fail(400, { error: 'From name is required' });
+		const fromEmail = `${ctx.org.slug}@commons.email`;
+		const campaignId = formData.get('campaignId')?.toString() || null;
+
+		if (!subject) return fail(400, { error: 'Subject is required' });
+		if (!rawBodyHtml) return fail(400, { error: 'Email body is required' });
+		const bodyHtml = sanitizeEmailBody(rawBodyHtml);
+
+		if (campaignId) {
+			const campaign = await serverQuery(api.campaigns.get, { campaignId: campaignId as any });
+			if (!campaign) return fail(400, { error: 'Invalid campaign selection' });
+		}
+
+		// Create blast record as draft with client-direct send mode
+		const result = await serverMutation(api.email.createBlast, {
+			orgSlug: params.slug,
+			subject,
+			bodyHtml,
+			fromName,
+			fromEmail,
+			sendMode: 'client-direct',
+			recipientFilter: parseFilter(formData),
+			campaignId: campaignId ?? undefined
+		});
+
+		return {
+			blastId: result.id,
+			orgId: ctx.org._id,
+			fromEmail,
+			fromName,
+			subject,
+			bodyHtml
+		};
 	}
 };

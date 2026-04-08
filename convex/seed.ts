@@ -33,6 +33,8 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+// TODO: Update seed to use org-key encryption once all callers migrate away from server-held PII keys.
+// Currently uses computeEmailHash for user lookups (person-layer), which requires EMAIL_LOOKUP_KEY.
 import { computeEmailHash } from "./_pii";
 
 // =============================================================================

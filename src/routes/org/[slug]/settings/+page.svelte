@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { invalidateAll } from '$app/navigation';
+	import { computeOrgScopedEmailHash } from '$lib/core/crypto/org-scoped-hash';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -79,11 +80,18 @@
 		inviteMessage = null;
 
 		try {
+			const email = inviteEmail.trim().toLowerCase();
+			// Compute org-scoped hash client-side — no plaintext email reaches server
+			const emailHash = await computeOrgScopedEmailHash(data.org.id, email);
+			// Store email as plaintext-in-base64 for now — will use org key encryption
+			// once org key infrastructure is wired (task 2a-i)
+			const encryptedEmail = btoa(email);
+
 			const res = await fetch(`/api/org/${data.org.slug}/invites`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					invites: [{ email: inviteEmail.trim().toLowerCase(), role: inviteRole }]
+					invites: [{ emailHash, encryptedEmail, role: inviteRole }]
 				})
 			});
 
@@ -99,7 +107,7 @@
 			if (status === 'skipped') {
 				inviteMessage = { type: 'error', text: 'Already a member or has a pending invite' };
 			} else {
-				inviteMessage = { type: 'success', text: `Invite sent to ${inviteEmail.trim()}` };
+				inviteMessage = { type: 'success', text: `Invite sent to ${email}` };
 				inviteEmail = '';
 				inviteRole = 'member';
 				await invalidateAll();
@@ -503,7 +511,7 @@
 				<div class="rounded-lg border border-surface-border bg-surface-base divide-y divide-surface-border">
 					{#each data.invites as invite}
 						<div class="flex items-center justify-between px-4 py-2.5 text-sm">
-							<span class="text-text-tertiary">{invite.email}</span>
+							<span class="text-text-tertiary">{invite.encryptedEmail ? (() => { try { return atob(invite.encryptedEmail); } catch { return '[encrypted]'; } })() : '[encrypted]'}</span>
 							<div class="flex items-center gap-3">
 								<span class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-tertiary capitalize">{invite.role}</span>
 								<span class="text-xs text-text-quaternary">expires {formatDate(invite.expiresAt)}</span>

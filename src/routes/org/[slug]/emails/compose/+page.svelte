@@ -2,10 +2,13 @@
 	import { onDestroy } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
+	import { env } from '$env/dynamic/public';
 	import SegmentBuilder from '$lib/components/segments/SegmentBuilder.svelte';
 	import type { SegmentFilter } from '$lib/types/segment';
 	import type { PageData, ActionData } from './$types';
 	import type { Editor as EditorType } from '@tiptap/core';
+	import type { BlastProgress } from '$lib/services/client-blast-sender';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -20,6 +23,18 @@
 	let countLoading = $state(false);
 	let sending = $state(false);
 	let showPreview = $state(false);
+
+	// Client-direct send state
+	const CLIENT_DIRECT_THRESHOLD = 500;
+	let showPassphraseDialog = $state(false);
+	let passphrase = $state('');
+	let passphraseError = $state('');
+	let blastProgress = $state<BlastProgress | null>(null);
+	let blastResult = $state<{ sent: number; failed: number; errors: Array<{ emailHash: string; error: string }> } | null>(null);
+	let pendingBlastData = $state<{ blastId: string; orgId: string; fromEmail: string; fromName: string; subject: string; bodyHtml: string } | null>(null);
+
+	const useClientDirect = $derived(recipientCount < CLIENT_DIRECT_THRESHOLD && recipientCount > 0);
+	const hasOrgKey = $derived(!!data.orgKeyVerifier);
 
 	// Segment builder state
 	let useSegmentBuilder = $state(false);
@@ -250,6 +265,115 @@
 
 	// Tiptap outputs <p></p> for empty content, so check for real content
 	const hasBody = $derived(bodyHtml.replace(/<[^>]*>/g, '').trim().length > 0);
+
+	async function startClientDirectSend(blastData: typeof pendingBlastData) {
+		if (!blastData) return;
+
+		const { getOrPromptOrgKey } = await import('$lib/services/org-key-manager');
+
+		// Try cached org key first
+		let orgKey = data.orgKeyVerifier
+			? await getOrPromptOrgKey(data.org.id, data.orgKeyVerifier)
+			: null;
+
+		if (!orgKey) {
+			// Need passphrase — show dialog and wait
+			pendingBlastData = blastData;
+			showPassphraseDialog = true;
+			return;
+		}
+
+		await executeClientSend(orgKey, blastData);
+	}
+
+	async function onPassphraseSubmit() {
+		if (!passphrase.trim() || !pendingBlastData || !data.orgKeyVerifier) return;
+
+		passphraseError = '';
+
+		try {
+			const { deriveAndCacheOrgKey } = await import('$lib/services/org-key-manager');
+			const orgKey = await deriveAndCacheOrgKey(passphrase, data.org.id, data.orgKeyVerifier);
+
+			if (!orgKey) {
+				passphraseError = 'Wrong passphrase. Please try again.';
+				return;
+			}
+
+			showPassphraseDialog = false;
+			passphrase = '';
+			await executeClientSend(orgKey, pendingBlastData);
+		} catch (err) {
+			passphraseError = err instanceof Error ? err.message : 'Key derivation failed';
+		}
+	}
+
+	async function executeClientSend(orgKey: CryptoKey, blastData: NonNullable<typeof pendingBlastData>) {
+		const { sendBlastFromClient } = await import('$lib/services/client-blast-sender');
+		const { useConvexClient } = await import('convex-sveltekit');
+		const { api } = await import('$lib/convex');
+
+		const convex = useConvexClient();
+
+		sending = true;
+		blastProgress = { total: 0, sent: 0, failed: 0, currentBatch: 0, totalBatches: 0, status: 'fetching-credentials' };
+
+		try {
+			// Fetch encrypted supporters via Convex client
+			const supporters = await convex.query(api.blasts.getEncryptedSupportersForBlast, {
+				orgSlug: data.org.slug
+			});
+
+			// Update blast to sending
+			await convex.mutation(api.blasts.updateClientBlastProgress, {
+				orgSlug: data.org.slug,
+				blastId: blastData.blastId as any,
+				status: 'sending',
+				totalSent: 0,
+				totalBounced: 0,
+				totalRecipients: supporters.length
+			});
+
+			const result = await sendBlastFromClient({
+				orgSlug: data.org.slug,
+				orgId: blastData.orgId,
+				blastId: blastData.blastId,
+				orgKey,
+				subject: blastData.subject,
+				bodyHtml: blastData.bodyHtml,
+				fromEmail: blastData.fromEmail,
+				fromName: blastData.fromName,
+				lambdaUrl: env.PUBLIC_SES_PROXY_URL || '',
+				encryptedSupporters: supporters,
+				onProgress: (p) => { blastProgress = p; }
+			});
+
+			// Finalize blast status
+			await convex.mutation(api.blasts.updateClientBlastProgress, {
+				orgSlug: data.org.slug,
+				blastId: blastData.blastId as any,
+				status: result.failed === result.total ? 'failed' : 'sent',
+				totalSent: result.sent,
+				totalBounced: result.failed,
+				totalRecipients: result.total
+			});
+
+			blastResult = result;
+
+			// Clear draft
+			if (browser) { try { localStorage.removeItem(draftKey); } catch {} }
+		} catch (err) {
+			blastProgress = { ...blastProgress!, status: 'error' };
+			blastResult = {
+				sent: blastProgress?.sent ?? 0,
+				failed: blastProgress?.total ?? 0,
+				errors: [{ emailHash: '', error: err instanceof Error ? err.message : 'Send failed' }]
+			};
+		} finally {
+			sending = false;
+			pendingBlastData = null;
+		}
+	}
 </script>
 
 <div class="space-y-6">
@@ -325,6 +449,52 @@
 						sandbox=""
 					></iframe>
 				</div>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Passphrase dialog for client-direct send -->
+	{#if showPassphraseDialog}
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+			<div class="w-full max-w-sm rounded-xl border border-surface-border-strong bg-surface-raised p-6 space-y-4">
+				<div>
+					<h3 class="text-base font-semibold text-text-primary">Enter organization passphrase</h3>
+					<p class="text-sm text-text-tertiary mt-1">
+						Your passphrase decrypts supporter emails in this browser. It is never sent to our servers.
+					</p>
+				</div>
+
+				{#if passphraseError}
+					<div class="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+						{passphraseError}
+					</div>
+				{/if}
+
+				<form onsubmit={(e) => { e.preventDefault(); onPassphraseSubmit(); }}>
+					<input
+						type="password"
+						bind:value={passphrase}
+						placeholder="Organization passphrase"
+						class="w-full rounded-lg border border-surface-border-strong bg-surface-base px-3 py-2 text-sm text-text-primary placeholder-text-quaternary focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+						autofocus
+					/>
+					<div class="flex gap-3 mt-4">
+						<button
+							type="button"
+							class="flex-1 rounded-lg border border-surface-border-strong bg-surface-overlay px-4 py-2.5 text-sm font-medium text-text-primary hover:bg-surface-overlay hover:border-text-quaternary transition-colors"
+							onclick={() => { showPassphraseDialog = false; passphrase = ''; passphraseError = ''; pendingBlastData = null; }}
+						>
+							Cancel
+						</button>
+						<button
+							type="submit"
+							class="flex-1 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors disabled:opacity-50"
+							disabled={!passphrase.trim()}
+						>
+							Unlock & Send
+						</button>
+					</div>
+				</form>
 			</div>
 		</div>
 	{/if}
@@ -825,8 +995,101 @@
 							{/if}
 						</button>
 					</form>
+				{:else if useClientDirect && hasOrgKey}
+					<!-- Client-Direct Send (<500 recipients, org key configured) -->
+					{#if blastProgress && sending}
+						<!-- Progress indicator -->
+						<div class="space-y-3">
+							<div class="flex items-center justify-between text-sm">
+								<span class="text-text-secondary">
+									{#if blastProgress.status === 'fetching-credentials'}
+										Preparing credentials...
+									{:else if blastProgress.status === 'decrypting'}
+										Decrypting emails...
+									{:else if blastProgress.status === 'sending'}
+										Sending batch {blastProgress.currentBatch}/{blastProgress.totalBatches}...
+									{:else if blastProgress.status === 'complete'}
+										Complete
+									{:else}
+										Error
+									{/if}
+								</span>
+								<span class="font-mono text-text-tertiary text-xs">
+									{blastProgress.sent} sent, {blastProgress.failed} failed / {blastProgress.total}
+								</span>
+							</div>
+							<div class="w-full bg-surface-border-strong rounded-full h-2">
+								<div
+									class="h-2 rounded-full transition-all duration-300 {blastProgress.failed > 0 ? 'bg-amber-500' : 'bg-teal-500'}"
+									style="width: {blastProgress.total > 0 ? Math.round(((blastProgress.sent + blastProgress.failed) / blastProgress.total) * 100) : 0}%"
+								></div>
+							</div>
+						</div>
+					{:else if blastResult}
+						<!-- Result summary -->
+						<div class="space-y-2">
+							<div class="rounded-lg border px-4 py-3 {blastResult.failed === 0 ? 'border-teal-500/30 bg-teal-500/10' : 'border-amber-500/30 bg-amber-500/10'}">
+								<p class="text-sm font-medium {blastResult.failed === 0 ? 'text-teal-400' : 'text-amber-400'}">
+									{blastResult.sent} sent{blastResult.failed > 0 ? `, ${blastResult.failed} failed` : ''}
+								</p>
+							</div>
+							<button
+								type="button"
+								class="w-full rounded-lg border border-surface-border-strong bg-surface-overlay px-4 py-2.5 text-sm font-medium text-text-primary hover:bg-surface-overlay hover:border-text-quaternary transition-colors"
+								onclick={() => goto(`/org/${data.org.slug}/emails`)}
+							>
+								Back to Emails
+							</button>
+						</div>
+					{:else}
+						<form
+							method="POST"
+							action="?/createClientDraft"
+							use:enhance={({ cancel }) => {
+								if (!confirm(`Send invitation to ${recipientCount.toLocaleString()} supporter${recipientCount === 1 ? '' : 's'}? Emails will be decrypted and sent from this browser.`)) {
+									cancel();
+									return;
+								}
+								sending = true;
+								return async ({ result, update }) => {
+									if (result.type === 'success' && result.data && 'blastId' in result.data) {
+										const blastData = result.data as { blastId: string; orgId: string; fromEmail: string; fromName: string; subject: string; bodyHtml: string };
+										sending = false;
+										await startClientDirectSend(blastData);
+									} else {
+										sending = false;
+										await update({ reset: false });
+									}
+								};
+							}}
+						>
+							<input type="hidden" name="subject" value={subject} />
+							<input type="hidden" name="bodyHtml" value={bodyHtml} />
+							<input type="hidden" name="fromName" value={fromName} />
+							<input type="hidden" name="fromEmail" value={fromEmail} />
+							<input type="hidden" name="campaignId" value={campaignId} />
+							<input type="hidden" name="verified" value={verifiedFilter} />
+							{#each selectedTagIds as tagId}
+								<input type="hidden" name="tagIds" value={tagId} />
+							{/each}
+							<button
+								type="submit"
+								class="w-full rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+								disabled={!subject.trim() || !hasBody || recipientCount === 0 || sending}
+							>
+								{#if sending}
+									Preparing...
+								{:else}
+									Send invitation to {recipientCount.toLocaleString()} supporter{recipientCount === 1 ? '' : 's'}
+								{/if}
+							</button>
+							<p class="text-xs text-text-quaternary text-center mt-2">
+								Emails decrypted in this browser, never on our servers
+							</p>
+						</form>
+					{/if}
 				{:else}
-					<!-- Regular Send -->
+					<!-- Server-side Send (500+ recipients or no org key) -->
 					<form
 						method="POST"
 						action="?/send"
@@ -863,6 +1126,11 @@
 								Send invitation to {recipientCount.toLocaleString()} supporter{recipientCount === 1 ? '' : 's'}
 							{/if}
 						</button>
+						{#if recipientCount >= CLIENT_DIRECT_THRESHOLD}
+							<p class="text-xs text-text-quaternary text-center mt-2">
+								Large blast -- will be processed via secure enclave
+							</p>
+						{/if}
 					</form>
 				{/if}
 			</div>
