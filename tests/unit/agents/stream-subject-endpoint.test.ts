@@ -243,7 +243,7 @@ describe('POST /api/agents/stream-subject', () => {
 				{
 					systemInstruction: expect.stringContaining('test prompt'),
 					temperature: 0.4,
-					thinkingLevel: 'high'
+					thinkingLevel: 'medium'
 				}
 			);
 		});

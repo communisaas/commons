@@ -26,6 +26,7 @@ Object.assign(process.env, env);
 function dbMockPlugin(): Plugin {
 	const dbMockPath = path.join(__dirname, 'tests/mocks/db-mock.ts');
 	const adapterMockPath = path.join(__dirname, 'tests/mocks/prisma-adapter-pg.ts');
+	const sentryStubPath = path.join(__dirname, 'tests/mocks/sentry-stub.ts');
 	return {
 		name: 'db-mock-for-tests',
 		enforce: 'pre',
@@ -35,6 +36,17 @@ function dbMockPlugin(): Plugin {
 			}
 			if (source === '@prisma/adapter-pg') {
 				return adapterMockPath;
+			}
+			// Stub the Sentry monitoring wrapper. The real module loads
+			// @sentry/sveltekit → @sentry/node → @opentelemetry/api@1.9.0,
+			// which has a broken ESM build (imports without .js extensions)
+			// that crashes Node's native ESM loader in vitest.
+			if (
+				source === '$lib/server/monitoring/sentry' ||
+				source.endsWith('/src/lib/server/monitoring/sentry.ts') ||
+				source.endsWith('/src/lib/server/monitoring/sentry')
+			) {
+				return sentryStubPath;
 			}
 			// redis is an optional dependency (dynamically imported in rate-limiter.ts
 			// only when REDIS_URL is set). Stub it so Vite's import analysis doesn't
@@ -68,6 +80,8 @@ export default defineConfig({
 		alias: {
 			// Stub @voter-protocol/noir-prover in CI where the local package isn't linked
 			'@voter-protocol/noir-prover': path.join(__dirname, 'src/lib/core/crypto/voter-protocol-stub.ts')
+			// Note: $lib/server/monitoring/sentry stub is wired via dbMockPlugin
+			// (pre-plugin) because SvelteKit's $lib resolver overrides resolve.alias.
 		}
 	},
 	test: {
