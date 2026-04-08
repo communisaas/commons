@@ -23,8 +23,7 @@
 
 	function extractDomain(url: string): string {
 		try {
-			const host = new URL(url).hostname;
-			return host.replace(/^www\./, '');
+			return new URL(url).hostname.replace(/^www\./, '');
 		} catch {
 			return url;
 		}
@@ -49,69 +48,68 @@
 		{/if}
 	</div>
 
-	<!-- Title + org -->
+	<!-- Title only — org dropped to reduce glaze -->
 	<p class="mt-0.5 text-sm text-slate-500 leading-snug">
-		{member.title}{member.organization ? ` · ${member.organization}` : ''}
+		{member.title || member.organization || ''}
 	</p>
-
-	<!-- Email provenance -->
-	{#if member.emailGrounded && member.emailSource}
-		<a
-			href={member.emailSource}
-			target="_blank"
-			rel="noopener noreferrer"
-			class="mt-1 inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 transition-colors"
-			onclick={(e) => e.stopPropagation()}
-		>
-			<ExternalLink class="h-3 w-3" />
-			{extractDomain(member.emailSource)}
-		</a>
-	{/if}
 
 	<!-- Phone for non-email officials -->
 	{#if member.deliveryRoute === 'phone_only' && member.phone}
-		<div class="mt-1.5 flex items-center gap-1.5 text-sm text-slate-500">
+		<div class="mt-1 flex items-center gap-1.5 text-sm text-slate-500">
 			<Phone class="h-3.5 w-3.5" />
 			<a href="tel:{member.phone}" class="hover:text-slate-700">{member.phone}</a>
 		</div>
 	{/if}
 
-	<!-- Action: latent at rest, activates on hover -->
-	{#if canAct}
-		<div class="mt-3">
+	<!-- Actions: receded row — clearly subordinate to title -->
+	<div class="mt-1.5 flex items-center gap-3">
+		{#if canAct}
 			{#if departing}
-				<span class="departing-pulse text-sm text-slate-400">
+				<span class="departing-pulse text-xs text-slate-400">
 					Opening mail&hellip;
 				</span>
 			{:else if contacted}
-				<span class="flex items-center gap-1 text-sm text-slate-400">
-					<Mail class="h-3.5 w-3.5" />
+				<span class="flex items-center gap-1 text-xs text-slate-400">
+					<Mail class="h-3 w-3" />
 					Email started
 				</span>
 			{:else if member.deliveryRoute === 'cwc'}
-				<span class="action-link flex items-center gap-0.5 text-sm text-slate-400 transition-colors duration-150">
+				<span class="action-link flex items-center gap-0.5 text-xs text-slate-400 transition-colors duration-150">
 					Send via Congress
-					<ChevronRight class="h-4 w-4 transition-all duration-150 opacity-0 -translate-x-1" />
+					<ChevronRight class="h-3.5 w-3.5 transition-all duration-150 opacity-0 -translate-x-1" />
 				</span>
 			{:else if member.deliveryRoute === 'email'}
-				<span class="action-link flex items-center gap-0.5 text-sm text-slate-400 transition-colors duration-150">
+				<span class="action-link flex items-center gap-0.5 text-xs text-slate-400 transition-colors duration-150">
 					Write to them
-					<ChevronRight class="h-4 w-4 transition-all duration-150 opacity-0 -translate-x-1" />
+					<ChevronRight class="h-3.5 w-3.5 transition-all duration-150 opacity-0 -translate-x-1" />
 				</span>
 			{:else if member.deliveryRoute === 'form' && member.contactFormUrl}
 				<a
 					href={member.contactFormUrl}
 					target="_blank"
 					rel="noopener noreferrer"
-					class="flex items-center gap-0.5 text-sm text-slate-400 hover:text-[var(--coord-route-solid)] transition-colors"
+					class="flex items-center gap-0.5 text-xs text-slate-400 hover:text-[var(--coord-route-solid)] transition-colors"
 					onclick={(e) => e.stopPropagation()}
 				>
 					Contact form
-					<ExternalLink class="h-3.5 w-3.5" />
+					<ExternalLink class="h-3 w-3" />
 				</a>
 			{/if}
-		</div>
-	{/if}
+		{/if}
+
+		{#if member.emailGrounded && member.emailSource}
+			<a
+				href={member.emailSource}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="flex items-center gap-0.5 text-xs text-slate-400 hover:text-slate-600 transition-colors"
+				onclick={(e) => e.stopPropagation()}
+			>
+				{extractDomain(member.emailSource)}
+				<ExternalLink class="h-2.5 w-2.5" />
+			</a>
+		{/if}
+	</div>
 {/snippet}
 
 {#if isActive}

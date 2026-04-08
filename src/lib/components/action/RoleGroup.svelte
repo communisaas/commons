@@ -1,11 +1,10 @@
 <script lang="ts">
 	/**
-	 * RoleGroup — spatial rhythm for entity clusters.
+	 * RoleGroup — one cell in the power landscape grid.
 	 *
-	 * No dividers. No borders. Figure-ground through proximity ratio:
-	 * - Header tight to children (mb-4) — gravitational binding
-	 * - Entities separated by generous void (space-y-10 = 40px)
-	 * - The void IS the boundary
+	 * Header names the group. Entities stack below it.
+	 * The grid row boundary between groups IS the figure-ground
+	 * separation — no rules, no cards needed.
 	 */
 	import DecisionMakerLandscapeCard from './DecisionMakerLandscapeCard.svelte';
 	import DistrictOfficialCard from './DistrictOfficialCard.svelte';
@@ -27,13 +26,11 @@
 </script>
 
 <div>
-	<!-- Header: metadata voice, gravitationally bound to first entity -->
-	<h3 class="font-mono text-xs font-semibold uppercase tracking-wider text-slate-400 mb-4">
+	<h3 class="font-mono text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4">
 		{group.label}
 	</h3>
 
-	<!-- Entities: tight clusters separated by composed silence -->
-	<div class="flex flex-col space-y-10">
+	<div class="flex flex-col space-y-8">
 		{#each group.members as member (member.id)}
 			{#if member.source === 'district' || isDistrictGroup}
 				<DistrictOfficialCard
@@ -53,3 +50,7 @@
 		{/each}
 	</div>
 </div>
+
+<style>
+	/* No component styles — layout is utility-class driven */
+</style>

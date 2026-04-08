@@ -15,8 +15,7 @@
 
 	function extractDomain(url: string): string {
 		try {
-			const host = new URL(url).hostname;
-			return host.replace(/^www\./, '');
+			return new URL(url).hostname.replace(/^www\./, '');
 		} catch {
 			return url;
 		}
@@ -45,70 +44,47 @@
 </script>
 
 {#snippet entityContent()}
-	<!-- Accountability opener — contextual sentence above the name -->
-	{#if member.accountabilityOpener}
-		<p class="text-sm leading-snug text-participation-primary-700 mb-1">
-			{member.accountabilityOpener}
-		</p>
-	{/if}
-
-	<!-- Name: the topographic peak. The entity IS this name. -->
+	<!-- Name: the strong center -->
 	<h4 class="text-xl font-bold text-slate-900 font-brand leading-tight">{member.name}</h4>
 
-	<!-- Title + org: tight to name, clearly subordinate -->
+	<!-- Title only — org is contextually obvious and creates glaze -->
 	<p class="mt-0.5 text-sm text-slate-500 leading-snug">
-		{#if member.title && member.organization}
-			{member.title}, {member.organization}
-		{:else}
-			{member.title || member.organization || ''}
-		{/if}
+		{member.title || member.organization || ''}
 	</p>
 
-	<!-- Email provenance -->
-	{#if member.emailGrounded && member.emailSource}
-		<a
-			href={member.emailSource}
-			target="_blank"
-			rel="noopener noreferrer"
-			class="mt-1 inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 transition-colors"
-			onclick={(e) => e.stopPropagation()}
-		>
-			<ExternalLink class="h-3 w-3" />
-			{extractDomain(member.emailSource)}
-		</a>
-	{/if}
-
-	<!-- Public actions -->
-	{#if member.publicActions.length > 0}
-		<ul class="mt-1.5 space-y-0.5">
-			{#each member.publicActions.slice(0, 2) as action}
-				<li class="text-xs text-slate-400 leading-snug line-clamp-1">
-					{action}
-				</li>
-			{/each}
-		</ul>
-	{/if}
-
-	<!-- Action: latent at rest, activates on hover -->
-	{#if canAct}
-		<div class="mt-3">
+	<!-- Actions: receded row — clearly subordinate to title -->
+	<div class="mt-1.5 flex items-center gap-3">
+		{#if canAct}
 			{#if departing}
-				<span class="departing-pulse text-sm text-slate-400">
+				<span class="departing-pulse text-xs text-slate-400">
 					Opening mail&hellip;
 				</span>
 			{:else if contacted}
-				<span class="flex items-center gap-1 text-sm text-slate-400">
-					<Mail class="h-3.5 w-3.5" />
+				<span class="flex items-center gap-1 text-xs text-slate-400">
+					<Mail class="h-3 w-3" />
 					Email started
 				</span>
 			{:else}
-				<span class="action-link flex items-center gap-0.5 text-sm text-slate-400 transition-colors duration-150">
+				<span class="action-link flex items-center gap-0.5 text-xs text-slate-400 transition-colors duration-150">
 					Write to them
-					<ChevronRight class="h-4 w-4 transition-all duration-150 opacity-0 -translate-x-1" />
+					<ChevronRight class="h-3.5 w-3.5 transition-all duration-150 opacity-0 -translate-x-1" />
 				</span>
 			{/if}
-		</div>
-	{/if}
+		{/if}
+
+		{#if member.emailGrounded && member.emailSource}
+			<a
+				href={member.emailSource}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="flex items-center gap-0.5 text-xs text-slate-400 hover:text-slate-600 transition-colors"
+				onclick={(e) => e.stopPropagation()}
+			>
+				{extractDomain(member.emailSource)}
+				<ExternalLink class="h-2.5 w-2.5" />
+			</a>
+		{/if}
+	</div>
 {/snippet}
 
 {#if isActive}

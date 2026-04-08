@@ -140,13 +140,13 @@
 				{/if}
 			</div>
 
-			<!-- Role groups in balanced columns — no row-alignment gaps -->
-			<div class="landscape-columns">
+			<!-- Role groups in a 2-col grid — each group is one cell -->
+			<div class="landscape-grid">
 				{#each landscape.roleGroups as group, i (group.category)}
 					<div
 						class="role-group"
 						class:revealed
-						style="animation-delay: {i * 100}ms"
+						style="animation-delay: {i * 80}ms"
 					>
 						<RoleGroup
 							{group}
@@ -201,19 +201,19 @@
 	.landscape.revealed {
 		animation: fadeIn 250ms ease-out forwards;
 	}
-	/* Balanced columns: content packs vertically, no row-alignment gaps */
-	.landscape-columns {
-		columns: 1;
-		column-gap: 1.25rem;
+	.landscape-grid {
+		display: grid;
+		grid-template-columns: 1fr;
+		column-gap: 2rem;
+		row-gap: 2.5rem;
+		align-items: start;
 	}
 	@media (min-width: 768px) {
-		.landscape-columns {
-			columns: 2;
+		.landscape-grid {
+			grid-template-columns: repeat(2, 1fr);
 		}
 	}
 	.role-group {
-		break-inside: avoid;
-		margin-bottom: 1.25rem;
 		opacity: 0;
 		transform: translateY(8px);
 	}
