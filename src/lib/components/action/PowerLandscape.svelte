@@ -32,6 +32,25 @@
 	const landscape = $derived(mergeLandscape(decisionMakers, districtOfficials));
 	const isCwc = $derived(template.deliveryMethod === 'cwc' || isCongressional);
 
+	// Group by organization — the natural institutional link between decision-makers.
+	// Role categories become inline badges on each entity rather than section headers.
+	// Sorted largest-first so column-count packs the heaviest org at the top.
+	const orgGroups = $derived(() => {
+		const allDMs = landscape.roleGroups.flatMap(g => g.members);
+		const groups = new Map<string, LandscapeMember[]>();
+		for (const m of allDMs) {
+			const org = m.organization || 'Independent';
+			if (!groups.has(org)) groups.set(org, []);
+			groups.get(org)!.push(m);
+		}
+		return [...groups.entries()]
+			.sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+			.map(([org, members]) => ({
+				label: org,
+				members: members.sort((a, b) => a.relevanceRank - b.relevanceRank)
+			}));
+	});
+
 	// Landscape-specific counts (only members actually in this landscape)
 	const allMembers = $derived([
 		...landscape.roleGroups.flatMap(g => g.members),
@@ -65,7 +84,7 @@
 	}
 </script>
 
-<div class="landscape" class:revealed>
+<div class="landscape space-y-5" class:revealed>
 	{#if landscape.totalCount === 0}
 		<!-- Empty state: contextual based on delivery method -->
 		{#if isCwc && onVerifyAddress}
@@ -109,87 +128,86 @@
 			</div>
 		{/if}
 	{:else}
-		<!-- Populated landscape -->
-		<div class="space-y-5">
-			<!-- Batch action header — same "Write to" gesture as cards, collective scope -->
-			<div class="flex items-center justify-between">
-				{#if registrationState === 'registering'}
-					<span class="flex items-center gap-1.5 text-sm font-medium text-slate-400 min-h-[44px]">
-						<Loader2 class="h-4 w-4 animate-spin" />
-						Opening mail&hellip;
-					</span>
-				{:else if remainingCount > 0}
-					<button
-						type="button"
-						class="group/batch flex items-center gap-1 text-sm font-medium text-participation-primary-600 hover:text-participation-primary-700 transition-colors cursor-pointer min-h-[44px]"
-						onclick={handleBatchRegister}
-					>
-						Write to all {remainingCount}
-						<ChevronRight class="h-4 w-4 transition-transform group-hover/batch:translate-x-0.5" />
-					</button>
-				{:else if totalCount > 0}
-					<span class="flex items-center gap-1.5 text-sm font-medium text-slate-500">
-						<Mail class="h-4 w-4" />
-						All {totalCount} emails started
-					</span>
-				{/if}
-				{#if contactedInLandscape > 0 && remainingCount > 0}
-					<span class="text-xs tabular-nums text-slate-400">
-						{contactedInLandscape} of {totalCount}
-					</span>
-				{/if}
-			</div>
+		<!-- Batch action header — same "Write to" gesture as cards, collective scope -->
+		<div class="flex items-center justify-between">
+			{#if registrationState === 'registering'}
+				<span class="flex items-center gap-1.5 text-sm font-medium text-slate-400 min-h-[44px]">
+					<Loader2 class="h-4 w-4 animate-spin" />
+					Opening mail&hellip;
+				</span>
+			{:else if remainingCount > 0}
+				<button
+					type="button"
+					class="group/batch flex items-center gap-1 text-sm font-medium text-participation-primary-600 hover:text-participation-primary-700 transition-colors cursor-pointer min-h-[44px]"
+					onclick={handleBatchRegister}
+				>
+					Write to all {remainingCount}
+					<ChevronRight class="h-4 w-4 transition-transform group-hover/batch:translate-x-0.5" />
+				</button>
+			{:else if totalCount > 0}
+				<span class="flex items-center gap-1.5 text-sm font-medium text-slate-500">
+					<Mail class="h-4 w-4" />
+					All {totalCount} emails started
+				</span>
+			{/if}
+			{#if contactedInLandscape > 0 && remainingCount > 0}
+				<span class="text-xs tabular-nums text-slate-400">
+					{contactedInLandscape} of {totalCount}
+				</span>
+			{/if}
+		</div>
 
-			<!-- Role groups in a 2-col grid — each group is one cell -->
-			<div class="landscape-grid">
-				{#each landscape.roleGroups as group, i (group.category)}
-					<div
-						class="role-group"
-						class:revealed
-						style="animation-delay: {i * 80}ms"
-					>
-						<RoleGroup
-							{group}
-							{contactedRecipients}
-							{departingRecipients}
-							{onWriteTo}
-						/>
-					</div>
-				{/each}
-			</div>
-
-			<!-- District group spans full width below the grid -->
-			{#if landscape.districtGroup}
+		<!-- Org groups: institutional clusters in column-count flow -->
+		<div class="landscape-columns">
+			{#each orgGroups() as group, i (group.label)}
 				<div
 					class="role-group"
 					class:revealed
-					style="animation-delay: {landscape.roleGroups.length * 100}ms"
+					data-size={group.members.length === 1 ? 'solo' : group.members.length <= 2 ? 'small' : 'normal'}
+					style="animation-delay: {i * 80}ms"
 				>
 					<RoleGroup
-						group={landscape.districtGroup}
+						{group}
 						{contactedRecipients}
 						{departingRecipients}
 						{onWriteTo}
-						isDistrictGroup={true}
+						showRoleBadge={true}
 					/>
 				</div>
-			{/if}
-
-			<!-- Hybrid: DMs visible but congress requires address verification -->
-			{#if isCwc && !landscape.districtGroup && onVerifyAddress}
-				<div class="pt-4 border-t border-slate-100">
-					<button
-						type="button"
-						class="group flex items-center gap-2 text-sm text-slate-500 hover:text-[var(--coord-route-solid)] cursor-pointer min-h-[44px] transition-colors"
-						onclick={onVerifyAddress}
-					>
-						<MapPin class="h-4 w-4" />
-						Verify your address to also contact your representatives
-						<ChevronRight class="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-					</button>
-				</div>
-			{/if}
+			{/each}
 		</div>
+
+		<!-- District group spans full width below the grid -->
+		{#if landscape.districtGroup}
+			<div
+				class="role-group"
+				class:revealed
+				style="animation-delay: {landscape.roleGroups.length * 100}ms"
+			>
+				<RoleGroup
+					group={landscape.districtGroup}
+					{contactedRecipients}
+					{departingRecipients}
+					{onWriteTo}
+					isDistrictGroup={true}
+				/>
+			</div>
+		{/if}
+
+		<!-- Hybrid: DMs visible but congress requires address verification -->
+		{#if isCwc && !landscape.districtGroup && onVerifyAddress}
+			<div class="pt-4 border-t border-slate-100">
+				<button
+					type="button"
+					class="group flex items-center gap-2 text-sm text-slate-500 hover:text-[var(--coord-route-solid)] cursor-pointer min-h-[44px] transition-colors"
+					onclick={onVerifyAddress}
+				>
+					<MapPin class="h-4 w-4" />
+					Verify your address to also contact your representatives
+					<ChevronRight class="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+				</button>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -201,24 +219,42 @@
 	.landscape.revealed {
 		animation: fadeIn 250ms ease-out forwards;
 	}
-	.landscape-grid {
-		display: grid;
-		grid-template-columns: 1fr;
+	/*
+	 * CSS column-count flow: groups pack tightly into two balanced columns
+	 * rather than locking into rigid grid rows. break-inside: avoid keeps
+	 * each role group intact — the browser will never split a group's members
+	 * across column boundaries.
+	 *
+	 * On mobile (< 768px) column-count: 1 is identical to a stacked list.
+	 */
+	.landscape-columns {
+		column-count: 1;
 		column-gap: 2rem;
-		row-gap: 2.5rem;
-		align-items: start;
 	}
 	@media (min-width: 768px) {
-		.landscape-grid {
-			grid-template-columns: repeat(2, 1fr);
+		.landscape-columns {
+			column-count: 2;
 		}
 	}
 	.role-group {
+		/* Critical: prevents a group from splitting across columns */
+		break-inside: avoid;
+		/* Spacing between groups — acts as row-gap in normal flow */
+		margin-bottom: 1.75rem;
 		opacity: 0;
 		transform: translateY(8px);
 	}
 	.role-group.revealed {
 		animation: revealGroup 300ms ease-out forwards;
+	}
+	/*
+	 * Solo and small groups get a tighter top margin so they read as
+	 * intentional, precise entries — not gaps. The role header still anchors
+	 * them; we're just reducing the visual weight of the surrounding void.
+	 */
+	.role-group[data-size='solo'],
+	.role-group[data-size='small'] {
+		margin-bottom: 1.25rem;
 	}
 	@keyframes fadeIn {
 		to {
