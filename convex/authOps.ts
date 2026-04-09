@@ -36,7 +36,9 @@ export const upsertFromOAuth = mutation({
     scope: v.string(),
 
     // User data from provider
-    encryptedEmail: v.string(),
+    email: v.optional(v.string()),
+    name: v.optional(v.string()),
+    encryptedEmail: v.optional(v.string()),
     encryptedName: v.optional(v.string()),
     emailHash: v.optional(v.string()),
     avatar: v.optional(v.string()),
@@ -68,12 +70,21 @@ export const upsertFromOAuth = mutation({
         updatedAt: now,
       });
 
-      // Backfill tokenIdentifier if missing (migration from pre-JWT era)
+      // Backfill tokenIdentifier + plaintext email if missing
       const existingUser0 = await ctx.db.get(existingAccount.userId);
-      if (existingUser0 && !existingUser0.tokenIdentifier) {
-        await ctx.db.patch(existingAccount.userId, {
-          tokenIdentifier: `https://commons.email|${existingAccount.userId}`,
-        });
+      if (existingUser0) {
+        const patch: Record<string, unknown> = {};
+        if (!existingUser0.tokenIdentifier) {
+          patch.tokenIdentifier = `https://commons.email|${existingAccount.userId}`;
+        }
+        if (!existingUser0.email && args.email) {
+          patch.email = args.email;
+          patch.name = args.name ?? existingUser0.name;
+          patch.custodyMode = "plaintext";
+        }
+        if (Object.keys(patch).length > 0) {
+          await ctx.db.patch(existingAccount.userId, patch);
+        }
       }
 
       return { userId: existingAccount.userId, isNew: false };
@@ -103,11 +114,18 @@ export const upsertFromOAuth = mutation({
         updatedAt: now,
       });
 
-      // Backfill tokenIdentifier if missing (migration from pre-JWT era)
+      // Backfill tokenIdentifier + plaintext email if missing
+      const userPatch: Record<string, unknown> = {};
       if (!existingUser.tokenIdentifier) {
-        await ctx.db.patch(existingUser._id, {
-          tokenIdentifier: `https://commons.email|${existingUser._id}`,
-        });
+        userPatch.tokenIdentifier = `https://commons.email|${existingUser._id}`;
+      }
+      if (!existingUser.email && args.email) {
+        userPatch.email = args.email;
+        userPatch.name = args.name ?? existingUser.name;
+        userPatch.custodyMode = "plaintext";
+      }
+      if (Object.keys(userPatch).length > 0) {
+        await ctx.db.patch(existingUser._id, userPatch);
       }
 
       return { userId: existingUser._id, isNew: false };
@@ -119,9 +137,12 @@ export const upsertFromOAuth = mutation({
 
     const userId = await ctx.db.insert("users", {
       avatar: args.avatar,
+      email: args.email,
+      name: args.name,
       encryptedEmail: args.encryptedEmail,
       encryptedName: args.encryptedName,
       ...(args.emailHash ? { emailHash: args.emailHash } : {}),
+      custodyMode: args.email ? "plaintext" : undefined,
       updatedAt: now,
 
       // Verification

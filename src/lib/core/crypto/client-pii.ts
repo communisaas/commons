@@ -123,7 +123,8 @@ export async function decryptPiiClient(
 		);
 
 		return decoder.decode(plaintext);
-	} catch {
+	} catch (err) {
+		console.warn('[client-pii] AES-GCM decrypt failed:', err instanceof Error ? err.message : err);
 		return null;
 	}
 }
@@ -163,9 +164,12 @@ export async function decryptUserPiiClient(
 			const parsed: ClientEncryptedPii = JSON.parse(encryptedEmail);
 			if (parsed.v === 'client-1') {
 				email = await decryptPiiClient(parsed, userId, 'email');
+				if (!email) console.warn('[client-pii] email decryption returned null — wrong device key?');
+			} else {
+				console.warn('[client-pii] email blob version mismatch:', parsed.v ?? 'missing', '(expected client-1)');
 			}
-		} catch {
-			// Not client-encrypted or parse failure
+		} catch (err) {
+			console.warn('[client-pii] email parse/decrypt failed:', err);
 		}
 	}
 
@@ -174,9 +178,11 @@ export async function decryptUserPiiClient(
 			const parsed: ClientEncryptedPii = JSON.parse(encryptedName);
 			if (parsed.v === 'client-1') {
 				name = await decryptPiiClient(parsed, userId, 'name');
+			} else {
+				console.warn('[client-pii] name blob version mismatch:', parsed.v ?? 'missing');
 			}
-		} catch {
-			// Not client-encrypted or parse failure
+		} catch (err) {
+			console.warn('[client-pii] name parse/decrypt failed:', err);
 		}
 	}
 

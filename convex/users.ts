@@ -49,13 +49,13 @@ export const getProfile = query({
     const user = await ctx.db.get(userId);
     if (!user) throw new Error("User not found");
 
-    // Always return encrypted blobs — client decrypts locally.
-    // Server never decrypts PII. No dual-mode, no fallback.
+    // Return plaintext email/name when available (post-migration).
+    // Encrypted blobs kept as fallback for un-migrated users.
     return {
       _id: user._id,
       _creationTime: user._creationTime,
-      email: null,
-      name: null,
+      email: user.email ?? null,
+      name: user.name ?? null,
       encryptedEmail: user.encryptedEmail ?? null,
       encryptedName: user.encryptedName ?? null,
       avatar: user.avatar ?? null,
@@ -86,18 +86,47 @@ export const getProfile = query({
  */
 export const storeClientEncryptedPii = mutation({
   args: {
-    encryptedEmail: v.string(),
+    encryptedEmail: v.optional(v.string()),
     encryptedName: v.optional(v.string()),
+    // Plaintext fields for migration — written alongside encrypted blobs
+    email: v.optional(v.string()),
+    name: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { userId } = await requireAuth(ctx);
     await ctx.db.patch(userId, {
-      encryptedEmail: args.encryptedEmail,
-      encryptedName: args.encryptedName,
-      // Clear legacy plaintext columns — DB breach can't read cleartext alongside client blobs
-      email: undefined,
-      name: undefined,
-      custodyMode: "client",
+      ...(args.encryptedEmail ? { encryptedEmail: args.encryptedEmail } : {}),
+      ...(args.encryptedName ? { encryptedName: args.encryptedName } : {}),
+      // Preserve plaintext email/name — no longer cleared
+      ...(args.email ? { email: args.email } : {}),
+      ...(args.name ? { name: args.name } : {}),
+      custodyMode: args.email ? "plaintext" : "client",
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Migrate a user's email/name from client-encrypted blobs to plaintext.
+ * Called by the client after successful decryption — one-time write-back.
+ */
+export const migrateEmailToPlaintext = mutation({
+  args: {
+    email: v.string(),
+    name: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { userId } = await requireAuth(ctx);
+    const user = await ctx.db.get(userId);
+    if (!user) throw new Error("User not found");
+
+    // Skip if already migrated
+    if (user.email) return;
+
+    await ctx.db.patch(userId, {
+      email: args.email,
+      ...(args.name ? { name: args.name } : {}),
+      custodyMode: "plaintext",
       updatedAt: Date.now(),
     });
   },

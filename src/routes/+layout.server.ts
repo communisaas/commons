@@ -34,9 +34,7 @@ export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
 	}
 
 	if (convexProfile) {
-		// Don't delete the seed here — let the client consume it.
-		// The cookie has a 5-minute TTL and expires naturally.
-		// Deleting based on DB state breaks device recovery (old blobs from previous key).
+		const hasPlaintextEmail = Boolean(convexProfile.email);
 
 		return {
 			user: {
@@ -54,11 +52,11 @@ export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
 				hasWallet: convexProfile.hasWallet,
 				hasDistrictCredential: Boolean(convexProfile.districtVerified),
 				orgMemberships: convexMemberships ?? [],
-				// Client-side PII custody
-				encryptedEmail: convexProfile.encryptedEmail ?? null,
-				// One-time OAuth PII for device recovery re-encryption
-				oauthPiiSeed: oauthPiiSeed,
-				encryptedName: convexProfile.encryptedName ?? null,
+				// Encrypted blobs only for un-migrated users (client decryption fallback)
+				encryptedEmail: hasPlaintextEmail ? null : (convexProfile.encryptedEmail ?? null),
+				encryptedName: hasPlaintextEmail ? null : (convexProfile.encryptedName ?? null),
+				// OAuth seed only needed for un-migrated users
+				oauthPiiSeed: hasPlaintextEmail ? null : oauthPiiSeed,
 			}
 		};
 	}

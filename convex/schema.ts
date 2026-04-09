@@ -80,13 +80,16 @@ export default defineSchema({
     walletType: v.optional(v.string()), // 'evm' | 'near'
     districtHash: v.optional(v.string()),
 
-    // PII encryption at rest
-    encryptedEmail: v.string(),
+    // PII — plaintext email/name (migration from client-side encryption)
+    email: v.optional(v.string()),
+    name: v.optional(v.string()),
+    // Encrypted blobs (deprecated — being migrated to plaintext above)
+    encryptedEmail: v.optional(v.string()),
     encryptedName: v.optional(v.string()),
     // Legacy — new accounts use identityCommitment for dedup
     emailHash: v.optional(v.string()),
     encryptedProfile: v.optional(v.string()),
-    // PII custody mode: "server" (operator-held key) or "client" (user-held key in IndexedDB)
+    // PII custody mode: "server" | "client" | "plaintext" (migration target)
     custodyMode: v.optional(v.string()),
 
     // NEAR account
@@ -116,6 +119,7 @@ export default defineSchema({
     profileVisibility: v.string(), // 'private' | 'public'
   })
     .index("by_tokenIdentifier", ["tokenIdentifier"])
+    .index("by_email", ["email"])
     .index("by_emailHash", ["emailHash"])
     .index("by_identityHash", ["identityHash"])
     .index("by_identityCommitment", ["identityCommitment"])

@@ -64,12 +64,21 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 	lastUserId = user.id;
 
 	(async () => {
+		// Fast path: plaintext email already available from server (post-migration)
+		if (user.email) {
+			if (capturedId !== lastUserId) return;
+			state.email = user.email;
+			state.name = user.name;
+			state.decrypting = false;
+			return;
+		}
+
+		// Slow path: decrypt from client-encrypted blob (pre-migration users)
 		const { decryptUserPiiClient, isClientPiiAvailable } = await import('$lib/core/crypto/client-pii');
 
 		if (capturedId !== lastUserId) return;
 
 		if (!isClientPiiAvailable()) {
-			console.log('[decryptedUser] client PII not available');
 			state.email = null;
 			state.name = null;
 			state.decrypting = false;
@@ -82,11 +91,21 @@ export function syncDecryptedUser(user: LayoutUser | null): void {
 			user.id
 		);
 
-		console.log('[decryptedUser] result:', { email: email ? 'OK' : 'NULL', name: name ? 'OK' : 'NULL' });
 		if (capturedId !== lastUserId) return;
 		state.email = email;
 		state.name = name;
 		state.decrypting = false;
+
+		// Write-back: migrate plaintext to server so future loads skip decryption
+		if (email) {
+			fetch('/api/pii/migrate', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ email, name }),
+			}).catch((err) => {
+				console.error('[decryptedUser] plaintext write-back failed:', err);
+			});
+		}
 	})().catch((err) => {
 		console.error('[decryptedUser] decrypt error:', err);
 		if (capturedId !== lastUserId) return;

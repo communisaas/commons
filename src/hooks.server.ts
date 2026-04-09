@@ -105,15 +105,10 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			}).catch(() => {});
 		}
 
-		// Person-layer PII: client-custodied encryption (device key in IndexedDB).
-		// Org-layer PII: org-custodied encryption (passphrase-derived key, client decrypts).
-		// Server holds no PII decryption keys.
-		const pii = { email: null as string | null, name: null as string | null };
-
 		event.locals.user = {
 			id: user._id as string,
-			email: pii.email,
-			name: pii.name,
+			email: (user as any).email ?? null,
+			name: (user as any).name ?? null,
 			avatar: user.avatar ?? null,
 			// PII custody
 			email_hash: user.emailHash ?? null,

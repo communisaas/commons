@@ -259,7 +259,9 @@ export class OAuthCallbackHandler {
 			provider: config.provider,
 			providerAccountId: userData.id,
 			scope: config.scope,
-			encryptedEmail: '', // placeholder — client overwrites with device-encrypted blob
+			email: userData.email,
+			name: userData.name ?? undefined,
+			encryptedEmail: undefined,
 			encryptedName: undefined,
 			avatar: userData.avatar,
 			emailVerified,

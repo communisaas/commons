@@ -223,6 +223,30 @@ export const getBounceReportsNeedingHash = internalQuery({
   },
 });
 
+export const getUsersNeedingPlaintextEmail = internalQuery({
+  args: { cursor: v.optional(v.string()), limit: v.number() },
+  handler: async (ctx, { cursor, limit }) => {
+    const all = await ctx.db.query("users").order("asc").take(10_000);
+    // Users with encryptedEmail but no plaintext email — need migration
+    const needsWork = all.filter(
+      (u) => !u.email && u.encryptedEmail && u.encryptedEmail !== "",
+    );
+    const start = cursor
+      ? needsWork.findIndex((u) => u._id === cursor) + 1
+      : 0;
+    const batch = needsWork.slice(start, start + limit);
+    return {
+      items: batch.map((u) => ({
+        _id: u._id,
+        encryptedEmail: u.encryptedEmail,
+        encryptedName: u.encryptedName,
+        custodyMode: u.custodyMode,
+      })),
+      hasMore: needsWork.length > start + limit,
+    };
+  },
+});
+
 // =============================================================================
 // INTERNAL MUTATION — patch encrypted fields
 // =============================================================================
@@ -764,5 +788,96 @@ export const backfillOrgBillingEmail = internalAction({
     }
 
     return { processed, failed };
+  },
+});
+
+// =============================================================================
+// USER EMAIL PLAINTEXT MIGRATION
+// =============================================================================
+
+/**
+ * Backfill plaintext email/name on user records from server-encrypted blobs.
+ * Skips client-encrypted blobs (v: "client-1") — those are migrated client-side.
+ * Idempotent: skips users that already have plaintext email.
+ */
+export const backfillUserPlaintextEmail = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    let processed = 0;
+    let skipped = 0;
+    let failed = 0;
+    let cursor: string | undefined;
+    let hasMore = true;
+
+    while (hasMore) {
+      const batch = await ctx.runQuery(
+        internal.backfill.getUsersNeedingPlaintextEmail,
+        { cursor, limit: BATCH_SIZE },
+      );
+      hasMore = batch.hasMore;
+
+      for (const u of batch.items) {
+        try {
+          // Skip client-encrypted blobs — only the client can decrypt those
+          let isClientEncrypted = false;
+          if (u.encryptedEmail) {
+            try {
+              const parsed = JSON.parse(u.encryptedEmail);
+              if (parsed.v === "client-1") {
+                isClientEncrypted = true;
+              }
+            } catch {
+              // Not JSON — skip
+            }
+          }
+
+          if (isClientEncrypted) {
+            skipped++;
+            cursor = u._id;
+            continue;
+          }
+
+          // Server-encrypted blob: decrypt with server key
+          const patch: Record<string, unknown> = {};
+
+          if (u.encryptedEmail) {
+            try {
+              const parsed = JSON.parse(u.encryptedEmail) as EncryptedPii;
+              const email = await tryDecryptPii(parsed, u._id, "email");
+              if (email) patch.email = email;
+            } catch { /* parse failure — skip */ }
+          }
+
+          if (u.encryptedName) {
+            try {
+              const parsed = JSON.parse(u.encryptedName) as EncryptedPii;
+              const name = await tryDecryptPii(parsed, u._id, "name");
+              if (name) patch.name = name;
+            } catch { /* parse failure — skip */ }
+          }
+
+          if (Object.keys(patch).length > 0) {
+            patch.custodyMode = "plaintext";
+            await ctx.runMutation(internal.backfill.patchRow, {
+              id: u._id,
+              patch,
+            });
+            processed++;
+          } else {
+            skipped++;
+          }
+
+          cursor = u._id;
+        } catch (err) {
+          console.error(`[backfill] user plaintext email ${u._id} failed:`, err);
+          failed++;
+          cursor = u._id;
+        }
+      }
+
+      if (batch.items.length === 0) break;
+    }
+
+    return { processed, skipped, failed };
   },
 });
