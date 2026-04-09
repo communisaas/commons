@@ -21,16 +21,26 @@
 		}
 	}
 
+	const ROLE_SHORT: Record<string, string> = {
+		votes: 'Votes',
+		executes: 'Executes',
+		shapes: 'Shapes',
+		funds: 'Funds',
+		oversees: 'Oversees'
+	};
+
 	let {
 		member,
 		contacted = false,
 		departing = false,
-		onWriteTo
+		onWriteTo,
+		showRoleBadge = false
 	}: {
 		member: LandscapeMember;
 		contacted: boolean;
 		departing: boolean;
 		onWriteTo: (member: LandscapeMember) => void;
+		showRoleBadge?: boolean;
 	} = $props();
 
 	const canAct = $derived(member.deliveryRoute !== 'recorded' && member.deliveryRoute !== 'phone_only');
@@ -44,12 +54,17 @@
 </script>
 
 {#snippet entityContent()}
-	<!-- Name: the strong center -->
-	<h4 class="text-xl font-bold text-slate-900 font-brand leading-tight">{member.name}</h4>
+	<!-- Name + role badge -->
+	<div class="flex items-baseline gap-2">
+		<h4 class="text-xl font-bold text-slate-900 font-brand leading-tight">{member.name}</h4>
+		{#if showRoleBadge && member.roleCategory}
+			<span class="role-badge shrink-0">{ROLE_SHORT[member.roleCategory] || member.roleCategory}</span>
+		{/if}
+	</div>
 
-	<!-- Title only — org is contextually obvious and creates glaze -->
+	<!-- Title — org is now in the group header -->
 	<p class="mt-0.5 text-sm text-slate-500 leading-snug">
-		{member.title || member.organization || ''}
+		{member.title || ''}
 	</p>
 
 	<!-- Actions: receded row — clearly subordinate to title -->
@@ -113,6 +128,16 @@
 	:global(.group:hover) .action-link :global(svg) {
 		opacity: 1;
 		transform: translateX(0);
+	}
+	/* Role badge — functional power annotation, subordinate to name */
+	.role-badge {
+		font-family: var(--font-mono, ui-monospace, monospace);
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--color-slate-400);
+		line-height: 1;
 	}
 	/* Contacted: the entity settles — quieter, done */
 	.entity--contacted :global(h4) { color: var(--color-slate-400); }

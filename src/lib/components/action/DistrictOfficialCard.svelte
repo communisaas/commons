@@ -9,16 +9,26 @@
 	import { Mail, ChevronRight, ExternalLink, Phone } from '@lucide/svelte';
 	import type { LandscapeMember } from '$lib/utils/landscapeMerge';
 
+	const ROLE_SHORT: Record<string, string> = {
+		votes: 'Votes',
+		executes: 'Executes',
+		shapes: 'Shapes',
+		funds: 'Funds',
+		oversees: 'Oversees'
+	};
+
 	let {
 		member,
 		contacted = false,
 		departing = false,
-		onWriteTo
+		onWriteTo,
+		showRoleBadge = false
 	}: {
 		member: LandscapeMember;
 		contacted: boolean;
 		departing: boolean;
 		onWriteTo: (member: LandscapeMember) => void;
+		showRoleBadge?: boolean;
 	} = $props();
 
 	function extractDomain(url: string): string {
@@ -40,15 +50,17 @@
 </script>
 
 {#snippet entityContent()}
-	<!-- Name + route label -->
+	<!-- Name + role/route label -->
 	<div class="flex items-baseline gap-2">
 		<h4 class="text-xl font-bold text-slate-900 font-brand leading-tight">{member.name}</h4>
 		{#if member.deliveryRoute === 'cwc'}
 			<span class="text-xs font-medium text-emerald-600 shrink-0">Congressional</span>
+		{:else if showRoleBadge && member.roleCategory}
+			<span class="role-badge shrink-0">{ROLE_SHORT[member.roleCategory] || member.roleCategory}</span>
 		{/if}
 	</div>
 
-	<!-- Title only — org dropped to reduce glaze -->
+	<!-- Title — org is in the group header when showRoleBadge is active -->
 	<p class="mt-0.5 text-sm text-slate-500 leading-snug">
 		{member.title || member.organization || ''}
 	</p>
@@ -137,6 +149,15 @@
 	:global(.group:hover) .action-link :global(svg) {
 		opacity: 1;
 		transform: translateX(0);
+	}
+	.role-badge {
+		font-family: var(--font-mono, ui-monospace, monospace);
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--color-slate-400);
+		line-height: 1;
 	}
 	.entity--contacted :global(h4) { color: var(--color-slate-400); }
 	.entity--contacted :global(p) { color: var(--color-slate-300); }
