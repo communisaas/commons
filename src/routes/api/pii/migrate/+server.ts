@@ -16,8 +16,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const body = await request.json();
 	const { email, name } = body;
 
-	if (!email || typeof email !== 'string') {
-		throw error(400, 'Missing email');
+	if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+		throw error(400, 'Invalid email');
 	}
 
 	await serverMutation(api.users.migrateEmailToPlaintext, {
