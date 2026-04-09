@@ -3,23 +3,12 @@ import type { LayoutServerLoad } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
-export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
+export const load: LayoutServerLoad = async ({ locals, depends }) => {
 	// Cache user data across navigations — only re-fetch when explicitly invalidated
 	depends('data:user');
 
 	if (!locals.user) {
 		return { user: null };
-	}
-
-	// Read OAuth PII seed for device recovery re-encryption.
-	// Deleted only AFTER custody transition succeeds (custodyMode already "client")
-	// to prevent seed loss on transient Convex failures during first load.
-	let oauthPiiSeed: { email: string; name: string | null } | null = null;
-	const seedCookie = cookies.get('oauth_pii_seed');
-	if (seedCookie) {
-		try {
-			oauthPiiSeed = JSON.parse(seedCookie);
-		} catch { /* malformed — ignore */ }
 	}
 
 	let convexProfile = null;
@@ -34,8 +23,6 @@ export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
 	}
 
 	if (convexProfile) {
-		const hasPlaintextEmail = Boolean(convexProfile.email);
-
 		return {
 			user: {
 				id: locals.user.id,
@@ -52,11 +39,9 @@ export const load: LayoutServerLoad = async ({ locals, depends, cookies }) => {
 				hasWallet: convexProfile.hasWallet,
 				hasDistrictCredential: Boolean(convexProfile.districtVerified),
 				orgMemberships: convexMemberships ?? [],
-				// Encrypted blobs only for un-migrated users (client decryption fallback)
-				encryptedEmail: hasPlaintextEmail ? null : (convexProfile.encryptedEmail ?? null),
-				encryptedName: hasPlaintextEmail ? null : (convexProfile.encryptedName ?? null),
-				// OAuth seed only needed for un-migrated users
-				oauthPiiSeed: hasPlaintextEmail ? null : oauthPiiSeed,
+				// Encrypted blobs for un-migrated users (client decryption fallback)
+				encryptedEmail: convexProfile.email ? null : (convexProfile.encryptedEmail ?? null),
+				encryptedName: convexProfile.email ? null : (convexProfile.encryptedName ?? null),
 			}
 		};
 	}

@@ -95,32 +95,6 @@
 		if (decryptedUser.name) piiName = decryptedUser.name;
 	});
 
-	// ── Legacy PII custody: encrypt from OAuth seed (un-migrated users only) ──
-	// Once email is stored plaintext (Phase 1+), this effect is a no-op because
-	// oauthPiiSeed is null when plaintext email exists on the user record.
-	$effect(() => {
-		const authUser = data.user as Record<string, unknown> | null;
-		if (!browser || !authUser?.id) return;
-
-		const oauthSeed = authUser.oauthPiiSeed as { email: string; name: string | null } | null;
-		if (!oauthSeed?.email) return;
-
-		// Plaintext migration: write email directly instead of encrypting
-		const userId = authUser.id as string;
-		fetch('/api/pii/migrate', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ email: oauthSeed.email, name: oauthSeed.name }),
-		}).then(async (res) => {
-			if (res.ok) {
-				const { invalidate } = await import('$app/navigation');
-				invalidate('data:user');
-			}
-		}).catch((err) => {
-			console.error('[PII Migration] Plaintext write failed:', err);
-		});
-	});
-
 	// ── Session credential for CredentialExpiryNudge (async, client-only) ──
 	let layoutCredential: SessionCredentialForPolicy | null = $state(null);
 
