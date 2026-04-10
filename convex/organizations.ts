@@ -986,6 +986,38 @@ export const getOrgKeyVerifier = query({
   args: { slug: v.string() },
   handler: async (ctx, { slug }) => {
     const { org } = await requireOrgRole(ctx, slug, "editor");
-    return { orgKeyVerifier: org.orgKeyVerifier ?? null };
+    return {
+      orgKeyVerifier: org.orgKeyVerifier ?? null,
+      hasRecoveryKey: Boolean(org.recoveryWrappedOrgKey),
+      piiVersion: (org as any).piiVersion ?? "legacy",
+    };
+  },
+});
+
+/**
+ * Set org encryption passphrase — creates verifier, stores recovery + server-sealed keys.
+ * Called once during org encryption setup. Requires owner role.
+ */
+export const setOrgKeyVerifier = mutation({
+  args: {
+    slug: v.string(),
+    orgKeyVerifier: v.string(),
+    recoveryWrappedOrgKey: v.string(),
+    serverSealedOrgKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "owner");
+
+    if (org.orgKeyVerifier) {
+      throw new Error("Org encryption already configured. Use key rotation instead.");
+    }
+
+    await ctx.db.patch(org._id, {
+      orgKeyVerifier: args.orgKeyVerifier,
+      recoveryWrappedOrgKey: args.recoveryWrappedOrgKey,
+      ...(args.serverSealedOrgKey ? { serverSealedOrgKey: args.serverSealedOrgKey } : {}),
+      piiVersion: "legacy",
+      updatedAt: Date.now(),
+    } as any);
   },
 });

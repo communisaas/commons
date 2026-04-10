@@ -930,6 +930,8 @@ export default defineSchema({
     // Org-level PII encryption (passphrase-derived, multi-admin)
     orgKeyVerifier: v.optional(v.string()),        // Sentinel encrypted with org key — verifies passphrase
     recoveryWrappedOrgKey: v.optional(v.string()),  // Org key wrapped with recovery key — emergency recovery
+    serverSealedOrgKey: v.optional(v.string()),     // Org key wrapped with server wrapping key — for public ingestion
+    piiVersion: v.optional(v.string()),             // "legacy" | "migrating" | "org-1"
 
     updatedAt: v.number(),
 
