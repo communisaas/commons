@@ -597,13 +597,11 @@ export const listByUser = query({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Authentication required");
 
-    // Resolve userId from identity via emailHash
-    const { computeEmailHash } = await import("./_pii");
-    const emailHash = await computeEmailHash(identity.email!);
-    const user = emailHash
+    // Resolve userId from identity
+    const user = identity.email
       ? await ctx.db
           .query("users")
-          .withIndex("by_emailHash", (q) => q.eq("emailHash", emailHash))
+          .withIndex("by_email", (q) => q.eq("email", identity.email))
           .first()
       : null;
     if (!user) return [];

@@ -11,17 +11,12 @@ import { requireAuth } from "./_authHelpers";
  * Accepts either an email (computes hash) or a pre-computed emailHash.
  */
 export const getByEmail = internalQuery({
-  args: { email: v.optional(v.string()), emailHash: v.optional(v.string()) },
+  args: { email: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    let hash = args.emailHash;
-    if (!hash && args.email) {
-      const { computeEmailHash } = await import("./_pii");
-      hash = await computeEmailHash(args.email) ?? undefined;
-    }
-    if (!hash) return null;
+    if (!args.email) return null;
     return await ctx.db
       .query("users")
-      .withIndex("by_emailHash", (q) => q.eq("emailHash", hash!))
+      .withIndex("by_email", (q) => q.eq("email", args.email))
       .first();
   },
 });

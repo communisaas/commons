@@ -34,8 +34,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 // TODO: Update seed to use org-key encryption once all callers migrate away from server-held PII keys.
-// Currently uses computeEmailHash for user lookups (person-layer), which requires EMAIL_LOOKUP_KEY.
-import { computeEmailHash } from "./_pii";
+// User lookups now use plaintext email via by_email index.
 
 // =============================================================================
 // TIME HELPERS
@@ -294,14 +293,10 @@ export const zeroTemplateMetrics = internalMutation({
 export const checkSeeded = internalQuery({
   args: {},
   handler: async (ctx) => {
-    // computeEmailHash imported at top level
-    const seedHash = await computeEmailHash("seed-1@commons.email");
-    const user = seedHash
-      ? await ctx.db
-          .query("users")
-          .withIndex("by_emailHash", (q) => q.eq("emailHash", seedHash))
-          .first()
-      : null;
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", "seed-1@commons.email"))
+      .first();
     return user !== null;
   },
 });
@@ -1695,14 +1690,10 @@ export const grantDevAccount = internalMutation({
   },
   handler: async (ctx, { orgIds }) => {
     // Check if dev account exists
-    // computeEmailHash imported at top level
-    const devHash = await computeEmailHash("mock7ee@gmail.com");
-    const devUser = devHash
-      ? await ctx.db
-          .query("users")
-          .withIndex("by_emailHash", (q) => q.eq("emailHash", devHash))
-          .first()
-      : null;
+    const devUser = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", "mock7ee@gmail.com"))
+      .first();
 
     if (!devUser) {
       console.log("[seed] Dev account mock7ee@gmail.com not found — skipping dev grants.");
