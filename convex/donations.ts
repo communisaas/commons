@@ -8,39 +8,13 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
-import { encryptPii, computeEmailHash, tryDecryptPii, type EncryptedPii } from "./_pii";
+import { encryptPii, computeEmailHash, type EncryptedPii } from "./_pii";
 
 // =============================================================================
 // DONATIONS — Queries, Mutations, Actions
 // =============================================================================
 
-/**
- * Decrypt email and name from encrypted fields.
- * No plaintext fallback — encrypted fields are the sole source of truth.
- */
-async function decryptDonationPii(donation: {
-  _id: string;
-  encryptedEmail?: string | null;
-  encryptedName?: string | null;
-}): Promise<{ email: string | null; name: string | null }> {
-  let email: string | null = null;
-  if (donation.encryptedEmail) {
-    try {
-      const enc: EncryptedPii = JSON.parse(donation.encryptedEmail);
-      email = await tryDecryptPii(enc, donation._id, "email");
-    } catch { /* decryption failed */ }
-  }
-
-  let name: string | null = null;
-  if (donation.encryptedName) {
-    try {
-      const enc: EncryptedPii = JSON.parse(donation.encryptedName);
-      name = await tryDecryptPii(enc, donation._id, "name");
-    } catch { /* decryption failed */ }
-  }
-
-  return { email, name };
-}
+// PII returned as encrypted blobs — client decrypts with org key
 
 /**
  * List donations for an org.
@@ -79,15 +53,7 @@ export const listByOrg = query({
       page = page.filter((d) => d.status === args.status);
     }
 
-    // Decrypt PII from encrypted fields, falling back to plaintext
-    const decryptedPage = await Promise.all(
-      page.map(async (d) => {
-        const { email, name } = await decryptDonationPii(d);
-        return { ...d, email, name };
-      }),
-    );
-
-    return { ...results, page: decryptedPage };
+    return { ...results, page };
   },
 });
 
@@ -119,15 +85,7 @@ export const listByCampaign = query({
         cursor: args.paginationOpts.cursor ?? null,
       });
 
-    // Decrypt PII from encrypted fields, falling back to plaintext
-    const decryptedPage = await Promise.all(
-      results.page.map(async (d) => {
-        const { email, name } = await decryptDonationPii(d);
-        return { ...d, email, name };
-      }),
-    );
-
-    return { ...results, page: decryptedPage };
+    return { ...results, page: results.page };
   },
 });
 
@@ -751,21 +709,16 @@ export const listDonors = query({
       .filter((d) => d.status === "completed")
       .slice(0, 100);
 
-    const data = await Promise.all(
-      completed.map(async (d) => {
-        const { email, name } = await decryptDonationPii(d);
-        return {
-          _id: d._id,
-          name,
-          email,
-          amountCents: d.amountCents,
-          recurring: d.recurring,
-          engagementTier: d.engagementTier,
-          districtHash: d.districtHash ? d.districtHash.slice(0, 12) : null,
-          completedAt: d.completedAt ? new Date(d.completedAt).toISOString() : null,
-        };
-      }),
-    );
+    const data = completed.map((d) => ({
+      _id: d._id,
+      encryptedName: d.encryptedName ?? null,
+      encryptedEmail: d.encryptedEmail ?? null,
+      amountCents: d.amountCents,
+      recurring: d.recurring,
+      engagementTier: d.engagementTier,
+      districtHash: d.districtHash ? d.districtHash.slice(0, 12) : null,
+      completedAt: d.completedAt ? new Date(d.completedAt).toISOString() : null,
+    }));
 
     return { data };
   },

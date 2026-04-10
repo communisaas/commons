@@ -8,7 +8,7 @@
 import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { tryDecryptPii, type EncryptedPii } from "./_pii";
+// PII returned as encrypted blobs — v1 API consumers decrypt with org key
 
 // =============================================================================
 // API KEY AUTH
@@ -689,28 +689,7 @@ export const listDonationsV1 = internalQuery({
     const items = page.slice(0, args.limit);
     const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
 
-    // Decrypt PII from encrypted fields — no plaintext fallback
-    const decryptedItems = await Promise.all(
-      items.map(async (d) => {
-        let email: string | null = null;
-        if (d.encryptedEmail) {
-          try {
-            const enc: EncryptedPii = JSON.parse(d.encryptedEmail);
-            email = await tryDecryptPii(enc, d._id, "email");
-          } catch { /* decryption failed */ }
-        }
-        let name: string | null = null;
-        if (d.encryptedName) {
-          try {
-            const enc: EncryptedPii = JSON.parse(d.encryptedName);
-            name = await tryDecryptPii(enc, d._id, "name");
-          } catch { /* decryption failed */ }
-        }
-        return { ...d, email, name };
-      }),
-    );
-
-    return { items: decryptedItems, cursor: nextCursor, hasMore, total };
+    return { items, cursor: nextCursor, hasMore, total };
   },
 });
 
@@ -724,23 +703,7 @@ export const getDonationById = internalQuery({
     const d = donations.find((d) => d._id === donationId) ?? null;
     if (!d) return null;
 
-    // Decrypt PII from encrypted fields — no plaintext fallback
-    let email: string | null = null;
-    if (d.encryptedEmail) {
-      try {
-        const enc: EncryptedPii = JSON.parse(d.encryptedEmail);
-        email = await tryDecryptPii(enc, d._id, "email");
-      } catch { /* decryption failed */ }
-    }
-    let name: string | null = null;
-    if (d.encryptedName) {
-      try {
-        const enc: EncryptedPii = JSON.parse(d.encryptedName);
-        name = await tryDecryptPii(enc, d._id, "name");
-      } catch { /* decryption failed */ }
-    }
-
-    return { ...d, email, name };
+    return d;
   },
 });
 

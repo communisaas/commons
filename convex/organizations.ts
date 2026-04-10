@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
-import { tryDecryptPii, type EncryptedPii } from "./_pii";
+// Billing email: returned as encrypted blob, client decrypts with org key
 
 // =============================================================================
 // QUERIES
@@ -193,17 +193,9 @@ export const getDashboard = query({
 
       members,
 
-      billingEmail:
+      encryptedBillingEmail:
         membership.role === "owner"
-          ? await (async () => {
-              if (!org.encryptedBillingEmail) return null;
-              try {
-                const enc: EncryptedPii = JSON.parse(org.encryptedBillingEmail);
-                return await tryDecryptPii(enc, `org:${org._id}`, "billingEmail");
-              } catch {
-                return null;
-              }
-            })()
+          ? (org.encryptedBillingEmail ?? null)
           : null,
 
       onboardingState,
@@ -929,23 +921,12 @@ export const getBillingContext = query({
       .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
       .first();
 
-    // Decrypt billing email for Stripe customer creation
-    let billingEmail: string | null = null;
-    if (org.encryptedBillingEmail) {
-      try {
-        const enc: EncryptedPii = JSON.parse(org.encryptedBillingEmail);
-        billingEmail = await tryDecryptPii(enc, `org:${org._id}`, "billingEmail");
-      } catch {
-        // decryption failure — leave null
-      }
-    }
-
     return {
       org: {
         _id: org._id,
         slug: org.slug,
         stripeCustomerId: (org as any).stripeCustomerId ?? null,
-        billingEmail,
+        encryptedBillingEmail: org.encryptedBillingEmail ?? null,
       },
       membership: { role: membership.role },
       subscription: sub

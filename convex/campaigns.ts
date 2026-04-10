@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole, loadOrg, requireAuth } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
-import { encryptSupporterEmail, computeEmailHash, tryDecryptPii, type EncryptedPii } from "./_pii";
+import { encryptSupporterEmail, computeEmailHash } from "./_pii";
 
 // =============================================================================
 // QUERIES
@@ -1127,41 +1127,19 @@ export const getPastDeliveries = query({
       .withIndex("by_campaignId", (q) => q.eq("campaignId", campaignId))
       .collect();
 
-    return await Promise.all(
-      deliveries.map(async (d) => {
-        // Decrypt targetEmail from encrypted field if available, fall back to plaintext
-        let targetEmail = d.targetEmail;
-        if (d.encryptedTargetEmail) {
-          const decrypted = await tryDecryptPii(
-            JSON.parse(d.encryptedTargetEmail) as EncryptedPii,
-            "delivery:" + d._id,
-            "targetEmail",
-          );
-          if (decrypted) targetEmail = decrypted;
-        }
-
-        // Decrypt targetName from encrypted field if available, fall back to plaintext
-        let targetName = d.targetName;
-        if (d.encryptedTargetName) {
-          const decrypted = await tryDecryptPii(
-            JSON.parse(d.encryptedTargetName) as EncryptedPii,
-            "delivery:" + d._id,
-            "targetName",
-          );
-          if (decrypted) targetName = decrypted;
-        }
-
+    return deliveries.map((d) => {
         return {
           _id: d._id,
-          targetEmail,
-          targetName,
+          targetEmail: d.targetEmail ?? null,
+          targetName: d.targetName ?? null,
+          encryptedTargetEmail: d.encryptedTargetEmail ?? null,
+          encryptedTargetName: d.encryptedTargetName ?? null,
           targetTitle: d.targetTitle,
           targetDistrict: d.targetDistrict ?? null,
           status: d.status,
           sentAt: d.sentAt ?? null,
           proofWeight: d.proofWeight ?? null,
         };
-      }),
-    );
+      });
   },
 });
