@@ -1,12 +1,6 @@
 import { writable, type Writable } from 'svelte/store';
 import type { TemplateFormData } from '$lib/types/template';
 import { z } from 'zod';
-import {
-	encryptPiiClient,
-	decryptPiiClient,
-	isClientPiiAvailable,
-	type ClientEncryptedPii
-} from '$lib/core/crypto/client-pii';
 
 interface PendingSuggestion {
 	subject_line: string;
@@ -152,37 +146,25 @@ function createTemplateDraftStore(): TemplateDraftStore {
 			console.warn('Failed to save template drafts to localStorage');
 		}
 
-		// Encrypt emails async — best-effort, non-blocking
-		if (emailsByDraft.size > 0 && isClientPiiAvailable()) {
-			encryptDraftEmails(emailsByDraft);
-		}
-	}
-
-	/** Encrypt DM emails and store in a separate localStorage key per draft. */
-	async function encryptDraftEmails(emailsByDraft: Map<string, Array<{ idx: number; email: string }>>) {
-		for (const [draftId, emails] of emailsByDraft) {
-			try {
-				const plaintext = JSON.stringify(emails);
-				const encrypted = await encryptPiiClient(plaintext, draftId, 'dm-emails');
-				localStorage.setItem(`${STORAGE_KEY}_emails_${draftId}`, JSON.stringify(encrypted));
-			} catch {
-				// Encryption unavailable — emails already stripped from main blob
+		// Store DM emails in a separate localStorage key per draft
+		if (emailsByDraft.size > 0) {
+			for (const [draftId, emails] of emailsByDraft) {
+				try {
+					localStorage.setItem(`${STORAGE_KEY}_emails_${draftId}`, JSON.stringify(emails));
+				} catch {
+					// localStorage full or unavailable
+				}
 			}
 		}
 	}
 
-	/** Decrypt DM emails and merge back into draft data. */
+	/** Restore DM emails from localStorage back into draft data. */
 	async function decryptDraftEmails(draftId: string, data: TemplateFormData): Promise<void> {
-		if (!isClientPiiAvailable()) return;
 		const stored = localStorage.getItem(`${STORAGE_KEY}_emails_${draftId}`);
 		if (!stored) return;
 
 		try {
-			const encrypted: ClientEncryptedPii = JSON.parse(stored);
-			const plaintext = await decryptPiiClient(encrypted, draftId, 'dm-emails');
-			if (!plaintext) return;
-
-			const emails: Array<{ idx: number; email: string }> = JSON.parse(plaintext);
+			const emails: Array<{ idx: number; email: string }> = JSON.parse(stored);
 			const dms = data.audience?.decisionMakers;
 			if (!Array.isArray(dms)) return;
 

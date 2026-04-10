@@ -39,9 +39,6 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				hasWallet: convexProfile.hasWallet,
 				hasDistrictCredential: Boolean(convexProfile.districtVerified),
 				orgMemberships: convexMemberships ?? [],
-				// Encrypted blobs for un-migrated users (client decryption fallback)
-				encryptedEmail: convexProfile.email ? null : (convexProfile.encryptedEmail ?? null),
-				encryptedName: convexProfile.email ? null : (convexProfile.encryptedName ?? null),
 			}
 		};
 	}

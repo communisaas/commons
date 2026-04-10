@@ -261,8 +261,6 @@ export class OAuthCallbackHandler {
 			scope: config.scope,
 			email: userData.email,
 			name: userData.name ?? undefined,
-			encryptedEmail: undefined,
-			encryptedName: undefined,
 			avatar: userData.avatar,
 			emailVerified,
 			encryptedAccessToken: encAccessToken ? JSON.parse(JSON.stringify(encAccessToken)) : undefined,

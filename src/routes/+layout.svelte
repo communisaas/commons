@@ -56,43 +56,21 @@
 		data: LayoutData;
 	} = $props();
 
-	// Decrypted PII — local reactive state, triggers re-render in child components
-	let piiEmail: string | null = $state(null);
-	let piiName: string | null = $state(null);
-
-	// Reactive user object with decrypted PII overlaid
-	const user = $derived(data.user ? {
-		...(data.user as Record<string, unknown>),
-		email: piiEmail ?? (data.user as Record<string, unknown>).email,
-		name: piiName ?? (data.user as Record<string, unknown>).name,
-	} : null);
-
 	// Hydrate wallet state
 	$effect(() => {
 		walletState.initFromPageData(data.user as PageUser | null);
 	});
 
-	// ── Decrypt PII from client-custodied blobs ──
-	// Feeds the decryptedUser store (available to all components) AND local state (for layout user).
+	// Sync plaintext email/name to reactive store (consumed by child components)
+	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 	$effect(() => {
 		const u = data.user as Record<string, unknown> | null;
 		if (!browser) return;
-
 		syncDecryptedUser(u ? {
 			id: u.id as string,
 			email: u.email as string | null,
 			name: u.name as string | null,
-			encryptedEmail: u.encryptedEmail as string | null,
-			encryptedName: u.encryptedName as string | null,
 		} : null);
-	});
-
-	// Bridge store → local state for layout's derived user object
-	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
-
-	$effect(() => {
-		if (decryptedUser.email) piiEmail = decryptedUser.email;
-		if (decryptedUser.name) piiName = decryptedUser.name;
 	});
 
 	// ── Session credential for CredentialExpiryNudge (async, client-only) ──
@@ -157,7 +135,7 @@
 	{#if !isOrgPage}
 		<!-- HeaderSystem handles context-aware header rendering -->
 		<!-- HeaderTemplate is a structural subset of Template — handler only reads common fields at runtime -->
-		<HeaderSystem user={user as HeaderUser | null} template={(data as Record<string, unknown>).template as HeaderTemplate | null} onTemplateUse={handleTemplateUse} />
+		<HeaderSystem user={data.user as HeaderUser | null} template={(data as Record<string, unknown>).template as HeaderTemplate | null} onTemplateUse={handleTemplateUse} />
 
 		<!-- Credential expiry nudge: fixed banner below header, shows when credential nears expiration -->
 		<CredentialExpiryNudge

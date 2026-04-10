@@ -49,15 +49,11 @@ export const getProfile = query({
     const user = await ctx.db.get(userId);
     if (!user) throw new Error("User not found");
 
-    // Return plaintext email/name when available (post-migration).
-    // Encrypted blobs kept as fallback for un-migrated users.
     return {
       _id: user._id,
       _creationTime: user._creationTime,
       email: user.email ?? null,
       name: user.name ?? null,
-      encryptedEmail: user.encryptedEmail ?? null,
-      encryptedName: user.encryptedName ?? null,
       avatar: user.avatar ?? null,
       trustTier: user.trustTier ?? 0,
       isVerified: user.isVerified ?? false,
@@ -76,59 +72,6 @@ export const getProfile = query({
       profileVisibility: user.profileVisibility ?? "private",
       profileCompletedAt: user.profileCompletedAt ?? null,
     };
-  },
-});
-
-/**
- * Store client-encrypted PII blobs, transitioning custody to the user's device.
- * The server never sees plaintext — it receives opaque AES-256-GCM ciphertext
- * encrypted with HKDF(userSecret, "commons-pii-v1", userId).
- */
-export const storeClientEncryptedPii = mutation({
-  args: {
-    encryptedEmail: v.optional(v.string()),
-    encryptedName: v.optional(v.string()),
-    // Plaintext fields for migration — written alongside encrypted blobs
-    email: v.optional(v.string()),
-    name: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { userId } = await requireAuth(ctx);
-    await ctx.db.patch(userId, {
-      ...(args.encryptedEmail ? { encryptedEmail: args.encryptedEmail } : {}),
-      ...(args.encryptedName ? { encryptedName: args.encryptedName } : {}),
-      // Preserve plaintext email/name — no longer cleared
-      ...(args.email ? { email: args.email } : {}),
-      ...(args.name ? { name: args.name } : {}),
-      custodyMode: args.email ? "plaintext" : "client",
-      updatedAt: Date.now(),
-    });
-  },
-});
-
-/**
- * Migrate a user's email/name from client-encrypted blobs to plaintext.
- * Called by the client after successful decryption — one-time write-back.
- */
-export const migrateEmailToPlaintext = mutation({
-  args: {
-    email: v.string(),
-    name: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { userId } = await requireAuth(ctx);
-    const user = await ctx.db.get(userId);
-    if (!user) throw new Error("User not found");
-
-    // Skip if already migrated
-    if (user.email) return;
-
-    await ctx.db.patch(userId, {
-      email: args.email,
-      ...(args.name ? { name: args.name } : {}),
-      custodyMode: "plaintext",
-      updatedAt: Date.now(),
-    });
   },
 });
 

@@ -199,7 +199,6 @@ const SENSITIVE_IDENTITY_PATHS = [
 	'/api/identity/verify-mdl',
 	'/api/identity/bridge',
 	'/api/auth/passkey/register',
-	'/api/pii/migrate',
 	'/api/auth/passkey/authenticate',
 	'/api/location/resolve',
 	'/api/wallet/connect',

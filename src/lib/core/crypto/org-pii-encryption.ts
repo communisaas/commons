@@ -6,9 +6,9 @@
  *   HKDF(stretched, salt="commons-org-pii-v1", info=orgId) → AES-256-GCM key
  *
  * Domain separation from other keys:
- *   Person PII:    salt="commons-pii-v1"        (client-pii.ts)
  *   Credentials:   salt="commons-credential-v2"  (credential-encryption.ts)
  *   Org PII:       salt="commons-org-pii-v1"     (this file)
+ *   Person email/name: plaintext (no longer encrypted)
  */
 
 import { wordlist } from './bip39-english';

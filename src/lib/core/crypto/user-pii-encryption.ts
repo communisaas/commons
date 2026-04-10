@@ -1,11 +1,10 @@
 /**
- * @deprecated Server-held PII encryption — migrating to client-custodied encryption.
+ * @deprecated Server-held PII encryption — person email/name now stored plaintext.
  *
- * Person-layer PII: client-custodied encryption (device key in IndexedDB).
  * Org-layer PII: org-custodied encryption (passphrase-derived key, client decrypts).
  *
- * All functions in this file are deprecated. New code should use:
- * - `client-pii.ts` for person-layer PII (client-side)
+ * Functions in this file are deprecated for person-layer PII. New code should use:
+ * - Plaintext `email`/`name` fields on the users table
  * - `org-scoped-hash.ts` for org-layer hashing
  */
 
