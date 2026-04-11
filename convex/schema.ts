@@ -1056,6 +1056,9 @@ export default defineSchema({
     phoneHash: v.optional(v.string()),
     encryptedCustomFields: v.optional(v.string()),
 
+    // Cross-org bounce/complaint correlation (unkeyed SHA-256 of normalized email)
+    globalEmailHash: v.optional(v.string()),
+
     // ZK identity binding
     identityCommitment: v.optional(v.string()),
 
@@ -1073,6 +1076,7 @@ export default defineSchema({
     .index("by_orgId", ["orgId"])
     .index("by_orgId_emailHash", ["orgId", "emailHash"])
     .index("by_orgId_phoneHash", ["orgId", "phoneHash"])
+    .index("by_globalEmailHash", ["globalEmailHash"])
     .index("by_emailStatus", ["emailStatus"])
     .index("by_smsStatus", ["smsStatus"])
     .index("by_source", ["source"])

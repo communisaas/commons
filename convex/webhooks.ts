@@ -8,7 +8,27 @@
 import { internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { computeEmailHash } from "./_pii";
+/**
+ * Unkeyed SHA-256 hash of normalized email — for cross-org bounce/complaint
+ * correlation. No server-held secret key needed.
+ */
+async function computeGlobalEmailHash(email: string): Promise<string> {
+  const normalized = email.toLowerCase().trim();
+  const encoder = new TextEncoder();
+  const hash = await crypto.subtle.digest("SHA-256", encoder.encode(normalized));
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function computeGlobalPhoneHash(phone: string): Promise<string> {
+  const normalized = phone.replace(/\D/g, "");
+  const encoder = new TextEncoder();
+  const hash = await crypto.subtle.digest("SHA-256", encoder.encode(normalized));
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 // =============================================================================
 // SES WEBHOOK — INTERNAL MUTATIONS
@@ -27,8 +47,7 @@ export const updateSupporterEmailStatus = internalMutation({
     for (const hash of args.emailHashes) {
       const supporters = await ctx.db
         .query("supporters")
-        .withIndex("by_orgId_emailHash")
-        .filter((q) => q.eq(q.field("emailHash"), hash))
+        .withIndex("by_globalEmailHash", (q) => q.eq("globalEmailHash", hash))
         .collect();
 
       for (const s of supporters) {
@@ -50,7 +69,7 @@ export const recordEmailOpen = internalMutation({
   },
   handler: async (ctx, args) => {
     // Compute email hash for dedup lookups (HMAC is deterministic — safe in mutations)
-    const emailHash = args.emailHash ?? await computeEmailHash(args.email);
+    const emailHash = args.emailHash ?? await computeGlobalEmailHash(args.email);
 
     // Find the most recent sent blast that hasn't already recorded an open for this email
     const blasts = await ctx.db
@@ -99,7 +118,7 @@ export const recordEmailClick = internalMutation({
   },
   handler: async (ctx, args) => {
     // Compute email hash (HMAC is deterministic — safe in mutations)
-    const emailHash = await computeEmailHash(args.email);
+    const emailHash = await computeGlobalEmailHash(args.email);
 
     // Find the most recent sent blast
     const blasts = await ctx.db
@@ -280,7 +299,7 @@ export const processSesWebhook = internalAction({
 
       if (emails.length > 0) {
         const hashes = (
-          await Promise.all(emails.map((email: string) => computeEmailHash(email)))
+          await Promise.all(emails.map((email: string) => computeGlobalEmailHash(email)))
         ).filter((h): h is string => h !== null);
 
         if (hashes.length > 0) {
@@ -298,7 +317,7 @@ export const processSesWebhook = internalAction({
 
       if (emails.length > 0) {
         const hashes = (
-          await Promise.all(emails.map((email: string) => computeEmailHash(email)))
+          await Promise.all(emails.map((email: string) => computeGlobalEmailHash(email)))
         ).filter((h): h is string => h !== null);
 
         if (hashes.length > 0) {
@@ -379,7 +398,7 @@ export const handleInboundSms = internalMutation({
     const body = args.body.trim().toLowerCase();
 
     // Compute phone hash for lookup (phone field is encrypted now)
-    const fromPhoneHash = await computePhoneHash(args.from).catch(() => null);
+    const fromPhoneHash = await computeGlobalPhoneHash(args.from).catch(() => null);
 
     if (STOP_KEYWORDS.has(body)) {
       // Mark all supporters with this phone as stopped
