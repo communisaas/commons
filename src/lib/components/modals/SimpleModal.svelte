@@ -100,7 +100,7 @@
 		out:fade={{ duration: 150 }}
 	>
 		<div
-			class="relative w-full {maxWidth} flex max-h-[90vh] flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+			class="relative w-full {maxWidth} flex max-h-[90vh] flex-col overflow-hidden rounded-lg bg-white shadow-md"
 			role="document"
 		>
 			{#if title || showClose}

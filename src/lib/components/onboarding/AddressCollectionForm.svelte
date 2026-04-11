@@ -245,7 +245,7 @@
 
 					<!-- Privacy Note (Shield) -->
 					<div
-						class="mb-6 flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50/50 p-4"
+						class="mb-6 flex items-start gap-3 rounded-md border border-blue-100 bg-blue-50/50 p-4"
 					>
 						<div
 							class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600"
@@ -360,7 +360,7 @@
 								!city.trim() ||
 								!stateCode.trim() ||
 								!zipCode.trim()}
-							class="group relative w-full overflow-hidden rounded-xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-slate-900/20 transition-all hover:bg-slate-800 hover:shadow-xl hover:shadow-slate-900/30 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
+							class="group relative w-full overflow-hidden rounded-md bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-slate-900/20 transition-all hover:bg-slate-800 hover:shadow-md hover:shadow-slate-900/30 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
 						>
 							<div class="relative z-10 flex items-center justify-center gap-2">
 								{#if isVerifying}
@@ -386,7 +386,7 @@
 
 						<button
 							onclick={skipVerification}
-							class="w-full rounded-xl px-4 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+							class="w-full rounded-md px-4 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
 						>
 							Skip for now
 						</button>
@@ -409,7 +409,7 @@
 					</div>
 
 					<!-- Verified Address -->
-					<div class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+					<div class="mb-6 overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
 						<div class="border-b border-slate-100 bg-slate-50/50 px-4 py-3">
 							<p class="text-xs font-semibold uppercase tracking-wider text-slate-500">
 								Official Address
@@ -425,7 +425,7 @@
 
 					<!-- Representatives Found -->
 					{#if verificationResult?.representatives}
-						<div class="mb-6 overflow-hidden rounded-xl border border-blue-100 bg-blue-50/30">
+						<div class="mb-6 overflow-hidden rounded-md border border-blue-100 bg-blue-50/30">
 							<div class="border-b border-blue-100 bg-blue-50/50 px-4 py-3">
 								<p class="text-xs font-semibold uppercase tracking-wider text-blue-600">
 									Your Representatives
@@ -450,7 +450,7 @@
 					{/if}
 
 					{#if verificationResult?.zk_eligible === false}
-						<div class="mb-6 flex items-start gap-3 rounded-xl border border-amber-100 bg-amber-50/50 p-4">
+						<div class="mb-6 flex items-start gap-3 rounded-md border border-amber-100 bg-amber-50/50 p-4">
 							<AlertCircle class="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
 							<div>
 								<p class="text-sm font-medium text-amber-800">
@@ -467,14 +467,14 @@
 						<button
 							onclick={editAddress}
 							disabled={isSaving}
-							class="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50"
+							class="flex-1 rounded-md border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50"
 						>
 							Edit
 						</button>
 						<button
 							onclick={acceptAddress}
 							disabled={isSaving}
-							class="flex-1 rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-900/20 transition-all hover:bg-slate-800 hover:shadow-xl hover:shadow-slate-900/30 active:scale-[0.98] disabled:opacity-50"
+							class="flex-1 rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-900/20 transition-all hover:bg-slate-800 hover:shadow-md hover:shadow-slate-900/30 active:scale-[0.98] disabled:opacity-50"
 						>
 							{#if isSaving}
 								<span class="flex items-center justify-center gap-2">

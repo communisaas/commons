@@ -305,7 +305,7 @@
 	{#if FEATURES.DEBATE}
 		{#if liveDebate}
 			{@const badge = debateStatusBadge(liveDebate.status)}
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 				<div class="flex items-center justify-between">
 					<h3 class="text-sm font-medium text-text-secondary">Adversarial Debate</h3>
 					<span class="inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-mono {badge.classes}">
@@ -371,7 +371,7 @@
 				</a>
 			</div>
 		{:else if data.campaign.debateEnabled && !data.campaign.debateId && data.actionCount != null}
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-3">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-3">
 				<h3 class="text-sm font-medium text-text-secondary">Adversarial Debate</h3>
 				<p class="text-sm text-text-tertiary">
 					{data.actionCount} of {data.campaign.debateThreshold} verified actions — debate activates at threshold
@@ -387,7 +387,7 @@
 	{/if}
 
 	<!-- Decision-Maker Targets -->
-	<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+	<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 		<h3 class="text-sm font-medium text-text-secondary">Decision-Maker Targets</h3>
 
 		{#if Array.isArray(data.campaign.targets) && data.campaign.targets.length > 0}
@@ -475,7 +475,7 @@
 
 	<!-- Embed widget -->
 	{#if data.campaign.status === 'ACTIVE' || data.campaign.status === 'PAUSED'}
-		<div class="rounded-xl border border-surface-border bg-surface-base">
+		<div class="rounded-md border border-surface-border bg-surface-base">
 			<button
 				type="button"
 				onclick={() => { embedOpen = !embedOpen; }}
@@ -520,12 +520,12 @@
 
 	<!-- Campaign settings -->
 	<details open={data.campaign.status === 'DRAFT'}>
-		<summary class="cursor-pointer rounded-xl border border-surface-border bg-surface-base px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
+		<summary class="cursor-pointer rounded-md border border-surface-border bg-surface-base px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
 			Campaign settings
 		</summary>
 		<div class="mt-2">
 			<form method="POST" action="?/update" use:enhance class="space-y-6">
-				<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-5">
+				<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-5">
 					<!-- Title -->
 					<div>
 						<label for="title" class="block text-sm font-medium text-text-secondary mb-1.5">Title</label>
@@ -688,7 +688,7 @@
 	<!-- Analytics detail -->
 	{#if data.analytics}
 		<details>
-			<summary class="cursor-pointer rounded-xl border border-surface-border bg-surface-base px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
+			<summary class="cursor-pointer rounded-md border border-surface-border bg-surface-base px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
 				Analytics detail
 			</summary>
 			<div class="mt-2 space-y-6">

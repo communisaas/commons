@@ -183,7 +183,7 @@
 
 	<!-- Trust Tier Gate -->
 	{#if data.gated}
-		<div class="rounded-xl border border-slate-200 bg-white p-8 text-center">
+		<div class="rounded-md border border-slate-200 bg-white p-8 text-center">
 			<Shield class="mx-auto h-12 w-12 text-slate-300 mb-4" />
 			<h2 class="text-lg font-medium text-slate-800 mb-2">Identity Verification Required</h2>
 			<p class="text-sm text-slate-500 mb-4">
@@ -211,14 +211,14 @@
 			</div>
 
 			{#if data.grants.length === 0}
-				<div class="rounded-xl border border-dashed border-slate-200 p-8 text-center">
+				<div class="rounded-md border border-dashed border-slate-200 p-8 text-center">
 					<Bot class="mx-auto h-10 w-10 text-slate-300 mb-3" />
 					<p class="text-sm text-slate-500">No delegation grants yet. Create one to get started.</p>
 				</div>
 			{:else}
 				<div class="space-y-3">
 					{#each data.grants as grant}
-						<div class="rounded-xl border border-slate-200 bg-white p-5">
+						<div class="rounded-md border border-slate-200 bg-white p-5">
 							<div class="flex items-start justify-between mb-3">
 								<div>
 									<div class="flex items-center gap-2 mb-1">
@@ -281,7 +281,7 @@
 		<!-- Creation Flow -->
 		{#if showCreate}
 			<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-				<div class="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+				<div class="w-full max-w-lg rounded-2xl bg-white p-6 shadow-md">
 					<div class="flex items-center justify-between mb-4">
 						<h3 class="text-lg font-medium text-slate-900">
 							{createStep === 'input' ? 'Describe Your Policy' : 'Review Parsed Policy'}
@@ -407,7 +407,7 @@
 				<h2 class="text-lg font-medium text-slate-800 mb-4">Pending Reviews</h2>
 				<div class="space-y-3">
 					{#each data.pendingReviews as review}
-						<div class="rounded-xl border border-amber-100 bg-amber-50/30 p-4">
+						<div class="rounded-md border border-amber-100 bg-amber-50/30 p-4">
 							<div class="flex items-start justify-between">
 								<div>
 									<p class="text-sm font-medium text-slate-800">{review.targetTitle}</p>
@@ -446,7 +446,7 @@
 		{#if data.recentActions.length > 0}
 			<section>
 				<h2 class="text-lg font-medium text-slate-800 mb-4">Recent Actions</h2>
-				<div class="rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+				<div class="rounded-md border border-slate-200 bg-white divide-y divide-slate-100">
 					{#each data.recentActions as action}
 						<div class="p-4">
 							<div class="flex items-center justify-between">

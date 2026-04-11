@@ -156,7 +156,7 @@
 	>
 		<!-- Modal Container -->
 		<div
-			class="relative w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+			class="relative w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-md"
 			transition:scale={{ duration: 300, start: 0.95, easing: quintOut }}
 		>
 			<!-- Close Button -->

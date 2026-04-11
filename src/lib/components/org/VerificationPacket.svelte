@@ -99,7 +99,7 @@
 
 </script>
 
-<div class="rounded-xl border p-6 space-y-6" style="background: var(--coord-node-bg); border-color: var(--coord-node-border); box-shadow: var(--coord-node-shadow);">
+<div class="rounded-md border p-6 space-y-6" style="background: var(--coord-node-bg); border-color: var(--coord-node-border); box-shadow: var(--coord-node-shadow);">
 	<!-- Header -->
 	<div class="flex items-center justify-between">
 		<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">{label}</p>

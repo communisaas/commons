@@ -158,7 +158,7 @@
     <!-- Backdrop -->
     <button
       type="button"
-      class="absolute inset-0 bg-black/40 backdrop-blur-sm"
+      class="absolute inset-0 bg-black/40"
       onclick={handleDismiss}
       aria-label="Close compose pane"
     ></button>
@@ -231,7 +231,7 @@
   </div>
 {:else}
   <!-- Desktop: inline panel -->
-  <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
+  <div class="rounded-md border border-slate-200 bg-white shadow-sm">
     <!-- Back link -->
     <div class="border-b border-slate-100 px-6 py-4">
       <button

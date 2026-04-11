@@ -126,7 +126,7 @@
 				-->
 				{#if debate.winningStance === 'SUPPORT'}
 					<button
-						class="flex w-full items-center gap-3 rounded-xl border border-emerald-200/60
+						class="flex w-full items-center gap-3 rounded-md border border-emerald-200/60
 						       bg-emerald-50/95 px-4 py-2.5 shadow-lg backdrop-blur-sm
 						       transition-colors active:bg-emerald-100/95"
 						onclick={scrollToDebate}
@@ -142,7 +142,7 @@
 					</button>
 				{:else if debate.winningStance === 'OPPOSE'}
 					<button
-						class="flex w-full items-center gap-3 rounded-xl border border-red-200/60
+						class="flex w-full items-center gap-3 rounded-md border border-red-200/60
 						       bg-red-50/95 px-4 py-2.5 shadow-lg backdrop-blur-sm
 						       transition-colors active:bg-red-100/95"
 						onclick={scrollToDebate}
@@ -158,7 +158,7 @@
 					</button>
 				{:else if debate.winningStance === 'AMEND'}
 					<button
-						class="flex w-full items-center gap-3 rounded-xl border border-amber-200/60
+						class="flex w-full items-center gap-3 rounded-md border border-amber-200/60
 						       bg-amber-50/95 px-4 py-2.5 shadow-lg backdrop-blur-sm
 						       transition-colors active:bg-amber-100/95"
 						onclick={scrollToDebate}
@@ -190,7 +190,7 @@
 					same stance breakdown the visual bar communicates.
 				-->
 				<button
-					class="flex w-full items-center gap-3 rounded-xl border border-amber-200/60
+					class="flex w-full items-center gap-3 rounded-md border border-amber-200/60
 					       bg-amber-50/95 px-4 py-2.5 shadow-lg backdrop-blur-sm
 					       transition-colors active:bg-amber-100/95"
 					onclick={scrollToDebate}

@@ -79,7 +79,7 @@
 	}
 </script>
 
-<div class="rounded-xl border border-slate-200 bg-white p-5" style="border-radius: 12px;">
+<div class="rounded-md border border-slate-200 bg-white p-5" style="border-radius: 12px;">
 	<h3 class="text-base font-bold text-slate-900" style="font-family: 'Satoshi', sans-serif;">
 		Submit Argument
 	</h3>

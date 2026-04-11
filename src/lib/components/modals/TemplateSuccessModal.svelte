@@ -151,7 +151,7 @@
 >
 	<!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 	<div
-		class="relative w-full max-w-md overflow-hidden rounded-xl bg-white shadow-2xl"
+		class="relative w-full max-w-md overflow-hidden rounded-md bg-white shadow-md"
 		role="presentation"
 		onclick={(e) => e.stopPropagation()}
 		onkeydown={(e) => e.stopPropagation()}

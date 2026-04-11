@@ -16,7 +16,7 @@
 <div class="mx-auto max-w-lg px-4 py-16">
 	{#if data.delivery}
 		<!-- Report delivery verification -->
-		<div class="rounded-xl border-2 border-green-200 bg-gradient-to-br from-green-50 to-emerald-50 p-8 text-center shadow-sm">
+		<div class="rounded-md border-2 border-green-200 bg-gradient-to-br from-green-50 to-emerald-50 p-8 text-center shadow-sm">
 			<div class="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
 				<ShieldCheck class="h-8 w-8 text-green-600" />
 			</div>
@@ -42,7 +42,7 @@
 		</div>
 	{:else if data.credential && !data.credential.expired}
 		<!-- Valid credential -->
-		<div class="rounded-xl border-2 border-green-200 bg-gradient-to-br from-green-50 to-emerald-50 p-8 text-center shadow-sm">
+		<div class="rounded-md border-2 border-green-200 bg-gradient-to-br from-green-50 to-emerald-50 p-8 text-center shadow-sm">
 			<div class="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
 				<ShieldCheck class="h-8 w-8 text-green-600" />
 			</div>
@@ -60,7 +60,7 @@
 		</div>
 	{:else if data.credential?.expired}
 		<!-- Expired credential -->
-		<div class="rounded-xl border-2 border-amber-200 bg-amber-50 p-8 text-center shadow-sm">
+		<div class="rounded-md border-2 border-amber-200 bg-amber-50 p-8 text-center shadow-sm">
 			<div class="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-amber-100">
 				<Clock class="h-8 w-8 text-amber-600" />
 			</div>
@@ -71,7 +71,7 @@
 		</div>
 	{:else}
 		<!-- Error state -->
-		<div class="rounded-xl border-2 border-slate-200 bg-slate-50 p-8 text-center shadow-sm">
+		<div class="rounded-md border-2 border-slate-200 bg-slate-50 p-8 text-center shadow-sm">
 			<div class="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-slate-100">
 				<AlertCircle class="h-8 w-8 text-slate-500" />
 			</div>

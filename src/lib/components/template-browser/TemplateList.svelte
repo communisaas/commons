@@ -319,7 +319,7 @@
 			<button
 				type="button"
 				onclick={onCreateTemplate}
-				class="group relative flex w-full items-center gap-4 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50/50 p-4 text-left transition-all duration-300 hover:border-cyan-400 hover:bg-cyan-50/50 hover:shadow-md md:p-5"
+				class="group relative flex w-full items-center gap-4 rounded-md border-2 border-dashed border-slate-300 bg-slate-50/50 p-4 text-left transition-all duration-300 hover:border-cyan-400 hover:bg-cyan-50/50 hover:shadow-md md:p-5"
 			>
 				<div
 					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-200 transition-colors group-hover:bg-cyan-100"
@@ -361,7 +361,7 @@
 						data-template-button
 						data-template-id={template.id}
 						data-testid="template-button-{template.id}"
-						class="template-card card-topic relative flex w-full items-start justify-between gap-3 rounded-xl p-3 text-left backdrop-blur-sm transition-all duration-300 hover:scale-[1.02] motion-reduce:transition-none motion-reduce:hover:scale-100 md:p-4 {isCongressional
+						class="template-card card-topic relative flex w-full items-start justify-between gap-3 rounded-md p-3 text-left transition-all duration-300 hover:scale-[1.02] motion-reduce:transition-none motion-reduce:hover:scale-100 md:p-4 {isCongressional
 							? 'card-weight-heavy'
 							: 'card-weight-light'}"
 						class:newly-revealed={isNewlyRevealed}

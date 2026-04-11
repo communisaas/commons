@@ -184,7 +184,7 @@
 
 		<!-- Search results -->
 		{#if hasSearched}
-			<div class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] overflow-hidden">
+			<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] overflow-hidden">
 				{#if searchResults.length === 0}
 					<div class="p-6 text-center">
 						<p class="text-sm text-text-tertiary">No bills found for "{searchQuery}"</p>
@@ -259,7 +259,7 @@
 		<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Watching</h2>
 
 		{#if data.watching.length === 0}
-			<div class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-8 text-center">
+			<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-8 text-center">
 				<div class="mx-auto w-10 h-10 rounded-full bg-surface-overlay flex items-center justify-center mb-3">
 					<svg class="w-5 h-5 text-text-quaternary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
@@ -273,7 +273,7 @@
 				{#each data.watching as watch (watch.id)}
 					{@const bill = watch.bill}
 					{@const pos = positions[watch.billId] ?? null}
-					<div class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 hover:bg-surface-raised transition-colors">
+					<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 hover:bg-surface-raised transition-colors">
 						<div class="flex items-start justify-between gap-3">
 							<div class="min-w-0 flex-1">
 								<div class="flex items-center gap-2 mb-1">
@@ -355,7 +355,7 @@
 			<div class="space-y-3">
 				{#each data.relevant as rel (rel.id)}
 					{@const bill = rel.bill}
-					<div class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 hover:bg-surface-raised transition-colors">
+					<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 hover:bg-surface-raised transition-colors">
 						<div class="flex items-start justify-between gap-3">
 							<div class="min-w-0 flex-1">
 								<div class="flex items-center gap-2 mb-1">

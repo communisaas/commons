@@ -743,7 +743,7 @@
 						{@const isEditing = activeInlineEditor === segment.instanceId}
 						{@const isFilled = !!(segment.name && variableValues[segment.name])}
 						<div
-							class="voice-card my-3 whitespace-normal rounded-xl px-5 py-4
+							class="voice-card my-3 whitespace-normal rounded-md px-5 py-4
 								{isEditing
 									? 'voice-card--active'
 									: isFilled

@@ -120,7 +120,7 @@
 {#if href}
 	<a
 		{href}
-		class="group block rounded-xl border border-slate-200 bg-white p-4 shadow-sm
+		class="group block rounded-md border border-slate-200 bg-white p-4 shadow-sm
       transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2
       focus-visible:ring-indigo-300"
 		data-debate-id={debateId}
@@ -128,7 +128,7 @@
 		{@render cardContent()}
 	</a>
 {:else}
-	<div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-debate-id={debateId}>
+	<div class="rounded-md border border-slate-200 bg-white p-4 shadow-sm" data-debate-id={debateId}>
 		{@render cardContent()}
 	</div>
 {/if}

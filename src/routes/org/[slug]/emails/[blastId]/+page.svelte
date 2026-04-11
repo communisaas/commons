@@ -116,7 +116,7 @@
 			{#each data.variants as variant, i (variant?.id ?? i)}
 				{#if variant}
 					{@const winner = isWinner(variant)}
-					<div class="rounded-xl border {winner ? 'border-teal-500/30 bg-teal-500/5' : 'border-surface-border bg-surface-base'} p-6 space-y-4">
+					<div class="rounded-md border {winner ? 'border-teal-500/30 bg-teal-500/5' : 'border-surface-border bg-surface-base'} p-6 space-y-4">
 						<div class="flex items-center justify-between">
 							<h2 class="text-lg font-medium text-text-primary">Variant {variant.abVariant}</h2>
 							{#if winner && data.variants[0]?.abWinnerPickedAt}
@@ -158,7 +158,7 @@
 
 		<!-- Winner send info -->
 		{#if FEATURES.ENGAGEMENT_METRICS && data.winnerBlast}
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-2">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-2">
 				<h3 class="text-sm font-medium text-text-secondary">Winner Send</h3>
 				<p class="text-sm text-text-tertiary">
 					Winning variant sent to {data.winnerBlast.totalSent.toLocaleString()} remaining recipients
@@ -173,7 +173,7 @@
 	{:else}
 		<!-- Non-A/B blast detail -->
 		{#if FEATURES.ENGAGEMENT_METRICS}
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6">
 				<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
 					<div>
 						<p class="text-xs text-text-tertiary">Sent</p>
@@ -201,7 +201,7 @@
 
 	<!-- Bounced Recipients -->
 	{#if FEATURES.ENGAGEMENT_METRICS && data.bounceEvents.length > 0}
-		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-3">
+		<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-3">
 			<h3 class="text-sm font-medium text-text-secondary">
 				Bounced Recipients
 				<span class="ml-2 font-mono text-text-tertiary">{data.bounceEvents.length}</span>

@@ -378,7 +378,7 @@
 				<button
 					type="button"
 					onclick={generateAndSubmit}
-					class="flex-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-xl"
+					class="flex-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-md"
 				>
 					Send to Representative
 				</button>
@@ -459,7 +459,7 @@
 		<!-- Success state (parent transitions away on auto-dispatch; user rarely sees this) -->
 		<div class="flex flex-col items-center justify-center py-12 text-center">
 			<div
-				class="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-green-400 to-emerald-600 shadow-2xl"
+				class="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-green-400 to-emerald-600 shadow-md"
 			>
 				<Check class="h-10 w-10 text-white" strokeWidth={3} />
 			</div>
@@ -496,7 +496,7 @@
 			<button
 				type="button"
 				onclick={() => { /* Parent already notified via auto-dispatch */ }}
-				class="mt-6 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-xl"
+				class="mt-6 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-md"
 			>
 				Done
 			</button>
@@ -520,7 +520,7 @@
 					<button
 						type="button"
 						onclick={handleRetry}
-						class="rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-xl"
+						class="rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-md"
 					>
 						{proofState.retryLabel ?? 'Try Again'}
 					</button>

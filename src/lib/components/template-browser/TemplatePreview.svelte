@@ -200,7 +200,7 @@
 	data-testid="template-preview"
 	style="--card-hue: {hue}"
 	class="card-topic card-weight-heavy
-               {inModal ? 'h-full' : 'rounded-xl'}
+               {inModal ? 'h-full' : 'rounded-md'}
                {inModal ? 'p-5 sm:p-8' : 'p-4 sm:p-5 md:p-6 lg:p-8'}
                {inModal ? '' : expandToContent ? '' : 'sm:sticky sm:top-8'}
                {inModal ? '' : expandToContent ? '' : 'h-[calc(100vh-4rem)]'}
@@ -254,9 +254,9 @@
 
 <!-- Email Loading Modal - Integrated inline -->
 {#if showEmailModal}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
 		<div
-			class="animate-in zoom-in-95 mx-4 w-full max-w-sm rounded-2xl bg-white p-8 shadow-2xl duration-200"
+			class="animate-in zoom-in-95 mx-4 w-full max-w-sm rounded-2xl bg-white p-8 shadow-md duration-200"
 		>
 			<div class="text-center">
 				<!-- Animated mail icon -->

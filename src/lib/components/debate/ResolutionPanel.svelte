@@ -75,7 +75,7 @@
 </script>
 
 <!-- Resolution container: cooler atmosphere than the amber deliberation surface -->
-<div class="rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50/80 overflow-hidden">
+<div class="rounded-md border border-slate-200 bg-gradient-to-b from-white to-slate-50/80 overflow-hidden">
 	<!-- Phase + Model agreement header -->
 	<div class="px-5 pt-4 pb-3 flex items-center justify-between flex-wrap gap-3">
 		<ResolutionPhaseIndicator

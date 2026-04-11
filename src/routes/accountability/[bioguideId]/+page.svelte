@@ -114,7 +114,7 @@
 
 	<!-- Summary Card -->
 	<section
-		class="mb-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+		class="mb-8 rounded-md border border-slate-200 bg-white p-6 shadow-sm"
 		aria-label="Summary statistics"
 	>
 		<h2 class="sr-only">Summary</h2>

@@ -97,7 +97,7 @@
 		aria-label="Contact details"
 		tabindex="-1"
 	>
-		<div class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+		<div class="w-full max-w-md rounded-lg bg-white p-6 shadow-md">
 			<h3 class="text-lg font-semibold text-slate-900">Contact Details</h3>
 
 			<div class="mt-4 space-y-4">

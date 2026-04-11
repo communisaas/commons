@@ -172,7 +172,7 @@
 	{/if}
 
 	<!-- Proof context -->
-	<div class="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-6 py-4">
+	<div class="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-6 py-4">
 		<p class="text-sm text-text-secondary">
 			You're about to deliver cryptographic proof of constituent support.
 		</p>
@@ -197,7 +197,7 @@
 			await update({ reset: false });
 		};
 	}} class="space-y-6">
-		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+		<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 			<div class="flex items-center justify-between">
 				<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Decision-maker recipients</p>
 				{#if hasTargets}
@@ -259,7 +259,7 @@
 		</div>
 
 		<!-- Email Preview -->
-		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+		<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 			<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Email Preview</p>
 			<div class="rounded-lg border border-surface-border bg-surface-raised overflow-hidden" style="max-height: 600px; overflow-y: auto;">
 				<iframe
@@ -304,7 +304,7 @@
 
 	<!-- Delivery Timeline -->
 	{#if data.pastDeliveries.length > 0}
-		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-6">
+		<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-6">
 			<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Proof delivery arc</p>
 
 			{#each data.pastDeliveries as delivery}
@@ -392,7 +392,7 @@
 	<!-- Log Response Modal -->
 	{#if logResponseDeliveryId}
 		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true">
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6 w-full max-w-md space-y-4">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6 w-full max-w-md space-y-4">
 				<h3 class="text-sm font-semibold text-text-primary">Log Decision-Maker Response</h3>
 
 				<div class="space-y-3">

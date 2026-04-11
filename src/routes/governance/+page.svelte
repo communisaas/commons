@@ -141,7 +141,7 @@
 
 	{#if cases.length === 0}
 		<!-- Empty state -->
-		<div class="rounded-xl border border-slate-200 bg-white p-12 text-center">
+		<div class="rounded-md border border-slate-200 bg-white p-12 text-center">
 			<Scale class="h-12 w-12 text-slate-300 mx-auto mb-4" />
 			<h2 class="text-lg font-medium text-slate-700 mb-1">No pending cases</h2>
 			<p class="text-sm text-slate-500 max-w-md mx-auto">
@@ -159,7 +159,7 @@
 				{@const winner = selectedWinner[govCase.id]}
 				{@const result = submitResult[govCase.id]}
 
-				<div class="rounded-xl border border-slate-200 bg-white overflow-hidden transition-shadow
+				<div class="rounded-md border border-slate-200 bg-white overflow-hidden transition-shadow
 					{isExpanded ? 'shadow-lg ring-1 ring-violet-100' : 'shadow-sm hover:shadow-md'}">
 
 					<!-- Case header — always visible -->

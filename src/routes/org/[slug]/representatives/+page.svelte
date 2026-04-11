@@ -190,7 +190,7 @@
 		<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Following</h2>
 
 		{#if filteredFollowed.length === 0}
-			<div class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-8 text-center">
+			<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-8 text-center">
 				<div class="mx-auto w-10 h-10 rounded-full bg-surface-overlay flex items-center justify-center mb-3">
 					<svg class="w-5 h-5 text-text-quaternary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6m-1.5 12V10.332A48.36 48.36 0 0012 9.75c-2.551 0-5.056.2-7.5.582V21M3 21h18M12 6.75h.008v.008H12V6.75z" />
@@ -208,7 +208,7 @@
 			<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
 				{#each filteredFollowed as follow (follow.id)}
 					{@const dm = follow.decisionMaker}
-					<div class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 hover:bg-surface-raised transition-colors">
+					<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 hover:bg-surface-raised transition-colors">
 						<div class="flex items-start gap-3">
 							<!-- Photo or initials -->
 							{#if dm.photoUrl}
@@ -289,7 +289,7 @@
 			<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Discover</h2>
 			<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
 				{#each filteredDiscover as dm (dm.id)}
-					<div class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 hover:bg-surface-raised transition-colors">
+					<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 hover:bg-surface-raised transition-colors">
 						<div class="flex items-start gap-3">
 							{#if dm.photoUrl}
 								<img

@@ -334,7 +334,7 @@
 				<button
 					type="button"
 					onclick={proceedFromValueProp}
-					class="w-full rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4 text-lg font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-xl"
+					class="w-full rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4 text-lg font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-md"
 				>
 					Continue to Verification
 				</button>
@@ -353,7 +353,7 @@
 			<!-- Success State -->
 			<div class="py-12 text-center">
 				<div
-					class="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-green-400 to-emerald-600 shadow-2xl"
+					class="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-green-400 to-emerald-600 shadow-md"
 				>
 					<Check class="h-10 w-10 text-white" strokeWidth={3} />
 				</div>
@@ -431,7 +431,7 @@
 							oncompletePending = false;
 							oncomplete?.({ ...verificationData!, userId });
 						}}
-						class="rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-xl"
+						class="rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-md"
 					>
 						Continue to Message Submission
 					</button>

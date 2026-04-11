@@ -196,7 +196,7 @@ ACCESSIBILITY:
 	<!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
 	<aside
 		bind:this={drawerElement}
-		class="detail-drawer fixed right-0 top-0 z-50 flex h-full w-full flex-col overflow-hidden shadow-2xl"
+		class="detail-drawer fixed right-0 top-0 z-50 flex h-full w-full flex-col overflow-hidden shadow-md"
 		class:drawer-l3={isL3Active}
 		style="
 			background: oklch(0.995 0.003 60);

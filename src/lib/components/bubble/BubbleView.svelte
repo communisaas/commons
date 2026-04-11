@@ -25,7 +25,7 @@
 </script>
 
 <div
-	class="relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50 {className}"
+	class="relative overflow-hidden rounded-md border border-slate-200 bg-slate-50 {className}"
 	style="min-height: 320px;"
 	role="region"
 	aria-label="Geographic bubble — your privacy-preserving location"

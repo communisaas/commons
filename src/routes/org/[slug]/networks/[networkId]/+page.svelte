@@ -149,7 +149,7 @@
 		{/if}
 
 		<!-- Coalition Proof Power (HERO) -->
-		<div class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-6 space-y-4">
+		<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-6 space-y-4">
 			<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary">Coalition Proof Power</p>
 
 			<div class="flex items-baseline gap-3">
@@ -185,7 +185,7 @@
 
 		<!-- Proof Pressure -->
 		{#if data.proofPressure.length > 0}
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 				<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary">Cross-Org Proof Pressure</p>
 
 				<div class="overflow-x-auto rounded-lg border border-surface-border">
@@ -250,7 +250,7 @@
 		{/if}
 
 		<!-- Coalition Report CTA + Report -->
-		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+		<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 			<div class="flex items-center justify-between">
 				<p class="text-sm font-medium text-text-secondary">Coalition Report</p>
 				<button
@@ -266,7 +266,7 @@
 
 		<!-- Membership Admin (collapsed) -->
 		<details>
-			<summary class="cursor-pointer rounded-xl border border-surface-border bg-surface-base px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
+			<summary class="cursor-pointer rounded-md border border-surface-border bg-surface-base px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
 				Membership admin
 				<span class="text-text-quaternary ml-1">&middot; {activeMembers.length} members</span>
 			</summary>

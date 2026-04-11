@@ -46,7 +46,7 @@
 
 {#if bubbleState.phase !== 'idle'}
 	<div
-		class="rounded-lg border border-slate-200 bg-white/90 p-3 text-sm backdrop-blur-sm"
+		class="rounded-lg border border-slate-200 bg-white/90 p-3 text-sm"
 		role="status"
 		aria-live="polite"
 	>

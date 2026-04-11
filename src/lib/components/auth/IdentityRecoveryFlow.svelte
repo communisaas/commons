@@ -246,7 +246,7 @@
 					<button
 						type="button"
 						onclick={() => { currentStep = 'verify-mdl'; }}
-						class="rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-amber-600 hover:to-orange-600 hover:shadow-xl"
+						class="rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-amber-600 hover:to-orange-600 hover:shadow-md"
 					>
 						Restore Credentials
 					</button>
@@ -286,7 +286,7 @@
 			<!-- Success State -->
 			<div class="py-12 text-center">
 				<div
-					class="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-green-400 to-emerald-600 shadow-2xl"
+					class="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-green-400 to-emerald-600 shadow-md"
 				>
 					<Check class="h-10 w-10 text-white" strokeWidth={3} />
 				</div>

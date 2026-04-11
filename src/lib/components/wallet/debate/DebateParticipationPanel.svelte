@@ -30,7 +30,7 @@
 	<div class="mt-4 space-y-4">
 		{#if !walletState.connected}
 			<!-- Connect wallet prompt -->
-			<div class="rounded-xl border border-slate-200 bg-white p-5 text-center" style="border-radius: 12px;">
+			<div class="rounded-md border border-slate-200 bg-white p-5 text-center" style="border-radius: 12px;">
 				<p class="text-sm text-slate-500">Connect your wallet to participate in this debate.</p>
 				<button
 					onclick={() => walletState.connectEVM()}
@@ -54,7 +54,7 @@
 			</div>
 		{:else if debateStatus !== 'active'}
 			<!-- Read-only status -->
-			<div class="rounded-xl border border-slate-200 bg-slate-50 p-5 text-center" style="border-radius: 12px;">
+			<div class="rounded-md border border-slate-200 bg-slate-50 p-5 text-center" style="border-radius: 12px;">
 				<p class="text-sm text-slate-500">
 					Debate is <span class="font-medium text-slate-700">{debateStatus}</span>
 				</p>

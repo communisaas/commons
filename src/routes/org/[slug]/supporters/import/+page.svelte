@@ -298,7 +298,7 @@
 	</div>
 
 	<!-- ── CSV Upload Section (hero) ──────────────────────────── -->
-	<div class="rounded-xl border border-surface-border bg-surface-base p-5">
+	<div class="rounded-md border border-surface-border bg-surface-base p-5">
 		<div class="flex items-center gap-3 mb-4">
 			<div class="w-9 h-9 rounded-lg bg-teal-500/15 flex items-center justify-center flex-shrink-0">
 				<svg class="w-5 h-5 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -364,7 +364,7 @@
 			ondrop={onDrop}
 			ondragover={onDragOver}
 			ondragleave={onDragLeave}
-			class="relative rounded-xl border-2 border-dashed p-12 text-center transition-colors cursor-pointer
+			class="relative rounded-md border-2 border-dashed p-12 text-center transition-colors cursor-pointer
 				{dragOver ? 'border-teal-400 bg-teal-500/5' : 'border-surface-border-strong hover:border-text-quaternary bg-surface-base'}"
 			onclick={() => document.getElementById('csv-file-input')?.click()}
 			onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') document.getElementById('csv-file-input')?.click(); }}
@@ -417,7 +417,7 @@
 		</div>
 
 		<!-- Column mappings -->
-		<div class="rounded-xl border border-surface-border bg-surface-base divide-y divide-surface-border">
+		<div class="rounded-md border border-surface-border bg-surface-base divide-y divide-surface-border">
 			<div class="px-4 py-3">
 				<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Column Mapping</p>
 			</div>
@@ -452,7 +452,7 @@
 
 		<!-- Preview table -->
 		{#if previewRows.length > 0}
-			<div class="rounded-xl border border-surface-border bg-surface-base overflow-hidden">
+			<div class="rounded-md border border-surface-border bg-surface-base overflow-hidden">
 				<div class="px-4 py-3 border-b border-surface-border">
 					<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">
 						Preview <span class="text-text-quaternary">(first {previewRows.length} rows)</span>
@@ -517,7 +517,7 @@
 
 		{#if form?.success}
 			<!-- Success summary -->
-			<div class="rounded-xl border border-teal-500/30 bg-teal-500/10 p-6 space-y-4">
+			<div class="rounded-md border border-teal-500/30 bg-teal-500/10 p-6 space-y-4">
 				<div class="flex items-center gap-3">
 					<svg class="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -580,7 +580,7 @@
 			{/if}
 
 			<!-- Summary of what will happen -->
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 				<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Import Summary</p>
 
 				<div class="space-y-2">
@@ -688,7 +688,7 @@
 			<!-- Action Network -->
 			<a
 				href="/org/{data.org.slug}/supporters/import/action-network"
-				class="flex items-center gap-4 rounded-xl border border-surface-border bg-surface-base p-4 hover:border-surface-border-strong hover:bg-surface-overlay transition-colors group"
+				class="flex items-center gap-4 rounded-md border border-surface-border bg-surface-base p-4 hover:border-surface-border-strong hover:bg-surface-overlay transition-colors group"
 			>
 				<div class="w-10 h-10 rounded-lg bg-orange-500/20 flex items-center justify-center flex-shrink-0">
 					<svg class="w-5 h-5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -706,7 +706,7 @@
 
 			<!-- EveryAction (coming soon) -->
 			<div
-				class="flex items-center gap-4 rounded-xl border border-surface-border bg-surface-base p-4 opacity-50 cursor-default"
+				class="flex items-center gap-4 rounded-md border border-surface-border bg-surface-base p-4 opacity-50 cursor-default"
 			>
 				<div class="w-10 h-10 rounded-lg bg-surface-overlay flex items-center justify-center flex-shrink-0">
 					<svg class="w-5 h-5 text-text-quaternary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -721,7 +721,7 @@
 
 			<!-- NationBuilder (coming soon) -->
 			<div
-				class="flex items-center gap-4 rounded-xl border border-surface-border bg-surface-base p-4 opacity-50 cursor-default"
+				class="flex items-center gap-4 rounded-md border border-surface-border bg-surface-base p-4 opacity-50 cursor-default"
 			>
 				<div class="w-10 h-10 rounded-lg bg-surface-overlay flex items-center justify-center flex-shrink-0">
 					<svg class="w-5 h-5 text-text-quaternary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">

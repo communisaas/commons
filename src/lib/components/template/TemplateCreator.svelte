@@ -689,7 +689,7 @@
 <!-- Draft Recovery Modal -->
 {#if showDraftRecovery}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-		<div class="mx-4 w-full max-w-md rounded-lg bg-white shadow-xl">
+		<div class="mx-4 w-full max-w-md rounded-lg bg-white shadow-md">
 			<div class="p-6">
 				<h3 class="mb-2 text-lg font-semibold text-slate-900">Recover Previous Draft?</h3>
 				<p class="mb-4 text-sm text-slate-600">

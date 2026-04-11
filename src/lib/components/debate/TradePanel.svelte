@@ -283,7 +283,7 @@
   }
 </script>
 
-<div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+<div class="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
   <!-- ------------------------------------------------------------------ -->
   <!-- Header                                                              -->
   <!-- ------------------------------------------------------------------ -->

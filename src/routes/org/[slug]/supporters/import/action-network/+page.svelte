@@ -103,7 +103,7 @@
 
 	{#if !isConnected}
 		<!-- ── Connect Form ─────────────────────────────────────── -->
-		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+		<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 			<div class="flex items-center gap-3">
 				<div class="w-10 h-10 rounded-lg bg-orange-500/20 flex items-center justify-center">
 					<svg class="w-5 h-5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -168,7 +168,7 @@
 		<!-- ── Connected State ──────────────────────────────────── -->
 
 		<!-- Connection status card -->
-		<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+		<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-3">
 					<div class="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
@@ -263,7 +263,7 @@
 
 		<!-- ── Running sync progress ────────────────────────────── -->
 		{#if isRunning && sync}
-			<div class="rounded-xl border border-teal-500/30 bg-teal-500/5 p-6 space-y-4">
+			<div class="rounded-md border border-teal-500/30 bg-teal-500/5 p-6 space-y-4">
 				<div class="flex items-center gap-3">
 					<svg class="w-5 h-5 text-teal-400 animate-spin" fill="none" viewBox="0 0 24 24">
 						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -320,7 +320,7 @@
 
 		<!-- ── Completed sync summary ───────────────────────────── -->
 		{#if sync && (sync.status === 'completed' || sync.status === 'failed') && !isRunning}
-			<div class="rounded-xl border {sync.status === 'completed' ? 'border-teal-500/30 bg-teal-500/10' : 'border-red-500/30 bg-red-500/10'} p-6 space-y-4">
+			<div class="rounded-md border {sync.status === 'completed' ? 'border-teal-500/30 bg-teal-500/10' : 'border-red-500/30 bg-red-500/10'} p-6 space-y-4">
 				<div class="flex items-center gap-3">
 					{#if sync.status === 'completed'}
 						<svg class="w-6 h-6 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">

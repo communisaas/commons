@@ -15,7 +15,7 @@
 {#if variantProp === 'list'}
 	<!-- Template List Item Skeleton -->
 	<div
-		class="template-skeleton rounded-xl p-3 md:p-4 {classNames}"
+		class="template-skeleton rounded-md p-3 md:p-4 {classNames}"
 	>
 		<div class="flex items-start justify-between gap-3">
 			<div class="min-w-0 flex-1">
@@ -58,7 +58,7 @@
 {:else if variantProp === 'preview'}
 	<!-- Template Preview Skeleton -->
 	<div
-		class="template-skeleton-preview rounded-xl border border-slate-200 bg-white p-6 {classNames}"
+		class="template-skeleton-preview rounded-md border border-slate-200 bg-white p-6 {classNames}"
 	>
 		<!-- Header -->
 		<div class="mb-6">

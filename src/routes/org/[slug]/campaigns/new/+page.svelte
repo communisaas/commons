@@ -215,7 +215,7 @@
 		</div>
 
 		<!-- Proof preview -->
-		<div class="rounded-xl border border-surface-border bg-surface-raised p-6 space-y-3">
+		<div class="rounded-md border border-surface-border bg-surface-raised p-6 space-y-3">
 			<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary">What decision-makers will see</p>
 			<div class="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
 				<p class="text-xs font-mono uppercase tracking-wider text-text-quaternary mb-1">Verification Packet</p>

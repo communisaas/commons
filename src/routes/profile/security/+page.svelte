@@ -147,7 +147,7 @@
 	{/if}
 
 	<!-- Passkey section -->
-	<section class="rounded-xl border border-slate-200 bg-white">
+	<section class="rounded-md border border-slate-200 bg-white">
 		<div class="border-b border-slate-100 px-5 py-4 sm:px-6">
 			<div class="flex items-center gap-3">
 				<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50">
@@ -237,7 +237,7 @@
 	</section>
 
 	<!-- OAuth section (informational) -->
-	<section class="rounded-xl border border-slate-200 bg-white">
+	<section class="rounded-md border border-slate-200 bg-white">
 		<div class="border-b border-slate-100 px-5 py-4 sm:px-6">
 			<div class="flex items-center gap-3">
 				<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50">

@@ -55,7 +55,7 @@
 	<div class="mx-auto max-w-lg">
 		{#if form?.success}
 			<!-- Success state -->
-			<div class="rounded-xl border border-emerald-200 bg-emerald-50 p-6 text-center">
+			<div class="rounded-md border border-emerald-200 bg-emerald-50 p-6 text-center">
 				<div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
 					<svg class="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />

@@ -422,7 +422,7 @@
 	<!-- Preview modal -->
 	{#if showPreview && previewHtml}
 		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-			<div class="w-full max-w-2xl max-h-[80vh] flex flex-col rounded-xl border border-surface-border-strong bg-surface-raised overflow-hidden">
+			<div class="w-full max-w-2xl max-h-[80vh] flex flex-col rounded-md border border-surface-border-strong bg-surface-raised overflow-hidden">
 				<div class="flex items-center justify-between px-4 py-3 border-b border-surface-border">
 					<div>
 						<p class="text-sm font-medium text-text-primary">Email Preview</p>
@@ -456,7 +456,7 @@
 	<!-- Passphrase dialog for client-direct send -->
 	{#if showPassphraseDialog}
 		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-			<div class="w-full max-w-sm rounded-xl border border-surface-border-strong bg-surface-raised p-6 space-y-4">
+			<div class="w-full max-w-sm rounded-md border border-surface-border-strong bg-surface-raised p-6 space-y-4">
 				<div>
 					<h3 class="text-base font-semibold text-text-primary">Enter organization passphrase</h3>
 					<p class="text-sm text-text-tertiary mt-1">
@@ -503,7 +503,7 @@
 		<!-- Main form -->
 		<div class="lg:col-span-2 space-y-6">
 			<!-- From / Subject -->
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 				<div class="grid grid-cols-2 gap-4">
 					<div>
 						<label for="fromName" class="block text-sm font-medium text-text-secondary mb-1.5">From Name</label>
@@ -620,7 +620,7 @@
 			{/if}
 
 			<!-- Body editor -->
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 				<div class="flex items-center justify-between">
 					<label class="block text-sm font-medium text-text-secondary">Email Body</label>
 					<div class="flex items-center gap-1">
@@ -743,7 +743,7 @@
 		<!-- Sidebar: Filters + Actions -->
 		<div class="space-y-6">
 			<!-- Recipient filters -->
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 				<div class="flex items-center justify-between">
 					<h3 class="text-sm font-medium text-text-secondary">Recipients</h3>
 					<button
@@ -849,7 +849,7 @@
 
 			<!-- A/B Test Toggle -->
 			{#if data.abTestingAllowed}
-				<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-4">
+				<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
 					<div class="flex items-center justify-between">
 						<div>
 							<h3 class="text-sm font-medium text-text-secondary">A/B Test</h3>
@@ -925,7 +925,7 @@
 			{/if}
 
 			<!-- Actions -->
-			<div class="rounded-xl border border-surface-border bg-surface-base p-6 space-y-3">
+			<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-3">
 				<!-- Preview -->
 				<form
 					method="POST"

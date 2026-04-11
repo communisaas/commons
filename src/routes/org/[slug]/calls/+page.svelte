@@ -141,7 +141,7 @@
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
 		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 		<div
-			class="mx-4 w-full max-w-lg rounded-xl border border-surface-border bg-surface-raised p-6"
+			class="mx-4 w-full max-w-lg rounded-md border border-surface-border bg-surface-raised p-6"
 			onclick={(e) => e.stopPropagation()}
 		>
 			<h2 class="mb-4 text-lg font-bold text-text-primary">Initiate Patch-Through Call</h2>

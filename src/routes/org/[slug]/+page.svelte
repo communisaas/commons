@@ -174,7 +174,7 @@
 
 	<!-- ===== Effective Reach ===== -->
 	{#if er.total > 0}
-		<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
+		<div class="rounded-md bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
 			<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary mb-3">Effective Reach</p>
 
 			<!-- Hero number -->
@@ -280,7 +280,7 @@
 	{#if data.followedReps.count > 0 || data.watchedBills.count > 0}
 		<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 			<!-- Decision Makers card -->
-			<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
+			<div class="rounded-md bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
 				<div class="flex items-center justify-between mb-4">
 					<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Decision Makers</p>
 					<a
@@ -318,7 +318,7 @@
 			</div>
 
 			<!-- Legislation card -->
-			<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
+			<div class="rounded-md bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
 				<div class="flex items-center justify-between mb-4">
 					<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Legislation</p>
 					<a
@@ -369,7 +369,7 @@
 	{/if}
 
 	<!-- ===== SECTIONS 2+3: Verification Pipeline & Engagement Tiers (collapsed) ===== -->
-	<details class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)]">
+	<details class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)]">
 		<summary class="cursor-pointer px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
 			Verification pipeline &amp; engagement tiers
 		</summary>
@@ -454,7 +454,7 @@
 	</details>
 
 	<!-- ===== SECTION 4: Campaign List ===== -->
-	<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
+	<div class="rounded-md bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
 		<div class="flex items-center justify-between mb-4">
 			<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Campaigns</p>
 			<a
@@ -526,7 +526,7 @@
 
 	<!-- ===== SECTION 5: Recent Activity ===== -->
 	{#if data.recentActivity.length > 0}
-		<div class="rounded-xl bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
+		<div class="rounded-md bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
 			<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary mb-4">Recent Activity</p>
 			<div class="space-y-1">
 				{#each data.recentActivity.slice(0, 5) as item (item.id)}
@@ -583,7 +583,7 @@
 	{/if}
 
 	<!-- ===== Endorsed Templates (collapsed) ===== -->
-	<details class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)]">
+	<details class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)]">
 		<summary class="cursor-pointer px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
 			Endorsed templates
 			{#if endorsedList.length > 0}

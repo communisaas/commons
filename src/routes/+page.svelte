@@ -569,7 +569,7 @@
 				<!-- Template Preview (desktop only) -->
 				<div class="template-preview-column">
 					{#if hasError}
-						<div class="rounded-xl border border-orange-200 bg-orange-50 p-6 text-center">
+						<div class="rounded-md border border-orange-200 bg-orange-50 p-6 text-center">
 							<div class="mb-4 flex justify-center">
 								<div class="flex h-16 w-16 items-center justify-center rounded-full bg-orange-100">
 									<svg
@@ -602,7 +602,7 @@
 							</button>
 						</div>
 					{:else if isLoading && !selectedTemplate}
-						<div class="rounded-xl border border-slate-200 bg-white p-6">
+						<div class="rounded-md border border-slate-200 bg-white p-6">
 							<div class="animate-pulse">
 								<div class="mb-6 h-6 w-64 rounded bg-slate-200"></div>
 								<div class="mb-3 h-4 w-full rounded bg-slate-200"></div>
@@ -618,7 +618,7 @@
 							onSendMessage={async () => handleSendMessage(selectedTemplate)}
 						/>
 					{:else}
-						<div class="rounded-xl border border-slate-200 bg-slate-50 p-12 text-center">
+						<div class="rounded-md border border-slate-200 bg-slate-50 p-12 text-center">
 							<div class="mb-4 text-slate-400">
 								<svg
 									class="mx-auto h-16 w-16"

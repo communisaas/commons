@@ -162,7 +162,7 @@
 		`,
 		magical: `
 			bg-gradient-to-r from-indigo-600 via-blue-600 to-purple-600
-			text-white shadow-xl
+			text-white shadow-md
 			shadow-purple-500/30
 			relative overflow-hidden
 			border border-white/20

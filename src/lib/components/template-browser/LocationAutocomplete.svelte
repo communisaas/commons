@@ -252,7 +252,7 @@
 	<!-- Autocomplete dropdown -->
 	{#if isOpen}
 		<div
-			class="absolute left-0 top-full z-50 mt-2 w-80 rounded-lg border border-slate-200 bg-white shadow-xl ring-1 ring-slate-900/5"
+			class="absolute left-0 top-full z-50 mt-2 w-80 rounded-lg border border-slate-200 bg-white shadow-md ring-1 ring-slate-900/5"
 		>
 			<!-- Search input -->
 			<div class="border-b border-slate-100 p-3">

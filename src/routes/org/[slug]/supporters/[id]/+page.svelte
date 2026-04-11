@@ -50,7 +50,7 @@
 	</nav>
 
 	<!-- Verification status hero -->
-	<div class="rounded-xl border border-surface-border bg-surface-base p-6">
+	<div class="rounded-md border border-surface-border bg-surface-base p-6">
 		<div class="flex items-center gap-4">
 			{#if vState === 'Verified'}
 				<div class="w-12 h-12 rounded-full bg-emerald-500/15 flex items-center justify-center">
@@ -81,7 +81,7 @@
 	</div>
 
 	<!-- Details -->
-	<div class="rounded-xl border border-surface-border bg-surface-base divide-y divide-surface-border">
+	<div class="rounded-md border border-surface-border bg-surface-base divide-y divide-surface-border">
 		<div class="px-5 py-4 flex items-center justify-between">
 			<span class="text-xs text-text-tertiary">Email</span>
 			<div class="flex items-center gap-2">
@@ -158,7 +158,7 @@
 	</div>
 
 	<!-- Tags -->
-	<div class="rounded-xl border border-surface-border bg-surface-base p-5 space-y-4">
+	<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-4">
 		<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Tags</p>
 
 		{#if form?.error}

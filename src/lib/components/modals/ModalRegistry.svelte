@@ -83,7 +83,7 @@
 	closeOnEscape={true}
 >
 	{#snippet children(data)}
-		<div class="overflow-hidden rounded-xl bg-white">
+		<div class="overflow-hidden rounded-md bg-white">
 			<AddressCollectionForm
 				_template={getTemplate(data) || { title: '', deliveryMethod: '' }}
 				oncomplete={async (detail) => {

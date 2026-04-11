@@ -325,7 +325,7 @@
 	{/if}
 
 	<!-- Current Plan + Usage -->
-	<section class="rounded-xl bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-6 space-y-5">
+	<section class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-6 space-y-5">
 		<div class="flex items-center justify-between">
 			<div>
 				<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Current Plan</h2>
@@ -396,7 +396,7 @@
 					{@const isCurrent = planName === plan.slug}
 					{@const isUpgrade = !isCurrent && plan.slug !== 'free'}
 					<div
-						class="rounded-xl border p-5 space-y-4 {isCurrent
+						class="rounded-md border p-5 space-y-4 {isCurrent
 							? 'border-teal-500/40 bg-teal-500/5'
 							: 'border-surface-border bg-surface-base'}"
 					>
@@ -439,7 +439,7 @@
 			<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Team</h2>
 			<span class="text-xs text-text-tertiary font-mono tabular-nums">{seatsUsed} of {maxSeats} seats used</span>
 		</div>
-		<div class="rounded-xl border border-surface-border bg-surface-base divide-y divide-surface-border">
+		<div class="rounded-md border border-surface-border bg-surface-base divide-y divide-surface-border">
 			{#each data.members as member}
 				<div class="flex items-center gap-3 px-5 py-3">
 					{#if member.avatar}
@@ -464,7 +464,7 @@
 
 		<!-- Invite Form (editor+ only) -->
 		{#if canInvite}
-			<div class="rounded-xl border border-surface-border bg-surface-base p-5 space-y-3">
+			<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-3">
 				<h3 class="text-sm font-medium text-text-primary">Invite a team member</h3>
 				{#if atSeatLimit}
 					<p class="text-xs text-amber-400">All {maxSeats} seats are in use. Upgrade your plan to invite more members.</p>
@@ -551,7 +551,7 @@
 
 		<!-- Existing domains list -->
 		{#if data.issueDomains.length > 0}
-			<div class="rounded-xl border border-surface-border bg-surface-base divide-y divide-surface-border">
+			<div class="rounded-md border border-surface-border bg-surface-base divide-y divide-surface-border">
 				{#each data.issueDomains as domain}
 					<div class="px-5 py-3">
 						<div class="flex items-center justify-between">
@@ -590,7 +590,7 @@
 
 		<!-- Add/Edit domain form (editor+ only) -->
 		{#if canEdit}
-			<div class="rounded-xl border border-surface-border bg-surface-base p-5 space-y-3">
+			<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-3">
 				<h3 class="text-sm font-medium text-text-primary">
 					{editingDomainId ? 'Edit issue domain' : 'Add an issue domain'}
 				</h3>

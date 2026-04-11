@@ -337,7 +337,7 @@
 			</div>
 
 			<!-- Proof card -->
-			<div class="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-5">
+			<div class="mt-6 rounded-md border border-slate-200 bg-slate-50 p-5">
 				<p class="text-xs font-medium uppercase tracking-wider text-slate-400">Verified Action</p>
 				<h3 class="mt-1 text-base font-bold text-slate-900">{data.campaign.title}</h3>
 				<p class="text-sm text-slate-500">via {data.campaign.orgName}</p>
