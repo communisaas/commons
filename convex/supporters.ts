@@ -815,6 +815,10 @@ export const importWithEncryption = action({
     ),
   },
   handler: async (ctx, args) => {
+    // Auth check first — before any key operations
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
     const { computeOrgScopedEmailHash, computeOrgScopedPhoneHash } = await import("./_orgHash");
     const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
     const { encryptWithOrgKey } = await import("./_orgKey");

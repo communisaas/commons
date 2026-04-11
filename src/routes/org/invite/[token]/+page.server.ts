@@ -27,7 +27,6 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		orgName: invite.orgName,
 		orgSlug: invite.orgSlug,
 		orgAvatar: invite.orgAvatar,
-		inviteEmail: invite.email,
 		inviteRole: invite.role,
 		isAuthenticated: !!locals.user,
 		userEmail: locals.user?.email ?? null

@@ -5,9 +5,6 @@
 	let { data }: { data: PageData } = $props();
 
 	const currentPath = $derived($page.url.pathname);
-	const emailMismatch = $derived(
-		data.isAuthenticated && data.userEmail && data.inviteEmail && data.userEmail !== data.inviteEmail
-	);
 </script>
 
 <svelte:head>
@@ -54,21 +51,11 @@
 			<p class="invite-page__subtitle">
 				You've been invited to join as <strong>{data.inviteRole}</strong>.
 			</p>
-			{#if emailMismatch}
-				<p class="invite-page__warning">
-					This invite was sent to <strong>{data.inviteEmail}</strong>, but you're signed in as <strong>{data.userEmail}</strong>.
-					Sign in with the correct account to accept.
-				</p>
-				<a href="/auth/google?returnTo={encodeURIComponent(currentPath)}" class="invite-page__btn invite-page__btn--secondary">
-					Switch account
-				</a>
-			{:else}
-				<form method="POST" action="?/accept">
-					<button type="submit" class="invite-page__btn invite-page__btn--primary">
-						Accept invite
-					</button>
-				</form>
-			{/if}
+			<form method="POST" action="?/accept">
+				<button type="submit" class="invite-page__btn invite-page__btn--primary">
+					Accept invite
+				</button>
+			</form>
 		{/if}
 	</div>
 </div>
