@@ -370,93 +370,56 @@
 		box-shadow: var(--focus-ring-community);
 	}
 
-	/* Participation Badge System—Clear Status Communication */
+	/* Badge System — typographic, not pill. Color is the only signal. */
 	.participation-badge {
-		@apply inline-flex items-center gap-1.5;
-		@apply rounded-full border font-medium;
-		@apply px-3 py-1 text-xs;
-		@apply transition-all duration-150;
-		font-family:
-			'Satoshi',
-			ui-sans-serif,
-			system-ui,
-			-apple-system,
-			sans-serif;
-		letter-spacing: 0.025em;
+		@apply inline-flex items-center gap-1;
+		@apply font-medium;
+		@apply text-xs;
+		@apply transition-colors duration-150;
+		font-family: var(--font-mono, ui-monospace, monospace);
+		font-size: 0.6875rem;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
 	}
 
 	.participation-badge-sm {
-		@apply px-2 py-0.5 text-xs;
+		font-size: 0.625rem;
 	}
 
 	.participation-badge-md {
-		@apply px-3 py-1 text-sm;
+		font-size: 0.75rem;
 	}
 
-	/* Channel Badges */
-	.participation-badge-verified {
-		background-color: var(--channel-verified-50);
-		color: var(--channel-verified-700);
-		border-color: var(--channel-verified-200);
-	}
+	/* Channel badges — text color only, no container */
+	.participation-badge-verified { color: var(--channel-verified-700); }
+	.participation-badge-community { color: var(--channel-community-700); }
 
-	.participation-badge-community {
-		background-color: var(--channel-community-50);
-		color: var(--channel-community-700);
-		border-color: var(--channel-community-200);
-	}
+	/* Status badges — text color only */
+	.participation-badge-success { color: var(--status-success-700); }
+	.participation-badge-warning { color: var(--status-warning-700); }
+	.participation-badge-error { color: var(--status-error-700); }
+	.participation-badge-info { color: var(--status-info-700); }
+	.participation-badge-neutral { color: var(--status-neutral-700); }
 
-	/* Status Badges */
-	.participation-badge-success {
-		background-color: var(--status-success-50);
-		color: var(--status-success-700);
-		border-color: var(--status-success-500);
-	}
-
-	.participation-badge-warning {
-		background-color: var(--status-warning-50);
-		color: var(--status-warning-700);
-		border-color: var(--status-warning-500);
-	}
-
-	.participation-badge-error {
-		background-color: var(--status-error-50);
-		color: var(--status-error-700);
-		border-color: var(--status-error-500);
-	}
-
-	.participation-badge-info {
-		background-color: var(--status-info-50);
-		color: var(--status-info-700);
-		border-color: var(--status-info-500);
-	}
-
-	.participation-badge-neutral {
-		background-color: var(--status-neutral-50);
-		color: var(--status-neutral-700);
-		border-color: var(--surface-border);
-	}
-
-	/* Participation Surface System—Infrastructure Depth */
+	/* Surface system — minimal containment, earned only */
 	.participation-surface {
 		background-color: var(--surface-base);
 		border: 1px solid var(--surface-border);
-		border-radius: 0.75rem; /* 12px: participation roundness */
-		box-shadow: var(--shadow-sm);
+		border-radius: 0.5rem;
 	}
 
 	.participation-surface-raised {
 		background-color: var(--surface-raised);
 		border: 1px solid var(--surface-border);
-		border-radius: 0.75rem;
-		box-shadow: var(--shadow-md);
+		border-radius: 0.5rem;
+		box-shadow: var(--shadow-sm);
 	}
 
 	.participation-surface-overlay {
 		background-color: var(--surface-overlay);
 		border: 1px solid var(--surface-border-strong);
-		border-radius: 0.75rem;
-		box-shadow: var(--shadow-lg);
+		border-radius: 0.5rem;
+		box-shadow: var(--shadow-md);
 	}
 
 	/*
@@ -478,56 +441,38 @@
 	Delivery type (congressional vs. direct) is weight-only (shadow depth).
 	*/
 
-	/* Topic-tinted surface: atmospheric, not categorical.
-	   Transition matches voice-card timing so parent and child breathe as one. */
+	/*
+	 * Template item: atmospheric topic tint on the ground plane.
+	 * No card containment — typography and proximity create structure.
+	 * Topic hue provides confirming warmth, felt not decoded.
+	 */
 	.card-topic {
-		background: oklch(0.985 0.01 var(--card-hue) / 0.95);
-		border: 1px solid oklch(0.88 0.02 var(--card-hue) / 0.3);
-		transition: background 300ms cubic-bezier(0.4, 0, 0.2, 1),
-			border-color 300ms cubic-bezier(0.4, 0, 0.2, 1);
+		background: transparent;
+		border: none;
+		border-bottom: 1px solid oklch(0.88 0.02 var(--card-hue) / 0.25);
+		transition: border-color 200ms ease-out;
 	}
 
 	.card-topic:hover {
-		background: oklch(0.98 0.018 var(--card-hue) / 0.97);
-		border-color: oklch(0.84 0.03 var(--card-hue) / 0.4);
+		border-bottom-color: oklch(0.75 0.04 var(--card-hue) / 0.4);
 	}
 
-	/* Weight: congressional = heavier shadow, direct = lighter */
-	.card-weight-heavy {
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
-			0 1px 3px 0 rgba(0, 0, 0, 0.04),
-			0 6px 16px -6px rgba(0, 0, 0, 0.06);
-		transition: box-shadow 300ms cubic-bezier(0.4, 0, 0.2, 1);
-	}
-
-	.card-weight-heavy:hover {
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.75),
-			0 2px 4px 0 rgba(0, 0, 0, 0.04),
-			0 12px 24px -8px rgba(0, 0, 0, 0.08);
-	}
-
+	/* Weight classes: no shadow depth — typography carries hierarchy */
+	.card-weight-heavy,
 	.card-weight-light {
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.5),
-			0 1px 2px 0 rgba(0, 0, 0, 0.03);
-		transition: box-shadow 300ms cubic-bezier(0.4, 0, 0.2, 1);
+		box-shadow: none;
 	}
 
+	.card-weight-heavy:hover,
 	.card-weight-light:hover {
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
-			0 4px 12px -4px rgba(0, 0, 0, 0.06);
+		box-shadow: none;
 	}
 
-	/* Selected state: topic color surfaces clearly — selection needs legibility */
+	/* Selected state: left accent bar, not ring */
 	.card-selected {
-		border-color: oklch(0.65 0.08 var(--card-hue) / 0.5) !important;
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
-			0 0 0 2px oklch(0.7 0.06 var(--card-hue) / 0.15),
-			0 1px 3px 0 rgba(0, 0, 0, 0.04) !important;
+		border-left: 3px solid oklch(0.55 0.1 var(--card-hue)) !important;
+		border-bottom-color: oklch(0.75 0.04 var(--card-hue) / 0.4) !important;
+		box-shadow: none !important;
 	}
 
 	/* Icon: high-chroma topic focal point */
