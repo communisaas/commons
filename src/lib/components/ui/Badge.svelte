@@ -15,36 +15,34 @@
 
 	let { variant = 'neutral', size = 'sm', pulse = false, children }: Props = $props();
 
-	const variants = {
-		congressional: 'bg-congressional-50 text-congressional-700 border-congressional-200',
-		direct: 'bg-direct-50 text-direct-700 border-direct-200',
-		certified: 'bg-green-50 text-green-700 border-green-200',
-		success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-		warning: 'bg-amber-50 text-amber-700 border-amber-200',
-		error: 'bg-red-50 text-red-700 border-red-200',
-		neutral: 'bg-gray-50 text-gray-700 border-gray-200'
+	const variants: Record<string, string> = {
+		congressional: 'text-emerald-700 bg-emerald-50/60',
+		direct: 'text-slate-700 bg-slate-100/60',
+		certified: 'text-green-700 bg-green-50/60',
+		success: 'text-emerald-700 bg-emerald-50/60',
+		warning: 'text-amber-700 bg-amber-50/60',
+		error: 'text-red-700 bg-red-50/60',
+		neutral: 'text-slate-600 bg-slate-50/60'
 	};
 
-	const sizes = {
-		sm: 'px-2 py-0.5 text-xs',
-		md: 'px-3 py-1 text-sm'
+	const sizes: Record<string, string> = {
+		sm: 'px-1.5 py-0.5 text-xs',
+		md: 'px-2 py-0.5 text-sm'
 	};
 
-	const pulseColors = {
-		congressional: 'bg-congressional-500',
-		direct: 'bg-direct-500',
+	const pulseColors: Record<string, string> = {
+		congressional: 'bg-emerald-500',
+		direct: 'bg-slate-500',
 		certified: 'bg-green-500',
 		success: 'bg-emerald-500',
 		warning: 'bg-amber-500',
 		error: 'bg-red-500',
-		neutral: 'bg-gray-500'
+		neutral: 'bg-slate-400'
 	};
 </script>
 
 <span
-	class="inline-flex items-center gap-1.5 rounded-full border font-medium transition-colors {variants[
-		variant
-	]} {sizes[size]}"
+	class="inline-flex items-center gap-1 rounded font-medium {variants[variant]} {sizes[size]}"
 	role="status"
 >
 	{#if pulse}

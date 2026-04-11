@@ -74,10 +74,11 @@
 	};
 	const IconComponent = $derived(icon ? iconComponents[icon] : undefined);
 
-	// Elegant spring animations for smooth interactions
-	let buttonScale = spring(1, { stiffness: 0.4, damping: 0.8 });
-	let shadowIntensity = spring(0, { stiffness: 0.3, damping: 0.9 });
-	let glowIntensity = spring(0, { stiffness: 0.4, damping: 0.8 }); // For magical variant glow
+	// Spring physics removed — CSS transitions are sufficient for buttons.
+	// Keep flight animation springs below (earned interaction).
+	const buttonScale = { subscribe: (fn: (v: number) => void) => { fn(1); return () => {}; }, set: () => {} };
+	const shadowIntensity = { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; }, set: () => {} };
+	const glowIntensity = { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; }, set: () => {} };
 
 	// Dynamic paper plane flight animation with realistic physics
 	// CRITICAL: All springs must have IDENTICAL physics for unified motion
@@ -444,54 +445,42 @@
 	const variantClasses = {
 		primary: `
 			bg-participation-primary-500 hover:bg-participation-primary-600
-			text-white
-			border border-participation-primary-600
-			shadow-sm hover:shadow-md
-			transition-all duration-200
+			text-white border border-participation-primary-600
+			transition-colors duration-150
 		`,
 		secondary: `
-			bg-participation-primary-50 hover:bg-participation-primary-100
+			bg-white hover:bg-slate-50
 			text-participation-primary-700 hover:text-participation-primary-800
-			border border-participation-primary-200 hover:border-participation-primary-300
-			shadow-sm
+			border border-slate-200 hover:border-slate-300
+			transition-colors duration-150
 		`,
 		magical: `
-			bg-gradient-to-r from-indigo-600 via-blue-600 to-purple-600
-			hover:from-indigo-700 hover:via-blue-700 hover:to-purple-700
+			bg-participation-primary-600 hover:bg-participation-primary-700
 			text-white font-semibold
-			border border-indigo-400/40
-			shadow-xl shadow-purple-900/20
-			relative overflow-hidden
+			border border-participation-primary-700
+			transition-colors duration-150
 		`,
 		verified: `
 			bg-verified-500 hover:bg-verified-600
-			text-white
-			border border-verified-600
-			shadow-sm hover:shadow-md
+			text-white border border-verified-600
+			transition-colors duration-150
 		`,
 		community: `
 			bg-community-50 hover:bg-community-100
 			text-community-700 hover:text-community-800
 			border border-community-200
-			shadow-sm
+			transition-colors duration-150
 		`,
 		danger: `
 			bg-red-500 hover:bg-red-600
-			text-white
-			border border-red-600
-			shadow-sm hover:shadow-md
+			text-white border border-red-600
+			transition-colors duration-150
 		`
 	};
 </script>
 
 <div class="relative inline-block">
-	<!-- Glow effect for magical variant -->
-	{#if variant === 'magical'}
-		<div
-			class="pointer-events-none absolute inset-0 rounded-md bg-gradient-to-r from-indigo-400 via-blue-400 to-purple-400 opacity-50 blur-xl"
-			style="transform: scale({1 + $glowIntensity * 0.2}); opacity: {0.2 + $glowIntensity * 0.3}"
-		></div>
-	{/if}
+	<!-- Glow removed — solid color transitions are sufficient -->
 
 	<!-- Icon element - different rendering based on animation type -->
 	{#if IconComponent && animationType !== 'chevrons'}
@@ -561,12 +550,7 @@
 			class:opacity-50={disabled}
 			class:cursor-not-allowed={disabled}
 			style="
-				transform: scale({$buttonScale});
 				transform-origin: center;
-				box-shadow: 
-					0 4px 6px -1px rgba(0, 0, 0, 0.1), 
-					0 2px 4px -1px rgba(0, 0, 0, 0.06),
-					0 0 {12 * $shadowIntensity}px rgba(71, 85, 105, {0.2 * $shadowIntensity});
 			"
 			aria-label={text}
 			onclick={handleClick}
@@ -636,12 +620,7 @@
 			class:cursor-not-allowed={disabled}
 			class:cursor-pointer={!disabled}
 			style="
-				transform: scale({$buttonScale});
 				transform-origin: center;
-				box-shadow: 
-					0 4px 6px -1px rgba(0, 0, 0, 0.1), 
-					0 2px 4px -1px rgba(0, 0, 0, 0.06),
-					0 0 {12 * $shadowIntensity}px rgba(71, 85, 105, {0.2 * $shadowIntensity});
 			"
 			aria-label={text}
 			onclick={handleClick}
