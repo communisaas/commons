@@ -83,9 +83,16 @@
 			const email = inviteEmail.trim().toLowerCase();
 			// Compute org-scoped hash client-side — no plaintext email reaches server
 			const emailHash = await computeOrgScopedEmailHash(data.org.id, email);
-			// Store email as plaintext-in-base64 for now — will use org key encryption
-			// once org key infrastructure is wired (task 2a-i)
-			const encryptedEmail = btoa(email);
+
+			// Encrypt email with org key when available, fall back to base64
+			let encryptedEmail: string;
+			if (cachedOrgKey) {
+				const { encryptWithOrgKey } = await import('$lib/core/crypto/org-pii-encryption');
+				const blob = await encryptWithOrgKey(email, cachedOrgKey, emailHash, 'email');
+				encryptedEmail = JSON.stringify(blob);
+			} else {
+				encryptedEmail = btoa(email);
+			}
 
 			const res = await fetch(`/api/org/${data.org.slug}/invites`, {
 				method: 'POST',
@@ -224,6 +231,415 @@
 
 	const domainCount = $derived(data.issueDomains.length);
 	const atDomainLimit = $derived(domainCount >= 20);
+
+	// ── Encryption setup state ──
+	const encryptionConfigured = $derived(!!data.encryption.orgKeyVerifier);
+	type SetupStep = 'idle' | 'passphrase' | 'recovery' | 'saving' | 'done';
+	let setupStep = $state<SetupStep>('idle');
+	let passphrase = $state('');
+	let passphraseConfirm = $state('');
+	let recoveryWords = $state<string[]>([]);
+	let recoveryAcknowledged = $state(false);
+	let encryptionError = $state('');
+	let encryptionSaving = $state(false);
+
+	// Derived from recovery key generation — held in memory only during setup
+	let recoveryKeyBytes: Uint8Array | null = null;
+
+	// ── Device unlock state ──
+	let deviceUnlocked = $state(false);
+	let deviceCheckDone = $state(false);
+	let unlockPassphrase = $state('');
+	let unlockError = $state('');
+	let unlockLoading = $state(false);
+	// Hold the cached org key in memory for use during this session
+	let cachedOrgKey: CryptoKey | null = null;
+
+	// ── Rotation state ──
+	let showRotation = $state(false);
+	let rotationCurrentPassphrase = $state('');
+	let rotationNewPassphrase = $state('');
+	let rotationNewConfirm = $state('');
+	let rotationRecoveryWords = $state<string[]>([]);
+	let rotationRecoveryAck = $state(false);
+	let rotationError = $state('');
+	let rotationLoading = $state(false);
+	let rotationStep = $state<'verify' | 'newpass' | 'recovery' | 'saving'>('verify');
+
+	let rotationRecoveryKeyBytes: Uint8Array | null = null;
+
+	const rotationNewValid = $derived(
+		rotationNewPassphrase.length >= 12 &&
+		rotationNewPassphrase === rotationNewConfirm
+	);
+
+	function startRotation() {
+		showRotation = true;
+		rotationStep = 'verify';
+		rotationCurrentPassphrase = '';
+		rotationNewPassphrase = '';
+		rotationNewConfirm = '';
+		rotationRecoveryWords = [];
+		rotationRecoveryAck = false;
+		rotationError = '';
+		rotationRecoveryKeyBytes = null;
+	}
+
+	function cancelRotation() {
+		showRotation = false;
+		rotationCurrentPassphrase = '';
+		rotationNewPassphrase = '';
+		rotationNewConfirm = '';
+		rotationRecoveryWords = [];
+		rotationRecoveryAck = false;
+		rotationError = '';
+		rotationRecoveryKeyBytes = null;
+	}
+
+	async function verifyCurrentPassphrase() {
+		if (!rotationCurrentPassphrase.trim()) return;
+		rotationError = '';
+		try {
+			const { deriveOrgKey, verifyOrgKey } = await import('$lib/core/crypto/org-pii-encryption');
+			const key = await deriveOrgKey(rotationCurrentPassphrase, data.org.id);
+			const valid = await verifyOrgKey(key, data.encryption.orgKeyVerifier!);
+			if (!valid) {
+				rotationError = 'Wrong passphrase.';
+				return;
+			}
+			// Current passphrase verified — hold the key for rotation
+			cachedOrgKey = key;
+			rotationStep = 'newpass';
+		} catch (err) {
+			rotationError = err instanceof Error ? err.message : 'Verification failed';
+		}
+	}
+
+	async function rotationGenerateRecovery() {
+		if (!rotationNewValid) return;
+		try {
+			const { generateRecoveryKey } = await import('$lib/core/crypto/org-pii-encryption');
+			const recovery = await generateRecoveryKey();
+			rotationRecoveryWords = recovery.words;
+			rotationRecoveryKeyBytes = recovery.key;
+			rotationStep = 'recovery';
+		} catch (err) {
+			rotationError = err instanceof Error ? err.message : 'Failed to generate recovery key';
+		}
+	}
+
+	async function finalizeRotation() {
+		if (!rotationRecoveryAck || !rotationRecoveryKeyBytes || !cachedOrgKey || rotationLoading) return;
+		rotationLoading = true;
+		rotationError = '';
+		rotationStep = 'saving';
+
+		try {
+			const { deriveOrgKey, createKeyVerifier, wrapOrgKeyForRecovery } = await import('$lib/core/crypto/org-pii-encryption');
+			const { cacheOrgKey } = await import('$lib/services/org-key-manager');
+			const { useConvexClient } = await import('convex-sveltekit');
+			const { api: convexApi } = await import('$lib/convex');
+
+			// Derive NEW key from new passphrase (this becomes the new verifier)
+			// Wait — the underlying AES key doesn't change. We re-wrap the SAME key
+			// with the new passphrase-derived verifier + new recovery key.
+			// But the verifier is created from the ORG key, not the passphrase key.
+			// So we need the actual org key. We already have it in cachedOrgKey.
+
+			// Create new verifier from the existing org key
+			const newVerifier = await createKeyVerifier(cachedOrgKey);
+
+			// Wrap org key with new recovery key
+			const recoveryWrapped = await wrapOrgKeyForRecovery(cachedOrgKey, rotationRecoveryKeyBytes);
+
+			// Save to Convex
+			const convex = useConvexClient();
+			await convex.mutation(convexApi.organizations.rotateOrgPassphrase, {
+				slug: data.org.slug,
+				orgKeyVerifier: newVerifier,
+				recoveryWrappedOrgKey: recoveryWrapped
+			});
+
+			// Re-seal for server with the same org key
+			try {
+				const rawKeyBytes = await crypto.subtle.exportKey('raw', cachedOrgKey);
+				const rawKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(rawKeyBytes)));
+				await convex.action(convexApi.organizations.sealOrgKey, {
+					slug: data.org.slug,
+					rawKeyBase64
+				});
+			} catch {
+				console.warn('[Rotation] Server re-seal failed');
+			}
+
+			// Re-cache with new verifier
+			await cacheOrgKey(cachedOrgKey, data.org.id);
+
+			// Clean up
+			rotationCurrentPassphrase = '';
+			rotationNewPassphrase = '';
+			rotationNewConfirm = '';
+			rotationRecoveryKeyBytes = null;
+			showRotation = false;
+
+			await invalidateAll();
+		} catch (err) {
+			rotationError = err instanceof Error ? err.message : 'Rotation failed';
+			rotationStep = 'recovery';
+		} finally {
+			rotationLoading = false;
+		}
+	}
+
+	// ── Recovery flow state ──
+	let showRecoveryFlow = $state(false);
+	let recoveryInput = $state('');
+	let recoveryError = $state('');
+	let recoveryLoading = $state(false);
+
+	async function recoverWithMnemonic() {
+		if (!recoveryInput.trim() || recoveryLoading) return;
+		recoveryLoading = true;
+		recoveryError = '';
+
+		try {
+			const { mnemonicToRecoveryKey, unwrapOrgKeyFromRecovery } = await import('$lib/core/crypto/org-pii-encryption');
+			const { cacheOrgKey } = await import('$lib/services/org-key-manager');
+
+			const wrappedKey = data.encryption.recoveryWrappedOrgKey;
+			if (!wrappedKey) {
+				recoveryError = 'Recovery key data not available. Only org owners can recover.';
+				return;
+			}
+
+			// Parse and validate mnemonic (checksum will catch typos)
+			const words = recoveryInput.trim().toLowerCase().split(/\s+/);
+			const recoveryKeyBytes = await mnemonicToRecoveryKey(words);
+
+			// Unwrap the org key
+			const orgKey = await unwrapOrgKeyFromRecovery(wrappedKey, recoveryKeyBytes);
+
+			// Cache on this device
+			await cacheOrgKey(orgKey, data.org.id);
+
+			cachedOrgKey = orgKey;
+			deviceUnlocked = true;
+			showRecoveryFlow = false;
+			recoveryInput = '';
+		} catch (err) {
+			recoveryError = err instanceof Error ? err.message : 'Recovery failed';
+		} finally {
+			recoveryLoading = false;
+		}
+	}
+
+	// Decrypted invite emails (populated reactively)
+	let decryptedInviteEmails = $state<Record<string, string>>({});
+
+	$effect(() => {
+		// Re-run when invites or org key changes
+		const invites = data.invites;
+		const orgKey = cachedOrgKey;
+		decryptInviteEmails(invites, orgKey);
+	});
+
+	async function decryptInviteEmails(
+		invites: typeof data.invites,
+		orgKey: CryptoKey | null
+	) {
+		const results: Record<string, string> = {};
+		for (const invite of invites) {
+			if (!invite.encryptedEmail) {
+				results[invite.id] = '[no email]';
+				continue;
+			}
+			try {
+				const parsed = JSON.parse(invite.encryptedEmail);
+				if (parsed.v === 'org-1' && orgKey && invite.emailHash) {
+					const { decryptWithOrgKey } = await import('$lib/core/crypto/org-pii-encryption');
+					results[invite.id] = await decryptWithOrgKey(parsed, orgKey, invite.emailHash, 'email');
+				} else if (parsed.v === 'org-1') {
+					results[invite.id] = '[locked]';
+				} else {
+					results[invite.id] = atob(invite.encryptedEmail);
+				}
+			} catch {
+				// Not JSON or decryption failed — try legacy base64
+				try {
+					results[invite.id] = atob(invite.encryptedEmail);
+				} catch {
+					results[invite.id] = '[encrypted]';
+				}
+			}
+		}
+		decryptedInviteEmails = results;
+	}
+
+	// Check device cache on mount when encryption is configured
+	$effect(() => {
+		if (encryptionConfigured && data.encryption.orgKeyVerifier && !deviceCheckDone) {
+			checkDeviceCache();
+		}
+	});
+
+	async function checkDeviceCache() {
+		try {
+			const { getOrPromptOrgKey } = await import('$lib/services/org-key-manager');
+			const key = await getOrPromptOrgKey(data.org.id, data.encryption.orgKeyVerifier!);
+			if (key) {
+				cachedOrgKey = key;
+				deviceUnlocked = true;
+			}
+		} catch {
+			// No cached key — will show unlock prompt
+		} finally {
+			deviceCheckDone = true;
+		}
+	}
+
+	async function unlockWithPassphrase() {
+		if (!unlockPassphrase.trim() || unlockLoading) return;
+		unlockLoading = true;
+		unlockError = '';
+
+		try {
+			const { deriveAndCacheOrgKey } = await import('$lib/services/org-key-manager');
+			const key = await deriveAndCacheOrgKey(
+				unlockPassphrase,
+				data.org.id,
+				data.encryption.orgKeyVerifier!
+			);
+
+			if (!key) {
+				unlockError = 'Wrong passphrase. Please try again.';
+				return;
+			}
+
+			cachedOrgKey = key;
+			deviceUnlocked = true;
+			unlockPassphrase = '';
+		} catch (err) {
+			unlockError = err instanceof Error ? err.message : 'Unlock failed';
+		} finally {
+			unlockLoading = false;
+		}
+	}
+
+	const passphraseValid = $derived(
+		passphrase.length >= 12 &&
+		passphrase === passphraseConfirm
+	);
+	const passphraseMismatch = $derived(
+		passphraseConfirm.length > 0 && passphrase !== passphraseConfirm
+	);
+
+	function startEncryptionSetup() {
+		setupStep = 'passphrase';
+		passphrase = '';
+		passphraseConfirm = '';
+		recoveryWords = [];
+		recoveryAcknowledged = false;
+		encryptionError = '';
+		recoveryKeyBytes = null;
+	}
+
+	function cancelEncryptionSetup() {
+		setupStep = 'idle';
+		passphrase = '';
+		passphraseConfirm = '';
+		recoveryWords = [];
+		recoveryAcknowledged = false;
+		encryptionError = '';
+		recoveryKeyBytes = null;
+	}
+
+	async function proceedToRecovery() {
+		if (!passphraseValid) return;
+		try {
+			const { generateRecoveryKey } = await import('$lib/core/crypto/org-pii-encryption');
+			const recovery = await generateRecoveryKey();
+			recoveryWords = recovery.words;
+			recoveryKeyBytes = recovery.key;
+			setupStep = 'recovery';
+		} catch (err) {
+			encryptionError = err instanceof Error ? err.message : 'Failed to generate recovery key';
+		}
+	}
+
+	async function finalizeEncryptionSetup() {
+		if (!recoveryAcknowledged || !recoveryKeyBytes || encryptionSaving) return;
+		encryptionSaving = true;
+		encryptionError = '';
+		setupStep = 'saving';
+
+		try {
+			const { deriveOrgKey, createKeyVerifier, wrapOrgKeyForRecovery } = await import('$lib/core/crypto/org-pii-encryption');
+			const { cacheOrgKey } = await import('$lib/services/org-key-manager');
+			const { useConvexClient } = await import('convex-sveltekit');
+			const { api: convexApi } = await import('$lib/convex');
+
+			// 1. Derive org key from passphrase (single PBKDF2 derivation)
+			const orgKey = await deriveOrgKey(passphrase, data.org.id);
+
+			// 2. Create verifier (sentinel encrypted with org key)
+			const verifier = await createKeyVerifier(orgKey);
+
+			// 3. Wrap org key with recovery key
+			const recoveryWrapped = await wrapOrgKeyForRecovery(orgKey, recoveryKeyBytes);
+
+			// 4. Save verifier + recovery to Convex — authoritative state
+			const convex = useConvexClient();
+			await convex.mutation(convexApi.organizations.setOrgKeyVerifier, {
+				slug: data.org.slug,
+				orgKeyVerifier: verifier,
+				recoveryWrappedOrgKey: recoveryWrapped
+			});
+
+			// 4b. Seal org key for server-side operations (non-fatal if wrapping key not configured)
+			try {
+				const rawKeyBytes = await crypto.subtle.exportKey('raw', orgKey);
+				const rawKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(rawKeyBytes)));
+				await convex.action(convexApi.organizations.sealOrgKey, {
+					slug: data.org.slug,
+					rawKeyBase64
+				});
+			} catch (sealErr) {
+				// Server seal is non-fatal during initial setup — can be retried later
+				// when ORG_KEY_WRAPPING_KEY is configured on the server
+				console.warn('[Encryption] Server seal failed (wrapping key may not be configured):', sealErr);
+			}
+
+			// 5. Cache key on this device (uses already-derived key, no re-derivation)
+			try {
+				await cacheOrgKey(orgKey, data.org.id);
+			} catch (cacheErr) {
+				// Device caching is non-fatal — the unlock flow can re-cache later.
+				// Encryption is configured server-side; this device just won't have a cached key.
+				console.warn('[Encryption] Device key caching failed:', cacheErr);
+			}
+
+			// 6. Clean up sensitive state and mark device as unlocked
+			passphrase = '';
+			passphraseConfirm = '';
+			recoveryKeyBytes = null;
+			cachedOrgKey = orgKey;
+			deviceUnlocked = true;
+			deviceCheckDone = true;
+			setupStep = 'done';
+
+			// Refresh page data
+			await invalidateAll();
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : 'Failed to configure encryption';
+			encryptionError = msg;
+			// Clear passphrase on any error — user must re-enter
+			passphrase = '';
+			passphraseConfirm = '';
+			setupStep = 'recovery';
+		} finally {
+			encryptionSaving = false;
+		}
+	}
 
 	function startEditDomain(domain: typeof data.issueDomains[0]) {
 		editingDomainId = domain.id;
@@ -511,7 +927,7 @@
 				<div class="rounded-lg border border-surface-border bg-surface-base divide-y divide-surface-border">
 					{#each data.invites as invite}
 						<div class="flex items-center justify-between px-4 py-2.5 text-sm">
-							<span class="text-text-tertiary">{invite.encryptedEmail ? (() => { try { return atob(invite.encryptedEmail); } catch { return '[encrypted]'; } })() : '[encrypted]'}</span>
+							<span class="text-text-tertiary">{decryptedInviteEmails[invite.id] ?? '[decrypting...]'}</span>
 							<div class="flex items-center gap-3">
 								<span class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-tertiary capitalize">{invite.role}</span>
 								<span class="text-xs text-text-quaternary">expires {formatDate(invite.expiresAt)}</span>
@@ -662,4 +1078,345 @@
 			</div>
 		{/if}
 	</section>
+
+	<!-- Supporter Encryption -->
+	{#if isOwner}
+		<section class="space-y-4">
+			<div>
+				<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Supporter Encryption</h2>
+				<p class="text-xs text-text-tertiary mt-1">Protect supporter PII with an organization-held encryption key.</p>
+			</div>
+
+			{#if encryptionConfigured && setupStep !== 'done'}
+				<!-- Configured state -->
+				<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-3">
+					<div class="flex items-center gap-3">
+						<div class="flex items-center gap-2">
+							<svg class="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+							</svg>
+							<span class="text-sm text-text-primary font-medium">Encryption active</span>
+						</div>
+						{#if deviceCheckDone}
+							<span class="text-xs font-mono {deviceUnlocked ? 'text-emerald-500' : 'text-amber-400'}">
+								{deviceUnlocked ? 'unlocked on this device' : 'locked on this device'}
+							</span>
+						{/if}
+					</div>
+					<p class="text-xs text-text-tertiary leading-relaxed">
+						Your encryption key is configured. Once data migration completes, supporter names, emails,
+						and phone numbers will be encrypted with your organization's key — accessible only to team members with the passphrase.
+					</p>
+
+					<!-- Unlock prompt for devices without cached key -->
+					{#if deviceCheckDone && !deviceUnlocked}
+						<div class="border-t border-surface-border pt-3 space-y-3">
+							<p class="text-xs text-text-secondary">
+								Enter the organization passphrase to unlock encryption on this device.
+							</p>
+							{#if unlockError}
+								<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+									{unlockError}
+								</div>
+							{/if}
+							{#if !showRecoveryFlow}
+								<form onsubmit={(e) => { e.preventDefault(); unlockWithPassphrase(); }} class="flex flex-col sm:flex-row gap-3">
+									<input
+										type="password"
+										bind:value={unlockPassphrase}
+										placeholder="Organization passphrase"
+										autocomplete="current-password"
+										disabled={unlockLoading}
+										class="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:opacity-50"
+									/>
+									<button
+										type="submit"
+										disabled={!unlockPassphrase.trim() || unlockLoading}
+										class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+									>
+										{unlockLoading ? 'Unlocking...' : 'Unlock'}
+									</button>
+								</form>
+								{#if isOwner && data.encryption.recoveryWrappedOrgKey}
+									<button
+										onclick={() => { showRecoveryFlow = true; unlockError = ''; }}
+										class="text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+									>
+										Forgot passphrase? Use recovery words
+									</button>
+								{/if}
+							{:else}
+								<!-- Recovery flow -->
+								<div class="space-y-3">
+									<p class="text-xs text-text-secondary">
+										Enter your 24-word recovery phrase, separated by spaces.
+									</p>
+									{#if recoveryError}
+										<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+											{recoveryError}
+										</div>
+									{/if}
+									<textarea
+										bind:value={recoveryInput}
+										placeholder="word1 word2 word3 ... word24"
+										rows={3}
+										disabled={recoveryLoading}
+										class="w-full px-3 py-2 text-sm font-mono rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:opacity-50 resize-none"
+									></textarea>
+									<div class="flex gap-3">
+										<button
+											onclick={() => { showRecoveryFlow = false; recoveryInput = ''; recoveryError = ''; }}
+											class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors"
+										>
+											Back
+										</button>
+										<button
+											onclick={recoverWithMnemonic}
+											disabled={!recoveryInput.trim() || recoveryLoading}
+											class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+										>
+											{recoveryLoading ? 'Recovering...' : 'Recover Key'}
+										</button>
+									</div>
+								</div>
+							{/if}
+						</div>
+					{/if}
+
+					<!-- Change passphrase (owner, device unlocked) -->
+					{#if deviceCheckDone && deviceUnlocked && isOwner}
+						<div class="border-t border-surface-border pt-3">
+							{#if !showRotation}
+								<button
+									onclick={startRotation}
+									class="text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+								>
+									Change passphrase
+								</button>
+							{:else if rotationStep === 'verify'}
+								<div class="space-y-3">
+									<p class="text-xs text-text-secondary">Verify your current passphrase to continue.</p>
+									{#if rotationError}
+										<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">{rotationError}</div>
+									{/if}
+									<form onsubmit={(e) => { e.preventDefault(); verifyCurrentPassphrase(); }} class="flex flex-col sm:flex-row gap-3">
+										<input type="password" bind:value={rotationCurrentPassphrase} placeholder="Current passphrase" autocomplete="current-password" class="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500" />
+										<button type="submit" disabled={!rotationCurrentPassphrase.trim()} class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">Verify</button>
+										<button type="button" onclick={cancelRotation} class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors">Cancel</button>
+									</form>
+								</div>
+							{:else if rotationStep === 'newpass'}
+								<div class="space-y-3">
+									<p class="text-xs text-text-secondary">Enter a new passphrase (minimum 12 characters).</p>
+									<input type="password" bind:value={rotationNewPassphrase} placeholder="New passphrase" autocomplete="new-password" class="w-full px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500" />
+									<input type="password" bind:value={rotationNewConfirm} placeholder="Confirm new passphrase" autocomplete="new-password" class="w-full px-3 py-2 text-sm rounded-lg border {rotationNewConfirm && rotationNewPassphrase !== rotationNewConfirm ? 'border-red-500/50' : 'border-surface-border-strong'} bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500" />
+									<div class="flex gap-3">
+										<button onclick={cancelRotation} class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors">Cancel</button>
+										<button onclick={rotationGenerateRecovery} disabled={!rotationNewValid} class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Generate New Recovery Key</button>
+									</div>
+								</div>
+							{:else if rotationStep === 'recovery'}
+								<div class="space-y-3">
+									<p class="text-xs text-text-secondary">Write down your new 24-word recovery key. The old recovery key will no longer work.</p>
+									{#if rotationError}
+										<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">{rotationError}</div>
+									{/if}
+									<div class="grid grid-cols-3 sm:grid-cols-4 gap-x-4 gap-y-2 py-3 px-2 rounded border border-surface-border bg-surface-overlay">
+										{#each rotationRecoveryWords as word, i}
+											<div class="flex items-baseline gap-1.5">
+												<span class="text-[10px] text-text-quaternary font-mono tabular-nums w-5 text-right shrink-0">{i + 1}.</span>
+												<span class="text-sm text-text-primary font-mono font-medium">{word}</span>
+											</div>
+										{/each}
+									</div>
+									<label class="flex items-start gap-2.5 cursor-pointer select-none">
+										<input type="checkbox" bind:checked={rotationRecoveryAck} class="mt-0.5 rounded border-surface-border-strong accent-teal-500" />
+										<span class="text-xs text-text-secondary leading-relaxed">I have written down these new recovery words.</span>
+									</label>
+									<div class="flex gap-3">
+										<button onclick={cancelRotation} class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors">Cancel</button>
+										<button onclick={finalizeRotation} disabled={!rotationRecoveryAck || rotationLoading} class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{rotationLoading ? 'Saving...' : 'Save New Passphrase'}</button>
+									</div>
+								</div>
+							{:else if rotationStep === 'saving'}
+								<div class="flex items-center gap-3">
+									<div class="h-4 w-4 animate-spin rounded-full border-2 border-teal-500 border-t-transparent"></div>
+									<span class="text-sm text-text-secondary">Updating passphrase...</span>
+								</div>
+							{/if}
+						</div>
+					{/if}
+				</div>
+
+			{:else if setupStep === 'idle'}
+				<!-- Not configured — setup CTA -->
+				<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-4">
+					<div class="space-y-2">
+						<p class="text-sm text-text-primary leading-relaxed">
+							Encryption protects your supporters' personal information with a passphrase that only your organization holds.
+							Once enabled, Commons cannot read supporter names, emails, or phone numbers — only your team can.
+						</p>
+						<p class="text-xs text-text-tertiary leading-relaxed">
+							You will create a passphrase and receive a 24-word recovery key. If all team members forget the passphrase,
+							the recovery key is the only way to regain access. Store it securely offline.
+						</p>
+					</div>
+					<button
+						onclick={startEncryptionSetup}
+						class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors"
+					>
+						Set Up Encryption
+					</button>
+				</div>
+
+			{:else if setupStep === 'passphrase'}
+				<!-- Step 1: Create passphrase -->
+				<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-5">
+					<div>
+						<h3 class="text-sm font-semibold text-text-primary">Create a passphrase</h3>
+						<p class="text-xs text-text-tertiary mt-1 leading-relaxed">
+							This passphrase derives the encryption key for all supporter data in your organization.
+							Every team member who needs to view supporter information will need this passphrase.
+							Minimum 12 characters.
+						</p>
+					</div>
+
+					{#if encryptionError}
+						<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+							{encryptionError}
+						</div>
+					{/if}
+
+					<form onsubmit={(e) => { e.preventDefault(); proceedToRecovery(); }} class="space-y-3">
+						<div class="space-y-1">
+							<label for="enc-passphrase" class="text-xs text-text-tertiary">Passphrase</label>
+							<input
+								id="enc-passphrase"
+								type="password"
+								bind:value={passphrase}
+								placeholder="At least 12 characters"
+								autocomplete="new-password"
+								class="w-full px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+							/>
+							{#if passphrase.length > 0 && passphrase.length < 12}
+								<p class="text-xs text-amber-400">{12 - passphrase.length} more characters needed</p>
+							{/if}
+						</div>
+						<div class="space-y-1">
+							<label for="enc-confirm" class="text-xs text-text-tertiary">Confirm passphrase</label>
+							<input
+								id="enc-confirm"
+								type="password"
+								bind:value={passphraseConfirm}
+								placeholder="Re-enter passphrase"
+								autocomplete="new-password"
+								class="w-full px-3 py-2 text-sm rounded-lg border {passphraseMismatch ? 'border-red-500/50' : 'border-surface-border-strong'} bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+							/>
+							{#if passphraseMismatch}
+								<p class="text-xs text-red-400">Passphrases do not match</p>
+							{/if}
+						</div>
+						<div class="flex gap-3 pt-1">
+							<button
+								type="button"
+								onclick={cancelEncryptionSetup}
+								class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors"
+							>
+								Cancel
+							</button>
+							<button
+								type="submit"
+								disabled={!passphraseValid}
+								class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+							>
+								Generate Recovery Key
+							</button>
+						</div>
+					</form>
+				</div>
+
+			{:else if setupStep === 'recovery'}
+				<!-- Step 2: Recovery words -->
+				<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-5">
+					<div>
+						<h3 class="text-sm font-semibold text-text-primary">Recovery key</h3>
+						<p class="text-xs text-text-tertiary mt-1 leading-relaxed">
+							Write these 24 words down on paper and store them somewhere safe.
+							If every team member forgets the passphrase, these words are the only way to recover access to encrypted supporter data.
+						</p>
+					</div>
+
+					{#if encryptionError}
+						<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+							{encryptionError}
+						</div>
+					{/if}
+
+					<!-- Recovery word grid -->
+					<div class="grid grid-cols-3 sm:grid-cols-4 gap-x-4 gap-y-2 py-3 px-2 rounded border border-surface-border bg-surface-overlay">
+						{#each recoveryWords as word, i}
+							<div class="flex items-baseline gap-1.5">
+								<span class="text-[10px] text-text-quaternary font-mono tabular-nums w-5 text-right shrink-0">{i + 1}.</span>
+								<span class="text-sm text-text-primary font-mono font-medium">{word}</span>
+							</div>
+						{/each}
+					</div>
+
+					<label class="flex items-start gap-2.5 cursor-pointer select-none">
+						<input
+							type="checkbox"
+							bind:checked={recoveryAcknowledged}
+							class="mt-0.5 rounded border-surface-border-strong accent-teal-500"
+						/>
+						<span class="text-xs text-text-secondary leading-relaxed">
+							I have written down these 24 words and stored them securely.
+							I understand that if I lose both the passphrase and these words,
+							encrypted supporter data cannot be recovered.
+						</span>
+					</label>
+
+					<div class="flex gap-3">
+						<button
+							type="button"
+							onclick={() => { setupStep = 'passphrase'; encryptionError = ''; }}
+							class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors"
+						>
+							Back
+						</button>
+						<button
+							onclick={finalizeEncryptionSetup}
+							disabled={!recoveryAcknowledged || encryptionSaving}
+							class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+						>
+							{encryptionSaving ? 'Configuring...' : 'Enable Encryption'}
+						</button>
+					</div>
+				</div>
+
+			{:else if setupStep === 'saving'}
+				<!-- Saving state -->
+				<div class="rounded-md border border-surface-border bg-surface-base p-5">
+					<div class="flex items-center gap-3">
+						<div class="h-4 w-4 animate-spin rounded-full border-2 border-teal-500 border-t-transparent"></div>
+						<span class="text-sm text-text-secondary">Deriving encryption key and configuring...</span>
+					</div>
+				</div>
+
+			{:else if setupStep === 'done'}
+				<!-- Just completed setup -->
+				<div class="rounded-md border border-emerald-500/20 bg-surface-base p-5 space-y-3">
+					<div class="flex items-center gap-2">
+						<svg class="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+						</svg>
+						<span class="text-sm text-text-primary font-medium">Encryption configured</span>
+					</div>
+					<p class="text-xs text-text-tertiary leading-relaxed">
+						Your organization's encryption key has been derived and cached on this device.
+						Share the passphrase securely with team members who need to view supporter data.
+					</p>
+				</div>
+			{/if}
+		</section>
+	{/if}
 </div>

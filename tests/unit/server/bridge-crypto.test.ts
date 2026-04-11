@@ -24,21 +24,15 @@ const SAMPLE_FIELDS: SensitiveFields = {
 
 describe('bridge-crypto', () => {
 	let savedBridgeKey: string | undefined;
-	let savedPiiKey: string | undefined;
 
 	beforeEach(() => {
 		savedBridgeKey = process.env.BRIDGE_ENCRYPTION_KEY;
-		savedPiiKey = process.env.PII_ENCRYPTION_KEY;
-		// Default: set a valid key
 		process.env.BRIDGE_ENCRYPTION_KEY = TEST_KEY_HEX;
-		delete process.env.PII_ENCRYPTION_KEY;
 	});
 
 	afterEach(() => {
 		if (savedBridgeKey !== undefined) process.env.BRIDGE_ENCRYPTION_KEY = savedBridgeKey;
 		else delete process.env.BRIDGE_ENCRYPTION_KEY;
-		if (savedPiiKey !== undefined) process.env.PII_ENCRYPTION_KEY = savedPiiKey;
-		else delete process.env.PII_ENCRYPTION_KEY;
 	});
 
 	// Fresh import each test to reset the _warnedKey flag
@@ -99,25 +93,12 @@ describe('bridge-crypto', () => {
 	});
 
 	describe('dev passthrough (no encryption key — throws in production)', () => {
-		it('returns null in dev when neither BRIDGE_ENCRYPTION_KEY nor PII_ENCRYPTION_KEY is set', async () => {
+		it('returns null in dev when BRIDGE_ENCRYPTION_KEY is not set', async () => {
 			delete process.env.BRIDGE_ENCRYPTION_KEY;
-			delete process.env.PII_ENCRYPTION_KEY;
 
 			const { encryptBridgeFields } = await loadModule();
 			const result = await encryptBridgeFields('session-dev', SAMPLE_FIELDS);
 			expect(result).toBeNull();
-		});
-
-		it('uses PII_ENCRYPTION_KEY as fallback', async () => {
-			delete process.env.BRIDGE_ENCRYPTION_KEY;
-			process.env.PII_ENCRYPTION_KEY = TEST_KEY_HEX;
-
-			const { encryptBridgeFields, decryptBridgeFields } = await loadModule();
-			const blob = await encryptBridgeFields('session-pii-fallback', SAMPLE_FIELDS);
-			expect(blob).not.toBeNull();
-
-			const decrypted = await decryptBridgeFields('session-pii-fallback', blob!);
-			expect(decrypted.secret).toBe(SAMPLE_FIELDS.secret);
 		});
 	});
 
@@ -187,7 +168,6 @@ describe('bridge-crypto', () => {
 
 			// Remove key, try to decrypt
 			delete process.env.BRIDGE_ENCRYPTION_KEY;
-			delete process.env.PII_ENCRYPTION_KEY;
 
 			// Need fresh module load since getMasterKeyHex reads env at call time
 			const mod2 = await loadModule();

@@ -2,7 +2,7 @@ import { redirect, fail } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { parseCSV } from '$lib/server/csv';
-import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
+import { serverAction } from 'convex-sveltekit';
 import type { PageServerLoad, Actions } from './$types';
 
 function requireRole(role: string, required: string): void {
@@ -230,44 +230,19 @@ export const actions: Actions = {
 			const batch = mappedRows.slice(batchStart, batchStart + BATCH_SIZE);
 
 			try {
-				// Encrypt emails in SvelteKit
-				const encryptedBatch = await Promise.all(
-					batch.map(async ({ mapped, rowNum }) => {
+				// Build plaintext batch — encryption happens server-side in Convex
+				const plaintextBatch = batch
+					.map(({ mapped, rowNum }) => {
 						try {
-							// NOTE: Batch import encrypts email with a synthetic UUID as entity ID.
-							// This is a known pre-existing pattern — the Convex _id is only assigned
-							// at insert time. Name/phone are stored as plaintext during transition;
-							// a backfill action will re-encrypt with real _ids later.
-							const supId = crypto.randomUUID();
-							const encryptionWork: Promise<unknown>[] = [];
-							let eHash: string | null = null;
-							let eEncRaw: unknown = null;
-							let pHash: string | undefined;
-
-							encryptionWork.push(
-								computeEmailHash(mapped.email).then((h) => { eHash = h; }),
-								encryptPii(mapped.email, `supporter:${supId}`).then((e) => { eEncRaw = e; })
-							);
-							// Compute phone hash (deterministic — correct regardless of entity ID)
-							if (mapped.phone) {
-								const { computePhoneHash } = await import('$lib/core/crypto/user-pii-encryption');
-								encryptionWork.push(
-									computePhoneHash(mapped.phone).then((h) => { pHash = h ?? undefined; })
-								);
-							}
-
-							await Promise.all(encryptionWork);
-							if (!eHash || !eEncRaw) throw new Error('Email encryption failed');
-
 							return {
-								encryptedEmail: JSON.stringify(eEncRaw),
-								emailHash: eHash,
+								email: mapped.email,
+								name: mapped.name || undefined,
+								phone: mapped.phone || undefined,
 								postalCode: mapped.postalCode || undefined,
-								phoneHash: pHash,
 								country: mapped.country || undefined,
 								emailStatus: mapped.emailStatus,
 								smsStatus: mapped.smsStatus,
-								tagIds: mapped.tags.map((t) => tagIdMap[t]).filter(Boolean)
+								tagIds: mapped.tags.map((t: string) => tagIdMap[t]).filter(Boolean)
 							};
 						} catch (err) {
 							const msg = err instanceof Error ? err.message : String(err);
@@ -275,14 +250,21 @@ export const actions: Actions = {
 							return null;
 						}
 					})
-				);
+					.filter(Boolean) as Array<{
+						email: string;
+						name?: string;
+						phone?: string;
+						postalCode?: string;
+						country?: string;
+						emailStatus: string;
+						smsStatus: string;
+						tagIds: string[];
+					}>;
 
-				const validBatch = encryptedBatch.filter(Boolean) as NonNullable<typeof encryptedBatch[0]>[];
-
-				if (validBatch.length > 0) {
-					const result = await serverMutation(api.supporters.importBatch, {
+				if (plaintextBatch.length > 0) {
+					const result = await serverAction(api.supporters.importWithEncryption, {
 						slug: params.slug,
-						supporters: validBatch
+						supporters: plaintextBatch
 					});
 					imported += result.imported;
 					updated += result.updated;

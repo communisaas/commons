@@ -5,7 +5,7 @@
  * Key derivation: HKDF(masterKey, sessionId, "commons-bridge-session-v1")
  * Each session gets a unique derived key via HKDF info binding.
  *
- * Follows the same pattern as user-pii-encryption.ts.
+ * Follows the same AES-256-GCM pattern as org-pii-encryption.ts.
  */
 
 import { dev } from '$app/environment';
@@ -35,7 +35,7 @@ export interface EncryptedBlob {
 
 function getMasterKeyHex(): string | null {
 	try {
-		return process.env.BRIDGE_ENCRYPTION_KEY || process.env.PII_ENCRYPTION_KEY || null;
+		return process.env.BRIDGE_ENCRYPTION_KEY || null;
 	} catch {
 		return null;
 	}
@@ -118,8 +118,8 @@ export async function decryptBridgeFields(
 	const masterKeyHex = getMasterKeyHex();
 	if (!masterKeyHex) {
 		throw new Error(
-			'[bridge-crypto] BRIDGE_ENCRYPTION_KEY / PII_ENCRYPTION_KEY not set — ' +
-				'cannot decrypt bridge session. Set the same key used to encrypt.'
+			'[bridge-crypto] BRIDGE_ENCRYPTION_KEY not set — ' +
+				'cannot decrypt bridge session.'
 		);
 	}
 

@@ -119,32 +119,40 @@ describe('Org PII Encryption', () => {
 	});
 
 	describe('recovery', () => {
-		it('generates 24 words', () => {
-			const { words } = generateRecoveryKey();
+		it('generates 24 words', async () => {
+			const { words } = await generateRecoveryKey();
 			expect(words).toHaveLength(24);
 		});
 
-		it('words are from BIP39 wordlist', () => {
-			const { words } = generateRecoveryKey();
+		it('words are from BIP39 wordlist', async () => {
+			const { words } = await generateRecoveryKey();
 			for (const word of words) {
 				expect(wordlist).toContain(word);
 			}
 		});
 
-		it('key is 32 bytes', () => {
-			const { key } = generateRecoveryKey();
+		it('key is 32 bytes', async () => {
+			const { key } = await generateRecoveryKey();
 			expect(key).toHaveLength(32);
 		});
 
-		it('mnemonic round-trips to same key', () => {
-			const { key, words } = generateRecoveryKey();
-			const recovered = mnemonicToRecoveryKey(words);
+		it('mnemonic round-trips to same key', async () => {
+			const { key, words } = await generateRecoveryKey();
+			const recovered = await mnemonicToRecoveryKey(words);
 			expect(recovered).toEqual(key);
+		});
+
+		it('BIP39 checksum detects typos', async () => {
+			const { words } = await generateRecoveryKey();
+			// Corrupt one word
+			const corrupted = [...words];
+			corrupted[0] = corrupted[0] === 'abandon' ? 'ability' : 'abandon';
+			await expect(mnemonicToRecoveryKey(corrupted)).rejects.toThrow('checksum failed');
 		});
 
 		it('wrap → unwrap round-trip', async () => {
 			const orgKey = await deriveOrgKey(TEST_PASSPHRASE, TEST_ORG_ID);
-			const { key: recoveryKey } = generateRecoveryKey();
+			const { key: recoveryKey } = await generateRecoveryKey();
 
 			const wrapped = await wrapOrgKeyForRecovery(orgKey, recoveryKey);
 			const unwrapped = await unwrapOrgKeyFromRecovery(wrapped, recoveryKey);
@@ -156,7 +164,7 @@ describe('Org PII Encryption', () => {
 
 		it('recovered key decrypts data from original key', async () => {
 			const orgKey = await deriveOrgKey(TEST_PASSPHRASE, TEST_ORG_ID);
-			const { key: recoveryKey } = generateRecoveryKey();
+			const { key: recoveryKey } = await generateRecoveryKey();
 
 			const encrypted = await encryptWithOrgKey('secret-data', orgKey, 'ent', 'field');
 			const wrapped = await wrapOrgKeyForRecovery(orgKey, recoveryKey);
@@ -168,8 +176,8 @@ describe('Org PII Encryption', () => {
 
 		it('wrong recovery key fails to unwrap', async () => {
 			const orgKey = await deriveOrgKey(TEST_PASSPHRASE, TEST_ORG_ID);
-			const { key: recoveryKey } = generateRecoveryKey();
-			const { key: wrongKey } = generateRecoveryKey();
+			const { key: recoveryKey } = await generateRecoveryKey();
+			const { key: wrongKey } = await generateRecoveryKey();
 
 			const wrapped = await wrapOrgKeyForRecovery(orgKey, recoveryKey);
 
@@ -178,13 +186,13 @@ describe('Org PII Encryption', () => {
 			).rejects.toThrow();
 		});
 
-		it('rejects invalid mnemonic length', () => {
-			expect(() => mnemonicToRecoveryKey(['abandon'])).toThrow('24 words');
+		it('rejects invalid mnemonic length', async () => {
+			await expect(mnemonicToRecoveryKey(['abandon'])).rejects.toThrow('24 words');
 		});
 
-		it('rejects invalid BIP39 words', () => {
+		it('rejects invalid BIP39 words', async () => {
 			const words = Array(24).fill('notaword');
-			expect(() => mnemonicToRecoveryKey(words)).toThrow('Invalid BIP39 word');
+			await expect(mnemonicToRecoveryKey(words)).rejects.toThrow('Invalid recovery word');
 		});
 	});
 

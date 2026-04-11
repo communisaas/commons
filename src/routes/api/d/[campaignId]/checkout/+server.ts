@@ -1,5 +1,5 @@
-// CONVEX: Keep SvelteKit — Stripe session creation (getStripe, stripe.checkout.sessions.create),
-// PII encryption (computeEmailHash, encryptPii), rate limiting, supporter find-or-create.
+// CONVEX: Keep SvelteKit — Stripe session creation, rate limiting.
+// PII encryption handled server-side in Convex via org key.
 /**
  * POST /api/d/[campaignId]/checkout — Create Stripe Checkout Session for donation
  */
@@ -10,7 +10,6 @@ import { api } from '$lib/convex';
 import { getStripe } from '$lib/server/billing/stripe';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
-import { computeEmailHash, encryptPii } from '$lib/core/crypto/user-pii-encryption';
 import crypto from 'node:crypto';
 import type { RequestHandler } from './$types';
 

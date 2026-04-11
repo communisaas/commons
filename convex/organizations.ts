@@ -1,4 +1,4 @@
-import { query, mutation, action, internalMutation } from "./_generated/server";
+import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
@@ -119,10 +119,8 @@ export const getDashboard = query({
           userId: m.userId,
           role: m.role,
           joinedAt: m.joinedAt,
-          userName: null as string | null,
-          userEmail: null as string | null,
-          encryptedUserName: user?.encryptedName ?? null,
-          encryptedUserEmail: user?.encryptedEmail ?? null,
+          userName: user?.name ?? null,
+          userEmail: user?.email ?? null,
           userAvatar: user?.avatar ?? null,
         };
       }),
@@ -226,10 +224,8 @@ export const getMembers = query({
           role: m.role,
           joinedAt: m.joinedAt,
           invitedBy: m.invitedBy ?? null,
-          userName: null as string | null,
-          userEmail: null as string | null,
-          encryptedUserName: user?.encryptedName ?? null,
-          encryptedUserEmail: user?.encryptedEmail ?? null,
+          userName: user?.name ?? null,
+          userEmail: user?.email ?? null,
           userAvatar: user?.avatar ?? null,
         };
       }),
@@ -396,10 +392,8 @@ export const getSettingsData = query({
         return {
           _id: m._id,
           userId: m.userId,
-          name: null as string | null,
-          email: null as string | null,
-          encryptedName: user?.encryptedName ?? null,
-          encryptedEmail: user?.encryptedEmail ?? null,
+          name: user?.name ?? null,
+          email: user?.email ?? null,
           avatar: user?.avatar ?? null,
           role: m.role,
           joinedAt: m.joinedAt,
@@ -425,6 +419,7 @@ export const getSettingsData = query({
         ? activeInvites.map((i) => ({
             _id: i._id,
             encryptedEmail: i.encryptedEmail,
+            emailHash: i.emailHash,
             role: i.role,
             expiresAt: i.expiresAt,
           }))
@@ -966,10 +961,14 @@ export const updateStripeCustomerId = mutation({
 export const getOrgKeyVerifier = query({
   args: { slug: v.string() },
   handler: async (ctx, { slug }) => {
-    const { org } = await requireOrgRole(ctx, slug, "editor");
+    const { org, membership } = await requireOrgRole(ctx, slug, "editor");
     return {
       orgKeyVerifier: org.orgKeyVerifier ?? null,
       hasRecoveryKey: Boolean(org.recoveryWrappedOrgKey),
+      // Only return the wrapped key to owners (needed for recovery flow)
+      recoveryWrappedOrgKey: membership.role === "owner"
+        ? (org.recoveryWrappedOrgKey ?? null)
+        : null,
       piiVersion: (org as any).piiVersion ?? "legacy",
     };
   },
@@ -998,6 +997,102 @@ export const setOrgKeyVerifier = mutation({
       recoveryWrappedOrgKey: args.recoveryWrappedOrgKey,
       ...(args.serverSealedOrgKey ? { serverSealedOrgKey: args.serverSealedOrgKey } : {}),
       piiVersion: "legacy",
+      updatedAt: Date.now(),
+    } as any);
+  },
+});
+
+/**
+ * Seal the org key with the server wrapping key.
+ * Called during org encryption setup — client sends raw key bytes,
+ * server wraps them so automated operations can encrypt/decrypt PII.
+ */
+export const sealOrgKey = action({
+  args: {
+    slug: v.string(),
+    rawKeyBase64: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Verify caller is org owner via query
+    const orgData = await ctx.runQuery(internal.organizations.verifyOwner, {
+      slug: args.slug,
+    });
+    if (!orgData) throw new Error("Not authorized or org not found");
+
+    const { sealOrgKey: seal } = await import("./_orgKeyUnseal");
+    const sealedBlob = await seal(args.rawKeyBase64, orgData.orgId);
+
+    await ctx.runMutation(internal.organizations.patchServerSealedKey, {
+      orgId: orgData.orgId,
+      serverSealedOrgKey: sealedBlob,
+    });
+
+    return { sealed: true };
+  },
+});
+
+/**
+ * Rotate the org encryption passphrase. Overwrites verifier, recovery key,
+ * and server-sealed key. The underlying AES key doesn't change — only the
+ * passphrase wrapping changes. Owner-only.
+ */
+export const rotateOrgPassphrase = mutation({
+  args: {
+    slug: v.string(),
+    orgKeyVerifier: v.string(),
+    recoveryWrappedOrgKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "owner");
+
+    if (!org.orgKeyVerifier) {
+      throw new Error("Org encryption not configured. Use setup instead.");
+    }
+
+    await ctx.db.patch(org._id, {
+      orgKeyVerifier: args.orgKeyVerifier,
+      recoveryWrappedOrgKey: args.recoveryWrappedOrgKey,
+      updatedAt: Date.now(),
+    } as any);
+  },
+});
+
+/**
+ * Internal query: read org record by ID. Used by _orgKeyUnseal.ts
+ * in action contexts where ctx.db is not available.
+ */
+export const getOrgById = internalQuery({
+  args: { orgId: v.string() },
+  handler: async (ctx, { orgId }) => {
+    const org = await ctx.db.get(orgId as any);
+    if (!org) return null;
+    return {
+      _id: org._id,
+      serverSealedOrgKey: (org as any).serverSealedOrgKey ?? null,
+    };
+  },
+});
+
+/**
+ * Internal query: verify the authenticated user is an owner of the org.
+ * Used by actions that can't call requireOrgRole directly.
+ */
+export const verifyOwner = internalQuery({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { org } = await requireOrgRole(ctx, slug, "owner");
+    return { orgId: org._id };
+  },
+});
+
+export const patchServerSealedKey = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    serverSealedOrgKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.orgId, {
+      serverSealedOrgKey: args.serverSealedOrgKey,
       updatedAt: Date.now(),
     } as any);
   },

@@ -6,7 +6,7 @@
  * SvelteKit because they depend on buildSegmentWhere() and Prisma queries.
  */
 
-import { query, mutation } from "./_generated/server";
+import { query, mutation, action } from "./_generated/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
 import type { Doc } from "./_generated/dataModel";
@@ -357,5 +357,58 @@ export const exportMatching = query({
     }
 
     return results;
+  },
+});
+
+/**
+ * Export matching supporters with server-side decryption via org key.
+ * Returns plaintext email/name/phone for CSV export.
+ */
+export const exportDecrypted = action({
+  args: { slug: v.string(), filters: v.any() },
+  handler: async (ctx, { slug, filters }) => {
+    const { api } = await import("./_generated/api");
+    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
+    const { decryptWithOrgKey } = await import("./_orgKey");
+
+    // Get org context
+    const org = await ctx.runQuery(api.organizations.getBySlug, { slug });
+    if (!org) throw new Error("Organization not found");
+
+    const orgKey = await getOrgKeyForAction(ctx, org._id);
+    if (!orgKey) throw new Error("Organization encryption not configured");
+
+    // Get encrypted supporters
+    const supporters = await ctx.runQuery(api.segments.exportMatching, { slug, filters });
+
+    // Decrypt each supporter's PII
+    return Promise.all(
+      supporters.map(async (s: any) => {
+        let email = "[encrypted]";
+        let name = "";
+        let phone = "";
+
+        if (s.encryptedEmail) {
+          try {
+            const parsed = JSON.parse(s.encryptedEmail);
+            email = await decryptWithOrgKey(parsed, orgKey, `supporter:${s._id}`, "email");
+          } catch { /* decryption failed */ }
+        }
+        if (s.encryptedName) {
+          try {
+            const parsed = JSON.parse(s.encryptedName);
+            name = await decryptWithOrgKey(parsed, orgKey, `supporter:${s._id}`, "name");
+          } catch { /* decryption failed */ }
+        }
+        if (s.encryptedPhone) {
+          try {
+            const parsed = JSON.parse(s.encryptedPhone);
+            phone = await decryptWithOrgKey(parsed, orgKey, `supporter:${s._id}`, "phone");
+          } catch { /* decryption failed */ }
+        }
+
+        return { email, name, phone, tags: s.tagNames?.join("; ") ?? "" };
+      }),
+    );
   },
 });

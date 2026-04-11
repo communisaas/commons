@@ -110,10 +110,6 @@ declare global {
 			IP_HASH_SALT?: string; // Privacy-preserving IP anonymization (daily rotation)
 			OAUTH_ENCRYPTION_KEY?: string; // AES-256-GCM key for OAuth token encryption at rest
 			BRIDGE_ENCRYPTION_KEY?: string; // AES-256-GCM key for bridge session encryption
-			/** @deprecated Server-held PII keys — migrating to client-custodied encryption */
-			PII_ENCRYPTION_KEY?: string;
-			/** @deprecated Server-held PII keys — migrating to client-custodied encryption */
-			EMAIL_LOOKUP_KEY?: string;
 			CONVEX_JWT_PRIVATE_KEY?: string; // RSA private key (PKCS#8 PEM) for minting Convex auth JWTs
 			CONVEX_AUTH_ISSUER?: string; // JWT issuer URL (defaults to https://commons.email)
 

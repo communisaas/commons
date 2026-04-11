@@ -4,7 +4,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
-import { tryDecryptSupporterEmail } from '$lib/core/crypto/user-pii-encryption';
+// Segment export uses Convex action for server-side decryption with org key
 import type { RequestHandler } from './$types';
 import { safeUserId } from '$lib/core/server/security';
 
@@ -138,19 +138,31 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			filters
 		});
 
+		// Decrypt via Convex action (uses org key)
+		const { serverAction } = await import('convex-sveltekit');
+		let decryptedRows: Array<{ email: string; name: string; phone: string; tags: string }>;
+		try {
+			decryptedRows = await serverAction(api.segments.exportDecrypted, {
+				slug: params.slug,
+				filters
+			});
+		} catch {
+			// Fall back to encrypted blobs if org key not configured
+			decryptedRows = supporters.map((s) => ({
+				email: '[encrypted]',
+				name: s.name ?? '',
+				phone: s.phone ?? '',
+				tags: s.tagNames.join('; ')
+			}));
+		}
+
 		const header = 'email,name,phone,tags';
-		const rows = await Promise.all(supporters.map(async (s) => {
-			const tagNames = s.tagNames.join('; ');
-			const email = s.encryptedEmail
-				? await tryDecryptSupporterEmail(s).catch(() => '[encrypted]')
-				: '[encrypted]';
-			return [
-				csvEscape(email),
-				csvEscape(s.name ?? ''),
-				csvEscape(s.phone ?? ''),
-				csvEscape(tagNames)
-			].join(',');
-		}));
+		const rows = decryptedRows.map((r) => [
+			csvEscape(r.email),
+			csvEscape(r.name),
+			csvEscape(r.phone),
+			csvEscape(r.tags)
+		].join(','));
 
 		console.info(`[bulk] export_csv org=${params.slug} user=${safeUserId(locals.user.id)} rows=${supporters.length}`);
 		const csv = [header, ...rows].join('\n');

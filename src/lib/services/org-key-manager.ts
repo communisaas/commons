@@ -126,6 +126,16 @@ export async function deriveAndCacheOrgKey(
 }
 
 /**
+ * Cache an already-derived org key on this device. Avoids re-deriving via PBKDF2
+ * when we already hold the key in memory (e.g., during initial setup).
+ */
+export async function cacheOrgKey(orgKey: CryptoKey, orgId: string): Promise<void> {
+	const deviceBytes = await getOrCreateMasterBytes();
+	const wrapped = await wrapOrgKeyForDevice(orgKey, deviceBytes);
+	await storeCachedWrapped(orgId, wrapped);
+}
+
+/**
  * Clear the cached org key for an org (e.g., on logout or passphrase change).
  */
 export { clearCachedWrapped as clearCachedOrgKey };

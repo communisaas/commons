@@ -1,4 +1,4 @@
-import { tryDecryptPii, type EncryptedPii } from '$lib/core/crypto/user-pii-encryption';
+// Member PII: plaintext name/email returned from Convex (user-level, not org-encrypted)
 import type { PageServerLoad } from './$types';
 
 import { serverQuery } from 'convex-sveltekit';
@@ -7,12 +7,19 @@ import { api } from '$lib/convex';
 export const load: PageServerLoad = async ({ parent, params }) => {
 	const { org, membership } = await parent();
 
-	const data = await serverQuery(api.organizations.getSettingsData, { slug: params.slug });
+	const isEditor = membership.role === 'owner' || membership.role === 'editor';
+	const [data, keyInfo] = await Promise.all([
+		serverQuery(api.organizations.getSettingsData, { slug: params.slug }),
+		isEditor
+			? serverQuery(api.organizations.getOrgKeyVerifier, { slug: params.slug })
+			: Promise.resolve({ orgKeyVerifier: null, hasRecoveryKey: false, piiVersion: 'legacy' })
+	]);
 
 	// Invite emails are client-encrypted — pass through as-is for client-side decryption
-	const invites = (data.invites ?? []).map((i: { _id: string; encryptedEmail: string; role: string; expiresAt: number }) => ({
+	const invites = (data.invites ?? []).map((i: { _id: string; encryptedEmail: string; emailHash?: string; role: string; expiresAt: number }) => ({
 		id: i._id,
 		encryptedEmail: i.encryptedEmail,
+		emailHash: i.emailHash ?? null,
 		role: i.role,
 		expiresAt: new Date(i.expiresAt).toISOString()
 	}));
@@ -32,33 +39,16 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			emailsSent: data.usage.emailsSent,
 			maxEmails: 10000
 		},
-		members: await Promise.all(data.members.map(async (m: Record<string, unknown>) => {
-			let name = m.name as string | null;
-			let email = m.email as string | null;
-			// Decrypt encrypted PII blobs server-side (encryption keys are server-only)
-			if (!name && m.encryptedName) {
-				try {
-					const enc: EncryptedPii = JSON.parse(m.encryptedName as string);
-					name = await tryDecryptPii(enc, m.userId as string, 'name') ?? null;
-				} catch { /* decryption failed */ }
-			}
-			if (!email && m.encryptedEmail) {
-				try {
-					const enc: EncryptedPii = JSON.parse(m.encryptedEmail as string);
-					email = await tryDecryptPii(enc, m.userId as string, 'email') ?? null;
-				} catch { /* decryption failed */ }
-			}
-			return {
-				id: m._id,
-				userId: m.userId,
-				name,
-				email,
-				avatar: m.avatar,
-				role: m.role,
-				joinedAt: typeof m.joinedAt === 'number'
-					? new Date(m.joinedAt as number).toISOString()
-					: String(m.joinedAt)
-			};
+		members: data.members.map((m: Record<string, unknown>) => ({
+			id: m._id,
+			userId: m.userId,
+			name: (m.name as string | null) ?? null,
+			email: (m.email as string | null) ?? null,
+			avatar: m.avatar,
+			role: m.role,
+			joinedAt: typeof m.joinedAt === 'number'
+				? new Date(m.joinedAt as number).toISOString()
+				: String(m.joinedAt)
 		})),
 		invites,
 		issueDomains: (data.issueDomains ?? []).map((d: Record<string, unknown>) => ({
@@ -72,6 +62,12 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			updatedAt: typeof d.updatedAt === 'number'
 				? new Date(d.updatedAt as number).toISOString()
 				: String(d.updatedAt)
-		}))
+		})),
+		encryption: {
+			orgKeyVerifier: keyInfo.orgKeyVerifier,
+			hasRecoveryKey: keyInfo.hasRecoveryKey,
+			recoveryWrappedOrgKey: keyInfo.recoveryWrappedOrgKey,
+			piiVersion: keyInfo.piiVersion
+		}
 	};
 };

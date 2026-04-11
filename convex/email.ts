@@ -8,8 +8,9 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
-import { decryptSupporterEmail } from "./_pii";
 import { computeOrgScopedEmailHash } from "./_orgHash";
+import { getOrgKeyForAction } from "./_orgKeyUnseal";
+import { decryptWithOrgKey } from "./_orgKey";
 
 // =============================================================================
 // EMAIL BLASTS — Queries, Mutations, Actions
@@ -456,12 +457,17 @@ export const sendBlastBatch = internalAction({
         return;
       }
 
+      // Unseal org key once per batch (not per recipient)
+      const orgKey = await getOrgKeyForAction(ctx, blast.orgId);
+      if (!orgKey) throw new Error("Organization encryption not configured — cannot decrypt emails");
+
       let batchSent = 0;
       let batchFailed = 0;
 
       for (const recipient of batch) {
         try {
-          const email = await decryptSupporterEmail(recipient);
+          const parsed = JSON.parse(recipient.encryptedEmail);
+          const email = await decryptWithOrgKey(parsed, orgKey, `supporter:${recipient._id}`, "email");
           const success = await sendViaSes(
             email,
             blast.fromEmail,

@@ -118,16 +118,7 @@ export const getGrant = query({
     if (!grant) throw new Error("Delegation grant not found");
     if (grant.userId !== userId) throw new Error("Not authorized to view this grant");
 
-    // Decrypt policy text
-    let policyText = grant.policyText;
-    try {
-      const parsed = JSON.parse(grant.policyText) as EncryptedPii;
-      if (parsed.ciphertext && parsed.iv) {
-        policyText = await decryptPii(parsed, grant.userId, "policy");
-      }
-    } catch {
-      policyText = "[encrypted]";
-    }
+    const policyText = grant.policyText;
 
     // Full action history (last 20)
     const allActions = await ctx.db

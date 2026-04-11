@@ -158,22 +158,23 @@ export async function verifyOrgKey(orgKey: CryptoKey, verifier: string): Promise
 }
 
 /**
- * Generate a 256-bit recovery key with BIP39 24-word mnemonic.
+ * Generate a 256-bit recovery key with BIP39-compliant 24-word mnemonic.
+ * Includes SHA-256 checksum (first 8 bits) for typo detection.
  */
-export function generateRecoveryKey(): { key: Uint8Array; words: string[] } {
+export async function generateRecoveryKey(): Promise<{ key: Uint8Array; words: string[] }> {
 	const key = crypto.getRandomValues(new Uint8Array(32));
 
-	// Convert 256 bits to 24 words (11 bits each = 264 bits)
-	// BIP39: 256 bits entropy + 8 bits checksum = 264 bits = 24 × 11-bit words
-	// For simplicity we skip the checksum — this is a recovery key, not a wallet seed
-	// We use all 256 bits mapped to 23 full words + 1 partial word (8 remaining bits, padded)
-	const words: string[] = [];
+	// BIP39: 256 bits entropy + 8 bits checksum (SHA-256) = 264 bits = 24 × 11-bit words
+	const hash = await crypto.subtle.digest('SHA-256', key);
+	const checksum = new Uint8Array(hash)[0]; // first 8 bits of SHA-256(entropy)
+
 	let bits = '';
 	for (const byte of key) {
 		bits += byte.toString(2).padStart(8, '0');
 	}
-	// Pad to 264 bits (24 × 11) so we get exactly 24 words
-	bits += '00000000'; // 8 zero-padding bits
+	bits += checksum.toString(2).padStart(8, '0');
+
+	const words: string[] = [];
 	for (let i = 0; i < 24; i++) {
 		const index = parseInt(bits.slice(i * 11, (i + 1) * 11), 2);
 		words.push(wordlist[index]);
@@ -184,22 +185,32 @@ export function generateRecoveryKey(): { key: Uint8Array; words: string[] } {
 
 /**
  * Convert a 24-word mnemonic back to a 256-bit recovery key.
+ * Validates BIP39 checksum to detect transcription errors.
  */
-export function mnemonicToRecoveryKey(words: string[]): Uint8Array {
+export async function mnemonicToRecoveryKey(words: string[]): Promise<Uint8Array> {
 	if (words.length !== 24) throw new Error('Recovery mnemonic must be 24 words');
 
 	let bits = '';
 	for (const word of words) {
 		const idx = wordlist.indexOf(word.toLowerCase().trim());
-		if (idx === -1) throw new Error(`Invalid BIP39 word: "${word}"`);
+		if (idx === -1) throw new Error(`Invalid recovery word: "${word}"`);
 		bits += idx.toString(2).padStart(11, '0');
 	}
 
-	// First 256 bits are the key (remaining 8 are padding)
+	// First 256 bits = entropy, last 8 bits = checksum
 	const key = new Uint8Array(32);
 	for (let i = 0; i < 32; i++) {
 		key[i] = parseInt(bits.slice(i * 8, (i + 1) * 8), 2);
 	}
+
+	// Verify checksum
+	const providedChecksum = parseInt(bits.slice(256, 264), 2);
+	const hash = await crypto.subtle.digest('SHA-256', key);
+	const expectedChecksum = new Uint8Array(hash)[0];
+	if (providedChecksum !== expectedChecksum) {
+		throw new Error('Invalid recovery mnemonic — checksum failed. Check for typos.');
+	}
+
 	return key;
 }
 

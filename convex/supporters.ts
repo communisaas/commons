@@ -4,10 +4,10 @@
  * PII model (org-key migration):
  *   Client encrypts/decrypts PII with org key.
  *   Server stores opaque encrypted blobs + org-scoped hashes.
- *   No server-held PII_ENCRYPTION_KEY or EMAIL_LOOKUP_KEY.
+ *   No server-held encryption keys — org key only.
  */
 
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, action, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
 
@@ -777,5 +777,81 @@ export const importBatch = mutation({
     }
 
     return { imported, updated, skipped };
+  },
+});
+
+/**
+ * Import supporters with server-side org key encryption.
+ * Accepts plaintext PII, unseals the org key, encrypts each field,
+ * then delegates to importBatch mutation.
+ */
+export const importWithEncryption = action({
+  args: {
+    slug: v.string(),
+    supporters: v.array(
+      v.object({
+        email: v.string(),
+        name: v.optional(v.string()),
+        phone: v.optional(v.string()),
+        postalCode: v.optional(v.string()),
+        country: v.optional(v.string()),
+        emailStatus: v.string(),
+        smsStatus: v.string(),
+        tagIds: v.array(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const { computeOrgScopedEmailHash, computeOrgScopedPhoneHash } = await import("./_orgHash");
+    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
+    const { encryptWithOrgKey } = await import("./_orgKey");
+    const { api } = await import("./_generated/api");
+
+    // Get org ID from slug
+    const org = await ctx.runQuery(api.organizations.getBySlug, { slug: args.slug });
+    if (!org) throw new Error("Organization not found");
+
+    // Unseal org key
+    const orgKey = await getOrgKeyForAction(ctx, org._id);
+    if (!orgKey) throw new Error("Organization encryption not configured. An org owner must set up encryption in org settings before importing supporters.");
+
+    // Encrypt each supporter's PII
+    const encrypted = await Promise.all(
+      args.supporters.map(async (s) => {
+        const normalizedEmail = s.email.trim().toLowerCase();
+        const emailHash = await computeOrgScopedEmailHash(org._id, normalizedEmail);
+
+        // Use emailHash as entityId for encryption AAD binding
+        const encEmail = await encryptWithOrgKey(normalizedEmail, orgKey, emailHash, "email");
+        const encName = s.name
+          ? await encryptWithOrgKey(s.name.trim(), orgKey, emailHash, "name")
+          : undefined;
+        const encPhone = s.phone
+          ? await encryptWithOrgKey(s.phone.trim(), orgKey, emailHash, "phone")
+          : undefined;
+        const phoneHash = s.phone
+          ? await computeOrgScopedPhoneHash(org._id, s.phone.trim())
+          : undefined;
+
+        return {
+          encryptedEmail: JSON.stringify(encEmail),
+          emailHash,
+          encryptedName: encName ? JSON.stringify(encName) : undefined,
+          encryptedPhone: encPhone ? JSON.stringify(encPhone) : undefined,
+          phoneHash,
+          postalCode: s.postalCode,
+          country: s.country,
+          emailStatus: s.emailStatus,
+          smsStatus: s.smsStatus,
+          tagIds: s.tagIds,
+        };
+      }),
+    );
+
+    // Delegate to existing importBatch mutation
+    return ctx.runMutation(api.supporters.importBatch, {
+      slug: args.slug,
+      supporters: encrypted,
+    });
   },
 });

@@ -8,7 +8,9 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
-import { encryptPii, computeEmailHash, type EncryptedPii } from "./_pii";
+import { computeOrgScopedEmailHash } from "./_orgHash";
+import { getOrgKeyForAction } from "./_orgKeyUnseal";
+import { encryptWithOrgKey } from "./_orgKey";
 
 // =============================================================================
 // DONATIONS — Queries, Mutations, Actions
@@ -343,10 +345,14 @@ export const processCheckout = action({
 
     const engagementTier = args.districtCode ? 2 : args.postalCode ? 1 : 0;
 
-    // Compute email hash first (deterministic HMAC — safe before insert)
     const normalizedEmail = args.email.toLowerCase();
-    const emailHash = await computeEmailHash(normalizedEmail);
-    if (!emailHash) throw new Error("Email encryption failed");
+
+    // Unseal org key — required for PII encryption
+    const orgKey = await getOrgKeyForAction(ctx, campaign.orgId);
+    if (!orgKey) throw new Error("Organization encryption not configured. An org owner must set up encryption in org settings before accepting donations.");
+
+    // Org-scoped email hash
+    const emailHash = await computeOrgScopedEmailHash(campaign.orgId, normalizedEmail);
 
     // Rate limit: 5 checkouts per minute per campaign+donor (Stripe cost)
     const rlKey = `donations.processCheckout:${args.campaignId}:${emailHash.slice(0, 16)}`;
@@ -374,16 +380,18 @@ export const processCheckout = action({
     });
 
     // Step 2: Encrypt PII with real doc _id (AAD binding must match decrypt path)
-    const [encryptedEmail, encryptedName] = await Promise.all([
-      encryptPii(normalizedEmail, donationDocId, "email"),
-      encryptPii(args.name.trim(), donationDocId, "name"),
+    const [encEmail, encName] = await Promise.all([
+      encryptWithOrgKey(normalizedEmail, orgKey, donationDocId, "email"),
+      encryptWithOrgKey(args.name.trim(), orgKey, donationDocId, "name"),
     ]);
+    const encryptedEmail = JSON.stringify(encEmail);
+    const encryptedName = JSON.stringify(encName);
 
     // Step 3: Patch with correctly-bound ciphertext
     await ctx.runMutation(internal.donations.patchEncryptedPii, {
       donationId: donationDocId,
-      encryptedEmail: JSON.stringify(encryptedEmail),
-      encryptedName: JSON.stringify(encryptedName),
+      encryptedEmail,
+      encryptedName,
     });
 
     // Create Stripe Checkout Session

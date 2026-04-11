@@ -26,7 +26,6 @@ import {
 // (bridge-crypto.test.ts covers encryption separately)
 beforeEach(() => {
 	delete process.env.BRIDGE_ENCRYPTION_KEY;
-	delete process.env.PII_ENCRYPTION_KEY;
 });
 
 const TEST_ORIGIN = 'https://commons.example';

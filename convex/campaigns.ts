@@ -3,7 +3,9 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole, loadOrg, requireAuth } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
-import { encryptSupporterEmail, computeEmailHash } from "./_pii";
+import { computeOrgScopedEmailHash } from "./_orgHash";
+import { getOrgKeyForAction } from "./_orgKeyUnseal";
+import { encryptWithOrgKey } from "./_orgKey";
 
 // =============================================================================
 // QUERIES
@@ -824,11 +826,22 @@ export const submitAction = action({
 
     const normalizedEmail = args.email.trim().toLowerCase();
 
-    // Compute email hash first (deterministic HMAC — needed for rate limit key)
-    const emailHash = await computeEmailHash(normalizedEmail);
-    if (!emailHash) throw new Error("Encryption service not available");
+    // Get campaign first — needed for orgId
+    const campaign = await ctx.runQuery(internal.campaigns.getActiveCampaign, {
+      campaignId: args.campaignId,
+    });
+    if (!campaign) {
+      throw new Error("Campaign not found or inactive");
+    }
 
-    // Rate limit: 10 actions per minute per campaign+donor (uses hash, not plaintext)
+    // Unseal org key — required for PII encryption
+    const orgKey = await getOrgKeyForAction(ctx, campaign.orgId);
+    if (!orgKey) throw new Error("Organization encryption not configured. An org owner must set up encryption in org settings before accepting submissions.");
+
+    // Org-scoped email hash (deterministic, no secret key)
+    const emailHash = await computeOrgScopedEmailHash(campaign.orgId, normalizedEmail);
+
+    // Rate limit: 10 actions per minute per campaign+donor
     const rlKey = `campaigns.submitAction:${args.campaignId}:${emailHash.slice(0, 16)}`;
     const rl = await ctx.runMutation(internal._rateLimit.check, {
       key: rlKey,
@@ -836,14 +849,6 @@ export const submitAction = action({
       maxRequests: 10,
     });
     if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
-
-    // Get campaign
-    const campaign = await ctx.runQuery(internal.campaigns.getActiveCampaign, {
-      campaignId: args.campaignId,
-    });
-    if (!campaign) {
-      throw new Error("Campaign not found or inactive");
-    }
 
     // Step 1: Find or create supporter with placeholder email
     const { supporterId, isNew } = await ctx.runMutation(
@@ -859,18 +864,24 @@ export const submitAction = action({
 
     // Step 2: Encrypt PII with real supporter ID and patch
     if (isNew) {
-      const { encryptSupporterName, encryptSupporterPhone } = await import("./_pii");
-      const encryptionResults = await Promise.all([
-        encryptSupporterEmail(normalizedEmail, supporterId),
-        args.name ? encryptSupporterName(args.name.trim(), supporterId) : null,
-        args.phone ? encryptSupporterPhone(args.phone.trim(), supporterId) : null,
+      const entityId = `supporter:${supporterId}`;
+      const { computeOrgScopedPhoneHash } = await import("./_orgHash");
+
+      const [encEmail, encName, encPhone] = await Promise.all([
+        encryptWithOrgKey(normalizedEmail, orgKey, entityId, "email"),
+        args.name ? encryptWithOrgKey(args.name.trim(), orgKey, entityId, "name") : null,
+        args.phone ? encryptWithOrgKey(args.phone.trim(), orgKey, entityId, "phone") : null,
       ]);
+      const phoneHash = args.phone
+        ? await computeOrgScopedPhoneHash(campaign.orgId, args.phone.trim())
+        : undefined;
+
       await ctx.runMutation(internal.supporters.patchEncryptedPii, {
         supporterId: supporterId as Id<"supporters">,
-        encryptedEmail: encryptionResults[0].encryptedEmail,
-        encryptedName: encryptionResults[1] ?? undefined,
-        encryptedPhone: encryptionResults[2]?.encryptedPhone ?? undefined,
-        phoneHash: encryptionResults[2]?.phoneHash ?? undefined,
+        encryptedEmail: JSON.stringify(encEmail),
+        encryptedName: encName ? JSON.stringify(encName) : undefined,
+        encryptedPhone: encPhone ? JSON.stringify(encPhone) : undefined,
+        phoneHash,
       });
     }
 

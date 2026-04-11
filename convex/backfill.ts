@@ -1,40 +1,18 @@
 /**
- * PII Backfill Actions
+ * Data migration infrastructure.
  *
- * One-time actions to encrypt plaintext PII fields on existing rows.
- * Run these BEFORE dropping plaintext columns from the schema.
+ * Queries to identify rows needing migration + generic patch mutation.
+ * Encryption actions use org key via _orgKeyUnseal.ts.
  *
- * All actions are idempotent: rows with valid encrypted fields are skipped.
- * All use batched processing to stay within Convex action time limits.
- *
- * Entity ID patterns (must match decrypt paths):
- *   supporters:  "supporter:{_id}"  fields: email, name, phone
- *   donations:   "{_id}" (bare)     fields: email, name
- *   eventRsvps:  "rsvp:{_id}"       fields: name
- *   smsMessages: "smsMsg:{_id}"     fields: to
- *   calls:       "call:{_id}"       fields: callerPhone, targetPhone
- *   emailEvents: hash only          fields: recipientEmail → recipientEmailHash
- *   suppressed:  hash only          fields: email → emailHash
- *   bounceRpts:  hash only          fields: email → emailHash
+ * All actions are idempotent and batched.
  */
 
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import {
-  encryptPii,
-  tryDecryptPii,
-  computeEmailHash,
-  computePhoneHash,
-  encryptSupporterEmail,
-  encryptSupporterName,
-  encryptSupporterPhone,
-  type EncryptedPii,
-} from "./_pii";
-
-// =============================================================================
-// BATCH HELPERS
-// =============================================================================
+import { encryptWithOrgKey } from "./_orgKey";
+import { getOrgKeyForAction } from "./_orgKeyUnseal";
+import { computeOrgScopedEmailHash, computeOrgScopedPhoneHash } from "./_orgHash";
 
 const BATCH_SIZE = 50;
 
@@ -43,212 +21,71 @@ const BATCH_SIZE = 50;
 // =============================================================================
 
 export const getSupportersNeedingBackfill = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("supporters").order("asc").take(10_000);
-    // Find rows missing encryptedName, encryptedPhone, or with empty encryptedEmail
-    const needsWork = all.filter(
+  args: { orgId: v.string(), paginationCursor: v.optional(v.string()), limit: v.number() },
+  handler: async (ctx, { orgId, paginationCursor, limit }) => {
+    const result = await ctx.db
+      .query("supporters")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId as any))
+      .paginate({ numItems: limit * 5, cursor: (paginationCursor ?? null) as any });
+
+    // Filter in memory but from a paginated source (not capped at 10K)
+    const needsWork = result.page.filter(
       (s) =>
         (s.name && !s.encryptedName) ||
         (s.phone && !s.encryptedPhone) ||
         !s.encryptedEmail || s.encryptedEmail === "",
     );
-    let start = 0;
-    if (cursor) {
-      const idx = needsWork.findIndex((s) => s._id === cursor);
-      if (idx >= 0) start = idx + 1;
-    }
-    const batch = needsWork.slice(start, start + limit);
+
     return {
-      items: batch.map((s) => ({
+      items: needsWork.slice(0, limit).map((s) => ({
         _id: s._id,
+        orgId: s.orgId,
         name: s.name ?? null,
         phone: s.phone ?? null,
         encryptedName: s.encryptedName ?? null,
         encryptedPhone: s.encryptedPhone ?? null,
-        phoneHash: s.phoneHash ?? null,
         encryptedEmail: s.encryptedEmail,
         email: (s as any).email ?? null,
       })),
-      hasMore: needsWork.length > start + limit,
+      continueCursor: result.continueCursor,
+      isDone: result.isDone,
     };
   },
 });
 
 export const getDonationsNeedingBackfill = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("donations").order("asc").take(10_000);
-    const needsWork = all.filter(
+  args: { orgId: v.string(), paginationCursor: v.optional(v.string()), limit: v.number() },
+  handler: async (ctx, { orgId, paginationCursor, limit }) => {
+    const result = await ctx.db
+      .query("donations")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId as any))
+      .paginate({ numItems: limit * 5, cursor: (paginationCursor ?? null) as any });
+
+    const needsWork = result.page.filter(
       (d) =>
         !d.encryptedEmail ||
         d.encryptedEmail === "" ||
         !d.encryptedName ||
         d.encryptedName === "",
     );
-    let start = 0;
-    if (cursor) {
-      const idx = needsWork.findIndex((d) => d._id === cursor);
-      if (idx >= 0) start = idx + 1;
-    }
-    const batch = needsWork.slice(start, start + limit);
+
     return {
-      items: batch.map((d) => ({
+      items: needsWork.slice(0, limit).map((d) => ({
         _id: d._id,
+        orgId: d.orgId,
         email: d.email,
         name: d.name,
         encryptedEmail: d.encryptedEmail ?? null,
         encryptedName: d.encryptedName ?? null,
       })),
-      hasMore: needsWork.length > start + limit,
-    };
-  },
-});
-
-export const getRsvpsNeedingBackfill = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("eventRsvps").order("asc").take(10_000);
-    const needsWork = all.filter((r) => r.name && !r.encryptedRsvpName);
-    let start = 0;
-    if (cursor) {
-      const idx = needsWork.findIndex((r) => r._id === cursor);
-      if (idx >= 0) start = idx + 1;
-    }
-    const batch = needsWork.slice(start, start + limit);
-    return {
-      items: batch.map((r) => ({ _id: r._id, name: r.name })),
-      hasMore: needsWork.length > start + limit,
-    };
-  },
-});
-
-export const getEmailEventsNeedingHash = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("emailEvents").order("asc").take(10_000);
-    const needsWork = all.filter((e) => e.recipientEmail && !e.recipientEmailHash);
-    let start = 0;
-    if (cursor) {
-      const idx = needsWork.findIndex((e) => e._id === cursor);
-      if (idx >= 0) start = idx + 1;
-    }
-    const batch = needsWork.slice(start, start + limit);
-    return {
-      items: batch.map((e) => ({ _id: e._id, recipientEmail: e.recipientEmail })),
-      hasMore: needsWork.length > start + limit,
-    };
-  },
-});
-
-export const getSmsNeedingBackfill = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("smsMessages").order("asc").take(10_000);
-    const needsWork = all.filter((m) => m.to && !m.encryptedTo);
-    let start = 0;
-    if (cursor) {
-      const idx = needsWork.findIndex((m) => m._id === cursor);
-      if (idx >= 0) start = idx + 1;
-    }
-    const batch = needsWork.slice(start, start + limit);
-    return {
-      items: batch.map((m) => ({ _id: m._id, to: m.to })),
-      hasMore: needsWork.length > start + limit,
-    };
-  },
-});
-
-export const getCallsNeedingBackfill = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("patchThroughCalls").order("asc").take(10_000);
-    const needsWork = all.filter(
-      (c) =>
-        (c.callerPhone && !c.encryptedCallerPhone) ||
-        (c.targetPhone && !c.encryptedTargetPhone),
-    );
-    let start = 0;
-    if (cursor) {
-      const idx = needsWork.findIndex((c) => c._id === cursor);
-      if (idx >= 0) start = idx + 1;
-    }
-    const batch = needsWork.slice(start, start + limit);
-    return {
-      items: batch.map((c) => ({
-        _id: c._id,
-        callerPhone: c.callerPhone,
-        targetPhone: c.targetPhone,
-        encryptedCallerPhone: c.encryptedCallerPhone ?? null,
-        encryptedTargetPhone: c.encryptedTargetPhone ?? null,
-      })),
-      hasMore: needsWork.length > start + limit,
-    };
-  },
-});
-
-export const getSuppressedNeedingHash = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("suppressedEmails").order("asc").take(10_000);
-    const needsWork = all.filter((s) => s.email && !s.emailHash);
-    let start = 0;
-    if (cursor) {
-      const idx = needsWork.findIndex((s) => s._id === cursor);
-      if (idx >= 0) start = idx + 1;
-    }
-    const batch = needsWork.slice(start, start + limit);
-    return {
-      items: batch.map((s) => ({ _id: s._id, email: s.email })),
-      hasMore: needsWork.length > start + limit,
-    };
-  },
-});
-
-export const getBounceReportsNeedingHash = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("bounceReports").order("asc").take(10_000);
-    const needsWork = all.filter((b) => b.email && !b.emailHash);
-    let start = 0;
-    if (cursor) {
-      const idx = needsWork.findIndex((b) => b._id === cursor);
-      if (idx >= 0) start = idx + 1;
-    }
-    const batch = needsWork.slice(start, start + limit);
-    return {
-      items: batch.map((b) => ({ _id: b._id, email: b.email })),
-      hasMore: needsWork.length > start + limit,
-    };
-  },
-});
-
-export const getUsersNeedingPlaintextEmail = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("users").order("asc").take(10_000);
-    // Users with encryptedEmail but no plaintext email — need migration
-    const needsWork = all.filter(
-      (u) => !u.email && u.encryptedEmail && u.encryptedEmail !== "",
-    );
-    const start = cursor
-      ? needsWork.findIndex((u) => u._id === cursor) + 1
-      : 0;
-    const batch = needsWork.slice(start, start + limit);
-    return {
-      items: batch.map((u) => ({
-        _id: u._id,
-        encryptedEmail: u.encryptedEmail,
-        encryptedName: u.encryptedName,
-        custodyMode: u.custodyMode,
-      })),
-      hasMore: needsWork.length > start + limit,
+      continueCursor: result.continueCursor,
+      isDone: result.isDone,
     };
   },
 });
 
 // =============================================================================
-// INTERNAL MUTATION — patch encrypted fields
+// GENERIC PATCH
 // =============================================================================
 
 export const patchRow = internalMutation({
@@ -262,289 +99,65 @@ export const patchRow = internalMutation({
 });
 
 // =============================================================================
-// BACKFILL ACTIONS
+// ORG KEY MIGRATION ACTIONS
 // =============================================================================
 
 /**
- * Backfill supporter name + phone encryption.
- * Idempotent: skips rows that already have encryptedName/encryptedPhone.
+ * Re-encrypt supporter PII from plaintext fields to org key encryption.
+ * Requires serverSealedOrgKey on the org. Idempotent.
  */
 export const backfillSupporterPii = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    let processed = 0;
-    let skipped = 0;
-    let failed = 0;
-    let cursor: string | undefined;
-    let hasMore = true;
+  args: { orgId: v.string() },
+  handler: async (ctx, { orgId }) => {
+    const orgKey = await getOrgKeyForAction(ctx, orgId);
+    if (!orgKey) throw new Error("Org encryption not configured");
 
-    while (hasMore) {
-      const batch = await ctx.runQuery(internal.backfill.getSupportersNeedingBackfill, {
-        cursor,
-        limit: BATCH_SIZE,
-      });
-      hasMore = batch.hasMore;
+    let processed = 0;
+    let failed = 0;
+    let isDone = false;
+    let paginationCursor: string | undefined;
+
+    while (!isDone) {
+      const batch = await ctx.runQuery(
+        internal.backfill.getSupportersNeedingBackfill,
+        { orgId, paginationCursor, limit: BATCH_SIZE },
+      );
+      isDone = batch.isDone;
+      paginationCursor = batch.continueCursor;
 
       for (const s of batch.items) {
         try {
+          const entityId = `supporter:${s._id}`;
           const patch: Record<string, unknown> = {};
 
-          // Re-encrypt email if missing/empty (CSV import rows with wrong AAD)
-          if (!s.encryptedEmail || s.encryptedEmail === "") {
-            if (s.email) {
-              const { encryptedEmail } = await encryptSupporterEmail(s.email, s._id);
-              patch.encryptedEmail = encryptedEmail;
-            }
-          }
-
-          // Encrypt name if missing
-          if (s.name && !s.encryptedName) {
-            patch.encryptedName = await encryptSupporterName(s.name, s._id);
-          }
-
-          // Encrypt phone if missing (phone may not be E.164, so hash separately)
-          if (s.phone && !s.encryptedPhone) {
-            const enc = await encryptPii(s.phone, "supporter:" + s._id, "phone");
-            patch.encryptedPhone = JSON.stringify(enc);
-            if (!s.phoneHash) {
-              try {
-                patch.phoneHash = await computePhoneHash(s.phone) ?? undefined;
-              } catch {
-                // Non-E.164 phone — encrypt succeeds but hash skipped
-              }
-            }
-          }
-
-          if (Object.keys(patch).length > 0) {
-            // Also null out legacy plaintext fields to prevent breach recovery
-            if (patch.encryptedName) patch.name = undefined;
-            if (patch.encryptedPhone) patch.phone = undefined;
-            if (patch.encryptedEmail) patch.email = undefined;
-
-            await ctx.runMutation(internal.backfill.patchRow, {
-              id: s._id,
-              patch,
-            });
-            processed++;
-          } else {
-            skipped++;
-          }
-
-          cursor = s._id;
-        } catch (err) {
-          console.error(`[backfill] supporter ${s._id} failed:`, err);
-          failed++;
-          cursor = s._id;
-        }
-      }
-
-      if (batch.items.length === 0) break;
-    }
-
-    return { processed, skipped, failed };
-  },
-});
-
-/**
- * Backfill donation email + name encryption.
- */
-export const backfillDonationPii = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    let processed = 0;
-    let skipped = 0;
-    let failed = 0;
-    let cursor: string | undefined;
-    let hasMore = true;
-
-    while (hasMore) {
-      const batch = await ctx.runQuery(internal.backfill.getDonationsNeedingBackfill, {
-        cursor,
-        limit: BATCH_SIZE,
-      });
-      hasMore = batch.hasMore;
-
-      for (const d of batch.items) {
-        try {
-          const patch: Record<string, unknown> = {};
-
-          if (d.email && (!d.encryptedEmail || d.encryptedEmail === "")) {
-            const enc = await encryptPii(d.email, d._id, "email");
+          if (s.email && (!s.encryptedEmail || s.encryptedEmail === "")) {
+            const enc = await encryptWithOrgKey(s.email, orgKey, entityId, "email");
             patch.encryptedEmail = JSON.stringify(enc);
+            patch.emailHash = await computeOrgScopedEmailHash(orgId, s.email);
           }
-
-          if (d.name && (!d.encryptedName || d.encryptedName === "")) {
-            const enc = await encryptPii(d.name, d._id, "name");
+          if (s.name && !s.encryptedName) {
+            const enc = await encryptWithOrgKey(s.name, orgKey, entityId, "name");
             patch.encryptedName = JSON.stringify(enc);
           }
-
-          if (Object.keys(patch).length > 0) {
-            // Null out legacy plaintext
-            if (patch.encryptedEmail) patch.email = undefined;
-            if (patch.encryptedName) patch.name = undefined;
-
-            await ctx.runMutation(internal.backfill.patchRow, {
-              id: d._id,
-              patch,
-            });
-            processed++;
-          } else {
-            skipped++;
-          }
-
-          cursor = d._id;
-        } catch (err) {
-          console.error(`[backfill] donation ${d._id} failed:`, err);
-          failed++;
-          cursor = d._id;
-        }
-      }
-
-      if (batch.items.length === 0) break;
-    }
-
-    return { processed, skipped, failed };
-  },
-});
-
-/**
- * Backfill event RSVP name encryption.
- */
-export const backfillRsvpNames = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    let processed = 0;
-    let failed = 0;
-    let cursor: string | undefined;
-    let hasMore = true;
-
-    while (hasMore) {
-      const batch = await ctx.runQuery(internal.backfill.getRsvpsNeedingBackfill, {
-        cursor,
-        limit: BATCH_SIZE,
-      });
-      hasMore = batch.hasMore;
-
-      for (const r of batch.items) {
-        try {
-          const enc = await encryptPii(r.name, `rsvp:${r._id}`, "name");
-          await ctx.runMutation(internal.backfill.patchRow, {
-
-            id: r._id,
-            patch: { encryptedRsvpName: JSON.stringify(enc) },
-          });
-          processed++;
-          cursor = r._id;
-        } catch (err) {
-          console.error(`[backfill] rsvp ${r._id} failed:`, err);
-          failed++;
-          cursor = r._id;
-        }
-      }
-
-      if (batch.items.length === 0) break;
-    }
-
-    return { processed, failed };
-  },
-});
-
-/**
- * Backfill SMS message phone encryption.
- */
-export const backfillSmsPhones = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    let processed = 0;
-    let failed = 0;
-    let cursor: string | undefined;
-    let hasMore = true;
-
-    while (hasMore) {
-      const batch = await ctx.runQuery(internal.backfill.getSmsNeedingBackfill, {
-        cursor,
-        limit: BATCH_SIZE,
-      });
-      hasMore = batch.hasMore;
-
-      for (const m of batch.items) {
-        try {
-          const enc = await encryptPii(m.to, `smsMsg:${m._id}`, "to");
-          let toHash: string | undefined;
-          try { toHash = await computePhoneHash(m.to) ?? undefined; } catch { /* non-E.164 */ }
-          await ctx.runMutation(internal.backfill.patchRow, {
-            id: m._id,
-            patch: {
-              encryptedTo: JSON.stringify(enc),
-              ...(toHash ? { toHash } : {}),
-            },
-          });
-          processed++;
-          cursor = m._id;
-        } catch (err) {
-          console.error(`[backfill] sms ${m._id} failed:`, err);
-          failed++;
-          cursor = m._id;
-        }
-      }
-
-      if (batch.items.length === 0) break;
-    }
-
-    return { processed, failed };
-  },
-});
-
-/**
- * Backfill patch-through call phone encryption.
- */
-export const backfillCallPhones = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    let processed = 0;
-    let failed = 0;
-    let cursor: string | undefined;
-    let hasMore = true;
-
-    while (hasMore) {
-      const batch = await ctx.runQuery(internal.backfill.getCallsNeedingBackfill, {
-        cursor,
-        limit: BATCH_SIZE,
-      });
-      hasMore = batch.hasMore;
-
-      for (const c of batch.items) {
-        try {
-          const patch: Record<string, unknown> = {};
-
-          if (c.callerPhone && !c.encryptedCallerPhone) {
-            const enc = await encryptPii(c.callerPhone, `call:${c._id}`, "callerPhone");
-            patch.encryptedCallerPhone = JSON.stringify(enc);
-            try { patch.callerPhoneHash = await computePhoneHash(c.callerPhone) ?? undefined; } catch { /* non-E.164 */ }
-          }
-          if (c.targetPhone && !c.encryptedTargetPhone) {
-            const enc = await encryptPii(c.targetPhone, `call:${c._id}`, "targetPhone");
-            patch.encryptedTargetPhone = JSON.stringify(enc);
-            try { patch.targetPhoneHash = await computePhoneHash(c.targetPhone) ?? undefined; } catch { /* non-E.164 */ }
+          if (s.phone && !s.encryptedPhone) {
+            const enc = await encryptWithOrgKey(s.phone, orgKey, entityId, "phone");
+            patch.encryptedPhone = JSON.stringify(enc);
+            patch.phoneHash = await computeOrgScopedPhoneHash(orgId, s.phone);
           }
 
           if (Object.keys(patch).length > 0) {
-            await ctx.runMutation(internal.backfill.patchRow, {
-
-              id: c._id,
-              patch,
-            });
+            patch.email = null;
+            patch.name = null;
+            patch.phone = null;
+            patch.updatedAt = Date.now();
+            await ctx.runMutation(internal.backfill.patchRow, { id: s._id, patch });
             processed++;
           }
-          cursor = c._id;
         } catch (err) {
-          console.error(`[backfill] call ${c._id} failed:`, err);
+          console.error(`[backfillSupporterPii] Failed on supporter ${s._id}:`, err);
           failed++;
-          cursor = c._id;
         }
       }
-
-      if (batch.items.length === 0) break;
     }
 
     return { processed, failed };
@@ -552,332 +165,97 @@ export const backfillCallPhones = internalAction({
 });
 
 // =============================================================================
-// SUPPORTER CUSTOM FIELDS ENCRYPTION BACKFILL
+// HASH MIGRATION — HMAC → ORG-SCOPED
 // =============================================================================
 
-export const getSupportersNeedingCustomFieldsBackfill = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("supporters").order("asc").take(10_000);
-    // Find rows with plaintext customFields but no encryptedCustomFields
-    const needsWork = all.filter(
-      (s) => (s as any).customFields && !(s as any).encryptedCustomFields,
-    );
-    let start = 0;
-    if (cursor) {
-      const idx = needsWork.findIndex((s) => s._id === cursor);
-      if (idx >= 0) start = idx + 1;
-    }
-    const batch = needsWork.slice(start, start + limit);
+/**
+ * Fetch supporters for an org using Convex native pagination.
+ * Scales to any org size — no in-memory filtering.
+ */
+export const getSupportersForHashMigration = internalQuery({
+  args: { orgId: v.string(), paginationCursor: v.optional(v.string()), limit: v.number() },
+  handler: async (ctx, { orgId, paginationCursor, limit }) => {
+    const result = await ctx.db
+      .query("supporters")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId as any))
+      .paginate({ numItems: limit, cursor: (paginationCursor ?? null) as any });
+
     return {
-      items: batch.map((s) => ({
+      items: result.page.map((s) => ({
         _id: s._id,
-        customFields: (s as any).customFields,
+        encryptedEmail: s.encryptedEmail,
+        emailHash: s.emailHash,
       })),
-      hasMore: needsWork.length > start + limit,
+      continueCursor: result.continueCursor,
+      isDone: result.isDone,
     };
   },
 });
 
 /**
- * Backfill supporter customFields encryption.
- * Reads plaintext customFields, encrypts, writes encryptedCustomFields.
- * Idempotent: skips rows that already have encryptedCustomFields.
+ * Migrate supporter emailHash from legacy HMAC to org-scoped SHA-256.
+ *
+ * For each supporter: decrypt email with org key → recompute emailHash
+ * as org-scoped → patch if changed. Idempotent (skips if hash already correct).
  */
-export const backfillSupporterCustomFields = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    let processed = 0;
+export const migrateEmailHashes = internalAction({
+  args: { orgId: v.string() },
+  handler: async (ctx, { orgId }) => {
+    const { decryptWithOrgKey } = await import("./_orgKey");
+
+    const orgKey = await getOrgKeyForAction(ctx, orgId);
+    if (!orgKey) throw new Error("Org encryption not configured");
+
+    let migrated = 0;
     let skipped = 0;
     let failed = 0;
-    let cursor: string | undefined;
-    let hasMore = true;
+    let isDone = false;
+    let paginationCursor: string | undefined;
 
-    while (hasMore) {
+    while (!isDone) {
       const batch = await ctx.runQuery(
-        internal.backfill.getSupportersNeedingCustomFieldsBackfill,
-        { cursor, limit: BATCH_SIZE },
+        internal.backfill.getSupportersForHashMigration,
+        { orgId, paginationCursor, limit: BATCH_SIZE },
       );
-      hasMore = batch.hasMore;
+      isDone = batch.isDone;
+      paginationCursor = batch.continueCursor;
 
       for (const s of batch.items) {
         try {
-          if (!s.customFields) {
+          if (!s.encryptedEmail || s.encryptedEmail === "") {
             skipped++;
-            cursor = s._id;
             continue;
           }
 
-          const enc = await encryptPii(
-            JSON.stringify(s.customFields),
-            "supporter:" + s._id,
-            "customFields",
-          );
-          await ctx.runMutation(internal.backfill.patchRow, {
-            id: s._id,
-            patch: { encryptedCustomFields: JSON.stringify(enc) },
-          });
-          processed++;
-          cursor = s._id;
-        } catch (err) {
-          console.error(`[backfill] supporter customFields ${s._id} failed:`, err);
-          failed++;
-          cursor = s._id;
-        }
-      }
-
-      if (batch.items.length === 0) break;
-    }
-
-    return { processed, skipped, failed };
-  },
-});
-
-// =============================================================================
-// HASH-ONLY BACKFILLS (deterministic — can run as mutations for speed)
-// =============================================================================
-
-/**
- * Backfill email event hashes. Deterministic HMAC — runs as mutation.
- */
-export const backfillEmailEventHashes = internalMutation({
-  args: { limit: v.optional(v.number()) },
-  handler: async (ctx, { limit }) => {
-    const batchSize = limit ?? 200;
-    const all = await ctx.db.query("emailEvents").order("asc").take(10_000);
-    const needsWork = all.filter((e) => e.recipientEmail && !e.recipientEmailHash);
-    const batch = needsWork.slice(0, batchSize);
-
-    let processed = 0;
-    for (const e of batch) {
-      const hash = await computeEmailHash(e.recipientEmail);
-      if (hash) {
-        await ctx.db.patch(e._id, { recipientEmailHash: hash });
-        processed++;
-      }
-    }
-
-    return { processed, remaining: needsWork.length - processed };
-  },
-});
-
-/**
- * Backfill suppressed email hashes.
- */
-export const backfillSuppressedHashes = internalMutation({
-  args: { limit: v.optional(v.number()) },
-  handler: async (ctx, { limit }) => {
-    const batchSize = limit ?? 200;
-    const all = await ctx.db.query("suppressedEmails").order("asc").take(10_000);
-    const needsWork = all.filter((s) => s.email && !s.emailHash);
-    const batch = needsWork.slice(0, batchSize);
-
-    let processed = 0;
-    for (const s of batch) {
-      const hash = await computeEmailHash(s.email);
-      if (hash) {
-        await ctx.db.patch(s._id, { emailHash: hash });
-        processed++;
-      }
-    }
-
-    return { processed, remaining: needsWork.length - processed };
-  },
-});
-
-/**
- * Backfill bounce report hashes.
- */
-export const backfillBounceReportHashes = internalMutation({
-  args: { limit: v.optional(v.number()) },
-  handler: async (ctx, { limit }) => {
-    const batchSize = limit ?? 200;
-    const all = await ctx.db.query("bounceReports").order("asc").take(10_000);
-    const needsWork = all.filter((b) => b.email && !b.emailHash);
-    const batch = needsWork.slice(0, batchSize);
-
-    let processed = 0;
-    for (const b of batch) {
-      const hash = await computeEmailHash(b.email);
-      if (hash) {
-        await ctx.db.patch(b._id, { emailHash: hash });
-        processed++;
-      }
-    }
-
-    return { processed, remaining: needsWork.length - processed };
-  },
-});
-
-// =============================================================================
-// ORG BILLING EMAIL BACKFILL
-// =============================================================================
-
-/**
- * Query orgs that have plaintext billingEmail but no encryptedBillingEmail.
- * Used during migration from plaintext to encrypted billing email.
- */
-export const getOrgsNeedingBillingEmailBackfill = internalQuery({
-  args: { cursor: v.optional(v.string()), limit: v.number() },
-  handler: async (ctx, { cursor, limit }) => {
-    const all = await ctx.db.query("organizations").order("asc").take(10_000);
-    // Find orgs that still have plaintext billingEmail but no encrypted version
-    const needsWork = all.filter(
-      (o) => (o as any).billingEmail && !o.encryptedBillingEmail,
-    );
-    let start = 0;
-    if (cursor) {
-      const idx = needsWork.findIndex((o) => o._id === cursor);
-      if (idx >= 0) start = idx + 1;
-    }
-    const batch = needsWork.slice(start, start + limit);
-    return {
-      items: batch.map((o) => ({
-        _id: o._id,
-        billingEmail: (o as any).billingEmail as string,
-      })),
-      hasMore: needsWork.length > start + limit,
-    };
-  },
-});
-
-/**
- * Backfill org billing email encryption.
- * Encrypts plaintext billingEmail → encryptedBillingEmail + billingEmailHash.
- * Entity ID pattern: "org:{_id}"
- * Idempotent: skips orgs that already have encryptedBillingEmail.
- */
-export const backfillOrgBillingEmail = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    let processed = 0;
-    let failed = 0;
-    let cursor: string | undefined;
-    let hasMore = true;
-
-    while (hasMore) {
-      const batch = await ctx.runQuery(internal.backfill.getOrgsNeedingBillingEmailBackfill, {
-        cursor,
-        limit: BATCH_SIZE,
-      });
-      hasMore = batch.hasMore;
-
-      for (const o of batch.items) {
-        try {
-          const entityId = `org:${o._id}`;
-          const enc = await encryptPii(o.billingEmail, entityId, "billingEmail");
-          const hash = await computeEmailHash(o.billingEmail);
-
-          await ctx.runMutation(internal.backfill.patchRow, {
-            id: o._id,
-            patch: {
-              encryptedBillingEmail: JSON.stringify(enc),
-              ...(hash ? { billingEmailHash: hash } : {}),
-            },
-          });
-          processed++;
-          cursor = o._id;
-        } catch (err) {
-          console.error(`[backfill] org billing email ${o._id} failed:`, err);
-          failed++;
-          cursor = o._id;
-        }
-      }
-
-      if (batch.items.length === 0) break;
-    }
-
-    return { processed, failed };
-  },
-});
-
-// =============================================================================
-// USER EMAIL PLAINTEXT MIGRATION
-// =============================================================================
-
-/**
- * Backfill plaintext email/name on user records from server-encrypted blobs.
- * Skips client-encrypted blobs (v: "client-1") — those are migrated client-side.
- * Idempotent: skips users that already have plaintext email.
- */
-export const backfillUserPlaintextEmail = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    let processed = 0;
-    let skipped = 0;
-    let failed = 0;
-    let cursor: string | undefined;
-    let hasMore = true;
-
-    while (hasMore) {
-      const batch = await ctx.runQuery(
-        internal.backfill.getUsersNeedingPlaintextEmail,
-        { cursor, limit: BATCH_SIZE },
-      );
-      hasMore = batch.hasMore;
-
-      for (const u of batch.items) {
-        try {
-          // Skip client-encrypted blobs — only the client can decrypt those
-          let isClientEncrypted = false;
-          if (u.encryptedEmail) {
-            try {
-              const parsed = JSON.parse(u.encryptedEmail);
-              if (parsed.v === "client-1") {
-                isClientEncrypted = true;
-              }
-            } catch {
-              // Not JSON — skip
-            }
-          }
-
-          if (isClientEncrypted) {
+          const parsed = JSON.parse(s.encryptedEmail);
+          let email: string;
+          try {
+            email = await decryptWithOrgKey(parsed, orgKey, `supporter:${s._id}`, "email");
+          } catch {
+            // Legacy server-encrypted blob — can't decrypt with org key
+            console.warn(`[migrateEmailHashes] Cannot decrypt supporter ${s._id} — legacy blob`);
             skipped++;
-            cursor = u._id;
             continue;
           }
 
-          // Server-encrypted blob: decrypt with server key
-          const patch: Record<string, unknown> = {};
+          const correctHash = await computeOrgScopedEmailHash(orgId, email);
 
-          if (u.encryptedEmail) {
-            try {
-              const parsed = JSON.parse(u.encryptedEmail) as EncryptedPii;
-              const email = await tryDecryptPii(parsed, u._id, "email");
-              if (email) patch.email = email;
-            } catch { /* parse failure — skip */ }
-          }
-
-          if (u.encryptedName) {
-            try {
-              const parsed = JSON.parse(u.encryptedName) as EncryptedPii;
-              const name = await tryDecryptPii(parsed, u._id, "name");
-              if (name) patch.name = name;
-            } catch { /* parse failure — skip */ }
-          }
-
-          if (Object.keys(patch).length > 0) {
-            patch.custodyMode = "plaintext";
+          if (s.emailHash !== correctHash) {
             await ctx.runMutation(internal.backfill.patchRow, {
-              id: u._id,
-              patch,
+              id: s._id,
+              patch: { emailHash: correctHash, updatedAt: Date.now() },
             });
-            processed++;
+            migrated++;
           } else {
             skipped++;
           }
-
-          cursor = u._id;
         } catch (err) {
-          console.error(`[backfill] user plaintext email ${u._id} failed:`, err);
+          console.error(`[migrateEmailHashes] Failed on supporter ${s._id}:`, err);
           failed++;
-          cursor = u._id;
         }
       }
-
-      if (batch.items.length === 0) break;
     }
 
-    return { processed, skipped, failed };
+    return { migrated, skipped, failed };
   },
 });
