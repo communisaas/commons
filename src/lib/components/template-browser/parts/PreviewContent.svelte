@@ -138,7 +138,7 @@
 </script>
 
 {#if debateResolution}
-	<div class="mb-3 rounded-lg border px-3 py-2 text-sm
+	<div class="mb-3 rounded border px-3 py-2 text-sm
 		{debateResolution.winningStance === 'SUPPORT'
 			? 'border-emerald-200/60 bg-emerald-50/50 text-emerald-700'
 			: debateResolution.winningStance === 'OPPOSE'
@@ -319,9 +319,8 @@
 										e.stopPropagation();
 										copyToClipboard();
 									}}
-									class="shrink-0 cursor-pointer rounded-lg bg-participation-primary-50 p-2 transition-all
-									       duration-200 hover:bg-participation-primary-100 focus:outline-none focus:ring-2
-									       focus:ring-participation-primary-200 focus:ring-offset-2 active:bg-participation-primary-200"
+									class="shrink-0 cursor-pointer rounded bg-participation-primary-50 p-2 transition-colors
+									       duration-150 hover:bg-participation-primary-100 focus:outline-none active:bg-participation-primary-200"
 									aria-label="Copy all recipient emails to clipboard"
 								>
 									{#if copied}

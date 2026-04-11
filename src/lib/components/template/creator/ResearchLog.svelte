@@ -45,7 +45,7 @@
 					<div class="flex gap-2.5">
 						<!-- Step number -->
 						<div
-							class="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500"
+							class="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded bg-slate-100 text-[10px] font-bold font-mono text-slate-500"
 						>
 							{i + 1}
 						</div>

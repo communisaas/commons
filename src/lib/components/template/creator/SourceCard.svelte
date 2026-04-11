@@ -34,7 +34,7 @@
 	>
 		<!-- Citation number -->
 		<span
-			class="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-participation-primary-50 text-[10px] font-semibold leading-none text-participation-primary-600"
+			class="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded bg-participation-primary-50 text-[10px] font-bold leading-none text-participation-primary-600 font-mono"
 		>
 			{source.num}
 		</span>
@@ -44,7 +44,7 @@
 			<span class="text-sm text-slate-800 line-clamp-1">{source.title}</span>
 			<div class="flex items-center gap-1.5 text-[11px] text-slate-400 mt-0.5">
 				<span
-					class="inline-flex items-center rounded-full border px-1.5 py-px font-medium {badge.bg} {badge.text} {badge.border}"
+					class="inline-flex items-center rounded px-1 py-px font-medium {badge.text}"
 				>
 					{source.type}
 				</span>
