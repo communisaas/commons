@@ -445,16 +445,16 @@ export const createRsvp = action({
     const { encryptWithOrgKey } = await import("./_orgKey");
 
     const orgKey = await getOrgKeyForAction(ctx, orgId);
-    let encryptedEmail = "";
-    let encryptedRsvpName: string | undefined;
+    if (!orgKey) {
+      throw new Error("Organization encryption not configured. An org owner must set up encryption before accepting RSVPs.");
+    }
 
-    if (orgKey) {
-      const encEmail = await encryptWithOrgKey(args.email.trim().toLowerCase(), orgKey, `rsvp:${emailHash}`, "email");
-      encryptedEmail = JSON.stringify(encEmail);
-      if (args.name.trim()) {
-        const encName = await encryptWithOrgKey(args.name.trim(), orgKey, `rsvp:${emailHash}`, "name");
-        encryptedRsvpName = JSON.stringify(encName);
-      }
+    const encEmail = await encryptWithOrgKey(args.email.trim().toLowerCase(), orgKey, `rsvp:${emailHash}`, "email");
+    const encryptedEmail = JSON.stringify(encEmail);
+    let encryptedRsvpName: string | undefined;
+    if (args.name.trim()) {
+      const encName = await encryptWithOrgKey(args.name.trim(), orgKey, `rsvp:${emailHash}`, "name");
+      encryptedRsvpName = JSON.stringify(encName);
     }
 
     const result = await ctx.runMutation(internal.events.insertRsvp, {

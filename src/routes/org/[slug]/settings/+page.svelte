@@ -258,27 +258,18 @@
 	// ── Rotation state ──
 	let showRotation = $state(false);
 	let rotationCurrentPassphrase = $state('');
-	let rotationNewPassphrase = $state('');
-	let rotationNewConfirm = $state('');
 	let rotationRecoveryWords = $state<string[]>([]);
 	let rotationRecoveryAck = $state(false);
 	let rotationError = $state('');
 	let rotationLoading = $state(false);
-	let rotationStep = $state<'verify' | 'newpass' | 'recovery' | 'saving'>('verify');
+	let rotationStep = $state<'verify' | 'recovery' | 'saving'>('verify');
 
 	let rotationRecoveryKeyBytes: Uint8Array | null = null;
-
-	const rotationNewValid = $derived(
-		rotationNewPassphrase.length >= 12 &&
-		rotationNewPassphrase === rotationNewConfirm
-	);
 
 	function startRotation() {
 		showRotation = true;
 		rotationStep = 'verify';
 		rotationCurrentPassphrase = '';
-		rotationNewPassphrase = '';
-		rotationNewConfirm = '';
 		rotationRecoveryWords = [];
 		rotationRecoveryAck = false;
 		rotationError = '';
@@ -288,8 +279,6 @@
 	function cancelRotation() {
 		showRotation = false;
 		rotationCurrentPassphrase = '';
-		rotationNewPassphrase = '';
-		rotationNewConfirm = '';
 		rotationRecoveryWords = [];
 		rotationRecoveryAck = false;
 		rotationError = '';
@@ -307,24 +296,21 @@
 				rotationError = 'Wrong passphrase.';
 				return;
 			}
-			// Current passphrase verified — hold the key for rotation
+			// Current passphrase verified — hold the key, generate new recovery
 			cachedOrgKey = key;
-			rotationStep = 'newpass';
+			// Go straight to recovery generation (passphrase can't change
+			// without re-encrypting all data — this resets recovery only)
+			try {
+				const { generateRecoveryKey } = await import('$lib/core/crypto/org-pii-encryption');
+				const recovery = await generateRecoveryKey();
+				rotationRecoveryWords = recovery.words;
+				rotationRecoveryKeyBytes = recovery.key;
+				rotationStep = 'recovery';
+			} catch (err2) {
+				rotationError = err2 instanceof Error ? err2.message : 'Failed to generate recovery key';
+			}
 		} catch (err) {
 			rotationError = err instanceof Error ? err.message : 'Verification failed';
-		}
-	}
-
-	async function rotationGenerateRecovery() {
-		if (!rotationNewValid) return;
-		try {
-			const { generateRecoveryKey } = await import('$lib/core/crypto/org-pii-encryption');
-			const recovery = await generateRecoveryKey();
-			rotationRecoveryWords = recovery.words;
-			rotationRecoveryKeyBytes = recovery.key;
-			rotationStep = 'recovery';
-		} catch (err) {
-			rotationError = err instanceof Error ? err.message : 'Failed to generate recovery key';
 		}
 	}
 
@@ -335,18 +321,12 @@
 		rotationStep = 'saving';
 
 		try {
-			const { deriveOrgKey, createKeyVerifier, wrapOrgKeyForRecovery } = await import('$lib/core/crypto/org-pii-encryption');
+			const { createKeyVerifier, wrapOrgKeyForRecovery } = await import('$lib/core/crypto/org-pii-encryption');
 			const { cacheOrgKey } = await import('$lib/services/org-key-manager');
 			const { useConvexClient } = await import('convex-sveltekit');
 			const { api: convexApi } = await import('$lib/convex');
 
-			// Derive NEW key from new passphrase (this becomes the new verifier)
-			// Wait — the underlying AES key doesn't change. We re-wrap the SAME key
-			// with the new passphrase-derived verifier + new recovery key.
-			// But the verifier is created from the ORG key, not the passphrase key.
-			// So we need the actual org key. We already have it in cachedOrgKey.
-
-			// Create new verifier from the existing org key
+			// Re-wrap existing org key with new recovery key + fresh verifier
 			const newVerifier = await createKeyVerifier(cachedOrgKey);
 
 			// Wrap org key with new recovery key
@@ -377,8 +357,6 @@
 
 			// Clean up
 			rotationCurrentPassphrase = '';
-			rotationNewPassphrase = '';
-			rotationNewConfirm = '';
 			rotationRecoveryKeyBytes = null;
 			showRotation = false;
 
@@ -1191,11 +1169,11 @@
 									onclick={startRotation}
 									class="text-xs text-text-tertiary hover:text-text-secondary transition-colors"
 								>
-									Change passphrase
+									Reset recovery key
 								</button>
 							{:else if rotationStep === 'verify'}
 								<div class="space-y-3">
-									<p class="text-xs text-text-secondary">Verify your current passphrase to continue.</p>
+									<p class="text-xs text-text-secondary">Verify your passphrase to generate a new recovery key.</p>
 									{#if rotationError}
 										<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">{rotationError}</div>
 									{/if}
@@ -1204,16 +1182,6 @@
 										<button type="submit" disabled={!rotationCurrentPassphrase.trim()} class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">Verify</button>
 										<button type="button" onclick={cancelRotation} class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors">Cancel</button>
 									</form>
-								</div>
-							{:else if rotationStep === 'newpass'}
-								<div class="space-y-3">
-									<p class="text-xs text-text-secondary">Enter a new passphrase (minimum 12 characters).</p>
-									<input type="password" bind:value={rotationNewPassphrase} placeholder="New passphrase" autocomplete="new-password" class="w-full px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500" />
-									<input type="password" bind:value={rotationNewConfirm} placeholder="Confirm new passphrase" autocomplete="new-password" class="w-full px-3 py-2 text-sm rounded-lg border {rotationNewConfirm && rotationNewPassphrase !== rotationNewConfirm ? 'border-red-500/50' : 'border-surface-border-strong'} bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500" />
-									<div class="flex gap-3">
-										<button onclick={cancelRotation} class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors">Cancel</button>
-										<button onclick={rotationGenerateRecovery} disabled={!rotationNewValid} class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Generate New Recovery Key</button>
-									</div>
 								</div>
 							{:else if rotationStep === 'recovery'}
 								<div class="space-y-3">
@@ -1235,13 +1203,13 @@
 									</label>
 									<div class="flex gap-3">
 										<button onclick={cancelRotation} class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors">Cancel</button>
-										<button onclick={finalizeRotation} disabled={!rotationRecoveryAck || rotationLoading} class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{rotationLoading ? 'Saving...' : 'Save New Passphrase'}</button>
+										<button onclick={finalizeRotation} disabled={!rotationRecoveryAck || rotationLoading} class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{rotationLoading ? 'Saving...' : 'Save New Recovery Key'}</button>
 									</div>
 								</div>
 							{:else if rotationStep === 'saving'}
 								<div class="flex items-center gap-3">
 									<div class="h-4 w-4 animate-spin rounded-full border-2 border-teal-500 border-t-transparent"></div>
-									<span class="text-sm text-text-secondary">Updating passphrase...</span>
+									<span class="text-sm text-text-secondary">Saving recovery key...</span>
 								</div>
 							{/if}
 						</div>
