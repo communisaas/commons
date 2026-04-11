@@ -34,8 +34,8 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	return apiOk({
 		id: donation._id,
 		campaignId: donation.campaignId,
-		email: maskEmail(donation.email),
-		name: donation.name,
+		email: donation.email ? maskEmail(donation.email) : '[encrypted]',
+		name: donation.name ?? '[encrypted]',
 		amountCents: donation.amountCents,
 		currency: donation.currency,
 		recurring: donation.recurring,

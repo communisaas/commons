@@ -83,7 +83,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 		endorsedTemplates: [],
 		// TODO: enhance convex/organizations.getDashboard to include growth (thisWeek/lastWeek verified actions)
 		growth: { thisWeek: 0, lastWeek: 0 },
-		billingEmail: dashboard.billingEmail ?? null,
+		encryptedBillingEmail: dashboard.encryptedBillingEmail ?? null,
 		onboardingState: {
 			hasDescription: dashboard.onboardingState?.hasDescription ?? false,
 			hasIssueDomains: dashboard.onboardingState?.hasIssueDomains ?? false,

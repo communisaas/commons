@@ -251,6 +251,7 @@ export const getEncryptedSupporters = internalQuery({
     return supporters
       .filter((s) => s.emailStatus === "subscribed")
       .map((s) => ({
+        _id: s._id,
         encryptedEmail: s.encryptedEmail,
         emailHash: s.emailHash,
       }));

@@ -441,15 +441,30 @@ export const createRsvp = action({
     });
     if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
 
-    // Public RSVP flow — no device keys available.
-    // Store org-scoped hash only; org already has the RSVP list.
+    // Encrypt RSVP PII with org key
+    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
+    const { encryptWithOrgKey } = await import("./_orgKey");
+
+    const orgKey = await getOrgKeyForAction(ctx, orgId);
+    let encryptedEmail = "";
+    let encryptedRsvpName: string | undefined;
+
+    if (orgKey) {
+      const encEmail = await encryptWithOrgKey(args.email.trim().toLowerCase(), orgKey, `rsvp:${emailHash}`, "email");
+      encryptedEmail = JSON.stringify(encEmail);
+      if (args.name.trim()) {
+        const encName = await encryptWithOrgKey(args.name.trim(), orgKey, `rsvp:${emailHash}`, "name");
+        encryptedRsvpName = JSON.stringify(encName);
+      }
+    }
+
     const result = await ctx.runMutation(internal.events.insertRsvp, {
       eventId: args.eventId,
       supporterId: args.supporterId,
-      encryptedEmail: "",  // no server encryption — org-scoped hash is sufficient for public RSVPs
+      encryptedEmail,
       emailHash,
       name: args.name.trim(),
-      encryptedRsvpName: undefined,
+      encryptedRsvpName,
       status: args.status || "GOING",
       guestCount: args.guestCount ?? 1,
       districtHash: args.districtHash,

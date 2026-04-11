@@ -44,6 +44,7 @@ export const list = query({
       invites: activeInvites.map((inv) => ({
         _id: inv._id,
         encryptedEmail: inv.encryptedEmail,
+        emailHash: inv.emailHash,
         role: inv.role,
         expiresAt: inv.expiresAt,
       })),

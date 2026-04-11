@@ -43,8 +43,8 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const data = result.items.map((d: any) => ({
 		id: d._id,
 		campaignId: d.campaignId,
-		email: maskEmail(d.email),
-		name: d.name,
+		email: d.email ? maskEmail(d.email) : '[encrypted]',
+		name: d.name ?? '[encrypted]',
 		amountCents: d.amountCents,
 		currency: d.currency,
 		recurring: d.recurring,

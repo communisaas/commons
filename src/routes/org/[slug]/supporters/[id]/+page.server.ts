@@ -39,7 +39,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 			importedAt: typeof convexSupporter.importedAt === 'number'
 				? new Date(convexSupporter.importedAt).toISOString()
 				: convexSupporter.importedAt ?? null,
-			customFields: convexSupporter.customFields ?? null,
+			encryptedCustomFields: convexSupporter.encryptedCustomFields ?? null,
 			createdAt: typeof convexSupporter._creationTime === 'number'
 				? new Date(convexSupporter._creationTime).toISOString()
 				: String(convexSupporter._creationTime),
