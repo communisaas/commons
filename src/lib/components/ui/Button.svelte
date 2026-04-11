@@ -74,12 +74,6 @@
 	};
 	const IconComponent = $derived(icon ? iconComponents[icon] : undefined);
 
-	// Spring physics removed — CSS transitions are sufficient for buttons.
-	// Keep flight animation springs below (earned interaction).
-	const buttonScale = { subscribe: (fn: (v: number) => void) => { fn(1); return () => {}; }, set: () => {} };
-	const shadowIntensity = { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; }, set: () => {} };
-	const glowIntensity = { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; }, set: () => {} };
-
 	// Dynamic paper plane flight animation with realistic physics
 	// CRITICAL: All springs must have IDENTICAL physics for unified motion
 	const flightPhysics = { stiffness: 0.08, damping: 0.85 };
@@ -202,24 +196,14 @@
 
 	$effect(() => {
 		if (hovered && !disabled) {
-			buttonScale.set(1.02);
-			shadowIntensity.set(1);
-			if (variant === 'magical') {
-				glowIntensity.set(1);
-			}
-			// Animation based on type
 			if (animationType === 'chevrons') {
-				// Scale with button for cohesive animation
-				// Move in the direction the chevron points
 				if (isLargeViewport) {
-					chevronsX.set(1); // Move right on large viewports
+					chevronsX.set(1);
 				} else {
-					chevronsY.set(1); // Move down on small viewports
+					chevronsY.set(1);
 				}
-				chevronsScale.set(1.02); // Match button scale
+				chevronsScale.set(1.02);
 			} else if (animationType === 'flight') {
-				// Subtle plane movement on hover - breathes life into the button
-				// Works even when flight is disabled for hover effect
 				if (!enableFlight || flightState === 'ready') {
 					planeX.set(3);
 					planeY.set(-2);
@@ -228,15 +212,10 @@
 				}
 			}
 		} else {
-			buttonScale.set(1);
-			shadowIntensity.set(0);
-			glowIntensity.set(0);
-			// Reset animations
 			chevronsX.set(0);
 			chevronsY.set(0);
 			chevronsScale.set(1);
 			chevronsOpacity.set(1);
-			// Reset plane position when not hovering
 			if (animationType === 'flight' && (!enableFlight || flightState === 'ready')) {
 				planeX.set(0);
 				planeY.set(0);
@@ -304,8 +283,6 @@
 			const isSignedIn = user && user.id;
 
 			if (animationType === 'chevrons') {
-				// Click animation - pulse in direction of chevron
-				buttonScale.set(0.98);
 				if (isLargeViewport) {
 					chevronsX.set(4);
 				} else {
@@ -322,7 +299,6 @@
 					}
 					chevronsScale.set(1.05);
 					chevronsOpacity.set(1);
-					buttonScale.set(1);
 				}, 150);
 
 				setTimeout(() => {
@@ -335,9 +311,7 @@
 
 				onclick?.(__event);
 			} else if (enableFlight && isSignedIn && flightState === 'ready') {
-				// SIGNED IN: Full flight animation, redirect after brief takeoff
 				flightState = 'taking-off';
-				buttonScale.set(0.96);
 
 				setTimeout(() => {
 					clicked = false;
@@ -348,19 +322,12 @@
 				}, 400);
 
 				setTimeout(() => {
-					if (flightState === 'flying') {
-						flightState = 'sent';
-						buttonScale.set(1.03);
-					}
+					if (flightState === 'flying') flightState = 'sent';
 				}, 800);
 
 				setTimeout(() => {
 					if (flightState === 'sent') flightState = 'departing';
 				}, 1200);
-
-				setTimeout(() => {
-					buttonScale.set(1);
-				}, 1100);
 
 				setTimeout(() => {
 					if (flightState === 'departing') flightState = 'returning';
@@ -370,25 +337,18 @@
 					if (flightState === 'returning') flightState = 'ready';
 				}, 2300);
 
-				// Redirect early - user sees takeoff then page transitions
+				// Redirect early — user sees takeoff then page transitions
 				setTimeout(() => {
 					onclick?.(__event);
 				}, 120);
 			} else if (icon === 'send') {
-				// NOT SIGNED IN (or no flight): Pulse animation with plane
-				// Button press
-				buttonScale.set(0.96);
-
-				// Plane pulses with button - eager forward motion
+				// Plane pulses — eager forward motion
 				planeX.set(8);
 				planeY.set(-3);
 				planeRotation.set(-8);
 				planeScale.set(1.1);
 
 				setTimeout(() => {
-					// Button bounces back
-					buttonScale.set(1.02);
-					// Plane settles back
 					planeX.set(0);
 					planeY.set(0);
 					planeRotation.set(0);
@@ -396,22 +356,12 @@
 				}, 150);
 
 				setTimeout(() => {
-					buttonScale.set(1);
 					clicked = false;
 				}, 250);
 
-				// Immediate callback - opens auth modal
 				onclick?.(__event);
 			} else {
-				// Standard click animation (no icon)
-				buttonScale.set(0.98);
-
 				setTimeout(() => {
-					buttonScale.set(1.02);
-				}, 120);
-
-				setTimeout(() => {
-					buttonScale.set(1);
 					clicked = false;
 				}, 200);
 
