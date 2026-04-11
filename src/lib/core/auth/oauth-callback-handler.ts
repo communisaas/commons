@@ -68,7 +68,7 @@ export interface TokenData {
 export interface DatabaseUser {
 	id: string;
 	avatar: string | null;
-	// PII fields (email, name) are encrypted — access via decryptUserPii()
+	// PII fields stored as encrypted blobs
 	encrypted_email: string;
 	encrypted_name: string | null;
 	email_hash?: string;

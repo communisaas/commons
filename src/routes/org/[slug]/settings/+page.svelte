@@ -84,15 +84,15 @@
 			// Compute org-scoped hash client-side — no plaintext email reaches server
 			const emailHash = await computeOrgScopedEmailHash(data.org.id, email);
 
-			// Encrypt email with org key when available, fall back to base64
-			let encryptedEmail: string;
-			if (cachedOrgKey) {
-				const { encryptWithOrgKey } = await import('$lib/core/crypto/org-pii-encryption');
-				const blob = await encryptWithOrgKey(email, cachedOrgKey, emailHash, 'email');
-				encryptedEmail = JSON.stringify(blob);
-			} else {
-				encryptedEmail = btoa(email);
+			// Encrypt email with org key — required, no plaintext fallback
+			if (!cachedOrgKey) {
+				inviteMessage = { type: 'error', text: 'Unlock encryption before sending invites.' };
+				inviteSending = false;
+				return;
 			}
+			const { encryptWithOrgKey } = await import('$lib/core/crypto/org-pii-encryption');
+			const blob = await encryptWithOrgKey(email, cachedOrgKey, emailHash, 'email');
+			const encryptedEmail = JSON.stringify(blob);
 
 			const res = await fetch(`/api/org/${data.org.slug}/invites`, {
 				method: 'POST',

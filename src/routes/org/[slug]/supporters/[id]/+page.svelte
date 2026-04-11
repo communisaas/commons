@@ -141,9 +141,9 @@
 		</div>
 		<div class="px-5 py-4 flex items-center justify-between">
 			<span class="text-xs text-text-tertiary">Phone</span>
-			<span class="text-sm text-text-primary">{data.supporter.phone || '\u2014'}</span>
+			<span class="text-sm text-text-primary">{decryptedPhone || '\u2014'}</span>
 		</div>
-		{#if data.supporter.phone}
+		{#if decryptedPhone}
 			<div class="px-5 py-4 flex items-center justify-between">
 				<span class="text-xs text-text-tertiary">SMS Status</span>
 				<div class="flex items-center gap-2">

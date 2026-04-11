@@ -818,7 +818,7 @@ export const importWithEncryption = action({
     const { computeOrgScopedEmailHash, computeOrgScopedPhoneHash } = await import("./_orgHash");
     const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
     const { encryptWithOrgKey } = await import("./_orgKey");
-    const { api } = await import("./_generated/api");
+    const { api, internal } = await import("./_generated/api");
 
     // Get org ID from slug
     const org = await ctx.runQuery(api.organizations.getBySlug, { slug: args.slug });

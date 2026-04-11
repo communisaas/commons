@@ -156,6 +156,7 @@ export const triggerEnclaveSend = internalAction({
         body: JSON.stringify({
           sealedOrgKey: blast.sealedOrgKey,
           supporters: supporters.map((s) => ({
+            _id: String(s._id),
             encryptedEmail: s.encryptedEmail,
             emailHash: s.emailHash,
           })),
