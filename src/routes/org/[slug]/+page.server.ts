@@ -29,8 +29,6 @@ export const load: PageServerLoad = async ({ parent }) => {
 		role: m.role,
 		userName: m.userName ?? null,
 		userEmail: m.userEmail ?? null,
-		encryptedUserName: m.encryptedUserName ?? null,
-		encryptedUserEmail: m.encryptedUserEmail ?? null,
 		userAvatar: m.userAvatar ?? null,
 		joinedAt: m.joinedAt
 	}));

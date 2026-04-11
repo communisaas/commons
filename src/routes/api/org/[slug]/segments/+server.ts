@@ -147,12 +147,12 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 				filters
 			});
 		} catch {
-			// Fall back to encrypted blobs if org key not configured
+			// Org key not configured — export with redacted PII
 			decryptedRows = supporters.map((s) => ({
 				email: '[encrypted]',
-				name: s.name ?? '',
-				phone: s.phone ?? '',
-				tags: s.tagNames.join('; ')
+				name: '[encrypted]',
+				phone: '[encrypted]',
+				tags: s.tagNames?.join('; ') ?? ''
 			}));
 		}
 

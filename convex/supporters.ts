@@ -182,6 +182,19 @@ export const get = query({
 /**
  * Search by email hash — accepts pre-computed org-scoped hash from client.
  */
+export const findByEmailHash = query({
+  args: { slug: v.string(), emailHash: v.string() },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "member");
+    return ctx.db
+      .query("supporters")
+      .withIndex("by_orgId_emailHash", (idx) =>
+        idx.eq("orgId", org._id).eq("emailHash", args.emailHash),
+      )
+      .first();
+  },
+});
+
 export const searchByEmail = query({
   args: {
     orgSlug: v.string(),
@@ -815,29 +828,20 @@ export const importWithEncryption = action({
     const orgKey = await getOrgKeyForAction(ctx, org._id);
     if (!orgKey) throw new Error("Organization encryption not configured. An org owner must set up encryption in org settings before importing supporters.");
 
-    // Encrypt each supporter's PII
-    const encrypted = await Promise.all(
+    // Step 1: Insert with placeholder encrypted fields to get real Convex _ids
+    const placeholders = await Promise.all(
       args.supporters.map(async (s) => {
         const normalizedEmail = s.email.trim().toLowerCase();
         const emailHash = await computeOrgScopedEmailHash(org._id, normalizedEmail);
-
-        // Use emailHash as entityId for encryption AAD binding
-        const encEmail = await encryptWithOrgKey(normalizedEmail, orgKey, emailHash, "email");
-        const encName = s.name
-          ? await encryptWithOrgKey(s.name.trim(), orgKey, emailHash, "name")
-          : undefined;
-        const encPhone = s.phone
-          ? await encryptWithOrgKey(s.phone.trim(), orgKey, emailHash, "phone")
-          : undefined;
         const phoneHash = s.phone
           ? await computeOrgScopedPhoneHash(org._id, s.phone.trim())
           : undefined;
 
         return {
-          encryptedEmail: JSON.stringify(encEmail),
+          encryptedEmail: "",
           emailHash,
-          encryptedName: encName ? JSON.stringify(encName) : undefined,
-          encryptedPhone: encPhone ? JSON.stringify(encPhone) : undefined,
+          encryptedName: undefined as string | undefined,
+          encryptedPhone: undefined as string | undefined,
           phoneHash,
           postalCode: s.postalCode,
           country: s.country,
@@ -848,10 +852,42 @@ export const importWithEncryption = action({
       }),
     );
 
-    // Delegate to existing importBatch mutation
-    return ctx.runMutation(api.supporters.importBatch, {
+    // importBatch returns { imported, updated, skipped } — but we need the IDs
+    // Use a dedicated mutation that returns IDs for patching
+    const result = await ctx.runMutation(api.supporters.importBatch, {
       slug: args.slug,
-      supporters: encrypted,
+      supporters: placeholders,
     });
+
+    // Step 2: Read back the just-inserted supporters by emailHash, encrypt with real _id AAD
+    for (let i = 0; i < args.supporters.length; i++) {
+      const s = args.supporters[i];
+      const normalizedEmail = s.email.trim().toLowerCase();
+      const emailHash = placeholders[i].emailHash;
+
+      // Find the supporter by emailHash
+      const supporter = await ctx.runQuery(api.supporters.findByEmailHash, {
+        slug: args.slug,
+        emailHash,
+      });
+      if (!supporter) continue;
+
+      // Encrypt with supporter:${_id} AAD — matches decrypt path in email.ts
+      const entityId = `supporter:${supporter._id}`;
+      const [encEmail, encName, encPhone] = await Promise.all([
+        encryptWithOrgKey(normalizedEmail, orgKey, entityId, "email"),
+        s.name ? encryptWithOrgKey(s.name.trim(), orgKey, entityId, "name") : null,
+        s.phone ? encryptWithOrgKey(s.phone.trim(), orgKey, entityId, "phone") : null,
+      ]);
+
+      await ctx.runMutation(internal.supporters.patchEncryptedPii, {
+        supporterId: supporter._id as any,
+        encryptedEmail: JSON.stringify(encEmail),
+        encryptedName: encName ? JSON.stringify(encName) : undefined,
+        encryptedPhone: encPhone ? JSON.stringify(encPhone) : undefined,
+      });
+    }
+
+    return result;
   },
 });

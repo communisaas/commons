@@ -271,7 +271,6 @@ export const actions: Actions = {
 					skipped += result.skipped;
 				}
 
-				skipped += encryptedBatch.filter((b) => b === null).length;
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
 				errors.push(`Batch starting at row ${batch[0]?.rowNum ?? '?'}: ${msg}`);
