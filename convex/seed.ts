@@ -404,9 +404,9 @@ export const configureOrgEncryption = internalAction({
       // Import as CryptoKey
       const orgKey = await importOrgKey(rawKeyBytes.buffer);
 
-      // Create verifier (encrypt known sentinel)
+      // Create verifier — must match createKeyVerifier() in org-pii-encryption.ts
       const sentinel = "commons-org-key-check-v1";
-      const verifierBlob = await encryptWithOrgKey(sentinel, orgKey, "verifier", "check");
+      const verifierBlob = await encryptWithOrgKey(sentinel, orgKey, "verifier", "sentinel");
       const orgKeyVerifier = JSON.stringify(verifierBlob);
 
       // Seal for server operations
@@ -778,54 +778,74 @@ export const insertSupporters = internalAction({
       const orgKey = await getOrgKeyForAction(ctx, orgId);
       if (!orgKey) throw new Error(`Org ${orgId} has no encryption configured`);
 
-      const batch: Array<{
-        orgId: string;
-        encryptedEmail: string;
-        emailHash: string;
-        encryptedName: string;
+      // Insert supporters with placeholder encrypted fields first to get real IDs
+      const plaintextBatch: Array<{
+        name: string;
+        email: string;
         postalCode: string;
-        country: string;
         verified: boolean;
-        emailStatus: string;
-        smsStatus: string;
+        hasSms: boolean;
         source: string;
-        updatedAt: number;
+        daysAgoN: number;
       }> = [];
 
       for (let i = 0; i < count; i++) {
         const name = SUPPORTER_NAMES[globalIdx % SUPPORTER_NAMES.length];
         const email = seedEmail(name, globalIdx);
         const postalCode = POSTAL_CODES[globalIdx % POSTAL_CODES.length];
-        const hasSms = globalIdx % 3 === 0;
-
-        const entityId = `seed-supporter-${globalIdx}`;
-        const [encEmail, encName] = await Promise.all([
-          encryptWithOrgKey(email, orgKey, entityId, "email"),
-          encryptWithOrgKey(name, orgKey, entityId, "name"),
-        ]);
-        const emailHash = await computeOrgScopedEmailHash(orgId, email);
-
-        batch.push({
-          orgId,
-          encryptedEmail: JSON.stringify(encEmail),
-          emailHash,
-          encryptedName: JSON.stringify(encName),
+        plaintextBatch.push({
+          name,
+          email,
           postalCode,
-          country: "US",
           verified: globalIdx % 4 !== 3,
-          emailStatus: "subscribed",
-          smsStatus: hasSms ? "subscribed" : "none",
+          hasSms: globalIdx % 3 === 0,
           source: globalIdx % 5 === 0 ? "csv" : "organic",
-          updatedAt: daysAgo(globalIdx + 1),
+          daysAgoN: globalIdx + 1,
         });
         globalIdx++;
       }
 
+      // Insert with placeholder fields to get real Convex _ids
       const batchIds = await ctx.runMutation(internal.seed.insertSupporterBatch, {
-        supporters: batch,
+        supporters: plaintextBatch.map((s) => ({
+          orgId,
+          encryptedEmail: "",
+          emailHash: "",
+          encryptedName: "",
+          postalCode: s.postalCode,
+          country: "US",
+          verified: s.verified,
+          emailStatus: "subscribed",
+          smsStatus: s.hasSms ? "subscribed" : "none",
+          source: s.source,
+          updatedAt: daysAgo(s.daysAgoN),
+        })),
         orgId,
         orgIdx,
       });
+
+      // Now encrypt with real IDs as AAD (matches production decrypt path)
+      for (let i = 0; i < batchIds.length; i++) {
+        const supporterId = batchIds[i];
+        const s = plaintextBatch[i];
+        const entityId = `supporter:${supporterId}`;
+
+        const [encEmail, encName] = await Promise.all([
+          encryptWithOrgKey(s.email, orgKey, entityId, "email"),
+          encryptWithOrgKey(s.name, orgKey, entityId, "name"),
+        ]);
+        const emailHash = await computeOrgScopedEmailHash(orgId, s.email);
+
+        await ctx.runMutation(internal.seed.patchSeedRecord, {
+          id: supporterId,
+          patch: {
+            encryptedEmail: JSON.stringify(encEmail),
+            encryptedName: JSON.stringify(encName),
+            emailHash,
+          },
+        });
+      }
+
       ids.push(...batchIds);
     }
 
