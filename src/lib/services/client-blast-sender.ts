@@ -115,7 +115,7 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 
 		try {
 			const blob: OrgEncryptedPii = JSON.parse(supporter.encryptedEmail);
-			const email = await decryptWithOrgKey(blob, orgKey, supporter._id, 'email');
+			const email = await decryptWithOrgKey(blob, orgKey, `supporter:${supporter._id}`, 'email');
 			decrypted.push({ email, emailHash: supporter.emailHash });
 		} catch (err) {
 			failed++;
