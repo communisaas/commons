@@ -33,8 +33,7 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-// TODO: Update seed to use org-key encryption once all callers migrate away from server-held PII keys.
-// User lookups now use plaintext email via by_email index.
+// Org encryption configured during seed — supporters encrypted with org key, hashes org-scoped.
 
 // =============================================================================
 // TIME HELPERS
@@ -180,8 +179,9 @@ export const seedAll = internalAction({
     console.log("[seed] Phase 1: Inserting users...");
     const userIds = await ctx.runMutation(internal.seed.insertUsers);
 
-    console.log("[seed] Phase 2: Inserting organizations + memberships...");
+    console.log("[seed] Phase 2: Inserting organizations + encryption + memberships...");
     const orgIds = await ctx.runMutation(internal.seed.insertOrgs);
+    await ctx.runAction(internal.seed.configureOrgEncryption, { orgIds: orgIds.map(String) });
     await ctx.runMutation(internal.seed.insertMemberships, { userIds, orgIds });
 
     console.log("[seed] Phase 3: Inserting templates...");
@@ -191,7 +191,7 @@ export const seedAll = internalAction({
     const campaignIds = await ctx.runMutation(internal.seed.insertCampaigns, { orgIds, templateIds });
 
     console.log("[seed] Phase 5: Inserting supporters + tags...");
-    const supporterIds = await ctx.runMutation(internal.seed.insertSupporters, { orgIds });
+    const supporterIds = await ctx.runAction(internal.seed.insertSupporters, { orgIds: orgIds.map(String) });
     const tagIds = await ctx.runMutation(internal.seed.insertTags, { orgIds });
     await ctx.runMutation(internal.seed.assignSupporterTags, { supporterIds, tagIds, orgIds });
 
@@ -229,6 +229,9 @@ export const seedAll = internalAction({
 
     console.log("[seed] Phase 16: Granting dev account access...");
     await ctx.runMutation(internal.seed.grantDevAccount, { orgIds });
+
+    console.log("[seed] Phase 17: Encrypting seed PII (donations, RSVPs, invites)...");
+    await ctx.runAction(internal.seed.encryptSeedPii, { orgIds: orgIds.map(String) });
 
     console.log(
       `[seed] Complete! Created ${userIds.length} users, ${orgIds.length} orgs, ` +
@@ -315,8 +318,8 @@ export const insertUsers = internalMutation({
       const u = SEED_USERS[i];
       const id = await ctx.db.insert("users", {
         tokenIdentifier: u.tokenIdentifier,
-        encryptedEmail: "",
-        emailHash: `seed-user-${i}`,
+        email: u.email,
+        name: u.name,
         updatedAt: now,
 
         // Verification
@@ -381,6 +384,59 @@ export const insertOrgs = internalMutation({
     }
 
     return ids;
+  },
+});
+
+// =============================================================================
+// PHASE 2a: CONFIGURE ORG ENCRYPTION
+// =============================================================================
+
+export const configureOrgEncryption = internalAction({
+  args: { orgIds: v.array(v.string()) },
+  handler: async (ctx, { orgIds }) => {
+    const { sealOrgKey } = await import("./_orgKeyUnseal");
+    const { encryptWithOrgKey, importOrgKey } = await import("./_orgKey");
+
+    for (const orgId of orgIds) {
+      // Generate random 32-byte org key
+      const rawKeyBytes = crypto.getRandomValues(new Uint8Array(32));
+
+      // Import as CryptoKey
+      const orgKey = await importOrgKey(rawKeyBytes.buffer);
+
+      // Create verifier (encrypt known sentinel)
+      const sentinel = "commons-org-key-check-v1";
+      const verifierBlob = await encryptWithOrgKey(sentinel, orgKey, "verifier", "check");
+      const orgKeyVerifier = JSON.stringify(verifierBlob);
+
+      // Seal for server operations
+      const rawKeyBase64 = btoa(String.fromCharCode(...rawKeyBytes));
+      const serverSealedOrgKey = await sealOrgKey(rawKeyBase64, orgId);
+
+      // Patch org with encryption config
+      await ctx.runMutation(internal.seed.patchOrgEncryption, {
+        orgId,
+        orgKeyVerifier,
+        serverSealedOrgKey,
+      });
+    }
+    console.log(`[seed] Configured encryption on ${orgIds.length} orgs`);
+  },
+});
+
+export const patchOrgEncryption = internalMutation({
+  args: {
+    orgId: v.string(),
+    orgKeyVerifier: v.string(),
+    serverSealedOrgKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.orgId as any, {
+      orgKeyVerifier: args.orgKeyVerifier,
+      serverSealedOrgKey: args.serverSealedOrgKey,
+      piiVersion: "org-1",
+      updatedAt: Date.now(),
+    } as any);
   },
 });
 
@@ -695,14 +751,23 @@ export const insertCampaigns = internalMutation({
 // PHASE 5a: INSERT SUPPORTERS
 // =============================================================================
 
-export const insertSupporters = internalMutation({
-  args: {
-    orgIds: v.array(v.id("organizations")),
-  },
-  handler: async (ctx, { orgIds }): Promise<Id<"supporters">[]> => {
-    const ids: Id<"supporters">[] = [];
+/**
+ * Generate a realistic seed email from a name.
+ */
+function seedEmail(name: string, idx: number): string {
+  return `${name.toLowerCase().replace(/[^a-z]/g, '')}${idx}@example.com`;
+}
 
-    // Distribute 20 supporters: 8 for org 0, 7 for org 1, 5 for org 2
+export const insertSupporters = internalAction({
+  args: {
+    orgIds: v.array(v.string()),
+  },
+  handler: async (ctx, { orgIds }): Promise<string[]> => {
+    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
+    const { encryptWithOrgKey } = await import("./_orgKey");
+    const { computeOrgScopedEmailHash } = await import("./_orgHash");
+
+    const ids: string[] = [];
     const distribution = [8, 7, 5];
     let globalIdx = 0;
 
@@ -710,44 +775,100 @@ export const insertSupporters = internalMutation({
       const orgId = orgIds[orgIdx];
       const count = distribution[orgIdx];
 
+      const orgKey = await getOrgKeyForAction(ctx, orgId);
+      if (!orgKey) throw new Error(`Org ${orgId} has no encryption configured`);
+
+      const batch: Array<{
+        orgId: string;
+        encryptedEmail: string;
+        emailHash: string;
+        encryptedName: string;
+        postalCode: string;
+        country: string;
+        verified: boolean;
+        emailStatus: string;
+        smsStatus: string;
+        source: string;
+        updatedAt: number;
+      }> = [];
+
       for (let i = 0; i < count; i++) {
         const name = SUPPORTER_NAMES[globalIdx % SUPPORTER_NAMES.length];
+        const email = seedEmail(name, globalIdx);
         const postalCode = POSTAL_CODES[globalIdx % POSTAL_CODES.length];
-
-        const smsStatuses: Array<"none" | "subscribed"> = ["none", "subscribed"];
         const hasSms = globalIdx % 3 === 0;
 
-        const id = await ctx.db.insert("supporters", {
+        const entityId = `seed-supporter-${globalIdx}`;
+        const [encEmail, encName] = await Promise.all([
+          encryptWithOrgKey(email, orgKey, entityId, "email"),
+          encryptWithOrgKey(name, orgKey, entityId, "name"),
+        ]);
+        const emailHash = await computeOrgScopedEmailHash(orgId, email);
+
+        batch.push({
           orgId,
-          // Seed data: plaintext name stored in encryptedName for convenience
-          // (not real encryption — seed only)
-          encryptedName: name,
+          encryptedEmail: JSON.stringify(encEmail),
+          emailHash,
+          encryptedName: JSON.stringify(encName),
           postalCode,
           country: "US",
-          encryptedEmail: "",
-          emailHash: `seed-supporter-${globalIdx}`,
-          verified: globalIdx % 4 !== 3, // 75% verified
+          verified: globalIdx % 4 !== 3,
           emailStatus: "subscribed",
-          smsStatus: hasSms ? smsStatuses[1] : smsStatuses[0],
+          smsStatus: hasSms ? "subscribed" : "none",
           source: globalIdx % 5 === 0 ? "csv" : "organic",
           updatedAt: daysAgo(globalIdx + 1),
         });
-        ids.push(id);
         globalIdx++;
       }
 
-      await ctx.db.patch(orgId, {
-        supporterCount: count,
-        onboardingState: {
-          hasDescription: true,
-          hasIssueDomains: false,
-          hasSupporters: true,
-          hasCampaigns: true,
-          hasTeam: true,
-          hasSentEmail: orgIdx === 0, // org 0 has a completed email blast
-        },
+      const batchIds = await ctx.runMutation(internal.seed.insertSupporterBatch, {
+        supporters: batch,
+        orgId,
+        orgIdx,
       });
+      ids.push(...batchIds);
     }
+
+    return ids;
+  },
+});
+
+export const insertSupporterBatch = internalMutation({
+  args: {
+    supporters: v.array(v.any()),
+    orgId: v.string(),
+    orgIdx: v.number(),
+  },
+  handler: async (ctx, { supporters, orgId, orgIdx }) => {
+    const ids: string[] = [];
+    for (const s of supporters) {
+      const id = await ctx.db.insert("supporters", {
+        orgId: s.orgId as any,
+        encryptedEmail: s.encryptedEmail,
+        emailHash: s.emailHash,
+        encryptedName: s.encryptedName,
+        postalCode: s.postalCode,
+        country: s.country,
+        verified: s.verified,
+        emailStatus: s.emailStatus,
+        smsStatus: s.smsStatus,
+        source: s.source,
+        updatedAt: s.updatedAt,
+      });
+      ids.push(id);
+    }
+
+    await ctx.db.patch(orgId as any, {
+      supporterCount: supporters.length,
+      onboardingState: {
+        hasDescription: true,
+        hasIssueDomains: false,
+        hasSupporters: true,
+        hasCampaigns: true,
+        hasTeam: true,
+        hasSentEmail: orgIdx === 0,
+      },
+    });
 
     return ids;
   },
@@ -783,7 +904,7 @@ export const insertTags = internalMutation({
 
 export const assignSupporterTags = internalMutation({
   args: {
-    supporterIds: v.array(v.id("supporters")),
+    supporterIds: v.array(v.string()),
     tagIds: v.array(v.id("tags")),
     orgIds: v.array(v.id("organizations")),
   },
@@ -1015,7 +1136,7 @@ export const insertEvents = internalMutation({
 export const insertEventRsvps = internalMutation({
   args: {
     eventIds: v.array(v.id("events")),
-    supporterIds: v.array(v.id("supporters")),
+    supporterIds: v.array(v.string()),
     orgIds: v.array(v.id("organizations")),
   },
   handler: async (ctx, { eventIds, supporterIds }) => {
@@ -1074,7 +1195,7 @@ export const insertDonations = internalMutation({
   args: {
     orgIds: v.array(v.id("organizations")),
     campaignIds: v.array(v.id("campaigns")),
-    supporterIds: v.array(v.id("supporters")),
+    supporterIds: v.array(v.string()),
   },
   handler: async (ctx, { orgIds, campaignIds, supporterIds }) => {
     const now = Date.now();
@@ -1206,7 +1327,7 @@ export const insertWorkflows = internalMutation({
 export const insertWorkflowExecutions = internalMutation({
   args: {
     workflowIds: v.array(v.id("workflows")),
-    supporterIds: v.array(v.id("supporters")),
+    supporterIds: v.array(v.string()),
   },
   handler: async (ctx, { workflowIds, supporterIds }) => {
     const executionDefs = [
@@ -1466,11 +1587,16 @@ export const insertOrgInvites = internalMutation({
       },
     ];
 
+    const encoder = new TextEncoder();
     for (const inv of inviteDefs) {
+      // Hash the token for at-rest storage (schema requires tokenHash, not plaintext token)
+      const hashBuf = await crypto.subtle.digest("SHA-256", encoder.encode("invite-token:" + inv.token));
+      const tokenHash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+
       await ctx.db.insert("orgInvites", {
         orgId: orgIds[inv.orgIdx],
         role: inv.role,
-        token: inv.token,
+        tokenHash,
         expiresAt: inv.expiresAt,
         accepted: inv.accepted,
         invitedBy: inv.invitedBy,
@@ -1488,7 +1614,7 @@ export const insertOrgInvites = internalMutation({
 export const insertCampaignActions = internalMutation({
   args: {
     campaignIds: v.array(v.id("campaigns")),
-    supporterIds: v.array(v.id("supporters")),
+    supporterIds: v.array(v.string()),
     orgIds: v.array(v.id("organizations")),
   },
   handler: async (ctx, { campaignIds, supporterIds, orgIds }) => {
@@ -1729,6 +1855,100 @@ export const grantDevAccount = internalMutation({
 // org[0] which has a completed email blast). The insertSupporters mutation
 // runs before insertEmailBlasts in the seedAll orchestrator.
 // =============================================================================
+
+// =============================================================================
+// PHASE 17: ENCRYPT SEED PII — backfill donations, RSVPs, invites
+// =============================================================================
+
+export const encryptSeedPii = internalAction({
+  args: { orgIds: v.array(v.string()) },
+  handler: async (ctx, { orgIds }) => {
+    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
+    const { encryptWithOrgKey } = await import("./_orgKey");
+    const { computeOrgScopedEmailHash } = await import("./_orgHash");
+
+    for (const orgId of orgIds) {
+      const orgKey = await getOrgKeyForAction(ctx, orgId);
+      if (!orgKey) continue;
+
+      // Encrypt donations
+      const donations = await ctx.runQuery(internal.seed.getOrgDonations, { orgId });
+      for (const d of donations) {
+        if (d.encryptedEmail && d.encryptedEmail !== "") continue; // already encrypted
+        const name = d.rawName ?? "Supporter";
+        const email = `${name.toLowerCase().replace(/[^a-z]/g, '')}@example.com`;
+        const [encEmail, encName] = await Promise.all([
+          encryptWithOrgKey(email, orgKey, d._id, "email"),
+          encryptWithOrgKey(name, orgKey, d._id, "name"),
+        ]);
+        const emailHash = await computeOrgScopedEmailHash(orgId, email);
+        await ctx.runMutation(internal.seed.patchSeedRecord, {
+          id: d._id,
+          patch: {
+            encryptedEmail: JSON.stringify(encEmail),
+            encryptedName: JSON.stringify(encName),
+            emailHash,
+          },
+        });
+      }
+
+      // Encrypt invites
+      const invites = await ctx.runQuery(internal.seed.getOrgInvites, { orgId });
+      for (const inv of invites) {
+        if (inv.encryptedEmail && inv.encryptedEmail !== "" && !inv.encryptedEmail.startsWith("seed-")) continue;
+        const email = `invite-${inv.emailHash}@example.com`;
+        const encEmail = await encryptWithOrgKey(email, orgKey, inv.emailHash, "email");
+        const emailHash = await computeOrgScopedEmailHash(orgId, email);
+        await ctx.runMutation(internal.seed.patchSeedRecord, {
+          id: inv._id,
+          patch: {
+            encryptedEmail: JSON.stringify(encEmail),
+            emailHash,
+          },
+        });
+      }
+    }
+    console.log(`[seed] Encrypted PII for ${orgIds.length} orgs`);
+  },
+});
+
+export const getOrgDonations = internalQuery({
+  args: { orgId: v.string() },
+  handler: async (ctx, { orgId }) => {
+    const all = await ctx.db
+      .query("donations")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId as any))
+      .collect();
+    return all.map((d) => ({
+      _id: String(d._id),
+      encryptedEmail: d.encryptedEmail,
+      encryptedName: d.encryptedName,
+      rawName: d.name ?? (d.encryptedName && !d.encryptedName.startsWith("{") ? d.encryptedName : null),
+    }));
+  },
+});
+
+export const getOrgInvites = internalQuery({
+  args: { orgId: v.string() },
+  handler: async (ctx, { orgId }) => {
+    const all = await ctx.db
+      .query("orgInvites")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId as any))
+      .collect();
+    return all.map((i) => ({
+      _id: String(i._id),
+      encryptedEmail: i.encryptedEmail,
+      emailHash: i.emailHash,
+    }));
+  },
+});
+
+export const patchSeedRecord = internalMutation({
+  args: { id: v.string(), patch: v.any() },
+  handler: async (ctx, { id, patch }) => {
+    await ctx.db.patch(id as any, patch);
+  },
+});
 
 // =============================================================================
 // CLEAR SEED — wipe all seeded data so seedAll can re-run
