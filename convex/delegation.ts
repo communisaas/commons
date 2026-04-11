@@ -14,9 +14,8 @@ import { query, mutation, action, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireAuth } from "./_authHelpers";
-import { encryptPii, decryptPii } from "./_pii";
-import type { EncryptedPii } from "./_pii";
-import type { Id } from "./_generated/dataModel";
+// Policy text stored plaintext — server sees it in action args anyway.
+// Feature gated behind FEATURES.DELEGATION = false.
 
 const MAX_ACTIVE_GRANTS = 3;
 const VALID_SCOPES = [
@@ -48,16 +47,8 @@ export const listGrants = query({
 
     return await Promise.all(
       grants.map(async (grant) => {
-        // Decrypt policy text
-        let policyText = grant.policyText;
-        try {
-          const parsed = JSON.parse(grant.policyText) as EncryptedPii;
-          if (parsed.ciphertext && parsed.iv) {
-            policyText = await decryptPii(parsed, grant.userId, "policy");
-          }
-        } catch {
-          policyText = "[encrypted]";
-        }
+        // Policy text stored plaintext (legacy encrypted blobs shown as-is)
+        const policyText = grant.policyText;
 
         // Recent actions (last 5)
         const allActions = await ctx.db
@@ -268,22 +259,13 @@ export const createGrant = action({
       throw new Error("Policy text must not exceed 5000 characters");
     }
 
-    // Encrypt policy text (non-deterministic — random IV)
-    // Look up the user's Convex _id to match the key used for decryption (grant.userId)
+    // Look up the user's Convex _id
     const user = await ctx.runQuery(internal.users.getByEmail, { email: identity.email! });
     if (!user) throw new Error("User not found");
-    const entityId: string = user._id as Id<"users">;
-
-    const encryptedPolicy = await encryptPii(
-      args.policyText.trim(),
-      entityId,
-      "policy",
-    );
-    const storedPolicyText = JSON.stringify(encryptedPolicy);
 
     return await ctx.runMutation(internal.delegation.insertGrant, {
       scope: args.scope,
-      policyText: storedPolicyText,
+      policyText: args.policyText.trim(),
       issueFilter: (args.issueFilter ?? [])
         .map((s) => s.toLowerCase().trim())
         .filter(Boolean),
@@ -315,21 +297,6 @@ export const updateGrant = action({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
-    let encryptedPolicy: string | undefined;
-    if (args.policyText !== undefined) {
-      // Look up the user's Convex _id to match the key used for decryption (grant.userId)
-      const user = await ctx.runQuery(internal.users.getByEmail, { email: identity.email! });
-      if (!user) throw new Error("User not found");
-      const entityId: string = user._id as Id<"users">;
-
-      const encrypted = await encryptPii(
-        args.policyText.trim(),
-        entityId,
-        "policy",
-      );
-      encryptedPolicy = JSON.stringify(encrypted);
-    }
-
     await ctx.runMutation(internal.delegation.patchGrant, {
       grantId: args.grantId,
       status: args.status,
@@ -341,7 +308,7 @@ export const updateGrant = action({
         : undefined,
       issueFilter: args.issueFilter?.map((s) => s.toLowerCase().trim()).filter(Boolean),
       orgFilter: args.orgFilter?.map((s) => s.toLowerCase().trim()).filter(Boolean),
-      policyText: encryptedPolicy,
+      policyText: args.policyText?.trim(),
     });
   },
 });
