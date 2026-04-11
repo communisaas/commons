@@ -47,13 +47,17 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 		supporterId: supporterId as any
 	});
 	if (!supporter) throw error(404, 'Supporter not found');
-	if (!supporter.phone) throw error(400, 'Supporter does not have a phone number on file');
+	if (!supporter.encryptedPhone) throw error(400, 'Supporter does not have a phone number on file');
+
+	// Client must decrypt supporter phone with org key and pass it in the body
+	const callerPhone = (body as Record<string, unknown>).callerPhone as string | undefined;
+	if (!callerPhone) throw error(400, 'callerPhone required — decrypt supporter phone with org key first');
 
 	// Create call record
 	const callResult = await serverMutation(api.calls.createCall, {
 		slug: params.slug,
 		supporterId: supporterId as any,
-		callerPhone: supporter.phone,
+		callerPhone,
 		targetPhone,
 		targetName: targetName || undefined,
 		campaignId: campaignId ? (campaignId as any) : undefined,
@@ -63,7 +67,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 	// Initiate the call via Twilio
 	const callbackUrl = `${url.origin}/api/sms/call-status`;
 	const result = await initiatePatchThroughCall(
-		supporter.phone,
+		callerPhone,
 		targetPhone,
 		callbackUrl,
 		targetName
@@ -115,13 +119,13 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	return json({
 		data: result.data.map((c) => ({
 			id: c._id,
-			targetPhone: c.targetPhone,
+			encryptedTargetPhone: c.encryptedTargetPhone,
 			targetName: c.targetName,
 			status: c.status,
 			duration: c.duration,
 			campaignId: c.campaignId,
 			supporter: c.supporter
-				? { id: c.supporter._id, name: c.supporter.name }
+				? { id: c.supporter._id, encryptedName: c.supporter.encryptedName }
 				: null,
 			createdAt: new Date(c._creationTime).toISOString(),
 			updatedAt: new Date(c.updatedAt).toISOString()
