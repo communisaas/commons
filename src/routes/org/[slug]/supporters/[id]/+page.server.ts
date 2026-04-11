@@ -7,12 +7,18 @@ import type { PageServerLoad, Actions } from './$types';
 export const load: PageServerLoad = async ({ params, parent }) => {
 	const { org } = await parent();
 
-	const [convexSupporter, allTags] = await Promise.all([
+	const { membership } = await parent();
+	const isEditor = membership.role === 'owner' || membership.role === 'editor';
+
+	const [convexSupporter, allTags, keyInfo] = await Promise.all([
 		serverQuery(api.supporters.get, {
 			orgSlug: org.slug,
 			supporterId: params.id as any
 		}),
-		serverQuery(api.supporters.getTags, { orgSlug: org.slug })
+		serverQuery(api.supporters.getTags, { orgSlug: org.slug }),
+		isEditor
+			? serverQuery(api.organizations.getOrgKeyVerifier, { slug: org.slug })
+			: Promise.resolve({ orgKeyVerifier: null })
 	]);
 
 	if (!convexSupporter) throw error(404, 'Supporter not found');
@@ -20,11 +26,11 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 	return {
 		supporter: {
 			id: convexSupporter._id,
-			email: convexSupporter.email,
-			name: convexSupporter.name ?? null,
+			encryptedEmail: convexSupporter.encryptedEmail ?? null,
+			encryptedName: convexSupporter.encryptedName ?? null,
+			encryptedPhone: convexSupporter.encryptedPhone ?? null,
 			postalCode: convexSupporter.postalCode ?? null,
 			country: convexSupporter.country ?? null,
-			phone: convexSupporter.phone ?? null,
 			identityVerified: convexSupporter.identityVerified ?? false,
 			verified: convexSupporter.verified ?? false,
 			emailStatus: convexSupporter.emailStatus ?? 'subscribed',
@@ -45,7 +51,8 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 				name: t.name
 			}))
 		},
-		allTags: (allTags ?? []).map((t: Record<string, unknown>) => ({ id: t._id ?? t.id, name: t.name }))
+		allTags: (allTags ?? []).map((t: Record<string, unknown>) => ({ id: t._id ?? t.id, name: t.name })),
+		encryption: { orgKeyVerifier: keyInfo.orgKeyVerifier }
 	};
 };
 

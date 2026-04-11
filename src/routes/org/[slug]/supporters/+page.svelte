@@ -8,6 +8,56 @@
 
 	let { data }: { data: PageData } = $props();
 
+	// ── Client-side PII decryption ──
+	let decryptedPii = $state<Record<string, { email: string; name: string; phone: string }>>({});
+
+	$effect(() => {
+		decryptSupporterPii(data.supporters);
+	});
+
+	async function decryptSupporterPii(supporters: typeof data.supporters) {
+		try {
+			const { getOrPromptOrgKey } = await import('$lib/services/org-key-manager');
+			const { decryptWithOrgKey } = await import('$lib/core/crypto/org-pii-encryption');
+
+			const verifierData = data.encryption;
+			if (!verifierData?.orgKeyVerifier) return;
+
+			const orgKey = await getOrPromptOrgKey(data.org.id, verifierData.orgKeyVerifier);
+			if (!orgKey) return;
+
+			const results: Record<string, { email: string; name: string; phone: string }> = {};
+			for (const s of supporters) {
+				const entityId = `supporter:${s.id}`;
+				let email = '', name = '', phone = '';
+				try {
+					if (s.encryptedEmail) {
+						email = await decryptWithOrgKey(JSON.parse(s.encryptedEmail), orgKey, entityId, 'email');
+					}
+				} catch { /* decryption failed */ }
+				try {
+					if (s.encryptedName) {
+						name = await decryptWithOrgKey(JSON.parse(s.encryptedName), orgKey, entityId, 'name');
+					}
+				} catch { /* decryption failed */ }
+				try {
+					if (s.encryptedPhone) {
+						phone = await decryptWithOrgKey(JSON.parse(s.encryptedPhone), orgKey, entityId, 'phone');
+					}
+				} catch { /* decryption failed */ }
+				results[s.id] = { email, name, phone };
+			}
+			decryptedPii = results;
+		} catch {
+			// Org key not available — show [encrypted]
+		}
+	}
+
+	// Helper to get decrypted value or fallback
+	function pii(supporterId: string, field: 'email' | 'name' | 'phone'): string {
+		return decryptedPii[supporterId]?.[field] || '\u2014';
+	}
+
 	// Segment builder toggle
 	let showSegmentBuilder = $state(false);
 
@@ -639,7 +689,7 @@
 										href="/org/{data.org.slug}/supporters/{supporter.id}"
 										class="text-sm text-text-primary hover:text-teal-400 transition-colors"
 									>
-										{supporter.name || '\u2014'}
+										{pii(supporter.id, 'name')}
 									</a>
 								</td>
 
@@ -654,7 +704,7 @@
 											<span class="inline-block w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0"></span>
 										{/if}
 										<span class="text-sm truncate max-w-48 {supporter.emailStatus === 'complained' ? 'text-text-tertiary line-through' : 'text-text-tertiary'}">
-											{supporter.email}
+											{pii(supporter.id, 'email')}
 										</span>
 									</div>
 								</td>

@@ -4,6 +4,39 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
+	// ── Client-side PII decryption ──
+	let decryptedEmail = $state('');
+	let decryptedName = $state('');
+	let decryptedPhone = $state('');
+
+	$effect(() => {
+		decryptDetail();
+	});
+
+	async function decryptDetail() {
+		try {
+			const { getOrPromptOrgKey } = await import('$lib/services/org-key-manager');
+			const { decryptWithOrgKey } = await import('$lib/core/crypto/org-pii-encryption');
+
+			const verifier = data.encryption?.orgKeyVerifier;
+			if (!verifier) return;
+
+			const orgKey = await getOrPromptOrgKey(data.org.id, verifier);
+			if (!orgKey) return;
+
+			const entityId = `supporter:${data.supporter.id}`;
+			if (data.supporter.encryptedEmail) {
+				try { decryptedEmail = await decryptWithOrgKey(JSON.parse(data.supporter.encryptedEmail), orgKey, entityId, 'email'); } catch {}
+			}
+			if (data.supporter.encryptedName) {
+				try { decryptedName = await decryptWithOrgKey(JSON.parse(data.supporter.encryptedName), orgKey, entityId, 'name'); } catch {}
+			}
+			if (data.supporter.encryptedPhone) {
+				try { decryptedPhone = await decryptWithOrgKey(JSON.parse(data.supporter.encryptedPhone), orgKey, entityId, 'phone'); } catch {}
+			}
+		} catch {}
+	}
+
 	const canEdit = $derived(
 		data.membership.role === 'owner' || data.membership.role === 'editor'
 	);
@@ -46,7 +79,7 @@
 		<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 			<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
 		</svg>
-		<span class="text-text-tertiary truncate">{data.supporter.name || data.supporter.email}</span>
+		<span class="text-text-tertiary truncate">{decryptedName || decryptedEmail || '\u2014'}</span>
 	</nav>
 
 	<!-- Verification status hero -->
@@ -90,13 +123,13 @@
 				{:else if data.supporter.emailStatus === 'bounced' || data.supporter.emailStatus === 'complained'}
 					<span class="inline-block w-1.5 h-1.5 rounded-full bg-red-500"></span>
 				{/if}
-				<span class="text-sm text-text-primary {data.supporter.emailStatus === 'complained' ? 'line-through text-text-tertiary' : ''}">{data.supporter.email}</span>
+				<span class="text-sm text-text-primary {data.supporter.emailStatus === 'complained' ? 'line-through text-text-tertiary' : ''}">{decryptedEmail || '\u2014'}</span>
 				<span class="text-xs font-mono text-text-quaternary capitalize">({data.supporter.emailStatus})</span>
 			</div>
 		</div>
 		<div class="px-5 py-4 flex items-center justify-between">
 			<span class="text-xs text-text-tertiary">Name</span>
-			<span class="text-sm text-text-primary">{data.supporter.name || '\u2014'}</span>
+			<span class="text-sm text-text-primary">{decryptedName || '\u2014'}</span>
 		</div>
 		<div class="px-5 py-4 flex items-center justify-between">
 			<span class="text-xs text-text-tertiary">Postal Code</span>

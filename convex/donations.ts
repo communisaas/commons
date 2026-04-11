@@ -381,8 +381,8 @@ export const processCheckout = action({
 
     // Step 2: Encrypt PII with real doc _id (AAD binding must match decrypt path)
     const [encEmail, encName] = await Promise.all([
-      encryptWithOrgKey(normalizedEmail, orgKey, donationDocId, "email"),
-      encryptWithOrgKey(args.name.trim(), orgKey, donationDocId, "name"),
+      encryptWithOrgKey(normalizedEmail, orgKey, `donation:${donationDocId}`, "email"),
+      encryptWithOrgKey(args.name.trim(), orgKey, `donation:${donationDocId}`, "name"),
     ]);
     const encryptedEmail = JSON.stringify(encEmail);
     const encryptedName = JSON.stringify(encName);

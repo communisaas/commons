@@ -9,7 +9,7 @@ import type { PageServerLoad, Actions } from './$types';
 const PAGE_SIZE = 50;
 
 export const load: PageServerLoad = async ({ parent, url }) => {
-	const { org } = await parent();
+	const { org, membership } = await parent();
 
 	// Parse filter params
 	const q = url.searchParams.get('q')?.trim() || '';
@@ -36,6 +36,12 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		convexFilters.q = q;
 	}
 
+	// Load encryption verifier for client-side PII decryption
+	const isEditor = membership.role === 'owner' || membership.role === 'editor';
+	const keyInfo = isEditor
+		? await serverQuery(api.organizations.getOrgKeyVerifier, { slug: org.slug })
+		: { orgKeyVerifier: null };
+
 	const [convexResult, summaryStats, tags, campaigns] = await Promise.all([
 		serverQuery(api.supporters.list, {
 			orgSlug: org.slug,
@@ -47,16 +53,15 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		serverQuery(api.campaigns.listForOrg, { orgSlug: org.slug })
 	]);
 
-	// Map Convex supporter shape → shape expected by +page.svelte
+	// Pass encrypted blobs through — client decrypts with org key
 	const supporters = convexResult.supporters
-		.filter((s: Record<string, unknown>) => s.email !== null)
 		.map((s: Record<string, unknown>) => ({
 			id: s._id,
-			email: s.email,
-			name: s.name ?? null,
+			encryptedEmail: s.encryptedEmail ?? null,
+			encryptedName: s.encryptedName ?? null,
+			encryptedPhone: s.encryptedPhone ?? null,
 			postalCode: s.postalCode ?? null,
 			country: s.country ?? null,
-			phone: s.phone ?? null,
 			identityVerified: s.identityVerified ?? false,
 			verified: s.verified ?? false,
 			emailStatus: s.emailStatus ?? 'subscribed',
@@ -83,6 +88,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 			imported: summaryStats.imported
 		},
 		emailHealth: summaryStats.emailHealth,
+		encryption: { orgKeyVerifier: keyInfo.orgKeyVerifier },
 		filters
 	};
 };

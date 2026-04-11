@@ -1898,8 +1898,8 @@ export const encryptSeedPii = internalAction({
         const name = d.rawName ?? "Supporter";
         const email = `${name.toLowerCase().replace(/[^a-z]/g, '')}@example.com`;
         const [encEmail, encName] = await Promise.all([
-          encryptWithOrgKey(email, orgKey, d._id, "email"),
-          encryptWithOrgKey(name, orgKey, d._id, "name"),
+          encryptWithOrgKey(email, orgKey, `donation:${d._id}`, "email"),
+          encryptWithOrgKey(name, orgKey, `donation:${d._id}`, "name"),
         ]);
         const emailHash = await computeOrgScopedEmailHash(orgId, email);
         await ctx.runMutation(internal.seed.patchSeedRecord, {
