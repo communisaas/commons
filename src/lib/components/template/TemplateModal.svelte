@@ -1161,7 +1161,7 @@
 									skipDirectSend: true
 								});
 							}}
-							class="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700 active:scale-[0.98]"
+							class="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700"
 						>
 							Create free account
 						</button>
@@ -1185,14 +1185,14 @@
 									source: 'post-send-tier-upgrade'
 								});
 							}}
-							class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-indigo-700 active:scale-[0.98]"
+							class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-indigo-700"
 						>
 							Verify your address
 						</button>
 					</div>
 				{:else if user && (user.trust_tier ?? 0) === 2 && template.deliveryMethod === 'cwc'}
 					<div
-						class="rounded-lg border border-purple-200 bg-gradient-to-r from-purple-50 to-indigo-50 p-4"
+						class="rounded-lg border border-purple-200 bg-slate-50 p-4"
 						in:fly={{ y: 10, duration: 400, delay: 300 }}
 					>
 						<p class="mb-1 text-sm font-semibold text-purple-900">
@@ -1215,7 +1215,7 @@
 									});
 								}
 							}}
-							class="w-full rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-purple-700 active:scale-[0.98]"
+							class="w-full rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-purple-700"
 						>
 							Verify identity
 						</button>
@@ -1367,7 +1367,7 @@
 					<!-- mDL: Highest signal — verify with digital ID -->
 					<button
 						onclick={() => { attemptWalletVerification(); }}
-						class="group flex w-full items-center gap-4 rounded-xl border-2 border-purple-200 bg-gradient-to-r from-purple-50 to-indigo-50 p-4 text-left transition-all hover:border-purple-300 hover:shadow-md"
+						class="group flex w-full items-center gap-4 rounded-md border-2 border-purple-200 bg-slate-50 p-4 text-left transition-all hover:border-purple-300 hover:shadow-md"
 					>
 						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-100">
 							<Smartphone class="h-5 w-5 text-purple-600" />
@@ -1382,7 +1382,7 @@
 					<!-- Address: Primary CTA — available now, resolves the tension -->
 					<button
 						onclick={() => { collectingAddress = true; }}
-						class="group flex w-full items-center gap-4 rounded-xl border-2 border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 p-4 text-left transition-all hover:border-emerald-300 hover:shadow-md"
+						class="group flex w-full items-center gap-4 rounded-md border-2 border-emerald-200 bg-emerald-50 p-4 text-left transition-all hover:border-emerald-300 hover:shadow-md"
 					>
 						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100">
 							<MapPin class="h-5 w-5 text-emerald-600" />
@@ -1404,7 +1404,7 @@
 					<!-- Email: Quiet escape hatch — still valid, just lower signal -->
 					<button
 						onclick={() => handleUnifiedEmailFlow()}
-						class="group flex w-full items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 text-left transition-all hover:border-slate-300 hover:shadow-sm"
+						class="group flex w-full items-center gap-4 rounded-md border border-slate-200 bg-white p-4 text-left transition-all hover:border-slate-300 hover:shadow-sm"
 					>
 						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100">
 							<Send class="h-5 w-5 text-slate-500" />

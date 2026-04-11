@@ -28,7 +28,7 @@
 		</div>
 
 		<!-- What Congress Sees -->
-		<div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+		<div class="rounded-md border border-slate-200 bg-white p-6 shadow-sm">
 			<h3 class="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-900">
 				<MessageSquare class="h-5 w-5 text-blue-600" />
 				What Congressional Offices See
@@ -71,7 +71,7 @@
 		<!-- Privacy Guarantee -->
 		{#if showPrivacy}
 			<div
-				class="rounded-xl border border-green-200 bg-gradient-to-br from-green-50 to-emerald-50 p-6 shadow-sm"
+				class="rounded-md border border-green-200 bg-green-50 p-6 shadow-sm"
 			>
 				<div class="flex items-start gap-4">
 					<div class="rounded-full bg-green-100 p-3 shadow-sm">

@@ -39,7 +39,7 @@
 	<button
 		onclick={() => handleAuthClick(featuredProvider.provider)}
 		disabled={loadingProvider !== null}
-		class="relative flex w-full items-center justify-center gap-2.5 overflow-hidden rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-base font-semibold text-slate-900 shadow-sm transition-all duration-300 hover:border-slate-300 hover:shadow-md active:scale-[0.98] disabled:cursor-wait disabled:opacity-100"
+		class="relative flex w-full items-center justify-center gap-2.5 overflow-hidden rounded-md border border-slate-200 bg-white px-4 py-3.5 text-base font-semibold text-slate-900 shadow-sm transition-all duration-300 hover:border-slate-300 hover:shadow-md disabled:cursor-wait disabled:opacity-100"
 	>
 		<!-- Fluid fill on loading -->
 		{#if loadingProvider === featuredProvider.provider}
@@ -80,7 +80,7 @@
 	<button
 		onclick={() => handleAuthClick('linkedin')}
 		disabled={loadingProvider !== null}
-		class="relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 transition-all duration-300 hover:border-slate-300 hover:bg-slate-50 hover:shadow-sm active:scale-[0.98] disabled:cursor-wait disabled:opacity-100"
+		class="relative flex w-full items-center justify-center gap-2 overflow-hidden rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 transition-all duration-300 hover:border-slate-300 hover:bg-slate-50 hover:shadow-sm disabled:cursor-wait disabled:opacity-100"
 	>
 		{#if loadingProvider === 'linkedin'}
 			<div

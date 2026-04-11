@@ -185,7 +185,7 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div
-	class="clarification-panel rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-6 shadow-sm"
+	class="clarification-panel rounded-md border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-6 shadow-sm"
 	transition:slide={{ duration: 250 }}
 >
 	<!-- Conversational Header -->

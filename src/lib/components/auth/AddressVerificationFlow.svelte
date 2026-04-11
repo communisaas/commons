@@ -457,7 +457,7 @@
 				<!-- Option A: Use my location -->
 				<button
 					type="button"
-					class="flex w-full items-start gap-4 rounded-xl border border-slate-200 p-5 text-left cursor-pointer transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
+					class="flex w-full items-start gap-4 rounded-md border border-slate-200 p-5 text-left cursor-pointer transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
 					onclick={handleGeolocationPath}
 				>
 					<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100">
@@ -473,7 +473,7 @@
 				<!-- Option B: Choose on map (client-side) or Enter address (legacy) -->
 				<button
 					type="button"
-					class="flex w-full items-start gap-4 rounded-xl border border-slate-200 p-5 text-left cursor-pointer transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
+					class="flex w-full items-start gap-4 rounded-md border border-slate-200 p-5 text-left cursor-pointer transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
 					onclick={handleSelectAddressPath}
 				>
 					<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100">
@@ -680,7 +680,7 @@
 			</div>
 
 			<!-- District Card -->
-			<div class="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 p-5">
+			<div class="rounded-md border border-emerald-200 bg-emerald-50 p-5">
 				<div class="mb-3 flex items-center gap-2">
 					<MapPin class="h-5 w-5 text-emerald-600" />
 					<span class="text-lg font-bold text-emerald-900">{verifiedDistrict}</span>

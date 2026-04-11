@@ -74,7 +74,7 @@
 		</div>
 	{:else}
 		<!-- Upgrade nudge banner -->
-		<div class="mb-6 overflow-hidden rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 to-sky-50 shadow-sm">
+		<div class="mb-6 overflow-hidden rounded-md border border-blue-200 bg-blue-50 shadow-sm">
 			<div class="flex items-center gap-4 p-4">
 				<!-- Icon -->
 				<div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-sky-100">

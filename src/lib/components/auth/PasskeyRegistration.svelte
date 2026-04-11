@@ -117,7 +117,7 @@
 
 {#if !isSupported}
 	<!-- Browser doesn't support WebAuthn -->
-	<div class="rounded-xl border border-slate-200 bg-slate-50 p-6">
+	<div class="rounded-md border border-slate-200 bg-slate-50 p-6">
 		<div class="flex items-start gap-4">
 			<div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100">
 				<ShieldCheck class="h-5 w-5 text-slate-400" />
@@ -132,7 +132,7 @@
 	</div>
 {:else if uiState ==='success'}
 	<!-- Success state with celebration -->
-	<div class="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 p-6 shadow-sm">
+	<div class="rounded-md border border-emerald-200 bg-emerald-50 p-6 shadow-sm">
 		<div class="flex items-start gap-4">
 			<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-emerald-100 ring-4 ring-emerald-50">
 				<CheckCircle2 class="h-6 w-6 text-emerald-600" />
@@ -147,7 +147,7 @@
 	</div>
 {:else if uiState ==='error'}
 	<!-- Error state with retry -->
-	<div class="rounded-xl border border-red-200 bg-red-50 p-6">
+	<div class="rounded-md border border-red-200 bg-red-50 p-6">
 		<div class="flex items-start gap-4">
 			<div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-red-100">
 				<AlertCircle class="h-5 w-5 text-red-600" />
@@ -168,9 +168,9 @@
 	</div>
 {:else}
 	<!-- Idle state: Registration prompt -->
-	<div class="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-6 shadow-sm transition-all hover:border-emerald-200 hover:shadow-md">
+	<div class="rounded-md border border-slate-200 bg-slate-50 p-6 shadow-sm transition-all hover:border-emerald-200 hover:shadow-md">
 		<div class="mb-4 flex items-center gap-3">
-			<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-50 to-teal-50 ring-2 ring-emerald-100">
+			<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-emerald-50 ring-2 ring-emerald-100">
 				{#if hasBiometric}
 					<Fingerprint class="h-6 w-6 text-emerald-600" />
 				{:else}
@@ -194,7 +194,7 @@
 		<button
 			onclick={handleRegister}
 			disabled={uiState ==='registering'}
-			class="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:from-emerald-700 hover:to-teal-700 hover:shadow-md active:scale-[0.98] disabled:cursor-wait disabled:opacity-90"
+			class="flex w-full items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-700 hover:shadow-md disabled:cursor-wait disabled:opacity-90"
 		>
 			{#if uiState ==='registering'}
 				<Loader2 class="h-4 w-4 animate-spin" />

@@ -1078,7 +1078,7 @@
 	<!-- Streaming thoughts (perceptual engineering: scannable research log) -->
 	{#if !isSettled && suggestionState.status === 'streaming' && !showAISuggest}
 		<div
-			class="mt-4 rounded-xl border border-participation-primary-200/60 bg-gradient-to-br from-participation-primary-50 to-white/80 p-3 shadow-atmospheric-card backdrop-blur-sm"
+			class="mt-4 rounded-md border border-participation-primary-200/60 bg-participation-primary-50 p-3 "
 			transition:fade={{ duration: 200 }}
 			role="status"
 			aria-live="polite"
@@ -1124,7 +1124,7 @@
 	<!-- Fallback thinking indicator (for non-streaming paths like clarification follow-up) -->
 	{#if !isSettled && suggestionState.status === 'thinking' && !showAISuggest}
 		<div
-			class="mt-4 rounded-xl border border-participation-primary-200/60 bg-gradient-to-br from-participation-primary-50 to-white/80 p-3 shadow-atmospheric-card"
+			class="mt-4 rounded-md border border-participation-primary-200/60 bg-participation-primary-50 p-3 "
 			transition:fade={{ duration: 150 }}
 		>
 			<div class="flex items-center gap-2">
@@ -1152,7 +1152,7 @@
 	<!-- Refined suggestion surface -->
 	{#if showAISuggest && currentSuggestion}
 		<div
-			class="mt-4 rounded-xl border border-participation-primary-200/60 bg-gradient-to-br from-participation-primary-50 to-white/80 p-4 shadow-atmospheric-card backdrop-blur-sm"
+			class="mt-4 rounded-md border border-participation-primary-200/60 bg-participation-primary-50 p-4 "
 			transition:slide={{ duration: 200 }}
 		>
 			<!-- Iteration timeline (perceptual temporal navigation) -->
