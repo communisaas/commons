@@ -42,7 +42,7 @@
 
 <button
 	type="button"
-	class="card-topic group relative flex w-full flex-col overflow-hidden rounded-xl text-left backdrop-blur-sm transition-all duration-300 motion-reduce:transition-none {isCongressional
+	class="card-topic group relative flex w-full flex-col overflow-hidden rounded-md text-left transition-colors duration-200 motion-reduce:transition-none {isCongressional
 		? 'card-weight-heavy'
 		: 'card-weight-light'}"
 	style="--card-hue: {hue}; transform: scale({cardScale}); transform-origin: center; will-change: transform; backface-visibility: hidden;"
@@ -103,7 +103,7 @@
 
 		<!-- Title: Satoshi Bold — brand voice -->
 		<h3
-			class="line-clamp-2 font-brand font-bold text-gray-900 group-hover:text-gray-700 {isCongressional ? 'text-lg md:text-xl' : 'text-base md:text-lg'}"
+			class="font-brand font-bold text-gray-900 group-hover:text-gray-700 {isCongressional ? 'text-lg md:text-xl' : 'text-base md:text-lg'}"
 		>
 			{template.title}
 		</h3>

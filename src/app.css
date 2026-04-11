@@ -370,27 +370,23 @@
 		box-shadow: var(--focus-ring-community);
 	}
 
-	/* Participation Badge System—Clear Status Communication */
+	/* Badge System — tight radius, subtle background, not pill */
 	.participation-badge {
-		@apply inline-flex items-center gap-1.5;
-		@apply rounded-full border font-medium;
-		@apply px-3 py-1 text-xs;
-		@apply transition-all duration-150;
-		font-family:
-			'Satoshi',
-			ui-sans-serif,
-			system-ui,
-			-apple-system,
-			sans-serif;
-		letter-spacing: 0.025em;
+		@apply inline-flex items-center gap-1;
+		@apply font-medium;
+		@apply px-1.5 py-0.5 text-xs;
+		@apply transition-colors duration-150;
+		border-radius: 3px;
+		font-family: 'Satoshi', ui-sans-serif, system-ui, -apple-system, sans-serif;
+		letter-spacing: 0.02em;
 	}
 
 	.participation-badge-sm {
-		@apply px-2 py-0.5 text-xs;
+		@apply px-1 py-0 text-xs;
 	}
 
 	.participation-badge-md {
-		@apply px-3 py-1 text-sm;
+		@apply px-2 py-0.5 text-sm;
 	}
 
 	/* Channel Badges */
@@ -437,26 +433,25 @@
 		border-color: var(--surface-border);
 	}
 
-	/* Participation Surface System—Infrastructure Depth */
+	/* Surface System — tighter radius, lighter shadow */
 	.participation-surface {
 		background-color: var(--surface-base);
 		border: 1px solid var(--surface-border);
-		border-radius: 0.75rem; /* 12px: participation roundness */
-		box-shadow: var(--shadow-sm);
+		border-radius: 6px;
 	}
 
 	.participation-surface-raised {
 		background-color: var(--surface-raised);
 		border: 1px solid var(--surface-border);
-		border-radius: 0.75rem;
-		box-shadow: var(--shadow-md);
+		border-radius: 6px;
+		box-shadow: 0 1px 3px -1px rgba(0, 0, 0, 0.08);
 	}
 
 	.participation-surface-overlay {
 		background-color: var(--surface-overlay);
 		border: 1px solid var(--surface-border-strong);
-		border-radius: 0.75rem;
-		box-shadow: var(--shadow-lg);
+		border-radius: 6px;
+		box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.12);
 	}
 
 	/*
@@ -479,55 +474,39 @@
 	*/
 
 	/* Topic-tinted surface: atmospheric, not categorical.
-	   Transition matches voice-card timing so parent and child breathe as one. */
+	   Tighter radius (6px) and single-layer shadow — structure without pillowiness. */
 	.card-topic {
-		background: oklch(0.985 0.01 var(--card-hue) / 0.95);
-		border: 1px solid oklch(0.88 0.02 var(--card-hue) / 0.3);
-		transition: background 300ms cubic-bezier(0.4, 0, 0.2, 1),
-			border-color 300ms cubic-bezier(0.4, 0, 0.2, 1);
+		background: oklch(0.99 0.006 var(--card-hue) / 0.9);
+		border: 1px solid oklch(0.88 0.015 var(--card-hue) / 0.25);
+		border-radius: 6px;
+		transition: border-color 200ms ease-out;
 	}
 
 	.card-topic:hover {
-		background: oklch(0.98 0.018 var(--card-hue) / 0.97);
-		border-color: oklch(0.84 0.03 var(--card-hue) / 0.4);
+		border-color: oklch(0.8 0.025 var(--card-hue) / 0.4);
 	}
 
-	/* Weight: congressional = heavier shadow, direct = lighter */
+	/* Weight: single-layer shadow only — no inset tricks */
 	.card-weight-heavy {
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
-			0 1px 3px 0 rgba(0, 0, 0, 0.04),
-			0 6px 16px -6px rgba(0, 0, 0, 0.06);
-		transition: box-shadow 300ms cubic-bezier(0.4, 0, 0.2, 1);
+		box-shadow: 0 1px 3px -1px rgba(0, 0, 0, 0.08);
 	}
 
 	.card-weight-heavy:hover {
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.75),
-			0 2px 4px 0 rgba(0, 0, 0, 0.04),
-			0 12px 24px -8px rgba(0, 0, 0, 0.08);
+		box-shadow: 0 2px 6px -2px rgba(0, 0, 0, 0.1);
 	}
 
 	.card-weight-light {
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.5),
-			0 1px 2px 0 rgba(0, 0, 0, 0.03);
-		transition: box-shadow 300ms cubic-bezier(0.4, 0, 0.2, 1);
+		box-shadow: 0 1px 2px -1px rgba(0, 0, 0, 0.05);
 	}
 
 	.card-weight-light:hover {
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
-			0 4px 12px -4px rgba(0, 0, 0, 0.06);
+		box-shadow: 0 1px 4px -1px rgba(0, 0, 0, 0.08);
 	}
 
-	/* Selected state: topic color surfaces clearly — selection needs legibility */
+	/* Selected: stronger border, subtle shadow */
 	.card-selected {
-		border-color: oklch(0.65 0.08 var(--card-hue) / 0.5) !important;
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.6),
-			0 0 0 2px oklch(0.7 0.06 var(--card-hue) / 0.15),
-			0 1px 3px 0 rgba(0, 0, 0, 0.04) !important;
+		border-color: oklch(0.6 0.08 var(--card-hue) / 0.6) !important;
+		box-shadow: 0 1px 3px -1px rgba(0, 0, 0, 0.08) !important;
 	}
 
 	/* Icon: high-chroma topic focal point */
