@@ -11,7 +11,7 @@
 import type * as _authHelpers from "../_authHelpers.js";
 import type * as _orgHash from "../_orgHash.js";
 import type * as _orgKey from "../_orgKey.js";
-import type * as _pii from "../_pii.js";
+import type * as _orgKeyUnseal from "../_orgKeyUnseal.js";
 import type * as _rateLimit from "../_rateLimit.js";
 import type * as analytics from "../analytics.js";
 import type * as authOps from "../authOps.js";
@@ -59,7 +59,7 @@ declare const fullApi: ApiFromModules<{
   _authHelpers: typeof _authHelpers;
   _orgHash: typeof _orgHash;
   _orgKey: typeof _orgKey;
-  _pii: typeof _pii;
+  _orgKeyUnseal: typeof _orgKeyUnseal;
   _rateLimit: typeof _rateLimit;
   analytics: typeof analytics;
   authOps: typeof authOps;
