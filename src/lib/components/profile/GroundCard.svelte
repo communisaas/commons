@@ -88,8 +88,7 @@
 		</div>
 	{:else}
 		<div
-			class="rounded-xl border border-slate-200/60 bg-white/80 p-5 backdrop-blur-sm"
-			style="box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.6), 0 1px 2px 0 rgba(0,0,0,0.05)"
+			class="rounded-md border border-slate-200/50 bg-white/70 p-4"
 		>
 			<div class="animate-pulse">
 				<!-- "Your ground" header -->
@@ -135,8 +134,7 @@
 		</div>
 	{:else}
 		<div
-			class="rounded-xl border border-slate-200/60 bg-white/80 p-5 backdrop-blur-sm"
-			style="box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.6), 0 1px 2px 0 rgba(0,0,0,0.05)"
+			class="rounded-md border border-slate-200/50 bg-white/70 p-4"
 		>
 			<span class="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
 				Your ground
@@ -201,8 +199,7 @@
 		{/if}
 	{:else}
 		<div
-			class="rounded-xl border border-slate-200/60 bg-white/80 p-5 backdrop-blur-sm"
-			style="box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.6), 0 1px 2px 0 rgba(0,0,0,0.05)"
+			class="rounded-md border border-slate-200/50 bg-white/70 p-4"
 		>
 			<span class="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
 				Your ground

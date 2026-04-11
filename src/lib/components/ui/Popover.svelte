@@ -235,7 +235,7 @@
 			bind:this={popoverElement}
 			{id}
 			role="tooltip"
-			class="z-[100] rounded-xl border border-slate-200 bg-white shadow-xl"
+			class="z-[100] rounded-md border border-slate-200 bg-white shadow-md"
 			transition:fade={{ duration: 200 }}
 			style="position: fixed; isolation: isolate;"
 			onmouseenter={handleMouseEnter}

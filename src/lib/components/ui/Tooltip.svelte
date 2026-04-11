@@ -267,8 +267,8 @@
 
 			<div
 				bind:this={tooltipElement}
-				class="fixed z-[100] min-w-[12rem] whitespace-normal rounded-lg bg-slate-800 px-3 py-2 text-sm
-                       text-white shadow-lg
+				class="fixed z-[100] min-w-[12rem] whitespace-normal rounded bg-slate-800 px-2.5 py-1.5 text-sm
+                       text-white shadow-md
                        {show ? 'opacity-100' : 'pointer-events-none opacity-0'}
                        {isPositioned ? 'transition-opacity duration-150' : 'transition-none'}"
 				style="top: 0; left: 0;"

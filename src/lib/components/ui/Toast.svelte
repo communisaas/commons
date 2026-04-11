@@ -82,7 +82,7 @@
 
 {#if visible}
 	<div
-		class="flex items-start gap-3 rounded-lg border p-4 shadow-sm {config.bgColor} {config.borderColor}"
+		class="flex items-start gap-3 rounded-md border p-3 {config.bgColor} {config.borderColor}"
 		transition:fly={{ y: -20, duration: 200 }}
 	>
 		<IconComponent class="h-5 w-5 flex-shrink-0 {config.iconColor}" />
@@ -101,7 +101,7 @@
 		{#if dismissible}
 			<button
 				type="button"
-				class="flex-shrink-0 rounded-md p-1 hover:bg-black/5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+				class="flex-shrink-0 p-1 hover:bg-black/5 focus:outline-none"
 				onclick={dismiss}
 			>
 				<X class="h-4 w-4 {config.iconColor}" />

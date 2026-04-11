@@ -34,7 +34,7 @@
 	>
 		<div class="relative">
 			<div
-				class="whitespace-nowrap rounded-lg bg-gray-900 py-2 pl-2 pr-3 text-xs font-medium leading-none text-white shadow-[0_10px_30px_rgba(0,0,0,0.3)]"
+				class="whitespace-nowrap rounded bg-gray-900 px-2 py-1.5 text-xs font-medium leading-none text-white shadow-md"
 			>
 				{content}
 			</div>

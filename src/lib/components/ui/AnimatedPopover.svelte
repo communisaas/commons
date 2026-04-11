@@ -280,7 +280,7 @@
 			aria-modal="false"
 			tabindex="0"
 		>
-			<div class="popover-card whitespace-normal rounded-lg border border-gray-200 bg-white shadow-lg">
+			<div class="popover-card whitespace-normal rounded-md border border-gray-200 bg-white shadow-md">
 				<div class="px-3 py-2 text-sm">
 					{#if children}
 						{@render children({ open })}
