@@ -83,110 +83,245 @@
 	}
 </script>
 
-<div class="org-landing">
-	<div class="org-landing__inner">
-		<h1 class="org-landing__title">Organizations</h1>
-		<p class="org-landing__sub">
-			Run campaigns. Track verified action. Deliver proof to decision-makers.
-		</p>
+<svelte:head>
+	<title>Organizations | Commons</title>
+	<meta name="description" content="Verified advocacy infrastructure. Deliver cryptographic proof to decision-makers." />
+</svelte:head>
 
-		{#if orgs.length > 0}
-			<!-- Org list for members -->
-			<div class="org-landing__list">
+<div class="org-page">
+	<a href="/" class="back-link">&larr; commons.email</a>
+
+	{#if orgs.length > 0}
+		<!-- ═══ RETURNING USER ═══ -->
+		<div class="org-page__inner">
+			<h1 class="page-heading">Your organizations</h1>
+
+			<div class="org-list">
 				{#each orgs as org}
-					<a href="/org/{org.orgSlug}" class="org-landing__card">
+					<a href="/org/{org.orgSlug}" class="org-card">
 						{#if org.orgAvatar}
-							<img src={org.orgAvatar} alt="" class="org-landing__avatar" />
+							<img src={org.orgAvatar} alt="" class="org-card__avatar" />
 						{:else}
-							<div class="org-landing__avatar org-landing__avatar--fallback">
+							<div class="org-card__avatar org-card__avatar--fallback">
 								{org.orgName.charAt(0).toUpperCase()}
 							</div>
 						{/if}
-						<div class="org-landing__card-info">
-							<span class="org-landing__card-name">{org.orgName}</span>
-							<span class="org-landing__card-meta">
+						<div class="org-card__info">
+							<span class="org-card__name">{org.orgName}</span>
+							<span class="org-card__meta">
 								{org.role}{#if org.activeCampaignCount > 0}
 									&middot; {org.activeCampaignCount} active
 								{/if}
 							</span>
 						</div>
-						<span class="org-landing__arrow" aria-hidden="true">&rarr;</span>
+						<span class="org-card__arrow" aria-hidden="true">&rarr;</span>
 					</a>
 				{/each}
 			</div>
 
-			<!-- Create another -->
 			{#if showCreate}
-				<div class="org-create" style="margin-top: 1.5rem;">
-					<form class="org-create__form" onsubmit={(e) => { e.preventDefault(); handleCreate(); }}>
-						<label class="org-create__label">
-							<span class="org-create__label-text">Name</span>
+				<form class="create-form" onsubmit={(e) => { e.preventDefault(); handleCreate(); }}>
+					<label class="create-form__label">
+						<span class="create-form__label-text">Name</span>
+						<input
+							type="text"
+							class="create-form__input"
+							placeholder="Acme Coalition"
+							value={orgName}
+							oninput={handleNameInput}
+							maxlength="100"
+							required
+						/>
+					</label>
+					<label class="create-form__label">
+						<span class="create-form__label-text">Slug</span>
+						<div class="create-form__slug-row">
+							<span class="create-form__slug-prefix">/org/</span>
 							<input
 								type="text"
-								class="org-create__input"
-								placeholder="Acme Coalition"
-								value={orgName}
-								oninput={handleNameInput}
-								maxlength="100"
+								class="create-form__input create-form__input--slug"
+								placeholder="acme-coalition"
+								value={orgSlug}
+								oninput={handleSlugInput}
+								maxlength="48"
 								required
 							/>
-						</label>
-						<label class="org-create__label">
-							<span class="org-create__label-text">Slug</span>
-							<div class="org-create__slug-row">
-								<span class="org-create__slug-prefix">/org/</span>
-								<input
-									type="text"
-									class="org-create__input org-create__input--slug"
-									placeholder="acme-coalition"
-									value={orgSlug}
-									oninput={handleSlugInput}
-									maxlength="48"
-									required
-								/>
-							</div>
-						</label>
-						{#if errorMsg}
-							<p class="org-create__error">{errorMsg}</p>
-						{/if}
-						<div class="org-create__actions">
-							<button type="button" class="org-create__cancel" onclick={() => { showCreate = false; }}>Cancel</button>
-							<button type="submit" class="org-landing__cta" disabled={submitting || !orgName.trim() || !orgSlug.trim()}>
-								{submitting ? 'Creating…' : 'Create'}
-							</button>
 						</div>
-					</form>
-				</div>
+					</label>
+					{#if errorMsg}
+						<p class="create-form__error">{errorMsg}</p>
+					{/if}
+					<div class="create-form__actions">
+						<button type="button" class="create-form__cancel" onclick={() => { showCreate = false; }}>Cancel</button>
+						<button type="submit" class="cta" disabled={submitting || !orgName.trim() || !orgSlug.trim()}>
+							{submitting ? 'Creating...' : 'Create'}
+						</button>
+					</div>
+				</form>
 			{:else}
-				<button class="org-landing__create-link" onclick={openCreate}>
+				<button class="create-link" onclick={openCreate}>
 					Create new organization
 				</button>
 			{/if}
-		{:else if user}
-			<!-- Authenticated but no orgs -->
-			{#if showCreate}
-				<div class="org-create">
-					<form class="org-create__form" onsubmit={(e) => { e.preventDefault(); handleCreate(); }}>
-						<label class="org-create__label">
-							<span class="org-create__label-text">Name</span>
+		</div>
+	{:else}
+		<!-- ═══ NARRATIVE ═══ -->
+		<div class="org-page__narrative">
+
+			<!-- Act 1: The Vision — what becomes possible -->
+			<p class="narrative__opening">
+				What a decision-maker receives from your organization:
+			</p>
+
+			<figure class="specimen">
+				<div class="specimen__row">
+					<span class="specimen__label">Campaign</span>
+					<span class="specimen__value">Aquifer Monitoring Expansion — Budget Allocation</span>
+				</div>
+				<div class="specimen__row">
+					<span class="specimen__label">District</span>
+					<span class="specimen__value">NV Water District 7</span>
+				</div>
+
+				<div class="specimen__divider"></div>
+
+				<div class="specimen__count-block">
+					<span class="specimen__count">248</span>
+					<span class="specimen__count-label">verified constituents in your district</span>
+				</div>
+
+				<div class="specimen__evidence">
+					<div class="specimen__evidence-row">
+						<span class="specimen__evidence-label">Identity</span>
+						<span class="specimen__evidence-detail">
+							<strong>156</strong> government ID verified
+							<span class="specimen__sep" aria-hidden="true">&middot;</span>
+							<strong>92</strong> address-matched
+						</span>
+					</div>
+					<div class="specimen__evidence-row">
+						<span class="specimen__evidence-label">Messages</span>
+						<span class="specimen__evidence-detail">
+							<strong>196</strong> individually composed
+							<span class="specimen__sep" aria-hidden="true">&middot;</span>
+							<strong>52</strong> shared statements
+						</span>
+					</div>
+				</div>
+
+				<div class="specimen__divider"></div>
+
+				<div class="specimen__geography">
+					Across <strong>14</strong> communities in the district
+				</div>
+				<div class="specimen__period">
+					Submissions <strong>Feb 12 – Mar 4, 2026</strong>
+				</div>
+				<div class="specimen__screening">
+					One submission per person &middot; duplicates removed
+				</div>
+
+				<div class="specimen__attestation">
+					Cryptographic audit trail available &middot; independently verifiable
+				</div>
+			</figure>
+
+			<div class="narrative__context">
+				<p>
+					Every claim is independently verifiable — the decision-maker's office
+					can audit the proof without trusting your organization or the platform.
+				</p>
+				<p class="narrative__context-emphasis">
+					No other advocacy platform produces this.
+				</p>
+			</div>
+
+			<hr class="section-rule" />
+
+			<!-- Act 2: The System — how it works -->
+			<p class="narrative__mechanism">
+				Import supporters from any platform. Launch a campaign targeting officials across
+				24 boundary types — Congress, state legislatures, county boards, school districts,
+				water districts, transit authorities. Constituents take verified action.
+				The proof assembles itself.
+			</p>
+
+			<div class="narrative__capabilities">
+				<p>
+					<strong>Campaigns</strong> with verification packets that assemble automatically — district-level
+					counts, engagement tier distributions, coordination integrity scores.
+					<strong>Email and SMS</strong> at scale with verification context.
+					A/B testing. Segmentation by tier and district.
+					<strong>Patch-through calling</strong> with verified caller district.
+				</p>
+				<p>
+					<strong>Automation</strong> triggered by verification events — when a supporter
+					verifies, the system responds. <strong>Legislative monitoring</strong> personalized to
+					your supporters' verified districts. <strong>Coalition networks</strong> that
+					aggregate proof across organizations.
+				</p>
+			</div>
+
+			<hr class="section-rule" />
+
+			<!-- Act 3: Access — pricing + threshold -->
+			<div class="narrative__pricing">
+				<span class="section-label">Pricing</span>
+
+				<div class="pricing-grid">
+					<div class="pricing-row">
+						<span class="pricing-name">Free</span>
+						<span class="pricing-price">$0</span>
+						<span class="pricing-limits">100 verified actions &middot; 1,000 emails &middot; 2 seats</span>
+					</div>
+					<div class="pricing-row">
+						<span class="pricing-name">Starter</span>
+						<span class="pricing-price">$10<span class="pricing-mo">/mo</span></span>
+						<span class="pricing-limits">1,000 verified actions &middot; 20,000 emails &middot; 5 seats</span>
+					</div>
+					<div class="pricing-row">
+						<span class="pricing-name">Organization</span>
+						<span class="pricing-price">$75<span class="pricing-mo">/mo</span></span>
+						<span class="pricing-limits">5,000 verified actions &middot; 100,000 emails &middot; 10 seats</span>
+					</div>
+					<div class="pricing-row">
+						<span class="pricing-name">Coalition</span>
+						<span class="pricing-price">$200<span class="pricing-mo">/mo</span></span>
+						<span class="pricing-limits">10,000 verified actions &middot; 250,000 emails &middot; 25 seats</span>
+					</div>
+				</div>
+
+				<p class="pricing-note">
+					Individuals are always free. Verification is the upgrade path, not payment.
+				</p>
+			</div>
+
+			<hr class="section-rule" />
+
+			<!-- Threshold -->
+			<div class="narrative__threshold">
+				{#if user}
+					<form class="create-form" onsubmit={(e) => { e.preventDefault(); handleCreate(); }}>
+						<label class="create-form__label">
+							<span class="create-form__label-text">Name</span>
 							<input
 								type="text"
-								class="org-create__input"
-								placeholder="Acme Coalition"
+								class="create-form__input"
+								placeholder="Your organization"
 								value={orgName}
 								oninput={handleNameInput}
 								maxlength="100"
 								required
 							/>
 						</label>
-						<label class="org-create__label">
-							<span class="org-create__label-text">Slug</span>
-							<div class="org-create__slug-row">
-								<span class="org-create__slug-prefix">/org/</span>
+						<label class="create-form__label">
+							<span class="create-form__label-text">Slug</span>
+							<div class="create-form__slug-row">
+								<span class="create-form__slug-prefix">/org/</span>
 								<input
 									type="text"
-									class="org-create__input org-create__input--slug"
-									placeholder="acme-coalition"
+									class="create-form__input create-form__input--slug"
+									placeholder="your-organization"
 									value={orgSlug}
 									oninput={handleSlugInput}
 									maxlength="48"
@@ -195,101 +330,115 @@
 							</div>
 						</label>
 						{#if errorMsg}
-							<p class="org-create__error">{errorMsg}</p>
+							<p class="create-form__error">{errorMsg}</p>
 						{/if}
-						<div class="org-create__actions">
-							<button type="button" class="org-create__cancel" onclick={() => { showCreate = false; }}>Cancel</button>
-							<button type="submit" class="org-landing__cta" disabled={submitting || !orgName.trim() || !orgSlug.trim()}>
-								{submitting ? 'Creating…' : 'Create'}
-							</button>
-						</div>
+						<button
+							type="submit"
+							class="cta cta--full"
+							disabled={submitting || !orgName.trim() || !orgSlug.trim()}
+						>
+							{submitting ? 'Creating...' : 'Create organization'}
+						</button>
 					</form>
-				</div>
-			{:else}
-				<div class="org-landing__empty">
-					<p class="org-landing__empty-text">
-						No organizations yet.
-					</p>
-					<button class="org-landing__cta" onclick={openCreate}>
-						Create one
+				{:else}
+					<button class="cta" onclick={handleSignIn}>
+						Sign in to create your organization
 					</button>
-				</div>
-			{/if}
-		{:else}
-			<!-- Not signed in -->
-			<div class="org-landing__empty">
-				<button class="org-landing__cta" onclick={handleSignIn}>
-					Sign in to get started
-				</button>
+				{/if}
 			</div>
-		{/if}
-	</div>
+		</div>
+	{/if}
 </div>
 
 <style>
-	.org-landing {
-		min-height: 60vh;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 3rem 1.5rem;
+	/* ═══════════════════════════════════════════
+	   ORG PAGE — Document Layout
+	   ═══════════════════════════════════════════ */
+	.org-page {
+		min-height: 100vh;
+		padding: 1.5rem 1.5rem 4rem;
 	}
 
-	.org-landing__inner {
+	@media (min-width: 640px) {
+		.org-page {
+			padding: 2rem 2rem 5rem;
+		}
+	}
+
+	@media (min-width: 1024px) {
+		.org-page {
+			padding: 2.5rem 3rem 6rem;
+		}
+	}
+
+	/* ═══ BACK LINK ═══ */
+	.back-link {
+		display: inline-block;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		color: oklch(0.52 0.02 250);
+		text-decoration: none;
+		margin-bottom: 3rem;
+		transition: color 200ms ease-out;
+	}
+
+	.back-link:hover {
+		color: oklch(0.35 0.06 180);
+	}
+
+	@media (min-width: 640px) {
+		.back-link {
+			margin-bottom: 4rem;
+		}
+	}
+
+	/* ═══ RETURNING USER VIEW ═══ */
+	.org-page__inner {
 		max-width: 28rem;
 		width: 100%;
-		text-align: center;
 	}
 
-	.org-landing__title {
+	.page-heading {
 		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 1.5rem;
+		font-size: clamp(1.25rem, 1.188rem + 0.31vw, 1.5rem);
 		font-weight: 700;
 		color: oklch(0.2 0.03 250);
-		margin: 0 0 0.5rem;
+		margin: 0 0 1.5rem;
 	}
 
-	.org-landing__sub {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.9375rem;
-		color: oklch(0.5 0.02 250);
-		margin: 0 0 2rem;
-		line-height: 1.5;
-	}
-
-	.org-landing__list {
+	.org-list {
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
-		text-align: left;
 	}
 
-	.org-landing__card {
+	.org-card {
 		display: flex;
 		align-items: center;
 		gap: 0.75rem;
 		padding: 0.875rem 1rem;
-		border-radius: 12px;
+		border-radius: 6px;
 		border: 1px solid oklch(0.92 0.01 250);
 		background: oklch(0.99 0.003 250);
 		text-decoration: none;
-		transition: all 150ms ease-out;
+		transition: border-color 200ms ease-out, background 200ms ease-out;
 	}
 
-	.org-landing__card:hover {
+	.org-card:hover {
 		border-color: oklch(0.8 0.04 180);
 		background: oklch(0.98 0.008 180 / 0.5);
 	}
 
-	.org-landing__avatar {
+	.org-card__avatar {
 		width: 2rem;
 		height: 2rem;
-		border-radius: 7px;
+		border-radius: 6px;
 		object-fit: cover;
 		flex-shrink: 0;
 	}
 
-	.org-landing__avatar--fallback {
+	.org-card__avatar--fallback {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -300,7 +449,7 @@
 		font-weight: 600;
 	}
 
-	.org-landing__card-info {
+	.org-card__info {
 		display: flex;
 		flex-direction: column;
 		gap: 1px;
@@ -308,70 +457,33 @@
 		flex: 1;
 	}
 
-	.org-landing__card-name {
+	.org-card__name {
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.875rem;
 		font-weight: 600;
 		color: oklch(0.25 0.02 250);
 	}
 
-	.org-landing__card-meta {
+	.org-card__meta {
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.75rem;
 		color: oklch(0.5 0.02 250);
 		text-transform: capitalize;
 	}
 
-	.org-landing__arrow {
+	.org-card__arrow {
 		font-size: 0.875rem;
 		color: oklch(0.6 0.02 250);
 		flex-shrink: 0;
-		transition: transform 150ms ease-out;
+		transition: transform 150ms ease-out, color 150ms ease-out;
 	}
 
-	.org-landing__card:hover .org-landing__arrow {
+	.org-card:hover .org-card__arrow {
 		transform: translateX(2px);
 		color: oklch(0.45 0.08 180);
 	}
 
-	.org-landing__empty {
-		padding: 2rem 0;
-	}
-
-	.org-landing__empty-text {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.875rem;
-		color: oklch(0.5 0.02 250);
-		margin: 0 0 1.25rem;
-	}
-
-	.org-landing__cta {
-		display: inline-block;
-		padding: 0.625rem 1.25rem;
-		border-radius: 8px;
-		border: 1px solid oklch(0.8 0.04 180);
-		background: oklch(0.97 0.01 180);
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.875rem;
-		font-weight: 500;
-		color: oklch(0.35 0.1 180);
-		text-decoration: none;
-		cursor: pointer;
-		transition: all 150ms ease-out;
-	}
-
-	.org-landing__cta:hover {
-		background: oklch(0.94 0.03 180);
-		border-color: oklch(0.7 0.06 180);
-	}
-
-	.org-landing__cta:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-
-	/* Create link — subtle affordance below org list */
-	.org-landing__create-link {
+	.create-link {
 		display: inline-block;
 		margin-top: 1.25rem;
 		padding: 0;
@@ -385,43 +497,408 @@
 		transition: color 150ms ease-out;
 	}
 
-	.org-landing__create-link:hover {
+	.create-link:hover {
 		color: oklch(0.38 0.1 180);
 	}
 
-	/* Creation form */
-	.org-create {
-		text-align: left;
+	/* ═══════════════════════════════════════════
+	   NARRATIVE VIEW
+	   ═══════════════════════════════════════════ */
+	.org-page__narrative {
+		max-width: 38rem;
+		width: 100%;
 	}
 
-	.org-create__form {
+	/* ═══ OPENING ═══ */
+	.narrative__opening {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: clamp(1.125rem, 1.063rem + 0.31vw, 1.375rem);
+		font-weight: 500;
+		line-height: 1.5;
+		color: oklch(0.35 0.02 250);
+		margin: 0 0 2rem;
+	}
+
+	/* ═══════════════════════════════════════════
+	   SPECIMEN — Verification Packet
+	   ═══════════════════════════════════════════ */
+	.specimen {
+		margin: 0;
+		padding: 1.25rem 1.25rem;
+		background: oklch(0.995 0.003 155 / 0.85);
+		border: 1px solid oklch(0.9 0.012 155 / 0.4);
+		border-radius: 4px;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.75rem;
+		line-height: 1.65;
+		color: oklch(0.32 0.02 250);
+	}
+
+	@media (min-width: 640px) {
+		.specimen {
+			padding: 1.5rem 1.75rem;
+			font-size: 0.8125rem;
+		}
+	}
+
+	.specimen__row {
 		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-		padding: 1.25rem;
-		border-radius: 12px;
-		border: 1px solid oklch(0.88 0.04 180);
-		background: oklch(0.985 0.005 180 / 0.5);
+		gap: 0.75rem;
+		margin-bottom: 0.25rem;
 	}
 
-	.org-create__label {
+	@media (max-width: 479px) {
+		.specimen__row {
+			flex-direction: column;
+			gap: 0.125rem;
+		}
+	}
+
+	.specimen__label {
+		color: oklch(0.55 0.015 250);
+		min-width: 5.5rem;
+		flex-shrink: 0;
+	}
+
+	.specimen__label--block {
+		display: block;
+		margin-bottom: 0.375rem;
+		min-width: unset;
+	}
+
+	.specimen__value {
+		color: oklch(0.22 0.02 250);
+		font-weight: 500;
+	}
+
+	.specimen__divider {
+		height: 1px;
+		background: oklch(0.88 0.01 155 / 0.5);
+		margin: 0.875rem 0;
+	}
+
+	.specimen__count-block {
+		display: flex;
+		align-items: baseline;
+		gap: 0.625rem;
+		margin-bottom: 0.875rem;
+	}
+
+	.specimen__count {
+		font-size: 1.625rem;
+		font-weight: 700;
+		color: oklch(0.18 0.03 250);
+		line-height: 1;
+	}
+
+	@media (min-width: 640px) {
+		.specimen__count {
+			font-size: 2rem;
+		}
+	}
+
+	.specimen__count-label {
+		font-size: 0.6875rem;
+		color: oklch(0.5 0.015 250);
+		font-weight: 400;
+	}
+
+	/* Evidence rows — identity + authorship */
+	.specimen__evidence {
 		display: flex;
 		flex-direction: column;
 		gap: 0.375rem;
 	}
 
-	.org-create__label-text {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.75rem;
+	.specimen__evidence-row {
+		display: flex;
+		gap: 0.75rem;
+		font-size: 0.6875rem;
+		line-height: 1.6;
+	}
+
+	@media (max-width: 479px) {
+		.specimen__evidence-row {
+			flex-direction: column;
+			gap: 0.125rem;
+		}
+	}
+
+	@media (min-width: 640px) {
+		.specimen__evidence-row {
+			font-size: 0.75rem;
+		}
+	}
+
+	.specimen__evidence-label {
+		color: oklch(0.52 0.015 250);
+		min-width: 4.5rem;
+		flex-shrink: 0;
+	}
+
+	@media (min-width: 640px) {
+		.specimen__evidence-label {
+			min-width: 5rem;
+		}
+	}
+
+	.specimen__evidence-detail {
+		color: oklch(0.38 0.015 250);
+	}
+
+	.specimen__evidence-detail strong {
+		color: oklch(0.22 0.02 250);
 		font-weight: 600;
-		color: oklch(0.4 0.02 250);
+	}
+
+	.specimen__sep {
+		margin: 0 0.3rem;
+		color: oklch(0.72 0.01 250);
+	}
+
+	/* Geography, period, screening — compact factual lines */
+	.specimen__geography,
+	.specimen__period,
+	.specimen__screening {
+		font-size: 0.6875rem;
+		color: oklch(0.48 0.015 250);
+		line-height: 1.7;
+	}
+
+	@media (min-width: 640px) {
+		.specimen__geography,
+		.specimen__period,
+		.specimen__screening {
+			font-size: 0.75rem;
+		}
+	}
+
+	.specimen__geography strong,
+	.specimen__period strong {
+		color: oklch(0.25 0.02 250);
+		font-weight: 600;
+	}
+
+	.specimen__screening {
+		color: oklch(0.52 0.015 250);
+	}
+
+	.specimen__attestation {
+		margin-top: 0.625rem;
+		font-size: 0.625rem;
+		color: oklch(0.52 0.02 155);
+		letter-spacing: 0.015em;
+	}
+
+	@media (min-width: 640px) {
+		.specimen__attestation {
+			font-size: 0.6875rem;
+		}
+	}
+
+	/* ═══ CONTEXT ═══ */
+	.narrative__context {
+		margin-top: 2rem;
+	}
+
+	.narrative__context p {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.9375rem;
+		line-height: 1.65;
+		color: oklch(0.38 0.02 250);
+		margin: 0 0 0.625rem;
+	}
+
+	.narrative__context-emphasis {
+		font-weight: 600;
+		color: oklch(0.22 0.025 250) !important;
+		margin-bottom: 0 !important;
+	}
+
+	/* ═══ SECTION RULE ═══ */
+	.section-rule {
+		border: none;
+		border-top: 1px dotted oklch(0.82 0.01 60 / 0.6);
+		margin: 2.5rem 0;
+	}
+
+	@media (min-width: 640px) {
+		.section-rule {
+			margin: 3rem 0;
+		}
+	}
+
+	/* ═══ MECHANISM ═══ */
+	.narrative__mechanism {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.9375rem;
+		line-height: 1.75;
+		color: oklch(0.38 0.02 250);
+		margin: 0 0 1.75rem;
+	}
+
+	/* ═══ CAPABILITIES ═══ */
+	.narrative__capabilities {
+		display: flex;
+		flex-direction: column;
+		gap: 1.125rem;
+	}
+
+	.narrative__capabilities p {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.9375rem;
+		line-height: 1.75;
+		color: oklch(0.42 0.02 250);
+		margin: 0;
+	}
+
+	.narrative__capabilities strong {
+		color: oklch(0.22 0.02 250);
+		font-weight: 600;
+	}
+
+	/* ═══ PRICING ═══ */
+	.section-label {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.6875rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		color: oklch(0.55 0.02 250);
+	}
+
+	.pricing-grid {
+		margin-top: 1rem;
+	}
+
+	.pricing-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.375rem 0.875rem;
+		padding: 0.6875rem 0;
+		border-bottom: 1px solid oklch(0.91 0.006 250 / 0.5);
+	}
+
+	.pricing-row:first-child {
+		border-top: 1px solid oklch(0.91 0.006 250 / 0.5);
+	}
+
+	.pricing-name {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		font-weight: 600;
+		color: oklch(0.25 0.02 250);
+	}
+
+	.pricing-price {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.8125rem;
+		font-weight: 700;
+		color: oklch(0.2 0.03 250);
+	}
+
+	.pricing-mo {
+		font-weight: 400;
+		font-size: 0.6875rem;
+		color: oklch(0.55 0.015 250);
+	}
+
+	.pricing-limits {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		color: oklch(0.5 0.015 250);
+		width: 100%;
+	}
+
+	@media (min-width: 640px) {
+		.pricing-row {
+			display: grid;
+			grid-template-columns: 7rem 4rem 1fr;
+			gap: 0.75rem;
+		}
+
+		.pricing-limits {
+			width: auto;
+			font-size: 0.75rem;
+		}
+	}
+
+	.pricing-note {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		color: oklch(0.5 0.02 250);
+		margin: 1.25rem 0 0;
+		line-height: 1.5;
+	}
+
+	/* ═══ THRESHOLD ═══ */
+	.narrative__threshold {
+		/* Terminal CTA section — no extra chrome */
+	}
+
+	/* ═══════════════════════════════════════════
+	   SHARED: CTA + FORM
+	   ═══════════════════════════════════════════ */
+	.cta {
+		display: inline-block;
+		padding: 0.625rem 1.25rem;
+		border-radius: 6px;
+		border: 1px solid oklch(0.8 0.04 180);
+		background: oklch(0.97 0.01 180);
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: oklch(0.35 0.1 180);
+		cursor: pointer;
+		transition: background 150ms ease-out, border-color 150ms ease-out;
+	}
+
+	.cta:hover {
+		background: oklch(0.94 0.03 180);
+		border-color: oklch(0.7 0.06 180);
+	}
+
+	.cta:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.cta--full {
+		display: block;
+		width: 100%;
+		text-align: center;
+		margin-top: 0.5rem;
+	}
+
+	.create-form {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		padding: 1.25rem;
+		border-radius: 6px;
+		border: 1px solid oklch(0.88 0.015 180 / 0.4);
+		background: oklch(0.985 0.005 180 / 0.5);
+	}
+
+	.create-form__label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+	}
+
+	.create-form__label-text {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.6875rem;
+		font-weight: 600;
+		color: oklch(0.42 0.02 250);
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 	}
 
-	.org-create__input {
+	.create-form__input {
 		padding: 0.5rem 0.75rem;
-		border-radius: 8px;
+		border-radius: 6px;
 		border: 1px solid oklch(0.88 0.02 250);
 		background: white;
 		font-family: 'Satoshi', system-ui, sans-serif;
@@ -431,53 +908,53 @@
 		transition: border-color 150ms ease-out;
 	}
 
-	.org-create__input:focus {
+	.create-form__input:focus {
 		border-color: oklch(0.65 0.1 180);
 	}
 
-	.org-create__input::placeholder {
+	.create-form__input::placeholder {
 		color: oklch(0.7 0.01 250);
 	}
 
-	.org-create__slug-row {
+	.create-form__slug-row {
 		display: flex;
 		align-items: center;
-		gap: 0;
 	}
 
-	.org-create__slug-prefix {
+	.create-form__slug-prefix {
 		padding: 0.5rem 0 0.5rem 0.75rem;
-		border-radius: 8px 0 0 8px;
+		border-radius: 6px 0 0 6px;
 		border: 1px solid oklch(0.88 0.02 250);
 		border-right: none;
 		background: oklch(0.96 0.005 250);
-		font-family: 'Satoshi', system-ui, sans-serif;
+		font-family: 'JetBrains Mono', monospace;
 		font-size: 0.8125rem;
 		color: oklch(0.5 0.02 250);
 		user-select: none;
 	}
 
-	.org-create__input--slug {
-		border-radius: 0 8px 8px 0;
+	.create-form__input--slug {
+		border-radius: 0 6px 6px 0;
 		flex: 1;
 		min-width: 0;
+		font-family: 'JetBrains Mono', monospace;
 	}
 
-	.org-create__error {
+	.create-form__error {
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.8125rem;
 		color: oklch(0.5 0.15 25);
 		margin: 0;
 	}
 
-	.org-create__actions {
+	.create-form__actions {
 		display: flex;
 		justify-content: flex-end;
 		gap: 0.75rem;
 		margin-top: 0.25rem;
 	}
 
-	.org-create__cancel {
+	.create-form__cancel {
 		padding: 0.5rem 1rem;
 		border: none;
 		background: transparent;
@@ -489,7 +966,7 @@
 		transition: color 150ms ease-out;
 	}
 
-	.org-create__cancel:hover {
+	.create-form__cancel:hover {
 		color: oklch(0.3 0.02 250);
 	}
 </style>
