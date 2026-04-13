@@ -507,7 +507,8 @@ export default defineSchema({
     slotCount: v.optional(v.number()),
   })
     .index("by_userId_expiresAt", ["userId", "expiresAt"])
-    .index("by_congressionalDistrict", ["congressionalDistrict"]),
+    .index("by_congressionalDistrict", ["congressionalDistrict"])
+    .index("by_credentialHash", ["credentialHash"]),
 
   // ===========================================================================
   // RATE LIMITS
@@ -1169,6 +1170,11 @@ export default defineSchema({
     engagementTier: v.number(), // 0-4
     districtHash: v.optional(v.string()),
     messageHash: v.optional(v.string()),
+
+    // Identity verification level at time of action (0-5, from users.trustTier)
+    trustTier: v.optional(v.number()),
+    // How the message was composed: 'individual' | 'shared' | 'edited'
+    compositionMode: v.optional(v.string()),
 
     // Agentic delegation
     delegated: v.boolean(),

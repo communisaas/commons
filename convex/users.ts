@@ -548,6 +548,39 @@ export const getIdentityForEngagement = query({
   },
 });
 
+/**
+ * Resolve a credential hash to verification data for the /v/[hash] certificate page.
+ * Returns user trust tier, verification method, districts, and issuance data.
+ * No PII returned — only verification status and district codes.
+ */
+export const resolveCredentialHash = query({
+  args: { credentialHash: v.string() },
+  handler: async (ctx, { credentialHash }) => {
+    const credential = await ctx.db
+      .query("districtCredentials")
+      .withIndex("by_credentialHash", (idx) => idx.eq("credentialHash", credentialHash))
+      .first();
+
+    if (!credential) return null;
+    if (credential.revokedAt) return null;
+    if (credential.expiresAt < Date.now()) return null;
+
+    const user = await ctx.db.get(credential.userId);
+    if (!user) return null;
+
+    return {
+      trustTier: user.trustTier,
+      verificationMethod: credential.verificationMethod,
+      congressionalDistrict: credential.congressionalDistrict || null,
+      stateSenateDistrict: credential.stateSenateDistrict ?? null,
+      stateAssemblyDistrict: credential.stateAssemblyDistrict ?? null,
+      issuedAt: credential.issuedAt,
+      expiresAt: credential.expiresAt,
+      hasDistrictCommitment: !!credential.districtCommitment,
+    };
+  },
+});
+
 // =============================================================================
 // ENCRYPTED DELIVERY DATA (Identity blobs)
 // =============================================================================

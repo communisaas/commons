@@ -1,4 +1,4 @@
-import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
+import { query, mutation, action, internalMutation, internalQuery, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole, loadOrg, requireAuth } from "./_authHelpers";
@@ -654,6 +654,36 @@ export const getActiveCampaign = internalQuery({
 });
 
 /**
+ * Internal query: Resolve a user's trustTier and engagement data by email.
+ * Returns trustTier (0-5) and engagementTier (0-4) if the email belongs to a registered user.
+ */
+export const getUserTrustTier = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, { email }) => {
+    const normalized = email.toLowerCase().trim();
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_email", (idx) => idx.eq("email", normalized))
+      .first();
+
+    if (!user) return null;
+
+    // Derive engagement tier from user's reputation data
+    // reputationTier is a string: 'new' | 'active' | 'established' | 'veteran' | 'pillar'
+    const tierMap: Record<string, number> = {
+      new: 0, active: 1, established: 2, veteran: 3, pillar: 4
+    };
+    const engagementTier = tierMap[user.reputationTier?.toLowerCase() ?? 'new'] ?? 0;
+
+    return {
+      trustTier: user.trustTier,
+      engagementTier,
+    };
+  },
+});
+
+/**
  * Internal mutation: Find or create a supporter for a campaign submission.
  * Returns the supporter ID and whether it was newly created.
  */
@@ -744,6 +774,8 @@ export const createCampaignAction = internalMutation({
     engagementTier: v.number(),
     districtHash: v.optional(v.string()),
     messageHash: v.optional(v.string()),
+    trustTier: v.optional(v.number()),
+    compositionMode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Deduplicate: one action per supporter per campaign
@@ -772,6 +804,8 @@ export const createCampaignAction = internalMutation({
       engagementTier: args.engagementTier,
       districtHash: args.districtHash,
       messageHash: args.messageHash,
+      trustTier: args.trustTier,
+      compositionMode: args.compositionMode,
       delegated: false,
       sentAt: Date.now(),
     });
@@ -812,6 +846,7 @@ export const submitAction = action({
     message: v.optional(v.string()),
     districtCode: v.optional(v.string()),
     source: v.optional(v.string()),
+    compositionMode: v.optional(v.string()), // 'individual' | 'shared' | 'edited'
   },
   handler: async (ctx, args) => {
     // Validate early
@@ -922,9 +957,16 @@ export const submitAction = action({
       messageHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
     }
 
+    // Resolve trust tier + engagement tier from registered user, fall back to verification heuristics
+    const userData = await ctx.runQuery(
+      internal.campaigns.getUserTrustTier,
+      { email: normalizedEmail },
+    );
+    const trustTier = userData?.trustTier ?? (districtVerified ? 2 : args.postalCode ? 1 : 0);
+    const engagementTier = userData?.engagementTier ?? 0;
+
     // Create campaign action (dedup inside mutation)
     const verified = districtVerified || !!args.postalCode;
-    const engagementTier = districtVerified ? 2 : args.postalCode ? 1 : 0;
 
     const result = await ctx.runMutation(
       internal.campaigns.createCampaignAction,
@@ -935,6 +977,8 @@ export const submitAction = action({
         engagementTier,
         districtHash,
         messageHash,
+        trustTier,
+        compositionMode: args.compositionMode,
       },
     );
 
@@ -1119,6 +1163,407 @@ export const getStats = query({
 });
 
 /**
+ * Raw action data for server-side verification packet computation.
+ * Returns anonymized per-action fields (hashes, tiers, timestamps).
+ * No PII — safe for public query since all fields are hashed or numeric.
+ */
+export const getActionsForPacket = query({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const actions = await ctx.db
+      .query("campaignActions")
+      .withIndex("by_campaignId", (idx) => idx.eq("campaignId", campaignId))
+      .collect();
+
+    return actions.map((a) => ({
+      verified: a.verified,
+      engagementTier: a.engagementTier,
+      districtHash: a.districtHash ?? null,
+      messageHash: a.messageHash ?? null,
+      sentAt: a.sentAt,
+      trustTier: a.trustTier ?? null,
+      compositionMode: a.compositionMode ?? null,
+    }));
+  },
+});
+
+/**
+ * Report preview: returns campaign, targets, and a staffer-legible packet summary.
+ * Used by the report page to show what the decision-maker will receive.
+ */
+export const getReportPreview = query({
+  args: {
+    campaignId: v.id("campaigns"),
+    orgSlug: v.string(),
+  },
+  handler: async (ctx, { campaignId, orgSlug }) => {
+    const { org } = await requireOrgRole(ctx, orgSlug, "editor");
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign || campaign.orgId !== org._id) return null;
+
+    const targets = (campaign.targets as Array<{ name?: string; email: string; title?: string; district?: string }>) ?? [];
+
+    // Compute a lightweight packet summary for the preview
+    const actions = await ctx.db
+      .query("campaignActions")
+      .withIndex("by_campaignId", (idx) => idx.eq("campaignId", campaignId))
+      .collect();
+
+    const verified = actions.filter((a) => a.verified);
+    const districtSet = new Set(
+      verified.filter((a) => a.districtHash).map((a) => a.districtHash!),
+    );
+
+    return {
+      campaign: {
+        _id: campaign._id,
+        title: campaign.title,
+        status: campaign.status,
+        type: campaign.type,
+      },
+      targets: targets.map((t) => ({
+        name: t.name ?? null,
+        email: t.email,
+        title: t.title ?? null,
+        district: t.district ?? null,
+      })),
+      packet: {
+        verified: verified.length,
+        total: actions.length,
+        districtCount: districtSet.size,
+      },
+      // HTML rendering happens server-side via report-template.ts
+      renderedHtml: null,
+    };
+  },
+});
+
+/**
+ * Send a campaign report to selected decision-makers.
+ * Creates campaignDelivery records, deduplicates targets, then schedules
+ * dispatchReportEmails to send via SES immediately.
+ */
+export const sendReport = mutation({
+  args: {
+    campaignId: v.id("campaigns"),
+    orgSlug: v.string(),
+    targetEmails: v.array(v.string()),
+    renderedHtml: v.optional(v.string()), // Pre-rendered report email HTML from server
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.orgId !== org._id) {
+      return { error: "Campaign not found", deliveryCount: 0 };
+    }
+
+    if (campaign.status !== "ACTIVE" && campaign.status !== "PAUSED" && campaign.status !== "COMPLETE") {
+      return { error: "Campaign must be active, paused, or complete to send reports", deliveryCount: 0 };
+    }
+
+    const targets = (campaign.targets as Array<{ name?: string; email: string; title?: string; district?: string }>) ?? [];
+    let deliveryCount = 0;
+    const seen = new Set<string>();
+
+    for (const email of args.targetEmails) {
+      if (seen.has(email)) continue;
+      seen.add(email);
+      const target = targets.find((t) => t.email === email);
+      if (!target) continue;
+
+      // Dedup: skip if already delivered to this target for this campaign
+      const existing = await ctx.db
+        .query("campaignDeliveries")
+        .withIndex("by_campaignId", (q) => q.eq("campaignId", args.campaignId))
+        .filter((q) => q.eq(q.field("targetEmail"), email))
+        .first();
+
+      if (existing && (existing.status === "sent" || existing.status === "delivered" || existing.status === "opened")) {
+        continue; // Already delivered
+      }
+
+      await ctx.db.insert("campaignDeliveries", {
+        campaignId: args.campaignId,
+        targetEmail: email,
+        targetName: target.name ?? email,
+        targetTitle: target.title ?? "",
+        targetDistrict: target.district,
+        status: "queued",
+        packetSnapshot: args.renderedHtml ? { html: args.renderedHtml } : undefined,
+        createdAt: Date.now(),
+      });
+      deliveryCount++;
+    }
+
+    // Schedule actual email dispatch for queued deliveries
+    if (deliveryCount > 0) {
+      await ctx.scheduler.runAfter(0, internal.campaigns.dispatchReportEmails, {
+        campaignId: args.campaignId,
+      });
+    }
+
+    return { error: null, deliveryCount };
+  },
+});
+
+/**
+ * Internal action: Dispatch queued report emails via SES.
+ * Finds all "queued" deliveries for a campaign, sends each via SES,
+ * updates status to "sent" or "failed".
+ */
+export const dispatchReportEmails = internalAction({
+  args: {
+    campaignId: v.id("campaigns"),
+  },
+  handler: async (ctx, args) => {
+    const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
+    const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+    const awsRegion = process.env.AWS_REGION || "us-east-1";
+    const fromEmail = process.env.SES_FROM_EMAIL || "reports@commons.email";
+
+    if (!awsAccessKeyId || !awsSecretAccessKey) {
+      console.error("[dispatchReportEmails] AWS SES credentials not configured — marking deliveries as failed");
+      for (const delivery of deliveries) {
+        await ctx.runMutation(internal.campaigns.updateDeliveryStatus, {
+          deliveryId: delivery._id,
+          status: "failed",
+        });
+      }
+      return;
+    }
+
+    // Get campaign + org for email content
+    const campaign = await ctx.runQuery(internal.campaigns.getCampaignForReport, {
+      campaignId: args.campaignId,
+    });
+    if (!campaign) return;
+
+    // Get queued deliveries
+    const deliveries = await ctx.runQuery(internal.campaigns.getQueuedDeliveries, {
+      campaignId: args.campaignId,
+    });
+    if (deliveries.length === 0) return;
+
+    // Build the report email subject
+    const subject = `${campaign.verifiedActionCount} verified constituents — ${campaign.title}`;
+
+    // Prefer pre-rendered HTML from server (matches preview), fall back to inline template
+    const fallbackHtml = buildReportEmailHtml(campaign);
+
+    for (const delivery of deliveries) {
+      const htmlBody = (delivery as Record<string, any>).packetHtml ?? fallbackHtml;
+
+      try {
+        const success = await sendReportViaSes(
+          delivery.targetEmail,
+          fromEmail,
+          campaign.orgName,
+          subject,
+          htmlBody,
+          awsAccessKeyId,
+          awsSecretAccessKey,
+          awsRegion,
+        );
+
+        await ctx.runMutation(internal.campaigns.updateDeliveryStatus, {
+          deliveryId: delivery._id,
+          status: success ? "sent" : "failed",
+          sentAt: success ? Date.now() : undefined,
+        });
+      } catch (err) {
+        console.error(`[dispatchReportEmails] Failed for ${delivery.targetEmail}:`, err instanceof Error ? err.message : err);
+        await ctx.runMutation(internal.campaigns.updateDeliveryStatus, {
+          deliveryId: delivery._id,
+          status: "failed",
+        });
+      }
+    }
+  },
+});
+
+/** Internal query: get campaign data needed for report emails */
+export const getCampaignForReport = internalQuery({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign) return null;
+    const org = await ctx.db.get(campaign.orgId);
+    return {
+      _id: campaign._id,
+      title: campaign.title,
+      orgName: org?.name ?? org?.slug ?? "Organization",
+      verifiedActionCount: campaign.verifiedActionCount ?? 0,
+      actionCount: campaign.actionCount ?? 0,
+    };
+  },
+});
+
+/** Internal query: get queued deliveries for a campaign */
+export const getQueuedDeliveries = internalQuery({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const deliveries = await ctx.db
+      .query("campaignDeliveries")
+      .withIndex("by_campaignId", (q) => q.eq("campaignId", campaignId))
+      .filter((q) => q.eq(q.field("status"), "queued"))
+      .collect();
+    return deliveries.map((d) => ({
+      _id: d._id,
+      targetEmail: d.targetEmail,
+      targetName: d.targetName,
+      targetTitle: d.targetTitle,
+      targetDistrict: d.targetDistrict ?? null,
+      packetHtml: (d.packetSnapshot as Record<string, unknown> | undefined)?.html as string | undefined ?? undefined,
+    }));
+  },
+});
+
+/** Internal mutation: update a delivery's status */
+export const updateDeliveryStatus = internalMutation({
+  args: {
+    deliveryId: v.id("campaignDeliveries"),
+    status: v.string(),
+    sentAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const patch: Record<string, unknown> = { status: args.status };
+    if (args.sentAt) patch.sentAt = args.sentAt;
+    await ctx.db.patch(args.deliveryId, patch);
+  },
+});
+
+/** Aggregate delivery metrics for campaign analytics dashboard */
+export const getDeliveryMetrics = query({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const deliveries = await ctx.db
+      .query("campaignDeliveries")
+      .withIndex("by_campaignId", (q) => q.eq("campaignId", campaignId))
+      .collect();
+
+    const total = deliveries.length;
+    const sent = deliveries.filter((d) => d.status !== "queued").length;
+    const delivered = deliveries.filter((d) => d.status === "delivered" || d.status === "opened").length;
+    const opened = deliveries.filter((d) => d.status === "opened").length;
+    const bounced = deliveries.filter((d) => d.status === "bounced").length;
+
+    return {
+      sent,
+      delivered,
+      opened,
+      clicked: 0, // click tracking not yet wired
+      bounced,
+      complained: 0,
+      deliveryRate: sent > 0 ? Math.round((delivered / sent) * 100) : 0,
+      openRate: sent > 0 ? Math.round((opened / sent) * 100) : 0,
+      clickRate: 0,
+      bounceRate: sent > 0 ? Math.round((bounced / sent) * 100) : 0,
+    };
+  },
+});
+
+/**
+ * Build a simple report email HTML inline (for Convex action context where
+ * SvelteKit imports aren't available). The full rich template from
+ * report-template.ts is used in the server-side preview.
+ */
+function buildReportEmailHtml(campaign: {
+  title: string;
+  orgName: string;
+  verifiedActionCount: number;
+  _id: any;
+}): string {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#fafaf9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fafaf9;">
+<tr><td align="center" style="padding:40px 20px;">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
+<tr><td style="padding:0 0 32px 0;"><p style="margin:0;font-size:12px;font-weight:600;color:#a3a3a3;text-transform:uppercase;letter-spacing:.08em;">Verification Report</p></td></tr>
+<tr><td style="padding:0 0 8px 0;"><p style="margin:0;font-size:18px;font-weight:600;color:#171717;line-height:1.4;">${esc(campaign.title)}</p></td></tr>
+<tr><td style="padding:0 0 28px 0;"><p style="margin:0;font-size:13px;color:#737373;">from ${esc(campaign.orgName)}</p></td></tr>
+<tr><td style="padding:24px 0;border-top:1px solid #e5e5e5;border-bottom:1px solid #e5e5e5;">
+<p style="margin:0 0 4px 0;font-size:36px;font-weight:700;color:#171717;font-family:'Courier New',monospace;">${campaign.verifiedActionCount.toLocaleString()}</p>
+<p style="margin:0;font-size:15px;color:#525252;">verified constituents</p>
+</td></tr>
+<tr><td style="padding:20px 0 0 0;"><p style="margin:0;font-size:13px;color:#525252;">One submission per person · duplicates removed</p></td></tr>
+<tr><td style="padding:28px 0 0 0;">
+<table role="presentation" cellpadding="0" cellspacing="0"><tr>
+<td style="background:#f5f5f4;border:1px solid #e5e5e5;border-radius:6px;padding:12px 20px;">
+<a href="https://commons.email/v/${campaign._id}" style="font-size:13px;color:#525252;text-decoration:none;">Verify these claims independently &rarr;</a>
+</td></tr></table>
+</td></tr>
+<tr><td style="padding:40px 0 0 0;">
+<p style="margin:0;font-size:11px;color:#a3a3a3;line-height:1.6;">This report was generated by <a href="https://commons.email" style="color:#a3a3a3;text-decoration:underline;">commons.email</a>. Every claim is cryptographically attested and independently auditable.</p>
+</td></tr>
+</table></td></tr></table>
+</body></html>`;
+}
+
+/**
+ * Send a report email via SES v2 using raw HTTP (same pattern as email.ts sendViaSes).
+ */
+async function sendReportViaSes(
+  to: string, from: string, fromName: string, subject: string,
+  htmlBody: string, accessKeyId: string, secretAccessKey: string, region: string,
+): Promise<boolean> {
+  const endpoint = `https://email.${region}.amazonaws.com/v2/email/outbound-emails`;
+  const safeFromName = fromName.replace(/[\r\n\x00-\x1f\x7f]/g, "");
+  const safeSubject = subject.replace(/[\r\n\x00-\x1f\x7f]/g, "");
+
+  const body = JSON.stringify({
+    Content: { Simple: { Subject: { Data: safeSubject, Charset: "UTF-8" }, Body: { Html: { Data: htmlBody, Charset: "UTF-8" } } } },
+    Destination: { ToAddresses: [to] },
+    FromEmailAddress: `${safeFromName} <${from}>`,
+  });
+
+  const now = new Date();
+  const dateStamp = now.toISOString().replace(/[-:T]/g, "").slice(0, 8);
+  const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const credentialScope = `${dateStamp}/${region}/ses/aws4_request`;
+  const encoder = new TextEncoder();
+
+  async function hmacSha256(key: ArrayBuffer | Uint8Array, data: string): Promise<ArrayBuffer> {
+    const cryptoKey = await crypto.subtle.importKey("raw", key as BufferSource, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return crypto.subtle.sign("HMAC", cryptoKey, encoder.encode(data));
+  }
+
+  async function sha256Hex(data: string): Promise<string> {
+    const hash = await crypto.subtle.digest("SHA-256", encoder.encode(data));
+    return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  const payloadHash = await sha256Hex(body);
+  const canonicalHeaders = `content-type:application/json\nhost:email.${region}.amazonaws.com\nx-amz-date:${amzDate}\n`;
+  const signedHeaders = "content-type;host;x-amz-date";
+  const canonicalRequest = `POST\n/v2/email/outbound-emails\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+  const canonicalRequestHash = await sha256Hex(canonicalRequest);
+  const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${credentialScope}\n${canonicalRequestHash}`;
+
+  const kDate = await hmacSha256(encoder.encode("AWS4" + secretAccessKey), dateStamp);
+  const kRegion = await hmacSha256(kDate, region);
+  const kService = await hmacSha256(kRegion, "ses");
+  const kSigning = await hmacSha256(kService, "aws4_request");
+  const signatureBytes = await hmacSha256(kSigning, stringToSign);
+  const signature = Array.from(new Uint8Array(signatureBytes)).map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Amz-Date": amzDate, Authorization: authorization },
+      body,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Get past deliveries for a campaign. Requires org membership.
  * Decrypts targetEmail/targetName from encrypted fields with plaintext fallback.
  */
@@ -1149,6 +1594,7 @@ export const getPastDeliveries = query({
           targetDistrict: d.targetDistrict ?? null,
           status: d.status,
           sentAt: d.sentAt ?? null,
+          createdAt: d.createdAt ?? null,
           proofWeight: d.proofWeight ?? null,
         };
       });
