@@ -59,6 +59,22 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid email address' });
 		}
 
+		// Determine composition mode by comparing message to campaign template
+		let compositionMode: 'individual' | 'shared' | 'edited' | undefined;
+		if (message) {
+			try {
+				const campaign = await serverQuery(api.campaigns.getPublicAny, { campaignId: params.slug });
+				if (campaign?.body) {
+					const normalizeWs = (s: string) => s.trim().replace(/\s+/g, ' ');
+					compositionMode = normalizeWs(message) === normalizeWs(campaign.body) ? 'shared' : 'edited';
+				} else {
+					compositionMode = 'individual';
+				}
+			} catch {
+				// Non-fatal
+			}
+		}
+
 		try {
 			const result = await serverAction(api.campaigns.submitAction, {
 				campaignId: params.slug,
@@ -67,7 +83,8 @@ export const actions: Actions = {
 				postalCode: postalCode ?? undefined,
 				phone: phone ?? undefined,
 				message: message ?? undefined,
-				source: 'widget'
+				source: 'widget',
+				compositionMode
 			});
 
 			return {

@@ -1,13 +1,7 @@
 <script lang="ts">
-	interface Packet {
-		gds: number | null;
-		ald: number | null;
-		temporalEntropy: number | null;
-		burstVelocity: number | null;
-		cai: number | null;
-	}
+	import type { IntegrityMetrics } from '$lib/types/verification-packet';
 
-	let { packet }: { packet: Packet } = $props();
+	let { packet }: { packet: IntegrityMetrics } = $props();
 
 	interface ScoreEntry {
 		key: string;

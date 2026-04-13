@@ -2,6 +2,8 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { computeVerificationPacketCached } from '$lib/server/verification-packet';
+import { renderReportEmail } from '$lib/server/email/report-template';
 
 function requireRole(role: string, required: string): void {
 	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
@@ -10,7 +12,7 @@ function requireRole(role: string, required: string): void {
 	}
 }
 
-export const load: PageServerLoad = async ({ params, parent, locals }) => {
+export const load: PageServerLoad = async ({ params, parent, locals, platform }) => {
 	if (!locals.user) throw redirect(302, '/auth/login');
 	const { org } = await parent();
 	const ctx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
@@ -25,6 +27,24 @@ export const load: PageServerLoad = async ({ params, parent, locals }) => {
 		throw error(404, 'Campaign not found');
 	}
 
+	// Compute full packet for the report email template
+	const packetKV = platform?.env?.PACKET_CACHE_KV as
+		| { get(key: string): Promise<string | null>; put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> }
+		| undefined;
+	const fullPacket = await computeVerificationPacketCached(
+		preview.campaign._id,
+		org.id,
+		packetKV
+	);
+
+	// Render the email HTML using the staffer-legible template
+	const renderedHtml = renderReportEmail({
+		campaignTitle: preview.campaign.title,
+		orgName: org.name ?? org.slug,
+		packet: fullPacket,
+		verificationUrl: `https://commons.email/v/${preview.campaign._id}`
+	});
+
 	const pastDeliveries = await serverQuery(api.campaigns.getPastDeliveries, {
 		campaignId: params.id as any,
 		orgSlug: params.slug
@@ -34,13 +54,13 @@ export const load: PageServerLoad = async ({ params, parent, locals }) => {
 		campaign: preview.campaign,
 		targets: preview.targets,
 		packet: preview.packet,
-		renderedHtml: preview.renderedHtml,
+		renderedHtml,
 		pastDeliveries: pastDeliveries ?? []
 	};
 };
 
 export const actions: Actions = {
-	send: async ({ request, params, locals }) => {
+	send: async ({ request, params, locals, platform }) => {
 		if (!locals.user) {
 			throw redirect(302, `/auth/google?returnTo=/org/${params.slug}/campaigns/${params.id}/report`);
 		}
@@ -61,10 +81,33 @@ export const actions: Actions = {
 			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
 		}
 
+		// Render the full report email HTML so the decision-maker gets the same quality as the preview
+		const packetKV = platform?.env?.PACKET_CACHE_KV as
+			| { get(key: string): Promise<string | null>; put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> }
+			| undefined;
+		let renderedHtml: string | undefined;
+		try {
+			const preview = await serverQuery(api.campaigns.getReportPreview, {
+				campaignId: params.id as any, orgSlug: params.slug
+			});
+			if (preview) {
+				const fullPacket = await computeVerificationPacketCached(preview.campaign._id, ctx.org._id, packetKV);
+				renderedHtml = renderReportEmail({
+					campaignTitle: preview.campaign.title,
+					orgName: ctx.org.name ?? params.slug,
+					packet: fullPacket,
+					verificationUrl: `https://commons.email/v/${preview.campaign._id}`
+				});
+			}
+		} catch {
+			// Non-fatal: dispatch will use fallback template
+		}
+
 		const result = await serverMutation(api.campaigns.sendReport, {
 			campaignId: params.id as any,
 			orgSlug: params.slug,
-			targetEmails: selectedEmails
+			targetEmails: selectedEmails,
+			renderedHtml
 		});
 
 		if (result.error) {

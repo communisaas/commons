@@ -3,6 +3,8 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
+import { computeVerificationPacketCached } from '$lib/server/verification-packet';
+import { loadCampaignAnalytics } from '$lib/server/campaign-analytics';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params, parent, platform }) => {

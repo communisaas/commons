@@ -60,6 +60,27 @@ export const actions: Actions = {
 			return fail(400, { error: 'Please enter a valid email address' });
 		}
 
+		// Determine composition mode by comparing message to campaign template
+		let compositionMode: 'individual' | 'shared' | 'edited' | undefined;
+		if (message) {
+			try {
+				const campaign = await serverQuery(api.campaigns.getPublicAny, { campaignId: params.slug });
+				if (campaign?.body) {
+					// Normalize whitespace for comparison (trim + collapse internal whitespace)
+					const normalizeWs = (s: string) => s.trim().replace(/\s+/g, ' ');
+					if (normalizeWs(message) === normalizeWs(campaign.body)) {
+						compositionMode = 'shared';
+					} else {
+						compositionMode = 'edited';
+					}
+				} else {
+					compositionMode = 'individual';
+				}
+			} catch {
+				// Non-fatal: fall back to undefined (heuristic will be used)
+			}
+		}
+
 		try {
 			const result = await serverAction(api.campaigns.submitAction, {
 				campaignId: params.slug,
@@ -68,7 +89,8 @@ export const actions: Actions = {
 				postalCode: postalCode ?? undefined,
 				message: message ?? undefined,
 				districtCode: rawDistrictCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? rawDistrictCode : undefined,
-				source: 'campaign'
+				source: 'campaign',
+				compositionMode
 			});
 
 			return {

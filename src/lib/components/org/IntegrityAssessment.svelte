@@ -1,30 +1,24 @@
 <script lang="ts">
-	interface Packet {
-		gds: number | null;
-		ald: number | null;
-		temporalEntropy: number | null;
-		burstVelocity: number | null;
-		cai: number | null;
-	}
+	import type { IntegrityMetrics } from '$lib/types/verification-packet';
 
 	let {
 		packet,
 		class: className = ''
 	}: {
-		packet: Packet;
+		packet: IntegrityMetrics;
 		class?: string;
 	} = $props();
 
-	function assessIntegrity(p: Packet): string {
+	function assessIntegrity(p: IntegrityMetrics): string {
 		if (p.burstVelocity !== null && p.burstVelocity > 5)
-			return 'WARNING: Sudden spike in actions. Decision-makers may flag this as coordinated.';
+			return 'Unusual activity spike detected. May warrant review.';
 		const parts: string[] = [];
-		if (p.gds !== null && p.gds >= 0.7) parts.push('geographically diverse');
-		else if (p.gds !== null) parts.push('concentrated in few districts');
-		if (p.ald !== null && p.ald >= 0.7) parts.push('individually authored');
-		else if (p.ald !== null) parts.push('messages are similar');
-		if (p.temporalEntropy !== null && p.temporalEntropy >= 2) parts.push('organically timed');
-		if (parts.length === 0) return 'Accumulating verification data.';
+		if (p.gds !== null && p.gds >= 0.7) parts.push('spread across multiple areas');
+		else if (p.gds !== null) parts.push('concentrated in a few areas');
+		if (p.ald !== null && p.ald >= 0.7) parts.push('most messages are distinct');
+		else if (p.ald !== null) parts.push('many messages are similar');
+		if (p.temporalEntropy !== null && p.temporalEntropy >= 2) parts.push('submitted over time');
+		if (parts.length === 0) return 'Accumulating data.';
 		return parts.join(', ') + '.';
 	}
 

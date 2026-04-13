@@ -3,6 +3,7 @@ import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
+import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import type { RequestHandler } from './$types';
 import type { Id } from '$convex/_generated/dataModel';
 
