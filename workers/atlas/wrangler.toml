@@ -1,0 +1,15 @@
+name = "commons-atlas"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+
+# Custom domain route — Workers routes override Pages wildcard routing.
+# This is what makes atlas.commons.email serve R2 instead of the Pages project.
+routes = [
+  { pattern = "atlas.commons.email/*", zone_name = "commons.email" }
+]
+
+# R2 binding — the only resource this Worker touches.
+# No KV, no D1, no secrets, no session state.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "shadow-atlas"

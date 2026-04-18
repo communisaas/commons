@@ -43,8 +43,10 @@ const config = {
 					// F4: NEAR RPC — chain-signatures.ts via near-provider.ts (browser-side MPC signing)
 					'https://rpc.testnet.near.org',
 					'https://rpc.mainnet.near.org',
-					// Storacha IPFS: client-side ZKP district lookup (Shadow Atlas cell chunks)
-					// Bare domain for path-style fetch, wildcard for subdomain redirect
+					// Shadow Atlas data: R2 custom domain (primary), IPFS gateways (transition + future)
+					'https://atlas.commons.email',
+					// Storacha IPFS: kept during migration window (gateways live until 2026-05-31)
+					// Remove these once R2 is confirmed live and IPFS env vars are cleared.
 					'https://storacha.link',
 					'https://*.storacha.link',
 					'https://w3s.link',

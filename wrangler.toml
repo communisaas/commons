@@ -7,6 +7,7 @@ pages_build_output_dir = ".svelte-kit/cloudflare"
 [vars]
 PUBLIC_CONVEX_URL = "https://quirky-chinchilla-352.convex.cloud"
 PUBLIC_SCROLL_RPC_URL = "https://rpc.scroll.io"
+ATLAS_BASE_URL = "https://atlas.commons.email"
 # IDENTITY_SIGNING_KEY = "set in Cloudflare dashboard (openssl rand -hex 32)"
 
 # Contract addresses (override for mainnet deployment):
