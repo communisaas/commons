@@ -14,19 +14,22 @@ import {
 	getOfficialsForDistrict,
 	getCellChunkByParent,
 	getDistrictIndex,
-	setCIDs,
-	isIPFSConfigured,
+	configure,
+	isConfigured,
 	type CellDistricts,
 	type CellEntry,
 	type DistrictIndex,
 	type OfficialsFileIPFS,
 } from './ipfs-store';
 
-// Initialize CIDs from Vite public env var (available in browser)
+// Initialize content sources from Vite public env vars (available in browser).
+// R2 is primary; IPFS activates when CID is set.
+const VITE_ATLAS_URL = import.meta.env.VITE_ATLAS_BASE_URL as string | undefined;
 const VITE_CID_ROOT = import.meta.env.VITE_IPFS_CID_ROOT as string | undefined;
-if (VITE_CID_ROOT) {
-	setCIDs({ root: VITE_CID_ROOT });
-}
+configure({
+	atlasBaseUrl: VITE_ATLAS_URL || '',
+	ipfsCid: VITE_CID_ROOT || '',
+});
 
 /** H3 resolution for Shadow Atlas cells */
 const H3_RESOLUTION = 7;
@@ -39,8 +42,8 @@ export async function lookupDistrictsFromBrowser(
 	lat: number,
 	lng: number,
 ): Promise<CellDistricts | null> {
-	if (!isIPFSConfigured()) {
-		console.warn('[browser-client] IPFS not configured (VITE_IPFS_CID_ROOT missing)');
+	if (!isConfigured()) {
+		console.warn('[browser-client] Content source not configured (VITE_IPFS_CID_ROOT missing)');
 		return null;
 	}
 
@@ -57,7 +60,7 @@ export async function lookupDistrictsFromBrowser(
 export async function getOfficialsFromBrowser(
 	districtCode: string,
 ): Promise<OfficialsFileIPFS | null> {
-	if (!isIPFSConfigured()) return null;
+	if (!isConfigured()) return null;
 	return getOfficialsForDistrict(districtCode);
 }
 
@@ -109,8 +112,8 @@ export async function getFullCellDataFromBrowser(options: {
 	lng?: number;
 	country?: string;
 }): Promise<ClientCellProofResult | null> {
-	if (!isIPFSConfigured()) {
-		console.warn('[browser-client] IPFS not configured — cannot fetch cell proof');
+	if (!isConfigured()) {
+		console.warn('[browser-client] Content source not configured — cannot fetch cell proof');
 		return null;
 	}
 

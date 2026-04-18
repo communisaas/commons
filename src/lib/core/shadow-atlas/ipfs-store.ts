@@ -1,18 +1,20 @@
 /**
- * IPFS Data Store for Shadow Atlas
+ * Shadow Atlas Content Store
  *
- * Fetches and caches content-addressed data from IPFS gateways.
+ * Fetches and caches shadow atlas data from content sources.
+ * R2 is the primary production source (fast, reliable, Cloudflare-native).
+ * IPFS gateways are a pluggable secondary source — activate by setting
+ * IPFS_CID_ROOT + IPFS_GATEWAYS env vars when the ecosystem matures.
+ *
+ * Source priority: Local IPFS (dev) → R2 → IPFS gateways
+ *
  * Chunked district mapping, per-district officials, and Merkle snapshots
- * are pinned to IPFS quarterly and cached in-memory with 7-day TTL.
- *
- * Server-only: runs in CF Workers (in-memory Map per-isolate).
- * Browser never downloads the full datasets — server-side API routes
- * resolve districts and officials, returning only the user's data.
+ * are published quarterly and cached in-memory with 7-day TTL.
  *
  * This module has NO server-only imports ($env/dynamic/private).
  */
 
-// BN254 validation — inlined here to keep ipfs-store browser-safe.
+// BN254 validation — inlined here to keep this module browser-safe.
 // client.ts imports $env/dynamic/private and cannot be imported from browser code.
 const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
@@ -35,50 +37,116 @@ function validateBN254HexArray(values: string[], label: string): void {
 }
 
 // ============================================================================
-// Configuration
+// Content Source Abstraction
 // ============================================================================
+
+/** A source that can resolve atlas content by relative path. */
+interface ContentSource {
+	readonly name: string;
+	/** Construct a fetchable URL for a path (e.g., "US/cells/832a.json"). */
+	url(path: string): string;
+}
 
 /** Local IPFS gateway for development (Docker commons-ipfs container) */
 const LOCAL_IPFS_GATEWAY = 'http://localhost:8080/ipfs';
 
-/** Primary IPFS gateway (Storacha — our pinning provider) */
-const IPFS_GATEWAY = 'https://storacha.link/ipfs';
-
-/** Fallback gateway (w3s.link is Storacha's CDN alias) */
-const FALLBACK_GATEWAYS = [
-	'https://w3s.link/ipfs',
-];
-
 /** Cache TTL: 7 days (quarterly updates with comfortable margin) */
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** IPFS fetch timeout (first fetch can be slow — gateway may need to find content) */
-const IPFS_FETCH_TIMEOUT_MS = 30_000;
+/** Content fetch timeout */
+const FETCH_TIMEOUT_MS = 30_000;
 
 /**
- * Content identifiers for pinned IPFS data.
- * Updated quarterly by the shadow-atlas pipeline.
+ * Content source configuration.
+ * Set at startup via configure() from env vars.
  *
- * Single `root` CID covers a UnixFS directory DAG.
- * Files are addressed as `{root}/US/manifest.json`, `{root}/US/districts/{parent}.json`, etc.
- *
- * Defaults are overridden at runtime by setCIDs() from env vars
- * (hooks.server.ts reads IPFS_CID_ROOT on startup).
+ * R2 is the reliable floor — set atlasBaseUrl for production reads.
+ * IPFS is the aspirational ceiling — set ipfsCid + ipfsGateways to activate.
+ */
+const CONTENT_CONFIG = {
+	/** R2 or CDN base URL for direct HTTP reads (no CID in path). */
+	atlasBaseUrl: '',
+	/** IPFS root CID for content-addressed reads (when IPFS is active). */
+	ipfsCid: '',
+	/** Separate CID for Merkle snapshot (legacy IPFS — separate pin). */
+	merkleSnapshotCid: '',
+	/** IPFS gateway URLs, tried in order when ipfsCid is set. */
+	ipfsGateways: [] as string[],
+};
+
+/**
+ * Configure content sources at startup.
+ * Called from hooks.server.ts (server) and browser-client.ts (browser).
+ */
+export function configure(opts: {
+	atlasBaseUrl?: string;
+	ipfsCid?: string;
+	merkleSnapshotCid?: string;
+	ipfsGateways?: string[];
+}): void {
+	if (opts.atlasBaseUrl != null) CONTENT_CONFIG.atlasBaseUrl = opts.atlasBaseUrl.replace(/\/$/, '');
+	if (opts.ipfsCid != null) CONTENT_CONFIG.ipfsCid = opts.ipfsCid;
+	if (opts.merkleSnapshotCid != null) CONTENT_CONFIG.merkleSnapshotCid = opts.merkleSnapshotCid;
+	if (opts.ipfsGateways) CONTENT_CONFIG.ipfsGateways = opts.ipfsGateways;
+}
+
+/**
+ * Backward-compat alias for configure().
+ * @deprecated Use configure() instead.
+ */
+export function setCIDs(cids: Partial<{ root: string; merkleSnapshot: string }>): void {
+	configure({ ipfsCid: cids.root, merkleSnapshotCid: cids.merkleSnapshot });
+}
+
+/**
+ * Backward-compat read-only view of IPFS CIDs.
+ * @deprecated Read from CONTENT_CONFIG directly in new code.
  */
 export const IPFS_CIDS = {
-	/** Root CID for chunked UnixFS directory DAG */
-	root: '',
-	/** Quarterly Merkle tree snapshot (~15-25 MB compressed) */
-	merkleSnapshot: '',
-} as const;
+	get root(): string { return CONTENT_CONFIG.ipfsCid; },
+	get merkleSnapshot(): string { return CONTENT_CONFIG.merkleSnapshotCid; },
+};
+
+const isProduction = typeof globalThis.process === 'undefined' || globalThis.process.env?.NODE_ENV === 'production';
 
 /**
- * Override CIDs at runtime (e.g., from env vars or on-chain registry).
- * Called from hooks.server.ts on app startup.
+ * Build ordered content source list. First success wins.
+ *
+ * Priority:
+ *   1. Local IPFS gateway (dev only — Docker commons-ipfs, fast, no rate limits)
+ *   2. R2 / CDN (production floor — reliable, free, Cloudflare-native)
+ *   3. IPFS gateways (aspirational ceiling — content-addressed, decentralized)
  */
-export function setCIDs(cids: Partial<Record<keyof typeof IPFS_CIDS, string>>): void {
-	if (cids.root) (IPFS_CIDS as Record<string, string>).root = cids.root;
-	if (cids.merkleSnapshot) (IPFS_CIDS as Record<string, string>).merkleSnapshot = cids.merkleSnapshot;
+function getSources(): ContentSource[] {
+	const sources: ContentSource[] = [];
+
+	// Dev: local IPFS node
+	if (!isProduction && CONTENT_CONFIG.ipfsCid) {
+		sources.push({
+			name: 'local-ipfs',
+			url: (path) => `${LOCAL_IPFS_GATEWAY}/${CONTENT_CONFIG.ipfsCid}/${path}`,
+		});
+	}
+
+	// R2 / CDN: primary production reads
+	if (CONTENT_CONFIG.atlasBaseUrl) {
+		sources.push({
+			name: 'r2',
+			url: (path) => `${CONTENT_CONFIG.atlasBaseUrl}/${path}`,
+		});
+	}
+
+	// IPFS gateways: content-addressed verification / future primary
+	if (CONTENT_CONFIG.ipfsCid) {
+		for (const gw of CONTENT_CONFIG.ipfsGateways) {
+			sources.push({
+				name: `ipfs:${gw}`,
+				url: (path) => `${gw}/${CONTENT_CONFIG.ipfsCid}/${path}`,
+			});
+		}
+	}
+
+	return sources;
 }
 
 // ============================================================================
@@ -86,7 +154,7 @@ export function setCIDs(cids: Partial<Record<keyof typeof IPFS_CIDS, string>>): 
 // ============================================================================
 
 /**
- * Validate and return an IPFS path segment (country code, parentKey, districtCode, etc.).
+ * Validate and return a path segment (country code, parentKey, districtCode, etc.).
  * Rejects traversal attacks and empty strings.
  *
  * @throws {Error} if segment contains `..`, `/`, `\`, or is empty
@@ -146,7 +214,7 @@ export interface MerkleSnapshotData {
 // Chunked Pipeline Types (complement to substrate's build pipeline)
 // ============================================================================
 
-/** Manifest for a country's chunked IPFS data */
+/** Manifest for a country's chunked data */
 export interface ChunkManifest {
 	version: number;
 	generated: string;
@@ -204,7 +272,7 @@ export interface OfficialsFileIPFS {
 
 /**
  * Combined cell chunk: districts + Tree 2 SMT proofs per H3 parent group.
- * Published at `{rootCID}/{country}/cells/{parentCell}.json`.
+ * Published at `{source}/{country}/cells/{parentCell}.json`.
  * One fetch gives the client everything needed for ZK proof generation.
  */
 export interface CellChunkFile {
@@ -224,7 +292,7 @@ export interface CellChunkFile {
 /**
  * Per-cell entry: circuit-ready districts + SMT proof.
  * Keyed by cellId (GEOID string). H3 → cellId reverse lookup via h3Index.
- * Single-letter keys minimize JSON size on IPFS.
+ * Single-letter keys minimize JSON size.
  */
 export interface CellEntry {
 	/** cell_id as 0x-hex BN254 field element (GEOID encoded — circuit private input) */
@@ -246,7 +314,7 @@ export interface CellEntry {
 /**
  * District index: maps (slot, fieldElementHex) → chunk keys.
  * One fetch replaces the O(n) chunk scan.
- * Published at `{rootCID}/{country}/district-index.json`.
+ * Published at `{source}/{country}/district-index.json`.
  */
 export interface DistrictIndex {
 	version: 1;
@@ -316,30 +384,101 @@ const cellChunkCache = new LRUCache<CellChunkFile>(50, CACHE_TTL_MS);
 /** District index cache — one per country, ~50-200 KB */
 const districtIndexCache = new LRUCache<DistrictIndex>(5, CACHE_TTL_MS);
 
-/** Manifest cache — keyed by country code, refreshed when root CID changes */
-const manifestCacheMap = new Map<string, { rootCid: string; data: ChunkManifest; fetchedAt: number }>();
-
-// ============================================================================
-// IPFS Fetch
-// ============================================================================
+/** Manifest cache — keyed by country code, refreshed when config changes or TTL expires */
+const manifestCacheMap = new Map<string, { configKey: string; data: ChunkManifest; fetchedAt: number }>();
 
 /**
- * Fetch data from IPFS by CID, trying multiple gateways.
- * Supports both JSON and binary (ArrayBuffer) responses.
- * Throws if all gateways fail.
+ * Cache invalidation key — changes when the underlying data source changes.
+ *
+ * With IPFS (ipfsCid set): CID changes each quarterly upload → automatic invalidation.
+ * With R2 only (atlasBaseUrl): URL is stable across updates → caches rely on 7-day TTL
+ * and Worker isolate recycling. For explicit invalidation after quarterly uploads,
+ * use versioned R2 paths (e.g., /v2026Q2/) or call clearCache() at deploy time.
  */
-async function fetchFromIPFS<T>(cid: string, mode: 'json' | 'binary' = 'json'): Promise<T> {
-	if (!cid) {
+function getConfigKey(): string {
+	return CONTENT_CONFIG.ipfsCid || CONTENT_CONFIG.atlasBaseUrl || '';
+}
+
+// ============================================================================
+// Content Fetch
+// ============================================================================
+
+/** Sentinel error class for "file not found" (all sources returned 404). */
+class ContentNotFoundError extends Error {
+	constructor(path: string) {
+		super(`Content not found: ${path}`);
+		this.name = 'ContentNotFoundError';
+	}
+}
+
+/**
+ * Fetch a file by relative path, trying content sources in priority order.
+ *
+ * Path is relative to the content root, e.g. "US/manifest.json".
+ *
+ * Throws ContentNotFoundError when all sources return 404 (file doesn't exist).
+ * Throws generic Error on network failures (timeout, DNS, 5xx, etc.).
+ */
+async function fetchContent<T>(path: string): Promise<T> {
+	const sources = getSources();
+	if (sources.length === 0) {
 		throw new Error(
-			'IPFS CID not configured. District data not yet published — ' +
-			'substrate must run the quarterly pipeline (Phase A1/A2) first.'
+			'No content sources configured. Set ATLAS_BASE_URL (R2) or ' +
+			'IPFS_CID_ROOT + IPFS_GATEWAYS (IPFS) to enable shadow atlas data.'
 		);
 	}
 
-	// In dev, try local Docker IPFS node first (fast, no rate limits)
-	const gateways = typeof globalThis.process !== 'undefined' && globalThis.process.env?.NODE_ENV !== 'production'
-		? [LOCAL_IPFS_GATEWAY, IPFS_GATEWAY, ...FALLBACK_GATEWAYS]
-		: [IPFS_GATEWAY, ...FALLBACK_GATEWAYS];
+	let lastError: Error | null = null;
+	let all404 = true;
+
+	for (const source of sources) {
+		try {
+			const response = await fetch(source.url(path), {
+				headers: { Accept: 'application/json' },
+				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+			});
+
+			if (!response.ok) {
+				if (response.status !== 404) all404 = false;
+				throw new Error(`${source.name} returned ${response.status} for ${path}`);
+			}
+
+			return (await response.json()) as T;
+		} catch (err) {
+			lastError = err instanceof Error ? err : new Error(String(err));
+			// Network errors (timeout, DNS, etc.) are not 404s
+			if (!(err instanceof Error && err.message.includes('returned 404'))) {
+				all404 = false;
+			}
+			console.warn(`[Atlas Store] ${source.name} failed for ${path}: ${lastError.message}`);
+		}
+	}
+
+	if (all404) {
+		throw new ContentNotFoundError(path);
+	}
+
+	throw new Error(`All content sources failed for ${path}: ${lastError?.message}`);
+}
+
+/**
+ * Fetch data by direct IPFS CID (not path-based).
+ * Used for legacy Merkle snapshot fetch when only a separate CID is available.
+ * Only activates when IPFS gateways are configured.
+ */
+async function fetchDirectCID<T>(cid: string, mode: 'json' | 'binary' = 'json'): Promise<T> {
+	if (!cid) {
+		throw new Error('CID not provided for direct fetch');
+	}
+
+	const gateways = !isProduction && CONTENT_CONFIG.ipfsCid
+		? [LOCAL_IPFS_GATEWAY, ...CONTENT_CONFIG.ipfsGateways]
+		: [...CONTENT_CONFIG.ipfsGateways];
+
+	if (gateways.length === 0) {
+		throw new Error('No IPFS gateways configured for direct CID fetch');
+	}
+
 	let lastError: Error | null = null;
 
 	for (const gateway of gateways) {
@@ -348,7 +487,7 @@ async function fetchFromIPFS<T>(cid: string, mode: 'json' | 'binary' = 'json'): 
 			const accept = mode === 'binary' ? 'application/octet-stream' : 'application/json';
 			const response = await fetch(url, {
 				headers: { Accept: accept },
-				signal: AbortSignal.timeout(IPFS_FETCH_TIMEOUT_MS),
+				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 			});
 
 			if (!response.ok) {
@@ -361,97 +500,11 @@ async function fetchFromIPFS<T>(cid: string, mode: 'json' | 'binary' = 'json'): 
 			return (await response.json()) as T;
 		} catch (err) {
 			lastError = err instanceof Error ? err : new Error(String(err));
-			console.warn(`[IPFS Store] Gateway ${gateway} failed for ${cid}: ${lastError.message}`);
+			console.warn(`[Atlas Store] Gateway ${gateway} failed for CID ${cid}: ${lastError.message}`);
 		}
 	}
 
-	throw new Error(
-		`All IPFS gateways failed for CID ${cid}: ${lastError?.message}`
-	);
-}
-
-/** Sentinel error class for "file not found in IPFS DAG" (all gateways returned 404). */
-class IPFSNotFoundError extends Error {
-	constructor(path: string) {
-		super(`IPFS file not found: ${path}`);
-		this.name = 'IPFSNotFoundError';
-	}
-}
-
-/**
- * Fetch a file from within the root CID's UnixFS directory.
- * Uses gateway failover just like fetchFromIPFS.
- *
- * Path is relative to the root CID, e.g. "US/manifest.json".
- *
- * Throws IPFSNotFoundError when all gateways return 404 (file doesn't exist in DAG).
- * Throws generic Error on network/gateway failures (timeout, DNS, 5xx, etc.).
- */
-async function fetchFromRootCID<T>(path: string): Promise<T> {
-	const rootCid = IPFS_CIDS.root;
-	if (!rootCid) {
-		throw new Error('IPFS root CID not configured');
-	}
-
-	// In dev, try local Docker IPFS node first (fast, no rate limits)
-	const gateways = typeof globalThis.process !== 'undefined' && globalThis.process.env?.NODE_ENV !== 'production'
-		? [LOCAL_IPFS_GATEWAY, IPFS_GATEWAY, ...FALLBACK_GATEWAYS]
-		: [IPFS_GATEWAY, ...FALLBACK_GATEWAYS];
-	let lastError: Error | null = null;
-	let all404 = true;
-
-	for (const gateway of gateways) {
-		try {
-			const url = `${gateway}/${rootCid}/${path}`;
-			const response = await fetch(url, {
-				headers: { Accept: 'application/json' },
-				signal: AbortSignal.timeout(IPFS_FETCH_TIMEOUT_MS),
-			});
-
-			if (!response.ok) {
-				if (response.status !== 404) all404 = false;
-				throw new Error(`${gateway} returned ${response.status} for ${path}`);
-			}
-
-			return (await response.json()) as T;
-		} catch (err) {
-			lastError = err instanceof Error ? err : new Error(String(err));
-			// Network errors (timeout, DNS, etc.) are not 404s
-			if (!(err instanceof Error && err.message.includes('returned 404'))) {
-				all404 = false;
-			}
-			console.warn(`[IPFS Store] Gateway ${gateway} failed for ${rootCid}/${path}: ${lastError.message}`);
-		}
-	}
-
-	// All gateways returned 404 → file genuinely doesn't exist in the DAG
-	if (all404) {
-		throw new IPFSNotFoundError(path);
-	}
-
-	throw new Error(`All IPFS gateways failed for ${path}: ${lastError?.message}`);
-}
-
-// ============================================================================
-// Cache-Through Fetch
-// ============================================================================
-
-/**
- * Fetch data with cache-through semantics:
- * 1. Check in-memory cache (return if valid: same CID + within TTL)
- * 2. Fetch from IPFS gateways
- * 3. Store in memory cache
- */
-async function getCached<T>(key: string, cid: string, mode: 'json' | 'binary' = 'json'): Promise<T> {
-	const cached = memoryStore.get(key) as CacheEntry<T> | undefined;
-
-	if (cached && cached.cid === cid && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS) {
-		return cached.data;
-	}
-
-	const data = await fetchFromIPFS<T>(cid, mode);
-	memoryStore.set(key, { data, cid, fetchedAt: Date.now() } as CacheEntry<unknown>);
-	return data;
+	throw new Error(`All gateways failed for CID ${cid}: ${lastError?.message}`);
 }
 
 // ============================================================================
@@ -464,57 +517,82 @@ async function getCached<T>(key: string, cid: string, mode: 'json' | 'binary' = 
  * Cipher's cell-tree-snapshot.ts deserializes + computes paths from this.
  * Cached in Worker memory for 7 days.
  *
- * The returned MerkleSnapshotData.snapshot is the CellTreeSnapshotWire
- * JSON object — cipher's deserializeCellTreeSnapshot() consumes it.
+ * Tries path-based fetch first (R2 or IPFS-in-DAG), then falls back
+ * to direct CID fetch (legacy IPFS separate pin).
  */
 export async function getMerkleSnapshot(): Promise<MerkleSnapshotData> {
-	return getCached<MerkleSnapshotData>('merkle-snapshot', IPFS_CIDS.merkleSnapshot);
+	const cacheKey = 'merkle-snapshot';
+	const configKey = getConfigKey();
+	const cached = memoryStore.get(cacheKey) as CacheEntry<MerkleSnapshotData> | undefined;
+	if (cached && cached.cid === configKey && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS) {
+		return cached.data;
+	}
+
+	// Path-based fetch (works with R2 and future IPFS-in-DAG)
+	if (CONTENT_CONFIG.atlasBaseUrl || CONTENT_CONFIG.ipfsCid) {
+		try {
+			const data = await fetchContent<MerkleSnapshotData>('merkle-snapshot.json');
+			memoryStore.set(cacheKey, { data, cid: configKey, fetchedAt: Date.now() });
+			return data;
+		} catch (err) {
+			// Path-based fetch failed — fall through to legacy direct CID fetch.
+			// Log so operators can diagnose R2 issues during migration.
+			console.warn(
+				'[Atlas Store] Path-based Merkle snapshot fetch failed, trying legacy CID:',
+				err instanceof Error ? err.message : String(err),
+			);
+		}
+	}
+
+	// Legacy: direct CID fetch for separate Merkle snapshot pin
+	if (CONTENT_CONFIG.merkleSnapshotCid && CONTENT_CONFIG.ipfsGateways.length > 0) {
+		const data = await fetchDirectCID<MerkleSnapshotData>(CONTENT_CONFIG.merkleSnapshotCid);
+		memoryStore.set(cacheKey, { data, cid: configKey, fetchedAt: Date.now() });
+		return data;
+	}
+
+	throw new Error(
+		'Merkle snapshot not available: configure ATLAS_BASE_URL or ' +
+		'IPFS_CID_ROOT + IPFS_GATEWAYS + IPFS_CID_MERKLE_SNAPSHOT'
+	);
 }
 
 // ============================================================================
-// Chunked Pipeline API (root CID mode)
+// Chunked Pipeline API
 // ============================================================================
-
-/**
- * Check if chunked (root CID) mode is active.
- */
-export function isChunkedMode(): boolean {
-	return !!IPFS_CIDS.root;
-}
 
 /**
  * Fetch the manifest for a country.
- * Cached in memory — refreshed when root CID changes or TTL expires.
+ * Cached in memory — refreshed when content config changes or TTL expires.
  */
 export async function getManifest(country = 'US'): Promise<ChunkManifest> {
 	const safeCountry = sanitizePathSegment(country);
-	const rootCid = IPFS_CIDS.root;
-	if (!rootCid) throw new Error('Root CID not configured — chunked mode not available');
+	const configKey = getConfigKey();
+	if (!configKey) throw new Error('No content source configured');
 
 	const cached = manifestCacheMap.get(safeCountry);
 	if (
 		cached &&
-		cached.rootCid === rootCid &&
+		cached.configKey === configKey &&
 		(Date.now() - cached.fetchedAt) < CACHE_TTL_MS
 	) {
 		return cached.data;
 	}
 
-	const data = await fetchFromRootCID<ChunkManifest>(`${safeCountry}/manifest.json`);
-	manifestCacheMap.set(safeCountry, { rootCid, data, fetchedAt: Date.now() });
+	const data = await fetchContent<ChunkManifest>(`${safeCountry}/manifest.json`);
+	manifestCacheMap.set(safeCountry, { configKey, data, fetchedAt: Date.now() });
 	return data;
 }
 
 /**
- * Fetch district data for a specific H3 cell from the chunked IPFS store.
+ * Fetch district data for a specific H3 cell from the chunked store.
  *
  * 1. Compute cellToParent(cellIndex, 3) to find the parent cell
  * 2. Check LRU cache for the chunk
- * 3. Fetch chunk from IPFS: {root}/{country}/districts/{parentCell}.json
+ * 3. Fetch chunk: {source}/{country}/districts/{parentCell}.json
  * 4. Return the 24-slot array for this cell, or null if not found
  *
  * Memory: ~8 KB per chunk, max 100 chunks = ~800 KB.
- * Compare: monolithic approach = 355 MB.
  */
 export async function getChunkForCell(
 	cellIndex: string,
@@ -523,7 +601,6 @@ export async function getChunkForCell(
 	const safeCountry = sanitizePathSegment(country);
 
 	// Dynamic import keeps h3-js out of this module's static dependency graph.
-	// client.ts imports h3-js directly; ipfs-store stays lean.
 	const { cellToParent } = await import('h3-js');
 	const parentCell = sanitizePathSegment(cellToParent(cellIndex, 3));
 
@@ -534,23 +611,21 @@ export async function getChunkForCell(
 	}
 
 	try {
-		const chunk = await fetchFromRootCID<ChunkFile>(
+		const chunk = await fetchContent<ChunkFile>(
 			`${safeCountry}/districts/${parentCell}.json`,
 		);
 		chunkCache.set(cacheKey, chunk);
 		return chunk.cells[cellIndex] ?? null;
 	} catch (err) {
-		// Chunk genuinely doesn't exist (cell in ocean / outside coverage) → return null
-		if (err instanceof IPFSNotFoundError) return null;
-		// Network / gateway errors → propagate so callers don't confuse with "no data"
+		if (err instanceof ContentNotFoundError) return null;
 		throw err;
 	}
 }
 
 /**
- * Fetch officials for a specific district from the chunked IPFS store.
+ * Fetch officials for a specific district from the chunked store.
  *
- * Fetches: {root}/{country}/officials/{districtCode}.json
+ * Fetches: {source}/{country}/officials/{districtCode}.json
  * Returns null if the file doesn't exist (e.g., unpopulated district).
  */
 export async function getOfficialsForDistrict(
@@ -565,15 +640,13 @@ export async function getOfficialsForDistrict(
 	if (cached) return cached;
 
 	try {
-		const data = await fetchFromRootCID<OfficialsFileIPFS>(
+		const data = await fetchContent<OfficialsFileIPFS>(
 			`${safeCountry}/officials/${safeDistrict}.json`,
 		);
 		officialsFileCache.set(cacheKey, data);
 		return data;
 	} catch (err) {
-		// District file genuinely doesn't exist (unpopulated district) → return null
-		if (err instanceof IPFSNotFoundError) return null;
-		// Network / gateway errors → propagate
+		if (err instanceof ContentNotFoundError) return null;
 		throw err;
 	}
 }
@@ -590,7 +663,7 @@ export async function getOfficialsForDistrict(
  * Cached per country. ~50-200 KB gzipped.
  */
 export async function getDistrictIndex(country = 'US'): Promise<DistrictIndex | null> {
-	if (!IPFS_CIDS.root) return null;
+	if (!isConfigured()) return null;
 	const safeCountry = sanitizePathSegment(country);
 
 	const cacheKey = `district-index:${safeCountry}`;
@@ -598,13 +671,13 @@ export async function getDistrictIndex(country = 'US'): Promise<DistrictIndex | 
 	if (cached) return cached;
 
 	try {
-		const index = await fetchFromRootCID<DistrictIndex>(
+		const index = await fetchContent<DistrictIndex>(
 			`${safeCountry}/district-index.json`,
 		);
 		districtIndexCache.set(cacheKey, index);
 		return index;
 	} catch (err) {
-		if (err instanceof IPFSNotFoundError) return null;
+		if (err instanceof ContentNotFoundError) return null;
 		throw err;
 	}
 }
@@ -623,7 +696,7 @@ export async function getCellChunkByParent(
 	parentKey: string,
 	country = 'US',
 ): Promise<CellChunkFile | null> {
-	if (!IPFS_CIDS.root) return null;
+	if (!isConfigured()) return null;
 	const safeCountry = sanitizePathSegment(country);
 	const safeParent = sanitizePathSegment(parentKey);
 
@@ -632,12 +705,12 @@ export async function getCellChunkByParent(
 	if (cached) return cached;
 
 	try {
-		const chunk = await fetchFromRootCID<CellChunkFile>(
+		const chunk = await fetchContent<CellChunkFile>(
 			`${safeCountry}/cells/${safeParent}.json`,
 		);
 
 		// BR5-009: Validate all BN254 field elements before caching.
-		// A compromised IPFS gateway could serve values >= BN254_MODULUS,
+		// A compromised source could serve values >= BN254_MODULUS,
 		// causing circuit failures or field aliasing attacks.
 		validateBN254Hex(chunk.cellMapRoot, 'cellMapRoot');
 		for (const [cellKey, entry] of Object.entries(chunk.cells)) {
@@ -645,7 +718,7 @@ export async function getCellChunkByParent(
 			validateBN254HexArray(entry.d, `cells[${cellKey}].d`);
 			validateBN254HexArray(entry.p, `cells[${cellKey}].p`);
 
-			// Structural validation: catch malformed gateway responses at fetch boundary
+			// Structural validation: catch malformed responses at fetch boundary
 			if (entry.d.length !== 24) {
 				throw new Error(`cells[${cellKey}].d has ${entry.d.length} slots, expected 24`);
 			}
@@ -663,7 +736,7 @@ export async function getCellChunkByParent(
 		cellChunkCache.set(cacheKey, chunk);
 		return chunk;
 	} catch (err) {
-		if (err instanceof IPFSNotFoundError) return null;
+		if (err instanceof ContentNotFoundError) return null;
 		throw err;
 	}
 }
@@ -673,24 +746,31 @@ export async function getCellChunkByParent(
 // ============================================================================
 
 /**
- * Check IPFS gateway reachability.
- * Uses a lightweight HEAD request to the primary gateway.
+ * Check primary content source reachability.
+ * Uses a lightweight HEAD request.
  */
-export async function checkIPFSHealth(): Promise<boolean> {
+export async function checkHealth(): Promise<boolean> {
 	try {
-		// Attempt to reach the gateway root — lightweight check
-		const response = await fetch(IPFS_GATEWAY, {
+		const url = CONTENT_CONFIG.atlasBaseUrl || (
+			CONTENT_CONFIG.ipfsGateways.length > 0 ? CONTENT_CONFIG.ipfsGateways[0] : null
+		);
+		if (!url) return false;
+
+		const response = await fetch(url, {
 			method: 'HEAD',
 			signal: AbortSignal.timeout(5_000),
 		});
-		return response.ok || response.status === 400; // 400 = gateway up but no CID specified
+		return response.ok || response.status === 400;
 	} catch {
 		return false;
 	}
 }
 
+/** @deprecated Use checkHealth() instead. */
+export const checkIPFSHealth = checkHealth;
+
 /**
- * Clear all cached data. Forces re-fetch from IPFS on next access.
+ * Clear all cached data. Forces re-fetch on next access.
  */
 export async function clearCache(): Promise<void> {
 	memoryStore.delete('merkle-snapshot');
@@ -702,9 +782,15 @@ export async function clearCache(): Promise<void> {
 }
 
 /**
- * Check if data is available (CIDs configured and cached or fetchable).
- * Use this before calling read functions to determine if IPFS mode is active.
+ * Check if any content source is configured (R2 or IPFS).
+ * Use this before calling read functions.
  */
-export function isIPFSConfigured(): boolean {
-	return !!IPFS_CIDS.root;
+export function isConfigured(): boolean {
+	return !!CONTENT_CONFIG.atlasBaseUrl || !!CONTENT_CONFIG.ipfsCid;
 }
+
+/** @deprecated Use isConfigured() instead. */
+export const isIPFSConfigured = isConfigured;
+
+/** @deprecated Use isConfigured() instead. */
+export const isChunkedMode = isConfigured;

@@ -55,6 +55,8 @@ describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 			};
 
 			vi.doMock('$lib/core/shadow-atlas/ipfs-store', () => ({
+				configure: vi.fn(),
+				isConfigured: () => true,
 				isIPFSConfigured: () => true,
 				getChunkForCell: vi.fn().mockResolvedValue(mockSlots),
 				getOfficialsForDistrict: vi.fn().mockResolvedValue(mockOfficials),
@@ -87,6 +89,8 @@ describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 			const emptySlots = Array(24).fill(null);
 
 			vi.doMock('$lib/core/shadow-atlas/ipfs-store', () => ({
+				configure: vi.fn(),
+				isConfigured: () => true,
 				isIPFSConfigured: () => true,
 				getChunkForCell: vi.fn().mockResolvedValue(emptySlots),
 				getOfficialsForDistrict: vi.fn(),
@@ -105,8 +109,10 @@ describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 			expect(cellDistricts!.slots[0]).toBeNull();
 		});
 
-		it('falls back gracefully when IPFS is not configured', async () => {
+		it('falls back gracefully when content source is not configured', async () => {
 			vi.doMock('$lib/core/shadow-atlas/ipfs-store', () => ({
+				configure: vi.fn(),
+				isConfigured: () => false,
 				isIPFSConfigured: () => false,
 				getChunkForCell: vi.fn(),
 				getOfficialsForDistrict: vi.fn(),

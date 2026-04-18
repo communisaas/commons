@@ -159,9 +159,11 @@ declare global {
 			// Identity Verification (mDL via Digital Credentials API — no provider API keys needed)
 			// District resolution via Shadow Atlas H3 mapping (no external API keys needed)
 
-			// IPFS CID for Shadow Atlas chunked data (single root CID for UnixFS DAG)
-			IPFS_CID_ROOT?: string;
-			IPFS_CID_MERKLE_SNAPSHOT?: string;
+			// Shadow Atlas content sources
+			ATLAS_BASE_URL?: string; // R2 custom domain (primary reads)
+			IPFS_CID_ROOT?: string; // IPFS root CID (activates IPFS source layer)
+			IPFS_CID_MERKLE_SNAPSHOT?: string; // Separate Merkle snapshot CID (legacy)
+			IPFS_GATEWAYS?: string; // Comma-separated IPFS gateway URLs
 
 			// Witness Encryption (X25519 keypair for witness encryption/decryption)
 			// Generate with: npx tsx scripts/generate-witness-keypair.ts

@@ -9,7 +9,7 @@ import {
 } from '$lib/core/security/rate-limiter';
 import { deriveTrustTier } from '$lib/core/identity/authority-level';
 import { trackForRejection } from '$lib/services/rejectionMonitor';
-import { setCIDs } from '$lib/core/shadow-atlas/ipfs-store';
+import { configure } from '$lib/core/shadow-atlas/ipfs-store';
 import {
 	initCloudflareSentryHandle,
 	sentryHandle,
@@ -53,10 +53,14 @@ const handlePlatformEnv: Handle = async ({ event, resolve }) => {
 		}
 		envShimApplied = true;
 
-		// Wire IPFS CIDs from env vars so Shadow Atlas reads go live.
-		setCIDs({
-			root: process.env.IPFS_CID_ROOT || '',
-			merkleSnapshot: process.env.IPFS_CID_MERKLE_SNAPSHOT || '',
+		// Wire Shadow Atlas content sources from env vars.
+		// R2 is the primary read path; IPFS activates when CID + gateways are set.
+		configure({
+			atlasBaseUrl: process.env.ATLAS_BASE_URL || '',
+			ipfsCid: process.env.IPFS_CID_ROOT || '',
+			merkleSnapshotCid: process.env.IPFS_CID_MERKLE_SNAPSHOT || '',
+			ipfsGateways: (process.env.IPFS_GATEWAYS || '')
+				.split(',').map(s => s.trim()).filter(Boolean),
 		});
 	}
 	return resolve(event);

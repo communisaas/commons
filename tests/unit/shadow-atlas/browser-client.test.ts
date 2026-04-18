@@ -22,6 +22,8 @@ describe('browser-client', () => {
 		it('returns null when IPFS is not configured', async () => {
 			// Mock ipfs-store with no root CID configured
 			vi.doMock('$lib/core/shadow-atlas/ipfs-store', () => ({
+				configure: vi.fn(),
+				isConfigured: () => false,
 				isIPFSConfigured: () => false,
 				getChunkForCell: vi.fn(),
 				getOfficialsForDistrict: vi.fn(),
@@ -39,6 +41,8 @@ describe('browser-client', () => {
 			const mockSlots = ['cd-0612', 'CA', null, null, ...Array(20).fill(null)];
 
 			vi.doMock('$lib/core/shadow-atlas/ipfs-store', () => ({
+				configure: vi.fn(),
+				isConfigured: () => true,
 				isIPFSConfigured: () => true,
 				getChunkForCell: vi.fn().mockResolvedValue(mockSlots),
 				getOfficialsForDistrict: vi.fn(),
@@ -59,6 +63,8 @@ describe('browser-client', () => {
 
 		it('returns null when cell has no data', async () => {
 			vi.doMock('$lib/core/shadow-atlas/ipfs-store', () => ({
+				configure: vi.fn(),
+				isConfigured: () => true,
 				isIPFSConfigured: () => true,
 				getChunkForCell: vi.fn().mockResolvedValue(null),
 				getOfficialsForDistrict: vi.fn(),
@@ -80,6 +86,8 @@ describe('browser-client', () => {
 	describe('getOfficialsFromBrowser', () => {
 		it('returns null when IPFS is not configured', async () => {
 			vi.doMock('$lib/core/shadow-atlas/ipfs-store', () => ({
+				configure: vi.fn(),
+				isConfigured: () => false,
 				isIPFSConfigured: () => false,
 				getChunkForCell: vi.fn(),
 				getOfficialsForDistrict: vi.fn(),
@@ -104,6 +112,8 @@ describe('browser-client', () => {
 
 			const mockGetOfficials = vi.fn().mockResolvedValue(mockOfficials);
 			vi.doMock('$lib/core/shadow-atlas/ipfs-store', () => ({
+				configure: vi.fn(),
+				isConfigured: () => true,
 				isIPFSConfigured: () => true,
 				getChunkForCell: vi.fn(),
 				getOfficialsForDistrict: mockGetOfficials,
