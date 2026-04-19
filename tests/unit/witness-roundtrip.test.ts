@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import { x25519 } from '@noble/curves/ed25519';
 import { blake2b } from '@noble/hashes/blake2b';
-import { xchacha20poly1305 } from '@noble/ciphers/chacha';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { randomBytes } from '@noble/hashes/utils';
 import { decryptWitness, type EncryptedWitnessPayload } from '$lib/server/witness-decryption';
 
