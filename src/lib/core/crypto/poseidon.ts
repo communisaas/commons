@@ -11,13 +11,20 @@
  * 1. BarretenbergSync uses threads: 1 (single-threaded WASM without nested workers)
  * 2. Barretenberg.new() creates internal workers which causes deadlocks in nested worker contexts
  * 3. For lightweight operations like hashing, single-threaded is actually faster (no worker overhead)
+ *
+ * bb.js v4 migration notes:
+ * - `Fr` is no longer in the top-level package exports (lives in a subpath under
+ *   `barretenberg/testing/fields.js`). We work directly with `Uint8Array` instead,
+ *   which also matches the v4 `poseidon2Permutation` msgpack API shape:
+ *     input:  { inputs: Uint8Array[] }
+ *     output: { outputs: Uint8Array[] }
+ * - `BarretenbergSync.initSingleton()` is still the sync entry point.
  */
 
-import type { Fr as FrType, BarretenbergSync as BarretenbergSyncType } from '@aztec/bb.js';
+import type { BarretenbergSync as BarretenbergSyncType } from '@aztec/bb.js';
 
 // Lazy-loaded module references
 let BarretenbergSync: typeof import('@aztec/bb.js').BarretenbergSync | null = null;
-let Fr: typeof import('@aztec/bb.js').Fr | null = null;
 
 // Singleton BarretenbergSync instance (initialized lazily)
 let bbSyncInstance: BarretenbergSyncType | null = null;
@@ -26,19 +33,17 @@ let bbSyncInstance: BarretenbergSyncType | null = null;
  * Lazy-load @aztec/bb.js (avoids SSR issues)
  */
 async function loadBbJs() {
-	if (!BarretenbergSync || !Fr) {
+	if (!BarretenbergSync) {
 		// Import buffer shim first to install Buffer globally
 		await import('$lib/core/proof/buffer-shim');
 		// Then import bb.js
 		const bbjs = await import('@aztec/bb.js');
 		BarretenbergSync = bbjs.BarretenbergSync;
-		Fr = bbjs.Fr;
 	}
-	// After the if block, both are guaranteed to be assigned
-	if (!BarretenbergSync || !Fr) {
-		throw new Error('Failed to load @aztec/bb.js: BarretenbergSync or Fr is undefined');
+	if (!BarretenbergSync) {
+		throw new Error('Failed to load @aztec/bb.js: BarretenbergSync is undefined');
 	}
-	return { BarretenbergSync, Fr };
+	return { BarretenbergSync };
 }
 
 /**
@@ -81,14 +86,14 @@ async function getBarretenbergSync(): Promise<BarretenbergSyncType> {
 
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
 
+/** Zero field element as a 32-byte big-endian Uint8Array. */
+const FR_ZERO: Uint8Array = new Uint8Array(32);
+
 /**
- * Convert hex string to Fr (field element).
+ * Convert hex string to a 32-byte big-endian Uint8Array field element.
  * Validates hex format and BN254 field modulus bound.
  */
-function hexToFr(hex: string): FrType {
-	if (!Fr) {
-		throw new Error('Fr not loaded - call loadBbJs() first');
-	}
+function hexToFrBytes(hex: string): Uint8Array {
 	// Remove 0x prefix if present
 	const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex;
 	// M-05: Reject empty hex strings (would silently become 0)
@@ -111,14 +116,13 @@ function hexToFr(hex: string): FrType {
 	for (let i = 0; i < 32; i++) {
 		bytes[i] = parseInt(padded.slice(i * 2, i * 2 + 2), 16);
 	}
-	return new Fr(bytes);
+	return bytes;
 }
 
 /**
- * Convert Fr to hex string
+ * Convert 32-byte field element Uint8Array to hex string
  */
-function frToHex(fr: FrType): string {
-	const bytes = fr.toBuffer();
+function frBytesToHex(bytes: Uint8Array): string {
 	let hex = '';
 	for (let i = 0; i < bytes.length; i++) {
 		hex += bytes[i].toString(16).padStart(2, '0');
@@ -127,13 +131,14 @@ function frToHex(fr: FrType): string {
 }
 
 /**
- * Get Fr.ZERO
+ * Run the Poseidon2 permutation on a 4-element state (bb.js v4 API).
+ *
+ * v4 signature: `poseidon2Permutation({ inputs: Uint8Array[] }): { outputs: Uint8Array[] }`
+ * We wrap it so the rest of this module can keep passing/receiving plain Uint8Array[].
  */
-function getFrZero(): FrType {
-	if (!Fr) {
-		throw new Error('Fr not loaded - call loadBbJs() first');
-	}
-	return Fr.ZERO;
+function permute4(bb: BarretenbergSyncType, state: Uint8Array[]): Uint8Array[] {
+	const { outputs } = bb.poseidon2Permutation({ inputs: state });
+	return outputs;
 }
 
 /**
@@ -168,10 +173,9 @@ export const DOMAIN_HASH2 = '0x' + (0x48324d).toString(16).padStart(64, '0');
 export async function poseidon2Hash1(input: string): Promise<string> {
 	await loadBbJs();
 	const bb = await getBarretenbergSync();
-	const zero = getFrZero();
-	const state = [hexToFr(input), hexToFr(DOMAIN_HASH1), zero, zero];
-	const result = bb.poseidon2Permutation(state);
-	return frToHex(result[0]);
+	const state = [hexToFrBytes(input), hexToFrBytes(DOMAIN_HASH1), FR_ZERO, FR_ZERO];
+	const result = permute4(bb, state);
+	return frBytesToHex(result[0]);
 }
 
 /**
@@ -181,14 +185,11 @@ export async function poseidon2Hash1(input: string): Promise<string> {
  * BA-003: Domain separation tag in slot 2 prevents collision with hash4(a, b, 0, 0).
  */
 export async function poseidon2Hash2(left: string, right: string): Promise<string> {
-	// Ensure bb.js is loaded first
 	await loadBbJs();
 	const bb = await getBarretenbergSync();
-	const zero = getFrZero();
-	const state = [hexToFr(left), hexToFr(right), hexToFr(DOMAIN_HASH2), zero];
-	// poseidon2Permutation is synchronous on BarretenbergSync
-	const result = bb.poseidon2Permutation(state);
-	return frToHex(result[0]);
+	const state = [hexToFrBytes(left), hexToFrBytes(right), hexToFrBytes(DOMAIN_HASH2), FR_ZERO];
+	const result = permute4(bb, state);
+	return frBytesToHex(result[0]);
 }
 
 /**
@@ -203,20 +204,13 @@ export const DOMAIN_HASH3 = '0x' + (0x48334d).toString(16).padStart(64, '0');
 /**
  * Poseidon2 hash of 3 field elements (matches voter-protocol hash3)
  * state = [a, b, c, DOMAIN_HASH3], output = permutation(state)[0]
- *
- * @param a - First input (hex string, 0x-prefixed)
- * @param b - Second input (hex string, 0x-prefixed)
- * @param c - Third input (hex string, 0x-prefixed)
- * @returns Hash as hex string (0x-prefixed)
  */
 export async function poseidon2Hash3(a: string, b: string, c: string): Promise<string> {
-	// Ensure bb.js is loaded first
 	await loadBbJs();
 	const bb = await getBarretenbergSync();
-	const state = [hexToFr(a), hexToFr(b), hexToFr(c), hexToFr(DOMAIN_HASH3)];
-	// poseidon2Permutation is synchronous on BarretenbergSync
-	const result = bb.poseidon2Permutation(state);
-	return frToHex(result[0]);
+	const state = [hexToFrBytes(a), hexToFrBytes(b), hexToFrBytes(c), hexToFrBytes(DOMAIN_HASH3)];
+	const result = permute4(bb, state);
+	return frBytesToHex(result[0]);
 }
 
 /**
@@ -238,31 +232,24 @@ export const DOMAIN_HASH4 = '0x' + (0x48344d).toString(16).padStart(64, '0');
  * Matches Noir circuit poseidon2_hash4:
  *   Round 1: state = permute([DOMAIN_HASH4, a, b, c])
  *   Round 2: state[1] += d, state = permute(state), return state[0]
- *
- * @param a - First input (hex string)
- * @param b - Second input (hex string)
- * @param c - Third input (hex string)
- * @param d - Fourth input (hex string)
- * @returns Hash as hex string (0x-prefixed)
  */
 export async function poseidon2Hash4(a: string, b: string, c: string, d: string): Promise<string> {
-	// Ensure bb.js is loaded first
 	await loadBbJs();
 	const bb = await getBarretenbergSync();
 
 	// Round 1: permute([DOMAIN_HASH4, a, b, c])
-	const state1 = [hexToFr(DOMAIN_HASH4), hexToFr(a), hexToFr(b), hexToFr(c)];
-	const r1 = bb.poseidon2Permutation(state1);
+	const state1 = [hexToFrBytes(DOMAIN_HASH4), hexToFrBytes(a), hexToFrBytes(b), hexToFrBytes(c)];
+	const r1 = permute4(bb, state1);
 
 	// Round 2: state[1] += d, then permute
-	const s1BigInt = BigInt(frToHex(r1[1]));
+	const s1BigInt = BigInt(frBytesToHex(r1[1]));
 	const dBigInt = BigInt(d.startsWith('0x') ? d : '0x' + d);
 	const s1PlusD = (s1BigInt + dBigInt) % BN254_MODULUS;
 	const s1PlusDHex = '0x' + s1PlusD.toString(16).padStart(64, '0');
 
-	const state2 = [r1[0], hexToFr(s1PlusDHex), r1[2], r1[3]];
-	const r2 = bb.poseidon2Permutation(state2);
-	return frToHex(r2[0]);
+	const state2 = [r1[0], hexToFrBytes(s1PlusDHex), r1[2], r1[3]];
+	const r2 = permute4(bb, state2);
+	return frBytesToHex(r2[0]);
 }
 
 /**
@@ -282,9 +269,6 @@ export const DOMAIN_SPONGE_24 = '0x' + (0x534f4e47455f24).toString(16).padStart(
  *    - ADD inputs to state[1], state[2], state[3]
  *    - permute(state)
  * 3. Return state[0]
- *
- * @param inputs - Exactly 24 hex strings (district IDs)
- * @returns District commitment as hex string
  */
 export async function poseidon2Sponge24(inputs: string[]): Promise<string> {
 	if (inputs.length !== 24) {
@@ -294,14 +278,14 @@ export async function poseidon2Sponge24(inputs: string[]): Promise<string> {
 	const bb = await getBarretenbergSync();
 
 	// Initialize state: [DOMAIN_SPONGE_24, 0, 0, 0]
-	let state = [hexToFr(DOMAIN_SPONGE_24), getFrZero(), getFrZero(), getFrZero()];
+	let state: Uint8Array[] = [hexToFrBytes(DOMAIN_SPONGE_24), FR_ZERO, FR_ZERO, FR_ZERO];
 
 	// Absorb: 24 inputs / 3 rate = 8 rounds
 	for (let i = 0; i < 8; i++) {
 		// ADD inputs to rate elements (state[1], state[2], state[3])
-		const s1 = BigInt(frToHex(state[1]));
-		const s2 = BigInt(frToHex(state[2]));
-		const s3 = BigInt(frToHex(state[3]));
+		const s1 = BigInt(frBytesToHex(state[1]));
+		const s2 = BigInt(frBytesToHex(state[2]));
+		const s3 = BigInt(frBytesToHex(state[3]));
 		const in0 = BigInt(inputs[i * 3].startsWith('0x') ? inputs[i * 3] : '0x' + inputs[i * 3]);
 		const in1 = BigInt(inputs[i * 3 + 1].startsWith('0x') ? inputs[i * 3 + 1] : '0x' + inputs[i * 3 + 1]);
 		const in2 = BigInt(inputs[i * 3 + 2].startsWith('0x') ? inputs[i * 3 + 2] : '0x' + inputs[i * 3 + 2]);
@@ -310,16 +294,16 @@ export async function poseidon2Sponge24(inputs: string[]): Promise<string> {
 		const new2 = (s2 + in1) % BN254_MODULUS;
 		const new3 = (s3 + in2) % BN254_MODULUS;
 
-		state[1] = hexToFr('0x' + new1.toString(16).padStart(64, '0'));
-		state[2] = hexToFr('0x' + new2.toString(16).padStart(64, '0'));
-		state[3] = hexToFr('0x' + new3.toString(16).padStart(64, '0'));
+		state[1] = hexToFrBytes('0x' + new1.toString(16).padStart(64, '0'));
+		state[2] = hexToFrBytes('0x' + new2.toString(16).padStart(64, '0'));
+		state[3] = hexToFrBytes('0x' + new3.toString(16).padStart(64, '0'));
 
 		// Permute
-		state = [...bb.poseidon2Permutation([state[0], state[1], state[2], state[3]])];
+		state = permute4(bb, state);
 	}
 
 	// Squeeze: return state[0]
-	return frToHex(state[0]);
+	return frBytesToHex(state[0]);
 }
 
 /**
@@ -329,10 +313,8 @@ export async function poseidon2Sponge24(inputs: string[]): Promise<string> {
  * @returns Field element as hex string (0x...)
  */
 export async function poseidonHash(input: string): Promise<string> {
-	// Ensure bb.js is loaded first
 	await loadBbJs();
 	const bb = await getBarretenbergSync();
-	const zero = getFrZero();
 
 	// Convert string to bytes
 	const encoder = new TextEncoder();
@@ -340,7 +322,7 @@ export async function poseidonHash(input: string): Promise<string> {
 
 	// Poseidon2 works on field elements (BN254)
 	// Each field element can hold ~31 bytes (248 bits)
-	const chunks: FrType[] = [];
+	const chunks: Uint8Array[] = [];
 
 	for (let i = 0; i < bytes.length; i += 31) {
 		const chunk = bytes.slice(i, i + 31);
@@ -348,19 +330,19 @@ export async function poseidonHash(input: string): Promise<string> {
 		for (let j = 0; j < chunk.length; j++) {
 			value = (value << 8n) | BigInt(chunk[j]);
 		}
-		// Convert bigint to Fr
+		// Convert bigint to field element Uint8Array
 		const hexValue = '0x' + value.toString(16).padStart(64, '0');
-		chunks.push(hexToFr(hexValue));
+		chunks.push(hexToFrBytes(hexValue));
 	}
 
 	// Pad to 4 elements for permutation
 	while (chunks.length < 4) {
-		chunks.push(zero);
+		chunks.push(FR_ZERO);
 	}
 
 	// Hash with Poseidon2 permutation (synchronous on BarretenbergSync)
-	const result = bb.poseidon2Permutation(chunks.slice(0, 4));
-	return frToHex(result[0]);
+	const result = permute4(bb, chunks.slice(0, 4));
+	return frBytesToHex(result[0]);
 }
 
 /**
