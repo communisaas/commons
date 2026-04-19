@@ -1,7 +1,9 @@
 @import 'tailwindcss';
-/* Import JetBrains Mono for data/metrics — must precede any non-@import/@charset/@layer */
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @config '../tailwind.config.ts';
+
+/* JetBrains Mono loaded via <link> in app.html — can't be @imported after
+   @tailwindcss/vite inlines tailwind content ahead of it (violates CSS spec
+   that @import must precede all non-@charset/@layer statements). */
 
 /* Register --card-hue as typed property — provides fallback default (55 = warm gold) */
 @property --card-hue {
