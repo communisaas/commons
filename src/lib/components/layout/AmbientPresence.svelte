@@ -36,9 +36,14 @@
 	let isVisible = $state(false);
 	let isDropdownOpen = $state(false);
 	let dropdownRef = $state<HTMLDivElement | null>(null);
+	// SSR always renders sign-in pill; client swaps to user pill post-mount.
+	// Avoids Svelte 5 hydration DOM-walk mismatch in the authenticated branch.
+	let mounted = $state(false);
 
 	// Reveal logic: show after delay or scroll
 	onMount(() => {
+		mounted = true;
+
 		// If authenticated, show immediately
 		if (user) {
 			isVisible = true;
@@ -131,7 +136,7 @@
 -->
 
 <div class="ambient-presence" class:ambient-presence--visible={isVisible}>
-	{#if user}
+	{#if mounted && user}
 		<!-- Authenticated: User pill with dropdown -->
 		<div class="ambient-user-container" bind:this={dropdownRef}>
 			<button
