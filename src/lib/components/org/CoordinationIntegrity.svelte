@@ -87,7 +87,7 @@
 	);
 </script>
 
-<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-6 space-y-4">
+<div class="rounded-md bg-surface-base border border-surface-border p-6 space-y-4">
 	<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary">Coordination Integrity</p>
 
 	{#if allNull}

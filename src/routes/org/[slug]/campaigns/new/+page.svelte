@@ -79,7 +79,7 @@
 		{/if}
 
 		<!-- Section 1: Who should see this proof? -->
-		<div class="rounded-lg bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 space-y-4">
+		<div class="rounded-lg bg-surface-base border border-surface-border p-4 space-y-4">
 			<div>
 				<p class="text-sm font-medium text-text-secondary">Who should see this proof?</p>
 				<p class="text-xs text-text-tertiary mt-0.5">Choose the jurisdiction where your proof will land</p>
@@ -176,7 +176,7 @@
 		</div>
 
 		<!-- Debate settings -->
-		<div class="rounded-lg bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 space-y-4">
+		<div class="rounded-lg bg-surface-base border border-surface-border p-4 space-y-4">
 			<div class="flex items-center justify-between">
 				<div>
 					<p class="text-sm font-medium text-text-secondary">Adversarial Debate</p>

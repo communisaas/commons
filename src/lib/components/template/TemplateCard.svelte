@@ -52,7 +52,7 @@
 	<!-- New Badge: Temporal signal (top-right corner) -->
 	{#if template.isNew}
 		<span
-			class="absolute right-3 top-3 z-10 rounded bg-cyan-500 px-2 py-1 font-brand text-[0.6875rem] font-bold uppercase tracking-wide text-white shadow-sm"
+			class="absolute right-3 top-3 z-10 rounded bg-cyan-500 px-2 py-1 font-brand text-[0.6875rem] font-bold uppercase tracking-wide text-white"
 		>
 			New
 		</span>
@@ -157,25 +157,25 @@
 
 	<!-- Footer Section: Action arrow always visible, metrics only when meaningful -->
 	<div
-		class="border-t border-slate-100/50 bg-gradient-to-br from-slate-50/30 to-violet-50/10 p-4"
+		class="border-t border-slate-100/50 p-4"
 	>
 		{#if FEATURES.DEBATE && template.debateSummary}
 			{@const ds = template.debateSummary}
 			<div class="mb-2 flex items-center gap-2 text-sm">
 				{#if ds.status === 'resolved'}
 					{#if ds.winningStance === 'SUPPORT'}
-						<span class="inline-flex items-center gap-1.5 rounded-full border border-emerald-200/60 bg-emerald-50 px-2 py-0.5">
-							<span class="font-brand font-medium text-emerald-700">Peer-reviewed</span>
+						<span class="inline-flex items-center gap-1.5">
+							<span class="font-mono text-xs text-emerald-700">Peer-reviewed</span>
 							<span class="text-xs text-emerald-600/70">&middot; {ds.uniqueParticipants}</span>
 						</span>
 					{:else if ds.winningStance === 'OPPOSE'}
-						<span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200/60 bg-slate-50 px-2 py-0.5">
-							<span class="font-brand font-medium text-slate-700">Debated</span>
+						<span class="inline-flex items-center gap-1.5">
+							<span class="font-mono text-xs text-slate-700">Debated</span>
 							<span class="text-xs text-slate-600/70">&middot; {ds.uniqueParticipants}</span>
 						</span>
 					{:else if ds.winningStance === 'AMEND'}
-						<span class="inline-flex items-center gap-1.5 rounded-full border border-amber-200/60 bg-amber-50 px-2 py-0.5">
-							<span class="font-brand font-medium text-amber-700">Amended</span>
+						<span class="inline-flex items-center gap-1.5">
+							<span class="font-mono text-xs text-amber-700">Amended</span>
 							<span class="text-xs text-amber-600/70">&middot; {ds.uniqueParticipants}</span>
 						</span>
 					{/if}
@@ -198,14 +198,14 @@
 				<!-- Verified Sends Metric: JetBrains Mono with gradient for high activity -->
 				<div class="relative flex items-center gap-2 text-sm text-slate-600">
 					<Users
-						class="h-4 w-4 shrink-0 {isHighActivity ? 'text-violet-500' : 'text-slate-500'}"
+						class="h-4 w-4 shrink-0 {isHighActivity ? 'text-teal-500' : 'text-slate-500'}"
 						aria-hidden="true"
 					/>
 					<span
 						class="font-mono font-medium tabular-nums"
 						class:bg-gradient-to-br={isHighActivity}
-						class:from-violet-600={isHighActivity}
-						class:to-purple-600={isHighActivity}
+						class:from-teal-600={isHighActivity}
+						class:to-emerald-600={isHighActivity}
 						class:bg-clip-text={isHighActivity}
 						class:text-transparent={isHighActivity}
 					>

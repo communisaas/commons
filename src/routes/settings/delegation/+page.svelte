@@ -45,10 +45,10 @@
 	};
 
 	const statusColors: Record<string, string> = {
-		active: 'bg-emerald-100 text-emerald-700',
-		paused: 'bg-amber-100 text-amber-700',
-		revoked: 'bg-red-100 text-red-700',
-		expired: 'bg-slate-100 text-slate-500'
+		active: 'text-emerald-700',
+		paused: 'text-amber-700',
+		revoked: 'text-red-700',
+		expired: 'text-slate-500'
 	};
 
 	async function parsePolicy() {
@@ -222,10 +222,10 @@
 							<div class="flex items-start justify-between mb-3">
 								<div>
 									<div class="flex items-center gap-2 mb-1">
-										<span class="rounded-full px-2.5 py-0.5 text-xs font-medium {statusColors[grant.status] || 'bg-slate-100 text-slate-500'}">
+										<span class="font-mono text-xs {statusColors[grant.status] || 'text-slate-500'}">
 											{grant.status}
 										</span>
-										<span class="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+										<span class="font-mono text-xs text-blue-700">
 											{scopeLabels[grant.scope] || grant.scope}
 										</span>
 									</div>
@@ -281,7 +281,7 @@
 		<!-- Creation Flow -->
 		{#if showCreate}
 			<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-				<div class="w-full max-w-lg rounded-2xl bg-white p-6 shadow-md">
+				<div class="w-full max-w-lg rounded-lg bg-white p-6 shadow-md">
 					<div class="flex items-center justify-between mb-4">
 						<h3 class="text-lg font-medium text-slate-900">
 							{createStep === 'input' ? 'Describe Your Policy' : 'Review Parsed Policy'}

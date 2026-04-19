@@ -285,10 +285,17 @@
 
 <div class="space-y-6 md:space-y-8" data-testid="template-list">
 	{#if loading}
-		<!-- Loading State using SkeletonTemplate -->
-		{#each Array(4) as _, index}
-			<SkeletonTemplate variant="list" animate={true} classNames="template-loading-{index}" />
-		{/each}
+		<!-- Loading State: wrapped in group-level spacing to match real card containers -->
+		<div class="space-y-3 md:space-y-4">
+			<!-- Group header skeleton -->
+			<div class="flex items-center justify-between">
+				<div class="h-3.5 w-20 rounded bg-slate-200/50"></div>
+				<div class="h-3 w-16 rounded bg-slate-200/40"></div>
+			</div>
+			{#each Array(4) as _, index}
+				<SkeletonTemplate variant="list" animate={true} classNames="template-loading-{index}" />
+			{/each}
+		</div>
 	{:else}
 		<!-- Search UI -->
 		<div class="search-container">

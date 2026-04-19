@@ -305,7 +305,7 @@
 			</div>
 			<div class="mt-2 h-2 w-full rounded-full bg-slate-200">
 				<div
-					class="h-full rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-500"
+					class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-700 transition-all duration-500"
 					style="width: {currentStep === 'value-prop' ? '50%' : '99%'}"
 				></div>
 			</div>
@@ -325,7 +325,7 @@
 	{/if}
 
 	<!-- Step Content -->
-	<div class="rounded-2xl border border-slate-200 bg-white p-8 shadow-lg">
+	<div class="rounded-lg border border-slate-200 bg-white p-8 shadow-lg">
 		{#if currentStep === 'value-prop'}
 			<!-- Value Proposition -->
 			<VerificationValueProp variant="full" />
@@ -334,7 +334,7 @@
 				<button
 					type="button"
 					onclick={proceedFromValueProp}
-					class="w-full rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4 text-lg font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-md"
+					class="w-full rounded-lg bg-gradient-to-r from-emerald-500 to-emerald-700 px-6 py-4 text-lg font-semibold text-white shadow-lg transition-all hover:bg-emerald-700 hover:shadow-md"
 				>
 					Continue to Verification
 				</button>
@@ -431,7 +431,7 @@
 							oncompletePending = false;
 							oncomplete?.({ ...verificationData!, userId });
 						}}
-						class="rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-md"
+						class="rounded-lg bg-gradient-to-r from-emerald-500 to-emerald-700 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:bg-emerald-700 hover:shadow-md"
 					>
 						Continue to Message Submission
 					</button>

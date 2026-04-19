@@ -219,14 +219,10 @@
 					{template.description || template.preview}
 				</p>
 				<div class="mt-3 flex items-center gap-2">
-					<span
-						class="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700"
-					>
+					<span class="font-mono text-xs text-blue-700">
 						{template.domain}
 					</span>
-					<span
-						class="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600"
-					>
+					<span class="font-mono text-xs text-slate-600">
 						{template.deliveryMethod === 'cwc' ? 'Congressional' : 'Direct'}
 					</span>
 				</div>

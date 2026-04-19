@@ -39,9 +39,9 @@ ACCESSIBILITY:
 			border: 'border-blue-200'
 		},
 		document: {
-			bg: 'bg-purple-50',
-			text: 'text-purple-700',
-			border: 'border-purple-200'
+			bg: 'bg-slate-100',
+			text: 'text-slate-700',
+			border: 'border-slate-200'
 		},
 		organization: {
 			bg: 'bg-orange-50',

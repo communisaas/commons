@@ -67,33 +67,27 @@
 			  amber    → AMEND   (amendment proposed, modified framing available)
 		-->
 		{#if debate.winningStance === 'SUPPORT'}
-			<div
-				class="inline-flex items-center gap-1.5 rounded-full border border-emerald-200/60 bg-emerald-50 px-2.5 py-1 text-sm"
-			>
+			<div class="inline-flex items-center gap-1.5">
 				<ShieldCheck class="h-3.5 w-3.5 text-emerald-600" />
-				<span class="font-medium text-emerald-700">Deliberation-tested</span>
+				<span class="font-mono text-xs text-emerald-700">Deliberation-tested</span>
 				{#if variant === 'inline'}
-					<span class="text-emerald-600/70">· {uniqueParticipants} deliberated</span>
+					<span class="font-mono text-xs text-emerald-600/70">· {uniqueParticipants} deliberated</span>
 				{/if}
 			</div>
 		{:else if debate.winningStance === 'OPPOSE'}
-			<div
-				class="inline-flex items-center gap-1.5 rounded-full border border-red-200/60 bg-red-50 px-2.5 py-1 text-sm"
-			>
+			<div class="inline-flex items-center gap-1.5">
 				<AlertTriangle class="h-3.5 w-3.5 text-red-600" />
-				<span class="font-medium text-red-700">Framing contested</span>
+				<span class="font-mono text-xs text-red-700">Framing contested</span>
 				{#if variant === 'inline'}
-					<span class="text-red-600/70">· see deliberation</span>
+					<span class="font-mono text-xs text-red-600/70">· see deliberation</span>
 				{/if}
 			</div>
 		{:else if debate.winningStance === 'AMEND'}
-			<div
-				class="inline-flex items-center gap-1.5 rounded-full border border-amber-200/60 bg-amber-50 px-2.5 py-1 text-sm"
-			>
+			<div class="inline-flex items-center gap-1.5">
 				<PenLine class="h-3.5 w-3.5 text-amber-600" />
-				<span class="font-medium text-amber-700">Amendment proposed</span>
+				<span class="font-mono text-xs text-amber-700">Amendment proposed</span>
 				{#if variant === 'inline'}
-					<span class="text-amber-600/70">· see deliberation</span>
+					<span class="font-mono text-xs text-amber-600/70">· see deliberation</span>
 				{/if}
 			</div>
 		{/if}

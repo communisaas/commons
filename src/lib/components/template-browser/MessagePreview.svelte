@@ -830,7 +830,7 @@
 									<!-- User-editable variables with input in popover -->
 									{#if segment.name && userEditableVariables.has(segment.name)}
 										<div class="mb-2 flex items-center gap-1.5">
-											<Sparkles class="h-3 w-3 text-purple-500" />
+											<Sparkles class="h-3 w-3 text-amber-500" />
 											<span class="text-[11px] font-medium tracking-tight text-slate-700">
 												{(segment.name && variableHints[segment.name]?.prompt) ||
 													segment.name ||
@@ -849,12 +849,12 @@
 												placeholder={(segment.name && variableHints[segment.name]?.placeholder) ||
 													`Enter your ${segment.name || 'value'}...`}
 												class="w-full min-w-[280px] resize-none rounded-lg border border-slate-300 bg-white p-3
-														font-sans text-sm focus:border-purple-500 focus:ring-2 focus:ring-purple-500 focus:ring-opacity-20"
+														font-sans text-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-500 focus:ring-opacity-20"
 												rows="4"
 											></textarea>
 											<!-- Character count and encouragement -->
 											{#if segment.name && variableValues[segment.name] && typeof variableValues[segment.name] === 'string' && (variableValues[segment.name] as string).length > 10}
-												<div class="mt-1 text-xs text-purple-600">
+												<div class="mt-1 text-xs text-amber-600">
 													{(variableValues[segment.name] as string).length} characters • Looking great!
 												</div>
 											{/if}
@@ -864,7 +864,7 @@
 												oninput={(e) => handleInput(e, segment.name || '')}
 												placeholder={`Enter ${segment.name || 'value'}...`}
 												class="w-full min-w-[240px] rounded-lg border border-slate-300 bg-white px-3 py-2
-														font-sans text-sm focus:border-purple-500 focus:ring-2 focus:ring-purple-500 focus:ring-opacity-20"
+														font-sans text-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-500 focus:ring-opacity-20"
 											/>
 										{/if}
 									{/if}

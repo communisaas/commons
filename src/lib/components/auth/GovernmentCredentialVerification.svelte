@@ -18,7 +18,7 @@
 		Info
 	} from '@lucide/svelte';
 	import {
-		isDigitalCredentialsSupported,
+		shouldUseSameDeviceFlow,
 		requestCredential,
 		type CredentialRequestResult
 	} from '$lib/core/identity/digital-credentials-api';
@@ -59,8 +59,12 @@
 		| 'unsupported'
 		| 'unsupported_state';
 
+	// Desktop browsers must always use the cross-device bridge: Chrome on macOS
+	// detects DC API support but has no local wallet, falling through to CTAP2
+	// hybrid transport which crashes the renderer. shouldUseSameDeviceFlow()
+	// returns true only on mobile devices with DC API support.
 	let verificationState = $state<VerificationState>(
-		isDigitalCredentialsSupported() ? 'idle' : 'unsupported'
+		shouldUseSameDeviceFlow() ? 'idle' : 'unsupported'
 	);
 	let errorMessage = $state<string | null>(null);
 	let supportedStates = $state<string[]>([]);
@@ -166,6 +170,8 @@
 			.userAgentData?.platform?.toLowerCase() ?? '';
 		if (uadPlatform === 'android' || ua.includes('Android')) return 'android';
 		if (/iPhone|iPad/.test(ua)) return 'ios';
+		// iPadOS 13+ reports macOS UA — detect via touch capability
+		if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 0) return 'ios';
 		return 'desktop';
 	}
 
@@ -184,6 +190,9 @@
 	let sseCleanup: (() => void) | null = null;
 
 	async function startBridge() {
+		// Close any previous SSE connection before opening a new one
+		sseCleanup?.();
+		sseCleanup = null;
 		bridgeStatus = 'waiting';
 		bridgeError = null;
 
@@ -192,7 +201,7 @@
 			// (server verifies via hash before creating the session).
 			if (!userEmail) {
 				bridgeStatus = 'error';
-				bridgeError = 'Cross-device verification requires your email. Sign in on the device where you created your account to decrypt it.';
+				bridgeError = 'Unable to start verification — your email is not available. Please sign in again.';
 				return;
 			}
 			const response = await fetch('/api/identity/bridge/start', {
@@ -447,7 +456,7 @@
 
 				{#if bridgeQrSvg}
 					<div class="flex justify-center py-6">
-						<div class="rounded-lg bg-white p-3 border border-slate-100">
+						<div class="rounded-lg p-3 border border-slate-100">
 							{@html bridgeQrSvg}
 						</div>
 					</div>
@@ -459,7 +468,7 @@
 
 				<!-- Pairing code: user verifies this matches phone before approving -->
 				{#if bridgePairingCode}
-					<div class="mt-2 rounded-lg border border-slate-200 bg-white px-4 py-3">
+					<div class="mt-2 rounded-lg border border-slate-200 px-4 py-3">
 						<p class="text-xs text-slate-500 mb-1">Matching code</p>
 						<p class="font-mono text-base font-bold text-slate-900 tracking-wider">
 							{bridgePairingCode}

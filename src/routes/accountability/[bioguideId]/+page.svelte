@@ -114,7 +114,7 @@
 
 	<!-- Summary Card -->
 	<section
-		class="mb-8 rounded-md border border-slate-200 bg-white p-6 shadow-sm"
+		class="mb-8 rounded-md border border-slate-200 bg-white p-6"
 		aria-label="Summary statistics"
 	>
 		<h2 class="sr-only">Summary</h2>
@@ -234,7 +234,7 @@
 				billEntry.receipts.reduce((s, r) => s + r.alignment, 0) / billEntry.receipts.length
 			)}
 
-			<div class="mb-3 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+			<div class="mb-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
 				<!-- Bill Header (clickable) -->
 				<button
 					class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"

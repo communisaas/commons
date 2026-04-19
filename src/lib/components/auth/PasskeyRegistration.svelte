@@ -132,7 +132,7 @@
 	</div>
 {:else if uiState ==='success'}
 	<!-- Success state with celebration -->
-	<div class="rounded-md border border-emerald-200 bg-emerald-50 p-6 shadow-sm">
+	<div class="rounded-md border border-emerald-200 bg-emerald-50 p-6">
 		<div class="flex items-start gap-4">
 			<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-emerald-100 ring-4 ring-emerald-50">
 				<CheckCircle2 class="h-6 w-6 text-emerald-600" />
@@ -168,7 +168,7 @@
 	</div>
 {:else}
 	<!-- Idle state: Registration prompt -->
-	<div class="rounded-md border border-slate-200 bg-slate-50 p-6 shadow-sm transition-all hover:border-emerald-200 hover:shadow-md">
+	<div class="rounded-md border border-slate-200 bg-slate-50 p-6 transition-all hover:border-emerald-200 hover:shadow-md">
 		<div class="mb-4 flex items-center gap-3">
 			<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-emerald-50 ring-2 ring-emerald-100">
 				{#if hasBiometric}

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { browser } from '$app/environment';
-	import { isDigitalCredentialsSupported } from '$lib/core/identity/digital-credentials-api';
+	import { shouldUseSameDeviceFlow } from '$lib/core/identity/digital-credentials-api';
 	import { FEATURES } from '$lib/config/features';
 	import DebateMarketCard from '$lib/components/debate/DebateMarketCard.svelte';
 	import DebateParticipationPanel from '$lib/components/wallet/debate/DebateParticipationPanel.svelte';
@@ -63,7 +63,7 @@
 	// Check mDL support on mount
 	$effect(() => {
 		if (browser) {
-			mdlSupported = isDigitalCredentialsSupported();
+			mdlSupported = shouldUseSameDeviceFlow();
 		}
 	});
 
@@ -442,7 +442,7 @@
 
 		<button
 			onclick={goToIdentify}
-			class="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-6 py-3.5 text-base font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 active:bg-slate-700"
+			class="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-6 py-3.5 text-base font-semibold text-white transition-colors hover:bg-slate-800 active:bg-slate-700"
 		>
 			Take Action
 			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -480,7 +480,7 @@
 					required
 					autocomplete="name"
 					placeholder="Your full name"
-					class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-sm transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+					class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
 				/>
 			</div>
 
@@ -495,7 +495,7 @@
 					required
 					autocomplete="email"
 					placeholder="you@example.com"
-					class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-sm transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+					class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
 				/>
 			</div>
 
@@ -512,7 +512,7 @@
 						autocomplete="postal-code"
 						placeholder="e.g. 90210"
 						onblur={validatePostalCode}
-						class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-sm transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+						class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
 					/>
 				</div>
 				{#if postalCodeResolved}
@@ -631,7 +631,7 @@
 						bind:value={districtStreet}
 						autocomplete="street-address"
 						placeholder="123 Main Street"
-						class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-sm transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+						class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
 					/>
 				</div>
 
@@ -645,7 +645,7 @@
 						bind:value={districtCity}
 						autocomplete="address-level2"
 						placeholder="City"
-						class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-sm transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+						class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
 					/>
 				</div>
 
@@ -661,7 +661,7 @@
 							autocomplete="address-level1"
 							placeholder="CA"
 							maxlength="2"
-							class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-sm transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+							class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
 						/>
 					</div>
 					<div>
@@ -675,7 +675,7 @@
 							autocomplete="postal-code"
 							placeholder="90210"
 							maxlength="10"
-							class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-sm transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+							class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
 						/>
 					</div>
 				</div>
@@ -802,7 +802,7 @@
 						rows="5"
 						bind:value={message}
 						placeholder="Add a personal message..."
-						class="mt-1 block w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-sm transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+						class="mt-1 block w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
 					></textarea>
 				</div>
 			{/if}

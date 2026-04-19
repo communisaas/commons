@@ -806,7 +806,7 @@
 	<div class="lg:grid lg:gap-8 lg:items-start overflow-x-clip {landscape.totalCount > 3 ? 'lg:grid-cols-[2fr_3fr]' : 'lg:grid-cols-[3fr_2fr]'}">
 		<!-- LEFT: Message preview — sticky reference while landscape scrolls -->
 		<div class="min-w-0 lg:sticky lg:top-6 lg:self-start">
-			<div class="rounded-md border border-slate-200 bg-white shadow-sm">
+			<div class="rounded-md border border-slate-200 bg-white">
 				{#if addressRequired}
 					<!-- Address Required Notice -->
 					<div class="border-b border-amber-200 bg-amber-50 px-6 py-4">

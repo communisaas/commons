@@ -198,7 +198,7 @@
 	const config = $derived(statusConfig[status]);
 </script>
 
-<div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+<div class="rounded-lg border border-slate-200 bg-white p-4">
 	<div class="flex items-start justify-between">
 		<div class="flex items-start gap-3">
 			{#if config}

@@ -48,7 +48,7 @@
 	import ProofGenerator from '$lib/components/template/ProofGenerator.svelte';
 	import AddressCollectionForm from '$lib/components/onboarding/AddressCollectionForm.svelte';
 	import {
-		isDigitalCredentialsSupported,
+		shouldUseSameDeviceFlow,
 		requestCredential
 	} from '$lib/core/identity/digital-credentials-api';
 	import {
@@ -529,7 +529,7 @@
 		walletErrorMessage = null;
 
 		// If DC API isn't supported, skip straight to failure
-		if (!isDigitalCredentialsSupported()) {
+		if (!shouldUseSameDeviceFlow()) {
 			walletErrorMessage = 'Digital Credentials API not supported in this browser';
 			trustUpgradePhase = 'wallet-failed';
 			return;
@@ -1122,7 +1122,7 @@
 				{:else}
 					{@const sentCount = template.send_count ?? 0}
 					<!-- Standard Impact Counter -->
-					<div class="rounded-lg border border-slate-200 bg-white p-4">
+					<div class="rounded-lg border border-slate-200 p-4">
 						<div class="text-center">
 							<div class="mb-2 text-3xl font-bold text-slate-900">
 								You + {sentCount.toLocaleString()} others
@@ -1192,13 +1192,13 @@
 					</div>
 				{:else if user && (user.trust_tier ?? 0) === 2 && template.deliveryMethod === 'cwc'}
 					<div
-						class="rounded-lg border border-purple-200 bg-slate-50 p-4"
+						class="rounded-lg border border-emerald-200 bg-slate-50 p-4"
 						in:fly={{ y: 10, duration: 400, delay: 300 }}
 					>
-						<p class="mb-1 text-sm font-semibold text-purple-900">
+						<p class="mb-1 text-sm font-semibold text-emerald-900">
 							Verify your identity for cryptographic delivery
 						</p>
-						<p class="mb-3 text-xs text-purple-700">
+						<p class="mb-3 text-xs text-emerald-700">
 							Your message was delivered as a constituent. Verify your identity to send with a zero-knowledge proof next time — unfakeable, unbottable.
 						</p>
 						<button
@@ -1215,14 +1215,14 @@
 									});
 								}
 							}}
-							class="w-full rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-purple-700"
+							class="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-700"
 						>
 							Verify identity
 						</button>
 					</div>
 				{:else if user && (user.trust_tier ?? 0) === 3 && template.deliveryMethod === 'cwc'}
 					<div
-						class="rounded-lg border border-indigo-200 bg-gradient-to-r from-indigo-50 to-violet-50 p-4"
+						class="rounded-lg border border-emerald-200 bg-gradient-to-r from-emerald-50 to-emerald-100 p-4"
 						in:fly={{ y: 10, duration: 400, delay: 300 }}
 					>
 						<p class="mb-1 text-sm font-semibold text-indigo-900">
@@ -1367,16 +1367,16 @@
 					<!-- mDL: Highest signal — verify with digital ID -->
 					<button
 						onclick={() => { attemptWalletVerification(); }}
-						class="group flex w-full items-center gap-4 rounded-md border-2 border-purple-200 bg-slate-50 p-4 text-left transition-all hover:border-purple-300 hover:shadow-md"
+						class="group flex w-full items-center gap-4 rounded-md border-2 border-emerald-200 bg-slate-50 p-4 text-left transition-all hover:border-emerald-300 hover:shadow-md"
 					>
-						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-100">
-							<Smartphone class="h-5 w-5 text-purple-600" />
+						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100">
+							<Smartphone class="h-5 w-5 text-emerald-600" />
 						</div>
 						<div class="min-w-0 flex-1">
-							<span class="block text-sm font-semibold text-purple-900">Verify with Digital ID</span>
-							<span class="block text-xs text-purple-600">Cryptographic proof of identity. Undeniable signal.</span>
+							<span class="block text-sm font-semibold text-emerald-900">Verify with Digital ID</span>
+							<span class="block text-xs text-emerald-600">Cryptographic proof of identity. Undeniable signal.</span>
 						</div>
-						<ArrowRight class="h-4 w-4 shrink-0 text-purple-400 transition-transform group-hover:translate-x-0.5" />
+						<ArrowRight class="h-4 w-4 shrink-0 text-emerald-400 transition-transform group-hover:translate-x-0.5" />
 					</button>
 
 					<!-- Address: Primary CTA — available now, resolves the tension -->
@@ -1421,11 +1421,11 @@
 				<!-- Phase 2: Wallet prompt active — iOS shows wallet UI -->
 				<div class="flex flex-col items-center justify-center py-8" in:fade={{ duration: 200 }}>
 					<div class="relative mb-6">
-						<div class="flex h-20 w-20 items-center justify-center rounded-full bg-purple-100">
-							<Smartphone class="h-10 w-10 text-purple-600" />
+						<div class="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100">
+							<Smartphone class="h-10 w-10 text-emerald-600" />
 						</div>
 						<div class="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-white shadow-md">
-							<Loader2 class="h-5 w-5 animate-spin text-purple-600" />
+							<Loader2 class="h-5 w-5 animate-spin text-emerald-600" />
 						</div>
 					</div>
 					<p class="text-lg font-semibold text-slate-900">Requesting wallet...</p>
@@ -1457,11 +1457,11 @@
 				<!-- Phase 4: Simulating verification — brief interstitial -->
 				<div class="flex flex-col items-center justify-center py-8" in:fade={{ duration: 200 }}>
 					<div class="relative mb-6">
-						<div class="flex h-20 w-20 items-center justify-center rounded-full bg-purple-100">
-							<Fingerprint class="h-10 w-10 text-purple-600" />
+						<div class="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100">
+							<Fingerprint class="h-10 w-10 text-emerald-600" />
 						</div>
 						<div class="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-white shadow-md">
-							<Loader2 class="h-5 w-5 animate-spin text-purple-600" />
+							<Loader2 class="h-5 w-5 animate-spin text-emerald-600" />
 						</div>
 					</div>
 					<p class="text-lg font-semibold text-slate-900">Verifying credential...</p>

@@ -16,7 +16,7 @@
 		<!-- Hero Value Prop -->
 		<div class="text-center">
 			<div
-				class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg"
+				class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-600 shadow-lg"
 			>
 				<Shield class="h-8 w-8 text-white" />
 			</div>
@@ -28,7 +28,7 @@
 		</div>
 
 		<!-- What Congress Sees -->
-		<div class="rounded-md border border-slate-200 bg-white p-6 shadow-sm">
+		<div class="rounded-md border border-slate-200 bg-white p-6">
 			<h3 class="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-900">
 				<MessageSquare class="h-5 w-5 text-blue-600" />
 				What Congressional Offices See
@@ -71,10 +71,10 @@
 		<!-- Privacy Guarantee -->
 		{#if showPrivacy}
 			<div
-				class="rounded-md border border-green-200 bg-green-50 p-6 shadow-sm"
+				class="rounded-md border border-green-200 bg-green-50 p-6"
 			>
 				<div class="flex items-start gap-4">
-					<div class="rounded-full bg-green-100 p-3 shadow-sm">
+					<div class="rounded-full bg-green-100 p-3">
 						<Lock class="h-6 w-6 text-green-700" />
 					</div>
 					<div class="flex-1 space-y-3">

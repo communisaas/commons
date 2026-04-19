@@ -61,7 +61,7 @@
 			{#each filtered as org (org.slug)}
 				<a
 					href="/org/{org.slug}"
-					class="rounded-md bg-surface-base border border-surface-border p-5 shadow-[var(--shadow-sm)] transition-colors hover:border-teal-500/40 group"
+					class="rounded-md bg-surface-base border border-surface-border p-5 transition-colors hover:border-teal-500/40 group"
 				>
 					<!-- Logo / initials -->
 					<div class="flex items-center gap-3 mb-3">

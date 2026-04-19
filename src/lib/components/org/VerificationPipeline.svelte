@@ -33,7 +33,7 @@
 	}
 </script>
 
-<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-6 {className}">
+<div class="rounded-md bg-surface-base border border-surface-border p-6 {className}">
 	<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary mb-4">Verification Pipeline</p>
 
 	{#if total === 0}

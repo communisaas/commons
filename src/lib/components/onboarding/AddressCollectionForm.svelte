@@ -232,7 +232,7 @@
 							></div>
 							<!-- Main Icon -->
 							<div
-								class="relative flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue-50 to-indigo-50 shadow-sm ring-1 ring-blue-100"
+								class="relative flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue-50 to-indigo-50 ring-1 ring-blue-100"
 							>
 								<MapPin class="h-8 w-8 text-blue-600 opacity-90" strokeWidth={1.5} />
 							</div>
@@ -399,7 +399,7 @@
 								class="absolute inset-0 animate-ping rounded-full bg-green-100 opacity-75 duration-[3000ms]"
 							></div>
 							<div
-								class="relative flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-green-50 to-emerald-50 shadow-sm ring-1 ring-green-100"
+								class="relative flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-green-50 to-emerald-50 ring-1 ring-green-100"
 							>
 								<CheckCircle2 class="h-8 w-8 text-green-600 opacity-90" strokeWidth={1.5} />
 							</div>
@@ -409,7 +409,7 @@
 					</div>
 
 					<!-- Verified Address -->
-					<div class="mb-6 overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+					<div class="mb-6 overflow-hidden rounded-md border border-slate-200 bg-white">
 						<div class="border-b border-slate-100 bg-slate-50/50 px-4 py-3">
 							<p class="text-xs font-semibold uppercase tracking-wider text-slate-500">
 								Official Address
@@ -491,7 +491,7 @@
 					<div class="mb-6 text-center">
 						<div class="relative mb-4 inline-flex h-16 w-16 items-center justify-center">
 							<div
-								class="relative flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-green-50 to-emerald-50 shadow-sm ring-1 ring-green-100"
+								class="relative flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-green-50 to-emerald-50 ring-1 ring-green-100"
 							>
 								<CheckCircle2 class="h-8 w-8 text-green-600 opacity-90" strokeWidth={1.5} />
 							</div>

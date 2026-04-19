@@ -77,7 +77,7 @@
 			{#if TypeIcon}
 				<div class="flex-shrink-0 pt-0.5">
 					<TypeIcon
-						class="h-4 w-4 {isInsight ? 'text-amber-500' : 'text-purple-500'}"
+						class="h-4 w-4 text-amber-500"
 						strokeWidth={2}
 					/>
 				</div>

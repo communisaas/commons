@@ -123,15 +123,15 @@
 				<tbody class="divide-y divide-slate-100">
 					<tr>
 						<td class="px-4 py-2.5 text-slate-700">Chrome 141+ <span class="text-slate-400">(desktop & Android)</span></td>
-						<td class="px-4 py-2.5"><span class="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">Full support</span></td>
+						<td class="px-4 py-2.5"><span class="font-mono text-xs text-green-700">Full support</span></td>
 					</tr>
 					<tr>
 						<td class="px-4 py-2.5 text-slate-700">Safari 26+ <span class="text-slate-400">(macOS & iOS)</span></td>
-						<td class="px-4 py-2.5"><span class="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">Full support</span></td>
+						<td class="px-4 py-2.5"><span class="font-mono text-xs text-green-700">Full support</span></td>
 					</tr>
 					<tr>
 						<td class="px-4 py-2.5 text-slate-700">Firefox, Edge, older browsers</td>
-						<td class="px-4 py-2.5"><span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">Not yet supported</span></td>
+						<td class="px-4 py-2.5"><span class="font-mono text-xs text-slate-600">Not yet supported</span></td>
 					</tr>
 				</tbody>
 			</table>
@@ -149,7 +149,7 @@
 		</p>
 		<div class="mt-3 flex flex-wrap gap-2">
 			{#each data.supportedStates.sort() as state}
-				<span class="inline-flex items-center rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm font-medium text-slate-700 shadow-sm">
+				<span class="inline-flex items-center rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm font-medium text-slate-700">
 					{state}
 				</span>
 			{/each}

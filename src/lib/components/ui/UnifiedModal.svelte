@@ -81,7 +81,7 @@ backdrop handling, and keyboard navigation.
 	>
 		<!-- Modal Container -->
 		<div
-			class="relative flex min-h-0 w-full flex-col overflow-hidden rounded-2xl bg-white shadow-md {sizeClasses[
+			class="relative flex min-h-0 w-full flex-col overflow-hidden rounded-lg bg-white shadow-md {sizeClasses[
 				size
 			]} max-h-[90dvh]"
 			class:max-h-none={size === 'full'}

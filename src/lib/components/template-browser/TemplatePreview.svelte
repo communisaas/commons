@@ -256,7 +256,7 @@
 {#if showEmailModal}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
 		<div
-			class="animate-in zoom-in-95 mx-4 w-full max-w-sm rounded-2xl bg-white p-8 shadow-md duration-200"
+			class="animate-in zoom-in-95 mx-4 w-full max-w-sm rounded-lg bg-white p-8 shadow-md duration-200"
 		>
 			<div class="text-center">
 				<!-- Animated mail icon -->

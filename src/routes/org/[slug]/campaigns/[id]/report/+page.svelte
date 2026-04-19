@@ -63,7 +63,7 @@
 			case 'replied':
 				return 'bg-blue-400';
 			case 'meeting_requested':
-				return 'bg-purple-400';
+				return 'bg-teal-400';
 			case 'vote_cast':
 				return 'bg-amber-400';
 			case 'public_statement':

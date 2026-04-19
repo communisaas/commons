@@ -40,7 +40,7 @@
 	const isEmpty = $derived(metrics.sent === 0);
 </script>
 
-<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-6 space-y-5">
+<div class="rounded-md bg-surface-base border border-surface-border p-6 space-y-5">
 	<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary">Email Delivery</p>
 
 	{#if isEmpty}

@@ -719,7 +719,7 @@
 	{/if}
 
 	<!-- Current Plan + Usage -->
-	<section class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-6 space-y-5">
+	<section class="rounded-md bg-surface-base border border-surface-border p-6 space-y-5">
 		<div class="flex items-center justify-between">
 			<div>
 				<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Current Plan</h2>

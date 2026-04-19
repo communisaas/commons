@@ -12,6 +12,7 @@
 	import { templateStore } from '$lib/stores/templates.svelte';
 	import TemplatePreview from '$lib/components/template-browser/TemplatePreview.svelte';
 	import TemplateList from '$lib/components/template-browser/TemplateList.svelte';
+	import SkeletonTemplate from '$lib/components/ui/SkeletonTemplate.svelte';
 	import TouchModal from '$lib/components/ui/TouchModal.svelte';
 	import SimpleModal from '$lib/components/modals/SimpleModal.svelte';
 	import TemplateSuccessModal from '$lib/components/modals/TemplateSuccessModal.svelte';
@@ -602,14 +603,7 @@
 							</button>
 						</div>
 					{:else if isLoading && !selectedTemplate}
-						<div class="rounded-md border border-slate-200 bg-white p-6">
-							<div class="animate-pulse">
-								<div class="mb-6 h-6 w-64 rounded bg-slate-200"></div>
-								<div class="mb-3 h-4 w-full rounded bg-slate-200"></div>
-								<div class="mb-6 h-4 w-3/4 rounded bg-slate-200"></div>
-								<div class="h-64 rounded bg-slate-200"></div>
-							</div>
-						</div>
+						<SkeletonTemplate variant="preview" animate={true} />
 					{:else if selectedTemplate}
 						<TemplatePreview
 							template={selectedTemplate}

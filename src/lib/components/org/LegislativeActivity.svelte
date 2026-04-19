@@ -155,7 +155,7 @@
 </script>
 
 {#if FEATURES.LEGISLATION}
-	<div class="rounded-md bg-surface-base border border-surface-border p-6 shadow-[var(--shadow-sm)]">
+	<div class="rounded-md bg-surface-base border border-surface-border p-6">
 		<div class="flex items-center justify-between mb-4">
 			<div class="flex items-center gap-2">
 				<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Legislative Activity</p>

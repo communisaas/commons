@@ -29,6 +29,7 @@
 	import AddressVerificationFlow from './AddressVerificationFlow.svelte';
 	import { hasValidSession } from '$lib/core/identity/session-cache';
 	import { needsCredentialRecovery } from '$lib/core/identity/recovery-detector';
+	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 
 	interface Props {
 		userId: string;
@@ -156,7 +157,7 @@
 	>
 		<!-- Modal Container -->
 		<div
-			class="relative w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-md"
+			class="relative w-full max-w-4xl overflow-hidden rounded-lg bg-white shadow-md"
 			transition:scale={{ duration: 300, start: 0.95, easing: quintOut }}
 		>
 			<!-- Close Button -->
@@ -179,7 +180,7 @@
 					</p>
 				</div>
 			{:else if needsTier4Plus}
-				<div class="border-b border-indigo-200 bg-gradient-to-r from-indigo-50 to-blue-50 px-8 py-6">
+				<div class="border-b border-emerald-200 bg-gradient-to-r from-emerald-50 to-emerald-100 px-8 py-6">
 					<h2 id="verification-gate-title" class="text-2xl font-bold text-slate-900">
 						Verify with Passport or Government Credential
 					</h2>
@@ -215,6 +216,7 @@
 				{#if showRecovery}
 					<IdentityRecoveryFlow
 						{userId}
+						userEmail={decryptedUser.email ?? undefined}
 						oncomplete={handleRecoveryComplete}
 						oncancel={handleCancel}
 					/>
@@ -227,6 +229,7 @@
 				{:else}
 					<IdentityVerificationFlow
 						{userId}
+						userEmail={decryptedUser.email ?? undefined}
 						{templateSlug}
 						skipValueProp={true}
 						oncomplete={handleVerificationComplete}

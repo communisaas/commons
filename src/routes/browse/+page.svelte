@@ -71,7 +71,7 @@
 
 <div class="min-h-screen bg-gray-50 pb-12">
 	<!-- Header Section -->
-	<div class="bg-white shadow-sm">
+	<div>
 		<div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
 			<h1 class="text-3xl font-bold text-gray-900 md:text-4xl">Browse Templates</h1>
 			<p class="mt-2 text-lg text-gray-600">

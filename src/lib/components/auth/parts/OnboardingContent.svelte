@@ -212,7 +212,7 @@
 
 		<!-- Template Preview Card -->
 		<div
-			class="mb-6 rounded-lg border border-slate-200 bg-gradient-to-br from-blue-50 to-indigo-50 p-4"
+			class="mb-6 rounded-lg border border-slate-200 bg-emerald-50 p-4"
 		>
 			<h3 class="mb-1 text-sm font-semibold text-slate-900">
 				{template.title}

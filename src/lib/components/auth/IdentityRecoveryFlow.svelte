@@ -201,7 +201,7 @@
 	{/if}
 
 	<!-- Step Content -->
-	<div class="rounded-2xl border border-slate-200 bg-white p-8 shadow-lg">
+	<div class="rounded-lg border border-slate-200 bg-white p-8 shadow-lg">
 		{#if currentStep === 'explain'}
 			<!-- Explanation Step -->
 			<div class="py-8 text-center">

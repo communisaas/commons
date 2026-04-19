@@ -142,7 +142,7 @@
 	</a>
 
 	<!-- Header card -->
-	<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-6">
+	<div class="rounded-md bg-surface-base border border-surface-border p-6">
 		<div class="flex items-start gap-4">
 			<!-- Photo or initials -->
 			{#if dm.photoUrl}
@@ -208,7 +208,7 @@
 
 	<!-- Contact info -->
 	{#if dm.phone || dm.email || dm.websiteUrl || dm.officeAddress}
-		<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-5">
+		<div class="rounded-md bg-surface-base border border-surface-border p-5">
 			<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">Contact</h2>
 			<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
 				{#if dm.phone}
@@ -250,7 +250,7 @@
 
 	<!-- Accountability summary -->
 	{#if data.accountability.receiptCount > 0}
-		<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-5">
+		<div class="rounded-md bg-surface-base border border-surface-border p-5">
 			<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">Accountability Summary</h2>
 			<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
 				<div>
@@ -278,7 +278,7 @@
 		<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Activity</h2>
 
 		{#if timeline.length === 0}
-			<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-8 text-center">
+			<div class="rounded-md bg-surface-base border border-surface-border p-8 text-center">
 				<div class="mx-auto w-10 h-10 rounded-full bg-surface-overlay flex items-center justify-center mb-3">
 					<svg class="w-5 h-5 text-text-quaternary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -289,7 +289,7 @@
 		{:else}
 			<div class="space-y-2">
 				{#each timeline as item (item.id)}
-					<div class="rounded-md bg-surface-base border border-surface-border shadow-[var(--shadow-sm)] p-4 hover:bg-surface-raised transition-colors">
+					<div class="rounded-md bg-surface-base border border-surface-border p-4 hover:bg-surface-raised transition-colors">
 						<div class="flex items-start justify-between gap-3">
 							<div class="flex-1 min-w-0">
 								{#if item.type === 'vote'}

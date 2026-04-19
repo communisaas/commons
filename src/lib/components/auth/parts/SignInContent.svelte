@@ -104,7 +104,7 @@
 		></div>
 		<!-- Main Node -->
 		<div
-			class="relative flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-emerald-50 to-teal-50 shadow-sm ring-1 ring-emerald-100"
+			class="relative flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-emerald-50 to-teal-50 ring-1 ring-emerald-100"
 		>
 			<Users class="h-10 w-10 text-emerald-600 opacity-90" strokeWidth={1.5} />
 		</div>

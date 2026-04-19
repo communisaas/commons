@@ -4,7 +4,7 @@
 	 *
 	 * Perceptual design: This is a place of judgment, not a list of tasks.
 	 * The atmosphere is cooler and more authoritative than the debate surface —
-	 * slate and violet instead of warm amber. Each case is a gravity well
+	 * emerald and teal instead of warm amber. Each case is a gravity well
 	 * that draws the reviewer into the evidence. The action (selecting a winner
 	 * and writing justification) is positioned as a weighty act, not a button click.
 	 *
@@ -124,8 +124,8 @@
 	<!-- Chamber header -->
 	<div class="mb-8">
 		<div class="flex items-center gap-3 mb-2">
-			<div class="h-10 w-10 rounded-lg bg-violet-100 flex items-center justify-center">
-				<Gavel class="h-5 w-5 text-violet-700" />
+			<div class="h-10 w-10 rounded-lg bg-emerald-100 flex items-center justify-center">
+				<Gavel class="h-5 w-5 text-emerald-700" />
 			</div>
 			<div>
 				<h1 class="text-xl font-semibold text-slate-900 tracking-tight">Governance Review</h1>
@@ -136,7 +136,7 @@
 				</p>
 			</div>
 		</div>
-		<div class="h-px bg-gradient-to-r from-violet-200 via-slate-200 to-transparent mt-4"></div>
+		<div class="h-px bg-gradient-to-r from-emerald-200 via-slate-200 to-transparent mt-4"></div>
 	</div>
 
 	{#if cases.length === 0}
@@ -160,12 +160,12 @@
 				{@const result = submitResult[govCase.id]}
 
 				<div class="rounded-md border border-slate-200 bg-white overflow-hidden transition-shadow
-					{isExpanded ? 'shadow-lg ring-1 ring-violet-100' : 'shadow-sm hover:shadow-md'}">
+					{isExpanded ? 'shadow-lg ring-1 ring-emerald-100' : 'hover:shadow-md'}">
 
 					<!-- Case header — always visible -->
 					<button
 						class="w-full text-left px-6 py-4 transition-colors
-							{isExpanded ? 'bg-gradient-to-r from-violet-50/50 to-white' : 'hover:bg-slate-50/50'}"
+							{isExpanded ? 'bg-gradient-to-r from-emerald-50/50 to-white' : 'hover:bg-slate-50/50'}"
 						onclick={() => toggleCase(govCase.id)}
 					>
 						<div class="flex items-start gap-4">
@@ -184,7 +184,7 @@
 								<div class="flex items-center gap-2 mb-1">
 									<a
 										href="/s/{govCase.templateSlug}"
-										class="text-xs font-medium text-violet-600 hover:text-violet-800 transition-colors"
+										class="text-xs font-medium text-teal-600 hover:text-teal-800 transition-colors"
 										onclick={(e) => e.stopPropagation()}
 									>
 										{govCase.templateTitle}
@@ -243,7 +243,7 @@
 							<!-- Evidence section header -->
 							<div class="px-6 py-3 bg-slate-50/50 border-b border-slate-100">
 								<div class="flex items-center gap-2">
-									<Shield class="h-3.5 w-3.5 text-violet-500" />
+									<Shield class="h-3.5 w-3.5 text-emerald-500" />
 									<h3 class="text-xs font-semibold text-slate-600 uppercase tracking-wider">
 										AI Evaluation Evidence
 									</h3>
@@ -258,7 +258,7 @@
 									{@const resScore = resolution?.argumentScores.find((s) => s.argumentIndex === arg.argumentIndex)}
 
 									<div class="px-6 py-4 transition-colors
-										{isSelected ? 'bg-violet-50/40 ring-inset ring-1 ring-violet-200' : ''}">
+										{isSelected ? 'bg-emerald-50/40 ring-inset ring-1 ring-emerald-200' : ''}">
 
 										<!-- Argument header with selection -->
 										<div class="flex items-start gap-3">
@@ -266,8 +266,8 @@
 											<button
 												class="shrink-0 mt-1 h-5 w-5 rounded-full border-2 flex items-center justify-center transition-all
 													{isSelected
-														? 'border-violet-500 bg-violet-500'
-														: 'border-slate-300 hover:border-violet-400'}"
+														? 'border-emerald-500 bg-emerald-500'
+														: 'border-slate-300 hover:border-emerald-400'}"
 												onclick={() => { selectedWinner[govCase.id] = isSelected ? null : arg.argumentIndex; }}
 												title="Select as winner"
 											>
@@ -357,10 +357,10 @@
 							</div>
 
 							<!-- Governance action panel -->
-							<div class="border-t-2 border-violet-100 bg-gradient-to-b from-violet-50/30 to-white">
+							<div class="border-t-2 border-emerald-100 bg-gradient-to-b from-emerald-50/30 to-white">
 								<div class="px-6 py-5">
 									<div class="flex items-center gap-2 mb-4">
-										<Gavel class="h-4 w-4 text-violet-600" />
+										<Gavel class="h-4 w-4 text-emerald-600" />
 										<h3 class="text-sm font-semibold text-slate-800">
 											Submit Governance Resolution
 										</h3>
@@ -384,8 +384,8 @@
 										<!-- Selection summary -->
 										{#if winner != null}
 											{@const winnerArg = govCase.arguments.find((a) => a.argumentIndex === winner)}
-											<div class="rounded-lg border border-violet-200 bg-violet-50/50 p-3 mb-4">
-												<div class="flex items-center gap-2 text-xs text-violet-700 mb-1">
+											<div class="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 mb-4">
+												<div class="flex items-center gap-2 text-xs text-emerald-700 mb-1">
 													<CheckCircle2 size={12} />
 													<span class="font-medium">Selected winner: Argument #{winner}</span>
 													{#if winnerArg}
@@ -412,7 +412,7 @@
 												id="justification-{govCase.id}"
 												class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2
 													text-sm text-slate-800 placeholder:text-slate-400
-													focus:outline-none focus:ring-2 focus:ring-violet-300 focus:border-violet-300
+													focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-300
 													resize-y min-h-[80px]"
 												placeholder="Explain the reasoning behind this governance decision. Consider: Why did AI evaluators disagree? Which arguments presented stronger evidence? How does the community signal inform the decision?"
 												bind:value={justifications[govCase.id]}
@@ -430,7 +430,7 @@
 											<button
 												class="px-4 py-2 rounded-lg text-sm font-medium transition-all
 													{winner != null && justifications[govCase.id]?.trim()
-														? 'bg-violet-600 text-white hover:bg-violet-700 shadow-sm'
+														? 'bg-emerald-600 text-white hover:bg-emerald-700'
 														: 'bg-slate-100 text-slate-400 cursor-not-allowed'}"
 												disabled={winner == null || !justifications[govCase.id]?.trim() || submitting === govCase.id}
 												onclick={() => submitResolution(govCase.id)}

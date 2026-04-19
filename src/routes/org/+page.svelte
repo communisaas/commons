@@ -8,7 +8,7 @@
 	const user = $derived(data.user);
 	const orgs = $derived(user?.orgMemberships ?? []);
 
-	// Creation form state
+	// Creation form state (terminal beat)
 	let showCreate = $state(false);
 	let orgName = $state('');
 	let orgSlug = $state('');
@@ -62,11 +62,11 @@
 			});
 
 			if (!res.ok) {
-				const data = await res.json().catch(() => null);
+				const body = await res.json().catch(() => null);
 				if (res.status === 409) {
 					errorMsg = 'That slug is taken. Try another.';
 				} else {
-					errorMsg = data?.message || 'Something went wrong.';
+					errorMsg = body?.message || 'Something went wrong.';
 				}
 				return;
 			}
@@ -85,7 +85,10 @@
 
 <svelte:head>
 	<title>Organizations | Commons</title>
-	<meta name="description" content="Verified advocacy infrastructure. Deliver cryptographic proof to decision-makers." />
+	<meta
+		name="description"
+		content="312 signatures, no proof. A petition counts names; a verification packet documents constituents — each individually authored, identity-proven, district-matched, screened for duplicates."
+	/>
 </svelte:head>
 
 <div class="org-page">
@@ -165,210 +168,432 @@
 			{/if}
 		</div>
 	{:else}
-		<!-- ═══ NARRATIVE ═══ -->
-		<div class="org-page__narrative">
+		<!-- ═══ ARGUMENT ═══ -->
+		<article class="argument">
 
-			<!-- Act 1: The Vision — what becomes possible -->
-			<p class="narrative__opening">
-				What a decision-maker receives from your organization:
-			</p>
+			<!-- ═══════════════════════════════════════════
+			     BEAT 1 — THE PROBLEM (empirical, cited)
+			     ═══════════════════════════════════════════ -->
+			<section class="beat beat--problem" aria-labelledby="problem-heading">
+				<h1 id="problem-heading" class="problem__thesis">
+					<span class="problem__stat">312</span> signatures. No proof any of them live in the district.
+				</h1>
 
-			<figure class="specimen">
-				<div class="specimen__row">
-					<span class="specimen__label">Campaign</span>
-					<span class="specimen__value">Aquifer Monitoring Expansion — Budget Allocation</span>
-				</div>
-				<div class="specimen__row">
-					<span class="specimen__label">District</span>
-					<span class="specimen__value">NV Water District 7</span>
-				</div>
+				<p class="problem__bridge">
+					Staffers discount volume when authorship, constituency, and specificity are opaque.
+				</p>
 
-				<div class="specimen__divider"></div>
+				<p class="problem__counter">
+					Only <span class="problem__stat problem__stat--weak">51%</span> of Congressional staff say form emails influence undecided votes. Half believe those messages are sent <em>without</em> the constituent's knowledge. <span class="problem__stat problem__stat--weak">92%</span> say individualized emails DO influence &mdash; which is the filter staffers apply.
+				</p>
 
-				<div class="specimen__count-block">
-					<span class="specimen__count">248</span>
-					<span class="specimen__count-label">verified constituents in your district</span>
-				</div>
+				<p class="problem__citation">
+					CMF, <cite>Citizen-Centric Advocacy</cite> (2017); CMF 2004/2015 longitudinal staff panel
+				</p>
+			</section>
 
-				<div class="specimen__evidence">
-					<div class="specimen__evidence-row">
-						<span class="specimen__evidence-label">Identity</span>
-						<span class="specimen__evidence-detail">
-							<strong>156</strong> government ID verified
-							<span class="specimen__sep" aria-hidden="true">&middot;</span>
-							<strong>92</strong> address-matched
+			<!-- ═══════════════════════════════════════════
+			     BEAT 2 — THE EVIDENCE (gap artifact)
+			     Inbox spray pattern: 300 identical subjects
+			     ═══════════════════════════════════════════ -->
+			<section class="beat beat--evidence" aria-labelledby="evidence-heading">
+				<h2 id="evidence-heading" class="beat__heading">What the staffer actually sees</h2>
+				<p class="beat__subheading">
+					Shared-office mailbox, <span class="beat__subheading-num">6</span>-minute window, one morning in March.
+				</p>
+
+				<figure class="inbox-artifact" aria-label="Congressional staff shared inbox showing mass-mail spray pattern">
+					<div class="inbox-artifact__chrome">
+						<span class="inbox-artifact__dot"></span>
+						<span class="inbox-artifact__dot"></span>
+						<span class="inbox-artifact__dot"></span>
+						<span class="inbox-artifact__chrome-label">staff@house.gov &middot; Inbox</span>
+					</div>
+
+					<div class="inbox-artifact__toolbar">
+						<span class="inbox-artifact__filter">Sort: received</span>
+						<span class="inbox-artifact__count">
+							<span class="inbox-artifact__count-num">312</span> unread
 						</span>
 					</div>
-					<div class="specimen__evidence-row">
-						<span class="specimen__evidence-label">Messages</span>
-						<span class="specimen__evidence-detail">
-							<strong>196</strong> individually composed
-							<span class="specimen__sep" aria-hidden="true">&middot;</span>
-							<strong>52</strong> shared statements
+
+					<ul class="inbox-artifact__list" role="list">
+						<li class="inbox-row">
+							<span class="inbox-row__time">9:04</span>
+							<span class="inbox-row__from">M. Alvarez</span>
+							<span class="inbox-row__subject">Oppose HR 5421 &mdash; Clean Water Funding Cut</span>
+						</li>
+						<li class="inbox-row">
+							<span class="inbox-row__time">9:04</span>
+							<span class="inbox-row__from">J. Okafor</span>
+							<span class="inbox-row__subject">Oppose HR 5421 &mdash; Clean Water Funding Cut</span>
+						</li>
+						<li class="inbox-row">
+							<span class="inbox-row__time">9:05</span>
+							<span class="inbox-row__from">S. Park</span>
+							<span class="inbox-row__subject">Oppose HR 5421 &mdash; Clean Water Funding Cut</span>
+						</li>
+						<li class="inbox-row">
+							<span class="inbox-row__time">9:05</span>
+							<span class="inbox-row__from">D. Thompson</span>
+							<span class="inbox-row__subject">Oppose HR 5421 &mdash; Clean Water Funding Cut</span>
+						</li>
+						<li class="inbox-row">
+							<span class="inbox-row__time">9:06</span>
+							<span class="inbox-row__from">L. Nguyen</span>
+							<span class="inbox-row__subject">Oppose HR 5421 &mdash; Clean Water Funding Cut</span>
+						</li>
+						<li class="inbox-row inbox-row--dim">
+							<span class="inbox-row__time">9:06</span>
+							<span class="inbox-row__from">A. Patel</span>
+							<span class="inbox-row__subject">Oppose HR 5421 &mdash; Clean Water Funding Cut</span>
+						</li>
+						<li class="inbox-row inbox-row--dimmer">
+							<span class="inbox-row__time">9:07</span>
+							<span class="inbox-row__from">R. Chen</span>
+							<span class="inbox-row__subject">Oppose HR 5421 &mdash; Clean Water Funding Cut</span>
+						</li>
+						<li class="inbox-row inbox-row--dimmest">
+							<span class="inbox-row__time">9:07</span>
+							<span class="inbox-row__from">B. Ito</span>
+							<span class="inbox-row__subject">Oppose HR 5421 &mdash; Clean Water Funding Cut</span>
+						</li>
+						<li class="inbox-row__ellipsis">&mdash; 304 more, identical subject line &mdash;</li>
+					</ul>
+				</figure>
+
+				<p class="evidence__caption">
+					Auto-grouped by the CRM as one campaign. Sampled, totaled, filed. No identity check. No district proof. Half of staff report these campaigns are sent without the constituent's knowledge.
+				</p>
+				<p class="evidence__citation">
+					CMF 2004/2015 longitudinal staff panel
+				</p>
+				<p class="evidence__citation">
+					Walker &amp; Le, <cite>Socius</cite> 2023 &middot; astroturf campaigns measurably harm trust in legitimate advocacy orgs
+				</p>
+			</section>
+
+			<!-- ═══════════════════════════════════════════
+			     BEAT 3 — THE MECHANISM (specimen + staff-filter mapping)
+			     ═══════════════════════════════════════════ -->
+			<section class="beat beat--mechanism" aria-labelledby="mechanism-heading">
+				<h2 id="mechanism-heading" class="beat__heading">What Commons delivers instead</h2>
+				<p class="beat__subheading">
+					A petition counts names. A verification packet documents constituents &mdash; each individually authored, identity-proven, district-matched, screened for duplicates.
+				</p>
+
+				<div class="mechanism__specimen-block">
+					<p class="mechanism__provenance">
+						Example packet &middot; CA-12 &middot; Feb 2026
+					</p>
+
+					<figure class="specimen">
+						<div class="specimen__title">Verified Constituent Report</div>
+
+						<div class="specimen__meta">
+							<div class="specimen__row">
+								<span class="specimen__label">Campaign</span>
+								<span class="specimen__value">HR 5421 &middot; Clean Water Funding</span>
+							</div>
+							<div class="specimen__row">
+								<span class="specimen__label">District</span>
+								<span class="specimen__value">CA-12</span>
+							</div>
+							<div class="specimen__row">
+								<span class="specimen__label">Period</span>
+								<span class="specimen__value">Feb 12 &ndash; Mar 4, 2026</span>
+							</div>
+						</div>
+
+						<div class="specimen__divider"></div>
+
+						<div class="specimen__hero">
+							<span class="specimen__count">248</span>
+							<span class="specimen__count-label">verified constituents<br/>in your district</span>
+						</div>
+
+						<div class="specimen__divider"></div>
+
+						<div class="specimen__evidence">
+							<div class="specimen__evidence-row">
+								<span class="specimen__evidence-label">Identity</span>
+								<span class="specimen__evidence-detail">
+									<strong>156</strong> government ID
+									<span class="specimen__sep">&middot;</span>
+									<strong>92</strong> address-matched
+								</span>
+							</div>
+							<div class="specimen__evidence-row">
+								<span class="specimen__evidence-label">Authorship</span>
+								<span class="specimen__evidence-detail">
+									<strong>196</strong> individually composed
+									<span class="specimen__sep">&middot;</span>
+									<strong>52</strong> shared statements
+								</span>
+							</div>
+							<div class="specimen__evidence-row">
+								<span class="specimen__evidence-label">Geography</span>
+								<span class="specimen__evidence-detail">
+									<strong>14</strong> communities across district
+								</span>
+							</div>
+							<div class="specimen__evidence-row">
+								<span class="specimen__evidence-label">Screening</span>
+								<span class="specimen__evidence-detail">
+									One submission per person &middot; duplicates removed
+								</span>
+							</div>
+						</div>
+
+						<div class="specimen__seal">
+							<span class="specimen__seal-text">Cryptographic audit trail &middot; independently verifiable</span>
+						</div>
+					</figure>
+				</div>
+
+				<!-- Staff-filter mapping: each specimen field → the question it answers, with a citation -->
+				<dl class="filter-map" aria-label="How each field maps to the staff intake filter it answers">
+					<div class="filter-map__row">
+						<dt class="filter-map__field">Identity</dt>
+						<dd class="filter-map__answer">answers the staffer's first filter:</dd>
+						<dd class="filter-map__question">&ldquo;Is this person real?&rdquo;</dd>
+						<dd class="filter-map__citation">CMF 2004/2015 &middot; 78% of staff say it is &ldquo;helpful&rdquo; or &ldquo;very helpful&rdquo; when advocacy campaigns reveal their identity</dd>
+					</div>
+					<div class="filter-map__row">
+						<dt class="filter-map__field">Geography</dt>
+						<dd class="filter-map__answer">answers:</dd>
+						<dd class="filter-map__question">&ldquo;Are they in my district?&rdquo;</dd>
+						<dd class="filter-map__citation">CMF 2017 &middot; 91% of staff weight district-specific impact information</dd>
+					</div>
+					<div class="filter-map__row">
+						<dt class="filter-map__field">Authorship</dt>
+						<dd class="filter-map__answer">answers:</dd>
+						<dd class="filter-map__question">&ldquo;Did they actually write this?&rdquo;</dd>
+						<dd class="filter-map__citation">CMF 2004/2015 &middot; 53% of staff say form campaigns are sent without the constituent's knowledge</dd>
+					</div>
+					<div class="filter-map__row">
+						<dt class="filter-map__field">Screening</dt>
+						<dd class="filter-map__answer">answers:</dd>
+						<dd class="filter-map__question">&ldquo;Is this astroturf?&rdquo;</dd>
+						<dd class="filter-map__citation">Walker &amp; Le, Socius 2023 &middot; unverified submissions measurably harm trust in legitimate orgs</dd>
+					</div>
+				</dl>
+			</section>
+
+			<!-- ═══════════════════════════════════════════
+			     BEAT 4 — INTERNATIONAL REACH
+			     ═══════════════════════════════════════════ -->
+			<section class="beat beat--reach" aria-labelledby="reach-heading">
+				<h2 id="reach-heading" class="beat__heading">One packet model across fragmented intake.</h2>
+				<p class="beat__subheading">
+					Commons delivers verified packets across US Congress, state legislatures, federal agencies, and local boards.
+				</p>
+
+				<ul class="reach__list" role="list">
+					<li class="reach__item">U.S. Congress</li>
+					<li class="reach__item"><a href="/org/for/state-legislature" class="reach__link">State legislatures</a></li>
+					<li class="reach__item"><a href="/org/for/agency-rulemaking" class="reach__link">Federal agency dockets</a></li>
+					<li class="reach__item">Governor's offices</li>
+					<li class="reach__item">County boards</li>
+					<li class="reach__item"><a href="/org/for/local-government" class="reach__link">City councils</a></li>
+					<li class="reach__item">School boards</li>
+					<li class="reach__item">Water districts</li>
+					<li class="reach__item">Transit authorities</li>
+				</ul>
+
+				<p class="reach__international">
+					<span class="reach__international-label">International adapters shipping 2026:</span> UK Parliament, EU Parliament, Bundestag e-petitions.
+				</p>
+
+				<p class="reach__footer">
+					<span class="reach__stat">24</span> U.S. boundary types live today &middot; <span class="reach__stat">90,887</span> local government entities covered.
+				</p>
+				<p class="reach__citation">
+					U.S. Census Bureau Local Governments 2022 &middot; regulations.gov v4 &middot; UK petition.parliament.uk, EU ECI, Bundestag e-petitions
+				</p>
+			</section>
+
+			<!-- ═══════════════════════════════════════════
+			     BEAT 5 — THE INCUMBENT WINDOW
+			     ═══════════════════════════════════════════ -->
+			<section class="beat beat--window" aria-labelledby="window-heading">
+				<h2 id="window-heading" class="window__pull-quote">
+					The progressive data stack is being renegotiated. Eighty of the largest coalition data-operations orgs are running RFPs for its replacement.
+				</h2>
+
+				<p class="window__body">
+					The incumbent voter-file platform has shed engineering capacity and is priced for enterprises its customers no longer are. Switching costs &mdash; list migration, integration rewiring, staff retraining &mdash; kept orgs in place. The 2026 RFP window is when those costs get shared across the coalition rather than borne alone.
+				</p>
+
+				<p class="window__citation">
+					The Movement Cooperative next-generation voter DB RFP (80+ member orgs) &middot; Higher Ground Labs, <cite>Where do we go from here?</cite> (2024) &middot; Sifry, <cite>Living with VANxiety</cite> (2023)
+				</p>
+			</section>
+
+			<!-- ═══════════════════════════════════════════
+			     BEAT 6 — FRICTION + PRICE
+			     ═══════════════════════════════════════════ -->
+			<section class="beat beat--price" aria-labelledby="price-heading">
+				<h2 id="price-heading" class="sr-only">Friction removal and price</h2>
+
+				<div class="pricing__anchor">
+					<div class="pricing__anchor-line pricing__anchor-line--strike">
+						<span class="pricing__anchor-text">Not <span class="pricing__anchor-num">$15</span>/mo per seat.</span>
+					</div>
+					<div class="pricing__anchor-line pricing__anchor-line--strike">
+						<span class="pricing__anchor-text">Not <span class="pricing__anchor-num">$40,000</span>/yr with a year-long implementation.</span>
+					</div>
+					<div class="pricing__anchor-line pricing__anchor-line--punchline">
+						<span class="pricing__free">$0.</span>
+						<span class="pricing__free-scope">
+							<span class="pricing__free-scope-num">100</span> verified actions
+							<span class="pricing__free-scope-sep">&middot;</span>
+							<span class="pricing__free-scope-num">2</span> seats
+							<span class="pricing__free-scope-sep">&middot;</span>
+							no time limit
 						</span>
 					</div>
 				</div>
 
-				<div class="specimen__divider"></div>
-
-				<div class="specimen__geography">
-					Across <strong>14</strong> communities in the district
-				</div>
-				<div class="specimen__period">
-					Submissions <strong>Feb 12 – Mar 4, 2026</strong>
-				</div>
-				<div class="specimen__screening">
-					One submission per person &middot; duplicates removed
-				</div>
-
-				<div class="specimen__attestation">
-					Cryptographic audit trail available &middot; independently verifiable
-				</div>
-			</figure>
-
-			<div class="narrative__context">
-				<p>
-					Every claim is independently verifiable — the decision-maker's office
-					can audit the proof without trusting your organization or the platform.
+				<p class="pricing__anchor-source">
+					Starter tier published &middot; enterprise by quote &middot; Apr 2026
 				</p>
-				<p class="narrative__context-emphasis">
-					No other advocacy platform produces this.
+
+				<p class="pricing__legend">
+					One verified action = one constituent, identity-proven, district-matched, authored for you. Metered at submission, not at send.
 				</p>
-			</div>
-
-			<hr class="section-rule" />
-
-			<!-- Act 2: The System — how it works -->
-			<p class="narrative__mechanism">
-				Import supporters from any platform. Launch a campaign targeting officials across
-				24 boundary types — Congress, state legislatures, county boards, school districts,
-				water districts, transit authorities. Constituents take verified action.
-				The proof assembles itself.
-			</p>
-
-			<div class="narrative__capabilities">
-				<p>
-					<strong>Campaigns</strong> with verification packets that assemble automatically — district-level
-					counts, engagement tier distributions, coordination integrity scores.
-					<strong>Email and SMS</strong> at scale with verification context.
-					A/B testing. Segmentation by tier and district.
-					<strong>Patch-through calling</strong> with verified caller district.
-				</p>
-				<p>
-					<strong>Automation</strong> triggered by verification events — when a supporter
-					verifies, the system responds. <strong>Legislative monitoring</strong> personalized to
-					your supporters' verified districts. <strong>Coalition networks</strong> that
-					aggregate proof across organizations.
-				</p>
-			</div>
-
-			<hr class="section-rule" />
-
-			<!-- Act 3: Access — pricing + threshold -->
-			<div class="narrative__pricing">
-				<span class="section-label">Pricing</span>
 
 				<div class="pricing-grid">
 					<div class="pricing-row">
 						<span class="pricing-name">Free</span>
 						<span class="pricing-price">$0</span>
-						<span class="pricing-limits">100 verified actions &middot; 1,000 emails &middot; 2 seats</span>
+						<span class="pricing-limits"><span class="pricing-num">100</span> verified actions &middot; <span class="pricing-num">1,000</span> emails &middot; <span class="pricing-num">2</span> seats</span>
 					</div>
 					<div class="pricing-row">
 						<span class="pricing-name">Starter</span>
 						<span class="pricing-price">$10<span class="pricing-mo">/mo</span></span>
-						<span class="pricing-limits">1,000 verified actions &middot; 20,000 emails &middot; 5 seats</span>
+						<span class="pricing-limits"><span class="pricing-num">1,000</span> verified actions &middot; <span class="pricing-num">20,000</span> emails &middot; <span class="pricing-num">5</span> seats</span>
 					</div>
 					<div class="pricing-row">
 						<span class="pricing-name">Organization</span>
 						<span class="pricing-price">$75<span class="pricing-mo">/mo</span></span>
-						<span class="pricing-limits">5,000 verified actions &middot; 100,000 emails &middot; 10 seats</span>
+						<span class="pricing-limits"><span class="pricing-num">5,000</span> verified actions &middot; <span class="pricing-num">100,000</span> emails &middot; <span class="pricing-num">10</span> seats</span>
 					</div>
 					<div class="pricing-row">
 						<span class="pricing-name">Coalition</span>
 						<span class="pricing-price">$200<span class="pricing-mo">/mo</span></span>
-						<span class="pricing-limits">10,000 verified actions &middot; 250,000 emails &middot; 25 seats</span>
+						<span class="pricing-limits"><span class="pricing-num">10,000</span> verified actions &middot; <span class="pricing-num">250,000</span> emails &middot; <span class="pricing-num">25</span> seats</span>
 					</div>
 				</div>
 
-				<p class="pricing-note">
-					Individuals are always free. Verification is the upgrade path, not payment.
+				<p class="pricing__friction">
+					No demo required. No procurement review. Import your list from Action Network, EveryAction, NationBuilder, or any CSV export &mdash; a packet produced today, not a year from now.
 				</p>
-			</div>
+			</section>
 
-			<hr class="section-rule" />
-
-			<!-- Threshold -->
-			<div class="narrative__threshold">
+			<!-- ═══════════════════════════════════════════
+			     BEAT 7 — TERMINAL CTA
+			     ═══════════════════════════════════════════ -->
+			<section class="beat beat--cta">
 				{#if user}
-					<form class="create-form" onsubmit={(e) => { e.preventDefault(); handleCreate(); }}>
-						<label class="create-form__label">
-							<span class="create-form__label-text">Name</span>
-							<input
-								type="text"
-								class="create-form__input"
-								placeholder="Your organization"
-								value={orgName}
-								oninput={handleNameInput}
-								maxlength="100"
-								required
-							/>
-						</label>
-						<label class="create-form__label">
-							<span class="create-form__label-text">Slug</span>
-							<div class="create-form__slug-row">
-								<span class="create-form__slug-prefix">/org/</span>
+					{#if !showCreate}
+						<button class="cta" onclick={openCreate}>
+							Create your organization
+						</button>
+					{:else}
+						<form class="create-form create-form--threshold" onsubmit={(e) => { e.preventDefault(); handleCreate(); }}>
+							<label class="create-form__label">
+								<span class="create-form__label-text">Name</span>
 								<input
 									type="text"
-									class="create-form__input create-form__input--slug"
-									placeholder="your-organization"
-									value={orgSlug}
-									oninput={handleSlugInput}
-									maxlength="48"
+									class="create-form__input"
+									placeholder="Your organization"
+									value={orgName}
+									oninput={handleNameInput}
+									maxlength="100"
 									required
 								/>
+							</label>
+							<label class="create-form__label">
+								<span class="create-form__label-text">Slug</span>
+								<div class="create-form__slug-row">
+									<span class="create-form__slug-prefix">/org/</span>
+									<input
+										type="text"
+										class="create-form__input create-form__input--slug"
+										placeholder="your-organization"
+										value={orgSlug}
+										oninput={handleSlugInput}
+										maxlength="48"
+										required
+									/>
+								</div>
+							</label>
+							{#if errorMsg}
+								<p class="create-form__error">{errorMsg}</p>
+							{/if}
+							<div class="create-form__actions">
+								<button
+									type="button"
+									class="create-form__cancel"
+									onclick={() => { showCreate = false; errorMsg = ''; }}
+								>
+									Cancel
+								</button>
+								<button
+									type="submit"
+									class="cta"
+									disabled={submitting || !orgName.trim() || !orgSlug.trim()}
+								>
+									{submitting ? 'Creating...' : 'Create organization'}
+								</button>
 							</div>
-						</label>
-						{#if errorMsg}
-							<p class="create-form__error">{errorMsg}</p>
-						{/if}
-						<button
-							type="submit"
-							class="cta cta--full"
-							disabled={submitting || !orgName.trim() || !orgSlug.trim()}
-						>
-							{submitting ? 'Creating...' : 'Create organization'}
-						</button>
-					</form>
+						</form>
+					{/if}
 				{:else}
 					<button class="cta" onclick={handleSignIn}>
 						Sign in to create your organization
 					</button>
 				{/if}
-			</div>
-		</div>
+			</section>
+		</article>
 	{/if}
 </div>
 
 <style>
 	/* ═══════════════════════════════════════════
-	   ORG PAGE — Document Layout
+	   ORG-V2 — argument, not pitch
+	   Warm cream ground. Specimen + inbox are the only
+	   bounded artifacts. Everything else sits on ground.
 	   ═══════════════════════════════════════════ */
+
 	.org-page {
 		min-height: 100vh;
 		padding: 1.5rem 1.5rem 4rem;
+		background: oklch(0.995 0.004 55);
 	}
 
 	@media (min-width: 640px) {
-		.org-page {
-			padding: 2rem 2rem 5rem;
-		}
+		.org-page { padding: 2rem 2rem 5rem; }
 	}
 
 	@media (min-width: 1024px) {
 		.org-page {
 			padding: 2.5rem 3rem 6rem;
+			padding-left: max(3rem, 12vw);
 		}
+	}
+
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
 	}
 
 	/* ═══ BACK LINK ═══ */
@@ -383,17 +608,13 @@
 		transition: color 200ms ease-out;
 	}
 
-	.back-link:hover {
-		color: oklch(0.35 0.06 180);
-	}
+	.back-link:hover { color: oklch(0.35 0.06 180); }
 
 	@media (min-width: 640px) {
-		.back-link {
-			margin-bottom: 4rem;
-		}
+		.back-link { margin-bottom: 4rem; }
 	}
 
-	/* ═══ RETURNING USER VIEW ═══ */
+	/* ═══ RETURNING USER (preserved from /org) ═══ */
 	.org-page__inner {
 		max-width: 28rem;
 		width: 100%;
@@ -497,278 +718,828 @@
 		transition: color 150ms ease-out;
 	}
 
-	.create-link:hover {
-		color: oklch(0.38 0.1 180);
-	}
+	.create-link:hover { color: oklch(0.38 0.1 180); }
 
 	/* ═══════════════════════════════════════════
-	   NARRATIVE VIEW
+	   ARGUMENT — the composed surface
 	   ═══════════════════════════════════════════ */
-	.org-page__narrative {
-		max-width: 38rem;
+	.argument {
 		width: 100%;
+		max-width: 54rem;
 	}
 
-	/* ═══ OPENING ═══ */
-	.narrative__opening {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: clamp(1.125rem, 1.063rem + 0.31vw, 1.375rem);
-		font-weight: 500;
+	.beat {
+		max-width: 42rem;
+	}
+
+	/* Differentiated beat gaps — the narrative arc specifies cognitive pacing.
+	   hero→evidence: tight coupling (same argument, different angle)
+	   evidence→mechanism: moderate (from problem to proposal)
+	   mechanism→reach: large (from specimen to system)
+	   reach→window: moderate (from system to market moment)
+	   window→price: largest (biggest cognitive pivot — now the commercial frame)
+	   price→CTA: tight (action follows price directly) */
+	.beat--problem { margin-bottom: 2rem; }
+	.beat--evidence { margin-bottom: 2.75rem; }
+	.beat--mechanism { margin-bottom: 4rem; }
+	.beat--reach { margin-bottom: 2.5rem; }
+	.beat--window { margin-bottom: 4.25rem; }
+	.beat--price { margin-bottom: 1.5rem; }
+
+	@media (min-width: 768px) {
+		.beat--problem { margin-bottom: 2.5rem; }
+		.beat--evidence { margin-bottom: 3.5rem; }
+		.beat--mechanism { margin-bottom: 5rem; }
+		.beat--reach { margin-bottom: 3rem; }
+		.beat--window { margin-bottom: 5.5rem; }
+		.beat--price { margin-bottom: 2rem; }
+	}
+
+	.beat__eyebrow {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		font-weight: 400;
 		line-height: 1.5;
+		color: oklch(0.55 0.01 250);
+		margin: 0 0 1.25rem;
+		letter-spacing: 0.02em;
+	}
+
+	.beat__eyebrow-num {
+		font-variant-numeric: tabular-nums;
+		font-weight: 600;
 		color: oklch(0.35 0.02 250);
-		margin: 0 0 2rem;
+	}
+
+	.beat__heading {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: clamp(1.375rem, 1.1rem + 1.2vw, 1.75rem);
+		line-height: 1.22;
+		font-weight: 700;
+		color: oklch(0.2 0.03 250);
+		margin: 0 0 0.625rem;
+		letter-spacing: -0.01em;
+		max-width: 36rem;
+	}
+
+	.beat__subheading {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.9375rem;
+		line-height: 1.55;
+		font-weight: 400;
+		color: oklch(0.42 0.015 250);
+		margin: 0 0 1.75rem;
+		max-width: 36rem;
+	}
+
+	.beat__subheading-num {
+		font-family: 'JetBrains Mono', monospace;
+		font-variant-numeric: tabular-nums;
+		font-weight: 600;
+		color: oklch(0.3 0.02 250);
 	}
 
 	/* ═══════════════════════════════════════════
-	   SPECIMEN — Verification Packet
+	   BEAT 1 — THE PROBLEM
 	   ═══════════════════════════════════════════ */
-	.specimen {
-		margin: 0;
-		padding: 1.25rem 1.25rem;
-		background: oklch(0.995 0.003 155 / 0.85);
-		border: 1px solid oklch(0.9 0.012 155 / 0.4);
-		border-radius: 4px;
+	.problem__thesis {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: clamp(1.5rem, 1.05rem + 2.2vw, 2.375rem);
+		line-height: 1.18;
+		font-weight: 700;
+		color: oklch(0.18 0.03 250);
+		margin: 0 0 1.5rem;
+		letter-spacing: -0.015em;
+		max-width: 36rem;
+	}
+
+	.problem__stat {
+		font-family: 'JetBrains Mono', monospace;
+		font-variant-numeric: tabular-nums;
+		font-weight: 700;
+		color: oklch(0.35 0.12 165);
+	}
+
+	.problem__stat--weak {
+		color: oklch(0.5 0.01 250);
+	}
+
+	.problem__bridge {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: clamp(1.0625rem, 0.98rem + 0.5vw, 1.1875rem);
+		line-height: 1.5;
+		font-weight: 500;
+		color: oklch(0.32 0.02 250);
+		margin: 0 0 1.125rem;
+		max-width: 34rem;
+	}
+
+	.problem__counter {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: clamp(1rem, 0.95rem + 0.4vw, 1.125rem);
+		line-height: 1.55;
+		font-weight: 400;
+		color: oklch(0.32 0.02 250);
+		margin: 0 0 1.25rem;
+		max-width: 34rem;
+	}
+
+	.problem__counter em {
+		font-style: italic;
+		color: oklch(0.22 0.03 250);
+		font-weight: 500;
+	}
+
+	.problem__citation {
 		font-family: 'JetBrains Mono', monospace;
 		font-size: 0.75rem;
-		line-height: 1.65;
+		line-height: 1.55;
+		color: oklch(0.55 0.01 250);
+		margin: 0;
+		letter-spacing: 0.01em;
+	}
+
+	.problem__citation cite {
+		font-style: italic;
+	}
+
+	/* ═══════════════════════════════════════════
+	   BEAT 2 — INBOX ARTIFACT
+	   White on cream. Earns a border + subtle shadow.
+	   ═══════════════════════════════════════════ */
+	.inbox-artifact {
+		margin: 0 0 1.25rem;
+		max-width: 34rem;
+		background: #ffffff;
+		border: 1px solid oklch(0.88 0.006 250);
+		box-shadow:
+			0 1px 2px oklch(0.15 0.01 250 / 0.04),
+			0 4px 14px oklch(0.15 0.01 250 / 0.06);
+		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+		font-size: 0.75rem;
+		color: oklch(0.3 0.01 250);
+		overflow: hidden;
+	}
+
+	.inbox-artifact__chrome {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 0.4rem 0.625rem;
+		background: oklch(0.96 0.003 250);
+		border-bottom: 1px solid oklch(0.91 0.005 250);
+	}
+
+	.inbox-artifact__dot {
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		background: oklch(0.82 0.004 250);
+	}
+
+	.inbox-artifact__chrome-label {
+		margin-left: 0.625rem;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.625rem;
+		color: oklch(0.55 0.01 250);
+		letter-spacing: 0.02em;
+	}
+
+	.inbox-artifact__toolbar {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		padding: 0.5rem 0.875rem;
+		border-bottom: 1px solid oklch(0.93 0.005 250);
+		background: oklch(0.985 0.003 250);
+	}
+
+	.inbox-artifact__filter {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.6875rem;
+		color: oklch(0.5 0.01 250);
+	}
+
+	.inbox-artifact__count {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.6875rem;
+		color: oklch(0.42 0.015 250);
+	}
+
+	.inbox-artifact__count-num {
+		font-family: 'JetBrains Mono', monospace;
+		font-variant-numeric: tabular-nums;
+		font-weight: 600;
+		color: oklch(0.22 0.03 250);
+	}
+
+	.inbox-artifact__list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+
+	.inbox-row {
+		display: grid;
+		grid-template-columns: 2.25rem 5rem 1fr;
+		gap: 0.5rem;
+		padding: 0.5rem 0.875rem;
+		border-bottom: 1px solid oklch(0.945 0.004 250);
+		font-size: 0.6875rem;
+		line-height: 1.4;
+		align-items: baseline;
+	}
+
+	@media (min-width: 480px) {
+		.inbox-row {
+			grid-template-columns: 2.5rem 6rem 1fr;
+			gap: 0.625rem;
+			padding: 0.4375rem 0.875rem;
+		}
+	}
+
+	.inbox-row__time {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.625rem;
+		color: oklch(0.62 0.01 250);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.inbox-row__from {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-weight: 600;
+		color: oklch(0.22 0.03 250);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.inbox-row__subject {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		color: oklch(0.38 0.015 250);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.inbox-row--dim { opacity: 0.78; }
+	.inbox-row--dimmer { opacity: 0.55; }
+	.inbox-row--dimmest { opacity: 0.35; }
+
+	.inbox-row__ellipsis {
+		list-style: none;
+		padding: 0.75rem 0.875rem 0.875rem;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		font-weight: 500;
+		color: oklch(0.48 0.015 250);
+		letter-spacing: 0.03em;
+		text-align: center;
+		background: oklch(0.98 0.003 250);
+		border-top: 1px solid oklch(0.93 0.005 250);
+	}
+
+	.evidence__caption {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.9375rem;
+		line-height: 1.55;
 		color: oklch(0.32 0.02 250);
+		margin: 0 0 1rem;
+		max-width: 34rem;
+	}
+
+	.evidence__citation {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.75rem;
+		line-height: 1.55;
+		color: oklch(0.55 0.01 250);
+		margin: 0;
+		letter-spacing: 0.01em;
+	}
+
+	.evidence__citation + .evidence__citation {
+		margin-top: 0.375rem;
+	}
+
+	.evidence__citation cite { font-style: italic; }
+
+	/* ═══════════════════════════════════════════
+	   BEAT 3 — MECHANISM (specimen + filter map)
+	   ═══════════════════════════════════════════ */
+	.mechanism__specimen-block {
+		margin-bottom: 2.5rem;
+		max-width: 38rem;
+	}
+
+	.mechanism__provenance {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		font-weight: 400;
+		line-height: 1.5;
+		color: oklch(0.58 0.008 250);
+		margin: 0 0 0.625rem;
+		letter-spacing: 0.02em;
+	}
+
+	.specimen {
+		margin: 0;
+		padding: 0;
+		background: #ffffff;
+		border: 1px solid oklch(0.84 0.008 250);
+		box-shadow:
+			0 1px 2px oklch(0.15 0.01 250 / 0.05),
+			0 4px 16px oklch(0.15 0.01 250 / 0.07);
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.75rem;
+		line-height: 1.6;
+		color: oklch(0.3 0.02 250);
 	}
 
 	@media (min-width: 640px) {
-		.specimen {
-			padding: 1.5rem 1.75rem;
-			font-size: 0.8125rem;
+		.specimen { font-size: 0.8125rem; }
+	}
+
+	.specimen__title {
+		padding: 0.625rem 1.25rem;
+		font-size: 0.5625rem;
+		font-weight: 600;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: oklch(0.5 0.012 250);
+		border-bottom: 1px solid oklch(0.91 0.006 250);
+		background: oklch(0.985 0.002 250);
+	}
+
+	@media (min-width: 640px) {
+		.specimen__title {
+			padding: 0.75rem 2rem;
+			font-size: 0.625rem;
 		}
+	}
+
+	.specimen__meta { padding: 1.125rem 1.25rem 0; }
+
+	@media (min-width: 640px) {
+		.specimen__meta { padding: 1.375rem 2rem 0; }
 	}
 
 	.specimen__row {
 		display: flex;
 		gap: 0.75rem;
-		margin-bottom: 0.25rem;
+		margin-bottom: 0.125rem;
 	}
 
 	@media (max-width: 479px) {
-		.specimen__row {
-			flex-direction: column;
-			gap: 0.125rem;
-		}
+		.specimen__row { flex-direction: column; gap: 0; }
 	}
 
 	.specimen__label {
-		color: oklch(0.55 0.015 250);
+		color: oklch(0.55 0.01 250);
 		min-width: 5.5rem;
 		flex-shrink: 0;
 	}
 
-	.specimen__label--block {
-		display: block;
-		margin-bottom: 0.375rem;
-		min-width: unset;
-	}
-
 	.specimen__value {
-		color: oklch(0.22 0.02 250);
+		color: oklch(0.2 0.02 250);
 		font-weight: 500;
 	}
 
 	.specimen__divider {
 		height: 1px;
-		background: oklch(0.88 0.01 155 / 0.5);
-		margin: 0.875rem 0;
+		background: oklch(0.91 0.006 250);
+		margin: 0.875rem 1.25rem;
 	}
 
-	.specimen__count-block {
+	@media (min-width: 640px) {
+		.specimen__divider { margin: 1rem 2rem; }
+	}
+
+	.specimen__hero {
+		padding: 1rem 1.25rem 1.25rem;
 		display: flex;
 		align-items: baseline;
-		gap: 0.625rem;
-		margin-bottom: 0.875rem;
+		gap: 0.75rem;
+	}
+
+	@media (min-width: 640px) {
+		.specimen__hero { padding: 1.5rem 2rem 1.75rem; }
 	}
 
 	.specimen__count {
-		font-size: 1.625rem;
+		font-size: 2.5rem;
 		font-weight: 700;
-		color: oklch(0.18 0.03 250);
+		color: oklch(0.35 0.12 165);
 		line-height: 1;
 	}
 
 	@media (min-width: 640px) {
-		.specimen__count {
-			font-size: 2rem;
-		}
+		.specimen__count { font-size: 3.25rem; }
 	}
 
 	.specimen__count-label {
 		font-size: 0.6875rem;
-		color: oklch(0.5 0.015 250);
+		color: oklch(0.48 0.01 250);
 		font-weight: 400;
+		line-height: 1.35;
 	}
 
-	/* Evidence rows — identity + authorship */
 	.specimen__evidence {
+		padding: 0 1.25rem;
 		display: flex;
 		flex-direction: column;
-		gap: 0.375rem;
+		gap: 0.4375rem;
+	}
+
+	@media (min-width: 640px) {
+		.specimen__evidence { padding: 0 2rem; }
 	}
 
 	.specimen__evidence-row {
 		display: flex;
 		gap: 0.75rem;
 		font-size: 0.6875rem;
-		line-height: 1.6;
+		line-height: 1.5;
 	}
 
 	@media (max-width: 479px) {
-		.specimen__evidence-row {
-			flex-direction: column;
-			gap: 0.125rem;
-		}
+		.specimen__evidence-row { flex-direction: column; gap: 0; }
 	}
 
 	@media (min-width: 640px) {
-		.specimen__evidence-row {
-			font-size: 0.75rem;
-		}
+		.specimen__evidence-row { font-size: 0.75rem; }
 	}
 
 	.specimen__evidence-label {
-		color: oklch(0.52 0.015 250);
-		min-width: 4.5rem;
+		color: oklch(0.52 0.01 250);
+		min-width: 5.5rem;
 		flex-shrink: 0;
 	}
 
-	@media (min-width: 640px) {
-		.specimen__evidence-label {
-			min-width: 5rem;
-		}
-	}
-
 	.specimen__evidence-detail {
-		color: oklch(0.38 0.015 250);
+		color: oklch(0.38 0.01 250);
 	}
 
 	.specimen__evidence-detail strong {
-		color: oklch(0.22 0.02 250);
+		color: oklch(0.2 0.02 250);
 		font-weight: 600;
 	}
 
 	.specimen__sep {
-		margin: 0 0.3rem;
-		color: oklch(0.72 0.01 250);
+		margin: 0 0.2rem;
+		color: oklch(0.72 0.006 250);
 	}
 
-	/* Geography, period, screening — compact factual lines */
-	.specimen__geography,
-	.specimen__period,
-	.specimen__screening {
+	.specimen__seal {
+		margin-top: 1rem;
+		padding: 0.75rem 1.25rem;
+		border-top: 1px solid oklch(0.88 0.01 165 / 0.4);
+		background: oklch(0.97 0.008 165 / 0.35);
+	}
+
+	@media (min-width: 640px) {
+		.specimen__seal { padding: 0.875rem 2rem; }
+	}
+
+	.specimen__seal-text {
 		font-size: 0.6875rem;
-		color: oklch(0.48 0.015 250);
-		line-height: 1.7;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		font-weight: 500;
+		color: oklch(0.4 0.05 165);
 	}
 
 	@media (min-width: 640px) {
-		.specimen__geography,
-		.specimen__period,
-		.specimen__screening {
-			font-size: 0.75rem;
-		}
+		.specimen__seal-text { font-size: 0.75rem; }
 	}
 
-	.specimen__geography strong,
-	.specimen__period strong {
-		color: oklch(0.25 0.02 250);
-		font-weight: 600;
-	}
-
-	.specimen__screening {
-		color: oklch(0.52 0.015 250);
-	}
-
-	.specimen__attestation {
-		margin-top: 0.625rem;
-		font-size: 0.625rem;
-		color: oklch(0.52 0.02 155);
-		letter-spacing: 0.015em;
-	}
-
-	@media (min-width: 640px) {
-		.specimen__attestation {
-			font-size: 0.6875rem;
-		}
-	}
-
-	/* ═══ CONTEXT ═══ */
-	.narrative__context {
-		margin-top: 2rem;
-	}
-
-	.narrative__context p {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.9375rem;
-		line-height: 1.65;
-		color: oklch(0.38 0.02 250);
-		margin: 0 0 0.625rem;
-	}
-
-	.narrative__context-emphasis {
-		font-weight: 600;
-		color: oklch(0.22 0.025 250) !important;
-		margin-bottom: 0 !important;
-	}
-
-	/* ═══ SECTION RULE ═══ */
-	.section-rule {
-		border: none;
-		border-top: 1px dotted oklch(0.82 0.01 60 / 0.6);
-		margin: 2.5rem 0;
-	}
-
-	@media (min-width: 640px) {
-		.section-rule {
-			margin: 3rem 0;
-		}
-	}
-
-	/* ═══ MECHANISM ═══ */
-	.narrative__mechanism {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.9375rem;
-		line-height: 1.75;
-		color: oklch(0.38 0.02 250);
-		margin: 0 0 1.75rem;
-	}
-
-	/* ═══ CAPABILITIES ═══ */
-	.narrative__capabilities {
+	/* ═══ FILTER MAP — specimen field → staff question → citation ═══
+	   Mobile: stronger row separation, field owns its own line, question is the visual peak.
+	   Desktop: rows can breathe wider, same stacking. */
+	.filter-map {
+		margin: 0;
+		padding: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 1.125rem;
+		gap: 1.25rem;
+		max-width: 38rem;
 	}
 
-	.narrative__capabilities p {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.9375rem;
-		line-height: 1.75;
-		color: oklch(0.42 0.02 250);
-		margin: 0;
+	@media (min-width: 640px) {
+		.filter-map { gap: 1.5rem; }
 	}
 
-	.narrative__capabilities strong {
-		color: oklch(0.22 0.02 250);
-		font-weight: 600;
+	.filter-map__row {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 0.375rem;
+		padding-top: 1.25rem;
+		border-top: 1.5px solid oklch(0.84 0.008 250);
 	}
 
-	/* ═══ PRICING ═══ */
-	.section-label {
-		font-family: 'Satoshi', system-ui, sans-serif;
+	@media (min-width: 640px) {
+		.filter-map__row {
+			gap: 0.125rem;
+			padding-top: 1.125rem;
+			border-top-width: 1px;
+			border-top-color: oklch(0.88 0.006 250);
+		}
+	}
+
+	.filter-map__row:first-child {
+		padding-top: 0;
+		border-top: none;
+	}
+
+	.filter-map__field {
+		font-family: 'JetBrains Mono', monospace;
 		font-size: 0.6875rem;
 		font-weight: 600;
 		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		color: oklch(0.35 0.12 165);
+		margin: 0 0 0.125rem;
+	}
+
+	.filter-map__answer {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		line-height: 1.4;
+		font-weight: 400;
+		color: oklch(0.5 0.015 250);
+		margin: 0;
+	}
+
+	.filter-map__question {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: clamp(1.125rem, 1rem + 0.6vw, 1.25rem);
+		line-height: 1.3;
+		font-weight: 600;
+		color: oklch(0.18 0.03 250);
+		font-style: italic;
+		margin: 0.125rem 0 0.5rem;
+		letter-spacing: -0.005em;
+	}
+
+	.filter-map__citation {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		line-height: 1.55;
+		color: oklch(0.55 0.01 250);
+		margin: 0;
+		letter-spacing: 0.01em;
+	}
+
+	/* ═══════════════════════════════════════════
+	   BEAT 4 — REACH
+	   ═══════════════════════════════════════════ */
+	.reach__list {
+		list-style: none;
+		margin: 0 0 2rem;
+		padding: 0;
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 0.5rem 1.25rem;
+		max-width: 42rem;
+	}
+
+	@media (min-width: 480px) {
+		.reach__list {
+			gap: 0.625rem 2.5rem;
+		}
+	}
+
+	@media (min-width: 768px) {
+		.reach__list {
+			grid-template-columns: repeat(3, 1fr);
+			gap: 0.75rem 2.5rem;
+		}
+	}
+
+	.reach__item {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: clamp(0.9375rem, 0.85rem + 0.6vw, 1.25rem);
+		font-weight: 700;
+		line-height: 1.3;
+		color: oklch(0.22 0.03 250);
+		letter-spacing: -0.005em;
+	}
+
+	.reach__link {
+		color: inherit;
+		text-decoration: none;
+		border-bottom: 1px solid oklch(0.82 0.06 180 / 0.5);
+		transition: border-bottom-color 150ms ease-out, color 150ms ease-out;
+	}
+
+	.reach__link:hover {
+		color: oklch(0.38 0.11 180);
+		border-bottom-color: oklch(0.45 0.1 180);
+	}
+
+	.reach__link:focus-visible {
+		outline: 2px solid oklch(0.48 0.2 280);
+		outline-offset: 2px;
+		border-radius: 2px;
+	}
+
+	.reach__item--future {
+		color: oklch(0.5 0.02 250);
+		font-weight: 500;
+	}
+
+	.reach__item-soon {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.625rem;
+		font-weight: 400;
+		text-transform: uppercase;
 		letter-spacing: 0.1em;
-		color: oklch(0.55 0.02 250);
+		color: oklch(0.5 0.1 180);
+		margin-left: 0.375rem;
+		vertical-align: 0.1em;
+	}
+
+	.reach__international {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.875rem;
+		line-height: 1.5;
+		font-weight: 400;
+		color: oklch(0.52 0.012 250);
+		margin: 0 0 1.5rem;
+		max-width: 42rem;
+	}
+
+	.reach__international-label {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		font-weight: 400;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: oklch(0.55 0.01 250);
+	}
+
+	.reach__footer {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.9375rem;
+		line-height: 1.55;
+		font-weight: 400;
+		color: oklch(0.38 0.015 250);
+		margin: 0 0 0.75rem;
+		max-width: 40rem;
+	}
+
+	.reach__stat {
+		font-family: 'JetBrains Mono', monospace;
+		font-variant-numeric: tabular-nums;
+		font-weight: 600;
+		color: oklch(0.22 0.03 250);
+	}
+
+	.reach__citation {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		line-height: 1.55;
+		color: oklch(0.55 0.01 250);
+		margin: 0;
+		letter-spacing: 0.01em;
+		max-width: 42rem;
+	}
+
+	/* ═══════════════════════════════════════════
+	   BEAT 5 — INCUMBENT WINDOW
+	   ═══════════════════════════════════════════ */
+	.window__pull-quote {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: clamp(1.3125rem, 1rem + 1.6vw, 1.75rem);
+		line-height: 1.28;
+		font-weight: 600;
+		color: oklch(0.2 0.03 250);
+		margin: 0 0 1.25rem;
+		padding-left: 1.125rem;
+		border-left: 2px solid oklch(0.55 0.12 165);
+		letter-spacing: -0.01em;
+		max-width: 36rem;
+	}
+
+	.window__body {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 1rem;
+		line-height: 1.6;
+		font-weight: 400;
+		color: oklch(0.32 0.02 250);
+		margin: 0 0 1.25rem;
+		max-width: 36rem;
+	}
+
+	.window__citation {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.75rem;
+		line-height: 1.55;
+		color: oklch(0.55 0.01 250);
+		margin: 0;
+		letter-spacing: 0.01em;
+		max-width: 40rem;
+	}
+
+	.window__citation cite { font-style: italic; }
+
+	/* ═══════════════════════════════════════════
+	   BEAT 6 — PRICE
+	   ═══════════════════════════════════════════ */
+	.pricing__anchor {
+		display: flex;
+		flex-direction: column;
+		gap: 0.125rem;
+		margin-bottom: 1.5rem;
+	}
+
+	.pricing__anchor-line {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 1.125rem;
+		line-height: 1.3;
+		font-weight: 500;
+	}
+
+	.pricing__anchor-line--strike {
+		color: oklch(0.62 0.008 250);
+		text-decoration: line-through;
+		text-decoration-thickness: 1px;
+		text-decoration-color: oklch(0.72 0.008 250);
+	}
+
+	.pricing__anchor-num {
+		font-family: 'JetBrains Mono', monospace;
+		font-variant-numeric: tabular-nums;
+		font-weight: 600;
+	}
+
+	.pricing__anchor-line--punchline {
+		display: flex;
+		align-items: baseline;
+		flex-wrap: wrap;
+		gap: 0.625rem 0.875rem;
+		margin-top: 0.5rem;
+	}
+
+	.pricing__anchor-source {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		line-height: 1.5;
+		color: oklch(0.55 0.01 250);
+		margin: 0.625rem 0 0;
+		letter-spacing: 0.02em;
+	}
+
+	.pricing__free {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: clamp(1.75rem, 1.4rem + 1.75vw, 2.375rem);
+		font-weight: 700;
+		color: oklch(0.48 0.16 160);
+		letter-spacing: -0.02em;
+		line-height: 1;
+	}
+
+	.pricing__free-scope {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.8125rem;
+		line-height: 1.4;
+		font-weight: 400;
+		color: oklch(0.38 0.015 250);
+		letter-spacing: 0.005em;
+	}
+
+	.pricing__free-scope-num {
+		font-variant-numeric: tabular-nums;
+		font-weight: 600;
+		color: oklch(0.22 0.03 250);
+	}
+
+	.pricing__free-scope-sep {
+		margin: 0 0.25rem;
+		color: oklch(0.72 0.008 250);
+	}
+
+	.pricing__legend {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.9375rem;
+		line-height: 1.55;
+		color: oklch(0.38 0.015 250);
+		margin: 2rem 0 1.25rem;
+		max-width: 36rem;
+	}
+
+	.pricing__friction {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.9375rem;
+		line-height: 1.55;
+		font-weight: 500;
+		color: oklch(0.32 0.02 250);
+		margin: 1.75rem 0 0;
+		max-width: 36rem;
 	}
 
 	.pricing-grid {
-		margin-top: 1rem;
+		margin: 0;
+		max-width: 38rem;
 	}
 
 	.pricing-row {
@@ -805,10 +1576,17 @@
 	}
 
 	.pricing-limits {
-		font-family: 'JetBrains Mono', monospace;
-		font-size: 0.6875rem;
-		color: oklch(0.5 0.015 250);
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.75rem;
+		color: oklch(0.48 0.012 250);
 		width: 100%;
+	}
+
+	.pricing-num {
+		font-family: 'JetBrains Mono', monospace;
+		font-variant-numeric: tabular-nums;
+		font-weight: 600;
+		color: oklch(0.28 0.02 250);
 	}
 
 	@media (min-width: 640px) {
@@ -820,21 +1598,20 @@
 
 		.pricing-limits {
 			width: auto;
-			font-size: 0.75rem;
+			font-size: 0.8125rem;
 		}
 	}
 
-	.pricing-note {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.8125rem;
-		color: oklch(0.5 0.02 250);
-		margin: 1.25rem 0 0;
-		line-height: 1.5;
+	/* ═══════════════════════════════════════════
+	   BEAT 7 — CTA
+	   ═══════════════════════════════════════════ */
+	.beat--cta {
+		margin-top: 2rem;
+		max-width: 28rem;
 	}
 
-	/* ═══ THRESHOLD ═══ */
-	.narrative__threshold {
-		/* Terminal CTA section — no extra chrome */
+	.create-form--threshold {
+		max-width: 28rem;
 	}
 
 	/* ═══════════════════════════════════════════
@@ -842,33 +1619,27 @@
 	   ═══════════════════════════════════════════ */
 	.cta {
 		display: inline-block;
-		padding: 0.625rem 1.25rem;
-		border-radius: 6px;
-		border: 1px solid oklch(0.8 0.04 180);
-		background: oklch(0.97 0.01 180);
+		padding: 0.75rem 1.5rem;
+		min-height: 44px;
+		border-radius: 4px;
+		border: 1px solid oklch(0.45 0.1 180);
+		background: oklch(0.42 0.1 180);
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.875rem;
-		font-weight: 500;
-		color: oklch(0.35 0.1 180);
+		font-weight: 600;
+		color: #ffffff;
 		cursor: pointer;
 		transition: background 150ms ease-out, border-color 150ms ease-out;
 	}
 
 	.cta:hover {
-		background: oklch(0.94 0.03 180);
-		border-color: oklch(0.7 0.06 180);
+		background: oklch(0.38 0.11 180);
+		border-color: oklch(0.38 0.11 180);
 	}
 
 	.cta:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
-	}
-
-	.cta--full {
-		display: block;
-		width: 100%;
-		text-align: center;
-		margin-top: 0.5rem;
 	}
 
 	.create-form {

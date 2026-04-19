@@ -75,8 +75,8 @@
 			arrives: 'Government ID verified. Cryptographic proof. Cannot be faked or botted.',
 			weight: 82,
 			gradientFrom: '#c084fc', gradientTo: '#a855f7',
-			textClass: 'text-purple-600',
-			accentClass: 'text-purple-700',
+			textClass: 'text-emerald-600',
+			accentClass: 'text-emerald-700',
 		},
 		{
 			signal: 'Undeniable',
@@ -179,7 +179,7 @@
 					{displayName}
 				</h1>
 			{:else if decryptedUser.decrypting}
-				<div class="h-8 w-48 animate-pulse rounded bg-slate-200/40 sm:h-9 lg:h-10"></div>
+				<div class="h-7 w-48 animate-pulse rounded bg-slate-200/40 sm:h-8 lg:h-9"></div>
 			{:else}
 				<h1 class="text-xl font-bold text-slate-900 sm:text-2xl lg:text-3xl" style="font-family: 'Satoshi', system-ui, sans-serif">
 					Your Profile
@@ -273,8 +273,10 @@
 			<span class="section-label">Your representatives</span>
 
 			{#await representativesPromise}
-				<div class="mt-3 animate-pulse">
-					<div class="h-5 w-48 rounded bg-slate-200/40"></div>
+				<div class="mt-3 animate-pulse space-y-1.5">
+					<div class="h-[1.125rem] w-44 rounded bg-slate-200/40"></div>
+					<div class="h-[1.125rem] w-48 rounded bg-slate-200/40"></div>
+					<div class="h-[1.125rem] w-40 rounded bg-slate-200/40"></div>
 				</div>
 			{:then representatives}
 				{#if representatives && representatives.length > 0}
@@ -309,11 +311,11 @@
 	<span class="section-label">Your record</span>
 
 	{#await templatesDataPromise}
-		<div class="mt-5 flex gap-8 sm:gap-12">
+		<div class="mt-5 grid grid-cols-2 gap-y-5 sm:flex sm:flex-wrap sm:items-baseline sm:gap-x-12 lg:gap-x-16">
 			{#each Array(4) as _}
 				<div class="animate-pulse">
-					<div class="h-9 w-10 rounded bg-slate-200/40"></div>
-					<div class="mt-2 h-3 w-14 rounded bg-slate-200/30"></div>
+					<div class="h-9 w-12 rounded bg-slate-200/40 lg:h-10"></div>
+					<div class="mt-1 h-3 w-10 rounded bg-slate-200/30"></div>
 				</div>
 			{/each}
 		</div>
@@ -342,7 +344,7 @@
 					<span class="block text-xs font-medium text-slate-500">templates</span>
 				</div>
 				<div>
-					<span class="font-mono text-3xl font-bold text-violet-600 lg:text-4xl">
+					<span class="font-mono text-3xl font-bold text-emerald-600 lg:text-4xl">
 						{templatesData.templateStats.totalUses}
 					</span>
 					<span class="block text-xs font-medium text-slate-500">adopted</span>
@@ -417,7 +419,7 @@
 <section in:fly={{ y: 12, duration: 400, delay: 300 }}>
 	{#await userDetailsPromise}
 		<div class="animate-pulse space-y-2">
-			<div class="h-5 w-52 rounded bg-slate-200/40"></div>
+			<div class="h-[1.125rem] w-52 rounded bg-slate-200/40 lg:h-5"></div>
 			<div class="h-3 w-36 rounded bg-slate-200/30"></div>
 		</div>
 	{:then userDetails}

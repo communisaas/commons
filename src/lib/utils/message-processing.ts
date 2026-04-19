@@ -91,9 +91,9 @@ export function getSourceTypeBadge(type: Source['type']): {
 			border: 'border-blue-200'
 		},
 		research: {
-			bg: 'bg-purple-50',
-			text: 'text-purple-700',
-			border: 'border-purple-200'
+			bg: 'bg-slate-50',
+			text: 'text-slate-700',
+			border: 'border-slate-200'
 		},
 		government: {
 			bg: 'bg-slate-50',

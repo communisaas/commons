@@ -67,7 +67,7 @@
 		1: { hue: 250, chroma: 0.02, lightness: 0.55, ringCount: 1 },
 		2: { hue: 260, chroma: 0.18, lightness: 0.55, ringCount: 2 },
 		3: { hue: 160, chroma: 0.18, lightness: 0.5, ringCount: 3 },
-		4: { hue: 300, chroma: 0.15, lightness: 0.5, ringCount: 4 },
+		4: { hue: 160, chroma: 0.20, lightness: 0.42, ringCount: 4 },
 		5: { hue: 85, chroma: 0.15, lightness: 0.55, ringCount: 5 }
 	};
 

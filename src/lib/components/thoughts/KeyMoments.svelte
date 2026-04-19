@@ -50,10 +50,10 @@ ACCESSIBILITY:
 			ring: 'focus-visible:ring-emerald-500/50'
 		},
 		insight: {
-			bg: 'bg-purple-50/90 hover:bg-purple-100/95',
-			border: 'border-purple-200/60',
-			text: 'text-purple-700',
-			ring: 'focus-visible:ring-purple-500/50'
+			bg: 'bg-amber-50/90 hover:bg-amber-100/95',
+			border: 'border-amber-200/60',
+			text: 'text-amber-700',
+			ring: 'focus-visible:ring-amber-500/50'
 		},
 		decision_maker: {
 			bg: 'bg-orange-50/90 hover:bg-orange-100/95',

@@ -217,11 +217,11 @@
 
 			<!-- Event Type Badge -->
 			<div class="flex items-center gap-2">
-				<span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+				<span class="font-mono text-xs text-slate-700">
 					{data.event.eventType === 'IN_PERSON' ? 'In Person' : data.event.eventType === 'VIRTUAL' ? 'Virtual' : 'Hybrid'}
 				</span>
 				{#if data.event.requireVerification}
-					<span class="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+					<span class="font-mono text-xs text-amber-700">
 						Verified Attendance
 					</span>
 				{/if}
@@ -453,7 +453,7 @@
 		</div>
 
 		<!-- Proof Card -->
-		<div class="mb-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+		<div class="mb-6 rounded-lg border border-slate-200 bg-white p-5">
 			<p class="mb-1 text-xs font-medium text-slate-400">RSVP CONFIRMATION</p>
 			<h3 class="mb-3 text-lg font-bold text-slate-900">{data.event.title}</h3>
 			<div class="space-y-2 text-sm text-slate-600">

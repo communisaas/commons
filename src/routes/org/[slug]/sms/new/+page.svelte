@@ -166,7 +166,7 @@
 		{#if body.trim()}
 			<div class="mb-6 rounded-lg border border-surface-border p-4">
 				<h2 class="mb-3 text-sm font-medium text-text-tertiary">Preview</h2>
-				<div class="mx-auto max-w-xs rounded-2xl bg-surface-overlay px-4 py-3">
+				<div class="mx-auto max-w-xs rounded-lg bg-surface-overlay px-4 py-3">
 					<p class="whitespace-pre-wrap text-sm text-text-primary">{body.trim()}</p>
 				</div>
 			</div>

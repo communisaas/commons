@@ -416,7 +416,7 @@
 		</div>
 
 		<!-- Proof Card -->
-		<div class="mb-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+		<div class="mb-6 rounded-lg border border-slate-200 bg-white p-5">
 			<p class="mb-1 text-xs font-medium text-slate-400">DONATION CONFIRMATION</p>
 			<h3 class="mb-3 text-lg font-bold text-slate-900">{data.campaign.title}</h3>
 			<div class="space-y-2 text-sm text-slate-600">
