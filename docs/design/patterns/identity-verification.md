@@ -187,7 +187,7 @@ This suite of components handles identity verification for Commons's congression
 - **Card padding**: `p-6` / `p-8` (24px/32px)
 - **Gap between elements**: `gap-4` / `gap-6` (16px/24px)
 - **Maximum content width**: `max-w-3xl` (768px)
-- **Border radius**: `rounded-lg` (8px) / `rounded-xl` (12px) / `rounded-2xl` (16px)
+- **Border radius**: `rounded` (4px) for inputs, `rounded-lg` (8px) for actual cards. `rounded-xl`/`rounded-2xl` are prohibited — civic infrastructure has edges. See `docs/design/design-system.md` containment policy.
 
 ---
 

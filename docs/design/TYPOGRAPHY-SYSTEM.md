@@ -8,7 +8,13 @@ This document provides detailed usage patterns and examples for Commons's typogr
 
 ## Core Principle
 
-**Satoshi** for words. **JetBrains Mono** for numbers. This creates visual hierarchy where numbers feel weighted—like scoreboards—while words remain human and direct.
+**Satoshi** for words. **JetBrains Mono** for numbers.
+
+### Why this split exists
+
+The typographic register encodes epistemic status. JetBrains Mono signals "this is verifiable" — counts, scores, dates, hashes, district codes. Anything a third party could audit. Satoshi signals "this is interpretive" — explanations, descriptions, calls to action, editorial context. The reader learns, without being told, which parts of the surface are proven and which are contextual.
+
+This is not a decorative choice. It's a consequence of the generative constraint: every visual element is either verifiable or honestly labeled as interpretive. The font face IS the label. See `docs/design/design-system.md` for the full constraint.
 
 ---
 
@@ -23,7 +29,7 @@ This document provides detailed usage patterns and examples for Commons's typogr
 </h1>
 
 <!-- Coordination count: JetBrains Mono Medium -->
-<p class="font-mono text-sm font-medium text-violet-600">
+<p class="font-mono text-sm font-medium text-emerald-600">
   1,247 sent this
 </p>
 
@@ -84,7 +90,7 @@ This document provides detailed usage patterns and examples for Commons's typogr
   </span>
 
   <!-- Count: JetBrains Mono Bold with spring animation -->
-  <span class="font-mono text-2xl font-bold text-violet-600 tabular-nums">
+  <span class="font-mono text-2xl font-bold text-emerald-600 tabular-nums">
     {Math.floor($displayCount)}
   </span>
 </div>
@@ -112,16 +118,16 @@ This document provides detailed usage patterns and examples for Commons's typogr
 </div>
 ```
 
-### Privacy Badge
+### Verification Status
 
 ```svelte
-<div class="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 border border-emerald-200">
-  <svg class="h-4 w-4 text-emerald-600" />
-  <span class="font-brand text-xs font-medium text-emerald-700">
-    Zero-knowledge verified
-  </span>
-</div>
+<!-- Typographic annotation — no pill, no badge container -->
+<span class="font-mono text-xs text-emerald-600">
+  ZK verified
+</span>
 ```
+
+Verification status is a typographic annotation, not a badge. No `rounded-full`, no `bg-{color}-50`, no `border`. The information is in the words and the color (emerald = verified). The container adds nothing. See containment policy in `docs/design/design-system.md`.
 
 ---
 
@@ -142,4 +148,4 @@ This document provides detailed usage patterns and examples for Commons's typogr
 
 ---
 
-*Commons PBC | Typography System | 2025-11*
+*Commons PBC | Typography System | 2026-04*

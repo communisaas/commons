@@ -1,8 +1,8 @@
 # Language & Voice Guidelines
 
-**Pragmatic Cypherpunk Energy**
+**Direct. Specific. Institutional.**
 
-This document defines how Commons communicates. We cut through bullshit. We tell users exactly what's happening. We're transparent about trade-offs. We don't hide behind corporate-speak or defensive language.
+This document defines how Commons communicates. State what is. Show what exists. Don't justify, don't hedge, don't decorate. The cypherpunk substrate is present in the engineering (ZK proofs, client-side encryption, sovereign identity) — the voice has matured toward civic precision.
 
 ---
 
@@ -80,7 +80,7 @@ This document defines how Commons communicates. We cut through bullshit. We tell
 
 | Avoid | Use Instead | Reasoning |
 |-------|-------------|-----------|
-| campaigns | (just location name) | "Campaigns" is politically loaded, implies fundraising/elections |
+| campaigns (person layer) | (just location name) | "Campaigns" is politically loaded, implies fundraising/elections |
 | issues | (just location name) | "Issues" feels heavy, problem-focused, politically loaded |
 | privacy-focused | your data stays in your browser | Specific mechanism > vague claim |
 | secure | encrypted, zero-knowledge, TEE-based | Specific technology > vague promise |
@@ -93,6 +93,8 @@ This document defines how Commons communicates. We cut through bullshit. We tell
 | seamless | (remove entirely) | Filler word |
 | solutions | tools, methods, approaches | Corporate buzzword |
 | empower | enable, let you, you can | Condescending verb |
+
+**Org-layer exception:** "Campaign" is a valid noun in org-layer UI where it refers to the specific technical object — a named set of verified actions targeting decision-makers. It is NOT valid as marketing copy, hero text, or person-layer language. Person-layer equivalent: "template" or location name.
 
 ### Geographic Scope Language
 
@@ -329,6 +331,39 @@ This document defines how Commons communicates. We cut through bullshit. We tell
 
 ---
 
+## The Acquisition Register
+
+voice.md defines two registers: primary UI (confident statements) and popovers (technical detail). Both assume an authenticated user inside the product. The acquisition surface — the org landing page, the homepage for a first-time visitor — is a third register.
+
+**The acquisition surface speaks to someone who doesn't use Commons yet.** They may never have heard of verification packets. They will leave in 3 seconds if the page feels like another SaaS pitch.
+
+### Principles
+
+- **Show the artifact, not the description.** Don't explain what Commons is. Show what it produces. The proof specimen IS the pitch.
+- **Show the gap, not the feature.** Don't enumerate capabilities. Show what the visitor currently sends (undifferentiated email count) next to what they could send (verification packet with proof). The gap IS the argument.
+- **Show one capability in full resolution.** Not a feature grid. Not a comparison table. One thing, completely rendered, so the visitor can evaluate it in 5 seconds.
+- **Price as punchline.** Price only lands after value is established. After the specimen, after the gap: "Free. $0." The price IS the punchline.
+- **No superlatives.** Let the specimen speak. "No other platform produces this" is the closest to a claim — and only if it's true.
+
+### What the acquisition surface is NOT
+
+- Feature matrix
+- Pricing comparison table
+- Testimonial carousel
+- Animated hero with abstract shapes
+- "Trusted by X organizations" social proof bar
+- Dense prose paragraphs enumerating capabilities
+
+### Relationship to anti-manipulation
+
+Anti-manipulation still applies. The acquisition surface does not tell the visitor how to feel. It shows what exists and lets them feel what they feel. The distinction: manipulation says "your voice matters!" Specificity says "248 verified constituents in your district." One is emotional extraction. The other is evidence.
+
+The anti-marketing stance (refuse to try to create desire) applies to product surfaces. It does not apply to the acquisition surface. The acquisition surface earns attention through specificity — which is a form of respect, not a form of selling.
+
+See [ORG-ACQUISITION-SURFACE.md](ORG-ACQUISITION-SURFACE.md) for the full acquisition surface design philosophy.
+
+---
+
 ## Anti-Patterns to Avoid
 
 ### 1. Over-Explaining in Primary UI
@@ -380,7 +415,7 @@ This document defines how Commons communicates. We cut through bullshit. We tell
 Before shipping copy, verify:
 
 **Primary UI:**
-- [ ] No corporate buzzwords (campaigns, platform, engagement, seamless, innovative)
+- [ ] No corporate buzzwords (campaigns¹, platform, engagement, seamless, innovative) — ¹org-layer UI may use "campaign" as a technical noun; see vocabulary table
 - [ ] No hedging language (try to, aim to, strive for)
 - [ ] No marketing superlatives (best, revolutionary, industry-leading)
 - [ ] No passive voice (will be delivered → we deliver)
@@ -481,7 +516,7 @@ Alternative: Use passkey authentication for phishing-resistant login.
 
 ---
 
-## Pragmatic Cypherpunk = Show Don't Tell
+## Show Don't Tell
 
 **Don't announce you're privacy-focused. Just be privacy-focused.**
 

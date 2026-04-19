@@ -1,9 +1,10 @@
 # The Perceptual Bridge: Person Layer and Org Layer as One System
 
-**Status:** Design Philosophy — IMPLEMENTATION DIVERGED (see ORG-UX-AUDIT.md)
+**Status:** Design Philosophy — ALIGNED (redesign completed 2026-03-17; acquisition gap identified, see ORG-ACQUISITION-SURFACE.md)
 **Created:** 2026-03-06
 **Audited:** 2026-03-17
-**Depends on:** design-system.md, voice.md, platform-extension.md, org-data-model.md
+**Updated:** 2026-04-13
+**Depends on:** design-system.md, voice.md, ORG-ACQUISITION-SURFACE.md
 **Context:** Both layers are now shipping. The person-facing layer is deeply built (Postal Bubble, Power Landscape, RelayLoom, trust journey, three-zone template flow). The org-facing layer is operational (campaigns, supporter management, email delivery, RBAC, embeddable widgets). This document defines how they connect — not as two products stitched together, but as two perspectives on one event.
 
 ---
@@ -307,13 +308,19 @@ The Commons admin feels like a meteorologist. They watch conditions accumulate �
 
 The person on Commons feels like a citizen. They don't feel marketed to. They feel counted.
 
+### What this document does NOT cover
+
+The pre-authentication acquisition surface — the page that makes someone decide to create an org. That surface needs to create desire through specificity, not manipulation. It shows what the product produces (the specimen) and what the visitor is currently producing (nothing verifiable). It operates in a different voice register and follows different visual principles than the authenticated org dashboard.
+
+See [ORG-ACQUISITION-SURFACE.md](ORG-ACQUISITION-SURFACE.md) for the acquisition surface design philosophy.
+
 ---
 
 ## Typography of the Bridge
 
 The bridge manifests typographically. The same number appears in both layers, in the same font, with the same spring physics.
 
-**Person sees:** `font-mono tabular-nums text-2xl font-bold text-violet-600` → "248"
+**Person sees:** `font-mono tabular-nums text-2xl font-bold text-emerald-600` → "248"
 **Org sees:** `font-mono tabular-nums text-3xl font-bold` → "248"
 **Decision-maker sees:** `font-mono tabular-nums` → "248 verified constituents"
 
@@ -366,21 +373,16 @@ If the answer to any of these is no, the bridge is broken.
 
 ---
 
-## Implementation Status (2026-03-17 Audit)
+## Implementation Status (2026-04-12)
 
-**The bridge is broken.** A multi-agent UX audit (Claude, Codex, Gemini) confirmed that the org layer implementation diverged from this document's design intent. The implementation built exactly what this document says NOT to build:
+The org layer redesign completed 2026-03-17 (18 tasks, 4 review gates). The bridge is structurally aligned:
 
-| This Document Says | Implementation Built |
-|--------------------|---------------------|
-| "Don't Build: Campaign management" | Campaign list, campaign creation form, campaign detail with admin controls as hero |
-| "Don't Build: List management" | Contact table with search/filter/segment as primary supporter view |
-| "Don't Build: Email marketing" | Mailchimp-style email compose with "Send an email blast to your supporters" |
-| "Don't Build: Analytics dashboard" | 7-section metrics wall with equal-weight cards |
-| "Do Build: Verification packet assembler" | Packet exists but is one of 7 equal-weight dashboard sections |
-| "Do Build: Invitation composer" | Generic email compose; verification context is a footnote |
-| "Do Build: Segment lens" | Standard CRM segment builder (email status, tags, source) |
-| "Do Build: Report shipper" | "Preview Report" button below fold, labeled like analytics export |
-| "Do Build: Migration garden" | Standard CSV import with progress bar |
-| "Do Build: Coalition endorsement" | Network pages are membership admin tables |
+- Dashboard leads with verification packet as primary surface
+- "Deliver Proof" is the primary CTA
+- Tier distribution and integrity scores collapse into detail (not equal-weight sections)
+- Campaign cards show verified count as the hero element
+- Coordination integrity gets natural-language assessment, not raw abbreviations
 
-**The philosophy in this document is correct.** The execution diverged. See [ORG-UX-AUDIT.md](ORG-UX-AUDIT.md) for the full 13-finding audit and [ORG-REDESIGN-THESIS.md](ORG-REDESIGN-THESIS.md) for the redesign direction that re-aligns implementation with this document's intent.
+**Remaining gap:** The acquisition surface (pre-auth org landing at `/org`) has no design philosophy derived from this document. The landing page shows the proof specimen but doesn't leverage the bridge principles — it doesn't show the gap between what orgs currently send and what Commons produces, and it doesn't address the cold-start problem (visitor has never heard of verification packets). See [ORG-ACQUISITION-SURFACE.md](ORG-ACQUISITION-SURFACE.md).
+
+**Historical context:** A multi-agent UX audit (2026-03-17) found the original org implementation had diverged from this document — built CRM patterns instead of verification-first. See [ORG-UX-AUDIT.md](ORG-UX-AUDIT.md) for the 13-finding audit and [ORG-REDESIGN-THESIS.md](ORG-REDESIGN-THESIS.md) for the redesign that corrected the divergence.

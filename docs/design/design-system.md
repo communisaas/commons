@@ -1,6 +1,31 @@
 # Commons Design System
 
-**Verified voice, directed.**
+**Civic Proof.**
+
+---
+
+## The Generative Constraint
+
+One rule produces every visual decision:
+
+> **Every visual element is either verifiable or honestly labeled as interpretive.**
+
+This constraint generates the design system. Not the other way around.
+
+- **Typographic register = epistemic status.** JetBrains Mono for verifiable claims — counts, scores, dates, hashes, district codes. Anything a third party could audit. Satoshi for interpretive context — explanations, descriptions, calls to action, editorial framing. The reader learns, without being told, which parts of the surface are proven and which are contextual.
+- **Numbers are never decorative.** "248 verified constituents" is a specific claim backed by a Merkle root. Every number on the page could be audited. No vanity metrics, no rounded-up percentages, no "trusted by 10,000+ users."
+- **The warm cream ground says "institution."** Content sits ON the ground, not IN white boxes. White is reserved for bounded artifacts — the proof specimen, the email preview — objects that need to float above the ground plane.
+- **Borders earn their place.** A hairline rule between the specimen and contextual copy says "these are different registers." A border around a card says "this is a bounded object." Borders that say nothing are decoration. Kill them.
+
+---
+
+## The Design Language: Civic Proof
+
+The aesthetic of infrastructure that knows what it can prove. Warm, not cold. Precise, not flashy. Confident enough to leave space empty.
+
+The visual identity is the proof specimen — the verification packet rendered as a document. Monospace type, label-value pairs, attestation footer, hairline rules. The form follows function: this is evidence, and it looks like evidence. The specimen is the centerpiece — not because we decided it should be, but because when you remove everything that isn't verifiable or necessary, the specimen is what remains.
+
+The closest analog: a well-made government report — if that report were designed by someone who understood typography, white space, and the web. Official without being bureaucratic. Dense where density serves comprehension. Sparse everywhere else.
 
 ---
 
@@ -19,39 +44,28 @@ Every pixel answers one question: **does this make the action feel real?**
 
 ---
 
-## What We're Not
+## What We Are
 
-We're not a SaaS product. We're not a consumer app. We're not a petition platform.
-
-We're civic infrastructure. The design should feel like a well-made envelope — professional, solid, carrying something real. Not a weapon. Not a dashboard. Not a game.
+Civic infrastructure. The design feels like a well-made envelope — professional, solid, carrying something real.
 
 **We design for conviction, not momentum. Credibility, not polish. Gravity, not weight.**
 
 ---
 
-## The Visual Identity: Coordination Graph
+## Color
 
-The RelayLoom component defines our visual language. It shows what Commons actually does:
-
-- **Nodes** — People and targets, connected
-- **Edges** — Messages flowing from many senders to decision-makers
-- **Animation** — Flow that reveals collective action in progress
-
-This is the honest aesthetic. Not gradients and glows. A graph of coordination.
-
-### Colors Derived from RelayLoom
+Three semantic colors. No others.
 
 ```css
-/* Coordination flow */
---teal-route: rgba(59, 196, 184, 0.9);    /* #3BC4B8 — Message routes to targets */
---indigo-share: rgba(79, 70, 229, 0.9);   /* #4F46E5 — Sharing/spreading connections */
-
-/* Verification */
+/* Semantic */
+--teal-route: rgba(59, 196, 184, 0.9);    /* #3BC4B8 — Routes, connections, active coordination */
+--indigo-share: rgba(79, 70, 229, 0.9);   /* #4F46E5 — Sharing, spreading, secondary actions */
 --emerald-verified: #10b981;               /* Delivery confirmed, identity verified */
 
 /* Surfaces */
---surface-base: #ffffff;
---surface-node: rgba(255, 255, 255, 0.9);  /* Node cards with blur */
+--surface-base: oklch(0.995 0.004 55);     /* Warm cream — the institutional ground */
+--surface-artifact: #ffffff;               /* Bounded objects that float: specimens, email previews */
+--surface-node: rgba(255, 255, 255, 0.9);  /* Node cards in RelayLoom visualization */
 --border-node: rgba(148, 163, 184, 0.45);  /* Subtle node borders */
 
 /* Text */
@@ -60,7 +74,11 @@ This is the honest aesthetic. Not gradients and glows. A graph of coordination.
 --text-muted: #94a3b8;                     /* Slate-400 */
 ```
 
-**That's it.** Teal for routes. Indigo for sharing. Emerald for verification. No violet accent. No participation-primary gradients. No five-color palette.
+Teal for routes. Indigo for sharing. Emerald for verification. **No other semantic colors.** Violet, purple, blue as semantic accent colors are prohibited — they fragment the vocabulary. If you reach for violet, ask whether the element is a route (teal), a share (indigo), or a verification signal (emerald). It's always one of the three.
+
+**Scoped exceptions:**
+- **Debate subsystem** — violet is permitted within `src/lib/components/debate/` as an AI-reasoning / evaluation-phase signal. It separates AI-contributed outputs (machine scores, AI evaluation phase) from human deliberation (amber) and semantic verdicts (emerald/red/amber). This is subsystem-local vocabulary, not a global semantic. Prohibited outside the debate subsystem.
+- **Party indicators** — purple for Independent is a political convention, not a design decision. Permitted on representative/decision-maker indicators only.
 
 ---
 
@@ -219,11 +237,15 @@ Entity names at text-xl (20px) create **topographic peaks** on the continuous su
 
 ### Containment Policy
 
-Use the minimum structure the task requires for the user to perceive, chunk, and act. No pattern is ideologically forbidden; every pattern must earn its place.
+Use the minimum structure the task requires for the user to perceive, chunk, and act. Every container must earn its place.
 
-- **Proximity ratio** — default for entity lists. No borders, no backgrounds.
-- **Cards** — reserved for the message preview artifact (it IS a bounded object — an email).
-- **Borders** — reserved for major section breaks, not entity separation.
+- **Proximity ratio** — the default. Entity lists, form sections, metric displays, settings groups. No borders, no backgrounds, no cards. Tight internal spacing (4-8px), generous void between clusters (32-48px). The void IS the boundary.
+- **Cards** — ONLY for bounded artifacts. The email preview IS a card (it's a document). A template card IS a card (it's a browsable object). The proof specimen IS a card (it's evidence). A list of supporters is NOT a card. A settings section is NOT a card. A metric display is NOT a card.
+- **`rounded-xl` (12px)** — prohibited. Civic infrastructure has edges. Use `rounded-lg` (8px) sparingly for actual cards. `rounded` (4px) for inputs. Nothing for typographic layouts.
+- **`shadow-sm` on static elements** — prohibited. Shadow means "this floats above the ground plane." If nothing is below it, the shadow is lying. Reserve shadow for overlays, dropdowns, and modals — things that genuinely occlude content below them.
+- **`bg-white` containers** — prohibited as a default wrapper. The warm cream ground (`--surface-base`) is the surface. Content sits on it. White (`--surface-artifact`) is reserved for artifacts that need to feel like documents placed on a desk.
+- **Pill badges** (`rounded-full bg-{color}-50 text-{color}-700 text-xs px-2 py-0.5`) — prohibited. Replace with typographic annotations: mono text at reduced size, no background, no border. The information is in the words, not the container.
+- **Borders** — hairline rules between register changes (the specimen and its context, role groups in a list). Not `border border-slate-200` on every container.
 - **Background shifts** — reserved for interactive states (hover, active), not resting state.
 
 ### Action Affordances
@@ -232,7 +254,11 @@ Action links are latent at rest (slate-400) and activate on hover (teal). The ch
 
 ## Components
 
-### Nodes (from RelayLoom)
+### RelayLoom (Person-Layer Visualization)
+
+RelayLoom shows coordination as a graph — people and targets connected by message routes. It appears on the person-layer homepage. It is a visualization component, not the visual identity. The visual identity is the proof specimen (see "The Design Language" above).
+
+### Nodes (RelayLoom + Template Browser)
 
 The node card is the visualization unit. White with slight blur, subtle border, soft shadow. Used in RelayLoom and template browser cards — contexts where items are browsable objects.
 
@@ -240,13 +266,15 @@ The node card is the visualization unit. White with slight blur, subtle border, 
 .node {
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(148, 163, 184, 0.45);
-  border-radius: 12px;
+  border-radius: 8px;    /* rounded-lg — the maximum for cards */
   backdrop-filter: blur(4px);
   box-shadow:
     inset 0 1px 6px rgba(0, 0, 0, 0.08),
     0 20px 50px -28px rgba(15, 23, 42, 0.45);
 }
 ```
+
+Note: Node cards are bounded artifacts (browsable objects) — cards are permitted here per the containment policy. The shadow is earned because nodes float above the RelayLoom canvas.
 
 ### Buttons
 
@@ -298,7 +326,8 @@ From voice.md—still accurate:
 
 ### What We Don't Say
 
-- campaigns, issues, community, platform, content, engagement, solutions, empower
+- issues, community, platform, content, engagement, solutions, empower
+- "campaigns" on person-layer surfaces (org layer uses it as a technical noun — see voice.md)
 
 ### What We Do Say
 
@@ -317,9 +346,10 @@ Non-negotiable.
 WCAG AA minimum. Body text 4.5:1, large text 3:1.
 
 ```css
-/* These pass */
-color: #0f172a; /* on white: 16.8:1 */
-color: #10b981; /* emerald on white: 3.2:1 (large text only) */
+/* These pass on warm cream (oklch 0.995 0.004 55) — contrast ratios similar to white */
+color: #0f172a; /* on cream: ~16.5:1 */
+color: #10b981; /* emerald on cream: ~3.1:1 (large text only) */
+/* On artifact white (#fff), ratios are marginally higher */
 ```
 
 ### Focus States
@@ -398,4 +428,4 @@ If it manipulates rather than serves, it's wrong. If it decorates rather than co
 
 ---
 
-*Commons PBC | Design System | 2025-11*
+*Commons PBC | Design System | 2026-04*

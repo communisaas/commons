@@ -14,7 +14,7 @@ Start here. Everything else references this.
 
 ### [voice.md](voice.md) — Voice & Language
 
-**How Commons speaks.** Pragmatic cypherpunk. Direct. No corporate speak.
+**How Commons speaks.** Direct. Specific. Institutional. No corporate speak.
 
 ### [TYPOGRAPHY-SYSTEM.md](TYPOGRAPHY-SYSTEM.md) — Typography Implementation
 
@@ -31,6 +31,10 @@ Multi-agent critique found the org layer diverged from PERCEPTUAL-BRIDGE.md — 
 ### [ORG-REDESIGN-THESIS.md](ORG-REDESIGN-THESIS.md) — Org Layer Redesign (COMPLETE)
 
 Inverted information hierarchy: proof/power/verification state leads every screen. 18 tasks, 4 review gates, all passed. The canonical reference for org-layer design philosophy.
+
+### [ORG-ACQUISITION-SURFACE.md](ORG-ACQUISITION-SURFACE.md) — Org Acquisition Surface
+
+**Design principles for the pre-auth org landing page.** The cognitive sequence (gap, specimen, coverage, price), visual principles (figure-ground, rhythm, contrast), and voice register for converting someone who doesn't use Commons into someone who creates an org. Addresses the cold-start problem no other design doc covers.
 
 ### [jurisdiction-ux-strategy.md](jurisdiction-ux-strategy.md) — Jurisdiction UX
 
