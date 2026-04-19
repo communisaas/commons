@@ -10,6 +10,26 @@
  */
 
 /**
+ * Detect whether this is a mobile device (has a local wallet).
+ * Desktop browsers should use the cross-device bridge instead of the DC API's
+ * CTAP2 hybrid transport, which crashes Chrome's renderer on macOS.
+ *
+ * iPadOS 13+ reports a macOS UA string — detect via maxTouchPoints.
+ */
+export function isMobileDevice(): boolean {
+	if (typeof navigator === 'undefined') return false;
+	const ua = navigator.userAgent;
+	const uadPlatform =
+		(navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform?.toLowerCase() ??
+		'';
+	if (uadPlatform === 'android' || ua.includes('Android')) return true;
+	if (/iPhone|iPad/.test(ua)) return true;
+	// iPadOS 13+ lies: reports Macintosh UA. Detect via touch capability.
+	if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 0) return true;
+	return false;
+}
+
+/**
  * Check if the browser supports the Digital Credentials API.
  * Feature detection: `typeof DigitalCredential !== 'undefined'`
  */
@@ -18,30 +38,50 @@ export function isDigitalCredentialsSupported(): boolean {
 }
 
 /**
+ * Check if the same-device DC API flow should be used.
+ * Returns true only on mobile devices with DC API support.
+ * Desktop browsers should always use the cross-device bridge.
+ */
+export function shouldUseSameDeviceFlow(): boolean {
+	return isMobileDevice() && isDigitalCredentialsSupported();
+}
+
+/**
  * Check which protocols the browser/device supports.
  * Chrome: org-iso-mdoc + openid4vp
  * Safari: org-iso-mdoc only
  */
-export async function getSupportedProtocols(): Promise<{
+export function getSupportedProtocols(): {
 	mdoc: boolean;
 	openid4vp: boolean;
-}> {
+} {
 	if (!isDigitalCredentialsSupported()) {
 		return { mdoc: false, openid4vp: false };
 	}
 
 	// userAgentAllowsProtocol may not be available in all implementations
-	const checkProtocol = DigitalCredential.userAgentAllowsProtocol;
-	if (!checkProtocol) {
+	if (!DigitalCredential.userAgentAllowsProtocol) {
 		// Assume mdoc is available if DC API is supported (conservative fallback)
 		return { mdoc: true, openid4vp: false };
 	}
 
 	return {
-		mdoc: checkProtocol('org-iso-mdoc'),
-		openid4vp: checkProtocol('openid4vp')
+		mdoc: DigitalCredential.userAgentAllowsProtocol('org-iso-mdoc'),
+		openid4vp: DigitalCredential.userAgentAllowsProtocol('openid4vp')
 	};
 }
+
+// --- DEBUG: Crash breadcrumbs (survives renderer crash via localStorage) ---
+function debugBreadcrumb(step: string, data: Record<string, unknown>) {
+	try {
+		const crumbs = JSON.parse(localStorage.getItem('dc-debug') || '[]');
+		crumbs.push({ step, ...data, ts: Date.now() });
+		localStorage.setItem('dc-debug', JSON.stringify(crumbs));
+	} catch {
+		/* storage full or unavailable */
+	}
+}
+// --- END DEBUG ---
 
 export interface CredentialRequestConfig {
 	requests: Array<{
@@ -66,6 +106,7 @@ export type CredentialRequestResult =
  * Request a digital credential from the user's wallet.
  *
  * Wraps navigator.credentials.get({ digital }) with:
+ * - Protocol filtering (only pass protocols the browser supports)
  * - AbortController timeout (60s for wallet interaction)
  * - Graceful AbortError handling for user dismissal
  * - Typed error responses
@@ -85,9 +126,14 @@ export async function requestCredential(
 	const timeoutId = setTimeout(() => controller.abort(), 60_000); // 60s for wallet interaction
 
 	try {
+		debugBreadcrumb('pre-process', {
+			protocols: config.requests.map((r) => r.protocol),
+			dataTypes: config.requests.map((r) => typeof r.data)
+		});
+
 		// For org-iso-mdoc, the server sends CBOR as base64 over JSON.
 		// The DC API expects binary (ArrayBuffer), so decode before passing to the wallet.
-		const processedRequests = config.requests.map((req) => {
+		let processedRequests = config.requests.map((req) => {
 			if (req.protocol === 'org-iso-mdoc' && typeof req.data === 'string') {
 				const binaryStr = atob(req.data);
 				const bytes = new Uint8Array(binaryStr.length);
@@ -97,6 +143,36 @@ export async function requestCredential(
 				return { ...req, data: bytes.buffer };
 			}
 			return req;
+		});
+
+		// Filter to only protocols supported by this browser.
+		// Safari only supports org-iso-mdoc; passing unsupported protocols
+		// may crash the Credential Request Coordinator.
+		const supported = getSupportedProtocols();
+		const protocolAllowed: Record<string, boolean> = {
+			'org-iso-mdoc': supported.mdoc,
+			openid4vp: supported.openid4vp
+		};
+		processedRequests = processedRequests.filter(
+			(req) => protocolAllowed[req.protocol] ?? false
+		);
+
+		debugBreadcrumb('post-filter', {
+			supported,
+			survivingProtocols: processedRequests.map((r) => r.protocol)
+		});
+
+		if (processedRequests.length === 0) {
+			return {
+				success: false,
+				error: 'unsupported',
+				message: `No requested protocols are supported by this browser (checked: ${JSON.stringify(supported)})`
+			};
+		}
+
+		debugBreadcrumb('pre-get', {
+			protocols: processedRequests.map((r) => r.protocol),
+			requestCount: processedRequests.length
 		});
 
 		const credential = await navigator.credentials.get({
@@ -130,6 +206,11 @@ export async function requestCredential(
 			responseData = JSON.stringify(responseData);
 		}
 
+		debugBreadcrumb('post-get-success', {
+			protocol: credential.protocol,
+			dataType: typeof responseData
+		});
+
 		return {
 			success: true,
 			protocol: credential.protocol,
@@ -137,6 +218,12 @@ export async function requestCredential(
 		};
 	} catch (err) {
 		clearTimeout(timeoutId);
+
+		debugBreadcrumb('catch', {
+			errorName: err instanceof Error ? err.name : 'non-Error',
+			errorMessage: err instanceof Error ? err.message : String(err),
+			aborted: controller.signal.aborted
+		});
 
 		if (err instanceof DOMException) {
 			if (err.name === 'AbortError') {
