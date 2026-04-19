@@ -1,6 +1,7 @@
-@import 'tailwindcss/base';
-@import 'tailwindcss/components';
-@import 'tailwindcss/utilities';
+@import 'tailwindcss';
+/* Import JetBrains Mono for data/metrics — must precede any non-@import/@charset/@layer */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@config '../tailwind.config.ts';
 
 /* Register --card-hue as typed property — provides fallback default (55 = warm gold) */
 @property --card-hue {
@@ -8,9 +9,6 @@
 	inherits: true;
 	initial-value: 55;
 }
-
-/* Import JetBrains Mono for data/metrics */
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 /* Satoshi font for brand/words - Self-hosted for performance */
 @font-face {
@@ -128,18 +126,18 @@
 		--participation-primary-900: #312e81; /* Indigo-900: dark text */
 		--participation-primary-950: #1e1b4b; /* Indigo-950: darkest */
 
-		/* Accent Colors—Distinctive Voice */
-		--participation-accent-50: #faf5ff;
-		--participation-accent-100: #f3e8ff;
-		--participation-accent-200: #e9d5ff;
-		--participation-accent-300: #d8b4fe;
-		--participation-accent-400: #c084fc;
-		--participation-accent-500: #a855f7; /* Violet-500: accent */
-		--participation-accent-600: #9333ea; /* Violet-600: "Count" color */
-		--participation-accent-700: #7c3aed; /* Violet-700: hover */
-		--participation-accent-800: #6b21a8; /* Violet-800: pressed */
-		--participation-accent-900: #581c87; /* Violet-900: dark */
-		--participation-accent-950: #3b0764; /* Violet-950: darkest */
+		/* Accent Colors — Emerald (verification semantic per design-system.md) */
+		--participation-accent-50: #ecfdf5;
+		--participation-accent-100: #d1fae5;
+		--participation-accent-200: #a7f3d0;
+		--participation-accent-300: #6ee7b7;
+		--participation-accent-400: #34d399;
+		--participation-accent-500: #10b981; /* Emerald-500: accent */
+		--participation-accent-600: #059669; /* Emerald-600: "Count" color */
+		--participation-accent-700: #047857; /* Emerald-700: hover */
+		--participation-accent-800: #065f46; /* Emerald-800: pressed */
+		--participation-accent-900: #064e3b; /* Emerald-900: dark */
+		--participation-accent-950: #022c22; /* Emerald-950: darkest */
 
 		/* Delivery Channel Colors—Clear Differentiation */
 		--channel-verified-50: #ecfdf5;
