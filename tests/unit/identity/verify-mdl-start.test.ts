@@ -162,7 +162,11 @@ beforeEach(() => {
 
 	// Mock CBOR encoding
 	mockCborEncode.mockReturnValue(MOCK_CBOR_BYTES);
-	mockCborTagged.mockImplementation((tag: number, value: any) => ({ tag, value }));
+	// vitest 4: arrow functions aren't constructable, and production code calls
+	// `new Tagged(24, ...)`. Use a `function` expression so the mock supports `new`.
+	mockCborTagged.mockImplementation(function (tag: number, value: any) {
+		return { tag, value };
+	});
 });
 
 afterEach(() => {

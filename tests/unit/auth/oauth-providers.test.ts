@@ -21,31 +21,34 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // ---------------------------------------------------------------------------
 
 // Mock arctic OAuth providers
+// Note: vitest 4 requires mock constructors to be invoked as `new` — arrow
+// functions are not constructable. Use `function` expressions so production
+// code's `new Google(...)` / `new Facebook(...)` calls succeed.
 vi.mock('arctic', () => ({
-	Google: vi.fn().mockImplementation(() => ({
-		validateAuthorizationCode: vi.fn().mockResolvedValue({})
-	})),
-	LinkedIn: vi.fn().mockImplementation(() => ({
-		validateAuthorizationCode: vi.fn().mockResolvedValue({})
-	})),
-	Discord: vi.fn().mockImplementation(() => ({
-		validateAuthorizationCode: vi.fn().mockResolvedValue({})
-	})),
-	Twitter: vi.fn().mockImplementation(() => ({
-		validateAuthorizationCode: vi.fn().mockResolvedValue({})
-	}))
+	Google: vi.fn().mockImplementation(function () {
+		return { validateAuthorizationCode: vi.fn().mockResolvedValue({}) };
+	}),
+	LinkedIn: vi.fn().mockImplementation(function () {
+		return { validateAuthorizationCode: vi.fn().mockResolvedValue({}) };
+	}),
+	Discord: vi.fn().mockImplementation(function () {
+		return { validateAuthorizationCode: vi.fn().mockResolvedValue({}) };
+	}),
+	Twitter: vi.fn().mockImplementation(function () {
+		return { validateAuthorizationCode: vi.fn().mockResolvedValue({}) };
+	})
 }));
 
 vi.mock('$lib/core/auth/coinbase-oauth', () => ({
-	CoinbaseOAuth: vi.fn().mockImplementation(() => ({
-		validateAuthorizationCode: vi.fn().mockResolvedValue({})
-	}))
+	CoinbaseOAuth: vi.fn().mockImplementation(function () {
+		return { validateAuthorizationCode: vi.fn().mockResolvedValue({}) };
+	})
 }));
 
 vi.mock('$lib/core/auth/facebook-oauth', () => ({
-	FacebookOAuth: vi.fn().mockImplementation(() => ({
-		validateAuthorizationCode: vi.fn().mockResolvedValue({})
-	}))
+	FacebookOAuth: vi.fn().mockImplementation(function () {
+		return { validateAuthorizationCode: vi.fn().mockResolvedValue({}) };
+	})
 }));
 
 // ---------------------------------------------------------------------------
