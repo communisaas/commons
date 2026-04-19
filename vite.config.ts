@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import { sveltekit } from '@sveltejs/kit/vite';
+import tailwindcss from '@tailwindcss/vite';
 import wasm from 'vite-plugin-wasm';
 import alias from '@rollup/plugin-alias';
 import { fileURLToPath } from 'url';
@@ -46,6 +47,7 @@ export default defineConfig({
 				return null;
 			}
 		},
+		tailwindcss(),
 		wasm(),
 		sveltekit()
 	],
