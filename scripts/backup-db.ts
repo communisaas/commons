@@ -37,8 +37,8 @@
  * new one.
  */
 
-import { execSync } from 'child_process';
-import { readFileSync, unlinkSync } from 'fs';
+import { spawn } from 'child_process';
+import { createWriteStream, readFileSync, unlinkSync } from 'fs';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 /**
@@ -92,6 +92,53 @@ function sanitizeForPgDump(rawUrl: string): string {
 	return kept.length > 0 ? `${base}?${kept.join('&')}` : base;
 }
 
+/**
+ * Run `pg_dump | gzip | openssl enc > file` as a shell-free pipeline.
+ *
+ * Each stage exit code is checked independently — pg_dump failing after
+ * emitting zero bytes would otherwise produce an apparently-successful
+ * encrypted-of-nothing archive. Any non-zero exit, spawn error, or
+ * truncated output rejects the promise.
+ */
+function runPipeline(pgUrl: string, outPath: string): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const pgDump = spawn('pg_dump', ['--format=custom', pgUrl], {
+			stdio: ['ignore', 'pipe', 'inherit'],
+		});
+		const gzipProc = spawn('gzip', [], {
+			stdio: ['pipe', 'pipe', 'inherit'],
+		});
+		const openssl = spawn(
+			'openssl',
+			['enc', '-aes-256-cbc', '-pbkdf2', '-pass', 'env:BACKUP_ENCRYPTION_KEY'],
+			{ stdio: ['pipe', 'pipe', 'inherit'] },
+		);
+
+		pgDump.stdout.pipe(gzipProc.stdin);
+		gzipProc.stdout.pipe(openssl.stdin);
+		openssl.stdout.pipe(createWriteStream(outPath));
+
+		const errors: string[] = [];
+		const stages: [string, ReturnType<typeof spawn>][] = [
+			['pg_dump', pgDump],
+			['gzip', gzipProc],
+			['openssl', openssl],
+		];
+		let remaining = stages.length;
+
+		for (const [name, proc] of stages) {
+			proc.on('error', (e) => errors.push(`${name}: ${e.message}`));
+			proc.on('close', (code) => {
+				if (code !== 0) errors.push(`${name} exited ${code}`);
+				if (--remaining === 0) {
+					if (errors.length > 0) reject(new Error(errors.join('; ')));
+					else resolve();
+				}
+			});
+		}
+	});
+}
+
 async function backupDatabase() {
 	const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 	const filename = `commons-backup-${timestamp}.dump.gz.enc`;
@@ -109,11 +156,13 @@ async function backupDatabase() {
 
 	const pgUrl = sanitizeForPgDump(dbUrl);
 
-	// pg_dump → gzip → encrypt → file
-	execSync(
-		`pg_dump --format=custom "${pgUrl}" | gzip | openssl enc -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -out "${tmpPath}"`,
-		{ stdio: 'inherit' }
-	);
+	// pg_dump → gzip → openssl → file
+	//
+	// Spawn each process directly (no shell) so the connection string — which
+	// regularly contains shell-special chars ($, ", ', space, !) in the
+	// password — can never break quoting. pg_dump receives the URL as a single
+	// argv element; the pipeline is wired in-process via stdio streams.
+	await runPipeline(pgUrl, tmpPath);
 
 	// Upload to S3
 	const s3 = new S3Client({ region });
