@@ -1,20 +1,84 @@
 <script lang="ts">
 	import type { PageData } from './$types';
+	import type { VerificationPacket } from '$lib/types/verification-packet';
 	import { goto } from '$app/navigation';
-	import { modalActions } from '$lib/stores/modalSystem.svelte';
+	import { Datum } from '$lib/design';
+	import VerificationPacketComponent from '$lib/components/org/VerificationPacket.svelte';
 
 	let { data }: { data: PageData } = $props();
 
 	const user = $derived(data.user);
 	const orgs = $derived(user?.orgMemberships ?? []);
 
-	// Creation form state (terminal beat)
+	// Specimen: real CA-12 verification packet with H3 cells
+	const ca12Boundary: GeoJSON.Polygon = {
+		type: 'Polygon',
+		coordinates: [[
+			[-122.510, 37.708], [-122.505, 37.725], [-122.503, 37.758],
+			[-122.498, 37.778], [-122.483, 37.808], [-122.455, 37.812],
+			[-122.420, 37.812], [-122.392, 37.810], [-122.370, 37.798],
+			[-122.357, 37.788], [-122.356, 37.768], [-122.382, 37.748],
+			[-122.393, 37.732], [-122.400, 37.718], [-122.420, 37.710],
+			[-122.452, 37.708], [-122.480, 37.708], [-122.510, 37.708]
+		]]
+	};
+
+	const specimenPacket: VerificationPacket = {
+		verified: 248,
+		total: 248,
+		verifiedPct: 100,
+		districtCount: 1,
+		authorship: { individual: 196, shared: 52, unknown: 0, explicit: true },
+		dateRange: { earliest: '2026-02-12', latest: '2026-03-04', spanDays: 21 },
+		identityBreakdown: { govId: 156, addressVerified: 92, emailOnly: 0, unverified: 0 },
+		gds: 0.94,
+		ald: 0.79,
+		temporalEntropy: 3.2,
+		burstVelocity: 1.8,
+		cai: 0.72,
+		tiers: [
+			{ tier: 1, label: 'New', count: 68 },
+			{ tier: 2, label: 'Active', count: 85 },
+			{ tier: 3, label: 'Established', count: 62 },
+			{ tier: 4, label: 'Veteran', count: 33 },
+		],
+		geography: [{ hash: 'ca12', count: 248 }],
+		cells: [
+			{ h3: '87283082cffffff', count: 48 },  // Mission + Noe Valley
+			{ h3: '872830958ffffff', count: 26 },  // Sunset
+			{ h3: '87283082affffff', count: 24 },  // SOMA
+			{ h3: '87283095bffffff', count: 22 },  // Richmond
+			{ h3: '87283082dffffff', count: 18 },  // Castro
+			{ h3: '872830828ffffff', count: 16 },  // Tenderloin
+			{ h3: '872830829ffffff', count: 16 },  // Western Addition
+			{ h3: '87283082bffffff', count: 15 },  // North Beach
+			{ h3: '872830825ffffff', count: 14 },  // Bayview
+			{ h3: '872830952ffffff', count: 13 },  // Excelsior
+			{ h3: '872830876ffffff', count: 13 },  // Marina
+			{ h3: '872830874ffffff', count: 12 },  // Presidio Heights
+			{ h3: '87283082effffff', count: 11 },  // Potrero Hill
+		],
+		temporal: {
+			bins: [2, 4, 8, 14, 18, 25, 30, 42, 38, 35, 28, 22, 18, 12, 8, 5, 3],
+			startMs: new Date('2026-02-12T00:00:00Z').getTime(),
+			binWidthMs: 3600000 * 24  // daily bins for the specimen
+		},
+		lastUpdated: '2026-03-04T18:00:00Z'
+	};
+
+	// Creation form state (returning users)
 	let showCreate = $state(false);
 	let orgName = $state('');
 	let orgSlug = $state('');
 	let slugEdited = $state(false);
 	let submitting = $state(false);
 	let errorMsg = $state('');
+
+	// Waitlist state (argument CTA)
+	let waitlistEmail = $state('');
+	let waitlistSubmitting = $state(false);
+	let waitlistSubmitted = $state(false);
+	let waitlistError = $state('');
 
 	function deriveSlug(name: string): string {
 		return name
@@ -78,8 +142,54 @@
 		}
 	}
 
-	function handleSignIn(): void {
-		modalActions.openModal('sign-in-modal', 'sign-in');
+	async function handleWaitlist(): Promise<void> {
+		if (!waitlistEmail.trim()) return;
+
+		waitlistSubmitting = true;
+		waitlistError = '';
+
+		try {
+			const res = await fetch('/api/waitlist', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ email: waitlistEmail.trim() })
+			});
+
+			if (!res.ok) {
+				const body = await res.json().catch(() => null);
+				waitlistError = body?.message || 'Something went wrong. Try again.';
+				return;
+			}
+
+			waitlistSubmitted = true;
+		} catch {
+			waitlistError = 'Network error. Try again.';
+		} finally {
+			waitlistSubmitting = false;
+		}
+	}
+
+	async function handleRequestAccess(): Promise<void> {
+		waitlistSubmitting = true;
+		waitlistError = '';
+
+		try {
+			const res = await fetch('/api/waitlist', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' }
+			});
+
+			if (!res.ok) {
+				waitlistError = 'Something went wrong. Try again.';
+				return;
+			}
+
+			waitlistSubmitted = true;
+		} catch {
+			waitlistError = 'Network error. Try again.';
+		} finally {
+			waitlistSubmitting = false;
+		}
 	}
 </script>
 
@@ -176,7 +286,7 @@
 			     ═══════════════════════════════════════════ -->
 			<section class="beat beat--problem" aria-labelledby="problem-heading">
 				<h1 id="problem-heading" class="problem__thesis">
-					<span class="problem__stat">312</span> signatures. No proof any of them live in the district.
+					<span class="problem__stat"><Datum value={312} /></span> signatures. No proof any of them live in the district.
 				</h1>
 
 				<p class="problem__bridge">
@@ -184,7 +294,7 @@
 				</p>
 
 				<p class="problem__counter">
-					Only <span class="problem__stat problem__stat--weak">51%</span> of Congressional staff say form emails influence undecided votes. Half believe those messages are sent <em>without</em> the constituent's knowledge. <span class="problem__stat problem__stat--weak">92%</span> say individualized emails DO influence &mdash; which is the filter staffers apply.
+					Only <span class="problem__stat problem__stat--weak"><Datum value={51} />%</span> of Congressional staff say form emails influence undecided votes. Half believe those messages are sent <em>without</em> the constituent's knowledge. <span class="problem__stat problem__stat--weak"><Datum value={92} />%</span> say individualized emails DO influence &mdash; which is the filter staffers apply.
 				</p>
 
 				<p class="problem__citation">
@@ -199,7 +309,7 @@
 			<section class="beat beat--evidence" aria-labelledby="evidence-heading">
 				<h2 id="evidence-heading" class="beat__heading">What the staffer actually sees</h2>
 				<p class="beat__subheading">
-					Shared-office mailbox, <span class="beat__subheading-num">6</span>-minute window, one morning in March.
+					Shared-office mailbox, <span class="beat__subheading-num"><Datum value={6} /></span>-minute window, one morning in March.
 				</p>
 
 				<figure class="inbox-artifact" aria-label="Congressional staff shared inbox showing mass-mail spray pattern">
@@ -213,7 +323,7 @@
 					<div class="inbox-artifact__toolbar">
 						<span class="inbox-artifact__filter">Sort: received</span>
 						<span class="inbox-artifact__count">
-							<span class="inbox-artifact__count-num">312</span> unread
+							<span class="inbox-artifact__count-num"><Datum value={312} /></span> unread
 						</span>
 					</div>
 
@@ -282,77 +392,21 @@
 					A petition counts names. A verification packet documents constituents &mdash; each individually authored, identity-proven, district-matched, screened for duplicates.
 				</p>
 
-				<div class="mechanism__specimen-block">
-					<p class="mechanism__provenance">
-						Example packet &middot; CA-12 &middot; Feb 2026
-					</p>
+				<div class="mechanism__layout">
+					<div class="mechanism__specimen-block">
+						<p class="mechanism__provenance">
+							Example packet &middot; CA-12 &middot; Feb 2026
+						</p>
 
-					<figure class="specimen">
-						<div class="specimen__title">Verified Constituent Report</div>
+						<VerificationPacketComponent
+							packet={specimenPacket}
+							boundary={ca12Boundary}
+							interactive
+						/>
+					</div>
 
-						<div class="specimen__meta">
-							<div class="specimen__row">
-								<span class="specimen__label">Campaign</span>
-								<span class="specimen__value">HR 5421 &middot; Clean Water Funding</span>
-							</div>
-							<div class="specimen__row">
-								<span class="specimen__label">District</span>
-								<span class="specimen__value">CA-12</span>
-							</div>
-							<div class="specimen__row">
-								<span class="specimen__label">Period</span>
-								<span class="specimen__value">Feb 12 &ndash; Mar 4, 2026</span>
-							</div>
-						</div>
-
-						<div class="specimen__divider"></div>
-
-						<div class="specimen__hero">
-							<span class="specimen__count">248</span>
-							<span class="specimen__count-label">verified constituents<br/>in your district</span>
-						</div>
-
-						<div class="specimen__divider"></div>
-
-						<div class="specimen__evidence">
-							<div class="specimen__evidence-row">
-								<span class="specimen__evidence-label">Identity</span>
-								<span class="specimen__evidence-detail">
-									<strong>156</strong> government ID
-									<span class="specimen__sep">&middot;</span>
-									<strong>92</strong> address-matched
-								</span>
-							</div>
-							<div class="specimen__evidence-row">
-								<span class="specimen__evidence-label">Authorship</span>
-								<span class="specimen__evidence-detail">
-									<strong>196</strong> individually composed
-									<span class="specimen__sep">&middot;</span>
-									<strong>52</strong> shared statements
-								</span>
-							</div>
-							<div class="specimen__evidence-row">
-								<span class="specimen__evidence-label">Geography</span>
-								<span class="specimen__evidence-detail">
-									<strong>14</strong> communities across district
-								</span>
-							</div>
-							<div class="specimen__evidence-row">
-								<span class="specimen__evidence-label">Screening</span>
-								<span class="specimen__evidence-detail">
-									One submission per person &middot; duplicates removed
-								</span>
-							</div>
-						</div>
-
-						<div class="specimen__seal">
-							<span class="specimen__seal-text">Cryptographic audit trail &middot; independently verifiable</span>
-						</div>
-					</figure>
-				</div>
-
-				<!-- Staff-filter mapping: each specimen field → the question it answers, with a citation -->
-				<dl class="filter-map" aria-label="How each field maps to the staff intake filter it answers">
+					<!-- Staff-filter mapping: each specimen field → the question it answers, with a citation -->
+					<dl class="filter-map" aria-label="How each field maps to the staff intake filter it answers">
 					<div class="filter-map__row">
 						<dt class="filter-map__field">Identity</dt>
 						<dd class="filter-map__answer">answers the staffer's first filter:</dd>
@@ -372,12 +426,68 @@
 						<dd class="filter-map__citation">CMF 2004/2015 &middot; 53% of staff say form campaigns are sent without the constituent's knowledge</dd>
 					</div>
 					<div class="filter-map__row">
+						<dt class="filter-map__field">Timing</dt>
+						<dd class="filter-map__answer">answers:</dd>
+						<dd class="filter-map__question">&ldquo;Is this organic or manufactured?&rdquo;</dd>
+						<dd class="filter-map__citation">Walker &amp; Le, Socius 2023 &middot; staffers can distinguish organic constituent engagement from coordinated astroturf by arrival patterns</dd>
+					</div>
+					<div class="filter-map__row">
 						<dt class="filter-map__field">Screening</dt>
 						<dd class="filter-map__answer">answers:</dd>
 						<dd class="filter-map__question">&ldquo;Is this astroturf?&rdquo;</dd>
 						<dd class="filter-map__citation">Walker &amp; Le, Socius 2023 &middot; unverified submissions measurably harm trust in legitimate orgs</dd>
 					</div>
 				</dl>
+				</div>
+			</section>
+
+			<!-- ═══════════════════════════════════════════
+			     BEAT 3b — THE PLATFORM (full stack, not a bolt-on)
+			     ═══════════════════════════════════════════ -->
+			<section class="beat beat--platform" aria-labelledby="platform-heading">
+				<h2 id="platform-heading" class="beat__heading">One platform, not one more tool.</h2>
+				<p class="beat__subheading">
+					Verification is the foundation, not an add-on. Every tool an advocacy org runs today &mdash; built in, built around verified constituent voice.
+				</p>
+
+				<div class="platform__grid">
+					<div class="platform__tile">
+						<span class="platform__tile-name">Supporters</span>
+						<span class="platform__tile-desc">Import from Action Network, EveryAction, NationBuilder, CSV. District-match on import.</span>
+					</div>
+					<div class="platform__tile">
+						<span class="platform__tile-name">Campaigns</span>
+						<span class="platform__tile-desc">Each campaign assembles a proof packet. Every action verified and attributed.</span>
+					</div>
+					<div class="platform__tile">
+						<span class="platform__tile-name">Email</span>
+						<span class="platform__tile-desc">Blasts, sequences, deliverability tracking. Segmented by verification tier.</span>
+					</div>
+					<div class="platform__tile">
+						<span class="platform__tile-name">SMS &amp; Calls</span>
+						<span class="platform__tile-desc">Verified constituent targeting. 10DLC-ready.</span>
+					</div>
+					<div class="platform__tile">
+						<span class="platform__tile-name">Events</span>
+						<span class="platform__tile-desc">Mobilize and coordinate. Attendance feeds the verification funnel.</span>
+					</div>
+					<div class="platform__tile">
+						<span class="platform__tile-name">Fundraising</span>
+						<span class="platform__tile-desc">Contributions, donor management, compliance reporting.</span>
+					</div>
+					<div class="platform__tile">
+						<span class="platform__tile-name">Legislation</span>
+						<span class="platform__tile-desc">Track bills, monitor votes, trigger campaigns on activity.</span>
+					</div>
+					<div class="platform__tile">
+						<span class="platform__tile-name">Decision Makers</span>
+						<span class="platform__tile-desc">Follow across jurisdictions. Build scorecards. Prove accountability.</span>
+					</div>
+					<div class="platform__tile">
+						<span class="platform__tile-name">Automation</span>
+						<span class="platform__tile-desc">Verification-gated workflows. Multi-step sequences. Conditional triggers.</span>
+					</div>
+				</div>
 			</section>
 
 			<!-- ═══════════════════════════════════════════
@@ -406,7 +516,7 @@
 				</p>
 
 				<p class="reach__footer">
-					<span class="reach__stat">24</span> U.S. boundary types live today &middot; <span class="reach__stat">90,887</span> local government entities covered.
+					<span class="reach__stat"><Datum value={24} /></span> U.S. boundary types live today &middot; <span class="reach__stat"><Datum value={90887} /></span> local government entities covered.
 				</p>
 				<p class="reach__citation">
 					U.S. Census Bureau Local Governments 2022 &middot; regulations.gov v4 &middot; UK petition.parliament.uk, EU ECI, Bundestag e-petitions
@@ -431,129 +541,64 @@
 			</section>
 
 			<!-- ═══════════════════════════════════════════
-			     BEAT 6 — FRICTION + PRICE
+			     BEAT 6 — BETA ACCESS
 			     ═══════════════════════════════════════════ -->
-			<section class="beat beat--price" aria-labelledby="price-heading">
-				<h2 id="price-heading" class="sr-only">Friction removal and price</h2>
-
-				<div class="pricing__anchor">
-					<div class="pricing__anchor-line pricing__anchor-line--strike">
-						<span class="pricing__anchor-text">Not <span class="pricing__anchor-num">$15</span>/mo per seat.</span>
-					</div>
-					<div class="pricing__anchor-line pricing__anchor-line--strike">
-						<span class="pricing__anchor-text">Not <span class="pricing__anchor-num">$40,000</span>/yr with a year-long implementation.</span>
-					</div>
-					<div class="pricing__anchor-line pricing__anchor-line--punchline">
-						<span class="pricing__free">$0.</span>
-						<span class="pricing__free-scope">
-							<span class="pricing__free-scope-num">100</span> verified actions
-							<span class="pricing__free-scope-sep">&middot;</span>
-							<span class="pricing__free-scope-num">2</span> seats
-							<span class="pricing__free-scope-sep">&middot;</span>
-							no time limit
-						</span>
-					</div>
-				</div>
-
-				<p class="pricing__anchor-source">
-					Starter tier published &middot; enterprise by quote &middot; Apr 2026
+			<section class="beat beat--access" aria-labelledby="access-heading">
+				<h2 id="access-heading" class="beat__heading">Private beta. Founding organizations.</h2>
+				<p class="beat__subheading">
+					We're onboarding advocacy organizations individually &mdash; not self-serve, not a free trial. Direct access to the engineering team. Your use case shapes the platform.
 				</p>
 
-				<p class="pricing__legend">
-					One verified action = one constituent, identity-proven, district-matched, authored for you. Metered at submission, not at send.
-				</p>
-
-				<div class="pricing-grid">
-					<div class="pricing-row">
-						<span class="pricing-name">Free</span>
-						<span class="pricing-price">$0</span>
-						<span class="pricing-limits"><span class="pricing-num">100</span> verified actions &middot; <span class="pricing-num">1,000</span> emails &middot; <span class="pricing-num">2</span> seats</span>
+				<dl class="access__points">
+					<div class="access__point">
+						<dt class="access__point-label">Import</dt>
+						<dd class="access__point-desc">Bring your supporter list. We district-match and start the verification funnel on day one.</dd>
 					</div>
-					<div class="pricing-row">
-						<span class="pricing-name">Starter</span>
-						<span class="pricing-price">$10<span class="pricing-mo">/mo</span></span>
-						<span class="pricing-limits"><span class="pricing-num">1,000</span> verified actions &middot; <span class="pricing-num">20,000</span> emails &middot; <span class="pricing-num">5</span> seats</span>
+					<div class="access__point">
+						<dt class="access__point-label">Ship</dt>
+						<dd class="access__point-desc">Produce your first verified proof packet during the beta period.</dd>
 					</div>
-					<div class="pricing-row">
-						<span class="pricing-name">Organization</span>
-						<span class="pricing-price">$75<span class="pricing-mo">/mo</span></span>
-						<span class="pricing-limits"><span class="pricing-num">5,000</span> verified actions &middot; <span class="pricing-num">100,000</span> emails &middot; <span class="pricing-num">10</span> seats</span>
+					<div class="access__point">
+						<dt class="access__point-label">Shape</dt>
+						<dd class="access__point-desc">Founding partners get a permanent voice in the roadmap. Your feedback directly informs the product.</dd>
 					</div>
-					<div class="pricing-row">
-						<span class="pricing-name">Coalition</span>
-						<span class="pricing-price">$200<span class="pricing-mo">/mo</span></span>
-						<span class="pricing-limits"><span class="pricing-num">10,000</span> verified actions &middot; <span class="pricing-num">250,000</span> emails &middot; <span class="pricing-num">25</span> seats</span>
-					</div>
-				</div>
-
-				<p class="pricing__friction">
-					No demo required. No procurement review. Import your list from Action Network, EveryAction, NationBuilder, or any CSV export &mdash; a packet produced today, not a year from now.
-				</p>
+				</dl>
 			</section>
 
 			<!-- ═══════════════════════════════════════════
-			     BEAT 7 — TERMINAL CTA
+			     BEAT 7 — TERMINAL CTA (waitlist)
 			     ═══════════════════════════════════════════ -->
 			<section class="beat beat--cta">
-				{#if user}
-					{#if !showCreate}
-						<button class="cta" onclick={openCreate}>
-							Create your organization
-						</button>
-					{:else}
-						<form class="create-form create-form--threshold" onsubmit={(e) => { e.preventDefault(); handleCreate(); }}>
-							<label class="create-form__label">
-								<span class="create-form__label-text">Name</span>
-								<input
-									type="text"
-									class="create-form__input"
-									placeholder="Your organization"
-									value={orgName}
-									oninput={handleNameInput}
-									maxlength="100"
-									required
-								/>
-							</label>
-							<label class="create-form__label">
-								<span class="create-form__label-text">Slug</span>
-								<div class="create-form__slug-row">
-									<span class="create-form__slug-prefix">/org/</span>
-									<input
-										type="text"
-										class="create-form__input create-form__input--slug"
-										placeholder="your-organization"
-										value={orgSlug}
-										oninput={handleSlugInput}
-										maxlength="48"
-										required
-									/>
-								</div>
-							</label>
-							{#if errorMsg}
-								<p class="create-form__error">{errorMsg}</p>
-							{/if}
-							<div class="create-form__actions">
-								<button
-									type="button"
-									class="create-form__cancel"
-									onclick={() => { showCreate = false; errorMsg = ''; }}
-								>
-									Cancel
-								</button>
-								<button
-									type="submit"
-									class="cta"
-									disabled={submitting || !orgName.trim() || !orgSlug.trim()}
-								>
-									{submitting ? 'Creating...' : 'Create organization'}
-								</button>
-							</div>
-						</form>
+				{#if waitlistSubmitted}
+					<div class="access__confirmed">
+						<p class="access__confirmed-text">You're on the list. We'll be in touch.</p>
+					</div>
+				{:else if user}
+					<button class="cta" onclick={handleRequestAccess} disabled={waitlistSubmitting}>
+						{waitlistSubmitting ? 'Requesting...' : 'Request beta access'}
+					</button>
+					{#if waitlistError}
+						<p class="waitlist-form__error">{waitlistError}</p>
 					{/if}
 				{:else}
-					<button class="cta" onclick={handleSignIn}>
-						Sign in to create your organization
-					</button>
+					<form class="waitlist-form" onsubmit={(e) => { e.preventDefault(); handleWaitlist(); }}>
+						<div class="waitlist-form__row">
+							<input
+								type="email"
+								class="waitlist-form__input"
+								placeholder="you@yourorg.org"
+								bind:value={waitlistEmail}
+								required
+							/>
+							<button type="submit" class="cta" disabled={waitlistSubmitting || !waitlistEmail.trim()}>
+								{waitlistSubmitting ? 'Joining...' : 'Join the waitlist'}
+							</button>
+						</div>
+						{#if waitlistError}
+							<p class="waitlist-form__error">{waitlistError}</p>
+						{/if}
+						<p class="waitlist-form__note">No spam. We'll reach out when we're ready to onboard your org.</p>
+					</form>
 				{/if}
 			</section>
 		</article>
@@ -580,7 +625,7 @@
 	@media (min-width: 1024px) {
 		.org-page {
 			padding: 2.5rem 3rem 6rem;
-			padding-left: max(3rem, 12vw);
+			padding-inline: max(3rem, calc(50% - 27rem));
 		}
 	}
 
@@ -740,16 +785,18 @@
 	   window→price: largest (biggest cognitive pivot — now the commercial frame)
 	   price→CTA: tight (action follows price directly) */
 	.beat--problem { margin-bottom: 2rem; }
-	.beat--evidence { margin-bottom: 2.75rem; }
-	.beat--mechanism { margin-bottom: 4rem; }
+	.beat--evidence { margin-bottom: 2.75rem; max-width: 54rem; }
+	.beat--mechanism { margin-bottom: 2.5rem; max-width: 54rem; }
+	.beat--platform { margin-bottom: 2.5rem; max-width: 54rem; }
 	.beat--reach { margin-bottom: 2.5rem; }
 	.beat--window { margin-bottom: 4.25rem; }
-	.beat--price { margin-bottom: 1.5rem; }
+	.beat--price { margin-bottom: 1.5rem; max-width: 54rem; } /* legacy — kept for specificity */
 
 	@media (min-width: 768px) {
 		.beat--problem { margin-bottom: 2.5rem; }
 		.beat--evidence { margin-bottom: 3.5rem; }
-		.beat--mechanism { margin-bottom: 5rem; }
+		.beat--mechanism { margin-bottom: 3rem; }
+		.beat--platform { margin-bottom: 3.5rem; }
 		.beat--reach { margin-bottom: 3rem; }
 		.beat--window { margin-bottom: 5.5rem; }
 		.beat--price { margin-bottom: 2rem; }
@@ -869,7 +916,7 @@
 	   ═══════════════════════════════════════════ */
 	.inbox-artifact {
 		margin: 0 0 1.25rem;
-		max-width: 34rem;
+		max-width: 42rem;
 		background: #ffffff;
 		border: 1px solid oklch(0.88 0.006 250);
 		box-shadow:
@@ -1005,7 +1052,7 @@
 		line-height: 1.55;
 		color: oklch(0.32 0.02 250);
 		margin: 0 0 1rem;
-		max-width: 34rem;
+		max-width: 42rem;
 	}
 
 	.evidence__citation {
@@ -1025,10 +1072,25 @@
 
 	/* ═══════════════════════════════════════════
 	   BEAT 3 — MECHANISM (specimen + filter map)
+	   Side-by-side at lg: specimen (left) + filter map (right)
 	   ═══════════════════════════════════════════ */
+	.mechanism__layout {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 2.5rem;
+	}
+
+	@media (min-width: 1024px) {
+		.mechanism__layout {
+			grid-template-columns: 5fr 4fr;
+			gap: 2.5rem;
+			align-items: start;
+		}
+	}
+
 	.mechanism__specimen-block {
-		margin-bottom: 2.5rem;
-		max-width: 38rem;
+		margin-bottom: 0;
+		max-width: none;
 	}
 
 	.mechanism__provenance {
@@ -1154,39 +1216,153 @@
 		.specimen__evidence { padding: 0 2rem; }
 	}
 
-	.specimen__evidence-row {
-		display: flex;
-		gap: 0.75rem;
-		font-size: 0.6875rem;
-		line-height: 1.5;
-	}
-
-	@media (max-width: 479px) {
-		.specimen__evidence-row { flex-direction: column; gap: 0; }
+	/* ═══ Self-labeling stacked segments ═══
+	   The bar IS the legend. Each segment contains its label + count.
+	   Depth = visual weight: darker segment = deeper verification.
+	   No separate legend. No chart convention. The visualization
+	   is the information. */
+	.specimen__section-label {
+		font-size: 0.5625rem;
+		font-weight: 600;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: oklch(0.5 0.012 250);
+		margin: 0.25rem 0 0.375rem;
 	}
 
 	@media (min-width: 640px) {
-		.specimen__evidence-row { font-size: 0.75rem; }
+		.specimen__section-label { font-size: 0.625rem; }
 	}
 
-	.specimen__evidence-label {
-		color: oklch(0.52 0.01 250);
-		min-width: 5.5rem;
+	.specimen__section-label:first-child {
+		margin-top: 0;
+	}
+
+	.specimen__stack {
+		display: flex;
+		height: 2rem;
+		border-radius: 3px;
+		overflow: hidden;
+		gap: 1px;
+		background: oklch(0.91 0.005 250);
+	}
+
+	@media (min-width: 640px) {
+		.specimen__stack { height: 2.25rem; }
+	}
+
+	.specimen__stack-seg {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0 0.5rem;
+		min-width: 3rem;
+		overflow: hidden;
+		gap: 0.25rem;
+	}
+
+	.specimen__stack-name {
+		font-size: 0.5625rem;
+		font-weight: 500;
+		letter-spacing: 0.02em;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		min-width: 0;
+	}
+
+	@media (min-width: 640px) {
+		.specimen__stack-name { font-size: 0.625rem; }
+	}
+
+	.specimen__stack-count {
+		font-weight: 700;
+		font-size: 0.75rem;
 		flex-shrink: 0;
 	}
 
-	.specimen__evidence-detail {
-		color: oklch(0.38 0.01 250);
+	@media (min-width: 640px) {
+		.specimen__stack-count { font-size: 0.8125rem; }
 	}
 
-	.specimen__evidence-detail strong {
-		color: oklch(0.2 0.02 250);
-		font-weight: 600;
+	/* Deep: government ID, individual voice — proven, authoritative */
+	.specimen__stack-seg--deep {
+		background: oklch(0.38 0.1 170);
+		color: oklch(0.97 0.005 170);
 	}
 
-	.specimen__sep {
-		margin: 0 0.2rem;
-		color: oklch(0.72 0.006 250);
+	/* Mid: address verified — moderate depth, supportive */
+	.specimen__stack-seg--mid {
+		background: oklch(0.92 0.04 175);
+		color: oklch(0.25 0.03 250);
+	}
+
+	/* Muted: shared template — absence of original voice */
+	.specimen__stack-seg--muted {
+		background: oklch(0.94 0.005 250);
+		color: oklch(0.4 0.015 250);
+	}
+
+	/* District map — real MapLibre + Protomaps tiles */
+	.specimen__map-container {
+		height: 160px;
+		margin: 0.25rem 0;
+		border-radius: 3px;
+		overflow: hidden;
+		border: 1px solid oklch(0.91 0.006 250);
+	}
+
+	@media (min-width: 640px) {
+		.specimen__map-container { height: 200px; }
+	}
+
+	.specimen__geo-meta {
+		font-size: 0.625rem;
+		color: oklch(0.5 0.01 250);
+		padding-top: 0.25rem;
+		margin: 0;
+	}
+
+	@media (min-width: 640px) {
+		.specimen__geo-meta { font-size: 0.6875rem; }
+	}
+
+	/* Temporal arrival — Pulse sparkline with date context */
+	.specimen__temporal-row {
+		display: flex;
+		align-items: flex-end;
+		gap: 0.75rem;
+		padding: 0.25rem 0 0;
+	}
+
+	@media (max-width: 479px) {
+		.specimen__temporal-row {
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 0.25rem;
+		}
+	}
+
+	.specimen__temporal-caption {
+		display: flex;
+		flex-direction: column;
+		gap: 0;
+	}
+
+	.specimen__temporal-range {
+		font-size: 0.6875rem;
+		font-weight: 500;
+		color: oklch(0.32 0.015 250);
+	}
+
+	.specimen__temporal-detail {
+		font-size: 0.5625rem;
+		color: oklch(0.52 0.008 250);
+	}
+
+	@media (min-width: 640px) {
+		.specimen__temporal-range { font-size: 0.75rem; }
+		.specimen__temporal-detail { font-size: 0.625rem; }
 	}
 
 	.specimen__seal {
@@ -1221,7 +1397,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 1.25rem;
-		max-width: 38rem;
 	}
 
 	@media (min-width: 640px) {
@@ -1287,6 +1462,44 @@
 		color: oklch(0.55 0.01 250);
 		margin: 0;
 		letter-spacing: 0.01em;
+	}
+
+	/* ═══════════════════════════════════════════
+	   BEAT 3b — PLATFORM (full stack grid)
+	   ═══════════════════════════════════════════ */
+	.platform__grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1.25rem 1.5rem;
+	}
+
+	@media (min-width: 768px) {
+		.platform__grid {
+			grid-template-columns: repeat(3, 1fr);
+			gap: 1.5rem 2.5rem;
+		}
+	}
+
+	.platform__tile {
+		display: flex;
+		flex-direction: column;
+		gap: 0.3125rem;
+	}
+
+	.platform__tile-name {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: oklch(0.22 0.03 250);
+	}
+
+	.platform__tile-desc {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		line-height: 1.5;
+		color: oklch(0.48 0.015 250);
 	}
 
 	/* ═══════════════════════════════════════════
@@ -1443,175 +1656,130 @@
 	.window__citation cite { font-style: italic; }
 
 	/* ═══════════════════════════════════════════
-	   BEAT 6 — PRICE
+	   BEAT 6 — BETA ACCESS
 	   ═══════════════════════════════════════════ */
-	.pricing__anchor {
-		display: flex;
-		flex-direction: column;
-		gap: 0.125rem;
+	.beat--access {
 		margin-bottom: 1.5rem;
 	}
 
-	.pricing__anchor-line {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 1.125rem;
-		line-height: 1.3;
-		font-weight: 500;
+	@media (min-width: 768px) {
+		.beat--access { margin-bottom: 2rem; }
 	}
 
-	.pricing__anchor-line--strike {
-		color: oklch(0.62 0.008 250);
-		text-decoration: line-through;
-		text-decoration-thickness: 1px;
-		text-decoration-color: oklch(0.72 0.008 250);
-	}
-
-	.pricing__anchor-num {
-		font-family: 'JetBrains Mono', monospace;
-		font-variant-numeric: tabular-nums;
-		font-weight: 600;
-	}
-
-	.pricing__anchor-line--punchline {
-		display: flex;
-		align-items: baseline;
-		flex-wrap: wrap;
-		gap: 0.625rem 0.875rem;
-		margin-top: 0.5rem;
-	}
-
-	.pricing__anchor-source {
-		font-family: 'JetBrains Mono', monospace;
-		font-size: 0.6875rem;
-		line-height: 1.5;
-		color: oklch(0.55 0.01 250);
-		margin: 0.625rem 0 0;
-		letter-spacing: 0.02em;
-	}
-
-	.pricing__free {
-		font-family: 'JetBrains Mono', monospace;
-		font-size: clamp(1.75rem, 1.4rem + 1.75vw, 2.375rem);
-		font-weight: 700;
-		color: oklch(0.48 0.16 160);
-		letter-spacing: -0.02em;
-		line-height: 1;
-	}
-
-	.pricing__free-scope {
-		font-family: 'JetBrains Mono', monospace;
-		font-size: 0.8125rem;
-		line-height: 1.4;
-		font-weight: 400;
-		color: oklch(0.38 0.015 250);
-		letter-spacing: 0.005em;
-	}
-
-	.pricing__free-scope-num {
-		font-variant-numeric: tabular-nums;
-		font-weight: 600;
-		color: oklch(0.22 0.03 250);
-	}
-
-	.pricing__free-scope-sep {
-		margin: 0 0.25rem;
-		color: oklch(0.72 0.008 250);
-	}
-
-	.pricing__legend {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.9375rem;
-		line-height: 1.55;
-		color: oklch(0.38 0.015 250);
-		margin: 2rem 0 1.25rem;
-		max-width: 36rem;
-	}
-
-	.pricing__friction {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.9375rem;
-		line-height: 1.55;
-		font-weight: 500;
-		color: oklch(0.32 0.02 250);
-		margin: 1.75rem 0 0;
-		max-width: 36rem;
-	}
-
-	.pricing-grid {
+	.access__points {
 		margin: 0;
-		max-width: 38rem;
-	}
-
-	.pricing-row {
+		padding: 0;
 		display: flex;
-		flex-wrap: wrap;
-		align-items: baseline;
-		gap: 0.375rem 0.875rem;
-		padding: 0.6875rem 0;
-		border-bottom: 1px solid oklch(0.91 0.006 250 / 0.5);
-	}
-
-	.pricing-row:first-child {
-		border-top: 1px solid oklch(0.91 0.006 250 / 0.5);
-	}
-
-	.pricing-name {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.8125rem;
-		font-weight: 600;
-		color: oklch(0.25 0.02 250);
-	}
-
-	.pricing-price {
-		font-family: 'JetBrains Mono', monospace;
-		font-size: 0.8125rem;
-		font-weight: 700;
-		color: oklch(0.2 0.03 250);
-	}
-
-	.pricing-mo {
-		font-weight: 400;
-		font-size: 0.6875rem;
-		color: oklch(0.55 0.015 250);
-	}
-
-	.pricing-limits {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.75rem;
-		color: oklch(0.48 0.012 250);
-		width: 100%;
-	}
-
-	.pricing-num {
-		font-family: 'JetBrains Mono', monospace;
-		font-variant-numeric: tabular-nums;
-		font-weight: 600;
-		color: oklch(0.28 0.02 250);
+		flex-direction: column;
+		gap: 1.25rem;
 	}
 
 	@media (min-width: 640px) {
-		.pricing-row {
+		.access__points {
 			display: grid;
-			grid-template-columns: 7rem 4rem 1fr;
-			gap: 0.75rem;
+			grid-template-columns: repeat(3, 1fr);
+			gap: 2rem;
 		}
+	}
 
-		.pricing-limits {
-			width: auto;
-			font-size: 0.8125rem;
-		}
+	.access__point {
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+	}
+
+	.access__point-label {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		color: oklch(0.35 0.12 165);
+		margin: 0;
+	}
+
+	.access__point-desc {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.9375rem;
+		line-height: 1.55;
+		color: oklch(0.38 0.015 250);
+		margin: 0;
+	}
+
+	.access__confirmed {
+		padding: 1.25rem 1.5rem;
+		border-radius: 6px;
+		border: 1px solid oklch(0.82 0.08 165 / 0.4);
+		background: oklch(0.97 0.01 165 / 0.3);
+	}
+
+	.access__confirmed-text {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 1rem;
+		font-weight: 600;
+		color: oklch(0.32 0.08 165);
+		margin: 0;
 	}
 
 	/* ═══════════════════════════════════════════
-	   BEAT 7 — CTA
+	   BEAT 7 — CTA (waitlist)
 	   ═══════════════════════════════════════════ */
 	.beat--cta {
 		margin-top: 2rem;
-		max-width: 28rem;
+		max-width: 32rem;
 	}
 
-	.create-form--threshold {
-		max-width: 28rem;
+	.waitlist-form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.waitlist-form__row {
+		display: flex;
+		gap: 0.5rem;
+	}
+
+	@media (max-width: 479px) {
+		.waitlist-form__row {
+			flex-direction: column;
+		}
+	}
+
+	.waitlist-form__input {
+		flex: 1;
+		min-width: 0;
+		padding: 0.75rem 1rem;
+		border-radius: 4px;
+		border: 1px solid oklch(0.84 0.008 250);
+		background: white;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.875rem;
+		color: oklch(0.2 0.02 250);
+		outline: none;
+		transition: border-color 150ms ease-out;
+	}
+
+	.waitlist-form__input:focus {
+		border-color: oklch(0.65 0.1 180);
+	}
+
+	.waitlist-form__input::placeholder {
+		color: oklch(0.65 0.01 250);
+	}
+
+	.waitlist-form__error {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		color: oklch(0.5 0.15 25);
+		margin: 0;
+	}
+
+	.waitlist-form__note {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.75rem;
+		color: oklch(0.58 0.01 250);
+		margin: 0;
 	}
 
 	/* ═══════════════════════════════════════════
