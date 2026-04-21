@@ -58,6 +58,15 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
  * host, port, dbname, TLS options — is left byte-for-byte unchanged.
  */
 function sanitizeForPgDump(rawUrl: string): string {
+	// Some env sources paste the URL with surrounding quotes (copied from a
+	// .env line like `DATABASE_URL="postgresql://..."`). Strip matched
+	// single or double quote pairs, but leave internal quotes alone.
+	let url = rawUrl.trim();
+	if ((url.startsWith('"') && url.endsWith('"')) || (url.startsWith("'") && url.endsWith("'"))) {
+		url = url.slice(1, -1);
+	}
+	rawUrl = url;
+
 	const libpqAllowlist = new Set([
 		'host', 'hostaddr', 'port', 'dbname', 'user', 'password',
 		'connect_timeout', 'client_encoding', 'options', 'application_name',
