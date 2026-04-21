@@ -10,16 +10,28 @@
 	const user = $derived(data.user);
 	const orgs = $derived(user?.orgMemberships ?? []);
 
-	// Specimen: real CA-12 verification packet with H3 cells
+	// Specimen: real CA-12 (East Bay — Oakland, Berkeley, Alameda, San Leandro)
+	// Boundary: simplified from Census TIGER/Line 119th Congress (1660 → 48 vertices)
+	// H3 cells: computed via latLngToCell(lat, lng, 7) from real East Bay neighborhoods
 	const ca12Boundary: GeoJSON.Polygon = {
 		type: 'Polygon',
 		coordinates: [[
-			[-122.510, 37.708], [-122.505, 37.725], [-122.503, 37.758],
-			[-122.498, 37.778], [-122.483, 37.808], [-122.455, 37.812],
-			[-122.420, 37.812], [-122.392, 37.810], [-122.370, 37.798],
-			[-122.357, 37.788], [-122.356, 37.768], [-122.382, 37.748],
-			[-122.393, 37.732], [-122.400, 37.718], [-122.420, 37.710],
-			[-122.452, 37.708], [-122.480, 37.708], [-122.510, 37.708]
+			[-122.373, 37.884], [-122.332, 37.788], [-122.266, 37.689],
+			[-122.158, 37.67], [-122.156, 37.68], [-122.163, 37.69],
+			[-122.158, 37.689], [-122.15, 37.686], [-122.144, 37.691],
+			[-122.142, 37.693], [-122.143, 37.701], [-122.132, 37.702],
+			[-122.125, 37.698], [-122.127, 37.704], [-122.127, 37.712],
+			[-122.131, 37.716], [-122.137, 37.725], [-122.138, 37.73],
+			[-122.13, 37.733], [-122.121, 37.732], [-122.116, 37.749],
+			[-122.123, 37.759], [-122.124, 37.762], [-122.128, 37.768],
+			[-122.143, 37.79], [-122.163, 37.802], [-122.17, 37.802],
+			[-122.178, 37.804], [-122.18, 37.818], [-122.185, 37.832],
+			[-122.189, 37.838], [-122.195, 37.842], [-122.205, 37.851],
+			[-122.221, 37.866], [-122.239, 37.883], [-122.25, 37.89],
+			[-122.253, 37.894], [-122.255, 37.896], [-122.256, 37.899],
+			[-122.26, 37.9], [-122.262, 37.902], [-122.267, 37.904],
+			[-122.27, 37.904], [-122.282, 37.9], [-122.293, 37.898],
+			[-122.302, 37.899], [-122.368, 37.885], [-122.373, 37.884]
 		]]
 	};
 
@@ -44,24 +56,24 @@
 		],
 		geography: [{ hash: 'ca12', count: 248 }],
 		cells: [
-			{ h3: '87283082cffffff', count: 48 },  // Mission + Noe Valley
-			{ h3: '872830958ffffff', count: 26 },  // Sunset
-			{ h3: '87283082affffff', count: 24 },  // SOMA
-			{ h3: '87283095bffffff', count: 22 },  // Richmond
-			{ h3: '87283082dffffff', count: 18 },  // Castro
-			{ h3: '872830828ffffff', count: 16 },  // Tenderloin
-			{ h3: '872830829ffffff', count: 16 },  // Western Addition
-			{ h3: '87283082bffffff', count: 15 },  // North Beach
-			{ h3: '872830825ffffff', count: 14 },  // Bayview
-			{ h3: '872830952ffffff', count: 13 },  // Excelsior
-			{ h3: '872830876ffffff', count: 13 },  // Marina
-			{ h3: '872830874ffffff', count: 12 },  // Presidio Heights
-			{ h3: '87283082effffff', count: 11 },  // Potrero Hill
+			{ h3: '8728308acffffff', count: 50 },  // Temescal + Rockridge
+			{ h3: '872830810ffffff', count: 38 },  // Downtown Oakland
+			{ h3: '872830988ffffff', count: 24 },  // Fruitvale
+			{ h3: '8728308a9ffffff', count: 20 },  // Berkeley Downtown
+			{ h3: '872830816ffffff', count: 18 },  // Lake Merritt
+			{ h3: '872830811ffffff', count: 16 },  // West Oakland
+			{ h3: '872830989ffffff', count: 15 },  // Alameda
+			{ h3: '872830980ffffff', count: 14 },  // San Leandro
+			{ h3: '8728308a1ffffff', count: 13 },  // Piedmont
+			{ h3: '872830813ffffff', count: 12 },  // Emeryville
+			{ h3: '8728308adffffff', count: 11 },  // North Oakland
+			{ h3: '87283098effffff', count: 10 },  // East Oakland
+			{ h3: '8728308f4ffffff', count: 7 },   // Albany
 		],
 		temporal: {
 			bins: [2, 4, 8, 14, 18, 25, 30, 42, 38, 35, 28, 22, 18, 12, 8, 5, 3],
 			startMs: new Date('2026-02-12T00:00:00Z').getTime(),
-			binWidthMs: 3600000 * 24  // daily bins for the specimen
+			binWidthMs: 3600000 * 24
 		},
 		lastUpdated: '2026-03-04T18:00:00Z'
 	};
