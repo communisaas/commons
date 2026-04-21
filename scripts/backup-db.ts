@@ -43,18 +43,21 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 /**
  * Strip Prisma/PgBouncer-specific query params from a connection string.
- * pg_dump uses libpq, which rejects any URI query parameter it doesn't
- * recognize ("invalid URI query parameter"). Prisma connection strings
- * commonly carry `schema`, `pgbouncer`, `connection_limit`, `pool_timeout`,
- * `statement_cache_size`, etc. — none of which are libpq options.
+ * pg_dump uses libpq, which rejects any URI query parameter outside the
+ * documented libpq keyword set ("invalid URI query parameter"). Prisma
+ * connection strings commonly carry `schema`, `pgbouncer`, `connection_limit`,
+ * `pool_timeout`, `statement_cache_size`, etc. — none of which are libpq
+ * options.
  *
- * Allowlist below matches the libpq connection-string keys documented at
+ * Operates on the raw string rather than `new URL()` because production
+ * DATABASE_URLs routinely contain unescaped special characters in the
+ * password that WHATWG URL rejects ("TypeError: Invalid URL"). The libpq
+ * allowlist is the source of truth:
  * https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS.
- * Anything outside the allowlist is dropped. Credentials, host, port,
- * dbname, and standard TLS options pass through unchanged.
+ * Anything outside the allowlist is dropped; everything else — credentials,
+ * host, port, dbname, TLS options — is left byte-for-byte unchanged.
  */
 function sanitizeForPgDump(rawUrl: string): string {
-	const u = new URL(rawUrl);
 	const libpqAllowlist = new Set([
 		'host', 'hostaddr', 'port', 'dbname', 'user', 'password',
 		'connect_timeout', 'client_encoding', 'options', 'application_name',
@@ -65,17 +68,28 @@ function sanitizeForPgDump(rawUrl: string): string {
 		'requirepeer', 'krbsrvname', 'gsslib', 'service', 'target_session_attrs',
 		'load_balance_hosts', 'channel_binding', 'passfile',
 	]);
+
+	const qIndex = rawUrl.indexOf('?');
+	if (qIndex === -1) return rawUrl;
+
+	const base = rawUrl.slice(0, qIndex);
+	const query = rawUrl.slice(qIndex + 1);
 	const stripped: string[] = [];
-	for (const key of [...u.searchParams.keys()]) {
-		if (!libpqAllowlist.has(key)) {
+	const kept: string[] = [];
+	for (const pair of query.split('&')) {
+		if (!pair) continue;
+		const eq = pair.indexOf('=');
+		const key = eq === -1 ? pair : pair.slice(0, eq);
+		if (libpqAllowlist.has(key)) {
+			kept.push(pair);
+		} else {
 			stripped.push(key);
-			u.searchParams.delete(key);
 		}
 	}
 	if (stripped.length > 0) {
 		console.log(`[backup] Stripped non-libpq params from DATABASE_URL: ${stripped.join(', ')}`);
 	}
-	return u.toString();
+	return kept.length > 0 ? `${base}?${kept.join('&')}` : base;
 }
 
 async function backupDatabase() {
