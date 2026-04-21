@@ -13,6 +13,28 @@
  *   AWS_REGION             - AWS region (default: us-east-1)
  *   AWS_ACCESS_KEY_ID      - AWS credentials
  *   AWS_SECRET_ACCESS_KEY  - AWS credentials
+ *
+ * RETENTION / LIFECYCLE — NOT MANAGED HERE
+ * -----------------------------------------
+ * This script only uploads. Retention lives in the S3 bucket's lifecycle
+ * configuration, not in code. Without one, daily objects accumulate forever
+ * and storage cost grows linearly. Expected policy (applied via
+ * `aws s3api put-bucket-lifecycle-configuration` on the target bucket):
+ *
+ *   daily/ prefix:
+ *     - Transition to GLACIER_IR after 30 days (≈5× cheaper, ms retrieval)
+ *     - Expire current version after 365 days
+ *     - Expire noncurrent versions after 30 days (versioning is on for
+ *       accidental-delete recovery; don't keep orphans forever)
+ *
+ * IAM — the uploading principal only needs `s3:PutObject` on
+ * `arn:aws:s3:::<bucket>/daily/*`. Restore reads go through a separate
+ * principal (operator-initiated, not automated).
+ *
+ * Key custody — BACKUP_ENCRYPTION_KEY is the sole decryption secret. If
+ * you rotate it you lose the ability to restore backups encrypted under
+ * the previous value; keep old keys in a password manager alongside the
+ * new one.
  */
 
 import { execSync } from 'child_process';
