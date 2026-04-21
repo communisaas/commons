@@ -442,16 +442,35 @@ export default defineSchema({
 
     // Congressional delivery
     cwcSubmissionId: v.optional(v.string()),
-    deliveryStatus: v.string(), // 'pending' | 'processing' | 'delivered' | 'partial' | 'failed'
+    deliveryStatus: v.string(), // 'pending' | 'processing' | 'delivered' | 'partial' | 'failed' | 'demo'
     deliveryError: v.optional(v.string()),
     deliveredAt: v.optional(v.number()),
     resolvedDistrict: v.optional(v.string()), // congressional district from TEE resolve
+    // Attempt counter for CAS-guarded terminal writes. Each claimForDelivery
+    // transition (pending|failed → processing) increments; terminal writes pass
+    // expectedAttempts so resurrected old workers can't overwrite newer retries.
+    deliveryAttempts: v.optional(v.number()),
 
     // Blockchain verification
     verificationTxHash: v.optional(v.string()),
     verificationStatus: v.string(), // 'pending' | 'verified' | 'rejected'
     verifiedAt: v.optional(v.number()),
     blockNumber: v.optional(v.number()),
+
+    // Async on-chain anchor (AR.3). Runs AFTER delivery success as defense in
+    // depth — the on-chain verifier contract independently verifies the proof.
+    // 'divergent' means the TEE accepted a proof the chain rejected — P0 alert.
+    // 'poisoned' is a terminal state after too many retries; requires operator.
+    anchorStatus: v.optional(v.string()), // 'pending' | 'anchored' | 'failed' | 'divergent' | 'poisoned'
+    anchorTxHash: v.optional(v.string()),
+    anchorAt: v.optional(v.number()),
+    anchorError: v.optional(v.string()),
+    anchorAttempts: v.optional(v.number()),
+    // Typed classifier from district-gate-client: 'success' | 'rpc_transient' |
+    // 'contract_invalid_proof' | 'contract_other_revert' | 'relayer_config'.
+    // The retry cron keys off this to avoid wasting gas on non-retriable outcomes
+    // (relayer_config = operator fix; contract_invalid_proof = divergent/terminal).
+    anchorResultKind: v.optional(v.string()),
 
     // Reputation
     reputationDelta: v.optional(v.number()),
@@ -468,6 +487,7 @@ export default defineSchema({
     .index("by_templateId", ["templateId"])
     .index("by_deliveryStatus", ["deliveryStatus"])
     .index("by_verificationStatus", ["verificationStatus"])
+    .index("by_anchorStatus", ["anchorStatus"])
     .index("by_witnessExpiresAt", ["witnessExpiresAt"]),
 
   // ===========================================================================
@@ -1169,6 +1189,10 @@ export default defineSchema({
     verified: v.boolean(),
     engagementTier: v.number(), // 0-4
     districtHash: v.optional(v.string()),
+    // H3 res-7 cell index (~5.16 km², neighborhood scale). Resolved during
+    // district verification via latLngToCell(lat, lng, 7). Stored for
+    // intra-district geographic visualization in verification packets.
+    h3Cell: v.optional(v.string()),
     messageHash: v.optional(v.string()),
 
     // Identity verification level at time of action (0-5, from users.trustTier)
@@ -1966,4 +1990,22 @@ export default defineSchema({
   })
     .index("by_grantId", ["grantId"])
     .index("by_decision", ["decision"]),
+
+  // ===========================================================================
+  // WAITLIST — pre-launch beta interest capture
+  // ===========================================================================
+
+  waitlist: defineTable({
+    email: v.string(),
+    emailHash: v.string(), // SHA-256 of lowercased email — dedup index
+    userId: v.optional(v.id("users")), // linked if authenticated at signup
+    source: v.string(), // 'landing' | 'referral' | etc.
+    status: v.string(), // 'waiting' | 'invited' | 'converted'
+    invitedAt: v.optional(v.number()),
+    convertedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_emailHash", ["emailHash"])
+    .index("by_status", ["status"])
+    .index("by_userId", ["userId"]),
 });

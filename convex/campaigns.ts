@@ -773,6 +773,7 @@ export const createCampaignAction = internalMutation({
     verified: v.boolean(),
     engagementTier: v.number(),
     districtHash: v.optional(v.string()),
+    h3Cell: v.optional(v.string()),
     messageHash: v.optional(v.string()),
     trustTier: v.optional(v.number()),
     compositionMode: v.optional(v.string()),
@@ -796,6 +797,9 @@ export const createCampaignAction = internalMutation({
     const campaign = await ctx.db.get(args.campaignId);
     const orgId = campaign?.orgId;
 
+    // Validate h3Cell format: H3 res-7 indices are 15-char hex strings starting with '87'
+    const h3Cell = args.h3Cell && /^8[0-9a-f]{14}$/.test(args.h3Cell) ? args.h3Cell : undefined;
+
     await ctx.db.insert("campaignActions", {
       campaignId: args.campaignId,
       orgId,
@@ -803,6 +807,7 @@ export const createCampaignAction = internalMutation({
       verified: args.verified,
       engagementTier: args.engagementTier,
       districtHash: args.districtHash,
+      h3Cell,
       messageHash: args.messageHash,
       trustTier: args.trustTier,
       compositionMode: args.compositionMode,
@@ -845,6 +850,7 @@ export const submitAction = action({
     phone: v.optional(v.string()),
     message: v.optional(v.string()),
     districtCode: v.optional(v.string()),
+    h3Cell: v.optional(v.string()), // H3 res-7 cell index from client-side district resolution
     source: v.optional(v.string()),
     compositionMode: v.optional(v.string()), // 'individual' | 'shared' | 'edited'
   },
@@ -976,6 +982,7 @@ export const submitAction = action({
         verified,
         engagementTier,
         districtHash,
+        h3Cell: args.h3Cell,
         messageHash,
         trustTier,
         compositionMode: args.compositionMode,
@@ -1179,6 +1186,7 @@ export const getActionsForPacket = query({
       verified: a.verified,
       engagementTier: a.engagementTier,
       districtHash: a.districtHash ?? null,
+      h3Cell: a.h3Cell ?? null,
       messageHash: a.messageHash ?? null,
       sentAt: a.sentAt,
       trustTier: a.trustTier ?? null,

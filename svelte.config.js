@@ -28,7 +28,7 @@ const config = {
 				'default-src': ['self'],
 				'script-src': ['self', 'wasm-unsafe-eval'],
 				'style-src': ['self', 'unsafe-inline', 'https://fonts.googleapis.com'],
-				'img-src': ['self', 'data:', 'blob:'],
+				'img-src': ['self', 'data:', 'blob:', 'https://tile.openstreetmap.org', 'https://*.basemaps.cartocdn.com'],
 				'font-src': ['self', 'https://fonts.gstatic.com'],
 				'connect-src': [
 					'self',
@@ -43,6 +43,11 @@ const config = {
 					// F4: NEAR RPC — chain-signatures.ts via near-provider.ts (browser-side MPC signing)
 					'https://rpc.testnet.near.org',
 					'https://rpc.mainnet.near.org',
+					// Map tiles: Protomaps PMTiles (BubbleTerrain), OSM raster (MapPinSelector), CartoDB Positron (DistrictMap)
+					'https://build.protomaps.com',
+					'https://demotiles.maplibre.org',
+					'https://tile.openstreetmap.org',
+					'https://*.basemaps.cartocdn.com',
 					// Shadow Atlas data: R2 custom domain (primary), IPFS gateways (transition + future)
 					'https://atlas.commons.email',
 					// Storacha IPFS: kept during migration window (gateways live until 2026-05-31)

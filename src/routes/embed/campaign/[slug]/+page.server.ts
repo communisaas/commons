@@ -41,6 +41,7 @@ export const actions: Actions = {
 		const postalCode = formData.get('postalCode')?.toString().trim() || null;
 		const phone = formData.get('phone')?.toString().trim() || null;
 		const message = formData.get('message')?.toString().trim() || null;
+		const h3Cell = formData.get('h3Cell')?.toString().trim() || null;
 
 		if (message && message.length > 5000) {
 			return fail(400, { error: 'Message too long (5000 character maximum)' });
@@ -83,6 +84,7 @@ export const actions: Actions = {
 				postalCode: postalCode ?? undefined,
 				phone: phone ?? undefined,
 				message: message ?? undefined,
+				h3Cell: h3Cell ?? undefined,
 				source: 'widget',
 				compositionMode
 			});

@@ -43,6 +43,37 @@ export interface IdentityBreakdown {
 	unverified: number;
 }
 
+// ── Dimensional data (preserved from computation, not flattened) ──
+
+export interface DistrictWeight {
+	/** Hashed district identifier (privacy-preserving) */
+	hash: string;
+	/** Action count in this district */
+	count: number;
+}
+
+export interface CellWeight {
+	/** H3 res-7 cell index (~5.16 km², neighborhood scale) */
+	h3: string;
+	/** Action count in this cell */
+	count: number;
+	/** Per-cell identity breakdown (enables cross-dimensional filtering on hover) */
+	identity?: { govId: number; address: number; email: number };
+	/** Per-cell hourly bins aligned to the packet's temporal field (same startMs/binWidthMs) */
+	temporalBins?: number[];
+	/** Per-cell authorship: individually composed vs shared */
+	authorship?: { individual: number; shared: number };
+}
+
+export interface TemporalField {
+	/** Hourly bin counts from first action to last */
+	bins: number[];
+	/** Epoch ms of first bin's start */
+	startMs: number;
+	/** Bin width in ms (3600000 = 1 hour) */
+	binWidthMs: number;
+}
+
 // ── Engagement tier (audit section) ──
 
 export interface TierCount {
@@ -89,6 +120,15 @@ export interface VerificationPacket {
 	// ── Engagement tier distribution (audit section) ──
 
 	tiers: TierCount[];
+
+	// ── Dimensional fields (the shapes behind the scalars) ──
+
+	/** Per-district action counts — the geographic field that GDS compresses. Sorted by count desc. */
+	geography: DistrictWeight[] | null;
+	/** Per-H3-cell action counts — intra-district geographic spread at neighborhood scale. Sorted by count desc. Cells with <5 actions suppressed (k-anonymity). */
+	cells: CellWeight[] | null;
+	/** Hourly action bins — the temporal rhythm that entropy/velocity compress. */
+	temporal: TemporalField | null;
 
 	// ── Metadata ──
 

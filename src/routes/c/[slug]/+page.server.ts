@@ -42,6 +42,7 @@ export const actions: Actions = {
 		const postalCode = formData.get('postalCode')?.toString().trim() || null;
 		const message = formData.get('message')?.toString().trim() || null;
 		const rawDistrictCode = formData.get('districtCode')?.toString().trim() || null;
+		const h3Cell = formData.get('h3Cell')?.toString().trim() || null;
 
 		if (message && message.length > 5000) {
 			return fail(400, { error: 'Message too long (5000 character maximum)' });
@@ -89,6 +90,7 @@ export const actions: Actions = {
 				postalCode: postalCode ?? undefined,
 				message: message ?? undefined,
 				districtCode: rawDistrictCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? rawDistrictCode : undefined,
+				h3Cell: h3Cell ?? undefined,
 				source: 'campaign',
 				compositionMode
 			});
