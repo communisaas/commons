@@ -16,11 +16,6 @@ vi.mock('$lib/core/shadow-atlas/client', () => ({
 	resolveAddress: (...args: unknown[]) => mockResolveAddress(...args)
 }));
 
-// Mock IPFS store for resolveDistrictFromPostalCode (used by mDL verification path)
-vi.mock('$lib/core/shadow-atlas/ipfs-store', () => ({
-	getDistrictIndex: vi.fn().mockResolvedValue(null),
-	getCellChunkByParent: vi.fn().mockResolvedValue(null)
-}));
 
 // We test processCredentialResponse which dispatches to processOid4vpResponse
 // Since processOid4vpResponse is internal, we test through the public API
@@ -107,8 +102,7 @@ describe('OpenID4VP response processing', () => {
 
 		expect(result.success).toBe(true);
 		if (result.success) {
-			// District is at-large fallback (IPFS index mocked as null)
-			expect(result.district).toBe('CA-AL');
+			expect(result.district).toBe('CA-12');
 			expect(result.state).toBe('CA');
 			expect(result.verificationMethod).toBe('mdl');
 			expect(result.credentialHash).toMatch(/^[0-9a-f]{64}$/);
@@ -132,7 +126,7 @@ describe('OpenID4VP response processing', () => {
 
 		expect(result.success).toBe(true);
 		if (result.success) {
-			expect(result.district).toBe('NY-AL');
+			expect(result.district).toBe('NY-10');
 			expect(result.state).toBe('NY');
 		}
 	});
@@ -154,7 +148,7 @@ describe('OpenID4VP response processing', () => {
 
 		expect(result.success).toBe(true);
 		if (result.success) {
-			expect(result.district).toBe('TX-AL');
+			expect(result.district).toBe('TX-25');
 			expect(result.state).toBe('TX');
 		}
 	});
@@ -183,7 +177,7 @@ describe('OpenID4VP response processing', () => {
 
 		expect(result.success).toBe(true);
 		if (result.success) {
-			expect(result.district).toBe('CA-AL');
+			expect(result.district).toBe('CA-36');
 		}
 	});
 

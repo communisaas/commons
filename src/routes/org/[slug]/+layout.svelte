@@ -163,8 +163,8 @@
 		</nav>
 	</div>
 
-	<!-- Main content -->
-	<main class="flex-1 min-w-0 pt-[88px] md:pt-0">
+	<!-- Main content — warm cream ground (design system surface) -->
+	<main class="flex-1 min-w-0 pt-[88px] md:pt-0" style="background: oklch(0.995 0.004 55);">
 		<div class="p-6 md:p-8 max-w-5xl">
 			{@render children()}
 		</div>

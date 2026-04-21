@@ -4,16 +4,21 @@
 
 ---
 
-## The Generative Constraint
+## The Generative Constraints
 
-One rule produces every visual decision:
+Two rules produce every visual decision:
 
-> **Every visual element is either verifiable or honestly labeled as interpretive.**
+> **1. Every visual element is either verifiable or honestly labeled as interpretive.**
 
-This constraint generates the design system. Not the other way around.
+> **2. Information has shape. Express the shape, not just the value.**
+
+The first constraint generates the typographic system — which register a claim belongs to. The second generates the dimensional system — how compressed data decompresses into the fields it was measured from.
+
+"248 verified" is not a number. It is a compression of geography (where those people are), time (when they acted), identity depth (how strongly they're verified), and voice (whether they composed or echoed). Rendering it as three digits in a monospace font expresses one dimension — quantity — and erases the rest. The design system's job is to make the erased dimensions available.
 
 - **Typographic register = epistemic status.** JetBrains Mono for verifiable claims — counts, scores, dates, hashes, district codes. Anything a third party could audit. Satoshi for interpretive context — explanations, descriptions, calls to action, editorial framing. The reader learns, without being told, which parts of the surface are proven and which are contextual.
-- **Numbers are never decorative.** "248 verified constituents" is a specific claim backed by a Merkle root. Every number on the page could be audited. No vanity metrics, no rounded-up percentages, no "trusted by 10,000+ users."
+- **Numbers are compressions, not endpoints.** "248 verified constituents" is backed by a geographic distribution, a temporal arrival pattern, an identity tier structure, and an authorship texture. The scalar is the headline. The dimensions behind it are the story. Both must be accessible.
+- **Dimensions are visual, not textual.** A geographic distribution is a spatial field, not "GDS: 0.94." A temporal pattern is a rhythm, not "14 days." An identity composition is a depth gradient, not "104 gov ID, 89 address." If a dimension can be felt as shape, show the shape. Text descriptions of dimensions are a design failure.
 - **The warm cream ground says "institution."** Content sits ON the ground, not IN white boxes. White is reserved for bounded artifacts — the proof specimen, the email preview — objects that need to float above the ground plane.
 - **Borders earn their place.** A hairline rule between the specimen and contextual copy says "these are different registers." A border around a card says "this is a bounded object." Borders that say nothing are decoration. Kill them.
 
@@ -23,9 +28,11 @@ This constraint generates the design system. Not the other way around.
 
 The aesthetic of infrastructure that knows what it can prove. Warm, not cold. Precise, not flashy. Confident enough to leave space empty.
 
-The visual identity is the proof specimen — the verification packet rendered as a document. Monospace type, label-value pairs, attestation footer, hairline rules. The form follows function: this is evidence, and it looks like evidence. The specimen is the centerpiece — not because we decided it should be, but because when you remove everything that isn't verifiable or necessary, the specimen is what remains.
+The visual identity is the proof specimen — the verification packet rendered as a navigable information space. Not a text document with label-value pairs. An object with dimensions: a geographic field showing where constituents are, a temporal rhythm showing when they acted, an identity stratigraphy showing how deeply they're verified, an authorship texture showing whether they composed or echoed. These dimensions are primary. The scalars (counts, scores, percentages) are summaries that compress them — useful headlines, but not the information itself.
 
-The closest analog: a well-made government report — if that report were designed by someone who understood typography, white space, and the web. Official without being bureaucratic. Dense where density serves comprehension. Sparse everywhere else.
+The specimen is the centerpiece — not because we decided it should be, but because when you remove everything that isn't verifiable or necessary, the specimen is what remains. And when you look at the specimen honestly, it is not a flat report. It is multi-dimensional civic evidence that a decision-maker should be able to *inhabit* — rotating between geography, time, identity, and voice to understand the signal.
+
+The closest analog: not a government report — a weather station. Radar showing geographic spread. Pressure gradients showing temporal momentum. Stratification showing depth. A meteorologist doesn't read the weather as a table of numbers. They read it as interacting fields. A staffer reading a verification packet should feel the same thing: not "248" but the spatial, temporal, and social dimensions that produced 248.
 
 ---
 
@@ -46,9 +53,56 @@ Every pixel answers one question: **does this make the action feel real?**
 
 ## What We Are
 
-Civic infrastructure. The design feels like a well-made envelope — professional, solid, carrying something real.
+Civic infrastructure. The design feels like a navigable information space — where verified civic action has geographic extent, temporal rhythm, identity depth, and compositional texture. Every dimension is expressible. Every compression is honest about what it erased.
 
 **We design for conviction, not momentum. Credibility, not polish. Gravity, not weight.**
+
+---
+
+## The Five Dimensions
+
+Every verified action has five dimensions. The design system must express all of them — not as scalars, but as fields.
+
+### Geography — WHERE
+
+Each action comes from a place. A district. A community. The geographic dimension is a spatial distribution, not a count. "47 districts" is a compression. The field — which districts, how dense, where the gaps are — is the information. Express it as spatial weight: density gradients, proportional segments, coverage patterns. A staffer should see at a glance whether the signal comes from one neighborhood or spans their entire district.
+
+Data: per-action `districtHash` → `geography: DistrictWeight[]` on the packet.
+Primitives: `Ratio` (proportional bar), future geographic map component.
+
+### Time — WHEN
+
+Each action has a timestamp. The temporal dimension is a rhythm, not a date range. "14 days" is a compression. The shape — early adopters, then a surge, then steady accumulation — is the story. Express it as a pulse: the arrival cadence, the momentum, the organic-vs-manufactured pattern. A campaign that built over two weeks feels different from one that spiked in an hour. Both say "248." Only the temporal dimension shows the difference.
+
+Data: per-action `sentAt` → `temporal: TemporalField` (hourly bins) on the packet.
+Primitives: `Pulse` (sparkline rhythm). Scalars derived: `temporalEntropy`, `burstVelocity`.
+
+### Identity — HOW DEEP
+
+Each action carries a trust tier: unverified, email, address, government ID. The identity dimension is a stratigraphy, not four buckets. Express it as depth: concentric rings that fill as verification deepens. The deeper the identity, the stronger the signal. A packet with 200 email-only and 48 gov-ID-verified has a different identity topology than one with 248 gov-ID. Both say "248 verified." Only the identity dimension shows the difference.
+
+Data: per-action `trustTier` → `identityBreakdown` + `tiers[]` on the packet.
+Primitives: `Rings` (concentric depth glyph), `Ratio` (identity composition bar).
+
+### Voice — WHAT THEY SAID
+
+Each action has an authorship mode: individually composed, template-shared, edited. The voice dimension is a compositional texture, not two counts. 200 individually composed messages carry different weight than 200 copies of the same template. Express it as texture: the ratio of original to echoed, the diversity of message hashes, the spread of compositional effort.
+
+Data: per-action `messageHash` + `compositionMode` → `authorship` + `ald` on the packet.
+Primitives: `Ratio` (composed vs shared).
+
+### Engagement — HOW COMMITTED
+
+Each action carries an engagement tier: new, active, established, veteran, pillar. The engagement dimension is a depth distribution, not a single ratio (CAI). Express it as accumulated weight: how many people have deep, sustained, multi-campaign participation vs first-time actors. A campaign backed by 12 pillars and 43 veterans feels different from one backed by 248 first-timers.
+
+Data: per-action `engagementTier` → `tiers[]` + `cai` on the packet.
+Primitives: `Rings` (tier depth), tier distribution bars.
+
+### Cross-Dimensional Interaction
+
+Dimensions are not independent. Geography × Time = "where did the surge come from?" Identity × Geography = "are the gov-ID-verified people concentrated or spread?" Voice × Time = "did the individual compositions come first, then the template echoes?"
+
+When the design system matures, dimensional primitives should cross-filter: hover on a geographic cluster → the temporal Pulse highlights when that cluster acted → the identity Rings show the depth of that cluster. This is how an information space becomes navigable — by making the dimensions talk to each other.
 
 ---
 
@@ -177,17 +231,32 @@ If it's a word, use Satoshi. If it's a number, use JetBrains Mono.
 - Particle burst (ShareButton.svelte) — Template spreading
 - Count increment — Numbers ticking up with spring physics
 - Route flow (RelayLoom.svelte) — Edges drawing on load
+- Dimensional transitions — fields filling, rhythms drawing, rings expanding
 
 **Nothing else.** Privacy badges don't animate. Forms don't animate. Cards hover-lift slightly, that's it.
 
 ### The Physics
 
+Canonical spring configs live in `$lib/design/motion.ts`. Named by semantic purpose:
+
 ```typescript
-// Spring physics for coordination counts
-spring(count, { stiffness: 0.2, damping: 0.8 })
+import { SPRINGS } from '$lib/design/motion';
+
+SPRINGS.COUNT_TICK   // { stiffness: 0.2, damping: 0.8 }  — scoreboard numbers
+SPRINGS.METRIC       // { stiffness: 0.15, damping: 0.8 } — dashboard panels
+SPRINGS.DEPARTURE    // { stiffness: 0.08, damping: 0.85 } — message leaving
+SPRINGS.SCORE_BAR    // { stiffness: 0.3, damping: 0.85 }  — bar fills
+SPRINGS.SIGNAL       // { stiffness: 0.06, damping: 0.75 } — slow growth
+SPRINGS.ENTRANCE     // { stiffness: 0.25, damping: 0.85 } — panel slide-in
 ```
 
-Numbers should tick like scoreboards—weighted, inevitable. Not bouncy or playful.
+Never invent new spring params. Import from `$lib/design/motion`.
+
+Numbers should tick like scoreboards — weighted, inevitable. Not bouncy or playful.
+
+### Dimensional Motion
+
+Temporal rhythm IS motion. A `Pulse` sparkline doesn't just show a shape — the shape itself encodes tempo, momentum, and organic vs manufactured timing. When a Pulse draws on load, the eye traces the arrival cadence. This is motion without animation: the shape communicates dynamics.
 
 ### Performance Budget
 
@@ -374,31 +443,39 @@ Already covered. All animations respect `prefers-reduced-motion`.
 
 ---
 
-## What's Implemented vs. Aspirational
+## Structural Primitives (`$lib/design/`)
 
-### Implemented (Ship Today)
+The design philosophy is encoded as components. Import from `$lib/design`. See `$lib/design/DESIGN.md` for the agent-readable decision tree.
 
-- Satoshi + JetBrains Mono typography
-- Button.svelte with paper plane physics
-- ShareButton.svelte with particle burst
-- RelayLoom.svelte coordination graph
-- ChannelExplainer.svelte channel cards
-- Teal/indigo/emerald color vocabulary
+### Register Layer
+- **`Datum`** — Verifiable numeric claim. Always JetBrains Mono + tabular-nums. Optional spring animation, optional cite provenance. The font IS the truth claim.
+- **`Cite`** — Contextual provenance. Four forms: whisper (materializes on hover), mark (dotted underline), footnote (collects at Artifact bottom), ghost (aria-only). Provenance should be visual (use dimensional primitives inside), not textual.
 
-### Not Yet Implemented
+### Dimensional Layer
+- **`Ratio`** — Composition as color proportion. A thin segmented bar showing what a count is made of. 3-5px tall. No labels. For identity breakdown, authorship texture, geographic distribution.
+- **`Pulse`** — Temporal rhythm as sparkline. A tiny smooth curve showing when things happened. 56×12px default. For arrival cadence, momentum patterns.
+- **`Rings`** — Depth/tier as concentric glyph. 14-16px. Shows how deep verification goes. Citation-scale TrustTierIndicator.
 
-- Coordination count ticker with spring animation
-- Reputation gain feedback
-- Live activity pulse
-- Graph aesthetic extended to template cards
+### Spatial Layer
+- **`Artifact`** — Bounded white object that earns card treatment. Proof specimens, email previews, templates. Provides footnote context for Cite footnotes.
+- **`EntityCluster`** — Proximity-ratio layout. Generous void between entities (32px default). No borders. The void IS the boundary.
+
+### Motion Layer
+- **`SPRINGS`** — Six canonical spring configs. See Motion section above.
+- **`COORD_COLORS`** — The three semantic colors as JS constants.
+- **`TIMING`** — CSS transition durations (150/220/320ms).
 
 ---
 
 ## Decision Rules
 
+### "Does this number have dimensions behind it?"
+
+**If yes**, express them. Use Ratio (composition), Pulse (time), Rings (depth). Prefer visual shape over text description. A scalar with its dimensions hidden is an incomplete rendering.
+
 ### "Should this animate?"
 
-**Yes** if it's a coordination signal (send, share, count update).
+**Yes** if it's a coordination signal (send, share, count update, dimension transition).
 **No** if it's anything else.
 
 ### "What color?"
@@ -409,8 +486,15 @@ Already covered. All animations respect `prefers-reduced-motion`.
 
 ### "Satoshi or Mono?"
 
-**Satoshi** — Words
-**Mono** — Numbers
+**Satoshi** — Words, explanations, citations (interpretive)
+**Mono** — Numbers, dates, hashes, district codes (verifiable)
+
+### "Text or shape?"
+
+If the information is a composition → **Ratio** (color proportion, not "40% gov ID").
+If the information is temporal → **Pulse** (rhythm, not "14 days").
+If the information is depth → **Rings** (strata, not "T3: 12").
+If you're writing a sentence that describes what a visual could show, you've chosen wrong.
 
 ---
 
@@ -419,12 +503,14 @@ Already covered. All animations respect `prefers-reduced-motion`.
 When reviewing design work, ask:
 
 1. **Does this make the action feel real?** — conviction for the sender, substance for the collective, credibility for the recipient
-2. Is the animation communicating information or just decorating?
-3. Would this work if we removed all color except teal and emerald?
-4. Can you scan this surface by hopping between typographic peaks?
-5. **Does this feel honest?** — not "infrastructure vs. consumer app" but does every element earn its place?
+2. **Are the dimensions expressed or erased?** — Can I feel WHERE, WHEN, HOW DEEP, and WHAT WAS SAID? Or just see a count?
+3. Is the animation communicating information or just decorating?
+4. Would this work if we removed all color except teal and emerald?
+5. Can you scan this surface by hopping between typographic peaks?
+6. **Does this feel honest?** — does every element earn its place? Is every compression acknowledged?
+7. **Could a staffer inhabit this information?** — Not read it. Inhabit it. Rotate between geography, time, identity, voice. Understand the signal as a field, not a number.
 
-If it manipulates rather than serves, it's wrong. If it decorates rather than communicates, it's wrong. If it gamifies rather than informs, it's wrong.
+If it manipulates rather than serves, it's wrong. If it decorates rather than communicates, it's wrong. If it gamifies rather than informs, it's wrong. If it compresses without offering decompression, it's incomplete.
 
 ---
 

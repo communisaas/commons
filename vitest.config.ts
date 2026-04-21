@@ -88,8 +88,6 @@ export default defineConfig({
 		// File patterns
 		include: ['tests/**/*.{test,spec}.{js,ts}'],
 		exclude: [
-			// Exclude smoke tests — they hit real external APIs (Census, Congress.gov, CWC)
-			'tests/smoke/**',
 			// Exclude Playwright E2E tests (UI-based)
 			'tests/e2e/basic-functionality.spec.ts',
 			'tests/e2e/identity-verification-flow.spec.ts',
@@ -128,8 +126,6 @@ export default defineConfig({
 			'tests/unit/automation/workflow-engine.test.ts',
 			'tests/unit/billing/usage.test.ts',
 			'tests/unit/blockchain/submission-retry-queue.test.ts',
-			'tests/unit/congressional/cwc-delivery.test.ts',
-			'tests/unit/cwc-house-delivery.test.ts',
 			'tests/unit/debate/settle-endpoint.test.ts',
 			'tests/unit/delegation/grant-crud.test.ts',
 			'tests/unit/dp-contribution-bounding.test.ts',

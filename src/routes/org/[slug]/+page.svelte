@@ -3,17 +3,15 @@
 	import OnboardingChecklist from '$lib/components/org/OnboardingChecklist.svelte';
 	import LegislativeActivity from '$lib/components/org/LegislativeActivity.svelte';
 	import { FEATURES } from '$lib/config/features';
+	import { Datum, Ratio } from '$lib/design';
+	import { SPRINGS } from '$lib/design/motion';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
 
-	function fmt(n: number): string {
-		return n.toLocaleString('en-US');
-	}
-
 	function relativeTime(iso: string): string {
 		const diff = Date.now() - new Date(iso).getTime();
-		if (diff < 0) return 'just now'; // I5: guard clock skew / future timestamps
+		if (diff < 0) return 'just now';
 		const mins = Math.floor(diff / 60000);
 		if (mins < 1) return 'just now';
 		if (mins < 60) return `${mins}m ago`;
@@ -23,29 +21,8 @@
 		return `${days}d ago`;
 	}
 
-	function statusColor(status: string): string {
-		switch (status) {
-			case 'ACTIVE': return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
-			case 'DRAFT': return 'text-text-tertiary bg-surface-raised border-surface-border';
-			case 'PAUSED': return 'text-amber-400 bg-amber-500/10 border-amber-500/20';
-			case 'COMPLETE': return 'text-teal-400 bg-teal-500/10 border-teal-500/20';
-			default: return 'text-text-tertiary bg-surface-raised border-surface-border';
-		}
-	}
-
-	function tierColor(tier: number): string {
-		switch (tier) {
-			case 4: return 'bg-emerald-500';
-			case 3: return 'bg-emerald-500/70';
-			case 2: return 'bg-teal-500/60';
-			case 1: return 'bg-teal-500/40';
-			default: return 'bg-text-quaternary';
-		}
-	}
-
 	// Effective reach (email status breakdown)
 	const er = $derived(data.emailReach);
-	const erPct = $derived(er.total > 0 ? (er.subscribed / er.total * 100).toFixed(1) : '0.0');
 
 	// Funnel percentages (relative to imported)
 	const funnel = $derived(data.funnel);
@@ -166,73 +143,12 @@
 	}
 </script>
 
-<div class="space-y-6">
-	<!-- Page title -->
-	<div>
-		<h1 class="text-xl font-semibold text-text-primary">{data.org.name}</h1>
-	</div>
+<svelte:head>
+	<title>{data.org.name} | Commons</title>
+</svelte:head>
 
-	<!-- ===== Effective Reach ===== -->
-	{#if er.total > 0}
-		<div class="rounded-md bg-surface-base border border-surface-border p-6">
-			<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary mb-3">Effective Reach</p>
-
-			<!-- Hero number -->
-			<div class="flex items-baseline gap-3 mb-4">
-				<span class="font-mono tabular-nums text-3xl font-bold text-text-primary">{fmt(er.subscribed)}</span>
-				<span class="text-sm text-text-secondary">/ {fmt(er.total)}</span>
-				<span class="text-sm font-mono tabular-nums text-emerald-400">({erPct}%)</span>
-			</div>
-
-			<!-- Stacked bar -->
-			<div class="h-3 rounded-full overflow-hidden flex bg-surface-raised">
-				{#if er.subscribed > 0}
-					<div class="bg-emerald-500 transition-all duration-700" style="width: {er.subscribed / er.total * 100}%"></div>
-				{/if}
-				{#if er.unsubscribed > 0}
-					<div class="bg-amber-500 transition-all duration-700" style="width: {er.unsubscribed / er.total * 100}%"></div>
-				{/if}
-				{#if er.bounced > 0}
-					<div class="bg-red-500 transition-all duration-700" style="width: {er.bounced / er.total * 100}%"></div>
-				{/if}
-				{#if er.complained > 0}
-					<div class="bg-red-400 transition-all duration-700" style="width: {er.complained / er.total * 100}%"></div>
-				{/if}
-			</div>
-
-			<!-- Legend -->
-			<div class="flex flex-wrap gap-x-5 gap-y-1 mt-3 text-xs">
-				<span class="flex items-center gap-1.5">
-					<span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-					<span class="text-text-secondary">Subscribed</span>
-					<span class="font-mono tabular-nums text-text-tertiary">{fmt(er.subscribed)}</span>
-				</span>
-				{#if er.unsubscribed > 0}
-					<span class="flex items-center gap-1.5">
-						<span class="w-2 h-2 rounded-full bg-amber-500"></span>
-						<span class="text-text-secondary">Unsubscribed</span>
-						<span class="font-mono tabular-nums text-text-tertiary">{fmt(er.unsubscribed)}</span>
-					</span>
-				{/if}
-				{#if er.bounced > 0}
-					<span class="flex items-center gap-1.5">
-						<span class="w-2 h-2 rounded-full bg-red-500"></span>
-						<span class="text-text-secondary">Bounced</span>
-						<span class="font-mono tabular-nums text-text-tertiary">{fmt(er.bounced)}</span>
-					</span>
-				{/if}
-				{#if er.complained > 0}
-					<span class="flex items-center gap-1.5">
-						<span class="w-2 h-2 rounded-full bg-red-400"></span>
-						<span class="text-text-secondary">Complained</span>
-						<span class="font-mono tabular-nums text-text-tertiary">{fmt(er.complained)}</span>
-					</span>
-				{/if}
-			</div>
-		</div>
-	{/if}
-
-	<!-- ===== Onboarding Checklist (first-run) ===== -->
+<div class="dashboard">
+	<!-- ═══ ONBOARDING ═══ -->
 	{#if !data.onboardingComplete}
 		<OnboardingChecklist
 			orgSlug={data.org.slug}
@@ -243,7 +159,11 @@
 		/>
 	{/if}
 
-	<!-- ===== Verification Packet (primary surface — position 1) ===== -->
+	<!-- ═══════════════════════════════════════════
+	     PROOF — the gravitational center
+	     The packet is the reason this page exists.
+	     Everything else serves it.
+	     ═══════════════════════════════════════════ -->
 	<VerificationPacket
 		packet={data.packet}
 		label={data.stats.activeCampaigns > 0
@@ -252,413 +172,1021 @@
 	>
 		{#snippet actions()}
 			{#if data.packet && data.topCampaignId}
-				<div class="flex gap-3 pt-2">
-					<a href="/org/{data.org.slug}/campaigns/{data.topCampaignId}/report"
-					   class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors">
-						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-						</svg>
+				<div class="proof-cta">
+					<a href="/org/{data.org.slug}/campaigns/{data.topCampaignId}/report" class="cta cta--primary">
 						Deliver Proof
 					</a>
-					<a href="/org/{data.org.slug}/campaigns/{data.topCampaignId}/report"
-					   class="inline-flex items-center gap-2 rounded-lg bg-surface-overlay px-4 py-2.5 text-sm font-medium text-text-secondary hover:bg-surface-raised transition-colors">
-						Preview Proof Packet
+					<a href="/org/{data.org.slug}/campaigns/{data.topCampaignId}/report" class="cta cta--ghost">
+						Preview Packet
 					</a>
 				</div>
 			{/if}
 		{/snippet}
 	</VerificationPacket>
 
-	<!-- ===== Legislative Activity ===== -->
-	<LegislativeActivity
-		alerts={data.legislativeAlerts}
-		orgSlug={data.org.slug}
-		pendingCount={data.legislativeAlerts.length}
-	/>
 
-	<!-- ===== Intelligence Loop: Decision Makers & Legislation ===== -->
-	{#if data.followedReps.count > 0 || data.watchedBills.count > 0}
-		<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-			<!-- Decision Makers card -->
-			<div class="rounded-md bg-surface-base border border-surface-border p-6">
-				<div class="flex items-center justify-between mb-4">
-					<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Decision Makers</p>
-					<a
-						href="/org/{data.org.slug}/representatives"
-						class="text-xs text-text-quaternary hover:text-teal-500 transition-colors"
-					>
-						View all &rarr;
-					</a>
-				</div>
-
-				<div class="flex items-baseline gap-2 mb-4">
-					<span class="font-mono tabular-nums text-2xl font-bold text-text-primary">{fmt(data.followedReps.count)}</span>
-					<span class="text-xs text-text-tertiary">followed</span>
-				</div>
-
-				{#if data.followedReps.top.length > 0}
-					<div class="space-y-2">
-						{#each data.followedReps.top as dm (dm.id)}
-							<div class="flex items-center gap-2 text-sm">
-								{#if dm.party}
-									<span class="inline-block w-5 h-5 rounded-full text-[10px] font-mono font-bold flex items-center justify-center text-white {dm.party === 'D' ? 'bg-blue-600' : dm.party === 'R' ? 'bg-red-600' : 'bg-purple-600'}">
-										{dm.party}
-									</span>
-								{/if}
-								<span class="text-text-primary truncate">{dm.name}</span>
-								{#if dm.jurisdiction}
-									<span class="text-text-quaternary text-xs flex-shrink-0">{dm.jurisdiction}</span>
-								{/if}
-							</div>
-						{/each}
-					</div>
-				{:else}
-					<p class="text-xs text-text-quaternary">No decision makers followed yet.</p>
-				{/if}
+	<!-- ═══════════════════════════════════════════
+	     OPERATIONS — campaigns + sidebar
+	     Campaigns are the verification engines.
+	     Sidebar holds reach, arrivals, legislative.
+	     ═══════════════════════════════════════════ -->
+	<div class="operations">
+		<!-- Campaigns -->
+		<section class="campaigns-section">
+			<div class="section-head">
+				<span class="section-label">Campaigns</span>
+				<a href="/org/{data.org.slug}/campaigns" class="section-link">View all</a>
 			</div>
 
-			<!-- Legislation card -->
-			<div class="rounded-md bg-surface-base border border-surface-border p-6">
-				<div class="flex items-center justify-between mb-4">
-					<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Legislation</p>
-					<a
-						href="/org/{data.org.slug}/legislation"
-						class="text-xs text-text-quaternary hover:text-teal-500 transition-colors"
-					>
-						View all &rarr;
-					</a>
+			{#if data.campaigns.length === 0}
+				<div class="empty-state">
+					<p class="empty-text">No campaigns yet.</p>
+					<a href="/org/{data.org.slug}/campaigns/new" class="empty-action">Assemble your first proof</a>
 				</div>
-
-				<div class="flex items-baseline gap-2 mb-4">
-					<span class="font-mono tabular-nums text-2xl font-bold text-text-primary">{fmt(data.watchedBills.count)}</span>
-					<span class="text-xs text-text-tertiary">watched</span>
-				</div>
-
-				{#if data.watchedBills.top.length > 0}
-					<div class="space-y-2">
-						{#each data.watchedBills.top as bill (bill.id)}
-							<div class="flex items-center gap-2 text-sm">
-								<span class="inline-block text-[10px] font-mono px-1.5 py-0.5 rounded border {
-									bill.status === 'introduced' ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' :
-									bill.status === 'committee' ? 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' :
-									bill.status === 'floor' ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' :
-									bill.status === 'passed' || bill.status === 'signed' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' :
-									bill.status === 'failed' || bill.status === 'vetoed' ? 'text-red-400 bg-red-500/10 border-red-500/20' :
-									'text-text-tertiary bg-surface-raised border-surface-border'
-								} flex-shrink-0">
-									{bill.status}
+			{:else}
+				<div class="campaigns">
+					{#each data.campaigns as campaign (campaign.id)}
+						<a href="/org/{data.org.slug}/campaigns/{campaign.id}" class="campaign">
+							<div class="campaign-count">
+								<span class="count-value">
+									<Datum value={campaign.verifiedActions} animate spring={SPRINGS.METRIC} />
 								</span>
-								<span class="text-text-primary truncate">{bill.title}</span>
-								{#if bill.position}
-									<span class="text-[10px] font-mono px-1 py-0.5 rounded {
-										bill.position === 'support' ? 'text-emerald-400 bg-emerald-500/10' :
-										bill.position === 'oppose' ? 'text-red-400 bg-red-500/10' :
-										'text-text-quaternary bg-surface-raised'
-									} flex-shrink-0">
-										{bill.position}
-									</span>
+								<span class="count-unit">verified</span>
+							</div>
+
+							<div class="campaign-body">
+								<span class="campaign-title">{campaign.title}</span>
+								{#if campaign.totalActions > 0}
+									<Ratio segments={[
+										{ value: campaign.verifiedActions, color: 'var(--coord-verified)', label: 'verified' },
+										{ value: Math.max(0, campaign.totalActions - campaign.verifiedActions), color: 'oklch(0.91 0.005 60)', label: 'unverified' }
+									]} height={3} />
 								{/if}
+								<span class="campaign-meta">
+									<Datum value={campaign.totalActions} class="meta-num" /> total &middot; {relativeTime(campaign.updatedAt)}
+								</span>
+							</div>
+
+							<span class="campaign-status" data-status={campaign.status.toLowerCase()}>{campaign.status}</span>
+						</a>
+					{/each}
+				</div>
+			{/if}
+		</section>
+
+		<!-- Sidebar -->
+		<aside class="sidebar">
+			<!-- Effective Reach -->
+			{#if er.subscribed > 0 || er.unsubscribed > 0}
+				<div class="reach">
+					<span class="section-label">Effective Reach</span>
+					<div class="reach-hero">
+						<span class="reach-value">
+							<Datum value={er.subscribed} animate spring={SPRINGS.METRIC} />
+						</span>
+						<span class="reach-of">
+							/ <Datum value={er.total} />
+						</span>
+					</div>
+					<Ratio segments={[
+						{ value: er.subscribed, color: 'var(--coord-verified)', label: 'subscribed' },
+						{ value: er.unsubscribed, color: 'oklch(0.65 0.15 50)', label: 'unsubscribed' },
+						{ value: er.bounced, color: 'oklch(0.6 0.18 25)', label: 'bounced' },
+						{ value: er.complained, color: 'oklch(0.55 0.15 25)', label: 'complained' }
+					]} height={4} />
+				</div>
+			{/if}
+
+			<!-- Recent Arrivals -->
+			{#if data.recentActivity.length > 0}
+				<div class="arrivals">
+					<span class="section-label">Recent Arrivals</span>
+					<div class="arrival-list">
+						{#each data.recentActivity.slice(0, 8) as item (item.id)}
+							<div class="arrival">
+								<span class="arrival-dot" class:arrival-dot--verified={item.verified}></span>
+								<span class="arrival-text">
+									<span class="arrival-name">{item.label}</span>
+									{#if item.type === 'action'}
+										<span class="arrival-sep">&middot;</span>
+										<span class="arrival-detail">{item.detail}</span>
+									{:else}
+										<span class="arrival-note">signed up</span>
+									{/if}
+								</span>
+								<span class="arrival-time">{relativeTime(item.timestamp)}</span>
 							</div>
 						{/each}
 					</div>
-				{:else}
-					<p class="text-xs text-text-quaternary">No bills watched yet.</p>
-				{/if}
-			</div>
+				</div>
+			{/if}
+
+			<!-- Legislative Activity -->
+			<LegislativeActivity
+				alerts={data.legislativeAlerts}
+				orgSlug={data.org.slug}
+				pendingCount={data.legislativeAlerts.length}
+			/>
+		</aside>
+	</div>
+
+
+	<!-- ═══════════════════════════════════════════
+	     INTELLIGENCE — decision makers + legislation
+	     Only appears when there's data to show.
+	     ═══════════════════════════════════════════ -->
+	{#if data.followedReps.count > 0 || data.watchedBills.count > 0}
+		<div class="intelligence">
+			{#if data.followedReps.count > 0}
+				<section class="intel-col">
+					<div class="section-head">
+						<span class="section-label">Decision Makers</span>
+						<a href="/org/{data.org.slug}/representatives" class="section-link">View all</a>
+					</div>
+					<div class="intel-hero">
+						<span class="intel-count">
+							<Datum value={data.followedReps.count} animate spring={SPRINGS.METRIC} />
+						</span>
+						<span class="intel-unit">followed</span>
+					</div>
+					{#if data.followedReps.top.length > 0}
+						<div class="intel-list">
+							{#each data.followedReps.top as dm (dm.id)}
+								<div class="intel-entry">
+									{#if dm.party}
+										<span class="party" data-party={dm.party}>{dm.party}</span>
+									{/if}
+									<span class="intel-name">{dm.name}</span>
+									{#if dm.jurisdiction}
+										<span class="intel-jurisdiction">{dm.jurisdiction}</span>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</section>
+			{/if}
+
+			{#if data.watchedBills.count > 0}
+				<section class="intel-col">
+					<div class="section-head">
+						<span class="section-label">Legislation</span>
+						<a href="/org/{data.org.slug}/legislation" class="section-link">View all</a>
+					</div>
+					<div class="intel-hero">
+						<span class="intel-count">
+							<Datum value={data.watchedBills.count} animate spring={SPRINGS.METRIC} />
+						</span>
+						<span class="intel-unit">watched</span>
+					</div>
+					{#if data.watchedBills.top.length > 0}
+						<div class="intel-list">
+							{#each data.watchedBills.top as bill (bill.id)}
+								<div class="intel-entry">
+									<span class="bill-status">{bill.status}</span>
+									<span class="intel-name">{bill.title}</span>
+									{#if bill.position}
+										<span class="bill-position" data-position={bill.position}>{bill.position}</span>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</section>
+			{/if}
 		</div>
 	{/if}
 
-	<!-- ===== SECTIONS 2+3: Verification Pipeline & Engagement Tiers (collapsed) ===== -->
-	<details class="rounded-md bg-surface-base border border-surface-border">
-		<summary class="cursor-pointer px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
-			Verification pipeline &amp; engagement tiers
-		</summary>
-		<div class="px-6 pb-6 space-y-6">
-			<!-- Verification Funnel -->
-			<div>
-				<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary mb-4">Verification Funnel</p>
 
-				{#if funnel.imported === 0}
-					<div class="py-4 text-center">
-						<p class="text-sm text-text-quaternary">No supporters yet. Import supporters to see verification progress.</p>
-					</div>
-				{:else}
-					<div class="space-y-3">
-						{#each funnelSteps as step, i}
-							<div class="flex items-center gap-4">
-								<div class="w-32 flex items-center gap-2">
-									<span class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-mono {step.count > 0 ? 'bg-teal-500/20 text-teal-400' : 'bg-surface-overlay text-text-quaternary'}">
-										{i + 1}
-									</span>
-									<span class="text-xs text-text-tertiary truncate">{step.label}</span>
+	<!-- ═══════════════════════════════════════════
+	     DEPTH — collapsed details
+	     Pipeline, tiers, endorsed templates.
+	     Available on inquiry, not on arrival.
+	     ═══════════════════════════════════════════ -->
+	<div class="depth">
+		<details class="depth-section">
+			<summary class="depth-summary">Verification pipeline &amp; engagement tiers</summary>
+			<div class="depth-content">
+				<!-- Verification Funnel -->
+				<div class="depth-block">
+					<span class="section-label">Verification Funnel</span>
+					{#if funnel.imported === 0}
+						<p class="empty-hint">No supporters yet. Import supporters to see verification progress.</p>
+					{:else}
+						<div class="funnel">
+							{#each funnelSteps as step, i}
+								<div class="funnel-step">
+									<span class="funnel-label">{step.label}</span>
+									<div class="funnel-bar">
+										<div class="funnel-fill" data-step={i} style="width: {Math.max(step.pct, 1)}%"></div>
+									</div>
+									<span class="funnel-count"><Datum value={step.count} /></span>
 								</div>
-								<div class="flex-1 h-6 rounded bg-surface-raised overflow-hidden relative">
-									<div
-										class="h-full rounded transition-all duration-700 ease-out {i === 0 ? 'bg-text-quaternary' : i === 1 ? 'bg-teal-500/40' : i === 2 ? 'bg-teal-500/60' : 'bg-emerald-500/70'}"
-										style="width: {Math.max(step.pct, 1)}%"
-									></div>
-									{#if step.count > 0}
-										<span class="absolute inset-0 flex items-center justify-end pr-2 text-[10px] font-mono tabular-nums text-text-tertiary">
-											{step.pct}%
-										</span>
-									{/if}
-								</div>
-								<span class="w-16 text-right font-mono tabular-nums text-sm text-text-secondary">
-									{fmt(step.count)}
-								</span>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</div>
-
-			<!-- Tier Distribution -->
-			<div>
-				<div class="flex items-center justify-between mb-4">
-					<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Engagement Tier Distribution</p>
-					{#if tierTotal > 0}
-						<span class="text-xs font-mono tabular-nums text-text-quaternary">{fmt(tierTotal)} actions</span>
+							{/each}
+						</div>
 					{/if}
 				</div>
 
-				{#if tierTotal === 0}
-					<div class="py-4 text-center">
-						<p class="text-sm text-text-quaternary">No campaign actions yet. Tier distribution will appear as supporters take action.</p>
-					</div>
-				{:else}
-					<div class="space-y-2">
-						{#each [...data.tiers].reverse() as tier}
-							<div class="flex items-center gap-3">
-								<span class="w-24 text-[10px] font-mono text-text-tertiary text-right">
-									{tier.label}
-									<span class="text-text-quaternary">T{tier.tier}</span>
-								</span>
-								<div class="flex-1 h-5 rounded bg-surface-raised overflow-hidden">
-									<div
-										class="h-full rounded {tierColor(tier.tier)} transition-all duration-700 ease-out"
-										style="width: {tier.count > 0 ? Math.max((tier.count / tierMax) * 100, 2) : 0}%"
-									></div>
+				<!-- Tier Distribution -->
+				<div class="depth-block">
+					<span class="section-label">Engagement Tier Distribution</span>
+					{#if tierTotal === 0}
+						<p class="empty-hint">No campaign actions yet. Tier distribution appears as supporters take action.</p>
+					{:else}
+						<div class="tiers">
+							{#each [...data.tiers].reverse() as tier}
+								<div class="tier-row">
+									<span class="tier-label">{tier.label} <span class="tier-num">T{tier.tier}</span></span>
+									<div class="tier-bar">
+										<div
+											class="tier-fill"
+											data-tier={tier.tier}
+											style="width: {tier.count > 0 ? Math.max((tier.count / tierMax) * 100, 2) : 0}%"
+										></div>
+									</div>
+									<span class="tier-count"><Datum value={tier.count} /></span>
 								</div>
-								<span class="w-14 text-xs font-mono tabular-nums text-text-tertiary text-right">
-									{fmt(tier.count)}
-								</span>
-								<span class="w-10 text-[10px] font-mono tabular-nums text-text-quaternary text-right">
-									{Math.round((tier.count / tierTotal) * 100)}%
-								</span>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			</div>
+		</details>
+
+		<details class="depth-section">
+			<summary class="depth-summary">
+				Endorsed templates
+				{#if endorsedList.length > 0}
+					<span class="depth-badge">&middot; {endorsedList.length}</span>
+				{/if}
+			</summary>
+			<div class="depth-content">
+				{#if endorsedList.length > 0}
+					<div class="endorsed-list">
+						{#each endorsedList as item (item.templateId)}
+							<div class="endorsed-entry">
+								<a href="/s/{item.slug}" class="endorsed-title">{item.title}</a>
+								{#if FEATURES.ENGAGEMENT_METRICS}
+									<span class="endorsed-meta">
+										<Datum value={item.sends} /> sends &middot; <Datum value={item.districts} /> districts
+									</span>
+								{/if}
+								<button class="endorsed-remove" onclick={() => removeEndorsement(item.templateId)}>Remove</button>
 							</div>
 						{/each}
 					</div>
+				{:else}
+					<p class="empty-hint">No endorsed templates yet. Endorse public templates to signal coalition support.</p>
 				{/if}
-			</div>
-		</div>
-	</details>
 
-	<!-- ===== SECTION 4: Campaign List ===== -->
-	<div class="rounded-md bg-surface-base border border-surface-border p-6">
-		<div class="flex items-center justify-between mb-4">
-			<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">Campaigns</p>
-			<a
-				href="/org/{data.org.slug}/campaigns"
-				class="text-xs text-text-quaternary hover:text-teal-500 transition-colors"
-			>
-				View all
-			</a>
-		</div>
-
-		{#if data.campaigns.length === 0}
-			<div class="py-4 text-center">
-				<p class="text-sm text-text-quaternary">No campaigns yet.</p>
-				<a
-					href="/org/{data.org.slug}/campaigns/new"
-					class="inline-block mt-2 text-xs text-teal-500 hover:text-teal-400 transition-colors"
-				>
-					Assemble your first proof
-				</a>
-			</div>
-		{:else}
-			<div class="space-y-2">
-				{#each data.campaigns as campaign (campaign.id)}
-					<a href="/org/{data.org.slug}/campaigns/{campaign.id}"
-					   class="flex items-center gap-4 rounded-lg border border-surface-border bg-surface-raised px-4 py-3 transition-colors hover:border-[var(--coord-route-solid)] group">
-						<!-- Verified count (hero element per card) -->
-						<div class="flex-shrink-0 text-right">
-							<p class="font-mono tabular-nums text-2xl font-bold text-emerald-400">
-								{fmt(campaign.verifiedActions)}
-							</p>
-							<p class="text-[10px] text-text-quaternary">verified</p>
+				<!-- Search to endorse -->
+				<div class="endorse-search">
+					<input
+						type="text"
+						class="endorse-input"
+						placeholder="Search templates to endorse..."
+						value={searchQuery}
+						oninput={handleSearchInput}
+					/>
+					{#if searchResults.length > 0}
+						<div class="search-results">
+							{#each searchResults as t (t.id)}
+								<button class="search-result" onclick={() => endorseTemplate(t.id)}>
+									<span class="search-result-title">{t.title}</span>
+									<span class="search-result-action">Endorse</span>
+								</button>
+							{/each}
 						</div>
-
-						<div class="min-w-0 flex-1">
-							<div class="flex items-center gap-2">
-								<p class="text-sm font-medium text-text-primary group-hover:text-teal-500 transition-colors truncate">
-									{campaign.title}
-								</p>
-								<span class="text-[10px] font-mono px-1.5 py-0.5 rounded border {statusColor(campaign.status)} flex-shrink-0">
-									{campaign.status}
-								</span>
-							</div>
-							<p class="text-xs text-text-quaternary mt-0.5">
-								<span class="font-mono tabular-nums">{fmt(campaign.totalActions)}</span> total actions
-								<span class="text-surface-border-strong mx-1">&middot;</span>
-								{relativeTime(campaign.updatedAt)}
-							</p>
-						</div>
-
-						{#if campaign.totalActions > 0}
-							{@const pct = Math.round((campaign.verifiedActions / campaign.totalActions) * 100)}
-							<div class="flex-shrink-0 w-10 h-10 relative">
-								<svg viewBox="0 0 36 36" class="w-10 h-10 -rotate-90">
-									<circle cx="18" cy="18" r="15" fill="none" stroke-width="3" class="stroke-surface-border" />
-									<circle cx="18" cy="18" r="15" fill="none" stroke-width="3"
-										stroke-dasharray="{pct * 0.942} {(100 - pct) * 0.942}"
-										class="stroke-teal-500/60" />
-								</svg>
-								<span class="absolute inset-0 flex items-center justify-center text-[9px] font-mono tabular-nums text-text-tertiary">
-									{pct}%
-								</span>
-							</div>
-						{/if}
-					</a>
-				{/each}
+					{/if}
+					{#if searching}
+						<div class="search-spinner"></div>
+					{/if}
+				</div>
 			</div>
-		{/if}
+		</details>
 	</div>
-
-	<!-- ===== SECTION 5: Recent Activity ===== -->
-	{#if data.recentActivity.length > 0}
-		<div class="rounded-md bg-surface-base border border-surface-border p-6">
-			<p class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary mb-4">Recent Activity</p>
-			<div class="space-y-1">
-				{#each data.recentActivity.slice(0, 5) as item (item.id)}
-					<div class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-raised transition-colors">
-						<!-- I4: Type indicator with label -->
-						{#if item.type === 'action'}
-							<div class="flex items-center gap-1.5 flex-shrink-0 w-16">
-								<div class="w-2 h-2 rounded-full {item.verified ? 'bg-emerald-500' : 'bg-text-quaternary'}"></div>
-								<span class="text-[9px] font-mono text-text-quaternary">Action</span>
-							</div>
-						{:else}
-							<div class="flex items-center gap-1.5 flex-shrink-0 w-16">
-								<div class="w-2 h-2 rounded-full bg-teal-500/60"></div>
-								<span class="text-[9px] font-mono text-text-quaternary">Signup</span>
-							</div>
-						{/if}
-
-						<!-- Content -->
-						<div class="min-w-0 flex-1">
-							<p class="text-xs text-text-secondary truncate">
-								<span class="font-medium">{item.label}</span>
-								{#if item.type === 'action'}
-									<span class="text-text-quaternary"> acted on </span>
-									<span class="text-text-tertiary">{item.detail}</span>
-								{:else}
-									<span class="text-text-quaternary"> signed up via </span>
-									<span class="text-text-tertiary">{item.detail}</span>
-								{/if}
-							</p>
-						</div>
-
-						<!-- Tier badge (actions only) -->
-						{#if item.type === 'action' && item.tier > 0}
-							<span class="text-[9px] font-mono px-1 py-0.5 rounded bg-surface-raised text-text-tertiary flex-shrink-0">
-								T{item.tier}
-							</span>
-						{/if}
-
-						<!-- Timestamp -->
-						<span class="text-[10px] font-mono text-text-quaternary flex-shrink-0">
-							{relativeTime(item.timestamp)}
-						</span>
-					</div>
-				{/each}
-			</div>
-		</div>
-	{/if}
 
 	<!-- Error flash -->
 	{#if errorFlash}
-		<div class="rounded-lg border border-red-900/40 bg-red-950/30 px-4 py-2 text-xs text-red-400">
-			{errorFlash}
-		</div>
+		<div class="error-flash">{errorFlash}</div>
 	{/if}
-
-	<!-- ===== Endorsed Templates (collapsed) ===== -->
-	<details class="rounded-md bg-surface-base border border-surface-border">
-		<summary class="cursor-pointer px-6 py-4 text-sm font-medium text-text-secondary hover:text-text-primary">
-			Endorsed templates
-			{#if endorsedList.length > 0}
-				<span class="text-text-quaternary ml-1">&middot; {endorsedList.length}</span>
-			{/if}
-		</summary>
-		<div class="px-6 pb-6">
-			{#if endorsedList.length > 0}
-				<div class="space-y-2 mb-4">
-					{#each endorsedList as item (item.templateId)}
-						<div class="group flex items-center gap-3 rounded-lg border border-surface-border bg-surface-raised px-4 py-3 transition-colors hover:border-[var(--coord-route-solid)]">
-							<div class="w-0.5 h-8 rounded-full bg-teal-500/60 flex-shrink-0"></div>
-							<div class="min-w-0 flex-1">
-								<a href="/s/{item.slug}" class="text-sm font-medium text-text-primary hover:text-teal-500 transition-colors line-clamp-1">
-									{item.title}
-								</a>
-								{#if FEATURES.ENGAGEMENT_METRICS}
-									<p class="text-xs text-text-quaternary mt-0.5">
-										<span class="font-mono tabular-nums">{fmt(item.sends)}</span> sends &middot; <span class="font-mono tabular-nums">{fmt(item.districts)}</span> districts
-									</p>
-								{/if}
-							</div>
-							<button
-								class="text-xs text-text-quaternary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
-								onclick={() => removeEndorsement(item.templateId)}
-							>
-								Remove
-							</button>
-						</div>
-					{/each}
-				</div>
-			{:else}
-				<p class="text-xs text-text-quaternary mb-4">No endorsed templates yet. Endorse public templates to signal coalition support.</p>
-			{/if}
-
-			<!-- Search to endorse -->
-			<div class="relative">
-				<input
-					type="text"
-					class="participation-input text-sm"
-					placeholder="Search templates to endorse..."
-					value={searchQuery}
-					oninput={handleSearchInput}
-				/>
-				{#if searchResults.length > 0}
-					<div class="absolute left-0 right-0 top-full mt-1 rounded-lg border border-surface-border bg-surface-base shadow-[var(--shadow-lg)] z-10 overflow-hidden">
-						{#each searchResults as t (t.id)}
-							<button
-								class="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-surface-raised transition-colors border-b border-surface-border last:border-0"
-								onclick={() => endorseTemplate(t.id)}
-							>
-								<div class="min-w-0 flex-1">
-									<p class="text-sm text-text-primary line-clamp-1">{t.title}</p>
-									{#if FEATURES.ENGAGEMENT_METRICS}
-										<p class="text-xs text-text-quaternary mt-0.5">
-											<span class="font-mono tabular-nums">{fmt(t.verified_sends)}</span> sends
-											{#if t.similarity != null}
-												<span class="text-surface-border-strong mx-1">&middot;</span>
-												<span class="text-teal-600">{Math.round(t.similarity * 100)}% match</span>
-											{/if}
-										</p>
-									{/if}
-								</div>
-								<span class="text-xs font-medium text-teal-500 flex-shrink-0">Endorse</span>
-							</button>
-						{/each}
-					</div>
-				{/if}
-				{#if searching}
-					<div class="absolute right-3 top-1/2 -translate-y-1/2">
-						<div class="w-3 h-3 border border-text-quaternary border-t-teal-500 rounded-full animate-spin"></div>
-					</div>
-				{/if}
-			</div>
-		</div>
-	</details>
-
 </div>
+
+<style>
+	/* ═══════════════════════════════════════════
+	   DASHBOARD — Verification-first. Warm ground.
+	   Content sits on cream. Only the proof packet
+	   earns bounded artifact treatment. Everything
+	   else lives on ground, grouped by proximity.
+	   ═══════════════════════════════════════════ */
+
+	.dashboard {
+		display: flex;
+		flex-direction: column;
+		gap: 2.5rem;
+	}
+
+	@media (min-width: 768px) {
+		.dashboard { gap: 3.5rem; }
+	}
+
+	/* ═══ SHARED ═══ */
+
+	.section-label {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.625rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		color: oklch(0.55 0.01 250);
+	}
+
+	.section-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		margin-bottom: 1.25rem;
+	}
+
+	.section-link {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.75rem;
+		color: oklch(0.58 0.01 250);
+		text-decoration: none;
+		transition: color 150ms ease-out;
+	}
+
+	.section-link:hover { color: oklch(0.45 0.1 180); }
+
+	.empty-state { padding: 1.5rem 0; }
+
+	.empty-text {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.875rem;
+		color: oklch(0.6 0.01 250);
+		margin: 0;
+	}
+
+	.empty-action {
+		display: inline-block;
+		margin-top: 0.5rem;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		color: oklch(0.45 0.1 180);
+		text-decoration: none;
+		transition: color 150ms ease-out;
+	}
+
+	.empty-action:hover { color: oklch(0.35 0.12 180); }
+
+	.empty-hint {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		color: oklch(0.6 0.01 250);
+		margin: 0;
+	}
+
+	/* ═══ PROOF CTA ═══ */
+
+	.proof-cta {
+		display: flex;
+		gap: 0.75rem;
+		padding-top: 0.75rem;
+	}
+
+	.cta {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.625rem 1.25rem;
+		border-radius: 4px;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.875rem;
+		font-weight: 600;
+		text-decoration: none;
+		transition: background 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out;
+		cursor: pointer;
+	}
+
+	.cta--primary {
+		background: oklch(0.42 0.1 180);
+		border: 1px solid oklch(0.45 0.1 180);
+		color: #ffffff;
+	}
+
+	.cta--primary:hover {
+		background: oklch(0.38 0.11 180);
+		border-color: oklch(0.38 0.11 180);
+	}
+
+	.cta--ghost {
+		background: transparent;
+		border: 1px solid oklch(0.86 0.01 250);
+		color: oklch(0.38 0.015 250);
+	}
+
+	.cta--ghost:hover {
+		border-color: oklch(0.7 0.06 180);
+		color: oklch(0.32 0.08 180);
+	}
+
+	/* ���══ OPERATIONS GRID ═══ */
+
+	.operations {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 2.5rem;
+	}
+
+	@media (min-width: 1024px) {
+		.operations {
+			grid-template-columns: 3fr 2fr;
+			gap: 3rem;
+			align-items: start;
+		}
+	}
+
+	.sidebar {
+		display: flex;
+		flex-direction: column;
+		gap: 2rem;
+	}
+
+	/* ═══ CAMPAIGNS ═══
+	   No cards. Each campaign is a row on ground,
+	   separated by a hairline. The verified count
+	   is the hero per-row — mono, large, emerald.
+	   Status is a typographic annotation, not a pill.
+	   ═══════════════════════════════════════════ */
+
+	.campaigns {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.campaign {
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+		padding: 0.875rem 0;
+		text-decoration: none;
+		border-top: 1px solid oklch(0.92 0.006 60 / 0.6);
+		transition: color 150ms ease-out;
+	}
+
+	.campaign:first-child { border-top: none; }
+
+	.campaign:hover .campaign-title { color: oklch(0.35 0.12 165); }
+
+	.campaign-count {
+		flex-shrink: 0;
+		text-align: right;
+		min-width: 3.5rem;
+	}
+
+	.count-value {
+		display: block;
+		font-size: 1.375rem;
+		font-weight: 700;
+		color: var(--coord-verified, #10b981);
+		line-height: 1;
+	}
+
+	.count-unit {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.5625rem;
+		color: oklch(0.58 0.01 250);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+
+	.campaign-body {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.campaign-title {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.9375rem;
+		font-weight: 600;
+		color: oklch(0.2 0.03 250);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		transition: color 150ms ease-out;
+	}
+
+	.campaign-meta {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.75rem;
+		color: oklch(0.55 0.01 250);
+	}
+
+	/* Typographic status — not a pill badge */
+	.campaign-status {
+		flex-shrink: 0;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.5625rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: oklch(0.55 0.01 250);
+	}
+
+	.campaign-status[data-status='active'] { color: oklch(0.5 0.14 165); }
+	.campaign-status[data-status='paused'] { color: oklch(0.6 0.14 85); }
+	.campaign-status[data-status='complete'] { color: oklch(0.45 0.12 180); }
+
+	/* ═══ EFFECTIVE REACH ═══ */
+
+	.reach {
+		display: flex;
+		flex-direction: column;
+		gap: 0.625rem;
+	}
+
+	.reach-hero {
+		display: flex;
+		align-items: baseline;
+		gap: 0.375rem;
+	}
+
+	.reach-value {
+		font-size: 1.5rem;
+		font-weight: 700;
+		color: oklch(0.2 0.03 250);
+	}
+
+	.reach-of {
+		font-size: 0.875rem;
+		color: oklch(0.55 0.01 250);
+	}
+
+	/* ═══ ARRIVALS ═══ */
+
+	.arrivals {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.arrival-list {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.arrival {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.3125rem 0;
+		font-size: 0.75rem;
+	}
+
+	.arrival-dot {
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		flex-shrink: 0;
+		background: oklch(0.82 0.01 250);
+	}
+
+	.arrival-dot--verified { background: var(--coord-verified, #10b981); }
+
+	.arrival-text {
+		flex: 1;
+		min-width: 0;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		color: oklch(0.42 0.015 250);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.arrival-name {
+		font-weight: 500;
+		color: oklch(0.28 0.02 250);
+	}
+
+	.arrival-sep { color: oklch(0.82 0.01 250); margin: 0 0.125rem; }
+	.arrival-detail, .arrival-note { color: oklch(0.55 0.01 250); }
+
+	.arrival-time {
+		flex-shrink: 0;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.625rem;
+		color: oklch(0.62 0.01 250);
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* ═══ INTELLIGENCE ═══ */
+
+	.intelligence {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 2rem;
+	}
+
+	@media (min-width: 768px) {
+		.intelligence {
+			grid-template-columns: 1fr 1fr;
+			gap: 3rem;
+		}
+	}
+
+	.intel-hero {
+		display: flex;
+		align-items: baseline;
+		gap: 0.5rem;
+		margin-bottom: 1rem;
+	}
+
+	.intel-count {
+		font-size: 1.5rem;
+		font-weight: 700;
+		color: oklch(0.2 0.03 250);
+	}
+
+	.intel-unit {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		color: oklch(0.55 0.01 250);
+	}
+
+	.intel-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.intel-entry {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-size: 0.875rem;
+	}
+
+	.intel-name {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		color: oklch(0.2 0.03 250);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		flex: 1;
+		min-width: 0;
+	}
+
+	.intel-jurisdiction {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.6875rem;
+		color: oklch(0.55 0.01 250);
+		flex-shrink: 0;
+	}
+
+	.party {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.125rem;
+		height: 1.125rem;
+		border-radius: 50%;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.5rem;
+		font-weight: 700;
+		color: white;
+		flex-shrink: 0;
+	}
+
+	.party[data-party='D'] { background: oklch(0.5 0.18 260); }
+	.party[data-party='R'] { background: oklch(0.5 0.18 25); }
+	.party[data-party='I'] { background: oklch(0.5 0.14 290); }
+
+	.bill-status {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.5625rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: oklch(0.52 0.06 250);
+		flex-shrink: 0;
+	}
+
+	.bill-position {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.5625rem;
+		font-weight: 500;
+		flex-shrink: 0;
+	}
+
+	.bill-position[data-position='support'] { color: oklch(0.5 0.14 165); }
+	.bill-position[data-position='oppose'] { color: oklch(0.55 0.15 25); }
+
+	/* ═══ DEPTH (collapsed details) ═══
+	   Available on inquiry, not on arrival.
+	   Hairline separators. Subordinate content.
+	   ═══════════════════════════════════════════ */
+
+	.depth {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 0;
+	}
+
+	@media (min-width: 1024px) {
+		.depth {
+			grid-template-columns: 1fr 1fr;
+			gap: 2rem;
+		}
+	}
+
+	.depth-section {
+		border-top: 1px solid oklch(0.91 0.006 60);
+	}
+
+	.depth-summary {
+		cursor: pointer;
+		padding: 1rem 0;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: oklch(0.42 0.015 250);
+		transition: color 150ms ease-out;
+	}
+
+	.depth-summary:hover { color: oklch(0.22 0.03 250); }
+
+	.depth-badge { color: oklch(0.62 0.01 250); }
+
+	.depth-content {
+		padding-bottom: 1.5rem;
+		display: flex;
+		flex-direction: column;
+		gap: 2rem;
+	}
+
+	.depth-block {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	/* ═══ FUNNEL ═══ */
+
+	.funnel {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.funnel-step {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.funnel-label {
+		width: 7.5rem;
+		flex-shrink: 0;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.75rem;
+		color: oklch(0.55 0.01 250);
+		text-align: right;
+	}
+
+	.funnel-bar {
+		flex: 1;
+		height: 1rem;
+		border-radius: 2px;
+		background: oklch(0.955 0.003 60);
+		overflow: hidden;
+	}
+
+	.funnel-fill {
+		height: 100%;
+		border-radius: 2px;
+		transition: width 700ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+
+	.funnel-fill[data-step='0'] { background: oklch(0.78 0.01 250); }
+	.funnel-fill[data-step='1'] { background: oklch(0.62 0.08 180 / 0.55); }
+	.funnel-fill[data-step='2'] { background: oklch(0.58 0.1 180 / 0.7); }
+	.funnel-fill[data-step='3'] { background: oklch(0.52 0.13 165 / 0.8); }
+
+	.funnel-count {
+		width: 3rem;
+		text-align: right;
+		font-size: 0.8125rem;
+		font-weight: 600;
+		color: oklch(0.38 0.015 250);
+	}
+
+	/* ═══ TIERS ═══ */
+
+	.tiers {
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+	}
+
+	.tier-row {
+		display: flex;
+		align-items: center;
+		gap: 0.625rem;
+	}
+
+	.tier-label {
+		width: 5.5rem;
+		flex-shrink: 0;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.625rem;
+		color: oklch(0.55 0.01 250);
+		text-align: right;
+	}
+
+	.tier-num { color: oklch(0.72 0.01 250); }
+
+	.tier-bar {
+		flex: 1;
+		height: 0.875rem;
+		border-radius: 2px;
+		background: oklch(0.955 0.003 60);
+		overflow: hidden;
+	}
+
+	.tier-fill {
+		height: 100%;
+		border-radius: 2px;
+		transition: width 700ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+
+	.tier-fill[data-tier='0'] { background: oklch(0.78 0.01 250); }
+	.tier-fill[data-tier='1'] { background: oklch(0.62 0.08 180 / 0.55); }
+	.tier-fill[data-tier='2'] { background: oklch(0.58 0.1 180 / 0.7); }
+	.tier-fill[data-tier='3'] { background: oklch(0.52 0.12 165 / 0.8); }
+	.tier-fill[data-tier='4'] { background: oklch(0.52 0.15 165); }
+
+	.tier-count {
+		width: 2.5rem;
+		text-align: right;
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: oklch(0.38 0.015 250);
+	}
+
+	/* ═══ ENDORSED TEMPLATES ═══ */
+
+	.endorsed-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.125rem;
+		margin-bottom: 1rem;
+	}
+
+	.endorsed-entry {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.5rem 0;
+	}
+
+	.endorsed-title {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: oklch(0.2 0.03 250);
+		text-decoration: none;
+		transition: color 150ms ease-out;
+		flex: 1;
+		min-width: 0;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.endorsed-title:hover { color: oklch(0.35 0.12 165); }
+
+	.endorsed-meta {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.625rem;
+		color: oklch(0.58 0.01 250);
+		flex-shrink: 0;
+	}
+
+	.endorsed-remove {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.6875rem;
+		color: oklch(0.65 0.01 250);
+		background: none;
+		border: none;
+		cursor: pointer;
+		opacity: 0;
+		transition: opacity 150ms ease-out, color 150ms ease-out;
+		flex-shrink: 0;
+		padding: 0;
+	}
+
+	.endorsed-entry:hover .endorsed-remove { opacity: 1; }
+	.endorsed-remove:hover { color: oklch(0.55 0.15 25); }
+
+	/* ═══ SEARCH ═══ */
+
+	.endorse-search { position: relative; }
+
+	.endorse-input {
+		width: 100%;
+		padding: 0.5625rem 0.75rem;
+		border-radius: 4px;
+		border: 1px solid oklch(0.88 0.008 60);
+		background: white;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		color: oklch(0.2 0.02 250);
+		outline: none;
+		transition: border-color 150ms ease-out;
+	}
+
+	.endorse-input:focus { border-color: oklch(0.65 0.1 180); }
+	.endorse-input::placeholder { color: oklch(0.65 0.01 250); }
+
+	.search-results {
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 100%;
+		margin-top: 0.25rem;
+		background: white;
+		border: 1px solid oklch(0.88 0.008 60);
+		border-radius: 4px;
+		box-shadow: 0 4px 12px -4px oklch(0 0 0 / 0.1);
+		z-index: 10;
+		overflow: hidden;
+	}
+
+	.search-result {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		padding: 0.5rem 0.75rem;
+		background: none;
+		border: none;
+		border-bottom: 1px solid oklch(0.94 0.004 60);
+		cursor: pointer;
+		text-align: left;
+		transition: background 150ms ease-out;
+	}
+
+	.search-result:last-child { border-bottom: none; }
+	.search-result:hover { background: oklch(0.985 0.003 60); }
+
+	.search-result-title {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		color: oklch(0.2 0.03 250);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.search-result-action {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.625rem;
+		font-weight: 600;
+		color: oklch(0.45 0.12 165);
+		flex-shrink: 0;
+		margin-left: 0.75rem;
+	}
+
+	.search-spinner {
+		position: absolute;
+		right: 0.625rem;
+		top: 50%;
+		transform: translateY(-50%);
+		width: 0.75rem;
+		height: 0.75rem;
+		border: 1.5px solid oklch(0.82 0.01 250);
+		border-top-color: oklch(0.45 0.12 165);
+		border-radius: 50%;
+		animation: spin 600ms linear infinite;
+	}
+
+	@keyframes spin {
+		to { transform: translateY(-50%) rotate(360deg); }
+	}
+
+	/* ═══ ERROR FLASH ═══ */
+
+	.error-flash {
+		padding: 0.625rem 1rem;
+		border-radius: 4px;
+		border: 1px solid oklch(0.7 0.15 25 / 0.3);
+		background: oklch(0.97 0.02 25 / 0.3);
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		color: oklch(0.45 0.15 25);
+	}
+</style>

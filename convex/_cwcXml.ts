@@ -1,15 +1,21 @@
 /**
- * CWC XML Generator
+ * CWC XML Generator (Convex runtime)
  *
  * Generates XML payloads for the US CWC (Communicating With Congress) system.
  * Both House and Senate use the same RELAX NG schema (CWC v2.0).
  * House has additional required fields (Organization, AddressValidation, etc.).
  *
- * This is the only US-specific module — other country adapters would have
- * their own payload generators.
+ * Lives in convex/ because it's called by the internal `deliverToCongress`
+ * action and Convex functions cannot import from SvelteKit's src/.
  */
 
-import type { CwcTemplate as Template } from '$lib/types/template';
+interface CwcTemplate {
+	id: string;
+	title: string;
+	description: string;
+	message_body: string;
+	delivery_config: unknown;
+}
 
 interface UserRepresentative {
 	bioguideId: string;
@@ -33,6 +39,7 @@ interface CWCUser {
 	name: string;
 	email: string;
 	phone?: string;
+	prefix?: string;
 	address: UserAddress;
 	representatives: {
 		house: UserRepresentative;
@@ -41,39 +48,41 @@ interface CWCUser {
 }
 
 export interface CWCMessage {
-	template: Template;
+	template: CwcTemplate;
 	user: CWCUser;
 	_targetRep: UserRepresentative;
 	personalizedMessage?: string;
+	/** Constituent position on the subject. 'Pro' | 'Con' | 'Undecided'. Omitted if unknown. */
+	proOrCon?: 'Pro' | 'Con' | 'Undecided';
 }
 
-/** Delivery agent configuration — sourced from env vars by the caller. */
 export interface DeliveryAgentConfig {
 	name: string;
 	email: string;
 	contactName: string;
 	contactEmail: string;
 	contactPhone: string;
-	/** Organization name (House CWC requires this in Delivery block). */
 	organization: string;
-	/** Brief org description (House CWC requires OrganizationAbout). */
 	organizationAbout: string;
 }
 
-/** Build delivery agent config from env vars, with sensible defaults. */
+/**
+ * `contactPhone` has no fallback — a missing env var becomes an empty string so
+ * `validateXML` can reject it at submission time rather than silently emitting a
+ * reserved-for-fiction number (555-123-4567) to Congressional offices.
+ */
 function getDefaultAgent(): DeliveryAgentConfig {
 	return {
 		name: process.env.CWC_DELIVERY_AGENT_NAME || 'Commons',
 		email: process.env.CWC_DELIVERY_AGENT_ACKNOWLEDGEMENT_EMAIL || process.env.CWC_DELIVERY_AGENT_ACK_EMAIL || 'noreply@commons.email',
 		contactName: process.env.CWC_DELIVERY_AGENT_CONTACT_NAME || process.env.CWC_DELIVERY_AGENT_CONTACT || 'Commons Support',
 		contactEmail: process.env.CWC_DELIVERY_AGENT_CONTACT_EMAIL || 'hello@commons.email',
-		contactPhone: process.env.CWC_DELIVERY_AGENT_CONTACT_PHONE || '555-123-4567',
+		contactPhone: process.env.CWC_DELIVERY_AGENT_CONTACT_PHONE || '',
 		organization: process.env.CWC_ORGANIZATION_NAME || 'Commons Platform',
 		organizationAbout: process.env.CWC_ORGANIZATION_ABOUT || 'Civic engagement platform'
 	};
 }
 
-/** Build Senate-specific delivery agent config. Senate uses different registered name. */
 function getSenateAgent(): DeliveryAgentConfig {
 	const base = getDefaultAgent();
 	return {
@@ -84,12 +93,6 @@ function getSenateAgent(): DeliveryAgentConfig {
 }
 
 export class CWCXmlGenerator {
-	/**
-	 * Generate proper CWC office code from representative data.
-	 * House: H{STATE}{DISTRICT} (e.g., HCA13)
-	 * Senate: SOAPBox office code (e.g., SCA03) — must come from rep.officeCode
-	 *         (sourced from Shadow Atlas cwc_code or SOAPBox active_offices endpoint)
-	 */
 	static generateOfficeCode(rep: UserRepresentative): string {
 		if (rep.chamber === 'senate') {
 			return rep.officeCode || rep.bioguideId;
@@ -99,9 +102,6 @@ export class CWCXmlGenerator {
 		return `H${state}${district}`;
 	}
 
-	/**
-	 * Generate CWC XML — routes to chamber-specific generator.
-	 */
 	static generateUserAdvocacyXML(message: CWCMessage, agent?: DeliveryAgentConfig): string {
 		if (message._targetRep.chamber === 'senate') {
 			return this.generateSenateXML(message, agent);
@@ -109,18 +109,17 @@ export class CWCXmlGenerator {
 		return this.generateHouseXML(message, agent);
 	}
 
-	/**
-	 * Generate House CWC XML (RELAX NG schema — same as Senate with additional required fields).
-	 */
 	static generateHouseXML(message: CWCMessage, agent?: DeliveryAgentConfig): string {
 		const a = agent || getDefaultAgent();
-		const { template, user, _targetRep, personalizedMessage } = message;
+		const { template, user, _targetRep, personalizedMessage, proOrCon } = message;
 		const deliveryId = this.generateDeliveryId(user.id, template.id, _targetRep.bioguideId);
 		const deliveryDate = new Date().toISOString().split('T')[0].replace(/-/g, '');
 		const [firstName, ...lastNameParts] = (user.name || 'Constituent').split(' ');
 		const lastName = lastNameParts.join(' ') || 'User';
 		const topics = this.generateLibraryOfCongressTopics(template.title || '');
-		const phone = user.phone ? this.formatPhoneNumber(user.phone) : '555-123-4567';
+		const phoneLine = this.formatPhoneLine(user.phone);
+		const prefixLine = user.prefix ? `        <Prefix>${this.escapeXML(user.prefix)}</Prefix>\n` : '';
+		const proOrConLine = proOrCon ? `        <ProOrCon>${proOrCon}</ProOrCon>\n` : '';
 
 		return `<?xml version="1.0" ?>
 <CWC>
@@ -150,15 +149,13 @@ export class CWCXmlGenerator {
         <NewsletterOptIn>N</NewsletterOptIn>
     </Recipient>
     <Constituent>
-        <Prefix>Mr.</Prefix>
-        <FirstName>${this.escapeXML(firstName)}</FirstName>
+${prefixLine}        <FirstName>${this.escapeXML(firstName)}</FirstName>
         <LastName>${this.escapeXML(lastName)}</LastName>
         <Address1>${this.escapeXML(user.address.street)}</Address1>
         <City>${this.escapeXML(user.address.city)}</City>
         <StateAbbreviation>${this.escapeXML(user.address.state)}</StateAbbreviation>
         <Zip>${this.escapeXML(user.address.zip)}</Zip>
-        <Phone>${this.escapeXML(phone)}</Phone>
-        <AddressValidation>Y</AddressValidation>
+${phoneLine}        <AddressValidation>N</AddressValidation>
         <Email>${this.escapeXML(user.email)}</Email>
         <EmailValidation>Y</EmailValidation>
     </Constituent>
@@ -167,16 +164,12 @@ export class CWCXmlGenerator {
         <LibraryOfCongressTopics>
             ${topics.map((topic) => `<LibraryOfCongressTopic>${topic}</LibraryOfCongressTopic>`).join('\n            ')}
         </LibraryOfCongressTopics>
-        <ProOrCon>Pro</ProOrCon>
-        <OrganizationStatement>${this.escapeXML(template.title || 'Constituent message')}</OrganizationStatement>
+${proOrConLine}        <OrganizationStatement>${this.escapeXML(template.title || 'Constituent message')}</OrganizationStatement>
         <ConstituentMessage>${this.escapeXML(personalizedMessage || template.message_body || '')}</ConstituentMessage>
     </Message>
 </CWC>`;
 	}
 
-	/**
-	 * Generate Senate-specific CWC XML (RELAX NG schema).
-	 */
 	static generateSenateXML(message: CWCMessage, agent?: DeliveryAgentConfig): string {
 		const a = agent || getSenateAgent();
 		const { template, user, _targetRep, personalizedMessage } = message;
@@ -185,6 +178,7 @@ export class CWCXmlGenerator {
 		const [firstName, ...lastNameParts] = (user.name || 'Constituent').split(' ');
 		const lastName = lastNameParts.join(' ') || 'User';
 		const topics = this.generateLibraryOfCongressTopics(template.title || '');
+		const prefixLine = user.prefix ? `        <Prefix>${this.escapeXML(user.prefix)}</Prefix>\n` : '';
 
 		return `<?xml version="1.0" encoding="UTF-8"?>
 <CWC>
@@ -207,8 +201,7 @@ export class CWCXmlGenerator {
         <NewsletterOptIn>N</NewsletterOptIn>
     </Recipient>
     <Constituent>
-        <Prefix>Mr.</Prefix>
-        <FirstName>${this.escapeXML(firstName)}</FirstName>
+${prefixLine}        <FirstName>${this.escapeXML(firstName)}</FirstName>
         <LastName>${this.escapeXML(lastName)}</LastName>
         <Address1>${this.escapeXML(user.address.street)}</Address1>
         <City>${this.escapeXML(user.address.city)}</City>
@@ -226,34 +219,31 @@ export class CWCXmlGenerator {
 </CWC>`;
 	}
 
-	/** Generate unique delivery ID for Senate (32-char lowercase hex, UUID sans hyphens). */
 	static generateDeliveryId(_userId: string, _templateId: string, _repBioguideId: string): string {
 		return crypto.randomUUID().replace(/-/g, '');
 	}
 
-	/** Generate unique message ID for CWC submission. */
-	static generateMessageId(userId: string, templateId: string, repBioguideId: string): string {
-		const timestamp = Date.now();
-		const hash = this.simpleHash(`${userId}-${templateId}-${repBioguideId}-${timestamp}`);
-		return `CWC-${templateId.substring(0, 6)}-${hash}`;
+	static formatPhoneLine(phone: string | undefined): string {
+		if (!phone) return '';
+		try {
+			return `        <Phone>${this.escapeXML(this.formatPhoneNumber(phone))}</Phone>\n`;
+		} catch {
+			return '';
+		}
 	}
 
-	/** Generate integrity hash for duplicate prevention. */
-	static generateIntegrityHash(userId: string, templateId: string, repBioguideId: string): string {
-		const today = new Date().toISOString().split('T')[0];
-		return this.simpleHash(`${userId}:${templateId}:${repBioguideId}:${today}`);
-	}
-
-	/** Format phone number to XXX-XXX-XXXX pattern. */
 	static formatPhoneNumber(phone: string): string {
 		const digits = phone.replace(/\D/g, '');
+		if (digits.length === 11 && digits.startsWith('1')) {
+			const rest = digits.slice(1);
+			return `${rest.slice(0, 3)}-${rest.slice(3, 6)}-${rest.slice(6)}`;
+		}
 		if (digits.length === 10) {
 			return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
 		}
-		return '555-123-4567';
+		throw new Error(`Invalid phone: expected 10 digits, got ${digits.length}`);
 	}
 
-	/** Generate Library of Congress topics from title keywords. */
 	static generateLibraryOfCongressTopics(title: string): string[] {
 		const t = title.toLowerCase();
 		const topics: string[] = [];
@@ -266,16 +256,6 @@ export class CWCXmlGenerator {
 		if (t.includes('civil rights') || t.includes('equality') || t.includes('discrimination')) topics.push('Civil Rights and Liberties, Minority Issues');
 		if (topics.length === 0) topics.push('Government Operations and Politics');
 		return topics;
-	}
-
-	static simpleHash(str: string): string {
-		let hash = 0;
-		for (let i = 0; i < str.length; i++) {
-			const char = str.charCodeAt(i);
-			hash = (hash << 5) - hash + char;
-			hash = hash & hash;
-		}
-		return Math.abs(hash).toString(36).substring(0, 8);
 	}
 
 	static escapeXML(str: string): string {
@@ -291,64 +271,25 @@ export class CWCXmlGenerator {
 		});
 	}
 
-	/** Basic XML validation — checks required CWC RELAX NG elements. */
 	static validateXML(xml: string): { valid: boolean; errors: string[] } {
 		const errors: string[] = [];
 
-		// Both House and Senate use the same RELAX NG schema
 		for (const el of ['<CWC>', '<CWCVersion>', '<DeliveryId>', '<DeliveryAgent>', '<Constituent>', '<Message>', '<MemberOffice>']) {
 			if (!xml.includes(el)) errors.push(`Missing required CWC element: ${el}`);
 		}
 
+		for (const el of ['DeliveryAgentContactPhone', 'DeliveryAgentContactEmail', 'DeliveryAgentContactName']) {
+			if (new RegExp(`<${el}>\\s*</${el}>`).test(xml)) {
+				errors.push(`Empty required CWC field: ${el} (check CWC_DELIVERY_AGENT_* env vars)`);
+			}
+		}
+
+		for (const el of ['Address1', 'City', 'StateAbbreviation', 'Zip']) {
+			if (new RegExp(`<${el}>\\s*</${el}>`).test(xml)) {
+				errors.push(`Empty constituent address field: ${el}`);
+			}
+		}
+
 		return { valid: errors.length === 0, errors };
 	}
-
-	/** Determine delivery method based on template configuration. */
-	static getDeliveryMethod(template: Template): 'cwc' | 'email' | 'hybrid' {
-		const config = template.delivery_config as Record<string, unknown>;
-		if (config?.method === 'direct_email') return 'email';
-		if (config?.method === 'cwc_only') return 'cwc';
-		if (config?.method === 'hybrid') return 'hybrid';
-		return 'cwc';
-	}
-
-	/** Generate preview XML with mock data (for testing/debugging). */
-	static generatePreviewXML(template: Template): string {
-		const mockRep = {
-			bioguideId: 'W000825',
-			name: 'Jennifer Wexton',
-			party: 'Democratic',
-			state: 'VA',
-			district: '01',
-			chamber: 'house' as const,
-			officeCode: 'HVA01'
-		};
-
-		return this.generateUserAdvocacyXML({
-			template,
-			user: {
-				id: 'preview-user',
-				name: 'Jane Doe',
-				email: 'jane.doe@example.com',
-				phone: '+1-555-123-4567',
-				address: { street: '123 Main Street', city: 'Arlington', state: 'VA', zip: '22201' },
-				representatives: {
-					house: mockRep,
-					senate: [{
-						bioguideId: 'P000145',
-						name: 'Alex Padilla',
-						party: 'Democratic',
-						state: 'CA',
-						district: '00',
-						chamber: 'senate' as const,
-						officeCode: 'SCA03'
-					}]
-				}
-			},
-			_targetRep: mockRep
-		});
-	}
 }
-
-/** @deprecated Use CWCXmlGenerator */
-export const CWCGenerator = CWCXmlGenerator;

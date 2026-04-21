@@ -26,37 +26,18 @@ You're verified constituent #248 in District 6.
 The count ticks up with spring physics. Her trust journey shows Tier 2: Established. The RelayLoom visualization draws a new edge — her node connecting to the council member's node. She is part of something.
 
 **The tenant union admin sees:**
-```
-Verification Packet — Rent Stabilization Campaign
 
-  248 verified          94.3% GDS          0.91 ALD
-  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░
+The verification packet as a live information space. The hero count ticks to 248 with spring physics. Below it, a Ratio bar shows the identity composition — deep emerald for gov-ID-verified, teal for address-verified, muted for email-only. The geographic distribution renders as a proportional density field — not "47 districts" but the shape of WHERE those 47 districts are, which are dense, which have one person. A Pulse sparkline shows the arrival rhythm: slow start, surge after the org email went out, steady taper. The admin watches these dimensions accumulate in real time. They feel the weather building.
 
-  Tier Distribution
-   0 New          104   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓
-   1 Active        89   ▓▓▓▓▓▓▓▓▓▓▓
-   2 Established   43   ▓▓▓▓▓▓
-   3 Veteran       12   ▓▓
-   4 Pillar         0
-```
-
-The admin watches the number increment. They don't know Jane sent it. They see +1 verified, +1 Established. The geographic spread updates. The coordination integrity scores recompute. The verification packet they'll send to the council member grows heavier.
+The admin doesn't know Jane sent it. They see +1 verified, the identity Ratio shift slightly deeper, the geographic field adjust, the Pulse add a tick to the current hour. The verification packet they'll ship to the council member grows heavier — not as a bigger number, but as a denser field.
 
 **The council member sees (when the report arrives):**
-```
-VERIFIED CONSTITUENT REPORT
-Rent Stabilization — District 6
 
-248 verified constituents in your district.
-12 Pillars, 43 Veterans, 89 Established, 104 Active.
-Geographic Diversity Score: 0.94
-Author Linkage Diversity: 0.91
+The same dimensions, simplified for intake. The geographic distribution shows constituent density across the council member's district — where the civic weight is concentrated. The identity depth shows that most are government-ID-verified. The arrival rhythm shows organic momentum, not a manufactured spike. The authorship ratio shows individually composed messages, not template echoes.
 
-This is not a petition. These are individually verified residents
-of your district, each proven via zero-knowledge cryptographic proof.
-```
+This is not a table of numbers. It is a navigable evidence space. A staffer can rotate between geography, time, identity, and voice to understand the signal. They don't read the weather. They see the radar.
 
-Three worlds. One action. Three different experiences of the same underlying event. This is the perceptual bridge.
+Three worlds. One action. Three different experiences of the same underlying fields. This is the perceptual bridge.
 
 ---
 
@@ -90,40 +71,15 @@ In Commons:
 
 AN's dashboard shows levers: "Send email. View opens. Export list." It's a control surface. You push buttons and things happen to your list.
 
-The Commons org dashboard shows conditions: "248 verified. GDS 0.94. Tier distribution climbing. Debate market at 62% AMEND." It's a weather station. You watch conditions accumulate. Your job is to read the weather and decide when to ship the report.
+The Commons org dashboard shows conditions as fields, not scalars. Geographic density — where the constituents are. Temporal rhythm — how the signal built over time. Identity depth — how deeply verified. Authorship texture — original voices vs echoes. It's a weather station. You watch conditions accumulate across dimensions. Your job is to read the weather and decide when to ship the report.
 
 **What this means for layout:**
 
-The dashboard's primary surface is the live verification packet. Not email metrics. Not supporter counts. The verification packet — the thing that ships to the decision-maker — dominates the screen. Everything else is secondary.
+The dashboard's primary surface is the live verification packet — a multi-dimensional information space, not a table of numbers. Geographic distribution, temporal pulse, identity composition, and engagement depth are visible as visual fields. Scalars (counts, scores) are summaries that sit ON these fields, not replacements for them. Everything else (email metrics, supporter list, embeds) is secondary.
 
-```
-┌──────────────────────────────────────────────────────┐
-│                                                       │
-│  VERIFICATION PACKET (live)                          │
-│  Rent Stabilization Campaign                         │
-│                                                       │
-│  ┌───────────┐  ┌───────────┐  ┌───────────┐        │
-│  │    248    │  │   0.94   │  │   0.91   │        │
-│  │ verified  │  │   GDS    │  │   ALD    │        │
-│  └───────────┘  └───────────┘  └───────────┘        │
-│                                                       │
-│  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░  62% of target (400)        │
-│                                                       │
-│  Tier   ▓ 0:104  ▓ 1:89  ▓ 2:43  ▓ 3:12  ▓ 4:0    │
-│                                                       │
-│  ┌──────────────────────────────────────────┐        │
-│  │  [Preview Report]   [Send to Council →]  │        │
-│  └──────────────────────────────────────────┘        │
-│                                                       │
-├──────────────────────────────────────────────────────┤
-│                                                       │
-│  SECONDARY: Email metrics, supporter list,           │
-│  action history, debate market, embeds               │
-│                                                       │
-└──────────────────────────────────────────────────────┘
-```
+The admin doesn't read "248 verified, GDS 0.94." They see the geographic density shift in real time as a new district lights up. They see the Pulse sparkline extend. They see the identity Ratio bar deepen. They see the Rings glyph fill another ring. The dimensions ARE the dashboard. The numbers are labels on the dimensions.
 
-The numbers are in JetBrains Mono. They animate with spring physics. They tick up in real-time via SSE. When the org admin opens their dashboard, the first thing that moves is the verified count — it's alive.
+When the org admin opens their dashboard, the first thing that moves is the verification packet — its dimensions coming alive via SSE. Not a number ticking. Fields filling.
 
 ### 2. Email Is an Invitation to Verified Action, Not a Broadcast
 
@@ -316,17 +272,15 @@ See [ORG-ACQUISITION-SURFACE.md](ORG-ACQUISITION-SURFACE.md) for the acquisition
 
 ---
 
-## Typography of the Bridge
+## Typography and Dimensions of the Bridge
 
-The bridge manifests typographically. The same number appears in both layers, in the same font, with the same spring physics.
+The bridge manifests in two ways: typographic continuity (same numbers, same font, same spring) and dimensional continuity (same geographic field, same temporal rhythm, same identity depth).
 
-**Person sees:** `font-mono tabular-nums text-2xl font-bold text-emerald-600` → "248"
-**Org sees:** `font-mono tabular-nums text-3xl font-bold` → "248"
-**Decision-maker sees:** `font-mono tabular-nums` → "248 verified constituents"
+**Typographic bridge:** "248" appears in JetBrains Mono across all three layers. Same spring physics. Same weight. When the org admin sees "248," they're seeing the same counter the person saw tick up. Numbers don't lie when they're all the same number.
 
-Same number. Same font. Same weight. The visual continuity IS the bridge. When the org admin sees "248" on their dashboard, they're seeing the same counter the person saw tick up. When the decision-maker reads "248 verified," they're seeing the same number the org reviewed before shipping.
+**Dimensional bridge:** The geographic distribution the person contributed to is the same field the org watches fill, is the same density pattern the decision-maker sees in the report. The temporal rhythm the person's action joined is the same Pulse the org watches extend, is the same arrival curve the decision-maker reads for organic vs manufactured signal. The identity depth the person earned (their trust tier) is the same stratigraphy the org sees in the Rings glyph, is the same credibility gradient the decision-maker evaluates.
 
-Numbers don't lie when they're all the same number.
+The bridge is not just numeric. It is dimensional. The same FIELDS — geography, time, identity, voice — appear in all three perspectives. Compressed differently for each audience, but derived from the same underlying data.
 
 ---
 
@@ -361,13 +315,15 @@ When reviewing any org-layer design, ask:
 
 1. **Does this surface show the org something their supporters proved?** If it shows something the org configured or input, question whether it belongs on the primary surface.
 
-2. **Could the person recognize their action in the org's display?** The count should be the same count. The tier should be the same tier. The geography should be the same geography.
+2. **Could the person recognize their action in the org's display?** The count should be the same count. The tier should be the same tier. The geography should be the same geography. The temporal rhythm should include their moment.
 
-3. **Does the org feel like they're watching, not managing?** The dashboard should feel like a window, not a control panel. The org's agency is in timing and targeting — not in manufacturing signal.
+3. **Does the org feel like they're watching, not managing?** The dashboard should feel like a weather station, not a control panel. The org's agency is in timing and targeting — not in manufacturing signal.
 
-4. **Is the decision-maker's view derivable from the org's view?** The report that ships should be the packet the org sees, frozen at the moment they clicked send. No transformation, no editorialization.
+4. **Is the decision-maker's view derivable from the org's view?** The report that ships should be the packet the org sees, frozen at the moment they clicked send. Same dimensions, simplified for intake. No transformation, no editorialization.
 
-5. **Does this make coordination feel heavier?** The shared design question. It applies to the org layer as much as the person layer. When the org sees 248 verified constituents with GDS 0.94, does the number land with weight? Do the tier bars feel like accumulated labor?
+5. **Does this make coordination feel heavier?** When the org sees 248 verified constituents, do they feel the geographic spread, the temporal momentum, the identity depth? Or just see a number? Gravity is dimensional — a count alone has no weight.
+
+6. **Are the dimensions expressed or compressed?** Can the admin see WHERE the constituents are, not just how many? WHEN they arrived, not just the date range? HOW DEEP the verification goes, not just a percentage? If any dimension is reduced to a scalar without an available decompression, the bridge is incomplete.
 
 If the answer to any of these is no, the bridge is broken.
 

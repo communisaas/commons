@@ -9,6 +9,7 @@
  */
 
 import type * as _authHelpers from "../_authHelpers.js";
+import type * as _cwcXml from "../_cwcXml.js";
 import type * as _orgHash from "../_orgHash.js";
 import type * as _orgKey from "../_orgKey.js";
 import type * as _orgKeyUnseal from "../_orgKeyUnseal.js";
@@ -46,6 +47,7 @@ import type * as templates from "../templates.js";
 import type * as users from "../users.js";
 import type * as v1api from "../v1api.js";
 import type * as verify from "../verify.js";
+import type * as waitlist from "../waitlist.js";
 import type * as webhooks from "../webhooks.js";
 import type * as workflows from "../workflows.js";
 
@@ -57,6 +59,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   _authHelpers: typeof _authHelpers;
+  _cwcXml: typeof _cwcXml;
   _orgHash: typeof _orgHash;
   _orgKey: typeof _orgKey;
   _orgKeyUnseal: typeof _orgKeyUnseal;
@@ -94,6 +97,7 @@ declare const fullApi: ApiFromModules<{
   users: typeof users;
   v1api: typeof v1api;
   verify: typeof verify;
+  waitlist: typeof waitlist;
   webhooks: typeof webhooks;
   workflows: typeof workflows;
 }>;

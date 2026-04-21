@@ -9,6 +9,16 @@ import {
 	type SessionCredentialForPolicy
 } from '$lib/core/identity/credential-policy';
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
+import { buildActionDomain } from '$lib/core/zkp/action-domain-builder';
+
+/**
+ * Server-held session constant. The client's submitted sessionId must match
+ * this exactly — otherwise they could forge a new `actionDomain` per-send by
+ * varying the session component (defeating per-template sybil resistance).
+ *
+ * Rotate on each Congressional session transition.
+ */
+const CURRENT_SESSION_ID = '119th-congress';
 
 /**
  * Submission Creation Endpoint
@@ -58,7 +68,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			witnessNonce,
 			ephemeralPublicKey,
 			teeKeyId,
-			idempotencyKey
+			idempotencyKey,
+			sessionId,
+			recipientSubdivision
 		} = body;
 
 		if (
@@ -72,6 +84,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			!teeKeyId
 		) {
 			throw error(400, 'Missing required fields');
+		}
+
+		// Canonical action-domain binding (closes the self-referential gap).
+		// Without this, publicInputs.actionDomain was attacker-chosen and only
+		// compared to itself downstream. Here the server enforces that the
+		// client's action domain is the deterministic hash of (constants +
+		// templateId + user-submitted context). Any free parameters the client
+		// uses (recipientSubdivision) are included in the hash so nullifiers
+		// are still per-recipient distinct, but the server rebinds sessionId
+		// to a held constant so cross-session spoofing fails.
+		if (typeof sessionId !== 'string' || sessionId !== CURRENT_SESSION_ID) {
+			throw error(400, `sessionId must be "${CURRENT_SESSION_ID}"`);
+		}
+		if (typeof recipientSubdivision !== 'string' || recipientSubdivision.length === 0) {
+			throw error(400, 'recipientSubdivision is required');
 		}
 
 		// ── S2: Structural proof validation (ZKP-INTEGRITY-TASK-GRAPH.md § S2) ──
@@ -127,6 +154,46 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Cross-check: nullifier in body must match publicInputsArray[26]
 		if (BigInt(nullifier) !== BigInt(rawInputsArray[26] as string | number | bigint)) {
 			throw error(400, 'Nullifier does not match publicInputs[26]');
+		}
+
+		// Cross-check: publicInputs.actionDomain (named field) must match the
+		// canonical array position [27]. Without this, a client could ship
+		// different values in the two places and the TEE resolver's domain-binding
+		// check becomes meaningless.
+		const namedActionDomain = (publicInputs as Record<string, unknown> | null | undefined)?.actionDomain;
+		if (typeof namedActionDomain !== 'string') {
+			throw error(400, 'publicInputs.actionDomain missing or not a string');
+		}
+		try {
+			if (BigInt(namedActionDomain) !== BigInt(rawInputsArray[27] as string | number | bigint)) {
+				throw error(400, 'publicInputs.actionDomain does not match publicInputs[27]');
+			}
+		} catch (e) {
+			if (e && typeof e === 'object' && 'status' in e) throw e;
+			throw error(400, 'publicInputs.actionDomain is not a valid field element');
+		}
+
+		// Canonical binding: server recomputes the action domain and compares
+		// to the client-submitted one. sessionId is server-held (enforced above);
+		// templateId is server-authoritative from the POST body; country + juris-
+		// dictionType are hardcoded for CWC (US federal). Only recipientSubdivision
+		// is client-chosen, which is acceptable because each distinct subdivision
+		// produces a distinct nullifier — user can message different reps, but
+		// cannot forge new domains for the same (template, subdivision) pair.
+		const canonicalActionDomain = buildActionDomain({
+			country: 'US',
+			jurisdictionType: 'federal',
+			recipientSubdivision,
+			templateId,
+			sessionId: CURRENT_SESSION_ID
+		});
+		try {
+			if (BigInt(namedActionDomain) !== BigInt(canonicalActionDomain)) {
+				throw error(400, 'publicInputs.actionDomain does not match canonical derivation');
+			}
+		} catch (e) {
+			if (e && typeof e === 'object' && 'status' in e) throw e;
+			throw error(400, 'Invalid action domain binding');
 		}
 
 		// Use Convex action — handles atomic insert, idempotency, nullifier dedup,

@@ -339,10 +339,11 @@ async function processMdocResponse(
 		const birthDateRaw = fields.get('birth_date');
 		const birthYear = extractBirthYear(birthDateRaw);
 
-		// Step 6: Resolve district + cellId from postal code + state (ZERO external API calls)
-		// Uses Shadow Atlas district index from IPFS — no Nominatim geocoding.
-		// PRIVACY BOUNDARY: After this point, raw address fields are no longer used
-		const location = await resolveDistrictFromPostalCode(postalCode, state);
+		// Step 6: Resolve district + cellId from postal code + city + state via Shadow Atlas.
+		// Uses the self-hosted Nominatim + H3 pipeline — ZIP alone is insufficient because
+		// ~94% of Americans live in multi-district states where ZIP crosses district lines.
+		// PRIVACY BOUNDARY: After this point, raw address fields are no longer used.
+		const location = await resolveLocationFromAddress(postalCode, city ?? '', state);
 
 		if (!location.district) {
 			return {
@@ -530,10 +531,10 @@ async function processOid4vpResponse(
 		const birthDateRaw = findClaim(claims, 'birth_date');
 		const birthYear = extractBirthYear(birthDateRaw);
 
-		// Resolve district + cellId from postal code + state (ZERO external API calls)
-		// Uses Shadow Atlas district index from IPFS — no Nominatim geocoding.
-		// PRIVACY BOUNDARY: After this point, raw address fields are no longer used
-		const location = await resolveDistrictFromPostalCode(postalCode, state);
+		// Resolve district + cellId from postal code + city + state via Shadow Atlas.
+		// Uses the self-hosted Nominatim + H3 pipeline for sub-state precision.
+		// PRIVACY BOUNDARY: After this point, raw address fields are no longer used.
+		const location = await resolveLocationFromAddress(postalCode, city ?? '', state);
 
 		if (!location.district) {
 			return {
@@ -912,136 +913,18 @@ function base64urlDecodeString(str: string): string {
 }
 
 /**
- * Resolve congressional district AND cell ID from postal code + state.
+ * Resolve congressional district AND cell ID from (postalCode, city, state) via Shadow Atlas.
  *
- * ZERO external API calls — no Nominatim, no geocoding service.
- * Uses the Shadow Atlas district index (IPFS) to find districts for the state,
- * then fetches a cell chunk to get the cellId.
- *
- * Pipeline:
- *   1. Convert state abbreviation → FIPS code
- *   2. Scan district index labels for GEOID prefix matching state FIPS (slot 0 = congressional)
- *   3. Return the matching district code + cellId from the chunk
- *
- * For at-large states (1 congressional district): exact match.
- * For multi-district states: returns first matching district. The mDL does not
- * provide coordinates, so sub-state precision requires a ZIP→CD lookup table
- * (future enhancement). First-match is acceptable per privacy boundary design —
- * the district is the coarsest fact that leaves the boundary.
- *
- * US-only: mDL verification is restricted to US addresses.
- */
-async function resolveDistrictFromPostalCode(
-	_postalCode: string,
-	state: string
-): Promise<{ district: string | null; cellId: string | null }> {
-	try {
-		const stateUpper = state.toUpperCase().trim();
-
-		// State abbreviation → FIPS code (matches shadow-atlas/client.ts FIPS_TO_STATE)
-		const STATE_TO_FIPS: Record<string, string> = {
-			'AL': '01', 'AK': '02', 'AZ': '04', 'AR': '05', 'CA': '06',
-			'CO': '08', 'CT': '09', 'DE': '10', 'DC': '11', 'FL': '12',
-			'GA': '13', 'HI': '15', 'ID': '16', 'IL': '17', 'IN': '18',
-			'IA': '19', 'KS': '20', 'KY': '21', 'LA': '22', 'ME': '23',
-			'MD': '24', 'MA': '25', 'MI': '26', 'MN': '27', 'MS': '28',
-			'MO': '29', 'MT': '30', 'NE': '31', 'NV': '32', 'NH': '33',
-			'NJ': '34', 'NM': '35', 'NY': '36', 'NC': '37', 'ND': '38',
-			'OH': '39', 'OK': '40', 'OR': '41', 'PA': '42', 'RI': '44',
-			'SC': '45', 'SD': '46', 'TN': '47', 'TX': '48', 'UT': '49',
-			'VT': '50', 'VA': '51', 'WA': '53', 'WV': '54', 'WI': '55',
-			'WY': '56', 'AS': '60', 'GU': '66', 'MP': '69', 'PR': '72',
-			'VI': '78',
-		};
-
-		const fips = STATE_TO_FIPS[stateUpper];
-		if (!fips) {
-			console.error(`[mDL] Unknown US state abbreviation: ${stateUpper}`);
-			return { district: null, cellId: null };
-		}
-
-		// Fetch district index from IPFS (cached, ~50-200 KB)
-		const { getDistrictIndex, getCellChunkByParent } = await import(
-			'$lib/core/shadow-atlas/ipfs-store'
-		);
-		const index = await getDistrictIndex('US');
-		if (!index) {
-			console.warn('[mDL] District index not available from IPFS — falling back to at-large');
-			return { district: `${stateUpper}-AL`, cellId: null };
-		}
-
-		// Slot 0 = congressional district. Labels: fieldElementHex → raw GEOID (e.g. "0612")
-		const congressionalSlot = index.slots['0'];
-		if (!congressionalSlot) {
-			console.warn('[mDL] No congressional slot in district index');
-			return { district: `${stateUpper}-AL`, cellId: null };
-		}
-
-		// Find all congressional districts for this state by GEOID prefix
-		const stateDistricts: { hex: string; geoid: string }[] = [];
-		for (const [hex, label] of Object.entries(index.labels)) {
-			if (label.startsWith(fips) && congressionalSlot[hex]) {
-				stateDistricts.push({ hex, geoid: label });
-			}
-		}
-
-		if (stateDistricts.length === 0) {
-			console.warn(`[mDL] No districts found for state ${stateUpper} (FIPS ${fips})`);
-			return { district: `${stateUpper}-AL`, cellId: null };
-		}
-
-		// Convert GEOID to display format (e.g. "0612" → "CA-12", "5000" → "VT-AL")
-		const geoidToDisplay = (geoid: string): string => {
-			const distNum = geoid.slice(2);
-			const district = distNum === '00' || distNum === '98' ? 'AL' : distNum;
-			return `${stateUpper}-${district}`;
-		};
-
-		// Pick the district. For at-large states (1 district), this is exact.
-		// For multi-district states, pick the first match.
-		const picked = stateDistricts[0];
-		const districtCode = geoidToDisplay(picked.geoid);
-
-		// Fetch a cell from the picked district's chunk to get the cellId
-		let cellId: string | null = null;
-		try {
-			const chunkKeys = congressionalSlot[picked.hex];
-			if (chunkKeys && chunkKeys.length > 0) {
-				const chunk = await getCellChunkByParent(chunkKeys[0], 'US');
-				if (chunk) {
-					// Find any cell with the matching district in slot 0
-					for (const [key, entry] of Object.entries(chunk.cells)) {
-						if (entry.d[0].toLowerCase() === picked.hex.toLowerCase()) {
-							cellId = key;
-							break;
-						}
-					}
-				}
-			}
-		} catch (err) {
-			// cellId lookup is non-fatal
-			console.warn('[mDL] Cell ID lookup failed:', err instanceof Error ? err.message : err);
-		}
-
-		return { district: districtCode, cellId };
-	} catch (err) {
-		console.error('[mDL] District resolution failed:', err instanceof Error ? err.message : err);
-		return { district: null, cellId: null };
-	}
-}
-
-/**
- * Resolve congressional district AND cell ID from address via Nominatim geocoding.
- *
- * Fully sovereign pipeline via Shadow Atlas:
- *   1. Nominatim geocode (city, state, zip → coordinates)
+ * Fully sovereign pipeline:
+ *   1. Self-hosted Nominatim geocode (city, state, zip → coordinates)
  *   2. H3 + IPFS district lookup (coordinates → district + cell_id)
  *
- * PRIVACY: city/state/zip sent to self-hosted Nominatim.
+ * PRIVACY: city/state/zip sent to self-hosted Nominatim (our infrastructure, not a third party).
  *
- * NOTE: The mDL verification path uses resolveDistrictFromPostalCode() instead,
- * which makes ZERO external API calls. This function is retained for other
- * code paths that may still need full address resolution (e.g. resolveCellIdFromAddress).
+ * This is the primary resolver for both mDL verification (postal_code + city + state from
+ * the credential) and manual address entry (street geocoded separately via resolveAddress).
+ * ZIP alone is insufficient — ~94% of Americans live in multi-district states where ZIP
+ * codes can span congressional boundaries.
  */
 async function resolveLocationFromAddress(
 	postalCode: string,
@@ -1060,11 +943,9 @@ async function resolveLocationFromAddress(
 		const district = result.officials?.district_code ?? result.district?.id ?? null;
 		const cellId = result.cell_id ?? null;
 
-		// Final fallback: at-large district for the state
-		if (!district) {
-			return { district: `${state.toUpperCase()}-AL`, cellId };
-		}
-
+		// No silent XX-AL fallback: returning an at-large code for users in multi-district
+		// states is the same bug that state-first-match encoded. If Shadow Atlas can't place
+		// the address, fail and let the caller prompt the user to correct their address.
 		return { district, cellId };
 	} catch (err) {
 		console.error('[mDL] Location resolution failed:', err instanceof Error ? err.message : err);

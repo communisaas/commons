@@ -1230,6 +1230,15 @@ export const getSubmissionStatus = internalQuery({
       error: submission.deliveryError
         ? "Delivery encountered an issue. Please try again or contact support."
         : null,
+      // Proof chain surface: verificationStatus is the TEE three-gate result
+      // (pending → verified|rejected), anchorStatus is the async on-chain
+      // Noir/UltraHonk verifier trail. Surfaced for the inline proof footer
+      // so users see what cryptographically supports their delivery receipt.
+      verificationStatus: submission.verificationStatus,
+      verifiedAt: submission.verifiedAt,
+      anchorStatus: submission.anchorStatus,
+      anchorTxHash: submission.anchorTxHash,
+      anchorAt: submission.anchorAt,
     };
   },
 });

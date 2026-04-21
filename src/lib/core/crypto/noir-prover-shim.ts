@@ -66,6 +66,17 @@ export interface ThreeTreeNoirProver {
 		input: ThreeTreeProofInput,
 		options?: { keccak?: boolean }
 	): Promise<ThreeTreeProofResult>;
+	/**
+	 * Verify a three-tree proof against its public inputs using the Barretenberg
+	 * backend (bb.js UltraHonk). Returns true only if the pairing check passes.
+	 *
+	 * This is the real cryptographic verifier — the same code used in tests and
+	 * in the prover's self-check. No Groth16 / no on-chain call required.
+	 */
+	verifyProof(
+		proofResult: ThreeTreeProofResult,
+		options?: { keccak?: boolean }
+	): Promise<boolean>;
 	destroy(): void;
 }
 

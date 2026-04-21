@@ -26,12 +26,6 @@ vi.mock('$lib/core/shadow-atlas/client', () => ({
 	resolveAddress: (...args: unknown[]) => mockResolveAddress(...args)
 }));
 
-// Mock IPFS store for resolveDistrictFromPostalCode (mDL verification now uses H3 direct)
-vi.mock('$lib/core/shadow-atlas/ipfs-store', () => ({
-	getDistrictIndex: vi.fn().mockResolvedValue(null),
-	getCellChunkByParent: vi.fn().mockResolvedValue(null)
-}));
-
 import { processCredentialResponse, type MdlVerificationResult } from '$lib/core/identity/mdl-verification';
 
 beforeAll(() => {
@@ -186,8 +180,7 @@ describe('mDL mdoc verification', () => {
 
 			expect(result.success).toBe(true);
 			if (result.success) {
-				// District is at-large fallback (IPFS index mocked as null)
-			expect(result.district).toBe('CA-AL');
+				expect(result.district).toBe('CA-12');
 				expect(result.state).toBe('CA');
 				expect(result.verificationMethod).toBe('mdl');
 
@@ -281,7 +274,7 @@ describe('mDL mdoc verification', () => {
 
 			expect(result.success).toBe(true);
 			if (result.success) {
-				expect(result.district).toBe('IL-AL');
+				expect(result.district).toBe('IL-07');
 			}
 		});
 

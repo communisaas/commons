@@ -5,13 +5,13 @@
  * the staffer's language at every line. No platform jargon, no
  * engagement tier labels, no coordination integrity scores.
  *
- * What it shows:
- * - Verified constituent count
- * - Identity verification method (when available)
- * - Authorship breakdown
- * - Geographic spread
- * - Date range
- * - Verification link
+ * Design principle: the same DIMENSIONS the org sees in the dashboard
+ * should be visible here — identity composition, authorship texture,
+ * geographic spread, temporal rhythm. Simplified for email intake,
+ * but dimensional, not just textual.
+ *
+ * Email client constraints: table-based layout, inline styles,
+ * no external CSS. Simple table-cell ratio bars work everywhere.
  */
 
 import type { VerificationPacket } from '$lib/types/verification-packet';
@@ -37,45 +37,129 @@ function fmtDate(iso: string): string {
 }
 
 /**
+ * Render an email-safe ratio bar using table cells.
+ * Works in all email clients (Outlook, Gmail, Apple Mail).
+ */
+function ratioBar(
+	segments: Array<{ pct: number; color: string }>,
+	height: number = 4
+): string {
+	const cells = segments
+		.filter((s) => s.pct > 0)
+		.map(
+			(s) =>
+				`<td style="width:${s.pct}%;height:${height}px;background-color:${s.color};font-size:0;line-height:0;">&nbsp;</td>`
+		)
+		.join('');
+
+	return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:2px;overflow:hidden;"><tr>${cells}</tr></table>`;
+}
+
+/**
  * Render the report email HTML.
- * Light theme, institutional tone. Table-based layout for email client compatibility.
+ * Institutional tone. Table-based layout. Dimensional evidence.
  */
 export function renderReportEmail(ctx: ReportContext): string {
 	const { campaignTitle, orgName, packet, verificationUrl } = ctx;
 	const { verified, districtCount, authorship, dateRange, identityBreakdown } = packet;
 
-	// Build evidence lines
-	const lines: string[] = [];
-
-	// Identity breakdown (Cycle 2+)
+	// ── Identity dimension ──
+	let identityHtml = '';
 	if (identityBreakdown) {
+		const total = identityBreakdown.govId + identityBreakdown.addressVerified + identityBreakdown.emailOnly;
+		if (total > 0) {
+			const parts: string[] = [];
+			if (identityBreakdown.govId > 0) parts.push(`${identityBreakdown.govId} government ID`);
+			if (identityBreakdown.addressVerified > 0) parts.push(`${identityBreakdown.addressVerified} address verified`);
+			if (identityBreakdown.emailOnly > 0) parts.push(`${identityBreakdown.emailOnly} email`);
+
+			const bar = ratioBar([
+				{ pct: Math.round((identityBreakdown.govId / total) * 100), color: '#10b981' },
+				{ pct: Math.round((identityBreakdown.addressVerified / total) * 100), color: '#3bc4b8' },
+				{ pct: Math.round((identityBreakdown.emailOnly / total) * 100), color: '#d4d4d4' }
+			]);
+
+			identityHtml = `
+          <tr>
+            <td style="padding:12px 0 4px 0;">
+              <p style="margin:0;font-size:13px;color:#525252;">${escapeHtml(parts.join(' · '))}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 0 8px 0;">${bar}</td>
+          </tr>`;
+		}
+	}
+
+	// ── Authorship dimension ──
+	let authorshipHtml = '';
+	const authorTotal = authorship.individual + authorship.shared;
+	if (authorTotal > 0) {
 		const parts: string[] = [];
-		if (identityBreakdown.govId > 0) parts.push(`${identityBreakdown.govId} government ID verified`);
-		if (identityBreakdown.addressVerified > 0) parts.push(`${identityBreakdown.addressVerified} address verified`);
-		if (parts.length > 0) lines.push(parts.join(' · '));
+		if (authorship.individual > 0) {
+			parts.push(`${authorship.individual} ${authorship.explicit ? 'individually composed' : 'distinct messages'}`);
+		}
+		if (authorship.shared > 0) {
+			parts.push(`${authorship.shared} shared ${authorship.shared === 1 ? 'statement' : 'statements'}`);
+		}
+
+		const bar = ratioBar([
+			{ pct: Math.round((authorship.individual / authorTotal) * 100), color: '#10b981' },
+			{ pct: Math.round((authorship.shared / authorTotal) * 100), color: '#d4d4d4' }
+		]);
+
+		authorshipHtml = `
+          <tr>
+            <td style="padding:4px 0 4px 0;">
+              <p style="margin:0;font-size:13px;color:#525252;">${escapeHtml(parts.join(' · '))}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 0 8px 0;">${bar}</td>
+          </tr>`;
 	}
 
-	// Authorship
-	const authorParts: string[] = [];
-	if (authorship.individual > 0) {
-		authorParts.push(`${authorship.individual} ${authorship.explicit ? 'individually composed' : 'distinct messages'}`);
-	}
-	if (authorship.shared > 0) {
-		authorParts.push(`${authorship.shared} shared ${authorship.shared === 1 ? 'statement' : 'statements'}`);
-	}
-	if (authorParts.length > 0) lines.push(authorParts.join(' · '));
+	// ── Geographic dimension ──
+	let geographyHtml = '';
+	if (packet.geography && packet.geography.length > 1) {
+		const geoTotal = packet.geography.reduce((s, d) => s + d.count, 0);
+		const topDistricts = packet.geography.slice(0, 8); // Show top 8
 
-	// Date range
+		const bar = ratioBar(
+			topDistricts.map((d, i) => ({
+				pct: Math.round((d.count / geoTotal) * 100),
+				color: i === 0 ? '#3bc4b8' : `rgba(59,196,184,${Math.max(0.25, 0.8 - i * 0.08)})`
+			}))
+		);
+
+		geographyHtml = `
+          <tr>
+            <td style="padding:4px 0 4px 0;">
+              <p style="margin:0;font-size:13px;color:#525252;">${districtCount} ${districtCount === 1 ? 'community' : 'communities'} represented</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 0 8px 0;">${bar}</td>
+          </tr>`;
+	} else {
+		geographyHtml = `
+          <tr>
+            <td style="padding:4px 0 8px 0;">
+              <p style="margin:0;font-size:13px;color:#525252;">${districtCount} ${districtCount === 1 ? 'community' : 'communities'} represented</p>
+            </td>
+          </tr>`;
+	}
+
+	// ── Temporal dimension ──
+	let temporalHtml = '';
 	if (dateRange.spanDays > 0) {
-		lines.push(`Submissions ${fmtDate(dateRange.earliest)} – ${fmtDate(dateRange.latest)}`);
+		temporalHtml = `
+          <tr>
+            <td style="padding:4px 0 8px 0;">
+              <p style="margin:0;font-size:13px;color:#525252;">Submissions ${escapeHtml(fmtDate(dateRange.earliest))} – ${escapeHtml(fmtDate(dateRange.latest))}</p>
+            </td>
+          </tr>`;
 	}
-
-	// Dedup
-	lines.push('One submission per person · duplicates removed');
-
-	const evidenceHtml = lines
-		.map((line) => `<tr><td style="padding:3px 0;font-size:13px;color:#525252;">${escapeHtml(line)}</td></tr>`)
-		.join('\n');
 
 	return `<!DOCTYPE html>
 <html lang="en">
@@ -127,11 +211,19 @@ export function renderReportEmail(ctx: ReportContext): string {
             </td>
           </tr>
 
-          <!-- Evidence Lines -->
+          <!-- Dimensional Evidence -->
           <tr>
             <td style="padding:20px 0 0 0;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                ${evidenceHtml}
+                ${identityHtml}
+                ${authorshipHtml}
+                ${geographyHtml}
+                ${temporalHtml}
+                <tr>
+                  <td style="padding:4px 0;">
+                    <p style="margin:0;font-size:13px;color:#737373;">One submission per person · duplicates removed</p>
+                  </td>
+                </tr>
               </table>
             </td>
           </tr>

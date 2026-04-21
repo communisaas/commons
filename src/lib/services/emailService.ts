@@ -159,16 +159,17 @@ export function analyzeEmailFlow(
 			// Congressional templates use congress@commons.email relay.
 		}
 
-		// Enforce address gating for authenticated users on congressional delivery
-		// Tier 2+ users are already district-verified — skip address collection
-		// Guests bypass address gate entirely — they use the mailto relay
+		// Enforce address gating for authenticated users on congressional delivery.
+		// CWC requires a complete street address in every constituent submission — tier
+		// (district verification) is orthogonal: identity tier gates who can send, the
+		// plaintext street is what the House/Senate mail systems demand. No bypass.
+		// Guests bypass the gate — they use the mailto relay with no CWC XML stamp.
 		const trustTier = options?.trustTier ?? 0;
-		const isDistrictVerified = trustTier >= 2;
 		const hasCompleteAddress = user
 			? Boolean(user.street && user.city && user.state && user.zip)
 			: false;
 
-		if (user && isCongressional && !hasCompleteAddress && !isDistrictVerified) {
+		if (user && isCongressional && !hasCompleteAddress) {
 			return {
 				requiresAuth: false,
 				requiresAddress: true,
@@ -203,6 +204,7 @@ export function analyzeEmailFlow(
 		}
 
 		// Tier 2+ on congressional templates get attested delivery method
+		const isDistrictVerified = trustTier >= 2;
 		const deliveryMethod = (isCongressional && isDistrictVerified)
 			? 'email_attested' as const
 			: 'mailto' as const;

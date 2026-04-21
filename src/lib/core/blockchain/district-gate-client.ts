@@ -286,11 +286,51 @@ export interface VerifyParams {
 	deadline?: number;
 }
 
+/**
+ * Classification of a verify attempt's outcome. Callers (anchor endpoint,
+ * divergence classifier) key off `kind` rather than parsing `error` strings.
+ *
+ * - success               : contract verified the proof; txHash set
+ * - contract_invalid_proof: verifier rejected the proof — TEE/chain disagreement
+ *                           (P0 divergent alert material)
+ * - contract_other_revert : contract reverted for another reason (nullifier reuse,
+ *                           action domain not whitelisted, etc.) — NOT divergence
+ * - rpc_transient         : network, timeout, gas, nonce — retry
+ * - relayer_config        : missing env vars, no wallet, circuit-breaker open —
+ *                           operational issue, not an integrity event
+ */
+export type VerifyResultKind =
+	| 'success'
+	| 'contract_invalid_proof'
+	| 'contract_other_revert'
+	| 'rpc_transient'
+	| 'relayer_config';
+
 export interface VerifyResult {
 	success: boolean;
+	kind: VerifyResultKind;
 	txHash?: string;
 	error?: string;
 }
+
+/**
+ * Contract-level revert signals that indicate the verifier mathematically
+ * rejected the proof. Sourced from UltraVerifier (bb.js-generated Solidity
+ * verifier) and DistrictGate custom errors. Everything else that reverts
+ * (nullifier used, action domain not allowed, depth mismatch) is NOT a
+ * divergence — it's a semantic rejection of a valid proof.
+ */
+const CONTRACT_INVALID_PROOF_SIGNALS = [
+	'invalid proof',
+	'invalidproof',
+	'proof verification failed',
+	'proofverificationfailed',
+	'pairing check',
+	'pairingcheckfailed',
+	'ecpairing',
+	'sumcheck',
+	'public input'
+];
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SINGLETON PROVIDER + CONTRACT
@@ -355,6 +395,7 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 	if (isCircuitOpen()) {
 		return {
 			success: false,
+			kind: 'rpc_transient',
 			error: 'Circuit breaker OPEN: RPC failures exceeded threshold. Retry after cooldown.'
 		};
 	}
@@ -366,6 +407,7 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 	if (params.publicInputs.length !== THREE_TREE_PUBLIC_INPUT_COUNT) {
 		return {
 			success: false,
+			kind: 'relayer_config',
 			error: `Expected ${THREE_TREE_PUBLIC_INPUT_COUNT} public inputs, got ${params.publicInputs.length}`
 		};
 	}
@@ -373,16 +415,17 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 	// Validate proof is non-empty valid hex
 	const proofRaw = params.proof.startsWith('0x') ? params.proof.slice(2) : params.proof;
 	if (!proofRaw || proofRaw.length === 0) {
-		return { success: false, error: 'Proof is empty' };
+		return { success: false, kind: 'relayer_config', error: 'Proof is empty' };
 	}
 	if (!/^[0-9a-fA-F]+$/.test(proofRaw)) {
-		return { success: false, error: 'Proof contains invalid hex characters' };
+		return { success: false, kind: 'relayer_config', error: 'Proof contains invalid hex characters' };
 	}
 
 	// Validate verifier depth is one of the supported circuit sizes
 	if (!(VALID_VERIFIER_DEPTHS as readonly number[]).includes(params.verifierDepth)) {
 		return {
 			success: false,
+			kind: 'relayer_config',
 			error: `Invalid verifierDepth ${params.verifierDepth}. Must be one of: ${VALID_VERIFIER_DEPTHS.join(', ')}`
 		};
 	}
@@ -487,7 +530,7 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		console.error('[DistrictGateClient] EIP-712 signing failed:', msg);
-		return { success: false, error: `EIP-712 signing failed: ${msg}` };
+		return { success: false, kind: 'relayer_config', error: `EIP-712 signing failed: ${msg}` };
 	}
 
 	// ───────────────────────────────────────────────────────────────────────
@@ -528,7 +571,7 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 			gasUsed: receipt.gasUsed.toString()
 		});
 
-		return { success: true, txHash: receipt.hash };
+		return { success: true, kind: 'success', txHash: receipt.hash };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 
@@ -557,7 +600,20 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 			isRpcError
 		});
 
-		return { success: false, error: `Transaction failed: ${revertReason}` };
+		// Classify the outcome for callers. RPC errors are transient; contract
+		// reverts matching verifier-invalid-proof signals are P0 divergence;
+		// everything else is a non-divergent contract rejection (nullifier used,
+		// action domain not allowed, etc.).
+		let kind: VerifyResultKind;
+		if (isRpcError) {
+			kind = 'rpc_transient';
+		} else {
+			const reasonLower = revertReason.toLowerCase();
+			const isInvalidProof = CONTRACT_INVALID_PROOF_SIGNALS.some((s) => reasonLower.includes(s));
+			kind = isInvalidProof ? 'contract_invalid_proof' : 'contract_other_revert';
+		}
+
+		return { success: false, kind, error: `Transaction failed: ${revertReason}` };
 	}
 }
 

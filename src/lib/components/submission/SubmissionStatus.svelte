@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { CheckCircle2, Send, AlertCircle, ExternalLink, RotateCcw } from '@lucide/svelte';
+	import { CheckCircle2, Send, AlertCircle, ExternalLink, RotateCcw, FlaskConical } from '@lucide/svelte';
 	import { onMount, onDestroy, untrack } from 'svelte';
 	import { z } from 'zod';
 
@@ -10,7 +10,7 @@
 		onDelivered
 	}: {
 		submissionId: string;
-		initialStatus?: 'sending' | 'delivered' | 'failed';
+		initialStatus?: 'sending' | 'delivered' | 'demo' | 'failed';
 		onOverride?: () => void;
 		onDelivered?: () => void;
 	} = $props();
@@ -21,12 +21,22 @@
 	let canOverride = $state(true);
 	let retrying = $state(false);
 
+	// Proof chain state — surfaced in the inline proof footer
+	let verificationStatus = $state<'pending' | 'verified' | 'rejected' | null>(null);
+	let anchorStatus = $state<'pending' | 'anchored' | 'failed' | 'divergent' | 'poisoned' | null>(null);
+	let anchorTxHash = $state<string | null>(null);
+
 	// Zod schema for the submission status API response
 	const StatusResponseSchema = z.object({
-		status: z.enum(['pending', 'processing', 'delivered', 'partial', 'failed']),
+		status: z.enum(['pending', 'processing', 'delivered', 'partial', 'failed', 'demo']),
 		deliveryCount: z.number(),
-		deliveredAt: z.string().nullable(),
-		error: z.string().nullable()
+		deliveredAt: z.union([z.string(), z.number()]).nullable(),
+		error: z.string().nullable(),
+		verificationStatus: z.enum(['pending', 'verified', 'rejected']).nullish(),
+		verifiedAt: z.union([z.string(), z.number()]).nullish(),
+		anchorStatus: z.enum(['pending', 'anchored', 'failed', 'divergent', 'poisoned']).nullish(),
+		anchorTxHash: z.string().nullish(),
+		anchorAt: z.union([z.string(), z.number()]).nullish()
 	});
 
 	// Poll interval handle
@@ -44,7 +54,7 @@
 	 * - delivered/partial  -> 'delivered'
 	 * - failed             -> 'failed'
 	 */
-	function mapBackendStatus(backendStatus: string): 'sending' | 'delivered' | 'failed' {
+	function mapBackendStatus(backendStatus: string): 'sending' | 'delivered' | 'demo' | 'failed' {
 		switch (backendStatus) {
 			case 'pending':
 			case 'processing':
@@ -52,6 +62,8 @@
 			case 'delivered':
 			case 'partial':
 				return 'delivered';
+			case 'demo':
+				return 'demo';
 			case 'failed':
 				return 'failed';
 			default:
@@ -60,7 +72,12 @@
 	}
 
 	function isTerminalStatus(backendStatus: string): boolean {
-		return backendStatus === 'delivered' || backendStatus === 'partial' || backendStatus === 'failed';
+		return (
+			backendStatus === 'delivered' ||
+			backendStatus === 'partial' ||
+			backendStatus === 'demo' ||
+			backendStatus === 'failed'
+		);
 	}
 
 	async function pollStatus() {
@@ -99,6 +116,9 @@
 			// Update UI state
 			status = mapBackendStatus(data.status);
 			deliveryCount = data.deliveryCount;
+			verificationStatus = data.verificationStatus ?? null;
+			anchorStatus = data.anchorStatus ?? null;
+			anchorTxHash = data.anchorTxHash ?? null;
 
 			if (data.error) {
 				details = data.error;
@@ -187,6 +207,12 @@
 			description: 'Message received by congressional offices',
 			color: 'green'
 		},
+		demo: {
+			icon: FlaskConical,
+			text: 'Demo send — no delivery',
+			description: 'CWC transport is not configured on this deploy. Your message was validated but NOT sent to any congressional office.',
+			color: 'amber'
+		},
 		failed: {
 			icon: AlertCircle,
 			text: 'Delivery failed',
@@ -196,6 +222,45 @@
 	});
 
 	const config = $derived(statusConfig[status]);
+
+	// Inline proof footer — tiered evidence legibility for staffers and users.
+	// Each line shows one factual claim that the system cryptographically backs.
+	const proofLines = $derived.by(() => {
+		const lines: { label: string; value: string; tone: 'verified' | 'pending' | 'warn' | 'muted' }[] = [];
+
+		// Demo state: proof WAS verified by the TEE (three gates ran), but no
+		// CWC transport is configured so the message was NOT sent to Congress.
+		// Surface both facts honestly — overclaiming "no proof" would be as bad
+		// as overclaiming "delivered".
+		if (status === 'demo') {
+			lines.push({ label: 'Proof', value: 'verified locally · demo mode', tone: 'verified' });
+			lines.push({ label: 'Delivery', value: 'skipped · CWC transport not configured', tone: 'warn' });
+			return lines;
+		}
+
+		// Proof verification (TEE three-gate: decrypt + Noir/UltraHonk verify + cell reconcile)
+		if (verificationStatus === 'verified') {
+			lines.push({ label: 'Proof', value: 'verified · residency bound to delivery address', tone: 'verified' });
+		} else if (verificationStatus === 'rejected') {
+			lines.push({ label: 'Proof', value: 'rejected · submission not cryptographically valid', tone: 'warn' });
+		} else if (status === 'sending') {
+			lines.push({ label: 'Proof', value: 'verifying…', tone: 'pending' });
+		}
+
+		// On-chain anchor — DistrictGate independently verifies the proof.
+		if (anchorStatus === 'anchored') {
+			const short = anchorTxHash ? `${anchorTxHash.slice(0, 10)}…${anchorTxHash.slice(-8)}` : 'anchored';
+			lines.push({ label: 'On-chain', value: short, tone: 'verified' });
+		} else if (anchorStatus === 'divergent') {
+			lines.push({ label: 'On-chain', value: 'under review · chain disagreement', tone: 'warn' });
+		} else if (anchorStatus === 'poisoned') {
+			lines.push({ label: 'On-chain', value: 'anchor unavailable · retry exhausted', tone: 'warn' });
+		} else if (verificationStatus === 'verified' && (anchorStatus === 'pending' || anchorStatus === 'failed' || !anchorStatus)) {
+			lines.push({ label: 'On-chain', value: 'anchoring…', tone: 'pending' });
+		}
+
+		return lines;
+	});
 </script>
 
 <div class="rounded-lg border border-slate-200 bg-white p-4">
@@ -208,7 +273,9 @@
 						? 'text-participation-primary-600'
 						: config.color === 'green'
 							? 'text-green-600'
-							: 'text-red-600'} {status === 'sending' ? 'animate-pulse' : ''}"
+							: config.color === 'amber'
+								? 'text-amber-600'
+								: 'text-red-600'} {status === 'sending' ? 'animate-pulse' : ''}"
 				/>
 			{/if}
 
@@ -258,6 +325,27 @@
 					Send as-is
 				</button>
 			{/if}
+		</div>
+	{/if}
+
+	{#if proofLines.length > 0}
+		<div class="mt-3 border-t border-slate-100 pt-2">
+			<dl class="space-y-0.5 text-xs">
+				{#each proofLines as line (line.label)}
+					<div class="flex gap-2">
+						<dt class="w-16 shrink-0 font-medium text-slate-500">{line.label}</dt>
+						<dd
+							class="font-mono text-[11px]
+							{line.tone === 'verified' ? 'text-emerald-700' : ''}
+							{line.tone === 'pending' ? 'text-slate-500' : ''}
+							{line.tone === 'warn' ? 'text-amber-700' : ''}
+							{line.tone === 'muted' ? 'text-slate-400' : ''}"
+						>
+							{line.value}
+						</dd>
+					</div>
+				{/each}
+			</dl>
 		</div>
 	{/if}
 </div>

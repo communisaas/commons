@@ -267,7 +267,12 @@
 					encryptedWitness: encryptedWitness.ciphertext,
 					witnessNonce: encryptedWitness.nonce,
 					ephemeralPublicKey: encryptedWitness.ephemeralPublicKey,
-					teeKeyId: encryptedWitness.teeKeyId
+					teeKeyId: encryptedWitness.teeKeyId,
+					// Ingress canonically re-derives actionDomain from these + templateId
+					// + server-held session constant, then compares to publicInputs.actionDomain.
+					// Without this, the client's action domain was self-attesting.
+					sessionId,
+					recipientSubdivision
 				})
 			});
 

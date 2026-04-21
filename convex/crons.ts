@@ -163,4 +163,29 @@ crons.interval(
   internal.blastCleanup.cleanupStaleSealedKeys,
 );
 
+// ---------------------------------------------------------------------------
+// 14. Sweep Stuck Processing Submissions — recover from crashed delivery workers
+//     A worker that claimed a submission (deliveryStatus='processing') but died
+//     mid-flight leaves the submission unrecoverable — claimForDelivery refuses
+//     to re-claim a processing row. Every 2 minutes, revert rows that have been
+//     stuck in 'processing' for >5 minutes back to 'failed' so the next claim
+//     can retry.
+// ---------------------------------------------------------------------------
+crons.interval(
+  "sweep-stuck-processing",
+  { minutes: 2 },
+  internal.submissions.sweepStuckProcessing,
+);
+
+// ---------------------------------------------------------------------------
+// 15. Retry Failed Anchors — re-schedule on-chain anchors that hit transient RPC
+//     failures. Does NOT re-try 'divergent' (P0 forensic state) or 'anchored'.
+//     Every 5 minutes, pick submissions with anchorStatus='failed' and retry.
+// ---------------------------------------------------------------------------
+crons.interval(
+  "retry-failed-anchors",
+  { minutes: 5 },
+  internal.submissions.retryFailedAnchors,
+);
+
 export default crons;

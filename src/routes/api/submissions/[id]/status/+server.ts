@@ -38,6 +38,11 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 		status: result.status,
 		deliveryCount: result.deliveryCount,
 		deliveredAt: result.deliveredAt,
-		error: result.error
+		error: result.error,
+		verificationStatus: result.verificationStatus,
+		verifiedAt: result.verifiedAt,
+		anchorStatus: result.anchorStatus,
+		anchorTxHash: result.anchorTxHash,
+		anchorAt: result.anchorAt
 	});
 };
