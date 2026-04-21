@@ -156,6 +156,29 @@ async function backupDatabase() {
 
 	const pgUrl = sanitizeForPgDump(dbUrl);
 
+	// Shape diagnostics — value stays secret; only structure is logged.
+	// Byte codes of the first 16 chars reveal BOMs, unicode, or odd prefixes
+	// without exposing secret content. Printable ASCII passes through as-is;
+	// anything else is reported as a hex code point.
+	const firstBytes = [...pgUrl.slice(0, 16)]
+		.map((c) => {
+			const cp = c.codePointAt(0) ?? 0;
+			return cp >= 0x20 && cp < 0x7f ? c : `<U+${cp.toString(16).padStart(4, '0')}>`;
+		})
+		.join('');
+	const shape = {
+		rawLen: dbUrl.length,
+		cleanLen: pgUrl.length,
+		leadingWhitespace: dbUrl !== dbUrl.trimStart(),
+		trailingWhitespace: dbUrl !== dbUrl.trimEnd(),
+		schemeMatch: /^[a-z][a-z0-9+.-]*:\/\//i.exec(pgUrl)?.[0] ?? '(no scheme)',
+		keywordValue: /^\s*[a-z_]+\s*=/i.test(pgUrl),
+		hasQuery: pgUrl.includes('?'),
+		firstChar: pgUrl.length > 0 ? `${pgUrl[0]}=U+${pgUrl.codePointAt(0)!.toString(16)}` : '(empty)',
+		first16: firstBytes,
+	};
+	console.log('[backup] DATABASE_URL shape:', JSON.stringify(shape));
+
 	// pg_dump → gzip → openssl → file
 	//
 	// Spawn each process directly (no shell) so the connection string — which
