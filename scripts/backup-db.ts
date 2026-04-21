@@ -19,6 +19,43 @@ import { execSync } from 'child_process';
 import { readFileSync, unlinkSync } from 'fs';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
+/**
+ * Strip Prisma/PgBouncer-specific query params from a connection string.
+ * pg_dump uses libpq, which rejects any URI query parameter it doesn't
+ * recognize ("invalid URI query parameter"). Prisma connection strings
+ * commonly carry `schema`, `pgbouncer`, `connection_limit`, `pool_timeout`,
+ * `statement_cache_size`, etc. — none of which are libpq options.
+ *
+ * Allowlist below matches the libpq connection-string keys documented at
+ * https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS.
+ * Anything outside the allowlist is dropped. Credentials, host, port,
+ * dbname, and standard TLS options pass through unchanged.
+ */
+function sanitizeForPgDump(rawUrl: string): string {
+	const u = new URL(rawUrl);
+	const libpqAllowlist = new Set([
+		'host', 'hostaddr', 'port', 'dbname', 'user', 'password',
+		'connect_timeout', 'client_encoding', 'options', 'application_name',
+		'fallback_application_name', 'keepalives', 'keepalives_idle',
+		'keepalives_interval', 'keepalives_count', 'tcp_user_timeout',
+		'replication', 'gssencmode', 'sslmode', 'requiressl', 'sslcompression',
+		'sslcert', 'sslkey', 'sslpassword', 'sslrootcert', 'sslcrl',
+		'requirepeer', 'krbsrvname', 'gsslib', 'service', 'target_session_attrs',
+		'load_balance_hosts', 'channel_binding', 'passfile',
+	]);
+	const stripped: string[] = [];
+	for (const key of [...u.searchParams.keys()]) {
+		if (!libpqAllowlist.has(key)) {
+			stripped.push(key);
+			u.searchParams.delete(key);
+		}
+	}
+	if (stripped.length > 0) {
+		console.log(`[backup] Stripped non-libpq params from DATABASE_URL: ${stripped.join(', ')}`);
+	}
+	return u.toString();
+}
+
 async function backupDatabase() {
 	const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 	const filename = `commons-backup-${timestamp}.dump.gz.enc`;
@@ -34,9 +71,11 @@ async function backupDatabase() {
 
 	console.log('[backup] Starting database backup...');
 
+	const pgUrl = sanitizeForPgDump(dbUrl);
+
 	// pg_dump → gzip → encrypt → file
 	execSync(
-		`pg_dump --format=custom "${dbUrl}" | gzip | openssl enc -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -out "${tmpPath}"`,
+		`pg_dump --format=custom "${pgUrl}" | gzip | openssl enc -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -out "${tmpPath}"`,
 		{ stdio: 'inherit' }
 	);
 
