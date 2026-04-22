@@ -128,28 +128,19 @@
 					onCellHover={handleCellHover}
 				/>
 			</div>
-			<p class="vp__geo-meta">
-				<Datum value={p.cells.length} /> cells &middot; diversity <Datum value={p.gds} decimals={2} />
-			</p>
-			{#if hoveredCell}
-				<div class="vp__hover-detail">
-					{#if hoveredCell.identity}
-						<span>
-							<Datum value={hoveredCell.identity.govId} class="vp__hover-num" /> gov ID
-							{#if hoveredCell.identity.address > 0}<span class="vp__hover-sep">&middot;</span><Datum value={hoveredCell.identity.address} class="vp__hover-num" /> address{/if}
+			<div class="vp__geo-footer">
+				<p class="vp__geo-meta">
+					<Datum value={p.cells.length} /> cells &middot; diversity <Datum value={p.gds} decimals={2} />
+					{#if hoveredCell}
+						<span class="vp__hover-inline">
+							&middot; <Datum value={hoveredCell.count} class="vp__hover-num" /> here
+							{#if hoveredCell.identity}
+								&middot; <Datum value={hoveredCell.identity.govId} class="vp__hover-num" /> gov ID
+							{/if}
 						</span>
 					{/if}
-					{#if hoveredCell.authorship}
-						<span>
-							<Datum value={hoveredCell.authorship.individual} class="vp__hover-num" /> composed
-							{#if hoveredCell.authorship.shared > 0}<span class="vp__hover-sep">&middot;</span><Datum value={hoveredCell.authorship.shared} class="vp__hover-num" /> shared{/if}
-						</span>
-					{/if}
-					{#if hoveredCell.temporalBins}
-						<Pulse values={hoveredCell.temporalBins} width={80} height={14} color="var(--coord-verified, #10b981)" />
-					{/if}
-				</div>
-			{/if}
+				</p>
+			</div>
 
 			<div class="vp__divider"></div>
 		{:else if p.geography && p.geography.length > 1}
@@ -332,28 +323,21 @@
 	}
 	@media (min-width: 640px) { .vp__map-container { height: 200px; margin: 0.25rem 2rem; } }
 
+	.vp__geo-footer {
+		padding: 0.25rem 1.25rem 0;
+	}
+	@media (min-width: 640px) { .vp__geo-footer { padding-left: 2rem; padding-right: 2rem; } }
+
 	.vp__geo-meta {
 		font-size: 0.625rem;
 		color: oklch(0.5 0.01 250);
-		padding: 0.25rem 1.25rem 0;
 		margin: 0;
 	}
-	@media (min-width: 640px) { .vp__geo-meta { padding-left: 2rem; padding-right: 2rem; font-size: 0.6875rem; } }
+	@media (min-width: 640px) { .vp__geo-meta { font-size: 0.6875rem; } }
 
-	/* Hover cross-filter detail */
-	.vp__hover-detail {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.5rem 1rem;
-		padding: 0.25rem 1.25rem 0;
-		font-size: 0.625rem;
-		color: oklch(0.5 0.01 250);
-	}
-	@media (min-width: 640px) { .vp__hover-detail { padding-left: 2rem; } }
-
+	/* Hover detail appended inline — no layout shift */
+	:global(.vp__hover-inline) { opacity: 0.9; }
 	:global(.vp__hover-num) { font-weight: 700; color: oklch(0.3 0.02 250); }
-	.vp__hover-sep { margin: 0 0.125rem; opacity: 0.4; }
 
 	/* Temporal arrival */
 	.vp__temporal {
