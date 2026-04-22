@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { Datum } from '$lib/design';
 	import VerificationPacketComponent from '$lib/components/org/VerificationPacket.svelte';
+	import ProofClaim from '$lib/components/crypto/ProofClaim.svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -452,6 +453,46 @@
 			</section>
 
 			<!-- ═══════════════════════════════════════════
+			     BEAT 3½ — THE PROOF (how each row is signed)
+			     Three cryptographic claims. Private vs public.
+			     Bridges the specimen to the protocol.
+			     ═══════════════════════════════════════════ -->
+			<section class="beat beat--proof" aria-labelledby="proof-heading">
+				<h2 id="proof-heading" class="beat__heading">What the packet actually proves.</h2>
+				<p class="beat__subheading">
+					Every verified row is three independent cryptographic claims. What the sender keeps private stays private. What the decision-maker can verify is recorded publicly.
+				</p>
+
+				<div class="proof-claims">
+					<ProofClaim
+						type="identity"
+						claim="I'm a real person."
+						subhead="The sender proved a verified identity &mdash; without revealing which identity."
+						privateParts={['ID document', 'real name', 'user secret']}
+						publicParts={['identity commitment in the registry']}
+					/>
+					<ProofClaim
+						type="location"
+						claim="I live in this district."
+						subhead="The sender proved residency &mdash; without revealing an exact address."
+						privateParts={['street address', 'exact H3 cell']}
+						publicParts={['district assignment proof']}
+					/>
+					<ProofClaim
+						type="uniqueness"
+						claim="This is my one action on this campaign."
+						subhead="The sender&apos;s past actions stay unlinked &mdash; but the same person can&apos;t sign twice."
+						privateParts={['action history', 'engagement tier inputs']}
+						publicParts={['one-time action receipt']}
+					/>
+				</div>
+
+				<p class="proof-footnote">
+					<a href="/spec" class="proof-link">See the full protocol &rarr;</a>
+				</p>
+			</section>
+
+			<!-- ═══════════════════════════════════════════
 			     BEAT 3b — THE PLATFORM (full stack, not a bolt-on)
 			     ═══════════════════════════════════════════ -->
 			<section class="beat beat--platform" aria-labelledby="platform-heading">
@@ -797,7 +838,32 @@
 	.beat--problem { margin-bottom: 2rem; }
 	.beat--evidence { margin-bottom: 2.75rem; max-width: 54rem; }
 	.beat--mechanism { margin-bottom: 2.5rem; max-width: 54rem; }
+	.beat--proof { margin-bottom: 2.75rem; max-width: 54rem; }
 	.beat--platform { margin-bottom: 2.5rem; max-width: 54rem; }
+
+	.proof-claims {
+		display: flex;
+		flex-direction: column;
+		gap: 1.75rem;
+		margin-top: 0.5rem;
+	}
+
+	.proof-footnote {
+		margin: 1.5rem 0 0;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.875rem;
+	}
+
+	.proof-link {
+		color: oklch(0.38 0.1 175);
+		text-decoration: none;
+		border-bottom: 1px solid oklch(0.82 0.06 180 / 0.5);
+		transition: color 150ms ease-out, border-bottom-color 150ms ease-out;
+	}
+	.proof-link:hover {
+		color: oklch(0.32 0.11 175);
+		border-bottom-color: oklch(0.45 0.1 180);
+	}
 	.beat--reach { margin-bottom: 2.5rem; }
 	.beat--window { margin-bottom: 4.25rem; }
 	.beat--price { margin-bottom: 1.5rem; max-width: 54rem; } /* legacy — kept for specificity */

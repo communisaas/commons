@@ -171,10 +171,37 @@
 			{@render actions()}
 		{/if}
 
-		<!-- Seal -->
-		<div class="vp__seal">
-			<span class="vp__seal-text">Cryptographic audit trail &middot; independently verifiable</span>
-		</div>
+		<!-- Seal — click to drill into cryptographic audit trail -->
+		<details class="vp__seal-details">
+			<summary class="vp__seal">
+				<span class="vp__seal-text">Cryptographic audit trail &middot; independently verifiable</span>
+				<span class="vp__seal-chevron" aria-hidden="true">›</span>
+			</summary>
+			<div class="vp__seal-drawer">
+				<dl class="vp__seal-hashes">
+					<div class="vp__seal-hash-row">
+						<dt>identity registry</dt>
+						<dd><code>user_root</code> &mdash; commitment to every verified person</dd>
+					</div>
+					<div class="vp__seal-hash-row">
+						<dt>district registry</dt>
+						<dd><code>cell_map_root</code> &mdash; commitment to H3-cell → district assignments</dd>
+					</div>
+					<div class="vp__seal-hash-row">
+						<dt>action anchor</dt>
+						<dd><code>engagement_root</code> &mdash; commitment to per-person action history</dd>
+					</div>
+					<div class="vp__seal-hash-row">
+						<dt>one-time receipts</dt>
+						<dd><Datum value={p.verified} /> &mdash; one per verified action, prevents double-spend (<code>nullifier</code>)</dd>
+					</div>
+				</dl>
+				<p class="vp__seal-footnote">
+					Every row in this packet carries a zero-knowledge proof. A decision-maker can verify the proofs without learning who signed.
+					<a href="/spec" class="vp__seal-link">Inspect the full protocol &rarr;</a>
+				</p>
+			</div>
+		</details>
 	{/if}
 </div>
 
@@ -359,13 +386,24 @@
 		.vp__temporal-detail { font-size: 0.625rem; }
 	}
 
-	/* Seal */
-	.vp__seal {
+	/* Seal — interactive drawer */
+	.vp__seal-details {
 		margin-top: 1rem;
-		padding: 0.75rem 1.25rem;
 		border-top: 1px solid oklch(0.88 0.01 165 / 0.4);
 		background: oklch(0.97 0.008 165 / 0.35);
 	}
+
+	.vp__seal {
+		list-style: none;
+		padding: 0.75rem 1.25rem;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		transition: background 150ms ease-out;
+	}
+	.vp__seal::-webkit-details-marker { display: none; }
+	.vp__seal:hover { background: oklch(0.96 0.012 165 / 0.45); }
 	@media (min-width: 640px) { .vp__seal { padding: 0.875rem 2rem; } }
 
 	.vp__seal-text {
@@ -376,4 +414,75 @@
 		color: oklch(0.4 0.05 165);
 	}
 	@media (min-width: 640px) { .vp__seal-text { font-size: 0.75rem; } }
+
+	.vp__seal-chevron {
+		font-family: 'JetBrains Mono', monospace;
+		color: oklch(0.5 0.06 165);
+		transition: transform 200ms ease-out;
+		font-size: 1rem;
+		line-height: 1;
+	}
+	.vp__seal-details[open] .vp__seal-chevron { transform: rotate(90deg); }
+
+	.vp__seal-drawer {
+		padding: 0.25rem 1.25rem 1rem;
+		border-top: 1px solid oklch(0.9 0.012 165 / 0.4);
+	}
+	@media (min-width: 640px) { .vp__seal-drawer { padding: 0.25rem 2rem 1.25rem; } }
+
+	.vp__seal-hashes {
+		margin: 0.75rem 0 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.vp__seal-hash-row {
+		display: grid;
+		grid-template-columns: 8rem 1fr;
+		gap: 0.75rem;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.75rem;
+		line-height: 1.45;
+		color: oklch(0.42 0.015 250);
+	}
+	@media (max-width: 479px) {
+		.vp__seal-hash-row { grid-template-columns: 1fr; gap: 0.125rem; }
+	}
+
+	.vp__seal-hash-row dt {
+		font-size: 0.625rem;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: oklch(0.5 0.01 250);
+		font-weight: 600;
+		padding-top: 0.125rem;
+	}
+
+	.vp__seal-hash-row dd { margin: 0; }
+	.vp__seal-hash-row code {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.75rem;
+		color: oklch(0.25 0.03 250);
+		background: oklch(0.95 0.004 250);
+		padding: 0.0625rem 0.25rem;
+		border-radius: 2px;
+		font-weight: 500;
+	}
+
+	.vp__seal-footnote {
+		margin: 1rem 0 0;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.75rem;
+		line-height: 1.5;
+		color: oklch(0.45 0.015 250);
+	}
+
+	.vp__seal-link {
+		color: oklch(0.38 0.1 175);
+		text-decoration: none;
+		border-bottom: 1px solid oklch(0.82 0.06 180 / 0.5);
+		margin-left: 0.25rem;
+	}
+	.vp__seal-link:hover { color: oklch(0.32 0.11 175); border-bottom-color: oklch(0.45 0.1 180); }
 </style>
