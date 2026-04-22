@@ -23,7 +23,7 @@
 		<header class="graph-cell-head">
 			<span class="graph-cell-num">①</span>
 			<span class="graph-cell-title">Position commitment</span>
-			<span class="graph-cell-note"><a href="#domain">PCM domain · §3</a></span>
+			<span class="graph-cell-note"><a href="#domain-separation">PCM domain · §3</a></span>
 		</header>
 
 		<svg class="graph-svg" viewBox="0 0 380 220" xmlns="http://www.w3.org/2000/svg"
@@ -200,7 +200,7 @@
 		<header class="graph-cell-head">
 			<span class="graph-cell-num">④</span>
 			<span class="graph-cell-title">Position nullifier &middot; prevents double-claim</span>
-			<span class="graph-cell-note"><a href="#domain">PNL domain · §3</a></span>
+			<span class="graph-cell-note"><a href="#domain-separation">PNL domain · §3</a></span>
 		</header>
 
 		<svg class="graph-svg" viewBox="0 0 440 220" xmlns="http://www.w3.org/2000/svg"

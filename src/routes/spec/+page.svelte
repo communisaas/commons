@@ -180,7 +180,7 @@
 				<span class="fact-label">Canonical source</span>
 				<a
 					class="fact-value fact-link"
-					href="https://github.com/voter-protocol/voter-protocol/blob/main/specs/CRYPTOGRAPHY-SPEC.md"
+					href="https://github.com/communisaas/voter-protocol/blob/main/specs/CRYPTOGRAPHY-SPEC.md"
 				><span class="font-mono">CRYPTOGRAPHY-SPEC.md</span> &rarr;</a>
 			</div>
 		</div>
@@ -188,7 +188,7 @@
 		<p class="hero-audience">
 			<a href="/org" class="hero-audience-link">For advocacy orgs &rarr;</a>
 			<span class="hero-audience-sep" aria-hidden="true">·</span>
-			<a href="https://github.com/voter-protocol/voter-protocol/blob/main/specs/CRYPTOGRAPHY-SPEC.md" class="hero-audience-link">For cryptographers &rarr;</a>
+			<a href="https://github.com/communisaas/voter-protocol/blob/main/specs/CRYPTOGRAPHY-SPEC.md" class="hero-audience-link">For cryptographers &rarr;</a>
 		</p>
 	</header>
 
@@ -421,7 +421,7 @@
 				<span class="attest-label">Non-collision enforced</span>
 			</div>
 			<p class="attest-body">
-				For every pair of distinct tags, <a href="https://github.com/voter-protocol/voter-protocol/blob/main/packages/crypto/test/domain-separation.test.ts"><code>packages/crypto/test/domain-separation.test.ts</code></a> asserts <code>H<sub>t&#8321;</sub>(x, y, z) &ne; H<sub>t&#8322;</sub>(x, y, z)</code> for arbitrary non-zero inputs. The test runs on every CI build.
+				The five domain tags (<code>DOMAIN_HASH1..4</code>, <code>DOMAIN_SPONGE_24</code>) are asserted distinct at the constant level in <a href="https://github.com/communisaas/voter-protocol/blob/main/packages/crypto/test/golden-vectors.test.ts"><code>packages/crypto/test/golden-vectors.test.ts</code></a>; combined with Poseidon2 collision-resistance, distinct tags yield distinct outputs for arbitrary inputs. The test runs on every CI build.
 			</p>
 		</aside>
 	</section>
@@ -729,7 +729,7 @@
 			<li class="limit">
 				<h3>Operator tree-construction trust</h3>
 				<p class="limit-status">Core gap.</p>
-				<p>The Shadow Atlas operator can poison or censor tree construction. Walkaway roadmap target. See <a href="https://github.com/voter-protocol/voter-protocol/blob/main/specs/TRUST-MODEL-AND-OPERATOR-INTEGRITY.md">TRUST-MODEL-AND-OPERATOR-INTEGRITY.md</a> &sect;5.</p>
+				<p>The Shadow Atlas operator can poison or censor tree construction. Walkaway roadmap target. See <a href="https://github.com/communisaas/voter-protocol/blob/main/specs/TRUST-MODEL-AND-OPERATOR-INTEGRITY.md">TRUST-MODEL-AND-OPERATOR-INTEGRITY.md</a> &sect;5.</p>
 			</li>
 		</ul>
 	</section>
@@ -739,15 +739,15 @@
 	<!-- ================================================================ -->
 	<footer class="spec-footer">
 		<div class="footer-links">
-			<a href="https://github.com/voter-protocol/voter-protocol/blob/main/specs/CRYPTOGRAPHY-SPEC.md">
+			<a href="https://github.com/communisaas/voter-protocol/blob/main/specs/CRYPTOGRAPHY-SPEC.md">
 				<span class="flink-label">Canonical spec</span>
 				<span class="flink-path">voter-protocol/specs/CRYPTOGRAPHY-SPEC.md</span>
 			</a>
-			<a href="https://github.com/voter-protocol/voter-protocol/tree/main/packages/crypto/noir">
+			<a href="https://github.com/communisaas/voter-protocol/tree/main/packages/crypto/noir">
 				<span class="flink-label">Circuit source</span>
 				<span class="flink-path">packages/crypto/noir/</span>
 			</a>
-			<a href="https://github.com/voter-protocol/voter-protocol/blob/main/specs/TRUST-MODEL-AND-OPERATOR-INTEGRITY.md">
+			<a href="https://github.com/communisaas/voter-protocol/blob/main/specs/TRUST-MODEL-AND-OPERATOR-INTEGRITY.md">
 				<span class="flink-label">Threat model</span>
 				<span class="flink-path">TRUST-MODEL-AND-OPERATOR-INTEGRITY.md</span>
 			</a>

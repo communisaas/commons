@@ -135,7 +135,7 @@
 		<header class="graph-cell-head">
 			<span class="graph-cell-num">③</span>
 			<span class="graph-cell-title">Note commitment</span>
-			<span class="graph-cell-note"><a href="#domain">H3M domain · §3</a></span>
+			<span class="graph-cell-note"><a href="#domain-separation">H3M domain · §3</a></span>
 		</header>
 
 		<svg class="graph-svg" viewBox="0 0 380 220" xmlns="http://www.w3.org/2000/svg"

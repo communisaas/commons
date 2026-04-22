@@ -40,7 +40,7 @@
 		children
 	}: Props = $props();
 
-	const sourceUrl = `https://github.com/voter-protocol/voter-protocol/blob/main/${source}`;
+	const sourceUrl = `https://github.com/communisaas/voter-protocol/blob/main/${source}`;
 </script>
 
 <article class="circuit" aria-label={`Circuit ${name}`}>
