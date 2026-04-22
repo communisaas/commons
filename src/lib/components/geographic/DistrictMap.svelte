@@ -72,26 +72,43 @@
 	let containerEl = $state<HTMLDivElement | null>(null);
 	let mapInstance: { remove: () => void } | null = null;
 	let resolvedBoundary = $state<GeoJSON.Polygon | GeoJSON.MultiPolygon | undefined>(boundary);
+	let boundaryResolved = $state(!districtCode || !!boundary); // true if no async fetch needed
+	let mapInitialized = $state(false);
 
 	// Self-resolve boundary from districtCode if not provided directly
 	$effect(() => {
 		if (boundary) {
 			resolvedBoundary = boundary;
+			boundaryResolved = true;
 			return;
 		}
-		if (!districtCode || !districtCentroid) return;
+		if (!districtCode || !districtCentroid) {
+			boundaryResolved = true;
+			return;
+		}
 
-		fetch(`/api/shadow-atlas/boundary?district=${districtCode}&lat=${districtCentroid.lat}&lng=${districtCentroid.lng}`)
+		const controller = new AbortController();
+		fetch(`/api/shadow-atlas/boundary?district=${districtCode}&lat=${districtCentroid.lat}&lng=${districtCentroid.lng}`, { signal: controller.signal })
 			.then(r => r.ok ? r.json() : null)
 			.then(data => {
 				if (data?.geometry) resolvedBoundary = data.geometry;
 			})
-			.catch(() => { /* boundary fetch failed — map renders without boundary */ });
+			.catch(e => {
+				if (e.name !== 'AbortError') console.warn('[DistrictMap] Boundary fetch failed:', e);
+			})
+			.finally(() => { boundaryResolved = true; });
+
+		return () => controller.abort();
+	});
+
+	// Initialize map once container is ready AND boundary is resolved (or confirmed absent)
+	$effect(() => {
+		if (!containerEl || !boundaryResolved || mapInitialized) return;
+		mapInitialized = true;
+		initMap(containerEl);
 	});
 
 	onMount(() => {
-		if (!containerEl) return;
-		initMap(containerEl);
 		return () => { mapInstance?.remove(); };
 	});
 

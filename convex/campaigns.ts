@@ -1120,6 +1120,8 @@ export const getForOrgPage = query({
         targets: campaign.targets ?? null,
         targetCountry: campaign.targetCountry,
         targetJurisdiction: campaign.targetJurisdiction ?? null,
+        districtCode: campaign.districtCode ?? null,
+        districtCentroid: campaign.districtCentroid ?? null,
         createdAt: campaign._creationTime,
         updatedAt: campaign.updatedAt,
       },

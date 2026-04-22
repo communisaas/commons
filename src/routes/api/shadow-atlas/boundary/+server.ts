@@ -71,14 +71,19 @@ export const GET: RequestHandler = async ({ url, locals, platform }) => {
 			return json({ error: 'No districts found at coordinates' }, { status: 404 });
 		}
 
-		// Match by district code — the id field contains the GEOID or district code
-		const stateCode = districtCode.split('-')[0];
-		const districtNum = districtCode.split('-')[1];
-		const match = data.districts.find(d =>
-			d.id.includes(districtNum) && d.name?.toLowerCase().includes(stateCode.toLowerCase())
-			|| d.id === districtCode
-			|| d.name === `Congressional District ${districtNum}`
-		);
+		// Match by district code. Shadow Atlas returns districts with varying ID formats.
+		// Try exact match first, then FIPS-based matching (state FIPS + zero-padded district).
+		const stateCode = districtCode.split('-')[0]; // e.g., "CA"
+		const districtNum = districtCode.split('-')[1]; // e.g., "11"
+		const paddedNum = districtNum.padStart(2, '0'); // e.g., "11"
+
+		const match = data.districts.find(d => {
+			// Exact code match
+			if (d.id === districtCode) return true;
+			// FIPS GEOID match: state FIPS (2 digits) + district (2 digits), e.g., "0611" for CA-11
+			if (d.id.length >= 4 && d.id.endsWith(paddedNum) && d.layer === 'cd') return true;
+			return false;
+		});
 
 		if (!match) {
 			return json({ error: `District ${districtCode} not found in response` }, { status: 404 });
