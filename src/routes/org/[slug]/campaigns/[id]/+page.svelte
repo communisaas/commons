@@ -284,7 +284,9 @@
 	<!-- HERO: Verification Packet — the proof this campaign has assembled -->
 	<VerificationPacket
 		packet={packet}
-		showDebate={data.campaign.debateEnabled}
+		districtCode={data.campaign.districtCode}
+		districtCentroid={data.campaign.districtCentroid}
+		interactive
 	>
 		{#snippet actions()}
 			{#if data.campaign.status === 'ACTIVE' || data.campaign.status === 'PAUSED' || data.campaign.status === 'COMPLETE'}

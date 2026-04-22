@@ -10,28 +10,28 @@
 	const user = $derived(data.user);
 	const orgs = $derived(user?.orgMemberships ?? []);
 
-	// Specimen: real CA-12 (East Bay — Oakland, Berkeley, Alameda, San Leandro)
-	// Boundary: simplified from Census TIGER/Line 119th Congress (1660 → 48 vertices)
-	// H3 cells: computed via latLngToCell(lat, lng, 7) from real East Bay neighborhoods
-	const ca12Boundary: GeoJSON.Polygon = {
+	// Specimen: real CA-11 (San Francisco)
+	// Boundary: simplified from Census TIGER/Line 119th Congress (689 → 47 vertices)
+	// H3 cells: computed via latLngToCell(lat, lng, 7) from real SF neighborhoods
+	const ca11Boundary: GeoJSON.Polygon = {
 		type: 'Polygon',
 		coordinates: [[
-			[-122.373, 37.884], [-122.332, 37.788], [-122.266, 37.689],
-			[-122.158, 37.67], [-122.156, 37.68], [-122.163, 37.69],
-			[-122.158, 37.689], [-122.15, 37.686], [-122.144, 37.691],
-			[-122.142, 37.693], [-122.143, 37.701], [-122.132, 37.702],
-			[-122.125, 37.698], [-122.127, 37.704], [-122.127, 37.712],
-			[-122.131, 37.716], [-122.137, 37.725], [-122.138, 37.73],
-			[-122.13, 37.733], [-122.121, 37.732], [-122.116, 37.749],
-			[-122.123, 37.759], [-122.124, 37.762], [-122.128, 37.768],
-			[-122.143, 37.79], [-122.163, 37.802], [-122.17, 37.802],
-			[-122.178, 37.804], [-122.18, 37.818], [-122.185, 37.832],
-			[-122.189, 37.838], [-122.195, 37.842], [-122.205, 37.851],
-			[-122.221, 37.866], [-122.239, 37.883], [-122.25, 37.89],
-			[-122.253, 37.894], [-122.255, 37.896], [-122.256, 37.899],
-			[-122.26, 37.9], [-122.262, 37.902], [-122.267, 37.904],
-			[-122.27, 37.904], [-122.282, 37.9], [-122.293, 37.898],
-			[-122.302, 37.899], [-122.368, 37.885], [-122.373, 37.884]
+			[-122.612, 37.815], [-122.504, 37.708], [-122.486, 37.708],
+			[-122.481, 37.708], [-122.469, 37.708], [-122.467, 37.712],
+			[-122.466, 37.722], [-122.462, 37.722], [-122.453, 37.723],
+			[-122.449, 37.723], [-122.446, 37.727], [-122.44, 37.73],
+			[-122.435, 37.732], [-122.432, 37.732], [-122.426, 37.732],
+			[-122.42, 37.732], [-122.413, 37.733], [-122.407, 37.735],
+			[-122.403, 37.731], [-122.4, 37.721], [-122.399, 37.718],
+			[-122.397, 37.713], [-122.395, 37.708], [-122.379, 37.708],
+			[-122.29, 37.721], [-122.31, 37.754], [-122.335, 37.793],
+			[-122.349, 37.816], [-122.358, 37.842], [-122.399, 37.904],
+			[-122.428, 37.904], [-122.42, 37.863], [-122.42, 37.861],
+			[-122.47, 37.833], [-122.478, 37.833], [-122.478, 37.831],
+			[-122.478, 37.825], [-122.483, 37.826], [-122.492, 37.825],
+			[-122.5, 37.822], [-122.502, 37.822], [-122.512, 37.825],
+			[-122.523, 37.825], [-122.526, 37.821], [-122.529, 37.818],
+			[-122.529, 37.815], [-122.612, 37.815]
 		]]
 	};
 
@@ -54,21 +54,19 @@
 			{ tier: 3, label: 'Established', count: 62 },
 			{ tier: 4, label: 'Veteran', count: 33 },
 		],
-		geography: [{ hash: 'ca12', count: 248 }],
+		geography: [{ hash: 'ca11', count: 248 }],
 		cells: [
-			{ h3: '8728308acffffff', count: 50 },  // Temescal + Rockridge
-			{ h3: '872830810ffffff', count: 38 },  // Downtown Oakland
-			{ h3: '872830988ffffff', count: 24 },  // Fruitvale
-			{ h3: '8728308a9ffffff', count: 20 },  // Berkeley Downtown
-			{ h3: '872830816ffffff', count: 18 },  // Lake Merritt
-			{ h3: '872830811ffffff', count: 16 },  // West Oakland
-			{ h3: '872830989ffffff', count: 15 },  // Alameda
-			{ h3: '872830980ffffff', count: 14 },  // San Leandro
-			{ h3: '8728308a1ffffff', count: 13 },  // Piedmont
-			{ h3: '872830813ffffff', count: 12 },  // Emeryville
-			{ h3: '8728308adffffff', count: 11 },  // North Oakland
-			{ h3: '87283098effffff', count: 10 },  // East Oakland
-			{ h3: '8728308f4ffffff', count: 7 },   // Albany
+			{ h3: '87283082cffffff', count: 56 },  // Mission + Noe Valley
+			{ h3: '87283082dffffff', count: 39 },  // Castro + Haight
+			{ h3: '87283082affffff', count: 32 },  // SOMA
+			{ h3: '872830958ffffff', count: 20 },  // Sunset
+			{ h3: '872830828ffffff', count: 18 },  // Tenderloin
+			{ h3: '87283095bffffff', count: 16 },  // Richmond
+			{ h3: '87283082bffffff', count: 16 },  // North Beach
+			{ h3: '87283082effffff', count: 15 },  // Potrero Hill
+			{ h3: '872830876ffffff', count: 14 },  // Marina
+			{ h3: '872830825ffffff', count: 12 },  // Bayview
+			{ h3: '872830952ffffff', count: 10 },  // Excelsior
 		],
 		temporal: {
 			bins: [2, 4, 8, 14, 18, 25, 30, 42, 38, 35, 28, 22, 18, 12, 8, 5, 3],
@@ -407,12 +405,12 @@
 				<div class="mechanism__layout">
 					<div class="mechanism__specimen-block">
 						<p class="mechanism__provenance">
-							Example packet &middot; CA-12 &middot; Feb 2026
+							Example packet &middot; CA-11 &middot; Feb 2026
 						</p>
 
 						<VerificationPacketComponent
 							packet={specimenPacket}
-							boundary={ca12Boundary}
+							boundary={ca11Boundary}
 							interactive
 						/>
 					</div>

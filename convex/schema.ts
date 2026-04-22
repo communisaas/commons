@@ -1166,6 +1166,9 @@ export default defineSchema({
     // Geographic targeting
     targetJurisdiction: v.optional(v.string()),
     targetCountry: v.string(),
+    // Specific district code (e.g., "CA-11") and its centroid for boundary lookups
+    districtCode: v.optional(v.string()),
+    districtCentroid: v.optional(v.object({ lat: v.number(), lng: v.number() })),
 
     // Intelligence loop
     billId: v.optional(v.id("bills")),

@@ -10,13 +10,19 @@
 		packet,
 		label = 'Verified Constituent Report',
 		boundary = undefined,
+		districtCode = undefined,
+		districtCentroid = undefined,
 		interactive = false,
 		actions
 	}: {
 		packet: Packet | null;
 		label?: string;
-		/** District boundary for geographic map */
+		/** District boundary for geographic map (static — takes precedence) */
 		boundary?: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+		/** District code (e.g., "CA-11") — DistrictMap self-resolves boundary if no boundary prop */
+		districtCode?: string;
+		/** District centroid for boundary lookup */
+		districtCentroid?: { lat: number; lng: number };
 		/** Enable map interaction (pan/zoom/hover) */
 		interactive?: boolean;
 		actions?: Snippet;
@@ -115,6 +121,8 @@
 			<div class="vp__map-container">
 				<DistrictMap
 					boundary={boundary}
+					districtCode={districtCode}
+					districtCentroid={districtCentroid}
 					cells={p.cells}
 					interactive={interactive}
 					onCellHover={handleCellHover}

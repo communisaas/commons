@@ -37,6 +37,8 @@
 		center = undefined,
 		zoom = undefined,
 		boundary = undefined,
+		districtCode = undefined,
+		districtCentroid = undefined,
 		cells = [],
 		clusters = [],
 		districts = [],
@@ -50,6 +52,10 @@
 		zoom?: number;
 		/** Single district boundary polygon (for single-district view) */
 		boundary?: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+		/** District code (e.g., "CA-11") — fetches boundary from Shadow Atlas if boundary not provided */
+		districtCode?: string;
+		/** District centroid for boundary lookup — required when districtCode is set and boundary is not */
+		districtCentroid?: { lat: number; lng: number };
 		/** H3 res-7 cells with action counts — renders as hexagonal choropleth */
 		cells?: CellWeight[];
 		/** Fallback: point clusters (used when cell data unavailable) */
@@ -65,6 +71,23 @@
 
 	let containerEl = $state<HTMLDivElement | null>(null);
 	let mapInstance: { remove: () => void } | null = null;
+	let resolvedBoundary = $state<GeoJSON.Polygon | GeoJSON.MultiPolygon | undefined>(boundary);
+
+	// Self-resolve boundary from districtCode if not provided directly
+	$effect(() => {
+		if (boundary) {
+			resolvedBoundary = boundary;
+			return;
+		}
+		if (!districtCode || !districtCentroid) return;
+
+		fetch(`/api/shadow-atlas/boundary?district=${districtCode}&lat=${districtCentroid.lat}&lng=${districtCentroid.lng}`)
+			.then(r => r.ok ? r.json() : null)
+			.then(data => {
+				if (data?.geometry) resolvedBoundary = data.geometry;
+			})
+			.catch(() => { /* boundary fetch failed — map renders without boundary */ });
+	});
 
 	onMount(() => {
 		if (!containerEl) return;
@@ -109,8 +132,8 @@
 		const allCoords: [number, number][] = [];
 
 		// Build district feature for clipping (if boundary provided)
-		const districtFeature = boundary
-			? turfHelpers.feature(boundary)
+		const districtFeature = resolvedBoundary
+			? turfHelpers.feature(resolvedBoundary)
 			: null;
 
 		// Collect cell polygons for rendering + bounds
@@ -152,8 +175,8 @@
 		}
 
 		// Collect boundary coords for bounds
-		if (boundary) {
-			const rings = boundary.type === 'Polygon' ? boundary.coordinates : boundary.coordinates.flat();
+		if (resolvedBoundary) {
+			const rings = resolvedBoundary.type === 'Polygon' ? resolvedBoundary.coordinates : resolvedBoundary.coordinates.flat();
 			for (const ring of rings) {
 				for (const coord of ring) allCoords.push(coord as [number, number]);
 			}
@@ -211,11 +234,11 @@
 			}
 
 			// District boundary + outside mask
-			if (boundary) {
+			if (resolvedBoundary) {
 				// Dim everything outside the district
 				m.addSource('outside-mask', {
 					type: 'geojson',
-					data: makeOutsideMask(boundary)
+					data: makeOutsideMask(resolvedBoundary)
 				});
 				m.addLayer({
 					id: 'outside-dim',
@@ -227,7 +250,7 @@
 				// District boundary stroke
 				m.addSource('district', {
 					type: 'geojson',
-					data: { type: 'Feature', properties: {}, geometry: boundary }
+					data: { type: 'Feature', properties: {}, geometry: resolvedBoundary }
 				});
 				m.addLayer({
 					id: 'district-stroke',
