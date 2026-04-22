@@ -128,7 +128,7 @@
 			<span class="graph-cell-title">Cell set &middot; sorted · merkle₄</span>
 		</header>
 
-		<svg class="graph-svg graph-svg-wide" viewBox="0 0 380 320" xmlns="http://www.w3.org/2000/svg"
+		<svg class="graph-svg" viewBox="0 0 380 320" xmlns="http://www.w3.org/2000/svg"
 			aria-hidden="true" preserveAspectRatio="xMidYMid meet">
 			<!-- cell_ids[16] visualized as 16 slots: first N ascending, rest zeros -->
 			<text class="g-label-tag" x="190" y="14" text-anchor="middle">cell_ids[16] · strictly ascending · zero-padded</text>
