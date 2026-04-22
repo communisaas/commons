@@ -493,6 +493,56 @@
 		opacity: 0.55;
 	}
 
+	/* Tree-membership ladder — cascading H nodes instead of an opaque box.
+	   Used for merkle₂₀ and smt primitives: the sibling-path is the proof. */
+	:global(.g-ladder-node) {
+		fill: #ffffff;
+		stroke: var(--text-primary);
+		stroke-width: 1.25;
+	}
+	:global(.g-ladder-node-label) {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 9px;
+		fill: var(--text-primary);
+		font-weight: 500;
+	}
+	:global(.g-ladder-elision) {
+		fill: none;
+		stroke: var(--text-tertiary);
+		stroke-width: 0.75;
+		stroke-dasharray: 1.5 2.5;
+		opacity: 0.7;
+	}
+	:global(.g-ladder-elision-label) {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 8.5px;
+		fill: var(--text-tertiary);
+		letter-spacing: 0.02em;
+	}
+	/* Bit glyph: tiny teal digit (0/1) that tags each SMT level with the
+	   bit of the key deciding L/R. Absent on Merkle ladders. */
+	:global(.g-ladder-bit) {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 9px;
+		fill: var(--coord-route-solid);
+		font-weight: 600;
+	}
+	:global(.g-ladder-bit-tick) {
+		stroke: var(--coord-route-solid);
+		stroke-width: 0.9;
+		opacity: 0.6;
+	}
+	:global(.g-ladder-cap) {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 8.5px;
+		fill: var(--text-tertiary);
+		letter-spacing: 0.02em;
+	}
+	:global(.g-ladder-cap em) {
+		font-style: normal;
+		color: var(--coord-route-solid);
+	}
+
 	@media (max-width: 480px) {
 		:global(.graph-cell-eq) {
 			font-size: 0.625rem;

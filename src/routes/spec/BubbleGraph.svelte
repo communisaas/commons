@@ -23,7 +23,7 @@
 			<span class="graph-cell-note"><a href="#binding">see §5</a> &middot; same shape as 3TM ③</span>
 		</header>
 
-		<svg class="graph-svg graph-svg-wide" viewBox="0 0 680 400" xmlns="http://www.w3.org/2000/svg"
+		<svg class="graph-svg graph-svg-wide" viewBox="0 0 680 520" xmlns="http://www.w3.org/2000/svg"
 			aria-hidden="true" preserveAspectRatio="xMidYMid meet">
 			<!-- Center top: ic -->
 			<rect class="g-shared" x="280" y="16" width="120" height="30" rx="4" />
@@ -64,21 +64,58 @@
 			<path class="g-arrow" d="M 154 242 L 154 262" marker-end="url(#arrow-bm)" />
 			<text class="g-label-derived" x="154" y="276" text-anchor="middle">engagement_leaf</text>
 
-			<!-- side path · idx -->
-			<rect class="g-witness" x="200" y="268" width="92" height="22" rx="3" />
-			<text class="g-label" x="246" y="283" text-anchor="middle">path · idx</text>
-			<path class="g-arrow" d="M 206 290 Q 190 295 190 302" marker-end="url(#arrow-bm)" />
+			<!-- ─── Engagement sibling-path ladder · merkle₂₀ ─── -->
+			<text class="g-label-tag" x="20" y="294" text-anchor="start">merkle₂₀</text>
 
-			<!-- merkle₂₀ -->
-			<path class="g-arrow" d="M 154 282 L 154 302" marker-end="url(#arrow-bm)" />
-			<rect class="g-op" x="114" y="302" width="80" height="26" rx="3" />
-			<text class="g-op-label" x="154" y="320" text-anchor="middle">merkle₂₀</text>
+			<!-- entry trunk: engagement_leaf → Level 0 -->
+			<path class="g-arrow" d="M 154 282 L 154 291" />
+
+			<!-- Level 0: sib₀ on LEFT -->
+			<rect class="g-witness" x="20" y="292" width="100" height="20" rx="3" />
+			<text class="g-label" x="70" y="306" text-anchor="middle">sib₀</text>
+			<path class="g-arrow" d="M 120 302 L 143 302" marker-end="url(#arrow-bm)" />
+			<circle class="g-ladder-node" cx="154" cy="302" r="11" />
+			<text class="g-ladder-node-label" x="154" y="305" text-anchor="middle">H</text>
+
+			<path class="g-arrow" d="M 154 313 L 154 330" />
+
+			<!-- Level 1: sib₁ on RIGHT -->
+			<rect class="g-witness" x="190" y="324" width="100" height="20" rx="3" />
+			<text class="g-label" x="240" y="338" text-anchor="middle">sib₁</text>
+			<path class="g-arrow" d="M 190 334 L 165 334" marker-end="url(#arrow-bm)" />
+			<circle class="g-ladder-node" cx="154" cy="334" r="11" />
+			<text class="g-ladder-node-label" x="154" y="337" text-anchor="middle">H</text>
+
+			<path class="g-arrow" d="M 154 345 L 154 362" />
+
+			<!-- Level 2: sib₂ on LEFT -->
+			<rect class="g-witness" x="20" y="356" width="100" height="20" rx="3" />
+			<text class="g-label" x="70" y="370" text-anchor="middle">sib₂</text>
+			<path class="g-arrow" d="M 120 366 L 143 366" marker-end="url(#arrow-bm)" />
+			<circle class="g-ladder-node" cx="154" cy="366" r="11" />
+			<text class="g-ladder-node-label" x="154" y="369" text-anchor="middle">H</text>
+
+			<path class="g-arrow" d="M 154 377 L 154 386" />
+
+			<!-- Elision: 16 more levels -->
+			<line class="g-ladder-elision" x1="20" y1="394" x2="290" y2="394" />
+			<line class="g-ladder-elision" x1="20" y1="414" x2="290" y2="414" />
+			<text class="g-ladder-elision-label" x="155" y="408" text-anchor="middle">16 more levels · sib₃ … sib₁₈</text>
+
+			<path class="g-arrow" d="M 154 422 L 154 432" />
+
+			<!-- Level 19: sib₁₉ on RIGHT -->
+			<rect class="g-witness" x="190" y="434" width="100" height="20" rx="3" />
+			<text class="g-label" x="240" y="448" text-anchor="middle">sib₁₉</text>
+			<path class="g-arrow" d="M 190 444 L 165 444" marker-end="url(#arrow-bm)" />
+			<circle class="g-ladder-node" cx="154" cy="444" r="11" />
+			<text class="g-ladder-node-label" x="154" y="447" text-anchor="middle">H</text>
 
 			<!-- closure ≡ engagement_root (PUBLIC INPUT) -->
-			<line class="g-closure" x1="154" y1="328" x2="154" y2="364" />
-			<text class="g-equiv" x="154" y="350" text-anchor="middle">≡</text>
-			<rect class="g-closure-peg" x="84" y="370" width="140" height="26" rx="3" />
-			<text class="g-label-closure" x="154" y="388" text-anchor="middle">engagement_root</text>
+			<line class="g-closure" x1="154" y1="455" x2="154" y2="484" />
+			<text class="g-equiv" x="154" y="472" text-anchor="middle">≡</text>
+			<rect class="g-closure-peg" x="84" y="488" width="140" height="26" rx="3" />
+			<text class="g-label-closure" x="154" y="506" text-anchor="middle">engagement_root</text>
 
 			<!-- ═══ RIGHT BRANCH: epoch nullifier ═══ -->
 			<!-- epoch_domain (public input) -->

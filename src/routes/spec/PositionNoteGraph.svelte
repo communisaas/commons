@@ -71,32 +71,72 @@
 			<span class="graph-cell-title">Tree membership &middot; merkle₂₀</span>
 		</header>
 
-		<svg class="graph-svg" viewBox="0 0 380 220" xmlns="http://www.w3.org/2000/svg"
+		<svg class="graph-svg" viewBox="0 0 380 380" xmlns="http://www.w3.org/2000/svg"
 			aria-hidden="true" preserveAspectRatio="xMidYMid meet">
-			<!-- commitment (from ①) -->
-			<rect class="g-witness" x="40" y="14" width="120" height="26" rx="3"
+			<!-- commitment (from ①), teal-routed — enters the ladder as leaf -->
+			<rect class="g-witness" x="130" y="14" width="120" height="26" rx="3"
 				style="stroke: var(--coord-route-solid); stroke-dasharray: none; opacity: 0.85;" />
-			<text class="g-label" x="100" y="31" text-anchor="middle"
+			<text class="g-label" x="190" y="31" text-anchor="middle"
 				style="fill: var(--coord-route-solid);">commitment</text>
-			<text class="g-label-tag" x="100" y="54" text-anchor="middle">from ①</text>
+			<text class="g-label-tag" x="190" y="54" text-anchor="middle">from ①</text>
 
-			<!-- side path witness -->
-			<rect class="g-witness" x="220" y="14" width="140" height="26" rx="3" />
-			<text class="g-label" x="290" y="31" text-anchor="middle">position_path[20] · idx</text>
+			<!-- ─── Sibling-path ladder · merkle₂₀ ─── -->
+			<text class="g-label-tag" x="32" y="74" text-anchor="start">merkle₂₀</text>
 
-			<!-- both feed merkle -->
-			<path class="g-arrow" d="M 100 40 Q 100 70 176 90" marker-end="url(#arrow-pn-2)" />
-			<path class="g-arrow" d="M 290 40 Q 290 70 204 90" marker-end="url(#arrow-pn-2)" />
+			<!-- entry trunk: commitment → Level 0 -->
+			<path class="g-arrow" d="M 190 40 L 190 84" marker-end="url(#arrow-pn-2)" />
 
-			<!-- merkle₂₀ -->
-			<rect class="g-op" x="150" y="90" width="80" height="28" rx="3" />
-			<text class="g-op-label" x="190" y="109" text-anchor="middle">merkle₂₀</text>
+			<!-- Level 0: sib₀ on LEFT -->
+			<rect class="g-witness" x="38" y="88" width="102" height="20" rx="3" />
+			<text class="g-label" x="89" y="102" text-anchor="middle">sib₀</text>
+			<path class="g-arrow" d="M 140 98 L 180 98" marker-end="url(#arrow-pn-2)" />
+			<circle class="g-ladder-node" cx="190" cy="98" r="11" />
+			<text class="g-ladder-node-label" x="190" y="101" text-anchor="middle">H</text>
 
-			<!-- closure -->
-			<line class="g-closure" x1="190" y1="118" x2="190" y2="158" />
-			<text class="g-equiv" x="190" y="144" text-anchor="middle">≡</text>
-			<rect class="g-closure-peg" x="130" y="164" width="120" height="26" rx="3" />
-			<text class="g-label-closure" x="190" y="182" text-anchor="middle">position_root</text>
+			<path class="g-arrow" d="M 190 109 L 190 126" />
+
+			<!-- Level 1: sib₁ on RIGHT -->
+			<rect class="g-witness" x="240" y="128" width="102" height="20" rx="3" />
+			<text class="g-label" x="291" y="142" text-anchor="middle">sib₁</text>
+			<path class="g-arrow" d="M 240 138 L 200 138" marker-end="url(#arrow-pn-2)" />
+			<circle class="g-ladder-node" cx="190" cy="138" r="11" />
+			<text class="g-ladder-node-label" x="190" y="141" text-anchor="middle">H</text>
+
+			<path class="g-arrow" d="M 190 149 L 190 166" />
+
+			<!-- Level 2: sib₂ on LEFT -->
+			<rect class="g-witness" x="38" y="168" width="102" height="20" rx="3" />
+			<text class="g-label" x="89" y="182" text-anchor="middle">sib₂</text>
+			<path class="g-arrow" d="M 140 178 L 180 178" marker-end="url(#arrow-pn-2)" />
+			<circle class="g-ladder-node" cx="190" cy="178" r="11" />
+			<text class="g-ladder-node-label" x="190" y="181" text-anchor="middle">H</text>
+
+			<path class="g-arrow" d="M 190 189 L 190 198" />
+
+			<!-- Elision: 16 more levels -->
+			<line class="g-ladder-elision" x1="40" y1="206" x2="340" y2="206" />
+			<line class="g-ladder-elision" x1="40" y1="228" x2="340" y2="228" />
+			<text class="g-ladder-elision-label" x="190" y="220" text-anchor="middle">16 more levels · sib₃ … sib₁₈</text>
+
+			<path class="g-arrow" d="M 190 236 L 190 246" />
+
+			<!-- Level 19: sib₁₉ on RIGHT -->
+			<rect class="g-witness" x="240" y="248" width="102" height="20" rx="3" />
+			<text class="g-label" x="291" y="262" text-anchor="middle">sib₁₉</text>
+			<path class="g-arrow" d="M 240 258 L 200 258" marker-end="url(#arrow-pn-2)" />
+			<circle class="g-ladder-node" cx="190" cy="258" r="11" />
+			<text class="g-ladder-node-label" x="190" y="261" text-anchor="middle">H</text>
+
+			<!-- closure → position_root peg -->
+			<line class="g-closure" x1="190" y1="269" x2="190" y2="298" />
+			<text class="g-equiv" x="190" y="286" text-anchor="middle">≡</text>
+			<rect class="g-closure-peg" x="130" y="302" width="120" height="26" rx="3" />
+			<text class="g-label-closure" x="190" y="320" text-anchor="middle">position_root</text>
+
+			<!-- Caption: idx and sibling path are both witnesses -->
+			<text class="g-ladder-cap" x="190" y="346" text-anchor="middle">
+				position_path[20] is the sibling witness; position_index selects L/R
+			</text>
 
 			<defs>
 				<marker id="arrow-pn-2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">

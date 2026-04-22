@@ -25,7 +25,7 @@
 		</header>
 		<p class="graph-cell-narrator">Identity proves this is a real, uniquely registered person. The deterministic output is the <span class="ic">identity_commitment</span> &mdash; abbreviated <span class="ic">ic</span> &mdash; a stable per-person value that never reveals who.</p>
 
-		<svg class="graph-svg" viewBox="0 0 380 290" xmlns="http://www.w3.org/2000/svg"
+		<svg class="graph-svg" viewBox="0 0 380 450" xmlns="http://www.w3.org/2000/svg"
 			aria-hidden="true" preserveAspectRatio="xMidYMid meet">
 			<!-- Witnesses: 2×2 grid -->
 			<g>
@@ -49,27 +49,69 @@
 			<rect class="g-op" x="150" y="94" width="80" height="28" rx="14" />
 			<text class="g-op-label" x="190" y="113" text-anchor="middle">H4</text>
 
-			<!-- H4 → user_leaf -->
+			<!-- H4 → user_leaf (enters the ladder as leaf) -->
 			<path class="g-arrow" d="M 190 122 L 190 144" marker-end="url(#arrow-3tm)" />
 			<text class="g-label-derived" x="190" y="158" text-anchor="middle">user_leaf</text>
 
-			<!-- user_leaf → merkle, plus side path witness -->
-			<path class="g-arrow" d="M 190 164 L 190 194" marker-end="url(#arrow-3tm)" />
-			<rect class="g-witness" x="230" y="170" width="140" height="22" rx="3" />
-			<text class="g-label" x="300" y="185" text-anchor="middle">user_path · user_index</text>
-			<path class="g-arrow" d="M 238 192 Q 220 210 220 216" marker-end="url(#arrow-3tm)" />
+			<!-- ─── Sibling-path ladder · merkle₂₀ ─── -->
+			<!-- 20 levels of cascading H: leaf + sibᵢ → climb. 4 shown concretely,
+			     16 elided. Sibling slots (dashed) are the private path witness. -->
+			<text class="g-label-tag" x="32" y="180" text-anchor="start">merkle₂₀</text>
 
-			<!-- merkle operator -->
-			<rect class="g-op" x="150" y="194" width="80" height="28" rx="3" />
-			<text class="g-op-label" x="190" y="213" text-anchor="middle">merkle</text>
+			<!-- entry trunk -->
+			<path class="g-arrow" d="M 190 164 L 190 188" />
 
-			<!-- Closure: merkle ≡ user_root -->
-			<line class="g-closure" x1="190" y1="222" x2="190" y2="244" />
-			<text class="g-equiv" x="190" y="240" text-anchor="middle">≡</text>
+			<!-- Level 0: sib₀ on LEFT -->
+			<rect class="g-witness" x="38" y="190" width="102" height="20" rx="3" />
+			<text class="g-label" x="89" y="204" text-anchor="middle">sib₀</text>
+			<path class="g-arrow" d="M 140 200 L 180 200" marker-end="url(#arrow-3tm)" />
+			<circle class="g-ladder-node" cx="190" cy="200" r="11" />
+			<text class="g-ladder-node-label" x="190" y="203" text-anchor="middle">H</text>
 
-			<!-- user_root public peg -->
-			<rect class="g-closure-peg" x="140" y="252" width="100" height="24" rx="3" />
-			<text class="g-label-closure" x="190" y="268" text-anchor="middle">user_root</text>
+			<path class="g-arrow" d="M 190 211 L 190 228" />
+
+			<!-- Level 1: sib₁ on RIGHT -->
+			<rect class="g-witness" x="240" y="230" width="102" height="20" rx="3" />
+			<text class="g-label" x="291" y="244" text-anchor="middle">sib₁</text>
+			<path class="g-arrow" d="M 240 240 L 200 240" marker-end="url(#arrow-3tm)" />
+			<circle class="g-ladder-node" cx="190" cy="240" r="11" />
+			<text class="g-ladder-node-label" x="190" y="243" text-anchor="middle">H</text>
+
+			<path class="g-arrow" d="M 190 251 L 190 268" />
+
+			<!-- Level 2: sib₂ on LEFT -->
+			<rect class="g-witness" x="38" y="270" width="102" height="20" rx="3" />
+			<text class="g-label" x="89" y="284" text-anchor="middle">sib₂</text>
+			<path class="g-arrow" d="M 140 280 L 180 280" marker-end="url(#arrow-3tm)" />
+			<circle class="g-ladder-node" cx="190" cy="280" r="11" />
+			<text class="g-ladder-node-label" x="190" y="283" text-anchor="middle">H</text>
+
+			<path class="g-arrow" d="M 190 291 L 190 300" />
+
+			<!-- Elision band: 16 more levels (sib₃ … sib₁₈) -->
+			<line class="g-ladder-elision" x1="40" y1="308" x2="340" y2="308" />
+			<line class="g-ladder-elision" x1="40" y1="330" x2="340" y2="330" />
+			<text class="g-ladder-elision-label" x="190" y="322" text-anchor="middle">16 more levels · sib₃ … sib₁₈</text>
+
+			<path class="g-arrow" d="M 190 338 L 190 348" />
+
+			<!-- Level 19: sib₁₉ on RIGHT -->
+			<rect class="g-witness" x="240" y="350" width="102" height="20" rx="3" />
+			<text class="g-label" x="291" y="364" text-anchor="middle">sib₁₉</text>
+			<path class="g-arrow" d="M 240 360 L 200 360" marker-end="url(#arrow-3tm)" />
+			<circle class="g-ladder-node" cx="190" cy="360" r="11" />
+			<text class="g-ladder-node-label" x="190" y="363" text-anchor="middle">H</text>
+
+			<!-- Closure: last H ≡ user_root -->
+			<line class="g-closure" x1="190" y1="371" x2="190" y2="400" />
+			<text class="g-equiv" x="190" y="388" text-anchor="middle">≡</text>
+			<rect class="g-closure-peg" x="140" y="404" width="100" height="24" rx="3" />
+			<text class="g-label-closure" x="190" y="420" text-anchor="middle">user_root</text>
+
+			<!-- Caption: what idx does -->
+			<text class="g-ladder-cap" x="190" y="442" text-anchor="middle">
+				user_index (private) decides L/R at each level
+			</text>
 
 			<defs>
 				<marker id="arrow-3tm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
@@ -93,7 +135,7 @@
 		</header>
 		<p class="graph-cell-narrator">Location proves the person lives in one of the 24 accepted districts.</p>
 
-		<svg class="graph-svg" viewBox="0 0 380 290" xmlns="http://www.w3.org/2000/svg"
+		<svg class="graph-svg" viewBox="0 0 380 470" xmlns="http://www.w3.org/2000/svg"
 			aria-hidden="true" preserveAspectRatio="xMidYMid meet">
 			<!-- cell_id (witness, left) -->
 			<rect class="g-witness" x="30" y="10" width="120" height="22" rx="3" />
@@ -120,27 +162,78 @@
 			<rect class="g-op" x="150" y="134" width="80" height="28" rx="14" />
 			<text class="g-op-label" x="190" y="153" text-anchor="middle">H2</text>
 
-			<!-- H2 → cell_map_leaf -->
+			<!-- H2 → cell_map_leaf (enters ladder as leaf) -->
 			<path class="g-arrow" d="M 190 162 L 190 184" marker-end="url(#arrow-3tm-2)" />
 			<text class="g-label-derived" x="190" y="198" text-anchor="middle">cell_map_leaf</text>
 
-			<!-- cell_map_leaf → smt, plus side path witness -->
-			<path class="g-arrow" d="M 190 204 L 190 222" marker-end="url(#arrow-3tm-2)" />
-			<rect class="g-witness" x="232" y="208" width="138" height="22" rx="3" />
-			<text class="g-label" x="301" y="223" text-anchor="middle">cell_map_path · bits</text>
-			<path class="g-arrow" d="M 240 230 Q 224 238 224 244" marker-end="url(#arrow-3tm-2)" />
+			<!-- ─── SMT ladder · position keyed by bits(cell_id) ─── -->
+			<!-- Same cascading-H shape as merkle₂₀, but the leaf slot is NOT a
+			     free witness: it is determined by bits of cell_id. The bits
+			     witness exists only to avoid in-circuit decomposition. -->
+			<text class="g-label-tag" x="32" y="220" text-anchor="start">smt₂₀</text>
+			<text class="g-ladder-cap" x="348" y="220" text-anchor="end"><tspan style="fill: var(--coord-route-solid); font-weight: 600;">slot = bits(cell_id)</tspan></text>
 
-			<!-- smt operator -->
-			<rect class="g-op" x="150" y="222" width="80" height="28" rx="3" />
-			<text class="g-op-label" x="190" y="241" text-anchor="middle">smt</text>
+			<!-- entry trunk -->
+			<path class="g-arrow" d="M 190 204 L 190 228" />
 
-			<!-- Closure -->
-			<line class="g-closure" x1="190" y1="250" x2="190" y2="268" />
-			<text class="g-equiv" x="190" y="264" text-anchor="middle">≡</text>
+			<!-- teal slot-binding arc: cell_id (top-left) drops a dashed route
+			     to the ladder's entry, showing dual role (input AND key) -->
+			<path d="M 90 32 Q 30 150 30 228 Q 30 238 50 240" class="g-closure"
+				style="stroke: var(--coord-route-solid); stroke-dasharray: 2 4; opacity: 0.55;" />
+			<text class="g-ladder-bit" x="22" y="140" text-anchor="start"
+				style="writing-mode: vertical-rl; text-orientation: mixed; opacity: 0.7;">key route</text>
 
-			<!-- cell_map_root peg -->
-			<rect class="g-closure-peg" x="130" y="270" width="120" height="20" rx="3" />
-			<text class="g-label-closure" x="190" y="284" text-anchor="middle">cell_map_root</text>
+			<!-- Level 0: path[0] on LEFT -->
+			<rect class="g-witness" x="58" y="230" width="102" height="20" rx="3" />
+			<text class="g-label" x="109" y="244" text-anchor="middle">path[0]</text>
+			<path class="g-arrow" d="M 160 240 L 180 240" marker-end="url(#arrow-3tm-2)" />
+			<circle class="g-ladder-node" cx="190" cy="240" r="11" />
+			<text class="g-ladder-node-label" x="190" y="243" text-anchor="middle">H</text>
+			<!-- bit tag -->
+			<text class="g-ladder-bit" x="212" y="244" text-anchor="start">bit₀</text>
+
+			<path class="g-arrow" d="M 190 251 L 190 268" />
+
+			<!-- Level 1: path[1] on RIGHT -->
+			<rect class="g-witness" x="222" y="270" width="102" height="20" rx="3" />
+			<text class="g-label" x="273" y="284" text-anchor="middle">path[1]</text>
+			<path class="g-arrow" d="M 222 280 L 200 280" marker-end="url(#arrow-3tm-2)" />
+			<circle class="g-ladder-node" cx="190" cy="280" r="11" />
+			<text class="g-ladder-node-label" x="190" y="283" text-anchor="middle">H</text>
+			<text class="g-ladder-bit" x="168" y="284" text-anchor="end">bit₁</text>
+
+			<path class="g-arrow" d="M 190 291 L 190 308" />
+
+			<!-- Level 2: path[2] on LEFT -->
+			<rect class="g-witness" x="58" y="310" width="102" height="20" rx="3" />
+			<text class="g-label" x="109" y="324" text-anchor="middle">path[2]</text>
+			<path class="g-arrow" d="M 160 320 L 180 320" marker-end="url(#arrow-3tm-2)" />
+			<circle class="g-ladder-node" cx="190" cy="320" r="11" />
+			<text class="g-ladder-node-label" x="190" y="323" text-anchor="middle">H</text>
+			<text class="g-ladder-bit" x="212" y="324" text-anchor="start">bit₂</text>
+
+			<path class="g-arrow" d="M 190 331 L 190 340" />
+
+			<!-- Elision: 16 more levels (path[3] … path[18]) -->
+			<line class="g-ladder-elision" x1="40" y1="348" x2="340" y2="348" />
+			<line class="g-ladder-elision" x1="40" y1="370" x2="340" y2="370" />
+			<text class="g-ladder-elision-label" x="190" y="362" text-anchor="middle">16 more levels · path[3] … path[18] · bit₃ … bit₁₈</text>
+
+			<path class="g-arrow" d="M 190 378 L 190 388" />
+
+			<!-- Level 19: path[19] on RIGHT -->
+			<rect class="g-witness" x="222" y="390" width="102" height="20" rx="3" />
+			<text class="g-label" x="273" y="404" text-anchor="middle">path[19]</text>
+			<path class="g-arrow" d="M 222 400 L 200 400" marker-end="url(#arrow-3tm-2)" />
+			<circle class="g-ladder-node" cx="190" cy="400" r="11" />
+			<text class="g-ladder-node-label" x="190" y="403" text-anchor="middle">H</text>
+			<text class="g-ladder-bit" x="168" y="404" text-anchor="end">bit₁₉</text>
+
+			<!-- Closure: last H ≡ cell_map_root -->
+			<line class="g-closure" x1="190" y1="411" x2="190" y2="438" />
+			<text class="g-equiv" x="190" y="426" text-anchor="middle">≡</text>
+			<rect class="g-closure-peg" x="130" y="442" width="120" height="20" rx="3" />
+			<text class="g-label-closure" x="190" y="456" text-anchor="middle">cell_map_root</text>
 
 			<defs>
 				<marker id="arrow-3tm-2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
@@ -165,7 +258,7 @@
 		</header>
 		<p class="graph-cell-narrator">Identity and location bind to this one action — and only this one. The same <span class="ic">ic</span> from ① forks into a nullifier (prevents double-spend) and into the engagement record.</p>
 
-		<svg class="graph-svg graph-svg-wide" viewBox="0 0 680 400" xmlns="http://www.w3.org/2000/svg"
+		<svg class="graph-svg graph-svg-wide" viewBox="0 0 680 520" xmlns="http://www.w3.org/2000/svg"
 			aria-hidden="true" preserveAspectRatio="xMidYMid meet">
 			<!-- Center top: ic (shared witness) — the single source of truth -->
 			<rect class="g-shared" x="280" y="16" width="120" height="30" rx="4" />
@@ -225,21 +318,58 @@
 			<path class="g-arrow" d="M 534 242 L 534 262" marker-end="url(#arrow-3tm-3)" />
 			<text class="g-label-derived" x="534" y="276" text-anchor="middle">engagement_leaf</text>
 
-			<!-- engagement_leaf → merkle, plus side path witness -->
-			<rect class="g-witness" x="580" y="268" width="90" height="22" rx="3" />
-			<text class="g-label" x="625" y="283" text-anchor="middle">path · idx</text>
-			<path class="g-arrow" d="M 586 289 Q 570 294 570 302" marker-end="url(#arrow-3tm-3)" />
-			<path class="g-arrow" d="M 534 282 L 534 302" marker-end="url(#arrow-3tm-3)" />
+			<!-- ─── Engagement sibling-path ladder · merkle₂₀ ─── -->
+			<text class="g-label-tag" x="400" y="294" text-anchor="end">merkle₂₀</text>
 
-			<!-- merkle -->
-			<rect class="g-op" x="494" y="302" width="80" height="26" rx="3" />
-			<text class="g-op-label" x="534" y="320" text-anchor="middle">merkle</text>
+			<!-- entry trunk: engagement_leaf → Level 0 -->
+			<path class="g-arrow" d="M 534 282 L 534 291" />
+
+			<!-- Level 0: sib₀ on LEFT -->
+			<rect class="g-witness" x="400" y="292" width="100" height="20" rx="3" />
+			<text class="g-label" x="450" y="306" text-anchor="middle">sib₀</text>
+			<path class="g-arrow" d="M 500 302 L 523 302" marker-end="url(#arrow-3tm-3)" />
+			<circle class="g-ladder-node" cx="534" cy="302" r="11" />
+			<text class="g-ladder-node-label" x="534" y="305" text-anchor="middle">H</text>
+
+			<path class="g-arrow" d="M 534 313 L 534 330" />
+
+			<!-- Level 1: sib₁ on RIGHT -->
+			<rect class="g-witness" x="570" y="324" width="100" height="20" rx="3" />
+			<text class="g-label" x="620" y="338" text-anchor="middle">sib₁</text>
+			<path class="g-arrow" d="M 570 334 L 545 334" marker-end="url(#arrow-3tm-3)" />
+			<circle class="g-ladder-node" cx="534" cy="334" r="11" />
+			<text class="g-ladder-node-label" x="534" y="337" text-anchor="middle">H</text>
+
+			<path class="g-arrow" d="M 534 345 L 534 362" />
+
+			<!-- Level 2: sib₂ on LEFT -->
+			<rect class="g-witness" x="400" y="356" width="100" height="20" rx="3" />
+			<text class="g-label" x="450" y="370" text-anchor="middle">sib₂</text>
+			<path class="g-arrow" d="M 500 366 L 523 366" marker-end="url(#arrow-3tm-3)" />
+			<circle class="g-ladder-node" cx="534" cy="366" r="11" />
+			<text class="g-ladder-node-label" x="534" y="369" text-anchor="middle">H</text>
+
+			<path class="g-arrow" d="M 534 377 L 534 386" />
+
+			<!-- Elision: 16 more levels -->
+			<line class="g-ladder-elision" x1="400" y1="394" x2="670" y2="394" />
+			<line class="g-ladder-elision" x1="400" y1="414" x2="670" y2="414" />
+			<text class="g-ladder-elision-label" x="535" y="408" text-anchor="middle">16 more levels · sib₃ … sib₁₈</text>
+
+			<path class="g-arrow" d="M 534 422 L 534 432" />
+
+			<!-- Level 19: sib₁₉ on RIGHT -->
+			<rect class="g-witness" x="570" y="434" width="100" height="20" rx="3" />
+			<text class="g-label" x="620" y="448" text-anchor="middle">sib₁₉</text>
+			<path class="g-arrow" d="M 570 444 L 545 444" marker-end="url(#arrow-3tm-3)" />
+			<circle class="g-ladder-node" cx="534" cy="444" r="11" />
+			<text class="g-ladder-node-label" x="534" y="447" text-anchor="middle">H</text>
 
 			<!-- closure → engagement_root peg -->
-			<line class="g-closure" x1="534" y1="328" x2="534" y2="364" />
-			<text class="g-equiv" x="534" y="350" text-anchor="middle">≡</text>
-			<rect class="g-closure-peg" x="464" y="370" width="140" height="26" rx="3" />
-			<text class="g-label-closure" x="534" y="388" text-anchor="middle">engagement_root</text>
+			<line class="g-closure" x1="534" y1="455" x2="534" y2="484" />
+			<text class="g-equiv" x="534" y="472" text-anchor="middle">≡</text>
+			<rect class="g-closure-peg" x="464" y="488" width="140" height="26" rx="3" />
+			<text class="g-label-closure" x="534" y="506" text-anchor="middle">engagement_root</text>
 
 			<defs>
 				<marker id="arrow-3tm-3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
