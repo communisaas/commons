@@ -1,12 +1,16 @@
 <!--
-  CircuitPrimer — the topology of a ZK proof in one annotated picture.
+  CircuitPrimer — the topology of a ZK proof in two annotated pictures.
 
-  Teaches the visual grammar in-situ:
+  Panel 1 — the grammar:
     - Dashed rectangle → private witness (stays with the user)
     - Solid rectangle  → public receipt (anyone can verify)
     - Rounded pill     → hash function
     - Horizontal bar with ≡ → proof equation: left side computed = right side public
     - Travelling artifact  → the proof itself, sent from prover to verifier
+
+  Panel 2 — the membership extension (vocabulary: leaf, sibling, ladder, root):
+    When the private data must belong to a known set, the grammar extends.
+    A leaf climbs a ladder of sibling hashes until it meets the public root.
 
   Every later circuit diagram reuses this grammar. The primer is the only
   place each element gets a role label. Subsequent diagrams inherit it.
@@ -82,6 +86,88 @@
 		<span class="hl-op">hash</span> inside the prover, producing a value that the
 		<span class="hl-equiv">proof equation</span> binds to a
 		<span class="hl-public">public receipt</span> on-chain.
+	</p>
+</figure>
+
+<!-- ═════════════════════════════════════════════════════════════════════ -->
+<!-- Panel 2 — the membership extension: leaf, sibling, ladder, root       -->
+<!-- ═════════════════════════════════════════════════════════════════════ -->
+<figure class="primer primer-membership" aria-label="Tree membership topology">
+	<svg viewBox="0 0 680 260" xmlns="http://www.w3.org/2000/svg"
+		role="img" preserveAspectRatio="xMidYMid meet">
+
+		<!-- Region backgrounds -->
+		<rect x="0" y="24" width="300" height="216" rx="4"
+			fill="rgba(0,0,0,0.04)" stroke="none" />
+		<text x="16" y="18" class="region-label">Private · your leaf enters here</text>
+
+		<rect x="380" y="24" width="300" height="216" rx="4"
+			fill="rgba(59,196,184,0.035)" stroke="none" />
+		<text x="664" y="18" class="region-label" text-anchor="end">Public · the known root</text>
+
+		<!-- Leaf (private witness) -->
+		<rect class="g-witness" x="80" y="44" width="140" height="26" rx="3" />
+		<text class="g-label" x="150" y="61" text-anchor="middle">leaf</text>
+		<text class="annotation" x="232" y="60">↖ leaf · the hash of your private data</text>
+
+		<!-- Trunk: leaf → Level 0 -->
+		<path class="g-arrow" d="M 150 72 L 150 89" />
+
+		<!-- Level 0: H₀ with sib₀ on RIGHT -->
+		<circle class="g-ladder-node" cx="150" cy="100" r="11" />
+		<text class="g-ladder-node-label" x="150" y="103" text-anchor="middle">H</text>
+		<rect class="g-witness" x="210" y="90" width="70" height="20" rx="3" />
+		<text class="g-label" x="245" y="104" text-anchor="middle">sib₀</text>
+		<path class="g-arrow" d="M 210 100 L 161 100" marker-end="url(#primer-arrow-2)" />
+		<text class="annotation" x="290" y="104">← sibling · another hash at this level</text>
+
+		<!-- Trunk to Level 1 -->
+		<path class="g-arrow" d="M 150 111 L 150 129" />
+
+		<!-- Level 1: H₁ with sib₁ on LEFT -->
+		<circle class="g-ladder-node" cx="150" cy="140" r="11" />
+		<text class="g-ladder-node-label" x="150" y="143" text-anchor="middle">H</text>
+		<rect class="g-witness" x="20" y="130" width="70" height="20" rx="3" />
+		<text class="g-label" x="55" y="144" text-anchor="middle">sib₁</text>
+		<path class="g-arrow" d="M 90 140 L 139 140" marker-end="url(#primer-arrow-2)" />
+		<text class="annotation" x="290" y="144">← ladder · each step = H(current, sibling)</text>
+
+		<!-- Trunk to Level 2 -->
+		<path class="g-arrow" d="M 150 151 L 150 169" />
+
+		<!-- Level 2: H₂ with sib₂ on RIGHT -->
+		<circle class="g-ladder-node" cx="150" cy="180" r="11" />
+		<text class="g-ladder-node-label" x="150" y="183" text-anchor="middle">H</text>
+		<rect class="g-witness" x="210" y="170" width="70" height="20" rx="3" />
+		<text class="g-label" x="245" y="184" text-anchor="middle">sib₂</text>
+		<path class="g-arrow" d="M 210 180 L 161 180" marker-end="url(#primer-arrow-2)" />
+
+		<!-- Depth hint: "real circuits climb 20" -->
+		<text class="annotation" x="290" y="184">real circuits climb 20 levels</text>
+
+		<!-- Closure bridge: bent path from last H down-then-right to root peg -->
+		<path class="g-closure" d="M 150 191 L 150 221 L 460 221" fill="none" />
+		<text class="g-equiv" x="305" y="217" text-anchor="middle">≡</text>
+
+		<!-- Root peg in public region -->
+		<rect class="g-closure-peg" x="460" y="208" width="180" height="26" rx="3" />
+		<text class="g-label-closure" x="550" y="225" text-anchor="middle">root</text>
+		<text class="annotation" x="550" y="200" text-anchor="middle">↓ root · on-chain commitment to the whole set</text>
+
+		<defs>
+			<marker id="primer-arrow-2" viewBox="0 0 10 10" refX="9" refY="5"
+				markerWidth="6" markerHeight="6" orient="auto">
+				<path d="M 0 0 L 10 5 L 0 10 z" fill="var(--text-tertiary)" />
+			</marker>
+		</defs>
+	</svg>
+
+	<p class="primer-caption">
+		When you must prove membership in a known set, the grammar extends. Your value hashes into a
+		<span class="hl-private">leaf</span>. Each climb combines it with a
+		<span class="hl-private">sibling</span> — another hash at that tree level — until the
+		<span class="hl-op">ladder</span> of twenty climbs reaches the
+		<span class="hl-public">root</span>, the set's on-chain commitment. The chain of siblings <em>is</em> the proof.
 	</p>
 </figure>
 
