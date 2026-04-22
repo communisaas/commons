@@ -62,7 +62,7 @@
 		<!-- Hero count -->
 		<div class="vp__hero">
 			<span class="vp__hero-count"><Datum value={$animVerified} /></span>
-			<span class="vp__hero-label">verified constituents{#if p.districtCount > 0}<br/>across <Datum value={p.districtCount} /> communities{/if}</span>
+			<span class="vp__hero-label">verified constituents{#if p.districtCount > 1}<br/>across <Datum value={p.districtCount} /> districts{/if}</span>
 		</div>
 
 		<div class="vp__divider"></div>
@@ -230,7 +230,7 @@
 		padding: 1rem 1.25rem 1.25rem;
 		display: flex;
 		align-items: baseline;
-		gap: 0.75rem;
+		gap: 0.5rem;
 	}
 	@media (min-width: 640px) { .vp__hero { padding: 1.5rem 2rem 1.75rem; } }
 
@@ -243,10 +243,11 @@
 	@media (min-width: 640px) { .vp__hero-count { font-size: 3.25rem; } }
 
 	.vp__hero-label {
-		font-size: 0.6875rem;
-		color: oklch(0.48 0.01 250);
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		color: oklch(0.42 0.01 250);
 		font-weight: 400;
-		line-height: 1.35;
+		line-height: 1.4;
 	}
 
 	/* Divider */
