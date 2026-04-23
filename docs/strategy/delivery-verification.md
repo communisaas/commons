@@ -1,8 +1,41 @@
 # Email Verification (TEE-Based Privacy-Preserving Verification)
 
 **Status**: Phased Implementation
-**Current Phase**: Phase 1 Complete (OAuth persistence)
-**Future Phases**: Phase 2-4 Planned (TEE verification, congressional signatures, browser-native)
+**Current Phase**: Phase 1 partially scaffolded, not shipped end-to-end (reconciled 2026-04-23)
+**Future Phases**: Phase 2-4 illustrative (TEE verification, congressional signatures, browser-native)
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** This strategy doc
+> describes a three-phase vision for cryptographic delivery proof.
+> Concrete corrections before trusting any "✅ IMPLEMENTED" markers:
+>
+> - **Phase 1 OAuth persistence is NOT shipped end-to-end.**
+>   Encryption primitives exist in `src/lib/core/auth/oauth-token-encryption.ts`,
+>   but **no Convex schema fields** store `encryptedOauthTokens`,
+>   `oauthProvider`, `oauthExpiresAt`. OAuth is currently used for
+>   SvelteKit-session sign-in only; tokens aren't persisted for
+>   post-send verification. Downgrade Phase 1 to "Scaffolded."
+> - **Phase 2 TEE email verification is illustrative.** No AWS Nitro
+>   deployment. Active resolver is `LocalConstituentResolver`
+>   (in-process decryption in the CF Worker). `verifyEmailDelivery()`
+>   referenced below (~lines 113-167) does not exist in the codebase.
+>   Gmail OAuth search, 5–10 s TEE turnarounds, and attestation
+>   properties (attestation, hypervisor, memory encryption, secure
+>   deletion) are **desired** properties, not implemented.
+> - **Phase 3 Congressional signatures:** delivery code in
+>   `convex/submissions.ts` + `convex/_cwcXml.ts` exists for CWC, but
+>   **`FEATURES.CONGRESSIONAL=false`** — UI gated off. House delivery
+>   requires `GCP_PROXY_URL` + `GCP_PROXY_AUTH_TOKEN` per
+>   `docs/adr/WP-008-house-cwc-delivery-fix.md`.
+> - **Accountability receipt "badge" end-to-end is overstated.**
+>   `accountabilityReceipts` foundation shipped; Phase 2 scorecard +
+>   Phase 3 Scroll L2 anchor are partial (see ACCOUNTABILITY-RECEIPT
+>   banner). Scorecard compute is a log-only stub in
+>   `convex/legislation.ts`.
+> - **Verification page path is `/verify/[hash]`**
+>   (`src/routes/verify/[hash]/+page.server.ts`) with lookup order:
+>   (1) `deliveryId` → `campaignDeliveries`, (2) `campaignId` →
+>   `campaigns` (legacy), (3) district credential hash (legacy).
+>   Doc should enumerate this.
 
 > **Implementation Status Overview**:
 > - **Phase 1 (OAuth)**: ✅ IMPLEMENTED - Token persistence, encrypted storage, revocation

@@ -1,5 +1,36 @@
 # Identity Verification UI Components
 
+> ⚠️ **2026-04-23 audit — UI-pattern doc, silent omissions worth calling
+> out:**
+>
+> - **`verificationMethod` enum still includes `'self.xyz' | 'didit'`**
+>   (`src/lib/core/identity/session-credentials.ts:~65`) for DB
+>   backward compatibility. UI components route only through
+>   `digital-credentials-api` (mDL). Any "removed Cycle 15" framing
+>   means "removed from the active intake path," not "removed from
+>   the type system."
+> - **Desktop fallback flow is undocumented.**
+>   `GovernmentCredentialVerification.svelte:~62-68,184-295` falls
+>   back to the cross-device bridge (QR + SSE + HMAC pairing +
+>   email-hash anti-phishing) when `shouldUseSameDeviceFlow()` is
+>   false on desktop. The happy-path UX below describes only the
+>   mobile DC-API path. See `docs/design/CROSS-DEVICE-BRIDGE.md`.
+> - **Trust Tier 4 (passport) is unreachable.**
+>   `deriveAuthorityLevel` has no `document_type === 'passport'`
+>   branch; `TRUST_TIER_LABELS[4]` is a ghost. Reachable trust tiers
+>   are 0–3 + 5. `FEATURES.PASSKEY=false` (passkey Tier-1 path also
+>   gated off).
+> - **Trust tiers (0–5, identity) ≠ engagement tiers (0–4, reputation).**
+>   The "reputation" concepts in this doc live on Merkle Tree 3 via
+>   `shadow-atlas-handler.ts`; UI doesn't expose engagement tier yet.
+> - **Credential crypto is load-bearing but undocumented here.**
+>   Per-user AES-256-GCM via HKDF with `commons-credential-v2` salt
+>   (`src/lib/core/identity/credential-encryption.ts`). The
+>   "sealed credential" in any description above lives in IndexedDB +
+>   server cache.
+> - **Backend is Convex; TEE is Planned.** Active resolver is
+>   `LocalConstituentResolver` (`src/lib/server/tee/local-resolver.ts`).
+
 ## Overview
 
 This suite of components handles identity verification for Commons's congressional advocacy platform. The design balances **civic credibility** with **digital sovereignty**, making users feel empowered rather than surveilled.

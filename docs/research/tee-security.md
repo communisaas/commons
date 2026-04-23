@@ -4,6 +4,40 @@
 **Question:** Can we find an economical TEE solution without NSA backdoors (avoiding AMD PSP, Intel ME)?
 **Answer:** ✅ **YES - AWS Nitro Enclaves on ARM Graviton processors**
 
+> ⚠️ **2026-04-23 audit — research sound, deployment framing stale:**
+>
+> The architectural recommendation (Nitro on Graviton) remains valid,
+> but the "Migration Path: 1-2 days, code is cloud-agnostic, just
+> change config" framing overstates deployment readiness. Concrete
+> corrections:
+>
+> - **TEE is Planned, not deployed.** Active resolver is
+>   `LocalConstituentResolver` (`src/lib/server/tee/index.ts:~28`,
+>   comment at :27 reads `// Future: resolver = new NitroEnclaveResolver`).
+>   No `NitroEnclaveResolver` class, no AWS SDK wiring, no Dockerfile /
+>   Terraform / CloudFormation in the repo.
+> - **Abstraction is single-provider.** `ConstituentResolver` interface
+>   exists in `constituent-resolver.ts`, but only
+>   `LocalConstituentResolver` implements it. There is no provider
+>   factory/registry; switching providers requires new
+>   implementation + attestation verification (CBOR, COSE) + KMS
+>   integration — weeks, not "1-2 days."
+> - **Cost figures (~$0.12/debate, ~$0.06 grounding) are notional.**
+>   `convex/debates.ts:~720` is a log-only stub; no evaluation runs
+>   actually happen. Figures assume c7g pricing + Exa API rates but
+>   have no operational validation.
+> - **Bittensor subnet path is deprecated** (~$28K TAO lock
+>   prohibitive, per sister doc `architecture/tee-systems.md`). TEE
+>   Planned replaces it.
+> - **Witness-encryption crypto claims (X25519 ECDH → BLAKE2b keyed
+>   hash → XChaCha20-Poly1305) are accurate** against
+>   `src/lib/core/proof/witness-encryption.ts` — those rows audit
+>   clean.
+> - **Action items dated October 2025** are 6 months stale. See
+>   `docs/implementation-status.md` and
+>   `docs/architecture/tee-systems.md` for current Phase 2-3
+>   roadmap.
+
 ---
 
 ## Executive Summary

@@ -1,8 +1,31 @@
 # Priority Execution Tracker
 
-> **Status**: COMPLETE (all 10 priorities shipped)
+> **Status**: COMPLETE (all 10 priorities shipped) — with post-ship drift; see banner
 > **Date**: 2026-03-23
 > **Pattern**: For each priority — structure task graph → implement → review → update doc → next priority
+
+> ⚠️ **2026-04-23 audit — ship-state follow-ups:**
+>
+> - **P1c (Backup/Restore) is now DELETED, not "DONE."** The scripts
+>   and workflow (`scripts/backup-db.ts`, `scripts/restore-db.ts`,
+>   `.github/workflows/daily-backup.yml`) were removed 2026-04-21
+>   (commit 247a69f2) when Prisma → Convex became the sole datastore.
+>   Convex-native DR via `npx convex export`. See banner on
+>   `docs/runbooks/DISASTER-RECOVERY.md`.
+> - **Storage isolation (not a priority row here, but cross-cutting
+>   residual gap):** `templateDraftStore` still uses the global key
+>   `commons_template_drafts` (`src/lib/stores/templateDraft.ts:~24`)
+>   with no user/org prefix. Cross-org draft leakage is possible on
+>   shared devices. Listed in KNOWN-LIMITATIONS addenda; not yet
+>   closed.
+> - **Storacha pinning sunset 2026-05-31** is a new ops-urgent
+>   exposure (writes disabled 2026-04-15) — not on this tracker
+>   because it post-dates the ship; track in a new priority row or
+>   cross-link.
+> - Other eight priorities (P0, P1a, P1b, P1d, P2a, P2b, P3a, P3b,
+>   P3c) verify as shipped against code. Feature-gated entries
+>   (DEBATE, PASSKEY, DELEGATION = `false`) remain correctly gated —
+>   the code ships; the flags are off.
 
 ---
 

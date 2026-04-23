@@ -1,5 +1,22 @@
 # US Mobile Driver's License Landscape — March 2026
 
+> ⚠️ **2026-04-23 audit — Commons-side claims verify clean; two small
+> gaps in the research narrative:**
+>
+> - **Add explicit browser baseline.** `src/lib/core/identity/digital-credentials-api.ts:~7`
+>   documents: *"Chrome 141+ (`org-iso-mdoc` + `openid4vp`), Safari 26+
+>   (`org-iso-mdoc` only)."* Surfacing this keeps ops aligned when
+>   debugging wallet flows.
+> - **Apple Business Connect enrollment is still ops-pending** for
+>   iOS Safari wallet verification. Not in code as a blocker; worth
+>   calling out as a gating external dependency.
+> - **Verified against code:** mDL/DCAPI as sole active intake;
+>   OID4VP JWT sig verification (ES256/384/512, JWK + x5c); bifurcated
+>   nonce validation (hard in OID4VP, presence-only in
+>   `org-iso-mdoc` with T3 deferral); `self.xyz` / `Didit` as
+>   backward-compat-only enums; cross-device bridge required on
+>   desktop.
+
 ## Our Current Coverage
 
 16 states/territories in IACA trust store: **AK, AZ, CA, CO, GA, HI, IL, MD, MT, ND, NM, OH, PR, UT, VA, WV**
