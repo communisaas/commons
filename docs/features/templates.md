@@ -2,6 +2,33 @@
 
 **The core unit of civic action. Templates are reusable message structures that resolve with user context at send time.**
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The conceptual model is
+> accurate, but concrete schema references describe the pre-Convex Prisma
+> schema:
+>
+> - **Schema location:** `prisma/schema.prisma` does not exist. Templates
+>   live in `convex/schema.ts` (lines ~163-285, table `templates`).
+> - **Field naming:** Convex uses **camelCase**, not snake_case.
+>   `messageBody` (not `message_body`), `researchLog` (not
+>   `research_log`), `verifiedSends`, `uniqueDistricts`, `avgReputation`,
+>   `topicEmbedding`, etc.
+> - **Nested arrays, not separate tables:** `TemplateJurisdiction[]` and
+>   `TemplateScope[]` are **flattened** onto the template record as
+>   `jurisdictions: v.array(v.object({...}))` and
+>   `scopes: v.array(v.object({...}))` (`convex/schema.ts:~224-263`).
+> - **Category is deprecated:** `category` remains as a backward-compat
+>   string; the primary grouping fields are `domain` + `topics`
+>   (`convex/schema.ts:167-169`).
+> - **Draft store encrypts DM emails separately:** `templateDraftStore`
+>   (`src/lib/stores/templateDraft.ts`) strips decision-maker emails from
+>   the plaintext draft and encrypts them in a separate localStorage key
+>   to avoid plaintext PII. Not documented below.
+> - **`recipientEmails` computed field:** referenced in the CRUD section
+>   but not present in current API responses; `recipientConfig` is stored
+>   as opaque `v.any()` and never extracted as a typed field.
+> - **`src/lib/core/db/template-select.ts`** referenced in Key Files
+>   does not exist.
+
 ---
 
 ## Table of Contents

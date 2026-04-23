@@ -1,5 +1,55 @@
 # Production Secrets Checklist
 
+> ⚠️ **DRIFT DETECTED (2026-04-23 audit).** This checklist is out of sync
+> with the codebase. Treat `.env.example` + `grep process.env` in `src/`
+> and `convex/` as source of truth until this file is refreshed.
+>
+> ### Concrete deltas to apply before a prod deploy
+>
+> **Mislabeled as unused — actually CRITICAL:**
+> - `GROQ_API_KEY` — powers the Llama Guard 4 moderation pipeline
+>   (`src/lib/core/server/moderation/llama-guard.ts`). Required for
+>   safety gating; do not treat as optional.
+>
+> **Missing from the checklist but required in production:**
+>
+> Security/crypto keys (all HIGH priority unless noted):
+> - `BRIDGE_ENCRYPTION_KEY` — AES-256-GCM for Convex bridge session crypto
+> - `CAMPAIGN_PSEUDONYM_KEY` — Ed25519 for campaign pseudonym generation
+> - `DISTRICT_HASH_KEY` — HMAC for district-residency proofs
+> - `SESSION_CREATION_SECRET` — OAuth callback session mint
+> - `OAUTH_ENCRYPTION_KEY` — encrypts OAuth refresh tokens at rest
+> - `ORG_KEY_WRAPPING_KEY` — wraps org-level encryption keys
+> - `PSEUDONYMOUS_ID_SALT` — **CRITICAL**; Convex-side pseudonym salt
+>   (equivalent to `SUBMISSION_ANONYMIZATION_SALT`)
+> - `INTERNAL_API_SECRET` — internal-to-internal HTTP auth
+>
+> Integrations:
+> - `FIRECRAWL_API_KEY` — web scraping (`src/lib/server/firecrawl/client.ts`
+>   throws without it)
+> - `CWC_DELIVERY_AGENT_CONTACT_EMAIL` / `..._CONTACT_PHONE` — Senate CWC
+>   metadata (distinct from the `_ACK_EMAIL` field already listed)
+> - `SES_FROM_EMAIL` — blast-campaign sender (defaults to
+>   `reports@commons.email`)
+> - `TEE_RESOLVER_URL`, `ENCLAVE_PARENT_HOST` — optional, Nitro enclave
+>   lifecycle (Planned)
+>
+> OAuth: add a dedicated **Coinbase** section (trust tier 5, KYC) —
+> currently only mentioned in the quick-reference table.
+>
+> **Obsolete entries — safe to remove:**
+> - `DATABASE_URL` — no code reads it (Convex-only; Prisma/Postgres
+>   removed).
+> - `ANTHROPIC_API_KEY` — not referenced anywhere. Remove or mark as
+>   "future use only".
+>
+> **Clarify:** `TWITTER_CLIENT_*` / `DISCORD_CLIENT_*` should carry a
+> "DO NOT CONFIGURE IN PRODUCTION" note — routes return 403 and these
+> providers are permanently disabled.
+>
+> **Naming inconsistency:** `SHADOW_ATLAS_URL` (used in Convex) vs
+> `SHADOW_ATLAS_API_URL` (listed here). Unify.
+
 This document provides a comprehensive checklist of all environment variables required for the Commons production deployment on Cloudflare Pages.
 
 ## Quick Reference: Critical vs Optional

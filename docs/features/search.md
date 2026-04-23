@@ -4,6 +4,31 @@
 **Purpose**: Define how users find templates (semantic search + embeddings)
 **Context**: Template browser needs search across all templates
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Core strategy remains
+> directionally valid, but specific backend claims are pre-Convex:
+>
+> - **Not pgvector.** Live search uses Convex `.searchIndex()` (full-text)
+>   and `.vectorIndex("by_*", { dimensions: 768 })`. Zero pgvector
+>   references in `convex/schema.ts`. HNSW migration pseudocode below is
+>   obsolete.
+> - **Embedding model:** Gemini **`text-embedding-004`, 768 dimensions**
+>   (`convex/intelligence.ts:~206-233`). The ADR-011 1024-dim Voyage AI
+>   target was never shipped.
+> - **Execution boundary:** Query embedding is generated **server-side**;
+>   vector similarity runs on Convex. The client calls `/api/templates/search`;
+>   it does not compute embeddings. Client IndexedDB cache
+>   (`src/lib/core/search/cache.ts`) holds results only.
+> - **Index coverage:** templates have `by_topicEmbedding` +
+>   `by_locationEmbedding`; intelligence has `by_embedding`; bills have
+>   `by_topicEmbedding`. **Decision-makers have only a `.searchIndex()`
+>   (keyword), no vector index.**
+> - **Schema:** `domain` + `topics` are primary; `category` is deprecated
+>   but retained on the record.
+> - **Embedding generation is rate-limited** (20/hr authenticated) via
+>   `src/lib/server/ai/llm-cost-protection.ts`.
+> - **Code samples** below using `await prisma.template.create(...)`
+>   describe removed infrastructure — substitute Convex mutations.
+
 ---
 
 ## The Problem

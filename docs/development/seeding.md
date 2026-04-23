@@ -1,5 +1,29 @@
 # Database Seeding
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The single-script Prisma-era
+> seeding described here was replaced by a multi-stage Convex pipeline.
+>
+> ### Current seeding
+>
+> - **Primary:** `npm run seed` → `npx convex run seed:seedAll`
+>   (see `convex/seed.ts`).
+> - **Agent-powered templates:** `npm run seed:agents` →
+>   `scripts/seed-with-agents.ts` (regenerates `convex/seedData.ts`
+>   snapshots using Gemini + Exa). Requires `GEMINI_API_KEY`, `EXA_API_KEY`,
+>   `GROQ_API_KEY`.
+> - **Org templates:** `npm run seed:org` → `scripts/seed-org-templates.ts`.
+> - **Policy vibes:** `scripts/seed-vibes.ts`.
+> - **Data shape:** templates carry `domain` + `topics` (not `category`);
+>   users are seeded with `verificationMethod: "mdl"` only (legacy
+>   `'self.xyz' | 'didit'` enum values are unused in fixtures).
+> - **No `DATABASE_URL`.** Convex is cloud-managed; local dev is
+>   `npx convex dev`. `scripts/seed-database.ts` (referenced below) does
+>   not exist.
+>
+> The counts and names below (12 users, 13 templates, 4 named reps) are
+> stale; the actual fixture sets live in `convex/seed.ts` (SEED_USERS,
+> REPRESENTATIVES) and `convex/seedData.ts` (SEED_TEMPLATES).
+
 ## Overview
 
 Single consolidated seeding script for the MVP database with congressional and SF-focused templates.

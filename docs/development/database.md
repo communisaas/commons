@@ -1,6 +1,34 @@
 # Database
 
-**Stack:** PostgreSQL 16 + pgvector, Prisma 6.19.x with `@prisma/adapter-pg`, Cloudflare Hyperdrive
+> ⚠️ **FULLY OBSOLETE (2026-04-23 audit).** This doc describes the
+> pre-Convex stack (Prisma 6.19 + Postgres + pgvector + Hyperdrive).
+> **None of the commands, bindings, or constraints below apply.**
+>
+> ### Current stack
+>
+> - **Backend:** Convex (`convex/schema.ts`, ~71 tables, flattened
+>   from the former Prisma schema). No Prisma / Postgres / Supabase /
+>   Hyperdrive in the repo.
+> - **Vector search:** Convex `.vectorIndex("by_*", { dimensions: 768 })`
+>   using Gemini `text-embedding-004` embeddings. No pgvector HNSW
+>   migrations.
+> - **Local dev:** `npx convex dev` (cloud dev instance).
+>   `docker-compose.yml` runs only IPFS for ancillary pinning, **not** the
+>   app DB.
+> - **Seeding:** `npm run seed` → `npx convex run seed:seedAll`
+>   (see `convex/seed.ts` and `docs/development/seeding.md`).
+> - **Deploys:** `npx convex deploy --env-file .env.production` (see
+>   MEMORY: `convex deploy -y` silently fails for prod).
+> - **No migration files.** Schema changes are declarative edits to
+>   `convex/schema.ts`; Convex applies them on `dev`/`deploy`.
+>
+> The sections below (quick commands, connection architecture, Hyperdrive
+> pooling, pgvector index migrations, Prisma hard rules) are retained
+> only as historical context. **Do not follow any of them.**
+
+---
+
+**Stack (historical, 2026-01):** PostgreSQL 16 + pgvector, Prisma 6.19.x with `@prisma/adapter-pg`, Cloudflare Hyperdrive
 
 ---
 
