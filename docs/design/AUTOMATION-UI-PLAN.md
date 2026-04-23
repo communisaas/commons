@@ -1,8 +1,51 @@
 # Automation Workflow Builder UI — Design Plan
 
-**Status**: Plan
+**Status**: Plan — minimal builder shipped, visual builder + data-shape fixes still pending (reconciled 2026-04-23)
 **Date**: 2026-03-17
 **Scope**: Redesign the workflow builder from the current minimal form into a visual, verification-first workflow builder
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The minimal builder and
+> the Convex execution engine are live; the "visual builder" redesign
+> (WorkflowBuilder, TriggerSelector, StepChain, StepCard,
+> ConditionBranch, constants.ts) remains design-only. Some data-shape
+> issues called out in §1 also remain unfixed.
+>
+> **Shipped:**
+>
+> - Routes: `/org/[slug]/workflows/*` (list / new / detail).
+> - `WorkflowCard.svelte`, `ExecutionTable.svelte`.
+> - Backend executor at `convex/workflows.ts:~457-473` (delay-pause/
+>   resume via `thenStepIndex`/`elseStepIndex`).
+> - Convex tables: `workflows` (trigger/steps as `v.any()`) +
+>   `workflowExecutions`.
+> - Sidebar nav "Workflows" gated on `FEATURES.AUTOMATION`.
+>
+> **Not shipped (design only):**
+>
+> - `WorkflowBuilder.svelte`, `TriggerSelector.svelte`, `StepChain.svelte`,
+>   `StepCard.svelte`, `ConditionBranch.svelte`, `constants.ts`.
+> - Chip selectors for tags / campaigns (still plain `<select>` + raw-ID
+>   fallback).
+> - Condition-field dropdown (still a free-text input).
+> - Condition branch UI rendered as numeric inputs, not step-label pills.
+>
+> **Data-shape issues still unfixed:**
+>
+> - **Condition operator mismatch:** UI offers
+>   `equals/not_equals/gt/lt/contains`; backend only handles
+>   `eq/gte/lte/exists` — and the branching code at
+>   `workflows.ts:~414-420` currently defaults conditions to `false`.
+>   Operators are cosmetic.
+> - **Delay unit mismatch:** UI stores `{ duration, unit }`; backend
+>   expects `delayMinutes: number` (`workflows.ts:~401` falls back to
+>   `1`). Saved delays are effectively 1-minute no-ops.
+> - **Condition index naming:** UI stores `thenStep`/`elseStep`; backend
+>   reads `thenStepIndex`/`elseStepIndex`.
+> - **Email step field names:** UI `subject`/`body`; backend expects
+>   `emailSubject`/`emailBody`. Executor for `send_email` is also a
+>   log-only success stub at `workflows.ts:~441-446`.
+> - **TRIGGER_LABELS / STEP_LABELS** still duplicated in
+>   `new/+page.svelte:~6-21` and `[id]/+page.svelte:~7-22`.
 
 ---
 

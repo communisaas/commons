@@ -4,7 +4,29 @@
 
 **Created**: 2026-03-30
 **Predecessor**: [`BILLING-ENFORCEMENT-ROADMAP.md`](BILLING-ENFORCEMENT-ROADMAP.md)
-**Status**: PHASES E+F COMPLETE (2026-03-30)
+**Status**: PHASES E+F COMPLETE (2026-03-30); D1 shipped, D3 partial, D2 partial, Phase C not started (reconciled 2026-04-23)
+
+> ⚠️ **2026-04-23 audit — reconciliation with sister ROADMAP banner:**
+>
+> - **D1 (Redis rate limiter)** — **shipped.** `SlidingWindowRateLimiter`
+>   auto-selects Redis when `REDIS_URL` is set; in-memory fallback
+>   otherwise (`src/lib/core/security/rate-limiter.ts:~179-226,293-294`).
+>   The "Pending" / per-isolate-acceptable framing is stale.
+> - **D2 (platform-wide COGS circuit breaker)** — **still partial.**
+>   The `daily-global` quota in `llm-cost-protection.ts:~81-85` is
+>   per-user, not a shared KV counter across all users. True
+>   platform-wide breaker still pending.
+> - **D3 (subscription_schedule handlers)** — **partial**, not pending.
+>   `convex/subscriptions.ts:~536,544,550` handles
+>   `subscription_schedule.completed`, `.canceled`, `.released`, but
+>   the handlers only log — they don't sync plan changes on schedule
+>   completion. Treat as "handlers wired, logic deferred."
+> - **D4 (past-due grace via `pastDueSince`)** — already marked
+>   complete in ROADMAP; stays complete here.
+> - **Phase C (org-scoped AI sponsorship)** — not started; LLM rate
+>   limits are user/guest/verified tiers with no org context.
+> - **`mapStripeStatus()` default for unknown statuses is
+>   `past_due`** (`convex/subscriptions.ts:~561-580`), not `active`.
 
 ---
 

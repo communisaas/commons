@@ -1,8 +1,48 @@
 # Legislator Scorecard — Design Plan
 
-> **Status**: DESIGN
+> **Status**: DESIGN — UI skeleton shipped, compute is a stub
 > **Date**: 2026-03-23
-> **Depends on**: Accountability receipts (complete), Intelligence loop (complete), DecisionMaker model (complete)
+> **Depends on**: Accountability receipts (foundation complete — Phase 2 scorecard + Phase 3 chain anchor still partial per ACCOUNTABILITY-RECEIPT banner), Intelligence loop (complete), DecisionMaker model (complete)
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Scorecard UI skeleton is
+> shipping; the **computation core is a stub**, and the code samples
+> throughout use Prisma against a Convex-only codebase.
+>
+> **Shipped:**
+>
+> - Convex `scorecardSnapshots` table matches §3.1 schema
+>   (`convex/schema.ts:~1881`).
+> - API routes: `GET /api/dm/[id]/scorecard`,
+>   `GET /api/dm/scorecard/compare?ids=...`,
+>   `GET /api/embed/scorecard/[id]` — all present as thin wrappers
+>   over Convex queries.
+> - Public page `/dm/[id]/scorecard/+page.svelte` and 6 scorecard
+>   components (`CompositeScoreBadge`, `ResponsivenessGauge`, etc.)
+>   in `src/lib/components/scorecard/`.
+>
+> **Not shipped:**
+>
+> - **`computeScorecards` is a log-only stub** —
+>   `convex/legislation.ts:~2389` returns `{ computed: 0, skipped: 0 }`
+>   with "Scorecard computation not yet fully implemented..." log.
+> - **Vote tracker stub** in the same file; §4 computation pipeline
+>   has no live executor.
+> - **`src/lib/server/scorecard/compute.ts`** referenced in §6.2
+>   does not exist; only `src/lib/server/legislation/scorecard/types.ts`
+>   is present (~68 LoC).
+> - **`src/routes/api/cron/scorecard-compute/+server.ts`** does not
+>   exist. Scorecard compute is registered as a Convex cron
+>   (`convex/crons.ts:~123`); no SvelteKit HTTP cron route.
+>
+> **Corrections:**
+>
+> - **§3.2 migration block** (`20260323_scorecard_snapshot`) is
+>   irrelevant — Convex has no migration files; schema is code.
+> - **Prisma code samples in §4** (`db.accountabilityReceipt.findMany(...)`
+>   etc.) are pseudocode; live code uses Convex `ctx.db.query(...)`.
+> - **§4.2 Poseidon2 attestation-hash logic** is Phase 4 aspirational.
+>   Live code uses SHA-256 (`computeAttestationDigest`,
+>   `attestationDigest` field) — see ACCOUNTABILITY-RECEIPT banner.
 
 ---
 

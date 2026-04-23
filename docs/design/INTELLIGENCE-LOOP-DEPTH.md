@@ -1,10 +1,44 @@
 # Intelligence Loop Depth: From Campaign-Scoped to Relationship-Scoped
 
-> **Status**: Implemented + DecisionMaker migration complete (2026-03-18)
+> **Status**: Implemented + DecisionMaker migration complete (2026-03-18); schema rewritten in Convex 2026-04
 > **Author**: noot
 > **Date**: 2026-03-18
 > **Depends on**: Intelligence Loop (INTELLIGENCE-LOOP-PLAN.md), Accountability Receipts (ACCOUNTABILITY-RECEIPT.md)
 > **Builds on**: All 6 phases of the intelligence loop (implemented 2026-03-17/18)
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Relationship-scoped
+> architecture is shipped; the **Prisma/PostgreSQL framing is
+> obsolete**. Concrete corrections:
+>
+> - **Schema is Convex.** The `Representative` / `OrgRepFollow` /
+>   `OrgBillWatch` Prisma blocks (~lines 125-298) describe a database
+>   that doesn't exist. Live tables: `decisionMakers`
+>   (`convex/schema.ts:~1771`), `orgDmFollows` (~1854),
+>   `orgBillWatches` (~1867), `accountabilityReceipts` (~1692),
+>   `orgIssueDomains` (~1751). FKs are `decisionMakerId`,
+>   not `representativeId`.
+> - **Search is Convex-native.** The `searchBills()` sample using
+>   `tsvector` / `to_tsquery` / `ts_rank` / Prisma `$queryRaw` (~lines
+>   336-364) is fiction. Live code does
+>   `ctx.db.query("bills").withSearchIndex("search_bills", q =>
+>   q.search("title", args.q))` (`convex/legislation.ts`).
+> - **Embeddings are Gemini `text-embedding-004`** (768-dim), not a
+>   non-specified provider. No Voyage AI.
+> - **"Representative" narrative is legacy.** The `Representative` →
+>   `DecisionMaker` migration (Wave DM-1/2 in the implementation log)
+>   renamed the table. Outside the log, the main narrative still
+>   reads as if `Representative` is the canonical entity — rewrite
+>   to `DecisionMaker` where it refers to the current table.
+> - **API route paths are post-migration.** Routes under
+>   `/api/org/[slug]/reps/*` should be `/api/org/[slug]/decision-makers/*`
+>   (or whatever DM-namespaced form shipped) — verify against
+>   `src/routes/` before linking.
+> - **Scorecard compute is a stub** (`convex/legislation.ts:~1206` /
+>   `computeScorecards` — `{ computed: 0, skipped: 0 }` log-only).
+>   "Accountability score across 8 bills is 34/100" example framing
+>   should read as aspirational, not live.
+> - **Scroll L2 receipt anchor is Phase 3**, unmentioned below. See
+>   ACCOUNTABILITY-RECEIPT banner for shipped vs. planned split.
 
 ## The Problem
 

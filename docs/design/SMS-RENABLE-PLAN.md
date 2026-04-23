@@ -1,7 +1,58 @@
 # SMS / Calling Re-Enablement Plan
 
 **Date**: 2026-03-17
-**Status**: Partially implemented — SMS consent model (smsStatus field, blast filter, STOP webhook) DONE. Remaining P0-P2 gaps documented below.
+**Status**: Partially implemented — consent model + quota gate shipped; send path and segment filtering still stubbed.
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Architecture language is
+> Prisma-era; live backend is Convex. Some P0 items are stubbed more
+> than the header implies.
+>
+> **Shipped:**
+>
+> - `supporters.smsStatus` field (`'none' | 'subscribed' | 'unsubscribed'
+>   | 'stopped'`) in Convex schema.
+> - STOP/START webhook in `convex/webhooks.ts updateSmsStatus()` —
+>   processes STOP → `stopped`, START → `subscribed` (no
+>   `'unsubscribed'` mapping; the four-state enum is narrower in
+>   practice).
+> - `plans.ts maxSms` per tier (free=0, starter=1000, organization=10000,
+>   coalition=50000) + per-blast quota gate at
+>   `src/routes/api/org/[slug]/sms/[id]/+server.ts:~41-44` returning
+>   `smsSent >= maxSms` as 403.
+>
+> **Not shipped / partial:**
+>
+> - **`sendSmsBlast(blastId)` does not exist.** The SvelteKit route
+>   calls a fire-and-forget `void sendSmsBlast(params.id)` at ~line 47
+>   but no definition is in the codebase. Quota check passes; no
+>   actual send. Must be implemented (Convex action or worker) before
+>   SMS can be live.
+> - **TCPA consent trail (§3.1) missing.** `smsConsentAt`,
+>   `smsConsentMethod`, `smsConsentIp` are not in the Convex schema;
+>   only `smsStatus` is tracked.
+> - **Segment filter by `smsStatus` is not wired.**
+>   `convex/segments.ts matchCondition()` handles tag / emailStatus /
+>   source / verification / engagementTier / dateRange only. "P2
+>   segment builder" is a stub.
+> - **`smsSent` per-period aggregation**: the counter check runs, but
+>   the Convex aggregation that feeds `getOrgUsage().smsSent` against
+>   the `smsBlasts`/`smsMessages` tables may not be period-scoped —
+>   verify before flipping SMS on.
+>
+> **Stale refs:**
+>
+> - `src/lib/server/sms/send-blast.ts` and any path calling
+>   `db.smsBlast.update()` / `db.supporter.findMany()` — these are
+>   Prisma/SvelteKit-server; live code lives under `convex/sms.ts`
+>   + `convex/webhooks.ts`.
+> - Prisma migrations (`20260317_add_sms_consent_status`,
+>   `20260323_add_sms_consent_tracking`) referenced in the checklist
+>   do **not exist**. Convex schema is code; no migration files.
+>
+> **Ops-dependent (not code):**
+>
+> - Twilio account credentials + **10DLC campaign registration**
+>   remain ops tasks; no code change enables SMS until those land.
 
 ---
 

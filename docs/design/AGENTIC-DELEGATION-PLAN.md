@@ -1,9 +1,54 @@
 # Agentic Delegation — Design Plan
 
-> **Status**: DESIGN
+> **Status**: DESIGN — schema + UI shipped, execution pipeline unbuilt (reconciled 2026-04-23)
 > **Date**: 2026-03-23
 > **Depends on**: Trust tiers (complete), Debate markets (design phase), Accountability receipts (complete)
 > **Phase**: 3 — requires debate markets and scorecards before meaningful implementation
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** `FEATURES.DELEGATION=false`
+> (`src/lib/config/features.ts:73`). UI + schema + API routes exist but
+> are inaccessible at runtime; the execution pipeline is unbuilt.
+>
+> **Shipped:**
+>
+> - Convex schema: `delegationGrants`, `delegatedActions`,
+>   `delegationReviews`, and the `CampaignAction.delegated` +
+>   `delegationGrantId` extensions match §4.
+> - Settings UI: `src/routes/settings/delegation/+page.svelte` (TrustTierGate,
+>   ActiveGrants, creation flow with NL policy parsing, ReviewQueue,
+>   ActionHistory — §6).
+> - API routes: `POST/GET /api/delegation`,
+>   `PATCH/DELETE /api/delegation/[id]`,
+>   `POST /api/delegation/parse-policy`,
+>   `PATCH /api/delegation/review/[reviewId]`.
+> - Trust-tier gate: API + page server both check `trust_tier < 3`.
+> - `revokeGrant` mutation sets `revokedAt` + `status='revoked'`.
+>
+> **Not shipped (§5 "Agent Execution Engine" is aspirational):**
+>
+> - **Discovery pipeline:** no campaign scan, no issue embedding filter,
+>   no relevance score, no auto-execution logic.
+> - **Cron `src/routes/api/cron/delegation-execute/+server.ts`
+>   does not exist.** Convex crons (15 jobs) make no delegation calls.
+> - **`internal.delegation.discover()` / auto-action callers do not
+>   exist.** `recordAction` internalMutation (`delegation.ts:~339`)
+>   is dormant — no caller invokes it.
+> - **No integration with existing agents** (`gemini-provider.ts`,
+>   message-writer, etc.) — delegation has no hooks in the live
+>   agent stack.
+>
+> **Corrections:**
+>
+> - **§2.1 "Tier 3 = address-verified"** is imprecise. Trust tier 3+
+>   requires **ID or mDL verification**; post-Cycle-15 the active
+>   intake is mDL via W3C Digital Credentials API. Legacy
+>   `self.xyz` / `Didit` enum values remain for backward compat only.
+> - **§7.1 "Policy text encrypted at rest" is false.** `policyText`
+>   is stored plaintext in the Convex schema (see inline code comment
+>   at `delegation.ts:~17`). Issue and org filters are also
+>   plaintext arrays. The design justification is that it's the
+>   user's own policy text, not third-party PII — but the doc
+>   should reflect reality.
 
 ---
 
