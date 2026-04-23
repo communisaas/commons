@@ -4,25 +4,31 @@
 **Mission:** Wire Browser WASM Prover for ZK Proof Generation
 **Working Directory:** `/Users/noot/Documents/commons`
 
+> **⚠️ HEAVILY STALE — AUDITED 2026-04-23.** This doc was written for the single-tree `district_membership` circuit and a layered client stack that never shipped. Several concrete claims below do not match code. Treat the overall shape as historical; use `src/lib/core/zkp/prover-client.ts` and `voter-protocol/specs/CRYPTOGRAPHY-SPEC.md` as the current source of truth.
+>
+> **Known divergences from implementation (verified 2026-04-23):**
+> - **Circuit:** The live circuit is `three_tree_membership` (user + cell-map + engagement), not `district_membership`. `prover-client.ts:18-25` imports `ThreeTreeProofInput` / `getThreeTreeProverForDepth()`.
+> - **`witness-builder.ts` — does not exist.** Witness construction lives in `prover-client.ts` and per-purpose builders (`debate-weight-client.ts`, `position-note-client.ts`, `community-field-client.ts`).
+> - **`proof-generation.svelte.ts` — does not exist.** Proof state is tracked inside `prover-client.ts`; there is no separate Svelte rune store under `src/lib/stores/`.
+> - **Authority / engagement tier range:** The client uses `EngagementTier = 0 | 1 | 2 | 3 | 4` (`prover-client.ts:75`), not `[1..5]`.
+> - **Root registration timelock:** Claims of a timelock on root registration are false. `UserRootRegistry.sol:82-83` (voter-protocol) states explicitly that new roots are active immediately; only deactivation / expiry / reactivation carry a 7-day timelock.
+> - **Gas / cost figures** cited anywhere downstream (~2.2M gas, ~$0.01/verify) are unverified — no UltraHonk verifier gas harness exists in `voter-protocol/contracts/test/`.
+
 ---
 
 ## Executive Summary
 
-Successfully integrated `@voter-protocol/noir-prover` WASM package into the Commons frontend for in-browser zero-knowledge proof generation. The implementation provides a clean, type-safe API with Svelte 5 runes-based reactive state management.
+Browser ZK proof generation runs via `@voter-protocol/noir-prover` WASM, driven by the client code in `src/lib/core/zkp/`. Reactive UI state is handled inline in the prover-client module (not in a separate store) and surfaces through callbacks to consuming components.
 
-**Key Achievements:**
-- ✅ Lazy-initialized prover with singleton pattern (SA-006 compliant)
-- ✅ Comprehensive input validation (BN254 field modulus checks)
-- ✅ Reactive state management with Svelte 5 runes
-- ✅ Progress tracking for async operations
-- ✅ Error recovery and retry logic
-- ✅ Full TypeScript type safety
-
-**Lines of Code:** 1,106 lines (excluding examples and docs)
+**Key behaviors (verify against `prover-client.ts`):**
+- Lazy-initialized prover with singleton pattern (SA-006 compliant)
+- BN254 field element validation at input boundary
+- Progress callbacks for async proof generation
+- Retry / recovery on WASM init failure (cache clears on failure)
 
 ---
 
-## Architecture Overview
+## Architecture Overview (aspirational diagram — see banner for divergences)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -30,11 +36,11 @@ Successfully integrated `@voter-protocol/noir-prover` WASM package into the Comm
 ├─────────────────────────────────────────────────────────────────┤
 │  Svelte UI Components                                           │
 │         ↓                                                        │
-│  proof-generation.svelte.ts (Reactive Store)                   │
+│  [no separate reactive store — state lives in prover-client]    │
 │         ↓                                                        │
-│  prover-client.ts (Validation & API Wrapper)                   │
+│  prover-client.ts (validation, API wrapper, three-tree inputs)  │
 │         ↓                                                        │
-│  witness-builder.ts (Input Construction)                       │
+│  [per-purpose clients: debate-weight, position-note, community] │
 │         ↓                                                        │
 │  @voter-protocol/noir-prover (WASM)                            │
 │         ↓                                                        │

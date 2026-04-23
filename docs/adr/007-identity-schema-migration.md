@@ -8,9 +8,14 @@ Accepted (Partially superseded — see Legacy Note below)
 
 ## Context
 
-The identity verification system is fully implemented in code (`src/lib/core/server/identity-hash.ts`, `src/routes/api/identity/verify/+server.ts`, `src/routes/api/identity/didit/webhook/+server.ts`) but the database schema in `prisma/schema.prisma` was missing required fields. This created a critical gap where the verification API routes would fail at runtime when attempting to store or query identity verification data.
+The identity verification system is fully implemented in code (`src/lib/core/server/identity-hash.ts`, `src/routes/api/identity/verify/+server.ts`, and the current mDL path under `src/routes/api/identity/verify-mdl/*`) but the underlying schema needed to grow to support it.
 
-> **Legacy Note (Cycle 15):** The self.xyz and Didit.me verification providers referenced in this ADR have been removed. mDL via the Digital Credentials API is now the sole active verification provider. The schema fields described here (identity_hash, identity_fingerprint, birth_year) remain valid and are still used by the mDL verification flow. The identity_hash generation logic is the same regardless of provider. References to self.xyz and Didit.me below are historical context for why these fields were originally added.
+> **Legacy Note (Cycle 15, audited 2026-04-23):**
+> - **Provider state:** self.xyz and Didit.me are removed. mDL via the Digital Credentials API is the sole active provider. References to self.xyz / Didit below are historical.
+> - **Stack:** The repo is now Convex-only; the canonical schema lives in `convex/schema.ts`, not `prisma/schema.prisma` (which has been removed). Prisma-style DDL below is pseudocode.
+> - **Sybil field:** The live anti-sybil identifier is `identityCommitment` (set inside the mDL privacy boundary, `src/lib/core/identity/mdl-verification.ts:~1010`; duplicate-check at `convex/users.ts:~820`). `identityHash` exists on `users` but is **indexed non-uniquely** (`convex/schema.ts`, `.index("by_identityHash", ...)`), not `@unique`. Where this ADR promises uniqueness-based sybil resistance via `identityHash`, the real mechanism is `identityCommitment` uniqueness.
+> - **Aspirational fields:** `verification_attempts` / `verification_cooldown_until` described below are not in the Convex schema; no rate-limit enforcement uses them. `identity_fingerprint` exists but is never written or read in production code.
+> - **VerificationAudit scope:** The real `verificationAudit` table stores `{userId, verificationMethod, result, errorCode?, ipHash?}`; the broader "age/duplicate/proof reason + SDK metadata" capture described below is not implemented.
 
 ### The Problem
 

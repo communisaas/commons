@@ -2,9 +2,11 @@
 
 **VOTER Protocol uses TEE for two purposes: message delivery and debate evaluation. ZK proof generation remains in-browser.**
 
+> **⚠️ AUDIT NOTE (2026-04-23):** Client-side wiring (witness encryption, public-key endpoint, HTTP resolver invocation from `deliverToCongress`) is in place, but **no AWS Nitro Enclave is deployed**. `docs/implementation-status.md` (~line 113) is the authoritative tracker — it lists "TEE deployment" as **Planned**. Debate-evaluation TEE (Use Case 2) is entirely unbuilt: `convex/debates.ts:~720` logs `"Would evaluate debate..."` and skips. Cost figures in this doc are notional, not measured against a running deployment. `FEATURES.DEBATE = false` in production.
+
 ---
 
-## TEE Use Case 1: Message Delivery ✅
+## TEE Use Case 1: Message Delivery (scaffolded, not deployed)
 
 **Purpose**: Decrypt congressional messages for CWC API delivery
 
@@ -13,10 +15,11 @@
 - End-to-end encryption requires trusted intermediary
 - TEE provides hardware-isolated decryption environment
 
-**Implementation**: Week 13 Complete (October 22, 2025)
-- Files: `tee-workload/` - Universal TEE container
-- Cloud provider: AWS Nitro Enclaves (current target, mock/Phase 2)
-- Cost: ~$350-400/month (always-on)
+**Implementation status (verified 2026-04-23):**
+- Client witness encryption: **shipped** — `src/lib/core/proof/witness-encryption.ts` (XChaCha20-Poly1305 + ephemeral X25519 to `/api/tee/public-key`).
+- Server-side resolver invocation: **shipped but stubbed** — `convex/submissions.ts:deliverToCongress` POSTs to `TEE_RESOLVER_URL/resolve` for three-gate validation, but the resolver itself (`src/lib/server/tee/constituent-resolver.ts`) is annotated "NitroEnclaveResolver (future)".
+- Nitro Enclave container / deployment: **not deployed.** No CloudFormation/Terraform/container definitions in-repo.
+- Cost: ~$350-400/month is a **notional target** — no deployment is running against which to measure this.
 
 **Flow**:
 1. Browser encrypts message with XChaCha20-Poly1305

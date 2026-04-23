@@ -1,8 +1,15 @@
 # Organizations, Subscriptions & Payments
 
-> **Status:** Architecture document (February 2026)
-> **Scope:** The full payments and subscription model (individual pro + org), dual-path fiat/crypto billing, and the org-specific data model for shared templates, DM cache, and team governance.
-> **Constraint:** Must compose with graduated trust, privacy-preserving identity, and the existing User/Template/ResolvedContact models without violating any cypherpunk invariant.
+> **Status:** Architecture document (February 2026 — audited 2026-04-23)
+> **Scope:** The full payments and subscription model (individual free + org), dual-path fiat/crypto billing, and the org-specific data model for shared templates, DM cache, and team governance.
+> **Constraint:** Must compose with graduated trust, privacy-preserving identity, and the existing User / Template / ResolvedContact models without violating any cypherpunk invariant.
+>
+> **⚠️ Known divergences from implementation (verified against `main`, 2026-04-23):**
+> - **Stack:** Commons is now Convex-only. `prisma/` has been removed from the repo. Schema snippets below written in Prisma DSL are pseudocode; the canonical schema lives in `convex/schema.ts`.
+> - **Plan enum:** The canonical plans are `free | starter | organization | coalition` (`src/lib/server/billing/plans.ts`, mirrored in `convex/subscriptions.ts`). Older snippets using `pro | org` are stale — `pro` was replaced by `free` (individuals free forever) plus the three paid tiers.
+> - **Naming:** Convex uses camelCase (`planDescription`, `priceCents`, `currentPeriodStart`, `currentPeriodEnd`, `pastDueSince`). Prisma-style snake_case field names in this doc should be read as pseudocode.
+> - **Subscription shape:** `pastDueSince` (number | undefined) is the grace-period field used by the 7-day past_due window; older text that does not mention it predates the grace period implementation.
+> - **`User.memberships` / `User.subscription`:** These are *query patterns*, not denormalized relations on the `users` table. Use `orgMemberships.by_userId` / `subscriptions.by_userId` indexes to materialize them.
 
 ---
 

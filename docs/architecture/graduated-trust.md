@@ -1,8 +1,15 @@
 # Graduated Trust Architecture
 
-> **Status:** Active architecture document (February 2026)
+> **Status:** Active architecture document (February 2026 — audited 2026-04-23)
 > **Supersedes:** The binary verified/unverified model across all identity documentation
 > **Audience:** Implementation agents, code reviewers, the author at 3am
+>
+> **⚠️ Known divergences from implementation (verified against `main`, 2026-04-23):**
+> - **Tier 4 (Passport) is unreachable.** `deriveAuthorityLevel()` (`src/lib/core/identity/authority-level.ts:45-64`) has no `document_type === 'passport'` branch: it returns 5 for mDL, falls through to `identity_commitment + trust_tier>=3` → 3, never 4. Tier 4 exists in the labels table and in this doc, but no user will actually derive it. Either retire the tier or add the branch.
+> - **Passkey does nothing for tier derivation.** `deriveTrustTier()` accepts `passkey_credential_id` in its input object but never consults it (`authority-level.ts:89-121`). `FEATURES.PASSKEY = false` (`src/lib/config/features.ts:79`), and no UI path invokes `PasskeyRegistration.svelte`. The "Tier 1 Passkey ✅" cycle entry further down in this doc overstates readiness.
+> - **Authority Level 2 and Trust Tier 2 are not aligned.** Authority Level 2 is gated on `trust_score >= 100`, but the Tier 2 (District Verified) flow sets `district_verified` / `address_verified_at` and does not bump `trust_score`. A correctly address-verified user will typically land on Authority Level 1, not 2.
+> - **No Veriff / phone-verification layer exists.** Earlier drafts of this spec referenced a Veriff phone path; no Veriff integration is present in `src/lib/core/identity/`. Treat any Veriff mentions as aspirational.
+> - **Plaintext address fields on the User type.** `convex/schema.ts` no longer stores `street`/`city`/`state`/`zip`, but `src/lib/types/user.ts` still declares `street?` and `zip?`. No active DB PII violation, but the type contract is stale.
 
 ---
 
