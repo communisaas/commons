@@ -2,6 +2,28 @@
 
 **Status**: IMPLEMENTED | Bracket Syntax with Auto-Fill and User-Editable Variables
 
+> ⚠️ **2026-04-23 audit — minor clarifications (no breaking rot):**
+>
+> - **Field-name mapping:** `message_body` (snake_case) is the
+>   resolver's input interface; Convex storage uses `messageBody`
+>   (camelCase) and re-exposes it as `message_body` on API responses
+>   for compat (`convex/templates.ts:~235,340`). Both forms refer to
+>   the same field.
+> - **User-editable variable list** in code (`templateResolver.ts:~241-248`):
+>   `[Personal Connection]`, `[Your Story]` + aliases `[Personal Story]`,
+>   `[Your Experience]`, `[Phone]` + aliases `[Phone Number]`,
+>   `[Your Phone]`. The "Your Story" row in the table is correct;
+>   `[Phone]` is the primary variable and should be read as such,
+>   with `[Phone Number]` / `[Your Phone]` as aliases of it.
+> - **"No server-side variable resolution (except in CWC)"** claim
+>   below is partially stale. Convex stores unresolved templates and
+>   returns them as-is; the `convex/templates.ts` CWC extraction path
+>   does **not** perform substitution. Substitution is purely client-side.
+> - **mDL personalization variables are not implemented.** Identity
+>   fields flow through auth / credential paths, not into template
+>   bracket variables. Treat any doc implying mDL-driven variable
+>   substitution as aspirational.
+
 ---
 
 **Variables personalize campaign messages with user data, representative names, and personal testimony.**

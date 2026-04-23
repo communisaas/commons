@@ -2,7 +2,29 @@
 
 > **What they are**: Five metrics that measure whether campaign participation is organic, diverse, and sustained — or manufactured, concentrated, and bursty.
 >
-> **Who sees them**: Org dashboards (campaign detail → Analytics detail), proof report emails to decision-makers, and the public verification page at `/verify/:campaignId`.
+> **Who sees them**: Org dashboards (campaign detail → Analytics detail), proof report emails to decision-makers, and the public verification page at `/verify/{deliveryId}` (accepts campaignId for legacy links, but per-delivery hash is primary — `src/routes/verify/[hash]/+page.server.ts`).
+
+> ⚠️ **2026-04-23 audit — concrete nullability corrections.** Formulas
+> below are right (`1 − HHI`, unique/total, Shannon entropy log₂,
+> max/mean of non-zero bins, `(T3+T4) / max(T1,1)`). Minimum-inputs
+> conditions drift from the code:
+>
+> - **Temporal entropy H(t):** returns `null` when `actions.length < 2`
+>   **OR** when the submission time range is `< 1 hour`
+>   (`verification-packet.ts:~357-365`, `rangeMs < 3600000`). The doc's
+>   "≥ 3 total actions" framing is wrong in both directions — 2 actions
+>   are enough, but actions compressed into under an hour still produce
+>   `null`.
+> - **Coordination authenticity CAI:** returns `null` when
+>   `tier1 + tier3 + tier4 === 0` (`verification-packet.ts:~404-411`).
+>   A **0-T1** campaign with T3/T4 participants still produces a valid
+>   score — divisor is `max(tier1, 1)`. The "≥ 1 Tier 1 supporter"
+>   requirement below is overstated.
+> - **Burst velocity BV:** returns `null` only when all hourly bins are
+>   zero (no `≥ 2 bins` check). Single-spike campaigns with 1 non-zero
+>   bin do produce a valid score.
+> - **Verification page path:** `/verify/[hash]` — hash can be
+>   deliveryId (primary) or campaignId (legacy).
 
 ---
 

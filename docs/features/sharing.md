@@ -3,6 +3,30 @@
 **Date**: 2025-01-08
 **Insight**: Platform-specific buttons (Facebook, LinkedIn) are limiting. Templates need to spread EVERYWHERE.
 
+> ⚠️ **2026-04-23 audit — implemented vs prescribed:**
+>
+> - **Share URL `/s/[slug]`:** ✓ live.
+> - **OG image:** `/s/[slug]/og-image/+server.ts` generates **1200×630**
+>   images via Satori + Sharp, includes `verifiedSends` count and
+>   domain-aware color. Meta-tag linkage on the share page is not
+>   obviously wired — verify before relying on social cards.
+> - **ShareButton:** native `navigator.share()` with clipboard fallback.
+>   **The 4 pre-written message variants** (short / medium / long / SMS)
+>   prescribed here are **not surfaced in `ShareButton.svelte`**.
+>   `generateShareMessage()` in `src/lib/core/share/share-messages.ts`
+>   exists, but only a single default message is passed from
+>   `ShareButton`. `TemplateModal.svelte` has richer share UX (hardcoded
+>   message variants + QR + raw-URL field) but doesn't call
+>   `generateShareMessage()` either.
+> - **Analytics view tracking** uses `trackTemplateView()`
+>   (`src/lib/core/analytics/client.ts:~251`) with localStorage dedup
+>   (1 view per template per browser per day) + k-ary LDP when
+>   `VITE_ANALYTICS_DP_ENABLED=true` + daily per-metric contribution
+>   caps. No raw counts exposed. This doc is silent on DP.
+> - **Congressional gating:** `/s/[slug]/+layout.server.ts:~26-28` 404s
+>   CWC templates when `FEATURES.CONGRESSIONAL=false`.
+> - **No Prisma refs; Convex-only.**
+
 ---
 
 ## The Problem with Platform-Specific Share Buttons

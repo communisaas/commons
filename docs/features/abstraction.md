@@ -2,7 +2,33 @@
 
 > **STATUS: ASPIRATIONAL** — `src/lib/core/legislative/types.ts` foundation exists; adapter implementations (US Congress, UK Parliament, EU) are planned.
 
-**Status**: Design Spec — Adapter architecture planned
+> ⚠️ **ADDENDUM (2026-04-23 audit) — what's actually in the repo, so
+> nobody tries to import from it:**
+>
+> - Under `src/lib/core/legislative/`, **only `types.ts` exists**. There
+>   is no `adapters/`, `registry.ts`, `base.ts`, `models/`,
+>   `delivery/pipeline.ts`, or `resolution/variables.ts`. The
+>   `adapterRegistry` shown in usage examples does not exist at runtime.
+> - **Live US delivery is not routed through the abstraction.** CWC
+>   submission lives in `convex/submissions.ts` + `convex/_cwcXml.ts`
+>   (+ House proxy envs) and is gated by `FEATURES.CONGRESSIONAL=false`.
+>   There is no `src/lib/core/legislative/adapters/us-congress.ts`.
+> - **Location resolvers (postcode/ZIP → district) are live** for US,
+>   CA, GB, AU at `src/lib/core/location/resolvers/*`. **Representative
+>   lookup for CA/GB/AU is a stub**: `rep-lookup.ts:~26-34` returns
+>   `[]`. US reps come through Census + Congress.gov helpers outside
+>   any adapter pattern.
+> - **Phantom API routes listed in §6** (`/api/address/lookup`,
+>   `/api/submit`) are not in the codebase. Real endpoints:
+>   `/api/location/resolve-address`, `/api/geographic/resolve`,
+>   `/api/v1/representatives`, `/api/submissions/create`.
+> - **Phantom component dirs** (`src/lib/components/landing/template/`,
+>   `src/lib/components/template/`, `src/lib/components/submission/`)
+>   do not exist. Template components live under
+>   `src/lib/components/templates/`.
+> - **Congressional_Office → Legislative_Office / Representative /
+>   Jurisdiction migration is not underway.** External-API lookups on
+>   demand is the current pattern; planned tables were never created.
 
 ---
 

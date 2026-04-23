@@ -2,6 +2,27 @@
 
 **Feature implementation guides - what Commons actually implements (thin client).**
 
+> ⚠️ **2026-04-23 audit — corrections:**
+>
+> - **`embeddings.md` link is broken** (reading-order section for
+>   backend engineers). That content was merged into
+>   `features/search.md`; point there instead.
+> - **"Congressional email lookup (Hunter.io for template creators)"**
+>   is not a shipped feature. Decision-maker enrichment uses a Gemini
+>   agent pipeline + Firecrawl (`/api/agents/stream-decision-makers`).
+>   No Hunter.io integration.
+> - **Missing feature-gate banners.** `CONGRESSIONAL=false`,
+>   `PASSKEY=false`, `DELEGATION=false`, `ENGAGEMENT_METRICS=false`
+>   — items like "Congressional email lookup" (L~14) and
+>   passkey-auth should carry `FEATURE-GATED` banners matching the
+>   DEBATE row at L~145.
+> - **"Token storage in database"** framing is stale — backend is
+>   Convex-only.
+> - **Terminology:** "Congressional email lookup" and "Congressional
+>   delivery" refer to the same feature (flag-gated off either way);
+>   standardize on "Congressional delivery" per
+>   `docs/congressional/delivery.md`.
+
 ---
 
 ## Responsibility Separation

@@ -2,6 +2,40 @@
 
 > **Status**: P0 IMPLEMENTED (campaign SSE stream), P1-P3 design only.
 
+> ⚠️ **ADDENDUM (2026-04-23 audit) — event types drifted from the
+> "ThoughtSegment" generic framing; an extra live stream is
+> undocumented.**
+>
+> **Agent stream event types** — doc implies a uniform `ThoughtSegment`
+> event. Actual emitted events per endpoint:
+>
+> - `/api/agents/stream-subject` → `thought`, `clarification`
+> - `/api/agents/stream-message` → `thought`, `phase`
+> - `/api/agents/stream-decision-makers` → `segment`, `identity-found`,
+>   `candidate-resolved`, `verification`
+>
+> Terminal results come via `emitter.complete()`, not a `complete`
+> event type.
+>
+> **Campaign SSE stream** (`/api/org/[slug]/campaigns/[campaignId]/stream`):
+>
+> - Real events: `packet` (every ~30s after full recompute via
+>   `computeVerificationPacketCached()`), `heartbeat` (~15s),
+>   `debate:spawned`/`debate:argument`/`debate:status`/`debate:resolved`
+>   (when a linked debate exists), `error`.
+> - The `action` and `delivery` per-event push channels described
+>   below are **not implemented** — only the full-packet diff model is live.
+>
+> **Missing from this doc:** `/api/debates/[debateId]/stream` is a
+> live SSE endpoint (hybrid shadow-atlas polling + local state) emitting
+> `evaluating`, `ai_scores_submitted`, `resolved_with_ai`,
+> `governance_escalated`, `appeal_started`, `resolution_finalized`,
+> `debate:argument`, `debate:position`, `debate:settled`. Add to
+> "What exists."
+>
+> **Storage layer:** doc occasionally references Prisma polling for
+> debates; active code uses Convex (`serverQuery(api.debates.get)`).
+
 ---
 
 ## Current State
