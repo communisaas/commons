@@ -126,7 +126,7 @@ These strings are used by Commons, not by the circuits. They have no effect on Z
 |---|---|
 | `commons-identity-v1` | Identity commitment domain prefix (SHA-256 mod BN254, used during pre-circuit derivation) |
 | `commons-credential-v2` | HKDF salt for per-user AES-256-GCM credential encryption (IndexedDB at-rest) |
-| `commons-witness-encryption-v1` | BLAKE2b key for X25519 → XChaCha20 witness encryption (encrypted messages in flight) |
+| `commons-witness-encryption-v1` | BLAKE2b **keyed-hash** key (passed as the 3rd arg to libsodium `crypto_generichash`, `src/lib/core/proof/witness-encryption.ts:~202`) deriving the X25519 → XChaCha20 witness-encryption key |
 
 ---
 

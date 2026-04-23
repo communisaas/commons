@@ -4,6 +4,34 @@
 
 This document covers SvelteKit 5 patterns, state management with runes, component architecture, and frontend-specific decisions. For blockchain integration, see `INTEGRATION-GUIDE.md`.
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Versions (SvelteKit 2.57
+> + Svelte 5.55), the design system pointer (`src/lib/design/*`), and
+> the Convex-on-server posture are accurate. These specific examples
+> drift from what the codebase actually does today — read them as
+> target patterns, not the canonical implementation:
+>
+> - **Runes migration is incomplete.** Grep shows essentially no
+>   `$props()` / `$state()` / `$bindable()` usage inside components;
+>   components still use destructuring + callback props (Svelte 5
+>   syntax) without runes. `Layout.svelte` has one `$derived`.
+>   `src/lib/stores/templateDraft.ts` and `tooltip.ts` still use
+>   legacy `writable()` / `readable()` from `svelte/store`. Treat
+>   the "we migrated all stores to runes in September 2024" claim as
+>   aspirational.
+> - **API-route examples import from `$lib/core/db`** (Prisma). That
+>   module does not exist. Real server handlers use
+>   `serverQuery(api.*)` / `serverMutation(api.*)` from
+>   `convex-sveltekit` (~599 call sites across the repo). See
+>   `+page.server.ts` / `+layout.server.ts` for canonical shape.
+> - **Callback props are destructuring syntax, not runes.** Props like
+>   `{ onclick }` on `Button.svelte` are plain Svelte 5 destructuring —
+>   the "`createEventDispatcher` → callback props" migration is real
+>   but does not involve `$props()`.
+> - **Convex integration is silent in this guide.** The
+>   `convex-sveltekit` client, server `serverQuery` / `serverMutation`
+>   wrappers, and `ctx.auth.getUserIdentity()` bridge deserve a section
+>   but aren't documented here.
+
 ---
 
 ## Table of Contents

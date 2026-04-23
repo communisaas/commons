@@ -1,10 +1,32 @@
 # Implementation Status
 
-**Date:** 2026-03-19
+**Date:** 2026-03-19 (partially reconciled 2026-04-23 — see banner)
 **Status:** Phase 0-2 COMPLETE, security hardened, deployed to production
 **Deploy:** commons.email on Cloudflare Pages (~13 MiB bundle)
-**Tests:** ~4,000 unit tests (3,891 passing)
+**Tests:** ~4,000 unit tests (3,891 passing, as of 2026-03-18 — not re-counted post-Convex migration)
 **Security:** 27 brutalist audit rounds, 180+ findings addressed
+
+> ⚠️ **PARTIAL RECONCILIATION (2026-04-23 audit).** This file is cited
+> as canonical by many other docs, so concrete corrections are inlined
+> throughout. The broad Phase 0-2 shipped narrative is correct.
+> Concrete deltas applied / still open:
+>
+> - **Data Model section rewritten** for Convex-only (Prisma/Postgres/
+>   Hyperdrive removed 2026-04-23).
+> - **Congressional + Passkey rows** now carry `(FEATURE-GATED, flag=false)`
+>   annotations — code ships, flag is off.
+> - **Feature flag values** in the flags table reflect
+>   `src/lib/config/features.ts` today (CONGRESSIONAL=false,
+>   LEGISLATION/ACCOUNTABILITY=true).
+> - **Architecture Quick Reference** replaced `prisma/schema.prisma` and
+>   removed `db.ts` (Prisma-era file; doesn't exist).
+> - **Storacha sunset (2026-05-31)** is an ops-urgent gap not reflected
+>   in the "Known Gaps" table below — pinning provider migration is
+>   in-flight (see `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md`).
+> - **Moderation Layer 1 model** migrated from `llama-guard-4-12b` to
+>   `openai/gpt-oss-safeguard-20b` (Groq free-tier change).
+> - **OAuth row** includes "passkeys" — passkey is in code but gated by
+>   `FEATURES.PASSKEY=false`. Do not count as a live OAuth provider.
 
 ---
 
@@ -22,16 +44,16 @@ Commons is live. The full verification loop works end-to-end: org creates campai
 
 | System | Status |
 |--------|--------|
-| Passkey auth (WebAuthn, did:key) | Production |
+| Passkey auth (WebAuthn, did:key) | Planned (FEATURE-GATED, `PASSKEY=false`) |
 | Address verification (Census geocoding, district credential) | Production |
 | mDL identity verification (W3C Digital Credentials API) | Production |
 | ZK proof generation (browser WASM, Noir/UltraHonk) | Production |
-| Congressional submission (CWC API, encrypted witness) | Production |
-| Encrypted delivery (XChaCha20-Poly1305, X25519) | Production |
-| Trust tier computation (6 tiers, 0-5) | Production |
+| Congressional submission (CWC API, encrypted witness) | Production (FEATURE-GATED, `CONGRESSIONAL=false`) |
+| Encrypted delivery (XChaCha20-Poly1305, X25519) | Production (TEE decryption Planned — `LocalConstituentResolver` active) |
+| Trust tier computation (6 tiers, 0-5) | Production (Tier 4 passport unreachable in `deriveAuthorityLevel`) |
 | Engagement tiers (0-4, on-chain portable) | Production |
-| Shadow Atlas (94,166 districts, chunked IPFS) | Production |
-| OAuth (Google, Facebook, LinkedIn, Coinbase, passkeys) | Production |
+| Shadow Atlas (94,166 districts, chunked IPFS) | Production (pinning on Storacha — sunsetting 2026-05-31) |
+| OAuth (Google, Facebook, LinkedIn, Coinbase) | Production |
 | Template system (create, share, browse, moderate) | Production |
 | AI agents (DM discovery, message writer, subject line) | Production |
 | Spatial browse (3 views) | Production |
@@ -80,11 +102,12 @@ Commons is live. The full verification loop works end-to-end: org creates campai
 
 | Metric | Value |
 |--------|-------|
-| Prisma models | 50+ |
-| Database | PostgreSQL + pgvector via Hyperdrive |
-| Org-layer code | ~7,747 lines |
-| Person-layer code | ~8,665 lines (identity alone) |
-| Total unit tests | ~4,000 |
+| Convex tables | 71 (`convex/schema.ts`) |
+| Backend | Convex-only (Prisma / Postgres / Hyperdrive removed 2026-04) |
+| Vector search | Convex `.vectorIndex` (768-dim Gemini `text-embedding-004`) |
+| Org-layer code | ~7,747 lines (historical — may drift with refactors) |
+| Person-layer code | ~8,665 lines (identity alone, historical) |
+| Total unit tests | ~4,000 (3,891 passing as of 2026-03-18; not re-counted post-Convex) |
 
 ---
 
@@ -138,7 +161,7 @@ Source: `src/lib/config/features.ts`
 
 | Flag | Value | Notes |
 |------|-------|-------|
-| CONGRESSIONAL | `true` | CWC delivery pipeline |
+| CONGRESSIONAL | `false` | CWC delivery pipeline (code ships, flag off) |
 | WALLET | `true` | EVM + NEAR providers |
 | STANCE_POSITIONS | `true` | Position registration |
 | PUBLIC_API | `true` | V1 RESTful API |
@@ -148,11 +171,15 @@ Source: `src/lib/config/features.ts`
 | EVENTS | `true` | RSVP + capacity + map |
 | FUNDRAISING | `true` | Stripe checkout |
 | AUTOMATION | `true` | Workflow engine |
-| SMS | `true` | Twilio campaigns |
+| SMS | `true` | Twilio campaigns (credentials + 10DLC pending ops) |
 | NETWORKS | `true` | Multi-org coalitions |
-| DEBATE | `false` | Markets + AI evaluation |
-| LEGISLATION | uncommitted | Bill tracking + watching |
-| ACCOUNTABILITY | uncommitted | Receipt system |
+| SHADOW_ATLAS_VERIFICATION | `true` | Client-side district commitment |
+| LEGISLATION | `true` | Bill tracking + watching |
+| ACCOUNTABILITY | `true` | Receipt system |
+| DEBATE | `false` | Markets + AI evaluation (cron is log-only stub) |
+| DELEGATION | `false` | Agentic delegation (Tier 3+) |
+| ENGAGEMENT_METRICS | `false` | Send/engagement counters |
+| PASSKEY | `false` | WebAuthn sign-in |
 
 ---
 
@@ -185,8 +212,8 @@ See `memory/build_history.md` for detailed per-wave records.
 
 | Layer | Key Files |
 |-------|-----------|
-| DB + ALS | `src/lib/core/db.ts` |
-| Auth + Session | `src/hooks.server.ts` |
+| Backend / Schema | `convex/schema.ts` (Convex; `src/lib/core/db.ts` removed with Prisma) |
+| Auth + Session | `src/hooks.server.ts` (SvelteKit session → Convex JWT bridge) |
 | Trust Tier | `src/lib/core/identity/authority-level.ts` |
 | Identity Verification | `src/lib/components/auth/IdentityVerificationFlow.svelte` |
 | ZK Proofs | `src/lib/components/proof/ProofGenerator.svelte` |
@@ -199,7 +226,7 @@ See `memory/build_history.md` for detailed per-wave records.
 | Verification Packet | `src/lib/server/campaigns/verification.ts` |
 | SSE Stream | `src/lib/server/sse-stream.ts` |
 | CF Config | `wrangler.toml` |
-| Schema | `prisma/schema.prisma` |
+| Schema | `convex/schema.ts` |
 | Feature Flags | `src/lib/config/features.ts` |
 
 ---
