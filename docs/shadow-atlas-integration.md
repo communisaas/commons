@@ -3,6 +3,34 @@
 **Last Updated:** 2026-02-22
 **Status:** ✅ API Client + Officials Endpoint Implemented
 
+> ⚠️ **2026-04-23 audit — architecture claims are mostly accurate; a
+> few concrete items need correction before building against this doc:**
+>
+> - **Submit endpoint** in the integration-flow section is wrong.
+>   `/api/congressional/submit` does not exist. Use
+>   `POST /api/submissions/create`
+>   (`src/routes/api/submissions/create/+server.ts`).
+> - **Storacha is sunsetting 2026-05-31** (uploads already disabled
+>   2026-04-15). Any client that fetches cell chunks exclusively from
+>   `storacha.link/ipfs` will 404 after the cutover. R2 is the primary
+>   production path in the chunked pipeline
+>   (`src/lib/core/ipfs/ipfs-store.ts`); the pinning provider migration
+>   is an ops-urgent task. See the `storacha_sunset_migration` memory
+>   entry and `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md`.
+> - **Chunked pipeline shape:** the API docs suggest per-district merkle
+>   roots, but the live architecture has a **single `cellMapRoot`
+>   (Tree 2)** valid for all cells in an epoch; clients fetch
+>   `{parentCell}.json` and extract districts + SMT path in one call.
+> - **TEE is Planned; `LocalConstituentResolver` is the active path**
+>   (`src/lib/server/tee/local-resolver.ts`). In-process decryption,
+>   function-scoped PII — will be replaced by an AWS Nitro Enclave.
+> - **Nullifier semantics (NUL-001):** `H2(identityCommitment, actionDomain)`
+>   (`src/lib/server/shadow-atlas-handler.ts:~106`); engagement tier
+>   range is 0–4. Worth adding to the Privacy Model section.
+> - **Correct as-is:** three-tree architecture, 31 public inputs,
+>   `FEATURES.SHADOW_ATLAS_VERIFICATION=true`, Convex backend on the
+>   submit path.
+
 Shadow Atlas provides district lookup, Merkle proof generation for ZK proofs, and representative resolution. It replaces runtime dependencies on Congress.gov, Census Bureau client-side calls, and Google Civic API.
 
 **Cross-Repository References:**

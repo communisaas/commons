@@ -2,7 +2,38 @@
 
 **Date:** 2025-11-04
 **Phase:** 2.1-2.4 Complete (UI Components)
-**Status:** ✅ Core Components Built - Integration Pending
+**Status:** ⚠️ Historical integration plan — core components built, creator integration never shipped
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The data model has moved
+> to Convex; the creator integration described here was not implemented.
+> Read these deltas before trusting any code sample:
+>
+> - **No `TemplateJurisdiction` Prisma table.** Jurisdictions are a
+>   **flattened `v.array(v.object({...}))`** on the `templates` row in
+>   `convex/schema.ts:~224-243`. Same for `scopes` (`~245-263`). There
+>   is no `@prisma/client` import for `TemplateJurisdiction`; the local
+>   interface at `src/lib/types/jurisdiction.ts` is the right source.
+> - **Field naming is camelCase in Convex:** `stateSenateDistrict`,
+>   `countyFips`, `cityFips`, `schoolDistrictId` — not the snake_case
+>   used in the Prisma-style code samples below.
+> - **`JurisdictionPicker` lives at
+>   `src/lib/components/geographic/JurisdictionPicker.svelte`**, not
+>   `src/lib/components/template/creator/`. It's a general geographic
+>   picker, not creator-specific.
+> - **`CoveragePreview.svelte` does not exist** in the codebase.
+> - **`TemplateCreator.svelte` still has a 3-step flow**
+>   (`'objective' | 'audience' | 'content'`, see
+>   `TemplateCreator.svelte:~47-49`). The proposed 5-step flow with a
+>   separate `jurisdiction` step was **not integrated**. `formData` has
+>   no `jurisdiction` field; validators don't include jurisdiction rules.
+> - **API section describes Prisma `$transaction` + `createMany`.**
+>   Template persistence is a Convex mutation; there is no
+>   `/api/templates/+server.ts` route that matches these samples.
+> - **Census integration files** (`fips-lookup.ts`, `district-lookup.ts`)
+>   referenced in the spec were not found. Verify before relying on
+>   them.
+> - **Level enum values (`federal | state | county | city |
+>   school_district`) are correct.**
 
 ---
 

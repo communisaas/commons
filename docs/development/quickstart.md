@@ -4,6 +4,49 @@
 
 This guide covers local development setup, testing strategies, database seeding, feature flag management, and deployment workflows. For blockchain integration, see `docs/integration.md`.
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** ~40% of setup commands
+> below are dead. Use this working quick-start instead; treat the
+> Prisma/Postgres sections as historical.
+>
+> ### Working quickstart (current as of 2026-04-23)
+>
+> 1. `cp .env.example .env.local` (or `.env` — both are gitignored).
+>    Fill in required Convex + API keys. `.env.example` in the repo is
+>    the source of truth for variable names.
+> 2. `npx convex dev` — starts/attaches to your Convex cloud dev instance.
+> 3. `npm run dev` (in a second terminal) — SvelteKit on :5173, talks to
+>    Convex cloud.
+> 4. `npm run seed` — runs `npx convex run seed:seedAll` against the Convex
+>    dev instance. Optional: `npm run seed:agents` (requires
+>    `GEMINI_API_KEY`, `GROQ_API_KEY`, `EXA_API_KEY`).
+> 5. `docker compose up -d` is **only** for local IPFS; it does not start
+>    a DB. There is no local Postgres anymore.
+>
+> ### Dead commands (no longer in package.json)
+>
+> - `npm run db:start`, `db:stop`, `db:reset`, `db:generate`, `db:push`,
+>   `db:migrate`, `db:seed` — all gone. Prisma / Postgres / Hyperdrive
+>   removed in the Convex migration.
+> - `npx prisma db pull`, `npx prisma migrate deploy` — Prisma isn't a
+>   dependency.
+> - `scripts/seed-database.ts` — doesn't exist. Seeding lives in
+>   `convex/seed.ts` + `scripts/seed-with-agents.ts` + `scripts/seed-org-templates.ts`
+>   + `scripts/seed-vibes.ts`.
+> - `DATABASE_URL=postgresql://...` — not read anywhere.
+>
+> ### Other corrections
+>
+> - **Node:** `.nvmrc` specifies 24.15.0; the "20.x or later" line below
+>   is stale.
+> - **Prod deploy:** `npx convex deploy --env-file .env.production`.
+>   `convex deploy -y` silently fails for prod (see MEMORY).
+> - **Schema:** code-driven via `convex/schema.ts`; no migration files.
+> - **Default flags:** `CONGRESSIONAL=false`, `DEBATE=false`,
+>   `PASSKEY=false`. Flip locally in `src/lib/config/features.ts` — do
+>   not commit.
+> - **Docker compose:** `docker-compose.yml` only defines the IPFS
+>   service. The "Option 1: Docker Compose" Postgres block is dead.
+
 ---
 
 ## Table of Contents

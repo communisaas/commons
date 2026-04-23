@@ -1,6 +1,27 @@
 # Content Moderation
 
-**Status**: IMPLEMENTED | Automated Two-Layer Pipeline (Llama Guard via Groq)
+**Status**: IMPLEMENTED | Automated Two-Layer Pipeline (via Groq)
+
+> ⚠️ **2026-04-23 audit — concrete corrections to trust this doc:**
+>
+> - **Layer 1 model migrated.** `llama-guard-4-12b` is no longer on the
+>   Groq free tier; the live model is `openai/gpt-oss-safeguard-20b`
+>   (`src/lib/core/server/moderation/llama-guard.ts:9-20`). Any
+>   "Llama Guard 4" framing in this doc describes the historical design;
+>   the code path is otherwise unchanged (MLCommons S1-S14 taxonomy,
+>   same thresholds, same fail-open).
+> - **Two layers, not three.** ADR-006 describes a planned 3-layer
+>   pipeline adding Gemini 3 Flash for quality assessment; Layer 2 was
+>   not built. Code in `convex/` and `src/lib/core/server/moderation/`
+>   only implements Layer 0 + Layer 1.
+> - **Error handling is fail-open, not HTTP 503.** Groq errors, missing
+>   `GROQ_API_KEY`, and rate-limit exhaustion all return `safe: true`
+>   / sentinel `-1` scores from the moderation helpers — the functions
+>   never throw. Any claim that moderation returns HTTP 503 or
+>   `MODERATION_FAILED` is wrong.
+> - **Schema is Convex**, not Prisma. Any fields like `reviewed_at`,
+>   `reviewed_by`, `consensus_approved` referenced below do not exist on
+>   `convex/schema.ts` — they were Prisma-era and never migrated.
 
 ---
 
@@ -39,7 +60,7 @@ Protects AI agents from jailbreak and manipulation attacks.
 
 ## Layer 1: Content Safety
 
-**Model**: `llama-guard-4-12b` via Groq
+**Model**: `openai/gpt-oss-safeguard-20b` via Groq (migrated — Llama Guard 4 12B is no longer on the free tier; see `src/lib/core/server/moderation/llama-guard.ts:9-20`).
 
 MLCommons S1-S14 hazard taxonomy with a permissive policy designed for political speech.
 
@@ -89,7 +110,7 @@ Prompt injection detection runs before each agent call:
 
 | Agent Route | Threshold | Rationale |
 |---|---|---|
-| `/api/agents/stream-subject` | 0.6 | Raw user input, most exposed |
+| `/api/agents/stream-subject` | 0.5 (default) | Raw user input, most exposed — call site passes no threshold, falls through to the 0.5 default (`src/routes/api/agents/stream-subject/+server.ts:77`) |
 | `/api/agents/stream-message` | 0.8 | AI-refined input |
 | `/api/agents/stream-decision-makers` | 0.8 | AI-refined input |
 

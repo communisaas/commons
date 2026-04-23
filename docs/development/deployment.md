@@ -2,6 +2,51 @@
 
 > commons.email deploys to **Cloudflare Workers** via Pages.
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** This guide still describes
+> the pre-Convex stack (Prisma 6.x + Hyperdrive + ALS-scoped PrismaClient).
+> **Prisma, Hyperdrive, and the local Postgres are removed.** Use the
+> current flow below; treat the architecture diagram, database-migration
+> section, Hyperdrive section, and "Key Constraints" points 1–4 as
+> historical.
+>
+> ### Current deploy (2026-04-23)
+>
+> **Frontend (SvelteKit on Cloudflare Pages):**
+>
+> ```bash
+> npm run build
+> npx wrangler pages deploy .svelte-kit/cloudflare \
+>   --project-name commons --branch production
+> ```
+>
+> **Backend (Convex):**
+>
+> ```bash
+> npx convex deploy --env-file .env.production
+> ```
+>
+> - `convex deploy -y` silently no-ops against prod (see MEMORY) — always
+>   pass `--env-file`.
+> - `PUBLIC_CONVEX_URL` is required (wrangler.toml). Missing from secrets
+>   table below.
+>
+> **Not in the flow anymore:**
+>
+> - `npx prisma db push` / `migrate dev` / `migrate deploy` — Prisma is
+>   not a dependency.
+> - Hyperdrive binding — no entry in `wrangler.toml`; no connection
+>   pooling to configure.
+> - `AsyncLocalStorage`-scoped `PrismaClient` — dead constraint; the
+>   `nodejs_als` flag remains in `wrangler.toml` but not for this.
+> - `$disconnect()` warning — inapplicable.
+>
+> **Storage ops alert:** Storacha sunsets **2026-05-31** (uploads already
+> disabled 2026-04-15). `pin-to-ipfs.ts` is hardcoded to Storacha;
+> gateway fallbacks (`storacha.link/ipfs`) will 404 after that date.
+> Deploy runbook should gain a "pinning provider" section before the
+> cutover. See `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md` and the
+> `storacha_sunset_migration` memory entry.
+
 ---
 
 ## Quick Reference

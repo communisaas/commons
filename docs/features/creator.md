@@ -2,6 +2,27 @@
 
 **Status**: IMPLEMENTED | AI-Powered Multi-Step Campaign Authoring
 
+> ⚠️ **2026-04-23 audit — minor metric drift; architecture is accurate.**
+> Flow, API endpoints, SSE event types, draft persistence, domain/topics,
+> moderation, and decision-maker pipeline are all correct against code.
+> Things to treat skeptically:
+>
+> - **Component line counts are stale** — most listed values are 50–170%
+>   under actual sizes (e.g. `UnifiedObjectiveEntry` is ~1,529 lines,
+>   not ~550; `MessageGenerationResolver` ~649, not ~480). Use as rough
+>   landmarks only.
+> - **File count in `src/lib/components/template/creator/` is 15**, not 14.
+> - **`SourceEditor.svelte` (~460 lines) exists** in that directory but
+>   is missing from the architecture tree below.
+> - **Step naming:** code uses `'objective' | 'audience' | 'content'`
+>   internally; UI labels step 2 as "Who Controls This?"; this doc
+>   sometimes refers to step 2 as "Decision-Makers". Same step, three
+>   names.
+> - **Draft save timing:** 2s debounce on content-change **plus** 30s
+>   periodic auto-save from the store (`templateDraftStore.startAutoSave`).
+>   The "auto-saves every 2s (debounced)" summary is the debounce leg
+>   only.
+
 ---
 
 **Guided creation flow that transforms a raw civic concern into a research-backed, publishable campaign template with verified decision-maker contacts.**
