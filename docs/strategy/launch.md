@@ -1,6 +1,15 @@
 # Phase 1: Privacy-Preserving Civic Intelligence That Goes Viral
 
 > **STATUS: HISTORICAL** — January 2025 planning document. The product has evolved significantly since this was written. See [`product-roadmap.md`](product-roadmap.md) for current timeline and priorities, and [`index.md`](index.md) for how the Person Layer and Org Layer now structure the product.
+>
+> ⚠️ **2026-04-23 audit — specific items that will mislead if taken at face value:**
+>
+> - The "3 months to launch" schedule below is obsolete: **Phases 0–2 shipped 2026-03** (see `product-roadmap.md`, `docs/implementation-status.md`).
+> - The narrative that `self.xyz` / `Didit` were "removed in Cycle 15" (~line 18) is **imprecise**. The W3C Digital Credentials API (mDL) is the sole active intake, but `'self.xyz' | 'didit'` **remain as enum values** on `verificationMethod` for backward compatibility with stored records (`src/lib/core/identity/session-credentials.ts:2-4`, `convex/schema.ts`).
+> - Congressional delivery is **feature-gated off** (`FEATURES.CONGRESSIONAL=false` in `src/lib/config/features.ts:24`). Any text below that implies CWC delivery is live describes code-complete-but-flag-off state.
+> - `FEATURES.DEBATE=false` and `FEATURES.PASSKEY=false`. `WALLET=true`, `SHADOW_ATLAS_VERIFICATION=true`.
+> - Backend is **Convex-only** (Prisma / Postgres / Hyperdrive removed as of 2026-04). Any query samples below written in Prisma syntax are historical.
+> - Advocacy-partnership / viral-seeding success metrics ("1 template with 10K actions", "Sunrise / Justice Dems integration") were **not pursued** in that form; the product shipped on the campaigns + email + networks rails instead.
 
 **Date**: 2025-01-08
 **Context**: Synthesis of brutalist critique + our actual implementation + social media virality

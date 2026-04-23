@@ -1,11 +1,30 @@
 # ADR-011: MongoDB to pgvector Migration
 
 **Date:** 2026-02-05
-**Status:** ACCEPTED
+**Status:** SUPERSEDED — see ADR-012+/Convex migration (2026-04)
 **Deciders:** Infrastructure engineering
 **Supersedes:** MongoDB Atlas Vector Search architecture (2026-01)
 
 ---
+
+> ⚠️ **SUPERSEDED (2026-04-23 audit).** The Postgres/pgvector/Prisma architecture
+> described here was removed in the Convex migration. Intelligence and semantic
+> search now live in `convex/schema.ts` (`intelligence` table, `.vectorIndex("by_embedding", { dimensions: 768 })`)
+> and `convex/intelligence.ts` (Gemini `text-embedding-004`). Specifics that no
+> longer hold:
+>
+> - **Embedding model/dims:** doc says 1024-dim Voyage AI; code uses 768-dim
+>   Gemini (`convex/schema.ts:575`, `convex/intelligence.ts:206-233`,
+>   `src/lib/core/search/index.ts:10`).
+> - **Storage:** Prisma/Postgres paths under `src/lib/server/intelligence/`
+>   and `prisma/` do not exist in the repo. All intelligence ops are Convex
+>   functions.
+> - **Legacy surface:** `mongoId` persists as a read-only citation field
+>   (`src/lib/core/thoughts/types.ts:183,201`) for backward compat with stored
+>   records — nothing writes it.
+>
+> Cost/scale rationale (ephemeral TTL, &lt;100K vectors, managed-DB simplicity)
+> remains directionally valid but the concrete decision is obsolete.
 
 ## Context
 

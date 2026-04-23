@@ -1,5 +1,30 @@
 # Contextual Template Discovery: Intuiting Where Users Are At
 
+> ⚠️ **PARTIAL IMPLEMENTATION (2026-04-23 audit).** Conceptual vision is the
+> direction of travel; several concrete sections describe architecture that
+> differs from shipped code. Do not copy code snippets without verifying.
+>
+> - **Template DB migration already done.** Jurisdictions are flattened on the
+>   template record (`convex/schema.ts:224-243`, `jurisdictions` array with
+>   `congressionalDistrict`, `stateSenateDistrict`, `countyFips`, `cityName`,
+>   etc.). The "migration prerequisite" framing below is obsolete.
+> - **IP geolocation is server-side**, not client-direct to ipify/ipinfo —
+>   see `src/lib/core/location/inference-engine.ts:131`
+>   (`fetch('/api/location/ip-lookup')`).
+> - **Semantic search is hybrid, not "all client-side"**. Query embedding is
+>   generated server-side; vector search runs as a Convex `.vectorSearch`
+>   (`convex/templates.ts:~499`, `by_topicEmbedding`). IndexedDB cache in
+>   `src/lib/core/search/cache.ts` holds results, not the full model.
+> - **Domain + topics replaced `category`.** `category` remains as a deprecated
+>   column for backward compat; new code uses `domain` + `topics`
+>   (`convex/schema.ts:167-169`).
+> - **"Happening in Your Area" landing UX is aspirational** — no matching
+>   component in `src/routes/` / `src/lib/components/`.
+> - **mDL is optional, not required.** `FEATURES.CONGRESSIONAL=false`;
+>   `verificationMethod` enum still accepts legacy `'self.xyz' | 'didit'` for
+>   stored records (`convex/schema.ts:~503`), but only `digital-credentials-api`
+>   is the active path for new verification.
+
 **The Problem with Discrete Filters:**
 ```
 ❌ Federal / State / County / City [dropdown]

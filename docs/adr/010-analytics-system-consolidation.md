@@ -1,10 +1,32 @@
 # ADR-010: Analytics System Consolidation
 
-**Status:** Implemented
+**Status:** Implemented (with divergences — see banner)
 **Date:** 2025-01-25
 **Work Package:** WP-010
 **Author:** Backend Engineer
 **Reviewers:** Privacy Team, Data Engineering
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Privacy *principles* and the
+> feature flag architecture documented here are accurate, but several concrete
+> claims no longer match the Convex-only codebase:
+>
+> - **No separate `analytics_aggregate` / `analytics_snapshot` tables.** The
+>   runtime has a single `analytics` table in `convex/schema.ts` with a
+>   `recordType: 'aggregate' | 'snapshot'` discriminator. Access separation is
+>   by query pattern + `USE_SNAPSHOT_ONLY` flag, not by table.
+> - **`src/lib/core/analytics/aggregate.ts` does not exist.** `index.ts:148`
+>   still re-exports from `'./aggregate'`; the siblings present are
+>   `client.ts`, `snapshot.ts`, `noise.ts`, `budget.ts`, `coarsen.ts`,
+>   `sanitize.ts`, `rate-limit-db.ts`. Treat the `aggregate.ts` section and
+>   any `queryAggregates()` / `getHealthMetrics()` / `incrementAggregate()`
+>   references as describing a removed file; the barrel re-export is a stale
+>   line, not a live API.
+> - **Code samples use Prisma syntax** (e.g. `db.analytics_aggregate.findMany`).
+>   Prisma has been removed. Real access is Convex queries/mutations
+>   (`ctx.db.query().withIndex().collect()`).
+> - **DP budget constants (`SERVER_EPSILON=1.0`, `CLIENT_EPSILON=2.0`,
+>   `MAX_DAILY_EPSILON=10.0`) and `USE_SNAPSHOT_ONLY` are real and correct**
+>   (`src/lib/types/analytics/metrics.ts:175,193,217`, `src/app.d.ts`).
 
 ## Context
 

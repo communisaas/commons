@@ -1,5 +1,31 @@
 # Multi-Level Governance & Privacy Architecture
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Privacy principles, nullifier
+> shape, and XChaCha20-Poly1305 + X25519 witness encryption are accurate.
+> These specific items diverge from current code and should be read as
+> design intent, not current state:
+>
+> - **TEE is Planned, not deployed.** Lines that describe the AWS Nitro
+>   enclave as live ("enclave verifies address, generates proof (2-5s
+>   TEE-based)") describe the target. Current active resolver is
+>   `LocalConstituentResolver` (`docs/implementation-status.md:~113`,
+>   `docs/architecture.md`). Witness encryption to `/api/tee/public-key` is
+>   scaffolded; nothing decrypts on an enclave yet.
+> - **CWC delivery is feature-gated off.** `FEATURES.CONGRESSIONAL=false`
+>   (`src/lib/config/features.ts:24`). Federal delivery code exists but is
+>   not in the default user path.
+> - **Prisma schema blocks are obsolete.** Backend is Convex-only; schema
+>   lives in `convex/schema.ts` (translated + flattened from the old
+>   Prisma). User-table code samples here lack current fields
+>   (`authorityLevel`, `trustTier`, `identityCommitment`, etc.).
+> - **"self.xyz / Didit removed in Cycle 15" is imprecise.** They remain as
+>   legacy enum values on `verificationMethod`
+>   (`src/lib/core/identity/session-credentials.ts:2-4`); the active intake
+>   is mDL via W3C Digital Credentials API only.
+> - **Client-side pseudocode (e.g. `resolveUserLocation()`)** describes
+>   proposed behavior; verify against
+>   `src/lib/core/location/inference-engine.ts` before relying on it.
+
 **The Problem:** Users live in local communities with city councils, county commissioners, state legislatures, and federal representatives. VOTER Protocol's verified delivery (federal ZK proofs + CWC API) only works at federal level. Local/state delivery uses client-side `mailto:` with recipient names exposed.
 
 **The Privacy Gap:** We encrypt addresses for federal delivery (AWS Nitro Enclaves), but what about names at local/state levels?

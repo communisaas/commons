@@ -2,8 +2,42 @@
 
 **Date:** 2026-02-02 (Updated)
 **Author:** Distinguished Engineering Review
-**Status:** ✅ ALL WAVES COMPLETE - Ready for Mainnet Deployment
+**Status:** ⚠️ HISTORICAL — superseded by Convex migration (2026-04)
 **Scope:** Cross-repository integration remediation
+
+---
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** This plan described a
+> Prisma/Postgres-era integration and a two-tree ZK shape. Both have been
+> replaced. Treat as historical: the waves broadly shipped, but the file
+> paths, endpoints, and input counts here will mislead anyone building today.
+>
+> Current-state deltas vs. this doc:
+>
+> - **Endpoint:** `/api/congressional/submit` → **`/api/submissions/create`**
+>   (`src/routes/api/submissions/create/+server.ts`). The SvelteKit
+>   `/api/congressional/*` tree described in WS2.4 was not shipped; submit
+>   logic lives in `convex/submissions.ts`.
+> - **Public inputs:** 29 (two-tree) → **31 (three-tree,
+>   `three_tree_membership`)**. Validated at
+>   `src/routes/api/submissions/create/+server.ts:~125` as `!== 31`.
+> - **Witness / proof UI files:** `src/lib/core/zkp/witness-builder.ts`,
+>   `proof-generation.svelte.ts`, and the `ProofGenerationUI` component
+>   listed in WS2.3 are **not present**. Witness assembly is inline in
+>   `src/lib/core/zkp/prover-client.ts`.
+> - **DB layer:** Prisma/Supabase removed. Convex-only. WS-references to
+>   `prisma/` migrations are obsolete.
+> - **Identity:** `self.xyz` / `Didit` remain only as legacy enum values on
+>   `verificationMethod` (`convex/schema.ts:~503`). Active intake is mDL via
+>   the W3C Digital Credentials API. `FEATURES.PASSKEY=false`,
+>   `CONGRESSIONAL=false`, `DEBATE=false`.
+> - **Debate resolution cron (WS4.1 / Phase 2):** still a log-only stub
+>   (`convex/debates.ts:~720` logs "Would evaluate..."). Deferral status
+>   unchanged.
+>
+> For current submission/integration shape see `docs/integration.md`,
+> `docs/specs/zk-proof-integration.md` (both carry their own divergence
+> banners noting the same truths).
 
 ---
 
