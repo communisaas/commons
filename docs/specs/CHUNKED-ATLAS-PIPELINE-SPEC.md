@@ -26,6 +26,29 @@ Remaining rot and load-bearing gaps:
 The rest of this document describes the live pipeline. Where a claim is
 Phase-2 / Storacha-post-sunset / unmeasured, a callout appears inline.
 
+### Additional gaps (2026-04-23 audit addendum)
+
+4. **Storacha uploads already disabled.** The provider cut off writes on
+   **2026-04-15** — any quarterly build after that date cannot pin new
+   content via the current Storacha wiring. Timeline is: write-disabled
+   2026-04-15 → full sunset 2026-05-31. No "failed upload" diagnostic
+   documented in the pipeline runbook.
+5. **BEF redistricting fix (2026-03-29) is not reflected here.** 119th
+   Congress redistricting touched ~1.08M blocks and a full-US re-pin
+   completed on that date. Spec should name the CID rotation + record
+   that clients have been cut over (or otherwise call out any
+   stragglers). See MEMORY `bittensor_subnet_status.md` and the 03-29
+   CI/CD cleanup entry.
+6. **On-chain root anchor (Scroll L2 `SnapshotAnchor` contract) is
+   unmentioned.** Quarterly root is anchored on Scroll per MEMORY; the
+   client-side verification path that reads the contract belongs in
+   this spec (or needs an explicit cross-reference). If the anchor is
+   still pre-launch, mark it as Phase N.
+7. **R2 versioning / cache-invalidation strategy for quarterly rebuilds
+   is underspecified.** The doc notes a 7-day TTL but not whether
+   paths are immutable-by-version or mutated in place, nor how the
+   client detects a new quarterly root.
+
 ---
 
 ## 1. Problem Statement

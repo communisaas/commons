@@ -4,7 +4,29 @@
 > **Scope:** Unit economics for Free / Starter / Organization / Coalition tiers. Every external API call traced from code, priced at current rates, projected against realistic usage.
 > **Companion:** `org-data-model.md` (data model), `civic-intelligence-cost-model.md` (intelligence pipeline costs)
 > **Policy:** Individual users are free. All subscription revenue comes from organizations. See [`docs/strategy/monetization-policy.md`](../strategy/monetization-policy.md).
-> **Last verified:** February 2026 (costs), March 2026 (pricing alignment).
+> **Last verified:** February 2026 (costs), March 2026 (pricing alignment), targeted audit 2026-04-23.
+
+> ⚠️ **2026-04-23 audit — mostly clean, two clarifications:**
+>
+> Plan names, prices (Free $0 / Starter $10 / Organization $75 /
+> Coalition $200), seat/template/action/email/SMS limits, period-scoped
+> query-time aggregation, 7-day grace via `pastDueSince`, and the
+> `invoice.payment_succeeded` → clears `pastDueSince` webhook flow all
+> verify correctly against `src/lib/server/billing/plans.ts` +
+> `convex/subscriptions.ts`.
+>
+> Two material edits applied:
+>
+> - **"Pro / Pro power" margin rows are phantom tiers.** Live enum is
+>   `free|starter|organization|coalition`. Renamed to
+>   `Starter`/`Starter power`/`Organization`/`Organization (mid-load)`
+>   for internal consistency with the rest of the doc (the numbers
+>   themselves are unchanged).
+> - **Scenario blended-cost assumptions are unstated.** Projections at
+>   `$0.016/message` require ~90% template-source cache hits **plus**
+>   thinking-level reduction — both are optimization levers, not current
+>   state. The "Projected per-message cost after further optimization"
+>   framing should be read as target, not present.
 
 ---
 
@@ -386,10 +408,13 @@ At $0.030/message blended, the economics are solid:
 
 | Tier | Messages/mo | COGS | Revenue | Margin |
 |---|---|---|---|---|
-| Pro | 100 | $3.00 + $0.39 DM | $10 | **66%** |
-| Pro power | 300 | $9.00 + $0.92 DM | $10 | **1%** |
-| Small org | 500 | $15.00 + $0.79 DM | $40 | **61%** |
-| Mid org | 2,000 | $60.00 + $1.81 DM | $150 | **59%** |
+| Starter | 100 | $3.00 + $0.39 DM | $10 | **66%** |
+| Starter power | 300 | $9.00 + $0.92 DM | $10 | **1%** |
+| Organization | 500 | $15.00 + $0.79 DM | $40 | **61%** |
+| Organization (mid-load) | 2,000 | $60.00 + $1.81 DM | $150 | **59%** |
+
+<!-- 2026-04-23 audit: prior rows named "Pro / Pro power" — those tiers don't exist. Live plan enum is free|starter|organization|coalition (see src/lib/server/billing/plans.ts). -->
+
 
 ---
 

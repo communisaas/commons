@@ -4,6 +4,36 @@
 > These blueprints cover the four Phase 0 launch blockers from `docs/strategy/product-roadmap.md`.
 > Every file path, Prisma query, and component pattern references **real code** observed in this codebase.
 
+> ⚠️ **HISTORICAL — backend has moved to Convex (2026-04 audit).**
+> Phases 0–2 shipped. Treat this as a historical record, not a
+> copy-paste source:
+>
+> - **~74 Prisma code samples are dead code.** Backend is Convex-only;
+>   all `db.*` / `prisma.*` snippets in Blueprints 1–4 are unexecutable
+>   as written. Real access uses `serverQuery` / `serverAction` /
+>   `serverMutation` from `convex-sveltekit`.
+> - **Shipped status of the four blueprints:**
+>   - **1. Org onboarding flow:** shipped. `OnboardingChecklist.svelte`
+>     + `/api/org/[slug]/invites` live, backed by Convex (token mint
+>     uses encrypted-email + hash, not `randomBytes`). Org-profile
+>     PATCH is at `/api/org/[slug]/profile`, not `/api/org/[slug]`.
+>   - **2. Org dashboard:** **partial.** Scaffolding + checklist live;
+>     verification funnel + tier distribution + campaign list still
+>     return hardcoded zeros (`+page.server.ts:~37-49`). TODO on
+>     `convex/organizations.getDashboard`.
+>   - **3. Stripe billing:** checkout, portal, webhooks, plan constants
+>     all live. **Usage metering (`getOrgUsage`) not implemented** —
+>     organizations can exceed limits because the guard is missing in
+>     send + embed paths. See
+>     `docs/design/BILLING-ENFORCEMENT-ROADMAP.md`.
+>   - **4. Public campaign page (`/c/[slug]`):** shipped. Load + submit
+>     flows moved to Convex; UI is monolithic (blueprint's 5-component
+>     split not done — design debt).
+> - **Feature flags silently off:** `CONGRESSIONAL=false`, `DEBATE=false`,
+>   `PASSKEY=false`. Blueprint narrative implies these are live.
+> - **Identity intake:** mDL sole active method; legacy `self.xyz` /
+>   `didit` enum values retained for backward compat but unused.
+
 ---
 
 ## Table of Contents

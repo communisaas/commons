@@ -5,6 +5,31 @@
 **Author:** Distinguished Infrastructure Engineering
 **Scope:** Intelligence system cost structure, ingestion strategy, scaling economics
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Cost-model frame and
+> LLM-rate-limit numbers (subject 3/5/5/hr, DM 0/2/3/hr, message 0/3/5/hr,
+> embeddings 0/20/20/hr, daily-global 3/10/15/day) are accurate against
+> `src/lib/server/ai/llm-cost-protection.ts`. Concrete corrections:
+>
+> - **Embeddings are Gemini, not Voyage AI.** Code uses
+>   `text-embedding-004` (768-dim) via `convex/intelligence.ts:~218`.
+>   `.env.example:~140` notes OpenAI was removed and Gemini is the
+>   live provider. All "Voyage voyage-law-2 $0.12/1M" / "voyage-4
+>   $0.06/1M" claims and the "self-hosted Nomic for bulk, Voyage for
+>   legal" hybrid strategy describe an integration that was never
+>   built. Voyage API is not used anywhere in the repo.
+> - **Moderation Layer 1 migrated.** "Llama Guard 4 12B" referenced
+>   here is deprecated on Groq free tier. Live model is
+>   `openai/gpt-oss-safeguard-20b`
+>   (`src/lib/core/server/moderation/llama-guard.ts:20`). The proposed
+>   3-layer pipeline (adding Gemini 3 Flash quality assessment) was
+>   never built — active pipeline is 2 layers. See ADR-006 banner.
+> - **TEE debate-evaluation cost (~$0.12/debate) is notional**, not
+>   measured. `convex/debates.ts:~720` is a log-only stub
+>   (`console.log("[debate-resolution] Would evaluate debate ${id}…")`).
+>   Full evaluation pipeline is Phase 6 per the comment. Bittensor
+>   subnet path is deprecated; Nitro Enclave is Planned, not
+>   deployed.
+
 ---
 
 ## Executive Summary

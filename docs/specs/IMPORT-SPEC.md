@@ -1,6 +1,45 @@
 # Supporter Import Architecture
 
-> **STATUS: SHIPPED** — CSV import and Action Network connector operational. Architecture supports additional platform connectors.
+> **STATUS: CSV shipped — Action Network connector is state-only (no worker).**
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** CSV path is production-ready
+> and ~85% of this spec is accurate against code. Concrete corrections:
+>
+> - **Action Network OSDI sync is NOT operational.** The `anSync` object
+>   on `organizations` stores API key, `status`, `syncType`,
+>   `totalResources`, `processedResources`, `currentResource`, and
+>   counters; the `connectAnSync` / `startAnSync` / `disconnectAnSync`
+>   mutations set state, but **no background worker consumes it** —
+>   there is no job that actually calls the AN OSDI API, paginates
+>   `people`, `taggings`, or `action_history`. Treat §2.2 as a design
+>   target. Orgs must export CSV from AN for now.
+> - **SMS phone filtering via `smsStatus` is unwired.** Schema field
+>   exists; `updateSmsStatus` enforces STOP keyword; **no segment
+>   filter / list query** actually scopes recipients by `smsStatus`.
+>   Per implementation-status.md known-gaps table.
+> - **Dedup key is `(orgId, emailHash)`**, not `(orgId, email)`.
+>   Email addresses are never stored in plaintext; the indexed column
+>   is `emailHash`, an org-scoped salted hash of the normalized email
+>   (`computeOrgScopedEmailHash(orgId, normalizedEmail)`, index
+>   `by_orgId_emailHash` on supporters).
+> - **Encryption happens server-side in the Convex action layer.** The
+>   `importWithEncryption` action accepts plaintext PII, unseals the
+>   org key in the action, encrypts per-field with entity-bound AAD,
+>   and stores ciphertext. The "client encrypts before upload" framing
+>   (if read into any section) is wrong.
+> - **CSV field mapping accepts more aliases than the spec lists.**
+>   Live aliases include `sms_consent` / `can_text` / `sms_status` /
+>   `sms_opt_in` / `can_message` (SMS consent + email opt-out
+>   inference) and `country` (location). `Subscription Status` is
+>   inferred from `can_message` (false/0/no → unsubscribed) rather
+>   than a direct column.
+
+**Status:** Shipped
+**Author:** Architecture
+**Created:** 2026-03-06
+**Updated:** 2026-03-13
+**Depends on:** Org Data Model, List Management, Campaign System, Shadow Atlas, ZK Identity
+**Research:** `docs/research/action-network-migration-research.md`
 
 **Status:** Shipped
 **Author:** Architecture

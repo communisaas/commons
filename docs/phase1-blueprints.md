@@ -1,8 +1,42 @@
 # Phase 1 Implementation Blueprints
 
-> STATUS: Active implementation guide
+> STATUS: Historical implementation guide (reconciled 2026-04-23)
 > Generated: 2026-03-11
 > Source of truth for Phase 1 features. All blueprints grounded in codebase as of commit 46dd286a.
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Phases 0–2 shipped, and
+> the bulk of this blueprint matches live code. Specific deltas to use
+> before copy-pasting:
+>
+> - **Prisma → Convex:** every `src/lib/core/db.ts` / `PrismaClient` /
+>   `runWithDb()` / `prisma/schema.prisma` reference is dead. Backend
+>   is Convex-only; API routes use `serverQuery` / `serverAction` from
+>   `convex-sveltekit`. Session + JWT bridge via `hooks.server.ts`.
+> - **1. Public REST API:** shipped (`/src/routes/api/v1/*` — supporters,
+>   keys, campaigns). Rate limiter (`SlidingWindowRateLimiter`) and
+>   `PLANS` constants verified. Design-constraints refs to Prisma/
+>   `db.ts` are historical.
+> - **2. Supporter Segmentation UI:** shipped. `segments` table in
+>   `convex/schema.ts:~1125-1139`. Actual filter shape is a flat
+>   conditions + AND/OR array, not the hierarchical FilterNode/FilterGroup
+>   tree described in §2.3 (semantically equivalent, simpler).
+> - **3. Campaign Analytics Expansion:** shipped. Email delivery
+>   metrics + VerificationPacket (GDS/ALD/entropy/burst/CAI) render on
+>   the campaign detail page. Open/click granularity requires SES
+>   webhook config (ops prerequisite, not code gap).
+> - **4. Email A/B Testing:** schema + compose UI + results view live.
+>   `emailBlasts.{isAbTest, abTestConfig, abVariant, abParentId,
+>   abWinnerPickedAt}` present. Winner-selection cron
+>   (`/api/cron/ab-winner`) — verify deployment; if absent, winner
+>   picking is manual.
+> - **5. AN Migration Promotion:** **not shipped.** No
+>   `/compare/action-network` or `/compare/action-network/parallel`
+>   routes. The comparison landing page + parallel-ops guide were
+>   descoped; the `AnSync` state plumbing exists but see the
+>   IMPORT-SPEC banner for the "state stored, no background worker
+>   wired" gap.
+> - **Feature flags silently off:** `CONGRESSIONAL=false`,
+>   `DEBATE=false`, `PASSKEY=false`.
 
 ---
 
