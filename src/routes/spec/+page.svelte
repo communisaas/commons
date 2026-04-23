@@ -125,16 +125,16 @@
 		use: string;
 	}> = [
 		{
-			name: 'SONGE_24',
+			name: 'SONGE_$',
 			hex: '0x534f4e47455f24',
 			layout: [
-				{ kind: 'tag', label: 'SONGE_24' },
+				{ kind: 'tag', label: 'SONGE_$' },
 				{ kind: 'zero' },
 				{ kind: 'zero' },
 				{ kind: 'zero' }
 			],
 			arity: '24',
-			use: 'District commitment · sponge capacity seed'
+			use: 'District commitment · sponge capacity seed · mnemonic SONGE_24'
 		}
 	];
 </script>
