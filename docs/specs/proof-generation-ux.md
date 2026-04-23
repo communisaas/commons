@@ -1,4 +1,29 @@
-> **SUPERSEDED (2026-02-20):** Browser-native ZK proof generation is implemented and operational in Phase 1 via @voter-protocol/noir-prover (UltraHonk/keccak mode). This document describes the pre-implementation design. For current architecture, see voter-protocol/specs/TWO-TREE-ARCHITECTURE-SPEC.md.
+> ## ⚠️ SUPERSEDED (2026-02-20)
+>
+> This document is a **pre-implementation design sketch** kept for historical
+> context. Browser-native ZK proof generation shipped in Phase 1; the shipped
+> design is materially different from what this document describes.
+>
+> **Do not treat any code, timing, memory, or API claim below as authoritative.**
+> Specifically, the following are known to be stale or fabricated relative to
+> the shipped implementation:
+>
+> - Package `voter-district-circuit` → real package is `@voter-protocol/noir-prover`.
+> - Circuit depth K=14 → real default depth is 20 (`prover-client.ts:35`).
+> - 3-input proof flow (districtRoot, nullifier, actionId) → real three-tree flow
+>   has 31 public inputs (`prover-client.ts:183-225`).
+> - Timing estimates (2-5s desktop / 8-15s mobile) → no benchmark harness exists;
+>   treat as rough guidance only. Measure in your environment.
+> - Memory budget (600-800MB WASM) → unmeasured.
+> - Proof size (~4.6KB) → unvalidated.
+> - Integration roadmap checklist at the bottom of this doc → all items
+>   shipped; leave the boxes as-is as an artifact.
+>
+> **Canonical references for the shipped system:**
+> - Protocol: [`voter-protocol/specs/CRYPTOGRAPHY-SPEC.md`](../../../voter-protocol/specs/CRYPTOGRAPHY-SPEC.md)
+> - Client: `commons/src/lib/core/zkp/prover-client.ts` (three-tree), `community-field-client.ts` (bubble), `debate-weight-client.ts`, `position-note-client.ts`
+> - UX entry point: `commons/src/lib/components/template/ProofGenerator.svelte`
+> - Public /spec page: [`commons/src/routes/spec/+page.svelte`](../../src/routes/spec/+page.svelte)
 
 # Proof Generation UX: Browser-Native Zero-Knowledge Proving
 

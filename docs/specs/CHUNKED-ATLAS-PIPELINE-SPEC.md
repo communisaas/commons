@@ -2,10 +2,29 @@
 
 > **Spec ID:** CHUNKED-ATLAS-001
 > **Version:** 1.0.0
-> **Status:** DESIGN COMPLETE — Awaiting Implementation
-> **Date:** 2026-03-15
+> **Status:** LIVE (code landed) — one load-bearing migration task open: **Storacha pinning sunset on 2026-05-31** (see §4.4).
+> **Date:** 2026-03-15 (design); 2026-04-23 (status reconciled)
 > **Repos:** `commons` (consumer), `voter-protocol` (producer)
 > **Supersedes:** Monolithic H3 mapping pipeline (ipfs-store.ts v1/v2, build-h3-mapping.ts)
+
+## Implementation reconciliation (2026-04-23)
+
+Components the spec originally marked as "to implement" are shipped:
+- `build-chunked-mapping.ts` (partition by H3 res-3) — `voter-protocol/packages/shadow-atlas/scripts/build-chunked-mapping.ts`
+- `pin-to-ipfs.ts` (directory mode + gateway verification) — same path
+- `push-cids.ts` (CID → Cloudflare secrets) — same path
+- `export-officials.ts` (queries `federal_members`, not the fabricated `officials` table) — same path
+- `validate-build.ts` (7-check gate) — same path
+- `ipfs-store.ts` (LRU + 7-day TTL + gateway failover) — `commons/src/lib/core/shadow-atlas/ipfs-store.ts`
+
+Remaining rot and load-bearing gaps:
+
+1. **Storacha is hardcoded as the primary pinning service** and Storacha is sunsetting on **2026-05-31** (~38 days from spec reconciliation). `pin-to-ipfs.ts` instantiates only Storacha; the "Pinata backup" referenced in its header comment is imported but never constructed. The `storacha.link/ipfs` fallback gateway listed in §5 will 404 after sunset. **Action required before 2026-05-31:** either refresh Storacha credentials (not possible if the space is being sunset) or wire Pinata / NFT.storage / alternative as primary, update the gateway chain, and re-pin.
+2. **Chunk-count numbers in this spec are inconsistent.** §3 says ~783 chunks (res-3 parents of continental US); §7 example validation output shows 4,698 chunks; memory notes say 977. The 4,698 figure is almost certainly the multi-country × multi-slot total (US + CA + GB + AU + NZ across populated slots), not the per-country `cd` count. The spec should either pick one number and explain the scope, or show all three with their scopes.
+3. **Example validation output (§7 lines 509-517) is presented as if from a real run** — precise cell counts, district counts, official counts. These were aspirational when the spec was DESIGN COMPLETE; now that the build has run in production, either replace with real output or label as "expected output format, illustrative."
+
+The rest of this document describes the live pipeline. Where a claim is
+Phase-2 / Storacha-post-sunset / unmeasured, a callout appears inline.
 
 ---
 

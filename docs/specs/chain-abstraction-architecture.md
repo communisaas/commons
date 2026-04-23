@@ -1,13 +1,32 @@
 # Chain Abstraction Architecture
 
-> **STATUS: FEATURE-GATED** (`FEATURES.WALLET = false`) — Infrastructure built but gated behind wallet feature flag.
+> **STATUS: PARTIAL — Path 1 live (Sepolia), Path 2 stub.** `FEATURES.WALLET = false` in production for the full wallet surface; NEP-366 meta-tx sponsorship is reachable via `/api/wallet/near/sponsor` independently.
 
 > Canonical specification for the wallet, signing, gas, and funding layers.
 > Civic identity is wallet-agnostic. Every layer below it is interchangeable.
 
-**Status:** Implemented (Waves 1-6 complete, 2026-02-26)
+**Status (reconciled 2026-04-23):** Mixed — see Implementation Status block below.
 **Scope:** Commons frontend + voter-protocol contracts
-**Depends on:** [TWO-TREE-ARCHITECTURE-SPEC](../../../voter-protocol/specs/TWO-TREE-ARCHITECTURE-SPEC.md), [DEBATE-MARKET-SPEC](../../../voter-protocol/specs/DEBATE-MARKET-SPEC.md)
+**Depends on:** [CRYPTOGRAPHY-SPEC](../../../voter-protocol/specs/CRYPTOGRAPHY-SPEC.md), [DEBATE-MARKET-SPEC](../../../voter-protocol/specs/DEBATE-MARKET-SPEC.md)
+
+## Implementation Status (2026-04-23)
+
+Not every layer is shipped. The matrix below reconciles what's described in this document against what exists in the commons + voter-protocol source trees.
+
+| Component | Doc claims | Actual state | Evidence |
+|---|---|---|---|
+| NEP-366 meta-tx (NEAR → Scroll via chain signatures) | Live | **Live on NEAR testnet.** Full implementation: `buildDelegateActionForFunctionCall`, `signDelegateAction`, `relayDelegateAction`. | `commons/src/lib/core/near/meta-transactions.ts`; `commons/src/routes/api/wallet/near/sponsor/+server.ts` |
+| NEAR implicit account creation (Ed25519 derivation, encrypted storage) | Live | **Live.** Fire-and-forget post-signup; `deriveScrollAddress()` uses NEAR Chain Signatures MPC. | `commons/src/lib/core/near/chain-signatures.ts:198-240`; `commons/src/lib/core/wallet/near-provider.ts` |
+| Scroll Sepolia chain ID (534351) | Live | **Live on Sepolia.** | `commons/src/lib/core/contracts.ts:47` |
+| Scroll mainnet chain ID (534352) | Live | **Not deployed.** Referenced in code, never used. | `commons/src/lib/core/contracts.ts` |
+| ERC-4337 SimpleAccount factory | Live | **Stub.** Factory address is hardcoded to the Pimlico Sepolia deployment; no factory invocation in the submission flow; feature flag OFF. | `commons/src/lib/core/wallet/smart-account-provider.ts:43`; `commons/src/lib/core/wallet/debate-client.ts:417` (TODO comment) |
+| Pimlico paymaster / gas sponsorship | Live | **Not wired.** `PIMLICO_API_KEY` is commented out in `wrangler.toml`; `sponsor-userop/+server.ts` is a skeleton that calls a bundler that isn't configured. | `commons/src/routes/api/wallet/sponsor-userop/+server.ts:8-58`; `wrangler.toml` |
+| Staking (native ETH, no approval) | Live | **Fabricated.** Code uses ERC-20 approval via `ensureTokenApproval()`; `STAKING_TOKEN_ADDRESS` is the zero address with a warning comment. | `commons/src/lib/core/contracts.ts:36-44`; `commons/src/lib/core/wallet/debate-client.ts:271,349` |
+| EIP-7702 smart-account delegation | Live | **Skeleton only.** `delegate()` / `isDelegated()` exist for Sepolia; flag `PUBLIC_ENABLE_SMART_ACCOUNTS` is `false` by default; never wired into the submission path. | `commons/src/lib/core/wallet/smart-account-provider.ts:66-216` |
+| `rotateNearPrimaryKey()` account rotation | Live | **Not implemented.** Recovery keypair is generated; rotation logic absent. | `commons/src/lib/core/near/account.ts` |
+| Cost claims (~$0.01 / ~2.2M gas) | Live | **Unverified.** Hardcoded max gas cap in sponsor-userop is 5M gwei; no deployment trace or benchmark harness. | `commons/src/routes/api/wallet/sponsor-userop/+server.ts:58` |
+
+**What a reader should take away:** Path 1 (NEAR implicit account + NEP-366 meta-tx → Scroll Sepolia via chain signatures) is real and testable. Path 2 (ERC-4337 UserOp + Pimlico paymaster) is a design contract with a stubbed implementation — it will not currently sponsor a real transaction. Scroll mainnet is aspirational until a mainnet deployment of DistrictGate + registries + factory is completed.
 
 ---
 
@@ -147,10 +166,12 @@ Two independent gas delegation mechanisms, one per chain:
 **NEAR side (NEP-366 meta-transactions):**
 The user signs a `DelegateAction` off-chain. The server's sponsor account wraps it in a regular NEAR transaction and broadcasts it. The NEAR runtime verifies the inner signature and executes the action. Cost: ~0.001 NEAR per relay (~$0.005).
 
-**Scroll side (ERC-4337 UserOperations):**
+**Scroll side (ERC-4337 UserOperations) — design, not yet wired:**
 The client constructs a `UserOperation` targeting `execute(dest, value, func)` on the user's smart account. Pimlico's verifying paymaster sponsors the gas. The bundler submits the UserOp to the EntryPoint contract. Cost: Pimlico deposit (prepaid by protocol).
 
-These compose for Path 1 users: the NEAR meta-tx sponsors the MPC signing call, then the Pimlico paymaster sponsors the Scroll transaction. The user pays zero gas on either chain.
+**Current state:** `PIMLICO_API_KEY` is commented out in `wrangler.toml`; `/api/wallet/sponsor-userop/+server.ts` is a skeleton that validates a request envelope but has no working bundler or paymaster wired behind it. The SimpleAccount factory address hardcoded in `smart-account-provider.ts:43` is a Pimlico Sepolia deployment; there is no mainnet factory and no factory-invocation step in any shipping submission path. Until the paymaster + factory are deployed and configured, Path 2 sponsors nothing — a user attempting Path 2 would pay gas directly from their own Scroll balance via an EOA transaction.
+
+**Implication for composition:** Path 1 users (NEAR implicit + MPC chain signatures) currently pay their own Scroll gas once the signed EIP-712 envelope reaches Scroll, because the Pimlico half of the composition is stub. The NEAR-side sponsorship (~0.001 NEAR per relay) still works independently.
 
 ### 4.3 Progressive Trust Escalation
 
@@ -195,7 +216,9 @@ The signer produces this EIP-712 signature via `WalletProvider.signTypedData()`.
 
 ### 5.2 Staking Transfer
 
-Native ETH via `msg.value` — no approval transaction needed. The contract receives ETH directly with each payable call (`proposeDebate`, `submitArgument`, `coSignArgument`, `appealResolution`) and returns ETH via `Address.sendValue()` on settlement/withdrawal.
+**Design target (not shipped):** Native ETH via `msg.value` — no approval transaction needed. The contract would receive ETH directly with each payable call (`proposeDebate`, `submitArgument`, `coSignArgument`, `appealResolution`) and return ETH via `Address.sendValue()` on settlement/withdrawal.
+
+**Actual state (2026-04-23):** Staking is ERC-20 based, gated on `STAKING_TOKEN_ADDRESS`. The wallet client calls `ensureTokenApproval()` before each stake (`commons/src/lib/core/wallet/debate-client.ts:271,349`), meaning the approval transaction the design promised to eliminate is still required. `STAKING_TOKEN_ADDRESS` in `commons/src/lib/core/contracts.ts:36-44` is the zero address with a warning comment — i.e., no staking token is actually configured. The native-ETH payable-call pattern was a plan; migrating `DebateMarket.sol` to payable plus removing the ERC-20 approval path is Phase 2 work.
 
 ---
 
@@ -304,23 +327,25 @@ Code locations for each layer (not exhaustive — entry points only):
 
 ---
 
-## 9. Staking: Native ETH
+## 9. Staking: Native ETH (design target, not yet migrated)
+
+> **Status:** Proposed. Current `DebateMarket.sol` + `debate-client.ts` use ERC-20 approval (`ensureTokenApproval()`) with `STAKING_TOKEN_ADDRESS` unconfigured. This section describes the Phase-2 migration that eliminates approval.
 
 ```
 User → submitArgument{value: stakeAmount}(...)
         └→ require(msg.value >= minStake)
 ```
-One transaction. No approval. No token contract dependency. All 5 outbound ETH transfers use `Address.sendValue()` with `nonReentrant` + CEI pattern.
+Target state: one transaction, no approval, no token contract dependency. Outbound transfers would use `Address.sendValue()` with `nonReentrant` + CEI pattern.
 
 ### Settlement Change
 ```
-Current: stakingToken.transfer(winner, payout)
-Target:  Address.sendValue(payable(winner), payout)
+Current: stakingToken.transfer(winner, payout)   // ERC-20 path (present)
+Target:  Address.sendValue(payable(winner), payout)  // native ETH (Phase 2)
 ```
 
 ### Onramp Change
 ```
-OnrampWidget.svelte: cryptoCurrencyCode: 'USDC' → 'ETH'
+OnrampWidget.svelte: cryptoCurrencyCode: 'USDC' → 'ETH' (pending migration)
 ```
 
 ### Display Change

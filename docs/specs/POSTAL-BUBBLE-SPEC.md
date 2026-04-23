@@ -8,7 +8,7 @@
 **Revised:** 2026-03-01 — Rev 2: From disambiguation widget to identity object
 **Depends on:** Shadow Atlas R-tree (94,166 districts), Nominatim (self-hosted), `GeocodeService.detectCountry()`
 **Supersedes:** Address verification paradigm in `location-picker-spec.md`
-**Companion specs:** `SPATIAL-BROWSE-SPEC.md`, `GEOGRAPHIC-IDENTITY-ROUTING.md`, `TWO-TREE-ARCHITECTURE-SPEC.md`
+**Companion specs:** `SPATIAL-BROWSE-SPEC.md`, `GEOGRAPHIC-IDENTITY-ROUTING.md`, [`voter-protocol/specs/CRYPTOGRAPHY-SPEC.md`](../../../voter-protocol/specs/CRYPTOGRAPHY-SPEC.md) (canonical crypto)
 
 ---
 
@@ -1172,9 +1172,9 @@ The LocationFilter doesn't infer a district anymore. It infers a bubble seed. Th
 
 ### voter-protocol (ZK layer)
 
-**No changes.** The ZK circuits take `district_id` → Merkle proof → nullifier → ZK proof. The bubble is a UX concept that produces a `district_id`. The circuit is agnostic to how it was produced.
+**No circuit changes.** The community-field path uses the existing `bubble_membership` circuit, which takes H3 cells (`cell_ids[16]`, sorted ascending, zero-padded to `MAX_CELLS = 16`) — **not a `district_id`** — and produces `cell_set_root`, `epoch_nullifier`, and `cell_count` as outputs. See `voter-protocol/packages/crypto/noir/bubble_membership/src/main.nr`. The bubble is a UX concept whose resolved cell set feeds the circuit; district resolution happens client-side *after* the proof, by mapping each resolved cell to its congressional district via the Shadow Atlas. The circuit is agnostic to how the cell set was produced.
 
-**One subtlety:** If the bubble is ambiguous (user hasn't pinched past a CD fence), the system cannot generate a ZK proof for congressional district membership — because the district isn't known. The bubble makes this visible: "tighten your bubble to generate a verified position." The ZK layer doesn't need to handle ambiguity; the bubble prevents ambiguous inputs from reaching it.
+**One subtlety:** If the bubble is ambiguous (user hasn't pinched past a CD fence), the client cannot claim a specific congressional district — because the resolved cells span multiple districts. The bubble makes this visible: "tighten your bubble to claim a specific district." The ZK layer still accepts the proof (the cells *are* verifiably in the user's bubble), but the downstream district-specific claim is ambiguous until the bubble is tightened.
 
 ---
 
