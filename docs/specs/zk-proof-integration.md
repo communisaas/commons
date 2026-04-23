@@ -1,18 +1,28 @@
 # Phase 1: Browser-Native Zero-Knowledge Proof Integration
 
-> **STATUS: FEATURE-GATED** — Browser prover complete, broader ZK infrastructure gated behind feature flags.
+> **⚠️ PARTIALLY STALE — AUDITED 2026-04-23.** This spec was written for a two-tree / single-tree branch of the ZK system and an earlier set of routes. Several concrete claims below no longer match the code. Treat anything not in this notice as aspirational until verified against source.
+>
+> **Canonical crypto spec:** [`voter-protocol/specs/CRYPTOGRAPHY-SPEC.md`](https://github.com/communisaas/voter-protocol/blob/main/specs/CRYPTOGRAPHY-SPEC.md)
+>
+> **Known divergences from implementation (verified 2026-04-23 against `main`):**
+> - **Circuit:** current canonical circuit is `three_tree_membership` (user + cell-map + engagement), not single-tree district membership. Public input shape differs; use `prover-client.ts` + CRYPTOGRAPHY-SPEC §5 as the source of truth.
+> - **Endpoints:** `/api/congressional/submit` does NOT exist. The real submission route is `/api/submissions/create` (Convex-backed). `/api/tee/pubkey` does not exist — it is `/api/tee/public-key/`, and nothing in the submission path calls it yet.
+> - **Files claimed "Created":** `src/lib/core/zkp/witness-builder.ts` and `src/lib/stores/proof-generation.svelte.ts` do not exist. Witness construction lives in `prover-client.ts` and `*-client.ts` per-circuit builders.
+> - **Feature gates:** `FEATURES.CONGRESSIONAL` is `false` and `FEATURES.DEBATE` is `false` in production (`src/lib/config/features.ts`). The flow described here is not reachable end-to-end today.
+> - **TEE delivery:** `sendToTEE()` does not exist. Submissions validate a proof but do not hand the ciphertext to a TEE. AWS Nitro Enclave integration is in `docs/implementation-status.md` as "Planned."
+> - **Gas / cost:** "~2.2M gas" and "~$0.01 per verification" appear throughout without a backing benchmark; `contracts/test/` has no UltraHonk verifier gas harness that produces these numbers. Treat as unverified estimates, not measured values.
 
 > **Updated 2026-02-02**: Reflects Wave 2.3 browser prover integration completion.
 
-**Status**: ✅ **COMPLETE** - Browser prover fully integrated with Svelte 5 reactive store
+**Status**: FEATURE-GATED — browser prover shipped; downstream wiring blocked on `FEATURES.CONGRESSIONAL` / TEE work.
 **Architecture**: Browser-native Noir/UltraHonk proving (no server-side proving, cypherpunk-compliant)
-**Performance**: 600ms-10s browser proving | ~50-100ms verification | ~2.2M gas on-chain (Scroll L2)
+**Performance (unverified estimates)**: 600ms-10s browser proving | ~50-100ms verification | ~2.2M gas on-chain (Scroll L2) — no UltraHonk gas benchmark in `voter-protocol/contracts/test/` produces this figure; do not cite until a harness exists.
 
 ## Wave 2.3 Implementation Summary
 
 **Files Created:**
 - `src/lib/core/zkp/prover-client.ts` - Low-level prover wrapper ✅ exists
-- `src/lib/core/zkp/witness-builder.ts` - Circuit witness construction ❌ not created
+- `src/lib/core/zkp/witness-builder.ts` - Circuit witness construction ❌ not created (witness construction lives in `prover-client.ts` and per-circuit `*-client.ts` builders)
 - `src/lib/stores/proof-generation.svelte.ts` - Svelte 5 reactive store ❌ not created (proof state managed in prover-client)
 - `src/lib/core/zkp/README.md` - Integration documentation
 
