@@ -1,12 +1,40 @@
 # Vector Search Implementation Guide
 
-> **Implementation Status:** ✅ Complete (2026-02-05, migrated to pgvector)
+> ⚠️ **OUT OF DATE (2026-04-23 audit).** This guide documents the
+> **superseded** Postgres/pgvector/Voyage AI stack. Commons migrated to
+> Convex-native vector search in 2026-04. Every concrete command, file
+> path, cost number, and SQL snippet below describes infrastructure
+> that no longer exists.
 >
-> **Author:** Distinguished Data Engineering Team
+> ### Current vector-search stack
 >
-> **Technologies:** PostgreSQL pgvector (HNSW) + Voyage AI Embeddings
+> - **Store:** Convex `.vectorIndex(...)` on `convex/schema.ts` tables.
+>   Templates: `by_topicEmbedding`, `by_locationEmbedding`. Intelligence:
+>   `by_embedding`. Bills: `by_topicEmbedding`. Decision-makers: keyword
+>   only (`.searchIndex(...)`, no vector index).
+> - **Embeddings:** **Gemini `text-embedding-004`, 768 dimensions**
+>   (`src/lib/core/search/gemini-embeddings.ts`, `src/lib/core/search/index.ts:10`).
+>   Not Voyage AI, not 1024-dim, no voyage-3/voyage-4/voyage-law-2.
+> - **Execution:** query embedding generated server-side; vector search
+>   runs server-side. Client IndexedDB cache
+>   (`src/lib/core/search/cache.ts`) stores *results*, not the model.
+> - **Rate limit:** embeddings = 20/hr for authenticated users
+>   (`src/lib/server/ai/llm-cost-protection.ts:74-78`).
+> - **Not in the repo:** `prisma/schema.prisma`, `pgvector` extension,
+>   `HNSW` migrations, Voyage AI client, `src/lib/server/intelligence/`,
+>   `src/lib/server/embeddings/`, `npm run db:push`.
+> - **ADR-011** (MongoDB → pgvector) is marked **SUPERSEDED** and points
+>   at the Convex migration.
 >
-> **Migration:** MongoDB Atlas → pgvector. See [ADR-011](./adr/011-mongodb-to-pgvector-migration.md).
+> Treat the rest of this document as historical context for the
+> short-lived Postgres era.
+>
+
+**Author:** Distinguished Data Engineering Team
+
+**Technologies (historical, 2026-02):** PostgreSQL pgvector (HNSW) + Voyage AI Embeddings
+
+**Migration:** MongoDB Atlas → pgvector. See [ADR-011](./adr/011-mongodb-to-pgvector-migration.md).
 
 ## Table of Contents
 

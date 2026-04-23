@@ -1,9 +1,37 @@
 # WP-008: Fix CWC House Delivery
 
-**Status:** ✅ COMPLETED
+**Status:** ✅ COMPLETED (with code-path drift — see banner)
 **Date:** 2026-01-26
 **Priority:** Critical
 **Complexity:** High (3-4 days estimated)
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The fix shipped and the
+> behavior is correct — House submissions no longer silently simulate;
+> the `HOUSE-SIM-*` fake-success bug is gone. Code-path references in
+> this ADR point at a pre-Convex tree that doesn't exist anymore:
+>
+> - **Real implementation:** `convex/submissions.ts` (House delivery
+>   flow around ~948-1032, `GCP_PROXY_URL` + `GCP_PROXY_AUTH_TOKEN`
+>   read at ~948-949; House reps skipped with an entry in the
+>   `errors[]` array if proxy config missing) and `convex/_cwcXml.ts`
+>   (XML generation). Not `src/lib/core/congress/cwc-client.ts` or
+>   `src/lib/core/legislative/adapters/cwc/cwcAdapter.ts` — those files
+>   do not exist.
+> - **Demo mode:** when CWC creds are absent, submissions are stored
+>   with `deliveryStatus: 'demo'` (`convex/submissions.ts:~962`),
+>   distinct from production failure. Documented here implicitly,
+>   not explicitly.
+> - **Env vars verified:** `GCP_PROXY_URL` + `GCP_PROXY_AUTH_TOKEN`
+>   are both present in `.env.example:~176-177` and read in
+>   `convex/submissions.ts`.
+> - **Regression test gap:** `tests/unit/cwc-house-delivery.test.ts`
+>   referenced as "8/8 tests passing" does not exist. The
+>   "silently-simulate" bug has no named regression test —
+>   `cwc-xml-honesty.test.ts` covers XML honesty but not the
+>   demo-status vs real-delivery split.
+> - **Feature flag:** `FEATURES.CONGRESSIONAL=false`
+>   (`src/lib/config/features.ts:24`) — delivery code ships, UI
+>   entrypoint is off.
 
 ---
 

@@ -1,9 +1,36 @@
 # ADR-006: Permissive Moderation Architecture
 
 **Date**: 2026-01-23
-**Status**: IMPLEMENTED
+**Status**: IMPLEMENTED (with model + layer-count drift — see banner)
 **Decision Maker**: Technical Architecture Team
 **Impact**: High - Complete moderation architecture redesign
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The "permissive / civic-speech
+> / S1 + S4 block, everything else permit" policy is accurate and shipped.
+> Two concrete claims need correction before using this ADR as a
+> reference:
+>
+> - **Layer 1 model migrated.** "Llama Guard 4 12B" is named throughout
+>   (summary, architecture diagram, before/after table, references).
+>   The live model is **`openai/gpt-oss-safeguard-20b`** on Groq —
+>   Llama Guard 4 is no longer on the free tier
+>   (`src/lib/core/server/moderation/llama-guard.ts:9-20`). Treat every
+>   "Llama Guard 4" mention below as historical.
+> - **Pipeline is 2 layers, not 3.** The "Layer 2 — Gemini 3 Flash
+>   quality assessment" described in the architecture diagram and
+>   implementation table was **never built**. Active pipeline is Layer 0
+>   (`llama-prompt-guard-2-86m`) + Layer 1
+>   (`openai/gpt-oss-safeguard-20b`) only. See
+>   `src/lib/core/server/moderation/index.ts`.
+> - **Thresholds vary by endpoint.** Default is 0.5; message/DM routes
+>   pass 0.8 (`moderatePromptOnly(content, 0.8)`). The ADR's "universal
+>   0.5" framing is oversimplified.
+> - **Fail-open behavior:** prompt-guard fails open on all errors
+>   (including 429). llama-guard fails open on non-429 errors but
+>   **throws on 429 rate-limit**. No HTTP 503.
+> - **Schema refs:** `reviewed_at`, `reviewed_by`, `consensus_approved`
+>   described as persistence fields were Prisma-era and do not exist on
+>   `convex/schema.ts`.
 
 ---
 

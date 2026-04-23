@@ -6,6 +6,33 @@
 
 **This is fine.** We test what matters at each layer.
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The layered philosophy
+> (unit → integration → E2E → manual) is sound. Specific test files
+> referenced do not exist as named:
+>
+> - ❌ `tests/integration/zk-proof-generation.test.ts` — not present.
+> - ❌ `tests/e2e/zk-proof-generation.spec.ts` — not present. E2E suite
+>   has `identity-verification-flow.spec.ts`,
+>   `moderation/moderation-pipeline.spec.ts`, and
+>   `basic-functionality.spec.ts` — none are proof-specific.
+> - ✅ `tests/unit/ProofGenerator.test.ts` — exists (unit tests only).
+> - ✅ Voter-protocol integration tests live at
+>   `tests/unit/voter-protocol/` (NOT `tests/e2e/voter-protocol/`).
+> - Circuit in scope is `three_tree_membership`, **31 public inputs**
+>   (`THREE_TREE_PUBLIC_INPUT_COUNT = 31` at
+>   `src/lib/core/crypto/noir-prover-shim.ts:22`), validated at
+>   `src/routes/api/submissions/create/+server.ts:~125` as `!== 31`.
+>   Submit endpoint is `/api/submissions/create`, not
+>   `/api/congressional/submit`.
+> - **TEE is scaffolded, not deployed.** Witness encryption
+>   (XChaCha20-Poly1305 + X25519) + `/api/tee/public-key` endpoint exist;
+>   the enclave doesn't. Treat any strategy that assumes an attested
+>   TEE round-trip as Phase-2.
+> - Ghost refs to `src/lib/core/zkp/witness-builder.ts` and
+>   `proof-generation.svelte.ts` are not present; the real prover API
+>   is `src/lib/core/zkp/prover-client.ts` (`initializeThreeTreeProver`,
+>   `generateThreeTreeProof`).
+
 ---
 
 ## Testing Strategy (3 Layers)

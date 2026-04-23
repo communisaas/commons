@@ -1,6 +1,44 @@
 # Location Intelligence & Privacy
 
-**Status**: IMPLEMENTED | Privacy-by-Architecture with Progressive Signal Inference
+**Status**: PARTIAL | Privacy-by-Architecture with Progressive Signal Inference (TEE boundary NOT deployed)
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Privacy design goals are
+> sound, but this doc describes a TEE privacy boundary that is **not
+> deployed**. Concrete corrections:
+>
+> - **TEE boundary is aspirational.** Witness encryption
+>   (XChaCha20-Poly1305 + X25519, `/api/tee/public-key`) is scaffolded,
+>   but there is no Nitro enclave. The active resolver is
+>   `LocalConstituentResolver` (`src/lib/server/tee/local-resolver.ts`) —
+>   witness decryption happens in-process on the server. Any section
+>   below that frames the TEE as the privacy line should be read as
+>   intended design, not current state. See
+>   `docs/implementation-status.md:~113` ("TEE deployment | Planned").
+> - **IP geolocation confidence values differ from the table.** Code at
+>   `src/lib/core/location/inference-engine.ts:156` sets confidence as
+>   `data.state_code ? 0.3 : 0.6` (country-only is **more** confident,
+>   VPN-resistant), not the "0.2 state only" stated here.
+> - **GeoLite2 fallback is not implemented.** The live fallback chain
+>   (`src/routes/api/location/ip-lookup/+server.ts`) is Cloudflare
+>   native → `cf-connecting-ip`/`cf-ipcountry` headers → mock (dev).
+>   The "GeoLite2-City.mmdb" path described as operational is a comment,
+>   not code.
+> - **mDL verification is browser-side, not server-side HPKE/CBOR/COSE.**
+>   W3C Digital Credentials API performs selective disclosure in the
+>   browser; the server receives the disclosed fields via the API, not
+>   raw encrypted mDL blobs. The "decrypt HPKE → CBOR → COSE_Sign1"
+>   flow described in the privacy-boundary section is not the active
+>   protocol.
+> - **"14 governance layers" resolution is scoped.** For template
+>   filtering and credential issuance, only the congressional district
+>   is operationalized (`FEATURES.ADDRESS_SPECIFICITY='district'`); the
+>   remaining layers are proof-internal or not yet wired.
+> - **User table has a generic `location: v.optional(v.string())` field**
+>   (`convex/schema.ts:~114`) — the doc's "no server-side storage of
+>   any location fields" claim should explicitly say no street/city/
+>   county/state, not "no location".
+> - **Storacha sunsets 2026-05-31.** Shadow Atlas pinning migration
+>   is ops-urgent — not called out below.
 
 ---
 

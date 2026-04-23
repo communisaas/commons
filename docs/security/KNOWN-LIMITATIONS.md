@@ -1,5 +1,41 @@
 # Known Security Limitations
 
+> ⚠️ **ADDENDA (2026-04-23 audit) — status updates + missing entries:**
+>
+> **Flip / reframe existing rows:**
+>
+> - **OID4VP JWT signature verification** is now **implemented**, not
+>   "Planned" — full ES256/ES384/ES512 verification in
+>   `verifyVpTokenSignature()` (~lines 623-704 of the DCAPI handler),
+>   with JWK + x5c key extraction and constant-time signature compare.
+> - **mdoc nonce:** doc previously "Planned." Reality is partial —
+>   nonce *presence* is required and validated in the OID4VP path;
+>   **transcript binding (SessionTranscript extraction → deviceAuth
+>   HPKE)** is still deferred to T3. Reframe as "partial, T3 pending."
+> - **`SKIP_ISSUER_VERIFICATION` bypass** remains in production code
+>   (gated, logged, test-only) — keep the entry but clarify it's active
+>   behind an env-flag.
+>
+> **Missing entries to add (material gaps):**
+>
+> - **Storacha pinning sunset (2026-05-31) — operationally urgent.**
+>   Uploads disabled 2026-04-15. `pin-to-ipfs.ts` hardcodes Storacha;
+>   `storacha.link/ipfs` gateway will 404 after sunset. Shadow-Atlas
+>   pinning provider migration required. Severity: **CRITICAL** (fixed
+>   deadline, no fallback wired).
+> - **TEE is MVP-only — `LocalConstituentResolver`, not an attested
+>   enclave.** Witness decryption runs in-process in the CF Worker
+>   runtime. Nitro deployment is Phase 2 (see
+>   `docs/implementation-status.md`). The prior entry framed TEE as
+>   shippable; treat as gap.
+> - **Client storage lacks per-user keying.** `templateDraftStore`,
+>   search cache, trade preimages all use globally-keyed localStorage /
+>   IndexedDB entries; shared devices can read another user's drafts.
+>   See MEMORY `storage_isolation_gaps.md`.
+> - **`FEATURES.PASSKEY=false`** — passkey authentication routes exist
+>   but are not the live sign-in path. Treat any claim that WebAuthn
+>   is a live auth channel as aspirational.
+
 ## Workers KV Eventual Consistency (Bridge Sessions)
 
 The cross-device verification bridge uses Cloudflare Workers KV for ephemeral session state. KV is eventually consistent — concurrent reads can return stale data.
