@@ -1,10 +1,50 @@
 # ZKP Integrity Task Graph
 
 **Status**: REVIEWED — 6 brutalist critics, findings validated against code
-**Date**: 2026-03-29
+**Date**: 2026-03-29 (reconciled 2026-04-23)
 **Reviewed**: 2026-03-29 — Architecture (3 critics) + Security (3 critics)
 **Scope**: Shadow Atlas integration, client-side ZKP, verification wiring, root lifecycle
 **Repos**: `commons`, `voter-protocol`
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Most tasks remain accurate
+> against code, but **two critical integrity gaps are still open** and
+> at least three mitigations are partial. Items to flag before the next
+> review gate:
+>
+> - **CRITICAL — 2B-chain (on-chain verify in delivery):** not wired.
+>   `deliverToCongress` (`convex/submissions.ts:~814-1130`) calls the
+>   TEE `/resolve` and proceeds to CWC without an on-chain verification
+>   step. No `/api/submissions/verify-onchain` webhook exists.
+> - **CRITICAL — 2F (district cross-check):** not implemented.
+>   `deliverToCongress:~919` extracts `districtCode` from the decrypted
+>   witness and uses it to look up officials, but there is **no check
+>   that `districtCode` is in the set attested by `publicInputs[2..25]`.**
+>   An attacker with a valid proof for District A can forge a witness
+>   addressed to District B. This is the attack F2 in the document.
+> - **HIGH — F6 nullifier fail-closed:** nullifier dedup is **local
+>   only** (`convex/submissions.ts:~148-153`); `isNullifierUsed()` in
+>   `district-gate-client.ts:~629-631` returns `false` when the chain
+>   is unconfigured, and the submission endpoint never calls it.
+>   "Fail-closed on unconfigured chain" is not enforced at the
+>   submission path.
+> - **MEDIUM — F7 demo-delivery warning:** `deliveryStatus: "demo"` +
+>   `demo-` ID prefix are set (`~957-979`), but no `console.warn` is
+>   emitted. Demo mode is silent in logs.
+> - **MEDIUM — 5E (debate path fail-open):** still lives.
+>   `arguments/+server.ts:~140-151` and `cosign/+server.ts:~102-113`
+>   set `serverVerified=true` on blockchain misconfiguration. Not
+>   hardened.
+> - **LOW — 2D lifecycle:** state machine uses `pending | verified |
+>   rejected`; no `verifying` intermediate (TEE call is synchronous
+>   inside `deliverToCongress`). `verification_failed` in the task is
+>   emitted as `rejected`.
+> - **Correctly shipped as documented:** S1 (promoteTier removed), S2
+>   (structural proof validation — 31 BN254 inputs, nullifier-index
+>   binding, action-domain canonicalization). S2 actually exceeds the
+>   task description (adds server-computed action-domain enforcement).
+> - **Storacha sunset 2026-05-31** is correctly externalized;
+>   `pin-to-ipfs.ts` hardcoded + writes disabled 2026-04-15. See
+>   CHUNKED-ATLAS-PIPELINE-SPEC banner.
 
 ---
 

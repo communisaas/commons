@@ -1,8 +1,38 @@
 # /org-v3/agency-rulemaking — Segment Surface Spec
 
 **Path 3, Segment 02 — Federal Agency Rulemaking**
-**Status:** Spec. Not implemented. Companion to `/org-v3/state-legislature`.
+**Status:** Landing page only — backend unimplemented. Companion to `/org-v3/state-legislature`.
 **Date:** 2026-04-17
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Segment marketing surface
+> (landing page + pricing) is live; the agency-rulemaking feature has
+> **no backend implementation**. Do not cite this spec for capability
+> claims. Concrete:
+>
+> - **Landing page shipped:** `src/routes/org/for/agency-rulemaking/+page.svelte`
+>   (UI-only; no `+page.server.ts`).
+> - **No regulations.gov integration.** No docket ingestion, no
+>   comment-period tracking, no technical-citation extraction, no
+>   shared-template disclosure screening in the codebase. Zero grep
+>   hits for "docket" / "comment period" / "regulations.gov" outside
+>   this spec.
+> - **Schema supports `institution.type === 'agency'`** on
+>   `decisionMakers` but lacks rulemaking-specific fields: no
+>   `docketId`, `commentPeriodEnd`, `impactZoneGeometry`,
+>   `ruleSectionRef`, or authorship-evidence distinctions.
+> - **"Proximate-impact H3 overlay" geography** is not in the schema.
+>   Shadow Atlas resolves congressional districts, not agency
+>   comment-period impact zones.
+> - **"24 boundary types"** figure applies to Shadow Atlas
+>   (congressional/local boundary resolution), not agency dockets.
+> - **No `FEATURES.*` gate** exists for agency rulemaking — the
+>   landing page renders unconditionally.
+> - **Seed data contains one agency-context message** (USCIS H-1B
+>   backlog) as a template example; not evidence of a submission
+>   pipeline.
+>
+> Roadmap target: H2 2026. Until then, treat this spec as segment
+> positioning + data-model sketch, not roadmap commitment.
 
 ---
 

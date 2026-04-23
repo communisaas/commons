@@ -1,9 +1,42 @@
 # Org Layer UX Audit: The CRM Divergence
 
-**Status:** Audit findings (2026-03-17)
+**Status:** Audit findings (2026-03-17) — largely addressed by ORG-REDESIGN-THESIS (same day); findings status reconciled 2026-04-23
 **Method:** Multi-agent critique (Claude, Codex, Gemini) + structured adversarial debate + founder review
 **Severity:** Critical — the org layer implementation has diverged from its own design philosophy
 **Depends on:** PERCEPTUAL-BRIDGE.md, design-system.md, CAMPAIGN-ORCHESTRATION-SPEC.md, org-data-model.md
+
+> ⚠️ **HISTORICAL BANNER (2026-04-23 audit).** This audit was filed
+> 2026-03-17; ORG-REDESIGN-THESIS shipped the response the same day.
+> Most Phase 0–1 findings shipped; some Phase 2–4 findings remain open.
+> Treat as historical evidence, not an active TODO list.
+>
+> **Fixed** (verified shipped):
+> - **Finding 5 "Preview Report" CTA** → "Deliver Proof" primary CTA
+>   integrated into `VerificationPacket` on dashboard + campaign detail.
+> - **Finding 6 Coordination Integrity incomprehensibility** → human
+>   labels + inline descriptions + burst-velocity amber banner.
+> - **Finding 7 Dashboard metrics wall** → packet-first hero, funnel
+>   de-emphasized, intelligence (decision-makers, legislation) now
+>   lives under its own navigation.
+> - **Finding 4 Campaign detail leads with admin** → packet above
+>   form, edit form in `<details>`.
+>
+> **Partial** (directional improvement; not complete):
+> - **Finding 2 Onboarding CRM muscle memory** — hints reframed, but
+>   sequence still looks CRM-shaped.
+> - **Finding 3 Supporter table dominance** — `VerificationPipeline`
+>   imported + rendered, but the row-level table still looks like CRM.
+> - **Finding 8 Email Compose** — subtitle/verification context
+>   added, but Mailchimp-parity editor is largely untouched.
+>
+> **Open** (deferred to Phase 2 / 4.1 or beyond):
+> - Finding 9 Embed widget value framing.
+> - Finding 10 Migration metaphor / "garden" visualization.
+> - Finding 12 Coalition proof visualization (still member-admin).
+> - Finding 13 Representative → DecisionMaker workflow unification
+>   (pages still fractured).
+>
+> For the concrete task ledger see `ORG-REDESIGN-THESIS.md`.
 
 ---
 

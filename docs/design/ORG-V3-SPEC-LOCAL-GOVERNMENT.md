@@ -1,8 +1,37 @@
 # /org-v3/local-government — Segment Surface Spec
 
 **Path 3, Segment 03 — Local Government**
-**Status:** Spec. Not implemented. Companion to `/org-v3/state-legislature`.
+**Status:** Spec — boundary types + template metadata shipped; delivery system is Phase 3+.
 **Date:** 2026-04-17
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Some infrastructure is
+> live; **no local-government delivery path exists**. Corrections:
+>
+> - **Shipped:** 24-slot Shadow Atlas boundary types including
+>   city-council, unified-school, water, fire, transit, hospital,
+>   library, park, conservation, utility, judicial, township,
+>   precinct, tribal (`src/lib/core/shadow-atlas/client.ts:~250-274`).
+>   `DecisionMaker` type enum includes `board_member`;
+>   `jurisdictionLevel` includes `'municipal' | 'county'`
+>   (`convex/schema.ts:~1772,1779`). Template schema supports
+>   `jurisdictionType='city' | 'school_district' | 'county'` +
+>   `scopeLevel='locality'`.
+> - **Not shipped:** local-government decision-maker ingestion (seed
+>   has exactly one local template — Portland 3D-printed housing —
+>   and no local officials). No clerk-email delivery path. No public
+>   comment packet assembly. No agenda-item linking for non-Granicus
+>   platforms. No deadline detection.
+> - **"Same component skeleton as `/org-v3/state-legislature`"**
+>   (~line 112) is forward-looking — the state-legislature segment
+>   delivery is also not shipped (gated by `FEATURES.CONGRESSIONAL=false`).
+> - **"Commons covers all [24 boundary types]"** (~line 86)
+>   overstates: boundary types are *defined* in Shadow Atlas; a
+>   delivery system for local officials does not exist. Reframe as
+>   "Shadow Atlas resolves all 24 boundary types; delivery to
+>   local-government officials is Phase 3+."
+> - **`deliveryMethod` enum on campaigns is `'cwc' | 'email' |
+>   'recorded'`** (`convex/schema.ts:~311,874`) — no local-gov-specific
+>   routing yet.
 
 ---
 

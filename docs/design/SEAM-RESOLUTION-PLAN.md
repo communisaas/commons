@@ -1,8 +1,36 @@
 # Seam Resolution Plan — Three Priority Architectural Seams
 
-> **Status**: COMPLETE — all 3 seams resolved, all 3 review gates passed
+> **Status**: Seam 1 complete; Seam 2 location unknown; Seam 3 partial (debate gated off) — reconciled 2026-04-23
 > **Date**: 2026-03-19
 > **Depends on**: DecisionMaker migration (complete), Brutalist R1+R2 (complete)
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Reconciliation against
+> code:
+>
+> - **Seam 1 (CongressionalRep → DecisionMaker split-brain):** ✅
+>   **SHIPPED**. `CongressionalRep` fully removed from `src/`;
+>   `DecisionMaker` entity live in `convex/schema.ts:~1771` with
+>   `by_userId_decisionMakerId` index; `/api/submissions/create`
+>   uses DecisionMaker authority chain. Audit-clean.
+> - **Seam 2 (Batch Ingestion / N+1 elimination):** ⚠️
+>   **NOT FOUND**. Files the plan cites (`correlator.ts`,
+>   `member-sync.ts`) don't exist under `src/lib/server/legislation/`
+>   — that directory contains only `monitoring.ts`, `receipts/`,
+>   `scorecard/`. Either the logic moved into Convex actions without
+>   a matching path rename, or S2 never shipped. Verify with a grep
+>   over `convex/legislation.ts` before trusting the "done" mark.
+> - **Seam 3 (Debate ↔ Campaign integration):** ⚠️ **PARTIAL +
+>   GATED**. `spawnDebate` action, `debateEnabled`/`debateThreshold`
+>   schema, SSE stream, and campaign-page debate display all exist.
+>   **Auto-spawn on threshold is not wired** — `debateThreshold` is
+>   stored but never checked on action creation; the manual endpoint
+>   `/api/campaigns/[id]/debate` requires `FEATURES.DEBATE=true`
+>   (currently `false`). The proof-report `renderDebateSection()`
+>   claimed in S3-03 was not added to `report-template.ts`.
+>
+> - **Three-tree / 31-input claim in the plan is correct.**
+>   `src/routes/api/submissions/create/+server.ts` validates exactly
+>   31 BN254 public inputs.
 
 ## Overview
 
