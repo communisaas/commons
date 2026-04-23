@@ -2,6 +2,29 @@
 
 **Status**: ✅ Privacy-Preserving Aggregation-Only
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** DP architecture, privacy
+> parameters, and the single `analytics` table with `recordType`
+> discriminator are all accurate. Concrete route/file claims that
+> diverge:
+>
+> - **`/api/analytics/aggregate` and `/api/analytics/health` do not
+>   exist.** Querying is Convex-only; see `convex/analytics.ts`. The
+>   only SvelteKit route is `POST /api/analytics/increment`.
+> - **`/api/cron/analytics-snapshot` is not a SvelteKit route.** It's
+>   now a Convex cron (`convex/crons.ts:~90`, daily 00:05 UTC, calling
+>   `internal.analytics.materializeSnapshot`).
+> - **`src/lib/core/analytics/aggregate.ts` does not exist.**
+>   `index.ts:148` re-exports from `'./aggregate'` as dead code; the
+>   named symbols (`queryAggregates`, `getHealthMetrics`,
+>   `incrementAggregate`, `checkContributionLimit`, etc.) have no live
+>   callers.
+> - **Code snippets using Prisma** (e.g. `db.analytics_aggregate.findMany`)
+>   describe the removed ORM. Access is Convex
+>   `ctx.db.query(...).withIndex(...).collect(...)`.
+> - **Correct as-is:** `SERVER_EPSILON=1.0`, `CLIENT_EPSILON=2.0`,
+>   `MAX_DAILY_EPSILON=10.0`, `USE_SNAPSHOT_ONLY`,
+>   `FEATURES.ANALYTICS_EXPANDED=true`.
+
 ---
 
 ## Architecture

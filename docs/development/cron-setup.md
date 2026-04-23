@@ -1,6 +1,27 @@
 # Cron Job Setup
 
-Daily analytics snapshot materialization at 00:05 UTC.
+> ⚠️ **FULLY OBSOLETE (2026-04-23 audit).** Every external trigger
+> described below (GitHub Actions workflows, cron-job.org config,
+> Upstash QStash, pg_cron, `CRON_SECRET`, `/api/cron/analytics-snapshot`
+> HTTP endpoint) was removed. The three GitHub workflows this doc set
+> up (`analytics-snapshot.yml`, `bounce-report-processing.yml`,
+> `legislation-crons.yml`) were deleted 2026-03-28.
+>
+> ### Current cron architecture
+>
+> - **Single source of truth:** `convex/crons.ts` (~15 scheduled jobs).
+>   Convex's native scheduler invokes them — no external triggers, no
+>   secrets, no `CRON_SECRET`, no HTTP endpoints to hit.
+> - **Analytics snapshot:** `convex/crons.ts:~90-94`
+>   (`crons.daily(..., { hourUTC: 0, minuteUTC: 5 })` →
+>   `internal.analytics.materializeSnapshot`). Previously a SvelteKit
+>   route; that route is gone.
+> - **Debate resolution:** defined but is a **log-only stub**
+>   (`convex/debates.ts:~697-739` logs "Would evaluate..." and does
+>   nothing on-chain; gated by `FEATURES.DEBATE=false`).
+> - **Monitoring:** Convex dashboard / logs.
+>
+> Daily analytics snapshot materialization at 00:05 UTC.
 
 ---
 

@@ -2,6 +2,32 @@
 
 **Status**: 🚨 CRITICAL | Regression Prevention for Address Verification & Saving
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Use this guide for the
+> *testing philosophy* (contract tests, field-naming rigor, end-to-end
+> coverage). Specific paths, endpoints, and DB references below are
+> stale:
+>
+> - **Test files don't exist as named.**
+>   `tests/integration/address-verification-api.test.ts` and
+>   `tests/integration/address-save-api.test.ts` are fictional. The
+>   real address test is
+>   `tests/integration/api/address-verification-e2e.test.ts` (save is
+>   folded into this E2E, not a separate test).
+> - **Endpoints are wrong.** `/api/address/verify` and
+>   `/api/user/address` don't exist. Real routes are
+>   `POST /api/location/resolve-address` (census + district resolution)
+>   and `POST /api/identity/verify-address` (credential issuance,
+>   representative upsert).
+> - **Backend is Convex, not Prisma.** `db.user.findUnique(...)`,
+>   `db.congressionalRep.*`, and any `prisma.*` samples describe the
+>   removed ORM. New tests should use Convex testing harnesses; the
+>   existing E2E retains `db`-shaped helpers as legacy plumbing only.
+> - **Helpers like `verifyAddress()` / `saveAddress()` are pedagogical
+>   placeholders**, not real utilities.
+> - **Related:** `docs/development/e2e-testing-guide.md` has its own
+>   divergence banner with complementary corrections; read both before
+>   writing new tests.
+
 ---
 
 ## The Problem We Had

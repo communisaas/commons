@@ -1,6 +1,53 @@
 # Decision-Maker Enrichment Pipeline
 
-> **STATUS: SHIPPED** — 3-phase AI discovery pipeline fully operational.
+> **STATUS: SHIPPED (different shape than spec)** — the DM pipeline is
+> operational in prod, but the **3-phase/3-file architecture this spec
+> describes was not implemented**. The live design is a single-provider,
+> 4-stage deterministic pipeline in `src/lib/core/agents/providers/gemini-provider.ts`.
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The outputs of this spec
+> are right (privacy model, Gemini + Firecrawl, no Hunter/Clearbit/Apollo,
+> SSE `ThoughtSegment` events, Convex persistence). The **architecture
+> described below was superseded before it shipped.** Use code as the
+> source of truth.
+>
+> **File layout:**
+>
+> - ❌ `decision-maker-identification.ts`, `decision-maker-enrichment.ts`,
+>   `decision-maker-validation.ts` — **do not exist**. All logic lives in
+>   `gemini-provider.ts` (orchestrator + phases, with a sibling
+>   `decision-maker.ts` for SSE wiring and post-pipeline steps, and
+>   `decision-maker-accountability.ts` for Phase 4 accountability prompts).
+>
+> **Actual pipeline shape:**
+>
+> 1. **Phase 1 — Role Discovery** (`gemini-provider.ts:~1034-1090`):
+>    `generateWithThoughts()` + structural reasoning, no search.
+> 2. **Phase 2a — Parallel Identity Resolution** (~1102-1147): parallel
+>    Exa searches + one extraction call + identity cache lookups.
+> 3. **Phase 2b — Contact Hunting** (~1149-1206): **4 deterministic stages**
+>    (parallel contact searches → batch page selection (1 Gemini call) →
+>    parallel Firecrawl reads → chunked synthesis, 3 identities per chunk).
+> 4. **Email Grounding** (~1254-1276): inline check that emails appear in
+>    the Firecrawl page text + highlights. Returns **`emailGrounded: boolean`**;
+>    the `emailConfidence: number` field and the "60% identity + 40% email"
+>    formula in this spec are not implemented.
+> 5. **Dedupe + filter** (~1293-1319): name-based dedup with shared-email
+>    preservation.
+>
+> **Post-pipeline (in `decision-maker.ts`):**
+>
+> - **Phase 3.5 — DNS MX verification** (lines ~626-703): batch DNS via
+>   Cloudflare DOH, filters undeliverable addresses. Runs *after* the
+>   provider returns — not as an inline validation pass.
+> - **Phase 4 — Accountability/classification** (~769-826): separate
+>   prompt via `decision-maker-accountability.ts`.
+>
+> **Misc:**
+>
+> - Domain-plausibility heuristics in this spec are not implemented —
+>   the code trusts Gemini synthesis + page-grounded emails.
+> - No separate "Phase 3 validation" module.
 
 **Status:** Shipped
 **Author:** Architecture Team

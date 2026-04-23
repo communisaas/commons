@@ -2,6 +2,35 @@
 
 > **STATUS: PARTIAL — Path 1 live (Sepolia), Path 2 stub.** `FEATURES.WALLET = false` in production for the full wallet surface; NEP-366 meta-tx sponsorship is reachable via `/api/wallet/near/sponsor` independently.
 
+> ⚠️ **Addendum (2026-04-23 audit)** — the existing status block is
+> broadly right, but the Implementation Status matrix + Section 4/5 prose
+> still present some stub items as if live. Concrete corrections:
+>
+> - **§4.2 Pimlico paymaster / ERC-4337 sponsorship:** presented as
+>   "Live," but `PIMLICO_API_KEY` isn't configured in prod.
+>   `/api/wallet/sponsor-userop/+server.ts` is a validation-only skeleton
+>   with a hardcoded `MAX_GAS_PER_OP_WEI = 5M gwei` ceiling; it does not
+>   actually sponsor ops. Treat Path 2 users as paying their own gas on
+>   an EOA transaction.
+> - **§4.4 `rotateNearPrimaryKey()`:** fully aspirational. The function
+>   does not exist in the codebase; recovery-keypair generation exists in
+>   `src/lib/core/chain-signatures/*` but is never invoked for rotation.
+>   Move to "Open Gaps" or mark explicitly `Design (not implemented)`.
+> - **§5.2 Native ETH staking:** design target. `DebateMarket` has no
+>   payable methods; staking is ERC-20 (tUSDC on Scroll Sepolia,
+>   `0xe70623c79E…`) with `ensureTokenApproval()` before every stake
+>   (`debate-client.ts:271,349`). The "eliminate approval tx" goal is
+>   Phase 2.
+> - **SimpleAccount factory:** hardcoded address
+>   (`src/lib/core/wallet/smart-account-provider.ts:43`) — no factory
+>   deployment, `PUBLIC_ENABLE_SMART_ACCOUNTS=false`, submission path
+>   uses EOA, not smart accounts. EIP-7702 `delegate()` / `isDelegated()`
+>   implemented but unwired.
+> - **Cost row (~$0.01 / ~2.2M gas):** unverified; code's internal
+>   ceiling is 5× higher. Strike or disclaimer.
+> - **Correct as-is:** Scroll mainnet chain ID (534352) referenced but
+>   unused — Sepolia (534351) is the only live network.
+
 > Canonical specification for the wallet, signing, gas, and funding layers.
 > Civic identity is wallet-agnostic. Every layer below it is interchangeable.
 
