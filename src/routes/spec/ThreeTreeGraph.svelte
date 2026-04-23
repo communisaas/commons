@@ -121,7 +121,7 @@
 		</svg>
 
 		<p class="graph-cell-eq">
-			user_root ≡ merkle( H4(user_secret, cell_id, salt, authority), path, idx )
+			user_root ≡ merkle( H4(user_secret, cell_id, registration_salt, authority_level), path, idx )
 		</p>
 	</figure>
 

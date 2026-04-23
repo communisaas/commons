@@ -2,8 +2,9 @@
  * Action Domain Builder - Deterministic action domain computation
  *
  * Constructs action domains for ZK proof nullifier binding. The action domain
- * uniquely identifies a (protocol, country, jurisdiction, recipient, template, session)
- * tuple so that each user can only submit one proof per action domain.
+ * uniquely identifies a (protocol, country, jurisdictionType, recipientSubdivision,
+ * templateId, legislativeSessionId) tuple so that each user can only submit one
+ * proof per action domain.
  *
  * HASHING SCHEME:
  * keccak256(abi.encodePacked(protocol, country, jurisdictionType, recipientSubdivision, templateId, sessionId))
@@ -80,7 +81,14 @@ export interface ActionDomainParams {
 	/** Template identifier from the template registry */
 	templateId: string;
 
-	/** Legislative session or campaign identifier */
+	/**
+	 * Legislative session identifier (e.g., "119th-congress").
+	 *
+	 * Scopes nullifier uniqueness to a legislative period — a user's proof for
+	 * the 119th Congress produces a distinct nullifier from the same action
+	 * in the 120th.  NOT a user-created "campaign" ID; those live in the
+	 * `templateId` field.
+	 */
 	sessionId: string;
 }
 
@@ -142,8 +150,8 @@ function validateParams(params: ActionDomainParams): void {
  *   country: 'US',
  *   jurisdictionType: 'federal',
  *   recipientSubdivision: 'US-CA',
- *   templateId: 'climate-action-2026',
- *   sessionId: '119th-congress'
+ *   templateId: 'climate-action-2026',  // the user-created "campaign"
+ *   sessionId: '119th-congress'          // the legislative session
  * });
  * // domain: "0x1a2b3c..." (64-char hex field element)
  * ```
