@@ -1,9 +1,47 @@
 # Cross-Border Coalition Support — Design Plan
 
-> **Status:** DESIGN
+> **Status:** DESIGN — with blockers (see audit banner)
 > **Date:** 2026-03-17
 > **Depends on:** CHUNKED-ATLAS-PIPELINE-SPEC.md (Phase 6), billing plans, OrgNetwork model
 > **Scope:** Canada (CA), United Kingdom (GB), Australia (AU)
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Postal-resolver layer
+> works; almost everything downstream is a stub or an aspirational
+> cross-repo dependency. Concrete blockers:
+>
+> - **Postal → constituency resolvers are live** for CA / GB / AU:
+>   `src/lib/core/location/resolvers/{canada-postal,uk-postcodes,australia-aec}.ts`
+>   call represent.opennorth.ca / postcodes.io / AEC. Keep this plan
+>   language for these.
+> - **Representative lookup is a stub.**
+>   `src/lib/server/geographic/rep-lookup.ts:~26-34` returns `[]` for
+>   all non-US countries. Plan language that treats rep-lookup as
+>   "fallback" or "partially working" is inverted — postal resolvers
+>   are fine; rep lookup is the gap.
+> - **Legislative abstraction layer has only `types.ts`.** No registry,
+>   no per-country adapters, no delivery pipeline. Any Phase 1 work in
+>   this plan that depends on `abstraction.md` is blocked until that
+>   doc's ASPIRATIONAL items land.
+> - **Referenced pipeline scripts (`build-chunked-mapping.ts`,
+>   `export-officials.ts`, `validate-build.ts`) don't exist in
+>   commons.** They live in the shadow-atlas package inside
+>   voter-protocol. Effort estimates that assume these are
+>   in-commons-edit-in-place are wrong; cross-repo coordination is
+>   required. See `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md`.
+> - **US congressional delivery is gated off** (`FEATURES.CONGRESSIONAL
+>   = false`). Cross-border coalitions cannot target US reps today,
+>   so any coalition-flow example involving US reps is blocked until
+>   the flag flips.
+> - **Backend is Convex, not Prisma.** §8.1-ish "add `country_code` to
+>   `Organization` in `prisma/schema.prisma`" edits must target
+>   `convex/schema.ts`. `applicable_countries` already exists on
+>   templates (`src/lib/types/template.ts`), not on `OrgNetwork` —
+>   confirm which model actually needs it before migrating.
+> - **Cross-border verification packet (`§5 CrossBorderVerificationPacket`,
+>   per-country GDS, etc.) has no code footprint.** `verification-packet.ts`
+>   has no country-aware logic; treat §5 as sketch.
+> - **Storacha sunset 2026-05-31** affects IPFS pinning for all country
+>   atlases; not covered below. See `CHUNKED-ATLAS-PIPELINE-SPEC.md`.
 
 ---
 

@@ -7,6 +7,22 @@
 **Status**: COMPLETE (2026-03-30)
 **Review**: 2 brutalist cycles (6 critics). Findings verified against code.
 
+> ⚠️ **2026-04-23 audit — mostly accurate, three small corrections:**
+>
+> - **T5 (Billing Portal arg/field mismatch) is already fixed.** The
+>   portal route uses `api.organizations.getBillingContext` which takes
+>   `slug` and reads `stripeCustomerId` off the org record (not the
+>   subscription). Owner role enforced. Treat the "Still TODO" framing
+>   as outdated.
+> - **Unknown Stripe status default is `past_due`, not `active`.**
+>   `mapStripeStatus()` in `convex/subscriptions.ts:~561-580` logs a
+>   warning and returns `"past_due"` for unrecognized states — the
+>   defensive posture keeps access gated. Line ~315 of this doc says
+>   the opposite.
+> - **Test count is stale.** Doc says 202 tests passing; current
+>   `npm test` reports ~2,874. Verification-date line should be
+>   refreshed on next audit.
+
 ---
 
 ## Dependency Graph

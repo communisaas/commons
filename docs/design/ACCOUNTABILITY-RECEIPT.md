@@ -1,9 +1,47 @@
 # Accountability Receipt: Proof-Weighted Decision-Maker Tracking
 
-> **Status**: Implemented (2026-03-17)
+> **Status**: Foundation Implemented (2026-03-17); Phase 2 scorecard compute + Phase 3 chain anchor still partial
 > **Author**: noot
 > **Date**: 2026-03-17
 > **Depends on**: voter-protocol (three-tree ZK), shadow-atlas (cell-district SMT), commons (verification pipeline)
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Core receipt model
+> shipped; several concrete deltas need to be read before building
+> against this spec:
+>
+> - **Schema is Convex, not Prisma.** The `model AccountabilityReceipt`
+>   block (lines ~257-314) is historical. Live table is
+>   `accountabilityReceipts` in `convex/schema.ts:~1692`.
+> - **FK is `decisionMakerId`, not `bioguideId`.** The receipt row
+>   references `decisionMakers` via `decisionMakerId: v.id("decisionMakers")`.
+>   `bioguideId` is a field on `decisionMakers` itself, not the
+>   accountability-receipt primary identifier. Update any `bioguideId`
+>   parameter in function signatures / indexes below.
+> - **Function name is `computeAttestationDigest()` (SHA-256)**, not
+>   `computeAttestationHash()` (Poseidon2) as line ~647 suggests.
+>   Stored field is `attestationDigest`. The Phase-4 Poseidon2 swap
+>   is still design intent — no migration path in code yet.
+> - **Scorecard compute is a stub.** `convex/legislation.ts
+>   computeScorecards` returns `{ computed: 0, skipped: 0 }` with a
+>   "not yet fully implemented" log. Treat the Phase 2 "scorecard
+>   algorithm" section as design, not live.
+> - **Vote tracker is a stub.** `convex/legislation.ts trackVotes`
+>   logs "not yet fully implemented" — the `scripts/anchor-receipts.ts`
+>   CLI and the `anchor-receipts` GitHub Actions job are not in the
+>   tree. Anchoring is IPFS-only today
+>   (`anchor.ts buildAnchorMerkleTree` — SHA-256, pads to power-of-2);
+>   **Scroll L2 SnapshotAnchor integration for receipts is Phase 4,
+>   not shipped.** (The on-chain contract exists for shadow-atlas
+>   quarterly roots, not accountability receipts.)
+> - **Separate generator file does not exist.** Receipt generation
+>   is inlined in Convex mutations. `src/lib/server/legislation/receipts/generator.ts`
+>   referenced in the Implementation Status section is not in the repo.
+> - **SvelteKit route for public accountability pages unverified.**
+>   `src/routes/accountability/[bioguideId]/` may not exist — confirm
+>   before linking to receipt-display URLs.
+> - **Cross-link:** `POWER-LANDSCAPE-SPEC.md` explicitly calls out
+>   that accountability receipts live in code but are missing from
+>   that spec. These two docs should reference each other.
 
 ## The Gap
 

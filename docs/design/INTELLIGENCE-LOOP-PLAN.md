@@ -1,8 +1,37 @@
 # Decision-Maker Intelligence Loop
 
-> **STATUS: DESIGN** — Engineering specification for the monitor → alert → mobilize → deliver → track → score feedback loop.
+> **STATUS: IMPLEMENTED (2026-03-18)** — monitor → alert → mobilize → deliver → track → score loop shipped. Design-phase framing below is historical; see Implementation Log near the end of this file and `INTELLIGENCE-LOOP-DEPTH.md` for the canonical post-implementation architecture.
 > **Date**: 2026-03-17
-> **Depends on**: Intelligence Service (pgvector), Agent Infrastructure (Gemini 3 Flash), Campaign Delivery (SES), Shadow Atlas, Verification Pipeline
+> **Depends on**: Intelligence Service (Convex vector indexes), Agent Infrastructure (Gemini 3 Flash), Campaign Delivery (SES), Shadow Atlas, Verification Pipeline
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Core design shipped.
+> Concrete corrections:
+>
+> - **Header says DESIGN; body's Implementation Log shows all gates
+>   PASSED 2026-03-18.** Flip status at top.
+> - **Prisma model language is historical.** 6 tables exist in
+>   `convex/schema.ts` (bills, legislativeAlerts, orgBillRelevances,
+>   legislativeActions, decisionMakers, accountabilityReceipts) using
+>   `defineTable()` with Convex value types. `prisma/schema.prisma`
+>   does not exist; `npx prisma migrate` does not apply.
+> - **pgvector / SQL language is misleading.** Vector search is
+>   Convex-native (`.vectorIndex("by_embedding", { dimensions: 768 })`
+>   on intelligence / bills tables using Gemini `text-embedding-004`).
+>   No raw SQL exposure.
+> - **Model renames:** `ReportResponse` folded into
+>   `accountabilityReceipts` (`convex/schema.ts:~1692`, 1733-1745);
+>   `OrgIssueDomain` is live as `orgIssueDomains` table
+>   (`~1751`, camelCase). Developers searching for the old names
+>   find nothing.
+> - **DecisionMaker migration is not called out here.** The plan was
+>   authored before `CongressionalRep → decisionMakers` unification.
+>   Post-migration architecture is in `INTELLIGENCE-LOOP-DEPTH.md`.
+> - **Missing from the plan (present in code):** `orgDmFollows`
+>   (`~1854`) and `orgBillWatches` (`~1867`) tables enable the
+>   follow/watch activity feed described in INTELLIGENCE-LOOP-DEPTH.md.
+> - **Embeddings are Gemini, not Voyage** — no 1024-dim refs needed;
+>   this doc is already correct on 768-dim. Treat any Voyage mention
+>   as obsolete (ADR-011 superseded).
 
 ---
 

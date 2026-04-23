@@ -5,7 +5,55 @@
 **Created**: 2026-03-30
 **Prerequisite**: [`MONETIZATION-IMPLEMENTATION.md`](MONETIZATION-IMPLEMENTATION.md) (COMPLETE)
 **Strategy**: [`docs/strategy/monetization-policy.md`](../strategy/monetization-policy.md)
-**Status**: PHASE A+B COMPLETE (2026-03-30)
+**Status**: PHASE A+B+D4+B5 COMPLETE (2026-03-30); Phases C + D1 + D2 + D3 still outstanding
+
+> ⚠️ **2026-04-23 audit — ship-state reconciliation:**
+>
+> **Items marked pending below that actually shipped (flip to Working):**
+>
+> - **A1 `sentEmailCount` increment** — live in `convex/email.ts:~283-297`
+>   (idempotent on blast→sent transition).
+> - **A2 `smsSentCount`** — schema field at
+>   `convex/schema.ts:~935`, aggregated in `subscriptions.ts:~177-185`.
+> - **A3 verified-action aggregation** — `subscriptions.ts:~151-162`
+>   via `by_orgId_verified` index, period-scoped.
+> - **A4 `/api/v1/usage` endpoint** — returns real data from
+>   `checkPlanLimitsByOrgId`, no zeros.
+> - **B1 verified-action submission gate** —
+>   `convex/submissions.ts:~55-62`, throws
+>   `VERIFIED_ACTION_QUOTA_EXCEEDED`.
+> - **B2 email-send limit** — `convex/email.ts:~348-352` checks
+>   `emailsSent >= maxEmails` before send (UI has defensive layer).
+> - **B3 SMS-send limit** — `src/routes/api/org/[slug]/sms/[id]/+server.ts:~40-44`
+>   returns 403 on `smsSent >= maxSms`.
+> - **B4 embeddings rate limit** —
+>   `/api/embeddings/generate/+server.ts` calls
+>   `enforceLLMRateLimit('embeddings')`; quota 20/hr (verified +
+>   authenticated).
+> - **B5 monthly usage reset (query-time)** —
+>   `subscriptions.ts:~135-143` uses `currentPeriodStart` (paid) or
+>   calendar month (free).
+> - **D4 past-due 7-day grace via `pastDueSince`** —
+>   `subscriptions.ts:~123-128` sets on first transition, clears on
+>   `invoice.payment_succeeded`.
+>
+> **Still pending (accurate):**
+>
+> - **D1 Cloudflare KV rate limiter** — not shipped; current impl
+>   uses in-memory / Redis.
+> - **D2 platform-wide global COGS circuit breaker** — partial; the
+>   `daily-global` quota in `llm-cost-protection.ts` is per-user, not
+>   a shared KV counter across all users.
+> - **D3 `subscription_schedule` event handling** — no handlers for
+>   `subscription_schedule.completed`/`.canceled` in `convex/webhooks.ts`.
+> - **Phase C org sponsorship** — not prioritized; reframe as "Not
+>   Started" rather than "future" if product intent has moved on.
+>
+> **Note on email/SMS counters:** doc says all enforcement uses
+> query-time aggregation. In practice, verified-action counts are
+> query-time, but email/SMS use denormalized per-org counters
+> (intentional — atomically incremented on send). Both approaches
+> coexist; the "query-time only" framing is oversimplified.
 
 ---
 

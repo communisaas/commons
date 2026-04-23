@@ -4,7 +4,28 @@
 
 When the user's desktop browser doesn't support the W3C Digital Credentials API (Firefox, older browsers, embedded webviews), verification must happen on a phone that does. The bridge mediates this cross-device flow.
 
-**For Chrome 141+ and Safari 26+, the bridge is not needed** — the DC-API handles cross-device via built-in CTAP2 hybrid transport.
+**For Chrome 141+ and Safari 26+ on mobile, the bridge is not needed** — the DC-API handles in-wallet verification on the same device.
+
+> ⚠️ **2026-04-23 audit — correction to the "no bridge needed" claim:**
+> the original wording conflated **native-wallet CTAP2 hybrid** (which
+> iOS/Android wallets use internally) with **what DC-API exposes to web
+> apps** (same-device only). On **desktop** Chrome/Safari,
+> `shouldUseSameDeviceFlow()` (`src/lib/core/identity/digital-credentials-api.ts:~44-46`)
+> returns `false` and the bridge is **required**. Core crypto claims
+> (KV + SSE + HMAC, AES-256-GCM + HKDF via `bridge-crypto.ts`, 3-word
+> pairing code) all verify correctly against code.
+>
+> - **OID4VP JWT signature verification is now implemented**
+>   (`mdl-verification.ts:~459-514, 623-704`, ES256/ES384/ES512, JWK +
+>   x5c key extraction) — reflects the wave-9 KNOWN-LIMITATIONS
+>   update. This bridge doc doesn't mention it because it scopes to
+>   `org-iso-mdoc`; that's fine, but cross-link for completeness.
+> - **mdoc nonce validation is partial.** OID4VP path verifies nonce
+>   in the token; `org-iso-mdoc` path enforces nonce presence only —
+>   full SessionTranscript binding and DeviceAuth HPKE verification
+>   remain deferred to **T3 (Phase 2)**.
+> - **Workers KV is eventually consistent;** `bridge-session.ts:~262-264`
+>   documents the known race. Mitigations live in KNOWN-LIMITATIONS.md.
 
 ## Architecture
 
