@@ -1,8 +1,15 @@
 # Staked Deliberation (Debates)
 
-> **STATUS: FEATURE-GATED** — Fully implemented, activation pending. `FEATURES.DEBATE = false`
+> **STATUS: FEATURE-GATED + PARTIALLY WIRED** — `FEATURES.DEBATE = false`. Audited 2026-04-23.
+>
+> **Known divergences from implementation:**
+> - **Daily resolution cron is a stub.** `convex/debates.ts:~720` logs `[debate-resolution] Would evaluate debate…` and returns. No scheduled trigger invokes the evaluate endpoint.
+> - **`POST /api/debates/[id]/resolve` does NOT call `DebateMarket.resolveDebate()` on-chain.** It runs `ctx.runMutation(api.debates.updateStatus, …)` — a local Convex status update. No blockchain transaction is sent.
+> - **`/resolve` does NOT block when AI evaluation has started.** The endpoint has no `aiResolution` / `resolution_method` guard; community resolution can still fire after AI has started.
+> - **Settlement UI exists.** `src/lib/components/debate/DebateSettlement.svelte` is shipped. Earlier "Known Gaps" claims that it has no UI are stale.
+> - **`/evaluate` endpoint IS wired end-to-end** (calls `aiEvaluator.evaluateDebate()`), so if manually invoked the evaluation path works. What's missing is the automatic daily trigger.
 
-**Status:** Deployed to Scroll Sepolia testnet. Frontend, API, and on-chain contract integration wired end-to-end. AI evaluation pipeline operational via `@voter-protocol/ai-evaluator`. Automated daily resolution cron at 02:00 UTC.
+**Status:** Deployed to Scroll Sepolia testnet. Frontend, API, and on-chain contract integration wired for manual flows; `FEATURES.DEBATE = false` in production. AI evaluation pipeline reachable via the `/evaluate` endpoint; the daily resolution cron is currently a log-only stub.
 **Tier Requirement:** 3+ (ZK-verified identity)
 **Contract:** `voter-protocol/contracts/src/DebateMarket.sol` (1897 lines, 193 tests across 4 test files)
 **Deployed:** `0xA07D6F620FEc31A163E1F888956e4c98D522B906` (Scroll Sepolia V11)

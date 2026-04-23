@@ -1,15 +1,24 @@
 # Architecture: Commons + voter-protocol
 
-**Date:** 2026-03-19
+**Date:** 2026-03-19 (audited 2026-04-23)
 **Status:** Production — commons.email deployed on Cloudflare Pages
+
+> **⚠️ Known divergences from implementation (verified against `main`, 2026-04-23):**
+> - **Backend:** Commons is now Convex-only. PostgreSQL / pgvector / Hyperdrive / Prisma are **gone** (`prisma/` directory removed). The "50+ Prisma models via Hyperdrive" language below describes the pre-migration stack. Canonical schema lives in `convex/schema.ts` (~71 tables, 232 indexes).
+> - **Auth:** `FEATURES.PASSKEY = false` (`src/lib/config/features.ts:79`). Passkey / WebAuthn / did:key flows exist in code but no UI path activates them today.
+> - **Identity providers:** self.xyz and Didit were retired in Cycle 15; mDL via the W3C Digital Credentials API is the sole active provider. OAuth (Google/Facebook/LinkedIn/Coinbase) still authenticates, but is not a verification provider.
+> - **TEE:** AWS Nitro Enclave deployment is **Planned** per `docs/implementation-status.md:~113`. Witness encryption is scaffolded (`src/lib/core/proof/witness-encryption.ts` + `/api/tee/public-key`), but the enclave itself is not deployed. `LocalConstituentResolver` is the only active resolver. Debate-evaluation TEE is entirely unbuilt.
+> - **Circuit:** The live circuit is `three_tree_membership`; `district_membership` is legacy / dead (see `voter-protocol/specs/CRYPTOGRAPHY-SPEC.md §11.1`).
+> - **Gas / cost:** "~2.2M gas" and per-verification cost figures cited below are unverified estimates — no UltraHonk gas harness in `voter-protocol/contracts/test/`.
+> - **Submission endpoint:** `/api/submissions/create` is correct and in place; any reference to `/api/congressional/submit` in sibling docs is stale.
 
 ---
 
 ## Executive Summary
 
-**Commons** is the full-stack application for verified civic action. SvelteKit 5 frontend + API layer that orchestrates identity verification, campaign management, email delivery, and proof assembly. Deployed on Cloudflare Pages with PostgreSQL via Hyperdrive.
+**Commons** is the full-stack application for verified civic action. SvelteKit 5 frontend + API layer that orchestrates identity verification, campaign management, email delivery, and proof assembly. Deployed on Cloudflare Pages. Backend runs on **Convex**.
 
-**voter-protocol** is the cryptographic infrastructure. Noir/UltraHonk zero-knowledge proofs, Shadow Atlas district trees, AWS Nitro Enclave encrypted delivery, ERC-8004 reputation, smart contracts on Scroll zkEVM.
+**voter-protocol** is the cryptographic infrastructure. Noir/UltraHonk zero-knowledge proofs, Shadow Atlas district trees, AWS Nitro Enclave encrypted delivery (planned), ERC-8004 reputation, smart contracts on Scroll zkEVM.
 
 Together they form a system where every civic action carries a cryptographic proof of identity without revealing who you are.
 
@@ -20,23 +29,23 @@ Together they form a system where every civic action carries a cryptographic pro
 ### Commons (this repo)
 
 - **SvelteKit 5 Frontend** — Runes-based state, SSR, Svelte 5 component architecture
-- **PostgreSQL + pgvector** — 50+ Prisma models via Hyperdrive connection pooling, per-request client via ALS
-- **OAuth + Passkey Auth** — Google, Facebook, LinkedIn, Coinbase, passkeys (WebAuthn, did:key)
-- **Identity Verification UI** — mDL via W3C Digital Credentials API (sole provider)
+- **Convex backend** — 71 tables in `convex/schema.ts`, ~180 functions, auth bridge via RS256 JWT → `ctx.auth.getUserIdentity()` (replaces the earlier PostgreSQL + pgvector + Hyperdrive + Prisma stack)
+- **OAuth Auth** — Google, Facebook, LinkedIn, Coinbase (passkey / WebAuthn / did:key code exists but gated off via `FEATURES.PASSKEY = false`)
+- **Identity Verification UI** — mDL via W3C Digital Credentials API (sole active provider; self.xyz and Didit retired Cycle 15)
 - **Template System** — Creation, moderation (2-layer Llama Guard via Groq), customization
 - **AI Agents** — DM discovery, message writer, subject line generation (Gemini API)
 - **Org Layer** — Campaign management, email engine (SES), supporter management, billing (Stripe), events, fundraising, automation workflows, SMS/calling (Twilio), multi-org networks, public API v1
 - **Verification Packets** — Coordination integrity scores (GDS, ALD, temporal entropy, burst velocity, CAI)
-- **Browser Encryption** — XChaCha20-Poly1305 address encryption to TEE public key
+- **Browser Encryption** — XChaCha20-Poly1305 address encryption to TEE public key (scaffolded; enclave itself not deployed)
 - **Intelligence Layer** — DecisionMaker entity, bill ingestion, activity feed, accountability receipts
 
 ### voter-protocol (sibling repo)
 
-- **Noir ZK Circuits** — Merkle tree proofs (depth 18/20/22/24 for 260K–16M leaves)
+- **Noir ZK Circuits** — `three_tree_membership` (current) at depths 18/20/22/24 for 260K–16M leaves; `district_membership` is legacy / dead code
 - **Browser WASM Prover** — Noir/UltraHonk compiled to WASM (600ms–10s proving)
-- **Solidity Verifier** — On-chain UltraHonk proof verification (~2.2M gas on Scroll L2)
-- **AWS Nitro Enclaves** — TEE deployment, encrypted witness decryption, debate evaluation
-- **CWC API Integration** — Congressional message delivery (inside TEE)
+- **Solidity Verifier** — On-chain UltraHonk proof verification (gas figures in this doc are unverified estimates — no harness)
+- **AWS Nitro Enclaves** — TEE deployment for witness decryption — **Planned** (not deployed). Debate-evaluation TEE unbuilt.
+- **CWC API Integration** — Congressional message delivery (planned to run inside TEE; currently via `LocalConstituentResolver`)
 - **ERC-8004 Reputation** — On-chain reputation tracking with time decay
 - **Smart Contracts** — DistrictGate, VerifierRegistry, UserRootRegistry, CellMapRegistry, NullifierRegistry, DistrictRegistry, CampaignRegistry
 - **Shadow Atlas** — 94,166 districts, 24 boundary types, chunked IPFS (977 H3 chunks)

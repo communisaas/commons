@@ -1,6 +1,15 @@
 # Platform Extension Architecture
 
-> **STATUS: MIXED** — Person-facing foundation table reflects actual code. Org-facing file trees (src/lib/server/*) are **architectural targets** — some subsystems are built (campaigns, email, supporters, embeddable widgets), others are planned. Prisma schema below is aspirational and may not match `prisma/schema.prisma`. See `architecture/org-data-model.md` for actual org schema.
+> **STATUS: MIXED** — Person-facing foundation table reflects actual code. Org-facing file trees (src/lib/server/*) are **architectural targets** — some subsystems are built (campaigns, email, supporters, embeddable widgets), others are planned. See `architecture/org-data-model.md` for actual org schema.
+>
+> **⚠️ AUDITED 2026-04-23. Known divergences from implementation:**
+> - **Prisma data models** row: stale. Prisma has been removed from the repo; canonical schema is `convex/schema.ts`. All Prisma DDL blocks below are pseudocode, not executable schema. Convex uses camelCase, not snake_case.
+> - **Supporter PII:** The real Supporter table stores `encryptedEmail` + `emailHash` + `encryptedName` + `globalEmailHash` + `emailStatus` / `smsStatus` enums. Plaintext `email` / `name` columns were dropped in Cycle 6.
+> - **Campaign types:** Schema supports `LETTER | EVENT | FORM | FUNDRAISER`, not the 3-type enum in older drafts.
+> - **Missing subsystems (directories referenced but not fully shipped):** `src/lib/server/lists/` (does not exist — supporter/segment logic lives in `convex/supporters.ts` + `convex/segments.ts`), `src/lib/server/campaigns/widgets.ts` (not present), `src/lib/server/fundraising/` (routes exist; server lib does not), `src/lib/server/analytics/` (analytics computation is distributed across `campaign-analytics.ts` and `verification-packet.ts`).
+> - **Email engine:** `src/lib/server/email/` contains `compiler.ts`, `ses.ts`, `sanitize.ts`, `report-template.ts`, `unsubscribe.ts`. Claims of `engine.ts`, `providers/resend.ts`, `ab-test.ts`, `deliverability.ts`, `tracking.ts`, and `templates/` are aspirational.
+> - **Billing:** `src/lib/server/billing/` contains `plans.ts` + `stripe.ts` only. `metering.ts` / `invoices.ts` are not present. Stripe integration is client-init plus webhook handlers; metered-usage billing remains an open gap.
+> - **SMS:** `src/lib/server/sms/` contains `twilio.ts` + `types.ts` only. Campaign-level SMS orchestration is not yet implemented in the server lib.
 
 > What exists, what needs building, and how the org layer connects to the person layer
 
@@ -20,7 +29,7 @@ The hard parts are built. This is the infrastructure no competitor can replicate
 | Spatial Browse (3 views) | `src/routes/browse/` | Production |
 | Chain abstraction (3 wallet paths) | `src/lib/core/wallet/` | Production |
 | OAuth + passkey auth | `src/routes/auth/` | Production |
-| Prisma data models | `prisma/schema.prisma` | Production |
+| Convex data models | `convex/schema.ts` | Production (replaced Prisma 2026-03) |
 | 136 Svelte components | `src/lib/components/` | Production |
 | 22 API endpoints | `src/routes/api/` | Production |
 

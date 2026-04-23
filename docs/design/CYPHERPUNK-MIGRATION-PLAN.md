@@ -1,9 +1,11 @@
 # Cypherpunk Migration Plan — Pragmatic Privacy for the User Model
 
-> **Status**: PLANNING
+> **Status**: PLANNING (audited 2026-04-23)
 > **Date**: 2026-03-21
 > **Depends on**: Security hardening (complete), DecisionMaker migration (complete), Seam resolution (complete)
 > **Deprecated**: commons-subnet / BTS evaluation (design-phase only; debate market mechanics TBD)
+>
+> **Audit note (2026-04-23):** Phases A and C are shipped end-to-end (salt rotation, OAuth token encryption, log scrubbing, IP HKDF, plaintext PII scrubbed in Cycles 6–7). Phase B is server-side complete; B-3 (client-side shadow-atlas path + `'three-tree'` sentinel cleanup) is deferred to a frontend cycle. Phase D infrastructure is live but `FEATURES.PASSKEY = false` keeps the ceremony UX off; D-3 (OAuth-as-linking) is not started. **Where this plan states "self.xyz / Didit removed in Cycle 15" or "mDL sole provider", the accurate framing is: new verification intake is mDL-only via the W3C Digital Credentials API; the legacy enum values remain in `session-credentials.ts` for stored-record compatibility — no removal code was executed.**
 
 ## Thesis
 

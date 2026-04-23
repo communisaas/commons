@@ -28,7 +28,7 @@ Sliding window log algorithm applied per route. Executes in the `handleRateLimit
 | `/api/identity/` | 10/min | 60s | IP | Verification abuse |
 | `/api/shadow-atlas/register` | 5/min | 60s | User | Registration abuse |
 | `/api/shadow-atlas/cell-proof` | 10/min | 60s | User | Cell ID enumeration |
-| `/api/congressional/submit` | 3/hr | 3600s | User | Congressional spam |
+| `/api/legislative/submit` | 3/hr | 3600s | User | Legislative spam (renamed from `/api/congressional/submit`) |
 | `/api/auth/passkey/register` | 5/min | 60s | User | Registration attempts |
 | `/api/auth/passkey/authenticate` | 10/min | 60s | IP | Authentication brute-force |
 | `/api/location/` | 5/min | 60s | IP | District lookup throttle |
@@ -78,14 +78,19 @@ Rate limiting runs after auth so user-keyed limits can use the authenticated use
 
 Per-user quotas for AI agent operations, tiered by trust level.
 
+**Canonical source:** `src/lib/server/llm-cost-protection.ts` (`QUOTAS` map, ~line 52). Values below verified against that file on 2026-04-23.
+
 | Operation | Guest | Authenticated | Verified |
 |---|---|---|---|
-| Subject line | 5/hr | 15/hr | 30/hr |
-| Decision makers | 0 (blocked) | 3/hr | 10/hr |
-| Message generation | 0 (blocked) | 10/hr | 30/hr |
-| Daily global | 10/day | 50/day | 150/day |
+| Subject line | 3/hr | 5/hr | 5/hr |
+| Decision makers | 0 (blocked) | 2/hr | 3/hr |
+| Message generation | 0 (blocked) | 3/hr | 5/hr |
+| Embeddings | 0 (blocked) | 20/hr | 20/hr |
+| Daily global (circuit breaker) | 3/day | 10/day | 15/day |
 
 Trust tiers: guest (no session), authenticated (logged in), verified (trust_tier ≥ 2, address attested).
+
+> **Note:** Earlier revisions of this doc published a 10–30× higher quota table. The numbers above are the actual enforced limits. If you see older documents citing "15/hr" or "30/day verified" for any of these operations, treat those as stale.
 
 ---
 

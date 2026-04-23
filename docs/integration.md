@@ -2,6 +2,15 @@
 
 **How Commons integrates with external services and voter-protocol backend**
 
+> **⚠️ AUDITED 2026-04-23.** Known divergences from implementation:
+> - **Submission endpoint:** `/api/submissions/create` (SvelteKit → Convex). The `/api/congressional/submit` path some sections describe does not exist.
+> - **Public-input count:** The submit endpoint enforces `publicInputs.length === 31` (three-tree circuit). Older sections describe a 29-element two-tree shape.
+> - **ReputationAgent proxy:** the `/api/expertise/verify` SvelteKit proxy described below does not exist in the repo; treat that whole section as aspirational infrastructure, not shipped glue.
+> - **TEE enclave:** not deployed. Witness encryption is scaffolded on the client; `LocalConstituentResolver` is the only active resolver. See `docs/architecture/tee-systems.md`.
+> - **Identity providers:** self.xyz / Didit retired Cycle 15. Legacy enum values remain for stored-record compatibility but no new intake goes through them.
+> - **Convex-only:** Prisma / PostgreSQL / Supabase have been removed. Any Prisma-era DDL here is pseudocode.
+> - **`encryptedMessage`:** accepted by the schema but dropped on insert in `convex/submissions.ts`; do not rely on it being stored until TEE delivery ships.
+
 ---
 
 ## Table of Contents
@@ -34,8 +43,10 @@
 
 ### voter-protocol API Endpoints
 
+> **ASPIRATIONAL — the SvelteKit proxy described below (`src/routes/api/expertise/verify/+server.ts`) does not exist in-repo.** The upstream ReputationAgent worker endpoint may exist, but Commons has no shipped glue code that calls it. Treat the remainder of this subsection as design intent, not runtime behavior.
+
 ```typescript
-// ReputationAgent API (credential verification)
+// ReputationAgent API (credential verification) — proxy endpoint not implemented in commons
 POST https://reputation.voter.workers.dev/reputation/verify
 Headers:
   Authorization: Bearer ${VOTER_API_KEY}
@@ -101,35 +112,39 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 ---
 
-## Congressional Submit Endpoint (IMPLEMENTED)
+## Submission Endpoint (IMPLEMENTED)
 
-**Status:** ✅ Complete (Wave 2.4)
-**Implementation:** `src/routes/api/congressional/submit/+server.ts`
+**Status:** Live; `FEATURES.CONGRESSIONAL = false` gates downstream CWC delivery in prod.
+**Implementation:** `src/routes/api/submissions/create/+server.ts` (SvelteKit route) → `convex/submissions.ts:create` (Convex action). The old `/api/congressional/submit` path does not exist; any reference to it in docs is stale.
 **Documentation:** `docs/congressional/congressional-submit.md`
 
 ### Endpoint
 
 ```typescript
-POST /api/congressional/submit
+POST /api/submissions/create
 Authorization: Bearer <session-token>
 Content-Type: application/json
 
 {
-  "proof": "0x...",           // Serialized Noir proof
-  "publicInputs": [           // 29 public inputs (two-tree architecture)
-    "userRoot",               // [0] User identity tree root
-    "cellMapRoot",            // [1] Geographic cell tree root
-    ...                       // [2-25] Witness data (Merkle proof siblings)
+  "proof": "0x...",           // Serialized Noir proof (three-tree UltraHonk)
+  "publicInputs": [           // 31 public inputs (three-tree architecture)
+    "userRoot",               // [0]  User identity tree root
+    "cellMapRoot",            // [1]  Geographic cell tree root
+    "engagementRoot",         // [2]  Engagement tree root
+    ...                       // [3..25]  Three-tree public outputs / witness data
     "nullifier",              // [26] Unique action identifier
     "actionDomain",           // [27] Action domain hash (whitelisted via SA-001)
-    "authorityLevel"          // [28] User authority level (0-15)
+    "authorityLevel",         // [28] User authority level
+    ...                       // [29..30] Engagement tier / additional public outputs
   ],
   "verifierDepth": 20,        // Circuit depth (18|20|22|24)
-  "encryptedWitness": "...",  // TEE-encrypted address
-  "encryptedMessage": "...",  // TEE-encrypted message content
+  "encryptedWitness": "...",  // Witness encryption blob (to TEE public key). TEE Nitro enclave not deployed yet — `LocalConstituentResolver` is the only active resolver. See `docs/architecture/tee-systems.md`.
   "templateId": "template-123"
+  // NOTE: `encryptedMessage` is accepted by the schema but is currently dropped on insert (`convex/submissions.ts` hardcodes `encryptedMessage: undefined`). Do not rely on it being stored until the TEE delivery path ships.
 }
 ```
+
+> **Load-bearing:** `publicInputs.length` is enforced at `src/routes/api/submissions/create/+server.ts:~125` as `!== 31`. Clients sending a 29-element array (the two-tree shape described in older docs) will be rejected.
 
 ### Response
 
