@@ -7,6 +7,43 @@
 **Created:** 2026-03-05
 **Depends on:** Agent system (Cycle 35+), Shadow Atlas, Engagement Tiers, Debate Markets, ZK Identity
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Treat as vision framing;
+> numeric and event specs drift from live code. Use
+> `src/lib/server/ai/llm-cost-protection.ts` and
+> `src/lib/core/agents/providers/gemini-provider.ts` as sources of truth.
+>
+> - **Rate limits below are 2–6× higher than enforced.** Live values
+>   from `llm-cost-protection.ts:~52-85` (guest / auth / verified per
+>   hour): subject-line `3/5/5`; decision-makers `0/2/3`;
+>   message-generation `0/3/5`; embeddings `0/20/20`; daily global
+>   `3/10/15`/day. Any "Auth 15/hr / Verified 30/hr" framing here is
+>   wrong.
+> - **Moderation Layer 1 model migrated.** `Llama Guard 4 12B` is no
+>   longer on Groq's free tier; live Layer 1 is
+>   `openai/gpt-oss-safeguard-20b` (`llama-guard.ts:20`). MLCommons
+>   S1/S4 block policy is unchanged. (Layer 0 is still
+>   `llama-prompt-guard-2-86m`; Layer 2 quality-assessment was never
+>   built — pipeline is 2 layers, not 3.)
+> - **SSE event vocabulary:** `/api/agents/stream-decision-makers`
+>   emits `segment`, `identity-found`, `candidate-resolved`, **and
+>   `verification`** (after DNS MX batch verification). Clients must
+>   handle all four. `stream-subject` → `thought`, `clarification`;
+>   `stream-message` → `thought`, `phase`.
+> - **Pipeline phase numbering:** Live decision-maker pipeline is
+>   single-provider **4 stages** (parallel contact searches → batch
+>   page selection → parallel Firecrawl reads → chunked contact
+>   synthesis) in `gemini-provider.ts`. The "Phase 1 / 2a / 2b /
+>   Phase 4 accountability" labeling below is inconsistent; Phase 4 is
+>   actually a post-pipeline step in `decision-maker.ts`
+>   (`decision-maker-accountability.ts`), not part of the provider
+>   pipeline.
+> - **Agentic delegation is `FEATURES.DELEGATION=false`.** Code exists
+>   for Tier 3+ but is gated off; any section implying delegation
+>   endpoints resolve at runtime is aspirational.
+> - **Correct as-is:** Gemini for agents (not Anthropic/OpenAI), Exa +
+>   Firecrawl for search/scrape (no Hunter.io / Clearbit), mDL as sole
+>   active identity intake, TEE Planned.
+
 ---
 
 ## Vision

@@ -1,11 +1,46 @@
 # Power Landscape: Directed Civic Address
 
-> **STATUS: ASPIRATIONAL** — Design spec. Not yet implemented.
+> **STATUS: PARTIAL** — Cycle 37 data-model + Phase 4 accountability
+> agent + position APIs + key components (`PowerLandscape.svelte`,
+> `StanceRegistration.svelte`, `PositionCount.svelte`,
+> `ComposePane.svelte`) all exist. Cycle 41–42 "COMPLETE" claims are
+> **unverified** and should be treated as aspirational until integration
+> tests confirm.
 
-**Status:** Implementation Spec — Cycles 37-40
+**Status:** Implementation Spec — Cycles 37-40 (partial, Cycles 41-42 unverified)
 **Author:** Architecture
 **Created:** 2026-02-27
 **Depends on:** Shadow Atlas Cycle 35 (multi-layer lookup), Decision-Maker Enrichment Pipeline
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).**
+>
+> - **Header self-contradicts.** Line 3 says ASPIRATIONAL; the body
+>   labels Cycles 41–42 COMPLETE. Reality splits: Cycle 37 data model
+>   + Phase 4 agent + APIs shipped; Cycle 41 acceptance criteria
+>   (F-01…F-13, returning-user SSR hydration on
+>   `+page.svelte:~43 landscapeRevealed=$state(false)`) are not
+>   verifiable without integration tests.
+> - **Prisma schema snippets (lines ~410-443) describe tables that
+>   exist only in Convex.** `positionRegistrations` / `positionDeliveries`
+>   are defined in `convex/schema.ts:~846-883`. Naming is camelCase
+>   (`districtCode`, not `district_code`), emails are stored as
+>   `encryptedRecipientEmail` + `recipientEmailHash` (plaintext
+>   `recipient_email` field does not exist), and a `pseudonymousId`
+>   (HMAC-SHA256 per ANTI-ASTROTURF) is live but missing from this
+>   spec.
+> - **Pipeline phase numbering is inconsistent.** "Pipeline gets a
+>   fourth phase" framing (line ~466) implies 3→4 migration; the live
+>   pipeline is labeled Phase 1 (research) / Phase 2a (identity) /
+>   Phase 2b (4-stage contact hunting) / Phase 3.5 (DNS MX) / Phase 4
+>   (accountability) in `decision-maker.ts` + `gemini-provider.ts`.
+>   Spec's "Phase 1/2a/3/4" doesn't match.
+> - **Accountability receipts are absent from this spec** but live in
+>   code as `accountabilityReceipts` (Convex table ~line 1692, SHA-256
+>   attestations, Merkle anchoring). Any "directed civic address"
+>   narrative should cross-link the receipt artifact.
+> - **Shadow Atlas helper name `getOfficials(districtCode)` is not in
+>   the code** — the integration uses `SHADOW_ATLAS_URL` env-var HTTP
+>   calls, not a typed helper of that name.
 
 ---
 

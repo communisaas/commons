@@ -2,6 +2,39 @@
 
 **Status**: IMPLEMENTED | Gemini 3 Flash + SSE Streaming + Multi-Phase Pipelines
 
+> ⚠️ **2026-04-23 audit — small but load-bearing corrections:**
+>
+> - **Agent roster is 4+, not 3.** Beyond subject-line / decision-maker /
+>   message-writer, `src/lib/core/agents/agents/` also contains
+>   `source-discovery.ts`, `source-evaluator.ts`, and
+>   `decision-maker-accountability.ts`. Source discovery/evaluation
+>   should be documented as first-class (the message-writer flow
+>   invokes them as distinct agents, not private helpers).
+> - **SSE event vocabulary per endpoint** (from the real route
+>   handlers):
+>   - `/stream-subject` → `thought`, `clarification`, `complete`, `error`
+>   - `/stream-message` → `thought`, `phase` (values include
+>     `'sources'`, `'validate'`, `'generate'`), `complete`, `error`
+>   - `/stream-decision-makers` → `segment`, `identity-found`,
+>     `candidate-resolved`, `verification`, `complete`, `error`
+>     (no `phase`, no `progress`; `thought` text travels inside
+>     `segment.content`, not as a separate event)
+> - **Email "verbatim" verification** is a case-insensitive substring
+>   match (`email.toLowerCase().includes(emailLower)`) against fetched
+>   page text — not a literal verbatim scan.
+> - **Subject-line threshold is 0.5 default, not 0.6.** Call site
+>   (`src/routes/api/agents/stream-subject/+server.ts:~77`) invokes
+>   `moderatePromptOnly(body.message)` with no threshold arg; message
+>   + DM routes pass 0.8 explicitly.
+> - **Layer-1 moderation model migrated** to `openai/gpt-oss-safeguard-20b`
+>   (`llama-guard.ts:20`). Any "Llama Guard 4" naming is historical.
+> - **Rate-limit table (canonical, from `llm-cost-protection.ts`):**
+>   subject 3/5/5/hr, DM 0/2/3/hr, message 0/3/5/hr,
+>   embeddings 0/20/20/hr, daily global 3/10/15/day. Higher numbers
+>   elsewhere are wrong.
+> - **`FEATURES.DELEGATION=false`** — agentic-delegation endpoints are
+>   code-present but not live.
+
 ---
 
 **Three AI agents power the campaign creation flow: subject line generation, decision-maker resolution, and message writing.**

@@ -7,6 +7,34 @@
 **Created:** 2026-03-06
 **Depends on:** org-data-model.md, platform-extension.md, DESIGN-004-COALITION-COORDINATION, POWER-LANDSCAPE-SPEC, decision-maker-enrichment-pipeline
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Orchestration logic,
+> SSE event naming (`packet`/`heartbeat`/`debate:*`, no `action`/
+> `delivery` per-event pushes), verification-packet nullability, and
+> feature-flag framing for debate are accurate. Concrete corrections:
+>
+> - **§1.2 campaign-type enum is incomplete.** Live code accepts
+>   **`'LETTER' | 'EVENT' | 'FORM' | 'FUNDRAISER'`** (see
+>   `convex/campaigns.ts`). FUNDRAISER is shipped (Stripe donations,
+>   `goalAmountCents`, `raisedAmountCents`, `donorCount`) and gated by
+>   `FEATURES.FUNDRAISING=true`. Spec lists only 3 types.
+> - **§7 file layout is wrong.** `src/lib/server/campaigns/` directory
+>   doesn't exist; the listed per-campaign-type files (create.ts,
+>   lifecycle.ts, letter.ts, event.ts, form.ts, report.ts, widgets.ts,
+>   delivery.ts) are not present. Real layout:
+>   - `convex/campaigns.ts` — CRUD, delivery dispatch, action creation
+>   - `src/lib/server/verification-packet.ts` — packet computation only
+>   - `src/routes/org/[slug]/campaigns/` — dashboard / creation / settings
+>   - `src/routes/org/[slug]/campaigns/[id]/report/` — report UI
+> - **Debate event emission is gated.** Stream endpoint at
+>   `/api/org/[slug]/campaigns/[campaignId]/stream/+server.ts:~103`
+>   short-circuits debate:* emission when `FEATURES.DEBATE=false`
+>   (prod default). With debate off, the stream emits only `packet` +
+>   `heartbeat`.
+> - **Target count max is 50** per campaign — undocumented
+>   validation error thrown in `convex/campaigns.ts:~557`.
+> - **`debateThreshold`** defaults to 50; code does **not** validate
+>   the 25–500 bounds claimed here.
+
 ---
 
 ## Purpose

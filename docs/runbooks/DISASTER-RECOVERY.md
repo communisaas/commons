@@ -1,5 +1,43 @@
 # Disaster Recovery Runbook
 
+> ⚠️ **CRITICAL (2026-04-23 audit) — DO NOT EXECUTE §1–6 AS WRITTEN.**
+> This runbook describes the pre-Convex Postgres backup/restore flow.
+> **Postgres + Prisma + Hyperdrive were removed 2026-03-26; the
+> Postgres backup GitHub Actions workflow + `scripts/backup-db.ts` +
+> `scripts/restore-db.ts` were deleted 2026-04-21.** None of the
+> commands, environment variables, or scripts below exist anymore.
+>
+> ### Current DR posture (interim — needs a full rewrite)
+>
+> - **Primary data store: Convex** (`convex/schema.ts`, ~71 tables).
+>   Convex provides native point-in-time recovery / snapshots via its
+>   dashboard + CLI (`npx convex export`). This runbook needs to
+>   document the Convex-side procedures before the next incident.
+> - **Shadow Atlas pinning — OPERATIONAL DR RISK**: `pin-to-ipfs.ts`
+>   is hardcoded to Storacha. **Storacha uploads disabled 2026-04-15;
+>   full sunset 2026-05-31.** Client-side ZKP fetches cell chunks
+>   through `storacha.link/ipfs` — post-sunset that gateway 404s.
+>   Pinata import exists but is never instantiated. Pinning-provider
+>   migration must complete before 2026-05-31 or Shadow Atlas restore
+>   fails. See `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md` §4.4.
+> - **PII encryption keys remain FROZEN** (AES-256-GCM). Doc is
+>   correct that loss is unrecoverable. Add per-org sealed keys
+>   (`convex/_orgKey.ts`, `sealedOrgKey`), `ENTROPY_ENCRYPTION_KEY`,
+>   and Bridge KV (`bridge-crypto.ts`, HKDF-derived AES-256-GCM).
+> - **TEE recovery is not covered**: TEE is Planned, witness decryption
+>   currently runs in `LocalConstituentResolver` (CF Worker process).
+>   No HSM / sealed recovery yet.
+> - **Deploy cutover:** `npm run build && wrangler pages deploy
+>   .svelte-kit/cloudflare --project-name commons --branch production`
+>   + `npx convex deploy --env-file .env.production` (note: `-y`
+>   silently fails for prod). No Hyperdrive / Prisma steps.
+> - **Rate limiter:** SlidingWindowRateLimiter uses REDIS_URL if set;
+>   otherwise in-memory. DR-sensitive: restoring to an env without
+>   Redis loses rate-limit state across restarts.
+>
+> Until this file is rewritten, treat the §1–6 checklist as
+> historical. Contact ops for current DR procedures.
+
 **RTO**: 4 hours | **RPO**: 24 hours (daily backup cadence)
 
 ## Prerequisites

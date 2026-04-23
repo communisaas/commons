@@ -1,5 +1,33 @@
 # Codebase Maintenance Standards
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The "Development
+> Discipline" + "Code Organization" sections remain sound. The
+> database + backup + deploy sections describe the removed Prisma
+> stack. Concrete corrections:
+>
+> - **Database:** Convex-only. `npm run db:migrate`, `db:generate`,
+>   `db:push`, `db:seed` do not exist in `package.json`. Active seed
+>   is `npm run seed` → `npx convex run seed:seedAll`. Schema is
+>   `convex/schema.ts`, not Prisma.
+> - **Backups:** `scripts/backup-db.ts` + `scripts/restore-db.ts`
+>   were deleted 2026-04-21. Postgres backup GitHub Actions workflows
+>   are gone. Use `npx convex export` / Convex dashboard for DR.
+>   Pinning-provider migration (Storacha sunset 2026-05-31) is an
+>   additional DR task — see
+>   `docs/runbooks/DISASTER-RECOVERY.md` (also banner'd).
+> - **Crons:** All 15 jobs live in `convex/crons.ts` (Convex native
+>   scheduler). No HTTP `/api/cron/*` endpoints, no GitHub Actions
+>   cron workflows. The three cron workflows
+>   (`analytics-snapshot.yml`, `bounce-report-processing.yml`,
+>   `legislation-crons.yml`) were deleted 2026-03-28.
+> - **Deploy:** Frontend via `npm run build && wrangler pages deploy
+>   .svelte-kit/cloudflare`. Backend via
+>   `npx convex deploy --env-file .env.production` (the `-y` flag
+>   silently fails for prod — always pass `--env-file`).
+> - **Feature flags:** `FEATURES.CONGRESSIONAL=false`,
+>   `DEBATE=false`, `PASSKEY=false` — aspirational framing elsewhere
+>   in this doc should be read as code-complete-but-gated.
+
 ## Development Discipline
 
 ### Core Principles
