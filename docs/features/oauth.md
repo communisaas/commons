@@ -2,6 +2,22 @@
 
 **Status**: ✅ IMPLEMENTED | 4 Providers Active + 2 Disabled
 
+> ⚠️ **2026-04-23 audit — specific corrections applied inline, but note:**
+>
+> - **Session expiry is conditional, not always 90 days.** Social-funnel
+>   routes (`template-modal`, `/s/`) get 90-day sessions; all other flows
+>   get **30 days** (`src/lib/core/auth/oauth-callback-handler.ts:~302`).
+>   The ASCII diagram below is accurate only for the funnel path.
+> - **`oauth-security.ts` no longer exists** as a separate file; content
+>   was merged into the callback handler. Line counts in the "Core Files"
+>   section (468 / 361 / 206) are stale — actual `oauth-providers.ts` is
+>   now ~894 lines, `oauth-callback-handler.ts` ~460 lines.
+> - **Facebook uses PKCE via a custom `FacebookOAuth` class**;
+>   `code_verifier` is mandatory. Not currently documented below.
+> - **Coinbase is optional**: config function returns `null` if
+>   `COINBASE_CLIENT_ID` / `COINBASE_CLIENT_SECRET` are unset — no hard
+>   throw, silently unavailable.
+
 ---
 
 **Unified OAuth authentication system with Sybil-resistance-aware provider hierarchy.**
@@ -134,7 +150,7 @@ DISCORD_CLIENT_SECRET=your-discord-client-secret
    https://commons.email/auth/twitter/callback
    ```
 
-3. **Scopes**: `tweet.read users.read offline.access`
+3. **Scopes**: `users.read tweet.read users.email offline.access` — the `users.email` scope is required for Sybil-resistance verification; without it the provider returns no email and accounts get synthetic `@twitter.local` addresses.
 
 4. **User Info Endpoint**: `https://api.twitter.com/2/users/me`
 
@@ -151,7 +167,7 @@ DISCORD_CLIENT_SECRET=your-discord-client-secret
    https://commons.email/auth/linkedin/callback
    ```
 
-3. **Scopes**: `r_liteprofile r_emailaddress`
+3. **Scopes**: `openid profile email` (LinkedIn OAuth 2.0 / "Sign In with LinkedIn v2" — the legacy `r_liteprofile r_emailaddress` scopes are v1 and rejected by current LinkedIn apps).
 
 4. **User Info Endpoint**: `https://api.linkedin.com/v2/userinfo`
 

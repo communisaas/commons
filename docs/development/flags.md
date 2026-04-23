@@ -6,25 +6,37 @@ Compile-time boolean/string constants that gate unreleased features. Svelte's de
 
 ## Current Flags
 
+Reflects `src/lib/config/features.ts` as of 2026-04-23.
+
 | Flag | Type | Default | What it gates |
 |------|------|---------|---------------|
-| `DEBATE` | `boolean` | `false` | Deliberation surfaces, argument submission, LMSR market, resolution/appeal (~52 KB of UI) |
-| `CONGRESSIONAL` | `boolean` | `false` | CWC delivery, district officials lookup, congressional template routing, CWC-specific decision-maker UI |
-| `WALLET` | `boolean` | `false` | Wallet connect, balance display, on-chain identity strip |
-| `STANCE_POSITIONS` | `boolean` | `false` | Stance registration (support/oppose), verified position display, TrustJourney signal strength |
-| `ADDRESS_SPECIFICITY` | `AddressSpecificity` | `'region'` | `'off'` = no location features; `'region'` = state/city inference + template filtering; `'district'` = full street-address collection + congressional district credential issuance |
+| `DEBATE` | `boolean` | `false` | Deliberation surfaces, argument submission, LMSR market, resolution/appeal |
+| `CONGRESSIONAL` | `boolean` | `false` | CWC delivery, district officials lookup, congressional template routing |
+| `ADDRESS_SPECIFICITY` | `AddressSpecificity` | `'district'` | `'off'` = no location features; `'region'` = state/city inference + template filtering; `'district'` = full street-address collection + congressional district credential issuance |
+| `STANCE_POSITIONS` | `boolean` | `true` | Stance registration (support/oppose), inline proof footer, verified positions |
+| `WALLET` | `boolean` | `true` | Wallet connect, balance display, on-chain identity |
+| `ANALYTICS_EXPANDED` | `boolean` | `true` | Enhanced campaign analytics: delivery metrics, timelines, coordination-integrity overlay |
+| `AB_TESTING` | `boolean` | `true` | Email A/B testing: two-variant split, winner selection, results comparison |
+| `PUBLIC_API` | `boolean` | `true` | Public REST API at `/api/v1/` with API-key auth |
+| `EVENTS` | `boolean` | `true` | Events: RSVP, verified attendance, event management |
+| `FUNDRAISING` | `boolean` | `true` | Fundraising: Stripe donations, 0% platform fee, public donate pages |
+| `AUTOMATION` | `boolean` | `true` | Automation: event-driven engagement ladders, workflow builder |
+| `SMS` | `boolean` | `true` | SMS campaigns + patch-through calling (Twilio) |
+| `NETWORKS` | `boolean` | `true` | Multi-org coalition networks: parent/child orgs, shared supporter pools |
+| `LEGISLATION` | `boolean` | `true` | Legislative intelligence loop: bill monitoring, alerts, scorecards |
+| `ACCOUNTABILITY` | `boolean` | `true` | Accountability receipts: proof-weighted decision-maker tracking |
+| `SHADOW_ATLAS_VERIFICATION` | `boolean` | `true` | Client-side district verification (no plaintext address to server) |
+| `DELEGATION` | `boolean` | `false` | Agentic delegation: AI proxy civic actions under user-defined policy (Tier 3+) |
+| `ENGAGEMENT_METRICS` | `boolean` | `false` | Send/engagement counters ("X acted on this"), district coverage, open/click |
+| `PASSKEY` | `boolean` | `false` | Passkey (WebAuthn) sign-in option on the login screen |
 
-## Where Each Flag Is Checked
+## Where Flags Are Checked
 
-**DEBATE** -- Template detail page (stance badge, debate tab, market widget), debate sub-route redirect, modal registry (debate modals).
+For current call-sites, search the codebase directly — maintaining a list here drifts. Primary consumer: `src/routes/s/[slug]/+page.svelte` (template detail page). Server-side filtering: `src/routes/browse/+page.server.ts`, `src/routes/+page.server.ts`. Modals: `src/lib/components/modals/ModalRegistry.svelte`.
 
-**CONGRESSIONAL** -- Browse/home page server loaders (filters out `cwc` templates), template detail layout loader (404s CWC templates), template detail page (CWC delivery flow, proof generation, trust-tier gate), decision-maker results component (congressional rep section).
-
-**WALLET** -- Header avatar (wallet badge), identity strip (wallet connection UI), modal registry (wallet modals).
-
-**STANCE_POSITIONS** -- Template detail page (stance selector, verified-position panel, skip-stance logic on creator arrival).
-
-**ADDRESS_SPECIFICITY** -- Template detail page (address-verification prompt at `'district'`), modal registry (address collection form at `'district'`).
+```bash
+rg "FEATURES\.<FLAG_NAME>" src/
+```
 
 ## Usage
 

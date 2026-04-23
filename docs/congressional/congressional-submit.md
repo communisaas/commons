@@ -1,5 +1,32 @@
 # Congressional Submit Endpoint Implementation
 
+> ⚠️ **DEPRECATED — ghost API (2026-04-23 audit).** The `/api/congressional/submit` endpoint
+> described below **does not exist** in the repo and was never shipped. The
+> actual submission endpoint is `POST /api/submissions/create`
+> (`src/routes/api/submissions/create/+server.ts`). Treat this file as
+> historical planning; for the live shape, read:
+>
+> - `docs/integration.md` — request/response shape (has its own divergence
+>   banner with current-state deltas)
+> - `docs/specs/zk-proof-integration.md` — canonical ZK integration doc
+>   (also carries a divergence banner)
+> - `convex/submissions.ts` — source of truth for submission business logic
+>
+> **Concrete divergences vs. this file:**
+>
+> - **Endpoint:** `/api/congressional/submit` → `/api/submissions/create`
+> - **Public inputs:** 29 (two-tree) → **31 (three-tree, `three_tree_membership`)**;
+>   enforcement at `+server.ts:~125` as `!== 31`.
+> - **Files listed as "created"** (`src/routes/api/congressional/submit/+server.ts`,
+>   `src/lib/core/congressional/submission-handler.ts`) **do not exist**.
+>   Business logic lives in `convex/submissions.ts`.
+> - **DB layer:** Prisma/Postgres references are obsolete — backend is
+>   Convex-only; `ctx.db.insert("submissions", ...)` replaces `prisma.submission.create`.
+> - **Feature flag:** `FEATURES.CONGRESSIONAL = false`
+>   (`src/lib/config/features.ts:24`) — delivery code exists but is gated off.
+> - **TEE:** Planned, not deployed. `LocalConstituentResolver` is the active
+>   resolver (`docs/implementation-status.md`).
+
 ## Overview
 
 Implementation of the `/api/congressional/submit` endpoint that accepts ZK proofs from browsers and submits them to the blockchain for verification.

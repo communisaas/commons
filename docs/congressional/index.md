@@ -1,5 +1,24 @@
 # Message Delivery Documentation
 
+> ⚠️ **CONGRESSIONAL FEATURE GATED OFF (2026-04-23 audit).**
+> `FEATURES.CONGRESSIONAL = false` (`src/lib/config/features.ts:24`) — the
+> congressional flow documented here is code-complete but not rendered in
+> the default deployment. Treat the "Overview" and delivery descriptions
+> as the *target* shape.
+>
+> Specific corrections vs the body below:
+>
+> - **Endpoint:** `POST /api/submissions/create`
+>   (`src/routes/api/submissions/create/+server.ts`). The
+>   `/api/congressional/*` tree was not shipped.
+> - **Circuit:** `three_tree_membership`, **31 public inputs** (enforcement
+>   at `+server.ts:~125` as `!== 31`).
+> - **TEE:** Planned, not deployed. Witness-encryption wiring exists; the
+>   active resolver is `LocalConstituentResolver`
+>   (`docs/implementation-status.md:~113`).
+> - **Identity:** Active intake is mDL via W3C Digital Credentials API.
+>   Passkey WebAuthn is **not enabled** (`FEATURES.PASSKEY = false`).
+
 **How the voter-protocol enables civic impact tracking and coordination.**
 
 ---

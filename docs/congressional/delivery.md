@@ -1,5 +1,40 @@
 # Message Delivery - Protocol Participation
 
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** This doc describes an
+> aspirational multi-tenant delivery model (CWC + email templates + OAuth
+> Sent-folder verification) that was not built as written. The live
+> pipeline is **congressional-only (CWC via Convex), ZK-gated, and
+> currently feature-flagged off**. Read these deltas before trusting any
+> specific section:
+>
+> - **Feature flag:** `FEATURES.CONGRESSIONAL = false`
+>   (`src/lib/config/features.ts:24`). Delivery code exists; UI entrypoints
+>   do not render.
+> - **Identity:** ZK-proof gated via `locals.user.verified_at`. There is
+>   **no OAuth Sent-folder email verification** — no `verifyEmailDelivery()`,
+>   no Sent-folder scan. Active intake is mDL (W3C Digital Credentials API);
+>   `self.xyz` / `Didit` persist only as legacy enum values.
+> - **DB layer:** Prisma / Postgres sections are obsolete. Schema is in
+>   `convex/schema.ts`. Fields like `api_provider` and `recipient_emails`
+>   on templates **do not exist** — the live shape is
+>   `deliveryMethod: string` + `deliveryConfig: any` +
+>   `recipientConfig: any`.
+> - **Routing logic (`template.delivery_method === 'email'` branch):**
+>   not in code. `deliverToCongress` is CWC-only.
+> - **Retry logic:** actual implementation uses distributed CAS guards
+>   (`claimForDelivery`, `updateDeliveryStatus`), attempt counters, and a
+>   15-minute stuck-sweeper cron — not the simple 3-retry exponential
+>   backoff described here.
+> - **CWC file locations:** `src/lib/core/legislative/adapters/cwc/...`
+>   paths listed in the appendix **do not exist**. Live code is in
+>   `convex/_cwcXml.ts` and `convex/submissions.ts`. See also
+>   `docs/adr/WP-008-house-cwc-delivery-fix.md` (House requires an
+>   IP-whitelisted proxy).
+> - **TEE:** Planned, not deployed. `LocalConstituentResolver` is the
+>   active resolver in production.
+> - **Demo status:** When no CWC creds are configured, submissions are
+>   marked `deliveryStatus: 'demo'` (not documented below).
+
 **What users care about**: Did my message have impact? Can I see that impact?
 
 **What the protocol delivers**: Track your civic actions, see coordination with others, build reputation for participation.

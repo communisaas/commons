@@ -2,6 +2,33 @@
 
 > **STATUS: PARTIALLY IMPLEMENTED** — Decision-maker agent pipeline exists at `src/lib/core/agents/agents/decision-maker.ts` (3-phase: identification → enrichment → validation via Gemini). UX components below (DecisionMakerSearch, AddressOrLookup) are **design proposals not yet built**. Congressional address flow is implemented.
 
+> ⚠️ **2026-04-23 audit — additional corrections to trust in-line examples:**
+>
+> - **Decision-maker lookup endpoint:** `/api/decision-makers/search`
+>   (described as a Hunter.io / Clearbit / pattern-guessing waterfall)
+>   **does not exist**. The live endpoint is
+>   `POST /api/agents/stream-decision-makers`
+>   (`src/routes/api/agents/stream-decision-makers/+server.ts`), which
+>   streams SSE `ThoughtSegment` objects from a Gemini agent pipeline.
+>   Email validation uses DNS MX checks via Cloudflare DOH, not
+>   Hunter.io confidence scores. Apollo.io is not used in the codebase.
+> - **Trust Tier 4 (passport) is unreachable** — `deriveAuthorityLevel`
+>   has no `document_type === 'passport'` branch. Reachable trust tiers
+>   are 0–3 + 5 (Government mDL). Passkey path accepted by
+>   `deriveTrustTier` but gated off (`FEATURES.PASSKEY = false`).
+> - **Trust tiers (0–5, identity)** are distinct from **engagement tiers
+>   (0–4, reputation)** — treat numeric "Tier N" language below as trust
+>   tier unless stated.
+> - **Identity providers:** `'self.xyz'` / `'didit'` remain only as
+>   legacy enum values for stored-record backward compatibility. Only
+>   `'digital-credentials-api'` (mDL via W3C Digital Credentials API) is
+>   the active intake.
+> - **Email verification is integrated into OAuth** (required at
+>   callback, unverified email → lower trust_score), not a separate
+>   post-signup stage.
+> - **Backend:** Convex-only. Session and user mutations are Convex
+>   actions, not Prisma.
+
 **Date**: 2025-01-08 (Updated)
 **Goal**: Draw users in step-by-step, engaging their agency, minimizing friction
 
