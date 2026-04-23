@@ -4,8 +4,38 @@
 
 **Version:** 1.0.0
 **Date:** 2026-01-25
-**Status:** Feature-Gated
+**Status:** Historical / Aspirational (conflicts with shipped routing model — see audit banner)
 **Context:** How Commons consumes geographic identity proofs
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit) — architecture described
+> here was never implemented.** The shipped submission path uses a
+> different routing model; do not build against this spec.
+>
+> - **"14 districts revealed by proof" is fictional.** The live
+>   `three_tree_membership` circuit has 31 public inputs (verified at
+>   `src/routes/api/submissions/create/+server.ts:~125` as `!== 31`),
+>   but they encode three tree roots + identity commitment + action
+>   domain + nullifier + engagement data — **not a 14-element
+>   districtHashes array**. Functions like `extractDistrictHashes()`
+>   / `districts[0..13]` do not exist.
+> - **Routing binds to `recipientSubdivision` string** (e.g. "CA-12")
+>   via action-domain hash, not an enum-driven multi-district fan-out.
+>   See `+server.ts:~100-101,183-189`. Campaign-level `targetDistrict`
+>   enum + `additionalDistricts[]` arrays are not in the schema.
+> - **Witness decryption is server-side, not TEE-side.** TEE is
+>   Planned; `LocalConstituentResolver` runs in the CF Worker process.
+>   Treat every "TEE decrypts witness" claim here as target design.
+> - **mDL via W3C Digital Credentials API is the sole active intake.**
+>   Legacy `self.xyz` / `Didit` enum values remain for stored-record
+>   compat only.
+> - **Storacha pinning sunsets 2026-05-31** — client cell-chunk fetch
+>   chain needs a migration path; unmentioned below.
+> - **24 boundary types figure is correct** (Shadow Atlas).
+> - **For the live shape, reference:**
+>   `docs/integration.md` (request/response shape),
+>   `docs/specs/zk-proof-integration.md` (circuit),
+>   `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md` (atlas pipeline),
+>   `docs/design/ZKP-INTEGRITY-TASK-GRAPH.md` (task graph).
 
 ---
 

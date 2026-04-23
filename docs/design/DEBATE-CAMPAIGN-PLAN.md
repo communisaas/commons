@@ -1,8 +1,45 @@
 # Debate Market / Campaign Integration — Design Plan
 
-**Status**: Design
+**Status**: Mostly shipped behind `FEATURES.DEBATE=false` — see audit banner
 **Date**: 2026-03-17
 **Depends on**: Debate infrastructure (~85% built), Campaign verification pipeline (complete)
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** `FEATURES.DEBATE=false`
+> in `src/lib/config/features.ts:21` — the code for most items below
+> exists but is **inaccessible at runtime**. This plan reads like a
+> roadmap; it's closer to a completion checklist. Specific corrections:
+>
+> - **Inline campaign debate display (§2) is already shipped.**
+>   `src/routes/org/[slug]/campaigns/[id]/+page.svelte:~306-389`
+>   renders proposition, arguments, status, time-remaining, AI-panel
+>   consensus when resolved, threshold progress when not spawned,
+>   and `DebateSettlement.svelte` for admins. SSE listeners wired
+>   for `debate:argument`, `debate:position`, `debate:settled`
+>   (~44-99). Plan treats this as work-to-do; it's done.
+> - **Daily resolution cron is a stub, not "Complete."**
+>   `convex/debates.ts:~720` logs `[debate-resolution] Would
+>   evaluate debate ${id} (...)` and returns. No AI evaluation
+>   pipeline wired. Deferred to Phase 6.
+> - **Layer 2 Gemini 3 Flash quality assessment was never built.**
+>   Per ADR-006 banner: live moderation pipeline is 2 layers
+>   (Prompt Guard + `openai/gpt-oss-safeguard-20b`). Layer 1 model
+>   migrated off `llama-guard-4-12b` (free tier deprecated). Any
+>   reasoning in this plan that assumes Gemini 3 Flash quality
+>   scoring is a prerequisite is moot.
+> - **Staking is ERC-20 tUSDC with approval**, not native ETH.
+>   `PUBLIC_STAKING_TOKEN_ADDRESS=0x0` default + Scroll Sepolia
+>   tUSDC (`0xe70623c79E…`). `ensureTokenApproval()` is called
+>   before every stake (`debate-client.ts:~271,349`). Native-ETH
+>   migration is §5.2 of chain-abstraction, Phase 2.
+> - **Pimlico paymaster is a skeleton.** `sponsor-userop` route is
+>   validation-only; `PIMLICO_API_KEY` unconfigured in prod. Path 2
+>   users effectively pay their own gas on an EOA.
+> - **TEE debate cost (~$0.12/debate) is notional.** Unmeasured —
+>   nothing evaluates on-enclave yet. Phase 6 will enable real
+>   measurement. Bittensor path is deprecated.
+> - **Report-email debate section (§3) is the only truly
+>   unwritten code path** — `renderReportHtml()` in
+>   `report-template.ts` has no debate block.
 
 ---
 

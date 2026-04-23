@@ -1,10 +1,33 @@
 # How to Proceed: Post-Redesign → First Org Onboarding
 
 **Date**: 2026-03-17
-**Last updated**: 2026-03-17 (corrected after codebase audit)
+**Last updated**: 2026-03-17 (corrected after codebase audit), reconciled 2026-04-23
 **Context**: Org layer redesign complete (18 tasks, 4 review gates). Privacy invariants enforced. Voice corrected. All 5 coordination integrity scores compute from real data. Shadow Atlas deployed for district lookups. SSE infrastructure exists but unused for campaigns.
 
 **Goal**: First org sends a verification-backed report to a decision-maker's office. The office responds differently.
+
+> ⚠️ **2026-04-23 audit — mostly shipped, three corrections:**
+>
+> - **Phase 1 "Campaign action enforcement already existed at
+>   `/c/[slug]/`" is under-verified.** `/api/v1/campaigns/[id]/actions`
+>   is read-only (GET); the public campaign submission path at
+>   `/c/[slug]/` should call `checkPlanLimits` server-side. Spot-check
+>   the embed widget path before claiming enforcement is
+>   4/4 complete.
+> - **`interpretScore()` is not a live function.** Score-interpretation
+>   thresholds render as static tables on the `/about/integrity`
+>   Svelte page (+page.svelte:~27-35), not computed via a shared
+>   helper. Rename the Phase 3 line to "score-interpretation hints
+>   rendered on /about/integrity" to match reality.
+> - **SSE + KV packet cache + migration landing page + segment bulk
+>   actions are all live** — the doc's "Deferred" markers for these
+>   are inverted (they shipped). Only `FEATURES.DEBATE=false` and
+>   SMS (Twilio/10DLC ops pending) remain truly deferred.
+> - **Backing stack note:** Plan language is Convex-native (no
+>   Prisma refs), which is correct. Other related design docs
+>   (INTELLIGENCE-LOOP-PLAN, CROSS-BORDER-PLAN, SMS-RENABLE-PLAN)
+>   do still carry Prisma-era schema framing — cross-check before
+>   lifting snippets from them.
 
 ---
 

@@ -2,8 +2,35 @@
 
 > The packet should speak the staffer's language, not the platform's.
 
-**Status**: Workstream opened 2026-04-11
+**Status**: Phases 1–3 shipped (~2026-04-11 onward); Phase 4 (engagement tier label replacement) in progress.
 **Scope**: Data model, packet computation, UI presentation, org page specimen
+
+> ⚠️ **2026-04-23 audit — corrections:**
+>
+> - **`computeVerificationPacketCached` is live** (`src/lib/server/verification-packet.ts:~58-91`,
+>   with Cloudflare KV caching at 30s TTL) — the MEMORY note
+>   calling it unimplemented is outdated.
+> - **`campaignActions.trustTier` + `campaignActions.compositionMode`
+>   are in Convex schema** (`convex/schema.ts:~1202-1204`). "null
+>   until Cycle 2" framing (~line 104) should be rewritten as
+>   "null when the action didn't capture trustTier" — Cycle 2
+>   has shipped.
+> - **Metric nullability wording drift** (matches wave-10
+>   coordination-integrity audit): H(t) returns null when fewer than
+>   2 actions OR range `< 1h`; CAI returns null when `actions < 2`
+>   OR `tier1+tier3+tier4 === 0` (a 0-T1 T3/T4 campaign still scores);
+>   burst velocity returns null only when all hourly bins are zero.
+>   Rewrite the metric blurbs to reflect both guards.
+> - **Engagement tier labels still present in `packet.tiers`**
+>   (`verification-packet.ts:~416-434`) — Phase 4 tier-label
+>   replacement isn't done, and the "New/Active/Established/Veteran/
+>   Pillar" strings are still emitted to the packet output. k-anonymity
+>   suppression (<5) is present; display relabeling is the remaining
+>   work.
+> - **Correct as-is:** staffer-legible packet structure (verified
+>   count, districtCount, authorship, dateRange, identityBreakdown);
+>   report email template rendering via visual dimensions; SSE stream
+>   integration via `createSSEStream()`; `FEATURES.ACCOUNTABILITY=true`.
 
 ---
 

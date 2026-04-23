@@ -5,6 +5,40 @@
 > **Results**: ~600 raw findings → 180+ validated → all fixed. Last 3 rounds averaged 1 P2 fix/round.
 > **Individual round docs**: `docs/archive/2026-03-brutalist-rounds/`
 
+> ⚠️ **2026-04-23 audit — stale paths + residual issues worth flagging:**
+>
+> - **`executor.ts` no longer exists.** The double-fault fix (F-R27-01)
+>   migrated with the rest of the workflow system into
+>   `convex/workflows.ts` (~lines 457-473). The current shape still
+>   calls `logAction` before `updateExecution` in the error handler —
+>   if `logAction` throws, the run can remain at `running` forever.
+>   Re-open this finding or wrap the cleanup in an outer try/catch.
+> - **Client storage isolation (R6) is partially fixed, not closed.**
+>   `templateDraftStore` does split DM emails into
+>   `${STORAGE_KEY}_emails_${draftId}`, but the stores are still
+>   globally keyed per-device (no userId binding, no encryption).
+>   Shared-device DM disclosure remains an open gap — keep in
+>   Known Limitations.
+> - **Race-condition language is SQL-flavored.** "spawn.ts 3-phase +
+>   FOR UPDATE" framing describes Prisma/Postgres semantics; live code
+>   uses Convex optimistic concurrency + atomic `updateMany`. Rewrite
+>   to Convex patterns.
+> - **Analytics k-anonymity fallback isn't fully removed.** The
+>   fallback on the analytics critical path is gone, but k-anonymity
+>   threshold logic remains in `convex/analytics.ts:~104` and
+>   `legislation.ts:~103`. "Removed" in the log is overstated — it's
+>   "not on the hot path anymore."
+> - **"OID4VP JWT sig verification shipped" is nuance-shy.** The
+>   live verification path in `verify-mdl` does HPKE decryption +
+>   credential response verification; the wave-9 KNOWN-LIMITATIONS
+>   update is about `verifyVpTokenSignature()` at
+>   `mdl-verification.ts:~623-704` (ES256/ES384/ES512 with JWK/x5c).
+>   Both are correct — differentiate them.
+> - **Storacha sunset 2026-05-31** is an operational/DR risk that
+>   never appeared in a security round because it post-dates the
+>   audit (2026-04-15 write cutoff). Cross-link to KNOWN-LIMITATIONS
+>   and DISASTER-RECOVERY rather than treating as closed.
+
 ---
 
 ## Summary Stats

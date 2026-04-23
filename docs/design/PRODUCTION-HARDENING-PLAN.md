@@ -1,9 +1,45 @@
 # Production Hardening Plan
 
 **Status**: Engineering Specification
-**Date**: 2026-03-23
+**Date**: 2026-03-23 (reconciled 2026-04-23)
 **Scope**: Pre-launch hardening for org onboarding (Phase 0 → Phase 1)
 **Owner**: TBD
+
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Per-area reconciliation:
+>
+> - **§1 Billing enforcement** — SHIPPING. Query-time enforcement in
+>   `convex/templates.ts:~902-923` + neighbors; hard-stop at limit.
+>   Actual enforcement is stricter than the "soft grace via
+>   `pastDueSince`" wording below (past-due grace is on *subscription
+>   state*, not per-metric quota).
+> - **§2 Error monitoring** — SHIPPING. Sentry is wired via
+>   `@sentry/sveltekit` in `src/hooks.server.ts:~14-17,~262` and
+>   `SENTRY_DSN` / `VITE_SENTRY_DSN` in `.env.example:~503-508`.
+> - **§3 Backup & DR — OBSOLETE.** The backup scripts, GitHub Actions
+>   workflow, and S3 pipeline this section documents
+>   (`scripts/backup-db.ts`, `scripts/restore-db.ts`,
+>   `.github/workflows/daily-backup.yml`) were **deleted 2026-04-21**
+>   (commit `247a69f2`) when Convex became the sole datastore. Do not
+>   execute §3. For DR use `npx convex export` / Convex dashboard
+>   snapshots; see `docs/runbooks/DISASTER-RECOVERY.md` (also
+>   banner'd). Storacha pinning sunset 2026-05-31 is the live DR
+>   exposure not captured here.
+> - **§4 Storage isolation — NOT IMPLEMENTED.** Per-user keying was
+>   not built. Stores still use global keys:
+>   `commons_template_drafts` (`templateDraft.ts:24`),
+>   `commons-search-cache` (`src/lib/core/search/cache.ts:23`),
+>   `commons-trade-preimages`. Multi-user-device DM/search/trade
+>   leakage remains an open Phase-0 blocker.
+> - **§5 Rate limiter — softer than specified.** The spec's
+>   "fail-fast if `ENVIRONMENT==='production' && !REDIS_URL`" is not
+>   implemented. `src/lib/core/security/rate-limiter.ts:~659-672`
+>   logs a warning and falls back to in-memory; `/api/health` endpoint
+>   referenced in the spec does not exist.
+> - **§6 DB connection resilience — OBSOLETE.** `src/lib/core/db.ts`,
+>   `src/lib/server/db-retry.ts`, and `/api/health` are all absent
+>   (Convex removes traditional connection concerns; retries live
+>   inside the Convex client, not application code). Entire section
+>   assumes Prisma + Hyperdrive.
 
 ---
 
