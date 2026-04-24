@@ -14,10 +14,9 @@
 >   **no OAuth Sent-folder email verification** — no `verifyEmailDelivery()`,
 >   no Sent-folder scan. Active intake is mDL (W3C Digital Credentials API);
 >   `self.xyz` / `Didit` persist only as legacy enum values.
-> - **DB layer:** Prisma / Postgres sections are obsolete. Schema is in
->   `convex/schema.ts`. Fields like `api_provider` and `recipient_emails`
->   on templates **do not exist** — the live shape is
->   `deliveryMethod: string` + `deliveryConfig: any` +
+> - **DB layer:** Schema is in `convex/schema.ts`. Fields like
+>   `api_provider` and `recipient_emails` on templates **do not exist** —
+>   the live shape is `deliveryMethod: string` + `deliveryConfig: any` +
 >   `recipientConfig: any`.
 > - **Routing logic (`template.delivery_method === 'email'` branch):**
 >   not in code. `deliverToCongress` is CWC-only.
@@ -204,20 +203,19 @@ Templates can target ANY decision-maker:
 
 ## Technical Implementation (For Developers)
 
-### Database Schema:
+### Schema:
 
-```prisma
-model Template {
-  target_level        String    // "federal" | "state" | "local" | "corporate" | "nonprofit" | "multi"
-  target_body         String?   // "us_congress" | "ca_legislature" | "sf_city_council" | "hoa_board" | "corporate_board"
-  delivery_method     String    // "api" | "email" | "hybrid"
+```typescript
+// convex/schema.ts (excerpt — illustrative; live fields are deliveryMethod / deliveryConfig / recipientConfig)
+templates: defineTable({
+  targetLevel: v.string(),      // "federal" | "state" | "local" | "corporate" | "nonprofit" | "multi"
+  targetBody: v.optional(v.string()),  // "us_congress" | "ca_legislature" | "sf_city_council" | "hoa_board" | ...
+  deliveryMethod: v.string(),   // "api" | "email" | "hybrid"
 
-  // For API delivery:
-  api_provider        String?   // "cwc" | "state_api"
-
-  // For email delivery:
-  recipient_emails    String[]  // ["council@cityofsf.gov", "ceo@corp.com", "hoa-board@example.com"]
-}
+  // Opaque config blobs resolved by the delivery router:
+  deliveryConfig: v.any(),      // e.g. { apiProvider: "cwc" }
+  recipientConfig: v.any()      // e.g. { emails: [...] }
+})
 ```
 
 ### Routing Logic:

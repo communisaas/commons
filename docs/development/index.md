@@ -10,30 +10,31 @@
 
 Install dependencies, run dev server, common commands.
 
-**Start here**: `npm install` → `npm run dev` → http://localhost:5173
+**Start here**: `npm install` → `cp .env.example .env.local` → `npx convex dev` → `npm run dev` → http://localhost:5173
 
 **Commands**:
-- `npm run dev` - Dev server
+- `npx convex dev` - Attach to Convex cloud dev instance
+- `npm run dev` - SvelteKit dev server
 - `npm run build` - Production build
 - `npm run test` - Test suite
 - `npm run check` - Type checking
 
 ### 2. [database.md](database.md) - Database
 
-PostgreSQL + Prisma 6.x + Hyperdrive connection pooling + pgvector.
+**Convex** (managed backend). Schema lives in `convex/schema.ts` (~71 tables, 232 indexes).
 
-**What it documents**: Schema overview, connection architecture, migrations, seeding, Cloudflare Workers constraints.
+**What it documents**: Schema overview, auth bridge (RS256 JWT → `ctx.auth.getUserIdentity()`), Convex vector index for embeddings.
 
-**Cross-reference**: `/prisma/schema.prisma`
+**Cross-reference**: `convex/schema.ts` (code-driven, no migration files)
 
-### 3. [seeding.md](seeding.md) - Database Seeding
+### 3. [seeding.md](seeding.md) - Seeding
 
-Test data generation, seed scripts, development fixtures.
+Test data generation via Convex seed actions.
 
 **Commands**:
-- `npm run db:seed` - Seed test data
-- `npm run db:push` - Push schema changes (dev)
-- `npm run db:migrate` - Create migration (production)
+- `npm run seed` - Runs `npx convex run seed:seedAll` (idempotent)
+- `npm run seed:agents` - Seeds AI-agent fixtures (requires `GEMINI_API_KEY`, `GROQ_API_KEY`, `EXA_API_KEY`)
+- Schema changes: edit `convex/schema.ts` and `npx convex dev` re-deploys (no migrations)
 
 ---
 
@@ -80,10 +81,10 @@ Three-agent pipeline for campaign creation: subject line generation, decision-ma
 
 ### 7. [moderation.md](moderation.md) - Content Moderation
 
-Automated two-layer pipeline via Groq (Llama Guard). No manual review by design.
+Automated two-layer pipeline via Groq. No manual review by design.
 
 **Layer 0**: Prompt injection detection (Llama Prompt Guard 2)
-**Layer 1**: Content safety classification (Llama Guard 4, permissive for civic speech)
+**Layer 1**: Content safety classification (`openai/gpt-oss-safeguard-20b`, permissive for civic speech)
 
 **Policy**: Only S1 (violent crimes) and S4 (CSAM) block content. Political speech, defamation, and electoral opinions are allowed.
 
@@ -112,7 +113,7 @@ Pre-deployment verification, production build, environment checks.
 - [ ] `npm run test:run` passes
 - [ ] `npm run check` (type checking)
 - [ ] Environment variables set
-- [ ] Database migrations run
+- [ ] `npx convex deploy --env-file .env.production`
 - [ ] Feature flags configured
 
 ---
@@ -139,13 +140,9 @@ End-to-end testing for voter-protocol integration: identity verification, ZK pro
 
 Testing strategy for zero-knowledge proof generation and verification.
 
-### 14. [DATABASE-CLEARING-ISSUE.md](DATABASE-CLEARING-ISSUE.md) - Database Clearing Issue
+### 15. [VECTOR_SEARCH_GUIDE.md](VECTOR_SEARCH_GUIDE.md) - Convex Vector Search Guide
 
-Known issue and resolution for database clearing in test environments.
-
-### 15. [VECTOR_SEARCH_GUIDE.md](VECTOR_SEARCH_GUIDE.md) - pgvector Usage Guide
-
-pgvector setup, embedding generation, similarity search patterns.
+Convex `.vectorIndex(...)` setup, embedding generation with Gemini `text-embedding-004` (768 dims), similarity search patterns.
 
 ---
 
@@ -186,11 +183,12 @@ Linting, formatting, dependency updates, tech debt tracking.
 
 1. **Pull latest**: `git pull`
 2. **Install deps**: `npm install` (if package.json changed)
-3. **Run dev server**: `npm run dev`
-4. **Make changes**
-5. **Run tests**: `npm run test`
-6. **Type check**: `npm run check`
-7. **Commit**: `git commit -m "feat: description"`
+3. **Start Convex**: `npx convex dev`
+4. **Run dev server**: `npm run dev`
+5. **Make changes**
+6. **Run tests**: `npm run test`
+7. **Type check**: `npm run check`
+8. **Commit**: `git commit -m "feat: description"`
 
 ### Before Creating PR
 
@@ -202,13 +200,12 @@ Linting, formatting, dependency updates, tech debt tracking.
 
 **All must pass** or PR will be rejected by CI.
 
-### Database Changes
+### Schema Changes
 
-1. **Modify schema**: Edit `/prisma/schema.prisma`
-2. **Generate client**: `npm run db:generate`
-3. **Push changes (dev)**: `npm run db:push`
-4. **Create migration (prod)**: `npm run db:migrate`
-5. **Update seed data**: Edit `/scripts/seed-database.ts`
+1. **Edit schema**: `convex/schema.ts`
+2. **Auto-deploy (dev)**: `npx convex dev` watches and deploys on save
+3. **Deploy (prod)**: `npx convex deploy --env-file .env.production`
+4. **Update seed data**: Edit `convex/seedData.ts` or regenerate via `npm run seed:agents`
 
 ---
 
@@ -216,9 +213,9 @@ Linting, formatting, dependency updates, tech debt tracking.
 
 **First day**:
 1. Read quickstart.md
-2. Run `npm install && npm run dev`
-3. Browse codebase in `/src/lib/`
-4. Read schema.md (understand data model)
+2. `npm install && npx convex dev && npm run dev`
+3. Browse codebase in `/src/lib/` and `/convex/`
+4. Read database.md (understand schema)
 5. Run test suite (`npm run test`)
 
 **First week**:
@@ -240,11 +237,12 @@ Linting, formatting, dependency updates, tech debt tracking.
 
 **Add new feature**:
 1. Create feature flag in flags.md
-2. Add database schema in schema.prisma
-3. Create UI components in `/src/lib/components/`
-4. Add API routes in `/src/routes/api/`
-5. Write integration tests
-6. Document in `/docs/features/`
+2. Add schema in `convex/schema.ts`
+3. Add Convex queries/mutations in `convex/`
+4. Create UI components in `/src/lib/components/`
+5. Add API routes in `/src/routes/api/` (if SvelteKit-side needed)
+6. Write integration tests
+7. Document in `/docs/features/`
 
 **Fix bug**:
 1. Write failing test that reproduces bug
@@ -266,15 +264,14 @@ Linting, formatting, dependency updates, tech debt tracking.
 
 **Production is down**:
 1. Check Cloudflare Pages logs via Cloudflare dashboard
-2. Check database connection
-3. Check environment variables
-4. Rollback deploy if needed via Cloudflare Pages dashboard
+2. Check Convex dashboard for function errors
+3. Check environment variables in Cloudflare Pages + Convex
+4. Rollback deploy if needed via Cloudflare Pages dashboard / Convex dashboard
 
-**Database migration failed**:
-1. Check migration status: `npx prisma migrate status`
-2. Rollback: `npx prisma migrate resolve --rolled-back`
-3. Fix migration file
-4. Retry: `npm run db:migrate`
+**Schema deploy failed**:
+1. Check Convex dashboard for validation errors
+2. Fix schema mismatch in `convex/schema.ts`
+3. Retry: `npx convex deploy --env-file .env.production`
 
 **Tests failing in CI but passing locally**:
 1. Check Node version matches CI (see `.github/workflows/`)

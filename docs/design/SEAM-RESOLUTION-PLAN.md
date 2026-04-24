@@ -45,8 +45,7 @@ Three architectural seams identified from deferred work across brutalist rounds 
 **Impact**: Person-layer verified supporters and org-layer accountability can't compose. A user's verified district reps don't flow into the org's followed DMs.
 
 **Files touched**:
-- `prisma/schema.prisma` — new `UserDMRelation` model, remove old models
-- `prisma/migrations/20260319_user_dm_relation/migration.sql` — DDL + backfill
+- `convex/schema.ts` — new `userDMRelations` table, remove old tables
 - `src/routes/api/identity/verify-address/+server.ts` — DM upsert instead of CongressionalRep
 - `src/lib/core/identity/identity-binding.ts` — UserDMRelation in merge logic
 - `src/lib/utils/templateResolver.ts` — DM field mapping

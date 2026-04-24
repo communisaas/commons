@@ -3,9 +3,8 @@
 **Date**: 2026-03-17
 **Status**: Partially implemented — consent model + quota gate shipped; send path and segment filtering still stubbed.
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Architecture language is
-> Prisma-era; live backend is Convex. Some P0 items are stubbed more
-> than the header implies.
+> **Audit notes (2026-04-23).** Live backend is Convex; some P0 items
+> are stubbed more than the header implies.
 >
 > **Shipped:**
 >
@@ -41,13 +40,11 @@
 >
 > **Stale refs:**
 >
-> - `src/lib/server/sms/send-blast.ts` and any path calling
->   `db.smsBlast.update()` / `db.supporter.findMany()` — these are
->   Prisma/SvelteKit-server; live code lives under `convex/sms.ts`
->   + `convex/webhooks.ts`.
-> - Prisma migrations (`20260317_add_sms_consent_status`,
->   `20260323_add_sms_consent_tracking`) referenced in the checklist
->   do **not exist**. Convex schema is code; no migration files.
+> - Any SvelteKit-server `send-blast.ts` paths referenced below are
+>   historical. Live code lives under `convex/sms.ts` + `convex/webhooks.ts`.
+> - The checklist mentions dated feature-ship markers (e.g.
+>   `20260317_add_sms_consent_status`). Convex schema is code — there
+>   are no migration files; treat these as ship identifiers only.
 >
 > **Ops-dependent (not code):**
 >
@@ -67,7 +64,7 @@ The SMS/calling stack is **fully built** — REST client, DB models, CRUD API, U
 | **Twilio REST client** | `src/lib/server/sms/twilio.ts` | Complete. Direct `fetch()` calls, zero SDK. `sendSms`, `initiatePatchThroughCall`, `validateTwilioSignature`, `isValidE164`. |
 | **Blast engine** | `src/lib/server/sms/send-blast.ts` | Complete. Batch-of-10 with 1s delay, per-message DB tracking, status rollup. |
 | **Type definitions** | `src/lib/server/sms/types.ts` | Complete. Status enums, `SMS_MAX_LENGTH=1600`, `SMS_SEGMENT_LENGTH=160`. |
-| **Prisma models** | `prisma/schema.prisma:2043-2122` | Complete. `SmsBlast`, `SmsMessage`, `PatchThroughCall` with full indexes. |
+| **Convex tables** | `convex/schema.ts` (`smsBlasts`, `smsMessages`, `patchThroughCalls`) | Complete. Full indexes. |
 | **Org API** | `src/routes/api/org/[slug]/sms/` | Complete. POST/GET blasts, PATCH/DELETE individual, GET messages. |
 | **Org API (calls)** | `src/routes/api/org/[slug]/calls/` | Complete. POST initiate, GET list. |
 | **Webhooks** | `src/routes/api/sms/webhook/`, `src/routes/api/sms/call-status/` | Complete. Twilio signature validation, status updates, counter increments. |
@@ -114,7 +111,7 @@ The implementation is code-complete but **not operationally live** because:
 
 | # | Gap | Risk | Effort |
 |---|-----|------|--------|
-| 8 | **Recipient filter/segmentation** | `send-blast.ts` has a TODO: "Apply recipientFilter when segment query builder supports phone filtering." Currently blasts go to ALL supporters with phones. | **8-12 LoC**: Add `smsStatus` case to segment query builder (line 70-79 in `src/lib/server/segments/query-builder.ts`, after emailStatus case). Handle operators: `equals` (e.g., 'subscribed'), `excludes`. In `send-blast.ts` line 31-38, replace hard-coded where with: `const where = { orgId: blast.orgId, phone: { not: null }, ...(blast.recipientFilter ? buildSegmentWhere(blast.orgId, blast.recipientFilter) : { smsStatus: 'subscribed' }) }`. Requires: `recipientFilter?: SegmentFilter` field on SmsBlast model (add to schema.prisma, update create API at `src/routes/api/org/[slug]/sms/+server.ts` to accept it). |
+| 8 | **Recipient filter/segmentation** | Send path has a TODO: "Apply recipientFilter when segment query builder supports phone filtering." Currently blasts go to ALL supporters with phones. | **8-12 LoC**: Add `smsStatus` case to segment matcher (`convex/segments.ts matchCondition()`, after `emailStatus` case). Handle operators: `equals` (e.g., 'subscribed'), `excludes`. In the Convex send action, query supporters via `ctx.db.query("supporters").withIndex("by_orgId", q => q.eq("orgId", blast.orgId))` filtered by `smsStatus === 'subscribed'` + phone present, then apply `recipientFilter` in-memory or via targeted index lookups. Requires: `recipientFilter?: SegmentFilter` field on `smsBlasts` table (add to `convex/schema.ts`, update create mutation at `src/routes/api/org/[slug]/sms/+server.ts` → Convex mutation to accept it). |
 | 9 | **SMS cost preview** | Org admin has no visibility into how many segments/dollars a blast will cost before sending. | Add a "Preview: ~X recipients, ~Y segments, ~$Z" line to the compose page. Query supporter count + estimate segment count from body length. |
 | 10 | **Confirmation dialog before send** | "Send Now" fires immediately with no confirmation. Easy to accidentally blast. | Add a confirmation modal: "Send to ~X supporters? This cannot be undone." |
 
@@ -133,20 +130,19 @@ The implementation is code-complete but **not operationally live** because:
 
 ### 3.1 SMS Consent Timestamp/Method Tracking
 
-**Schema changes** (`prisma/schema.prisma:1450`):
-```prisma
-model Supporter {
+**Schema changes** (`convex/schema.ts` — `supporters` table):
+```typescript
+supporters: defineTable({
   // ... existing fields
-  smsStatus    String  @default("none") // none|subscribed|unsubscribed|stopped
-  smsConsentAt DateTime? // When opt-in recorded, UTC
-  smsConsentMethod String? // 'import'|'form'|'rsvp'|'widget'|'api' — how they opted in
-  smsConsentIp String? // IP that provided consent (for 4-year audit trail)
-}
+  smsStatus: v.string(),                       // 'none' | 'subscribed' | 'unsubscribed' | 'stopped'
+  smsConsentAt: v.optional(v.number()),        // When opt-in recorded, UTC millis
+  smsConsentMethod: v.optional(v.string()),    // 'import' | 'form' | 'rsvp' | 'widget' | 'api'
+  smsConsentIp: v.optional(v.string()),        // IP that provided consent (4-year audit trail)
+}),
 ```
 
-**Migration required**: `20260323_add_sms_consent_tracking.ts`
-- Add three nullable columns to `supporter` table
-- No backfill needed for existing supporters (NULL = no consent on record)
+**Deploy**: `npx convex deploy --env-file .env.production` picks up the three new optional fields.
+- No backfill needed for existing supporters (undefined = no consent on record)
 
 **Implementation points**:
 1. **CSV import** (`src/routes/org/[slug]/supporters/import/+page.server.ts:300-315`): Set `smsConsentAt: new Date(), smsConsentMethod: 'import'` when `mapped.smsStatus === 'subscribed'`
@@ -162,30 +158,27 @@ model Supporter {
 
 **File: `src/lib/server/sms/send-blast.ts:13-92`** (send-blast entry point)
 
-After line 43 (fetch blast data), add rate limit check:
+After fetching the blast record, add a rate-limit check:
 ```typescript
 // Check SMS quota before batch send
-const usage = await getOrgUsage(blast.orgId);
+const usage = await getOrgUsage(ctx, blast.orgId);
 const overLimit = isOverLimit(usage);
 if (overLimit.sms) {
-  await db.smsBlast.update({
-    where: { id: blastId },
-    data: { status: 'failed', errorCode: 'QUOTA_EXCEEDED' }
-  });
+  await ctx.db.patch(blast._id, { status: 'failed', errorCode: 'QUOTA_EXCEEDED' });
   throw new Error(`Org ${blast.orgId} exceeded SMS quota for period`);
 }
 ```
 
-**Daily cap** (optional enhancement): Add to `SmsBlast` model:
-- `dailySentCount: number @default(0)` — resets at UTC midnight via cron job
+**Daily cap** (optional enhancement): Add to `smsBlasts` table:
+- `dailySentCount: v.number()` (default 0) — resets at UTC midnight via Convex cron
 - Check before sending: `if (org.dailySentCount + supporters.length > MAX_PER_DAY) throw error`
 
-**Cost tracking** (optional): Store estimated cost in SMS message records:
-```prisma
-model SmsMessage {
+**Cost tracking** (optional): Store estimated cost in `smsMessages`:
+```typescript
+smsMessages: defineTable({
   // ...
-  estimatedCost: Decimal? // ~0.0079 * segmentCount
-}
+  estimatedCost: v.optional(v.number()),  // ~0.0079 * segmentCount
+}),
 ```
 
 ---
@@ -198,17 +191,16 @@ model SmsMessage {
 - File: `src/lib/server/sms/send-blast.ts` — add timezone check before sendSms()
 
 **Consent verification** (part of P1):
-- Before any blast, verify `smsStatus === 'subscribed'` AND `smsConsentAt is not null`
-- Add validation in `send-blast.ts` line 31-38:
+- Before any blast, verify `smsStatus === 'subscribed'` AND `smsConsentAt` is set
+- Add validation in the Convex send action:
   ```typescript
-  const supporters = await db.supporter.findMany({
-    where: {
-      orgId: blast.orgId,
-      phone: { not: null },
-      smsStatus: 'subscribed',
-      smsConsentAt: { not: null } // Explicit opt-in record required
-    }
-  });
+  const candidates = await ctx.db
+    .query("supporters")
+    .withIndex("by_orgId", (q) => q.eq("orgId", blast.orgId))
+    .collect();
+  const supporters = candidates.filter(
+    (s) => s.phone && s.smsStatus === 'subscribed' && s.smsConsentAt !== undefined,
+  );
   ```
 
 ---
@@ -260,9 +252,9 @@ Required for A2P SMS in the US since 2023:
 
 ### Minimum viable (P0 — blocks first real SMS)
 
-- [x] Add `smsStatus` field to Supporter model (`none|subscribed|unsubscribed|stopped`, default `none`)
-- [x] Run Prisma migration (`20260317_add_sms_consent_status`)
-- [x] Update `send-blast.ts` to filter on `smsStatus: 'subscribed'`
+- [x] Add `smsStatus` field to `supporters` table (`'none' | 'subscribed' | 'unsubscribed' | 'stopped'`, default `'none'`)
+- [x] Deploy schema via `npx convex deploy` (ship marker: `20260317_sms_consent_status`)
+- [x] Update send path to filter on `smsStatus === 'subscribed'`
 - [x] Add STOP webhook processing (6 keywords) and update `smsStatus`
 - [ ] Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` in Cloudflare Pages secrets
 - [ ] Register 10DLC brand + campaign in Twilio Console
@@ -270,9 +262,9 @@ Required for A2P SMS in the US since 2023:
 
 ### Before first org use (P1)
 
-**Schema & migrations** (~30 min):
-- [ ] Add `smsConsentAt` (DateTime?), `smsConsentMethod` (String?), `smsConsentIp` (String?) to Supporter model
-- [ ] Run Prisma migration (`20260323_add_sms_consent_tracking`)
+**Schema & deploy** (~30 min):
+- [ ] Add `smsConsentAt` (optional number), `smsConsentMethod` (optional string), `smsConsentIp` (optional string) to `supporters` table in `convex/schema.ts`
+- [ ] Deploy via `npx convex deploy --env-file .env.production` (ship marker: `20260323_sms_consent_tracking`)
 
 **Billing limits** (~1 hr, 22 LoC):
 - [ ] Add `maxSms: number` to `PlanLimits` interface (line 8-17 in `src/lib/server/billing/plans.ts`)
@@ -347,8 +339,8 @@ Required for A2P SMS in the US since 2023:
 
 **`tests/unit/segments/sms-segment-builder.test.ts`** (~6 tests):
 - Query builder handles `smsStatus` field: `{ field: 'smsStatus', operator: 'equals', value: 'subscribed' }`
-- Translate to Prisma: `{ smsStatus: 'subscribed' }`
-- Handle `excludes`: `{ smsStatus: { not: 'unsubscribed' } }`
+- Translate to Convex matcher: filter returns `s.smsStatus === 'subscribed'`
+- Handle `excludes`: filter returns `s.smsStatus !== 'unsubscribed'`
 - Segment + SMS blast: recipients respect filter
 
 ### Integration tests (smoke tests with test Twilio credentials)

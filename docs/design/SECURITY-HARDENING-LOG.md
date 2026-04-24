@@ -20,9 +20,9 @@
 >   Shared-device DM disclosure remains an open gap — keep in
 >   Known Limitations.
 > - **Race-condition language is SQL-flavored.** "spawn.ts 3-phase +
->   FOR UPDATE" framing describes Prisma/Postgres semantics; live code
->   uses Convex optimistic concurrency + atomic `updateMany`. Rewrite
->   to Convex patterns.
+>   FOR UPDATE" framing describes row-lock semantics; live code
+>   uses Convex atomic mutations + unique indexes (race conditions
+>   collapse on insert). Rewrite to Convex patterns.
 > - **Analytics k-anonymity fallback isn't fully removed.** The
 >   fallback on the analytics critical path is gone, but k-anonymity
 >   threshold logic remains in `convex/analytics.ts:~104` and
@@ -229,7 +229,7 @@ N+1 queries eliminated. Batch operations where per-item queries existed.
 | Email recipient N+1→batch status recheck per batch | engine.ts | R25 |
 | Org dashboard endorsements take:50 | org dashboard | R25 |
 | Alert generator P2002 upsert + @@unique constraint | alert generator | R11 |
-| Bill ingestion Prisma upsert | bill ingestion | R11 |
+| Bill ingestion atomic upsert via unique index | bill ingestion | R11 |
 | Batch auto-follow INSERT...ON CONFLICT | auto-follow | R6 |
 
 ---

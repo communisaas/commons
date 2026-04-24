@@ -1,6 +1,11 @@
 # The Bubble: Geographic Identity as a Living Object
 
 > **STATUS: ASPIRATIONAL** — Design spec. Not yet implemented.
+>
+> Schema additions below land on the `users` table in `convex/schema.ts`
+> using `v.optional(v.number())` / `v.optional(v.string())` and Convex
+> index declarations. Field names use camelCase (`bubbleLat`, `bubbleLng`,
+> `bubbleRadius`, `bubbleUpdated`, `bubbleSeed`).
 
 **Status:** Design Spec — Active (Rev 2)
 **Author:** Architecture / Perceptual Engineering
@@ -515,7 +520,7 @@ The Bubble paradigm supersedes the 5-signal inference architecture. Here is the 
 | `routes/api/location/ip-lookup/+server.ts` | Optional Bubble seeder from IP |
 | `routes/api/location/resolve/+server.ts` | Coordinates → district for ZK proofs (post-Bubble) |
 | `routes/api/location/resolve-address/+server.ts` | Address → credential issuance |
-| All Prisma schema fields | `district_hash`, `district_verified`, `TemplateJurisdiction`, `TemplateScope` — structural |
+| All Convex schema fields | `districtHash`, `districtVerified`, `TemplateJurisdiction`, `TemplateScope` — structural |
 
 **ARCHIVE (superseded spec):**
 
@@ -1145,21 +1150,21 @@ src/routes/api/shadow-atlas/bubble/+server.ts   ← Server proxy
 ```
 src/lib/components/template-browser/LocationFilter.svelte ← Replace with Bubble
 src/lib/core/shadow-atlas/client.ts                        ← Add bubbleQuery()
-prisma/schema.prisma                                       ← Add bubble fields to User
+convex/schema.ts                                           ← Add bubble fields to users table
 ```
 
-**New User model fields:**
-```prisma
-model User {
+**New `users` table fields (`convex/schema.ts`):**
+```typescript
+users: defineTable({
   // ... existing fields ...
 
   // Geographic bubble (persistent identity)
-  bubble_lat       Float?    // Bubble center latitude
-  bubble_lng       Float?    // Bubble center longitude
-  bubble_radius    Float?    // Bubble radius in meters
-  bubble_updated   DateTime? // Last bubble modification
-  bubble_seed      String?   // How seeded: "postal", "gps", "city", "country"
-}
+  bubbleLat: v.optional(v.number()),      // Bubble center latitude
+  bubbleLng: v.optional(v.number()),      // Bubble center longitude
+  bubbleRadius: v.optional(v.number()),   // Bubble radius in meters
+  bubbleUpdated: v.optional(v.number()),  // Last bubble modification (ms)
+  bubbleSeed: v.optional(v.string()),     // How seeded: "postal", "gps", "city", "country"
+})
 ```
 
 **Integration with LocationFilter:** The existing 5-signal inference (GPS, IP, OAuth, timezone, verified address) becomes a **bubble seeder**. Each signal seeds the bubble at a different radius:
@@ -1324,7 +1329,7 @@ commons/src/lib/
 │   └── BubbleInput.svelte         ← NEW: postal code entry + country detection
 ├── routes/api/shadow-atlas/
 │   └── bubble/+server.ts          ← NEW: server proxy for bubble-query
-└── prisma/schema.prisma           ← ADD: bubble_lat/lng/radius/updated/seed on User
+└── convex/schema.ts               ← ADD: bubbleLat/bubbleLng/bubbleRadius/bubbleUpdated/bubbleSeed on users
 ```
 
 Steps:
@@ -1334,8 +1339,8 @@ Steps:
    - `$derived`: `precision` (computed from `resolvedLayers`), `resolvedLayers` (layers where center is inside exactly one district and no fence for that layer is inside the bubble), `ambiguousLayers` (layers with fences inside the bubble)
    - On `center` or `radius` change: call `computeBubbleState()` from `bubble-geometry.ts` — pure function, no API call
    - Export `seedBubble(center, radius, postalCode?)` — fires API call, hydrates `cachedExtent`, triggers derived recomputation
-   - Export `persistBubble()` — saves to User model via API, also to localStorage
-   - Export `restoreBubble()` — loads from localStorage (instant) then from User model (async)
+   - Export `persistBubble()` — saves to the `users` table via a Convex mutation, also to localStorage
+   - Export `restoreBubble()` — loads from localStorage (instant) then from the `users` table via a Convex query (async)
 3. Add server proxy: `routes/api/shadow-atlas/bubble/+server.ts` — POST handler that forwards to shadow-atlas, with rate limiting
 4. Build `bubble-client.ts` — typed API client wrapping the proxy. Returns typed `BubbleQueryResponse`.
 5. Build `BubbleInput.svelte`:
@@ -1344,8 +1349,8 @@ Steps:
    - Canadian FSA → full code prompt
    - On input: detect country, validate format, call `seedBubble()` with geocoded centroid
    - View Transition: `view-transition-name: location-widget` for bubble birth morph
-6. Add bubble fields to Prisma User model: `bubble_lat Float?`, `bubble_lng Float?`, `bubble_radius Float?`, `bubble_updated DateTime?`, `bubble_seed String?`
-7. Run Prisma migration
+6. Add bubble fields to the `users` table in `convex/schema.ts`: `bubbleLat: v.optional(v.number())`, `bubbleLng: v.optional(v.number())`, `bubbleRadius: v.optional(v.number())`, `bubbleUpdated: v.optional(v.number())`, `bubbleSeed: v.optional(v.string())`
+7. Deploy schema: `npx convex dev` (local) or `npx convex deploy --env-file .env.production`
 8. Test: type `94103` → API fires → `cachedExtent` hydrated → `precision` = `county` (state senate + county resolved, congressional ambiguous due to Market St fence)
 
 ### Phase 3: The living bubble

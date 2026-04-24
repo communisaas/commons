@@ -140,107 +140,92 @@ The structured policy is derived from natural language input via the Gemini API 
 
 ## 4. Schema
 
-### 4.1 New Models
+### 4.1 New Tables
 
-```prisma
-model DelegationGrant {
-  id                  String    @id @default(cuid())
-  userId              String    @map("user_id")
+All live in `convex/schema.ts`. camelCase fields throughout; Convex `v.id(...)` replaces string foreign keys. Cascade deletion is implemented in Convex mutations rather than at the schema layer.
+
+```ts
+delegationGrants: defineTable({
+  userId: v.id("users"),
 
   // Scope
-  scope               String    // 'campaign_sign' | 'debate_position' | 'message_generate' | 'full'
+  scope: v.string(),                        // 'campaign_sign' | 'debate_position' | 'message_generate' | 'full'
 
-  // Constraints (JSON for flexibility)
-  issueFilter         String[]  @default([])
-  orgFilter           String[]  @default([])
-  stanceProfileId     String?   @map("stance_profile_id")
-  maxActionsPerDay    Int       @default(5) @map("max_actions_per_day")
-  requireReviewAbove  Float     @default(10) @map("require_review_above")
+  // Constraints
+  issueFilter: v.array(v.string()),         // default: []
+  orgFilter: v.array(v.id("organizations")),// default: []
+  stanceProfileId: v.optional(v.id("stanceProfiles")),
+  maxActionsPerDay: v.number(),             // default: 5
+  requireReviewAbove: v.number(),           // default: 10
 
   // Natural language policy (for display)
-  policyText          String    @map("policy_text")
+  policyText: v.string(),
 
   // Lifecycle
-  expiresAt           DateTime? @map("expires_at")
-  revokedAt           DateTime? @map("revoked_at")
-  status              String    @default("active") // 'active' | 'paused' | 'revoked' | 'expired'
+  expiresAt: v.optional(v.number()),
+  revokedAt: v.optional(v.number()),
+  status: v.string(),                       // 'active' | 'paused' | 'revoked' | 'expired' (default "active")
 
   // Audit
-  lastActionAt        DateTime? @map("last_action_at")
-  totalActions        Int       @default(0) @map("total_actions")
+  lastActionAt: v.optional(v.number()),
+  totalActions: v.number(),                 // default: 0
 
-  createdAt           DateTime  @default(now()) @map("created_at")
-  updatedAt           DateTime  @updatedAt @map("updated_at")
+  createdAt: v.number(),
+  updatedAt: v.number(),
+})
+  .index("by_userId", ["userId"])
+  .index("by_status", ["status"]),
 
-  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  actions             DelegatedAction[]
-  reviewQueue         DelegationReview[]
-
-  @@index([userId])
-  @@index([status])
-  @@map("delegation_grant")
-}
-
-model DelegatedAction {
-  id                String   @id @default(cuid())
-  grantId           String   @map("grant_id")
+delegatedActions: defineTable({
+  grantId: v.id("delegationGrants"),
 
   // What was done
-  actionType        String   @map("action_type") // 'campaign_sign' | 'debate_position' | 'message_generate'
-  targetId          String   @map("target_id")   // campaignId or debateId
-  targetTitle       String   @map("target_title")
+  actionType: v.string(),                   // 'campaign_sign' | 'debate_position' | 'message_generate'
+  targetId: v.string(),                     // campaignId or debateId (polymorphic)
+  targetTitle: v.string(),
 
   // Decision reasoning
-  reasoning         String   // agent's reasoning for this action
-  relevanceScore    Float    @map("relevance_score") // how well this matched the policy (0-1)
-  stanceAlignment   Float?   @map("stance_alignment") // alignment with user's stance profile (0-1)
+  reasoning: v.string(),                    // agent's reasoning for this action
+  relevanceScore: v.number(),               // how well this matched the policy (0-1)
+  stanceAlignment: v.optional(v.number()),  // alignment with user's stance profile (0-1)
 
   // Result
-  resultId          String?  @map("result_id")   // CampaignAction.id or DebateArgument.id
-  status            String   @default("completed") // 'completed' | 'reviewed' | 'rejected' | 'failed'
+  resultId: v.optional(v.string()),         // campaignActions._id or debateArguments._id
+  status: v.string(),                       // 'completed' | 'reviewed' | 'rejected' | 'failed' (default "completed")
 
-  createdAt         DateTime @default(now()) @map("created_at")
+  createdAt: v.number(),
+})
+  .index("by_grantId", ["grantId"])
+  .index("by_createdAt", ["createdAt"]),
 
-  grant             DelegationGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
-
-  @@index([grantId])
-  @@index([createdAt])
-  @@map("delegated_action")
-}
-
-model DelegationReview {
-  id                String   @id @default(cuid())
-  grantId           String   @map("grant_id")
-  actionId          String?  @map("action_id")
+delegationReviews: defineTable({
+  grantId: v.id("delegationGrants"),
+  actionId: v.optional(v.id("delegatedActions")),
 
   // What needs review
-  targetId          String   @map("target_id")
-  targetTitle       String   @map("target_title")
-  reasoning         String
-  proofWeight       Float    @map("proof_weight")
+  targetId: v.string(),
+  targetTitle: v.string(),
+  reasoning: v.string(),
+  proofWeight: v.number(),
 
   // User decision
-  decision          String?  // 'approve' | 'reject' | null (pending)
-  decidedAt         DateTime? @map("decided_at")
+  decision: v.optional(v.string()),         // 'approve' | 'reject' | undefined (pending)
+  decidedAt: v.optional(v.number()),
 
-  createdAt         DateTime @default(now()) @map("created_at")
-
-  grant             DelegationGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
-
-  @@index([grantId])
-  @@index([decision])
-  @@map("delegation_review")
-}
+  createdAt: v.number(),
+})
+  .index("by_grantId", ["grantId"])
+  .index("by_decision", ["decision"]),
 ```
 
-### 4.2 CampaignAction Extension
+### 4.2 campaignActions Extension
 
-```prisma
-model CampaignAction {
-  // ... existing fields ...
-  delegated         Boolean  @default(false)
-  delegationGrantId String?  @map("delegation_grant_id")
-}
+The `campaignActions` table in `convex/schema.ts` carries two delegation fields:
+
+```ts
+// inside campaignActions: defineTable({ ... })
+delegated: v.boolean(),                     // default: false
+delegationGrantId: v.optional(v.id("delegationGrants")),
 ```
 
 ---

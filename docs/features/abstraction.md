@@ -314,10 +314,10 @@ interface DeliveryCapability {
 - Representative search: `/api/user/representatives`
 - Message submission: `/api/submit` (calls delivery pipeline)
 
-### Database
-All data structures stored in Prisma schema:
-- `Congressional_Office` table (legacy, being migrated)
-- Future: `Legislative_Office`, `Representative`, `Jurisdiction` tables
+### Data Model
+All data structures live in `convex/schema.ts`:
+- `representatives` table (current) — flattened bioguide + office contact info.
+- Planned: a unified `legislativeOffices`, `representatives`, `jurisdictions` split when the abstraction layer is built out (see §Roadmap).
 
 ## Roadmap
 

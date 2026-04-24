@@ -66,8 +66,8 @@ Rate limiting runs after auth so user-keyed limits can use the authenticated use
 
 ### Storage
 
-- **Development**: In-memory Map (zero config, 5-minute cleanup interval)
-- **Production**: Per-isolate state on CF Workers (resets on isolate recycle — acceptable trade-off)
+- **Development**: In-memory Map (zero config, 5-minute cleanup interval). Also the fallback for dev/test when `REDIS_URL` is unset.
+- **Production**: Redis (via `REDIS_URL`). **Constructor throws at boot** if `NODE_ENV=production` and `REDIS_URL` is unset, unless `RATE_LIMITER_ALLOW_MEMORY=1` explicitly opts in (useful for single-isolate local-prod smoke tests only). Per-isolate memory state was rejected as load-bearing in prod because CF Workers spawn many isolates and memory counters drift. See `src/lib/core/security/rate-limiter.ts:283+`.
 - **Rejection monitoring**: Async webhook alerts when rejection rate exceeds threshold (`REJECTION_THRESHOLD_PERCENT`, default 1%)
 
 ---
@@ -191,19 +191,15 @@ RETURNING count, (count <= $limit) as allowed
 
 ### Schema
 
-```prisma
-model RateLimit {
-  id            String   @id @default(cuid())
-  key           String   // "sha256(ip):metric_name"
-  window_start  DateTime @db.Date
-  count         Int      @default(1)
-  created_at    DateTime @default(now())
-  updated_at    DateTime @updatedAt
-
-  @@unique([key, window_start])
-  @@index([window_start])
-  @@map("rate_limits")
-}
+```ts
+// convex/schema.ts
+rateLimits: defineTable({
+  key: v.string(),              // "sha256(ip):metric_name"
+  windowStart: v.number(),      // day-aligned epoch ms
+  count: v.number(),            // default 1
+})
+  .index("by_key_window", ["key", "windowStart"])   // uniqueness enforced in mutation
+  .index("by_windowStart", ["windowStart"])
 ```
 
 ### Cleanup
@@ -298,7 +294,7 @@ For privacy purposes, approximate rate limiting is actually fine. Document that 
 
 ### Growth (When Needed)
 1. Add `RATE_LIMIT_USE_DB=true` to environment
-2. Run Prisma migration for `rate_limits` table
+2. Add `rateLimits` table to `convex/schema.ts` and deploy (`npx convex deploy --env-file .env.production`)
 3. Add cleanup to daily cron job
 4. Monitor DB connection usage
 

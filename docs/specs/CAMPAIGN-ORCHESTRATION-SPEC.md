@@ -25,11 +25,13 @@
 >   - `src/lib/server/verification-packet.ts` — packet computation only
 >   - `src/routes/org/[slug]/campaigns/` — dashboard / creation / settings
 >   - `src/routes/org/[slug]/campaigns/[id]/report/` — report UI
-> - **Debate event emission is gated.** Stream endpoint at
+> - **Debate event emission is flag-gated.** Stream endpoint at
 >   `/api/org/[slug]/campaigns/[campaignId]/stream/+server.ts:~103`
->   short-circuits debate:* emission when `FEATURES.DEBATE=false`
->   (prod default). With debate off, the stream emits only `packet` +
->   `heartbeat`.
+>   short-circuits debate:* emission when `FEATURES.DEBATE=false`.
+>   Prod default is now `FEATURES.DEBATE=true` (flipped 2026-04), so
+>   `debate:argument` / `debate:position` / `debate:settled` events
+>   flow by default; the short-circuit path only triggers if the flag
+>   is flipped back off locally or in test env.
 > - **Target count max is 50** per campaign — undocumented
 >   validation error thrown in `convex/campaigns.ts:~557`.
 > - **`debateThreshold`** defaults to 50; code does **not** validate

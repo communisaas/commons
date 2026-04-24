@@ -12,9 +12,9 @@ The identity verification system is fully implemented in code (`src/lib/core/ser
 
 > **Legacy Note (Cycle 15, audited 2026-04-23):**
 > - **Provider state:** self.xyz and Didit.me are removed. mDL via the Digital Credentials API is the sole active provider. References to self.xyz / Didit below are historical.
-> - **Stack:** The repo is now Convex-only; the canonical schema lives in `convex/schema.ts`, not `prisma/schema.prisma` (which has been removed). Prisma-style DDL below is pseudocode.
-> - **Sybil field:** The live anti-sybil identifier is `identityCommitment` (set inside the mDL privacy boundary, `src/lib/core/identity/mdl-verification.ts:~1010`; duplicate-check at `convex/users.ts:~820`). `identityHash` exists on `users` but is **indexed non-uniquely** (`convex/schema.ts`, `.index("by_identityHash", ...)`), not `@unique`. Where this ADR promises uniqueness-based sybil resistance via `identityHash`, the real mechanism is `identityCommitment` uniqueness.
-> - **Aspirational fields:** `verification_attempts` / `verification_cooldown_until` described below are not in the Convex schema; no rate-limit enforcement uses them. `identity_fingerprint` exists but is never written or read in production code.
+> - **Stack:** Canonical schema is `convex/schema.ts`. Schema DDL below is illustrative.
+> - **Sybil field:** The live anti-sybil identifier is `identityCommitment` (set inside the mDL privacy boundary, `src/lib/core/identity/mdl-verification.ts:~1010`; duplicate-check at `convex/users.ts:~820`). `identityHash` exists on `users` but is **indexed non-uniquely** (`.index("by_identityHash", ...)`). Uniqueness-based sybil resistance is enforced via `identityCommitment`.
+> - **Aspirational fields:** `verificationAttempts` / `verificationCooldownUntil` described below are not in the Convex schema; no rate-limit enforcement uses them. `identityFingerprint` exists but is never written or read in production code.
 > - **VerificationAudit scope:** The real `verificationAudit` table stores `{userId, verificationMethod, result, errorCode?, ipHash?}`; the broader "age/duplicate/proof reason + SDK metadata" capture described below is not implemented.
 
 ### The Problem
@@ -33,31 +33,48 @@ But the schema only had basic verification fields (`is_verified`, `verification_
 
 ## Decision
 
-Add the following fields and models to `prisma/schema.prisma`:
+Add the following fields and tables to `convex/schema.ts`:
 
-### User Model Additions
+### `users` table additions
 
-```prisma
+```ts
 // === SYBIL RESISTANCE FIELDS (Phase 1A Identity Verification) ===
-identity_hash             String?    @unique @map("identity_hash")
-identity_fingerprint      String?    @map("identity_fingerprint")
-birth_year                Int?       @map("birth_year")
+identityHash: v.optional(v.string()),        // indexed (not unique)
+identityFingerprint: v.optional(v.string()),
+birthYear: v.optional(v.number()),
+identityCommitment: v.optional(v.string()),  // unique — canonical sybil field
 
-// === VERIFICATION RATE LIMITING (Phase 1A) ===
-verification_attempts     Int        @default(0) @map("verification_attempts")
-verification_cooldown_until DateTime? @map("verification_cooldown_until")
+// === VERIFICATION RATE LIMITING (Phase 1A — aspirational) ===
+verificationAttempts: v.optional(v.number()),
+verificationCooldownUntil: v.optional(v.number()),
 ```
 
-### New Models
+With indexes:
+```ts
+.index("by_identityHash", ["identityHash"])
+.index("by_identityCommitment", ["identityCommitment"])
+```
 
-```prisma
-model VerificationAudit {
+### New tables
+
+```ts
+verificationAudit: defineTable({
   // Tracks all verification attempts for fraud detection and compliance
-}
+  userId: v.id("users"),
+  verificationMethod: v.string(),
+  result: v.string(),
+  errorCode: v.optional(v.string()),
+  ipHash: v.optional(v.string()),
+  createdAt: v.number(),
+}).index("by_userId", ["userId"])
 
-model VerificationSession {
-  // Ephemeral sessions for verification flows (originally self.xyz and Didit, now mDL only)
-}
+verificationSessions: defineTable({
+  // Ephemeral sessions for verification flows (mDL)
+  userId: v.id("users"),
+  state: v.string(),
+  nonce: v.string(),
+  expiresAt: v.number(),
+}).index("by_userId", ["userId"]).index("by_state", ["state"])
 ```
 
 ## Privacy-Preserving Design
@@ -171,4 +188,4 @@ Default behavior:
 - ~~`src/routes/api/identity/didit/webhook/+server.ts`~~ - Didit webhook handler (removed — Cycle 15)
 - `src/routes/api/identity/verify-mdl/start/+server.ts` - mDL session start (active)
 - `src/routes/api/identity/verify-mdl/verify/+server.ts` - mDL credential verification (active)
-- `prisma/core.prisma` - Reference schema (fields were already defined here)
+- `convex/schema.ts` - canonical schema

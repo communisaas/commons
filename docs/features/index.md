@@ -29,10 +29,11 @@
 
 **Commons implements**:
 - ✅ Template system (create, customize, moderate)
-- ✅ OAuth authentication (Google, Facebook, Twitter, LinkedIn, Discord)
+- ✅ OAuth authentication (Google, Facebook, Twitter, LinkedIn, Coinbase)
 - ✅ UI for address collection
 - ✅ Semantic search (Google Gemini embeddings)
-- ✅ Congressional email lookup (Hunter.io for template creators)
+- ⚠️ Congressional delivery (code ships; `FEATURES.CONGRESSIONAL=false`)
+- ✅ Decision-maker enrichment (Gemini agent pipeline + Firecrawl, not Hunter.io)
 - ✅ Universal sharing (navigator.share API)
 
 **voter-protocol owns** (Commons just calls as thin client):
@@ -163,7 +164,7 @@ Campaign action SSE stream for real-time verification packet updates.
 
 ### 10. [debates.md](debates.md) - Debate Markets
 
-> STATUS: FEATURE-GATED (`DEBATE = false`)
+> STATUS: LIVE (`DEBATE = true`, flipped 2026-04)
 
 LMSR-based debate markets where verified participants stake on SUPPORT/OPPOSE/AMEND with structured arguments.
 
@@ -181,7 +182,7 @@ LMSR-based debate markets where verified participants stake on SUPPORT/OPPOSE/AM
 
 Google Gemini integration for semantic search and template discovery.
 
-**What it does**: Generate vector embeddings for templates, enable semantic search via pgvector.
+**What it does**: Generate vector embeddings for templates, enable semantic search via Convex `.vectorIndex("by_topicEmbedding", { dimensions: 768 })`.
 
 **Dependencies**: None (standalone service)
 

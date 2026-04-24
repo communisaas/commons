@@ -33,8 +33,8 @@
 > `debate:argument`, `debate:position`, `debate:settled`. Add to
 > "What exists."
 >
-> **Storage layer:** doc occasionally references Prisma polling for
-> debates; active code uses Convex (`serverQuery(api.debates.get)`).
+> **Storage layer:** debate polling reads from Convex via
+> `serverQuery(api.debates.get)`.
 
 ---
 
@@ -96,7 +96,7 @@ export async function GET({ params, locals }) {
   const packet = await computeVerificationPacket(params.campaignId, orgId);
   emitter.send('packet', packet);
 
-  // Poll for changes (CF Workers can't use pg LISTEN/NOTIFY)
+  // Poll for changes (Convex native subscriptions could drive this reactively in future)
   const interval = setInterval(async () => {
     const updated = await computeVerificationPacket(params.campaignId, orgId);
     emitter.send('packet', updated);
@@ -175,8 +175,7 @@ For lower latency: the widget's API endpoint (`/api/campaigns/:id/actions`) coul
 
 ### Cloudflare Workers
 - **No WebSockets** on Pages (requires Durable Objects, which Pages doesn't support)
-- **No pg LISTEN/NOTIFY** — Hyperdrive doesn't proxy notification channels
-- **30s poll** is the pragmatic choice. TransformStream + SSE works within Workers' execution model.
+- **30s poll** is the pragmatic choice. TransformStream + SSE works within Workers' execution model. Convex reactive queries can replace the poll in a later pass.
 - **Request timeout**: CF Workers have a 30s CPU limit per request, but SSE streams use I/O time (not CPU), so long-lived connections work. The stream stays open as long as the client maintains it.
 
 ### Packet computation cost

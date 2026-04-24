@@ -1,32 +1,12 @@
 # Codebase Maintenance Standards
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The "Development
-> Discipline" + "Code Organization" sections remain sound. The
-> database + backup + deploy sections describe the removed Prisma
-> stack. Concrete corrections:
->
-> - **Database:** Convex-only. `npm run db:migrate`, `db:generate`,
->   `db:push`, `db:seed` do not exist in `package.json`. Active seed
->   is `npm run seed` → `npx convex run seed:seedAll`. Schema is
->   `convex/schema.ts`, not Prisma.
-> - **Backups:** `scripts/backup-db.ts` + `scripts/restore-db.ts`
->   were deleted 2026-04-21. Postgres backup GitHub Actions workflows
->   are gone. Use `npx convex export` / Convex dashboard for DR.
->   Pinning-provider migration (Storacha sunset 2026-05-31) is an
->   additional DR task — see
->   `docs/runbooks/DISASTER-RECOVERY.md` (also banner'd).
-> - **Crons:** All 15 jobs live in `convex/crons.ts` (Convex native
->   scheduler). No HTTP `/api/cron/*` endpoints, no GitHub Actions
->   cron workflows. The three cron workflows
->   (`analytics-snapshot.yml`, `bounce-report-processing.yml`,
->   `legislation-crons.yml`) were deleted 2026-03-28.
-> - **Deploy:** Frontend via `npm run build && wrangler pages deploy
->   .svelte-kit/cloudflare`. Backend via
->   `npx convex deploy --env-file .env.production` (the `-y` flag
->   silently fails for prod — always pass `--env-file`).
-> - **Feature flags:** `FEATURES.CONGRESSIONAL=false`,
->   `DEBATE=false`, `PASSKEY=false` — aspirational framing elsewhere
->   in this doc should be read as code-complete-but-gated.
+**Current state (2026-04-23):**
+
+- **Database:** Convex-only. Active seed is `npm run seed` → `npx convex run seed:seedAll`. Schema is `convex/schema.ts`.
+- **Backups:** `npx convex export` / Convex dashboard for DR. Pinning-provider migration (Storacha sunset 2026-05-31) is an additional DR task — see `docs/runbooks/DISASTER-RECOVERY.md`.
+- **Crons:** All ~15 jobs live in `convex/crons.ts` (Convex native scheduler). No HTTP `/api/cron/*` endpoints, no external cron services.
+- **Deploy:** Frontend via `npm run build && wrangler pages deploy .svelte-kit/cloudflare`. Backend via `npx convex deploy --env-file .env.production` (the `-y` flag silently no-ops for prod — always pass `--env-file`).
+- **Feature flags:** `FEATURES.CONGRESSIONAL=false`, `PASSKEY=false`, `DELEGATION=false`, `ENGAGEMENT_METRICS=false`; `DEBATE=true`.
 
 ## Development Discipline
 
@@ -81,9 +61,10 @@ npm run preview  # Manual verification of build
 
 **Database Layer:**
 
-- pgvector (Postgres) with Prisma ORM
-- Migrations managed via `npm run db:migrate`
-- Type generation via `npm run db:generate`
+- Convex (cloud-managed). Schema declared in `convex/schema.ts`.
+- Vector search via Convex `.vectorIndex(...)` with Gemini `text-embedding-004` (768 dims).
+- Schema changes applied by `npx convex dev` / `npx convex deploy --env-file .env.production`. No migration files.
+- Types generated automatically by the Convex CLI into `convex/_generated/`.
 
 **External Integrations:**
 
@@ -104,7 +85,7 @@ src/lib/
 │   ├── templates/          # Template CRUD and delivery
 │   ├── congress/           # US Congressional features
 │   ├── api/                # Single unified API client
-│   └── db.ts               # Database client
+│   └── convex/             # Convex client + auth bridge
 │
 ├── experimental/            # Research & prototypes
 │   ├── political-field/    # Political field analytics

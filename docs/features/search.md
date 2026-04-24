@@ -1,33 +1,27 @@
 # Template Search & Discovery Strategy
 
-**Date**: 2025-01-08
+**Date**: 2025-01-08 (rewritten 2026-04-23)
 **Purpose**: Define how users find templates (semantic search + embeddings)
 **Context**: Template browser needs search across all templates
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Core strategy remains
-> directionally valid, but specific backend claims are pre-Convex:
+> **Current architecture (2026-04-23).** Live search uses Convex
+> `.searchIndex()` (full-text) and `.vectorIndex("by_*", { dimensions: 768 })`.
+> Embedding model is Gemini `text-embedding-004`, 768 dimensions
+> (`convex/intelligence.ts:~206-233`). Query embedding is generated
+> **server-side**; vector similarity runs on Convex. The client calls
+> `/api/templates/search`; it does not compute embeddings. Client IndexedDB
+> cache (`src/lib/core/search/cache.ts`) holds results only.
 >
-> - **Not pgvector.** Live search uses Convex `.searchIndex()` (full-text)
->   and `.vectorIndex("by_*", { dimensions: 768 })`. Zero pgvector
->   references in `convex/schema.ts`. HNSW migration pseudocode below is
->   obsolete.
-> - **Embedding model:** Gemini **`text-embedding-004`, 768 dimensions**
->   (`convex/intelligence.ts:~206-233`). The ADR-011 1024-dim Voyage AI
->   target was never shipped.
-> - **Execution boundary:** Query embedding is generated **server-side**;
->   vector similarity runs on Convex. The client calls `/api/templates/search`;
->   it does not compute embeddings. Client IndexedDB cache
->   (`src/lib/core/search/cache.ts`) holds results only.
-> - **Index coverage:** templates have `by_topicEmbedding` +
->   `by_locationEmbedding`; intelligence has `by_embedding`; bills have
->   `by_topicEmbedding`. **Decision-makers have only a `.searchIndex()`
->   (keyword), no vector index.**
-> - **Schema:** `domain` + `topics` are primary; `category` is deprecated
->   but retained on the record.
-> - **Embedding generation is rate-limited** (20/hr authenticated) via
->   `src/lib/server/ai/llm-cost-protection.ts`.
-> - **Code samples** below using `await prisma.template.create(...)`
->   describe removed infrastructure — substitute Convex mutations.
+> **Index coverage:** templates have `by_topicEmbedding` +
+> `by_locationEmbedding`; intelligence has `by_embedding`; bills have
+> `by_topicEmbedding`. Decision-makers have only a `.searchIndex()`
+> (keyword), no vector index.
+>
+> **Schema:** `domain` + `topics` are primary; `category` is deprecated
+> but retained on the record.
+>
+> **Embedding generation is rate-limited** (20/hr authenticated) via
+> `src/lib/server/ai/llm-cost-protection.ts`.
 
 ---
 
@@ -57,9 +51,9 @@ They might search for:
 ```
 User query: "my landlord won't fix heating"
     ↓
-Text embedding (Gemini Embedding API - FREE)
+Text embedding (Gemini text-embedding-004, 768 dim)
     ↓
-Vector similarity search (pgvector)
+Vector similarity search (Convex .vectorIndex)
     ↓
 Matching templates:
   1. "Report housing code violations" (0.89 similarity)
@@ -69,16 +63,15 @@ Matching templates:
 
 ---
 
-## Implementation Plan (Already Documented)
+## Implementation Plan
 
-### Existing Implementation (See: `docs/GOOGLE-GEMINI-EMBEDDING-INTEGRATION.md`):
-1. ✅ Gemini Embedding API integration (`gemini-embedding-001`)
-2. ✅ pgvector extension enabled
-3. ✅ `template_embeddings` table with vector storage
-4. ✅ Scripts for generating/migrating embeddings:
-   - `scripts/generate-template-embeddings.ts`
-   - `scripts/migrate-template-locations.ts`
-   - `scripts/verify-migration.ts`
+### Existing Implementation
+1. Gemini Embedding API integration (`text-embedding-004`, 768 dim)
+2. Convex `.vectorIndex("by_topicEmbedding", { dimensions: 768 })` on
+   `templates`
+3. Convex `.vectorIndex("by_locationEmbedding", { dimensions: 768 })` on
+   `templates`
+4. Backfill action in `convex/templates.ts` for embedding regeneration
 
 ### What's Embedded:
 ```typescript
@@ -86,13 +79,14 @@ Matching templates:
 const embeddingText = `
   ${template.title}
   ${template.description}
-  ${template.category}
+  ${template.domain}         // primary
+  ${template.topics.join(' ')}
   ${template.subject}
   ${template.message.substring(0, 500)} // First 500 chars
 `;
 ```
 
-### Search API Endpoint (To Be Implemented):
+### Search API Endpoint:
 ```typescript
 // POST /api/templates/search
 {
@@ -113,13 +107,17 @@ const embeddingText = `
 }
 ```
 
+The handler generates a query embedding server-side via Gemini, then
+calls a Convex query that uses `.vectorSearch("templates",
+"by_topicEmbedding", ...)` to retrieve nearest neighbours.
+
 ---
 
 ## Search Strategy (Multi-Tier)
 
 ### Tier 1: Semantic Search (Primary)
 **Use case**: Natural language queries, broad topics
-**How**: Text embeddings → Vector similarity search
+**How**: Text embeddings → Convex vector similarity search
 **Examples**:
 - "my landlord won't fix heating" → Housing code violations templates
 - "internet privacy" → Data collection, net neutrality templates
@@ -131,21 +129,21 @@ const embeddingText = `
 - Works across categories
 
 **Limitations**:
-- Computationally expensive (vector operations)
 - Requires embedding generation for all templates
+- Bounded by the Convex vector index capacity
 
 ---
 
 ### Tier 2: Full-Text Search (Fallback)
 **Use case**: Specific keywords, exact matches
-**How**: PostgreSQL `tsvector` with `ts_rank`
+**How**: Convex `.searchIndex("by_text", { searchField: "...", filterFields: [...] })`
 **Examples**:
 - "Delta Airlines" → Exact company name match
 - "CWC_MESSAGE" → Message type filter
 - "California" → Location-specific templates
 
 **Advantages**:
-- Fast (PostgreSQL built-in)
+- Fast (native Convex full-text)
 - Exact keyword matching
 - No embedding overhead
 
@@ -157,7 +155,7 @@ const embeddingText = `
 
 ### Tier 3: Category Filtering (Browsing)
 **Use case**: Exploratory browsing
-**How**: Fixed category taxonomy
+**How**: Fixed `domain` + `topics` taxonomy (`category` is deprecated)
 **Examples**:
 - "Consumer Rights" → All consumer-related templates
 - "Environment" → Climate, pollution, conservation
@@ -169,7 +167,7 @@ const embeddingText = `
 - Clear navigation
 
 **Limitations**:
-- Templates can only be in one category
+- Templates usually pick one primary `domain`
 - Doesn't help users who don't know what they're looking for
 
 ---
@@ -254,36 +252,39 @@ Categories:
 
 ### On Template Creation:
 ```typescript
-// When template creator publishes template
-async function publishTemplate(template) {
-  // 1. Save template to database
-  const savedTemplate = await prisma.template.create({ data: template });
+// convex/templates.ts — inside a mutation
+const templateId = await ctx.db.insert("templates", {
+  ...templateData,
+  // topicEmbedding and locationEmbedding are written after generation
+});
 
-  // 2. Generate embedding
-  const embeddingText = buildEmbeddingText(savedTemplate);
-  const embedding = await generateEmbedding(embeddingText); // Gemini API
-
-  // 3. Store embedding
-  await prisma.templateEmbedding.create({
-    data: {
-      templateId: savedTemplate.id,
-      embedding: embedding,
-      embeddingText: embeddingText
-    }
-  });
-
-  return savedTemplate;
-}
+// Schedule an action to generate + write embeddings
+await ctx.scheduler.runAfter(0, internal.templates.attachEmbeddings, { templateId });
 ```
 
-### Bulk Migration (Existing Templates):
+```typescript
+// convex/templates.ts — action
+export const attachEmbeddings = internalAction({
+  args: { templateId: v.id("templates") },
+  handler: async (ctx, { templateId }) => {
+    const template = await ctx.runQuery(internal.templates.getByIdInternal, { templateId });
+    const topicEmbedding = await generateEmbedding(buildTopicText(template));
+    const locationEmbedding = await generateEmbedding(buildLocationText(template));
+    await ctx.runMutation(internal.templates.setEmbeddings, {
+      templateId, topicEmbedding, locationEmbedding
+    });
+  }
+});
+```
+
+### Bulk backfill:
+
 ```bash
-# Generate embeddings for all existing templates
-npm run db:generate-embeddings
-
-# Verify embeddings
-npm run db:verify-embeddings
+# Run against your dev deployment:
+npx convex run templates:regenerateAllEmbeddings
 ```
+
+The bulk backfill is a Convex action in `convex/templates.ts` that iterates every template missing an embedding and calls Gemini `text-embedding-004`.
 
 ---
 
@@ -292,7 +293,7 @@ npm run db:verify-embeddings
 ### FREE Tier (Google AI Studio):
 - **Requests**: Unlimited (rate-limited to 1,500 requests/minute)
 - **Input tokens**: FREE
-- **Model**: `gemini-embedding-001`
+- **Model**: `text-embedding-004`
 
 ### Paid Tier (Google Cloud Vertex AI):
 - **Cost**: $0.00001/1,000 characters (0.001¢/1K chars)
@@ -302,7 +303,7 @@ npm run db:verify-embeddings
 ### Compared to Alternatives:
 - **OpenAI `text-embedding-3-small`**: $0.02/1M tokens ($0.0002/1K chars) - 20x more expensive
 - **Cohere Embed v3**: $0.10/1M tokens ($0.001/1K chars) - 100x more expensive
-- **Gemini Embedding**: $0.00001/1K chars - **CHEAPEST**
+- **Gemini `text-embedding-004`**: $0.00001/1K chars - **CHEAPEST**
 
 **Verdict**: Gemini Embedding API is FREE (Google AI Studio) and cheapest if we scale to paid tier.
 
@@ -311,15 +312,15 @@ npm run db:verify-embeddings
 ## Search Performance
 
 ### Query Latency Targets:
-- **Semantic search**: < 200ms (vector similarity in PostgreSQL)
-- **Full-text search**: < 50ms (PostgreSQL `tsvector`)
-- **Category filtering**: < 20ms (indexed lookup)
+- **Semantic search**: < 200ms (Convex `.vectorIndex` similarity)
+- **Full-text search**: < 50ms (Convex `.searchIndex`)
+- **Category filtering**: < 20ms (Convex indexed lookup)
 
 ### Optimization Strategies:
-1. **Index vectors** - pgvector `ivfflat` or `hnsw` index
-2. **Cache popular queries** - Redis for top 100 searches
-3. **Pre-compute embeddings** - Never generate embeddings on search
-4. **Pagination** - Return 10 results at a time
+1. **Native Convex indexes** — `.vectorIndex` for semantic, `.searchIndex` for keyword
+2. **Cache popular queries** — client-side IndexedDB results cache for top queries
+3. **Pre-compute embeddings** — never generate embeddings on search
+4. **Pagination** — return 10 results at a time
 
 ---
 
@@ -361,17 +362,17 @@ const embedding = await generateEmbedding(query, language: 'es');
 
 ### Phase 1 (Week 1-2): Basic Semantic Search
 - [x] Gemini Embedding API integration
-- [x] `template_embeddings` table + pgvector
-- [x] Embedding generation scripts
-- [ ] Search API endpoint (`/api/templates/search`)
-- [ ] Frontend search bar component
-- [ ] Results ranking algorithm
+- [x] `templates` collection with Convex `.vectorIndex("by_topicEmbedding", { dimensions: 768 })`
+- [x] Embedding generation action (on template create + bulk backfill)
+- [x] Search API endpoint (`/api/templates/search`)
+- [x] Frontend search bar component
+- [x] Results ranking algorithm
 
 ### Phase 2 (Week 3-4): Hybrid Search
-- [ ] Full-text search fallback
-- [ ] Deduplication logic
-- [ ] Category filtering
-- [ ] Search performance optimization (indexes)
+- [x] Full-text search fallback (Convex `.searchIndex`)
+- [x] Deduplication logic
+- [x] Category filtering
+- [x] Search performance optimization (Convex-native indexes)
 
 ### Phase 3 (Month 2): Advanced Features
 - [ ] Personalized search (user history)
@@ -384,16 +385,16 @@ const embedding = await generateEmbedding(query, language: 'es');
 ## The Bottom Line
 
 ### Current State:
-- ✅ Embeddings infrastructure ready (Gemini API + pgvector)
-- ✅ Scripts for generating embeddings
-- ⬜ Search API endpoint (needs implementation)
-- ⬜ Frontend search UI (needs implementation)
+- Embeddings infrastructure live (Gemini API + Convex `.vectorIndex`)
+- Embedding generation scheduled on create + backfill action available
+- Search API endpoint live (`/api/templates/search`)
+- Frontend search UI live (homepage search bar)
 
 ### Next Steps:
-1. **Implement search API** (`/api/templates/search`)
-2. **Build search UI** (homepage search bar)
-3. **Test with real queries** ("landlord heating", "internet privacy", etc.)
-4. **Optimize ranking** (similarity + popularity + recency)
+1. **Iterate on ranking** (similarity + popularity + recency)
+2. **Add personalization** (user history signal)
+3. **Expose trending boost** (24h activity)
+4. **Analytics** — log popular queries for tuning
 
 ### Cost:
 - **FREE** (Google AI Studio Gemini Embedding API)
@@ -401,9 +402,8 @@ const embedding = await generateEmbedding(query, language: 'es');
 
 ### Performance:
 - **Target**: < 200ms for semantic search
-- **Optimization**: pgvector indexes + caching
+- **Native Convex vector + search indexes**
 
 ---
 
-**Status**: Infrastructure ready, implementation in progress.
-**See**: `docs/GOOGLE-GEMINI-EMBEDDING-INTEGRATION.md` for technical details.
+**Status**: Infrastructure live, iterating on ranking + personalization.

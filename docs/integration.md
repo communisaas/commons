@@ -8,7 +8,7 @@
 > - **ReputationAgent proxy:** the `/api/expertise/verify` SvelteKit proxy described below does not exist in the repo; treat that whole section as aspirational infrastructure, not shipped glue.
 > - **TEE enclave:** not deployed. Witness encryption is scaffolded on the client; `LocalConstituentResolver` is the only active resolver. See `docs/architecture/tee-systems.md`.
 > - **Identity providers:** self.xyz / Didit retired Cycle 15. Legacy enum values remain for stored-record compatibility but no new intake goes through them.
-> - **Convex-only:** Prisma / PostgreSQL / Supabase have been removed. Any Prisma-era DDL here is pseudocode.
+> - **Data model:** canonical schema is `convex/schema.ts`. Any DDL here is illustrative.
 > - **`encryptedMessage`:** accepted by the schema but dropped on insert in `convex/submissions.ts`; do not rely on it being stored until TEE delivery ships.
 
 ---

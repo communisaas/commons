@@ -6,39 +6,26 @@
 > **Depends on**: Intelligence Loop (INTELLIGENCE-LOOP-PLAN.md), Accountability Receipts (ACCOUNTABILITY-RECEIPT.md)
 > **Builds on**: All 6 phases of the intelligence loop (implemented 2026-03-17/18)
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Relationship-scoped
-> architecture is shipped; the **Prisma/PostgreSQL framing is
-> obsolete**. Concrete corrections:
+> **Audit notes (2026-04-23).**
 >
-> - **Schema is Convex.** The `Representative` / `OrgRepFollow` /
->   `OrgBillWatch` Prisma blocks (~lines 125-298) describe a database
->   that doesn't exist. Live tables: `decisionMakers`
+> - **Schema lives in Convex.** Live tables: `decisionMakers`
 >   (`convex/schema.ts:~1771`), `orgDmFollows` (~1854),
 >   `orgBillWatches` (~1867), `accountabilityReceipts` (~1692),
->   `orgIssueDomains` (~1751). FKs are `decisionMakerId`,
->   not `representativeId`.
-> - **Search is Convex-native.** The `searchBills()` sample using
->   `tsvector` / `to_tsquery` / `ts_rank` / Prisma `$queryRaw` (~lines
->   336-364) is fiction. Live code does
+>   `orgIssueDomains` (~1751). FKs are `decisionMakerId`.
+> - **Search is Convex-native.** The `searchBills()` sample uses
 >   `ctx.db.query("bills").withSearchIndex("search_bills", q =>
 >   q.search("title", args.q))` (`convex/legislation.ts`).
-> - **Embeddings are Gemini `text-embedding-004`** (768-dim), not a
->   non-specified provider. No Voyage AI.
-> - **"Representative" narrative is legacy.** The `Representative` →
->   `DecisionMaker` migration (Wave DM-1/2 in the implementation log)
->   renamed the table. Outside the log, the main narrative still
->   reads as if `Representative` is the canonical entity — rewrite
->   to `DecisionMaker` where it refers to the current table.
-> - **API route paths are post-migration.** Routes under
->   `/api/org/[slug]/reps/*` should be `/api/org/[slug]/decision-makers/*`
->   (or whatever DM-namespaced form shipped) — verify against
->   `src/routes/` before linking.
+> - **Embeddings are Gemini `text-embedding-004`** (768-dim). No Voyage AI.
+> - **Canonical entity is `DecisionMaker`** — the universal target unified
+>   in Wave DM-1/2 (see implementation log). "Representative" appears only
+>   in historical context.
+> - **API route paths are DM-namespaced.** Routes live at
+>   `/api/org/[slug]/decision-makers/*`.
 > - **Scorecard compute is a stub** (`convex/legislation.ts:~1206` /
 >   `computeScorecards` — `{ computed: 0, skipped: 0 }` log-only).
->   "Accountability score across 8 bills is 34/100" example framing
->   should read as aspirational, not live.
-> - **Scroll L2 receipt anchor is Phase 3**, unmentioned below. See
->   ACCOUNTABILITY-RECEIPT banner for shipped vs. planned split.
+>   Accountability score examples are aspirational.
+> - **Scroll L2 receipt anchor is Phase 3.** See ACCOUNTABILITY-RECEIPT
+>   for shipped vs. planned split.
 
 ## The Problem
 
@@ -154,182 +141,182 @@ Today, `LegislativeAction.decisionMakerId` is a nullable string pointing to `Cam
 
 ## Schema
 
-### New Model: Representative
+### DecisionMaker Table (Universal)
 
-```prisma
-model Representative {
-  id           String   @id @default(cuid())
+Historical context: the original design called this `Representative`. Wave DM-1/2 generalized it to `decisionMakers` — a universal accountability target (legislators, executives, agency officials, board members).
 
-  /// Congress.gov canonical identifier (e.g., "B001230")
-  bioguideId   String   @unique @map("bioguide_id")
+```typescript
+// convex/schema.ts
+decisionMakers: defineTable({
+  // Canonical external identifier (e.g., Congress.gov bioguideId "B001230",
+  // OpenStates ID, UK Parliament member ID)
+  externalId: v.string(),
+  externalSystem: v.string(), // "bioguide" | "openstates" | "parliament_uk" | ...
 
-  /// Display name (official Congress.gov listing)
-  name         String
-  firstName    String?  @map("first_name")
-  lastName     String   @map("last_name")
+  // Display name
+  name: v.string(),
+  firstName: v.optional(v.string()),
+  lastName: v.string(),
 
-  /// Political metadata
-  party        String?  // "D" | "R" | "I" | "L" | null
-  state        String?  // Two-letter state code
-  district     String?  // House district number (null for senators)
-  chamber      String?  // "house" | "senate"
+  // Political metadata
+  party: v.optional(v.string()),
+  jurisdiction: v.optional(v.string()), // state code, constituency, etc.
+  district: v.optional(v.string()),
+  title: v.optional(v.string()), // "senator", "representative", "mayor", "director"
 
-  /// Contact
-  phone        String?
-  email        String?
-  websiteUrl   String?  @map("website_url")
-  officeAddress String? @map("office_address")
-  photoUrl     String?  @map("photo_url")
+  // Contact
+  phone: v.optional(v.string()),
+  email: v.optional(v.string()),
+  websiteUrl: v.optional(v.string()),
+  officeAddress: v.optional(v.string()),
+  photoUrl: v.optional(v.string()),
 
-  /// Status
-  inOffice     Boolean  @default(true) @map("in_office")
-  termStart    DateTime? @map("term_start")
-  termEnd      DateTime? @map("term_end")
+  // Status
+  active: v.boolean(),
+  termStart: v.optional(v.number()),
+  termEnd: v.optional(v.number()),
 
-  /// Sync metadata
-  lastSyncedAt DateTime? @map("last_synced_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
-
-  /// Relations
-  actions      LegislativeAction[]
-  receipts     AccountabilityReceipt[]
-  followers    OrgRepFollow[]
-
-  @@index([state, district])
-  @@index([party])
-  @@index([chamber])
-  @@index([lastName])
-  @@map("representative")
-}
+  // Sync metadata
+  lastSyncedAt: v.optional(v.number()),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+})
+  .index("by_externalId", ["externalSystem", "externalId"])
+  .index("by_jurisdiction_district", ["jurisdiction", "district"])
+  .index("by_party", ["party"])
+  .index("by_lastName", ["lastName"]),
 ```
 
-**Why bioguideId as unique key:** Congress.gov assigns a Biographical Directory ID to every member who has ever served. It's stable across terms, name changes, and party switches. It's already used as `LegislativeAction.externalId` and `AccountabilityReceipt.bioguideId`. This is the canonical identity.
+**Why external identifier as unique key:** Congress.gov assigns a Biographical Directory ID (bioguide) to every member who has ever served. Analogous stable IDs exist for OpenStates, UK Parliament, Canadian Parl, etc. The `(externalSystem, externalId)` composite is unique and stable across terms, name changes, and party switches.
 
-**Why not merge with InternationalRepresentative:** Different identity systems (bioguide vs UK Parliament member IDs vs Canadian Parl IDs), different metadata (constituencies vs districts), different data sources. A shared base type adds complexity without value until cross-border accountability is real. Keep them separate; unify at the query layer when needed.
+**Why a universal table:** Different identity systems (bioguide vs UK Parliament member IDs vs Canadian Parl IDs) share enough structure that a single table with a discriminator column beats per-country tables. Cross-border accountability falls out of this.
 
-### New Model: OrgRepFollow
+### OrgDMFollow Table
 
-```prisma
-model OrgRepFollow {
-  id               String   @id @default(cuid())
-  orgId            String   @map("org_id")
-  representativeId String   @map("representative_id")
+```typescript
+// convex/schema.ts
+orgDmFollows: defineTable({
+  orgId: v.id("organizations"),
+  decisionMakerId: v.id("decisionMakers"),
 
-  /// How this follow originated
-  reason           String   @default("manual") // "manual" | "campaign_delivery" | "bill_sponsor" | "alert"
+  // How this follow originated
+  reason: v.union(
+    v.literal("manual"),
+    v.literal("campaign_delivery"),
+    v.literal("bill_sponsor"),
+    v.literal("alert"),
+  ),
 
-  /// Whether to alert on new activity
-  alertsEnabled    Boolean  @default(true) @map("alerts_enabled")
+  // Whether to alert on new activity
+  alertsEnabled: v.boolean(),
 
-  /// Optional note from org (e.g., "key vote on water bill")
-  note             String?
+  // Optional note from org (e.g., "key vote on water bill")
+  note: v.optional(v.string()),
 
-  followedAt       DateTime @default(now()) @map("followed_at")
-
-  org              Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  representative   Representative @relation(fields: [representativeId], references: [id], onDelete: Cascade)
-
-  @@unique([orgId, representativeId])
-  @@index([orgId])
-  @@index([representativeId])
-  @@map("org_rep_follow")
-}
+  followedAt: v.number(),
+})
+  .index("by_org_dm", ["orgId", "decisionMakerId"]) // unique via mutation guard
+  .index("by_orgId", ["orgId"])
+  .index("by_decisionMakerId", ["decisionMakerId"]),
 ```
+
+Uniqueness is enforced in the mutation (check-then-insert inside a single Convex mutation — atomic) rather than via DB constraint.
 
 **Auto-follow triggers:**
 - When a `CampaignDelivery` is created targeting a representative, auto-create `OrgRepFollow` with `reason: 'campaign_delivery'`
 - When an org acts on a `LegislativeAlert`, auto-follow the bill's sponsors with `reason: 'bill_sponsor'`
 - Manual follow from the representative directory
 
-### New Model: OrgBillWatch
+### OrgBillWatch Table
 
-```prisma
-model OrgBillWatch {
-  id        String   @id @default(cuid())
-  orgId     String   @map("org_id")
-  billId    String   @map("bill_id")
+```typescript
+// convex/schema.ts
+orgBillWatches: defineTable({
+  orgId: v.id("organizations"),
+  billId: v.id("bills"),
 
-  /// How this watch originated
-  reason    String   @default("manual") // "manual" | "alert" | "campaign"
+  // How this watch originated
+  reason: v.union(
+    v.literal("manual"),
+    v.literal("alert"),
+    v.literal("campaign"),
+  ),
 
-  /// Org's declared position on this bill
-  position  String?  // "support" | "oppose" | null
+  // Org's declared position on this bill
+  position: v.optional(v.union(v.literal("support"), v.literal("oppose"))),
 
-  addedBy   String?  @map("added_by") // userId who added it
+  addedBy: v.optional(v.id("users")),
 
-  createdAt DateTime @default(now()) @map("created_at")
-
-  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  bill      Bill         @relation(fields: [billId], references: [id], onDelete: Cascade)
-
-  @@unique([orgId, billId])
-  @@index([orgId])
-  @@map("org_bill_watch")
-}
+  createdAt: v.number(),
+})
+  .index("by_org_bill", ["orgId", "billId"]) // unique via mutation guard
+  .index("by_orgId", ["orgId"]),
 ```
 
 ### Schema Modifications
 
-**Bill — add full-text search:**
+**`bills` — full-text search via Convex search index:**
 
-```sql
--- Migration: add tsvector column for full-text search
-ALTER TABLE "bill"
-  ADD COLUMN IF NOT EXISTS fts tsvector
-  GENERATED ALWAYS AS (
-    to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, ''))
-  ) STORED;
-
-CREATE INDEX IF NOT EXISTS bill_fts_gin ON bill USING gin(fts);
-```
-
-**LegislativeAction — add representative FK:**
-
-```prisma
-model LegislativeAction {
+```typescript
+// convex/schema.ts
+bills: defineTable({
   // ... existing fields ...
-
-  /// NEW: canonical FK to Representative (replaces string-based matching)
-  representativeId String? @map("representative_id")
-  representative   Representative? @relation(fields: [representativeId], references: [id])
-
-  // decisionMakerId remains for backward compat (delivery linkage)
-  // externalId remains as source system ID (bioguide, openstates, etc.)
-}
+  title: v.string(),
+  summary: v.optional(v.string()),
+  // ...
+})
+  // ... existing indexes ...
+  .searchIndex("search_bills", {
+    searchField: "title",
+    filterFields: ["jurisdiction", "status"],
+  }),
 ```
 
-**AccountabilityReceipt — add representative FK:**
+No tsvector / GIN — Convex provides a native search index with filter fields.
 
-```prisma
-model AccountabilityReceipt {
+**`legislativeActions` — decisionMaker link:**
+
+```typescript
+// convex/schema.ts
+legislativeActions: defineTable({
   // ... existing fields ...
-
-  /// NEW: canonical FK to Representative
-  representativeId String? @map("representative_id")
-  representative   Representative? @relation(fields: [representativeId], references: [id])
-
-  // bioguideId + dmName remain as denormalized copies for display/query
-}
+  decisionMakerId: v.optional(v.id("decisionMakers")), // canonical link
+  externalId: v.optional(v.string()),                   // source system ID (bioguide, openstates, etc.)
+  // ...
+})
+  .index("by_decisionMakerId", ["decisionMakerId"])
+  .index("by_billId", ["billId"])
+  .index("by_occurredAt", ["occurredAt"]),
 ```
 
-**Organization — add public profile fields:**
+**`accountabilityReceipts` — decisionMaker link:**
 
-```prisma
-model Organization {
+```typescript
+// convex/schema.ts
+accountabilityReceipts: defineTable({
   // ... existing fields ...
-
-  /// NEW: public profile for org discovery
-  mission         String?  // One-line mission statement
-  websiteUrl      String?  @map("website_url")
-  logoUrl         String?  @map("logo_url")
-  isPublic        Boolean  @default(false) @map("is_public") // opt-in to directory listing
-
-  /// Relations
-  repFollows      OrgRepFollow[]
-  billWatches     OrgBillWatch[]
-}
+  decisionMakerId: v.optional(v.id("decisionMakers")),
+  // dmName is retained as a denormalized display copy
+  // ...
+})
+  .index("by_decisionMakerId", ["decisionMakerId"]),
 ```
+
+**`organizations` — public profile fields:**
+
+```typescript
+// convex/schema.ts (additive)
+organizations: defineTable({
+  // ... existing fields ...
+  mission: v.optional(v.string()),
+  websiteUrl: v.optional(v.string()),
+  logoUrl: v.optional(v.string()),
+  isPublic: v.boolean(), // opt-in to directory listing
+  // ...
+}),
+```
+
+Relations are not declared in Convex schema — joins happen in queries via `ctx.db.query("orgDmFollows").withIndex("by_orgId", q => q.eq("orgId", orgId))`.
 
 ---
 
@@ -348,58 +335,68 @@ Returns: bioguideId, name, party, state, district, terms, depiction (photo URL).
 **Sync strategy:**
 - Run after bill ingestion in the legislation-sync cron
 - Paginate through all current members (≈535 House + 100 Senate)
-- Upsert `Representative` rows by bioguideId
-- Mark `inOffice = false` for members not in the current response
+- Upsert `decisionMakers` rows by `(externalSystem: "bioguide", externalId)` — check-then-insert/patch inside a Convex mutation
+- Mark `active = false` for members not in the current response
 - Extract firstName/lastName from the official name field
 - Store term dates, photo URL, party from the most recent term
 
 **Backfill from existing data:**
-- Query distinct `externalId` + `name` from `LegislativeAction` where `externalId IS NOT NULL`
-- Query distinct `externalId` from `Bill.sponsors` JSON
-- Create `Representative` rows for any bioguide IDs not yet in the table
-- Update `LegislativeAction.representativeId` and `AccountabilityReceipt.representativeId` via:
+- Query distinct `externalId` + `name` from `legislativeActions` where `externalId` is present
+- Query distinct `externalId` from `bills.sponsors` array
+- Insert `decisionMakers` for any bioguide IDs not yet in the table
+- Update `legislativeActions.decisionMakerId` and `accountabilityReceipts.decisionMakerId` in a Convex mutation:
 
-```sql
-UPDATE legislative_action la
-SET representative_id = r.id
-FROM representative r
-WHERE la.external_id = r.bioguide_id
-AND la.representative_id IS NULL;
+```typescript
+// convex/legislation.ts (backfill mutation)
+export const backfillDecisionMakerIds = internalMutation({
+  handler: async (ctx) => {
+    const actions = await ctx.db
+      .query("legislativeActions")
+      .filter(q => q.eq(q.field("decisionMakerId"), undefined))
+      .collect();
+    for (const a of actions) {
+      if (!a.externalId) continue;
+      const dm = await ctx.db
+        .query("decisionMakers")
+        .withIndex("by_externalId", q =>
+          q.eq("externalSystem", "bioguide").eq("externalId", a.externalId!))
+        .unique();
+      if (dm) await ctx.db.patch(a._id, { decisionMakerId: dm._id });
+    }
+  },
+});
 ```
 
 ### 2. Bill Full-Text Search
 
-PostgreSQL tsvector with ranking:
+Convex search index with filter fields (ranking is handled by Convex's native search):
 
 ```typescript
-async function searchBills(query: string, opts: {
-  jurisdiction?: string;
-  status?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<{ bills: Bill[]; total: number }> {
-  const tsQuery = query
-    .trim()
-    .split(/\s+/)
-    .map(w => `${w}:*`)  // prefix matching
-    .join(' & ');
-
-  return db.$queryRaw`
-    SELECT b.*, ts_rank(b.fts, to_tsquery('english', ${tsQuery})) AS rank
-    FROM bill b
-    WHERE b.fts @@ to_tsquery('english', ${tsQuery})
-    ${opts.jurisdiction ? Prisma.sql`AND b.jurisdiction = ${opts.jurisdiction}` : Prisma.empty}
-    ${opts.status ? Prisma.sql`AND b.status = ${opts.status}` : Prisma.empty}
-    ORDER BY rank DESC, b.status_date DESC
-    LIMIT ${opts.limit ?? 20}
-    OFFSET ${opts.offset ?? 0}
-  `;
-}
+// convex/legislation.ts
+export const searchBills = query({
+  args: {
+    q: v.string(),
+    jurisdiction: v.optional(v.string()),
+    status: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    let q = ctx.db
+      .query("bills")
+      .withSearchIndex("search_bills", (builder) => {
+        let b = builder.search("title", args.q);
+        if (args.jurisdiction) b = b.eq("jurisdiction", args.jurisdiction);
+        if (args.status) b = b.eq("status", args.status);
+        return b;
+      });
+    return await q.take(args.limit ?? 20);
+  },
+});
 ```
 
-**Why tsvector over embedding search for bill discovery:** Embedding search is great for relevance scoring (does this bill match the org's mission?). But when an org types "HR 4521" or "clean water infrastructure," they want exact keyword matching with ranking, not semantic similarity. tsvector handles this correctly; embedding search would return tangentially related bills.
+**Why Convex search over embedding search for bill discovery:** Embedding search is great for relevance scoring (does this bill match the org's mission?). But when an org types "HR 4521" or "clean water infrastructure," they want exact keyword matching with ranking, not semantic similarity. Convex search handles keyword matching with filter-field constraints; embedding search would return tangentially related bills.
 
-Both are available — tsvector for keyword search, embedding for topic browse.
+Both are available — Convex search for keyword discovery, Convex vector index for topic browse.
 
 ### 3. Representative Activity Feed
 
@@ -470,31 +467,32 @@ function computeRepRelevance(rep: Representative, org: {
 When an org views a bill, surface (without attribution) how many other orgs in their network are watching the same bill:
 
 ```typescript
-async function getBillNetworkSignal(billId: string, orgId: string): Promise<{
-  networkOrgsWatching: number;
-  totalOrgsWatching: number;  // across all Commons orgs
-  networkProofWeight: number; // max proof weight across network receipts for this bill
-}> {
-  // Get org's network member IDs
-  const networkOrgIds = await getNetworkOrgIds(orgId);
+// convex/legislation.ts (query)
+export const getBillNetworkSignal = query({
+  args: { billId: v.id("bills"), orgId: v.id("organizations") },
+  handler: async (ctx, { billId, orgId }) => {
+    const networkOrgIds = await getNetworkOrgIds(ctx, orgId);
+    const networkOrgIdSet = new Set(networkOrgIds);
 
-  const [networkCount, totalCount, maxWeight] = await Promise.all([
-    db.orgBillWatch.count({
-      where: { billId, orgId: { in: networkOrgIds } }
-    }),
-    db.orgBillWatch.count({ where: { billId } }),
-    db.accountabilityReceipt.aggregate({
-      where: { billId, orgId: { in: networkOrgIds } },
-      _max: { proofWeight: true }
-    })
-  ]);
+    const allWatches = await ctx.db
+      .query("orgBillWatches")
+      .withIndex("by_org_bill", (q) => q.eq("billId", billId))
+      .collect();
 
-  return {
-    networkOrgsWatching: networkCount,
-    totalOrgsWatching: totalCount,
-    networkProofWeight: maxWeight._max.proofWeight ?? 0
-  };
-}
+    const networkCount = allWatches.filter((w) => networkOrgIdSet.has(w.orgId)).length;
+    const totalCount = allWatches.length;
+
+    const receipts = await ctx.db
+      .query("accountabilityReceipts")
+      .withIndex("by_billId", (q) => q.eq("billId", billId))
+      .collect();
+    const networkProofWeight = receipts
+      .filter((r) => networkOrgIdSet.has(r.orgId))
+      .reduce((max, r) => Math.max(max, r.proofWeight ?? 0), 0);
+
+    return { networkOrgsWatching: networkCount, totalOrgsWatching: totalCount, networkProofWeight };
+  },
+});
 ```
 
 **Privacy:** Only counts are shown. No org names. No attribution. "3 organizations in your network are also tracking this bill" — not "Organization X is tracking this bill." Opt-in attribution follows the same pattern as the public accountability page.
@@ -513,23 +511,23 @@ Step 2: Embed bills (existing)
 Step 3: Score relevance (existing)
 Step 4: Generate alerts (existing)
 Step 5: Auto-dismiss stale (existing)
-Step 6: Sync Congress.gov members → Representative table (NEW)
-Step 7: Backfill representativeId on new LegislativeActions (NEW)
+Step 6: Sync Congress.gov members → `decisionMakers` (NEW)
+Step 7: Backfill `decisionMakerId` on new `legislativeActions` (NEW)
 ```
 
 ### 2. Vote Tracker Cron (extend)
 
 After correlating votes to deliveries, also:
-- Set `LegislativeAction.representativeId` from bioguide lookup
-- Create `RepActivityAlert` for orgs following this rep (if alertsEnabled)
-- Auto-follow: if a vote correlates to a delivery, ensure OrgRepFollow exists
+- Set `legislativeActions.decisionMakerId` from bioguide lookup
+- Create `dmActivityAlert` for orgs following this DM (if alertsEnabled)
+- Auto-follow: if a vote correlates to a delivery, ensure `orgDmFollows` exists
 
 ### 3. Campaign Delivery (extend)
 
-When `CampaignDelivery` is created:
-- Resolve `targetName` + `targetEmail` → `Representative` (if match found by bioguide or name+state+district)
-- Create `OrgRepFollow` with reason `campaign_delivery` if not exists
-- Create `OrgBillWatch` with reason `campaign` if campaign has billId
+When a campaign delivery is created:
+- Resolve `targetName` + `targetEmail` → `decisionMakers` (if match found by bioguide or name+jurisdiction+district)
+- Insert `orgDmFollows` with reason `campaign_delivery` if not exists
+- Insert `orgBillWatches` with reason `campaign` if campaign has billId
 
 ### 4. Org Dashboard (extend)
 
@@ -593,28 +591,28 @@ GET  /api/orgs/directory                       — public org directory (search,
 
 ## Implementation Sequence
 
-### Wave 1: Representative Entity + Member Sync (Foundation)
+### Wave 1: DecisionMaker Entity + Member Sync (Foundation)
 
-1. `Representative` model in schema
+1. `decisionMakers` table in `convex/schema.ts`
 2. Congress.gov members API integration in legislation sync cron
-3. Backfill script: existing LegislativeAction + Bill.sponsors → Representative rows
-4. FK migration: LegislativeAction.representativeId, AccountabilityReceipt.representativeId
-5. Bill fts tsvector column + GIN index
+3. Backfill script: existing `legislativeActions` + `bills.sponsors` → `decisionMakers` rows
+4. Link backfill: `legislativeActions.decisionMakerId`, `accountabilityReceipts.decisionMakerId`
+5. `bills` Convex `searchIndex` for full-text search
 
 ### Wave 2: Follow + Watch + Search (Relationship)
 
-6. `OrgRepFollow` + `OrgBillWatch` models
-7. Bill search endpoint (tsvector) + bill browse endpoint (embedding)
-8. Rep directory page with search/filter
+6. `orgDmFollows` + `orgBillWatches` tables
+7. Bill search endpoint (Convex searchIndex) + bill browse endpoint (Convex vectorIndex)
+8. DM directory page with search/filter
 9. Follow/unfollow UI + auto-follow on delivery
 10. Bill watchlist page + manual watch/unwatch
 
 ### Wave 3: Activity Feed + Alerts (Depth)
 
-11. Rep activity feed (all votes by followed reps)
-12. Activity alerts: "Rep X voted on bill Y" for followed reps
+11. DM activity feed (all votes by followed DMs)
+12. Activity alerts: "DM X voted on bill Y" for followed DMs
 13. Bill network signal: "N orgs in your network watching this bill"
-14. Org dashboard integration: reps + bills sections
+14. Org dashboard integration: DMs + bills sections
 
 ### Wave 4: Org Discovery (Network)
 
@@ -632,10 +630,10 @@ GET  /api/orgs/directory                       — public org directory (search,
 
 | # | Severity | File | Issue | Resolution |
 |---|----------|------|-------|------------|
-| G1-1 | High | `prisma/schema.prisma` | Legacy `model representative` and new `model Representative` both generate `db.representative` accessor — runtime shadowing | **Fixed**: Renamed legacy to `CongressionalRep` → `db.congressionalRep`. Updated 8 files. |
-| G1-2 | Low | `scripts/backfill-representatives.ts:116` | `gen_random_uuid()::text` vs schema's `@default(cuid())` — mixed ID formats | Accepted: both valid strings, backfill is one-time |
-| G1-3 | Info | member-sync / backfill | Two tables store overlapping rep data (`representative` legacy + `representatives` new) | Legacy table serves address-verification; canonical `Representative` is intelligence entity. Unification deferred. |
-| G1-4 | Info | `bills/search/+server.ts` | 4 query variants for filter combos — verbose but correct | Accepted: tagged templates prevent SQL injection |
+| G1-1 | High | `convex/schema.ts` | Legacy `representative` and new `representatives` tables both exposed via auto-generated query accessors — runtime shadowing | **Fixed**: Renamed legacy to `congressionalReps`. Updated 8 files. |
+| G1-2 | Low | `scripts/backfill-representatives.ts:116` | `crypto.randomUUID()` vs Convex auto-assigned `_id` — mixed ID sources in backfill | Accepted: both valid strings, backfill is one-time |
+| G1-3 | Info | member-sync / backfill | Two tables store overlapping rep data (`congressionalReps` legacy + `decisionMakers` new) | Legacy table serves address-verification; canonical `decisionMakers` is intelligence entity. Unification deferred. |
+| G1-4 | Info | `bills/search/+server.ts` | 4 query variants for filter combos — verbose but correct | Accepted: Convex search filter fields handle combinations cleanly |
 
 **Result**: 1 High fixed, 1 Low accepted, 2 Info documented. Gate passed.
 
@@ -685,12 +683,12 @@ All 4 waves complete. 19 tasks across 3 review gates.
 - `src/routes/directory/+page.server.ts` + `+page.svelte` — Public org directory
 
 **Files modified:**
-- `prisma/schema.prisma` — Representative, OrgRepFollow, OrgBillWatch models + FKs + Org profile fields
+- `convex/schema.ts` — `decisionMakers`, `orgDmFollows`, `orgBillWatches` tables + links + Org profile fields
 - `src/routes/api/cron/legislation-sync/+server.ts` — Member sync + backfill steps
 - `src/lib/server/campaigns/report.ts` — Auto-follow trigger
 - `src/routes/org/[slug]/+page.server.ts` + `+page.svelte` — Dashboard intelligence widgets
-- `src/routes/org/[slug]/+layout.svelte` — Nav: Representatives + Legislation items
-- Legacy model rename: `representative` → `CongressionalRep` (8 files)
+- `src/routes/org/[slug]/+layout.svelte` — Nav: Decision Makers + Legislation items
+- Legacy table rename: `representative` → `congressionalReps` (8 files)
 
 ---
 
@@ -703,13 +701,13 @@ supporting any type of accountability target: legislators, executives, board mem
 
 | # | Severity | File | Issue | Resolution |
 |---|----------|------|-------|------------|
-| DM1-1 | Critical | `migration.sql` | Table name wrong: `"representatives"` → actual table is `"representative"` (singular, from `@@map`) | **Fixed**: Rewrote migration to SELECT FROM `"representative"` |
-| DM1-2 | Critical | `migration.sql` | Column names wrong: `first_name`, `last_name`, `in_office`, `created_at` don't exist on `representative` table — actual columns are `name`, `is_active`, `last_updated` | **Fixed**: Rewrote to use actual columns with name parsing |
-| DM1-3 | Critical | `migration.sql` | Attempted INSERT FROM `org_rep_follow` — no such table exists (model was never committed as a migration) | **Fixed**: Removed org_rep_follow migration; table will start empty |
-| DM1-4 | Critical | `migration.sql` | DROP TABLE `representative` — table still used by `CongressionalRep` model + `user_representatives` FK | **Fixed**: Keep `representative` table; only drop `international_representatives` |
-| DM1-5 | High | `schema.prisma` | `DecisionMaker` model missing `district` field — member-sync and UI depend on it | **Fixed**: Added `district String?` field |
-| DM1-6 | High | `migration.sql` | Missing FK constraint from `legislative_action.decision_maker_id` → `decision_maker.id` | **Fixed**: Added ALTER TABLE with orphan cleanup |
-| DM1-7 | Info | 54 TS errors | Stale `db.representative`, `db.orgRepFollow`, `db.internationalRepresentative`, `bioguideId` references | Expected: Wave 2 (API + receipt rewrite) will resolve all |
+| DM1-1 | Critical | backfill mutation | Source table name wrong — legacy data lives in `congressionalReps`, backfill queried nonexistent `representatives` | **Fixed**: Backfill now reads from `congressionalReps` |
+| DM1-2 | Critical | backfill mutation | Field names wrong: `firstName`, `lastName`, `inOffice`, `createdAt` don't exist on legacy table — actual fields are `name`, `isActive`, `lastUpdated` | **Fixed**: Rewrote backfill to use actual fields with name parsing |
+| DM1-3 | Critical | backfill mutation | Attempted insert from `orgRepFollow` — no such table exists (table was never committed to schema) | **Fixed**: Removed that step; `orgDmFollows` starts empty |
+| DM1-4 | Critical | backfill mutation | Planned deletion of `congressionalReps` table — still used by address-verification + `userRepresentatives` link | **Fixed**: Keep `congressionalReps`; only drop `internationalRepresentatives` |
+| DM1-5 | High | `convex/schema.ts` | `decisionMakers` table missing `district` field — member-sync and UI depend on it | **Fixed**: Added `district: v.optional(v.string())` field |
+| DM1-6 | High | backfill mutation | Missing orphan-cleanup step for `legislativeActions.decisionMakerId` — some legacy rows pointed at nonexistent DMs | **Fixed**: Added orphan cleanup before backfill |
+| DM1-7 | Info | 54 TS errors | Stale `ctx.db.query("representative")`, `orgRepFollows`, `internationalRepresentatives`, `bioguideId` references | Expected: Wave 2 (API + receipt rewrite) will resolve all |
 
 **Result**: 4 Critical fixed, 2 High fixed, 1 Info documented. Gate passed.
 
@@ -718,7 +716,7 @@ supporting any type of accountability target: legislators, executives, board mem
 | # | Severity | File | Issue | Resolution |
 |---|----------|------|-------|------------|
 | DM2-1 | High | `representatives/+server.ts` | DecisionMaker.create missing `lastName` (required field) | **Fixed**: Added name parsing for first/last split |
-| DM2-2 | High | `s/[slug]/+page.server.ts` | `db.representative` should be `db.congressionalRep` (person-layer) | **Fixed**: Updated 2 references |
+| DM2-2 | High | `s/[slug]/+page.server.ts` | `ctx.db.query("representative")` should be `ctx.db.query("congressionalReps")` (person-layer) | **Fixed**: Updated 2 references |
 | DM2-3 | High | `verify/receipt/[id]/+page.server.ts` | `receipt.bioguideId` → `receipt.decisionMakerId` | **Fixed** |
 | DM2-4 | High | `representatives/+page.svelte` | References `f.representative`, `rep.state`, `rep.chamber`, `rep.inOffice`, `/reps/` API paths | **Fixed**: Full rewrite to `f.decisionMaker`, `dm.jurisdiction`, `dm.active`, `/decision-makers/` paths |
 | DM2-5 | High | `representatives/[repId]/+page.svelte` | References `data.representative`, `rep.state`, `rep.chamber`, `rep.inOffice`, `/reps/` API path | **Fixed**: Full rewrite to `data.decisionMaker`, `dm.jurisdiction`, `dm.active`, `/decision-makers/` path |

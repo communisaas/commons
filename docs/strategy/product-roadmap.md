@@ -71,7 +71,7 @@ Infrastructure that took years. Zero of this exists in any competitor's stack.
 | Campaign verification packets (GDS, ALD, entropy, tiers) | Production | 734 |
 | Campaign report rendering (HTML, merge fields, delivery tracking) | Production | 453 |
 | Email deliverability verification (Reacher pipeline) | Production | 211 |
-| Data models (50+ Prisma models, all indexed) | Production | 1,626 |
+| Data models (71 Convex tables, 232 indexes) | Production | 1,626 |
 
 **Total org-layer code already written: ~7,747 lines.**
 

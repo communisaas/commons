@@ -1,13 +1,13 @@
 # Debate Market / Campaign Integration — Design Plan
 
-**Status**: Mostly shipped behind `FEATURES.DEBATE=false` — see audit banner
+**Status**: Live as of 2026-04 — `FEATURES.DEBATE=true`. See audit banner for residual gaps.
 **Date**: 2026-03-17
-**Depends on**: Debate infrastructure (~85% built), Campaign verification pipeline (complete)
+**Depends on**: Debate infrastructure (shipped), Campaign verification pipeline (complete)
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** `FEATURES.DEBATE=false`
-> in `src/lib/config/features.ts:21` — the code for most items below
-> exists but is **inaccessible at runtime**. This plan reads like a
-> roadmap; it's closer to a completion checklist. Specific corrections:
+> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** `FEATURES.DEBATE=true`
+> in `src/lib/config/features.ts:21` (flipped live in 2026-04). This
+> plan reads like a roadmap; it's closer to a completion checklist.
+> Specific corrections:
 >
 > - **Inline campaign debate display (§2) is already shipped.**
 >   `src/routes/org/[slug]/campaigns/[id]/+page.svelte:~306-389`
@@ -16,10 +16,11 @@
 >   and `DebateSettlement.svelte` for admins. SSE listeners wired
 >   for `debate:argument`, `debate:position`, `debate:settled`
 >   (~44-99). Plan treats this as work-to-do; it's done.
-> - **Daily resolution cron is a stub, not "Complete."**
->   `convex/debates.ts:~720` logs `[debate-resolution] Would
->   evaluate debate ${id} (...)` and returns. No AI evaluation
->   pipeline wired. Deferred to Phase 6.
+> - **Daily resolution cron is now wired (E-cycle B3, 2026-04-23).**
+>   `convex/debates.ts:resolveExpiredDebates` dispatches to
+>   `${baseUrl}/api/debates/[id]/evaluate` with the cron secret, skips
+>   debates with existing `aiResolution` / zero args / no on-chain ID,
+>   and fails-observable when env is missing.
 > - **Layer 2 Gemini 3 Flash quality assessment was never built.**
 >   Per ADR-006 banner: live moderation pipeline is 2 layers
 >   (Prompt Guard + `openai/gpt-oss-safeguard-20b`). Layer 1 model

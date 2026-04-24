@@ -32,43 +32,41 @@ We've implemented a flexible, agent-interpreted domain credibility system that w
 
 ### Database Schema
 
-**`UserExpertise` Model** - Added to `prisma/schema.prisma`:
+**`userExpertise` table** - Added to `convex/schema.ts`:
 
-```prisma
-model UserExpertise {
-  id                     String   @id @default(cuid())
-  user_id                String   @map("user_id")
+```typescript
+userExpertise: defineTable({
+  userId: v.id("users"),
 
   // Domain context (flexible, not rigid enum)
-  domain                 String   // "healthcare" | "hoa_landscaping" | "university_accessibility" | etc.
-  organization_type      String?  // "congress" | "hoa" | "university" | "corporate" | "nonprofit"
+  domain: v.string(),                // "healthcare" | "hoa_landscaping" | "university_accessibility" | etc.
+  organizationType: v.optional(v.string()), // "congress" | "hoa" | "university" | "corporate" | "nonprofit"
 
   // === FREE-TEXT CREDENTIALS (agent parses/verifies) ===
-  professional_role      String?  // "Registered Nurse" | "Certified Arborist" | "APICS Supply Chain Manager"
-  experience_description String?  // Free-text backstory
-  credentials_claim      String?  // "CA RN License #482901" | "ISA Cert #WE-8901A"
+  professionalRole: v.optional(v.string()),       // "Registered Nurse" | "Certified Arborist" | ...
+  experienceDescription: v.optional(v.string()),  // Free-text backstory
+  credentialsClaim: v.optional(v.string()),       // "CA RN License #482901" | "ISA Cert #WE-8901A"
 
   // === AGENT VERIFICATION RESULTS ===
-  verification_status    String   @default("unverified")  // unverified | agent_verified | state_api_verified | peer_endorsed
-  verification_evidence  Json?    // What agent found
-  verified_at            DateTime?
-  verified_by_agent      String?  // openai | gemini | claude | state_api
+  verificationStatus: v.string(),            // unverified | agent_verified | state_api_verified | peer_endorsed
+  verificationEvidence: v.optional(v.any()), // What agent found
+  verifiedAt: v.optional(v.number()),
+  verifiedByAgent: v.optional(v.string()),   // gemini | state_api | ...
 
   // === CREDIBILITY MULTIPLIERS ===
-  credential_multiplier  Float    @default(1.0)  // 1.0 = unverified, 1.5 = peer-endorsed, 2.0 = state-verified
+  credentialMultiplier: v.number(),          // 1.0 unverified, 1.5 peer-endorsed, 2.0 state-verified
 
   // === CONCRETE USAGE SIGNALS (McDonald 2018 research) ===
-  issues_tracked         String[] @default([])  // Bill IDs, proposal numbers
-  templates_created      Int      @default(0)
-  messages_sent          Int      @default(0)
-  peer_endorsements      Int      @default(0)
-  active_months          Int      @default(0)
-
-  @@unique([user_id, domain])
-}
+  issuesTracked: v.array(v.string()),        // Bill IDs, proposal numbers
+  templatesCreated: v.number(),
+  messagesSent: v.number(),
+  peerEndorsements: v.number(),
+  activeMonths: v.number(),
+}).index("by_user_domain", ["userId", "domain"]);
+// uniqueness of (userId, domain) enforced in mutation
 ```
 
-**Migration Applied**: `prisma db push` - schema synchronized
+**Schema deployed**: `npx convex dev` applied the schema to the active deployment.
 
 ### Agent-Based Verification Service
 
@@ -387,8 +385,8 @@ if (template.related_bills) {
 ## Files Changed
 
 ### Database
-- ✅ `prisma/schema.prisma` - Added `UserExpertise` model
-- ✅ Database migration applied via `prisma db push`
+- `convex/schema.ts` - Added `userExpertise` table with `by_user_domain` index
+- Schema deployed via `npx convex dev`
 
 ### Core Services
 - ⏳ `src/lib/core/reputation/credential-verifier.ts` - **TO BE REMOVED** (moved to voter-protocol ReputationAgent)

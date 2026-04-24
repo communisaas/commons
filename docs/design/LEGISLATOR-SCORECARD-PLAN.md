@@ -4,9 +4,8 @@
 > **Date**: 2026-03-23
 > **Depends on**: Accountability receipts (foundation complete — Phase 2 scorecard + Phase 3 chain anchor still partial per ACCOUNTABILITY-RECEIPT banner), Intelligence loop (complete), DecisionMaker model (complete)
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Scorecard UI skeleton is
-> shipping; the **computation core is a stub**, and the code samples
-> throughout use Prisma against a Convex-only codebase.
+> **Audit notes (2026-04-23).** Scorecard UI skeleton is shipping;
+> the computation core is a stub.
 >
 > **Shipped:**
 >
@@ -36,11 +35,11 @@
 >
 > **Corrections:**
 >
-> - **§3.2 migration block** (`20260323_scorecard_snapshot`) is
->   irrelevant — Convex has no migration files; schema is code.
-> - **Prisma code samples in §4** (`db.accountabilityReceipt.findMany(...)`
->   etc.) are pseudocode; live code uses Convex `ctx.db.query(...)`.
-> - **§4.2 Poseidon2 attestation-hash logic** is Phase 4 aspirational.
+> - The `20260323_scorecard_snapshot` marker in §3.2 is a ship
+>   identifier, not a migration file — Convex schema is code.
+> - Code samples in §4 are pseudocode; live code uses Convex
+>   `ctx.db.query(...)`.
+> - §4.2 Poseidon2 attestation-hash logic is Phase 4 aspirational.
 >   Live code uses SHA-256 (`computeAttestationDigest`,
 >   `attestationDigest` field) — see ACCOUNTABILITY-RECEIPT banner.
 
@@ -125,58 +124,48 @@ Published only when both responsiveness and alignment have met their floor rules
 
 ### 3.1 New Models
 
-```prisma
-model ScorecardSnapshot {
-  id                String   @id @default(cuid())
-  decisionMakerId   String   @map("decision_maker_id")
+```typescript
+// convex/schema.ts
+scorecardSnapshots: defineTable({
+  decisionMakerId: v.id("decisionMakers"),
 
   // Period
-  periodStart       DateTime @map("period_start")
-  periodEnd         DateTime @map("period_end")
+  periodStart: v.number(),
+  periodEnd: v.number(),
 
   // Scores
-  responsiveness    Float?   // 0-100, null if insufficient data
-  alignment         Float?   // 0-100, null if insufficient data
-  composite         Float?   // 0-100, null if either component null
-  proofWeightTotal  Float    @map("proof_weight_total")
+  responsiveness: v.optional(v.number()), // 0-100, undefined if insufficient data
+  alignment: v.optional(v.number()),       // 0-100, undefined if insufficient data
+  composite: v.optional(v.number()),       // 0-100, undefined if either component missing
+  proofWeightTotal: v.number(),
 
   // Input counts (for transparency)
-  deliveriesSent    Int      @map("deliveries_sent")
-  deliveriesOpened  Int      @map("deliveries_opened")
-  deliveriesVerified Int     @map("deliveries_verified")
-  repliesReceived   Int      @map("replies_received")
-  alignedVotes      Int      @map("aligned_votes")
-  totalScoredVotes  Int      @map("total_scored_votes")
+  deliveriesSent: v.number(),
+  deliveriesOpened: v.number(),
+  deliveriesVerified: v.number(),
+  repliesReceived: v.number(),
+  alignedVotes: v.number(),
+  totalScoredVotes: v.number(),
 
   // Methodology version (for future algorithm changes)
-  methodologyVersion Int     @default(1) @map("methodology_version")
+  methodologyVersion: v.number(),
 
   // Attestation
-  snapshotHash      String   @map("snapshot_hash") // SHA-256 of all input data
+  snapshotHash: v.string(),               // SHA-256 of all input data
 
-  createdAt         DateTime @default(now()) @map("created_at")
-
-  decisionMaker     DecisionMaker @relation(fields: [decisionMakerId], references: [id], onDelete: Cascade)
-
-  @@unique([decisionMakerId, periodEnd, methodologyVersion])
-  @@index([decisionMakerId])
-  @@index([periodEnd])
-  @@index([composite])
-  @@map("scorecard_snapshot")
-}
+  createdAt: v.number(),
+})
+  .index("by_dm_period_method", ["decisionMakerId", "periodEnd", "methodologyVersion"]) // unique via mutation guard
+  .index("by_decisionMakerId", ["decisionMakerId"])
+  .index("by_periodEnd", ["periodEnd"])
+  .index("by_composite", ["composite"]),
 ```
 
-**Add to DecisionMaker:**
-```prisma
-model DecisionMaker {
-  // ... existing fields ...
-  scorecardSnapshots ScorecardSnapshot[]
-}
-```
+Cascade on DM delete is handled in the DM delete mutation: it explicitly deletes matching `scorecardSnapshots` rows.
 
-### 3.2 Migration
+### 3.2 Deploy
 
-Single migration: `20260323_scorecard_snapshot` — creates `scorecard_snapshot` table, adds relation to DecisionMaker.
+Ship marker: `20260323_scorecard_snapshot`. Convex schema is code — `npx convex deploy --env-file .env.production` picks up the new table.
 
 ---
 
@@ -196,32 +185,54 @@ Runs weekly (Sunday 03:00 UTC). For each DM with >= 1 accountability receipt:
 6. Upsert `ScorecardSnapshot`
 
 ```typescript
-async function computeScorecard(dmId: string, periodStart: Date, periodEnd: Date) {
-  const receipts = await db.accountabilityReceipt.findMany({
-    where: { decisionMakerId: dmId, createdAt: { gte: periodStart, lte: periodEnd } },
-    include: { delivery: { include: { responses: true } } }
-  });
+// convex/scorecard.ts (internal action or mutation helper)
+async function computeScorecard(
+  ctx: MutationCtx,
+  dmId: Id<"decisionMakers">,
+  periodStart: number,
+  periodEnd: number,
+) {
+  const receipts = await ctx.db
+    .query("accountabilityReceipts")
+    .withIndex("by_decisionMakerId", (q) => q.eq("decisionMakerId", dmId))
+    .filter((q) =>
+      q.and(
+        q.gte(q.field("createdAt"), periodStart),
+        q.lte(q.field("createdAt"), periodEnd),
+      ),
+    )
+    .collect();
 
   // Count response types across all deliveries
   let sent = 0, opened = 0, verified = 0, replied = 0;
   for (const r of receipts) {
-    if (!r.delivery) continue;
+    if (!r.deliveryId) continue;
+    const delivery = await ctx.db.get(r.deliveryId);
+    if (!delivery) continue;
     sent++;
-    const responses = r.delivery.responses;
-    if (responses.some(rr => rr.type === 'opened')) opened++;
-    if (responses.some(rr => rr.type === 'clicked_verify')) verified++;
-    if (responses.some(rr => ['replied', 'meeting_requested'].includes(rr.type))) replied++;
+    // Response types are embedded on accountabilityReceipts post-migration
+    // (ReportResponse folded in) — adjust per live schema.
+    if (r.opened) opened++;
+    if (r.clickedVerify) verified++;
+    if (r.replied || r.meetingRequested) replied++;
   }
 
   // Alignment: match receipts to legislative actions
-  const billIds = [...new Set(receipts.map(r => r.billId))];
-  const actions = await db.legislativeAction.findMany({
-    where: { decisionMakerId: dmId, billId: { in: billIds } }
-  });
+  const billIds = new Set(receipts.map((r) => r.billId).filter(Boolean));
+  const actions: Doc<"legislativeActions">[] = [];
+  for (const billId of billIds) {
+    const byBill = await ctx.db
+      .query("legislativeActions")
+      .withIndex("by_billId", (q) => q.eq("billId", billId as Id<"bills">))
+      .collect();
+    for (const a of byBill) {
+      if (a.decisionMakerId === dmId) actions.push(a);
+    }
+  }
 
   let aligned = 0, scored = 0;
   for (const action of actions) {
-    const receipt = receipts.find(r => r.billId === action.billId);
+    const receipt = receipts.find((r) => r.billId === action.billId);
     if (!receipt || !receipt.causalityClass?.includes('before_vote')) continue;
     scored++;
     if (
@@ -233,12 +244,12 @@ async function computeScorecard(dmId: string, periodStart: Date, periodEnd: Date
   // Compute scores
   const responsiveness = sent >= 3
     ? (0.3 * (opened / sent) + 0.5 * (verified / sent) + 0.2 * (replied / sent)) * 100
-    : null;
-  const alignment = scored >= 2 ? (aligned / scored) * 100 : null;
+    : undefined;
+  const alignment = scored >= 2 ? (aligned / scored) * 100 : undefined;
   const composite = responsiveness != null && alignment != null
     ? 0.6 * responsiveness + 0.4 * alignment
-    : null;
-  const proofWeightTotal = receipts.reduce((sum, r) => sum + r.proofWeight, 0);
+    : undefined;
+  const proofWeightTotal = receipts.reduce((sum, r) => sum + (r.proofWeight ?? 0), 0);
 
   return { responsiveness, alignment, composite, proofWeightTotal,
     deliveriesSent: sent, deliveriesOpened: opened, deliveriesVerified: verified,

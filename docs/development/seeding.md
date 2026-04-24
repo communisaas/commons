@@ -1,125 +1,66 @@
-# Database Seeding
+# Seeding
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The single-script Prisma-era
-> seeding described here was replaced by a multi-stage Convex pipeline.
->
-> ### Current seeding
->
-> - **Primary:** `npm run seed` → `npx convex run seed:seedAll`
->   (see `convex/seed.ts`).
-> - **Agent-powered templates:** `npm run seed:agents` →
->   `scripts/seed-with-agents.ts` (regenerates `convex/seedData.ts`
->   snapshots using Gemini + Exa). Requires `GEMINI_API_KEY`, `EXA_API_KEY`,
->   `GROQ_API_KEY`.
-> - **Org templates:** `npm run seed:org` → `scripts/seed-org-templates.ts`.
-> - **Policy vibes:** `scripts/seed-vibes.ts`.
-> - **Data shape:** templates carry `domain` + `topics` (not `category`);
->   users are seeded with `verificationMethod: "mdl"` only (legacy
->   `'self.xyz' | 'didit'` enum values are unused in fixtures).
-> - **No `DATABASE_URL`.** Convex is cloud-managed; local dev is
->   `npx convex dev`. `scripts/seed-database.ts` (referenced below) does
->   not exist.
->
-> The counts and names below (12 users, 13 templates, 4 named reps) are
-> stale; the actual fixture sets live in `convex/seed.ts` (SEED_USERS,
-> REPRESENTATIVES) and `convex/seedData.ts` (SEED_TEMPLATES).
+Commons's development data is seeded into the Convex backend via a multi-stage pipeline. All commands run against your Convex dev deployment (set `PUBLIC_CONVEX_URL`).
 
-## Overview
-
-Single consolidated seeding script for the MVP database with congressional and SF-focused templates.
-
-## Usage
+## Commands
 
 ```bash
-# Seed the database
-npm run db:seed
-
-# Or directly
-npx tsx scripts/seed-database.ts
+npm run seed          # Primary: `npx convex run seed:seedAll` (idempotent)
+npm run seed:agents   # Agent-powered template regeneration
+npm run seed:org      # Org-scoped templates
+npx tsx scripts/seed-vibes.ts   # Policy vibes
 ```
 
-## What Gets Seeded
+## Primary Seed (`seed:seedAll`)
 
-### Users (12)
+Entry point: `convex/seed.ts`. Fixture data: `convex/seedData.ts`.
 
-- Mix of verified and unverified users
-- VOTER Protocol data (trust scores, reputation tiers, tokens)
-- Geographic distribution across US
-- Realistic user personas (teachers, organizers, policy analysts)
+- Idempotent: safe to re-run; existing rows are skipped or updated in-place.
+- Runs against the dev Convex deployment via `npx convex run`.
+- Loads users, templates, representatives, and a minimal set of debates.
 
-### Templates (13)
+## Agent-Powered Seed (`seed:agents`)
 
-#### Federal Templates (9) - All with Source Citations
+Script: `scripts/seed-with-agents.ts`.
 
-1. **Climate**: NOAA 2024 damage reports ($178B disasters vs $7.4B spending)
-2. **Defense vs Childcare**: NDAA FY2024 ($858B defense, $0 childcare)
-3. **Healthcare**: HHS OIG on insulin pricing (900% markup)
-4. **Student Debt**: Federal Reserve data ($1.7T debt crisis)
-5. **Housing**: HUD 2025 rent data ($2,400 median rent)
-6. **AI Regulation**: Senate hearings on regulation vacuum
-7. **Child Privacy**: Surgeon General on mental health crisis
-8. **Debt Ceiling**: Treasury/CBO on $34T debt
-9. **Immigration**: CBP statistics on border encounters
+- Regenerates `convex/seedData.ts` by running the full research + message generation pipeline (Gemini + Exa + Groq).
+- Required env: `GEMINI_API_KEY`, `EXA_API_KEY`, `GROQ_API_KEY`.
+- Output is deterministic per-run; commit the regenerated snapshot when intentional.
 
-#### SF Municipal Templates (4) - All with Source Citations
+## Org Template Seed (`seed:org`)
 
-1. **SF Teacher Housing**: SFUSD data on 2-hour commutes
-2. **Empty Offices**: Axios SF on 35% vacancy, only 1 conversion
-3. **Retail Ghost Town**: CoStar on 22% Union Square vacancy
-4. **SFUSD Exodus**: 5,000 students lost to housing crisis
+Script: `scripts/seed-org-templates.ts`.
 
-### Representatives (4)
+- Populates org-owned templates for the test organizations.
 
-- Nancy Pelosi (CA-11)
-- Alex Padilla (Senator)
-- Laphonza Butler (Senator)
-- Kevin Kiley (CA-3)
+## Policy Vibes Seed
 
-## Template Features
+Script: `scripts/seed-vibes.ts`.
 
-### Source Citations
+- Populates the policy vibe fixtures used by the domain + topic system.
 
-Every template includes:
+## Data Shape
 
-- Verified sources in description field
-- In-message citations with dates
-- Government reports, official statistics
-- No unsourced claims
+Templates carry `domain` + `topics` (not the legacy `category` scalar). Users are seeded with `verificationMethod: "mdl"`. Legacy enum values (`'self.xyz'`, `'didit'`) remain only as string literals in the schema for backward compat with historical rows and never appear in fresh fixtures.
 
-### Delivery Methods
+Field naming in Convex is camelCase (`verifiedSends`, `districtHash`, `bioguideId`, `officeCode`).
 
-- **Federal**: `cwc` (Communicating With Congress API)
-- **Municipal**: `email` (Direct email to SF officials)
+## Environment
 
-### Metrics
+`PUBLIC_CONVEX_URL` (and `CONVEX_DEPLOY_KEY` for CI). No `DATABASE_URL` — Convex is cloud-managed; local dev uses `npx convex dev`.
 
-- Realistic send counts
-- District coverage data
-- Quality scores from AI agents
-- Verification status
+For CWC testing, `CWC_API_KEY` is additionally required.
 
-## Data Integrity
+## Re-seeding After Tests
 
-All templates follow "The Math Doesn't Work" format:
+If a test run mutates fixture data, just re-run:
 
-1. Sharp contrast numbers
-2. Source citation
-3. Local connection
-4. Personal story placeholder
-5. Direct question to officials
+```bash
+npm run seed
+```
 
-## Environment Variables
+## Customizing Fixtures
 
-Required for full functionality:
+Edit `convex/seedData.ts` directly (or run `npm run seed:agents` to regenerate it from live sources). Then re-run `npm run seed`.
 
-- `DATABASE_URL` (PostgreSQL connection string)
-- `CWC_API_KEY` (for congressional delivery)
-
-## Maintenance
-
-The single seed file (`scripts/seed-database.ts`) contains all MVP data:
-
-- Easy to modify templates
-- Add new sources as needed
-- Adjust user distribution
-- Update representative data
+For new tables, add a loader to `convex/seed.ts:seedAll` so it's covered by the idempotent run.

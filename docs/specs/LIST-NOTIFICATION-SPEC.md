@@ -636,126 +636,90 @@ When a supporter unsubscribes or requests deletion:
 
 These models extend the existing schema from `org-data-model.md` and `platform-extension.md`.
 
-```prisma
-model Supporter {
+```typescript
+// convex/schema.ts
+
+supporters: defineTable({
   // ... existing fields from platform-extension.md ...
 
-  emailStatus         String       @default("subscribed")  // subscribed | unsubscribed | bounced | complained
-  source              String       @default("organic")     // organic | action_network | csv_import
-  importedAt          DateTime?    @map("imported_at")
-  phone               String?
+  emailStatus: v.string(),     // subscribed | unsubscribed | bounced | complained
+  source: v.string(),          // organic | action_network | csv_import
+  importedAt: v.optional(v.number()),
+  phone: v.optional(v.string()),
 
   // Cached engagement data (refreshed daily from Shadow Atlas)
-  cachedTier          Int?         @map("cached_tier")     // 0-4, null if unverified
-  cachedTierAt        DateTime?    @map("cached_tier_at")
+  cachedTier: v.optional(v.number()),    // 0-4, undefined if unverified
+  cachedTierAt: v.optional(v.number()),
+})
+  .index("by_org_emailStatus", ["orgId", "emailStatus"])
+  .index("by_org_tier", ["orgId", "cachedTier"])
+  .index("by_org_source", ["orgId", "source"]),
 
-  // Relations
-  actions             SupporterAction[]
-  emailEvents         EmailEvent[]
+emailBlasts: defineTable({
+  orgId: v.id("organizations"),
+  segmentId: v.optional(v.id("segments")),
 
-  @@index([orgId, emailStatus])
-  @@index([orgId, cachedTier])
-  @@index([orgId, source])
-}
+  subject: v.string(),
+  bodyMjml: v.string(),
+  bodyHtml: v.string(),        // compiled from MJML
+  fromName: v.string(),
+  fromEmail: v.string(),
 
-model EmailBlast {
-  id            String       @id @default(cuid())
-  orgId         String       @map("org_id")
-  segmentId     String?      @map("segment_id")
-
-  subject       String
-  bodyMjml      String       @map("body_mjml")
-  bodyHtml      String       @map("body_html")      // compiled from MJML
-  fromName      String       @map("from_name")
-  fromEmail     String       @map("from_email")
-
-  status        String       @default("draft")       // draft | scheduled | sending | sent | paused
-  scheduledAt   DateTime?    @map("scheduled_at")
-  sentAt        DateTime?    @map("sent_at")
+  status: v.string(),          // draft | scheduled | sending | sent | paused
+  scheduledAt: v.optional(v.number()),
+  sentAt: v.optional(v.number()),
 
   // A/B test
-  abTestEnabled Boolean      @default(false) @map("ab_test_enabled")
-  abVariants    Json?        @map("ab_variants")     // variant configs
-  abWinnerMetric String?     @map("ab_winner_metric") // open_rate | click_rate
+  abTestEnabled: v.boolean(),
+  abVariants: v.optional(v.any()),     // variant configs
+  abWinnerMetric: v.optional(v.string()), // open_rate | click_rate
 
   // Verification context (computed at send time)
-  verificationContext Json?  @map("verification_context")
+  verificationContext: v.optional(v.any()),
 
   // Aggregate metrics (no per-user breakdown)
-  totalSent     Int          @default(0) @map("total_sent")
-  totalOpened   Int          @default(0) @map("total_opened")
-  totalClicked  Int          @default(0) @map("total_clicked")
-  totalBounced  Int          @default(0) @map("total_bounced")
-  totalComplaints Int        @default(0) @map("total_complaints")
+  totalSent: v.number(),
+  totalOpened: v.number(),
+  totalClicked: v.number(),
+  totalBounced: v.number(),
+  totalComplaints: v.number(),
+})
+  .index("by_org", ["orgId"])
+  .index("by_status", ["status"]),
 
-  org           Organization @relation(fields: [orgId], references: [id])
-  segment       Segment?     @relation(fields: [segmentId], references: [id])
-  batches       EmailBatch[]
+emailBatches: defineTable({
+  blastId: v.id("emailBlasts"),
+  batchIndex: v.number(),
 
-  createdAt     DateTime     @default(now()) @map("created_at")
-  updatedAt     DateTime     @updatedAt @map("updated_at")
+  status: v.string(),          // pending | sending | sent | failed
+  sentCount: v.number(),
+  failedCount: v.number(),
+  provider: v.optional(v.string()),    // ses | resend
+  sentAt: v.optional(v.number()),
+}).index("by_blast", ["blastId"]),
 
-  @@index([orgId])
-  @@index([status])
-  @@map("email_blast")
-}
+segments: defineTable({
+  orgId: v.id("organizations"),
+  name: v.string(),
+  filters: v.any(),            // SegmentFilter serialized
+  createdBy: v.id("users"),
 
-model EmailBatch {
-  id            String       @id @default(cuid())
-  blastId       String       @map("blast_id")
-  batchIndex    Int          @map("batch_index")
+  cachedCount: v.number(),
+  cachedAt: v.optional(v.number()),
+})
+  .index("by_org", ["orgId"])
+  .index("by_org_name", ["orgId", "name"]),
 
-  status        String       @default("pending")     // pending | sending | sent | failed
-  sentCount     Int          @default(0) @map("sent_count")
-  failedCount   Int          @default(0) @map("failed_count")
-  provider      String?                              // ses | resend
-  sentAt        DateTime?    @map("sent_at")
-
-  blast         EmailBlast   @relation(fields: [blastId], references: [id])
-
-  @@index([blastId])
-  @@map("email_batch")
-}
-
-model Segment {
-  id            String       @id @default(cuid())
-  orgId         String       @map("org_id")
-  name          String
-  filters       Json                                 // SegmentFilter serialized
-  createdBy     String       @map("created_by")
-
-  cachedCount   Int          @default(0) @map("cached_count")
-  cachedAt      DateTime?    @map("cached_at")
-
-  org           Organization @relation(fields: [orgId], references: [id])
-  blasts        EmailBlast[]
-
-  createdAt     DateTime     @default(now()) @map("created_at")
-  updatedAt     DateTime     @updatedAt @map("updated_at")
-
-  @@unique([orgId, name])
-  @@index([orgId])
-  @@map("segment")
-}
-
-model NotificationRule {
-  id            String       @id @default(cuid())
-  orgId         String       @map("org_id")
-  trigger       String                               // NotificationTrigger enum value
-  channel       String       @default("email")       // email | in_app
-  audience      String       @default("org_admins")  // org_admins | segment | all_subscribed
-  segmentId     String?      @map("segment_id")
-  templateKey   String       @map("template_key")    // notification template identifier
-  throttleSecs  Int          @default(86400) @map("throttle_secs")
-  enabled       Boolean      @default(true)
-
-  org           Organization @relation(fields: [orgId], references: [id])
-
-  createdAt     DateTime     @default(now()) @map("created_at")
-
-  @@index([orgId, trigger])
-  @@map("notification_rule")
-}
+notificationRules: defineTable({
+  orgId: v.id("organizations"),
+  trigger: v.string(),         // NotificationTrigger enum value
+  channel: v.string(),         // email | in_app
+  audience: v.string(),        // org_admins | segment | all_subscribed
+  segmentId: v.optional(v.id("segments")),
+  templateKey: v.string(),     // notification template identifier
+  throttleSecs: v.number(),
+  enabled: v.boolean(),
+}).index("by_org_trigger", ["orgId", "trigger"]);
 ```
 
 ---

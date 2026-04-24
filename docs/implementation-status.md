@@ -11,15 +11,13 @@
 > throughout. The broad Phase 0-2 shipped narrative is correct.
 > Concrete deltas applied / still open:
 >
-> - **Data Model section rewritten** for Convex-only (Prisma/Postgres/
->   Hyperdrive removed 2026-04-23).
+> - **Data Model section** describes the current Convex-only backend.
 > - **Congressional + Passkey rows** now carry `(FEATURE-GATED, flag=false)`
 >   annotations — code ships, flag is off.
 > - **Feature flag values** in the flags table reflect
 >   `src/lib/config/features.ts` today (CONGRESSIONAL=false,
 >   LEGISLATION/ACCOUNTABILITY=true).
-> - **Architecture Quick Reference** replaced `prisma/schema.prisma` and
->   removed `db.ts` (Prisma-era file; doesn't exist).
+> - **Architecture Quick Reference** points at `convex/schema.ts`.
 > - **Storacha sunset (2026-05-31)** is an ops-urgent gap not reflected
 >   in the "Known Gaps" table below — pinning provider migration is
 >   in-flight (see `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md`).
@@ -103,7 +101,7 @@ Commons is live. The full verification loop works end-to-end: org creates campai
 | Metric | Value |
 |--------|-------|
 | Convex tables | 71 (`convex/schema.ts`) |
-| Backend | Convex-only (Prisma / Postgres / Hyperdrive removed 2026-04) |
+| Backend | Convex (managed, ~71 tables, 232 indexes) |
 | Vector search | Convex `.vectorIndex` (768-dim Gemini `text-embedding-004`) |
 | Org-layer code | ~7,747 lines (historical — may drift with refactors) |
 | Person-layer code | ~8,665 lines (identity alone, historical) |
@@ -135,7 +133,7 @@ Comprehensive brutalist security audit (2026-03-19). See `docs/design/SECURITY-H
 |--------|--------|-------|
 | TEE deployment | Planned | AWS Nitro Enclaves for witness decryption + debate evaluation |
 | Mainnet blockchain | Planned | Scroll Sepolia only; mainnet pending security council setup |
-| Debate markets | Feature-gated | Code complete, `DEBATE = false` |
+| Debate markets | Live | `DEBATE = true` (flipped 2026-04); daily resolution cron dispatches to `/evaluate` |
 | Legislation tracking | Uncommitted | Bill ingestion + watching in working tree |
 | Accountability receipts | Uncommitted | 44 untracked + 23 modified files in working tree |
 | Cross-border coalitions | Design doc | Canada first, ~5 weeks. See `docs/design/CROSS-BORDER-PLAN.md` |
@@ -176,7 +174,7 @@ Source: `src/lib/config/features.ts`
 | SHADOW_ATLAS_VERIFICATION | `true` | Client-side district commitment |
 | LEGISLATION | `true` | Bill tracking + watching |
 | ACCOUNTABILITY | `true` | Receipt system |
-| DEBATE | `false` | Markets + AI evaluation (cron is log-only stub) |
+| DEBATE | `true` | Markets + AI evaluation (cron dispatches to `/api/debates/[id]/evaluate` since E-cycle B3) |
 | DELEGATION | `false` | Agentic delegation (Tier 3+) |
 | ENGAGEMENT_METRICS | `false` | Send/engagement counters |
 | PASSKEY | `false` | WebAuthn sign-in |
@@ -212,7 +210,7 @@ See `memory/build_history.md` for detailed per-wave records.
 
 | Layer | Key Files |
 |-------|-----------|
-| Backend / Schema | `convex/schema.ts` (Convex; `src/lib/core/db.ts` removed with Prisma) |
+| Backend / Schema | `convex/schema.ts` (Convex, ~71 tables, 232 indexes) |
 | Auth + Session | `src/hooks.server.ts` (SvelteKit session → Convex JWT bridge) |
 | Trust Tier | `src/lib/core/identity/authority-level.ts` |
 | Identity Verification | `src/lib/components/auth/IdentityVerificationFlow.svelte` |

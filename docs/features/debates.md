@@ -1,15 +1,16 @@
 # Staked Deliberation (Debates)
 
-> **STATUS: FEATURE-GATED + PARTIALLY WIRED** — `FEATURES.DEBATE = false`. Audited 2026-04-23.
+> **STATUS: LIVE** — `FEATURES.DEBATE = true` (flipped 2026-04, verified 2026-04-23).
 >
-> **Known divergences from implementation:**
-> - **Daily resolution cron is a stub.** `convex/debates.ts:~720` logs `[debate-resolution] Would evaluate debate…` and returns. No scheduled trigger invokes the evaluate endpoint.
+> **Known divergences from implementation (still open):**
 > - **`POST /api/debates/[id]/resolve` does NOT call `DebateMarket.resolveDebate()` on-chain.** It runs `ctx.runMutation(api.debates.updateStatus, …)` — a local Convex status update. No blockchain transaction is sent.
 > - **`/resolve` does NOT block when AI evaluation has started.** The endpoint has no `aiResolution` / `resolution_method` guard; community resolution can still fire after AI has started.
-> - **Settlement UI exists.** `src/lib/components/debate/DebateSettlement.svelte` is shipped. Earlier "Known Gaps" claims that it has no UI are stale.
-> - **`/evaluate` endpoint IS wired end-to-end** (calls `aiEvaluator.evaluateDebate()`), so if manually invoked the evaluation path works. What's missing is the automatic daily trigger.
+> - **Settlement UI exists.** `src/lib/components/debate/DebateSettlement.svelte` is shipped.
+>
+> **Resolved during E-cycle (2026-04-23):**
+> - **Daily resolution cron no longer a stub.** `convex/debates.ts:resolveExpiredDebates` now dispatches to `${baseUrl}/api/debates/[id]/evaluate` with the cron secret (B3 work). Fails-observable when env missing; skips debates with existing `aiResolution`, zero args, or no on-chain ID.
 
-**Status:** Deployed to Scroll Sepolia testnet. Frontend, API, and on-chain contract integration wired for manual flows; `FEATURES.DEBATE = false` in production. AI evaluation pipeline reachable via the `/evaluate` endpoint; the daily resolution cron is currently a log-only stub.
+**Status:** Live on production (`FEATURES.DEBATE = true`). Frontend, API, on-chain contract integration, and daily AI-evaluation cron all wired. Remaining gap: `/resolve` does not settle on-chain itself — that's handled by contract-level resolution or via AI pipeline writing back.
 **Tier Requirement:** 3+ (ZK-verified identity)
 **Contract:** `voter-protocol/contracts/src/DebateMarket.sol` (1897 lines, 193 tests across 4 test files)
 **Deployed:** `0xA07D6F620FEc31A163E1F888956e4c98D522B906` (Scroll Sepolia V11)
@@ -71,7 +72,7 @@ The `DebateSurface` component renders on the template detail page (`/s/[slug]`):
 5. Composes argument (min 20 chars, + amendment text if AMEND)
 6. Sets stake via `StakeVisualizer` (range $1-$100, spring-animated formula display)
 7. `DebateProofGenerator` generates three-tree ZK proof with debate-scoped action domain
-8. Submits: `POST /api/debates/create` calls `DebateMarket.proposeDebate()` on-chain, then creates debate + first argument atomically in Prisma
+8. Submits: `POST /api/debates/create` calls `DebateMarket.proposeDebate()` on-chain, then creates debate + first argument atomically via Convex mutation (`convex/debates.ts`)
 
 Only one active debate per template is allowed (409 if duplicate attempted).
 
@@ -168,7 +169,7 @@ payout = stake + (losing_pool * stake / winning_argument_total_stake)
 
 | Group | Field | Type | Notes |
 |---|---|---|---|
-| Core | `id` | `String @id` | Prisma CUID |
+| Core | `_id` | `Id<'debates'>` | Convex document id |
 | Core | `template_id` | `String` | FK to Template |
 | Core | `debate_id_onchain` | `String @unique` | `bytes32` from `proposeDebate()` |
 | Core | `action_domain` | `String` | `keccak256(debateId, "debate", propHash) mod BN254` |
@@ -205,7 +206,7 @@ Indexes: `template_id`, `status`, `debate_id_onchain`
 
 | Group | Field | Type | Notes |
 |---|---|---|---|
-| Core | `id` | `String @id` | Prisma CUID |
+| Core | `_id` | `Id<'debateArguments'>` | Convex document id |
 | Core | `debate_id` | `String` | FK to Debate |
 | Core | `argument_index` | `Int` | On-chain index; `@@unique([debate_id, argument_index])` |
 | Content | `stance` | `String` | `'SUPPORT' \| 'OPPOSE' \| 'AMEND'` |
@@ -340,7 +341,7 @@ Mirrors `DebateMarket.deriveDomain()` on-chain. A user can send a message (templ
 | `POST` | `/api/debates/[debateId]/appeal` | Tier 3+ | Appeal resolution (requires 2x bond). Calls `appealResolution()` on-chain. |
 | `POST` | `/api/debates/[debateId]/claim` | Authenticated | Claim settlement. Two paths: simple claim or private position. |
 | `GET` | `/api/debates/[debateId]/position-proof` | Public | Merkle proof for private settlement (proxied from shadow-atlas) |
-| `GET` | `/api/debates/[debateId]/stream` | Public | SSE real-time updates (dual-source: shadow-atlas + Prisma polling) |
+| `GET` | `/api/debates/[debateId]/stream` | Public | SSE real-time updates (dual-source: shadow-atlas + Convex polling) |
 | `GET` | `/api/cron/debate-resolution` | CRON_SECRET | Automated daily resolution at 02:00 UTC. Finds expired active debates and triggers evaluation. |
 
 All `/api/debates/` routes (including GETs) are rate-limited at 20 req/min per user via sliding window in `hooks.server.ts`.
@@ -350,7 +351,7 @@ All `/api/debates/` routes (including GETs) are rate-limited at 20 req/min per u
 `GET /api/debates/[debateId]/stream` combines two event sources:
 
 1. **Shadow-atlas upstream** -- market price updates, trade activity, epoch execution
-2. **Prisma polling** (5s interval) -- AI resolution state transitions
+2. **Convex polling** (5s interval) -- AI resolution state transitions
 
 **Event types:**
 
@@ -359,13 +360,13 @@ All `/api/debates/` routes (including GETs) are rate-limited at 20 req/min per u
 | `state` | shadow-atlas | `{ prices, epochPhase, epochSecondsRemaining }` |
 | `epoch_executed` | shadow-atlas | `{ prices, pricesStale? }` |
 | `trade_activity` | shadow-atlas | (stubbed -- no UI handler) |
-| `evaluating` | Prisma poll | `{ debateId }` -- status -> resolving |
-| `ai_scores_submitted` | Prisma poll | `{ debateId, signatureCount, panelConsensus }` |
+| `evaluating` | Convex poll | `{ debateId }` -- status -> resolving |
+| `ai_scores_submitted` | Convex poll | `{ debateId, signatureCount, panelConsensus }` |
 | `ai_evaluation_submitted` | shadow-atlas | Same shape as `ai_scores_submitted` (shared handler) |
-| `resolved_with_ai` | Prisma poll | `{ debateId, winningArgumentIndex, winningStance, resolutionMethod }` |
-| `governance_escalated` | Prisma poll | `{ debateId, panelConsensus }` |
-| `appeal_started` | Prisma poll | `{ debateId, appealDeadline }` |
-| `resolution_finalized` | Prisma poll | `{ debateId, winningArgumentIndex, winningStance, resolutionMethod }` |
+| `resolved_with_ai` | Convex poll | `{ debateId, winningArgumentIndex, winningStance, resolutionMethod }` |
+| `governance_escalated` | Convex poll | `{ debateId, panelConsensus }` |
+| `appeal_started` | Convex poll | `{ debateId, appealDeadline }` |
+| `resolution_finalized` | Convex poll | `{ debateId, winningArgumentIndex, winningStance, resolutionMethod }` |
 | `resolved` | shadow-atlas | Triggers full debate reload |
 
 Client reconnects automatically after 5s on SSE error. Polling stops once debate is `resolved`.
@@ -442,7 +443,7 @@ Client reconnects automatically after 5s on SSE error. Polling stops once debate
 | No event indexer for on-chain state sync | **Medium** | Aggregate caches (`argument_count`, `unique_participants`, `total_stake`, `co_sign_count`, prices) updated in API handlers, not via chain events. Can drift. |
 | Settlement has no frontend UI | **Medium** | Both on-chain settlement paths (`claimSettlement`, `settlePrivatePosition`) are wired in the API but no user-facing settlement component exists. |
 | `trade_activity` SSE event has no client consumer | **Low** | Event emitted by shadow-atlas but no listener registered in `debateState.svelte.ts`. EventSource silently drops unhandled events. Re-register when TradePanel activity indicator is built. |
-| `evaluate` rate limit is per-isolate on CF Workers | **Low** | `activeEvaluations` Set and `recentEvaluations` Map are module-scoped. On Workers, isolates do not share state. Acceptable because the endpoint is cron-only and Prisma-level status checks provide the real guard. |
+| `evaluate` rate limit is per-isolate on CF Workers | **Low** | `activeEvaluations` Set and `recentEvaluations` Map are module-scoped. On Workers, isolates do not share state. Acceptable because the endpoint is cron-only and Convex-level status checks provide the real guard. |
 | No wallet integration UI | **Low** | Server-side relayer used for all on-chain transactions. No client-side wallet connect. |
 | No content moderation for arguments | **Low** | Argument text is unfiltered. Needs extension of existing moderation pipeline. |
 

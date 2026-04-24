@@ -74,11 +74,11 @@ Feature-specific documentation (person-facing).
 - `templates.md` — Template system (creation, customization, moderation)
 - `template-variables.md` — Variable syntax, auto-fill, authoring guide
 - `creator.md` — Template creator UI (14 components, 3-agent SSE pipeline)
-- `debates.md` — Debate markets (FEATURE-GATED: `DEBATE = false`)
+- `debates.md` — Debate markets (`DEBATE = true`, live as of 2026-04)
 - `oauth.md` — OAuth provider flows
 - `onboarding.md` — User onboarding flows
 - `jurisdiction.md` — Jurisdiction system (TemplateJurisdiction model)
-- `search.md` — Template search (Gemini embeddings + pgvector)
+- `search.md` — Template search (Gemini `text-embedding-004` + Convex vector index)
 - `sharing.md` — Sharing and social proof
 - `abstraction.md` — Legislative body abstraction layer
 - `coordination-integrity.md` — 5 coordination integrity metrics (GDS, ALD, entropy, burst, CAI)
@@ -118,9 +118,9 @@ Technical specifications and design docs.
 ### `development/` (17 files + integrations/)
 Development workflows, guides, and testing.
 
-- `deployment.md` — **Cloudflare Workers deployment** (wrangler, Hyperdrive, KV)
+- `deployment.md` — **Cloudflare Workers deployment** (wrangler, Convex, KV)
 - `quickstart.md` — Getting started guide
-- `database.md` — Prisma schema, migrations, seeding
+- `database.md` — Convex schema (`convex/schema.ts`), deploy workflow, seeding
 - `testing.md` — Integration-first test strategy
 - `agents.md` — AI agent system (subject line, message writer, decision maker resolution)
 - `moderation.md` — Content moderation pipeline (Llama Guard, prompt injection)

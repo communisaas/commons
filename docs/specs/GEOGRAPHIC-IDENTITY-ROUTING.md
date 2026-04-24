@@ -256,9 +256,7 @@ export async function POST({ request, locals }) {
   const userId = locals.session.userId;
 
   // 1. Get Commons campaign config (determines routing, not proof)
-  const campaign = await prisma.campaign.findUnique({
-    where: { id: campaignId }
-  });
+  const campaign = await convex.query(api.campaigns.getById, { id: campaignId });
 
   if (!campaign) {
     return json({ error: 'Campaign not found' }, { status: 404 });
@@ -291,16 +289,15 @@ export async function POST({ request, locals }) {
   ];
 
   // 7. Create submission record
-  const submission = await prisma.submission.create({
-    data: {
-      userId,
-      campaignId,
-      nullifier,
-      proofHex: proof,
-      publicInputs: JSON.stringify(publicInputs),
-      deliveryStatus: 'pending',
-    }
+  const submissionId = await convex.mutation(api.submissions.create, {
+    userId,
+    campaignId,
+    nullifier,
+    proofHex: proof,
+    publicInputs: JSON.stringify(publicInputs),
+    deliveryStatus: 'pending',
   });
+  const submission = { id: submissionId };
 
   // 8. Commons routes based on geographic identity
   const deliveries = [];
@@ -313,14 +310,13 @@ export async function POST({ request, locals }) {
     }
 
     // Commons creates delivery record (routing is Commons's concern)
-    const delivery = await prisma.delivery.create({
-      data: {
-        submissionId: submission.id,
-        districtType,
-        districtHash,
-        status: 'pending',
-      }
+    const deliveryId = await convex.mutation(api.deliveries.create, {
+      submissionId: submission.id,
+      districtType,
+      districtHash,
+      status: 'pending',
     });
+    const delivery = { id: deliveryId, districtType };
 
     deliveries.push(delivery);
   }
@@ -436,30 +432,18 @@ export async function storeSessionCredentials(
   await idb.put('session-credentials', encrypted, userId);
 
   // Server: Store in session table (for backend proof generation)
-  await prisma.sessionCredential.upsert({
-    where: { userId },
-    create: {
-      userId,
-      cellId: credentials.cellId,
-      boundariesJson: JSON.stringify(credentials.boundaries),
-      boundaryRoot: credentials.boundaryRoot,
-      leafIndex: credentials.leafIndex,
-      merklePathJson: JSON.stringify(credentials.merklePath),
-      merkleRoot: credentials.merkleRoot,
-      epochId: credentials.epochId,
-      // userSecret and identityCommitment are derived, not stored server-side
-      expiresAt: credentials.expiresAt,
-    },
-    update: {
-      cellId: credentials.cellId,
-      boundariesJson: JSON.stringify(credentials.boundaries),
-      boundaryRoot: credentials.boundaryRoot,
-      leafIndex: credentials.leafIndex,
-      merklePathJson: JSON.stringify(credentials.merklePath),
-      merkleRoot: credentials.merkleRoot,
-      epochId: credentials.epochId,
-      expiresAt: credentials.expiresAt,
-    }
+  // Convex upsert: mutation is atomic — look up by userId, patch or insert.
+  await convex.mutation(api.sessionCredentials.upsert, {
+    userId,
+    cellId: credentials.cellId,
+    boundariesJson: JSON.stringify(credentials.boundaries),
+    boundaryRoot: credentials.boundaryRoot,
+    leafIndex: credentials.leafIndex,
+    merklePathJson: JSON.stringify(credentials.merklePath),
+    merkleRoot: credentials.merkleRoot,
+    epochId: credentials.epochId,
+    // userSecret and identityCommitment are derived, not stored server-side
+    expiresAt: credentials.expiresAt,
   });
 }
 ```
@@ -665,32 +649,29 @@ UPDATE campaigns SET target_district = 2 WHERE type = 'state_senate';
 Existing session credentials need cell data:
 
 ```typescript
-async function migrateSessionCredentials(): Promise<void> {
-  const sessions = await prisma.sessionCredential.findMany({
-    where: { cellId: null }
-  });
+// convex/sessionCredentials.ts
+export const migrateSessionCredentials = internalMutation({
+  handler: async (ctx) => {
+    const sessions = await ctx.db
+      .query("sessionCredentials")
+      .filter((q) => q.eq(q.field("cellId"), undefined))
+      .collect();
 
-  for (const session of sessions) {
-    // Re-resolve address to get cell data
-    const user = await prisma.user.findUnique({
-      where: { id: session.userId },
-      select: { verifiedAddress: true }
-    });
-
-    if (user?.verifiedAddress) {
-      const cell = await resolveAddressToCell(user.verifiedAddress);
-      await prisma.sessionCredential.update({
-        where: { userId: session.userId },
-        data: {
+    for (const session of sessions) {
+      // Re-resolve address to get cell data
+      const user = await ctx.db.get(session.userId);
+      if (user?.verifiedAddress) {
+        const cell = await resolveAddressToCell(user.verifiedAddress);
+        await ctx.db.patch(session._id, {
           cellId: cell.cellId,
           boundariesJson: JSON.stringify(cell.boundaries),
           boundaryRoot: cell.boundaryRoot,
           // ... other cell data
-        }
-      });
+        });
+      }
     }
-  }
-}
+  },
+});
 ```
 
 ---

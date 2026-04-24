@@ -97,30 +97,25 @@ User sends message
 - `/src/routes/api/social/generate-card/+server.ts` - Server-side canvas rendering
 - `/src/routes/api/social/track-referral/+server.ts` - Referral tracking
 
-**Database schema additions**:
-```prisma
-model ShareableCard {
-  id              String   @id @default(cuid())
-  userId          String
-  templateId      String
-  deliveryId      String   // Proof of delivery
+**Schema additions** (Convex `convex/schema.ts`):
+```typescript
+shareableCards: defineTable({
+  userId: v.id('users'),
+  templateId: v.id('templates'),
+  deliveryId: v.id('campaignDeliveries'), // Proof of delivery
 
   // Card metadata
-  imageUrl        String   // Generated card image
-  shareCount      Int      @default(0)
-  viewCount       Int      @default(0)
-  conversionCount Int      @default(0)
+  imageUrl: v.string(),            // Generated card image
+  shareCount: v.number(),
+  viewCount: v.number(),
+  conversionCount: v.number(),
 
   // Referral tracking
-  referralCode    String   @unique
-  referredUsers   String[] // List of user IDs who signed up via this card
-
-  createdAt       DateTime @default(now())
-
-  @@index([userId])
-  @@index([referralCode])
-  @@map("shareable_card")
-}
+  referralCode: v.string(),
+  referredUsers: v.array(v.id('users')),
+})
+  .index('by_user', ['userId'])
+  .index('by_referral_code', ['referralCode']) // unique enforced at mutation layer
 ```
 
 ### Why This Works
@@ -201,36 +196,27 @@ User sees friend's impact card on Twitter
 - `/src/lib/components/template/TrendingBadge.svelte` - Trending indicator
 - `/src/lib/components/template/SocialProof.svelte` - "X people sent this"
 
-**Database queries**:
+**Data queries** (Convex):
 ```typescript
 // Trending templates (spike detection)
-const trending = await prisma.template.findMany({
-  where: {
-    // Templates with >3x normal send rate in last 24 hours
-    submissions: {
-      some: {
-        createdAt: { gte: yesterday }
-      }
-    }
-  },
-  include: {
-    _count: {
-      select: {
-        submissions: {
-          where: {
-            createdAt: { gte: yesterday }
-          }
-        }
-      }
-    }
-  },
-  orderBy: {
-    submissions: {
-      _count: 'desc'
-    }
-  },
-  take: 10
-});
+// Count recent submissions per template via by_template_created index,
+// then rank client-side or via an aggregation.
+const recent = await ctx.db
+  .query('submissions')
+  .withIndex('by_created_at', q => q.gte('createdAt', yesterday))
+  .collect();
+
+const countsByTemplate = new Map<Id<'templates'>, number>();
+for (const sub of recent) {
+  countsByTemplate.set(sub.templateId, (countsByTemplate.get(sub.templateId) ?? 0) + 1);
+}
+
+const trendingIds = [...countsByTemplate.entries()]
+  .sort(([, a], [, b]) => b - a)
+  .slice(0, 10)
+  .map(([id]) => id);
+
+const trending = await Promise.all(trendingIds.map(id => ctx.db.get(id)));
 ```
 
 ### Why This Works
@@ -314,39 +300,37 @@ const trending = await prisma.template.findMany({
 - 🏆 **Community Organizer**: 50 referrals
 - 💎 **Movement Leader**: 200 referrals
 
-**Database schema**:
-```prisma
-model UserStats {
-  id                String   @id @default(cuid())
-  userId            String   @unique
+**Schema** (Convex `convex/schema.ts`):
+```typescript
+userStats: defineTable({
+  userId: v.id('users'),
 
   // Action stats
-  messagesSent      Int      @default(0)
-  reputationPoints  Int      @default(0)
-  referralCount     Int      @default(0)
+  messagesSent: v.number(),
+  reputationPoints: v.number(),
+  referralCount: v.number(),
 
   // Rankings
-  cityRank          Int?
-  nationalRank      Int?
+  cityRank: v.optional(v.number()),
+  nationalRank: v.optional(v.number()),
 
   // Badges
-  badges            Json     @default("[]") // Array of badge IDs
+  badges: v.array(v.string()), // Array of badge IDs
+})
+  .index('by_user', ['userId']),
 
-  updatedAt         DateTime @updatedAt
-
-  @@map("user_stats")
-}
-
-model Badge {
-  id          String   @id @default(cuid())
-  name        String
-  description String
-  requirement Json     // e.g., { "messagesSent": 20 }
-  icon        String   // Emoji or icon name
-  rarity      String   // common, uncommon, rare, legendary
-
-  @@map("badge")
-}
+badges: defineTable({
+  name: v.string(),
+  description: v.string(),
+  requirement: v.object({ messagesSent: v.optional(v.number()) }),
+  icon: v.string(),             // Emoji or icon name
+  rarity: v.union(              // common, uncommon, rare, legendary
+    v.literal('common'),
+    v.literal('uncommon'),
+    v.literal('rare'),
+    v.literal('legendary'),
+  ),
+}),
 ```
 
 ### Why This Works

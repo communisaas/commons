@@ -67,61 +67,65 @@ Delivery Confirmation:
 
 ---
 
-## **Database Schema**
+## **Schema (Convex)**
 
-### **New Table: CongressionalSubmission**
+### **New Table: `congressionalSubmissions`**
 
 Tracks email-based congressional submissions (mail receiver → CWC API flow).
 
-```prisma
-model CongressionalSubmission {
-  id                String    @id @default(cuid())
-
-  // Tracking identifiers
-  tracking_email    String    @unique // "congress+slug+userId@commons.email"
-  template_id       String
-  user_id           String    // REQUIRED (no guest support)
+```typescript
+// convex/schema.ts
+congressionalSubmissions: defineTable({
+  trackingEmail: v.string(),        // "congress+slug+userId@commons.email"
+  templateId: v.id("templates"),
+  userId: v.id("users"),            // REQUIRED (no guest support)
 
   // User data (from inbound email)
-  sender_email      String    // User's actual email address
-  sender_name       String?   // Extracted from email
-  message_body      String    // What user actually sent
-  message_subject   String?   // Email subject line
+  senderEmail: v.string(),
+  senderName: v.optional(v.string()),
+  messageBody: v.string(),
+  messageSubject: v.optional(v.string()),
 
   // Congressional recipients (resolved from template + user address)
-  target_representatives Json   // [{ bioguideId, name, chamber, officeCode }]
+  targetRepresentatives: v.array(v.object({
+    bioguideId: v.string(),
+    name: v.string(),
+    chamber: v.string(),
+    officeCode: v.string()
+  })),
 
   // Delivery tracking
-  received_at       DateTime? // When mail receiver got the email
-  submitted_at      DateTime? // When submitted to CWC
-  delivery_status   String    @default("pending") // 'pending' | 'received' | 'submitted' | 'delivered' | 'failed'
+  receivedAt: v.optional(v.number()),
+  submittedAt: v.optional(v.number()),
+  deliveryStatus: v.string(),       // 'pending' | 'received' | 'submitted' | 'delivered' | 'failed'
 
   // CWC Job correlation
-  cwc_job_id        String?   // Links to CWCJob table
-  cwc_confirmations Json?     // Array of { office, confirmationNumber, status }
+  cwcJobId: v.optional(v.id("cwcJobs")),
+  cwcConfirmations: v.optional(v.array(v.object({
+    office: v.string(),
+    confirmationNumber: v.string(),
+    status: v.string()
+  }))),
 
   // Error tracking
-  error_message     String?
-  error_timestamp   DateTime?
+  errorMessage: v.optional(v.string()),
+  errorTimestamp: v.optional(v.number()),
 
-  // Metadata
-  created_at        DateTime  @default(now())
-  updated_at        DateTime  @updatedAt
-
-  @@index([tracking_email])
-  @@index([template_id])
-  @@index([user_id])
-  @@index([delivery_status])
-  @@index([created_at])
-  @@map("congressional_submission")
-}
+  createdAt: v.number(),
+  updatedAt: v.number()
+})
+  .index("by_trackingEmail", ["trackingEmail"])
+  .index("by_templateId", ["templateId"])
+  .index("by_userId", ["userId"])
+  .index("by_deliveryStatus", ["deliveryStatus"])
+  .index("by_createdAt", ["createdAt"])
 ```
 
 ### **Template Schema Changes**
 
-**Current state** (schema.prisma:141-287):
-- ✅ `recipient_config` (Json) - Already exists, perfect!
-- ❌ `deliveryMethod` (String) - **DEPRECATED, will remove**
+**Current state** (`convex/schema.ts` — `templates` table):
+- `recipientConfig` (v.any()) - Already exists.
+- `deliveryMethod` (v.string()) - **Deprecated, will remove.**
 
 **New `recipient_config` structure**:
 
@@ -400,7 +404,8 @@ export function analyzeEmailFlow(template: Template, user: User | null): EmailFl
 ```typescript
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { convexServerClient } from '$lib/server/convex/client';
+import { api } from '$convex/_generated/api';
 import { submitToCongressViaLambda } from '$lib/core/congress/mail-receiver-submission';
 
 /**
@@ -431,26 +436,17 @@ export const POST: RequestHandler = async ({ request }) => {
 
     const [_, templateSlug, userId] = match;
 
-    // Look up template and user
-    const template = await prisma.template.findUnique({
-      where: { slug: templateSlug }
+    // Look up template and user via Convex
+    const template = await convexServerClient.query(api.templates.getBySlug, {
+      slug: templateSlug
     });
 
     if (!template) {
       throw error(404, 'Template not found');
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        street: true,
-        city: true,
-        state: true,
-        zip: true
-      }
+    const user = await convexServerClient.query(api.users.getById, {
+      id: userId
     });
 
     if (!user) {
@@ -461,20 +457,22 @@ export const POST: RequestHandler = async ({ request }) => {
       throw error(400, 'User address not found - cannot route to congressional representatives');
     }
 
-    // Create Congressional Submission record
-    const submission = await prisma.congressionalSubmission.create({
-      data: {
-        tracking_email: trackingMatch,
-        template_id: template.id,
-        user_id: user.id,
-        sender_email: email.from,
-        sender_name: email.fromName || user.name,
-        message_body: email.text,
-        message_subject: email.subject,
-        delivery_status: 'received',
-        received_at: new Date()
+    // Create Congressional Submission record via Convex mutation (atomic)
+    const submissionId = await convexServerClient.mutation(
+      api.congressionalSubmissions.create,
+      {
+        trackingEmail: trackingMatch,
+        templateId: template._id,
+        userId: user._id,
+        senderEmail: email.from,
+        senderName: email.fromName || user.name,
+        messageBody: email.text,
+        messageSubject: email.subject,
+        deliveryStatus: 'received',
+        receivedAt: Date.now()
       }
-    });
+    );
+    const submission = { id: submissionId };
 
     console.log('[Mail Receiver] Congressional submission received:', {
       submissionId: submission.id,
@@ -529,9 +527,12 @@ function parseInboundEmail(formData: FormData) {
 
 ```typescript
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { prisma } from '$lib/core/db';
+import { convexServerClient } from '$lib/server/convex/client';
+import { api } from '$convex/_generated/api';
 import { lookupRepresentatives } from '$lib/core/congress/address-lookup';
-import type { Template, User } from '@prisma/client';
+import type { Doc } from '$convex/_generated/dataModel';
+type Template = Doc<'templates'>;
+type User = Doc<'users'>;
 
 /**
  * Submit congressional message via Lambda workers
@@ -574,15 +575,14 @@ export async function submitToCongressViaLambda(params: {
     }))
   });
 
-  // STEP 2: Create CWC job
-  const job = await prisma.cWCJob.create({
-    data: {
-      templateId: template.id,
-      userId: user.id,
-      status: 'queued',
-      submissionCount: representatives.length
-    }
+  // STEP 2: Create CWC job via Convex mutation
+  const jobId = await convexServerClient.mutation(api.cwcJobs.create, {
+    templateId: template._id,
+    userId: user._id,
+    status: 'queued',
+    submissionCount: representatives.length
   });
+  const job = { id: jobId };
 
   // STEP 3: Send to SQS FIFO queues
   const sqsClient = new SQSClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -648,32 +648,28 @@ export async function submitToCongressViaLambda(params: {
     });
   }
 
-  // STEP 4: Update CWC job with message IDs
-  await prisma.cWCJob.update({
-    where: { id: job.id },
-    data: {
-      messageIds,
-      status: 'processing'
-    }
+  // STEP 4: Update CWC job with message IDs via Convex mutation
+  await convexServerClient.mutation(api.cwcJobs.updateStatus, {
+    id: job.id,
+    messageIds,
+    status: 'processing'
   });
 
-  // STEP 5: Update congressional submission
-  await prisma.congressionalSubmission.update({
-    where: { id: submissionId },
-    data: {
-      cwc_job_id: job.id,
-      submitted_at: new Date(),
-      delivery_status: 'submitted',
-      target_representatives: representatives.map(r => ({
-        bioguideId: r.bioguideId,
-        name: r.name,
-        chamber: r.chamber,
-        officeCode: r.officeCode,
-        state: r.state,
-        district: r.district,
-        party: r.party
-      }))
-    }
+  // STEP 5: Update congressional submission via Convex mutation
+  await convexServerClient.mutation(api.congressionalSubmissions.markSubmitted, {
+    id: submissionId,
+    cwcJobId: job.id,
+    submittedAt: Date.now(),
+    deliveryStatus: 'submitted',
+    targetRepresentatives: representatives.map(r => ({
+      bioguideId: r.bioguideId,
+      name: r.name,
+      chamber: r.chamber,
+      officeCode: r.officeCode,
+      state: r.state,
+      district: r.district,
+      party: r.party
+    }))
   });
 
   console.log('[Mail Receiver] Congressional submission complete:', {
@@ -698,7 +694,8 @@ export async function submitToCongressViaLambda(params: {
 ```typescript
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { prisma } from '$lib/core/db';
+import { convexServerClient } from '$lib/server/convex/client';
+import { api } from '$convex/_generated/api';
 
 /**
  * Get Congressional Submission Status
@@ -714,54 +711,37 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     throw error(401, 'Authentication required');
   }
 
-  const submission = await prisma.congressionalSubmission.findUnique({
-    where: { id: submissionId },
-    select: {
-      id: true,
-      delivery_status: true,
-      received_at: true,
-      submitted_at: true,
-      target_representatives: true,
-      cwc_confirmations: true,
-      error_message: true,
-      error_timestamp: true,
-      cwc_job_id: true,
-      user_id: true
-    }
-  });
+  const submission = await convexServerClient.query(
+    api.congressionalSubmissions.getById,
+    { id: submissionId }
+  );
 
   if (!submission) {
     throw error(404, 'Submission not found');
   }
 
   // Authorization check
-  if (submission.user_id !== session.userId) {
+  if (submission.userId !== session.userId) {
     throw error(403, 'Not authorized to view this submission');
   }
 
   // Fetch CWC job status if available
   let cwcJob = null;
-  if (submission.cwc_job_id) {
-    cwcJob = await prisma.cWCJob.findUnique({
-      where: { id: submission.cwc_job_id },
-      select: {
-        status: true,
-        results: true,
-        submissionCount: true,
-        completedAt: true
-      }
+  if (submission.cwcJobId) {
+    cwcJob = await convexServerClient.query(api.cwcJobs.getById, {
+      id: submission.cwcJobId
     });
   }
 
   return json({
-    submissionId: submission.id,
-    status: submission.delivery_status,
-    receivedAt: submission.received_at,
-    submittedAt: submission.submitted_at,
-    representatives: submission.target_representatives,
-    confirmations: submission.cwc_confirmations,
-    error: submission.error_message,
-    errorTimestamp: submission.error_timestamp,
+    submissionId: submission._id,
+    status: submission.deliveryStatus,
+    receivedAt: submission.receivedAt,
+    submittedAt: submission.submittedAt,
+    representatives: submission.targetRepresentatives,
+    confirmations: submission.cwcConfirmations,
+    error: submission.errorMessage,
+    errorTimestamp: submission.errorTimestamp,
     cwcJob: cwcJob
   });
 };

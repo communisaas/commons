@@ -78,13 +78,10 @@ Users need to prove they sent congressional messages for reputation tracking, bu
 const { tokens } = await oauth2Client.getToken(code);
 
 // Tokens stored encrypted server-side
-await prisma.user.update({
-  where: { id: user.id },
-  data: {
-    encrypted_oauth_tokens: encryptTokens(tokens),
-    oauth_provider: 'google',
-    oauth_expires_at: tokens.expiry_date
-  }
+await ctx.db.patch(user._id, {
+  encryptedOauthTokens: encryptTokens(tokens),
+  oauthProvider: 'google',
+  oauthExpiresAt: tokens.expiry_date
 });
 ```
 

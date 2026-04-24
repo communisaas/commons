@@ -2,35 +2,35 @@
 
 > Produced 2026-03-11 by the architect agent.
 > These blueprints cover the four Phase 0 launch blockers from `docs/strategy/product-roadmap.md`.
-> Every file path, Prisma query, and component pattern references **real code** observed in this codebase.
+> Every file path and component pattern references **real code** observed in this codebase.
 
-> ⚠️ **HISTORICAL — backend has moved to Convex (2026-04 audit).**
-> Phases 0–2 shipped. Treat this as a historical record, not a
-> copy-paste source:
+> Historical blueprint (2026-04-23 reconciliation). Phases 0–2 shipped.
+> Treat this as a design record, not a copy-paste source:
 >
-> - **~74 Prisma code samples are dead code.** Backend is Convex-only;
->   all `db.*` / `prisma.*` snippets in Blueprints 1–4 are unexecutable
->   as written. Real access uses `serverQuery` / `serverAction` /
->   `serverMutation` from `convex-sveltekit`.
+> - All data-access snippets below read/write through Convex via
+>   `serverQuery` / `serverAction` / `serverMutation` from
+>   `convex-sveltekit`. Data and index names match `convex/schema.ts`.
 > - **Shipped status of the four blueprints:**
 >   - **1. Org onboarding flow:** shipped. `OnboardingChecklist.svelte`
->     + `/api/org/[slug]/invites` live, backed by Convex (token mint
->     uses encrypted-email + hash, not `randomBytes`). Org-profile
->     PATCH is at `/api/org/[slug]/profile`, not `/api/org/[slug]`.
->   - **2. Org dashboard:** **partial.** Scaffolding + checklist live;
+>     + `/api/org/[slug]/invites` live (token mint uses encrypted-email
+>     + hash, not `randomBytes`). Org-profile PATCH is at
+>     `/api/org/[slug]/profile`, not `/api/org/[slug]`.
+>   - **2. Org dashboard:** partial. Scaffolding + checklist live;
 >     verification funnel + tier distribution + campaign list still
 >     return hardcoded zeros (`+page.server.ts:~37-49`). TODO on
 >     `convex/organizations.getDashboard`.
 >   - **3. Stripe billing:** checkout, portal, webhooks, plan constants
->     all live. **Usage metering (`getOrgUsage`) not implemented** —
+>     all live. Usage metering (`getOrgUsage`) not implemented —
 >     organizations can exceed limits because the guard is missing in
 >     send + embed paths. See
 >     `docs/design/BILLING-ENFORCEMENT-ROADMAP.md`.
 >   - **4. Public campaign page (`/c/[slug]`):** shipped. Load + submit
->     flows moved to Convex; UI is monolithic (blueprint's 5-component
+>     flows run on Convex; UI is monolithic (blueprint's 5-component
 >     split not done — design debt).
-> - **Feature flags silently off:** `CONGRESSIONAL=false`, `DEBATE=false`,
->   `PASSKEY=false`. Blueprint narrative implies these are live.
+> - **Feature flags silently off:** `CONGRESSIONAL=false`, `PASSKEY=false`,
+>   `DELEGATION=false`, `ENGAGEMENT_METRICS=false`. `DEBATE=true`
+>   (flipped 2026-04). Blueprint narrative implies CWC/passkey flows are
+>   live; they are code-complete but gated.
 > - **Identity intake:** mDL sole active method; legacy `self.xyz` /
 >   `didit` enum values retained for backward compat but unused.
 
@@ -1472,7 +1472,7 @@ No feature flag needed for Phase 0 work -- these are all launch blockers that sh
 ### Testing Strategy
 
 1. **Onboarding:** Verify first-run detection with empty org, partially set up org, and fully set up org.
-2. **Dashboard:** Verify all Prisma queries return expected shapes with seed data.
+2. **Dashboard:** Verify all Convex queries return expected shapes with seed data.
 3. **Billing:** Test webhook handler with Stripe CLI (`stripe trigger checkout.session.completed`).
 4. **Campaign page:** Test form submission, dedup, rate limiting, and plan limit enforcement.
 

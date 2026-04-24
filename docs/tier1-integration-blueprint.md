@@ -3,6 +3,8 @@
 **Status:** ACTIVE — guides Tasks #2, #3, #4, #5
 **Scope:** Flip ADDRESS_SPECIFICITY → 'district', CONGRESSIONAL → true, DEBATE → true
 
+> Reconciliation note (2026-04-23). `ADDRESS_SPECIFICITY` is already `'district'` and `DEBATE` is already `true` in production; only `CONGRESSIONAL` remains flag-gated off. The canonical schema lives in `convex/schema.ts`; when checking a claim from this blueprint, grep `convex/schema.ts` or `convex/*.ts` for the table/field name.
+
 ---
 
 ## 1. District Verification (ADDRESS_SPECIFICITY → 'district')
@@ -77,7 +79,7 @@ When `FEATURES.ADDRESS_SPECIFICITY === 'district'` and the form includes a `dist
 | Submission handler | `src/lib/core/congressional/submission-handler.ts` | Built. Stores ZK proof, queues blockchain verification. **No CWC delivery.** |
 | Blockchain verification | `src/lib/core/blockchain/district-gate-client.ts` | Built. `verifyOnChain()` submits to Scroll. |
 | Retry queue | `src/lib/core/blockchain/submission-retry-queue.ts` | Built. Exponential backoff for failed on-chain submissions. |
-| Submission model | `prisma/schema.prisma:704` | Built. Has `cwc_submission_id`, `delivery_status`, `delivery_error`, `delivered_at` — all CWC fields ready but never populated. |
+| Submission model | `convex/schema.ts` (`submissions` table) | Built. Has `cwcSubmissionId`, `deliveryStatus`, `deliveryError`, `deliveredAt` — all CWC fields ready but never populated. |
 | Template routing | `/api/debates/create` uses `templateId` | Debate→Template relation exists. Campaign→Template via `campaign.templateId`. |
 | Officials with CWC codes | resolve-address API | Returns `office_code` (CWC code) per official. |
 
@@ -87,10 +89,10 @@ The submission handler runs: proof → nullifier check → store → blockchain 
 
 CWC (Congress.gov Web Communication) API delivers messages to congressional offices. Each office has a unique CWC code (returned as `cwc_code`/`office_code` from the officials lookup). The delivery flow should be:
 
-1. After blockchain verification succeeds (`verification_status: 'verified'`), trigger CWC delivery
-2. Decrypt the message in TEE (the `encrypted_message` field on Submission)
+1. After blockchain verification succeeds (`verificationStatus: 'verified'`), trigger CWC delivery
+2. Decrypt the message in TEE (the `encryptedMessage` field on `submissions`)
 3. POST to CWC API with: recipient office code, message body, sender district, metadata
-4. Update `cwc_submission_id`, `delivery_status`, `delivered_at`
+4. Update `cwcSubmissionId`, `deliveryStatus`, `deliveredAt`
 
 ### Wiring instructions (Task #3)
 
@@ -113,7 +115,7 @@ interface CWCDeliveryResult {
 }
 ```
 
-**Delivery trigger:** Add a `deliverToCongress()` call inside `queueBlockchainSubmission()` after the `verification_status: 'verified'` update (submission-handler.ts:167-179). This keeps delivery gated behind proof verification.
+**Delivery trigger:** Add a `deliverToCongress()` call inside `queueBlockchainSubmission()` after the `verificationStatus: 'verified'` patch (submission-handler.ts:167-179). This keeps delivery gated behind proof verification.
 
 ```typescript
 // After line 179 in submission-handler.ts:
@@ -135,9 +137,9 @@ if (result.success && result.txHash) {
 - Rate limit: CWC has per-office rate limits. Implement per-office queuing.
 - Retry: CWC returns 429/503 → queue for retry using existing `submission-retry-queue.ts` pattern
 
-**Message decryption:** The `encrypted_message` field contains XChaCha20-Poly1305 ciphertext encrypted to the TEE public key. Decryption must happen inside the TEE. For Phase 1 without TEE: if `encrypted_message` is null, the message was submitted in plaintext via the campaign page form (non-ZK path). Support both:
-- ZK path: encrypted_message → TEE decrypt → CWC deliver
-- Campaign page path: message from form → stored as CampaignAction.messageHash → deliver via CWC with plaintext
+**Message decryption:** The `encryptedMessage` field contains XChaCha20-Poly1305 ciphertext encrypted to the TEE public key. Decryption must happen inside the TEE. For Phase 1 without TEE: if `encryptedMessage` is undefined, the message was submitted in plaintext via the campaign page form (non-ZK path). Support both:
+- ZK path: `encryptedMessage` → TEE decrypt → CWC deliver
+- Campaign page path: message from form → stored as `campaignActions.messageHash` → deliver via CWC with plaintext
 
 ### Env vars required
 - `CWC_API_URL` — CWC delivery gateway endpoint
@@ -158,8 +160,8 @@ if (result.success && result.txHash) {
 | 23 debate components total | `src/lib/components/debate/` | Built. Full debate UI exists. |
 | 13 debate API endpoints | `src/routes/api/debates/` | Built. create, arguments, commit, reveal, cosign, resolve, appeal, evaluate, stream, position-proof, ai-resolution, claim, by-template. |
 | Debate page | `src/routes/s/[slug]/debate/[debateId]/` | Built. Full debate participation page. |
-| Debate model | `prisma/schema.prisma:989` | Built. Links to Template via `template_id`. LMSR fields, arguments, nullifiers. |
-| Campaign model | `prisma/schema.prisma:1485` | Has `debateEnabled` (default false), `debateThreshold` (default 50). |
+| Debate model | `convex/schema.ts` (`debates` table) | Built. Links to Template via `templateId`. LMSR fields, arguments, nullifiers. |
+| Campaign model | `convex/schema.ts` (`campaigns` table) | Has `debateEnabled` (default false), `debateThreshold` (default 50). |
 | Campaign→Template link | `campaign.templateId` | Exists. Campaign optionally references a Template. |
 
 ### What's missing — the gap
@@ -180,40 +182,23 @@ Add a debate lookup to the `load` function when `FEATURES.DEBATE` is true:
 
 ```typescript
 import { FEATURES } from '$lib/config/features';
+import { serverQuery } from '$lib/server/convex';
+import { api } from '$convex/api';
 
 // Inside load(), after campaign query:
 let debate = null;
 if (FEATURES.DEBATE && campaign.debateEnabled && campaign.templateId) {
-    debate = await db.debate.findFirst({
-        where: { template_id: campaign.templateId },
-        orderBy: [{ status: 'asc' }, { created_at: 'desc' }],
-        select: {
-            id: true,
-            debate_id_onchain: true,
-            proposition_text: true,
-            status: true,
-            deadline: true,
-            argument_count: true,
-            unique_participants: true,
-            total_stake: true,
-            winning_stance: true,
-            current_prices: true,
-            current_epoch: true,
-            arguments: {
-                select: {
-                    argument_index: true,
-                    stance: true,
-                    weighted_score: true
-                },
-                orderBy: { weighted_score: 'desc' },
-                take: 5  // Top 5 for signal display
-            }
-        }
+    debate = await serverQuery(api.debates.latestForTemplate, {
+        templateId: campaign.templateId,
+        topArgumentCount: 5, // Top 5 for signal display
     });
 }
 ```
 
-Return `debate` (with BigInt serialized) in the page data.
+The Convex query uses `withIndex('by_template', q => q.eq('templateId', templateId))`,
+orders by `status asc, createdAt desc`, and returns the matching
+`debates` row along with the top-N `debateArguments` ordered by
+`weightedScore`. Return `debate` (with any BigInt fields serialised) in the page data.
 
 **Client (`/c/[slug]/+page.svelte`):**
 
@@ -308,15 +293,11 @@ Debate gating should check `plan.slug` is 'organization' or 'coalition' in the `
 All code must remain CF Workers compatible:
 
 - **No `Buffer`**: Use `Uint8Array` + `TextEncoder` (already done in district-credential.ts)
-- **No `fs`/`path`**: All file I/O goes through Prisma
+- **No `fs`/`path`**: All data I/O goes through Convex
 - **No `process.env` directly in client code**: Use `$env/dynamic/public` for client, `process.env` only in server paths (populated by `handlePlatformEnv` shim)
 - **CWC HTTP client**: Use `fetch()` (globally available on Workers), not axios/node-fetch
 - **Ed25519 signing**: Uses `@noble/curves` (pure JS, Workers compatible) — already correct
-- **No `prisma` singleton in module scope**: Use `db` from `$lib/core/db.ts` (per-request via ALS). **Note:** `submission-handler.ts` imports `prisma` not `db` — this must be fixed to `db` for Workers compatibility.
-
-### Database: `prisma` vs `db` import
-
-The submission handler (`submission-handler.ts:1`) imports from `'$lib/core/db'` as `prisma`, while the standard pattern is `db`. Check that this is the ALS-backed per-request client, not a module-scope singleton. If it's `import { prisma } from '$lib/core/db'` and `db.ts` exports both names for the same ALS client, it's fine. If not, fix it.
+- **No DB clients in module scope**: call Convex via `serverQuery` / `serverAction` / `serverMutation` at request time.
 
 ### Environment variables summary
 
@@ -336,6 +317,6 @@ New for Tier 1:
 | Task | What to do | Key files to modify |
 |------|-----------|-------------------|
 | **#2** Wire district verification | Replace postal code with AddressCollectionForm on campaign page when district mode. Thread district code through form submission. Hash district instead of postal. Upgrade engagement tier. | `+page.svelte`, `+page.server.ts` in `/c/[slug]/`, `AddressCollectionForm.svelte` (add district to callback) |
-| **#3** Wire CWC delivery | Create `cwc-delivery.ts`. Add delivery trigger in submission-handler after blockchain verification. Add CWC rate limiting. Fix `prisma` → `db` import if needed. | `submission-handler.ts`, new `cwc-delivery.ts`, `/api/congressional/submit/` (if endpoint needed) |
+| **#3** Wire CWC delivery | Create `cwc-delivery.ts`. Add delivery trigger in submission-handler after blockchain verification. Add CWC rate limiting. | `submission-handler.ts`, new `cwc-delivery.ts`, `/api/congressional/submit/` (if endpoint needed) |
 | **#4** Integrate debate markets | Add debate query to campaign page server load. Render DebateMarketCard + DebateSignal on campaign landing. Shape data for component types. Add debate spawning action to org dashboard. | `+page.svelte`, `+page.server.ts` in `/c/[slug]/` |
 | **#5** Flip flags | Set ADDRESS_SPECIFICITY='district', CONGRESSIONAL=true, DEBATE=true in features.ts. Gate CONGRESSIONAL behind plan check. Gate DEBATE behind plan + WALLET check. Add rate limits to new endpoints. | `features.ts`, billing checks in relevant endpoints |

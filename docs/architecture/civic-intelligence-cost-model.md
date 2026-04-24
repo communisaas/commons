@@ -248,7 +248,7 @@ TIER 1: ALWAYS-ON (Background, Nightly Batch)
 TIER 2: TOPIC-TRIGGERED (On-Demand, Cached 30 Days)
 ├── SEC filings for companies in active campaigns (EDGAR, free)
 ├── Deep document parsing for cited sources (Docling, self-hosted)
-├── Semantic search across cached intelligence (pgvector)
+├── Semantic search across cached intelligence (Convex .vectorIndex)
 └── Related article discovery (Exa or Perplexity, pay-per-query)
 
 TIER 3: USER-INITIATED (Real-Time, Cached 30 Days)
@@ -271,7 +271,7 @@ A nightly batch window handles the entire federal + state legislative corpus.
 04:00 UTC — Embedding generation (new/changed documents)
 04:30 UTC — Deduplication pass (content-hash + MinHash)
 05:00 UTC — TTL cleanup (expire documents past retention window)
-05:30 UTC — Index optimization (VACUUM ANALYZE on intelligence table)
+05:30 UTC — Index optimization (Convex manages vector/search index maintenance)
 ```
 
 ### Data Retention
@@ -317,40 +317,36 @@ Configuration:
 - Summary-only embedding (title + abstract): 80-95% reduction vs full text
 - Semantic chunking vs naive splitting: 10-15% better retrieval quality
 
-### Vector Storage: pgvector Configuration
+### Vector Storage: Convex Configuration
 
-```sql
--- Use halfvec (float16) for 50% storage reduction, <1% quality loss
--- Reference: https://neon.com/blog/dont-use-vector-use-halvec-instead
-
--- HNSW index for approximate nearest neighbor search
-CREATE INDEX intelligence_embedding_hnsw
-  ON intelligence USING hnsw (embedding vector_cosine_ops)
-  WITH (m = 16, ef_construction = 200);
-
--- Full-text search via generated tsvector column
-ALTER TABLE intelligence ADD COLUMN fts tsvector
-  GENERATED ALWAYS AS (
-    setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(snippet, '')), 'B')
-  ) STORED;
-CREATE INDEX intelligence_fts_idx ON intelligence USING gin(fts);
-
--- Hybrid search function (Reciprocal Rank Fusion)
--- Combines vector similarity + full-text relevance
--- See: prisma/migrations/20260205_add_intelligence_pgvector/migration.sql
+```typescript
+// convex/schema.ts
+intelligence: defineTable({
+  title: v.string(),
+  snippet: v.string(),
+  embedding: v.array(v.float64()),   // Gemini text-embedding-004, 768 dim
+  source: v.string(),
+  publishedAt: v.number(),
+  /* ... */
+})
+  .searchIndex("by_text", {
+    searchField: "title",
+    filterFields: ["source"],
+  })
+  .vectorIndex("by_embedding", {
+    vectorField: "embedding",
+    dimensions: 768,
+  });
 ```
 
-**Storage estimates at scale:**
+Hybrid search combines a keyword pass through `.searchIndex("by_text")`
+with a semantic pass through `.vectorSearch("intelligence",
+"by_embedding", ...)`, fused via Reciprocal Rank Fusion in the caller.
 
-| Documents | Vector Size (halfvec, 1024-dim) | Total with Indexes | RAM Needed |
-|-----------|--------------------------------|-------------------|------------|
-| 10,000 | ~20 MB | ~60 MB | 1 GB |
-| 100,000 | ~200 MB | ~600 MB | 2 GB |
-| 1,000,000 | ~2 GB | ~6 GB | 8 GB |
-
-At 100K documents (more than sufficient for topic-scoped ingestion), the
-entire vector index fits in 2 GB RAM on the existing Postgres instance.
+**Storage and index management are handled by Convex.** At the
+topic-scoped corpus sizes we actually operate on (tens of thousands of
+documents), vector search latency stays comfortably under the 200ms
+target and there is no hand-tuned index state to maintain.
 
 ---
 
@@ -387,9 +383,9 @@ Structured Output:
   - Cross-references (citations, amendments)
   - Metadata (source, date, type, page count)
   ↓
-ParsedDocumentCache (Postgres JSONB, 30-day TTL)
+ParsedDocumentCache (Convex table, 30-day TTL)
   ↓
-Embedding Generation (chunked sections → pgvector)
+Embedding Generation (chunked sections → Convex .vectorIndex)
 ```
 
 ---
@@ -401,18 +397,18 @@ Embedding Generation (chunked sections → pgvector)
 | Component | Spec | Monthly Cost | Purpose |
 |-----------|------|-------------|---------|
 | **Processing VPS** | 8GB RAM, 4 vCPU (Hetzner CX32) | $40 | Docling + Nomic Embed + batch jobs |
-| **Database VPS** | 8GB RAM, 4 vCPU, 100GB SSD | $40 | PostgreSQL + pgvector (shared with app) |
+| **Convex (managed)** | Primary data + vector/search indexes | included | Intelligence + templates + bills |
 | **News API** | Currents API Professional | $35 | Primary news ingestion |
 | **Object storage** | Backblaze B2, ~50GB | $5 | Raw document archive, backups |
 | **Buffer** | - | $5 | DNS, monitoring, misc |
-| **Total** | | **$125/mo** | |
+| **Total** | | **$85/mo** | |
 
 This covers:
 - ~72,000 pages/month document parsing capacity
 - Unlimited embedding generation (self-hosted)
 - All federal + state legislative data (free APIs)
 - ~10,000 news articles/month
-- 100K+ vector documents in pgvector
+- 100K+ vector documents in Convex `.vectorIndex`
 
 ### Comparison: API-Only Approach
 
@@ -421,10 +417,9 @@ This covers:
 | Reducto parsing (10K pages) | $150 |
 | Voyage AI embeddings (5M tokens) | $100-300 |
 | NewsAPI Business | $449 |
-| Managed PostgreSQL + pgvector | $85 |
-| **Total** | **$784-1,084/mo** |
+| **Total** | **$699-999/mo** |
 
-**Self-hosted saves 84-88%** ($125 vs $784-1,084).
+**Self-hosted + Convex saves 88-91%** ($85 vs $699-999).
 
 ### Scaling Path
 
@@ -473,18 +468,7 @@ References:
 - [Memory-efficient, Extreme-scale Document Deduplication (2024)](https://arxiv.org/pdf/2411.04257)
 - [LSHBloom: Internet-Scale Text Deduplication](https://arxiv.org/html/2411.04257v3)
 
-### Vector Quantization (50% Storage Reduction)
-
-**halfvec (float16):** pgvector supports half-precision vectors with <1%
-quality degradation. Halves storage and improves cache utilization.
-
-```sql
--- Standard: 1024 dims × 4 bytes = 4KB per vector
--- halfvec: 1024 dims × 2 bytes = 2KB per vector
--- Index size reduction: ~66%
-```
-
-Reference: [Optimizing Vector Storage with pgvector Halfvec](https://www.eastagile.com/blogs/optimizing-vector-storage-in-postgresql-with-pgvector-halfvec)
+### Dimension Tiering
 
 **Matryoshka embeddings:** Models like Nomic Embed v1.5 support dimension
 truncation. Store multiple resolutions for tiered search:
@@ -505,11 +489,12 @@ latency tolerance is 12-24 hours, always use batch endpoints.
 
 ### Caching (Eliminates Redundant API Calls)
 
-The `ParsedDocumentCache` table (Postgres JSONB) with 30-day TTL ensures
-no document is parsed twice. The `Intelligence` table with HNSW index
-ensures no embedding query hits the API if the content already exists.
+The `parsedDocumentCache` Convex table with 30-day TTL ensures no
+document is parsed twice. The `intelligence` table with its
+`.vectorIndex("by_embedding", { dimensions: 768 })` ensures no embedding
+query hits the API if the content already exists.
 
-Hit count tracking (`hit_count` column) enables cache warming for
+Hit count tracking (`hitCount` field) enables cache warming for
 frequently accessed documents.
 
 ---
@@ -549,13 +534,12 @@ At scale, the intelligence pipeline costs half a cent per user per month.
 
 | Decision | Choice | Rationale | Date |
 |----------|--------|-----------|------|
-| Vector database | pgvector (Postgres) | Eliminate MongoDB; single database for all data; HNSW performance sufficient for <1M vectors | 2026-02-05 |
+| Vector database | Convex `.vectorIndex(...)` | Single backend for all data; sufficient performance for <1M vectors | 2026-04-23 |
 | Primary embedding model | Self-hosted Nomic Embed v1.5 + Voyage API for legal | Balance cost ($0 bulk) with quality (Voyage for legal precision) | 2026-02-05 |
 | Document parsing | Self-hosted Docling + Reducto API fallback | $40/mo for 72K pages vs $0.015/page API | 2026-02-05 |
 | News source | Currents API ($150/mo) | Best cost/request ratio for civic news | 2026-02-05 |
 | Ingestion cadence | Nightly batch (02:00-05:30 UTC) | Civic data changes daily at most; no real-time requirement | 2026-02-05 |
-| Vector precision | halfvec (float16) | 50% storage savings, <1% quality loss | 2026-02-05 |
-| Template embeddings | Google Gemini embedding-001 | Free tier, sufficient quality for template discovery | 2026-02-05 |
+| Template embeddings | Google Gemini `text-embedding-004` (768 dim) | Free tier, sufficient quality for template discovery | 2026-02-05 |
 
 ---
 
@@ -582,16 +566,13 @@ At scale, the intelligence pipeline costs half a cent per user per month.
 - [Currents API Pricing](https://currentsapi.services/en/product/price) — Best cost/request news API
 - [GNews Pricing](https://gnews.io/pricing) — Alternative news API
 - [Exa Pricing](https://exa.ai/pricing) — Neural search
-- Managed PostgreSQL + pgvector (via Cloudflare Hyperdrive in production)
 - [Google Gemini API Pricing](https://ai.google.dev/gemini-api/docs/pricing) — Embeddings
 
 ### Technical References
 - [PDF Data Extraction Benchmark 2025: Docling vs Unstructured vs LlamaParse](https://procycons.com/en/blogs/pdf-data-extraction-benchmark/) — Docling 97.9% table accuracy
 - [Best Open-Source Embedding Models Benchmarked](https://supermemory.ai/blog/best-open-source-embedding-models-benchmarked-and-ranked/) — MTEB comparisons
-- [Optimizing Vector Storage with pgvector Halfvec](https://www.eastagile.com/blogs/optimizing-vector-storage-in-postgresql-with-pgvector-halfvec) — 50% storage reduction
 - [Introduction to Matryoshka Embedding Models](https://huggingface.co/blog/matryoshka) — Variable-dimension embeddings
 - [Memory-efficient Document Deduplication (arXiv 2024)](https://arxiv.org/pdf/2411.04257) — MinHash LSH at scale
-- [Neon: Don't Use Vector, Use Halfvec](https://neon.com/blog/dont-use-vector-use-halvec-instead-and-save-50-of-your-storage-cost)
 - [Weaviate: Binary Quantization for 32x Memory Reduction](https://weaviate.io/blog/binary-quantization)
 
 ---

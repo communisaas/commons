@@ -21,13 +21,13 @@
 >   rendered on /about/integrity" to match reality.
 > - **SSE + KV packet cache + migration landing page + segment bulk
 >   actions are all live** — the doc's "Deferred" markers for these
->   are inverted (they shipped). Only `FEATURES.DEBATE=false` and
->   SMS (Twilio/10DLC ops pending) remain truly deferred.
-> - **Backing stack note:** Plan language is Convex-native (no
->   Prisma refs), which is correct. Other related design docs
->   (INTELLIGENCE-LOOP-PLAN, CROSS-BORDER-PLAN, SMS-RENABLE-PLAN)
->   do still carry Prisma-era schema framing — cross-check before
->   lifting snippets from them.
+>   are inverted (they shipped). `FEATURES.DEBATE` has since flipped
+>   to `true` (2026-04); only SMS (Twilio/10DLC ops) and Congressional
+>   (`FEATURES.CONGRESSIONAL=false`) remain truly deferred.
+> - **Backing stack:** Convex (`convex/schema.ts`, 71 tables,
+>   232 indexes). Cross-check snippets in
+>   INTELLIGENCE-LOOP-PLAN, CROSS-BORDER-PLAN, and SMS-RENABLE-PLAN
+>   against live Convex tables before lifting them.
 
 ---
 

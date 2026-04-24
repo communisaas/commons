@@ -68,7 +68,7 @@ Critical scope boundary:
 - **Simple list pages** (workflows, events, fundraising, sms) — 48 lines each, card galleries for secondary features.
 - **Calls page** — patch-through calling is a tool. Fine as-is.
 - **Invite flow** — token acceptance is operational. Fine as-is.
-- **Prisma schema** — no model changes.
+- **Convex schema** (`convex/schema.ts`) — no table changes.
 - **Privacy invariants** — no relaxation.
 
 ---

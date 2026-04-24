@@ -578,7 +578,7 @@ Before I proceed with deep research, I need your guidance:
 
 4. **Output format**: For each power structure, do you want:
    - Markdown docs (like WHAT-ACTUALLY-WORKS.md)?
-   - Database schemas (Prisma models)?
+   - Database schemas (Convex `defineTable` definitions)?
    - User flow diagrams?
    - All of the above?
 

@@ -20,8 +20,7 @@
 > - **Files listed as "created"** (`src/routes/api/congressional/submit/+server.ts`,
 >   `src/lib/core/congressional/submission-handler.ts`) **do not exist**.
 >   Business logic lives in `convex/submissions.ts`.
-> - **DB layer:** Prisma/Postgres references are obsolete — backend is
->   Convex-only; `ctx.db.insert("submissions", ...)` replaces `prisma.submission.create`.
+> - **DB layer:** Convex-only; writes use `ctx.db.insert("submissions", ...)`.
 > - **Feature flag:** `FEATURES.CONGRESSIONAL = false`
 >   (`src/lib/config/features.ts:24`) — delivery code exists but is gated off.
 > - **TEE:** Planned, not deployed. `LocalConstituentResolver` is the active
@@ -70,7 +69,7 @@ if (!Array.isArray(body.publicInputs) || body.publicInputs.length !== 29) {
 Control Flow:
 1. Extract nullifier from `publicInputs[26]` (two-tree architecture)
 2. Check nullifier uniqueness in database
-3. Create `Submission` record in Postgres
+3. Create `submissions` record in Convex (`ctx.db.insert`)
 4. Queue blockchain verification (async)
 5. Return submission ID and status
 
@@ -87,7 +86,7 @@ queueBlockchainSubmission(submission.id, request).catch((error) => {
 ```
 
 **Database Mapping:**
-- Uses existing `Submission` model (lines 1037-1092 in schema.prisma)
+- Uses existing `submissions` table in `convex/schema.ts`
 - Maps request fields to schema:
   - `proof` → `proof_hex`
   - `publicInputs` → `public_inputs` (JSON array)
@@ -171,25 +170,26 @@ grep "DistrictGateClient" logs.txt
 # }
 ```
 
-## Database Schema
+## Schema
 
-No schema changes required! Uses existing `Submission` model:
+No schema changes required. Uses the existing `submissions` table in `convex/schema.ts`:
 
-```prisma
-model Submission {
-  id                   String    @id @default(cuid())
-  user_id              String
-  template_id          String
-  proof_hex            String    // Our proof data
-  public_inputs        Json      // Our 29 field elements (two-tree)
-  nullifier            String    @unique // Prevents double-actions
-  action_id            String    // Our actionDomain
-  encrypted_message    String?   // Optional encrypted content
-  verification_status  String    @default("pending") // 'pending' | 'verified' | 'rejected'
-  verification_tx_hash String?   // Blockchain transaction hash
-  verified_at          DateTime?
+```typescript
+submissions: defineTable({
+  userId: v.id("users"),
+  templateId: v.id("templates"),
+  proofHex: v.string(),
+  publicInputs: v.array(v.string()),     // 31 field elements (three-tree)
+  nullifier: v.string(),                 // unique — enforced via index + app check
+  actionId: v.string(),                  // actionDomain
+  encryptedMessage: v.optional(v.string()),
+  verificationStatus: v.string(),        // 'pending' | 'verified' | 'rejected'
+  verificationTxHash: v.optional(v.string()),
+  verifiedAt: v.optional(v.number())
   // ... other fields
-}
+})
+  .index("by_nullifier", ["nullifier"])
+  .index("by_userId", ["userId"])
 ```
 
 ## API Contract
@@ -347,8 +347,8 @@ grep "DistrictGateClient" logs.txt
 ## Environment Variables
 
 ### Required
-- `DATABASE_URL`: Postgres connection string (already configured)
-- `DIRECT_URL`: Direct Postgres connection (already configured)
+- `PUBLIC_CONVEX_URL`: Convex deployment URL (already configured)
+- `CONVEX_DEPLOY_KEY`: CI/CD deploy auth (already configured)
 
 ### Optional (Phase 1 uses defaults)
 - `DISTRICT_GATE_ADDRESS`: Contract address on Scroll (defaults to empty)
@@ -386,11 +386,11 @@ grep "DistrictGateClient" logs.txt
 
 ### Response Time
 - **Target:** < 200ms (database insert only)
-- **Actual:** ~50-100ms (Postgres insert + queue scheduling)
+- **Actual:** ~50-100ms (Convex insert + action scheduling)
 - **Blockchain:** Async (3-15 seconds on Scroll L2, doesn't block response)
 
 ### Throughput
-- **Database:** Limited by Postgres connection pool (10-20 concurrent)
+- **Database:** Limited by Convex function concurrency (per-deployment quota)
 - **Blockchain:** Limited by Scroll block time (~3 seconds)
 - **Bottleneck:** Nullifier uniqueness check (indexed query)
 
@@ -412,7 +412,7 @@ grep "DistrictGateClient" logs.txt
 ### Database Errors
 - Connection timeout → 500 Internal Server Error
 - Unique constraint violation → 409 Conflict (nullifier)
-- Transaction deadlock → Retry (Prisma handles automatically)
+- OCC conflict → Convex retries mutations automatically on serializability conflicts
 
 ### Blockchain Errors (Phase 2)
 - RPC timeout → Logged, marked as failed, retryable
@@ -444,7 +444,7 @@ The new endpoint coexists with the existing submission endpoint:
 
 - [ZK Proof Integration](../specs/zk-proof-integration.md)
 - [Architecture](../architecture.md)
-- [Submission Model](../prisma/schema.prisma) (lines 1037-1092)
+- [Submission Schema](../../convex/schema.ts) (`submissions` table)
 - [Existing Submission Endpoint](../src/routes/api/submissions/create/+server.ts)
 
 ## Authors

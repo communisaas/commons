@@ -155,7 +155,7 @@ This document defines how Commons communicates. State what is. Show what exists.
 
 **Example 1: Content moderation**
 - Primary: "Agent-reviewed templates"
-- Popover: "Automated 2-layer pipeline: Llama Prompt Guard (injection) + Llama Guard 4 (safety) via Groq."
+- Popover: "Automated 2-layer pipeline: Llama Prompt Guard 2 (injection) + gpt-oss-safeguard-20b (safety) via Groq."
 
 **Example 2: Reputation tracking**
 - Primary: "Earn reputation"

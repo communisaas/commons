@@ -4,7 +4,7 @@
 **Status:** Production — commons.email deployed on Cloudflare Pages
 
 > **⚠️ Known divergences from implementation (verified against `main`, 2026-04-23):**
-> - **Backend:** Commons is now Convex-only. PostgreSQL / pgvector / Hyperdrive / Prisma are **gone** (`prisma/` directory removed). The "50+ Prisma models via Hyperdrive" language below describes the pre-migration stack. Canonical schema lives in `convex/schema.ts` (~71 tables, 232 indexes).
+> - **Backend:** Canonical schema lives in `convex/schema.ts` (~71 tables, 232 indexes). Field names are camelCase.
 > - **Auth:** `FEATURES.PASSKEY = false` (`src/lib/config/features.ts:79`). Passkey / WebAuthn / did:key flows exist in code but no UI path activates them today.
 > - **Identity providers:** self.xyz and Didit were retired in Cycle 15; mDL via the W3C Digital Credentials API is the sole active provider. OAuth (Google/Facebook/LinkedIn/Coinbase) still authenticates, but is not a verification provider.
 > - **TEE:** AWS Nitro Enclave deployment is **Planned** per `docs/implementation-status.md:~113`. Witness encryption is scaffolded (`src/lib/core/proof/witness-encryption.ts` + `/api/tee/public-key`), but the enclave itself is not deployed. `LocalConstituentResolver` is the only active resolver. Debate-evaluation TEE is entirely unbuilt.
@@ -29,7 +29,7 @@ Together they form a system where every civic action carries a cryptographic pro
 ### Commons (this repo)
 
 - **SvelteKit 5 Frontend** — Runes-based state, SSR, Svelte 5 component architecture
-- **Convex backend** — 71 tables in `convex/schema.ts`, ~180 functions, auth bridge via RS256 JWT → `ctx.auth.getUserIdentity()` (replaces the earlier PostgreSQL + pgvector + Hyperdrive + Prisma stack)
+- **Convex backend** — 71 tables in `convex/schema.ts`, ~180 functions, auth bridge via RS256 JWT → `ctx.auth.getUserIdentity()`
 - **OAuth Auth** — Google, Facebook, LinkedIn, Coinbase (passkey / WebAuthn / did:key code exists but gated off via `FEATURES.PASSKEY = false`)
 - **Identity Verification UI** — mDL via W3C Digital Credentials API (sole active provider; self.xyz and Didit retired Cycle 15)
 - **Template System** — Creation, moderation (2-layer Llama Guard via Groq), customization
@@ -210,13 +210,14 @@ VERIFICATION PACKET:
 └─────────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ POSTGRESQL (via Cloudflare Hyperdrive)                            │
+│ CONVEX (managed backend — convex.dev)                             │
 ├─────────────────────────────────────────────────────────────────┤
-│ • 50+ Prisma models, per-request client via AsyncLocalStorage    │
-│ • pgvector for semantic search (Gemini embeddings)               │
-│ • Hyperdrive connection pooling (max:1 per isolate)              │
-│ • EncryptedDeliveryData (ciphertext — platform cannot decrypt)   │
+│ • ~71 tables, 232 indexes in `convex/schema.ts`                   │
+│ • 180+ functions (queries, mutations, actions, HTTP actions)      │
+│ • Convex vector index for semantic search (Gemini embeddings)     │
+│ • submissions (ciphertext, proofBytes — platform cannot decrypt) │
 │ • DecisionMaker + Institution (universal, multi-system identity) │
+│ • Auth bridge: RS256 JWT (hooks.server.ts) → ctx.auth.getUser…() │
 └─────────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────────┐

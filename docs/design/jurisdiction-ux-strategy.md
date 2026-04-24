@@ -20,42 +20,44 @@
 
 ### Current State (Well-Designed)
 
-The `TemplateJurisdiction` model (`prisma/schema.prisma:332-383`) is **already comprehensive**:
+The `templateJurisdictions` table (`convex/schema.ts`) is **already comprehensive**:
 
-```prisma
-model TemplateJurisdiction {
+```typescript
+templateJurisdictions: defineTable({
+  templateId: v.id("templates"),
+
   // Flexible jurisdiction types
-  jurisdiction_type         String    // 'federal' | 'state' | 'county' | 'city' | 'school_district'
+  jurisdictionType: v.string(),              // 'federal' | 'state' | 'county' | 'city' | 'school_district'
 
   // Federal
-  congressional_district    String?   // "TX-18", "CA-12"
-  senate_class              String?   // "I", "II", "III"
+  congressionalDistrict: v.optional(v.string()), // "TX-18", "CA-12"
+  senateClass: v.optional(v.string()),           // "I", "II", "III"
 
   // State
-  state_code                String?   // "TX", "CA"
-  state_senate_district     String?
-  state_house_district      String?
+  stateCode: v.optional(v.string()),             // "TX", "CA"
+  stateSenateDistrict: v.optional(v.string()),
+  stateHouseDistrict: v.optional(v.string()),
 
   // County
-  county_fips               String?   // 5-digit FIPS code
-  county_name               String?
+  countyFips: v.optional(v.string()),            // 5-digit FIPS code
+  countyName: v.optional(v.string()),
 
   // City
-  city_name                 String?
-  city_fips                 String?
+  cityName: v.optional(v.string()),
+  cityFips: v.optional(v.string()),
 
   // School district
-  school_district_id        String?   // NCES district ID
-  school_district_name      String?
+  schoolDistrictId: v.optional(v.string()),      // NCES district ID
+  schoolDistrictName: v.optional(v.string()),
 
   // Geospatial
-  latitude                  Float?
-  longitude                 Float?
+  latitude: v.optional(v.number()),
+  longitude: v.optional(v.number()),
 
   // Coverage metadata
-  estimated_population      BigInt?
-  coverage_notes            String?   // Human-readable
-}
+  estimatedPopulation: v.optional(v.number()),
+  coverageNotes: v.optional(v.string()),         // Human-readable
+}),
 ```
 
 ### Complexity Assessment
@@ -90,29 +92,23 @@ model TemplateJurisdiction {
 ### Current UX (Seed Script Pattern)
 
 ```typescript
-// From seed-database.ts:1573-1602
-if (template.jurisdiction_level === 'federal') {
+// From a Convex seed mutation
+if (template.jurisdictionLevel === 'federal') {
   // Easy: Just federal
-  await db.templateJurisdiction.create({
-    data: {
-      template_id: createdTemplate.id,
-      jurisdiction_type: 'federal',
-      state_code: null,
-      congressional_district: null
-    }
+  await ctx.db.insert("templateJurisdictions", {
+    templateId: createdTemplate._id,
+    jurisdictionType: 'federal',
   });
-} else if (template.jurisdiction_level === 'municipal' && template.specific_locations) {
+} else if (template.jurisdictionLevel === 'municipal' && template.specificLocations) {
   // Hard: Which jurisdictions exactly?
-  for (const location of template.specific_locations) {
+  for (const location of template.specificLocations) {
     if (location === 'San Francisco') {
-      await db.templateJurisdiction.create({
-        data: {
-          template_id: createdTemplate.id,
-          jurisdiction_type: 'state',  // Wait, is this state or city?
-          state_code: 'CA',
-          city_name: 'San Francisco',
-          county_name: 'San Francisco County'
-        }
+      await ctx.db.insert("templateJurisdictions", {
+        templateId: createdTemplate._id,
+        jurisdictionType: 'state',  // Wait, is this state or city?
+        stateCode: 'CA',
+        cityName: 'San Francisco',
+        countyName: 'San Francisco County',
       });
     }
   }
@@ -144,7 +140,7 @@ if (template.jurisdiction_level === 'federal') {
 ### Current Agent Infrastructure
 
 **Content Moderation** (`src/lib/core/server/moderation/`):
-- ✅ Automated 2-layer pipeline via Groq (Llama Prompt Guard 2 + Llama Guard 4)
+- ✅ Automated 2-layer pipeline via Groq (Llama Prompt Guard 2 + `openai/gpt-oss-safeguard-20b`)
 - ✅ Template quality assessment
 
 **Jurisdiction Assignment**: **NOT YET IMPLEMENTED**
@@ -184,21 +180,17 @@ User enters:
 **Step 4: Jurisdiction Record Creation**
 
 ```typescript
-// Agent creates appropriate TemplateJurisdiction records
-await db.templateJurisdiction.createMany({
-  data: [
-    {
-      template_id: templateId,
-      jurisdiction_type: 'city',
-      state_code: 'CA',
-      county_fips: '06075',
-      county_name: 'San Francisco County',
-      city_name: 'San Francisco',
-      city_fips: '0667000', // Census Place FIPS
-      estimated_population: 873965n,
-      coverage_notes: 'City & County of San Francisco residents'
-    }
-  ]
+// Agent creates appropriate templateJurisdictions rows (Convex)
+await ctx.db.insert("templateJurisdictions", {
+  templateId,
+  jurisdictionType: 'city',
+  stateCode: 'CA',
+  countyFips: '06075',
+  countyName: 'San Francisco County',
+  cityName: 'San Francisco',
+  cityFips: '0667000', // Census Place FIPS
+  estimatedPopulation: 873965,
+  coverageNotes: 'City & County of San Francisco residents',
 });
 ```
 
@@ -345,12 +337,12 @@ STEP 3 (Address → District): "TX-25"
 
 ### Phase 6 (Later): Semantic Embeddings
 
-**Already in schema** (`prisma/schema.prisma:170-174`):
-```prisma
-location_embedding        Json?     // Gemini embedding of location context
-topic_embedding           Json?     // Gemini embedding of policy topic
-embedding_version         String    @default("v1")
-embeddings_updated_at     DateTime?
+**Already in schema** (`convex/schema.ts`, `templates` table):
+```typescript
+locationEmbedding: v.optional(v.array(v.float64())),  // Gemini embedding of location context
+topicEmbedding: v.optional(v.array(v.float64())),     // Gemini embedding of policy topic
+embeddingVersion: v.string(),                          // default "v1"
+embeddingsUpdatedAt: v.optional(v.number()),
 ```
 
 **Use case**:

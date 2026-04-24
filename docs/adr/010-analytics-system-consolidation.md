@@ -21,9 +21,9 @@
 >   any `queryAggregates()` / `getHealthMetrics()` / `incrementAggregate()`
 >   references as describing a removed file; the barrel re-export is a stale
 >   line, not a live API.
-> - **Code samples use Prisma syntax** (e.g. `db.analytics_aggregate.findMany`).
->   Prisma has been removed. Real access is Convex queries/mutations
->   (`ctx.db.query().withIndex().collect()`).
+> - **Access is Convex queries/mutations.** Real access is
+>   `ctx.db.query("analyticsAggregate").withIndex(...).collect()` inside
+>   Convex functions, not legacy pseudocode shown below.
 > - **DP budget constants (`SERVER_EPSILON=1.0`, `CLIENT_EPSILON=2.0`,
 >   `MAX_DAILY_EPSILON=10.0`) and `USE_SNAPSHOT_ONLY` are real and correct**
 >   (`src/lib/types/analytics/metrics.ts:175,193,217`, `src/app.d.ts`).
@@ -368,7 +368,7 @@ For `SERVER_EPSILON = 1.0` and `SENSITIVITY = 1`:
 - Harder to query wrong table by accident
 
 **Cons:**
-- Requires Prisma schema migration
+- Requires a Convex schema change
 - All existing code needs updates
 - Doesn't prevent accidental queries
 

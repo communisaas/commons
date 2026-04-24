@@ -214,26 +214,22 @@ They **cannot** determine:
 
 ## Schema Addition
 
-```prisma
-model analytics_cohort {
-  id              String    @id @default(cuid())
-
-  // Cohort identification
-  cohort_week     DateTime  @db.Date
+```typescript
+// convex/schema.ts
+analyticsCohort: defineTable({
+  // Cohort identification (YYYY-MM-DD of week start)
+  cohortWeek: v.string(),
 
   // Retention metrics (all noisy when queried)
-  initial_size    Int
-  week_1_active   Int
-  week_2_active   Int
-  week_3_active   Int
-  week_4_active   Int
+  initialSize: v.number(),
+  week1Active: v.number(),
+  week2Active: v.number(),
+  week3Active: v.number(),
+  week4Active: v.number(),
 
   // Noise metadata
-  epsilon         Float     @default(1.0)
-
-  @@unique([cohort_week])
-  @@map("analytics_cohort")
-}
+  epsilon: v.number(),
+}).index("by_cohort_week", ["cohortWeek"]);
 ```
 
 ---
@@ -250,20 +246,20 @@ GET /api/analytics/cohort?weeks=4
 {
   "cohorts": [
     {
-      "cohort_week": "2025-01-06",
-      "initial_size": 234,      // noisy
+      "cohortWeek": "2025-01-06",
+      "initialSize": 234,       // noisy
       "retention": {
-        "week_1": 0.67,         // noisy
-        "week_2": 0.45,
-        "week_3": 0.38,
-        "week_4": 0.31
+        "week1": 0.67,          // noisy
+        "week2": 0.45,
+        "week3": 0.38,
+        "week4": 0.31
       }
     },
     // ... more cohorts
   ],
   "privacy": {
     "epsilon": 1.0,
-    "differential_privacy": true
+    "differentialPrivacy": true
   }
 }
 ```
@@ -282,13 +278,13 @@ export interface CohortToken {
 }
 
 export interface CohortRetention {
-  cohort_week: string;
-  initial_size: number;
+  cohortWeek: string;
+  initialSize: number;
   retention: {
-    week_1: number;
-    week_2: number;
-    week_3: number;
-    week_4: number;
+    week1: number;
+    week2: number;
+    week3: number;
+    week4: number;
   };
 }
 
@@ -296,7 +292,7 @@ export interface CohortQueryResponse {
   cohorts: CohortRetention[];
   privacy: {
     epsilon: number;
-    differential_privacy: true;
+    differentialPrivacy: true;
   };
 }
 ```
@@ -314,7 +310,7 @@ export function increment(metric: Metric, dimensions?: Dimensions): void {
 
   const fullDimensions: Dimensions = {
     ...sanitize(dimensions),
-    cohort_token: cohortToken  // Added automatically
+    cohortToken: cohortToken  // Added automatically
   };
 
   queue.add({ metric, dimensions: fullDimensions });

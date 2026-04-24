@@ -25,7 +25,7 @@
 >   caps. No raw counts exposed. This doc is silent on DP.
 > - **Congressional gating:** `/s/[slug]/+layout.server.ts:~26-28` 404s
 >   CWC templates when `FEATURES.CONGRESSIONAL=false`.
-> - **No Prisma refs; Convex-only.**
+> - **Backend:** Convex-only.
 
 ---
 

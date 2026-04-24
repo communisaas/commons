@@ -32,11 +32,10 @@
 >   = false`). Cross-border coalitions cannot target US reps today,
 >   so any coalition-flow example involving US reps is blocked until
 >   the flag flips.
-> - **Backend is Convex, not Prisma.** §8.1-ish "add `country_code` to
->   `Organization` in `prisma/schema.prisma`" edits must target
->   `convex/schema.ts`. `applicable_countries` already exists on
->   templates (`src/lib/types/template.ts`), not on `OrgNetwork` —
->   confirm which model actually needs it before migrating.
+> - **Schema lives in Convex.** §8.1 edits target `convex/schema.ts`.
+>   `applicableCountries` already exists on templates
+>   (`src/lib/types/template.ts`), not on `orgNetworks` — confirm
+>   which table actually needs it before adding the field.
 > - **Cross-border verification packet (`§5 CrossBorderVerificationPacket`,
 >   per-country GDS, etc.) has no code footprint.** `verification-packet.ts`
 >   has no country-aware logic; treat §5 as sketch.
@@ -243,23 +242,23 @@ The `OrgNetwork` model supports parent/child relationships: one owner org create
 
 A coalition network can contain orgs from different countries. The network itself has no country — it's a coordination layer above national boundaries.
 
-**Schema additions to `OrgNetwork`:**
+**Schema additions to `orgNetworks`** (`convex/schema.ts`):
 
-```prisma
-model OrgNetwork {
+```typescript
+orgNetworks: defineTable({
   // ... existing fields ...
-  applicable_countries String[]  @default([])  // ISO 3166-1 alpha-2 codes
+  applicableCountries: v.array(v.string()),  // ISO 3166-1 alpha-2 codes
   // Empty = unrestricted (any country). Non-empty = only orgs in listed countries can join.
-}
+}),
 ```
 
-**Schema additions to `Organization`:**
+**Schema additions to `organizations`** (`convex/schema.ts`):
 
-```prisma
-model Organization {
+```typescript
+organizations: defineTable({
   // ... existing fields ...
-  country_code  String  @default("US") @map("country_code")  // Primary operating country
-}
+  countryCode: v.string(),  // Primary operating country, default "US"
+}),
 ```
 
 ### 4.3 Shared Supporter Pools
@@ -272,13 +271,17 @@ The network detail page (`networks/[networkId]/+page.server.ts`) already compute
 For cross-border coalitions, extend these queries with country grouping:
 
 ```typescript
-// Group supporter counts by country
-const countryGroups = await db.supporter.groupBy({
-  by: ['orgId'],
-  where: { orgId: { in: activeMemberOrgIds } },
-  _count: { id: true }
-});
-// Then join with org.country_code for per-country breakdown
+// Group supporter counts by country (Convex query)
+const countsByOrg = new Map<Id<"organizations">, number>();
+for (const orgId of activeMemberOrgIds) {
+  const count = await ctx.db
+    .query("supporters")
+    .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+    .collect()
+    .then((rows) => rows.length);
+  countsByOrg.set(orgId, count);
+}
+// Then join with organizations.countryCode for per-country breakdown
 ```
 
 **Privacy invariant:** Supporter PII never crosses org boundaries. The network sees aggregate counts only. An org in the UK cannot see individual supporters from a Canadian member org. This is enforced at the query level — the network stats endpoint only returns counts, never records.
@@ -387,7 +390,7 @@ For a coalition campaign:
 | `validate-build.ts` CA checks | 1 day | Cell count floor, officials completeness |
 | `ipfs-store.ts` per-country manifest cache | 0.5 days | Minor refactor |
 | `client.ts` + resolver atlas fallback | 1 day | Wire `lookupDistrict(lat, lng, 'CA')` through chunked path |
-| `Organization.country_code` migration | 0.5 days | Prisma migration + backfill existing orgs as 'US' |
+| `organizations.countryCode` field add | 0.5 days | Convex schema update + backfill existing orgs as 'US' |
 | Network country breakdown UI | 2 days | Per-country stats on network detail page |
 | Cross-border verification packet | 2 days | Country grouping in `computeVerificationPacket()` |
 | Report rendering country sections | 1 day | HTML template for per-country breakdown |
@@ -478,8 +481,8 @@ The UK and Australia can follow as fast-follows once the Canada pipeline proves 
 
 | File | Change | Lines |
 |------|--------|-------|
-| `prisma/schema.prisma` | Add `country_code String @default("US")` to `Organization` | ~1 line near existing model |
-| `prisma/schema.prisma` | Add `applicable_countries String[] @default([])` to `OrgNetwork` | ~1 line near existing model |
+| `convex/schema.ts` | Add `countryCode: v.string()` (default "US") to `organizations` | ~1 line near existing table |
+| `convex/schema.ts` | Add `applicableCountries: v.array(v.string())` (default []) to `orgNetworks` | ~1 line near existing table |
 
 ### 8.2 Runtime — District Resolution
 

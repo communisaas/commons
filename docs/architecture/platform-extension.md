@@ -3,8 +3,8 @@
 > **STATUS: MIXED** — Person-facing foundation table reflects actual code. Org-facing file trees (src/lib/server/*) are **architectural targets** — some subsystems are built (campaigns, email, supporters, embeddable widgets), others are planned. See `architecture/org-data-model.md` for actual org schema.
 >
 > **⚠️ AUDITED 2026-04-23. Known divergences from implementation:**
-> - **Prisma data models** row: stale. Prisma has been removed from the repo; canonical schema is `convex/schema.ts`. All Prisma DDL blocks below are pseudocode, not executable schema. Convex uses camelCase, not snake_case.
-> - **Supporter PII:** The real Supporter table stores `encryptedEmail` + `emailHash` + `encryptedName` + `globalEmailHash` + `emailStatus` / `smsStatus` enums. Plaintext `email` / `name` columns were dropped in Cycle 6.
+> - **Data models:** canonical schema is `convex/schema.ts`. Schema DDL blocks below are illustrative pseudocode. Convex uses camelCase.
+> - **Supporter PII:** The real `supporters` table stores `encryptedEmail` + `emailHash` + `encryptedName` + `globalEmailHash` + `emailStatus` / `smsStatus` enums. Plaintext `email` / `name` columns were dropped in Cycle 6.
 > - **Campaign types:** Schema supports `LETTER | EVENT | FORM | FUNDRAISER`, not the 3-type enum in older drafts.
 > - **Missing subsystems (directories referenced but not fully shipped):** `src/lib/server/lists/` (does not exist — supporter/segment logic lives in `convex/supporters.ts` + `convex/segments.ts`), `src/lib/server/campaigns/widgets.ts` (not present), `src/lib/server/fundraising/` (routes exist; server lib does not), `src/lib/server/analytics/` (analytics computation is distributed across `campaign-analytics.ts` and `verification-packet.ts`).
 > - **Email engine:** `src/lib/server/email/` contains `compiler.ts`, `ses.ts`, `sanitize.ts`, `report-template.ts`, `unsubscribe.ts`. Claims of `engine.ts`, `providers/resend.ts`, `ab-test.ts`, `deliverability.ts`, `tracking.ts`, and `templates/` are aspirational.
@@ -29,7 +29,7 @@ The hard parts are built. This is the infrastructure no competitor can replicate
 | Spatial Browse (3 views) | `src/routes/browse/` | Production |
 | Chain abstraction (3 wallet paths) | `src/lib/core/wallet/` | Production |
 | OAuth + passkey auth | `src/routes/auth/` | Production |
-| Convex data models | `convex/schema.ts` | Production (replaced Prisma 2026-03) |
+| Convex data models | `convex/schema.ts` | Production |
 | 136 Svelte components | `src/lib/components/` | Production |
 | 22 API endpoints | `src/routes/api/` | Production |
 
@@ -165,62 +165,56 @@ src/lib/server/sms/
 
 ## Multi-Tenancy Data Model
 
-```prisma
-model Organization {
-  id            String       @id @default(cuid())
-  name          String
-  slug          String       @unique
-  domain        String?               // custom domain (CNAME)
-  plan          Plan         @default(FREE)
-  stripeId      String?
-  members       Membership[]
-  campaigns     Campaign[]
-  supporters    Supporter[]
-  createdAt     DateTime     @default(now())
-}
+```ts
+// convex/schema.ts (illustrative shape — real tables use camelCase and Convex validators)
+organizations: defineTable({
+  name: v.string(),
+  slug: v.string(),                           // unique
+  domain: v.optional(v.string()),             // custom domain (CNAME)
+  plan: v.string(),                           // 'free' | 'starter' | 'organization' | 'coalition'
+  stripeCustomerId: v.optional(v.string()),
+})
+  .index("by_slug", ["slug"])
 
-model Membership {
-  id            String       @id @default(cuid())
-  userId        String
-  orgId         String
-  role          Role         @default(MEMBER)
-  user          User         @relation(...)
-  org           Organization @relation(...)
-  @@unique([userId, orgId])
-}
+memberships: defineTable({
+  userId: v.id("users"),
+  orgId: v.id("organizations"),
+  role: v.string(),                           // 'owner' | 'editor' | 'member'
+})
+  .index("by_user_org", ["userId", "orgId"])
+  .index("by_orgId", ["orgId"])
 
-model Supporter {
-  id                  String       @id @default(cuid())
-  orgId               String
-  email               String
-  name                String?
-  postalCode          String?
-  country             String?
-  identityCommitment  String?      // binds to ZK identity layer
-  tags                Tag[]
-  customFields        Json?
-  org                 Organization @relation(...)
-  @@unique([orgId, email])
-}
+supporters: defineTable({
+  orgId: v.id("organizations"),
+  // PII at rest — never plaintext:
+  encryptedEmail: v.string(),
+  emailHash: v.string(),                      // per-org HMAC for dedupe
+  globalEmailHash: v.string(),                // cross-org anti-sybil
+  encryptedName: v.optional(v.string()),
+  postalCode: v.optional(v.string()),
+  country: v.optional(v.string()),
+  identityCommitment: v.optional(v.string()), // binds to ZK identity layer
+  emailStatus: v.string(),                    // 'subscribed' | 'unsubscribed' | 'bounced'
+  smsStatus: v.optional(v.string()),
+  customFields: v.optional(v.any()),
+})
+  .index("by_org_emailHash", ["orgId", "emailHash"])  // uniqueness in mutation
+  .index("by_global_email_hash", ["globalEmailHash"])
+  .index("by_orgId", ["orgId"])
 
-model Campaign {
-  id            String       @id @default(cuid())
-  orgId         String
-  type          CampaignType
-  title         String
-  body          String
-  status        Status       @default(DRAFT)
-  targets       Json?        // resolved via Postal Bubble / Power Landscape (any of 24 district types)
-  actions       Action[]
-  debate        Debate?      // optional debate market attachment
-  org           Organization @relation(...)
-}
-
-enum Plan { FREE STARTER ORGANIZATION COALITION }
-enum CampaignType { LETTER EVENT FORM }
+campaigns: defineTable({
+  orgId: v.id("organizations"),
+  type: v.string(),                           // 'LETTER' | 'EVENT' | 'FORM' | 'FUNDRAISER'
+  title: v.string(),
+  body: v.string(),
+  status: v.string(),                         // 'DRAFT' | 'ACTIVE' | 'ARCHIVED'
+  targets: v.optional(v.any()),               // resolved via Postal Bubble / Power Landscape
+  debateId: v.optional(v.id("debates")),      // optional debate market attachment
+})
+  .index("by_orgId", ["orgId"])
 ```
 
-The `identityCommitment` on Supporter is the bridge: it links the org's supporter record to the person's ZK identity without revealing the credential. The org knows "this supporter is verified" — not "this supporter is Jane Doe at 123 Main St."
+The `identityCommitment` on `supporters` is the bridge: it links the org's supporter record to the person's ZK identity without revealing the credential. The org knows "this supporter is verified" — not "this supporter is Jane Doe at 123 Main St."
 
 ---
 

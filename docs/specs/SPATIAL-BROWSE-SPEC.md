@@ -1,11 +1,13 @@
 # Spatial Browse: From Template List to Civic Landscape
 
 > **STATUS: ASPIRATIONAL** — Design spec. Not yet implemented.
+>
+> **Storage:** `topicEmbedding` / `locationEmbedding` are stored on the `templates` table in `convex/schema.ts` with Convex vector indexes. Embedding provider is Gemini `text-embedding-004` (768-dim).
 
 **Status:** Design Spec — Active
 **Author:** Architecture / Perceptual Engineering
 **Created:** 2026-03-01
-**Depends on:** Seed data (13 templates), `topic_embedding` / `location_embedding` (Prisma), `TemplateScope`, `TemplateJurisdiction`, `deriveTargetPresentation()`
+**Depends on:** Seed data (13 templates), `topicEmbedding` / `locationEmbedding` on the Convex `templates` table, `TemplateScope`, `TemplateJurisdiction`, `deriveTargetPresentation()`
 **Companion specs:** `POWER-LANDSCAPE-SPEC.md` (detail view), `decision-maker-enrichment-pipeline.md`
 
 ---
@@ -324,13 +326,13 @@ This is a **spatial reasoning task** (see PE recognition patterns). The user nav
 
 #### 1. Embedding Source
 
-Templates already have `topic_embedding` (JSON array, OpenAI `text-embedding-3-small` 1536-dimensional vector) stored in Prisma. The embedding captures semantic meaning of `title + description + topics.join(', ')`.
+Templates already have `topicEmbedding` (Gemini `text-embedding-004`, 768-dimensional vector) stored on the Convex `templates` table. The embedding captures semantic meaning of `title + description + topics.join(', ')`.
 
 For templates without embeddings (newly created, embedding job not yet run): exclude from constellation, show in a separate "Uncharted" sidebar list.
 
 #### 2. Dimensionality Reduction
 
-1536D → 2D projection. Three options, ranked by suitability:
+768D → 2D projection. Three options, ranked by suitability:
 
 | Method | Quality | Performance | Dependencies | Deterministic |
 |--------|---------|-------------|--------------|---------------|

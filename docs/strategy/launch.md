@@ -7,9 +7,9 @@
 > - The "3 months to launch" schedule below is obsolete: **Phases 0–2 shipped 2026-03** (see `product-roadmap.md`, `docs/implementation-status.md`).
 > - The narrative that `self.xyz` / `Didit` were "removed in Cycle 15" (~line 18) is **imprecise**. The W3C Digital Credentials API (mDL) is the sole active intake, but `'self.xyz' | 'didit'` **remain as enum values** on `verificationMethod` for backward compatibility with stored records (`src/lib/core/identity/session-credentials.ts:2-4`, `convex/schema.ts`).
 > - Congressional delivery is **feature-gated off** (`FEATURES.CONGRESSIONAL=false` in `src/lib/config/features.ts:24`). Any text below that implies CWC delivery is live describes code-complete-but-flag-off state.
-> - `FEATURES.DEBATE=false` and `FEATURES.PASSKEY=false`. `WALLET=true`, `SHADOW_ATLAS_VERIFICATION=true`.
-> - Backend is **Convex-only** (Prisma / Postgres / Hyperdrive removed as of 2026-04). Any query samples below written in Prisma syntax are historical.
+> - `FEATURES.DEBATE=true` (flipped live). `FEATURES.CONGRESSIONAL=false`, `FEATURES.PASSKEY=false`, `FEATURES.DELEGATION=false`, `FEATURES.ENGAGEMENT_METRICS=false`. `WALLET=true`, `SHADOW_ATLAS_VERIFICATION=true`.
 > - Advocacy-partnership / viral-seeding success metrics ("1 template with 10K actions", "Sunrise / Justice Dems integration") were **not pursued** in that form; the product shipped on the campaigns + email + networks rails instead.
+> - The "3-layer moderation" section below (OpenAI GPT-4 + Gemini 3 Flash + Claude 3.5 Haiku + human review) was **never built that way**. Live stack is **2-layer Groq** (`llama-prompt-guard-2-86m` + `openai/gpt-oss-safeguard-20b`), no OpenAI API, no Claude, no dedicated human-review queue. See ADR-006.
 
 **Date**: 2025-01-08
 **Context**: Synthesis of brutalist critique + our actual implementation + social media virality

@@ -14,9 +14,8 @@
 > - **CWC delivery is feature-gated off.** `FEATURES.CONGRESSIONAL=false`
 >   (`src/lib/config/features.ts:24`). Federal delivery code exists but is
 >   not in the default user path.
-> - **Prisma schema blocks are obsolete.** Backend is Convex-only; schema
->   lives in `convex/schema.ts` (translated + flattened from the old
->   Prisma). User-table code samples here lack current fields
+> - **User-table code samples lack current fields.** Live schema lives in
+>   `convex/schema.ts` and carries additional fields not shown here
 >   (`authorityLevel`, `trustTier`, `identityCommitment`, etc.).
 > - **"self.xyz / Didit removed in Cycle 15" is imprecise.** They remain as
 >   legacy enum values on `verificationMethod`
@@ -73,57 +72,58 @@
 - Message content (happens in their email client, not our platform)
 - Their physical address (only know they clicked a template tagged "Austin, TX")
 
-### Current Data Model (Prisma Schema)
+### Current Data Model (Convex Schema)
 
-**We currently store:**
-```typescript
-model User {
-  id String @id @default(cuid())
-  email String? @unique  // Optional - OAuth only, not required
+Live in `convex/schema.ts`. camelCase fields; PII encrypted at rest.
 
-  // Location data - QUESTION: Do we store this?
-  city String?
-  state String?
-  county String?
-  congressional_district String?  // Required for federal ZK proofs
+```ts
+users: defineTable({
+  email: v.optional(v.string()),          // Optional — OAuth only, not required
+                                          // uniqueness enforced by "by_email" index
+  // Location data — stored only when user explicitly reveals via action
+  city: v.optional(v.string()),
+  state: v.optional(v.string()),
+  county: v.optional(v.string()),
+  congressionalDistrict: v.optional(v.string()),  // Required for federal ZK proofs
 
   // Identity verification
-  verification_method String?  // 'digital-credentials-api' (mDL). Legacy values: 'self.xyz', 'didit.me' (removed in Cycle 15)
-  verified_at DateTime?
-}
+  verificationMethod: v.optional(v.string()),     // 'digital-credentials-api' (mDL)
+                                                  // Legacy values: 'self.xyz', 'didit.me' remain as enum values for backward compat
+  verifiedAt: v.optional(v.number()),
+  // ...additional live fields: authorityLevel, trustTier, identityCommitment, etc.
+})
+  .index("by_email", ["email"]),
 
-model Template {
-  id String @id @default(cuid())
-
+templates: defineTable({
   // Governance level
-  level String  // 'federal' | 'state' | 'county' | 'city'
+  level: v.string(),                      // 'federal' | 'state' | 'county' | 'city'
 
-  // Geographic targeting - QUESTION: How specific?
-  state String?
-  county String?
-  city String?
-  congressional_district String?
+  // Geographic targeting
+  state: v.optional(v.string()),
+  county: v.optional(v.string()),
+  city: v.optional(v.string()),
+  congressionalDistrict: v.optional(v.string()),
 
   // Recipient information
-  recipient_name String?  // For mailto: links (local/state)
-  recipient_office String?  // CWC office ID (federal only)
-}
+  recipientName: v.optional(v.string()),  // For mailto: links (local/state)
+  recipientOffice: v.optional(v.string()),// CWC office ID (federal only)
+})
+  .index("by_level", ["level"]),
 
-model Submission {
-  id String @id @default(cuid())
-  user_id String
-  template_id String
+submissions: defineTable({
+  userId: v.id("users"),
+  templateId: v.id("templates"),
 
   // Message routing handled by protocol (users don't choose)
-  delivery_method String  // Internal: 'cwc_api' | 'mailto' | 'direct_form'
+  deliveryMethod: v.string(),             // 'cwc_api' | 'mailto' | 'direct_form'
 
-  // What do we know?
-  submitted_at DateTime
-  delivered Boolean?  // Only known for federal (CWC confirmation)
+  submittedAt: v.number(),
+  delivered: v.optional(v.boolean()),     // Only known for federal (CWC confirmation)
 
-  // Privacy question: Do we store this?
-  recipient_name String?  // Exposed in mailto: links
-}
+  recipientName: v.optional(v.string()),  // Exposed in mailto: links
+})
+  .index("by_userId", ["userId"])
+  .index("by_templateId", ["templateId"]),
 ```
 
 -----

@@ -87,7 +87,6 @@ Source: [Groq rate limits](https://console.groq.com/docs/rate-limits)
 | Workers Paid | 10M requests/mo | $0.30/M |
 | KV reads | 10M/mo | $0.50/M |
 | KV writes | 1M/mo | $5.00/M |
-| Hyperdrive | Included | — |
 | Base | $5/mo | — |
 
 ---
@@ -295,11 +294,11 @@ The previous model had message generation at $0.004. **The real cost is $0.055 �
 |---|---|---|---|
 | Cloudflare Workers | Paid | $5 | 10M requests included |
 | Firecrawl | Hobby | $16 | 3,000 pages/mo |
-| PostgreSQL + pgvector | Managed | $25–50 | |
+| Convex (managed) | — | included | Primary data + vector/search indexes |
 | Groq | Free tier | $0 | 432K req/mo covers moderation |
 | Exa | Pay-as-you-go | $0 base | 1K free searches/mo, then $7/1K |
 | Gemini API | Pay-as-you-go | $0 base | 5K free grounded queries/mo |
-| **Total baseline** | | **$46–71** | |
+| **Total baseline** | | **$21** | |
 
 ---
 

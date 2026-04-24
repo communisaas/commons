@@ -198,7 +198,7 @@ REDIS_URL=... # Optional Redis for distributed rate limiting
 **Infrastructure**:
 - AWS Nitro Enclaves (ARM Graviton, hypervisor-isolated)
 - Cloudflare Workers (application hosting)
-- PostgreSQL via Hyperdrive (data persistence)
+- Convex (data persistence, managed backend)
 
 ---
 

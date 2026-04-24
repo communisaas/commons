@@ -27,40 +27,37 @@ No session. No user. No timestamp beyond the day.
 
 ## Schema
 
-```prisma
-model analytics_aggregate {
-  id              String    @id @default(cuid())
+```typescript
+// convex/schema.ts
+analyticsAggregate: defineTable({
+  // Temporal bucket (day granularity only, stored as YYYY-MM-DD)
+  date: v.string(),
 
-  // Temporal bucket (day granularity only)
-  date            DateTime  @db.Date
-
-  // Metric identifier
-  metric          String    // 'template_use', 'delivery_success', etc.
+  // Metric identifier: 'template_use', 'delivery_success', etc.
+  metric: v.string(),
 
   // Dimensions (all optional, creates sparse matrix)
-  template_id     String?
-  jurisdiction    String?   // State code only: 'CA', 'NY'
-  delivery_method String?   // 'cwc', 'email', 'certified'
-  utm_source      String?   // Sanitized referrer
-  error_type      String?   // Categorized, never raw message
+  templateId: v.optional(v.string()),
+  jurisdiction: v.optional(v.string()),      // State code: 'CA', 'NY'
+  deliveryMethod: v.optional(v.string()),    // 'cwc', 'email', 'certified'
+  utmSource: v.optional(v.string()),         // Sanitized referrer
+  errorType: v.optional(v.string()),         // Categorized, never raw message
 
   // The count (only value we store)
-  count           Int       @default(0)
+  count: v.number(),
 
   // Noise metadata (for audit trail)
-  noise_applied   Float     @default(0)
-  epsilon         Float     @default(1.0)
-
-  // Composite unique prevents duplicates
-  @@unique([date, metric, template_id, jurisdiction, delivery_method, utm_source, error_type])
-
-  // Query indexes
-  @@index([date])
-  @@index([metric, date])
-  @@index([template_id, date])
-
-  @@map("analytics_aggregate")
-}
+  noiseApplied: v.number(),
+  epsilon: v.number(),
+})
+  .index("by_date", ["date"])
+  .index("by_metric_date", ["metric", "date"])
+  .index("by_template_date", ["templateId", "date"])
+  // Composite unique prevents duplicates (enforced in mutation)
+  .index("by_unique_key", [
+    "date", "metric", "templateId", "jurisdiction",
+    "deliveryMethod", "utmSource", "errorType"
+  ]);
 ```
 
 ---
@@ -72,40 +69,53 @@ model analytics_aggregate {
 The only write operation. Atomic upsert:
 
 ```typescript
-// aggregate.ts
-export async function increment(
-  metric: Metric,
-  dimensions: Dimensions
-): Promise<void> {
-  const today = new Date().toISOString().split('T')[0];
+// convex/analytics.ts
+export const increment = internalMutation({
+  args: {
+    metric: v.string(),
+    dimensions: v.object({
+      templateId: v.optional(v.string()),
+      jurisdiction: v.optional(v.string()),
+      deliveryMethod: v.optional(v.string()),
+      utmSource: v.optional(v.string()),
+      errorType: v.optional(v.string()),
+    }),
+  },
+  handler: async (ctx, { metric, dimensions }) => {
+    const today = new Date().toISOString().split('T')[0];
 
-  await db.analytics_aggregate.upsert({
-    where: {
-      date_metric_template_id_jurisdiction_delivery_method_utm_source_error_type: {
-        date: new Date(today),
+    const existing = await ctx.db
+      .query("analyticsAggregate")
+      .withIndex("by_unique_key", (q) =>
+        q
+          .eq("date", today)
+          .eq("metric", metric)
+          .eq("templateId", dimensions.templateId)
+          .eq("jurisdiction", dimensions.jurisdiction)
+          .eq("deliveryMethod", dimensions.deliveryMethod)
+          .eq("utmSource", dimensions.utmSource)
+          .eq("errorType", dimensions.errorType)
+      )
+      .unique();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, { count: existing.count + 1 });
+    } else {
+      await ctx.db.insert("analyticsAggregate", {
+        date: today,
         metric,
-        template_id: dimensions.template_id ?? null,
-        jurisdiction: dimensions.jurisdiction ?? null,
-        delivery_method: dimensions.delivery_method ?? null,
-        utm_source: dimensions.utm_source ?? null,
-        error_type: dimensions.error_type ?? null,
-      }
-    },
-    update: {
-      count: { increment: 1 }
-    },
-    create: {
-      date: new Date(today),
-      metric,
-      template_id: dimensions.template_id ?? null,
-      jurisdiction: dimensions.jurisdiction ?? null,
-      delivery_method: dimensions.delivery_method ?? null,
-      utm_source: dimensions.utm_source ?? null,
-      error_type: dimensions.error_type ?? null,
-      count: 1
+        templateId: dimensions.templateId,
+        jurisdiction: dimensions.jurisdiction,
+        deliveryMethod: dimensions.deliveryMethod,
+        utmSource: dimensions.utmSource,
+        errorType: dimensions.errorType,
+        count: 1,
+        noiseApplied: 0,
+        epsilon: 1.0,
+      });
     }
-  });
-}
+  },
+});
 ```
 
 ### Query
@@ -113,35 +123,41 @@ export async function increment(
 Read with noise applied:
 
 ```typescript
-// aggregate.ts
-export async function query(params: QueryParams): Promise<QueryResult[]> {
-  const { metric, start, end, groupBy } = params;
-
-  // Validate date range
-  const daysDiff = differenceInDays(end, start);
-  if (daysDiff > PRIVACY.MAX_QUERY_DAYS) {
-    throw new QueryRangeError(`Max ${PRIVACY.MAX_QUERY_DAYS} days`);
-  }
-
-  // Fetch raw aggregates
-  const raw = await db.analytics_aggregate.findMany({
-    where: {
-      metric,
-      date: { gte: start, lte: end }
+// convex/analytics.ts
+export const query = query({
+  args: {
+    metric: v.string(),
+    start: v.string(),
+    end: v.string(),
+    groupBy: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, { metric, start, end, groupBy }) => {
+    // Validate date range
+    const daysDiff = differenceInDays(new Date(end), new Date(start));
+    if (daysDiff > PRIVACY.MAX_QUERY_DAYS) {
+      throw new QueryRangeError(`Max ${PRIVACY.MAX_QUERY_DAYS} days`);
     }
-  });
 
-  // Group by requested dimensions
-  const grouped = groupByDimensions(raw, groupBy);
+    // Fetch raw aggregates
+    const raw = await ctx.db
+      .query("analyticsAggregate")
+      .withIndex("by_metric_date", (q) =>
+        q.eq("metric", metric).gte("date", start).lte("date", end)
+      )
+      .collect();
 
-  // Apply coarsening for small cohorts
-  const coarsened = coarsen(grouped);
+    // Group by requested dimensions
+    const grouped = groupByDimensions(raw, groupBy);
 
-  // Apply Laplace noise
-  const noisy = applyNoise(coarsened, PRIVACY.SERVER_EPSILON);
+    // Apply coarsening for small cohorts
+    const coarsened = coarsen(grouped);
 
-  return noisy;
-}
+    // Apply Laplace noise
+    const noisy = applyNoise(coarsened, PRIVACY.SERVER_EPSILON);
+
+    return noisy;
+  },
+});
 ```
 
 ---
@@ -152,25 +168,25 @@ export async function query(params: QueryParams): Promise<QueryResult[]> {
 // src/lib/types/analytics/aggregate.ts
 
 export interface AggregateRecord {
-  date: Date;
+  date: string;
   metric: Metric;
-  template_id: string | null;
+  templateId: string | null;
   jurisdiction: string | null;
-  delivery_method: DeliveryMethod | null;
-  utm_source: string | null;
-  error_type: ErrorType | null;
+  deliveryMethod: DeliveryMethod | null;
+  utmSource: string | null;
+  errorType: ErrorType | null;
   count: number;
 }
 
 export interface QueryParams {
   metric: Metric;
-  start: Date;
-  end: Date;
+  start: string;
+  end: string;
   groupBy?: DimensionKey[];
   filters?: {
-    template_id?: string;
+    templateId?: string;
     jurisdiction?: string;
-    delivery_method?: DeliveryMethod;
+    deliveryMethod?: DeliveryMethod;
   };
 }
 
@@ -178,7 +194,7 @@ export interface QueryResult {
   dimensions: Record<DimensionKey, string | null>;
   count: number;           // Always noisy
   coarsened: boolean;      // True if rolled up from finer granularity
-  coarsen_level?: string;  // e.g., 'state' if rolled up from district
+  coarsenLevel?: string;   // e.g., 'state' if rolled up from district
 }
 ```
 

@@ -259,10 +259,11 @@ test('should return existing submission on retry with same idempotency key', asy
   // Should return SAME submission
   expect(result2.submissionId).toBe(result1.submissionId);
 
-  // Verify only ONE submission in database
-  const submissions = await prisma.submission.findMany({
-    where: { nullifier: '0x5678' }
-  });
+  // Verify only ONE submission in database (Convex)
+  const submissions = await ctx.db
+    .query('submissions')
+    .withIndex('by_nullifier', q => q.eq('nullifier', '0x5678'))
+    .collect();
   expect(submissions).toHaveLength(1);
 });
 ```
@@ -271,61 +272,77 @@ test('should return existing submission on retry with same idempotency key', asy
 
 ## Backend: Idempotency Key Validation
 
-### Server-Side Checks
+### Server-Side Checks (Convex mutation)
 
 ```typescript
-// src/routes/api/submissions/create/+server.ts
+// convex/submissions.ts
 
-export const POST: RequestHandler = async ({ request, locals }) => {
-  const { idempotencyKey, nullifier, ...data } = await request.json();
+export const insertSubmission = mutation({
+  args: {
+    idempotencyKey: v.optional(v.string()),
+    nullifier: v.string(),
+    templateId: v.id('templates'),
+    proof: v.string(),
+    encryptedWitness: v.string(),
+    witnessNonce: v.string(),
+    ephemeralPublicKey: v.string(),
+    teeKeyId: v.string(),
+    publicInputs: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { idempotencyKey, nullifier, ...data } = args;
 
-  // Validate idempotency key format (UUID v4)
-  if (idempotencyKey && !isValidUUID(idempotencyKey)) {
-    throw error(400, 'Invalid idempotency key format');
-  }
+    // Validate idempotency key format (UUID v4)
+    if (idempotencyKey && !isValidUUID(idempotencyKey)) {
+      throw new Error('Invalid idempotency key format');
+    }
 
-  // Optional: Enforce idempotency key for production
-  if (process.env.NODE_ENV === 'production' && !idempotencyKey) {
-    throw error(400, 'Idempotency key required');
-  }
-
-  // Transaction handles duplicate checking
-  const submission = await prisma.$transaction(async (tx) => {
-    // Check idempotency key first
+    // Idempotent retry: return existing by key
     if (idempotencyKey) {
-      const existing = await tx.submission.findUnique({
-        where: { idempotency_key: idempotencyKey }
-      });
+      const existing = await ctx.db
+        .query('submissions')
+        .withIndex('by_idempotency_key', q => q.eq('idempotencyKey', idempotencyKey))
+        .unique();
 
       if (existing) {
-        console.log('[Idempotent Retry] Returning existing submission:', existing.id);
-        return existing; // Return existing (no 409 error)
+        console.log('[Idempotent Retry] Returning existing submission:', existing._id);
+        return existing;
       }
     }
 
-    // Check nullifier (business constraint)
-    const duplicate = await tx.submission.findUnique({
-      where: { nullifier }
-    });
+    // Nullifier dedupe (single-flight via by_nullifier index)
+    const duplicate = await ctx.db
+      .query('submissions')
+      .withIndex('by_nullifier', q => q.eq('nullifier', nullifier))
+      .unique();
 
     if (duplicate) {
-      throw error(409, 'Duplicate nullifier (action already taken)');
+      throw new Error('DUPLICATE_NULLIFIER');
     }
 
-    // Create new submission
-    return await tx.submission.create({
-      data: { ...data, nullifier, idempotency_key: idempotencyKey }
+    // Convex mutations are atomic — race on the same nullifier/idempotencyKey
+    // is serialized by the OCC transaction engine, not by SQL-style $transaction.
+    const id = await ctx.db.insert('submissions', {
+      ...data,
+      nullifier,
+      idempotencyKey,
+      createdAt: Date.now(),
     });
-  });
 
-  return json({ success: true, submissionId: submission.id });
-};
+    return await ctx.db.get(id);
+  },
+});
 
 function isValidUUID(uuid: string): boolean {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return uuidRegex.test(uuid);
 }
 ```
+
+Atomicity is enforced by the `by_nullifier` and `by_idempotency_key` indexes
+defined in `convex/schema.ts`; Convex serializes conflicting mutations so
+the "check-then-insert" pattern above is race-free without any explicit
+transaction wrapper.
 
 ---
 
@@ -336,38 +353,47 @@ function isValidUUID(uuid: string): boolean {
 ```typescript
 // src/lib/server/monitoring.ts
 
-export function logIdempotentRetry(submission: Submission) {
+export function logIdempotentRetry(submission: Doc<'submissions'>) {
   console.log('[Idempotent Retry]', {
-    submissionId: submission.id,
-    idempotencyKey: submission.idempotency_key,
-    createdAt: submission.created_at,
-    timeSinceCreation: Date.now() - submission.created_at.getTime(),
+    submissionId: submission._id,
+    idempotencyKey: submission.idempotencyKey,
+    createdAt: submission.createdAt,
+    timeSinceCreation: Date.now() - submission.createdAt,
   });
 
   // Track in analytics (privacy-safe)
   trackEvent('submission.idempotent_retry', {
-    time_since_creation_ms: Date.now() - submission.created_at.getTime(),
+    time_since_creation_ms: Date.now() - submission.createdAt,
   });
 }
 ```
 
 ### Dashboard Metrics
 
+Emit metrics from the Convex mutation (analytics sink or `internalAction`):
+
 ```typescript
-// Grafana/Datadog query
-
 // Idempotent retry rate (should be 1-5%)
-SELECT
-  COUNT(*) FILTER (WHERE idempotency_key IS NOT NULL AND is_retry = true) /
-  COUNT(*) * 100 AS retry_rate_percent
-FROM submission
-WHERE created_at > NOW() - INTERVAL '1 hour';
+// Compute in an internal action over the submissions table within a
+// rolling window.
+const windowStart = Date.now() - 60 * 60 * 1000; // 1 hour
+const recent = await ctx.db
+  .query('submissions')
+  .withIndex('by_created_at', q => q.gte('createdAt', windowStart))
+  .collect();
 
-// Average time between retry attempts (should be seconds, not minutes)
-SELECT
-  AVG(time_since_creation_ms) / 1000 AS avg_retry_delay_seconds
-FROM idempotent_retries
-WHERE timestamp > NOW() - INTERVAL '1 hour';
+const retries = recent.filter(s => s.isRetry === true).length;
+const retryRatePercent = recent.length ? (retries / recent.length) * 100 : 0;
+
+// Average time between retry attempts
+const avgRetryDelaySec =
+  retries > 0
+    ? recent
+        .filter(s => s.isRetry === true)
+        .reduce((sum, s) => sum + (s.retryDelayMs ?? 0), 0) /
+      retries /
+      1000
+    : 0;
 ```
 
 ---
@@ -389,29 +415,30 @@ WHERE timestamp > NOW() - INTERVAL '1 hour';
 3. **Key Expiration** (Future Enhancement)
    ```typescript
    // Optional: Expire idempotency keys after 24 hours
-   await prisma.submission.updateMany({
-     where: {
-       idempotency_key: { not: null },
-       created_at: { lt: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-     },
-     data: {
-       idempotency_key: null // Clear expired keys
-     }
-   });
+   // Run from an internal action or scheduled cron.
+   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+   const expired = await ctx.db
+     .query('submissions')
+     .withIndex('by_created_at', q => q.lt('createdAt', cutoff))
+     .filter(q => q.neq(q.field('idempotencyKey'), undefined))
+     .collect();
+
+   for (const sub of expired) {
+     await ctx.db.patch(sub._id, { idempotencyKey: undefined });
+   }
    ```
 
 4. **Rate Limiting**
    ```typescript
    // Prevent idempotency key abuse (10 submissions per user per hour)
-   const recentSubmissions = await prisma.submission.count({
-     where: {
-       user_id: userId,
-       created_at: { gt: new Date(Date.now() - 60 * 60 * 1000) }
-     }
-   });
+   const windowStart = Date.now() - 60 * 60 * 1000;
+   const recentSubmissions = await ctx.db
+     .query('submissions')
+     .withIndex('by_user_created', q => q.eq('userId', userId).gt('createdAt', windowStart))
+     .collect();
 
-   if (recentSubmissions >= 10) {
-     throw error(429, 'Rate limit exceeded. Try again in 1 hour.');
+   if (recentSubmissions.length >= 10) {
+     throw new Error('RATE_LIMIT_EXCEEDED');
    }
    ```
 
@@ -450,12 +477,19 @@ if (process.env.REQUIRE_IDEMPOTENCY_KEY === 'true' && !idempotencyKey) {
 
 ### Step 3: Backfill Existing Submissions (Optional)
 
-```sql
--- Generate idempotency keys for old submissions (for analytics only)
-UPDATE submission
-SET idempotency_key = gen_random_uuid()
-WHERE idempotency_key IS NULL
-  AND created_at < '2026-01-25'; -- Before WP-004 implementation
+```typescript
+// Backfill idempotency keys on legacy submissions (analytics only).
+// Run via an internal Convex action.
+const cutoff = new Date('2026-01-25').getTime();
+const legacy = await ctx.db
+  .query('submissions')
+  .withIndex('by_created_at', q => q.lt('createdAt', cutoff))
+  .filter(q => q.eq(q.field('idempotencyKey'), undefined))
+  .collect();
+
+for (const sub of legacy) {
+  await ctx.db.patch(sub._id, { idempotencyKey: crypto.randomUUID() });
+}
 ```
 
 ---
@@ -475,10 +509,10 @@ WHERE idempotency_key IS NULL
 
 ### Q: What if server restarts during submission?
 
-**A:** Database transaction ensures atomicity:
-- If COMMIT succeeded → Submission created
-- If COMMIT failed → No submission (client retries)
-- Idempotency key ensures retry safety
+**A:** Convex mutations are atomic — either the full mutation commits or nothing does:
+- If the mutation commits → Submission created
+- If the mutation fails (conflict, crash, etc.) → No submission (client retries)
+- The `by_idempotency_key` index ensures retry safety
 
 ### Q: Should idempotency keys be logged?
 
@@ -549,11 +583,11 @@ export async function submitMessage(
 
 ## Summary
 
-✅ **Idempotency Key:** Client-generated UUID prevents duplicate submissions
-✅ **Automatic Retries:** Network failures safely retry with same key
-✅ **Server Detection:** Database unique constraint enforces idempotency
-✅ **Backward Compatible:** Optional field, existing code works
-✅ **Production-Ready:** Tested, monitored, documented
+- **Idempotency Key:** Client-generated UUID prevents duplicate submissions
+- **Automatic Retries:** Network failures safely retry with same key
+- **Server Detection:** Convex `by_idempotency_key` index + atomic mutations enforce idempotency
+- **Backward Compatible:** Optional field, existing code works
+- **Production-Ready:** Tested, monitored, documented
 
 **Next Steps:**
 1. Update client code to include `idempotencyKey`

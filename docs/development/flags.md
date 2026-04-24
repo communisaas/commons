@@ -10,7 +10,7 @@ Reflects `src/lib/config/features.ts` as of 2026-04-23.
 
 | Flag | Type | Default | What it gates |
 |------|------|---------|---------------|
-| `DEBATE` | `boolean` | `false` | Deliberation surfaces, argument submission, LMSR market, resolution/appeal |
+| `DEBATE` | `boolean` | `true` | Deliberation surfaces, argument submission, LMSR market, resolution/appeal (flipped live 2026-04) |
 | `CONGRESSIONAL` | `boolean` | `false` | CWC delivery, district officials lookup, congressional template routing |
 | `ADDRESS_SPECIFICITY` | `AddressSpecificity` | `'district'` | `'off'` = no location features; `'region'` = state/city inference + template filtering; `'district'` = full street-address collection + congressional district credential issuance |
 | `STANCE_POSITIONS` | `boolean` | `true` | Stance registration (support/oppose), inline proof footer, verified positions |

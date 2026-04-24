@@ -564,7 +564,7 @@ traceEvent(traceId, 'message-generation', 'source-discovery', {
 | `src/routes/api/agents/stream-message/+server.ts` | Add template source cache lookup/write. Fix `traceId` conditional in completion trace. |
 | `src/lib/server/llm-cost-protection.ts` | Fix `logLLMOperation` to write traces even without cost breakdown. |
 | `src/lib/core/agents/utils/url-validator.ts` | Deprecated — Firecrawl fetch subsumes URL validation. |
-| `prisma/schema.prisma` | Add `cachedSources Json?` and `sourcesCachedAt DateTime?` to `Template` model. |
+| `convex/schema.ts` | Add `cachedSources: v.optional(v.any())` and `sourcesCachedAt: v.optional(v.number())` to the `templates` table. |
 
 ---
 

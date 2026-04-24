@@ -39,7 +39,7 @@
 >   `src/lib/server/db-retry.ts`, and `/api/health` are all absent
 >   (Convex removes traditional connection concerns; retries live
 >   inside the Convex client, not application code). Entire section
->   assumes Prisma + Hyperdrive.
+>   is pre-Convex and no longer applies.
 
 ---
 
@@ -61,10 +61,10 @@ The commons platform has 6 production hardening gaps blocking org onboarding. Th
 ## 1. BILLING LIMIT ENFORCEMENT (CRITICAL)
 
 ### Current State
-- **Schema**: `Organization.max_templates_month` (int, default: 100)
+- **Schema**: `organizations.maxTemplatesMonth` (number, default: 100) in `convex/schema.ts`
 - **Sync**: Stripe webhook updates limits when subscription changes
 - **Files**:
-  - `/prisma/schema.prisma` (field definition)
+  - `convex/schema.ts` (field definition)
   - `/src/routes/api/billing/webhook/+server.ts` (webhook handler)
   - `/src/lib/server/org.ts` (org loading)
 
@@ -90,17 +90,15 @@ WHERE org_id = $1
 **Cons**: Query on every template creation; needs index on (org_id, created_at)
 
 #### Option B: Cached Counter Table (Fast, denormalized)
-Add `OrgUsageTracker` model:
-```prisma
-model OrgUsageTracker {
-  id       String    @id @default(cuid())
-  org_id   String    @unique @map("org_id")
-  month    DateTime  @map("month") // Start of month
-  count    Int       @default(0)
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@index([org_id, month])
-}
+Add `orgUsageTrackers` table in `convex/schema.ts`:
+```typescript
+orgUsageTrackers: defineTable({
+  orgId: v.id("organizations"),
+  month: v.number(),   // UTC ms, start of month
+  count: v.number(),
+  updatedAt: v.number(),
+})
+  .index("by_org_month", ["orgId", "month"]), // unique via mutation guard
 ```
 
 **Pros**: O(1) lookup, fast
@@ -109,7 +107,7 @@ model OrgUsageTracker {
 **Recommendation**: Start with Option A (query-based), migrate to Option B if template creation becomes bottleneck.
 
 ### Files Affected
-- `/prisma/schema.prisma` (optional: add OrgUsageTracker if using Option B)
+- `convex/schema.ts` (optional: add `orgUsageTrackers` if using Option B)
 - `/src/routes/api/templates/+server.ts` (add enforcement gate before creation)
 - `/src/lib/server/org.ts` (add `usage` field to org load query)
 - New: `/src/lib/server/billing/usage.ts` (usage tracking helpers)
@@ -295,7 +293,7 @@ PUBLIC_ENVIRONMENT="production|staging|development"
 
 ### Current State
 - **Backups**: None found. No scripts, cron jobs, or restore procedures
-- **PII Encryption**: At rest via Prisma ORM (`commons-credential-v2` domain string for AES-256-GCM)
+- **PII Encryption**: At rest in Convex (`commons-credential-v2` domain string for AES-256-GCM)
 - **Key Storage**: Unknown — likely `$env/dynamic/private` but not documented
 - **Recovery**: Unknown RTO/RPO SLAs
 
@@ -315,185 +313,55 @@ PUBLIC_ENVIRONMENT="production|staging|development"
 
 #### Backup Architecture
 
-**Provider**: AWS managed RDS backups (if migrating to RDS) OR manual pg_dump to S3
+Convex handles durability: the managed deployment runs point-in-time
+recovery (PITR) and regular snapshots automatically. For our own DR
+drills we use `npx convex export` to capture a dump that the dashboard
+can re-import (or use Convex's PITR slider). There is no bespoke
+`pg_dump` / S3 backup pipeline and no separately-managed backup key.
 
-**Option A: RDS + AWS Backup** (Recommended for managed service)
-- Automated daily snapshots retained 30 days
-- Point-in-time recovery to any second in past 7 days
-- Encryption key in AWS KMS (separate from app keys)
-- Cost: ~$0.20/GB/month storage + data transfer
+PII is already encrypted at rest in the Convex schema
+(`encryptedEmail`, `encryptedName`, `encryptedAddress`, etc.). The
+domain keys (`commons-credential-v2`, `commons-witness-encryption-v1`,
+`commons-identity-v1`) remain frozen in `$env/dynamic/private` and
+are not part of the backup flow.
 
-**Option B: Postgres pg_dump → S3 + encryption key in Secrets Manager**
-- Daily pg_dump to S3 (encrypted at rest)
-- Encryption key stored in Cloudflare Workers Secrets (or AWS Secrets Manager)
-- Restore: download dump, decrypt key, restore locally
-- Cost: ~$0.023/GB/month S3 storage
+#### DR Drill Script
 
-**Recommendation**: Start with Option B (simpler, portable). Migrate to RDS if operational overhead grows.
-
-#### Key Management
-
-**Encryption Keys for PII** (app-side, already encrypted):
-- Domain string: `commons-credential-v2` (FROZEN post-launch)
-- Stored in: `$env/dynamic/private` (Cloudflare Workers Secrets)
-- Key rotation: Not implemented yet (defer to Phase 2)
-
-**Backup Encryption Key** (separate):
-- Use Cloudflare Workers KV or AWS Secrets Manager
-- Rotate annually
-- Never stored in code or version control
-
-#### Script: Daily Backup (Cron)
-
-**File**: `/scripts/backup-db.ts`
+**File**: `/scripts/dr-drill.ts` (to be added)
 
 ```typescript
-import { exec } from 'child_process';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
-
-const s3 = new S3Client({ region: 'us-east-1' });
-const secrets = new SecretsManagerClient({ region: 'us-east-1' });
-
-async function backupDatabase() {
-  const timestamp = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-  const filename = `commons-backup-${timestamp}.sql.gz`;
-
-  try {
-    // Get backup encryption key from Secrets Manager
-    const keyResponse = await secrets.send(
-      new GetSecretValueCommand({ SecretId: 'commons/backup-key' })
-    );
-    const backupKey = keyResponse.SecretString;
-
-    // pg_dump + gzip
-    console.log('Starting database backup...');
-    exec(
-      `pg_dump --format=custom ${process.env.DATABASE_URL} | gzip | openssl enc -aes-256-cbc -pass pass:${backupKey} > /tmp/${filename}`,
-      async (err) => {
-        if (err) {
-          console.error('pg_dump failed:', err);
-          throw err;
-        }
-
-        // Upload to S3
-        const fileBuffer = await readFile(`/tmp/${filename}`);
-        await s3.send(
-          new PutObjectCommand({
-            Bucket: 'commons-backups',
-            Key: `daily/${filename}`,
-            Body: fileBuffer,
-            ServerSideEncryption: 'AES256'
-          })
-        );
-
-        console.log(`Backup uploaded: ${filename}`);
-
-        // Cleanup
-        exec(`rm /tmp/${filename}`);
-      }
-    );
-  } catch (error) {
-    console.error('Backup failed:', error);
-    // Alert via Sentry
-    Sentry.captureException(error, { level: 'fatal' });
-    throw error;
-  }
-}
-
-backupDatabase();
+// 1. Snapshot: npx convex export --path backups/$(date +%F).zip
+// 2. Restore to a fresh dev deployment: npx convex import --path ...
+// 3. Run smoke tests + count key tables vs. production
+// 4. Emit a timestamped DR report into `ops/dr-drills/`
 ```
 
-**Cron Setup** (AWS EventBridge or GitHub Actions):
-- Trigger daily at 02:00 UTC (low-traffic window)
-- Timeout: 1 hour
-- Retry: 3x on failure, alert if all fail
-
-#### Script: Restore Procedure (Manual)
-
-**File**: `/scripts/restore-db.ts`
-
-```typescript
-import { exec } from 'child_process';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-
-async function restoreDatabase(backupDate: string, targetDb: string) {
-  const filename = `commons-backup-${backupDate}.sql.gz`;
-
-  try {
-    // Download from S3
-    const s3 = new S3Client({ region: 'us-east-1' });
-    const response = await s3.send(
-      new GetObjectCommand({
-        Bucket: 'commons-backups',
-        Key: `daily/${filename}`
-      })
-    );
-
-    // Decrypt + restore
-    console.log(`Restoring from ${filename}...`);
-    exec(
-      `cat /tmp/${filename} | openssl enc -d -aes-256-cbc -pass pass:${backupKey} | gunzip | pg_restore --format=custom --clean --if-exists -d ${targetDb}`,
-      (err) => {
-        if (err) {
-          console.error('Restore failed:', err);
-          throw err;
-        }
-        console.log('Restore complete. Validate schema and run tests.');
-      }
-    );
-  } catch (error) {
-    console.error('Restore failed:', error);
-    throw error;
-  }
-}
-
-restoreDatabase(process.argv[2], process.argv[3]);
-```
-
-**Usage**:
-```bash
-# Restore 2026-03-15 backup to local test DB
-npx ts-node scripts/restore-db.ts 2026-03-15 postgresql://user:pass@localhost:5432/commons_test
-```
+Run this against a sibling dev deployment, **never** against production.
 
 ### Files Affected
-- New: `/scripts/backup-db.ts` (daily backup automation)
-- New: `/scripts/restore-db.ts` (manual restore)
-- New: `/docs/runbooks/DISASTER-RECOVERY.md` (procedures)
-- `.github/workflows/daily-backup.yml` (GitHub Actions cron trigger)
-- `.env.example` (document backup key secret)
+- New: `/scripts/dr-drill.ts` (quarterly DR drill automation)
+- Update: `/docs/runbooks/DISASTER-RECOVERY.md` (Convex-native procedure)
 
 ### Environment Variables
-```
-# Backup encryption (stored in Secrets Manager, not in .env)
-AWS_BACKUP_KEY_SECRET_NAME="commons/backup-key"
-AWS_REGION="us-east-1"
-S3_BACKUP_BUCKET="commons-backups"
-
-# For restore script
-BACKUP_ENCRYPTION_PASSWORD="(retrieved from Secrets Manager at restore time)"
-```
+None beyond the existing Convex deploy keys. No backup-encryption
+secret is required; the export archive is already encrypted at rest in
+whatever storage you keep it in.
 
 ### Test Plan
-1. **Monthly**: Run restore script to staging DB
-2. **Monthly**: Validate schema with `pg_dump --schema-only` diff
-3. **Monthly**: Run integration tests against restored DB
-4. **Quarterly**: Full disaster recovery drill (restore to production-like environment, failover test)
-5. **Quarterly**: Key rotation test (update backup key, verify old backups still decrypt)
+1. **Monthly**: Run `npx convex export` + verify the archive re-imports into a throwaway dev deployment.
+2. **Monthly**: Run integration smoke tests against the restored dev deployment.
+3. **Quarterly**: Full DR drill with stakeholder announcement (walk through the runbook end-to-end).
 
 ### Runbook: Disaster Recovery
 
 **File**: `/docs/runbooks/DISASTER-RECOVERY.md`
 
-1. **Assess**: Determine data loss window (last clean backup available?)
-2. **Notify**: Alert stakeholders of RTO/RPO
-3. **Prepare**: Spin up clean PostgreSQL instance (RDS or self-managed)
-4. **Restore**: Run `/scripts/restore-db.ts` targeting new instance
-5. **Validate**: Run smoke tests, check row counts, verify encrypted fields still decrypt
-6. **Switch**: Update HYPERDRIVE/DATABASE_URL to new instance
-7. **Deploy**: Redeploy app code to trigger health checks
-8. **Monitor**: Watch error rates for 1 hour
+1. **Assess**: Determine data loss window (last clean Convex snapshot / export).
+2. **Notify**: Alert stakeholders of RTO/RPO.
+3. **Restore**: Use `npx convex import` (or Convex dashboard point-in-time recovery) to roll the target deployment back to the chosen snapshot.
+4. **Validate**: Run smoke tests, check row counts, verify encrypted fields still decrypt.
+5. **Deploy**: Redeploy app code to trigger health checks.
+6. **Monitor**: Watch error rates for 1 hour.
 
 ### Migration Path
 1. **Week 1**: Create backup script, test locally with sample backup
@@ -891,49 +759,25 @@ CLOUDFLARE_KV_NAMESPACE="rate_limiter" (bound in wrangler.toml)
 
 ---
 
-## 6. DATABASE CONNECTION RESILIENCE (MEDIUM)
+## 6. BACKEND CONNECTION RESILIENCE (HISTORICAL)
 
-### Current State
-- **Architecture**: Hyperdrive + AsyncLocalStorage (ALS) pattern — **excellent**
-- **Gaps**:
-  - No connection timeout configuration
-  - No explicit error handling for Hyperdrive unavailability
-  - No retry logic (would hit raw CF Workers I/O error)
-  - No health check endpoint
+### Status
+Obsolete after the Convex migration. Convex-client calls from SvelteKit
+(`serverQuery` / `serverMutation` / `serverAction` via `convex-sveltekit`)
+handle retries, connection management, and transport errors internally.
+No bespoke connection pool or ALS-scoped client to harden.
 
-### Target State
-1. Connection timeout: 5 second default
-2. Automatic retry on transient failures (3 attempts, exponential backoff)
-3. Health check validates DB connectivity (see #5 above)
-4. Graceful degradation if DB unavailable (return cached data or error)
+The remaining resilience concern is **observability**: surfacing Convex
+call failures to Sentry so they show up on the error dashboard. That is
+covered by `$lib/server/monitoring/sentry.ts`.
 
 ### Design
 
 #### Timeout Configuration
 
-**File**: `/src/lib/core/db.ts` (modify existing code)
+**Obsolete for Convex.** Convex client and server handle connection lifecycle, pooling, and retries internally. Application code does not create connections.
 
-```typescript
-export function createRequestClient(connectionString: string): PrismaClient {
-  if (dev) {
-    // ... existing dev code
-  }
-
-  // ✅ NEW: Add connection timeout
-  const adapter = new PrismaPg({
-    connectionString,
-    max: 1,
-    connectionTimeoutMillis: 5000, // 5s timeout
-    idleTimeoutMillis: 30000, // 30s idle
-    statement_timeout: 30000, // 30s per query
-  });
-
-  return new PrismaClient({
-    adapter,
-    log: ['error', 'warn']
-  });
-}
-```
+If a retry wrapper is needed for transient Convex action failures (external HTTP calls, etc.), wrap the outer call in `withRetry()` as shown below — the retry logic operates on the action, not on a DB connection.
 
 #### Retry Logic for Transient Failures
 
@@ -1055,11 +899,11 @@ DB_STATEMENT_TIMEOUT_MS="30000"
 1. **Unit**: withRetry succeeds on first attempt
 2. **Unit**: withRetry retries on transient error, succeeds on attempt 2
 3. **Unit**: withRetry exhausts max attempts → throws original error
-4. **Integration**: Simulate Hyperdrive timeout, verify retry logic
+4. **Integration**: Simulate a Convex-call timeout, verify retry/fallback behavior
 5. **Integration**: Verify final error is captured and alerted via Sentry
 
 ### Complexity & Timeline
-- **Timeout config**: S (1 day, already supported by PrismaPg)
+- **Timeout config**: Obsolete — handled by Convex client
 - **Retry helper**: S (1 day, ~40 lines)
 - **Route integration**: M (2-3 days, incrementally applied to critical paths)
 
@@ -1099,7 +943,7 @@ DB_STATEMENT_TIMEOUT_MS="30000"
 ### E2E Tests
 - Multi-user device: User A logs in, creates draft; User B logs in on same browser, sees empty store
 - Rate limiting: Burst requests → rejected after limit
-- Database failover: Hyperdrive connection drops → retry → succeed
+- Backend failover: transient Convex call error → retry → succeed
 
 ### Monitoring & SLOs
 - **Billing enforcement**: 100% of template creation requests gated (monitor in Sentry)

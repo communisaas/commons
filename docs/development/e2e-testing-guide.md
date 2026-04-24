@@ -1,35 +1,14 @@
 # E2E Testing Guide: Commons ↔ Voter Protocol Integration
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The guide conflates two
-> distinct test harnesses and points at paths that have moved. Concrete
-> corrections before you use any example below:
->
-> - **Two suites, not one:**
->   - **Browser E2E (Playwright):** `tests/e2e/*.spec.ts`
->     (e.g. `identity-verification-flow.spec.ts`,
->     `moderation/moderation-pipeline.spec.ts`). Run via `npm run test:e2e`
->     against a live dev server.
->   - **Voter-protocol integration (Vitest + MSW):** `tests/unit/voter-protocol/`
->     (NOT `tests/e2e/voter-protocol/`). Fixtures, `full-flow.test.ts`,
->     `error-cases.test.ts`, `edge-cases.test.ts` all live here. Run via
->     `npm run test:e2e:voter`.
-> - **All `tests/e2e/voter-protocol/*` paths below are wrong** — substitute
->   `tests/unit/voter-protocol/*`.
-> - **Identity:** `Didit.me` / `createMockDiditWebhook()` examples are
->   obsolete. Active intake is mDL via W3C Digital Credentials API. See
->   in-code note at `full-flow.test.ts:~36`: *"didit-client module removed
->   (Cycle 15 — mDL-only consolidation)."* Legacy `'self.xyz' | 'didit'`
->   enum values remain only for DB backward compat.
-> - **Database:** `DATABASE_URL=postgresql://...` in the env block is
->   stale. Backend is Convex-only; no Postgres, no Prisma. The Postgres
->   DSN in `test-utils.ts:~41` is dead weight kept for old fixture
->   defaults, not a live dependency.
-> - **Submit endpoint:** `/api/submissions/create` (not
->   `/api/congressional/submit`). Architecture diagrams and any helper
->   that still says "congressional/submit" should be updated.
-> - **Feature flags in tests:** `FEATURES.CONGRESSIONAL=false`,
->   `DEBATE=false`, `PASSKEY=false` in default config — tests that assert
->   these flows are live must override the flag for the test env.
+**Current layout (2026-04-23):**
+
+- **Two suites:**
+  - **Browser E2E (Playwright):** `tests/e2e/*.spec.ts` (e.g. `identity-verification-flow.spec.ts`, `moderation/moderation-pipeline.spec.ts`). Run via `npm run test:e2e` against a live dev server.
+  - **Voter-protocol integration (Vitest + MSW):** `tests/unit/voter-protocol/`. Fixtures, `full-flow.test.ts`, `error-cases.test.ts`, `edge-cases.test.ts` live here. Run via `npm run test:e2e:voter`.
+- **Identity:** mDL via W3C Digital Credentials API is the active intake. Legacy `'self.xyz' | 'didit'` enum values remain only for historical record backward compat.
+- **Backend:** Convex-only. No `DATABASE_URL` is read at runtime; any Postgres DSN in test fixtures is dead weight kept for old fixture defaults, not a live dependency.
+- **Submit endpoint:** `POST /api/submissions/create`.
+- **Feature flags in tests:** `FEATURES.CONGRESSIONAL=false`, `PASSKEY=false`, `DELEGATION=false`, `ENGAGEMENT_METRICS=false`; `DEBATE=true`. Tests that assert CWC/passkey/delegation flows are live must override the flag for the test env.
 
 This guide covers the end-to-end testing suite for the Commons ↔ voter-protocol integration, including identity verification, ZK proof generation, and congressional submission.
 
@@ -195,8 +174,8 @@ useHandlers(createShadowAtlasHandlers({ errorMode: 'network' }));
 ```bash
 # tests/.env.test
 SHADOW_ATLAS_API_URL=http://localhost:3000
-DIDIT_WEBHOOK_SECRET=test-webhook-secret
-DATABASE_URL=postgresql://test:test@localhost:5432/test
+# Convex test deployment — set via CONVEX_DEPLOY_KEY + PUBLIC_CONVEX_URL in CI
+PUBLIC_CONVEX_URL=https://<test-deployment>.convex.cloud
 ```
 
 ### Test Configuration

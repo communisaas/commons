@@ -1,538 +1,264 @@
-# Vector Search Implementation Guide
+# Vector Search Guide
 
-> ⚠️ **OUT OF DATE (2026-04-23 audit).** This guide documents the
-> **superseded** Postgres/pgvector/Voyage AI stack. Commons migrated to
-> Convex-native vector search in 2026-04. Every concrete command, file
-> path, cost number, and SQL snippet below describes infrastructure
-> that no longer exists.
->
-> ### Current vector-search stack
->
-> - **Store:** Convex `.vectorIndex(...)` on `convex/schema.ts` tables.
->   Templates: `by_topicEmbedding`, `by_locationEmbedding`. Intelligence:
->   `by_embedding`. Bills: `by_topicEmbedding`. Decision-makers: keyword
->   only (`.searchIndex(...)`, no vector index).
-> - **Embeddings:** **Gemini `text-embedding-004`, 768 dimensions**
->   (`src/lib/core/search/gemini-embeddings.ts`, `src/lib/core/search/index.ts:10`).
->   Not Voyage AI, not 1024-dim, no voyage-3/voyage-4/voyage-law-2.
-> - **Execution:** query embedding generated server-side; vector search
->   runs server-side. Client IndexedDB cache
->   (`src/lib/core/search/cache.ts`) stores *results*, not the model.
-> - **Rate limit:** embeddings = 20/hr for authenticated users
->   (`src/lib/server/ai/llm-cost-protection.ts:74-78`).
-> - **Not in the repo:** `prisma/schema.prisma`, `pgvector` extension,
->   `HNSW` migrations, Voyage AI client, `src/lib/server/intelligence/`,
->   `src/lib/server/embeddings/`, `npm run db:push`.
-> - **ADR-011** (MongoDB → pgvector) is marked **SUPERSEDED** and points
->   at the Convex migration.
->
-> Treat the rest of this document as historical context for the
-> short-lived Postgres era.
->
+Commons uses Convex-native vector search backed by Gemini embeddings.
 
-**Author:** Distinguished Data Engineering Team
+## Stack
 
-**Technologies (historical, 2026-02):** PostgreSQL pgvector (HNSW) + Voyage AI Embeddings
-
-**Migration:** MongoDB Atlas → pgvector. See [ADR-011](./adr/011-mongodb-to-pgvector-migration.md).
-
-## Table of Contents
-
-1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [Setup Instructions](#setup-instructions)
-4. [Usage Examples](#usage-examples)
-5. [Cost Analysis](#cost-analysis)
-6. [Best Practices](#best-practices)
-7. [Troubleshooting](#troubleshooting)
+- **Store:** Convex `.vectorIndex(...)` declarations on `convex/schema.ts` tables.
+  - `templates`: `by_topicEmbedding`, `by_locationEmbedding`
+  - `intelligence`: `by_embedding`
+  - `bills`: `by_topicEmbedding`
+  - `decisionMakers`: `.searchIndex(...)` only (keyword, no vector)
+- **Embeddings:** Gemini `text-embedding-004`, **768 dimensions**
+  (`src/lib/core/search/gemini-embeddings.ts`, `src/lib/core/search/index.ts`).
+- **Execution:** Query embedding generated server-side; vector search runs
+  server-side via a Convex action. Client cache
+  (`src/lib/core/search/cache.ts`, IndexedDB) stores *results*, not the model.
+- **Rate limit:** Embedding generation is capped at 20/hour for
+  authenticated users (`src/lib/server/ai/llm-cost-protection.ts`).
 
 ---
 
 ## Overview
 
-Commons's vector search system enables semantic search across intelligence
-items (news, legislation, regulatory filings, corporate disclosures) and
-template discovery. Unlike keyword search, semantic search understands meaning
-and context.
+Semantic search across intelligence items (news, legislation, regulatory
+filings, corporate disclosures) and template discovery. Unlike keyword
+search, semantic search understands meaning and context.
 
-### What You Can Do
+### What you can do
 
 - **Find similar content**: "Show me news articles similar to this legislative update"
 - **Search by meaning**: "renewable energy tax incentives" matches "clean power subsidies"
-- **Hybrid search**: Combine semantic similarity + full-text keyword matching via RRF
-- **Discover related intelligence**: Find contextually relevant civic data for advocacy
+- **Hybrid search**: Combine semantic similarity + keyword matching
+- **Discover related intelligence**: Find contextually relevant civic data
 - **Template discovery**: "my landlord won't fix the heating" → "housing code violations"
 
-### Key Features
+### Key features
 
-- **1024-dimensional embeddings** via Voyage AI (voyage-3 / voyage-law-2)
-- **HNSW index** in pgvector for fast approximate nearest neighbor search
-- **Cosine similarity** scoring (1 - distance = similarity)
-- **Pre-filtering** by category, topics, dates, relevance score
-- **Hybrid search** combining vector + full-text via Reciprocal Rank Fusion (RRF)
-- **Reranking** via Voyage AI cross-encoder for precision improvement
-- **Automatic batching** for efficient bulk embedding operations
-- **Cost tracking** and estimation
+- **768-dimensional embeddings** via Gemini `text-embedding-004`
+- **Native Convex vector index** — no separate vector store to provision
+- **Cosine similarity** scoring
+- **Pre-filtering** by `filterFields` declared on the index (e.g. `category`, `topics`)
+- **Keyword + vector hybrid** patterns via `.searchIndex()` + `.vectorIndex()` on the same table
 
 ---
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         User Query                               │
-│                   "climate change policy"                        │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Voyage AI Embeddings                          │
-│               voyage-3 model (1024 dimensions)                   │
-│                   Cost: $0.06 per 1M tokens                      │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼ Query Vector [0.123, -0.456, ...]
-┌─────────────────────────────────────────────────────────────────┐
-│              PostgreSQL pgvector (HNSW Index)                    │
-│                                                                  │
-│  ┌──────────────────────┐       ┌──────────────────────┐        │
-│  │  intelligence table  │       │  template table      │        │
-│  │  • 1024-dim vectors  │       │  • 768-dim vectors   │        │
-│  │  • HNSW cosine index │       │  • topic + location  │        │
-│  │  • tsvector GIN idx  │       │  • Gemini embeddings │        │
-│  │  • category filter   │       │  • category filter   │        │
-│  └──────────────────────┘       └──────────────────────┘        │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│               Hybrid Search Results (RRF)                        │
-│  Vector similarity + full-text relevance merged via              │
-│  Reciprocal Rank Fusion (k=60)                                   │
-│                                                                  │
-│  1. "New climate legislation passes Senate" (0.89)               │
-│  2. "Environmental policy update: carbon pricing" (0.85)         │
-│  3. "Green energy subsidies expanded" (0.82)                     │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼ (Optional)
-┌─────────────────────────────────────────────────────────────────┐
-│                   Voyage AI Reranking                            │
-│        Improves precision using cross-encoder model              │
-│                   Cost: $0.05 per 1M tokens                      │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Final Ranked Results                          │
-│              Optimized for relevance and precision               │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### File Structure
-
-```
-src/lib/server/
-├── embeddings/
-│   ├── types.ts                 # TypeScript definitions
-│   ├── voyage-client.ts         # Voyage AI API client
-│   └── index.ts                 # Public exports
-├── intelligence/
-│   ├── types.ts                 # Intelligence item types
-│   ├── queries.ts               # Prisma query functions
-│   ├── vector-search.ts         # pgvector semantic search (raw SQL)
-│   ├── semantic-service.ts      # High-level search service
-│   ├── service.ts               # CRUD operations + embedding insertion
-│   └── index.ts                 # Public exports
-prisma/
-├── schema.prisma                # Intelligence + ParsedDocumentCache models
-└── migrations/
-    └── 20260205_.../migration.sql  # HNSW index, tsvector, hybrid_search fn
-scripts/
-└── generate-embeddings.ts       # Backfill embeddings for existing data
-```
-
----
-
-## Setup Instructions
-
-### 1. Prerequisites
-
-- **PostgreSQL 16 with pgvector extension** (included in `docker-compose.yml`)
-- **Voyage AI API key** from [dash.voyageai.com](https://dash.voyageai.com/)
-
-### 2. Start Local Database
-
-```bash
-# Start PostgreSQL with pgvector
-npm run db:start
-
-# Apply Prisma schema (creates Intelligence + ParsedDocumentCache tables)
-npm run db:push
-
-# Apply pgvector indexes and hybrid search function
-psql postgresql://commons:commons@localhost:5432/commons \
-  -f prisma/migrations/20260205_add_intelligence_pgvector/migration.sql
-```
-
-The `docker/init-db.sql` script automatically runs `CREATE EXTENSION vector`
-on both the `commons` and `test` databases.
-
-### 3. Environment Variables
-
-Add to your `.env`:
-
-```bash
-# Voyage AI Embeddings (required for semantic search)
-VOYAGE_API_KEY=your-voyage-api-key-here
-
-# Database (set automatically by docker-compose)
-DATABASE_URL=postgresql://commons:commons@localhost:5432/commons
-```
-
-No MongoDB credentials, no Atlas Admin API keys. One database.
-
-### 4. Verify Setup
+## Schema Declaration
 
 ```typescript
-import { SemanticIntelligenceService } from '$lib/server/intelligence';
-
-// Basic semantic search
-const results = await SemanticIntelligenceService.search(
-  'renewable energy policy',
-  { categories: ['legislative'], limit: 5 }
-);
-
-// Health check via /api/health
-const health = await fetch('/api/health');
-// { status: 'ok', postgres: true, uptime: 1234 }
+// convex/schema.ts
+export default defineSchema({
+  intelligence: defineTable({
+    title: v.string(),
+    snippet: v.string(),
+    category: v.string(),
+    topics: v.array(v.string()),
+    embedding: v.array(v.float64()),
+    publishedAt: v.number(),
+    relevanceScore: v.number(),
+    expiresAt: v.number()
+  })
+    .index("by_category", ["category"])
+    .index("by_publishedAt", ["publishedAt"])
+    .searchIndex("by_title", {
+      searchField: "title",
+      filterFields: ["category"]
+    })
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: 768,
+      filterFields: ["category", "topics"]
+    })
+});
 ```
+
+The index is built and maintained by Convex automatically. No HNSW
+migration, no extension install, no separate compute.
 
 ---
 
-## Usage Examples
-
-### Intelligence Search
-
-#### Basic Semantic Search
+## Generating Embeddings
 
 ```typescript
-import { SemanticIntelligenceService } from '$lib/server/intelligence';
+// src/lib/core/search/gemini-embeddings.ts
+import { GoogleGenAI } from '@google/genai';
 
-const results = await SemanticIntelligenceService.search(
-  'renewable energy legislation',
-  {
-    categories: ['legislative'],
-    limit: 10,
-    minScore: 0.7
+export async function generateEmbedding(text: string): Promise<number[]> {
+  const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+  const result = await client.models.embedContent({
+    model: 'text-embedding-004',
+    contents: text
+  });
+  return result.embeddings[0].values; // 768 floats
+}
+```
+
+Inside a Convex action:
+
+```typescript
+// convex/intelligence.ts
+import { v } from "convex/values";
+import { action } from "./_generated/server";
+
+export const insertWithEmbedding = action({
+  args: { title: v.string(), snippet: v.string(), category: v.string() },
+  handler: async (ctx, { title, snippet, category }) => {
+    const embedding = await generateEmbedding(`${title} ${snippet}`);
+    await ctx.runMutation(internal.intelligence.insert, {
+      title, snippet, category, embedding, publishedAt: Date.now()
+    });
   }
-);
-
-results.forEach((r) => {
-  console.log(`${r.title} (${r.score.toFixed(2)})`);
 });
 ```
 
-#### Search with Reranking (Best Precision)
+## Searching
 
 ```typescript
-// Gets 20 candidates via vector search, then reranks top 5
-const results = await SemanticIntelligenceService.searchWithReranking(
-  'climate change mitigation strategies',
-  {
-    categories: ['news', 'legislative'],
-    limit: 20,
-    rerankTopK: 5
+// convex/intelligence.ts (action — vector search requires an action)
+import { v } from "convex/values";
+import { action } from "./_generated/server";
+
+export const semanticSearch = action({
+  args: { query: v.string(), category: v.optional(v.string()), limit: v.optional(v.number()) },
+  handler: async (ctx, { query, category, limit = 10 }) => {
+    const queryEmbedding = await generateEmbedding(query);
+    const results = await ctx.vectorSearch("intelligence", "by_embedding", {
+      vector: queryEmbedding,
+      limit,
+      filter: category ? (q) => q.eq("category", category) : undefined
+    });
+    // Fetch the full documents for the returned ids
+    const docs = await Promise.all(
+      results.map((r) => ctx.runQuery(internal.intelligence.getById, { id: r._id }))
+    );
+    return docs.map((doc, i) => ({ ...doc, score: results[i]._score }));
   }
-);
+});
 ```
 
-#### Hybrid Search (Best Recall)
+### Hybrid (keyword + vector)
 
 ```typescript
-// Combines vector search + full-text search via Reciprocal Rank Fusion
-const results = await SemanticIntelligenceService.hybridSearch(
-  'H.R. 842 renewable energy tax credits',
-  {
-    categories: ['legislative'],
-    publishedAfter: new Date('2025-01-01'),
-    limit: 10
+export const hybridSearch = action({
+  args: { query: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, { query, limit = 10 }) => {
+    // Run keyword search via searchIndex
+    const keywordHits = await ctx.runQuery(internal.intelligence.searchByTitle, { query, limit });
+
+    // Run vector search
+    const queryEmbedding = await generateEmbedding(query);
+    const vectorHits = await ctx.vectorSearch("intelligence", "by_embedding", {
+      vector: queryEmbedding,
+      limit
+    });
+
+    // Merge with Reciprocal Rank Fusion
+    return rrfMerge(keywordHits, vectorHits, { k: 60 });
   }
-);
-```
-
-Under the hood, this calls the `hybrid_search_intelligence()` SQL function
-which merges vector cosine similarity with tsvector full-text relevance
-using RRF with k=60.
-
-#### Find Similar Content
-
-```typescript
-const similar = await SemanticIntelligenceService.findSimilar(
-  articleId,
-  { limit: 5, minScore: 0.8 }
-);
-```
-
-### Direct API Usage
-
-#### Generate Embeddings
-
-```typescript
-import { createEmbedding, createBatchEmbeddings } from '$lib/server/embeddings';
-
-// Single embedding
-const [embedding] = await createEmbedding('Climate change policy', {
-  model: 'voyage-3',
-  inputType: 'document'
-});
-
-// Batch embeddings (efficient for multiple texts)
-const texts = ['Text 1', 'Text 2', 'Text 3'];
-const embeddings = await createBatchEmbeddings(texts, {
-  model: 'voyage-3',
-  batchSize: 64,
-  showProgress: true
-});
-```
-
-#### Store Intelligence with Embedding
-
-```typescript
-import { insertIntelligenceWithEmbedding } from '$lib/server/intelligence';
-
-await insertIntelligenceWithEmbedding({
-  category: 'legislative',
-  title: 'H.R. 2547: Clean Energy Investment Tax Credit Act',
-  source: 'Congress.gov',
-  source_url: 'https://congress.gov/bill/119/hr2547',
-  published_at: new Date(),
-  snippet: 'Introduces new tax incentives for clean energy...',
-  topics: ['renewable energy', 'tax policy'],
-  relevance_score: 0.88,
-  expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000)
-});
-```
-
-The function generates a Voyage AI embedding and inserts it via raw SQL
-(Prisma doesn't natively handle pgvector's `vector` type for writes).
-
-#### Rerank Results
-
-```typescript
-import { rerankDocuments } from '$lib/server/embeddings';
-
-const documents = [
-  'Document about renewable energy',
-  'Article on fossil fuels',
-  'Climate policy update'
-];
-
-const results = await rerankDocuments('clean energy transition', documents, {
-  topK: 3,
-  returnDocuments: true
 });
 ```
 
 ---
 
-## Cost Analysis
+## Usage from the App
 
-### Voyage AI Pricing (2026)
-
-| Model | Price per 1M Tokens | Free Tier | Use Case |
-|-------|--------------------:|-----------|----------|
-| voyage-4 | $0.06 | 200M tokens | General (default) |
-| voyage-4-large | $0.12 | 200M tokens | Highest quality |
-| voyage-law-2 | $0.12 | 50M tokens | Legal/legislative text |
-| rerank-2.5 | $0.05 | 200M tokens | Precision improvement |
-| Batch API | 33% discount | — | Nightly ingestion |
-
-### pgvector Storage Cost
-
-| Documents | Vector Size (1024-dim) | With Indexes | RAM Needed |
-|-----------|----------------------:|------------:|----------:|
-| 10,000 | ~40 MB | ~120 MB | 1 GB |
-| 100,000 | ~400 MB | ~1.2 GB | 2 GB |
-| 1,000,000 | ~4 GB | ~12 GB | 8 GB |
-
-At 100K documents, the entire index fits in 2 GB RAM on the existing
-Postgres instance. No additional infrastructure needed.
-
-### Full Cost Model
-
-For comprehensive cost analysis including data acquisition, document parsing,
-embedding generation, and infrastructure at various scales, see:
-
-**[Civic Intelligence Cost Model](./architecture/civic-intelligence-cost-model.md)**
-
----
-
-## Best Practices
-
-### 1. Choosing Between Search Methods
-
-| Method | When to Use | Pros | Cons |
-|--------|-------------|------|------|
-| **Semantic** | Conceptual queries ("climate action") | Understands meaning | May miss exact keywords |
-| **Hybrid** | Mixed queries ("H.R. 842 climate") | Best of both worlds | Slightly slower |
-| **With Reranking** | When precision critical | Highest accuracy | API cost for reranking |
-| **By Embedding** | Already have pre-computed embedding | No redundant API calls | Requires pre-computed |
-
-### 2. Embedding Generation
+Client calls the SvelteKit route, which invokes the Convex action:
 
 ```typescript
-// Good: Generate embeddings at insertion time
-import { insertIntelligenceWithEmbedding } from '$lib/server/intelligence';
+// src/routes/api/templates/search/+server.ts
+import { convexServerClient } from '$lib/server/convex/client';
+import { api } from '$convex/_generated/api';
 
-await insertIntelligenceWithEmbedding({
-  ...item,
-  // Embedding generated + stored in same transaction
-});
-
-// Bad: Inserting without embedding (requires backfill later)
-await db.intelligence.create({ data: item });
-```
-
-### 3. Pre-filter Before Search
-
-```typescript
-// Good: Filter narrows search space before vector comparison
-const results = await semanticSearchIntelligence(query, embedding, {
-  categories: ['legislative'],
-  publishedAfter: lastWeek,
-  limit: 10
-});
-
-// Bad: Searching all documents without filtering
-const results = await semanticSearchIntelligence(query, embedding, {
-  limit: 10
-});
-```
-
-### 4. Batch Processing
-
-```typescript
-// Good: Batch embeddings
-const embeddings = await createBatchEmbeddings(texts, {
-  batchSize: 64,
-  showProgress: true
-});
-
-// Bad: Sequential single-embedding API calls
-const embeddings = await Promise.all(
-  texts.map((text) => createEmbedding(text))
-);
-```
-
-### 5. Graceful Degradation
-
-```typescript
-try {
-  const results = await SemanticIntelligenceService.search(query, filters);
-  return results;
-} catch (error) {
-  console.error('Vector search failed, falling back to text search:', error);
-  return await textSearchFallback(query, filters);
+export async function POST({ request }) {
+  const { query, category } = await request.json();
+  const results = await convexServerClient.action(
+    api.intelligence.semanticSearch,
+    { query, category, limit: 20 }
+  );
+  return Response.json({ results });
 }
 ```
 
 ---
 
+## Best Practices
+
+### 1. Pre-filter before vector search
+
+Use `filterFields` on the index; pass a `filter` to `ctx.vectorSearch`.
+Narrowing the candidate set reduces cost and improves precision.
+
+### 2. Generate embeddings at write time
+
+Embed when inserting the row. Avoid background batch jobs that can
+drift out of sync with the source data.
+
+### 3. Batch with backoff
+
+The Gemini embedding endpoint is rate-limited. Batch where you can;
+back off on 429s. The LLM cost-protection layer
+(`src/lib/server/ai/llm-cost-protection.ts`) enforces 20/hr per user.
+
+### 4. Cache results, not embeddings
+
+Convex is the source of truth. Client-side IndexedDB cache
+(`src/lib/core/search/cache.ts`) stores top-N results per query for
+instant re-display; invalidate on mutation.
+
+### 5. Graceful degradation
+
+If embedding generation fails, fall back to `.searchIndex()` (keyword)
+on the same table. The UI should never hang on a Gemini outage.
+
+---
+
 ## Troubleshooting
 
-### pgvector Extension Not Found
+### Dimension mismatch
 
-**Error:** `ERROR: type "vector" does not exist`
-
-**Solution:** The extension must be created in your database:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
+```
+Error: vector dimensions (512) do not match index (768)
 ```
 
-This runs automatically via `docker/init-db.sql` when using `docker-compose`.
-For managed Postgres, enable pgvector from the provider dashboard.
+You generated an embedding with a model other than `text-embedding-004`.
+Regenerate, or update the `dimensions` field on the `.vectorIndex()`
+declaration and redeploy (`npx convex dev`).
 
-### HNSW Index Not Created
+### No results returned
 
-**Error:** Slow vector searches (full sequential scan)
+1. Confirm the row has a non-empty `embedding` array.
+2. Confirm `filterFields` in the query match values in the row.
+3. Try a lower `limit` or broader filter to rule out filtering.
 
-**Solution:** Apply the migration SQL:
+### High Gemini cost
 
-```bash
-psql $DATABASE_URL -f prisma/migrations/20260205_add_intelligence_pgvector/migration.sql
-```
-
-Verify index exists:
-
-```sql
-SELECT indexname FROM pg_indexes WHERE tablename = 'intelligence';
--- Should include: intelligence_embedding_hnsw
-```
-
-### Dimension Mismatch
-
-**Error:** `ERROR: different vector dimensions`
-
-**Solution:**
-- Ensure all embeddings use the same model (Gemini embedding-001 = 768 dimensions)
-- Check the `Unsupported("vector(768)")` type in Prisma schema matches
-- Regenerate embeddings if the model was changed
-
-### No Results Returned
-
-**Debug Steps:**
-
-```sql
--- 1. Check if documents have embeddings
-SELECT count(*) FROM intelligence WHERE embedding IS NOT NULL;
-
--- 2. Check embedding dimensions
-SELECT array_length(embedding::real[], 1) FROM intelligence LIMIT 1;
-
--- 3. Test raw vector search
-SELECT title, 1 - (embedding <=> '[0.1, 0.2, ...]'::vector) as similarity
-FROM intelligence
-ORDER BY embedding <=> '[0.1, 0.2, ...]'::vector
-LIMIT 5;
-```
-
-### Voyage AI Rate Limiting
-
-**Error:** `Rate limited after 3 retries`
-
-**Solution:**
-1. Reduce batch size: `{ batchSize: 32 }`
-2. Add delays between batches
-3. Use Voyage AI's batch API for bulk operations (33% cheaper, 12-hour window)
-
-### High Costs
-
-```typescript
-import { costTracker } from '$lib/server/embeddings';
-
-console.log(costTracker.getStats());
-// { totalTokens: 150000, embeddingCalls: 50, rerankCalls: 10, estimatedCost: 0.009 }
-```
-
-**Prevention:**
-- Check embeddings exist before regenerating (deduplication)
-- Use `estimateEmbeddingCost()` before batch operations
-- Use voyage-3-lite for queries (3x cheaper, minimal quality loss)
-- Reserve voyage-law-2 for legislative documents only
+Check `llm-cost-protection` logs. Embedding regenerations on hot paths
+(e.g. every pageview) are the usual culprit — cache the query embedding
+by query string.
 
 ---
 
-## Additional Resources
+## Cost
 
-- [Voyage AI Documentation](https://docs.voyageai.com/)
-- [pgvector GitHub](https://github.com/pgvector/pgvector) — HNSW, IVFFlat indexing
-- [Civic Intelligence Cost Model](./architecture/civic-intelligence-cost-model.md) — Full cost analysis
-- [ADR-011: MongoDB to pgvector Migration](./adr/011-mongodb-to-pgvector-migration.md)
-- [Embeddings Module README](../src/lib/server/embeddings/README.md) — Voyage AI client API reference
-- [Intelligence Orchestrator README](../src/lib/core/intelligence/README.md) — Provider architecture
+- **Gemini `text-embedding-004`** is currently free on the Google AI
+  Studio tier; paid tier is a fraction of a cent per 1M characters.
+- **Convex vector storage** is counted against your Convex plan's
+  storage quota; 768-dim float64 arrays are ~6 KB per row before
+  compression.
+
+For typical Commons volumes (< 100K intelligence rows, < 10K templates)
+both are well within hobby-tier limits.
 
 ---
 
-*Commons PBC | Vector Search Guide | Updated 2026-02-05 (pgvector migration)*
+## References
+
+- `convex/schema.ts` — index declarations
+- `convex/intelligence.ts` — search actions
+- `src/lib/core/search/gemini-embeddings.ts` — embedding client
+- `src/lib/core/search/cache.ts` — client-side cache
+- `src/lib/server/ai/llm-cost-protection.ts` — rate limiting
+
+---
+
+*Commons PBC | Vector Search Guide*

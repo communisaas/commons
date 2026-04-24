@@ -1,62 +1,24 @@
 # Deployment Guide
 
-> commons.email deploys to **Cloudflare Workers** via Pages.
+> commons.email deploys to **Cloudflare Workers** via Pages, with **Convex** as the managed backend.
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** This guide still describes
-> the pre-Convex stack (Prisma 6.x + Hyperdrive + ALS-scoped PrismaClient).
-> **Prisma, Hyperdrive, and the local Postgres are removed.** Use the
-> current flow below; treat the architecture diagram, database-migration
-> section, Hyperdrive section, and "Key Constraints" points 1–4 as
-> historical.
->
-> ### Current deploy (2026-04-23)
->
-> **Frontend (SvelteKit on Cloudflare Pages):**
->
-> ```bash
-> npm run build
-> npx wrangler pages deploy .svelte-kit/cloudflare \
->   --project-name commons --branch production
-> ```
->
-> **Backend (Convex):**
->
-> ```bash
-> npx convex deploy --env-file .env.production
-> ```
->
-> - `convex deploy -y` silently no-ops against prod (see MEMORY) — always
->   pass `--env-file`.
-> - `PUBLIC_CONVEX_URL` is required (wrangler.toml). Missing from secrets
->   table below.
->
-> **Not in the flow anymore:**
->
-> - `npx prisma db push` / `migrate dev` / `migrate deploy` — Prisma is
->   not a dependency.
-> - Hyperdrive binding — no entry in `wrangler.toml`; no connection
->   pooling to configure.
-> - `AsyncLocalStorage`-scoped `PrismaClient` — dead constraint; the
->   `nodejs_als` flag remains in `wrangler.toml` but not for this.
-> - `$disconnect()` warning — inapplicable.
->
-> **Storage ops alert:** Storacha sunsets **2026-05-31** (uploads already
-> disabled 2026-04-15). `pin-to-ipfs.ts` is hardcoded to Storacha;
-> gateway fallbacks (`storacha.link/ipfs`) will 404 after that date.
-> Deploy runbook should gain a "pinning provider" section before the
-> cutover. See `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md` and the
-> `storacha_sunset_migration` memory entry.
+**Storage ops alert:** Storacha sunsets **2026-05-31** (uploads already disabled 2026-04-15). `pin-to-ipfs.ts` is hardcoded to Storacha; gateway fallbacks (`storacha.link/ipfs`) will 404 after that date. Deploy runbook should gain a "pinning provider" section before the cutover. See `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md` and the `storacha_sunset_migration` memory entry.
 
 ---
 
 ## Quick Reference
 
 ```bash
-npm run build                                              # Build for production
-npm run test                                               # Verify tests pass
+# Backend (Convex)
+npx convex deploy --env-file .env.production
+
+# Frontend (SvelteKit on Cloudflare Pages)
+npm run build
 npx wrangler pages deploy .svelte-kit/cloudflare \
-  --project-name commons --branch production       # Deploy
+  --project-name commons --branch production
 ```
+
+Note: `npx convex deploy -y` silently no-ops against prod — always pass `--env-file`.
 
 ---
 
@@ -64,13 +26,12 @@ npx wrangler pages deploy .svelte-kit/cloudflare \
 
 - **Runtime**: Cloudflare Workers (Pages Functions)
 - **Adapter**: `@sveltejs/adapter-cloudflare`
-- **DB pooling**: Hyperdrive (binding in `wrangler.toml`)
-- **Per-request isolation**: AsyncLocalStorage (`nodejs_als` flag) scopes PrismaClient per request
+- **Backend**: Convex (cloud-managed, code-driven schema)
 - **KV namespaces**: DC_SESSION_KV, REJECTION_MONITOR_KV, VICAL_KV, REGISTRATION_RETRY_KV
 - **Config**: `wrangler.toml` at repo root
 
 ```
-Browser → Cloudflare CDN → Workers (SvelteKit) → Hyperdrive → PostgreSQL
+Browser → Cloudflare CDN → Workers (SvelteKit) → Convex
                                     ↓
                               KV (ephemeral state)
 ```
@@ -99,8 +60,10 @@ Required secrets:
 
 | Secret | Purpose |
 |---|---|
+| `PUBLIC_CONVEX_URL` | Convex deployment URL (public, exposed to client) |
+| `CONVEX_DEPLOY_KEY` | For CI/CD Convex deploys |
 | `GEMINI_API_KEY` | Gemini API for agents + embeddings |
-| `GROQ_API_KEY` | Llama Guard safety moderation |
+| `GROQ_API_KEY` | Llama Guard moderation pipeline |
 | `IDENTITY_SIGNING_KEY` | Ed25519 signing for district credentials |
 | `JWT_SECRET` | Session token signing |
 | `IDENTITY_HASH_SALT` | Sybil-resistant identity hashing |
@@ -129,26 +92,19 @@ npx wrangler kv namespace create REGISTRATION_RETRY_KV
 
 Update `wrangler.toml` with the returned namespace IDs.
 
-### Hyperdrive
-
-Hyperdrive handles connection pooling. The binding ID is in `wrangler.toml`. Local dev uses `localConnectionString` for direct Postgres access.
-
-Set `max: 1` on the client-side Pool (internal to PrismaPg) — Hyperdrive manages the actual pool. Never call `$disconnect()`.
-
 ---
 
-## Database Migrations
+## Schema Changes
 
 ```bash
-# Development: push schema directly
-npx prisma db push
+# Dev: edit convex/schema.ts, then:
+npx convex dev     # auto-deploys schema + functions to the dev Convex instance
 
-# Production: create and apply migration
-npx prisma migrate dev --name describe-change
-npx prisma migrate deploy   # Run on production DB
+# Prod: edit convex/schema.ts, then:
+npx convex deploy --env-file .env.production
 ```
 
-The production `DATABASE_URL` should point to the Hyperdrive connection string for migrations run locally, or directly to the Postgres instance.
+Convex is declarative and code-driven: there are no migration files. Schema diffs are applied when you run `dev`/`deploy`.
 
 ---
 
@@ -157,6 +113,10 @@ The production `DATABASE_URL` should point to the Hyperdrive connection string f
 ### Standard Deploy
 
 ```bash
+# 1. Deploy Convex backend
+npx convex deploy --env-file .env.production
+
+# 2. Deploy SvelteKit frontend
 npm run build && npx wrangler pages deploy .svelte-kit/cloudflare \
   --project-name commons --branch production
 ```
@@ -170,7 +130,7 @@ npx wrangler pages deploy .svelte-kit/cloudflare \
 
 ### Rollback
 
-Use the Cloudflare Pages dashboard to roll back to a previous deployment. Each deploy is immutable and instantly revertible.
+Use the Cloudflare Pages dashboard to roll back to a previous deployment. Each deploy is immutable and instantly revertible. For Convex, `npx convex deploy` supports rollback to previous deployment versions via the dashboard.
 
 ---
 
@@ -179,15 +139,15 @@ Use the Cloudflare Pages dashboard to roll back to a previous deployment. Each d
 - **Cloudflare Dashboard** → Workers & Pages → commons → Logs
 - **Real-time logs**: `npx wrangler pages deployment tail --project-name commons`
 - **KV metrics**: Dashboard → Workers & Pages → KV → namespace → Metrics
+- **Convex dashboard**: function-level metrics, logs, and errors
 
 ---
 
 ## Key Constraints
 
-1. **No module-level I/O**: Cloudflare Workers reuse module scope across requests. Never store PrismaClient, fetch results, or request-scoped state at module level.
-2. **AsyncLocalStorage required**: `nodejs_als` flag must be enabled. `db.ts` uses ALS to scope PrismaClient per request.
-3. **No `$disconnect()`**: Hyperdrive manages connections. Calling `$disconnect()` breaks pooling.
-4. **Prisma 6.x**: Stay on 6.x — Prisma 7.x has WASM compilation issues on Workers (#28657).
+1. **No module-level I/O**: Cloudflare Workers reuse module scope across requests. Never store fetch results or request-scoped state at module level.
+2. **Convex bridge via `ctx.auth.getUserIdentity()`**: SvelteKit sessions issue an RS256 JWT that Convex verifies; no server-held DB connection to manage.
+3. **Schema edits deploy with `npx convex deploy`**: never hand-apply changes.
 
 ---
 

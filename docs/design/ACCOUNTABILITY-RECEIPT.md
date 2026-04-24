@@ -9,9 +9,6 @@
 > shipped; several concrete deltas need to be read before building
 > against this spec:
 >
-> - **Schema is Convex, not Prisma.** The `model AccountabilityReceipt`
->   block (lines ~257-314) is historical. Live table is
->   `accountabilityReceipts` in `convex/schema.ts:~1692`.
 > - **FK is `decisionMakerId`, not `bioguideId`.** The receipt row
 >   references `decisionMakers` via `decisionMakerId: v.id("decisionMakers")`.
 >   `bioguideId` is a field on `decisionMakers` itself, not the
@@ -290,76 +287,69 @@ function computeAlignment(
 
 ## Schema
 
-### New Model: AccountabilityReceipt
+### Table: accountabilityReceipts
 
-```prisma
-model AccountabilityReceipt {
-  id                String   @id @default(cuid())
+Live in `convex/schema.ts`. Foreign key is `decisionMakerId: v.id("decisionMakers")`; `bioguideId` is a field on `decisionMakers`, not on this table.
 
-  /// Canonical decision-maker identifier (Representative.bioguide_id)
-  bioguideId        String
-  dmName            String   // denormalized for display
+```ts
+accountabilityReceipts: defineTable({
+  // Decision-maker reference (FK)
+  decisionMakerId: v.id("decisionMakers"),
+  dmName: v.string(),                   // denormalized for display
 
-  /// The bill this receipt concerns
-  billId            String
+  // The bill this receipt concerns
+  billId: v.id("bills"),
 
-  /// The org that delivered the proof
-  orgId             String
+  // The org that delivered the proof
+  orgId: v.id("organizations"),
 
-  /// The specific delivery (nullable for aggregate receipts)
-  deliveryId        String?  @unique
+  // The specific delivery (optional for aggregate receipts)
+  deliveryId: v.optional(v.id("campaignDeliveries")),
 
   // ── Proof Weight Components (frozen from packetSnapshot) ──
-  verifiedCount     Int
-  totalCount        Int
-  gds               Float?
-  ald               Float?
-  cai               Float?
-  temporalEntropy   Float?
-  districtCount     Int
-  proofWeight       Float     // computed scalar [0, 1]
+  verifiedCount: v.number(),
+  totalCount: v.number(),
+  gds: v.optional(v.number()),
+  ald: v.optional(v.number()),
+  cai: v.optional(v.number()),
+  temporalEntropy: v.optional(v.number()),
+  districtCount: v.number(),
+  proofWeight: v.number(),              // computed scalar [0, 1]
 
   // ── Cryptographic Binding ──
-  attestationHash   String    // Phase 1: SHA-256(packetDigest, billId, bioguideId, weight); Phase 4: Poseidon2
-  packetDigest      String    // SHA-256 of frozen packetSnapshot JSON
+  attestationDigest: v.string(),        // Phase 1: SHA-256(packetDigest, billId, decisionMakerId, weight); Phase 4: Poseidon2
+  packetDigest: v.string(),             // SHA-256 of frozen packetSnapshot JSON
 
   // ── Temporal Chain ──
-  proofDeliveredAt  DateTime  // T1: CampaignDelivery.sentAt
-  proofVerifiedAt   DateTime? // T2: ReportResponse.type='clicked_verify'
-  actionOccurredAt  DateTime? // T3: LegislativeAction.occurredAt
-  causalityClass    String    @default("pending") // strong|moderate|weak|none|pending
+  proofDeliveredAt: v.number(),         // T1: campaignDeliveries.sentAt (ms epoch)
+  proofVerifiedAt: v.optional(v.number()),  // T2: reportResponses.type='clicked_verify'
+  actionOccurredAt: v.optional(v.number()), // T3: legislativeActions.occurredAt
+  causalityClass: v.string(),           // strong|moderate|weak|none|pending (default "pending")
 
   // ── Decision-Maker Action ──
-  dmAction          String?   // voted_yes|voted_no|abstained|sponsored|co-sponsored
-  alignment         Float     @default(0) // 1.0 aligned, 0 unknown, -1.0 contrary
-  actionSourceUrl   String?   // link to vote record
+  dmAction: v.optional(v.string()),     // voted_yes|voted_no|abstained|sponsored|co-sponsored
+  alignment: v.number(),                // 1.0 aligned, 0 unknown, -1.0 contrary (default 0)
+  actionSourceUrl: v.optional(v.string()),
 
   // ── Metadata ──
-  status            String    @default("pending") // pending|actioned|expired
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-
-  // ── Relations ──
-  bill              Bill         @relation(fields: [billId], references: [id])
-  org               Organization @relation(fields: [orgId], references: [id])
-
-  @@unique([orgId, billId, bioguideId]) // one receipt per org per bill per DM
-  @@index([bioguideId])
-  @@index([billId])
-  @@index([orgId])
-  @@index([status])
-  @@index([causalityClass])
-}
+  status: v.string(),                   // pending|actioned|expired (default "pending")
+  createdAt: v.number(),
+  updatedAt: v.number(),
+})
+  // One receipt per org per bill per DM — uniqueness enforced by this composite index
+  .index("by_org_bill_dm", ["orgId", "billId", "decisionMakerId"])
+  .index("by_decisionMakerId", ["decisionMakerId"])
+  .index("by_billId", ["billId"])
+  .index("by_orgId", ["orgId"])
+  .index("by_status", ["status"])
+  .index("by_causalityClass", ["causalityClass"])
 ```
 
-### Campaign Position (new column)
+Atomic upserts (`ctx.db.insert` / `ctx.db.patch` inside a mutation) plus the `by_org_bill_dm` unique-intent index prevent duplicate receipts under concurrent writes.
 
-```prisma
-model Campaign {
-  // ... existing fields ...
-  position    String?  // 'support' | 'oppose' | null (inferred or explicit)
-}
-```
+### Campaign Position (field on campaigns table)
+
+The `campaigns` table in `convex/schema.ts` carries an optional `position: v.optional(v.string())` field — `'support' | 'oppose' | null` (inferred or explicit).
 
 ### No New Models for Cross-Org Aggregation
 
@@ -784,7 +774,7 @@ Redefining success for governance means measuring power's responsiveness to veri
 All four phases implemented 2026-03-17. Three implementation waves with three review gates.
 
 ### Phase 1: Foundation — COMPLETE
-- `AccountabilityReceipt` model in `prisma/schema.prisma` (27 fields, 6 indexes)
+- `accountabilityReceipts` table in `convex/schema.ts` (27 fields, 6 indexes)
 - `ACCOUNTABILITY` feature flag in `src/lib/config/features.ts`
 - `src/lib/server/legislation/receipts/proof-weight.ts` — `computeProofWeight()`
 - `src/lib/server/legislation/receipts/causality.ts` — `classifyCausality()`

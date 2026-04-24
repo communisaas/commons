@@ -4,34 +4,28 @@
 > **Date**: 2026-03-17
 > **Depends on**: Intelligence Service (Convex vector indexes), Agent Infrastructure (Gemini 3 Flash), Campaign Delivery (SES), Shadow Atlas, Verification Pipeline
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Core design shipped.
-> Concrete corrections:
+> **Audit notes (2026-04-23).**
 >
-> - **Header says DESIGN; body's Implementation Log shows all gates
->   PASSED 2026-03-18.** Flip status at top.
-> - **Prisma model language is historical.** 6 tables exist in
->   `convex/schema.ts` (bills, legislativeAlerts, orgBillRelevances,
->   legislativeActions, decisionMakers, accountabilityReceipts) using
->   `defineTable()` with Convex value types. `prisma/schema.prisma`
->   does not exist; `npx prisma migrate` does not apply.
-> - **pgvector / SQL language is misleading.** Vector search is
->   Convex-native (`.vectorIndex("by_embedding", { dimensions: 768 })`
->   on intelligence / bills tables using Gemini `text-embedding-004`).
->   No raw SQL exposure.
+> - **All gates passed 2026-03-18.** Header status is IMPLEMENTED;
+>   design narrative below is retained for historical reference.
+> - **Schema lives in Convex.** 6 tables exist in `convex/schema.ts`
+>   (`bills`, `legislativeAlerts`, `orgBillRelevances`,
+>   `legislativeActions`, `decisionMakers`, `accountabilityReceipts`)
+>   using `defineTable()` with Convex value types.
+> - **Vector search is Convex-native**
+>   (`.vectorIndex("by_embedding", { dimensions: 768 })` on
+>   intelligence / bills tables using Gemini `text-embedding-004`).
 > - **Model renames:** `ReportResponse` folded into
 >   `accountabilityReceipts` (`convex/schema.ts:~1692`, 1733-1745);
->   `OrgIssueDomain` is live as `orgIssueDomains` table
->   (`~1751`, camelCase). Developers searching for the old names
->   find nothing.
-> - **DecisionMaker migration is not called out here.** The plan was
->   authored before `CongressionalRep → decisionMakers` unification.
->   Post-migration architecture is in `INTELLIGENCE-LOOP-DEPTH.md`.
-> - **Missing from the plan (present in code):** `orgDmFollows`
->   (`~1854`) and `orgBillWatches` (`~1867`) tables enable the
->   follow/watch activity feed described in INTELLIGENCE-LOOP-DEPTH.md.
-> - **Embeddings are Gemini, not Voyage** — no 1024-dim refs needed;
->   this doc is already correct on 768-dim. Treat any Voyage mention
->   as obsolete (ADR-011 superseded).
+>   `OrgIssueDomain` is live as `orgIssueDomains` (~1751, camelCase).
+> - **DecisionMaker migration** happened after this plan — see
+>   `INTELLIGENCE-LOOP-DEPTH.md` for the post-migration architecture.
+>   This doc's "Representative" references describe the pre-migration
+>   era.
+> - **Follow/watch tables** (`orgDmFollows` ~1854, `orgBillWatches`
+>   ~1867) enable the activity feed described in
+>   `INTELLIGENCE-LOOP-DEPTH.md`.
+> - **Embeddings are Gemini** — 768-dim throughout.
 
 ---
 
@@ -84,157 +78,119 @@ Phase F: Scheduling & Optimization (cron cadence, cost control, cold start)
 
 ## Phase A: Data Foundation
 
-### New Prisma Models
+### New Convex Tables
 
-```prisma
+```typescript
+// convex/schema.ts
+
 // Bill / legislative item tracked by the intelligence loop
-model Bill {
-  id                String   @id @default(cuid())
-  externalId        String   @unique @map("external_id") // e.g. "hr-1234-119" or "ca-sb-567-2026"
-  jurisdiction      String   // "us-federal" | "us-state-ca" | "uk-parliament" | etc.
-  jurisdictionLevel String   @map("jurisdiction_level") // "federal" | "state" | "local"
-  chamber           String?  // "house" | "senate" | "council" | null
-  title             String
-  summary           String?
-  status            String   @default("introduced") // introduced | committee | floor | passed | failed | signed | vetoed
-  statusDate        DateTime @map("status_date")
-  sponsors          Json?    // [{name, externalId, party}]
-  committees        String[] // committee names
-  sourceUrl         String   @map("source_url")
-  fullTextUrl       String?  @map("full_text_url")
+bills: defineTable({
+  externalId: v.string(),           // e.g. "hr-1234-119" or "ca-sb-567-2026"
+  jurisdiction: v.string(),         // "us-federal" | "us-state-ca" | "uk-parliament" | etc.
+  jurisdictionLevel: v.string(),    // "federal" | "state" | "local"
+  chamber: v.optional(v.string()),  // "house" | "senate" | "council"
+  title: v.string(),
+  summary: v.optional(v.string()),
+  status: v.string(),               // introduced | committee | floor | passed | failed | signed | vetoed
+  statusDate: v.number(),
+  sponsors: v.optional(v.array(v.object({
+    name: v.string(),
+    externalId: v.optional(v.string()),
+    party: v.optional(v.string()),
+  }))),
+  committees: v.array(v.string()),
+  sourceUrl: v.string(),
+  fullTextUrl: v.optional(v.string()),
 
-  // Relevance scoring (computed per-org via OrgBillRelevance)
-  topicEmbedding    Unsupported("vector(768)")? @map("topic_embedding")
-  topics            String[]
-  entities          String[]
+  // Relevance scoring (computed per-org via orgBillRelevances)
+  topicEmbedding: v.optional(v.array(v.float64())), // 768-dim Gemini embedding
+  topics: v.array(v.string()),
+  entities: v.array(v.string()),
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  alerts     LegislativeAlert[]
-  relevances OrgBillRelevance[]
-  actions    LegislativeAction[]
-
-  @@index([jurisdiction, status])
-  @@index([statusDate])
-  @@index([externalId])
-  @@map("bill")
-}
+  createdAt: v.number(),
+  updatedAt: v.number(),
+})
+  .index("by_externalId", ["externalId"])
+  .index("by_jurisdiction_status", ["jurisdiction", "status"])
+  .index("by_statusDate", ["statusDate"])
+  .vectorIndex("by_embedding", { vectorField: "topicEmbedding", dimensions: 768 })
+  .searchIndex("search_bills", {
+    searchField: "title",
+    filterFields: ["jurisdiction", "status"],
+  }),
 
 // Per-org relevance score for a bill (avoids N*M recomputation)
-model OrgBillRelevance {
-  id        String @id @default(cuid())
-  orgId     String @map("org_id")
-  billId    String @map("bill_id")
-  score     Float  // 0.0-1.0 cosine similarity between bill embedding and org issue domains
-  matchedOn String[] @map("matched_on") // which org topics matched
-
-  createdAt DateTime @default(now()) @map("created_at")
-
-  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  bill Bill         @relation(fields: [billId], references: [id], onDelete: Cascade)
-
-  @@unique([orgId, billId])
-  @@index([orgId, score])
-  @@map("org_bill_relevance")
-}
+orgBillRelevances: defineTable({
+  orgId: v.id("organizations"),
+  billId: v.id("bills"),
+  score: v.number(),                // 0.0-1.0 cosine similarity
+  matchedOn: v.array(v.string()),   // which org topics matched
+  createdAt: v.number(),
+})
+  .index("by_org_bill", ["orgId", "billId"])   // unique via mutation guard
+  .index("by_org_score", ["orgId", "score"]),
 
 // Alert generated when a bill is relevant to an org
-model LegislativeAlert {
-  id          String   @id @default(cuid())
-  orgId       String   @map("org_id")
-  billId      String   @map("bill_id")
-  type        String   // "new_bill" | "status_change" | "vote_scheduled" | "amendment"
-  title       String
-  summary     String
-  urgency     String   @default("normal") // "low" | "normal" | "high" | "critical"
-  status      String   @default("pending") // "pending" | "seen" | "acted" | "dismissed"
-  actionTaken String?  @map("action_taken") // "created_campaign" | "sent_email" | null
+legislativeAlerts: defineTable({
+  orgId: v.id("organizations"),
+  billId: v.id("bills"),
+  type: v.string(),                 // "new_bill" | "status_change" | "vote_scheduled" | "amendment"
+  title: v.string(),
+  summary: v.string(),
+  urgency: v.string(),              // "low" | "normal" | "high" | "critical"
+  status: v.string(),               // "pending" | "seen" | "acted" | "dismissed"
+  actionTaken: v.optional(v.string()),
+  createdAt: v.number(),
+  seenAt: v.optional(v.number()),
+})
+  .index("by_org_status", ["orgId", "status"])
+  .index("by_org_createdAt", ["orgId", "createdAt"]),
 
-  createdAt DateTime @default(now()) @map("created_at")
-  seenAt    DateTime? @map("seen_at")
-
-  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  bill Bill         @relation(fields: [billId], references: [id], onDelete: Cascade)
-
-  @@index([orgId, status])
-  @@index([orgId, createdAt])
-  @@map("legislative_alert")
-}
-
-// Tracks what a decision-maker did after receiving a report
-model ReportResponse {
-  id           String   @id @default(cuid())
-  deliveryId   String   @map("delivery_id")
-  type         String   // "opened" | "clicked_verify" | "replied" | "forwarded" | "meeting_requested" | "vote_cast" | "public_statement"
-  detail       String?  // free-text: reply excerpt, vote direction, etc.
-  confidence   String   @default("observed") // "observed" (SES events) | "inferred" (timing correlation) | "reported" (org manually logs)
-  occurredAt   DateTime @map("occurred_at")
-  createdAt    DateTime @default(now()) @map("created_at")
-
-  delivery CampaignDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
-
-  @@index([deliveryId])
-  @@index([occurredAt])
-  @@map("report_response")
-}
-
-// Decision-maker action on a bill (vote, sponsorship, statement)
-model LegislativeAction {
-  id              String   @id @default(cuid())
-  billId          String   @map("bill_id")
-  decisionMakerId String?  @map("decision_maker_id") // nullable: not all officials are in our DB
-  externalId      String?  @map("external_id") // bioguide_id, openstates_id, etc.
-  name            String
-  action          String   // "voted_yes" | "voted_no" | "abstained" | "sponsored" | "co-sponsored" | "statement"
-  detail          String?
-  sourceUrl       String?  @map("source_url")
-  occurredAt      DateTime @map("occurred_at")
-  createdAt       DateTime @default(now()) @map("created_at")
-
-  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
-
-  @@index([billId])
-  @@index([decisionMakerId])
-  @@index([occurredAt])
-  @@map("legislative_action")
-}
+// Decision-maker action on a bill (vote, sponsorship, statement).
+// Post-migration note: response tracking (opened/clicked/replied) folded into
+// accountabilityReceipts — see INTELLIGENCE-LOOP-DEPTH.md.
+legislativeActions: defineTable({
+  billId: v.id("bills"),
+  decisionMakerId: v.optional(v.id("decisionMakers")),
+  externalId: v.optional(v.string()), // bioguide_id, openstates_id, etc.
+  name: v.string(),
+  action: v.string(),                 // "voted_yes" | "voted_no" | "abstained" | "sponsored" | "co-sponsored" | "statement"
+  detail: v.optional(v.string()),
+  sourceUrl: v.optional(v.string()),
+  occurredAt: v.number(),
+  createdAt: v.number(),
+})
+  .index("by_billId", ["billId"])
+  .index("by_decisionMakerId", ["decisionMakerId"])
+  .index("by_occurredAt", ["occurredAt"]),
 
 // Org's declared issue domains (used for bill relevance scoring)
-model OrgIssueDomain {
-  id          String @id @default(cuid())
-  orgId       String @map("org_id")
-  label       String // "water rights", "school safety", "transit equity"
-  embedding   Unsupported("vector(768)")? // precomputed from label + description
-  description String?
-  weight      Float  @default(1.0) // org can prioritize domains
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-
-  @@unique([orgId, label])
-  @@index([orgId])
-  @@map("org_issue_domain")
-}
+orgIssueDomains: defineTable({
+  orgId: v.id("organizations"),
+  label: v.string(),                  // "water rights", "school safety", "transit equity"
+  embedding: v.optional(v.array(v.float64())), // 768-dim
+  description: v.optional(v.string()),
+  weight: v.number(),                 // org can prioritize domains
+  createdAt: v.number(),
+  updatedAt: v.number(),
+})
+  .index("by_org_label", ["orgId", "label"])  // unique via mutation guard
+  .index("by_orgId", ["orgId"])
+  .vectorIndex("by_embedding", { vectorField: "embedding", dimensions: 768 }),
 ```
 
-### Relation Additions to Existing Models
+### Field Additions to Existing Tables
 
-```prisma
-// Add to Campaign:
-billId String? @map("bill_id")   // nullable — not all campaigns are bill-triggered
-bill   Bill?   @relation(fields: [billId], references: [id])
+```typescript
+// Add to campaigns:
+billId: v.optional(v.id("bills")),   // not all campaigns are bill-triggered
 
-// Add to CampaignDelivery:
-sesMessageId String?  @map("ses_message_id") // SES MessageId for SNS event correlation
-responses    ReportResponse[]
+// Add to campaignDeliveries:
+sesMessageId: v.optional(v.string()), // SES MessageId for SNS event correlation
 
-// Add to Organization:
-issueDomains    OrgIssueDomain[]
-billRelevances  OrgBillRelevance[]
-alerts          LegislativeAlert[]
+// Related tables queried via indexes:
+// - accountabilityReceipts (includes response tracking post-migration)
+// - orgIssueDomains, orgBillRelevances, legislativeAlerts — queried via by_orgId
 ```
 
 ### Critical: Per-Delivery Verification URLs
@@ -247,18 +203,18 @@ https://commons.email/verify/${delivery.id}
 
 Each CampaignDelivery row gets a unique verification URL. SES click events on this URL map unambiguously to a specific delivery and decision-maker.
 
-### Migration Strategy
+### Deploy Strategy
 
-Single migration file. All new tables, no column changes to existing tables. Zero-downtime deploy — new tables are unused until Phase B code ships.
+All new tables, no field changes to existing tables. Zero-downtime deploy — new tables are unused until Phase B code ships. Convex schema changes ship via `npx convex deploy --env-file .env.production`.
 
 ### Tasks
 
 | # | Task | Effort | Dependencies |
 |---|------|--------|-------------|
-| A1 | Prisma schema: 6 new models + relations | 2h | None |
-| A2 | Migration: `npx prisma migrate dev` + raw SQL for pgvector columns + HNSW index on `bill.topic_embedding` and `org_issue_domain.embedding` | 1h | A1 |
-| A3 | OrgIssueDomain CRUD: settings page section for org admins to declare issue domains | 4h | A2 |
-| A4 | Embedding generation: on OrgIssueDomain create/update, compute 768-dim embedding via Gemini embedding model | 2h | A3 |
+| A1 | Convex schema: 6 new tables + field additions | 2h | None |
+| A2 | Deploy schema + seed minimal indexes (vector index for `bills.topicEmbedding` + `orgIssueDomains.embedding` at 768-dim) | 1h | A1 |
+| A3 | `orgIssueDomains` CRUD: settings page section for org admins to declare issue domains | 4h | A2 |
+| A4 | Embedding generation: on `orgIssueDomains` insert/patch, compute 768-dim embedding via Gemini embedding model | 2h | A3 |
 
 ---
 
@@ -359,16 +315,18 @@ Cron (daily) → fetch new/updated bills from Congress.gov API
   → paginate: process N bills per cron invocation, store cursor
   → normalize to BillIngestion type
   → compute topic embedding (Gemini embedding model, ~$0.00004/bill)
-  → upsert Bill row
-  → SET-BASED relevance scoring (single SQL per bill, not per-org loop):
-      SELECT oid.org_id, 1 - (b.topic_embedding <=> oid.embedding) AS score
-      FROM org_issue_domain oid
-      WHERE 1 - (b.topic_embedding <=> oid.embedding) > 0.6
-  → bulk insert OrgBillRelevance rows for all matching orgs
-  → generate LegislativeAlert for orgs where score > 0.75 AND bill status changed
+  → insert/patch bills row
+  → Vector-index relevance scoring (single Convex vectorSearch per bill, not per-org loop):
+      const matches = await ctx.vectorSearch("orgIssueDomains", "by_embedding", {
+        vector: bill.topicEmbedding,
+        limit: 1000,
+      });
+      // matches = [{ _id, _score }, ...] for all org issue domains above similarity floor
+  → bulk insert orgBillRelevances rows for matches with score > 0.6
+  → insert legislativeAlerts rows for orgs where score > 0.75 AND bill status changed
 ```
 
-**Set-based scoring (critical).** Relevance scoring uses a single pgvector query per bill that scores ALL orgs simultaneously via HNSW index scan. This is O(bills), not O(bills × orgs). At 10K orgs, bill ingestion + scoring is the same cost as at 100 orgs. The per-org loop described in an earlier draft would hit the Workers 30s CPU limit at ~500 orgs.
+**Vector-index scoring (critical).** Relevance scoring uses a single Convex `ctx.vectorSearch()` per bill that scores ALL org issue domains simultaneously. This is O(bills), not O(bills × orgs). At 10K orgs, bill ingestion + scoring is the same cost as at 100 orgs. The per-org loop described in an earlier draft would hit the Workers 30s CPU limit at ~500 orgs.
 
 **Chunked ingestion.** Cloudflare Workers have a 30s CPU limit. Each cron invocation processes a chunk of bills (e.g., 50 per run), stores a cursor in KV, and the next invocation resumes. Daily cadence with 6h retry window ensures all bills are processed within 24h even with partial failures.
 
@@ -381,11 +339,11 @@ Cron (daily) → fetch new/updated bills from Congress.gov API
 | Congress.gov API calls | ~500 bills/month (active Congress) | Free | $0 |
 | Open States API calls | ~5,000 bills/month (all 50 states) | Free (1K/day limit) | $0 |
 | Embedding generation (Gemini) | ~5,500 bills/month | ~$0.00004/bill | ~$0.22 |
-| Set-based cosine similarity | ~5,500 queries/month (one per bill, regardless of org count) | DB compute only | ~$0 |
+| Vector-index cosine similarity | ~5,500 queries/month (one per bill, regardless of org count) | Convex compute only | ~$0 |
 | Alert email digests (SES) | ~100 orgs × 4 weekly | $0.0001/email | ~$0.16 |
 | **Total incremental** | | | **< $1/month** at 100 orgs |
 
-At 10,000 orgs, bill ingestion cost stays flat (~$0.22/mo). Relevance scoring stays flat too — set-based SQL means one query per bill regardless of org count. Cost at 10K orgs ≈ cost at 100 orgs plus digest email volume.
+At 10,000 orgs, bill ingestion cost stays flat (~$0.22/mo). Relevance scoring stays flat too — `ctx.vectorSearch()` means one query per bill regardless of org count. Cost at 10K orgs ≈ cost at 100 orgs plus digest email volume.
 
 ### The Local Government Problem
 
@@ -404,28 +362,28 @@ This is a Phase 3+ capability. We document the gap explicitly rather than preten
 
 | # | Task | Effort | Dependencies |
 |---|------|--------|-------------|
-| C1 | Congress.gov bill ingestion: fetch, normalize, upsert Bill rows | 6h | A2 |
-| C2 | Bill embedding generation: Gemini embedding model, store as pgvector | 3h | C1 |
-| C3 | Relevance scorer: cosine similarity between bill and org issue domain embeddings, threshold at 0.6 | 4h | C2, A4 |
-| C4 | Alert generator: bill status change + relevance > 0.75 → LegislativeAlert | 3h | C3 |
+| C1 | Congress.gov bill ingestion: fetch, normalize, insert/patch `bills` rows | 6h | A2 |
+| C2 | Bill embedding generation: Gemini embedding model, store in Convex vector index | 3h | C1 |
+| C3 | Relevance scorer: cosine similarity via `ctx.vectorSearch()` between bill and org issue domain embeddings, threshold at 0.6 | 4h | C2, A4 |
+| C4 | Alert generator: bill status change + relevance > 0.75 → `legislativeAlerts` insert | 3h | C3 |
 | C5 | Open States ingestion: normalize state bills to same BillIngestion type | 4h | C1 |
-| C6 | Vote tracker: Congress.gov roll call votes → LegislativeAction rows | 4h | C1 |
+| C6 | Vote tracker: Congress.gov roll call votes → `legislativeActions` rows | 4h | C1 |
 | C7 | Cron endpoint: `/api/cron/legislation-sync` with CRON_SECRET auth, fail-closed | 2h | C1-C6 |
 
 ### Integration Tests (Phase C)
 
 ```typescript
-// test: congress.gov → Bill row → embedding → relevance score → alert
+// test: congress.gov → bills row → embedding → relevance score → alert
 // Uses MSW to intercept Congress.gov API (external HTTP boundary)
-// Real pgvector for cosine similarity (no mock — this IS the logic)
-// Real Prisma for all DB operations
+// Real Convex vector index for cosine similarity (no mock — this IS the logic)
+// Real Convex mutations/queries for all DB operations
 
 describe('legislation ingestion pipeline', () => {
   it('ingests a bill and scores relevance against org issue domains', async () => {
     // Setup: create org with issue domain "water rights" + precomputed embedding
     // MSW: mock Congress.gov API returning a water infrastructure bill
     // Execute: run ingestion pipeline
-    // Assert: Bill row exists, OrgBillRelevance.score > 0.6, LegislativeAlert created
+    // Assert: bills row exists, orgBillRelevances.score > 0.6, legislativeAlerts row created
   });
 
   it('does not alert on irrelevant bills', async () => {
@@ -444,7 +402,7 @@ describe('legislation ingestion pipeline', () => {
 ```
 
 **What we mock:** External HTTP APIs (Congress.gov, Open States) via MSW at the network boundary.
-**What we don't mock:** pgvector, Prisma, embedding computation, cosine similarity scoring. These are the core logic — mocking them would test nothing.
+**What we don't mock:** Convex vector index, Convex queries/mutations, embedding computation, cosine similarity scoring. These are the core logic — mocking them would test nothing.
 
 ---
 
@@ -635,7 +593,7 @@ This turns onboarding into a demonstration of value. First alert appears during 
 12. Assert score reflects vote alignment + response engagement
 
 **What's mocked:** External HTTP (Congress.gov, Open States, SES/SNS) via MSW.
-**What's real:** PostgreSQL, pgvector, Prisma, embedding computation, cosine similarity, verification packet computation, all business logic.
+**What's real:** Convex (queries, mutations, vector index, search index), embedding computation, cosine similarity, verification packet computation, all business logic.
 
 ---
 
@@ -708,9 +666,9 @@ The intelligence loop becomes valuable at step 1, not step 3. Bill alerts alone 
 
 At 100 orgs: < $1/month incremental.
 At 1,000 orgs: < $10/month (dominated by digest emails).
-At 10,000 orgs: < $100/month (bill ingestion flat, relevance scoring linear in org count but cheap pgvector scans).
+At 10,000 orgs: < $100/month (bill ingestion flat, relevance scoring linear in org count but cheap Convex vector-index scans).
 
-The architecture is designed so bill ingestion is O(bills) and relevance scoring is O(bills) via set-based SQL (one query per bill scores all orgs). The expensive part (embedding generation) is O(bills) regardless of org count.
+The architecture is designed so bill ingestion is O(bills) and relevance scoring is O(bills) via `ctx.vectorSearch()` (one query per bill scores all orgs). The expensive part (embedding generation) is O(bills) regardless of org count.
 
 ### 11. Open States Rate Limits
 
@@ -799,7 +757,7 @@ Three AI critics (Claude, Codex, Gemini) reviewed this architecture. Findings as
 | Finding | Source | Fix Applied |
 |---------|--------|------------|
 | Embedding dimension mismatch: Gemini outputs 768, not 1024 | Claude, Codex | All vector columns changed to `vector(768)` |
-| O(bills × orgs) doesn't fit 30s Workers | All three | Changed to set-based SQL: one query per bill scores all orgs |
+| O(bills × orgs) doesn't fit 30s Workers | All three | Changed to Convex `ctx.vectorSearch()`: one query per bill scores all orgs |
 | Chunked ingestion needed for Workers | All three | Added cursor-based pagination, N bills per cron invocation |
 | Per-campaign verify URL prevents per-target click attribution | Codex | Changed to per-delivery URL: `/verify/${deliveryId}` |
 | No Campaign→Bill FK breaks scorecard alignment | Claude | Added `billId` to Campaign model |
@@ -833,7 +791,7 @@ Three AI critics (Claude, Codex, Gemini) reviewed this architecture. Findings as
 | Task | Status | Agent | Finding |
 |------|--------|-------|---------|
 | Fix vector(1024) → vector(768) | Done | schema-eng | Fixed in schema + queries.ts + 3 docs |
-| 6 new Prisma models | Done | schema-eng | All models + relations + indexes |
+| 6 new Convex tables | Done | schema-eng | All tables + indexes + vector index |
 | Migration + HNSW indexes | Done | schema-eng | Single migration, verified on local PG |
 | LEGISLATION flag + env vars | Done | schema-eng | Flag + OPEN_STATES_API_KEY |
 | OrgIssueDomain CRUD | Done | domain-eng | Settings page, editor+ gating, 20 max |
@@ -863,7 +821,7 @@ Three AI critics (Claude, Codex, Gemini) reviewed this architecture. Findings as
 | Bill embedding generation | Done | ingestion-eng | Gemini 768-dim, batch NULL-fill |
 | Open States ingestion | Done | ingestion-eng | Active-state detection, 1K/day budget |
 | Vote tracker | Done | ingestion-eng | Roll call → LegislativeAction, bioguide_id match |
-| Relevance scorer | Done | relevance-eng | Set-based SQL, O(bills) not O(bills×orgs) |
+| Relevance scorer | Done | relevance-eng | `ctx.vectorSearch()`, O(bills) not O(bills×orgs) |
 | Alert generator | Done | relevance-eng | Urgency tiers, dedup, per-bill error isolation |
 | Cron endpoint | Done | relevance-eng | CRON_SECRET fail-closed, feature flag gated |
 | Alert digest email | Done | relevance-eng | Weekly, urgency-grouped, CAN-SPAM compliant |
@@ -876,7 +834,7 @@ Three AI critics (Claude, Codex, Gemini) reviewed this architecture. Findings as
 
 | # | Finding | Severity | Status |
 |---|---------|----------|--------|
-| G2-1 | Scorer upserts loop per-org after set-based SQL query. The SQL is O(bills) but Prisma upserts are O(matching orgs). Fine at current scale; optimize to batch upsert at 1000+ matching orgs/bill. | Low | Noted |
+| G2-1 | Scorer iterates matches serially after `ctx.vectorSearch()`. The search is O(bills) but Convex patch/insert calls are O(matching orgs). Fine at current scale; optimize with bulk insert pattern at 1000+ matching orgs/bill. | Low | Noted |
 | G2-2 | Cron scores only bills with NO existing OrgBillRelevance rows. New org issue domains won't retroactively score old bills. Need "rescore for new domains" path — deferred to F2 (cold start). | Medium | Deferred to F2 |
 | G2-3 | Congress.gov fetcher makes 4-5 API calls per bill (detail + summary + committees + subjects + text). 50 bills/chunk = ~300 calls/invocation. Well within 5K/hr limit but monitor. | Low | Monitor |
 | G2-4 | Correlator uses last-name fuzzy matching for vote↔delivery alignment. May produce false positives for common surnames. Consider bioguide_id-first match with name fallback. | Low | Fixed in Wave 3 |

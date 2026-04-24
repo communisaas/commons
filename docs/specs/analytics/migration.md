@@ -42,13 +42,14 @@
 
 Add new tables without removing old:
 
-```prisma
-model analytics_aggregate { ... }
-model analytics_funnel { ... }
-model analytics_cohort { ... }  // New
+```typescript
+// convex/schema.ts
+analyticsAggregate: defineTable({ ... }).index(...)
+analyticsFunnel: defineTable({ ... }).index(...)
+analyticsCohort: defineTable({ ... }).index(...)   // New
 ```
 
-**Status:** ✅ `analytics_aggregate` and `analytics_funnel` added
+**Status:** `analyticsAggregate` and `analyticsFunnel` added
 
 ### Phase 2: Dual-Write Implementation (Current)
 
@@ -72,23 +73,30 @@ export async function increment(metric: Metric, dimensions: Dimensions) {
 Compare aggregate totals between systems:
 
 ```typescript
-// Daily validation job
-async function validateParity() {
-  const newCounts = await db.analytics_aggregate.aggregate({
-    where: { date: today },
-    _sum: { count: true }
-  });
+// Daily validation (Convex query)
+export const validateParity = query({
+  args: { today: v.string() },
+  handler: async (ctx, { today }) => {
+    const aggRows = await ctx.db
+      .query("analyticsAggregate")
+      .withIndex("by_date", (q) => q.eq("date", today))
+      .collect();
+    const newCounts = aggRows.reduce((a, r) => a + r.count, 0);
 
-  const legacyCounts = await db.analytics_event.count({
-    where: { timestamp: { gte: startOfDay(today) } }
-  });
+    const legacyRows = await ctx.db
+      .query("analyticsEvent")
+      .withIndex("by_timestamp", (q) => q.gte("timestamp", startOfDay(today)))
+      .collect();
+    const legacyCounts = legacyRows.length;
 
-  // Allow 5% variance due to timing differences
-  const variance = Math.abs(newCounts - legacyCounts) / legacyCounts;
-  if (variance > 0.05) {
-    alertOperations('Analytics parity check failed');
-  }
-}
+    // Allow 5% variance due to timing differences
+    const variance = Math.abs(newCounts - legacyCounts) / legacyCounts;
+    if (variance > 0.05) {
+      alertOperations('Analytics parity check failed');
+    }
+    return { newCounts, legacyCounts, variance };
+  },
+});
 ```
 
 ### Phase 4: Legacy Read Deprecation
@@ -105,8 +113,8 @@ Update all read paths to use new endpoints:
 ### Phase 5: Legacy Removal
 
 ```bash
-# Remove legacy tables
-npx prisma migrate dev --name remove_legacy_analytics
+# Drop legacy tables from convex/schema.ts, then deploy
+npx convex deploy --env-file .env.production
 
 # Remove legacy code
 rm src/lib/core/analytics/database.ts
@@ -124,8 +132,8 @@ rm src/routes/api/analytics/events/+server.ts
 | Component | Current Usage | New Usage |
 |-----------|--------------|-----------|
 | `+layout.js` | `analytics.pageView()` | `client.increment('page_view')` |
-| `s/[slug]/+page.svelte` | `funnelAnalytics.trackTemplateView()` | `client.increment('template_view', { template_id })` |
-| `AnalyticsDashboard.svelte` | Queries `analytics_event` | Queries `analytics_aggregate` |
+| `s/[slug]/+page.svelte` | `funnelAnalytics.trackTemplateView()` | `client.increment('template_view', { templateId })` |
+| `AnalyticsDashboard.svelte` | Queries `analyticsEvent` | Queries `analyticsAggregate` |
 
 ### Medium Priority
 
@@ -149,8 +157,8 @@ If critical issues arise:
 
 ### Phase 1-2 Rollback
 ```bash
-# Revert schema changes
-npx prisma migrate dev --name revert_analytics
+# Revert schema changes in convex/schema.ts, then redeploy
+npx convex deploy --env-file .env.production
 
 # Re-enable legacy-only writes
 ANALYTICS_MODE=legacy npm run dev
@@ -170,8 +178,9 @@ ANALYTICS_READS=legacy npm run dev
 git checkout HEAD~1 -- src/lib/core/analytics/database.ts
 git checkout HEAD~1 -- src/lib/core/analytics/funnel.ts
 
-# Restore tables from backup
-pg_restore --table=analytics_session --table=analytics_event backup.dump
+# Restore tables from backup (Convex snapshot import)
+npx convex import --table analyticsSession backup/analyticsSession.jsonl
+npx convex import --table analyticsEvent backup/analyticsEvent.jsonl
 ```
 
 ---

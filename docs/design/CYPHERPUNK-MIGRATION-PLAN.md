@@ -52,7 +52,7 @@ A-5 (IP hash salt rotation)
   │ A-2, A-4, A-5 are independent  │
   │ A-1, A-3 can run in parallel   │
   │ All of Phase A can ship as one  │
-  │ Prisma migration + code change  │
+  │ Convex schema + code change     │
   └─────────────────────────────────┘
 ```
 
@@ -90,8 +90,7 @@ A-5 (IP hash salt rotation)
 **Verification before drop**: Grep confirms zero usage in `src/`. Only schema definition and type generation reference these.
 
 **Files**:
-- `prisma/schema.prisma` — drop 6 columns
-- `prisma/migrations/` — new migration
+- `convex/schema.ts` — drop 6 fields from `users` table
 - `src/lib/core/auth/auth.ts` — remove `verification_data` from Session.User select
 
 **Findings**: _(filled during implementation)_
@@ -110,8 +109,7 @@ A-5 (IP hash salt rotation)
 - After verified backfill, null plaintext columns
 
 **Files**:
-- `prisma/schema.prisma` — add 3 encrypted columns to `account`
-- `prisma/migrations/` — new migration
+- `convex/schema.ts` — add 3 encrypted fields to `accounts` table
 - `src/lib/core/auth/oauth-callback-handler.ts` — encrypt on write
 - Token read paths — decrypt on read, fallback to plaintext during transition
 - Backfill script (one-time)
@@ -228,7 +226,7 @@ Tier 2 commitments are tied to `userId`, not to the person. Same person, two OAu
 
 **Files**:
 - `src/routes/api/identity/verify-address/+server.ts` — remove commitment generation (lines 193-198)
-- `prisma/migrations/` — backfill migration to null Tier 2-only commitments
+- One-time backfill mutation in Convex to null Tier 2-only commitments
 - Tests confirming Tier 2 verification no longer sets commitment
 
 **Findings**: _(filled during implementation)_
@@ -237,13 +235,14 @@ Tier 2 commitments are tied to `userId`, not to the person. Same person, two OAu
 
 #### B-2: DistrictCredential stops storing plaintext districts — ☐ implement · ☐ review
 
-**Problem**: `DistrictCredential` stores `congressional_district: "CA-12"` in plaintext, indexed and queryable.
+**Problem**: `districtCredentials` stores `congressionalDistrict: "CA-12"` in plaintext, indexed and queryable.
 
-**Change**: New columns replace plaintext:
-```prisma
-district_commitment  String   // Poseidon2_sponge_24(districts[0..24])
-slot_count           Int      // How many of 24 slots are non-zero
-// credential_hash already exists
+**Change**: New fields replace plaintext:
+```typescript
+// In convex/schema.ts districtCredentials table:
+districtCommitment: v.string(),   // Poseidon2_sponge_24(districts[0..24])
+slotCount: v.number(),             // How many of 24 slots are non-zero
+// credentialHash already exists
 ```
 
 - The W3C VC (with human-readable districts) is returned to client, stored in encrypted IndexedDB
@@ -251,14 +250,13 @@ slot_count           Int      // How many of 24 slots are non-zero
 - Existing plaintext columns: kept for backward compat during TTL window, dropped after all credentials expire (6 months)
 
 **Migration**:
-- Add new columns alongside old
-- `verify-address` writes new columns on new verifications
-- Existing rows: compute `district_commitment` from plaintext districts via Poseidon2 sponge
-- After TTL expiry of all legacy credentials (~6 months), drop plaintext columns
+- Add new fields alongside old (additive Convex schema change)
+- `verify-address` writes new fields on new verifications
+- Existing rows: compute `districtCommitment` from plaintext districts via Poseidon2 sponge
+- After TTL expiry of all legacy credentials (~6 months), drop plaintext fields
 
 **Files**:
-- `prisma/schema.prisma` — add `district_commitment`, `slot_count` to DistrictCredential
-- `prisma/migrations/` — additive migration
+- `convex/schema.ts` — add `districtCommitment`, `slotCount` to `districtCredentials`
 - `src/routes/api/identity/verify-address/+server.ts` — compute and store commitment
 - `src/lib/core/identity/district-credential.ts` — `DistrictMembership` interface update
 - Backfill script for existing rows
@@ -392,12 +390,11 @@ C-5 (encrypt Supporter email)
 - Identity-binding merge logic: update to merge by pseudonym
 
 **Files**:
-- `prisma/schema.prisma` — add `pseudonym_id` to `template_campaign`
-- `prisma/migrations/` — additive migration
+- `convex/schema.ts` — add `pseudonymId` to `templateCampaigns`
 - Backfill script
 - `src/lib/core/identity/identity-binding.ts` — merge logic for pseudonymous campaigns
 - `src/routes/profile/+page.server.ts` — use counter instead of campaign query
-- Any API that queries `template_campaign` by `user_id`
+- Any API that queries `templateCampaigns` by `userId`
 
 **Findings**: _(filled during implementation)_
 
@@ -425,7 +422,7 @@ C-5 (encrypt Supporter email)
 - `src/routes/+layout.server.ts` — remove UserDMRelation query for person-layer
 - `src/routes/api/identity/verify-address/+server.ts` — stop creating UserDMRelation rows
 - Client-side rep resolution component (new or refactored)
-- `prisma/schema.prisma` — add `source` column to UserDMRelation
+- `convex/schema.ts` — add `source` field to `userDmRelations`
 
 **Findings**: _(filled during implementation)_
 
@@ -454,12 +451,12 @@ C-5 (encrypt Supporter email)
 **Critical dependency**: OrgInvite uses email for invite matching. Must update invite flow to match by `email_hash`.
 
 **Files**:
-- `prisma/schema.prisma` — add columns, update unique constraints
+- `convex/schema.ts` — add `encryptedEmail`, `encryptedName`, `emailHash` fields to `users`, update unique indexes
 - `src/lib/core/auth/oauth-callback-handler.ts` — hash-based lookup
 - `src/lib/core/auth/auth.ts` — decrypt email/name in session validation
 - `src/routes/+layout.server.ts` — decrypt for client context
 - `src/routes/api/user/profile/+server.ts` — decrypt on read, encrypt on write
-- Org invite flow — match by email_hash
+- Org invite flow — match by emailHash
 - Backfill script
 
 **Findings**: _(filled during implementation)_
@@ -480,7 +477,7 @@ C-5 (encrypt Supporter email)
 - Null out individual columns after backfill verified
 
 **Files**:
-- `prisma/schema.prisma` — add `encrypted_profile`, mark old columns for removal
+- `convex/schema.ts` — add `encryptedProfile` to `users`, mark old fields for removal
 - `src/routes/api/user/profile/+server.ts` — encrypt/decrypt
 - Backfill script
 
@@ -490,16 +487,16 @@ C-5 (encrypt Supporter email)
 
 #### C-5: Encrypt `Supporter.email` at rest — ☐ implement · ☐ review
 
-**Problem**: Org-layer `Supporter` model stores plaintext email with `@@unique([orgId, email])`. Different privacy model (org-collected data) but still a breach vector.
+**Problem**: Org-layer `supporters` table stores plaintext email with unique index on `[orgId, email]`. Different privacy model (org-collected data) but still a breach vector.
 
 **Change**:
-- Add `encrypted_email`, `email_hash` to Supporter
+- Add `encryptedEmail`, `emailHash` to `supporters`
 - Same HMAC-lookup pattern as C-3
-- Unique constraint moves to `@@unique([orgId, email_hash])`
+- Unique index moves to `by_org_email_hash: ["orgId", "emailHash"]`
 - Org-layer queries use hash for dedup, decrypt for display
 
 **Files**:
-- `prisma/schema.prisma` — Supporter model changes
+- `convex/schema.ts` — `supporters` table changes
 - Supporter CRUD endpoints
 - Campaign targeting queries
 
@@ -658,7 +655,7 @@ This plan follows the same pattern:
 - [x] All 5 tasks implemented and individually reviewed
 - [x] 33 new tests pass (salted hash: 5, OAuth encryption: 12, IP rotation: 12, safe-user-id: 4)
 - [x] Migration SQL reviewed: all additive nullable columns or `DROP IF EXISTS`
-- [x] Schema.prisma consistent with migrations (verified dead fields absent, new columns present)
+- [x] `convex/schema.ts` consistent with writes (verified dead fields absent, new fields present)
 - [x] Pre-existing test failures (158) unchanged — no regressions introduced
 - **Non-blocking findings carried forward**: `VerificationAudit.ip_hash` unused; analytics `hashIP` unsalted
 - **Resolved**: `userId.slice(0,8)` in identity modules (session-credentials, session-cache, verification-handler) — these are CLIENT-SIDE debug logs (IndexedDB/browser), visible only to the user on their own device. Not a server-side leak.
@@ -706,7 +703,7 @@ This plan follows the same pattern:
 
 *ENV keys required*: `PII_ENCRYPTION_KEY` (32-byte hex, master encryption key), `EMAIL_LOOKUP_KEY` (32-byte hex, HMAC key for lookups). Both have dev fallback with warning.
 
-**Findings**: (1) Using ENV-key + userId for key derivation instead of encrypted_entropy avoids a Node.js crypto dependency and works for pre-verification users. Per-user entropy path can be added as an upgrade later. (2) OAuth callback now sets `id: crypto.randomUUID()` on user creation to ensure the userId used for key derivation is available at encryption time (Prisma's default cuid() is server-generated). (3) Transition-safe: all reads fall back to plaintext when encrypted columns are null or decryption fails — safe for pre-backfill users and rollback.
+**Findings**: (1) Using ENV-key + userId for key derivation instead of encrypted_entropy avoids a Node.js crypto dependency and works for pre-verification users. Per-user entropy path can be added as an upgrade later. (2) OAuth callback now sets `id: crypto.randomUUID()` on user creation to ensure the userId used for key derivation is available at encryption time (Convex auto-assigns `_id` on insert, but we want a deterministic user ID for key derivation across provider migrations). (3) Transition-safe: all reads fall back to plaintext when encrypted fields are null or decryption fails — safe for pre-backfill users and rollback.
 
 **C-5 (complete)**: Supporter email encryption — same pattern as C-3 but for the org-layer Supporter model.
 
@@ -761,7 +758,7 @@ All creation paths dual-write: plaintext `email` + `encrypted_email` + `email_ha
 
 **S-1 (complete)**: `verifyPasskeyAuth` in `passkey-authentication.ts` — added `encrypted_email`, `encrypted_name` to SELECT, imported `decryptUserPii`, called it before constructing return object.
 
-**S-2 (complete)**: Profile GET in `api/user/profile/+server.ts` — removed `email`/`name` from Prisma SELECT, uses `locals.user.email`/`.name` (already decrypted by validateSession). Trivial change.
+**S-2 (complete)**: Profile GET in `api/user/profile/+server.ts` — removed `email`/`name` from Convex query projection, uses `locals.user.email`/`.name` (already decrypted by validateSession). Trivial change.
 
 **S-3 (complete)**: Supporter encryption info string fix + read path decrypt.
 
@@ -791,7 +788,7 @@ All creation paths dual-write: plaintext `email` + `encrypted_email` + `email_ha
 
 **C-2a (complete)**: Client-side rep resolver — `src/lib/core/identity/client-rep-resolver.ts`. Dual-source: primary via `getTreeState()` from session-credentials (three-tree registration), fallback via `getCredential()` from credential-store (W3C VC in IndexedDB). Resolves officials via `getOfficialsFromBrowser()`.
 
-**C-2b (complete)**: `+layout.server.ts` — removed `dmRelations` include from Prisma query, removed `dmReps` transformation. Added `hasDistrictCredential: Boolean(user.district_verified)` to return value. Components use client-side `resolveRepresentatives()` when flag is true.
+**C-2b (complete)**: `+layout.server.ts` — removed `dmRelations` from Convex query result, removed `dmReps` transformation. Added `hasDistrictCredential: Boolean(user.districtVerified)` to return value. Components use client-side `resolveRepresentatives()` when flag is true.
 
 **C-2c (complete)**: `verify-address/+server.ts` — skips UserDMRelation upsert block when `verification_method === 'shadow_atlas'`. For legacy modes, adds `source: verification_method` to UserDMRelation records.
 
@@ -950,24 +947,23 @@ SecuritySettingsPage
 
 #### D-1b: Multi-Passkey Support (Future)
 
-Current schema stores one passkey on User. For multi-device support, extract to a separate model:
+Current schema stores one passkey on User. For multi-device support, extract to a separate Convex table:
 
-```prisma
-model Passkey {
-  id              String   @id @default(cuid())
-  userId          String   @map("user_id")
-  credentialId    String   @unique @map("credential_id")
-  publicKeyJwk    Json     @map("public_key_jwk")
-  displayName     String?  @map("display_name") // "iPhone", "Yubikey", etc.
-  createdAt       DateTime @default(now()) @map("created_at")
-  lastUsedAt      DateTime? @map("last_used_at")
-
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("passkey")
-}
+```typescript
+// convex/schema.ts
+passkeys: defineTable({
+  userId: v.id("users"),
+  credentialId: v.string(),
+  publicKeyJwk: v.any(),
+  displayName: v.optional(v.string()), // "iPhone", "Yubikey", etc.
+  createdAt: v.number(),
+  lastUsedAt: v.optional(v.number()),
+})
+  .index("by_userId", ["userId"])
+  .index("by_credentialId", ["credentialId"]),
 ```
+
+Deletes cascade via explicit mutation logic (Convex has no FK cascade).
 
 **Defer until**: Real user demand for multi-device passkeys. Current single-passkey model works for v1.
 

@@ -29,8 +29,7 @@
 >   (including 429). llama-guard fails open on non-429 errors but
 >   **throws on 429 rate-limit**. No HTTP 503.
 > - **Schema refs:** `reviewed_at`, `reviewed_by`, `consensus_approved`
->   described as persistence fields were Prisma-era and do not exist on
->   `convex/schema.ts`.
+>   described as persistence fields do not exist on `convex/schema.ts`.
 
 ---
 

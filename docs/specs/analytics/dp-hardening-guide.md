@@ -328,41 +328,35 @@ Instead of applying noise at query time, apply noise once during daily aggregati
  * 4. Budget tracks total epsilon spent per time period
  */
 
-// Schema addition for noisy snapshots
-// prisma/schema.prisma
-/*
-model analytics_snapshot {
-  id              String   @id @default(cuid())
-  snapshot_date   DateTime @db.Date
-  metric          String
-  template_id     String   @default("")
-  jurisdiction    String   @default("")
-  delivery_method String   @default("")
-  utm_source      String   @default("")
-  error_type      String   @default("")
+// Schema additions (convex/schema.ts)
+analyticsSnapshot: defineTable({
+  snapshotDate: v.string(),     // YYYY-MM-DD
+  metric: v.string(),
+  templateId: v.string(),       // default "" when not specified
+  jurisdiction: v.string(),
+  deliveryMethod: v.string(),
+  utmSource: v.string(),
+  errorType: v.string(),
 
   // Noisy count (noise applied once, immutable)
-  noisy_count     Int
+  noisyCount: v.number(),
 
   // Privacy metadata
-  epsilon_spent   Float
-  noise_seed      String   // For auditability
+  epsilonSpent: v.number(),
+  noiseSeed: v.string(),        // For auditability
+})
+  .index("by_snapshot_date", ["snapshotDate"])
+  .index("by_unique_key", [
+    "snapshotDate", "metric", "templateId", "jurisdiction",
+    "deliveryMethod", "utmSource", "errorType"
+  ]),
 
-  @@unique([snapshot_date, metric, template_id, jurisdiction, delivery_method, utm_source, error_type])
-  @@index([snapshot_date])
-  @@map("analytics_snapshot")
-}
-
-model privacy_budget {
-  id            String   @id @default(cuid())
-  budget_date   DateTime @db.Date @unique
-  epsilon_spent Float    @default(0)
-  epsilon_limit Float    @default(10.0)
-  queries_count Int      @default(0)
-
-  @@map("privacy_budget")
-}
-*/
+privacyBudgets: defineTable({
+  budgetDate: v.string(),       // YYYY-MM-DD (unique)
+  epsilonSpent: v.number(),
+  epsilonLimit: v.number(),
+  queriesCount: v.number(),
+}).index("by_budget_date", ["budgetDate"]);
 ```
 
 ### Daily Snapshot Job
@@ -374,52 +368,73 @@ model privacy_budget {
  * Run as cron job at 00:05 UTC each day.
  * Applies Laplace noise ONCE to previous day's aggregates.
  */
-export async function materializeNoisySnapshot(date: Date): Promise<void> {
-  const startOfDay = new Date(date);
-  startOfDay.setUTCHours(0, 0, 0, 0);
+export const materializeNoisySnapshot = internalMutation({
+  args: { date: v.string() },
+  handler: async (ctx, { date }) => {
+    // Fetch raw aggregates for the day
+    const rawAggregates = await ctx.db
+      .query("analyticsAggregate")
+      .withIndex("by_date", (q) => q.eq("date", date))
+      .collect();
 
-  // Fetch raw aggregates for the day
-  const rawAggregates = await db.analytics_aggregate.findMany({
-    where: { date: startOfDay }
-  });
+    // Generate deterministic noise seed for auditability
+    const noiseSeed = await generateNoiseSeed(date);
 
-  // Generate deterministic noise seed for auditability
-  const noiseSeed = await generateNoiseSeed(startOfDay);
+    // Apply noise once and insert snapshots (Convex mutations are atomic)
+    for (let i = 0; i < rawAggregates.length; i++) {
+      const agg = rawAggregates[i];
+      const noise = seededLaplace(noiseSeed, i, PRIVACY.SERVER_EPSILON);
 
-  // Apply noise once and store
-  const snapshots = rawAggregates.map((agg, index) => {
-    const noise = seededLaplace(noiseSeed, index, PRIVACY.SERVER_EPSILON);
-    return {
-      snapshot_date: startOfDay,
-      metric: agg.metric,
-      template_id: agg.template_id,
-      jurisdiction: agg.jurisdiction,
-      delivery_method: agg.delivery_method,
-      utm_source: agg.utm_source,
-      error_type: agg.error_type,
-      noisy_count: Math.max(0, Math.round(agg.count + noise)),
-      epsilon_spent: PRIVACY.SERVER_EPSILON,
-      noise_seed: noiseSeed
-    };
-  });
+      // Skip duplicates: check existing snapshot for this key
+      const existing = await ctx.db
+        .query("analyticsSnapshot")
+        .withIndex("by_unique_key", (q) =>
+          q
+            .eq("snapshotDate", date)
+            .eq("metric", agg.metric)
+            .eq("templateId", agg.templateId ?? "")
+            .eq("jurisdiction", agg.jurisdiction ?? "")
+            .eq("deliveryMethod", agg.deliveryMethod ?? "")
+            .eq("utmSource", agg.utmSource ?? "")
+            .eq("errorType", agg.errorType ?? "")
+        )
+        .unique();
+      if (existing) continue;
 
-  // Batch insert snapshots
-  await db.analytics_snapshot.createMany({
-    data: snapshots,
-    skipDuplicates: true
-  });
-
-  // Update budget ledger
-  await db.privacy_budget.upsert({
-    where: { budget_date: startOfDay },
-    update: { epsilon_spent: { increment: PRIVACY.SERVER_EPSILON } },
-    create: {
-      budget_date: startOfDay,
-      epsilon_spent: PRIVACY.SERVER_EPSILON,
-      epsilon_limit: PRIVACY.MAX_DAILY_EPSILON
+      await ctx.db.insert("analyticsSnapshot", {
+        snapshotDate: date,
+        metric: agg.metric,
+        templateId: agg.templateId ?? "",
+        jurisdiction: agg.jurisdiction ?? "",
+        deliveryMethod: agg.deliveryMethod ?? "",
+        utmSource: agg.utmSource ?? "",
+        errorType: agg.errorType ?? "",
+        noisyCount: Math.max(0, Math.round(agg.count + noise)),
+        epsilonSpent: PRIVACY.SERVER_EPSILON,
+        noiseSeed,
+      });
     }
-  });
-}
+
+    // Update budget ledger (upsert)
+    const budget = await ctx.db
+      .query("privacyBudgets")
+      .withIndex("by_budget_date", (q) => q.eq("budgetDate", date))
+      .unique();
+
+    if (budget) {
+      await ctx.db.patch(budget._id, {
+        epsilonSpent: budget.epsilonSpent + PRIVACY.SERVER_EPSILON,
+      });
+    } else {
+      await ctx.db.insert("privacyBudgets", {
+        budgetDate: date,
+        epsilonSpent: PRIVACY.SERVER_EPSILON,
+        epsilonLimit: PRIVACY.MAX_DAILY_EPSILON,
+        queriesCount: 0,
+      });
+    }
+  },
+});
 
 /**
  * Seeded Laplace for reproducibility and auditability
@@ -446,34 +461,50 @@ function seededLaplace(seed: string, index: number, epsilon: number): number {
 /**
  * Query noisy snapshots instead of raw aggregates
  */
-export async function queryNoisyAggregates(
-  params: AggregateQuery
-): Promise<AggregateQueryResponse> {
-  // Always read from snapshots - noise already applied
-  const snapshots = await db.analytics_snapshot.findMany({
-    where: {
+export const queryNoisyAggregates = query({
+  args: {
+    metric: v.string(),
+    start: v.string(),
+    end: v.string(),
+    filters: v.optional(v.object({
+      templateId: v.optional(v.string()),
+      jurisdiction: v.optional(v.string()),
+    })),
+    groupBy: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, params) => {
+    // Always read from snapshots - noise already applied
+    let snapshots = await ctx.db
+      .query("analyticsSnapshot")
+      .withIndex("by_snapshot_date", (q) =>
+        q.gte("snapshotDate", params.start).lte("snapshotDate", params.end)
+      )
+      .filter((q) => q.eq(q.field("metric"), params.metric))
+      .collect();
+
+    if (params.filters?.templateId) {
+      snapshots = snapshots.filter((s) => s.templateId === params.filters!.templateId);
+    }
+    if (params.filters?.jurisdiction) {
+      snapshots = snapshots.filter((s) => s.jurisdiction === params.filters!.jurisdiction);
+    }
+
+    // No additional noise - just return cached noisy values
+    const results = groupAndSum(snapshots, params.groupBy);
+
+    return {
+      success: true,
       metric: params.metric,
-      snapshot_date: { gte: params.start, lte: params.end },
-      ...(params.filters?.template_id && { template_id: params.filters.template_id }),
-      ...(params.filters?.jurisdiction && { jurisdiction: params.filters.jurisdiction })
-    }
-  });
-
-  // No additional noise - just return cached noisy values
-  const results = groupAndSum(snapshots, params.groupBy);
-
-  return {
-    success: true,
-    metric: params.metric,
-    results,
-    privacy: {
-      epsilon: PRIVACY.SERVER_EPSILON,
-      differential_privacy: true,
-      noise_applied_at: 'materialization', // Not query time
-      budget_remaining: await getRemainingBudget(params.end)
-    }
-  };
-}
+      results,
+      privacy: {
+        epsilon: PRIVACY.SERVER_EPSILON,
+        differentialPrivacy: true,
+        noiseAppliedAt: 'materialization', // Not query time
+        budgetRemaining: await getRemainingBudget(ctx, params.end),
+      },
+    };
+  },
+});
 ```
 
 ### Engineering Pattern: CQRS (Command Query Responsibility Segregation)
@@ -481,21 +512,21 @@ export async function queryNoisyAggregates(
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      WRITE PATH                              │
-│  Client → increment → analytics_aggregate (raw, no noise)   │
+│  Client → increment → analyticsAggregate (raw, no noise)    │
 └─────────────────────────────────────────────────────────────┘
                               │
                               │ Daily Cron (00:05 UTC)
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                  MATERIALIZATION                             │
-│  analytics_aggregate → applyNoise → analytics_snapshot      │
+│  analyticsAggregate → applyNoise → analyticsSnapshot        │
 │  (noise applied ONCE, immutable)                            │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      READ PATH                               │
-│  Query → analytics_snapshot (pre-noised, safe to cache)     │
+│  Query → analyticsSnapshot (pre-noised, safe to cache)      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -509,10 +540,10 @@ export async function queryNoisyAggregates(
 
 ### Files to Modify/Create
 
-- `prisma/schema.prisma` - Add `analytics_snapshot` and `privacy_budget` models
-- `src/lib/core/analytics/snapshot.ts` - New file for materialization logic
-- `src/lib/core/analytics/aggregate.ts` - Change queries to read from snapshots
-- `src/routes/api/cron/analytics-snapshot/+server.ts` - New cron endpoint
+- `convex/schema.ts` - Add `analyticsSnapshot` and `privacyBudgets` tables
+- `convex/analyticsSnapshot.ts` - New module for materialization logic
+- `convex/analytics.ts` - Change queries to read from snapshots
+- `convex/crons.ts` - Schedule the daily snapshot mutation
 
 ---
 
@@ -914,32 +945,46 @@ If retention analysis is needed, do it server-side without client tokens:
  *
  * This is aggregate-only and doesn't require client state.
  */
-export async function getCohortMetrics(date: Date): Promise<CohortMetrics> {
-  const dayAgo = new Date(date.getTime() - 24 * 60 * 60 * 1000);
-  const weekAgo = new Date(date.getTime() - 7 * 24 * 60 * 60 * 1000);
+export const getCohortMetrics = query({
+  args: { date: v.string() },
+  handler: async (ctx, { date }) => {
+    const dayAgo = addDays(date, -1);
+    const weekAgo = addDays(date, -7);
 
-  // These are AGGREGATES, not individual users
-  const [viewsToday, viewsYesterday, conversionsThisWeek] = await Promise.all([
-    db.analytics_aggregate.aggregate({
-      where: { metric: 'template_view', date },
-      _sum: { count: true }
-    }),
-    db.analytics_aggregate.aggregate({
-      where: { metric: 'template_view', date: dayAgo },
-      _sum: { count: true }
-    }),
-    db.analytics_aggregate.aggregate({
-      where: { metric: 'template_use', date: { gte: weekAgo } },
-      _sum: { count: true }
-    })
-  ]);
+    // These are AGGREGATES, not individual users
+    const [viewsTodayRows, viewsYesterdayRows, conversionsWeekRows] = await Promise.all([
+      ctx.db
+        .query("analyticsAggregate")
+        .withIndex("by_metric_date", (q) =>
+          q.eq("metric", "template_view").eq("date", date)
+        )
+        .collect(),
+      ctx.db
+        .query("analyticsAggregate")
+        .withIndex("by_metric_date", (q) =>
+          q.eq("metric", "template_view").eq("date", dayAgo)
+        )
+        .collect(),
+      ctx.db
+        .query("analyticsAggregate")
+        .withIndex("by_metric_date", (q) =>
+          q.eq("metric", "template_use").gte("date", weekAgo)
+        )
+        .collect(),
+    ]);
 
-  return {
-    daily_views: applyLaplace(viewsToday._sum.count ?? 0),
-    daily_growth: calculateGrowthRate(viewsToday, viewsYesterday),
-    weekly_conversions: applyLaplace(conversionsThisWeek._sum.count ?? 0)
-  };
-}
+    const sum = (rows: { count: number }[]) => rows.reduce((a, r) => a + r.count, 0);
+    const viewsToday = sum(viewsTodayRows);
+    const viewsYesterday = sum(viewsYesterdayRows);
+    const conversionsThisWeek = sum(conversionsWeekRows);
+
+    return {
+      dailyViews: applyLaplace(viewsToday),
+      dailyGrowth: calculateGrowthRate(viewsToday, viewsYesterday),
+      weeklyConversions: applyLaplace(conversionsThisWeek),
+    };
+  },
+});
 ```
 
 ### Files to Modify
@@ -974,62 +1019,71 @@ for (const inc of increments) {
  * Option 3: Aggregate in memory, single upsert per bucket (optimal)
  */
 
-// Option 3: Optimal approach
-export async function processBatchOptimized(
-  increments: Array<{ metric: Metric; dimensions?: Dimensions }>
-): Promise<{ processed: number }> {
-  // Aggregate in memory first
-  const buckets = new Map<string, { metric: Metric; dimensions: Dimensions; count: number }>();
+// Option 3: Optimal approach (Convex mutations are atomic by default)
+export const processBatchOptimized = internalMutation({
+  args: {
+    increments: v.array(v.object({
+      metric: v.string(),
+      dimensions: v.optional(v.any()),
+    })),
+  },
+  handler: async (ctx, { increments }) => {
+    // Aggregate in memory first
+    const buckets = new Map<string, { metric: string; dimensions: Dimensions; count: number }>();
 
-  for (const inc of increments) {
-    const dims = inc.dimensions ?? {};
-    const key = makeBucketKey(inc.metric, dims);
+    for (const inc of increments) {
+      const dims = inc.dimensions ?? {};
+      const key = makeBucketKey(inc.metric, dims);
 
-    const existing = buckets.get(key);
-    if (existing) {
-      existing.count++;
-    } else {
-      buckets.set(key, { metric: inc.metric, dimensions: dims, count: 1 });
+      const existing = buckets.get(key);
+      if (existing) {
+        existing.count++;
+      } else {
+        buckets.set(key, { metric: inc.metric, dimensions: dims, count: 1 });
+      }
     }
-  }
 
-  // Single transaction for all upserts
-  await db.$transaction(
-    Array.from(buckets.values()).map(bucket =>
-      db.analytics_aggregate.upsert({
-        where: {
-          date_metric_template_id_jurisdiction_delivery_method_utm_source_error_type: {
-            date: getTodayUTC(),
-            metric: bucket.metric,
-            template_id: bucket.dimensions.template_id ?? '',
-            jurisdiction: bucket.dimensions.jurisdiction ?? '',
-            delivery_method: bucket.dimensions.delivery_method ?? '',
-            utm_source: bucket.dimensions.utm_source ?? '',
-            error_type: bucket.dimensions.error_type ?? ''
-          }
-        },
-        update: { count: { increment: bucket.count } },
-        create: {
-          date: getTodayUTC(),
+    // Convex mutations execute atomically — no explicit transaction wrapper needed
+    const today = getTodayUTC();
+    for (const bucket of buckets.values()) {
+      const existing = await ctx.db
+        .query("analyticsAggregate")
+        .withIndex("by_unique_key", (q) =>
+          q
+            .eq("date", today)
+            .eq("metric", bucket.metric)
+            .eq("templateId", bucket.dimensions.templateId ?? "")
+            .eq("jurisdiction", bucket.dimensions.jurisdiction ?? "")
+            .eq("deliveryMethod", bucket.dimensions.deliveryMethod ?? "")
+            .eq("utmSource", bucket.dimensions.utmSource ?? "")
+            .eq("errorType", bucket.dimensions.errorType ?? "")
+        )
+        .unique();
+
+      if (existing) {
+        await ctx.db.patch(existing._id, { count: existing.count + bucket.count });
+      } else {
+        await ctx.db.insert("analyticsAggregate", {
+          date: today,
           metric: bucket.metric,
-          template_id: bucket.dimensions.template_id ?? '',
-          jurisdiction: bucket.dimensions.jurisdiction ?? '',
-          delivery_method: bucket.dimensions.delivery_method ?? '',
-          utm_source: bucket.dimensions.utm_source ?? '',
-          error_type: bucket.dimensions.error_type ?? '',
+          templateId: bucket.dimensions.templateId ?? "",
+          jurisdiction: bucket.dimensions.jurisdiction ?? "",
+          deliveryMethod: bucket.dimensions.deliveryMethod ?? "",
+          utmSource: bucket.dimensions.utmSource ?? "",
+          errorType: bucket.dimensions.errorType ?? "",
           count: bucket.count,
-          noise_applied: 0,
-          epsilon: PRIVACY.SERVER_EPSILON
-        }
-      })
-    )
-  );
+          noiseApplied: 0,
+          epsilon: PRIVACY.SERVER_EPSILON,
+        });
+      }
+    }
 
-  return { processed: increments.length };
-}
+    return { processed: increments.length };
+  },
+});
 
-function makeBucketKey(metric: Metric, dims: Dimensions): string {
-  return `${metric}|${dims.template_id ?? ''}|${dims.jurisdiction ?? ''}|${dims.delivery_method ?? ''}`;
+function makeBucketKey(metric: string, dims: Dimensions): string {
+  return `${metric}|${dims.templateId ?? ''}|${dims.jurisdiction ?? ''}|${dims.deliveryMethod ?? ''}`;
 }
 ```
 
@@ -1261,7 +1315,7 @@ describe('Privacy Budget', () => {
 
 ### Phase 1: Foundation (Week 1)
 
-1. Add `analytics_snapshot` and `privacy_budget` tables to schema
+1. Add `analyticsSnapshot` and `privacyBudgets` tables to `convex/schema.ts`
 2. Implement `cryptoRandom` and remove Math.random fallback
 3. Implement UTC time bucketing
 4. Remove `disableLDP()` public method

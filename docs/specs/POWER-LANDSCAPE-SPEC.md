@@ -20,14 +20,13 @@
 >   (F-01…F-13, returning-user SSR hydration on
 >   `+page.svelte:~43 landscapeRevealed=$state(false)`) are not
 >   verifiable without integration tests.
-> - **Prisma schema snippets (lines ~410-443) describe tables that
->   exist only in Convex.** `positionRegistrations` / `positionDeliveries`
->   are defined in `convex/schema.ts:~846-883`. Naming is camelCase
->   (`districtCode`, not `district_code`), emails are stored as
->   `encryptedRecipientEmail` + `recipientEmailHash` (plaintext
->   `recipient_email` field does not exist), and a `pseudonymousId`
->   (HMAC-SHA256 per ANTI-ASTROTURF) is live but missing from this
->   spec.
+> - **Schema snippets below** model `positionRegistrations` and
+>   `positionDeliveries`, which live in `convex/schema.ts:~846-883`.
+>   Naming is camelCase (`districtCode`, not `district_code`), emails
+>   are stored as `encryptedRecipientEmail` + `recipientEmailHash`
+>   (plaintext `recipient_email` field does not exist), and a
+>   `pseudonymousId` (HMAC-SHA256 per ANTI-ASTROTURF) is live but
+>   missing from this spec.
 > - **Pipeline phase numbering is inconsistent.** "Pipeline gets a
 >   fourth phase" framing (line ~466) implies 3→4 migration; the live
 >   pipeline is labeled Phase 1 (research) / Phase 2a (identity) /
@@ -443,44 +442,38 @@ interface ProcessedDecisionMaker {
 type RoleCategory = 'votes' | 'executes' | 'shapes' | 'funds' | 'oversees';
 ```
 
-#### Position Registration (new Prisma model)
+#### Position Registration (new Convex tables)
 
-```prisma
-model PositionRegistration {
-  id                   String   @id @default(cuid())
-  template_id          String
-  identity_commitment  String   // verified citizen
-  stance               String   // 'support' | 'oppose'
-  district_code        String?  // citizen's district
-  registered_at        DateTime @default(now())
+```typescript
+// convex/schema.ts (shape of positionRegistrations / positionDeliveries)
 
-  // delivery tracking (per decision-maker)
-  deliveries           PositionDelivery[]
+positionRegistrations: defineTable({
+  templateId: v.id("templates"),
+  identityCommitment: v.string(),          // verified citizen
+  stance: v.string(),                      // 'support' | 'oppose'
+  districtCode: v.optional(v.string()),    // citizen's district
+  pseudonymousId: v.string(),              // HMAC-SHA256 per ANTI-ASTROTURF
+  registeredAt: v.number(),                // ms epoch
+})
+  .index("by_template", ["templateId"])
+  .index("by_template_identity", ["templateId", "identityCommitment"]),
+  // uniqueness (one position per citizen per template) enforced in mutation
 
-  template             Template @relation(fields: [template_id], references: [id])
-
-  @@unique([template_id, identity_commitment])  // one position per citizen per template
-  @@index([template_id])
-}
-
-model PositionDelivery {
-  id                   String   @id @default(cuid())
-  registration_id      String
-  recipient_name       String
-  recipient_email      String?
-  delivery_method      String   // 'cwc' | 'email' | 'recorded'
-  delivery_status      String   // 'pending' | 'delivered' | 'failed'
-  delivered_at         DateTime?
-
-  registration         PositionRegistration @relation(fields: [registration_id], references: [id])
-
-  @@index([registration_id])
-}
+positionDeliveries: defineTable({
+  registrationId: v.id("positionRegistrations"),
+  recipientName: v.string(),
+  // Email is stored encrypted with a hash for lookup (no plaintext column)
+  encryptedRecipientEmail: v.optional(v.bytes()),
+  recipientEmailHash: v.optional(v.string()),
+  deliveryMethod: v.string(),              // 'cwc' | 'email' | 'recorded'
+  deliveryStatus: v.string(),              // 'pending' | 'delivered' | 'failed'
+  deliveredAt: v.optional(v.number()),
+}).index("by_registration", ["registrationId"]);
 ```
 
-#### Template recipient_config schema update
+#### Template recipientConfig schema update
 
-The existing `recipient_config` JSON field stores decision-makers. Add:
+The existing `recipientConfig` JSON field stores decision-makers. Add:
 
 ```typescript
 interface RecipientConfig {
@@ -615,7 +608,7 @@ GET  /api/positions/count/[templateId]
 | `src/lib/core/agents/agents/decision-maker-accountability.ts` | Create | Phase 4: accountability opener + role classification prompt |
 | `src/lib/core/agents/agents/decision-maker.ts` | Modify | Wire Phase 4 into orchestrator after Phase 3 |
 | `src/lib/core/agents/prompts/accountability-opener.ts` | Create | System prompt for accountability generation |
-| `prisma/schema.prisma` | Modify | Add `PositionRegistration` and `PositionDelivery` models |
+| `convex/schema.ts` | Modify | Add `positionRegistrations` and `positionDeliveries` tables |
 | `src/routes/api/positions/register/+server.ts` | Create | Position registration endpoint |
 | `src/routes/api/positions/count/[templateId]/+server.ts` | Create | Public count endpoint |
 | `src/routes/api/positions/batch-register/+server.ts` | Create | Batch position + delivery endpoint |
@@ -1057,7 +1050,7 @@ Findings are documented below each cycle's section upon completion.
 
 **Deliverables:**
 - `src/lib/types/template.ts` — `RoleCategory`, `RoleGroup`, 5 new fields on `ProcessedDecisionMaker`
-- `prisma/schema.prisma` — `PositionRegistration` + `PositionDelivery` models, `prisma generate` passes
+- `convex/schema.ts` — `positionRegistrations` + `positionDeliveries` tables, `npx convex dev` deploys cleanly
 - `src/lib/services/positionService.ts` — `registerPosition()`, `getPositionCounts()`, `batchRegisterDeliveries()`
 - `src/routes/api/positions/register/+server.ts` — POST, auth, upsert, returns count
 - `src/routes/api/positions/count/[templateId]/+server.ts` — GET, public, aggregate only
@@ -1070,7 +1063,7 @@ Findings are documented below each cycle's section upon completion.
 1. **DRY fix (applied):** `RoleCategory` was defined in both `template.ts` and `decision-maker-accountability.ts`. Consolidated — accountability module now imports from `template.ts`.
 2. **Type safety fix (applied):** Orchestrator merge used `as unknown as Record<string, unknown>` cast to set accountability fields on `ProcessedDecisionMaker`. Since the type was already extended by 37A, replaced with direct property assignment.
 3. **personalPrompt storage:** Stored on first decision-maker for UI extraction. Pragmatic but fragile — if first DM is removed, prompt is lost. Acceptable for now; Cycle 39's `landscapeMerge.ts` should extract it early and store separately.
-4. **DB migration not run:** `prisma generate` passes but `db push` was not executed. Must run before Cycle 38 UI can call the API.
+4. **Schema deploy not run:** tables are defined in `convex/schema.ts` but `npx convex dev` has not been executed against the active dev deployment. Must run before Cycle 38 UI can call the API.
 
 ### Cycle 38
 **Status:** COMPLETE
@@ -1085,7 +1078,7 @@ Findings are documented below each cycle's section upon completion.
 
 **Review findings:**
 1. **Double-fetch fix (applied):** Store init was fetching from API even though SSR data was already available. Added `initialCount?` parameter to `init()`. Page now seeds from `data.positionCounts`.
-2. **identity_commitment verified:** Field exists on Prisma User model (optional String?). Derived falls back to `demo-${userId}` for non-credentialed users.
+2. **identityCommitment verified:** Field exists on the `users` table in `convex/schema.ts` as `v.optional(v.string())`. Derived falls back to `demo-${userId}` for non-credentialed users.
 3. **Spec deviation (accepted):** Spec called for "409 → already registered" handling but the API returns 200 with `isNew: false` (upsert semantics). StanceRegistration handles this correctly — count still updates, state transitions to registered.
 
 ### Cycle 39
@@ -1207,7 +1200,7 @@ Uses `placeholder` text only — not a substitute for accessible labeling.
 Collapse/expand button doesn't communicate state to assistive technology.
 
 **F-29 [MEDIUM] Double cast on template: `as unknown as TemplateType`.**
-`+page.svelte:50` — Hides any mismatch between Prisma model and TS interface. Runtime shape mismatches become silent.
+`+page.svelte:50` — Hides any mismatch between the Convex schema and the TS interface. Runtime shape mismatches become silent.
 
 ---
 
@@ -1376,7 +1369,7 @@ Collapse/expand button doesn't communicate state to assistive technology.
 - F-22 (LOW): TemplateBodyPreview toggle has `aria-expanded`
 
 **Additional fix (runtime):**
-- `prisma db push` executed — `position_registration` and `position_delivery` tables now exist in database. Was causing 500 error on `/api/positions/register` ("Cannot read properties of undefined (reading 'create')").
+- `npx convex dev` re-run against the active deployment — `positionRegistrations` and `positionDeliveries` tables now exist. Was causing 500 error on `/api/positions/register` ("Cannot read properties of undefined (reading 'create')").
 
 **Review findings:**
 1. **Focus trap scope (correct):** Only active on mobile overlay. Desktop inline panel doesn't need a trap — it's not an overlay. Focus trap queries all focusable elements within `overlayEl` and wraps Tab at boundaries.

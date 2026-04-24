@@ -106,7 +106,7 @@ Five orthogonal layers. Each layer has exactly one responsibility and makes no a
 
 ## 3. Entry Paths
 
-Three paths, one interface. The path is selected at account creation and stored as `WalletEntryPath` on the User model.
+Three paths, one interface. The path is selected at account creation and stored as `walletEntryPath` on the `users` table.
 
 ### Path 1: Non-Crypto (NEAR Implicit Account)
 
@@ -114,10 +114,10 @@ The user authenticates via OAuth or passkey. The server:
 
 1. Generates an Ed25519 keypair (`KeyPairEd25519.fromRandom()`)
 2. Derives the NEAR implicit account ID (hex-encoded public key = account ID — no on-chain transaction)
-3. Encrypts the private key with AES-256-GCM (`ENTROPY_ENCRYPTION_KEY`), stores in Prisma
+3. Encrypts the private key with AES-256-GCM (`ENTROPY_ENCRYPTION_KEY`), stores in Convex (`users` table)
 4. Generates a recovery keypair (separate Ed25519 pair, server-held, for device loss)
 5. Calls `deriveScrollAddress()` — view call to NEAR MPC signer → deterministic secp256k1 pubkey → `computeAddress()` → Scroll address
-6. Stores `near_account_id`, `near_derived_scroll_address` on User
+6. Stores `nearAccountId`, `nearDerivedScrollAddress` on the `users` table
 
 The user now has a Scroll wallet. They never saw a seed phrase.
 

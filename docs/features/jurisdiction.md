@@ -4,36 +4,16 @@
 **Phase:** 2.1-2.4 Complete (UI Components)
 **Status:** ⚠️ Historical integration plan — core components built, creator integration never shipped
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The data model has moved
-> to Convex; the creator integration described here was not implemented.
-> Read these deltas before trusting any code sample:
->
-> - **No `TemplateJurisdiction` Prisma table.** Jurisdictions are a
->   **flattened `v.array(v.object({...}))`** on the `templates` row in
->   `convex/schema.ts:~224-243`. Same for `scopes` (`~245-263`). There
->   is no `@prisma/client` import for `TemplateJurisdiction`; the local
->   interface at `src/lib/types/jurisdiction.ts` is the right source.
-> - **Field naming is camelCase in Convex:** `stateSenateDistrict`,
->   `countyFips`, `cityFips`, `schoolDistrictId` — not the snake_case
->   used in the Prisma-style code samples below.
-> - **`JurisdictionPicker` lives at
->   `src/lib/components/geographic/JurisdictionPicker.svelte`**, not
->   `src/lib/components/template/creator/`. It's a general geographic
->   picker, not creator-specific.
-> - **`CoveragePreview.svelte` does not exist** in the codebase.
-> - **`TemplateCreator.svelte` still has a 3-step flow**
->   (`'objective' | 'audience' | 'content'`, see
->   `TemplateCreator.svelte:~47-49`). The proposed 5-step flow with a
->   separate `jurisdiction` step was **not integrated**. `formData` has
->   no `jurisdiction` field; validators don't include jurisdiction rules.
-> - **API section describes Prisma `$transaction` + `createMany`.**
->   Template persistence is a Convex mutation; there is no
->   `/api/templates/+server.ts` route that matches these samples.
-> - **Census integration files** (`fips-lookup.ts`, `district-lookup.ts`)
->   referenced in the spec were not found. Verify before relying on
->   them.
-> - **Level enum values (`federal | state | county | city |
->   school_district`) are correct.**
+**Current state (2026-04-23):** The creator integration described here was not implemented. Deltas to trust vs. the content below:
+
+- **Jurisdictions are flattened.** `convex/schema.ts` stores `jurisdictions` and `scopes` as `v.array(v.object({...}))` directly on the `templates` row. There is no separate jurisdiction table. Type source is `src/lib/types/jurisdiction.ts`.
+- **Field naming is camelCase** (`stateSenateDistrict`, `countyFips`, `cityFips`, `schoolDistrictId`). The snake_case code samples below are historical.
+- **`JurisdictionPicker`** lives at `src/lib/components/geographic/JurisdictionPicker.svelte` (general geographic picker, not creator-specific).
+- **`CoveragePreview.svelte` does not exist** in the codebase.
+- **`TemplateCreator.svelte`** still has a 3-step flow (`'objective' | 'audience' | 'content'`). The proposed 5-step flow with a separate `jurisdiction` step was not integrated.
+- **API section describes atomic multi-step writes.** Template persistence is a single Convex mutation (atomic transaction by default); the samples below that split create-template + create-jurisdictions are pedagogical.
+- **Census integration files** (`fips-lookup.ts`, `district-lookup.ts`) referenced in the spec were not found. Verify before relying on them.
+- **Level enum values (`federal | state | county | city | school_district`) are correct.**
 
 ---
 
@@ -45,7 +25,7 @@
 1. ✅ **JurisdictionPicker.svelte** - Multi-select autocomplete component
 2. ✅ **CoveragePreview.svelte** - Estimated reach visualization
 3. ✅ **Census API Integration** - FIPS code → population lookup with IndexedDB caching
-4. ✅ **Congressional District Lookup** - Representative information via Prisma
+4. ✅ **Congressional District Lookup** - Representative information via Convex
 5. ✅ **TypeScript Interfaces** - Comprehensive types for jurisdiction data
 
 **Still Required:**
@@ -58,49 +38,45 @@
 
 ## Architecture Overview
 
-### Database Schema (Phase 1 - Already Complete)
+### Data Model
 
-```prisma
-model TemplateJurisdiction {
-  id                        String    @id @default(cuid())
-  template_id               String
-  jurisdiction_type         String    // 'federal' | 'state' | 'county' | 'city' | 'school_district'
+Jurisdictions are embedded on the template row in Convex:
 
-  // Federal jurisdictions
-  congressional_district    String?   // "TX-18"
-  senate_class              String?   // "I", "II", "III"
+```typescript
+// convex/schema.ts (excerpt)
+templates: defineTable({
+  // ...other template fields
+  jurisdictions: v.array(v.object({
+    jurisdictionType: v.string(),  // 'federal' | 'state' | 'county' | 'city' | 'school_district'
 
-  // State jurisdictions
-  state_code                String?   // "TX"
-  state_senate_district     String?
-  state_house_district      String?
+    // Federal
+    congressionalDistrict: v.optional(v.string()),  // "TX-18"
+    senateClass: v.optional(v.string()),            // "I", "II", "III"
 
-  // County jurisdictions
-  county_fips               String?   // "48201" (Harris County, TX)
-  county_name               String?
+    // State
+    stateCode: v.optional(v.string()),              // "TX"
+    stateSenateDistrict: v.optional(v.string()),
+    stateHouseDistrict: v.optional(v.string()),
 
-  // City jurisdictions
-  city_name                 String?
-  city_fips                 String?   // Census Place FIPS
+    // County
+    countyFips: v.optional(v.string()),             // "48201"
+    countyName: v.optional(v.string()),
 
-  // School district
-  school_district_id        String?
-  school_district_name      String?
+    // City
+    cityName: v.optional(v.string()),
+    cityFips: v.optional(v.string()),
 
-  // Geospatial + metadata
-  latitude                  Float?
-  longitude                 Float?
-  estimated_population      BigInt?
-  coverage_notes            String?
+    // School district
+    schoolDistrictId: v.optional(v.string()),
+    schoolDistrictName: v.optional(v.string()),
 
-  // Relation
-  template                  Template  @relation(fields: [template_id], references: [id], onDelete: Cascade)
-
-  @@index([template_id])
-  @@index([jurisdiction_type])
-  @@index([congressional_district])
-  @@map("template_jurisdiction")
-}
+    // Geospatial + metadata
+    latitude: v.optional(v.number()),
+    longitude: v.optional(v.number()),
+    estimatedPopulation: v.optional(v.number()),
+    coverageNotes: v.optional(v.string())
+  }))
+})
 ```
 
 ### Component Architecture
@@ -155,7 +131,7 @@ src/lib/types/
 ```svelte
 <script lang="ts">
   import JurisdictionPicker from '$lib/components/template/creator/JurisdictionPicker.svelte';
-  import type { TemplateJurisdiction } from '@prisma/client';
+  import type { TemplateJurisdiction } from '$lib/types/jurisdiction';
 
   let jurisdictions = $state<TemplateJurisdiction[]>([]);
 </script>
@@ -279,8 +255,8 @@ function normalizeStateCode(input: string): string | null
 ```
 
 **Data Source:**
-- Uses existing `representative` table (Prisma)
-- Filters: `chamber: 'house'`, `is_active: true`
+- Uses existing `representatives` table in Convex
+- Filters: `chamber: 'house'`, `isActive: true`
 - Returns: Representative name, party, bioguide ID, office address, phone, email
 
 **Example Usage:**
@@ -387,47 +363,45 @@ interface CreateTemplateRequest {
 }
 ```
 
-2. **Create template with jurisdictions (transaction):**
+2. **Create template with jurisdictions (atomic — a single Convex mutation is already transactional):**
 ```typescript
-const newTemplate = await db.$transaction(async (prisma) => {
-  // Create template
-  const template = await prisma.template.create({
-    data: {
-      title: validData.title,
+// convex/templates.ts
+export const create = mutation({
+  args: {
+    title: v.string(),
+    // ... other fields
+    jurisdictions: v.array(v.object({
+      type: v.string(),
+      congressionalDistrict: v.optional(v.string()),
+      stateCode: v.optional(v.string()),
+      countyFips: v.optional(v.string()),
+      cityName: v.optional(v.string()),
+      cityFips: v.optional(v.string()),
+      estimatedPopulation: v.optional(v.number())
+    }))
+  },
+  handler: async (ctx, args) => {
+    const id = await ctx.db.insert("templates", {
+      title: args.title,
       // ... other fields
-    }
-  });
-
-  // Create jurisdiction records
-  if (validData.jurisdictions && validData.jurisdictions.length > 0) {
-    await prisma.templateJurisdiction.createMany({
-      data: validData.jurisdictions.map(j => ({
-        template_id: template.id,
-        jurisdiction_type: j.type,
-        congressional_district: j.congressional_district,
-        state_code: j.state_code,
-        county_fips: j.county_fips,
-        city_name: j.city_name,
-        city_fips: j.city_fips,
-        estimated_population: j.estimated_population ? BigInt(j.estimated_population) : null
-      }))
+      jurisdictions: args.jurisdictions
     });
+    return await ctx.db.get(id);
   }
-
-  // Return template with jurisdictions
-  return await prisma.template.findUnique({
-    where: { id: template.id },
-    include: { jurisdictions: true }
-  });
 });
 ```
 
-3. **Update GET endpoint to include jurisdictions:**
+3. **Update GET endpoint to return jurisdictions (they're embedded on the template row, no join needed):**
 ```typescript
-const dbTemplates = await db.template.findMany({
-  where: { is_public: true },
-  include: { jurisdictions: true },
-  orderBy: { createdAt: 'desc' }
+// convex/templates.ts
+export const listPublic = query({
+  handler: async (ctx) => {
+    return await ctx.db
+      .query("templates")
+      .withIndex("by_isPublic", (q) => q.eq("isPublic", true))
+      .order("desc")
+      .collect();
+  }
 });
 ```
 
@@ -699,7 +673,7 @@ async function searchCounties(query: string): Promise<JurisdictionSuggestion[]> 
    - Congressional district → representative lookup
    - State district enumeration
    - State name normalization
-   - Prisma integration
+   - Convex query integration
 
 ### Modified Files
 
@@ -732,13 +706,13 @@ async function searchCounties(query: string): Promise<JurisdictionSuggestion[]> 
 ### No Blockers
 - All core components functional
 - Database schema already migrated (Phase 1)
-- Prisma types available
+- Convex types available (`convex/_generated/dataModel`)
 - Census API accessible (no auth required)
 
 ### Dependencies
-1. **Database Connection** (from Phase 0 audit)
-   - PostgreSQL connection string needed for Prisma operations
-   - Development can continue without database (components work standalone)
+1. **Convex Deployment**
+   - `PUBLIC_CONVEX_URL` + `npx convex dev` session for live queries/mutations
+   - Development can continue without a live deployment (components work standalone)
 
 2. **Template Creator Refactor**
    - Needs careful integration to maintain existing flow
@@ -783,7 +757,7 @@ import type {
   JurisdictionValidation
 } from '$lib/types/jurisdiction';
 
-import type { TemplateJurisdiction } from '@prisma/client';
+import type { TemplateJurisdiction } from '$lib/types/jurisdiction';
 ```
 
 **Census Data Functions:**

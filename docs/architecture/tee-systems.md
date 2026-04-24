@@ -2,7 +2,7 @@
 
 **VOTER Protocol uses TEE for two purposes: message delivery and debate evaluation. ZK proof generation remains in-browser.**
 
-> **⚠️ AUDIT NOTE (2026-04-23):** Client-side wiring (witness encryption, public-key endpoint, HTTP resolver invocation from `deliverToCongress`) is in place, but **no AWS Nitro Enclave is deployed**. `docs/implementation-status.md` (~line 113) is the authoritative tracker — it lists "TEE deployment" as **Planned**. Debate-evaluation TEE (Use Case 2) is entirely unbuilt: `convex/debates.ts:~720` logs `"Would evaluate debate..."` and skips. Cost figures in this doc are notional, not measured against a running deployment. `FEATURES.DEBATE = false` in production.
+> **⚠️ AUDIT NOTE (2026-04-23):** Client-side wiring (witness encryption, public-key endpoint, HTTP resolver invocation from `deliverToCongress`) is in place, but **no AWS Nitro Enclave is deployed**. `docs/implementation-status.md` (~line 113) is the authoritative tracker — it lists "TEE deployment" as **Planned**. Debate-evaluation TEE (Use Case 2) remains the long-term design: the daily Convex cron (`convex/debates.ts:resolveExpiredDebates`) now dispatches to `/api/debates/[id]/evaluate` on the SvelteKit host (no-TEE path) which runs `resolveDebateWithAI`. `FEATURES.DEBATE = true` as of 2026-04-23; TEE replaces the no-TEE evaluator when deployed. Cost figures in this doc are notional, not measured against a running deployment.
 
 ---
 

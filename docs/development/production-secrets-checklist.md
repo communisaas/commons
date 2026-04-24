@@ -1,73 +1,24 @@
 # Production Secrets Checklist
 
-> ⚠️ **DRIFT DETECTED (2026-04-23 audit).** This checklist is out of sync
-> with the codebase. Treat `.env.example` + `grep process.env` in `src/`
-> and `convex/` as source of truth until this file is refreshed.
->
-> ### Concrete deltas to apply before a prod deploy
->
-> **Mislabeled as unused — actually CRITICAL:**
-> - `GROQ_API_KEY` — powers the Llama Guard 4 moderation pipeline
->   (`src/lib/core/server/moderation/llama-guard.ts`). Required for
->   safety gating; do not treat as optional.
->
-> **Missing from the checklist but required in production:**
->
-> Security/crypto keys (all HIGH priority unless noted):
-> - `BRIDGE_ENCRYPTION_KEY` — AES-256-GCM for Convex bridge session crypto
-> - `CAMPAIGN_PSEUDONYM_KEY` — Ed25519 for campaign pseudonym generation
-> - `DISTRICT_HASH_KEY` — HMAC for district-residency proofs
-> - `SESSION_CREATION_SECRET` — OAuth callback session mint
-> - `OAUTH_ENCRYPTION_KEY` — encrypts OAuth refresh tokens at rest
-> - `ORG_KEY_WRAPPING_KEY` — wraps org-level encryption keys
-> - `PSEUDONYMOUS_ID_SALT` — **CRITICAL**; Convex-side pseudonym salt
->   (equivalent to `SUBMISSION_ANONYMIZATION_SALT`)
-> - `INTERNAL_API_SECRET` — internal-to-internal HTTP auth
->
-> Integrations:
-> - `FIRECRAWL_API_KEY` — web scraping (`src/lib/server/firecrawl/client.ts`
->   throws without it)
-> - `CWC_DELIVERY_AGENT_CONTACT_EMAIL` / `..._CONTACT_PHONE` — Senate CWC
->   metadata (distinct from the `_ACK_EMAIL` field already listed)
-> - `SES_FROM_EMAIL` — blast-campaign sender (defaults to
->   `reports@commons.email`)
-> - `TEE_RESOLVER_URL`, `ENCLAVE_PARENT_HOST` — optional, Nitro enclave
->   lifecycle (Planned)
->
-> OAuth: add a dedicated **Coinbase** section (trust tier 5, KYC) —
-> currently only mentioned in the quick-reference table.
->
-> **Obsolete entries — safe to remove:**
-> - `DATABASE_URL` — no code reads it (Convex-only; Prisma/Postgres
->   removed).
-> - `ANTHROPIC_API_KEY` — not referenced anywhere. Remove or mark as
->   "future use only".
->
-> **Clarify:** `TWITTER_CLIENT_*` / `DISCORD_CLIENT_*` should carry a
-> "DO NOT CONFIGURE IN PRODUCTION" note — routes return 403 and these
-> providers are permanently disabled.
->
-> **Naming inconsistency:** `SHADOW_ATLAS_URL` (used in Convex) vs
-> `SHADOW_ATLAS_API_URL` (listed here). Unify.
-
-This document provides a comprehensive checklist of all environment variables required for the Commons production deployment on Cloudflare Pages.
+This document lists the environment variables required for the Commons production deployment. Source of truth: `.env.example` + `grep process.env` in `src/` and `convex/`.
 
 ## Quick Reference: Critical vs Optional
 
 | Priority | Category | Variables |
 |----------|----------|-----------|
-| **CRITICAL** | Database | `DATABASE_URL` |
-| **CRITICAL** | Security Salts | `IDENTITY_HASH_SALT`, `IP_HASH_SALT` |
-| **CRITICAL** | AI Services | `GEMINI_API_KEY` |
+| **CRITICAL** | Convex | `PUBLIC_CONVEX_URL`, `CONVEX_DEPLOY_KEY` |
+| **CRITICAL** | Security Salts | `IDENTITY_HASH_SALT`, `IP_HASH_SALT`, `PSEUDONYMOUS_ID_SALT` |
+| **CRITICAL** | AI Services | `GEMINI_API_KEY`, `GROQ_API_KEY` |
 | **CRITICAL** | Congressional API | `CWC_API_KEY` |
-| **CRITICAL** | Authentication | `JWT_SECRET`, `EMAIL_VERIFICATION_SECRET` |
-| ~~**HIGH**~~ | ~~Identity Verification~~ | ~~`DIDIT_API_KEY`, `DIDIT_WORKFLOW_ID`, `DIDIT_WEBHOOK_SECRET`~~ (Didit.me removed in Cycle 15; mDL via Digital Credentials API requires no API keys) |
+| **CRITICAL** | Authentication | `JWT_SECRET`, `EMAIL_VERIFICATION_SECRET`, `SESSION_CREATION_SECRET` |
+| **HIGH** | Crypto Keys | `BRIDGE_ENCRYPTION_KEY`, `CAMPAIGN_PSEUDONYM_KEY`, `DISTRICT_HASH_KEY`, `OAUTH_ENCRYPTION_KEY`, `ORG_KEY_WRAPPING_KEY`, `INTERNAL_API_SECRET` |
 | **HIGH** | OAuth | `GOOGLE_CLIENT_ID/SECRET`, other OAuth providers |
 | **MEDIUM** | VOTER Protocol | `VOTER_API_URL`, `VOTER_API_KEY` |
 | **MEDIUM** | Congressional Lookup | `CONGRESS_API_KEY` |
 | **MEDIUM** | House Submissions | `GCP_PROXY_URL`, `GCP_PROXY_AUTH_TOKEN` |
-| **OPTIONAL** | AI Tie-breaker | `ANTHROPIC_API_KEY` |
-| ~~**OPTIONAL**~~ | ~~self.xyz~~ | ~~`SELF_APP_NAME`, `SELF_SCOPE`, `SELF_MOCK_PASSPORT`~~ (self.xyz removed in Cycle 15) |
+| **MEDIUM** | Integrations | `FIRECRAWL_API_KEY`, `SES_FROM_EMAIL`, CWC delivery-agent contact fields |
+| **OPTIONAL** | TEE | `TEE_RESOLVER_URL`, `ENCLAVE_PARENT_HOST` |
+| **REMOVED** | Identity providers | `DIDIT_*`, `SELF_*` (Cycle 15 — mDL-only) |
 
 ---
 
@@ -108,20 +59,24 @@ openssl rand -hex 32
 
 ---
 
-## 2. Database Configuration (CRITICAL)
+## 2. Convex Backend (CRITICAL)
 
-### DATABASE_URL
+### PUBLIC_CONVEX_URL
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | PostgreSQL connection string (via Hyperdrive in production) |
-| **Used In** | `src/lib/core/db.ts`, Prisma |
-| **Format** | PostgreSQL connection string with SSL |
-| **Obtain** | Database provider dashboard (Hyperdrive-wrapped in production) |
+| **Purpose** | Public URL of the Convex deployment (client + server read it) |
+| **Used In** | `src/lib/server/convex/client.ts`, every frontend convex client |
+| **Format** | `https://<deployment>.convex.cloud` |
+| **Obtain** | Convex dashboard → Settings → Production deployment URL |
 
-```
-postgresql://user:password@ep-xxx.region.aws.neon.tech/database?sslmode=require
-```
+### CONVEX_DEPLOY_KEY
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | CI/CD deployment auth for `npx convex deploy` |
+| **Used In** | `.github/workflows/*.yml`, local `npx convex deploy --env-file .env.production` |
+| **Obtain** | Convex dashboard → Settings → Deploy Keys |
 
 ---
 
@@ -389,8 +344,9 @@ These variables are **NOT USED** in the current codebase and should be removed i
 ### Setting Secrets via Wrangler CLI
 
 ```bash
-# Database
-wrangler pages secret put DATABASE_URL
+# Convex backend
+wrangler pages secret put PUBLIC_CONVEX_URL
+wrangler pages secret put CONVEX_DEPLOY_KEY
 
 # Security Salts (CRITICAL - generate fresh values)
 wrangler pages secret put IDENTITY_HASH_SALT
@@ -448,11 +404,13 @@ wrangler pages secret put VOTER_API_KEY
 
 ### Critical (Must Have)
 
-- [ ] `DATABASE_URL` - PostgreSQL connection string (Hyperdrive-wrapped in production)
+- [ ] `PUBLIC_CONVEX_URL` - Production Convex deployment URL
+- [ ] `CONVEX_DEPLOY_KEY` - For CI/CD Convex deploys
 - [ ] `IDENTITY_HASH_SALT` - Generated with `openssl rand -hex 32`
 - [ ] `IP_HASH_SALT` - Generated with `openssl rand -hex 32`
 - [ ] `JWT_SECRET` - Generated with `openssl rand -base64 32`
-- [ ] `GEMINI_API_KEY` - For agents, quality assessment + embeddings
+- [ ] `GEMINI_API_KEY` - For agents + embeddings
+- [ ] `GROQ_API_KEY` - For the 2-layer moderation pipeline
 - [ ] `CWC_API_KEY` - For Senate submissions
 
 ### High Priority

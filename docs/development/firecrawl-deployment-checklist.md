@@ -1,10 +1,9 @@
 # Firecrawl Provider Deployment Checklist
 
-> **STATUS: NEEDS REVISION** — This checklist references MongoDB for caching (~15 occurrences). The actual stack uses PostgreSQL + Prisma — no MongoDB. Cache implementation should use Prisma models, not MongoDB collections. Review all MongoDB references before deployment.
+**Status:** Planning draft. If Firecrawl caching is re-enabled, it should write to a Convex table with an expiry (TTL) index — not to any external cache store.
 
 **Implementation Date:** 2026-01-31
 **Target Deployment:** TBD
-**Engineer:** Distinguished Backend Engineer
 
 ---
 
@@ -33,7 +32,7 @@
 
 #### Development
 
-- [ ] **Add FIRECRAWL_API_KEY to `.env`**
+- [ ] **Add `FIRECRAWL_API_KEY` to `.env.local`**
   ```bash
   FIRECRAWL_API_KEY=fc-dev-key-here
   ```
@@ -46,14 +45,13 @@
 
 #### Staging
 
-- [ ] **Set FIRECRAWL_API_KEY in staging environment**
-- [ ] **Verify MongoDB connection in staging**
+- [ ] **Set `FIRECRAWL_API_KEY` in staging Convex deployment**
 - [ ] **Test with real organization discovery**
 
 #### Production
 
-- [ ] **Set FIRECRAWL_API_KEY in production environment**
-- [ ] **Confirm MongoDB Atlas connection string**
+- [ ] **Set `FIRECRAWL_API_KEY` as a Cloudflare Pages secret**
+- [ ] **Set `FIRECRAWL_API_KEY` in the production Convex deployment** (`npx convex env set`)
 - [ ] **Enable production error logging**
 
 ### 3. Testing
@@ -72,7 +70,7 @@
 
 #### Integration Tests (Requires API Key)
 
-- [ ] **Set FIRECRAWL_API_KEY**
+- [ ] **Set `FIRECRAWL_API_KEY`**
   ```bash
   export FIRECRAWL_API_KEY=fc-your-key
   ```
@@ -112,24 +110,24 @@
 ### 4. Code Review
 
 - [ ] **Review firecrawl-client.ts**
-  - Type safety ✓
-  - Error handling ✓
-  - API client patterns ✓
+  - Type safety
+  - Error handling
+  - API client patterns
 
 - [ ] **Review firecrawl-provider.ts**
-  - Provider interface compliance ✓
-  - MongoDB integration ✓
-  - Relevance filtering logic ✓
+  - Provider interface compliance
+  - Convex cache integration (read/write through a Convex action with TTL)
+  - Relevance filtering logic
 
 - [ ] **Review test coverage**
-  - Unit tests: ~80% ✓
-  - Edge cases covered ✓
-  - Mock patterns correct ✓
+  - Unit tests: ~80%
+  - Edge cases covered
+  - Mock patterns correct
 
 - [ ] **Review documentation**
-  - FIRECRAWL_PROVIDER.md complete ✓
-  - QUICK_START.md clear ✓
-  - Code comments sufficient ✓
+  - FIRECRAWL_PROVIDER.md complete
+  - QUICK_START.md clear
+  - Code comments sufficient
 
 ### 5. Performance Validation
 
@@ -148,32 +146,31 @@
 - [ ] **Test with concurrent requests**
   - 5 simultaneous discoveries
   - No rate limit errors
-  - MongoDB handles load
+  - Convex cache table handles load
 
-### 6. MongoDB Verification
+### 6. Convex Cache Verification
 
-- [ ] **Verify organizations collection exists**
-  ```javascript
-  db.organizations.countDocuments()
+If Firecrawl caching is re-enabled:
+
+- [ ] **Design a Convex cache table**
+  ```typescript
+  // convex/schema.ts
+  firecrawlOrgCache: defineTable({
+    normalizedName: v.string(),
+    leadership: v.array(v.object({ /* ... */ })),
+    source: v.string(),
+    cachedAt: v.number(),
+    expiresAt: v.number()
+  })
+    .index("by_normalizedName", ["normalizedName"])
+    .index("by_expiresAt", ["expiresAt"])
   ```
 
-- [ ] **Verify TTL index configured**
-  ```javascript
-  db.organizations.getIndexes()
-  // Should include: { "expiresAt": 1 }
-  ```
+- [ ] **Add a scheduled cleanup cron in `convex/crons.ts`** that deletes rows where `expiresAt < now()`.
 
-- [ ] **Test cache insertion**
-  ```javascript
-  // After first discovery
-  db.organizations.findOne({ normalizedName: "patagonia" })
-  // Should return document with leadership array
-  ```
+- [ ] **Test cache insertion** via a Convex mutation and verify retrieval.
 
-- [ ] **Verify TTL expiration works**
-  - Manually set `expiresAt` to past date
-  - Wait 60 seconds (TTL runs every 60s)
-  - Verify document deleted
+- [ ] **Verify TTL expiration works** by setting `expiresAt` to the past and confirming the next cron run deletes the row.
 
 ---
 
@@ -197,7 +194,11 @@
 
 #### Staging
 
-- [ ] **Deploy to staging environment**
+- [ ] **Deploy Convex functions to staging**
+  ```bash
+  npx convex deploy --env-file .env.staging
+  ```
+- [ ] **Deploy SvelteKit frontend to staging**
 - [ ] **Verify service starts without errors**
 - [ ] **Check logs for provider initialization**
   ```
@@ -207,7 +208,7 @@
 - [ ] **Test end-to-end flow in staging**
   - Create template with corporate target
   - Verify decision-makers discovered
-  - Check MongoDB for cached data
+  - Check Convex cache table for cached data
 
 #### Production
 
@@ -227,7 +228,7 @@
   - Alert on: >10 errors/hour
 
 - [ ] **Set up cache metrics**
-  - Track: Cache hit rate
+  - Track: Cache hit rate (from Convex function logs)
   - Alert if: <50% hit rate after 24h
 
 - [ ] **Monitor resolution latency**
@@ -243,17 +244,14 @@
 - [ ] **Verify first production discovery works**
   - Organization: (choose well-known org)
   - Result: Decision-makers found
-  - Cache: Document in MongoDB
+  - Cache: Row in Convex cache table
 
 - [ ] **Check error logs**
   - Expected: Zero Firecrawl errors
   - Actual: _____
 
-- [ ] **Verify MongoDB writes**
-  ```javascript
-  db.organizations.find({ source: 'firecrawl' }).count()
-  // Should be > 0 after first discovery
-  ```
+- [ ] **Verify Convex writes**
+  - Convex dashboard → Data → `firecrawlOrgCache` → row count > 0
 
 ### Week 1
 
@@ -262,17 +260,11 @@
   - Actual: _____ credits
 
 - [ ] **Calculate cache hit rate**
-  ```javascript
-  // Query application logs
-  grep "cacheHit: true" logs | wc -l
-  grep "cacheHit: false" logs | wc -l
-  ```
+  - Convex dashboard → Function logs → filter by `cacheHit:true` vs `cacheHit:false`
   - Target: >30% hit rate
-  - Actual: _____ %
 
 - [ ] **Review discovery success rate**
   - Target: >90% successful
-  - Actual: _____ %
 
 - [ ] **Check average latency**
   - Cache hits: _____ ms (target: <100ms)
@@ -285,8 +277,8 @@
   - Actual: $_____
 
 - [ ] **Review cache staleness**
-  - Orgs refreshed: _____ (should be low)
-  - Cache hits: _____ (should be high)
+  - Rows refreshed: _____
+  - Cache hits: _____
 
 - [ ] **User feedback collection**
   - Decision-maker accuracy: ___/10
@@ -322,17 +314,14 @@
    - Organizational targets will show "No provider available" error
    - Government targets unaffected (use Gemini)
 
-3. **Clean up MongoDB (if needed)**
-   ```javascript
-   // Only if cache causing issues
-   db.organizations.deleteMany({ source: 'firecrawl' })
-   ```
+3. **Clean up cache (if needed)**
+   - Convex dashboard → Data → `firecrawlOrgCache` → delete rows
 
 ### Rollback Triggers
 
 - [ ] **>50 errors/hour** from Firecrawl API
 - [ ] **>90s average discovery time** for 24 hours
-- [ ] **MongoDB storage issues** (unlikely)
+- [ ] **Cache table growth unbounded** (cron failing)
 - [ ] **Critical user complaints** about decision-maker quality
 
 ---
@@ -341,24 +330,24 @@
 
 ### Technical
 
-- ✅ **Zero deployment errors**
-- ✅ **Provider registered and operational**
-- ✅ **MongoDB caching working**
-- ✅ **Cache hit rate >30% after Week 1**
-- ✅ **Average discovery time <60s**
+- Zero deployment errors
+- Provider registered and operational
+- Convex cache table populated + TTL cleanup running
+- Cache hit rate >30% after Week 1
+- Average discovery time <60s
 
 ### User Experience
 
-- ✅ **Organizational targets now discoverable**
-- ✅ **Decision-makers have contact info**
-- ✅ **Relevance filtering accurate (user validation)**
-- ✅ **Progress updates clear and helpful**
+- Organizational targets now discoverable
+- Decision-makers have contact info
+- Relevance filtering accurate (user validation)
+- Progress updates clear and helpful
 
 ### Cost
 
-- ✅ **Monthly cost <$10** (first month)
-- ✅ **Within projected $5/month** (steady state)
-- ✅ **No unexpected charges**
+- Monthly cost <$10 (first month)
+- Within projected $5/month (steady state)
+- No unexpected charges
 
 ---
 
@@ -424,10 +413,10 @@
 
 - [ ] **Announce deployment in #engineering**
   ```
-  🚀 Deployed: Firecrawl decision-maker provider
+  Deployed: Firecrawl decision-maker provider
   - Now supports corporate, nonprofit, education, healthcare, labor, media targets
   - Autonomous web research for org leadership
-  - MongoDB caching for performance
+  - Convex-backed caching with TTL
   - Docs: src/lib/core/agents/providers/FIRECRAWL_PROVIDER.md
   ```
 
@@ -464,7 +453,7 @@
 
 **Deployment Date:** _____________
 **Deployed By:** _____________
-**Production Status:** ⬜ Pending | ⬜ Complete | ⬜ Rolled Back
+**Production Status:** Pending | Complete | Rolled Back
 
 **Notes:**
 _______________________________________________________________

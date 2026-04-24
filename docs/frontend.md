@@ -18,11 +18,12 @@ This document covers SvelteKit 5 patterns, state management with runes, componen
 >   legacy `writable()` / `readable()` from `svelte/store`. Treat
 >   the "we migrated all stores to runes in September 2024" claim as
 >   aspirational.
-> - **API-route examples import from `$lib/core/db`** (Prisma). That
->   module does not exist. Real server handlers use
+> - **Database access uses Convex.** Real server handlers use
 >   `serverQuery(api.*)` / `serverMutation(api.*)` from
 >   `convex-sveltekit` (~599 call sites across the repo). See
 >   `+page.server.ts` / `+layout.server.ts` for canonical shape.
+>   Any example below that imports from `$lib/core/db` is stale — that
+>   module no longer exists.
 > - **Callback props are destructuring syntax, not runes.** Props like
 >   `{ onclick }` on `Button.svelte` are plain Svelte 5 destructuring —
 >   the "`createEventDispatcher` → callback props" migration is real
@@ -60,8 +61,7 @@ This document covers SvelteKit 5 patterns, state management with runes, componen
 - **Design System**: See `docs/design-system.md` for comprehensive design tokens
 
 **Database & Backend:**
-- **PostgreSQL**: Database via Hyperdrive connection pooling (accessed via Prisma ORM)
-- **Prisma**: Type-safe database client
+- **Convex**: Managed backend and database. Schema in `convex/schema.ts` (~71 tables, 232 indexes). Server handlers use `serverQuery(api.*)` / `serverMutation(api.*)` from `convex-sveltekit`; Convex functions read auth via `ctx.auth.getUserIdentity()` (RS256 JWT bridged from SvelteKit sessions).
 - **@oslojs/crypto**: Cryptographic session management
 
 **Key Libraries:**

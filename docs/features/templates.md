@@ -2,32 +2,14 @@
 
 **The core unit of civic action. Templates are reusable message structures that resolve with user context at send time.**
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** The conceptual model is
-> accurate, but concrete schema references describe the pre-Convex Prisma
-> schema:
->
-> - **Schema location:** `prisma/schema.prisma` does not exist. Templates
->   live in `convex/schema.ts` (lines ~163-285, table `templates`).
-> - **Field naming:** Convex uses **camelCase**, not snake_case.
->   `messageBody` (not `message_body`), `researchLog` (not
->   `research_log`), `verifiedSends`, `uniqueDistricts`, `avgReputation`,
->   `topicEmbedding`, etc.
-> - **Nested arrays, not separate tables:** `TemplateJurisdiction[]` and
->   `TemplateScope[]` are **flattened** onto the template record as
->   `jurisdictions: v.array(v.object({...}))` and
->   `scopes: v.array(v.object({...}))` (`convex/schema.ts:~224-263`).
-> - **Category is deprecated:** `category` remains as a backward-compat
->   string; the primary grouping fields are `domain` + `topics`
->   (`convex/schema.ts:167-169`).
-> - **Draft store encrypts DM emails separately:** `templateDraftStore`
->   (`src/lib/stores/templateDraft.ts`) strips decision-maker emails from
->   the plaintext draft and encrypts them in a separate localStorage key
->   to avoid plaintext PII. Not documented below.
-> - **`recipientEmails` computed field:** referenced in the CRUD section
->   but not present in current API responses; `recipientConfig` is stored
->   as opaque `v.any()` and never extracted as a typed field.
-> - **`src/lib/core/db/template-select.ts`** referenced in Key Files
->   does not exist.
+**Schema specifics (2026-04-23):**
+
+- **Schema location:** `convex/schema.ts`, table `templates`.
+- **Field naming:** camelCase. `messageBody`, `researchLog`, `verifiedSends`, `uniqueDistricts`, `avgReputation`, `topicEmbedding`, etc.
+- **Nested arrays, not separate tables:** `jurisdictions` and `scopes` are flattened onto the template record as `v.array(v.object({...}))`.
+- **Category is deprecated:** `category` remains as a backward-compat string; the primary grouping fields are `domain` + `topics`.
+- **Draft store encrypts DM emails separately:** `templateDraftStore` (`src/lib/stores/templateDraft.ts`) strips decision-maker emails from the plaintext draft and encrypts them in a separate localStorage key to avoid plaintext PII.
+- **`recipientConfig`** is stored as opaque `v.any()`; there is no typed `recipientEmails` computed field on current responses.
 
 ---
 
@@ -276,10 +258,10 @@ The `GET /api/templates` endpoint returns `topics` tags (1-5 lowercase strings) 
 
 | File | Purpose |
 |---|---|
-| `prisma/schema.prisma` | Template, TemplateJurisdiction, TemplateScope, Message models |
-| `src/routes/api/templates/+server.ts` | GET (list) and POST (create) endpoints |
-| `src/routes/api/templates/check-slug/+server.ts` | Slug availability check with suggestions |
-| `src/lib/core/db/template-select.ts` | Shared Prisma select clause for list views |
+| `convex/schema.ts` | `templates` table definition (with nested `jurisdictions` + `scopes`) |
+| `convex/templates.ts` | Convex queries/mutations for list, get, create, check-slug |
+| `src/routes/api/templates/+server.ts` | SvelteKit bridge → Convex (GET list, POST create) |
+| `src/routes/api/templates/check-slug/+server.ts` | SvelteKit bridge for slug availability check |
 | `src/lib/utils/templateResolver.ts` | Variable resolution engine |
 | `src/lib/components/template/TemplateCreator.svelte` | Multi-step creation orchestrator |
 | `src/lib/components/template/creator/UnifiedObjectiveEntry.svelte` | Step 1: objective + AI subject line |

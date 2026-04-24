@@ -8,7 +8,7 @@
 > - **Circuit:** current canonical circuit is `three_tree_membership` (user + cell-map + engagement), not single-tree district membership. Public input shape differs; use `prover-client.ts` + CRYPTOGRAPHY-SPEC §5 as the source of truth.
 > - **Endpoints:** `/api/congressional/submit` does NOT exist. The real submission route is `/api/submissions/create` (Convex-backed). `/api/tee/pubkey` does not exist — it is `/api/tee/public-key/`, and nothing in the submission path calls it yet.
 > - **Files claimed "Created":** `src/lib/core/zkp/witness-builder.ts` and `src/lib/stores/proof-generation.svelte.ts` do not exist. Witness construction lives in `prover-client.ts` and `*-client.ts` per-circuit builders.
-> - **Feature gates:** `FEATURES.CONGRESSIONAL` is `false` and `FEATURES.DEBATE` is `false` in production (`src/lib/config/features.ts`). The flow described here is not reachable end-to-end today.
+> - **Feature gates:** `FEATURES.CONGRESSIONAL` is `false` (`src/lib/config/features.ts:24`); `FEATURES.DEBATE` was flipped to `true` in 2026-04. The CWC-delivery flow described here is still gated off; the debate-market flow is live.
 > - **TEE delivery:** `sendToTEE()` does not exist. Submissions validate a proof but do not hand the ciphertext to a TEE. AWS Nitro Enclave integration is in `docs/implementation-status.md` as "Planned."
 > - **Gas / cost:** "~2.2M gas" and "~$0.01 per verification" appear throughout without a backing benchmark; `contracts/test/` has no UltraHonk verifier gas harness that produces these numbers. Treat as unverified estimates, not measured values.
 
@@ -154,23 +154,21 @@
 │ COMMONS BACKEND (SvelteKit API Routes)                              │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│ STEP 7: Store Encrypted Blobs (Postgres via Prisma)                 │
+│ STEP 7: Store Encrypted Blobs (Convex: submissions table)           │
 │ ┌─────────────────────────────────────────────────────────────────┐│
-│ │ model Submission {                                              ││
-│ │   id                   String   @id @default(cuid())            ││
-│ │   proof_bytes          Bytes    // ZK proof (~7.3KB keccak)     ││
-│ │   district_root        String   // Public output 1              ││
-│ │   nullifier            String   // Public output 2 (indexed)    ││
-│ │   action_id            String   // Public output 3              ││
-│ │   encrypted_witness    Bytes    // Address (TEE-encrypted)      ││
-│ │   encrypted_message    Bytes    // Message (TEE-encrypted)      ││
-│ │   template_id          String                                   ││
-│ │   status               String   // pending | verified | ...     ││
+│ │ submissions: defineTable({                                      ││
+│ │   proofBytes: v.bytes(),         // ZK proof (~7.3KB keccak)    ││
+│ │   districtRoot: v.string(),      // Public output 1             ││
+│ │   nullifier: v.string(),         // Public output 2 (indexed)   ││
+│ │   actionId: v.string(),          // Public output 3             ││
+│ │   encryptedWitness: v.bytes(),   // Address (TEE-encrypted)     ││
+│ │   encryptedMessage: v.bytes(),   // Message (TEE-encrypted)     ││
+│ │   templateId: v.id("templates"),                                ││
+│ │   status: v.string(),            // pending | verified | ...    ││
+│ │ }).index("by_nullifier_action", ["nullifier", "actionId"]);     ││
+│ │ // Uniqueness enforced in the mutation (mutations are atomic)   ││
 │ │                                                                  ││
-│ │   @@unique([nullifier, action_id]) // Prevent double-action     ││
-│ │ }                                                                ││
-│ │                                                                  ││
-│ │ // Commons CANNOT read encrypted data - only TEE can         ││
+│ │ // Commons CANNOT read encrypted data — only the TEE can        ││
 │ └─────────────────────────────────────────────────────────────────┘│
 │           ↓                                                          │
 │ STEP 8: Submit ZK Proof to Scroll L2                                │
@@ -774,67 +772,58 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 ### 4. Database Schema Updates
 
-**Location**: `prisma/schema.prisma`
+**Location**: `convex/schema.ts`
 
-```prisma
+```typescript
 // Shadow Atlas: District Merkle Trees (size depends on circuit depth)
-model ShadowAtlasTree {
-  id                     String   @id @default(cuid())
-  congressional_district String   @unique  // "CA-12", "NY-15", etc.
+shadowAtlasTrees: defineTable({
+  congressionalDistrict: v.string(),   // "CA-12", "NY-15", etc.
 
   // Merkle tree state
-  leaf_count             Int      @default(0)  // Current size
-  merkle_root            String   // Poseidon hash root
-  leaves                 String[] // identity_commitments
+  leafCount: v.number(),               // Current size
+  merkleRoot: v.string(),              // Poseidon hash root
+  leaves: v.array(v.string()),         // identityCommitments
+})
+  .index("by_district", ["congressionalDistrict"]),
 
-  // Metadata
-  created_at             DateTime @default(now())
-  updated_at             DateTime @updatedAt
-}
-
-// User Shadow Atlas Registration
-model User {
+// User Shadow Atlas Registration (fields on `users`)
+users: defineTable({
   // ... existing fields ...
 
   // Identity verification (mDL via Digital Credentials API; self.xyz and Didit.me removed in Cycle 15)
-  identity_verified      Boolean  @default(false)
-  verification_method    String?  // 'mdl' (legacy records may contain 'self.xyz' | 'didit')
-  identity_commitment    String?  // Poseidon hash of identity secret
+  identityVerified: v.boolean(),
+  verificationMethod: v.optional(v.string()),   // 'mdl' (legacy records may contain 'self.xyz' | 'didit')
+  identityCommitment: v.optional(v.string()),   // Poseidon hash of identity secret
 
   // Shadow Atlas position
-  shadow_atlas_leaf_index Int?    // Position in district tree (0-4095)
-  congressional_district  String? // "CA-12", "NY-15", etc.
-}
+  shadowAtlasLeafIndex: v.optional(v.number()), // Position in district tree (0-4095)
+  congressionalDistrict: v.optional(v.string()),// "CA-12", "NY-15", etc.
+}),
 
 // Anonymous Submissions (ZK-proven messages)
-model Submission {
-  id                   String   @id @default(cuid())
-
+submissions: defineTable({
   // ZK proof data
-  proof_bytes          Bytes    // UltraHonk proof (~7.3KB keccak)
-  district_root        String   // Public output 1
-  nullifier            String   // Public output 2 (prevents double-action)
-  action_id            String   // Public output 3 (identifies action type)
+  proofBytes: v.bytes(),               // UltraHonk proof (~7.3KB keccak)
+  districtRoot: v.string(),            // Public output 1
+  nullifier: v.string(),               // Public output 2 (prevents double-action)
+  actionId: v.string(),                // Public output 3 (identifies action type)
 
   // Encrypted data (only TEE can decrypt)
-  encrypted_witness    Bytes    // Address + district (XChaCha20-Poly1305)
-  encrypted_message    Bytes    // Message content
+  encryptedWitness: v.bytes(),         // Address + district (XChaCha20-Poly1305)
+  encryptedMessage: v.bytes(),         // Message content
 
   // Metadata
-  template_id          String
-  customizations       Json?
-  status               String   // pending | verified | delivered | failed
-  blockchain_tx_hash   String?  // Scroll L2 transaction hash
+  templateId: v.id("templates"),
+  customizations: v.optional(v.any()),
+  status: v.string(),                  // pending | verified | delivered | failed
+  blockchainTxHash: v.optional(v.string()), // Scroll L2 transaction hash
 
-  // Timestamps
-  created_at           DateTime @default(now())
-  delivered_at         DateTime?
-
-  // Prevent nullifier reuse (double-action protection)
-  @@unique([nullifier, action_id])
-  @@index([status])
-  @@index([blockchain_tx_hash])
-}
+  deliveredAt: v.optional(v.number()),
+})
+  // Nullifier reuse guard enforced in mutation (mutations are atomic)
+  .index("by_nullifier_action", ["nullifier", "actionId"])
+  .index("by_status", ["status"])
+  .index("by_tx_hash", ["blockchainTxHash"]);
 ```
 
 ---
@@ -928,7 +917,7 @@ model Submission {
 
 ### Phase 1.2: Shadow Atlas Backend (COMPLETE - Wave 1.2)
 
-- [x] Add `ShadowAtlasTree` model to Prisma schema
+- [x] Add `shadowAtlasTrees` table to `convex/schema.ts`
 - [x] Create `/api/shadow-atlas/register` endpoint
 - [x] Implement Poseidon hash Merkle tree building
 - [x] Add `generateMerklePath()` utility
@@ -946,7 +935,7 @@ model Submission {
 
 ### Phase 1.4: Submission Flow (COMPLETE - Wave 2.4)
 
-- [x] Update `Submission` model in Prisma schema
+- [x] Update `submissions` table in `convex/schema.ts`
 - [x] Create XChaCha20-Poly1305 encryption utilities
 - [x] Build `/api/congressional/submit` endpoint
 - [x] Implement nullifier-enforced submission

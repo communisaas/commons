@@ -26,8 +26,7 @@
 > - **Email verification is integrated into OAuth** (required at
 >   callback, unverified email → lower trust_score), not a separate
 >   post-signup stage.
-> - **Backend:** Convex-only. Session and user mutations are Convex
->   actions, not Prisma.
+> - **Backend:** Convex-only. Session and user mutations are Convex actions.
 
 **Date**: 2025-01-08 (Updated)
 **Goal**: Draw users in step-by-step, engaging their agency, minimizing friction

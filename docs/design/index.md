@@ -46,7 +46,7 @@ Inverted information hierarchy: proof/power/verification state leads every scree
 
 ### [INTELLIGENCE-LOOP-PLAN.md](INTELLIGENCE-LOOP-PLAN.md) — Decision-Maker Intelligence Loop
 
-**The 6-phase feedback loop: monitor → alert → mobilize → deliver → track → score.** Implemented 2026-03-17/18. Phases A-F with 3 review gates. Federal + state bill ingestion, pgvector relevance, SES delivery tracking, vote correlation, per-DM scorecards.
+**The 6-phase feedback loop: monitor → alert → mobilize → deliver → track → score.** Implemented 2026-03-17/18. Phases A-F with 3 review gates. Federal + state bill ingestion, Convex vector-index relevance, SES delivery tracking, vote correlation, per-DM scorecards.
 
 ### [INTELLIGENCE-LOOP-DEPTH.md](INTELLIGENCE-LOOP-DEPTH.md) — Intelligence Loop Depth Expansion
 

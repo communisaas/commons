@@ -109,7 +109,7 @@ Zero citation hallucination: every URL in output was validated accessible in Pha
 | Provider Router | `src/lib/core/agents/providers/router.ts` | Priority-based provider selection with fallback |
 | Exa Search | `src/lib/core/agents/exa-search.ts` | Semantic web search ($0.005/search, 25 results, 4 RPS) |
 | Firecrawl | `src/lib/core/agents/exa-search.ts` | Headless page rendering for JS-heavy sites (20s timeout) |
-| Intelligence Service | `src/lib/server/intelligence/service.ts` | pgvector semantic search, topic/entity/embedding storage, 90-day TTL |
+| Intelligence Service | `src/lib/server/intelligence/service.ts` | Convex `.vectorIndex(...)` semantic search, topic/entity/embedding storage, 90-day TTL |
 | Prompt Guard | Endpoint middleware | Llama Prompt Guard 2 via Groq (threshold 0.7-0.8) |
 | Cost Tracking | `CostBreakdown` type | Per-component: Gemini (input/output/thinking), Exa, Firecrawl, Grounding, Groq |
 | Gemini Client | `src/lib/core/agents/gemini-client.ts` | Singleton client, gemini-3-flash-preview, exponential backoff, token tracking |
@@ -137,7 +137,7 @@ Query Shadow Atlas API                        engagementPath
 
               ──── combine at submission ────
               Agent content + Constituent proof
-              → DistrictGate.verifyThreeTreeProof(proof, publicInputs[31], depth)
+              → DistrictGate.verifyThreeTreeProof(proof, publicInputs[0..30], depth)
               → NullifierRegistry.usedNullifiers[nullifier] = true
               → CampaignRegistry.participantCount++
 ```
@@ -565,16 +565,16 @@ EXISTING:
 EXTENSION:
   src/lib/server/intelligence/decision-maker-network.ts
 
-  SHARED CACHE (Postgres + pgvector):
-    decision_makers table:
-      id, name, title, organization
-      email (verified), email_source, email_verified_at
-      phone, social_urls
+  SHARED CACHE (Convex table + .vectorIndex):
+    decisionMakers table:
+      _id, name, title, organization
+      email (verified), emailSource, emailVerifiedAt
+      phone, socialUrls
       districts[]              // which districts this person has authority over
-      committee_assignments[]
-      policy_positions[]       // extracted from public statements
-      last_verified: timestamp
-      verification_count: int  // how many independent resolutions confirmed this
+      committeeAssignments[]
+      policyPositions[]        // extracted from public statements
+      lastVerified: number
+      verificationCount: number  // how many independent resolutions confirmed this
 
   ENRICHMENT PIPELINE:
     1. When any constituent's agent resolves a decision-maker:
@@ -820,8 +820,8 @@ Added to the existing platform COGS from `strategy/economics.md`:
 | LegiScan | LegiScan Pull API | $300 |
 | Legislative monitor inference | Gemini (screening + alerts) | $6,500 |
 | Groq (moderation) | Groq | $10 |
-| Intelligence DB (pgvector) | Neon Postgres (shared) | $0 (included in existing DB) |
-| Scheduled compute (monitors) | Vercel Cron / Edge Functions | $100 |
+| Intelligence DB (Convex `.vectorIndex`) | Convex (shared) | $0 (included in existing backend) |
+| Scheduled compute (monitors) | Convex scheduled actions | $0 (included) |
 | **Agentic COGS** | | **~$9,800** |
 
 ### Combined Platform COGS (10K constituents / ~1K orgs)
@@ -829,12 +829,12 @@ Added to the existing platform COGS from `strategy/economics.md`:
 | Layer | Monthly |
 |---|---|
 | Existing platform (email, DB, storage, chain) | $7,000 |
-| Agentic infrastructure | $9,800 |
-| **Total COGS** | **~$16,800** |
+| Agentic infrastructure | $9,700 |
+| **Total COGS** | **~$16,700** |
 | **Revenue** (from economics.md) | **$60,500** |
 | **Gross margin** | **72%** |
 
-The agentic layer adds ~$9,800/month at 10K constituents, dominated by legislative monitor inference ($6,500 — screening bills across all district types, shared per topic cluster). Margin drops from 87% to 72%.
+The agentic layer adds ~$9,700/month at 10K constituents, dominated by legislative monitor inference ($6,500 — screening bills across all district types, shared per topic cluster). Margin drops from 87% to 72%.
 
 ### Cost Levers
 

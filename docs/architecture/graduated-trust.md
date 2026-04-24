@@ -190,13 +190,18 @@ User creates account
 
 ### Schema changes
 
-```prisma
-// Add to User model
-passkey_credential_id   String?   @unique @map("passkey_credential_id")
-passkey_public_key_jwk  Json?     @map("passkey_public_key_jwk")    // JWK for the passkey public key
-did_key                 String?   @unique @map("did_key")           // did:key:z6Mk...
-passkey_created_at      DateTime? @map("passkey_created_at")
-passkey_last_used_at    DateTime? @map("passkey_last_used_at")
+```ts
+// convex/schema.ts — add to users table
+users: defineTable({
+  // ...existing fields
+  passkeyCredentialId: v.optional(v.string()),   // unique
+  passkeyPublicKeyJwk: v.optional(v.any()),      // JWK for passkey public key
+  didKey: v.optional(v.string()),                // did:key:z6Mk... (unique)
+  passkeyCreatedAt: v.optional(v.number()),
+  passkeyLastUsedAt: v.optional(v.number()),
+})
+  .index("by_passkey_credential_id", ["passkeyCredentialId"])
+  .index("by_did_key", ["didKey"])
 ```
 
 ### Authority level mapping
@@ -224,7 +229,7 @@ OAuth-only users without passkey: `authority_level = 1` (same number, weaker gua
 | `src/hooks.server.ts` | Add passkey session validation alongside cookie auth |
 | `src/lib/core/identity/authority-level.ts` | Distinguish passkey (L1 strong) from OAuth-only (L1 weak) |
 | `src/lib/services/emailService.ts` | Include did:key in message metadata for Tier 1+ users |
-| `prisma/schema.prisma` | Add passkey fields to User model |
+| `convex/schema.ts` | Add passkey fields to `users` table |
 
 ### Dependencies
 
@@ -304,47 +309,44 @@ Server generates 6-digit code → mailed to address via USPS
 
 ### Schema changes
 
-```prisma
-// Add to User model
-address_verification_method  String?   @map("address_verification_method") // 'civic_api' | 'postal' | 'mdl'
-address_verified_at          DateTime? @map("address_verified_at")
-
-// The existing district_verified boolean is retained but now means "Tier 2+ achieved"
-// The existing congressional_district field is retained for server-side routing
+```ts
+// convex/schema.ts — add to users table
+users: defineTable({
+  // ...existing fields
+  addressVerificationMethod: v.optional(v.string()), // 'civic_api' | 'postal' | 'mdl'
+  addressVerifiedAt: v.optional(v.number()),
+  // Existing districtVerified boolean is retained but now means "Tier 2+ achieved"
+  // Existing congressionalDistrict field is retained for server-side routing
+})
 
 // NEW: Track issued VCs
-model DistrictCredential {
-  id                    String   @id @default(cuid())
-  user_id               String   @map("user_id")
-  credential_type       String   @default("district_residency") @map("credential_type")
-  congressional_district String  @map("congressional_district")
-  state_senate_district  String? @map("state_senate_district")
-  state_assembly_district String? @map("state_assembly_district")
-  verification_method   String   @map("verification_method") // 'civic_api' | 'postal'
-  issued_at             DateTime @default(now()) @map("issued_at")
-  expires_at            DateTime @map("expires_at") // 90 days from issuance
-  revoked_at            DateTime? @map("revoked_at")
-  credential_hash       String   @map("credential_hash") // SHA-256 of the VC for integrity check
-
-  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
-
-  @@index([user_id, expires_at])
-  @@index([congressional_district])
-  @@map("district_credential")
-}
+districtCredentials: defineTable({
+  userId: v.id("users"),
+  credentialType: v.string(), // default: "district_residency"
+  congressionalDistrict: v.string(),
+  stateSenateDistrict: v.optional(v.string()),
+  stateAssemblyDistrict: v.optional(v.string()),
+  verificationMethod: v.string(),   // 'civic_api' | 'postal'
+  issuedAt: v.number(),
+  expiresAt: v.number(),            // 90 days from issuance
+  revokedAt: v.optional(v.number()),
+  credentialHash: v.string(),       // SHA-256 of the VC for integrity check
+})
+  .index("by_user_expires", ["userId", "expiresAt"])
+  .index("by_district", ["congressionalDistrict"])
 ```
 
 ### Plaintext address fields: DEPRECATION REQUIRED
 
-The User model currently has:
-```prisma
-city                   String?
-state                  String?
-street                 String?
-zip                    String?
+The `users` table currently has:
+```ts
+city: v.optional(v.string()),
+state: v.optional(v.string()),
+street: v.optional(v.string()),
+zip: v.optional(v.string()),
 ```
 
-These fields store PII in plaintext. They violate the privacy guarantees documented in `docs/design/patterns/identity-verification.md` ("Your address never leaves this device") and `prisma/schema.prisma` comments ("Address verified once via TEE, cached as session credential, then destroyed").
+These fields store PII in plaintext. They violate the privacy guarantees documented in `docs/design/patterns/identity-verification.md` ("Your address never leaves this device") and the `convex/schema.ts` comment ("Address verified once via TEE, cached as session credential, then destroyed").
 
 **Migration plan:**
 1. Address fields remain temporarily for Tier 2 address collection
@@ -426,7 +428,7 @@ User has verified their identity with a government credential (mDL / EUDIW via D
 - Credential policy with action-based TTL (`credential-policy.ts`)
 - Shadow Atlas registration handler (`shadow-atlas-handler.ts`)
 - Shadow Atlas API client (`shadow-atlas/client.ts`)
-- Prisma schema for all Tier 3 models (ShadowAtlasRegistration, Submission, EncryptedDeliveryData)
+- Convex schema for all Tier 3 models (`shadowAtlasRegistrations`, `submissions`, `encryptedDeliveryData` in `convex/schema.ts`)
 - Sybil resistance via identity_hash uniqueness
 - Cross-provider deduplication via identity_commitment
 
@@ -444,8 +446,6 @@ User has verified their identity with a government credential (mDL / EUDIW via D
 **`src/lib/core/proof/nitro-enclave-demo.ts`** — Demo/stub code. Replace with real TEE attestation verification.
 
 **`src/lib/core/tee/providers/gcp.ts`** — GCP Confidential Computing provider. **Decision: AWS Nitro Enclaves only.** This is dead code — remove when doing TEE implementation.
-
-**Schema consolidation: RESOLVED (2026-02-16)** — The three-schema problem has been eliminated. `schema.prisma` is the single canonical schema. `core.prisma` and `schema-production.prisma` have been deleted.
 
 ### Implementation scope for completion
 
@@ -669,10 +669,8 @@ The `'email'` and `'certified'` values are ambiguous — replace with explicit n
 
 | Item | Location | Reason |
 |------|----------|--------|
-| Plaintext address fields | User model: `street`, `city`, `state`, `zip` | PII; derive district then clear |
+| Plaintext address fields | `users` table: `street`, `city`, `state`, `zip` | PII; derive district then clear |
 | Bundled address + identity verification | `IdentityVerificationFlow.svelte` | Unbundle: address is Tier 2, identity is Tier 3 |
-| ~~`schema-production.prisma`~~ | ~~`prisma/`~~ | **REMOVED 2026-02-16** |
-| ~~`core.prisma`~~ | ~~`prisma/`~~ | **REMOVED 2026-02-16** |
 | Static "without cryptographic verification" text | `ActionBar.svelte` | Replace with dynamic TrustSignal |
 
 ### Medium-term (with Tier 3 completion)
@@ -755,11 +753,7 @@ Currently applies TTL uniformly to all credentials. Needs to differentiate:
 
 ### Non-critical refactors (quality)
 
-**5. ~~Three Prisma schemas → one~~ COMPLETED 2026-02-16**
-
-`schema.prisma` is canonical. Non-canonical variants deleted.
-
-**6. Unify IndexedDB credential storage**
+**5. Unify IndexedDB credential storage**
 
 Shadow Atlas handler has its own IndexedDB logic. District credentials need storage. Passkey metadata needs storage. Build one `CredentialStore` that manages all client-side credentials.
 
@@ -817,7 +811,7 @@ Each tier is an independent workstream. They should be implemented in order (Tie
 
 ### Tier 1 agent context
 
-**Background needed:** WebAuthn/FIDO2, passkey registration and authentication ceremonies, `did:key` specification, SimpleWebAuthn library. SvelteKit server endpoints, Prisma schema migrations.
+**Background needed:** WebAuthn/FIDO2, passkey registration and authentication ceremonies, `did:key` specification, SimpleWebAuthn library. SvelteKit server endpoints, Convex schema (`convex/schema.ts`) updates.
 
 **Key constraint:** Must coexist with existing OAuth auth. Do not break current login flows. Passkeys are additive.
 

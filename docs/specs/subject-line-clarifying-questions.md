@@ -517,4 +517,3 @@ function detectCountry(input: string, userLocation?: InferredLocation): string {
 - [Agentic AI Design Patterns](https://research.aimultiple.com/agentic-ai-design-patterns/) - Human-in-the-loop pattern
 - [ICLR 2025 Paper on Clarifying Questions](https://proceedings.iclr.cc/paper_files/paper/2025/file/97e2df4bb8b2f1913657344a693166a2-Paper-Conference.pdf) - Double-turn training
 - [Zendesk AI Best Practices](https://support.zendesk.com/hc/en-us/articles/9424547622298-Best-practices-for-creating-and-using-generative-procedures-for-AI-agents-with-agentic-AI) - When to ask clarifying questions
-- [MongoDB Agentic Patterns](https://medium.com/mongodb/here-are-7-design-patterns-for-agentic-systems-you-need-to-know-d74a4b5835a5) - Interactive agent pattern

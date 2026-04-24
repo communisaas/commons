@@ -1,51 +1,8 @@
 # Development Guide
 
-**Commons's development workflow: testing, seeding, feature flags, deployment. Not blockchain—that's in [voter-protocol](https://github.com/communisaas/voter-protocol).**
+**Commons's development workflow: testing, seeding, feature flags, deployment. Not blockchain — that's in [voter-protocol](https://github.com/communisaas/voter-protocol).**
 
-This guide covers local development setup, testing strategies, database seeding, feature flag management, and deployment workflows. For blockchain integration, see `docs/integration.md`.
-
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** ~40% of setup commands
-> below are dead. Use this working quick-start instead; treat the
-> Prisma/Postgres sections as historical.
->
-> ### Working quickstart (current as of 2026-04-23)
->
-> 1. `cp .env.example .env.local` (or `.env` — both are gitignored).
->    Fill in required Convex + API keys. `.env.example` in the repo is
->    the source of truth for variable names.
-> 2. `npx convex dev` — starts/attaches to your Convex cloud dev instance.
-> 3. `npm run dev` (in a second terminal) — SvelteKit on :5173, talks to
->    Convex cloud.
-> 4. `npm run seed` — runs `npx convex run seed:seedAll` against the Convex
->    dev instance. Optional: `npm run seed:agents` (requires
->    `GEMINI_API_KEY`, `GROQ_API_KEY`, `EXA_API_KEY`).
-> 5. `docker compose up -d` is **only** for local IPFS; it does not start
->    a DB. There is no local Postgres anymore.
->
-> ### Dead commands (no longer in package.json)
->
-> - `npm run db:start`, `db:stop`, `db:reset`, `db:generate`, `db:push`,
->   `db:migrate`, `db:seed` — all gone. Prisma / Postgres / Hyperdrive
->   removed in the Convex migration.
-> - `npx prisma db pull`, `npx prisma migrate deploy` — Prisma isn't a
->   dependency.
-> - `scripts/seed-database.ts` — doesn't exist. Seeding lives in
->   `convex/seed.ts` + `scripts/seed-with-agents.ts` + `scripts/seed-org-templates.ts`
->   + `scripts/seed-vibes.ts`.
-> - `DATABASE_URL=postgresql://...` — not read anywhere.
->
-> ### Other corrections
->
-> - **Node:** `.nvmrc` specifies 24.15.0; the "20.x or later" line below
->   is stale.
-> - **Prod deploy:** `npx convex deploy --env-file .env.production`.
->   `convex deploy -y` silently fails for prod (see MEMORY).
-> - **Schema:** code-driven via `convex/schema.ts`; no migration files.
-> - **Default flags:** `CONGRESSIONAL=false`, `DEBATE=false`,
->   `PASSKEY=false`. Flip locally in `src/lib/config/features.ts` — do
->   not commit.
-> - **Docker compose:** `docker-compose.yml` only defines the IPFS
->   service. The "Option 1: Docker Compose" Postgres block is dead.
+This guide covers local development setup, testing strategies, Convex seeding, feature flag management, and deployment workflows.
 
 ---
 
@@ -54,7 +11,7 @@ This guide covers local development setup, testing strategies, database seeding,
 1. [Quick Start](#quick-start)
 2. [Development Environment](#development-environment)
 3. [Testing Strategy](#testing-strategy)
-4. [Database Seeding](#database-seeding)
+4. [Seeding](#seeding)
 5. [Feature Flags](#feature-flags)
 6. [Deployment](#deployment)
 7. [Troubleshooting](#troubleshooting)
@@ -70,20 +27,17 @@ This guide covers local development setup, testing strategies, database seeding,
 npm install
 
 # Set up environment variables
-cp .env.example .env
-# Edit .env with your database and API credentials
+cp .env.example .env.local
+# Edit .env.local with required Convex + API keys
 
-# Generate Prisma client
-npm run db:generate
+# Attach to Convex cloud dev instance (auto-deploys schema + functions)
+npx convex dev
 
-# Push schema to database (development)
-npm run db:push
-
-# Seed development data
-npm run db:seed
-
-# Start development server
+# In a second terminal: start the SvelteKit dev server
 npm run dev
+
+# In a third terminal (optional): seed fixtures
+npm run seed
 ```
 
 Visit http://localhost:5173 to see the application.
@@ -93,6 +47,7 @@ Visit http://localhost:5173 to see the application.
 ```bash
 # Development
 npm run dev              # Start dev server with hot reload
+npx convex dev           # Attach/deploy to Convex cloud dev instance
 
 # Code Quality
 npm run check            # TypeScript + Svelte validation
@@ -100,11 +55,11 @@ npm run lint             # ESLint (warnings allowed)
 npm run lint:strict      # ESLint (zero tolerance)
 npm run format           # Prettier auto-fix
 
-# Database
-npm run db:push          # Push schema changes (dev)
-npm run db:migrate       # Create/run migrations (prod)
-npm run db:studio        # Open Prisma Studio GUI
-npm run db:seed          # Seed sample data
+# Seeding
+npm run seed             # Seeds Convex dev instance via seed:seedAll
+npm run seed:agents      # Agent-powered seed (requires GEMINI_API_KEY, GROQ_API_KEY, EXA_API_KEY)
+npm run seed:org         # Seeds org templates
+# scripts/seed-vibes.ts  # Seeds policy vibes (run directly with tsx)
 
 # Testing
 npm run test             # All tests (watch mode)
@@ -125,68 +80,45 @@ npm run preview          # Preview production build
 
 ### Prerequisites
 
-- **Node.js**: 20.x or later
-- **PostgreSQL**: 15.x or later (via pgvector/Prisma or local Docker Compose)
+- **Node.js**: 24.15.0 (see `.nvmrc`)
+- **No local database** — Convex is the managed backend (`npx convex dev` attaches to your cloud dev deployment)
 - **Environment Variables**: See `.env.example` for required configuration
 
 ### Environment Configuration
 
-**Required Variables:**
+**Required Variables:** `.env.example` is the source of truth. Key ones:
 
 ```bash
-# Database (pgvector via Docker Compose or managed Neon)
-DATABASE_URL=postgresql://commons:commons@localhost:5432/commons
+# Convex (required)
+PUBLIC_CONVEX_URL=https://<your-deployment>.convex.cloud
+CONVEX_DEPLOY_KEY=...          # For CI/prod deploys
 
-# Congressional Delivery (Optional)
-CWC_API_KEY=your-cwc-api-key
+# Moderation (required for creation + agent calls)
+GROQ_API_KEY=...
 
-# OAuth Providers (Optional - any combination)
+# Agents + embeddings
+GEMINI_API_KEY=...
+
+# Congressional Delivery (optional)
+CWC_API_KEY=...
+
+# OAuth Providers (optional — any combination)
 OAUTH_REDIRECT_BASE_URL=http://localhost:5173
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
-# ... other OAuth providers
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
 ```
 
 **Development vs Production:**
 
-- **Development**: `NODE_ENV=development` (default)
-  - OAuth security relaxed (HTTP allowed)
-  - Detailed error messages
-  - Hot reload enabled
+- **Development** (`NODE_ENV=development`): OAuth HTTP allowed, detailed errors, hot reload.
+- **Production** (`NODE_ENV=production`): HTTPS enforcement, error sanitization, optimizations.
 
-- **Production**: `NODE_ENV=production`
-  - OAuth HTTPS enforcement
-  - Error sanitization
-  - Build optimizations
+### Local Services
 
-### Local Database Setup
-
-**Option 1: Docker Compose (Recommended)**
+`docker-compose.yml` defines only the **IPFS** service for ancillary pinning. There is no local application database — Convex is cloud-managed and `npx convex dev` attaches to your dev deployment.
 
 ```bash
-# Start local Postgres
-npm run db:start
-
-# Connect to local database
-DATABASE_URL=postgres://root:mysecretpassword@localhost:5432/local
-npm run db:push
-npm run db:seed
-```
-
-**Database Workflow:**
-
-```bash
-# Development: Push schema changes directly
-npm run db:push
-
-# Production: Create migration first
-npm run db:migrate
-
-# Inspect database
-npm run db:studio  # Opens Prisma Studio at http://localhost:5555
-
-# Reset database (⚠️ DELETES ALL DATA)
-npx prisma migrate reset
+docker compose up -d    # Optional: local IPFS
 ```
 
 ---
@@ -199,7 +131,7 @@ npx prisma migrate reset
 
 - **Focus**: Realistic user workflows over isolated units
 - **Benefits**: Higher confidence, less maintenance, better bug detection
-- **Coverage**: 170/194 tests passing (87.6%), 70%+ coverage across all metrics
+- **Coverage**: ~4,000 unit tests (3,891 passing as of 2026-03-18, not re-counted post-Convex migration)
 
 ### Test Types
 
@@ -208,7 +140,7 @@ npx prisma migrate reset
 **Location**: `tests/integration/`
 
 **What to test:**
-- Full user flows (address verification → saving → database)
+- Full user flows (address verification → saving → Convex writes)
 - API endpoint contracts
 - Legislative abstraction pipeline
 - Template personalization
@@ -223,14 +155,11 @@ import { userFactory, templateFactory } from '../fixtures/factories';
 
 describe('Congressional Delivery Flow', () => {
   it('should deliver message from template selection to congressional offices', async () => {
-    // Setup
-    const user = userFactory.build({ state: 'CA', congressional_district: 'CA-11' });
+    const user = userFactory.build({ state: 'CA', congressionalDistrict: 'CA-11' });
     const template = templateFactory.build({ deliveryMethod: 'cwc' });
 
-    // Execute delivery pipeline
     const result = await deliverToCongressionalOffices(user, template);
 
-    // Verify
     expect(result.status).toBe('delivered');
     expect(result.offices).toContain('CA11');
     expect(result.cwcResponse.success).toBe(true);
@@ -248,35 +177,6 @@ describe('Congressional Delivery Flow', () => {
 - Edge case scenarios
 - Error handling logic
 
-**Example:**
-
-```typescript
-// tests/unit/template-resolver.test.ts
-import { describe, it, expect } from 'vitest';
-import { resolveTemplate } from '$lib/utils/templateResolver';
-
-describe('Template Resolution', () => {
-  it('should resolve [Name] variable with user name', () => {
-    const template = { message_body: 'Hello [Name]!' };
-    const user = { name: 'Sarah Martinez' };
-
-    const resolved = resolveTemplate(template, user);
-
-    expect(resolved.body).toBe('Hello Sarah Martinez!');
-  });
-
-  it('should remove unfilled variables from final text', () => {
-    const template = { message_body: 'Dear [Representative Name],\n[Personal Connection]' };
-    const user = { name: 'Alex' };
-
-    const resolved = resolveTemplate(template, user);
-
-    expect(resolved.body).not.toContain('[Representative Name]');
-    expect(resolved.body).not.toContain('[Personal Connection]');
-  });
-});
-```
-
 #### 3. End-to-End Tests (Critical Flows)
 
 **Location**: `tests/e2e/`
@@ -287,141 +187,22 @@ describe('Template Resolution', () => {
 - UI component behavior
 - Cross-browser compatibility
 
-**Example:**
-
-```typescript
-// tests/e2e/template-customization.spec.ts
-import { test, expect } from '@playwright/test';
-
-test('should customize template and submit', async ({ page }) => {
-  await page.goto('/s/climate-subsidies');
-
-  // Fill in customization fields
-  await page.fill('[name="personalConnection"]', 'I live near a flood zone.');
-  await page.fill('[name="street"]', '1847 Fillmore St');
-  await page.fill('[name="city"]', 'San Francisco');
-
-  // Submit
-  await page.click('button:has-text("Send Message")');
-
-  // Verify delivery
-  await expect(page.locator('.success-message')).toBeVisible();
-});
-```
-
 ### Running Tests
 
 ```bash
-# All tests (watch mode)
-npm run test
-
-# All tests (single run)
-npm run test:run
-
-# Specific test types
+npm run test                # Watch mode
+npm run test:run            # Single run
 npm run test:unit
 npm run test:integration
 npm run test:e2e
-
-# With coverage
 npm run test:coverage
 
 # Feature flag testing
-npm run test:production    # Production features only (ENABLE_BETA=false)
-npm run test:beta          # Include beta features (ENABLE_BETA=true)
-ENABLE_RESEARCH=true npm run test:run  # Include research features
-
-# Debugging
-npm run test -- --reporter=verbose
-npm run test -- --grep="pattern"
-npm run test -- filename.test.ts
-DEBUG_TESTS=true npm run test
+npm run test:production     # Production features only
+npm run test:beta           # Include beta features
 ```
 
-### Test Configuration
-
-**Vitest Configuration** (`vitest.config.ts`):
-
-```typescript
-export default defineConfig({
-  test: {
-    environment: 'jsdom',
-    setupFiles: [
-      'tests/config/setup.ts',
-      'tests/config/test-monitoring.ts'
-    ],
-
-    // Parallelism for fast execution
-    pool: 'forks',
-    poolOptions: {
-      forks: {
-        maxForks: 4  // 4 parallel processes
-      }
-    },
-
-    // Coverage thresholds (honest measurement)
-    coverage: {
-      provider: 'v8',
-      thresholds: {
-        global: {
-          branches: 20,
-          functions: 20,
-          lines: 20,
-          statements: 20
-        },
-        // Higher for critical paths
-        'src/lib/core/auth/': { branches: 40, functions: 40 },
-        'src/routes/api/': { branches: 30, functions: 30 }
-      }
-    }
-  }
-});
-```
-
-**Playwright Configuration** (`playwright.config.ts`):
-
-```typescript
-export default defineConfig({
-  testDir: 'tests/e2e',
-  fullyParallel: true,
-  retries: process.env.CI ? 2 : 0,
-
-  // Cross-browser testing
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } }
-  ],
-
-  // Auto-start preview server
-  webServer: {
-    command: 'npm run build && npm run preview',
-    port: 4173
-  }
-});
-```
-
-### Test Fixtures & Mocks
-
-**Type-Safe Factories** (`tests/fixtures/factories.ts`):
-
-```typescript
-// User factory
-const user = userFactory.build({
-  overrides: { state: 'CA', city: 'San Francisco' }
-});
-
-// Template factory
-const template = templateFactory.build({
-  overrides: { deliveryMethod: 'cwc', category: 'Environment' }
-});
-
-// Predefined scenarios
-const californiaUser = testScenarios.californiaUser();
-const climateTemplate = testScenarios.climateTemplate();
-```
-
-**Mock Patterns** (see `tests/README.md` for comprehensive guide):
+### Mock Patterns
 
 ```typescript
 // OAuth mock
@@ -434,186 +215,66 @@ vi.mock('arctic', () => ({
   }))
 }));
 
-// Database mock (use vi.hoisted for proper isolation)
-const mockDb = vi.hoisted(() => ({
-  user: {
-    findUnique: vi.fn(),
-    create: vi.fn()
-  }
+// Convex client mock (use vi.hoisted for proper isolation)
+const mockConvex = vi.hoisted(() => ({
+  query: vi.fn(),
+  mutation: vi.fn()
 }));
 ```
 
 ### Critical Testing Requirements
 
-**⚠️ Address Verification Flow (Mission-Critical)**
+**Address Verification Flow (Mission-Critical)**
 
-**Before ANY address-related changes, these tests MUST pass:**
+Before any address-related changes, these tests must pass:
 
 ```bash
-npm run test:integration -- address-verification-api
-npm run test:integration -- address-save-api
+npm run test:integration -- address-verification-e2e
 ```
 
-**Why**: We previously shipped 5 data integrity bugs because tests checked wrong field names.
+Tests must verify:
+- Exact field names (camelCase: `bioguideId`, `officeCode`, `congressionalDistrict`)
+- All required fields populated
+- Data pipeline contracts (verify → save → Convex)
+- Representative storage with real bioguide IDs
 
-**Tests MUST verify:**
-- ✅ Exact field names (snake_case: `bioguide_id`, not `bioguideId`)
-- ✅ All required fields present (`office_code`, `state`, `congressional_district`)
-- ✅ Data pipeline contracts (verify → save → database)
-- ✅ Representative storage with real bioguide IDs
-
-See `docs/development/testing.md` for test strategy and requirements.
+See `docs/development/testing.md` for details.
 
 ---
 
-## Database Seeding
+## Seeding
 
-### Seed Script
+Seeding runs against your Convex dev instance via `convex/seed.ts`.
 
-**Command:**
-
-```bash
-npm run db:seed
-```
-
-**What Gets Seeded:**
-
-1. **Users (12 total)**
-   - Mix of verified (70%) and unverified (30%)
-   - Geographic diversity: CA, WA, NY, TX, FL, OR, DC
-   - VOTER Protocol data: trust scores, reputation tiers, token earnings
-   - Real addresses with congressional districts
-
-2. **Templates (15 total)**
-   - Federal templates (8): Climate, healthcare, education, housing
-   - Municipal templates (7): SF-specific issues
-   - All verification states: approved, pending, reviewing, rejected
-   - Agent consensus scores and quality metrics
-
-3. **Congressional Representatives (4 total)**
-   - Active and historical representatives
-   - Office addresses and contact information
-   - Bioguide IDs for CWC integration
-
-4. **User-Representative Relationships**
-   - Links users to their congressional representatives
-   - Based on congressional district matching
-
-### Seed Data Structure
-
-**Users** (`scripts/seed-database.ts` line 1336-1923):
-
-```typescript
-{
-  email: 'sarah.teacher@gmail.com',
-  name: 'Sarah Martinez',
-
-  // Address
-  street: '1847 Fillmore St',
-  city: 'San Francisco',
-  state: 'CA',
-  congressional_district: 'CA-11',
-
-  // Verification
-  is_verified: true,
-  verification_method: 'didit_zk',
-
-  // VOTER Protocol
-  wallet_address: '0x1234...',
-  trust_score: 85,
-  reputation_tier: 'established',
-  total_earned: '15750000000000000000',  // 15.75 VOTER tokens
-
-  // Profile
-  role: 'teacher',
-  organization: 'San Francisco Unified School District'
-}
-```
-
-**Templates** (`scripts/seed-database.ts` line 82-1332):
-
-```typescript
-{
-  title: "The Math Doesn't Work: Climate Edition",
-  slug: 'the-math-doesnt-work-climate-edition',
-
-  // Content
-  message_body: 'Dear [Representative Name]...',
-  category: 'Environment',
-  deliveryMethod: 'cwc',
-
-  // Metrics
-  metrics: {
-    sent: 8234,
-    districts_covered: 417
-  },
-
-  // Verification
-  verification_status: 'approved',
-  quality_score: 92,
-  agent_votes: {
-    openai: { score: 0.94, reasoning: '...' },
-    gemini: { score: 0.89, reasoning: '...' }
-  }
-}
-```
-
-### Seed Output
-
-**After seeding, you'll see:**
-
-```
-👥 User Summary:
-================
-Verified Users: 8/12
-  • trusted: 3 users
-  • established: 3 users
-  • emerging: 2 users
-  • novice: 4 users
-Average Trust Score: 65
-Total VOTER Tokens Earned: 156.80 VOTER
-
-🌐 Available Templates:
-=====================
-📍 https://commons.email/the-math-doesnt-work-climate-edition
-   "The Math Doesn't Work: Climate Edition" (Environment → federal)
-   Created by: Sarah Martinez (established)
-
-📍 https://commons.email/housing-2400-rent-400k-starter-home
-   "Housing: $2,400 Rent, $400k Starter Home" (Housing → federal)
-   Created by: Anna Rodriguez (trusted)
-```
-
-### Custom Seeding
-
-**Modify seed data** in `scripts/seed-database.ts`:
-
-```typescript
-// Add new user
-const seedUserData = [
-  // ... existing users
-  {
-    email: 'new.user@example.com',
-    name: 'New User',
-    // ... other fields
-  }
-];
-
-// Add new template
-const seedTemplates = [
-  // ... existing templates
-  {
-    title: 'New Template',
-    // ... other fields
-  }
-];
-```
-
-**Run seed:**
+### Primary Seed
 
 ```bash
-npm run db:seed
+npm run seed    # Invokes `npx convex run seed:seedAll`
 ```
+
+This loads fixture users, templates, representatives, and debates. Idempotent — safe to re-run. Reads from `convex/seedData.ts`.
+
+### Agent-Powered Seed
+
+```bash
+npm run seed:agents
+```
+
+Regenerates `convex/seedData.ts` by running the full research + message agent pipeline. Requires `GEMINI_API_KEY`, `EXA_API_KEY`, `GROQ_API_KEY`.
+
+### Org Templates
+
+```bash
+npm run seed:org    # Invokes scripts/seed-org-templates.ts
+```
+
+### Policy Vibes
+
+```bash
+npx tsx scripts/seed-vibes.ts
+```
+
+See [seeding.md](seeding.md) for data structure and fixture details.
 
 ---
 
@@ -621,88 +282,40 @@ npm run db:seed
 
 ### Feature Flag System
 
-Commons uses environment-based feature flags to control access to:
+Commons uses the `FEATURES` object in `src/lib/config/features.ts` for boolean toggles on UI + backend features.
 
-- **Beta features** (`src/lib/features/`): AI suggestions, template intelligence
-- **Research features** (`src/lib/experimental/`): Cascade analytics, experimental UIs
+**Committed flags** (see memory index): `CONGRESSIONAL`, `WALLET`, `STANCE_POSITIONS`, `PUBLIC_API`, `ADDRESS_SPECIFICITY`, `ANALYTICS_EXPANDED`, `AB_TESTING`, `EVENTS`, `FUNDRAISING`, `AUTOMATION`, `SMS`, `NETWORKS`, `LEGISLATION`, `ACCOUNTABILITY`, `SHADOW_ATLAS_VERIFICATION`, `DEBATE`, `DELEGATION`.
 
-### Configuration
+**Defaults (2026-04-23):** `CONGRESSIONAL=false`, `DEBATE=true`, `PASSKEY=false`, `DELEGATION=false`, `ENGAGEMENT_METRICS=false`.
 
-**Environment Variables:**
+**Environment-layered flags** (for research features):
 
 ```bash
-# Enable beta features
-ENABLE_BETA=true
-
-# Enable research features (development only)
-ENABLE_RESEARCH=true
-
-# Node environment (affects OAuth, logging, etc.)
+ENABLE_BETA=true        # AI suggestions, template intelligence
+ENABLE_RESEARCH=true    # Cascade analytics, experimental UIs (dev-only)
 NODE_ENV=production
 ```
 
 ### Checking Feature Status
 
-**In Code:**
-
 ```typescript
-import { isFeatureEnabled } from '$lib/features/config';
+import { FEATURES } from '$lib/config/features';
 
-if (isFeatureEnabled('CASCADE_ANALYTICS')) {
-  // Show cascade analytics UI
-}
-
-if (isFeatureEnabled('AI_SUGGESTIONS')) {
-  // Enable AI-powered template suggestions
-}
-```
-
-**Feature Flag Helper:**
-
-```typescript
-// src/lib/features/config.ts
-export function isFeatureEnabled(feature: string): boolean {
-  const flags = {
-    CASCADE_ANALYTICS: process.env.ENABLE_RESEARCH === 'true',
-    AI_SUGGESTIONS: process.env.ENABLE_BETA === 'true',
-    TEMPLATE_INTELLIGENCE: process.env.ENABLE_BETA === 'true'
-  };
-
-  return flags[feature] || false;
+if (FEATURES.DEBATE) {
+  // Show debate UI
 }
 ```
 
 ### Development Workflows
 
-**Standard Development:**
-
 ```bash
-npm run dev
-```
+npm run dev                              # Standard
+ENABLE_BETA=true npm run dev             # With beta features
+ENABLE_RESEARCH=true npm run dev         # With research features
 
-**With Beta Features:**
-
-```bash
-ENABLE_BETA=true npm run dev
-```
-
-**With Research Features:**
-
-```bash
-ENABLE_RESEARCH=true npm run dev
-```
-
-**Testing with Feature Flags:**
-
-```bash
-# Production features only
-npm run test:production
-
-# Include beta features
-npm run test:beta
-
-# Include research features
-ENABLE_RESEARCH=true npm run test:run
+npm run test:production                  # Production features only
+npm run test:beta                        # Include beta features
+ENABLE_RESEARCH=true npm run test:run    # Include research features
 ```
 
 ---
@@ -711,121 +324,56 @@ ENABLE_RESEARCH=true npm run test:run
 
 ### Build Process
 
-**Production Build:**
-
 ```bash
-npm run build
-```
-
-**Build Output:**
-
-- Optimized SvelteKit build in `/build`
-- Server-side rendering enabled
-- Asset fingerprinting for caching
-- Code splitting for performance
-
-**Preview Production Build:**
-
-```bash
-npm run preview
+npm run build      # Production build
+npm run preview    # Preview
 ```
 
 ### Pre-Deployment Checklist
 
-**⚠️ MANDATORY - ALL commands must pass with 0 errors:**
+All must pass:
 
 ```bash
-# 1. Format code
 npm run format
-
-# 2. Lint (zero tolerance)
 npm run lint --max-warnings 0
-
-# 3. Type check
 npm run check
-
-# 4. Production build
 npm run build
-
-# 5. Test suite
 npm run test:run
 ```
 
-**If ANY command fails, you CANNOT deploy. Fix the issues first.**
+### Production Environment
 
-### Environment Configuration (Production)
+**Required Variables:** `PUBLIC_CONVEX_URL`, `CONVEX_DEPLOY_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `CWC_API_KEY` (if CWC enabled), security salts (`IDENTITY_HASH_SALT`, `IP_HASH_SALT`), auth secrets (`JWT_SECRET`), OAuth credentials. See [production-secrets-checklist.md](production-secrets-checklist.md).
 
-**Required Variables:**
+### Deploy Workflow
 
-```bash
-NODE_ENV=production
-DATABASE_URL=postgresql://...
-CWC_API_KEY=...
-OAUTH_REDIRECT_BASE_URL=https://commons.email
-
-# OAuth providers
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-# ... other OAuth providers
-```
-
-**Security Requirements:**
-
-- ✅ All OAuth redirects must use HTTPS in production
-- ✅ Session secrets must be cryptographically random (32+ bytes)
-- ✅ Database credentials must use SSL/TLS
-- ✅ API keys must be stored securely (never in code)
-
-### Deployment Platforms
-
-**Production runs on Cloudflare Workers** (Pages) via `@sveltejs/adapter-cloudflare`.
-
-```javascript
-import adapterCloudflare from '@sveltejs/adapter-cloudflare';
-
-export default {
-  kit: {
-    adapter: adapterCloudflare()
-  }
-};
-```
-
-Build and deploy:
-```bash
-npm run build && npx wrangler pages deploy .svelte-kit/cloudflare --project-name commons
-```
-
-### Database Migrations (Production)
-
-**⚠️ NEVER use `db:push` in production**
-
-**Proper Migration Workflow:**
+**Backend (Convex):**
 
 ```bash
-# 1. Create migration (local)
-npm run db:migrate
-
-# 2. Review migration file
-cat prisma/migrations/[timestamp]_[name]/migration.sql
-
-# 3. Test migration on staging database
-DATABASE_URL=<staging> npx prisma migrate deploy
-
-# 4. Deploy migration to production
-DATABASE_URL=<production> npx prisma migrate deploy
+npx convex deploy --env-file .env.production
 ```
 
-**Migration Best Practices:**
+Note: `npx convex deploy -y` silently no-ops against prod. Always pass `--env-file`.
 
-- ✅ Always create migrations locally first
-- ✅ Test migrations on staging before production
-- ✅ Never edit migration files after creation
-- ✅ Use transactions for complex migrations
-- ✅ Have rollback plan for each migration
+**Frontend (Cloudflare Pages):**
 
-### CI/CD Integration
+```bash
+npm run build
+npx wrangler pages deploy .svelte-kit/cloudflare \
+  --project-name commons --branch production
+```
 
-**GitHub Actions Example:**
+### Schema Changes in Production
+
+Schema is code-driven via `convex/schema.ts`. Edit the file, commit, then:
+
+```bash
+npx convex deploy --env-file .env.production
+```
+
+Convex validates the diff against existing data and applies it. No migration files, no `db:push`.
+
+### CI/CD
 
 ```yaml
 name: CI/CD
@@ -843,7 +391,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
         with:
-          node-version: 20
+          node-version: 24.15.0
 
       - run: npm ci
       - run: npm run format -- --check
@@ -859,137 +407,63 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - run: npm ci
+      - run: npx convex deploy --env-file .env.production
       - run: npm run build
-      # Deploy to your platform
+      - run: npx wrangler pages deploy .svelte-kit/cloudflare --project-name commons --branch production
 ```
-
-### Monitoring & Logging
-
-**Production Logging:**
-
-```typescript
-// Use structured logging in production
-if (process.env.NODE_ENV === 'production') {
-  console.log(JSON.stringify({
-    level: 'info',
-    message: 'User authenticated',
-    userId: user.id,
-    timestamp: new Date().toISOString()
-  }));
-}
-```
-
-**Error Tracking:**
-
-- Sanitize error messages (no sensitive data)
-- Log to external service (Sentry, LogRocket, etc.)
-- Include request context (route, user agent, timestamp)
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
+### Convex Connection Errors
 
-#### Database Connection Errors
-
-**Symptom:**
-
-```
-Error: P1001: Can't reach database server at `<host>`
-```
+**Symptom:** `ConvexError` or "function not found" at runtime
 
 **Solutions:**
 
 ```bash
-# Check DATABASE_URL format
-echo $DATABASE_URL
+# Ensure `npx convex dev` is running and deployed successfully
+# Check PUBLIC_CONVEX_URL matches your deployment
+echo $PUBLIC_CONVEX_URL
 
-# Test connection
-npx prisma db pull
-
-# Verify database is running (docker compose up -d)
+# Re-deploy functions
+npx convex dev
 ```
 
-#### Test Failures
+### Test Failures
 
-**Symptom:**
-
-```
-Error: Cannot read properties of undefined (reading 'mockResolvedValue')
-```
+**Symptom:** `Cannot read properties of undefined (reading 'mockResolvedValue')`
 
 **Solutions:**
 
 ```bash
-# Clear test cache
 npx vitest --clearCache
-
-# Reset mocks
 # Ensure vi.clearAllMocks() in afterEach()
-
 # Check mock setup order (use vi.hoisted)
 ```
 
-#### Build Failures
-
-**Symptom:**
-
-```
-Error: Cannot find module '@sveltejs/kit'
-```
-
-**Solutions:**
+### Build Failures
 
 ```bash
-# Reinstall dependencies
 rm -rf node_modules package-lock.json
 npm install
-
-# Regenerate Prisma client
-npm run db:generate
-
-# Sync SvelteKit types
 npx svelte-kit sync
 ```
 
-#### OAuth Errors in Development
+### OAuth Errors in Development
 
-**Symptom:**
-
-```
-Error: redirect_uri_mismatch
-```
+**Symptom:** `redirect_uri_mismatch`
 
 **Solutions:**
 
 ```bash
-# Verify OAUTH_REDIRECT_BASE_URL
-echo $OAUTH_REDIRECT_BASE_URL
-# Should be: http://localhost:5173
+echo $OAUTH_REDIRECT_BASE_URL    # Should be http://localhost:5173
 
-# Check OAuth provider console
-# Ensure http://localhost:5173/auth/[provider]/callback is registered
-
-# Verify NODE_ENV=development (allows HTTP)
+# In the OAuth provider console, ensure
+# http://localhost:5173/auth/<provider>/callback is registered.
+# NODE_ENV=development allows HTTP.
 ```
-
-### Getting Help
-
-**When filing issues:**
-
-1. Include full error message and stack trace
-2. Provide specific command that fails
-3. Share relevant environment information
-4. Include recent changes that might have introduced the issue
-5. Check existing issues first
-
-**Resources:**
-
-- Test Suite: `tests/README.md`
-- Database Seeding: `docs/development/seeding.md`
-- Integrations: `docs/integration.md`
-- Template System: `docs/features/templates.md`
 
 ---
 
@@ -997,10 +471,10 @@ echo $OAUTH_REDIRECT_BASE_URL
 
 - **Testing**: See `tests/README.md` for comprehensive test suite documentation
 - **Frontend**: See `docs/frontend.md` for SvelteKit 5 patterns
-- **Templates**: See `docs/features/templates.md` for variable system and moderation
+- **Templates**: See `docs/features/templates.md` for the variable system and moderation
 - **Integrations**: See `docs/integration.md` for CWC, OAuth, TEE setup
-- **Deployment**: See `docs/development/deployment.md` for Cloudflare Workers deployment
+- **Deployment**: See [deployment.md](deployment.md) for Cloudflare Pages + Convex deploy
 
 ---
 
-*Commons | Development Guide | 2026-03*
+*Commons | Development Guide*

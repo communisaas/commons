@@ -93,7 +93,7 @@ Verified actions are the primary metered unit. Email is secondary.
 | Component | Service | Monthly |
 |---|---|---|
 | Application | Cloudflare Pages | $200 |
-| Database | Neon Postgres (+ pgvector) | $300 |
+| Database | Convex (managed) | $300 |
 | Email delivery | Amazon SES | $3,000 |
 | Queue | Upstash Redis | $100 |
 | Storage | Cloudflare R2 | $50 |

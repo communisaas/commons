@@ -1,40 +1,19 @@
 # Analytics System
 
-**Status**: ✅ Privacy-Preserving Aggregation-Only
+**Status**: Privacy-Preserving Aggregation-Only
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** DP architecture, privacy
-> parameters, and the single `analytics` table with `recordType`
-> discriminator are all accurate. Concrete route/file claims that
-> diverge:
->
-> - **`/api/analytics/aggregate` and `/api/analytics/health` do not
->   exist.** Querying is Convex-only; see `convex/analytics.ts`. The
->   only SvelteKit route is `POST /api/analytics/increment`.
-> - **`/api/cron/analytics-snapshot` is not a SvelteKit route.** It's
->   now a Convex cron (`convex/crons.ts:~90`, daily 00:05 UTC, calling
->   `internal.analytics.materializeSnapshot`).
-> - **`src/lib/core/analytics/aggregate.ts` does not exist.**
->   `index.ts:148` re-exports from `'./aggregate'` as dead code; the
->   named symbols (`queryAggregates`, `getHealthMetrics`,
->   `incrementAggregate`, `checkContributionLimit`, etc.) have no live
->   callers.
-> - **Code snippets using Prisma** (e.g. `db.analytics_aggregate.findMany`)
->   describe the removed ORM. Access is Convex
->   `ctx.db.query(...).withIndex(...).collect(...)`.
-> - **Correct as-is:** `SERVER_EPSILON=1.0`, `CLIENT_EPSILON=2.0`,
->   `MAX_DAILY_EPSILON=10.0`, `USE_SNAPSHOT_ONLY`,
->   `FEATURES.ANALYTICS_EXPANDED=true`.
+Commons uses differential privacy for analytics. No events, no sessions, no user tracking. Data lives in the single `analytics` table on Convex (`convex/schema.ts`) discriminated by `recordType`. Querying and snapshot materialization are Convex-only.
+
+**Privacy parameters (live):** `SERVER_EPSILON=1.0`, `CLIENT_EPSILON=2.0`, `MAX_DAILY_EPSILON=10.0`, `USE_SNAPSHOT_ONLY`, `FEATURES.ANALYTICS_EXPANDED=true`.
 
 ---
 
 ## Architecture
 
-Commons uses differential privacy for analytics. No events, no sessions, no user tracking.
-
 ```
-User Action → increment(metric, dims) → k-ary RR (ε=2.0) → Server → Aggregate DB
+User Action → increment(metric, dims) → k-ary RR (ε=2.0) → Server → Convex analytics
                                                                         ↓
-                                                              Cron (daily) → Noisy Snapshot
+                                                              Convex cron (daily) → Noisy Snapshot
                                                                         ↓
                                                               Query → Cached Noisy Data
 ```
@@ -63,14 +42,14 @@ analytics.increment('delivery_success', {
 });
 ```
 
-## API Endpoints
+## API & Internal Functions
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
+| Entry point | Method | Purpose |
+|---|---|---|
 | `/api/analytics/increment` | POST | Receive batched increments |
-| `/api/analytics/aggregate` | GET | Query with DP noise |
-| `/api/analytics/health` | GET | Platform metrics |
-| `/api/cron/analytics-snapshot` | GET | Daily snapshot materialization |
+| `convex/analytics.ts:queryAggregates` | Convex query | Query with DP noise |
+| `convex/analytics.ts:getHealthMetrics` | Convex query | Platform metrics |
+| `internal.analytics.materializeSnapshot` | Convex cron (daily 00:05 UTC) | Snapshot materialization, invoked from `convex/crons.ts` |
 
 ## What We Track
 

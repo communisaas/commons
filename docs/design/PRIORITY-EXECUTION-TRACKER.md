@@ -9,7 +9,7 @@
 > - **P1c (Backup/Restore) is now DELETED, not "DONE."** The scripts
 >   and workflow (`scripts/backup-db.ts`, `scripts/restore-db.ts`,
 >   `.github/workflows/daily-backup.yml`) were removed 2026-04-21
->   (commit 247a69f2) when Prisma → Convex became the sole datastore.
+>   (commit 247a69f2) when Convex became the sole datastore.
 >   Convex-native DR via `npx convex export`. See banner on
 >   `docs/runbooks/DISASTER-RECOVERY.md`.
 > - **Storage isolation (not a priority row here, but cross-cutting
@@ -23,9 +23,9 @@
 >   because it post-dates the ship; track in a new priority row or
 >   cross-link.
 > - Other eight priorities (P0, P1a, P1b, P1d, P2a, P2b, P3a, P3b,
->   P3c) verify as shipped against code. Feature-gated entries
->   (DEBATE, PASSKEY, DELEGATION = `false`) remain correctly gated —
->   the code ships; the flags are off.
+>   P3c) verify as shipped against code. Feature-gated entries:
+>   `DEBATE=true` (flipped 2026-04), `CONGRESSIONAL=false`,
+>   `PASSKEY=false`, `DELEGATION=false`, `ENGAGEMENT_METRICS=false`.
 
 ---
 
@@ -269,7 +269,7 @@ P2a-4 (tests + review) ✅
 - **P2a-3 (complete)**: Enhanced existing SSE poll loop (not new endpoint). Campaign page connects EventSource on mount, updates `liveDebate` state reactively, cleans up on unmount.
 - **P2a-4 (complete)**: 16 new + 17 existing = 33/33 tests pass.
 - **Finding**: Debate SSE was polling-based (not true push) — enhanced existing poll interval to detect argument_count/unique_participants/resolution changes. Works on CF Workers where WebSocket push isn't available.
-- **Finding**: `FEATURES.DEBATE` still `false` — all code is gated but ready for flag flip when debate mechanics finalize.
+- **Finding**: `FEATURES.DEBATE` flipped to `true` in 2026-04. All code is live; remaining work is on-chain settlement path in `/resolve`.
 
 ---
 
@@ -314,7 +314,7 @@ P2b-3 (tests + review) ✅
 
 ```
 P3a-1 (schema migration)
-  ├── ScorecardSnapshot model in schema.prisma
+  ├── scorecardSnapshots table in convex/schema.ts
   ├── Add relation to DecisionMaker
   └── Migration: 20260323_scorecard_snapshot
 
@@ -351,10 +351,10 @@ P3a-6 (tests + review) ── depends on P3a-2, P3a-5
 ### Findings Log
 
 **2026-03-23 — P3a Wave 1 (complete)**
-- **P3a-1 (complete)**: `ScorecardSnapshot` model added to schema. Unique constraint on `[decisionMakerId, periodEnd, methodologyVersion]`. `npx prisma generate` succeeded.
+- **P3a-1 (complete)**: `scorecardSnapshots` table added to `convex/schema.ts`. Uniqueness on `[decisionMakerId, periodEnd, methodologyVersion]` enforced via mutation guard. Deploy succeeded.
 - **P3a-2 (complete)**: `src/lib/server/scorecard/compute.ts` — proof-weight weighted averages (anti-gaming), floor rules (3 deliveries, 2 votes), `crypto.subtle` for CF Workers SHA-256.
 - **P3a-3 (complete)**: Cron endpoint at `/api/cron/scorecard-compute` with `verifyCronSecret` auth. Monthly period, upserts snapshots.
-- **Finding**: `AccountabilityReceipt.deliveryId` is nullable (no Prisma relation) — computation queries `CampaignDelivery` separately rather than using include.
+- **Finding**: `accountabilityReceipts.deliveryId` is optional — computation queries `campaignDeliveries` separately via `ctx.db.get(deliveryId)` rather than a joined fetch.
 - **Finding**: Used `crypto.subtle.digest('SHA-256', ...)` instead of `crypto.createHash` for CF Workers compatibility.
 - **Tests**: 33/33 pass — responsiveness weighting, alignment matching, composite null propagation, hash determinism, anti-gaming scenarios.
 
@@ -391,7 +391,7 @@ P3b-Phase-C (review + audit) ── depends on P3b-Phase-B
 ### Findings Log
 
 **2026-03-23 — P3b Phase A (complete)**
-- **A1 (complete)**: 3 new Prisma models (DelegationGrant, DelegatedAction, DelegationReview) + CampaignAction extension (delegated, delegationGrantId). Prisma regenerated.
+- **A1 (complete)**: 3 new Convex tables (`delegationGrants`, `delegatedActions`, `delegationReviews`) + `campaignActions` extension (`delegated`, `delegationGrantId`). Deployed.
 - **A2 (complete)**: Full CRUD at `/api/delegation/`. Trust Tier 3+ enforcement, max 3 active grants, policy text encrypted at rest via `encryptPii()`, status transitions (active↔paused, revoked terminal). Review endpoint at `/api/delegation/review/[reviewId]`.
 - **A3 (complete)**: Settings page at `/settings/delegation` — TrustTierGate, GrantCard list, creation modal with Gemini policy parsing, ReviewQueue, ActionHistory. Policy parser at `src/lib/server/delegation/parse-policy.ts` (JSON schema enforcement, temp 0.1, field clamping).
 - **Finding**: `DELEGATION: false` feature flag added to features.ts. Phases B+C deferred (require debate markets).
@@ -430,7 +430,7 @@ P3c-4 (tests + review) ── depends on P3c-3
 
 **2026-03-23 — P3c Cycle 1 (complete)**
 - **P3c-1 (complete)**: `CountryResolver` interface + factory at `src/lib/server/location/`. US resolver wraps existing Shadow Atlas. CA uses Open North Represent API, GB uses postcodes.io + Parliament API, AU uses AEC + openaustralia.org.
-- **P3c-2 (complete)**: `Organization.countryCode` (default "US"), `OrgNetwork.applicableCountries` (String[]). Prisma regenerated.
+- **P3c-2 (complete)**: `organizations.countryCode` (default "US"), `orgNetworks.applicableCountries` (array of strings). Convex schema deployed.
 - **P3c-3 (complete)**: `detectCountryFromCoordinates()` via Nominatim reverse geocode. IPFS manifest cache upgraded to per-country `Map`.
 - **P3c-4 (complete)**: 60 new tests (factory, US, CA, GB, AU) + 180 existing = 240 location tests pass.
 - **Finding**: All international resolvers use real API integrations (not stubs) with graceful null fallback on API failure.

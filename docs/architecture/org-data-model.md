@@ -5,9 +5,9 @@
 > **Constraint:** Must compose with graduated trust, privacy-preserving identity, and the existing User / Template / ResolvedContact models without violating any cypherpunk invariant.
 >
 > **⚠️ Known divergences from implementation (verified against `main`, 2026-04-23):**
-> - **Stack:** Commons is now Convex-only. `prisma/` has been removed from the repo. Schema snippets below written in Prisma DSL are pseudocode; the canonical schema lives in `convex/schema.ts`.
+> - **Stack:** Canonical schema is `convex/schema.ts`. Schema snippets below are illustrative.
 > - **Plan enum:** The canonical plans are `free | starter | organization | coalition` (`src/lib/server/billing/plans.ts`, mirrored in `convex/subscriptions.ts`). Older snippets using `pro | org` are stale — `pro` was replaced by `free` (individuals free forever) plus the three paid tiers.
-> - **Naming:** Convex uses camelCase (`planDescription`, `priceCents`, `currentPeriodStart`, `currentPeriodEnd`, `pastDueSince`). Prisma-style snake_case field names in this doc should be read as pseudocode.
+> - **Naming:** Convex uses camelCase (`planDescription`, `priceCents`, `currentPeriodStart`, `currentPeriodEnd`, `pastDueSince`).
 > - **Subscription shape:** `pastDueSince` (number | undefined) is the grace-period field used by the 7-day past_due window; older text that does not mention it predates the grace period implementation.
 > - **`User.memberships` / `User.subscription`:** These are *query patterns*, not denormalized relations on the `users` table. Use `orgMemberships.by_userId` / `subscriptions.by_userId` indexes to materialize them.
 
@@ -70,151 +70,130 @@ No "viewer" role. If you're in the org, you can use it. No "admin" vs "super-adm
 
 ### Organization
 
-```prisma
-model Organization {
-  id          String   @id @default(cuid())
-  name        String
-  slug        String   @unique                    // URL-safe identifier
-  description String?
-  avatar      String?
+```ts
+// convex/schema.ts
+organizations: defineTable({
+  name: v.string(),
+  slug: v.string(),           // unique, URL-safe
+  description: v.optional(v.string()),
+  avatar: v.optional(v.string()),
 
   // === BILLING ===
-  billing_email      String?  @map("billing_email")
-  stripe_customer_id String?  @unique @map("stripe_customer_id") // For Stripe-managed invoicing
+  billingEmail: v.optional(v.string()),
+  stripeCustomerId: v.optional(v.string()),   // unique; Stripe-managed invoicing
 
   // === LIMITS (set per-customer during pricing conversation) ===
-  max_seats           Int     @default(5)  @map("max_seats")
-  max_templates_month Int     @default(100) @map("max_templates_month")
-  dm_cache_ttl_days   Int     @default(30)  @map("dm_cache_ttl_days")
+  maxSeats: v.number(),                // default 5
+  maxTemplatesMonth: v.number(),       // default 100
+  dmCacheTtlDays: v.number(),          // default 30
 
   // === IDENTITY ===
   // Org-level identity commitment for on-chain attestation.
   // NOT derived from any member's identity — independently generated.
   // Used when org publishes position registrations or debate stances.
-  identity_commitment String? @unique @map("identity_commitment")
+  identityCommitment: v.optional(v.string()), // unique
 
   // === WALLET (optional, for on-chain org actions) ===
-  wallet_address      String? @unique @map("wallet_address")
-  wallet_type         String? @map("wallet_type")  // 'evm' | 'near'
-
-  // === TIMESTAMPS ===
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  // === RELATIONS ===
-  memberships       OrgMembership[]
-  templates         Template[]        @relation("OrgTemplates")
-  resolved_contacts OrgResolvedContact[]
-  invites           OrgInvite[]
-  subscription      Subscription?
-
-  @@map("organization")
-}
+  walletAddress: v.optional(v.string()),      // unique
+  walletType: v.optional(v.string()),         // 'evm' | 'near'
+})
+  .index("by_slug", ["slug"])
+  .index("by_stripe_customer_id", ["stripeCustomerId"])
+  .index("by_identity_commitment", ["identityCommitment"])
+  .index("by_wallet_address", ["walletAddress"])
+// Relations (memberships, templates, resolvedContacts, invites, subscription)
+// are modeled as separate tables indexed by `orgId`.
 ```
 
 ### OrgMembership
 
 The join table between users and orgs. A user can belong to multiple orgs. An org can have multiple users. Neither owns the other.
 
-```prisma
-model OrgMembership {
-  id     String @id @default(cuid())
-  userId String @map("user_id")
-  orgId  String @map("org_id")
-
-  role      String   @default("member")  // 'owner' | 'editor' | 'member'
-  joinedAt  DateTime @default(now()) @map("joined_at")
-  invitedBy String?  @map("invited_by")  // userId of who invited them
-
-  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, orgId])
-  @@index([orgId])
-  @@map("org_membership")
-}
+```ts
+// convex/schema.ts
+orgMemberships: defineTable({
+  userId: v.id("users"),
+  orgId: v.id("organizations"),
+  role: v.string(),                    // 'owner' | 'editor' | 'member'
+  joinedAt: v.number(),
+  invitedBy: v.optional(v.id("users")),
+})
+  .index("by_userId", ["userId"])
+  .index("by_orgId", ["orgId"])
+  .index("by_user_org", ["userId", "orgId"])  // uniqueness enforced in mutation
 ```
 
 ### OrgInvite
 
 Invites are email-based, token-authenticated, and expire. No invite link that lives forever.
 
-```prisma
-model OrgInvite {
-  id    String @id @default(cuid())
-  orgId String @map("org_id")
-
-  email     String
-  role      String   @default("member")  // Role the invitee will receive
-  token     String   @unique             // SHA-256 random, used in invite URL
-  expiresAt DateTime @map("expires_at")  // 7-day default
-  accepted  Boolean  @default(false)
-  invitedBy String   @map("invited_by")  // userId of inviter
-
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-
-  @@index([orgId])
-  @@index([email])
-  @@map("org_invite")
-}
+```ts
+// convex/schema.ts
+orgInvites: defineTable({
+  orgId: v.id("organizations"),
+  email: v.string(),
+  role: v.string(),                    // role the invitee will receive
+  token: v.string(),                   // unique; SHA-256 random used in invite URL
+  expiresAt: v.number(),               // 7-day default
+  accepted: v.boolean(),               // default false
+  invitedBy: v.id("users"),
+})
+  .index("by_orgId", ["orgId"])
+  .index("by_email", ["email"])
+  .index("by_token", ["token"])
 ```
 
 ### OrgResolvedContact
 
-Org-scoped decision-maker cache. Same structure as the global `ResolvedContact`, but scoped to the org with a longer TTL. When a member triggers DM discovery, the result is written to both the global cache (14-day TTL, benefits everyone) and the org cache (configurable TTL, benefits the org).
+Org-scoped decision-maker cache. Same structure as the global `resolvedContacts` table, but scoped to the org with a longer TTL. When a member triggers DM discovery, the result is written to both the global cache (14-day TTL, benefits everyone) and the org cache (configurable TTL, benefits the org).
 
-```prisma
-model OrgResolvedContact {
-  id    String @id @default(cuid())
-  orgId String @map("org_id")
+```ts
+// convex/schema.ts
+orgResolvedContacts: defineTable({
+  orgId: v.id("organizations"),
+  orgKey: v.string(),                  // normalized org name + title
+  name: v.string(),
+  title: v.string(),
+  email: v.string(),
+  emailSource: v.optional(v.string()),
 
-  orgKey      String @map("org_key")     // Normalized org name + title
-  name        String
-  title       String
-  email       String
-  emailSource String? @map("email_source")
-
-  resolvedAt DateTime @default(now()) @map("resolved_at")
-  expiresAt  DateTime @map("expires_at")  // org.dm_cache_ttl_days from resolvedAt
-  resolvedBy String?  @map("resolved_by") // userId who triggered discovery
-
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-
-  @@unique([orgId, orgKey, title])
-  @@index([orgId])
-  @@index([expiresAt])
-  @@map("org_resolved_contact")
-}
+  resolvedAt: v.number(),
+  expiresAt: v.number(),               // organizations.dmCacheTtlDays from resolvedAt
+  resolvedBy: v.optional(v.id("users")),
+})
+  .index("by_orgId", ["orgId"])
+  .index("by_expiresAt", ["expiresAt"])
+  .index("by_org_key_title", ["orgId", "orgKey", "title"])  // uniqueness in mutation
 ```
 
 ### Template extension
 
-The existing Template model gains an optional org relation. Templates can be personal (userId only), org-owned (orgId only), or both (created by a user within an org context).
+The existing `templates` table gains an optional `orgId`. Templates can be personal (userId only), org-owned (orgId only), or both (created by a user within an org context).
 
-```prisma
-// Added to existing Template model:
-model Template {
+```ts
+// convex/schema.ts — added to templates
+templates: defineTable({
   // ... existing fields ...
-
-  orgId String? @map("org_id")
-  org   Organization? @relation("OrgTemplates", fields: [orgId], references: [id])
-
-  @@index([orgId])
-}
+  orgId: v.optional(v.id("organizations")),
+})
+  .index("by_orgId", ["orgId"])
 ```
 
 ### User extension
 
-The existing User model gains a memberships relation. No other changes — the user's identity, trust tier, credentials, and wallet remain untouched.
+The `users` table needs no additional fields for org membership — `orgMemberships` and `subscriptions` are separate tables indexed by `userId`. The user's identity, trust tier, credentials, and wallet remain untouched.
 
-```prisma
-// Added to existing User model:
-model User {
-  // ... existing fields ...
+```ts
+// Query patterns, not stored relations:
+const memberships = await ctx.db
+  .query("orgMemberships")
+  .withIndex("by_userId", q => q.eq("userId", userId))
+  .collect();
 
-  memberships  OrgMembership[]
-  subscription Subscription?
-}
+const subscription = await ctx.db
+  .query("subscriptions")
+  .withIndex("by_userId", q => q.eq("userId", userId))
+  .unique();
 ```
 
 ---
@@ -309,46 +288,40 @@ For **Org (custom)**: semi-automated. The org sends the agreed amount, the syste
 
 Shared across both payment paths. Whether the money came from Stripe or on-chain, the subscription state is the same.
 
-```prisma
-model Subscription {
-  id     String  @id @default(cuid())
-
-  // Polymorphic owner: either a user (pro) or an org
-  userId String? @unique @map("user_id")
-  orgId  String? @unique @map("org_id")
+```ts
+// convex/schema.ts
+subscriptions: defineTable({
+  // Polymorphic owner: either a user or an org (one of these two is set)
+  userId: v.optional(v.id("users")),
+  orgId: v.optional(v.id("organizations")),
 
   // === PLAN ===
-  plan              String  @default("pro")        // 'pro' | 'org'
-  plan_description  String?  @map("plan_description")  // Human-readable for custom orgs
-  price_cents       Int      @map("price_cents")       // Monthly price in USD cents
+  plan: v.string(),                            // 'free' | 'starter' | 'organization' | 'coalition'
+  planDescription: v.optional(v.string()),     // human-readable for custom orgs
+  priceCents: v.number(),                      // monthly price in USD cents
 
   // === STATUS ===
-  status            String  @default("active") @map("status") // 'active' | 'past_due' | 'canceled' | 'trialing'
-  current_period_start DateTime @map("current_period_start")
-  current_period_end   DateTime @map("current_period_end")
+  status: v.string(),                          // 'active' | 'past_due' | 'canceled' | 'trialing'
+  currentPeriodStart: v.number(),
+  currentPeriodEnd: v.number(),
+  pastDueSince: v.optional(v.number()),        // grace-period anchor for 7-day past_due window
 
   // === PAYMENT METHOD ===
-  payment_method    String  @default("stripe") @map("payment_method") // 'stripe' | 'crypto'
+  paymentMethod: v.string(),                   // 'stripe' | 'crypto'
 
-  // Stripe (populated when payment_method = 'stripe')
-  stripe_subscription_id String? @unique @map("stripe_subscription_id")
+  // Stripe (populated when paymentMethod = 'stripe')
+  stripeSubscriptionId: v.optional(v.string()),
 
-  // Crypto (populated when payment_method = 'crypto')
-  paying_address    String?  @map("paying_address")      // Wallet that pays
-  payment_chain     String?  @map("payment_chain")        // 'scroll'
-  payment_token     String?  @map("payment_token")        // 'USDC'
-  last_tx_hash      String?  @map("last_tx_hash")         // Most recent payment tx
-  last_verified_at  DateTime? @map("last_verified_at")    // When we last confirmed on-chain
-
-  // === TIMESTAMPS ===
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  user User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  org  Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
-
-  @@map("subscription")
-}
+  // Crypto (populated when paymentMethod = 'crypto')
+  payingAddress: v.optional(v.string()),       // wallet that pays
+  paymentChain: v.optional(v.string()),        // 'scroll'
+  paymentToken: v.optional(v.string()),        // 'USDC'
+  lastTxHash: v.optional(v.string()),          // most recent payment tx
+  lastVerifiedAt: v.optional(v.number()),      // when we last confirmed on-chain
+})
+  .index("by_userId", ["userId"])
+  .index("by_orgId", ["orgId"])
+  .index("by_stripe_subscription_id", ["stripeSubscriptionId"])
 ```
 
 ### Privacy properties of crypto payments
