@@ -15,52 +15,65 @@ Targeted the 4 implementation verticals touched by the 3-seam resolution: verify
 
 ### P0 — Critical (6)
 
-#### F-R3-01: On-chain call inside DB transaction → split-brain + connection starvation
+#### F-R3-01: On-chain call inside backend mutation → split-brain + starvation
 
 **File**: `src/lib/server/debates/spawn.ts:84-111`
-**What**: `proposeDebate()` (which calls `tx.wait()` for block confirmation on Scroll, 3-30s) executes INSIDE the Prisma `$transaction`. Holds a PostgreSQL connection for the entire blockchain round-trip. On CF Workers with Hyperdrive (max:1 pool), one spawn blocks all DB access.
-**Impact**: (1) Connection pool exhaustion during concurrent spawns. (2) If Prisma transaction times out (5s default) but on-chain call already committed → debate exists on-chain with no off-chain record. Permanent split-brain, unrecoverable without reconciliation job. Bond money burned.
-**Solution**: Move on-chain call OUTSIDE the transaction. Pattern:
-1. Acquire a "pending" lock on the campaign (advisory lock or `debateId = 'PENDING'`)
-2. Do on-chain call in open code
-3. On success: short transaction to create Debate row + link campaign
-4. On failure: release lock
-**Pitfall**: The pending marker must be distinguishable from a real debateId. Use a separate `debateSpawnStatus` enum field rather than overloading `debateId`.
+**What**: `proposeDebate()` (which calls `tx.wait()` for block confirmation on Scroll, 3-30s) executes INSIDE a backend mutation. The mutation runs atomically — on-chain waits extend the mutation's lifetime and starve other writes against the same rows.
+**Impact**: (1) Mutation contention during concurrent spawns. (2) If the mutation times out but the on-chain call already committed → debate exists on-chain with no off-chain record. Permanent split-brain, unrecoverable without a reconciliation job. Bond money burned.
+**Solution**: Move the on-chain call OUTSIDE the mutation. Pattern:
+1. Short mutation: atomically set `debateSpawnStatus = 'pending'` on the campaign (guarded by a conditional check so two racers can't both claim pending)
+2. From an action (or the server route after the mutation returns), do the on-chain call
+3. On success: short mutation creates the `debates` row + links the campaign
+4. On failure: short mutation resets the status
+**Pitfall**: The pending marker must be distinguishable from a real debateId. Use a separate `debateSpawnStatus` literal-union field rather than overloading `debateId`.
 
 ---
 
 #### F-R3-02: Race condition — no row lock on campaign → double bond burn
 
 **File**: `src/lib/server/debates/spawn.ts:40-52`, callers at 3 sites
-**What**: `findUnique` inside the transaction reads `campaign.debateId` under `READ COMMITTED` isolation — no `FOR UPDATE` lock. Two concurrent requests both see `debateId: null`, both call `proposeDebate()` on-chain, both burn bonds. One transaction wins the `campaign.update`; the other fails, leaving an orphaned on-chain debate.
+**What**: The pre-check reads `campaign.debateId` before the mutation begins. Two concurrent requests both see `debateId: null`, both call `proposeDebate()` on-chain, both burn bonds. One mutation wins the update; the other leaves an orphaned on-chain debate.
 **Impact**: Real money lost (bond × 2). Orphaned on-chain state with no off-chain record.
-**Solution**: Replace the Prisma `findUnique` with `$queryRaw` using `SELECT ... FOR UPDATE`:
-```sql
-SELECT id, debate_enabled, debate_id, debate_threshold, template_id
-FROM campaign WHERE id = $1 FOR UPDATE
+**Solution**: Push the null-check into the mutation itself so the claim is atomic:
+```ts
+export const claimPendingSpawn = mutation({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const c = await ctx.db.get(campaignId);
+    if (!c || c.debateId || c.debateSpawnStatus === "pending") return null;
+    await ctx.db.patch(campaignId, { debateSpawnStatus: "pending" });
+    return c;
+  },
+});
 ```
-**Pitfall**: `FOR UPDATE` requires the transaction to be the first writer — if another transaction already holds the lock, this one blocks until it completes. Combined with F-R3-01 (on-chain call inside transaction), the second transaction would block for the full RPC duration. Fix F-R3-01 first to keep lock duration short.
+**Pitfall**: Combined with F-R3-01 (on-chain call inside the mutation), the second caller would have to wait for the full RPC duration. Fix F-R3-01 first so this mutation only holds the claim, not the on-chain round-trip.
 
 ---
 
 #### F-R3-03: identity-binding updateMany → silent data loss on P2002
 
 **File**: `src/lib/core/identity/identity-binding.ts:250-268`
-**What**: `updateMany({ userId: sourceUserId }, { userId: targetUserId })` hits a unique constraint when any source DM relation conflicts with a target relation. PostgreSQL aborts the ENTIRE statement — no partial update. The catch block then `deleteMany({ userId: sourceUserId })`, destroying ALL source relations including non-conflicting ones.
+**What**: A bulk reassignment of `userId` from source to target hits the `(userId, decisionMakerId)` unique index when any source DM relation collides with a target relation. The mutation aborts — no partial update. The catch block then deletes ALL source relations, destroying non-conflicting ones too.
 **Example**: Source follows DMs [X, Y, Z], target follows [X, W]. UpdateMany fails on X. DeleteMany removes X, Y, Z. Y and Z are permanently lost.
 **Impact**: Silent data loss of non-conflicting DM relations during identity merge.
-**Solution**: Replace bulk update with per-row merge:
+**Solution**: Replace bulk reassignment with a per-row merge inside one mutation:
 ```ts
-const sourceRels = await tx.userDMRelation.findMany({ where: { userId: sourceUserId } });
+const sourceRels = await ctx.db
+  .query("userDMRelations")
+  .withIndex("by_user", (q) => q.eq("userId", sourceUserId))
+  .collect();
 const targetDmIds = new Set(
-  (await tx.userDMRelation.findMany({ where: { userId: targetUserId }, select: { decisionMakerId: true } }))
-    .map(r => r.decisionMakerId)
+  (await ctx.db
+    .query("userDMRelations")
+    .withIndex("by_user", (q) => q.eq("userId", targetUserId))
+    .collect()
+  ).map((r) => r.decisionMakerId)
 );
 for (const rel of sourceRels) {
   if (targetDmIds.has(rel.decisionMakerId)) {
-    await tx.userDMRelation.delete({ where: { id: rel.id } }); // Duplicate — safe to drop
+    await ctx.db.delete(rel._id); // Duplicate — safe to drop
   } else {
-    await tx.userDMRelation.update({ where: { id: rel.id }, data: { userId: targetUserId } });
+    await ctx.db.patch(rel._id, { userId: targetUserId });
   }
 }
 ```
@@ -70,12 +83,12 @@ for (const rel of sourceRels) {
 
 #### F-R3-04: identity-binding missing Segment FK → merge always fails
 
-**File**: `prisma/schema.prisma:1508`, `identity-binding.ts:291`
-**What**: `Segment.createdBy → User.id` has no `onDelete` clause. PostgreSQL defaults to `RESTRICT`. When `tx.user.delete({ where: { id: sourceUserId } })` executes, any Segment created by the source user causes a FK violation, rolling back the entire merge transaction.
+**File**: `convex/schema.ts` (`segments.createdBy` index), `identity-binding.ts:291`
+**What**: `segments.createdBy` references `users._id`, but nothing transfers or nulls it before the merge deletes the source user. Downstream reads that assume a live `createdBy` hit `null`, and the merge mutation can't cleanly delete the source user while segments still reference it.
 **Impact**: Merge is a hard blocker for any user who created org segments. Silent failure with no recovery.
 **Solution**: Two options:
-- (A) Add `onDelete: SetNull` to `Segment.createdBy` — segments survive, creator becomes null
-- (B) Transfer segments in identity-binding: `tx.segment.updateMany({ where: { createdBy: sourceUserId }, data: { createdBy: targetUserId } })`
+- (A) Treat `segments.createdBy` as optional and null it when the source user is deleted — segments survive, creator becomes null
+- (B) Transfer segments in identity-binding by patching each matching row inside the merge mutation: `for (const seg of segmentsByUser(sourceUserId)) ctx.db.patch(seg._id, { createdBy: targetUserId })`
 Option B is better — preserves audit trail.
 **Pitfall**: Also need to handle OrgMembership (unique on userId+orgId, both users same org → pick higher role), Subscription (unique userId → transfer if source has one), EncryptedDeliveryData (unique userId → preserve).
 
@@ -84,28 +97,26 @@ Option B is better — preserves audit trail.
 #### F-R3-05: member-sync non-atomic DM create + ExternalId → orphaned records
 
 **File**: `src/lib/server/legislation/ingest/member-sync.ts:317-348`
-**What**: Phase 5 uses TWO separate `$transaction` calls: first creates DecisionMaker rows, second creates ExternalId rows. If transaction 1 succeeds and transaction 2 fails, orphaned DMs exist with no ExternalId. Next sync re-creates them (lookup misses), producing duplicates.
+**What**: Phase 5 performs TWO separate mutations: first inserts DecisionMaker rows, then inserts ExternalId rows. If mutation 1 succeeds and mutation 2 fails, orphaned DMs exist with no ExternalId. Next sync re-creates them (lookup misses), producing duplicates.
 **Impact**: Duplicate DecisionMaker rows for the same legislator. Corrupts correlator matching.
-**Solution**: Merge into a single `$transaction`:
+**Solution**: Merge both inserts into a single Convex mutation so they commit atomically:
 ```ts
-await db.$transaction(
-  toCreate.flatMap((m, i) => [
-    db.decisionMaker.create({ data: { type: 'legislator', ...m.data }, select: { id: true } }),
-    // Can't reference dm.id inline — need interactive transaction instead
-  ])
-);
-```
-Actually, use an interactive transaction:
-```ts
-await db.$transaction(async (tx) => {
-  for (const m of toCreate) {
-    const dm = await tx.decisionMaker.create({ data: { ... } });
-    await tx.externalId.create({ data: { decisionMakerId: dm.id, ... } });
-    currentDmIds.add(dm.id);
-  }
+export const createDecisionMakersWithExternalIds = mutation({
+  args: { toCreate: v.array(v.object({ data: v.any(), externalIds: v.array(v.any()) })) },
+  handler: async (ctx, { toCreate }) => {
+    const created: Id<"decisionMakers">[] = [];
+    for (const m of toCreate) {
+      const dmId = await ctx.db.insert("decisionMakers", { type: "legislator", ...m.data });
+      for (const xid of m.externalIds) {
+        await ctx.db.insert("externalIds", { decisionMakerId: dmId, ...xid });
+      }
+      created.push(dmId);
+    }
+    return created;
+  },
 });
 ```
-**Pitfall**: Interactive transaction holds connection longer. But create batches are typically small (0-10 new members per sync).
+**Pitfall**: Keep create batches small (0-10 new members per sync) so the mutation stays within Convex's per-mutation time budget.
 
 ---
 
@@ -204,8 +215,8 @@ if (wouldDeactivate > totalFederalDms * 0.1) {
 #### F-R3-18: correlator 500 sequential updates in $transaction
 
 **File**: `src/lib/server/legislation/actions/correlator.ts:289-312`
-**What**: Prisma `$transaction([...updates])` runs 500 individual SQL statements serially. Holds connection for full duration.
-**Fix**: Replace with raw SQL `UPDATE ... FROM (VALUES ...) AS v(id, dm_id)`.
+**What**: A transaction composed of 500 individual update calls runs them serially and holds the mutation open for the full duration.
+**Fix**: Move the whole batch into a single Convex mutation that iterates and `ctx.db.patch`es each id — one round-trip, one atomic commit.
 
 #### F-R3-19: spawn.ts API input validation gap
 
@@ -225,7 +236,7 @@ if (wouldDeactivate > totalFederalDms * 0.1) {
 
 | Finding | Reason |
 |---------|--------|
-| Non-atomic DM creation in verify-address (findUnique → create) | Inside interactive transaction — P2002 rolls back cleanly, retried on next verification. Correct behavior. |
+| Non-atomic DM creation in verify-address (lookup → create) | Runs inside a single mutation — unique-index violation rolls back cleanly, retried on next verification. Correct behavior. |
 | Privacy theater (unsalted district hash) | district_hash is for aggregate counting, not privacy. ~435 districts is inherently small keyspace. Not designed as privacy-preserving. |
 | Identity commitment domain prefix mismatch | Intentional domain separation: `address-attestation` for district, `commons-identity-v1` for mDL. Different commitment contexts, no collision by design. |
 | Modular reduction bias (BN254) | Theoretical. ~25% bias in identity commitments is not exploitable for Sybil or preimage attacks at current scale. Standard in practice. |
@@ -244,10 +255,10 @@ if (wouldDeactivate > totalFederalDms * 0.1) {
 
 | Task | File(s) | Agent | Blocked by |
 |------|---------|-------|------------|
-| T-R3-01: Move on-chain call outside DB transaction | `spawn.ts` | debate-eng | — |
-| T-R3-02: Add SELECT FOR UPDATE race guard | `spawn.ts` | debate-eng | T-R3-01 |
-| T-R3-03: Fix identity-binding updateMany data loss | `identity-binding.ts` | identity-eng | — |
-| T-R3-04: Add Segment/OrgMembership/Subscription handlers | `identity-binding.ts`, `schema.prisma` | identity-eng | T-R3-03 |
+| T-R3-01: Move on-chain call outside the spawn mutation | `spawn.ts` | debate-eng | — |
+| T-R3-02: Atomic pending-claim mutation (race guard) | `spawn.ts` | debate-eng | T-R3-01 |
+| T-R3-03: Fix identity-binding bulk-reassignment data loss | `identity-binding.ts` | identity-eng | — |
+| T-R3-04: Add Segment/OrgMembership/Subscription handlers | `identity-binding.ts`, `convex/schema.ts` | identity-eng | T-R3-03 |
 | T-R3-05: Fix member-sync atomicity + circuit breaker | `member-sync.ts` | sync-eng | — |
 
 **Review Gate G-R3-01**: Verify spawn.ts chain call outside tx, race guard works, identity merge handles all models, member-sync atomic + circuit breaker.
@@ -270,7 +281,7 @@ if (wouldDeactivate > totalFederalDms * 0.1) {
 |------|---------|-------|------------|
 | T-R3-11: Credential revocation + trust_tier atomic SQL | `verify-address/+server.ts` | api-eng | — |
 | T-R3-12: process.env → parameter injection for legislation | 4 files | sync-eng | — |
-| T-R3-13: Correlator batch write → raw SQL | `correlator.ts` | sync-eng | — |
+| T-R3-13: Correlator batch write → single Convex mutation | `correlator.ts` | sync-eng | — |
 | T-R3-14: Debate API input validation | `debate/+server.ts` | debate-eng | — |
 
 **Review Gate G-R3-03**: Verify credential revocation, env fix, batch SQL, input validation.
@@ -281,20 +292,20 @@ if (wouldDeactivate > totalFederalDms * 0.1) {
 
 | Task | Status | Agent | Notes |
 |------|--------|-------|-------|
-| T-R3-01 | **done** | debate-eng | 3-phase pattern: read tx → open-code on-chain → write tx |
-| T-R3-02 | **done** | debate-eng | `SELECT ... FOR UPDATE` in Phase 3 write tx (line 133) |
-| T-R3-03 | **done** | identity-eng | Per-row merge: findMany → set-diff → delete/move per-row |
+| T-R3-01 | **done** | debate-eng | 3-phase pattern: claim mutation → open-code on-chain → finalize mutation |
+| T-R3-02 | **done** | debate-eng | Atomic pending-claim inside the finalize mutation (line 133) |
+| T-R3-03 | **done** | identity-eng | Per-row merge: collect → set-diff → delete/patch per-row |
 | T-R3-04 | **done** | identity-eng | Segment, OrgMembership (role priority), Subscription, EncryptedDeliveryData, ShadowAtlasRegistration |
 | T-R3-05 | **done** | sync-eng | Single interactive tx for DM+ExternalId; 3-guard circuit breaker in Phase 6 |
 | G-R3-01 | **passed** | team-lead | 8/8 checkpoints verified against code |
 | T-R3-06 | **done** | api-eng | Cap 10, bioguide `/^[A-Z]\d{6}$/`, chamber enum, atomic `GREATEST(trust_tier, 2)` |
 | T-R3-07 | **done** | sync-eng | findMany + createMany = 2 queries per roll call (was 870) |
 | T-R3-08 | **done** | sync-eng | `lastNameToDms` multi-candidate map + first-name cross-check, ambiguous → skip |
-| T-R3-09 | **done** | identity-eng | `$transaction` + `FOR UPDATE`, `mergeAccountsInTx` (no nested tx), `requireReauth`, idempotency guard |
+| T-R3-09 | **done** | identity-eng | Single mutation + atomic claim, `mergeAccountsInTx` (flat handler, no nested mutation), `requireReauth`, idempotency guard |
 | T-R3-10 | **done** | debate-eng | `platform.context.waitUntil()` at 2 sites + Node.js fallback |
 | G-R3-02 | **passed** | team-lead | 10/10 checkpoints verified against code |
 | T-R3-11 | **done** | api-eng | `updateMany({ revoked_at: null }, { revoked_at: now })` before new credential |
 | T-R3-12 | **done** | sync-eng | 4 files + 2 cron callers: `apiKey?` param with `process.env` fallback |
-| T-R3-13 | **done** | sync-eng | Single `$executeRaw` UPDATE...FROM (VALUES) — ~500 queries → 1 |
+| T-R3-13 | **done** | sync-eng | Single Convex mutation iterates the batch and patches each row — ~500 round-trips → 1 |
 | T-R3-14 | **done** | debate-eng | duration 1-30 days, jurisdictionSizeHint 1-10000, `Number.isFinite` + `Number.isInteger` |
 | G-R3-03 | **passed** | team-lead | 5/5 checkpoints verified against code |

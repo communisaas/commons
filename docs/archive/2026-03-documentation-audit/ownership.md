@@ -221,34 +221,31 @@ export class CommonsBrowserProverWrapper {
 **Why:** Application-specific usage patterns, UI state management, user experience wrapping protocol primitives. Database stores ONLY metadata (verified status, timestamps), never PII.
 
 #### 3. Database Schema (Application Data)
-**Location:** `commons/prisma/schema.prisma`
+**Location:** `commons/convex/schema.ts`
 
-```prisma
-model User {
-  id                        String   @id
-  email                     String?
+```ts
+users: defineTable({
+  email: v.optional(v.string()),
 
   // VOTER Protocol integration (NO PII STORED)
-  scroll_address            String?  // Deterministic address (passkey-derived)
-  district_verified         Boolean  // ZK proof verification status
-  last_proof_timestamp      DateTime? // When last proof was generated
+  scrollAddress: v.optional(v.string()),        // Deterministic address (passkey-derived)
+  districtVerified: v.boolean(),                 // ZK proof verification status
+  lastProofTimestamp: v.optional(v.number()),   // When last proof was generated
+})
+  .index("by_email", ["email"])
+  .index("by_scroll_address", ["scrollAddress"]);
 
-  // Application data
-  templates                 Template[]
-  sessions                  Session[]
-}
-
-model Template {
-  id                        String   @id
-  title                     String
-  category                  String
-  body                      String   // Public template text (no PII)
+templates: defineTable({
+  userId: v.id("users"),
+  title: v.string(),
+  category: v.string(),
+  body: v.string(),       // Public template text (no PII)
 
   // Application-specific
-  is_public                 Boolean
-  view_count                Int
-  fork_count                Int
-}
+  isPublic: v.boolean(),
+  viewCount: v.number(),
+  forkCount: v.number(),
+}).index("by_user", ["userId"]);
 ```
 
 **Ownership:** commons
@@ -332,7 +329,7 @@ export class CommonsUser {
 - ✅ Template creator/editor
 - ✅ Congressional office lookup
 - ✅ CWC API integration
-- ✅ pgvector/Prisma database schema (metadata only, NO PII)
+- ✅ Convex schema (metadata only, NO PII)
 - ✅ SvelteKit routes/pages
 - ❌ Halo2 circuit design
 - ❌ Cryptographic primitives
@@ -360,7 +357,7 @@ export class CommonsUser {
 ✅ src/lib/core/blockchain/rpc/        # RPC abstraction (correct)
 ✅ src/lib/core/auth/                  # OAuth + passkey auth (correct)
 ✅ src/lib/core/congress/              # CWC integration (correct)
-✅ prisma/schema.prisma                # Clean schema (metadata only, NO PII)
+✅ convex/schema.ts                    # Clean schema (metadata only, NO PII)
 ❌ src/lib/integrations/voter-protocol/browser-prover-wrapper.ts # NOT STARTED (waiting on SDK)
 ❌ Integration with @voter-protocol/client # Can't integrate until browser WASM SDK exists
 ```
@@ -471,8 +468,8 @@ commons/
 │   │   ├── components/              # Svelte UI
 │   │   └── routes/                  # SvelteKit pages
 │   └── routes/
-├── prisma/
-│   └── schema.prisma               # Application database
+├── convex/
+│   └── schema.ts                   # Application database
 ├── docs/
 │   └── ARCHITECTURE.md             # Application architecture
 └── package.json
@@ -524,7 +521,7 @@ commons/
 6. Begin Scroll smart contract implementation
 
 ### This Week (commons):
-1. Update Prisma schema to remove all PII fields
+1. Update `convex/schema.ts` to remove all PII fields
 2. Add `district_verified` and `last_proof_timestamp` fields
 3. Prepare UI for 600ms-10s device-dependent proof generation progress indicators
 4. Implement Shadow Atlas loading status UI

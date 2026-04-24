@@ -21,7 +21,7 @@ Targeted last unaudited verticals: bills/legislation, SMS/Twilio, segments, temp
 | R16-08: process.env in identity-binding | ACCEPTED — Fail-closed (throws if undefined). handlePlatformEnv shim populates process.env. Function validates salt exists before proceeding. |
 | R16-09: Segment campaign filter not org-scoped | ACCEPTED — Outer query scopes supporters to orgId. Cross-org campaignId in filter returns empty results (no supporters have actions on other orgs' campaigns). Minimal theoretical info leak. |
 | Bill search not org-scoped | REJECTED — Bills are public legislative records. Intentional design. |
-| Segment query builder SQL injection | REJECTED — Uses Prisma parameterized queries. validateSegmentFilter whitelists fields/operators. |
+| Segment query builder SQL injection | REJECTED — Queries run through the Convex typed query API; validateSegmentFilter whitelists fields/operators. |
 
 ---
 

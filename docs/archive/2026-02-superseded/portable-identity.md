@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-**Current Architecture Issue:** Encrypted blobs stored in centralized Postgres database creates:
+**Current Architecture Issue:** Encrypted blobs stored in a centralized backend database creates:
 - Single point of failure (database compromise = all encrypted data leaked)
 - Vendor lock-in (can't migrate users between platforms)
 - Storage costs scale linearly with users (~$50/month per 1,000 users)
@@ -37,13 +37,11 @@
 
 **Current implementation reality:**
 ```typescript
-// Encrypted blob stored in Postgres (centralized)
-await prisma.encryptedDeliveryData.create({
-  data: {
-    user_id: userId,  // ← Links identity to platform account
-    encrypted_blob: encryptedAddress,  // ← Encrypted but centralized storage
-    created_at: new Date()
-  }
+// Encrypted blob stored on the Convex backend (centralized)
+await ctx.db.insert("encryptedDeliveryData", {
+  userId,                         // ← Links identity to platform account
+  encryptedBlob: encryptedAddress, // ← Encrypted but centralized storage
+  createdAt: Date.now(),
 });
 ```
 
@@ -190,16 +188,15 @@ await identityRegistry.updateEncryptedBlob(ipfsHash);
 
 ### Option 1: Centralized Database (Current)
 
-**Postgres (Supabase):**
+**Managed document store:**
 ```
 Cost per encrypted blob: ~200 bytes (encrypted address + metadata)
 1,000 users = 200 KB storage + 1,000 rows
 10,000 users = 2 MB storage + 10,000 rows
 100,000 users = 20 MB storage + 100,000 rows
 
-Supabase pricing:
-- Free tier: 500 MB database, 2 GB bandwidth (good for ~2,500 users)
-- Pro tier: $25/month base + $0.125/GB storage
+Pricing (representative managed tier):
+- Base: ~$25/month
 - Cost per 1,000 users: ~$25/month (includes database overhead)
 - Cost per 100,000 users: ~$500/month
 ```
@@ -317,12 +314,12 @@ TOTAL COST:
 
 | Storage Method | One-Time Cost | Monthly Cost | 5-Year Total | Portability | Decentralization |
 |----------------|---------------|--------------|--------------|-------------|------------------|
-| **Postgres (current)** | $0 | $500 | $30,000 | ❌ No | ❌ Centralized |
+| **Centralized DB (current)** | $0 | $500 | $30,000 | ❌ No | ❌ Centralized |
 | **On-Chain (Scroll L2)** | $10 | $0 | $10 | ✅ Yes | ✅ Maximally |
 | **IPFS + Pointer (recommended)** | $10 | $0 | $10 | ✅ Yes | ✅ Highly |
 
 **Winner: IPFS + On-Chain Pointer**
-- 99.97% cost reduction vs. Postgres ($10 vs. $30,000 over 5 years)
+- 99.97% cost reduction vs. centralized DB ($10 vs. $30,000 over 5 years)
 - User portability (can leave platform, keep identity)
 - Decentralized (no vendor lock-in)
 - Scales to millions of users on free tier
@@ -503,7 +500,7 @@ async function processMessageDelivery(userAddress: string, message: string) {
 
 ### Comparison to Current Architecture
 
-**Current (Postgres):**
+**Current (centralized DB):**
 - Platform operators: ❌ Can see encrypted blobs (centralized storage)
 - Legal compulsion: ❌ Subpoena forces platform to hand over encrypted blobs
 - Vendor lock-in: ❌ Users can't leave platform without losing delivery capability
@@ -525,7 +522,7 @@ async function processMessageDelivery(userAddress: string, message: string) {
 
 > "Privacy: Halo2 recursive proofs, addresses never leave browser, never stored in any database"
 
-✅ This proposal ensures addresses never stored in Postgres (IPFS blobs encrypted, on-chain hash only)
+✅ This proposal ensures addresses never stored in the backend DB (IPFS blobs encrypted, on-chain hash only)
 
 > "Account Abstraction: NEAR Chain Signatures (optional for simplified UX)"
 
@@ -541,19 +538,17 @@ async function processMessageDelivery(userAddress: string, message: string) {
 
 ## Migration Path (Existing Users)
 
-### For Users with Encrypted Blobs in Postgres
+### For Users with Encrypted Blobs on the Backend
 
 **Migration script:**
 ```typescript
-// For each existing user with encrypted blob in Postgres:
-async function migrateUserToIPFS(userId: string) {
-  // 1. Fetch existing encrypted blob from Postgres
-  const existingBlob = await prisma.encryptedDeliveryData.findUnique({
-    where: { user_id: userId }
-  });
+// For each existing user with encrypted blob stored server-side:
+async function migrateUserToIPFS(userId: Id<"users">) {
+  // 1. Fetch existing encrypted blob from the backend
+  const existingBlob = await ctx.runQuery(api.encryptedDelivery.byUser, { userId });
 
   // 2. Upload to IPFS
-  const ipfsHash = await uploadToPinata(existingBlob.encrypted_blob);
+  const ipfsHash = await uploadToPinata(existingBlob.encryptedBlob);
 
   // 3. Update on-chain pointer (user must sign transaction)
   const tx = await identityRegistry.updateEncryptedBlob(
@@ -561,10 +556,8 @@ async function migrateUserToIPFS(userId: string) {
   );
   await tx.wait();
 
-  // 4. Delete from Postgres (privacy win)
-  await prisma.encryptedDeliveryData.delete({
-    where: { user_id: userId }
-  });
+  // 4. Delete server-side blob (privacy win)
+  await ctx.runMutation(api.encryptedDelivery.remove, { userId });
 
   console.log(`Migrated user ${userId} to IPFS: ${ipfsHash}`);
 }
@@ -581,9 +574,9 @@ async function migrateUserToIPFS(userId: string) {
 1. **Update voter-protocol smart contracts** (add `encryptedBlobIPFSHash` mapping)
 2. **Integrate Pinata IPFS pinning** (free tier supports millions of users)
 3. **Build browser-side blob creation** (encrypt → upload to IPFS → update on-chain pointer)
-4. **Update AWS Nitro Enclave delivery** (fetch from IPFS instead of Postgres)
-5. **Migrate existing users** (Postgres → IPFS, one-time migration)
-6. **Deprecate Postgres blob storage** (privacy win, cost savings, portability)
+4. **Update AWS Nitro Enclave delivery** (fetch from IPFS instead of the backend DB)
+5. **Migrate existing users** (backend DB → IPFS, one-time migration)
+6. **Deprecate backend blob storage** (privacy win, cost savings, portability)
 
 ---
 
@@ -599,7 +592,7 @@ async function migrateUserToIPFS(userId: string) {
 
 **RECOMMENDATION: Implement IPFS + On-Chain Pointer architecture for portable, decentralized, cost-efficient identity credentials.**
 
-**Cost savings:** 99.97% reduction vs. Postgres ($10 vs. $30,000 over 5 years for 100k users)
+**Cost savings:** 99.97% reduction vs. centralized DB ($10 vs. $30,000 over 5 years for 100k users)
 
 **Decentralization:** Fully aligned with voter-protocol's blockchain-native vision
 

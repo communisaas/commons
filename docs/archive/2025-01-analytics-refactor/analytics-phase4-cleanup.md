@@ -141,8 +141,8 @@ function makeBucketKey(metric: Metric, dims: Dimensions): string {
 
 ### Critical Notes
 
-1. **No Promise.all for unbounded lists** - Would overwhelm connection pool
-2. **$transaction batching** - Prisma handles atomic commit
+1. **No Promise.all for unbounded lists** - Would overwhelm the backend
+2. **Batch via a single mutation** - Convex mutations are atomic per invocation
 3. **In-memory aggregation** - O(n) pass, minimal memory overhead
 4. **Backward compatible** - Same signature, same semantics
 

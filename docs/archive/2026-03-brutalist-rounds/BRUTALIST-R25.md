@@ -17,12 +17,12 @@ Full-stack audit of server infrastructure: auth, billing, automation engine, ema
 |---------|------------|
 | Rate limit key collision (API v1) | REJECTED — keyId is unique DB PK, no collision possible |
 | hashDistrict bare SHA-256 | REJECTED — duplicate of R4-Residual + R14, deferred to Phase 4 Poseidon2 |
-| Calls page supporter.email in SSR | REJECTED — email in Prisma select but NOT in load return value (mapped out) |
+| Calls page supporter.email in SSR | REJECTED — email is projected by the backend query but stripped from the load return value (mapped out) |
 | Campaign target email conditional | REJECTED — works as designed; only member/editor/owner roles exist |
 | Billing usage TOCTOU | ACCEPTED — soft caps, cosmetic over-count under race; not security |
 | SMS webhook race (updateMany increment) | REJECTED — atomic increment is safe |
 | Bill search tsquery | REJECTED — already hardened in R18 (char/term caps) |
-| Alert cursor cross-org | REJECTED — Prisma where clause implicitly scopes cursor |
+| Alert cursor cross-org | REJECTED — Convex index query implicitly scopes the cursor to the orgId |
 | Billing downgrade entitlements | ACCEPTED — soft enforcement, business logic not security |
 | In-memory rate limiter per-isolate | ACCEPTED — documented, REDIS_URL available for prod |
 | SES bounce cross-org attribution | ACCEPTED — user-scoped suppression is intentional design |
@@ -108,9 +108,9 @@ const recentExecs = supporterId ? new Set(
 #### F-R25-06: Calls page supporter.email over-fetch
 
 **File**: `src/routes/org/[slug]/calls/+page.server.ts:29`
-**What**: Prisma select includes `email: true` for supporter but email is never used in return mapping. Wasteful fetch of PII. Not a leak (email isn't returned) but violates data minimization.
+**What**: The backend query projects `email` on supporter but email is never used in the return mapping. Wasteful fetch of PII. Not a leak (email isn't returned) but violates data minimization.
 
-**Solution**: Remove `email: true` from select.
+**Solution**: Remove `email` from the query's projection/return shape.
 
 ---
 

@@ -66,7 +66,7 @@ if (sessionAge > MAX_SESSION_LIFETIME_MS) {
 ```
 Insert this check BEFORE the renewal logic.
 
-**Pitfall**: Session model may not have `createdAt`. Check `prisma/schema.prisma` for the Session model fields. If missing, add it with a migration (default to `now()` for existing rows). The 90-day cap means users re-auth ~4x/year — reasonable for a civic platform handling identity credentials.
+**Pitfall**: The `sessions` table may not have `createdAt`. Check `convex/schema.ts` for the table definition. If missing, add the field and backfill existing rows with `Date.now()`. The 90-day cap means users re-auth ~4x/year — reasonable for a civic platform handling identity credentials.
 
 ---
 
@@ -144,7 +144,7 @@ For timezone: validate against `Intl.supportedValuesOf('timeZone')` (available i
 | Task | Finding | File(s) | Agent |
 |------|---------|---------|-------|
 | T-R4B-01: Restrict supporter PII in SMS messages | F-R4B-01 | `sms/[id]/messages/+server.ts` | api-eng |
-| T-R4B-02: Session absolute expiry cap | F-R4B-02 | `auth.ts`, `schema.prisma` | auth-eng |
+| T-R4B-02: Session absolute expiry cap | F-R4B-02 | `auth.ts`, `convex/schema.ts` | auth-eng |
 
 **Review Gate G-R4B-01**: Verify supporter select only returns id+name, editor role required, session has 90-day absolute cap.
 

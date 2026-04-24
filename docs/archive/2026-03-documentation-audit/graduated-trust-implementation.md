@@ -24,7 +24,7 @@ Remove deprecated code, consolidate schemas, establish the trust_tier field as t
 
 ### Wave 1A: Deprecated Code Removal
 
-**Agent background:** SvelteKit codebase familiarity, Prisma schema management, file system cleanup.
+**Agent background:** SvelteKit codebase familiarity, Convex schema management, file system cleanup.
 
 | Task | File(s) | Action |
 |------|---------|--------|
@@ -38,32 +38,31 @@ Remove deprecated code, consolidate schemas, establish the trust_tier field as t
 
 ### Wave 1B: Schema Consolidation
 
-**Agent background:** Prisma ORM, PostgreSQL schema management, multi-file schema configuration.
+**Agent background:** Convex schema design, table/index configuration, multi-file consolidation.
 
 | Task | Detail |
 |------|--------|
-| Identify canonical schema | `prisma/schema.prisma` is canonical |
-| Diff `core.prisma` vs `schema.prisma` | Document every divergence |
-| Diff `schema-production.prisma` vs `schema.prisma` | Document every divergence |
+| Identify canonical schema | `convex/schema.ts` is canonical |
+| Diff any stale schema drafts | Document every divergence |
 | Determine if non-canonical schemas are consumed anywhere | Check `package.json`, build scripts, CI, wrangler config for references |
-| Delete or mark non-canonical schemas | If nothing consumes them: delete. If build uses them: unify. |
+| Delete or unify non-canonical schemas | If nothing consumes them: delete. If build uses them: unify. |
 
-**Verification:** Single schema. Build and `npx prisma validate` succeed. No references to deleted schema files.
+**Verification:** Single schema. `npx convex dev` builds cleanly. No references to deleted schema files.
 
 ### Wave 1C: Trust Tier Foundation
 
-**Agent background:** TypeScript, Prisma schema design, SvelteKit server hooks, identity systems.
+**Agent background:** TypeScript, Convex schema design, SvelteKit server hooks, identity systems.
 
 | Task | Detail |
 |------|--------|
-| Add `trust_tier` field to User model | `trust_tier Int @default(0) @map("trust_tier")` |
-| Derive `is_verified` from trust_tier | Add computed logic: `is_verified = trust_tier >= 3` |
+| Add `trustTier` field to `users` table | `trustTier: v.number()` (default 0) |
+| Derive `isVerified` from trustTier | Add computed logic: `isVerified = trustTier >= 3` |
 | Extend `authority-level.ts` | Add Tier 0 (anonymous, no user) and adjust Tier 1/2 logic |
-| Add `trust_tier` to session locals | `hooks.server.ts` — attach `trust_tier` to `event.locals.user` |
+| Add `trustTier` to session locals | `hooks.server.ts` — attach `trustTier` to `event.locals.user` |
 | Update `credential-policy.ts` | Add tier-aware TTL differentiation (prep only — no new tiers yet) |
-| Add address lifecycle fields | `address_verification_method`, `address_verified_at` on User model |
-| Add passkey placeholder fields | `passkey_credential_id`, `passkey_public_key_jwk`, `did_key`, `passkey_created_at`, `passkey_last_used_at` on User model |
-| Generate migration | `npx prisma migrate dev --name graduated-trust-foundation` |
+| Add address lifecycle fields | `addressVerificationMethod`, `addressVerifiedAt` on `users` table |
+| Add passkey placeholder fields | `passkeyCredentialId`, `passkeyPublicKeyJwk`, `didKey`, `passkeyCreatedAt`, `passkeyLastUsedAt` on `users` table |
+| Deploy schema | `npx convex dev` picks up the new fields; ship via `npx convex deploy --env-file .env.production` |
 
 **Verification:** Migration applies cleanly. `trust_tier` defaults to 0 for all existing users. `authority-level.ts` exports a function that handles all tiers. `hooks.server.ts` attaches trust_tier to locals.
 
@@ -135,7 +134,7 @@ Remove deprecated code, consolidate schemas, establish the trust_tier field as t
 | Create `address-verification.ts` | `src/lib/core/identity/address-verification.ts` — Census geocoder integration, district derivation |
 | Create `district-credential.ts` | `src/lib/core/identity/district-credential.ts` — VC issuance, signing, verification |
 | Create verify-address endpoint | `src/routes/api/identity/verify-address/+server.ts` — address → district → VC |
-| Add DistrictCredential model | Prisma schema addition per graduated-trust.md spec |
+| Add DistrictCredential table | Convex schema addition per graduated-trust.md spec |
 | Implement address nullification | After district derivation, clear street/city/state/zip from User record |
 | Create `credential-store.ts` | `src/lib/core/identity/credential-store.ts` — unified IndexedDB credential wallet |
 | Store VC client-side | DistrictResidencyCredential stored in IndexedDB |
@@ -290,7 +289,7 @@ Security bugs (BR5-010 nullifier no-op, address bypass), UX bugs (VerificationGa
 Address 10 deferred issues from Cycles 6-7, including a production risk (ALS+waitUntil), type safety gaps, and incomplete Svelte 5 migration.
 
 ### Wave 8A: ALS Safety + Error Sanitization
-- Added `getRequestClient()` to `db.ts` — resolves concrete PrismaClient from ALS (not the Proxy)
+- Added `getRequestClient()` to `db.ts` — resolves the concrete per-request backend client from ALS (not the Proxy)
 - `delivery-worker.ts` accepts optional `db` parameter, uses captured client in `waitUntil`
 - Callers (`create/+server.ts`, `retry/+server.ts`) capture client via `getRequestClient()` before response
 - Sanitized `delivery_error` in status endpoint (generic user-safe message)
@@ -391,7 +390,7 @@ After each cycle:
 | Wave | Status | Notes |
 |------|--------|-------|
 | 1A: Deprecated removal | **COMPLETE** | 2026-02-16: Deleted nitro-enclave-demo.ts, gcp.ts. Archived coinbase-auth + portable-identity specs. Cleaned manager.ts + provider.ts types. Removed static disclaimer from ActionBar. Opus review: fixed 2 stale GCP comments in provider.ts header. |
-| 1B: Schema consolidation | **COMPLETE** | 2026-02-16: Deleted core.prisma and schema-production.prisma. Updated mock-drift-detection.ts. schema.prisma is canonical. Opus review: cleaned agent artifact from .planning/. |
+| 1B: Schema consolidation | **COMPLETE** | 2026-02-16: Removed stale schema drafts. Updated mock-drift-detection.ts. `convex/schema.ts` is canonical. Opus review: cleaned agent artifact from .planning/. |
 | 1C: Trust tier foundation | **COMPLETE** | 2026-02-16: Added 9 fields to schema (trust_tier, 5 passkey, 2 address). Added deriveTrustTier() + TrustTier type + TRUST_TIER_LABELS + trustTierToAuthorityLevel() to authority-level.ts. Added TIER_CREDENTIAL_TTL + isTierCredentialFresh() to credential-policy.ts. hooks.server.ts computes trust_tier per-request. auth.ts User interface extended with 4 new fields. Opus review: cleaned stale GCP env vars from app.d.ts + .env.example. Finding: is_verified derivation from trust_tier correctly deferred — needs data migration to set trust_tier=3 for users with identity_commitment before is_verified can be computed. Migration generation deferred to pre-Cycle 2. |
 
 ### Cycle 2 Status
@@ -499,7 +498,7 @@ Remove deprecated code paths and unsafe type casts accumulated across Cycles 1-9
 | Task | File(s) | Detail |
 |------|---------|--------|
 | Remove legacy single-tree code | `ProofGenerator.svelte`, `prover-client.ts` | Legacy single-tree branch was gated with deprecation warning in Cycle 8D. All new flows use two-tree. Remove the legacy branch entirely. |
-| Fix delivery-worker Template cast | `delivery-worker.ts` | `as unknown as Template` cast is unsafe. Create proper type or use Prisma's generated type with select/include to get exactly the fields CWC needs. |
+| Fix delivery-worker Template cast | `delivery-worker.ts` | `as unknown as Template` cast is unsafe. Define a minimal `CwcTemplate` interface containing only the fields CWC needs, and project to it explicitly. |
 | Remove dead imports + unused vars | Various | Sweep for any `// removed`, `// deprecated`, `// TODO: remove` markers left by previous cycles. |
 | Update env documentation | `.env.example`, `wrangler.toml` | Ensure all new env vars (GOOGLE_CIVIC_API_KEY, CWC_PRODUCTION, WITNESS_ENCRYPTION_PUBLIC_KEY) are documented with descriptions. |
 
@@ -510,7 +509,7 @@ Final review gate. Verify the entire codebase builds and deploys cleanly.
 | Task | File(s) | Detail |
 |------|---------|--------|
 | Opus review | — | Review all Cycle 10 changes. Focus: Workers runtime compatibility, Svelte 5 migration completeness, type safety improvements, build output size. |
-| svelte-check | — | Target: 0 errors (fix the 2 pre-existing if feasible: PrismaClient cast in db.ts, data.user in layout.svelte). |
+| svelte-check | — | Target: 0 errors (fix the 2 pre-existing if feasible: backend client cast in db.ts, data.user in layout.svelte). |
 | CF build + deploy dry run | — | `ADAPTER=cloudflare npm run build && npx wrangler pages deploy .svelte-kit/cloudflare --project-name commons --branch staging --dry-run` |
 | Document remaining gaps | `.planning/production-gaps.md` | Honest list of what's NOT production-ready: IACA root certificates, COSE_Sign1 verification, OpenID4VP, Ed25519 credential signing (currently HMAC), Nitro Enclave deployment. |
 
@@ -522,12 +521,12 @@ Final review gate. Verify the entire codebase builds and deploys cleanly.
 |------|--------|-------|
 | 10A: CF Workers Build | **COMPLETE** | 2026-02-17: Build failed on `Invalid export 'devSessionStore'` from `start/+server.ts`. Fixed by extracting to `_dev-session-store.ts` (underscore prefix = non-route SvelteKit convention). `ADAPTER=cloudflare npm run build` passes in 38s. Env var propagation verified via `handlePlatformEnv` in hooks. Commit: c0bb1ce1. **Note:** libsodium WASM and KV namespace remain untested at runtime. |
 | 10B: Svelte 5 Migration | **COMPLETE** | 2026-02-17: VerificationChoice, SelfXyzVerification, DiditVerification migrated to callback props. IdentityVerificationFlow consumer updated — all handlers take direct data instead of CustomEvent wrappers. 4 commits. svelte-check: 0 new errors. (Note: SelfXyzVerification and DiditVerification subsequently removed in Cycle 15.) |
-| 10C: Dead Code Cleanup | **COMPLETE** | 2026-02-17: Removed 240 lines single-tree code from prover-client.ts. Created CwcTemplate minimal interface (5 fields). Updated delivery-worker.ts to use Prisma `select` — no cast needed. Updated .env.example and wrangler.toml documentation. 4 commits. |
+| 10C: Dead Code Cleanup | **COMPLETE** | 2026-02-17: Removed 240 lines single-tree code from prover-client.ts. Created CwcTemplate minimal interface (5 fields). Updated delivery-worker.ts to project to the minimal template type — no cast needed. Updated .env.example and wrangler.toml documentation. 4 commits. |
 | 10D: Review + Build | **COMPLETE** | 2026-02-17: Found and fixed 2 dangling files (example-usage.ts, witness-builder.ts) importing removed exports — 544 more lines deleted. Updated barrel index.ts. CF build passes. svelte-check: 18 errors, 95 warnings (0 new from Cycle 10). Total dead code removed: ~1300 lines. |
 
 **Post-Cycle 10 fixes** (committed separately):
 - `fix(email)`: Duplicate title check → title + subject
-- `fix(submissions)`: ALS scope — capture PrismaClient before response, register promotion with waitUntil
+- `fix(submissions)`: ALS scope — capture backend client before response, register promotion with waitUntil
 - `refactor(submission)`: SubmissionStatus rewrite — WebSocket→polling, retry, generation counter
 - `chore`: ProofGenerator deprecation warning, modal state types
 

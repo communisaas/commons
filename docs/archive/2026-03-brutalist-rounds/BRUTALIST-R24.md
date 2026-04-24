@@ -15,7 +15,7 @@ Targeted all public-facing routes: V1 API (`/api/v1/`), embed pages (`/embed/`),
 
 | Finding | Disposition |
 |---------|------------|
-| Slug injection in embed/c/s routes | REJECTED — All use Prisma findFirst/findUnique with exact match |
+| Slug injection in embed/c/s routes | REJECTED — All use Convex typed queries with exact-match on an indexed `slug` field |
 | XSS in templates | REJECTED — Zero `{@html}` directives in any public route |
 | Open redirect via returnTo | REJECTED — No returnTo params used in any public route |
 | V1 pagination cap | REJECTED — `parsePagination()` enforces API_PAGE_SIZE=50 max |

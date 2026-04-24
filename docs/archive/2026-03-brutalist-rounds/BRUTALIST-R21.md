@@ -33,7 +33,7 @@ Targeted foundational infrastructure: `hooks.server.ts`, auth system (`auth.ts`)
 **File**: `src/lib/server/org.ts:95-100`
 **What**: The `requireRole` function uses a `Record<OrgRole, number>` hierarchy lookup. If `current` is any value not in the map (e.g., corrupted DB value, future role added without updating hierarchy), `hierarchy[current]` returns `undefined`. In JavaScript, `undefined < N` evaluates to `false` (NaN comparison), so the error is never thrown — the check silently passes.
 
-The Prisma schema uses `String @default("member")` with no DB-level enum constraint. The `as OrgRole` cast in `loadOrgContext` (line 69) is unsafe. This function is called 76+ times across the codebase — a single bypass here compromises all role-gated endpoints.
+The `convex/schema.ts` definition stores the role as `v.string()` with a literal-union narrowing only enforced at the mutation boundary. The `as OrgRole` cast in `loadOrgContext` (line 69) is unsafe. This function is called 76+ times across the codebase — a single bypass here compromises all role-gated endpoints.
 
 **Impact**: Any unknown role string bypasses all `requireRole` checks. Requires DB corruption or schema mismatch to exploit, but the fix is trivial and eliminates an entire class of bypass.
 

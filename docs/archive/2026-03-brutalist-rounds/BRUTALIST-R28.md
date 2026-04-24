@@ -171,9 +171,9 @@ First sweep of post-Cycle 6 code (cypherpunk migration complete) plus never-audi
 **What**: `getOrgUsage()` only counts SmsMessage records. PatchThroughCall records are never counted toward any billing limit. A $10/mo Starter plan user can run unlimited calls.
 **Status**: TRACKED — Add call counting to billing usage
 
-#### F-R28-17: Debate appeal passes Prisma UUID instead of on-chain debate ID
+#### F-R28-17: Debate appeal passes backend record ID instead of on-chain debate ID
 **File**: `src/routes/api/debates/[debateId]/appeal/+server.ts:28`
-**What**: `appealResolution(debateId)` passes the URL param (Prisma UUID) but blockchain client expects `debate_id_onchain` (bytes32). Appeal always fails on-chain.
+**What**: `appealResolution(debateId)` passes the URL param (backend record ID) but the blockchain client expects `debate_id_onchain` (bytes32). Appeal always fails on-chain.
 **Status**: TRACKED — Fix before DEBATE flag flip
 
 #### F-R28-18: Debate cosign weight rollback uses wrong field
@@ -190,7 +190,7 @@ First sweep of post-Cycle 6 code (cypherpunk migration complete) plus never-audi
 
 #### F-R28-20: SSE polling creates N queries/5s per connected client
 **File**: `src/routes/api/debates/[debateId]/stream/+server.ts:211`
-**What**: Each SSE connection polls Prisma every 5s independently. 100 viewers = 1200 queries/min on single debate. No shared polling or pub/sub.
+**What**: Each SSE connection polls the backend every 5s independently. 100 viewers = 1200 queries/min on single debate. Should leverage Convex reactive subscriptions instead of independent polls.
 **Status**: DEFERRED — Scalability concern, not immediate (feature flagged off)
 
 #### F-R28-21: SMS deliveredCount not idempotent

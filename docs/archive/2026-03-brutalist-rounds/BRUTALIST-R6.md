@@ -151,11 +151,11 @@ if (waitUntil) {
 
 ### P2 — Medium (3)
 
-#### F-R6-07: pgvector embedding arrays not validated for finite numbers
+#### F-R6-07: embedding arrays not validated for finite numbers
 
 **Files**: `src/routes/api/templates/search/+server.ts:46`, `src/lib/server/legislation/relevance/embedder.ts:69`
-**What**: Embedding arrays from Gemini API stringified via `.join(',')` without checking `Number.isFinite` per element. NaN/Infinity would produce malformed vector syntax.
-**Impact**: PostgreSQL rejects at cast time (no injection), but query fails with unhelpful error.
+**What**: Embedding arrays from Gemini API are written to the Convex `.vectorIndex("by_*", { dimensions: 768 })` without checking `Number.isFinite` per element. NaN/Infinity would produce malformed vector payloads.
+**Impact**: Convex rejects the mutation at validation time (no injection), but the query fails with an unhelpful error.
 
 **Solution**: Add validation after `generateEmbedding`:
 ```ts
@@ -171,19 +171,17 @@ if (!embedding.every(Number.isFinite)) throw error(502, 'Invalid embedding from 
 **File**: `src/lib/server/campaigns/report.ts:614-629`
 **What**: Per-DM `db.orgDMFollow.upsert()` in a loop. 100 DMs = 100 sequential round-trips. On fire-and-forget path so doesn't block response.
 
-**Solution**: Batch with `INSERT...ON CONFLICT DO NOTHING`:
+**Solution**: Collapse the loop into a single Convex mutation that performs the upserts in one round-trip (guarded by a unique index on `(orgId, decisionMakerId)`):
 ```ts
-if (dms.length > 0) {
-  await db.$executeRaw`
-    INSERT INTO "org_dm_follow" ("org_id", "decision_maker_id", "reason", "created_at")
-    SELECT ${orgId}, id, 'campaign_delivery', NOW()
-    FROM "decision_maker" WHERE id IN (${Prisma.join(dms.map(d => d.id))})
-    ON CONFLICT ("org_id", "decision_maker_id") DO NOTHING
-  `;
-}
+await ctx.runMutation(api.orgDmFollows.bulkFollow, {
+  orgId,
+  decisionMakerIds: dms.map((d) => d.id),
+  reason: "campaign_delivery",
+});
 ```
+The mutation iterates the ids, checks the unique index, and `insert`s only when no row exists. All of this runs inside one transactional invocation.
 
-**Pitfall**: Check the actual column names in the `OrgDMFollow` model — Prisma maps may differ from raw SQL names.
+**Pitfall**: Ensure `orgDmFollows` has an index `["orgId", "decisionMakerId"]` so the dedup check is O(1) per id.
 
 ---
 

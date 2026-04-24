@@ -226,10 +226,10 @@ await db.$transaction(
 );
 ```
 
-**Prisma handles:**
-- Connection pooling internally
-- Atomic commit/rollback
-- Query optimization
+**Convex handles:**
+- Reactive connections and subscriptions
+- Atomic mutations (each mutation commits/rolls back as a unit)
+- Query optimization via indexed reads
 - Error handling
 
 ---

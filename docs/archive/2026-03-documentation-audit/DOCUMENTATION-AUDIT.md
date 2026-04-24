@@ -188,7 +188,7 @@ From the Implementation Verifier agent — the reality against which all docs sh
 | **Analytics with differential privacy** | Budget enforcement, Laplace noise, snapshots |
 | **Congressional delivery (CWC)** | Senate + House API, encrypted storage |
 | **OAuth** | Google, Facebook, LinkedIn, Coinbase, passkeys |
-| **Cloudflare Workers deployment** | Hyperdrive, ALS, KV namespaces |
+| **Cloudflare Workers deployment** | ALS, KV namespaces |
 
 ### Built but Feature-Gated (DEBATE/CONGRESSIONAL/WALLET/STANCE = false)
 
@@ -227,7 +227,7 @@ Stop the bleeding. Fix the README, deployment docs, and the most misleading stru
 
 **1.2 — Fix deployment docs** ✅
 - Archived `docs/development/aws-deployment.md` → `docs/archive/2026-03-documentation-audit/`
-- Rewrote `docs/development/deployment.md` — now describes Cloudflare Workers (wrangler, Hyperdrive, KV, ALS, secrets, constraints)
+- Rewrote `docs/development/deployment.md` — now describes Cloudflare Workers (wrangler, KV, ALS, secrets, constraints)
 - Renamed `DEPLOYMENT_CHECKLIST.md` → `docs/development/firecrawl-deployment-checklist.md`
 
 **1.3 — Archive self-declared dead docs** ✅
@@ -341,7 +341,7 @@ Document what's built but undocumented.
 5. [x] Location privacy — wrote `architecture/location-privacy.md`: five-signal progressive inference, client-side storage architecture, privacy boundaries (mDL, ZK, CWC), data flow diagram, risk analysis with mitigations, multi-country support.
 
 **4.2 — Cloudflare deployment guide** ✅ (already complete from Wave 1)
-`development/deployment.md` already covers all listed items: Wrangler config, Hyperdrive, KV namespaces, secrets, build→deploy→rollback, monitoring, key constraints.
+`development/deployment.md` already covers all listed items: Wrangler config, KV namespaces, secrets, build→deploy→rollback, monitoring, key constraints.
 
 **Index updates**: README.md (file counts, new entries), development/index.md (agents + moderation sections), features/index.md (template-variables entry).
 

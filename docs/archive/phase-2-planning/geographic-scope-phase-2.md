@@ -418,66 +418,63 @@ export function validateScope(
 **Implementation**:
 
 #### Database Schema Addition:
-```prisma
-model ScopeCorrection {
-  id                String   @id @default(cuid())
-  template_id       String
+```ts
+// convex/schema.ts
+scopeCorrections: defineTable({
+  templateId: v.id("templates"),
 
   // AI's original extraction
-  ai_extracted      Json     // Full ScopeMapping
-  ai_confidence     Float
-  ai_method         String   // 'regex' | 'fuzzy' | 'geocoder' | 'llm'
+  aiExtracted: v.any(),          // Full ScopeMapping
+  aiConfidence: v.number(),
+  aiMethod: v.string(),          // 'regex' | 'fuzzy' | 'geocoder' | 'llm'
 
   // User's correction
-  user_corrected    Json     // Full ScopeMapping
-  correction_type   String   // 'wrong_country' | 'wrong_region' | 'wrong_district' | 'too_broad' | 'too_specific'
+  userCorrected: v.any(),        // Full ScopeMapping
+  correctionType: v.string(),    // 'wrong_country' | 'wrong_region' | 'wrong_district' | 'too_broad' | 'too_specific'
 
   // Context for learning
-  message_snippet   String   // First 200 chars
-  subject           String
+  messageSnippet: v.string(),    // First 200 chars
+  subject: v.string(),
 
-  created_at        DateTime @default(now())
-
-  @@index([ai_method, correction_type])
-  @@index([created_at])
-  @@map("scope_correction")
-}
+  createdAt: v.number(),
+})
+  .index("by_method_type", ["aiMethod", "correctionType"])
+  .index("by_created", ["createdAt"]);
 ```
 
 #### Learning Pipeline:
 ```typescript
-// src/lib/server/scope-learning.ts
+// convex/scopeLearning.ts
 
-export async function recordCorrection(
-  templateId: string,
-  aiExtracted: ScopeMapping,
-  userCorrected: ScopeMapping
-) {
-  // Store correction for analysis
-  await prisma.scopeCorrection.create({
-    data: {
-      template_id: templateId,
-      ai_extracted: aiExtracted,
-      ai_confidence: aiExtracted.confidence,
-      ai_method: aiExtracted.extraction_method || 'unknown',
-      user_corrected: userCorrected,
-      correction_type: determineCorrectionType(aiExtracted, userCorrected),
-      message_snippet: '...', // From template
-      subject: '...'
-    }
-  });
+export const recordCorrection = mutation({
+  args: {
+    templateId: v.id("templates"),
+    aiExtracted: v.any(),
+    userCorrected: v.any(),
+  },
+  handler: async (ctx, { templateId, aiExtracted, userCorrected }) => {
+    // Store correction for analysis
+    await ctx.db.insert("scopeCorrections", {
+      templateId,
+      aiExtracted,
+      aiConfidence: aiExtracted.confidence,
+      aiMethod: aiExtracted.extraction_method ?? "unknown",
+      userCorrected,
+      correctionType: determineCorrectionType(aiExtracted, userCorrected),
+      messageSnippet: "...",
+      subject: "...",
+      createdAt: Date.now(),
+    });
 
-  // Update fuzzy patterns if pattern emerges
-  await updateFuzzyPatterns(aiExtracted, userCorrected);
-}
+    await updateFuzzyPatterns(aiExtracted, userCorrected);
+  },
+});
 
 // Weekly batch job: analyze corrections and add to fuzzy patterns
-export async function analyzeCorrectionPatterns() {
-  const corrections = await prisma.scopeCorrection.findMany({
-    where: {
-      created_at: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
-    }
-  });
+export const analyzeCorrectionPatterns = action({
+  handler: async (ctx) => {
+    const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const corrections = await ctx.runQuery(api.scopeLearning.listSince, { since });
 
   // Find patterns (e.g., "SoCal" consistently corrected to California)
   const patterns = findPatterns(corrections);
@@ -487,17 +484,18 @@ export async function analyzeCorrectionPatterns() {
     await addFuzzyPattern(pattern);
   }
 
-  // Log learning progress
-  console.log('[scope-learning]', JSON.stringify({
-    corrections_analyzed: corrections.length,
-    patterns_found: patterns.length,
-    patterns_added: patterns.filter(p => p.occurrences >= 3).length
-  }));
-}
+    // Log learning progress
+    console.log('[scope-learning]', JSON.stringify({
+      corrections_analyzed: corrections.length,
+      patterns_found: patterns.length,
+      patterns_added: patterns.filter(p => p.occurrences >= 3).length
+    }));
+  },
+});
 ```
 
 **Deliverables**:
-- [ ] `ScopeCorrection` database model
+- [ ] `scopeCorrections` Convex table
 - [ ] `recordCorrection()` function (called when user edits)
 - [ ] Weekly batch job for pattern analysis
 - [ ] Dashboard showing learning metrics

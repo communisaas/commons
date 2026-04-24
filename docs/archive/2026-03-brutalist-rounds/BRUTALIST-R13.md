@@ -33,11 +33,10 @@ Full `src/` roast by Codex and Gemini. Claude exceeded stdout buffer. Cross-vali
 **What**: Line 46: `locals.user?.identity_commitment ?? `demo-${session.userId}`` — unverified users (Tier 0-1, no identity_commitment) get a synthetic `demo-` prefixed commitment that feeds into `confirmMailtoSend()` which creates PositionRegistration + PositionDelivery records. This is the exact pattern fixed in R12-01 for `positions/register`, but the sibling route was missed.
 **Impact**: Any authenticated but unverified user can mint stance registrations and delivery records, polluting position counts and social proof.
 
-**Solution**: Same as R12-01 — derive from DB, require verification:
+**Solution**: Same as R12-01 — derive from the backend, require verification:
 ```ts
-const user = await prisma.user.findUnique({
-    where: { id: session.userId },
-    select: { identity_commitment: true }
+const user = await ctx.runQuery(api.users.getIdentityCommitment, {
+    userId: session.userId,
 });
 if (!user?.identity_commitment) {
     return json({ error: 'Identity verification required' }, { status: 403 });
@@ -110,16 +109,15 @@ For endpoints needing the updated record back, use a second read after the scope
 
 **Solution**: Verify the registration belongs to the caller's identity_commitment:
 ```ts
-const user = await prisma.user.findUnique({
-    where: { id: session.userId },
-    select: { identity_commitment: true }
+const user = await ctx.runQuery(api.users.getIdentityCommitment, {
+    userId: session.userId,
 });
 if (!user?.identity_commitment) {
     return json({ error: 'Identity verification required' }, { status: 403 });
 }
-const registration = await prisma.positionRegistration.findFirst({
-    where: { id: registrationId, identity_commitment: user.identity_commitment },
-    select: { id: true }
+const registration = await ctx.runQuery(api.positions.getOwnedRegistration, {
+    registrationId,
+    identityCommitment: user.identity_commitment,
 });
 ```
 

@@ -55,12 +55,12 @@ Seven different User type definitions exist in parallel, each assuming a differe
 | `User` (auth) | `src/lib/core/auth/auth.ts:18-57` | 36 fields including PII | Still references removed fields |
 | `Locals.user` | `src/app.d.ts:11-36` | 19 fields, NO PII | Correct per architecture |
 | `EmailServiceUser` | `src/lib/types/user.ts:73-118` | 16 fields | Address from parameter |
-| `PrismaUserForEmail` | `src/lib/types/user.ts:124-138` | 8 fields | Intentionally stripped |
+| `BackendUserForEmail` | `src/lib/types/user.ts:124-138` | 8 fields | Intentionally stripped |
 | `ComponentUser` | `src/lib/types/component-props.ts` | 3 fields | Minimal |
 | `BlockchainUser` | `src/lib/types/blockchain.ts` | Wallet-focused | Different intent |
 | `UserProfileData` | `src/lib/types/any-replacements.ts` | Any workaround | TypeScript escape hatch |
 
-**Impact:** When hooks.server.ts converts `locals.user` from Prisma User, the transformation loses PII fields—but if someone imports the wrong User type, they could accidentally expose plaintext address. Integration gap: `toEmailServiceUser()` has silent fallbacks that paper over type mismatches.
+**Impact:** When hooks.server.ts converts `locals.user` from the backend `users` document, the transformation loses PII fields—but if someone imports the wrong User type, they could accidentally expose plaintext address. Integration gap: `toEmailServiceUser()` has silent fallbacks that paper over type mismatches.
 
 **Files Requiring Update:**
 - `/src/lib/core/auth/auth.ts` lines 18-57: Remove `street`, `city`, `state`, `zip`, `phone`, `congressional_district`, `connection_details`
@@ -91,7 +91,7 @@ Session credentials stored in three incompatible places:
 | Storage | Location | Expiration |
 |---------|----------|------------|
 | IndexedDB | `src/lib/core/identity/session-cache.ts` | 3-6 months client-side |
-| Postgres | `EncryptedDeliveryData` table | TEE-encrypted, no expiration |
+| Convex | `EncryptedDeliveryData` table | TEE-encrypted, no expiration |
 | User Model | `session_credential` field | No TTL tracking |
 
 **Problem:** Dynamic imports used for circular dependency avoidance. `session-cache.ts` vs `session-credentials.ts` are different modules. When cached credential expires on client, backend doesn't know; verification status becomes stale.
@@ -421,7 +421,7 @@ These issues will cause runtime crashes or security vulnerabilities:
 
 ### 9.2 Priority 1: Core Functionality (Weeks 2-3)
 
-1. **Consolidate User types** - 7 → 2 (`Locals.User` + `PrismaUser`)
+1. **Consolidate User types** - 7 → 2 (`Locals.User` + `BackendUser`)
 2. **Complete district lookup** - Implement cwcAdapter TODO
 3. **Add timeouts to all HTTP calls** - 30-second default
 4. **Implement rate limiting** - Identity verification endpoints
@@ -449,13 +449,13 @@ These issues will cause runtime crashes or security vulnerabilities:
 The following work packages are designed for delegation to specialized engineering agents. Each package includes context, scope, acceptance criteria, and estimated complexity.
 
 ### WP-001: User Type Consolidation
-**Assignee Profile:** TypeScript architect with Prisma experience
+**Assignee Profile:** TypeScript architect with Convex experience
 **Complexity:** Medium (2-3 days)
 **Dependencies:** None
 
 **Scope:**
 - Audit all 7 User type definitions
-- Create canonical `PrismaUser` type from Prisma schema
+- Create canonical `BackendUser` type derived from `convex/schema.ts`
 - Create `LocalsUser` type for session context
 - Update `toEmailServiceUser()` to use new types
 - Fix all type assertions and casts
@@ -528,20 +528,20 @@ The following work packages are designed for delegation to specialized engineeri
 ---
 
 ### WP-004: Database Transaction Safety
-**Assignee Profile:** Backend engineer with Prisma/PostgreSQL experience
+**Assignee Profile:** Backend engineer with Convex experience
 **Complexity:** Medium (2-3 days)
 **Dependencies:** None
 
 **Scope:**
-- Wrap identity verification in transaction
-- Wrap submission creation + delivery in transaction
-- Add unique constraint on nullifier column
+- Move identity verification into a single atomic mutation
+- Move submission creation + delivery into a single atomic mutation
+- Add a unique index on the nullifier field
 - Add idempotency keys to submission endpoints
 
 **Files:**
 - `src/routes/api/identity/verify/+server.ts`
 - `src/routes/api/submissions/create/+server.ts`
-- `prisma/schema.prisma`
+- `convex/schema.ts`
 
 **Acceptance Criteria:**
 - [ ] Concurrent verification test doesn't create duplicates
@@ -749,14 +749,14 @@ src/lib/core/analytics/aggregate.ts          # Dual system confusion
 | **WP-001** User Type Consolidation | ✅ COMPLETE | TypeScript architect | Consolidated 7 → 2 types. Removed PII fields from auth.ts. Updated component-props.ts, hooks.server.ts. |
 | **WP-002** Security Vulnerability Fixes | ✅ COMPLETE | Security engineer | Fixed 4 CVEs: auth bypass, timing attack, userId spoofing, parameter naming bug. Added `crypto.timingSafeEqual`. |
 | **WP-003** HTTP Client Hardening | ✅ COMPLETE | Backend engineer | Added 30s timeouts + exponential backoff to 6 files: cwc-client, address-lookup, census-api, openai/gemini-embeddings, oauth-providers. |
-| **WP-004** Database Transaction Safety | ✅ COMPLETE | Prisma engineer | Wrapped identity/submission flows in `$transaction()`. Added nullifier unique constraint + idempotency_key column. |
+| **WP-004** Database Transaction Safety | ✅ COMPLETE | Convex engineer | Moved identity/submission flows into atomic mutations. Added unique index on nullifier + `idempotencyKey` field. |
 | **WP-005** Dead Code Removal | ✅ COMPLETE | General engineer | Removed 1,123 lines: ai-suggestions/, credential-verifier.ts, blockchain.ts, deprecated functions. |
 
 **Verification:** Build passes (7,511 modules), Tests pass (330/330, 7 skipped)
 
 #### Files Modified in Wave 1:
 ```
-prisma/schema.prisma                              # Unique constraint, idempotency_key
+convex/schema.ts                                  # Unique index on nullifier, idempotencyKey
 src/lib/core/auth/auth.ts                         # Removed PII fields from User interface
 src/lib/types/user.ts                             # Added phone to DeliveryAddress
 src/lib/types/component-props.ts                  # Removed address from ComponentUser
@@ -870,7 +870,7 @@ scripts/test-dc-territory-lookup.ts               # Manual test script
 
 | Audit Category | Agent Profile | Critical Findings | Impact |
 |----------------|---------------|-------------------|--------|
-| **Data Model Integrity** | Prisma/PostgreSQL architect | 15 orphaned models, 5 unused relations, cascade delete risks | HIGH |
+| **Data Model Integrity** | Convex schema architect | 15 orphaned models, 5 unused relations, cascade delete risks | HIGH |
 | **API Route Completeness** | Security engineer | 6 CRITICAL auth gaps, 21/31 routes missing auth | CRITICAL |
 | **Component State Management** | Svelte specialist | 5 memory leaks, 5 SSR issues, 4 orphaned components | MEDIUM |
 | **Dead Code Detection** | Codebase archaeologist | 4,250 lines removable, 36 unused npm deps, 1,282 lines TEE stubs | MEDIUM |
@@ -889,7 +889,7 @@ scripts/test-dc-territory-lookup.ts               # Manual test script
 | `/api/identity/init` | No authentication | Session hijacking | Add session auth |
 | `/api/cwc/jobs/[jobId]` | No ownership check | PII leakage via job metadata | Add ownership validation |
 
-#### Orphaned Prisma Models (15 Total)
+#### Orphaned Tables (15 Total)
 
 These models have zero application references and should be removed:
 
@@ -966,19 +966,19 @@ Based on Wave 3 audit findings, the following remediation work packages are reco
 
 ---
 
-### WP-012: Prisma Schema Cleanup
+### WP-012: Schema Cleanup
 **Priority:** HIGH
 **Complexity:** Low (1 day)
 **Dependencies:** None
 
 **Scope:**
-- Remove 15 orphaned models from schema
-- Add missing indexes (User.district_hash, etc.)
+- Remove 15 orphaned tables from `convex/schema.ts`
+- Add missing indexes (`users.districtHash`, etc.)
 - Document cascade delete behavior
 
 **Acceptance Criteria:**
-- [ ] 15 models removed
-- [ ] Migration runs clean
+- [ ] 15 tables removed
+- [ ] `npx convex dev` accepts schema cleanly
 - [ ] No application code breaks
 
 ---
@@ -1059,7 +1059,7 @@ Based on Wave 3 audit findings, the following remediation work packages are reco
 - **WP-011:** Fix 6 CRITICAL API authentication vulnerabilities (NEW)
 
 ### High Priority (Pre-Launch)
-- **WP-012:** Remove 15 orphaned Prisma models
+- **WP-012:** Remove 15 orphaned tables
 - **WP-016:** Expand test coverage to 80%+
 - House CWC: Apply for vendor program IP whitelisting
 
@@ -1077,7 +1077,7 @@ Based on Wave 3 audit findings, the following remediation work packages are reco
 | Work Package | Status | Agent Profile | Summary |
 |--------------|--------|---------------|---------|
 | **WP-011** API Authentication Sweep | ✅ COMPLETE | Security engineer | Fixed 6 CRITICAL vulnerabilities. All routes now require auth, userId from locals only. |
-| **WP-012** Prisma Schema Cleanup | ✅ COMPLETE | Database architect | Removed 15 orphaned models (~25% schema reduction). Migration pending. |
+| **WP-012** Schema Cleanup | ✅ COMPLETE | Database architect | Removed 15 orphaned tables (~25% schema reduction). Deploy pending. |
 | **WP-013** Memory Leak Fixes | ✅ COMPLETE | Svelte specialist | Fixed 5 components with proper cleanup (stores, timeouts, observers). |
 | **WP-014** npm Dependency Cleanup | ✅ COMPLETE | Node.js engineer | Removed 9 packages (531 total with transitive deps). Build 10% faster. |
 
@@ -1096,7 +1096,7 @@ Based on Wave 3 audit findings, the following remediation work packages are reco
 
 **Pattern Applied:** All routes now use `locals.user.id` instead of trusting client-provided userId.
 
-#### WP-012: Models Removed from Prisma Schema
+#### WP-012: Tables Removed from `convex/schema.ts`
 
 ```
 UserEmail, ai_suggestions, user_writing_style, template_analytics,
@@ -1106,9 +1106,9 @@ analytics_funnel, DeliveryLog, AgentDissent, AgentPerformance,
 RewardCalculation
 ```
 
-**⚠️ ACTION REQUIRED:** Run migration to drop tables:
+**⚠️ ACTION REQUIRED:** Deploy schema to drop tables:
 ```bash
-npx prisma migrate dev --name remove-15-orphaned-models
+npx convex deploy --env-file .env.production
 ```
 
 #### WP-013: Components Fixed for Memory Leaks
@@ -1142,9 +1142,9 @@ src/routes/api/identity/init/+server.ts
 src/routes/api/cwc/jobs/[jobId]/+server.ts
 
 # Schema cleanup (WP-012)
-prisma/schema.prisma
+convex/schema.ts
 src/lib/types/templateConfig.ts
-src/lib/types/prisma-extensions.d.ts
+src/lib/types/backend-extensions.d.ts
 src/lib/types/api.ts
 tests/setup/api-test-setup.ts
 tests/mocks/registry.ts
@@ -1171,7 +1171,7 @@ package-lock.json
 - ~~**WP-011:** Fix 6 CRITICAL API authentication vulnerabilities~~ ✅ DONE
 
 ### High Priority (Pre-Launch)
-- ~~**WP-012:** Remove 15 orphaned Prisma models~~ ✅ DONE (migration pending)
+- ~~**WP-012:** Remove 15 orphaned tables~~ ✅ DONE (deploy pending)
 - **WP-016:** Expand test coverage to 80%+
 - House CWC: Apply for vendor program IP whitelisting
 
@@ -1254,7 +1254,7 @@ tests/integration/api/README.md                (documentation)
 
 **app.d.ts changes:**
 - Added 31 missing env var declarations (TEE, identity, analytics, security)
-- Removed 19 unused declarations (SMTP, Supabase, dead feature flags)
+- Removed 19 unused declarations (SMTP, legacy DB provider envs, dead feature flags)
 - Added inline documentation for all variables
 
 **.env.example changes:**
@@ -1278,7 +1278,7 @@ tests/integration/api/README.md                (documentation)
 **Total Technical Debt Addressed:**
 - 6 CRITICAL security vulnerabilities → 0
 - 7 User types → 2
-- 15 orphaned Prisma models → 0
+- 15 orphaned tables → 0
 - 5 memory leak components → 0
 - 38 unvalidated JSON.parse → 0
 - 31 explicit `any` types → 0

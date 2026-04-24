@@ -107,15 +107,15 @@ This is more complex but produces correct results. The alternative (UNION ALL in
 
 #### F-R2-07: accountability_receipt composite index references non-existent table
 
-**File**: `prisma/migrations/20260318_decision_maker_migration/migration.sql:276-277`
-**What**: `CREATE INDEX "accountability_receipt_dm_delivered_idx"` will fail if the `accountability_receipt` table hasn't been created. Both this migration and the accountability receipt system are uncommitted — migration order is ambiguous.
+**File**: backend migration script `20260318_decision_maker_migration`
+**What**: Declaring the composite index `by_dm_delivered` on `accountabilityReceipts` fails if the table hasn't been created yet. Both this migration and the accountability receipt system are uncommitted — schema order is ambiguous.
 **Fix**: Remove this index from the DM migration. It belongs in the accountability receipt migration (or a standalone migration that runs after both).
 
 ---
 
 #### F-R2-08: jurisdiction_level 'international' is US-centric taxonomy
 
-**File**: `prisma/migrations/20260318_decision_maker_migration/migration.sql:126-131,227`
+**File**: backend migration script `20260318_decision_maker_migration`
 **What**: UK House of Commons is labeled `jurisdiction_level='international'` but it's a federal/national legislature within the UK. When adding Canadian provincial legislators (Cross-Border Plan), both federal Canadian MPs and provincial MPPs would have `jurisdiction='CA'` with no way to distinguish — federal is already coded as 'international'.
 **Fix**: Change institution seeds and DM rows from `'international'` to `'federal'`. Reserve `'international'` for genuinely supranational bodies (EU Parliament, UN).
 
@@ -135,7 +135,7 @@ This is more complex but produces correct results. The alternative (UNION ALL in
 
 **File**: `follow/+server.ts:70`
 **What**: `update: {}` returns old data unchanged but response says 201 Created.
-**Fix**: Check if follow was created or existed. Use Prisma `$transaction` with findUnique + create, or return 200 when upsert hit the update path.
+**Fix**: Check if the follow was created or already existed inside a single Convex mutation (unique index lookup + insert), and return 200 when the insert was a no-op.
 
 ---
 
@@ -177,7 +177,7 @@ This is more complex but produces correct results. The alternative (UNION ALL in
 | Delete uses deleteMany | Intentional for idempotency. |
 | Response leaks CUIDs | CUIDs are not sequential. Authenticated API. Acceptable. |
 | Large body DoS | CF Workers + SvelteKit enforce body size limits. Rate limiting handles frequency. |
-| Nullable decisionMakerId crash | Prisma's `{ in: [...] }` filter excludes null matches. No crash possible. |
+| Nullable decisionMakerId crash | Convex `.withIndex(...).filter(...)` on an `in` set skips null matches. No crash possible. |
 | Missing (orgId, dmId, proofDeliveredAt) composite index | The existing (decisionMakerId, proofDeliveredAt) composite + orgId single index cover the query plan via bitmap AND. |
 
 ---

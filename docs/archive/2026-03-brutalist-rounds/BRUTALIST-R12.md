@@ -40,9 +40,8 @@ The endpoint NEVER validates that the submitted `identityCommitment` matches `lo
 **Solution**: Derive `identityCommitment` from server-side session, never from client:
 ```ts
 // Replace body.identityCommitment with server-derived value
-const user = await prisma.user.findUnique({
-    where: { id: session.userId },
-    select: { identity_commitment: true }
+const user = await ctx.runQuery(api.users.getIdentityCommitment, {
+    userId: session.userId,
 });
 if (!user?.identity_commitment) {
     return json({ error: 'Identity verification required to register positions' }, { status: 403 });

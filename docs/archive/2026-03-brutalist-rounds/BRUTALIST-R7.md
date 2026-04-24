@@ -146,7 +146,7 @@ Update critical call sites (SSE agent endpoints that have access to `event.platf
 3. Asserts: source user's records moved to target, unique conflicts resolved correctly, source user deleted
 4. Asserts: transaction atomicity (on failure, nothing changes)
 
-**Pitfall**: Test needs a real database (Prisma $transaction + unique constraints). Use the existing vitest database test setup, not mocks.
+**Pitfall**: Test needs a real backend (Convex mutation + unique indexes). Use the existing vitest backend test setup, not mocks.
 
 ---
 

@@ -84,19 +84,28 @@ Also add a unique constraint migration: `@@unique([orgId, billId, type])`.
 #### F-R11-04: upsertBill TOCTOU — bills silently dropped on concurrent ingestion
 
 **File**: `src/lib/server/legislation/ingest/congress-gov.ts:336-381`
-**What**: `findUnique` then `create` instead of Prisma's `upsert()`. Concurrent ingestion causes unique constraint violations, and the error handler silently drops the bill.
+**What**: Separate lookup-then-insert calls instead of a single atomic upsert. Concurrent ingestion causes unique-index violations, and the error handler silently drops the bill.
 **Impact**: Bills missing from the database after ingestion runs.
 
-**Solution**: Replace with Prisma `upsert`:
+**Solution**: Collapse into one Convex mutation that looks up via `by_externalId` and either patches or inserts atomically:
 ```ts
-await db.bill.upsert({
-    where: { externalId: bill.externalId },
-    update: { title: bill.title, status: bill.status, ... },
-    create: { externalId: bill.externalId, title: bill.title, ... }
+export const upsertBill = mutation({
+  args: { bill: v.any() },
+  handler: async (ctx, { bill }) => {
+    const existing = await ctx.db
+      .query("bills")
+      .withIndex("by_externalId", (q) => q.eq("externalId", bill.externalId))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, { title: bill.title, status: bill.status, /* ... */ });
+    } else {
+      await ctx.db.insert("bills", bill);
+    }
+  },
 });
 ```
 
-**Pitfall**: Ensure the `update` clause includes all fields that should be refreshed, not just the ones set on creation.
+**Pitfall**: Ensure the patch path refreshes every field that should be kept current, not just those populated on insert.
 
 ---
 
@@ -173,7 +182,7 @@ targets: membership.role === 'member'
 | T-R11-01: Suppress totalCount for k-anonymity | F-R11-01 | `verify/receipt/[id]/+page.server.ts` | security-eng |
 | T-R11-02: Scorecard receipt exact match | F-R11-02 | `scorecard/compute.ts` | security-eng |
 | T-R11-03: Alert generator upsert | F-R11-03 | `alerts/generator.ts` | security-eng |
-| T-R11-04: upsertBill Prisma upsert | F-R11-04 | `congress-gov.ts` | api-eng |
+| T-R11-04: upsertBill atomic mutation | F-R11-04 | `congress-gov.ts` | api-eng |
 | T-R11-05: requireRole on 3 PII endpoints | F-R11-05 | donors, executions, segments | api-eng |
 | T-R11-06: getClientIP header order | F-R11-06 | `analytics/increment/+server.ts` | api-eng |
 | T-R11-07: Remove user-seed-1 hardcoded bypass | F-R11-07 | `backfill-embeddings`, `hooks.server.ts` | api-eng |

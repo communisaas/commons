@@ -150,14 +150,14 @@ recipientEmails: [], // Don't expose emails
 **What**: Queries `findUnique({ where: { slug } })` with no `is_public` filter. Private template metadata (title, description, category, action counts) leaked via OG image generation.
 **Impact**: Private template metadata exposure.
 
-**Solution**: Add `is_public` check:
+**Solution**: Add an `is_public` check via an indexed Convex query:
 ```ts
-const template = await prisma.template.findFirst({
-    where: { slug: params.slug, is_public: true },
-    // ...
+const template = await ctx.runQuery(api.templates.getPublicBySlug, {
+    slug: params.slug,
 });
 if (!template) return new Response('Not found', { status: 404 });
 ```
+The query narrows `by_slug` and filters `is_public === true`.
 
 ---
 

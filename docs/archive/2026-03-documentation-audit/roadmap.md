@@ -145,21 +145,18 @@ Everything below this line represents future vision for verified data integratio
 
 ### Database Schema Updates
 
-```prisma
-model ResolvedVariable {
-  id            String   @id @default(cuid())
-  templateId    String
-  userId        String
-  variable      String
-  value         String
-  source        Json
-  confidence    Float
-  resolvedAt    DateTime @default(now())
-  expiresAt     DateTime
-
-  @@index([templateId, userId, variable])
-  @@map("resolved_variable")
-}
+```ts
+// convex/schema.ts
+resolvedVariables: defineTable({
+  templateId: v.id("templates"),
+  userId: v.id("users"),
+  variable: v.string(),
+  value: v.string(),
+  source: v.any(),
+  confidence: v.number(),
+  resolvedAt: v.number(),
+  expiresAt: v.number(),
+}).index("by_template_user_variable", ["templateId", "userId", "variable"]);
 ```
 
 ### Testing Strategy

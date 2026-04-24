@@ -42,42 +42,31 @@ Congressional Staff
 - Session management via `@oslojs/crypto` (same as public interface)
 - Rate limiting on email sends (prevent abuse)
 
-**Database schema (new table):**
+**Backend tables (`convex/schema.ts`):**
 
-```prisma
-model CongressionalUser {
-  id                String   @id @default(cuid())
-  email             String   @unique // Must be .senate.gov or .house.gov
-  email_verified    Boolean  @default(false)
-  office_type       String   // 'senate' | 'house' | 'governor' | 'state_leg'
-  state             String   // Two-letter state code (e.g., 'CA', 'NY')
-  district          String?  // House district number (null for Senate)
-  office_name       String?  // e.g., 'Office of Senator Jane Smith'
+```ts
+congressionalUsers: defineTable({
+  email: v.string(),            // .senate.gov / .house.gov
+  emailVerified: v.boolean(),
+  officeType: v.string(),       // 'senate' | 'house' | 'governor' | 'state_leg'
+  state: v.string(),            // Two-letter state code
+  district: v.optional(v.string()), // House district number
+  officeName: v.optional(v.string()),
+  lastLogin: v.optional(v.number()),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+})
+  .index("by_email", ["email"])
+  .index("by_state_district", ["state", "district"]);
 
-  // Session management
-  last_login        DateTime?
-  created_at        DateTime @default(now())
-  updated_at        DateTime @updatedAt
-
-  // Relations
-  sessions          CongressionalSession[]
-
-  @@index([email])
-  @@index([state, district])
-}
-
-model CongressionalSession {
-  id                String   @id @default(cuid())
-  user_id           String
-  token             String   @unique
-  expires_at        DateTime
-  created_at        DateTime @default(now())
-
-  user              CongressionalUser @relation(fields: [user_id], references: [id], onDelete: Cascade)
-
-  @@index([token])
-  @@index([expires_at])
-}
+congressionalSessions: defineTable({
+  userId: v.id("congressionalUsers"),
+  token: v.string(),
+  expiresAt: v.number(),
+  createdAt: v.number(),
+})
+  .index("by_token", ["token"])
+  .index("by_expires", ["expiresAt"]);
 ```
 
 ---
@@ -290,7 +279,7 @@ GET /api/congressional/analytics?state=CA&district=12&period=30d
 ### Week 15: Authentication + Inbox
 
 **Database & Backend:**
-- [ ] Create `CongressionalUser` and `CongressionalSession` Prisma models
+- [ ] Define `congressionalUsers` and `congressionalSessions` tables in `convex/schema.ts`
 - [ ] Implement email domain validation (`.senate.gov`, `.house.gov` whitelist)
 - [ ] Build magic link authentication system
 - [ ] Create session management with `@oslojs/crypto`
@@ -355,15 +344,15 @@ GET /api/congressional/analytics?state=CA&district=12&period=30d
 - `@sveltejs/enhanced-img` for optimized images
 
 **Backend:**
-- SvelteKit API routes
-- Prisma ORM for database queries
+- SvelteKit API routes / Convex functions
+- Convex reactive database (queries, mutations, actions)
 - `@oslojs/crypto` for session management
 - `nodemailer` for magic link emails
 
 **Database:**
-- Supabase Postgres (existing)
-- New tables: `CongressionalUser`, `CongressionalSession`
-- Indexes on `email`, `state`, `district`, `expires_at`
+- Convex (existing)
+- New tables: `congressionalUsers`, `congressionalSessions`
+- Indexes on `email`, `state`, `district`, `expiresAt`
 
 **Email Service:**
 - AWS SES (already configured for CWC delivery)

@@ -20,8 +20,9 @@ OPENAI_ORGANIZATION=org-... # Optional but recommended
 # Google AI (Gemini 2.5)
 GOOGLE_AI_API_KEY=...
 
-# Database
-DATABASE_URL=postgresql://...
+# Backend
+CONVEX_DEPLOYMENT=...
+NEXT_PUBLIC_CONVEX_URL=...
 REDIS_URL=redis://...
 
 # Commons Core
@@ -55,11 +56,8 @@ EMERGENCY_SHUTDOWN_THRESHOLD=500.00 # USD
 **1. Database Migration**
 
 ```bash
-# Run Prisma migrations
-npx prisma migrate deploy
-
-# Verify agent-agnostic fields exist
-npx prisma studio # Check Template model
+# Deploy Convex schema + functions
+npx convex deploy --env-file .env.production
 ```
 
 **2. Redis Configuration**

@@ -7,7 +7,7 @@
 ## Methodology
 
 Brutalist MCP roasts were run against the DecisionMaker migration across four verticals:
-1. **Schema** — Prisma schema for DecisionMaker, Institution, ExternalId, OrgDMFollow
+1. **Schema** — Convex tables for DecisionMaker, Institution, ExternalId, OrgDMFollow
 2. **Security** — Follow/unfollow API, activity endpoints, feed endpoint
 3. **Migration** — SQL migration from representative/international_representatives
 4. **Architecture** — Overall design: dual-table strategy, sync pipeline, identity model
@@ -88,18 +88,18 @@ Same for PATCH handler body.note.
 
 #### F-05: No audit trail on follow records
 
-**File**: `prisma/schema.prisma:2471-2487` (OrgDMFollow model)
-**What**: `OrgDMFollow` records which org follows which DM but not which user performed the action. For orgs with multiple admins, there's no accountability for who changed follow/alert settings.
+**File**: `convex/schema.ts` (`orgDmFollows` table)
+**What**: `orgDmFollows` records which org follows which DM but not which user performed the action. For orgs with multiple admins, there's no accountability for who changed follow/alert settings.
 
-**Solution**: Add `followedBy String? @map("followed_by")` to OrgDMFollow, populated from `locals.user.id` in the API handler. Nullable for backcompat with existing rows.
+**Solution**: Add `followedBy: v.optional(v.string())` to `orgDmFollows`, populated from `locals.user.id` in the API handler. Optional for backcompat with existing rows.
 
-**Pitfall**: Requires a schema migration. Can be batched with other schema changes. Don't add an FK to `user` table — just store the userId string to avoid cascade complexity.
+**Pitfall**: Requires a schema change. Can be batched with other schema changes. Don't add a foreign reference to `users` — just store the userId string to avoid cascade complexity.
 
 ---
 
 #### F-06: International rep data loss in migration (constituency_name, chamber)
 
-**File**: `prisma/migrations/20260318_decision_maker_migration/migration.sql:195-239`
+**File**: backend migration script `20260318_decision_maker_migration`
 **What**: The migration copies `international_representatives` into `decision_maker` but drops two columns:
 - `constituency_name` (e.g., "Sheffield Hallam") — not mapped to any DM field
 - `chamber` (e.g., "commons", "senate") — not mapped (title gets `office`, not chamber)
@@ -119,23 +119,23 @@ After `DROP TABLE international_representatives`, this data is unrecoverable.
 
 #### F-07: Composite index missing for DM activity queries
 
-**Files**: `prisma/schema.prisma:2300-2303` (LegislativeAction indexes)
-**What**: The activity endpoint queries `legislativeAction` by `(decisionMakerId, occurredAt DESC)` but only single-column indexes exist. The DB must index-scan decisionMakerId then sort by occurredAt.
+**Files**: `convex/schema.ts` (`legislativeActions` indexes)
+**What**: The activity endpoint queries `legislativeActions` by `(decisionMakerId, occurredAt DESC)` but only single-column indexes exist. The backend must index-scan by decisionMakerId then sort by occurredAt.
 
-**Solution**: Add composite index:
-```prisma
-@@index([decisionMakerId, occurredAt])
+**Solution**: Add composite index on `legislativeActions`:
+```ts
+.index("by_dm_occurred", ["decisionMakerId", "occurredAt"])
 ```
-Same for `accountabilityReceipt`:
-```prisma
-@@index([decisionMakerId, proofDeliveredAt])
+Same for `accountabilityReceipts`:
+```ts
+.index("by_dm_delivered", ["decisionMakerId", "proofDeliveredAt"])
 ```
 
 ---
 
 #### F-08: ExternalId uniqueness constraint too strict for scoped systems
 
-**File**: `prisma/schema.prisma:2466` — `@@unique([system, value])`
+**File**: `convex/schema.ts` — `externalIds` unique index `["system", "value"]`
 **What**: Global uniqueness on `(system, value)` means two DMs can't share the same external ID value within a system. For bioguide this is correct (globally unique). For `constituency`, IDs could theoretically collide across countries if using a generic system name.
 
 **Solution**: Use country-specific system names when ingesting: `"uk-constituency"`, `"au-aec"`, `"ca-riding"` instead of generic `"constituency"`. Document this convention. The constraint is then correct.
@@ -160,9 +160,12 @@ Same for `accountabilityReceipt`:
 
 **Solution**: After F-01 is fixed (correlator uses DM IDs), this fallback becomes:
 ```ts
-const dm = await db.decisionMaker.findFirst({
-  where: { lastName: actionLastName, jurisdiction: /* from bill context */ }
-});
+const dm = await ctx.db
+  .query("decisionMakers")
+  .withIndex("by_lastName_jurisdiction", (q) =>
+    q.eq("lastName", actionLastName).eq("jurisdiction", jurisdiction)
+  )
+  .first();
 ```
 This is more reliable than delivery-name matching and leverages the new model.
 
@@ -191,7 +194,7 @@ This is more reliable than delivery-name matching and leverages the new model.
 
 | Finding | Claimed by | Reason for Rejection |
 |---------|-----------|---------------------|
-| "String discriminators need CHECK constraints" | Schema critics | Prisma controls all writes; app validates types. CHECK constraints require raw SQL migrations and complicate schema management. Defense-in-depth but not proportionate. |
+| "String discriminators need CHECK constraints" | Schema critics | Convex mutations control all writes and validate via `v.literal()` unions. CHECK constraints would be redundant. Defense-in-depth but not proportionate. |
 | "GET endpoints completely unrate-limited" | Security critics | All endpoints require authentication + org membership via `loadOrgContext`. Cloudflare edge rate limiting handles volumetric abuse. Per-endpoint rate limits are defense-in-depth, not a vulnerability. |
 | "Name-matching is collision-prone at scale" | Architecture critics | Already documented in correlator comments. The bioguide path is primary; name matching is fallback. F-01 and F-10 address the real issue (correlator must write DM IDs, not delivery IDs). |
 | "No tenant isolation on DecisionMaker reads" | Security critics | DecisionMaker is a public entity (legislators are public figures). Reads don't need org-scoping — any authenticated user should be able to view a DM's public info. Follow/receipt data IS org-scoped. |
@@ -215,7 +218,7 @@ This is more reliable than delivery-name matching and leverages the new model.
 |------|---------|---------|-------|
 | T-03: Add role check to follow API | `follow/+server.ts` | — | api-eng |
 | T-04: Add input length limits to follow API | `follow/+server.ts` | T-03 (same file) | api-eng |
-| T-05: Add followedBy to OrgDMFollow | `schema.prisma`, `follow/+server.ts` | — | schema-eng |
+| T-05: Add followedBy to OrgDMFollow | `convex/schema.ts`, `follow/+server.ts` | — | schema-eng |
 | T-06: Fix migration data loss (constituency_name → district, chamber → institution) | `migration.sql` | — | migration-eng |
 
 **Review Gate G-02**: Verify role checks work, migration preserves all international rep data.
@@ -224,7 +227,7 @@ This is more reliable than delivery-name matching and leverages the new model.
 
 | Task | File(s) | Depends | Agent |
 |------|---------|---------|-------|
-| T-07: Add composite indexes for activity queries | `schema.prisma` | — | schema-eng |
+| T-07: Add composite indexes for activity queries | `convex/schema.ts` | — | schema-eng |
 | T-08: Scope ExternalId constituency system names | `migration.sql`, convention doc | T-06 | migration-eng |
 | T-09: Add receipts to feed endpoint | `feed/+server.ts` | — | api-eng |
 | T-10: Upgrade correlator name-fallback to DM resolution | `correlator.ts` | T-01 | correlator-eng |

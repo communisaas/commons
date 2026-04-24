@@ -15,7 +15,7 @@ Full codebase roast of `src/` by Claude and Gemini critics. 29 raw findings dedu
 
 | Finding | Reason |
 |---------|--------|
-| C1: Vector SQL injection via `::vector(768)` cast | Prisma `$executeRaw` template literals auto-parameterize. `vectorStr` is a bound param, not string interpolation. |
+| C1: Vector SQL injection via `::vector(768)` cast | Vector values flow through the typed backend query API as bound params — no string interpolation. |
 | C3: Unauthenticated debate stream | Debate state is public by design (blockchain-mirrored market data). No private user data exposed. |
 | C5: Scorer O(n^2) upsert loop | Mischaracterized. Single SQL CROSS JOIN computes all similarities in one pass. Per-org upserts are O(orgs-per-bill), not O(bills x orgs). |
 | M8: Debate spawn race condition | R3 already added `SELECT ... FOR UPDATE` in Phase 3 of `spawn.ts:133-136`. Second concurrent spawn returns null. |
@@ -114,15 +114,15 @@ db.legislativeAction.findMany({
 #### F-R4-05: Embedder serial per-row UPDATE (N+1)
 
 **File**: `src/lib/server/legislation/relevance/embedder.ts:67-76`
-**What**: Per-bill UPDATE in a loop. 100 bills = 100 sequential round-trips through Hyperdrive.
-**Impact**: Cron execution time 3-10s+ per batch. Blocks Hyperdrive's single connection.
+**What**: Per-bill UPDATE in a loop. 100 bills = 100 sequential round-trips through the backend.
+**Impact**: Cron execution time 3-10s+ per batch. Serializes writes on the backend's single-flight path.
 **Solution**: Single batch UPDATE via raw SQL:
 ```sql
 UPDATE bill SET topic_embedding = v.embedding::vector(768)
 FROM (VALUES ($1::text, $2::text), ...) AS v(id, embedding)
 WHERE bill.id = v.id
 ```
-**Pitfall**: Prisma `$executeRaw` with dynamic VALUES list requires `Prisma.sql` + `Prisma.join` (same pattern as correlator R3 fix).
+**Pitfall**: Express this as a single Convex mutation that iterates the batch and calls `ctx.db.patch` per id — one mutation, one atomic commit, no per-row round-trip.
 
 ---
 
@@ -162,15 +162,15 @@ for (let i = 0; i < targets.length; i += BATCH_SIZE) {
 #### F-R4-08: Member sync Phase 4 — 600+ updates in array transaction
 
 **File**: `src/lib/server/legislation/ingest/member-sync.ts:300-316`
-**What**: `db.$transaction(toUpdate.map(m => db.decisionMaker.update(...)))` creates 600+ individual UPDATE statements in one transaction. Serialized through Hyperdrive max:1 pool.
-**Impact**: 4-6s wall-clock for typical sync. Technical debt, not broken, but 10x slower than batch SQL.
+**What**: `db.$transaction(toUpdate.map(m => db.decisionMaker.update(...)))` creates 600+ individual UPDATE statements in one transaction. Serialized through the backend's single-flight path.
+**Impact**: 4-6s wall-clock for typical sync. Technical debt, not broken, but 10x slower than batched writes.
 **Solution**: Same pattern as correlator (R3 T-R3-13) — single raw SQL UPDATE:
 ```sql
 UPDATE "decision_maker" SET name = v.name, party = v.party, ...
 FROM (VALUES ...) AS v(id, name, party, ...)
 WHERE "decision_maker".id = v.id
 ```
-**Pitfall**: Many columns to update (12+). Use a CTE or temporary table for cleanliness. Or chunk into batches of 50 with `Prisma.join`.
+**Pitfall**: Many columns to update (12+). Chunk into batches of 50 and patch them inside a single Convex mutation per chunk.
 
 ---
 
@@ -233,7 +233,7 @@ WHERE "decision_maker".id = v.id
 |------|-----------|---------|-------|
 | T-R4-09: COUNT(DISTINCT) for ALD | F-R4-09 | `verification.ts` | perf-eng |
 | T-R4-10: Ordered locking in identity binding | F-R4-10 | `identity-binding.ts` | identity-eng |
-| T-R4-11: Debate spawn retry + reconciliation log | F-R4-12 | `spawn.ts`, `schema.prisma` | debate-eng |
+| T-R4-11: Debate spawn retry + reconciliation log | F-R4-12 | `spawn.ts`, `convex/schema.ts` | debate-eng |
 
 **Review Gate G-R4-03**: Verify raw SQL COUNT DISTINCT, ordered FOR UPDATE, spawn retry logic.
 
@@ -248,7 +248,7 @@ WHERE "decision_maker".id = v.id
 | T-R4-03 | **done** | api-eng | `campaign.findFirst({ id, orgId })` before call record creation |
 | T-R4-04 | **done** | api-eng | `bill: { relevances: { some: { orgId } } }` filter on legislativeAction |
 | G-R4-01 | **passed** | team-lead | 4/4 checkpoints verified against code |
-| T-R4-05 | **done** | perf-eng | `UPDATE...FROM (VALUES ${Prisma.join(values)})` — N→1 queries |
+| T-R4-05 | **done** | perf-eng | Single Convex mutation iterates the batch and patches each id — N→1 round-trips |
 | T-R4-06 | **done** | identity-eng | `/^[0-9a-f]{64}$/i` regex, rejects short/non-hex |
 | T-R4-07 | **done** | perf-eng | `BATCH_SIZE=10`, `Promise.all(batch.map(...))` with per-item try/catch |
 | T-R4-08 | **done** | perf-eng | `CHUNK_SIZE=50`, loop over chunked array transactions |
