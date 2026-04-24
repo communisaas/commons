@@ -25,7 +25,17 @@ interface GateSuccess {
 	success: true;
 }
 
+interface ReconcileGateSuccess {
+	success: true;
+	/** Authoritative district code derived from cellId via Shadow Atlas.
+	 * Use this instead of trusting witness.deliveryAddress.congressional_district —
+	 * the witness is user-controlled and can lie about the district even when the
+	 * cellId matches. */
+	districtCode: string;
+}
+
 type GateResult = GateSuccess | GateFailure;
+type ReconcileResult = ReconcileGateSuccess | GateFailure;
 
 interface VerifyInput {
 	proof: string;
@@ -180,25 +190,33 @@ interface ReconcileInput {
 }
 
 /**
- * GATE 3 — reconcile decrypted delivery address to the cellId committed in the witness.
+ * GATE 3 — reconcile decrypted delivery address to the cellId committed in the witness,
+ * and return the authoritative district code derived from that cellId.
  *
- * Derives a cellId from the typed address via Shadow Atlas (same pipeline used
- * for verification-time district resolution: Nominatim geocode → H3 cell).
- * Compares to `witness.cellId` using constant-time equality.
+ * Derives (cellId, district) from the typed address via Shadow Atlas (same pipeline
+ * used for verification-time district resolution: Nominatim geocode → H3 cell →
+ * district). Compares cellId to `witness.cellId` using constant-time equality.
  *
  * Mismatch means the user proved residency in cell X and typed a delivery
  * address in cell Y. The request is rejected; ConstituentData is never returned.
+ *
+ * On success, returns the atlas-derived `districtCode` so the caller can use it
+ * as the authoritative district for CWC routing — NEVER trust a
+ * `congressional_district` field in the decrypted witness, which is
+ * user-controlled and can mis-name the district even when the cellId matches.
  */
-export async function reconcileCellGate(input: ReconcileInput): Promise<GateResult> {
+export async function reconcileCellGate(input: ReconcileInput): Promise<ReconcileResult> {
 	if (!input.witnessCellId) {
 		return { success: false, errorCode: 'PROOF_INVALID', error: 'witness_cell_id_missing' };
 	}
 
 	let derivedCellId: string | null;
+	let derivedDistrictId: string | null;
 	try {
 		const { resolveAddress } = await import('$lib/core/shadow-atlas/client');
 		const result = await resolveAddress(input.address);
 		derivedCellId = result.cell_id ?? null;
+		derivedDistrictId = result.district?.id ?? null;
 	} catch {
 		return { success: false, errorCode: 'ADDRESS_UNRESOLVABLE', error: 'shadow_atlas_unreachable' };
 	}
@@ -213,7 +231,15 @@ export async function reconcileCellGate(input: ReconcileInput): Promise<GateResu
 		return { success: false, errorCode: 'CELL_MISMATCH', error: 'cell_mismatch' };
 	}
 
-	return { success: true };
+	// Atlas resolved a cellId that matches the witness. The cell-to-district map
+	// is deterministic, so a populated cell must have a district — a null here
+	// means atlas data is missing a district assignment for this cell, which we
+	// treat as unresolvable rather than silently passing through.
+	if (!derivedDistrictId) {
+		return { success: false, errorCode: 'ADDRESS_UNRESOLVABLE', error: 'no_district_for_cell' };
+	}
+
+	return { success: true, districtCode: derivedDistrictId };
 }
 
 /**

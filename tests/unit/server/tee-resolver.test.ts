@@ -156,7 +156,7 @@ describe('LocalConstituentResolver — three-gate atomic check', () => {
 		expect(result.constituent!.name).toBe('Constituent');
 	});
 
-	it('handles optional phone and congressional_district', async () => {
+	it('handles optional phone and ignores witness congressional_district (atlas is authoritative)', async () => {
 		mockDecryptWitness.mockResolvedValueOnce({ ...VALID_WITNESS, deliveryAddress: { ...FULL_ADDRESS, phone: undefined, congressional_district: undefined } });
 		mockShadowAtlasSuccess();
 
@@ -164,7 +164,25 @@ describe('LocalConstituentResolver — three-gate atomic check', () => {
 
 		expect(result.success).toBe(true);
 		expect(result.constituent!.phone).toBeUndefined();
-		expect(result.constituent!.congressionalDistrict).toBeUndefined();
+		// Even when the witness lacks congressional_district, atlas provides it.
+		// The witness's own district value is never used for routing.
+		expect(result.constituent!.congressionalDistrict).toBe('CA-12');
+	});
+
+	it('uses atlas-derived district, ignoring a lying witness congressional_district (ZKP-F-001)', async () => {
+		// Attacker encrypts a witness with honest cellId + address but LIES about
+		// congressional_district. Gate 3 passes (cellId matches) but routing must
+		// use atlas's CA-12, not the attacker's "TX-25".
+		mockDecryptWitness.mockResolvedValueOnce({
+			...VALID_WITNESS,
+			deliveryAddress: { ...FULL_ADDRESS, congressional_district: 'TX-25' }
+		});
+		mockShadowAtlasSuccess(); // atlas returns CA-12
+
+		const result = await resolver.resolve(buildRequest());
+
+		expect(result.success).toBe(true);
+		expect(result.constituent!.congressionalDistrict).toBe('CA-12');
 	});
 
 	// ---------------------------------------------------------------------------

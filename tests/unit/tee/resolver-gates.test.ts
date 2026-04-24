@@ -251,13 +251,14 @@ describe('verifyProofGate — AR.4b invalid proof rejected', () => {
 describe('reconcileCellGate — AR.4a cell mismatch rejected', () => {
 	const addr = { street: '123 Main St', city: 'SF', state: 'CA', zip: '94110' };
 
-	it('accepts when derived cellId matches witness cellId', async () => {
+	it('accepts when derived cellId matches witness cellId and returns atlas-derived districtCode', async () => {
 		mockShadowAtlasCell('872830828ffffff');
 		const result = await reconcileCellGate({
 			address: addr,
 			witnessCellId: '872830828ffffff'
 		});
 		expect(result.success).toBe(true);
+		if (result.success) expect(result.districtCode).toBe('CA-12');
 	});
 
 	it('accepts when case differs but value matches', async () => {
@@ -267,6 +268,28 @@ describe('reconcileCellGate — AR.4a cell mismatch rejected', () => {
 			witnessCellId: '872830828ffffff'
 		});
 		expect(result.success).toBe(true);
+		if (result.success) expect(result.districtCode).toBe('CA-12');
+	});
+
+	it('rejects ADDRESS_UNRESOLVABLE when atlas returns populated cell without a district', async () => {
+		// Atlas data gap: a cell is mapped but has no district assignment.
+		// We must not silently pass without a district — delivery would have no target.
+		mockResolveAddress.mockResolvedValueOnce({
+			geocode: { lat: 34.05, lng: -118.24, matched_address: 'mock', confidence: 0.95, country: 'US' },
+			district: null,
+			officials: null,
+			cell_id: '872830828ffffff',
+			vintage: 'mock'
+		});
+		const result = await reconcileCellGate({
+			address: addr,
+			witnessCellId: '872830828ffffff'
+		});
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.errorCode).toBe('ADDRESS_UNRESOLVABLE');
+			expect(result.error).toBe('no_district_for_cell');
+		}
 	});
 
 	it('rejects when derived cellId does not match witness cellId', async () => {

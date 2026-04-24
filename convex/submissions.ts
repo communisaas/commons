@@ -48,6 +48,20 @@ export const create = action({
     // Compute pseudonymous ID (HMAC-SHA256 of userId)
     const pseudonymousId = await computePseudonymousId(identity.subject);
 
+    // (1a) Active-credential gate: reject if the submitter has no non-revoked,
+    // unexpired district credential. Closes F1 stale-proof replay.
+    // identity.tokenIdentifier → users.by_tokenIdentifier → districtCredentials lookup.
+    const credentialStatus = await ctx.runQuery(
+      internal.submissions.hasActiveDistrictCredential,
+      { tokenIdentifier: identity.tokenIdentifier }
+    );
+    if (!credentialStatus.active) {
+      throw new Error("NO_ACTIVE_DISTRICT_CREDENTIAL");
+    }
+    // Use credentialId (always set) not credentialHash (empty for commitment-only
+    // shadow_atlas credentials — would bypass delivery recheck on falsy guard).
+    const issuingCredentialId = credentialStatus.credentialId;
+
     // Check org verified action quota (if template belongs to an org)
     const template = await ctx.runQuery(internal.submissions.getTemplateForDelivery, {
       templateId: args.templateId,
@@ -79,6 +93,7 @@ export const create = action({
       teeKeyId: args.teeKeyId,
       idempotencyKey: args.idempotencyKey,
       witnessExpiresAt: Date.now() + WITNESS_TTL_MS,
+      issuingCredentialId,
     });
 
     if (result.existing) {
@@ -128,6 +143,7 @@ export const insertSubmission = internalMutation({
     teeKeyId: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
     witnessExpiresAt: v.number(),
+    issuingCredentialId: v.optional(v.id("districtCredentials")),
   },
   handler: async (ctx, args) => {
     // Check idempotency key (client retry protection)
@@ -175,10 +191,65 @@ export const insertSubmission = internalMutation({
       deliveryStatus: "pending",
       verificationStatus: "pending",
       witnessExpiresAt: args.witnessExpiresAt,
+      issuingCredentialId: args.issuingCredentialId,
       updatedAt: Date.now(),
     });
 
     return { submissionId: id, existing: false };
+  },
+});
+
+/**
+ * Internal: Check whether a user has a currently-active (non-revoked, unexpired)
+ * district credential. Used as the F1 revocation gate at submission entry AND
+ * at delivery enqueue (closes the TOCTOU window between action and dispatch).
+ *
+ * Resolves tokenIdentifier → userId via the by_tokenIdentifier index so the
+ * submissions.create action can pass through identity.tokenIdentifier directly.
+ */
+export const hasActiveDistrictCredential = internalQuery({
+  args: { tokenIdentifier: v.string() },
+  handler: async (ctx, { tokenIdentifier }) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_tokenIdentifier", (q) => q.eq("tokenIdentifier", tokenIdentifier))
+      .unique();
+    if (!user) return { active: false as const, reason: "user_not_found" };
+
+    const now = Date.now();
+    const credentials = await ctx.db
+      .query("districtCredentials")
+      .withIndex("by_userId_expiresAt", (q) => q.eq("userId", user._id))
+      .collect();
+
+    const active = credentials.find((c) => !c.revokedAt && c.expiresAt > now);
+    if (!active) return { active: false as const, reason: "revoked_or_expired" };
+
+    return {
+      active: true as const,
+      credentialId: active._id,
+      userId: user._id,
+      credentialHash: active.credentialHash,
+    };
+  },
+});
+
+/**
+ * Internal: Check a credential Id for current validity. Used at delivery
+ * enqueue to recheck revocation after submission was accepted — closes the
+ * TOCTOU window where a user revokes (re-verifies) between submit and send.
+ *
+ * Keyed on Convex Id (not credentialHash) because commitment-only credentials
+ * store credentialHash="" which would defeat a hash-based lookup.
+ */
+export const isCredentialActive = internalQuery({
+  args: { credentialId: v.id("districtCredentials") },
+  handler: async (ctx, { credentialId }) => {
+    const credential = await ctx.db.get(credentialId);
+    if (!credential) return { active: false as const, reason: "not_found" };
+    if (credential.revokedAt) return { active: false as const, reason: "revoked" };
+    if (credential.expiresAt < Date.now()) return { active: false as const, reason: "expired" };
+    return { active: true as const };
   },
 });
 
@@ -634,8 +705,28 @@ export const anchorProofOnChain = internalAction({
     const anchorUrl = process.env.COMMONS_INTERNAL_URL;
     const anchorSecret = process.env.INTERNAL_API_SECRET;
     if (!anchorUrl || !anchorSecret) {
-      // No anchor infra configured — leave anchorStatus unset so it's clear
-      // the anchor was skipped rather than failed.
+      // No anchor infra configured. In prior versions we silently returned,
+      // leaving anchorStatus unset — which made it impossible to distinguish
+      // "not yet processed" from "env missing, will never anchor" in the DB.
+      // Now we write an explicit terminal state so ops dashboards can count
+      // skipped-anchor volume and alert when the rate becomes non-trivial.
+      //
+      // We can't fire the internal alert here (same env is missing), so fall
+      // back to console.error — Convex forwards these to the runtime logs.
+      const missing = [
+        !anchorUrl ? "COMMONS_INTERNAL_URL" : null,
+        !anchorSecret ? "INTERNAL_API_SECRET" : null,
+      ]
+        .filter(Boolean)
+        .join(",");
+      console.error(
+        `[ANCHOR_SKIPPED] submissionId=${args.submissionId} — anchor infra not configured (missing: ${missing}). On-chain audit will not run for this submission.`
+      );
+      await ctx.runMutation(internal.submissions.updateAnchorStatus, {
+        submissionId: args.submissionId,
+        anchorStatus: "skipped_missing_env",
+        anchorError: `anchor_infra_not_configured:${missing}`,
+      });
       return;
     }
 
@@ -850,6 +941,27 @@ export const deliverToCongress = internalAction({
         return;
       }
 
+      // (1f) Revocation recheck at delivery enqueue. Closes the TOCTOU window
+      // where a user re-verifies (rotating their credential) between the accepted
+      // submission and the scheduler-dispatched delivery. If the credential that
+      // issued this submission is now revoked or expired, fail the delivery.
+      // Note: submissions from before the 1a rollout may have issuingCredentialId
+      // undefined — those are grandfathered through until backfill/expiry.
+      if (submission.issuingCredentialId) {
+        const credStatus = await ctx.runQuery(internal.submissions.isCredentialActive, {
+          credentialId: submission.issuingCredentialId,
+        });
+        if (!credStatus.active) {
+          await ctx.runMutation(internal.submissions.updateDeliveryStatus, {
+            submissionId: args.submissionId,
+            deliveryStatus: "failed",
+            deliveryError: `credential_${credStatus.reason}`,
+            expectedAttempts: claim.attempts,
+          });
+          return;
+        }
+      }
+
       // Decrypt witness via TEE resolver
       const teeUrl = process.env.TEE_RESOLVER_URL;
       if (!teeUrl) {
@@ -957,6 +1069,11 @@ export const deliverToCongress = internalAction({
       if (!hasHouseConfig && !hasSenateConfig) {
         // No CWC configured — mark explicitly as demo so receipts/metrics/UI can
         // distinguish a missing-config deploy from a real Congressional delivery.
+        // Log as warn (not debug/info) so prod log dashboards surface the case:
+        // a deploy silently entering demo mode is an ops incident, not a user error.
+        console.warn(
+          `[DELIVERY_DEMO_MODE] submissionId=${args.submissionId} template=${submission.templateId} district=${districtCode} — CWC not configured (missing both GCP_PROXY_URL+GCP_PROXY_AUTH_TOKEN AND CWC_API_BASE_URL+CWC_API_KEY). Message did NOT reach Congress; delivery status marked 'demo'.`
+        );
         await ctx.runMutation(internal.submissions.updateDeliveryStatus, {
           submissionId: args.submissionId,
           deliveryStatus: "demo",

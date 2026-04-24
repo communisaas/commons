@@ -34,6 +34,10 @@ export class LocalConstituentResolver implements ConstituentResolver {
 			};
 		}
 
+		// NOTE: the witness wire format may include a `congressional_district` field,
+		// but we intentionally do NOT type it here — reading it would invite a
+		// regression where that user-controlled value is used for routing. The
+		// authoritative district comes from reconcileCellGate (atlas-derived).
 		const addr = witness.deliveryAddress as
 			| {
 					name?: string;
@@ -43,7 +47,6 @@ export class LocalConstituentResolver implements ConstituentResolver {
 					state: string;
 					zip: string;
 					phone?: string;
-					congressional_district?: string;
 			  }
 			| undefined;
 
@@ -71,6 +74,11 @@ export class LocalConstituentResolver implements ConstituentResolver {
 		}
 
 		// GATE 3: Reconcile decrypted address to the cellId committed in the witness (AR.2c + AR.2d).
+		// On success, reconcileCellGate returns the atlas-derived districtCode — this is
+		// the only trustworthy source for downstream CWC routing. The witness's own
+		// `congressional_district` field is user-controlled and MUST NOT be trusted
+		// (an attacker can provide an honest cellId+address but lie about the district
+		// string, routing the message to another district's reps).
 		const reconcileResult = await reconcileCellGate({
 			address: { street: addr.street, city: addr.city, state: addr.state, zip: addr.zip },
 			witnessCellId: witness.cellId
@@ -92,7 +100,7 @@ export class LocalConstituentResolver implements ConstituentResolver {
 					state: addr.state,
 					zip: addr.zip
 				},
-				congressionalDistrict: addr.congressional_district
+				congressionalDistrict: reconcileResult.districtCode
 			}
 		};
 	}

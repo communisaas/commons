@@ -620,9 +620,22 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 /**
  * Check if a nullifier has been used on-chain.
  *
+ * STATUS: Not currently wired into the submission path. Nullifier deduplication
+ * in the live flow is enforced atomically by Convex (`insertSubmission` uses
+ * `by_nullifier` index + transactional guard). The on-chain nullifier record is
+ * populated as a side effect of `anchorProofOnChain` after delivery succeeds.
+ *
+ * This helper is retained as a defense-in-depth primitive: a future revision
+ * may add pre-submit chain dedup so a duplicate is rejected without reaching
+ * the Convex write. If you remove this, also drop the corresponding tests.
+ *
+ * FAIL-OPEN: returns `false` when the contract is unconfigured or a read fails.
+ * Only safe because the function is NOT in the enforcement path today; if you
+ * wire it into submit, add a fail-closed variant or guard the caller.
+ *
  * @param actionDomain - Action domain (bytes32 hex)
  * @param nullifier - Nullifier to check (bytes32 hex)
- * @returns true if already used, false if available
+ * @returns true if already used, false if available (or chain unreachable)
  */
 export async function isNullifierUsed(actionDomain: string, nullifier: string): Promise<boolean> {
 	const instance = getContractInstance();
@@ -644,6 +657,14 @@ export async function isNullifierUsed(actionDomain: string, nullifier: string): 
 
 /**
  * Check if an action domain is whitelisted on-chain.
+ *
+ * STATUS: Not currently wired into submit. Domain binding is enforced at two
+ * earlier points: (1) server recomputes the canonical action domain in
+ * `/api/submissions/create` and compares to the client claim, (2) the on-chain
+ * verifier contract rejects non-whitelisted domains when the anchor fires
+ * post-delivery. This helper is retained as defense-in-depth.
+ *
+ * FAIL-OPEN: same caveat as `isNullifierUsed` above.
  *
  * @param actionDomain - Action domain hash (bytes32 hex)
  * @returns true if whitelisted, false otherwise
