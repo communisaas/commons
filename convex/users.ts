@@ -347,7 +347,18 @@ export const updateMdlVerification = mutation({
 
 /**
  * Verify address: revoke old credentials, create new one, update user, upsert DM relations.
+ *
+ * Rate-limited by query-time aggregation on districtCredentials.issuedAt:
+ *   - 24h between re-verifications (per userId)
+ *   - 6 re-verifications per trailing 180d (per userId + per emailHash)
+ * Bypass at trust_tier >= 3 (mDL/passport verified identity).
  */
+const ADDRESS_VERIFICATION_METHODS = ["shadow_atlas", "civic_api", "postal"] as const;
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const ONE_EIGHTY_DAYS_MS = 180 * 24 * 60 * 60 * 1000;
+const MAX_REVERIFICATIONS_PER_180D = 6;
+const MAX_USERIDS_PER_EMAIL_HASH_180D = 3;
+
 export const verifyAddress = mutation({
   args: {
     userId: v.id("users"),
@@ -380,11 +391,46 @@ export const verifyAddress = mutation({
     if (!user) throw new Error("User not found");
     const now = Date.now();
 
-    // Revoke existing unexpired credentials
+    // (1d) verificationMethod allowlist — prevent client from claiming "mdl" etc.
+    if (!ADDRESS_VERIFICATION_METHODS.includes(args.verificationMethod as typeof ADDRESS_VERIFICATION_METHODS[number])) {
+      throw new Error("INVALID_VERIFICATION_METHOD");
+    }
+
     const existing = await ctx.db
       .query("districtCredentials")
       .withIndex("by_userId_expiresAt", (q) => q.eq("userId", args.userId))
       .collect();
+
+    // (1c) Re-verification throttle — bypass at trust_tier >= 3 (mDL-verified identity).
+    if (user.trustTier < 3) {
+      const within24h = existing.filter((c) => now - c.issuedAt < TWENTY_FOUR_HOURS_MS);
+      if (within24h.length >= 1) {
+        throw new Error("ADDRESS_VERIFICATION_THROTTLED_24H");
+      }
+      const within180d = existing.filter((c) => now - c.issuedAt < ONE_EIGHTY_DAYS_MS);
+      if (within180d.length >= MAX_REVERIFICATIONS_PER_180D) {
+        throw new Error("ADDRESS_VERIFICATION_THROTTLED_180D");
+      }
+
+      // Email-sybil gate: cap distinct userIds sharing this emailHash within
+      // the trailing 180-day window. Throwaway-account farms bypass per-userId
+      // throttle; this closes that hole while permitting legitimate users who
+      // have accumulated accounts over years (measured by users._creationTime).
+      if (user.emailHash) {
+        const siblingUsers = await ctx.db
+          .query("users")
+          .withIndex("by_emailHash", (q) => q.eq("emailHash", user.emailHash))
+          .collect();
+        const recentSiblings = siblingUsers.filter(
+          (u) => now - u._creationTime < ONE_EIGHTY_DAYS_MS
+        );
+        if (recentSiblings.length > MAX_USERIDS_PER_EMAIL_HASH_180D) {
+          throw new Error("ADDRESS_VERIFICATION_EMAIL_SYBIL");
+        }
+      }
+    }
+
+    // Revoke existing unexpired credentials
     for (const cred of existing) {
       if (!cred.revokedAt) {
         await ctx.db.patch(cred._id, { revokedAt: now });

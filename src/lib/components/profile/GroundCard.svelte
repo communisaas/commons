@@ -19,12 +19,18 @@
 		userId,
 		trustTier = 0,
 		embedded = false,
-		onVerifyAddress
+		onVerifyAddress,
+		onChangeAddress
 	}: {
 		userId: string;
 		trustTier?: number;
 		embedded?: boolean;
 		onVerifyAddress?: () => void;
+		/**
+		 * Secondary "I moved" action, only surfaced when a verified address is
+		 * already present. Triggers the re-grounding flow.
+		 */
+		onChangeAddress?: () => void;
 	} = $props();
 
 	let loading = $state(true);
@@ -132,6 +138,17 @@
 			<Lock class="h-3 w-3" />
 			<span>Encrypted on this device</span>
 		</div>
+
+		{#if onChangeAddress}
+			<button
+				type="button"
+				class="mt-2 text-[11px] text-slate-400 underline decoration-dotted underline-offset-2 transition-colors hover:text-slate-600"
+				onclick={() => onChangeAddress?.()}
+				data-testid="ground-i-moved"
+			>
+				I moved
+			</button>
+		{/if}
 	{:else}
 		<div
 			class="rounded-md border border-slate-200/50 bg-white/70 p-4"
@@ -159,6 +176,17 @@
 				<Lock class="h-3 w-3" />
 				<span>Encrypted on this device</span>
 			</div>
+
+			{#if onChangeAddress}
+				<button
+					type="button"
+					class="mt-2.5 text-[11px] text-slate-400 underline decoration-dotted underline-offset-2 transition-colors hover:text-slate-600"
+					onclick={() => onChangeAddress?.()}
+					data-testid="ground-i-moved"
+				>
+					I moved
+				</button>
+			{/if}
 		</div>
 	{/if}
 {:else}

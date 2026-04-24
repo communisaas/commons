@@ -13,6 +13,7 @@
 	import ProfileEditModal from '$lib/components/profile/ProfileEditModal.svelte';
 	import GroundCard from '$lib/components/profile/GroundCard.svelte';
 	import VerificationGate from '$lib/components/auth/VerificationGate.svelte';
+	import AddressChangeFlow from '$lib/components/auth/AddressChangeFlow.svelte';
 	import { invalidateAll } from '$app/navigation';
 	import { FEATURES } from '$lib/config/features';
 	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
@@ -34,6 +35,8 @@
 	let showEditModal = $state(false);
 	let editingSection = $state<EditSection>('basic');
 	let showVerificationGate = $state(false);
+	let showAddressChange = $state(false);
+	let currentReps = $state<ProfileRepresentative[]>([]);
 
 	const user = $derived(data.user);
 	const displayName = $derived(decryptedUser.name ?? user?.name ?? null);
@@ -139,6 +142,27 @@
 
 	function handleVerifyAddress(): void {
 		showVerificationGate = true;
+	}
+
+	async function handleChangeAddress(): Promise<void> {
+		// Snapshot the current representatives BEFORE opening the flow so the
+		// consequential diff can compare "was" vs "is" — the page `representatives`
+		// promise will be invalidated by the re-grounding and only reflect the new
+		// coordinates after invalidateAll() fires on close.
+		try {
+			const reps = await representativesPromise;
+			if (Array.isArray(reps)) {
+				currentReps = reps.map((r) => r as unknown as ProfileRepresentative);
+			}
+		} catch (e) {
+			console.warn('[Profile] Failed to snapshot current reps:', e);
+		}
+		showAddressChange = true;
+	}
+
+	function handleAddressChangeClose(): void {
+		showAddressChange = false;
+		invalidateAll();
 	}
 
 	function handleVerificationComplete() {
@@ -263,7 +287,13 @@
 			<span class="section-label">Your ground</span>
 			<div class="mt-3">
 				{#if user}
-					<GroundCard userId={user.id} {trustTier} embedded={true} onVerifyAddress={handleVerifyAddress} />
+					<GroundCard
+						userId={user.id}
+						{trustTier}
+						embedded={true}
+						onVerifyAddress={handleVerifyAddress}
+						onChangeAddress={handleChangeAddress}
+					/>
 				{/if}
 			</div>
 		</div>
@@ -487,6 +517,42 @@
 		onverified={handleVerificationComplete}
 		oncancel={() => (showVerificationGate = false)}
 	/>
+{/if}
+
+{#if user && showAddressChange}
+	<div
+		class="fixed inset-0 z-[1010] flex items-start justify-center overflow-y-auto bg-white/95 pt-6 backdrop-blur-sm sm:items-center sm:pt-0"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Change your address"
+	>
+		<div class="relative w-full max-w-2xl">
+			<button
+				type="button"
+				onclick={handleAddressChangeClose}
+				class="absolute right-4 top-4 z-10 rounded-full p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+				aria-label="Close address change"
+			>
+				<span aria-hidden="true" class="text-xl leading-none">×</span>
+			</button>
+			<AddressChangeFlow
+				userId={user.id}
+				onClose={handleAddressChangeClose}
+				initialRepresentatives={currentReps}
+				refreshRepresentatives={async () => {
+					await invalidateAll();
+					try {
+						const reps = await representativesPromise;
+						return Array.isArray(reps)
+							? (reps as unknown as ProfileRepresentative[])
+							: [];
+					} catch {
+						return [];
+					}
+				}}
+			/>
+		</div>
+	</div>
 {/if}
 
 

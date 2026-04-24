@@ -372,3 +372,19 @@ export function trackFunnelStep(step: 1 | 2 | 3 | 4 | 5, templateId?: string): v
 	const metric = `funnel_${step}` as Metric;
 	analytics.increment(metric, { template_id: templateId });
 }
+
+/**
+ * Track a constituent re-grounding (address change after initial verification).
+ *
+ * The server never sees old or new district identifiers. Only two boolean flags
+ * are emitted, encoded into the `utm_source` dimension as a compact tag matching
+ * the sanitizer's alphanumeric-only allowlist:
+ *   - `d1_s1` — district changed AND state changed
+ *   - `d1_s0` — district changed, state unchanged
+ *   - `d0_s0` — neither changed (shouldn't happen in practice; benign if it does)
+ */
+export function trackAddressChanged(districtChanged: boolean, stateChanged: boolean): void {
+	analytics.increment(METRICS.address_changed, {
+		utm_source: `d${districtChanged ? 1 : 0}_s${stateChanged ? 1 : 0}`
+	});
+}

@@ -39,7 +39,6 @@ beforeEach(() => {
 	// Keep real CONGRESS_API_KEY for smoke tests, fallback to test key for mocked tests
 	process.env.CONGRESS_API_KEY = process.env.CONGRESS_API_KEY || 'test-congress-api-key';
 	process.env.CWC_API_KEY = process.env.CWC_API_KEY || process.env.TEST_CWC_API_KEY || 'test-api-key';
-	process.env.SUPABASE_DATABASE_URL = process.env.DATABASE_URL;
 
 	// Mock browser APIs that may be accessed during tests
 	if (typeof window !== 'undefined') {

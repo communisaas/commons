@@ -280,6 +280,34 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			commitment: input.district_commitment
 		});
 	} catch (err) {
+		// Surface throttle / allowlist errors from verifyAddress mutation with
+		// the right HTTP status so the UI can distinguish user-correctable
+		// conditions from internal errors.
+		const message = err instanceof Error ? err.message : '';
+		if (message.includes('ADDRESS_VERIFICATION_THROTTLED_24H')) {
+			return json(
+				{ success: false, error: 'You re-verified recently. Please wait 24 hours between address changes.', code: 'THROTTLED_24H' },
+				{ status: 429 }
+			);
+		}
+		if (message.includes('ADDRESS_VERIFICATION_THROTTLED_180D')) {
+			return json(
+				{ success: false, error: 'Re-verification limit reached for this account. Contact support if you have moved.', code: 'THROTTLED_180D' },
+				{ status: 429 }
+			);
+		}
+		if (message.includes('ADDRESS_VERIFICATION_EMAIL_SYBIL')) {
+			return json(
+				{ success: false, error: 'This email is associated with multiple accounts. Contact support to consolidate before re-verifying.', code: 'EMAIL_SYBIL' },
+				{ status: 429 }
+			);
+		}
+		if (message.includes('INVALID_VERIFICATION_METHOD')) {
+			return json(
+				{ success: false, error: 'Invalid verification method.', code: 'INVALID_METHOD' },
+				{ status: 400 }
+			);
+		}
 		console.error('[verify-address] Credential issuance failed:', err);
 		return json(
 			{

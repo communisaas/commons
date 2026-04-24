@@ -45,6 +45,12 @@
 		minimumTier?: number;
 		/** User's current trust tier from server (default: 0 for anonymous) */
 		userTrustTier?: number;
+		/**
+		 * Force the Tier-2 address verification flow regardless of the user's
+		 * current tier. Used exclusively by AddressChangeFlow for re-grounding:
+		 * a tier-2+ user otherwise cannot re-enter the address flow.
+		 */
+		forceAddressFlow?: boolean;
 		onverified?: (data: { userId: string; method: string }) => void;
 		oncancel?: () => void;
 	}
@@ -56,6 +62,7 @@
 		cellId,
 		minimumTier = 2,
 		userTrustTier = 0,
+		forceAddressFlow = false,
 		onverified,
 		oncancel
 	}: Props = $props();
@@ -75,8 +82,14 @@
 	});
 
 	// Derived: which verification flow to show
-	let needsTier2: boolean = $derived(minimumTier <= 2 && userTrustTier < 2);
-	let needsTier4Plus: boolean = $derived(minimumTier >= 4 && userTrustTier < minimumTier);
+	// `forceAddressFlow` overrides tier checks — used by AddressChangeFlow to
+	// re-enter the flow for an already-verified user (re-grounding / move).
+	let needsTier2: boolean = $derived(
+		forceAddressFlow || (minimumTier <= 2 && userTrustTier < 2)
+	);
+	let needsTier4Plus: boolean = $derived(
+		!forceAddressFlow && minimumTier >= 4 && userTrustTier < minimumTier
+	);
 
 	/**
 	 * Check if user meets the minimum trust tier or has valid session credential.
@@ -88,6 +101,11 @@
 	 */
 	export async function checkVerification(): Promise<boolean> {
 		try {
+			// Re-grounding override: always force the flow, even for verified users.
+			if (forceAddressFlow) {
+				return false;
+			}
+
 			// Fast path: server-side trust tier already meets requirement
 			if (userTrustTier >= minimumTier) {
 				console.log('[Verification Gate] Trust tier check passed:', { userTrustTier, minimumTier });

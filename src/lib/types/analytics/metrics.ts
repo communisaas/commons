@@ -29,6 +29,9 @@ export const METRICS = {
 	auth_start: 'auth_start',
 	auth_complete: 'auth_complete',
 
+	// Re-grounding (address change by verified constituent)
+	address_changed: 'address_changed',
+
 	// Errors (categorized, never raw messages)
 	error_network: 'error_network',
 	error_validation: 'error_validation',
