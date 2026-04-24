@@ -22,7 +22,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 	const { debateId } = params;
 	if (!debateId) throw error(400, 'Missing debateId');
 
-	await serverQuery(api.debates.get, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
 	if (!debate) throw error(404, 'Debate not found');
 	if (debate.status !== 'resolved' && debate.status !== 'resolving') {
 		throw error(400, 'Can only appeal resolved or resolving debates');

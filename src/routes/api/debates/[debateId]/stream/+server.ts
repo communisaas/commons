@@ -1,4 +1,4 @@
-// Cannot move to Convex: uses createSSEStream, ReadableStream piping, setInterval polling.
+// Kept in SvelteKit: uses createSSEStream, ReadableStream piping, setInterval polling.
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
 import { env } from '$env/dynamic/private';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
@@ -13,9 +13,9 @@ import { error } from '@sveltejs/kit';
  * SSE stream for real-time debate updates.
  * Combines two event sources:
  * 1. Upstream shadow-atlas SSE (market price updates, trade activity)
- * 2. Local Prisma polling (AI resolution state transitions)
+ * 2. Local Convex polling (AI resolution state transitions)
  *
- * Events emitted locally via Prisma polling:
+ * Events emitted locally via Convex polling:
  *   - evaluating: AI evaluation in progress (status → resolving)
  *   - ai_scores_submitted: Scores submitted on-chain (aiSignatureCount populated)
  *   - resolved_with_ai: Debate resolved via AI+community blend
@@ -52,14 +52,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	let lastParticipantCount: number | null = null;
 
 	/**
-	 * Poll Prisma for AI resolution state changes.
+	 * Poll Convex for AI resolution state changes.
 	 * Emits SSE events when status or aiSignatureCount changes.
 	 */
 	async function pollResolutionState() {
 		if (closed) return;
 
 		try {
-			await serverQuery(api.debates.get, { debateId: debateId as any });
+			const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
 
 			if (!debate || closed) return;
 
@@ -170,7 +170,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 	// Initialize: fetch current state so we only emit on transitions
 	try {
-		await serverQuery(api.debates.get, { debateId: debateId as any });
+		const initial = await serverQuery(api.debates.get, { debateId: debateId as any });
 		if (initial) {
 			lastStatus = initial.status;
 			lastSignatureCount = initial.aiSignatureCount;

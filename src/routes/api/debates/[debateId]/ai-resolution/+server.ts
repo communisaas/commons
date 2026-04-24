@@ -21,6 +21,9 @@ export const GET: RequestHandler = async ({ params }) => {
 	const debate = await serverQuery(api.debates.get, {
 		debateId: debateId as any
 	});
+	if (!debate) {
+		throw error(404, 'Debate not found');
+	}
 	if (!debate.aiResolution && !debate.aiSignatureCount) {
 		return json({ aiResolution: null });
 	}

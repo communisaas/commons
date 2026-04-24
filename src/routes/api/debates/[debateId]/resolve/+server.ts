@@ -30,7 +30,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 		throw error(403, 'Tier 3+ verification required to resolve debates');
 	}
 
-	await serverQuery(api.debates.get, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
 
 	if (!debate) {
 		throw error(404, 'Debate not found');

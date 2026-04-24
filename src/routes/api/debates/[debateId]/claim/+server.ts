@@ -48,7 +48,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	await serverQuery(api.debates.get, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
 
 	if (!debate) {
 		throw error(404, 'Debate not found');
