@@ -4,6 +4,7 @@ import type { RequestHandler } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
+import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.DEBATE) {
@@ -52,16 +53,20 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		if (onchainResult.success) {
 			txHash = onchainResult.txHash;
 		} else if (onchainResult.error?.includes('not configured')) {
+			// Fails-closed in prod; fall through off-chain only in dev or via opt-in.
+			allowChainMisconfig({ op: 'debates/commit' });
 			console.warn('[debates/commit] Blockchain not configured, accepting off-chain only');
 		} else {
 			throw error(502, `On-chain commit submission failed: ${onchainResult.error}`);
 		}
 	} catch (err: unknown) {
-		// Re-throw SvelteKit errors (our own 502 above)
+		// Re-throw SvelteKit errors (our own 502 above) and the prod-gate throw.
 		if (err && typeof err === 'object' && 'status' in err) {
 			throw err;
 		}
-		// Import failure or unexpected error — treat as blockchain not configured
+		// Import failure or unexpected error — treat as missing-chain in dev only.
+		// In prod this is suspicious (chain should be present); fail-closed.
+		allowChainMisconfig({ op: 'debates/commit' });
 		console.warn('[debates/commit] Blockchain not available, accepting off-chain only:', err);
 	}
 

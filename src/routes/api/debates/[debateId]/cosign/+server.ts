@@ -4,6 +4,7 @@ import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
+import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
 
 /** Returns true for a valid Ethereum address (0x-prefixed, 42 hex chars). */
 function isValidEthAddress(addr: unknown): addr is string {
@@ -100,15 +101,20 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 				txHash = onchainResult.txHash;
 				serverVerified = true;
 			} else if (onchainResult.error?.includes('not configured')) {
+				// Fails-closed in prod; fall through off-chain only in dev or via opt-in.
+				allowChainMisconfig({ op: 'debates/cosign' });
 				console.warn('[debates/cosign] Blockchain not configured, updating off-chain only');
 				serverVerified = true;
 			} else {
 				throw error(502, `On-chain co-sign failed: ${onchainResult.error}`);
 			}
 		} catch (err: unknown) {
+			// Re-throw SvelteKit errors (our 502) and the prod-gate throw.
 			if (err && typeof err === 'object' && 'status' in err) {
 				throw err;
 			}
+			// Module import or unexpected failure — fails-closed in prod.
+			allowChainMisconfig({ op: 'debates/cosign' });
 			console.warn('[debates/cosign] Blockchain module unavailable, updating off-chain only:', err);
 			serverVerified = true;
 		}

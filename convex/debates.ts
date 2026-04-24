@@ -693,36 +693,77 @@ export const insertDebate = internalMutation({
 /**
  * Resolve expired debates: find active debates past deadline, trigger AI evaluation.
  * Called daily at 02:00 UTC by cron.
+ *
+ * The AI evaluator + blockchain calls live in SvelteKit (voter-protocol monorepo
+ * dependency, env-gated blockchain relayer). This action dispatches each expired
+ * debate to `POST /api/debates/[id]/evaluate` which owns rate limiting, debounce,
+ * and on-chain settlement. Convex only orchestrates the list + fan-out.
+ *
+ * Env requirements:
+ *   COMMONS_INTERNAL_URL — base URL for the internal evaluate endpoint
+ *   CRON_SECRET          — bearer secret validated by verifyCronSecret
+ *
+ * Missing either env skips the run with an explicit log (ops-visible) rather
+ * than silently no-op'ing.
  */
 export const resolveExpiredDebates = internalAction({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
 
-    // Find expired active debates
-    const expired = await ctx.runQuery(
-      internal.debates.getExpiredDebates,
-      { now },
-    );
+    const baseUrl = process.env.COMMONS_INTERNAL_URL;
+    const cronSecret = process.env.CRON_SECRET;
+    if (!baseUrl || !cronSecret) {
+      const missing = [
+        !baseUrl ? "COMMONS_INTERNAL_URL" : null,
+        !cronSecret ? "CRON_SECRET" : null,
+      ]
+        .filter(Boolean)
+        .join(",");
+      console.error(
+        `[debate-resolution] Skipping run — env missing: ${missing}. No evaluation dispatched.`,
+      );
+      return { total: 0, triggered: 0, skipped: 0, failed: 0, envMissing: true };
+    }
+
+    const expired = await ctx.runQuery(internal.debates.getExpiredDebates, { now });
 
     let triggered = 0;
     let skipped = 0;
     const errors: string[] = [];
 
     for (const debate of expired) {
-      // Skip if already resolved or no arguments
-      if (debate.aiResolution || debate.argumentCount === 0) {
+      // Skip if already resolved, has no arguments, or has no on-chain ID
+      // (evaluate endpoint rejects those; avoid the round-trip).
+      if (debate.aiResolution || debate.argumentCount === 0 || !debate.debateIdOnchain) {
         skipped++;
         continue;
       }
 
       try {
-        // AI evaluation would be triggered here
-        // For now, log and skip — full evaluation pipeline will be wired in Phase 6
-        console.log(
-          `[debate-resolution] Would evaluate debate ${debate._id} (${debate.argumentCount} args)`,
+        const response = await fetch(
+          `${baseUrl}/api/debates/${debate._id}/evaluate`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${cronSecret}`,
+            },
+          },
         );
-        triggered++;
+
+        if (response.ok) {
+          triggered++;
+        } else if (response.status === 404 || response.status === 429) {
+          // 404 = FEATURES.DEBATE disabled or debate not found (already moved).
+          // 429 = rate-limited (recently evaluated); both are benign for a cron.
+          skipped++;
+        } else {
+          const body = await response.text().catch(() => "");
+          errors.push(
+            `${debate._id}: HTTP ${response.status} ${body.slice(0, 120)}`,
+          );
+        }
       } catch (err) {
         errors.push(
           `${debate._id}: ${err instanceof Error ? err.message : String(err)}`,
@@ -733,8 +774,17 @@ export const resolveExpiredDebates = internalAction({
     console.log(
       `[debate-resolution] ${expired.length} expired: ${triggered} triggered, ${skipped} skipped, ${errors.length} errors`,
     );
+    if (errors.length > 0) {
+      console.error(`[debate-resolution] errors: ${errors.join(" | ")}`);
+    }
 
-    return { total: expired.length, triggered, skipped, failed: errors.length };
+    return {
+      total: expired.length,
+      triggered,
+      skipped,
+      failed: errors.length,
+      envMissing: false,
+    };
   },
 });
 
