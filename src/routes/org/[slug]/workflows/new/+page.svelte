@@ -1,30 +1,15 @@
 <script lang="ts">
 	import type { PageData } from './$types';
+	import {
+		TRIGGER_LABELS,
+		STEP_LABELS,
+		DELAY_UNITS,
+		CONDITION_OPERATORS,
+		toDelayMinutes,
+		type DelayUnit
+	} from '$lib/config/workflow-labels';
 
 	let { data }: { data: PageData } = $props();
-
-	const TRIGGER_LABELS: Record<string, string> = {
-		supporter_created: 'New Supporter',
-		campaign_action: 'Campaign Action',
-		event_rsvp: 'Event RSVP',
-		event_checkin: 'Event Check-in',
-		donation_completed: 'Donation Completed',
-		tag_added: 'Tag Added'
-	};
-
-	const STEP_LABELS: Record<string, string> = {
-		send_email: 'Send Email',
-		add_tag: 'Add Tag',
-		remove_tag: 'Remove Tag',
-		delay: 'Wait',
-		condition: 'Condition'
-	};
-
-	const DELAY_UNITS = [
-		{ value: 'minutes', label: 'Minutes' },
-		{ value: 'hours', label: 'Hours' },
-		{ value: 'days', label: 'Days' }
-	];
 
 	type Step = {
 		type: string;
@@ -102,11 +87,39 @@
 		if (triggerType === 'tag_added' && triggerTagId) trigger.tagId = triggerTagId;
 		if (triggerType === 'campaign_action' && triggerCampaignId) trigger.campaignId = triggerCampaignId;
 
+		// Translate UI-friendly field names to the backend executor contract.
+		// Must agree with convex/workflows.ts:~357 step shape.
+		const payloadSteps = steps.map((s) => {
+			if (s.type === 'send_email') {
+				return { type: 'send_email', emailSubject: s.subject ?? '', emailBody: s.body ?? '' };
+			}
+			if (s.type === 'add_tag' || s.type === 'remove_tag') {
+				return { type: s.type, tagId: s.tagId ?? '' };
+			}
+			if (s.type === 'delay') {
+				return {
+					type: 'delay',
+					delayMinutes: toDelayMinutes(s.duration ?? 1, (s.unit ?? 'hours') as DelayUnit)
+				};
+			}
+			if (s.type === 'condition') {
+				return {
+					type: 'condition',
+					field: s.field ?? '',
+					operator: s.operator ?? 'equals',
+					value: s.value ?? '',
+					thenStepIndex: s.thenStep ?? 0,
+					elseStepIndex: s.elseStep ?? 0
+				};
+			}
+			return { type: s.type };
+		});
+
 		try {
 			const res = await fetch(`/api/org/${data.org.slug}/workflows`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ name: name.trim(), description: description.trim() || null, trigger, steps })
+				body: JSON.stringify({ name: name.trim(), description: description.trim() || null, trigger, steps: payloadSteps })
 			});
 
 			if (res.ok) {
@@ -341,11 +354,9 @@
 											bind:value={step.operator}
 											class="rounded-lg border border-surface-border-strong bg-surface-raised px-3 py-2 text-sm text-text-primary focus:border-text-tertiary focus:outline-none"
 										>
-											<option value="equals">equals</option>
-											<option value="not_equals">not equals</option>
-											<option value="gt">greater than</option>
-											<option value="lt">less than</option>
-											<option value="contains">contains</option>
+											{#each CONDITION_OPERATORS as opt (opt.value)}
+												<option value={opt.value}>{opt.label}</option>
+											{/each}
 										</select>
 										<input
 											type="text"

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { TRIGGER_LABELS } from '$lib/config/workflow-labels';
+
 	let { workflow }: {
 		workflow: {
 			id: string;
@@ -11,15 +13,6 @@
 			createdAt: string;
 		};
 	} = $props();
-
-	const TRIGGER_LABELS: Record<string, string> = {
-		supporter_created: 'New Supporter',
-		campaign_action: 'Campaign Action',
-		event_rsvp: 'Event RSVP',
-		event_checkin: 'Event Check-in',
-		donation_completed: 'Donation Completed',
-		tag_added: 'Tag Added'
-	};
 
 	function formatDate(iso: string): string {
 		return new Intl.DateTimeFormat('en-US', {

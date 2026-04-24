@@ -1,25 +1,9 @@
 <script lang="ts">
 	import ExecutionTable from '$lib/components/automation/ExecutionTable.svelte';
+	import { TRIGGER_LABELS, STEP_LABELS } from '$lib/config/workflow-labels';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
-
-	const TRIGGER_LABELS: Record<string, string> = {
-		supporter_created: 'New Supporter',
-		campaign_action: 'Campaign Action',
-		event_rsvp: 'Event RSVP',
-		event_checkin: 'Event Check-in',
-		donation_completed: 'Donation Completed',
-		tag_added: 'Tag Added'
-	};
-
-	const STEP_LABELS: Record<string, string> = {
-		send_email: 'Send Email',
-		add_tag: 'Add Tag',
-		remove_tag: 'Remove Tag',
-		delay: 'Wait',
-		condition: 'Condition'
-	};
 
 	let toggling = $state(false);
 	let deleting = $state(false);
@@ -35,8 +19,10 @@
 
 	function stepSummary(step: { type: string; [key: string]: unknown }): string {
 		const label = STEP_LABELS[step.type] ?? step.type;
-		if (step.type === 'send_email' && step.subject) return `${label}: "${step.subject}"`;
-		if (step.type === 'delay' && step.duration) return `${label}: ${step.duration} ${step.unit ?? 'hours'}`;
+		// Reads backend field names (emailSubject, delayMinutes, thenStepIndex) —
+		// source of truth is convex/workflows.ts step shape.
+		if (step.type === 'send_email' && step.emailSubject) return `${label}: "${step.emailSubject}"`;
+		if (step.type === 'delay' && step.delayMinutes) return `${label}: ${step.delayMinutes} min`;
 		if (step.type === 'condition' && step.field) return `${label}: ${step.field} ${step.operator} ${step.value}`;
 		return label;
 	}
