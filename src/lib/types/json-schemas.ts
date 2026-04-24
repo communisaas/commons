@@ -1,10 +1,9 @@
 /**
- * Comprehensive type definitions for all Prisma JsonValue fields
- * This file contains type interfaces for every JSON field in the database schema
- * and provides type-safe access patterns for JsonValue data.
+ * Comprehensive type definitions for every JSON (v.any()) field in the Convex schema.
+ * Provides type-safe access patterns for JsonValue data.
  */
 
-/** JSON value type — replaces JsonValue after migration */
+/** JSON value type. */
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 // ============= ANALYTICS SCHEMA TYPES =============
@@ -326,7 +325,7 @@ export interface CertificationData {
 // ============= TEMPLATE TYPES =============
 
 /**
- * Template metrics as stored in Prisma JSON fields.
+ * Template metrics as stored in JSON fields.
  * Distinct from TemplateMetrics in templateConfig.ts which tracks
  * delivery-oriented counters (sent/opened/clicked/responded).
  */

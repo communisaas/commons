@@ -86,7 +86,7 @@ export interface Template {
 	verified_sends?: number; // Alias (Convex field name)
 	unique_districts?: number; // Unique congressional districts reached
 
-	// Geographic scope (populated by scope-filtering, not in Prisma Template model)
+	// Geographic scope (populated by scope-filtering; computed, not stored on the template row)
 	applicable_countries?: string[];
 	jurisdiction_level?: string | null;
 	specific_locations?: string[];
@@ -138,7 +138,7 @@ export interface Template {
 	corrected_at?: Date | string | null; // When AI corrections applied
 	reviewed_at?: Date | string | null; // When human/final review completed
 
-	// Standard Prisma timestamps
+	// Standard timestamps
 	createdAt: Date | string; // Template creation timestamp
 	updatedAt: Date | string; // Template last update timestamp
 }

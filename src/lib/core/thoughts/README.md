@@ -74,7 +74,7 @@ interface Citation {
   url?: string;
   excerpt: string;
   sourceType: 'intelligence' | 'document' | 'organization' | 'web';
-  mongoId?: string;        // MongoDB intelligence item
+  intelligenceId?: string; // Convex intelligence item
   documentId?: string;     // Reducto-parsed document
 }
 ```
@@ -176,7 +176,7 @@ The thought system supports progressive disclosure of information:
 | Layer | Content | Source | Access |
 |-------|---------|--------|--------|
 | Surface | Agent synthesis | Gemini reasoning | Always visible |
-| L1 | Citations/excerpts | MongoDB cache | Click inline citation |
+| L1 | Citations/excerpts | Convex intelligence cache | Click inline citation |
 | L2 | Research trace | Google Search grounding | Click action segment |
 | L3 | Full documents | Reducto parse | "View full document" |
 

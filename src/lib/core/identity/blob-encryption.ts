@@ -4,7 +4,7 @@
  * Implements XChaCha20-Poly1305 authenticated encryption for address data.
  * Blobs are encrypted to TEE public key before storage.
  *
- * Phase 1: Postgres storage (platform cannot decrypt)
+ * Phase 1: Convex storage (platform cannot decrypt)
  * Phase 2: IPFS storage + on-chain pointers (portable credentials)
  */
 
@@ -149,7 +149,7 @@ export async function encryptIdentityBlob(
 /**
  * Storage interface for encrypted blobs
  *
- * Phase 1: Postgres via API
+ * Phase 1: Convex via API
  * Phase 2: IPFS + on-chain pointer
  */
 export interface BlobStorage {
@@ -159,9 +159,9 @@ export interface BlobStorage {
 }
 
 /**
- * Phase 1: Postgres blob storage
+ * Phase 1: Convex-backed blob storage (HTTP-bridged from browser to /api/identity/*)
  */
-export class PostgresBlobStorage implements BlobStorage {
+export class ServerBlobStorage implements BlobStorage {
 	async store(userId: string, blob: EncryptedBlob): Promise<string> {
 		const response = await fetch('/api/identity/store-blob', {
 			method: 'POST',
@@ -210,12 +210,12 @@ export class PostgresBlobStorage implements BlobStorage {
 /**
  * Get active storage implementation
  *
- * Phase 1: Always Postgres
- * Phase 2: IPFS for new users, Postgres for legacy
+ * Phase 1: Always server-backed (Convex via `/api/identity/*`)
+ * Phase 2: IPFS for new users, server-backed for legacy
  */
 export function getBlobStorage(): BlobStorage {
 	// TODO: Phase 2 - Check feature flag or user preference
-	return new PostgresBlobStorage();
+	return new ServerBlobStorage();
 }
 
 /**

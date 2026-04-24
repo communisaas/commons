@@ -115,8 +115,8 @@ ACCESSIBILITY:
 			</div>
 		{/if}
 
-		<!-- MongoDB ID (if intelligence source) -->
-		{#if citation.mongoId}
+		<!-- Intelligence ID (if intelligence source) -->
+		{#if citation.intelligenceId}
 			<div class="space-y-1">
 				<span class="block text-xs font-medium uppercase tracking-wider" style="color: oklch(0.5 0.02 60);">
 					Intelligence ID
@@ -128,7 +128,7 @@ ACCESSIBILITY:
 						color: oklch(0.35 0.02 60);
 					"
 				>
-					{citation.mongoId}
+					{citation.intelligenceId}
 				</code>
 			</div>
 		{/if}

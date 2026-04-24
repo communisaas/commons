@@ -422,7 +422,7 @@ export class ThoughtEmitter {
 	}
 
 	/**
-	 * Start a retrieval action (MongoDB/vector search)
+	 * Start a retrieval action (Convex vector search)
 	 *
 	 * Emits an action segment for context retrieval and returns a handle
 	 * for updating as results are found.
@@ -500,7 +500,7 @@ export class ThoughtEmitter {
 	 * const citation = emitter.cite("Apple's 2025 Report", {
 	 *   url: 'https://apple.com/environmental-report-2025',
 	 *   excerpt: 'We are committed to achieving carbon neutrality...',
-	 *   mongoId: '507f1f77bcf86cd799439011'
+	 *   intelligenceId: 'j57abcdef123456'
 	 * });
 	 *
 	 * emitter.think('Apple has committed to carbon neutrality by 2030.', {
@@ -515,7 +515,7 @@ export class ThoughtEmitter {
 			url: source.url,
 			excerpt: source.excerpt,
 			sourceType: this.inferSourceType(source),
-			mongoId: source.mongoId,
+			intelligenceId: source.intelligenceId,
 			documentId: source.documentId
 		};
 
@@ -612,7 +612,7 @@ export class ThoughtEmitter {
 		// Use explicit sourceType if provided
 		if (source.sourceType) return source.sourceType;
 		// Otherwise infer from IDs/URL
-		if (source.mongoId) return 'intelligence';
+		if (source.intelligenceId) return 'intelligence';
 		if (source.documentId) return 'document';
 		if (source.url?.includes('commons.email')) return 'organization';
 		return 'web';

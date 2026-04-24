@@ -126,10 +126,10 @@ export interface DocumentCrossRef {
 /**
  * Fully parsed document with Reducto intelligence
  *
- * This is what we cache in MongoDB and display in L3 view.
+ * This is what we cache in `parsedDocumentCache` (Convex) and display in L3 view.
  */
 export interface ParsedDocument {
-	/** Unique document ID (MongoDB _id when cached) */
+	/** Unique document ID (Convex `_id` when cached) */
 	id: string;
 
 	/** Document title */
@@ -251,15 +251,12 @@ export interface AnalysisResult {
 }
 
 // ============================================================================
-// MongoDB Cache Types
+// Cache Types
 // ============================================================================
 
-// Note: The MongoDB cache schema is now defined in:
-// src/lib/server/mongodb/schema.ts as ParsedDocumentCacheDocument
-//
-// This provides:
-// - Proper ObjectId typing
-// - TTL index on expiresAt (30 days)
-// - Unique index on sourceUrlHash for deduplication
-// - Index on documentType for filtering
-// - Hit count tracking for cache statistics
+// The parsed-document cache lives in Convex as the `parsedDocumentCache` table
+// (`convex/schema.ts`). It provides:
+//   - A `by_expiresAt` index (cleaned up by the daily cron in `convex/crons.ts`)
+//   - A `by_sourceUrlHash` unique-lookup index for deduplication
+//   - A `by_documentType` index for filtering
+//   - A `hitCount` field for cache statistics

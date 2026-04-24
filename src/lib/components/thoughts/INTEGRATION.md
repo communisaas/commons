@@ -677,7 +677,7 @@ Override CSS variables for theming:
 ## Next Steps
 
 1. **Integrate with Gemini agent** - Replace simulated delays with real API calls
-2. **Add persistence** - Save thought streams to MongoDB for history
+2. **Add persistence** - Save thought streams to Convex for history
 3. **Enable replay** - Allow users to replay agent reasoning at different speeds
 4. **Export functionality** - Download thought stream as markdown or JSON
 5. **Search/filter** - Find specific thoughts, citations, or phases

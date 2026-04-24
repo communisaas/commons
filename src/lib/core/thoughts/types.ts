@@ -110,7 +110,7 @@ export interface ThoughtSegment {
  * Progressive disclosure layers for a thought segment
  *
  * Depth layers (from spec):
- * - L1: Citations/excerpts from MongoDB cache
+ * - L1: Citations/excerpts from the intelligence cache (Convex)
  * - L2: Research trace from Google Search grounding
  * - L3: Full documents from Reducto parse
  */
@@ -159,7 +159,7 @@ export type CitationSourceType = 'intelligence' | 'document' | 'organization' | 
  *   url: 'https://...',
  *   excerpt: 'We are committed to carbon neutrality by 2030...',
  *   sourceType: 'intelligence',
- *   mongoId: '507f1f77bcf86cd799439011'
+ *   intelligenceId: 'j57abcdef123456'
  * };
  * ```
  */
@@ -179,8 +179,8 @@ export interface Citation {
 	/** Type of source being cited */
 	sourceType: CitationSourceType;
 
-	/** MongoDB intelligence item ID (for intelligence sources) */
-	mongoId?: string;
+	/** Convex intelligence item ID (for intelligence sources) */
+	intelligenceId?: string;
 
 	/** Reducto document ID (for parsed documents) */
 	documentId?: string;
@@ -197,15 +197,15 @@ export interface CitationSource {
 	/** Relevant excerpt text */
 	excerpt: string;
 
-	/** MongoDB intelligence item ID */
-	mongoId?: string;
+	/** Convex intelligence item ID */
+	intelligenceId?: string;
 
 	/** Reducto document ID */
 	documentId?: string;
 
 	/**
 	 * Explicit source type override
-	 * If not provided, inferred from mongoId/documentId/url
+	 * If not provided, inferred from intelligenceId/documentId/url
 	 */
 	sourceType?: CitationSourceType;
 }
@@ -218,7 +218,7 @@ export interface CitationSource {
  * Type of action being traced
  *
  * - research: Web research via Google Search grounding
- * - retrieve: Context retrieval from MongoDB/vector search
+ * - retrieve: Context retrieval from Convex vector search
  * - analyze: Analysis operation
  * - search: Search operation
  */
@@ -316,7 +316,7 @@ export interface ActionTrace {
 	/** Key findings from research */
 	findings?: string[];
 
-	// Retrieval-specific fields (MongoDB/Vector Search)
+	// Retrieval-specific fields (Convex vector search)
 
 	/** Query string used for retrieval */
 	query?: string;
@@ -351,7 +351,7 @@ export interface PageVisit {
  * A retrieval result with relevance score
  */
 export interface RetrievalResult {
-	/** Result ID (MongoDB ID, intelligence item ID, etc.) */
+	/** Result ID (Convex ID, intelligence item ID, etc.) */
 	id: string;
 
 	/** Result title or label */

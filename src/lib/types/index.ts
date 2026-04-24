@@ -51,7 +51,7 @@ export type {
 	EmailServiceUser,
 	UserProfile,
 	Representative,
-	PrismaUserForEmail
+	UserForEmail
 } from './user';
 export { toEmailServiceUser } from './user';
 export type { Jurisdiction, Office, TemplateScope } from './jurisdiction';

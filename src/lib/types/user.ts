@@ -126,10 +126,10 @@ export interface EmailServiceUser {
 }
 
 /**
- * Prisma User model fields relevant for email services
+ * User fields relevant for email services.
  * NOTE: NO PII fields - address data comes from DeliveryAddress at send time
  */
-export type PrismaUserForEmail = {
+export type UserForEmail = {
 	id: string;
 	email: string;
 	name: string | null;
