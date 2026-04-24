@@ -43,14 +43,18 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 			throw error(403, 'SMS send limit reached for the current billing period. Upgrade your plan to send more.');
 		}
 
-		// Fire-and-forget
-		void sendSmsBlast(params.id);
-
-		return json({
-			id: params.id,
-			status: 'sending',
-			updatedAt: new Date().toISOString()
-		});
+		// Dispatch path is not yet wired. Org-PII encryption means the server can't
+		// decrypt supporter phones; the blast runner must be a client-side operation
+		// (analogous to `client-blast-sender.ts` for email) or go via a Lambda proxy
+		// with decrypted phones passed in. Both are pending.
+		//
+		// Previous revisions of this route called an undefined `sendSmsBlast()` and
+		// returned `{ status: 'sending' }` — which silently lied to the caller. We
+		// now fail-loud so ops dashboards + UI can surface the real state.
+		throw error(
+			501,
+			'SMS blast dispatch is not yet wired. Blast drafts are preserved; please contact support to enable sending.'
+		);
 	}
 
 	// Update fields (only if draft)

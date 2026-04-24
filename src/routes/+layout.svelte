@@ -61,6 +61,30 @@
 		walletState.initFromPageData(data.user as PageUser | null);
 	});
 
+	// Scope template drafts to the active user. Drafts saved by another user on
+	// the same device become invisible after login — protects against shared-device
+	// cross-account leakage when one user doesn't explicitly log out.
+	$effect(() => {
+		if (!browser) return;
+		const userId = (data.user as Record<string, unknown> | null)?.id as string | undefined;
+		let cancelled = false;
+		(async () => {
+			const { templateDraftStore, deriveOwnerHash } = await import(
+				'$lib/stores/templateDraft'
+			);
+			if (cancelled) return;
+			if (!userId) {
+				templateDraftStore.setOwner(null);
+				return;
+			}
+			const hash = await deriveOwnerHash(userId);
+			if (!cancelled) templateDraftStore.setOwner(hash);
+		})().catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	});
+
 	// Sync plaintext email/name to reactive store (consumed by child components)
 	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 	$effect(() => {

@@ -290,7 +290,25 @@ export class SlidingWindowRateLimiter {
 			console.debug('[RateLimiter] Using Redis backend');
 			this.store = new RedisStore(url);
 		} else {
-			console.debug('[RateLimiter] Using in-memory backend (set REDIS_URL for production)');
+			// Fail-fast in production: the in-memory backend is per-isolate and
+			// provides no global enforcement on CF Workers, which means rate
+			// limits are effectively bypassed. Require REDIS_URL for any
+			// real deployment; allow opt-out via RATE_LIMITER_ALLOW_MEMORY=1
+			// for local smoke tests that explicitly want the memory backend.
+			const nodeEnv = env.NODE_ENV ?? process.env.NODE_ENV;
+			const allowMemory =
+				env.RATE_LIMITER_ALLOW_MEMORY === '1' ||
+				process.env.RATE_LIMITER_ALLOW_MEMORY === '1';
+			if (nodeEnv === 'production' && !allowMemory) {
+				throw new Error(
+					'[RateLimiter] REDIS_URL is required in production. ' +
+						'In-memory fallback is per-isolate on Workers and provides no global rate limiting. ' +
+						'Set REDIS_URL, or RATE_LIMITER_ALLOW_MEMORY=1 to explicitly opt into the memory backend.'
+				);
+			}
+			console.warn(
+				'[RateLimiter] Using in-memory backend (per-isolate, dev-only). Set REDIS_URL for global rate limiting.'
+			);
 			this.store = new InMemoryStore();
 		}
 	}

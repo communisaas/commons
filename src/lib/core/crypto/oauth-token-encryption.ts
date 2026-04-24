@@ -1,12 +1,23 @@
 /**
  * OAuth Token Encryption at Rest
  *
- * Encrypts OAuth access_token, refresh_token, and id_token before storing in Postgres.
- * Uses Web Crypto API (CF Workers compatible) — AES-256-GCM with HKDF-derived per-account keys.
+ * Encrypts OAuth access_token, refresh_token, and id_token before storing in
+ * the `accounts` table in Convex (schema.ts:~147 — `encryptedAccessToken`,
+ * `encryptedRefreshToken`, `encryptedIdToken`).
+ *
+ * Uses Web Crypto API (CF Workers compatible) — AES-256-GCM with HKDF-derived
+ * per-account keys.
  *
  * Key derivation: HKDF(OAUTH_ENCRYPTION_KEY, provider + providerAccountId)
  * This ensures each provider+account pair gets a unique encryption key,
  * so compromising one account's ciphertext reveals nothing about another.
+ *
+ * STATUS:
+ *   - encryptOAuthToken: wired at oauth-callback-handler.ts (tokens persisted)
+ *   - decryptOAuthToken: defined but not yet called by any refresh/use path.
+ *     Refreshing a stale access token or making on-behalf-of provider API
+ *     calls requires wiring decryption at the consumer; that's a separate
+ *     feature build (OAUTH-REFRESH) and not in the current bug-fix scope.
  */
 
 /** Encrypted token stored as JSON in the database */

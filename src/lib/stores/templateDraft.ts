@@ -17,11 +17,27 @@ interface DraftStorage {
 		lastSaved: number;
 		currentStep: string;
 		pendingSuggestion?: PendingSuggestion | null;
+		/** Short hash of the owning user's id. Drafts with a different ownerHash
+		 * from the active session are ignored on load — prevents cross-user
+		 * draft leakage on shared devices when a user doesn't explicitly log out. */
+		ownerHash?: string;
 	};
 }
 
 // Storage key for localStorage
 const STORAGE_KEY = 'commons_template_drafts';
+
+/** Derive a short stable hash for the owning user. Uses SHA-256 on the userId
+ * (or email) and returns the first 16 hex chars — enough to avoid collisions
+ * across a single device while not recording the plaintext id in localStorage. */
+export async function deriveOwnerHash(userIdentifier: string): Promise<string> {
+	const bytes = new TextEncoder().encode(userIdentifier);
+	const digest = await crypto.subtle.digest('SHA-256', bytes);
+	return Array.from(new Uint8Array(digest))
+		.slice(0, 8)
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('');
+}
 
 // Auto-save interval (30 seconds)
 const AUTO_SAVE_INTERVAL = 30 * 1000;
@@ -54,6 +70,11 @@ interface TemplateDraftStore {
 	hasDraft: (draftId: string) => boolean;
 	getDraftAge: (draftId: string) => number | null;
 	getAllDraftIds: () => string[];
+	/** Set the active owner hash. Drafts saved under a different owner become
+	 * invisible to getDraft/getAllDraftIds/hasDraft after this call. Pass null
+	 * to revert to unscoped (guest) behavior. Call this once at mount, after
+	 * the user's id becomes available. */
+	setOwner: (ownerHash: string | null) => void;
 }
 
 function createTemplateDraftStore(): TemplateDraftStore {
@@ -76,10 +97,24 @@ function createTemplateDraftStore(): TemplateDraftStore {
 		data: z.unknown(), // TemplateFormData is complex, validate structure later
 		lastSaved: z.number(),
 		currentStep: z.string(),
-		pendingSuggestion: PendingSuggestionSchema
+		pendingSuggestion: PendingSuggestionSchema,
+		ownerHash: z.string().optional()
 	});
 
 	const DraftStorageSchema = z.record(DraftEntrySchema);
+
+	// Active owner scope (set via setOwner after user auth is resolved).
+	// Drafts are filtered to this owner on every read; writes stamp this value.
+	let currentOwnerHash: string | null = null;
+
+	function draftMatchesOwner(entry: DraftStorage[string]): boolean {
+		// No active owner set (pre-auth boot) — show all (legacy behavior).
+		if (currentOwnerHash === null) return true;
+		// Active owner set — require stored ownerHash to match. Drafts with no
+		// ownerHash are legacy, pre-scoping entries; treat them as guest-owned
+		// and visible only when no owner is set.
+		return entry.ownerHash === currentOwnerHash;
+	}
 
 	// Load drafts from localStorage on initialization
 	function loadDrafts(): DraftStorage {
@@ -272,7 +307,10 @@ function createTemplateDraftStore(): TemplateDraftStore {
 			data: plain,
 			lastSaved: Date.now(),
 			currentStep,
-			pendingSuggestion: suggestionToSave ?? null
+			pendingSuggestion: suggestionToSave ?? null,
+			// Stamp owner at save time. Null when auth isn't yet resolved; once
+			// the component calls setOwner(), subsequent saves scope correctly.
+			ownerHash: currentOwnerHash ?? undefined
 		};
 
 		update((drafts) => {
@@ -291,7 +329,10 @@ function createTemplateDraftStore(): TemplateDraftStore {
 		pendingSuggestion?: PendingSuggestion | null;
 	} | null {
 		const drafts = loadDrafts();
-		return drafts[draftId] || null;
+		const entry = drafts[draftId];
+		if (!entry) return null;
+		if (!draftMatchesOwner(entry)) return null;
+		return entry;
 	}
 
 	function deleteDraft(draftId: string) {
@@ -354,7 +395,9 @@ function createTemplateDraftStore(): TemplateDraftStore {
 
 	function hasDraft(draftId: string): boolean {
 		const drafts = loadDrafts();
-		return draftId in drafts;
+		const entry = drafts[draftId];
+		if (!entry) return false;
+		return draftMatchesOwner(entry);
 	}
 
 	function getDraftAge(draftId: string): number | null {
@@ -365,7 +408,13 @@ function createTemplateDraftStore(): TemplateDraftStore {
 
 	function getAllDraftIds(): string[] {
 		const drafts = loadDrafts();
-		return Object.keys(drafts);
+		return Object.entries(drafts)
+			.filter(([, entry]) => draftMatchesOwner(entry))
+			.map(([id]) => id);
+	}
+
+	function setOwner(ownerHash: string | null) {
+		currentOwnerHash = ownerHash;
 	}
 
 	return {
@@ -377,7 +426,8 @@ function createTemplateDraftStore(): TemplateDraftStore {
 		startAutoSave,
 		hasDraft,
 		getDraftAge,
-		getAllDraftIds
+		getAllDraftIds,
+		setOwner
 	};
 }
 
