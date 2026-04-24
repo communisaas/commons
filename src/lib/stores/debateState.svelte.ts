@@ -354,9 +354,9 @@ function createDebateState() {
 				}
 			});
 
-			// Finding 11: shadow-atlas emits 'ai_evaluation_submitted'; the Prisma-polling
-			// path emits 'ai_scores_submitted'. Both carry the same payload shape and
-			// must update signatureCount identically. Extract to a shared handler.
+			// Both 'ai_evaluation_submitted' (shadow-atlas) and 'ai_scores_submitted'
+			// (local polling) carry the same payload shape and must update
+			// signatureCount identically.
 			const handleAIScoresSubmitted = (e: MessageEvent) => {
 				const data = parseSSE(e.data, sseAIScoresSchema, 'ai_scores');
 				if (!data) return;

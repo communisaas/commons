@@ -551,7 +551,7 @@ export async function registerLeaf(leaf: string, options?: { attestationHash?: s
  * browser clear / device loss.
  *
  * Authorization boundary: Shadow Atlas validates API access (Bearer token).
- * Per-leaf ownership is enforced by commons (OAuth session + Postgres).
+ * Per-leaf ownership is enforced by commons (OAuth session + Convex).
  *
  * @param newLeaf - Hex-encoded new leaf hash (with 0x prefix)
  * @param oldLeafIndex - Index of the old leaf to zero

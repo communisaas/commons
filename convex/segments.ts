@@ -2,8 +2,6 @@
  * Segment CRUD — Convex queries and mutations.
  *
  * No PII involved — segments are filter definitions, not data containers.
- * The bulk actions (apply_tag, remove_tag, export_csv, count) stay in
- * SvelteKit because they depend on buildSegmentWhere() and Prisma queries.
  */
 
 import { query, mutation, action } from "./_generated/server";
@@ -93,7 +91,7 @@ export const list = query({
       .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
       .collect();
 
-    // Sort by _creationTime descending (newest first, matching Prisma updatedAt desc)
+    // Sort by _creationTime descending (newest first)
     segments.sort((a, b) => b._creationTime - a._creationTime);
 
     return {
@@ -199,7 +197,7 @@ export const remove = mutation({
 });
 
 // =============================================================================
-// BULK OPERATIONS (replaces Prisma buildSegmentWhere)
+// BULK OPERATIONS
 // =============================================================================
 
 /**

@@ -43,7 +43,7 @@ export class CronCostMonitor {
 	summarize(): CostSummary {
 		const embeddingCost = this.embeddingsGenerated * COST_PER_EMBEDDING;
 		// Congress.gov and Open States are free (API key based)
-		// pgvector cosine similarity is negligible (local DB operation)
+		// Convex `.vectorIndex(...)` cosine similarity is negligible (in-stack operation)
 		return {
 			api_calls: {
 				congress_gov: this.congressGovCalls,

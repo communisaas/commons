@@ -3,7 +3,6 @@ import { v } from "convex/values";
 
 // =============================================================================
 // Commons Convex Schema
-// Translated from prisma/schema.prisma with flattening rules applied.
 //
 // Flattened child tables:
 //   template_jurisdiction + template_scope → nested in `templates`
@@ -25,7 +24,7 @@ import { v } from "convex/values";
 //   - `_id` and `_creationTime` are automatic (no `id`/`createdAt` fields)
 //   - DateTime → v.number() (epoch ms)
 //   - FK relations → v.id("tableName")
-//   - Prisma @default / @updatedAt → handled in mutations, not schema
+//   - Defaults / updatedAt → handled in mutations, not schema
 //   - PII fields (encrypted_email, email_hash) → v.string()
 //   - Vector embeddings → v.optional(v.array(v.float64())) + .vectorIndex()
 // =============================================================================
@@ -461,7 +460,7 @@ export default defineSchema({
     // depth — the on-chain verifier contract independently verifies the proof.
     // 'divergent' means the TEE accepted a proof the chain rejected — P0 alert.
     // 'poisoned' is a terminal state after too many retries; requires operator.
-    anchorStatus: v.optional(v.string()), // 'pending' | 'anchored' | 'failed' | 'divergent' | 'poisoned'
+    anchorStatus: v.optional(v.string()), // 'pending' | 'anchored' | 'failed' | 'divergent' | 'poisoned' | 'skipped_missing_env'
     anchorTxHash: v.optional(v.string()),
     anchorAt: v.optional(v.number()),
     anchorError: v.optional(v.string()),
@@ -479,6 +478,14 @@ export default defineSchema({
     // Witness expiry
     witnessExpiresAt: v.optional(v.number()),
 
+    // F1 gate: Convex Id of the district credential that was active when this
+    // submission was accepted. Re-checked at delivery enqueue (closes the TOCTOU
+    // window between submissions.create and deliverToCongress). Optional for
+    // backward compat with pre-fix submissions. We use the Id (not credentialHash)
+    // because shadow_atlas / commitment-only credentials store credentialHash=""
+    // which would bypass the delivery recheck.
+    issuingCredentialId: v.optional(v.id("districtCredentials")),
+
     updatedAt: v.number(),
   })
     .index("by_nullifier", ["nullifier"])
@@ -488,7 +495,8 @@ export default defineSchema({
     .index("by_deliveryStatus", ["deliveryStatus"])
     .index("by_verificationStatus", ["verificationStatus"])
     .index("by_anchorStatus", ["anchorStatus"])
-    .index("by_witnessExpiresAt", ["witnessExpiresAt"]),
+    .index("by_witnessExpiresAt", ["witnessExpiresAt"])
+    .index("by_issuingCredentialId", ["issuingCredentialId"]),
 
   // ===========================================================================
   // VERIFICATION SESSIONS

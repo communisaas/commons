@@ -8,7 +8,7 @@
  *   - Protects AI agents from manipulation attacks
  *   - 99.8% AUC for jailbreak detection
  *
- * Layer 1: Llama Guard 4 12B (via GROQ) - OPTIONAL
+ * Layer 1: `openai/gpt-oss-safeguard-20b` (via GROQ) - OPTIONAL
  *   - MLCommons S1-S14 hazard taxonomy
  *   - PERMISSIVE: Only S1 (threats) and S4 (CSAM) block content
  *   - Political speech, defamation claims, electoral opinions ALLOWED

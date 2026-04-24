@@ -1,9 +1,9 @@
 /**
  * Client-Side Embedding Search — Server-Delegated
  *
- * Delegates semantic search to `/api/templates/search` which uses
- * pgvector HNSW index + quality boost. This unifies the search pipeline
- * so client and server use the same ranking logic.
+ * Delegates semantic search to `/api/templates/search` which runs a
+ * Convex `.vectorIndex(...)` query + quality boost. This unifies the search
+ * pipeline so client and server use the same ranking logic.
  *
  * The class interface is preserved for backward compatibility with
  * TemplateRanker and createSemanticSearch().
@@ -54,7 +54,7 @@ export class EmbeddingSearch {
 
 	/**
 	 * Search templates via server-side semantic search endpoint.
-	 * Server performs pgvector cosine search + quality boost + 0.40 floor.
+	 * Server runs a Convex `.vectorIndex(...)` cosine search + quality boost + 0.40 floor.
 	 */
 	async search(query: SearchQuery): Promise<Array<TemplateWithEmbedding & { similarity: number }>> {
 		const startTime = performance.now();

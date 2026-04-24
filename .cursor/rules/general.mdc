@@ -2,7 +2,7 @@
 
 ## About the Project
 
-Commons is a SvelteKit application using TypeScript, Prisma for the database ORM, Tailwind CSS for styling, and Playwright for e2e testing. The goal of the project is to provide a platform for constituents to easily communicate with their elected representatives.
+Commons is a SvelteKit application using TypeScript, Convex for the managed backend, Tailwind CSS for styling, and Playwright for e2e testing. The goal of the project is to provide a platform for constituents to easily communicate with their elected representatives.
 
 ## Development Workflow
 
@@ -18,11 +18,12 @@ Commons is a SvelteKit application using TypeScript, Prisma for the database ORM
 -   Use the ESLint for linting. Run `npm run lint` to check for linting errors.
 -   Write clear and descriptive comments where necessary, but avoid over-commenting obvious code.
 
-## Prisma
+## Convex
 
--   When you change the `schema.prisma` file, run `npx prisma generate` to update the Prisma client.
--   To create a new migration, run `npx prisma migrate dev --name <migration-name>`.
--   Use `npx prisma db push` for schema prototyping (not for production).
+-   Schema lives in `convex/schema.ts`. Functions live alongside in `convex/*.ts`.
+-   `npx convex dev` attaches to the cloud dev deployment and auto-deploys schema + functions on save.
+-   `npx convex deploy --env-file .env.production` for prod. No migrations — schema diffs are applied on deploy.
+-   Generated types in `convex/_generated/` are produced by the CLI; do not edit by hand.
 
 ## SvelteKit
 

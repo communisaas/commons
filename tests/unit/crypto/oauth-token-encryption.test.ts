@@ -143,7 +143,7 @@ describe('OAuth Token Encryption', () => {
 			expect(enc1!.ciphertext).not.toBe(enc2!.ciphertext);
 		});
 
-		it('encrypted token is JSON-serializable (for Prisma Json column)', async () => {
+		it('encrypted token is JSON-serializable (for v.any() column)', async () => {
 			const encrypted = await encryptOAuthToken('token', 'google', '12345');
 			const json = JSON.stringify(encrypted);
 			const parsed = JSON.parse(json);

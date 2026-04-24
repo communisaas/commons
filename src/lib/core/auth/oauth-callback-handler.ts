@@ -4,7 +4,7 @@
  * Consolidates 85% of duplicate OAuth callback logic across 5 providers
  * while maintaining provider-specific customizations.
  *
- * DB operations use Convex via serverMutation() — no Prisma.
+ * DB operations use Convex via serverMutation().
  * Cookie management uses SvelteKit's Cookies API.
  *
  * Features:

@@ -7,7 +7,7 @@
  * 1. User completes identity verification (Digital Credentials API / mDL)
  * 2. Extract verified address data
  * 3. Encrypt address blob with TEE public key (XChaCha20-Poly1305)
- * 4. Store encrypted blob in Postgres
+ * 4. Store encrypted blob in Convex (platform cannot decrypt)
  * 5. Cache session credential in IndexedDB
  * 6. Return session data for future use
  *
@@ -125,7 +125,7 @@ export async function handleVerificationComplete(
 		// Step 3: Encrypt blob with TEE public key
 		const encryptedBlob = await encryptIdentityBlob(identityBlob, teePublicKey);
 
-		// Step 4: Store encrypted blob in Postgres
+		// Step 4: Store encrypted blob in Convex
 		const blobStorage = getBlobStorage();
 		const blobId = await blobStorage.store(userId, encryptedBlob);
 

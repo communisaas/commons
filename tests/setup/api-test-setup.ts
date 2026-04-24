@@ -2,7 +2,7 @@
  * API Test Setup Infrastructure
  *
  * Provides MSW-based external service mocking for integration tests.
- * Post-Convex migration: no Prisma, no direct DB access.
+ * Backend is Convex; tests do not touch a DB directly.
  */
 
 import { beforeAll, afterAll, beforeEach } from 'vitest';

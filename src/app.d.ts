@@ -64,7 +64,6 @@ declare global {
 		interface PageState {}
 		interface Platform {
 			env?: {
-				HYPERDRIVE?: { connectionString: string };
 				DC_SESSION_KV?: KVNamespace;
 				REGISTRATION_RETRY_KV?: KVNamespace;
 				REJECTION_MONITOR_KV?: KVNamespace;
@@ -154,7 +153,7 @@ declare global {
 
 			// AI Services
 			GEMINI_API_KEY?: string; // Used for quality assessment and AI agents
-			GROQ_API_KEY?: string; // Used for Llama Guard 4 safety moderation
+			GROQ_API_KEY?: string; // 2-layer moderation: Llama Prompt Guard 2 + gpt-oss-safeguard-20b
 
 			// Identity Verification (mDL via Digital Credentials API — no provider API keys needed)
 			// District resolution via Shadow Atlas H3 mapping (no external API keys needed)

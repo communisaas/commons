@@ -20,7 +20,7 @@
  *
  * Prerequisites:
  *   - commons dev server running (npm run dev)
- *   - Prisma migration applied
+ *   - Convex dev instance attached (npx convex dev)
  *   - .env populated with model API keys + signer keys
  */
 

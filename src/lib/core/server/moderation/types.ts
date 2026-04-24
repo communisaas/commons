@@ -8,7 +8,7 @@
  *    - Protects AI agents from jailbreak/manipulation attacks
  *
  * 2. Content Safety (OPTIONAL, minimal)
- *    - Llama Guard 4 via GROQ
+ *    - `openai/gpt-oss-safeguard-20b` via GROQ
  *    - Only blocks TRULY illegal content (S1: threats, S4: CSAM)
  *    - Does NOT block: political speech, defamation claims, electoral opinions
  *
@@ -16,7 +16,7 @@
  * Platform serves ANY decision-maker (Congress, corporations, HOAs, etc.)
  * Political speech, strong criticism, and controversial opinions are ALLOWED.
  *
- * @see https://huggingface.co/meta-llama/Llama-Guard-4-12B
+ * @see https://console.groq.com/docs/model/openai/gpt-oss-safeguard-20b
  * @see https://huggingface.co/meta-llama/Llama-Prompt-Guard-2
  */
 
@@ -124,7 +124,7 @@ export const NON_BLOCKING_HAZARDS: MLCommonsHazard[] = [
 ];
 
 /**
- * Safety result from Llama Guard 4
+ * Safety result from the Layer 1 safety classifier.
  */
 export interface SafetyResult {
 	/** Content passed safety checks (no BLOCKING_HAZARDS detected) */

@@ -12,7 +12,7 @@
 	 * (expanding a case, reading AI evidence) → Deliberation (comparing arguments) →
 	 * Resolution (selecting winner, writing justification) → Confirmation (review + submit)
 	 *
-	 * Data model: Debates with status 'awaiting_governance' from Prisma,
+	 * Data model: Debates with status 'awaiting_governance' in Convex,
 	 * backed by DebateMarket.sol on Scroll Sepolia. The on-chain function
 	 * submitGovernanceResolution(debateId, winningIndex, justificationHash)
 	 * is the terminal action.

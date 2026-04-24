@@ -145,25 +145,26 @@ const remaining = await getRemainingBudget(new Date());
 const status = await getBudgetStatus(startDate, endDate);
 ```
 
-## Cron Endpoint
+## Cron (Convex scheduler)
 
-**Endpoint:** `GET /api/cron/analytics-snapshot`
+**Registered in** `convex/crons.ts` — `crons.daily("analytics snapshot", { hourUTC: 0, minuteUTC: 5 }, internal.analytics.materializeSnapshot)`.
 
-**Schedule:** Daily at 00:05 UTC
+**Schedule:** Daily at 00:05 UTC.
 
-**Authentication:** Requires `CRON_SECRET` environment variable
+**Authentication:** none — runs inside Convex with full `ctx` (internal). No HTTP endpoint, no shared secret.
+
+**Manual run:**
 
 ```bash
-curl -X GET https://commons.email/api/cron/analytics-snapshot \
-  -H "Authorization: Bearer $CRON_SECRET"
+npx convex run analytics:materializeSnapshot
 ```
 
-**Response:**
+**Return shape (from the action):**
 
 ```json
 {
 	"success": true,
-	"date": "2025-01-11",
+	"date": "2026-04-23",
 	"snapshots_created": 1234,
 	"epsilon_spent": 1.0,
 	"budget_remaining": 9.0
@@ -172,43 +173,13 @@ curl -X GET https://commons.email/api/cron/analytics-snapshot \
 
 ## Deployment
 
-### 1. Production Cron Setup
+### 1. Cron setup
 
-**Using Vercel Cron:**
-
-```json
-{
-	"crons": [
-		{
-			"path": "/api/cron/analytics-snapshot",
-			"schedule": "5 0 * * *"
-		}
-	]
-}
-```
-
-**Using GitHub Actions:**
-
-```yaml
-name: Analytics Snapshot
-on:
-  schedule:
-    - cron: '5 0 * * *' # 00:05 UTC daily
-jobs:
-  materialize:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger snapshot
-        run: |
-          curl -X GET ${{ secrets.API_URL }}/api/cron/analytics-snapshot \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
-```
+Declared jobs in `convex/crons.ts` register on the next `npx convex dev` / `npx convex deploy`. No external scheduler (Vercel Cron, GitHub Actions, Upstash QStash) is in use.
 
 ### 2. Environment Variables
 
-```bash
-CRON_SECRET=<random-secret>  # For cron endpoint authentication
-```
+None required for this job — Convex runs it with internal privileges.
 
 ### 3. Migration Path
 

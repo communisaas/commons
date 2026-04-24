@@ -101,7 +101,6 @@ export const getBySlug = query({
 /**
  * Public: List public templates with enriched data for the homepage.
  * Returns org endorsement info, debate summary, scopes, and computed metrics.
- * DUAL-STACK: This is the Convex primary path; Prisma is the fallback.
  */
 export const listPublic = query({
   args: {
@@ -305,7 +304,6 @@ export const listPublic = query({
 /**
  * Public: Get a single public template by slug with enriched data.
  * Returns the full template shape expected by the detail page layout.
- * DUAL-STACK: This is the Convex primary path; Prisma is the fallback.
  */
 export const getBySlugPublic = query({
   args: { slug: v.string() },
@@ -357,7 +355,6 @@ export const getBySlugPublic = query({
 
 /**
  * Extract recipient emails from recipient_config JSON.
- * Mirrors the Prisma-side extractRecipientEmails utility.
  */
 function extractRecipientEmailsConvex(recipientConfig: unknown): string[] {
   if (!recipientConfig || typeof recipientConfig !== "object") return [];

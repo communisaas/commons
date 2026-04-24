@@ -277,7 +277,7 @@ export interface TemplateWithJurisdictions {
 }
 
 /**
- * Template jurisdiction (matches Prisma schema)
+ * Template jurisdiction.
  */
 export interface TemplateJurisdiction {
 	id: string;

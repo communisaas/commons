@@ -2,7 +2,7 @@
  * Convex Auth Bridge — JWT minting for SvelteKit → Convex authentication.
  *
  * Architecture:
- *   1. SvelteKit validates session cookie → gets user from Prisma (existing handleAuth)
+ *   1. SvelteKit validates session cookie → gets user (existing handleAuth)
  *   2. This module mints an RS256 JWT with user claims (sub, email, name)
  *   3. The JWT is stored in event.locals.convexToken
  *   4. convex-sveltekit's serverQuery() reads locals.convexToken and sends it to Convex

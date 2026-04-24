@@ -18,7 +18,7 @@
 		"test:run": "vitest --run --config=vitest.config.ts",
 		"test:coverage": "vitest --coverage --config=vitest.config.ts",
 		"test": "npm run test:run",
-		"test:reseed": "npm run test:run && npm run db:seed",
+		"test:reseed": "npm run test:run && npm run seed",
 		"test:e2e": "playwright test --config=playwright.config.ts",
 		"test:production": "ENABLE_BETA=false npm run test:run",
 		"test:beta": "ENABLE_BETA=true npm run test:run",

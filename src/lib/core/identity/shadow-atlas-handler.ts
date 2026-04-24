@@ -350,9 +350,9 @@ export async function registerThreeTree(
  * Recover a user's credential after browser clear / device loss.
  *
  * Sends replace: true to the registration endpoint which:
- * 1. Looks up the user's existing registration in Postgres
+ * 1. Looks up the user's existing registration in Convex
  * 2. Calls Shadow Atlas POST /v1/register/replace to zero the old leaf
- * 3. Updates Postgres with the new leaf index and proof
+ * 3. Updates Convex with the new leaf index and proof
  * 4. Returns fresh Tree 1 proof
  *
  * Then fetches fresh Tree 2 cell proof and stores all credentials in IndexedDB.

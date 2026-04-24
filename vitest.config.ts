@@ -13,34 +13,19 @@ const env = loadEnv('test', process.cwd(), '');
 Object.assign(process.env, env);
 
 /**
- * Fix pg → pg-pool CJS/ESM interop crash in vitest.
- *
- * Problem: pg-pool's `module.exports = Pool` gets wrapped as ESM namespace
- * { default: Pool } by Node's CJS→ESM translator. When pg/lib/index.js does
- * `class BoundPool extends Pool`, it extends an object instead of a constructor.
- *
- * Solution: Intercept `$lib/core/db` resolution BEFORE the SvelteKit plugin
- * processes it, redirecting to a mock that uses PrismaClient with datasourceUrl
- * instead of the pg driver adapter. Also mock @prisma/adapter-pg as a fallback.
+ * Test-only module resolver:
+ *   - Stub `$lib/server/monitoring/sentry` because the real module loads
+ *     @sentry/sveltekit → @sentry/node → @opentelemetry/api@1.9.0, which has
+ *     a broken ESM build that crashes Node's native ESM loader in vitest.
+ *   - Stub `redis` (optional dep, dynamically imported only when REDIS_URL is
+ *     set) so Vite's import analysis doesn't fail when redis isn't installed.
  */
-function dbMockPlugin(): Plugin {
-	const dbMockPath = path.join(__dirname, 'tests/mocks/db-mock.ts');
-	const adapterMockPath = path.join(__dirname, 'tests/mocks/prisma-adapter-pg.ts');
+function testModuleStubsPlugin(): Plugin {
 	const sentryStubPath = path.join(__dirname, 'tests/mocks/sentry-stub.ts');
 	return {
-		name: 'db-mock-for-tests',
+		name: 'test-module-stubs',
 		enforce: 'pre',
 		resolveId(source) {
-			if (source === '$lib/core/db' || source.endsWith('/src/lib/core/db.ts') || source.endsWith('/src/lib/core/db')) {
-				return dbMockPath;
-			}
-			if (source === '@prisma/adapter-pg') {
-				return adapterMockPath;
-			}
-			// Stub the Sentry monitoring wrapper. The real module loads
-			// @sentry/sveltekit → @sentry/node → @opentelemetry/api@1.9.0,
-			// which has a broken ESM build (imports without .js extensions)
-			// that crashes Node's native ESM loader in vitest.
 			if (
 				source === '$lib/server/monitoring/sentry' ||
 				source.endsWith('/src/lib/server/monitoring/sentry.ts') ||
@@ -48,9 +33,6 @@ function dbMockPlugin(): Plugin {
 			) {
 				return sentryStubPath;
 			}
-			// redis is an optional dependency (dynamically imported in rate-limiter.ts
-			// only when REDIS_URL is set). Stub it so Vite's import analysis doesn't
-			// fail when redis isn't installed in the test environment.
 			if (source === 'redis') {
 				return { id: 'redis-stub:virtual', external: true };
 			}
@@ -60,7 +42,7 @@ function dbMockPlugin(): Plugin {
 
 export default defineConfig({
 	plugins: [
-		dbMockPlugin(),
+		testModuleStubsPlugin(),
 		sveltekit(),
 		svelteTesting({
 			resolveBrowser: false, // Don't automatically modify resolve.conditions
@@ -80,7 +62,7 @@ export default defineConfig({
 		alias: {
 			// Stub @voter-protocol/noir-prover in CI where the local package isn't linked
 			'@voter-protocol/noir-prover': path.join(__dirname, 'src/lib/core/crypto/voter-protocol-stub.ts')
-			// Note: $lib/server/monitoring/sentry stub is wired via dbMockPlugin
+			// Note: $lib/server/monitoring/sentry stub is wired via testModuleStubsPlugin
 			// (pre-plugin) because SvelteKit's $lib resolver overrides resolve.alias.
 		}
 	},
@@ -96,37 +78,21 @@ export default defineConfig({
 			// (incompatible with MSW Node.js environment in current config)
 			// See: docs/testing/svelte-component-testing.md for migration path
 			'tests/unit/ProofGenerator.test.ts',
-			// Post-Convex migration: these tests reference deleted Prisma source files,
-			// missing Convex URL config, or stale assertions. Need rewriting for Convex.
+			// Post-Convex migration: these tests reference deleted source files,
+			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',
-			'tests/integration/api/address-verification-e2e.test.ts',
-			'tests/integration/api/core-routes.test.ts',
-			'tests/integration/api/identity-routes.test.ts',
-			'tests/integration/cwc-submission.test.ts',
-			'tests/integration/identity/cell-id-integration.test.ts',
 			'tests/integration/oauth-resumption.test.ts',
 			'tests/integration/dp-end-to-end.test.ts',
 			'tests/unit/agents/source-cache.test.ts',
 			'tests/unit/analytics-snapshot.test.ts',
-			'tests/unit/api/congressional-submit.test.ts',
 			'tests/unit/api/cron-analytics-snapshot.test.ts',
-			'tests/unit/api/cron-cleanup-witness.test.ts',
-			'tests/unit/api/debate-creation.test.ts',
-			'tests/unit/api/email-confirm.test.ts',
 			'tests/unit/api/public-api-gate.test.ts',
-			'tests/unit/api/stance-positions.test.ts',
-			'tests/unit/api/stream-message-cache.test.ts',
-			'tests/unit/api/submission-retry.test.ts',
-			'tests/unit/api/submission-status.test.ts',
-			'tests/unit/api/verify-district.test.ts',
 			'tests/unit/auth/oauth-callback-handler.test.ts',
 			'tests/unit/auth/oauth-security.test.ts',
 			'tests/unit/automation/workflow-api-v1.test.ts',
 			'tests/unit/automation/workflow-crud.test.ts',
 			'tests/unit/automation/workflow-engine.test.ts',
 			'tests/unit/billing/usage.test.ts',
-			'tests/unit/blockchain/submission-retry-queue.test.ts',
-			'tests/unit/debate/settle-endpoint.test.ts',
 			'tests/unit/delegation/grant-crud.test.ts',
 			'tests/unit/dp-contribution-bounding.test.ts',
 			'tests/unit/events/event-checkin.test.ts',
@@ -139,34 +105,25 @@ export default defineConfig({
 			'tests/unit/geographic/api-v1-reps.test.ts',
 			'tests/unit/geographic/campaign-targeting.test.ts',
 			'tests/unit/geographic/rep-lookup.test.ts',
-			'tests/unit/identity/identity-binding-merge.test.ts',
-			'tests/unit/identity/mdl-android-e2e.test.ts',
 			'tests/unit/identity/passkey-authentication-decrypt.test.ts',
 			'tests/unit/identity/passkey-authentication.test.ts',
-			'tests/unit/identity/passkey-registration.test.ts',
 			'tests/unit/identity/passkey-settings.test.ts',
-			'tests/unit/identity/verify-address.test.ts',
-			'tests/unit/identity/verify-mdl-verify.test.ts',
 			'tests/unit/location/au-resolver.test.ts',
 			'tests/unit/location/ca-resolver.test.ts',
 			'tests/unit/location/country-resolver.test.ts',
 			'tests/unit/location/gb-resolver.test.ts',
 			'tests/unit/location/us-resolver.test.ts',
-			'tests/unit/networks/network-aggregation.test.ts',
 			'tests/unit/networks/network-api-v1.test.ts',
-			'tests/unit/networks/network-crud.test.ts',
 			'tests/unit/scorecard/api.test.ts',
 			'tests/unit/scorecard/compute.test.ts',
 			'tests/unit/security/rate-limiter.test.ts',
 			'tests/unit/server/reacher-client.test.ts',
 			'tests/unit/sms/billing-limits.test.ts',
-			'tests/unit/sms/inbound-webhook.test.ts',
 			'tests/unit/sms/patch-through-call.test.ts',
 			'tests/unit/sms/sms-api-v1.test.ts',
 			'tests/unit/sms/sms-crud.test.ts',
 			'tests/unit/sms/twilio-integration.test.ts',
 			'tests/unit/supporters/find-by-email.test.ts',
-			'tests/unit/wallet/debate-txhash-bypass.test.ts',
 			'tests/unit/wallet/wallet-api.test.ts',
 			'tests/unit/wallet/wallet-state.test.ts',
 			// Directly import convex/_generated/api which isn't available in CI
@@ -229,7 +186,6 @@ export default defineConfig({
 				'**/*.config.{js,ts}',
 				'**/coverage/**',
 				'e2e/**',
-				'prisma/**',
 				'**/*.spec.ts',
 				'**/*.test.ts',
 				'build/',

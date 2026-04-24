@@ -47,7 +47,7 @@ export interface SessionCredential {
 	verificationMethod: 'digital-credentials-api' | 'mdl' | 'nfc-passport' | 'government-id';
 	/** Congressional district (e.g., "CA-12") */
 	congressionalDistrict?: string;
-	/** Encrypted blob ID in Postgres */
+	/** Encrypted blob ID (Convex `_id` as string) */
 	blobId: string;
 	/** When the blob was encrypted */
 	encryptedAt: string;

@@ -82,8 +82,8 @@ export default defineConfig({
 
 	// Polyfill Node.js globals for browser (needed for @aztec/bb.js)
 	// NOTE: buffer/pino aliases are applied ONLY via the alias() plugin (client + workers).
-	// resolve.alias is NOT used because it also applies to SSR, which breaks pg/Prisma
-	// (SSR needs the real Node.js buffer, not the browser shim).
+	// resolve.alias is NOT used because it also applies to SSR, which requires the real
+	// Node.js buffer (not the browser shim).
 	resolve: {},
 
 	optimizeDeps: {
@@ -171,7 +171,6 @@ export default defineConfig({
 				'**/*.config.{js,ts}',
 				'**/coverage/**',
 				'e2e/**',
-				'prisma/**',
 				'**/*.spec.ts',
 				'**/*.test.ts'
 			],

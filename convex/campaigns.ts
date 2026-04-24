@@ -38,8 +38,6 @@ export const list = query({
         let templateTitle: string | null = null;
         if (c.templateId) {
           // templateId is stored as string (not v.id) so look up by slug index or iterate
-          // For now, scan templates table by userId — but templateId here is the Prisma ID string
-          // In Convex migration, templateId will be a Convex ID once data is migrated
         }
 
         return {
@@ -1163,10 +1161,24 @@ export const getStats = query({
         .map((a) => a.districtHash!),
     );
 
+    // (1e) Tier partition — staffer-legible reports need to distinguish
+    // heuristic tier-2 rows from ZKP-backed tier-3+ rows. Query-time
+    // aggregation from campaignActions.trustTier; no denormalized counter.
+    // `verifiedActions` remains the current billable meter (unchanged
+    // semantics); `tier3VerifiedActions` is additive, for display partitioning.
+    const tier3Verified = verified.filter((a) => (a.trustTier ?? 0) >= 3);
+    const tier3DistrictSet = new Set(
+      tier3Verified
+        .filter((a) => a.districtHash)
+        .map((a) => a.districtHash!),
+    );
+
     return {
       verifiedActions: verified.length,
       totalActions: actions.length,
       uniqueDistricts: districtSet.size,
+      tier3VerifiedActions: tier3Verified.length,
+      tier3UniqueDistricts: tier3DistrictSet.size,
     };
   },
 });
@@ -1354,8 +1366,10 @@ export const dispatchReportEmails = internalAction({
     });
     if (deliveries.length === 0) return;
 
-    // Build the report email subject
-    const subject = `${campaign.verifiedActionCount} verified constituents — ${campaign.title}`;
+    // Build the report email subject — "constituent actions" is honest across
+    // both tier-2 heuristic and tier-3+ ID-verified rows. The ID-verified subset
+    // is called out in the body for staffers who weight by verification depth.
+    const subject = `${campaign.verifiedActionCount} constituent actions — ${campaign.title}`;
 
     // Prefer pre-rendered HTML from server (matches preview), fall back to inline template
     const fallbackHtml = buildReportEmailHtml(campaign);
@@ -1398,11 +1412,25 @@ export const getCampaignForReport = internalQuery({
     const campaign = await ctx.db.get(campaignId);
     if (!campaign) return null;
     const org = await ctx.db.get(campaign.orgId);
+
+    // (1e) Tier partition for honest reporting: query-time count of
+    // tier-3+ (document-verified) actions. F2 closure — staffer reports
+    // must not conflate heuristic tier-2 (postal-code/self-claim) with
+    // ZKP-grade tier-3 (ID-verified) constituent evidence.
+    const actions = await ctx.db
+      .query("campaignActions")
+      .withIndex("by_campaignId", (q) => q.eq("campaignId", campaignId))
+      .collect();
+    const tier3VerifiedActionCount = actions.filter(
+      (a) => a.verified && (a.trustTier ?? 0) >= 3
+    ).length;
+
     return {
       _id: campaign._id,
       title: campaign.title,
       orgName: org?.name ?? org?.slug ?? "Organization",
       verifiedActionCount: campaign.verifiedActionCount ?? 0,
+      tier3VerifiedActionCount,
       actionCount: campaign.actionCount ?? 0,
     };
   },
@@ -1481,9 +1509,15 @@ function buildReportEmailHtml(campaign: {
   title: string;
   orgName: string;
   verifiedActionCount: number;
+  tier3VerifiedActionCount?: number;
   _id: any;
 }): string {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const tier3 = campaign.tier3VerifiedActionCount ?? 0;
+  const hasTier3 = tier3 > 0;
+  const tier3Line = hasTier3
+    ? `<tr><td style="padding:12px 0 0 0;"><p style="margin:0;font-size:13px;color:#525252;">Including <strong style="color:#171717;">${tier3.toLocaleString()}</strong> with government ID verification</p></td></tr>`
+    : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
@@ -1496,7 +1530,8 @@ function buildReportEmailHtml(campaign: {
 <tr><td style="padding:0 0 28px 0;"><p style="margin:0;font-size:13px;color:#737373;">from ${esc(campaign.orgName)}</p></td></tr>
 <tr><td style="padding:24px 0;border-top:1px solid #e5e5e5;border-bottom:1px solid #e5e5e5;">
 <p style="margin:0 0 4px 0;font-size:36px;font-weight:700;color:#171717;font-family:'Courier New',monospace;">${campaign.verifiedActionCount.toLocaleString()}</p>
-<p style="margin:0;font-size:15px;color:#525252;">verified constituents</p>
+<p style="margin:0;font-size:15px;color:#525252;">constituent actions</p>
+${tier3Line}
 </td></tr>
 <tr><td style="padding:20px 0 0 0;"><p style="margin:0;font-size:13px;color:#525252;">One submission per person · duplicates removed</p></td></tr>
 <tr><td style="padding:28px 0 0 0;">

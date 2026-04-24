@@ -12,4 +12,3 @@ src/routes/admin/**
 src/routes/api/blockchain/**
 .claude/**
 CLAUDE.md
-prisma/*.md

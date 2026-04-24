@@ -21,9 +21,6 @@ Thumbs.db
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
-# Prisma
-/node_modules/.prisma/client
-
 # Private documentation
 CombinedCWCDocumentation1.0.md
 cwc_schema_v2.rng
@@ -63,7 +60,6 @@ project.inlang/
 *.sh
 !scripts/remote-test.sh
 *.sql
-!prisma/migrations/**/*.sql
 .env.production
 
 # GeoIP databases (download separately, ~70MB)
@@ -86,7 +82,6 @@ __pycache__/
 # Development artifacts
 .wrangler/
 .yarn/
-prisma/dev.db
 svelte-check-baseline.txt
 .planning/
 commons-desktop-a11y.md

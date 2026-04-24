@@ -32,7 +32,7 @@ import type { TemplateGroup, PrecisionLevel } from '$lib/types/template';
 export type GeographicScope = 'district' | 'city' | 'county' | 'state' | 'nationwide' | null;
 
 /**
- * TemplateScope from database (matches Prisma schema)
+ * TemplateScope from database.
  */
 export interface TemplateScope {
 	id: string;
