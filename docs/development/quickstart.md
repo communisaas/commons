@@ -360,7 +360,7 @@ Note: `npx convex deploy -y` silently no-ops against prod. Always pass `--env-fi
 ```bash
 npm run build
 npx wrangler pages deploy .svelte-kit/cloudflare \
-  --project-name commons --branch production
+  --project-name communique-site --branch production
 ```
 
 ### Schema Changes in Production
@@ -409,7 +409,7 @@ jobs:
       - run: npm ci
       - run: npx convex deploy --env-file .env.production
       - run: npm run build
-      - run: npx wrangler pages deploy .svelte-kit/cloudflare --project-name commons --branch production
+      - run: npx wrangler pages deploy .svelte-kit/cloudflare --project-name communique-site --branch production
 ```
 
 ---

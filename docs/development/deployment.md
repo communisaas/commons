@@ -15,7 +15,7 @@ npx convex deploy --env-file .env.production
 # Frontend (SvelteKit on Cloudflare Pages)
 npm run build
 npx wrangler pages deploy .svelte-kit/cloudflare \
-  --project-name commons --branch production
+  --project-name communique-site --branch production
 ```
 
 Note: `npx convex deploy -y` silently no-ops against prod — always pass `--env-file`.
@@ -53,7 +53,7 @@ pages_build_output_dir = ".svelte-kit/cloudflare"
 Set via Cloudflare dashboard or CLI:
 
 ```bash
-npx wrangler pages secret put <KEY> --project-name commons
+npx wrangler pages secret put <KEY> --project-name communique-site
 ```
 
 Required secrets:
@@ -118,15 +118,24 @@ npx convex deploy --env-file .env.production
 
 # 2. Deploy SvelteKit frontend
 npm run build && npx wrangler pages deploy .svelte-kit/cloudflare \
-  --project-name commons --branch production
+  --project-name communique-site --branch production
 ```
 
 ### Preview Deploy (non-production branch)
 
 ```bash
 npx wrangler pages deploy .svelte-kit/cloudflare \
-  --project-name commons --branch feature-name
+  --project-name communique-site --branch feature-name
 ```
+
+### Staging Smoke
+
+`staging.commons.email` is the Cloudflare Pages branch deployment for `staging` in the
+`communique-site` project. Today it is not a fully isolated environment: the repo-visible
+configuration points branch builds at the same Convex URL and KV bindings as production.
+Until separate staging Convex and KV resources are provisioned, treat Android device smoke
+on staging as controlled production-backed smoke with test accounts and no Business Connect
+or live congressional delivery paths.
 
 ### Rollback
 
@@ -136,8 +145,8 @@ Use the Cloudflare Pages dashboard to roll back to a previous deployment. Each d
 
 ## Monitoring
 
-- **Cloudflare Dashboard** → Workers & Pages → commons → Logs
-- **Real-time logs**: `npx wrangler pages deployment tail --project-name commons`
+- **Cloudflare Dashboard** → Workers & Pages → communique-site → Logs
+- **Real-time logs**: `npx wrangler pages deployment tail --project-name communique-site`
 - **KV metrics**: Dashboard → Workers & Pages → KV → namespace → Metrics
 - **Convex dashboard**: function-level metrics, logs, and errors
 

@@ -1,7 +1,7 @@
 /**
  * Identity Encryption Integration Tests
  *
- * Tests browser-side encryption → Postgres storage → retrieval flow
+ * Tests browser-side encryption → server storage → retrieval flow
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -75,10 +75,10 @@ describe('Identity Blob Encryption', () => {
 		expect(isValidEncryptedBlob(invalidBlob2)).toBe(false);
 	});
 
-	it('should get Postgres blob storage by default', () => {
+	it('should get server blob storage by default', () => {
 		const storage = getBlobStorage();
 		expect(storage).toBeDefined();
-		expect(storage.constructor.name).toBe('PostgresBlobStorage');
+		expect(storage.constructor.name).toBe('ServerBlobStorage');
 	});
 
 	it('should encrypt with deterministic nonce generation', async () => {

@@ -23,7 +23,7 @@
   decryption currently runs in `LocalConstituentResolver` (CF Worker
   process). No HSM / sealed recovery yet.
 - **Deploy cutover:** `npm run build && wrangler pages deploy
-  .svelte-kit/cloudflare --project-name commons --branch production` +
+  .svelte-kit/cloudflare --project-name communique-site --branch production` +
   `npx convex deploy --env-file .env.production` (note: `-y` silently
   fails for prod — always pass `--env-file`).
 - **Rate limiter:** `SlidingWindowRateLimiter` uses `REDIS_URL` if set;
@@ -105,7 +105,7 @@ Spot-check these tables via the Convex dashboard or a quick query:
    ```bash
    npm run build
    npx wrangler pages deploy .svelte-kit/cloudflare \
-     --project-name commons --branch production
+     --project-name communique-site --branch production
    ```
 3. Verify the live site is operational: check `commons.email` health.
 

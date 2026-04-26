@@ -1,4 +1,4 @@
-name = "commons"
+name = "communique-site"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat", "nodejs_als"]
 pages_build_output_dir = ".svelte-kit/cloudflare"
@@ -16,7 +16,7 @@ VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
 # PUBLIC_DISTRICT_GATE_ADDRESS = "0x..."
 # PUBLIC_SCROLL_CHAIN_ID = "534352"
 
-# Secrets (set via `npx wrangler pages secret put <KEY> --project-name commons`):
+# Secrets (set via `npx wrangler pages secret put <KEY> --project-name communique-site`):
 #
 # Write Relay (Phase B1):
 #   WRITE_RELAY_URL          - Write relay Worker URL (e.g., https://commons-write-relay.workers.dev)
