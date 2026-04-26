@@ -25,8 +25,9 @@ separate gates and are not prerequisites for Android device rollout.
 | A5 | done | Add credential-hash reuse detection/cooldown for Android OID4VP replay defense in depth. | `mdl-finalization-internal`, `mdl-protocol-policy`, `verify-mdl-start`. | Brutalist CLI debate partial pass: Codex reviewed; Claude/CON contribution failed; no blocking finding surfaced. |
 | A6a | done | Android same-device pre-smoke source readiness: bridge `credentialHash` propagation, desktop fail-closed completion, and disclosed-field copy alignment. | `mdl-smoke-readiness`. | Brutalist context `3affd4a1-34a2-4f8f-8fff-b079705347c8`; accepted findings fixed before commit. |
 | A6b | done | Align Android OpenID4VP DC API request envelope: `openid4vp-v1-unsigned`, `response_type=vp_token`, `response_mode=dc_api`, DCQL `mso_mdoc`, exact claim paths, and `intent_to_retain=false` for every mdoc claim. | `verify-mdl-start`, `mdl-protocol-policy`, `mdl-smoke-readiness`, `oid4vp-verify`. | Brutalist contexts `f519aa7e-4dcb-487b-bf68-843ca6ba9680` and `170e2dfc-cdca-4f20-a32b-17a7ea719051`; blocking protocol/filter findings fixed before commit. |
-| A6c | active | Implement Android OpenID4VP response handling: normalize Chrome/Wallet DC API authorization responses, handle `vp_token` containers, and route `mso_mdoc` payloads through verified mdoc processing or fail closed. | Add response-shape fixtures plus focused verifier/route tests. | Brutalist review before commit; do not claim live-smoke readiness until response handling is verified. |
-| A6d | queued | Android same-device live smoke: Chrome + Google Wallet mDL on a physical Android device. | See same-device checklist below plus `mdl-smoke-readiness`. | File launch findings before enablement. |
+| A6c | done | Normalize Android OpenID4VP response envelopes and fail closed on encrypted `dc_api.jwt` or `mso_mdoc` DeviceResponse payloads until their verifier work exists. | `oid4vp-verify`, `mdl-mdoc`, plus focused Android mDL suites. | Brutalist contexts `c6e02348-86c4-415a-9376-2e8bc2154573` and `f1a930ae-4fec-42a9-a5f2-8eab73a8b280`; valid classifier findings fixed before commit. |
+| A6d | active | Accept Android `mso_mdoc` safely: reconstruct OpenID4VP DC API SessionTranscript, verify DeviceAuth over the handover, decode `vp_token.mdl[]` DeviceResponse, then pass only verified data through the privacy boundary. | DC API handover fixture tests, DeviceAuth replay regression, `oid4vp-verify`, `mdl-mdoc`. | Brutalist security review before commit; no live smoke until this passes. |
+| A6e | queued | Android same-device live smoke: Chrome + Google Wallet mDL on a physical Android device. | See same-device checklist below plus `mdl-smoke-readiness`. | File launch findings before enablement. |
 | A7 | queued | Desktop-to-Android bridge live smoke. | See bridge checklist below. | File launch findings before enablement. |
 | A8 | queued | Update Android-first docs and user-facing copy after smoke results are known. | Static/source review plus touched-file Svelte check. | Brutalist product/security copy review. |
 | A9 | blocked | Raw mdoc T3: SessionTranscript reconstruction and DeviceAuth verification. | mdoc fixture tests and capture-replay regression. | Required before `MDL_MDOC=true` or iOS enablement. |
@@ -42,12 +43,13 @@ separate gates and are not prerequisites for Android device rollout.
 - Brutalist review context `3affd4a1-34a2-4f8f-8fff-b079705347c8` was fully paginated without rerun for the final assessment; valid findings folded into `d30811f7`.
 - `A6b` request-envelope alignment committed as `aa76a5d9` (`Align Android OpenID4VP request envelope`) with follow-up `c301e4c0` (`Restore mdoc retention flags`): same-device and bridge start routes now emit the versioned unsigned OpenID4VP DC API request shape, protocol probes distinguish versioned OpenID4VP from legacy aliases, feature gates still keep raw `org-iso-mdoc` closed, focused tests lock the DCQL claim paths plus versioned verifier dispatch, and every requested mdoc claim carries `intent_to_retain=false`.
 - Brutalist review contexts `4472a180-0d49-47a7-8c4b-ac4e51490628` and `f519aa7e-4dcb-487b-bf68-843ca6ba9680` surfaced the request-shape/protocol drift and exact-protocol filtering issues; accepted findings were fixed before `aa76a5d9`.
-- Next tractable target is `A6c`: Android OpenID4VP response handling for Chrome/Wallet DC API `vp_token`/`mso_mdoc` responses, with fail-closed tests before any physical same-device smoke.
+- `A6c` response-envelope normalization committed as `4de4239a` (`Fail closed on Android OpenID4VP mdoc responses`): JWT/SD-JWT OpenID4VP fixtures still require signature verification, DigitalCredential envelopes are protocol-bound, encrypted `dc_api.jwt` response markers fail closed, `mso_mdoc` VP token arrays fail closed with a DeviceAuth gate, and mixed or ambiguous envelopes are rejected before address lookup.
+- Next tractable target is `A6d`: implement OpenID4VP DC API handover SessionTranscript and DeviceAuth verification so `vp_token.mdl[]` DeviceResponses can be accepted instead of fail-closed.
 - Global `svelte-check` remains a separate repo-health track and is not an Android mDL launch gate unless errors touch this surface.
 
 ## Smoke Criteria
 
-Same-device Android smoke (`A6d`) passes only when:
+Same-device Android smoke (`A6e`) passes only when:
 
 - Android Chrome + Google Wallet mDL accepts the `openid4vp-v1-unsigned` DC API request.
 - The verifier normalizes the returned OpenID4VP authorization response and rejects unsupported or unsigned response shapes.
@@ -72,5 +74,8 @@ Raw mdoc and iOS stay false throughout this lane. In-flight verification and bri
 ## Dependency Notes
 
 Android mDL rollout is independent of the V2 proof-generation cutover. Users verified during the V1 proof era remain subject to the V2 credential cutover runbook when `V2_PROOF_GENERATION` is enabled.
+
+`A6d` shares the SessionTranscript and DeviceAuth work with raw mdoc T3, but is scoped to the
+OpenID4VP DC API handover used by Android Chrome/Google Wallet.
 
 Raw mdoc T3 unblocks only after SessionTranscript reconstruction, DeviceAuth MAC/signature verification, and sufficient IACA/VICAL coverage for target jurisdictions. iOS remains blocked until raw mdoc T3 and Apple Business Connect are both complete.
