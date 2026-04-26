@@ -16,6 +16,7 @@
 		"test:integration": "vitest --run tests/integration --config=vitest.config.ts",
 		"test:all": "npm run test:run && npm run test:e2e",
 		"test:run": "vitest --run --config=vitest.config.ts",
+		"test:components": "vitest --run tests/unit/components --config=vitest.components.config.ts",
 		"test:coverage": "vitest --coverage --config=vitest.config.ts",
 		"test": "npm run test:run",
 		"test:reseed": "npm run test:run && npm run seed",

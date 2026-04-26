@@ -21,15 +21,13 @@
  *   - Phase transitions bubble up via `onPhaseChange` so the parent can
  *     disable its close × while retirement is underway.
  *
- * NOTE: This test is currently excluded from the vitest run due to the
- * MSW/Node environment incompatibility documented for Svelte 5 component
- * tests (see vitest.config.ts exclude list and ProofGenerator.test.ts).
- * It is kept here so that when the browser-env test harness lands, the
- * coverage can be enabled without rewriting.
+ * NOTE: This test runs under vitest.components.config.ts. The repo-wide
+ * vitest.config.ts still excludes Svelte component tests because its shared
+ * MSW/Node harness is not compatible with this lane.
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from 'vitest';
-import { render, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import AddressChangeFlow from '$lib/components/auth/AddressChangeFlow.svelte';
 
 // Mock the identity modules
@@ -50,13 +48,6 @@ vi.mock('$lib/core/analytics/client', () => ({
 
 vi.mock('$app/navigation', () => ({
 	invalidateAll: vi.fn().mockResolvedValue(undefined)
-}));
-
-// Stub the inner verification flow so tests can focus on the outer composition
-// (old ground + delegation). Integration coverage of the inner flow lives
-// alongside AddressVerificationFlow itself.
-vi.mock('$lib/components/auth/AddressVerificationFlow.svelte', () => ({
-	default: vi.fn()
 }));
 
 describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', () => {
@@ -108,14 +99,21 @@ describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', (
 			});
 		});
 
-		it('renders a "Former" chiplet beside the old address', async () => {
-			const { getByText } = render(AddressChangeFlow, {
+		it('renders a "Former" chiplet beside the old address only after completion', async () => {
+			const { getByTestId, getByText, queryByText } = render(AddressChangeFlow, {
 				props: {
 					userId: mockUserId,
 					onClose: vi.fn(),
 					initialRepresentatives: portlandReps
 				}
 			});
+
+			await waitFor(() => {
+				expect(getByText(/current ground/i)).toBeTruthy();
+			});
+			expect(queryByText(/^former$/i)).toBeNull();
+
+			await fireEvent.click(getByTestId('stub-phase-complete'));
 
 			await waitFor(() => {
 				expect(getByText(/^former$/i)).toBeTruthy();
@@ -177,11 +175,7 @@ describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', (
 
 	describe('Zone 2–4 — Delegated to AddressVerificationFlow', () => {
 		it('mounts AddressVerificationFlow inline, NOT wrapped in a nested modal', async () => {
-			const VerificationFlowMod = await import(
-				'$lib/components/auth/AddressVerificationFlow.svelte'
-			);
-
-			render(AddressChangeFlow, {
+			const { getByTestId } = render(AddressChangeFlow, {
 				props: {
 					userId: mockUserId,
 					onClose: vi.fn(),
@@ -189,8 +183,9 @@ describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', (
 				}
 			});
 
-			// The inner component is invoked — the single-surface contract.
-			expect(VerificationFlowMod.default).toBeTruthy();
+			await waitFor(() => {
+				expect(getByTestId('address-verification-flow-stub')).toBeTruthy();
+			});
 		});
 	});
 
@@ -198,7 +193,7 @@ describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', (
 		it('exposes onPhaseChange so the parent can disable close during witnessing', async () => {
 			const onPhaseChange = vi.fn();
 
-			render(AddressChangeFlow, {
+			const { getByTestId } = render(AddressChangeFlow, {
 				props: {
 					userId: mockUserId,
 					onClose: vi.fn(),
@@ -207,10 +202,15 @@ describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', (
 				}
 			});
 
-			// The callback is wired; the inner flow will emit phase transitions
-			// through it. Asserted by signature here; emission-on-retire is
-			// covered at the AddressVerificationFlow integration layer.
-			expect(onPhaseChange).toBeDefined();
+			await waitFor(() => {
+				expect(onPhaseChange).toHaveBeenCalledWith('capture');
+			});
+
+			await fireEvent.click(getByTestId('stub-phase-witnessing'));
+			expect(onPhaseChange).toHaveBeenCalledWith('witnessing');
+
+			await fireEvent.click(getByTestId('stub-phase-complete'));
+			expect(onPhaseChange).toHaveBeenCalledWith('complete');
 		});
 	});
 
@@ -218,7 +218,7 @@ describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', (
 		it('calls onClose when the inner flow cancels', async () => {
 			const onClose = vi.fn();
 
-			render(AddressChangeFlow, {
+			const { getByTestId } = render(AddressChangeFlow, {
 				props: {
 					userId: mockUserId,
 					onClose,
@@ -226,9 +226,12 @@ describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', (
 				}
 			});
 
-			// Covered via inner-flow cancel callback plumbing; signature check
-			// here guards the API surface.
-			expect(onClose).toBeDefined();
+			await waitFor(() => {
+				expect(getByTestId('stub-cancel')).toBeTruthy();
+			});
+
+			await fireEvent.click(getByTestId('stub-cancel'));
+			expect(onClose).toHaveBeenCalledTimes(1);
 		});
 	});
 
@@ -242,7 +245,7 @@ describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', (
 			// the re-grounding ceremony. At `complete` it morphs from "Current
 			// ground" (single column) to "Prior ground" (left grid column). The
 			// user sees the same pane throughout — no structural replacement.
-			const { getByText, queryByText } = render(AddressChangeFlow, {
+			const { getByTestId, getByText, queryByText } = render(AddressChangeFlow, {
 				props: {
 					userId: mockUserId,
 					onClose: vi.fn(),
@@ -266,15 +269,18 @@ describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', (
 			// At capture there is no "WAS" yet. Once the harness lands this
 			// assertion will cover the positive case via phase emission.
 			expect(hiddenMarker).toBeNull();
+
+			await fireEvent.click(getByTestId('stub-phase-complete'));
+
+			await waitFor(() => {
+				expect(getByText(/prior ground/i)).toBeTruthy();
+				expect(getByText(/^former$/i)).toBeTruthy();
+				expect(getByText('123 Burnside Ave')).toBeTruthy();
+			});
 		});
 
 		it('uses a horizontal grid layout when phase === complete', async () => {
-			// The outer container picks up grid + sm:grid-cols-2 at `complete`.
-			// We cannot trigger phase=complete without driving the inner flow,
-			// but the class strings exist on the rendered markup regardless of
-			// phase — tests here document the intent. Integration coverage in
-			// Playwright E2E re-grounding test validates the transition.
-			const { container } = render(AddressChangeFlow, {
+			const { container, getByTestId } = render(AddressChangeFlow, {
 				props: {
 					userId: mockUserId,
 					onClose: vi.fn(),
@@ -286,6 +292,13 @@ describe('AddressChangeFlow Component (Stage 3.7 — continuous composition)', (
 				// During capture the grid classes are not active.
 				const gridEl = container.querySelector('.grid');
 				expect(gridEl).toBeNull();
+			});
+
+			await fireEvent.click(getByTestId('stub-phase-complete'));
+
+			await waitFor(() => {
+				const gridEl = container.querySelector('.grid');
+				expect(gridEl).toBeTruthy();
 			});
 		});
 	});

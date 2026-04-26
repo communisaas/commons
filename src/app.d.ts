@@ -111,6 +111,9 @@ declare global {
 			BRIDGE_ENCRYPTION_KEY?: string; // AES-256-GCM key for bridge session encryption
 			CONVEX_JWT_PRIVATE_KEY?: string; // RSA private key (PKCS#8 PEM) for minting Convex auth JWTs
 			CONVEX_AUTH_ISSUER?: string; // JWT issuer URL (defaults to https://commons.email)
+			SESSION_CREATION_SECRET?: string; // HMAC proof key for SvelteKit-created Convex sessions
+			DEV_LOGIN_TOKEN?: string; // Non-production Playwright/dev login bearer token
+			PLAYWRIGHT_DEV_LOGIN_TOKEN?: string; // Test runner token forwarded to DEV_LOGIN_TOKEN
 
 			// Analytics Configuration
 			USE_SNAPSHOT_ONLY?: string; // 'true' = use privacy-preserving snapshots only (production default)

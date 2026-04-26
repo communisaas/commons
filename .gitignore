@@ -92,3 +92,4 @@ commons-desktop-a11y.md
 
 # Playwright MCP artifacts
 .playwright-mcp/
+tests/e2e/.auth/

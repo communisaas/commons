@@ -10,9 +10,50 @@
  * This is the CORE property that makes DP meaningful.
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyKaryRR, correctKaryRR } from '$lib/core/analytics/noise';
 import { PRIVACY, METRIC_VALUES, type Metric } from '$lib/types/analytics';
+
+function makeSeededGetRandomValues(seed: number): Crypto['getRandomValues'] {
+	let state = seed >>> 0;
+
+	function nextWord(): number {
+		state ^= state << 13;
+		state ^= state >>> 17;
+		state ^= state << 5;
+		return state >>> 0;
+	}
+
+	return ((array: ArrayBufferView | null) => {
+		if (!array) return array;
+
+		const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+		let word = 0;
+		let remaining = 0;
+
+		for (let i = 0; i < bytes.length; i++) {
+			if (remaining === 0) {
+				word = nextWord();
+				remaining = 4;
+			}
+			bytes[i] = word & 0xff;
+			word >>>= 8;
+			remaining--;
+		}
+
+		return array;
+	}) as Crypto['getRandomValues'];
+}
+
+beforeEach(() => {
+	vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(
+		makeSeededGetRandomValues(0xc0ffee)
+	);
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe('k-ary Randomized Response epsilon-LDP Guarantee', () => {
 	/**

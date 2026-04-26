@@ -16,6 +16,12 @@
  */
 export type AddressSpecificity = 'off' | 'region' | 'district';
 
+const forceShadowAtlasOff = import.meta.env.VITE_FORCE_SHADOW_ATLAS_OFF === '1';
+
+if (import.meta.env.PROD && forceShadowAtlasOff && import.meta.env.VITE_ENVIRONMENT !== 'test') {
+	throw new Error('VITE_FORCE_SHADOW_ATLAS_OFF may only be used by test builds');
+}
+
 export const FEATURES = {
 	/** Deliberation surfaces, argument submission, LMSR market, resolution/appeal */
 	DEBATE: true,
@@ -67,7 +73,7 @@ export const FEATURES = {
 	ACCOUNTABILITY: true,
 
 	/** Shadow Atlas client-side verification: browser computes district commitment (no plaintext to server) */
-	SHADOW_ATLAS_VERIFICATION: true,
+	SHADOW_ATLAS_VERIFICATION: forceShadowAtlasOff ? false : true,
 
 	/** Agentic delegation: AI proxy civic actions under user-defined policy constraints (Tier 3+) */
 	DELEGATION: false,
