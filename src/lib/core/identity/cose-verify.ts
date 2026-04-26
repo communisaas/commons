@@ -38,6 +38,7 @@ export interface MobileSecurityObject {
 	digestAlgorithm: string;
 	/** namespace -> { digestID -> digest } */
 	valueDigests: Map<string, Map<number, Uint8Array>>;
+	deviceKeyInfo?: DeviceKeyInfo;
 	validityInfo: {
 		signed: Date;
 		validFrom: Date;
@@ -46,6 +47,21 @@ export interface MobileSecurityObject {
 	/** Raw DER bytes of the issuer certificate */
 	issuerCertificate: Uint8Array;
 }
+
+export interface DeviceKeyInfo {
+	deviceKey: CoseEc2Key;
+}
+
+export interface CoseEc2Key {
+	kty: 'EC2';
+	curve: EcCurve;
+	x: Uint8Array;
+	y: Uint8Array;
+}
+
+export type DeviceAuthVerificationResult =
+	| { valid: true }
+	| { valid: false; reason: string };
 
 // ---------------------------------------------------------------------------
 // COSE algorithm identifiers (RFC 9053)
@@ -62,6 +78,23 @@ const COSE_HEADER_ALG = 1;
 
 /** COSE unprotected header key for x5chain (X.509 certificate chain) */
 const COSE_HEADER_X5CHAIN = 33;
+
+/** COSE key type EC2 */
+const COSE_KEY_TYPE_EC2 = 2;
+
+/** COSE EC2 curve identifiers */
+const COSE_CRV_P256 = 1;
+const COSE_CRV_P384 = 2;
+
+/** COSE key labels */
+const COSE_KEY_KTY = 1;
+const COSE_KEY_ALG = 3;
+const COSE_KEY_KEY_OPS = 4;
+const COSE_KEY_CRV = -1;
+const COSE_KEY_X = -2;
+const COSE_KEY_Y = -3;
+const COSE_KEY_OP_VERIFY = 2;
+const MAX_PROTECTED_HEADER_CBOR_DEPTH = 32;
 
 // ---------------------------------------------------------------------------
 // ASN.1 OIDs for X.509 EC public key extraction
@@ -105,7 +138,15 @@ export async function verifyCoseSign1(
 	issuerAuth: unknown[],
 	trustedRoots: IACACertificate[]
 ): Promise<CoseVerificationResult> {
-	const { decode, encode } = await import('cbor-web');
+	let decode: (data: Uint8Array | ArrayBuffer) => unknown;
+	try {
+		decode = await loadCborDecode();
+	} catch (err) {
+		return {
+			valid: false,
+			reason: `Failed to load CBOR decoder: ${err instanceof Error ? err.message : String(err)}`
+		};
+	}
 
 	// --- Validate COSE_Sign1 structure ---
 	if (!Array.isArray(issuerAuth) || issuerAuth.length !== 4) {
@@ -127,16 +168,12 @@ export async function verifyCoseSign1(
 	// Decode protected headers to check algorithm
 	let protectedHeaders: Map<number, unknown>;
 	try {
-		const decoded = decode(protectedHeadersCBOR);
-		if (decoded instanceof Map) {
-			protectedHeaders = decoded;
-		} else if (typeof decoded === 'object' && decoded !== null) {
-			protectedHeaders = new Map(Object.entries(decoded).map(([k, v]) => [Number(k), v]));
-		} else {
-			return { valid: false, reason: 'Protected headers did not decode to a map' };
-		}
-	} catch {
-		return { valid: false, reason: 'Failed to decode protected headers CBOR' };
+		protectedHeaders = decodeProtectedHeaders(protectedHeadersCBOR, decode);
+	} catch (err) {
+		return {
+			valid: false,
+			reason: `Failed to decode protected headers CBOR: ${err instanceof Error ? err.message : String(err)}`
+		};
 	}
 
 	const algorithm = protectedHeaders.get(COSE_HEADER_ALG);
@@ -220,11 +257,14 @@ export async function verifyCoseSign1(
 
 	// --- Build Sig_structure and verify ---
 	// Sig_structure = ["Signature1", protectedHeadersCBOR, externalAad, payloadCBOR]
-	const sigStructure = ['Signature1', protectedHeadersCBOR, new Uint8Array(0), payloadCBOR];
-
 	let sigStructureEncoded: Uint8Array;
 	try {
-		sigStructureEncoded = new Uint8Array(encode(sigStructure));
+		sigStructureEncoded = encodeCoseSigStructure(
+			'Signature1',
+			protectedHeadersCBOR,
+			new Uint8Array(0),
+			payloadCBOR
+		);
 	} catch {
 		return { valid: false, reason: 'Failed to CBOR-encode Sig_structure' };
 	}
@@ -263,6 +303,133 @@ export async function verifyCoseSign1(
 	}
 
 	return { valid: true, mso };
+}
+
+// ---------------------------------------------------------------------------
+// DeviceAuth verification
+// ---------------------------------------------------------------------------
+
+/**
+ * Verify ISO 18013-5 DeviceAuth.deviceSignature.
+ *
+ * DeviceSignature is a COSE_Sign1 with detached content. ISO 18013-5 signs
+ * DeviceAuthenticationBytes as the Sig_structure payload and uses an empty
+ * external_aad byte string. The COSE_Sign1 payload itself must be nil.
+ */
+export async function verifyDeviceSignature(
+	deviceSignature: unknown,
+	deviceKey: CoseEc2Key,
+	deviceAuthenticationBytes: Uint8Array
+): Promise<DeviceAuthVerificationResult> {
+	let decode: (data: Uint8Array | ArrayBuffer) => unknown;
+	try {
+		decode = await loadCborDecode();
+	} catch (err) {
+		return {
+			valid: false,
+			reason: `Failed to load CBOR decoder: ${err instanceof Error ? err.message : String(err)}`
+		};
+	}
+
+	if (!Array.isArray(deviceSignature) || deviceSignature.length !== 4) {
+		return { valid: false, reason: 'DeviceSignature must be a 4-element COSE_Sign1 array' };
+	}
+
+	const deviceKeyError = validateCoseEc2KeyStruct(deviceKey);
+	if (deviceKeyError) {
+		return { valid: false, reason: `Invalid DeviceAuth key: ${deviceKeyError}` };
+	}
+
+	const [protectedHeadersRaw, _unprotectedHeaders, payloadRaw, signatureRaw] = deviceSignature;
+
+	const protectedHeadersCBOR = toBytes(protectedHeadersRaw);
+	if (!protectedHeadersCBOR) {
+		return { valid: false, reason: 'DeviceSignature protected headers must be bytes' };
+	}
+
+	let protectedHeaders: Map<number, unknown>;
+	try {
+		protectedHeaders = decodeProtectedHeaders(protectedHeadersCBOR, decode);
+	} catch (err) {
+		return {
+			valid: false,
+			reason: `Failed to decode DeviceSignature protected headers: ${err instanceof Error ? err.message : String(err)}`
+		};
+	}
+
+	const algorithm = protectedHeaders.get(COSE_HEADER_ALG);
+	const expectedAlg = deviceKey.curve === 'P-384' ? COSE_ALG_ES384 : COSE_ALG_ES256;
+	if (algorithm !== expectedAlg) {
+		return {
+			valid: false,
+			reason: `DeviceSignature algorithm ${String(algorithm)} does not match ${deviceKey.curve}`
+		};
+	}
+
+	if (payloadRaw !== null) {
+		return { valid: false, reason: 'DeviceSignature payload must be nil (detached content)' };
+	}
+
+	const signature = toBytes(signatureRaw);
+	if (!signature) {
+		return { valid: false, reason: 'DeviceSignature signature must be bytes' };
+	}
+
+	const curveParams = CURVE_PARAMS[deviceKey.curve];
+	if (signature.length !== curveParams.sigSize) {
+		return {
+			valid: false,
+			reason: `Invalid DeviceSignature length: ${signature.length} (expected ${curveParams.sigSize})`
+		};
+	}
+
+	let publicKey: CryptoKey;
+	try {
+		publicKey = await crypto.subtle.importKey(
+			'raw',
+			toBufferSource(coseEc2KeyToRaw(deviceKey)),
+			{ name: 'ECDSA', namedCurve: deviceKey.curve },
+			false,
+			['verify']
+		);
+	} catch (err) {
+		return {
+			valid: false,
+			reason: `Failed to import DeviceAuth key: ${err instanceof Error ? err.message : String(err)}`
+		};
+	}
+
+	let sigStructure: Uint8Array;
+	try {
+		sigStructure = encodeCoseSigStructure(
+			'Signature1',
+			protectedHeadersCBOR,
+			new Uint8Array(0),
+			deviceAuthenticationBytes
+		);
+	} catch (err) {
+		return {
+			valid: false,
+			reason: `Failed to encode DeviceSignature Sig_structure: ${err instanceof Error ? err.message : String(err)}`
+		};
+	}
+
+	let valid: boolean;
+	try {
+		valid = await crypto.subtle.verify(
+			{ name: 'ECDSA', hash: curveParams.hash },
+			publicKey,
+			toBufferSource(signature),
+			toBufferSource(sigStructure)
+		);
+	} catch (err) {
+		return {
+			valid: false,
+			reason: `DeviceSignature verification threw: ${err instanceof Error ? err.message : String(err)}`
+		};
+	}
+
+	return valid ? { valid: true } : { valid: false, reason: 'DeviceSignature is invalid' };
 }
 
 // ---------------------------------------------------------------------------
@@ -841,13 +1008,370 @@ function parseMobileSecurityObject(
 		validUntil: parseDate(rawValidity?.validUntil)
 	};
 
+	const deviceKeyInfoValue = getMapLikeValue(msoData, 'deviceKeyInfo');
+	const deviceKeyInfo = parseDeviceKeyInfo(deviceKeyInfoValue);
+	if (deviceKeyInfoValue !== undefined && !deviceKeyInfo) {
+		throw new Error('Invalid MSO deviceKeyInfo.deviceKey');
+	}
+
 	return {
 		version,
 		digestAlgorithm,
 		valueDigests,
+		...(deviceKeyInfo ? { deviceKeyInfo } : {}),
 		validityInfo,
 		issuerCertificate: issuerCertDER
 	};
+}
+
+function parseDeviceKeyInfo(value: unknown): DeviceKeyInfo | undefined {
+	const deviceKeyValue = getMapLikeValue(value, 'deviceKey');
+	const deviceKey = parseCoseEc2Key(deviceKeyValue);
+	return deviceKey ? { deviceKey } : undefined;
+}
+
+function parseCoseEc2Key(value: unknown): CoseEc2Key | undefined {
+	if (!(value instanceof Map)) return undefined;
+
+	const kty = getMapLikeValue(value, COSE_KEY_KTY);
+	if (kty !== COSE_KEY_TYPE_EC2) return undefined;
+
+	const crv = getMapLikeValue(value, COSE_KEY_CRV);
+	const curve = coseCurveToEcCurve(crv);
+	if (!curve) return undefined;
+
+	const keyAlgorithm = getMapLikeValue(value, COSE_KEY_ALG);
+	const expectedAlgorithm = curve === 'P-384' ? COSE_ALG_ES384 : COSE_ALG_ES256;
+	if (keyAlgorithm !== undefined && keyAlgorithm !== expectedAlgorithm) return undefined;
+
+	const keyOps = getMapLikeValue(value, COSE_KEY_KEY_OPS);
+	if (keyOps !== undefined) {
+		if (!Array.isArray(keyOps) || !keyOps.includes(COSE_KEY_OP_VERIFY)) return undefined;
+	}
+
+	const x = toBytes(getMapLikeValue(value, COSE_KEY_X));
+	const y = toBytes(getMapLikeValue(value, COSE_KEY_Y));
+	if (!x || !y) return undefined;
+
+	const componentSize = CURVE_PARAMS[curve].componentSize;
+	if (x.length !== componentSize || y.length !== componentSize) return undefined;
+
+	return {
+		kty: 'EC2',
+		curve,
+		x,
+		y
+	};
+}
+
+function validateCoseEc2KeyStruct(value: unknown): string | null {
+	if (typeof value !== 'object' || value === null) return 'key must be an object';
+	const key = value as Partial<CoseEc2Key>;
+	if (key.kty !== 'EC2') return 'kty must be EC2';
+	if (key.curve !== 'P-256' && key.curve !== 'P-384') return 'unsupported curve';
+	if (!(key.x instanceof Uint8Array) || !(key.y instanceof Uint8Array)) {
+		return 'coordinates must be byte strings';
+	}
+	const componentSize = CURVE_PARAMS[key.curve].componentSize;
+	if (key.x.length !== componentSize || key.y.length !== componentSize) {
+		return `coordinate length must be ${componentSize} bytes for ${key.curve}`;
+	}
+	return null;
+}
+
+function coseCurveToEcCurve(value: unknown): EcCurve | undefined {
+	if (value === COSE_CRV_P256) return 'P-256';
+	if (value === COSE_CRV_P384) return 'P-384';
+	return undefined;
+}
+
+function coseEc2KeyToRaw(key: CoseEc2Key): Uint8Array {
+	const raw = new Uint8Array(1 + key.x.length + key.y.length);
+	raw[0] = 0x04;
+	raw.set(key.x, 1);
+	raw.set(key.y, 1 + key.x.length);
+	return raw;
+}
+
+function getMapLikeValue(value: unknown, key: string | number): unknown {
+	if (!isMapLike(value)) return undefined;
+	if (value instanceof Map) {
+		return value.get(key);
+	}
+	const record = value as Record<string, unknown>;
+	return record[String(key)];
+}
+
+function isMapLike(value: unknown): value is Map<unknown, unknown> | Record<string, unknown> {
+	return (
+		value instanceof Map ||
+		(typeof value === 'object' && value !== null && !Array.isArray(value))
+	);
+}
+
+function decodeProtectedHeaders(
+	protectedHeadersCBOR: Uint8Array,
+	decode: (data: Uint8Array) => unknown
+): Map<number, unknown> {
+	assertNoDuplicateCborMapLabels(protectedHeadersCBOR);
+	return normalizeMap(decode(protectedHeadersCBOR));
+}
+
+async function loadCborDecode(): Promise<(data: Uint8Array | ArrayBuffer) => unknown> {
+	const cborModule = (await import('cbor-web')) as unknown as {
+		default?: { decode?: (data: Uint8Array | ArrayBuffer) => unknown };
+		decode?: (data: Uint8Array | ArrayBuffer) => unknown;
+	};
+	const decode = cborModule.default?.decode ?? cborModule.decode;
+	if (typeof decode !== 'function') {
+		throw new Error('cbor-web decode is unavailable');
+	}
+	return decode;
+}
+
+function normalizeMap(value: unknown): Map<number, unknown> {
+	if (value instanceof Map) {
+		const out = new Map<number, unknown>();
+		for (const [key, val] of value.entries()) {
+			if (typeof key === 'number') {
+				out.set(key, val);
+			}
+		}
+		return out;
+	}
+	throw new Error('protected headers must decode to a Map');
+}
+
+function assertNoDuplicateCborMapLabels(cbor: Uint8Array): void {
+	const head = readCborHead(cbor, 0);
+	if (head.majorType !== 5 || head.value === null) {
+		throw new Error('protected headers did not decode to a definite-length map');
+	}
+
+	const seen = new Set<string>();
+	let offset = head.offset;
+	for (let i = 0; i < head.value; i++) {
+		const key = readCborMapKeyIdentity(cbor, offset);
+		if (seen.has(key.identity)) {
+			throw new Error(`duplicate protected header label ${key.display}`);
+		}
+		seen.add(key.identity);
+		offset = skipCborItem(cbor, key.offset);
+	}
+
+	if (offset !== cbor.length) {
+		throw new Error('protected headers CBOR has trailing data');
+	}
+}
+
+interface CborHead {
+	majorType: number;
+	value: number | null;
+	offset: number;
+}
+
+function readCborHead(cbor: Uint8Array, offset: number): CborHead {
+	if (offset >= cbor.length) throw new Error('truncated CBOR item');
+
+	const first = cbor[offset++];
+	const majorType = first >> 5;
+	const additionalInfo = first & 0x1f;
+
+	if (additionalInfo < 24) {
+		return { majorType, value: additionalInfo, offset };
+	}
+	if (additionalInfo === 24) {
+		ensureCborAvailable(cbor, offset, 1);
+		return { majorType, value: cbor[offset], offset: offset + 1 };
+	}
+	if (additionalInfo === 25) {
+		ensureCborAvailable(cbor, offset, 2);
+		return {
+			majorType,
+			value: (cbor[offset] << 8) | cbor[offset + 1],
+			offset: offset + 2
+		};
+	}
+	if (additionalInfo === 26) {
+		ensureCborAvailable(cbor, offset, 4);
+		return {
+			majorType,
+			value:
+				cbor[offset] * 0x1000000 +
+				((cbor[offset + 1] << 16) | (cbor[offset + 2] << 8) | cbor[offset + 3]),
+			offset: offset + 4
+		};
+	}
+	if (additionalInfo === 27) {
+		ensureCborAvailable(cbor, offset, 8);
+		let value = 0n;
+		for (let i = 0; i < 8; i++) {
+			value = (value << 8n) | BigInt(cbor[offset + i]);
+		}
+		if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+			throw new Error('CBOR integer is too large');
+		}
+		return { majorType, value: Number(value), offset: offset + 8 };
+	}
+	if (additionalInfo === 31) {
+		return { majorType, value: null, offset };
+	}
+
+	throw new Error('invalid CBOR additional information');
+}
+
+function readCborMapKeyIdentity(
+	cbor: Uint8Array,
+	offset: number
+): { identity: string; display: string; offset: number } {
+	const start = offset;
+	const head = readCborHead(cbor, offset);
+	if (head.value === null) {
+		throw new Error('indefinite-length protected header labels are not supported');
+	}
+
+	if (head.majorType === 0) {
+		return { identity: `int:${head.value}`, display: String(head.value), offset: head.offset };
+	}
+	if (head.majorType === 1) {
+		const value = -1 - head.value;
+		return { identity: `int:${value}`, display: String(value), offset: head.offset };
+	}
+	if (head.majorType === 2 || head.majorType === 3) {
+		const end = checkedCborOffset(cbor, head.offset, head.value);
+		const bytes = cbor.slice(head.offset, end);
+		if (head.majorType === 3) {
+			const text = new TextDecoder().decode(bytes);
+			return { identity: `text:${text}`, display: text, offset: end };
+		}
+		const hex = hexEncode(bytes);
+		return { identity: `bytes:${hex}`, display: `0x${hex}`, offset: end };
+	}
+
+	const end = skipCborItem(cbor, start);
+	const hex = hexEncode(cbor.slice(start, end));
+	return { identity: `raw:${hex}`, display: `0x${hex}`, offset: end };
+}
+
+function skipCborItem(cbor: Uint8Array, offset: number, depth = 0): number {
+	if (depth > MAX_PROTECTED_HEADER_CBOR_DEPTH) {
+		throw new Error('protected headers CBOR nesting is too deep');
+	}
+
+	const head = readCborHead(cbor, offset);
+	if (head.value === null) {
+		throw new Error('indefinite-length CBOR is not supported in protected headers');
+	}
+
+	if (head.majorType === 0 || head.majorType === 1 || head.majorType === 7) {
+		return head.offset;
+	}
+	if (head.majorType === 2 || head.majorType === 3) {
+		return checkedCborOffset(cbor, head.offset, head.value);
+	}
+	if (head.majorType === 4) {
+		let next = head.offset;
+		for (let i = 0; i < head.value; i++) {
+			next = skipCborItem(cbor, next, depth + 1);
+		}
+		return next;
+	}
+	if (head.majorType === 5) {
+		let next = head.offset;
+		for (let i = 0; i < head.value; i++) {
+			next = skipCborItem(cbor, next, depth + 1);
+			next = skipCborItem(cbor, next, depth + 1);
+		}
+		return next;
+	}
+	if (head.majorType === 6) {
+		return skipCborItem(cbor, head.offset, depth + 1);
+	}
+
+	throw new Error('unsupported CBOR major type');
+}
+
+function checkedCborOffset(cbor: Uint8Array, offset: number, length: number): number {
+	ensureCborAvailable(cbor, offset, length);
+	return offset + length;
+}
+
+function ensureCborAvailable(cbor: Uint8Array, offset: number, length: number): void {
+	if (offset + length > cbor.length) {
+		throw new Error('truncated CBOR item');
+	}
+}
+
+function hexEncode(bytes: Uint8Array): string {
+	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function toBytes(value: unknown): Uint8Array | null {
+	if (value instanceof Uint8Array) return new Uint8Array(value);
+	if (value instanceof ArrayBuffer) return new Uint8Array(value);
+	return null;
+}
+
+function encodeCoseSigStructure(
+	context: 'Signature1',
+	protectedHeaders: Uint8Array,
+	externalAad: Uint8Array,
+	payload: Uint8Array
+): Uint8Array {
+	return encodeMinimalCbor([context, protectedHeaders, externalAad, payload]);
+}
+
+type MinimalCborValue = string | Uint8Array | null | readonly MinimalCborValue[];
+
+function encodeMinimalCbor(value: MinimalCborValue): Uint8Array {
+	if (typeof value === 'string') {
+		return encodeCborBytes(3, new TextEncoder().encode(value));
+	}
+	if (value instanceof Uint8Array) {
+		return encodeCborBytes(2, value);
+	}
+	if (value === null) {
+		return new Uint8Array([0xf6]);
+	}
+	if (Array.isArray(value)) {
+		return concatBytes([encodeCborHead(4, value.length), ...value.map(encodeMinimalCbor)]);
+	}
+	throw new Error('Unsupported minimal CBOR value');
+}
+
+function encodeCborBytes(majorType: number, bytes: Uint8Array): Uint8Array {
+	return concatBytes([encodeCborHead(majorType, bytes.length), bytes]);
+}
+
+function encodeCborHead(majorType: number, length: number): Uint8Array {
+	if (majorType < 0 || majorType > 7) throw new Error('Invalid CBOR major type');
+	if (!Number.isSafeInteger(length) || length < 0) throw new Error('Invalid CBOR length');
+
+	const prefix = majorType << 5;
+	if (length < 24) return new Uint8Array([prefix | length]);
+	if (length <= 0xff) return new Uint8Array([prefix | 24, length]);
+	if (length <= 0xffff) return new Uint8Array([prefix | 25, length >> 8, length & 0xff]);
+	if (length <= 0xffffffff) {
+		return new Uint8Array([
+			prefix | 26,
+			(length >>> 24) & 0xff,
+			(length >>> 16) & 0xff,
+			(length >>> 8) & 0xff,
+			length & 0xff
+		]);
+	}
+	throw new Error('CBOR length too large');
+}
+
+function concatBytes(chunks: Uint8Array[]): Uint8Array {
+	const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+	const out = new Uint8Array(length);
+	let offset = 0;
+	for (const chunk of chunks) {
+		out.set(chunk, offset);
+		offset += chunk.length;
+	}
+	return out;
 }
 
 // ---------------------------------------------------------------------------

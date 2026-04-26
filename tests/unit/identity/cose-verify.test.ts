@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import {
 	verifyCoseSign1,
+	verifyDeviceSignature,
 	validateMsoDigests,
 	extractEcPublicKeyFromDER,
 	extractTBSAndSignature,
@@ -116,20 +117,26 @@ async function buildMinimalCert(publicKey: CryptoKey): Promise<Uint8Array> {
 async function buildCoseSign1(
 	payload: Uint8Array,
 	privateKey: CryptoKey,
-	certDER: Uint8Array
+	certDER: Uint8Array,
+	options?: { protectedHeadersCBOR?: Uint8Array }
 ): Promise<unknown[]> {
 	// Protected headers: { 1: -7 } (alg: ES256)
 	const protectedHeaders = new Map<number, number>();
 	protectedHeaders.set(1, -7);
-	const protectedHeadersCBOR = new Uint8Array(encode(protectedHeaders));
+	const protectedHeadersCBOR =
+		options?.protectedHeadersCBOR ?? new Uint8Array(encode(protectedHeaders));
 
 	// Unprotected headers: { 33: certDER } (x5chain)
 	const unprotectedHeaders = new Map<number, Uint8Array>();
 	unprotectedHeaders.set(33, certDER);
 
 	// Build Sig_structure = ["Signature1", protectedHeadersCBOR, b"", payload]
-	const sigStructure = ['Signature1', protectedHeadersCBOR, new Uint8Array(0), payload];
-	const sigStructureEncoded = new Uint8Array(encode(sigStructure));
+	const sigStructureEncoded = encodeCoseSigStructureForTest(
+		'Signature1',
+		protectedHeadersCBOR,
+		new Uint8Array(0),
+		payload
+	);
 
 	// Sign with ECDSA P-256 SHA-256
 	// Node.js Web Crypto returns raw (IEEE P1363) format: r || s, 64 bytes
@@ -148,7 +155,10 @@ async function buildCoseSign1(
 /**
  * Build a test MSO (MobileSecurityObject) CBOR payload.
  */
-function buildTestMso(namespaceDigests?: Map<string, Map<number, Uint8Array>>): Uint8Array {
+function buildTestMso(
+	namespaceDigests?: Map<string, Map<number, Uint8Array>>,
+	deviceKey?: unknown
+): Uint8Array {
 	const mso: Record<string, unknown> = {
 		version: '1.0',
 		digestAlgorithm: 'SHA-256',
@@ -171,6 +181,10 @@ function buildTestMso(namespaceDigests?: Map<string, Map<number, Uint8Array>>): 
 				])
 			]
 		]);
+	}
+
+	if (deviceKey) {
+		mso.deviceKeyInfo = new Map<string, unknown>([['deviceKey', deviceKey]]);
 	}
 
 	return new Uint8Array(encode(mso));
@@ -218,6 +232,88 @@ function wrapDERSequence(content: Uint8Array): Uint8Array {
 	result.set(lenBytes, 1);
 	result.set(content, 1 + lenBytes.length);
 	return result;
+}
+
+async function publicKeyToCoseEc2Key(publicKey: CryptoKey): Promise<Map<number, unknown>> {
+	const raw = new Uint8Array(await crypto.subtle.exportKey('raw', publicKey));
+	return new Map<number, unknown>([
+		[1, 2], // kty: EC2
+		[-1, 1], // crv: P-256
+		[-2, raw.slice(1, 33)],
+		[-3, raw.slice(33, 65)]
+	]);
+}
+
+async function buildDeviceSignature(
+	deviceAuthenticationBytes: Uint8Array,
+	privateKey: CryptoKey,
+	options?: { payload?: unknown; protectedHeadersCBOR?: Uint8Array }
+): Promise<unknown[]> {
+	const protectedHeaders = new Map<number, number>([[1, -7]]);
+	const protectedHeadersCBOR =
+		options?.protectedHeadersCBOR ?? new Uint8Array(encode(protectedHeaders));
+	const sigStructure = encodeCoseSigStructureForTest(
+		'Signature1',
+		protectedHeadersCBOR,
+		new Uint8Array(0),
+		deviceAuthenticationBytes
+	);
+	const rawSignature = new Uint8Array(
+		await crypto.subtle.sign(
+			{ name: 'ECDSA', hash: 'SHA-256' },
+			privateKey,
+			sigStructure
+		)
+	);
+	return [protectedHeadersCBOR, new Map(), options?.payload ?? null, rawSignature];
+}
+
+function encodeCoseSigStructureForTest(
+	context: 'Signature1',
+	protectedHeaders: Uint8Array,
+	externalAad: Uint8Array,
+	payload: Uint8Array
+): Uint8Array {
+	return encodeMinimalCborForTest([context, protectedHeaders, externalAad, payload]);
+}
+
+type MinimalCborValueForTest = string | Uint8Array | null | readonly MinimalCborValueForTest[];
+
+function encodeMinimalCborForTest(value: MinimalCborValueForTest): Uint8Array {
+	if (typeof value === 'string') {
+		return encodeCborBytesForTest(3, new TextEncoder().encode(value));
+	}
+	if (value instanceof Uint8Array) {
+		return encodeCborBytesForTest(2, value);
+	}
+	if (value === null) {
+		return new Uint8Array([0xf6]);
+	}
+	if (Array.isArray(value)) {
+		return concatBytes(
+			encodeCborHeadForTest(4, value.length),
+			...value.map(encodeMinimalCborForTest)
+		);
+	}
+	throw new Error('Unsupported CBOR value');
+}
+
+function encodeCborBytesForTest(majorType: number, bytes: Uint8Array): Uint8Array {
+	return concatBytes(encodeCborHeadForTest(majorType, bytes.length), bytes);
+}
+
+function encodeCborHeadForTest(majorType: number, length: number): Uint8Array {
+	const prefix = majorType << 5;
+	if (length < 24) return new Uint8Array([prefix | length]);
+	if (length <= 0xff) return new Uint8Array([prefix | 24, length]);
+	if (length <= 0xffff) return new Uint8Array([prefix | 25, length >> 8, length & 0xff]);
+	return new Uint8Array([
+		prefix | 26,
+		(length >>> 24) & 0xff,
+		(length >>> 16) & 0xff,
+		(length >>> 8) & 0xff,
+		length & 0xff
+	]);
 }
 
 /** Cast Uint8Array to BufferSource — works around cross-realm type mismatch in vitest/jsdom */
@@ -505,6 +601,56 @@ describe('COSE_Sign1 Verification', () => {
 			}
 		});
 
+		it('should reject duplicate protected header labels before signature verification', async () => {
+			const keyPair = await generateKeyPair();
+			const certDER = await buildMinimalCert(keyPair.publicKey);
+			const msoPayload = buildTestMso();
+			const duplicateAlgProtectedHeaders = new Uint8Array([0xa2, 0x01, 0x26, 0x01, 0x26]);
+			const coseSign1 = await buildCoseSign1(msoPayload, keyPair.privateKey, certDER, {
+				protectedHeadersCBOR: duplicateAlgProtectedHeaders
+			});
+
+			const trustedRoot: IACACertificate = {
+				state: 'XX',
+				issuer: 'Test Root',
+				certificateB64: uint8ArrayToBase64(certDER),
+				derBytes: certDER,
+				expiresAt: '2035-12-31T23:59:59Z'
+			};
+
+			const result = await verifyCoseSign1(coseSign1, [trustedRoot]);
+
+			expect(result.valid).toBe(false);
+			if (!result.valid) {
+				expect(result.reason).toContain('duplicate protected header label 1');
+			}
+		});
+
+		it('should reject text-keyed protected alg labels', async () => {
+			const keyPair = await generateKeyPair();
+			const certDER = await buildMinimalCert(keyPair.publicKey);
+			const msoPayload = buildTestMso();
+			const textAlgProtectedHeaders = new Uint8Array(encode({ '1': -7 }));
+			const coseSign1 = await buildCoseSign1(msoPayload, keyPair.privateKey, certDER, {
+				protectedHeadersCBOR: textAlgProtectedHeaders
+			});
+
+			const trustedRoot: IACACertificate = {
+				state: 'XX',
+				issuer: 'Test Root',
+				certificateB64: uint8ArrayToBase64(certDER),
+				derBytes: certDER,
+				expiresAt: '2035-12-31T23:59:59Z'
+			};
+
+			const result = await verifyCoseSign1(coseSign1, [trustedRoot]);
+
+			expect(result.valid).toBe(false);
+			if (!result.valid) {
+				expect(result.reason).toContain('protected headers must decode to a Map');
+			}
+		});
+
 		it('should reject when signature has wrong length', async () => {
 			const protectedHeaders = new Map<number, number>();
 			protectedHeaders.set(1, -7);
@@ -711,6 +857,271 @@ describe('COSE_Sign1 Verification', () => {
 			);
 
 			expect(result).toBe(false);
+		});
+	});
+
+	describe('DeviceAuth deviceSignature verification', () => {
+		it('verifies a detached DeviceAuthentication signature using the MSO device key', async () => {
+			const deviceKeyPair = await generateKeyPair();
+			const deviceKey = await publicKeyToCoseEc2Key(deviceKeyPair.publicKey);
+
+			const issuerKeyPair = await generateKeyPair();
+			const certDER = await buildMinimalCert(issuerKeyPair.publicKey);
+			const msoPayload = buildTestMso(undefined, deviceKey);
+			const issuerAuth = await buildCoseSign1(msoPayload, issuerKeyPair.privateKey, certDER);
+
+			const trustedRoot: IACACertificate = {
+				state: 'XX',
+				issuer: 'Test Root',
+				certificateB64: uint8ArrayToBase64(certDER),
+				derBytes: certDER,
+				expiresAt: '2035-12-31T23:59:59Z'
+			};
+
+			const coseResult = await verifyCoseSign1(issuerAuth, [trustedRoot]);
+			expect(coseResult.valid).toBe(true);
+			if (!coseResult.valid) return;
+			expect(coseResult.mso.deviceKeyInfo?.deviceKey.curve).toBe('P-256');
+
+			const deviceAuthenticationBytes = new Uint8Array([
+				0x84,
+				0x74,
+				...new TextEncoder().encode('DeviceAuthentication'),
+				0xf6,
+				0x63,
+				0x6d,
+				0x44,
+				0x4c,
+				0x40
+			]);
+			const deviceSignature = await buildDeviceSignature(
+				deviceAuthenticationBytes,
+				deviceKeyPair.privateKey
+			);
+
+			await expect(
+				verifyDeviceSignature(
+					deviceSignature,
+					coseResult.mso.deviceKeyInfo!.deviceKey,
+					deviceAuthenticationBytes
+				)
+			).resolves.toEqual({ valid: true });
+		});
+
+		it('rejects replay against a different DeviceAuthentication transcript', async () => {
+			const deviceKeyPair = await generateKeyPair();
+			const deviceKey = await publicKeyToCoseEc2Key(deviceKeyPair.publicKey);
+			const deviceAuthenticationBytes = new Uint8Array([0x83, 0x01, 0x02, 0x03]);
+			const tamperedAuthenticationBytes = new Uint8Array([0x83, 0x01, 0x02, 0x04]);
+			const deviceSignature = await buildDeviceSignature(
+				deviceAuthenticationBytes,
+				deviceKeyPair.privateKey
+			);
+
+			const result = await verifyDeviceSignature(
+				deviceSignature,
+				{
+					kty: 'EC2',
+					curve: 'P-256',
+					x: deviceKey.get(-2) as Uint8Array,
+					y: deviceKey.get(-3) as Uint8Array
+				},
+				tamperedAuthenticationBytes
+			);
+
+			expect(result.valid).toBe(false);
+			if (!result.valid) {
+				expect(result.reason).toMatch(/invalid/i);
+			}
+		});
+
+		it('rejects DeviceSignature verification with a different device key', async () => {
+			const signingKeyPair = await generateKeyPair();
+			const differentKeyPair = await generateKeyPair();
+			const differentDeviceKey = await publicKeyToCoseEc2Key(differentKeyPair.publicKey);
+			const deviceAuthenticationBytes = new Uint8Array([0x83, 0x01, 0x02, 0x03]);
+			const deviceSignature = await buildDeviceSignature(
+				deviceAuthenticationBytes,
+				signingKeyPair.privateKey
+			);
+
+			const result = await verifyDeviceSignature(
+				deviceSignature,
+				{
+					kty: 'EC2',
+					curve: 'P-256',
+					x: differentDeviceKey.get(-2) as Uint8Array,
+					y: differentDeviceKey.get(-3) as Uint8Array
+				},
+				deviceAuthenticationBytes
+			);
+
+			expect(result.valid).toBe(false);
+			if (!result.valid) {
+				expect(result.reason).toMatch(/invalid/i);
+			}
+		});
+
+		it('verifies DeviceAuthentication bytes with multi-byte CBOR length encoding', async () => {
+			const deviceKeyPair = await generateKeyPair();
+			const deviceKey = await publicKeyToCoseEc2Key(deviceKeyPair.publicKey);
+			const deviceAuthenticationBytes = new Uint8Array(300);
+			crypto.getRandomValues(deviceAuthenticationBytes);
+			const deviceSignature = await buildDeviceSignature(
+				deviceAuthenticationBytes,
+				deviceKeyPair.privateKey
+			);
+
+			const result = await verifyDeviceSignature(
+				deviceSignature,
+				{
+					kty: 'EC2',
+					curve: 'P-256',
+					x: deviceKey.get(-2) as Uint8Array,
+					y: deviceKey.get(-3) as Uint8Array
+				},
+				deviceAuthenticationBytes
+			);
+
+			expect(result).toEqual({ valid: true });
+		});
+
+		it('rejects duplicate DeviceSignature protected header labels', async () => {
+			const deviceKeyPair = await generateKeyPair();
+			const deviceKey = await publicKeyToCoseEc2Key(deviceKeyPair.publicKey);
+			const deviceAuthenticationBytes = new Uint8Array([0x83, 0x01, 0x02, 0x03]);
+			const duplicateAlgProtectedHeaders = new Uint8Array([0xa2, 0x01, 0x26, 0x01, 0x26]);
+			const deviceSignature = await buildDeviceSignature(
+				deviceAuthenticationBytes,
+				deviceKeyPair.privateKey,
+				{ protectedHeadersCBOR: duplicateAlgProtectedHeaders }
+			);
+
+			const result = await verifyDeviceSignature(
+				deviceSignature,
+				{
+					kty: 'EC2',
+					curve: 'P-256',
+					x: deviceKey.get(-2) as Uint8Array,
+					y: deviceKey.get(-3) as Uint8Array
+				},
+				deviceAuthenticationBytes
+			);
+
+			expect(result.valid).toBe(false);
+			if (!result.valid) {
+				expect(result.reason).toContain('duplicate protected header label 1');
+			}
+		});
+
+		it('rejects text-keyed DeviceSignature protected alg labels', async () => {
+			const deviceKeyPair = await generateKeyPair();
+			const deviceKey = await publicKeyToCoseEc2Key(deviceKeyPair.publicKey);
+			const deviceAuthenticationBytes = new Uint8Array([0x83, 0x01, 0x02, 0x03]);
+			const textAlgProtectedHeaders = new Uint8Array(encode({ '1': -7 }));
+			const deviceSignature = await buildDeviceSignature(
+				deviceAuthenticationBytes,
+				deviceKeyPair.privateKey,
+				{ protectedHeadersCBOR: textAlgProtectedHeaders }
+			);
+
+			const result = await verifyDeviceSignature(
+				deviceSignature,
+				{
+					kty: 'EC2',
+					curve: 'P-256',
+					x: deviceKey.get(-2) as Uint8Array,
+					y: deviceKey.get(-3) as Uint8Array
+				},
+				deviceAuthenticationBytes
+			);
+
+			expect(result.valid).toBe(false);
+			if (!result.valid) {
+				expect(result.reason).toContain('protected headers must decode to a Map');
+			}
+		});
+
+		it('rejects DeviceSignature payloads that are not detached', async () => {
+			const deviceKeyPair = await generateKeyPair();
+			const deviceKey = await publicKeyToCoseEc2Key(deviceKeyPair.publicKey);
+			const deviceAuthenticationBytes = new Uint8Array([0x83, 0x01, 0x02, 0x03]);
+			const deviceSignature = await buildDeviceSignature(
+				deviceAuthenticationBytes,
+				deviceKeyPair.privateKey,
+				{ payload: new Uint8Array([0x01]) }
+			);
+
+			const result = await verifyDeviceSignature(
+				deviceSignature,
+				{
+					kty: 'EC2',
+					curve: 'P-256',
+					x: deviceKey.get(-2) as Uint8Array,
+					y: deviceKey.get(-3) as Uint8Array
+				},
+				deviceAuthenticationBytes
+			);
+
+			expect(result).toEqual({
+				valid: false,
+				reason: 'DeviceSignature payload must be nil (detached content)'
+			});
+		});
+
+		it('rejects mismatched COSE_Key alg values in present deviceKeyInfo', async () => {
+			const deviceKeyPair = await generateKeyPair();
+			const deviceKey = await publicKeyToCoseEc2Key(deviceKeyPair.publicKey);
+			deviceKey.set(3, -35); // alg: ES384, invalid for the P-256 key coordinates.
+
+			const issuerKeyPair = await generateKeyPair();
+			const certDER = await buildMinimalCert(issuerKeyPair.publicKey);
+			const msoPayload = buildTestMso(undefined, deviceKey);
+			const issuerAuth = await buildCoseSign1(msoPayload, issuerKeyPair.privateKey, certDER);
+
+			const trustedRoot: IACACertificate = {
+				state: 'XX',
+				issuer: 'Test Root',
+				certificateB64: uint8ArrayToBase64(certDER),
+				derBytes: certDER,
+				expiresAt: '2035-12-31T23:59:59Z'
+			};
+
+			const coseResult = await verifyCoseSign1(issuerAuth, [trustedRoot]);
+			expect(coseResult.valid).toBe(false);
+			if (!coseResult.valid) {
+				expect(coseResult.reason).toContain('Invalid MSO deviceKeyInfo.deviceKey');
+			}
+		});
+
+		it('rejects string-keyed COSE_Key labels in present deviceKeyInfo', async () => {
+			const deviceKeyPair = await generateKeyPair();
+			const deviceKey = await publicKeyToCoseEc2Key(deviceKeyPair.publicKey);
+			const stringKeyedDeviceKey = {
+				'1': 2,
+				'-1': 1,
+				'-2': deviceKey.get(-2),
+				'-3': deviceKey.get(-3)
+			};
+
+			const issuerKeyPair = await generateKeyPair();
+			const certDER = await buildMinimalCert(issuerKeyPair.publicKey);
+			const msoPayload = buildTestMso(undefined, stringKeyedDeviceKey);
+			const issuerAuth = await buildCoseSign1(msoPayload, issuerKeyPair.privateKey, certDER);
+
+			const trustedRoot: IACACertificate = {
+				state: 'XX',
+				issuer: 'Test Root',
+				certificateB64: uint8ArrayToBase64(certDER),
+				derBytes: certDER,
+				expiresAt: '2035-12-31T23:59:59Z'
+			};
+
+			const coseResult = await verifyCoseSign1(issuerAuth, [trustedRoot]);
+			expect(coseResult.valid).toBe(false);
+			if (!coseResult.valid) {
+				expect(coseResult.reason).toContain('Invalid MSO deviceKeyInfo.deviceKey');
+			}
 		});
 	});
 
