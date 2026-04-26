@@ -2,7 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import { isAnyMdlProtocolEnabled, isMdlProtocolEnabled } from '$lib/config/features';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 
@@ -11,6 +11,11 @@ const VerifyMdlSchema = z.object({
 	data: z.string().min(1),
 	nonce: z.string().min(1).max(128)
 });
+
+function isMdlCredentialReuseError(err: unknown): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return message.includes('MDL_CREDENTIAL_HASH_REUSED');
+}
 
 /**
  * mDL Verification Verify Endpoint
@@ -115,12 +120,36 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		}
 		const identityCommitment = result.identityCommitment;
 
-		// Bind identity commitment for Sybil detection and account merging
-		// If this commitment already exists on another user, accounts are merged
-		const bindingResult = await serverMutation(api.users.bindIdentityCommitment, {
-			userId: session.userId as any,
-			identityCommitment
-		});
+		// Server-only finalizer: bind identity commitment for Sybil detection and
+		// apply the mDL tier upgrade in the same internal Convex mutation. This
+		// also handles account-merge flows where the canonical user differs from
+		// the authenticated session user.
+		const now = Date.now();
+		let bindingResult;
+		try {
+			bindingResult = await serverMutation(internal.users.finalizeMdlVerification, {
+				userId: session.userId as any,
+				identityCommitment,
+				credentialHash: result.credentialHash,
+				nonce,
+				protocol,
+				sessionChannel: 'same-device',
+				verifiedAt: now,
+				addressVerificationMethod: 'mdl',
+				documentType: 'mdl'
+			});
+		} catch (err) {
+			if (isMdlCredentialReuseError(err)) {
+				return json(
+					{
+						error: 'credential_reuse_detected',
+						message: 'This wallet presentation was already used. Start a new verification session.'
+					},
+					{ status: 409 }
+				);
+			}
+			throw err;
+		}
 
 		// Use the canonical userId after potential merge
 		const canonicalUserId = bindingResult.userId;
@@ -132,16 +161,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				accountsMoved: bindingResult.mergeDetails?.accountsMoved
 			});
 		}
-
-		// Update user record with mDL verification
-		// Always set verification metadata; only upgrade trust_tier (never downgrade)
-		const now = Date.now();
-		await serverMutation(api.users.updateMdlVerification, {
-			userId: canonicalUserId as any,
-			verifiedAt: now,
-			addressVerificationMethod: 'mdl',
-			documentType: 'mdl'
-		});
 
 		console.log('[mDL Verify] Success:', {
 			userId: canonicalUserId,

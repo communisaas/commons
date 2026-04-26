@@ -2,7 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { internal } from '$lib/convex';
 import { isMdlBridgeEnabled, isMdlProtocolEnabled } from '$lib/config/features';
 import {
 	getBridgeSession,
@@ -20,6 +20,11 @@ const CompleteSchema = z.object({
 	data: z.string().min(1).max(65536),
 	hmac: z.string().min(32).max(128)
 });
+
+function isMdlCredentialReuseError(err: unknown): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return message.includes('MDL_CREDENTIAL_HASH_REUSED');
+}
 
 /**
  * Bridge Complete — phone submits verified credential.
@@ -113,20 +118,40 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		}
 		const identityCommitment = result.identityCommitment;
 
-		// Bind identity commitment + update user
-		const bindingResult = await serverMutation(api.users.bindIdentityCommitment, {
-			userId: session.desktopUserId as any,
-			identityCommitment
-		});
+		// Server-only finalizer: the bridge phone request has no Convex auth
+		// cookie, so HMAC verification above is the authorization boundary.
+		let bindingResult;
+		try {
+			bindingResult = await serverMutation(internal.users.finalizeMdlVerification, {
+				userId: session.desktopUserId as any,
+				identityCommitment,
+				credentialHash: result.credentialHash,
+				nonce: session.nonce,
+				protocol: input.protocol,
+				sessionChannel: 'bridge',
+				verifiedAt: Date.now(),
+				addressVerificationMethod: 'mdl',
+				documentType: 'mdl'
+			});
+		} catch (err) {
+			if (isMdlCredentialReuseError(err)) {
+				await failBridgeSession(
+					input.sessionId,
+					'This wallet presentation was already used. Start a new verification session.',
+					platform
+				);
+				return json(
+					{
+						error: 'credential_reuse_detected',
+						message: 'This wallet presentation was already used. Start a new verification session.'
+					},
+					{ status: 409 }
+				);
+			}
+			throw err;
+		}
 
 		const canonicalUserId = bindingResult.userId;
-
-		await serverMutation(api.users.updateMdlVerification, {
-			userId: canonicalUserId as any,
-			verifiedAt: Date.now(),
-			addressVerificationMethod: 'mdl',
-			documentType: 'mdl'
-		});
 
 		// Store derived facts in bridge session (SSE stream picks these up)
 		await completeBridgeSession(

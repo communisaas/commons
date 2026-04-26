@@ -317,9 +317,14 @@ export const clearPasskey = mutation({
 // =============================================================================
 
 /**
- * Update user after mDL verification. Only upgrades trust_tier, never downgrades.
+ * Internal legacy helper for mDL verification metadata. Only upgrades trust_tier,
+ * never downgrades.
+ *
+ * Do not expose this as a public mutation: clients must not be able to self-assert
+ * mDL verification. New server routes should prefer finalizeMdlVerification so
+ * commitment binding and tier mutation stay atomic.
  */
-export const updateMdlVerification = mutation({
+export const updateMdlVerification = internalMutation({
   args: {
     userId: v.id("users"),
     verifiedAt: v.number(),
@@ -327,8 +332,6 @@ export const updateMdlVerification = mutation({
     documentType: v.string(),
   },
   handler: async (ctx, args) => {
-    const { userId: authUserId } = await requireAuth(ctx);
-    if (args.userId !== authUserId) throw new Error("Unauthorized");
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("User not found");
     const patch: Record<string, unknown> = {
@@ -342,6 +345,96 @@ export const updateMdlVerification = mutation({
       patch.trustTier = 5;
     }
     await ctx.db.patch(args.userId, patch);
+  },
+});
+
+const MDL_CREDENTIAL_REUSE_COOLDOWN_MS = 10 * 60 * 1000;
+const MDL_CREDENTIAL_HASH_REUSED = "MDL_CREDENTIAL_HASH_REUSED";
+const MDL_CREDENTIAL_HASH_INVALID = "MDL_CREDENTIAL_HASH_INVALID";
+
+/**
+ * Server-only mDL finalizer.
+ *
+ * Same-device and bridge verification routes have already authenticated the
+ * flow (session cookie or bridge HMAC) before calling this internal mutation.
+ * Keeping commitment binding and the tier upgrade in one internal mutation
+ * avoids two bad states:
+ *   - bridge completion failing because the phone request has no Convex auth
+ *   - account-merge flows failing when the canonical user is not the session user
+ */
+export const finalizeMdlVerification = internalMutation({
+  args: {
+    userId: v.id("users"),
+    identityCommitment: v.string(),
+    credentialHash: v.string(),
+    nonce: v.string(),
+    protocol: v.string(),
+    sessionChannel: v.union(v.literal("same-device"), v.literal("bridge")),
+    verifiedAt: v.number(),
+    addressVerificationMethod: v.string(),
+    documentType: v.string(),
+    identityHash: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("identityCommitment"), args.identityCommitment))
+      .first();
+
+    const linkedToExisting = Boolean(existing && existing._id !== args.userId);
+    const canonicalUserId = linkedToExisting ? existing!._id : args.userId;
+    const user = await ctx.db.get(canonicalUserId);
+    if (!user) throw new Error("User not found");
+    const now = Date.now();
+
+    if (!/^[0-9a-f]{64}$/i.test(args.credentialHash)) {
+      throw new Error(MDL_CREDENTIAL_HASH_INVALID);
+    }
+
+    const activeReuse = await ctx.db
+      .query("mdlCredentialUses")
+      .withIndex("by_credentialHash", (q) => q.eq("credentialHash", args.credentialHash))
+      .filter((q) => q.gt(q.field("expiresAt"), now))
+      .first();
+
+    if (activeReuse) {
+      throw new Error(MDL_CREDENTIAL_HASH_REUSED);
+    }
+
+    await ctx.db.insert("mdlCredentialUses", {
+      credentialHash: args.credentialHash,
+      userId: canonicalUserId,
+      identityCommitment: args.identityCommitment,
+      nonce: args.nonce,
+      protocol: args.protocol,
+      sessionChannel: args.sessionChannel,
+      firstSeenAt: now,
+      expiresAt: now + MDL_CREDENTIAL_REUSE_COOLDOWN_MS,
+    });
+
+    const patch: Record<string, unknown> = {
+      identityCommitment: args.identityCommitment,
+      isVerified: true,
+      verificationMethod: "mdl",
+      verifiedAt: args.verifiedAt,
+      addressVerificationMethod: args.addressVerificationMethod,
+      addressVerifiedAt: args.verifiedAt,
+      documentType: args.documentType,
+      updatedAt: Date.now(),
+    };
+    if (args.identityHash) patch.identityHash = args.identityHash;
+    if ((user.trustTier ?? 0) < 5) {
+      patch.trustTier = 5;
+    }
+
+    await ctx.db.patch(canonicalUserId, patch);
+
+    return {
+      userId: canonicalUserId,
+      linkedToExisting,
+      requireReauth: linkedToExisting,
+      mergeDetails: linkedToExisting ? { accountsMoved: 1 } : undefined,
+    };
   },
 });
 

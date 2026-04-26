@@ -539,6 +539,23 @@ export default defineSchema({
     .index("by_credentialHash", ["credentialHash"]),
 
   // ===========================================================================
+  // MDL PRESENTATION REUSE COOLDOWN
+  // ===========================================================================
+
+  mdlCredentialUses: defineTable({
+    credentialHash: v.string(),
+    userId: v.id("users"),
+    identityCommitment: v.string(),
+    nonce: v.string(),
+    protocol: v.string(), // 'openid4vp' | 'org-iso-mdoc'
+    sessionChannel: v.string(), // 'same-device' | 'bridge'
+    firstSeenAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_credentialHash", ["credentialHash"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  // ===========================================================================
   // RATE LIMITS
   // ===========================================================================
 
