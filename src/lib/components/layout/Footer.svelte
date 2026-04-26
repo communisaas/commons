@@ -22,6 +22,14 @@
 			<a href="/org" class="footer-coda__contact footer-coda__contact--org">For organizations</a>
 		</div>
 
+		<!-- Legal links (F-1.2: privacy disclosure must be discoverable from
+		     every page; full /privacy and /terms routes pending F-4.4) -->
+		<div class="footer-coda__links">
+			<a href="/about/integrity#data-practices" class="footer-coda__contact">Privacy &amp; data</a>
+			<span class="footer-coda__sep" aria-hidden="true"></span>
+			<a href="/about/integrity" class="footer-coda__contact">Integrity</a>
+		</div>
+
 		<!-- Legal minimum -->
 		<p class="footer-coda__legal">© {new Date().getFullYear()} Commons PBC</p>
 	</div>

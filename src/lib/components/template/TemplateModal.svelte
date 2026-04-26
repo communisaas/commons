@@ -47,6 +47,7 @@
 	import VerificationGate from '$lib/components/auth/VerificationGate.svelte';
 	import ProofGenerator from '$lib/components/template/ProofGenerator.svelte';
 	import AddressCollectionForm from '$lib/components/onboarding/AddressCollectionForm.svelte';
+	import { isAnyMdlProtocolEnabled } from '$lib/config/features';
 	import {
 		shouldUseSameDeviceFlow,
 		requestCredential
@@ -95,7 +96,9 @@
 	/** Census Block GEOID from address verification (for three-tree ZK architecture) */
 	let verifiedCellId = $state<string | undefined>(undefined);
 	/** Structured address from AddressCollectionForm for ProofGenerator deliveryAddress */
-	let verifiedAddress = $state<{ street: string; city: string; state: string; zip: string } | null>(null);
+	let verifiedAddress = $state<{ street: string; city: string; state: string; zip: string } | null>(
+		null
+	);
 
 	// Enhanced URL copy component state
 	let copyButtonScale = spring(1, { stiffness: 0.4, damping: 0.8 });
@@ -125,8 +128,8 @@
 
 	// Pre-written share messages for different contexts
 	const shareMessages = $derived(() => {
-		const actionCount = template.send_count || 0;
-		const domain = template.domain?.toLowerCase() || 'advocacy';
+		const actionCount = numericCount(template.send_count);
+		const domain = typeof template.domain === 'string' ? template.domain.toLowerCase() : 'advocacy';
 
 		return {
 			// Short & urgent (Twitter, Discord) - <280 chars
@@ -149,6 +152,15 @@
 		};
 	});
 
+	function numericCount(value: unknown): number {
+		if (typeof value === 'number' && Number.isFinite(value)) return value;
+		if (typeof value === 'string') {
+			const parsed = Number(value);
+			if (Number.isFinite(parsed)) return parsed;
+		}
+		return 0;
+	}
+
 	// Store event handlers for proper cleanup
 	let mailAppBlurHandler: (() => void) | null = null;
 	let mailAppVisibilityHandler: (() => void) | null = null;
@@ -161,7 +173,9 @@
 		// If initialState is provided, skip auto-routing and go directly to that state
 		if (initialState) {
 			console.log(`[TemplateModal] initialState="${initialState}" — skipping auto-routing`);
-			modalActions.setState(initialState as import('$lib/stores/modalSystem.svelte').LegacyModalState);
+			modalActions.setState(
+				initialState as import('$lib/stores/modalSystem.svelte').LegacyModalState
+			);
 			return;
 		}
 
@@ -185,7 +199,9 @@
 				handleSendConfirmation(true);
 			} else {
 				// Tier 1 (OAuth-only): needs address verification before ZKP
-				console.log(`[TemplateModal] Tier ${user.trust_tier ?? 1} user on congressional — showing trust upgrade`);
+				console.log(
+					`[TemplateModal] Tier ${user.trust_tier ?? 1} user on congressional — showing trust upgrade`
+				);
 				trustUpgradePhase = 'choice';
 				modalActions.setState('trust-upgrade');
 			}
@@ -251,7 +267,9 @@
 			}
 		}
 
-		const flow = analyzeEmailFlow(template, enrichedUser, { trustTier: enrichedUser?.trust_tier ?? 0 });
+		const flow = analyzeEmailFlow(template, enrichedUser, {
+			trustTier: enrichedUser?.trust_tier ?? 0
+		});
 
 		// Store mailto URL for later use
 		if (flow.mailtoUrl) {
@@ -381,17 +399,15 @@
 	 * We parse the formatted address string into components and store locally
 	 * (privacy-preserving: no server persistence of address).
 	 */
-	async function handleAddressComplete(
-		data: {
-			address: string;
-			verified: boolean;
-			streetAddress: string;
-			city: string;
-			state: string;
-			zip: string;
-			representatives?: Representative[] | ProviderRepresentative[];
-		}
-	) {
+	async function handleAddressComplete(data: {
+		address: string;
+		verified: boolean;
+		streetAddress: string;
+		city: string;
+		state: string;
+		zip: string;
+		representatives?: Representative[] | ProviderRepresentative[];
+	}) {
 		console.log('[Template Modal] Address complete:', {
 			street: data.streetAddress,
 			city: data.city,
@@ -522,7 +538,7 @@
 	 * 2. Trigger navigator.credentials.get() — iOS shows wallet prompt
 	 * 3. If wallet succeeds: verify on server, proceed to ZKP
 	 * 4. If wallet fails (not enrolled, unsupported): show brief error,
- *    then offer to use another method.
+	 *    then offer to use another method.
 	 */
 	async function attemptWalletVerification() {
 		trustUpgradePhase = 'wallet-requesting';
@@ -610,10 +626,7 @@
 	 * After user verifies, proceed with Congressional submission
 	 */
 	function handleVerificationComplete(data: { userId: string; method: string }) {
-		console.log(
-			'[Template Modal] Verification complete, proceeding with submission:',
-			data
-		);
+		console.log('[Template Modal] Verification complete, proceeding with submission:', data);
 		showVerificationGate = false;
 
 		// Now that user is verified, route by tier
@@ -708,7 +721,9 @@
 			// Guest on congressional template: already sent via mailto relay.
 			// Go to celebration with upgrade CTA (same as non-congressional guest path).
 			if (!user && isCongressional) {
-				console.log('[Template Modal] Guest confirmed send on congressional — celebration + upgrade CTA');
+				console.log(
+					'[Template Modal] Guest confirmed send on congressional — celebration + upgrade CTA'
+				);
 
 				modalActions.confirmSend();
 
@@ -730,7 +745,8 @@
 				// CWC requires full address encrypted into the ZKP witness.
 				// Address is hydrated from encrypted IndexedDB on mount (Tier 2+)
 				// or collected inline via AddressCollectionForm.
-				const hasAddress = verifiedAddress &&
+				const hasAddress =
+					verifiedAddress &&
 					verifiedAddress.street &&
 					verifiedAddress.city &&
 					verifiedAddress.state &&
@@ -944,20 +960,16 @@
 </script>
 
 <!-- Modal Content (no backdrop - UnifiedModal handles that) -->
-<div
-	class="flex max-h-[90vh] w-full flex-col overflow-clip"
-	role="document"
-	tabindex="-1"
->
+<div class="flex max-h-[90vh] w-full flex-col overflow-clip" role="document" tabindex="-1">
 	<!-- Dynamic Content Based on State -->
 	{#if currentState === 'loading'}
 		<!-- Loading State - mailto is being resolved -->
 		<div class="p-6 text-center sm:p-8" in:scale={{ duration: 500, easing: backOut }}>
 			<div
-				class="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-participation-primary-100 sm:mb-6 sm:h-20 sm:w-20"
+				class="bg-participation-primary-100 mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full sm:mb-6 sm:h-20 sm:w-20"
 				style="transform: scale({$celebrationScale})"
 			>
-				<Send class="h-8 w-8 text-participation-primary-600 sm:h-10 sm:w-10" />
+				<Send class="text-participation-primary-600 h-8 w-8 sm:h-10 sm:w-10" />
 			</div>
 			<h3 class="mb-2 text-xl font-bold text-slate-900 sm:text-2xl">Preparing message...</h3>
 			<p class="mb-4 text-sm text-slate-600 sm:mb-6 sm:text-base">
@@ -967,7 +979,7 @@
 			<!-- Animated progress indicator -->
 			<div class="mx-auto h-2 w-32 overflow-hidden rounded-full bg-slate-200">
 				<div
-					class="h-full rounded-full bg-gradient-to-r from-participation-primary-500 to-participation-primary-700 transition-all duration-1000 ease-out"
+					class="from-participation-primary-500 to-participation-primary-700 h-full rounded-full bg-gradient-to-r transition-all duration-1000 ease-out"
 					style="width: {$actionProgress * 100}%"
 				></div>
 			</div>
@@ -978,15 +990,15 @@
 			<!-- Close Button -->
 			<button
 				onclick={handleClose}
-				class="absolute right-4 top-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
+				class="absolute top-4 right-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
 			>
 				<X class="h-5 w-5" />
 			</button>
 
 			<div
-				class="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-participation-primary-100 sm:mb-6 sm:h-20 sm:w-20"
+				class="bg-participation-primary-100 mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full sm:mb-6 sm:h-20 sm:w-20"
 			>
-				<Send class="h-8 w-8 text-participation-primary-600 sm:h-10 sm:w-10" />
+				<Send class="text-participation-primary-600 h-8 w-8 sm:h-10 sm:w-10" />
 			</div>
 			<h3 class="mb-2 text-xl font-bold text-slate-900 sm:text-2xl">Did you send it?</h3>
 			<p class="mb-4 text-sm text-slate-600 sm:mb-6 sm:text-base">Confirm to track this action.</p>
@@ -1018,7 +1030,7 @@
 			<!-- Close Button -->
 			<button
 				onclick={handleClose}
-				class="absolute right-4 top-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
+				class="absolute top-4 right-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
 			>
 				<X class="h-5 w-5" />
 			</button>
@@ -1087,8 +1099,8 @@
 			<!-- Enhanced Celebration Content -->
 			<div class="flex-1 space-y-6 overflow-y-auto p-6">
 				<!-- Pioneer Badge (first 10 users) or Impact Counter -->
-				{#if (template.send_count ?? 0) <= 10}
-					{@const sentCount = template.send_count ?? 0}
+				{#if numericCount(template.send_count) <= 10}
+					{@const sentCount = numericCount(template.send_count)}
 					<!-- Pioneer Badge -->
 					<div
 						class="rounded-lg border-2 border-orange-300 bg-gradient-to-br from-orange-50 via-amber-50 to-yellow-50 p-6"
@@ -1175,7 +1187,8 @@
 							Verify your address for faster delivery
 						</p>
 						<p class="mb-3 text-xs text-indigo-700">
-							Congressional offices prioritize verified constituents. Add your address to ensure your message is counted.
+							Congressional offices prioritize verified constituents. Add your address to ensure
+							your message is counted.
 						</p>
 						<button
 							onclick={() => {
@@ -1199,7 +1212,8 @@
 							Verify your identity for cryptographic delivery
 						</p>
 						<p class="mb-3 text-xs text-emerald-700">
-							Your message was delivered as a constituent. Verify your identity to send with a zero-knowledge proof next time — unfakeable, unbottable.
+							Your message was delivered as a constituent. Verify your identity to send with a
+							zero-knowledge proof next time — unfakeable, unbottable.
 						</p>
 						<button
 							onclick={() => {
@@ -1225,11 +1239,10 @@
 						class="rounded-lg border border-emerald-200 bg-gradient-to-r from-emerald-50 to-emerald-100 p-4"
 						in:fly={{ y: 10, duration: 400, delay: 300 }}
 					>
-						<p class="mb-1 text-sm font-semibold text-indigo-900">
-							Generate a ZK proof next time
-						</p>
+						<p class="mb-1 text-sm font-semibold text-indigo-900">Generate a ZK proof next time</p>
 						<p class="mb-3 text-xs text-indigo-700">
-							You're identity-verified. Next time, send with a zero-knowledge proof — mathematically verified district residency. Maximum weight.
+							You're identity-verified. Next time, send with a zero-knowledge proof — mathematically
+							verified district residency. Maximum weight.
 						</p>
 					</div>
 				{/if}
@@ -1239,10 +1252,14 @@
 					<!-- Primary: Universal Share Button -->
 					<button
 						onclick={handleUniversalShare}
-						class="flex w-full items-center justify-center gap-2 rounded-lg bg-participation-primary-600 px-6 py-3 font-semibold text-white shadow-sm transition-all hover:bg-participation-primary-700 active:scale-95"
+						class="bg-participation-primary-600 hover:bg-participation-primary-700 flex w-full items-center justify-center gap-2 rounded-lg px-6 py-3 font-semibold text-white shadow-sm transition-all active:scale-95"
 					>
 						<Share2 class="h-5 w-5" />
-						<span>{(typeof navigator !== 'undefined' && 'share' in navigator) ? 'Share template' : 'Copy share message'}</span>
+						<span
+							>{typeof navigator !== 'undefined' && 'share' in navigator
+								? 'Share template'
+								: 'Copy share message'}</span
+						>
 					</button>
 				</div>
 
@@ -1268,7 +1285,7 @@
 				{#if showQRCode && qrCodeDataUrl}
 					<div class="rounded-lg border border-slate-200 bg-white p-4" in:scale={{ duration: 300 }}>
 						<img src={qrCodeDataUrl} alt="QR code for {template.title}" class="mx-auto" />
-						<p class="mb-3 mt-2 text-center text-xs text-slate-600">
+						<p class="mt-2 mb-3 text-center text-xs text-slate-600">
 							Print this for protests, meetings, or events
 						</p>
 						<button
@@ -1330,7 +1347,7 @@
 			<!-- Close Button -->
 			<button
 				onclick={handleClose}
-				class="absolute right-4 top-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
+				class="absolute top-4 right-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
 			>
 				<X class="h-5 w-5" />
 			</button>
@@ -1347,8 +1364,11 @@
 		<!-- Trust Upgrade — graduated trust with real wallet attempt -->
 		<div class="relative p-6 sm:p-8" in:scale={{ duration: 500, easing: backOut }}>
 			<button
-				onclick={() => { trustUpgradePhase = 'choice'; handleClose(); }}
-				class="absolute right-4 top-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
+				onclick={() => {
+					trustUpgradePhase = 'choice';
+					handleClose();
+				}}
+				class="absolute top-4 right-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
 			>
 				<X class="h-5 w-5" />
 			</button>
@@ -1356,48 +1376,72 @@
 			{#if trustUpgradePhase === 'choice'}
 				<!-- Phase 1: Choice — strengthen signal -->
 				<div class="mb-6 text-center">
-					<div class="mb-3 inline-flex h-14 w-14 items-center justify-center rounded-full bg-slate-100">
+					<div
+						class="mb-3 inline-flex h-14 w-14 items-center justify-center rounded-full bg-slate-100"
+					>
 						<ShieldCheck class="h-7 w-7 text-slate-600" />
 					</div>
 					<h3 class="mb-1 text-xl font-bold text-slate-900">Strengthen your signal</h3>
-					<p class="text-sm text-slate-500">Congressional offices prioritize verified constituents</p>
+					<p class="text-sm text-slate-500">
+						Congressional offices prioritize verified constituents
+					</p>
 				</div>
 
 				<div class="space-y-3">
-					<!-- mDL: Highest signal — verify with digital ID -->
-					<button
-						onclick={() => { attemptWalletVerification(); }}
-						class="group flex w-full items-center gap-4 rounded-md border-2 border-emerald-200 bg-slate-50 p-4 text-left transition-all hover:border-emerald-300 hover:shadow-md"
-					>
-						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100">
-							<Smartphone class="h-5 w-5 text-emerald-600" />
-						</div>
-						<div class="min-w-0 flex-1">
-							<span class="block text-sm font-semibold text-emerald-900">Verify with Digital ID</span>
-							<span class="block text-xs text-emerald-600">Cryptographic proof of identity. Undeniable signal.</span>
-						</div>
-						<ArrowRight class="h-4 w-4 shrink-0 text-emerald-400 transition-transform group-hover:translate-x-0.5" />
-					</button>
+					{#if isAnyMdlProtocolEnabled()}
+						<!-- mDL: Highest signal — verify with digital ID -->
+						<button
+							onclick={() => {
+								attemptWalletVerification();
+							}}
+							class="group flex w-full items-center gap-4 rounded-md border-2 border-emerald-200 bg-slate-50 p-4 text-left transition-all hover:border-emerald-300 hover:shadow-md"
+						>
+							<div
+								class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100"
+							>
+								<Smartphone class="h-5 w-5 text-emerald-600" />
+							</div>
+							<div class="min-w-0 flex-1">
+								<span class="block text-sm font-semibold text-emerald-900"
+									>Verify with Digital ID</span
+								>
+								<span class="block text-xs text-emerald-600"
+									>Cryptographic proof of identity. Undeniable signal.</span
+								>
+							</div>
+							<ArrowRight
+								class="h-4 w-4 shrink-0 text-emerald-400 transition-transform group-hover:translate-x-0.5"
+							/>
+						</button>
+					{/if}
 
 					<!-- Address: Primary CTA — available now, resolves the tension -->
 					<button
-						onclick={() => { collectingAddress = true; }}
+						onclick={() => {
+							collectingAddress = true;
+						}}
 						class="group flex w-full items-center gap-4 rounded-md border-2 border-emerald-200 bg-emerald-50 p-4 text-left transition-all hover:border-emerald-300 hover:shadow-md"
 					>
-						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100">
+						<div
+							class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100"
+						>
 							<MapPin class="h-5 w-5 text-emerald-600" />
 						</div>
 						<div class="min-w-0 flex-1">
 							<span class="block text-sm font-semibold text-emerald-900">Verify your address</span>
-							<span class="block text-xs text-emerald-600">Confirms your district. Your message gets read.</span>
+							<span class="block text-xs text-emerald-600"
+								>Confirms your district. Your message gets read.</span
+							>
 						</div>
-						<ArrowRight class="h-4 w-4 shrink-0 text-emerald-400 transition-transform group-hover:translate-x-0.5" />
+						<ArrowRight
+							class="h-4 w-4 shrink-0 text-emerald-400 transition-transform group-hover:translate-x-0.5"
+						/>
 					</button>
 
 					<!-- Divider -->
 					<div class="flex items-center gap-3 py-0.5">
 						<div class="h-px flex-1 bg-slate-200"></div>
-						<span class="text-[10px] font-medium uppercase tracking-wider text-slate-400">or</span>
+						<span class="text-[10px] font-medium tracking-wider text-slate-400 uppercase">or</span>
 						<div class="h-px flex-1 bg-slate-200"></div>
 					</div>
 
@@ -1406,17 +1450,22 @@
 						onclick={() => handleUnifiedEmailFlow()}
 						class="group flex w-full items-center gap-4 rounded-md border border-slate-200 bg-white p-4 text-left transition-all hover:border-slate-300 hover:shadow-sm"
 					>
-						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100">
+						<div
+							class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100"
+						>
 							<Send class="h-5 w-5 text-slate-500" />
 						</div>
 						<div class="min-w-0 flex-1">
 							<span class="block text-sm font-medium text-slate-700">Send now via email</span>
-							<span class="block text-xs text-slate-500">Named sender. Lower priority but still delivered.</span>
+							<span class="block text-xs text-slate-500"
+								>Named sender. Lower priority but still delivered.</span
+							>
 						</div>
-						<ArrowRight class="h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5" />
+						<ArrowRight
+							class="h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5"
+						/>
 					</button>
 				</div>
-
 			{:else if trustUpgradePhase === 'wallet-requesting'}
 				<!-- Phase 2: Wallet prompt active — iOS shows wallet UI -->
 				<div class="flex flex-col items-center justify-center py-8" in:fade={{ duration: 200 }}>
@@ -1424,7 +1473,9 @@
 						<div class="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100">
 							<Smartphone class="h-10 w-10 text-emerald-600" />
 						</div>
-						<div class="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-white shadow-md">
+						<div
+							class="absolute -right-1 -bottom-1 flex h-8 w-8 items-center justify-center rounded-full bg-white shadow-md"
+						>
 							<Loader2 class="h-5 w-5 animate-spin text-emerald-600" />
 						</div>
 					</div>
@@ -1433,7 +1484,6 @@
 						Your device will prompt you to share <strong>only</strong> your postal code and state
 					</p>
 				</div>
-
 			{:else if trustUpgradePhase === 'wallet-failed'}
 				<!-- Phase 3: Wallet failed — show error + offer to simulate -->
 				<div class="flex flex-col items-center py-6" in:fade={{ duration: 200 }}>
@@ -1442,17 +1492,19 @@
 					</div>
 					<h3 class="mb-1 text-lg font-bold text-slate-900">Wallet unavailable</h3>
 					<p class="mb-4 max-w-xs text-center text-sm text-slate-500">
-						{walletErrorMessage || 'Digital ID verification requires enrollment with your state DMV.'}
+						{walletErrorMessage ||
+							'Digital ID verification requires enrollment with your state DMV.'}
 					</p>
 
-						<button
-							onclick={() => { trustUpgradePhase = 'choice'; }}
-							class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-						>
-							Try another method
-						</button>
+					<button
+						onclick={() => {
+							trustUpgradePhase = 'choice';
+						}}
+						class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+					>
+						Try another method
+					</button>
 				</div>
-
 			{:else if trustUpgradePhase === 'simulating'}
 				<!-- Phase 4: Simulating verification — brief interstitial -->
 				<div class="flex flex-col items-center justify-center py-8" in:fade={{ duration: 200 }}>
@@ -1460,7 +1512,9 @@
 						<div class="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100">
 							<Fingerprint class="h-10 w-10 text-emerald-600" />
 						</div>
-						<div class="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-white shadow-md">
+						<div
+							class="absolute -right-1 -bottom-1 flex h-8 w-8 items-center justify-center rounded-full bg-white shadow-md"
+						>
 							<Loader2 class="h-5 w-5 animate-spin text-emerald-600" />
 						</div>
 					</div>
@@ -1511,15 +1565,17 @@
 								return chambers ?? ['Senate', 'House'];
 							})()
 						}}
-						deliveryAddress={verifiedAddress ? {
-							name: decryptedUser.name || user.name || 'Constituent',
-							email: decryptedUser.email || $page.data?.user?.email || '',
-							street: verifiedAddress.street,
-							city: verifiedAddress.city,
-							state: verifiedAddress.state,
-							zip: verifiedAddress.zip,
-							congressional_district: $page.data?.user?.congressional_district || undefined
-						} : undefined}
+						deliveryAddress={verifiedAddress
+							? {
+									name: decryptedUser.name || user.name || 'Constituent',
+									email: decryptedUser.email || $page.data?.user?.email || '',
+									street: verifiedAddress.street,
+									city: verifiedAddress.city,
+									state: verifiedAddress.state,
+									zip: verifiedAddress.zip,
+									congressional_district: $page.data?.user?.congressional_district || undefined
+								}
+							: undefined}
 						autoStart={true}
 						oncomplete={(data) => handleProofComplete(data)}
 						oncancel={() => handleProofCancel()}
@@ -1530,15 +1586,11 @@
 					<div class="flex flex-col items-center justify-center py-12 text-center">
 						<AlertCircle class="mb-4 h-12 w-12 text-amber-500" />
 						<h3 class="mb-2 text-lg font-semibold text-slate-900">Authentication Required</h3>
-						<p class="mb-6 text-sm text-slate-600">Sign in to send verified messages to Congress.</p>
+						<p class="mb-6 text-sm text-slate-600">
+							Sign in to send verified messages to Congress.
+						</p>
 						<div class="flex gap-3">
-							<Button
-								variant="secondary"
-								size="lg"
-								onclick={handleClose}
-							>
-								Cancel
-							</Button>
+							<Button variant="secondary" size="lg" onclick={handleClose}>Cancel</Button>
 							<Button
 								variant="primary"
 								size="lg"
@@ -1566,10 +1618,10 @@
 				<div class="flex items-center justify-between">
 					<div class="flex items-center gap-3">
 						<div
-							class="inline-flex h-10 w-10 items-center justify-center rounded-full bg-participation-primary-100"
+							class="bg-participation-primary-100 inline-flex h-10 w-10 items-center justify-center rounded-full"
 							style="transform: scale({$celebrationScale})"
 						>
-							<Send class="h-5 w-5 text-participation-primary-600" />
+							<Send class="text-participation-primary-600 h-5 w-5" />
 						</div>
 						<div>
 							<h2 class="text-lg font-semibold text-slate-900">Message sent</h2>
@@ -1618,7 +1670,7 @@
 				{:else}
 					<!-- Fallback if no submission ID -->
 					<div class="rounded-lg border border-slate-200 bg-white p-4 text-center">
-						<Send class="mx-auto mb-3 h-8 w-8 text-participation-primary-600" />
+						<Send class="text-participation-primary-600 mx-auto mb-3 h-8 w-8" />
 						<p class="text-slate-600">Message processing started</p>
 					</div>
 				{/if}
@@ -1630,7 +1682,7 @@
 			<!-- Close Button -->
 			<button
 				onclick={handleClose}
-				class="absolute right-4 top-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
+				class="absolute top-4 right-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
 			>
 				<X class="h-5 w-5" />
 			</button>

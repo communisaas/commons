@@ -141,6 +141,74 @@
 		</ul>
 	</section>
 
+	<!-- Data practices (F-1.2 honesty pass) -->
+	<section class="space-y-3 border-t border-surface-border pt-8" id="data-practices">
+		<h2 class="text-lg font-semibold text-text-primary">What Commons Does With Your Data</h2>
+		<p class="text-sm text-text-secondary">
+			Plain-language summary of how we collect, use, and retain personal data.
+			Full Terms of Service and Privacy Policy documents are forthcoming; until
+			they ship, this section is the canonical disclosure on the Commons domain.
+			Companion technical detail lives in our
+			<a class="underline" href="https://github.com/communisaas/commons/blob/main/docs/security/KNOWN-LIMITATIONS.md">
+				security limitations doc
+			</a>.
+		</p>
+		<ul class="list-disc pl-5 space-y-2 text-sm text-text-secondary">
+			<li>
+				<strong class="text-text-primary">Legal basis (GDPR Art. 6(1)):</strong> we
+				process address fields under our legitimate interest in district verification
+				(Art. 6(1)(f)) and your account email under contract performance for
+				authentication (Art. 6(1)(b)). For users in the EU/UK we honor the standard
+				GDPR rights (access, rectification, erasure, portability, objection); contact
+				information is on the homepage.
+			</li>
+			<li>
+				<strong class="text-text-primary">Address fields — mDL path:</strong> when you
+				verify with a state-issued mobile driver's license, your wallet shares postal
+				code, city, and state with our servers. Those fields are used to derive your
+				congressional district and are discarded within seconds, before the response
+				returns. We do not log them, do not persist them in databases, and do not
+				back them up.
+			</li>
+			<li>
+				<strong class="text-text-primary">Address fields — Shadow Atlas path:</strong>
+				your full street address never leaves your device. Your browser computes a
+				cryptographic commitment to your district. Approximate coordinates transit our
+				servers briefly (under 5 seconds for typical requests) so we can confirm the
+				district mapping is authentic, then are discarded. We do not log raw coordinates.
+			</li>
+			<li>
+				<strong class="text-text-primary">What we persist:</strong> a one-way district
+				hash, your account email (for sign-in and anti-sybil), engagement-tier
+				counters, the actions you take through the platform, and operational logs
+				stripped of identifying address fields.
+			</li>
+			<li>
+				<strong class="text-text-primary">Hardware-isolated processing (TEE / enclave)</strong>
+				is on the roadmap; today the address-resolution and proof-witness paths run in
+				our standard server runtime. Our retention commitment for raw address fields
+				(seconds, not minutes) holds in both architectures.
+			</li>
+			<li>
+				<strong class="text-text-primary">We do not currently sell your data, and we
+				have no plans to.</strong> If our practices change in any way that would
+				constitute a "sale" or "share for cross-context behavioral advertising" under
+				CCPA, we will provide at least 30 days' notice via in-product banner and email
+				before the change takes effect. We do not use third-party advertising
+				trackers. We use minimal first-party analytics and operational telemetry.
+			</li>
+			<li>
+				<strong class="text-text-primary">mDL verification</strong> is currently
+				feature-flagged off; the surface is not reachable in production. When it goes
+				live, replay and relay limits are documented in our
+				<a class="underline" href="https://github.com/communisaas/commons/blob/main/docs/security/KNOWN-LIMITATIONS.md#f-13--mdoc-deviceauth-nonce-binding-partial-closure-2026-04-25">
+					KNOWN-LIMITATIONS
+				</a>
+				file (F-1.3). Full DeviceAuth verification (T3) is a launch checkpoint.
+			</li>
+		</ul>
+	</section>
+
 	<footer class="border-t border-surface-border pt-8 pb-12 text-center">
 		<p class="text-xs text-text-quaternary">
 			commons.email &mdash; verification-backed civic coordination

@@ -585,10 +585,18 @@ export async function encryptAddressBlob(
 }
 ```
 
-### TEE Decryption (voter-protocol, NOT Commons)
+### TEE Decryption (voter-protocol, NOT Commons) — PLANNED
+
+> ⚠️ **Status (2026-04-25 honesty pass)**: AWS Nitro Enclave deployment is on
+> the roadmap; **no enclave is deployed today**. The client-side wiring
+> (witness encryption, `/api/tee/public-key`, resolver HTTP call) is shipped,
+> but the active resolver is `LocalConstituentResolver` — an in-process
+> fallback. The block below describes the target architecture once the
+> enclave deploys; treat any "exists ONLY in enclave" claim in this section
+> as aspirational until the deployment ships.
 
 ```rust
-// voter-protocol TEE code (Rust inside AWS Nitro Enclave)
+// voter-protocol TEE code (Rust inside AWS Nitro Enclave) — PLANNED
 async fn decrypt_and_deliver(encrypted_blob: EncryptedBlob) -> Result<()> {
   // 1. Decrypt using TEE private key (exists ONLY in enclave)
   let identity_blob = decrypt_blob(encrypted_blob, TEE_PRIVATE_KEY)?;

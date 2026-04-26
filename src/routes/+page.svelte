@@ -453,6 +453,9 @@
 										district_commitment: (detail as Record<string, unknown>).districtCommitment,
 										slot_count: (detail as Record<string, unknown>).commitmentSlotCount,
 										verification_method: 'shadow_atlas',
+										// FU-1.1: forward coordinates so the server can recompute
+										// the expected commitment from IPFS cell data.
+										coordinates: (detail as Record<string, unknown>).coordinates ?? undefined,
 									})
 								});
 							} else if (detail?.address) {
@@ -678,6 +681,8 @@
 												district_commitment: (detail as Record<string, unknown>).districtCommitment,
 												slot_count: (detail as Record<string, unknown>).commitmentSlotCount,
 												verification_method: 'shadow_atlas',
+												// FU-1.1: forward coordinates for server-side authenticity check.
+												coordinates: (detail as Record<string, unknown>).coordinates ?? undefined,
 											})
 										});
 									} catch { /* non-fatal */ }

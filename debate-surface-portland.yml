@@ -1,0 +1,236 @@
+- generic [ref=e2]:
+  - banner "Site header" [ref=e3]:
+    - navigation "Primary navigation" [ref=e4]:
+      - link "Navigate back to Home" [ref=e6] [cursor=pointer]:
+        - /url: /
+        - img [ref=e7]
+        - generic [ref=e9]: Home
+      - button "Sign in to your account" [ref=e11] [cursor=pointer]:
+        - generic [ref=e12]: Sign in
+  - generic [ref=e13]:
+    - main [ref=e15]:
+      - generic [ref=e16]:
+        - generic [ref=e17]:
+          - heading "Stop blocking the homes we can actually afford" [level=1] [ref=e18]
+          - paragraph [ref=e19]: The City of Portland must remove the regulatory barriers to 3D-printed housing and community land trusts to provide homes at a fraction of traditional construction costs.
+          - generic [ref=e20]:
+            - button "Share this template" [ref=e22] [cursor=pointer]:
+              - generic [ref=e23]:
+                - generic [ref=e24]:
+                  - img [ref=e26]
+                  - img [ref=e33]
+                - generic:
+                  - generic: Share
+                  - generic: Copied!
+            - status [ref=e36]: Direct Outreach
+            - generic [ref=e37]: Housing & Zoning Reform
+            - generic [ref=e38]: 3d-printed-housing
+            - generic [ref=e39]: zoning
+            - generic [ref=e40]: community-land-trusts
+        - generic [ref=e41]:
+          - generic [ref=e42]:
+            - img [ref=e43]
+            - generic [ref=e45]: Deliberation resolving...
+          - generic [ref=e46]:
+            - paragraph [ref=e47]:
+              - generic [ref=e48]: Contact 3 decision-makers
+              - generic [ref=e49]: →
+              - generic [ref=e50]: first, where do you stand?
+            - generic [ref=e51]:
+              - button "I support this" [ref=e52]
+              - button "I oppose this" [ref=e53]
+        - generic [ref=e54]:
+          - button "Open template in modal" [ref=e57]:
+            - region "Template preview navigation" [ref=e58]:
+              - generic [ref=e59]:
+                - generic [ref=e63]:
+                  - text: It is exhausting to watch the cost of a standard home climb toward half a million dollars while knowing that 3D-printed homes can be built for a fraction of that cost. We are living through a housing crisis where the technology to solve it exists, but the rules to allow it don't. It feels like we are choosing bureaucratic inertia over actual roofs.
+                  - button "Add your Personal Connection" [ref=e64] [cursor=pointer]:
+                    - generic [ref=e66]:
+                      - img [ref=e67]
+                      - generic [ref=e69]: Your voice
+                    - text: Your perspective — why this matters to you
+                  - text: Last month, the City Council took a vital step by voting unanimously to rezone properties specifically to support the community land trust model
+                  - 'link "Source 1: City Council votes unanimously to rezone select properties to support affordable housing production" [ref=e70] [cursor=pointer]':
+                    - /url: https://www.portland.gov/bps/planning/affordable-housing/news/2026/2/25/city-council-votes-unanimously-rezone-select
+                    - generic [ref=e71]: "1"
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: government
+                        - generic: City Council votes unanimously to rezone select properties to support affordable housing production
+                        - generic:
+                          - img
+                          - text: portland.gov
+                  - text: . As the city noted, these zoning map changes are essential to 'avoid going through a lengthy and uncertain and expensive land use process and get to construction faster'
+                  - 'link "Source 1: City Council votes unanimously to rezone select properties to support affordable housing production" [ref=e72] [cursor=pointer]':
+                    - /url: https://www.portland.gov/bps/planning/affordable-housing/news/2026/2/25/city-council-votes-unanimously-rezone-select
+                    - generic [ref=e73]: "1"
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: government
+                        - generic: City Council votes unanimously to rezone select properties to support affordable housing production
+                        - generic:
+                          - img
+                          - text: portland.gov
+                  - text: . But rezoning is only half the battle if the building codes themselves remain a barrier to innovation. The city's ongoing Affordable Housing Opportunities Project aims to support non-profit partners by 'reducing zoning designation barriers'
+                  - 'link "Source 2: Affordable Housing Opportunities Project" [ref=e74] [cursor=pointer]':
+                    - /url: https://www.portland.gov/bps/planning/affordable-housing
+                    - generic [ref=e75]: "2"
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: government
+                        - generic: Affordable Housing Opportunities Project
+                        - generic:
+                          - img
+                          - text: portland.gov
+                  - text: ", and the Housing Bonus Alignment Project is currently proposing code changes to increase production"
+                  - 'link "Source 4: Housing Bonus Alignment Project" [ref=e76] [cursor=pointer]':
+                    - /url: https://www.portland.gov/bps/planning/housing-bonus-alignment
+                    - generic [ref=e77]: "4"
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: government
+                        - generic: Housing Bonus Alignment Project
+                        - generic:
+                          - img
+                          - text: portland.gov
+                  - text: . However, we need to move faster. Even at the federal level, recent guidance directs officials to eliminate 'arbitrary or unreasonable building code standards' that hinder alternative construction methods
+                  - 'link "Source 3: Executive Order Aims to Remove Regulatory Barriers to Affordable Housing Development" [ref=e78] [cursor=pointer]':
+                    - /url: https://www.lmc.org/news-publications/news/all/executive-order-aims-to-remove-regulatory-barriers-to-affordable-housing-development/
+                    - generic [ref=e79]: "3"
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: government
+                        - generic: Executive Order Aims to Remove Regulatory Barriers to Affordable Housing Development
+                        - generic:
+                          - img
+                          - text: lmc.org
+                  - text: ". Mayor Wilson, Director Kutch, and Ms. Didion: I am asking you to proactively clear the path for 3D-printed housing and expand the land trust model. Please ensure that our permitting and development standards reflect the urgency of this crisis. We have the tools to make Portland affordable; we just need you to stop the regulations from blocking them."
+                  - button "Edit Name variable" [ref=e82]:
+                    - button "Edit Name variable" [ref=e83]:
+                      - img [ref=e84]
+                      - generic [ref=e87]: Name
+                - generic [ref=e88]:
+                  - generic [ref=e89]:
+                    - img [ref=e90]
+                    - heading "Sources (4)" [level=4] [ref=e92]
+                  - generic [ref=e93]:
+                    - button "1 City Council votes unanimously to rezone select properties to support affordable housing production government · portland.gov" [ref=e95]:
+                      - generic [ref=e96]: "1"
+                      - generic [ref=e97]:
+                        - generic [ref=e98]: City Council votes unanimously to rezone select properties to support affordable housing production
+                        - generic [ref=e99]:
+                          - generic [ref=e100]: government
+                          - generic [ref=e101]: ·
+                          - generic [ref=e102]: portland.gov
+                      - img [ref=e104]
+                    - button "2 Affordable Housing Opportunities Project government · portland.gov" [ref=e107]:
+                      - generic [ref=e108]: "2"
+                      - generic [ref=e109]:
+                        - generic [ref=e110]: Affordable Housing Opportunities Project
+                        - generic [ref=e111]:
+                          - generic [ref=e112]: government
+                          - generic [ref=e113]: ·
+                          - generic [ref=e114]: portland.gov
+                      - img [ref=e116]
+                    - button "3 Executive Order Aims to Remove Regulatory Barriers to Affordable Housing Development government · lmc.org" [ref=e119]:
+                      - generic [ref=e120]: "3"
+                      - generic [ref=e121]:
+                        - generic [ref=e122]: Executive Order Aims to Remove Regulatory Barriers to Affordable Housing Development
+                        - generic [ref=e123]:
+                          - generic [ref=e124]: government
+                          - generic [ref=e125]: ·
+                          - generic [ref=e126]: lmc.org
+                      - img [ref=e128]
+                    - button "4 Housing Bonus Alignment Project government · portland.gov" [ref=e131]:
+                      - generic [ref=e132]: "4"
+                      - generic [ref=e133]:
+                        - generic [ref=e134]: Housing Bonus Alignment Project
+                        - generic [ref=e135]:
+                          - generic [ref=e136]: government
+                          - generic [ref=e137]: ·
+                          - generic [ref=e138]: portland.gov
+                      - img [ref=e140]
+                - button "Research Log 3 research steps · See how we built this message" [ref=e144]:
+                  - generic [ref=e145]:
+                    - img [ref=e147]
+                    - generic [ref=e150]:
+                      - heading "Research Log" [level=3] [ref=e151]
+                      - paragraph [ref=e152]: 3 research steps · See how we built this message
+                  - img [ref=e154]
+          - generic [ref=e156]:
+            - generic [ref=e158]:
+              - button "Write to all 3" [ref=e160] [cursor=pointer]:
+                - text: Write to all 3
+                - img [ref=e161]
+              - generic [ref=e163]:
+                - generic [ref=e165]:
+                  - heading "Portland Permitting & Development 2" [level=3] [ref=e166]
+                  - generic [ref=e167]:
+                    - button "Write to Eric Kutch" [ref=e168] [cursor=pointer]:
+                      - generic [ref=e169]:
+                        - heading "Eric Kutch" [level=4] [ref=e170]
+                        - generic [ref=e171]: Executes
+                      - paragraph [ref=e172]: Director
+                      - generic [ref=e174]:
+                        - text: Write to them
+                        - img [ref=e175]
+                    - button "Write to Natalie Didion" [ref=e177] [cursor=pointer]:
+                      - generic [ref=e178]:
+                        - heading "Natalie Didion" [level=4] [ref=e179]
+                        - generic [ref=e180]: Executes
+                      - paragraph [ref=e181]: City Building Official
+                      - generic [ref=e183]:
+                        - text: Write to them
+                        - img [ref=e184]
+                - generic [ref=e187]:
+                  - heading "City of Portland 1" [level=3] [ref=e188]
+                  - button "Write to Keith Wilson" [ref=e190] [cursor=pointer]:
+                    - generic [ref=e191]:
+                      - heading "Keith Wilson" [level=4] [ref=e192]
+                      - generic [ref=e193]: Executes
+                    - paragraph [ref=e194]: Mayor
+                    - generic [ref=e196]:
+                      - text: Write to them
+                      - img [ref=e197]
+            - generic [ref=e199]:
+              - heading "Public deliberation" [level=2] [ref=e200]
+              - generic [ref=e201]:
+                - generic [ref=e202]:
+                  - paragraph [ref=e203]: Should the Stop blocking the homes we can actually afford be adopted as a community priority?
+                  - button "Verified on-chain →" [ref=e204]
+                - generic [ref=e205]:
+                  - img "Stance distribution" [ref=e206]
+                  - generic [ref=e210]:
+                    - button "Support 33%" [ref=e211] [cursor=pointer]
+                    - button "Oppose 33%" [ref=e212] [cursor=pointer]
+                    - button "Amend 33%" [ref=e213] [cursor=pointer]
+                    - generic [ref=e214]: ·
+                    - generic [ref=e215]: 3 voices · $0.00 · Deadline passed
+                - generic [ref=e216]:
+                  - button "This proposal addresses a critical need and has broad community backing. The evidence supports immediate action." [ref=e218] [cursor=pointer]:
+                    - paragraph [ref=e221]: This proposal addresses a critical need and has broad community backing. The evidence supports immediate action.
+                  - button "While the intent is good, the implementation details are insufficient. We need more specific language before committing resources. ×2" [ref=e223] [cursor=pointer]:
+                    - generic [ref=e225]:
+                      - paragraph [ref=e226]: While the intent is good, the implementation details are insufficient. We need more specific language before committing resources.
+                      - generic [ref=e227]: ×2
+                  - button "The core proposal is sound but should include sunset provisions and measurable benchmarks for success." [ref=e229] [cursor=pointer]:
+                    - paragraph [ref=e232]: The core proposal is sound but should include sunset provisions and measurable benchmarks for success.
+      - 'button "Stance distribution: 1 support, 1 oppose, 1 amend 3 debating" [ref=e234]':
+        - 'img "Stance distribution: 1 support, 1 oppose, 1 amend" [ref=e236]'
+        - generic [ref=e240]: 3 debating
+        - img [ref=e241]
+    - contentinfo [ref=e242]:
+      - generic [ref=e243]:
+        - paragraph [ref=e244]: commons
+        - generic [ref=e245]:
+          - link "hello@commons.email" [ref=e246] [cursor=pointer]:
+            - /url: mailto:hello@commons.email
+          - link "For organizations" [ref=e248] [cursor=pointer]:
+            - /url: /org
+        - paragraph [ref=e249]: © 2026 Commons PBC

@@ -1128,7 +1128,8 @@
 						</button>
 						{#if recipientCount >= CLIENT_DIRECT_THRESHOLD}
 							<p class="text-xs text-text-quaternary text-center mt-2">
-								Large blast -- will be processed via secure enclave
+								Large blast -- will be processed via our server-side delivery worker
+								(hardware-isolated enclave is on the roadmap)
 							</p>
 						{/if}
 					</form>

@@ -32,7 +32,8 @@ This document defines how Commons communicates. State what is. Show what exists.
 
 ❌ "We track template views to show you what's trending. Your address and identity verification happen in your browser and encrypted TEE environments—we never see them."
 ✅ Primary: "Trending bills"
-✅ Popover: "View count tracked. Your identity/address stay local or encrypted in TEE."
+✅ Popover (post-enclave deployment): "View count tracked. Your identity/address stay local or encrypted in TEE."
+✅ Popover (current, pre-enclave): "View count tracked. Address fields transit our servers briefly during district resolution, then are discarded; only the district hash is retained."
 
 ### 3. Don't Wear Cypherpunk on Our Sleeve
 
@@ -478,6 +479,13 @@ Before shipping copy, verify:
 
 ### Example: Message delivery flow
 
+> ⚠️ F-1.2 honesty pass (2026-04-25): the AWS Nitro Enclave deployment is on
+> the roadmap; the active resolver today is `LocalConstituentResolver`
+> (in-process on the server). Voice-guide copy below reflects the *intended*
+> flow once the enclave ships — DO NOT use this language in shipping UI until
+> the enclave is deployed. For shipping copy today, see "CORRECT (current
+> reality, 2026-04)" below.
+
 **WRONG (over-explaining in primary UI):**
 ```
 Your address is encrypted in your browser using XChaCha20-Poly1305,
@@ -485,9 +493,13 @@ sent to an AWS Nitro Enclave that generates a Noir zero-knowledge proof,
 then deleted. The proof goes on-chain. Your address never touches our servers.
 ```
 
-**CORRECT (confident primary + detailed popover):**
+**CORRECT (target architecture — post-enclave deployment):**
 - Primary: "Send to Congress"
 - Popover: "Encrypted in browser → AWS Nitro Enclave → Congressional office API. Congress receives your message + address. ZK proof of residency goes on-chain."
+
+**CORRECT (current reality, 2026-04):**
+- Primary: "Send to Congress"
+- Popover: "Encrypted in browser → our delivery worker → Congressional office API. Hardware-isolated enclave is on the roadmap. ZK proof of residency goes on-chain."
 
 ### Example: Location detection
 

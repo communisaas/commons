@@ -561,7 +561,9 @@
 				try {
 					if (detail.districtCommitment) {
 						// ZKP path: commitment already computed client-side by AddressCollectionForm.
-						// Server never sees raw address or district — only the Poseidon2 commitment.
+						// Server uses the geocoded coordinates (FU-1.1) to recompute the expected
+						// commitment and reject mismatches; coordinates leak nothing the server
+						// didn't already learn during /api/location/resolve-address.
 						const verifyRes = await fetch('/api/identity/verify-address', {
 							method: 'POST',
 							headers: { 'Content-Type': 'application/json' },
@@ -569,6 +571,8 @@
 								district_commitment: detail.districtCommitment,
 								slot_count: detail.commitmentSlotCount,
 								verification_method: 'shadow_atlas',
+								coordinates: (detail as { coordinates?: { lat: number; lng: number } | null })
+									.coordinates ?? undefined,
 							})
 						});
 						if (!verifyRes.ok) {
