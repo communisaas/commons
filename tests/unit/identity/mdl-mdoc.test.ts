@@ -22,22 +22,37 @@ const { mockResolveAddress } = vi.hoisted(() => ({
 	mockResolveAddress: vi.fn()
 }));
 
+const { mockVerifyCoseSign1, mockValidateMsoDigests } = vi.hoisted(() => ({
+	mockVerifyCoseSign1: vi.fn(),
+	mockValidateMsoDigests: vi.fn()
+}));
+
 vi.mock('$lib/core/shadow-atlas/client', () => ({
 	resolveAddress: (...args: unknown[]) => mockResolveAddress(...args)
 }));
 
-import { processCredentialResponse, type MdlVerificationResult } from '$lib/core/identity/mdl-verification';
+vi.mock('$lib/core/identity/cose-verify', async () => {
+	const actual = await vi.importActual<typeof import('$lib/core/identity/cose-verify')>(
+		'$lib/core/identity/cose-verify'
+	);
+	return {
+		...actual,
+		verifyCoseSign1: mockVerifyCoseSign1,
+		validateMsoDigests: mockValidateMsoDigests
+	};
+});
+
+import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 
 beforeAll(() => {
-	// Bypass signature verification for synthetic test data.
-	// Will be removed when T1-T3 (crypto verification) ships with proper test fixtures.
-	process.env.SKIP_ISSUER_VERIFICATION = 'true';
 	// Required for identity commitment computation inside the privacy boundary
 	process.env.IDENTITY_COMMITMENT_SALT = 'test-salt-for-unit-tests';
 });
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mockVerifyCoseSign1.mockResolvedValue({ valid: true });
+	mockValidateMsoDigests.mockResolvedValue(true);
 });
 
 // ---------------------------------------------------------------------------
@@ -94,7 +109,14 @@ beforeAll(async () => {
  */
 async function buildMdocResponse(
 	fields: Record<string, string>,
-	options?: { omitNamespace?: boolean; omitDocuments?: boolean; addIssuerAuth?: boolean }
+	options?: {
+		omitNamespace?: boolean;
+		omitDocuments?: boolean;
+		addIssuerAuth?: boolean;
+		omitIssuerAuth?: boolean;
+		omitDeviceAuth?: boolean;
+		emptyDeviceAuth?: boolean;
+	}
 ): Promise<string> {
 	const { encode } = await import('cbor-web');
 
@@ -107,26 +129,37 @@ async function buildMdocResponse(
 
 	let deviceResponse: Record<string, unknown>;
 
+	// Synthetic deviceSigned shape used by all branches that emit a document.
+	// F-1.3 gate fails closed when deviceAuth is missing — opt-out via
+	// omitDeviceAuth / emptyDeviceAuth on the fixture.
+	const synthDeviceSigned = options?.omitDeviceAuth
+		? undefined
+		: {
+				deviceAuth: options?.emptyDeviceAuth
+					? {}
+					: { deviceMac: new Uint8Array([0xde, 0xad, 0xbe, 0xef]) }
+			};
+
 	if (options?.omitDocuments) {
 		deviceResponse = { version: '1.0' };
 	} else if (options?.omitNamespace) {
-		deviceResponse = {
-			documents: [
-				{
-					issuerSigned: {
-						nameSpaces: {}
-					}
-				}
-			]
+		const omitNamespaceDoc: Record<string, unknown> = {
+			issuerSigned: {
+				nameSpaces: {},
+				...(options?.omitIssuerAuth ? {} : { issuerAuth: syntheticIssuerAuth() })
+			}
 		};
+		if (synthDeviceSigned) omitNamespaceDoc.deviceSigned = synthDeviceSigned;
+		deviceResponse = { documents: [omitNamespaceDoc] };
 	} else {
 		const issuerSigned: Record<string, unknown> = {
 			nameSpaces: {
 				'org.iso.18013.5.1': namespaceElements
-			}
+			},
+			...(options?.omitIssuerAuth ? {} : { issuerAuth: syntheticIssuerAuth() })
 		};
 
-		if (options?.addIssuerAuth) {
+		if (options?.addIssuerAuth || (!options?.omitIssuerAuth && !issuerSigned.issuerAuth)) {
 			issuerSigned.issuerAuth = [
 				new Uint8Array([0]),
 				{},
@@ -135,8 +168,14 @@ async function buildMdocResponse(
 			];
 		}
 
+		// F-1.3: processMdocResponse fails closed when deviceSigned.deviceAuth
+		// is absent. The synthDeviceSigned variable above is the single source
+		// of truth — passes through here when present.
+		const documentEntry: Record<string, unknown> = { issuerSigned };
+		if (synthDeviceSigned) documentEntry.deviceSigned = synthDeviceSigned;
+
 		deviceResponse = {
-			documents: [{ issuerSigned }]
+			documents: [documentEntry]
 		};
 	}
 
@@ -148,6 +187,10 @@ async function buildMdocResponse(
 		binary += String.fromCharCode(bytes[i]);
 	}
 	return btoa(binary);
+}
+
+function syntheticIssuerAuth(): unknown[] {
+	return [new Uint8Array([0]), {}, new Uint8Array([0]), new Uint8Array([0])];
 }
 
 // ---------------------------------------------------------------------------
@@ -543,6 +586,81 @@ describe('mDL mdoc verification', () => {
 			expect(result.success).toBe(false);
 			if (!result.success) {
 				expect(result.error).toBe('district_lookup_failed');
+			}
+		});
+	});
+
+	// =========================================================================
+	// F-1.3: DeviceAuth presence gate (mdoc replay-protection partial closure)
+	// =========================================================================
+
+	describe('F-1.3 — DeviceAuth presence gate', () => {
+		it('rejects DeviceResponse missing deviceSigned entirely', async () => {
+			const mdocData = await buildMdocResponse(
+				{
+					resident_postal_code: '94110',
+					resident_state: 'CA'
+				},
+				{ omitDeviceAuth: true }
+			);
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-no-deviceauth'
+			);
+
+			expect(result.success).toBe(false);
+			if (!result.success) {
+				expect(result.error).toBe('replay_protection_missing');
+				expect(result.message).toMatch(/DeviceAuth/i);
+			}
+		});
+
+		it('rejects DeviceResponse with deviceAuth that has neither deviceMac nor deviceSignature', async () => {
+			const mdocData = await buildMdocResponse(
+				{
+					resident_postal_code: '94110',
+					resident_state: 'CA'
+				},
+				{ emptyDeviceAuth: true }
+			);
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-empty-deviceauth'
+			);
+
+			expect(result.success).toBe(false);
+			if (!result.success) {
+				expect(result.error).toBe('replay_protection_missing');
+				expect(result.message).toMatch(/deviceMac.*deviceSignature/i);
+			}
+		});
+
+		it('happy path: deviceAuth with deviceMac proceeds past the gate', async () => {
+			// Default options include deviceMac. This test asserts the gate doesn't
+			// false-reject legitimate-shaped responses.
+			const mdocData = await buildMdocResponse({
+				resident_postal_code: '94110',
+				resident_state: 'CA'
+			});
+			mockShadowAtlasSuccess('ca', '12');
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-with-deviceauth'
+			);
+
+			// Gate doesn't reject — outcome depends on downstream extraction.
+			// We only assert the gate-specific error did NOT fire.
+			if (!result.success) {
+				expect(result.error).not.toBe('replay_protection_missing');
 			}
 		});
 	});

@@ -71,7 +71,10 @@ export type MdlVerificationResult =
 				| 'missing_fields'
 				| 'missing_identity_fields'
 				| 'unsupported_protocol'
-				| 'district_lookup_failed';
+				| 'district_lookup_failed'
+				| 'replay_protection_missing'
+				| 'mdl_disabled'
+				| 'identity_commitment_failed';
 			message: string;
 			supportedStates?: string[];
 	  };
@@ -196,22 +199,56 @@ async function processMdocResponse(
 			};
 		}
 
-		// Step 2.5: Nonce validation via DeviceAuthentication (if present)
+		// Step 2.5: DeviceAuth presence gate (F-1.3, partial — full T3 pending)
 		// ISO 18013-5 §9.1.3.6: DeviceAuthentication = [
 		//   "DeviceAuthentication", SessionTranscript, docType, DeviceNameSpacesBytes
 		// ]
-		// SessionTranscript includes the nonce. Full DeviceAuth verification is T3;
-		// here we validate the nonce appears in the transcript structure if available.
+		//
+		// What this gate ACTUALLY does (revised after F-1.3 review round 2):
+		//   - REJECTS DeviceResponses whose deviceSigned is missing or whose
+		//     deviceAuth has neither deviceMac nor deviceSignature. ISO 18013-5
+		//     §9.1.3 requires DeviceAuthentication on every conformant response;
+		//     this gate enforces that minimum.
+		//
+		// What this gate DOES NOT do — DO NOT MISTAKE THIS FOR REPLAY DEFENSE:
+		//   - Does NOT verify the deviceMac / deviceSignature bytes
+		//   - Does NOT extract or compare the SessionTranscript nonce against
+		//     the OID4VP request nonce
+		//   - Does NOT prevent capture-replay: an attacker who captured Alice's
+		//     DeviceResponse can replay it verbatim — the deviceAuth bytes copy
+		//     across cleanly because the gate only checks key presence.
+		//
+		// Net value: rejects wallets that emit non-conformant responses (e.g.,
+		// negligent vendors, broken test rigs). Provides ZERO defense against
+		// the capture-replay threat that F-1.3 was opened against. Full T3
+		// (DeviceAuth verification against reconstructed SessionTranscript) is
+		// REQUIRED before the raw mdoc lane (`FEATURES.MDL_MDOC`) is opened.
+		// See `docs/security/KNOWN-LIMITATIONS.md` F-1.3 section.
 		const deviceSigned = doc?.deviceSigned as Record<string, unknown> | undefined;
-		if (deviceSigned) {
-			const deviceAuth = deviceSigned.deviceAuth as Record<string, unknown> | undefined;
-			if (deviceAuth) {
-				// deviceAuth contains either deviceMac or deviceSignature
-				// The session transcript embeds the nonce — full HPKE verification in T3
-				// For now, log that DeviceAuth is present (defense-in-depth signal)
-				console.log('[mDL] DeviceAuth structure present — full verification in T3');
-			}
+		const deviceAuth = deviceSigned?.deviceAuth as Record<string, unknown> | undefined;
+		if (!deviceAuth) {
+			return {
+				success: false,
+				error: 'replay_protection_missing',
+				message:
+					'DeviceAuthentication structure missing — replay protection cannot be evaluated. Full DeviceAuth verification ships with T3 (mDL launch gate).'
+			};
 		}
+		const hasMac = 'deviceMac' in deviceAuth;
+		const hasSig = 'deviceSignature' in deviceAuth;
+		if (!hasMac && !hasSig) {
+			return {
+				success: false,
+				error: 'replay_protection_missing',
+				message: 'DeviceAuth has neither deviceMac nor deviceSignature'
+			};
+		}
+		// Positive-case telemetry — useful when triaging T3 rollout.
+		console.log(
+			'[mDL] DeviceAuth structure present (kind:',
+			hasMac ? 'mac' : 'sig',
+			') — full HPKE verification deferred to T3'
+		);
 
 		// Step 3: COSE_Sign1 verification
 		const issuerAuth = issuerSigned.issuerAuth;
@@ -224,7 +261,10 @@ async function processMdocResponse(
 				let coseResult = await verifyCoseSign1(issuerAuth, roots);
 
 				// VICAL fallback: if static roots don't have this issuer, try runtime VICAL roots
-				if (!coseResult.valid && coseResult.reason === 'Issuer certificate not found in IACA trust store') {
+				if (
+					!coseResult.valid &&
+					coseResult.reason === 'Issuer certificate not found in IACA trust store'
+				) {
 					try {
 						const { getExpandedIACARoots } = await import('./vical-service');
 						const expandedRoots = await getExpandedIACARoots(vicalKv);
@@ -280,26 +320,18 @@ async function processMdocResponse(
 					}
 				}
 			} else {
-				// No IACA roots loaded — hard fail. Test bypass removed in T1-T3.
-				const skipVerification = process.env.SKIP_ISSUER_VERIFICATION === 'true';
-				if (!skipVerification) {
-					return {
-						success: false,
-						error: 'signature_invalid',
-						message: 'No IACA root certificates loaded — cannot verify mDL issuer'
-					};
-				}
-			}
-		} else {
-			// No issuerAuth — cannot verify credential origin. Test bypass removed in T1-T3.
-			const skipVerification = process.env.SKIP_ISSUER_VERIFICATION === 'true';
-			if (!skipVerification) {
 				return {
 					success: false,
 					error: 'signature_invalid',
-					message: 'No issuerAuth in credential — cannot verify mDL issuer'
+					message: 'No IACA root certificates loaded — cannot verify mDL issuer'
 				};
 			}
+		} else {
+			return {
+				success: false,
+				error: 'signature_invalid',
+				message: 'No issuerAuth in credential — cannot verify mDL issuer'
+			};
 		}
 
 		// Step 4: Extract namespace elements
@@ -374,16 +406,21 @@ async function processMdocResponse(
 			return {
 				success: false,
 				error: 'missing_identity_fields',
-				message: 'Your wallet must share birth date and document number for identity verification. Check your wallet settings or try a different wallet.'
+				message:
+					'Your wallet must share birth date and document number for identity verification. Check your wallet settings or try a different wallet.'
 			};
 		}
 
 		// Compute identity commitment INSIDE the privacy boundary.
 		// Raw documentNumber and birthYear are consumed here and never returned.
-		const identityCommitment = await computeIdentityCommitmentInBoundary(
-			documentNumber,
-			birthYear
-		);
+		const identityCommitment = await computeIdentityCommitmentInBoundary(documentNumber, birthYear);
+		if (!identityCommitment) {
+			return {
+				success: false,
+				error: 'identity_commitment_failed',
+				message: 'Identity commitment could not be computed — verifier is not configured'
+			};
+		}
 
 		// documentNumber, birthYear, postalCode, city go out of scope here — DISCARDED.
 		// Only district, cellId, credentialHash, and the hashed identityCommitment are returned.
@@ -472,27 +509,32 @@ async function processOid4vpResponse(
 			};
 		}
 
-		// Step 2: Verify the JWT/SD-JWT signature
-		// Test bypass: SKIP_ISSUER_VERIFICATION allows synthetic test tokens.
-		// Will be removed when T3 ships with real AAMVA test fixtures.
-		if (process.env.SKIP_ISSUER_VERIFICATION !== 'true') {
-			const sigResult = await verifyVpTokenSignature(vpToken);
-			if (!sigResult.valid) {
-				return {
-					success: false,
-					error: 'signature_invalid',
-					message: `VP token signature verification failed: ${sigResult.reason}`
-				};
-			}
+		// Step 2: Verify the JWT/SD-JWT signature before claims are parsed.
+		const sigResult = await verifyVpTokenSignature(vpToken);
+		if (!sigResult.valid) {
+			return {
+				success: false,
+				error: 'signature_invalid',
+				message: `VP token signature verification failed: ${sigResult.reason}`
+			};
 		}
 
 		// Step 3: Extract claims (only after signature verified)
-		const claims = parseVpToken(vpToken);
+		const claims = await parseVpToken(vpToken);
 		if (!claims) {
 			return {
 				success: false,
 				error: 'invalid_format',
 				message: 'Could not parse claims from verified VP token'
+			};
+		}
+
+		const temporalError = validateJwtTemporalClaims(claims);
+		if (temporalError) {
+			return {
+				success: false,
+				error: temporalError.error,
+				message: temporalError.message
 			};
 		}
 
@@ -549,10 +591,7 @@ async function processOid4vpResponse(
 
 		// Compute credential hash for dedup
 		const dataStr = typeof data === 'string' ? data : JSON.stringify(data);
-		const hashBuffer = await crypto.subtle.digest(
-			'SHA-256',
-			new TextEncoder().encode(dataStr)
-		);
+		const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(dataStr));
 		const credentialHash = Array.from(new Uint8Array(hashBuffer))
 			.map((b) => b.toString(16).padStart(2, '0'))
 			.join('');
@@ -562,15 +601,20 @@ async function processOid4vpResponse(
 			return {
 				success: false,
 				error: 'missing_identity_fields',
-				message: 'Your wallet must share birth date and document number for identity verification. Check your wallet settings or try a different wallet.'
+				message:
+					'Your wallet must share birth date and document number for identity verification. Check your wallet settings or try a different wallet.'
 			};
 		}
 
 		// Compute identity commitment INSIDE the privacy boundary
-		const identityCommitment = await computeIdentityCommitmentInBoundary(
-			documentNumber,
-			birthYear
-		);
+		const identityCommitment = await computeIdentityCommitmentInBoundary(documentNumber, birthYear);
+		if (!identityCommitment) {
+			return {
+				success: false,
+				error: 'identity_commitment_failed',
+				message: 'Identity commitment could not be computed — verifier is not configured'
+			};
+		}
 
 		return {
 			success: true,
@@ -597,8 +641,19 @@ async function processOid4vpResponse(
  * because they have no signature to verify.
  */
 function extractVpTokenString(data: unknown): string | null {
-	if (typeof data === 'string' && data.includes('.')) {
-		return data;
+	if (typeof data === 'string') {
+		const trimmed = data.trim();
+		if (trimmed.startsWith('{')) {
+			try {
+				const parsed = JSON.parse(trimmed) as unknown;
+				return extractVpTokenString(parsed);
+			} catch {
+				return null;
+			}
+		}
+		if (trimmed.includes('.')) {
+			return trimmed;
+		}
 	}
 
 	if (typeof data === 'object' && data !== null) {
@@ -614,13 +669,17 @@ function extractVpTokenString(data: unknown): string | null {
 /**
  * Verify a VP token (JWT or SD-JWT) signature using Web Crypto.
  *
- * For JWT: verifies the header.payload.signature using the embedded
- * public key (from header's `jwk` field or x5c certificate chain).
+ * For JWT: verifies the header.payload.signature using a leaf certificate from
+ * the header's `x5c` chain. The leaf certificate must chain to the same IACA
+ * trust store used by the raw mdoc COSE path. Header-provided `jwk` keys are
+ * intentionally rejected because they do not establish issuer trust.
  *
  * For SD-JWT: verifies the base JWT signature only (disclosures are
  * bound by the `_sd_alg` hash in the payload).
  */
-async function verifyVpTokenSignature(token: string): Promise<{ valid: true } | { valid: false; reason: string }> {
+async function verifyVpTokenSignature(
+	token: string
+): Promise<{ valid: true } | { valid: false; reason: string }> {
 	// Split off SD-JWT disclosures
 	const [jwtPart] = token.split('~');
 	const segments = jwtPart.split('.');
@@ -646,38 +705,68 @@ async function verifyVpTokenSignature(token: string): Promise<{ valid: true } | 
 
 	// Map JWT algorithm to Web Crypto parameters
 	const algMap: Record<string, { name: string; hash: string; namedCurve?: string }> = {
-		'ES256': { name: 'ECDSA', hash: 'SHA-256', namedCurve: 'P-256' },
-		'ES384': { name: 'ECDSA', hash: 'SHA-384', namedCurve: 'P-384' },
-		'ES512': { name: 'ECDSA', hash: 'SHA-512', namedCurve: 'P-521' },
+		ES256: { name: 'ECDSA', hash: 'SHA-256', namedCurve: 'P-256' },
+		ES384: { name: 'ECDSA', hash: 'SHA-384', namedCurve: 'P-384' },
+		ES512: { name: 'ECDSA', hash: 'SHA-512', namedCurve: 'P-521' }
 	};
 
 	const cryptoAlg = algMap[alg];
 	if (!cryptoAlg) {
-		return { valid: false, reason: `Unsupported JWT algorithm: ${alg}. Only ECDSA (ES256/ES384/ES512) supported.` };
+		return {
+			valid: false,
+			reason: `Unsupported JWT algorithm: ${alg}. Only ECDSA (ES256/ES384/ES512) supported.`
+		};
 	}
 
-	// Extract public key from header (jwk or x5c)
+	// Extract public key from a trusted x5c certificate. Do not accept `jwk`:
+	// a wallet-controlled key verifies syntax but proves nothing about DMV/IACA issuance.
 	let publicKey: CryptoKey;
 	try {
 		if (header.jwk && typeof header.jwk === 'object') {
-			// Key embedded as JWK in header
-			publicKey = await crypto.subtle.importKey(
-				'jwk',
-				header.jwk as JsonWebKey,
-				{ name: cryptoAlg.name, namedCurve: cryptoAlg.namedCurve! } as EcKeyImportParams,
-				false,
-				['verify']
-			);
+			return {
+				valid: false,
+				reason:
+					'OpenID4VP mDL JWT must use an x5c certificate anchored to IACA roots; embedded jwk is not accepted'
+			};
 		} else if (header.x5c && Array.isArray(header.x5c) && header.x5c.length > 0) {
-			// X.509 certificate chain — extract public key from leaf cert
 			const certB64 = header.x5c[0] as string;
+			if (typeof certB64 !== 'string' || certB64.length === 0) {
+				return { valid: false, reason: 'JWT x5c leaf certificate must be a base64 string' };
+			}
 			const certDer = base64Decode(certB64);
+
+			const [
+				{ getIACARootsForVerification, supportedIACAStates },
+				{ verifyCertificateAgainstIacaRoots }
+			] = await Promise.all([import('./iaca-roots'), import('./cose-verify')]);
+			const roots = getIACARootsForVerification();
+			if (roots.length === 0) {
+				return {
+					valid: false,
+					reason: 'No IACA root certificates loaded — cannot verify OpenID4VP issuer'
+				};
+			}
+
+			const trustResult = await verifyCertificateAgainstIacaRoots(certDer, roots);
+			if (!trustResult.trusted) {
+				return {
+					valid: false,
+					reason: `x5c leaf certificate is not anchored to IACA trust store (${trustResult.reason}). Supported states: ${supportedIACAStates().join(', ')}`
+				};
+			}
+
 			publicKey = await importEcPublicKeyFromCertDer(certDer, cryptoAlg);
 		} else {
-			return { valid: false, reason: 'JWT header must contain jwk or x5c for signature verification' };
+			return {
+				valid: false,
+				reason: 'JWT header must contain an x5c certificate chain for issuer verification'
+			};
 		}
 	} catch (err) {
-		return { valid: false, reason: `Failed to import signing key: ${err instanceof Error ? err.message : 'unknown'}` };
+		return {
+			valid: false,
+			reason: `Failed to import signing key: ${err instanceof Error ? err.message : 'unknown'}`
+		};
 	}
 
 	// Verify signature
@@ -699,7 +788,10 @@ async function verifyVpTokenSignature(token: string): Promise<{ valid: true } | 
 
 		return { valid: true };
 	} catch (err) {
-		return { valid: false, reason: `Signature verification error: ${err instanceof Error ? err.message : 'unknown'}` };
+		return {
+			valid: false,
+			reason: `Signature verification error: ${err instanceof Error ? err.message : 'unknown'}`
+		};
 	}
 }
 
@@ -805,7 +897,7 @@ function base64urlDecode(b64url: string): Uint8Array {
  *
  * Disclosures in SD-JWT are base64url-encoded JSON arrays: [salt, name, value]
  */
-function parseVpToken(token: string): Record<string, unknown> | null {
+async function parseVpToken(token: string): Promise<Record<string, unknown> | null> {
 	// Split off SD-JWT disclosures if present
 	const [jwtPart, ...disclosureParts] = token.split('~');
 
@@ -821,8 +913,9 @@ function parseVpToken(token: string): Record<string, unknown> | null {
 		const payload = JSON.parse(payloadJson) as Record<string, unknown>;
 
 		// If there are SD-JWT disclosures, merge them into the payload
-		if (disclosureParts.length > 0) {
-			mergeDisclosures(payload, disclosureParts);
+		if (disclosureParts.some(Boolean)) {
+			const valid = await mergeDisclosures(payload, disclosureParts);
+			if (!valid) return null;
 		}
 
 		return payload;
@@ -832,25 +925,119 @@ function parseVpToken(token: string): Record<string, unknown> | null {
 }
 
 /**
- * Merge SD-JWT disclosures into the payload.
+ * Merge SD-JWT disclosures into the payload only if each disclosure hash is
+ * committed in a signed `_sd` array. This prevents attackers from appending
+ * unbound disclosures after the JWT signature.
+ *
  * Each disclosure is a base64url-encoded JSON array: [salt, claim_name, claim_value]
  */
-function mergeDisclosures(payload: Record<string, unknown>, disclosures: string[]): void {
+async function mergeDisclosures(
+	payload: Record<string, unknown>,
+	disclosures: string[]
+): Promise<boolean> {
+	const sdAlg = typeof payload._sd_alg === 'string' ? payload._sd_alg.toLowerCase() : 'sha-256';
+	if (sdAlg !== 'sha-256') return false;
+
 	for (const disclosure of disclosures) {
 		if (!disclosure) continue; // Skip empty segments (trailing ~)
 		try {
 			const decoded = JSON.parse(base64urlDecodeString(disclosure));
-			if (Array.isArray(decoded) && decoded.length >= 3) {
-				const [_salt, name, value] = decoded;
-				if (typeof name === 'string') {
-					payload[name] = value;
-				}
+			if (!Array.isArray(decoded) || decoded.length < 3) {
+				return false;
 			}
+			const [_salt, name, value] = decoded;
+			if (typeof name !== 'string' || isUnsafeClaimName(name)) {
+				return false;
+			}
+
+			const disclosureDigest = await sha256Base64Url(disclosure);
+			const target = findDisclosureTarget(payload, disclosureDigest);
+			if (!target || Object.prototype.hasOwnProperty.call(target, name)) {
+				return false;
+			}
+
+			target[name] = value;
 		} catch {
-			// Skip malformed disclosures
-			continue;
+			return false;
 		}
 	}
+
+	return true;
+}
+
+function findDisclosureTarget(
+	value: unknown,
+	disclosureDigest: string
+): Record<string, unknown> | null {
+	if (!isRecord(value)) return null;
+
+	const sd = value._sd;
+	if (Array.isArray(sd) && sd.includes(disclosureDigest)) {
+		return value;
+	}
+
+	for (const nested of Object.values(value)) {
+		const found = findDisclosureTarget(nested, disclosureDigest);
+		if (found) return found;
+	}
+
+	return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isUnsafeClaimName(name: string): boolean {
+	return name === '__proto__' || name === 'constructor' || name === 'prototype';
+}
+
+async function sha256Base64Url(value: string): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+	const bytes = new Uint8Array(digest);
+	let binary = '';
+	for (const byte of bytes) {
+		binary += String.fromCharCode(byte);
+	}
+	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function validateJwtTemporalClaims(
+	claims: Record<string, unknown>
+): { error: 'expired' | 'invalid_format'; message: string } | null {
+	const now = Math.floor(Date.now() / 1000);
+	const skewSeconds = 60;
+
+	const exp = readNumericDateClaim(claims, 'exp');
+	if (exp.invalid) return { error: 'invalid_format', message: 'OpenID4VP exp claim is invalid' };
+	if (exp.value !== undefined && exp.value <= now - skewSeconds) {
+		return { error: 'expired', message: 'OpenID4VP response has expired' };
+	}
+
+	const nbf = readNumericDateClaim(claims, 'nbf');
+	if (nbf.invalid) return { error: 'invalid_format', message: 'OpenID4VP nbf claim is invalid' };
+	if (nbf.value !== undefined && nbf.value > now + skewSeconds) {
+		return { error: 'invalid_format', message: 'OpenID4VP response is not valid yet' };
+	}
+
+	const iat = readNumericDateClaim(claims, 'iat');
+	if (iat.invalid) return { error: 'invalid_format', message: 'OpenID4VP iat claim is invalid' };
+	if (iat.value !== undefined && iat.value > now + skewSeconds) {
+		return { error: 'invalid_format', message: 'OpenID4VP response was issued in the future' };
+	}
+
+	return null;
+}
+
+function readNumericDateClaim(
+	claims: Record<string, unknown>,
+	name: 'exp' | 'nbf' | 'iat'
+): { value?: number; invalid?: true } {
+	const value = claims[name];
+	if (value === undefined || value === null) return {};
+	if (typeof value === 'number' && Number.isFinite(value)) return { value };
+	if (typeof value === 'string' && /^\d+$/.test(value)) return { value: Number(value) };
+	return { invalid: true };
 }
 
 /**
@@ -876,22 +1063,17 @@ function findClaim(claims: Record<string, unknown>, name: string): string | null
 		return subject[name] as string;
 	}
 
+	const nestedClaims = claims.claims as Record<string, unknown> | undefined;
+	if (nestedClaims && typeof nestedClaims[name] === 'string') {
+		return nestedClaims[name] as string;
+	}
+
 	// Nested under vc.credentialSubject
 	const vc = claims.vc as Record<string, unknown> | undefined;
 	if (vc) {
 		const vcSubject = vc.credentialSubject as Record<string, unknown> | undefined;
 		if (vcSubject && typeof vcSubject[name] === 'string') {
 			return vcSubject[name] as string;
-		}
-	}
-
-	// Search all object values one level deep
-	for (const value of Object.values(claims)) {
-		if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-			const nested = value as Record<string, unknown>;
-			if (typeof nested[name] === 'string') {
-				return nested[name] as string;
-			}
 		}
 	}
 
@@ -1010,14 +1192,14 @@ function extractBirthYear(raw: string | null | undefined): number | undefined {
 async function computeIdentityCommitmentInBoundary(
 	documentNumber: string,
 	birthYear: number
-): Promise<string> {
+): Promise<string | null> {
 	// FROZEN: changing this prefix would invalidate all existing identity commitments
 	const DOMAIN_PREFIX = 'commons-identity-v1';
 	const COMMITMENT_SALT = process.env.IDENTITY_COMMITMENT_SALT;
 
 	if (!COMMITMENT_SALT) {
-		console.warn('[mDL] IDENTITY_COMMITMENT_SALT not configured — identity commitment skipped');
-		return '';
+		console.error('[mDL] IDENTITY_COMMITMENT_SALT not configured — identity commitment failed');
+		return null;
 	}
 
 	// Normalize inputs identically to identity-binding.ts computeIdentityCommitment()

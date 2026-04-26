@@ -31,6 +31,8 @@ export type CoseVerificationResult =
 	| { valid: true; mso: MobileSecurityObject }
 	| { valid: false; reason: string };
 
+export type CertificateTrustResult = { trusted: true } | { trusted: false; reason: string };
+
 export interface MobileSecurityObject {
 	version: string;
 	digestAlgorithm: string;
@@ -85,7 +87,7 @@ export interface EcPublicKeyInfo {
 /** Curve → hash algorithm mapping */
 const CURVE_PARAMS: Record<EcCurve, { hash: string; sigSize: number; componentSize: number }> = {
 	'P-256': { hash: 'SHA-256', sigSize: 64, componentSize: 32 },
-	'P-384': { hash: 'SHA-384', sigSize: 96, componentSize: 48 },
+	'P-384': { hash: 'SHA-384', sigSize: 96, componentSize: 48 }
 };
 
 // ---------------------------------------------------------------------------
@@ -191,30 +193,9 @@ export async function verifyCoseSign1(
 	}
 
 	// --- Trust store check: verify issuer cert chains to a trusted root ---
-	const trusted = await verifyDscAgainstRoot(issuerCertDER, trustedRoots);
-	if (!trusted) {
-		return { valid: false, reason: 'Issuer certificate not found in IACA trust store' };
-	}
-
-	// --- DSC validity period check ---
-	try {
-		const { notBefore, notAfter } = extractValidityPeriod(issuerCertDER);
-		const now = new Date();
-		if (now < notBefore) {
-			return {
-				valid: false,
-				reason: `DSC not yet valid (notBefore: ${notBefore.toISOString()})`
-			};
-		}
-		if (now > notAfter) {
-			return {
-				valid: false,
-				reason: `DSC expired (notAfter: ${notAfter.toISOString()})`
-			};
-		}
-	} catch {
-		// Validity extraction failed — non-fatal, proceed with signature verification.
-		// Some test certs may have minimal TBS that doesn't parse fully.
+	const trustResult = await verifyCertificateAgainstIacaRoots(issuerCertDER, trustedRoots);
+	if (!trustResult.trusted) {
+		return { valid: false, reason: trustResult.reason };
 	}
 
 	// --- Extract ECDSA public key from issuer certificate ---
@@ -466,6 +447,46 @@ async function verifyDscAgainstRoot(
 }
 
 /**
+ * Verify that an issuer/DSC certificate chains to a trusted IACA root and is currently valid.
+ *
+ * This is shared by the raw mdoc COSE path and OpenID4VP JWT x5c path so both
+ * lanes use the same issuer trust anchor.
+ */
+export async function verifyCertificateAgainstIacaRoots(
+	certDER: Uint8Array,
+	trustedRoots: IACACertificate[]
+): Promise<CertificateTrustResult> {
+	const trusted = await verifyDscAgainstRoot(certDER, trustedRoots);
+	if (!trusted) {
+		return { trusted: false, reason: 'Issuer certificate not found in IACA trust store' };
+	}
+
+	try {
+		const { notBefore, notAfter } = extractValidityPeriod(certDER);
+		const now = new Date();
+		if (now < notBefore) {
+			return {
+				trusted: false,
+				reason: `DSC not yet valid (notBefore: ${notBefore.toISOString()})`
+			};
+		}
+		if (now > notAfter) {
+			return {
+				trusted: false,
+				reason: `DSC expired (notAfter: ${notAfter.toISOString()})`
+			};
+		}
+	} catch (err) {
+		return {
+			trusted: false,
+			reason: `DSC validity period could not be parsed (${err instanceof Error ? err.message : 'unknown'})`
+		};
+	}
+
+	return { trusted: true };
+}
+
+/**
  * Minimal ASN.1/DER parser to extract an EC public key from an X.509 certificate.
  *
  * Searches for the SubjectPublicKeyInfo structure containing:
@@ -524,7 +545,7 @@ export function extractEcPublicKeyFromDER(certDER: Uint8Array): EcPublicKeyInfo 
 			) {
 				return {
 					keyBytes: certDER.slice(contentStart + 1, contentStart + 1 + keySize),
-					curve,
+					curve
 				};
 			}
 		}
@@ -713,10 +734,7 @@ export function extractValidityPeriod(certDER: Uint8Array): {
  * UTCTime (0x17):        YYMMDDHHMMSSZ  — year < 50 → 20xx, else 19xx
  * GeneralizedTime (0x18): YYYYMMDDHHMMSSZ
  */
-function parseDERTime(
-	data: Uint8Array,
-	offset: number
-): { date: Date; nextOffset: number } {
+function parseDERTime(data: Uint8Array, offset: number): { date: Date; nextOffset: number } {
 	const tag = data[offset];
 	if (tag !== 0x17 && tag !== 0x18) {
 		throw new Error(`Expected time tag (0x17 or 0x18), got 0x${tag.toString(16)}`);
