@@ -12,8 +12,8 @@ describe('mDL verification finalization', () => {
 
 		expect(schema).toContain('mdlCredentialUses: defineTable');
 		expect(schema).toContain('credentialHash: v.string()');
-		expect(schema).toContain('.index("by_credentialHash", ["credentialHash"])');
-		expect(schema).toContain('.index("by_expiresAt", ["expiresAt"])');
+		expect(schema).toMatch(/\.index\(["']by_credentialHash["'], \[["']credentialHash["']\]\)/);
+		expect(schema).toMatch(/\.index\(["']by_expiresAt["'], \[["']expiresAt["']\]\)/);
 	});
 
 	it('keeps mDL commitment binding and tier mutation behind an internal Convex finalizer', () => {
@@ -23,11 +23,11 @@ describe('mDL verification finalization', () => {
 		expect(convexUsers).toContain('export const updateMdlVerification = internalMutation');
 		expect(convexUsers).not.toContain('export const updateMdlVerification = mutation');
 		expect(convexUsers).toContain('identityCommitment: args.identityCommitment');
-		expect(convexUsers).toContain('query("mdlCredentialUses")');
-		expect(convexUsers).toContain('withIndex("by_credentialHash"');
+		expect(convexUsers).toMatch(/query\(["']mdlCredentialUses["']\)/);
+		expect(convexUsers).toMatch(/withIndex\(["']by_credentialHash["']/);
 		expect(convexUsers).toContain('MDL_CREDENTIAL_HASH_REUSED');
-		expect(convexUsers).toContain('ctx.db.insert("mdlCredentialUses"');
-		expect(convexUsers).toContain('verificationMethod: "mdl"');
+		expect(convexUsers).toMatch(/ctx\.db\.insert\(["']mdlCredentialUses["']/);
+		expect(convexUsers).toMatch(/verificationMethod: ["']mdl["']/);
 		expect(convexUsers).toContain('patch.trustTier = 5');
 		expect(convexUsers).toContain('requireReauth: linkedToExisting');
 	});
