@@ -29,7 +29,7 @@ separate gates and are not prerequisites for Android device rollout.
 | A6d-a | done | Prepare Android OpenID4VP DC API handover foundation: persist canonical verifier origin, build final-spec SessionTranscript bytes, and protect bridge protocol-binding state under AEAD/AAD. | `oid4vp-dc-api-handover`, `verify-mdl-start`, `bridge-session`, `bridge-crypto`, plus Android mDL focused suites. | Brutalist contexts `5d0ad5d9-374a-445e-9b98-fa3042d09804` and `47662b06-2659-408d-add4-fd3a1c5be1d6`; accepted origin/AEAD findings fixed before commit. |
 | A6d-b1 | done | Add the mdoc DeviceAuth `deviceSignature` verifier primitive: parse issuer-signed MSO `deviceKeyInfo.deviceKey`, verify detached COSE_Sign1 signatures over supplied `DeviceAuthenticationBytes`, harden protected-header/COSE_Key parsing, and keep `mso_mdoc` acceptance closed. | `cose-verify`, focused Android mDL suite. | Brutalist contexts `d2e7d9aa-9779-4d95-ac56-ac10a70fdcaf` and `d8bd46ab-de34-436c-810f-aea7bc41a7c9`; accepted COSE/CBOR findings fixed before commit. |
 | A6d-b2 | done | Wire Android OpenID4VP `mso_mdoc` DeviceResponse parsing: reconstruct DC API `SessionTranscript`/`DeviceAuthenticationBytes` from stored origin+nonce, verify DeviceAuth with the MSO device key, then pass only verified namespaces through the privacy boundary. | Focused `oid4vp-verify`/`mdl-mdoc`/`cose-verify`/`bounded-json` suite: 128 tests; Android mDL lane: 210 tests. | Brutalist contexts `03c77325-c37a-4c13-94ef-225c672b5903` and `ed9b7171-1b35-483f-9abc-5e95a2cb675b`; accepted findings fixed before commit. |
-| A6e | active | Android same-device live smoke: Chrome + Google Wallet mDL on a physical Android device. | See same-device checklist below plus `mdl-smoke-readiness`. | File launch findings before enablement. |
+| A6e | active | Android same-device live smoke: Chrome + Google Wallet mDL on a physical Android device. | Staging deploy preflight below, same-device checklist, plus `mdl-smoke-readiness`. | File launch findings before enablement. |
 | A7 | queued | Desktop-to-Android bridge live smoke. | See bridge checklist below. | File launch findings before enablement. |
 | A8 | queued | Update Android-first docs and user-facing copy after smoke results are known. | Static/source review plus touched-file Svelte check. | Brutalist product/security copy review. |
 | A9 | blocked | Raw mdoc T3: SessionTranscript reconstruction and DeviceAuth verification. | mdoc fixture tests and capture-replay regression. | Required before `MDL_MDOC=true` or iOS enablement. |
@@ -59,6 +59,15 @@ separate gates and are not prerequisites for Android device rollout.
 ## Smoke Criteria
 
 Same-device Android smoke (`A6e`) passes only when:
+
+- `main`, `staging`, and `production` point at the same reviewed commit, with CI and
+  Cloudflare immutable Pages deploy health green for that commit.
+- External custom-domain health checks return JSON `status: "ok"` before device testing:
+
+  ```bash
+  curl --fail-with-body -sS https://staging.commons.email/api/health | jq -e '.status == "ok"'
+  curl --fail-with-body -sS https://commons.email/api/health | jq -e '.status == "ok"'
+  ```
 
 - Android Chrome + Google Wallet mDL accepts the `openid4vp-v1-unsigned` DC API request.
 - The verifier normalizes the returned OpenID4VP authorization response and rejects unsupported or unsigned response shapes.

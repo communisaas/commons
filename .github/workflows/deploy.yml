@@ -107,17 +107,29 @@ jobs:
           done
           exit 1
 
-      - name: Verify production domain health
+      - name: Probe production domain health
         if: github.event.workflow_run.head_branch == 'production'
         run: |
           for attempt in {1..12}; do
-            if response=$(curl --fail-with-body -sS --max-time 20 "$DEPLOY_PUBLIC_URL/api/health"); then
-              echo "$response"
-              echo "$response" | jq -e '.status == "ok"' >/dev/null && exit 0
-            elif [ -n "${response:-}" ]; then
-              echo "$response"
+            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" "$DEPLOY_PUBLIC_URL/api/health"); then
+              http_status=$(printf '%s\n' "$response" | tail -n 1)
+              body=$(printf '%s\n' "$response" | sed '$d')
+
+              if [ "$http_status" = "200" ] && echo "$body" | jq -e '.status == "ok"' >/dev/null 2>&1; then
+                echo "$body"
+                exit 0
+              fi
+
+              if echo "$body" | jq -e . >/dev/null 2>&1; then
+                echo "$body"
+                echo "::error::Production domain health endpoint returned JSON but not status ok."
+                exit 1
+              fi
+
+              echo "Production domain probe attempt ${attempt} returned HTTP ${http_status}."
+            else
+              echo "Production domain probe failed on attempt ${attempt} before an HTTP response."
             fi
-            echo "Production domain health check failed on attempt ${attempt}; retrying..."
             sleep 10
           done
-          exit 1
+          echo "::warning::Production domain health could not be verified from GitHub-hosted runners; complete external release smoke against ${DEPLOY_PUBLIC_URL}/api/health."

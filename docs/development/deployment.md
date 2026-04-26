@@ -121,7 +121,7 @@ git push origin main:production
 
 Direct `wrangler pages deploy` is an emergency/manual operation, not the standard path.
 The normal deploy path is the GitHub Actions workflow so CI, immutable Pages health, and
-production-domain health gates are recorded together.
+deployment health gates are recorded together.
 
 ### Preview Deploy (non-production branch)
 
@@ -140,9 +140,14 @@ on staging as controlled production-backed smoke with test accounts and no Busin
 or live congressional delivery paths.
 
 The deploy workflow hard-checks the immutable Pages deployment URL for every branch after
-`wrangler pages deploy`. Production also hard-checks `commons.email`. The staging custom
-domain is validated during the real-device smoke pass because Cloudflare may return WAF
-responses to GitHub-hosted runners that do not reproduce from normal clients.
+`wrangler pages deploy`. Custom domains are validated during release smoke because
+Cloudflare may return WAF responses to GitHub-hosted runners that do not reproduce from
+normal clients. Before Android smoke, verify:
+
+```bash
+curl --fail-with-body -sS https://staging.commons.email/api/health | jq -e '.status == "ok"'
+curl --fail-with-body -sS https://commons.email/api/health | jq -e '.status == "ok"'
+```
 
 Real-device staging smoke should cover:
 
