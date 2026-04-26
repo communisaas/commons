@@ -215,25 +215,59 @@ export async function getRelayerHealth(): Promise<RelayerHealth> {
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Minimal ABI — only the functions we call */
+/** Minimal ABI — only the functions we call. Includes both V1 (31-input) and
+ *  V2 (33-input) three-tree verifiers plus the revocation-registry view. */
 const DISTRICT_GATE_ABI = [
-	// State-changing
+	// State-changing (V1, pre-F1 closure, 31 public inputs)
 	'function verifyThreeTreeProof(address signer, bytes proof, uint256[31] publicInputs, uint8 verifierDepth, uint256 deadline, bytes signature)',
+	// State-changing (V2, F1 closure — Stage 5, 33 public inputs)
+	// publicInputs[31] = revocation_nullifier, publicInputs[32] = revocation_registry_root
+	'function verifyThreeTreeProofV2(address signer, bytes proof, uint256[33] publicInputs, uint8 verifierDepth, uint256 deadline, bytes signature)',
 	// View functions
 	'function isNullifierUsed(bytes32 actionId, bytes32 nullifier) view returns (bool)',
 	'function allowedActionDomains(bytes32) view returns (bool)',
 	'function nonces(address) view returns (uint256)',
+	'function revocationRegistry() view returns (address)',
 	// Events
 	'event ThreeTreeProofVerified(address indexed signer, bytes32 indexed nullifier, bytes32 indexed actionDomain, uint8 verifierDepth)'
 ];
 
-/** Number of public inputs expected by the three-tree circuit */
+/** Minimal ABI for the RevocationRegistry — only the methods the commons app
+ *  reads (current root, empty-tree constant) or the relayer endpoint writes
+ *  (emitRevocation). */
+const REVOCATION_REGISTRY_ABI = [
+	'function emitRevocation(bytes32 revocationNullifier, bytes32 newRoot)',
+	'function currentRoot() view returns (bytes32)',
+	'function EMPTY_TREE_ROOT() view returns (bytes32)',
+	'function isRevoked(bytes32) view returns (bool)',
+	'function isRootAcceptable(bytes32 claimedRoot) view returns (bool)'
+];
+
+/**
+ * Number of public inputs expected by the V1 three-tree circuit (pre-F1 closure).
+ *
+ * V1 layout: [userRoot, cellMapRoot, districts[24], nullifier, actionDomain,
+ *             authorityLevel, engagementRoot, engagementTier].
+ *
+ * The V2 circuit (Stage 5) adds two inputs (revocation_nullifier,
+ * revocation_registry_root) for a total of 33 — see
+ * `THREE_TREE_V2_PUBLIC_INPUT_COUNT` below. Callers should accept both counts
+ * during the migration window; the resolver-gates structural check switches
+ * behaviour based on length.
+ */
 export const THREE_TREE_PUBLIC_INPUT_COUNT = 31;
+
+/**
+ * Number of public inputs expected by the V2 three-tree circuit (F1 closure,
+ * Stage 5). Adds revocation_nullifier (index 31) and revocation_registry_root
+ * (index 32). See voter-protocol/specs/REVOCATION-NULLIFIER-SPEC.md.
+ */
+export const THREE_TREE_V2_PUBLIC_INPUT_COUNT = 33;
 
 /** Valid circuit depths for three-tree verifier */
 const VALID_VERIFIER_DEPTHS = [18, 20, 22, 24] as const;
 
-/** Indices into the 31-element public inputs array */
+/** Indices into the 31-element V1 public inputs array (shared with V2 [0..30]) */
 export const PUBLIC_INPUT_INDEX = {
 	USER_ROOT: 0,
 	CELL_MAP_ROOT: 1,
@@ -244,9 +278,30 @@ export const PUBLIC_INPUT_INDEX = {
 	ENGAGEMENT_TIER: 30
 } as const;
 
-/** EIP-712 type definition for SubmitThreeTreeProof */
+/** Additional indices into the V2 public inputs array (F1 closure — Stage 5). */
+export const PUBLIC_INPUT_V2_INDEX = {
+	...PUBLIC_INPUT_INDEX,
+	REVOCATION_NULLIFIER: 31,
+	REVOCATION_REGISTRY_ROOT: 32
+} as const;
+
+/** EIP-712 type definition for SubmitThreeTreeProof (V1). */
 const EIP712_TYPES = {
 	SubmitThreeTreeProof: [
+		{ name: 'proofHash', type: 'bytes32' },
+		{ name: 'publicInputsHash', type: 'bytes32' },
+		{ name: 'verifierDepth', type: 'uint8' },
+		{ name: 'nonce', type: 'uint256' },
+		{ name: 'deadline', type: 'uint256' }
+	]
+};
+
+/** EIP-712 type definition for SubmitThreeTreeProofV2 (F1 closure).
+ *  Structurally identical to V1 — the difference is the public-input hash covers
+ *  33 elements instead of 31. The distinct typehash namespaces V2 submissions
+ *  from V1 in the contract's domain. */
+const EIP712_TYPES_V2 = {
+	SubmitThreeTreeProofV2: [
 		{ name: 'proofHash', type: 'bytes32' },
 		{ name: 'publicInputsHash', type: 'bytes32' },
 		{ name: 'verifierDepth', type: 'uint8' },
@@ -349,6 +404,14 @@ export function getConfig(): BlockchainConfig {
 	};
 }
 
+/** Address of the RevocationRegistry contract on Scroll. Optional — only
+ *  required for the V2 verifier path (F1 closure) and the relayer endpoint
+ *  that writes revocations. Read from env so deployments can pin a specific
+ *  registry without rebuilding the client. */
+export function getRevocationRegistryAddress(): string {
+	return env.REVOCATION_REGISTRY_ADDRESS || '';
+}
+
 /**
  * Get or create the ethers provider, wallet, and contract instances.
  * Uses NonceManager for automatic nonce tracking (prevents nonce collisions).
@@ -404,11 +467,17 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 	// PHASE 1: Validate inputs
 	// ───────────────────────────────────────────────────────────────────────
 
-	if (params.publicInputs.length !== THREE_TREE_PUBLIC_INPUT_COUNT) {
+	// Accept either V1 (31 inputs, pre-F1 closure) or V2 (33 inputs, Stage 5
+	// F1 closure). Router picks the appropriate contract call below.
+	const isV2 = params.publicInputs.length === THREE_TREE_V2_PUBLIC_INPUT_COUNT;
+	if (
+		params.publicInputs.length !== THREE_TREE_PUBLIC_INPUT_COUNT &&
+		!isV2
+	) {
 		return {
 			success: false,
 			kind: 'relayer_config',
-			error: `Expected ${THREE_TREE_PUBLIC_INPUT_COUNT} public inputs, got ${params.publicInputs.length}`
+			error: `Expected ${THREE_TREE_PUBLIC_INPUT_COUNT} or ${THREE_TREE_V2_PUBLIC_INPUT_COUNT} public inputs, got ${params.publicInputs.length}`
 		};
 	}
 
@@ -498,10 +567,13 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 	const proofBytes = params.proof.startsWith('0x') ? params.proof : '0x' + params.proof;
 	const proofHash = keccak256(proofBytes);
 
-	// Pack public inputs as uint256 array for hashing
+	// Pack public inputs as uint256 array for hashing. Length must match the
+	// call path (V1 = 31, V2 = 33) — otherwise the contract's recomputed hash
+	// diverges and the EIP-712 signature is rejected.
 	const publicInputsAsBigInt = params.publicInputs.map((v) => BigInt(v));
+	const expectedInputCount = isV2 ? THREE_TREE_V2_PUBLIC_INPUT_COUNT : THREE_TREE_PUBLIC_INPUT_COUNT;
 	const publicInputsPacked = solidityPacked(
-		Array(THREE_TREE_PUBLIC_INPUT_COUNT).fill('uint256'),
+		Array(expectedInputCount).fill('uint256'),
 		publicInputsAsBigInt
 	);
 	const publicInputsHash = keccak256(publicInputsPacked);
@@ -526,7 +598,14 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 
 	let signature: string;
 	try {
-		signature = await wallet.signTypedData(domain, EIP712_TYPES, value);
+		// V1 and V2 use distinct EIP-712 typehashes so the contract can tell
+		// which verifier the signer authorised. Signing the wrong typehash for
+		// the destination call path triggers an InvalidSignature revert.
+		signature = await wallet.signTypedData(
+			domain,
+			isV2 ? EIP712_TYPES_V2 : EIP712_TYPES,
+			value
+		);
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		console.error('[DistrictGateClient] EIP-712 signing failed:', msg);
@@ -551,14 +630,26 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 	});
 
 	try {
-		const tx = await contract.verifyThreeTreeProof(
-			wallet.address,
-			proofBytes,
-			publicInputsAsBigInt,
-			params.verifierDepth,
-			deadline,
-			signature
-		);
+		// Route to the V2 verifier (F1 closure) when the submitter provided 33
+		// public inputs; fall back to V1 for legacy 31-input proofs. The V2
+		// route performs the on-chain revocation-registry cross-check.
+		const tx = isV2
+			? await contract.verifyThreeTreeProofV2(
+					wallet.address,
+					proofBytes,
+					publicInputsAsBigInt,
+					params.verifierDepth,
+					deadline,
+					signature
+			  )
+			: await contract.verifyThreeTreeProof(
+					wallet.address,
+					proofBytes,
+					publicInputsAsBigInt,
+					params.verifierDepth,
+					deadline,
+					signature
+			  );
 
 		const receipt: TransactionReceipt = await tx.wait();
 
@@ -568,7 +659,8 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 		console.debug('[DistrictGateClient] Verification confirmed:', {
 			txHash: receipt.hash,
 			blockNumber: receipt.blockNumber,
-			gasUsed: receipt.gasUsed.toString()
+			gasUsed: receipt.gasUsed.toString(),
+			version: isV2 ? 'v2' : 'v1'
 		});
 
 		return { success: true, kind: 'success', txHash: receipt.hash };
@@ -686,5 +778,260 @@ export async function isActionDomainAllowed(actionDomain: string): Promise<boole
 			err instanceof Error ? err.message : err
 		);
 		return false;
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REVOCATION REGISTRY (F1 closure — Stage 5)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build a RevocationRegistry Contract instance connected to the relayer wallet.
+ * Shares the provider/wallet/nonce-manager singletons with DistrictGate (same
+ * chain, same signer). Returns null if registry address is not configured.
+ *
+ * USE FOR WRITES (`emitRevocation`). For reads, prefer
+ * `getRevocationRegistryReadOnlyContract()` which doesn't require a wallet —
+ * a deploy-time health check should not depend on relayer credentials.
+ */
+function getRevocationRegistryInstance(): { contract: Contract; wallet: Wallet } | null {
+	const registryAddr = getRevocationRegistryAddress();
+	if (!registryAddr) return null;
+
+	// Reuse the district-gate wallet + provider initialization — same signer,
+	// same RPC. getContractInstance() seeds _wallet / _provider / _nonceManager.
+	const dgInstance = getContractInstance();
+	if (!dgInstance || !_nonceManager || !_wallet) return null;
+
+	const contract = new Contract(registryAddr, REVOCATION_REGISTRY_ABI, _nonceManager);
+	return { contract, wallet: _wallet };
+}
+
+/**
+ * Read-only RevocationRegistry contract instance — REVIEW 5-1 fix.
+ *
+ * The deploy-time `EMPTY_TREE_ROOT` health check is read-only and MUST NOT
+ * depend on the relayer's `SCROLL_PRIVATE_KEY` being configured. A staging
+ * environment that hasn't yet been wired to the relayer wallet would
+ * otherwise see the gate fail for the wrong reason.
+ *
+ * Uses the same RPC URL as the relayer path but constructs an ad-hoc
+ * provider without the wallet. Caches a separate `_readOnlyProvider`
+ * singleton so we don't churn on every health-check call.
+ */
+let _readOnlyProvider: JsonRpcProvider | null = null;
+function getRevocationRegistryReadOnlyContract(): Contract | null {
+	const registryAddr = getRevocationRegistryAddress();
+	if (!registryAddr) return null;
+	const config = getConfig();
+	if (!config.rpcUrl) return null;
+	if (!_readOnlyProvider) {
+		_readOnlyProvider = new JsonRpcProvider(config.rpcUrl);
+	}
+	return new Contract(registryAddr, REVOCATION_REGISTRY_ABI, _readOnlyProvider);
+}
+
+/**
+ * Fetch the current RevocationRegistry SMT root from Scroll.
+ *
+ * The V2 prover needs this as a public input (index 32) so the circuit's
+ * non-membership proof and the contract's root-acceptance check agree. If the
+ * registry address is not configured or the read fails, returns the empty
+ * bytes32 (a freshly-deployed registry returns its EMPTY_TREE_ROOT from
+ * `currentRoot()` — this function does not distinguish that from a config
+ * miss, so callers must guard with `getRevocationRegistryAddress()`).
+ *
+ * @returns Current root as 0x-prefixed 32-byte hex, or zero hash on failure.
+ */
+export async function getRevocationRegistryRoot(): Promise<string> {
+	const instance = getRevocationRegistryInstance();
+	if (!instance) {
+		throw new Error(
+			'REVOCATION_REGISTRY_ADDRESS_NOT_SET: cannot fetch root without contract address',
+		);
+	}
+
+	try {
+		const root: string = await instance.contract.currentRoot();
+		return root;
+	} catch (err) {
+		// REVIEW 1 fix: previously this returned `0x0...0` on any failure,
+		// which (a) cannot be distinguished from a real all-zero root and
+		// (b) tricked the reconciliation cron into treating transport
+		// failures as actual on-chain state. Now it throws — callers
+		// classify and surface.
+		const msg = err instanceof Error ? err.message : String(err);
+		console.error('[DistrictGateClient] currentRoot() read failed:', msg);
+		throw new Error(`currentRoot_rpc_failed: ${msg}`);
+	}
+}
+
+/**
+ * Fetch the contract's deployed EMPTY_TREE_ROOT immutable.
+ *
+ * REVIEW 5-1 fix — uses the read-only contract path so the deploy gate is
+ * decoupled from relayer credentials. A staging environment without
+ * SCROLL_PRIVATE_KEY can still verify the contract was deployed correctly.
+ *
+ * @returns The contract's EMPTY_TREE_ROOT as 0x-prefixed 32-byte hex, or null
+ *          if the contract address isn't configured or the RPC read fails.
+ */
+export async function getRevocationRegistryEmptyTreeRoot(): Promise<string | null> {
+	const contract = getRevocationRegistryReadOnlyContract();
+	if (!contract) return null;
+	try {
+		const root: string = await contract.EMPTY_TREE_ROOT();
+		return root;
+	} catch (err) {
+		console.error(
+			'[DistrictGateClient] EMPTY_TREE_ROOT() read failed:',
+			err instanceof Error ? err.message : err
+		);
+		return null;
+	}
+}
+
+/**
+ * Classification of an emitRevocation attempt's outcome. Matches the taxonomy
+ * the Convex worker expects so it can distinguish retryable from terminal
+ * failures.
+ *
+ *   - success         : tx mined
+ *   - rpc_transient   : network / nonce / gas / 5xx — retry
+ *   - contract_revert : `AlreadyRevoked`, unauthorized relayer, paused —
+ *                       terminal; retrying will hit the same revert
+ *   - config          : missing env vars, unconfigured registry — terminal
+ */
+export type EmitRevocationKind = 'success' | 'rpc_transient' | 'contract_revert' | 'config';
+
+export interface EmitRevocationResult {
+	success: boolean;
+	kind: EmitRevocationKind;
+	txHash?: string;
+	blockNumber?: number;
+	error?: string;
+}
+
+/**
+ * Submit a revocation to RevocationRegistry.emitRevocation on Scroll.
+ *
+ * @param revocationNullifier - H2(districtCommitment, REVOCATION_DOMAIN) (bytes32 hex)
+ * @param newRoot             - The SMT root after inserting this nullifier.
+ *                              The contract trusts whatever the authorized
+ *                              relayer commits; correctness is verified by
+ *                              future proofs' non-membership checks. If SMT
+ *                              state tracking is not yet wired (pre-launch,
+ *                              no production users), callers may pass a
+ *                              deterministic placeholder computed from
+ *                              keccak256(currentRoot || nullifier). The
+ *                              `isRevoked` flat-mapping check (the actual F1
+ *                              closure) still works independently of root
+ *                              correctness.
+ *
+ * @returns Classified result. Circuit breaker is shared with verifyOnChain so
+ *          a failing Scroll RPC halts both read and write paths uniformly.
+ */
+export async function emitOnChainRevocation(params: {
+	revocationNullifier: string;
+	newRoot: string;
+}): Promise<EmitRevocationResult> {
+	if (isCircuitOpen()) {
+		return {
+			success: false,
+			kind: 'rpc_transient',
+			error: 'Circuit breaker OPEN: RPC failures exceeded threshold.'
+		};
+	}
+
+	// Validate inputs first — cheap, fail-fast.
+	if (!/^0x[0-9a-fA-F]{64}$/.test(params.revocationNullifier)) {
+		return {
+			success: false,
+			kind: 'config',
+			error: 'revocationNullifier must be 0x-prefixed 32-byte hex'
+		};
+	}
+	if (!/^0x[0-9a-fA-F]{64}$/.test(params.newRoot)) {
+		return {
+			success: false,
+			kind: 'config',
+			error: 'newRoot must be 0x-prefixed 32-byte hex'
+		};
+	}
+
+	const instance = getRevocationRegistryInstance();
+	if (!instance) {
+		const config = getConfig();
+		const missing: string[] = [];
+		if (!getRevocationRegistryAddress()) missing.push('REVOCATION_REGISTRY_ADDRESS');
+		if (!config.rpcUrl) missing.push('SCROLL_RPC_URL');
+		if (!config.privateKey) missing.push('SCROLL_PRIVATE_KEY');
+		return {
+			success: false,
+			kind: 'config',
+			error: `Relayer not configured (missing: ${missing.join(', ')})`
+		};
+	}
+
+	try {
+		// Balance guard — identical posture to verifyOnChain. A relayer that
+		// cannot afford the tx should return `config`, not `rpc_transient`,
+		// because retry budget won't help.
+		const balance = await getRelayerBalance(instance.wallet);
+		if (balance < BALANCE_CRITICAL_THRESHOLD) {
+			return {
+				success: false,
+				kind: 'config',
+				error: `Relayer balance critically low (${Number(balance) / 1e18} ETH)`
+			};
+		}
+	} catch {
+		recordRpcFailure();
+		return {
+			success: false,
+			kind: 'rpc_transient',
+			error: 'Unable to verify relayer balance'
+		};
+	}
+
+	try {
+		const tx = await instance.contract.emitRevocation(params.revocationNullifier, params.newRoot);
+		const receipt: TransactionReceipt = await tx.wait();
+		recordRpcSuccess();
+
+		return {
+			success: true,
+			kind: 'success',
+			txHash: receipt.hash,
+			blockNumber: receipt.blockNumber
+		};
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		const msgLower = msg.toLowerCase();
+
+		const rpcErrorPatterns = [
+			'network', 'timeout', 'econnrefused', 'etimedout', 'enotfound',
+			'econnreset', 'could not detect network', 'socket hang up',
+			'429', 'too many requests', '503', 'service unavailable',
+			'502', 'bad gateway', '504', 'gateway timeout',
+			'insufficient funds for gas', 'nonce too low'
+		];
+		const isRpcError = rpcErrorPatterns.some((p) => msgLower.includes(p));
+		if (isRpcError) {
+			recordRpcFailure();
+			return { success: false, kind: 'rpc_transient', error: msg };
+		}
+
+		// Contract reverts: AlreadyRevoked (terminal — the credential is
+		// already registered, no retry helps), UnauthorizedRelayer (terminal —
+		// governance misconfiguration), Paused (operationally terminal until
+		// ops intervene). All of these are `contract_revert`.
+		const revertMatch = msg.match(/reason="([^"]+)"/);
+		const revertReason = revertMatch ? revertMatch[1] : msg;
+		return {
+			success: false,
+			kind: 'contract_revert',
+			error: revertReason
+		};
 	}
 }

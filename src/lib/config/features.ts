@@ -91,8 +91,8 @@ export const FEATURES = {
 	 * Raw ISO mdoc (`org-iso-mdoc`) lane.
 	 *
 	 * Keep this false until T3 lands: reconstruct SessionTranscript and verify
-	 * DeviceMAC / DeviceSignature per ISO 18013-5 section 9.1.3. The current
-	 * presence gate rejects malformed wallets but does not stop capture-replay.
+	 * DeviceMAC / DeviceSignature per ISO 18013-5 §9.1.3. The current presence
+	 * gate rejects malformed wallets but does not stop capture-replay.
 	 */
 	MDL_MDOC: false,
 
@@ -105,7 +105,7 @@ export const FEATURES = {
 	MDL_IOS: false,
 
 	/**
-	 * Desktop to phone bridge. For the Android-first rollout this bridge returns
+	 * Desktop → phone bridge. For the Android-first rollout this bridge returns
 	 * only OpenID4VP request configs and the complete endpoint rejects mdoc.
 	 */
 	MDL_BRIDGE: true,
@@ -114,7 +114,35 @@ export const FEATURES = {
 	 * Legacy alias retained only for old string-search tests and migration
 	 * comments. New code must use the protocol/platform flags above.
 	 */
-	MDL: false
+	MDL: false,
+
+	/**
+	 * Wave 3 — V2 three-tree proof generation (F1 closure).
+	 *
+	 * When `false` (default): the client generates V1 proofs (31 public inputs).
+	 * The server-side resolver-gates and submission endpoint accept BOTH V1 and
+	 * V2 already, so a partial cutover is safe — flipping this on a subset of
+	 * sessions is the canary mechanism.
+	 *
+	 * When `true`: the client fetches the revocation non-membership path from
+	 * Convex and generates a V2 proof (33 public inputs, including
+	 * revocation_nullifier and revocation_registry_root). The on-chain
+	 * `verifyThreeTreeProofV2` ABI is invoked.
+	 *
+	 * Cutover plan (REGROUNDING-LAUNCH-READINESS.md Phase R2):
+	 *   - Day 0: flip true for 10% of new proofs (gradient via remote config or
+	 *            session-id hash bucket)
+	 *   - Day 3: 50% if metrics nominal
+	 *   - Day 7: 100%
+	 *   - Day 14: deprecate V1 generation; keep V1 verifier indefinitely for
+	 *            grandfathered submissions
+	 *
+	 * Hard gate: `@voter-protocol/noir-prover@2.x` MUST be installed and the
+	 * V2 circuit's verifying key MUST be deployed in DistrictGate before this
+	 * flag flips true. Otherwise V2 proofs can't be generated AND can't be
+	 * verified.
+	 */
+	V2_PROOF_GENERATION: false
 } as const;
 
 export const OPENID4VP_DC_API_PROTOCOL = 'openid4vp-v1-unsigned';

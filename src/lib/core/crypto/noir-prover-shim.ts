@@ -18,8 +18,21 @@
 // Re-export everything the npm package DOES provide
 export type { CircuitDepth } from '@voter-protocol/noir-prover';
 
-/** Number of public inputs in three-tree circuit (29 two-tree + engagement_root + engagement_tier) */
+/** Number of public inputs in three-tree circuit v1 (29 two-tree + engagement_root + engagement_tier) */
 export const THREE_TREE_PUBLIC_INPUT_COUNT = 31;
+
+/**
+ * Number of public inputs in three-tree circuit v2 (F1 closure, Stage 5).
+ *
+ * Adds:
+ *   index 31 - revocation_nullifier = H2(district_commitment, REVOCATION_DOMAIN)
+ *   index 32 - revocation_registry_root (SMT root that the non-membership
+ *              proof was built against)
+ *
+ * See voter-protocol/specs/REVOCATION-NULLIFIER-SPEC.md and
+ * voter-protocol/specs/CIRCUIT-REVISION-MIGRATION.md.
+ */
+export const THREE_TREE_V2_PUBLIC_INPUT_COUNT = 33;
 
 /** Three-tree proof input — matches Noir circuit interface */
 export interface ThreeTreeProofInput {
@@ -52,6 +65,33 @@ export interface ThreeTreeProofInput {
 	engagementIndex: number;
 	actionCount: bigint;
 	diversityScore: bigint;
+
+	// V2-only — F1 closure (Stage 5). REVOCATION-NULLIFIER-SPEC §2.4. The
+	// V2 circuit's `compute_revocation_smt_root` consumes these as witness
+	// inputs to verify NON-MEMBERSHIP of the user's revocation_nullifier in
+	// the on-chain RevocationRegistry SMT. Both arrays MUST have length 128
+	// (REVOCATION_SMT_DEPTH; F-1.4 widened from 64 to 128 on 2026-04-25)
+	// and MUST be derived from the SAME current SMT state that the public
+	// input `revocation_registry_root` references.
+	//
+	// Absent (undefined) when targeting the V1 prover; required for V2.
+	// See `src/lib/server/smt/revocation-smt.ts` for the canonical sibling-
+	// path computation (TS) and `voter-protocol/.../main.nr` for the
+	// circuit-side walk (Noir). Both must agree byte-for-byte — the cross-
+	// impl test in tests/unit/server/revocation-smt-cross-impl.test.ts
+	// pins the canonical roots.
+	revocationPath?: bigint[];
+	revocationPathBits?: number[];
+
+	// V2 public input [32] — the SMT root the prover claims its non-membership
+	// proof was built against. The on-chain `RevocationRegistry.isRootAcceptable`
+	// view tolerates archived roots within a 1-hour TTL, so a slightly-stale
+	// root produced by `getRevocationNonMembershipPath` still verifies. The
+	// prover does NOT recompute this from `revocationPath` + `revocationPathBits`
+	// at the WITNESS layer — the circuit DOES recompute and assert equality at
+	// the constraint layer. So this MUST agree with what the path walk produces
+	// or the proof fails. (REVIEW 1 caught this missing from the input shape.)
+	revocationRegistryRoot?: bigint;
 }
 
 /** Three-tree proof result */

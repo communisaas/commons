@@ -368,8 +368,9 @@ describe('k-ary RR Statistical Properties', () => {
 	it('should use correct domain size k from METRIC_VALUES', () => {
 		const k = METRIC_VALUES.length;
 
-		// Verify we have the expected domain size (20 metrics)
-		expect(k).toBe(20);
+		// Verify we have the expected domain size (21 metrics: 20 original +
+		// address_changed for Stage 3 re-grounding instrumentation)
+		expect(k).toBe(21);
 
 		// All metrics should be distinct
 		const uniqueMetrics = new Set(METRIC_VALUES);

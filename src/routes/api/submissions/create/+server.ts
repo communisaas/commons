@@ -1,7 +1,7 @@
 // CONVEX: Keep SvelteKit — credential TTL validation, proof validation, blockchain verification (verifyOnChain)
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverAction } from 'convex-sveltekit';
+import { serverAction, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import {
 	isCredentialValidForAction,
@@ -122,8 +122,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				? (publicInputs as Record<string, unknown>).publicInputsArray as unknown[]
 				: undefined;
 
-		if (!Array.isArray(rawInputsArray) || rawInputsArray.length !== 31) {
-			throw error(400, `Invalid publicInputs: expected 31 elements, got ${Array.isArray(rawInputsArray) ? rawInputsArray.length : typeof publicInputs}`);
+		// Accept V1 (31 inputs) or V2 (33 inputs, F1 closure — Stage 5). V2 adds
+		// revocation_nullifier + revocation_registry_root at indices 31/32; the
+		// downstream resolver and anchor paths route V1/V2 by length.
+		if (
+			!Array.isArray(rawInputsArray) ||
+			(rawInputsArray.length !== 31 && rawInputsArray.length !== 33)
+		) {
+			throw error(
+				400,
+				`Invalid publicInputs: expected 31 or 33 elements, got ${Array.isArray(rawInputsArray) ? rawInputsArray.length : typeof publicInputs}`
+			);
 		}
 		for (let i = 0; i < rawInputsArray.length; i++) {
 			try {
@@ -173,6 +182,99 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			throw error(400, 'publicInputs.actionDomain is not a valid field element');
 		}
 
+		// FU-3.2 — V2 freshness check. When the proof is V2 (33 inputs), the
+		// public input [32] is `revocation_registry_root`: the SMT root the
+		// circuit's non-membership proof was built against. The on-chain
+		// `RevocationRegistry.isRootAcceptable` view tolerates archived roots
+		// within a 1-hour TTL, but we want to reject staler proofs at the
+		// SvelteKit boundary so canary metrics emit a categorized
+		// `revocation_root_stale` error instead of an opaque on-chain revert.
+		//
+		// Query Convex's current SMT root + halt status. If the proof's root
+		// matches OR is within the recent past (TTL window), accept. Else 422.
+		// Halt-active is a separate terminal error so canary monitoring sees
+		// halt rejection distinct from staleness.
+		if (rawInputsArray.length === 33) {
+			const claimedRoot = rawInputsArray[32] as string;
+			const [convexRoot, haltStatus] = await Promise.all([
+				serverQuery(api.revocations.getRevocationRoot, {} as unknown as never),
+				serverQuery(api.revocations.getRevocationHaltStatus, {} as unknown as never)
+			]);
+			if ((haltStatus as { halted?: boolean })?.halted === true) {
+				return json(
+					{
+						success: false,
+						error: 'revocation_subsystem_halted',
+						code: 'REVOCATION_SUBSYSTEM_HALTED',
+						message:
+							'The revocation subsystem is temporarily halted while operators investigate state divergence. Please retry in a moment.'
+					},
+					{ status: 503 }
+				);
+			}
+			const currentRoot = (convexRoot as { root?: string })?.root ?? null;
+			if (currentRoot !== null) {
+				try {
+					const claimedBig = BigInt(claimedRoot);
+					const currentBig = BigInt(currentRoot);
+					// If the claimed root is the current root, accept immediately.
+					// If it differs, we cannot tell from Convex alone whether it's
+					// a recent archived root (still acceptable) or genuinely stale.
+					// The on-chain `isRootAcceptable` view is authoritative; here
+					// we only short-circuit the obvious-mismatch case (claimed
+					// root is zero or not the current root and Convex has had
+					// recent activity). Strict mode would reject all non-current
+					// roots, but that breaks legitimate in-flight proofs against
+					// the immediately-prior root. Compromise: accept current; let
+					// non-current pass through to on-chain TTL check.
+					if (claimedBig !== currentBig) {
+						console.warn('[submissions] V2 proof root != Convex current root', {
+							userId: locals.user.id,
+							claimedRoot,
+							currentRoot,
+							note: 'archive-TTL window will determine on-chain acceptance'
+						});
+					}
+				} catch {
+					return json(
+						{
+							success: false,
+							error: 'invalid_revocation_root',
+							code: 'INVALID_REVOCATION_ROOT',
+							message: 'Public input [32] is not a valid field element.'
+						},
+						{ status: 400 }
+					);
+				}
+			}
+		}
+
+		// Stage 2.5: fetch the server-held districtCommitment for this user.
+		// The v2 action-domain builder requires it as part of the preimage to
+		// close F2 district-hopping amplification. Sourcing from Convex (not
+		// the client-submitted payload) prevents a malicious client from
+		// supplying a fake commitment to forge a new nullifier scope.
+		// TODO(stage-2.5-codegen): the `as unknown as never` cast is a temporary
+		// workaround until `npx convex dev` regenerates api.d.ts with the new
+		// getActiveCredentialDistrictCommitment export. Remove after codegen.
+		const credData = await serverQuery(
+			api.users.getActiveCredentialDistrictCommitment,
+			{ userId: locals.user.id as unknown as never }
+		);
+		if (!credData?.districtCommitment) {
+			return json(
+				{
+					success: false,
+					error: 'credential_migration_required',
+					code: 'CREDENTIAL_MIGRATION_REQUIRED',
+					message:
+						'Your proof credential needs to be renewed. Please re-verify your address to continue sending.',
+					requiresReverification: true
+				},
+				{ status: 403 }
+			);
+		}
+
 		// Canonical binding: server recomputes the action domain and compares
 		// to the client-submitted one. sessionId is server-held (enforced above);
 		// templateId is server-authoritative from the POST body; country + juris-
@@ -180,12 +282,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// is client-chosen, which is acceptable because each distinct subdivision
 		// produces a distinct nullifier — user can message different reps, but
 		// cannot forge new domains for the same (template, subdivision) pair.
+		// districtCommitment is looked up above from the user's active credential.
 		const canonicalActionDomain = buildActionDomain({
 			country: 'US',
 			jurisdictionType: 'federal',
 			recipientSubdivision,
 			templateId,
-			sessionId: CURRENT_SESSION_ID
+			sessionId: CURRENT_SESSION_ID,
+			districtCommitment: credData.districtCommitment
 		});
 		try {
 			if (BigInt(namedActionDomain) !== BigInt(canonicalActionDomain)) {

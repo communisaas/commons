@@ -311,14 +311,16 @@ describe('DistrictGateClient', () => {
 	// ═════════════════════════════════════════════════════════════════════
 
 	describe('verifyOnChain — input validation', () => {
-		it('rejects wrong number of public inputs', async () => {
+		it('rejects wrong number of public inputs (not V1 31 nor V2 33)', async () => {
 			const result = await verifyOnChain({
 				proof: '0xdeadbeef',
 				publicInputs: ['0x01', '0x02'],
 				verifierDepth: 20
 			});
 			expect(result.success).toBe(false);
-			expect(result.error).toContain('Expected 31 public inputs');
+			// Stage 5 (F1 closure) widened the check to accept both V1 (31) and V2
+			// (33) public-input counts. The error string now references both.
+			expect(result.error).toContain('31 or 33 public inputs');
 			expect(result.error).toContain('got 2');
 		});
 

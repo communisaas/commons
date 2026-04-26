@@ -138,13 +138,33 @@
 			console.log('[ProofGenerator] Using three-tree proof flow');
 
 			// 2a. Build action domain (deterministic from template + session context)
+			// Stage 2.5: districtCommitment is REQUIRED by the v2 builder. A legacy
+			// v1 credential (issued before Stage 2.5) will lack it — surface a
+			// recoverable migration error so the UI can route the user through
+			// re-verify. The `onreverify` prop is wired by the parent; follow the
+			// same pattern as the three-tree credentialType guard above.
+			if (!credential.districtCommitment) {
+				proofState = {
+					status: 'error',
+					message:
+						'Your proof credential needs to be renewed. Please re-verify your address to continue.',
+					recoverable: true,
+					retryLabel: 'Re-verify Address',
+					retryAction: () => {
+						onreverify?.();
+					}
+				};
+				return;
+			}
+
 			const { buildActionDomain } = await import('$lib/core/zkp/action-domain-builder');
 			const actionDomain = buildActionDomain({
 				country: 'US',
 				jurisdictionType: 'federal',
 				recipientSubdivision,
 				templateId,
-				sessionId
+				sessionId,
+				districtCommitment: credential.districtCommitment
 			});
 			actionDomainHex = actionDomain;
 			console.log('[ProofGenerator] Action domain:', actionDomain.slice(0, 16) + '...');
@@ -154,13 +174,44 @@
 			nullifierHex = await computeNullifier(credential.identityCommitment, actionDomain);
 			console.log('[ProofGenerator] Nullifier:', nullifierHex.slice(0, 16) + '...');
 
-			// 2c. Map credential to circuit inputs
+			// 2c. Map credential to circuit inputs (V1 base shape).
 			const { mapCredentialToProofInputs } = await import(
 				'$lib/core/identity/proof-input-mapper'
 			);
+
+			// V2 generation gate. When `FEATURES.V2_PROOF_GENERATION` is true,
+			// fetch the revocation non-membership witness from Convex (via the
+			// /api/proofs/revocation-witness endpoint) and thread it through
+			// the proof context. The downstream validator enforces all-or-nothing
+			// V2 input presence.
+			//
+			// REVIEW 2 fix: failure to fetch the V2 witness MUST surface to the
+			// user (and fail proof generation) when V2 is the active mode.
+			// Previously this swallowed the error and silently produced a V1
+			// proof, masking outages and downgrading the F1 closure guarantee
+			// without telling anyone. The runbook's canary metrics depend on
+			// this failure being observable — a console.warn is operationally
+			// invisible and lets bad infra ride.
+			const { FEATURES } = await import('$lib/config/features');
+			let revocationContext: {
+				revocationPath?: string[];
+				revocationPathBits?: number[];
+				revocationRegistryRoot?: string;
+			} = {};
+			if (FEATURES.V2_PROOF_GENERATION && credential.districtCommitment) {
+				const { fetchRevocationWitness } = await import('$lib/core/zkp/revocation-witness');
+				const witness = await fetchRevocationWitness(credential.districtCommitment);
+				revocationContext = {
+					revocationPath: witness.revocationPath,
+					revocationPathBits: witness.revocationPathBits,
+					revocationRegistryRoot: witness.revocationRegistryRoot
+				};
+			}
+
 			const proofInputs = mapCredentialToProofInputs(credential, {
 				actionDomain,
-				nullifier: nullifierHex
+				nullifier: nullifierHex,
+				...revocationContext
 			});
 
 			// 2d. Initialize three-tree prover
@@ -184,6 +235,12 @@
 			// BR5-010: Save expected nullifier BEFORE overwriting with prover output
 			const expectedNullifier = nullifierHex;
 			nullifierHex = threeTreeResult.publicInputs.nullifier;
+			// Stage 5: when the prover is V2 (33 inputs), thread the F1 closure
+			// fields through. The `revocationNullifier` and `revocationRegistryRoot`
+			// are present as top-level named fields; downstream validators also
+			// read positions [31]/[32] of publicInputsArray. Absent on V1 provers;
+			// the installed @voter-protocol/noir-prover predates V2 — these
+			// spreads become no-ops until the npm package ships the V2 circuit.
 			publicInputsPayload = {
 				userRoot: threeTreeResult.publicInputs.userRoot,
 				cellMapRoot: threeTreeResult.publicInputs.cellMapRoot,
@@ -193,6 +250,12 @@
 				authorityLevel: threeTreeResult.publicInputs.authorityLevel,
 				engagementRoot: threeTreeResult.publicInputs.engagementRoot,
 				engagementTier: threeTreeResult.publicInputs.engagementTier,
+				...(threeTreeResult.publicInputs.revocationNullifier !== undefined
+					? { revocationNullifier: threeTreeResult.publicInputs.revocationNullifier }
+					: {}),
+				...(threeTreeResult.publicInputs.revocationRegistryRoot !== undefined
+					? { revocationRegistryRoot: threeTreeResult.publicInputs.revocationRegistryRoot }
+					: {}),
 				publicInputsArray: threeTreeResult.publicInputsArray
 			};
 
@@ -279,6 +342,20 @@
 			if (!response.ok) {
 				const errorData = await response.json().catch(() => ({}));
 				const serverMessage = errorData.message || errorData.error;
+				// Stage 5 F1 closure: v1 proof submitted against v2 verifier, or
+				// server-side credential rotation in progress. Surface a friendly
+				// re-verify prompt instead of a generic failure. Coordinate with
+				// Stage 2.5 if that agent has added a richer handler.
+				if (errorData.code === 'CREDENTIAL_MIGRATION_REQUIRED' || serverMessage === 'CREDENTIAL_MIGRATION_REQUIRED') {
+					proofState = {
+						status: 'error',
+						message: 'Your proof credential is being rotated -- please re-verify to continue.',
+						recoverable: true,
+						retryLabel: 'Re-verify Identity',
+						retryAction: () => onreverify?.()
+					};
+					return;
+				}
 				proofState = {
 					status: 'error',
 					message: serverMessage || 'Submission failed. Please try again.',

@@ -21,7 +21,8 @@ import {
 	type ThreeTreeNoirProver,
 	type ThreeTreeProofInput,
 	type ThreeTreeProofResult as NoirThreeTreeProofResult,
-	THREE_TREE_PUBLIC_INPUT_COUNT
+	THREE_TREE_PUBLIC_INPUT_COUNT,
+	THREE_TREE_V2_PUBLIC_INPUT_COUNT
 } from '$lib/core/crypto/noir-prover-shim';
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
 
@@ -174,6 +175,42 @@ export interface ThreeTreeProofInputs {
 
 	/** Shannon diversity score for engagement breadth */
 	diversityScore: string;
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// V2 PRIVATE INPUTS (F1 closure — REVOCATION-NULLIFIER-SPEC §2.4)
+	// Required when generating against a V2 prover (33 public inputs).
+	// Omitted for V1; the prover validates length via THREE_TREE_*_COUNT.
+	// ═══════════════════════════════════════════════════════════════════════
+
+	/**
+	 * Revocation SMT non-membership siblings (length = 128, REVOCATION_SMT_DEPTH).
+	 * Each entry is the sibling hash at depth d on the path from the user's
+	 * revocation_nullifier slot to the root. Sourced from Convex via
+	 * `internal.revocations.getRevocationSMTPath` against the user's
+	 * districtCommitment-derived nullifier. Must be derived from the SAME
+	 * SMT state that `revocationRegistryRoot` references.
+	 *
+	 * F-1.4 (2026-04-25): widened from 64 to 128.
+	 */
+	revocationPath?: string[];
+
+	/**
+	 * Direction bits at each SMT depth (length = 128). Bit decomposition of
+	 * (revocation_nullifier mod 2^128). Element d is `(low128 >> d) & 1`.
+	 */
+	revocationPathBits?: number[];
+
+	/**
+	 * Public input [32] — current RevocationRegistry SMT root the proof's
+	 * non-membership claim was built against. The contract's `isRootAcceptable`
+	 * view accepts this if it is the current root or within the archive TTL.
+	 *
+	 * Wiring: passed into the prover so it becomes a witnessed public input.
+	 * The circuit ALSO recomputes the root from `revocationPath` + bits and
+	 * asserts equality, so a mismatch between this value and the path produces
+	 * a proof-generation failure (not a silently-wrong proof).
+	 */
+	revocationRegistryRoot?: string;
 }
 
 /**
@@ -195,7 +232,7 @@ export interface ThreeTreeProofResult {
 	proof: string;
 
 	/**
-	 * All 31 public inputs as hex strings.
+	 * All public inputs as hex strings (V1: 31 fields, V2: 33 fields).
 	 * Structured for contract verification and UI consumption.
 	 */
 	publicInputs: {
@@ -222,11 +259,20 @@ export interface ThreeTreeProofResult {
 
 		/** [30] User's engagement tier (0-4) */
 		engagementTier: EngagementTier;
+
+		/** [31] V2 only — revocation nullifier = H2(districtCommitment, REVOCATION_DOMAIN).
+		 *  F1 closure, Stage 5. Absent when the installed prover is V1. */
+		revocationNullifier?: string;
+
+		/** [32] V2 only — current RevocationRegistry SMT root the proof's
+		 *  non-membership proof was built against. F1 closure, Stage 5.
+		 *  Absent when the installed prover is V1. */
+		revocationRegistryRoot?: string;
 	};
 
 	/**
 	 * Raw public inputs array (for direct contract submission).
-	 * Length: 31 (THREE_TREE_PUBLIC_INPUT_COUNT)
+	 * Length: 31 (V1) or 33 (V2 — F1 closure, Stage 5).
 	 */
 	publicInputsArray: string[];
 }
@@ -362,7 +408,22 @@ export async function generateThreeTreeProof(
 		engagementPath: inputs.engagementPath.map((p) => BigInt(p)),
 		engagementIndex: inputs.engagementIndex,
 		actionCount: BigInt(inputs.actionCount),
-		diversityScore: BigInt(inputs.diversityScore)
+		diversityScore: BigInt(inputs.diversityScore),
+
+		// V2 witnesses + public input (F1 closure). When the underlying prover
+		// is V1, these pass through as undefined and the npm package ignores
+		// them. When V2, all three are required — `validateThreeTreeProofInputs`
+		// enforces all-or-nothing presence (see validator below). The
+		// `revocationRegistryRoot` becomes public input [32] of the proof.
+		...(inputs.revocationPath !== undefined
+			? { revocationPath: inputs.revocationPath.map((p) => BigInt(p)) }
+			: {}),
+		...(inputs.revocationPathBits !== undefined
+			? { revocationPathBits: inputs.revocationPathBits }
+			: {}),
+		...(inputs.revocationRegistryRoot !== undefined
+			? { revocationRegistryRoot: BigInt(inputs.revocationRegistryRoot) }
+			: {})
 	};
 
 	try {
@@ -373,10 +434,58 @@ export async function generateThreeTreeProof(
 
 		const proofHex = '0x' + uint8ArrayToHex(result.proof);
 
-		if (result.publicInputs.length !== THREE_TREE_PUBLIC_INPUT_COUNT) {
+		// Accept either V1 (31) or V2 (33, Stage 5 F1 closure) public inputs.
+		// V2 adds revocation_nullifier [31] and revocation_registry_root [32];
+		// a future npm release of @voter-protocol/noir-prover will produce 33.
+		const isV2 = result.publicInputs.length === THREE_TREE_V2_PUBLIC_INPUT_COUNT;
+		if (
+			result.publicInputs.length !== THREE_TREE_PUBLIC_INPUT_COUNT &&
+			!isV2
+		) {
 			throw new Error(
-				`Expected ${THREE_TREE_PUBLIC_INPUT_COUNT} public inputs, got ${result.publicInputs.length}`
+				`Expected ${THREE_TREE_PUBLIC_INPUT_COUNT} or ${THREE_TREE_V2_PUBLIC_INPUT_COUNT} public inputs, got ${result.publicInputs.length}`
 			);
+		}
+
+		// FU-3.1 — Prover-version capability check + content-validation.
+		// Two distinct failure modes the V2 cutover can produce:
+		//
+		//   1. SHAPE: V1 prover returns 31 inputs even when V2 fields were
+		//      supplied (the npm package silently discarded the witnesses).
+		//      Caught by `length === 33` mismatch. Throws V2_PROVER_NOT_INSTALLED.
+		//
+		//   2. SEMANTIC: a buggy V2 prover release returns 33 inputs but
+		//      [32] doesn't match the caller's supplied revocationRegistryRoot.
+		//      Means the prover used a DIFFERENT root in its non-membership
+		//      constraint than the caller intended — silent integrity loss.
+		//      Caught by direct equality check. Throws V2_PROVER_ROOT_MISMATCH.
+		//
+		// Length-only would catch (1) but not (2). REVIEW 5-1 (Codex/Claude A).
+		const calledWithV2Inputs =
+			inputs.revocationPath !== undefined &&
+			inputs.revocationPathBits !== undefined &&
+			inputs.revocationRegistryRoot !== undefined;
+		if (calledWithV2Inputs && !isV2) {
+			throw new Error(
+				'V2_PROVER_NOT_INSTALLED: V2 inputs were supplied but the prover ' +
+					`returned ${result.publicInputs.length} public inputs (expected ${THREE_TREE_V2_PUBLIC_INPUT_COUNT}). ` +
+					'The installed @voter-protocol/noir-prover is V1; upgrade to >= 2.x before flipping FEATURES.V2_PROOF_GENERATION.'
+			);
+		}
+		if (calledWithV2Inputs && isV2) {
+			// Normalize both sides — caller passes "0x..." or "...", prover may
+			// return either. Compare as bigints to avoid leading-zero / case
+			// mismatches.
+			const expectedRoot = BigInt(inputs.revocationRegistryRoot!);
+			const actualRoot = BigInt(result.publicInputs[32]);
+			if (expectedRoot !== actualRoot) {
+				throw new Error(
+					'V2_PROVER_ROOT_MISMATCH: prover output public input [32] ' +
+						`(${result.publicInputs[32]}) does not match the supplied revocationRegistryRoot ` +
+						`(${inputs.revocationRegistryRoot}). The prover\'s non-membership constraint targeted ` +
+						'a different root than the caller intended; this is a prover-package bug. Do NOT submit.'
+				);
+			}
 		}
 
 		const publicInputs = {
@@ -387,7 +496,17 @@ export async function generateThreeTreeProof(
 			actionDomain: result.publicInputs[27],
 			authorityLevel: parseInt(result.publicInputs[28]) as 1 | 2 | 3 | 4 | 5,
 			engagementRoot: result.publicInputs[29],
-			engagementTier: parseInt(result.publicInputs[30]) as EngagementTier
+			engagementTier: parseInt(result.publicInputs[30]) as EngagementTier,
+			// V2 fields — present only when the prover produced 33 inputs. The
+			// app-side code path reads `publicInputsArray` directly for routing;
+			// these named fields are a convenience for debugging and for callers
+			// that want to read the revocation pair without indexing.
+			...(isV2
+				? {
+						revocationNullifier: result.publicInputs[31],
+						revocationRegistryRoot: result.publicInputs[32]
+				  }
+				: {})
 		};
 
 		return {
@@ -550,6 +669,44 @@ function validateThreeTreeProofInputs(inputs: ThreeTreeProofInputs): void {
 	}
 	if (inputs.engagementIndex < 0 || inputs.engagementIndex >= 2 ** CIRCUIT_DEPTH) {
 		throw new Error(`engagementIndex out of range for depth-${CIRCUIT_DEPTH} tree: ${inputs.engagementIndex}`);
+	}
+
+	// V2 inputs (F1 closure) — all-or-nothing coupled validation. Either all
+	// three V2 fields (revocationPath, revocationPathBits, revocationRegistryRoot)
+	// are present (V2 mode) or all are absent (V1 mode). Partial provision
+	// would produce a proof against an undefined non-membership state.
+	// F-1.4 (2026-04-25): widened from 64 to 128. MUST match
+	//   src/lib/server/smt/revocation-smt.ts and the Noir circuit.
+	const REVOCATION_SMT_DEPTH = 128;
+	const hasRevPath = inputs.revocationPath !== undefined;
+	const hasRevBits = inputs.revocationPathBits !== undefined;
+	const hasRevRoot = inputs.revocationRegistryRoot !== undefined;
+	const v2Count = [hasRevPath, hasRevBits, hasRevRoot].filter(Boolean).length;
+	if (v2Count !== 0 && v2Count !== 3) {
+		throw new Error(
+			'revocationPath, revocationPathBits, and revocationRegistryRoot must be provided together (V2 mode) or all omitted (V1 mode)',
+		);
+	}
+	if (v2Count === 3) {
+		if (!Array.isArray(inputs.revocationPath) || inputs.revocationPath!.length !== REVOCATION_SMT_DEPTH) {
+			throw new Error(
+				`revocationPath must have ${REVOCATION_SMT_DEPTH} siblings (V2 SMT depth), got ${inputs.revocationPath?.length}`,
+			);
+		}
+		inputs.revocationPath!.forEach((sibling, i) => {
+			validateFieldElement(sibling, `revocationPath[${i}]`);
+		});
+		if (!Array.isArray(inputs.revocationPathBits) || inputs.revocationPathBits!.length !== REVOCATION_SMT_DEPTH) {
+			throw new Error(
+				`revocationPathBits must have ${REVOCATION_SMT_DEPTH} bits (V2 SMT depth), got ${inputs.revocationPathBits?.length}`,
+			);
+		}
+		inputs.revocationPathBits!.forEach((bit, i) => {
+			if (bit !== 0 && bit !== 1) {
+				throw new Error(`revocationPathBits[${i}] must be 0 or 1, got ${bit}`);
+			}
+		});
+		validateFieldElement(inputs.revocationRegistryRoot!, 'revocationRegistryRoot');
 	}
 }
 

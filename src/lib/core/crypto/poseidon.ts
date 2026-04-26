@@ -369,6 +369,51 @@ export async function computeNullifier(
 }
 
 /**
+ * REVOCATION_DOMAIN — F1 closure protocol constant (FROZEN post-launch).
+ *
+ * The BN254 field element derived from UTF-8 "commons-revocation-v1",
+ * interpreted big-endian. 21 bytes (168 bits), well under BN254 modulus so
+ * no modular reduction is applied.
+ *
+ * Must match voter-protocol Noir circuit:
+ *   global REVOCATION_DOMAIN: Field = 0x636f6d6d6f6e732d7265766f636174696f6e2d7631;
+ *
+ * NOTE on "v1": this version tag identifies the Poseidon2 H2 input string
+ * ONLY — i.e., the domain-separation byte sequence. It is INDEPENDENT of
+ * the SMT keyspace truncation width, which lives at `SMT_DEPTH` in
+ * `src/lib/server/smt/revocation-smt.ts` (currently 128, F-1.4 widening
+ * 2026-04-25; was 64). A future engineer who reads "v1" and assumes
+ * "64-bit truncation" will derive correct nullifiers but query the wrong
+ * SMT slot. The TS validators in prover-client.ts catch length mismatches
+ * at the boundary, but do not assume domain-version implies depth.
+ *
+ * See REVOCATION-NULLIFIER-SPEC-001 §2.1.
+ */
+export const REVOCATION_DOMAIN =
+	'0x' + (0x636f6d6d6f6e732d7265766f636174696f6e2d7631n).toString(16).padStart(64, '0');
+
+/**
+ * Compute revocation nullifier = H2(districtCommitment, REVOCATION_DOMAIN).
+ *
+ * Used at two points in F1 closure:
+ *   1. Server-side in the relayer endpoint when recording a credential
+ *      revocation on-chain via RevocationRegistry.emitRevocation.
+ *   2. Derived in-circuit by the v2 three-tree prover and exposed as
+ *      public input [31]; the contract cross-checks against this.
+ *
+ * Both derivations use the SAME REVOCATION_DOMAIN constant so the server's
+ * pre-seeded revocation set matches what the circuit will assert against.
+ *
+ * @param districtCommitment - The 24-slot Poseidon2 sponge output (hex string)
+ * @returns Revocation nullifier as hex string
+ */
+export async function computeRevocationNullifier(
+	districtCommitment: string
+): Promise<string> {
+	return poseidon2Hash2(districtCommitment, REVOCATION_DOMAIN);
+}
+
+/**
  * Compute merkle root using Poseidon2 (matches Noir circuit exactly)
  * Uses the same algorithm as compute_merkle_root in main.nr
  */

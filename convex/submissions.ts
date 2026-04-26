@@ -11,6 +11,7 @@ import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { requireAuth } from "./_authHelpers";
 import { CWCXmlGenerator } from "./_cwcXml";
+import { selectActiveCredentialForUser } from "./_credentialSelect";
 
 // =============================================================================
 // SUBMISSIONS — ZK proof creation + congressional delivery
@@ -216,13 +217,7 @@ export const hasActiveDistrictCredential = internalQuery({
       .unique();
     if (!user) return { active: false as const, reason: "user_not_found" };
 
-    const now = Date.now();
-    const credentials = await ctx.db
-      .query("districtCredentials")
-      .withIndex("by_userId_expiresAt", (q) => q.eq("userId", user._id))
-      .collect();
-
-    const active = credentials.find((c) => !c.revokedAt && c.expiresAt > now);
+    const active = await selectActiveCredentialForUser(ctx, user._id);
     if (!active) return { active: false as const, reason: "revoked_or_expired" };
 
     return {
@@ -250,6 +245,29 @@ export const isCredentialActive = internalQuery({
     if (credential.revokedAt) return { active: false as const, reason: "revoked" };
     if (credential.expiresAt < Date.now()) return { active: false as const, reason: "expired" };
     return { active: true as const };
+  },
+});
+
+/**
+ * Internal: Return the `districtCommitment` stored on a specific credential row.
+ *
+ * Used by `deliverToCongress` to supply the server-canonical districtCommitment
+ * to the TEE resolver as part of the Stage 2.7 witness-to-commitment binding
+ * check. The resolver hashes the decrypted witness's 24 district slots with
+ * poseidon2Sponge24 and compares to this value — without it, a prover with a
+ * leaked credentialHash could submit a proof whose witness names districts
+ * different from the ones the server committed to.
+ *
+ * Returns `null` when the row is missing or lacks a commitment (legacy
+ * credential pre-sponge-24). Caller fails delivery closed in that case.
+ */
+export const getIssuingCredentialCommitment = internalQuery({
+  args: { credentialId: v.id("districtCredentials") },
+  handler: async (ctx, { credentialId }) => {
+    const credential = await ctx.db.get(credentialId);
+    if (!credential) return null;
+    if (!credential.districtCommitment) return null;
+    return { districtCommitment: credential.districtCommitment };
   },
 });
 
@@ -947,6 +965,13 @@ export const deliverToCongress = internalAction({
       // issued this submission is now revoked or expired, fail the delivery.
       // Note: submissions from before the 1a rollout may have issuingCredentialId
       // undefined — those are grandfathered through until backfill/expiry.
+      //
+      // Stage 2.7 — we also use the issuing credential to source the canonical
+      // `districtCommitment` passed to the TEE resolver for witness-to-commitment
+      // binding. The lookup is folded into the same branch: both checks require
+      // the same credential row, so keeping the gates adjacent lets a single
+      // missing/invalid credential take one code path.
+      let issuingDistrictCommitment: string | null = null;
       if (submission.issuingCredentialId) {
         const credStatus = await ctx.runQuery(internal.submissions.isCredentialActive, {
           credentialId: submission.issuingCredentialId,
@@ -960,6 +985,35 @@ export const deliverToCongress = internalAction({
           });
           return;
         }
+        const commitmentRow = await ctx.runQuery(internal.submissions.getIssuingCredentialCommitment, {
+          credentialId: submission.issuingCredentialId,
+        });
+        if (!commitmentRow) {
+          // Legacy credential pre-sponge-24, or stored without districtCommitment.
+          // Stage 2.7 requires the commitment for the binding gate — fail closed
+          // rather than pass the resolver an empty value that would fail-open to
+          // the old behavior. User must re-verify to refresh their credential.
+          await ctx.runMutation(internal.submissions.updateDeliveryStatus, {
+            submissionId: args.submissionId,
+            deliveryStatus: "failed",
+            deliveryError: "credential_commitment_missing",
+            expectedAttempts: claim.attempts,
+          });
+          return;
+        }
+        issuingDistrictCommitment = commitmentRow.districtCommitment;
+      } else {
+        // Submission predates Stage 1a issuingCredentialId wiring. Stage 2.7
+        // binding requires a districtCommitment, so these can no longer deliver.
+        // In practice these rows have long-since expired by credential TTL; fail
+        // closed rather than silently skip the binding check.
+        await ctx.runMutation(internal.submissions.updateDeliveryStatus, {
+          submissionId: args.submissionId,
+          deliveryStatus: "failed",
+          deliveryError: "credential_commitment_missing",
+          expectedAttempts: claim.attempts,
+        });
+        return;
       }
 
       // Decrypt witness via TEE resolver
@@ -972,6 +1026,12 @@ export const deliverToCongress = internalAction({
       // /resolve v2 wire contract: see src/lib/server/tee/constituent-resolver.ts ResolveRequest.
       // The TEE runs three atomic gates (decrypt, verify, reconcile). Only all-pass returns
       // ConstituentData. Typed errorCode lets us surface precise failures without PII leakage.
+      //
+      // Stage 2.7: `expected.districtCommitment` is REQUIRED. Sourced from the
+      // issuing credential above — the resolver re-hashes the decrypted witness's
+      // 24 district slots and compares. A mismatch means the proof's public
+      // action_domain was bound to commitment X but the witness names commitment
+      // Y, which is the exact forgery shape the binding gate blocks.
       const resolveResponse = await fetch(`${teeUrl}/resolve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -984,6 +1044,7 @@ export const deliverToCongress = internalAction({
           expected: {
             actionDomain: submission.actionId,
             templateId: submission.templateId,
+            districtCommitment: issuingDistrictCommitment,
           },
         }),
       });

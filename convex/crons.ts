@@ -188,4 +188,31 @@ crons.interval(
   internal.submissions.retryFailedAnchors,
 );
 
+// ---------------------------------------------------------------------------
+// 16. Reschedule Stuck Revocations — F1 closure (Stage 5).
+//     Credentials with revocationStatus='pending' whose last emit attempt is
+//     older than 1 hour are re-queued. Catches Convex-scheduler restart
+//     orphans. Respects MAX_REVOCATION_ATTEMPTS; terminal failures flip to
+//     'failed' and alert operator via the standard /api/internal/alert path.
+// ---------------------------------------------------------------------------
+crons.interval(
+  "reschedule-stuck-revocations",
+  { minutes: 15 },
+  internal.users.rescheduleStuckRevocations,
+);
+
+// ---------------------------------------------------------------------------
+// 17. Reconcile Revocation SMT Root — Wave 2 (KG-2 closure).
+//     Compares Convex's smtRoots.root against the on-chain RevocationRegistry
+//     currentRoot. Drift indicates either (a) on-chain emit failed silently
+//     after Convex committed, (b) operator wrote a divergent root through a
+//     different path, or (c) the precomputed EMPTY_TREE_ROOT in the contract
+//     constructor disagrees with our computed value. Every 1 hour.
+// ---------------------------------------------------------------------------
+crons.interval(
+  "reconcile-revocation-smt-root",
+  { hours: 1 },
+  internal.revocations.reconcileSMTRoot,
+);
+
 export default crons;
