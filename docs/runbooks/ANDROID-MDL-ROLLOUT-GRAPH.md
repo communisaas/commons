@@ -1,7 +1,8 @@
 # Android mDL Rollout Graph
 
 This graph tracks the Android-first mDL rollout as implementation -> review -> commit cycles.
-Android OpenID4VP is the functional lane; raw mdoc and iOS remain separate gates.
+Android OpenID4VP is the functional lane; raw mdoc, iOS, and Apple Business Connect remain
+separate gates and are not prerequisites for Android device rollout.
 
 ## Status Legend
 
@@ -22,7 +23,10 @@ Android OpenID4VP is the functional lane; raw mdoc and iOS remain separate gates
 | A3c | done | Commit SD-JWT disclosure hash binding. | `oid4vp-verify` SD-JWT disclosure tests. | Brutalist Claude pass on selective-disclosure handling. |
 | A4 | done | Commit internal mDL finalizer: no public client mutation can self-upgrade to tier 5. | `mdl-finalization-internal` plus route tests. | Brutalist A5/finalizer debate found no blocking finalizer-boundary issue. |
 | A5 | done | Add credential-hash reuse detection/cooldown for Android OID4VP replay defense in depth. | `mdl-finalization-internal`, `mdl-protocol-policy`, `verify-mdl-start`. | Brutalist CLI debate partial pass: Codex reviewed; Claude/CON contribution failed; no blocking finding surfaced. |
-| A6 | active | Android same-device live smoke: Chrome + Google Wallet mDL. Pre-smoke source readiness is committed. | See same-device checklist below plus `mdl-smoke-readiness`. | Brutalist CLI debate reviewed credential-hash propagation and disclosure copy; accepted findings were fixed before commit. |
+| A6a | done | Android same-device pre-smoke source readiness: bridge `credentialHash` propagation, desktop fail-closed completion, and disclosed-field copy alignment. | `mdl-smoke-readiness`. | Brutalist context `3affd4a1-34a2-4f8f-8fff-b079705347c8`; accepted findings fixed before commit. |
+| A6b | done | Align Android OpenID4VP DC API request envelope: `openid4vp-v1-unsigned`, `response_type=vp_token`, `response_mode=dc_api`, DCQL `mso_mdoc`, exact claim paths. | `verify-mdl-start`, `mdl-protocol-policy`, `mdl-smoke-readiness`, `oid4vp-verify`. | Brutalist context `f519aa7e-4dcb-487b-bf68-843ca6ba9680`; blocking protocol/filter findings fixed before commit. |
+| A6c | active | Implement Android OpenID4VP response handling: normalize Chrome/Wallet DC API authorization responses, handle `vp_token` containers, and route `mso_mdoc` payloads through verified mdoc processing or fail closed. | Add response-shape fixtures plus focused verifier/route tests. | Brutalist review before commit; do not claim live-smoke readiness until response handling is verified. |
+| A6d | queued | Android same-device live smoke: Chrome + Google Wallet mDL on a physical Android device. | See same-device checklist below plus `mdl-smoke-readiness`. | File launch findings before enablement. |
 | A7 | queued | Desktop-to-Android bridge live smoke. | See bridge checklist below. | File launch findings before enablement. |
 | A8 | queued | Update Android-first docs and user-facing copy after smoke results are known. | Static/source review plus touched-file Svelte check. | Brutalist product/security copy review. |
 | A9 | blocked | Raw mdoc T3: SessionTranscript reconstruction and DeviceAuth verification. | mdoc fixture tests and capture-replay regression. | Required before `MDL_MDOC=true` or iOS enablement. |
@@ -34,16 +38,20 @@ Android OpenID4VP is the functional lane; raw mdoc and iOS remain separate gates
 - `A2` committed as `5457d74e` (`Gate Android mDL protocols`).
 - `A3a`/`A3b`/`A3c` committed as `8891c9df` (`Harden mDL issuer verification`).
 - `A4`/`A5` committed as `5ffd93e7` (`Finalize Android mDL verification`); guard test stabilized as `db62f715`.
-- `A6` pre-smoke readiness committed as `d30811f7` (`Prepare Android mDL live smoke`): bridge completed SSE now carries `credentialHash`, desktop completion fails closed unless the hash is 64-hex and `identityCommitmentBound === true`, Android wallet copy discloses postal code/city/state/birth date/document number across live surfaces and help copy, and `mdl-smoke-readiness` guards protocol-field drift.
+- `A6a` pre-smoke readiness committed as `d30811f7` (`Prepare Android mDL live smoke`): bridge completed SSE now carries `credentialHash`, desktop completion fails closed unless the hash is 64-hex and `identityCommitmentBound === true`, Android wallet copy discloses postal code/city/state/birth date/document number across live surfaces and help copy, and `mdl-smoke-readiness` guards protocol-field drift.
 - Brutalist review context `3affd4a1-34a2-4f8f-8fff-b079705347c8` was fully paginated without rerun for the final assessment; valid findings folded into `d30811f7`.
-- Next tractable target is `A6`: live same-device Android smoke with Chrome + Google Wallet mDL.
+- `A6b` request-envelope alignment committed as `aa76a5d9` (`Align Android OpenID4VP request envelope`): same-device and bridge start routes now emit the versioned unsigned OpenID4VP DC API request shape, protocol probes distinguish versioned OpenID4VP from legacy aliases, feature gates still keep raw `org-iso-mdoc` closed, and focused tests lock the DCQL claim paths plus versioned verifier dispatch.
+- Brutalist review contexts `4472a180-0d49-47a7-8c4b-ac4e51490628` and `f519aa7e-4dcb-487b-bf68-843ca6ba9680` surfaced the request-shape/protocol drift and exact-protocol filtering issues; accepted findings were fixed before `aa76a5d9`.
+- Next tractable target is `A6c`: Android OpenID4VP response handling for Chrome/Wallet DC API `vp_token`/`mso_mdoc` responses, with fail-closed tests before any physical same-device smoke.
 - Global `svelte-check` remains a separate repo-health track and is not an Android mDL launch gate unless errors touch this surface.
 
 ## Smoke Criteria
 
-Same-device Android smoke (`A6`) passes only when:
+Same-device Android smoke (`A6d`) passes only when:
 
-- Android Chrome + Google Wallet mDL returns an OpenID4VP response.
+- Android Chrome + Google Wallet mDL accepts the `openid4vp-v1-unsigned` DC API request.
+- The verifier normalizes the returned OpenID4VP authorization response and rejects unsupported or unsigned response shapes.
+- `mso_mdoc` VP tokens are either verified through the mdoc privacy boundary or rejected fail-closed; no raw disclosed fields leave the boundary.
 - `/api/identity/verify-mdl/start` returns no `org-iso-mdoc` request while `MDL_MDOC=false`.
 - `/api/identity/verify-mdl/verify` upgrades the canonical user through the internal finalizer.
 - A forged or unsupported `org-iso-mdoc` verify request is rejected while `MDL_MDOC=false`.
