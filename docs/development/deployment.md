@@ -13,9 +13,8 @@
 npx convex deploy --env-file .env.production
 
 # Frontend (SvelteKit on Cloudflare Pages)
-npm run build
-npx wrangler pages deploy .svelte-kit/cloudflare \
-  --project-name communique-site --branch production
+git push origin main:staging       # staging deploy after CI passes
+git push origin main:production    # production deploy after CI passes
 ```
 
 Note: `npx convex deploy -y` silently no-ops against prod — always pass `--env-file`.
@@ -116,10 +115,13 @@ Convex is declarative and code-driven: there are no migration files. Schema diff
 # 1. Deploy Convex backend
 npx convex deploy --env-file .env.production
 
-# 2. Deploy SvelteKit frontend
-npm run build && npx wrangler pages deploy .svelte-kit/cloudflare \
-  --project-name communique-site --branch production
+# 2. Push the frontend branch. GitHub Actions runs CI, then deploys if CI passes.
+git push origin main:production
 ```
+
+Direct `wrangler pages deploy` is an emergency/manual operation, not the standard path.
+The normal deploy path is the GitHub Actions workflow so CI, immutable Pages health, and
+production-domain health gates are recorded together.
 
 ### Preview Deploy (non-production branch)
 
@@ -136,6 +138,19 @@ configuration points branch builds at the same Convex URL and KV bindings as pro
 Until separate staging Convex and KV resources are provisioned, treat Android device smoke
 on staging as controlled production-backed smoke with test accounts and no Business Connect
 or live congressional delivery paths.
+
+The deploy workflow hard-checks the immutable Pages deployment URL for every branch after
+`wrangler pages deploy`. Production also hard-checks `commons.email`. The staging custom
+domain is validated during the real-device smoke pass because Cloudflare may return WAF
+responses to GitHub-hosted runners that do not reproduce from normal clients.
+
+Real-device staging smoke should cover:
+
+1. Android Chrome same-device mDL/OpenID4VP wallet handoff.
+2. Desktop-to-phone bridge handoff.
+3. Address re-grounding from stale district data to the current district.
+4. Submission after re-grounding uses the new district commitment.
+5. No Business Connect or live congressional delivery path is exercised.
 
 ### Rollback
 

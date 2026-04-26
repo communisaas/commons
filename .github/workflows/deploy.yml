@@ -41,14 +41,26 @@ jobs:
       - name: Resolve deployment URL
         run: |
           case "${DEPLOY_BRANCH}" in
-            production) echo "DEPLOY_URL=https://commons.email" >> "$GITHUB_ENV" ;;
-            staging) echo "DEPLOY_URL=https://staging.commons.email" >> "$GITHUB_ENV" ;;
-            main) echo "DEPLOY_URL=https://main.communique-site.pages.dev" >> "$GITHUB_ENV" ;;
-            *) echo "DEPLOY_URL=https://${DEPLOY_BRANCH}.communique-site.pages.dev" >> "$GITHUB_ENV" ;;
+            production) echo "DEPLOY_PUBLIC_URL=https://commons.email" >> "$GITHUB_ENV" ;;
+            staging) echo "DEPLOY_PUBLIC_URL=https://staging.commons.email" >> "$GITHUB_ENV" ;;
+            main) echo "DEPLOY_PUBLIC_URL=https://main.communique-site.pages.dev" >> "$GITHUB_ENV" ;;
+            *) echo "DEPLOY_PUBLIC_URL=https://${DEPLOY_BRANCH}.communique-site.pages.dev" >> "$GITHUB_ENV" ;;
           esac
 
       - name: Deploy
-        run: npx wrangler pages deploy .svelte-kit/cloudflare --project-name communique-site --branch "$DEPLOY_BRANCH" --commit-hash "$DEPLOY_SHA"
+        run: |
+          set -o pipefail
+          deploy_output=$(mktemp)
+          npx wrangler pages deploy .svelte-kit/cloudflare --project-name communique-site --branch "$DEPLOY_BRANCH" --commit-hash "$DEPLOY_SHA" 2>&1 | tee "$deploy_output"
+          deployment_url=$(sed -nE 's/.*Take a peek over at (https:\/\/[a-z0-9-]+\.communique-site\.pages\.dev).*/\1/p' "$deploy_output" | head -n 1)
+
+          if [ -z "$deployment_url" ]; then
+            echo "::error::Unable to parse immutable Cloudflare Pages deployment URL from wrangler output."
+            cat "$deploy_output"
+            exit 1
+          fi
+
+          echo "DEPLOY_HEALTH_URL=${deployment_url}" >> "$GITHUB_ENV"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
@@ -56,20 +68,56 @@ jobs:
       - name: Purge CDN cache
         if: github.event.workflow_run.head_branch == 'production'
         run: |
-          response=$(curl --fail-with-body -sS -X POST "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/purge_cache" \
+          response=$(curl -sS --max-time 30 -w "\n%{http_code}" -X POST "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/purge_cache" \
             -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"purge_everything":true}')
-          echo "$response" | jq -e '.success == true' >/dev/null
+            -d '{"purge_everything":true}') || {
+              echo "::warning::Cloudflare cache purge request failed; deployment health check will still run."
+              exit 0
+            }
+
+          http_status=$(printf '%s\n' "$response" | tail -n 1)
+          body=$(printf '%s\n' "$response" | sed '$d')
+
+          if ! [[ "$http_status" =~ ^[0-9]{3}$ ]]; then
+            echo "::warning::Cloudflare cache purge returned an unreadable HTTP status; deployment health check will still run."
+            exit 0
+          fi
+
+          if (( http_status < 200 || http_status >= 300 )); then
+            echo "::warning::Cloudflare cache purge returned HTTP ${http_status}; deployment health check will still run."
+            exit 0
+          fi
+
+          if ! echo "$body" | jq -e '.success == true' >/dev/null; then
+            echo "::warning::Cloudflare cache purge response did not report success; deployment health check will still run."
+          fi
 
       - name: Verify deployment health
         run: |
           for attempt in {1..12}; do
-            if response=$(curl --fail-with-body -sS --max-time 20 "$DEPLOY_URL/api/health"); then
+            if response=$(curl --fail-with-body -sS --max-time 20 "$DEPLOY_HEALTH_URL/api/health"); then
               echo "$response"
               echo "$response" | jq -e '.status == "ok"' >/dev/null && exit 0
+            elif [ -n "${response:-}" ]; then
+              echo "$response"
             fi
             echo "Deployment health check failed on attempt ${attempt}; retrying..."
+            sleep 10
+          done
+          exit 1
+
+      - name: Verify production domain health
+        if: github.event.workflow_run.head_branch == 'production'
+        run: |
+          for attempt in {1..12}; do
+            if response=$(curl --fail-with-body -sS --max-time 20 "$DEPLOY_PUBLIC_URL/api/health"); then
+              echo "$response"
+              echo "$response" | jq -e '.status == "ok"' >/dev/null && exit 0
+            elif [ -n "${response:-}" ]; then
+              echo "$response"
+            fi
+            echo "Production domain health check failed on attempt ${attempt}; retrying..."
             sleep 10
           done
           exit 1
