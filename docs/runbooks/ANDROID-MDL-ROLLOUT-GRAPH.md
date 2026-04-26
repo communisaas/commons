@@ -22,7 +22,7 @@ Android OpenID4VP is the functional lane; raw mdoc and iOS remain separate gates
 | A3c | done | Commit SD-JWT disclosure hash binding. | `oid4vp-verify` SD-JWT disclosure tests. | Brutalist Claude pass on selective-disclosure handling. |
 | A4 | done | Commit internal mDL finalizer: no public client mutation can self-upgrade to tier 5. | `mdl-finalization-internal` plus route tests. | Brutalist A5/finalizer debate found no blocking finalizer-boundary issue. |
 | A5 | done | Add credential-hash reuse detection/cooldown for Android OID4VP replay defense in depth. | `mdl-finalization-internal`, `mdl-protocol-policy`, `verify-mdl-start`. | Brutalist CLI debate partial pass: Codex reviewed; Claude/CON contribution failed; no blocking finding surfaced. |
-| A6 | active | Android same-device live smoke: Chrome + Google Wallet mDL. | See same-device checklist below. | File launch findings before enablement. |
+| A6 | active | Android same-device live smoke: Chrome + Google Wallet mDL. Pre-smoke source readiness is committed. | See same-device checklist below plus `mdl-smoke-readiness`. | Brutalist CLI debate reviewed credential-hash propagation and disclosure copy; accepted findings were fixed before commit. |
 | A7 | queued | Desktop-to-Android bridge live smoke. | See bridge checklist below. | File launch findings before enablement. |
 | A8 | queued | Update Android-first docs and user-facing copy after smoke results are known. | Static/source review plus touched-file Svelte check. | Brutalist product/security copy review. |
 | A9 | blocked | Raw mdoc T3: SessionTranscript reconstruction and DeviceAuth verification. | mdoc fixture tests and capture-replay regression. | Required before `MDL_MDOC=true` or iOS enablement. |
@@ -34,6 +34,8 @@ Android OpenID4VP is the functional lane; raw mdoc and iOS remain separate gates
 - `A2` committed as `5457d74e` (`Gate Android mDL protocols`).
 - `A3a`/`A3b`/`A3c` committed as `8891c9df` (`Harden mDL issuer verification`).
 - `A4`/`A5` committed as `5ffd93e7` (`Finalize Android mDL verification`); guard test stabilized as `db62f715`.
+- `A6` pre-smoke readiness committed as `d30811f7` (`Prepare Android mDL live smoke`): bridge completed SSE now carries `credentialHash`, desktop completion fails closed unless the hash is 64-hex and `identityCommitmentBound === true`, Android wallet copy discloses postal code/city/state/birth date/document number across live surfaces and help copy, and `mdl-smoke-readiness` guards protocol-field drift.
+- Brutalist review context `3affd4a1-34a2-4f8f-8fff-b079705347c8` was fully paginated without rerun for the final assessment; valid findings folded into `d30811f7`.
 - Next tractable target is `A6`: live same-device Android smoke with Chrome + Google Wallet mDL.
 - Global `svelte-check` remains a separate repo-health track and is not an Android mDL launch gate unless errors touch this surface.
 
