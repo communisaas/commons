@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
+import { isMdlBridgeEnabled, isMdlProtocolEnabled } from '$lib/config/features';
 import { createBridgeSession } from '$lib/server/bridge-session';
 
 const StartSchema = z.object({
@@ -15,7 +16,9 @@ const StartSchema = z.object({
 function sanitizeLabel(s: string): string {
 	// Remove bidi override characters and other format/control chars
 	// eslint-disable-next-line no-control-regex
-	return s.replace(/[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '').trim();
+	return s
+		.replace(/[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+		.trim();
 }
 
 /**
@@ -25,6 +28,10 @@ function sanitizeLabel(s: string): string {
  * The QR encodes sessionId + secret for the phone to claim.
  */
 export const POST: RequestHandler = async ({ request, locals, platform, url }) => {
+	if (!isMdlBridgeEnabled()) {
+		throw error(404, 'Not found');
+	}
+
 	const session = locals.session;
 	if (!session?.userId) {
 		throw error(401, 'Authentication required');
@@ -56,11 +63,10 @@ export const POST: RequestHandler = async ({ request, locals, platform, url }) =
 
 	try {
 		// Generate ECDH key pair for credential decryption
-		const keyPair = await crypto.subtle.generateKey(
-			{ name: 'ECDH', namedCurve: 'P-256' },
-			true,
-			['deriveKey', 'deriveBits']
-		);
+		const keyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, [
+			'deriveKey',
+			'deriveBits'
+		]);
 
 		const privateKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
 
@@ -71,44 +77,47 @@ export const POST: RequestHandler = async ({ request, locals, platform, url }) =
 			.map((b) => b.toString(16).padStart(2, '0'))
 			.join('');
 
-		// Build mDL request configs (same as verify-mdl/start)
-		const cborModule = await import('cbor-web');
-		const cbor = cborModule.default ?? cborModule;
-		const { encode, Tagged } = cbor;
+		const requests: Array<{ protocol: string; data: unknown }> = [];
 
-		const itemsRequest = new Map<string, unknown>([
-			['docType', 'org.iso.18013.5.1.mDL'],
-			[
-				'nameSpaces',
-				new Map([
-					[
-						'org.iso.18013.5.1',
-						new Map<string, boolean>([
-							['resident_postal_code', false],
-							['resident_city', false],
-							['resident_state', false],
-							['birth_date', false],
-							['document_number', false]
-						])
-					]
-				])
-			]
-		]);
+		if (isMdlProtocolEnabled('org-iso-mdoc')) {
+			const cborModule = await import('cbor-web');
+			const cbor = cborModule.default ?? cborModule;
+			const { encode, Tagged } = cbor;
 
-		const itemsRequestBytes = encode(itemsRequest);
-		const taggedItemsRequest = new Tagged(24, new Uint8Array(itemsRequestBytes));
-		const docRequest = new Map<string, unknown>([['itemsRequest', taggedItemsRequest]]);
-		const deviceRequest = new Map<string, unknown>([
-			['version', '1.0'],
-			['docRequests', [docRequest]]
-		]);
+			const itemsRequest = new Map<string, unknown>([
+				['docType', 'org.iso.18013.5.1.mDL'],
+				[
+					'nameSpaces',
+					new Map([
+						[
+							'org.iso.18013.5.1',
+							new Map<string, boolean>([
+								['resident_postal_code', false],
+								['resident_city', false],
+								['resident_state', false],
+								['birth_date', false],
+								['document_number', false]
+							])
+						]
+					])
+				]
+			]);
 
-		const deviceRequestBytes = encode(deviceRequest);
-		const deviceRequestB64 = btoa(String.fromCharCode(...new Uint8Array(deviceRequestBytes)));
+			const itemsRequestBytes = encode(itemsRequest);
+			const taggedItemsRequest = new Tagged(24, new Uint8Array(itemsRequestBytes));
+			const docRequest = new Map<string, unknown>([['itemsRequest', taggedItemsRequest]]);
+			const deviceRequest = new Map<string, unknown>([
+				['version', '1.0'],
+				['docRequests', [docRequest]]
+			]);
 
-		const requests = [
-			{ protocol: 'org-iso-mdoc', data: deviceRequestB64 },
-			{
+			const deviceRequestBytes = encode(deviceRequest);
+			const deviceRequestB64 = btoa(String.fromCharCode(...new Uint8Array(deviceRequestBytes)));
+			requests.push({ protocol: 'org-iso-mdoc', data: deviceRequestB64 });
+		}
+
+		if (isMdlProtocolEnabled('openid4vp')) {
+			requests.push({
 				protocol: 'openid4vp',
 				data: {
 					client_id: qrOrigin,
@@ -131,8 +140,8 @@ export const POST: RequestHandler = async ({ request, locals, platform, url }) =
 						]
 					}
 				}
-			}
-		];
+			});
+		}
 
 		const result = await createBridgeSession(
 			session.userId,

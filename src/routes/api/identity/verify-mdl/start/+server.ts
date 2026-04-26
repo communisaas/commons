@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { isAnyMdlProtocolEnabled, isMdlProtocolEnabled } from '$lib/config/features';
 import { devSessionStore } from '../_dev-session-store';
 
 /**
@@ -10,8 +11,16 @@ import { devSessionStore } from '../_dev-session-store';
  *
  * The private key is stored in Workers KV with 5-min TTL.
  * The public key + request configs are returned to the client.
+ *
+ * Android-first launch gate: returns only protocols that are safe to operate.
+ * OpenID4VP is enabled for Android. Raw org-iso-mdoc stays off until T3
+ * DeviceAuth verification ships.
  */
 export const POST: RequestHandler = async ({ locals, platform }) => {
+	if (!isAnyMdlProtocolEnabled()) {
+		throw error(404, 'Not found');
+	}
+
 	// Authentication check
 	const session = locals.session;
 	if (!session?.userId) {
@@ -54,92 +63,76 @@ export const POST: RequestHandler = async ({ locals, platform }) => {
 			devSessionStore.set(kvKey, { data: sessionData, expires: Date.now() + 300_000 });
 		}
 
-		// Build dual-protocol request configurations
+		const requests: Array<{ protocol: string; data: unknown }> = [];
 
-		// org-iso-mdoc: CBOR-encoded DeviceRequest per ISO 18013-5 §8.3.2.1.2
-		const cborModule = await import('cbor-web');
-		const cbor = cborModule.default ?? cborModule;
-		const { encode, Tagged } = cbor;
+		if (isMdlProtocolEnabled('org-iso-mdoc')) {
+			// org-iso-mdoc: CBOR-encoded DeviceRequest per ISO 18013-5 §8.3.2.1.2
+			const cborModule = await import('cbor-web');
+			const cbor = cborModule.default ?? cborModule;
+			const { encode, Tagged } = cbor;
 
-		// ItemsRequest: what we're asking the wallet to disclose
-		// Fields: address (district derivation) + identity (commitment for Sybil resistance)
-		// All fields use intentToRetain: false — wallet should not persist disclosure
-		const itemsRequest = new Map<string, unknown>([
-			['docType', 'org.iso.18013.5.1.mDL'],
-			[
-				'nameSpaces',
-				new Map([
-					[
-						'org.iso.18013.5.1',
-						new Map<string, boolean>([
-							// Address fields → district derivation (discarded after deriveDistrict)
-							['resident_postal_code', false],
-							['resident_city', false],
-							['resident_state', false],
-							// Identity fields → identity commitment (hashed, then discarded)
-							// birth_date: only year extracted for commitment computation
-							// document_number: hashed into commitment, never stored
-							['birth_date', false],
-							['document_number', false]
-						])
-					]
-				])
-			]
-		]);
+			// ItemsRequest: what we're asking the wallet to disclose.
+			const itemsRequest = new Map<string, unknown>([
+				['docType', 'org.iso.18013.5.1.mDL'],
+				[
+					'nameSpaces',
+					new Map([
+						[
+							'org.iso.18013.5.1',
+							new Map<string, boolean>([
+								['resident_postal_code', false],
+								['resident_city', false],
+								['resident_state', false],
+								['birth_date', false],
+								['document_number', false]
+							])
+						]
+					])
+				]
+			]);
 
-		// Wrap ItemsRequest in CBOR tag 24 (bstr-wrapped CBOR) per ISO 18013-5
-		const itemsRequestBytes = encode(itemsRequest);
-		const taggedItemsRequest = new Tagged(24, new Uint8Array(itemsRequestBytes));
+			const itemsRequestBytes = encode(itemsRequest);
+			const taggedItemsRequest = new Tagged(24, new Uint8Array(itemsRequestBytes));
+			const docRequest = new Map<string, unknown>([['itemsRequest', taggedItemsRequest]]);
+			const deviceRequest = new Map<string, unknown>([
+				['version', '1.0'],
+				['docRequests', [docRequest]]
+			]);
 
-		// DocRequest (readerAuth omitted -- optional per spec, requires registered reader cert)
-		const docRequest = new Map<string, unknown>([['itemsRequest', taggedItemsRequest]]);
+			const deviceRequestBytes = encode(deviceRequest);
+			const deviceRequestB64 = btoa(String.fromCharCode(...new Uint8Array(deviceRequestBytes)));
+			requests.push({ protocol: 'org-iso-mdoc', data: deviceRequestB64 });
+		}
 
-		// DeviceRequest envelope
-		const deviceRequest = new Map<string, unknown>([
-			['version', '1.0'],
-			['docRequests', [docRequest]]
-		]);
-
-		// CBOR-encode, then base64 for JSON transport (client decodes before passing to wallet)
-		const deviceRequestBytes = encode(deviceRequest);
-		const deviceRequestB64 = btoa(
-			String.fromCharCode(...new Uint8Array(deviceRequestBytes))
-		);
-
-		const mdocRequest = {
-			protocol: 'org-iso-mdoc',
-			data: deviceRequestB64
-		};
-
-		// openid4vp: DCQL query (Chrome alternative)
-		const oid4vpRequest = {
-			protocol: 'openid4vp',
-			data: {
-				// DCQL (Digital Credentials Query Language) format
-				client_id: platform?.env?.PUBLIC_APP_URL ?? 'https://commons.email',
-				nonce,
-				dcql_query: {
-					credentials: [
-						{
-							format: 'mso_mdoc',
-							doctype: 'org.iso.18013.5.1.mDL',
-							claims: {
-								'org.iso.18013.5.1': [
-									{ name: 'resident_postal_code', intent_to_retain: false },
-									{ name: 'resident_city', intent_to_retain: false },
-									{ name: 'resident_state', intent_to_retain: false },
-									{ name: 'birth_date', intent_to_retain: false },
-									{ name: 'document_number', intent_to_retain: false }
-								]
+		if (isMdlProtocolEnabled('openid4vp')) {
+			requests.push({
+				protocol: 'openid4vp',
+				data: {
+					client_id: platform?.env?.PUBLIC_APP_URL ?? 'https://commons.email',
+					nonce,
+					dcql_query: {
+						credentials: [
+							{
+								format: 'mso_mdoc',
+								doctype: 'org.iso.18013.5.1.mDL',
+								claims: {
+									'org.iso.18013.5.1': [
+										{ name: 'resident_postal_code', intent_to_retain: false },
+										{ name: 'resident_city', intent_to_retain: false },
+										{ name: 'resident_state', intent_to_retain: false },
+										{ name: 'birth_date', intent_to_retain: false },
+										{ name: 'document_number', intent_to_retain: false }
+									]
+								}
 							}
-						}
-					]
+						]
+					}
 				}
-			}
-		};
+			});
+		}
 
 		return json({
-			requests: [mdocRequest, oid4vpRequest],
+			requests,
 			nonce,
 			expiresAt: Date.now() + 300_000 // 5 min TTL matches KV
 		});
@@ -148,4 +141,3 @@ export const POST: RequestHandler = async ({ locals, platform }) => {
 		throw error(500, 'Failed to initialize mDL verification');
 	}
 };
-

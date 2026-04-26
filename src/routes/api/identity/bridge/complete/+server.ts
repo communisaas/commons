@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { isMdlBridgeEnabled, isMdlProtocolEnabled } from '$lib/config/features';
 import {
 	getBridgeSession,
 	completeBridgeSession,
@@ -28,6 +29,10 @@ const CompleteSchema = z.object({
  * updates user record. Desktop SSE stream picks up the status change.
  */
 export const POST: RequestHandler = async ({ request, platform }) => {
+	if (!isMdlBridgeEnabled()) {
+		throw error(404, 'Not found');
+	}
+
 	let sessionId: string | undefined;
 	let hmacVerified = false; // Only fail session if caller proved possession
 
@@ -43,6 +48,9 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		}
 
 		sessionId = input.sessionId;
+		if (!isMdlProtocolEnabled(input.protocol)) {
+			throw error(404, 'Not found');
+		}
 
 		// Retrieve bridge session — secret comes from KV, never from client
 		const session = await getBridgeSession(input.sessionId, platform);
@@ -89,16 +97,19 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 
 		if (!result.success) {
 			await failBridgeSession(input.sessionId, result.message ?? 'Verification failed', platform);
-			return json(
-				{ error: result.error, message: result.message },
-				{ status: 422 }
-			);
+			return json({ error: result.error, message: result.message }, { status: 422 });
 		}
 
 		// Identity commitment is guaranteed present on success (missing fields = hard failure)
 		if (!result.identityCommitment) {
 			await failBridgeSession(input.sessionId, 'Identity fields not disclosed by wallet', platform);
-			return json({ error: 'missing_identity_fields', message: 'Wallet must disclose birth date and document number' }, { status: 422 });
+			return json(
+				{
+					error: 'missing_identity_fields',
+					message: 'Wallet must disclose birth date and document number'
+				},
+				{ status: 422 }
+			);
 		}
 		const identityCommitment = result.identityCommitment;
 

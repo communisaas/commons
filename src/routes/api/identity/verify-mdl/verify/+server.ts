@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { isAnyMdlProtocolEnabled, isMdlProtocolEnabled } from '$lib/config/features';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 
 const VerifyMdlSchema = z.object({
@@ -21,6 +22,10 @@ const VerifyMdlSchema = z.object({
  * The ephemeral key is deleted after use (one-time use).
  */
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
+	if (!isAnyMdlProtocolEnabled()) {
+		throw error(404, 'Not found');
+	}
+
 	// Authentication check
 	const session = locals.session;
 	if (!session?.userId) {
@@ -33,10 +38,14 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		try {
 			input = VerifyMdlSchema.parse(body);
 		} catch (e) {
-			if (e instanceof z.ZodError) throw error(400, `Invalid request: ${e.errors[0]?.message ?? 'validation failed'}`);
+			if (e instanceof z.ZodError)
+				throw error(400, `Invalid request: ${e.errors[0]?.message ?? 'validation failed'}`);
 			throw e;
 		}
 		const { protocol, data, nonce } = input;
+		if (!isMdlProtocolEnabled(protocol)) {
+			throw error(404, 'Not found');
+		}
 
 		// Retrieve ephemeral private key from KV (one-time use)
 		const kvKey = `mdl-session:${nonce}`;
@@ -84,16 +93,25 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 		if (!result.success) {
 			console.error('[mDL Verify] Verification failed:', result.error, result.message);
-			return json({
-				error: result.error,
-				message: result.message,
-				...(result.supportedStates && { supportedStates: result.supportedStates })
-			}, { status: 422 });
+			return json(
+				{
+					error: result.error,
+					message: result.message,
+					...(result.supportedStates && { supportedStates: result.supportedStates })
+				},
+				{ status: 422 }
+			);
 		}
 
 		// Identity commitment is guaranteed present on success (missing fields = hard failure)
 		if (!result.identityCommitment) {
-			return json({ error: 'missing_identity_fields', message: 'Wallet must disclose birth date and document number' }, { status: 422 });
+			return json(
+				{
+					error: 'missing_identity_fields',
+					message: 'Wallet must disclose birth date and document number'
+				},
+				{ status: 422 }
+			);
 		}
 		const identityCommitment = result.identityCommitment;
 
@@ -122,7 +140,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			userId: canonicalUserId as any,
 			verifiedAt: now,
 			addressVerificationMethod: 'mdl',
-			documentType: 'mdl',
+			documentType: 'mdl'
 		});
 
 		console.log('[mDL Verify] Success:', {

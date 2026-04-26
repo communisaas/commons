@@ -76,5 +76,60 @@ export const FEATURES = {
 	ENGAGEMENT_METRICS: false,
 
 	/** Passkey (WebAuthn) sign-in option on the login screen */
-	PASSKEY: false
+	PASSKEY: false,
+
+	/**
+	 * Android mDL over OpenID4VP.
+	 *
+	 * This is the first functional rollout lane. OpenID4VP responses are JWT /
+	 * SD-JWT based, and `processOid4vpResponse` verifies the token signature and
+	 * compares the VP nonce against the server-issued nonce before trusting
+	 * claims. It does not depend on Apple Business Connect.
+	 */
+	MDL_ANDROID_OID4VP: true,
+
+	/**
+	 * Raw ISO mdoc (`org-iso-mdoc`) lane.
+	 *
+	 * Keep this false until T3 lands: reconstruct SessionTranscript and verify
+	 * DeviceMAC / DeviceSignature per ISO 18013-5 section 9.1.3. The current
+	 * presence gate rejects malformed wallets but does not stop capture-replay.
+	 */
+	MDL_MDOC: false,
+
+	/**
+	 * iOS/Safari same-device lane.
+	 *
+	 * Apple Business Connect is an iOS availability gate, not an Android launch
+	 * gate. Keep false until ABC enrollment and `MDL_MDOC` are both ready.
+	 */
+	MDL_IOS: false,
+
+	/**
+	 * Desktop to phone bridge. For the Android-first rollout this bridge returns
+	 * only OpenID4VP request configs and the complete endpoint rejects mdoc.
+	 */
+	MDL_BRIDGE: true,
+
+	/**
+	 * Legacy alias retained only for old string-search tests and migration
+	 * comments. New code must use the protocol/platform flags above.
+	 */
+	MDL: false
 } as const;
+
+export type MdlProtocol = 'openid4vp' | 'org-iso-mdoc';
+
+export function isMdlProtocolEnabled(protocol: string): boolean {
+	if (protocol === 'openid4vp') return FEATURES.MDL_ANDROID_OID4VP;
+	if (protocol === 'org-iso-mdoc') return FEATURES.MDL_MDOC;
+	return false;
+}
+
+export function isAnyMdlProtocolEnabled(): boolean {
+	return FEATURES.MDL_ANDROID_OID4VP || FEATURES.MDL_MDOC;
+}
+
+export function isMdlBridgeEnabled(): boolean {
+	return FEATURES.MDL_BRIDGE && isAnyMdlProtocolEnabled();
+}

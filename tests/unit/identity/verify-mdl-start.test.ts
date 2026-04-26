@@ -6,8 +6,7 @@
  *   - Session nonce generation (32 bytes random, hex-encoded)
  *   - KV storage with 5-minute TTL
  *   - Dev mode fallback (in-memory devSessionStore)
- *   - CBOR encoding of ISO 18013-5 DeviceRequest
- *   - Dual-protocol response (org-iso-mdoc + openid4vp)
+ *   - Android-first OpenID4VP response
  *   - Auth guard (requires authenticated session)
  *   - Error cases: missing platform bindings, KV unavailable, crypto failures
  *
@@ -17,7 +16,7 @@
  *   - Private key stored in KV with 5-min TTL, bound to session userId
  *   - Nonce is 32 bytes of cryptographic randomness (64 hex chars)
  *   - KV key format: "mdl-session:{nonce}"
- *   - CBOR request follows ISO 18013-5 section 8.3.2.1.2
+ *   - Raw org-iso-mdoc stays omitted while MDL_MDOC is false
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -58,6 +57,18 @@ vi.mock('cbor-web', () => ({
 	encode: mockCborEncode,
 	Tagged: mockCborTagged
 }));
+
+// Android-first policy is active by default in features.ts. Keep the mock so
+// tests can still override individual constants in future cases.
+vi.mock('$lib/config/features', async () => {
+	const actual = await vi.importActual<{
+		FEATURES: Record<string, unknown>;
+	}>('$lib/config/features');
+	return {
+		...actual,
+		FEATURES: { ...actual.FEATURES, MDL_ANDROID_OID4VP: true, MDL_MDOC: false }
+	};
+});
 
 // ---------------------------------------------------------------------------
 // Import the module under test AFTER mocks are set up
@@ -447,67 +458,17 @@ describe('POST /api/identity/verify-mdl/start', () => {
 	});
 
 	// ============================================================================
-	// CBOR Encoding
+	// Protocol Policy
 	// ============================================================================
 
-	describe('CBOR encoding of ISO 18013-5 DeviceRequest', () => {
-		it('should encode a DeviceRequest with CBOR', async () => {
+	describe('Android-first protocol policy', () => {
+		it('should not build raw mdoc CBOR while MDL_MDOC is false', async () => {
 			const event = makeRequestEvent({ platform: null });
 
 			await POST(event);
 
-			// cbor.encode should have been called multiple times:
-			// once for ItemsRequest, once for DeviceRequest
-			expect(mockCborEncode).toHaveBeenCalled();
-		});
-
-		it('should create a CBOR Tagged value (tag 24) for ItemsRequest', async () => {
-			const event = makeRequestEvent({ platform: null });
-
-			await POST(event);
-
-			// Tagged is called with tag 24 (bstr-wrapped CBOR per ISO 18013-5)
-			expect(mockCborTagged).toHaveBeenCalledWith(24, expect.any(Uint8Array));
-		});
-
-		it('should request residential address fields only', async () => {
-			// The ItemsRequest should contain only: resident_postal_code, resident_city, resident_state
-			const event = makeRequestEvent({ platform: null });
-
-			await POST(event);
-
-			// Verify CBOR encode was called with a Map containing the correct fields
-			const encodeCallArgs = mockCborEncode.mock.calls;
-			// The first encode call is for itemsRequest which contains the namespaces
-			const itemsRequestArg = encodeCallArgs[0][0];
-
-			// Should be a Map
-			expect(itemsRequestArg).toBeInstanceOf(Map);
-			expect(itemsRequestArg.get('docType')).toBe('org.iso.18013.5.1.mDL');
-
-			// Check the requested fields
-			const nameSpaces = itemsRequestArg.get('nameSpaces');
-			expect(nameSpaces).toBeInstanceOf(Map);
-
-			const mdlNs = nameSpaces.get('org.iso.18013.5.1');
-			expect(mdlNs).toBeInstanceOf(Map);
-			expect(mdlNs.has('resident_postal_code')).toBe(true);
-			expect(mdlNs.has('resident_city')).toBe(true);
-			expect(mdlNs.has('resident_state')).toBe(true);
-		});
-
-		it('should set intentToRetain: false for all requested fields', async () => {
-			const event = makeRequestEvent({ platform: null });
-
-			await POST(event);
-
-			const itemsRequestArg = mockCborEncode.mock.calls[0][0];
-			const nameSpaces = itemsRequestArg.get('nameSpaces');
-			const mdlNs = nameSpaces.get('org.iso.18013.5.1');
-
-			expect(mdlNs.get('resident_postal_code')).toBe(false);
-			expect(mdlNs.get('resident_city')).toBe(false);
-			expect(mdlNs.get('resident_state')).toBe(false);
+			expect(mockCborEncode).not.toHaveBeenCalled();
+			expect(mockCborTagged).not.toHaveBeenCalled();
 		});
 	});
 
@@ -516,14 +477,13 @@ describe('POST /api/identity/verify-mdl/start', () => {
 	// ============================================================================
 
 	describe('response format', () => {
-		it('should return dual-protocol request configs', async () => {
+		it('should return only the enabled OpenID4VP request config', async () => {
 			const event = makeRequestEvent({ platform: null });
 			const response = await POST(event);
 			const data = await response.json();
 
-			expect(data.requests).toHaveLength(2);
-			expect(data.requests[0].protocol).toBe('org-iso-mdoc');
-			expect(data.requests[1].protocol).toBe('openid4vp');
+			expect(data.requests).toHaveLength(1);
+			expect(data.requests[0].protocol).toBe('openid4vp');
 		});
 
 		it('should return nonce in the response', async () => {
@@ -546,16 +506,14 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			expect(data.expiresAt).toBeLessThanOrEqual(after + 300_000);
 		});
 
-		it('should include base64-encoded CBOR data for org-iso-mdoc request', async () => {
+		it('should not include org-iso-mdoc while the mdoc lane is closed', async () => {
 			const event = makeRequestEvent({ platform: null });
 			const response = await POST(event);
 			const data = await response.json();
 
-			const mdocRequest = data.requests[0];
-			expect(mdocRequest.protocol).toBe('org-iso-mdoc');
-			expect(typeof mdocRequest.data).toBe('string');
-			// Should be base64 encoded (btoa output)
-			expect(mdocRequest.data.length).toBeGreaterThan(0);
+			expect(data.requests.map((request: { protocol: string }) => request.protocol)).not.toContain(
+				'org-iso-mdoc'
+			);
 		});
 
 		it('should include DCQL query for openid4vp request', async () => {
@@ -563,7 +521,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const response = await POST(event);
 			const data = await response.json();
 
-			const oid4vpRequest = data.requests[1];
+			const oid4vpRequest = data.requests[0];
 			expect(oid4vpRequest.protocol).toBe('openid4vp');
 			expect(oid4vpRequest.data.dcql_query).toBeDefined();
 			expect(oid4vpRequest.data.dcql_query.credentials).toHaveLength(1);
@@ -576,7 +534,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const response = await POST(event);
 			const data = await response.json();
 
-			const oid4vpRequest = data.requests[1];
+			const oid4vpRequest = data.requests[0];
 			expect(oid4vpRequest.data.nonce).toBe(data.nonce);
 		});
 
@@ -585,7 +543,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const response = await POST(event);
 			const data = await response.json();
 
-			const oid4vpRequest = data.requests[1];
+			const oid4vpRequest = data.requests[0];
 			expect(oid4vpRequest.data.client_id).toBeDefined();
 			expect(typeof oid4vpRequest.data.client_id).toBe('string');
 		});
@@ -595,7 +553,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const response = await POST(event);
 			const data = await response.json();
 
-			const claims = data.requests[1].data.dcql_query.credentials[0].claims['org.iso.18013.5.1'];
+			const claims = data.requests[0].data.dcql_query.credentials[0].claims['org.iso.18013.5.1'];
 			expect(claims).toHaveLength(5);
 			for (const claim of claims) {
 				expect(claim.intent_to_retain).toBe(false);
@@ -656,19 +614,15 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			}
 		});
 
-		it('should throw 500 when CBOR encoding fails', async () => {
+		it('should ignore CBOR encoder failures while mdoc is disabled', async () => {
 			mockCborEncode.mockImplementation(() => {
 				throw new Error('CBOR encode failed');
 			});
 
 			const event = makeRequestEvent({ platform: null });
+			const response = await POST(event);
 
-			try {
-				await POST(event);
-				expect.fail('Should have thrown');
-			} catch (err: any) {
-				expect(err.status).toBe(500);
-			}
+			expect(response.status).toBe(200);
 		});
 	});
 
