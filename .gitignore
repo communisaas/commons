@@ -80,6 +80,7 @@ __pycache__/
 *.pyc
 
 # Development artifacts
+.claude/
 .wrangler/
 .yarn/
 svelte-check-baseline.txt
