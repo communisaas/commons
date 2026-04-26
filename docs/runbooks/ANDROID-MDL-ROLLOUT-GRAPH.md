@@ -33,7 +33,7 @@ Android OpenID4VP is the functional lane; raw mdoc and iOS remain separate gates
 - `A1` committed as `f3d4a1a4` (`Remove campaign direct mDL entrypoint`).
 - `A2` committed as `5457d74e` (`Gate Android mDL protocols`).
 - `A3a`/`A3b`/`A3c` committed as `8891c9df` (`Harden mDL issuer verification`).
-- `A4`/`A5` committed as `5ffd93e7` (`Finalize Android mDL verification`).
+- `A4`/`A5` committed as `5ffd93e7` (`Finalize Android mDL verification`); guard test stabilized as `db62f715`.
 - Next tractable target is `A6`: live same-device Android smoke with Chrome + Google Wallet mDL.
 - Global `svelte-check` remains a separate repo-health track and is not an Android mDL launch gate unless errors touch this surface.
 
