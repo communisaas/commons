@@ -162,6 +162,7 @@ function buildTestMso(
 	const mso: Record<string, unknown> = {
 		version: '1.0',
 		digestAlgorithm: 'SHA-256',
+		docType: 'org.iso.18013.5.1.mDL',
 		validityInfo: {
 			signed: '2026-01-01T00:00:00Z',
 			validFrom: '2026-01-01T00:00:00Z',
@@ -852,6 +853,76 @@ describe('COSE_Sign1 Verification', () => {
 			const result = await validateMsoDigests(
 				mso,
 				{ 'org.iso.18013.5.1': [item0Bytes] },
+				(d: Uint8Array) => decode(d),
+				(d: unknown) => new Uint8Array(encode(d))
+			);
+
+			expect(result).toBe(false);
+		});
+
+		it('should reject elements without digest IDs', async () => {
+			const unsignedItem = {
+				random: new Uint8Array([0xaa]),
+				elementIdentifier: 'resident_state',
+				elementValue: 'NY'
+			};
+			const unsignedItemBytes = new Uint8Array(encode(unsignedItem));
+
+			const valueDigests = new Map<string, Map<number, Uint8Array>>([
+				[
+					'org.iso.18013.5.1',
+					new Map<number, Uint8Array>([[0, new Uint8Array([1, 2, 3])]])
+				]
+			]);
+
+			const mso: MobileSecurityObject = {
+				version: '1.0',
+				digestAlgorithm: 'SHA-256',
+				valueDigests,
+				validityInfo: {
+					signed: new Date('2026-01-01'),
+					validFrom: new Date('2026-01-01'),
+					validUntil: new Date('2027-01-01')
+				},
+				issuerCertificate: new Uint8Array(0)
+			};
+
+			const result = await validateMsoDigests(
+				mso,
+				{ 'org.iso.18013.5.1': [unsignedItemBytes] },
+				(d: Uint8Array) => decode(d),
+				(d: unknown) => new Uint8Array(encode(d))
+			);
+
+			expect(result).toBe(false);
+		});
+
+		it('should reject presented namespaces missing from the MSO', async () => {
+			const item = {
+				digestID: 0,
+				random: new Uint8Array([0xaa]),
+				elementIdentifier: 'resident_state',
+				elementValue: 'NY'
+			};
+			const itemBytes = new Uint8Array(encode(item));
+
+			const mso: MobileSecurityObject = {
+				version: '1.0',
+				digestAlgorithm: 'SHA-256',
+				valueDigests: new Map([
+					['org.iso.18013.5.1', new Map([[0, new Uint8Array([1, 2, 3])]])]
+				]),
+				validityInfo: {
+					signed: new Date('2026-01-01'),
+					validFrom: new Date('2026-01-01'),
+					validUntil: new Date('2027-01-01')
+				},
+				issuerCertificate: new Uint8Array(0)
+			};
+
+			const result = await validateMsoDigests(
+				mso,
+				{ 'org.example.unsigned': [itemBytes] },
 				(d: Uint8Array) => decode(d),
 				(d: unknown) => new Uint8Array(encode(d))
 			);

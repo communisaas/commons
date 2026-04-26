@@ -36,6 +36,8 @@ export type CertificateTrustResult = { trusted: true } | { trusted: false; reaso
 export interface MobileSecurityObject {
 	version: string;
 	digestAlgorithm: string;
+	/** Signed document type from the MSO (for mDL: org.iso.18013.5.1.mDL) */
+	docType?: string;
 	/** namespace -> { digestID -> digest } */
 	valueDigests: Map<string, Map<number, Uint8Array>>;
 	deviceKeyInfo?: DeviceKeyInfo;
@@ -59,9 +61,7 @@ export interface CoseEc2Key {
 	y: Uint8Array;
 }
 
-export type DeviceAuthVerificationResult =
-	| { valid: true }
-	| { valid: false; reason: string };
+export type DeviceAuthVerificationResult = { valid: true } | { valid: false; reason: string };
 
 // ---------------------------------------------------------------------------
 // COSE algorithm identifiers (RFC 9053)
@@ -254,6 +254,12 @@ export async function verifyCoseSign1(
 			reason: `Failed to extract/import public key: ${err instanceof Error ? err.message : String(err)}`
 		};
 	}
+	if (certCurve !== coseAlgCurve) {
+		return {
+			valid: false,
+			reason: `COSE algorithm curve ${coseAlgCurve} does not match issuer certificate curve ${certCurve}`
+		};
+	}
 
 	// --- Build Sig_structure and verify ---
 	// Sig_structure = ["Signature1", protectedHeadersCBOR, externalAad, payloadCBOR]
@@ -271,7 +277,7 @@ export async function verifyCoseSign1(
 
 	// COSE signature is raw format (r || s). Length depends on curve.
 	// Web Crypto API also uses raw (IEEE P1363) format for ECDSA — pass directly.
-	const verifyHash = CURVE_PARAMS[certCurve].hash;
+	const verifyHash = coseAlgParams.hash;
 	let valid: boolean;
 	try {
 		valid = await crypto.subtle.verify(
@@ -455,45 +461,53 @@ export async function validateMsoDigests(
 	decode: (data: Uint8Array) => unknown,
 	encode: (data: unknown) => Uint8Array
 ): Promise<boolean> {
+	if (mso.digestAlgorithm !== 'SHA-256') return false;
+
 	for (const [namespace, elements] of Object.entries(namespaceElements)) {
 		const nsDigests = mso.valueDigests.get(namespace);
-		if (!nsDigests) {
-			// Namespace not in MSO — cannot validate
-			continue;
-		}
+		if (!nsDigests || nsDigests.size === 0) return false;
+
+		const seenDigestIds = new Set<number>();
 
 		for (const element of elements) {
 			let elementBytes: Uint8Array;
-			let item: Record<string, unknown>;
+			let item: unknown;
 
-			if (element instanceof Uint8Array) {
-				elementBytes = element;
-				item = decode(element) as Record<string, unknown>;
-			} else if (typeof element === 'object' && element !== null) {
-				// Handle CBOR Tagged values (tag 24)
-				const tagged = element as { tag?: number; value?: Uint8Array };
-				if (tagged.tag === 24 && tagged.value instanceof Uint8Array) {
-					elementBytes = tagged.value;
-					item = decode(tagged.value) as Record<string, unknown>;
+			try {
+				if (element instanceof Uint8Array) {
+					elementBytes = element;
+					item = decode(element);
+				} else if (typeof element === 'object' && element !== null) {
+					// Handle CBOR Tagged values (tag 24)
+					const tagged = element as { tag?: number; value?: Uint8Array };
+					if (tagged.tag === 24 && tagged.value instanceof Uint8Array) {
+						elementBytes = tagged.value;
+						item = decode(tagged.value);
+					} else {
+						// Already decoded object — encode it for hashing
+						elementBytes = new Uint8Array(encode(element));
+						item = element;
+					}
 				} else {
-					// Already decoded object — encode it for hashing
-					elementBytes = new Uint8Array(encode(element));
-					item = element as Record<string, unknown>;
+					return false;
 				}
-			} else {
-				continue;
+			} catch {
+				return false;
 			}
 
-			const digestID =
-				typeof item.digestID === 'number'
-					? item.digestID
-					: typeof item.digestId === 'number'
-						? item.digestId
-						: null;
+			const rawDigestID = getMapLikeValue(item, 'digestID') ?? getMapLikeValue(item, 'digestId');
 
-			if (digestID === null) continue;
+			if (
+				typeof rawDigestID !== 'number' ||
+				!Number.isSafeInteger(rawDigestID) ||
+				rawDigestID < 0
+			) {
+				return false;
+			}
+			if (seenDigestIds.has(rawDigestID)) return false;
+			seenDigestIds.add(rawDigestID);
 
-			const expectedDigest = nsDigests.get(digestID);
+			const expectedDigest = nsDigests.get(rawDigestID);
 			if (!expectedDigest) {
 				// Digest ID not in MSO — element was not signed
 				return false;
@@ -963,6 +977,8 @@ function parseMobileSecurityObject(
 
 	// Extract digest algorithm
 	const digestAlgorithm = String(mso.digestAlgorithm ?? 'SHA-256');
+	const rawDocType = getMapLikeValue(msoData, 'docType');
+	const docType = typeof rawDocType === 'string' ? rawDocType : undefined;
 
 	// Extract valueDigests: Map<string, Map<number, Uint8Array>>
 	const valueDigests = new Map<string, Map<number, Uint8Array>>();
@@ -1017,6 +1033,7 @@ function parseMobileSecurityObject(
 	return {
 		version,
 		digestAlgorithm,
+		...(docType ? { docType } : {}),
 		valueDigests,
 		...(deviceKeyInfo ? { deviceKeyInfo } : {}),
 		validityInfo,
@@ -1104,8 +1121,7 @@ function getMapLikeValue(value: unknown, key: string | number): unknown {
 
 function isMapLike(value: unknown): value is Map<unknown, unknown> | Record<string, unknown> {
 	return (
-		value instanceof Map ||
-		(typeof value === 'object' && value !== null && !Array.isArray(value))
+		value instanceof Map || (typeof value === 'object' && value !== null && !Array.isArray(value))
 	);
 }
 

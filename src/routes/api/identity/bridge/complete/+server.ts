@@ -11,6 +11,9 @@ import {
 	verifyHmac
 } from '$lib/server/bridge-session';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
+import { readBoundedJson } from '$lib/server/bounded-json';
+
+const MAX_COMPLETE_BODY_BYTES = 80 * 1024;
 
 const CompleteSchema = z.object({
 	sessionId: z.string().uuid(),
@@ -42,7 +45,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 	let hmacVerified = false; // Only fail session if caller proved possession
 
 	try {
-		const body = await request.json();
+		const body = await readBoundedJson(request, MAX_COMPLETE_BODY_BYTES);
 		let input;
 		try {
 			input = CompleteSchema.parse(body);
@@ -67,6 +70,9 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		}
 		if (!session.secret) {
 			throw error(410, 'Session secret no longer available');
+		}
+		if (!session.requests.some((request) => request.protocol === input.protocol)) {
+			throw error(404, 'Not found');
 		}
 
 		// Verify HMAC using secret from KV
@@ -97,7 +103,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 			input.protocol,
 			ephemeralPrivateKey,
 			session.nonce,
-			{ vicalKv: platform?.env?.VICAL_KV }
+			{ vicalKv: platform?.env?.VICAL_KV, verifierOrigin: session.origin }
 		);
 
 		if (!result.success) {
@@ -161,7 +167,6 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 				state: result.state,
 				credentialHash: result.credentialHash,
 				cellId: result.cellId ?? undefined,
-				identityCommitment,
 				identityCommitmentBound: true
 			},
 			platform

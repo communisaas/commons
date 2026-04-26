@@ -41,6 +41,10 @@ export const POST: RequestHandler = async ({ locals, platform, url }) => {
 	const verifierOrigin = normalizeDcApiWebOrigin(canonicalOrigin ?? url.origin, {
 		allowLocalhostHttp: dev
 	});
+	const allowedProtocols = [
+		...(isMdlProtocolEnabled('org-iso-mdoc') ? ['org-iso-mdoc'] : []),
+		...(isMdlProtocolEnabled(OPENID4VP_DC_API_PROTOCOL) ? [OPENID4VP_DC_API_PROTOCOL] : [])
+	];
 
 	try {
 		// Generate ephemeral ECDH key pair for session encryption
@@ -66,6 +70,7 @@ export const POST: RequestHandler = async ({ locals, platform, url }) => {
 			privateKeyJwk,
 			userId: session.userId,
 			origin: verifierOrigin,
+			allowedProtocols,
 			createdAt: Date.now()
 		});
 
@@ -81,7 +86,7 @@ export const POST: RequestHandler = async ({ locals, platform, url }) => {
 
 		const requests: Array<{ protocol: string; data: unknown }> = [];
 
-		if (isMdlProtocolEnabled('org-iso-mdoc')) {
+		if (allowedProtocols.includes('org-iso-mdoc')) {
 			// org-iso-mdoc: CBOR-encoded DeviceRequest per ISO 18013-5 §8.3.2.1.2
 			const cborModule = await import('cbor-web');
 			const cbor = cborModule.default ?? cborModule;
@@ -120,7 +125,7 @@ export const POST: RequestHandler = async ({ locals, platform, url }) => {
 			requests.push({ protocol: 'org-iso-mdoc', data: deviceRequestB64 });
 		}
 
-		if (isMdlProtocolEnabled(OPENID4VP_DC_API_PROTOCOL)) {
+		if (allowedProtocols.includes(OPENID4VP_DC_API_PROTOCOL)) {
 			requests.push({
 				protocol: OPENID4VP_DC_API_PROTOCOL,
 				data: {

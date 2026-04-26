@@ -35,6 +35,12 @@ type KVNamespace = {
 	): Promise<void>;
 };
 
+interface MdlVerificationOptions {
+	vicalKv?: KVNamespace;
+	/** Canonical verifier origin stored with the DC API request session. */
+	verifierOrigin?: string;
+}
+
 /** Result of processing a credential response (discriminated union) */
 export type MdlVerificationResult =
 	| {
@@ -96,13 +102,19 @@ export async function processCredentialResponse(
 	protocol: string,
 	ephemeralPrivateKey: CryptoKey,
 	nonce: string,
-	options?: { vicalKv?: KVNamespace }
+	options?: MdlVerificationOptions
 ): Promise<MdlVerificationResult> {
 	try {
 		if (protocol === 'org-iso-mdoc') {
 			return await processMdocResponse(encryptedData, ephemeralPrivateKey, nonce, options?.vicalKv);
 		} else if (protocol === 'openid4vp' || protocol === 'openid4vp-v1-unsigned') {
-			return await processOid4vpResponse(encryptedData, ephemeralPrivateKey, nonce, protocol);
+			return await processOid4vpResponse(
+				encryptedData,
+				ephemeralPrivateKey,
+				nonce,
+				protocol,
+				options
+			);
 		} else {
 			return {
 				success: false,
@@ -148,7 +160,8 @@ async function processMdocResponse(
 	}
 
 	// Dynamic import cbor-web (Workers-compatible)
-	const { decode } = await import('cbor-web');
+	const cbor = await loadCborModule();
+	const decode = cbor.decode;
 
 	// Step 1: CBOR decode
 	let deviceResponse: Record<string, unknown>;
@@ -298,9 +311,10 @@ async function processMdocResponse(
 				// signed digests in the Mobile Security Object. Defense-in-depth —
 				// a tampered field would pass COSE signature but fail digest check.
 				if (coseResult.mso) {
+					const validityError = validateMsoValidity(coseResult.mso);
+					if (validityError) return validityError;
+
 					const { validateMsoDigests } = await import('./cose-verify');
-					const cborModule = await import('cbor-web');
-					const cborEncode = cborModule.default?.encode ?? cborModule.encode;
 					const nsData = (issuerSigned.nameSpaces ?? issuerSigned.namespaces) as
 						| Record<string, unknown[]>
 						| undefined;
@@ -309,7 +323,7 @@ async function processMdocResponse(
 							coseResult.mso,
 							nsData,
 							decode,
-							(data: unknown) => new Uint8Array(cborEncode(data))
+							(data: unknown) => new Uint8Array(cbor.encode(data))
 						);
 						if (!digestsValid) {
 							return {
@@ -351,7 +365,11 @@ async function processMdocResponse(
 
 		// Step 5: Extract address fields from IssuerSignedItem elements
 		// Each element is CBOR-encoded: { digestID, random, elementIdentifier, elementValue }
-		const fields = extractMdlFields(mdlNamespace, decode);
+		const fieldResult = extractMdlFields(mdlNamespace, decode);
+		if (fieldResult.duplicateIdentifier) {
+			return duplicateMdlElementResult(fieldResult.duplicateIdentifier);
+		}
+		const fields = fieldResult.fields;
 
 		const postalCode = fields.get('resident_postal_code');
 		const city = fields.get('resident_city');
@@ -447,8 +465,9 @@ async function processMdocResponse(
 function extractMdlFields(
 	namespaceElements: unknown[],
 	decode: (data: Uint8Array) => unknown
-): Map<string, string> {
+): { fields: Map<string, string>; duplicateIdentifier?: string } {
 	const fields = new Map<string, string>();
+	let duplicateIdentifier: string | undefined;
 
 	for (const element of namespaceElements) {
 		try {
@@ -467,7 +486,12 @@ function extractMdlFields(
 			}
 
 			if (item?.elementIdentifier && item?.elementValue !== undefined) {
-				fields.set(String(item.elementIdentifier), String(item.elementValue));
+				const identifier = String(item.elementIdentifier);
+				if (fields.has(identifier)) {
+					duplicateIdentifier = identifier;
+					continue;
+				}
+				fields.set(identifier, String(item.elementValue));
 			}
 		} catch {
 			// Skip malformed elements
@@ -475,7 +499,15 @@ function extractMdlFields(
 		}
 	}
 
-	return fields;
+	return duplicateIdentifier ? { fields, duplicateIdentifier } : { fields };
+}
+
+function duplicateMdlElementResult(identifier: string): MdlVerificationResult {
+	return {
+		success: false,
+		error: 'signature_invalid',
+		message: `Duplicate signed mDL element identifier rejected: ${identifier}`
+	};
 }
 
 /**
@@ -485,17 +517,16 @@ function extractMdlFields(
  * OpenID4VP responses contain a VP token. Legacy/test fixtures may present
  * JWT or SD-JWT VP tokens with claims directly. Current Google Wallet mDL
  * responses present `mso_mdoc` as base64url DeviceResponse entries inside a
- * VP token object; those must not be accepted until the DC API handover
- * SessionTranscript and DeviceAuth verification are implemented.
+ * VP token object; those are accepted only after issuerAuth, MSO digest, and
+ * DeviceAuth.deviceSignature verification against the stored DC API origin.
  *
  * Accepted formats:
- * 1. JWT: base64url(header).base64url(payload).base64url(signature)
- * 2. SD-JWT: header.payload.signature~disclosure1~disclosure2~...
+ * 1. `openid4vp-v1-unsigned`: `vp_token.mdl[]` mso_mdoc DeviceResponse only.
+ * 2. Legacy `openid4vp`: JWT or SD-JWT VP tokens with claims directly.
  *
  * Explicit fail-closed formats:
  * 3. `dc_api.jwt` encrypted response/JWE (request encryption not wired)
- * 4. `mso_mdoc` DeviceResponse arrays (DC API DeviceAuth T3 pending)
- * 5. Direct JSON object with claims (rejected — no signature to verify)
+ * 4. Direct JSON object with claims (rejected — no signature to verify)
  *
  * PRIVACY BOUNDARY: Same as mdoc path — extract address fields,
  * derive district, discard raw address data.
@@ -504,7 +535,8 @@ async function processOid4vpResponse(
 	data: unknown,
 	_ephemeralPrivateKey: CryptoKey,
 	nonce: string,
-	protocol: string
+	protocol: string,
+	options?: MdlVerificationOptions
 ): Promise<MdlVerificationResult> {
 	try {
 		// Step 1: Classify and extract the VP token payload.
@@ -525,18 +557,21 @@ async function processOid4vpResponse(
 			};
 		}
 		if (presentation.kind === 'mso_mdoc') {
-			return {
-				success: false,
-				error: 'replay_protection_missing',
-				message:
-					'OpenID4VP mso_mdoc DeviceResponse requires DC API SessionTranscript and DeviceAuth verification before it can be accepted'
-			};
+			return await processOpenId4VpMsoMdocPresentation(presentation, data, nonce, options);
 		}
 		if (presentation.kind === 'unsupported') {
 			return {
 				success: false,
 				error: 'invalid_format',
 				message: presentation.message
+			};
+		}
+		if (protocol === 'openid4vp-v1-unsigned') {
+			return {
+				success: false,
+				error: 'invalid_format',
+				message:
+					'OpenID4VP DC API mDL responses must use mso_mdoc DeviceResponse; JWT/SD-JWT VP tokens are not accepted for this protocol'
 			};
 		}
 
@@ -668,10 +703,348 @@ async function processOid4vpResponse(
 	}
 }
 
+async function processOpenId4VpMsoMdocPresentation(
+	presentation: Extract<Oid4vpPresentation, { kind: 'mso_mdoc' }>,
+	_originalData: unknown,
+	nonce: string,
+	options?: MdlVerificationOptions
+): Promise<MdlVerificationResult> {
+	if (!options?.verifierOrigin) {
+		return {
+			success: false,
+			error: 'replay_protection_missing',
+			message:
+				'OpenID4VP mso_mdoc DeviceResponse requires stored verifier origin, DC API SessionTranscript, and DeviceAuth verification before it can be accepted'
+		};
+	}
+
+	if (presentation.deviceResponses.length !== 1) {
+		return {
+			success: false,
+			error: 'invalid_format',
+			message: 'OpenID4VP mso_mdoc response must contain exactly one mDL DeviceResponse'
+		};
+	}
+
+	const cbor = await loadCborModule();
+	const deviceResponseBytes = base64urlDecode(presentation.deviceResponses[0]);
+	const deviceResponse = cbor.decode(deviceResponseBytes);
+	const documents = getMdocValue(deviceResponse, 'documents');
+	if (!Array.isArray(documents) || documents.length !== 1) {
+		return {
+			success: false,
+			error: 'invalid_format',
+			message: 'OpenID4VP mso_mdoc DeviceResponse must contain exactly one mDL document'
+		};
+	}
+
+	const doc = documents[0];
+	const docType = getMdocValue(doc, 'docType');
+	if (docType !== 'org.iso.18013.5.1.mDL') {
+		return {
+			success: false,
+			error: 'invalid_format',
+			message: 'OpenID4VP mso_mdoc DeviceResponse is not an mDL document'
+		};
+	}
+
+	const issuerSigned = getMdocValue(doc, 'issuerSigned');
+	if (!isMapLikeRecord(issuerSigned)) {
+		return { success: false, error: 'invalid_format', message: 'No issuerSigned data' };
+	}
+
+	const deviceSigned = getMdocValue(doc, 'deviceSigned');
+	if (!isMapLikeRecord(deviceSigned)) {
+		return {
+			success: false,
+			error: 'replay_protection_missing',
+			message: 'DeviceAuthentication structure missing — replay protection cannot be evaluated'
+		};
+	}
+
+	const deviceAuth = getMdocValue(deviceSigned, 'deviceAuth');
+	if (!isMapLikeRecord(deviceAuth)) {
+		return {
+			success: false,
+			error: 'replay_protection_missing',
+			message: 'DeviceAuthentication structure missing — replay protection cannot be evaluated'
+		};
+	}
+
+	const issuerAuth = asCoseSign1Array(getMdocValue(issuerSigned, 'issuerAuth'));
+	if (!issuerAuth) {
+		return {
+			success: false,
+			error: 'signature_invalid',
+			message: 'No issuerAuth in mso_mdoc credential — cannot verify mDL issuer'
+		};
+	}
+
+	const { verifyCoseSign1, validateMsoDigests, verifyDeviceSignature } =
+		await import('./cose-verify');
+	const { getIACARootsForVerification, supportedIACAStates } = await import('./iaca-roots');
+	const roots = getIACARootsForVerification();
+	if (roots.length === 0) {
+		return {
+			success: false,
+			error: 'signature_invalid',
+			message: 'No IACA root certificates loaded — cannot verify mDL issuer'
+		};
+	}
+
+	let coseResult = await verifyCoseSign1(issuerAuth, roots);
+	if (
+		!coseResult.valid &&
+		coseResult.reason === 'Issuer certificate not found in IACA trust store'
+	) {
+		try {
+			const { getExpandedIACARoots } = await import('./vical-service');
+			const expandedRoots = await getExpandedIACARoots(options.vicalKv);
+			if (expandedRoots.length > roots.length) {
+				coseResult = await verifyCoseSign1(issuerAuth, expandedRoots);
+			}
+		} catch (e) {
+			console.warn('[mDL] VICAL fallback failed (continuing with static roots):', e);
+		}
+	}
+
+	if (!coseResult.valid) {
+		if (coseResult.reason === 'Issuer certificate not found in IACA trust store') {
+			return {
+				success: false,
+				error: 'unsupported_state',
+				message: `This mDL was issued by a state not yet in our trust store. Supported states: ${supportedIACAStates().join(', ')}`,
+				supportedStates: supportedIACAStates()
+			};
+		}
+		return {
+			success: false,
+			error: 'signature_invalid',
+			message: `COSE_Sign1 verification failed: ${coseResult.reason}`
+		};
+	}
+
+	const msoError = validateOpenId4VpMsoMdocMso(coseResult.mso, docType);
+	if (msoError) return msoError;
+
+	const namespacesValue =
+		getMdocValue(issuerSigned, 'nameSpaces') ?? getMdocValue(issuerSigned, 'namespaces');
+	const namespaceRecord = namespaceElementsToRecord(namespacesValue);
+	if (!namespaceRecord) {
+		return {
+			success: false,
+			error: 'missing_fields',
+			message: 'No issuer-signed namespaces in mso_mdoc credential'
+		};
+	}
+
+	const digestsValid = await validateMsoDigests(
+		coseResult.mso,
+		namespaceRecord,
+		cbor.decode,
+		(data: unknown) => new Uint8Array(cbor.encode(data))
+	);
+	if (!digestsValid) {
+		return {
+			success: false,
+			error: 'signature_invalid',
+			message: 'MSO digest validation failed — field values do not match signed digests'
+		};
+	}
+
+	if (!coseResult.mso.deviceKeyInfo?.deviceKey) {
+		return {
+			success: false,
+			error: 'replay_protection_missing',
+			message: 'MSO deviceKeyInfo.deviceKey missing — DeviceAuth cannot be verified'
+		};
+	}
+
+	const deviceSignature = asCoseSign1Array(getMdocValue(deviceAuth, 'deviceSignature'));
+	if (!deviceSignature) {
+		return {
+			success: false,
+			error: 'replay_protection_missing',
+			message: 'OpenID4VP mso_mdoc DeviceAuth.deviceSignature is required for DC API verification'
+		};
+	}
+
+	const deviceNameSpacesValue =
+		getMdocValue(deviceSigned, 'nameSpaces') ?? getMdocValue(deviceSigned, 'namespaces');
+	const deviceNameSpacesBytes = getTaggedCborBytes(deviceNameSpacesValue);
+	if (!deviceNameSpacesBytes) {
+		return {
+			success: false,
+			error: 'replay_protection_missing',
+			message: 'DeviceSigned.nameSpaces bytes missing — DeviceAuthenticationBytes cannot be rebuilt'
+		};
+	}
+
+	const { buildOpenId4VpDcApiSessionTranscript } = await import('./oid4vp-dc-api-handover');
+	const { sessionTranscript } = await buildOpenId4VpDcApiSessionTranscript({
+		origin: options.verifierOrigin,
+		nonce,
+		jwkThumbprint: null
+	});
+	const deviceAuthentication = [
+		'DeviceAuthentication',
+		sessionTranscript,
+		docType,
+		taggedCborBytes(24, deviceNameSpacesBytes)
+	] as const;
+	const deviceAuthenticationBytes = encodeMdocAuthCbor(
+		taggedCborBytes(24, encodeMdocAuthCbor(deviceAuthentication))
+	);
+
+	const deviceAuthResult = await verifyDeviceSignature(
+		deviceSignature,
+		coseResult.mso.deviceKeyInfo.deviceKey,
+		deviceAuthenticationBytes
+	);
+	if (!deviceAuthResult.valid) {
+		return {
+			success: false,
+			error: 'signature_invalid',
+			message: `DeviceAuth.deviceSignature verification failed: ${deviceAuthResult.reason}`
+		};
+	}
+
+	const mdlNamespace = namespaceRecord['org.iso.18013.5.1'];
+	if (!mdlNamespace) {
+		return {
+			success: false,
+			error: 'missing_fields',
+			message: 'No mDL namespace in issuerSigned data'
+		};
+	}
+
+	const fieldResult = extractMdlFields(mdlNamespace, cbor.decode);
+	if (fieldResult.duplicateIdentifier) {
+		return duplicateMdlElementResult(fieldResult.duplicateIdentifier);
+	}
+	const fields = fieldResult.fields;
+	const credentialHash = await sha256Hex(deviceResponseBytes);
+	return deriveMdlResultFromFields(fields, credentialHash, 'OpenID4VP mso_mdoc');
+}
+
+async function deriveMdlResultFromFields(
+	fields: Map<string, string>,
+	credentialHash: string,
+	source: string
+): Promise<MdlVerificationResult> {
+	const postalCode = fields.get('resident_postal_code');
+	const city = fields.get('resident_city');
+	const state = fields.get('resident_state');
+
+	if (!postalCode || !state) {
+		return {
+			success: false,
+			error: 'missing_fields',
+			message: `${source} response missing required address fields (postal_code, state)`
+		};
+	}
+
+	const documentNumber = fields.get('document_number');
+	const birthDateRaw = fields.get('birth_date');
+	const birthYear = extractBirthYear(birthDateRaw);
+	const location = await resolveLocationFromAddress(postalCode, city ?? '', state);
+
+	if (!location.district) {
+		return {
+			success: false,
+			error: 'district_lookup_failed',
+			message: `Could not determine congressional district from ${source} claims`
+		};
+	}
+
+	if (!documentNumber || !birthYear) {
+		return {
+			success: false,
+			error: 'missing_identity_fields',
+			message:
+				'Your wallet must share birth date and document number for identity verification. Check your wallet settings or try a different wallet.'
+		};
+	}
+
+	const identityCommitment = await computeIdentityCommitmentInBoundary(documentNumber, birthYear);
+	if (!identityCommitment) {
+		return {
+			success: false,
+			error: 'identity_commitment_failed',
+			message: 'Identity commitment could not be computed — verifier is not configured'
+		};
+	}
+
+	return {
+		success: true,
+		district: location.district,
+		state,
+		credentialHash,
+		verificationMethod: 'mdl',
+		identityCommitment,
+		cellId: location.cellId ?? undefined
+	};
+}
+
+function validateOpenId4VpMsoMdocMso(
+	mso: { docType?: string; validityInfo: { validFrom: Date; validUntil: Date } },
+	expectedDocType: string
+): MdlVerificationResult | null {
+	if (mso.docType !== expectedDocType) {
+		return {
+			success: false,
+			error: 'signature_invalid',
+			message: 'MSO docType does not match the mDL DeviceResponse document type'
+		};
+	}
+
+	return validateMsoValidity(mso);
+}
+
+function validateMsoValidity(mso: {
+	validityInfo: { validFrom: Date; validUntil: Date };
+}): MdlVerificationResult | null {
+	const validFrom = mso.validityInfo.validFrom;
+	const validUntil = mso.validityInfo.validUntil;
+	const validFromMs = validFrom.getTime();
+	const validUntilMs = validUntil.getTime();
+
+	if (
+		!Number.isFinite(validFromMs) ||
+		!Number.isFinite(validUntilMs) ||
+		validFromMs > validUntilMs
+	) {
+		return {
+			success: false,
+			error: 'signature_invalid',
+			message: 'MSO validityInfo is invalid'
+		};
+	}
+
+	const now = Date.now();
+	const skewMs = 60_000;
+	if (validFromMs > now + skewMs) {
+		return {
+			success: false,
+			error: 'invalid_format',
+			message: 'mDL MSO is not valid yet'
+		};
+	}
+	if (validUntilMs <= now - skewMs) {
+		return {
+			success: false,
+			error: 'expired',
+			message: 'mDL MSO has expired'
+		};
+	}
+
+	return null;
+}
+
 type Oid4vpPresentation =
 	| { kind: 'jwt'; token: string }
 	| { kind: 'encrypted_response' }
-	| { kind: 'mso_mdoc'; credentialId: string }
+	| { kind: 'mso_mdoc'; credentialId: string; deviceResponses: string[] }
 	| { kind: 'unsupported'; message: string };
 
 /**
@@ -791,7 +1164,7 @@ function extractMsoMdocPresentation(
 			value.length > 0 &&
 			value.every(isBase64UrlDeviceResponseCandidate)
 		) {
-			return { kind: 'mso_mdoc', credentialId };
+			return { kind: 'mso_mdoc', credentialId, deviceResponses: value as string[] };
 		}
 	}
 	return null;
@@ -799,6 +1172,154 @@ function extractMsoMdocPresentation(
 
 function isBase64UrlDeviceResponseCandidate(value: unknown): boolean {
 	return typeof value === 'string' && value.length > 16 && /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+interface CborModule {
+	decode: (data: Uint8Array | ArrayBuffer) => unknown;
+	encode: (data: unknown) => ArrayBuffer | Uint8Array;
+}
+
+async function loadCborModule(): Promise<CborModule> {
+	const cborModule = (await import('cbor-web')) as unknown as {
+		default?: Partial<CborModule>;
+		decode?: CborModule['decode'];
+		encode?: CborModule['encode'];
+	};
+	const cbor = cborModule.default ?? cborModule;
+	if (typeof cbor.decode !== 'function' || typeof cbor.encode !== 'function') {
+		throw new Error('cbor-web encode/decode unavailable');
+	}
+	return {
+		decode: cbor.decode,
+		encode: cbor.encode
+	};
+}
+
+function getMdocValue(value: unknown, key: string): unknown {
+	if (value instanceof Map) return value.get(key);
+	if (isRecord(value)) return value[key];
+	return undefined;
+}
+
+function isMapLikeRecord(value: unknown): value is Map<unknown, unknown> | Record<string, unknown> {
+	return value instanceof Map || isRecord(value);
+}
+
+function asCoseSign1Array(value: unknown): unknown[] | null {
+	if (Array.isArray(value)) return value;
+	if (isRecord(value) && value.tag === 18 && Array.isArray(value.value)) {
+		return value.value;
+	}
+	return null;
+}
+
+function namespaceElementsToRecord(value: unknown): Record<string, unknown[]> | null {
+	const out: Record<string, unknown[]> = {};
+
+	if (value instanceof Map) {
+		for (const [key, elements] of value.entries()) {
+			if (typeof key === 'string' && Array.isArray(elements)) {
+				out[key] = elements;
+			}
+		}
+	} else if (isRecord(value)) {
+		for (const [key, elements] of Object.entries(value)) {
+			if (Array.isArray(elements)) {
+				out[key] = elements;
+			}
+		}
+	} else {
+		return null;
+	}
+
+	return Object.keys(out).length > 0 ? out : null;
+}
+
+function getTaggedCborBytes(value: unknown): Uint8Array | null {
+	if (isRecord(value) && value.tag === 24 && value.value instanceof Uint8Array) {
+		return new Uint8Array(value.value);
+	}
+	return null;
+}
+
+interface TaggedCborBytes {
+	readonly type: 'tagged-cbor-bytes';
+	readonly tag: number;
+	readonly bytes: Uint8Array;
+}
+
+function taggedCborBytes(tag: number, bytes: Uint8Array): TaggedCborBytes {
+	return { type: 'tagged-cbor-bytes', tag, bytes: new Uint8Array(bytes) };
+}
+
+type MdocAuthCborValue =
+	| string
+	| Uint8Array
+	| null
+	| TaggedCborBytes
+	| readonly MdocAuthCborValue[];
+
+function encodeMdocAuthCbor(value: MdocAuthCborValue): Uint8Array {
+	if (typeof value === 'string') {
+		return encodeCborBytes(3, new TextEncoder().encode(value));
+	}
+	if (value instanceof Uint8Array) {
+		return encodeCborBytes(2, value);
+	}
+	if (value === null) {
+		return new Uint8Array([0xf6]);
+	}
+	if (isTaggedCborBytes(value)) {
+		return concatBytes([encodeCborHead(6, value.tag), encodeCborBytes(2, value.bytes)]);
+	}
+	if (Array.isArray(value)) {
+		return concatBytes([encodeCborHead(4, value.length), ...value.map(encodeMdocAuthCbor)]);
+	}
+	throw new Error('Unsupported mdoc auth CBOR value');
+}
+
+function isTaggedCborBytes(value: unknown): value is TaggedCborBytes {
+	return isRecord(value) && value.type === 'tagged-cbor-bytes' && value.bytes instanceof Uint8Array;
+}
+
+function encodeCborBytes(majorType: number, bytes: Uint8Array): Uint8Array {
+	return concatBytes([encodeCborHead(majorType, bytes.length), bytes]);
+}
+
+function encodeCborHead(majorType: number, length: number): Uint8Array {
+	if (majorType < 0 || majorType > 7) throw new Error('Invalid CBOR major type');
+	if (!Number.isSafeInteger(length) || length < 0) throw new Error('Invalid CBOR length');
+
+	const prefix = majorType << 5;
+	if (length < 24) return new Uint8Array([prefix | length]);
+	if (length <= 0xff) return new Uint8Array([prefix | 24, length]);
+	if (length <= 0xffff) return new Uint8Array([prefix | 25, length >> 8, length & 0xff]);
+	if (length <= 0xffffffff) {
+		return new Uint8Array([
+			prefix | 26,
+			(length >>> 24) & 0xff,
+			(length >>> 16) & 0xff,
+			(length >>> 8) & 0xff,
+			length & 0xff
+		]);
+	}
+	throw new Error('CBOR length too large');
+}
+
+function concatBytes(chunks: Uint8Array[]): Uint8Array {
+	const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+	const out = new Uint8Array(length);
+	let offset = 0;
+	for (const chunk of chunks) {
+		out.set(chunk, offset);
+		offset += chunk.length;
+	}
+	return out;
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource));
+	return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 /**

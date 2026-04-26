@@ -92,7 +92,6 @@ export interface BridgeResult {
 	state: string;
 	credentialHash: string;
 	cellId?: string;
-	identityCommitment?: string;
 	identityCommitmentBound?: boolean;
 }
 

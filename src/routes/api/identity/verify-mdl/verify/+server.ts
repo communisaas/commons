@@ -5,10 +5,15 @@ import { serverMutation } from 'convex-sveltekit';
 import { internal } from '$lib/convex';
 import { isAnyMdlProtocolEnabled, isMdlProtocolEnabled } from '$lib/config/features';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
+import { readBoundedJson } from '$lib/server/bounded-json';
+
+const MAX_VERIFY_BODY_BYTES = 80 * 1024;
 
 const VerifyMdlSchema = z.object({
 	protocol: z.string().min(1),
-	data: z.string().min(1),
+	// mDL credentials are typically 2-8KB. Match the bridge cap to avoid
+	// same-device memory/CPU DoS from oversized JSON/CBOR payloads.
+	data: z.string().min(1).max(65536),
 	nonce: z.string().min(1).max(128)
 });
 
@@ -38,7 +43,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 	}
 
 	try {
-		const body = await request.json();
+		const body = await readBoundedJson(request, MAX_VERIFY_BODY_BYTES);
 		let input;
 		try {
 			input = VerifyMdlSchema.parse(body);
@@ -75,11 +80,28 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			throw error(410, 'Verification session expired or already used');
 		}
 
-		const { privateKeyJwk, userId: sessionUserId } = JSON.parse(sessionData);
+		const {
+			privateKeyJwk,
+			userId: sessionUserId,
+			origin: verifierOrigin,
+			allowedProtocols
+		} = JSON.parse(sessionData) as {
+			privateKeyJwk: JsonWebKey;
+			userId?: string;
+			origin?: unknown;
+			allowedProtocols?: unknown;
+		};
 
 		// Verify the session belongs to this user
 		if (sessionUserId !== session.userId) {
 			throw error(403, 'Session user mismatch');
+		}
+		if (
+			!Array.isArray(allowedProtocols) ||
+			!allowedProtocols.every((allowed): allowed is string => typeof allowed === 'string') ||
+			!allowedProtocols.includes(protocol)
+		) {
+			throw error(404, 'Not found');
 		}
 
 		// Import the ephemeral private key
@@ -93,7 +115,8 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 		// Process through privacy boundary
 		const result = await processCredentialResponse(data, protocol, ephemeralPrivateKey, nonce, {
-			vicalKv: platform?.env?.VICAL_KV
+			vicalKv: platform?.env?.VICAL_KV,
+			verifierOrigin: typeof verifierOrigin === 'string' ? verifierOrigin : undefined
 		});
 
 		if (!result.success) {
@@ -166,7 +189,6 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			userId: canonicalUserId,
 			district: result.district,
 			state: result.state,
-			commitmentFingerprint: identityCommitment.slice(0, 16) + '...',
 			identityFieldsAvailable: !!result.identityCommitment
 		});
 

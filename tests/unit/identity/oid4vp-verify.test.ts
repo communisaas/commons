@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { encode, Tagged } from 'cbor-web';
 
 // Mock Shadow Atlas client BEFORE importing mdl-verification (it uses dynamic import)
 const { mockResolveAddress } = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ vi.mock('$lib/core/shadow-atlas/client', () => ({
 // Since processOid4vpResponse is internal, we test through the public API
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 import { IACA_ROOTS } from '$lib/core/identity/iaca-roots';
+import { buildOpenId4VpDcApiSessionTranscript } from '$lib/core/identity/oid4vp-dc-api-handover';
 
 beforeAll(() => {
 	// Identity commitment computation requires IDENTITY_COMMITMENT_SALT
@@ -136,6 +138,331 @@ function wrapDERSequence(content: Uint8Array): Uint8Array {
 	return new Uint8Array([0x30, ...encodeDERLength(content.length), ...content]);
 }
 
+const MDL_DOCTYPE = 'org.iso.18013.5.1.mDL';
+const MDL_NAMESPACE = 'org.iso.18013.5.1';
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+	return new Uint8Array(bytes).buffer;
+}
+
+async function generateEcdsaKeyPair(): Promise<CryptoKeyPair> {
+	return crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
+		'sign',
+		'verify'
+	]);
+}
+
+async function publicKeyToCoseEc2Key(publicKey: CryptoKey): Promise<Map<number, unknown>> {
+	const raw = new Uint8Array(await crypto.subtle.exportKey('raw', publicKey));
+	return new Map<number, unknown>([
+		[1, 2], // kty: EC2
+		[3, -7], // alg: ES256
+		[-1, 1], // crv: P-256
+		[-2, toArrayBuffer(raw.slice(1, 33))],
+		[-3, toArrayBuffer(raw.slice(33, 65))]
+	]);
+}
+
+async function buildIssuerSignedNameSpaces(fields: Record<string, string>): Promise<{
+	nameSpaces: Map<string, unknown[]>;
+	valueDigests: Map<string, Map<number, unknown>>;
+}> {
+	const elements: unknown[] = [];
+	const digests = new Map<number, unknown>();
+	let digestID = 0;
+
+	for (const [elementIdentifier, elementValue] of Object.entries(fields)) {
+		const item = {
+			digestID,
+			random: toArrayBuffer(new Uint8Array([digestID, 1, 2, 3])),
+			elementIdentifier,
+			elementValue
+		};
+		const itemBytes = new Uint8Array(encode(item));
+		const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', itemBytes));
+		digests.set(digestID, toArrayBuffer(digest));
+		elements.push(new Tagged(24, toArrayBuffer(itemBytes)));
+		digestID++;
+	}
+
+	return {
+		nameSpaces: new Map([[MDL_NAMESPACE, elements]]),
+		valueDigests: new Map([[MDL_NAMESPACE, digests]])
+	};
+}
+
+function buildTestMso(
+	namespaceDigests: Map<string, Map<number, unknown>>,
+	deviceKey: Map<number, unknown>,
+	options: {
+		docType?: string;
+		validFrom?: string;
+		validUntil?: string;
+	} = {}
+): Uint8Array {
+	return new Uint8Array(
+		encode({
+			version: '1.0',
+			digestAlgorithm: 'SHA-256',
+			docType: options.docType ?? MDL_DOCTYPE,
+			valueDigests: namespaceDigests,
+			deviceKeyInfo: new Map<string, unknown>([['deviceKey', deviceKey]]),
+			validityInfo: {
+				signed: '2026-01-01T00:00:00Z',
+				validFrom: options.validFrom ?? '2026-01-01T00:00:00Z',
+				validUntil: options.validUntil ?? '2027-01-01T00:00:00Z'
+			}
+		})
+	);
+}
+
+async function buildCoseSign1(
+	payload: Uint8Array,
+	privateKey: CryptoKey,
+	certDER: Uint8Array
+): Promise<unknown[]> {
+	const protectedHeadersCBOR = new Uint8Array(encode(new Map<number, number>([[1, -7]])));
+	const sigStructure = encodeMdocTestCbor([
+		'Signature1',
+		protectedHeadersCBOR,
+		new Uint8Array(0),
+		payload
+	]);
+	const rawSignature = new Uint8Array(
+		await crypto.subtle.sign(
+			{ name: 'ECDSA', hash: 'SHA-256' },
+			privateKey,
+			sigStructure
+		)
+	);
+
+	return [
+		toArrayBuffer(protectedHeadersCBOR),
+		new Map<number, unknown>([[33, toArrayBuffer(certDER)]]),
+		toArrayBuffer(payload),
+		toArrayBuffer(rawSignature)
+	];
+}
+
+async function buildDeviceSignature(
+	deviceAuthenticationBytes: Uint8Array,
+	privateKey: CryptoKey
+): Promise<unknown[]> {
+	const protectedHeadersCBOR = new Uint8Array(encode(new Map<number, number>([[1, -7]])));
+	const sigStructure = encodeMdocTestCbor([
+		'Signature1',
+		protectedHeadersCBOR,
+		new Uint8Array(0),
+		deviceAuthenticationBytes
+	]);
+	const rawSignature = new Uint8Array(
+		await crypto.subtle.sign(
+			{ name: 'ECDSA', hash: 'SHA-256' },
+			privateKey,
+			sigStructure
+		)
+	);
+
+	return [
+		toArrayBuffer(protectedHeadersCBOR),
+		new Map<number, unknown>(),
+		null,
+		toArrayBuffer(rawSignature)
+	];
+}
+
+async function buildDeviceAuthenticationBytes({
+	origin,
+	nonce,
+	docType,
+	deviceNameSpacesBytes
+}: {
+	origin: string;
+	nonce: string;
+	docType: string;
+	deviceNameSpacesBytes: Uint8Array;
+}): Promise<Uint8Array> {
+	const { sessionTranscript } = await buildOpenId4VpDcApiSessionTranscript({
+		origin,
+		nonce,
+		jwkThumbprint: null
+	});
+	const deviceAuthentication = [
+		'DeviceAuthentication',
+		sessionTranscript,
+		docType,
+		taggedCborBytesForTest(24, deviceNameSpacesBytes)
+	] as const;
+
+	return encodeMdocTestCbor(
+		taggedCborBytesForTest(24, encodeMdocTestCbor(deviceAuthentication))
+	);
+}
+
+async function buildOpenId4VpMsoMdocResponse(
+	fields: Record<string, string>,
+	options: {
+		origin: string;
+		nonce: string;
+		signingOrigin?: string;
+		signingNonce?: string;
+		msoDocType?: string;
+		msoValidFrom?: string;
+		msoValidUntil?: string;
+		unsignedIssuerFields?: Record<string, string>;
+		signedDuplicateIssuerFields?: Record<string, string>;
+		useDeviceMac?: boolean;
+	}
+): Promise<string> {
+	const deviceKeyPair = await generateEcdsaKeyPair();
+	const deviceKey = await publicKeyToCoseEc2Key(deviceKeyPair.publicKey);
+	const { nameSpaces, valueDigests } = await buildIssuerSignedNameSpaces(fields);
+	const mdlElements = nameSpaces.get(MDL_NAMESPACE);
+	const mdlDigests = valueDigests.get(MDL_NAMESPACE);
+	if (!mdlElements || !mdlDigests) throw new Error('mDL namespace fixture missing');
+	if (options.signedDuplicateIssuerFields) {
+		let digestID = mdlDigests.size;
+		for (const [elementIdentifier, elementValue] of Object.entries(
+			options.signedDuplicateIssuerFields
+		)) {
+			const item = {
+				digestID,
+				random: toArrayBuffer(new Uint8Array([digestID, 9, 8, 7])),
+				elementIdentifier,
+				elementValue
+			};
+			const itemBytes = new Uint8Array(encode(item));
+			const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', itemBytes));
+			mdlDigests.set(digestID, toArrayBuffer(digest));
+			mdlElements.push(new Tagged(24, toArrayBuffer(itemBytes)));
+			digestID++;
+		}
+	}
+	if (options.unsignedIssuerFields) {
+		for (const [elementIdentifier, elementValue] of Object.entries(options.unsignedIssuerFields)) {
+			const unsignedItem = {
+				random: toArrayBuffer(new Uint8Array([0xff, 0x00])),
+				elementIdentifier,
+				elementValue
+			};
+			mdlElements.push(new Tagged(24, toArrayBuffer(new Uint8Array(encode(unsignedItem)))));
+		}
+	}
+	const msoPayload = buildTestMso(valueDigests, deviceKey, {
+		docType: options.msoDocType,
+		validFrom: options.msoValidFrom,
+		validUntil: options.msoValidUntil
+	});
+	const issuerAuth = await buildCoseSign1(
+		msoPayload,
+		jwtSigningKeyPair.privateKey,
+		jwtTestCertDer
+	);
+	const deviceNameSpacesBytes = new Uint8Array(encode(new Map()));
+	const deviceAuthenticationBytes = await buildDeviceAuthenticationBytes({
+		origin: options.signingOrigin ?? options.origin,
+		nonce: options.signingNonce ?? options.nonce,
+		docType: MDL_DOCTYPE,
+		deviceNameSpacesBytes
+	});
+	const deviceSignature = await buildDeviceSignature(
+		deviceAuthenticationBytes,
+		deviceKeyPair.privateKey
+	);
+	const deviceAuth = options.useDeviceMac
+		? { deviceMac: toArrayBuffer(new Uint8Array([1, 2, 3, 4])) }
+		: { deviceSignature: new Tagged(18, deviceSignature) };
+
+	const deviceResponse = {
+		version: '1.0',
+		documents: [
+			{
+				docType: MDL_DOCTYPE,
+				issuerSigned: {
+					nameSpaces,
+					issuerAuth: new Tagged(18, issuerAuth)
+				},
+				deviceSigned: {
+					nameSpaces: new Tagged(24, toArrayBuffer(deviceNameSpacesBytes)),
+					deviceAuth
+				}
+			}
+		]
+	};
+
+	return base64urlEncodeBytes(new Uint8Array(encode(deviceResponse)));
+}
+
+interface TaggedCborBytesForTest {
+	readonly type: 'tagged-cbor-bytes';
+	readonly tag: number;
+	readonly bytes: Uint8Array;
+}
+
+function taggedCborBytesForTest(tag: number, bytes: Uint8Array): TaggedCborBytesForTest {
+	return { type: 'tagged-cbor-bytes', tag, bytes: new Uint8Array(bytes) };
+}
+
+type MdocTestCborValue =
+	| string
+	| Uint8Array
+	| null
+	| TaggedCborBytesForTest
+	| readonly MdocTestCborValue[];
+
+function encodeMdocTestCbor(value: MdocTestCborValue): Uint8Array {
+	if (typeof value === 'string') {
+		return encodeCborBytesForMdocTest(3, new TextEncoder().encode(value));
+	}
+	if (value instanceof Uint8Array) {
+		return encodeCborBytesForMdocTest(2, value);
+	}
+	if (value === null) {
+		return new Uint8Array([0xf6]);
+	}
+	if (isTaggedCborBytesForTest(value)) {
+		return concatBytes(
+			encodeCborHeadForMdocTest(6, value.tag),
+			encodeCborBytesForMdocTest(2, value.bytes)
+		);
+	}
+	if (Array.isArray(value)) {
+		return concatBytes(
+			encodeCborHeadForMdocTest(4, value.length),
+			...value.map(encodeMdocTestCbor)
+		);
+	}
+	throw new Error('Unsupported test CBOR value');
+}
+
+function isTaggedCborBytesForTest(value: unknown): value is TaggedCborBytesForTest {
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		!Array.isArray(value) &&
+		(value as { type?: unknown }).type === 'tagged-cbor-bytes' &&
+		(value as { bytes?: unknown }).bytes instanceof Uint8Array
+	);
+}
+
+function encodeCborBytesForMdocTest(majorType: number, bytes: Uint8Array): Uint8Array {
+	return concatBytes(encodeCborHeadForMdocTest(majorType, bytes.length), bytes);
+}
+
+function encodeCborHeadForMdocTest(majorType: number, length: number): Uint8Array {
+	const prefix = majorType << 5;
+	if (length < 24) return new Uint8Array([prefix | length]);
+	if (length <= 0xff) return new Uint8Array([prefix | 24, length]);
+	if (length <= 0xffff) return new Uint8Array([prefix | 25, length >> 8, length & 0xff]);
+	return new Uint8Array([
+		prefix | 26,
+		(length >>> 24) & 0xff,
+		(length >>> 16) & 0xff,
+		(length >>> 8) & 0xff,
+		length & 0xff
+	]);
+}
+
 // Helper: build an SD-JWT disclosure and its signed digest commitment
 async function buildDisclosure(
 	salt: string,
@@ -165,6 +492,7 @@ function mockShadowAtlasSuccess(state: string, cd: string) {
 let ephemeralKey: CryptoKey;
 let jwtSigningKeyPair: CryptoKeyPair;
 let jwtTestCertB64 = '';
+let jwtTestCertDer: Uint8Array;
 
 beforeAll(async () => {
 	const keyPair = await crypto.subtle.generateKey(
@@ -180,6 +508,7 @@ beforeAll(async () => {
 		['sign', 'verify']
 	);
 	const certDer = await buildMinimalCert(jwtSigningKeyPair.publicKey);
+	jwtTestCertDer = certDer;
 	jwtTestCertB64 = uint8ArrayToBase64(certDer);
 	IACA_ROOTS.UNIT = [
 		{
@@ -193,7 +522,7 @@ beforeAll(async () => {
 });
 
 describe('OpenID4VP response processing', () => {
-	it('should extract claims from a JWT vp_token for the versioned DC API protocol', async () => {
+	it('should reject JWT vp_tokens for the versioned DC API mso_mdoc protocol', async () => {
 		const nonce = 'test-nonce-123';
 		const jwt = await buildJwt({
 			nonce,
@@ -204,8 +533,6 @@ describe('OpenID4VP response processing', () => {
 			birth_date: '1990-01-15'
 		});
 
-		mockShadowAtlasSuccess('ca', '12');
-
 		const result = await processCredentialResponse(
 			{ vp_token: jwt },
 			'openid4vp-v1-unsigned',
@@ -213,13 +540,12 @@ describe('OpenID4VP response processing', () => {
 			nonce
 		);
 
-		expect(result.success).toBe(true);
-		if (result.success) {
-			expect(result.district).toBe('CA-12');
-			expect(result.state).toBe('CA');
-			expect(result.verificationMethod).toBe('mdl');
-			expect(result.credentialHash).toMatch(/^[0-9a-f]{64}$/);
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('mso_mdoc DeviceResponse');
 		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
 	it('should extract claims from a JSON-stringified vp_token response', async () => {
@@ -249,7 +575,7 @@ describe('OpenID4VP response processing', () => {
 		}
 	});
 
-	it('should unwrap a DigitalCredential data envelope containing a JWT vp_token', async () => {
+	it('should reject a versioned DigitalCredential data envelope containing a JWT vp_token', async () => {
 		const nonce = 'test-nonce-digital-credential-envelope';
 		const jwt = await buildJwt({
 			nonce,
@@ -259,8 +585,6 @@ describe('OpenID4VP response processing', () => {
 			document_number: 'D4444444',
 			birth_date: '1984-10-12'
 		});
-
-		mockShadowAtlasSuccess('ma', '07');
 
 		const result = await processCredentialResponse(
 			JSON.stringify({
@@ -272,11 +596,12 @@ describe('OpenID4VP response processing', () => {
 			nonce
 		);
 
-		expect(result.success).toBe(true);
-		if (result.success) {
-			expect(result.district).toBe('MA-07');
-			expect(result.state).toBe('MA');
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('mso_mdoc DeviceResponse');
 		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
 	it('should reject data envelopes that omit protocol binding', async () => {
@@ -476,7 +801,7 @@ describe('OpenID4VP response processing', () => {
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
-	it('should fail closed on mso_mdoc VP token arrays until DC API DeviceAuth is verified', async () => {
+	it('should fail closed on mso_mdoc VP token arrays without the stored DC API origin', async () => {
 		const result = await processCredentialResponse(
 			JSON.stringify({
 				vp_token: {
@@ -518,7 +843,7 @@ describe('OpenID4VP response processing', () => {
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
-	it('should fail closed on nested mso_mdoc VP token arrays until DC API DeviceAuth is verified', async () => {
+	it('should fail closed on nested mso_mdoc VP token arrays without the stored DC API origin', async () => {
 		const result = await processCredentialResponse(
 			JSON.stringify({
 				protocol: 'openid4vp-v1-unsigned',
@@ -537,6 +862,257 @@ describe('OpenID4VP response processing', () => {
 		if (!result.success) {
 			expect(result.error).toBe('replay_protection_missing');
 			expect(result.message).toContain('DeviceAuth');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject ambiguous mso_mdoc DeviceResponses with multiple documents', async () => {
+		const nonce = 'test-nonce-mso-mdoc-multiple-documents';
+		const origin = 'https://verifier.example';
+		const deviceResponse = base64urlEncodeBytes(
+			new Uint8Array(encode({ documents: [{}, {}] }))
+		);
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('exactly one mDL document');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should verify mso_mdoc DeviceResponse through DC API DeviceAuth', async () => {
+		const nonce = 'test-nonce-mso-mdoc-success';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D7777777',
+				birth_date: '1990-05-17'
+			},
+			{ origin, nonce }
+		);
+
+		mockShadowAtlasSuccess('ca', '12');
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin }
+		);
+
+		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(result.district).toBe('CA-12');
+			expect(result.state).toBe('CA');
+			expect(result.verificationMethod).toBe('mdl');
+			expect(result.credentialHash).toMatch(/^[0-9a-f]{64}$/);
+			expect(result.identityCommitment).toMatch(/^[0-9a-f]{64}$/);
+			expect(result.cellId).toBe('872830828ffffff');
+		}
+	});
+
+	it('should reject replayed mso_mdoc DeviceAuth signed for a different nonce', async () => {
+		const nonce = 'test-nonce-mso-mdoc-replay';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D8888888',
+				birth_date: '1988-08-08'
+			},
+			{ origin, nonce, signingNonce: `${nonce}-captured` }
+		);
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('signature_invalid');
+			expect(result.message).toContain('DeviceAuth.deviceSignature');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject unsigned issuer-signed item injection in mso_mdoc namespaces', async () => {
+		const nonce = 'test-nonce-mso-mdoc-unsigned-field';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D7777777',
+				birth_date: '1990-05-17'
+			},
+			{
+				origin,
+				nonce,
+				unsignedIssuerFields: {
+					resident_state: 'NY',
+					document_number: 'FORGED'
+				}
+			}
+		);
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('signature_invalid');
+			expect(result.message).toContain('MSO digest validation failed');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject duplicate signed mDL element identifiers in mso_mdoc namespaces', async () => {
+		const nonce = 'test-nonce-mso-mdoc-duplicate-signed-field';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D7777777',
+				birth_date: '1990-05-17'
+			},
+			{
+				origin,
+				nonce,
+				signedDuplicateIssuerFields: {
+					resident_state: 'NY'
+				}
+			}
+		);
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('signature_invalid');
+			expect(result.message).toContain('Duplicate signed mDL element identifier');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject expired mso_mdoc MSOs', async () => {
+		const nonce = 'test-nonce-mso-mdoc-expired';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D1010101',
+				birth_date: '1991-01-01'
+			},
+			{ origin, nonce, msoValidUntil: '2026-01-01T00:00:00Z' }
+		);
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('expired');
+			expect(result.message).toContain('MSO has expired');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject mso_mdoc MSO docType mismatches', async () => {
+		const nonce = 'test-nonce-mso-mdoc-doctype';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D2020202',
+				birth_date: '1992-02-02'
+			},
+			{ origin, nonce, msoDocType: 'org.example.not-mdl' }
+		);
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('signature_invalid');
+			expect(result.message).toContain('MSO docType');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should fail closed on mso_mdoc DeviceMac until MAC verification is implemented', async () => {
+		const nonce = 'test-nonce-mso-mdoc-device-mac';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D9999999',
+				birth_date: '1999-09-09'
+			},
+			{ origin, nonce, useDeviceMac: true }
+		);
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('replay_protection_missing');
+			expect(result.message).toContain('DeviceAuth.deviceSignature');
 		}
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
