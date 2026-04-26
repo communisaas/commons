@@ -102,7 +102,7 @@ export async function processCredentialResponse(
 		if (protocol === 'org-iso-mdoc') {
 			return await processMdocResponse(encryptedData, ephemeralPrivateKey, nonce, options?.vicalKv);
 		} else if (protocol === 'openid4vp' || protocol === 'openid4vp-v1-unsigned') {
-			return await processOid4vpResponse(encryptedData, ephemeralPrivateKey, nonce);
+			return await processOid4vpResponse(encryptedData, ephemeralPrivateKey, nonce, protocol);
 		} else {
 			return {
 				success: false,
@@ -482,14 +482,20 @@ function extractMdlFields(
  * Process an OpenID4VP response.
  * Chrome 141+ may return credentials via this protocol alongside org-iso-mdoc.
  *
- * OpenID4VP responses contain a VP token (JWT or SD-JWT) with the
- * credential claims. The JWT signature MUST be verified against the
- * issuer's public key before claims are trusted.
+ * OpenID4VP responses contain a VP token. Legacy/test fixtures may present
+ * JWT or SD-JWT VP tokens with claims directly. Current Google Wallet mDL
+ * responses present `mso_mdoc` as base64url DeviceResponse entries inside a
+ * VP token object; those must not be accepted until the DC API handover
+ * SessionTranscript and DeviceAuth verification are implemented.
  *
- * Supported formats:
+ * Accepted formats:
  * 1. JWT: base64url(header).base64url(payload).base64url(signature)
  * 2. SD-JWT: header.payload.signature~disclosure1~disclosure2~...
- * 3. Direct JSON object with claims (rejected — no signature to verify)
+ *
+ * Explicit fail-closed formats:
+ * 3. `dc_api.jwt` encrypted response/JWE (request encryption not wired)
+ * 4. `mso_mdoc` DeviceResponse arrays (DC API DeviceAuth T3 pending)
+ * 5. Direct JSON object with claims (rejected — no signature to verify)
  *
  * PRIVACY BOUNDARY: Same as mdoc path — extract address fields,
  * derive district, discard raw address data.
@@ -497,18 +503,44 @@ function extractMdlFields(
 async function processOid4vpResponse(
 	data: unknown,
 	_ephemeralPrivateKey: CryptoKey,
-	nonce: string
+	nonce: string,
+	protocol: string
 ): Promise<MdlVerificationResult> {
 	try {
-		// Step 1: Extract the raw VP token string
-		const vpToken = extractVpTokenString(data);
-		if (!vpToken) {
+		// Step 1: Classify and extract the VP token payload.
+		const presentation = extractOid4vpPresentation(data, protocol);
+		if (!presentation) {
 			return {
 				success: false,
 				error: 'invalid_format',
 				message: 'Could not extract VP token from OpenID4VP response'
 			};
 		}
+		if (presentation.kind === 'encrypted_response') {
+			return {
+				success: false,
+				error: 'decryption_failed',
+				message:
+					'Encrypted OpenID4VP dc_api.jwt responses require request-encryption support before they can be accepted'
+			};
+		}
+		if (presentation.kind === 'mso_mdoc') {
+			return {
+				success: false,
+				error: 'replay_protection_missing',
+				message:
+					'OpenID4VP mso_mdoc DeviceResponse requires DC API SessionTranscript and DeviceAuth verification before it can be accepted'
+			};
+		}
+		if (presentation.kind === 'unsupported') {
+			return {
+				success: false,
+				error: 'invalid_format',
+				message: presentation.message
+			};
+		}
+
+		const vpToken = presentation.token;
 
 		// Step 2: Verify the JWT/SD-JWT signature before claims are parsed.
 		const sigResult = await verifyVpTokenSignature(vpToken);
@@ -636,35 +668,137 @@ async function processOid4vpResponse(
 	}
 }
 
+type Oid4vpPresentation =
+	| { kind: 'jwt'; token: string }
+	| { kind: 'encrypted_response' }
+	| { kind: 'mso_mdoc'; credentialId: string }
+	| { kind: 'unsupported'; message: string };
+
 /**
- * Extract the raw VP token string from an OpenID4VP response.
- * Only accepts JWT/SD-JWT strings — raw JSON objects are rejected
- * because they have no signature to verify.
+ * Extract and classify OpenID4VP response payloads.
+ *
+ * DigitalCredential.data may be:
+ * - a raw JWT/SD-JWT string from legacy/test integrations
+ * - a JSON string with `{ vp_token: ... }`
+ * - a full `{ protocol, data }` DigitalCredential-like envelope
+ * - a `dc_api.jwt` authorization response with encrypted `response`
+ * - a `mso_mdoc` VP token object like `{ "mdl": ["<base64url DeviceResponse>"] }`
  */
-function extractVpTokenString(data: unknown): string | null {
+function extractOid4vpPresentation(
+	data: unknown,
+	expectedProtocol: string,
+	depth = 0
+): Oid4vpPresentation | null {
+	if (depth > 2) {
+		return {
+			kind: 'unsupported',
+			message: 'OpenID4VP response envelope is nested too deeply'
+		};
+	}
+
 	if (typeof data === 'string') {
 		const trimmed = data.trim();
 		if (trimmed.startsWith('{')) {
 			try {
 				const parsed = JSON.parse(trimmed) as unknown;
-				return extractVpTokenString(parsed);
+				return extractOid4vpPresentation(parsed, expectedProtocol, depth);
 			} catch {
 				return null;
 			}
 		}
-		if (trimmed.includes('.')) {
-			return trimmed;
+		if (isCompactJwe(trimmed)) {
+			return { kind: 'encrypted_response' };
+		}
+		if (isJwtOrSdJwt(trimmed)) {
+			return { kind: 'jwt', token: trimmed };
 		}
 	}
 
 	if (typeof data === 'object' && data !== null) {
 		const obj = data as Record<string, unknown>;
-		if (typeof obj.vp_token === 'string' && obj.vp_token.includes('.')) {
-			return obj.vp_token;
+
+		if (typeof obj.response === 'string' || typeof obj.identityToken === 'string') {
+			return { kind: 'encrypted_response' };
+		}
+
+		if (typeof obj.protocol === 'string' && obj.protocol !== expectedProtocol) {
+			return {
+				kind: 'unsupported',
+				message: `OpenID4VP response protocol mismatch: expected ${expectedProtocol}, got ${obj.protocol}`
+			};
+		}
+
+		if ('data' in obj) {
+			if ('vp_token' in obj) {
+				return {
+					kind: 'unsupported',
+					message: 'OpenID4VP response envelope is ambiguous: contains both data and vp_token'
+				};
+			}
+			if (typeof obj.protocol !== 'string') {
+				return {
+					kind: 'unsupported',
+					message: 'OpenID4VP response data envelope is missing protocol'
+				};
+			}
+			const nested = extractOid4vpPresentation(obj.data, expectedProtocol, depth + 1);
+			if (nested) return nested;
+		}
+
+		const vpToken = obj.vp_token;
+		if (typeof vpToken === 'string') {
+			if (isCompactJwe(vpToken)) {
+				return { kind: 'encrypted_response' };
+			}
+			if (isJwtOrSdJwt(vpToken)) {
+				return { kind: 'jwt', token: vpToken };
+			}
+			return {
+				kind: 'unsupported',
+				message: 'OpenID4VP vp_token string is not a JWT, SD-JWT, or compact JWE'
+			};
+		}
+
+		if (typeof vpToken === 'object' && vpToken !== null) {
+			const mdocPresentation = extractMsoMdocPresentation(vpToken as Record<string, unknown>);
+			if (mdocPresentation) return mdocPresentation;
+			return {
+				kind: 'unsupported',
+				message: 'OpenID4VP vp_token object does not contain an mso_mdoc credential array'
+			};
 		}
 	}
 
 	return null;
+}
+
+function isJwtOrSdJwt(token: string): boolean {
+	const [jwtPart] = token.split('~');
+	return jwtPart.split('.').length === 3;
+}
+
+function isCompactJwe(token: string): boolean {
+	return token.split('.').length === 5;
+}
+
+function extractMsoMdocPresentation(
+	vpToken: Record<string, unknown>
+): Extract<Oid4vpPresentation, { kind: 'mso_mdoc' }> | null {
+	for (const [credentialId, value] of Object.entries(vpToken)) {
+		if (
+			credentialId === 'mdl' &&
+			Array.isArray(value) &&
+			value.length > 0 &&
+			value.every(isBase64UrlDeviceResponseCandidate)
+		) {
+			return { kind: 'mso_mdoc', credentialId };
+		}
+	}
+	return null;
+}
+
+function isBase64UrlDeviceResponseCandidate(value: unknown): boolean {
+	return typeof value === 'string' && value.length > 16 && /^[A-Za-z0-9_-]+$/.test(value);
 }
 
 /**

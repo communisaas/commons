@@ -249,6 +249,343 @@ describe('OpenID4VP response processing', () => {
 		}
 	});
 
+	it('should unwrap a DigitalCredential data envelope containing a JWT vp_token', async () => {
+		const nonce = 'test-nonce-digital-credential-envelope';
+		const jwt = await buildJwt({
+			nonce,
+			resident_postal_code: '02139',
+			resident_city: 'Cambridge',
+			resident_state: 'MA',
+			document_number: 'D4444444',
+			birth_date: '1984-10-12'
+		});
+
+		mockShadowAtlasSuccess('ma', '07');
+
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				protocol: 'openid4vp-v1-unsigned',
+				data: { vp_token: jwt }
+			}),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce
+		);
+
+		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(result.district).toBe('MA-07');
+			expect(result.state).toBe('MA');
+		}
+	});
+
+	it('should reject data envelopes that omit protocol binding', async () => {
+		const nonce = 'test-nonce-envelope-no-protocol';
+		const jwt = await buildJwt({
+			nonce,
+			resident_postal_code: '94110',
+			resident_state: 'CA',
+			document_number: 'D5555555',
+			birth_date: '1991-02-28'
+		});
+
+		const result = await processCredentialResponse(
+			JSON.stringify({ data: { vp_token: jwt } }),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('missing protocol');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should fail closed on encrypted dc_api.jwt OpenID4VP responses until request encryption is wired', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({ response: 'jwe-header.encrypted-key.iv.ciphertext.tag' }),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			'test-nonce-encrypted-response'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('decryption_failed');
+			expect(result.message).toContain('request-encryption support');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should fail closed on empty encrypted response markers', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({ response: '' }),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			'test-nonce-empty-encrypted-response'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('decryption_failed');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should treat encrypted response markers as higher priority than nested data', async () => {
+		const nonce = 'test-nonce-mixed-envelope';
+		const jwt = await buildJwt({
+			nonce,
+			resident_postal_code: '94110',
+			resident_state: 'CA',
+			document_number: 'D5555555',
+			birth_date: '1991-02-28'
+		});
+
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				response: 'jwe-header.encrypted-key.iv.ciphertext.tag',
+				data: { vp_token: jwt }
+			}),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('decryption_failed');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject ambiguous envelopes that contain both vp_token and nested data', async () => {
+		const nonce = 'test-nonce-ambiguous-envelope';
+		const jwt = await buildJwt({
+			nonce,
+			resident_postal_code: '94110',
+			resident_state: 'CA',
+			document_number: 'D5555555',
+			birth_date: '1991-02-28'
+		});
+
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				protocol: 'openid4vp-v1-unsigned',
+				vp_token: 'jwe-header.encrypted-key.iv.ciphertext.tag',
+				data: { vp_token: jwt }
+			}),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('ambiguous');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should fail closed on nested encrypted dc_api.jwt response envelopes', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				protocol: 'openid4vp-v1-unsigned',
+				data: { response: 'jwe-header.encrypted-key.iv.ciphertext.tag' }
+			}),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			'test-nonce-nested-encrypted-response'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('decryption_failed');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject data envelopes nested beyond the parser depth cap', async () => {
+		const nonce = 'test-nonce-depth-cap';
+		const jwt = await buildJwt({
+			nonce,
+			resident_postal_code: '94110',
+			resident_state: 'CA',
+			document_number: 'D5555555',
+			birth_date: '1991-02-28'
+		});
+
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				protocol: 'openid4vp-v1-unsigned',
+				data: {
+					protocol: 'openid4vp-v1-unsigned',
+					data: {
+						protocol: 'openid4vp-v1-unsigned',
+						data: {
+							protocol: 'openid4vp-v1-unsigned',
+							data: { vp_token: jwt }
+						}
+					}
+				}
+			}),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('nested too deeply');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should fail closed on compact JWE supplied as a vp_token string', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({ vp_token: 'jwe-header.encrypted-key.iv.ciphertext.tag' }),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			'test-nonce-vp-token-jwe'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('decryption_failed');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should fail closed on identityToken encrypted response envelopes', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({ identityToken: 'jwe-header.encrypted-key.iv.ciphertext.tag' }),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			'test-nonce-identity-token'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('decryption_failed');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should fail closed on mso_mdoc VP token arrays until DC API DeviceAuth is verified', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				vp_token: {
+					mdl: ['o2dkb2NzdoJvcmcuaXNvLjE4MDEzLjUuMS5tREw']
+				}
+			}),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			'test-nonce-mso-mdoc'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('replay_protection_missing');
+			expect(result.message).toContain('SessionTranscript');
+			expect(result.message).toContain('DeviceAuth');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject mdoc-shaped VP token arrays under unexpected credential ids', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				vp_token: {
+					cred1: ['o2dkb2NzdoJvcmcuaXNvLjE4MDEzLjUuMS5tREw']
+				}
+			}),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			'test-nonce-unexpected-credential-id'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('does not contain an mso_mdoc');
+			expect(result.message).not.toContain('DeviceAuth');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should fail closed on nested mso_mdoc VP token arrays until DC API DeviceAuth is verified', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				protocol: 'openid4vp-v1-unsigned',
+				data: {
+					vp_token: {
+						mdl: ['o2dkb2NzdoJvcmcuaXNvLjE4MDEzLjUuMS5tREw']
+					}
+				}
+			}),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			'test-nonce-nested-mso-mdoc'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('replay_protection_missing');
+			expect(result.message).toContain('DeviceAuth');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject mismatched DigitalCredential envelope protocols', async () => {
+		const nonce = 'test-nonce-protocol-mismatch';
+		const jwt = await buildJwt({
+			nonce,
+			resident_postal_code: '94110',
+			resident_state: 'CA',
+			document_number: 'D5555555',
+			birth_date: '1991-02-28'
+		});
+
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				protocol: 'org-iso-mdoc',
+				data: { vp_token: jwt }
+			}),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('protocol mismatch');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject non-mdoc VP token objects without DeviceAuth messaging', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({ vp_token: { mdl: [42] } }),
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			'test-nonce-non-mdoc-object'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('does not contain an mso_mdoc');
+			expect(result.message).not.toContain('DeviceAuth');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
 	it('should extract claims from a bare JWT string', async () => {
 		const nonce = 'test-nonce-456';
 		const jwt = await buildJwt({
@@ -388,6 +725,29 @@ describe('OpenID4VP response processing', () => {
 			expect(result.error).toBe('invalid_format');
 			expect(result.message).toContain('nonce mismatch');
 		}
+	});
+
+	it('should reject VP tokens that omit nonce', async () => {
+		const jwt = await buildJwt({
+			resident_postal_code: '94110',
+			resident_state: 'CA',
+			document_number: 'D5555555',
+			birth_date: '1991-02-28'
+		});
+
+		const result = await processCredentialResponse(
+			{ vp_token: jwt },
+			'openid4vp',
+			ephemeralKey,
+			'required-nonce'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('missing nonce');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
 	it('should reject expired VP tokens when exp is present', async () => {
