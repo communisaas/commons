@@ -87,7 +87,7 @@ export type MdlVerificationResult =
  * Raw address data enters this function. Only derived district leaves.
  *
  * @param encryptedData - The encrypted credential data from the wallet
- * @param protocol - 'org-iso-mdoc' or 'openid4vp'
+ * @param protocol - 'org-iso-mdoc', 'openid4vp-v1-unsigned', or legacy 'openid4vp'
  * @param ephemeralPrivateKey - The ephemeral private key for HPKE decryption
  * @param nonce - Session nonce for replay protection
  */
@@ -101,7 +101,7 @@ export async function processCredentialResponse(
 	try {
 		if (protocol === 'org-iso-mdoc') {
 			return await processMdocResponse(encryptedData, ephemeralPrivateKey, nonce, options?.vicalKv);
-		} else if (protocol === 'openid4vp') {
+		} else if (protocol === 'openid4vp' || protocol === 'openid4vp-v1-unsigned') {
 			return await processOid4vpResponse(encryptedData, ephemeralPrivateKey, nonce);
 		} else {
 			return {

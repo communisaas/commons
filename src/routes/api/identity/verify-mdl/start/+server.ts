@@ -1,6 +1,10 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { isAnyMdlProtocolEnabled, isMdlProtocolEnabled } from '$lib/config/features';
+import {
+	OPENID4VP_DC_API_PROTOCOL,
+	isAnyMdlProtocolEnabled,
+	isMdlProtocolEnabled
+} from '$lib/config/features';
 import { devSessionStore } from '../_dev-session-store';
 
 /**
@@ -104,26 +108,29 @@ export const POST: RequestHandler = async ({ locals, platform }) => {
 			requests.push({ protocol: 'org-iso-mdoc', data: deviceRequestB64 });
 		}
 
-		if (isMdlProtocolEnabled('openid4vp')) {
+		if (isMdlProtocolEnabled(OPENID4VP_DC_API_PROTOCOL)) {
 			requests.push({
-				protocol: 'openid4vp',
+				protocol: OPENID4VP_DC_API_PROTOCOL,
 				data: {
-					client_id: platform?.env?.PUBLIC_APP_URL ?? 'https://commons.email',
+					response_type: 'vp_token',
+					response_mode: 'dc_api',
 					nonce,
 					dcql_query: {
 						credentials: [
 							{
+								id: 'mdl',
 								format: 'mso_mdoc',
-								doctype: 'org.iso.18013.5.1.mDL',
-								claims: {
-									'org.iso.18013.5.1': [
-										{ name: 'resident_postal_code', intent_to_retain: false },
-										{ name: 'resident_city', intent_to_retain: false },
-										{ name: 'resident_state', intent_to_retain: false },
-										{ name: 'birth_date', intent_to_retain: false },
-										{ name: 'document_number', intent_to_retain: false }
-									]
-								}
+								meta: { doctype_value: 'org.iso.18013.5.1.mDL' },
+								claims: [
+									{
+										id: 'resident_postal_code',
+										path: ['org.iso.18013.5.1', 'resident_postal_code']
+									},
+									{ id: 'resident_city', path: ['org.iso.18013.5.1', 'resident_city'] },
+									{ id: 'resident_state', path: ['org.iso.18013.5.1', 'resident_state'] },
+									{ id: 'birth_date', path: ['org.iso.18013.5.1', 'birth_date'] },
+									{ id: 'document_number', path: ['org.iso.18013.5.1', 'document_number'] }
+								]
 							}
 						]
 					}

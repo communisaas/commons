@@ -79,12 +79,11 @@ export const FEATURES = {
 	PASSKEY: false,
 
 	/**
-	 * Android mDL over OpenID4VP.
+	 * Android mDL over OpenID4VP via the W3C Digital Credentials API.
 	 *
-	 * This is the first functional rollout lane. OpenID4VP responses are JWT /
-	 * SD-JWT based, and `processOid4vpResponse` verifies the token signature and
-	 * compares the VP nonce against the server-issued nonce before trusting
-	 * claims. It does not depend on Apple Business Connect.
+	 * This lane does not depend on Apple Business Connect. Google Wallet's
+	 * current web protocol identifier is `openid4vp-v1-unsigned`; the legacy
+	 * `openid4vp` alias is accepted only for older browser experiments.
 	 */
 	MDL_ANDROID_OID4VP: true,
 
@@ -118,10 +117,20 @@ export const FEATURES = {
 	MDL: false
 } as const;
 
-export type MdlProtocol = 'openid4vp' | 'org-iso-mdoc';
+export const OPENID4VP_DC_API_PROTOCOL = 'openid4vp-v1-unsigned';
+export const LEGACY_OPENID4VP_PROTOCOL = 'openid4vp';
+
+export type MdlProtocol =
+	| typeof OPENID4VP_DC_API_PROTOCOL
+	| typeof LEGACY_OPENID4VP_PROTOCOL
+	| 'org-iso-mdoc';
+
+export function isOpenId4VpProtocol(protocol: string): boolean {
+	return protocol === OPENID4VP_DC_API_PROTOCOL || protocol === LEGACY_OPENID4VP_PROTOCOL;
+}
 
 export function isMdlProtocolEnabled(protocol: string): boolean {
-	if (protocol === 'openid4vp') return FEATURES.MDL_ANDROID_OID4VP;
+	if (isOpenId4VpProtocol(protocol)) return FEATURES.MDL_ANDROID_OID4VP;
 	if (protocol === 'org-iso-mdoc') return FEATURES.MDL_MDOC;
 	return false;
 }

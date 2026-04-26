@@ -193,7 +193,7 @@ beforeAll(async () => {
 });
 
 describe('OpenID4VP response processing', () => {
-	it('should extract claims from a JWT vp_token', async () => {
+	it('should extract claims from a JWT vp_token for the versioned DC API protocol', async () => {
 		const nonce = 'test-nonce-123';
 		const jwt = await buildJwt({
 			nonce,
@@ -208,7 +208,7 @@ describe('OpenID4VP response processing', () => {
 
 		const result = await processCredentialResponse(
 			{ vp_token: jwt },
-			'openid4vp',
+			'openid4vp-v1-unsigned',
 			ephemeralKey,
 			nonce
 		);

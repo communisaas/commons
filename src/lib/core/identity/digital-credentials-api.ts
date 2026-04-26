@@ -4,10 +4,15 @@
  * Feature detection, protocol support checking, and credential request wrapper
  * for mDL verification via browser-native wallet interaction.
  *
- * Browser support: Chrome 141+ (org-iso-mdoc + openid4vp), Safari 26+ (org-iso-mdoc only)
+ * Browser support: Chrome 141+ (org-iso-mdoc + OpenID4VP v1), Safari 26+ (org-iso-mdoc only)
  *
  * @see https://w3c-fedid.github.io/digital-credentials/
  */
+import {
+	LEGACY_OPENID4VP_PROTOCOL,
+	OPENID4VP_DC_API_PROTOCOL,
+	isMdlProtocolEnabled
+} from '$lib/config/features';
 
 /**
  * Detect whether this is a mobile device (has a local wallet).
@@ -20,8 +25,9 @@ export function isMobileDevice(): boolean {
 	if (typeof navigator === 'undefined') return false;
 	const ua = navigator.userAgent;
 	const uadPlatform =
-		(navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform?.toLowerCase() ??
-		'';
+		(
+			navigator as Navigator & { userAgentData?: { platform?: string } }
+		).userAgentData?.platform?.toLowerCase() ?? '';
 	if (uadPlatform === 'android' || ua.includes('Android')) return true;
 	if (/iPhone|iPad/.test(ua)) return true;
 	// iPadOS 13+ lies: reports Macintosh UA. Detect via touch capability.
@@ -48,7 +54,7 @@ export function shouldUseSameDeviceFlow(): boolean {
 
 /**
  * Check which protocols the browser/device supports.
- * Chrome: org-iso-mdoc + openid4vp
+ * Chrome: org-iso-mdoc + OpenID4VP v1
  * Safari: org-iso-mdoc only
  */
 export function getSupportedProtocols(): {
@@ -67,7 +73,7 @@ export function getSupportedProtocols(): {
 
 	return {
 		mdoc: DigitalCredential.userAgentAllowsProtocol('org-iso-mdoc'),
-		openid4vp: DigitalCredential.userAgentAllowsProtocol('openid4vp')
+		openid4vp: DigitalCredential.userAgentAllowsProtocol(OPENID4VP_DC_API_PROTOCOL)
 	};
 }
 
@@ -149,13 +155,20 @@ export async function requestCredential(
 		// Safari only supports org-iso-mdoc; passing unsupported protocols
 		// may crash the Credential Request Coordinator.
 		const supported = getSupportedProtocols();
+		const userAgentAllowsProtocol =
+			DigitalCredential.userAgentAllowsProtocol?.bind(DigitalCredential);
 		const protocolAllowed: Record<string, boolean> = {
-			'org-iso-mdoc': supported.mdoc,
-			openid4vp: supported.openid4vp
+			'org-iso-mdoc':
+				(userAgentAllowsProtocol?.('org-iso-mdoc') ?? supported.mdoc) &&
+				isMdlProtocolEnabled('org-iso-mdoc'),
+			[OPENID4VP_DC_API_PROTOCOL]:
+				(userAgentAllowsProtocol?.(OPENID4VP_DC_API_PROTOCOL) ?? supported.openid4vp) &&
+				isMdlProtocolEnabled(OPENID4VP_DC_API_PROTOCOL),
+			[LEGACY_OPENID4VP_PROTOCOL]:
+				(userAgentAllowsProtocol?.(LEGACY_OPENID4VP_PROTOCOL) ?? false) &&
+				isMdlProtocolEnabled(LEGACY_OPENID4VP_PROTOCOL)
 		};
-		processedRequests = processedRequests.filter(
-			(req) => protocolAllowed[req.protocol] ?? false
-		);
+		processedRequests = processedRequests.filter((req) => protocolAllowed[req.protocol] ?? false);
 
 		debugBreadcrumb('post-filter', {
 			supported,

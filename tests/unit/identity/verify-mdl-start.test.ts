@@ -483,7 +483,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const data = await response.json();
 
 			expect(data.requests).toHaveLength(1);
-			expect(data.requests[0].protocol).toBe('openid4vp');
+			expect(data.requests[0].protocol).toBe('openid4vp-v1-unsigned');
 		});
 
 		it('should return nonce in the response', async () => {
@@ -522,11 +522,19 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const data = await response.json();
 
 			const oid4vpRequest = data.requests[0];
-			expect(oid4vpRequest.protocol).toBe('openid4vp');
+			expect(oid4vpRequest.protocol).toBe('openid4vp-v1-unsigned');
 			expect(oid4vpRequest.data.dcql_query).toBeDefined();
 			expect(oid4vpRequest.data.dcql_query.credentials).toHaveLength(1);
-			expect(oid4vpRequest.data.dcql_query.credentials[0].format).toBe('mso_mdoc');
-			expect(oid4vpRequest.data.dcql_query.credentials[0].doctype).toBe('org.iso.18013.5.1.mDL');
+			expect(oid4vpRequest.data.response_type).toBe('vp_token');
+			expect(oid4vpRequest.data.response_mode).toBe('dc_api');
+			const credential = oid4vpRequest.data.dcql_query.credentials[0];
+			expect(credential.id).toBe('mdl');
+			expect(credential.format).toBe('mso_mdoc');
+			expect(credential.meta.doctype_value).toBe('org.iso.18013.5.1.mDL');
+			expect(credential.claims[0]).toEqual({
+				id: 'resident_postal_code',
+				path: ['org.iso.18013.5.1', 'resident_postal_code']
+			});
 		});
 
 		it('should include nonce in the openid4vp request data', async () => {
@@ -538,26 +546,43 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			expect(oid4vpRequest.data.nonce).toBe(data.nonce);
 		});
 
-		it('should include client_id in the openid4vp request data', async () => {
+		it('should omit client_id from the unsigned OpenID4VP DC API request', async () => {
 			const event = makeRequestEvent({ platform: null });
 			const response = await POST(event);
 			const data = await response.json();
 
 			const oid4vpRequest = data.requests[0];
-			expect(oid4vpRequest.data.client_id).toBeDefined();
-			expect(typeof oid4vpRequest.data.client_id).toBe('string');
+			expect(oid4vpRequest.data.client_id).toBeUndefined();
 		});
 
-		it('should request intent_to_retain: false for all openid4vp claims', async () => {
+		it('should request every required mDL claim by DCQL path', async () => {
 			const event = makeRequestEvent({ platform: null });
 			const response = await POST(event);
 			const data = await response.json();
 
-			const claims = data.requests[0].data.dcql_query.credentials[0].claims['org.iso.18013.5.1'];
-			expect(claims).toHaveLength(5);
-			for (const claim of claims) {
-				expect(claim.intent_to_retain).toBe(false);
-			}
+			const claims = data.requests[0].data.dcql_query.credentials[0].claims;
+			expect(claims).toEqual([
+				{
+					id: 'resident_postal_code',
+					path: ['org.iso.18013.5.1', 'resident_postal_code']
+				},
+				{
+					id: 'resident_city',
+					path: ['org.iso.18013.5.1', 'resident_city']
+				},
+				{
+					id: 'resident_state',
+					path: ['org.iso.18013.5.1', 'resident_state']
+				},
+				{
+					id: 'birth_date',
+					path: ['org.iso.18013.5.1', 'birth_date']
+				},
+				{
+					id: 'document_number',
+					path: ['org.iso.18013.5.1', 'document_number']
+				}
+			]);
 		});
 	});
 

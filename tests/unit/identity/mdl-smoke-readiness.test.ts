@@ -52,8 +52,18 @@ describe('Android mDL live-smoke readiness', () => {
 		];
 
 		for (const source of starts) {
+			expect(source).toContain("protocol: OPENID4VP_DC_API_PROTOCOL");
+			expect(source).toContain("response_type: 'vp_token'");
+			expect(source).toContain("response_mode: 'dc_api'");
+			expect(source).toContain("id: 'mdl'");
+			expect(source).toContain("meta: { doctype_value: 'org.iso.18013.5.1.mDL' }");
+			expect(source).not.toContain("protocol: 'openid4vp'");
+			expect(source).not.toContain("doctype: 'org.iso.18013.5.1.mDL'");
+			expect(source).not.toContain('intent_to_retain');
+			expect(source).not.toContain('client_id:');
 			for (const field of protocolFields) {
 				expect(source).toContain(field);
+				expect(source).toContain(`path: ['org.iso.18013.5.1', '${field}']`);
 			}
 		}
 	});

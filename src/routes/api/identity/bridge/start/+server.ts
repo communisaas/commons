@@ -2,7 +2,11 @@ import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
-import { isMdlBridgeEnabled, isMdlProtocolEnabled } from '$lib/config/features';
+import {
+	OPENID4VP_DC_API_PROTOCOL,
+	isMdlBridgeEnabled,
+	isMdlProtocolEnabled
+} from '$lib/config/features';
 import { createBridgeSession } from '$lib/server/bridge-session';
 
 const StartSchema = z.object({
@@ -52,7 +56,7 @@ export const POST: RequestHandler = async ({ request, locals, platform, url }) =
 	}
 
 	// Canonical origin — fail-closed in production, prevents proxy-host redirection
-	// in both the QR URL and the openid4vp client_id.
+	// in the QR URL.
 	// Uses !dev from $app/environment (reliable on CF Workers, unlike process.env).
 	const canonicalOrigin = platform?.env?.PUBLIC_APP_URL;
 	if (!dev && !canonicalOrigin) {
@@ -116,26 +120,29 @@ export const POST: RequestHandler = async ({ request, locals, platform, url }) =
 			requests.push({ protocol: 'org-iso-mdoc', data: deviceRequestB64 });
 		}
 
-		if (isMdlProtocolEnabled('openid4vp')) {
+		if (isMdlProtocolEnabled(OPENID4VP_DC_API_PROTOCOL)) {
 			requests.push({
-				protocol: 'openid4vp',
+				protocol: OPENID4VP_DC_API_PROTOCOL,
 				data: {
-					client_id: qrOrigin,
+					response_type: 'vp_token',
+					response_mode: 'dc_api',
 					nonce,
 					dcql_query: {
 						credentials: [
 							{
+								id: 'mdl',
 								format: 'mso_mdoc',
-								doctype: 'org.iso.18013.5.1.mDL',
-								claims: {
-									'org.iso.18013.5.1': [
-										{ name: 'resident_postal_code', intent_to_retain: false },
-										{ name: 'resident_city', intent_to_retain: false },
-										{ name: 'resident_state', intent_to_retain: false },
-										{ name: 'birth_date', intent_to_retain: false },
-										{ name: 'document_number', intent_to_retain: false }
-									]
-								}
+								meta: { doctype_value: 'org.iso.18013.5.1.mDL' },
+								claims: [
+									{
+										id: 'resident_postal_code',
+										path: ['org.iso.18013.5.1', 'resident_postal_code']
+									},
+									{ id: 'resident_city', path: ['org.iso.18013.5.1', 'resident_city'] },
+									{ id: 'resident_state', path: ['org.iso.18013.5.1', 'resident_state'] },
+									{ id: 'birth_date', path: ['org.iso.18013.5.1', 'birth_date'] },
+									{ id: 'document_number', path: ['org.iso.18013.5.1', 'document_number'] }
+								]
 							}
 						]
 					}
