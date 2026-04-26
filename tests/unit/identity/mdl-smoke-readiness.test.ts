@@ -59,12 +59,12 @@ describe('Android mDL live-smoke readiness', () => {
 			expect(source).toContain("meta: { doctype_value: 'org.iso.18013.5.1.mDL' }");
 			expect(source).not.toContain("protocol: 'openid4vp'");
 			expect(source).not.toContain("doctype: 'org.iso.18013.5.1.mDL'");
-			expect(source).not.toContain('intent_to_retain');
 			expect(source).not.toContain('client_id:');
 			for (const field of protocolFields) {
 				expect(source).toContain(field);
 				expect(source).toContain(`path: ['org.iso.18013.5.1', '${field}']`);
 			}
+			expect(source.match(/intent_to_retain: false/g)?.length).toBe(protocolFields.length);
 		}
 	});
 });

@@ -124,12 +124,29 @@ export const POST: RequestHandler = async ({ locals, platform }) => {
 								claims: [
 									{
 										id: 'resident_postal_code',
-										path: ['org.iso.18013.5.1', 'resident_postal_code']
+										path: ['org.iso.18013.5.1', 'resident_postal_code'],
+										intent_to_retain: false
 									},
-									{ id: 'resident_city', path: ['org.iso.18013.5.1', 'resident_city'] },
-									{ id: 'resident_state', path: ['org.iso.18013.5.1', 'resident_state'] },
-									{ id: 'birth_date', path: ['org.iso.18013.5.1', 'birth_date'] },
-									{ id: 'document_number', path: ['org.iso.18013.5.1', 'document_number'] }
+									{
+										id: 'resident_city',
+										path: ['org.iso.18013.5.1', 'resident_city'],
+										intent_to_retain: false
+									},
+									{
+										id: 'resident_state',
+										path: ['org.iso.18013.5.1', 'resident_state'],
+										intent_to_retain: false
+									},
+									{
+										id: 'birth_date',
+										path: ['org.iso.18013.5.1', 'birth_date'],
+										intent_to_retain: false
+									},
+									{
+										id: 'document_number',
+										path: ['org.iso.18013.5.1', 'document_number'],
+										intent_to_retain: false
+									}
 								]
 							}
 						]

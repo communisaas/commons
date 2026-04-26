@@ -533,7 +533,8 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			expect(credential.meta.doctype_value).toBe('org.iso.18013.5.1.mDL');
 			expect(credential.claims[0]).toEqual({
 				id: 'resident_postal_code',
-				path: ['org.iso.18013.5.1', 'resident_postal_code']
+				path: ['org.iso.18013.5.1', 'resident_postal_code'],
+				intent_to_retain: false
 			});
 		});
 
@@ -564,23 +565,28 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			expect(claims).toEqual([
 				{
 					id: 'resident_postal_code',
-					path: ['org.iso.18013.5.1', 'resident_postal_code']
+					path: ['org.iso.18013.5.1', 'resident_postal_code'],
+					intent_to_retain: false
 				},
 				{
 					id: 'resident_city',
-					path: ['org.iso.18013.5.1', 'resident_city']
+					path: ['org.iso.18013.5.1', 'resident_city'],
+					intent_to_retain: false
 				},
 				{
 					id: 'resident_state',
-					path: ['org.iso.18013.5.1', 'resident_state']
+					path: ['org.iso.18013.5.1', 'resident_state'],
+					intent_to_retain: false
 				},
 				{
 					id: 'birth_date',
-					path: ['org.iso.18013.5.1', 'birth_date']
+					path: ['org.iso.18013.5.1', 'birth_date'],
+					intent_to_retain: false
 				},
 				{
 					id: 'document_number',
-					path: ['org.iso.18013.5.1', 'document_number']
+					path: ['org.iso.18013.5.1', 'document_number'],
+					intent_to_retain: false
 				}
 			]);
 		});
