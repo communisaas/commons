@@ -22,10 +22,18 @@ export interface EncryptedWitnessRef {
 /**
  * Circuit-domain separation inputs. The resolver compares these against the
  * values committed in publicInputs to prevent cross-template proof replay.
+ *
+ * `districtCommitment` is REQUIRED (Stage 2.7). It is the server-canonical
+ * Poseidon2_sponge_24 hash of the user's 24 district slots, fetched from
+ * `districtCredentials.districtCommitment` by the submissions action. The
+ * resolver hashes the DECRYPTED witness's district slots with the same
+ * sponge and compares — closes the witness-to-commitment binding gap a
+ * prover could exploit with a leaked credentialHash.
  */
 export interface ResolverExpected {
 	actionDomain: string;
 	templateId: string;
+	districtCommitment: string;
 }
 
 /**

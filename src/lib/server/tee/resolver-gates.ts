@@ -13,7 +13,14 @@
 
 import type { ResolverErrorCode, ResolverExpected } from './constituent-resolver';
 
+// Accept either V1 (31) or V2 (33, F1 closure — Stage 5) public-input arrays.
+// V2 adds two indices at the end — revocation_nullifier [31], revocation_registry_root
+// [32]. The positional fields this gate consults (nullifier [26], actionDomain [27])
+// are unchanged, so widening the acceptance set is structurally safe. Stage 2.7's
+// witness-to-commitment check and Stage 5's V2 wiring are both additive — order
+// does not matter.
 const THREE_TREE_PUBLIC_INPUT_COUNT = 31;
+const THREE_TREE_V2_PUBLIC_INPUT_COUNT = 33;
 
 interface GateFailure {
 	success: false;
@@ -41,7 +48,16 @@ interface VerifyInput {
 	proof: string;
 	publicInputs: unknown;
 	expected: ResolverExpected;
-	witness: { actionDomain?: string; nullifier?: string; identityCommitment?: string };
+	witness: {
+		actionDomain?: string;
+		nullifier?: string;
+		identityCommitment?: string;
+		/** Stage 2.7: the 24 district slots committed inside the witness. The
+		 * resolver hashes these with poseidon2Sponge24 and compares against
+		 * `expected.districtCommitment` to prevent a prover from forging a proof
+		 * whose decrypted witness doesn't match the server-canonical commitment. */
+		districts?: unknown;
+	};
 }
 
 interface PublicInputsShape {
@@ -95,7 +111,11 @@ export async function verifyProofGate(input: VerifyInput): Promise<GateResult> {
 	if (!pi || typeof pi !== 'object') {
 		return { success: false, errorCode: 'PROOF_INVALID', error: 'public_inputs_missing' };
 	}
-	if (!Array.isArray(pi.publicInputsArray) || pi.publicInputsArray.length !== THREE_TREE_PUBLIC_INPUT_COUNT) {
+	if (
+		!Array.isArray(pi.publicInputsArray) ||
+		(pi.publicInputsArray.length !== THREE_TREE_PUBLIC_INPUT_COUNT &&
+			pi.publicInputsArray.length !== THREE_TREE_V2_PUBLIC_INPUT_COUNT)
+	) {
 		return { success: false, errorCode: 'PROOF_INVALID', error: 'public_inputs_wrong_shape' };
 	}
 	if (typeof pi.actionDomain !== 'string' || typeof pi.nullifier !== 'string') {
@@ -123,6 +143,22 @@ export async function verifyProofGate(input: VerifyInput): Promise<GateResult> {
 		return { success: false, errorCode: 'DOMAIN_MISMATCH', error: 'action_domain_mismatch' };
 	}
 
+	// Witness-to-commitment binding (Stage 2.7): the decrypted witness's 24
+	// district slots must hash (via poseidon2Sponge24) to the same
+	// `districtCommitment` the server used to canonically recompute
+	// action_domain. Without this, a prover with a leaked credentialHash could
+	// learn a victim's districtCommitment, construct action_domain against it,
+	// and submit a proof generated with THEIR OWN districts — the other gates
+	// (actionDomain hash match, nullifier binding) would still pass while the
+	// witness, the authoritative source for delivery routing, names different
+	// districts than the commitment the action_domain was bound to. Checking
+	// here (before the expensive Noir pairing check) short-circuits the attack
+	// with cheap field arithmetic.
+	const witnessBinding = await verifyWitnessDistrictCommitment(witness.districts, expected.districtCommitment);
+	if (!witnessBinding.success) {
+		return witnessBinding;
+	}
+
 	// Witness-to-proof binding: the nullifier in the public inputs must match
 	// the nullifier inside the encrypted witness. A missing witness nullifier
 	// means the encrypted envelope was not produced by the proving pipeline —
@@ -137,6 +173,72 @@ export async function verifyProofGate(input: VerifyInput): Promise<GateResult> {
 	// Real Noir/UltraHonk verification via @voter-protocol/noir-prover.
 	// Runs the bb.js pairing check against the bundled verification key.
 	return await runNoirVerify(proof, pi.publicInputsArray);
+}
+
+/**
+ * Stage 2.7 — witness-to-commitment binding check.
+ *
+ * Validates that the decrypted witness's `districts` field is a 24-element
+ * array of hex field elements, hashes it with poseidon2Sponge24 (the same
+ * sponge used at credential issuance to produce `districtCommitment`), and
+ * compares in constant time against the server-supplied `expected.districtCommitment`.
+ *
+ * Errors are typed and PII-free:
+ *   - `witness_districts_malformed` (PROOF_INVALID) — shape check failed;
+ *     the witness envelope was not produced by a legitimate prover.
+ *   - `witness_commitment_mismatch` (DOMAIN_MISMATCH) — districts hash diverges
+ *     from the server-canonical commitment. This is the attack signature.
+ *
+ * Kept separate from `verifyProofGate` so tests and future callers can exercise
+ * the binding check independently of the full gate-2 pipeline.
+ */
+async function verifyWitnessDistrictCommitment(
+	witnessDistricts: unknown,
+	expectedCommitment: string
+): Promise<GateResult> {
+	if (!Array.isArray(witnessDistricts) || witnessDistricts.length !== 24) {
+		return { success: false, errorCode: 'PROOF_INVALID', error: 'witness_districts_malformed' };
+	}
+	// Every slot must be a string — poseidon2Sponge24 itself validates hex / BN254
+	// bounds per element, but we check the coarse type first to avoid throwing
+	// into a caller that expects a typed GateResult.
+	for (const slot of witnessDistricts) {
+		if (typeof slot !== 'string' || slot.length === 0) {
+			return { success: false, errorCode: 'PROOF_INVALID', error: 'witness_districts_malformed' };
+		}
+	}
+	if (typeof expectedCommitment !== 'string' || expectedCommitment.length === 0) {
+		// Defensive: the caller must supply a districtCommitment (Stage 2.7). A
+		// server that forgot to fetch it would fail-open to the old behavior
+		// otherwise — reject instead, using the malformed error (operator-facing,
+		// not an attack signature by itself).
+		return { success: false, errorCode: 'PROOF_INVALID', error: 'witness_districts_malformed' };
+	}
+	let witnessCommitment: string;
+	try {
+		const { poseidon2Sponge24 } = await import('$lib/core/crypto/poseidon');
+		witnessCommitment = await poseidon2Sponge24(witnessDistricts as string[]);
+	} catch {
+		// A malformed hex slot that poseidon couldn't parse is indistinguishable
+		// from a legitimate-but-corrupt witness. Treat as a witness-shape failure
+		// so the error stays typed and PII-free.
+		return { success: false, errorCode: 'PROOF_INVALID', error: 'witness_districts_malformed' };
+	}
+	// Normalize both sides for the constant-time compare. poseidon2Sponge24 always
+	// returns a 0x-prefixed 66-char hex; credential-stored commitments are produced
+	// the same way. But normalizing case + prefix defends against mismatched storage
+	// formats. (Length difference after normalization still fails closed.)
+	const normalizedWitness = normalizeFieldHex(witnessCommitment);
+	const normalizedExpected = normalizeFieldHex(expectedCommitment);
+	if (!constantTimeEqual(normalizedWitness, normalizedExpected)) {
+		return { success: false, errorCode: 'DOMAIN_MISMATCH', error: 'witness_commitment_mismatch' };
+	}
+	return { success: true };
+}
+
+function normalizeFieldHex(hex: string): string {
+	const clean = hex.startsWith('0x') || hex.startsWith('0X') ? hex.slice(2) : hex;
+	return clean.toLowerCase();
 }
 
 /**

@@ -55,12 +55,20 @@ const handlePlatformEnv: Handle = async ({ event, resolve }) => {
 
 		// Wire Shadow Atlas content sources from env vars.
 		// R2 is the primary read path; IPFS activates when CID + gateways are set.
+		// EXPECTED_CELL_MAP_ROOT + EXPECTED_CELL_MAP_DEPTH (F-1.1): pinned Tree 2
+		// SMT root and depth used to detect poisoned-gateway / poisoned-R2
+		// attacks. Refresh at every quarterly atlas release. Empty in dev only —
+		// production callers fail-closed when unset.
+		const depthRaw = process.env.EXPECTED_CELL_MAP_DEPTH;
+		const depth = depthRaw ? Number.parseInt(depthRaw, 10) : 0;
 		configure({
 			atlasBaseUrl: process.env.ATLAS_BASE_URL || '',
 			ipfsCid: process.env.IPFS_CID_ROOT || '',
 			merkleSnapshotCid: process.env.IPFS_CID_MERKLE_SNAPSHOT || '',
 			ipfsGateways: (process.env.IPFS_GATEWAYS || '')
 				.split(',').map(s => s.trim()).filter(Boolean),
+			expectedCellMapRoot: process.env.EXPECTED_CELL_MAP_ROOT || '',
+			expectedCellMapDepth: Number.isFinite(depth) && depth > 0 ? depth : 0,
 		});
 	}
 	return resolve(event);

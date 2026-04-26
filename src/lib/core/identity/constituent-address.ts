@@ -1,18 +1,29 @@
 /**
  * Constituent Address Store
  *
- * Encrypted client-side storage for constituent delivery address.
- * The plaintext address NEVER reaches our server — only the district
- * identifier is sent for credential issuance (privacy-by-design).
+ * Encrypted client-side cache for the constituent delivery address.
  *
- * But CWC delivery requires the full address encrypted into the ZKP
- * witness, and users shouldn't re-enter it every session. So we
- * store it here: AES-256-GCM, device-bound key, auto-expires with
- * the session credential (6 months).
+ * Privacy scope (F-1.2 honesty pass): the plaintext address does NOT reach
+ * our server through THIS storage path. However:
+ *  - During address verification, the manual-entry fallback (Path B in
+ *    `AddressVerificationFlow.svelte`) sends the full address to our
+ *    self-hosted geocoder server-side; we discard it after the district is
+ *    derived but before it ever reaches this store.
+ *  - The Shadow Atlas client-side ZKP path (Path A) computes the district
+ *    commitment in the browser; only the commitment + approximate coordinates
+ *    transit the server (the latter for the F-1.1 authenticity gate).
+ *  - From this store onwards, only encrypted forms reach the server: CWC
+ *    delivery uses the encrypted blob as ZKP witness payload; the server
+ *    never decrypts.
  *
- * Threat model: Same as session-credentials.ts — protects against
- * XSS, malicious extensions, devtools inspection. Same-origin scripts
- * with full DOM access can still invoke decrypt(). Defense-in-depth.
+ * Why we keep the address client-side: CWC delivery requires the full address
+ * encrypted into the ZKP witness, and users shouldn't re-enter it every
+ * session. AES-256-GCM, device-bound key, auto-expires with the session
+ * credential (6 months).
+ *
+ * Threat model: Same as session-credentials.ts — protects against XSS,
+ * malicious extensions, devtools inspection. Same-origin scripts with full
+ * DOM access can still invoke decrypt(). Defense-in-depth.
  */
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';

@@ -72,6 +72,21 @@ const CONTENT_CONFIG = {
 	merkleSnapshotCid: '',
 	/** IPFS gateway URLs, tried in order when ipfsCid is set. */
 	ipfsGateways: [] as string[],
+	/**
+	 * F-1.1: pinned Tree 2 (cell-district map) root. Set per quarterly atlas
+	 * release. When non-empty, callers MUST verify the SMT path embedded in
+	 * each fetched cell entry resolves to this value before trusting the
+	 * cell's districts. Empty disables the gate (dev-only).
+	 *
+	 * Future: replace with on-chain DistrictRegistry contract read.
+	 */
+	expectedCellMapRoot: '',
+	/**
+	 * F-1.1 (review): pinned Tree 2 depth. Manifest-supplied `cells.depth`
+	 * is unauthenticated — pinning the depth out-of-band defends against a
+	 * chunk that returns truncated paths (defense-in-depth). 0 disables.
+	 */
+	expectedCellMapDepth: 0,
 };
 
 /**
@@ -83,11 +98,30 @@ export function configure(opts: {
 	ipfsCid?: string;
 	merkleSnapshotCid?: string;
 	ipfsGateways?: string[];
+	expectedCellMapRoot?: string;
+	expectedCellMapDepth?: number;
 }): void {
 	if (opts.atlasBaseUrl != null) CONTENT_CONFIG.atlasBaseUrl = opts.atlasBaseUrl.replace(/\/$/, '');
 	if (opts.ipfsCid != null) CONTENT_CONFIG.ipfsCid = opts.ipfsCid;
 	if (opts.merkleSnapshotCid != null) CONTENT_CONFIG.merkleSnapshotCid = opts.merkleSnapshotCid;
 	if (opts.ipfsGateways) CONTENT_CONFIG.ipfsGateways = opts.ipfsGateways;
+	if (opts.expectedCellMapRoot != null) CONTENT_CONFIG.expectedCellMapRoot = opts.expectedCellMapRoot;
+	if (opts.expectedCellMapDepth != null) CONTENT_CONFIG.expectedCellMapDepth = opts.expectedCellMapDepth;
+}
+
+/**
+ * Read the pinned Tree 2 root configured at startup. Empty string when no
+ * pin is set (dev only — production callers MUST treat this as fail-closed).
+ */
+export function getExpectedCellMapRoot(): string {
+	return CONTENT_CONFIG.expectedCellMapRoot;
+}
+
+/**
+ * Read the pinned Tree 2 depth. 0 when no pin is set.
+ */
+export function getExpectedCellMapDepth(): number {
+	return CONTENT_CONFIG.expectedCellMapDepth;
 }
 
 /**

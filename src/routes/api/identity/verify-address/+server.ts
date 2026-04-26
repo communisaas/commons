@@ -71,6 +71,10 @@ interface VerifyAddressInput {
 	// B-2: Client-computed district commitment (replaces plaintext after transition)
 	district_commitment?: string; // Poseidon2_sponge_24(districts[0..24]) hex string
 	slot_count?: number;          // How many of 24 district slots are non-zero
+	// FU-1.1: coordinates required when district_commitment is provided.
+	// Server fetches the same IPFS cell data and recomputes the expected
+	// commitment; mismatch is rejected as COMMITMENT_AUTHENTICITY_MISMATCH.
+	coordinates?: { lat: number; lng: number };
 }
 
 function validateInput(body: unknown): VerifyAddressInput {
@@ -132,6 +136,24 @@ function validateInput(body: unknown): VerifyAddressInput {
 		}
 	}
 
+	// FU-1.1 — coordinates required when commitment is provided (server uses
+	// them to recompute the expected commitment from IPFS cell data).
+	let coordinates: { lat: number; lng: number } | undefined;
+	const rawCoords = b.coordinates;
+	if (rawCoords && typeof rawCoords === 'object') {
+		const c = rawCoords as Record<string, unknown>;
+		if (
+			typeof c.lat === 'number' &&
+			typeof c.lng === 'number' &&
+			Number.isFinite(c.lat) &&
+			Number.isFinite(c.lng) &&
+			Math.abs(c.lat) <= 90 &&
+			Math.abs(c.lng) <= 180
+		) {
+			coordinates = { lat: c.lat, lng: c.lng };
+		}
+	}
+
 	// Validate officials array if present
 	let officials: OfficialInput[] | undefined;
 	if (Array.isArray(b.officials)) {
@@ -183,7 +205,8 @@ function validateInput(body: unknown): VerifyAddressInput {
 		verification_method: verificationMethod,
 		officials,
 		district_commitment: districtCommitment,
-		slot_count: slotCount
+		slot_count: slotCount,
+		coordinates
 	};
 }
 
@@ -209,6 +232,100 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			{ success: false, error: err instanceof Error ? err.message : 'Invalid request body' },
 			{ status: 400 }
 		);
+	}
+
+	// FU-1.1 — issuance-time commitment authenticity. When the client
+	// supplies a `district_commitment`, the server recomputes the expected
+	// commitment from IPFS cell data at the user's coordinates and rejects
+	// on mismatch. Closes the dummy-hex bypass of the downgrade guard.
+	//
+	// Coordinates are required when commitment is supplied. Server doesn't
+	// learn anything new — `/api/location/resolve-address` already gave it
+	// the lat/lng during geocoding; the client just echoes them back.
+	if (input.district_commitment) {
+		if (!input.coordinates) {
+			return json(
+				{
+					success: false,
+					error:
+						'Address coordinates are required to verify the district commitment. Please retry the address resolution step.',
+					code: 'COMMITMENT_AUTHENTICITY_REQUIRES_COORDINATES'
+				},
+				{ status: 400 }
+			);
+		}
+		try {
+			const { verifyDistrictCommitment } = await import(
+				'$lib/server/identity/verify-commitment'
+			);
+			await verifyDistrictCommitment({
+				lat: input.coordinates.lat,
+				lng: input.coordinates.lng,
+				clientCommitment: input.district_commitment
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			if (msg.includes('COMMITMENT_AUTHENTICITY_MISMATCH')) {
+				console.warn('[verify-address] commitment authenticity mismatch', {
+					userId,
+					detail: msg.slice(0, 200)
+				});
+				return json(
+					{
+						success: false,
+						error:
+							'The district commitment you submitted does not match the address. Please retry; if the problem persists, your client may have stale data.',
+						code: 'COMMITMENT_AUTHENTICITY_MISMATCH'
+					},
+					{ status: 400 }
+				);
+			}
+			if (
+				msg.includes('COMMITMENT_VERIFY_IPFS_UNAVAILABLE') ||
+				msg.includes('COMMITMENT_VERIFY_IPFS_TIMEOUT')
+			) {
+				// IPFS-side outage / slow: cannot verify, request is well-formed.
+				// Surface as 503 so the client retries; do NOT issue a credential
+				// without verification. Timeout vs unavailable is logged but the
+				// user-facing message is unified (operationally the same path).
+				const isTimeout = msg.includes('COMMITMENT_VERIFY_IPFS_TIMEOUT');
+				console.error(
+					`[verify-address] IPFS ${isTimeout ? 'timeout' : 'unavailable'} for authenticity check`,
+					{ userId, detail: msg.slice(0, 200) }
+				);
+				return json(
+					{
+						success: false,
+						error:
+							'Verification service temporarily unavailable. Please retry in a moment.',
+						code: isTimeout
+							? 'COMMITMENT_VERIFY_IPFS_TIMEOUT'
+							: 'COMMITMENT_VERIFY_IPFS_UNAVAILABLE'
+					},
+					{ status: 503 }
+				);
+			}
+			if (msg.includes('COMMITMENT_VERIFY_BAD_CELL_DATA')) {
+				return json(
+					{
+						success: false,
+						error:
+							'Your address is in a region without supported district data (US territories, some rural areas). Please use district-attested verification instead.',
+						code: 'COMMITMENT_VERIFY_BAD_CELL_DATA'
+					},
+					{ status: 422 }
+				);
+			}
+			// Unknown failure — fail-closed.
+			console.error('[verify-address] commitment verification failed:', msg);
+			return json(
+				{
+					success: false,
+					error: 'Failed to verify district commitment. Please retry.'
+				},
+				{ status: 500 }
+			);
+		}
 	}
 
 	try {
@@ -305,6 +422,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		if (message.includes('INVALID_VERIFICATION_METHOD')) {
 			return json(
 				{ success: false, error: 'Invalid verification method.', code: 'INVALID_METHOD' },
+				{ status: 400 }
+			);
+		}
+		if (message.includes('ADDRESS_VERIFICATION_COMMITMENT_DOWNGRADE')) {
+			// Client submitted a verify request without districtCommitment while
+			// the user's history contains at least one commitment-bearing row.
+			// Client-side Poseidon2 sponge likely failed silently — surface so
+			// the UI can retry commitment generation rather than downgrade.
+			return json(
+				{
+					success: false,
+					error:
+						'Address commitment could not be computed. Please try again; if the problem persists, check your connection and retry.',
+					code: 'COMMITMENT_DOWNGRADE'
+				},
 				{ status: 400 }
 			);
 		}

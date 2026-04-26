@@ -25,6 +25,7 @@ import {
 	type SessionCredential
 } from './session-credentials';
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
+import { poseidon2Sponge24 } from '$lib/core/crypto/poseidon';
 
 // ============================================================================
 // BN254 Validation (browser-safe — cannot import from server-only client.ts)
@@ -137,6 +138,39 @@ async function fetchWithRetry(
 	}
 
 	throw lastError ?? new Error('fetchWithRetry: all attempts failed');
+}
+
+// ============================================================================
+// District Commitment (Stage 2.5 — F2 closure)
+// ============================================================================
+
+/**
+ * Compute `districtCommitment = Poseidon2_sponge_24(districts)` for binding into
+ * the v2 action-domain preimage.
+ *
+ * Mirrors what `AddressVerificationFlow.svelte` computes for the server-side
+ * `districtCredentials.districtCommitment` row, so the client and server agree
+ * on the commitment without any on-the-wire exchange. If the districts array is
+ * not exactly 24 slots (malformed cell data), returns `undefined` — the
+ * SessionCredential then lacks the field and downstream callers route the user
+ * through CREDENTIAL_MIGRATION_REQUIRED re-verify.
+ */
+async function computeDistrictCommitment(
+	districts: string[] | undefined
+): Promise<string | undefined> {
+	if (!Array.isArray(districts) || districts.length !== 24) {
+		console.warn(
+			'[Shadow Atlas] districts array is not 24 slots; skipping districtCommitment',
+			{ length: districts?.length }
+		);
+		return undefined;
+	}
+	try {
+		return await poseidon2Sponge24(districts);
+	} catch (err) {
+		console.error('[Shadow Atlas] poseidon2Sponge24 failed; districtCommitment will be absent', err);
+		return undefined;
+	}
 }
 
 // ============================================================================
@@ -264,6 +298,11 @@ export async function registerThreeTree(
 		// content-addressed IPFS via Storacha CDN.
 		const tree2Data = request.tree2;
 
+		// Step 2a: Compute district commitment over the 24-slot districts array
+		// (F2 closure — Stage 2.5). Bound into the v2 action-domain preimage so
+		// nullifier scope is cryptographically tied to the witnessed districts.
+		const districtCommitment = await computeDistrictCommitment(tree2Data.districts);
+
 		// Step 2b: Fetch Tree 3 engagement data (non-blocking — defaults to tier 0 on failure)
 		let engagementData = await fetchEngagementData(tree1Data.identityCommitment);
 
@@ -300,6 +339,10 @@ export async function registerThreeTree(
 			cellMapPath: tree2Data.cellMapPath,
 			cellMapPathBits: tree2Data.cellMapPathBits,
 			districts: tree2Data.districts,
+			// Stage 2.5: bind district commitment into the credential so the
+			// v2 action-domain builder can produce a nullifier scope tied to
+			// these exact 24 districts. Absent only if sponge-24 failed above.
+			districtCommitment,
 
 			// Tree 3 engagement fields
 			engagementRoot: engagementData.engagementRoot,
@@ -391,6 +434,11 @@ export async function recoverThreeTree(
 		// Step 2: Use pre-resolved Tree 2 proof from IPFS (zero server leaks)
 		const tree2Data = request.tree2;
 
+		// Step 2a: Recompute districtCommitment on recovery so the restored
+		// SessionCredential carries the Stage-2.5 F2-closure field even when
+		// the original registration predated it.
+		const districtCommitment = await computeDistrictCommitment(tree2Data.districts);
+
 		// Step 2b: Fetch Tree 3 engagement data (non-blocking — defaults to tier 0 on failure)
 		let engagementData = await fetchEngagementData(tree1Data.identityCommitment);
 
@@ -426,6 +474,10 @@ export async function recoverThreeTree(
 			cellMapPath: tree2Data.cellMapPath,
 			cellMapPathBits: tree2Data.cellMapPathBits,
 			districts: tree2Data.districts,
+			// Stage 2.5: thread recomputed commitment through the recovery path
+			// so post-recovery credentials bind action domains to their witnessed
+			// districts exactly like a fresh registration.
+			districtCommitment,
 
 			// Tree 3 engagement fields
 			engagementRoot: engagementData.engagementRoot,

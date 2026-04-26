@@ -28,6 +28,24 @@ vi.mock('$lib/core/crypto/noir-prover-shim', () => ({
 	getThreeTreeProverForDepth: (...args: unknown[]) => mockGetThreeTreeProverForDepth(...args)
 }));
 
+// Stage 2.7 — deterministic mock for poseidon2Sponge24 so tests can pre-compute
+// the expected commitment without loading bb.js WASM in unit tests. The mock
+// concatenates district slots and folds into a 256-bit value; same districts →
+// same output, so happy-path witness binding passes.
+const { mockPoseidonSponge24 } = vi.hoisted(() => ({
+	mockPoseidonSponge24: vi.fn(async (districts: string[]) => {
+		const combined = districts.join('|');
+		let hash = 0n;
+		for (let i = 0; i < combined.length; i++) {
+			hash = (hash * 131n + BigInt(combined.charCodeAt(i))) & ((1n << 256n) - 1n);
+		}
+		return '0x' + hash.toString(16).padStart(64, '0');
+	})
+}));
+vi.mock('$lib/core/crypto/poseidon', () => ({
+	poseidon2Sponge24: (districts: string[]) => mockPoseidonSponge24(districts)
+}));
+
 import { LocalConstituentResolver } from '$lib/server/tee/local-resolver';
 
 const VALID_PROOF = '0x' + 'ab'.repeat(1500);
@@ -46,11 +64,28 @@ const FULL_ADDRESS = {
 	congressional_district: 'CA-12'
 };
 
+// Stage 2.7: 24-slot districts + deterministic commitment derived by the same
+// folding formula as the hoisted mockPoseidonSponge24 above. Declared in module
+// scope so every test uses the same pair — binding gate passes by default.
+const HAPPY_DISTRICTS: string[] = Array.from({ length: 24 }, (_, i) =>
+	'0x' + (i + 1).toString(16).padStart(64, '0')
+);
+function computeMockSponge24(districts: string[]): string {
+	const combined = districts.join('|');
+	let hash = 0n;
+	for (let i = 0; i < combined.length; i++) {
+		hash = (hash * 131n + BigInt(combined.charCodeAt(i))) & ((1n << 256n) - 1n);
+	}
+	return '0x' + hash.toString(16).padStart(64, '0');
+}
+const HAPPY_COMMITMENT = computeMockSponge24(HAPPY_DISTRICTS);
+
 const VALID_WITNESS = {
 	deliveryAddress: FULL_ADDRESS,
 	cellId: CELL_ID,
 	nullifier: NULLIFIER,
-	actionDomain: ACTION_DOMAIN
+	actionDomain: ACTION_DOMAIN,
+	districts: HAPPY_DISTRICTS
 };
 
 // Named fields must match their canonical array positions: [26]=nullifier, [27]=actionDomain.
@@ -72,7 +107,7 @@ function buildRequest(overrides: Partial<{
 	ephemeralPublicKey: string;
 	proof: string;
 	publicInputs: unknown;
-	expected: { actionDomain: string; templateId: string };
+	expected: { actionDomain: string; templateId: string; districtCommitment: string };
 }> = {}) {
 	return {
 		ciphertext: overrides.ciphertext ?? 'base64-encrypted-data',
@@ -80,7 +115,7 @@ function buildRequest(overrides: Partial<{
 		ephemeralPublicKey: overrides.ephemeralPublicKey ?? '0xephemeral-public-key',
 		proof: overrides.proof ?? VALID_PROOF,
 		publicInputs: overrides.publicInputs ?? VALID_PUBLIC_INPUTS,
-		expected: overrides.expected ?? { actionDomain: ACTION_DOMAIN, templateId: 'tpl-1' }
+		expected: overrides.expected ?? { actionDomain: ACTION_DOMAIN, templateId: 'tpl-1', districtCommitment: HAPPY_COMMITMENT }
 	};
 }
 

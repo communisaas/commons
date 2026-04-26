@@ -1,5 +1,6 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { isMdlBridgeEnabled } from '$lib/config/features';
 import { createSSEStream } from '$lib/server/sse-stream';
 import { getBridgeSession } from '$lib/server/bridge-session';
 
@@ -11,6 +12,10 @@ import { getBridgeSession } from '$lib/server/bridge-session';
  * Closes on terminal state or TTL expiry.
  */
 export const GET: RequestHandler = async ({ params, locals, platform }) => {
+	if (!isMdlBridgeEnabled()) {
+		throw error(404, 'Not found');
+	}
+
 	const session = locals.session;
 	if (!session?.userId) {
 		throw error(401, 'Authentication required');

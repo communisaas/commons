@@ -169,6 +169,10 @@ export interface AddressVerificationResult {
 	zk_warning?: string;
 	error?: string;
 	district_source?: 'shadow_atlas';
+	/** FU-1.1: geocoded coordinates passed back to the verify-address endpoint
+	 *  so the server can recompute the expected districtCommitment from IPFS
+	 *  cell data and authenticate the client-supplied value. */
+	coordinates?: { lat: number; lng: number } | null;
 	special_status?: {
 		type: string;
 		message: string;

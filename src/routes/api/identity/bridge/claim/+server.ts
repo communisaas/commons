@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
+import { isMdlBridgeEnabled } from '$lib/config/features';
 import {
 	getBridgeSession,
 	claimBridgeSessionBestEffort,
@@ -21,6 +22,10 @@ const ClaimSchema = z.object({
  * Returns nothing sensitive.
  */
 export const POST: RequestHandler = async ({ request, platform }) => {
+	if (!isMdlBridgeEnabled()) {
+		throw error(404, 'Not found');
+	}
+
 	try {
 		const body = await request.json();
 		let input;
@@ -38,12 +43,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		}
 
 		// Verify HMAC using secret from KV (never from client)
-		const hmacValid = await verifyHmac(
-			session.secret,
-			input.hmac,
-			input.sessionId,
-			'claim'
-		);
+		const hmacValid = await verifyHmac(session.secret, input.hmac, input.sessionId, 'claim');
 		if (!hmacValid) {
 			throw error(403, 'Invalid HMAC — request integrity check failed');
 		}

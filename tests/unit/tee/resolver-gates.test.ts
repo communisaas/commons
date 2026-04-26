@@ -7,10 +7,22 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockResolveAddress, mockVerifyProof, mockGetThreeTreeProverForDepth } = vi.hoisted(() => ({
+const { mockResolveAddress, mockVerifyProof, mockGetThreeTreeProverForDepth, mockPoseidonSponge24 } = vi.hoisted(() => ({
 	mockResolveAddress: vi.fn(),
 	mockVerifyProof: vi.fn().mockResolvedValue(true),
-	mockGetThreeTreeProverForDepth: vi.fn()
+	mockGetThreeTreeProverForDepth: vi.fn(),
+	// Deterministic mock for poseidon2Sponge24: concatenates district slots and
+	// hashes with FNV-style folding. The witness-commitment binding test passes
+	// in both the districts and the "expected" commitment, so both sides of the
+	// compare use this same mock and match when they should.
+	mockPoseidonSponge24: vi.fn(async (districts: string[]) => {
+		const combined = districts.join('|');
+		let hash = 0n;
+		for (let i = 0; i < combined.length; i++) {
+			hash = (hash * 131n + BigInt(combined.charCodeAt(i))) & ((1n << 256n) - 1n);
+		}
+		return '0x' + hash.toString(16).padStart(64, '0');
+	})
 }));
 
 vi.mock('$lib/core/shadow-atlas/client', () => ({
@@ -21,9 +33,21 @@ vi.mock('$lib/core/crypto/noir-prover-shim', () => ({
 	getThreeTreeProverForDepth: (...args: unknown[]) => mockGetThreeTreeProverForDepth(...args)
 }));
 
+vi.mock('$lib/core/crypto/poseidon', () => ({
+	poseidon2Sponge24: (districts: string[]) => mockPoseidonSponge24(districts)
+}));
+
 import { verifyProofGate, reconcileCellGate } from '$lib/server/tee/resolver-gates';
 
-beforeEach(() => {
+// Deterministic 24-slot district list used by happy-path tests. The mock above
+// hashes these into a fixed value — we pre-compute it here so tests can pass
+// the same value as `expected.districtCommitment`.
+const HAPPY_DISTRICTS: string[] = Array.from({ length: 24 }, (_, i) =>
+	'0x' + (i + 1).toString(16).padStart(64, '0')
+);
+let HAPPY_COMMITMENT = '';
+
+beforeEach(async () => {
 	vi.clearAllMocks();
 	mockGetThreeTreeProverForDepth.mockResolvedValue({
 		verifyProof: (...args: unknown[]) => mockVerifyProof(...args),
@@ -31,6 +55,16 @@ beforeEach(() => {
 		destroy: vi.fn()
 	});
 	mockVerifyProof.mockResolvedValue(true);
+	// Re-apply the hoisted implementation after vi.clearAllMocks.
+	mockPoseidonSponge24.mockImplementation(async (districts: string[]) => {
+		const combined = districts.join('|');
+		let hash = 0n;
+		for (let i = 0; i < combined.length; i++) {
+			hash = (hash * 131n + BigInt(combined.charCodeAt(i))) & ((1n << 256n) - 1n);
+		}
+		return '0x' + hash.toString(16).padStart(64, '0');
+	});
+	HAPPY_COMMITMENT = await mockPoseidonSponge24(HAPPY_DISTRICTS);
 });
 
 // -----------------------------------------------------------------------------
@@ -71,8 +105,23 @@ function mockShadowAtlasCell(cellId: string) {
 // -----------------------------------------------------------------------------
 
 describe('verifyProofGate — AR.4b invalid proof rejected', () => {
-	const expected = { actionDomain: '0x0000000000000000000000000000000000000000000000000000000000000001', templateId: 'tpl-1' };
-	const witness = { nullifier: '0x000000000000000000000000000000000000000000000000000000000000beef' };
+	// Stage 2.7: `expected` and `witness` are rebuilt per test so they pick up
+	// HAPPY_COMMITMENT from the top-level beforeEach (it depends on the mocked
+	// poseidon2Sponge24 which resets on each test). districts are passed
+	// through so the witness-to-commitment binding gate passes by default.
+	let expected: { actionDomain: string; templateId: string; districtCommitment: string };
+	let witness: { nullifier: string; districts: string[] };
+	beforeEach(() => {
+		expected = {
+			actionDomain: '0x0000000000000000000000000000000000000000000000000000000000000001',
+			templateId: 'tpl-1',
+			districtCommitment: HAPPY_COMMITMENT
+		};
+		witness = {
+			nullifier: '0x000000000000000000000000000000000000000000000000000000000000beef',
+			districts: HAPPY_DISTRICTS
+		};
+	});
 
 	it('accepts a well-formed proof with matching domain and nullifier', async () => {
 		const result = await verifyProofGate({
@@ -183,11 +232,13 @@ describe('verifyProofGate — AR.4b invalid proof rejected', () => {
 	});
 
 	it('rejects when witness.nullifier is absent (witness malformed)', async () => {
+		// Supply valid districts so the Stage 2.7 binding gate passes — we're
+		// exercising the nullifier-missing branch specifically, which runs after.
 		const result = await verifyProofGate({
 			proof: VALID_PROOF,
 			publicInputs: makePublicInputs(),
 			expected,
-			witness: {} // no nullifier — attacker-supplied envelope outside prover pipeline
+			witness: { districts: HAPPY_DISTRICTS } // no nullifier — attacker-supplied envelope outside prover pipeline
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -363,8 +414,8 @@ describe('three-gate atomicity — AR.4d', () => {
 	// constituent object leaks through.
 
 	it('every error payload is a short typed string with no constituent data', async () => {
-		const expected = { actionDomain: '0x' + '1'.padStart(64, '0'), templateId: 'tpl' };
-		const witness = { nullifier: '0x' + 'be'.padStart(64, 'e') };
+		const expected = { actionDomain: '0x' + '1'.padStart(64, '0'), templateId: 'tpl', districtCommitment: HAPPY_COMMITMENT };
+		const witness = { nullifier: '0x' + 'be'.padStart(64, 'e'), districts: HAPPY_DISTRICTS };
 
 		const cases = [
 			// proof fails
@@ -388,8 +439,8 @@ describe('three-gate atomicity — AR.4d', () => {
 
 	it('constant-time equality on action domain does not short-circuit on length match', async () => {
 		// Sanity: identical-length but different values still fail; identical values pass.
-		const expected = { actionDomain: '0xaaaa' + '0'.repeat(60), templateId: 'tpl' };
-		const witness = { nullifier: '0xbbbb' + '0'.repeat(60) };
+		const expected = { actionDomain: '0xaaaa' + '0'.repeat(60), templateId: 'tpl', districtCommitment: HAPPY_COMMITMENT };
+		const witness = { nullifier: '0xbbbb' + '0'.repeat(60), districts: HAPPY_DISTRICTS };
 
 		const mismatch = await verifyProofGate({
 			proof: VALID_PROOF,

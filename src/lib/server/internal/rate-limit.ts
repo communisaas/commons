@@ -22,7 +22,7 @@ function getLimiter(): SlidingWindowRateLimiter {
 
 export interface InternalEndpointLimit {
 	/** Endpoint discriminator (used as the rate-limit key). */
-	endpoint: 'alert' | 'anchor-proof' | 'anchor-incidents';
+	endpoint: 'alert' | 'anchor-proof' | 'anchor-incidents' | 'emit-revocation';
 	maxRequests: number;
 	windowMs: number;
 }

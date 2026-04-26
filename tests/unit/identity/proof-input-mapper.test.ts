@@ -34,6 +34,10 @@ function makeThreeTreeCredential(overrides: Partial<SessionCredential> = {}): Se
 		cellMapPath: Array(20).fill('0x' + '02'.padStart(64, '0')),
 		cellMapPathBits: Array(20).fill(0),
 		districts: Array(24).fill('0x' + '03'.padStart(64, '0')),
+		// Stage 2.5: mock Poseidon2 sponge-24 output over `districts`. The mapper
+		// does not currently consume this field, but fixtures carry it so future
+		// additions (or cross-cutting validators) see a realistic credential.
+		districtCommitment: '0x' + '1f'.padStart(64, '0'),
 		userSecret: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
 		registrationSalt: '0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
 		engagementRoot: '0x0000000000000000000000000000000000000000000000000000000000000001',

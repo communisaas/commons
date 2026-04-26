@@ -32,6 +32,33 @@ import {
 } from './credential-encryption';
 
 // ============================================================================
+// Typed Errors
+// ============================================================================
+
+/**
+ * Thrown when a SessionCredential (or server-held districtCredentials row) is
+ * missing the `districtCommitment` field required by the v2 action-domain
+ * builder. The UI must route the user through a re-verify flow rather than
+ * attempt to generate or validate a proof with stale/legacy credential data.
+ *
+ * Emitted in two places:
+ *   - Client-side: ProofGenerator.svelte, when the loaded SessionCredential
+ *     lacks districtCommitment. Caller catches and invokes `onreverify`.
+ *   - Server-side: /api/submissions/create, as a 403 with
+ *     `code: 'CREDENTIAL_MIGRATION_REQUIRED'`.
+ *
+ * Structured so both layers share a single discriminator.
+ */
+export class CredentialMigrationRequiredError extends Error {
+	readonly code = 'CREDENTIAL_MIGRATION_REQUIRED' as const;
+
+	constructor(message = 'Your proof credential needs to be renewed. Please re-verify.') {
+		super(message);
+		this.name = 'CredentialMigrationRequiredError';
+	}
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -108,6 +135,22 @@ export interface TreeState {
 	/** All 24 district IDs for this cell (hex-encoded) */
 	districts?: string[];
 
+	/**
+	 * Poseidon2 sponge-24 commitment over `districts[0..24]`, hex-encoded BN254
+	 * field element (0x-prefixed, 64 chars).
+	 *
+	 * Bound into the v2 action domain preimage (see
+	 * `src/lib/core/zkp/action-domain-builder.ts`) to close F2 district-hopping
+	 * amplification. Optional on the type because legacy (v1) credentials
+	 * persisted before Stage 2.5 will not have this field; callers must detect
+	 * and prompt re-verification rather than silently proceed.
+	 *
+	 * Source of truth: computed client-side from the 24-slot cell payload at
+	 * registration/recovery time; mirrored server-side in
+	 * `districtCredentials.districtCommitment` (Convex).
+	 */
+	districtCommitment?: string;
+
 	// Tree 3 (Engagement) Fields
 	/** Tree 3 (Engagement) root hash */
 	engagementRoot?: string;
@@ -165,6 +208,12 @@ export interface SessionCredential {
 	cellMapPath?: string[];
 	cellMapPathBits?: number[];
 	districts?: string[];
+	/**
+	 * Poseidon2 sponge-24 commitment over the 24 district slots. Required by the
+	 * v2 action-domain builder (Stage 2 re-grounding) — callers must detect a
+	 * missing value and route the user to re-verify rather than proceed.
+	 */
+	districtCommitment?: string;
 	authorityLevel?: 1 | 2 | 3 | 4 | 5;
 	registrationSalt?: string;
 	userSecret?: string;
@@ -409,6 +458,11 @@ async function migrateLegacyRecords(records: any[]): Promise<void> {
 					cellMapPath: credential.cellMapPath,
 					cellMapPathBits: credential.cellMapPathBits,
 					districts: credential.districts,
+					// v1/v2 credentials predate Stage 2.5 and will not carry a
+					// districtCommitment. Downstream callers (ProofGenerator,
+					// server-side canonical recompute) detect the missing value
+					// and surface CREDENTIAL_MIGRATION_REQUIRED.
+					districtCommitment: credential.districtCommitment,
 					engagementRoot: credential.engagementRoot,
 					engagementPath: credential.engagementPath,
 					engagementIndex: credential.engagementIndex,
@@ -559,6 +613,7 @@ function extractTreeState(credential: SessionCredential): TreeState {
 		cellMapPath: credential.cellMapPath,
 		cellMapPathBits: credential.cellMapPathBits,
 		districts: credential.districts,
+		districtCommitment: credential.districtCommitment,
 		engagementRoot: credential.engagementRoot,
 		engagementPath: credential.engagementPath,
 		engagementIndex: credential.engagementIndex,
@@ -592,6 +647,7 @@ function mergeToSessionCredential(
 		cellMapPath: treeState.cellMapPath,
 		cellMapPathBits: treeState.cellMapPathBits,
 		districts: treeState.districts,
+		districtCommitment: treeState.districtCommitment,
 		authorityLevel: identity.authorityLevel,
 		registrationSalt: identity.registrationSalt,
 		userSecret: identity.userSecret,
