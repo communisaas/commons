@@ -332,7 +332,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			expect(options).toEqual({ expirationTtl: 300 }); // 5 minutes
 		});
 
-		it('should store privateKeyJwk and userId in KV session data', async () => {
+		it('should store privateKeyJwk, userId, and origin in KV session data', async () => {
 			const mockKvPut = vi.fn().mockResolvedValue(undefined);
 			const event = makeRequestEvent({
 				platform: {
@@ -351,8 +351,30 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const sessionData = JSON.parse(mockKvPut.mock.calls[0][1]);
 			expect(sessionData.privateKeyJwk).toEqual(MOCK_PRIVATE_KEY_JWK);
 			expect(sessionData.userId).toBe(TEST_USER_ID);
+			expect(sessionData.origin).toBe('http://localhost');
 			expect(sessionData.createdAt).toBeDefined();
 			expect(typeof sessionData.createdAt).toBe('number');
+		});
+
+		it('should prefer configured PUBLIC_APP_URL for the verifier origin', async () => {
+			const mockKvPut = vi.fn().mockResolvedValue(undefined);
+			const event = makeRequestEvent({
+				platform: {
+					env: {
+						PUBLIC_APP_URL: 'https://commons.example/',
+						DC_SESSION_KV: {
+							put: mockKvPut,
+							get: vi.fn(),
+							delete: vi.fn()
+						}
+					}
+				}
+			});
+
+			await POST(event);
+
+			const sessionData = JSON.parse(mockKvPut.mock.calls[0][1]);
+			expect(sessionData.origin).toBe('https://commons.example');
 		});
 
 		it('should use KV key format "mdl-session:{nonce}"', async () => {
@@ -445,7 +467,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			expect(mockDevSessionStore.set).toHaveBeenCalledTimes(1);
 		});
 
-		it('should store valid JSON with privateKeyJwk and userId in dev store', async () => {
+		it('should store valid JSON with privateKeyJwk, userId, and origin in dev store', async () => {
 			const event = makeRequestEvent({ platform: null });
 
 			await POST(event);
@@ -454,6 +476,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const sessionData = JSON.parse(value.data);
 			expect(sessionData.privateKeyJwk).toEqual(MOCK_PRIVATE_KEY_JWK);
 			expect(sessionData.userId).toBe(TEST_USER_ID);
+			expect(sessionData.origin).toBe('http://localhost');
 		});
 	});
 

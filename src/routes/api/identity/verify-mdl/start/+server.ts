@@ -1,10 +1,12 @@
 import { json, error } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
 import {
 	OPENID4VP_DC_API_PROTOCOL,
 	isAnyMdlProtocolEnabled,
 	isMdlProtocolEnabled
 } from '$lib/config/features';
+import { normalizeDcApiWebOrigin } from '$lib/core/identity/oid4vp-dc-api-handover';
 import { devSessionStore } from '../_dev-session-store';
 
 /**
@@ -20,7 +22,7 @@ import { devSessionStore } from '../_dev-session-store';
  * OpenID4VP is enabled for Android. Raw org-iso-mdoc stays off until T3
  * DeviceAuth verification ships.
  */
-export const POST: RequestHandler = async ({ locals, platform }) => {
+export const POST: RequestHandler = async ({ locals, platform, url }) => {
 	if (!isAnyMdlProtocolEnabled()) {
 		throw error(404, 'Not found');
 	}
@@ -30,6 +32,15 @@ export const POST: RequestHandler = async ({ locals, platform }) => {
 	if (!session?.userId) {
 		throw error(401, 'Authentication required');
 	}
+
+	const canonicalOrigin = platform?.env?.PUBLIC_APP_URL;
+	if (!dev && !canonicalOrigin) {
+		console.error('[mDL Start] PUBLIC_APP_URL not configured in production');
+		throw error(500, 'mDL verifier misconfigured');
+	}
+	const verifierOrigin = normalizeDcApiWebOrigin(canonicalOrigin ?? url.origin, {
+		allowLocalhostHttp: dev
+	});
 
 	try {
 		// Generate ephemeral ECDH key pair for session encryption
@@ -54,6 +65,7 @@ export const POST: RequestHandler = async ({ locals, platform }) => {
 		const sessionData = JSON.stringify({
 			privateKeyJwk,
 			userId: session.userId,
+			origin: verifierOrigin,
 			createdAt: Date.now()
 		});
 

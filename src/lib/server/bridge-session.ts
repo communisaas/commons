@@ -12,18 +12,21 @@
  * privacy boundary → derived facts only via SSE. Stronger than same-device.
  *
  * Encryption: Sensitive fields (secret, ephemeralPrivateKeyJwk, desktopUserLabel,
- * requests, nonce) are AES-256-GCM encrypted before KV storage when an encryption
- * key is available. See bridge-crypto.ts.
+ * requests, nonce) and the protocol-binding origin are AES-256-GCM encrypted
+ * before KV storage when an encryption key is available. See bridge-crypto.ts.
  *
  * TTL: 5 minutes. One-time transitions: pending → claimed → completed.
  */
 
 import {
+	canStorePlaintextBridgeFieldsForDev,
 	encryptBridgeFields,
 	decryptBridgeFields,
 	type EncryptedBlob,
 	type SensitiveFields
 } from './bridge-crypto.js';
+import { dev } from '$app/environment';
+import { normalizeDcApiWebOrigin } from '$lib/core/identity/oid4vp-dc-api-handover';
 
 // Dev fallback (mirrors verify-mdl/_dev-session-store.ts pattern)
 const devBridgeStore = new Map<string, { data: string; expires: number }>();
@@ -45,6 +48,8 @@ export interface BridgeSession {
 	desktopUserLabel: string;
 	secret: string; // 32-byte hex — HMAC key + QR proof
 	nonce: string; // replay protection, passed to mDL start
+	/** Verifier origin used to reconstruct the OpenID4VP DC API SessionTranscript. */
+	origin: string;
 	/** Human-verifiable pairing code (3 words). User visually matches across devices. */
 	pairingCode: string;
 	ephemeralPrivateKeyJwk: JsonWebKey;
@@ -110,9 +115,14 @@ async function kvPut(key: string, session: BridgeSession, platform?: Platform): 
 		ephemeralPrivateKeyJwk: session.ephemeralPrivateKeyJwk,
 		desktopUserLabel: session.desktopUserLabel,
 		requests: session.requests,
-		nonce: session.nonce
+		nonce: session.nonce,
+		origin: session.origin
 	};
-	const blob = await encryptBridgeFields(session.id, sensitiveFields);
+	const blob = await encryptBridgeFields(
+		session.id,
+		sensitiveFields,
+		bridgeSessionAssociatedData(session)
+	);
 
 	let toStore: BridgeSession;
 	if (blob) {
@@ -124,7 +134,8 @@ async function kvPut(key: string, session: BridgeSession, platform?: Platform): 
 			ephemeralPrivateKeyJwk: {} as JsonWebKey,
 			desktopUserLabel: '',
 			requests: [],
-			nonce: ''
+			nonce: '',
+			origin: ''
 		};
 	} else {
 		// No encryption key — store plaintext (dev only)
@@ -161,13 +172,20 @@ async function kvGet(key: string, platform?: Platform): Promise<BridgeSession | 
 		const session = JSON.parse(raw) as BridgeSession;
 		// Decrypt sensitive fields if encrypted blob is present
 		if (session.encrypted) {
-			const fields = await decryptBridgeFields(session.id, session.encrypted);
+			const fields = await decryptBridgeFields(
+				session.id,
+				session.encrypted,
+				bridgeSessionAssociatedData(session)
+			);
 			session.secret = fields.secret;
 			session.ephemeralPrivateKeyJwk = fields.ephemeralPrivateKeyJwk;
 			session.desktopUserLabel = fields.desktopUserLabel;
 			session.requests = fields.requests;
 			session.nonce = fields.nonce;
+			session.origin = fields.origin;
 			delete session.encrypted;
+		} else if (!canStorePlaintextBridgeFieldsForDev()) {
+			return null;
 		}
 		return session;
 	} catch {
@@ -182,6 +200,21 @@ async function kvDelete(key: string, platform?: Platform): Promise<void> {
 	} else {
 		devBridgeStore.delete(KV_PREFIX + key);
 	}
+}
+
+function bridgeSessionAssociatedData(session: BridgeSession): string {
+	return JSON.stringify({
+		version: 1,
+		id: session.id,
+		desktopUserId: session.desktopUserId,
+		pairingCode: session.pairingCode,
+		status: session.status,
+		result: session.result ?? null,
+		createdAt: session.createdAt,
+		claimedAt: session.claimedAt ?? null,
+		completedAt: session.completedAt ?? null,
+		errorMessage: session.errorMessage ?? null
+	});
 }
 
 // ---------- HMAC ----------
@@ -230,6 +263,7 @@ export async function createBridgeSession(
 	origin: string,
 	platform?: Platform
 ): Promise<{ sessionId: string; secret: string; qrUrl: string; pairingCode: string; expiresAt: number }> {
+	const verifierOrigin = normalizeDcApiWebOrigin(origin, { allowLocalhostHttp: dev });
 	const sessionId = crypto.randomUUID();
 	const secretBytes = new Uint8Array(32);
 	crypto.getRandomValues(secretBytes);
@@ -242,6 +276,7 @@ export async function createBridgeSession(
 		desktopUserLabel,
 		secret,
 		nonce,
+		origin: verifierOrigin,
 		pairingCode,
 		ephemeralPrivateKeyJwk,
 		requests,
@@ -253,7 +288,7 @@ export async function createBridgeSession(
 
 	// Secret in URL fragment — fragments never hit the server, never appear
 	// in logs, never leak via Referer headers. Mobile page reads via window.location.hash.
-	const qrUrl = `${origin}/verify-bridge/${sessionId}#${secret}`;
+	const qrUrl = `${verifierOrigin}/verify-bridge/${sessionId}#${secret}`;
 	return { sessionId, secret, qrUrl, pairingCode, expiresAt: Date.now() + BRIDGE_TTL * 1000 };
 }
 

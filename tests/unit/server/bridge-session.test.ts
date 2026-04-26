@@ -74,7 +74,69 @@ describe('bridge-session lifecycle', () => {
 			expect(session!.desktopUserId).toBe('user-desktop-001');
 			expect(session!.desktopUserLabel).toBe('alice@example.com');
 			expect(session!.nonce).toBe('nonce-abc');
+			expect(session!.origin).toBe(TEST_ORIGIN);
 			expect(session!.requests).toEqual(TEST_REQUESTS);
+		});
+
+		it('normalizes and rejects bridge origins at the session boundary', async () => {
+			const normalized = await createBridgeSession(
+				'user-desktop-001',
+				'alice@example.com',
+				TEST_REQUESTS,
+				TEST_EPHEMERAL_KEY,
+				'nonce-abc',
+				`${TEST_ORIGIN}/`
+			);
+			expect(normalized.qrUrl).toBe(
+				`${TEST_ORIGIN}/verify-bridge/${normalized.sessionId}#${normalized.secret}`
+			);
+
+			await expect(
+				createBridgeSession(
+					'user-desktop-001',
+					'alice@example.com',
+					TEST_REQUESTS,
+					TEST_EPHEMERAL_KEY,
+					'nonce-abc',
+					`${TEST_ORIGIN}/path`
+				)
+			).rejects.toThrow(/origin/);
+		});
+
+		it('rejects encrypted sessions when public metadata is tampered', async () => {
+			process.env.BRIDGE_ENCRYPTION_KEY = 'a'.repeat(64);
+			const stored = new Map<string, string>();
+			const platform = {
+				env: {
+					BRIDGE_SESSION_KV: {
+						get: async (key: string) => stored.get(key) ?? null,
+						put: async (key: string, value: string) => {
+							stored.set(key, value);
+						},
+						delete: async (key: string) => {
+							stored.delete(key);
+						}
+					}
+				}
+			};
+
+			const result = await createBridgeSession(
+				'user-desktop-001',
+				'alice@example.com',
+				TEST_REQUESTS,
+				TEST_EPHEMERAL_KEY,
+				'nonce-abc',
+				TEST_ORIGIN,
+				platform
+			);
+
+			const key = `bridge:${result.sessionId}`;
+			const tampered = JSON.parse(stored.get(key)!);
+			tampered.status = 'completed';
+			tampered.result = { district: 'CA-01', state: 'CA', credentialHash: 'f'.repeat(64) };
+			stored.set(key, JSON.stringify(tampered));
+
+			await expect(getBridgeSession(result.sessionId, platform)).resolves.toBeNull();
 		});
 	});
 

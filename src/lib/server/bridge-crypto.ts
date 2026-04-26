@@ -23,6 +23,7 @@ export interface SensitiveFields {
 	desktopUserLabel: string;
 	requests: Array<{ protocol: string; data: unknown }>;
 	nonce: string;
+	origin: string;
 }
 
 export interface EncryptedBlob {
@@ -39,6 +40,10 @@ function getMasterKeyHex(): string | null {
 	} catch {
 		return null;
 	}
+}
+
+export function canStorePlaintextBridgeFieldsForDev(): boolean {
+	return dev && !getMasterKeyHex();
 }
 
 // ---------- Key derivation ----------
@@ -73,7 +78,8 @@ async function deriveSessionKey(masterKey: CryptoKey, sessionId: string): Promis
  */
 export async function encryptBridgeFields(
 	sessionId: string,
-	fields: SensitiveFields
+	fields: SensitiveFields,
+	associatedData?: string
 ): Promise<EncryptedBlob | null> {
 	const masterKeyHex = getMasterKeyHex();
 	if (!masterKeyHex) {
@@ -94,8 +100,10 @@ export async function encryptBridgeFields(
 
 	const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV for AES-GCM
 	const plaintext = encoder.encode(JSON.stringify(fields));
+	const params: AesGcmParams = { name: 'AES-GCM', iv };
+	if (associatedData) params.additionalData = encoder.encode(associatedData);
 	const ciphertextBuf = await crypto.subtle.encrypt(
-		{ name: 'AES-GCM', iv },
+		params,
 		sessionKey,
 		plaintext
 	);
@@ -113,7 +121,8 @@ export async function encryptBridgeFields(
  */
 export async function decryptBridgeFields(
 	sessionId: string,
-	blob: EncryptedBlob
+	blob: EncryptedBlob,
+	associatedData?: string
 ): Promise<SensitiveFields> {
 	const masterKeyHex = getMasterKeyHex();
 	if (!masterKeyHex) {
@@ -128,10 +137,12 @@ export async function decryptBridgeFields(
 
 	const ciphertext = base64ToBytes(blob.ciphertext);
 	const iv = base64ToBytes(blob.iv);
+	const params: AesGcmParams = { name: 'AES-GCM', iv };
+	if (associatedData) params.additionalData = encoder.encode(associatedData);
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- TS lib mismatch: Uint8Array<ArrayBufferLike> vs BufferSource
 	const plaintextBuf = await (crypto.subtle.decrypt as any)(
-		{ name: 'AES-GCM', iv },
+		params,
 		sessionKey,
 		ciphertext
 	);

@@ -19,7 +19,8 @@ const SAMPLE_FIELDS: SensitiveFields = {
 	ephemeralPrivateKeyJwk: { kty: 'OKP', crv: 'X25519', d: 'test-private', x: 'test-public' },
 	desktopUserLabel: 'alice@example.com',
 	requests: [{ protocol: 'org.iso.mdoc', data: { doctype: 'org.iso.18013.5.1.mDL' } }],
-	nonce: 'test-nonce-abc123'
+	nonce: 'test-nonce-abc123',
+	origin: 'https://commons.example'
 };
 
 describe('bridge-crypto', () => {
@@ -56,6 +57,7 @@ describe('bridge-crypto', () => {
 			expect(decrypted.desktopUserLabel).toBe(SAMPLE_FIELDS.desktopUserLabel);
 			expect(decrypted.requests).toEqual(SAMPLE_FIELDS.requests);
 			expect(decrypted.nonce).toBe(SAMPLE_FIELDS.nonce);
+			expect(decrypted.origin).toBe(SAMPLE_FIELDS.origin);
 		});
 
 		it('handles fields with special characters', async () => {
@@ -131,6 +133,20 @@ describe('bridge-crypto', () => {
 	});
 
 	describe('tamper detection', () => {
+		it('throws when associated data is modified', async () => {
+			const { encryptBridgeFields, decryptBridgeFields } = await loadModule();
+			const blob = await encryptBridgeFields(
+				'session-aad',
+				SAMPLE_FIELDS,
+				'{"status":"pending"}'
+			);
+			expect(blob).not.toBeNull();
+
+			await expect(
+				decryptBridgeFields('session-aad', blob!, '{"status":"completed"}')
+			).rejects.toThrow();
+		});
+
 		it('throws when ciphertext is modified', async () => {
 			const { encryptBridgeFields, decryptBridgeFields } = await loadModule();
 			const blob = await encryptBridgeFields('session-tamper', SAMPLE_FIELDS);
