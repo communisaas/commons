@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { browser } from '$app/environment';
-	import { shouldUseSameDeviceFlow } from '$lib/core/identity/digital-credentials-api';
 	import { FEATURES } from '$lib/config/features';
 	import DebateMarketCard from '$lib/components/debate/DebateMarketCard.svelte';
 	import DebateParticipationPanel from '$lib/components/wallet/debate/DebateParticipationPanel.svelte';
@@ -37,11 +36,8 @@
 	let districtVerifying = $state(false);
 	let districtError = $state('');
 
-	// ── mDL verification state ──
-	let mdlSupported = $state(false);
-	let mdlVerifying = $state(false);
-	let mdlVerified = $state(false);
-	let verificationTier = $state(0); // 0=unverified, 1=postal, 2=district, 3=mDL
+	// ── Verification state ──
+	let verificationTier = $state(0); // 0=unverified, 1=postal, 2=district
 
 	// ── Debate signal (read-only, no wallet needed) ──
 	const debateStanceMap = $derived(
@@ -59,13 +55,6 @@
 	let displayCount = $state(data.stats.verifiedActions);
 	let displayDistricts = $state(data.stats.uniqueDistricts);
 	let hasSubmitted = $state(false);
-
-	// Check mDL support on mount
-	$effect(() => {
-		if (browser) {
-			mdlSupported = shouldUseSameDeviceFlow();
-		}
-	});
 
 	// Poll verified count — 10s after submission, 30s otherwise
 	$effect(() => {
@@ -108,52 +97,6 @@
 		if (code.length >= 3) {
 			postalCodeResolved = true;
 			verificationTier = 1;
-		}
-	}
-
-	// ── mDL verification ──
-	async function startMdlVerification() {
-		if (!mdlSupported || mdlVerifying) return;
-		mdlVerifying = true;
-
-		try {
-			const { requestCredential, getSupportedProtocols } = await import(
-				'$lib/core/identity/digital-credentials-api'
-			);
-
-			const protocols = await getSupportedProtocols();
-			if (!protocols.mdoc && !protocols.openid4vp) {
-				mdlVerifying = false;
-				return;
-			}
-
-			const requests: Array<{ protocol: string; data: unknown }> = [];
-			if (protocols.mdoc) {
-				requests.push({
-					protocol: 'org-iso-mdoc',
-					data: {
-						docType: 'org.iso.18013.5.1.mDL',
-						nameSpaces: {
-							'org.iso.18013.5.1': {
-								resident_postal_code: { intentToRetain: false },
-								resident_city: { intentToRetain: false },
-								resident_state: { intentToRetain: false }
-							}
-						}
-					}
-				});
-			}
-
-			const result = await requestCredential({ requests });
-
-			if (result.success) {
-				mdlVerified = true;
-				verificationTier = 3;
-			}
-		} catch {
-			// User cancelled or error — non-blocking
-		} finally {
-			mdlVerifying = false;
 		}
 	}
 
@@ -524,41 +467,6 @@
 					</p>
 				{/if}
 			</div>
-
-			<!-- mDL verification upgrade (only if browser supports it) -->
-			{#if mdlSupported && !mdlVerified}
-				<div class="rounded-lg border border-blue-100 bg-blue-50/50 p-4">
-					<div class="flex items-start gap-3">
-						<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-100">
-							<svg class="h-4 w-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-								<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
-							</svg>
-						</div>
-						<div class="min-w-0 flex-1">
-							<p class="text-sm font-medium text-blue-900">Strengthen your verification</p>
-							<p class="mt-0.5 text-xs text-blue-700">
-								Use your digital ID to cryptographically verify your identity. Takes about 5 seconds.
-							</p>
-							<button
-								onclick={startMdlVerification}
-								disabled={mdlVerifying}
-								class="mt-2 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
-							>
-								{mdlVerifying ? 'Verifying...' : 'Verify with Digital ID'}
-							</button>
-						</div>
-					</div>
-				</div>
-			{/if}
-
-			{#if mdlVerified}
-				<div class="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-					<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-						<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
-					</svg>
-					Identity verified via Digital ID
-				</div>
-			{/if}
 
 			<button
 				onclick={districtEnabled ? goToDistrict : goToCompose}
