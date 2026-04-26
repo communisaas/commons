@@ -238,7 +238,23 @@
 			});
 
 			eventSource.addEventListener('completed', (event) => {
-				const data = JSON.parse(event.data);
+				const data = JSON.parse(event.data) as {
+					district?: string;
+					state?: string;
+					cellId?: string;
+					credentialHash?: unknown;
+					identityCommitmentBound?: unknown;
+				};
+				const credentialHash =
+					typeof data.credentialHash === 'string' ? data.credentialHash : '';
+				if (!/^[0-9a-f]{64}$/i.test(credentialHash) || data.identityCommitmentBound !== true) {
+					eventSource.close();
+					sseCleanup = null;
+					bridgeStatus = 'error';
+					bridgeError = 'Verification completed without identity binding. Try again.';
+					return;
+				}
+
 				eventSource.close();
 				sseCleanup = null;
 				oncomplete?.({
@@ -249,7 +265,7 @@
 					cell_id: data.cellId,
 					providerData: {
 						provider: 'digital-credentials-api',
-						credentialHash: '',
+						credentialHash,
 						issuedAt: Date.now()
 					}
 				});
@@ -305,7 +321,7 @@
 
 			<p class="mt-3 text-sm text-slate-600 leading-relaxed">
 				Your browser will open {walletName}.
-				Approve sharing your postal code and state.
+				Approve sharing your postal code, city, state, birth date, and document number.
 			</p>
 
 			<button
@@ -319,7 +335,7 @@
 			</button>
 
 			<p class="mt-4 text-xs text-slate-400 leading-relaxed">
-				Only location is shared. Name, photo, and license number stay on your device.
+				Raw identity fields are used only to bind your district privately and are not stored.
 			</p>
 		</div>
 
@@ -331,7 +347,7 @@
 				Waiting for {walletName}
 			</p>
 			<p class="mt-2 text-sm text-slate-500">
-				Approve sharing your postal code and state
+				Approve sharing your postal code, city, state, birth date, and document number
 			</p>
 		</div>
 

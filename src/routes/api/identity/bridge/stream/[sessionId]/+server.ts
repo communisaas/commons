@@ -80,6 +80,7 @@ export const GET: RequestHandler = async ({ params, locals, platform }) => {
 							district: current.result?.district,
 							state: current.result?.state,
 							cellId: current.result?.cellId,
+							credentialHash: current.result?.credentialHash,
 							identityCommitmentBound: current.result?.identityCommitmentBound
 						});
 						emitter.close();

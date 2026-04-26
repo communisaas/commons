@@ -1,0 +1,60 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+const read = (path: string) => readFileSync(path, 'utf8');
+
+describe('Android mDL live-smoke readiness', () => {
+	it('propagates the bridge credential hash back to the desktop verifier', () => {
+		const bridgeStream = read('src/routes/api/identity/bridge/stream/[sessionId]/+server.ts');
+		const verifier = read('src/lib/components/auth/GovernmentCredentialVerification.svelte');
+
+		expect(bridgeStream).toContain('credentialHash: current.result?.credentialHash');
+		expect(verifier).toContain('const credentialHash =');
+		expect(verifier).toContain('/^[0-9a-f]{64}$/i.test(credentialHash)');
+		expect(verifier).toContain('data.identityCommitmentBound !== true');
+		expect(verifier).toContain('credentialHash,');
+		expect(verifier).not.toContain("credentialHash: ''");
+		expect(verifier).not.toContain('credentialHash: data.credentialHash');
+	});
+
+	it('discloses the mDL fields requested by the wallet prompt', () => {
+		const verifier = read('src/lib/components/auth/GovernmentCredentialVerification.svelte');
+		const mobileBridge = read('src/routes/verify-bridge/[sessionId]/+page.svelte');
+		const helpPage = read('src/routes/help/verification/+page.svelte');
+		const privacyBoundary = read('src/lib/core/identity/mdl-verification.ts');
+		const requestedFields = 'postal code, city, state, birth date, and document number';
+
+		expect(verifier).toContain(requestedFields);
+		expect(mobileBridge).toContain(requestedFields);
+		expect(helpPage).toContain(requestedFields);
+		expect(privacyBoundary).toContain('birth_date/document_number');
+		expect(verifier).not.toContain('Approve sharing your postal code and state');
+		expect(mobileBridge).not.toContain('Approve sharing your postal code and state');
+		expect(mobileBridge).not.toContain('share your postal code with your wallet');
+		expect(verifier).not.toContain('license number stay on your device');
+		expect(helpPage).not.toContain('wallet shares only postal code, city, and state');
+		expect(helpPage).not.toContain('No name, no photo, no license number');
+		expect(helpPage).not.toContain('Those three fields');
+		expect(privacyBoundary).not.toContain('only postal_code, city, state requested');
+	});
+
+	it('keeps wallet request fields aligned across same-device and bridge protocols', () => {
+		const starts = [
+			read('src/routes/api/identity/bridge/start/+server.ts'),
+			read('src/routes/api/identity/verify-mdl/start/+server.ts')
+		];
+		const protocolFields = [
+			'resident_postal_code',
+			'resident_city',
+			'resident_state',
+			'birth_date',
+			'document_number'
+		];
+
+		for (const source of starts) {
+			for (const field of protocolFields) {
+				expect(source).toContain(field);
+			}
+		}
+	});
+});

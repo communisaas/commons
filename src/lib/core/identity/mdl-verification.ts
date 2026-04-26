@@ -2,13 +2,14 @@
  * mDL Verification -- Privacy Boundary
  *
  * processCredentialResponse() is THE privacy boundary.
- * Raw address fields (postal_code, city, state) enter this function
- * and ONLY the derived fact (congressional district) leaves.
+ * Raw disclosed fields (postal_code, city, state, birth_date, document_number)
+ * enter this function and ONLY derived facts leave.
  *
  * This code runs in a CF Worker today and moves to a TEE unchanged later.
  *
  * Privacy guarantees:
- * 1. Selective disclosure: only postal_code, city, state requested
+ * 1. Selective disclosure: location fields plus birth_date/document_number
+ *    for private identity binding
  * 2. Raw fields never returned, logged, or stored
  * 3. Ephemeral key pairs (5-min TTL) prevent persistent decryption
  * 4. intentToRetain: false on all fields
@@ -20,7 +21,7 @@
  * 4. Verify COSE_Sign1 signature against IACA roots
  * 5. Validate MSO valueDigests
  * 6. Check DeviceAuth
- * 7. Extract address fields -> derive district -> discard address
+ * 7. Extract disclosed fields -> derive district and identity commitment -> discard raw fields
  */
 
 /** Workers KV binding (minimal type for VICAL fallback — avoids @cloudflare/workers-types dependency) */
@@ -127,9 +128,9 @@ export async function processCredentialResponse(
  * 2. Extract IssuerSigned data from the mDL document
  * 3. Verify COSE_Sign1 signature (when IACA roots available)
  * 4. Validate MSO valueDigests
- * 5. Extract address fields
- * 6. Derive congressional district
- * 7. Discard raw address - return only district
+ * 5. Extract disclosed fields
+ * 6. Derive congressional district and identity commitment
+ * 7. Discard raw fields - return only derived facts
  */
 async function processMdocResponse(
 	data: unknown,

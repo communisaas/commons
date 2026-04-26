@@ -38,7 +38,7 @@
 		{
 			icon: ScanLine,
 			title: 'Minimal disclosure',
-			desc: 'Your wallet shares only: postal code, city, and state. No name, no photo, no license number.',
+			desc: 'Your wallet shares postal code, city, state, birth date, and document number. Name, photo, and full street address stay out of the request.',
 		},
 		{
 			icon: ShieldCheck,
@@ -92,7 +92,9 @@
 		<ul class="mt-3 space-y-2">
 			<li class="flex items-start gap-2 text-sm text-slate-700">
 				<span class="mt-0.5 block h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>
-				Your address never leaves your device
+				Your wallet shares postal code, city, state, birth date, and document number.
+				Those fields transit our servers briefly to derive your congressional district
+				and a private identity commitment, then are discarded. We never persist them.
 			</li>
 			<li class="flex items-start gap-2 text-sm text-slate-700">
 				<span class="mt-0.5 block h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>
@@ -107,6 +109,11 @@
 				Your identity commitment is a one-way hash &mdash; it can't be reversed to reveal your identity
 			</li>
 		</ul>
+		<p class="mt-3 text-xs text-slate-500 leading-relaxed">
+			Note: hardware-isolated processing (TEE/enclave) is on the roadmap. Today the district
+			derivation runs in our standard server runtime. We commit not to retain raw address fields
+			beyond the duration of district resolution.
+		</p>
 	</section>
 
 	<!-- Browser requirements -->

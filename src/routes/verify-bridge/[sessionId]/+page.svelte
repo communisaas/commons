@@ -230,7 +230,8 @@
 					Ready to verify?
 				</h1>
 				<p class="mt-3 text-sm text-slate-600 leading-relaxed">
-					You'll confirm your account and then share your postal code with your wallet.
+					You'll confirm your account and then share your postal code, city, state, birth
+					date, and document number with your wallet.
 				</p>
 				<button
 					type="button"
@@ -290,7 +291,7 @@
 				<Loader2 class="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" />
 				<h1 class="text-xl font-bold text-slate-900 font-brand">Waiting for wallet</h1>
 				<p class="mt-2 text-sm text-slate-500">
-					Approve sharing your postal code and state
+					Approve sharing your postal code, city, state, birth date, and document number
 				</p>
 			</div>
 
