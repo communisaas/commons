@@ -278,9 +278,14 @@
 			{/if}
 		</div>
 
-		<!-- Privacy Notice -->
+		<!-- Privacy Notice (F-1.2: pending F-4.4 — full terms/privacy pages not
+		     yet written; pointing to /about/integrity as the canonical
+		     disclosure until they ship) -->
 		<p class="text-center text-xs text-slate-500">
-			By signing up, you agree to our terms and privacy policy.
+			By signing up, you accept Commons' data practices as described in our
+			<a href="/about/integrity" class="underline hover:text-slate-700">integrity
+			and limitations</a> page &mdash; full Terms of Service and Privacy Policy
+			documents are forthcoming.
 		</p>
 	</div>
 {/if}

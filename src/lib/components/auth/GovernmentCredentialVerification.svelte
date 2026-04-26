@@ -10,19 +10,15 @@
  -->
 
 <script lang="ts">
-	import {
-		Loader2,
-		Check,
-		AlertCircle,
-		RefreshCw,
-		Info
-	} from '@lucide/svelte';
+	import { Loader2, Check, AlertCircle, RefreshCw, Info } from '@lucide/svelte';
 	import {
 		shouldUseSameDeviceFlow,
+		getSupportedProtocols,
 		requestCredential,
 		type CredentialRequestResult
 	} from '$lib/core/identity/digital-credentials-api';
 	import QRCode from 'qrcode';
+	import { FEATURES, isMdlBridgeEnabled } from '$lib/config/features';
 
 	interface Props {
 		userId: string;
@@ -50,6 +46,32 @@
 
 	let { userId, userEmail, templateSlug, oncomplete, onerror, oncancel }: Props = $props();
 
+	// Platform detection
+	type Platform = 'android' | 'ios' | 'desktop';
+
+	function detectPlatform(): Platform {
+		if (typeof navigator === 'undefined') return 'desktop';
+		const ua = navigator.userAgent;
+		const uadPlatform =
+			(
+				navigator as Navigator & { userAgentData?: { platform?: string } }
+			).userAgentData?.platform?.toLowerCase() ?? '';
+		if (uadPlatform === 'android' || ua.includes('Android')) return 'android';
+		if (/iPhone|iPad/.test(ua)) return 'ios';
+		// iPadOS 13+ reports macOS UA — detect via touch capability
+		if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 0) return 'ios';
+		return 'desktop';
+	}
+
+	function shouldOfferSameDeviceMdl(): boolean {
+		return (
+			detectPlatform() === 'android' &&
+			FEATURES.MDL_ANDROID_OID4VP &&
+			shouldUseSameDeviceFlow() &&
+			getSupportedProtocols().openid4vp
+		);
+	}
+
 	type VerificationState =
 		| 'idle'
 		| 'requesting'
@@ -64,7 +86,7 @@
 	// hybrid transport which crashes the renderer. shouldUseSameDeviceFlow()
 	// returns true only on mobile devices with DC API support.
 	let verificationState = $state<VerificationState>(
-		shouldUseSameDeviceFlow() ? 'idle' : 'unsupported'
+		shouldOfferSameDeviceMdl() ? 'idle' : 'unsupported'
 	);
 	let errorMessage = $state<string | null>(null);
 	let supportedStates = $state<string[]>([]);
@@ -160,25 +182,14 @@
 		startVerification();
 	}
 
-	// Platform detection
-	type Platform = 'android' | 'ios' | 'desktop';
-
-	function detectPlatform(): Platform {
-		if (typeof navigator === 'undefined') return 'desktop';
-		const ua = navigator.userAgent;
-		const uadPlatform = (navigator as Navigator & { userAgentData?: { platform?: string } })
-			.userAgentData?.platform?.toLowerCase() ?? '';
-		if (uadPlatform === 'android' || ua.includes('Android')) return 'android';
-		if (/iPhone|iPad/.test(ua)) return 'ios';
-		// iPadOS 13+ reports macOS UA — detect via touch capability
-		if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 0) return 'ios';
-		return 'desktop';
-	}
-
 	const platform = $derived(detectPlatform());
 
 	const walletName = $derived(
-		platform === 'android' ? 'Google Wallet' : platform === 'ios' ? 'Apple Wallet' : 'your digital wallet'
+		platform === 'android'
+			? 'Google Wallet'
+			: platform === 'ios'
+				? 'Apple Wallet'
+				: 'your digital wallet'
 	);
 
 	// Cross-device bridge fallback (unsupported browsers)
@@ -201,7 +212,8 @@
 			// (server verifies via hash before creating the session).
 			if (!userEmail) {
 				bridgeStatus = 'error';
-				bridgeError = 'Unable to start verification — your email is not available. Please sign in again.';
+				bridgeError =
+					'Unable to start verification — your email is not available. Please sign in again.';
 				return;
 			}
 			const response = await fetch('/api/identity/bridge/start', {
@@ -302,10 +314,12 @@
 	}
 
 	import { onDestroy } from 'svelte';
-	onDestroy(() => { sseCleanup?.(); });
+	onDestroy(() => {
+		sseCleanup?.();
+	});
 
 	$effect(() => {
-		if (verificationState === 'unsupported') {
+		if (verificationState === 'unsupported' && platform === 'desktop' && isMdlBridgeEnabled()) {
 			startBridge();
 		}
 	});
@@ -314,53 +328,46 @@
 <div class="px-8 py-10">
 	{#if verificationState === 'idle'}
 		<!-- Idle: quiet confidence. The user already decided. Give them the action. -->
-		<div class="max-w-sm mx-auto">
-			<h3 class="text-xl font-bold text-slate-900 font-brand">
-				Verify with Digital ID
-			</h3>
+		<div class="mx-auto max-w-sm">
+			<h3 class="font-brand text-xl font-bold text-slate-900">Verify with Digital ID</h3>
 
-			<p class="mt-3 text-sm text-slate-600 leading-relaxed">
-				Your browser will open {walletName}.
-				Approve sharing your postal code, city, state, birth date, and document number.
-			</p>
+				<p class="mt-3 text-sm leading-relaxed text-slate-600">
+					Your browser will open {walletName}. Approve sharing your postal code, city, state,
+					birth date, and document number.
+				</p>
 
 			<button
 				type="button"
 				onclick={startVerification}
-				class="mt-8 w-full rounded-lg bg-emerald-600 px-6 py-4 text-base font-semibold text-white
-					transition-colors hover:bg-emerald-700
-					min-h-[52px]"
+				class="mt-8 min-h-[52px] w-full rounded-lg bg-emerald-600 px-6 py-4 text-base font-semibold
+					text-white transition-colors
+					hover:bg-emerald-700"
 			>
 				Verify
 			</button>
 
-			<p class="mt-4 text-xs text-slate-400 leading-relaxed">
-				Raw identity fields are used only to bind your district privately and are not stored.
-			</p>
+				<p class="mt-4 text-xs leading-relaxed text-slate-400">
+					Raw identity fields are used only to bind your district privately and are not stored.
+				</p>
 		</div>
-
 	{:else if verificationState === 'requesting'}
 		<!-- Wallet prompt active -->
 		<div class="flex flex-col items-center py-6">
-			<Loader2 class="h-8 w-8 animate-spin text-emerald-600 mb-4" />
+			<Loader2 class="mb-4 h-8 w-8 animate-spin text-emerald-600" />
 			<p class="text-base font-semibold text-slate-900">
 				Waiting for {walletName}
 			</p>
-			<p class="mt-2 text-sm text-slate-500">
-				Approve sharing your postal code, city, state, birth date, and document number
-			</p>
+				<p class="mt-2 text-sm text-slate-500">
+					Approve sharing your postal code, city, state, birth date, and document number
+				</p>
 		</div>
-
 	{:else if verificationState === 'verifying'}
 		<!-- Server verification -->
 		<div class="flex flex-col items-center py-6">
-			<Loader2 class="h-8 w-8 animate-spin text-emerald-600 mb-4" />
+			<Loader2 class="mb-4 h-8 w-8 animate-spin text-emerald-600" />
 			<p class="text-base font-semibold text-slate-900">Verifying</p>
-			<p class="mt-2 text-sm text-slate-500">
-				Checking credential with state issuer
-			</p>
+			<p class="mt-2 text-sm text-slate-500">Checking credential with state issuer</p>
 		</div>
-
 	{:else if verificationState === 'complete'}
 		<!-- Success -->
 		<div class="flex flex-col items-center py-6">
@@ -370,16 +377,17 @@
 			<p class="text-base font-semibold text-slate-900">Verified</p>
 			{#if verificationResult?.district}
 				<p class="mt-2 text-sm text-slate-600">
-					{verificationResult.district}{verificationResult.state ? `, ${verificationResult.state}` : ''}
+					{verificationResult.district}{verificationResult.state
+						? `, ${verificationResult.state}`
+						: ''}
 				</p>
 			{/if}
 		</div>
-
 	{:else if verificationState === 'error'}
 		<!-- Error -->
-		<div class="max-w-sm mx-auto">
-			<div class="flex items-start gap-3 mb-6">
-				<AlertCircle class="h-5 w-5 flex-shrink-0 text-red-500 mt-0.5" />
+		<div class="mx-auto max-w-sm">
+			<div class="mb-6 flex items-start gap-3">
+				<AlertCircle class="mt-0.5 h-5 w-5 flex-shrink-0 text-red-500" />
 				<div>
 					<p class="text-sm font-medium text-slate-900">Verification failed</p>
 					<p class="mt-1 text-sm text-slate-600">{errorMessage}</p>
@@ -389,8 +397,8 @@
 			<button
 				type="button"
 				onclick={retry}
-				class="w-full rounded-lg bg-slate-800 px-6 py-3 text-sm font-semibold text-white
-					transition-colors hover:bg-slate-900 min-h-[44px]"
+				class="min-h-[44px] w-full rounded-lg bg-slate-800 px-6 py-3 text-sm font-semibold
+					text-white transition-colors hover:bg-slate-900"
 			>
 				<span class="flex items-center justify-center gap-2">
 					<RefreshCw class="h-4 w-4" />
@@ -398,23 +406,20 @@
 				</span>
 			</button>
 		</div>
-
 	{:else if verificationState === 'unsupported_state'}
 		<!-- State not supported -->
-		<div class="max-w-sm mx-auto space-y-4">
+		<div class="mx-auto max-w-sm space-y-4">
 			<div class="flex items-start gap-3">
-				<Info class="h-5 w-5 flex-shrink-0 text-amber-500 mt-0.5" />
+				<Info class="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" />
 				<div>
 					<p class="text-sm font-medium text-slate-900">Your state isn't supported yet</p>
-					<p class="mt-1 text-sm text-slate-600">
-						We're adding more states. Check back soon.
-					</p>
+					<p class="mt-1 text-sm text-slate-600">We're adding more states. Check back soon.</p>
 				</div>
 			</div>
 
 			{#if supportedStates.length > 0}
-				<div class="pt-3 border-t border-slate-100">
-					<p class="font-mono text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+				<div class="border-t border-slate-100 pt-3">
+					<p class="mb-2 font-mono text-xs font-semibold tracking-wider text-slate-400 uppercase">
 						Supported ({supportedStates.length})
 					</p>
 					<p class="text-sm text-slate-600">
@@ -427,52 +432,62 @@
 				<button
 					type="button"
 					onclick={oncancel}
-					class="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700
-						transition-colors hover:bg-slate-50 min-h-[44px]"
+					class="min-h-[44px] w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium
+						text-slate-700 transition-colors hover:bg-slate-50"
 				>
 					Go back
 				</button>
 			{/if}
 		</div>
-
 	{:else if verificationState === 'unsupported'}
 		<!-- Browser unsupported — cross-device bridge -->
-		<div class="max-w-sm mx-auto">
-			{#if bridgeStatus === 'error'}
+		<div class="mx-auto max-w-sm">
+			{#if platform === 'ios'}
 				<div class="text-center">
-					<AlertCircle class="h-8 w-8 text-red-500 mx-auto mb-4" />
-					<h3 class="text-xl font-bold text-slate-900 font-brand">Bridge failed</h3>
+					<Info class="mx-auto mb-4 h-8 w-8 text-amber-500" />
+					<h3 class="font-brand text-xl font-bold text-slate-900">Android first</h3>
+					<p class="mt-2 text-sm text-slate-600">
+						Digital ID verification is open on Android with Google Wallet. iPhone support follows
+						after Apple Business Connect and final mdoc device-authentication work.
+					</p>
+				</div>
+			{:else if platform === 'android'}
+				<div class="text-center">
+					<Info class="mx-auto mb-4 h-8 w-8 text-amber-500" />
+					<h3 class="font-brand text-xl font-bold text-slate-900">Chrome required</h3>
+					<p class="mt-2 text-sm text-slate-600">
+						Open this page in an Android browser that supports Digital Credentials and OpenID4VP.
+					</p>
+				</div>
+			{:else if bridgeStatus === 'error'}
+				<div class="text-center">
+					<AlertCircle class="mx-auto mb-4 h-8 w-8 text-red-500" />
+					<h3 class="font-brand text-xl font-bold text-slate-900">Bridge failed</h3>
 					<p class="mt-2 text-sm text-slate-600">{bridgeError}</p>
 					<button
 						onclick={startBridge}
-						class="mt-6 rounded-lg bg-slate-800 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-900 transition-colors min-h-[44px]"
+						class="mt-6 min-h-[44px] rounded-lg bg-slate-800 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-slate-900"
 					>
 						Try again
 					</button>
 				</div>
-
 			{:else if bridgeStatus === 'claimed'}
 				<!-- Phone connected, waiting for wallet -->
 				<div class="text-center">
-					<Loader2 class="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" />
-					<h3 class="text-xl font-bold text-slate-900 font-brand">Phone connected</h3>
-					<p class="mt-2 text-sm text-slate-500">
-						Waiting for wallet verification on your phone
-					</p>
+					<Loader2 class="mx-auto mb-4 h-8 w-8 animate-spin text-emerald-600" />
+					<h3 class="font-brand text-xl font-bold text-slate-900">Phone connected</h3>
+					<p class="mt-2 text-sm text-slate-500">Waiting for wallet verification on your phone</p>
 				</div>
-
 			{:else}
 				<!-- Waiting for phone to scan QR -->
-				<h3 class="text-xl font-bold text-slate-900 font-brand">
-					Scan with your phone
-				</h3>
+				<h3 class="font-brand text-xl font-bold text-slate-900">Scan with an Android phone</h3>
 				<p class="mt-2 text-sm text-slate-600">
-					Use your phone's camera to scan the code.
+					Use an Android phone with Google Wallet to scan the code.
 				</p>
 
 				{#if bridgeQrSvg}
 					<div class="flex justify-center py-6">
-						<div class="rounded-lg p-3 border border-slate-100">
+						<div class="rounded-lg border border-slate-100 p-3">
 							{@html bridgeQrSvg}
 						</div>
 					</div>
@@ -485,13 +500,13 @@
 				<!-- Pairing code: user verifies this matches phone before approving -->
 				{#if bridgePairingCode}
 					<div class="mt-2 rounded-lg border border-slate-200 px-4 py-3">
-						<p class="text-xs text-slate-500 mb-1">Matching code</p>
-						<p class="font-mono text-base font-bold text-slate-900 tracking-wider">
+						<p class="mb-1 text-xs text-slate-500">Matching code</p>
+						<p class="font-mono text-base font-bold tracking-wider text-slate-900">
 							{bridgePairingCode}
 						</p>
-						<p class="mt-2 text-xs text-slate-400 leading-relaxed">
-							Your phone will show this code and your account name.
-							Verify both match before approving.
+						<p class="mt-2 text-xs leading-relaxed text-slate-400">
+							Your phone will show this code and your account name. Verify both match before
+							approving.
 						</p>
 					</div>
 				{/if}
@@ -501,8 +516,8 @@
 				<button
 					type="button"
 					onclick={oncancel}
-					class="mt-4 w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700
-						transition-colors hover:bg-slate-50 min-h-[44px]"
+					class="mt-4 min-h-[44px] w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium
+						text-slate-700 transition-colors hover:bg-slate-50"
 				>
 					Go back
 				</button>

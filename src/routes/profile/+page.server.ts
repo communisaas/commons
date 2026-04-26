@@ -11,11 +11,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 	let convexProfile = null;
 	let convexTemplates = null;
 	let convexReps = null;
+	let convexBudget: {
+		tierBypass: boolean;
+		nextAllowedAt: number | null;
+		recentCount: number;
+		periodCap: number;
+		windowMs: number;
+		emailSybilTripped: boolean;
+	} | null = null;
 	try {
-		[convexProfile, convexTemplates, convexReps] = await Promise.all([
+		[convexProfile, convexTemplates, convexReps, convexBudget] = await Promise.all([
 			serverQuery(api.users.getProfile, {}),
 			serverQuery(api.users.getMyTemplates, {}),
-			serverQuery(api.users.getMyRepresentatives, {})
+			serverQuery(api.users.getMyRepresentatives, {}),
+			serverQuery(api.users.getReverificationBudget, { userId: locals.user.id as any })
 		]);
 	} catch (err) {
 		console.error('[Profile Page] Convex query failed:', err instanceof Error ? err.message : String(err));
@@ -41,6 +50,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			avatar: locals.user.avatar,
 			trust_tier: locals.user.trust_tier ?? 0
 		},
+		reverificationBudget: convexBudget,
 		streamed: {
 			userDetails: Promise.resolve(convexProfile ? {
 				id: convexProfile._id,

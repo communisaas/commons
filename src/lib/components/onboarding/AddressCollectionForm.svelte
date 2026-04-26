@@ -114,15 +114,46 @@
 						).length;
 					}
 				} catch (err) {
-					console.warn('[AddressCollectionForm] ZKP commitment failed, proceeding without:', err);
+					// FU-1.3: emit a metric so canary monitoring can quantify
+					// commitment-gen failures (IPFS gateway issues, browser
+					// Poseidon failures). Without this counter, ops only sees
+					// secondary effects via downgrade-guard rejections later.
+					console.warn(
+						'[AddressCollectionForm] ZKP commitment failed, proceeding without:',
+						err
+					);
+					try {
+						const navWithSendBeacon = navigator as Navigator & {
+							sendBeacon?: (url: string, data?: BodyInit) => boolean;
+						};
+						const payload = JSON.stringify({
+							metric: 'verify_commitment_generation_failure',
+							error: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200),
+							timestamp: Date.now()
+						});
+						if (typeof navWithSendBeacon.sendBeacon === 'function') {
+							navWithSendBeacon.sendBeacon('/api/internal/metrics/client-event', payload);
+						}
+					} catch {
+						/* metric emission is best-effort */
+					}
 				}
 			}
+
+			// FU-1.1: capture coordinates so the verify-address handler can
+			// recompute the expected commitment server-side. Without these,
+			// the server cannot perform issuance-time authenticity verification.
+			const capturedCoordinates =
+				data.coordinates?.lat != null && data.coordinates?.lng != null
+					? { lat: data.coordinates.lat as number, lng: data.coordinates.lng as number }
+					: null;
 
 			verificationResult = {
 				verified: true,
 				correctedAddress: data.address.matched,
 				representatives: officials,
-				zk_eligible: data.zk_eligible as boolean | undefined
+				zk_eligible: data.zk_eligible as boolean | undefined,
+				coordinates: capturedCoordinates
 			};
 			selectedAddress = data.address.matched || fullAddress;
 			currentStep = 'verify';
@@ -156,7 +187,10 @@
 						: undefined,
 				// ZKP: pass commitment so parent can send shadow_atlas instead of civic_api
 				districtCommitment: districtCommitment ?? undefined,
-				commitmentSlotCount: districtCommitment ? commitmentSlotCount : undefined
+				commitmentSlotCount: districtCommitment ? commitmentSlotCount : undefined,
+				// FU-1.1: include coordinates so the verify-address handler can
+				// recompute expected commitment for authenticity check.
+				coordinates: verificationResult?.coordinates ?? null
 			});
 		} else {
 			console.warn('[AddressForm] No oncomplete callback registered!');

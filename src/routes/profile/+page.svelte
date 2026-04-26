@@ -6,7 +6,14 @@
 	 * Mobile: stacked, intimate. Desktop: zones spread, space composed.
 	 * The signal bar is the visual spine. Everything else is typography and space.
 	 */
-	import { User as UserIcon, ExternalLink, ChevronRight, Edit3, Download, Trash2 } from '@lucide/svelte';
+	import {
+		User as UserIcon,
+		ExternalLink,
+		ChevronRight,
+		Edit3,
+		Download,
+		Trash2
+	} from '@lucide/svelte';
 	import { spring } from 'svelte/motion';
 	import { fly } from 'svelte/transition';
 	import Badge from '$lib/components/ui/Badge.svelte';
@@ -15,7 +22,7 @@
 	import VerificationGate from '$lib/components/auth/VerificationGate.svelte';
 	import AddressChangeFlow from '$lib/components/auth/AddressChangeFlow.svelte';
 	import { invalidateAll } from '$app/navigation';
-	import { FEATURES } from '$lib/config/features';
+	import { FEATURES, isAnyMdlProtocolEnabled } from '$lib/config/features';
 	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 	import type { PageData } from './$types';
 
@@ -37,6 +44,9 @@
 	let showVerificationGate = $state(false);
 	let showAddressChange = $state(false);
 	let currentReps = $state<ProfileRepresentative[]>([]);
+	// Tracks the re-grounding phase so we can block the close × once the
+	// retirement ceremony is underway. Retired credentials cannot be un-retired.
+	let addressChangePhase = $state<'capture' | 'witnessing' | 'complete'>('capture');
 
 	const user = $derived(data.user);
 	const displayName = $derived(decryptedUser.name ?? user?.name ?? null);
@@ -45,7 +55,7 @@
 	const templatesDataPromise = $derived(data.streamed?.templatesData);
 	const representativesPromise = $derived(data.streamed?.representatives);
 
-	const trustTier = $derived((user as Record<string, unknown>)?.trust_tier as number ?? 0);
+	const trustTier = $derived(((user as Record<string, unknown>)?.trust_tier as number) ?? 0);
 	const tier = $derived(Math.max(0, Math.min(4, Math.floor(trustTier))));
 
 	const levels = [
@@ -53,41 +63,46 @@
 			signal: 'Noise',
 			arrives: 'General inbox. No constituent status. Likely unread.',
 			weight: 8,
-			gradientFrom: '#cbd5e1', gradientTo: '#94a3b8',
+			gradientFrom: '#cbd5e1',
+			gradientTo: '#94a3b8',
 			textClass: 'text-slate-600',
-			accentClass: 'text-slate-700',
+			accentClass: 'text-slate-700'
 		},
 		{
 			signal: 'Weak',
 			arrives: 'Named sender. No district proof. Low priority.',
 			weight: 18,
-			gradientFrom: '#93c5fd', gradientTo: '#3b82f6',
+			gradientFrom: '#93c5fd',
+			gradientTo: '#3b82f6',
 			textClass: 'text-blue-600',
-			accentClass: 'text-blue-700',
+			accentClass: 'text-blue-700'
 		},
 		{
 			signal: 'Constituent',
 			arrives: 'Confirmed constituent. Flagged for your district. Gets read.',
 			weight: 62,
-			gradientFrom: '#34d399', gradientTo: '#10b981',
+			gradientFrom: '#34d399',
+			gradientTo: '#10b981',
 			textClass: 'text-emerald-600',
-			accentClass: 'text-emerald-700',
+			accentClass: 'text-emerald-700'
 		},
 		{
 			signal: 'Verified',
 			arrives: 'Government ID verified. Cryptographic proof. Cannot be faked or botted.',
 			weight: 82,
-			gradientFrom: '#c084fc', gradientTo: '#a855f7',
+			gradientFrom: '#c084fc',
+			gradientTo: '#a855f7',
 			textClass: 'text-emerald-600',
-			accentClass: 'text-emerald-700',
+			accentClass: 'text-emerald-700'
 		},
 		{
 			signal: 'Undeniable',
 			arrives: 'Zero-knowledge proof of residency. Mathematically verified. Maximum weight.',
 			weight: 100,
-			gradientFrom: '#818cf8', gradientTo: '#6366f1',
+			gradientFrom: '#818cf8',
+			gradientTo: '#6366f1',
 			textClass: 'text-indigo-600',
-			accentClass: 'text-indigo-700',
+			accentClass: 'text-indigo-700'
 		}
 	];
 
@@ -157,25 +172,66 @@
 		} catch (e) {
 			console.warn('[Profile] Failed to snapshot current reps:', e);
 		}
+		addressChangePhase = 'capture';
 		showAddressChange = true;
 	}
 
 	function handleAddressChangeClose(): void {
+		// Guard: do not close during the witnessing phase — retired credentials
+		// cannot be restored, and closing mid-ceremony would leave partial state.
+		if (addressChangePhase === 'witnessing') return;
 		showAddressChange = false;
+		addressChangePhase = 'capture';
 		invalidateAll();
+	}
+
+	function handleAddressChangePhaseChange(phase: 'capture' | 'witnessing' | 'complete'): void {
+		addressChangePhase = phase;
 	}
 
 	function handleVerificationComplete() {
 		showVerificationGate = false;
 		invalidateAll();
 	}
+
+	// ─── Witnessing guard ───
+	// During the retirement ceremony the user's credentials are being cleared
+	// and rewritten. Closing the tab / hitting back / pressing ESC mid-flight
+	// can leave the identity in a half-retired state (old credentials gone,
+	// new not yet issued). Guard all three exits while phase is 'witnessing'.
+	function handleBeforeUnload(e: BeforeUnloadEvent) {
+		if (addressChangePhase === 'witnessing') {
+			e.preventDefault();
+			// Most modern browsers ignore custom strings and show their own prompt,
+			// but setting returnValue is still required to trigger the prompt.
+			e.returnValue = '';
+			return '';
+		}
+	}
+
+	function handleWindowKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape' && addressChangePhase === 'witnessing') {
+			e.preventDefault();
+			e.stopPropagation();
+		}
+	}
+
+	$effect(() => {
+		if (!showAddressChange) return;
+		// Only attach during an open address-change session; detach otherwise.
+		window.addEventListener('beforeunload', handleBeforeUnload);
+		window.addEventListener('keydown', handleWindowKeydown, true);
+		return () => {
+			window.removeEventListener('beforeunload', handleBeforeUnload);
+			window.removeEventListener('keydown', handleWindowKeydown, true);
+		};
+	});
 </script>
 
 <svelte:head>
 	<title>Profile | Commons</title>
 	<meta name="description" content="Your civic identity and advocacy impact" />
 </svelte:head>
-
 
 <!-- ═══ ZONE 1: IDENTITY + SIGNAL ═══ -->
 <section in:fly={{ y: 12, duration: 400 }}>
@@ -191,21 +247,27 @@
 			/>
 		{:else}
 			<div
-				class="flex h-12 w-12 items-center justify-center rounded-full bg-participation-primary-100 lg:h-14 lg:w-14"
+				class="bg-participation-primary-100 flex h-12 w-12 items-center justify-center rounded-full lg:h-14 lg:w-14"
 				style="box-shadow: 0 0 0 2.5px oklch(0.94 0.01 60)"
 			>
-				<UserIcon class="h-5 w-5 text-participation-primary-600 lg:h-6 lg:w-6" />
+				<UserIcon class="text-participation-primary-600 h-5 w-5 lg:h-6 lg:w-6" />
 			</div>
 		{/if}
 		<div>
 			{#if displayName}
-				<h1 class="text-xl font-bold text-slate-900 sm:text-2xl lg:text-3xl" style="font-family: 'Satoshi', system-ui, sans-serif">
+				<h1
+					class="text-xl font-bold text-slate-900 sm:text-2xl lg:text-3xl"
+					style="font-family: 'Satoshi', system-ui, sans-serif"
+				>
 					{displayName}
 				</h1>
 			{:else if decryptedUser.decrypting}
 				<div class="h-7 w-48 animate-pulse rounded bg-slate-200/40 sm:h-8 lg:h-9"></div>
 			{:else}
-				<h1 class="text-xl font-bold text-slate-900 sm:text-2xl lg:text-3xl" style="font-family: 'Satoshi', system-ui, sans-serif">
+				<h1
+					class="text-xl font-bold text-slate-900 sm:text-2xl lg:text-3xl"
+					style="font-family: 'Satoshi', system-ui, sans-serif"
+				>
 					Your Profile
 				</h1>
 			{/if}
@@ -227,7 +289,10 @@
 
 	<!-- Signal bar — the visual spine, full container width -->
 	<div class="mt-3">
-		<div class="relative h-2 overflow-hidden rounded-full lg:h-2.5" style="background: oklch(0.90 0.008 60)">
+		<div
+			class="relative h-2 overflow-hidden rounded-full lg:h-2.5"
+			style="background: oklch(0.90 0.008 60)"
+		>
 			<div
 				class="absolute inset-y-0 left-0 rounded-full"
 				style="width: {$signalWidth}%;
@@ -255,28 +320,43 @@
 	<!-- Next step -->
 	{#if tier === 1}
 		<p class="mt-2.5 text-sm lg:text-base">
-			<button class="font-medium text-emerald-600 transition-colors hover:text-emerald-800" onclick={handleVerifyAddress}>
+			<button
+				class="font-medium text-emerald-600 transition-colors hover:text-emerald-800"
+				onclick={handleVerifyAddress}
+			>
 				Verify your address &rarr;
 			</button>
 		</p>
-	{:else if tier === 2 || tier === 3}
+	{:else if (tier === 2 || tier === 3) && isAnyMdlProtocolEnabled()}
 		<p class="mt-2.5 text-sm lg:text-base">
-			<button class="font-medium text-indigo-600 transition-colors hover:text-indigo-800" onclick={handleVerifyAddress}>
+			<button
+				class="font-medium text-indigo-600 transition-colors hover:text-indigo-800"
+				onclick={handleVerifyAddress}
+			>
 				Verify with Government ID &rarr;
 			</button>
 		</p>
-	{:else if tier >= 4}
+	{:else if tier >= 4 && isAnyMdlProtocolEnabled()}
 		<p class="mt-2.5 text-sm lg:text-base">
-			<button class="font-medium text-indigo-600 transition-colors hover:text-indigo-800" onclick={handleVerifyAddress}>
+			<button
+				class="font-medium text-indigo-600 transition-colors hover:text-indigo-800"
+				onclick={handleVerifyAddress}
+			>
 				Re-verify identity &rarr;
 			</button>
+		</p>
+	{:else if tier >= 2 && !isAnyMdlProtocolEnabled()}
+		<!--
+			Government-ID verification is protocol-gated. If all lanes are closed,
+			name what's gated rather than dispatch into a flow that 404s.
+		-->
+		<p class="mt-2.5 text-xs leading-relaxed text-slate-500 lg:text-sm">
+			Government-ID verification is coming soon for this device.
 		</p>
 	{/if}
 </section>
 
-
 <hr class="section-rule" />
-
 
 <!-- ═══ ZONE 2: GROUND + REPRESENTATIVES ═══ -->
 <!-- Side by side on large screens: ground anchors left, representatives float right -->
@@ -291,6 +371,7 @@
 						userId={user.id}
 						{trustTier}
 						embedded={true}
+						budget={data.reverificationBudget}
 						onVerifyAddress={handleVerifyAddress}
 						onChangeAddress={handleChangeAddress}
 					/>
@@ -332,16 +413,16 @@
 	</div>
 </section>
 
-
 <hr class="section-rule" />
-
 
 <!-- ═══ ZONE 3: RECORD ═══ -->
 <section in:fly={{ y: 12, duration: 400, delay: 200 }}>
 	<span class="section-label">Your record</span>
 
 	{#await templatesDataPromise}
-		<div class="mt-5 grid grid-cols-2 gap-y-5 sm:flex sm:flex-wrap sm:items-baseline sm:gap-x-12 lg:gap-x-16">
+		<div
+			class="mt-5 grid grid-cols-2 gap-y-5 sm:flex sm:flex-wrap sm:items-baseline sm:gap-x-12 lg:gap-x-16"
+		>
 			{#each Array(4) as _}
 				<div class="animate-pulse">
 					<div class="h-9 w-12 rounded bg-slate-200/40 lg:h-10"></div>
@@ -352,10 +433,12 @@
 	{:then templatesData}
 		{#if templatesData}
 			<!-- Impact numbers — spread across the width on large screens -->
-			<div class="mt-5 grid grid-cols-2 gap-y-5 sm:flex sm:flex-wrap sm:items-baseline sm:gap-x-12 lg:gap-x-16">
+			<div
+				class="mt-5 grid grid-cols-2 gap-y-5 sm:flex sm:flex-wrap sm:items-baseline sm:gap-x-12 lg:gap-x-16"
+			>
 				{#if FEATURES.ENGAGEMENT_METRICS}
 					<div>
-						<span class="font-mono text-3xl font-bold text-participation-primary-600 lg:text-4xl">
+						<span class="text-participation-primary-600 font-mono text-3xl font-bold lg:text-4xl">
 							{templatesData.templateStats.totalSent}
 						</span>
 						<span class="block text-xs font-medium text-slate-500">sent</span>
@@ -386,7 +469,9 @@
 				<div class="mt-8 max-w-2xl">
 					{#each templatesData.templates.slice(0, 5) as template, i}
 						<div
-							class="flex items-center justify-between py-3 {i > 0 ? 'border-t border-dotted border-slate-200' : ''}"
+							class="flex items-center justify-between py-3 {i > 0
+								? 'border-t border-dotted border-slate-200'
+								: ''}"
 						>
 							<div class="min-w-0 flex-1">
 								<div class="flex items-center gap-2.5">
@@ -418,10 +503,12 @@
 						<div class="border-t border-dotted border-slate-200 pt-3">
 							<a
 								href="/browse"
-								class="group inline-flex items-center gap-1 text-sm font-medium text-participation-primary-600 transition-colors hover:text-participation-primary-700"
+								class="group text-participation-primary-600 hover:text-participation-primary-700 inline-flex items-center gap-1 text-sm font-medium transition-colors"
 							>
 								View all templates
-								<ChevronRight class="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+								<ChevronRight
+									class="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5"
+								/>
 							</a>
 						</div>
 					{/if}
@@ -431,7 +518,7 @@
 					No messages sent yet.
 					<a
 						href="/?create=true"
-						class="font-medium text-participation-primary-600 transition-colors hover:text-participation-primary-700"
+						class="text-participation-primary-600 hover:text-participation-primary-700 font-medium transition-colors"
 					>
 						Create a template to start &rarr;
 					</a>
@@ -441,9 +528,7 @@
 	{/await}
 </section>
 
-
 <hr class="section-rule" />
-
 
 <!-- ═══ ZONE 4: COLOPHON ═══ -->
 <section in:fly={{ y: 12, duration: 400, delay: 300 }}>
@@ -465,7 +550,9 @@
 					<span class="ml-1 font-medium text-slate-800">{userDetails.profile.organization}</span>
 				{/if}
 				{#if userDetails.profile.connection}
-					{#if userDetails.profile.role || userDetails.profile.organization}<span class="mx-2 text-slate-300">&middot;</span>{/if}
+					{#if userDetails.profile.role || userDetails.profile.organization}<span
+							class="mx-2 text-slate-300">&middot;</span
+						>{/if}
 					<span class="text-slate-500">Connection</span>
 					<span class="ml-1 font-medium text-slate-800">{userDetails.profile.connection}</span>
 				{/if}
@@ -498,7 +585,6 @@
 	</div>
 </section>
 
-
 {#if showEditModal}
 	<ProfileEditModal
 		{user}
@@ -527,25 +613,38 @@
 		aria-label="Change your address"
 	>
 		<div class="relative w-full max-w-2xl">
+			<!--
+				Close × is disabled during the witnessing phase. Retirement clears
+				credentials; leaving mid-ceremony would orphan them without new
+				issuance. Once `addressChangePhase === 'complete'` or still
+				'capture' the user may dismiss freely.
+			-->
 			<button
 				type="button"
 				onclick={handleAddressChangeClose}
-				class="absolute right-4 top-4 z-10 rounded-full p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-				aria-label="Close address change"
+				disabled={addressChangePhase === 'witnessing'}
+				class="absolute top-4 right-4 z-10 rounded-full p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+				aria-label={addressChangePhase === 'witnessing'
+					? 'Cannot close during re-grounding'
+					: 'Close address change'}
+				aria-disabled={addressChangePhase === 'witnessing'}
+				title={addressChangePhase === 'witnessing'
+					? 'Please wait — prior credentials are being retired.'
+					: 'Close'}
 			>
 				<span aria-hidden="true" class="text-xl leading-none">×</span>
 			</button>
 			<AddressChangeFlow
 				userId={user.id}
 				onClose={handleAddressChangeClose}
+				onPhaseChange={handleAddressChangePhaseChange}
 				initialRepresentatives={currentReps}
+				budget={data.reverificationBudget}
 				refreshRepresentatives={async () => {
 					await invalidateAll();
 					try {
 						const reps = await representativesPromise;
-						return Array.isArray(reps)
-							? (reps as unknown as ProfileRepresentative[])
-							: [];
+						return Array.isArray(reps) ? (reps as unknown as ProfileRepresentative[]) : [];
 					} catch {
 						return [];
 					}
@@ -554,7 +653,6 @@
 		</div>
 	</div>
 {/if}
-
 
 <style>
 	.section-rule {

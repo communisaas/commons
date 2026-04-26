@@ -74,10 +74,13 @@ export default defineConfig({
 			'tests/e2e/basic-functionality.spec.ts',
 			'tests/e2e/identity-verification-flow.spec.ts',
 			'tests/e2e/moderation/moderation-pipeline.spec.ts',
+			'tests/e2e/regrounding-flow.spec.ts',
+			'tests/e2e/auth.setup.ts',
 			// Temporarily exclude Svelte component tests - require Svelte 5 browser environment
 			// (incompatible with MSW Node.js environment in current config)
 			// See: docs/testing/svelte-component-testing.md for migration path
 			'tests/unit/ProofGenerator.test.ts',
+			'tests/unit/components/AddressChangeFlow.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',

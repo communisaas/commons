@@ -83,8 +83,10 @@
 							<p class="flex items-start gap-2">
 								<span class="mt-0.5 font-bold text-green-600">✓</span>
 								<span>
-									<span class="font-semibold">Your address never leaves this device.</span> We use cryptographic
-									proofs to verify your congressional district without ever storing your location.
+									<span class="font-semibold">Your full street address stays on your device.</span>
+									We compute a cryptographic commitment to your district in your browser. Approximate
+									coordinates transit our servers briefly to confirm the district mapping is authentic,
+									then are discarded. We never persist your street address or commit it to our database.
 								</span>
 							</p>
 							<p class="flex items-start gap-2">

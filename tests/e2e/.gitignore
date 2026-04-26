@@ -1,0 +1,3 @@
+# Playwright auth state — persisted by auth.setup.ts, contains live session
+# cookies. Never commit; regenerate per-CI-run via the setup project.
+.auth/

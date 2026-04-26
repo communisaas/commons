@@ -1,3 +1,19 @@
+<script module lang="ts">
+	/**
+	 * Re-verification budget surfaced from `users.getReverificationBudget`.
+	 * Exported at module scope so callers (parent pages, AddressChangeFlow)
+	 * can share the type without re-declaring it.
+	 */
+	export interface ReverificationBudget {
+		tierBypass: boolean;
+		nextAllowedAt: number | null;
+		recentCount: number;
+		periodCap: number;
+		windowMs: number;
+		emailSybilTripped: boolean;
+	}
+</script>
+
 <script lang="ts">
 	/**
 	 * GroundCard — Your literal ground in the democracy.
@@ -19,12 +35,20 @@
 		userId,
 		trustTier = 0,
 		embedded = false,
+		budget = null,
 		onVerifyAddress,
 		onChangeAddress
 	}: {
 		userId: string;
 		trustTier?: number;
 		embedded?: boolean;
+		/**
+		 * Re-verification budget — drives the legibility of the "I moved"
+		 * affordance. When throttled, the affordance is disabled with a calm
+		 * reason; when tier-bypassed, it carries a small "free for verified IDs"
+		 * note. Pass `null` to suppress all budget-aware decoration.
+		 */
+		budget?: ReverificationBudget | null;
 		onVerifyAddress?: () => void;
 		/**
 		 * Secondary "I moved" action, only surfaced when a verified address is
@@ -32,6 +56,48 @@
 		 */
 		onChangeAddress?: () => void;
 	} = $props();
+
+	// Tick once a minute so the throttle countdown stays fresh without a
+	// per-render setInterval explosion. Reactivity is gated on `budget` being
+	// present and currently throttled; idle budget states pay zero cost.
+	let now = $state<number>(Date.now());
+	$effect(() => {
+		if (!budget?.nextAllowedAt || budget.tierBypass) return;
+		if (budget.nextAllowedAt <= now) return;
+		const id = setInterval(() => {
+			now = Date.now();
+		}, 60_000);
+		return () => clearInterval(id);
+	});
+
+	const throttled = $derived(
+		Boolean(budget?.nextAllowedAt && !budget.tierBypass && budget.nextAllowedAt > now)
+	);
+	const periodFull = $derived(
+		Boolean(budget && !budget.tierBypass && budget.recentCount >= budget.periodCap)
+	);
+	const sybilBlocked = $derived(Boolean(budget?.emailSybilTripped));
+	// User can move iff none of the gates are tripped. Tier-3+ users are
+	// always allowed.
+	const canMove = $derived(
+		!budget || budget.tierBypass || (!throttled && !periodFull && !sybilBlocked)
+	);
+	const remaining = $derived(
+		budget && !budget.tierBypass
+			? Math.max(0, budget.periodCap - budget.recentCount)
+			: null
+	);
+	// Hours-until-allowed, rounded up so 5m → "1 hour" instead of "0 hours".
+	const hoursUntilAllowed = $derived(
+		throttled && budget?.nextAllowedAt
+			? Math.max(1, Math.ceil((budget.nextAllowedAt - now) / (60 * 60 * 1000)))
+			: null
+	);
+
+	function handleMoveClick() {
+		if (!canMove) return;
+		onChangeAddress?.();
+	}
 
 	let loading = $state(true);
 	let address = $state<{
@@ -140,14 +206,61 @@
 		</div>
 
 		{#if onChangeAddress}
-			<button
-				type="button"
-				class="mt-2 text-[11px] text-slate-400 underline decoration-dotted underline-offset-2 transition-colors hover:text-slate-600"
-				onclick={() => onChangeAddress?.()}
-				data-testid="ground-i-moved"
-			>
-				I moved
-			</button>
+			<div class="mt-2 flex items-baseline gap-2">
+				<button
+					type="button"
+					class="text-[13px] underline decoration-dotted underline-offset-2 transition-colors disabled:cursor-not-allowed disabled:no-underline"
+					class:text-slate-500={canMove}
+					class:hover:text-slate-700={canMove}
+					class:text-slate-300={!canMove}
+					onclick={handleMoveClick}
+					disabled={!canMove}
+					data-testid="ground-i-moved"
+					aria-disabled={!canMove}
+				>
+					I moved
+				</button>
+				{#if budget?.tierBypass}
+					<span
+						class="font-mono text-[10px] uppercase text-slate-400"
+						style="letter-spacing: 0.18em"
+						title="Verified IDs (Tier 3+) re-verify without throttling."
+					>
+						Free for verified ID
+					</span>
+				{:else if throttled && hoursUntilAllowed !== null}
+					<span
+						class="font-mono text-[10px] uppercase text-amber-600"
+						style="letter-spacing: 0.18em"
+						title="A 24-hour cooldown begins after each address change. This protects against ground-shopping."
+					>
+						Available in ~{hoursUntilAllowed}h
+					</span>
+				{:else if periodFull}
+					<span
+						class="font-mono text-[10px] uppercase text-amber-600"
+						style="letter-spacing: 0.18em"
+						title="Limit reached for the trailing 180 days. Contact support if you have moved again."
+					>
+						180-day limit reached
+					</span>
+				{:else if sybilBlocked}
+					<span
+						class="font-mono text-[10px] uppercase text-amber-600"
+						style="letter-spacing: 0.18em"
+					>
+						Account check needed
+					</span>
+				{:else if remaining !== null && budget && remaining < budget.periodCap}
+					<span
+						class="font-mono text-[10px] uppercase text-slate-400"
+						style="letter-spacing: 0.18em"
+						title="Up to {budget.periodCap} re-verifications per 180 days. Verifying with a government ID removes the limit."
+					>
+						{remaining}/{budget.periodCap} left · 180d
+					</span>
+				{/if}
+			</div>
 		{/if}
 	{:else}
 		<div
@@ -178,14 +291,60 @@
 			</div>
 
 			{#if onChangeAddress}
-				<button
-					type="button"
-					class="mt-2.5 text-[11px] text-slate-400 underline decoration-dotted underline-offset-2 transition-colors hover:text-slate-600"
-					onclick={() => onChangeAddress?.()}
-					data-testid="ground-i-moved"
-				>
-					I moved
-				</button>
+				<div class="mt-2.5 flex items-baseline gap-2">
+					<button
+						type="button"
+						class="text-[13px] underline decoration-dotted underline-offset-2 transition-colors disabled:cursor-not-allowed disabled:no-underline"
+						class:text-slate-500={canMove}
+						class:hover:text-slate-700={canMove}
+						class:text-slate-300={!canMove}
+						onclick={handleMoveClick}
+						disabled={!canMove}
+						data-testid="ground-i-moved"
+						aria-disabled={!canMove}
+					>
+						I moved
+					</button>
+					{#if budget?.tierBypass}
+						<span
+							class="font-mono text-[10px] uppercase text-slate-400"
+							style="letter-spacing: 0.18em"
+							title="Verified IDs (Tier 3+) re-verify without throttling."
+						>
+							Free for verified ID
+						</span>
+					{:else if throttled && hoursUntilAllowed !== null}
+						<span
+							class="font-mono text-[10px] uppercase text-amber-600"
+							style="letter-spacing: 0.18em"
+							title="A 24-hour cooldown begins after each address change."
+						>
+							Available in ~{hoursUntilAllowed}h
+						</span>
+					{:else if periodFull}
+						<span
+							class="font-mono text-[10px] uppercase text-amber-600"
+							style="letter-spacing: 0.18em"
+						>
+							180-day limit reached
+						</span>
+					{:else if sybilBlocked}
+						<span
+							class="font-mono text-[10px] uppercase text-amber-600"
+							style="letter-spacing: 0.18em"
+						>
+							Account check needed
+						</span>
+					{:else if remaining !== null && budget && remaining < budget.periodCap}
+						<span
+							class="font-mono text-[10px] uppercase text-slate-400"
+							style="letter-spacing: 0.18em"
+							title="Up to {budget.periodCap} re-verifications per 180 days. Government-ID verification removes the limit."
+						>
+							{remaining}/{budget.periodCap} left · 180d
+						</span>
+					{/if}
+				</div>
 			{/if}
 		</div>
 	{/if}
