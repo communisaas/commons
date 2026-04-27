@@ -65,12 +65,14 @@ declare global {
 		interface Platform {
 			env?: {
 				DC_SESSION_KV?: KVNamespace;
+				BRIDGE_SESSION_KV?: KVNamespace;
 				DIRECT_MDL_SESSION_KV?: KVNamespace;
 				REGISTRATION_RETRY_KV?: KVNamespace;
 				REJECTION_MONITOR_KV?: KVNamespace;
 				VICAL_KV?: KVNamespace;
 				PACKET_CACHE_KV?: KVNamespace;
 				PUBLIC_APP_URL?: string;
+				BRIDGE_ENCRYPTION_KEY?: string;
 				MDL_DIRECT_QR_REQUEST_PRIVATE_KEY?: string;
 				MDL_DIRECT_QR_REQUEST_X5C?: string;
 				MDL_DIRECT_QR_REQUEST_ALG?: string;

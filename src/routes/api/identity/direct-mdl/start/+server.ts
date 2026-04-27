@@ -29,7 +29,7 @@ function desktopUserLabelFromSession(user: App.Locals['user']): string {
 
 export const POST: RequestHandler = async ({ locals, platform, url }) => {
 	try {
-		requireMdlDirectQrEnabled();
+		requireMdlDirectQrEnabled(platform?.env?.PUBLIC_APP_URL, url.origin);
 	} catch {
 		throw error(404, 'Not found');
 	}

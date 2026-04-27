@@ -26,7 +26,7 @@ type RequestUriForm = {
 
 export const POST: RequestHandler = async ({ request, params, platform, url }) => {
 	try {
-		requireMdlDirectQrEnabled();
+		requireMdlDirectQrEnabled(platform?.env?.PUBLIC_APP_URL, url.origin);
 	} catch {
 		throw error(404, 'Not found');
 	}

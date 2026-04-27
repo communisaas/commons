@@ -17,9 +17,25 @@
 export type AddressSpecificity = 'off' | 'region' | 'district';
 
 const forceShadowAtlasOff = import.meta.env.VITE_FORCE_SHADOW_ATLAS_OFF === '1';
+const enableDirectQrSmoke = import.meta.env.VITE_MDL_DIRECT_QR === '1';
+const environmentLabel = import.meta.env.VITE_ENVIRONMENT;
+const directQrSmokeOrigin = import.meta.env.VITE_MDL_DIRECT_QR_ORIGIN?.trim() || '';
+const STAGING_DIRECT_QR_ORIGIN = 'https://staging.commons.email';
 
 if (import.meta.env.PROD && forceShadowAtlasOff && import.meta.env.VITE_ENVIRONMENT !== 'test') {
 	throw new Error('VITE_FORCE_SHADOW_ATLAS_OFF may only be used by test builds');
+}
+
+if (import.meta.env.PROD && enableDirectQrSmoke && environmentLabel !== 'staging') {
+	throw new Error('VITE_MDL_DIRECT_QR may only be enabled for staging smoke builds');
+}
+
+if (
+	import.meta.env.PROD &&
+	enableDirectQrSmoke &&
+	directQrSmokeOrigin !== STAGING_DIRECT_QR_ORIGIN
+) {
+	throw new Error('VITE_MDL_DIRECT_QR_ORIGIN must be the staging smoke origin');
 }
 
 export const FEATURES = {
@@ -124,7 +140,7 @@ export const FEATURES = {
 	 * real-device smoke all pass. `/verify-bridge` remains the default desktop
 	 * fallback while this is false.
 	 */
-	MDL_DIRECT_QR: false,
+	MDL_DIRECT_QR: enableDirectQrSmoke,
 
 	/**
 	 * Legacy alias retained only for old string-search tests and migration
@@ -163,6 +179,9 @@ export const FEATURES = {
 
 export const OPENID4VP_DC_API_PROTOCOL = 'openid4vp-v1-unsigned';
 export const LEGACY_OPENID4VP_PROTOCOL = 'openid4vp';
+export const MDL_DIRECT_QR_ALLOWED_ORIGIN = enableDirectQrSmoke
+	? directQrSmokeOrigin || (import.meta.env.DEV ? undefined : STAGING_DIRECT_QR_ORIGIN)
+	: undefined;
 
 export type MdlProtocol =
 	| typeof OPENID4VP_DC_API_PROTOCOL
@@ -191,8 +210,28 @@ export function isMdlDirectQrEnabled(): boolean {
 	return FEATURES.MDL_DIRECT_QR && FEATURES.MDL_ANDROID_OID4VP;
 }
 
-export function requireMdlDirectQrEnabled(): void {
+export function requireMdlDirectQrEnabled(runtimeOrigin?: string, requestOrigin?: string): void {
 	if (!isMdlDirectQrEnabled()) {
 		throw new Error('MDL_DIRECT_QR_DISABLED');
+	}
+	if (import.meta.env.DEV || !MDL_DIRECT_QR_ALLOWED_ORIGIN) return;
+	if (!runtimeOrigin) {
+		throw new Error('MDL_DIRECT_QR_ORIGIN_MISSING');
+	}
+	if (!requestOrigin) {
+		throw new Error('MDL_DIRECT_QR_REQUEST_ORIGIN_MISSING');
+	}
+	const runtime = parseOrigin(runtimeOrigin);
+	const request = parseOrigin(requestOrigin);
+	if (runtime !== MDL_DIRECT_QR_ALLOWED_ORIGIN || request !== MDL_DIRECT_QR_ALLOWED_ORIGIN) {
+		throw new Error('MDL_DIRECT_QR_ORIGIN_MISMATCH');
+	}
+}
+
+function parseOrigin(value: string): string {
+	try {
+		return new URL(value).origin;
+	} catch {
+		throw new Error('MDL_DIRECT_QR_ORIGIN_INVALID');
 	}
 }

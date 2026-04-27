@@ -11,9 +11,9 @@ import { readBoundedJson } from '$lib/server/bounded-json';
 const MAX_CANCEL_BODY_BYTES = 1024;
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export const POST: RequestHandler = async ({ request, locals, platform }) => {
+export const POST: RequestHandler = async ({ request, locals, platform, url }) => {
 	try {
-		requireMdlDirectQrEnabled();
+		requireMdlDirectQrEnabled(platform?.env?.PUBLIC_APP_URL, url.origin);
 	} catch {
 		throw error(404, 'Not found');
 	}
@@ -38,6 +38,11 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		throw error(403, 'Session ownership mismatch');
 	}
 
-	await failDirectMdlSession(sessionId, 'Direct QR session replaced', platform, DIRECT_MDL_TRANSPORT);
+	await failDirectMdlSession(
+		sessionId,
+		'Direct QR session replaced',
+		platform,
+		DIRECT_MDL_TRANSPORT
+	);
 	return json({ success: true });
 };

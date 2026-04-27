@@ -46,7 +46,7 @@ The existing `/verify-bridge` web flow remains the fallback and security referen
 | A6h | done | Direct `request_uri` endpoint and request object: emit the wallet-recognized OpenID4VP request, no embedded QR secret, strict client metadata, state/nonce binding, scanner-prefetch tolerance, and fetch replay behavior. | `direct-mdl-request`, `direct-mdl-request-object`, `direct-mdl-session`, focused direct/DC handover and verifier regression suites. | Brutalist contexts `ae6a6cc4-03ad-4b32-adf9-5f12224f7179` and `71892146-4dc8-44f2-82c1-8d0e753a8c1c`; accepted findings fixed before commit. |
 | A6i | done | Direct `direct_post` completion endpoint: parse OpenID4VP response parameters strictly, require state/session/transport match, verify mDL through the direct handover, finalize only the bound desktop user, and update the desktop completion channel. | Route tests for valid completion, stale/duplicate/mismatched state, malformed forms/JSON, extension params, wallet errors, finalizer binding, credential-hash reuse, and session-nonce reuse. | Brutalist context `c378146a-f523-47c6-afde-12748454c3d8`; accepted OpenID4VP response-param compatibility fixed before commit. |
 | A6j | done | Direct OpenID4VP QR desktop UI and account-binding posture: render the wallet-recognized QR as the primary desktop Android path only after first-valid-presenter risk is explicitly accepted or mitigated, show desktop account/pairing context where meaningful, and keep `/verify-bridge` as fallback. | Touched-file Svelte check, component/source smoke, QR payload inspection confirming it is not a Commons web URL, direct cancel/retry tests, and product/security evidence for the account-context decision. | Brutalist contexts `ea401916-65cf-489c-9014-e5eca16d328e`, `bf7b07bc-abb5-4042-9545-2688ad6dce91`, and `78b8339c-c05d-4aa3-82d5-5ac5ae537020`; accepted recovery/copy/signer findings fixed before commit. |
-| A6k | active | Staging preflight for real-device smoke: branches aligned, CI/deploy green, immutable Pages health green, external custom-domain health green, direct/bridge KV and encryption bindings verified, direct request fetch plus direct completion/finalizer atomicity reviewed, direct flag state verified, and test-account isolation/cleanup ready. | Branch/CI/deploy checklist below plus `mdl-smoke-readiness`, direct-session readiness checks, and real-wallet request_uri header/body capture. | Brutalist launch-readiness gate; no device smoke until findings are resolved or explicitly accepted. |
+| A6k | active | Staging preflight for real-device smoke: branches aligned, CI/deploy green, immutable Pages health green, external custom-domain health green, direct/bridge KV and encryption bindings verified, direct request fetch plus direct completion/finalizer atomicity reviewed, direct flag state verified, and test-account isolation/cleanup ready. | Branch/CI/deploy checklist below, `mdl-smoke-readiness`, `/api/internal/identity/mdl-readiness`, direct-session readiness checks, and real-wallet request_uri header/body capture. | Brutalist launch-readiness gate; no device smoke until findings are resolved or explicitly accepted. |
 | A6l | queued | Physical Android smoke: same-device Chrome + Google Wallet mDL, then desktop direct OpenID4VP QR scanned by Android Camera with immediate OS/wallet presentation affordance. | Real device checklist below; record phone/browser/wallet versions and wallet UI observations. | File launch findings before enablement; direct QR cannot become default if account-context/phishing signal is missing without explicit review acceptance. |
 | A7 | queued | `/verify-bridge` fallback live smoke after direct QR is working. | See bridge fallback checklist below. | File fallback findings before enablement. |
 | A8 | queued | Update Android-first docs and user-facing copy after smoke results are known. | Static/source review plus touched-file Svelte check. | Brutalist product/security copy review. |
@@ -86,6 +86,20 @@ The existing `/verify-bridge` web flow remains the fallback and security referen
 - `A6j` direct QR desktop UI is complete in this delta: `/api/identity/direct-mdl/start` creates authenticated desktop direct sessions and emits an `openid4vp://authorize` QR payload after signer preflight; `/api/identity/direct-mdl/stream/{sessionId}` carries request-fetched/completed/failed/expired events back to the desktop; `/api/identity/direct-mdl/cancel` invalidates abandoned direct QR sessions; the desktop component shows requested mDL fields plus the server-derived account label, validates `credentialHash` and `identityCommitmentBound`, fails closed on invalid completions, cancels old direct sessions on retry/fallback/back/destroy, and keeps the guided `/verify-bridge` path available.
 - Brutalist contexts `ea401916-65cf-489c-9014-e5eca16d328e`, `bf7b07bc-abb5-4042-9545-2688ad6dce91`, and `78b8339c-c05d-4aa3-82d5-5ac5ae537020` reviewed `A6j`. Accepted findings fixed before commit: old direct sessions must be cancelled on retry/fallback, wallet/verifier failures must reach the desktop stream, signer config must fail before a QR is shown, direct copy must disclose birth date/document number and raw-field non-storage, direct QR rendering failures must not spin forever, and direct completion must propagate `requireReauth`. Residual pre-flag-on findings move to `A6k`/`A6l`: first-valid-presenter account binding, actual Google Wallet `request_uri` `Accept`/`wallet_nonce` behavior, and whether 300s direct TTL is acceptable on real devices.
 - Next tractable target after the `A6j` gate is `A6k`: staging preflight for real-device smoke.
+- `A6k` implementation is in progress: staging branch deploys compile direct QR on with
+  `VITE_MDL_DIRECT_QR=1` plus `VITE_MDL_DIRECT_QR_ORIGIN=https://staging.commons.email`,
+  production/main keep it off, runtime direct routes reject non-staging `PUBLIC_APP_URL`, and
+  `/api/internal/identity/mdl-readiness` reports feature state, direct signer usability,
+  `PUBLIC_APP_URL` origin matching, KV bindings, bridge encryption, request-object contract,
+  and same-device protocol state behind `X-Internal-Secret`.
+- Brutalist A6k contexts `44feeded-fbb4-407c-a4a0-cb27b8d22d41` and
+  `aaabf1b7-c50f-436f-a057-b50b4a9af28e` reviewed the preflight delta. Accepted findings
+  fixed before commit: staging direct QR needs a hardcoded build-time allowed origin, live direct
+  routes must enforce that runtime `PUBLIC_APP_URL` matches the staging origin, and those routes
+  must also reject requests served from any non-staging origin. Residual staging-smoke warnings:
+  readiness proves signer import/signing but not external verifier-certificate registration or
+  Google Wallet trust, and shared `DC_SESSION_KV` fallback remains acceptable only for controlled
+  test-account smoke until dedicated bridge/direct namespaces are provisioned.
 - Global `svelte-check` remains a separate repo-health track and is not an Android mDL launch gate unless errors touch this surface.
 
 ## Direct OpenID4VP QR Decision
@@ -146,6 +160,14 @@ Staging real-device smoke (`A6k`/`A6l`) passes only when:
   or mutating the session.
 - Direct-session readiness verifies KV bindings, direct feature flag state, request/response
   endpoint availability, and bridge encryption configuration; `/api/health` alone is not enough.
+- Internal direct-session readiness is checked with:
+
+  ```bash
+  curl --fail-with-body -sS \
+    -H "X-Internal-Secret: $INTERNAL_API_SECRET" \
+    https://staging.commons.email/api/internal/identity/mdl-readiness | jq
+  ```
+
 - If staging still shares production Convex/KV, use dedicated test accounts and record cleanup
   for mDL credential-use rows and identity state touched by the smoke.
 - iOS Safari remains unavailable while `MDL_IOS=false`.

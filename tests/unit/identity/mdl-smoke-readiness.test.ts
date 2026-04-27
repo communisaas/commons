@@ -82,4 +82,34 @@ describe('Android mDL live-smoke readiness', () => {
 			protocolFields.length
 		);
 	});
+
+	it('keeps direct QR smoke enabled only for staging deploy builds', () => {
+		const deployWorkflow = read('.github/workflows/deploy.yml');
+		const features = read('src/lib/config/features.ts');
+		const directRoutes = [
+			read('src/routes/api/identity/direct-mdl/start/+server.ts'),
+			read('src/routes/api/identity/direct-mdl/request/[sessionId]/+server.ts'),
+			read('src/routes/api/identity/direct-mdl/complete/+server.ts'),
+			read('src/routes/api/identity/direct-mdl/stream/[sessionId]/+server.ts'),
+			read('src/routes/api/identity/direct-mdl/cancel/+server.ts')
+		];
+
+		expect(deployWorkflow).toContain('VITE_ENVIRONMENT=staging');
+		expect(deployWorkflow).toContain('VITE_MDL_DIRECT_QR=1');
+		expect(deployWorkflow).toContain(
+			'VITE_MDL_DIRECT_QR_ORIGIN=https://staging.commons.email'
+		);
+		expect(deployWorkflow).toContain('VITE_ENVIRONMENT=production');
+		expect(deployWorkflow).toContain('VITE_MDL_DIRECT_QR=0');
+		expect(features).toContain('VITE_MDL_DIRECT_QR');
+		expect(features).toContain('VITE_MDL_DIRECT_QR_ORIGIN');
+		expect(features).toContain('may only be enabled for staging smoke builds');
+		expect(features).toContain('must be the staging smoke origin');
+		expect(features).not.toContain('MDL_DIRECT_QR: true');
+		for (const source of directRoutes) {
+			expect(source).toContain(
+				'requireMdlDirectQrEnabled(platform?.env?.PUBLIC_APP_URL, url.origin)'
+			);
+		}
+	});
 });

@@ -25,9 +25,9 @@ type DirectPostForm = {
 
 let placeholderPrivateKeyPromise: Promise<CryptoKey> | null = null;
 
-export const POST: RequestHandler = async ({ request, platform }) => {
+export const POST: RequestHandler = async ({ request, platform, url }) => {
 	try {
-		requireMdlDirectQrEnabled();
+		requireMdlDirectQrEnabled(platform?.env?.PUBLIC_APP_URL, url.origin);
 	} catch {
 		throw error(404, 'Not found');
 	}
@@ -259,8 +259,7 @@ function hasMediaType(headerValue: string, mediaType: string): boolean {
 function isMdlCredentialReuseError(err: unknown): boolean {
 	const message = err instanceof Error ? err.message : String(err);
 	return (
-		message.includes('MDL_CREDENTIAL_HASH_REUSED') ||
-		message.includes('MDL_SESSION_NONCE_REUSED')
+		message.includes('MDL_CREDENTIAL_HASH_REUSED') || message.includes('MDL_SESSION_NONCE_REUSED')
 	);
 }
 

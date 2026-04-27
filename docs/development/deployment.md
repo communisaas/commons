@@ -154,6 +154,23 @@ Also verify the direct QR feature flag, direct-session KV binding, bridge/sessio
 configuration, request object endpoint, direct-post endpoint, and test-account cleanup plan
 before scanning a real mDL.
 
+The direct QR UI is compiled into staging branch deploys only. The deploy workflow sets
+`VITE_MDL_DIRECT_QR=1` and `VITE_MDL_DIRECT_QR_ORIGIN=https://staging.commons.email`
+for `staging`, and keeps direct QR `0` for `production` and `main`. Runtime direct
+routes also reject a staging-enabled artifact unless `PUBLIC_APP_URL` matches that
+staging origin. Before scanning, run the internal readiness probe from an operator shell
+that has `INTERNAL_API_SECRET`:
+
+```bash
+curl --fail-with-body -sS \
+  -H "X-Internal-Secret: $INTERNAL_API_SECRET" \
+  https://staging.commons.email/api/internal/identity/mdl-readiness | jq
+```
+
+The probe must return `status: "ok"`. Warnings for `BRIDGE_SESSION_KV` or
+`DIRECT_MDL_SESSION_KV` mean those lanes are using the shared `DC_SESSION_KV` fallback;
+that is acceptable only for controlled staging smoke with dedicated test accounts.
+
 Real-device staging smoke should cover:
 
 1. Android Chrome same-device mDL/OpenID4VP wallet handoff.

@@ -28,9 +28,9 @@ function sendTerminal(
 	return false;
 }
 
-export const GET: RequestHandler = async ({ params, locals, platform }) => {
+export const GET: RequestHandler = async ({ params, locals, platform, url }) => {
 	try {
-		requireMdlDirectQrEnabled();
+		requireMdlDirectQrEnabled(platform?.env?.PUBLIC_APP_URL, url.origin);
 	} catch {
 		throw error(404, 'Not found');
 	}
