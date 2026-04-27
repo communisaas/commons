@@ -21,9 +21,9 @@ const TEST_INPUT = {
 	clientId: 'redirect_uri:https://commons.example/api/identity/direct-mdl/complete',
 	responseUri: 'https://commons.example/api/identity/direct-mdl/complete',
 	requestUri: 'https://commons.example/api/identity/direct-mdl/request/session-001',
-	nonce: 'nonce-001',
-	state: 'state-001',
-	transactionId: 'tx-001'
+	nonce: 'nonce_0012345678',
+	state: 'state_0012345678',
+	transactionId: 'tx_0012345678901'
 };
 
 function makePlatform() {
@@ -65,9 +65,9 @@ describe('direct-mdl-session lifecycle', () => {
 
 		expect(handle).toMatchObject({
 			id: expect.any(String),
-			transactionId: 'tx-001',
-			nonce: 'nonce-001',
-			state: 'state-001',
+			transactionId: 'tx_0012345678901',
+			nonce: 'nonce_0012345678',
+			state: 'state_0012345678',
 			transport: DIRECT_MDL_TRANSPORT,
 			expiresAt: BASE_TIME + DIRECT_MDL_SESSION_TTL_SECONDS * 1000
 		});

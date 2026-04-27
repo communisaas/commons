@@ -24,6 +24,7 @@ export interface DirectMdlSession {
 	state: string;
 	transactionId: string;
 	walletNonce?: string;
+	requestObjectJwt?: string;
 	status: DirectMdlSessionStatus;
 	requestFetchedAt?: number;
 	completedAt?: number;
@@ -41,6 +42,7 @@ export interface CreateDirectMdlSessionInput {
 	nonce?: string;
 	state?: string;
 	transactionId?: string;
+	id?: string;
 }
 
 export interface DirectMdlSessionHandle {
@@ -132,6 +134,21 @@ function assertNonEmpty(name: string, value: string): void {
 	}
 }
 
+function assertBase64UrlToken(name: string, value: string): void {
+	if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{16,512}$/.test(value)) {
+		throw new Error(`DIRECT_MDL_SESSION_INVALID_${name.toUpperCase()}`);
+	}
+}
+
+function assertSessionId(id: string): void {
+	if (
+		typeof id !== 'string' ||
+		!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+	) {
+		throw new Error('DIRECT_MDL_SESSION_INVALID_ID');
+	}
+}
+
 function assertTransport(transport: string): asserts transport is DirectMdlTransport {
 	if (transport !== DIRECT_MDL_TRANSPORT) {
 		throw new Error('DIRECT_MDL_TRANSPORT_MISMATCH');
@@ -170,10 +187,16 @@ export async function createDirectMdlSession(
 	assertNonEmpty('clientId', input.clientId);
 	assertNonEmpty('responseUri', input.responseUri);
 	assertNonEmpty('requestUri', input.requestUri);
+	if (input.id !== undefined) assertSessionId(input.id);
+	if (input.nonce !== undefined) assertBase64UrlToken('nonce', input.nonce);
+	if (input.state !== undefined) assertBase64UrlToken('state', input.state);
+	if (input.transactionId !== undefined) {
+		assertBase64UrlToken('transactionId', input.transactionId);
+	}
 
 	const now = Date.now();
 	const session: DirectMdlSession = {
-		id: crypto.randomUUID(),
+		id: input.id ?? crypto.randomUUID(),
 		desktopUserId: input.desktopUserId,
 		transport: DIRECT_MDL_TRANSPORT,
 		clientId: input.clientId,
@@ -204,16 +227,19 @@ export async function createDirectMdlSession(
 
 export async function markDirectMdlRequestFetched(
 	sessionId: string,
-	input: { transport: string; walletNonce?: string },
+	input: { transport: string; walletNonce?: string; requestObjectJwt?: string },
 	platform?: Platform
 ): Promise<DirectMdlSession> {
 	assertTransport(input.transport);
+	if (input.walletNonce !== undefined) assertBase64UrlToken('walletNonce', input.walletNonce);
+	if (input.requestObjectJwt !== undefined)
+		assertNonEmpty('requestObjectJwt', input.requestObjectJwt);
 	const session = await requireSession(sessionId, platform);
 	if (session.status === 'completed' || session.status === 'failed') {
 		throw new Error('DIRECT_MDL_SESSION_TERMINAL');
 	}
 	if (session.status === 'request_fetched') {
-		if (session.walletNonce && input.walletNonce && session.walletNonce !== input.walletNonce) {
+		if ((session.walletNonce ?? null) !== (input.walletNonce ?? null)) {
 			throw new Error('DIRECT_MDL_WALLET_NONCE_MISMATCH');
 		}
 		return session;
@@ -222,6 +248,7 @@ export async function markDirectMdlRequestFetched(
 	session.status = 'request_fetched';
 	session.requestFetchedAt = Date.now();
 	if (input.walletNonce) session.walletNonce = input.walletNonce;
+	if (input.requestObjectJwt) session.requestObjectJwt = input.requestObjectJwt;
 	await putSession(session, platform);
 	return session;
 }

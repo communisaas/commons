@@ -71,6 +71,11 @@ declare global {
 				VICAL_KV?: KVNamespace;
 				PACKET_CACHE_KV?: KVNamespace;
 				PUBLIC_APP_URL?: string;
+				MDL_DIRECT_QR_REQUEST_PRIVATE_KEY?: string;
+				MDL_DIRECT_QR_REQUEST_X5C?: string;
+				MDL_DIRECT_QR_REQUEST_ALG?: string;
+				MDL_DIRECT_QR_REQUEST_KID?: string;
+				MDL_DIRECT_QR_REQUEST_AUD?: string;
 			};
 			context?: {
 				waitUntil: (promise: Promise<unknown>) => void;
@@ -161,6 +166,11 @@ declare global {
 
 			// Identity Verification (mDL via Digital Credentials API — no provider API keys needed)
 			// District resolution via Shadow Atlas H3 mapping (no external API keys needed)
+			MDL_DIRECT_QR_REQUEST_PRIVATE_KEY?: string; // PKCS#8 PEM used to sign direct OpenID4VP Request Objects
+			MDL_DIRECT_QR_REQUEST_X5C?: string; // JSON array or comma/newline-separated X.509 chain for Request Object JWS x5c
+			MDL_DIRECT_QR_REQUEST_ALG?: string; // ES256 default; RS256 also supported for registered verifier certificates
+			MDL_DIRECT_QR_REQUEST_KID?: string; // Optional JWS kid for the direct Request Object signer
+			MDL_DIRECT_QR_REQUEST_AUD?: string; // Optional Request Object audience; defaults to https://self-issued.me/v2
 
 			// Shadow Atlas content sources
 			ATLAS_BASE_URL?: string; // R2 custom domain (primary reads)

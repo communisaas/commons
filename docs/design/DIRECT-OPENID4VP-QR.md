@@ -65,7 +65,7 @@ signed request object; it is not the HTTP response body:
 
 ```json
 {
-  "client_id": "redirect_uri:https://commons.email/api/identity/direct-mdl/complete",
+  "client_id": "x509_san_dns:commons.email",
   "response_uri": "https://commons.email/api/identity/direct-mdl/complete",
   "response_type": "vp_token",
   "response_mode": "direct_post",
@@ -112,11 +112,15 @@ signed request object; it is not the HTTP response body:
 ```
 
 A6h must replace `client_id` with the Google Wallet registered verifier identifier
-required by the selected profile. `request_uri_method=post` belongs only on the QR
-authorization request because the signed request object does not contain a
-`request_uri`. The session store must persist the exact `client_id`, `response_uri`,
-`state`, `nonce`, `wallet_nonce`, `request_uri`, and transport so A6g/A6i can
-reconstruct the correct handover and reject cross-transport replay.
+required by the selected profile. For signed request objects, the client identifier
+must use a signed-compatible prefix. The initial implementation accepts
+`x509_san_dns:` and pins the `response_uri` host to that DNS name; `x509_hash:` remains
+closed until the verifier validates the hash against the JWS leaf certificate. The
+`redirect_uri:` prefix is not used for signed request objects. `request_uri_method=post`
+belongs only on the QR authorization request because the signed request object does not
+contain a `request_uri`. The session store must persist the exact `client_id`,
+`response_uri`, `state`, `nonce`, `wallet_nonce`, `request_uri`, and transport so A6g/A6i
+can reconstruct the correct handover and reject cross-transport replay.
 
 ## Direct mdoc Handover
 
