@@ -1,0 +1,289 @@
+name: Configure Cloudflare Branch Alias
+
+on:
+  workflow_dispatch:
+    inputs:
+      record_name:
+        description: Cloudflare DNS record to configure
+        required: true
+        default: staging.commons.email
+      branch_alias_target:
+        description: Pages branch alias target
+        required: true
+        default: staging.communique-site.pages.dev
+
+concurrency:
+  group: cloudflare-branch-alias-staging
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions: {}
+
+    steps:
+      - name: Upsert staging branch alias CNAME
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CF_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
+          PAGES_PROJECT: communique-site
+          RECORD_NAME: ${{ inputs.record_name }}
+          TARGET: ${{ inputs.branch_alias_target }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          api_base="https://api.cloudflare.com/client/v4"
+
+          cf_request() {
+            local method="$1"
+            local path="$2"
+            local data="${3:-}"
+            local response_file
+            local status
+            response_file=$(mktemp)
+
+            if [ -n "${data}" ]; then
+              status=$(curl -sS --show-error --max-time 30 --connect-timeout 10 --retry 2 --retry-all-errors \
+                -o "${response_file}" -w "%{http_code}" -X "${method}" \
+                -H "Authorization: Bearer ${CF_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+                --data "${data}" \
+                "${api_base}${path}") || {
+                  echo "::error::Cloudflare ${method} ${path} request failed before an HTTP response." >&2
+                  cat "${response_file}" >&2 || true
+                  rm -f "${response_file}"
+                  exit 1
+                }
+            else
+              status=$(curl -sS --show-error --max-time 30 --connect-timeout 10 --retry 2 --retry-all-errors \
+                -o "${response_file}" -w "%{http_code}" -X "${method}" \
+                -H "Authorization: Bearer ${CF_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+                "${api_base}${path}") || {
+                  echo "::error::Cloudflare ${method} ${path} request failed before an HTTP response." >&2
+                  cat "${response_file}" >&2 || true
+                  rm -f "${response_file}"
+                  exit 1
+                }
+            fi
+
+            if ! [[ "${status}" =~ ^2[0-9][0-9]$ ]]; then
+              echo "::error::Cloudflare ${method} ${path} returned HTTP ${status}." >&2
+              cat "${response_file}" >&2
+              rm -f "${response_file}"
+              exit 1
+            fi
+
+            if ! jq -e '.success == true' "${response_file}" >/dev/null; then
+              echo "::error::Cloudflare ${method} ${path} did not report success." >&2
+              cat "${response_file}" >&2
+              rm -f "${response_file}"
+              exit 1
+            fi
+
+            cat "${response_file}"
+            rm -f "${response_file}"
+          }
+
+          probe_health() {
+            local label="$1"
+            local url="$2"
+
+            for attempt in {1..6}; do
+              if response=$(curl -sS --max-time 20 -w "\n%{http_code}" "${url}"); then
+                http_status=$(printf '%s\n' "${response}" | tail -n 1)
+                body=$(printf '%s\n' "${response}" | sed '$d')
+
+                if [ "${http_status}" = "200" ] && echo "${body}" | jq -e '.status == "ok"' >/dev/null 2>&1; then
+                  echo "${label} health ok: ${url}"
+                  return 0
+                fi
+
+                if echo "${body}" | jq -e . >/dev/null 2>&1; then
+                  echo "${label} health attempt ${attempt} returned HTTP ${http_status}:"
+                  echo "${body}" | jq '{status, convex, message}'
+                else
+                  echo "${label} health attempt ${attempt} returned HTTP ${http_status} and a non-JSON body:"
+                  printf '%s\n' "${body}" | head -c 4000
+                  printf '\n'
+                fi
+              else
+                echo "${label} health attempt ${attempt} failed before an HTTP response."
+              fi
+
+              sleep 10
+            done
+
+            echo "::error::${label} health did not pass: ${url}"
+            exit 1
+          }
+
+          if [ -z "${CF_API_TOKEN:-}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not configured."
+            exit 1
+          fi
+
+          if [ -z "${CF_ZONE_ID:-}" ]; then
+            echo "::error::CLOUDFLARE_ZONE_ID is not configured."
+            exit 1
+          fi
+
+          if [ -z "${INTERNAL_API_SECRET:-}" ]; then
+            echo "::error::INTERNAL_API_SECRET is not configured as a GitHub secret."
+            exit 1
+          fi
+
+          case "${RECORD_NAME}:${TARGET}" in
+            staging.commons.email:staging.communique-site.pages.dev) ;;
+            *)
+              echo "::error::This workflow is intentionally limited to staging.commons.email -> staging.communique-site.pages.dev."
+              exit 1
+              ;;
+          esac
+
+          proxied=true
+
+          deployments=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments")
+          staging_deployment=$(echo "${deployments}" | jq -c --arg branch staging \
+            '[.result[] | select(.deployment_trigger.metadata.branch == $branch)] | first // empty')
+
+          if [ -z "${staging_deployment}" ]; then
+            echo "::error::No staging deployment found for Pages project ${PAGES_PROJECT}."
+            exit 1
+          fi
+
+          staging_commit=$(echo "${staging_deployment}" | jq -r '.deployment_trigger.metadata.commit_hash // ""')
+          staging_status=$(echo "${staging_deployment}" | jq -r '.latest_stage.status // ""')
+          staging_url=$(echo "${staging_deployment}" | jq -r '.url // ""')
+          branch_alias=$(echo "${staging_deployment}" | jq -r --arg target "https://${TARGET}" \
+            '(.aliases // []) | index($target) // empty')
+
+          if [ "${staging_commit}" != "${EXPECTED_COMMIT}" ]; then
+            echo "::error::Latest staging Pages deployment is ${staging_commit}; expected workflow commit ${EXPECTED_COMMIT}."
+            exit 1
+          fi
+
+          if [ "${staging_status}" != "success" ]; then
+            echo "::error::Latest staging Pages deployment status is ${staging_status}, not success."
+            exit 1
+          fi
+
+          if [ -z "${branch_alias}" ]; then
+            echo "::error::Latest staging Pages deployment does not advertise branch alias https://${TARGET}."
+            exit 1
+          fi
+
+          pages_domains=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/domains")
+          if ! echo "${pages_domains}" | jq -e --arg name "${RECORD_NAME}" \
+            '.result[]? | select(.name == $name and .status == "active")' >/dev/null; then
+            echo "::error::${RECORD_NAME} is not an active custom domain on Pages project ${PAGES_PROJECT}."
+            exit 1
+          fi
+
+          list_response=$(cf_request GET "/zones/${CF_ZONE_ID}/dns_records?name=${RECORD_NAME}")
+          count=$(echo "${list_response}" | jq '.result | length')
+
+          if [ "${count}" -gt 1 ]; then
+            echo "::error::Expected at most one DNS record for ${RECORD_NAME}; found ${count}."
+            echo "${list_response}" | jq -r '.result[] | "record id: \(.id), type: \(.type), content: \(.content), proxied: \(.proxied)"'
+            exit 1
+          fi
+
+          payload=$(jq -n \
+            --arg type CNAME \
+            --arg name "${RECORD_NAME}" \
+            --arg content "${TARGET}" \
+            --argjson proxied "${proxied}" \
+            '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: 1}')
+
+          if [ "${count}" -eq 0 ]; then
+            echo "No CNAME exists for ${RECORD_NAME}; target will be ${TARGET}, proxied=${proxied}."
+            mutation_response=$(cf_request POST "/zones/${CF_ZONE_ID}/dns_records" "${payload}")
+          else
+            record_id=$(echo "${list_response}" | jq -r '.result[0].id')
+            current_type=$(echo "${list_response}" | jq -r '.result[0].type')
+            current_content=$(echo "${list_response}" | jq -r '.result[0].content')
+            current_proxied=$(echo "${list_response}" | jq -r '.result[0].proxied')
+
+            if [ "${current_type}" != "CNAME" ]; then
+              echo "::error::${RECORD_NAME} exists as ${current_type}; replace it with a proxied CNAME before staging smoke."
+              exit 1
+            fi
+
+            if [ "${current_content}" = "${TARGET}" ] && [ "${current_proxied}" = "${proxied}" ]; then
+              echo "${RECORD_NAME} already points to ${TARGET} with proxied=${proxied}."
+            else
+              echo "${RECORD_NAME} will change from ${current_content} proxied=${current_proxied} to ${TARGET} proxied=${proxied}."
+              mutation_response=$(cf_request PATCH "/zones/${CF_ZONE_ID}/dns_records/${record_id}" "${payload}")
+              echo "${mutation_response}" | jq -r '.result | "Configured \(.name) -> \(.content), proxied=\(.proxied)"'
+            fi
+          fi
+
+          final_response=$(cf_request GET "/zones/${CF_ZONE_ID}/dns_records?name=${RECORD_NAME}")
+          if ! echo "${final_response}" | jq -e --arg name "${RECORD_NAME}" --arg content "${TARGET}" \
+            '.result | length == 1 and .[0].type == "CNAME" and .[0].name == $name and .[0].content == $content and .[0].proxied == true' >/dev/null; then
+            echo "::error::Final DNS state is not the required proxied CNAME."
+            echo "${final_response}" | jq -r '.result[] | "record id: \(.id), type: \(.type), content: \(.content), proxied: \(.proxied)"'
+            exit 1
+          fi
+
+          probe_health "immutable staging deployment" "${staging_url}/api/health"
+          probe_health "staging custom domain" "https://${RECORD_NAME}/api/health"
+          probe_health "production custom domain" "https://commons.email/api/health"
+
+          for attempt in {1..12}; do
+            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
+              -H "X-Internal-Secret: ${INTERNAL_API_SECRET}" \
+              "https://${RECORD_NAME}/api/internal/identity/mdl-readiness"); then
+              http_status=$(printf '%s\n' "${response}" | tail -n 1)
+              body=$(printf '%s\n' "${response}" | sed '$d')
+
+              if [ "${http_status}" = "200" ] && echo "${body}" | jq -e '.status == "ok"' >/dev/null 2>&1; then
+                echo "${body}" | jq '{status, blockers, warnings}'
+                break
+              fi
+
+              if echo "${body}" | jq -e . >/dev/null 2>&1; then
+                echo "${body}" | jq '{status, blockers, warnings, checks: [.checks[]? | select(.status != "ok")]}'
+              else
+                echo "Readiness attempt ${attempt} returned HTTP ${http_status} and a non-JSON body:"
+                printf '%s\n' "${body}" | head -c 4000
+                printf '\n'
+              fi
+            else
+              echo "Readiness attempt ${attempt} failed before an HTTP response."
+            fi
+
+            if [ "${attempt}" = "12" ]; then
+              echo "::error::${RECORD_NAME} did not pass internal mDL readiness after DNS branch-alias configuration."
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          direct_response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
+            -H "Origin: https://${RECORD_NAME}" \
+            -X POST "https://${RECORD_NAME}/api/identity/direct-mdl/start") || {
+              echo "::error::Direct mDL start route probe failed before an HTTP response."
+              exit 1
+            }
+          direct_status=$(printf '%s\n' "${direct_response}" | tail -n 1)
+          direct_body=$(printf '%s\n' "${direct_response}" | sed '$d')
+
+          if [ "${direct_status}" != "401" ]; then
+            echo "::error::Direct mDL start route did not return expected unauthenticated 401; got HTTP ${direct_status}."
+            if echo "${direct_body}" | jq -e . >/dev/null 2>&1; then
+              echo "${direct_body}" | jq '{message, status, blockers, warnings}'
+            else
+              printf '%s\n' "${direct_body}" | head -c 4000
+              printf '\n'
+            fi
+            exit 1
+          fi
+
+          echo "Direct mDL start route is present and origin-gated; unauthenticated probe returned 401."

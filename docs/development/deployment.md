@@ -142,7 +142,11 @@ or live congressional delivery paths.
 The deploy workflow hard-checks the immutable Pages deployment URL for every branch after
 `wrangler pages deploy`. Custom domains are validated during release smoke because
 Cloudflare may return WAF responses to GitHub-hosted runners that do not reproduce from
-normal clients. Before Android smoke, verify:
+normal clients. The manual `Configure Cloudflare Branch Alias` workflow keeps
+`staging.commons.email` pointed at the Cloudflare Pages branch alias
+`staging.communique-site.pages.dev`, then probes the internal mDL readiness endpoint with
+the `INTERNAL_API_SECRET` GitHub secret; run it before Android smoke if the staging custom
+domain serves a production-shaped artifact. Before Android smoke, verify:
 
 ```bash
 curl --fail-with-body -sS https://staging.commons.email/api/health | jq -e '.status == "ok"'
