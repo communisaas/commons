@@ -117,6 +117,16 @@ export const FEATURES = {
 	MDL_BRIDGE: true,
 
 	/**
+	 * Desktop → phone direct OpenID4VP QR.
+	 *
+	 * Keep false until the direct-session store, direct mdoc handover,
+	 * request_uri/direct_post endpoints, desktop QR UI, staging preflight, and
+	 * real-device smoke all pass. `/verify-bridge` remains the default desktop
+	 * fallback while this is false.
+	 */
+	MDL_DIRECT_QR: false,
+
+	/**
 	 * Legacy alias retained only for old string-search tests and migration
 	 * comments. New code must use the protocol/platform flags above.
 	 */
@@ -175,4 +185,14 @@ export function isAnyMdlProtocolEnabled(): boolean {
 
 export function isMdlBridgeEnabled(): boolean {
 	return FEATURES.MDL_BRIDGE && isAnyMdlProtocolEnabled();
+}
+
+export function isMdlDirectQrEnabled(): boolean {
+	return FEATURES.MDL_DIRECT_QR && FEATURES.MDL_ANDROID_OID4VP;
+}
+
+export function requireMdlDirectQrEnabled(): void {
+	if (!isMdlDirectQrEnabled()) {
+		throw new Error('MDL_DIRECT_QR_DISABLED');
+	}
 }

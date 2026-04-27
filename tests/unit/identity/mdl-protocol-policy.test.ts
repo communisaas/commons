@@ -4,7 +4,9 @@ import {
 	OPENID4VP_DC_API_PROTOCOL,
 	isAnyMdlProtocolEnabled,
 	isMdlBridgeEnabled,
-	isMdlProtocolEnabled
+	isMdlDirectQrEnabled,
+	isMdlProtocolEnabled,
+	requireMdlDirectQrEnabled
 } from '../../../src/lib/config/features';
 
 describe('mDL Android-first protocol policy', () => {
@@ -20,6 +22,12 @@ describe('mDL Android-first protocol policy', () => {
 	it('keeps the bridge open only through enabled protocols', () => {
 		expect(isAnyMdlProtocolEnabled()).toBe(true);
 		expect(isMdlBridgeEnabled()).toBe(true);
+	});
+
+	it('keeps direct desktop QR behind its explicit flag', () => {
+		expect(FEATURES.MDL_DIRECT_QR).toBe(false);
+		expect(isMdlDirectQrEnabled()).toBe(false);
+		expect(() => requireMdlDirectQrEnabled()).toThrow('MDL_DIRECT_QR_DISABLED');
 	});
 
 	it('rejects unknown protocols', () => {

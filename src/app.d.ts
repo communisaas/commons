@@ -65,6 +65,7 @@ declare global {
 		interface Platform {
 			env?: {
 				DC_SESSION_KV?: KVNamespace;
+				DIRECT_MDL_SESSION_KV?: KVNamespace;
 				REGISTRATION_RETRY_KV?: KVNamespace;
 				REJECTION_MONITOR_KV?: KVNamespace;
 				VICAL_KV?: KVNamespace;
