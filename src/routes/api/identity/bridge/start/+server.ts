@@ -1,5 +1,4 @@
 import { json, error } from '@sveltejs/kit';
-import { z } from 'zod';
 import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
 import {
@@ -8,13 +7,6 @@ import {
 	isMdlProtocolEnabled
 } from '$lib/config/features';
 import { createBridgeSession } from '$lib/server/bridge-session';
-
-const StartSchema = z.object({
-	// User's email supplied by the authenticated desktop client.
-	// Server verifies it hashes to the user's stored emailHash — if the client
-	// lies (supplies victim's email to phish), the hash mismatch rejects the request.
-	userEmail: z.string().email().max(254)
-});
 
 /** Normalize label for safe display — strip bidi controls, collapse whitespace */
 function sanitizeLabel(s: string): string {
@@ -25,13 +17,19 @@ function sanitizeLabel(s: string): string {
 		.trim();
 }
 
+function desktopUserLabelFromSession(user: App.Locals['user']): string {
+	if (!user?.email) return 'Signed-in Commons account';
+	const label = sanitizeLabel(user.email);
+	return label.length > 0 ? label : 'Signed-in Commons account';
+}
+
 /**
  * Bridge Start — creates a cross-device verification session.
  *
  * Desktop browser (no DC-API) calls this to get a QR code URL.
  * The QR encodes sessionId + secret for the phone to claim.
  */
-export const POST: RequestHandler = async ({ request, locals, platform, url }) => {
+export const POST: RequestHandler = async ({ locals, platform, url }) => {
 	if (!isMdlBridgeEnabled()) {
 		throw error(404, 'Not found');
 	}
@@ -41,19 +39,10 @@ export const POST: RequestHandler = async ({ request, locals, platform, url }) =
 		throw error(401, 'Authentication required');
 	}
 
-	// Accept client-supplied email as the pairing hint label.
-	// The 3-word pairing code is the actual security mechanism — both devices
-	// must display the same code for the user to confirm.
-	// emailHash anti-phishing check removed: new accounts may not have emailHash.
-	let userLabel: string;
-	try {
-		const body = await request.json().catch(() => ({}));
-		const parsed = StartSchema.parse(body);
-		userLabel = sanitizeLabel(parsed.userEmail);
-	} catch (e) {
-		if (e && typeof e === 'object' && 'status' in e) throw e;
-		throw error(400, 'Invalid request: userEmail required');
+	if (!locals.user || locals.user.id !== session.userId) {
+		throw error(401, 'Authentication required');
 	}
+	const userLabel = desktopUserLabelFromSession(locals.user);
 
 	// Canonical origin — fail-closed in production, prevents proxy-host redirection
 	// in the QR URL.

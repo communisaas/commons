@@ -56,7 +56,8 @@ Desktop shows success          Session deleted (TTL)         Phone shows "return
 
 - **QR = shared secret** — URL fragment contains 256-bit secret (never hits server)
 - **HMAC proof of possession** — /claim and /complete verify via HMAC without receiving the secret
-- **Email hash anti-phishing** — server verifies client-supplied email hashes to stored emailHash
+- **Server-derived account label** — the phone confirmation screen displays only the
+  authenticated desktop session's server-derived account label, never a client-supplied email
 - **Pairing code** — 3-word phrase displayed on both devices for visual confirmation
 - **One-way state transitions** — pending → claimed → completed (irreversible)
 - **Encrypted-at-rest** — sensitive KV fields encrypted with AES-256-GCM + HKDF

@@ -22,9 +22,7 @@
 
 	interface Props {
 		userId: string;
-		/** Authenticated user's email (for cross-device bridge anti-phishing).
-		 * Server verifies this matches the user's stored email hash.
-		 * Only required for cross-device bridge; same-device flow ignores it. */
+		/** Deprecated bridge hint. The bridge now derives its account label from the server session. */
 		userEmail?: string;
 		templateSlug?: string;
 		oncomplete?: (data: {
@@ -44,7 +42,7 @@
 		oncancel?: () => void;
 	}
 
-	let { userId, userEmail, templateSlug, oncomplete, onerror, oncancel }: Props = $props();
+	let { userId, templateSlug, oncomplete, onerror, oncancel }: Props = $props();
 
 	// Platform detection
 	type Platform = 'android' | 'ios' | 'desktop';
@@ -208,18 +206,8 @@
 		bridgeError = null;
 
 		try {
-			// Cross-device bridge requires the authenticated user's email
-			// (server verifies via hash before creating the session).
-			if (!userEmail) {
-				bridgeStatus = 'error';
-				bridgeError =
-					'Unable to start verification — your email is not available. Please sign in again.';
-				return;
-			}
 			const response = await fetch('/api/identity/bridge/start', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ userEmail })
+				method: 'POST'
 			});
 
 			if (!response.ok) {

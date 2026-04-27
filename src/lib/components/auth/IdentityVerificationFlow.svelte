@@ -7,7 +7,7 @@
 
 	interface Props {
 		userId: string;
-		/** User's email (for cross-device bridge anti-phishing) */
+		/** User email for parent flow display; bridge labels are derived server-side. */
 		userEmail?: string;
 		templateSlug?: string;
 		/** Skip value proposition (if already shown earlier in flow) */
