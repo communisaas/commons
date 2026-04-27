@@ -6,9 +6,11 @@ const read = (path: string) => readFileSync(path, 'utf8');
 describe('Android mDL live-smoke readiness', () => {
 	it('propagates the bridge credential hash back to the desktop verifier', () => {
 		const bridgeStream = read('src/routes/api/identity/bridge/stream/[sessionId]/+server.ts');
+		const directStream = read('src/routes/api/identity/direct-mdl/stream/[sessionId]/+server.ts');
 		const verifier = read('src/lib/components/auth/GovernmentCredentialVerification.svelte');
 
 		expect(bridgeStream).toContain('credentialHash: current.result?.credentialHash');
+		expect(directStream).toContain('credentialHash: session.result?.credentialHash');
 		expect(verifier).toContain('const credentialHash =');
 		expect(verifier).toContain('/^[0-9a-f]{64}$/i.test(credentialHash)');
 		expect(verifier).toContain('data.identityCommitmentBound !== true');
@@ -38,11 +40,12 @@ describe('Android mDL live-smoke readiness', () => {
 		expect(privacyBoundary).not.toContain('only postal_code, city, state requested');
 	});
 
-	it('keeps wallet request fields aligned across same-device and bridge protocols', () => {
-		const starts = [
+	it('keeps wallet request fields aligned across OpenID4VP protocols', () => {
+		const dcApiStarts = [
 			read('src/routes/api/identity/bridge/start/+server.ts'),
 			read('src/routes/api/identity/verify-mdl/start/+server.ts')
 		];
+		const directRequestObject = read('src/lib/server/direct-mdl-request-object.ts');
 		const protocolFields = [
 			'resident_postal_code',
 			'resident_city',
@@ -51,7 +54,7 @@ describe('Android mDL live-smoke readiness', () => {
 			'document_number'
 		];
 
-		for (const source of starts) {
+		for (const source of dcApiStarts) {
 			expect(source).toContain("protocol: OPENID4VP_DC_API_PROTOCOL");
 			expect(source).toContain("response_type: 'vp_token'");
 			expect(source).toContain("response_mode: 'dc_api'");
@@ -66,5 +69,17 @@ describe('Android mDL live-smoke readiness', () => {
 			}
 			expect(source.match(/intent_to_retain: false/g)?.length).toBe(protocolFields.length);
 		}
+
+		expect(directRequestObject).toContain("response_type: 'vp_token'");
+		expect(directRequestObject).toContain('response_mode: DIRECT_MDL_TRANSPORT');
+		expect(directRequestObject).toContain("id: 'mdl'");
+		expect(directRequestObject).toContain("meta: { doctype_value: 'org.iso.18013.5.1.mDL' }");
+		for (const field of protocolFields) {
+			expect(directRequestObject).toContain(field);
+			expect(directRequestObject).toContain(`path: ['org.iso.18013.5.1', '${field}']`);
+		}
+		expect(directRequestObject.match(/intent_to_retain: false(?!;)/g)?.length).toBe(
+			protocolFields.length
+		);
 	});
 });

@@ -282,7 +282,7 @@ describe('POST /api/identity/direct-mdl/complete', () => {
 		);
 	});
 
-	it('accepts wallet error responses without making the session terminal', async () => {
+	it('surfaces wallet error responses to the desktop stream', async () => {
 		const { platform } = makePlatform();
 		await createSession(platform);
 
@@ -300,12 +300,15 @@ describe('POST /api/identity/direct-mdl/complete', () => {
 
 		expect(response.status).toBe(400);
 		expect(await response.json()).toMatchObject({ error: 'wallet_error' });
-		expect(stored?.status).toBe('request_fetched');
+		expect(stored).toMatchObject({
+			status: 'failed',
+			errorMessage: 'Wallet did not complete the presentation'
+		});
 		expect(mocks.processCredentialResponse).not.toHaveBeenCalled();
 		expect(mocks.serverMutation).not.toHaveBeenCalled();
 	});
 
-	it('returns verification failures without making the session terminal', async () => {
+	it('surfaces verification failures to the desktop stream', async () => {
 		const { platform } = makePlatform();
 		await createSession(platform);
 		mocks.processCredentialResponse.mockResolvedValue({
@@ -318,7 +321,7 @@ describe('POST /api/identity/direct-mdl/complete', () => {
 		const stored = await getDirectMdlSession(SESSION_ID, platform);
 
 		expect(response.status).toBe(422);
-		expect(stored?.status).toBe('request_fetched');
+		expect(stored).toMatchObject({ status: 'failed', errorMessage: 'bad presentation' });
 		expect(mocks.serverMutation).not.toHaveBeenCalled();
 	});
 
@@ -332,7 +335,10 @@ describe('POST /api/identity/direct-mdl/complete', () => {
 
 		expect(response.status).toBe(409);
 		expect(await response.json()).toMatchObject({ error: 'credential_reuse_detected' });
-		expect(stored?.status).toBe('request_fetched');
+		expect(stored).toMatchObject({
+			status: 'failed',
+			errorMessage: 'This wallet presentation was already used. Start a new verification session.'
+		});
 	});
 
 	it('surfaces nonce reuse without completing the direct session', async () => {
@@ -345,6 +351,9 @@ describe('POST /api/identity/direct-mdl/complete', () => {
 
 		expect(response.status).toBe(409);
 		expect(await response.json()).toMatchObject({ error: 'credential_reuse_detected' });
-		expect(stored?.status).toBe('request_fetched');
+		expect(stored).toMatchObject({
+			status: 'failed',
+			errorMessage: 'This wallet presentation was already used. Start a new verification session.'
+		});
 	});
 });

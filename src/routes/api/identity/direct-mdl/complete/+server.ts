@@ -8,6 +8,7 @@ import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 import {
 	DIRECT_MDL_TRANSPORT,
 	completeDirectMdlSession,
+	failDirectMdlSession,
 	getDirectMdlSessionByState
 } from '$lib/server/direct-mdl-session';
 
@@ -42,6 +43,12 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		throw error(409, 'Direct mDL request object was not fetched');
 	}
 	if (form.walletError) {
+		await failDirectMdlSession(
+			session.id,
+			'Wallet did not complete the presentation',
+			platform,
+			DIRECT_MDL_TRANSPORT
+		);
 		return json(
 			{
 				error: 'wallet_error',
@@ -71,9 +78,11 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 	);
 
 	if (!result.success) {
+		await failDirectMdlSession(session.id, result.message ?? 'Verification failed', platform);
 		return json({ error: result.error, message: result.message }, { status: 422 });
 	}
 	if (!result.identityCommitment) {
+		await failDirectMdlSession(session.id, 'Identity fields not disclosed by wallet', platform);
 		return json(
 			{
 				error: 'missing_identity_fields',
@@ -98,6 +107,11 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 		});
 	} catch (err) {
 		if (isMdlCredentialReuseError(err)) {
+			await failDirectMdlSession(
+				session.id,
+				'This wallet presentation was already used. Start a new verification session.',
+				platform
+			);
 			return json(
 				{
 					error: 'credential_reuse_detected',
@@ -106,6 +120,7 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 				{ status: 409 }
 			);
 		}
+		await failDirectMdlSession(session.id, 'Verification could not be finalized', platform);
 		throw err;
 	}
 
@@ -119,7 +134,8 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 				state: result.state,
 				credentialHash: result.credentialHash,
 				cellId: result.cellId ?? undefined,
-				identityCommitmentBound: true
+				identityCommitmentBound: true,
+				requireReauth: bindingResult.requireReauth ?? false
 			}
 		},
 		platform

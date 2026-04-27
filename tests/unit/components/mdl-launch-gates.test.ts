@@ -62,10 +62,11 @@ describe('mDL launch gates', () => {
 		expect(address).toBeGreaterThan(button);
 	});
 
-	it('auto-starts the cross-device bridge only on desktop when bridge policy is enabled', () => {
+	it('auto-starts direct QR on desktop before falling back to the bridge', () => {
 		const svelte = source('src/lib/components/auth/GovernmentCredentialVerification.svelte');
 
-		expect(svelte).toContain("verificationState === 'unsupported' && platform === 'desktop' && isMdlBridgeEnabled()");
-		expect(svelte).toMatch(/if \(verificationState === 'unsupported' && platform === 'desktop' && isMdlBridgeEnabled\(\)\) \{\s*startBridge\(\);/);
+		expect(svelte).toContain("if (verificationState !== 'unsupported' || platform !== 'desktop') return;");
+		expect(svelte).toMatch(/if \(isMdlDirectQrEnabled\(\)\) \{\s*startDirectQr\(\);/);
+		expect(svelte).toMatch(/} else if \(isMdlBridgeEnabled\(\)\) \{\s*startBridge\(\);/);
 	});
 });

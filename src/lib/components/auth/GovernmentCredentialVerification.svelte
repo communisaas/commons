@@ -18,7 +18,7 @@
 		type CredentialRequestResult
 	} from '$lib/core/identity/digital-credentials-api';
 	import QRCode from 'qrcode';
-	import { FEATURES, isMdlBridgeEnabled } from '$lib/config/features';
+	import { FEATURES, isMdlBridgeEnabled, isMdlDirectQrEnabled } from '$lib/config/features';
 
 	interface Props {
 		userId: string;
@@ -37,6 +37,7 @@
 				credentialHash: string;
 				issuedAt: number;
 			};
+			requireReauth?: boolean;
 		}) => void;
 		onerror?: (data: { message: string }) => void;
 		oncancel?: () => void;
@@ -197,9 +198,176 @@
 	let bridgeStatus = $state<'idle' | 'waiting' | 'claimed' | 'error'>('idle');
 	let bridgeError = $state<string | null>(null);
 	let sseCleanup: (() => void) | null = null;
+	let directQrSvg = $state<string | null>(null);
+	let directQrPayload = $state<string | null>(null);
+	let directSessionId = $state<string | null>(null);
+	let directAccountLabel = $state<string | null>(null);
+	let directExpiresAt = $state<number | null>(null);
+	let directStatus = $state<'idle' | 'waiting' | 'scanned' | 'error'>('idle');
+	let directError = $state<string | null>(null);
+	let directSseCleanup: (() => void) | null = null;
+	let desktopFlow = $state<'direct' | 'bridge'>('bridge');
+	const directExpiresIn = $derived(
+		directExpiresAt ? Math.max(0, Math.ceil((directExpiresAt - Date.now()) / 60_000)) : null
+	);
+
+	async function cancelDirectSession(sessionId: string | null = directSessionId): Promise<boolean> {
+		if (!sessionId) return true;
+		try {
+			const response = await fetch('/api/identity/direct-mdl/cancel', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ sessionId })
+			});
+			if (!response.ok) throw new Error('Cancel failed');
+			if (directSessionId === sessionId) directSessionId = null;
+			return true;
+		} catch {
+			directStatus = 'error';
+			directError = 'Could not cancel the current scan. Wait for it to expire before starting again.';
+			return false;
+		}
+	}
+
+	async function startDirectQr() {
+		desktopFlow = 'direct';
+		const previousSessionId = directSessionId;
+		directSseCleanup?.();
+		directSseCleanup = null;
+		sseCleanup?.();
+		sseCleanup = null;
+		directQrSvg = null;
+		directQrPayload = null;
+		directExpiresAt = null;
+		if (!(await cancelDirectSession(previousSessionId))) return;
+		directStatus = 'waiting';
+		directError = null;
+
+		try {
+			const response = await fetch('/api/identity/direct-mdl/start', {
+				method: 'POST'
+			});
+
+			if (!response.ok) {
+				throw new Error('Failed to create direct verification session');
+			}
+
+			const { sessionId, qrUrl, accountLabel, expiresAt } = await response.json();
+			directSessionId = sessionId;
+			directQrPayload = qrUrl;
+			directAccountLabel = accountLabel;
+			directExpiresAt = typeof expiresAt === 'number' ? expiresAt : null;
+
+			if (!String(qrUrl).startsWith('openid4vp://authorize?')) {
+				throw new Error('Direct verification QR was not wallet-recognized');
+			}
+
+			try {
+				directQrSvg = await QRCode.toString(qrUrl, {
+					type: 'svg',
+					width: 240,
+					margin: 2,
+					color: { dark: '#1e293b', light: '#ffffff' }
+				});
+			} catch (err) {
+				throw new Error(err instanceof Error ? err.message : 'Failed to render direct QR');
+			}
+
+			const eventSource = new EventSource(`/api/identity/direct-mdl/stream/${sessionId}`);
+
+			eventSource.addEventListener('request_fetched', () => {
+				directStatus = 'scanned';
+			});
+
+			eventSource.addEventListener('completed', (event) => {
+				const data = JSON.parse(event.data) as {
+					district?: string;
+					state?: string;
+					cellId?: string;
+					credentialHash?: unknown;
+					identityCommitmentBound?: unknown;
+					requireReauth?: boolean;
+				};
+				const credentialHash =
+					typeof data.credentialHash === 'string' ? data.credentialHash : '';
+				if (!/^[0-9a-f]{64}$/i.test(credentialHash) || data.identityCommitmentBound !== true) {
+					eventSource.close();
+					directSseCleanup = null;
+					directStatus = 'error';
+					directError = 'Verification completed without identity binding. Try again.';
+					return;
+				}
+
+				eventSource.close();
+				directSseCleanup = null;
+				oncomplete?.({
+					verified: true,
+					method: 'mdl',
+					district: data.district,
+					state: data.state,
+					cell_id: data.cellId,
+					providerData: {
+						provider: 'digital-credentials-api',
+						credentialHash,
+						issuedAt: Date.now()
+					},
+					requireReauth: data.requireReauth ?? false
+				});
+			});
+
+			eventSource.addEventListener('failed', (event) => {
+				const data = JSON.parse(event.data);
+				eventSource.close();
+				directSseCleanup = null;
+				directStatus = 'error';
+				directError = directFailureMessage(data.error);
+			});
+
+			eventSource.addEventListener('expired', () => {
+				eventSource.close();
+				directSseCleanup = null;
+				directStatus = 'error';
+				directError = 'Session expired. Try again.';
+			});
+
+			eventSource.onerror = () => {
+				if (eventSource.readyState === EventSource.CLOSED) {
+					directStatus = 'error';
+					directError = 'Connection lost. Try again.';
+				}
+			};
+
+			directSseCleanup = () => eventSource.close();
+		} catch (err) {
+			directStatus = 'error';
+			directError = err instanceof Error ? err.message : 'Failed to start direct verification';
+		}
+	}
+
+	function directFailureMessage(error: unknown): string {
+		const message = typeof error === 'string' ? error : '';
+		if (message.includes('Identity fields')) {
+			return 'Google Wallet did not share all required fields. Try again and approve the requested fields.';
+		}
+		if (message.includes('already used')) {
+			return 'That wallet presentation was already used. Start a new scan.';
+		}
+		if (message.includes('Wallet did not complete')) {
+			return 'Google Wallet did not complete the presentation. Start a new scan.';
+		}
+		return 'Verification failed on your phone. Start a new scan or use guided phone scan.';
+	}
 
 	async function startBridge() {
+		const previousSessionId = directSessionId;
 		// Close any previous SSE connection before opening a new one
+		directSseCleanup?.();
+		directSseCleanup = null;
+		if (!(await cancelDirectSession(previousSessionId))) {
+			desktopFlow = 'direct';
+			return;
+		}
+		desktopFlow = 'bridge';
 		sseCleanup?.();
 		sseCleanup = null;
 		bridgeStatus = 'waiting';
@@ -304,10 +472,22 @@
 	import { onDestroy } from 'svelte';
 	onDestroy(() => {
 		sseCleanup?.();
+		directSseCleanup?.();
+		if (desktopFlow === 'direct') void cancelDirectSession();
 	});
 
+	async function cancelAndGoBack() {
+		if (desktopFlow === 'direct') {
+			await cancelDirectSession();
+		}
+		oncancel?.();
+	}
+
 	$effect(() => {
-		if (verificationState === 'unsupported' && platform === 'desktop' && isMdlBridgeEnabled()) {
+		if (verificationState !== 'unsupported' || platform !== 'desktop') return;
+		if (isMdlDirectQrEnabled()) {
+			startDirectQr();
+		} else if (isMdlBridgeEnabled()) {
 			startBridge();
 		}
 	});
@@ -447,6 +627,98 @@
 						Open this page in an Android browser that supports Digital Credentials and OpenID4VP.
 					</p>
 				</div>
+			{:else if isMdlDirectQrEnabled() && desktopFlow === 'direct' && directStatus === 'error'}
+				<div class="text-center">
+					<AlertCircle class="mx-auto mb-4 h-8 w-8 text-red-500" />
+					<h3 class="font-brand text-xl font-bold text-slate-900">Direct scan failed</h3>
+					<p class="mt-2 text-sm text-slate-600">{directError}</p>
+					<button
+						onclick={startDirectQr}
+						class="mt-6 min-h-[44px] rounded-lg bg-slate-800 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-slate-900"
+					>
+						Try again
+					</button>
+					{#if isMdlBridgeEnabled()}
+						<button
+							type="button"
+							onclick={startBridge}
+							class="mt-3 min-h-[44px] w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium
+								text-slate-700 transition-colors hover:bg-slate-50"
+						>
+							Cancel and use guided phone scan
+						</button>
+					{/if}
+				</div>
+			{:else if isMdlDirectQrEnabled() && desktopFlow === 'direct' && directStatus === 'scanned'}
+				<div class="text-center">
+					<Loader2 class="mx-auto mb-4 h-8 w-8 animate-spin text-emerald-600" />
+					<h3 class="font-brand text-xl font-bold text-slate-900">Wallet request opened</h3>
+					<p class="mt-2 text-sm text-slate-500">Waiting for wallet verification on your phone</p>
+					<button
+						type="button"
+						onclick={startDirectQr}
+						class="mt-6 min-h-[44px] w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium
+							text-slate-700 transition-colors hover:bg-slate-50"
+					>
+						New direct code
+					</button>
+					{#if isMdlBridgeEnabled()}
+						<button
+							type="button"
+							onclick={startBridge}
+							class="mt-3 min-h-[44px] w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium
+								text-slate-700 transition-colors hover:bg-slate-50"
+						>
+							Cancel and use guided phone scan
+						</button>
+					{/if}
+				</div>
+			{:else if isMdlDirectQrEnabled() && desktopFlow === 'direct'}
+				<h3 class="font-brand text-xl font-bold text-slate-900">Scan with Android Camera</h3>
+				<p class="mt-2 text-sm text-slate-600">
+					Google Wallet will ask for postal code, city, state, birth date, and document number.
+				</p>
+
+				{#if directQrSvg}
+					<div class="flex justify-center py-6">
+						<div class="rounded-lg border border-slate-100 p-3">
+							{@html directQrSvg}
+						</div>
+					</div>
+				{:else if directStatus === 'waiting'}
+					<div class="flex justify-center py-6">
+						<Loader2 class="h-6 w-6 animate-spin text-slate-400" />
+					</div>
+				{/if}
+
+				<div class="mt-2 rounded-lg border border-slate-200 px-4 py-3">
+					<p class="mb-1 text-xs text-slate-500">Signed in as</p>
+					<p class="break-all text-sm font-semibold text-slate-900">
+						{directAccountLabel ?? 'Signed-in Commons account'}
+					</p>
+					{#if directQrPayload}
+						<p class="mt-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+							Wallet request
+						</p>
+					{/if}
+					{#if directExpiresIn}
+						<p class="mt-2 text-xs text-slate-400">Expires in {directExpiresIn} min</p>
+					{/if}
+					<p class="mt-2 text-xs leading-relaxed text-slate-400">
+						Raw identity fields are used only to bind your district privately and are not stored.
+					</p>
+				</div>
+
+				{#if isMdlBridgeEnabled()}
+					<button
+						type="button"
+						onclick={startBridge}
+						class="mt-4 min-h-[44px] w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium
+							text-slate-700 transition-colors hover:bg-slate-50"
+					>
+						Cancel and use guided phone scan
+					</button>
+				{/if}
 			{:else if bridgeStatus === 'error'}
 				<div class="text-center">
 					<AlertCircle class="mx-auto mb-4 h-8 w-8 text-red-500" />
@@ -503,7 +775,7 @@
 			{#if oncancel}
 				<button
 					type="button"
-					onclick={oncancel}
+					onclick={cancelAndGoBack}
 					class="mt-4 min-h-[44px] w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-medium
 						text-slate-700 transition-colors hover:bg-slate-50"
 				>

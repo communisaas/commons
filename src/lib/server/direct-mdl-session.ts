@@ -41,6 +41,7 @@ export interface DirectMdlCompletionResult {
 	credentialHash: string;
 	cellId?: string;
 	identityCommitmentBound: boolean;
+	requireReauth?: boolean;
 }
 
 export interface CreateDirectMdlSessionInput {
