@@ -22,6 +22,7 @@ vi.mock('$lib/core/shadow-atlas/client', () => ({
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 import { IACA_ROOTS } from '$lib/core/identity/iaca-roots';
 import { buildOpenId4VpDcApiSessionTranscript } from '$lib/core/identity/oid4vp-dc-api-handover';
+import { buildOpenId4VpDirectSessionTranscript } from '$lib/core/identity/oid4vp-direct-handover';
 
 beforeAll(() => {
 	// Identity commitment computation requires IDENTITY_COMMITMENT_SALT
@@ -232,7 +233,7 @@ async function buildCoseSign1(
 		await crypto.subtle.sign(
 			{ name: 'ECDSA', hash: 'SHA-256' },
 			privateKey,
-			sigStructure
+			sigStructure as BufferSource
 		)
 	);
 
@@ -259,7 +260,7 @@ async function buildDeviceSignature(
 		await crypto.subtle.sign(
 			{ name: 'ECDSA', hash: 'SHA-256' },
 			privateKey,
-			sigStructure
+			sigStructure as BufferSource
 		)
 	);
 
@@ -273,20 +274,34 @@ async function buildDeviceSignature(
 
 async function buildDeviceAuthenticationBytes({
 	origin,
+	clientId,
 	nonce,
+	responseUri,
+	transport = 'dc_api',
 	docType,
 	deviceNameSpacesBytes
 }: {
-	origin: string;
+	origin?: string;
+	clientId?: string;
 	nonce: string;
+	responseUri?: string;
+	transport?: 'dc_api' | 'direct_post';
 	docType: string;
 	deviceNameSpacesBytes: Uint8Array;
 }): Promise<Uint8Array> {
-	const { sessionTranscript } = await buildOpenId4VpDcApiSessionTranscript({
-		origin,
-		nonce,
-		jwkThumbprint: null
-	});
+	const { sessionTranscript } =
+		transport === 'direct_post'
+			? await buildOpenId4VpDirectSessionTranscript({
+					clientId: clientId ?? '',
+					nonce,
+					responseUri: responseUri ?? '',
+					jwkThumbprint: null
+				})
+			: await buildOpenId4VpDcApiSessionTranscript({
+					origin: origin ?? '',
+					nonce,
+					jwkThumbprint: null
+				});
 	const deviceAuthentication = [
 		'DeviceAuthentication',
 		sessionTranscript,
@@ -306,6 +321,9 @@ async function buildOpenId4VpMsoMdocResponse(
 		nonce: string;
 		signingOrigin?: string;
 		signingNonce?: string;
+		signingTransport?: 'dc_api' | 'direct_post';
+		signingClientId?: string;
+		signingResponseUri?: string;
 		msoDocType?: string;
 		msoValidFrom?: string;
 		msoValidUntil?: string;
@@ -361,7 +379,10 @@ async function buildOpenId4VpMsoMdocResponse(
 	const deviceNameSpacesBytes = new Uint8Array(encode(new Map()));
 	const deviceAuthenticationBytes = await buildDeviceAuthenticationBytes({
 		origin: options.signingOrigin ?? options.origin,
+		clientId: options.signingClientId,
 		nonce: options.signingNonce ?? options.nonce,
+		responseUri: options.signingResponseUri,
+		transport: options.signingTransport ?? 'dc_api',
 		docType: MDL_DOCTYPE,
 		deviceNameSpacesBytes
 	});
@@ -922,6 +943,150 @@ describe('OpenID4VP response processing', () => {
 			expect(result.identityCommitment).toMatch(/^[0-9a-f]{64}$/);
 			expect(result.cellId).toBe('872830828ffffff');
 		}
+	});
+
+	it('should verify mso_mdoc DeviceResponse through direct OpenID4VP handover', async () => {
+		const nonce = 'test-nonce-mso-mdoc-direct-success';
+		const origin = 'https://verifier.example';
+		const clientId = 'redirect_uri:https://verifier.example/api/identity/direct-mdl/complete';
+		const responseUri = 'https://verifier.example/api/identity/direct-mdl/complete';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D1234001',
+				birth_date: '1990-05-17'
+			},
+			{
+				origin,
+				nonce,
+				signingTransport: 'direct_post',
+				signingClientId: clientId,
+				signingResponseUri: responseUri
+			}
+		);
+
+		mockShadowAtlasSuccess('ca', '12');
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ directPost: { clientId, responseUri } }
+		);
+
+		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(result.district).toBe('CA-12');
+			expect(result.state).toBe('CA');
+			expect(result.verificationMethod).toBe('mdl');
+			expect(result.credentialHash).toMatch(/^[0-9a-f]{64}$/);
+			expect(result.identityCommitment).toMatch(/^[0-9a-f]{64}$/);
+		}
+	});
+
+	it('should reject DC API DeviceAuth when verified as direct OpenID4VP handover', async () => {
+		const nonce = 'test-nonce-mso-mdoc-dc-as-direct';
+		const origin = 'https://verifier.example';
+		const clientId = 'redirect_uri:https://verifier.example/api/identity/direct-mdl/complete';
+		const responseUri = 'https://verifier.example/api/identity/direct-mdl/complete';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D1234002',
+				birth_date: '1990-05-17'
+			},
+			{ origin, nonce }
+		);
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ directPost: { clientId, responseUri } }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('signature_invalid');
+			expect(result.message).toContain('DeviceAuth.deviceSignature');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject direct OpenID4VP DeviceAuth when verified as DC API handover', async () => {
+		const nonce = 'test-nonce-mso-mdoc-direct-as-dc';
+		const origin = 'https://verifier.example';
+		const clientId = 'redirect_uri:https://verifier.example/api/identity/direct-mdl/complete';
+		const responseUri = 'https://verifier.example/api/identity/direct-mdl/complete';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D1234003',
+				birth_date: '1990-05-17'
+			},
+			{
+				origin,
+				nonce,
+				signingTransport: 'direct_post',
+				signingClientId: clientId,
+				signingResponseUri: responseUri
+			}
+		);
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('signature_invalid');
+			expect(result.message).toContain('DeviceAuth.deviceSignature');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject ambiguous DC API and direct OpenID4VP handover context', async () => {
+		const nonce = 'test-nonce-mso-mdoc-ambiguous-handover';
+		const origin = 'https://verifier.example';
+		const clientId = 'redirect_uri:https://verifier.example/api/identity/direct-mdl/complete';
+		const responseUri = 'https://verifier.example/api/identity/direct-mdl/complete';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D1234004',
+				birth_date: '1990-05-17'
+			},
+			{ origin, nonce }
+		);
+
+		const result = await processCredentialResponse(
+			{ vp_token: { mdl: [deviceResponse] } },
+			'openid4vp-v1-unsigned',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin, directPost: { clientId, responseUri } }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('ambiguous');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
 	it('should reject replayed mso_mdoc DeviceAuth signed for a different nonce', async () => {

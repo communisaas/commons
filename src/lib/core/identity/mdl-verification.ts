@@ -39,6 +39,13 @@ interface MdlVerificationOptions {
 	vicalKv?: KVNamespace;
 	/** Canonical verifier origin stored with the DC API request session. */
 	verifierOrigin?: string;
+	/** Direct-post verifier context stored with the OpenID4VP request_uri session. */
+	directPost?: {
+		clientId: string;
+		responseUri: string;
+		jwkThumbprint?: Uint8Array | ArrayBuffer | null;
+		allowLocalhostHttp?: boolean;
+	};
 }
 
 /** Result of processing a credential response (discriminated union) */
@@ -709,12 +716,19 @@ async function processOpenId4VpMsoMdocPresentation(
 	nonce: string,
 	options?: MdlVerificationOptions
 ): Promise<MdlVerificationResult> {
-	if (!options?.verifierOrigin) {
+	if (!options?.verifierOrigin && !options?.directPost) {
 		return {
 			success: false,
 			error: 'replay_protection_missing',
 			message:
-				'OpenID4VP mso_mdoc DeviceResponse requires stored verifier origin, DC API SessionTranscript, and DeviceAuth verification before it can be accepted'
+				'OpenID4VP mso_mdoc DeviceResponse requires stored verifier handover SessionTranscript context and DeviceAuth verification before it can be accepted'
+		};
+	}
+	if (options.verifierOrigin && options.directPost) {
+		return {
+			success: false,
+			error: 'invalid_format',
+			message: 'OpenID4VP mso_mdoc verifier handover context is ambiguous'
 		};
 	}
 
@@ -865,7 +879,7 @@ async function processOpenId4VpMsoMdocPresentation(
 		return {
 			success: false,
 			error: 'replay_protection_missing',
-			message: 'OpenID4VP mso_mdoc DeviceAuth.deviceSignature is required for DC API verification'
+			message: 'OpenID4VP mso_mdoc DeviceAuth.deviceSignature is required for verification'
 		};
 	}
 
@@ -880,12 +894,7 @@ async function processOpenId4VpMsoMdocPresentation(
 		};
 	}
 
-	const { buildOpenId4VpDcApiSessionTranscript } = await import('./oid4vp-dc-api-handover');
-	const { sessionTranscript } = await buildOpenId4VpDcApiSessionTranscript({
-		origin: options.verifierOrigin,
-		nonce,
-		jwkThumbprint: null
-	});
+	const sessionTranscript = await buildOpenId4VpMdocSessionTranscript(nonce, options);
 	const deviceAuthentication = [
 		'DeviceAuthentication',
 		sessionTranscript,
@@ -925,6 +934,32 @@ async function processOpenId4VpMsoMdocPresentation(
 	const fields = fieldResult.fields;
 	const credentialHash = await sha256Hex(deviceResponseBytes);
 	return deriveMdlResultFromFields(fields, credentialHash, 'OpenID4VP mso_mdoc');
+}
+
+async function buildOpenId4VpMdocSessionTranscript(nonce: string, options: MdlVerificationOptions) {
+	if (options.directPost) {
+		const { buildOpenId4VpDirectSessionTranscript } = await import('./oid4vp-direct-handover');
+		const { sessionTranscript } = await buildOpenId4VpDirectSessionTranscript({
+			clientId: options.directPost.clientId,
+			nonce,
+			responseUri: options.directPost.responseUri,
+			jwkThumbprint: options.directPost.jwkThumbprint ?? null,
+			allowLocalhostHttp: options.directPost.allowLocalhostHttp ?? false
+		});
+		return sessionTranscript;
+	}
+
+	if (options.verifierOrigin) {
+		const { buildOpenId4VpDcApiSessionTranscript } = await import('./oid4vp-dc-api-handover');
+		const { sessionTranscript } = await buildOpenId4VpDcApiSessionTranscript({
+			origin: options.verifierOrigin,
+			nonce,
+			jwkThumbprint: null
+		});
+		return sessionTranscript;
+	}
+
+	throw new Error('OpenID4VP mso_mdoc handover context missing');
 }
 
 async function deriveMdlResultFromFields(
