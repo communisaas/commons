@@ -127,8 +127,8 @@ export const FEATURES = {
 	MDL_IOS: false,
 
 	/**
-	 * Desktop → phone bridge. For the Android-first rollout this bridge returns
-	 * only OpenID4VP request configs and the complete endpoint rejects mdoc.
+	 * Deprecated desktop → phone web bridge backend. Retained only for reviewed
+	 * rollback/reference access while the direct QR path goes through smoke.
 	 */
 	MDL_BRIDGE: true,
 
@@ -137,8 +137,8 @@ export const FEATURES = {
 	 *
 	 * Keep false until the direct-session store, direct mdoc handover,
 	 * request_uri/direct_post endpoints, desktop QR UI, staging preflight, and
-	 * real-device smoke all pass. `/verify-bridge` remains the default desktop
-	 * fallback while this is false.
+	 * real-device smoke all pass. The `/verify-bridge` backend remains for
+	 * rollback/reference only; it is no longer offered in the user flow.
 	 */
 	MDL_DIRECT_QR: enableDirectQrSmoke,
 

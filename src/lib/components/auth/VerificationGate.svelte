@@ -93,7 +93,7 @@
 	// mDL launch gate: every path inside this gate that mounts the mDL flow
 	// needs at least one enabled protocol. Android/OpenID4VP can open before
 	// iOS/raw mdoc; when no protocol is enabled, surface a calm placeholder
-	// instead of dispatching into a flow that 404s at /api/identity/bridge/start.
+	// instead of dispatching into an unavailable wallet flow.
 	//
 	// All non-address paths inside this gate are mDL-bound:
 	//   - showRecovery — IdentityRecoveryFlow requires mDL re-verification

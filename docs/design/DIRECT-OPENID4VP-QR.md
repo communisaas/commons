@@ -1,13 +1,15 @@
 # Direct OpenID4VP QR Contract
 
-Status: A6e complete contract. Direct QR is not default until A6f-A6l pass.
+Status: Direct QR implementation is staged for Android smoke. `/verify-bridge` remains
+available as rollback/security-reference backend, but it is no longer offered in the
+desktop user flow.
 
 ## Purpose
 
 Desktop-to-phone mDL verification should use the Android/Wallet-recognized OpenID4VP
-cross-device flow when it is safe to do so. The current `/verify-bridge` QR remains
-the fallback because it provides a Commons-controlled confirmation page before wallet
-activation.
+cross-device flow when it is safe to do so. The old `/verify-bridge` QR opens a Commons
+web page first, which prevents Android Camera from immediately handing the request to the
+OS/wallet. Direct QR is now the user-facing desktop path on staging.
 
 ## Primary References
 
@@ -195,18 +197,18 @@ Launch rule:
 - Direct QR cannot become the default desktop path unless real-device smoke confirms the
   wallet surface has acceptable verifier context and the desktop completion UI does not
   finalize silently when account-binding evidence is weak.
-- If the account context is insufficient, keep `/verify-bridge` as the default and expose
-  direct QR only as an explicitly reviewed fallback or internal smoke path.
+- If the account context is insufficient, direct QR stays staging-only until an explicitly
+  reviewed mitigation is accepted.
 
-## Fallback Bridge Label
+## Retained Bridge Label
 
-The `/verify-bridge` fallback must not display client-supplied email. Its mobile account
-label comes from the authenticated desktop session. If the server has no email, it uses a
-generic signed-in account label and relies on the pairing code.
+The retained `/verify-bridge` backend must not display client-supplied email. Its mobile
+account label comes from the authenticated desktop session. If the server has no email, it
+uses a generic signed-in account label and relies on the pairing code.
 
 ## A6e Exit Criteria
 
-- Bridge fallback ignores spoofed client email labels.
+- Retained bridge backend ignores spoofed client email labels.
 - Direct QR contract is documented with separate DC API and direct-post transports.
 - Direct QR contract requires Google Wallet signed requests for cross-device flows.
 - The next implementation deltas are split into feature flag/session model, direct

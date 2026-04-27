@@ -39,7 +39,7 @@
 
 	// mDL launch gate: this entire flow re-verifies via government ID. When no
 	// protocol lane is enabled, render a placeholder instead of dispatching into
-	// a flow that 404s at /api/identity/bridge/start.
+	// an unavailable wallet flow.
 	const mdlGated = !isAnyMdlProtocolEnabled();
 
 	let currentStep = $state<FlowStep>('explain');

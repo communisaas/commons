@@ -183,7 +183,7 @@ Real-device staging smoke should cover:
 1. Android Chrome same-device mDL/OpenID4VP wallet handoff.
 2. Desktop direct OpenID4VP QR scanned by Android Camera, with immediate OS/wallet
    presentation affordance.
-3. Desktop-to-phone `/verify-bridge` fallback handoff.
+3. No `/verify-bridge` or guided phone scan entrypoint appears in the desktop user flow.
 4. Address re-grounding from stale district data to the current district.
 5. Submission after re-grounding uses the new district commitment.
 6. No Business Connect or live congressional delivery path is exercised.
