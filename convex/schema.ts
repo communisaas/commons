@@ -579,11 +579,12 @@ export default defineSchema({
 		identityCommitment: v.string(),
 		nonce: v.string(),
 		protocol: v.string(), // 'openid4vp' | 'org-iso-mdoc'
-		sessionChannel: v.string(), // 'same-device' | 'bridge'
+		sessionChannel: v.string(), // 'same-device' | 'bridge' | 'direct'
 		firstSeenAt: v.number(),
 		expiresAt: v.number()
 	})
 		.index('by_credentialHash', ['credentialHash'])
+		.index('by_nonce', ['nonce'])
 		.index('by_expiresAt', ['expiresAt']),
 
 	// ===========================================================================

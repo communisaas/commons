@@ -13,6 +13,7 @@ describe('mDL verification finalization', () => {
 		expect(schema).toContain('mdlCredentialUses: defineTable');
 		expect(schema).toContain('credentialHash: v.string()');
 		expect(schema).toMatch(/\.index\(["']by_credentialHash["'], \[["']credentialHash["']\]\)/);
+		expect(schema).toMatch(/\.index\(["']by_nonce["'], \[["']nonce["']\]\)/);
 		expect(schema).toMatch(/\.index\(["']by_expiresAt["'], \[["']expiresAt["']\]\)/);
 	});
 
@@ -25,7 +26,9 @@ describe('mDL verification finalization', () => {
 		expect(convexUsers).toContain('identityCommitment: args.identityCommitment');
 		expect(convexUsers).toMatch(/query\(["']mdlCredentialUses["']\)/);
 		expect(convexUsers).toMatch(/withIndex\(["']by_credentialHash["']/);
+		expect(convexUsers).toMatch(/withIndex\(["']by_nonce["']/);
 		expect(convexUsers).toContain('MDL_CREDENTIAL_HASH_REUSED');
+		expect(convexUsers).toContain('MDL_SESSION_NONCE_REUSED');
 		expect(convexUsers).toMatch(/ctx\.db\.insert\(["']mdlCredentialUses["']/);
 		expect(convexUsers).toMatch(/verificationMethod: ["']mdl["']/);
 		expect(convexUsers).toContain('patch.trustTier = 5');
@@ -35,7 +38,8 @@ describe('mDL verification finalization', () => {
 	it('uses the internal finalizer from same-device and bridge verification routes', () => {
 		for (const path of [
 			'src/routes/api/identity/verify-mdl/verify/+server.ts',
-			'src/routes/api/identity/bridge/complete/+server.ts'
+			'src/routes/api/identity/bridge/complete/+server.ts',
+			'src/routes/api/identity/direct-mdl/complete/+server.ts'
 		]) {
 			const route = source(path);
 

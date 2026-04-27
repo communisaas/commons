@@ -12,6 +12,7 @@ import {
 	createDirectMdlSession,
 	failDirectMdlSession,
 	getDirectMdlSession,
+	getDirectMdlSessionByState,
 	markDirectMdlRequestFetched
 } from '$lib/server/direct-mdl-session';
 
@@ -71,8 +72,11 @@ describe('direct-mdl-session lifecycle', () => {
 			transport: DIRECT_MDL_TRANSPORT,
 			expiresAt: BASE_TIME + DIRECT_MDL_SESSION_TTL_SECONDS * 1000
 		});
-		expect([...store.keys()]).toEqual([`direct-mdl:${handle.id}`]);
+		expect([...store.keys()].sort()).toEqual(
+			[`direct-mdl-state:${TEST_INPUT.state}`, `direct-mdl:${handle.id}`].sort()
+		);
 		expect(puts[0].ttl).toBe(DIRECT_MDL_SESSION_TTL_SECONDS);
+		expect(puts[1].ttl).toBe(DIRECT_MDL_SESSION_TTL_SECONDS);
 
 		const stored = await getDirectMdlSession(handle.id, platform);
 		expect(stored).toMatchObject({
@@ -83,6 +87,10 @@ describe('direct-mdl-session lifecycle', () => {
 			clientId: TEST_INPUT.clientId,
 			responseUri: TEST_INPUT.responseUri,
 			requestUri: TEST_INPUT.requestUri
+		});
+		await expect(getDirectMdlSessionByState(TEST_INPUT.state, platform)).resolves.toMatchObject({
+			id: handle.id,
+			state: TEST_INPUT.state
 		});
 	});
 
@@ -167,10 +175,29 @@ describe('direct-mdl-session lifecycle', () => {
 
 		const completed = await completeDirectMdlSession(
 			handle.id,
-			{ transport: DIRECT_MDL_TRANSPORT, state: TEST_INPUT.state },
+			{
+				transport: DIRECT_MDL_TRANSPORT,
+				state: TEST_INPUT.state,
+				result: {
+					district: 'CA-12',
+					state: 'CA',
+					credentialHash: 'a'.repeat(64),
+					cellId: '060750101001',
+					identityCommitmentBound: true
+				}
+			},
 			platform
 		);
-		expect(completed.status).toBe('completed');
+		expect(completed).toMatchObject({
+			status: 'completed',
+			result: {
+				district: 'CA-12',
+				state: 'CA',
+				credentialHash: 'a'.repeat(64),
+				cellId: '060750101001',
+				identityCommitmentBound: true
+			}
+		});
 		expect(completed.completedAt).toBe(BASE_TIME);
 	});
 

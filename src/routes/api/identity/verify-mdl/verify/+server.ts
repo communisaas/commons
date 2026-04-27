@@ -19,7 +19,10 @@ const VerifyMdlSchema = z.object({
 
 function isMdlCredentialReuseError(err: unknown): boolean {
 	const message = err instanceof Error ? err.message : String(err);
-	return message.includes('MDL_CREDENTIAL_HASH_REUSED');
+	return (
+		message.includes('MDL_CREDENTIAL_HASH_REUSED') ||
+		message.includes('MDL_SESSION_NONCE_REUSED')
+	);
 }
 
 /**

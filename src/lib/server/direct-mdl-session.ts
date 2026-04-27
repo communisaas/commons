@@ -25,6 +25,7 @@ export interface DirectMdlSession {
 	transactionId: string;
 	walletNonce?: string;
 	requestObjectJwt?: string;
+	result?: DirectMdlCompletionResult;
 	status: DirectMdlSessionStatus;
 	requestFetchedAt?: number;
 	completedAt?: number;
@@ -32,6 +33,14 @@ export interface DirectMdlSession {
 	errorMessage?: string;
 	createdAt: number;
 	expiresAt: number;
+}
+
+export interface DirectMdlCompletionResult {
+	district: string;
+	state: string;
+	credentialHash: string;
+	cellId?: string;
+	identityCommitmentBound: boolean;
 }
 
 export interface CreateDirectMdlSessionInput {
@@ -65,6 +74,7 @@ type KV = {
 type Platform = { env?: { DIRECT_MDL_SESSION_KV?: KV; DC_SESSION_KV?: KV } };
 
 const KV_PREFIX = 'direct-mdl:';
+const STATE_KV_PREFIX = 'direct-mdl-state:';
 const devDirectMdlStore = new Map<string, { data: string; expires: number }>();
 
 if (typeof setInterval !== 'undefined') {
@@ -84,6 +94,10 @@ function kvKey(sessionId: string): string {
 	return `${KV_PREFIX}${sessionId}`;
 }
 
+function stateKvKey(state: string): string {
+	return `${STATE_KV_PREFIX}${state}`;
+}
+
 async function putSession(session: DirectMdlSession, platform?: Platform): Promise<void> {
 	const data = JSON.stringify(session);
 	const kv = getKv(platform);
@@ -93,6 +107,20 @@ async function putSession(session: DirectMdlSession, platform?: Platform): Promi
 	}
 	devDirectMdlStore.set(kvKey(session.id), {
 		data,
+		expires: session.expiresAt
+	});
+}
+
+async function putStateIndex(session: DirectMdlSession, platform?: Platform): Promise<void> {
+	const kv = getKv(platform);
+	if (kv) {
+		await kv.put(stateKvKey(session.state), session.id, {
+			expirationTtl: DIRECT_MDL_SESSION_TTL_SECONDS
+		});
+		return;
+	}
+	devDirectMdlStore.set(stateKvKey(session.state), {
+		data: session.id,
 		expires: session.expiresAt
 	});
 }
@@ -211,6 +239,7 @@ export async function createDirectMdlSession(
 	};
 
 	await putSession(session, platform);
+	await putStateIndex(session, platform);
 
 	return {
 		id: session.id,
@@ -255,7 +284,7 @@ export async function markDirectMdlRequestFetched(
 
 export async function completeDirectMdlSession(
 	sessionId: string,
-	input: { transport: string; state: string },
+	input: { transport: string; state: string; result?: DirectMdlCompletionResult },
 	platform?: Platform
 ): Promise<DirectMdlSession> {
 	assertTransport(input.transport);
@@ -272,7 +301,35 @@ export async function completeDirectMdlSession(
 
 	session.status = 'completed';
 	session.completedAt = Date.now();
+	if (input.result) session.result = input.result;
 	await putSession(session, platform);
+	return session;
+}
+
+export async function getDirectMdlSessionByState(
+	state: string,
+	platform?: Platform
+): Promise<DirectMdlSession | null> {
+	assertBase64UrlToken('state', state);
+	const key = stateKvKey(state);
+	const kv = getKv(platform);
+	let sessionId: string | null = null;
+	if (kv) {
+		sessionId = await kv.get(key);
+	} else {
+		const stored = devDirectMdlStore.get(key);
+		if (stored && stored.expires > Date.now()) {
+			sessionId = stored.data;
+		} else if (stored) {
+			devDirectMdlStore.delete(key);
+		}
+	}
+	if (!sessionId) return null;
+	const session = await getSession(sessionId, platform);
+	if (!session) {
+		if (kv) await kv.delete(key);
+		else devDirectMdlStore.delete(key);
+	}
 	return session;
 }
 

@@ -358,6 +358,7 @@ export const updateMdlVerification = internalMutation({
 
 const MDL_CREDENTIAL_REUSE_COOLDOWN_MS = 10 * 60 * 1000;
 const MDL_CREDENTIAL_HASH_REUSED = 'MDL_CREDENTIAL_HASH_REUSED';
+const MDL_SESSION_NONCE_REUSED = 'MDL_SESSION_NONCE_REUSED';
 const MDL_CREDENTIAL_HASH_INVALID = 'MDL_CREDENTIAL_HASH_INVALID';
 
 /**
@@ -377,7 +378,7 @@ export const finalizeMdlVerification = internalMutation({
 		credentialHash: v.string(),
 		nonce: v.string(),
 		protocol: v.string(),
-		sessionChannel: v.union(v.literal('same-device'), v.literal('bridge')),
+		sessionChannel: v.union(v.literal('same-device'), v.literal('bridge'), v.literal('direct')),
 		verifiedAt: v.number(),
 		addressVerificationMethod: v.string(),
 		documentType: v.string(),
@@ -407,6 +408,16 @@ export const finalizeMdlVerification = internalMutation({
 
 		if (activeReuse) {
 			throw new Error(MDL_CREDENTIAL_HASH_REUSED);
+		}
+
+		const activeNonceReuse = await ctx.db
+			.query('mdlCredentialUses')
+			.withIndex('by_nonce', (q) => q.eq('nonce', args.nonce))
+			.filter((q) => q.gt(q.field('expiresAt'), now))
+			.first();
+
+		if (activeNonceReuse) {
+			throw new Error(MDL_SESSION_NONCE_REUSED);
 		}
 
 		await ctx.db.insert('mdlCredentialUses', {
