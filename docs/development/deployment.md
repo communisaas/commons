@@ -149,13 +149,20 @@ curl --fail-with-body -sS https://staging.commons.email/api/health | jq -e '.sta
 curl --fail-with-body -sS https://commons.email/api/health | jq -e '.status == "ok"'
 ```
 
+For direct OpenID4VP QR smoke, `/api/health` is only the outer availability check.
+Also verify the direct QR feature flag, direct-session KV binding, bridge/session encryption
+configuration, request object endpoint, direct-post endpoint, and test-account cleanup plan
+before scanning a real mDL.
+
 Real-device staging smoke should cover:
 
 1. Android Chrome same-device mDL/OpenID4VP wallet handoff.
-2. Desktop-to-phone bridge handoff.
-3. Address re-grounding from stale district data to the current district.
-4. Submission after re-grounding uses the new district commitment.
-5. No Business Connect or live congressional delivery path is exercised.
+2. Desktop direct OpenID4VP QR scanned by Android Camera, with immediate OS/wallet
+   presentation affordance.
+3. Desktop-to-phone `/verify-bridge` fallback handoff.
+4. Address re-grounding from stale district data to the current district.
+5. Submission after re-grounding uses the new district commitment.
+6. No Business Connect or live congressional delivery path is exercised.
 
 ### Rollback
 

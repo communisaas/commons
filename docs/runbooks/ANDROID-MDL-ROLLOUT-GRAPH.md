@@ -4,6 +4,16 @@ This graph tracks the Android-first mDL rollout as implementation -> review -> c
 Android OpenID4VP is the functional lane; raw mdoc, iOS, and Apple Business Connect remain
 separate gates and are not prerequisites for Android device rollout.
 
+There are two Android OpenID4VP transports from here:
+
+1. Same-device mobile browser: `navigator.credentials.get({ digital })` with
+   `response_mode=dc_api`.
+2. Desktop-to-phone direct QR: wallet-recognized OpenID4VP authorization request
+   using `request_uri` and `direct_post`, so Android Camera can hand off directly
+   to the OS/wallet instead of first opening `/verify-bridge`.
+
+The existing `/verify-bridge` web flow remains the fallback and security reference path.
+
 ## Status Legend
 
 - `done`: implemented, tested, reviewed, committed
@@ -29,8 +39,15 @@ separate gates and are not prerequisites for Android device rollout.
 | A6d-a | done | Prepare Android OpenID4VP DC API handover foundation: persist canonical verifier origin, build final-spec SessionTranscript bytes, and protect bridge protocol-binding state under AEAD/AAD. | `oid4vp-dc-api-handover`, `verify-mdl-start`, `bridge-session`, `bridge-crypto`, plus Android mDL focused suites. | Brutalist contexts `5d0ad5d9-374a-445e-9b98-fa3042d09804` and `47662b06-2659-408d-add4-fd3a1c5be1d6`; accepted origin/AEAD findings fixed before commit. |
 | A6d-b1 | done | Add the mdoc DeviceAuth `deviceSignature` verifier primitive: parse issuer-signed MSO `deviceKeyInfo.deviceKey`, verify detached COSE_Sign1 signatures over supplied `DeviceAuthenticationBytes`, harden protected-header/COSE_Key parsing, and keep `mso_mdoc` acceptance closed. | `cose-verify`, focused Android mDL suite. | Brutalist contexts `d2e7d9aa-9779-4d95-ac56-ac10a70fdcaf` and `d8bd46ab-de34-436c-810f-aea7bc41a7c9`; accepted COSE/CBOR findings fixed before commit. |
 | A6d-b2 | done | Wire Android OpenID4VP `mso_mdoc` DeviceResponse parsing: reconstruct DC API `SessionTranscript`/`DeviceAuthenticationBytes` from stored origin+nonce, verify DeviceAuth with the MSO device key, then pass only verified namespaces through the privacy boundary. | Focused `oid4vp-verify`/`mdl-mdoc`/`cose-verify`/`bounded-json` suite: 128 tests; Android mDL lane: 210 tests. | Brutalist contexts `03c77325-c37a-4c13-94ef-225c672b5903` and `ed9b7171-1b35-483f-9abc-5e95a2cb675b`; accepted findings fixed before commit. |
-| A6e | active | Android same-device live smoke: Chrome + Google Wallet mDL on a physical Android device. | Staging deploy preflight below, same-device checklist, plus `mdl-smoke-readiness`. | File launch findings before enablement. |
-| A7 | queued | Desktop-to-Android bridge live smoke. | See bridge checklist below. | File launch findings before enablement. |
+| A6e | active | Direct QR contract, QR payload, and account-binding decision: confirm the Google Wallet/Android Camera-recognized payload shape, define the phishing posture, and fix the fallback bridge account label so it is server-derived or pairing-code-only. | Source/spec review plus bridge-start tests if the fallback label is touched. | Brutalist context `28311067-1668-40eb-bac9-6b4867c4385e`; accepted findings folded into this split. |
+| A6f | queued | Direct QR feature flag and session model: add `MDL_DIRECT_QR`, a direct-session store separate from bridge sessions, explicit `transport=response_mode=direct_post`, TTL, nonce/state, request fetch state, completion state, and rollback isolation. | Unit tests for flag gating, session lifecycle, stale/duplicate transitions, and transport mismatch. | Brutalist backend/security gate before commit. |
+| A6g | queued | Cross-device OpenID4VP mdoc handover: implement a direct-post SessionTranscript/DeviceAuth path separate from `OpenID4VPDCAPIHandover`, with vectors that prove DC API bytes cannot be reused. | Golden cross-device SessionTranscript vector, negative DC API/direct transport swap tests, `oid4vp-verify`, `mdl-mdoc`, and `cose-verify`. | Brutalist protocol/crypto gate before commit. |
+| A6h | queued | Direct `request_uri` endpoint and request object: emit the wallet-recognized OpenID4VP request, no embedded QR secret, strict client metadata, state/nonce binding, scanner-prefetch tolerance, and fetch replay behavior. | Route tests for request object shape, expiry, prefetch/refetch behavior, and unsupported protocol rejection. | Brutalist request-surface gate before commit. |
+| A6i | queued | Direct `direct_post` completion endpoint: parse OpenID4VP response parameters strictly, require state/session/transport match, verify mDL through the direct handover, finalize only the bound desktop user, and update the desktop completion channel. | Route tests for valid completion, stale/duplicate/mismatched state, cross-transport replay, malformed forms/JSON, and finalizer binding. | Brutalist completion/finalizer gate before commit. |
+| A6j | queued | Direct OpenID4VP QR desktop UI: render the wallet-recognized QR as the primary desktop Android path only after account-binding posture is accepted, show desktop account/pairing context where meaningful, and keep `/verify-bridge` as fallback. | Touched-file Svelte check, component/source smoke, and QR payload inspection confirming it is not a Commons web URL. | Brutalist product/phishing review before commit. |
+| A6k | queued | Staging preflight for real-device smoke: branches aligned, CI/deploy green, immutable Pages health green, external custom-domain health green, direct/bridge KV and encryption bindings verified, direct flag state verified, and test-account isolation/cleanup ready. | Branch/CI/deploy checklist below plus `mdl-smoke-readiness` and direct-session readiness checks. | Brutalist launch-readiness gate; no device smoke until findings are resolved or explicitly accepted. |
+| A6l | queued | Physical Android smoke: same-device Chrome + Google Wallet mDL, then desktop direct OpenID4VP QR scanned by Android Camera with immediate OS/wallet presentation affordance. | Real device checklist below; record phone/browser/wallet versions and wallet UI observations. | File launch findings before enablement; direct QR cannot become default if account-context/phishing signal is missing without explicit review acceptance. |
+| A7 | queued | `/verify-bridge` fallback live smoke after direct QR is working. | See bridge fallback checklist below. | File fallback findings before enablement. |
 | A8 | queued | Update Android-first docs and user-facing copy after smoke results are known. | Static/source review plus touched-file Svelte check. | Brutalist product/security copy review. |
 | A9 | blocked | Raw mdoc T3: SessionTranscript reconstruction and DeviceAuth verification. | mdoc fixture tests and capture-replay regression. | Required before `MDL_MDOC=true` or iOS enablement. |
 | A10 | blocked | iOS/Apple Business Connect lane. | iOS Safari wallet test. | Requires ABC plus raw mdoc T3. |
@@ -53,12 +70,43 @@ separate gates and are not prerequisites for Android device rollout.
 - `A6d-b2` Android OpenID4VP `mso_mdoc` acceptance is complete in this delta: versioned DC API sessions now reject JWT/SD-JWT fallback tokens, decode exactly one mDL DeviceResponse/document, verify issuerAuth against IACA/VICAL roots, enforce signed MSO docType and validity, fail closed on unsigned/duplicate namespace elements, rebuild the DC API SessionTranscript from stored origin+nonce, verify DeviceAuth.deviceSignature with the MSO device key, and keep DeviceMac/raw mdoc closed.
 - Brutalist context `03c77325-c37a-4c13-94ef-225c672b5903` found unsigned item injection, missing MSO validity/docType checks, unbounded same-device data, plaintext bridge commitment result storage, and protocol binding gaps; all accepted findings were patched.
 - Brutalist context `ed9b7171-1b35-483f-9abc-5e95a2cb675b` found the versioned JWT fallback lane, parse-before-cap body handling, duplicate signed element identifiers, identity-commitment log prefix leakage, and COSE alg/curve defense-in-depth gaps; accepted findings were patched before commit.
-- Next tractable target is `A6e`: same-device Android live smoke on physical Chrome + Google Wallet mDL.
+- Brutalist security review context `28311067-1668-40eb-bac9-6b4867c4385e` was fully paginated without `resume=true`; accepted graph findings were direct-specific SessionTranscript work, a separate feature flag/session model, request_uri/direct_post split, explicit account-binding/phishing gates, fallback bridge label repair, and stronger production-backed staging preflight.
+- Next tractable target is `A6e`: direct QR contract, QR payload, and account-binding decision.
 - Global `svelte-check` remains a separate repo-health track and is not an Android mDL launch gate unless errors touch this surface.
+
+## Direct OpenID4VP QR Decision
+
+The desktop QR should not be a Commons web URL when Android can handle a wallet-recognized
+OpenID4VP request directly. The current bridge QR points at `/verify-bridge/{sessionId}#secret`,
+so Android Camera treats it as a web link and the OS wallet affordance appears only after the
+mobile page calls the Digital Credentials API. The direct lane restores the initial behavior:
+scan desktop QR -> Android recognizes the credential request -> user presents ID from the wallet.
+
+The direct lane must still preserve the security properties that made the web bridge safe:
+
+- The session is created only by an authenticated desktop user.
+- The wallet response finalizes only that server-bound desktop user; the phone cannot choose
+  or override the user ID.
+- `request_uri` and `direct_post` are single-use, TTL-bound, nonce-bound, and replay-checked.
+- The request object contains a user-visible account or pairing signal where the wallet/OS
+  profile can surface it. If physical smoke shows no meaningful account context, direct QR
+  stays behind the fallback bridge until a Brutalist-reviewed mitigation is accepted.
+- The fallback bridge cannot display a client-supplied email as the trust label unless the
+  server verifies it belongs to the authenticated desktop user.
+- `/verify-bridge` remains available for unsupported devices, QR scanners that do not route
+  OpenID4VP, or any wallet that mishandles direct requests.
+
+Protocol split:
+
+- Same-device Android browser keeps `openid4vp-v1-unsigned` over DC API with
+  `response_mode=dc_api`.
+- Desktop direct QR uses the OpenID4VP cross-device shape: a compact authorization request
+  containing a `request_uri`; the wallet retrieves the request object and returns the VP token
+  with `direct_post`.
 
 ## Smoke Criteria
 
-Same-device Android smoke (`A6e`) passes only when:
+Staging real-device smoke (`A6k`/`A6l`) passes only when:
 
 - `main`, `staging`, and `production` point at the same reviewed commit, with CI and
   Cloudflare immutable Pages deploy health green for that commit.
@@ -75,9 +123,20 @@ Same-device Android smoke (`A6e`) passes only when:
 - `/api/identity/verify-mdl/start` returns no `org-iso-mdoc` request while `MDL_MDOC=false`.
 - `/api/identity/verify-mdl/verify` upgrades the canonical user through the internal finalizer.
 - A forged or unsupported `org-iso-mdoc` verify request is rejected while `MDL_MDOC=false`.
+- Desktop direct QR is wallet-recognized by Android Camera/OS and does not scan as a plain
+  Commons web URL.
+- The direct request object's nonce/session maps to exactly one authenticated desktop user.
+- The wallet direct-post response upgrades that desktop user through the internal finalizer
+  and updates the desktop completion channel.
+- Stale, duplicate, mismatched, and unsupported direct-post responses fail without completing
+  or mutating the session.
+- Direct-session readiness verifies KV bindings, direct feature flag state, request/response
+  endpoint availability, and bridge encryption configuration; `/api/health` alone is not enough.
+- If staging still shares production Convex/KV, use dedicated test accounts and record cleanup
+  for mDL credential-use rows and identity state touched by the smoke.
 - iOS Safari remains unavailable while `MDL_IOS=false`.
 
-Bridge smoke (`A7`) passes only when:
+Bridge fallback smoke (`A7`) passes only when:
 
 - Desktop starts a bridge session and phone claim binds to the displayed pairing code.
 - Phone completion verifies the credential and SSE/status polling reaches the desktop.
@@ -86,7 +145,8 @@ Bridge smoke (`A7`) passes only when:
 
 ## Rollback
 
-Android rollback is a redeploy with `MDL_ANDROID_OID4VP=false` and `MDL_BRIDGE=false`.
+Android rollback is a redeploy with `MDL_ANDROID_OID4VP=false`, `MDL_DIRECT_QR=false`,
+and `MDL_BRIDGE=false`.
 Raw mdoc and iOS stay false throughout this lane. In-flight verification and bridge sessions expire from KV within roughly five minutes; no user tier downgrade is automatic.
 
 ## Dependency Notes
@@ -95,5 +155,9 @@ Android mDL rollout is independent of the V2 proof-generation cutover. Users ver
 
 `A6d` shares the SessionTranscript and DeviceAuth work with raw mdoc T3, but is scoped to the
 OpenID4VP DC API handover used by Android Chrome/Google Wallet.
+
+`A6g` adds the cross-device OpenID4VP request-uri/direct-post handover. That transport has a
+different handover from `response_mode=dc_api`, so direct QR verifier tests must not reuse the
+DC API SessionTranscript assumptions without an explicit protocol check.
 
 Raw mdoc T3 unblocks only after SessionTranscript reconstruction, DeviceAuth MAC/signature verification, and sufficient IACA/VICAL coverage for target jurisdictions. iOS remains blocked until raw mdoc T3 and Apple Business Connect are both complete.
