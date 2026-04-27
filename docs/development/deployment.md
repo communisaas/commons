@@ -144,9 +144,11 @@ The deploy workflow hard-checks the immutable Pages deployment URL for every bra
 Cloudflare may return WAF responses to GitHub-hosted runners that do not reproduce from
 normal clients. The manual `Configure Cloudflare Branch Alias` workflow keeps
 `staging.commons.email` pointed at the Cloudflare Pages branch alias
-`staging.communique-site.pages.dev`, then probes the internal mDL readiness endpoint with
-the `INTERNAL_API_SECRET` GitHub secret; run it before Android smoke if the staging custom
-domain serves a production-shaped artifact. Before Android smoke, verify:
+`staging.communique-site.pages.dev`, verifies the latest staging Pages deployment, and
+attempts custom-domain health/readiness probes. If Cloudflare challenges the GitHub-hosted
+runner, the workflow warns and the operator-shell probes below are the release gate. Run
+the workflow before Android smoke if the staging custom domain serves a production-shaped
+artifact. Before Android smoke, verify:
 
 ```bash
 curl --fail-with-body -sS https://staging.commons.email/api/health | jq -e '.status == "ok"'

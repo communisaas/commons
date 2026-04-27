@@ -30,6 +30,7 @@ jobs:
           CF_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
           INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
           PAGES_PROJECT: communique-site
+          DISPATCH_REF: ${{ github.ref_name }}
           RECORD_NAME: ${{ inputs.record_name }}
           TARGET: ${{ inputs.branch_alias_target }}
           EXPECTED_COMMIT: ${{ github.sha }}
@@ -44,10 +45,14 @@ jobs:
             local data="${3:-}"
             local response_file
             local status
+            local retry_args=(--retry 2 --retry-all-errors)
             response_file=$(mktemp)
+            if [ "${method}" = "POST" ]; then
+              retry_args=()
+            fi
 
             if [ -n "${data}" ]; then
-              status=$(curl -sS --show-error --max-time 30 --connect-timeout 10 --retry 2 --retry-all-errors \
+              status=$(curl -sS --show-error --max-time 30 --connect-timeout 10 "${retry_args[@]}" \
                 -o "${response_file}" -w "%{http_code}" -X "${method}" \
                 -H "Authorization: Bearer ${CF_API_TOKEN}" \
                 -H "Content-Type: application/json" \
@@ -59,7 +64,7 @@ jobs:
                   exit 1
                 }
             else
-              status=$(curl -sS --show-error --max-time 30 --connect-timeout 10 --retry 2 --retry-all-errors \
+              status=$(curl -sS --show-error --max-time 30 --connect-timeout 10 "${retry_args[@]}" \
                 -o "${response_file}" -w "%{http_code}" -X "${method}" \
                 -H "Authorization: Bearer ${CF_API_TOKEN}" \
                 -H "Content-Type: application/json" \
@@ -92,6 +97,9 @@ jobs:
           probe_health() {
             local label="$1"
             local url="$2"
+            local required="${3:-true}"
+            local challenged=false
+            local hard_failure=false
 
             for attempt in {1..6}; do
               if response=$(curl -sS --max-time 20 -w "\n%{http_code}" "${url}"); then
@@ -106,17 +114,29 @@ jobs:
                 if echo "${body}" | jq -e . >/dev/null 2>&1; then
                   echo "${label} health attempt ${attempt} returned HTTP ${http_status}:"
                   echo "${body}" | jq '{status, convex, message}'
+                  hard_failure=true
                 else
+                  if [ "${http_status}" = "403" ] && printf '%s' "${body}" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
+                    challenged=true
+                  else
+                    hard_failure=true
+                  fi
                   echo "${label} health attempt ${attempt} returned HTTP ${http_status} and a non-JSON body:"
                   printf '%s\n' "${body}" | head -c 4000
                   printf '\n'
                 fi
               else
                 echo "${label} health attempt ${attempt} failed before an HTTP response."
+                hard_failure=true
               fi
 
               sleep 10
             done
+
+            if [ "${required}" = "false" ] && [ "${challenged}" = "true" ] && [ "${hard_failure}" = "false" ]; then
+              echo "::warning::${label} health was blocked by a Cloudflare challenge from the GitHub runner; verify it from an operator shell."
+              return 0
+            fi
 
             echo "::error::${label} health did not pass: ${url}"
             exit 1
@@ -137,6 +157,11 @@ jobs:
             exit 1
           fi
 
+          if [ "${DISPATCH_REF}" != "staging" ]; then
+            echo "::error::Run this workflow from the staging ref so github.sha matches the reviewed staging deployment."
+            exit 1
+          fi
+
           case "${RECORD_NAME}:${TARGET}" in
             staging.commons.email:staging.communique-site.pages.dev) ;;
             *)
@@ -147,9 +172,18 @@ jobs:
 
           proxied=true
 
-          deployments=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments")
-          staging_deployment=$(echo "${deployments}" | jq -c --arg branch staging \
-            '[.result[] | select(.deployment_trigger.metadata.branch == $branch)] | first // empty')
+          staging_deployment=""
+          for page in {1..5}; do
+            deployments=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments?per_page=100&page=${page}")
+            staging_deployment=$(echo "${deployments}" | jq -c --arg branch staging \
+              '[.result[] | select(.deployment_trigger.metadata.branch == $branch)] | first // empty')
+            if [ -n "${staging_deployment}" ]; then
+              break
+            fi
+            if [ "$(echo "${deployments}" | jq '.result | length')" -lt 100 ]; then
+              break
+            fi
+          done
 
           if [ -z "${staging_deployment}" ]; then
             echo "::error::No staging deployment found for Pages project ${PAGES_PROJECT}."
@@ -177,7 +211,9 @@ jobs:
             exit 1
           fi
 
-          pages_domains=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/domains")
+          probe_health "immutable staging deployment" "${staging_url}/api/health"
+
+          pages_domains=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/domains?per_page=100")
           if ! echo "${pages_domains}" | jq -e --arg name "${RECORD_NAME}" \
             '.result[]? | select(.name == $name and .status == "active")' >/dev/null; then
             echo "::error::${RECORD_NAME} is not an active custom domain on Pages project ${PAGES_PROJECT}."
@@ -223,18 +259,29 @@ jobs:
             fi
           fi
 
-          final_response=$(cf_request GET "/zones/${CF_ZONE_ID}/dns_records?name=${RECORD_NAME}")
-          if ! echo "${final_response}" | jq -e --arg name "${RECORD_NAME}" --arg content "${TARGET}" \
-            '.result | length == 1 and .[0].type == "CNAME" and .[0].name == $name and .[0].content == $content and .[0].proxied == true' >/dev/null; then
+          dns_verified=false
+          for dns_attempt in {1..6}; do
+            final_response=$(cf_request GET "/zones/${CF_ZONE_ID}/dns_records?name=${RECORD_NAME}")
+            if echo "${final_response}" | jq -e --arg name "${RECORD_NAME}" --arg content "${TARGET}" \
+              '.result | length == 1 and .[0].type == "CNAME" and .[0].name == $name and .[0].content == $content and .[0].proxied == true' >/dev/null; then
+              dns_verified=true
+              break
+            fi
+            echo "DNS read-after-write verification attempt ${dns_attempt} did not see the required record yet."
+            sleep 5
+          done
+
+          if [ "${dns_verified}" != "true" ]; then
             echo "::error::Final DNS state is not the required proxied CNAME."
             echo "${final_response}" | jq -r '.result[] | "record id: \(.id), type: \(.type), content: \(.content), proxied: \(.proxied)"'
             exit 1
           fi
 
-          probe_health "immutable staging deployment" "${staging_url}/api/health"
-          probe_health "staging custom domain" "https://${RECORD_NAME}/api/health"
-          probe_health "production custom domain" "https://commons.email/api/health"
+          probe_health "staging custom domain" "https://${RECORD_NAME}/api/health" false
+          probe_health "production custom domain" "https://commons.email/api/health" false
 
+          readiness_challenged=false
+          readiness_hard_failure=false
           for attempt in {1..12}; do
             if response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
               -H "X-Internal-Secret: ${INTERNAL_API_SECRET}" \
@@ -249,16 +296,28 @@ jobs:
 
               if echo "${body}" | jq -e . >/dev/null 2>&1; then
                 echo "${body}" | jq '{status, blockers, warnings, checks: [.checks[]? | select(.status != "ok")]}'
+                readiness_hard_failure=true
               else
+                if [ "${http_status}" = "403" ] && printf '%s' "${body}" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
+                  readiness_challenged=true
+                else
+                  readiness_hard_failure=true
+                fi
                 echo "Readiness attempt ${attempt} returned HTTP ${http_status} and a non-JSON body:"
                 printf '%s\n' "${body}" | head -c 4000
                 printf '\n'
               fi
             else
               echo "Readiness attempt ${attempt} failed before an HTTP response."
+              readiness_hard_failure=true
             fi
 
             if [ "${attempt}" = "12" ]; then
+              if [ "${readiness_challenged}" = "true" ] && [ "${readiness_hard_failure}" = "false" ]; then
+                echo "::warning::Internal mDL readiness was blocked by a Cloudflare challenge from the GitHub runner; verify it from an operator shell."
+                break
+              fi
+
               echo "::error::${RECORD_NAME} did not pass internal mDL readiness after DNS branch-alias configuration."
               exit 1
             fi
@@ -266,24 +325,71 @@ jobs:
             sleep 10
           done
 
-          direct_response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
-            -H "Origin: https://${RECORD_NAME}" \
-            -X POST "https://${RECORD_NAME}/api/identity/direct-mdl/start") || {
-              echo "::error::Direct mDL start route probe failed before an HTTP response."
-              exit 1
-            }
-          direct_status=$(printf '%s\n' "${direct_response}" | tail -n 1)
-          direct_body=$(printf '%s\n' "${direct_response}" | sed '$d')
+          direct_challenged=false
+          direct_hard_failure=false
+          for attempt in {1..6}; do
+            if direct_response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
+              -H "Origin: https://${RECORD_NAME}" \
+              -X POST "https://${RECORD_NAME}/api/identity/direct-mdl/start"); then
+              direct_status=$(printf '%s\n' "${direct_response}" | tail -n 1)
+              direct_body=$(printf '%s\n' "${direct_response}" | sed '$d')
 
-          if [ "${direct_status}" != "401" ]; then
-            echo "::error::Direct mDL start route did not return expected unauthenticated 401; got HTTP ${direct_status}."
-            if echo "${direct_body}" | jq -e . >/dev/null 2>&1; then
-              echo "${direct_body}" | jq '{message, status, blockers, warnings}'
+              if [ "${direct_status}" = "401" ] && echo "${direct_body}" | jq -e '.message == "Authentication required"' >/dev/null 2>&1; then
+                echo "Direct mDL start route is present and origin-gated; unauthenticated probe returned 401."
+                break
+              fi
+
+              if [ "${direct_status}" = "403" ] && printf '%s' "${direct_body}" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
+                direct_challenged=true
+                echo "Direct mDL start attempt ${attempt} was blocked by a Cloudflare challenge from the GitHub runner."
+              else
+                direct_hard_failure=true
+                echo "Direct mDL start attempt ${attempt} did not return expected unauthenticated 401; got HTTP ${direct_status}."
+                if echo "${direct_body}" | jq -e . >/dev/null 2>&1; then
+                  echo "${direct_body}" | jq '{message, status, blockers, warnings}'
+                else
+                  printf '%s\n' "${direct_body}" | head -c 4000
+                  printf '\n'
+                fi
+              fi
             else
-              printf '%s\n' "${direct_body}" | head -c 4000
-              printf '\n'
+              direct_hard_failure=true
+              echo "Direct mDL start attempt ${attempt} failed before an HTTP response."
             fi
+
+            if [ "${attempt}" = "6" ]; then
+              if [ "${direct_challenged}" = "true" ] && [ "${direct_hard_failure}" = "false" ]; then
+                echo "::warning::Direct mDL start route probe was blocked by a Cloudflare challenge from the GitHub runner; verify it from an operator shell."
+                break
+              fi
+
+              echo "::error::Direct mDL start route did not pass."
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          latest_after=""
+          for page in {1..5}; do
+            deployments=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments?per_page=100&page=${page}")
+            latest_after=$(echo "${deployments}" | jq -c --arg branch staging \
+              '[.result[] | select(.deployment_trigger.metadata.branch == $branch)] | first // empty')
+            if [ -n "${latest_after}" ]; then
+              break
+            fi
+            if [ "$(echo "${deployments}" | jq '.result | length')" -lt 100 ]; then
+              break
+            fi
+          done
+
+          if [ -z "${latest_after}" ]; then
+            echo "::error::No staging deployment found after branch-alias verification."
             exit 1
           fi
 
-          echo "Direct mDL start route is present and origin-gated; unauthenticated probe returned 401."
+          latest_after_commit=$(echo "${latest_after}" | jq -r '.deployment_trigger.metadata.commit_hash // ""')
+          if [ "${latest_after_commit}" != "${EXPECTED_COMMIT}" ]; then
+            echo "::error::Latest staging Pages deployment moved during branch-alias verification: ${latest_after_commit}; expected ${EXPECTED_COMMIT}."
+            exit 1
+          fi
