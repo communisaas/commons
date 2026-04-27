@@ -140,9 +140,10 @@ Staging real-device smoke (`A6k`/`A6l`) passes only when:
   Cloudflare immutable Pages deploy health green for that commit.
 - The `Configure Cloudflare Branch Alias` workflow has verified or updated
   `staging.commons.email` as a proxied CNAME to `staging.communique-site.pages.dev` and
-  verified the latest staging Pages deployment for the reviewed commit. If the GitHub
-  runner is challenged by Cloudflare, treat its custom-domain probes as advisory and use
-  the operator-shell probes below as the gate.
+  verified the latest staging Pages deployment and branch alias target for the reviewed
+  commit without the deployment moving during DNS verification. If the GitHub runner is
+  challenged by Cloudflare, treat its custom-domain probes as advisory and use the
+  operator-shell probes below as the gate.
 - External custom-domain health checks return JSON `status: "ok"` before device testing:
 
   ```bash

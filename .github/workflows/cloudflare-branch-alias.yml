@@ -19,7 +19,7 @@ concurrency:
 jobs:
   configure:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 30
     permissions: {}
 
     steps:
@@ -171,19 +171,26 @@ jobs:
           esac
 
           proxied=true
+          cf_page_size=25
 
-          staging_deployment=""
-          for page in {1..5}; do
-            deployments=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments?per_page=100&page=${page}")
-            staging_deployment=$(echo "${deployments}" | jq -c --arg branch staging \
-              '[.result[] | select(.deployment_trigger.metadata.branch == $branch)] | first // empty')
-            if [ -n "${staging_deployment}" ]; then
-              break
-            fi
-            if [ "$(echo "${deployments}" | jq '.result | length')" -lt 100 ]; then
-              break
-            fi
-          done
+          find_latest_branch_deployment() {
+            local branch="$1"
+            local page
+            local deployments
+            local page_count
+
+            for page in {1..20}; do
+              deployments=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments?per_page=${cf_page_size}&page=${page}")
+              echo "${deployments}" | jq -c '.result[]?'
+              page_count=$(echo "${deployments}" | jq '.result | length')
+              if [ "${page_count}" -lt "${cf_page_size}" ]; then
+                break
+              fi
+            done | jq -s -c --arg branch "${branch}" \
+              '[.[] | select(.deployment_trigger.metadata.branch == $branch)] | sort_by(.created_on // .modified_on // "") | reverse | first // empty'
+          }
+
+          staging_deployment=$(find_latest_branch_deployment staging)
 
           if [ -z "${staging_deployment}" ]; then
             echo "::error::No staging deployment found for Pages project ${PAGES_PROJECT}."
@@ -192,6 +199,7 @@ jobs:
 
           staging_commit=$(echo "${staging_deployment}" | jq -r '.deployment_trigger.metadata.commit_hash // ""')
           staging_status=$(echo "${staging_deployment}" | jq -r '.latest_stage.status // ""')
+          staging_id=$(echo "${staging_deployment}" | jq -r '.id // ""')
           staging_url=$(echo "${staging_deployment}" | jq -r '.url // ""')
           branch_alias=$(echo "${staging_deployment}" | jq -r --arg target "https://${TARGET}" \
             '(.aliases // []) | index($target) // empty')
@@ -211,11 +219,31 @@ jobs:
             exit 1
           fi
 
+          echo "Latest staging deployment: ${staging_url} (${staging_commit}, ${staging_status})."
           probe_health "immutable staging deployment" "${staging_url}/api/health"
+          probe_health "staging branch alias target" "https://${TARGET}/api/health"
 
-          pages_domains=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/domains?per_page=100")
-          if ! echo "${pages_domains}" | jq -e --arg name "${RECORD_NAME}" \
-            '.result[]? | select(.name == $name and .status == "active")' >/dev/null; then
+          latest_before_dns=$(find_latest_branch_deployment staging)
+          latest_before_dns_id=$(echo "${latest_before_dns}" | jq -r '.id // ""')
+          if [ "${latest_before_dns_id}" != "${staging_id}" ]; then
+            echo "::error::Latest staging Pages deployment moved before DNS verification: ${latest_before_dns_id}; expected ${staging_id}."
+            exit 1
+          fi
+
+          domain_active=false
+          for page in {1..10}; do
+            pages_domains=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/domains?per_page=${cf_page_size}&page=${page}")
+            if echo "${pages_domains}" | jq -e --arg name "${RECORD_NAME}" \
+              '.result[]? | select(.name == $name and .status == "active")' >/dev/null; then
+              domain_active=true
+              break
+            fi
+            if [ "$(echo "${pages_domains}" | jq '.result | length')" -lt "${cf_page_size}" ]; then
+              break
+            fi
+          done
+
+          if [ "${domain_active}" != "true" ]; then
             echo "::error::${RECORD_NAME} is not an active custom domain on Pages project ${PAGES_PROJECT}."
             exit 1
           fi
@@ -371,17 +399,7 @@ jobs:
           done
 
           latest_after=""
-          for page in {1..5}; do
-            deployments=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments?per_page=100&page=${page}")
-            latest_after=$(echo "${deployments}" | jq -c --arg branch staging \
-              '[.result[] | select(.deployment_trigger.metadata.branch == $branch)] | first // empty')
-            if [ -n "${latest_after}" ]; then
-              break
-            fi
-            if [ "$(echo "${deployments}" | jq '.result | length')" -lt 100 ]; then
-              break
-            fi
-          done
+          latest_after=$(find_latest_branch_deployment staging)
 
           if [ -z "${latest_after}" ]; then
             echo "::error::No staging deployment found after branch-alias verification."
@@ -389,7 +407,37 @@ jobs:
           fi
 
           latest_after_commit=$(echo "${latest_after}" | jq -r '.deployment_trigger.metadata.commit_hash // ""')
+          latest_after_status=$(echo "${latest_after}" | jq -r '.latest_stage.status // ""')
+          latest_after_id=$(echo "${latest_after}" | jq -r '.id // ""')
+          latest_after_url=$(echo "${latest_after}" | jq -r '.url // ""')
+          latest_after_alias=$(echo "${latest_after}" | jq -r --arg target "https://${TARGET}" \
+            '(.aliases // []) | index($target) // empty')
+
+          if [ "${latest_after_id}" != "${staging_id}" ]; then
+            echo "::error::Latest staging Pages deployment moved during branch-alias verification: ${latest_after_id}; expected ${staging_id}."
+            exit 1
+          fi
+
           if [ "${latest_after_commit}" != "${EXPECTED_COMMIT}" ]; then
             echo "::error::Latest staging Pages deployment moved during branch-alias verification: ${latest_after_commit}; expected ${EXPECTED_COMMIT}."
             exit 1
           fi
+
+          if [ "${latest_after_status}" != "success" ]; then
+            echo "::error::Latest staging Pages deployment status changed during branch-alias verification: ${latest_after_status}, not success."
+            exit 1
+          fi
+
+          if [ -z "${latest_after_alias}" ]; then
+            echo "::error::Latest staging Pages deployment lost branch alias https://${TARGET} during branch-alias verification."
+            exit 1
+          fi
+
+          {
+            echo "### Cloudflare branch alias gate"
+            echo "- Commit: ${EXPECTED_COMMIT}"
+            echo "- Staging deployment: ${staging_id}"
+            echo "- Staging deployment URL: ${latest_after_url}"
+            echo "- DNS: ${RECORD_NAME} -> ${TARGET}, proxied=${proxied}"
+            echo "- Custom-domain probes completed; runner-side Cloudflare challenges are warnings only."
+          } >> "${GITHUB_STEP_SUMMARY}"
