@@ -58,6 +58,13 @@ VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
 binding = "DC_SESSION_KV"
 id = "a76f18d2c07042bc856a30038af05ab8"
 
+# DIRECT_MDL_SESSION_KV: KV namespace for direct OpenID4VP QR session state
+# Separate from DC_SESSION_KV so direct QR sessions can be monitored and purged
+# without affecting same-device district-confirmed sessions.
+[[kv_namespaces]]
+binding = "DIRECT_MDL_SESSION_KV"
+id = "e06bf9bb1d4f4fe7a74a440f8cb2afaa"
+
 # REJECTION_MONITOR_KV: KV namespace for rejection rate monitoring (P1 #18)
 # Tracks hourly rejection counts per route group. Entries have 2hr TTL.
 # Create the namespace before deploying:
