@@ -4,7 +4,9 @@
  * Feature detection, protocol support checking, and credential request wrapper
  * for mDL verification via browser-native wallet interaction.
  *
- * Browser support: Chrome 141+ (org-iso-mdoc + OpenID4VP v1), Safari 26+ (org-iso-mdoc only)
+ * Browser support is capability-detected at runtime with
+ * DigitalCredential.userAgentAllowsProtocol(...). Commons currently enables
+ * signed OpenID4VP; raw mdoc remains off until verifier support lands.
  *
  * @see https://w3c-fedid.github.io/digital-credentials/
  */
@@ -24,8 +26,8 @@ export function isDigitalCredentialsSupported(): boolean {
 
 /**
  * Check which protocols the browser/device supports.
- * Chrome: org-iso-mdoc + OpenID4VP v1
- * Safari: org-iso-mdoc only
+ * Browsers report protocol availability at runtime. A browser exposing the API
+ * is not enough; the verifier also has to enable the reported protocol.
  */
 export function getSupportedProtocols(): {
 	mdoc: boolean;
@@ -133,9 +135,8 @@ export async function requestCredential(
 			return req;
 		});
 
-		// Filter to only protocols supported by this browser.
-		// Safari only supports org-iso-mdoc; passing unsupported protocols
-		// may crash the Credential Request Coordinator.
+		// Filter to only protocols supported by this browser and enabled by our verifier.
+		// Passing unsupported protocols may crash the Credential Request Coordinator.
 		const supported = getSupportedProtocols();
 		const userAgentAllowsProtocol =
 			DigitalCredential.userAgentAllowsProtocol?.bind(DigitalCredential);

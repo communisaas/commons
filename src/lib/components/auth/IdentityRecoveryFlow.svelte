@@ -218,13 +218,13 @@
 
 			<div class="mt-5 border-t border-b border-dotted border-slate-300 py-5">
 				<p class="text-[14px] leading-relaxed text-slate-700">
-					Restoring proof credentials uses government-ID re-verification. Android OpenID4VP is the
-					first supported lane; iOS Safari support lands after Apple Business Connect and the
-					ISO&nbsp;18013-5 device-authentication step.
+					Restoring proof credentials uses government-ID re-verification through browser-mediated
+					Digital Credentials protocols. Commons opens recovery only when at least one deployed
+					protocol lane is enabled.
 				</p>
 				<p class="mt-3 text-[14px] leading-relaxed text-slate-700">
-					In the meantime, address-attested verification (Tier&nbsp;2) remains available and is
-					sufficient for messaging your representatives.
+					Address-attested verification (Tier&nbsp;2) remains available while additional wallet
+					and browser protocols are brought online.
 				</p>
 			</div>
 

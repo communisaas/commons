@@ -93,4 +93,28 @@ describe('mDL launch gates', () => {
 		expect(svelte).not.toContain('guided phone scan');
 		expect(svelte).not.toContain('verify-bridge');
 	});
+
+	it('keeps placeholder copy device-agnostic and off stale rollout dependencies', () => {
+		const sources = [
+			source('src/lib/components/auth/VerificationGate.svelte'),
+			source('src/lib/components/auth/IdentityRecoveryFlow.svelte'),
+			source('src/lib/components/modals/ModalRegistry.svelte'),
+			source('src/routes/help/verification/+page.svelte'),
+			source('src/lib/core/identity/digital-credentials-api.ts'),
+			source('src/lib/types/digital-credentials.d.ts'),
+			source('src/lib/config/features.ts'),
+			source('docs/development/deployment.md')
+		].join('\n');
+
+		expect(sources).toContain('browser-mediated Digital Credentials');
+		expect(sources).not.toContain('Android OpenID4VP');
+		expect(sources).not.toContain('rolling out first on Android');
+		expect(sources).not.toContain('Apple Business Connect');
+		expect(sources).not.toContain('Business Connect');
+		expect(sources).not.toContain('Safari 26+');
+		expect(sources).not.toContain('Full support');
+		expect(sources).not.toContain('unsupported browsers, use your phone');
+		expect(sources).not.toContain('separate custom QR verifier');
+		expect(sources).not.toContain('Android Camera');
+	});
 });

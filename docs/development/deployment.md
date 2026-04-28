@@ -135,9 +135,9 @@ npx wrangler pages deploy .svelte-kit/cloudflare \
 `staging.commons.email` is the Cloudflare Pages branch deployment for `staging` in the
 `communique-site` project. Today it is not a fully isolated environment: the repo-visible
 configuration points branch builds at the same Convex URL and KV bindings as production.
-Until separate staging Convex and KV resources are provisioned, treat Android device smoke
-on staging as controlled production-backed smoke with test accounts and no Business Connect
-or live congressional delivery paths.
+Until separate staging Convex and KV resources are provisioned, treat real-device credential
+smoke on staging as controlled production-backed smoke with test accounts and no live
+congressional delivery paths.
 
 The deploy workflow hard-checks the immutable Pages deployment URL for every branch after
 `wrangler pages deploy`. Custom domains are validated during release smoke because
@@ -175,13 +175,14 @@ nor that opt-in is present.
 
 Real-device browser-mediated credential smoke should cover:
 
-1. Desktop Chrome Digital Credentials QR scanned by Android Camera, with immediate OS/wallet
-   presentation affordance.
-2. Android Chrome same-device mDL/OpenID4VP wallet handoff.
+1. Desktop Chrome Digital Credentials cross-device handoff to an OpenID4VP-capable wallet,
+   with the browser or OS presenting the handoff affordance.
+2. Same-device mDL/OpenID4VP wallet handoff on any browser/device pair that reports the
+   enabled protocol.
 3. iOS/Safari remains explicitly off until the `org-iso-mdoc` lane completes.
 4. Address re-grounding from stale district data to the current district.
 5. Submission after re-grounding uses the new district commitment.
-6. No custom direct QR, Business Connect, or live congressional delivery path is exercised.
+6. No custom direct QR or live congressional delivery path is exercised.
 
 ### Rollback
 

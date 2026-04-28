@@ -105,9 +105,8 @@ export const FEATURES = {
 	/**
 	 * mDL over OpenID4VP via the W3C Digital Credentials API.
 	 *
-	 * This lane is capability-detected by browser protocol support. It does not
-	 * depend on Apple Business Connect. Google Wallet's current web protocol
-	 * identifier for cross-device flows is `openid4vp-v1-signed`; the unsigned
+	 * This lane is capability-detected by browser protocol support. The current
+	 * browser-mediated protocol identifier is `openid4vp-v1-signed`; the unsigned
 	 * and legacy aliases remain parser-only compatibility inputs for old
 	 * capture-replay tests, direct QR, and migration fixtures.
 	 */
@@ -123,10 +122,8 @@ export const FEATURES = {
 	MDL_MDOC: false,
 
 	/**
-	 * iOS/Safari same-device lane.
-	 *
-	 * Apple Business Connect is an iOS availability gate, not an Android launch
-	 * gate. Keep false until ABC enrollment and `MDL_MDOC` are both ready.
+	 * iOS/Safari same-device lane. Keep false until `org-iso-mdoc` verifier
+	 * support is ready and browser capability checks pass in real-device smoke.
 	 */
 	MDL_IOS: false,
 

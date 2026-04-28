@@ -230,13 +230,13 @@
 
 					<div class="mt-5 border-t border-b border-dotted border-slate-300 py-5">
 						<p class="text-[14px] leading-relaxed text-slate-700">
-							Android OpenID4VP is the first supported lane for mDL verification. iOS Safari support
-							follows after Apple Business Connect and the final ISO 18013-5 §9.1.3
-							device-authentication step.
+							Government-ID verification uses browser-mediated Digital Credentials protocols.
+							Commons opens this flow only when the deployed verifier has at least one protocol
+							lane enabled.
 						</p>
 						<p class="mt-3 text-[14px] leading-relaxed text-slate-700">
-							Address-attested verification (Tier&nbsp;2) is the highest tier available for now and
-							is sufficient for messaging your representatives.
+							Address-attested verification (Tier&nbsp;2) remains available while additional
+							wallet and browser protocols are brought online.
 						</p>
 					</div>
 

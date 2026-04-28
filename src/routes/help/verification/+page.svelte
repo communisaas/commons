@@ -13,11 +13,11 @@
 	const faqs = [
 		{
 			q: "My browser says it's not supported",
-			a: 'Switch to Chrome 141+ or Safari 26+. On mobile, you can scan the QR code with your phone to verify using its native wallet.',
+			a: 'Use a browser that reports Digital Credentials support for one of the protocols Commons has enabled. On desktop, supported browsers may present their own cross-device handoff.',
 		},
 		{
 			q: "My wallet doesn't show my license",
-			a: "Make sure your state's mobile driver's license (mDL) has been added to Apple Wallet or Google Wallet. Check your state DMV's website for setup instructions.",
+			a: "Make sure your state's mobile driver's license (mDL) has been added to a wallet supported by your browser. Check your state DMV's setup instructions.",
 		},
 		{
 			q: 'Verification failed',
@@ -33,7 +33,7 @@
 		{
 			icon: Smartphone,
 			title: 'Request credential',
-			desc: 'Your browser requests your digital credential from your phone\'s wallet.',
+			desc: 'Your browser requests your digital credential through the Digital Credentials API.',
 		},
 		{
 			icon: ScanLine,
@@ -129,22 +129,22 @@
 				</thead>
 				<tbody class="divide-y divide-slate-100">
 					<tr>
-						<td class="px-4 py-2.5 text-slate-700">Chrome 141+ <span class="text-slate-400">(desktop & Android)</span></td>
-						<td class="px-4 py-2.5"><span class="font-mono text-xs text-green-700">Full support</span></td>
+						<td class="px-4 py-2.5 text-slate-700">Chrome 141+ with OpenID4VP</td>
+						<td class="px-4 py-2.5"><span class="font-mono text-xs text-green-700">Enabled</span></td>
 					</tr>
 					<tr>
-						<td class="px-4 py-2.5 text-slate-700">Safari 26+ <span class="text-slate-400">(macOS & iOS)</span></td>
-						<td class="px-4 py-2.5"><span class="font-mono text-xs text-green-700">Full support</span></td>
+						<td class="px-4 py-2.5 text-slate-700">Safari / Apple Wallet mdoc</td>
+						<td class="px-4 py-2.5"><span class="font-mono text-xs text-amber-700">Pending</span></td>
 					</tr>
 					<tr>
-						<td class="px-4 py-2.5 text-slate-700">Firefox, Edge, older browsers</td>
+						<td class="px-4 py-2.5 text-slate-700">Browsers without enabled Digital Credentials protocols</td>
 						<td class="px-4 py-2.5"><span class="font-mono text-xs text-slate-600">Not yet supported</span></td>
 					</tr>
 				</tbody>
 			</table>
 		</div>
 		<p class="mt-2 text-xs text-slate-500">
-			On unsupported browsers, use your phone to verify by scanning the QR code.
+			Commons uses the browser-mediated wallet prompt for credential handoff.
 		</p>
 	</section>
 

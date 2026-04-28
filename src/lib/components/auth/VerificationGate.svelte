@@ -91,9 +91,9 @@
 	);
 
 	// mDL launch gate: every path inside this gate that mounts the mDL flow
-	// needs at least one enabled protocol. Android/OpenID4VP can open before
-	// iOS/raw mdoc; when no protocol is enabled, surface a calm placeholder
-	// instead of dispatching into an unavailable wallet flow.
+	// needs at least one enabled browser-mediated protocol. When no protocol is
+	// enabled, surface a calm placeholder instead of dispatching into an
+	// unavailable wallet flow.
 	//
 	// All non-address paths inside this gate are mDL-bound:
 	//   - showRecovery — IdentityRecoveryFlow requires mDL re-verification
@@ -282,14 +282,13 @@
 					<section class="mx-auto max-w-xl py-2" data-testid="mdl-gated-panel">
 						<div class="border-t border-b border-dotted border-slate-300 py-5">
 							<p class="text-[14px] leading-relaxed text-slate-700">
-								Government-ID verification (mobile driver's license, passport, or eID) is currently
-								rolling out first on Android via OpenID4VP. iOS Safari support remains gated on
-								Apple Business Connect and final ISO 18013-5 §9.1.3 device-authentication work.
+								Government-ID verification (mobile driver's license, passport, or eID) uses
+								browser-mediated Digital Credentials protocols. Commons opens this panel only
+								when the deployed verifier has at least one protocol lane enabled.
 							</p>
 							<p class="mt-3 text-[14px] leading-relaxed text-slate-700">
-								Until then, address-attested verification (Tier&nbsp;2) is the highest tier
-								available. Your district credential is fully functional for messaging your
-								representatives.
+								Address-attested verification (Tier&nbsp;2) remains available while additional
+								wallet and browser protocols are brought online.
 							</p>
 						</div>
 
