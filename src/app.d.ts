@@ -71,6 +71,11 @@ declare global {
 				VICAL_KV?: KVNamespace;
 				PACKET_CACHE_KV?: KVNamespace;
 				PUBLIC_APP_URL?: string;
+				MDL_OPENID4VP_REQUEST_PRIVATE_KEY?: string;
+				MDL_OPENID4VP_REQUEST_X5C?: string;
+				MDL_OPENID4VP_REQUEST_ALG?: string;
+				MDL_OPENID4VP_REQUEST_KID?: string;
+				MDL_OPENID4VP_REQUEST_AUD?: string;
 				MDL_DIRECT_QR_REQUEST_PRIVATE_KEY?: string;
 				MDL_DIRECT_QR_REQUEST_X5C?: string;
 				MDL_DIRECT_QR_REQUEST_ALG?: string;
@@ -165,6 +170,11 @@ declare global {
 
 			// Identity Verification (mDL via Digital Credentials API — no provider API keys needed)
 			// District resolution via Shadow Atlas H3 mapping (no external API keys needed)
+			MDL_OPENID4VP_REQUEST_PRIVATE_KEY?: string; // PKCS#8 PEM used to sign browser-mediated OpenID4VP Request Objects
+			MDL_OPENID4VP_REQUEST_X5C?: string; // JSON array or comma/newline-separated X.509 chain for browser-mediated Request Object JWS x5c
+			MDL_OPENID4VP_REQUEST_ALG?: string; // ES256 browser-mediated Request Object signer
+			MDL_OPENID4VP_REQUEST_KID?: string; // Optional JWS kid for the browser-mediated Request Object signer
+			MDL_OPENID4VP_REQUEST_AUD?: string; // Optional Request Object audience; defaults to https://self-issued.me/v2
 			MDL_DIRECT_QR_REQUEST_PRIVATE_KEY?: string; // PKCS#8 PEM used to sign direct OpenID4VP Request Objects
 			MDL_DIRECT_QR_REQUEST_X5C?: string; // JSON array or comma/newline-separated X.509 chain for Request Object JWS x5c
 			MDL_DIRECT_QR_REQUEST_ALG?: string; // ES256 direct Request Object signer

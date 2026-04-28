@@ -39,7 +39,7 @@ import {
 	getDirectMdlSession,
 	markDirectMdlRequestFetched
 } from '../../../src/lib/server/direct-mdl-session';
-import { OPENID4VP_DC_API_PROTOCOL } from '../../../src/lib/config/features';
+import { UNSIGNED_OPENID4VP_DC_API_PROTOCOL } from '../../../src/lib/config/features';
 
 const ORIGIN = 'https://commons.test';
 const SESSION_ID = '33333333-3333-4333-8333-333333333333';
@@ -195,7 +195,7 @@ describe('POST /api/identity/direct-mdl/complete', () => {
 		expect(body.transactionId).toBeUndefined();
 		expect(mocks.processCredentialResponse).toHaveBeenCalledWith(
 			{ vp_token: VP_TOKEN },
-			OPENID4VP_DC_API_PROTOCOL,
+			UNSIGNED_OPENID4VP_DC_API_PROTOCOL,
 			expect.anything(),
 			NONCE,
 			expect.objectContaining({
@@ -211,7 +211,7 @@ describe('POST /api/identity/direct-mdl/complete', () => {
 			identityCommitment: 'c'.repeat(64),
 			credentialHash: 'b'.repeat(64),
 			nonce: NONCE,
-			protocol: OPENID4VP_DC_API_PROTOCOL,
+			protocol: UNSIGNED_OPENID4VP_DC_API_PROTOCOL,
 			sessionChannel: 'direct',
 			verifiedAt: expect.any(Number),
 			addressVerificationMethod: 'mdl',
@@ -275,7 +275,7 @@ describe('POST /api/identity/direct-mdl/complete', () => {
 		expect(response.status).toBe(200);
 		expect(mocks.processCredentialResponse).toHaveBeenCalledWith(
 			{ vp_token: VP_TOKEN },
-			OPENID4VP_DC_API_PROTOCOL,
+			UNSIGNED_OPENID4VP_DC_API_PROTOCOL,
 			expect.anything(),
 			NONCE,
 			expect.anything()

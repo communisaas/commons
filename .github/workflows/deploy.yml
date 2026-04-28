@@ -38,13 +38,13 @@ jobs:
           case "${DEPLOY_BRANCH}" in
             production)
               echo "VITE_ENVIRONMENT=production" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR=1" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR_ORIGIN=https://commons.email" >> "$GITHUB_ENV"
+              echo "VITE_MDL_DIRECT_QR=0" >> "$GITHUB_ENV"
+              echo "VITE_MDL_DIRECT_QR_ORIGIN=" >> "$GITHUB_ENV"
               ;;
             staging)
               echo "VITE_ENVIRONMENT=staging" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR=1" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR_ORIGIN=https://staging.commons.email" >> "$GITHUB_ENV"
+              echo "VITE_MDL_DIRECT_QR=0" >> "$GITHUB_ENV"
+              echo "VITE_MDL_DIRECT_QR_ORIGIN=" >> "$GITHUB_ENV"
               ;;
             *)
               echo "VITE_ENVIRONMENT=development" >> "$GITHUB_ENV"
@@ -180,7 +180,7 @@ jobs:
             sleep 10
           done
 
-      - name: Probe production direct mDL route
+      - name: Probe production browser-mediated mDL route
         if: github.event.workflow_run.head_branch == 'production'
         run: |
           route_challenged=false
@@ -190,12 +190,12 @@ jobs:
               -X POST \
               -H "Accept: application/json" \
               -H "Origin: ${DEPLOY_PUBLIC_URL}" \
-              "${DEPLOY_PUBLIC_URL}/api/identity/direct-mdl/start"); then
+              "${DEPLOY_PUBLIC_URL}/api/identity/verify-mdl/start"); then
               http_status=$(printf '%s\n' "$response" | tail -n 1)
               body=$(printf '%s\n' "$response" | sed '$d')
 
               if [ "$http_status" = "401" ] && echo "$body" | jq -e '.message == "Authentication required"' >/dev/null 2>&1; then
-                echo "Production direct mDL route is live and requires authentication."
+                echo "Production browser-mediated mDL route is live and requires authentication."
                 exit 0
               fi
 
@@ -205,23 +205,23 @@ jobs:
                 route_hard_failure=true
               fi
 
-              echo "Production direct mDL route attempt ${attempt} returned HTTP ${http_status}:"
+              echo "Production browser-mediated mDL route attempt ${attempt} returned HTTP ${http_status}:"
               printf '%s\n' "$body" | head -c 4000
               printf '\n'
             else
-              echo "Production direct mDL route attempt ${attempt} failed before an HTTP response."
+              echo "Production browser-mediated mDL route attempt ${attempt} failed before an HTTP response."
             fi
 
             if [ "$attempt" = "12" ]; then
               if [ "$route_challenged" = "true" ] && [ "$route_hard_failure" = "false" ]; then
-                echo "::warning::Production direct mDL route was blocked by a Cloudflare challenge from the GitHub runner; complete external route smoke against ${DEPLOY_PUBLIC_URL}/api/identity/direct-mdl/start."
+                echo "::warning::Production browser-mediated mDL route was blocked by a Cloudflare challenge from the GitHub runner; complete external route smoke against ${DEPLOY_PUBLIC_URL}/api/identity/verify-mdl/start."
                 exit 0
               fi
               if [ "$route_hard_failure" = "true" ]; then
-                echo "::error::Production direct mDL route did not return the expected authentication gate."
+                echo "::error::Production browser-mediated mDL route did not return the expected authentication gate."
                 exit 1
               fi
-              echo "::warning::Production direct mDL route could not be verified from GitHub-hosted runners; complete external route smoke against ${DEPLOY_PUBLIC_URL}/api/identity/direct-mdl/start."
+              echo "::warning::Production browser-mediated mDL route could not be verified from GitHub-hosted runners; complete external route smoke against ${DEPLOY_PUBLIC_URL}/api/identity/verify-mdl/start."
               exit 0
             fi
 
@@ -275,7 +275,7 @@ jobs:
               if [ "${readiness_challenged}" = "true" ] && [ "${readiness_hard_failure}" = "false" ]; then
                 echo "::error::Production mDL readiness was blocked by a Cloudflare challenge from the GitHub runner."
               fi
-              echo "::error::Production direct QR did not pass internal mDL readiness."
+              echo "::error::Production browser-mediated mDL did not pass internal readiness."
               exit 1
             fi
 

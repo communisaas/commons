@@ -387,7 +387,8 @@ function base64ToUint8Array(value: string): Uint8Array {
 }
 
 async function importDirectMdlSigningKey(privateKeyPem: string, alg: string): Promise<CryptoKey> {
-	const cacheKey = `${alg}:${privateKeyPem}`;
+	const fingerprint = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(privateKeyPem));
+	const cacheKey = `${alg}:${base64UrlEncode(new Uint8Array(fingerprint))}`;
 	let keyPromise = importedKeys.get(cacheKey);
 	if (!keyPromise) {
 		keyPromise = importPKCS8(privateKeyPem, alg);

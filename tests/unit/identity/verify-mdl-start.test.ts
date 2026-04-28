@@ -6,7 +6,7 @@
  *   - Session nonce generation (32 bytes random, hex-encoded)
  *   - KV storage with 5-minute TTL
  *   - Dev mode fallback (in-memory devSessionStore)
- *   - Android-first OpenID4VP response
+ *   - Signed/encrypted OpenID4VP response request
  *   - Auth guard (requires authenticated session)
  *   - Error cases: missing platform bindings, KV unavailable, crypto failures
  *
@@ -33,6 +33,12 @@ const mockDevSessionStore = vi.hoisted(() => ({
 
 const mockCborEncode = vi.hoisted(() => vi.fn());
 const mockCborTagged = vi.hoisted(() => vi.fn());
+const mockGetSignerConfig = vi.hoisted(() => vi.fn());
+const mockValidateSignerConfig = vi.hoisted(() => vi.fn());
+const mockBuildRequestPayload = vi.hoisted(() => vi.fn());
+const mockSignRequest = vi.hoisted(() => vi.fn());
+const mockCalculateJwkThumbprintBytes = vi.hoisted(() => vi.fn());
+const mockAppEnvironment = vi.hoisted(() => ({ dev: true }));
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -58,8 +64,18 @@ vi.mock('cbor-web', () => ({
 	Tagged: mockCborTagged
 }));
 
-// Android-first policy is active by default in features.ts. Keep the mock so
-// tests can still override individual constants in future cases.
+vi.mock('$lib/server/dc-api-openid4vp-request', () => ({
+	getDcApiOpenId4VpSignerConfig: mockGetSignerConfig,
+	validateDcApiOpenId4VpSignerConfig: mockValidateSignerConfig,
+	buildDcApiOpenId4VpRequestPayload: mockBuildRequestPayload,
+	signDcApiOpenId4VpRequest: mockSignRequest,
+	calculateJwkThumbprintBytes: mockCalculateJwkThumbprintBytes
+}));
+
+vi.mock('$app/environment', () => mockAppEnvironment);
+
+// Digital Credentials policy is active by default in features.ts. Keep the mock
+// so tests can still override individual constants in future cases.
 vi.mock('$lib/config/features', async () => {
 	const actual = await vi.importActual<{
 		FEATURES: Record<string, unknown>;
@@ -106,6 +122,13 @@ const MOCK_PRIVATE_KEY_JWK = {
 	d: 'mock-private-key-d'
 };
 
+const MOCK_PUBLIC_KEY_JWK = {
+	kty: 'EC',
+	crv: 'P-256',
+	x: 'mock-x-coordinate',
+	y: 'mock-y-coordinate'
+};
+
 const MOCK_CBOR_BYTES = new Uint8Array([0xa2, 0x01, 0x02, 0x03, 0x04]);
 
 function makeRequestEvent(overrides: {
@@ -143,12 +166,87 @@ function makeRequestEvent(overrides: {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mockAppEnvironment.dev = true;
 
 	// Mock crypto.subtle.generateKey
 	mockGenerateKey.mockResolvedValue(MOCK_KEY_PAIR);
 
 	// Mock crypto.subtle.exportKey
-	mockExportKey.mockResolvedValue(MOCK_PRIVATE_KEY_JWK);
+	mockExportKey.mockImplementation((_format: string, key: unknown) =>
+		key === MOCK_KEY_PAIR.publicKey ? MOCK_PUBLIC_KEY_JWK : MOCK_PRIVATE_KEY_JWK
+	);
+	mockCalculateJwkThumbprintBytes.mockResolvedValue(new Uint8Array(32).fill(7));
+	mockGetSignerConfig.mockReturnValue({
+		privateKeyPem: 'test-private-key',
+		x5c: ['MIIDtestcert=='],
+		alg: 'ES256',
+		kid: 'test-kid',
+		audience: 'https://self-issued.me/v2'
+	});
+	mockValidateSignerConfig.mockResolvedValue(undefined);
+	mockBuildRequestPayload.mockImplementation(
+		async ({
+			nonce,
+			origin
+		}: {
+			nonce: string;
+			origin: string;
+			encryptionPublicJwk: JsonWebKey;
+			leafCertificateX5c: string;
+		}) => ({
+			client_id: 'x509_hash:test',
+			response_type: 'vp_token',
+			response_mode: 'dc_api.jwt',
+			nonce,
+			expected_origins: [origin],
+			client_metadata: {
+				jwks: { keys: [{ ...MOCK_PUBLIC_KEY_JWK, use: 'enc', kid: '1', alg: 'ECDH-ES' }] },
+				vp_formats_supported: {
+					mso_mdoc: {
+						deviceauth_alg_values: [-7],
+						issuerauth_alg_values: [-7]
+					}
+				}
+			},
+			dcql_query: {
+				credentials: [
+					{
+						id: 'mdl',
+						format: 'mso_mdoc',
+						meta: { doctype_value: 'org.iso.18013.5.1.mDL' },
+						claims: [
+							{
+								id: 'resident_postal_code',
+								path: ['org.iso.18013.5.1', 'resident_postal_code'],
+								intent_to_retain: false
+							},
+							{
+								id: 'resident_city',
+								path: ['org.iso.18013.5.1', 'resident_city'],
+								intent_to_retain: false
+							},
+							{
+								id: 'resident_state',
+								path: ['org.iso.18013.5.1', 'resident_state'],
+								intent_to_retain: false
+							},
+							{
+								id: 'birth_date',
+								path: ['org.iso.18013.5.1', 'birth_date'],
+								intent_to_retain: false
+							},
+							{
+								id: 'document_number',
+								path: ['org.iso.18013.5.1', 'document_number'],
+								intent_to_retain: false
+							}
+						]
+					}
+				]
+			}
+		})
+	);
+	mockSignRequest.mockResolvedValue('signed.request.jwt');
 
 	// Override crypto.subtle
 	Object.defineProperty(globalThis, 'crypto', {
@@ -332,7 +430,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			expect(options).toEqual({ expirationTtl: 300 }); // 5 minutes
 		});
 
-		it('should store privateKeyJwk, userId, and origin in KV session data', async () => {
+		it('should store privateKeyJwk, encryption thumbprint, userId, and origin in KV session data', async () => {
 			const mockKvPut = vi.fn().mockResolvedValue(undefined);
 			const event = makeRequestEvent({
 				platform: {
@@ -350,6 +448,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 
 			const sessionData = JSON.parse(mockKvPut.mock.calls[0][1]);
 			expect(sessionData.privateKeyJwk).toEqual(MOCK_PRIVATE_KEY_JWK);
+			expect(typeof sessionData.jwkThumbprint).toBe('string');
 			expect(sessionData.userId).toBe(TEST_USER_ID);
 			expect(sessionData.origin).toBe('http://localhost');
 			expect(sessionData.createdAt).toBeDefined();
@@ -467,7 +566,23 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			expect(mockDevSessionStore.set).toHaveBeenCalledTimes(1);
 		});
 
-		it('should store valid JSON with privateKeyJwk, userId, and origin in dev store', async () => {
+		it('should fail closed in production when DC_SESSION_KV is missing', async () => {
+			mockAppEnvironment.dev = false;
+			const event = makeRequestEvent({
+				platform: { env: { PUBLIC_APP_URL: 'https://commons.email' } }
+			});
+
+			try {
+				await POST(event);
+				expect.fail('Should have thrown');
+			} catch (err: any) {
+				expect(err.status).toBe(500);
+			}
+
+			expect(mockDevSessionStore.set).not.toHaveBeenCalled();
+		});
+
+		it('should store valid JSON with privateKeyJwk, encryption thumbprint, userId, and origin in dev store', async () => {
 			const event = makeRequestEvent({ platform: null });
 
 			await POST(event);
@@ -475,6 +590,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const value = mockDevSessionStore.set.mock.calls[0][1];
 			const sessionData = JSON.parse(value.data);
 			expect(sessionData.privateKeyJwk).toEqual(MOCK_PRIVATE_KEY_JWK);
+			expect(typeof sessionData.jwkThumbprint).toBe('string');
 			expect(sessionData.userId).toBe(TEST_USER_ID);
 			expect(sessionData.origin).toBe('http://localhost');
 		});
@@ -484,7 +600,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 	// Protocol Policy
 	// ============================================================================
 
-	describe('Android-first protocol policy', () => {
+	describe('Digital Credentials protocol policy', () => {
 		it('should not build raw mdoc CBOR while MDL_MDOC is false', async () => {
 			const event = makeRequestEvent({ platform: null });
 
@@ -506,7 +622,7 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const data = await response.json();
 
 			expect(data.requests).toHaveLength(1);
-			expect(data.requests[0].protocol).toBe('openid4vp-v1-unsigned');
+			expect(data.requests[0].protocol).toBe('openid4vp-v1-signed');
 		});
 
 		it('should return nonce in the response', async () => {
@@ -539,44 +655,62 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			);
 		});
 
-		it('should include DCQL query for openid4vp request', async () => {
+		it('should return a signed request object for openid4vp', async () => {
 			const event = makeRequestEvent({ platform: null });
 			const response = await POST(event);
 			const data = await response.json();
 
 			const oid4vpRequest = data.requests[0];
-			expect(oid4vpRequest.protocol).toBe('openid4vp-v1-unsigned');
-			expect(oid4vpRequest.data.dcql_query).toBeDefined();
-			expect(oid4vpRequest.data.dcql_query.credentials).toHaveLength(1);
-			expect(oid4vpRequest.data.response_type).toBe('vp_token');
-			expect(oid4vpRequest.data.response_mode).toBe('dc_api');
-			const credential = oid4vpRequest.data.dcql_query.credentials[0];
-			expect(credential.id).toBe('mdl');
-			expect(credential.format).toBe('mso_mdoc');
-			expect(credential.meta.doctype_value).toBe('org.iso.18013.5.1.mDL');
-			expect(credential.claims[0]).toEqual({
-				id: 'resident_postal_code',
-				path: ['org.iso.18013.5.1', 'resident_postal_code'],
-				intent_to_retain: false
+			expect(oid4vpRequest.protocol).toBe('openid4vp-v1-signed');
+			expect(oid4vpRequest.data).toEqual({ request: 'signed.request.jwt' });
+			expect(mockValidateSignerConfig).toHaveBeenCalledWith(
+				expect.objectContaining({ x5c: ['MIIDtestcert=='] }),
+				expect.objectContaining({ now: expect.any(Number) })
+			);
+			expect(mockSignRequest).toHaveBeenCalledWith(
+				expect.objectContaining({
+					response_mode: 'dc_api.jwt',
+					dcql_query: expect.any(Object),
+					client_metadata: expect.objectContaining({
+						jwks: expect.objectContaining({ keys: expect.any(Array) })
+					})
+				}),
+				expect.objectContaining({ kid: 'test-kid' }),
+				expect.objectContaining({ expiresAt: expect.any(Number), now: expect.any(Number) })
+			);
+		});
+
+		it('builds the signed OpenID4VP request with origin, nonce, and encryption key', async () => {
+			const event = makeRequestEvent({ platform: null });
+			const response = await POST(event);
+			const data = await response.json();
+
+			expect(mockBuildRequestPayload).toHaveBeenCalledWith({
+				nonce: data.nonce,
+				origin: 'http://localhost',
+				encryptionPublicJwk: MOCK_PUBLIC_KEY_JWK,
+				leafCertificateX5c: 'MIIDtestcert=='
 			});
 		});
 
-		it('should include nonce in the openid4vp request data', async () => {
+		it('should include nonce inside the signed openid4vp request payload', async () => {
 			const event = makeRequestEvent({ platform: null });
 			const response = await POST(event);
 			const data = await response.json();
 
-			const oid4vpRequest = data.requests[0];
-			expect(oid4vpRequest.data.nonce).toBe(data.nonce);
+			expect(mockBuildRequestPayload).toHaveBeenCalledWith(
+				expect.objectContaining({ nonce: data.nonce })
+			);
 		});
 
-		it('should omit client_id from the unsigned OpenID4VP DC API request', async () => {
+		it('should hide client_id and DCQL inside the signed OpenID4VP DC API request', async () => {
 			const event = makeRequestEvent({ platform: null });
 			const response = await POST(event);
 			const data = await response.json();
 
 			const oid4vpRequest = data.requests[0];
 			expect(oid4vpRequest.data.client_id).toBeUndefined();
+			expect(oid4vpRequest.data.dcql_query).toBeUndefined();
 		});
 
 		it('should request every required mDL claim by DCQL path', async () => {
@@ -584,7 +718,10 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			const response = await POST(event);
 			const data = await response.json();
 
-			const claims = data.requests[0].data.dcql_query.credentials[0].claims;
+			void data;
+			const payload = mockBuildRequestPayload.mock.results.at(-1)?.value;
+			const resolvedPayload = await payload;
+			const claims = resolvedPayload.dcql_query.credentials[0].claims;
 			expect(claims).toEqual([
 				{
 					id: 'resident_postal_code',
@@ -644,6 +781,19 @@ describe('POST /api/identity/verify-mdl/start', () => {
 			} catch (err: any) {
 				expect(err.status).toBe(500);
 			}
+		});
+
+		it('should throw 500 before storing a session when signer validation fails', async () => {
+			mockValidateSignerConfig.mockRejectedValueOnce(new Error('bad signer cert'));
+			const event = makeRequestEvent({ platform: null });
+
+			try {
+				await POST(event);
+				expect.fail('Should have thrown');
+			} catch (err: any) {
+				expect(err.status).toBe(500);
+			}
+			expect(mockDevSessionStore.set).not.toHaveBeenCalled();
 		});
 
 		it('should throw 500 when KV put fails', async () => {

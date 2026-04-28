@@ -7,6 +7,13 @@ import {
 	isMdlProtocolEnabled
 } from '$lib/config/features';
 import { normalizeDcApiWebOrigin } from '$lib/core/identity/oid4vp-dc-api-handover';
+import {
+	buildDcApiOpenId4VpRequestPayload,
+	calculateJwkThumbprintBytes,
+	getDcApiOpenId4VpSignerConfig,
+	signDcApiOpenId4VpRequest,
+	validateDcApiOpenId4VpSignerConfig
+} from '$lib/server/dc-api-openid4vp-request';
 import { devSessionStore } from '../_dev-session-store';
 
 /**
@@ -18,9 +25,9 @@ import { devSessionStore } from '../_dev-session-store';
  * The private key is stored in Workers KV with 5-min TTL.
  * The public key + request configs are returned to the client.
  *
- * Android-first launch gate: returns only protocols that are safe to operate.
- * OpenID4VP is enabled for Android. Raw org-iso-mdoc stays off until T3
- * DeviceAuth verification ships.
+ * Returns only protocols that are safe to operate. Browser-mediated OpenID4VP
+ * uses a signed request object plus encrypted dc_api.jwt response. Raw
+ * org-iso-mdoc stays off until T3 DeviceAuth verification ships.
  */
 export const POST: RequestHandler = async ({ locals, platform, url }) => {
 	if (!isAnyMdlProtocolEnabled()) {
@@ -61,28 +68,21 @@ export const POST: RequestHandler = async ({ locals, platform, url }) => {
 			.map((b) => b.toString(16).padStart(2, '0'))
 			.join('');
 
-		// Export private key for KV storage (used by verify endpoint for HPKE decryption)
+		// Export keys for encrypted dc_api.jwt response handling.
 		const privateKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+		const publicKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+		const jwkThumbprintBytes = await calculateJwkThumbprintBytes(publicKeyJwk);
+		const jwkThumbprint = base64UrlEncode(jwkThumbprintBytes);
 
-		// Store private key in Workers KV with 5-min TTL
 		const kvKey = `mdl-session:${nonce}`;
 		const sessionData = JSON.stringify({
 			privateKeyJwk,
+			jwkThumbprint,
 			userId: session.userId,
 			origin: verifierOrigin,
 			allowedProtocols,
 			createdAt: Date.now()
 		});
-
-		const kv = platform?.env?.DC_SESSION_KV;
-		if (kv) {
-			await kv.put(kvKey, sessionData, { expirationTtl: 300 }); // 5 minutes
-		} else {
-			// Dev fallback: use in-memory store
-			// In production, KV is required
-			console.warn('[mDL Start] DC_SESSION_KV not available -- using dev fallback');
-			devSessionStore.set(kvKey, { data: sessionData, expires: Date.now() + 300_000 });
-		}
 
 		const requests: Array<{ protocol: string; data: unknown }> = [];
 
@@ -126,50 +126,37 @@ export const POST: RequestHandler = async ({ locals, platform, url }) => {
 		}
 
 		if (allowedProtocols.includes(OPENID4VP_DC_API_PROTOCOL)) {
+			const signerConfig = getDcApiOpenId4VpSignerConfig(platform?.env);
+			const now = Date.now();
+			await validateDcApiOpenId4VpSignerConfig(signerConfig, { now });
+			const payload = await buildDcApiOpenId4VpRequestPayload({
+				nonce,
+				origin: verifierOrigin,
+				encryptionPublicJwk: publicKeyJwk,
+				leafCertificateX5c: signerConfig.x5c[0]
+			});
+			const request = await signDcApiOpenId4VpRequest(payload, signerConfig, {
+				now,
+				expiresAt: now + 300_000
+			});
 			requests.push({
 				protocol: OPENID4VP_DC_API_PROTOCOL,
-				data: {
-					response_type: 'vp_token',
-					response_mode: 'dc_api',
-					nonce,
-					dcql_query: {
-						credentials: [
-							{
-								id: 'mdl',
-								format: 'mso_mdoc',
-								meta: { doctype_value: 'org.iso.18013.5.1.mDL' },
-								claims: [
-									{
-										id: 'resident_postal_code',
-										path: ['org.iso.18013.5.1', 'resident_postal_code'],
-										intent_to_retain: false
-									},
-									{
-										id: 'resident_city',
-										path: ['org.iso.18013.5.1', 'resident_city'],
-										intent_to_retain: false
-									},
-									{
-										id: 'resident_state',
-										path: ['org.iso.18013.5.1', 'resident_state'],
-										intent_to_retain: false
-									},
-									{
-										id: 'birth_date',
-										path: ['org.iso.18013.5.1', 'birth_date'],
-										intent_to_retain: false
-									},
-									{
-										id: 'document_number',
-										path: ['org.iso.18013.5.1', 'document_number'],
-										intent_to_retain: false
-									}
-								]
-							}
-						]
-					}
-				}
+				data: { request }
 			});
+		}
+
+			const kv = platform?.env?.DC_SESSION_KV;
+			if (!kv && !dev) {
+				console.error('[mDL Start] DC_SESSION_KV not configured in production');
+				throw error(500, 'mDL verifier misconfigured');
+			}
+
+			if (kv) {
+				await kv.put(kvKey, sessionData, { expirationTtl: 300 }); // 5 minutes
+			} else {
+				// Dev fallback: use in-memory store. Deployed environments require KV.
+				console.warn('[mDL Start] DC_SESSION_KV not available -- using dev fallback');
+				devSessionStore.set(kvKey, { data: sessionData, expires: Date.now() + 300_000 });
 		}
 
 		return json({
@@ -182,3 +169,9 @@ export const POST: RequestHandler = async ({ locals, platform, url }) => {
 		throw error(500, 'Failed to initialize mDL verification');
 	}
 };
+
+function base64UrlEncode(bytes: Uint8Array): string {
+	let binary = '';
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}

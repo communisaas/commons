@@ -3,7 +3,10 @@ import { error, isHttpError, json } from '@sveltejs/kit';
 import { serverMutation } from 'convex-sveltekit';
 import type { RequestHandler } from './$types';
 import { internal } from '$lib/convex';
-import { OPENID4VP_DC_API_PROTOCOL, requireMdlDirectQrEnabled } from '$lib/config/features';
+import {
+	UNSIGNED_OPENID4VP_DC_API_PROTOCOL,
+	requireMdlDirectQrEnabled
+} from '$lib/config/features';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 import {
 	DIRECT_MDL_TRANSPORT,
@@ -64,7 +67,7 @@ export const POST: RequestHandler = async ({ request, platform, url }) => {
 	const placeholderPrivateKey = await getPlaceholderPrivateKey();
 	const result = await processCredentialResponse(
 		{ vp_token: form.vpToken },
-		OPENID4VP_DC_API_PROTOCOL,
+		UNSIGNED_OPENID4VP_DC_API_PROTOCOL,
 		placeholderPrivateKey,
 		session.nonce,
 		{
@@ -99,7 +102,7 @@ export const POST: RequestHandler = async ({ request, platform, url }) => {
 			identityCommitment: result.identityCommitment,
 			credentialHash: result.credentialHash,
 			nonce: session.nonce,
-			protocol: OPENID4VP_DC_API_PROTOCOL,
+			protocol: UNSIGNED_OPENID4VP_DC_API_PROTOCOL,
 			sessionChannel: 'direct',
 			verifiedAt: Date.now(),
 			addressVerificationMethod: 'mdl',

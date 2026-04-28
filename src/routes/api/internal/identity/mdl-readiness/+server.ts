@@ -21,6 +21,13 @@ import {
 	signDirectMdlRequestObject,
 	validateDirectMdlRequestObjectSignerConfig
 } from '$lib/server/direct-mdl-request-object';
+import {
+	DC_API_OPENID4VP_RESPONSE_MODE,
+	buildDcApiOpenId4VpRequestPayload,
+	getDcApiOpenId4VpSignerConfig,
+	signDcApiOpenId4VpRequest,
+	validateDcApiOpenId4VpSignerConfig
+} from '$lib/server/dc-api-openid4vp-request';
 
 type CheckStatus = 'ok' | 'warning' | 'blocked';
 
@@ -38,24 +45,37 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 	const smokeEnv = platform?.env as SmokeEnv | undefined;
 	const requestOrigin = readinessRequestOrigin(request, url.origin);
 	const originCheck = checkPublicAppUrl(smokeEnv?.PUBLIC_APP_URL, requestOrigin);
-	const directOriginCheck = checkAllowedDirectOrigin(originCheck.origin);
+	const directQrEnabled = isMdlDirectQrEnabled();
+	const directOriginCheck = directQrEnabled
+		? checkAllowedDirectOrigin(originCheck.origin)
+		: optionalDirectQrCheck('direct_qr_allowed_origin', 'Direct QR origin policy is disabled');
+	const dcApiSignerCheck =
+		originCheck.check.status === 'ok'
+			? await checkDcApiRequestSigner(smokeEnv, originCheck.origin)
+			: blockedDcApiRequestSignerCheck();
 	const signerCheck =
-		originCheck.check.status === 'ok' && directOriginCheck.status === 'ok'
+		directQrEnabled && originCheck.check.status === 'ok' && directOriginCheck.status === 'ok'
 			? await checkDirectRequestSigner(smokeEnv, originCheck.origin)
-			: blockedDirectRequestSignerCheck();
+			: directQrEnabled
+				? blockedDirectRequestSignerCheck()
+				: optionalDirectQrCheck('direct_request_signer', 'Direct QR signer is disabled');
 	const checks: ReadinessCheck[] = [
-		checkBoolean('android_openid4vp_enabled', FEATURES.MDL_ANDROID_OID4VP, 'OpenID4VP is enabled'),
+		checkBoolean('openid4vp_enabled', FEATURES.MDL_ANDROID_OID4VP, 'OpenID4VP is enabled'),
 		checkBoolean(
-			'direct_qr_enabled',
-			isMdlDirectQrEnabled(),
-			'Direct OpenID4VP QR is enabled for this build'
+			'openid4vp_signed_protocol',
+			OPENID4VP_DC_API_PROTOCOL === 'openid4vp-v1-signed',
+			'Browser-mediated OpenID4VP uses the signed DC API protocol'
 		),
+		checkOptionalBoolean('direct_qr_enabled', directQrEnabled, 'Direct OpenID4VP QR is enabled'),
 		checkBoolean('raw_mdoc_disabled', !FEATURES.MDL_MDOC, 'Raw org-iso-mdoc remains disabled'),
 		checkBoolean('ios_lane_disabled', !FEATURES.MDL_IOS, 'iOS lane remains disabled'),
 		originCheck.check,
 		directOriginCheck,
 		checkKvBinding('dc_session_kv', Boolean(smokeEnv?.DC_SESSION_KV), 'DC_SESSION_KV is bound'),
-		checkDirectSessionKvBinding(smokeEnv, originCheck.origin),
+		dcApiSignerCheck,
+		directQrEnabled
+			? checkDirectSessionKvBinding(smokeEnv, originCheck.origin)
+			: optionalDirectQrCheck('direct_mdl_session_kv', 'Direct QR session KV is disabled'),
 		signerCheck
 	];
 
@@ -79,18 +99,21 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 				DC_SESSION_KV: Boolean(smokeEnv?.DC_SESSION_KV),
 				DIRECT_MDL_SESSION_KV: Boolean(smokeEnv?.DIRECT_MDL_SESSION_KV)
 			},
-			directRequest: {
-				authorizationRequestScheme: 'openid4vp://authorize',
-				allowedOrigin: MDL_DIRECT_QR_ALLOWED_ORIGIN ?? null,
-				requestUriMethod: DIRECT_MDL_REQUEST_URI_METHOD,
-				requestObjectContentType: DIRECT_MDL_REQUEST_OBJECT_CONTENT_TYPE,
-				responseMode: DIRECT_MDL_TRANSPORT,
-				walletNonceRequired: true,
-				sessionTtlSeconds: DIRECT_MDL_SESSION_TTL_SECONDS
-			},
-			sameDevice: {
+			directRequest: directQrEnabled
+				? {
+						authorizationRequestScheme: 'openid4vp://authorize',
+						allowedOrigin: MDL_DIRECT_QR_ALLOWED_ORIGIN ?? null,
+						requestUriMethod: DIRECT_MDL_REQUEST_URI_METHOD,
+						requestObjectContentType: DIRECT_MDL_REQUEST_OBJECT_CONTENT_TYPE,
+						responseMode: DIRECT_MDL_TRANSPORT,
+						walletNonceRequired: true,
+						sessionTtlSeconds: DIRECT_MDL_SESSION_TTL_SECONDS
+					}
+				: null,
+			digitalCredentials: {
 				protocol: OPENID4VP_DC_API_PROTOCOL,
-				responseMode: 'dc_api'
+				responseMode: DC_API_OPENID4VP_RESPONSE_MODE,
+				requestObject: 'signed'
 			}
 		},
 		{ status: status === 'ok' ? 200 : 503 }
@@ -149,6 +172,18 @@ function checkBoolean(id: string, ok: boolean, message: string): ReadinessCheck 
 		status: ok ? 'ok' : 'blocked',
 		message: ok ? message : `${message} is not true`
 	};
+}
+
+function checkOptionalBoolean(id: string, ok: boolean, message: string): ReadinessCheck {
+	return {
+		id,
+		status: ok ? 'ok' : 'warning',
+		message: ok ? message : `${message} is disabled`
+	};
+}
+
+function optionalDirectQrCheck(id: string, message: string): ReadinessCheck {
+	return { id, status: 'warning', message };
 }
 
 function checkKvBinding(id: string, ok: boolean, message: string): ReadinessCheck {
@@ -256,6 +291,60 @@ function checkPublicAppUrl(configuredOrigin: string | undefined, requestOrigin: 
 			message: 'PUBLIC_APP_URL is a valid verifier origin'
 		} satisfies ReadinessCheck
 	};
+}
+
+function blockedDcApiRequestSignerCheck(): ReadinessCheck {
+	return {
+		id: 'dc_api_request_signer',
+		status: 'blocked',
+		message: 'OpenID4VP Request Object signer cannot be checked until PUBLIC_APP_URL passes'
+	};
+}
+
+async function checkDcApiRequestSigner(
+	smokeEnv: SmokeEnv | undefined,
+	origin: string | undefined
+): Promise<ReadinessCheck> {
+	if (!origin) {
+		return {
+			id: 'dc_api_request_signer',
+			status: 'blocked',
+			message: 'OpenID4VP Request Object signer cannot be checked without PUBLIC_APP_URL'
+		};
+	}
+
+	try {
+		const config = getDcApiOpenId4VpSignerConfig(smokeEnv);
+		const now = Date.now();
+		await validateDcApiOpenId4VpSignerConfig(config, { now });
+		const keyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, [
+			'deriveKey',
+			'deriveBits'
+		]);
+		const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+		const payload = await buildDcApiOpenId4VpRequestPayload({
+			nonce: 'readinessNonce0001',
+			origin,
+			encryptionPublicJwk: publicJwk,
+			leafCertificateX5c: config.x5c[0]
+		});
+		await signDcApiOpenId4VpRequest(payload, config, {
+			now,
+			expiresAt: now + 300_000
+		});
+		return {
+			id: 'dc_api_request_signer',
+			status: 'ok',
+			message: 'OpenID4VP Request Object signer imports and signs'
+		};
+	} catch (err) {
+		const message = err instanceof Error ? err.message : 'MDL_OPENID4VP_SIGNER_UNAVAILABLE';
+		return {
+			id: 'dc_api_request_signer',
+			status: 'blocked',
+			message: `OpenID4VP Request Object signer failed readiness: ${message}`
+		};
+	}
 }
 
 function blockedDirectRequestSignerCheck(): ReadinessCheck {

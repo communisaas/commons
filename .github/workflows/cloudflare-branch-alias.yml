@@ -353,45 +353,45 @@ jobs:
             sleep 10
           done
 
-          direct_challenged=false
-          direct_hard_failure=false
+          mdl_start_challenged=false
+          mdl_start_hard_failure=false
           for attempt in {1..6}; do
-            if direct_response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
+            if mdl_start_response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
               -H "Origin: https://${RECORD_NAME}" \
-              -X POST "https://${RECORD_NAME}/api/identity/direct-mdl/start"); then
-              direct_status=$(printf '%s\n' "${direct_response}" | tail -n 1)
-              direct_body=$(printf '%s\n' "${direct_response}" | sed '$d')
+              -X POST "https://${RECORD_NAME}/api/identity/verify-mdl/start"); then
+              mdl_start_status=$(printf '%s\n' "${mdl_start_response}" | tail -n 1)
+              mdl_start_body=$(printf '%s\n' "${mdl_start_response}" | sed '$d')
 
-              if [ "${direct_status}" = "401" ] && echo "${direct_body}" | jq -e '.message == "Authentication required"' >/dev/null 2>&1; then
-                echo "Direct mDL start route is present and origin-gated; unauthenticated probe returned 401."
+              if [ "${mdl_start_status}" = "401" ] && echo "${mdl_start_body}" | jq -e '.message == "Authentication required"' >/dev/null 2>&1; then
+                echo "Browser-mediated mDL start route is present and authentication-gated; unauthenticated probe returned 401."
                 break
               fi
 
-              if [ "${direct_status}" = "403" ] && printf '%s' "${direct_body}" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
-                direct_challenged=true
-                echo "Direct mDL start attempt ${attempt} was blocked by a Cloudflare challenge from the GitHub runner."
+              if [ "${mdl_start_status}" = "403" ] && printf '%s' "${mdl_start_body}" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
+                mdl_start_challenged=true
+                echo "Browser-mediated mDL start attempt ${attempt} was blocked by a Cloudflare challenge from the GitHub runner."
               else
-                direct_hard_failure=true
-                echo "Direct mDL start attempt ${attempt} did not return expected unauthenticated 401; got HTTP ${direct_status}."
-                if echo "${direct_body}" | jq -e . >/dev/null 2>&1; then
-                  echo "${direct_body}" | jq '{message, status, blockers, warnings}'
+                mdl_start_hard_failure=true
+                echo "Browser-mediated mDL start attempt ${attempt} did not return expected unauthenticated 401; got HTTP ${mdl_start_status}."
+                if echo "${mdl_start_body}" | jq -e . >/dev/null 2>&1; then
+                  echo "${mdl_start_body}" | jq '{message, status, blockers, warnings}'
                 else
-                  printf '%s\n' "${direct_body}" | head -c 4000
+                  printf '%s\n' "${mdl_start_body}" | head -c 4000
                   printf '\n'
                 fi
               fi
             else
-              direct_hard_failure=true
-              echo "Direct mDL start attempt ${attempt} failed before an HTTP response."
+              mdl_start_hard_failure=true
+              echo "Browser-mediated mDL start attempt ${attempt} failed before an HTTP response."
             fi
 
             if [ "${attempt}" = "6" ]; then
-              if [ "${direct_challenged}" = "true" ] && [ "${direct_hard_failure}" = "false" ]; then
-                echo "::warning::Direct mDL start route probe was blocked by a Cloudflare challenge from the GitHub runner; verify it from an operator shell."
+              if [ "${mdl_start_challenged}" = "true" ] && [ "${mdl_start_hard_failure}" = "false" ]; then
+                echo "::warning::Browser-mediated mDL start route probe was blocked by a Cloudflare challenge from the GitHub runner; verify it from an operator shell."
                 break
               fi
 
-              echo "::error::Direct mDL start route did not pass."
+              echo "::error::Browser-mediated mDL start route did not pass."
               exit 1
             fi
 

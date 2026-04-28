@@ -107,8 +107,9 @@ export const FEATURES = {
 	 *
 	 * This lane is capability-detected by browser protocol support. It does not
 	 * depend on Apple Business Connect. Google Wallet's current web protocol
-	 * identifier is `openid4vp-v1-unsigned`; the legacy `openid4vp` alias is
-	 * accepted only for older browser experiments.
+	 * identifier for cross-device flows is `openid4vp-v1-signed`; the unsigned
+	 * and legacy aliases remain parser-only compatibility inputs for old
+	 * capture-replay tests, direct QR, and migration fixtures.
 	 */
 	MDL_ANDROID_OID4VP: true,
 
@@ -174,7 +175,8 @@ export const FEATURES = {
 	V2_PROOF_GENERATION: false
 } as const;
 
-export const OPENID4VP_DC_API_PROTOCOL = 'openid4vp-v1-unsigned';
+export const OPENID4VP_DC_API_PROTOCOL = 'openid4vp-v1-signed';
+export const UNSIGNED_OPENID4VP_DC_API_PROTOCOL = 'openid4vp-v1-unsigned';
 export const LEGACY_OPENID4VP_PROTOCOL = 'openid4vp';
 export const MDL_DIRECT_QR_ALLOWED_ORIGIN = enableDirectQr
 	? directQrConfiguredOrigin || (import.meta.env.DEV ? undefined : expectedDirectQrOrigin)
@@ -182,15 +184,20 @@ export const MDL_DIRECT_QR_ALLOWED_ORIGIN = enableDirectQr
 
 export type MdlProtocol =
 	| typeof OPENID4VP_DC_API_PROTOCOL
+	| typeof UNSIGNED_OPENID4VP_DC_API_PROTOCOL
 	| typeof LEGACY_OPENID4VP_PROTOCOL
 	| 'org-iso-mdoc';
 
 export function isOpenId4VpProtocol(protocol: string): boolean {
-	return protocol === OPENID4VP_DC_API_PROTOCOL || protocol === LEGACY_OPENID4VP_PROTOCOL;
+	return (
+		protocol === OPENID4VP_DC_API_PROTOCOL ||
+		protocol === UNSIGNED_OPENID4VP_DC_API_PROTOCOL ||
+		protocol === LEGACY_OPENID4VP_PROTOCOL
+	);
 }
 
 export function isMdlProtocolEnabled(protocol: string): boolean {
-	if (isOpenId4VpProtocol(protocol)) return FEATURES.MDL_ANDROID_OID4VP;
+	if (protocol === OPENID4VP_DC_API_PROTOCOL) return FEATURES.MDL_ANDROID_OID4VP;
 	if (protocol === 'org-iso-mdoc') return FEATURES.MDL_MDOC;
 	return false;
 }

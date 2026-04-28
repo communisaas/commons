@@ -148,25 +148,19 @@ normal clients. The manual `Configure Cloudflare Branch Alias` workflow keeps
 branch alias target, pins that deployment through the DNS verification, and attempts
 custom-domain health/readiness probes. If Cloudflare challenges the GitHub-hosted runner,
 the workflow warns and the operator-shell probes below are the release gate. Run the
-workflow before Android smoke if the staging custom domain serves a production-shaped
-artifact. Before Android smoke, verify:
+workflow before staging credential smoke if the staging custom domain serves a
+production-shaped artifact. Before smoke, verify:
 
 ```bash
 curl --fail-with-body -sS https://staging.commons.email/api/health | jq -e '.status == "ok"'
 curl --fail-with-body -sS https://commons.email/api/health | jq -e '.status == "ok"'
 ```
 
-For direct OpenID4VP QR smoke, `/api/health` is only the outer availability check.
-Also verify the direct QR feature flag, direct-session KV binding, request object endpoint,
-direct-post endpoint, and test-account cleanup plan before scanning a real mDL.
-
-The direct QR UI is compiled into staging and production branch deploys only. The deploy
-workflow sets `VITE_MDL_DIRECT_QR=1` with
-`VITE_MDL_DIRECT_QR_ORIGIN=https://staging.commons.email` for `staging` and
-`VITE_MDL_DIRECT_QR_ORIGIN=https://commons.email` for `production`; `main` remains off.
-Runtime direct routes reject enabled artifacts unless `PUBLIC_APP_URL` and the request
-origin both match that branch's configured origin. Before scanning, run the internal
-readiness probe from an operator shell that has `INTERNAL_API_SECRET`:
+For browser-mediated OpenID4VP smoke, `/api/health` is only the outer availability check.
+The custom direct QR verifier is no longer compiled on for any deploy branch and is queued
+for deletion. Before scanning a real mDL, verify the browser-mediated request signer,
+session KV, and encrypted-response handling through the internal readiness probe from an
+operator shell that has `INTERNAL_API_SECRET`:
 
 ```bash
 curl --fail-with-body -sS \
@@ -174,25 +168,20 @@ curl --fail-with-body -sS \
   https://staging.commons.email/api/internal/identity/mdl-readiness | jq
 ```
 
-The probe must return `status: "ok"`. A warning for `DIRECT_MDL_SESSION_KV` means
-direct QR sessions are using the shared `DC_SESSION_KV` fallback; that is acceptable
-only for controlled staging smoke with dedicated test accounts.
-Production direct QR must have a dedicated `DIRECT_MDL_SESSION_KV` binding and a
-`commons.email` ES256 request-object signer; the readiness probe blocks production without
-the dedicated direct-session KV. If Redis is not configured, production must explicitly set
-`RATE_LIMITER_ALLOW_MEMORY=1` for the smoke/release window, because identity routes fail
-closed when neither `REDIS_URL` nor that opt-in is present.
+The probe must return `status: "ok"` for browser-mediated Digital Credentials readiness.
+If Redis is not configured, production must explicitly set `RATE_LIMITER_ALLOW_MEMORY=1`
+for the smoke/release window, because identity routes fail closed when neither `REDIS_URL`
+nor that opt-in is present.
 
-Real-device direct QR smoke should cover:
+Real-device browser-mediated credential smoke should cover:
 
-1. Android Chrome same-device mDL/OpenID4VP wallet handoff.
-2. Desktop direct OpenID4VP QR scanned by Android Camera, with immediate OS/wallet
+1. Desktop Chrome Digital Credentials QR scanned by Android Camera, with immediate OS/wallet
    presentation affordance.
-3. Browser-mediated Digital Credentials QR becomes the preferred desktop path once
-   signed OpenID4VP cross-device smoke passes.
+2. Android Chrome same-device mDL/OpenID4VP wallet handoff.
+3. iOS/Safari remains explicitly off until the `org-iso-mdoc` lane completes.
 4. Address re-grounding from stale district data to the current district.
 5. Submission after re-grounding uses the new district commitment.
-6. No Business Connect or live congressional delivery path is exercised.
+6. No custom direct QR, Business Connect, or live congressional delivery path is exercised.
 
 ### Rollback
 

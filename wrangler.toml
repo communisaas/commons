@@ -47,6 +47,13 @@ VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
 #
 # Wallet — Fiat Onramp:
 #   PUBLIC_TRANSAK_API_KEY   - Transak API key for fiat onramp widget
+#
+# Identity — mDL Digital Credentials:
+#   MDL_OPENID4VP_REQUEST_PRIVATE_KEY - PKCS#8 signer for browser-mediated signed OpenID4VP requests
+#   MDL_OPENID4VP_REQUEST_X5C         - X.509 chain for the Request Object JWS x5c header
+#   MDL_OPENID4VP_REQUEST_ALG         - ES256
+#   MDL_OPENID4VP_REQUEST_KID         - Optional Request Object JWS kid
+#   MDL_OPENID4VP_REQUEST_AUD         - Optional audience; defaults to https://self-issued.me/v2
 
 # DC_SESSION_KV: KV namespace for DC (district-confirmed) session state
 # Used to store ephemeral session data during the congressional contact flow

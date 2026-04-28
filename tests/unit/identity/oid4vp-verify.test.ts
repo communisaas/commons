@@ -7,6 +7,7 @@
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { encode, Tagged } from 'cbor-web';
+import { CompactEncrypt, importJWK } from 'jose';
 
 // Mock Shadow Atlas client BEFORE importing mdl-verification (it uses dynamic import)
 const { mockResolveAddress } = vi.hoisted(() => ({
@@ -75,6 +76,35 @@ function base64urlEncodeBytes(bytes: Uint8Array): string {
 		binary += String.fromCharCode(byte);
 	}
 	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+async function calculateTestJwkThumbprint(publicJwk: JsonWebKey): Promise<Uint8Array> {
+	const canonical = JSON.stringify({
+		crv: publicJwk.crv,
+		kty: publicJwk.kty,
+		x: publicJwk.x,
+		y: publicJwk.y
+	});
+	return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical)));
+}
+
+async function encryptDcApiJwt(payload: unknown, publicJwk: JsonWebKey): Promise<string> {
+	const encryptionKey = await importJWK(
+		{
+			kty: publicJwk.kty,
+			crv: publicJwk.crv,
+			x: publicJwk.x,
+			y: publicJwk.y,
+			use: 'enc',
+			kid: '1',
+			alg: 'ECDH-ES'
+		},
+		'ECDH-ES'
+	);
+	const payloadBytes = new Uint8Array(new TextEncoder().encode(JSON.stringify(payload)));
+	return new CompactEncrypt(payloadBytes)
+		.setProtectedHeader({ alg: 'ECDH-ES', enc: 'A256GCM', kid: '1' })
+		.encrypt(encryptionKey);
 }
 
 function uint8ArrayToBase64(bytes: Uint8Array): string {
@@ -278,6 +308,7 @@ async function buildDeviceAuthenticationBytes({
 	nonce,
 	responseUri,
 	transport = 'dc_api',
+	jwkThumbprint = null,
 	docType,
 	deviceNameSpacesBytes
 }: {
@@ -286,6 +317,7 @@ async function buildDeviceAuthenticationBytes({
 	nonce: string;
 	responseUri?: string;
 	transport?: 'dc_api' | 'direct_post';
+	jwkThumbprint?: Uint8Array | ArrayBuffer | null;
 	docType: string;
 	deviceNameSpacesBytes: Uint8Array;
 }): Promise<Uint8Array> {
@@ -300,7 +332,7 @@ async function buildDeviceAuthenticationBytes({
 			: await buildOpenId4VpDcApiSessionTranscript({
 					origin: origin ?? '',
 					nonce,
-					jwkThumbprint: null
+					jwkThumbprint
 				});
 	const deviceAuthentication = [
 		'DeviceAuthentication',
@@ -324,6 +356,7 @@ async function buildOpenId4VpMsoMdocResponse(
 		signingTransport?: 'dc_api' | 'direct_post';
 		signingClientId?: string;
 		signingResponseUri?: string;
+		signingJwkThumbprint?: Uint8Array | ArrayBuffer | null;
 		msoDocType?: string;
 		msoValidFrom?: string;
 		msoValidUntil?: string;
@@ -383,6 +416,7 @@ async function buildOpenId4VpMsoMdocResponse(
 		nonce: options.signingNonce ?? options.nonce,
 		responseUri: options.signingResponseUri,
 		transport: options.signingTransport ?? 'dc_api',
+		jwkThumbprint: options.signingJwkThumbprint ?? null,
 		docType: MDL_DOCTYPE,
 		deviceNameSpacesBytes
 	});
@@ -511,6 +545,8 @@ function mockShadowAtlasSuccess(state: string, cd: string) {
 
 // Ephemeral key (unused by OpenID4VP path but required by function signature)
 let ephemeralKey: CryptoKey;
+let ephemeralPublicJwk: JsonWebKey;
+let ephemeralJwkThumbprint: Uint8Array;
 let jwtSigningKeyPair: CryptoKeyPair;
 let jwtTestCertB64 = '';
 let jwtTestCertDer: Uint8Array;
@@ -518,10 +554,12 @@ let jwtTestCertDer: Uint8Array;
 beforeAll(async () => {
 	const keyPair = await crypto.subtle.generateKey(
 		{ name: 'ECDH', namedCurve: 'P-256' },
-		false,
+		true,
 		['deriveKey', 'deriveBits']
 	);
 	ephemeralKey = keyPair.privateKey;
+	ephemeralPublicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+	ephemeralJwkThumbprint = await calculateTestJwkThumbprint(ephemeralPublicJwk);
 
 	jwtSigningKeyPair = await crypto.subtle.generateKey(
 		{ name: 'ECDSA', namedCurve: 'P-256' },
@@ -650,10 +688,10 @@ describe('OpenID4VP response processing', () => {
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
-	it('should fail closed on encrypted dc_api.jwt OpenID4VP responses until request encryption is wired', async () => {
+	it('should reject malformed encrypted dc_api.jwt OpenID4VP responses', async () => {
 		const result = await processCredentialResponse(
 			JSON.stringify({ response: 'jwe-header.encrypted-key.iv.ciphertext.tag' }),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			'test-nonce-encrypted-response'
 		);
@@ -661,7 +699,7 @@ describe('OpenID4VP response processing', () => {
 		expect(result.success).toBe(false);
 		if (!result.success) {
 			expect(result.error).toBe('decryption_failed');
-			expect(result.message).toContain('request-encryption support');
+			expect(result.message).toContain('Failed to decrypt');
 		}
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
@@ -669,7 +707,7 @@ describe('OpenID4VP response processing', () => {
 	it('should fail closed on empty encrypted response markers', async () => {
 		const result = await processCredentialResponse(
 			JSON.stringify({ response: '' }),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			'test-nonce-empty-encrypted-response'
 		);
@@ -681,7 +719,7 @@ describe('OpenID4VP response processing', () => {
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
-	it('should treat encrypted response markers as higher priority than nested data', async () => {
+	it('should reject encrypted response envelopes that also contain nested VP data', async () => {
 		const nonce = 'test-nonce-mixed-envelope';
 		const jwt = await buildJwt({
 			nonce,
@@ -696,14 +734,34 @@ describe('OpenID4VP response processing', () => {
 				response: 'jwe-header.encrypted-key.iv.ciphertext.tag',
 				data: { vp_token: jwt }
 			}),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			nonce
 		);
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
-			expect(result.error).toBe('decryption_failed');
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('ambiguous');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject encrypted response envelopes with a mismatched top-level protocol', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				protocol: 'openid4vp-v1-unsigned',
+				response: 'jwe-header.encrypted-key.iv.ciphertext.tag'
+			}),
+			'openid4vp-v1-signed',
+			ephemeralKey,
+			'test-nonce-encrypted-protocol-mismatch'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('protocol mismatch');
 		}
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
@@ -740,10 +798,10 @@ describe('OpenID4VP response processing', () => {
 	it('should fail closed on nested encrypted dc_api.jwt response envelopes', async () => {
 		const result = await processCredentialResponse(
 			JSON.stringify({
-				protocol: 'openid4vp-v1-unsigned',
+				protocol: 'openid4vp-v1-signed',
 				data: { response: 'jwe-header.encrypted-key.iv.ciphertext.tag' }
 			}),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			'test-nonce-nested-encrypted-response'
 		);
@@ -795,7 +853,7 @@ describe('OpenID4VP response processing', () => {
 	it('should fail closed on compact JWE supplied as a vp_token string', async () => {
 		const result = await processCredentialResponse(
 			JSON.stringify({ vp_token: 'jwe-header.encrypted-key.iv.ciphertext.tag' }),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			'test-nonce-vp-token-jwe'
 		);
@@ -810,7 +868,7 @@ describe('OpenID4VP response processing', () => {
 	it('should fail closed on identityToken encrypted response envelopes', async () => {
 		const result = await processCredentialResponse(
 			JSON.stringify({ identityToken: 'jwe-header.encrypted-key.iv.ciphertext.tag' }),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			'test-nonce-identity-token'
 		);
@@ -818,6 +876,82 @@ describe('OpenID4VP response processing', () => {
 		expect(result.success).toBe(false);
 		if (!result.success) {
 			expect(result.error).toBe('decryption_failed');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject encrypted dc_api.jwt responses with unsupported JOSE headers', async () => {
+		const unsupportedHeader = base64urlEncode(
+			JSON.stringify({ alg: 'ECDH-ES', enc: 'A128GCM', kid: '1' })
+		);
+		const result = await processCredentialResponse(
+			JSON.stringify({ response: `${unsupportedHeader}.encrypted-key.iv.ciphertext.tag` }),
+			'openid4vp-v1-signed',
+			ephemeralKey,
+			'test-nonce-unsupported-jwe-header'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('decryption_failed');
+			expect(result.message).toContain('Unsupported');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject encrypted dc_api.jwt responses with a non-string JWK kid', async () => {
+		const unsupportedHeader = base64urlEncode(
+			JSON.stringify({ alg: 'ECDH-ES', enc: 'A256GCM', kid: 1 })
+		);
+		const result = await processCredentialResponse(
+			JSON.stringify({ response: `${unsupportedHeader}.encrypted-key.iv.ciphertext.tag` }),
+			'openid4vp-v1-signed',
+			ephemeralKey,
+			'test-nonce-unsupported-jwe-kid'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('decryption_failed');
+			expect(result.message).toContain('Unsupported');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject encrypted dc_api.jwt responses that omit the advertised JWK kid', async () => {
+		const unsupportedHeader = base64urlEncode(JSON.stringify({ alg: 'ECDH-ES', enc: 'A256GCM' }));
+		const result = await processCredentialResponse(
+			JSON.stringify({ response: `${unsupportedHeader}.encrypted-key.iv.ciphertext.tag` }),
+			'openid4vp-v1-signed',
+			ephemeralKey,
+			'test-nonce-missing-jwe-kid'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('decryption_failed');
+			expect(result.message).toContain('Unsupported');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should reject unencrypted vp_token payloads for the signed DC API protocol', async () => {
+		const result = await processCredentialResponse(
+			JSON.stringify({
+				vp_token: {
+					mdl: ['o2dkb2NzdoJvcmcuaXNvLjE4MDEzLjUuMS5tREw']
+				}
+			}),
+			'openid4vp-v1-signed',
+			ephemeralKey,
+			'test-nonce-signed-plaintext-mso-mdoc',
+			{ verifierOrigin: 'https://verifier.example', dcApiJwkThumbprint: ephemeralJwkThumbprint }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('must be encrypted');
 		}
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
@@ -943,6 +1077,77 @@ describe('OpenID4VP response processing', () => {
 			expect(result.identityCommitment).toMatch(/^[0-9a-f]{64}$/);
 			expect(result.cellId).toBe('872830828ffffff');
 		}
+	});
+
+	it('should decrypt signed dc_api.jwt responses before verifying mso_mdoc DeviceAuth', async () => {
+		const nonce = 'test-nonce-encrypted-mso-mdoc-success';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D7777778',
+				birth_date: '1990-05-17'
+			},
+			{ origin, nonce, signingJwkThumbprint: ephemeralJwkThumbprint }
+		);
+		const encryptedResponse = await encryptDcApiJwt(
+			{ vp_token: { mdl: [deviceResponse] } },
+			ephemeralPublicJwk
+		);
+
+		mockShadowAtlasSuccess('ca', '12');
+
+		const result = await processCredentialResponse(
+			JSON.stringify({ response: encryptedResponse }),
+			'openid4vp-v1-signed',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin, dcApiJwkThumbprint: ephemeralJwkThumbprint }
+		);
+
+		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(result.district).toBe('CA-12');
+			expect(result.state).toBe('CA');
+			expect(result.credentialHash).toMatch(/^[0-9a-f]{64}$/);
+			expect(result.identityCommitment).toMatch(/^[0-9a-f]{64}$/);
+		}
+	});
+
+	it('should reject signed encrypted mso_mdoc responses without the stored JWK thumbprint', async () => {
+		const nonce = 'test-nonce-encrypted-mso-mdoc-missing-thumbprint';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D7777779',
+				birth_date: '1990-05-17'
+			},
+			{ origin, nonce, signingJwkThumbprint: ephemeralJwkThumbprint }
+		);
+		const encryptedResponse = await encryptDcApiJwt(
+			{ vp_token: { mdl: [deviceResponse] } },
+			ephemeralPublicJwk
+		);
+
+		const result = await processCredentialResponse(
+			JSON.stringify({ response: encryptedResponse }),
+			'openid4vp-v1-signed',
+			ephemeralKey,
+			nonce,
+			{ verifierOrigin: origin }
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('32-byte encryption JWK thumbprint');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
 	it('should verify mso_mdoc DeviceResponse through direct OpenID4VP handover', async () => {

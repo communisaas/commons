@@ -7,6 +7,10 @@ const {
 	mockSignerConfig,
 	mockSignRequestObject,
 	mockValidateSignerConfig,
+	mockDcSignerConfig,
+	mockValidateDcSignerConfig,
+	mockBuildDcPayload,
+	mockSignDcRequest,
 	mockAllowedOrigin
 } = vi.hoisted(() => ({
 	mockDev: { value: false },
@@ -20,6 +24,10 @@ const {
 	mockSignerConfig: vi.fn(),
 	mockSignRequestObject: vi.fn(),
 	mockValidateSignerConfig: vi.fn(),
+	mockDcSignerConfig: vi.fn(),
+	mockValidateDcSignerConfig: vi.fn(),
+	mockBuildDcPayload: vi.fn(),
+	mockSignDcRequest: vi.fn(),
 	mockAllowedOrigin: { value: 'https://staging.commons.email' }
 }));
 
@@ -40,7 +48,7 @@ vi.mock('$lib/config/features', () => ({
 	get MDL_DIRECT_QR_ALLOWED_ORIGIN() {
 		return mockAllowedOrigin.value;
 	},
-	OPENID4VP_DC_API_PROTOCOL: 'openid4vp-v1-unsigned',
+	OPENID4VP_DC_API_PROTOCOL: 'openid4vp-v1-signed',
 	isMdlDirectQrEnabled: () => mockFeatures.MDL_DIRECT_QR && mockFeatures.MDL_ANDROID_OID4VP
 }));
 
@@ -51,6 +59,14 @@ vi.mock('$lib/server/direct-mdl-request-object', () => ({
 	signDirectMdlRequestObject: (...args: unknown[]) => mockSignRequestObject(...args),
 	validateDirectMdlRequestObjectSignerConfig: (...args: unknown[]) =>
 		mockValidateSignerConfig(...args)
+}));
+
+vi.mock('$lib/server/dc-api-openid4vp-request', () => ({
+	DC_API_OPENID4VP_RESPONSE_MODE: 'dc_api.jwt',
+	getDcApiOpenId4VpSignerConfig: (...args: unknown[]) => mockDcSignerConfig(...args),
+	validateDcApiOpenId4VpSignerConfig: (...args: unknown[]) => mockValidateDcSignerConfig(...args),
+	buildDcApiOpenId4VpRequestPayload: (...args: unknown[]) => mockBuildDcPayload(...args),
+	signDcApiOpenId4VpRequest: (...args: unknown[]) => mockSignDcRequest(...args)
 }));
 
 import { GET } from '../../../src/routes/api/internal/identity/mdl-readiness/+server';
@@ -80,6 +96,8 @@ function makeEvent(options: {
 				PUBLIC_APP_URL: origin,
 				DC_SESSION_KV: kv,
 				DIRECT_MDL_SESSION_KV: kv,
+				MDL_OPENID4VP_REQUEST_PRIVATE_KEY: 'configured',
+				MDL_OPENID4VP_REQUEST_X5C: 'configured',
 				MDL_DIRECT_QR_REQUEST_PRIVATE_KEY: 'configured',
 				MDL_DIRECT_QR_REQUEST_X5C: 'configured',
 				...options.platformEnv
@@ -100,6 +118,18 @@ beforeEach(() => {
 	mockSignerConfig.mockReturnValue({ privateKeyPem: 'configured', x5c: ['configured'] });
 	mockValidateSignerConfig.mockResolvedValue(undefined);
 	mockSignRequestObject.mockResolvedValue('signed.jwt');
+	mockDcSignerConfig.mockReturnValue({ privateKeyPem: 'configured', x5c: ['configured'] });
+	mockValidateDcSignerConfig.mockResolvedValue(undefined);
+	mockBuildDcPayload.mockResolvedValue({
+		client_id: 'x509_hash:readiness',
+		response_type: 'vp_token',
+		response_mode: 'dc_api.jwt',
+		nonce: 'readinessNonce0001',
+		expected_origins: ['https://staging.commons.email'],
+		client_metadata: { jwks: { keys: [] }, vp_formats_supported: { mso_mdoc: {} } },
+		dcql_query: { credentials: [] }
+	});
+	mockSignDcRequest.mockResolvedValue('signed.dc.jwt');
 });
 
 describe('GET /api/internal/identity/mdl-readiness', () => {
@@ -127,6 +157,16 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 			requestObjectContentType: 'application/oauth-authz-req+jwt',
 			walletNonceRequired: true
 		});
+		expect(body.digitalCredentials).toMatchObject({
+			protocol: 'openid4vp-v1-signed',
+			responseMode: 'dc_api.jwt',
+			requestObject: 'signed'
+		});
+		expect(mockValidateDcSignerConfig).toHaveBeenCalledWith(
+			{ privateKeyPem: 'configured', x5c: ['configured'] },
+			expect.objectContaining({ now: expect.any(Number) })
+		);
+		expect(mockSignDcRequest).toHaveBeenCalledOnce();
 		expect(mockValidateSignerConfig).toHaveBeenCalledWith(
 			{ privateKeyPem: 'configured', x5c: ['configured'] },
 			'staging.commons.email',
@@ -189,13 +229,15 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		expect(mockSignRequestObject).not.toHaveBeenCalled();
 	});
 
-	it('blocks direct smoke when the direct QR build flag is off', async () => {
+	it('does not block browser-mediated readiness when the direct QR build flag is off', async () => {
 		mockFeatures.MDL_DIRECT_QR = false;
 		const response = await GET(makeEvent());
-		expect(response.status).toBe(503);
+		expect(response.status).toBe(200);
 		const body = await response.json();
-		expect(body.status).toBe('blocked');
-		expect(body.blockers).toContain('direct_qr_enabled');
+		expect(body.status).toBe('ok');
+		expect(body.blockers).toEqual([]);
+		expect(body.warnings).toContain('direct_qr_enabled');
+		expect(body.directRequest).toBeNull();
 	});
 
 	it('blocks when PUBLIC_APP_URL points at a different deployed origin', async () => {
@@ -255,6 +297,41 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		expect(body.blockers).toContain('direct_request_signer');
 		expect(JSON.stringify(body)).not.toContain('sensitive-private-key-value');
 		expect(JSON.stringify(body)).not.toContain('sensitive-cert-chain-value');
+	});
+
+	it('blocks when the browser-mediated OpenID4VP signer cannot validate', async () => {
+		mockValidateDcSignerConfig.mockRejectedValueOnce(new Error('bad dc certificate'));
+		const response = await GET(
+			makeEvent({
+				platformEnv: {
+					MDL_OPENID4VP_REQUEST_PRIVATE_KEY: 'sensitive-openid4vp-private-key',
+					MDL_OPENID4VP_REQUEST_X5C: 'sensitive-openid4vp-cert-chain'
+				}
+			})
+		);
+		expect(response.status).toBe(503);
+		const body = await response.json();
+		expect(body.blockers).toContain('dc_api_request_signer');
+		expect(JSON.stringify(body)).not.toContain('sensitive-openid4vp-private-key');
+		expect(JSON.stringify(body)).not.toContain('sensitive-openid4vp-cert-chain');
+		expect(mockSignDcRequest).not.toHaveBeenCalled();
+	});
+
+	it('blocks when the browser-mediated OpenID4VP signer cannot sign', async () => {
+		mockSignDcRequest.mockRejectedValueOnce(new Error('bad dc key'));
+		const response = await GET(
+			makeEvent({
+				platformEnv: {
+					MDL_OPENID4VP_REQUEST_PRIVATE_KEY: 'sensitive-openid4vp-private-key',
+					MDL_OPENID4VP_REQUEST_X5C: 'sensitive-openid4vp-cert-chain'
+				}
+			})
+		);
+		expect(response.status).toBe(503);
+		const body = await response.json();
+		expect(body.blockers).toContain('dc_api_request_signer');
+		expect(JSON.stringify(body)).not.toContain('sensitive-openid4vp-private-key');
+		expect(JSON.stringify(body)).not.toContain('sensitive-openid4vp-cert-chain');
 	});
 
 	it('blocks when the direct request signer certificate is not deployment-bound', async () => {

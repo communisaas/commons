@@ -84,11 +84,13 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 		const {
 			privateKeyJwk,
+			jwkThumbprint,
 			userId: sessionUserId,
 			origin: verifierOrigin,
 			allowedProtocols
 		} = JSON.parse(sessionData) as {
 			privateKeyJwk: JsonWebKey;
+			jwkThumbprint?: unknown;
 			userId?: string;
 			origin?: unknown;
 			allowedProtocols?: unknown;
@@ -118,7 +120,9 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		// Process through privacy boundary
 		const result = await processCredentialResponse(data, protocol, ephemeralPrivateKey, nonce, {
 			vicalKv: platform?.env?.VICAL_KV,
-			verifierOrigin: typeof verifierOrigin === 'string' ? verifierOrigin : undefined
+			verifierOrigin: typeof verifierOrigin === 'string' ? verifierOrigin : undefined,
+			dcApiJwkThumbprint:
+				typeof jwkThumbprint === 'string' ? base64UrlDecode(jwkThumbprint) : undefined
 		});
 
 		if (!result.success) {
@@ -217,3 +221,12 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		throw error(500, 'mDL verification failed');
 	}
 };
+
+function base64UrlDecode(value: string): Uint8Array {
+	const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+	const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+	const binary = atob(padded);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	return bytes;
+}
