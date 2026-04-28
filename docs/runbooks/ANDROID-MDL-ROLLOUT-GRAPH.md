@@ -49,7 +49,7 @@ reference path, but it is no longer offered in the user-facing desktop flow.
 | A6j | done | Direct OpenID4VP QR desktop UI and account-binding posture: render the wallet-recognized QR as the primary desktop Android path only after first-valid-presenter risk is explicitly accepted or mitigated, show desktop account/pairing context where meaningful, and initially keep `/verify-bridge` as fallback. Superseded by A6l for user flow. | Touched-file Svelte check, component/source smoke, QR payload inspection confirming it is not a Commons web URL, direct cancel/retry tests, and product/security evidence for the account-context decision. | Brutalist contexts `ea401916-65cf-489c-9014-e5eca16d328e`, `bf7b07bc-abb5-4042-9545-2688ad6dce91`, and `78b8339c-c05d-4aa3-82d5-5ac5ae537020`; accepted recovery/copy/signer findings fixed before commit. |
 | A6k | done | Staging preflight for real-device smoke: branches aligned, CI/deploy green, immutable Pages health green, external custom-domain health green, direct/bridge KV and encryption bindings verified, direct request fetch plus direct completion/finalizer atomicity reviewed, direct flag state verified, and test-account isolation/cleanup ready. | Branch/CI/deploy checklist below, `mdl-smoke-readiness`, `/api/internal/identity/mdl-readiness`, direct-session readiness checks, and real-wallet request_uri header/body capture. | Brutalist launch-readiness gate completed; runner-side Cloudflare challenges resolved by operator-shell probes. |
 | A6l | done | Cut `/verify-bridge` out of the user-facing desktop flow: direct OpenID4VP QR is the only desktop-to-phone path when enabled, and desktop otherwise tells users to verify on Android instead of starting the bridge. | Component/source gate: no bridge start route, no guided phone scan CTA, no `/verify-bridge` string in `GovernmentCredentialVerification`; focused mDL launch tests; `npm run build`. | Brutalist context `73dc5fe3-33f7-426b-8bc7-e8e34f0a4773`; accepted direct SSE JSON parse hardening folded in. |
-| A6m | queued | Physical Android smoke: same-device Chrome + Google Wallet mDL, then desktop direct OpenID4VP QR scanned by Android Camera with immediate OS/wallet presentation affordance. | Real device checklist below; record phone/browser/wallet versions and wallet UI observations. | File launch findings before enablement; direct QR cannot become default if account-context/phishing signal is missing without explicit review acceptance. |
+| A6m | active | Production direct QR enablement plus physical Android smoke: same-device Chrome + Google Wallet mDL, then desktop direct OpenID4VP QR scanned by Android Camera with immediate OS/wallet presentation affordance. | Production/staging branch sync, Cloudflare production signer/readiness, real device checklist below; record phone/browser/wallet versions and wallet UI observations. | Brutalist production-enable/security gate; direct QR must be disabled if account-context/phishing signal is unacceptable on device. |
 | A7 | queued | Retire or hard-gate `/verify-bridge` backend routes after direct QR smoke, keeping only explicitly reviewed rollback access if needed. | Route inventory plus 404/feature-gate tests for public bridge entrypoints. | Brutalist backend-decommission review. |
 | A8 | queued | Update Android-first docs and user-facing copy after smoke results are known. | Static/source review plus touched-file Svelte check. | Brutalist product/security copy review. |
 | A9 | blocked | Raw mdoc T3: SessionTranscript reconstruction and DeviceAuth verification. | mdoc fixture tests and capture-replay regression. | Required before `MDL_MDOC=true` or iOS enablement. |
@@ -110,6 +110,13 @@ reference path, but it is no longer offered in the user-facing desktop flow.
   guided phone scan CTA are removed from the visible desktop verification path, direct QR is
   the only desktop-to-phone path when enabled, and desktop otherwise tells users to verify
   from Android while backend routes remain available for rollback/reference until A7.
+- `A6m` starts by enabling direct QR for production builds: production uses
+  `VITE_MDL_DIRECT_QR_ORIGIN=https://commons.email`, staging keeps
+  `https://staging.commons.email`, and main remains off. Cloudflare production must have a
+  `commons.email` direct request signer and a dedicated `DIRECT_MDL_SESSION_KV` binding before
+  production readiness may pass. With Redis absent, production must also explicitly set
+  `RATE_LIMITER_ALLOW_MEMORY=1` for the smoke/release window so identity routes boot
+  intentionally on the per-isolate limiter.
 - Global `svelte-check` remains a separate repo-health track and is not an Android mDL launch gate unless errors touch this surface.
 
 ## Direct OpenID4VP QR Decision
@@ -142,7 +149,7 @@ Protocol split:
 
 ## Smoke Criteria
 
-Staging real-device smoke (`A6k`/`A6l`) passes only when:
+Real-device smoke (`A6k`/`A6l`/`A6m`) passes only when:
 
 - `main`, `staging`, and `production` point at the same reviewed commit, with CI and
   Cloudflare immutable Pages deploy health green for that commit.
@@ -174,12 +181,18 @@ Staging real-device smoke (`A6k`/`A6l`) passes only when:
   or mutating the session.
 - Direct-session readiness verifies KV bindings, direct feature flag state, request/response
   endpoint availability, and bridge encryption configuration; `/api/health` alone is not enough.
+- Production direct-session readiness must show `DIRECT_MDL_SESSION_KV` bound. Staging may warn
+  when it uses the shared `DC_SESSION_KV` fallback, but production may not.
 - Internal direct-session readiness is checked with:
 
   ```bash
   curl --fail-with-body -sS \
     -H "X-Internal-Secret: $INTERNAL_API_SECRET" \
     https://staging.commons.email/api/internal/identity/mdl-readiness | jq
+
+  curl --fail-with-body -sS \
+    -H "X-Internal-Secret: $INTERNAL_API_SECRET" \
+    https://commons.email/api/internal/identity/mdl-readiness | jq
   ```
 
 - If staging still shares production Convex/KV, use dedicated test accounts and record cleanup

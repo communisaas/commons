@@ -38,8 +38,8 @@ jobs:
           case "${DEPLOY_BRANCH}" in
             production)
               echo "VITE_ENVIRONMENT=production" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR=0" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR_ORIGIN=" >> "$GITHUB_ENV"
+              echo "VITE_MDL_DIRECT_QR=1" >> "$GITHUB_ENV"
+              echo "VITE_MDL_DIRECT_QR_ORIGIN=https://commons.email" >> "$GITHUB_ENV"
               ;;
             staging)
               echo "VITE_ENVIRONMENT=staging" >> "$GITHUB_ENV"
@@ -156,3 +156,56 @@ jobs:
             sleep 10
           done
           echo "::warning::Production domain health could not be verified from GitHub-hosted runners; complete external release smoke against ${DEPLOY_PUBLIC_URL}/api/health."
+
+      - name: Probe production mDL readiness
+        if: github.event.workflow_run.head_branch == 'production'
+        env:
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
+        run: |
+          if [ -z "${INTERNAL_API_SECRET:-}" ]; then
+            echo "::error::INTERNAL_API_SECRET is not configured as a GitHub secret."
+            exit 1
+          fi
+
+          readiness_challenged=false
+          readiness_hard_failure=false
+          for attempt in {1..12}; do
+            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
+              -H "X-Internal-Secret: ${INTERNAL_API_SECRET}" \
+              "${DEPLOY_PUBLIC_URL}/api/internal/identity/mdl-readiness"); then
+              http_status=$(printf '%s\n' "${response}" | tail -n 1)
+              body=$(printf '%s\n' "${response}" | sed '$d')
+
+              if [ "${http_status}" = "200" ] && echo "${body}" | jq -e '.status == "ok"' >/dev/null 2>&1; then
+                echo "${body}" | jq '{status, blockers, warnings}'
+                exit 0
+              fi
+
+              if echo "${body}" | jq -e . >/dev/null 2>&1; then
+                echo "${body}" | jq '{status, blockers, warnings, checks: [.checks[]? | select(.status != "ok")]}'
+                readiness_hard_failure=true
+              else
+                if [ "${http_status}" = "403" ] && printf '%s' "${body}" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
+                  readiness_challenged=true
+                else
+                  readiness_hard_failure=true
+                fi
+                echo "Production mDL readiness attempt ${attempt} returned HTTP ${http_status} and a non-JSON body:"
+                printf '%s\n' "${body}" | head -c 4000
+                printf '\n'
+              fi
+            else
+              echo "Production mDL readiness attempt ${attempt} failed before an HTTP response."
+              readiness_hard_failure=true
+            fi
+
+            if [ "${attempt}" = "12" ]; then
+              if [ "${readiness_challenged}" = "true" ] && [ "${readiness_hard_failure}" = "false" ]; then
+                echo "::error::Production mDL readiness was blocked by a Cloudflare challenge from the GitHub runner."
+              fi
+              echo "::error::Production direct QR did not pass internal mDL readiness."
+              exit 1
+            fi
+
+            sleep 10
+          done

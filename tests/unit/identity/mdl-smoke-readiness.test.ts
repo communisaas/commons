@@ -14,6 +14,8 @@ describe('Android mDL live-smoke readiness', () => {
 		expect(verifier).toContain('const credentialHash =');
 		expect(verifier).toContain('/^[0-9a-f]{64}$/i.test(credentialHash)');
 		expect(verifier).toContain('data.identityCommitmentBound !== true');
+		expect(verifier).toContain('verification.requireReauth === true');
+		expect(verifier).toContain('data.requireReauth === true');
 		expect(verifier).toContain('credentialHash,');
 		expect(verifier).not.toContain("credentialHash: ''");
 		expect(verifier).not.toContain('credentialHash: data.credentialHash');
@@ -83,7 +85,7 @@ describe('Android mDL live-smoke readiness', () => {
 		);
 	});
 
-	it('keeps direct QR smoke enabled only for staging deploy builds', () => {
+	it('enables direct QR only for staging and production deploy builds', () => {
 		const deployWorkflow = read('.github/workflows/deploy.yml');
 		const features = read('src/lib/config/features.ts');
 		const directRoutes = [
@@ -100,11 +102,12 @@ describe('Android mDL live-smoke readiness', () => {
 			'VITE_MDL_DIRECT_QR_ORIGIN=https://staging.commons.email'
 		);
 		expect(deployWorkflow).toContain('VITE_ENVIRONMENT=production');
-		expect(deployWorkflow).toContain('VITE_MDL_DIRECT_QR=0');
+		expect(deployWorkflow).toContain('VITE_MDL_DIRECT_QR_ORIGIN=https://commons.email');
+		expect(deployWorkflow).toContain('VITE_ENVIRONMENT=development');
 		expect(features).toContain('VITE_MDL_DIRECT_QR');
 		expect(features).toContain('VITE_MDL_DIRECT_QR_ORIGIN');
-		expect(features).toContain('may only be enabled for staging smoke builds');
-		expect(features).toContain('must be the staging smoke origin');
+		expect(features).toContain('may only be enabled for staging or production builds');
+		expect(features).toContain('must match the deployment environment origin');
 		expect(features).not.toContain('MDL_DIRECT_QR: true');
 		for (const source of directRoutes) {
 			expect(source).toContain(

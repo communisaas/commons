@@ -17,25 +17,27 @@
 export type AddressSpecificity = 'off' | 'region' | 'district';
 
 const forceShadowAtlasOff = import.meta.env.VITE_FORCE_SHADOW_ATLAS_OFF === '1';
-const enableDirectQrSmoke = import.meta.env.VITE_MDL_DIRECT_QR === '1';
+const enableDirectQr = import.meta.env.VITE_MDL_DIRECT_QR === '1';
 const environmentLabel = import.meta.env.VITE_ENVIRONMENT;
-const directQrSmokeOrigin = import.meta.env.VITE_MDL_DIRECT_QR_ORIGIN?.trim() || '';
+const directQrConfiguredOrigin = import.meta.env.VITE_MDL_DIRECT_QR_ORIGIN?.trim() || '';
 const STAGING_DIRECT_QR_ORIGIN = 'https://staging.commons.email';
+const PRODUCTION_DIRECT_QR_ORIGIN = 'https://commons.email';
+const DIRECT_QR_ORIGINS_BY_ENV: Record<string, string> = {
+	staging: STAGING_DIRECT_QR_ORIGIN,
+	production: PRODUCTION_DIRECT_QR_ORIGIN
+};
+const expectedDirectQrOrigin = DIRECT_QR_ORIGINS_BY_ENV[environmentLabel ?? ''];
 
 if (import.meta.env.PROD && forceShadowAtlasOff && import.meta.env.VITE_ENVIRONMENT !== 'test') {
 	throw new Error('VITE_FORCE_SHADOW_ATLAS_OFF may only be used by test builds');
 }
 
-if (import.meta.env.PROD && enableDirectQrSmoke && environmentLabel !== 'staging') {
-	throw new Error('VITE_MDL_DIRECT_QR may only be enabled for staging smoke builds');
+if (import.meta.env.PROD && enableDirectQr && !expectedDirectQrOrigin) {
+	throw new Error('VITE_MDL_DIRECT_QR may only be enabled for staging or production builds');
 }
 
-if (
-	import.meta.env.PROD &&
-	enableDirectQrSmoke &&
-	directQrSmokeOrigin !== STAGING_DIRECT_QR_ORIGIN
-) {
-	throw new Error('VITE_MDL_DIRECT_QR_ORIGIN must be the staging smoke origin');
+if (import.meta.env.PROD && enableDirectQr && directQrConfiguredOrigin !== expectedDirectQrOrigin) {
+	throw new Error('VITE_MDL_DIRECT_QR_ORIGIN must match the deployment environment origin');
 }
 
 export const FEATURES = {
@@ -140,7 +142,7 @@ export const FEATURES = {
 	 * real-device smoke all pass. The `/verify-bridge` backend remains for
 	 * rollback/reference only; it is no longer offered in the user flow.
 	 */
-	MDL_DIRECT_QR: enableDirectQrSmoke,
+	MDL_DIRECT_QR: enableDirectQr,
 
 	/**
 	 * Legacy alias retained only for old string-search tests and migration
@@ -179,8 +181,8 @@ export const FEATURES = {
 
 export const OPENID4VP_DC_API_PROTOCOL = 'openid4vp-v1-unsigned';
 export const LEGACY_OPENID4VP_PROTOCOL = 'openid4vp';
-export const MDL_DIRECT_QR_ALLOWED_ORIGIN = enableDirectQrSmoke
-	? directQrSmokeOrigin || (import.meta.env.DEV ? undefined : STAGING_DIRECT_QR_ORIGIN)
+export const MDL_DIRECT_QR_ALLOWED_ORIGIN = enableDirectQr
+	? directQrConfiguredOrigin || (import.meta.env.DEV ? undefined : expectedDirectQrOrigin)
 	: undefined;
 
 export type MdlProtocol =

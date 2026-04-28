@@ -3,6 +3,7 @@ import {
 	normalizeOpenId4VpClientId,
 	normalizeOpenId4VpResponseUri
 } from '$lib/core/identity/oid4vp-direct-handover';
+import { extractEcPublicKeyFromDER, extractValidityPeriod } from '$lib/core/identity/cose-verify';
 import {
 	DIRECT_MDL_SESSION_TTL_SECONDS,
 	DIRECT_MDL_TRANSPORT,
@@ -35,6 +36,10 @@ export interface DirectMdlRequestObjectOptions {
 	allowLocalhostHttp?: boolean;
 	expectedRequestUri?: string;
 	expectedResponseUri?: string;
+	now?: number;
+}
+
+export interface DirectMdlSignerValidationOptions {
 	now?: number;
 }
 
@@ -77,8 +82,9 @@ type RequestUriValidationOptions = { allowLocalhostHttp?: boolean };
 
 const DEFAULT_SIGNING_ALG = 'ES256';
 const DEFAULT_REQUEST_OBJECT_AUDIENCE = 'https://self-issued.me/v2';
-const SUPPORTED_SIGNING_ALGS = new Set(['ES256', 'RS256']);
+const SUPPORTED_SIGNING_ALGS = new Set(['ES256']);
 const X509_SAN_DNS_CLIENT_ID_PREFIX = 'x509_san_dns:';
+const SUBJECT_ALT_NAME_OID = new Uint8Array([0x06, 0x03, 0x55, 0x1d, 0x11]);
 const importedKeys = new Map<string, Promise<CryptoKey>>();
 
 export function getDirectMdlRequestObjectSignerConfig(
@@ -96,6 +102,29 @@ export function getDirectMdlRequestObjectSignerConfig(
 	if (!audience) throw new Error('DIRECT_MDL_REQUEST_AUD_MISSING');
 
 	return { privateKeyPem, x5c, alg, kid, audience };
+}
+
+export async function validateDirectMdlRequestObjectSignerConfig(
+	config: DirectMdlRequestObjectSignerConfig,
+	expectedDnsName: string,
+	options: DirectMdlSignerValidationOptions = {}
+): Promise<void> {
+	const leafCertificate = config.x5c[0];
+	if (!leafCertificate) throw new Error('DIRECT_MDL_REQUEST_X5C_MISSING');
+
+	const leafDer = base64ToUint8Array(leafCertificate);
+	const expected = expectedDnsName.trim().toLowerCase();
+	if (!isDnsName(expected)) throw new Error('DIRECT_MDL_CLIENT_ID_INVALID_X509_SAN_DNS');
+	if (!certificateHasDnsSan(leafDer, expected)) {
+		throw new Error('DIRECT_MDL_REQUEST_X5C_SAN_MISMATCH');
+	}
+
+	const { notBefore, notAfter } = extractValidityPeriod(leafDer);
+	const now = new Date(options.now ?? Date.now());
+	if (now < notBefore) throw new Error('DIRECT_MDL_REQUEST_X5C_NOT_YET_VALID');
+	if (now > notAfter) throw new Error('DIRECT_MDL_REQUEST_X5C_EXPIRED');
+
+	await verifyEcPrivateKeyMatchesCertificate(config.privateKeyPem, leafDer);
 }
 
 export function buildDirectMdlAuthorizationRequestUrl(input: {
@@ -349,6 +378,14 @@ function normalizePem(raw: string | undefined): string {
 	return raw?.replace(/\\n/g, '\n').trim() ?? '';
 }
 
+function base64ToUint8Array(value: string): Uint8Array {
+	const normalized = value.replace(/\s+/g, '');
+	const binary = atob(normalized);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	return bytes;
+}
+
 async function importDirectMdlSigningKey(privateKeyPem: string, alg: string): Promise<CryptoKey> {
 	const cacheKey = `${alg}:${privateKeyPem}`;
 	let keyPromise = importedKeys.get(cacheKey);
@@ -357,6 +394,132 @@ async function importDirectMdlSigningKey(privateKeyPem: string, alg: string): Pr
 		importedKeys.set(cacheKey, keyPromise);
 	}
 	return keyPromise;
+}
+
+async function verifyEcPrivateKeyMatchesCertificate(
+	privateKeyPem: string,
+	certificateDer: Uint8Array
+): Promise<void> {
+	const { keyBytes, curve } = extractEcPublicKeyFromDER(certificateDer);
+	if (curve !== 'P-256') throw new Error('DIRECT_MDL_REQUEST_X5C_CURVE_UNSUPPORTED');
+
+	const publicKey = await crypto.subtle.importKey(
+		'jwk',
+		{
+			kty: 'EC',
+			crv: 'P-256',
+			x: base64UrlEncode(keyBytes.slice(1, 33)),
+			y: base64UrlEncode(keyBytes.slice(33, 65)),
+			ext: false
+		},
+		{ name: 'ECDSA', namedCurve: 'P-256' },
+		false,
+		['verify']
+	);
+	const privateKey = await importDirectMdlSigningKey(privateKeyPem, 'ES256');
+	const challenge = new TextEncoder().encode('commons-direct-mdl-request-object-signer-check');
+	const signature = await crypto.subtle.sign(
+		{ name: 'ECDSA', hash: 'SHA-256' },
+		privateKey,
+		challenge as BufferSource
+	);
+	const verified = await crypto.subtle.verify(
+		{ name: 'ECDSA', hash: 'SHA-256' },
+		publicKey,
+		signature,
+		challenge as BufferSource
+	);
+	if (!verified) throw new Error('DIRECT_MDL_REQUEST_X5C_KEY_MISMATCH');
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+	let binary = '';
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function certificateHasDnsSan(certificateDer: Uint8Array, expectedDnsName: string): boolean {
+	const expected = expectedDnsName.toLowerCase();
+	let searchOffset = 0;
+	while (searchOffset < certificateDer.length) {
+		const oidOffset = findLocalBytes(certificateDer, SUBJECT_ALT_NAME_OID, searchOffset);
+		if (oidOffset === -1) return false;
+		searchOffset = oidOffset + 1;
+
+		let pos = oidOffset + SUBJECT_ALT_NAME_OID.length;
+		if (certificateDer[pos] === 0x01) {
+			const criticalLength = parseLocalDerLength(certificateDer, pos + 1);
+			if (!criticalLength) continue;
+			pos = criticalLength.offset + criticalLength.length;
+		}
+		if (certificateDer[pos] !== 0x04) continue;
+		const extensionValue = parseLocalDerLength(certificateDer, pos + 1);
+		if (!extensionValue) continue;
+		const extensionEnd = extensionValue.offset + extensionValue.length;
+		if (extensionEnd > certificateDer.length) continue;
+		if (
+			subjectAltNameExtensionHasDnsName(
+				certificateDer.slice(extensionValue.offset, extensionEnd),
+				expected
+			)
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function subjectAltNameExtensionHasDnsName(
+	extensionDer: Uint8Array,
+	expectedDnsName: string
+): boolean {
+	if (extensionDer[0] !== 0x30) return false;
+	const sequence = parseLocalDerLength(extensionDer, 1);
+	if (!sequence) return false;
+	let pos = sequence.offset;
+	const end = sequence.offset + sequence.length;
+	if (end > extensionDer.length) return false;
+	while (pos < end) {
+		const tag = extensionDer[pos];
+		const length = parseLocalDerLength(extensionDer, pos + 1);
+		if (!length) return false;
+		const valueEnd = length.offset + length.length;
+		if (valueEnd > end) return false;
+		if (tag === 0x82) {
+			const value = new TextDecoder().decode(extensionDer.slice(length.offset, valueEnd));
+			if (/^[A-Za-z0-9.-]+$/.test(value) && value.toLowerCase() === expectedDnsName) {
+				return true;
+			}
+		}
+		pos = valueEnd;
+	}
+	return false;
+}
+
+function parseLocalDerLength(
+	data: Uint8Array,
+	offset: number
+): { length: number; offset: number } | null {
+	if (offset >= data.length) return null;
+	const first = data[offset];
+	if (first < 0x80) return { length: first, offset: offset + 1 };
+	const lengthBytes = first & 0x7f;
+	if (lengthBytes === 0 || lengthBytes > 4 || offset + lengthBytes >= data.length) return null;
+	let length = 0;
+	for (let i = 1; i <= lengthBytes; i++) {
+		length = (length << 8) | data[offset + i];
+	}
+	return { length, offset: offset + 1 + lengthBytes };
+}
+
+function findLocalBytes(haystack: Uint8Array, needle: Uint8Array, start = 0): number {
+	outer: for (let i = start; i <= haystack.length - needle.length; i++) {
+		for (let j = 0; j < needle.length; j++) {
+			if (haystack[i + j] !== needle[j]) continue outer;
+		}
+		return i;
+	}
+	return -1;
 }
 
 function isLocalHttpUrl(url: URL): boolean {

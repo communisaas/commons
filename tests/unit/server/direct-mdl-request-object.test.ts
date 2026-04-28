@@ -195,4 +195,16 @@ describe('direct mDL OpenID4VP request object', () => {
 		});
 		expect(config.privateKeyPem).toContain('BEGIN PRIVATE KEY');
 	});
+
+	it('rejects non-ES256 direct request object signers', () => {
+		const { privateKeyPem } = makeEcKeyPair();
+
+		expect(() =>
+			getDirectMdlRequestObjectSignerConfig({
+				MDL_DIRECT_QR_REQUEST_PRIVATE_KEY: privateKeyPem,
+				MDL_DIRECT_QR_REQUEST_X5C: 'MIIDfakecert==',
+				MDL_DIRECT_QR_REQUEST_ALG: 'RS256'
+			})
+		).toThrow('DIRECT_MDL_REQUEST_ALG_UNSUPPORTED');
+	});
 });

@@ -5,7 +5,9 @@ const {
 	mockPrivateEnv,
 	mockFeatures,
 	mockSignerConfig,
-	mockSignRequestObject
+	mockSignRequestObject,
+	mockValidateSignerConfig,
+	mockAllowedOrigin
 } = vi.hoisted(() => ({
 	mockDev: { value: false },
 	mockPrivateEnv: { INTERNAL_API_SECRET: 'test-secret' } as Record<string, string | undefined>,
@@ -17,7 +19,9 @@ const {
 		MDL_IOS: false
 	},
 	mockSignerConfig: vi.fn(),
-	mockSignRequestObject: vi.fn()
+	mockSignRequestObject: vi.fn(),
+	mockValidateSignerConfig: vi.fn(),
+	mockAllowedOrigin: { value: 'https://staging.commons.email' }
 }));
 
 vi.mock('$app/environment', () => ({
@@ -34,7 +38,9 @@ vi.mock('$env/dynamic/private', () => ({
 
 vi.mock('$lib/config/features', () => ({
 	FEATURES: mockFeatures,
-	MDL_DIRECT_QR_ALLOWED_ORIGIN: 'https://staging.commons.email',
+	get MDL_DIRECT_QR_ALLOWED_ORIGIN() {
+		return mockAllowedOrigin.value;
+	},
 	OPENID4VP_DC_API_PROTOCOL: 'openid4vp-v1-unsigned',
 	isMdlBridgeEnabled: () => mockFeatures.MDL_BRIDGE && mockFeatures.MDL_ANDROID_OID4VP,
 	isMdlDirectQrEnabled: () => mockFeatures.MDL_DIRECT_QR && mockFeatures.MDL_ANDROID_OID4VP
@@ -44,7 +50,9 @@ vi.mock('$lib/server/direct-mdl-request-object', () => ({
 	DIRECT_MDL_REQUEST_OBJECT_CONTENT_TYPE: 'application/oauth-authz-req+jwt',
 	DIRECT_MDL_REQUEST_URI_METHOD: 'post',
 	getDirectMdlRequestObjectSignerConfig: (...args: unknown[]) => mockSignerConfig(...args),
-	signDirectMdlRequestObject: (...args: unknown[]) => mockSignRequestObject(...args)
+	signDirectMdlRequestObject: (...args: unknown[]) => mockSignRequestObject(...args),
+	validateDirectMdlRequestObjectSignerConfig: (...args: unknown[]) =>
+		mockValidateSignerConfig(...args)
 }));
 
 import { GET } from '../../../src/routes/api/internal/identity/mdl-readiness/+server';
@@ -94,7 +102,9 @@ beforeEach(() => {
 	mockFeatures.MDL_DIRECT_QR = true;
 	mockFeatures.MDL_MDOC = false;
 	mockFeatures.MDL_IOS = false;
+	mockAllowedOrigin.value = 'https://staging.commons.email';
 	mockSignerConfig.mockReturnValue({ privateKeyPem: 'configured', x5c: ['configured'] });
+	mockValidateSignerConfig.mockResolvedValue(undefined);
 	mockSignRequestObject.mockResolvedValue('signed.jwt');
 });
 
@@ -127,7 +137,27 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 			requestObjectContentType: 'application/oauth-authz-req+jwt',
 			walletNonceRequired: true
 		});
+		expect(mockValidateSignerConfig).toHaveBeenCalledWith(
+			{ privateKeyPem: 'configured', x5c: ['configured'] },
+			'staging.commons.email',
+			expect.objectContaining({ now: expect.any(Number) })
+		);
 		expect(mockSignRequestObject).toHaveBeenCalledOnce();
+	});
+
+	it('returns ok when the production direct QR surface is fully configured', async () => {
+		mockAllowedOrigin.value = 'https://commons.email';
+		const response = await GET(makeEvent({ origin: 'https://commons.email' }));
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(body.status).toBe('ok');
+		expect(body.directRequest.allowedOrigin).toBe('https://commons.email');
+		expect(body.blockers).toEqual([]);
+		expect(mockValidateSignerConfig).toHaveBeenCalledWith(
+			{ privateKeyPem: 'configured', x5c: ['configured'] },
+			'commons.email',
+			expect.objectContaining({ now: expect.any(Number) })
+		);
 	});
 
 	it('blocks direct smoke when the direct QR build flag is off', async () => {
@@ -167,6 +197,21 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		expect(body.blockers).toEqual([]);
 	});
 
+	it('blocks production direct QR when the dedicated direct session KV is missing', async () => {
+		mockAllowedOrigin.value = 'https://commons.email';
+		const response = await GET(
+			makeEvent({
+				origin: 'https://commons.email',
+				platformEnv: {
+					DIRECT_MDL_SESSION_KV: undefined
+				}
+			})
+		);
+		expect(response.status).toBe(503);
+		const body = await response.json();
+		expect(body.blockers).toContain('direct_mdl_session_kv');
+	});
+
 	it('blocks when bridge encryption is missing on a deployed build', async () => {
 		delete process.env.BRIDGE_ENCRYPTION_KEY;
 		const response = await GET(makeEvent({ platformEnv: { BRIDGE_ENCRYPTION_KEY: undefined } }));
@@ -185,6 +230,22 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 				}
 			})
 		);
+		expect(response.status).toBe(503);
+		const body = await response.json();
+		expect(body.blockers).toContain('direct_request_signer');
+		expect(JSON.stringify(body)).not.toContain('sensitive-private-key-value');
+		expect(JSON.stringify(body)).not.toContain('sensitive-cert-chain-value');
+	});
+
+	it('blocks when the direct request signer certificate is not deployment-bound', async () => {
+		mockSignerConfig.mockReturnValueOnce({
+			privateKeyPem: 'sensitive-private-key-value',
+			x5c: ['sensitive-cert-chain-value']
+		});
+		mockValidateSignerConfig.mockRejectedValueOnce(
+			new Error('DIRECT_MDL_REQUEST_X5C_SAN_MISMATCH')
+		);
+		const response = await GET(makeEvent());
 		expect(response.status).toBe(503);
 		const body = await response.json();
 		expect(body.blockers).toContain('direct_request_signer');

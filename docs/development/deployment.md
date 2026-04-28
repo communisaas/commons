@@ -161,12 +161,13 @@ Also verify the direct QR feature flag, direct-session KV binding, bridge/sessio
 configuration, request object endpoint, direct-post endpoint, and test-account cleanup plan
 before scanning a real mDL.
 
-The direct QR UI is compiled into staging branch deploys only. The deploy workflow sets
-`VITE_MDL_DIRECT_QR=1` and `VITE_MDL_DIRECT_QR_ORIGIN=https://staging.commons.email`
-for `staging`, and keeps direct QR `0` for `production` and `main`. Runtime direct
-routes also reject a staging-enabled artifact unless `PUBLIC_APP_URL` matches that
-staging origin. Before scanning, run the internal readiness probe from an operator shell
-that has `INTERNAL_API_SECRET`:
+The direct QR UI is compiled into staging and production branch deploys only. The deploy
+workflow sets `VITE_MDL_DIRECT_QR=1` with
+`VITE_MDL_DIRECT_QR_ORIGIN=https://staging.commons.email` for `staging` and
+`VITE_MDL_DIRECT_QR_ORIGIN=https://commons.email` for `production`; `main` remains off.
+Runtime direct routes reject enabled artifacts unless `PUBLIC_APP_URL` and the request
+origin both match that branch's configured origin. Before scanning, run the internal
+readiness probe from an operator shell that has `INTERNAL_API_SECRET`:
 
 ```bash
 curl --fail-with-body -sS \
@@ -177,8 +178,13 @@ curl --fail-with-body -sS \
 The probe must return `status: "ok"`. Warnings for `BRIDGE_SESSION_KV` or
 `DIRECT_MDL_SESSION_KV` mean those lanes are using the shared `DC_SESSION_KV` fallback;
 that is acceptable only for controlled staging smoke with dedicated test accounts.
+Production direct QR must have a dedicated `DIRECT_MDL_SESSION_KV` binding and a
+`commons.email` ES256 request-object signer; the readiness probe blocks production without
+the dedicated direct-session KV. If Redis is not configured, production must explicitly set
+`RATE_LIMITER_ALLOW_MEMORY=1` for the smoke/release window, because identity routes fail
+closed when neither `REDIS_URL` nor that opt-in is present.
 
-Real-device staging smoke should cover:
+Real-device direct QR smoke should cover:
 
 1. Android Chrome same-device mDL/OpenID4VP wallet handoff.
 2. Desktop direct OpenID4VP QR scanned by Android Camera, with immediate OS/wallet

@@ -19,7 +19,8 @@ import {
 	DIRECT_MDL_REQUEST_OBJECT_CONTENT_TYPE,
 	DIRECT_MDL_REQUEST_URI_METHOD,
 	getDirectMdlRequestObjectSignerConfig,
-	signDirectMdlRequestObject
+	signDirectMdlRequestObject,
+	validateDirectMdlRequestObjectSignerConfig
 } from '$lib/server/direct-mdl-request-object';
 
 type CheckStatus = 'ok' | 'warning' | 'blocked';
@@ -62,13 +63,7 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 				? 'BRIDGE_SESSION_KV is bound'
 				: 'Bridge sessions will use DC_SESSION_KV fallback'
 		),
-		checkKvBinding(
-			'direct_mdl_session_kv',
-			Boolean(smokeEnv?.DIRECT_MDL_SESSION_KV ?? smokeEnv?.DC_SESSION_KV),
-			smokeEnv?.DIRECT_MDL_SESSION_KV
-				? 'DIRECT_MDL_SESSION_KV is bound'
-				: 'Direct sessions will use DC_SESSION_KV fallback'
-		),
+		checkDirectSessionKvBinding(smokeEnv, originCheck.origin),
 		checkBridgeEncryption(smokeEnv),
 		signerCheck
 	];
@@ -145,7 +140,7 @@ function checkAllowedDirectOrigin(origin: string | undefined): ReadinessCheck {
 	return {
 		id: 'direct_qr_allowed_origin',
 		status: 'ok',
-		message: 'Direct QR allowed origin matches the staging smoke origin'
+		message: 'Direct QR allowed origin matches the deployment origin'
 	};
 }
 
@@ -169,6 +164,38 @@ function checkKvBinding(id: string, ok: boolean, message: string): ReadinessChec
 		id,
 		status: message.includes('fallback') ? 'warning' : 'ok',
 		message
+	};
+}
+
+function checkDirectSessionKvBinding(
+	smokeEnv: SmokeEnv | undefined,
+	origin: string | undefined
+): ReadinessCheck {
+	if (smokeEnv?.DIRECT_MDL_SESSION_KV) {
+		return {
+			id: 'direct_mdl_session_kv',
+			status: 'ok',
+			message: 'DIRECT_MDL_SESSION_KV is bound'
+		};
+	}
+	if (origin === 'https://commons.email') {
+		return {
+			id: 'direct_mdl_session_kv',
+			status: 'blocked',
+			message: 'DIRECT_MDL_SESSION_KV is required for production direct QR'
+		};
+	}
+	if (smokeEnv?.DC_SESSION_KV) {
+		return {
+			id: 'direct_mdl_session_kv',
+			status: 'warning',
+			message: 'Direct sessions will use DC_SESSION_KV fallback'
+		};
+	}
+	return {
+		id: 'direct_mdl_session_kv',
+		status: 'blocked',
+		message: 'direct_mdl_session_kv is not bound'
 	};
 }
 
@@ -279,6 +306,8 @@ async function checkDirectRequestSigner(
 	try {
 		const config = getDirectMdlRequestObjectSignerConfig(smokeEnv);
 		const now = Date.now();
+		const hostname = new URL(origin).hostname;
+		await validateDirectMdlRequestObjectSignerConfig(config, hostname, { now });
 		const session: DirectMdlSession = {
 			id: '00000000-0000-4000-8000-000000000000',
 			desktopUserId: 'mdl-readiness',

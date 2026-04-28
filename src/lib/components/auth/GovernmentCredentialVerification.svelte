@@ -145,6 +145,12 @@
 			}
 
 			const verification = await verifyResponse.json();
+			if (verification.requireReauth === true) {
+				verificationState = 'error';
+				errorMessage = 'Sign in again to finish verification.';
+				onerror?.({ message: errorMessage });
+				return;
+			}
 
 			verificationResult = {
 				district: verification.district,
@@ -286,6 +292,11 @@
 						eventSource,
 						'Verification completed without identity binding. Try again.'
 					);
+					return;
+				}
+				if (data.requireReauth === true) {
+					failDirectStream(eventSource, 'Sign in again to finish verification.');
+					onerror?.({ message: 'Sign in again to finish verification.' });
 					return;
 				}
 

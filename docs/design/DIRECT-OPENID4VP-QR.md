@@ -193,11 +193,12 @@ desktop account context.
 Launch rule:
 
 - Direct QR may be implemented behind `MDL_DIRECT_QR`.
-- Direct QR may be smoked on staging only with test accounts.
+- Direct QR may run on staging and production only when the build origin is pinned to the
+  exact public origin and the runtime `PUBLIC_APP_URL` matches the request origin.
 - Direct QR cannot become the default desktop path unless real-device smoke confirms the
   wallet surface has acceptable verifier context and the desktop completion UI does not
   finalize silently when account-binding evidence is weak.
-- If the account context is insufficient, direct QR stays staging-only until an explicitly
+- If the account context is insufficient, direct QR must be disabled until an explicitly
   reviewed mitigation is accepted.
 
 ## Retained Bridge Label

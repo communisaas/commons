@@ -43,7 +43,8 @@ VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
 #   GROQ_API_KEY             - Llama Guard safety moderation
 #
 # Rate Limiting:
-#   REDIS_URL                - Redis connection URL for distributed rate limiting (optional)
+#   REDIS_URL                - Redis connection URL for distributed rate limiting
+#   RATE_LIMITER_ALLOW_MEMORY - Set to "1" only to explicitly allow per-isolate memory rate limiting
 #
 # Wallet — Fiat Onramp:
 #   PUBLIC_TRANSAK_API_KEY   - Transak API key for fiat onramp widget
