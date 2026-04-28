@@ -483,10 +483,9 @@ describe('findRateLimitConfig', () => {
 		expect(config!.keyStrategy).toBe('user');
 	});
 
-	it('should return undefined for exempt path: webhook', () => {
-		const config = findRateLimitConfig('/api/identity/didit/webhook');
-		expect(config).toBeUndefined();
-	});
+		it('should not exempt removed identity provider webhooks', () => {
+			expect(RATE_LIMIT_EXEMPT_PATHS).not.toContain('/api/identity/didit/webhook');
+		});
 
 	it('should return undefined for exempt path: health', () => {
 		const config = findRateLimitConfig('/api/health');
@@ -697,8 +696,8 @@ describe('ROUTE_RATE_LIMITS', () => {
 // =============================================================================
 
 describe('RATE_LIMIT_EXEMPT_PATHS', () => {
-	it('should exempt the webhook endpoint', () => {
-		expect(RATE_LIMIT_EXEMPT_PATHS).toContain('/api/identity/didit/webhook');
+	it('should not exempt removed identity provider webhooks', () => {
+		expect(RATE_LIMIT_EXEMPT_PATHS).not.toContain('/api/identity/didit/webhook');
 	});
 
 	it('should exempt health checks', () => {

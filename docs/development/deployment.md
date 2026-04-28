@@ -157,10 +157,9 @@ curl --fail-with-body -sS https://commons.email/api/health | jq -e '.status == "
 ```
 
 For browser-mediated OpenID4VP smoke, `/api/health` is only the outer availability check.
-The custom direct QR verifier is no longer compiled on for any deploy branch and is queued
-for deletion. Before scanning a real mDL, verify the browser-mediated request signer,
-session KV, and encrypted-response handling through the internal readiness probe from an
-operator shell that has `INTERNAL_API_SECRET`:
+Before scanning a real mDL, verify the browser-mediated request signer, session KV, and
+encrypted-response handling through the internal readiness probe from an operator shell
+that has `INTERNAL_API_SECRET`:
 
 ```bash
 curl --fail-with-body -sS \
@@ -182,7 +181,7 @@ Real-device browser-mediated credential smoke should cover:
 3. iOS/Safari remains explicitly off until the `org-iso-mdoc` lane completes.
 4. Address re-grounding from stale district data to the current district.
 5. Submission after re-grounding uses the new district commitment.
-6. No custom direct QR or live congressional delivery path is exercised.
+6. No live congressional delivery path is exercised.
 
 ### Rollback
 

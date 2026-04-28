@@ -9,11 +9,11 @@
 >   `digital-credentials-api` (mDL). Any "removed Cycle 15" framing
 >   means "removed from the active intake path," not "removed from
 >   the type system."
-> - **Desktop cross-device flow is changing.**
->   The legacy web bridge has been removed. The active rollout target is
->   browser-mediated Digital Credentials cross-device QR, with the temporary
->   direct OpenID4VP QR stack scheduled for deletion after that path passes
->   real-device smoke. See `docs/runbooks/DIGITAL-CREDENTIALS-ROLLOUT-GRAPH.md`.
+> - **Desktop cross-device flow is browser-mediated only.**
+>   The legacy web bridge and custom direct OpenID4VP QR stack have been removed.
+>   The active rollout target is browser-mediated Digital Credentials cross-device
+>   QR, with real-device smoke tracked in
+>   `docs/runbooks/DIGITAL-CREDENTIALS-ROLLOUT-GRAPH.md`.
 > - **Trust Tier 4 (passport) is unreachable.**
 >   `deriveAuthorityLevel` has no `document_type === 'passport'`
 >   branch; `TRUST_TIER_LABELS[4]` is a ghost. Reachable trust tiers

@@ -227,7 +227,7 @@ This document defines how Commons communicates. State what is. Show what exists.
 ✅ "See How It Works"
 
 ❌ "Sign Up"
-✅ "Create Account" or "Verify with Passport"
+✅ "Create Account" or "Verify with Digital ID"
 
 ### Navigation Labels
 

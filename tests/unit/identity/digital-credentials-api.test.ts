@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-	OPENID4VP_DC_API_PROTOCOL,
-	LEGACY_OPENID4VP_PROTOCOL
-} from '../../../src/lib/config/features';
+import { OPENID4VP_DC_API_PROTOCOL } from '../../../src/lib/config/features';
 import {
 	getSupportedProtocols,
 	shouldUseDigitalCredentialsFlow
@@ -32,7 +29,7 @@ describe('Digital Credentials browser capability gate', () => {
 
 	it('rejects legacy OpenID4VP-only browser experiments for the launch gate', () => {
 		vi.stubGlobal('DigitalCredential', {
-			userAgentAllowsProtocol: (protocol: string) => protocol === LEGACY_OPENID4VP_PROTOCOL
+			userAgentAllowsProtocol: (protocol: string) => protocol === 'openid4vp'
 		});
 
 		expect(getSupportedProtocols()).toEqual({ mdoc: false, openid4vp: false });

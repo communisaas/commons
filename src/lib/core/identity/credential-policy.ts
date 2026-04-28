@@ -358,7 +358,7 @@ export function formatValidationError(validation: CredentialValidation): {
  * - Tier 1: Authenticated (OAuth), 1 year TTL (session-based)
  * - Tier 2: Address attestation, 6 months (aligned with tree state TTL)
  * - Tier 3: Identity verification, 6 months (ID card / drivers license)
- * - Tier 4: Passport verification, 6 months (NFC passport)
+ * - Tier 4: Legacy passport provider tier, 6 months
  * - Tier 5: Government credential, 1 year (follows issuer TTL)
  *
  * Note: Action-based TTL applies ON TOP of tier TTL.

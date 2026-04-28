@@ -1,21 +1,13 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const read = (path: string) => readFileSync(path, 'utf8');
 
 describe('mDL live-smoke readiness', () => {
-	it('keeps credential hash and identity binding on active mDL paths', () => {
-		const directStream = read('src/routes/api/identity/direct-mdl/stream/[sessionId]/+server.ts');
-		const directComplete = read('src/routes/api/identity/direct-mdl/complete/+server.ts');
+	it('keeps credential hash and identity binding on the browser-mediated mDL path', () => {
 		const verifyRoute = read('src/routes/api/identity/verify-mdl/verify/+server.ts');
 		const verifier = read('src/lib/components/auth/GovernmentCredentialVerification.svelte');
 
-		expect(directComplete).toContain('identityCommitment: result.identityCommitment');
-		expect(directComplete).toContain('credentialHash: result.credentialHash');
-		expect(directComplete).toContain("sessionChannel: 'direct'");
-		expect(directComplete).toContain('identityCommitmentBound: true');
-		expect(directStream).toContain('credentialHash: session.result?.credentialHash');
-		expect(directStream).toContain('identityCommitmentBound: session.result?.identityCommitmentBound');
 		expect(verifyRoute).toContain('identityCommitment,');
 		expect(verifyRoute).toContain('credentialHash: result.credentialHash');
 		expect(verifyRoute).toContain("sessionChannel: 'digital-credentials'");
@@ -49,10 +41,9 @@ describe('mDL live-smoke readiness', () => {
 		expect(privacyBoundary).not.toContain('only postal_code, city, state requested');
 	});
 
-	it('keeps wallet request fields aligned across OpenID4VP protocols', () => {
+	it('keeps wallet request fields aligned on the signed browser-mediated protocol', () => {
 		const dcApiStart = read('src/routes/api/identity/verify-mdl/start/+server.ts');
 		const dcApiRequestObject = read('src/lib/server/dc-api-openid4vp-request.ts');
-		const directRequestObject = read('src/lib/server/direct-mdl-request-object.ts');
 		const protocolFields = [
 			'resident_postal_code',
 			'resident_city',
@@ -69,7 +60,7 @@ describe('mDL live-smoke readiness', () => {
 
 		expect(dcApiRequestObject).toContain("response_type: 'vp_token'");
 		expect(dcApiRequestObject).toContain('response_mode: DC_API_OPENID4VP_RESPONSE_MODE');
-		expect(dcApiRequestObject).toContain('DC_API_OPENID4VP_RESPONSE_MODE = \'dc_api.jwt\'');
+		expect(dcApiRequestObject).toContain("DC_API_OPENID4VP_RESPONSE_MODE = 'dc_api.jwt'");
 		expect(dcApiRequestObject).toContain('expected_origins: [input.origin]');
 		expect(dcApiRequestObject).toContain('client_metadata');
 		expect(dcApiRequestObject).toContain('jwks: { keys: [encryptionJwk] }');
@@ -84,47 +75,49 @@ describe('mDL live-smoke readiness', () => {
 		expect(dcApiRequestObject.match(/intent_to_retain: false(?!;)/g)?.length).toBe(
 			protocolFields.length
 		);
-
-		expect(directRequestObject).toContain("response_type: 'vp_token'");
-		expect(directRequestObject).toContain('response_mode: DIRECT_MDL_TRANSPORT');
-		expect(directRequestObject).toContain("id: 'mdl'");
-		expect(directRequestObject).toContain("meta: { doctype_value: 'org.iso.18013.5.1.mDL' }");
-		for (const field of protocolFields) {
-			expect(directRequestObject).toContain(field);
-			expect(directRequestObject).toContain(`path: ['org.iso.18013.5.1', '${field}']`);
-		}
-		expect(directRequestObject.match(/intent_to_retain: false(?!;)/g)?.length).toBe(
-			protocolFields.length
-		);
 	});
 
-	it('keeps direct QR disabled for every deploy build while deletion is queued', () => {
+	it('has no direct QR route, helper, deploy flag, env sample, or readiness surface', () => {
 		const deployWorkflow = read('.github/workflows/deploy.yml');
 		const features = read('src/lib/config/features.ts');
-		const directRoutes = [
-			read('src/routes/api/identity/direct-mdl/start/+server.ts'),
-			read('src/routes/api/identity/direct-mdl/request/[sessionId]/+server.ts'),
-			read('src/routes/api/identity/direct-mdl/complete/+server.ts'),
-			read('src/routes/api/identity/direct-mdl/stream/[sessionId]/+server.ts'),
-			read('src/routes/api/identity/direct-mdl/cancel/+server.ts')
+			const readiness = read('src/routes/api/internal/identity/mdl-readiness/+server.ts');
+			const envExample = read('.env.example');
+			const wrangler = read('wrangler.toml');
+			const identityPatternDoc = read('docs/design/patterns/identity-verification.md');
+			const removedPaths = [
+			'src/routes/api/identity/direct-mdl/start/+server.ts',
+			'src/routes/api/identity/direct-mdl/request/[sessionId]/+server.ts',
+			'src/routes/api/identity/direct-mdl/complete/+server.ts',
+			'src/routes/api/identity/direct-mdl/stream/[sessionId]/+server.ts',
+			'src/routes/api/identity/direct-mdl/cancel/+server.ts',
+			'src/lib/server/direct-mdl-session.ts',
+			'src/lib/server/direct-mdl-request-object.ts',
+			'src/lib/core/identity/oid4vp-direct-handover.ts',
+			'docs/design/DIRECT-OPENID4VP-QR.md'
 		];
+			const surfaces = [
+				deployWorkflow,
+				features,
+				readiness,
+				envExample,
+				wrangler,
+				identityPatternDoc
+			].join('\n');
 
 		expect(deployWorkflow).toContain('VITE_ENVIRONMENT=staging');
 		expect(deployWorkflow).toContain('VITE_ENVIRONMENT=production');
 		expect(deployWorkflow).toContain('VITE_ENVIRONMENT=development');
-		expect(deployWorkflow).not.toContain('VITE_MDL_DIRECT_QR=1');
-		expect(deployWorkflow).not.toContain('VITE_MDL_DIRECT_QR_ORIGIN=https://');
-		expect(features).toContain('VITE_MDL_DIRECT_QR');
-		expect(features).toContain('VITE_MDL_DIRECT_QR_ORIGIN');
-		expect(features).toContain('may only be enabled for staging or production builds');
-		expect(features).toContain('must match the deployment environment origin');
-		expect(features).not.toContain('MDL_DIRECT_QR: true');
-		for (const source of directRoutes) {
-			expect(source).toContain(
-				'requireMdlDirectQrEnabled(platform?.env?.PUBLIC_APP_URL, url.origin)'
-			);
+		for (const path of removedPaths) {
+			expect(existsSync(path)).toBe(false);
 		}
-	});
+		expect(surfaces).not.toContain('VITE_MDL_DIRECT_QR');
+		expect(surfaces).not.toContain('DIRECT_MDL_SESSION_KV');
+			expect(surfaces).not.toContain('MDL_DIRECT_QR');
+			expect(surfaces).not.toContain('/api/identity/direct-mdl');
+			expect(surfaces).not.toContain('direct-mdl');
+			expect(surfaces).not.toContain('scheduled for deletion after');
+			expect(surfaces).not.toContain('temporary direct OpenID4VP QR stack');
+		});
 
 	it('fails browser-mediated mDL start closed when production session KV is missing', () => {
 		const dcApiStart = read('src/routes/api/identity/verify-mdl/start/+server.ts');

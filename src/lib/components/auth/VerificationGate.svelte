@@ -6,9 +6,9 @@
  *   - Tier 0 (guest):            Not handled here (requires authentication first)
  *   - Tier 1 (authenticated):    Passthrough (minimum for non-congressional actions)
  *   - Tier 2 (address-attested): AddressVerificationFlow (district credential)
- *   - Tier 3 (identity-verified): IdentityVerificationFlow (ID card / license)
- *   - Tier 4 (passport-verified): IdentityVerificationFlow (passport path)
- *   - Tier 5 (government-cred):  IdentityVerificationFlow (with mDL option)
+ *   - Tier 3 (identity-verified): IdentityVerificationFlow
+ *   - Tier 4 (legacy passport tier): Recovery path only; no active intake provider
+ *   - Tier 5 (government-cred):  IdentityVerificationFlow (mDL)
  *
  * Flow:
  * 1. User clicks "Send Message" on Congressional template
@@ -286,15 +286,15 @@
 			{:else if needsTier4Plus}
 				<div
 					class="border-b border-emerald-200 bg-gradient-to-r from-emerald-50 to-emerald-100 px-8 py-6"
-				>
-					<h2 id="verification-gate-title" class="text-2xl font-bold text-slate-900">
-						Verify with Passport or Government Credential
-					</h2>
-					<p class="mt-2 text-slate-600">
-						This action requires document-level verification. Use your passport, digital driver's
-						license, or government credential for the fastest, most private verification available.
-					</p>
-				</div>
+					>
+						<h2 id="verification-gate-title" class="text-2xl font-bold text-slate-900">
+							Verify with Government Credential
+						</h2>
+						<p class="mt-2 text-slate-600">
+							This action requires document-level verification. Use your mobile driver's license
+							in a supported wallet for the fastest, most private verification available.
+						</p>
+					</div>
 			{:else if needsTier2}
 				<div
 					class="border-b border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 px-8 py-6"
@@ -330,11 +330,11 @@
 					-->
 					<section class="mx-auto max-w-xl py-2" data-testid="mdl-gated-panel">
 						<div class="border-t border-b border-dotted border-slate-300 py-5">
-							<p class="text-[14px] leading-relaxed text-slate-700">
-								Government-ID verification (mobile driver's license, passport, or eID) uses
-								browser-mediated Digital Credentials protocols. Commons opens this panel only when
-								the deployed verifier has at least one protocol lane enabled.
-							</p>
+								<p class="text-[14px] leading-relaxed text-slate-700">
+									Government-ID verification uses browser-mediated Digital Credentials protocols for
+									mobile driver's licenses. Commons opens this panel only when the deployed verifier
+									has at least one protocol lane enabled.
+								</p>
 							<p class="mt-3 text-[14px] leading-relaxed text-slate-700">
 								Address-attested verification (Tier&nbsp;2) remains available while additional
 								wallet and browser protocols are brought online.

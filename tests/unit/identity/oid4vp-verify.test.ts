@@ -1,8 +1,8 @@
 /**
  * Tests for OpenID4VP response processing in mdl-verification.ts
  *
- * Tests the VP token parsing (JWT, SD-JWT, direct claims) and
- * address field extraction logic without hitting external APIs.
+ * Tests encrypted DC API mso_mdoc VP token parsing and address field
+ * extraction logic without hitting external APIs.
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
@@ -23,7 +23,6 @@ vi.mock('$lib/core/shadow-atlas/client', () => ({
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 import { IACA_ROOTS } from '$lib/core/identity/iaca-roots';
 import { buildOpenId4VpDcApiSessionTranscript } from '$lib/core/identity/oid4vp-dc-api-handover';
-import { buildOpenId4VpDirectSessionTranscript } from '$lib/core/identity/oid4vp-direct-handover';
 
 beforeAll(() => {
 	// Identity commitment computation requires IDENTITY_COMMITMENT_SALT
@@ -32,6 +31,7 @@ beforeAll(() => {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mockResolveAddress.mockReset();
 });
 
 // Helper: encode a string as base64url (no padding)
@@ -105,6 +105,36 @@ async function encryptDcApiJwt(payload: unknown, publicJwk: JsonWebKey): Promise
 	return new CompactEncrypt(payloadBytes)
 		.setProtectedHeader({ alg: 'ECDH-ES', enc: 'A256GCM', kid: '1' })
 		.encrypt(encryptionKey);
+}
+
+async function processSignedDcApiPayload(
+	payload: unknown,
+	nonce: string,
+	options: { verifierOrigin?: string; dcApiJwkThumbprint?: Uint8Array | ArrayBuffer | null } = {}
+) {
+	const encryptedResponse = await encryptDcApiJwt(payload, ephemeralPublicJwk);
+	return processCredentialResponse(
+		JSON.stringify({ response: encryptedResponse }),
+		'openid4vp-v1-signed',
+		ephemeralKey,
+		nonce,
+		{
+			verifierOrigin: options.verifierOrigin,
+			dcApiJwkThumbprint: options.dcApiJwkThumbprint ?? ephemeralJwkThumbprint
+		}
+	);
+}
+
+async function processSignedMsoMdocResponse(
+	deviceResponse: string,
+	nonce: string,
+	origin?: string
+) {
+	return processSignedDcApiPayload(
+		{ vp_token: { mdl: [deviceResponse] } },
+		nonce,
+		{ verifierOrigin: origin }
+	);
 }
 
 function uint8ArrayToBase64(bytes: Uint8Array): string {
@@ -304,36 +334,22 @@ async function buildDeviceSignature(
 
 async function buildDeviceAuthenticationBytes({
 	origin,
-	clientId,
 	nonce,
-	responseUri,
-	transport = 'dc_api',
-	jwkThumbprint = null,
+	jwkThumbprint = ephemeralJwkThumbprint,
 	docType,
 	deviceNameSpacesBytes
 }: {
 	origin?: string;
-	clientId?: string;
 	nonce: string;
-	responseUri?: string;
-	transport?: 'dc_api' | 'direct_post';
-	jwkThumbprint?: Uint8Array | ArrayBuffer | null;
+	jwkThumbprint?: Uint8Array | ArrayBuffer;
 	docType: string;
 	deviceNameSpacesBytes: Uint8Array;
 }): Promise<Uint8Array> {
-	const { sessionTranscript } =
-		transport === 'direct_post'
-			? await buildOpenId4VpDirectSessionTranscript({
-					clientId: clientId ?? '',
-					nonce,
-					responseUri: responseUri ?? '',
-					jwkThumbprint: null
-				})
-			: await buildOpenId4VpDcApiSessionTranscript({
-					origin: origin ?? '',
-					nonce,
-					jwkThumbprint
-				});
+	const { sessionTranscript } = await buildOpenId4VpDcApiSessionTranscript({
+		origin: origin ?? '',
+		nonce,
+		jwkThumbprint
+	});
 	const deviceAuthentication = [
 		'DeviceAuthentication',
 		sessionTranscript,
@@ -353,9 +369,6 @@ async function buildOpenId4VpMsoMdocResponse(
 		nonce: string;
 		signingOrigin?: string;
 		signingNonce?: string;
-		signingTransport?: 'dc_api' | 'direct_post';
-		signingClientId?: string;
-		signingResponseUri?: string;
 		signingJwkThumbprint?: Uint8Array | ArrayBuffer | null;
 		msoDocType?: string;
 		msoValidFrom?: string;
@@ -412,11 +425,8 @@ async function buildOpenId4VpMsoMdocResponse(
 	const deviceNameSpacesBytes = new Uint8Array(encode(new Map()));
 	const deviceAuthenticationBytes = await buildDeviceAuthenticationBytes({
 		origin: options.signingOrigin ?? options.origin,
-		clientId: options.signingClientId,
 		nonce: options.signingNonce ?? options.nonce,
-		responseUri: options.signingResponseUri,
-		transport: options.signingTransport ?? 'dc_api',
-		jwkThumbprint: options.signingJwkThumbprint ?? null,
+		jwkThumbprint: options.signingJwkThumbprint ?? ephemeralJwkThumbprint,
 		docType: MDL_DOCTYPE,
 		deviceNameSpacesBytes
 	});
@@ -518,19 +528,6 @@ function encodeCborHeadForMdocTest(majorType: number, length: number): Uint8Arra
 	]);
 }
 
-// Helper: build an SD-JWT disclosure and its signed digest commitment
-async function buildDisclosure(
-	salt: string,
-	name: string,
-	value: string
-): Promise<{ disclosure: string; digest: string }> {
-	const disclosure = base64urlEncode(JSON.stringify([salt, name, value]));
-	const digest = base64urlEncodeBytes(
-		new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(disclosure)))
-	);
-	return { disclosure, digest };
-}
-
 /** Mock a successful Shadow Atlas resolveAddress() returning a district + cell_id */
 function mockShadowAtlasSuccess(state: string, cd: string) {
 	const districtCode = `${state.toUpperCase()}-${cd.padStart(2, '0')}`;
@@ -592,46 +589,18 @@ describe('OpenID4VP response processing', () => {
 			birth_date: '1990-01-15'
 		});
 
-		const result = await processCredentialResponse(
+		const result = await processSignedDcApiPayload(
 			{ vp_token: jwt },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce
+			nonce,
+			{ verifierOrigin: 'https://verifier.example' }
 		);
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
 			expect(result.error).toBe('invalid_format');
-			expect(result.message).toContain('mso_mdoc DeviceResponse');
+			expect(result.message).toContain('vp_token strings are not accepted');
 		}
 		expect(mockResolveAddress).not.toHaveBeenCalled();
-	});
-
-	it('should extract claims from a JSON-stringified vp_token response', async () => {
-		const nonce = 'test-nonce-json-string';
-		const jwt = await buildJwt({
-			nonce,
-			resident_postal_code: '30303',
-			resident_city: 'Atlanta',
-			resident_state: 'GA',
-			document_number: 'D2222222',
-			birth_date: '1987-04-02'
-		});
-
-		mockShadowAtlasSuccess('ga', '05');
-
-		const result = await processCredentialResponse(
-			JSON.stringify({ vp_token: jwt }),
-			'openid4vp',
-			ephemeralKey,
-			nonce
-		);
-
-		expect(result.success).toBe(true);
-		if (result.success) {
-			expect(result.district).toBe('GA-05');
-			expect(result.state).toBe('GA');
-		}
 	});
 
 	it('should reject a versioned DigitalCredential data envelope containing a JWT vp_token', async () => {
@@ -647,10 +616,10 @@ describe('OpenID4VP response processing', () => {
 
 		const result = await processCredentialResponse(
 			JSON.stringify({
-				protocol: 'openid4vp-v1-unsigned',
+				protocol: 'openid4vp-v1-signed',
 				data: { vp_token: jwt }
 			}),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			nonce
 		);
@@ -658,7 +627,7 @@ describe('OpenID4VP response processing', () => {
 		expect(result.success).toBe(false);
 		if (!result.success) {
 			expect(result.error).toBe('invalid_format');
-			expect(result.message).toContain('mso_mdoc DeviceResponse');
+			expect(result.message).toContain('vp_token strings are not accepted');
 		}
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
@@ -675,7 +644,7 @@ describe('OpenID4VP response processing', () => {
 
 		const result = await processCredentialResponse(
 			JSON.stringify({ data: { vp_token: jwt } }),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			nonce
 		);
@@ -750,7 +719,7 @@ describe('OpenID4VP response processing', () => {
 	it('should reject encrypted response envelopes with a mismatched top-level protocol', async () => {
 		const result = await processCredentialResponse(
 			JSON.stringify({
-				protocol: 'openid4vp-v1-unsigned',
+				protocol: 'org-iso-mdoc',
 				response: 'jwe-header.encrypted-key.iv.ciphertext.tag'
 			}),
 			'openid4vp-v1-signed',
@@ -778,11 +747,11 @@ describe('OpenID4VP response processing', () => {
 
 		const result = await processCredentialResponse(
 			JSON.stringify({
-				protocol: 'openid4vp-v1-unsigned',
+				protocol: 'openid4vp-v1-signed',
 				vp_token: 'jwe-header.encrypted-key.iv.ciphertext.tag',
 				data: { vp_token: jwt }
 			}),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			nonce
 		);
@@ -825,19 +794,19 @@ describe('OpenID4VP response processing', () => {
 
 		const result = await processCredentialResponse(
 			JSON.stringify({
-				protocol: 'openid4vp-v1-unsigned',
+				protocol: 'openid4vp-v1-signed',
 				data: {
-					protocol: 'openid4vp-v1-unsigned',
+					protocol: 'openid4vp-v1-signed',
 					data: {
-						protocol: 'openid4vp-v1-unsigned',
+						protocol: 'openid4vp-v1-signed',
 						data: {
-							protocol: 'openid4vp-v1-unsigned',
+							protocol: 'openid4vp-v1-signed',
 							data: { vp_token: jwt }
 						}
 					}
 				}
 			}),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			nonce
 		);
@@ -860,7 +829,24 @@ describe('OpenID4VP response processing', () => {
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
-			expect(result.error).toBe('decryption_failed');
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('vp_token strings are not accepted');
+		}
+		expect(mockResolveAddress).not.toHaveBeenCalled();
+	});
+
+	it('should fail closed on raw compact JWE strings outside the dc_api envelope', async () => {
+		const result = await processCredentialResponse(
+			'jwe-header.encrypted-key.iv.ciphertext.tag',
+			'openid4vp-v1-signed',
+			ephemeralKey,
+			'test-nonce-raw-jwe'
+		);
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('dc_api response envelope');
 		}
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
@@ -875,7 +861,8 @@ describe('OpenID4VP response processing', () => {
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
-			expect(result.error).toBe('decryption_failed');
+			expect(result.error).toBe('invalid_format');
+			expect(result.message).toContain('identityToken envelopes are not accepted');
 		}
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
@@ -957,14 +944,8 @@ describe('OpenID4VP response processing', () => {
 	});
 
 	it('should fail closed on mso_mdoc VP token arrays without the stored DC API origin', async () => {
-		const result = await processCredentialResponse(
-			JSON.stringify({
-				vp_token: {
-					mdl: ['o2dkb2NzdoJvcmcuaXNvLjE4MDEzLjUuMS5tREw']
-				}
-			}),
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
+		const result = await processSignedDcApiPayload(
+			{ vp_token: { mdl: ['o2dkb2NzdoJvcmcuaXNvLjE4MDEzLjUuMS5tREw'] } },
 			'test-nonce-mso-mdoc'
 		);
 
@@ -978,15 +959,10 @@ describe('OpenID4VP response processing', () => {
 	});
 
 	it('should reject mdoc-shaped VP token arrays under unexpected credential ids', async () => {
-		const result = await processCredentialResponse(
-			JSON.stringify({
-				vp_token: {
-					cred1: ['o2dkb2NzdoJvcmcuaXNvLjE4MDEzLjUuMS5tREw']
-				}
-			}),
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			'test-nonce-unexpected-credential-id'
+		const result = await processSignedDcApiPayload(
+			{ vp_token: { cred1: ['o2dkb2NzdoJvcmcuaXNvLjE4MDEzLjUuMS5tREw'] } },
+			'test-nonce-unexpected-credential-id',
+			{ verifierOrigin: 'https://verifier.example' }
 		);
 
 		expect(result.success).toBe(false);
@@ -999,17 +975,15 @@ describe('OpenID4VP response processing', () => {
 	});
 
 	it('should fail closed on nested mso_mdoc VP token arrays without the stored DC API origin', async () => {
-		const result = await processCredentialResponse(
-			JSON.stringify({
-				protocol: 'openid4vp-v1-unsigned',
+		const result = await processSignedDcApiPayload(
+			{
+				protocol: 'openid4vp-v1-signed',
 				data: {
 					vp_token: {
 						mdl: ['o2dkb2NzdoJvcmcuaXNvLjE4MDEzLjUuMS5tREw']
 					}
 				}
-			}),
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
+			},
 			'test-nonce-nested-mso-mdoc'
 		);
 
@@ -1028,13 +1002,7 @@ describe('OpenID4VP response processing', () => {
 			new Uint8Array(encode({ documents: [{}, {}] }))
 		);
 
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ verifierOrigin: origin }
-		);
+		const result = await processSignedMsoMdocResponse(deviceResponse, nonce, origin);
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -1060,13 +1028,7 @@ describe('OpenID4VP response processing', () => {
 
 		mockShadowAtlasSuccess('ca', '12');
 
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ verifierOrigin: origin }
-		);
+		const result = await processSignedMsoMdocResponse(deviceResponse, nonce, origin);
 
 		expect(result.success).toBe(true);
 		if (result.success) {
@@ -1150,150 +1112,6 @@ describe('OpenID4VP response processing', () => {
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
-	it('should verify mso_mdoc DeviceResponse through direct OpenID4VP handover', async () => {
-		const nonce = 'test-nonce-mso-mdoc-direct-success';
-		const origin = 'https://verifier.example';
-		const clientId = 'redirect_uri:https://verifier.example/api/identity/direct-mdl/complete';
-		const responseUri = 'https://verifier.example/api/identity/direct-mdl/complete';
-		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
-			{
-				resident_postal_code: '94110',
-				resident_city: 'San Francisco',
-				resident_state: 'CA',
-				document_number: 'D1234001',
-				birth_date: '1990-05-17'
-			},
-			{
-				origin,
-				nonce,
-				signingTransport: 'direct_post',
-				signingClientId: clientId,
-				signingResponseUri: responseUri
-			}
-		);
-
-		mockShadowAtlasSuccess('ca', '12');
-
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ directPost: { clientId, responseUri } }
-		);
-
-		expect(result.success).toBe(true);
-		if (result.success) {
-			expect(result.district).toBe('CA-12');
-			expect(result.state).toBe('CA');
-			expect(result.verificationMethod).toBe('mdl');
-			expect(result.credentialHash).toMatch(/^[0-9a-f]{64}$/);
-			expect(result.identityCommitment).toMatch(/^[0-9a-f]{64}$/);
-		}
-	});
-
-	it('should reject DC API DeviceAuth when verified as direct OpenID4VP handover', async () => {
-		const nonce = 'test-nonce-mso-mdoc-dc-as-direct';
-		const origin = 'https://verifier.example';
-		const clientId = 'redirect_uri:https://verifier.example/api/identity/direct-mdl/complete';
-		const responseUri = 'https://verifier.example/api/identity/direct-mdl/complete';
-		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
-			{
-				resident_postal_code: '94110',
-				resident_city: 'San Francisco',
-				resident_state: 'CA',
-				document_number: 'D1234002',
-				birth_date: '1990-05-17'
-			},
-			{ origin, nonce }
-		);
-
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ directPost: { clientId, responseUri } }
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('signature_invalid');
-			expect(result.message).toContain('DeviceAuth.deviceSignature');
-		}
-		expect(mockResolveAddress).not.toHaveBeenCalled();
-	});
-
-	it('should reject direct OpenID4VP DeviceAuth when verified as DC API handover', async () => {
-		const nonce = 'test-nonce-mso-mdoc-direct-as-dc';
-		const origin = 'https://verifier.example';
-		const clientId = 'redirect_uri:https://verifier.example/api/identity/direct-mdl/complete';
-		const responseUri = 'https://verifier.example/api/identity/direct-mdl/complete';
-		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
-			{
-				resident_postal_code: '94110',
-				resident_city: 'San Francisco',
-				resident_state: 'CA',
-				document_number: 'D1234003',
-				birth_date: '1990-05-17'
-			},
-			{
-				origin,
-				nonce,
-				signingTransport: 'direct_post',
-				signingClientId: clientId,
-				signingResponseUri: responseUri
-			}
-		);
-
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ verifierOrigin: origin }
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('signature_invalid');
-			expect(result.message).toContain('DeviceAuth.deviceSignature');
-		}
-		expect(mockResolveAddress).not.toHaveBeenCalled();
-	});
-
-	it('should reject ambiguous DC API and direct OpenID4VP handover context', async () => {
-		const nonce = 'test-nonce-mso-mdoc-ambiguous-handover';
-		const origin = 'https://verifier.example';
-		const clientId = 'redirect_uri:https://verifier.example/api/identity/direct-mdl/complete';
-		const responseUri = 'https://verifier.example/api/identity/direct-mdl/complete';
-		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
-			{
-				resident_postal_code: '94110',
-				resident_city: 'San Francisco',
-				resident_state: 'CA',
-				document_number: 'D1234004',
-				birth_date: '1990-05-17'
-			},
-			{ origin, nonce }
-		);
-
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ verifierOrigin: origin, directPost: { clientId, responseUri } }
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('invalid_format');
-			expect(result.message).toContain('ambiguous');
-		}
-		expect(mockResolveAddress).not.toHaveBeenCalled();
-	});
-
 	it('should reject replayed mso_mdoc DeviceAuth signed for a different nonce', async () => {
 		const nonce = 'test-nonce-mso-mdoc-replay';
 		const origin = 'https://verifier.example';
@@ -1308,13 +1126,7 @@ describe('OpenID4VP response processing', () => {
 			{ origin, nonce, signingNonce: `${nonce}-captured` }
 		);
 
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ verifierOrigin: origin }
-		);
+		const result = await processSignedMsoMdocResponse(deviceResponse, nonce, origin);
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -1345,13 +1157,7 @@ describe('OpenID4VP response processing', () => {
 			}
 		);
 
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ verifierOrigin: origin }
-		);
+		const result = await processSignedMsoMdocResponse(deviceResponse, nonce, origin);
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -1381,13 +1187,7 @@ describe('OpenID4VP response processing', () => {
 			}
 		);
 
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ verifierOrigin: origin }
-		);
+		const result = await processSignedMsoMdocResponse(deviceResponse, nonce, origin);
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -1411,13 +1211,7 @@ describe('OpenID4VP response processing', () => {
 			{ origin, nonce, msoValidUntil: '2026-01-01T00:00:00Z' }
 		);
 
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ verifierOrigin: origin }
-		);
+		const result = await processSignedMsoMdocResponse(deviceResponse, nonce, origin);
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -1441,13 +1235,7 @@ describe('OpenID4VP response processing', () => {
 			{ origin, nonce, msoDocType: 'org.example.not-mdl' }
 		);
 
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ verifierOrigin: origin }
-		);
+		const result = await processSignedMsoMdocResponse(deviceResponse, nonce, origin);
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -1471,13 +1259,7 @@ describe('OpenID4VP response processing', () => {
 			{ origin, nonce, useDeviceMac: true }
 		);
 
-		const result = await processCredentialResponse(
-			{ vp_token: { mdl: [deviceResponse] } },
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			nonce,
-			{ verifierOrigin: origin }
-		);
+		const result = await processSignedMsoMdocResponse(deviceResponse, nonce, origin);
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -1502,7 +1284,7 @@ describe('OpenID4VP response processing', () => {
 				protocol: 'org-iso-mdoc',
 				data: { vp_token: jwt }
 			}),
-			'openid4vp-v1-unsigned',
+			'openid4vp-v1-signed',
 			ephemeralKey,
 			nonce
 		);
@@ -1516,11 +1298,10 @@ describe('OpenID4VP response processing', () => {
 	});
 
 	it('should reject non-mdoc VP token objects without DeviceAuth messaging', async () => {
-		const result = await processCredentialResponse(
-			JSON.stringify({ vp_token: { mdl: [42] } }),
-			'openid4vp-v1-unsigned',
-			ephemeralKey,
-			'test-nonce-non-mdoc-object'
+		const result = await processSignedDcApiPayload(
+			{ vp_token: { mdl: [42] } },
+			'test-nonce-non-mdoc-object',
+			{ verifierOrigin: 'https://verifier.example' }
 		);
 
 		expect(result.success).toBe(false);
@@ -1532,288 +1313,29 @@ describe('OpenID4VP response processing', () => {
 		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
-	it('should extract claims from a bare JWT string', async () => {
-		const nonce = 'test-nonce-456';
-		const jwt = await buildJwt({
-			nonce,
-			resident_postal_code: '10001',
-			resident_city: 'New York',
-			resident_state: 'NY',
-			document_number: 'D7654321',
-			birth_date: '1985-06-20'
-		});
-
-		mockShadowAtlasSuccess('ny', '10');
-
-		const result = await processCredentialResponse(jwt, 'openid4vp', ephemeralKey, nonce);
-
-		expect(result.success).toBe(true);
-		if (result.success) {
-			expect(result.district).toBe('NY-10');
-			expect(result.state).toBe('NY');
-		}
-	});
-
-	it('should extract claims from SD-JWT with disclosures', async () => {
-		const nonce = 'test-nonce-789';
-		const d1 = await buildDisclosure('salt1', 'resident_postal_code', '78701');
-		const d2 = await buildDisclosure('salt2', 'resident_city', 'Austin');
-		const d3 = await buildDisclosure('salt3', 'resident_state', 'TX');
-		const d4 = await buildDisclosure('salt4', 'document_number', 'D9999999');
-		const d5 = await buildDisclosure('salt5', 'birth_date', '1992-03-14');
-		// Base JWT has nonce + signed digest commitments; address + identity fields come from disclosures.
-		const jwt = await buildJwt({
-			nonce,
-			_sd_alg: 'sha-256',
-			_sd: [d1.digest, d2.digest, d3.digest, d4.digest, d5.digest]
-		});
-		const sdJwt = `${jwt}~${d1.disclosure}~${d2.disclosure}~${d3.disclosure}~${d4.disclosure}~${d5.disclosure}~`;
-
-		mockShadowAtlasSuccess('tx', '25');
-
-		const result = await processCredentialResponse(sdJwt, 'openid4vp', ephemeralKey, nonce);
-
-		expect(result.success).toBe(true);
-		if (result.success) {
-			expect(result.district).toBe('TX-25');
-			expect(result.state).toBe('TX');
-		}
-	});
-
-	it('should reject SD-JWT disclosures that are not hash-bound to the signed payload', async () => {
-		const nonce = 'test-nonce-unbound-disclosure';
-		const d1 = await buildDisclosure('salt1', 'resident_postal_code', '78701');
-		const d2 = await buildDisclosure('salt2', 'resident_state', 'TX');
-		const d3 = await buildDisclosure('salt3', 'document_number', 'D9999999');
-		const d4 = await buildDisclosure('salt4', 'birth_date', '1992-03-14');
-		const jwt = await buildJwt({
-			nonce,
-			_sd_alg: 'sha-256',
-			_sd: []
-		});
-		const sdJwt = `${jwt}~${d1.disclosure}~${d2.disclosure}~${d3.disclosure}~${d4.disclosure}~`;
-
-		const result = await processCredentialResponse(sdJwt, 'openid4vp', ephemeralKey, nonce);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('invalid_format');
-		}
-		expect(mockResolveAddress).not.toHaveBeenCalled();
-	});
-
-	it('should extract claims nested under mDL namespace', async () => {
-		const nonce = 'test-nonce-ns';
-		const jwt = await buildJwt({
-			nonce,
-			'org.iso.18013.5.1': {
-				resident_postal_code: '90210',
-				resident_city: 'Beverly Hills',
-				resident_state: 'CA',
-				document_number: 'D1111111',
-				birth_date: '1988-12-01'
-			}
-		});
-
-		mockShadowAtlasSuccess('ca', '36');
-
-		const result = await processCredentialResponse(
-			{ vp_token: jwt },
-			'openid4vp',
-			ephemeralKey,
-			nonce
-		);
-
-		expect(result.success).toBe(true);
-		if (result.success) {
-			expect(result.district).toBe('CA-36');
-		}
-	});
-
-	it('should reject direct JSON objects (no signature to verify)', async () => {
-		const nonce = 'test-nonce-direct';
-		const data = {
-			nonce,
-			resident_postal_code: '60601',
-			resident_city: 'Chicago',
-			resident_state: 'IL',
-			document_number: 'D3333333',
-			birth_date: '1995-07-04'
-		};
-
-		const result = await processCredentialResponse(data, 'openid4vp', ephemeralKey, nonce);
-
-		// Raw JSON objects are now rejected — must be a signed JWT
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('invalid_format');
-		}
-	});
-
-	it('should reject when nonce does not match', async () => {
-		const jwt = await buildJwt({
-			nonce: 'wrong-nonce',
-			resident_postal_code: '94110',
-			resident_state: 'CA',
-			document_number: 'D5555555',
-			birth_date: '1991-02-28'
-		});
-
-		const result = await processCredentialResponse(
-			{ vp_token: jwt },
-			'openid4vp',
-			ephemeralKey,
-			'correct-nonce'
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('invalid_format');
-			expect(result.message).toContain('nonce mismatch');
-		}
-	});
-
-	it('should reject VP tokens that omit nonce', async () => {
-		const jwt = await buildJwt({
-			resident_postal_code: '94110',
-			resident_state: 'CA',
-			document_number: 'D5555555',
-			birth_date: '1991-02-28'
-		});
-
-		const result = await processCredentialResponse(
-			{ vp_token: jwt },
-			'openid4vp',
-			ephemeralKey,
-			'required-nonce'
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('invalid_format');
-			expect(result.message).toContain('missing nonce');
-		}
-		expect(mockResolveAddress).not.toHaveBeenCalled();
-	});
-
-	it('should reject expired VP tokens when exp is present', async () => {
-		const nonce = 'test-nonce-expired';
-		const jwt = await buildJwt({
-			nonce,
-			exp: Math.floor(Date.now() / 1000) - 120,
-			resident_postal_code: '94110',
-			resident_state: 'CA',
-			document_number: 'D5555555',
-			birth_date: '1991-02-28'
-		});
-
-		const result = await processCredentialResponse(
-			{ vp_token: jwt },
-			'openid4vp',
-			ephemeralKey,
-			nonce
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('expired');
-		}
-		expect(mockResolveAddress).not.toHaveBeenCalled();
-	});
-
-	it('should reject VP tokens before nbf when nbf is present', async () => {
-		const nonce = 'test-nonce-future-nbf';
-		const jwt = await buildJwt({
-			nonce,
-			nbf: Math.floor(Date.now() / 1000) + 120,
-			resident_postal_code: '94110',
-			resident_state: 'CA',
-			document_number: 'D5555555',
-			birth_date: '1991-02-28'
-		});
-
-		const result = await processCredentialResponse(
-			{ vp_token: jwt },
-			'openid4vp',
-			ephemeralKey,
-			nonce
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('invalid_format');
-			expect(result.message).toContain('not valid yet');
-		}
-		expect(mockResolveAddress).not.toHaveBeenCalled();
-	});
-
-	it('should reject when required address fields are missing', async () => {
-		const nonce = 'test-nonce-missing';
-		const jwt = await buildJwt({
-			nonce,
-			resident_city: 'San Francisco'
-			// Missing postal_code and state
-		});
-
-		const result = await processCredentialResponse(
-			{ vp_token: jwt },
-			'openid4vp',
-			ephemeralKey,
-			nonce
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('missing_fields');
-		}
-	});
-
-	it('should not search arbitrary nested objects for address claims', async () => {
-		const nonce = 'test-nonce-ambiguous-nesting';
-		const jwt = await buildJwt({
-			nonce,
-			legacy_address: {
-				resident_postal_code: '94110',
-				resident_state: 'CA'
-			},
-			document_number: 'D5555555',
-			birth_date: '1991-02-28'
-		});
-
-		const result = await processCredentialResponse(
-			{ vp_token: jwt },
-			'openid4vp',
-			ephemeralKey,
-			nonce
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('missing_fields');
-		}
-		expect(mockResolveAddress).not.toHaveBeenCalled();
-	});
-
 	it('should fail closed when identity commitment salt is not configured', async () => {
 		const previousSalt = process.env.IDENTITY_COMMITMENT_SALT;
 		delete process.env.IDENTITY_COMMITMENT_SALT;
 		const nonce = 'test-nonce-no-salt';
-		const jwt = await buildJwt({
-			nonce,
-			resident_postal_code: '94110',
-			resident_state: 'CA',
-			document_number: 'D5555555',
-			birth_date: '1991-02-28'
-		});
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D5555555',
+				birth_date: '1991-02-28'
+			},
+			{ origin, nonce, signingJwkThumbprint: ephemeralJwkThumbprint }
+		);
 
 		mockShadowAtlasSuccess('ca', '12');
 
 		try {
-			const result = await processCredentialResponse(
-				{ vp_token: jwt },
-				'openid4vp',
-				ephemeralKey,
-				nonce
+			const result = await processSignedDcApiPayload(
+				{ vp_token: { mdl: [deviceResponse] } },
+				nonce,
+				{ verifierOrigin: origin }
 			);
 
 			expect(result.success).toBe(false);
@@ -1829,102 +1351,35 @@ describe('OpenID4VP response processing', () => {
 		}
 	});
 
-	it('should reject malformed JWT', async () => {
-		const result = await processCredentialResponse(
-			'not-a-jwt',
-			'openid4vp',
-			ephemeralKey,
-			'some-nonce'
-		);
+	it('should reject legacy OpenID4VP protocol values', async () => {
+		const result = await processCredentialResponse('not-a-jwt', 'openid4vp', ephemeralKey, 'some-nonce');
 
 		expect(result.success).toBe(false);
 		if (!result.success) {
-			expect(result.error).toBe('invalid_format');
+			expect(result.error).toBe('unsupported_protocol');
 		}
-	});
-
-	it('should reject header-provided JWKs', async () => {
-		const nonce = 'test-nonce-jwk-reject';
-		const jwt = await buildJwtWithHeader(
-			{
-				nonce,
-				resident_postal_code: '94110',
-				resident_state: 'CA',
-				document_number: 'D5555555',
-				birth_date: '1991-02-28'
-			},
-			{
-				alg: 'ES256',
-				typ: 'JWT',
-				jwk: { kty: 'EC', crv: 'P-256', x: 'test', y: 'test' }
-			}
-		);
-
-		const result = await processCredentialResponse(
-			{ vp_token: jwt },
-			'openid4vp',
-			ephemeralKey,
-			nonce
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('signature_invalid');
-			expect(result.message).toContain('x5c');
-			expect(result.message).toContain('jwk is not accepted');
-		}
-		expect(mockResolveAddress).not.toHaveBeenCalled();
-	});
-
-	it('should reject x5c JWTs not anchored to IACA trust roots', async () => {
-		const nonce = 'test-nonce-untrusted-x5c';
-		const jwt = await buildJwtWithHeader(
-			{
-				nonce,
-				resident_postal_code: '94110',
-				resident_state: 'CA',
-				document_number: 'D5555555',
-				birth_date: '1991-02-28'
-			},
-			{
-				alg: 'ES256',
-				typ: 'JWT',
-				x5c: ['AQIDBAU=']
-			}
-		);
-
-		const result = await processCredentialResponse(
-			{ vp_token: jwt },
-			'openid4vp',
-			ephemeralKey,
-			nonce
-		);
-
-		expect(result.success).toBe(false);
-		if (!result.success) {
-			expect(result.error).toBe('signature_invalid');
-			expect(result.message).toContain('IACA trust store');
-		}
-		expect(mockResolveAddress).not.toHaveBeenCalled();
 	});
 
 	it('should handle district lookup failure gracefully', async () => {
 		const nonce = 'test-nonce-fail';
-		const jwt = await buildJwt({
-			nonce,
-			resident_postal_code: '00000',
-			resident_state: 'XX',
-			document_number: 'D0000000',
-			birth_date: '2000-01-01'
-		});
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '00000',
+				resident_city: 'Nowhere',
+				resident_state: 'XX',
+				document_number: 'D0000000',
+				birth_date: '2000-01-01'
+			},
+			{ origin, nonce, signingJwkThumbprint: ephemeralJwkThumbprint }
+		);
 
 		mockResolveAddress.mockRejectedValueOnce(new Error('Shadow Atlas unavailable'));
 
-		const result = await processCredentialResponse(
-			{ vp_token: jwt },
-			'openid4vp',
-			ephemeralKey,
-			nonce
+		const result = await processSignedDcApiPayload(
+			{ vp_token: { mdl: [deviceResponse] } },
+			nonce,
+			{ verifierOrigin: origin }
 		);
 
 		expect(result.success).toBe(false);

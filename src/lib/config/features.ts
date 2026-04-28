@@ -17,27 +17,9 @@
 export type AddressSpecificity = 'off' | 'region' | 'district';
 
 const forceShadowAtlasOff = import.meta.env.VITE_FORCE_SHADOW_ATLAS_OFF === '1';
-const enableDirectQr = import.meta.env.VITE_MDL_DIRECT_QR === '1';
-const environmentLabel = import.meta.env.VITE_ENVIRONMENT;
-const directQrConfiguredOrigin = import.meta.env.VITE_MDL_DIRECT_QR_ORIGIN?.trim() || '';
-const STAGING_DIRECT_QR_ORIGIN = 'https://staging.commons.email';
-const PRODUCTION_DIRECT_QR_ORIGIN = 'https://commons.email';
-const DIRECT_QR_ORIGINS_BY_ENV: Record<string, string> = {
-	staging: STAGING_DIRECT_QR_ORIGIN,
-	production: PRODUCTION_DIRECT_QR_ORIGIN
-};
-const expectedDirectQrOrigin = DIRECT_QR_ORIGINS_BY_ENV[environmentLabel ?? ''];
 
 if (import.meta.env.PROD && forceShadowAtlasOff && import.meta.env.VITE_ENVIRONMENT !== 'test') {
 	throw new Error('VITE_FORCE_SHADOW_ATLAS_OFF may only be used by test builds');
-}
-
-if (import.meta.env.PROD && enableDirectQr && !expectedDirectQrOrigin) {
-	throw new Error('VITE_MDL_DIRECT_QR may only be enabled for staging or production builds');
-}
-
-if (import.meta.env.PROD && enableDirectQr && directQrConfiguredOrigin !== expectedDirectQrOrigin) {
-	throw new Error('VITE_MDL_DIRECT_QR_ORIGIN must match the deployment environment origin');
 }
 
 export const FEATURES = {
@@ -106,9 +88,7 @@ export const FEATURES = {
 	 * mDL over OpenID4VP via the W3C Digital Credentials API.
 	 *
 	 * This lane is capability-detected by browser protocol support. The current
-	 * browser-mediated protocol identifier is `openid4vp-v1-signed`; the unsigned
-	 * and legacy aliases remain parser-only compatibility inputs for old
-	 * capture-replay tests, direct QR, and migration fixtures.
+	 * browser-mediated protocol identifier is `openid4vp-v1-signed`.
 	 */
 	MDL_ANDROID_OID4VP: true,
 
@@ -126,16 +106,6 @@ export const FEATURES = {
 	 * support is ready and browser capability checks pass in real-device smoke.
 	 */
 	MDL_IOS: false,
-
-	/**
-	 * Desktop → phone direct OpenID4VP QR.
-	 *
-	 * Keep false until the direct-session store, direct mdoc handover,
-	 * request_uri/direct_post endpoints, desktop QR UI, staging preflight, and
-	 * real-device smoke all pass. This custom QR lane is temporary while the
-	 * browser-mediated Digital Credentials cross-device lane is completed.
-	 */
-	MDL_DIRECT_QR: enableDirectQr,
 
 	/**
 	 * Legacy alias retained only for old string-search tests and migration
@@ -173,24 +143,11 @@ export const FEATURES = {
 } as const;
 
 export const OPENID4VP_DC_API_PROTOCOL = 'openid4vp-v1-signed';
-export const UNSIGNED_OPENID4VP_DC_API_PROTOCOL = 'openid4vp-v1-unsigned';
-export const LEGACY_OPENID4VP_PROTOCOL = 'openid4vp';
-export const MDL_DIRECT_QR_ALLOWED_ORIGIN = enableDirectQr
-	? directQrConfiguredOrigin || (import.meta.env.DEV ? undefined : expectedDirectQrOrigin)
-	: undefined;
 
-export type MdlProtocol =
-	| typeof OPENID4VP_DC_API_PROTOCOL
-	| typeof UNSIGNED_OPENID4VP_DC_API_PROTOCOL
-	| typeof LEGACY_OPENID4VP_PROTOCOL
-	| 'org-iso-mdoc';
+export type MdlProtocol = typeof OPENID4VP_DC_API_PROTOCOL | 'org-iso-mdoc';
 
 export function isOpenId4VpProtocol(protocol: string): boolean {
-	return (
-		protocol === OPENID4VP_DC_API_PROTOCOL ||
-		protocol === UNSIGNED_OPENID4VP_DC_API_PROTOCOL ||
-		protocol === LEGACY_OPENID4VP_PROTOCOL
-	);
+	return protocol === OPENID4VP_DC_API_PROTOCOL;
 }
 
 export function isMdlProtocolEnabled(protocol: string): boolean {
@@ -201,34 +158,4 @@ export function isMdlProtocolEnabled(protocol: string): boolean {
 
 export function isAnyMdlProtocolEnabled(): boolean {
 	return FEATURES.MDL_ANDROID_OID4VP || FEATURES.MDL_MDOC;
-}
-
-export function isMdlDirectQrEnabled(): boolean {
-	return FEATURES.MDL_DIRECT_QR && FEATURES.MDL_ANDROID_OID4VP;
-}
-
-export function requireMdlDirectQrEnabled(runtimeOrigin?: string, requestOrigin?: string): void {
-	if (!isMdlDirectQrEnabled()) {
-		throw new Error('MDL_DIRECT_QR_DISABLED');
-	}
-	if (import.meta.env.DEV || !MDL_DIRECT_QR_ALLOWED_ORIGIN) return;
-	if (!runtimeOrigin) {
-		throw new Error('MDL_DIRECT_QR_ORIGIN_MISSING');
-	}
-	if (!requestOrigin) {
-		throw new Error('MDL_DIRECT_QR_REQUEST_ORIGIN_MISSING');
-	}
-	const runtime = parseOrigin(runtimeOrigin);
-	const request = parseOrigin(requestOrigin);
-	if (runtime !== MDL_DIRECT_QR_ALLOWED_ORIGIN || request !== MDL_DIRECT_QR_ALLOWED_ORIGIN) {
-		throw new Error('MDL_DIRECT_QR_ORIGIN_MISMATCH');
-	}
-}
-
-function parseOrigin(value: string): string {
-	try {
-		return new URL(value).origin;
-	} catch {
-		throw new Error('MDL_DIRECT_QR_ORIGIN_INVALID');
-	}
 }

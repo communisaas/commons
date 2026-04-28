@@ -38,18 +38,12 @@ jobs:
           case "${DEPLOY_BRANCH}" in
             production)
               echo "VITE_ENVIRONMENT=production" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR=0" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR_ORIGIN=" >> "$GITHUB_ENV"
               ;;
             staging)
               echo "VITE_ENVIRONMENT=staging" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR=0" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR_ORIGIN=" >> "$GITHUB_ENV"
               ;;
             *)
               echo "VITE_ENVIRONMENT=development" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR=0" >> "$GITHUB_ENV"
-              echo "VITE_MDL_DIRECT_QR_ORIGIN=" >> "$GITHUB_ENV"
               ;;
           esac
 
@@ -58,8 +52,6 @@ jobs:
         env:
           PUBLIC_CONVEX_URL: https://quirky-chinchilla-352.convex.cloud
           VITE_ENVIRONMENT: ${{ env.VITE_ENVIRONMENT }}
-          VITE_MDL_DIRECT_QR: ${{ env.VITE_MDL_DIRECT_QR }}
-          VITE_MDL_DIRECT_QR_ORIGIN: ${{ env.VITE_MDL_DIRECT_QR_ORIGIN }}
 
       - name: Resolve deployment URL
         run: |

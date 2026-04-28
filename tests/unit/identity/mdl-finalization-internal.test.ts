@@ -35,19 +35,14 @@ describe('mDL verification finalization', () => {
 		expect(convexUsers).toContain('requireReauth: linkedToExisting');
 	});
 
-	it('uses the internal finalizer from Digital Credentials and direct verification routes', () => {
-		for (const path of [
-			'src/routes/api/identity/verify-mdl/verify/+server.ts',
-			'src/routes/api/identity/direct-mdl/complete/+server.ts'
-		]) {
-			const route = source(path);
+	it('uses the internal finalizer from the Digital Credentials verification route', () => {
+		const route = source('src/routes/api/identity/verify-mdl/verify/+server.ts');
 
-			expect(route).toContain("import { internal } from '$lib/convex'");
-			expect(route).toContain('serverMutation(internal.users.finalizeMdlVerification');
-			expect(route).toContain('credentialHash: result.credentialHash');
-			expect(route).toContain("error: 'credential_reuse_detected'");
-			expect(route).not.toContain('api.users.bindIdentityCommitment');
-			expect(route).not.toContain('api.users.updateMdlVerification');
-		}
+		expect(route).toContain("import { internal } from '$lib/convex'");
+		expect(route).toContain('serverMutation(internal.users.finalizeMdlVerification');
+		expect(route).toContain('credentialHash: result.credentialHash');
+		expect(route).toContain("error: 'credential_reuse_detected'");
+		expect(route).not.toContain('api.users.bindIdentityCommitment');
+		expect(route).not.toContain('api.users.updateMdlVerification');
 	});
 });

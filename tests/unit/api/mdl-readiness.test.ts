@@ -4,31 +4,26 @@ const {
 	mockDev,
 	mockPrivateEnv,
 	mockFeatures,
-	mockSignerConfig,
-	mockSignRequestObject,
-	mockValidateSignerConfig,
 	mockDcSignerConfig,
 	mockValidateDcSignerConfig,
 	mockBuildDcPayload,
 	mockSignDcRequest,
-	mockAllowedOrigin
+	mockCalculateJwkThumbprint,
+	mockProcessCredentialResponse
 } = vi.hoisted(() => ({
 	mockDev: { value: false },
 	mockPrivateEnv: { INTERNAL_API_SECRET: 'test-secret' } as Record<string, string | undefined>,
 	mockFeatures: {
 		MDL_ANDROID_OID4VP: true,
-		MDL_DIRECT_QR: true,
 		MDL_MDOC: false,
 		MDL_IOS: false
 	},
-	mockSignerConfig: vi.fn(),
-	mockSignRequestObject: vi.fn(),
-	mockValidateSignerConfig: vi.fn(),
 	mockDcSignerConfig: vi.fn(),
 	mockValidateDcSignerConfig: vi.fn(),
 	mockBuildDcPayload: vi.fn(),
 	mockSignDcRequest: vi.fn(),
-	mockAllowedOrigin: { value: 'https://staging.commons.email' }
+	mockCalculateJwkThumbprint: vi.fn(),
+	mockProcessCredentialResponse: vi.fn()
 }));
 
 vi.mock('$app/environment', () => ({
@@ -45,20 +40,7 @@ vi.mock('$env/dynamic/private', () => ({
 
 vi.mock('$lib/config/features', () => ({
 	FEATURES: mockFeatures,
-	get MDL_DIRECT_QR_ALLOWED_ORIGIN() {
-		return mockAllowedOrigin.value;
-	},
-	OPENID4VP_DC_API_PROTOCOL: 'openid4vp-v1-signed',
-	isMdlDirectQrEnabled: () => mockFeatures.MDL_DIRECT_QR && mockFeatures.MDL_ANDROID_OID4VP
-}));
-
-vi.mock('$lib/server/direct-mdl-request-object', () => ({
-	DIRECT_MDL_REQUEST_OBJECT_CONTENT_TYPE: 'application/oauth-authz-req+jwt',
-	DIRECT_MDL_REQUEST_URI_METHOD: 'post',
-	getDirectMdlRequestObjectSignerConfig: (...args: unknown[]) => mockSignerConfig(...args),
-	signDirectMdlRequestObject: (...args: unknown[]) => mockSignRequestObject(...args),
-	validateDirectMdlRequestObjectSignerConfig: (...args: unknown[]) =>
-		mockValidateSignerConfig(...args)
+	OPENID4VP_DC_API_PROTOCOL: 'openid4vp-v1-signed'
 }));
 
 vi.mock('$lib/server/dc-api-openid4vp-request', () => ({
@@ -66,7 +48,12 @@ vi.mock('$lib/server/dc-api-openid4vp-request', () => ({
 	getDcApiOpenId4VpSignerConfig: (...args: unknown[]) => mockDcSignerConfig(...args),
 	validateDcApiOpenId4VpSignerConfig: (...args: unknown[]) => mockValidateDcSignerConfig(...args),
 	buildDcApiOpenId4VpRequestPayload: (...args: unknown[]) => mockBuildDcPayload(...args),
+	calculateJwkThumbprintBytes: (...args: unknown[]) => mockCalculateJwkThumbprint(...args),
 	signDcApiOpenId4VpRequest: (...args: unknown[]) => mockSignDcRequest(...args)
+}));
+
+vi.mock('$lib/core/identity/mdl-verification', () => ({
+	processCredentialResponse: (...args: unknown[]) => mockProcessCredentialResponse(...args)
 }));
 
 import { GET } from '../../../src/routes/api/internal/identity/mdl-readiness/+server';
@@ -95,11 +82,8 @@ function makeEvent(options: {
 			env: {
 				PUBLIC_APP_URL: origin,
 				DC_SESSION_KV: kv,
-				DIRECT_MDL_SESSION_KV: kv,
 				MDL_OPENID4VP_REQUEST_PRIVATE_KEY: 'configured',
 				MDL_OPENID4VP_REQUEST_X5C: 'configured',
-				MDL_DIRECT_QR_REQUEST_PRIVATE_KEY: 'configured',
-				MDL_DIRECT_QR_REQUEST_X5C: 'configured',
 				...options.platformEnv
 			}
 		}
@@ -111,13 +95,11 @@ beforeEach(() => {
 	mockDev.value = false;
 	mockPrivateEnv.INTERNAL_API_SECRET = 'test-secret';
 	mockFeatures.MDL_ANDROID_OID4VP = true;
-	mockFeatures.MDL_DIRECT_QR = true;
 	mockFeatures.MDL_MDOC = false;
 	mockFeatures.MDL_IOS = false;
-	mockAllowedOrigin.value = 'https://staging.commons.email';
-	mockSignerConfig.mockReturnValue({ privateKeyPem: 'configured', x5c: ['configured'] });
-	mockValidateSignerConfig.mockResolvedValue(undefined);
-	mockSignRequestObject.mockResolvedValue('signed.jwt');
+	kv.get.mockResolvedValue('ok');
+	kv.put.mockResolvedValue(undefined);
+	kv.delete.mockResolvedValue(undefined);
 	mockDcSignerConfig.mockReturnValue({ privateKeyPem: 'configured', x5c: ['configured'] });
 	mockValidateDcSignerConfig.mockResolvedValue(undefined);
 	mockBuildDcPayload.mockResolvedValue({
@@ -130,6 +112,12 @@ beforeEach(() => {
 		dcql_query: { credentials: [] }
 	});
 	mockSignDcRequest.mockResolvedValue('signed.dc.jwt');
+	mockCalculateJwkThumbprint.mockResolvedValue(new Uint8Array(32).fill(1));
+	mockProcessCredentialResponse.mockResolvedValue({
+		success: false,
+		error: 'invalid_format',
+		message: 'OpenID4VP vp_token object does not contain an mso_mdoc credential array'
+	});
 });
 
 describe('GET /api/internal/identity/mdl-readiness', () => {
@@ -144,54 +132,50 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		await expect(GET(makeEvent())).rejects.toMatchObject({ status: 503 });
 	});
 
-	it('returns ok when the staging smoke surface is fully configured', async () => {
+	it('returns ok when the browser-mediated staging smoke surface is configured', async () => {
 		const response = await GET(makeEvent());
 		expect(response.status).toBe(200);
 		const body = await response.json();
 		expect(body.status).toBe('ok');
 		expect(body.blockers).toEqual([]);
-		expect(body.featureFlags.MDL_DIRECT_QR).toBe(true);
-		expect(body.directRequest).toMatchObject({
-			allowedOrigin: 'https://staging.commons.email',
-			requestUriMethod: 'post',
-			requestObjectContentType: 'application/oauth-authz-req+jwt',
-			walletNonceRequired: true
+		expect(body.warnings).toEqual([]);
+		expect(body.featureFlags).toEqual({
+			MDL_ANDROID_OID4VP: true,
+			MDL_MDOC: false,
+			MDL_IOS: false
 		});
+		expect(body.bindings).toEqual({ DC_SESSION_KV: true });
 		expect(body.digitalCredentials).toMatchObject({
 			protocol: 'openid4vp-v1-signed',
 			responseMode: 'dc_api.jwt',
 			requestObject: 'signed'
 		});
+		expect(body).not.toHaveProperty('directRequest');
+		expect(JSON.stringify(body)).not.toContain('DIRECT_MDL');
+		expect(JSON.stringify(body)).not.toContain('MDL_DIRECT');
 		expect(mockValidateDcSignerConfig).toHaveBeenCalledWith(
 			{ privateKeyPem: 'configured', x5c: ['configured'] },
 			expect.objectContaining({ now: expect.any(Number) })
 		);
-		expect(mockSignDcRequest).toHaveBeenCalledOnce();
-		expect(mockValidateSignerConfig).toHaveBeenCalledWith(
-			{ privateKeyPem: 'configured', x5c: ['configured'] },
-			'staging.commons.email',
-			expect.objectContaining({ now: expect.any(Number) })
-		);
-		expect(mockSignRequestObject).toHaveBeenCalledOnce();
-	});
-
-	it('returns ok when the production direct QR surface is fully configured', async () => {
-		mockAllowedOrigin.value = 'https://commons.email';
-		const response = await GET(makeEvent({ origin: 'https://commons.email' }));
-		expect(response.status).toBe(200);
-		const body = await response.json();
-		expect(body.status).toBe('ok');
-		expect(body.directRequest.allowedOrigin).toBe('https://commons.email');
-		expect(body.blockers).toEqual([]);
-		expect(mockValidateSignerConfig).toHaveBeenCalledWith(
-			{ privateKeyPem: 'configured', x5c: ['configured'] },
-			'commons.email',
-			expect.objectContaining({ now: expect.any(Number) })
+			expect(mockSignDcRequest).toHaveBeenCalledOnce();
+			expect(kv.put).toHaveBeenCalledWith(expect.stringMatching(/^mdl-readiness:/), 'ok', {
+				expirationTtl: 60
+			});
+			expect(kv.get).toHaveBeenCalledWith(expect.stringMatching(/^mdl-readiness:/));
+			expect(kv.delete).toHaveBeenCalledWith(expect.stringMatching(/^mdl-readiness:/));
+			expect(mockProcessCredentialResponse).toHaveBeenCalledWith(
+			expect.any(String),
+			'openid4vp-v1-signed',
+			expect.any(Object),
+			'readinessNonce0001',
+			expect.objectContaining({
+				verifierOrigin: 'https://staging.commons.email',
+				dcApiJwkThumbprint: new Uint8Array(32).fill(1)
+			})
 		);
 	});
 
 	it('accepts a canonical origin override for immutable deployment readiness probes', async () => {
-		mockAllowedOrigin.value = 'https://commons.email';
 		const response = await GET(
 			makeEvent({
 				origin: 'https://production.communique-site.pages.dev',
@@ -202,17 +186,10 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		expect(response.status).toBe(200);
 		const body = await response.json();
 		expect(body.status).toBe('ok');
-		expect(body.directRequest.allowedOrigin).toBe('https://commons.email');
 		expect(body.blockers).toEqual([]);
-		expect(mockValidateSignerConfig).toHaveBeenCalledWith(
-			{ privateKeyPem: 'configured', x5c: ['configured'] },
-			'commons.email',
-			expect.objectContaining({ now: expect.any(Number) })
-		);
 	});
 
 	it('blocks readiness origin overrides that do not match PUBLIC_APP_URL', async () => {
-		mockAllowedOrigin.value = 'https://commons.email';
 		const response = await GET(
 			makeEvent({
 				origin: 'https://production.communique-site.pages.dev',
@@ -223,21 +200,7 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		expect(response.status).toBe(503);
 		const body = await response.json();
 		expect(body.blockers).toContain('public_app_url');
-		expect(body.blockers).toContain('direct_qr_allowed_origin');
-		expect(body.blockers).toContain('direct_request_signer');
-		expect(mockValidateSignerConfig).not.toHaveBeenCalled();
-		expect(mockSignRequestObject).not.toHaveBeenCalled();
-	});
-
-	it('does not block browser-mediated readiness when the direct QR build flag is off', async () => {
-		mockFeatures.MDL_DIRECT_QR = false;
-		const response = await GET(makeEvent());
-		expect(response.status).toBe(200);
-		const body = await response.json();
-		expect(body.status).toBe('ok');
-		expect(body.blockers).toEqual([]);
-		expect(body.warnings).toContain('direct_qr_enabled');
-		expect(body.directRequest).toBeNull();
+		expect(mockSignDcRequest).not.toHaveBeenCalled();
 	});
 
 	it('blocks when PUBLIC_APP_URL points at a different deployed origin', async () => {
@@ -250,54 +213,32 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		expect(response.status).toBe(503);
 		const body = await response.json();
 		expect(body.blockers).toContain('public_app_url');
-		expect(body.blockers).toContain('direct_request_signer');
+		expect(body.blockers).toContain('dc_api_request_signer');
 	});
 
-	it('reports staging direct-session fallback KV binding as a warning, not a blocker', async () => {
+		it('blocks when DC_SESSION_KV is missing', async () => {
 		const response = await GET(
 			makeEvent({
 				platformEnv: {
-					DIRECT_MDL_SESSION_KV: undefined
-				}
-			})
-		);
-		expect(response.status).toBe(200);
-		const body = await response.json();
-		expect(body.warnings).toEqual(['direct_mdl_session_kv']);
-		expect(body.blockers).toEqual([]);
-	});
-
-	it('blocks production direct QR when the dedicated direct session KV is missing', async () => {
-		mockAllowedOrigin.value = 'https://commons.email';
-		const response = await GET(
-			makeEvent({
-				origin: 'https://commons.email',
-				platformEnv: {
-					DIRECT_MDL_SESSION_KV: undefined
+					DC_SESSION_KV: undefined
 				}
 			})
 		);
 		expect(response.status).toBe(503);
-		const body = await response.json();
-		expect(body.blockers).toContain('direct_mdl_session_kv');
-	});
+			const body = await response.json();
+			expect(body.blockers).toContain('dc_session_kv');
+		});
 
-	it('blocks when the direct request signer cannot sign', async () => {
-		mockSignRequestObject.mockRejectedValueOnce(new Error('bad key'));
-		const response = await GET(
-			makeEvent({
-				platformEnv: {
-					MDL_DIRECT_QR_REQUEST_PRIVATE_KEY: 'sensitive-private-key-value',
-					MDL_DIRECT_QR_REQUEST_X5C: 'sensitive-cert-chain-value'
-				}
-			})
-		);
-		expect(response.status).toBe(503);
-		const body = await response.json();
-		expect(body.blockers).toContain('direct_request_signer');
-		expect(JSON.stringify(body)).not.toContain('sensitive-private-key-value');
-		expect(JSON.stringify(body)).not.toContain('sensitive-cert-chain-value');
-	});
+		it('blocks when DC_SESSION_KV cannot write and read verifier sessions', async () => {
+			kv.get.mockResolvedValueOnce(null);
+			const response = await GET(makeEvent());
+			expect(response.status).toBe(503);
+			const body = await response.json();
+			expect(body.blockers).toContain('dc_session_kv');
+			expect(body.checks.find((check: { id: string }) => check.id === 'dc_session_kv').message).toContain(
+				'KV_READ_MISMATCH'
+			);
+		});
 
 	it('blocks when the browser-mediated OpenID4VP signer cannot validate', async () => {
 		mockValidateDcSignerConfig.mockRejectedValueOnce(new Error('bad dc certificate'));
@@ -334,19 +275,16 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		expect(JSON.stringify(body)).not.toContain('sensitive-openid4vp-cert-chain');
 	});
 
-	it('blocks when the direct request signer certificate is not deployment-bound', async () => {
-		mockSignerConfig.mockReturnValueOnce({
-			privateKeyPem: 'sensitive-private-key-value',
-			x5c: ['sensitive-cert-chain-value']
+	it('blocks when the browser-mediated encrypted response probe cannot decrypt', async () => {
+		mockProcessCredentialResponse.mockResolvedValueOnce({
+			success: false,
+			error: 'decryption_failed',
+			message: 'Failed to decrypt OpenID4VP dc_api.jwt response'
 		});
-		mockValidateSignerConfig.mockRejectedValueOnce(
-			new Error('DIRECT_MDL_REQUEST_X5C_SAN_MISMATCH')
-		);
 		const response = await GET(makeEvent());
 		expect(response.status).toBe(503);
 		const body = await response.json();
-		expect(body.blockers).toContain('direct_request_signer');
-		expect(JSON.stringify(body)).not.toContain('sensitive-private-key-value');
-		expect(JSON.stringify(body)).not.toContain('sensitive-cert-chain-value');
+		expect(body.blockers).toContain('dc_api_request_signer');
+		expect(JSON.stringify(body)).not.toContain('signed.dc.jwt');
 	});
 });

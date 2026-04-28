@@ -21,11 +21,11 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 describe('OpenID4VP DC API handover SessionTranscript', () => {
-	it('matches the OpenID4VP final spec CBOR vector', async () => {
-		const jwkThumbprint = hexToBytes(
-			'4283ec927ae0f208daaa2d026a814f2b22dca52cf85ffa8f3f8626c6bd669047'
-		);
+	const jwkThumbprint = hexToBytes(
+		'4283ec927ae0f208daaa2d026a814f2b22dca52cf85ffa8f3f8626c6bd669047'
+	);
 
+	it('matches the OpenID4VP final spec CBOR vector', async () => {
 		const parts = await buildOpenId4VpDcApiSessionTranscript({
 			origin: 'https://example.com',
 			nonce: 'exc7gBkxjx1rdc9udRrveKvSsJIq80avlXeLHhGwqtA',
@@ -43,13 +43,14 @@ describe('OpenID4VP DC API handover SessionTranscript', () => {
 		);
 	});
 
-	it('builds the unsigned dc_api handover with a null JWK thumbprint', async () => {
+	it('builds the encrypted dc_api handover with a JWK thumbprint', async () => {
 		const parts = await buildOpenId4VpDcApiSessionTranscript({
 			origin: 'https://verifier.example/',
-			nonce: 'nonce-123'
+			nonce: 'nonce-123',
+			jwkThumbprint
 		});
 
-		expect(parts.handoverInfo).toEqual(['https://verifier.example', 'nonce-123', null]);
+		expect(parts.handoverInfo).toEqual(['https://verifier.example', 'nonce-123', jwkThumbprint]);
 		expect(parts.handover[0]).toBe('OpenID4VPDCAPIHandover');
 		expect(parts.handover[1]).toHaveLength(32);
 		expect(parts.sessionTranscript).toEqual([null, null, parts.handover]);
@@ -67,15 +68,18 @@ describe('OpenID4VP DC API handover SessionTranscript', () => {
 	it('binds the handover hash to the origin and nonce', async () => {
 		const first = await buildOpenId4VpDcApiSessionTranscript({
 			origin: 'https://verifier.example',
-			nonce: 'nonce-a'
+			nonce: 'nonce-a',
+			jwkThumbprint
 		});
 		const second = await buildOpenId4VpDcApiSessionTranscript({
 			origin: 'https://verifier.example',
-			nonce: 'nonce-b'
+			nonce: 'nonce-b',
+			jwkThumbprint
 		});
 		const third = await buildOpenId4VpDcApiSessionTranscript({
 			origin: 'https://other.example',
-			nonce: 'nonce-a'
+			nonce: 'nonce-a',
+			jwkThumbprint
 		});
 
 		expect(bytesToHex(first.handoverInfoHash)).not.toBe(bytesToHex(second.handoverInfoHash));
@@ -96,21 +100,24 @@ describe('OpenID4VP DC API handover SessionTranscript', () => {
 		await expect(
 			buildOpenId4VpDcApiSessionTranscript({
 				origin: 'https://example.com/path',
-				nonce: 'nonce-123'
+				nonce: 'nonce-123',
+				jwkThumbprint
 			})
 		).rejects.toThrow(/origin/);
 
 		await expect(
 			buildOpenId4VpDcApiSessionTranscript({
 				origin: 'http://example.com',
-				nonce: 'nonce-123'
+				nonce: 'nonce-123',
+				jwkThumbprint
 			})
 		).rejects.toThrow(/https/);
 
 		await expect(
 			buildOpenId4VpDcApiSessionTranscript({
 				origin: 'origin:https://example.com',
-				nonce: 'nonce-123'
+				nonce: 'nonce-123',
+				jwkThumbprint
 			})
 		).rejects.toThrow(/origin:/);
 	});
@@ -119,9 +126,18 @@ describe('OpenID4VP DC API handover SessionTranscript', () => {
 		await expect(
 			buildOpenId4VpDcApiSessionTranscript({
 				origin: 'https://example.com',
-				nonce: ''
+				nonce: '',
+				jwkThumbprint
 			})
 		).rejects.toThrow(/nonce/);
+
+		await expect(
+			buildOpenId4VpDcApiSessionTranscript({
+				origin: 'https://example.com',
+				nonce: 'nonce-123',
+				jwkThumbprint: null as unknown as Uint8Array
+			})
+		).rejects.toThrow(/thumbprint/);
 
 		await expect(
 			buildOpenId4VpDcApiSessionTranscript({

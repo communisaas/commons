@@ -20,7 +20,7 @@
  *   1 — Authenticated (OAuth login, any logged-in user)
  *   2 — Address-attested (district verified via civic data)
  *   3 — Identity-verified (ID card / drivers license)
- *   4 — Passport-verified (NFC passport — legacy providers)
+ *   4 — Legacy passport-verified provider tier
  *   5 — Government credential (mDL / EUDIW via Digital Credentials API)
  */
 
@@ -30,8 +30,8 @@ export type TrustTier = 0 | 1 | 2 | 3 | 4 | 5;
 /**
  * Derive authority level from user verification state.
  *
- * Now uses document_type to differentiate passport (L4) from ID card/license (L3).
- * Previously all Didit verifications were L4, which was inaccurate for non-passport documents.
+ * Legacy provider records can still carry document_type, but live mDL records
+ * are elevated through the explicit 'mdl' document type above.
  *
  * @param user - User verification fields
  * @returns Authority level (1-5)
@@ -49,7 +49,7 @@ export function deriveAuthorityLevel(user: {
 	}
 
 	// Level 3: ID card / drivers license (verified identity, not just address)
-	// identity_commitment is only set by Tier 3+ verification (mDL/passport),
+		// identity_commitment is only set by Tier 3+ verification,
 	// never by Tier 2 (address-only). Guard on trust_tier >= 3 for defense in depth.
 	if (user.identity_commitment && (user.trust_tier ?? 0) >= 3) {
 		return 3;

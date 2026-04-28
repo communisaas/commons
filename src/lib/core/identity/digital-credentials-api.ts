@@ -10,11 +10,7 @@
  *
  * @see https://w3c-fedid.github.io/digital-credentials/
  */
-import {
-	LEGACY_OPENID4VP_PROTOCOL,
-	OPENID4VP_DC_API_PROTOCOL,
-	isMdlProtocolEnabled
-} from '$lib/config/features';
+import { OPENID4VP_DC_API_PROTOCOL, isMdlProtocolEnabled } from '$lib/config/features';
 
 /**
  * Check if the browser supports the Digital Credentials API.
@@ -146,10 +142,7 @@ export async function requestCredential(
 				isMdlProtocolEnabled('org-iso-mdoc'),
 			[OPENID4VP_DC_API_PROTOCOL]:
 				(userAgentAllowsProtocol?.(OPENID4VP_DC_API_PROTOCOL) ?? supported.openid4vp) &&
-				isMdlProtocolEnabled(OPENID4VP_DC_API_PROTOCOL),
-			[LEGACY_OPENID4VP_PROTOCOL]:
-				(userAgentAllowsProtocol?.(LEGACY_OPENID4VP_PROTOCOL) ?? false) &&
-				isMdlProtocolEnabled(LEGACY_OPENID4VP_PROTOCOL)
+				isMdlProtocolEnabled(OPENID4VP_DC_API_PROTOCOL)
 		};
 		processedRequests = processedRequests.filter((req) => protocolAllowed[req.protocol] ?? false);
 

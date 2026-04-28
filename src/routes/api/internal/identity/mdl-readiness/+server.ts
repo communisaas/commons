@@ -1,29 +1,15 @@
 import { dev } from '$app/environment';
 import { json, error } from '@sveltejs/kit';
 import { env as privateEnv } from '$env/dynamic/private';
+import { CompactEncrypt, importJWK } from 'jose';
 import type { RequestHandler } from './$types';
 import { verifyCronSecretRaw } from '$lib/server/cron-auth';
-import {
-	FEATURES,
-	MDL_DIRECT_QR_ALLOWED_ORIGIN,
-	OPENID4VP_DC_API_PROTOCOL,
-	isMdlDirectQrEnabled
-} from '$lib/config/features';
-import {
-	DIRECT_MDL_SESSION_TTL_SECONDS,
-	DIRECT_MDL_TRANSPORT,
-	type DirectMdlSession
-} from '$lib/server/direct-mdl-session';
-import {
-	DIRECT_MDL_REQUEST_OBJECT_CONTENT_TYPE,
-	DIRECT_MDL_REQUEST_URI_METHOD,
-	getDirectMdlRequestObjectSignerConfig,
-	signDirectMdlRequestObject,
-	validateDirectMdlRequestObjectSignerConfig
-} from '$lib/server/direct-mdl-request-object';
+import { FEATURES, OPENID4VP_DC_API_PROTOCOL } from '$lib/config/features';
+import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 import {
 	DC_API_OPENID4VP_RESPONSE_MODE,
 	buildDcApiOpenId4VpRequestPayload,
+	calculateJwkThumbprintBytes,
 	getDcApiOpenId4VpSignerConfig,
 	signDcApiOpenId4VpRequest,
 	validateDcApiOpenId4VpSignerConfig
@@ -45,20 +31,11 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 	const smokeEnv = platform?.env as SmokeEnv | undefined;
 	const requestOrigin = readinessRequestOrigin(request, url.origin);
 	const originCheck = checkPublicAppUrl(smokeEnv?.PUBLIC_APP_URL, requestOrigin);
-	const directQrEnabled = isMdlDirectQrEnabled();
-	const directOriginCheck = directQrEnabled
-		? checkAllowedDirectOrigin(originCheck.origin)
-		: optionalDirectQrCheck('direct_qr_allowed_origin', 'Direct QR origin policy is disabled');
+	const dcSessionKvCheck = await checkDcSessionKv(smokeEnv?.DC_SESSION_KV);
 	const dcApiSignerCheck =
 		originCheck.check.status === 'ok'
 			? await checkDcApiRequestSigner(smokeEnv, originCheck.origin)
 			: blockedDcApiRequestSignerCheck();
-	const signerCheck =
-		directQrEnabled && originCheck.check.status === 'ok' && directOriginCheck.status === 'ok'
-			? await checkDirectRequestSigner(smokeEnv, originCheck.origin)
-			: directQrEnabled
-				? blockedDirectRequestSignerCheck()
-				: optionalDirectQrCheck('direct_request_signer', 'Direct QR signer is disabled');
 	const checks: ReadinessCheck[] = [
 		checkBoolean('openid4vp_enabled', FEATURES.MDL_ANDROID_OID4VP, 'OpenID4VP is enabled'),
 		checkBoolean(
@@ -66,18 +43,12 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 			OPENID4VP_DC_API_PROTOCOL === 'openid4vp-v1-signed',
 			'Browser-mediated OpenID4VP uses the signed DC API protocol'
 		),
-		checkOptionalBoolean('direct_qr_enabled', directQrEnabled, 'Direct OpenID4VP QR is enabled'),
-		checkBoolean('raw_mdoc_disabled', !FEATURES.MDL_MDOC, 'Raw org-iso-mdoc remains disabled'),
-		checkBoolean('ios_lane_disabled', !FEATURES.MDL_IOS, 'iOS lane remains disabled'),
-		originCheck.check,
-		directOriginCheck,
-		checkKvBinding('dc_session_kv', Boolean(smokeEnv?.DC_SESSION_KV), 'DC_SESSION_KV is bound'),
-		dcApiSignerCheck,
-		directQrEnabled
-			? checkDirectSessionKvBinding(smokeEnv, originCheck.origin)
-			: optionalDirectQrCheck('direct_mdl_session_kv', 'Direct QR session KV is disabled'),
-		signerCheck
-	];
+			checkBoolean('raw_mdoc_disabled', !FEATURES.MDL_MDOC, 'Raw org-iso-mdoc remains disabled'),
+			checkBoolean('ios_lane_disabled', !FEATURES.MDL_IOS, 'iOS lane remains disabled'),
+			originCheck.check,
+			dcSessionKvCheck,
+			dcApiSignerCheck
+		];
 
 	const blockers = checks.filter((check) => check.status === 'blocked');
 	const warnings = checks.filter((check) => check.status === 'warning');
@@ -91,25 +62,12 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 			warnings: warnings.map((check) => check.id),
 			featureFlags: {
 				MDL_ANDROID_OID4VP: FEATURES.MDL_ANDROID_OID4VP,
-				MDL_DIRECT_QR: FEATURES.MDL_DIRECT_QR,
 				MDL_MDOC: FEATURES.MDL_MDOC,
 				MDL_IOS: FEATURES.MDL_IOS
 			},
 			bindings: {
-				DC_SESSION_KV: Boolean(smokeEnv?.DC_SESSION_KV),
-				DIRECT_MDL_SESSION_KV: Boolean(smokeEnv?.DIRECT_MDL_SESSION_KV)
+				DC_SESSION_KV: Boolean(smokeEnv?.DC_SESSION_KV)
 			},
-			directRequest: directQrEnabled
-				? {
-						authorizationRequestScheme: 'openid4vp://authorize',
-						allowedOrigin: MDL_DIRECT_QR_ALLOWED_ORIGIN ?? null,
-						requestUriMethod: DIRECT_MDL_REQUEST_URI_METHOD,
-						requestObjectContentType: DIRECT_MDL_REQUEST_OBJECT_CONTENT_TYPE,
-						responseMode: DIRECT_MDL_TRANSPORT,
-						walletNonceRequired: true,
-						sessionTtlSeconds: DIRECT_MDL_SESSION_TTL_SECONDS
-					}
-				: null,
 			digitalCredentials: {
 				protocol: OPENID4VP_DC_API_PROTOCOL,
 				responseMode: DC_API_OPENID4VP_RESPONSE_MODE,
@@ -137,35 +95,6 @@ function readinessRequestOrigin(request: Request, fallback: string): string {
 	}
 }
 
-function checkAllowedDirectOrigin(origin: string | undefined): ReadinessCheck {
-	if (!isMdlDirectQrEnabled()) {
-		return {
-			id: 'direct_qr_allowed_origin',
-			status: 'blocked',
-			message: 'Direct QR allowed origin cannot be checked while direct QR is disabled'
-		};
-	}
-	if (!MDL_DIRECT_QR_ALLOWED_ORIGIN) {
-		return {
-			id: 'direct_qr_allowed_origin',
-			status: 'blocked',
-			message: 'Direct QR allowed origin is not configured'
-		};
-	}
-	if (!origin || origin !== MDL_DIRECT_QR_ALLOWED_ORIGIN) {
-		return {
-			id: 'direct_qr_allowed_origin',
-			status: 'blocked',
-			message: 'Direct QR allowed origin must match PUBLIC_APP_URL and the request origin'
-		};
-	}
-	return {
-		id: 'direct_qr_allowed_origin',
-		status: 'ok',
-		message: 'Direct QR allowed origin matches the deployment origin'
-	};
-}
-
 function checkBoolean(id: string, ok: boolean, message: string): ReadinessCheck {
 	return {
 		id,
@@ -174,63 +103,34 @@ function checkBoolean(id: string, ok: boolean, message: string): ReadinessCheck 
 	};
 }
 
-function checkOptionalBoolean(id: string, ok: boolean, message: string): ReadinessCheck {
-	return {
-		id,
-		status: ok ? 'ok' : 'warning',
-		message: ok ? message : `${message} is disabled`
-	};
-}
-
-function optionalDirectQrCheck(id: string, message: string): ReadinessCheck {
-	return { id, status: 'warning', message };
-}
-
-function checkKvBinding(id: string, ok: boolean, message: string): ReadinessCheck {
-	if (!ok) {
+async function checkDcSessionKv(kv: KVNamespace | undefined): Promise<ReadinessCheck> {
+	if (!kv) {
 		return {
-			id,
+			id: 'dc_session_kv',
 			status: 'blocked',
-			message: `${id} is not bound`
+			message: 'DC_SESSION_KV is not bound'
 		};
 	}
-	return {
-		id,
-		status: message.includes('fallback') ? 'warning' : 'ok',
-		message
-	};
-}
 
-function checkDirectSessionKvBinding(
-	smokeEnv: SmokeEnv | undefined,
-	origin: string | undefined
-): ReadinessCheck {
-	if (smokeEnv?.DIRECT_MDL_SESSION_KV) {
+	const probeKey = `mdl-readiness:${Date.now()}:${randomHex(8)}`;
+	try {
+		await kv.put(probeKey, 'ok', { expirationTtl: 60 });
+		const value = await kv.get(probeKey);
+		await kv.delete(probeKey);
+		if (value !== 'ok') throw new Error('KV_READ_MISMATCH');
 		return {
-			id: 'direct_mdl_session_kv',
+			id: 'dc_session_kv',
 			status: 'ok',
-			message: 'DIRECT_MDL_SESSION_KV is bound'
+			message: 'DC_SESSION_KV can write, read, and delete verifier sessions'
 		};
-	}
-	if (origin === 'https://commons.email') {
+	} catch (err) {
+		const message = err instanceof Error ? err.message : 'KV_UNAVAILABLE';
 		return {
-			id: 'direct_mdl_session_kv',
+			id: 'dc_session_kv',
 			status: 'blocked',
-			message: 'DIRECT_MDL_SESSION_KV is required for production direct QR'
+			message: `DC_SESSION_KV lifecycle probe failed: ${message}`
 		};
 	}
-	if (smokeEnv?.DC_SESSION_KV) {
-		return {
-			id: 'direct_mdl_session_kv',
-			status: 'warning',
-			message: 'Direct sessions will use DC_SESSION_KV fallback'
-		};
-	}
-	return {
-		id: 'direct_mdl_session_kv',
-		status: 'blocked',
-		message: 'direct_mdl_session_kv is not bound'
-	};
 }
 
 function checkPublicAppUrl(configuredOrigin: string | undefined, requestOrigin: string) {
@@ -322,6 +222,7 @@ async function checkDcApiRequestSigner(
 			'deriveBits'
 		]);
 		const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+		const jwkThumbprint = await calculateJwkThumbprintBytes(publicJwk);
 		const payload = await buildDcApiOpenId4VpRequestPayload({
 			nonce: 'readinessNonce0001',
 			origin,
@@ -332,11 +233,18 @@ async function checkDcApiRequestSigner(
 			now,
 			expiresAt: now + 300_000
 		});
-		return {
-			id: 'dc_api_request_signer',
-			status: 'ok',
-			message: 'OpenID4VP Request Object signer imports and signs'
-		};
+		await checkDcApiEncryptedResponseHandling({
+			origin,
+			privateKey: keyPair.privateKey,
+			publicJwk,
+			jwkThumbprint
+		});
+			return {
+				id: 'dc_api_request_signer',
+				status: 'ok',
+				message:
+					'OpenID4VP Request Object signer imports, signs, and extracts encrypted dc_api.jwt envelopes'
+			};
 	} catch (err) {
 		const message = err instanceof Error ? err.message : 'MDL_OPENID4VP_SIGNER_UNAVAILABLE';
 		return {
@@ -347,64 +255,55 @@ async function checkDcApiRequestSigner(
 	}
 }
 
-function blockedDirectRequestSignerCheck(): ReadinessCheck {
-	return {
-		id: 'direct_request_signer',
-		status: 'blocked',
-		message: 'Direct Request Object signer cannot be checked until direct QR origin policy passes'
-	};
+async function checkDcApiEncryptedResponseHandling(input: {
+	origin: string;
+	privateKey: CryptoKey;
+	publicJwk: JsonWebKey;
+	jwkThumbprint: Uint8Array;
+}): Promise<void> {
+	const encryptedResponse = await encryptReadinessDcApiJwt(
+		{ vp_token: { mdl: [] } },
+		input.publicJwk
+	);
+	const result = await processCredentialResponse(
+		JSON.stringify({ response: encryptedResponse }),
+		OPENID4VP_DC_API_PROTOCOL,
+		input.privateKey,
+		'readinessNonce0001',
+		{
+			verifierOrigin: input.origin,
+			dcApiJwkThumbprint: input.jwkThumbprint
+		}
+	);
+
+	if (result.success || result.error !== 'invalid_format' || !result.message.includes('mso_mdoc')) {
+			throw new Error('MDL_OPENID4VP_ENCRYPTED_RESPONSE_PROBE_FAILED');
+		}
 }
 
-async function checkDirectRequestSigner(
-	smokeEnv: SmokeEnv | undefined,
-	origin: string | undefined
-): Promise<ReadinessCheck> {
-	if (!origin) {
-		return {
-			id: 'direct_request_signer',
-			status: 'blocked',
-			message: 'Direct Request Object signer cannot be checked without PUBLIC_APP_URL'
-		};
-	}
+function randomHex(byteLength: number): string {
+	const bytes = new Uint8Array(byteLength);
+	crypto.getRandomValues(bytes);
+	return Array.from(bytes)
+		.map((byte) => byte.toString(16).padStart(2, '0'))
+		.join('');
+}
 
-	try {
-		const config = getDirectMdlRequestObjectSignerConfig(smokeEnv);
-		const now = Date.now();
-		const hostname = new URL(origin).hostname;
-		await validateDirectMdlRequestObjectSignerConfig(config, hostname, { now });
-		const session: DirectMdlSession = {
-			id: '00000000-0000-4000-8000-000000000000',
-			desktopUserId: 'mdl-readiness',
-			transport: DIRECT_MDL_TRANSPORT,
-			clientId: `x509_san_dns:${new URL(origin).hostname}`,
-			responseUri: new URL('/api/identity/direct-mdl/complete', origin).toString(),
-			requestUri: new URL(
-				'/api/identity/direct-mdl/request/00000000-0000-4000-8000-000000000000',
-				origin
-			).toString(),
-			nonce: 'readinessNonce0001',
-			state: 'readinessState0001',
-			transactionId: 'readinessTxn0001',
-			status: 'created',
-			createdAt: now,
-			expiresAt: now + DIRECT_MDL_SESSION_TTL_SECONDS * 1000
-		};
-		await signDirectMdlRequestObject(session, config, {
-			now,
-			expectedRequestUri: session.requestUri,
-			expectedResponseUri: session.responseUri
-		});
-		return {
-			id: 'direct_request_signer',
-			status: 'ok',
-			message: 'Direct Request Object signer imports and signs'
-		};
-	} catch (err) {
-		const message = err instanceof Error ? err.message : 'DIRECT_MDL_SIGNER_UNAVAILABLE';
-		return {
-			id: 'direct_request_signer',
-			status: 'blocked',
-			message: `Direct Request Object signer failed readiness: ${message}`
-		};
-	}
+async function encryptReadinessDcApiJwt(payload: unknown, publicJwk: JsonWebKey): Promise<string> {
+	const encryptionKey = await importJWK(
+		{
+			kty: publicJwk.kty,
+			crv: publicJwk.crv,
+			x: publicJwk.x,
+			y: publicJwk.y,
+			use: 'enc',
+			kid: '1',
+			alg: 'ECDH-ES'
+		},
+		'ECDH-ES'
+	);
+	const payloadBytes = Uint8Array.from(new TextEncoder().encode(JSON.stringify(payload)));
+	return new CompactEncrypt(payloadBytes)
+		.setProtectedHeader({ alg: 'ECDH-ES', enc: 'A256GCM', kid: '1' })
+		.encrypt(encryptionKey);
 }

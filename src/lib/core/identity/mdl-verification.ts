@@ -24,11 +24,7 @@
  * 7. Extract disclosed fields -> derive district and identity commitment -> discard raw fields
  */
 import { compactDecrypt, decodeProtectedHeader } from 'jose';
-import {
-	OPENID4VP_DC_API_PROTOCOL,
-	UNSIGNED_OPENID4VP_DC_API_PROTOCOL,
-	LEGACY_OPENID4VP_PROTOCOL
-} from '$lib/config/features';
+import { OPENID4VP_DC_API_PROTOCOL } from '$lib/config/features';
 
 /** Workers KV binding (minimal type for VICAL fallback — avoids @cloudflare/workers-types dependency) */
 type KVNamespace = {
@@ -45,13 +41,6 @@ interface MdlVerificationOptions {
 	vicalKv?: KVNamespace;
 	/** Canonical verifier origin stored with the DC API request session. */
 	verifierOrigin?: string;
-	/** Direct-post verifier context stored with the OpenID4VP request_uri session. */
-	directPost?: {
-		clientId: string;
-		responseUri: string;
-		jwkThumbprint?: Uint8Array | ArrayBuffer | null;
-		allowLocalhostHttp?: boolean;
-	};
 	/** SHA-256 JWK thumbprint for encrypted browser-mediated dc_api.jwt responses. */
 	dcApiJwkThumbprint?: Uint8Array | ArrayBuffer | null;
 }
@@ -108,7 +97,7 @@ export type MdlVerificationResult =
  * Raw address data enters this function. Only derived district leaves.
  *
  * @param encryptedData - The encrypted credential data from the wallet
- * @param protocol - 'org-iso-mdoc', 'openid4vp-v1-signed', 'openid4vp-v1-unsigned', or legacy 'openid4vp'
+ * @param protocol - 'org-iso-mdoc' or 'openid4vp-v1-signed'
  * @param ephemeralPrivateKey - The ephemeral private key for HPKE decryption
  * @param nonce - Session nonce for replay protection
  */
@@ -122,11 +111,7 @@ export async function processCredentialResponse(
 	try {
 		if (protocol === 'org-iso-mdoc') {
 			return await processMdocResponse(encryptedData, ephemeralPrivateKey, nonce, options?.vicalKv);
-		} else if (
-			protocol === LEGACY_OPENID4VP_PROTOCOL ||
-			protocol === UNSIGNED_OPENID4VP_DC_API_PROTOCOL ||
-			protocol === OPENID4VP_DC_API_PROTOCOL
-		) {
+		} else if (protocol === OPENID4VP_DC_API_PROTOCOL) {
 			return await processOid4vpResponse(
 				encryptedData,
 				ephemeralPrivateKey,
@@ -533,20 +518,18 @@ function duplicateMdlElementResult(identifier: string): MdlVerificationResult {
  * Process an OpenID4VP response.
  * Chrome 141+ may return credentials via this protocol alongside org-iso-mdoc.
  *
- * OpenID4VP responses contain a VP token. Legacy/test fixtures may present
- * JWT or SD-JWT VP tokens with claims directly. Current Google Wallet mDL
- * responses present `mso_mdoc` as base64url DeviceResponse entries inside a
- * VP token object; those are accepted only after issuerAuth, MSO digest, and
+ * OpenID4VP responses contain a VP token. Current Google Wallet mDL responses
+ * present `mso_mdoc` as base64url DeviceResponse entries inside a VP token
+ * object; those are accepted only after issuerAuth, MSO digest, and
  * DeviceAuth.deviceSignature verification against the stored DC API origin.
  *
- * Accepted formats:
+ * Accepted format:
  * 1. `openid4vp-v1-signed`: encrypted `dc_api.jwt` response containing
  *    `vp_token.mdl[]` mso_mdoc DeviceResponse.
- * 2. `openid4vp-v1-unsigned`: `vp_token.mdl[]` mso_mdoc DeviceResponse only.
- * 3. Legacy `openid4vp`: JWT or SD-JWT VP tokens with claims directly.
  *
  * Explicit fail-closed formats:
- * 4. Direct JSON object with claims (rejected — no signature to verify)
+ * 2. Direct JSON object with claims (rejected — no issuer-signed mdoc)
+ * 3. JWT/SD-JWT VP tokens (rejected — not the signed DC API mso_mdoc lane)
  *
  * PRIVACY BOUNDARY: Same as mdoc path — extract address fields,
  * derive district, discard raw address data.
@@ -616,132 +599,11 @@ async function processOid4vpResponse(
 		if (presentation.kind === 'mso_mdoc') {
 			return await processOpenId4VpMsoMdocPresentation(presentation, data, nonce, options);
 		}
-		if (protocol === OPENID4VP_DC_API_PROTOCOL || protocol === UNSIGNED_OPENID4VP_DC_API_PROTOCOL) {
-			return {
-				success: false,
-				error: 'invalid_format',
-				message:
-					'OpenID4VP DC API mDL responses must use mso_mdoc DeviceResponse; JWT/SD-JWT VP tokens are not accepted for this protocol'
-			};
-		}
-
-		const vpToken = presentation.token;
-
-		// Step 2: Verify the JWT/SD-JWT signature before claims are parsed.
-		const sigResult = await verifyVpTokenSignature(vpToken);
-		if (!sigResult.valid) {
-			return {
-				success: false,
-				error: 'signature_invalid',
-				message: `VP token signature verification failed: ${sigResult.reason}`
-			};
-		}
-
-		// Step 3: Extract claims (only after signature verified)
-		const claims = await parseVpToken(vpToken);
-		if (!claims) {
-			return {
-				success: false,
-				error: 'invalid_format',
-				message: 'Could not parse claims from verified VP token'
-			};
-		}
-
-		const temporalError = validateJwtTemporalClaims(claims);
-		if (temporalError) {
-			return {
-				success: false,
-				error: temporalError.error,
-				message: temporalError.message
-			};
-		}
-
-		// Step 4: Verify nonce (REQUIRED — missing nonce is a failure)
-		if (!claims.nonce) {
-			return {
-				success: false,
-				error: 'invalid_format',
-				message: 'OpenID4VP response missing nonce — potential replay'
-			};
-		}
-		if (claims.nonce !== nonce) {
-			return {
-				success: false,
-				error: 'invalid_format',
-				message: 'OpenID4VP nonce mismatch'
-			};
-		}
-
-		// Extract address fields from claims
-		// Claims may be nested under various structures depending on the wallet
-		const postalCode = findClaim(claims, 'resident_postal_code');
-		const city = findClaim(claims, 'resident_city');
-		const state = findClaim(claims, 'resident_state');
-
-		if (!postalCode || !state) {
-			return {
-				success: false,
-				error: 'missing_fields',
-				message: 'OpenID4VP response missing required address fields (postal_code, state)'
-			};
-		}
-
-		// Extract identity fields, compute commitment, discard raw fields
-		const documentNumber = findClaim(claims, 'document_number');
-		const birthDateRaw = findClaim(claims, 'birth_date');
-		const birthYear = extractBirthYear(birthDateRaw);
-
-		// Resolve district + cellId from postal code + city + state via Shadow Atlas.
-		// Uses the self-hosted Nominatim + H3 pipeline for sub-state precision.
-		// PRIVACY BOUNDARY: After this point, raw address fields are no longer used.
-		const location = await resolveLocationFromAddress(postalCode, city ?? '', state);
-
-		if (!location.district) {
-			return {
-				success: false,
-				error: 'district_lookup_failed',
-				message: 'Could not determine congressional district from OpenID4VP claims'
-			};
-		}
-
-		const district = location.district;
-		const cellId = location.cellId;
-
-		// Compute credential hash for dedup
-		const dataStr = typeof data === 'string' ? data : JSON.stringify(data);
-		const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(dataStr));
-		const credentialHash = Array.from(new Uint8Array(hashBuffer))
-			.map((b) => b.toString(16).padStart(2, '0'))
-			.join('');
-
-		// Identity fields are REQUIRED for sybil-resistant identity commitment.
-		if (!documentNumber || !birthYear) {
-			return {
-				success: false,
-				error: 'missing_identity_fields',
-				message:
-					'Your wallet must share birth date and document number for identity verification. Check your wallet settings or try a different wallet.'
-			};
-		}
-
-		// Compute identity commitment INSIDE the privacy boundary
-		const identityCommitment = await computeIdentityCommitmentInBoundary(documentNumber, birthYear);
-		if (!identityCommitment) {
-			return {
-				success: false,
-				error: 'identity_commitment_failed',
-				message: 'Identity commitment could not be computed — verifier is not configured'
-			};
-		}
-
 		return {
-			success: true,
-			district,
-			state,
-			credentialHash,
-			verificationMethod: 'mdl',
-			identityCommitment,
-			cellId: cellId ?? undefined
+			success: false,
+			error: 'invalid_format',
+			message:
+				'OpenID4VP DC API mDL responses must use encrypted mso_mdoc DeviceResponse; JWT/SD-JWT VP tokens are not accepted'
 		};
 	} catch (err) {
 		console.error('[mDL] OpenID4VP processing error:', err);
@@ -759,19 +621,12 @@ async function processOpenId4VpMsoMdocPresentation(
 	nonce: string,
 	options?: MdlVerificationOptions
 ): Promise<MdlVerificationResult> {
-	if (!options?.verifierOrigin && !options?.directPost) {
+	if (!options?.verifierOrigin) {
 		return {
 			success: false,
 			error: 'replay_protection_missing',
 			message:
 				'OpenID4VP mso_mdoc DeviceResponse requires stored verifier handover SessionTranscript context and DeviceAuth verification before it can be accepted'
-		};
-	}
-	if (options.verifierOrigin && options.directPost) {
-		return {
-			success: false,
-			error: 'invalid_format',
-			message: 'OpenID4VP mso_mdoc verifier handover context is ambiguous'
 		};
 	}
 
@@ -1035,24 +890,12 @@ function isSha256Digest(value: Uint8Array | ArrayBuffer | null | undefined): boo
 }
 
 async function buildOpenId4VpMdocSessionTranscript(nonce: string, options: MdlVerificationOptions) {
-	if (options.directPost) {
-		const { buildOpenId4VpDirectSessionTranscript } = await import('./oid4vp-direct-handover');
-		const { sessionTranscript } = await buildOpenId4VpDirectSessionTranscript({
-			clientId: options.directPost.clientId,
-			nonce,
-			responseUri: options.directPost.responseUri,
-			jwkThumbprint: options.directPost.jwkThumbprint ?? null,
-			allowLocalhostHttp: options.directPost.allowLocalhostHttp ?? false
-		});
-		return sessionTranscript;
-	}
-
 	if (options.verifierOrigin) {
 		const { buildOpenId4VpDcApiSessionTranscript } = await import('./oid4vp-dc-api-handover');
 		const { sessionTranscript } = await buildOpenId4VpDcApiSessionTranscript({
 			origin: options.verifierOrigin,
 			nonce,
-			jwkThumbprint: options.dcApiJwkThumbprint ?? null
+			jwkThumbprint: options.dcApiJwkThumbprint as Uint8Array | ArrayBuffer
 		});
 		return sessionTranscript;
 	}
@@ -1175,7 +1018,6 @@ function validateMsoValidity(mso: {
 }
 
 type Oid4vpPresentation =
-	| { kind: 'jwt'; token: string }
 	| { kind: 'encrypted_response'; jwe: string }
 	| { kind: 'mso_mdoc'; credentialId: string; deviceResponses: string[] }
 	| { kind: 'unsupported'; message: string };
@@ -1184,7 +1026,6 @@ type Oid4vpPresentation =
  * Extract and classify OpenID4VP response payloads.
  *
  * DigitalCredential.data may be:
- * - a raw JWT/SD-JWT string from legacy/test integrations
  * - a JSON string with `{ vp_token: ... }`
  * - a full `{ protocol, data }` DigitalCredential-like envelope
  * - a `dc_api.jwt` authorization response with encrypted `response`
@@ -1213,10 +1054,10 @@ function extractOid4vpPresentation(
 			}
 		}
 		if (isCompactJwe(trimmed)) {
-			return { kind: 'encrypted_response', jwe: trimmed };
-		}
-		if (isJwtOrSdJwt(trimmed)) {
-			return { kind: 'jwt', token: trimmed };
+			return {
+				kind: 'unsupported',
+				message: 'OpenID4VP encrypted responses must be wrapped in a dc_api response envelope'
+			};
 		}
 	}
 
@@ -1230,8 +1071,14 @@ function extractOid4vpPresentation(
 			};
 		}
 
-		const hasEncryptedResponse =
-			typeof obj.response === 'string' || typeof obj.identityToken === 'string';
+		if (typeof obj.identityToken === 'string') {
+			return {
+				kind: 'unsupported',
+				message: 'OpenID4VP identityToken envelopes are not accepted for mDL verification'
+			};
+		}
+
+		const hasEncryptedResponse = typeof obj.response === 'string';
 		if (hasEncryptedResponse && ('data' in obj || 'vp_token' in obj)) {
 			return {
 				kind: 'unsupported',
@@ -1242,7 +1089,7 @@ function extractOid4vpPresentation(
 		if (hasEncryptedResponse) {
 			return {
 				kind: 'encrypted_response',
-				jwe: typeof obj.response === 'string' ? obj.response : (obj.identityToken as string)
+				jwe: obj.response as string
 			};
 		}
 
@@ -1265,15 +1112,9 @@ function extractOid4vpPresentation(
 
 		const vpToken = obj.vp_token;
 		if (typeof vpToken === 'string') {
-			if (isCompactJwe(vpToken)) {
-				return { kind: 'encrypted_response', jwe: vpToken };
-			}
-			if (isJwtOrSdJwt(vpToken)) {
-				return { kind: 'jwt', token: vpToken };
-			}
 			return {
 				kind: 'unsupported',
-				message: 'OpenID4VP vp_token string is not a JWT, SD-JWT, or compact JWE'
+				message: 'OpenID4VP vp_token strings are not accepted for mDL verification'
 			};
 		}
 
@@ -1288,11 +1129,6 @@ function extractOid4vpPresentation(
 	}
 
 	return null;
-}
-
-function isJwtOrSdJwt(token: string): boolean {
-	const [jwtPart] = token.split('~');
-	return jwtPart.split('.').length === 3;
 }
 
 function isCompactJwe(token: string): boolean {
@@ -1468,207 +1304,6 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 }
 
 /**
- * Verify a VP token (JWT or SD-JWT) signature using Web Crypto.
- *
- * For JWT: verifies the header.payload.signature using a leaf certificate from
- * the header's `x5c` chain. The leaf certificate must chain to the same IACA
- * trust store used by the raw mdoc COSE path. Header-provided `jwk` keys are
- * intentionally rejected because they do not establish issuer trust.
- *
- * For SD-JWT: verifies the base JWT signature only (disclosures are
- * bound by the `_sd_alg` hash in the payload).
- */
-async function verifyVpTokenSignature(
-	token: string
-): Promise<{ valid: true } | { valid: false; reason: string }> {
-	// Split off SD-JWT disclosures
-	const [jwtPart] = token.split('~');
-	const segments = jwtPart.split('.');
-
-	if (segments.length !== 3) {
-		return { valid: false, reason: 'JWT must have exactly 3 segments (header.payload.signature)' };
-	}
-
-	const [headerB64, payloadB64, signatureB64] = segments;
-
-	// Decode header to determine algorithm and key
-	let header: Record<string, unknown>;
-	try {
-		header = JSON.parse(base64urlDecodeString(headerB64)) as Record<string, unknown>;
-	} catch {
-		return { valid: false, reason: 'Failed to decode JWT header' };
-	}
-
-	const alg = header.alg as string;
-	if (!alg) {
-		return { valid: false, reason: 'JWT header missing alg field' };
-	}
-
-	// Map JWT algorithm to Web Crypto parameters
-	const algMap: Record<string, { name: string; hash: string; namedCurve?: string }> = {
-		ES256: { name: 'ECDSA', hash: 'SHA-256', namedCurve: 'P-256' },
-		ES384: { name: 'ECDSA', hash: 'SHA-384', namedCurve: 'P-384' },
-		ES512: { name: 'ECDSA', hash: 'SHA-512', namedCurve: 'P-521' }
-	};
-
-	const cryptoAlg = algMap[alg];
-	if (!cryptoAlg) {
-		return {
-			valid: false,
-			reason: `Unsupported JWT algorithm: ${alg}. Only ECDSA (ES256/ES384/ES512) supported.`
-		};
-	}
-
-	// Extract public key from a trusted x5c certificate. Do not accept `jwk`:
-	// a wallet-controlled key verifies syntax but proves nothing about DMV/IACA issuance.
-	let publicKey: CryptoKey;
-	try {
-		if (header.jwk && typeof header.jwk === 'object') {
-			return {
-				valid: false,
-				reason:
-					'OpenID4VP mDL JWT must use an x5c certificate anchored to IACA roots; embedded jwk is not accepted'
-			};
-		} else if (header.x5c && Array.isArray(header.x5c) && header.x5c.length > 0) {
-			const certB64 = header.x5c[0] as string;
-			if (typeof certB64 !== 'string' || certB64.length === 0) {
-				return { valid: false, reason: 'JWT x5c leaf certificate must be a base64 string' };
-			}
-			const certDer = base64Decode(certB64);
-
-			const [
-				{ getIACARootsForVerification, supportedIACAStates },
-				{ verifyCertificateAgainstIacaRoots }
-			] = await Promise.all([import('./iaca-roots'), import('./cose-verify')]);
-			const roots = getIACARootsForVerification();
-			if (roots.length === 0) {
-				return {
-					valid: false,
-					reason: 'No IACA root certificates loaded — cannot verify OpenID4VP issuer'
-				};
-			}
-
-			const trustResult = await verifyCertificateAgainstIacaRoots(certDer, roots);
-			if (!trustResult.trusted) {
-				return {
-					valid: false,
-					reason: `x5c leaf certificate is not anchored to IACA trust store (${trustResult.reason}). Supported states: ${supportedIACAStates().join(', ')}`
-				};
-			}
-
-			publicKey = await importEcPublicKeyFromCertDer(certDer, cryptoAlg);
-		} else {
-			return {
-				valid: false,
-				reason: 'JWT header must contain an x5c certificate chain for issuer verification'
-			};
-		}
-	} catch (err) {
-		return {
-			valid: false,
-			reason: `Failed to import signing key: ${err instanceof Error ? err.message : 'unknown'}`
-		};
-	}
-
-	// Verify signature
-	try {
-		const signedData = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
-		const signature = base64urlDecode(signatureB64);
-
-		// JWT uses raw R||S encoding for ECDSA (not DER)
-		const verified = await crypto.subtle.verify(
-			{ name: cryptoAlg.name, hash: cryptoAlg.hash },
-			publicKey,
-			signature as BufferSource,
-			signedData as BufferSource
-		);
-
-		if (!verified) {
-			return { valid: false, reason: 'JWT signature is invalid' };
-		}
-
-		return { valid: true };
-	} catch (err) {
-		return {
-			valid: false,
-			reason: `Signature verification error: ${err instanceof Error ? err.message : 'unknown'}`
-		};
-	}
-}
-
-/**
- * Import an EC public key from a DER-encoded X.509 certificate.
- * Extracts the SubjectPublicKeyInfo and imports via Web Crypto.
- */
-async function importEcPublicKeyFromCertDer(
-	certDer: Uint8Array,
-	alg: { name: string; namedCurve?: string }
-): Promise<CryptoKey> {
-	// X.509 certificates contain the SubjectPublicKeyInfo (SPKI) structure.
-	// Web Crypto can import SPKI directly from the raw certificate via 'spki' format.
-	// However, importKey('spki') expects raw SPKI, not the full certificate.
-	// For simplicity, we use the raw format with the full cert and let the runtime handle it.
-	// CF Workers supports importing from DER-encoded certificates.
-	return crypto.subtle.importKey(
-		'spki',
-		extractSpkiFromCert(certDer) as BufferSource,
-		{ name: alg.name, namedCurve: alg.namedCurve! } as EcKeyImportParams,
-		false,
-		['verify']
-	);
-}
-
-/**
- * Extract SubjectPublicKeyInfo (SPKI) from a DER-encoded X.509 certificate.
- * Walks the ASN.1 structure: Certificate → TBSCertificate → subjectPublicKeyInfo.
- *
- * Returns the complete DER-encoded SPKI for Web Crypto importKey('spki').
- */
-function extractSpkiFromCert(cert: Uint8Array): Uint8Array {
-	let pos = 0;
-
-	// Read a DER tag + length, return { tag, contentStart, contentLength, totalLength }
-	function readTL(): { tag: number; contentStart: number; contentLength: number } {
-		const tag = cert[pos++];
-		let len = cert[pos++];
-		if (len & 0x80) {
-			const numBytes = len & 0x7f;
-			len = 0;
-			for (let i = 0; i < numBytes; i++) {
-				len = (len << 8) | cert[pos++];
-			}
-		}
-		return { tag, contentStart: pos, contentLength: len };
-	}
-
-	// Skip an entire TLV element
-	function skip(): void {
-		const { contentLength } = readTL();
-		pos += contentLength;
-	}
-
-	// Outer SEQUENCE (Certificate)
-	readTL();
-	// TBSCertificate SEQUENCE
-	readTL();
-
-	// version [0] EXPLICIT — optional context tag 0xa0
-	if (cert[pos] === 0xa0) skip();
-
-	skip(); // serialNumber
-	skip(); // signature AlgorithmIdentifier
-	skip(); // issuer Name
-	skip(); // validity Validity
-	skip(); // subject Name
-
-	// subjectPublicKeyInfo — return the complete TLV
-	const spkiStart = pos;
-	const { contentLength } = readTL();
-	pos += contentLength;
-	return cert.slice(spkiStart, pos);
-}
-
-/**
  * Base64 (standard, NOT base64url) decode to Uint8Array
  */
 function base64Decode(b64: string): Uint8Array {
@@ -1690,209 +1325,8 @@ function base64urlDecode(b64url: string): Uint8Array {
 	return base64Decode(b64);
 }
 
-/**
- * Parse a VP token (JWT or SD-JWT) and extract the payload claims.
- *
- * JWT: header.payload.signature
- * SD-JWT: header.payload.signature~disclosure1~disclosure2~...
- *
- * Disclosures in SD-JWT are base64url-encoded JSON arrays: [salt, name, value]
- */
-async function parseVpToken(token: string): Promise<Record<string, unknown> | null> {
-	// Split off SD-JWT disclosures if present
-	const [jwtPart, ...disclosureParts] = token.split('~');
-
-	// Parse the JWT payload
-	const jwtSegments = jwtPart.split('.');
-	if (jwtSegments.length < 2) {
-		return null;
-	}
-
-	const payloadB64 = jwtSegments[1];
-	try {
-		const payloadJson = base64urlDecodeString(payloadB64);
-		const payload = JSON.parse(payloadJson) as Record<string, unknown>;
-
-		// If there are SD-JWT disclosures, merge them into the payload
-		if (disclosureParts.some(Boolean)) {
-			const valid = await mergeDisclosures(payload, disclosureParts);
-			if (!valid) return null;
-		}
-
-		return payload;
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Merge SD-JWT disclosures into the payload only if each disclosure hash is
- * committed in a signed `_sd` array. This prevents attackers from appending
- * unbound disclosures after the JWT signature.
- *
- * Each disclosure is a base64url-encoded JSON array: [salt, claim_name, claim_value]
- */
-async function mergeDisclosures(
-	payload: Record<string, unknown>,
-	disclosures: string[]
-): Promise<boolean> {
-	const sdAlg = typeof payload._sd_alg === 'string' ? payload._sd_alg.toLowerCase() : 'sha-256';
-	if (sdAlg !== 'sha-256') return false;
-
-	for (const disclosure of disclosures) {
-		if (!disclosure) continue; // Skip empty segments (trailing ~)
-		try {
-			const decoded = JSON.parse(base64urlDecodeString(disclosure));
-			if (!Array.isArray(decoded) || decoded.length < 3) {
-				return false;
-			}
-			const [_salt, name, value] = decoded;
-			if (typeof name !== 'string' || isUnsafeClaimName(name)) {
-				return false;
-			}
-
-			const disclosureDigest = await sha256Base64Url(disclosure);
-			const target = findDisclosureTarget(payload, disclosureDigest);
-			if (!target || Object.prototype.hasOwnProperty.call(target, name)) {
-				return false;
-			}
-
-			target[name] = value;
-		} catch {
-			return false;
-		}
-	}
-
-	return true;
-}
-
-function findDisclosureTarget(
-	value: unknown,
-	disclosureDigest: string
-): Record<string, unknown> | null {
-	if (!isRecord(value)) return null;
-
-	const sd = value._sd;
-	if (Array.isArray(sd) && sd.includes(disclosureDigest)) {
-		return value;
-	}
-
-	for (const nested of Object.values(value)) {
-		const found = findDisclosureTarget(nested, disclosureDigest);
-		if (found) return found;
-	}
-
-	return null;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isUnsafeClaimName(name: string): boolean {
-	return name === '__proto__' || name === 'constructor' || name === 'prototype';
-}
-
-async function sha256Base64Url(value: string): Promise<string> {
-	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-	const bytes = new Uint8Array(digest);
-	let binary = '';
-	for (const byte of bytes) {
-		binary += String.fromCharCode(byte);
-	}
-	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-function validateJwtTemporalClaims(
-	claims: Record<string, unknown>
-): { error: 'expired' | 'invalid_format'; message: string } | null {
-	const now = Math.floor(Date.now() / 1000);
-	const skewSeconds = 60;
-
-	const exp = readNumericDateClaim(claims, 'exp');
-	if (exp.invalid) return { error: 'invalid_format', message: 'OpenID4VP exp claim is invalid' };
-	if (exp.value !== undefined && exp.value <= now - skewSeconds) {
-		return { error: 'expired', message: 'OpenID4VP response has expired' };
-	}
-
-	const nbf = readNumericDateClaim(claims, 'nbf');
-	if (nbf.invalid) return { error: 'invalid_format', message: 'OpenID4VP nbf claim is invalid' };
-	if (nbf.value !== undefined && nbf.value > now + skewSeconds) {
-		return { error: 'invalid_format', message: 'OpenID4VP response is not valid yet' };
-	}
-
-	const iat = readNumericDateClaim(claims, 'iat');
-	if (iat.invalid) return { error: 'invalid_format', message: 'OpenID4VP iat claim is invalid' };
-	if (iat.value !== undefined && iat.value > now + skewSeconds) {
-		return { error: 'invalid_format', message: 'OpenID4VP response was issued in the future' };
-	}
-
-	return null;
-}
-
-function readNumericDateClaim(
-	claims: Record<string, unknown>,
-	name: 'exp' | 'nbf' | 'iat'
-): { value?: number; invalid?: true } {
-	const value = claims[name];
-	if (value === undefined || value === null) return {};
-	if (typeof value === 'number' && Number.isFinite(value)) return { value };
-	if (typeof value === 'string' && /^\d+$/.test(value)) return { value: Number(value) };
-	return { invalid: true };
-}
-
-/**
- * Find a claim value by name in a claims object.
- * Searches top-level, nested under common mDL namespaces,
- * and inside credentialSubject/claims structures.
- */
-function findClaim(claims: Record<string, unknown>, name: string): string | null {
-	// Direct top-level claim
-	if (typeof claims[name] === 'string') {
-		return claims[name] as string;
-	}
-
-	// Nested under mDL namespace
-	const mdlNs = claims['org.iso.18013.5.1'] as Record<string, unknown> | undefined;
-	if (mdlNs && typeof mdlNs[name] === 'string') {
-		return mdlNs[name] as string;
-	}
-
-	// Nested under credentialSubject
-	const subject = claims.credentialSubject as Record<string, unknown> | undefined;
-	if (subject && typeof subject[name] === 'string') {
-		return subject[name] as string;
-	}
-
-	const nestedClaims = claims.claims as Record<string, unknown> | undefined;
-	if (nestedClaims && typeof nestedClaims[name] === 'string') {
-		return nestedClaims[name] as string;
-	}
-
-	// Nested under vc.credentialSubject
-	const vc = claims.vc as Record<string, unknown> | undefined;
-	if (vc) {
-		const vcSubject = vc.credentialSubject as Record<string, unknown> | undefined;
-		if (vcSubject && typeof vcSubject[name] === 'string') {
-			return vcSubject[name] as string;
-		}
-	}
-
-	return null;
-}
-
-/**
- * Decode a base64url-encoded string to UTF-8 text.
- * Handles missing padding and url-safe characters.
- */
-function base64urlDecodeString(str: string): string {
-	// Convert base64url to standard base64
-	let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-	// Add padding
-	while (base64.length % 4 !== 0) {
-		base64 += '=';
-	}
-	return atob(base64);
 }
 
 /**

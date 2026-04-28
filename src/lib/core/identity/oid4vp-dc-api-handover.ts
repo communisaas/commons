@@ -1,17 +1,14 @@
 const HANDOVER_IDENTIFIER = 'OpenID4VPDCAPIHandover' as const;
 
-export type OpenId4VpDcApiHandoverInfo = [origin: string, nonce: string, jwkThumbprint: Uint8Array | null];
+export type OpenId4VpDcApiHandoverInfo = [origin: string, nonce: string, jwkThumbprint: Uint8Array];
 export type OpenId4VpDcApiHandover = [typeof HANDOVER_IDENTIFIER, Uint8Array];
 export type OpenId4VpDcApiSessionTranscript = [null, null, OpenId4VpDcApiHandover];
 
 export interface OpenId4VpDcApiSessionTranscriptInput {
 	origin: string;
 	nonce: string;
-	/**
-	 * OpenID4VP uses null for response_mode=dc_api and a SHA-256 JWK thumbprint
-	 * when the response is encrypted.
-	 */
-	jwkThumbprint?: Uint8Array | ArrayBuffer | null;
+	/** SHA-256 JWK thumbprint for encrypted dc_api.jwt responses. */
+	jwkThumbprint: Uint8Array | ArrayBuffer;
 }
 
 export interface OpenId4VpDcApiSessionTranscriptParts {
@@ -26,7 +23,7 @@ export interface OpenId4VpDcApiSessionTranscriptParts {
 export async function buildOpenId4VpDcApiSessionTranscript({
 	origin,
 	nonce,
-	jwkThumbprint = null
+	jwkThumbprint
 }: OpenId4VpDcApiSessionTranscriptInput): Promise<OpenId4VpDcApiSessionTranscriptParts> {
 	const handoverInfo: OpenId4VpDcApiHandoverInfo = [
 		normalizeDcApiOrigin(origin),
@@ -112,8 +109,10 @@ function normalizeDcApiNonce(nonce: string): string {
 
 function normalizeJwkThumbprint(
 	jwkThumbprint: Uint8Array | ArrayBuffer | null | undefined
-): Uint8Array | null {
-	if (jwkThumbprint == null) return null;
+): Uint8Array {
+	if (jwkThumbprint == null) {
+		throw new Error('DC API JWK thumbprint is required for encrypted responses');
+	}
 
 	const bytes =
 		jwkThumbprint instanceof Uint8Array

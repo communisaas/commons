@@ -34,8 +34,6 @@ VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
 #   IDENTITY_HASH_SALT       - Sybil-resistant identity hashing
 #   IDENTITY_COMMITMENT_SALT - mDL identity commitment (NEVER regenerate — invalidates nullifiers)
 #   PUBLIC_APP_URL           - Origin for openid4vp client_id (e.g., https://commons.email)
-#   MDL_DIRECT_QR_REQUEST_PRIVATE_KEY - PKCS#8 key for direct OpenID4VP Request Objects
-#   MDL_DIRECT_QR_REQUEST_X5C         - X.509 chain for the direct Request Object JWS header
 #
 # AI Services:
 #   GEMINI_API_KEY           - Gemini API for agents + embeddings
@@ -55,21 +53,14 @@ VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
 #   MDL_OPENID4VP_REQUEST_KID         - Optional Request Object JWS kid
 #   MDL_OPENID4VP_REQUEST_AUD         - Optional audience; defaults to https://self-issued.me/v2
 
-# DC_SESSION_KV: KV namespace for DC (district-confirmed) session state
-# Used to store ephemeral session data during the congressional contact flow
+# DC_SESSION_KV: KV namespace for Digital Credentials verifier session state
+# Used to store ephemeral mDL private keys, thumbprints, origins, and nonces
 # Create the namespace before deploying:
 #   npx wrangler kv namespace create DC_SESSION_KV
 # Then replace the id below with the output namespace ID
 [[kv_namespaces]]
 binding = "DC_SESSION_KV"
 id = "a76f18d2c07042bc856a30038af05ab8"
-
-# DIRECT_MDL_SESSION_KV: KV namespace for direct OpenID4VP QR session state
-# Separate from DC_SESSION_KV so direct QR sessions can be monitored and purged
-# without affecting same-device district-confirmed sessions.
-[[kv_namespaces]]
-binding = "DIRECT_MDL_SESSION_KV"
-id = "e06bf9bb1d4f4fe7a74a440f8cb2afaa"
 
 # REJECTION_MONITOR_KV: KV namespace for rejection rate monitoring (P1 #18)
 # Tracks hourly rejection counts per route group. Entries have 2hr TTL.
