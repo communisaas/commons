@@ -133,6 +133,8 @@ jobs:
       - name: Probe production domain health
         if: github.event.workflow_run.head_branch == 'production'
         run: |
+          domain_challenged=false
+          domain_hard_failure=false
           for attempt in {1..12}; do
             if response=$(curl -sS --max-time 20 -w "\n%{http_code}" "$DEPLOY_PUBLIC_URL/api/health"); then
               http_status=$(printf '%s\n' "$response" | tail -n 1)
@@ -149,13 +151,82 @@ jobs:
                 exit 1
               fi
 
-              echo "Production domain probe attempt ${attempt} returned HTTP ${http_status}."
+              if [ "$http_status" = "403" ] && printf '%s' "$body" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
+                domain_challenged=true
+              else
+                domain_hard_failure=true
+              fi
+
+              echo "Production domain probe attempt ${attempt} returned HTTP ${http_status}:"
+              printf '%s\n' "$body" | head -c 4000
+              printf '\n'
             else
               echo "Production domain probe failed on attempt ${attempt} before an HTTP response."
             fi
+
+            if [ "$attempt" = "12" ]; then
+              if [ "$domain_challenged" = "true" ] && [ "$domain_hard_failure" = "false" ]; then
+                echo "::warning::Production domain health was blocked by a Cloudflare challenge from the GitHub runner; complete external release smoke against ${DEPLOY_PUBLIC_URL}/api/health."
+                exit 0
+              fi
+              if [ "$domain_hard_failure" = "true" ]; then
+                echo "::error::Production domain health returned an unexpected response."
+                exit 1
+              fi
+              echo "::warning::Production domain health could not be verified from GitHub-hosted runners; complete external release smoke against ${DEPLOY_PUBLIC_URL}/api/health."
+              exit 0
+            fi
+
             sleep 10
           done
-          echo "::warning::Production domain health could not be verified from GitHub-hosted runners; complete external release smoke against ${DEPLOY_PUBLIC_URL}/api/health."
+
+      - name: Probe production direct mDL route
+        if: github.event.workflow_run.head_branch == 'production'
+        run: |
+          route_challenged=false
+          route_hard_failure=false
+          for attempt in {1..12}; do
+            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
+              -X POST \
+              -H "Accept: application/json" \
+              -H "Origin: ${DEPLOY_PUBLIC_URL}" \
+              "${DEPLOY_PUBLIC_URL}/api/identity/direct-mdl/start"); then
+              http_status=$(printf '%s\n' "$response" | tail -n 1)
+              body=$(printf '%s\n' "$response" | sed '$d')
+
+              if [ "$http_status" = "401" ] && echo "$body" | jq -e '.message == "Authentication required"' >/dev/null 2>&1; then
+                echo "Production direct mDL route is live and requires authentication."
+                exit 0
+              fi
+
+              if [ "$http_status" = "403" ] && printf '%s' "$body" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
+                route_challenged=true
+              else
+                route_hard_failure=true
+              fi
+
+              echo "Production direct mDL route attempt ${attempt} returned HTTP ${http_status}:"
+              printf '%s\n' "$body" | head -c 4000
+              printf '\n'
+            else
+              echo "Production direct mDL route attempt ${attempt} failed before an HTTP response."
+            fi
+
+            if [ "$attempt" = "12" ]; then
+              if [ "$route_challenged" = "true" ] && [ "$route_hard_failure" = "false" ]; then
+                echo "::warning::Production direct mDL route was blocked by a Cloudflare challenge from the GitHub runner; complete external route smoke against ${DEPLOY_PUBLIC_URL}/api/identity/direct-mdl/start."
+                exit 0
+              fi
+              if [ "$route_hard_failure" = "true" ]; then
+                echo "::error::Production direct mDL route did not return the expected authentication gate."
+                exit 1
+              fi
+              echo "::warning::Production direct mDL route could not be verified from GitHub-hosted runners; complete external route smoke against ${DEPLOY_PUBLIC_URL}/api/identity/direct-mdl/start."
+              exit 0
+            fi
+
+            sleep 10
+          done
 
       - name: Probe production mDL readiness
         if: github.event.workflow_run.head_branch == 'production'
@@ -172,7 +243,8 @@ jobs:
           for attempt in {1..12}; do
             if response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
               -H "X-Internal-Secret: ${INTERNAL_API_SECRET}" \
-              "${DEPLOY_PUBLIC_URL}/api/internal/identity/mdl-readiness"); then
+              -H "X-Readiness-Origin: ${DEPLOY_PUBLIC_URL}" \
+              "${DEPLOY_HEALTH_URL}/api/internal/identity/mdl-readiness"); then
               http_status=$(printf '%s\n' "${response}" | tail -n 1)
               body=$(printf '%s\n' "${response}" | sed '$d')
 

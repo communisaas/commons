@@ -160,6 +160,45 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		);
 	});
 
+	it('accepts a canonical origin override for immutable deployment readiness probes', async () => {
+		mockAllowedOrigin.value = 'https://commons.email';
+		const response = await GET(
+			makeEvent({
+				origin: 'https://production.communique-site.pages.dev',
+				headers: { 'x-readiness-origin': 'https://commons.email' },
+				platformEnv: { PUBLIC_APP_URL: 'https://commons.email' }
+			})
+		);
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(body.status).toBe('ok');
+		expect(body.directRequest.allowedOrigin).toBe('https://commons.email');
+		expect(body.blockers).toEqual([]);
+		expect(mockValidateSignerConfig).toHaveBeenCalledWith(
+			{ privateKeyPem: 'configured', x5c: ['configured'] },
+			'commons.email',
+			expect.objectContaining({ now: expect.any(Number) })
+		);
+	});
+
+	it('blocks readiness origin overrides that do not match PUBLIC_APP_URL', async () => {
+		mockAllowedOrigin.value = 'https://commons.email';
+		const response = await GET(
+			makeEvent({
+				origin: 'https://production.communique-site.pages.dev',
+				headers: { 'x-readiness-origin': 'https://evil.example' },
+				platformEnv: { PUBLIC_APP_URL: 'https://commons.email' }
+			})
+		);
+		expect(response.status).toBe(503);
+		const body = await response.json();
+		expect(body.blockers).toContain('public_app_url');
+		expect(body.blockers).toContain('direct_qr_allowed_origin');
+		expect(body.blockers).toContain('direct_request_signer');
+		expect(mockValidateSignerConfig).not.toHaveBeenCalled();
+		expect(mockSignRequestObject).not.toHaveBeenCalled();
+	});
+
 	it('blocks direct smoke when the direct QR build flag is off', async () => {
 		mockFeatures.MDL_DIRECT_QR = false;
 		const response = await GET(makeEvent());

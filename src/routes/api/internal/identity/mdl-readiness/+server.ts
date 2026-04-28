@@ -37,8 +37,13 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 	requireInternalSecret(request);
 
 	const smokeEnv = platform?.env as SmokeEnv | undefined;
-	const originCheck = checkPublicAppUrl(smokeEnv?.PUBLIC_APP_URL, url.origin);
-	const signerCheck = await checkDirectRequestSigner(smokeEnv, originCheck.origin);
+	const requestOrigin = readinessRequestOrigin(request, url.origin);
+	const originCheck = checkPublicAppUrl(smokeEnv?.PUBLIC_APP_URL, requestOrigin);
+	const directOriginCheck = checkAllowedDirectOrigin(originCheck.origin);
+	const signerCheck =
+		originCheck.check.status === 'ok' && directOriginCheck.status === 'ok'
+			? await checkDirectRequestSigner(smokeEnv, originCheck.origin)
+			: blockedDirectRequestSignerCheck();
 	const checks: ReadinessCheck[] = [
 		checkBoolean(
 			'android_openid4vp_enabled',
@@ -54,7 +59,7 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 		checkBoolean('raw_mdoc_disabled', !FEATURES.MDL_MDOC, 'Raw org-iso-mdoc remains disabled'),
 		checkBoolean('ios_lane_disabled', !FEATURES.MDL_IOS, 'iOS lane remains disabled'),
 		originCheck.check,
-		checkAllowedDirectOrigin(originCheck.origin),
+		directOriginCheck,
 		checkKvBinding('dc_session_kv', Boolean(smokeEnv?.DC_SESSION_KV), 'DC_SESSION_KV is bound'),
 		checkKvBinding(
 			'bridge_session_kv',
@@ -113,6 +118,16 @@ function requireInternalSecret(request: Request): void {
 	if (!expected) throw error(503, 'INTERNAL_API_SECRET not configured');
 	const provided = request.headers.get('x-internal-secret');
 	if (!verifyCronSecretRaw(provided, expected)) throw error(403, 'Invalid internal secret');
+}
+
+function readinessRequestOrigin(request: Request, fallback: string): string {
+	const override = request.headers.get('x-readiness-origin')?.trim();
+	if (!override) return fallback;
+	try {
+		return new URL(override).origin;
+	} catch {
+		return fallback;
+	}
 }
 
 function checkAllowedDirectOrigin(origin: string | undefined): ReadinessCheck {
@@ -288,6 +303,14 @@ function checkBridgeEncryption(smokeEnv: SmokeEnv | undefined): ReadinessCheck {
 		id: 'bridge_encryption_key',
 		status: 'ok',
 		message: 'BRIDGE_ENCRYPTION_KEY is configured'
+	};
+}
+
+function blockedDirectRequestSignerCheck(): ReadinessCheck {
+	return {
+		id: 'direct_request_signer',
+		status: 'blocked',
+		message: 'Direct Request Object signer cannot be checked until direct QR origin policy passes'
 	};
 }
 
