@@ -209,7 +209,6 @@ const SENSITIVE_IDENTITY_PATHS = [
 	'/api/identity/store-blob',
 	'/api/identity/delete-blob',
 	'/api/identity/verify-mdl',
-	'/api/identity/bridge',
 	'/api/auth/passkey/register',
 	'/api/auth/passkey/authenticate',
 	'/api/location/resolve',

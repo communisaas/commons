@@ -15,9 +15,9 @@ import {
 } from '$lib/config/features';
 
 /**
- * Detect whether this is a mobile device (has a local wallet).
- * Desktop browsers should use the cross-device bridge instead of the DC API's
- * CTAP2 hybrid transport, which crashes Chrome's renderer on macOS.
+ * Detect whether this is a mobile device for the current same-device launch gate.
+ * Desktop browser-mediated cross-device DC API support is tracked separately in
+ * the Digital Credentials rollout graph.
  *
  * iPadOS 13+ reports a macOS UA string — detect via maxTouchPoints.
  */
@@ -44,9 +44,9 @@ export function isDigitalCredentialsSupported(): boolean {
 }
 
 /**
- * Check if the same-device DC API flow should be used.
- * Returns true only on mobile devices with DC API support.
- * Desktop browsers should always use the cross-device bridge.
+ * Check if the current same-device DC API flow should be used.
+ * Returns true only on mobile devices with DC API support until the
+ * browser-mediated cross-device path is enabled.
  */
 export function shouldUseSameDeviceFlow(): boolean {
 	return isMobileDevice() && isDigitalCredentialsSupported();

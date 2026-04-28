@@ -103,11 +103,12 @@ export const FEATURES = {
 	PASSKEY: false,
 
 	/**
-	 * Android mDL over OpenID4VP via the W3C Digital Credentials API.
+	 * mDL over OpenID4VP via the W3C Digital Credentials API.
 	 *
-	 * This lane does not depend on Apple Business Connect. Google Wallet's
-	 * current web protocol identifier is `openid4vp-v1-unsigned`; the legacy
-	 * `openid4vp` alias is accepted only for older browser experiments.
+	 * This lane is capability-detected by browser protocol support. It does not
+	 * depend on Apple Business Connect. Google Wallet's current web protocol
+	 * identifier is `openid4vp-v1-unsigned`; the legacy `openid4vp` alias is
+	 * accepted only for older browser experiments.
 	 */
 	MDL_ANDROID_OID4VP: true,
 
@@ -129,18 +130,12 @@ export const FEATURES = {
 	MDL_IOS: false,
 
 	/**
-	 * Deprecated desktop → phone web bridge backend. Retained only for reviewed
-	 * rollback/reference access while the direct QR path goes through smoke.
-	 */
-	MDL_BRIDGE: true,
-
-	/**
 	 * Desktop → phone direct OpenID4VP QR.
 	 *
 	 * Keep false until the direct-session store, direct mdoc handover,
 	 * request_uri/direct_post endpoints, desktop QR UI, staging preflight, and
-	 * real-device smoke all pass. The `/verify-bridge` backend remains for
-	 * rollback/reference only; it is no longer offered in the user flow.
+	 * real-device smoke all pass. This custom QR lane is temporary while the
+	 * browser-mediated Digital Credentials cross-device lane is completed.
 	 */
 	MDL_DIRECT_QR: enableDirectQr,
 
@@ -202,10 +197,6 @@ export function isMdlProtocolEnabled(protocol: string): boolean {
 
 export function isAnyMdlProtocolEnabled(): boolean {
 	return FEATURES.MDL_ANDROID_OID4VP || FEATURES.MDL_MDOC;
-}
-
-export function isMdlBridgeEnabled(): boolean {
-	return FEATURES.MDL_BRIDGE && isAnyMdlProtocolEnabled();
 }
 
 export function isMdlDirectQrEnabled(): boolean {

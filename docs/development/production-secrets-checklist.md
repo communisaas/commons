@@ -11,7 +11,7 @@ This document lists the environment variables required for the Commons productio
 | **CRITICAL** | AI Services | `GEMINI_API_KEY`, `GROQ_API_KEY` |
 | **CRITICAL** | Congressional API | `CWC_API_KEY` |
 | **CRITICAL** | Authentication | `JWT_SECRET`, `EMAIL_VERIFICATION_SECRET`, `SESSION_CREATION_SECRET` |
-| **HIGH** | Crypto Keys | `BRIDGE_ENCRYPTION_KEY`, `CAMPAIGN_PSEUDONYM_KEY`, `DISTRICT_HASH_KEY`, `OAUTH_ENCRYPTION_KEY`, `ORG_KEY_WRAPPING_KEY`, `INTERNAL_API_SECRET` |
+| **HIGH** | Crypto Keys | `CAMPAIGN_PSEUDONYM_KEY`, `DISTRICT_HASH_KEY`, `OAUTH_ENCRYPTION_KEY`, `ORG_KEY_WRAPPING_KEY`, `INTERNAL_API_SECRET` |
 | **HIGH** | OAuth | `GOOGLE_CLIENT_ID/SECRET`, other OAuth providers |
 | **MEDIUM** | VOTER Protocol | `VOTER_API_URL`, `VOTER_API_KEY` |
 | **MEDIUM** | Congressional Lookup | `CONGRESS_API_KEY` |

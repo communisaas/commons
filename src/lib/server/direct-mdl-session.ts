@@ -1,10 +1,9 @@
 /**
  * Direct OpenID4VP mDL session model.
  *
- * This is the desktop QR direct-post lane. It is intentionally separate from
- * bridge sessions: no QR fragment secret, no phone web claim state, and a
- * direct-post transport binding that future request_uri/direct_post endpoints
- * must preserve.
+ * This is the desktop QR direct-post lane: no QR fragment secret, no phone web
+ * claim state, and a direct-post transport binding that future
+ * request_uri/direct_post endpoints must preserve.
  */
 
 export const DIRECT_MDL_TRANSPORT = 'direct_post' as const;

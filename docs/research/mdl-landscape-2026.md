@@ -14,8 +14,8 @@
 >   OID4VP JWT sig verification (ES256/384/512, JWK + x5c); bifurcated
 >   nonce validation (hard in OID4VP, presence-only in
 >   `org-iso-mdoc` with T3 deferral); `self.xyz` / `Didit` as
->   backward-compat-only enums; cross-device bridge required on
->   desktop.
+>   backward-compat-only enums; desktop cross-device verification is moving to
+>   browser-mediated Digital Credentials QR.
 
 ## Our Current Coverage
 

@@ -65,14 +65,12 @@ declare global {
 		interface Platform {
 			env?: {
 				DC_SESSION_KV?: KVNamespace;
-				BRIDGE_SESSION_KV?: KVNamespace;
 				DIRECT_MDL_SESSION_KV?: KVNamespace;
 				REGISTRATION_RETRY_KV?: KVNamespace;
 				REJECTION_MONITOR_KV?: KVNamespace;
 				VICAL_KV?: KVNamespace;
 				PACKET_CACHE_KV?: KVNamespace;
 				PUBLIC_APP_URL?: string;
-				BRIDGE_ENCRYPTION_KEY?: string;
 				MDL_DIRECT_QR_REQUEST_PRIVATE_KEY?: string;
 				MDL_DIRECT_QR_REQUEST_X5C?: string;
 				MDL_DIRECT_QR_REQUEST_ALG?: string;
@@ -116,7 +114,6 @@ declare global {
 			IDENTITY_HASH_SALT?: string; // Sybil-resistant identity hashing (NEVER regenerate in production)
 			IP_HASH_SALT?: string; // Privacy-preserving IP anonymization (daily rotation)
 			OAUTH_ENCRYPTION_KEY?: string; // AES-256-GCM key for OAuth token encryption at rest
-			BRIDGE_ENCRYPTION_KEY?: string; // AES-256-GCM key for bridge session encryption
 			CONVEX_JWT_PRIVATE_KEY?: string; // RSA private key (PKCS#8 PEM) for minting Convex auth JWTs
 			CONVEX_AUTH_ISSUER?: string; // JWT issuer URL (defaults to https://commons.email)
 			SESSION_CREATION_SECRET?: string; // HMAC proof key for SvelteKit-created Convex sessions

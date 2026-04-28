@@ -3,13 +3,12 @@ import {
 	FEATURES,
 	OPENID4VP_DC_API_PROTOCOL,
 	isAnyMdlProtocolEnabled,
-	isMdlBridgeEnabled,
 	isMdlDirectQrEnabled,
 	isMdlProtocolEnabled,
 	requireMdlDirectQrEnabled
 } from '../../../src/lib/config/features';
 
-describe('mDL Android-first protocol policy', () => {
+describe('mDL Digital Credentials protocol policy', () => {
 	it('opens OpenID4VP without opening raw mdoc', () => {
 		expect(FEATURES.MDL_ANDROID_OID4VP).toBe(true);
 		expect(FEATURES.MDL_MDOC).toBe(false);
@@ -19,9 +18,8 @@ describe('mDL Android-first protocol policy', () => {
 		expect(isMdlProtocolEnabled('org-iso-mdoc')).toBe(false);
 	});
 
-	it('keeps the bridge open only through enabled protocols', () => {
+	it('keeps the mDL protocol gate open only through enabled protocols', () => {
 		expect(isAnyMdlProtocolEnabled()).toBe(true);
-		expect(isMdlBridgeEnabled()).toBe(true);
 	});
 
 	it('keeps direct desktop QR behind its explicit flag', () => {

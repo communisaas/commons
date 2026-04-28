@@ -33,7 +33,6 @@ VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
 #   JWT_SECRET               - Session token signing
 #   IDENTITY_HASH_SALT       - Sybil-resistant identity hashing
 #   IDENTITY_COMMITMENT_SALT - mDL identity commitment (NEVER regenerate — invalidates nullifiers)
-#   BRIDGE_ENCRYPTION_KEY    - AES-256-GCM key for encrypted bridge KV sessions
 #   PUBLIC_APP_URL           - Origin for openid4vp client_id (e.g., https://commons.email)
 #   MDL_DIRECT_QR_REQUEST_PRIVATE_KEY - PKCS#8 key for direct OpenID4VP Request Objects
 #   MDL_DIRECT_QR_REQUEST_X5C         - X.509 chain for the direct Request Object JWS header

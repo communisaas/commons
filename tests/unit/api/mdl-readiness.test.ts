@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
 	mockDev,
@@ -13,7 +13,6 @@ const {
 	mockPrivateEnv: { INTERNAL_API_SECRET: 'test-secret' } as Record<string, string | undefined>,
 	mockFeatures: {
 		MDL_ANDROID_OID4VP: true,
-		MDL_BRIDGE: true,
 		MDL_DIRECT_QR: true,
 		MDL_MDOC: false,
 		MDL_IOS: false
@@ -42,7 +41,6 @@ vi.mock('$lib/config/features', () => ({
 		return mockAllowedOrigin.value;
 	},
 	OPENID4VP_DC_API_PROTOCOL: 'openid4vp-v1-unsigned',
-	isMdlBridgeEnabled: () => mockFeatures.MDL_BRIDGE && mockFeatures.MDL_ANDROID_OID4VP,
 	isMdlDirectQrEnabled: () => mockFeatures.MDL_DIRECT_QR && mockFeatures.MDL_ANDROID_OID4VP
 }));
 
@@ -81,9 +79,7 @@ function makeEvent(options: {
 			env: {
 				PUBLIC_APP_URL: origin,
 				DC_SESSION_KV: kv,
-				BRIDGE_SESSION_KV: kv,
 				DIRECT_MDL_SESSION_KV: kv,
-				BRIDGE_ENCRYPTION_KEY: 'a'.repeat(64),
 				MDL_DIRECT_QR_REQUEST_PRIVATE_KEY: 'configured',
 				MDL_DIRECT_QR_REQUEST_X5C: 'configured',
 				...options.platformEnv
@@ -96,9 +92,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mockDev.value = false;
 	mockPrivateEnv.INTERNAL_API_SECRET = 'test-secret';
-	process.env.BRIDGE_ENCRYPTION_KEY = 'a'.repeat(64);
 	mockFeatures.MDL_ANDROID_OID4VP = true;
-	mockFeatures.MDL_BRIDGE = true;
 	mockFeatures.MDL_DIRECT_QR = true;
 	mockFeatures.MDL_MDOC = false;
 	mockFeatures.MDL_IOS = false;
@@ -106,10 +100,6 @@ beforeEach(() => {
 	mockSignerConfig.mockReturnValue({ privateKeyPem: 'configured', x5c: ['configured'] });
 	mockValidateSignerConfig.mockResolvedValue(undefined);
 	mockSignRequestObject.mockResolvedValue('signed.jwt');
-});
-
-afterEach(() => {
-	delete process.env.BRIDGE_ENCRYPTION_KEY;
 });
 
 describe('GET /api/internal/identity/mdl-readiness', () => {
@@ -221,18 +211,17 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		expect(body.blockers).toContain('direct_request_signer');
 	});
 
-	it('reports fallback KV bindings as warnings, not blockers', async () => {
+	it('reports staging direct-session fallback KV binding as a warning, not a blocker', async () => {
 		const response = await GET(
 			makeEvent({
 				platformEnv: {
-					BRIDGE_SESSION_KV: undefined,
 					DIRECT_MDL_SESSION_KV: undefined
 				}
 			})
 		);
 		expect(response.status).toBe(200);
 		const body = await response.json();
-		expect(body.warnings).toEqual(['bridge_session_kv', 'direct_mdl_session_kv']);
+		expect(body.warnings).toEqual(['direct_mdl_session_kv']);
 		expect(body.blockers).toEqual([]);
 	});
 
@@ -249,14 +238,6 @@ describe('GET /api/internal/identity/mdl-readiness', () => {
 		expect(response.status).toBe(503);
 		const body = await response.json();
 		expect(body.blockers).toContain('direct_mdl_session_kv');
-	});
-
-	it('blocks when bridge encryption is missing on a deployed build', async () => {
-		delete process.env.BRIDGE_ENCRYPTION_KEY;
-		const response = await GET(makeEvent({ platformEnv: { BRIDGE_ENCRYPTION_KEY: undefined } }));
-		expect(response.status).toBe(503);
-		const body = await response.json();
-		expect(body.blockers).toContain('bridge_encryption_key');
 	});
 
 	it('blocks when the direct request signer cannot sign', async () => {

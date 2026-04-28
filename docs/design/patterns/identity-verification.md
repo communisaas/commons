@@ -9,12 +9,11 @@
 >   `digital-credentials-api` (mDL). Any "removed Cycle 15" framing
 >   means "removed from the active intake path," not "removed from
 >   the type system."
-> - **Desktop fallback flow is undocumented.**
->   `GovernmentCredentialVerification.svelte:~62-68,184-295` falls
->   back to the cross-device bridge (QR + SSE + HMAC pairing +
->   email-hash anti-phishing) when `shouldUseSameDeviceFlow()` is
->   false on desktop. The happy-path UX below describes only the
->   mobile DC-API path. See `docs/design/CROSS-DEVICE-BRIDGE.md`.
+> - **Desktop cross-device flow is changing.**
+>   The legacy web bridge has been removed. The active rollout target is
+>   browser-mediated Digital Credentials cross-device QR, with the temporary
+>   direct OpenID4VP QR stack scheduled for deletion after that path passes
+>   real-device smoke. See `docs/runbooks/DIGITAL-CREDENTIALS-ROLLOUT-GRAPH.md`.
 > - **Trust Tier 4 (passport) is unreachable.**
 >   `deriveAuthorityLevel` has no `document_type === 'passport'`
 >   branch; `TRUST_TIER_LABELS[4]` is a ghost. Reachable trust tiers

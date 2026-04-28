@@ -11,8 +11,8 @@ const MAX_VERIFY_BODY_BYTES = 80 * 1024;
 
 const VerifyMdlSchema = z.object({
 	protocol: z.string().min(1),
-	// mDL credentials are typically 2-8KB. Match the bridge cap to avoid
-	// same-device memory/CPU DoS from oversized JSON/CBOR payloads.
+		// mDL credentials are typically 2-8KB. Keep a strict cap to avoid
+		// memory/CPU DoS from oversized JSON/CBOR payloads.
 	data: z.string().min(1).max(65536),
 	nonce: z.string().min(1).max(128)
 });

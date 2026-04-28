@@ -157,9 +157,8 @@ curl --fail-with-body -sS https://commons.email/api/health | jq -e '.status == "
 ```
 
 For direct OpenID4VP QR smoke, `/api/health` is only the outer availability check.
-Also verify the direct QR feature flag, direct-session KV binding, bridge/session encryption
-configuration, request object endpoint, direct-post endpoint, and test-account cleanup plan
-before scanning a real mDL.
+Also verify the direct QR feature flag, direct-session KV binding, request object endpoint,
+direct-post endpoint, and test-account cleanup plan before scanning a real mDL.
 
 The direct QR UI is compiled into staging and production branch deploys only. The deploy
 workflow sets `VITE_MDL_DIRECT_QR=1` with
@@ -175,9 +174,9 @@ curl --fail-with-body -sS \
   https://staging.commons.email/api/internal/identity/mdl-readiness | jq
 ```
 
-The probe must return `status: "ok"`. Warnings for `BRIDGE_SESSION_KV` or
-`DIRECT_MDL_SESSION_KV` mean those lanes are using the shared `DC_SESSION_KV` fallback;
-that is acceptable only for controlled staging smoke with dedicated test accounts.
+The probe must return `status: "ok"`. A warning for `DIRECT_MDL_SESSION_KV` means
+direct QR sessions are using the shared `DC_SESSION_KV` fallback; that is acceptable
+only for controlled staging smoke with dedicated test accounts.
 Production direct QR must have a dedicated `DIRECT_MDL_SESSION_KV` binding and a
 `commons.email` ES256 request-object signer; the readiness probe blocks production without
 the dedicated direct-session KV. If Redis is not configured, production must explicitly set
@@ -189,7 +188,8 @@ Real-device direct QR smoke should cover:
 1. Android Chrome same-device mDL/OpenID4VP wallet handoff.
 2. Desktop direct OpenID4VP QR scanned by Android Camera, with immediate OS/wallet
    presentation affordance.
-3. No `/verify-bridge` or guided phone scan entrypoint appears in the desktop user flow.
+3. Browser-mediated Digital Credentials QR becomes the preferred desktop path once
+   signed OpenID4VP cross-device smoke passes.
 4. Address re-grounding from stale district data to the current district.
 5. Submission after re-grounding uses the new district commitment.
 6. No Business Connect or live congressional delivery path is exercised.

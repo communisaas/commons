@@ -62,7 +62,7 @@ describe('mDL launch gates', () => {
 		expect(address).toBeGreaterThan(button);
 	});
 
-	it('keeps the desktop mDL user flow off the bridge path', () => {
+	it('keeps the mDL user flow off the removed bridge path', () => {
 		const svelte = source('src/lib/components/auth/GovernmentCredentialVerification.svelte');
 
 		expect(svelte).toContain("if (verificationState !== 'unsupported' || platform !== 'desktop') return;");

@@ -7,7 +7,6 @@ import {
 	FEATURES,
 	MDL_DIRECT_QR_ALLOWED_ORIGIN,
 	OPENID4VP_DC_API_PROTOCOL,
-	isMdlBridgeEnabled,
 	isMdlDirectQrEnabled
 } from '$lib/config/features';
 import {
@@ -45,12 +44,7 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 			? await checkDirectRequestSigner(smokeEnv, originCheck.origin)
 			: blockedDirectRequestSignerCheck();
 	const checks: ReadinessCheck[] = [
-		checkBoolean(
-			'android_openid4vp_enabled',
-			FEATURES.MDL_ANDROID_OID4VP,
-			'Android OpenID4VP is enabled'
-		),
-		checkBoolean('bridge_enabled', isMdlBridgeEnabled(), 'Desktop-to-phone bridge is enabled'),
+		checkBoolean('android_openid4vp_enabled', FEATURES.MDL_ANDROID_OID4VP, 'OpenID4VP is enabled'),
 		checkBoolean(
 			'direct_qr_enabled',
 			isMdlDirectQrEnabled(),
@@ -61,15 +55,7 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 		originCheck.check,
 		directOriginCheck,
 		checkKvBinding('dc_session_kv', Boolean(smokeEnv?.DC_SESSION_KV), 'DC_SESSION_KV is bound'),
-		checkKvBinding(
-			'bridge_session_kv',
-			Boolean(smokeEnv?.BRIDGE_SESSION_KV ?? smokeEnv?.DC_SESSION_KV),
-			smokeEnv?.BRIDGE_SESSION_KV
-				? 'BRIDGE_SESSION_KV is bound'
-				: 'Bridge sessions will use DC_SESSION_KV fallback'
-		),
 		checkDirectSessionKvBinding(smokeEnv, originCheck.origin),
-		checkBridgeEncryption(smokeEnv),
 		signerCheck
 	];
 
@@ -85,14 +71,12 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 			warnings: warnings.map((check) => check.id),
 			featureFlags: {
 				MDL_ANDROID_OID4VP: FEATURES.MDL_ANDROID_OID4VP,
-				MDL_BRIDGE: FEATURES.MDL_BRIDGE,
 				MDL_DIRECT_QR: FEATURES.MDL_DIRECT_QR,
 				MDL_MDOC: FEATURES.MDL_MDOC,
 				MDL_IOS: FEATURES.MDL_IOS
 			},
 			bindings: {
 				DC_SESSION_KV: Boolean(smokeEnv?.DC_SESSION_KV),
-				BRIDGE_SESSION_KV: Boolean(smokeEnv?.BRIDGE_SESSION_KV),
 				DIRECT_MDL_SESSION_KV: Boolean(smokeEnv?.DIRECT_MDL_SESSION_KV)
 			},
 			directRequest: {
@@ -271,38 +255,6 @@ function checkPublicAppUrl(configuredOrigin: string | undefined, requestOrigin: 
 			status: 'ok',
 			message: 'PUBLIC_APP_URL is a valid verifier origin'
 		} satisfies ReadinessCheck
-	};
-}
-
-function checkBridgeEncryption(smokeEnv: SmokeEnv | undefined): ReadinessCheck {
-	const key = smokeEnv?.BRIDGE_ENCRYPTION_KEY ?? process.env.BRIDGE_ENCRYPTION_KEY;
-	if (dev) {
-		return {
-			id: 'bridge_encryption_key',
-			status: key ? 'ok' : 'warning',
-			message: key
-				? 'BRIDGE_ENCRYPTION_KEY is configured'
-				: 'BRIDGE_ENCRYPTION_KEY is optional only in local development'
-		};
-	}
-	if (!key) {
-		return {
-			id: 'bridge_encryption_key',
-			status: 'blocked',
-			message: 'BRIDGE_ENCRYPTION_KEY is required for deployed bridge session storage'
-		};
-	}
-	if (!/^(?:0x)?[0-9a-fA-F]{64}$/.test(key)) {
-		return {
-			id: 'bridge_encryption_key',
-			status: 'blocked',
-			message: 'BRIDGE_ENCRYPTION_KEY must be 32 bytes encoded as 64 hex characters'
-		};
-	}
-	return {
-		id: 'bridge_encryption_key',
-		status: 'ok',
-		message: 'BRIDGE_ENCRYPTION_KEY is configured'
 	};
 }
 

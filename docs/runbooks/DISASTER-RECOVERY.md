@@ -16,8 +16,7 @@
   `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md` §4.4.
 - **PII encryption keys remain FROZEN** (AES-256-GCM). Loss is
   unrecoverable. Per-org sealed keys (`convex/_orgKey.ts`,
-  `sealedOrgKey`), `ENTROPY_ENCRYPTION_KEY`, and Bridge KV
-  (`bridge-crypto.ts`, HKDF-derived AES-256-GCM) must all be backed up
+  `sealedOrgKey`) and `ENTROPY_ENCRYPTION_KEY` must all be backed up
   separately.
 - **TEE recovery is not yet covered**: TEE is Planned; witness
   decryption currently runs in `LocalConstituentResolver` (CF Worker
@@ -130,7 +129,6 @@ still available:
 | `ENTROPY_ENCRYPTION_KEY` | Decrypts user entropy at rest | CF Workers Secrets (`$env/dynamic/private`) |
 | `IDENTITY_HASH_SALT` | Identity commitment hashing | CF Workers Secrets |
 | `IDENTITY_SIGNING_KEY` | Credential issuance (Ed25519) | CF Workers Secrets |
-| `BRIDGE_ENCRYPTION_KEY` | Bridge KV session crypto (HKDF-derived) | CF Workers Secrets |
 | `ORG_KEY_WRAPPING_KEY` | Wraps per-org sealed keys | CF Workers Secrets |
 
 **Critical**: These keys are FROZEN post-launch. Loss means encrypted

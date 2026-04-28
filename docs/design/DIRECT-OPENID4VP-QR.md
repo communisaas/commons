@@ -1,15 +1,15 @@
 # Direct OpenID4VP QR Contract
 
-Status: Direct QR implementation is staged for Android smoke. `/verify-bridge` remains
-available as rollback/security-reference backend, but it is no longer offered in the
-desktop user flow.
+Status: Direct QR is a temporary OpenID4VP transport kept only until the
+browser-mediated Digital Credentials cross-device lane is verified. The legacy
+web bridge has been deleted.
 
 ## Purpose
 
-Desktop-to-phone mDL verification should use the Android/Wallet-recognized OpenID4VP
-cross-device flow when it is safe to do so. The old `/verify-bridge` QR opens a Commons
-web page first, which prevents Android Camera from immediately handing the request to the
-OS/wallet. Direct QR is now the user-facing desktop path on staging.
+Desktop-to-phone mDL verification should use the browser/OS-mediated Digital
+Credentials cross-device flow when available. This direct OpenID4VP QR contract
+documents the temporary custom transport used while the browser-mediated signed
+OpenID4VP lane is completed and smoked on real devices.
 
 ## Primary References
 
@@ -49,8 +49,8 @@ openid4vp://authorize?client_id=<encoded-client-id>&request_uri=<encoded-request
 If Google Wallet requires an HTTPS App Link rather than `openid4vp://`, the direct
 QR endpoint may switch to the wallet-supported HTTPS authorization endpoint. The
 invariant is that the QR contains only an authorization endpoint, `client_id`,
-`request_uri`, and `request_uri_method=post`. It must not embed the bridge secret
-or any long-lived bearer secret.
+`request_uri`, and `request_uri_method=post`. It must not embed a Commons web
+session secret or any long-lived bearer secret.
 
 ## Request Object
 
@@ -140,8 +140,7 @@ SessionTranscript = [
 ]
 ```
 
-The existing same-device and web-bridge wallet calls continue to use
-`OpenID4VPDCAPIHandover`:
+Browser-mediated Digital Credentials wallet calls use `OpenID4VPDCAPIHandover`:
 
 ```text
 SessionTranscript = [
@@ -160,7 +159,7 @@ handover bytes must not verify a DC API response.
 
 ## Session Model
 
-Direct QR uses a separate direct-session record, not the bridge session record.
+Direct QR uses a standalone direct-session record.
 
 Minimum fields:
 
@@ -184,32 +183,24 @@ requires unused `state`, `nonce`, and `transport`. Completion is single-use.
 Direct QR binds to the desktop account only on the server. The phone cannot choose a
 user id, and the direct-post endpoint must finalize only `desktopUserId`.
 
-The direct path bypasses the `/verify-bridge` phone confirmation screen. That means the
-wallet/OS consent surface must show enough verifier context for a user to notice a QR-swap
-attack. Google Wallet's docs say the registered product name and logo are displayed on
-the consent screen after RP onboarding; that is verifier-level context, not user-specific
-desktop account context.
+The direct path relies on the wallet/OS consent surface to show enough verifier
+context for a user to notice a QR-swap attack. Google Wallet's docs say the
+registered product name and logo are displayed on the consent screen after RP
+onboarding; that is verifier-level context, not user-specific desktop account
+context.
 
 Launch rule:
 
 - Direct QR may be implemented behind `MDL_DIRECT_QR`.
 - Direct QR may run on staging and production only when the build origin is pinned to the
   exact public origin and the runtime `PUBLIC_APP_URL` matches the request origin.
-- Direct QR cannot become the default desktop path unless real-device smoke confirms the
-  wallet surface has acceptable verifier context and the desktop completion UI does not
-  finalize silently when account-binding evidence is weak.
+- Direct QR cannot remain the default desktop path once browser-mediated Digital
+  Credentials cross-device QR passes real-device smoke.
 - If the account context is insufficient, direct QR must be disabled until an explicitly
   reviewed mitigation is accepted.
 
-## Retained Bridge Label
-
-The retained `/verify-bridge` backend must not display client-supplied email. Its mobile
-account label comes from the authenticated desktop session. If the server has no email, it
-uses a generic signed-in account label and relies on the pairing code.
-
 ## A6e Exit Criteria
 
-- Retained bridge backend ignores spoofed client email labels.
 - Direct QR contract is documented with separate DC API and direct-post transports.
 - Direct QR contract requires Google Wallet signed requests for cross-device flows.
 - The next implementation deltas are split into feature flag/session model, direct
