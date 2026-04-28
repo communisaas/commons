@@ -12,7 +12,7 @@
  *
  * Flow:
  * 1. User clicks "Send Message" on Congressional template
- * 2. Check trust_tier >= minimumTier OR session credential (hasValidSession)
+ * 2. Check trust_tier >= minimumTier and required local proof material
  * 3. If verified: Allow submission
  * 4. If not verified: Show appropriate verification flow based on minimumTier
  * 5. After verification: Continue with original action
@@ -27,8 +27,11 @@
 	import IdentityVerificationFlow from './IdentityVerificationFlow.svelte';
 	import IdentityRecoveryFlow from './IdentityRecoveryFlow.svelte';
 	import AddressVerificationFlow from './AddressVerificationFlow.svelte';
-	import { hasValidSession } from '$lib/core/identity/session-cache';
-	import { needsCredentialRecovery } from '$lib/core/identity/recovery-detector';
+	import {
+		credentialMeetsMinimumTier,
+		getUsableProofCredential,
+		needsCredentialRecovery
+	} from '$lib/core/identity/recovery-detector';
 	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 	import { isAnyMdlProtocolEnabled } from '$lib/config/features';
 
@@ -52,7 +55,7 @@
 		 * a tier-2+ user otherwise cannot re-enter the address flow.
 		 */
 		forceAddressFlow?: boolean;
-		onverified?: (data: { userId: string; method: string }) => void;
+		onverified?: (data: { userId: string; method: string; verified?: boolean }) => void;
 		oncancel?: () => void;
 	}
 
@@ -70,16 +73,34 @@
 
 	// Recovery state: tier-5 user with missing local credentials
 	let showRecovery = $state(false);
+	let recoveryCheckVersion = 0;
 
 	// Check recovery state when modal opens
 	$effect(() => {
-		if (showModal && userTrustTier >= 5) {
-			needsCredentialRecovery(userId, userTrustTier).then((needs) => {
-				showRecovery = needs;
-			});
-		} else if (!showModal) {
+		const version = ++recoveryCheckVersion;
+
+		if (!showModal || forceAddressFlow || userTrustTier < 5) {
 			showRecovery = false;
+			return;
 		}
+
+		needsCredentialRecovery(userId, userTrustTier)
+			.then((needs) => {
+				if (
+					version === recoveryCheckVersion &&
+					showModal &&
+					!forceAddressFlow &&
+					userTrustTier >= 5
+				) {
+					showRecovery = needs;
+				}
+			})
+			.catch((error) => {
+				console.error('[Verification Gate] Recovery check failed:', error);
+				if (version === recoveryCheckVersion) {
+					showRecovery = false;
+				}
+			});
 	});
 
 	// Derived: which verification flow to show
@@ -105,12 +126,14 @@
 	let mdlGated: boolean = $derived(!isAnyMdlProtocolEnabled() && !needsTier2 && !forceAddressFlow);
 
 	/**
-	 * Check if user meets the minimum trust tier or has valid session credential.
+	 * Check if user meets the minimum trust tier and has required local proof material.
 	 * Called before showing modal - allows instant send if verified.
 	 *
 	 * Priority:
-	 * 1. If userTrustTier >= minimumTier, user is already verified (no IndexedDB check needed)
-	 * 2. Otherwise, fall back to IndexedDB session credential check (legacy Tier 3 path)
+	 * 1. Tier-5 users with lost local proof material must enter recovery.
+	 * 2. If proof-grade verification is required, local proof material must exist.
+	 * 3. If userTrustTier >= minimumTier, user is already verified for non-proof paths.
+	 * 4. Otherwise, fall back to IndexedDB proof credential presence.
 	 */
 	export async function checkVerification(): Promise<boolean> {
 		try {
@@ -119,15 +142,38 @@
 				return false;
 			}
 
+			if (userTrustTier >= 5) {
+				const recoveryRequired = await needsCredentialRecovery(userId, userTrustTier);
+				if (recoveryRequired) {
+					console.log('[Verification Gate] Local proof credentials need recovery');
+					showRecovery = true;
+					return false;
+				}
+			}
+
+			let proofCredential = await getUsableProofCredential(userId);
+
+			if (minimumTier >= 4) {
+				if (!proofCredential || !credentialMeetsMinimumTier(proofCredential, minimumTier)) {
+					console.log('[Verification Gate] Local proof credential missing or under-authorized');
+					return false;
+				}
+			}
+
 			// Fast path: server-side trust tier already meets requirement
 			if (userTrustTier >= minimumTier) {
 				console.log('[Verification Gate] Trust tier check passed:', { userTrustTier, minimumTier });
 				return true;
 			}
 
-			// Fallback: check IndexedDB session credential (legacy Tier 3 flow)
-			const isVerified = await hasValidSession(userId);
-			console.log('[Verification Gate] Session check:', { isVerified, userTrustTier, minimumTier });
+			// Fallback: check IndexedDB proof credential presence
+			const isVerified =
+				proofCredential !== null && credentialMeetsMinimumTier(proofCredential, minimumTier);
+			console.log('[Verification Gate] Proof credential check:', {
+				isVerified,
+				userTrustTier,
+				minimumTier
+			});
 			return isVerified;
 		} catch (error) {
 			console.error('[Verification Gate] Session check failed:', error);
@@ -145,7 +191,8 @@
 		showModal = false;
 		onverified?.({
 			userId: data.userId,
-			method: data.method
+			method: data.method,
+			verified: data.verified
 		});
 	}
 
@@ -157,7 +204,8 @@
 		showModal = false;
 		onverified?.({
 			userId,
-			method: `address:${detail.method}`
+			method: `address:${detail.method}`,
+			verified: true
 		});
 	}
 
@@ -172,7 +220,8 @@
 		showModal = false;
 		onverified?.({
 			userId: data.userId,
-			method: data.method
+			method: data.method,
+			verified: data.verified
 		});
 	}
 
@@ -283,8 +332,8 @@
 						<div class="border-t border-b border-dotted border-slate-300 py-5">
 							<p class="text-[14px] leading-relaxed text-slate-700">
 								Government-ID verification (mobile driver's license, passport, or eID) uses
-								browser-mediated Digital Credentials protocols. Commons opens this panel only
-								when the deployed verifier has at least one protocol lane enabled.
+								browser-mediated Digital Credentials protocols. Commons opens this panel only when
+								the deployed verifier has at least one protocol lane enabled.
 							</p>
 							<p class="mt-3 text-[14px] leading-relaxed text-slate-700">
 								Address-attested verification (Tier&nbsp;2) remains available while additional

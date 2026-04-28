@@ -34,8 +34,8 @@ describe('mDL live-smoke readiness', () => {
 		const requestedFields = 'postal code, city, state, birth date, and document number';
 
 		expect(verifier).toContain(requestedFields);
-		expect(templateModal).toContain('postal code, city, state, birth date');
-		expect(templateModal).toContain('document number');
+		expect(templateModal).toContain('showVerificationGate = true');
+		expect(templateModal).not.toContain('requestCredential');
 		expect(helpPage).toContain(requestedFields);
 		expect(privacyBoundary).toContain('birth_date/document_number');
 		expect(verifier).not.toContain('Approve sharing your postal code and state');

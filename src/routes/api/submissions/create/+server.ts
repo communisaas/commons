@@ -19,6 +19,7 @@ import { buildActionDomain } from '$lib/core/zkp/action-domain-builder';
  * Rotate on each Congressional session transition.
  */
 const CURRENT_SESSION_ID = '119th-congress';
+const REQUIRED_CONGRESSIONAL_PROOF_TIER = 4;
 
 /**
  * Submission Creation Endpoint
@@ -177,12 +178,51 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			if (BigInt(namedActionDomain) !== BigInt(rawInputsArray[27] as string | number | bigint)) {
 				throw error(400, 'publicInputs.actionDomain does not match publicInputs[27]');
 			}
-		} catch (e) {
-			if (e && typeof e === 'object' && 'status' in e) throw e;
-			throw error(400, 'publicInputs.actionDomain is not a valid field element');
-		}
+			} catch (e) {
+				if (e && typeof e === 'object' && 'status' in e) throw e;
+				throw error(400, 'publicInputs.actionDomain is not a valid field element');
+			}
 
-		// FU-3.2 — V2 freshness check. When the proof is V2 (33 inputs), the
+			const namedAuthorityLevel = (publicInputs as Record<string, unknown> | null | undefined)
+				?.authorityLevel;
+			if (
+				typeof namedAuthorityLevel !== 'string' &&
+				typeof namedAuthorityLevel !== 'number' &&
+				typeof namedAuthorityLevel !== 'bigint'
+			) {
+				throw error(400, 'publicInputs.authorityLevel missing or not a field element');
+			}
+			let canonicalAuthorityLevel: bigint;
+			try {
+				canonicalAuthorityLevel = BigInt(namedAuthorityLevel);
+				if (
+					canonicalAuthorityLevel !== BigInt(rawInputsArray[28] as string | number | bigint)
+				) {
+					throw error(400, 'publicInputs.authorityLevel does not match publicInputs[28]');
+				}
+			} catch (e) {
+				if (e && typeof e === 'object' && 'status' in e) throw e;
+				throw error(400, 'publicInputs.authorityLevel is not a valid field element');
+			}
+
+			if (
+				canonicalAuthorityLevel < BigInt(REQUIRED_CONGRESSIONAL_PROOF_TIER) ||
+				(locals.user.trust_tier ?? 0) < REQUIRED_CONGRESSIONAL_PROOF_TIER
+			) {
+				return json(
+					{
+						success: false,
+						error: 'insufficient_authority',
+						code: 'INSUFFICIENT_AUTHORITY',
+						message:
+							'Government-ID verification is required before submitting verified messages to Congress.',
+						requiresReverification: true
+					},
+					{ status: 403 }
+				);
+			}
+
+			// FU-3.2 — V2 freshness check. When the proof is V2 (33 inputs), the
 		// public input [32] is `revocation_registry_root`: the SMT root the
 		// circuit's non-membership proof was built against. The on-chain
 		// `RevocationRegistry.isRootAcceptable` view tolerates archived roots

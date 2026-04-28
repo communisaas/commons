@@ -67,6 +67,7 @@ function buildBody(overrides: Record<string, unknown> = {}) {
 	const publicInputsArray: string[] = new Array(31).fill('0x' + '01'.repeat(32));
 	publicInputsArray[26] = VALID_NULLIFIER;
 	publicInputsArray[27] = CANONICAL_DOMAIN;
+	publicInputsArray[28] = '5';
 
 	// Proof: 2049 hex chars of '11' — well above min 2048, below max 131072
 	const proofHex = '0x' + '11'.repeat(1025);
@@ -77,6 +78,7 @@ function buildBody(overrides: Record<string, unknown> = {}) {
 		publicInputs: {
 			publicInputsArray,
 			actionDomain: CANONICAL_DOMAIN,
+			authorityLevel: 5,
 			nullifier: VALID_NULLIFIER
 		},
 		nullifier: VALID_NULLIFIER,
@@ -90,8 +92,8 @@ function buildBody(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-function buildEvent(body: unknown) {
-	return {
+function buildEvent(body: unknown, overrides: Record<string, unknown> = {}) {
+	const event = {
 		request: {
 			json: async () => body
 		},
@@ -100,8 +102,17 @@ function buildEvent(body: unknown) {
 			user: {
 				id: 'user_abc',
 				verified_at: Date.now() - 1000,
-				district_hash: 'dh'
+				district_hash: 'dh',
+				trust_tier: 5
 			}
+		}
+	};
+	return {
+		...event,
+		...overrides,
+		locals: {
+			...event.locals,
+			...((overrides.locals as Record<string, unknown> | undefined) ?? {})
 		}
 	} as unknown as Parameters<typeof POST>[0];
 }
@@ -159,11 +170,13 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 		const publicInputsArray = new Array(31).fill('0x' + '01'.repeat(32));
 		publicInputsArray[26] = VALID_NULLIFIER;
 		publicInputsArray[27] = forgedDomain;
+		publicInputsArray[28] = '5';
 
 		const body = buildBody({
 			publicInputs: {
 				publicInputsArray,
 				actionDomain: forgedDomain,
+				authorityLevel: 5,
 				nullifier: VALID_NULLIFIER
 			}
 		});
@@ -197,6 +210,56 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 		expect(json.success).toBe(true);
 		expect(json.submissionId).toBe('sub-1');
 		expect(mockServerAction).toHaveBeenCalledTimes(1);
+	});
+
+	it('returns 403 when the proof authority public input is below the CWC tier', async () => {
+		mockServerQuery.mockResolvedValueOnce({ districtCommitment: ACTIVE_COMMITMENT });
+
+		const publicInputsArray: string[] = new Array(31).fill('0x' + '01'.repeat(32));
+		publicInputsArray[26] = VALID_NULLIFIER;
+		publicInputsArray[27] = CANONICAL_DOMAIN;
+		publicInputsArray[28] = '3';
+
+		const response = await POST(
+			buildEvent(
+				buildBody({
+					publicInputs: {
+						publicInputsArray,
+						actionDomain: CANONICAL_DOMAIN,
+						authorityLevel: 3,
+						nullifier: VALID_NULLIFIER
+					}
+				})
+			)
+		);
+
+		expect(response.status).toBe(403);
+		const json = await response.json();
+		expect(json.code).toBe('INSUFFICIENT_AUTHORITY');
+		expect(json.requiresReverification).toBe(true);
+		expect(mockServerAction).not.toHaveBeenCalled();
+	});
+
+	it('returns 403 when the server-side user tier is below the CWC tier', async () => {
+		mockServerQuery.mockResolvedValueOnce({ districtCommitment: ACTIVE_COMMITMENT });
+
+		const response = await POST(
+			buildEvent(buildBody(), {
+				locals: {
+					user: {
+						id: 'user_abc',
+						verified_at: Date.now() - 1000,
+						district_hash: 'dh',
+						trust_tier: 2
+					}
+				}
+			})
+		);
+
+		expect(response.status).toBe(403);
+		const json = await response.json();
+		expect(json.code).toBe('INSUFFICIENT_AUTHORITY');
+		expect(mockServerAction).not.toHaveBeenCalled();
 	});
 
 	it('queries the canonical districtCommitment endpoint with the authenticated userId', async () => {

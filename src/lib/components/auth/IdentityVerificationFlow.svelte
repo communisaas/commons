@@ -31,11 +31,19 @@
 		onback?: () => void;
 	}
 
-	let { userId, userEmail, templateSlug, skipValueProp = false, oncomplete, oncancel, onback }: Props = $props();
+	let {
+		userId,
+		userEmail,
+		templateSlug,
+		skipValueProp = false,
+		oncomplete,
+		oncancel,
+		onback
+	}: Props = $props();
 
 	type FlowStep = 'value-prop' | 'verify-mdl' | 'complete';
 
-	let currentStep = $state<FlowStep>(untrack(() => skipValueProp ? 'verify-mdl' : 'value-prop'));
+	let currentStep = $state<FlowStep>(untrack(() => (skipValueProp ? 'verify-mdl' : 'value-prop')));
 	let verificationComplete = $state(false);
 	let registrationInProgress = $state(false);
 	let registrationComplete = $state(false);
@@ -111,8 +119,9 @@
 			}
 		} else {
 			console.warn('[Verification] No district available — Shadow Atlas registration deferred');
-			// No district means no registration possible — fire oncomplete directly
-			oncomplete?.({ ...data, userId });
+			registrationError =
+				'Proof credentials could not be set up because no district was returned. Please retry verification.';
+			oncompletePending = false;
 		}
 	}
 
@@ -135,8 +144,10 @@
 		savedDistrict = verifiedDistrict;
 
 		try {
-			const { findDistrictHex, getFullCellDataFromBrowser } = await import('$lib/core/shadow-atlas/browser-client');
-			const { registerThreeTree, recoverThreeTree } = await import('$lib/core/identity/shadow-atlas-handler');
+			const { findDistrictHex, getFullCellDataFromBrowser } =
+				await import('$lib/core/shadow-atlas/browser-client');
+			const { registerThreeTree, recoverThreeTree } =
+				await import('$lib/core/identity/shadow-atlas-handler');
 			const { poseidon2Hash4 } = await import('$lib/core/crypto/poseidon');
 
 			// Step 1: Resolve district hex from display format (e.g. "CA-12" → field element)
@@ -156,7 +167,8 @@
 			// Values MUST be valid BN254 field elements (< modulus, ~254 bits).
 			// Raw 32-byte randoms are 256 bits and exceed the modulus ~75% of the time,
 			// causing poseidon hexToFr to throw. Reduce modulo BN254 after generation.
-			const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+			const BN254_MODULUS =
+				21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 			function generateFieldElement(): string {
 				const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -178,7 +190,12 @@
 
 			// leaf = Poseidon2_H4(userSecret, cellId, registrationSalt, authorityLevel)
 			// Uses 2-round sponge with DOMAIN_HASH4 — matches Noir circuit exactly
-			const leaf = await poseidon2Hash4(userSecret, cellData.cellId, registrationSalt, authorityHex);
+			const leaf = await poseidon2Hash4(
+				userSecret,
+				cellData.cellId,
+				registrationSalt,
+				authorityHex
+			);
 
 			// Step 5: Register with tree2 data from IPFS
 			const result = await registerThreeTree({
@@ -189,12 +206,12 @@
 					cellMapRoot: cellData.cellMapRoot,
 					cellMapPath: cellData.cellMapPath,
 					cellMapPathBits: cellData.cellMapPathBits,
-					districts: cellData.districts,
+					districts: cellData.districts
 				},
 				userSecret,
 				registrationSalt,
 				verificationMethod: 'digital-credentials-api',
-				verifiedDistrict,
+				verifiedDistrict
 			});
 
 			if (result.success) {
@@ -222,12 +239,12 @@
 						cellMapRoot: cellData.cellMapRoot,
 						cellMapPath: cellData.cellMapPath,
 						cellMapPathBits: cellData.cellMapPathBits,
-						districts: cellData.districts,
+						districts: cellData.districts
 					},
 					userSecret,
 					registrationSalt,
 					verificationMethod: 'digital-credentials-api',
-					verifiedDistrict,
+					verifiedDistrict
 				});
 
 				if (recoveryResult.success) {
@@ -394,14 +411,16 @@
 					<div class="mx-auto mb-6 max-w-md rounded-lg border border-amber-200 bg-amber-50 p-3">
 						<div class="flex items-center gap-2 text-sm text-amber-700">
 							<AlertTriangle class="h-4 w-4" />
-							<span>Proof setup failed — your messages won't include cryptographic proof. You can retry or continue.</span>
+							<span>Proof setup failed. Retry before continuing to message submission.</span>
 						</div>
 						{#if savedDistrict}
 							<button
 								type="button"
 								onclick={() => {
 									retryDisabled = true;
-									setTimeout(() => { retryDisabled = false; }, 3000);
+									setTimeout(() => {
+										retryDisabled = false;
+									}, 3000);
 									triggerShadowAtlasRegistration(savedDistrict!);
 								}}
 								disabled={registrationInProgress || retryDisabled}
@@ -424,18 +443,20 @@
 					</div>
 				{/if}
 
-				<div class="flex flex-col gap-3 sm:flex-row sm:justify-center">
-					<button
-						type="button"
-						onclick={() => {
-							oncompletePending = false;
-							oncomplete?.({ ...verificationData!, userId });
-						}}
-						class="rounded-lg bg-gradient-to-r from-emerald-500 to-emerald-700 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:bg-emerald-700 hover:shadow-md"
-					>
-						Continue to Message Submission
-					</button>
-				</div>
+				{#if registrationComplete}
+					<div class="flex flex-col gap-3 sm:flex-row sm:justify-center">
+						<button
+							type="button"
+							onclick={() => {
+								oncompletePending = false;
+								oncomplete?.({ ...verificationData!, userId });
+							}}
+							class="rounded-lg bg-gradient-to-r from-emerald-500 to-emerald-700 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:bg-emerald-700 hover:shadow-md"
+						>
+							Continue to Message Submission
+						</button>
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</div>

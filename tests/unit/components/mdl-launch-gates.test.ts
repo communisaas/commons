@@ -54,16 +54,16 @@ describe('mDL launch gates', () => {
 	it('keeps the trust-upgrade digital-ID button behind the mDL protocol gate', () => {
 		const svelte = source('src/lib/components/template/TemplateModal.svelte');
 		const button = svelte.indexOf('Verify with Digital ID');
-		const gate = svelte.lastIndexOf(
-			'{#if isAnyMdlProtocolEnabled() && digitalCredentialsAvailable}',
-			button
-		);
+		const gate = svelte.lastIndexOf('{#if isAnyMdlProtocolEnabled()}', button);
 		const address = svelte.indexOf('Verify your address', button);
 
-		expect(svelte).toContain('digitalCredentialsAvailable = shouldUseDigitalCredentialsFlow();');
 		expect(gate).toBeGreaterThan(-1);
 		expect(button).toBeGreaterThan(gate);
 		expect(address).toBeGreaterThan(button);
+		expect(svelte).toContain('if (!requireCongressionalDeliveryAddress()) return;');
+		expect(svelte).toContain('showVerificationGate = true;');
+		expect(svelte).not.toContain('attemptWalletVerification');
+		expect(svelte).not.toContain('requestCredential');
 	});
 
 	it('keeps the mDL user flow device-agnostic and off deprecated paths', () => {
@@ -116,5 +116,84 @@ describe('mDL launch gates', () => {
 		expect(sources).not.toContain('unsupported browsers, use your phone');
 		expect(sources).not.toContain('separate custom QR verifier');
 		expect(sources).not.toContain('Android Camera');
+	});
+
+	it('routes recovery and post-mDL completion without stale trust-tier fallthrough', () => {
+		const gate = source('src/lib/components/auth/VerificationGate.svelte');
+		const modal = source('src/lib/components/template/TemplateModal.svelte');
+		const checkVerification = gate.slice(
+			gate.indexOf('export async function checkVerification'),
+			gate.indexOf('function handleVerificationComplete')
+		);
+		const modalCompletion = modal.slice(
+			modal.indexOf('function handleVerificationComplete'),
+			modal.indexOf('function handleVerificationCancel')
+		);
+
+		expect(checkVerification.indexOf('needsCredentialRecovery')).toBeLessThan(
+			checkVerification.indexOf('userTrustTier >= minimumTier')
+		);
+		expect(checkVerification).toContain('getUsableProofCredential(userId)');
+		expect(checkVerification).toContain('credentialMeetsMinimumTier(proofCredential, minimumTier)');
+		expect(checkVerification).toContain('showRecovery = true');
+		expect(gate).toContain('recoveryCheckVersion');
+		expect(modalCompletion).toContain("!data.method.startsWith('address:')");
+		expect(modalCompletion).toContain('await continueCongressionalProofFlow();');
+		expect(modalCompletion).not.toContain('user?.trust_tier');
+
+		const sendConfirmation = modal.slice(
+			modal.indexOf('async function handleSendConfirmation'),
+			modal.indexOf('// Universal share handler')
+		);
+		const addressCompletion = modal.slice(
+			modal.indexOf('async function handleAddressComplete'),
+			modal.indexOf('/**\n\t * Submit Congressional message')
+		);
+		expect(sendConfirmation).toContain('await continueCongressionalProofFlow();');
+		expect(sendConfirmation).toContain('requireCongressionalDeliveryAddress()');
+		expect(sendConfirmation).not.toContain('trust_tier');
+		expect(modal).toContain('credential.congressionalDistrict');
+		expect(modal).toContain('clearTreeState(user.id)');
+		expect(addressCompletion).not.toContain('possibly stale');
+		expect(addressCompletion).toContain('data.verified !== true');
+		expect(addressCompletion).not.toContain("?? 'AL'");
+		expect(addressCompletion).toContain('data.districtCommitment');
+		expect(addressCompletion).toContain('district_commitment: data.districtCommitment');
+		expect(addressCompletion).toContain('coordinates: data.coordinates');
+		expect(addressCompletion).toContain("modalActions.setState('error')");
+		expect(addressCompletion).toContain('clearTreeState(user.id)');
+		expect(addressCompletion).not.toContain('trust_tier');
+
+		const errorStart = modal.indexOf("{:else if currentState === 'error'}");
+		const errorState = modal.slice(
+			errorStart,
+			modal.indexOf('<!-- Verification Gate Modal -->', errorStart)
+		);
+		expect(errorState).toContain('await continueCongressionalProofFlow();');
+		expect(errorState).not.toContain('submitCongressionalMessage();');
+		expect(modal).toContain('proofSubmissionBlocked');
+		expect(modal).toContain('verifiedAddress = null');
+	});
+
+	it('keeps identity verification from continuing without proof setup', () => {
+		const svelte = source('src/lib/components/auth/IdentityVerificationFlow.svelte');
+		const noDistrict = svelte.slice(
+			svelte.indexOf("console.warn('[Verification] No district available"),
+			svelte.indexOf('/**\n\t * Register in Shadow Atlas')
+		);
+		const failureBranch = svelte.slice(
+			svelte.indexOf('{:else if registrationError}'),
+			svelte.indexOf('{:else if registrationComplete}')
+		);
+		const continueButton = svelte.slice(
+			svelte.indexOf('{#if registrationComplete}'),
+			svelte.indexOf('<!-- Help Text -->')
+		);
+
+		expect(noDistrict).toContain('registrationError =');
+		expect(noDistrict).not.toContain('oncomplete?.');
+		expect(failureBranch).toContain('Retry before continuing');
+		expect(continueButton).toContain('Continue to Message Submission');
+		expect(continueButton).toContain('oncomplete?.');
 	});
 });
