@@ -54,19 +54,39 @@ describe('mDL launch gates', () => {
 	it('keeps the trust-upgrade digital-ID button behind the mDL protocol gate', () => {
 		const svelte = source('src/lib/components/template/TemplateModal.svelte');
 		const button = svelte.indexOf('Verify with Digital ID');
-		const gate = svelte.lastIndexOf('{#if isAnyMdlProtocolEnabled()}', button);
+		const gate = svelte.lastIndexOf(
+			'{#if isAnyMdlProtocolEnabled() && digitalCredentialsAvailable}',
+			button
+		);
 		const address = svelte.indexOf('Verify your address', button);
 
+		expect(svelte).toContain('digitalCredentialsAvailable = shouldUseDigitalCredentialsFlow();');
 		expect(gate).toBeGreaterThan(-1);
 		expect(button).toBeGreaterThan(gate);
 		expect(address).toBeGreaterThan(button);
 	});
 
-	it('keeps the mDL user flow off the removed bridge path', () => {
+	it('keeps the mDL user flow device-agnostic and off deprecated paths', () => {
 		const svelte = source('src/lib/components/auth/GovernmentCredentialVerification.svelte');
 
-		expect(svelte).toContain("if (verificationState !== 'unsupported' || platform !== 'desktop') return;");
-		expect(svelte).toMatch(/if \(isMdlDirectQrEnabled\(\)\) \{\s*startDirectQr\(\);/);
+		expect(svelte).toContain('shouldUseDigitalCredentialsFlow');
+		expect(svelte).toContain('Digital ID unavailable');
+		expect(svelte).toContain('Your browser will ask your digital wallet');
+
+		expect(svelte).not.toContain('isMdlDirectQrEnabled');
+		expect(svelte).not.toContain('startDirectQr');
+		expect(svelte).not.toContain('/api/identity/direct-mdl/start');
+		expect(svelte).not.toContain('directQrSvg');
+		expect(svelte).not.toContain("import QRCode from 'qrcode'");
+		expect(svelte).not.toContain('platform');
+		expect(svelte).not.toContain('detectPlatform');
+		expect(svelte).not.toContain('Android required');
+		expect(svelte).not.toContain('Android first');
+		expect(svelte).not.toContain('Scan with Android Camera');
+		expect(svelte).not.toContain('Chrome required');
+		expect(svelte).not.toContain('Android Chrome');
+		expect(svelte).not.toContain('Google Wallet will ask');
+		expect(svelte).not.toContain('Waiting for {walletName}');
 		expect(svelte).not.toContain('isMdlBridgeEnabled');
 		expect(svelte).not.toContain('startBridge');
 		expect(svelte).not.toContain('/api/identity/bridge/start');

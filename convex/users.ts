@@ -364,11 +364,11 @@ const MDL_CREDENTIAL_HASH_INVALID = 'MDL_CREDENTIAL_HASH_INVALID';
 /**
  * Server-only mDL finalizer.
  *
- * Same-device and bridge verification routes have already authenticated the
- * flow (session cookie or bridge HMAC) before calling this internal mutation.
+ * Browser-mediated Digital Credentials and direct verification routes have
+ * already authenticated the flow before calling this internal mutation.
  * Keeping commitment binding and the tier upgrade in one internal mutation
  * avoids two bad states:
- *   - bridge completion failing because the phone request has no Convex auth
+ *   - direct wallet completion failing because the phone request has no Convex auth
  *   - account-merge flows failing when the canonical user is not the session user
  */
 export const finalizeMdlVerification = internalMutation({
@@ -378,7 +378,7 @@ export const finalizeMdlVerification = internalMutation({
 		credentialHash: v.string(),
 		nonce: v.string(),
 		protocol: v.string(),
-		sessionChannel: v.union(v.literal('same-device'), v.literal('bridge'), v.literal('direct')),
+		sessionChannel: v.union(v.literal('digital-credentials'), v.literal('direct')),
 		verifiedAt: v.number(),
 		addressVerificationMethod: v.string(),
 		documentType: v.string(),

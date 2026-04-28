@@ -15,41 +15,11 @@ import {
 } from '$lib/config/features';
 
 /**
- * Detect whether this is a mobile device for the current same-device launch gate.
- * Desktop browser-mediated cross-device DC API support is tracked separately in
- * the Digital Credentials rollout graph.
- *
- * iPadOS 13+ reports a macOS UA string — detect via maxTouchPoints.
- */
-export function isMobileDevice(): boolean {
-	if (typeof navigator === 'undefined') return false;
-	const ua = navigator.userAgent;
-	const uadPlatform =
-		(
-			navigator as Navigator & { userAgentData?: { platform?: string } }
-		).userAgentData?.platform?.toLowerCase() ?? '';
-	if (uadPlatform === 'android' || ua.includes('Android')) return true;
-	if (/iPhone|iPad/.test(ua)) return true;
-	// iPadOS 13+ lies: reports Macintosh UA. Detect via touch capability.
-	if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 0) return true;
-	return false;
-}
-
-/**
  * Check if the browser supports the Digital Credentials API.
  * Feature detection: `typeof DigitalCredential !== 'undefined'`
  */
 export function isDigitalCredentialsSupported(): boolean {
 	return typeof window !== 'undefined' && typeof DigitalCredential !== 'undefined';
-}
-
-/**
- * Check if the current same-device DC API flow should be used.
- * Returns true only on mobile devices with DC API support until the
- * browser-mediated cross-device path is enabled.
- */
-export function shouldUseSameDeviceFlow(): boolean {
-	return isMobileDevice() && isDigitalCredentialsSupported();
 }
 
 /**
@@ -67,14 +37,26 @@ export function getSupportedProtocols(): {
 
 	// userAgentAllowsProtocol may not be available in all implementations
 	if (!DigitalCredential.userAgentAllowsProtocol) {
-		// Assume mdoc is available if DC API is supported (conservative fallback)
-		return { mdoc: true, openid4vp: false };
+		return { mdoc: false, openid4vp: false };
 	}
 
 	return {
 		mdoc: DigitalCredential.userAgentAllowsProtocol('org-iso-mdoc'),
 		openid4vp: DigitalCredential.userAgentAllowsProtocol(OPENID4VP_DC_API_PROTOCOL)
 	};
+}
+
+/**
+ * Check whether this browser can run one of the enabled Digital Credentials
+ * protocol lanes. The browser/OS decides whether presentation is same-device
+ * or cross-device.
+ */
+export function shouldUseDigitalCredentialsFlow(): boolean {
+	const supported = getSupportedProtocols();
+	return (
+		(supported.openid4vp && isMdlProtocolEnabled(OPENID4VP_DC_API_PROTOCOL)) ||
+		(supported.mdoc && isMdlProtocolEnabled('org-iso-mdoc'))
+	);
 }
 
 // --- DEBUG: Crash breadcrumbs (survives renderer crash via localStorage) ---

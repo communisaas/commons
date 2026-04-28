@@ -35,7 +35,7 @@ describe('mDL verification finalization', () => {
 		expect(convexUsers).toContain('requireReauth: linkedToExisting');
 	});
 
-	it('uses the internal finalizer from same-device and direct verification routes', () => {
+	it('uses the internal finalizer from Digital Credentials and direct verification routes', () => {
 		for (const path of [
 			'src/routes/api/identity/verify-mdl/verify/+server.ts',
 			'src/routes/api/identity/direct-mdl/complete/+server.ts'

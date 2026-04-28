@@ -49,7 +49,7 @@
 	import AddressCollectionForm from '$lib/components/onboarding/AddressCollectionForm.svelte';
 	import { isAnyMdlProtocolEnabled } from '$lib/config/features';
 	import {
-		shouldUseSameDeviceFlow,
+		shouldUseDigitalCredentialsFlow,
 		requestCredential
 	} from '$lib/core/identity/digital-credentials-api';
 	import {
@@ -117,6 +117,7 @@
 	type TrustUpgradePhase = 'choice' | 'wallet-requesting' | 'wallet-failed' | 'simulating';
 	let trustUpgradePhase = $state<TrustUpgradePhase>('choice');
 	let walletErrorMessage = $state<string | null>(null);
+	let digitalCredentialsAvailable = $state(false);
 
 	// TODO(Phase 2): Wire to delivery-worker SSE/polling response.
 	// Currently false: delivery-worker runs via waitUntil(), modal can't await result.
@@ -167,6 +168,8 @@
 
 	// Initialize modal and auto-trigger mailto for ALL users (viral QR code flow)
 	onMount(async () => {
+		digitalCredentialsAvailable = shouldUseDigitalCredentialsFlow();
+
 		// Don't manipulate scroll here - UnifiedModal handles it
 		// Don't call modalActions.open - parent component handles it
 
@@ -535,7 +538,7 @@
 	 *
 	 * Flow:
 	 * 1. Call /api/identity/verify-mdl/start for DeviceRequest config
-	 * 2. Trigger navigator.credentials.get() — iOS shows wallet prompt
+	 * 2. Trigger navigator.credentials.get() — browser/OS shows wallet prompt or QR
 	 * 3. If wallet succeeds: verify on server, proceed to ZKP
 	 * 4. If wallet fails (not enrolled, unsupported): show brief error,
 	 *    then offer to use another method.
@@ -545,7 +548,7 @@
 		walletErrorMessage = null;
 
 		// If DC API isn't supported, skip straight to failure
-		if (!shouldUseSameDeviceFlow()) {
+		if (!shouldUseDigitalCredentialsFlow()) {
 			walletErrorMessage = 'Digital Credentials API not supported in this browser';
 			trustUpgradePhase = 'wallet-failed';
 			return;
@@ -565,7 +568,7 @@
 
 			const { requests, nonce } = await startResponse.json();
 
-			// Step 2: Trigger real wallet prompt — iOS will show the wallet UI
+			// Step 2: Trigger real wallet prompt or browser-mediated cross-device QR
 			const result = await requestCredential({ requests });
 
 			if (!result.success) {
@@ -1388,7 +1391,7 @@
 				</div>
 
 				<div class="space-y-3">
-					{#if isAnyMdlProtocolEnabled()}
+					{#if isAnyMdlProtocolEnabled() && digitalCredentialsAvailable}
 						<!-- mDL: Highest signal — verify with digital ID -->
 						<button
 							onclick={() => {
@@ -1467,7 +1470,7 @@
 					</button>
 				</div>
 			{:else if trustUpgradePhase === 'wallet-requesting'}
-				<!-- Phase 2: Wallet prompt active — iOS shows wallet UI -->
+				<!-- Phase 2: Wallet prompt or browser-mediated QR active -->
 				<div class="flex flex-col items-center justify-center py-8" in:fade={{ duration: 200 }}>
 					<div class="relative mb-6">
 						<div class="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100">
@@ -1481,7 +1484,8 @@
 					</div>
 					<p class="text-lg font-semibold text-slate-900">Requesting wallet...</p>
 					<p class="mt-2 max-w-xs text-center text-sm text-slate-600">
-						Your device will prompt you to share <strong>only</strong> your postal code and state
+						Your browser will ask your digital wallet for postal code, city, state, birth date, and
+						document number.
 					</p>
 				</div>
 			{:else if trustUpgradePhase === 'wallet-failed'}

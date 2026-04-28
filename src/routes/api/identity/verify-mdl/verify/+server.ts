@@ -11,8 +11,8 @@ const MAX_VERIFY_BODY_BYTES = 80 * 1024;
 
 const VerifyMdlSchema = z.object({
 	protocol: z.string().min(1),
-		// mDL credentials are typically 2-8KB. Keep a strict cap to avoid
-		// memory/CPU DoS from oversized JSON/CBOR payloads.
+	// mDL credentials are typically 2-8KB. Keep a strict cap to avoid
+	// memory/CPU DoS from oversized JSON/CBOR payloads.
 	data: z.string().min(1).max(65536),
 	nonce: z.string().min(1).max(128)
 });
@@ -20,8 +20,7 @@ const VerifyMdlSchema = z.object({
 function isMdlCredentialReuseError(err: unknown): boolean {
 	const message = err instanceof Error ? err.message : String(err);
 	return (
-		message.includes('MDL_CREDENTIAL_HASH_REUSED') ||
-		message.includes('MDL_SESSION_NONCE_REUSED')
+		message.includes('MDL_CREDENTIAL_HASH_REUSED') || message.includes('MDL_SESSION_NONCE_REUSED')
 	);
 }
 
@@ -159,7 +158,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				credentialHash: result.credentialHash,
 				nonce,
 				protocol,
-				sessionChannel: 'same-device',
+				sessionChannel: 'digital-credentials',
 				verifiedAt: now,
 				addressVerificationMethod: 'mdl',
 				documentType: 'mdl'
