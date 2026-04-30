@@ -207,6 +207,14 @@ Real-device browser-mediated credential smoke should cover:
 
 Use the Cloudflare Pages dashboard to roll back to a previous deployment. Each deploy is immutable and instantly revertible. For Convex, `npx convex deploy` supports rollback to previous deployment versions via the dashboard.
 
+For the browser-mediated mDL lane, the kill switch is currently a code flag, not a
+runtime env var. To disable it, set `MDL_ANDROID_OID4VP` to `false` in
+`src/lib/config/features.ts`, commit, push the rollback commit to `main`, `staging`,
+and `production`, wait for CI and Cloudflare Pages deploys, then verify
+`/api/identity/verify-mdl/start` no longer offers the OpenID4VP path and internal
+readiness no longer reports the lane as enabled. Keep the feature in controlled
+operator smoke until a faster runtime kill switch exists.
+
 ---
 
 ## Monitoring
@@ -215,6 +223,10 @@ Use the Cloudflare Pages dashboard to roll back to a previous deployment. Each d
 - **Real-time logs**: `npx wrangler pages deployment tail --project-name communique-site`
 - **KV metrics**: Dashboard → Workers & Pages → KV → namespace → Metrics
 - **Convex dashboard**: function-level metrics, logs, and errors
+- **mDL readiness**: schedule a periodic authenticated probe of
+  `/api/internal/identity/mdl-readiness` for both staging and production. Treat
+  signer/certificate failures as pre-user alerts, because request-certificate
+  expiry is otherwise detected only when `/start` is exercised.
 
 ---
 

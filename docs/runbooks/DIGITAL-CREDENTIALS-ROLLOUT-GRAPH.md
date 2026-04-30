@@ -37,11 +37,11 @@ web-bridge fallbacks are treated as cleanup targets, not launch scaffolding.
 | DC-3c | done | Fix verification/recovery routing and proof authority: tier-5 users with missing or under-authorized local proof credentials enter recovery; mDL completion, error retry, and address completion re-enter a single guarded CWC proof flow; CWC proof submission requires verified address commitment, matching local proof district, Tier 4+ local proof authority, and server-side Tier 4+ authority checks. | Focused mDL gate/recovery/submission tests pass (26 tests); `git diff --check` passes; `npm run build` passes with pre-existing project warnings. | Brutalist contexts `7c2d6810-915a-4524-8c27-4144b8d3b9c8`, `544bf300-6669-41e0-b888-63e6a0262ddc`, `69e19cce-7010-4fcb-8c7a-b38b3566e4bc`, `7c64ea41-862d-4c83-9c34-1d6d97bd0b11`, and `ecfa1f0d-684e-48fd-b4e1-ab6a6bd2d00e`; accepted findings fixed. |
 | DC-4 | done | Delete the custom `/api/identity/direct-mdl/*` implementation rather than keeping it as a hidden fallback: routes, `MDL_DIRECT_QR`, direct-session KV, direct request-object signer, SSE/cancel endpoints, tests, docs, wrangler binding, and env examples. Remove unsigned/direct-post OpenID4VP parsing from the verifier. | Runtime source/config inventory returns no custom direct QR route/helper/flag/protocol matches; readiness exercises browser-mediated signer import/signing, encrypted `dc_api.jwt` envelope extraction, and `DC_SESSION_KV` write/read/delete; focused verifier/readiness/protocol tests and `npm run build` pass. | Brutalist contexts `bd4ae775-82b1-4365-bde7-25390c6880c0`, `dffa65c2-ac67-4ed1-91eb-5b7b172367af`, `f1c76453-9e85-47d4-8113-3883a8294077`, and `c34eb58a-3d5b-455b-a50c-d1f730866197`; accepted findings fixed: readiness encrypted-response probe, fail-closed deleted parser shapes, required JWK thumbprint, stale security docs/e2e QR spec, KV lifecycle probe, stale direct-QR design/UI/operator docs, stale Didit webhook exemption, and removed issuer-bypass env heading. |
 | DC-5 | blocked | Enable Apple/Safari `org-iso-mdoc`: ReaderAuth, Apple verifier certificate/domain validation path, HPKE response handling, SessionTranscript/DeviceAuth verification, and issuer trust coverage. | Raw mdoc fixture suite, capture-replay regression, iOS/Safari real-device smoke. | Brutalist mdoc/Apple security review. |
-| DC-6a | review-blocked | Sync deployed branches to the current browser-mediated-only state. | `origin/main`, `origin/staging`, and `origin/production` are all at `1da630d0`; CI and Cloudflare Pages deploys passed for all three; latest successful Pages deployments for `main`, `staging`, and `production` all report source `1da630d`; production and staging readiness no longer expose bridge/direct flags, bindings, or checks. | Brutalist deployment-parity review attempted on 2026-04-30, but all available CLI critics were quota/rate-limit blocked; retry before marking `done`. |
-| DC-6b | review-blocked | Remove deleted-flow ops residue from Cloudflare after deploy parity: bridge/direct secrets and any deleted direct-session binding aliases. These secrets do not keep runtime code alive, but they violate the no-dead-implementation rule. | Removed `BRIDGE_ENCRYPTION_KEY` and `MDL_DIRECT_QR_REQUEST_ALG/KID/PRIVATE_KEY/X5C` from the production Pages secret inventory; a follow-up inventory grep found no `BRIDGE_ENCRYPTION_KEY`, `MDL_DIRECT_QR_REQUEST*`, or `DIRECT_MDL_ALLOWED_ORIGIN`; production and staging readiness remained `ok`. | Brutalist ops-residue review attempted on 2026-04-30, but all available CLI critics were quota/rate-limit blocked; retry before marking `done`. |
-| DC-6c | review-blocked | Staging readiness smoke on the deployed browser-mediated path before real devices. Localhost is not a meaningful Google Wallet acceptance target; `expected_origins` must be the exact deployed HTTPS origin. | `https://staging.commons.email/api/health` and `https://commons.email/api/health` returned `ok`; internal readiness with `x-readiness-origin: https://staging.commons.email` returned `status: "ok"` with no blockers/warnings, `MDL_ANDROID_OID4VP: true`, `MDL_MDOC: false`, `MDL_IOS: false`, only `DC_SESSION_KV`, and signed `openid4vp-v1-signed`/`dc_api.jwt`; unauthenticated `/api/identity/verify-mdl/start` returned the expected JSON 401 auth gate on staging and production. | Brutalist staging-readiness review attempted on 2026-04-30, but all available CLI critics were quota/rate-limit blocked; retry before marking `done`. |
+| DC-6a | done | Sync deployed branches to the current browser-mediated-only state. | `origin/main`, `origin/staging`, and `origin/production` are all at `e679d423`; CI and Cloudflare Pages deploys passed for all three; latest successful Pages deployments for `main`, `staging`, and `production` all report source `e679d42`; production and staging readiness no longer expose bridge/direct flags, bindings, or checks. | Brutalist context `861cd4f2-11f2-43b3-8248-8b4245aa2f4a`; accepted stale-evidence finding fixed. |
+| DC-6b | done | Remove deleted-flow ops residue from Cloudflare after deploy parity: bridge/direct secrets and any deleted direct-session binding aliases. These secrets do not keep runtime code alive, but they violate the no-dead-implementation rule. | Removed `BRIDGE_ENCRYPTION_KEY` and `MDL_DIRECT_QR_REQUEST_ALG/KID/PRIVATE_KEY/X5C` from the production Pages secret inventory; a follow-up inventory grep found no `BRIDGE_ENCRYPTION_KEY`, `MDL_DIRECT_QR_REQUEST*`, or `DIRECT_MDL_ALLOWED_ORIGIN`; production and staging readiness remained `ok`. | Brutalist context `861cd4f2-11f2-43b3-8248-8b4245aa2f4a`; no blocking residue found. |
+| DC-6c | done | Staging readiness smoke on the deployed browser-mediated path before real devices. Localhost is not a meaningful Google Wallet acceptance target; `expected_origins` must be the exact deployed HTTPS origin. | `https://staging.commons.email/api/health` and `https://commons.email/api/health` returned `ok`; internal readiness with `x-readiness-origin: https://staging.commons.email` returned `status: "ok"` with no blockers/warnings, `MDL_ANDROID_OID4VP: true`, `MDL_MDOC: false`, `MDL_IOS: false`, only `DC_SESSION_KV`, and signed `openid4vp-v1-signed`/`dc_api.jwt`; unauthenticated `/api/identity/verify-mdl/start` returned the expected JSON 401 auth gate on staging and production. | Brutalist context `861cd4f2-11f2-43b3-8248-8b4245aa2f4a`; wallet acceptance remains DC-6d. |
 | DC-6d | active | Staging real-device smoke with an actual Google Wallet mDL from a Google-supported mDL issuer and a Google-registered verifier certificate/origin. The Google sandbox test credential is an ID pass (`com.google.wallet.idcard.1`) and is not evidence for our mDL-only product query (`org.iso.18013.5.1.mDL`). | Browser/wallet/device versions, verifier origin shown in OS prompt, credential availability or exact wallet error, `/verify` finalizer result if Wallet returns a credential, screenshots/notes. If no operator has a Google-supported mDL, record `blocked: no_credential_available`; verifier infrastructure may proceed to DC-7, but public mDL launch remains blocked. | Brutalist real-device evidence gate. |
-| DC-7 | queued | Production readiness after staging smoke: branch parity, Cloudflare env cleanup, production probes, and controlled test-account verification. | Main/staging/production at same commit; production internal readiness green; no bridge/direct fallback warnings; Google verifier certificate/origin registration recorded. | Brutalist production gate. |
+| DC-7 | queued | Production readiness after staging smoke: branch parity, Cloudflare env cleanup, production probes, controlled test-account verification, rollback procedure, and certificate/readiness monitoring. | Main/staging/production at same commit; production internal readiness green; no bridge/direct fallback warnings; Google verifier certificate/origin registration recorded; feature rollback documented; periodic readiness/certificate expiry monitor configured. | Brutalist production gate. |
 
 ## Current Hard Gates
 
@@ -68,23 +68,28 @@ web-bridge fallbacks are treated as cleanup targets, not launch scaffolding.
 - Deployed readiness must be on the current source graph before device errors
   are interpreted. A readiness payload containing `MDL_BRIDGE`, `MDL_DIRECT_QR`,
   bridge session KV, or direct request signer checks means the deployment is old.
+- KV session deletion is best-effort one-time-use. The authoritative replay gate
+  is the Convex `mdlCredentialUses` nonce and credential-hash reuse check.
+- Before DC-7, keep `/api/internal/identity/mdl-readiness` under periodic
+  monitoring so request-certificate expiry fails before users discover it.
 
 ## Active Execution Graph
 
-1. **Brutalist retry for DC-6a/DC-6b/DC-6c**: the implementation and operator
-   probes are complete, but the review gate is blocked by external CLI quota.
-   Retry the review before changing these rows from `review-blocked` to `done`.
-2. **DC-6d real-device evidence**: test a real Google Wallet mDL, not the sandbox
+1. **DC-6d real-device evidence**: test a real Google Wallet mDL, not the sandbox
    ID pass, against the registered staging/prod verifier origin and certificate.
-3. **DC-7 production gate**: repeat readiness on `https://commons.email`, then
+2. **DC-7 production gate**: repeat readiness on `https://commons.email`, then
    run a controlled production verification only after DC-6d evidence is clean.
+   Document the feature rollback commit path and configure periodic readiness
+   monitoring before broader exposure.
+3. **Post-smoke scale cleanup**: add an expired-row cleanup mutation/cron for
+   `mdlCredentialUses` before verification volume moves beyond controlled tests.
 
 ## Current Evidence Snapshot
 
-- `1da630d0` is deployed to `origin/main`, `origin/staging`, and
+- `e679d423` is deployed to `origin/main`, `origin/staging`, and
   `origin/production`.
-- Cloudflare Pages latest successful deployments at `1da630d`: `main`
-  `fe6c3549`, `staging` `5edb9f38`, and `production` `93bcc2af`.
+- Cloudflare Pages latest successful deployments at `e679d42`: `main`
+  `42a64e1d`, `staging` `08c34153`, and `production` `cc207644`.
 - CI passed for all three branches. Deploy workflows passed for all three
   branch deployments; the production workflow warned that GitHub-hosted route
   smoke hit Cloudflare challenge responses, so operator-shell probes are the
@@ -107,9 +112,11 @@ web-bridge fallbacks are treated as cleanup targets, not launch scaffolding.
 - This graph split was reviewed with Brutalist context
   `7a770d47-e04c-41dc-bf47-c08abf63ac39`; accepted findings were folded into
   DC-6a/DC-6c/DC-6d.
-- Two follow-up Brutalist review attempts on 2026-04-30 produced no usable
-  critique because Codex, Gemini, and Claude CLI critics were quota/rate-limit
-  blocked. Do not count DC-6a/DC-6b/DC-6c as reviewed until that gate is retried.
+- Brutalist retry context `861cd4f2-11f2-43b3-8248-8b4245aa2f4a` cleared
+  DC-6a/DC-6b/DC-6c and identified non-blocking follow-ups: document the KV
+  delete/dedup split, document the code-deploy rollback path before DC-7, add
+  periodic readiness/certificate monitoring before production exposure, and add
+  `mdlCredentialUses` expired-row cleanup before scaling.
 
 ## Inventory Gates
 
