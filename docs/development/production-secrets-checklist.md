@@ -193,6 +193,18 @@ CWC_DELIVERY_AGENT_ACK=Y
 > - `SELF_APP_NAME`
 > - `SELF_SCOPE`
 > - `SELF_MOCK_PASSPORT`
+>
+> **Cycle 46 (2026-04-30):** The custom direct mDL QR verifier and bridge were
+> removed from the active product path. After the browser-mediated-only deployment
+> is live, remove these stale Cloudflare Pages secrets if present:
+>
+> - `BRIDGE_ENCRYPTION_KEY`
+> - `MDL_DIRECT_QR_REQUEST_ALG`
+> - `MDL_DIRECT_QR_REQUEST_KID`
+> - `MDL_DIRECT_QR_REQUEST_PRIVATE_KEY`
+> - `MDL_DIRECT_QR_REQUEST_X5C`
+> - `DIRECT_MDL_ALLOWED_ORIGIN`
+> - `DIRECT_MDL_SESSION_KV`
 
 ---
 

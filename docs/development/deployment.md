@@ -168,6 +168,26 @@ curl --fail-with-body -sS \
 ```
 
 The probe must return `status: "ok"` for browser-mediated Digital Credentials readiness.
+It must also be the current readiness shape: no `MDL_BRIDGE`, no `MDL_DIRECT_QR`, no
+bridge/direct KV bindings, and no direct request signer check. If those names appear, the
+custom domain is still serving an old deployment and real-device wallet errors are not
+actionable yet.
+
+Do not use localhost QR behavior as a wallet acceptance signal. The signed request embeds
+`expected_origins`, and Google Wallet validates the verifier origin and registered
+certificate before releasing data. Staging smoke must use the exact HTTPS origin
+(`https://staging.commons.email`) and the certificate registered for that origin. Google's
+sandbox test-ID flow provisions an ID pass (`com.google.wallet.idcard.1`); Commons'
+product mDL query asks for `org.iso.18013.5.1.mDL`, so the sandbox ID pass is not a valid
+end-to-end mDL credential.
+
+The runtime `PUBLIC_APP_URL` must match the custom domain being tested. If the staging
+deployment inherits `PUBLIC_APP_URL=https://commons.email`, internal readiness should block
+with a `public_app_url` origin mismatch and staging must not be used for Wallet acceptance
+evidence. Configure a staging runtime value of `https://staging.commons.email`, or move
+real-device Wallet acceptance to the registered production origin and treat staging as a
+code-readiness gate only.
+
 If Redis is not configured, production must explicitly set `RATE_LIMITER_ALLOW_MEMORY=1`
 for the smoke/release window, because identity routes fail closed when neither `REDIS_URL`
 nor that opt-in is present.
