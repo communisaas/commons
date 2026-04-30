@@ -196,7 +196,8 @@ CWC_DELIVERY_AGENT_ACK=Y
 >
 > **Cycle 46 (2026-04-30):** The custom direct mDL QR verifier and bridge were
 > removed from the active product path. After the browser-mediated-only deployment
-> is live, remove these stale Cloudflare Pages secrets if present:
+> went live at `1da630d0`, these stale Cloudflare Pages secrets were removed from
+> production when present:
 >
 > - `BRIDGE_ENCRYPTION_KEY`
 > - `MDL_DIRECT_QR_REQUEST_ALG`
@@ -205,6 +206,9 @@ CWC_DELIVERY_AGENT_ACK=Y
 > - `MDL_DIRECT_QR_REQUEST_X5C`
 > - `DIRECT_MDL_ALLOWED_ORIGIN`
 > - `DIRECT_MDL_SESSION_KV`
+>
+> Follow-up inventory found no `BRIDGE_ENCRYPTION_KEY`,
+> `MDL_DIRECT_QR_REQUEST*`, or `DIRECT_MDL_ALLOWED_ORIGIN` production secrets.
 
 ---
 
