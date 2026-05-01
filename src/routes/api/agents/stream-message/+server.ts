@@ -34,9 +34,13 @@ import { moderatePromptOnly } from '$lib/core/server/moderation';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { EvaluatedSource } from '$lib/core/agents/types';
+import { encryptMessageJobResult } from '$lib/server/message-job-encryption';
 
 /** 72-hour cache TTL for template source cache */
 const SOURCE_CACHE_TTL_MS = 72 * 60 * 60 * 1000;
+/** Short recovery window: enough for tab hibernation, not a long-lived draft archive. */
+const MESSAGE_JOB_TTL_MS = 2 * 60 * 60 * 1000;
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 
 interface RequestBody {
 	subject_line: string;
@@ -46,12 +50,21 @@ interface RequestBody {
 	voice_sample?: string;
 	raw_input?: string;
 	template_id?: string;
+	job_id?: string;
+	input_hash?: string;
+	recovery_public_key_jwk?: JsonWebKey;
 	geographic_scope?: {
 		type: 'international' | 'nationwide' | 'subnational';
 		country?: string;
 		subdivision?: string;
 		locality?: string;
 	};
+}
+
+function isRecoveryPublicKeyJwk(value: unknown): value is JsonWebKey {
+	if (!value || typeof value !== 'object') return false;
+	const key = value as JsonWebKey;
+	return key.kty === 'RSA' && typeof key.n === 'string' && typeof key.e === 'string';
 }
 
 export const POST: RequestHandler = async (event) => {
@@ -90,6 +103,35 @@ export const POST: RequestHandler = async (event) => {
 		});
 	}
 
+	const usesRecoverableJob = Boolean(
+		body.job_id || body.input_hash || body.recovery_public_key_jwk
+	);
+	if (usesRecoverableJob && (!body.job_id || !body.input_hash || !body.recovery_public_key_jwk)) {
+		return new Response(
+			JSON.stringify({
+				error: 'job_id, input_hash, and recovery_public_key_jwk are required together'
+			}),
+			{
+				status: 400,
+				headers: { 'Content-Type': 'application/json' }
+			}
+		);
+	}
+	if (usesRecoverableJob) {
+		if (body.job_id!.length > 128 || !SHA256_HEX_RE.test(body.input_hash!)) {
+			return new Response(JSON.stringify({ error: 'Invalid message generation job handle' }), {
+				status: 400,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+		if (!isRecoveryPublicKeyJwk(body.recovery_public_key_jwk)) {
+			return new Response(JSON.stringify({ error: 'Invalid recovery public key' }), {
+				status: 400,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+	}
+
 	const traceId = crypto.randomUUID();
 
 	console.log('[stream-message] trace:', {
@@ -113,7 +155,9 @@ export const POST: RequestHandler = async (event) => {
 		...(body.topics || []),
 		body.voice_sample,
 		body.raw_input
-	].filter(Boolean).join('\n');
+	]
+		.filter(Boolean)
+		.join('\n');
 
 	const injectionCheck = await moderatePromptOnly(contentToCheck, 0.8);
 
@@ -137,9 +181,37 @@ export const POST: RequestHandler = async (event) => {
 
 	console.log('[stream-message] Starting streaming generation:', {
 		userId: session.userId,
-		subject: body.subject_line.substring(0, 50),
+		subjectLength: body.subject_line.length,
 		decisionMakerCount: body.decision_makers?.length || 0
 	});
+
+	let messageJob: {
+		jobId: string;
+		inputHash: string;
+		status: string;
+		encryptedResult?: unknown;
+		errorMessage?: string | null;
+	} | null = null;
+	let messageJobCreated = false;
+
+	if (usesRecoverableJob) {
+		try {
+			const start = await serverMutation(api.messageJobs.startOrGet, {
+				jobId: body.job_id!,
+				inputHash: body.input_hash!,
+				recoveryPublicKeyJwk: body.recovery_public_key_jwk!,
+				expiresAt: Date.now() + MESSAGE_JOB_TTL_MS
+			});
+			messageJob = start.job;
+			messageJobCreated = start.created;
+		} catch (jobError) {
+			console.error('[stream-message] Message job start failed:', jobError);
+			return new Response(JSON.stringify({ error: 'Could not start message generation job' }), {
+				status: 500,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
+	}
 
 	// Create SSE stream
 	const { stream, emitter } = createSSEStream({
@@ -148,13 +220,43 @@ export const POST: RequestHandler = async (event) => {
 		userId: session.userId
 	});
 
-	// Run generation in background
-	(async () => {
+	// Run generation in background. When Cloudflare exposes waitUntil, keep the
+	// job alive long enough to persist an encrypted recovery envelope even if the
+	// browser stream disconnects during tab hibernation.
+	const generationTask = (async () => {
 		let streamSuccess = false;
 		let resultTokenUsage: import('$lib/core/agents/types').TokenUsage | undefined;
 		let resultExternalCounts: import('$lib/core/agents/types').ExternalApiCounts | undefined;
 
 		try {
+			if (messageJob) {
+				emitter.send('job', {
+					jobId: messageJob.jobId,
+					inputHash: messageJob.inputHash,
+					status: messageJob.status
+				});
+
+				if (!messageJobCreated) {
+					if (messageJob.status === 'completed') {
+						emitter.send('job-complete', { job: messageJob });
+						streamSuccess = true;
+						return;
+					}
+					if (messageJob.status === 'pending' || messageJob.status === 'running') {
+						emitter.send('job-running', { job: messageJob });
+						streamSuccess = true;
+						return;
+					}
+					emitter.error(messageJob.errorMessage || 'Message generation job is not recoverable');
+					return;
+				}
+
+				await serverMutation(api.messageJobs.markRunning, {
+					jobId: messageJob.jobId,
+					phase: 'sources'
+				});
+			}
+
 			// ================================================================
 			// Template source cache: lookup
 			// ================================================================
@@ -164,13 +266,13 @@ export const POST: RequestHandler = async (event) => {
 			if (body.template_id) {
 				try {
 					const template = await serverQuery(api.templates.getSourceCache, {
-						templateId: body.template_id as any,
+						templateId: body.template_id as any
 					});
 
 					if (
 						template?.cachedSources &&
 						template.sourcesCachedAt &&
-						(Date.now() - template.sourcesCachedAt) < SOURCE_CACHE_TTL_MS
+						Date.now() - template.sourcesCachedAt < SOURCE_CACHE_TTL_MS
 					) {
 						cacheHit = true;
 						verifiedSources = template.cachedSources as unknown as EvaluatedSource[];
@@ -211,6 +313,14 @@ export const POST: RequestHandler = async (event) => {
 				},
 				onPhase: (phase: PipelinePhase, message: string) => {
 					emitter.send('phase', { phase, message });
+					if (messageJob) {
+						serverMutation(api.messageJobs.checkpointPhase, {
+							jobId: messageJob.jobId,
+							phase
+						}).catch((err: unknown) => {
+							console.warn('[stream-message] Message job phase checkpoint failed:', err);
+						});
+					}
 				}
 			});
 
@@ -218,6 +328,29 @@ export const POST: RequestHandler = async (event) => {
 			const { tokenUsage, externalCounts, ...clientResult } = result;
 			resultTokenUsage = tokenUsage;
 			resultExternalCounts = externalCounts;
+
+			if (messageJob && body.recovery_public_key_jwk && body.input_hash) {
+				try {
+					const encrypted = await encryptMessageJobResult(
+						clientResult,
+						body.recovery_public_key_jwk,
+						messageJob.jobId,
+						body.input_hash
+					);
+					await serverMutation(api.messageJobs.completeEncrypted, {
+						jobId: messageJob.jobId,
+						encryptedResult: encrypted.encryptedResult,
+						encryptionMeta: encrypted.encryptionMeta
+					});
+				} catch (encryptionErr) {
+					console.error('[stream-message] Message job encrypted completion failed:', encryptionErr);
+					await serverMutation(api.messageJobs.fail, {
+						jobId: messageJob.jobId,
+						errorCode: 'RECOVERY_ENCRYPTION_FAILED',
+						errorMessage: 'Message generated, but encrypted recovery storage failed'
+					}).catch(() => {});
+				}
+			}
 
 			// Send final result
 			emitter.complete(clientResult);
@@ -227,11 +360,16 @@ export const POST: RequestHandler = async (event) => {
 			// Template source cache: write (fire-and-forget)
 			// Cache miss + template_id + non-empty sources → write cache
 			// ================================================================
-			if (body.template_id && !cacheHit && result.evaluatedSources && result.evaluatedSources.length > 0) {
+			if (
+				body.template_id &&
+				!cacheHit &&
+				result.evaluatedSources &&
+				result.evaluatedSources.length > 0
+			) {
 				serverMutation(api.templates.updateSourceCache, {
 					templateId: body.template_id as any,
 					cachedSources: result.evaluatedSources,
-					sourcesCachedAt: Date.now(),
+					sourcesCachedAt: Date.now()
 				}).catch((err: unknown) => {
 					console.warn('[stream-message] Source cache write failed:', err);
 				});
@@ -245,6 +383,13 @@ export const POST: RequestHandler = async (event) => {
 			});
 		} catch (error) {
 			console.error('[stream-message] Generation failed:', error);
+			if (messageJob) {
+				await serverMutation(api.messageJobs.fail, {
+					jobId: messageJob.jobId,
+					errorCode: 'GENERATION_FAILED',
+					errorMessage: error instanceof Error ? error.message : 'Generation failed'
+				}).catch(() => {});
+			}
 			emitter.error(error instanceof Error ? error.message : 'Generation failed');
 		} finally {
 			logLLMOperation(
@@ -262,9 +407,17 @@ export const POST: RequestHandler = async (event) => {
 		}
 	})();
 
+	const waitUntil = event.platform?.context?.waitUntil?.bind(event.platform.context);
+	if (waitUntil) {
+		waitUntil(generationTask);
+	} else {
+		generationTask.catch((err) => {
+			console.error('[stream-message] Background generation task failed:', err);
+		});
+	}
+
 	const headers = new Headers(SSE_HEADERS);
 	addRateLimitHeaders(headers, rateLimitCheck);
 
 	return new Response(stream, { headers });
 };
-

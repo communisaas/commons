@@ -292,6 +292,31 @@ export default defineSchema({
 		}),
 
 	// ===========================================================================
+	// MESSAGE GENERATION JOBS
+	// ===========================================================================
+
+	messageGenerationJobs: defineTable({
+		jobId: v.string(),
+		userId: v.id('users'),
+		inputHash: v.string(),
+		status: v.string(), // 'pending' | 'running' | 'completed' | 'failed' | 'expired'
+		phase: v.optional(v.string()), // 'sources' | 'message' | 'complete'
+		recoveryPublicKeyJwk: v.optional(v.any()),
+		encryptedResult: v.optional(v.any()),
+		encryptionMeta: v.optional(v.any()),
+		errorCode: v.optional(v.string()),
+		errorMessage: v.optional(v.string()),
+		attempts: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+		expiresAt: v.number()
+	})
+		.index('by_jobId', ['jobId'])
+		.index('by_userId_inputHash', ['userId', 'inputHash'])
+		.index('by_status_updatedAt', ['status', 'updatedAt'])
+		.index('by_expiresAt', ['expiresAt']),
+
+	// ===========================================================================
 	// VERIFIABLE MESSAGES
 	// ===========================================================================
 

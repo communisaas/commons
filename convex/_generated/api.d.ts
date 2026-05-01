@@ -9,7 +9,9 @@
  */
 
 import type * as _authHelpers from "../_authHelpers.js";
+import type * as _credentialSelect from "../_credentialSelect.js";
 import type * as _cwcXml from "../_cwcXml.js";
+import type * as _downgradeGuard from "../_downgradeGuard.js";
 import type * as _orgHash from "../_orgHash.js";
 import type * as _orgKey from "../_orgKey.js";
 import type * as _orgKeyUnseal from "../_orgKeyUnseal.js";
@@ -22,6 +24,7 @@ import type * as blasts from "../blasts.js";
 import type * as calls from "../calls.js";
 import type * as campaigns from "../campaigns.js";
 import type * as crons from "../crons.js";
+import type * as cutover from "../cutover.js";
 import type * as debates from "../debates.js";
 import type * as delegation from "../delegation.js";
 import type * as donations from "../donations.js";
@@ -31,10 +34,12 @@ import type * as http from "../http.js";
 import type * as intelligence from "../intelligence.js";
 import type * as invites from "../invites.js";
 import type * as legislation from "../legislation.js";
+import type * as messageJobs from "../messageJobs.js";
 import type * as networks from "../networks.js";
 import type * as organizations from "../organizations.js";
 import type * as positions from "../positions.js";
 import type * as resolvedContacts from "../resolvedContacts.js";
+import type * as revocations from "../revocations.js";
 import type * as seed from "../seed.js";
 import type * as seedData from "../seedData.js";
 import type * as segments from "../segments.js";
@@ -59,7 +64,9 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   _authHelpers: typeof _authHelpers;
+  _credentialSelect: typeof _credentialSelect;
   _cwcXml: typeof _cwcXml;
+  _downgradeGuard: typeof _downgradeGuard;
   _orgHash: typeof _orgHash;
   _orgKey: typeof _orgKey;
   _orgKeyUnseal: typeof _orgKeyUnseal;
@@ -72,6 +79,7 @@ declare const fullApi: ApiFromModules<{
   calls: typeof calls;
   campaigns: typeof campaigns;
   crons: typeof crons;
+  cutover: typeof cutover;
   debates: typeof debates;
   delegation: typeof delegation;
   donations: typeof donations;
@@ -81,10 +89,12 @@ declare const fullApi: ApiFromModules<{
   intelligence: typeof intelligence;
   invites: typeof invites;
   legislation: typeof legislation;
+  messageJobs: typeof messageJobs;
   networks: typeof networks;
   organizations: typeof organizations;
   positions: typeof positions;
   resolvedContacts: typeof resolvedContacts;
+  revocations: typeof revocations;
   seed: typeof seed;
   seedData: typeof seedData;
   segments: typeof segments;

@@ -36,7 +36,10 @@ export function createSSEStream(traceConfig?: {
 			if (closed) return;
 			try {
 				const event = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
-				writer.write(encoder.encode(event));
+				writer.write(encoder.encode(event)).catch(() => {
+					// Client disconnected or the stream was cancelled after the write was queued.
+					handleDisconnect();
+				});
 			} catch {
 				// Stream already closed by client disconnect or timeout
 				handleDisconnect();
@@ -96,7 +99,7 @@ export function createSSEStream(traceConfig?: {
 export const SSE_HEADERS = {
 	'Content-Type': 'text/event-stream',
 	'Cache-Control': 'no-cache',
-	'Connection': 'keep-alive',
+	Connection: 'keep-alive',
 	'X-Accel-Buffering': 'no',
 	'cf-no-buffer': '1'
 } as const;

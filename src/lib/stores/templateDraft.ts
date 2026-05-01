@@ -50,9 +50,7 @@ interface TemplateDraftStore {
 		currentStep: string,
 		pendingSuggestion?: PendingSuggestion | null
 	) => void;
-	getDraft: (
-		draftId: string
-	) => {
+	getDraft: (draftId: string) => {
 		data: TemplateFormData;
 		lastSaved: number;
 		currentStep: string;
@@ -127,10 +125,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 				const result = DraftStorageSchema.safeParse(parsed);
 
 				if (!result.success) {
-					console.warn(
-						'[TemplateDraft] Invalid draft storage structure:',
-						result.error.flatten()
-					);
+					console.warn('[TemplateDraft] Invalid draft storage structure:', result.error.flatten());
 					return {};
 				}
 
@@ -263,7 +258,8 @@ function createTemplateDraftStore(): TemplateDraftStore {
 							title: r.title ?? '',
 							organization: r.organization ?? ''
 						}))
-					: []
+					: [],
+				resolvedForSubject: data.audience?.resolvedForSubject
 			},
 			content: {
 				preview: data.content?.preview ?? '',
@@ -280,7 +276,9 @@ function createTemplateDraftStore(): TemplateDraftStore {
 				researchLog: Array.isArray(data.content?.researchLog) ? [...data.content.researchLog] : [],
 				geographicScope: data.content?.geographicScope ?? null,
 				aiGenerated: data.content?.aiGenerated ?? false,
-				edited: data.content?.edited ?? false
+				edited: data.content?.edited ?? false,
+				generatedForSubject: data.content?.generatedForSubject,
+				activeMessageJob: data.content?.activeMessageJob ?? null
 			},
 			review: {}
 		};
@@ -320,9 +318,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 		});
 	}
 
-	function getDraft(
-		draftId: string
-	): {
+	function getDraft(draftId: string): {
 		data: TemplateFormData;
 		lastSaved: number;
 		currentStep: string;
@@ -342,7 +338,11 @@ function createTemplateDraftStore(): TemplateDraftStore {
 			saveDrafts(updated);
 
 			// Clear encrypted emails
-			try { localStorage.removeItem(`${STORAGE_KEY}_emails_${draftId}`); } catch { /* */ }
+			try {
+				localStorage.removeItem(`${STORAGE_KEY}_emails_${draftId}`);
+			} catch {
+				/* */
+			}
 
 			// Clear any auto-save timer
 			const timerId = autoSaveTimers.get(draftId);

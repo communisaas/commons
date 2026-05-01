@@ -1,8 +1,15 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import type { TemplateFormData, Source } from '$lib/types/template';
 	import { cleanHtmlFormatting } from '$lib/utils/message-processing';
 	import { parseSSEStream } from '$lib/utils/sse-stream';
+	import {
+		computeMessageInputHash,
+		decryptMessageJobResult,
+		getOrCreateMessageRecoveryPublicKey,
+		type ActiveMessageJob,
+		type EncryptedMessageJobResult
+	} from '$lib/core/agents/message-job-recovery';
 	import AgentThinking from '$lib/components/ui/AgentThinking.svelte';
 	import MessageResults from './MessageResults.svelte';
 	import AuthGateOverlay from './AuthGateOverlay.svelte';
@@ -39,6 +46,7 @@
 	let rateLimitResetAt = $state<string | null>(null);
 	let rateLimitMessage = $state<string | null>(null);
 	let isGenerating = $state(false);
+	let destroyed = false;
 
 	// Streaming state
 	let thoughts = $state<string[]>([]);
@@ -99,7 +107,7 @@
 	let originalSources = $state<Source[]>([]);
 
 	// Textarea ref for cursor-position insertion
-	let editTextarea: HTMLTextAreaElement;
+	let editTextarea = $state<HTMLTextAreaElement>();
 
 	/**
 	 * Build topics array with robust fallback chain
@@ -140,26 +148,69 @@
 
 	// US state abbreviations for geographic inference
 	const US_STATES: Record<string, string> = {
-		AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
-		CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia',
-		HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa',
-		KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
-		MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi',
-		MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire',
-		NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina',
-		ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania',
-		RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee',
-		TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington',
-		WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming', DC: 'District of Columbia'
+		AL: 'Alabama',
+		AK: 'Alaska',
+		AZ: 'Arizona',
+		AR: 'Arkansas',
+		CA: 'California',
+		CO: 'Colorado',
+		CT: 'Connecticut',
+		DE: 'Delaware',
+		FL: 'Florida',
+		GA: 'Georgia',
+		HI: 'Hawaii',
+		ID: 'Idaho',
+		IL: 'Illinois',
+		IN: 'Indiana',
+		IA: 'Iowa',
+		KS: 'Kansas',
+		KY: 'Kentucky',
+		LA: 'Louisiana',
+		ME: 'Maine',
+		MD: 'Maryland',
+		MA: 'Massachusetts',
+		MI: 'Michigan',
+		MN: 'Minnesota',
+		MS: 'Mississippi',
+		MO: 'Missouri',
+		MT: 'Montana',
+		NE: 'Nebraska',
+		NV: 'Nevada',
+		NH: 'New Hampshire',
+		NJ: 'New Jersey',
+		NM: 'New Mexico',
+		NY: 'New York',
+		NC: 'North Carolina',
+		ND: 'North Dakota',
+		OH: 'Ohio',
+		OK: 'Oklahoma',
+		OR: 'Oregon',
+		PA: 'Pennsylvania',
+		RI: 'Rhode Island',
+		SC: 'South Carolina',
+		SD: 'South Dakota',
+		TN: 'Tennessee',
+		TX: 'Texas',
+		UT: 'Utah',
+		VT: 'Vermont',
+		VA: 'Virginia',
+		WA: 'Washington',
+		WV: 'West Virginia',
+		WI: 'Wisconsin',
+		WY: 'Wyoming',
+		DC: 'District of Columbia'
 	};
 
 	/**
 	 * Infer geographic scope from decision makers' organizations.
 	 * Heuristic-based — doesn't need to be perfect; Exa queries still work with approximate scope.
 	 */
-	function inferGeographicScope(
-		dms: { name: string; title: string; organization: string }[]
-	): { type: 'international' | 'nationwide' | 'subnational'; country?: string; subdivision?: string; locality?: string } {
+	function inferGeographicScope(dms: { name: string; title: string; organization: string }[]): {
+		type: 'international' | 'nationwide' | 'subnational';
+		country?: string;
+		subdivision?: string;
+		locality?: string;
+	} {
 		if (!dms || dms.length === 0) return { type: 'nationwide', country: 'US' };
 
 		const orgs = dms.map((dm) => dm.organization || '');
@@ -219,14 +270,166 @@
 		}
 
 		// Check for US-level indicators (Congress, Senate, federal agencies)
-		const federalPatterns = /\b(U\.?S\.?|United States|Congress|Senate|House of Representatives|Federal)\b/i;
-		const allUS = orgs.every(
-			(org) => federalPatterns.test(org) || nonNullStates.length > 0
-		);
+		const federalPatterns =
+			/\b(U\.?S\.?|United States|Congress|Senate|House of Representatives|Federal)\b/i;
+		const allUS = orgs.every((org) => federalPatterns.test(org) || nonNullStates.length > 0);
 		if (allUS) return { type: 'nationwide', country: 'US' };
 
 		// Default: if we can't determine, assume nationwide US
 		return { type: 'nationwide', country: 'US' };
+	}
+
+	type MessageGenerationPayload = {
+		subject_line: string;
+		core_message: string;
+		topics: string[];
+		decision_makers: Array<{ name: string; title: string; organization: string }>;
+		voice_sample: string;
+		raw_input: string;
+		geographic_scope: ReturnType<typeof inferGeographicScope>;
+	};
+
+	type MessageGenerationResult = {
+		message?: string;
+		sources?: unknown[];
+		research_log?: string[];
+		geographic_scope?: unknown;
+	};
+
+	type RecoverableJobResponse = {
+		job?: {
+			jobId: string;
+			inputHash: string;
+			status: ActiveMessageJob['status'];
+			encryptedResult?: EncryptedMessageJobResult | null;
+			errorMessage?: string | null;
+		};
+		error?: string;
+	};
+
+	function buildGenerationPayload(): MessageGenerationPayload {
+		const subjectLine = formData.objective.title;
+		const coreMessage =
+			formData.objective.description || formData.objective.rawInput || formData.objective.title;
+
+		if (!subjectLine) {
+			throw new Error('Missing subject line');
+		}
+
+		if (!formData.audience.decisionMakers || formData.audience.decisionMakers.length === 0) {
+			throw new Error('No decision-makers selected');
+		}
+
+		const decisionMakers = formData.audience.decisionMakers.map((dm) => ({
+			name: dm.name,
+			title: dm.title,
+			organization: dm.organization
+		}));
+
+		return {
+			subject_line: subjectLine,
+			core_message: coreMessage,
+			topics: buildTopics(),
+			decision_makers: decisionMakers,
+			voice_sample: buildVoiceSample(),
+			raw_input: buildRawInput(),
+			geographic_scope: inferGeographicScope(decisionMakers)
+		};
+	}
+
+	function applyMessageResult(result: MessageGenerationResult) {
+		const cleanedMessage = cleanHtmlFormatting(result.message || '');
+
+		originalMessage = cleanedMessage;
+		originalSubject = formData.objective.title;
+		originalSources = [...((result.sources as Source[]) || [])];
+
+		formData.content.preview = cleanedMessage;
+		formData.content.sources = (result.sources as typeof formData.content.sources) || [];
+		formData.content.researchLog = result.research_log || [];
+		formData.content.geographicScope =
+			(result.geographic_scope as typeof formData.content.geographicScope) || null;
+		formData.content.aiGenerated = true;
+		formData.content.edited = false;
+		formData.content.generatedForSubject = formData.objective.title;
+		if (formData.content.activeMessageJob) {
+			formData.content.activeMessageJob.status = 'completed';
+		}
+
+		onSaveDraft?.();
+		stage = 'results';
+	}
+
+	async function fetchRecoverableJob(jobId: string): Promise<RecoverableJobResponse['job'] | null> {
+		const response = await fetch(`/api/agents/message-jobs/${encodeURIComponent(jobId)}`, {
+			credentials: 'include'
+		});
+		if (response.status === 404) return null;
+		if (!response.ok) {
+			const body = (await response.json().catch(() => ({}))) as RecoverableJobResponse;
+			throw new Error(body.error || 'Could not recover message generation job');
+		}
+		const body = (await response.json()) as RecoverableJobResponse;
+		return body.job ?? null;
+	}
+
+	async function applyRecoveredJob(
+		job: NonNullable<RecoverableJobResponse['job']>
+	): Promise<boolean> {
+		if (job.status === 'completed' && job.encryptedResult) {
+			const result = await decryptMessageJobResult<MessageGenerationResult>(
+				job.jobId,
+				job.inputHash,
+				job.encryptedResult
+			);
+			applyMessageResult(result);
+			return true;
+		}
+
+		if (job.status === 'failed') {
+			throw new Error(job.errorMessage || 'Message generation failed');
+		}
+
+		if (job.status === 'expired') {
+			throw new Error('Message generation expired. Please try again.');
+		}
+
+		return false;
+	}
+
+	function sleep(ms: number) {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	async function pollActiveMessageJob(activeJob: ActiveMessageJob, maxMs = 8 * 60 * 1000) {
+		const started = Date.now();
+		while (!destroyed && Date.now() - started < maxMs) {
+			const job = await fetchRecoverableJob(activeJob.jobId);
+			if (!job) return false;
+			if (await applyRecoveredJob(job)) return true;
+			await sleep(3000);
+		}
+		return false;
+	}
+
+	async function resumeActiveMessageJob(activeJob: ActiveMessageJob) {
+		if (isGenerating) return;
+		isGenerating = true;
+		stage = 'generating';
+		errorMessage = null;
+		thoughts = ['Reconnecting to the message generation job...'];
+
+		try {
+			const recovered = await pollActiveMessageJob(activeJob);
+			if (!recovered && !destroyed) {
+				throw new Error('Message generation is still running. Please try again in a moment.');
+			}
+		} catch (err) {
+			errorMessage = err instanceof Error ? err.message : 'Could not recover message generation.';
+			stage = 'error';
+		} finally {
+			isGenerating = false;
+		}
 	}
 
 	async function generateMessage() {
@@ -240,23 +443,19 @@
 			thoughts = [];
 			console.log('[MessageGenerationResolver] Starting streaming generation...');
 
-			// Validate we have required data (with fallback for core_message)
-			const subjectLine = formData.objective.title;
-			const coreMessage =
-				formData.objective.description || formData.objective.rawInput || formData.objective.title;
+			const payload = buildGenerationPayload();
+			const inputHash = await computeMessageInputHash(payload);
+			const jobId = crypto.randomUUID();
+			const recoveryPublicKeyJwk = await getOrCreateMessageRecoveryPublicKey(jobId);
 
-			if (!subjectLine) {
-				throw new Error('Missing subject line');
-			}
-
-			if (!formData.audience.decisionMakers || formData.audience.decisionMakers.length === 0) {
-				throw new Error('No decision-makers selected');
-			}
-
-			// Build with fallback chains
-			const topics = buildTopics();
-			const voiceSample = buildVoiceSample();
-			const rawInput = buildRawInput();
+			formData.content.activeMessageJob = {
+				jobId,
+				inputHash,
+				status: 'pending',
+				startedAt: Date.now(),
+				recoveryKeyRef: jobId
+			};
+			onSaveDraft?.();
 
 			// Use streaming endpoint
 			const response = await fetch('/api/agents/stream-message', {
@@ -264,23 +463,18 @@
 				headers: { 'Content-Type': 'application/json' },
 				credentials: 'include', // Ensure session cookie is sent after OAuth return
 				body: JSON.stringify({
-					subject_line: subjectLine,
-					core_message: coreMessage,
-					topics,
-					decision_makers: formData.audience.decisionMakers.map((dm) => ({
-						name: dm.name,
-						title: dm.title,
-						organization: dm.organization
-					})),
-					voice_sample: voiceSample,
-					raw_input: rawInput,
-					geographic_scope: inferGeographicScope(formData.audience.decisionMakers)
+					...payload,
+					job_id: jobId,
+					input_hash: inputHash,
+					recovery_public_key_jwk: recoveryPublicKeyJwk
 				})
 			});
 
 			// Check for auth / rate-limit errors
 			if (response.status === 429 || response.status === 401) {
 				const errorData = await response.json().catch(() => ({}));
+				formData.content.activeMessageJob = null;
+				onSaveDraft?.();
 
 				// Guest with zero quota or 401 → auth gate
 				if (response.status === 401 || errorData.tier === 'guest') {
@@ -293,12 +487,22 @@
 
 			if (!response.ok) {
 				const errorData = await response.json().catch(() => ({}));
+				formData.content.activeMessageJob = null;
+				onSaveDraft?.();
 				throw new Error(errorData.error || 'Failed to generate message');
 			}
+
+			let streamCompleted = false;
 
 			// Process SSE stream
 			for await (const event of parseSSEStream<Record<string, unknown>>(response)) {
 				switch (event.type) {
+					case 'job':
+						if (formData.content.activeMessageJob) {
+							formData.content.activeMessageJob.status = 'running';
+						}
+						break;
+
 					case 'thought':
 						if (typeof event.data.content === 'string') {
 							thoughts = [...thoughts, event.data.content];
@@ -306,45 +510,45 @@
 						break;
 
 					case 'complete': {
-						const result = event.data as {
-							message?: string;
-							sources?: unknown[];
-							research_log?: string[];
-							geographic_scope?: unknown;
-						};
-
-						// Clean HTML formatting from message
-						const cleanedMessage = cleanHtmlFormatting(result.message || '');
-
-						// Store original for "start fresh"
-						originalMessage = cleanedMessage;
-						originalSubject = formData.objective.title;
-						originalSources = [...((result.sources as Source[]) || [])];
-
-						// Update formData — subject is already set by the subject-line agent
-						formData.content.preview = cleanedMessage;
-						formData.content.sources = (result.sources as typeof formData.content.sources) || [];
-						formData.content.researchLog = result.research_log || [];
-						formData.content.geographicScope =
-							(result.geographic_scope as typeof formData.content.geographicScope) || null;
-						formData.content.aiGenerated = true;
-						formData.content.edited = false;
-						formData.content.generatedForSubject = formData.objective.title;
+						streamCompleted = true;
+						const result = event.data as MessageGenerationResult;
+						applyMessageResult(result);
 
 						console.log('[MessageGenerationResolver] Message generated:', {
-							message_length: cleanedMessage.length,
+							message_length: formData.content.preview.length,
 							sources_count: formData.content.sources?.length || 0
 						});
 
-						stage = 'results';
+						break;
+					}
+
+					case 'job-complete': {
+						streamCompleted = true;
+						const job = (event.data as { job?: RecoverableJobResponse['job'] }).job;
+						if (job) await applyRecoveredJob(job);
+						break;
+					}
+
+					case 'job-running': {
+						const activeJob = formData.content.activeMessageJob;
+						if (activeJob) {
+							streamCompleted = await pollActiveMessageJob(activeJob);
+						}
 						break;
 					}
 
 					case 'error':
+						streamCompleted = true;
 						throw new Error(
 							typeof event.data.message === 'string' ? event.data.message : 'Generation failed'
 						);
 				}
+			}
+
+			if (!streamCompleted) {
+				const activeJob = formData.content.activeMessageJob;
+				if (activeJob && (await pollActiveMessageJob(activeJob, 30_000))) return;
+				throw new Error('Connection closed before message generation finished. Please try again.');
 			}
 		} catch (err: any) {
 			console.error('[MessageGenerationResolver] Error:', err);
@@ -368,28 +572,49 @@
 
 	// Auto-run on mount
 	onMount(() => {
-		// Check if the objective changed since content was generated
-		const generatedFor = formData.content.generatedForSubject;
-		const currentSubject = formData.objective.title;
-		const isStale = generatedFor && generatedFor !== currentSubject;
+		void (async () => {
+			// Check if the objective changed since content was generated
+			const generatedFor = formData.content.generatedForSubject;
+			const currentSubject = formData.objective.title;
+			const isStale = generatedFor && generatedFor !== currentSubject;
 
-		if (isStale) {
-			console.log('[MessageGenerationResolver] Subject changed, clearing stale content', {
-				generatedFor, currentSubject
-			});
-			formData.content.preview = '';
-			formData.content.aiGenerated = false;
-			formData.content.generatedForSubject = undefined;
-			generateMessage();
-		} else if (!formData.content.preview || !formData.content.aiGenerated) {
-			generateMessage();
-		} else {
-			// Already have a message for the current subject, go straight to results
-			originalMessage = formData.content.preview;
-			originalSubject = formData.objective.title;
-			originalSources = [...(formData.content.sources || [])];
-			stage = 'results';
-		}
+			if (isStale) {
+				console.log('[MessageGenerationResolver] Subject changed, clearing stale content', {
+					generatedFor,
+					currentSubject
+				});
+				formData.content.preview = '';
+				formData.content.aiGenerated = false;
+				formData.content.generatedForSubject = undefined;
+				formData.content.activeMessageJob = null;
+				await generateMessage();
+			} else if (!formData.content.preview || !formData.content.aiGenerated) {
+				const activeJob = formData.content.activeMessageJob;
+				if (activeJob) {
+					try {
+						const currentHash = await computeMessageInputHash(buildGenerationPayload());
+						if (currentHash === activeJob.inputHash) {
+							await resumeActiveMessageJob(activeJob);
+							return;
+						}
+					} catch {
+						// Fall through to a fresh generation; generateMessage will surface validation errors.
+					}
+					formData.content.activeMessageJob = null;
+				}
+				await generateMessage();
+			} else {
+				// Already have a message for the current subject, go straight to results
+				originalMessage = formData.content.preview;
+				originalSubject = formData.objective.title;
+				originalSources = [...(formData.content.sources || [])];
+				stage = 'results';
+			}
+		})();
+	});
+
+	onDestroy(() => {
+		destroyed = true;
 	});
 
 	function handleEdit() {
@@ -404,6 +629,7 @@
 		formData.objective.title = originalSubject;
 		formData.content.sources = [...originalSources];
 		formData.content.edited = false;
+		formData.content.activeMessageJob = null;
 		stage = 'results';
 	}
 
@@ -532,7 +758,7 @@
 					id="edit-subject"
 					type="text"
 					bind:value={formData.objective.title}
-					class="mt-1 w-full rounded-lg border border-slate-300 px-4 py-2 focus:border-participation-primary-500 focus:ring-2 focus:ring-participation-primary-500"
+					class="focus:border-participation-primary-500 focus:ring-participation-primary-500 mt-1 w-full rounded-lg border border-slate-300 px-4 py-2 focus:ring-2"
 				/>
 			</div>
 
@@ -544,19 +770,21 @@
 					bind:value={formData.content.preview}
 					bind:this={editTextarea}
 					rows={16}
-					class="mt-1 w-full rounded-lg border border-slate-300 px-4 py-2 font-mono text-sm focus:border-participation-primary-500 focus:ring-2 focus:ring-participation-primary-500"
+					class="focus:border-participation-primary-500 focus:ring-participation-primary-500 mt-1 w-full rounded-lg border border-slate-300 px-4 py-2 font-mono text-sm focus:ring-2"
 				></textarea>
-				<p class="mt-1 text-xs text-slate-500">
-					Type [1], [2], etc. to reference sources
-				</p>
+				<p class="mt-1 text-xs text-slate-500">Type [1], [2], etc. to reference sources</p>
 			</div>
 
 			<!-- Source management -->
 			<SourceEditor
 				sources={formData.content.sources || []}
 				message={formData.content.preview}
-				onSourcesChange={(s) => { formData.content.sources = s; }}
-				onMessageChange={(m) => { formData.content.preview = m; }}
+				onSourcesChange={(s) => {
+					formData.content.sources = s;
+				}}
+				onMessageChange={(m) => {
+					formData.content.preview = m;
+				}}
 				onInsertAtCursor={handleInsertAtCursor}
 			/>
 
@@ -572,7 +800,7 @@
 				<button
 					type="button"
 					onclick={handleSaveEdit}
-					class="inline-flex items-center gap-2 rounded-lg bg-participation-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-participation-primary-700"
+					class="bg-participation-primary-600 hover:bg-participation-primary-700 inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors"
 				>
 					Save changes
 				</button>
@@ -590,7 +818,7 @@
 				<button
 					type="button"
 					onclick={generateMessage}
-					class="inline-flex items-center gap-2 rounded-lg bg-participation-primary-600 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-participation-primary-700"
+					class="bg-participation-primary-600 hover:bg-participation-primary-700 inline-flex items-center gap-2 rounded-lg px-6 py-3 text-sm font-medium text-white transition-colors"
 				>
 					Try again
 				</button>
@@ -608,11 +836,9 @@
 		<!-- Rate limit reached — friendly, non-blocking -->
 		<div class="space-y-6 py-8">
 			<div class="rounded-lg border border-amber-200 bg-amber-50 p-6 text-center">
-				<p class="text-base font-semibold text-amber-900">
-					Generation limit reached
-				</p>
+				<p class="text-base font-semibold text-amber-900">Generation limit reached</p>
 				<p class="mt-2 text-sm text-amber-700">
-					{rateLimitMessage || 'You\'ve used your available message generations for now.'}
+					{rateLimitMessage || "You've used your available message generations for now."}
 				</p>
 				{#if rateLimitResetAt}
 					<p class="mt-2 text-xs text-amber-600">
@@ -640,7 +866,7 @@
 				icon={FileText}
 				hints={[]}
 				progress={buildAuthProgressItems()}
-				onback={onback}
+				{onback}
 				{draftId}
 				{onSaveDraft}
 			/>

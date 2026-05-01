@@ -1,5 +1,6 @@
 import type { TemplateScope } from './jurisdiction';
 import type { GeoScope } from '$lib/core/agents/types';
+import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
 
 // ============================================================================
 // Power Landscape Types (Cycle 37)
@@ -183,6 +184,8 @@ export interface TemplateFormData {
 		edited?: boolean; // Flag indicating user edited AI-generated message
 		/** Subject line content was generated for — triggers re-generation on mismatch */
 		generatedForSubject?: string;
+		/** Active/recoverable message generation job for tab hibernation recovery */
+		activeMessageJob?: ActiveMessageJob | null;
 	};
 	review: Record<string, never>; // For validation purposes, no data to store
 }

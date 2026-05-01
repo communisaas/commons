@@ -215,4 +215,14 @@ crons.interval(
   internal.revocations.reconcileSMTRoot,
 );
 
+// ---------------------------------------------------------------------------
+// 18. Cleanup Message Generation Jobs — removes encrypted recovery envelopes
+//     after their short retention window.
+// ---------------------------------------------------------------------------
+crons.interval(
+  "cleanup-message-generation-jobs",
+  { hours: 1 },
+  internal.messageJobs.cleanupExpired,
+);
+
 export default crons;
