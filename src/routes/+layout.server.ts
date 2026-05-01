@@ -19,7 +19,10 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 			serverQuery(api.organizations.getMyMemberships, {})
 		]);
 	} catch (err) {
-		console.error('[Layout] Convex profile query failed:', err instanceof Error ? err.message : String(err));
+		console.error(
+			'[Layout] Convex profile query failed:',
+			err instanceof Error ? err.message : String(err)
+		);
 	}
 
 	if (convexProfile) {
@@ -33,12 +36,15 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 				is_verified: convexProfile.isVerified || false,
 				verification_method: convexProfile.verificationMethod,
 				verified_at: convexProfile.verifiedAt,
+				address_verified_at: convexProfile.addressVerifiedAt
+					? new Date(convexProfile.addressVerifiedAt).toISOString()
+					: null,
 				hasPasskey: convexProfile.hasPasskey,
 				district_hash: convexProfile.districtHash,
 				district_verified: convexProfile.districtVerified,
 				hasWallet: convexProfile.hasWallet,
 				hasDistrictCredential: Boolean(convexProfile.districtVerified),
-				orgMemberships: convexMemberships ?? [],
+				orgMemberships: convexMemberships ?? []
 			}
 		};
 	}
@@ -54,6 +60,7 @@ export const load: LayoutServerLoad = async ({ locals, depends }) => {
 			is_verified: locals.user.is_verified || false,
 			verification_method: locals.user.verification_method,
 			verified_at: locals.user.verified_at,
+			address_verified_at: locals.user.address_verified_at?.toISOString() ?? null,
 			hasPasskey: false,
 			district_hash: locals.user.district_hash,
 			district_verified: locals.user.district_verified,

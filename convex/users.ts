@@ -64,6 +64,7 @@ export const getProfile = query({
 			isVerified: user.isVerified ?? false,
 			verificationMethod: user.verificationMethod ?? null,
 			verifiedAt: user.verifiedAt ?? null,
+			addressVerifiedAt: user.addressVerifiedAt ?? null,
 			hasPasskey: Boolean(user.passkeyCredentialId),
 			districtHash: user.districtHash ?? null,
 			districtVerified: user.districtVerified ?? false,

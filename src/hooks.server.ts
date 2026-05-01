@@ -1,5 +1,5 @@
 import { dev } from '$app/environment';
-import type { Handle } from '@sveltejs/kit';
+import type { Handle, HandleServerError } from '@sveltejs/kit';
 import { error } from '@sveltejs/kit';
 import {
 	getRateLimiter,
@@ -10,16 +10,11 @@ import {
 import { deriveTrustTier } from '$lib/core/identity/authority-level';
 import { trackForRejection } from '$lib/services/rejectionMonitor';
 import { configure } from '$lib/core/shadow-atlas/ipfs-store';
-import {
-	initCloudflareSentryHandle,
-	sentryHandle,
-	handleErrorWithSentry
-} from '@sentry/sveltekit';
+import { initCloudflareSentryHandle, sentryHandle, handleErrorWithSentry } from '@sentry/sveltekit';
 import { initConvex, serverQuery, serverMutation } from 'convex-sveltekit';
 import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { mintConvexToken } from '$lib/server/convex-jwt';
 import { api } from '$lib/convex';
-
 
 // ─── DUAL-STACK: Initialize Convex server-side client ───
 // Stores the deployment URL so serverQuery()/serverMutation()/serverAction()
@@ -33,7 +28,7 @@ if (typeof PUBLIC_CONVEX_URL === 'string' && PUBLIC_CONVEX_URL) {
  * Sentry error handler — captures unhandled errors with PII scrubbing.
  * Must be exported as `handleError` for SvelteKit to pick it up.
  */
-export const handleError = handleErrorWithSentry((input) => {
+export const handleError = handleErrorWithSentry((input: Parameters<HandleServerError>[0]) => {
 	const { error: err } = input;
 	console.error('[handleError]', err);
 });
@@ -66,9 +61,11 @@ const handlePlatformEnv: Handle = async ({ event, resolve }) => {
 			ipfsCid: process.env.IPFS_CID_ROOT || '',
 			merkleSnapshotCid: process.env.IPFS_CID_MERKLE_SNAPSHOT || '',
 			ipfsGateways: (process.env.IPFS_GATEWAYS || '')
-				.split(',').map(s => s.trim()).filter(Boolean),
+				.split(',')
+				.map((s) => s.trim())
+				.filter(Boolean),
 			expectedCellMapRoot: process.env.EXPECTED_CELL_MAP_ROOT || '',
-			expectedCellMapDepth: Number.isFinite(depth) && depth > 0 ? depth : 0,
+			expectedCellMapDepth: Number.isFinite(depth) && depth > 0 ? depth : 0
 		});
 	}
 	return resolve(event);
@@ -113,7 +110,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 		// Fire-and-forget — doesn't block the request.
 		if (!user.tokenIdentifier) {
 			serverMutation(api.authOps.backfillTokenIdentifier, {
-				userId: user._id as string,
+				userId: user._id as string
 			}).catch(() => {});
 		}
 
@@ -145,6 +142,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			// District
 			district_hash: user.districtHash ?? null,
 			district_verified: user.districtVerified ?? false,
+			address_verified_at: user.addressVerifiedAt ? new Date(user.addressVerifiedAt) : null,
 			// Profile
 			role: user.role ?? null,
 			organization: user.organization ?? null,
@@ -174,7 +172,10 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 					event.locals.convexToken = token;
 				}
 			} catch (err) {
-				console.warn('[Hooks] Convex JWT minting failed:', err instanceof Error ? err.message : String(err));
+				console.warn(
+					'[Hooks] Convex JWT minting failed:',
+					err instanceof Error ? err.message : String(err)
+				);
 			}
 		}
 
@@ -267,8 +268,8 @@ const handleSecurityHeaders: Handle = async ({ event, resolve }) => {
 	// COOP/COEP for SharedArrayBuffer (ZK proving) — only on routes that need it.
 	// Setting COEP: require-corp globally blocks JS module loading because CF Pages
 	// serves static assets without Cross-Origin-Resource-Policy headers.
-	const needsCrossOriginIsolation = event.url.pathname.startsWith('/s/') ||
-		event.url.pathname.startsWith('/profile');
+	const needsCrossOriginIsolation =
+		event.url.pathname.startsWith('/s/') || event.url.pathname.startsWith('/profile');
 	response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
 	if (needsCrossOriginIsolation && !isEmbed) {
 		response.headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
@@ -454,7 +455,10 @@ const handleRejectionMonitoring: Handle = async ({ event, resolve }) => {
 
 	// Fire-and-forget via waitUntil — don't add latency
 	const kv = event.platform?.env?.REJECTION_MONITOR_KV as
-		| { get(key: string): Promise<string | null>; put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> }
+		| {
+				get(key: string): Promise<string | null>;
+				put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+		  }
 		| undefined;
 	const waitUntil = event.platform?.context?.waitUntil?.bind(event.platform.context);
 
@@ -508,4 +512,13 @@ const handleSentryInit: Handle = async ({ event, resolve }) => {
  * 7. handleSecurityHeaders - Add COOP/COEP + CSP headers
  * 8. handleRejectionMonitoring - Track rejection rates (async, zero latency impact)
  */
-export const handle = sequence(handleSentryInit, handlePlatformEnv, sentryHandle(), handleAuth, handleRateLimit, handleCsrfGuard, handleSecurityHeaders, handleRejectionMonitoring);
+export const handle = sequence(
+	handleSentryInit,
+	handlePlatformEnv,
+	sentryHandle(),
+	handleAuth,
+	handleRateLimit,
+	handleCsrfGuard,
+	handleSecurityHeaders,
+	handleRejectionMonitoring
+);

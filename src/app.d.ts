@@ -32,6 +32,7 @@ declare global {
 				// Privacy-preserving district (hash only, no PII)
 				district_hash: string | null;
 				district_verified: boolean;
+				address_verified_at: Date | null;
 				// Profile fields
 				role: string | null;
 				organization: string | null;
@@ -70,6 +71,8 @@ declare global {
 				VICAL_KV?: KVNamespace;
 				PACKET_CACHE_KV?: KVNamespace;
 				PUBLIC_APP_URL?: string;
+				SENTRY_DSN?: string;
+				ENVIRONMENT?: string;
 				MDL_OPENID4VP_REQUEST_PRIVATE_KEY?: string;
 				MDL_OPENID4VP_REQUEST_X5C?: string;
 				MDL_OPENID4VP_REQUEST_ALG?: string;
@@ -121,6 +124,8 @@ declare global {
 
 			// Analytics Configuration
 			USE_SNAPSHOT_ONLY?: string; // 'true' = use privacy-preserving snapshots only (production default)
+			SENTRY_DSN?: string;
+			ENVIRONMENT?: string;
 
 			// Rate Limiting
 			RATE_LIMIT_USE_DB?: string; // 'true' = use database for rate limit state

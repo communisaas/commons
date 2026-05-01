@@ -46,6 +46,7 @@
 	import { getUserLocation } from '$lib/core/location/inference-engine';
 	import type { TemplateWithJurisdictions } from '$lib/core/location/types';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
+	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 
 	let { data }: { data: PageData } = $props();
 
@@ -97,10 +98,7 @@
 		scopeIsInferred = false; // User explicitly selected/cleared — no longer inferred
 		if (browser) {
 			if (scope) {
-				localStorage.setItem(
-					SCOPE_KEY,
-					JSON.stringify({ scope, timestamp: Date.now() })
-				);
+				localStorage.setItem(SCOPE_KEY, JSON.stringify({ scope, timestamp: Date.now() }));
 			} else {
 				localStorage.removeItem(SCOPE_KEY);
 			}
@@ -173,19 +171,21 @@
 		// Auto-infer location from IP + timezone if no stored scope
 		// Silent, no permission prompts — IP geolocation is automatic
 		if (!restoredFromStorage) {
-			getUserLocation().then((inferred) => {
-				// Only apply if user hasn't selected something in the meantime
-				if (!selectedScope && inferred.country_code && inferred.confidence > 0) {
-					const autoScope = inferredLocationToGeoScope(inferred);
-					if (autoScope) {
-						selectedScope = autoScope;
-						scopeIsInferred = true;
-						// Don't persist auto-inferred to localStorage — only user selections persist
+			getUserLocation()
+				.then((inferred) => {
+					// Only apply if user hasn't selected something in the meantime
+					if (!selectedScope && inferred.country_code && inferred.confidence > 0) {
+						const autoScope = inferredLocationToGeoScope(inferred);
+						if (autoScope) {
+							selectedScope = autoScope;
+							scopeIsInferred = true;
+							// Don't persist auto-inferred to localStorage — only user selections persist
+						}
 					}
-				}
-			}).catch(() => {
-				// Silent failure — location inference is best-effort
-			});
+				})
+				.catch(() => {
+					// Silent failure — location inference is best-effort
+				});
 		}
 
 		// Check for template creation parameter (including auth return with draft)
@@ -272,8 +272,7 @@
 			const newTemplate = await templateStore.addTemplate(pendingPublishData);
 			savedTemplate = newTemplate;
 		} catch (err) {
-			templatePublishError =
-				err instanceof Error ? err.message : 'Failed to publish template';
+			templatePublishError = err instanceof Error ? err.message : 'Failed to publish template';
 		} finally {
 			templatePublishing = false;
 		}
@@ -316,17 +315,20 @@
 	// so the homepage order matches what TemplateList renders
 	function sortGroupTemplates(templates: Template[]): Template[] {
 		const now = new Date();
-		const scored = templates.map((t) => ({
-			...t,
-			...scoreTemplate(
-				{
-					send_count: t.send_count || 0,
-					created_at: new Date(t.createdAt),
-					updated_at: new Date((t as Record<string, unknown>).updatedAt as string || t.createdAt)
-				},
-				now
-			)
-		}));
+		const scored = templates.map((t) => {
+			const templateRecord = t as unknown as Record<string, unknown>;
+			return {
+				...t,
+				...scoreTemplate(
+					{
+						send_count: t.send_count || 0,
+						created_at: new Date(t.createdAt),
+						updated_at: new Date((templateRecord.updatedAt as string) || t.createdAt)
+					},
+					now
+				)
+			};
+		});
 		return sortTemplatesByScore(scored);
 	}
 
@@ -404,6 +406,14 @@
 
 	interface OnCompleteDetail {
 		address?: string;
+		streetAddress?: string;
+		city?: string;
+		state?: string;
+		zip?: string;
+		representatives?: unknown;
+		districtCommitment?: string;
+		commitmentSlotCount?: number;
+		coordinates?: { lat: number; lng: number } | null;
 		[key: string]: unknown;
 	}
 
@@ -429,8 +439,12 @@
 			return;
 		}
 
-		const trustTier = (data.user as Record<string, unknown> | null)?.trust_tier as number ?? 0;
-		const flow = analyzeEmailFlow(template, toEmailServiceUser(data.user as Record<string, unknown> | null), { trustTier });
+		const trustTier = ((data.user as Record<string, unknown> | null)?.trust_tier as number) ?? 0;
+		const flow = analyzeEmailFlow(
+			template,
+			toEmailServiceUser(data.user as Record<string, unknown> | null),
+			{ trustTier }
+		);
 
 		if (flow.nextAction === 'address') {
 			modalActions.openModal('address-modal', 'address', {
@@ -445,19 +459,22 @@
 					// Verify address (ZKP commitment or fallback) before navigating
 					if (data.user) {
 						try {
-							if ((detail as Record<string, unknown>).districtCommitment) {
-								await fetch('/api/identity/verify-address', {
+							if (detail.districtCommitment) {
+								const verifyRes = await fetch('/api/identity/verify-address', {
 									method: 'POST',
 									headers: { 'Content-Type': 'application/json' },
 									body: JSON.stringify({
-										district_commitment: (detail as Record<string, unknown>).districtCommitment,
-										slot_count: (detail as Record<string, unknown>).commitmentSlotCount,
+										district_commitment: detail.districtCommitment,
+										slot_count: detail.commitmentSlotCount,
 										verification_method: 'shadow_atlas',
 										// FU-1.1: forward coordinates so the server can recompute
 										// the expected commitment from IPFS cell data.
-										coordinates: (detail as Record<string, unknown>).coordinates ?? undefined,
+										coordinates: detail.coordinates ?? undefined
 									})
 								});
+								if (verifyRes.ok) {
+									await persistAddressCompletion(data.user.id, detail);
+								}
 							} else if (detail?.address) {
 								// Fallback: resolve + verify with plaintext
 								const resolveRes = await fetch('/api/location/resolve-address', {
@@ -473,7 +490,7 @@
 								if (resolveRes.ok) {
 									const resolved = await resolveRes.json();
 									if (resolved.resolved && resolved.district?.code) {
-										await fetch('/api/identity/verify-address', {
+										const verifyRes = await fetch('/api/identity/verify-address', {
 											method: 'POST',
 											headers: { 'Content-Type': 'application/json' },
 											body: JSON.stringify({
@@ -482,6 +499,9 @@
 												officials: resolved.officials ?? []
 											})
 										});
+										if (verifyRes.ok) {
+											await persistAddressCompletion(data.user.id, detail, resolved.district.code);
+										}
 									}
 								}
 							}
@@ -555,7 +575,11 @@
 
 			<!-- Location Scope Bar -->
 			<div class="location-scope-row">
-				<LocationScopeBar scope={selectedScope} inferred={scopeIsInferred} onScopeChange={handleScopeChange} />
+				<LocationScopeBar
+					scope={selectedScope}
+					inferred={scopeIsInferred}
+					onScopeChange={handleScopeChange}
+				/>
 			</div>
 
 			<!-- Template Browser: List + Preview Grid -->
@@ -643,9 +667,7 @@
 
 <!-- Mobile Preview Modal -->
 {#if showMobilePreview && selectedTemplate}
-	<TouchModal
-		onclose={() => (showMobilePreview = false)}
-	>
+	<TouchModal onclose={() => (showMobilePreview = false)}>
 		<div class="h-full">
 			<TemplatePreview
 				template={selectedTemplate}
@@ -663,8 +685,13 @@
 						return;
 					}
 
-					const mobileTrustTier = (data.user as Record<string, unknown> | null)?.trust_tier as number ?? 0;
-					const flow = analyzeEmailFlow(selectedTemplate, toEmailServiceUser(data.user as Record<string, unknown> | null), { trustTier: mobileTrustTier });
+					const mobileTrustTier =
+						((data.user as Record<string, unknown> | null)?.trust_tier as number) ?? 0;
+					const flow = analyzeEmailFlow(
+						selectedTemplate,
+						toEmailServiceUser(data.user as Record<string, unknown> | null),
+						{ trustTier: mobileTrustTier }
+					);
 
 					if (flow.nextAction === 'address') {
 						modalActions.openModal('address-modal', 'address', {
@@ -672,20 +699,61 @@
 							source: 'mobile',
 							user: data.user,
 							onComplete: async (detail: OnCompleteDetail) => {
-								if (data.user && (detail as Record<string, unknown>).districtCommitment) {
+								if (data.user && detail.districtCommitment) {
 									try {
-										await fetch('/api/identity/verify-address', {
+										const verifyRes = await fetch('/api/identity/verify-address', {
 											method: 'POST',
 											headers: { 'Content-Type': 'application/json' },
 											body: JSON.stringify({
-												district_commitment: (detail as Record<string, unknown>).districtCommitment,
-												slot_count: (detail as Record<string, unknown>).commitmentSlotCount,
+												district_commitment: detail.districtCommitment,
+												slot_count: detail.commitmentSlotCount,
 												verification_method: 'shadow_atlas',
 												// FU-1.1: forward coordinates for server-side authenticity check.
-												coordinates: (detail as Record<string, unknown>).coordinates ?? undefined,
+												coordinates: detail.coordinates ?? undefined
 											})
 										});
-									} catch { /* non-fatal */ }
+										if (verifyRes.ok) {
+											await persistAddressCompletion(data.user.id, detail);
+										}
+									} catch {
+										/* non-fatal */
+									}
+								} else if (data.user && detail.address) {
+									try {
+										const resolveRes = await fetch('/api/location/resolve-address', {
+											method: 'POST',
+											headers: { 'Content-Type': 'application/json' },
+											body: JSON.stringify({
+												street: detail.streetAddress,
+												city: detail.city,
+												state: detail.state,
+												zip: detail.zip
+											})
+										});
+										if (resolveRes.ok) {
+											const resolved = await resolveRes.json();
+											if (resolved.resolved && resolved.district?.code) {
+												const verifyRes = await fetch('/api/identity/verify-address', {
+													method: 'POST',
+													headers: { 'Content-Type': 'application/json' },
+													body: JSON.stringify({
+														district: resolved.district.code,
+														verification_method: 'civic_api',
+														officials: resolved.officials ?? []
+													})
+												});
+												if (verifyRes.ok) {
+													await persistAddressCompletion(
+														data.user.id,
+														detail,
+														resolved.district.code
+													);
+												}
+											}
+										}
+									} catch {
+										/* non-fatal */
+									}
 								}
 								const templateUrl = `/s/${selectedTemplate.slug}`;
 								preloadData(templateUrl);

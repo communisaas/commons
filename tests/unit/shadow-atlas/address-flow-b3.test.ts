@@ -11,6 +11,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+function source(relativePath: string): string {
+	return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
+}
 
 describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 	beforeEach(() => {
@@ -124,6 +132,39 @@ describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 
 			const result = await lookupDistrictsFromBrowser(37.7749, -122.4194);
 			expect(result).toBeNull();
+		});
+	});
+
+	describe('commitment authenticity request contract', () => {
+		it('forwards the coordinates used to compute district_commitment', () => {
+			const svelte = source('src/lib/components/auth/AddressVerificationFlow.svelte');
+
+			expect(svelte).toContain('let commitmentCoordinates');
+			expect(svelte).toContain('commitmentCoordinates = { lat, lng }');
+			expect(svelte).toContain('coordinates: commitmentCoordinates ?? undefined');
+			expect(svelte).toContain('function resetCommitmentState');
+		});
+	});
+
+	describe('re-grounding address custody contract', () => {
+		it('starts address changes from address entry, not geolocation or map-pin selection', () => {
+			const svelte = source('src/lib/components/auth/AddressVerificationFlow.svelte');
+			const capture = source(
+				'src/lib/components/auth/address-steps/RegroundingAddressCapture.svelte'
+			);
+
+			expect(svelte).toContain('RegroundingAddressCapture');
+			expect(svelte).toContain("flowStep = 'address-input';");
+			expect(svelte).toContain("verificationMethod = 'address';");
+			expect(svelte).toContain(
+				"flowStep = regroundingMode ? 'address-input' : clientSideEnabled ? 'map-pin' : 'address-input'"
+			);
+			expect(svelte).toContain('Enter the new address before re-grounding.');
+			expect(capture).toContain('Address text is required for a verified address change.');
+			expect(capture).toContain("from '$lib/components/ui/Button.svelte'");
+			expect(svelte).not.toContain('Choose how to attest your new coordinates');
+			expect(svelte).not.toContain('Device geolocation — nothing leaves the browser');
+			expect(svelte).not.toContain('Drop a pin on your new location');
 		});
 	});
 

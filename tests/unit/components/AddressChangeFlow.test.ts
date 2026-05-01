@@ -2,7 +2,7 @@
  * AddressChangeFlow Component Unit Tests
  *
  * Tests the re-grounding composition — the single-surface UI for a verified
- * constituent rebinding to new civic coordinates.
+ * constituent binding a new verified address.
  *
  * Architecture under test (post Stage-3.7 refactor):
  *   - AddressChangeFlow renders Zone 1 (old ground, color-dimmed + "Former"

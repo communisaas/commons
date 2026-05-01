@@ -16,7 +16,7 @@
   ─── Re-grounding mode ───
 
   When `regroundingMode === true`, this component becomes the single surface
-  for a verified constituent rebinding to new coordinates. The `issuing-credential`
+  for a verified constituent binding a new address. The `issuing-credential`
   step renders a witnessing list bound to REAL async boundaries (no timers), and
   the `complete` step becomes a consequential diff (WAS / IS, representatives side
   by side) instead of the tier-2 success card. The phase-change callback lets the
@@ -30,24 +30,48 @@
 
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { MapPin, CheckCircle2, Loader2, AlertCircle, Building2, ChevronRight, Navigation, Lock, Map } from '@lucide/svelte';
+	import {
+		MapPin,
+		CheckCircle2,
+		Loader2,
+		AlertCircle,
+		Building2,
+		ChevronRight,
+		Navigation,
+		Lock,
+		Map
+	} from '@lucide/svelte';
 	import { storeCredential } from '$lib/core/identity/credential-store';
 	import { getBrowserGeolocation } from '$lib/core/location/browser-location';
-	import { storeConstituentAddress, clearConstituentAddress, getConstituentAddress, type ConstituentAddress } from '$lib/core/identity/constituent-address';
+	import {
+		storeConstituentAddress,
+		clearConstituentAddress,
+		getConstituentAddress,
+		type ConstituentAddress
+	} from '$lib/core/identity/constituent-address';
 	import { clearSessionCredential } from '$lib/core/identity/session-credentials';
 	import { addVerifiedLocationSignal } from '$lib/core/location/inference-engine';
 	import { FEATURES } from '$lib/config/features';
 	import {
 		lookupDistrictsFromBrowser,
 		getOfficialsFromBrowser,
-		getFullCellDataFromBrowser,
+		getFullCellDataFromBrowser
 	} from '$lib/core/shadow-atlas/browser-client';
 	import { convertDistrictId } from '$lib/core/shadow-atlas/district-format';
 	import { poseidon2Sponge24 } from '$lib/core/crypto/poseidon';
 	import { trackAddressChanged } from '$lib/core/analytics/client';
 	import MapPinSelector from './MapPinSelector.svelte';
+	import RegroundingAddressCapture from './address-steps/RegroundingAddressCapture.svelte';
 
-	type FlowStep = 'path-select' | 'geolocating' | 'address-input' | 'map-pin' | 'resolving' | 'confirm-district' | 'issuing-credential' | 'complete';
+	type FlowStep =
+		| 'path-select'
+		| 'geolocating'
+		| 'address-input'
+		| 'map-pin'
+		| 'resolving'
+		| 'confirm-district'
+		| 'issuing-credential'
+		| 'complete';
 
 	interface Representative {
 		name: string;
@@ -100,7 +124,8 @@
 		/^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$/.test(zipCode.trim()) ? 'CA' : 'US'
 	);
 
-	// Flow state
+	// Flow state. The re-grounding fallback path-select surface is address-only;
+	// on mount, re-grounding advances directly to address input.
 	let flowStep: FlowStep = $state('path-select');
 	let errorMessage: string = $state('');
 	let geoPermissionDenied: boolean = $state(false);
@@ -123,6 +148,7 @@
 
 	// B-3: 24 district slots from IPFS (for Poseidon2 commitment)
 	let districtSlots: string[] = $state([]);
+	let commitmentCoordinates = $state<{ lat: number; lng: number } | null>(null);
 
 	// B-3: Client-side district resolution (when SHADOW_ATLAS_VERIFICATION enabled)
 	const clientSideEnabled = FEATURES.SHADOW_ATLAS_VERIFICATION;
@@ -163,18 +189,28 @@
 		}
 	}
 
+	function resetCommitmentState() {
+		districtSlots = [];
+		commitmentCoordinates = null;
+	}
+
 	// Signal capture phase on mount when in re-grounding mode so the parent
 	// can initialise its close-guard state from a known baseline.
 	onMount(() => {
-		if (regroundingMode) emitRegroundingPhase('capture');
+		if (regroundingMode) {
+			flowStep = 'address-input';
+			verificationMethod = 'address';
+			emitRegroundingPhase('capture');
+		}
 	});
 
 	// Derived: form validation
 	let isFormValid: boolean = $derived(
 		street.trim().length > 0 &&
-		city.trim().length > 0 &&
-		stateCode.trim().length === 2 &&
-		(/^\d{5}(-\d{4})?$/.test(zipCode.trim()) || /^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$/.test(zipCode.trim()))
+			city.trim().length > 0 &&
+			stateCode.trim().length === 2 &&
+			(/^\d{5}(-\d{4})?$/.test(zipCode.trim()) ||
+				/^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$/.test(zipCode.trim()))
 	);
 
 	/**
@@ -184,7 +220,8 @@
 	 */
 	function processResolveResponse(data: Record<string, unknown>, ok: boolean) {
 		if (!ok || !data.resolved || !data.district) {
-			errorMessage = (data.error as string) || 'Could not determine your district. Please try again.';
+			errorMessage =
+				(data.error as string) || 'Could not determine your district. Please try again.';
 			flowStep = verificationMethod === 'browser' ? 'path-select' : 'address-input';
 			return;
 		}
@@ -196,7 +233,7 @@
 		const address = data.address as { matched?: string } | undefined;
 		correctedAddress = address?.matched || '';
 
-		representatives = ((data.officials as typeof representatives) || []);
+		representatives = (data.officials as typeof representatives) || [];
 		verifiedStateSenate = '';
 		verifiedStateAssembly = '';
 
@@ -211,6 +248,7 @@
 		try {
 			const cellDistricts = await lookupDistrictsFromBrowser(lat, lng);
 			if (!cellDistricts || !cellDistricts.slots[0]) return false;
+			commitmentCoordinates = { lat, lng };
 
 			// Fetch circuit-ready BN254 field elements for Poseidon2 commitment
 			const cellData = await getFullCellDataFromBrowser({ lat, lng });
@@ -225,7 +263,7 @@
 			// Fetch officials from IPFS for UI display
 			const officials = await getOfficialsFromBrowser(verifiedDistrict);
 			if (officials) {
-				representatives = officials.officials.map(o => ({
+				representatives = officials.officials.map((o) => ({
 					name: o.name,
 					office: o.office_address || '',
 					chamber: o.chamber,
@@ -251,6 +289,7 @@
 	 */
 	async function handleGeolocationPath() {
 		verificationMethod = 'browser';
+		resetCommitmentState();
 		flowStep = 'geolocating';
 		errorMessage = '';
 
@@ -283,7 +322,8 @@
 				const resolved = await resolveClientSide(lat, lng);
 				if (resolved) return;
 				// Client-side failed — show error instead of leaking to server
-				errorMessage = 'Could not resolve your district from IPFS data. Please try the map pin option.';
+				errorMessage =
+					'Could not resolve your district from IPFS data. Please try the map pin option.';
 				flowStep = 'path-select';
 				return;
 			}
@@ -318,6 +358,7 @@
 		if (!isFormValid) return;
 
 		verificationMethod = 'address';
+		resetCommitmentState();
 		flowStep = 'resolving';
 		errorMessage = '';
 
@@ -394,6 +435,14 @@
 	 *   6. Reads back the new ground for the consequential diff.
 	 */
 	async function handleConfirmDistrict() {
+		if (regroundingMode && !isFormValid) {
+			errorMessage = 'Enter the new address before re-grounding.';
+			verificationMethod = 'address';
+			flowStep = 'address-input';
+			emitRegroundingPhase('capture');
+			return;
+		}
+
 		flowStep = 'issuing-credential';
 		errorMessage = '';
 
@@ -409,12 +458,13 @@
 
 			if (districtSlots.length === 24) {
 				const commitment = await poseidon2Sponge24(districtSlots);
-				const nonZeroSlots = districtSlots.filter(s => s !== '0x' + '0'.repeat(64)).length;
+				const nonZeroSlots = districtSlots.filter((s) => s !== '0x' + '0'.repeat(64)).length;
 
 				requestBody = {
 					district_commitment: commitment,
 					slot_count: nonZeroSlots,
 					verification_method: 'shadow_atlas',
+					coordinates: commitmentCoordinates ?? undefined
 				};
 			} else {
 				// Fallback: no IPFS data available (client-side resolution failed)
@@ -423,7 +473,7 @@
 					state_senate_district: verifiedStateSenate || undefined,
 					state_assembly_district: verifiedStateAssembly || undefined,
 					verification_method: 'civic_api',
-					officials: representatives,
+					officials: representatives
 				};
 			}
 
@@ -478,10 +528,7 @@
 				// non-fatal cleanup; the next verification clears any residue.
 				markRegroundingStep('retire', 'active');
 				try {
-					await Promise.all([
-						clearConstituentAddress(userId),
-						clearSessionCredential(userId)
-					]);
+					await Promise.all([clearConstituentAddress(userId), clearSessionCredential(userId)]);
 				} catch (e) {
 					console.warn('[AddressVerificationFlow] Retire failed (non-fatal):', e);
 				}
@@ -492,9 +539,10 @@
 					console.warn('[AddressVerificationFlow] onRetired threw:', e);
 				}
 
-				// Write the new ground (form state). Geolocation + map-pin paths
-				// never captured an address string — the credential alone is the
-				// new ground in those cases.
+				// Write the new ground from the captured address. Re-grounding does
+				// not allow coordinate-only sources; profile affordance semantics are
+				// "change verified address", so the browser-local cache must carry
+				// the new address text after successful attestation.
 				if (verificationMethod === 'address' && street && city && stateCode && zipCode) {
 					try {
 						await storeConstituentAddress(userId, {
@@ -533,7 +581,10 @@
 				try {
 					await clearSessionCredential(userId);
 				} catch (e) {
-					console.warn('[AddressVerificationFlow] Clear stale SessionCredential failed (non-fatal):', e);
+					console.warn(
+						'[AddressVerificationFlow] Clear stale SessionCredential failed (non-fatal):',
+						e
+					);
 				}
 			}
 
@@ -596,9 +647,10 @@
 	 */
 	async function loadNewGroundForDiff() {
 		try {
-			// The address path writes IndexedDB post-retire in handleConfirmDistrict;
-			// geolocation and map-pin paths never capture an address string. Read
-			// whatever is there — null is fine (IS pane handles that case).
+			// Re-grounding always captures address text and writes IndexedDB
+			// post-retire in handleConfirmDistrict. Null means the encrypted
+			// browser cache could not be read, not that we accepted a coordinate-only
+			// address change.
 			const stored = await getConstituentAddress(userId);
 			if (stored) newAddress = stored;
 		} catch (e) {
@@ -622,12 +674,11 @@
 			oldDistrictCode && newDistrictCode && oldDistrictCode !== newDistrictCode
 		);
 
-		// State-change detection. The address path writes state into IndexedDB,
-		// but the geolocation and map-pin paths never capture a state string —
-		// they resolve districts directly from lat/lng via IPFS. For those
-		// paths, derive state-change from senator-name diff: federal senators
-		// are state-scoped, so if any OLD senator is absent from the NEW senator
-		// list, state changed.
+		// State-change detection. Re-grounding writes state into IndexedDB from
+		// the captured address. If the local cache cannot be read, derive a
+		// conservative state-change signal from senator-name diff: federal
+		// senators are state-scoped, so if any OLD senator is absent from the
+		// NEW senator list, state changed.
 		const newState = newAddress?.state || '';
 		const oldState = oldAddress?.state || '';
 		if (oldState && newState) {
@@ -669,22 +720,26 @@
 
 	function handleSelectAddressPath() {
 		verificationMethod = 'address';
+		resetCommitmentState();
 		geoPermissionDenied = false;
-		flowStep = clientSideEnabled ? 'map-pin' : 'address-input';
+		flowStep = regroundingMode ? 'address-input' : clientSideEnabled ? 'map-pin' : 'address-input';
 	}
 
 	/**
 	 * Path B (client-side): Map pin selection flow.
-	 * User drops a pin on the map — no address string ever leaves the browser.
+	 * User drops a pin on the map. This path does not capture address text and
+	 * is therefore unavailable for re-grounding.
 	 */
 	async function handleMapPinSelect(coords: { lat: number; lng: number }) {
 		verificationMethod = 'address';
+		resetCommitmentState();
 		flowStep = 'resolving';
 		errorMessage = '';
 
 		const resolved = await resolveClientSide(coords.lat, coords.lng);
 		if (!resolved) {
-			errorMessage = 'Could not determine your district from this location. Please try a different spot or use device location.';
+			errorMessage =
+				'Could not determine your district from this location. Please try a different spot or use device location.';
 			flowStep = 'map-pin';
 		}
 	}
@@ -702,6 +757,11 @@
 	function handleBack() {
 		errorMessage = '';
 		geoPermissionDenied = false;
+		resetCommitmentState();
+		if (regroundingMode) {
+			handleCancel();
+			return;
+		}
 		flowStep = 'path-select';
 	}
 
@@ -724,9 +784,13 @@
 			{#each ['path-select', 'confirm-district', 'complete'] as step, i}
 				{@const stepLabels = ['Verify', 'Confirm', 'Done']}
 				{@const stepIndex = ['path-select', 'confirm-district', 'complete'].indexOf(flowStep)}
-				{@const isActive = i <= stepIndex
-					|| (flowStep === 'geolocating' || flowStep === 'address-input' || flowStep === 'resolving') && i === 0
-					|| flowStep === 'issuing-credential' && i <= 1}
+				{@const isActive =
+					i <= stepIndex ||
+					((flowStep === 'geolocating' ||
+						flowStep === 'address-input' ||
+						flowStep === 'resolving') &&
+						i === 0) ||
+					(flowStep === 'issuing-credential' && i <= 1)}
 				<div class="flex items-center gap-2">
 					<div
 						class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold transition-colors duration-300"
@@ -741,7 +805,11 @@
 							{i + 1}
 						{/if}
 					</div>
-					<span class="text-xs font-medium" class:text-emerald-700={isActive} class:text-slate-400={!isActive}>
+					<span
+						class="text-xs font-medium"
+						class:text-emerald-700={isActive}
+						class:text-slate-400={!isActive}
+					>
 						{stepLabels[i]}
 					</span>
 					{#if i < 2}
@@ -755,76 +823,24 @@
 	<!-- PATH SELECT STEP -->
 	{#if flowStep === 'path-select'}
 		{#if regroundingMode}
-			<!-- Re-grounding register: eyebrow + Satoshi heading, outlined path options -->
-			<section class="pt-2 pb-2">
-				<div class="mb-5">
-					<p
-						class="font-mono text-[10px] uppercase text-slate-500"
-						style="letter-spacing: 0.22em"
-					>
-						New ground
-					</p>
-					<h2
-						class="mt-1.5 text-xl font-semibold leading-tight text-slate-900"
-						style="font-family: 'Satoshi', system-ui, sans-serif"
-					>
-						Choose how to attest your new coordinates.
-					</h2>
-				</div>
-
-				<div class="space-y-2">
-					<button
-						type="button"
-						class="flex w-full items-start gap-3 border-t border-dotted border-slate-300 py-4 text-left transition-colors hover:bg-slate-50/60"
-						onclick={handleGeolocationPath}
-					>
-						<Navigation class="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
-						<div class="min-w-0 flex-1">
-							<p class="text-sm font-medium text-slate-900">Use my location</p>
-							<p class="mt-0.5 text-xs text-slate-500">Device geolocation — nothing leaves the browser.</p>
-						</div>
-						<ChevronRight class="mt-1 h-4 w-4 shrink-0 text-slate-400" />
-					</button>
-
-					<button
-						type="button"
-						class="flex w-full items-start gap-3 border-t border-dotted border-slate-300 py-4 text-left transition-colors hover:bg-slate-50/60"
-						onclick={handleSelectAddressPath}
-					>
-						{#if clientSideEnabled}
-							<Map class="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
-						{:else}
-							<Building2 class="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
-						{/if}
-						<div class="min-w-0 flex-1">
-							{#if clientSideEnabled}
-								<p class="text-sm font-medium text-slate-900">Choose on map</p>
-								<p class="mt-0.5 text-xs text-slate-500">Drop a pin on your new location.</p>
-							{:else}
-								<p class="text-sm font-medium text-slate-900">Enter my address</p>
-								<p class="mt-0.5 text-xs text-slate-500">Verify with your new home address.</p>
-							{/if}
-						</div>
-						<ChevronRight class="mt-1 h-4 w-4 shrink-0 text-slate-400" />
-					</button>
-				</div>
-
-				{#if onCancel}
-					<div class="mt-6 border-t border-dotted border-slate-300 pt-4 text-right">
-						<button
-							type="button"
-							class="font-mono text-sm text-slate-500 underline decoration-slate-300 decoration-1 underline-offset-4 transition-colors hover:text-slate-700 hover:decoration-slate-500"
-							onclick={handleCancel}
-						>
-							Cancel
-						</button>
-					</div>
-				{/if}
-			</section>
+			<RegroundingAddressCapture
+				bind:streetAddress={street}
+				bind:city
+				bind:stateCode
+				bind:zipCode
+				{detectedCountry}
+				{errorMessage}
+				{geoPermissionDenied}
+				onSubmit={handleAddressPath}
+				onCancel={handleCancel}
+				onKeydown={handleKeydown}
+			/>
 		{:else}
 			<div class="space-y-5">
 				<div class="text-center">
-					<div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
+					<div
+						class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100"
+					>
 						<MapPin class="h-6 w-6 text-emerald-600" />
 					</div>
 					<h3 class="text-lg font-semibold text-slate-900">Verify Your District</h3>
@@ -837,15 +853,19 @@
 					<!-- Option A: Use my location -->
 					<button
 						type="button"
-						class="flex w-full items-start gap-4 rounded-md border border-slate-200 p-5 text-left cursor-pointer transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
+						class="flex w-full cursor-pointer items-start gap-4 rounded-md border border-slate-200 p-5 text-left transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
 						onclick={handleGeolocationPath}
 					>
-						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100">
+						<div
+							class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100"
+						>
 							<Navigation class="h-5 w-5 text-emerald-600" />
 						</div>
 						<div class="min-w-0 flex-1">
 							<p class="text-sm font-semibold text-slate-900">Use my location</p>
-							<p class="mt-0.5 text-xs text-slate-500">Quick verification using your device's location</p>
+							<p class="mt-0.5 text-xs text-slate-500">
+								Quick verification using your device's location
+							</p>
 						</div>
 						<ChevronRight class="mt-2.5 h-4 w-4 shrink-0 text-slate-400" />
 					</button>
@@ -853,10 +873,12 @@
 					<!-- Option B: Choose on map (client-side) or Enter address (legacy) -->
 					<button
 						type="button"
-						class="flex w-full items-start gap-4 rounded-md border border-slate-200 p-5 text-left cursor-pointer transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
+						class="flex w-full cursor-pointer items-start gap-4 rounded-md border border-slate-200 p-5 text-left transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
 						onclick={handleSelectAddressPath}
 					>
-						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100">
+						<div
+							class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100"
+						>
 							{#if clientSideEnabled}
 								<Map class="h-5 w-5 text-emerald-600" />
 							{:else}
@@ -866,10 +888,14 @@
 						<div class="min-w-0 flex-1">
 							{#if clientSideEnabled}
 								<p class="text-sm font-semibold text-slate-900">Choose on map</p>
-								<p class="mt-0.5 text-xs text-slate-500">Drop a pin on your location — nothing leaves your browser</p>
+								<p class="mt-0.5 text-xs text-slate-500">
+									Drop a pin to resolve your district without typing an address
+								</p>
 							{:else}
 								<p class="text-sm font-semibold text-slate-900">Enter my address</p>
-								<p class="mt-0.5 text-xs text-slate-500">Verify with your home address for constituency proof</p>
+								<p class="mt-0.5 text-xs text-slate-500">
+									Verify with your home address for constituency proof
+								</p>
 							{/if}
 						</div>
 						<ChevronRight class="mt-2.5 h-4 w-4 shrink-0 text-slate-400" />
@@ -881,7 +907,8 @@
 					<Lock class="h-3 w-3 text-emerald-700" />
 					<p class="text-xs font-medium text-emerald-700">
 						{#if clientSideEnabled}
-							Your location never leaves your browser. District data fetched from decentralized storage.
+							Location and map paths avoid address entry; server verification checks the selected
+							point against the district commitment.
 						{:else}
 							Your address is matched to a district, then forgotten. Nothing is stored.
 						{/if}
@@ -900,15 +927,12 @@
 			</div>
 		{/if}
 
-	<!-- GEOLOCATING STEP (loading) -->
+		<!-- GEOLOCATING STEP (loading) -->
 	{:else if flowStep === 'geolocating'}
 		{#if regroundingMode}
 			<section class="py-6" aria-live="polite">
 				<div class="mb-5">
-					<p
-						class="font-mono text-[10px] uppercase text-slate-500"
-						style="letter-spacing: 0.22em"
-					>
+					<p class="font-mono text-[10px] text-slate-500 uppercase" style="letter-spacing: 0.22em">
 						New ground
 					</p>
 					<h2
@@ -918,7 +942,9 @@
 						Awaiting location permission
 					</h2>
 				</div>
-				<div class="flex items-center gap-3 border-t border-b border-dotted border-slate-300 py-4 text-sm text-slate-500">
+				<div
+					class="flex items-center gap-3 border-t border-b border-dotted border-slate-300 py-4 text-sm text-slate-500"
+				>
 					<Loader2 class="h-4 w-4 shrink-0 animate-spin text-slate-500" />
 					<span>Please allow location access when prompted.</span>
 				</div>
@@ -929,146 +955,53 @@
 					<Loader2 class="h-8 w-8 animate-spin text-emerald-600" />
 				</div>
 				<h3 class="text-lg font-semibold text-slate-900">Detecting Location</h3>
-				<p class="mt-2 text-sm text-slate-600">
-					Please allow location access when prompted...
-				</p>
+				<p class="mt-2 text-sm text-slate-600">Please allow location access when prompted...</p>
 			</div>
 		{/if}
 
-	<!-- MAP PIN STEP (client-side, privacy-preserving) -->
+		<!-- MAP PIN STEP (client-side, privacy-preserving) -->
 	{:else if flowStep === 'map-pin'}
-		<div class="space-y-4">
-			{#if regroundingMode}
-				<div class="mb-2">
-					<p
-						class="font-mono text-[10px] uppercase text-slate-500"
-						style="letter-spacing: 0.22em"
-					>
-						New ground
-					</p>
-					<h2
-						class="mt-1.5 text-xl font-semibold leading-tight text-slate-900"
-						style="font-family: 'Satoshi', system-ui, sans-serif"
-					>
-						Drop a pin on your new location.
-					</h2>
-				</div>
-			{/if}
-			<MapPinSelector
-				onSelect={handleMapPinSelect}
-				onCancel={handleBack}
+		{#if regroundingMode}
+			<RegroundingAddressCapture
+				bind:streetAddress={street}
+				bind:city
+				bind:stateCode
+				bind:zipCode
+				{detectedCountry}
+				errorMessage={errorMessage ||
+					'Verified address changes require address text, not a map pin.'}
+				{geoPermissionDenied}
+				onSubmit={handleAddressPath}
+				onCancel={handleCancel}
+				onKeydown={handleKeydown}
 			/>
-		</div>
+		{:else}
+			<div class="space-y-4">
+				<MapPinSelector onSelect={handleMapPinSelect} onCancel={handleBack} />
+			</div>
+		{/if}
 
-	<!-- ADDRESS INPUT STEP -->
+		<!-- ADDRESS INPUT STEP -->
 	{:else if flowStep === 'address-input'}
 		{#if regroundingMode}
-			<section class="pt-2 pb-2">
-				<div class="mb-5">
-					<p
-						class="font-mono text-[10px] uppercase text-slate-500"
-						style="letter-spacing: 0.22em"
-					>
-						New ground
-					</p>
-					<h2
-						class="mt-1.5 text-xl font-semibold leading-tight text-slate-900"
-						style="font-family: 'Satoshi', system-ui, sans-serif"
-					>
-						Enter your new address.
-					</h2>
-					{#if geoPermissionDenied}
-						<p class="mt-2 flex items-center gap-1.5 text-xs text-amber-700">
-							<AlertCircle class="h-3.5 w-3.5 shrink-0" />
-							Location access was denied.
-						</p>
-					{/if}
-				</div>
-
-				<div class="space-y-3">
-					<div>
-						<label for="avf-street" class="mb-1 block text-xs font-medium uppercase tracking-wider text-slate-500">
-							Street
-						</label>
-						<input
-							id="avf-street"
-							type="text"
-							bind:value={street}
-							placeholder="123 Main Street"
-							class="w-full border-b border-slate-300 bg-transparent px-0 py-2 text-sm transition-colors focus:border-slate-900 focus:outline-none"
-							onkeydown={handleKeydown}
-						/>
-					</div>
-
-					<div class="grid grid-cols-6 gap-3">
-						<div class="col-span-3">
-							<label for="avf-city" class="mb-1 block text-xs font-medium uppercase tracking-wider text-slate-500">City</label>
-							<input
-								id="avf-city"
-								type="text"
-								bind:value={city}
-								placeholder="San Francisco"
-								class="w-full border-b border-slate-300 bg-transparent px-0 py-2 text-sm transition-colors focus:border-slate-900 focus:outline-none"
-								onkeydown={handleKeydown}
-							/>
-						</div>
-						<div class="col-span-1">
-							<label for="avf-state" class="mb-1 block text-xs font-medium uppercase tracking-wider text-slate-500">{detectedCountry === 'CA' ? 'Prov' : 'State'}</label>
-							<input
-								id="avf-state"
-								type="text"
-								bind:value={stateCode}
-								placeholder={detectedCountry === 'CA' ? 'ON' : 'CA'}
-								maxlength={2}
-								class="w-full border-b border-slate-300 bg-transparent px-0 py-2 text-center text-sm uppercase transition-colors focus:border-slate-900 focus:outline-none"
-								onkeydown={handleKeydown}
-							/>
-						</div>
-						<div class="col-span-2">
-							<label for="avf-zip" class="mb-1 block text-xs font-medium uppercase tracking-wider text-slate-500">{detectedCountry === 'CA' ? 'Postal' : 'ZIP'}</label>
-							<input
-								id="avf-zip"
-								type="text"
-								bind:value={zipCode}
-								placeholder={detectedCountry === 'CA' ? 'K1A 0B1' : '94102'}
-								maxlength={10}
-								class="w-full border-b border-slate-300 bg-transparent px-0 py-2 text-sm transition-colors focus:border-slate-900 focus:outline-none"
-								onkeydown={handleKeydown}
-							/>
-						</div>
-					</div>
-				</div>
-
-				{#if errorMessage}
-					<div class="mt-4 flex items-start gap-2 border-t border-dotted border-red-300 pt-3">
-						<AlertCircle class="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-						<p class="text-sm text-red-700">{errorMessage}</p>
-					</div>
-				{/if}
-
-				<!-- Primary action: document-register underlined text action -->
-				<div class="mt-6 flex items-center justify-between border-t border-dotted border-slate-300 pt-4">
-					<button
-						type="button"
-						class="font-mono text-sm text-slate-500 underline decoration-slate-300 decoration-1 underline-offset-4 transition-colors hover:text-slate-700 hover:decoration-slate-500"
-						onclick={handleBack}
-					>
-						&larr; Back
-					</button>
-					<button
-						type="button"
-						class="font-mono text-sm font-medium text-slate-900 underline decoration-slate-400 decoration-1 underline-offset-4 transition-colors hover:text-emerald-700 hover:decoration-emerald-500 disabled:cursor-not-allowed disabled:text-slate-300 disabled:no-underline"
-						onclick={handleAddressPath}
-						disabled={!isFormValid}
-					>
-						Resolve district &rarr;
-					</button>
-				</div>
-			</section>
+			<RegroundingAddressCapture
+				bind:streetAddress={street}
+				bind:city
+				bind:stateCode
+				bind:zipCode
+				{detectedCountry}
+				{errorMessage}
+				{geoPermissionDenied}
+				onSubmit={handleAddressPath}
+				onCancel={handleCancel}
+				onKeydown={handleKeydown}
+			/>
 		{:else}
 			<div class="space-y-5">
 				<div class="text-center">
-					<div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
+					<div
+						class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100"
+					>
 						<Building2 class="h-6 w-6 text-emerald-600" />
 					</div>
 					<h3 class="text-lg font-semibold text-slate-900">Enter Your Address</h3>
@@ -1076,9 +1009,13 @@
 						Confirm your district to send messages to your representatives.
 					</p>
 					{#if geoPermissionDenied}
-						<div class="mt-2 flex items-center justify-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2">
+						<div
+							class="mt-2 flex items-center justify-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2"
+						>
 							<AlertCircle class="h-3.5 w-3.5 text-amber-600" />
-							<p class="text-xs text-amber-700">Location access was denied. Please enter your address instead.</p>
+							<p class="text-xs text-amber-700">
+								Location access was denied. Please enter your address instead.
+							</p>
 						</div>
 					{/if}
 					<p class="mt-1 text-xs font-medium text-emerald-700">
@@ -1096,44 +1033,50 @@
 							type="text"
 							bind:value={street}
 							placeholder="123 Main Street"
-							class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+							class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm transition-colors focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-none"
 							onkeydown={handleKeydown}
 						/>
 					</div>
 
 					<div class="grid grid-cols-6 gap-3">
 						<div class="col-span-3">
-							<label for="avf-city" class="mb-1 block text-sm font-medium text-slate-700">City</label>
+							<label for="avf-city" class="mb-1 block text-sm font-medium text-slate-700"
+								>City</label
+							>
 							<input
 								id="avf-city"
 								type="text"
 								bind:value={city}
 								placeholder="San Francisco"
-								class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+								class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm transition-colors focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-none"
 								onkeydown={handleKeydown}
 							/>
 						</div>
 						<div class="col-span-1">
-							<label for="avf-state" class="mb-1 block text-sm font-medium text-slate-700">{detectedCountry === 'CA' ? 'Prov' : 'State'}</label>
+							<label for="avf-state" class="mb-1 block text-sm font-medium text-slate-700"
+								>{detectedCountry === 'CA' ? 'Prov' : 'State'}</label
+							>
 							<input
 								id="avf-state"
 								type="text"
 								bind:value={stateCode}
 								placeholder={detectedCountry === 'CA' ? 'ON' : 'CA'}
 								maxlength={2}
-								class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-center text-sm uppercase transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+								class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-center text-sm uppercase transition-colors focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-none"
 								onkeydown={handleKeydown}
 							/>
 						</div>
 						<div class="col-span-2">
-							<label for="avf-zip" class="mb-1 block text-sm font-medium text-slate-700">{detectedCountry === 'CA' ? 'Postal' : 'ZIP'}</label>
+							<label for="avf-zip" class="mb-1 block text-sm font-medium text-slate-700"
+								>{detectedCountry === 'CA' ? 'Postal' : 'ZIP'}</label
+							>
 							<input
 								id="avf-zip"
 								type="text"
 								bind:value={zipCode}
 								placeholder={detectedCountry === 'CA' ? 'K1A 0B1' : '94102'}
 								maxlength={10}
-								class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+								class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm transition-colors focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-none"
 								onkeydown={handleKeydown}
 							/>
 						</div>
@@ -1171,23 +1114,22 @@
 						How is my address used?
 					</summary>
 					<p class="mt-2 text-xs leading-relaxed text-slate-500">
-						Your address is sent to our server, geocoded via self-hosted infrastructure,
-						and matched to your {detectedCountry === 'CA' ? 'federal electoral district (riding)' : 'congressional district'}. After verification, the address is encrypted
-						locally. Only your district is sent to issue a verifiable credential.
+						Your address is sent to our server, geocoded via self-hosted infrastructure, and matched
+						to your {detectedCountry === 'CA'
+							? 'federal electoral district (riding)'
+							: 'congressional district'}. After verification, the address is encrypted locally.
+						Only your district is sent to issue a verifiable credential.
 					</p>
 				</details>
 			</div>
 		{/if}
 
-	<!-- RESOLVING STEP (loading) -->
+		<!-- RESOLVING STEP (loading) -->
 	{:else if flowStep === 'resolving'}
 		{#if regroundingMode}
 			<section class="py-6" aria-live="polite">
 				<div class="mb-5">
-					<p
-						class="font-mono text-[10px] uppercase text-slate-500"
-						style="letter-spacing: 0.22em"
-					>
+					<p class="font-mono text-[10px] text-slate-500 uppercase" style="letter-spacing: 0.22em">
 						New ground
 					</p>
 					<h2
@@ -1197,9 +1139,11 @@
 						Resolving district
 					</h2>
 				</div>
-				<div class="flex items-center gap-3 border-t border-b border-dotted border-slate-300 py-4 text-sm text-slate-500">
+				<div
+					class="flex items-center gap-3 border-t border-b border-dotted border-slate-300 py-4 text-sm text-slate-500"
+				>
 					<Loader2 class="h-4 w-4 shrink-0 animate-spin text-slate-500" />
-					<span>Looking up the boundary around your coordinates.</span>
+					<span>Looking up the district for this address.</span>
 				</div>
 			</section>
 		{:else}
@@ -1208,25 +1152,20 @@
 					<Loader2 class="h-8 w-8 animate-spin text-emerald-600" />
 				</div>
 				<h3 class="text-lg font-semibold text-slate-900">Resolving District</h3>
-				<p class="mt-2 text-sm text-slate-600">
-					Looking up your congressional district...
-				</p>
+				<p class="mt-2 text-sm text-slate-600">Looking up your congressional district...</p>
 			</div>
 		{/if}
 
-	<!-- CONFIRM DISTRICT STEP -->
+		<!-- CONFIRM DISTRICT STEP -->
 	{:else if flowStep === 'confirm-district'}
 		{#if regroundingMode}
 			<section class="pt-2 pb-2">
 				<div class="mb-5">
-					<p
-						class="font-mono text-[10px] uppercase text-slate-500"
-						style="letter-spacing: 0.22em"
-					>
+					<p class="font-mono text-[10px] text-slate-500 uppercase" style="letter-spacing: 0.22em">
 						New ground
 					</p>
 					<h2
-						class="mt-1.5 text-xl font-semibold leading-tight text-slate-900"
+						class="mt-1.5 text-xl leading-tight font-semibold text-slate-900"
 						style="font-family: 'Satoshi', system-ui, sans-serif"
 					>
 						Confirm the boundary before we re-ground.
@@ -1253,7 +1192,7 @@
 					{#if representatives.length > 0}
 						<div class="mt-3">
 							<p
-								class="mb-2 font-mono text-[10px] uppercase text-slate-500"
+								class="mb-2 font-mono text-[10px] text-slate-500 uppercase"
 								style="letter-spacing: 0.22em"
 							>
 								Representatives
@@ -1261,7 +1200,9 @@
 							<ul class="space-y-1">
 								{#each representatives as rep}
 									<li class="text-sm text-slate-700">
-										{rep.chamber === 'senate' ? 'Sen.' : 'Rep.'} <span class="font-medium text-slate-900">{rep.name}</span>{#if rep.party}&nbsp;<span class="text-slate-500">({rep.party})</span>{/if}
+										{rep.chamber === 'senate' ? 'Sen.' : 'Rep.'}
+										<span class="font-medium text-slate-900">{rep.name}</span
+										>{#if rep.party}&nbsp;<span class="text-slate-500">({rep.party})</span>{/if}
 									</li>
 								{/each}
 							</ul>
@@ -1276,7 +1217,9 @@
 					</div>
 				{/if}
 
-				<div class="mt-6 flex items-center justify-between border-t border-dotted border-slate-300 pt-4">
+				<div
+					class="mt-6 flex items-center justify-between border-t border-dotted border-slate-300 pt-4"
+				>
 					<button
 						type="button"
 						class="font-mono text-sm text-slate-500 underline decoration-slate-300 decoration-1 underline-offset-4 transition-colors hover:text-slate-700 hover:decoration-slate-500"
@@ -1296,7 +1239,9 @@
 		{:else}
 			<div class="space-y-5">
 				<div class="text-center">
-					<div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
+					<div
+						class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100"
+					>
 						<Building2 class="h-6 w-6 text-emerald-600" />
 					</div>
 					<h3 class="text-lg font-semibold text-slate-900">Your District</h3>
@@ -1320,10 +1265,14 @@
 					<!-- Representatives -->
 					{#if representatives.length > 0}
 						<div class="space-y-2">
-							<p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Your Representatives</p>
+							<p class="text-xs font-semibold tracking-wider text-slate-500 uppercase">
+								Your Representatives
+							</p>
 							{#each representatives as rep}
 								<div class="flex items-center gap-3 rounded-lg bg-white/70 px-3 py-2">
-									<div class="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
+									<div
+										class="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700"
+									>
 										{rep.chamber === 'house' ? 'H' : 'S'}
 									</div>
 									<div class="min-w-0 flex-1">
@@ -1366,7 +1315,7 @@
 			</div>
 		{/if}
 
-	<!-- ISSUING CREDENTIAL STEP -->
+		<!-- ISSUING CREDENTIAL STEP -->
 	{:else if flowStep === 'issuing-credential'}
 		{#if regroundingMode}
 			<!--
@@ -1377,15 +1326,10 @@
 			-->
 			<section class="py-6" aria-live="polite">
 				<div class="mb-5">
-					<p
-						class="font-mono text-[10px] uppercase text-slate-500"
-						style="letter-spacing: 0.22em"
-					>
+					<p class="font-mono text-[10px] text-slate-500 uppercase" style="letter-spacing: 0.22em">
 						Re-grounding
 					</p>
-					<h2 class="mt-1.5 text-base font-medium text-slate-900">
-						Witnessing the transition
-					</h2>
+					<h2 class="mt-1.5 text-base font-medium text-slate-900">Witnessing the transition</h2>
 				</div>
 
 				<ul class="space-y-3">
@@ -1397,7 +1341,9 @@
 									<CheckCircle2 class="h-4 w-4 text-emerald-600" />
 								{:else if s === 'active'}
 									<span class="relative flex h-3 w-3">
-										<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60"></span>
+										<span
+											class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60"
+										></span>
 										<span class="relative inline-flex h-3 w-3 rounded-full bg-emerald-500"></span>
 									</span>
 								{:else}
@@ -1422,13 +1368,11 @@
 					<Loader2 class="h-8 w-8 animate-spin text-teal-600" />
 				</div>
 				<h3 class="text-lg font-semibold text-slate-900">Issuing Credential</h3>
-				<p class="mt-2 text-sm text-slate-600">
-					Creating your verifiable district credential...
-				</p>
+				<p class="mt-2 text-sm text-slate-600">Creating your verifiable district credential...</p>
 			</div>
 		{/if}
 
-	<!-- COMPLETE STEP -->
+		<!-- COMPLETE STEP -->
 	{:else if flowStep === 'complete'}
 		{#if regroundingMode}
 			<!--
@@ -1442,13 +1386,13 @@
 			<section class="pt-2 pb-6">
 				<div class="mb-5">
 					<p
-						class="font-mono text-[10px] uppercase text-emerald-700"
+						class="font-mono text-[10px] text-emerald-700 uppercase"
 						style="letter-spacing: 0.22em"
 					>
 						Re-grounded
 					</p>
 					<h2
-						class="mt-2 text-2xl font-semibold leading-tight text-slate-900"
+						class="mt-2 text-2xl leading-tight font-semibold text-slate-900"
 						style="font-family: 'Satoshi', system-ui, sans-serif"
 					>
 						{#if districtChanged}
@@ -1475,7 +1419,7 @@
 								{@const newDistrictCode = newAddress?.district || verifiedDistrict || ''}
 								<p class="font-mono text-[12px]">
 									<span
-										class="uppercase tracking-wider text-slate-400"
+										class="tracking-wider text-slate-400 uppercase"
 										style="letter-spacing: 0.18em"
 									>
 										District
@@ -1492,7 +1436,7 @@
 								{@const newStateCode = newAddress?.state || ''}
 								<p class="font-mono text-[12px]">
 									<span
-										class="uppercase tracking-wider text-slate-400"
+										class="tracking-wider text-slate-400 uppercase"
 										style="letter-spacing: 0.18em"
 									>
 										State
@@ -1514,13 +1458,13 @@
 				<div>
 					<div class="mb-2 flex items-baseline justify-between">
 						<span
-							class="font-mono text-[10px] uppercase text-emerald-700"
+							class="font-mono text-[10px] text-emerald-700 uppercase"
 							style="letter-spacing: 0.22em"
 						>
 							New ground
 						</span>
 						<span
-							class="rounded-full border border-emerald-400 bg-emerald-50 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-700"
+							class="rounded-full border border-emerald-400 bg-emerald-50 px-2 py-0.5 text-[10px] tracking-wider text-emerald-700 uppercase"
 						>
 							Attested
 						</span>
@@ -1532,12 +1476,13 @@
 									{newAddress.street}
 								</p>
 								<p class="text-[14px] text-slate-700">
-									{newAddress.city}, {newAddress.state} {newAddress.zip}
+									{newAddress.city}, {newAddress.state}
+									{newAddress.zip}
 								</p>
 							</div>
 						{:else}
-							<p class="text-[14px] italic text-slate-500">
-								Verified by location signal — no address captured.
+							<p class="text-[14px] text-slate-500 italic">
+								Address attested. Local encrypted address cache unavailable.
 							</p>
 						{/if}
 						{#if newAddress?.district || verifiedDistrict}
@@ -1551,14 +1496,15 @@
 							<ul class="mt-3 space-y-1">
 								{#each newRepresentatives as rep}
 									<li class="text-sm text-slate-800">
-										{rep.chamber === 'senate' ? 'Sen.' : 'Rep.'} <span class="font-medium">{rep.name}</span>{#if rep.party}&nbsp;<span class="text-slate-500">({rep.party})</span>{/if}
+										{rep.chamber === 'senate' ? 'Sen.' : 'Rep.'}
+										<span class="font-medium">{rep.name}</span>{#if rep.party}&nbsp;<span
+												class="text-slate-500">({rep.party})</span
+											>{/if}
 									</li>
 								{/each}
 							</ul>
 						{:else}
-							<p class="mt-3 text-xs italic text-slate-500">
-								Refreshing representatives…
-							</p>
+							<p class="mt-3 text-xs text-slate-500 italic">Refreshing representatives…</p>
 						{/if}
 					</div>
 				</div>
@@ -1569,10 +1515,7 @@
 					wasn't) keeps the user's mental model honest.
 				-->
 				<div class="mt-5 space-y-1" data-testid="reground-privacy-receipt">
-					<p
-						class="font-mono text-[10px] uppercase text-slate-500"
-						style="letter-spacing: 0.22em"
-					>
+					<p class="font-mono text-[10px] text-slate-500 uppercase" style="letter-spacing: 0.22em">
 						Privacy log
 					</p>
 					<p class="font-mono text-[12px] text-slate-700">
@@ -1583,8 +1526,8 @@
 						<span class="text-slate-500">s=</span>{stateChanged ? 1 : 0}
 					</p>
 					<p class="text-[12px] leading-relaxed text-slate-500">
-						Two booleans, no district codes, no addresses, no IDs. Coordinates
-						never left this browser.
+						Two booleans, no district codes, no addresses, no IDs. Coordinates never left this
+						browser.
 					</p>
 				</div>
 
@@ -1601,9 +1544,8 @@
 						class="mt-5 max-w-prose text-[13px] leading-relaxed text-slate-500"
 						data-testid="reground-f2-note"
 					>
-						Your prior-district actions remain sound. Each district carries its
-						own nullifier scope, so re-grounding cannot replay or silently
-						inherit anything from the ground you left.
+						Your prior-district actions remain sound. Each district carries its own nullifier scope,
+						so re-grounding cannot replay or silently inherit anything from the ground you left.
 					</p>
 				{/if}
 
@@ -1625,7 +1567,9 @@
 				</div>
 				<h3 class="text-lg font-bold text-emerald-900">District Verified</h3>
 				<p class="mt-2 text-sm text-slate-600">
-					You're verified as a constituent of <strong class="text-emerald-700">{verifiedDistrict}</strong>.
+					You're verified as a constituent of <strong class="text-emerald-700"
+						>{verifiedDistrict}</strong
+					>.
 				</p>
 				<p class="mt-1 text-xs text-slate-500">
 					You can now send messages to your representatives.

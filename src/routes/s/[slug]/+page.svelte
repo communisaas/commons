@@ -23,7 +23,12 @@
 	import PowerLandscape from '$lib/components/action/PowerLandscape.svelte';
 	import { positionState } from '$lib/stores/positionState.svelte';
 	import type { EngagementData } from '$lib/types/engagement';
-	import { mergeLandscape, slugify, type LandscapeMember, type DistrictOfficialInput } from '$lib/utils/landscapeMerge';
+	import {
+		mergeLandscape,
+		slugify,
+		type LandscapeMember,
+		type DistrictOfficialInput
+	} from '$lib/utils/landscapeMerge';
 	import type { ProcessedDecisionMaker } from '$lib/types/template';
 	import { generateShareMessage } from '$lib/utils/share-messages';
 
@@ -35,6 +40,7 @@
 	import { FEATURES } from '$lib/config/features';
 	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 	import { topicHue } from '$lib/utils/topic-hue';
+	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 
 	let { data }: { data: PageData } = $props();
 
@@ -72,15 +78,17 @@
 	);
 
 	// Enhanced description with social proof for Open Graph
-	const socialProofDescription = $derived((() => {
-		const sent = template.send_count || 0;
-		if (sent > 1000) {
-			return `Join ${sent.toLocaleString()}+ constituents who took action. ${template.description}`;
-		} else if (sent > 100) {
-			return `${sent.toLocaleString()} people have taken action. ${template.description}`;
-		}
-		return template.description;
-	})());
+	const socialProofDescription = $derived(
+		(() => {
+			const sent = template.send_count || 0;
+			if (sent > 1000) {
+				return `Join ${sent.toLocaleString()}+ constituents who took action. ${template.description}`;
+			} else if (sent > 100) {
+				return `${sent.toLocaleString()} people have taken action. ${template.description}`;
+			}
+			return template.description;
+		})()
+	);
 
 	// Check if user has complete address for congressional templates
 	// Note: Address fields removed from User model per CYPHERPUNK-ARCHITECTURE.md
@@ -91,18 +99,23 @@
 		_addressSubmitted || guestState.state?.address || (data.user?.trust_tier ?? 0) >= 2
 	);
 	const isCongressional = $derived(
-		FEATURES.CONGRESSIONAL && (
-			template.deliveryMethod === 'cwc' ||
-			!!(data as unknown as PowerLandscapeData).recipientConfig?.cwcRouting
-		)
+		FEATURES.CONGRESSIONAL &&
+			(template.deliveryMethod === 'cwc' ||
+				!!(data as unknown as PowerLandscapeData).recipientConfig?.cwcRouting)
 	);
 	const addressRequired = $derived(
-		FEATURES.ADDRESS_SPECIFICITY === 'district' && isCongressional && !hasCompleteAddress && (data.user?.trust_tier ?? 0) < 2
+		FEATURES.ADDRESS_SPECIFICITY === 'district' &&
+			isCongressional &&
+			!hasCompleteAddress &&
+			(data.user?.trust_tier ?? 0) < 2
 	);
 
 	// Debate resolution signal for message preview banner
 	const debateResolution = $derived(
-		FEATURES.DEBATE && data.debate && (data.debate as DebateData).status === 'resolved' && (data.debate as DebateData).winningStance
+		FEATURES.DEBATE &&
+			data.debate &&
+			(data.debate as DebateData).status === 'resolved' &&
+			(data.debate as DebateData).winningStance
 			? {
 					winningStance: (data.debate as DebateData).winningStance as string,
 					participants: (data.debate as DebateData).uniqueParticipants
@@ -177,6 +190,10 @@
 		city?: string;
 		state?: string;
 		zip?: string;
+		representatives?: unknown;
+		districtCommitment?: string;
+		commitmentSlotCount?: number;
+		coordinates?: { lat: number; lng: number } | null;
 		[key: string]: unknown;
 	}
 
@@ -224,7 +241,11 @@
 		existingPosition?: { stance: string; registrationId: string } | null;
 		deliveredRecipients?: string[];
 		districtOfficials?: DistrictOfficialInput[];
-		recipientConfig?: { decisionMakers?: ProcessedDecisionMaker[]; personalPrompt?: string; cwcRouting?: boolean };
+		recipientConfig?: {
+			decisionMakers?: ProcessedDecisionMaker[];
+			personalPrompt?: string;
+			cwcRouting?: boolean;
+		};
 		engagementByDistrict?: EngagementData | null;
 		userDistrictCode?: string | null;
 	}
@@ -232,16 +253,11 @@
 
 	// Landscape computation
 	const landscape = $derived(
-		mergeLandscape(
-			pl.recipientConfig?.decisionMakers ?? [],
-			pl.districtOfficials ?? []
-		)
+		mergeLandscape(pl.recipientConfig?.decisionMakers ?? [], pl.districtOfficials ?? [])
 	);
 
 	// Identity commitment for position registration
-	const identityCommitment = $derived(
-		data.user?.identity_commitment ?? null
-	);
+	const identityCommitment = $derived(data.user?.identity_commitment ?? null);
 
 	// UI state
 	let contactedRecipients = $state(new Set<string>());
@@ -262,12 +278,12 @@
 					description: template.description
 				},
 				contactedNames: [...contactedRecipients]
-					.map(id => {
+					.map((id) => {
 						const allMembers = [
-							...landscape.roleGroups.flatMap(g => g.members),
+							...landscape.roleGroups.flatMap((g) => g.members),
 							...(landscape.districtGroup?.members ?? [])
 						];
-						return allMembers.find(m => m.id === id)?.name;
+						return allMembers.find((m) => m.id === id)?.name;
 					})
 					.filter((n): n is string => !!n),
 				totalRecipients: landscape.totalCount,
@@ -294,7 +310,9 @@
 		};
 
 		const onFocus = () => settle();
-		const onVisible = () => { if (!document.hidden) settle(); };
+		const onVisible = () => {
+			if (!document.hidden) settle();
+		};
 
 		window.addEventListener('focus', onFocus);
 		document.addEventListener('visibilitychange', onVisible);
@@ -395,9 +413,12 @@
 			// Inject personal connection before resolveTemplate strips the placeholder
 			const pc = personalConnectionValue?.trim();
 			const templateWithPC = pc
-				? { ...template, message_body: (template.message_body || '').replace(/\[Personal Connection\]/g, pc) }
+				? {
+						...template,
+						message_body: (template.message_body || '').replace(/\[Personal Connection\]/g, pc)
+					}
 				: template;
-			const resolved = resolveTemplate(templateWithPC as any, data.user as any ?? null);
+			const resolved = resolveTemplate(templateWithPC as any, (data.user as any) ?? null);
 			const resolvedBody = resolved.body.replace(/\[District\]/g, districtName);
 
 			const result = generatePersonalizedMailto({
@@ -426,11 +447,13 @@
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({
 							templateId: template.id,
-							recipients: [{
-								name: member.name,
-								email: member.email,
-								deliveryMethod: 'email'
-							}]
+							recipients: [
+								{
+									name: member.name,
+									email: member.email,
+									deliveryMethod: 'email'
+								}
+							]
 						}),
 						keepalive: true
 					}).catch(() => {}); // Fire-and-forget — UI already updated
@@ -458,7 +481,7 @@
 			.filter((m): m is LandscapeMember => m != null);
 
 		// Build single mailto with all email-bearing members in To:
-		const emailMembers = members.filter(m => m.email && m.deliveryRoute === 'email');
+		const emailMembers = members.filter((m) => m.email && m.deliveryRoute === 'email');
 		if (emailMembers.length > 0) {
 			const districtName = data.userDistrictCode ?? '';
 			const subject = template.subject || template.title;
@@ -466,7 +489,7 @@
 			const trustTier = data.user?.trust_tier ?? 0;
 			const attestation = buildProofFooter(trustTier, districtName || data.userDistrictCode);
 
-			const resolved = resolveTemplate(template as any, data.user as any ?? null);
+			const resolved = resolveTemplate(template as any, (data.user as any) ?? null);
 			const resolvedBody = resolved.body.replace(/\[District\]/g, districtName).trim();
 
 			const bodyParts: string[] = [];
@@ -478,12 +501,12 @@
 				bodyParts.push(attestation.trim());
 			}
 
-			const emails = emailMembers.map(m => m.email!).join(',');
+			const emails = emailMembers.map((m) => m.email!).join(',');
 			const url = `mailto:${encodeURIComponent(emails)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyParts.join('\n\n'))}`;
 
 			if (url.length <= 8000) {
 				// Set departing only — settle handler promotes to contacted when user returns
-				departingRecipients = new Set([...departingRecipients, ...emailMembers.map(m => m.id)]);
+				departingRecipients = new Set([...departingRecipients, ...emailMembers.map((m) => m.id)]);
 				trackDeliveryAttempt(template.id, 'email');
 
 				// Persist delivery records — stance-agnostic civic action (fire-and-forget)
@@ -513,14 +536,18 @@
 	}
 
 	// Resolve contacted members with emails for bounce reporting
-	const contactedMembers = $derived((() => {
-		if (contactedRecipients.size === 0) return [];
-		const allMembers = [
-			...landscape.roleGroups.flatMap(g => g.members),
-			...(landscape.districtGroup?.members ?? [])
-		];
-		return allMembers.filter(m => contactedRecipients.has(m.id) && m.email && !reportedBounces.has(m.email));
-	})());
+	const contactedMembers = $derived(
+		(() => {
+			if (contactedRecipients.size === 0) return [];
+			const allMembers = [
+				...landscape.roleGroups.flatMap((g) => g.members),
+				...(landscape.districtGroup?.members ?? [])
+			];
+			return allMembers.filter(
+				(m) => contactedRecipients.has(m.id) && m.email && !reportedBounces.has(m.email)
+			);
+		})()
+	);
 
 	async function handleReportBounce(email: string) {
 		if (reportingBounce || reportedBounces.has(email)) return;
@@ -571,13 +598,20 @@
 								district_commitment: detail.districtCommitment,
 								slot_count: detail.commitmentSlotCount,
 								verification_method: 'shadow_atlas',
-								coordinates: (detail as { coordinates?: { lat: number; lng: number } | null })
-									.coordinates ?? undefined,
+								coordinates:
+									(detail as { coordinates?: { lat: number; lng: number } | null }).coordinates ??
+									undefined
 							})
 						});
 						if (!verifyRes.ok) {
 							const err = await verifyRes.json().catch(() => ({}));
-							console.error('[TemplateFlow] verify-address (shadow_atlas) failed:', verifyRes.status, err);
+							console.error(
+								'[TemplateFlow] verify-address (shadow_atlas) failed:',
+								verifyRes.status,
+								err
+							);
+						} else {
+							await persistAddressCompletion(data.user.id, detail);
 						}
 					} else if (detail.streetAddress && detail.city && detail.state && detail.zip) {
 						// Fallback: IPFS unavailable, resolve server-side
@@ -594,7 +628,7 @@
 						if (resolveRes.ok) {
 							const resolved = await resolveRes.json();
 							if (resolved.resolved && resolved.district?.code) {
-								await fetch('/api/identity/verify-address', {
+								const verifyRes = await fetch('/api/identity/verify-address', {
 									method: 'POST',
 									headers: { 'Content-Type': 'application/json' },
 									body: JSON.stringify({
@@ -603,6 +637,9 @@
 										officials: resolved.officials ?? []
 									})
 								});
+								if (verifyRes.ok) {
+									await persistAddressCompletion(data.user.id, detail, resolved.district.code);
+								}
 							}
 						}
 					}
@@ -666,19 +703,29 @@
 
 		<!-- Template metadata — single scannable line -->
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
-			<ShareButton url={shareUrl} _title={template.title} message={shareMessage} variant="secondary" size="sm" />
+			<ShareButton
+				url={shareUrl}
+				_title={template.title}
+				message={shareMessage}
+				variant="secondary"
+				size="sm"
+			/>
 			<Badge variant={isCongressional ? 'congressional' : 'direct'}>
 				{isCongressional ? 'Congressional Delivery' : 'Direct Outreach'}
 			</Badge>
 			{#if template.domain}
-				<span class="font-brand text-sm font-medium" style="color: oklch(0.45 0.08 {hue})">{template.domain}</span>
+				<span class="font-brand text-sm font-medium" style="color: oklch(0.45 0.08 {hue})"
+					>{template.domain}</span
+				>
 			{/if}
 			{#if template.topics?.length}
 				{#each template.topics.slice(0, 3) as topic}
 					<span class="topic-pill" style="--card-hue: {hue}">{topic}</span>
 				{/each}
 				{#if template.topics.length > 3}
-					<span class="topic-pill-overflow" style="--card-hue: {hue}">+{template.topics.length - 3}</span>
+					<span class="topic-pill-overflow" style="--card-hue: {hue}"
+						>+{template.topics.length - 3}</span
+					>
 				{/if}
 			{/if}
 			{#if FEATURES.CONGRESSIONAL && (data.user?.trust_tier ?? 0) >= 2 && template.deliveryMethod === 'cwc'}
@@ -707,7 +754,7 @@
 	     arc — users should still perceive recipients as primary, with stance
 	     as a meaningful market-entry act, not a poll gate. -->
 	{#if FEATURES.DEBATE && FEATURES.STANCE_POSITIONS}
-		<div class="border-y border-slate-200/80 py-4 my-6">
+		<div class="my-6 border-y border-slate-200/80 py-4">
 			<!-- Debate signal — contextualizes the support/oppose decision -->
 			{#if FEATURES.DEBATE}
 				<DebateSignal debate={(data.debate as DebateData) ?? null} variant="inline" />
@@ -721,7 +768,8 @@
 					recipientCount={landscape.totalCount}
 					{isCongressional}
 					debateExists={!!(data.debate as DebateData | null)}
-					canInitiateDebate={(data.user?.trust_tier ?? 0) >= 3 && !(data.debate as DebateData | null)}
+					canInitiateDebate={(data.user?.trust_tier ?? 0) >= 3 &&
+						!(data.debate as DebateData | null)}
 					onChallenge={() => {
 						const hasDebate = !!(data.debate as DebateData | null);
 						if (hasDebate) {
@@ -741,34 +789,41 @@
 							});
 						}
 					}}
-					onVerifyForChallenge={data.user ? () => {
-						if ((data.user!.trust_tier ?? 0) < 2) {
-							modalActions.openModal('address-modal', 'address', {
-								template,
-								user: data.user,
-								context: 'debate'
-							});
-						} else {
-							modalActions.openModal('identity-verification-modal', 'identity-verification', {
-								userId: data.user!.id,
-								userEmail: decryptedUser.email ?? undefined,
-								templateSlug: template.slug,
-								onComplete: async () => {
-									await invalidateAll();
+					onVerifyForChallenge={data.user
+						? () => {
+								if ((data.user!.trust_tier ?? 0) < 2) {
+									modalActions.openModal('address-modal', 'address', {
+										template,
+										user: data.user,
+										context: 'debate'
+									});
+								} else {
+									modalActions.openModal('identity-verification-modal', 'identity-verification', {
+										userId: data.user!.id,
+										userEmail: decryptedUser.email ?? undefined,
+										templateSlug: template.slug,
+										onComplete: async () => {
+											await invalidateAll();
+										}
+									});
 								}
-							});
-						}
-					} : undefined}
+							}
+						: undefined}
 				/>
 			{:else}
 				<!-- Guest / no identity: stance-first framing that routes to auth -->
-				{@const rcLabel = landscape.totalCount > 0
-					? isCongressional
-						? landscape.totalCount === 1 ? '1 representative' : `${landscape.totalCount} representatives`
-						: landscape.totalCount === 1 ? '1 decision-maker' : `${landscape.totalCount} decision-makers`
-					: isCongressional
-						? 'your representatives'
-						: 'decision-makers'}
+				{@const rcLabel =
+					landscape.totalCount > 0
+						? isCongressional
+							? landscape.totalCount === 1
+								? '1 representative'
+								: `${landscape.totalCount} representatives`
+							: landscape.totalCount === 1
+								? '1 decision-maker'
+								: `${landscape.totalCount} decision-makers`
+						: isCongressional
+							? 'your representatives'
+							: 'decision-makers'}
 				<div class="space-y-3">
 					<p class="flex items-center gap-1.5 text-sm text-slate-600">
 						<span>Contact {rcLabel}</span>
@@ -777,10 +832,13 @@
 					</p>
 					<div class="flex flex-wrap items-center gap-3">
 						<button
-							class="flex min-h-[44px] flex-1 items-center justify-center rounded-lg bg-participation-primary-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-participation-primary-700 sm:flex-none"
+							class="bg-participation-primary-600 hover:bg-participation-primary-700 flex min-h-[44px] flex-1 items-center justify-center rounded-lg px-5 py-2.5 text-sm font-medium text-white transition-colors sm:flex-none"
 							onclick={() => {
 								if (!data.user) {
-									modalActions.openModal('template-modal', 'template_modal', { template, user: null });
+									modalActions.openModal('template-modal', 'template_modal', {
+										template,
+										user: null
+									});
 								} else {
 									handlePostAuthFlow();
 								}
@@ -792,7 +850,10 @@
 							class="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-red-200 bg-red-50 px-5 py-2.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 sm:flex-none"
 							onclick={() => {
 								if (!data.user) {
-									modalActions.openModal('template-modal', 'template_modal', { template, user: null });
+									modalActions.openModal('template-modal', 'template_modal', {
+										template,
+										user: null
+									});
 								} else {
 									handlePostAuthFlow();
 								}
@@ -807,7 +868,11 @@
 	{/if}
 
 	<!-- ACT: Two-column field — message as sticky reference, landscape as primary workspace -->
-	<div class="lg:grid lg:gap-8 lg:items-start overflow-x-clip {landscape.totalCount > 3 ? 'lg:grid-cols-[2fr_3fr]' : 'lg:grid-cols-[3fr_2fr]'}">
+	<div
+		class="overflow-x-clip lg:grid lg:items-start lg:gap-8 {landscape.totalCount > 3
+			? 'lg:grid-cols-[2fr_3fr]'
+			: 'lg:grid-cols-[3fr_2fr]'}"
+	>
 		<!-- LEFT: Message preview — sticky reference while landscape scrolls -->
 		<div class="min-w-0 lg:sticky lg:top-6 lg:self-start">
 			<div class="rounded-md border border-slate-200 bg-white">
@@ -852,12 +917,14 @@
 				<TemplatePreview
 					{template}
 					context="page"
-					user={data.user ? {
-						id: data.user.id,
-						name: data.user.name,
-						trust_tier: data.user.trust_tier,
-						district_code: data.userDistrictCode ?? undefined
-					} : null}
+					user={data.user
+						? {
+								id: data.user.id,
+								name: data.user.name,
+								trust_tier: data.user.trust_tier,
+								district_code: data.userDistrictCode ?? undefined
+							}
+						: null}
 					showEmailModal={false}
 					{debateResolution}
 					bind:personalConnectionValue
@@ -871,40 +938,49 @@
 					onOpenModal={() => {
 						const isMobile = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
 						if (isMobile) {
-							modalActions.openModal('mobile-preview', 'mobile_preview', { template, user: data.user });
+							modalActions.openModal('mobile-preview', 'mobile_preview', {
+								template,
+								user: data.user
+							});
 						}
 					}}
 					onSendMessage={async () => {
 						// Scroll to Power Landscape — no batch mailto
 						await tick();
-						document.getElementById('power-landscape')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+						document
+							.getElementById('power-landscape')
+							?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 					}}
-					onVerifyAddress={FEATURES.ADDRESS_SPECIFICITY === 'district' ? () => {
-						modalActions.openModal('address-modal', 'address', {
-							template,
-							source,
-							mode: 'collection',
-							onComplete: async (detail: AddressModalDetail) => {
-								await _handleAddressSubmit(detail);
+					onVerifyAddress={FEATURES.ADDRESS_SPECIFICITY === 'district'
+						? () => {
+								modalActions.openModal('address-modal', 'address', {
+									template,
+									source,
+									mode: 'collection',
+									onComplete: async (detail: AddressModalDetail) => {
+										await _handleAddressSubmit(detail);
+									}
+								});
 							}
-						});
-					} : undefined}
-					onVerifyIdentity={data.user ? () => {
-						modalActions.openModal('identity-verification-modal', 'identity-verification', {
-							userId: data.user!.id,
-							userEmail: decryptedUser.email ?? undefined,
-							templateSlug: template.slug,
-							onComplete: async () => {
-								await invalidateAll();
+						: undefined}
+					onVerifyIdentity={data.user
+						? () => {
+								modalActions.openModal('identity-verification-modal', 'identity-verification', {
+									userId: data.user!.id,
+									userEmail: decryptedUser.email ?? undefined,
+									templateSlug: template.slug,
+									onComplete: async () => {
+										await invalidateAll();
+									}
+								});
 							}
-						});
-					} : undefined}
+						: undefined}
 				/>
 			</div>
 		</div>
 
 		<!-- RIGHT: Relational field — who you're writing to, who's with you, what's been contested -->
-		<div class="mt-8 lg:mt-0 space-y-8 min-w-0">
+		<div class="mt-8 min-w-0 space-y-8 lg:mt-0">
 			<!-- Power Landscape: the strong center — who holds power, present from first render -->
 			<div id="power-landscape">
 				<PowerLandscape
@@ -916,16 +992,18 @@
 					onWriteTo={handleWriteTo}
 					onBatchRegister={handleBatchRegister}
 					{isCongressional}
-					onVerifyAddress={addressRequired ? () => {
-						modalActions.openModal('address-modal', 'address', {
-							template,
-							source,
-							mode: 'collection',
-							onComplete: async (detail: AddressModalDetail) => {
-								await _handleAddressSubmit(detail);
+					onVerifyAddress={addressRequired
+						? () => {
+								modalActions.openModal('address-modal', 'address', {
+									template,
+									source,
+									mode: 'collection',
+									onComplete: async (detail: AddressModalDetail) => {
+										await _handleAddressSubmit(detail);
+									}
+								});
 							}
-						});
-					} : undefined}
+						: undefined}
 					registrationState={batchRegistrationState}
 				/>
 
@@ -939,16 +1017,24 @@
 					{@const agg = pl.engagementByDistrict.aggregate}
 					{@const districts = pl.engagementByDistrict.districts ?? []}
 					{@const userDist = districts.find((d) => d.is_user_district)}
-					<div class="mt-6 pt-4 border-t border-slate-200/60">
+					<div class="mt-6 border-t border-slate-200/60 pt-4">
 						<div class="flex items-baseline gap-1.5">
-							<span class="font-mono text-base font-bold tabular-nums text-slate-800">{agg.total_positions.toLocaleString()}</span>
+							<span class="font-mono text-base font-bold text-slate-800 tabular-nums"
+								>{agg.total_positions.toLocaleString()}</span
+							>
 							<span class="text-sm text-slate-500">coordinating across</span>
-							<span class="font-mono text-base font-bold tabular-nums text-slate-800">{agg.total_districts}</span>
-							<span class="text-sm text-slate-500">{agg.total_districts === 1 ? 'district' : 'districts'}</span>
+							<span class="font-mono text-base font-bold text-slate-800 tabular-nums"
+								>{agg.total_districts}</span
+							>
+							<span class="text-sm text-slate-500"
+								>{agg.total_districts === 1 ? 'district' : 'districts'}</span
+							>
 						</div>
 						{#if userDist}
 							<div class="mt-1 flex items-baseline gap-1.5">
-								<span class="font-mono text-sm font-semibold tabular-nums text-emerald-700">{userDist.total}</span>
+								<span class="font-mono text-sm font-semibold text-emerald-700 tabular-nums"
+									>{userDist.total}</span
+								>
 								<span class="text-xs text-slate-500">in your district</span>
 							</div>
 						{/if}
@@ -960,7 +1046,7 @@
 						<span>Did an email bounce?</span>
 						{#each contactedMembers as member}
 							<button
-								class="ml-2 underline hover:text-slate-600 disabled:opacity-50 disabled:no-underline"
+								class="ml-2 underline hover:text-slate-600 disabled:no-underline disabled:opacity-50"
 								disabled={reportingBounce === member.email}
 								onclick={() => member.email && handleReportBounce(member.email)}
 							>
@@ -972,7 +1058,8 @@
 
 				{#if reportedBounces.size > 0}
 					<p class="mt-1 text-xs text-green-600">
-						Noted — {reportedBounces.size === 1 ? 'this address' : 'these addresses'} won't appear in future results.
+						Noted — {reportedBounces.size === 1 ? 'this address' : 'these addresses'} won't appear in
+						future results.
 					</p>
 				{/if}
 			</div>
@@ -1007,26 +1094,28 @@
 							cosignArgumentIndex: argumentIndex
 						});
 					}}
-					onVerifyIdentity={data.user ? () => {
-						if (data.user!.trust_tier != null && data.user!.trust_tier < 2) {
-							// Tier 0-1: need address first
-							modalActions.openModal('address-modal', 'address', {
-								template,
-								user: data.user,
-								context: 'debate'
-							});
-						} else {
-							// Tier 2+: open real mDL identity verification
-							modalActions.openModal('identity-verification-modal', 'identity-verification', {
-								userId: data.user!.id,
-								userEmail: decryptedUser.email ?? undefined,
-								templateSlug: template.slug,
-								onComplete: async () => {
-									await invalidateAll();
+					onVerifyIdentity={data.user
+						? () => {
+								if (data.user!.trust_tier != null && data.user!.trust_tier < 2) {
+									// Tier 0-1: need address first
+									modalActions.openModal('address-modal', 'address', {
+										template,
+										user: data.user,
+										context: 'debate'
+									});
+								} else {
+									// Tier 2+: open real mDL identity verification
+									modalActions.openModal('identity-verification-modal', 'identity-verification', {
+										userId: data.user!.id,
+										userEmail: decryptedUser.email ?? undefined,
+										templateSlug: template.slug,
+										onComplete: async () => {
+											await invalidateAll();
+										}
+									});
 								}
-							});
-						}
-					} : undefined}
+							}
+						: undefined}
 				/>
 			{/if}
 		</div>

@@ -2,7 +2,7 @@
   AddressChangeFlow.svelte
 
   Re-grounding — single-surface composition for a verified constituent
-  rebinding to new coordinates.
+  binding a new verified address.
 
   This is NOT a nested modal. The old-ground zone stays visible on the
   surface through the entire flow: capture, witnessing, AND the consequential
@@ -79,22 +79,24 @@
 	// Pre-flight gate. The throttle/cap/sybil checks are read-only projections
 	// of `verifyAddress`'s server-side gates, mirrored to the client so we can
 	// refuse mounting before any local state is touched.
-	const blockedReason = $derived.by((): null | {
-		kind: 'throttle' | 'period' | 'sybil';
-		hours?: number;
-	} => {
-		if (!budget || budget.tierBypass) return null;
-		const now = Date.now();
-		if (budget.nextAllowedAt && budget.nextAllowedAt > now) {
-			return {
-				kind: 'throttle',
-				hours: Math.max(1, Math.ceil((budget.nextAllowedAt - now) / (60 * 60 * 1000)))
-			};
+	const blockedReason = $derived.by(
+		(): null | {
+			kind: 'throttle' | 'period' | 'sybil';
+			hours?: number;
+		} => {
+			if (!budget || budget.tierBypass) return null;
+			const now = Date.now();
+			if (budget.nextAllowedAt && budget.nextAllowedAt > now) {
+				return {
+					kind: 'throttle',
+					hours: Math.max(1, Math.ceil((budget.nextAllowedAt - now) / (60 * 60 * 1000)))
+				};
+			}
+			if (budget.recentCount >= budget.periodCap) return { kind: 'period' };
+			if (budget.emailSybilTripped) return { kind: 'sybil' };
+			return null;
 		}
-		if (budget.recentCount >= budget.periodCap) return { kind: 'period' };
-		if (budget.emailSybilTripped) return { kind: 'sybil' };
-		return null;
-	});
+	);
 
 	// ---- Zone 1: Old ground ----
 	let oldAddress = $state<ConstituentAddress | null>(null);
@@ -164,9 +166,11 @@
 			// run and `phase` would stall in an outdated state, breaking the
 			// witnessing close-guard logic.
 			try {
-				(document as Document & {
-					startViewTransition: (cb: () => void) => { finished: Promise<void> };
-				}).startViewTransition(apply);
+				(
+					document as Document & {
+						startViewTransition: (cb: () => void) => { finished: Promise<void> };
+					}
+				).startViewTransition(apply);
 			} catch (err) {
 				console.warn('[AddressChangeFlow] startViewTransition threw, applying directly:', err);
 				apply();
@@ -210,11 +214,7 @@
 		crossfade) and animates its size/position from the top of the stack
 		to the left grid column.
 	-->
-	<div
-		class="gap-6"
-		class:grid={phase === 'complete'}
-		class:sm:grid-cols-2={phase === 'complete'}
-	>
+	<div class="gap-6" class:grid={phase === 'complete'} class:sm:grid-cols-2={phase === 'complete'}>
 		<!-- ═══ ZONE 1: OLD GROUND (persists through every phase) ═══ -->
 		<!--
 			During capture + witnessing this section sits above the inner flow.
@@ -229,15 +229,12 @@
 			style="view-transition-name: {transitionName};"
 		>
 			<div class="mb-2 flex items-baseline justify-between">
-				<span
-					class="font-mono text-[10px] uppercase text-slate-500"
-					style="letter-spacing: 0.22em"
-				>
+				<span class="font-mono text-[10px] text-slate-500 uppercase" style="letter-spacing: 0.22em">
 					{phase === 'complete' ? 'Prior ground' : 'Current ground'}
 				</span>
 				{#if phase === 'complete'}
 					<span
-						class="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-500"
+						class="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] tracking-wider text-slate-500 uppercase"
 					>
 						Former
 					</span>
@@ -260,12 +257,14 @@
 							{oldAddress.street}
 						</p>
 						<p class="text-[14px] text-slate-500">
-							{oldAddress.city}, {oldAddress.state} {oldAddress.zip}
+							{oldAddress.city}, {oldAddress.state}
+							{oldAddress.zip}
 						</p>
 					</div>
 					{#if oldAddress.district}
 						<div class="mt-2 flex items-center gap-2 border-l-2 border-slate-300 pl-3">
-							<span class="font-mono text-xs font-medium text-slate-500">{oldAddress.district}</span>
+							<span class="font-mono text-xs font-medium text-slate-500">{oldAddress.district}</span
+							>
 						</div>
 					{/if}
 				{:else}
@@ -275,7 +274,9 @@
 					<ul class="mt-3 space-y-1">
 						{#each oldRepresentatives as rep}
 							<li class="text-sm text-slate-500">
-								{rep.chamber === 'senate' ? 'Sen.' : 'Rep.'} {rep.name}{#if rep.party}&nbsp;<span class="text-slate-400">({rep.party})</span>{/if}
+								{rep.chamber === 'senate' ? 'Sen.' : 'Rep.'}
+								{rep.name}{#if rep.party}&nbsp;<span class="text-slate-400">({rep.party})</span
+									>{/if}
 							</li>
 						{/each}
 					</ul>
@@ -292,14 +293,11 @@
 		{#if blockedReason}
 			<section class="pt-2 pb-2" aria-live="polite" data-testid="reground-blocked">
 				<div class="mb-5">
-					<p
-						class="font-mono text-[10px] uppercase text-amber-700"
-						style="letter-spacing: 0.22em"
-					>
+					<p class="font-mono text-[10px] text-amber-700 uppercase" style="letter-spacing: 0.22em">
 						Re-grounding paused
 					</p>
 					<h2
-						class="mt-1.5 text-xl font-semibold leading-tight text-slate-900"
+						class="mt-1.5 text-xl leading-tight font-semibold text-slate-900"
 						style="font-family: 'Satoshi', system-ui, sans-serif"
 					>
 						{#if blockedReason.kind === 'throttle'}
@@ -315,8 +313,8 @@
 				<div class="border-t border-b border-dotted border-amber-300 py-4 text-sm text-slate-700">
 					{#if blockedReason.kind === 'throttle'}
 						<p>
-							A 24-hour cooldown begins after each address change so the ground
-							under each action stays stable. You can re-ground in
+							A 24-hour cooldown begins after each address change so the ground under each action
+							stays stable. You can re-ground in
 							{#if blockedReason.hours !== undefined}
 								<span class="font-mono">~{blockedReason.hours}h</span>.
 							{:else}
@@ -324,8 +322,7 @@
 							{/if}
 						</p>
 						<p class="mt-2 text-xs text-slate-500">
-							Verifying with a government ID (Tier 3+) lifts the cooldown for
-							future moves.
+							Verifying with a government ID (Tier 3+) lifts the cooldown for future moves.
 						</p>
 					{:else if blockedReason.kind === 'period'}
 						<p>
@@ -335,13 +332,13 @@
 							{:else}
 								six
 							{/if}
-							re-verifications in the trailing 180-day window. If you've genuinely
-							moved again, contact support and we'll restore your budget.
+							re-verifications in the trailing 180-day window. If you've genuinely moved again, contact
+							support and we'll restore your budget.
 						</p>
 					{:else}
 						<p>
-							This email is associated with multiple accounts created in the
-							same window. Contact support to consolidate before re-grounding.
+							This email is associated with multiple accounts created in the same window. Contact
+							support to consolidate before re-grounding.
 						</p>
 					{/if}
 				</div>
