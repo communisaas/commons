@@ -57,6 +57,9 @@
 
 	const trustTier = $derived(((user as Record<string, unknown>)?.trust_tier as number) ?? 0);
 	const tier = $derived(Math.max(0, Math.min(4, Math.floor(trustTier))));
+	const serverAddressVerified = $derived(
+		Boolean((user as Record<string, unknown> | null)?.district_verified) || trustTier >= 2
+	);
 
 	const levels = [
 		{
@@ -370,6 +373,7 @@
 					<GroundCard
 						userId={user.id}
 						{trustTier}
+						{serverAddressVerified}
 						embedded={true}
 						budget={data.reverificationBudget}
 						onVerifyAddress={handleVerifyAddress}

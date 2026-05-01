@@ -13,7 +13,10 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	try {
 		convexProfile = await serverQuery(api.users.getProfile, {});
 	} catch (err) {
-		console.error('[Profile Layout] Convex query failed:', err instanceof Error ? err.message : String(err));
+		console.error(
+			'[Profile Layout] Convex query failed:',
+			err instanceof Error ? err.message : String(err)
+		);
 	}
 
 	if (convexProfile) {
@@ -25,6 +28,9 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 				avatar: convexProfile.avatar || null,
 				is_verified: convexProfile.isVerified,
 				district_verified: convexProfile.districtVerified,
+				address_verified_at: convexProfile.addressVerifiedAt
+					? new Date(convexProfile.addressVerifiedAt).toISOString()
+					: null,
 				trust_score: convexProfile.trustScore,
 				reputation_tier: convexProfile.reputationTier,
 				trust_tier: convexProfile.trustTier,
@@ -42,6 +48,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 			avatar: locals.user.avatar || null,
 			is_verified: locals.user.is_verified,
 			district_verified: locals.user.district_verified,
+			address_verified_at: locals.user.address_verified_at?.toISOString() ?? null,
 			trust_score: locals.user.trust_score,
 			reputation_tier: locals.user.reputation_tier,
 			trust_tier: locals.user.trust_tier,
