@@ -2,7 +2,7 @@
 
 > commons.email deploys to **Cloudflare Workers** via Pages, with **Convex** as the managed backend.
 
-**Storage ops alert:** Storacha sunsets **2026-05-31** (uploads already disabled 2026-04-15). `pin-to-ipfs.ts` is hardcoded to Storacha; gateway fallbacks (`storacha.link/ipfs`) will 404 after that date. Deploy runbook should gain a "pinning provider" section before the cutover. See `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md` and the `storacha_sunset_migration` memory entry.
+**Storage stance (2026-05-02):** R2 (`atlas.commons.email`) is the production read path for shadow-atlas. IPFS pinning is paused until the ecosystem matures — Storacha was removed from voter-protocol rather than swapped, since its 2026-05-31 sunset and 2026-04-15 upload-disable left no migration window worth investing in. Pinata, Lighthouse, and Fleek service implementations remain on the shelf in voter-protocol for reactivation. See `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md` and the `storacha_sunset_migration` memory entry.
 
 ---
 

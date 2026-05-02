@@ -20,11 +20,12 @@
 >
 > **Missing entries to add (material gaps):**
 >
-> - **Storacha pinning sunset (2026-05-31) — operationally urgent.**
->   Uploads disabled 2026-04-15. `pin-to-ipfs.ts` hardcodes Storacha;
->   `storacha.link/ipfs` gateway will 404 after sunset. Shadow-Atlas
->   pinning provider migration required. Severity: **CRITICAL** (fixed
->   deadline, no fallback wired).
+> - **(RESOLVED 2026-05-02)** Storacha pinning sunset (2026-05-31).
+>   Uploads were disabled 2026-04-15. Resolved by removing Storacha
+>   from voter-protocol and pausing IPFS pinning rather than swapping
+>   providers. R2 (`atlas.commons.email`) carries the production read
+>   path. Pinata/Lighthouse/Fleek implementations preserved for
+>   future reactivation when IPFS matures.
 > - **TEE is MVP-only — `LocalConstituentResolver`, not an attested
 >   enclave.** Witness decryption runs in-process in the CF Worker
 >   runtime. Nitro deployment is Phase 2 (see

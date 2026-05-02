@@ -7,13 +7,14 @@
 - **Primary data store: Convex** (`convex/schema.ts`, ~71 tables). Convex
   provides native point-in-time recovery and snapshots via its dashboard
   and CLI (`npx convex export`).
-- **Shadow Atlas pinning — OPERATIONAL DR RISK**: `pin-to-ipfs.ts` is
-  hardcoded to Storacha. **Storacha uploads disabled 2026-04-15; full
-  sunset 2026-05-31.** Client-side ZKP fetches cell chunks through
-  `storacha.link/ipfs` — post-sunset that gateway 404s. Pinata import
-  exists but is never instantiated. **Pinning-provider migration must
-  complete before 2026-05-31** or Shadow Atlas restore fails. See
-  `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md` §4.4.
+- **Shadow Atlas read path — R2 (Cloudflare)**: served via
+  `atlas.commons.email` (Atlas Worker → R2 binding). DR posture is
+  whatever Cloudflare R2 provides plus the build pipeline's ability
+  to regenerate quarterly artifacts. IPFS pinning is paused (post
+  Storacha sunset 2026-05-31); Pinata/Lighthouse/Fleek service
+  implementations remain in `voter-protocol/packages/shadow-atlas/src/distribution/services/`
+  for reactivation when IPFS matures. R2 is the only restore path
+  until then.
 - **PII encryption keys remain FROZEN** (AES-256-GCM). Loss is
   unrecoverable. Per-org sealed keys (`convex/_orgKey.ts`,
   `sealedOrgKey`) and `ENTROPY_ENCRYPTION_KEY` must all be backed up
@@ -139,16 +140,13 @@ backed up separately from the dataset.
 
 ## Pinning Provider (Shadow Atlas)
 
-**Until the Storacha → successor migration completes**, a Shadow Atlas
-restore requires:
-
-1. A pinning provider that still holds the root CID + all 977 H3
-   chunks.
-2. A gateway that resolves them (currently `storacha.link/ipfs`;
-   post-sunset, migrate to the new provider's gateway).
-
-If either is missing at restore time, client-side ZKP verification will
-fail for affected districts. Treat the migration as a DR prerequisite.
+**IPFS pinning is paused as of 2026-05-02.** Restore depends on R2
+(`atlas.commons.email`) holding the latest quarterly artifacts plus
+the ability to rebuild from voter-protocol. There is no IPFS fallback
+until pinning is reactivated. When IPFS comes back, this section needs
+the provider name + gateway domain captured before the next quarterly
+build runs, and the gateway list in `CHUNKED-ATLAS-PIPELINE-SPEC.md` §5
+needs to be re-populated to match.
 
 ---
 

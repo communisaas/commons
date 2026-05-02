@@ -19,7 +19,7 @@ Components the spec originally marked as "to implement" are shipped:
 
 Remaining rot and load-bearing gaps:
 
-1. **Storacha is hardcoded as the primary pinning service** and Storacha is sunsetting on **2026-05-31** (~38 days from spec reconciliation). `pin-to-ipfs.ts` instantiates only Storacha; the "Pinata backup" referenced in its header comment is imported but never constructed. The `storacha.link/ipfs` fallback gateway listed in §5 will 404 after sunset. **Action required before 2026-05-31:** either refresh Storacha credentials (not possible if the space is being sunset) or wire Pinata / NFT.storage / alternative as primary, update the gateway chain, and re-pin.
+1. **IPFS pinning paused (2026-05-02).** R2 is the production read path (`atlas.commons.email`); IPFS pinning is deferred until the ecosystem matures further. The Storacha provider was removed from `voter-protocol/packages/shadow-atlas/` rather than swapped — Storacha sunsets 2026-05-31 and its uploads were already disabled 2026-04-15, so a swap-replace would have just been replacing dead bytes with shelved bytes. Pinata, Lighthouse, and Fleek service implementations remain in `src/distribution/services/` ready for reactivation when IPFS pinning resumes. The gateway fallback chain in §5 has been pruned of Storacha-affiliated domains.
 2. **Chunk-count numbers in this spec are inconsistent.** §3 says ~783 chunks (res-3 parents of continental US); §7 example validation output shows 4,698 chunks; memory notes say 977. The 4,698 figure is almost certainly the multi-country × multi-slot total (US + CA + GB + AU + NZ across populated slots), not the per-country `cd` count. The spec should either pick one number and explain the scope, or show all three with their scopes.
 3. **Example validation output (§7 lines 509-517) is presented as if from a real run** — precise cell counts, district counts, official counts. These were aspirational when the spec was DESIGN COMPLETE; now that the build has run in production, either replace with real output or label as "expected output format, illustrative."
 
@@ -28,11 +28,10 @@ Phase-2 / Storacha-post-sunset / unmeasured, a callout appears inline.
 
 ### Additional gaps (2026-04-23 audit addendum)
 
-4. **Storacha uploads already disabled.** The provider cut off writes on
-   **2026-04-15** — any quarterly build after that date cannot pin new
-   content via the current Storacha wiring. Timeline is: write-disabled
-   2026-04-15 → full sunset 2026-05-31. No "failed upload" diagnostic
-   documented in the pipeline runbook.
+4. **(RESOLVED 2026-05-02)** Storacha uploads were disabled 2026-04-15;
+   provider sunsets 2026-05-31. Resolved by deferring IPFS pinning rather
+   than swapping providers. R2 carries the production read path. See
+   item 1 for the post-resolution stance.
 5. **BEF redistricting fix (2026-03-29) is not reflected here.** 119th
    Congress redistricting touched ~1.08M blocks and a full-US re-pin
    completed on that date. Spec should name the CID rotation + record
@@ -681,10 +680,12 @@ const officialsCache: LRUCache<string, OfficialsFile>;  // maxSize: 50, ~100 KB
 
 **Gateway fallback chain:**
 ```typescript
+// Gateway list is dormant while IPFS pinning is deferred. R2 (atlas.commons.email)
+// is the active production read path. When IPFS reactivates, populate this chain
+// with the gateway domains corresponding to the chosen pinning provider.
 const GATEWAYS = [
-  'https://cloudflare-ipfs.com/ipfs',
-  'https://dweb.link/ipfs',
-  'https://storacha.link/ipfs',
+  'https://gateway.pinata.cloud/ipfs',
+  'https://ipfs.io/ipfs',
 ];
 
 async function fetchFromIPFS(path: string): Promise<Response> {
@@ -1270,7 +1271,11 @@ Each regression vector has a corresponding automated check.
 
 3. **RESOLVED: Slot 10 discrepancy.** `CIRCUIT_SLOT_NAMES` in `authority-mapper.ts` had `SCHOOL_BOARD` at slot 10, diverging from both `US_JURISDICTION` (jurisdiction.ts) and `DISTRICT-TAXONOMY` spec which use `COMMUNITY_COLLEGE`. The build pipeline (`build-h3-mapping.ts`) imports from `jurisdiction.ts` and the actual built artifact (h3-mapping-metadata.json) confirms `Community College District` at slot 10. Fixed: `authority-mapper.ts` aligned to match `US_JURISDICTION` and `DISTRICT-TAXONOMY`. `boundaryTypeToSlot()` slot assignments updated. Commons' `US_SLOT_NAMES` updated to match.
 
-4. **Storacha `uploadDirectory()` vs CLI `storacha up`.** The script uses the SDK; the user has the CLI. Either path works. The SDK is preferred for CI automation; the CLI is convenient for manual runs.
+4. **(HISTORICAL — IPFS pinning paused 2026-05-02)** Storacha
+   `uploadDirectory()` vs CLI `storacha up`. The script used the SDK;
+   the user had the CLI. Either path worked. The SDK was preferred for
+   CI automation; the CLI was convenient for manual runs. Retained
+   here as historical context for whoever reactivates IPFS pinning.
 
 ---
 

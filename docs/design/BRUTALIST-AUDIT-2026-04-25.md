@@ -233,8 +233,12 @@ These are tracked elsewhere (MEMORY.md, prior runbooks). Listed here for cross-l
 #### F-3.2 — Storacha sunset 2026-05-31
 
 - **Severity**: C (5-week clock)
-- **Status**: WIP (in MEMORY [storacha_sunset_migration.md])
-- **Action**: Pinning + gateway migration. F-1.1 (IPFS authenticity) bundles into this.
+- **Status**: RESOLVED 2026-05-02 — Storacha removed from voter-protocol;
+  IPFS pinning paused; R2 (`atlas.commons.email`) carries the
+  production read path. F-1.1 (IPFS authenticity) deferred along with
+  pinning reactivation.
+- **Action**: None pending. Reactivation work tracked in MEMORY
+  [storacha_sunset_migration.md] for when IPFS matures.
 
 #### F-3.3 — CA/GB/AU resolver stubs ship public routes
 

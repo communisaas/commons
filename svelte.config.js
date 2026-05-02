@@ -48,14 +48,10 @@ const config = {
 					'https://demotiles.maplibre.org',
 					'https://tile.openstreetmap.org',
 					'https://*.basemaps.cartocdn.com',
-					// Shadow Atlas data: R2 custom domain (primary), IPFS gateways (transition + future)
+					// Shadow Atlas data: R2 custom domain (primary read path).
+					// IPFS gateways are dormant — re-add gateway domains here when
+					// IPFS_CID_ROOT is set and the IPFS fallback path is reactivated.
 					'https://atlas.commons.email',
-					// Storacha IPFS: kept during migration window (gateways live until 2026-05-31)
-					// Remove these once R2 is confirmed live and IPFS env vars are cleared.
-					'https://storacha.link',
-					'https://*.storacha.link',
-					'https://w3s.link',
-					'https://*.w3s.link',
 					// Convex: HTTP queries + WebSocket subscriptions (dual-stack, Cycle 1)
 					'https://*.convex.cloud',
 					'wss://*.convex.cloud'

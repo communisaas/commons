@@ -1,0 +1,10 @@
+# CODEOWNERS — enforce review on security-sensitive surfaces.
+#
+# The Atlas Worker has a full-access R2 binding to the shadow-atlas
+# bucket (Cloudflare R2 bindings don't support a wrangler.toml
+# read-only flag as of 2026-05). The Worker code only calls
+# .get()/.head(), but a malicious or accidental commit introducing
+# .put/.delete/.list would have full bucket-write blast radius.
+# Mandatory review on these paths is the practical mitigation until
+# Cloudflare ships per-binding read-only scoping.
+workers/atlas/         @ejmockler

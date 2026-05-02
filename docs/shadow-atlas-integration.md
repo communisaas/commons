@@ -10,13 +10,15 @@
 >   `/api/congressional/submit` does not exist. Use
 >   `POST /api/submissions/create`
 >   (`src/routes/api/submissions/create/+server.ts`).
-> - **Storacha is sunsetting 2026-05-31** (uploads already disabled
->   2026-04-15). Any client that fetches cell chunks exclusively from
->   `storacha.link/ipfs` will 404 after the cutover. R2 is the primary
->   production path in the chunked pipeline
->   (`src/lib/core/ipfs/ipfs-store.ts`); the pinning provider migration
->   is an ops-urgent task. See the `storacha_sunset_migration` memory
->   entry and `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md`.
+> - **(RESOLVED 2026-05-02)** Storacha sunsets 2026-05-31; uploads were
+>   disabled 2026-04-15. R2 (`atlas.commons.email`) carries the
+>   production read path via `src/lib/core/shadow-atlas/ipfs-store.ts`.
+>   IPFS pinning is paused until the ecosystem matures — Pinata,
+>   Lighthouse, and Fleek service implementations are preserved in
+>   voter-protocol for future reactivation. The Storacha provider was
+>   removed from voter-protocol rather than swapped. See
+>   `docs/specs/CHUNKED-ATLAS-PIPELINE-SPEC.md` §4 and the
+>   `storacha_sunset_migration` memory entry.
 > - **Chunked pipeline shape:** the API docs suggest per-district merkle
 >   roots, but the live architecture has a **single `cellMapRoot`
 >   (Tree 2)** valid for all cells in an epoch; clients fetch
