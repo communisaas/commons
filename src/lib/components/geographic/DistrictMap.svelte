@@ -20,6 +20,7 @@
 	import { onMount } from 'svelte';
 	import type { LngLatBoundsLike } from 'maplibre-gl';
 	import type { CellWeight } from '$lib/types/verification-packet';
+	import { getDistrictBoundary } from '$lib/core/shadow-atlas/district-bundle';
 
 	interface Cluster {
 		lng: number;
@@ -82,21 +83,27 @@
 			boundaryResolved = true;
 			return;
 		}
-		if (!districtCode || !districtCentroid) {
+		if (!districtCode) {
 			boundaryResolved = true;
 			return;
 		}
+		// districtCentroid is no longer required — the bundle fetch resolves
+		// from districtCode alone. The prop is kept for backward compatibility
+		// and is read elsewhere in the component for viewport hints.
 
 		const controller = new AbortController();
-		fetch(`/api/shadow-atlas/boundary?district=${districtCode}&lat=${districtCentroid.lat}&lng=${districtCentroid.lng}`, { signal: controller.signal })
-			.then(r => r.ok ? r.json() : null)
-			.then(data => {
-				if (data?.geometry) resolvedBoundary = data.geometry;
+		// Fetch directly from atlas.commons.email — no server proxy, no
+		// lat/lng leak, no auth gate on a public dataset.
+		getDistrictBoundary(districtCode, controller.signal)
+			.then((result) => {
+				if (result?.geometry) resolvedBoundary = result.geometry;
 			})
-			.catch(e => {
-				if (e.name !== 'AbortError') console.warn('[DistrictMap] Boundary fetch failed:', e);
+			.catch((e) => {
+				if (e?.name !== 'AbortError') console.warn('[DistrictMap] Boundary fetch failed:', e);
 			})
-			.finally(() => { boundaryResolved = true; });
+			.finally(() => {
+				boundaryResolved = true;
+			});
 
 		return () => controller.abort();
 	});

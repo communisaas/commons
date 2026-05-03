@@ -804,7 +804,7 @@ describe('Proof E2E', () => {
 
 ```bash
 # Shadow Atlas API
-SHADOW_ATLAS_API_URL=https://shadow-atlas.voter-protocol.org
+SHADOW_ATLAS_API_URL=https://shadow-atlas.commons.email
 
 # Identity Verification
 # mDL via Digital Credentials API is the sole identity provider (self.xyz and Didit.me removed in Cycle 15)
@@ -814,7 +814,7 @@ SCROLL_RPC_URL=https://sepolia-rpc.scroll.io
 DISTRICT_GATE_ADDRESS=<deployed address>
 
 # TEE
-TEE_PUBLIC_KEY_URL=https://tee.voter-protocol.org/public-key
+TEE_PUBLIC_KEY_URL=https://tee.commons.email/public-key
 ```
 
 ---

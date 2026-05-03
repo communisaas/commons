@@ -330,7 +330,7 @@ const results = DiscoveryResultSchema.parse(JSON.parse(data));
 
 ```bash
 # Shadow Atlas API
-SHADOW_ATLAS_API_URL=https://shadow-atlas.voter-protocol.org
+SHADOW_ATLAS_API_URL=https://shadow-atlas.commons.email
 
 # For development
 SHADOW_ATLAS_API_URL=http://localhost:3001

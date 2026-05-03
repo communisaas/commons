@@ -45,15 +45,28 @@ const OUTPUT_PATTERN =
 	/^\/v\d{8}\/[A-Z]{2}(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)+\.json$/;
 
 /**
- * Source paths — what CI fetches during quarterly republish.
+ * Source paths — what CI fetches during quarterly republish AND what
+ * browsers fetch for district bundle visualization.
  *
- * Shape: `/source/manifest.json` (the moving index) OR
- *        `/source/manifest.json.sig` (Ed25519 signature sidecar) OR
- *        `/source/v{YYYYMMDD}/<filename>.{db|sha256}` where filename starts
- *        with a lowercase letter and contains no nested directories.
+ * Shape:
+ *   `/source/manifest.json`                              (moving index)
+ *   `/source/manifest.json.sig`                          (Ed25519 signature)
+ *   `/source/v{YYYYMMDD}/<filename>.{db|sha256}`         (top-level CI artifacts)
+ *   `/source/v{YYYYMMDD}/<country>/<layer>/index.json`   (per-layer district index)
+ *   `/source/v{YYYYMMDD}/<country>/<layer>/<id>.geojson` (per-district feature)
+ *
+ *   <country> — lowercase 2-3 letter (us, ca, gb, au)
+ *   <layer>   — lowercase alphanumeric + hyphen (cd, sldu, sldl, county, can-fed)
+ *   <id>      — must start with a lowercase letter and contain only alphanum +
+ *               hyphen (matches shadow-atlas id convention: cd-0611, sldu-06035, …)
+ *
+ * Why per-district files over a single per-layer bundle: per-layer aggregates
+ * run 150 MB (cd) to 450 MB (sldl) uncompressed — too large for browser fetches
+ * every page render. Per-district files are 50 KB to ~1.5 MB each; the browser
+ * fetches just what it needs plus a small per-layer index.
  */
 const SOURCE_PATTERN =
-	/^\/source\/(?:manifest\.json(?:\.sig)?|v\d{8}\/[a-z][A-Za-z0-9._-]*\.(?:db|sha256))$/;
+	/^\/source\/(?:manifest\.json(?:\.sig)?|v\d{8}\/(?:[a-z][A-Za-z0-9._-]*\.(?:db|sha256)|[a-z]{2,3}\/[a-z][a-z0-9-]*\/(?:index\.json|[a-z][a-z0-9-]*\.geojson)))$/;
 
 function isAllowedPath(path: string): boolean {
 	// Defense-in-depth: even though CF normalizes URLs before they reach
@@ -65,6 +78,7 @@ function isAllowedPath(path: string): boolean {
 }
 
 function contentTypeFor(path: string): string {
+	if (path.endsWith('.geojson')) return 'application/geo+json';
 	if (path.endsWith('.json')) return 'application/json';
 	if (path.endsWith('.db')) return 'application/vnd.sqlite3';
 	if (path.endsWith('.sha256')) return 'text/plain; charset=utf-8';

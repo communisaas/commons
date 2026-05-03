@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cellToBoundary, cellToLatLng, isValidCell } from 'h3-js';
+	import { getDistrictBoundary } from '$lib/core/shadow-atlas/district-bundle';
 
 	type LngLat = [number, number];
 	type PolygonGeometry = {
@@ -135,25 +136,14 @@
 		}
 
 		status = 'loading';
-		const [lat, lng] = cellToLatLng(cell);
-		const params = new URLSearchParams({
-			district,
-			lat: String(lat),
-			lng: String(lng)
-		});
 
-		fetch(`/api/shadow-atlas/boundary?${params.toString()}`, { signal: controller.signal })
-			.then(async (response) => {
-				if (!response.ok) throw new Error('boundary_unavailable');
-				return response.json() as Promise<{
-					name?: string;
-					geometry?: DistrictGeometry;
-				}>;
-			})
-			.then((data) => {
+		// Fetch directly from atlas.commons.email — no /api/shadow-atlas/boundary
+		// proxy, no lat/lng sent up, no auth gate on a public dataset.
+		getDistrictBoundary(district, controller.signal)
+			.then((result) => {
 				if (token !== loadToken) return;
-				districtGeometry = data.geometry ?? null;
-				boundaryName = data.name ?? district;
+				districtGeometry = (result?.geometry as DistrictGeometry | undefined) ?? null;
+				boundaryName = result?.name ?? district;
 				status = districtGeometry ? 'ready' : 'cell-only';
 			})
 			.catch(() => {
