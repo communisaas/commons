@@ -16,22 +16,28 @@
 	} from '@lucide/svelte';
 	import { spring } from 'svelte/motion';
 	import { fly } from 'svelte/transition';
+	import { onMount } from 'svelte';
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import ProfileEditModal from '$lib/components/profile/ProfileEditModal.svelte';
 	import GroundCard from '$lib/components/profile/GroundCard.svelte';
+	import GroundSpatialProof from '$lib/components/profile/GroundSpatialProof.svelte';
+	import { EntityCluster } from '$lib/design';
 	import VerificationGate from '$lib/components/auth/VerificationGate.svelte';
 	import AddressChangeFlow from '$lib/components/auth/AddressChangeFlow.svelte';
+	import AddressRestoreFlow from '$lib/components/auth/AddressRestoreFlow.svelte';
 	import { invalidateAll } from '$app/navigation';
 	import { FEATURES, isAnyMdlProtocolEnabled } from '$lib/config/features';
 	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
+	import { getConstituentAddress } from '$lib/core/identity/constituent-address';
+	import { getOfficialsFromBrowser } from '$lib/core/shadow-atlas/browser-client';
 	import type { PageData } from './$types';
 
 	interface ProfileRepresentative {
 		name: string;
-		party: string;
-		chamber: string;
-		state: string;
-		district: string;
+		party?: string;
+		chamber?: string;
+		state?: string;
+		district?: string;
 	}
 
 	let { data }: { data: PageData } = $props();
@@ -43,8 +49,12 @@
 	let editingSection = $state<EditSection>('basic');
 	let showVerificationGate = $state(false);
 	let showAddressChange = $state(false);
+	let showAddressRestore = $state(false);
+	let groundCardKey = $state(0);
 	let currentReps = $state<ProfileRepresentative[]>([]);
-	// Tracks the re-grounding phase so we can block the close × once the
+	let localRepresentatives = $state<ProfileRepresentative[]>([]);
+	let localGroundDistrict = $state<string | null>(null);
+	// Tracks the re-grounding phase so we can block the close control once the
 	// retirement ceremony is underway. Retired credentials cannot be un-retired.
 	let addressChangePhase = $state<'capture' | 'witnessing' | 'complete'>('capture');
 
@@ -54,17 +64,20 @@
 	const userDetailsPromise = $derived(data.streamed?.userDetails);
 	const templatesDataPromise = $derived(data.streamed?.templatesData);
 	const representativesPromise = $derived(data.streamed?.representatives);
-
-	const trustTier = $derived(((user as Record<string, unknown>)?.trust_tier as number) ?? 0);
-	const tier = $derived(Math.max(0, Math.min(4, Math.floor(trustTier))));
-	const serverAddressVerified = $derived(
-		Boolean((user as Record<string, unknown> | null)?.district_verified) || trustTier >= 2
+	const groundState = $derived(data.groundState);
+	const groundDistrict = $derived(
+		localGroundDistrict ?? groundState?.credential?.district ?? null
 	);
+	const groundH3Cell = $derived(groundState?.cell?.h3Cell ?? null);
+
+	const trustTier = $derived(user?.trust_tier ?? 0);
+	const tier = $derived(Math.max(0, Math.min(4, Math.floor(trustTier))));
+	const serverAddressVerified = $derived(Boolean(user?.district_verified));
 
 	const levels = [
 		{
-			signal: 'Noise',
-			arrives: 'General inbox. No constituent status. Likely unread.',
+			signal: 'Not verified',
+			arrives: 'General delivery. No district proof yet.',
 			weight: 8,
 			gradientFrom: '#cbd5e1',
 			gradientTo: '#94a3b8',
@@ -72,8 +85,8 @@
 			accentClass: 'text-slate-700'
 		},
 		{
-			signal: 'Weak',
-			arrives: 'Named sender. No district proof. Low priority.',
+			signal: 'Signed in',
+			arrives: 'Named sender. Verify your address for district delivery.',
 			weight: 18,
 			gradientFrom: '#93c5fd',
 			gradientTo: '#3b82f6',
@@ -81,8 +94,8 @@
 			accentClass: 'text-blue-700'
 		},
 		{
-			signal: 'Constituent',
-			arrives: 'Confirmed constituent. Flagged for your district. Gets read.',
+			signal: 'Address verified',
+			arrives: 'Your district is verified for official delivery.',
 			weight: 62,
 			gradientFrom: '#34d399',
 			gradientTo: '#10b981',
@@ -90,8 +103,8 @@
 			accentClass: 'text-emerald-700'
 		},
 		{
-			signal: 'Verified',
-			arrives: 'Government ID verified. Cryptographic proof. Cannot be faked or botted.',
+			signal: 'Identity checked',
+			arrives: 'Government ID verified. Adds a stronger proof for supported actions.',
 			weight: 82,
 			gradientFrom: '#c084fc',
 			gradientTo: '#a855f7',
@@ -99,8 +112,8 @@
 			accentClass: 'text-emerald-700'
 		},
 		{
-			signal: 'Undeniable',
-			arrives: 'Zero-knowledge proof of residency. Mathematically verified. Maximum weight.',
+			signal: 'Proof ready',
+			arrives: 'Residency proof ready for official delivery.',
 			weight: 100,
 			gradientFrom: '#818cf8',
 			gradientTo: '#6366f1',
@@ -129,7 +142,7 @@
 		}
 	});
 
-	function formatDate(date: string | Date) {
+	function formatDate(date: string | number | Date) {
 		return new Date(date).toLocaleDateString('en-US', {
 			year: 'numeric',
 			month: 'short',
@@ -147,19 +160,91 @@
 		invalidateAll();
 	}
 
-	function partyColor(party: string): string {
-		const p = party?.toLowerCase() || '';
-		if (p.startsWith('d')) return 'text-blue-700';
-		if (p.startsWith('r')) return 'text-red-700';
-		return 'text-slate-600';
+	function normalizeRepresentatives(reps: Array<{
+		name: string;
+		party?: string | null;
+		chamber?: string;
+		state?: string | null;
+		district?: string | null;
+	}>): ProfileRepresentative[] {
+		return reps.map((rep) => ({
+			name: rep.name,
+			party: rep.party ?? undefined,
+			chamber: rep.chamber,
+			state: rep.state ?? undefined,
+			district: rep.district ?? undefined
+		}));
 	}
 
-	function chamberLabel(chamber: string): string {
-		return chamber === 'senate' ? 'Sen.' : 'Rep.';
+	function repChamberLabel(chamber: string | undefined): string {
+		const c = chamber?.toLowerCase();
+		if (c === 'senate') return 'Senate';
+		if (c === 'house') return 'House';
+		return 'Representative';
 	}
+
+	function repSubline(rep: ProfileRepresentative): string {
+		const partyShort = rep.party ? rep.party.charAt(0).toUpperCase() : '';
+		const chamberLower = rep.chamber?.toLowerCase();
+		// House: state-district (e.g. CA-11). Senate: state. Falls back gracefully
+		// if either piece is missing.
+		const scope =
+			chamberLower === 'house'
+				? rep.state && rep.district
+					? `${rep.state}-${rep.district}`
+					: (rep.district ?? rep.state)
+				: rep.state;
+		if (partyShort && scope) return `${partyShort} · ${scope}`;
+		return scope ?? (partyShort ? `(${partyShort})` : '');
+	}
+
+	const CHAMBER_ORDER: Record<string, number> = { house: 0, senate: 1 };
+
+	function sortedRepresentatives(reps: ProfileRepresentative[]): ProfileRepresentative[] {
+		return [...reps].slice(0, 3).sort((a, b) => {
+			const aOrd = CHAMBER_ORDER[a.chamber?.toLowerCase() ?? ''] ?? 9;
+			const bOrd = CHAMBER_ORDER[b.chamber?.toLowerCase() ?? ''] ?? 9;
+			if (aOrd !== bOrd) return aOrd - bOrd;
+			return a.name.localeCompare(b.name);
+		});
+	}
+
+	async function refreshLocalRepresentatives(): Promise<void> {
+		if (!user?.id) {
+			return;
+		}
+		try {
+			const address = await getConstituentAddress(user.id);
+			const district = address?.district?.trim() || groundState?.credential?.district?.trim();
+			localGroundDistrict = district || null;
+			if (!district) {
+				localRepresentatives = [];
+				return;
+			}
+			const officials = await getOfficialsFromBrowser(district);
+			localRepresentatives =
+				officials?.officials.map((official) => ({
+					name: official.name,
+					party: official.party ?? undefined,
+					chamber: official.chamber,
+					state: official.state,
+					district: official.district ?? undefined
+				})) ?? [];
+		} catch (error) {
+			console.warn('[Profile] Failed to load local representatives:', error);
+		}
+	}
+
+	onMount(() => {
+		refreshLocalRepresentatives();
+	});
 
 	function handleVerifyAddress(): void {
 		showVerificationGate = true;
+	}
+
+	function handleRestoreAddress(): void {
+		showAddressRestore = true;
 	}
 
 	async function handleChangeAddress(): Promise<void> {
@@ -170,7 +255,7 @@
 		try {
 			const reps = await representativesPromise;
 			if (Array.isArray(reps)) {
-				currentReps = reps.map((r) => r as unknown as ProfileRepresentative);
+				currentReps = normalizeRepresentatives(reps);
 			}
 		} catch (e) {
 			console.warn('[Profile] Failed to snapshot current reps:', e);
@@ -185,6 +270,15 @@
 		if (addressChangePhase === 'witnessing') return;
 		showAddressChange = false;
 		addressChangePhase = 'capture';
+		groundCardKey += 1;
+		refreshLocalRepresentatives();
+		invalidateAll();
+	}
+
+	function handleAddressRestoreClose(): void {
+		showAddressRestore = false;
+		groundCardKey += 1;
+		refreshLocalRepresentatives();
 		invalidateAll();
 	}
 
@@ -285,7 +379,7 @@
 	<!-- Signal statement -->
 	<div class="mt-6 sm:mt-8 lg:mt-10">
 		<p class="text-base text-slate-700 lg:text-lg">
-			Signal strength:
+			Verification level:
 			<span class="font-bold {current.accentClass}">{current.signal}</span>.
 		</p>
 	</div>
@@ -361,56 +455,62 @@
 
 <hr class="section-rule" />
 
-<!-- ═══ ZONE 2: GROUND + REPRESENTATIVES ═══ -->
-<!-- Side by side on large screens: ground anchors left, representatives float right -->
+<!-- ═══ ZONE 2: OFFICIAL DELIVERY ═══ -->
 <section in:fly={{ y: 12, duration: 400, delay: 100 }}>
-	<div class="lg:grid lg:grid-cols-5 lg:gap-12">
-		<!-- Ground — left column, wider -->
-		<div class="lg:col-span-3">
-			<span class="section-label">Your ground</span>
-			<div class="mt-3">
-				{#if user}
+	<span class="section-label">Your ground</span>
+	<div class="mt-4 grid gap-8 lg:grid-cols-12 lg:items-start lg:gap-10">
+		<div class="lg:col-span-5">
+			{#if user}
+				{#key groundCardKey}
 					<GroundCard
 						userId={user.id}
 						{trustTier}
 						{serverAddressVerified}
+						{groundState}
 						embedded={true}
 						budget={data.reverificationBudget}
 						onVerifyAddress={handleVerifyAddress}
+						onRestoreAddress={handleRestoreAddress}
 						onChangeAddress={handleChangeAddress}
 					/>
-				{/if}
-			</div>
+				{/key}
+			{/if}
 		</div>
 
-		<!-- Representatives — right column -->
-		<div class="mt-8 lg:col-span-2 lg:mt-0">
-			<span class="section-label">Your representatives</span>
+		<div class="lg:col-span-7 space-y-10">
+			<GroundSpatialProof districtCode={groundDistrict} h3Cell={groundH3Cell} />
 
 			{#await representativesPromise}
-				<div class="mt-3 animate-pulse space-y-1.5">
-					<div class="h-[1.125rem] w-44 rounded bg-slate-200/40"></div>
-					<div class="h-[1.125rem] w-48 rounded bg-slate-200/40"></div>
-					<div class="h-[1.125rem] w-40 rounded bg-slate-200/40"></div>
-				</div>
-			{:then representatives}
-				{#if representatives && representatives.length > 0}
-					<div class="mt-3 space-y-1.5">
-						{#each representatives as rep}
-							{@const r = rep as unknown as ProfileRepresentative}
-							<div class="text-sm text-slate-700">
-								<span class="font-medium">{chamberLabel(r.chamber)} {r.name}</span>
-								<span class="font-semibold {partyColor(r.party)}">({r.party})</span>
-								{#if r.chamber !== 'senate' && r.district}
-									<span class="text-slate-400">{r.state}-{r.district}</span>
+				{#if localRepresentatives.length > 0}
+					<EntityCluster as="ul" density="tight">
+						{#each sortedRepresentatives(localRepresentatives) as rep (`${rep.chamber ?? ''}-${rep.name}`)}
+							<li>
+								<span class="ground-rep__chamber">{repChamberLabel(rep.chamber)}</span>
+								<h4 class="ground-rep__name">{rep.name}</h4>
+								{#if repSubline(rep)}
+									<p class="ground-rep__subline">{repSubline(rep)}</p>
 								{/if}
-							</div>
+							</li>
 						{/each}
-					</div>
-				{:else}
-					<p class="mt-3 text-sm text-slate-500">
-						Your representatives appear after address verification.
-					</p>
+					</EntityCluster>
+				{/if}
+			{:then representatives}
+				{@const reps =
+					localRepresentatives.length > 0
+						? localRepresentatives
+						: normalizeRepresentatives(representatives ?? [])}
+				{#if reps.length > 0}
+					<EntityCluster as="ul" density="tight">
+						{#each sortedRepresentatives(reps) as rep (`${rep.chamber ?? ''}-${rep.name}`)}
+							<li>
+								<span class="ground-rep__chamber">{repChamberLabel(rep.chamber)}</span>
+								<h4 class="ground-rep__name">{rep.name}</h4>
+								{#if repSubline(rep)}
+									<p class="ground-rep__subline">{repSubline(rep)}</p>
+								{/if}
+							</li>
+						{/each}
+					</EntityCluster>
 				{/if}
 			{/await}
 		</div>
@@ -490,8 +590,8 @@
 									</Badge>
 								</div>
 								<div class="mt-0.5 flex items-center gap-3 text-xs text-slate-500">
-									<span>{formatDate(template.createdAt || template._creationTime)}</span>
-									<span>{template.template_campaign?.length || 0} uses</span>
+									<span>{formatDate(template.createdAt)}</span>
+									<span>{template.useCount} uses</span>
 								</div>
 							</div>
 							<a
@@ -611,49 +711,91 @@
 
 {#if user && showAddressChange}
 	<div
-		class="fixed inset-0 z-[1010] flex items-start justify-center overflow-y-auto bg-white/95 pt-6 backdrop-blur-sm sm:items-center sm:pt-0"
+		class="fixed inset-0 z-[1010] overflow-y-auto backdrop-blur-sm"
+		style="background: oklch(0.995 0.004 55 / 0.96)"
 		role="dialog"
 		aria-modal="true"
-		aria-label="Change your address"
+		aria-label="Address re-grounding"
 	>
-		<div class="relative w-full max-w-2xl">
-			<!--
-				Close × is disabled during the witnessing phase. Retirement clears
-				credentials; leaving mid-ceremony would orphan them without new
-				issuance. Once `addressChangePhase === 'complete'` or still
-				'capture' the user may dismiss freely.
-			-->
-			<button
-				type="button"
-				onclick={handleAddressChangeClose}
-				disabled={addressChangePhase === 'witnessing'}
-				class="absolute top-4 right-4 z-10 rounded-full p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400"
-				aria-label={addressChangePhase === 'witnessing'
-					? 'Cannot close during re-grounding'
-					: 'Close address change'}
-				aria-disabled={addressChangePhase === 'witnessing'}
-				title={addressChangePhase === 'witnessing'
-					? 'Please wait — prior credentials are being retired.'
-					: 'Close'}
-			>
-				<span aria-hidden="true" class="text-xl leading-none">×</span>
-			</button>
-			<AddressChangeFlow
-				userId={user.id}
-				onClose={handleAddressChangeClose}
-				onPhaseChange={handleAddressChangePhaseChange}
-				initialRepresentatives={currentReps}
-				budget={data.reverificationBudget}
-				refreshRepresentatives={async () => {
-					await invalidateAll();
-					try {
-						const reps = await representativesPromise;
-						return Array.isArray(reps) ? (reps as unknown as ProfileRepresentative[]) : [];
-					} catch {
-						return [];
-					}
-				}}
-			/>
+		<div class="mx-auto flex min-h-full w-full max-w-4xl flex-col px-4 py-5 sm:px-6 lg:px-8">
+			<div class="flex items-center justify-between border-b border-dotted border-slate-300 pb-3">
+				<p class="font-mono text-[11px] font-semibold text-slate-500 uppercase">
+					Address re-grounding
+				</p>
+				<!--
+					Close is disabled during the witnessing phase. Retirement clears
+					credentials; leaving mid-ceremony would orphan them without new
+					issuance. Once `addressChangePhase === 'complete'` or still
+					'capture' the user may dismiss freely.
+				-->
+				<button
+					type="button"
+					onclick={handleAddressChangeClose}
+					disabled={addressChangePhase === 'witnessing'}
+					class="font-mono text-[11px] font-semibold text-slate-500 uppercase transition-colors hover:text-slate-800 disabled:cursor-not-allowed disabled:text-slate-300"
+					aria-label={addressChangePhase === 'witnessing'
+						? 'Cannot close during re-grounding'
+						: 'Close address re-grounding'}
+					aria-disabled={addressChangePhase === 'witnessing'}
+					title={addressChangePhase === 'witnessing'
+						? 'Please wait — prior credentials are being retired.'
+						: 'Close'}
+				>
+					Close
+				</button>
+			</div>
+			<div class="flex flex-1 items-start justify-center py-6 sm:items-center">
+				<AddressChangeFlow
+					userId={user.id}
+					onClose={handleAddressChangeClose}
+					onPhaseChange={handleAddressChangePhaseChange}
+					initialRepresentatives={currentReps}
+					budget={data.reverificationBudget}
+					refreshRepresentatives={async () => {
+						await invalidateAll();
+						try {
+							const reps = await representativesPromise;
+							return Array.isArray(reps) ? normalizeRepresentatives(reps) : [];
+						} catch {
+							return [];
+						}
+					}}
+				/>
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#if user && showAddressRestore}
+	<div
+		class="fixed inset-0 z-[1010] overflow-y-auto backdrop-blur-sm"
+		style="background: oklch(0.995 0.004 55 / 0.96)"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Address restore"
+	>
+		<div class="mx-auto flex min-h-full w-full max-w-xl flex-col px-4 py-5 sm:px-6 lg:px-8">
+			<div class="flex items-center justify-between border-b border-dotted border-slate-300 pb-3">
+				<p class="font-mono text-[11px] font-semibold text-slate-500 uppercase">
+					Address restore
+				</p>
+				<button
+					type="button"
+					onclick={handleAddressRestoreClose}
+					class="font-mono text-[11px] font-semibold text-slate-500 uppercase transition-colors hover:text-slate-800"
+					aria-label="Close address restore"
+					title="Close"
+				>
+					Close
+				</button>
+			</div>
+			<div class="flex flex-1 items-start justify-center py-6 sm:items-center">
+				<AddressRestoreFlow
+					userId={user.id}
+					onComplete={handleAddressRestoreClose}
+					onCancel={handleAddressRestoreClose}
+				/>
+			</div>
 		</div>
 	</div>
 {/if}
@@ -676,6 +818,35 @@
 		font-weight: 600;
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
+		color: oklch(0.55 0.02 250);
+	}
+
+	.ground-rep__chamber {
+		font-family:
+			'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+			'Liberation Mono', 'Courier New', monospace;
+		font-size: 0.625rem;
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		color: oklch(0.56 0.02 250);
+		display: block;
+		line-height: 1;
+		margin-bottom: 0.25rem;
+	}
+
+	.ground-rep__name {
+		font-size: 1.25rem;
+		line-height: 1.15;
+		font-weight: 700;
+		color: oklch(0.18 0.02 250);
+		letter-spacing: -0.01em;
+	}
+
+	.ground-rep__subline {
+		margin-top: 0.125rem;
+		font-size: 0.8125rem;
+		line-height: 1.3;
 		color: oklch(0.55 0.02 250);
 	}
 </style>

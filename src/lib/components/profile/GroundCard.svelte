@@ -12,15 +12,30 @@
 		windowMs: number;
 		emailSybilTripped: boolean;
 	}
+
+	export interface ProfileGroundState {
+		vault: {
+			status?: string;
+		} | null;
+		cell: {
+			cellId?: string;
+			h3Cell?: string;
+			source?: string;
+			expiresAt?: number;
+		} | null;
+		wrappers: Array<{
+			status?: string;
+		}>;
+	}
 </script>
 
 <script lang="ts">
 	/**
 	 * GroundCard — Your literal ground in the democracy.
 	 *
-	 * Decrypts the constituent address from IndexedDB (never touches server)
-	 * and displays it alongside the congressional district. The address is
-	 * the person's anchor — where they stand, who represents them.
+	 * Reads the local constituent address when available and combines it with
+	 * redacted server ground metadata. Verification status is separate from
+	 * whether this device can read the address for delivery.
 	 *
 	 * States: loading → has-address | no-address | expired
 	 * Modes: card (default) | embedded (no wrapper, for document layout)
@@ -35,22 +50,25 @@
 		userId,
 		trustTier = 0,
 		serverAddressVerified = false,
+		groundState = null,
 		embedded = false,
 		budget = null,
 		onVerifyAddress,
+		onRestoreAddress,
 		onChangeAddress
 	}: {
 		userId: string;
 		trustTier?: number;
 		/**
-		 * Server-side address/district attestation. Local IndexedDB address data
-		 * is a device cache; this flag is the authority for whether a user can
-		 * change their verified address when the cache is missing.
+		 * Server-side address/district attestation. The profile distinguishes
+		 * verification status from whether the address is currently readable:
+		 * readable, locked, or requiring re-entry.
 		 */
 		serverAddressVerified?: boolean;
+		groundState?: ProfileGroundState | null;
 		embedded?: boolean;
 		/**
-		 * Re-verification budget — drives the legibility of the "I moved"
+		 * Re-verification budget — drives the legibility of the re-grounding
 		 * affordance. When throttled, the affordance is disabled with a calm
 		 * reason; when tier-bypassed, it carries a small "free for verified IDs"
 		 * note. Pass `null` to suppress all budget-aware decoration.
@@ -58,8 +76,14 @@
 		budget?: ReverificationBudget | null;
 		onVerifyAddress?: () => void;
 		/**
-		 * Secondary "I moved" action, only surfaced when a verified address is
-		 * already present. Triggers the re-grounding flow.
+		 * Repair path for verified users whose browser no longer has a readable
+		 * address. This re-enters the address and persists encrypted ground
+		 * against the active credential; it is not a re-verification budget event.
+		 */
+		onRestoreAddress?: () => void;
+		/**
+		 * Secondary re-grounding action, only surfaced when a verified address
+		 * is already present. Triggers credential retirement and new issuance.
 		 */
 		onChangeAddress?: () => void;
 	} = $props();
@@ -99,9 +123,58 @@
 			: null
 	);
 
+	type ReGroundStatusTone = 'neutral' | 'caution';
+	type ReGroundStatus = { text: string; tone: ReGroundStatusTone; hint: string };
+
+	// Re-ground status annotation. Collapses five mutually-exclusive budget
+	// states into one derived so the action and its status render as a clean
+	// pair (action above, status below) instead of typographic siblings.
+	const reGroundStatus: ReGroundStatus | null = $derived.by(() => {
+		if (budget?.tierBypass) {
+			return {
+				text: 'Free for verified ID',
+				tone: 'neutral' as const,
+				hint: 'Verified IDs (Tier 3+) re-verify without throttling.'
+			};
+		}
+		if (throttled && hoursUntilAllowed !== null) {
+			return {
+				text: `Available in ~${hoursUntilAllowed}h`,
+				tone: 'caution' as const,
+				hint: 'A 24-hour cooldown begins after each address change. This protects against ground-shopping.'
+			};
+		}
+		if (periodFull) {
+			return {
+				text: '180-day limit reached',
+				tone: 'caution' as const,
+				hint: 'Limit reached for the trailing 180 days. Contact support if you have moved again.'
+			};
+		}
+		if (sybilBlocked) {
+			return {
+				text: 'Account check needed',
+				tone: 'caution' as const,
+				hint: ''
+			};
+		}
+		if (remaining !== null && budget && remaining < budget.periodCap) {
+			return {
+				text: `${remaining}/${budget.periodCap} left · 180d`,
+				tone: 'neutral' as const,
+				hint: `Up to ${budget.periodCap} re-verifications per 180 days. Government-ID verification removes the limit.`
+			};
+		}
+		return null;
+	});
+
 	function handleMoveClick() {
 		if (!canMove) return;
 		onChangeAddress?.();
+	}
+
+	function handleRestoreClick() {
+		(onRestoreAddress ?? onChangeAddress)?.();
 	}
 
 	let loading = $state(true);
@@ -145,6 +218,21 @@
 	});
 
 	const district = $derived(address?.district || congressionalDistrict);
+	const activeWrapperCount = $derived(
+		groundState?.wrappers?.filter((wrapper) => wrapper.status === 'active').length ?? 0
+	);
+	const savedDistrict = $derived(district ?? null);
+	const hasServerVault = $derived(Boolean(groundState?.vault));
+	const hasSavedGroundMetadata = $derived(Boolean(groundState?.cell || serverAddressVerified));
+	const vaultDisplayState = $derived(
+		address
+			? 'unlocked'
+			: hasServerVault && activeWrapperCount > 0
+				? 'locked'
+				: hasSavedGroundMetadata
+					? 'reentry'
+					: 'absent'
+	);
 </script>
 
 {#if loading}
@@ -197,71 +285,51 @@
 			</p>
 		</div>
 
-		{#if district}
+		{#if savedDistrict}
 			<div class="mt-2.5 flex items-center gap-2 border-l-2 border-emerald-400 pl-3">
-				<span class="text-sm font-medium text-emerald-700">{district}</span>
+				<span class="text-sm font-medium text-emerald-700">{savedDistrict}</span>
 			</div>
 		{/if}
 
-		<div class="mt-2.5 flex items-center gap-1.5 text-[11px] text-slate-400">
+		<div
+			class="mt-2.5 flex items-center gap-1.5 text-[11px] text-slate-400"
+			title="Encrypted on this device and used when official delivery requires an address."
+		>
 			<Lock class="h-3 w-3" />
-			<span>Encrypted on this device</span>
+			<span>Address saved for official delivery</span>
 		</div>
 
 		{#if onChangeAddress}
-			<div class="mt-2 flex items-baseline gap-2">
+			<div class="mt-3 border-t border-dotted border-slate-300 pt-2.5">
 				<button
 					type="button"
-					class="text-[13px] underline decoration-dotted underline-offset-2 transition-colors disabled:cursor-not-allowed disabled:no-underline"
-					class:text-slate-500={canMove}
-					class:hover:text-slate-700={canMove}
-					class:text-slate-300={!canMove}
+					class="group inline-flex items-center gap-1 text-[13px] font-medium transition-colors disabled:cursor-not-allowed
+						{canMove
+						? 'text-slate-700 hover:text-[var(--coord-route-solid)]'
+						: 'text-slate-400'}"
 					onclick={handleMoveClick}
 					disabled={!canMove}
 					data-testid="ground-i-moved"
 					aria-disabled={!canMove}
+					title="Retire this district credential and attest a new address."
 				>
-					I moved
+					<span>Re-ground address</span>
+					{#if canMove}
+						<ArrowRight
+							class="h-3.5 w-3.5 -translate-x-1 opacity-0 transition-all group-hover:translate-x-0 group-hover:opacity-100"
+						/>
+					{/if}
 				</button>
-				{#if budget?.tierBypass}
-					<span
-						class="font-mono text-[10px] text-slate-400 uppercase"
-						style="letter-spacing: 0.18em"
-						title="Verified IDs (Tier 3+) re-verify without throttling."
+				{#if reGroundStatus}
+					<p
+						class="mt-1 font-mono text-[10px] tracking-[0.1em] uppercase {reGroundStatus.tone ===
+						'caution'
+							? 'text-amber-600'
+							: 'text-slate-400'}"
+						title={reGroundStatus.hint}
 					>
-						Free for verified ID
-					</span>
-				{:else if throttled && hoursUntilAllowed !== null}
-					<span
-						class="font-mono text-[10px] text-amber-600 uppercase"
-						style="letter-spacing: 0.18em"
-						title="A 24-hour cooldown begins after each address change. This protects against ground-shopping."
-					>
-						Available in ~{hoursUntilAllowed}h
-					</span>
-				{:else if periodFull}
-					<span
-						class="font-mono text-[10px] text-amber-600 uppercase"
-						style="letter-spacing: 0.18em"
-						title="Limit reached for the trailing 180 days. Contact support if you have moved again."
-					>
-						180-day limit reached
-					</span>
-				{:else if sybilBlocked}
-					<span
-						class="font-mono text-[10px] text-amber-600 uppercase"
-						style="letter-spacing: 0.18em"
-					>
-						Account check needed
-					</span>
-				{:else if remaining !== null && budget && remaining < budget.periodCap}
-					<span
-						class="font-mono text-[10px] text-slate-400 uppercase"
-						style="letter-spacing: 0.18em"
-						title="Up to {budget.periodCap} re-verifications per 180 days. Verifying with a government ID removes the limit."
-					>
-						{remaining}/{budget.periodCap} left · 180d
-					</span>
+						{reGroundStatus.text}
+					</p>
 				{/if}
 			</div>
 		{/if}
@@ -279,71 +347,45 @@
 				</p>
 			</div>
 
-			{#if district}
+			{#if savedDistrict}
 				<div class="mt-3 flex items-center gap-2">
 					<MapPin class="h-3.5 w-3.5 text-emerald-500" />
-					<span class="text-sm font-medium text-emerald-700">{district}</span>
+					<span class="text-sm font-medium text-emerald-700">{savedDistrict}</span>
 				</div>
 			{/if}
 
-			<div class="mt-3 flex items-center gap-1.5 text-[11px] text-slate-400">
+			<div
+				class="mt-3 flex items-center gap-1.5 text-[11px] text-slate-400"
+				title="Encrypted on this device and used when official delivery requires an address."
+			>
 				<Lock class="h-3 w-3" />
-				<span>Encrypted on this device</span>
+				<span>Address saved for official delivery</span>
 			</div>
 
 			{#if onChangeAddress}
-				<div class="mt-2.5 flex items-baseline gap-2">
+				<div class="reground mt-3 border-t border-dotted border-slate-300 pt-2.5">
 					<button
 						type="button"
-						class="text-[13px] underline decoration-dotted underline-offset-2 transition-colors disabled:cursor-not-allowed disabled:no-underline"
-						class:text-slate-500={canMove}
-						class:hover:text-slate-700={canMove}
-						class:text-slate-300={!canMove}
+						class="reground__action group inline-flex items-center gap-1 text-[13px] font-medium transition-colors disabled:cursor-not-allowed"
+						class:reground__action--idle={canMove}
+						class:reground__action--blocked={!canMove}
 						onclick={handleMoveClick}
 						disabled={!canMove}
 						data-testid="ground-i-moved"
 						aria-disabled={!canMove}
+						title="Retire this district credential and attest a new address."
 					>
-						I moved
+						<span>Re-ground address</span>
+						<ArrowRight class="reground__arrow h-3.5 w-3.5 transition-all" />
 					</button>
-					{#if budget?.tierBypass}
-						<span
-							class="font-mono text-[10px] text-slate-400 uppercase"
-							style="letter-spacing: 0.18em"
-							title="Verified IDs (Tier 3+) re-verify without throttling."
+					{#if reGroundStatus}
+						<p
+							class="reground__status mt-1"
+							class:reground__status--caution={reGroundStatus.tone === 'caution'}
+							title={reGroundStatus.hint}
 						>
-							Free for verified ID
-						</span>
-					{:else if throttled && hoursUntilAllowed !== null}
-						<span
-							class="font-mono text-[10px] text-amber-600 uppercase"
-							style="letter-spacing: 0.18em"
-							title="A 24-hour cooldown begins after each address change."
-						>
-							Available in ~{hoursUntilAllowed}h
-						</span>
-					{:else if periodFull}
-						<span
-							class="font-mono text-[10px] text-amber-600 uppercase"
-							style="letter-spacing: 0.18em"
-						>
-							180-day limit reached
-						</span>
-					{:else if sybilBlocked}
-						<span
-							class="font-mono text-[10px] text-amber-600 uppercase"
-							style="letter-spacing: 0.18em"
-						>
-							Account check needed
-						</span>
-					{:else if remaining !== null && budget && remaining < budget.periodCap}
-						<span
-							class="font-mono text-[10px] text-slate-400 uppercase"
-							style="letter-spacing: 0.18em"
-							title="Up to {budget.periodCap} re-verifications per 180 days. Government-ID verification removes the limit."
-						>
-							{remaining}/{budget.periodCap} left · 180d
-						</span>
+							{reGroundStatus.text}
+						</p>
 					{/if}
 				</div>
 			{/if}
@@ -373,22 +415,56 @@
 				>
 			{/if}
 		</p>
-	{:else if serverAddressVerified}
-		<p class="text-sm text-slate-500">
-			Address verified. This browser does not hold the encrypted address cache.
-			{#if onChangeAddress}
-				<button
-					class="ml-1 font-medium transition-colors disabled:cursor-not-allowed"
-					class:text-slate-600={canMove}
-					class:hover:text-slate-800={canMove}
-					class:text-slate-300={!canMove}
-					onclick={handleMoveClick}
-					disabled={!canMove}
-					data-testid="ground-i-moved"
-					aria-disabled={!canMove}>Change address &rarr;</button
-				>
+	{:else if vaultDisplayState === 'locked'}
+		<div class="space-y-2">
+			<p class="text-sm text-slate-600">
+				<ShieldAlert class="mr-1.5 inline h-3.5 w-3.5 text-amber-500" />
+				Saved address locked.
+			</p>
+			{#if savedDistrict}
+				<p class="text-xs text-slate-500">
+					{savedDistrict}
+				</p>
 			{/if}
-		</p>
+			{#if onRestoreAddress || onChangeAddress}
+				<div class="border-t border-dotted border-slate-300 pt-2">
+					<button
+						type="button"
+						class="font-mono text-[12px] font-medium text-slate-600 uppercase underline decoration-dotted underline-offset-4 transition-colors hover:text-slate-800"
+						onclick={handleRestoreClick}
+						data-testid="ground-i-moved"
+						title="Re-enter the address and bind a fresh encrypted ground record."
+					>
+						Re-enter address &rarr;
+					</button>
+				</div>
+			{/if}
+		</div>
+	{:else if vaultDisplayState === 'reentry'}
+		<div class="space-y-2">
+			<p class="text-sm text-slate-600">
+				<ShieldAlert class="mr-1.5 inline h-3.5 w-3.5 text-amber-500" />
+				Address needs re-entry.
+			</p>
+			{#if savedDistrict}
+				<p class="text-xs text-slate-500">
+					{savedDistrict}
+				</p>
+			{/if}
+			{#if onRestoreAddress || onChangeAddress}
+				<div class="border-t border-dotted border-slate-300 pt-2">
+					<button
+						type="button"
+						class="font-mono text-[12px] font-medium text-slate-600 uppercase underline decoration-dotted underline-offset-4 transition-colors hover:text-slate-800"
+						onclick={handleRestoreClick}
+						data-testid="ground-i-moved"
+						title="Re-enter the address and bind a fresh encrypted ground record."
+					>
+						Re-enter address &rarr;
+					</button>
+				</div>
+			{/if}
+		</div>
 	{:else}
 		<p class="text-sm text-slate-500">
 			Verify your address to be counted as a constituent.
@@ -453,60 +529,65 @@
 						/>
 					</button>
 				{/if}
-			{:else if serverAddressVerified}
+			{:else if vaultDisplayState === 'locked'}
 				<div class="flex items-start gap-3">
-					<MapPin class="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-500" />
+					<ShieldAlert class="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
 					<div>
-						<p class="text-sm font-medium text-slate-700">Address verified</p>
+						<p class="text-sm font-medium text-slate-700">Saved address locked</p>
 						<p class="mt-0.5 text-[13px] text-slate-500">
-							This browser does not hold the encrypted address cache. You can still change your
-							verified address; the prior address text just will not be shown.
+							Your district proof is still active. This device cannot read the saved address right
+							now, so re-enter it before delivery.
 						</p>
+						{#if savedDistrict}
+							<p class="mt-1 text-[11px] text-slate-400">
+								{savedDistrict}
+							</p>
+						{/if}
 					</div>
 				</div>
 
-				{#if onChangeAddress}
+				{#if onRestoreAddress || onChangeAddress}
 					<button
-						class="group mt-3 flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:border-emerald-300 hover:bg-emerald-50/50 hover:text-emerald-700 disabled:cursor-not-allowed disabled:text-slate-400 disabled:opacity-50 disabled:hover:border-slate-200 disabled:hover:bg-transparent disabled:hover:text-slate-400"
-						onclick={handleMoveClick}
-						disabled={!canMove}
+						class="group mt-3 flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:border-emerald-300 hover:bg-emerald-50/50 hover:text-emerald-700"
+						onclick={handleRestoreClick}
 						data-testid="ground-i-moved"
-						aria-disabled={!canMove}
+						title="Re-enter the address and bind a fresh encrypted ground record."
 					>
-						<span>Change verified address</span>
+						<span>Re-enter address</span>
 						<ArrowRight
 							class="h-3.5 w-3.5 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-emerald-500"
 						/>
 					</button>
-					{#if budget?.tierBypass}
-						<p
-							class="mt-2 font-mono text-[10px] text-slate-400 uppercase"
-							style="letter-spacing: 0.18em"
-						>
-							Free for verified ID
+				{/if}
+			{:else if vaultDisplayState === 'reentry'}
+				<div class="flex items-start gap-3">
+					<ShieldAlert class="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
+					<div>
+						<p class="text-sm font-medium text-slate-700">Address needs re-entry</p>
+						<p class="mt-0.5 text-[13px] text-slate-500">
+							Your district proof is still active, but this device does not have the address needed
+							for delivery.
 						</p>
-					{:else if throttled && hoursUntilAllowed !== null}
-						<p
-							class="mt-2 font-mono text-[10px] text-amber-600 uppercase"
-							style="letter-spacing: 0.18em"
-						>
-							Available in ~{hoursUntilAllowed}h
-						</p>
-					{:else if periodFull}
-						<p
-							class="mt-2 font-mono text-[10px] text-amber-600 uppercase"
-							style="letter-spacing: 0.18em"
-						>
-							180-day limit reached
-						</p>
-					{:else if sybilBlocked}
-						<p
-							class="mt-2 font-mono text-[10px] text-amber-600 uppercase"
-							style="letter-spacing: 0.18em"
-						>
-							Account check needed
-						</p>
-					{/if}
+						{#if savedDistrict}
+							<p class="mt-1 text-[11px] text-slate-400">
+								{savedDistrict}
+							</p>
+						{/if}
+					</div>
+				</div>
+
+				{#if onRestoreAddress || onChangeAddress}
+					<button
+						class="group mt-3 flex w-full items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:border-emerald-300 hover:bg-emerald-50/50 hover:text-emerald-700"
+						onclick={handleRestoreClick}
+						data-testid="ground-i-moved"
+						title="Re-enter the address and bind a fresh encrypted ground record."
+					>
+						<span>Re-enter address</span>
+						<ArrowRight
+							class="h-3.5 w-3.5 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-emerald-500"
+						/>
+					</button>
 				{/if}
 			{:else}
 				<div class="flex items-start gap-3">
@@ -514,8 +595,8 @@
 					<div>
 						<p class="text-sm font-medium text-slate-700">No address verified</p>
 						<p class="mt-0.5 text-[13px] text-slate-500">
-							Verify your address to be counted as a constituent. Your address stays encrypted on
-							your device — it never reaches our servers.
+							Verify your address to be counted as a constituent. We keep the saved address
+							encrypted and only disclose it when a government delivery API requires it.
 						</p>
 					</div>
 				</div>
