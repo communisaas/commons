@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { serverMutation } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import { isAnyMdlProtocolEnabled, isMdlProtocolEnabled } from '$lib/config/features';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
@@ -156,7 +157,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		const now = Date.now();
 		let bindingResult;
 		try {
-			bindingResult = await serverMutation(internal.users.finalizeMdlVerification, {
+			bindingResult = await serverInternalMutation(internal.users.finalizeMdlVerification, {
 				userId: session.userId as any,
 				identityCommitment,
 				credentialHash: result.credentialHash,

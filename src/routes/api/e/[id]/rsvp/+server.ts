@@ -6,7 +6,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverQuery, serverAction } from 'convex-sveltekit';
+import { serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
@@ -48,7 +48,8 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	}
 
 	// Engagement tier: district-verified = 2, postal = 1, none = 0
-	const engagementTier = districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? 2 : postalCode ? 1 : 0;
+	const engagementTier =
+		districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? 2 : postalCode ? 1 : 0;
 
 	try {
 		// Convex action handles: event validation, capacity claiming, PII encryption, upsert dedup, rsvpCount
@@ -56,15 +57,16 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 			eventId: params.id as any,
 			email: email.toLowerCase(),
 			name: name.trim(),
-			guestCount: typeof guestCount === 'number' && guestCount >= 0 ? guestCount : 0,
+			guestCount: typeof guestCount === 'number' && guestCount >= 0 ? guestCount : 1,
 			districtHash: dHash,
 			engagementTier
 		});
 
 		return json({
 			success: true,
-			rsvpCount: result.rsvpCount ?? 0,
-			status: result.status ?? 'GOING'
+			id: result.id,
+			updated: result.updated,
+			status: 'GOING'
 		});
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);

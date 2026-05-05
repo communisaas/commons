@@ -2,7 +2,9 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation } from '$lib/server/convex-internal';
 import { api, internal } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 /**
  * GET /api/delegation/[id]
@@ -16,7 +18,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const grant = await serverQuery(internal.v1api.getDelegationGrant, { grantId: params.id });
+	const grant = await serverInternalQuery(internal.v1api.getDelegationGrant, { grantId: params.id });
 	if (!grant) {
 		throw error(404, 'Delegation grant not found');
 	}
@@ -75,7 +77,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'No valid fields to update');
 	}
 
-	const result = await serverMutation(internal.v1api.updateDelegationGrant, {
+	const result = await serverInternalMutation(internal.v1api.updateDelegationGrant, {
 		grantId: params.id,
 		userId: session.userId,
 		data
@@ -101,7 +103,7 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 	}
 
 	const result = await serverMutation(api.delegation.revokeGrant, {
-		grantId: params.id
+		grantId: params.id as Id<'delegationGrants'>
 	});
 
 	return json({ message: 'Delegation grant revoked' });

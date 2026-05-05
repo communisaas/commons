@@ -6,6 +6,10 @@ import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
 
+function verifyTransactionAsync(_txHash: string, _context: Record<string, unknown>): void {
+	// Transaction verification worker is not wired in this API boundary yet.
+}
+
 /** Returns true for a valid Ethereum address (0x-prefixed, 42 hex chars). */
 function isValidEthAddress(addr: unknown): addr is string {
 	return typeof addr === 'string' && /^0x[0-9a-fA-F]{40}$/.test(addr);
@@ -131,7 +135,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	// Fire-and-forget: verify client-submitted tx
 	if (clientTxHash && txHash) {
-		verifyTransactionAsync(txHash, {
+		void verifyTransactionAsync(txHash, {
 			debateId,
 			type: 'cosign',
 			userId: session.userId

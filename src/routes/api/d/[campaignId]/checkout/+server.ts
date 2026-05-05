@@ -5,20 +5,14 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverQuery, serverMutation, serverAction } from 'convex-sveltekit';
+import { serverQuery, serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { getStripe } from '$lib/server/billing/stripe';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
-import crypto from 'node:crypto';
 import type { RequestHandler } from './$types';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_INTERVALS = ['month', 'year', 'week'];
-
-function hashDistrict(value: string): string {
-	return crypto.createHash('sha256').update(value.toLowerCase().trim()).digest('hex');
-}
 
 export const POST: RequestHandler = async ({ params, request, url, getClientAddress }) => {
 	if (!FEATURES.FUNDRAISING) throw error(404, 'Not found');
@@ -54,72 +48,32 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 	}
 
 	// Fetch campaign via Convex
-	const campaign = await serverQuery(api.campaigns.getPublicAny, {
+	const campaign = await serverQuery(api.campaigns.getPublic, {
 		campaignId: params.campaignId as any
 	});
 
 	if (!campaign) throw error(404, 'Campaign not found');
-	if (campaign.type !== 'FUNDRAISER') throw error(400, 'Campaign is not a fundraiser');
 	if (campaign.status !== 'ACTIVE') throw error(400, 'Campaign is not accepting donations');
 
-	// Compute district hash + engagement tier
-	let dHash: string | null = null;
-	if (districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district') {
-		dHash = hashDistrict(districtCode);
-	} else if (postalCode) {
-		dHash = hashDistrict(postalCode);
-	}
+	const districtCodeArg =
+		districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? String(districtCode) : undefined;
+	const postalCodeArg = postalCode ? String(postalCode) : undefined;
+	const successUrl = `${url.origin}/d/${params.campaignId}?success=true&session_id={CHECKOUT_SESSION_ID}`;
+	const cancelUrl = `${url.origin}/d/${params.campaignId}?canceled=true`;
 
-	const engagementTier = districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? 2 : postalCode ? 1 : 0;
-
-	// Process donation through Convex action (handles supporter find-or-create, PII encryption, donation record)
+	// Convex owns PII encryption, donation record creation, Stripe checkout creation, and session persistence.
 	const donationResult = await serverAction(api.donations.processCheckout, {
 		campaignId: params.campaignId as any,
 		email: email.toLowerCase(),
 		name: name.trim(),
 		amountCents,
-		currency: campaign.donationCurrency || 'usd',
 		recurring: Boolean(recurring),
-		recurringInterval: recurring ? (recurringInterval || 'month') : null,
-		districtHash: dHash,
-		engagementTier,
-		postalCode: postalCode || null
+		recurringInterval: recurring ? recurringInterval || 'month' : undefined,
+		postalCode: postalCodeArg,
+		districtCode: districtCodeArg,
+		successUrl,
+		cancelUrl
 	});
 
-	// Build Stripe Checkout Session
-	const stripe = getStripe();
-	const currency = campaign.donationCurrency || 'usd';
-	const mode = recurring ? 'subscription' : 'payment';
-
-	const priceData: Record<string, unknown> = {
-		currency,
-		product_data: { name: campaign.title },
-		unit_amount: amountCents
-	};
-
-	if (recurring) {
-		priceData.recurring = { interval: recurringInterval || 'month' };
-	}
-
-	const session = await stripe.checkout.sessions.create({
-		mode: mode as 'payment' | 'subscription',
-		line_items: [{ price_data: priceData as Parameters<typeof stripe.checkout.sessions.create>[0]['line_items'][0]['price_data'], quantity: 1 }],
-		metadata: {
-			type: 'donation',
-			donationId: donationResult.donationId,
-			orgId: campaign.orgId || '',
-			campaignId: params.campaignId
-		},
-		success_url: `${url.origin}/d/${params.campaignId}?success=true&donation=${donationResult.donationId}`,
-		cancel_url: `${url.origin}/d/${params.campaignId}?canceled=true`,
-		customer_email: email.toLowerCase()
-	});
-
-	// Update donation with session ID via Convex
-	await serverMutation(api.donations.setStripeSessionId, {
-		donationId: donationResult.donationId as any,
-		stripeSessionId: session.id!
-	});
-
-	return json({ url: session.url, donationId: donationResult.donationId });
+	return json({ url: donationResult.url, donationId: donationResult.donationId });
 };

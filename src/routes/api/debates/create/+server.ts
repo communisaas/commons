@@ -1,7 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { serverQuery } from 'convex-sveltekit';
+import { api, internal } from '$lib/convex';
+import { serverInternalMutation } from '$lib/server/convex-internal';
 import { solidityPackedKeccak256 } from 'ethers';
 import { proposeDebate, deriveDomain } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
@@ -101,31 +102,28 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}
 
 	const durationMs = durationSeconds * 1000;
-	const deadline = new Date(Date.now() + durationMs);
+	const deadlineMs = Date.now() + durationMs;
 
 	// Create debate record via Convex
-	const debate = await serverMutation(api.debates.insertDebate, {
-		data: {
-			templateId: templateId,
-			debateIdOnchain: debateIdOnchain!,
-			actionDomain: actionDomain!,
-			propositionHash: propositionHash,
-			propositionText: propositionText,
-			deadline,
-			jurisdictionSize: jurisdictionHint,
-			status: 'active',
-			proposerAddress: '0x0000000000000000000000000000000000000000',
-			proposerBond: bond,
-			txHash: txHash ?? null
-		}
+	const debateId = await serverInternalMutation(internal.debates.insertDebate, {
+		templateId: templateId as any,
+		debateIdOnchain: debateIdOnchain!,
+		actionDomain: actionDomain!,
+		propositionHash,
+		propositionText,
+		deadline: deadlineMs,
+		jurisdictionSize: jurisdictionHint,
+		proposerAddress: '0x0000000000000000000000000000000000000000',
+		proposerBond: Number(bond),
+		txHash: txHash ?? undefined
 	});
 
 	return json({
-		debateId: debate.id,
-		debateIdOnchain: debate.debateIdOnchain,
-		actionDomain: debate.actionDomain,
-		propositionHash: debate.propositionHash,
-		deadline: debate.deadline.toISOString(),
+		debateId,
+		debateIdOnchain,
+		actionDomain,
+		propositionHash,
+		deadline: new Date(deadlineMs).toISOString(),
 		txHash: txHash ?? null
 	});
 };

@@ -7,6 +7,7 @@ import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
@@ -17,7 +18,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	const { title, description, eventType, startAt, endAt, timezone, venue, address, city, state, postalCode, latitude, longitude, virtualUrl, capacity, waitlistEnabled, requireVerification, campaignId } = body;
 
 	const eventId = await serverMutation(api.events.create, {
-		slug: params.slug,
+		orgSlug: params.slug,
 		title,
 		description: description?.trim() || undefined,
 		eventType: eventType || 'IN_PERSON',
@@ -35,7 +36,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		capacity: typeof capacity === 'number' && capacity > 0 ? capacity : undefined,
 		waitlistEnabled: Boolean(waitlistEnabled),
 		requireVerification: Boolean(requireVerification),
-		campaignId: campaignId || undefined
+		campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined
 	});
 	return json({ id: eventId }, { status: 201 });
 };
@@ -44,9 +45,12 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const result = await serverQuery(api.events.list, { slug: params.slug });
+	const result = await serverQuery(api.events.list, {
+		orgSlug: params.slug,
+		paginationOpts: { numItems: 50, cursor: null }
+	});
 	return json({
-		data: result,
-		meta: { cursor: null, hasMore: false }
+		data: result.page,
+		meta: { cursor: result.continueCursor, hasMore: !result.isDone }
 	});
 };

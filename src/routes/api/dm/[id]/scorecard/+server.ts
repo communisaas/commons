@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -12,7 +13,7 @@ import type { RequestHandler } from './$types';
 export const GET: RequestHandler = async ({ params }) => {
 	const { id } = params;
 
-	const result = await serverQuery(internal.v1api.getDmScorecard, { dmId: id });
+	const result = await serverInternalQuery(internal.v1api.getDmScorecard, { dmId: id });
 	if (!result) {
 		throw error(404, 'Decision-maker not found');
 	}

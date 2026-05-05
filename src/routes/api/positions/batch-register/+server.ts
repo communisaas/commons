@@ -12,8 +12,9 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');
@@ -51,15 +52,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		// Verify the registration exists and belongs to the caller
-		const user = await serverQuery(api.users.getById, { id: session.userId as any });
-		if (!user?.identity_commitment) {
+		const identityCommitment = locals.user?.identity_commitment;
+		if (!identityCommitment) {
 			return json({ error: 'Identity verification required' }, { status: 403 });
 		}
 
 		// Create delivery records (mutation verifies ownership via identityCommitment)
 		const result = await serverMutation(api.positions.batchRegisterDeliveries, {
-			registrationId: registrationId as any,
-			identityCommitment: user.identity_commitment,
+			registrationId: registrationId as Id<'positionRegistrations'>,
+			identityCommitment,
 			recipients: recipients.map((r: { name: string; email?: string; deliveryMethod: string }) => ({
 				name: r.name,
 				email: r.email,

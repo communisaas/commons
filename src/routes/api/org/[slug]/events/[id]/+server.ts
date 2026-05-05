@@ -7,6 +7,7 @@ import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
@@ -16,8 +17,8 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	const body = await request.json();
 
 	await serverMutation(api.events.update, {
-		eventId: params.id,
-		slug: params.slug,
+		eventId: params.id as Id<'events'>,
+		orgSlug: params.slug,
 		...body,
 		startAt: body.startAt ? new Date(body.startAt).getTime() : undefined,
 		endAt: body.endAt !== undefined ? (body.endAt ? new Date(body.endAt).getTime() : null) : undefined
@@ -30,8 +31,8 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	await serverMutation(api.events.update, {
-		eventId: params.id,
-		slug: params.slug,
+		eventId: params.id as Id<'events'>,
+		orgSlug: params.slug,
 		status: 'CANCELLED'
 	});
 	return json({ success: true });

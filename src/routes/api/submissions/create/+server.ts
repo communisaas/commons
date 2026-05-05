@@ -10,6 +10,7 @@ import {
 } from '$lib/core/identity/credential-policy';
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
 import { buildActionDomain } from '$lib/core/zkp/action-domain-builder';
+import { FEATURES } from '$lib/config/features';
 
 /**
  * Server-held session constant. The client's submitted sessionId must match
@@ -32,6 +33,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const session = locals.session;
 		if (!session?.userId) {
 			throw error(401, 'Authentication required');
+		}
+
+		if (!FEATURES.CONGRESSIONAL) {
+			return json(
+				{
+					success: false,
+					error: 'congressional_launch_gated',
+					code: 'CONGRESSIONAL_NOT_LAUNCHED',
+					message: 'Congressional delivery is not publicly launched.'
+				},
+				{ status: 403 }
+			);
 		}
 
 		// ISSUE-005: Enforce action-based TTL for constituent messages
@@ -117,10 +130,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Extract publicInputsArray from payload.
 		// ProofGenerator sends publicInputs as an object with named fields + publicInputsArray.
 		// We validate the raw array (31 BN254 field elements).
-		const rawInputsArray: unknown[] | undefined =
-			Array.isArray(publicInputs) ? publicInputs :
-			(publicInputs && typeof publicInputs === 'object' && 'publicInputsArray' in publicInputs)
-				? (publicInputs as Record<string, unknown>).publicInputsArray as unknown[]
+		const rawInputsArray: unknown[] | undefined = Array.isArray(publicInputs)
+			? publicInputs
+			: publicInputs && typeof publicInputs === 'object' && 'publicInputsArray' in publicInputs
+				? ((publicInputs as Record<string, unknown>).publicInputsArray as unknown[])
 				: undefined;
 
 		// Accept V1 (31 inputs) or V2 (33 inputs, F1 closure — Stage 5). V2 adds
@@ -170,7 +183,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// canonical array position [27]. Without this, a client could ship
 		// different values in the two places and the TEE resolver's domain-binding
 		// check becomes meaningless.
-		const namedActionDomain = (publicInputs as Record<string, unknown> | null | undefined)?.actionDomain;
+		const namedActionDomain = (publicInputs as Record<string, unknown> | null | undefined)
+			?.actionDomain;
 		if (typeof namedActionDomain !== 'string') {
 			throw error(400, 'publicInputs.actionDomain missing or not a string');
 		}
@@ -178,51 +192,49 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			if (BigInt(namedActionDomain) !== BigInt(rawInputsArray[27] as string | number | bigint)) {
 				throw error(400, 'publicInputs.actionDomain does not match publicInputs[27]');
 			}
-			} catch (e) {
-				if (e && typeof e === 'object' && 'status' in e) throw e;
-				throw error(400, 'publicInputs.actionDomain is not a valid field element');
-			}
+		} catch (e) {
+			if (e && typeof e === 'object' && 'status' in e) throw e;
+			throw error(400, 'publicInputs.actionDomain is not a valid field element');
+		}
 
-			const namedAuthorityLevel = (publicInputs as Record<string, unknown> | null | undefined)
-				?.authorityLevel;
-			if (
-				typeof namedAuthorityLevel !== 'string' &&
-				typeof namedAuthorityLevel !== 'number' &&
-				typeof namedAuthorityLevel !== 'bigint'
-			) {
-				throw error(400, 'publicInputs.authorityLevel missing or not a field element');
+		const namedAuthorityLevel = (publicInputs as Record<string, unknown> | null | undefined)
+			?.authorityLevel;
+		if (
+			typeof namedAuthorityLevel !== 'string' &&
+			typeof namedAuthorityLevel !== 'number' &&
+			typeof namedAuthorityLevel !== 'bigint'
+		) {
+			throw error(400, 'publicInputs.authorityLevel missing or not a field element');
+		}
+		let canonicalAuthorityLevel: bigint;
+		try {
+			canonicalAuthorityLevel = BigInt(namedAuthorityLevel);
+			if (canonicalAuthorityLevel !== BigInt(rawInputsArray[28] as string | number | bigint)) {
+				throw error(400, 'publicInputs.authorityLevel does not match publicInputs[28]');
 			}
-			let canonicalAuthorityLevel: bigint;
-			try {
-				canonicalAuthorityLevel = BigInt(namedAuthorityLevel);
-				if (
-					canonicalAuthorityLevel !== BigInt(rawInputsArray[28] as string | number | bigint)
-				) {
-					throw error(400, 'publicInputs.authorityLevel does not match publicInputs[28]');
-				}
-			} catch (e) {
-				if (e && typeof e === 'object' && 'status' in e) throw e;
-				throw error(400, 'publicInputs.authorityLevel is not a valid field element');
-			}
+		} catch (e) {
+			if (e && typeof e === 'object' && 'status' in e) throw e;
+			throw error(400, 'publicInputs.authorityLevel is not a valid field element');
+		}
 
-			if (
-				canonicalAuthorityLevel < BigInt(REQUIRED_CONGRESSIONAL_PROOF_TIER) ||
-				(locals.user.trust_tier ?? 0) < REQUIRED_CONGRESSIONAL_PROOF_TIER
-			) {
-				return json(
-					{
-						success: false,
-						error: 'insufficient_authority',
-						code: 'INSUFFICIENT_AUTHORITY',
-						message:
-							'Government-ID verification is required before submitting verified messages to Congress.',
-						requiresReverification: true
-					},
-					{ status: 403 }
-				);
-			}
+		if (
+			canonicalAuthorityLevel < BigInt(REQUIRED_CONGRESSIONAL_PROOF_TIER) ||
+			(locals.user.trust_tier ?? 0) < REQUIRED_CONGRESSIONAL_PROOF_TIER
+		) {
+			return json(
+				{
+					success: false,
+					error: 'insufficient_authority',
+					code: 'INSUFFICIENT_AUTHORITY',
+					message:
+						'Government-ID verification is required before submitting verified messages to Congress.',
+					requiresReverification: true
+				},
+				{ status: 403 }
+			);
+		}
 
-			// FU-3.2 — V2 freshness check. When the proof is V2 (33 inputs), the
+		// FU-3.2 — V2 freshness check. When the proof is V2 (33 inputs), the
 		// public input [32] is `revocation_registry_root`: the SMT root the
 		// circuit's non-membership proof was built against. The on-chain
 		// `RevocationRegistry.isRootAcceptable` view tolerates archived roots
@@ -297,10 +309,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// TODO(stage-2.5-codegen): the `as unknown as never` cast is a temporary
 		// workaround until `npx convex dev` regenerates api.d.ts with the new
 		// getActiveCredentialDistrictCommitment export. Remove after codegen.
-		const credData = await serverQuery(
-			api.users.getActiveCredentialDistrictCommitment,
-			{ userId: locals.user.id as unknown as never }
-		);
+		const credData = await serverQuery(api.users.getActiveCredentialDistrictCommitment, {
+			userId: locals.user.id as unknown as never
+		});
 		if (!credData?.districtCommitment) {
 			return json(
 				{

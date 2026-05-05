@@ -63,7 +63,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			resolved: true,
 			address: {
 				matched: result.geocode.matched_address,
-				...parseMatchedAddress(result.geocode.matched_address)
+				...parseMatchedAddress(result.geocode.matched_address, {
+					street,
+					city,
+					state,
+					zip,
+					country: country ?? result.geocode.country
+				})
 			},
 			coordinates: {
 				lat: result.geocode.lat,
@@ -113,20 +119,159 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 };
 
 /**
- * Parse matched address into components.
- * Works with Nominatim display_name format and comma-separated address strings.
+ * Parse matched address into components without trusting comma position.
+ *
+ * Shadow Atlas can return either a compact canonical address:
+ *   "12 MINT PLZ, SAN FRANCISCO, CA, 94103"
+ * or a Nominatim display_name:
+ *   "12, Mint Plaza, Tenderloin, San Francisco, California, 94103, United States"
+ *
+ * The latter includes neighborhoods between street and city, so positional
+ * parsing corrupts fields. Use the submitted structured address as the fallback
+ * and only lift geocoder components when they are identifiable.
  */
-function parseMatchedAddress(matched: string): {
+function parseMatchedAddress(
+	matched: string,
+	fallback: { street: string; city: string; state: string; zip: string; country?: 'US' | 'CA' }
+): {
 	street: string;
 	city: string;
 	state: string;
 	zip: string;
 } {
-	const parts = matched.split(', ');
+	const parts = matched
+		.split(',')
+		.map((part) => part.trim())
+		.filter(Boolean);
+	const fallbackAddress = {
+		street: fallback.street.trim(),
+		city: fallback.city.trim(),
+		state: fallback.state.trim().toUpperCase(),
+		zip: fallback.zip.trim().toUpperCase()
+	};
+
+	if (parts.length === 4) {
+		const state = normalizeRegionCode(parts[2], fallback.country);
+		if (state && isPostalCode(parts[3])) {
+			return {
+				street: parts[0],
+				city: parts[1],
+				state,
+				zip: parts[3].trim().toUpperCase()
+			};
+		}
+	}
+
+	const zip = parts.find(isPostalCode)?.toUpperCase() ?? fallbackAddress.zip;
+	const state =
+		parts.map((part) => normalizeRegionCode(part, fallback.country)).find(Boolean) ??
+		fallbackAddress.state;
+	const cityIndex = parts.findIndex((part) => sameToken(part, fallbackAddress.city));
+	const city = cityIndex >= 0 ? parts[cityIndex] : fallbackAddress.city;
+
 	return {
-		street: parts[0] || '',
-		city: parts[1] || '',
-		state: parts[2] || '',
-		zip: parts[3] || ''
+		street: parseStreetFromParts(parts, cityIndex, fallbackAddress.street),
+		city,
+		state,
+		zip
 	};
 }
+
+function parseStreetFromParts(parts: string[], cityIndex: number, fallbackStreet: string): string {
+	const streetParts = cityIndex > 0 ? parts.slice(0, cityIndex) : parts;
+	const first = streetParts[0] ?? '';
+	const second = streetParts[1] ?? '';
+	if (/^\d+[A-Za-z]?$/.test(first) && second) return `${first} ${second}`;
+	if (/\d/.test(first)) return first;
+	return fallbackStreet;
+}
+
+function isPostalCode(value: string): boolean {
+	return /^\d{5}(-\d{4})?$|^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$/.test(value.trim());
+}
+
+function sameToken(left: string, right: string): boolean {
+	return normalizeToken(left) === normalizeToken(right);
+}
+
+function normalizeToken(value: string): string {
+	return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function normalizeRegionCode(value: string, country: 'US' | 'CA' = 'US'): string | null {
+	const trimmed = value.trim();
+	if (/^[A-Za-z]{2}$/.test(trimmed)) return trimmed.toUpperCase();
+	const key = normalizeToken(trimmed);
+	const map = country === 'CA' ? CANADIAN_PROVINCE_CODES : US_STATE_CODES;
+	return map[key] ?? null;
+}
+
+const US_STATE_CODES: Record<string, string> = {
+	alabama: 'AL',
+	alaska: 'AK',
+	arizona: 'AZ',
+	arkansas: 'AR',
+	california: 'CA',
+	colorado: 'CO',
+	connecticut: 'CT',
+	delaware: 'DE',
+	'district of columbia': 'DC',
+	florida: 'FL',
+	georgia: 'GA',
+	hawaii: 'HI',
+	idaho: 'ID',
+	illinois: 'IL',
+	indiana: 'IN',
+	iowa: 'IA',
+	kansas: 'KS',
+	kentucky: 'KY',
+	louisiana: 'LA',
+	maine: 'ME',
+	maryland: 'MD',
+	massachusetts: 'MA',
+	michigan: 'MI',
+	minnesota: 'MN',
+	mississippi: 'MS',
+	missouri: 'MO',
+	montana: 'MT',
+	nebraska: 'NE',
+	nevada: 'NV',
+	'new hampshire': 'NH',
+	'new jersey': 'NJ',
+	'new mexico': 'NM',
+	'new york': 'NY',
+	'north carolina': 'NC',
+	'north dakota': 'ND',
+	ohio: 'OH',
+	oklahoma: 'OK',
+	oregon: 'OR',
+	pennsylvania: 'PA',
+	'rhode island': 'RI',
+	'south carolina': 'SC',
+	'south dakota': 'SD',
+	tennessee: 'TN',
+	texas: 'TX',
+	utah: 'UT',
+	vermont: 'VT',
+	virginia: 'VA',
+	washington: 'WA',
+	'west virginia': 'WV',
+	wisconsin: 'WI',
+	wyoming: 'WY'
+};
+
+const CANADIAN_PROVINCE_CODES: Record<string, string> = {
+	alberta: 'AB',
+	'british columbia': 'BC',
+	manitoba: 'MB',
+	'new brunswick': 'NB',
+	'newfoundland and labrador': 'NL',
+	'nova scotia': 'NS',
+	'ontario': 'ON',
+	'prince edward island': 'PE',
+	quebec: 'QC',
+	saskatchewan: 'SK',
+	'northwest territories': 'NT',
+	nunavut: 'NU',
+	yukon: 'YT'
+};

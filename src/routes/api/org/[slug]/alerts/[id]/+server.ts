@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 /**
@@ -27,7 +28,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	await serverMutation(api.legislation.dismissAlert, {
-		alertId: params.id,
+		alertId: params.id as Id<'legislativeAlerts'>,
 		slug: params.slug
 	});
 	return json({

@@ -7,15 +7,9 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverInternalQuery } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
-
-function maskEmail(email: string): string {
-	const [local, domain] = email.split('@');
-	if (!domain) return '***';
-	return `${local.charAt(0)}***@${domain}`;
-}
 
 export const GET: RequestHandler = async ({ params, request }) => {
 	if (!FEATURES.FUNDRAISING) return apiError('NOT_FOUND', 'Not found', 404);
@@ -28,14 +22,17 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const donation = await serverQuery(internal.v1api.getDonationById, { donationId: params.id, orgId: auth.orgId });
+	const donation = await serverInternalQuery(internal.v1api.getDonationById, {
+		donationId: params.id,
+		orgId: auth.orgId
+	});
 	if (!donation) return apiError('NOT_FOUND', 'Donation not found', 404);
 
 	return apiOk({
 		id: donation._id,
 		campaignId: donation.campaignId,
-		email: donation.email ? maskEmail(donation.email) : '[encrypted]',
-		name: donation.name ?? '[encrypted]',
+		email: '[encrypted]',
+		name: '[encrypted]',
 		amountCents: donation.amountCents,
 		currency: donation.currency,
 		recurring: donation.recurring,

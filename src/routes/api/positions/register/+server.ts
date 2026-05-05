@@ -14,6 +14,7 @@ import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');
@@ -37,21 +38,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		// Derive identity commitment server-side — never trust client input
-		const user = await serverQuery(api.users.getById, { id: session.userId as any });
-		if (!user?.identity_commitment) {
+		const identityCommitment = locals.user?.identity_commitment;
+		if (!identityCommitment) {
 			return json({ error: 'Identity verification required to register positions' }, { status: 403 });
 		}
-		const identityCommitment = user.identity_commitment;
 
 		// Derive district_code from ShadowAtlasRegistration using server-derived commitment
 		const atlas = await serverQuery(api.users.getShadowAtlasRegistration, {
-			identityCommitment
+			userId: session.userId as Id<'users'>
 		});
 		const resolvedDistrictCode = atlas?.congressionalDistrict ?? undefined;
 
 		// Register position (upsert — duplicates return existing)
 		const registration = await serverMutation(api.positions.register, {
-			templateId: templateId as any,
+			templateId: templateId as Id<'templates'>,
 			identityCommitment,
 			stance,
 			districtCode: resolvedDistrictCode
@@ -59,7 +59,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// Always return fresh counts
 		const count = await serverQuery(api.positions.getCounts, {
-			templateId: templateId as any
+			templateId: templateId as Id<'templates'>
 		});
 
 		return json({

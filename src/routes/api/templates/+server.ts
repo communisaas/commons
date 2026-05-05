@@ -25,12 +25,14 @@ function contentHash(title: string, body: string): string {
 /** Sanitize slug: lowercase, alphanumeric + hyphens only, max 100 chars */
 function sanitizeSlug(slug: string | undefined): string | undefined {
 	if (!slug) return undefined;
-	return slug
-		.toLowerCase()
-		.replace(/[^a-z0-9-]/g, '-')
-		.replace(/-+/g, '-')
-		.replace(/^-|-$/g, '')
-		.slice(0, 100) || undefined;
+	return (
+		slug
+			.toLowerCase()
+			.replace(/[^a-z0-9-]/g, '-')
+			.replace(/-+/g, '-')
+			.replace(/^-|-$/g, '')
+			.slice(0, 100) || undefined
+	);
 }
 
 /** Validate and sanitize topics at the API boundary. */
@@ -209,7 +211,11 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		if (!validation.validData) {
 			const response: StructuredApiResponse = {
 				success: false,
-				error: createApiError('validation', 'VALIDATION_MISSING_DATA', 'Validation passed but data is missing')
+				error: createApiError(
+					'validation',
+					'VALIDATION_MISSING_DATA',
+					'Validation passed but data is missing'
+				)
 			};
 			return json(response, { status: 400 });
 		}
@@ -332,47 +338,53 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						await serverMutation(api.templates.patchMetadata, {
 							templateId: existingByContent._id as any,
 							...(incomingDomain ? { domain: incomingDomain } : {}),
-							...(incomingTopics.length > 0 ? { topics: incomingTopics } : {}),
+							...(incomingTopics.length > 0 ? { topics: incomingTopics } : {})
 						});
 					}
 
-					const finalDomain = incomingDomain || existingDomain || (existingByContent.category !== 'General' ? existingByContent.category : '') || '';
+					const finalDomain =
+						incomingDomain ||
+						existingDomain ||
+						(existingByContent.category !== 'General' ? existingByContent.category : '') ||
+						'';
 					const finalTopics = incomingTopics.length > 0 ? incomingTopics : existingTopics;
 
 					const response: StructuredApiResponse = {
 						success: true,
-						data: { template: {
-							id: existingByContent._id,
-							slug: existingByContent.slug,
-							title: existingByContent.title,
-							description: existingByContent.description,
-							domain: finalDomain,
-							topics: finalTopics,
-							type: existingByContent.type,
-							deliveryMethod: existingByContent.deliveryMethod,
-							subject: existingByContent.title,
-							message_body: existingByContent.messageBody,
-							preview: existingByContent.preview,
-							coordinationScale: 0,
-							isNew: false,
-							verified_sends: existingByContent.verifiedSends ?? 0,
-							unique_districts: existingByContent.uniqueDistricts ?? 0,
-							send_count: existingByContent.verifiedSends ?? 0,
-							delivery_config: existingByContent.deliveryConfig,
-							cwc_config: existingByContent.cwcConfig,
-							recipient_config: existingByContent.recipientConfig,
-							campaign_id: existingByContent.campaignId ?? null,
-							status: existingByContent.status,
-							is_public: existingByContent.isPublic,
-							jurisdiction_level: null,
-							applicable_countries: null,
-							specific_locations: null,
-							jurisdictions: [],
-							scope: null,
-							scopes: [],
-							createdAt: existingByContent._creationTime,
-							updatedAt: existingByContent.updatedAt
-						} }
+						data: {
+							template: {
+								id: existingByContent._id,
+								slug: existingByContent.slug,
+								title: existingByContent.title,
+								description: existingByContent.description,
+								domain: finalDomain,
+								topics: finalTopics,
+								type: existingByContent.type,
+								deliveryMethod: existingByContent.deliveryMethod,
+								subject: existingByContent.title,
+								message_body: existingByContent.messageBody,
+								preview: existingByContent.preview,
+								coordinationScale: 0,
+								isNew: false,
+								verified_sends: existingByContent.verifiedSends ?? 0,
+								unique_districts: existingByContent.uniqueDistricts ?? 0,
+								send_count: existingByContent.verifiedSends ?? 0,
+								delivery_config: existingByContent.deliveryConfig,
+								cwc_config: existingByContent.cwcConfig,
+								recipient_config: existingByContent.recipientConfig,
+								campaign_id: existingByContent.campaignId ?? null,
+								status: existingByContent.status,
+								is_public: existingByContent.isPublic,
+								jurisdiction_level: null,
+								applicable_countries: null,
+								specific_locations: null,
+								jurisdictions: [],
+								scope: null,
+								scopes: [],
+								createdAt: existingByContent._creationTime,
+								updatedAt: existingByContent.updatedAt
+							}
+						}
 					};
 
 					return json(response);
@@ -425,6 +437,14 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					geographicScope: validData.geographic_scope
 				});
 
+				if (!newTemplate) {
+					const response: StructuredApiResponse = {
+						success: false,
+						error: createApiError('server', 'SERVER_DATABASE', 'Template could not be created')
+					};
+					return json(response, { status: 500 });
+				}
+
 				const templateId = newTemplate._id;
 				const isPublic = newTemplate.isPublic;
 				const isCwc = validData.deliveryMethod === 'cwc';
@@ -452,10 +472,9 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 								const locationText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.domain}`;
 								const topicText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.messageBody}`;
 
-								const embeddings = await generateBatchEmbeddings(
-									[locationText, topicText],
-									{ taskType: 'RETRIEVAL_DOCUMENT' }
-								);
+								const embeddings = await generateBatchEmbeddings([locationText, topicText], {
+									taskType: 'RETRIEVAL_DOCUMENT'
+								});
 
 								const domainHue = projectToHue(embeddings[1]);
 
@@ -466,7 +485,9 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 									domainHue
 								});
 
-								console.log(`[deferred] Embeddings generated for template ${templateId} (domainHue=${domainHue.toFixed(1)})`);
+								console.log(
+									`[deferred] Embeddings generated for template ${templateId} (domainHue=${domainHue.toFixed(1)})`
+								);
 							} catch (embeddingError) {
 								console.error('[deferred] Embedding generation failed:', embeddingError);
 							}
@@ -476,7 +497,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					if (platform?.context?.waitUntil) {
 						platform.context.waitUntil(deferredWork);
 					} else {
-						deferredWork.catch(err => {
+						deferredWork.catch((err) => {
 							console.error('[deferred] Background work failed:', err);
 						});
 					}
@@ -484,38 +505,40 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 				const response: StructuredApiResponse = {
 					success: true,
-					data: { template: {
-						id: newTemplate._id,
-						slug: newTemplate.slug,
-						title: newTemplate.title,
-						description: newTemplate.description,
-						domain: newTemplate.domain,
-						topics: (newTemplate.topics as string[]) || [],
-						type: newTemplate.type,
-						deliveryMethod: newTemplate.deliveryMethod,
-						subject: newTemplate.title,
-						message_body: newTemplate.messageBody,
-						preview: newTemplate.preview,
-						coordinationScale: 0,
-						isNew: true,
-						verified_sends: 0,
-						unique_districts: 0,
-						send_count: 0,
-						delivery_config: newTemplate.deliveryConfig,
-						cwc_config: newTemplate.cwcConfig,
-						recipient_config: newTemplate.recipientConfig,
-						campaign_id: newTemplate.campaignId ?? null,
-						status: newTemplate.status,
-						is_public: newTemplate.isPublic,
-						jurisdiction_level: null,
-						applicable_countries: null,
-						specific_locations: null,
-						jurisdictions: [],
-						scope: null,
-						scopes: [],
-						createdAt: newTemplate._creationTime,
-						updatedAt: newTemplate.updatedAt
-					} }
+					data: {
+						template: {
+							id: newTemplate._id,
+							slug: newTemplate.slug,
+							title: newTemplate.title,
+							description: newTemplate.description,
+							domain: newTemplate.domain,
+							topics: (newTemplate.topics as string[]) || [],
+							type: newTemplate.type,
+							deliveryMethod: newTemplate.deliveryMethod,
+							subject: newTemplate.title,
+							message_body: newTemplate.messageBody,
+							preview: newTemplate.preview,
+							coordinationScale: 0,
+							isNew: true,
+							verified_sends: 0,
+							unique_districts: 0,
+							send_count: 0,
+							delivery_config: newTemplate.deliveryConfig,
+							cwc_config: newTemplate.cwcConfig,
+							recipient_config: newTemplate.recipientConfig,
+							campaign_id: newTemplate.campaignId ?? null,
+							status: newTemplate.status,
+							is_public: newTemplate.isPublic,
+							jurisdiction_level: null,
+							applicable_countries: null,
+							specific_locations: null,
+							jurisdictions: [],
+							scope: null,
+							scopes: [],
+							createdAt: newTemplate._creationTime,
+							updatedAt: newTemplate.updatedAt
+						}
+					}
 				};
 
 				return json(response);
@@ -544,7 +567,11 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		} else {
 			const response: StructuredApiResponse = {
 				success: false,
-				error: createApiError('auth', 'AUTH_REQUIRED', 'Authentication required to create templates')
+				error: createApiError(
+					'auth',
+					'AUTH_REQUIRED',
+					'Authentication required to create templates'
+				)
 			};
 			return json(response, { status: 401 });
 		}

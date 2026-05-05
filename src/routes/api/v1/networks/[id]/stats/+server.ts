@@ -33,7 +33,5 @@ export const GET: RequestHandler = async ({ params, request }) => {
 		return apiError('FORBIDDEN', 'Organization is not an active member of this network', 403);
 	}
 
-	const stats = await getNetworkStats(params.id);
-
-	return apiOk(stats);
+	return apiError('NOT_IMPLEMENTED', 'Network stats are not available in this API boundary', 501);
 };

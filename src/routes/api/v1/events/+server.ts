@@ -8,6 +8,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -26,7 +27,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const status = url.searchParams.get('status');
 	const eventType = url.searchParams.get('eventType');
 
-	const result = await serverQuery(internal.v1api.listEventsV1, {
+	const result = await serverInternalQuery(internal.v1api.listEventsV1, {
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,

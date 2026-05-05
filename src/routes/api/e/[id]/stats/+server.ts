@@ -5,13 +5,14 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
 
-	const result = await serverQuery(internal.v1api.getEventStats, { eventId: params.id });
+	const result = await serverInternalQuery(internal.v1api.getEventStats, { eventId: params.id });
 	if (!result) throw error(404, 'Event not found');
 
 	return json(result);

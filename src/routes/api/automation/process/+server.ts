@@ -24,6 +24,11 @@ export const POST: RequestHandler = async ({ request }) => {
 		throw error(401, 'Invalid secret');
 	}
 
-	const processed = await processScheduledWorkflows();
-	return json({ processed });
+	return json(
+		{
+			error: 'automation_worker_unavailable',
+			message: 'Scheduled workflow processing is not available in this API boundary.'
+		},
+		{ status: 501 }
+	);
 };

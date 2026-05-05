@@ -8,6 +8,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -22,7 +23,7 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const event = await serverQuery(internal.v1api.getEventById, { eventId: params.id, orgId: auth.orgId });
+	const event = await serverInternalQuery(internal.v1api.getEventById, { eventId: params.id, orgId: auth.orgId });
 	if (!event) return apiError('NOT_FOUND', 'Event not found', 404);
 
 	return apiOk({

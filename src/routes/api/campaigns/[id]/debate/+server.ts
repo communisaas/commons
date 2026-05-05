@@ -1,7 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 // CONVEX: Keep SvelteKit
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import type { RequestHandler } from './$types';
@@ -29,7 +30,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	// Look up the campaign for auth checks via Convex
 	const campaign = await serverQuery(api.debates.getCampaignForDebate, {
-		campaignId: params.id as any
+		campaignId: params.id as Id<'campaigns'>
 	});
 
 	if (!campaign) {
@@ -82,25 +83,11 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'Proposition text must be at least 10 characters');
 	}
 
-	const result = await spawnDebateForCampaign(campaign._id, {
-		proposition: propositionText || undefined,
-		durationDays: durationSeconds / (24 * 60 * 60),
-		jurisdictionSizeHint: jurisdictionHint
-	});
-
-	if (!result) {
-		throw error(502, 'Failed to create debate');
-	}
-
-	// Fetch the debate to return full details
-	const debate = await serverQuery(api.debates.get, {
-		debateId: result.debateId as any
-	});
-
-	return json({
-		debateId: result.debateId,
-		debateIdOnchain: debate?.debateIdOnchain,
-		propositionText: debate?.propositionText,
-		deadline: debate?.deadline ? new Date(debate.deadline).toISOString() : null
-	}, { status: 201 });
+	return json(
+		{
+			error: 'campaign_debate_helper_unavailable',
+			message: 'Campaign-linked debate creation is not available in this API boundary.'
+		},
+		{ status: 501 }
+	);
 };

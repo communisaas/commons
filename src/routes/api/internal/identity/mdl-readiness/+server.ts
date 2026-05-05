@@ -24,8 +24,9 @@ type ReadinessCheck = {
 };
 
 type SmokeEnv = NonNullable<App.Platform['env']>;
+type MdlReadinessRequestEvent = Pick<Parameters<RequestHandler>[0], 'request' | 'platform' | 'url'>;
 
-export const GET: RequestHandler = async ({ request, platform, url }) => {
+export const GET = (async ({ request, platform, url }: MdlReadinessRequestEvent) => {
 	requireInternalSecret(request);
 
 	const smokeEnv = platform?.env as SmokeEnv | undefined;
@@ -76,7 +77,7 @@ export const GET: RequestHandler = async ({ request, platform, url }) => {
 		},
 		{ status: status === 'ok' ? 200 : 503 }
 	);
-};
+}) satisfies RequestHandler;
 
 function requireInternalSecret(request: Request): void {
 	const expected = privateEnv.INTERNAL_API_SECRET;

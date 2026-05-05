@@ -53,7 +53,7 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 	let customerId = billing.org.stripeCustomerId;
 	if (!customerId) {
 		const customer = await stripe.customers.create({
-			email: billing.org.billingEmail ?? locals.user.email,
+			email: locals.user.email,
 			metadata: { orgId: billing.org._id, orgSlug: billing.org.slug }
 		});
 		customerId = customer.id;

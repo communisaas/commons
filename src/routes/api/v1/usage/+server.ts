@@ -7,6 +7,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk } from '$lib/server/api-v1/response';
 import { serverQuery } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -20,7 +21,7 @@ export const GET: RequestHandler = async ({ request }) => {
 	if (scopeErr) return scopeErr;
 
 	// auth.orgId is a Convex document ID, not a slug — use internal query
-	const usage = await serverQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
+	const usage = await serverInternalQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
 		orgId: auth.orgId
 	});
 

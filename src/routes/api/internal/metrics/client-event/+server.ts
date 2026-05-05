@@ -20,7 +20,7 @@
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { enforceInternalRateLimit } from '$lib/server/internal/rate-limit';
+import { enforceInternalRateLimit, type InternalEndpointLimit } from '$lib/server/internal/rate-limit';
 
 const ALLOWED_METRICS = new Set([
 	'verify_commitment_generation_failure',
@@ -32,7 +32,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	// Per-IP-keyed rate limit; legitimate clients should hit this < 1/minute.
 	// 60/min/IP is generous; sustained spam is a misconfiguration to investigate.
 	await enforceInternalRateLimit({
-		endpoint: 'metrics-client-event',
+		endpoint: 'metrics-client-event' as InternalEndpointLimit['endpoint'],
 		maxRequests: 60,
 		windowMs: 60_000
 	});

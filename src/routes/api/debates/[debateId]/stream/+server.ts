@@ -158,7 +158,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 					case 'under_appeal':
 						emitter.send('appeal_started', {
 							debateId,
-							appealDeadline: debate.appealDeadline?.toISOString() ?? null
+							appealDeadline: debate.appealDeadline
+								? new Date(debate.appealDeadline).toISOString()
+								: null
 						});
 						break;
 				}

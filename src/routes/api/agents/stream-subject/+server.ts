@@ -41,6 +41,10 @@ interface RequestBody {
 	conversationContext?: ConversationContext;
 }
 
+type SubjectLineStreamResponse = SubjectLineResponseWithClarification & {
+	domain?: string;
+};
+
 export const POST: RequestHandler = async (event) => {
 	const rateLimitCheck = await enforceLLMRateLimit(event, 'subject-line');
 	if (!rateLimitCheck.allowed) {
@@ -116,7 +120,7 @@ export const POST: RequestHandler = async (event) => {
 		let resultTokenUsage: TokenUsage | undefined;
 
 		try {
-			const generator = generateStreamWithThoughts<SubjectLineResponseWithClarification>(prompt, {
+			const generator = generateStreamWithThoughts<SubjectLineStreamResponse>(prompt, {
 				systemInstruction: systemPrompt,
 				temperature: 0.4,
 				thinkingLevel: 'medium'
@@ -214,4 +218,3 @@ export const POST: RequestHandler = async (event) => {
 
 	return new Response(stream, { headers });
 };
-

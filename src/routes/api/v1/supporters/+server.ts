@@ -8,7 +8,7 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -45,33 +45,41 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const source = url.searchParams.get('source');
 	const tagId = url.searchParams.get('tag');
 
-	const result = await serverQuery(internal.v1api.listSupporters, {
+	const result = await serverInternalQuery(internal.v1api.listSupporters, {
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
 		emailHash,
 		verified: verified === 'true' ? true : verified === 'false' ? false : undefined,
-		emailStatus: emailStatus && ['subscribed', 'unsubscribed', 'bounced', 'complained'].includes(emailStatus) ? emailStatus : undefined,
-		source: source && ['csv', 'action_network', 'organic', 'widget'].includes(source) ? source : undefined,
+		emailStatus:
+			emailStatus && ['subscribed', 'unsubscribed', 'bounced', 'complained'].includes(emailStatus)
+				? emailStatus
+				: undefined,
+		source:
+			source && ['csv', 'action_network', 'organic', 'widget'].includes(source)
+				? source
+				: undefined,
 		tagId: tagId ?? undefined
 	});
 
 	// Return encrypted blobs — client decrypts with org key
-	const data = result.items.map((s: any) => ({
-		id: s._id,
-		encryptedEmail: s.encryptedEmail,
-		encryptedName: s.encryptedName ?? null,
-		postalCode: s.postalCode,
-		country: s.country,
-		encryptedPhone: s.encryptedPhone ?? null,
-		verified: s.verified,
-		emailStatus: s.emailStatus,
-		source: s.source,
-		encryptedCustomFields: s.encryptedCustomFields ?? null,
-		createdAt: new Date(s._creationTime).toISOString(),
-		updatedAt: new Date(s.updatedAt).toISOString(),
-		tags: s.tags
-	}));
+	const data = result.items
+		.filter((s) => s != null)
+		.map((s) => ({
+			id: s._id,
+			encryptedEmail: s.encryptedEmail,
+			encryptedName: s.encryptedName ?? null,
+			postalCode: s.postalCode,
+			country: s.country,
+			encryptedPhone: s.encryptedPhone ?? null,
+			verified: s.verified,
+			emailStatus: s.emailStatus,
+			source: s.source,
+			encryptedCustomFields: s.encryptedCustomFields ?? null,
+			createdAt: new Date(s._creationTime).toISOString(),
+			updatedAt: new Date(s.updatedAt).toISOString(),
+			tags: s.tags
+		}));
 
 	return apiOk(data, { cursor: result.cursor, hasMore: result.hasMore, total: result.total });
 };
@@ -104,12 +112,20 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const {
-		encryptedEmail, emailHash, encryptedName, postalCode, country,
-		encryptedPhone, phoneHash, source, encryptedCustomFields, tags
+		encryptedEmail,
+		emailHash,
+		encryptedName,
+		postalCode,
+		country,
+		encryptedPhone,
+		phoneHash,
+		source,
+		encryptedCustomFields,
+		tags
 	} = parsed;
 
 	// Pass pre-encrypted blobs through to Convex — no server-side encryption
-	const result = await serverMutation(internal.v1api.createSupporter, {
+	const result = await serverInternalMutation(internal.v1api.createSupporter, {
 		orgId: auth.orgId,
 		encryptedEmail,
 		emailHash,
@@ -128,6 +144,10 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const s = result.supporter;
+	if (!s) {
+		return apiError('SERVER_ERROR', 'Supporter could not be created', 500);
+	}
+
 	return apiOk(
 		{
 			id: s._id,

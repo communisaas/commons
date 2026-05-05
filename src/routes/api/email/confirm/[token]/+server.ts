@@ -12,7 +12,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { validateConfirmationToken } from '$lib/core/email/delivery-confirmation';
-import { serverMutation } from 'convex-sveltekit';
+import { serverInternalMutation } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 
 export const GET: RequestHandler = async ({ params }) => {
@@ -27,6 +27,6 @@ export const GET: RequestHandler = async ({ params }) => {
 		throw error(400, 'Invalid or expired confirmation token');
 	}
 
-	const result = await serverMutation(internal.v1api.confirmEmailDelivery, { templateId: id });
+	const result = await serverInternalMutation(internal.v1api.confirmEmailDelivery, { submissionId: id });
 	return json(result);
 };

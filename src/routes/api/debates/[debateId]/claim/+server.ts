@@ -1,7 +1,7 @@
 // Settlement requires on-chain tx execution. Cannot move to Convex.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { claimSettlement, settlePrivatePosition } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
@@ -58,7 +58,14 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	}
 
 	const body = await request.json();
-	const { nullifierHex, proofHex, publicInputs, positionProof, positionPublicInputs, walletAddress } = body;
+	const {
+		nullifierHex,
+		proofHex,
+		publicInputs,
+		positionProof,
+		positionPublicInputs,
+		walletAddress
+	} = body;
 
 	if (!nullifierHex || !proofHex || !publicInputs) {
 		throw error(400, 'ZK proof data is required for settlement claims');
@@ -72,7 +79,10 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			throw error(400, 'positionPublicInputs must be an array of exactly 5 bytes32 hex strings');
 		}
 		for (let i = 0; i < 5; i++) {
-			if (typeof positionPublicInputs[i] !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(positionPublicInputs[i])) {
+			if (
+				typeof positionPublicInputs[i] !== 'string' ||
+				!/^0x[0-9a-fA-F]{64}$/.test(positionPublicInputs[i])
+			) {
 				throw error(400, `positionPublicInputs[${i}] must be a 0x-prefixed 32-byte hex string`);
 			}
 		}
@@ -101,7 +111,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 			if (onchainResult.success) {
 				console.info('[debates/claim] Private position settled on-chain', {
-					debateId: debate.id,
+					debateId: debate._id,
 					debateIdOnchain: debate.debateIdOnchain,
 					positionRoot: (positionPublicInputs as string[])[0].slice(0, 16) + '...',
 					txHash: onchainResult.txHash,
@@ -110,7 +120,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 				});
 
 				return json({
-					debateId: debate.id,
+					debateId: debate._id,
 					status: 'settlement_claimed',
 					settlementPath: 'private_position',
 					txHash: onchainResult.txHash,
@@ -128,7 +138,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 			if (onchainResult.success) {
 				console.info('[debates/claim] Settlement claimed on-chain', {
-					debateId: debate.id,
+					debateId: debate._id,
 					debateIdOnchain: debate.debateIdOnchain,
 					nullifier: nullifierHex.slice(0, 16) + '...',
 					txHash: onchainResult.txHash,
@@ -137,7 +147,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 				});
 
 				return json({
-					debateId: debate.id,
+					debateId: debate._id,
 					status: 'settlement_claimed',
 					settlementPath: 'simple_claim',
 					txHash: onchainResult.txHash,
@@ -155,7 +165,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	// Fallback: blockchain not configured or debate not registered on-chain
 	const settlementPath = isPrivateSettlement ? 'private_position' : 'simple_claim';
 	console.info('[debates/claim] Settlement claim recorded (off-chain)', {
-		debateId: debate.id,
+		debateId: debate._id,
 		settlementPath,
 		nullifier: nullifierHex.slice(0, 16) + '...',
 		winningStance: debate.winningStance,
@@ -164,7 +174,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	});
 
 	return json({
-		debateId: debate.id,
+		debateId: debate._id,
 		status: 'claim_recorded',
 		settlementPath,
 		winningStance: debate.winningStance,

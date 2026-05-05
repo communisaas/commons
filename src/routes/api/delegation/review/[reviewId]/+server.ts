@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
 import { serverMutation } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 
 /**
@@ -30,7 +31,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, "Decision must be 'approve' or 'reject'");
 	}
 
-	const result = await serverMutation(internal.v1api.submitDelegationReview, {
+	const result = await serverInternalMutation(internal.v1api.submitDelegationReview, {
 		reviewId: params.reviewId,
 		userId: session.userId,
 		decision

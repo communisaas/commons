@@ -3,7 +3,10 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { resolveDebate as resolveDebateOnChain, readChainResolution } from '$lib/core/blockchain/debate-market-client';
+import {
+	resolveDebate as resolveDebateOnChain,
+	readChainResolution
+} from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
 
 /**
@@ -30,7 +33,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 		throw error(403, 'Tier 3+ verification required to resolve debates');
 	}
 
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.getPublicDetail, { debateId: debateId as any });
 
 	if (!debate) {
 		throw error(404, 'Debate not found');
@@ -38,12 +41,15 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 	if (debate.status !== 'active') {
 		throw error(400, 'Debate is already resolved');
 	}
-	if (new Date() <= debate.deadline) {
+	if (Date.now() <= debate.deadline) {
 		throw error(400, 'Debate deadline has not passed yet');
 	}
 	// If AI evaluation is in progress or complete, resolution must go through /evaluate
 	if (debate.resolutionMethod || debate.aiResolution) {
-		throw error(409, 'This debate has AI evaluation data. Use the /evaluate endpoint for AI-augmented resolution.');
+		throw error(
+			409,
+			'This debate has AI evaluation data. Use the /evaluate endpoint for AI-augmented resolution.'
+		);
 	}
 
 	if (debate.arguments.length === 0) {
@@ -93,30 +99,31 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 	}
 
 	try {
-		const resolved = await serverMutation(api.debates.updateStatus, {
-			where: { id: debateId, status: 'active' },
-			data: {
-				status: 'resolved',
-				winningArgumentIndex: winningIndex,
-				winningStance: winningStance,
-				resolvedAt: new Date(),
-				resolutionMethod: 'community_only',
-				resolvedFromChain: resolvedFromChain,
-			}
+		await serverMutation(api.debates.updateStatus, {
+			debateId: debate._id,
+			status: 'resolved',
+			winningArgumentIndex: winningIndex,
+			winningStance: winningStance,
+			resolutionMethod: 'community_only'
 		});
 
 		return json({
-			debateId: resolved.id,
+			debateId: debate._id,
 			status: 'resolved',
-			winningArgumentIndex: resolved.winningArgumentIndex,
-			winningStance: resolved.winningStance,
-			resolvedAt: resolved.resolvedAt?.toISOString(),
+			winningArgumentIndex: winningIndex,
+			winningStance,
+			resolvedAt: new Date().toISOString(),
 			resolvedFromChain,
 			...(txHash && { txHash })
 		});
 	} catch (err: unknown) {
 		// P2025: Record not found (status already changed by concurrent request)
-		if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2025') {
+		if (
+			err &&
+			typeof err === 'object' &&
+			'code' in err &&
+			(err as { code: string }).code === 'P2025'
+		) {
 			throw error(409, 'Debate has already been resolved or status changed');
 		}
 		throw err;

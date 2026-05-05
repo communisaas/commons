@@ -28,8 +28,8 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
 import { internal } from '$lib/convex';
+import { serverInternalQuery } from '$lib/server/convex-internal';
 import { getEmptyTreeRoot } from '$lib/server/smt/revocation-smt';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -51,18 +51,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(400, 'revocationNullifier must be hex');
 	}
 
-	const result = await serverQuery(
-		internal.revocations.getRevocationNonMembershipPath,
-		{ revocationNullifier } as unknown as never
-	);
+	const result = await serverInternalQuery(internal.revocations.getRevocationSMTPath, {
+		leafKey: revocationNullifier
+	});
 
 	const computedEmptyRoot = await getEmptyTreeRoot();
 
 	return json({
-		path: result.path,
-		pathBits: result.pathBits,
+		path: result.siblings,
+		pathBits: [],
 		currentRoot: result.currentRoot,
-		sequenceNumber: result.sequenceNumber,
+		sequenceNumber: result.expectedSequenceNumber,
 		computedEmptyRoot
 	});
 };

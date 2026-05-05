@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
 import { serverQuery } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 
 /**
@@ -21,7 +22,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 	}
 
 	const callerPseudoId = computePseudonymousId(locals.user.id);
-	const result = await serverQuery(internal.v1api.getSubmissionStatus, {
+	const result = await serverInternalQuery(internal.v1api.getSubmissionStatus, {
 		submissionId: id,
 		pseudonymousId: callerPseudoId
 	});
@@ -43,6 +44,8 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 		verifiedAt: result.verifiedAt,
 		anchorStatus: result.anchorStatus,
 		anchorTxHash: result.anchorTxHash,
-		anchorAt: result.anchorAt
+		anchorAt: result.anchorAt,
+		receipts: result.receipts ?? [],
+		receiptSummary: result.receiptSummary ?? null
 	});
 };

@@ -5,6 +5,7 @@ import { api } from '$lib/convex';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
 // Segment export uses Convex action for server-side decryption with org key
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 import { safeUserId } from '$lib/core/server/security';
 
@@ -188,7 +189,7 @@ export const DELETE: RequestHandler = async ({ url, params, locals }) => {
 
 	await serverMutation(api.segments.remove, {
 		slug: params.slug,
-		segmentId
+		segmentId: segmentId as Id<'segments'>
 	});
 	return json({ ok: true });
 };

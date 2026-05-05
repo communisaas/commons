@@ -15,6 +15,7 @@ import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');
@@ -33,15 +34,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		// Derive identity_commitment from DB — require real verification
-		const user = await serverQuery(api.users.getById, { id: session.userId as any });
-		if (!user?.identity_commitment) {
+		const identityCommitment = locals.user?.identity_commitment;
+		if (!identityCommitment) {
 			return json({ error: 'Identity verification required to confirm send' }, { status: 403 });
 		}
-		const identityCommitment = user.identity_commitment;
 
 		// Auto-fill district_code from ShadowAtlasRegistration
 		const atlas = await serverQuery(api.users.getShadowAtlasRegistration, {
-			identityCommitment
+			userId: session.userId as Id<'users'>
 		});
 		const districtCode = atlas?.congressionalDistrict ?? undefined;
 
@@ -50,7 +50,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const templateTitle = template?.title;
 
 		const result = await serverMutation(api.positions.confirmMailtoSend, {
-			templateId: templateId as any,
+			templateId: templateId as Id<'templates'>,
 			identityCommitment,
 			districtCode,
 			templateTitle

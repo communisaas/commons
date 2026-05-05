@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -27,6 +28,6 @@ export const GET: RequestHandler = async ({ url }) => {
 		throw error(400, 'Cannot compare more than 5 decision-makers');
 	}
 
-	const results = await serverQuery(internal.v1api.compareDmScorecards, { dmIds: ids });
+	const results = await serverInternalQuery(internal.v1api.compareDmScorecards, { dmIds: ids });
 	return json(results);
 };

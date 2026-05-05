@@ -19,5 +19,5 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	}
 
 	const result = await serverQuery(api.legislation.listOrgDmFollows, { slug: params.slug });
-	return json({ follows: result, total: result.length, limit: 50, offset: 0 });
+	return json({ follows: result.followed, total: result.followedCount, limit: 50, offset: 0 });
 };

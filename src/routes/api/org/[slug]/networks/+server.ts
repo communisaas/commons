@@ -49,6 +49,6 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!FEATURES.NETWORKS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const result = await serverQuery(api.networks.list, { slug: params.slug });
+	const result = await serverQuery(api.networks.list, { orgSlug: params.slug });
 	return json({ data: result });
 };

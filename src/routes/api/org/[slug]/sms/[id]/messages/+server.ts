@@ -24,11 +24,11 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	return json({
 		data: messages.map((m) => ({
 			id: m._id,
-			to: m.to ? '***' + m.to.slice(-4) : null,
+			to: m.encryptedTo ? '[encrypted]' : null,
 			status: m.status,
 			errorCode: m.errorCode,
-			supporter: m.recipientName
-				? { name: m.recipientName }
+			supporter: m.encryptedName
+				? { name: '[encrypted]' }
 				: null,
 			createdAt: new Date(m._creationTime).toISOString()
 		})),

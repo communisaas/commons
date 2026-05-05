@@ -7,6 +7,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { serverQuery } from 'convex-sveltekit';
+import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -22,7 +23,7 @@ export const GET: RequestHandler = async ({ request, params, url }) => {
 	const { cursor, limit } = parsePagination(url);
 	const verified = url.searchParams.get('verified');
 
-	const result = await serverQuery(internal.v1api.listCampaignActions, {
+	const result = await serverInternalQuery(internal.v1api.listCampaignActions, {
 		campaignId: params.id,
 		orgId: auth.orgId,
 		limit,

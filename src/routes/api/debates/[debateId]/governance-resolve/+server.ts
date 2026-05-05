@@ -34,7 +34,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 		throw error(400, 'winningArgumentIndex and justification are required');
 	}
 
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.getPublicDetail, { debateId: debateId as any });
 	if (!debate) throw error(404, 'Debate not found');
 	if (debate.status !== 'awaiting_governance') {
 		throw error(400, `Debate status is '${debate.status}', expected 'awaiting_governance'`);
