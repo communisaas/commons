@@ -153,8 +153,6 @@ export async function generateMessage(options: GenerateMessageOptions): Promise<
 				title: dm.title,
 				organization: dm.organization
 			})),
-			minSources: 3,
-			maxSources: 6,
 			traceId: options.traceId,
 			onThought: onThought ? (thought) => onThought(thought, 'sources') : undefined,
 			onPhase: (phase, message) => {

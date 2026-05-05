@@ -11,7 +11,7 @@
 
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import type { Id } from '../../convex/_generated/dataModel';
+import type { Id } from '$convex/_generated/dataModel';
 import type {
 	VerificationPacket,
 	TierCount,

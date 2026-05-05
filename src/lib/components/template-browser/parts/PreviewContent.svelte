@@ -25,6 +25,12 @@
 	import { hasCitations } from '$lib/utils/message-processing';
 	import { topicHue } from '$lib/utils/topic-hue';
 
+	type PreviewDecisionMaker = {
+		name: string;
+		title?: string;
+		organization?: string;
+	};
+
 	let {
 		template,
 		inModal,
@@ -68,7 +74,7 @@
 
 	const recipients = $derived(extractRecipientEmails(template?.recipient_config));
 	const recipientConfig = $derived(parseRecipientConfig(template?.recipient_config));
-	const decisionMakers = $derived(recipientConfig?.decisionMakers ?? []);
+	const decisionMakers = $derived<PreviewDecisionMaker[]>(recipientConfig?.decisionMakers ?? []);
 	const recipientCount = $derived(decisionMakers.length || recipients.length);
 	const targetInfo = $derived(deriveTargetPresentation(template));
 

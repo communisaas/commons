@@ -215,7 +215,7 @@ export async function checkRateLimit(
 			limit: max,
 			resetAt: new Date(result.reset),
 			tier: context.tier,
-			reason: getRateLimitReason(operation, context.tier, result, { success: true, reset: 0, remaining: 0 })
+			reason: getRateLimitReason(operation, context.tier, result, { success: true, reset: 0 })
 		};
 	}
 

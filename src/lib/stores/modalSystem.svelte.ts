@@ -47,6 +47,7 @@ export type LegacyModalState =
 	| 'loading'
 	| 'confirmation'
 	| 'trust-upgrade' // Graduated trust: offer identity verification before sending
+	| 'ground-restore' // Delivery address exists server-side but needs unlock/re-entry locally
 	| 'cwc-submission' // ZKP proof generation + Congressional submission
 	| 'proof-generation' // ZK proof generation (Phase 2)
 	| 'celebration'

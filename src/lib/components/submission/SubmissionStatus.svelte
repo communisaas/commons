@@ -10,7 +10,7 @@
 		onDelivered
 	}: {
 		submissionId: string;
-		initialStatus?: 'sending' | 'delivered' | 'demo' | 'failed';
+		initialStatus?: 'sending' | 'delivered' | 'partial' | 'demo' | 'failed';
 		onOverride?: () => void;
 		onDelivered?: () => void;
 	} = $props();
@@ -20,6 +20,17 @@
 	let deliveryCount = $state<number | null>(null);
 	let canOverride = $state(true);
 	let retrying = $state(false);
+	let receipts = $state<
+		Array<{
+			recipientKey: string;
+			recipientName: string | null;
+			chamber: string | null;
+			provider: string;
+			status: 'processing' | 'delivered' | 'failed' | 'demo' | string;
+			providerReceiptId: string | null;
+			errorCode: string | null;
+		}>
+	>([]);
 
 	// Proof chain state — surfaced in the inline proof footer
 	let verificationStatus = $state<'pending' | 'verified' | 'rejected' | null>(null);
@@ -36,7 +47,20 @@
 		verifiedAt: z.union([z.string(), z.number()]).nullish(),
 		anchorStatus: z.enum(['pending', 'anchored', 'failed', 'divergent', 'poisoned']).nullish(),
 		anchorTxHash: z.string().nullish(),
-		anchorAt: z.union([z.string(), z.number()]).nullish()
+		anchorAt: z.union([z.string(), z.number()]).nullish(),
+		receipts: z
+			.array(
+				z.object({
+					recipientKey: z.string(),
+					recipientName: z.string().nullable(),
+					chamber: z.string().nullable(),
+					provider: z.string(),
+					status: z.string(),
+					providerReceiptId: z.string().nullable(),
+					errorCode: z.string().nullable()
+				})
+			)
+			.default([])
 	});
 
 	// Poll interval handle
@@ -54,14 +78,15 @@
 	 * - delivered/partial  -> 'delivered'
 	 * - failed             -> 'failed'
 	 */
-	function mapBackendStatus(backendStatus: string): 'sending' | 'delivered' | 'demo' | 'failed' {
+	function mapBackendStatus(backendStatus: string): 'sending' | 'delivered' | 'partial' | 'demo' | 'failed' {
 		switch (backendStatus) {
 			case 'pending':
 			case 'processing':
 				return 'sending';
 			case 'delivered':
-			case 'partial':
 				return 'delivered';
+			case 'partial':
+				return 'partial';
 			case 'demo':
 				return 'demo';
 			case 'failed':
@@ -116,6 +141,7 @@
 			// Update UI state
 			status = mapBackendStatus(data.status);
 			deliveryCount = data.deliveryCount;
+			receipts = data.receipts;
 			verificationStatus = data.verificationStatus ?? null;
 			anchorStatus = data.anchorStatus ?? null;
 			anchorTxHash = data.anchorTxHash ?? null;
@@ -207,6 +233,12 @@
 			description: 'Message received by congressional offices',
 			color: 'green'
 		},
+		partial: {
+			icon: AlertCircle,
+			text: deliveryCount ? `Delivered to ${deliveryCount} offices` : 'Partially delivered',
+			description: 'Some offices did not accept delivery',
+			color: 'amber'
+		},
 		demo: {
 			icon: FlaskConical,
 			text: 'Demo send — no delivery',
@@ -222,6 +254,7 @@
 	});
 
 	const config = $derived(statusConfig[status]);
+	const receiptRows = $derived(receipts);
 
 	// Inline proof footer — tiered evidence legibility for staffers and users.
 	// Each line shows one factual claim that the system cryptographically backs.
@@ -325,6 +358,40 @@
 					Send as-is
 				</button>
 			{/if}
+		</div>
+	{/if}
+
+	{#if receiptRows.length > 0}
+		<div class="mt-3 border-t border-slate-100 pt-2">
+			<p class="mb-1.5 text-xs font-medium text-slate-500">Delivery receipts</p>
+			<ul class="space-y-1 text-xs">
+				{#each receiptRows as receipt (receipt.recipientKey)}
+					<li class="flex items-center justify-between gap-3">
+						<span class="min-w-0 truncate text-slate-600">
+							{receipt.recipientName ?? receipt.recipientKey}
+						</span>
+						<span
+							class="shrink-0 font-mono text-[11px]
+							{receipt.status === 'delivered' ? 'text-emerald-700' : ''}
+							{receipt.status === 'processing' ? 'text-slate-500' : ''}
+							{receipt.status === 'demo' ? 'text-amber-700' : ''}
+							{receipt.status === 'failed' ? 'text-red-700' : ''}"
+						>
+							{#if receipt.status === 'delivered'}
+								delivered
+							{:else if receipt.status === 'processing'}
+								processing
+							{:else if receipt.status === 'demo'}
+								demo
+							{:else if receipt.status === 'failed'}
+								failed{receipt.errorCode ? ` · ${receipt.errorCode.toLowerCase()}` : ''}
+							{:else}
+								{receipt.status}
+							{/if}
+						</span>
+					</li>
+				{/each}
+			</ul>
 		</div>
 	{/if}
 

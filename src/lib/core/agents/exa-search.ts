@@ -250,7 +250,7 @@ export async function readPage(
 
 	const result = await rateLimiter.execute(
 		async () => withTimeout(
-			firecrawl.scrapeUrl(url, { formats: ['markdown', 'links', 'rawHtml'] }),
+			firecrawl.scrape(url, { formats: ['markdown', 'links', 'rawHtml'] }),
 			SCRAPE_TIMEOUT_MS,
 			`firecrawl "${url.slice(0, 60)}"`
 		),
@@ -263,7 +263,7 @@ export async function readPage(
 	}
 
 	const scrapeData = result.data;
-	if (!scrapeData?.success || !scrapeData.markdown) {
+	if (!scrapeData?.markdown) {
 		console.debug(`[page-fetch] Firecrawl empty for ${url} — trying Exa fallback`);
 		return await fetchViaExaFallback(url);
 	}

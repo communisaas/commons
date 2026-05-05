@@ -8,8 +8,8 @@
  * update the cache so future hits can skip re-verification when fresh.
  */
 
-import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { internal } from '$lib/convex';
+import { serverInternalMutation, serverInternalQuery } from '$lib/server/convex-internal';
 
 export interface ResolvedContact {
 	orgKey: string;
@@ -44,7 +44,7 @@ export async function getCachedContacts(
 			title: p.title,
 		}));
 
-		const results = await serverQuery(internal.resolvedContacts.getCached, {
+		const results = await serverInternalQuery(internal.resolvedContacts.getCached, {
 			pairs: normalizedPairs,
 		});
 
@@ -87,7 +87,7 @@ export async function upsertResolvedContacts(
 	if (withEmail.length === 0) return;
 
 	try {
-		await serverMutation(internal.resolvedContacts.upsert, {
+		await serverInternalMutation(internal.resolvedContacts.upsert, {
 			contacts: withEmail.map(c => ({
 				orgKey: normalizeOrgKey(c.organization),
 				title: c.title,
@@ -117,7 +117,7 @@ export async function updateContactVerification(
 	if (updates.length === 0) return;
 
 	try {
-		await serverMutation(internal.resolvedContacts.updateVerification, {
+		await serverInternalMutation(internal.resolvedContacts.updateVerification, {
 			updates: updates.map(u => ({
 				orgKey: normalizeOrgKey(u.organization),
 				title: u.title,

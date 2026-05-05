@@ -1164,6 +1164,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 					if (isSentinelName(candidate.name || '')) return;
 
 					// Skip duplicate person (same person resolved for multiple positions)
+					const nameLower = candidate.name.toLowerCase().replace(/\s+/g, ' ').trim();
 					if (emittedNames.has(nameLower)) return;
 					emittedNames.add(nameLower);
 
@@ -1200,7 +1201,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 						emailSource: final.emailSource,
 						reasoning: final.reasoning,
 						status: final.email ? 'resolved' : 'no-email',
-					discovered: candidate.discovered
+						discovered: candidate.discovered
 					});
 				}
 			);
@@ -1318,16 +1319,22 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			const withoutEmail = deduped.filter(dm => !dm.email);
 			console.debug(`[gemini-provider] Returning ${deduped.length} candidates: ${withVerifiedEmail.length} with verified email, ${withoutEmail.length} without email`);
 
+			const contactsToCache = deduped.flatMap((dm) =>
+				typeof dm.email === 'string' && dm.email.includes('@')
+					? [
+							{
+								organization: dm.organization,
+								title: dm.title,
+								name: dm.name,
+								email: dm.email,
+								emailSource: dm.emailSource
+							}
+						]
+					: []
+			);
+
 			// Cache write — fire-and-forget, never blocks the response
-			upsertResolvedContacts(
-				deduped.map(dm => ({
-					organization: dm.organization,
-					title: dm.title,
-					name: dm.name,
-					email: dm.email,
-					emailSource: dm.emailSource
-				}))
-			).catch(err => console.warn('[gemini-provider] Cache write failed:', err));
+			upsertResolvedContacts(contactsToCache).catch(err => console.warn('[gemini-provider] Cache write failed:', err));
 
 			streaming?.onPhase?.(
 				'complete',

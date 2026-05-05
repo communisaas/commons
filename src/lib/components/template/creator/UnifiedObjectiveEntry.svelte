@@ -336,7 +336,7 @@
 
 						case 'complete':
 							if (event.data.data) {
-								const raw = event.data.data as Record<string, unknown>;
+								const raw = event.data.data as unknown as Record<string, unknown>;
 								const ctx = raw.inferred_context as Record<string, unknown> | undefined;
 								const newSuggestion: AISuggestion = {
 									...(raw as unknown as AISuggestion),
@@ -647,6 +647,7 @@
 				subject_line: data.title,
 				core_message: data.description || data.rawInput || '',
 				topics: data.topics || [],
+				domain: data.domain || '',
 				url_slug: data.slug || '',
 				voice_sample: data.voiceSample || data.rawInput || ''
 			};
@@ -663,6 +664,7 @@
 				subject_line: initialSuggestion.subject_line,
 				core_message: initialSuggestion.core_message,
 				topics: initialSuggestion.topics,
+				domain: initialSuggestion.domain || '',
 				url_slug: initialSuggestion.url_slug,
 				voice_sample: initialSuggestion.voice_sample
 			};
@@ -808,7 +810,7 @@
 
 						case 'complete':
 							if (event.data.data) {
-								const raw = event.data.data as Record<string, unknown>;
+								const raw = event.data.data as unknown as Record<string, unknown>;
 								const ctx = raw.inferred_context as Record<string, unknown> | undefined;
 								const newSuggestion: AISuggestion = {
 									...(raw as unknown as AISuggestion),

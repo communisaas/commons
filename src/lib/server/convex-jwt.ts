@@ -17,7 +17,9 @@
  * Runtime: Works on Cloudflare Workers (uses Web Crypto via jose).
  */
 
-import { SignJWT, importPKCS8, exportJWK, type JWK, type KeyLike } from 'jose';
+import { SignJWT, importPKCS8, exportJWK, type JWK } from 'jose';
+
+type ConvexJwtPrivateKey = Awaited<ReturnType<typeof importPKCS8>>;
 
 // ─── Configuration ───
 
@@ -28,14 +30,14 @@ const TOKEN_TTL_SECONDS = 3600; // 1 hour
 
 // ─── Cached key material ───
 
-let _privateKey: KeyLike | null = null;
+let _privateKey: ConvexJwtPrivateKey | null = null;
 let _publicJwk: JWK | null = null;
 
 /**
  * Import the RSA private key from PEM string (cached after first call).
  * Returns null if CONVEX_JWT_PRIVATE_KEY is not set.
  */
-async function getPrivateKey(): Promise<KeyLike | null> {
+async function getPrivateKey(): Promise<ConvexJwtPrivateKey | null> {
 	if (_privateKey) return _privateKey;
 
 	const pem = process.env.CONVEX_JWT_PRIVATE_KEY;

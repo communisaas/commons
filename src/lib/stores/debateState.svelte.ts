@@ -564,6 +564,7 @@ function createDebateState() {
 
 				const source = (aiResolution.source as AIResolutionData['source']) ?? 'ai_panel';
 				const resMinerCount = (aiResolution.minerCount as number) ?? undefined;
+				const models = Array.isArray(aiResolution.models) ? aiResolution.models : [];
 
 				const resolution: AIResolutionData = {
 					argumentScores,

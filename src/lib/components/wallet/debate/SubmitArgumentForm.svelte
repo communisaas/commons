@@ -10,13 +10,15 @@
 	} = $props();
 
 	let uiState: 'drafting' | 'signing' | 'submitting' | 'confirmed' | 'error' = $state('drafting');
-	let stance: 0 | 1 | 2 = $state(0);
+	type Stance = 0 | 1 | 2;
+	let stance = $state<Stance>(0);
 	let bodyText = $state('');
 	let amendmentText = $state('');
 	let stakeAmount = $state('');
 	let errorMessage = $state('');
 	let txHash = $state('');
 
+	const stanceOptions = [0, 1, 2] as const satisfies readonly Stance[];
 	const stanceLabels = ['Support', 'Oppose', 'Amend'] as const;
 
 	const canSubmit = $derived(
@@ -108,9 +110,9 @@
 			<div>
 				<label class="block text-sm font-medium text-slate-700">Stance</label>
 				<div class="mt-1 flex gap-2">
-					{#each [0, 1, 2] as s}
+					{#each stanceOptions as s}
 						<button
-							onclick={() => { stance = s as 0 | 1 | 2; }}
+							onclick={() => { stance = s; }}
 							class="rounded-lg px-4 py-2 text-sm font-medium transition-colors {stance === s
 								? 'bg-slate-900 text-white'
 								: 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}"

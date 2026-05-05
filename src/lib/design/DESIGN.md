@@ -4,6 +4,14 @@ When building or modifying UI in this codebase, follow these rules.
 They encode the design philosophy structurally. Do not override them
 without reading `docs/design/design-system.md` first.
 
+## Authority
+
+Canonical order: `docs/design/design-system.md`, then `docs/design/voice.md`,
+then this contract, then shipped code plus explicit divergence banners, then
+feature specs. Aspirational specs do not override this file. If a feature spec
+conflicts on radius, color semantics, motion, or recipient-facing proof
+language, normalize to this contract.
+
 ## Decision Tree
 
 **Showing a number?**
@@ -43,6 +51,14 @@ without reading `docs/design/design-system.md` first.
   The void between entities IS the boundary (32px default gap).
   Internal spacing within each entity stays tight (4-8px).
 
+**Rendering recipient/staffer-facing proof?**
+→ Lead with what answers recipient triage: verified constituents,
+  jurisdiction, verification method, authorship, geography, timing,
+  and deduplication. Keep platform-internal metrics (`GDS`, `ALD`,
+  entropy, `CAI`) and engagement labels (`Pillar`, `Veteran`,
+  `Established`, `Active`) out of headlines. Translate them into
+  plain behavioral evidence or put them in collapsed audit details.
+
 **Need spring animation?**
 → Import `SPRINGS` from `$lib/design/motion`. Named configs:
   `COUNT_TICK` (scoreboard), `METRIC` (dashboard), `DEPARTURE`
@@ -75,6 +91,11 @@ without reading `docs/design/design-system.md` first.
 - **Teal** (`--coord-route`): Routes, connections, active coordination.
 - **Emerald** (`--coord-verified`): Verified, delivered, proven.
 - **Indigo** (`--coord-share`): Sharing, spreading, secondary.
+
+Local categorical palettes are allowed only inside scoped components/specs
+where color classifies a domain taxonomy, not a product action or proof state.
+They must be redundant with position, shape, or text and cannot style CTAs,
+verification, delivery, proof strength, or global navigation.
 
 ## Voice
 

@@ -31,7 +31,10 @@ import { ThoughtEmitter } from '$lib/core/thoughts/emitter';
 import { decisionMakerRouter } from '../providers';
 import { sumTokenUsage } from '../types';
 import { verifyEmailBatch, type EmailVerdict } from '$lib/server/email-verification';
-import { updateContactVerification } from '../utils/contact-cache';
+import {
+	updateContactVerification,
+	type ContactVerificationStatus
+} from '../utils/contact-cache';
 import { generateAccountabilityOpeners } from './decision-maker-accountability';
 import {
 	documentToolDefinition,
@@ -643,7 +646,11 @@ export async function resolveDecisionMakers(
 					const verificationResults = await verifyEmailBatch(emailsToVerify);
 
 					// Collect cache writeback entries for ALL verified emails (before filtering)
-					const cacheUpdates: Array<{ organization: string; title: string; verificationStatus: string }> = [];
+					const cacheUpdates: Array<{
+						organization: string;
+						title: string;
+						verificationStatus: ContactVerificationStatus;
+					}> = [];
 					for (const dm of result.decisionMakers) {
 						if (!dm.email) continue;
 						const vr = verificationResults.get(dm.email);
