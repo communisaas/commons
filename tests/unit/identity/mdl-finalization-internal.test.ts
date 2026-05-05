@@ -39,7 +39,11 @@ describe('mDL verification finalization', () => {
 		const route = source('src/routes/api/identity/verify-mdl/verify/+server.ts');
 
 		expect(route).toContain("import { internal } from '$lib/convex'");
-		expect(route).toContain('serverMutation(internal.users.finalizeMdlVerification');
+		// H7 — route was migrated from serverMutation to serverInternalMutation
+		// to keep the auth-bridge boundary explicit. The internal-mutation API
+		// scopes the call to a server-only path; the public mutation API would
+		// require a session JWT we don't have here.
+		expect(route).toContain('serverInternalMutation(internal.users.finalizeMdlVerification');
 		expect(route).toContain('credentialHash: result.credentialHash');
 		expect(route).toContain("error: 'credential_reuse_detected'");
 		expect(route).not.toContain('api.users.bindIdentityCommitment');
