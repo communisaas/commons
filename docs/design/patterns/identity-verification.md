@@ -46,7 +46,8 @@ This suite of components handles identity verification for Commons's congression
 ### Emotional Architecture
 
 - **Approach motivation**: "3x response rate" = tangible benefit
-- **Autonomy preservation**: "Your address never leaves this device" = user control
+- **Autonomy preservation**: "Your address is encrypted at rest and unlocked only
+  for verification or official delivery" = user control without hiding delivery reality
 - **Status elevation**: "Join verified constituents" = aspirational group membership
 - **Trust through transparency**: Show exactly what Congress sees = demystify the process
 
@@ -255,7 +256,7 @@ This suite of components handles identity verification for Commons's congression
 1. **Immediate benefit**: "3x higher response rate" (concrete, measurable)
 2. **Social proof**: "87% of offices prioritize" (authority, consensus)
 3. **Time investment**: "30 seconds" (low friction)
-4. **Privacy guarantee**: "Your address never stored" (risk mitigation)
+4. **Privacy guarantee**: "Plaintext address is not stored at rest" (risk mitigation)
 
 ### Choice Architecture
 
@@ -274,9 +275,9 @@ This suite of components handles identity verification for Commons's congression
 
 ### What Works
 
-✅ **"Your address never leaves this device"**
+✅ **"Your address is encrypted at rest and disclosed only where official delivery requires it"**
 - Active voice, user-centric
-- Concrete protection (not abstract "encryption")
+- Concrete protection without implying browser-only custody
 
 ✅ **"Congress sees: ✓ Verified constituent from [District]"**
 - Shows exactly what's revealed

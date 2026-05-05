@@ -87,7 +87,7 @@ Congressional offices process thousands of messages. The signal hierarchy:
 | 2 | Email + attestation | "Verified constituent of [District]" with verification link | Read by staff, logged as constituent contact |
 | 3-5 | CWC official channel | Cryptographic proof of district, delivered through official intake | Highest priority, enters casework system |
 
-The jump from Tier 0 to Tier 2 is the highest-ROI graduation. Address entry takes 10 seconds. The user goes from "unknown sender" to "verified constituent." Tier 3 adds cryptographic guarantees and anonymous delivery, but the recipient-facing signal improvement is smaller than 0→2.
+The jump from Tier 0 to Tier 2 is the highest-ROI graduation. Address entry takes 10 seconds. The user goes from "unknown sender" to "verified constituent." Tier 3 adds cryptographic guarantees and official-channel delivery, but the recipient-facing signal improvement is smaller than 0→2.
 
 ### Where trust graduation appears in the template flow
 
@@ -346,7 +346,9 @@ street: v.optional(v.string()),
 zip: v.optional(v.string()),
 ```
 
-These fields store PII in plaintext. They violate the privacy guarantees documented in `docs/design/patterns/identity-verification.md` ("Your address never leaves this device") and the `convex/schema.ts` comment ("Address verified once via TEE, cached as session credential, then destroyed").
+These fields store PII in plaintext. They violate the current ground-vault
+custody rule: no plaintext address fields at rest, encrypted vault material for
+address persistence, and disclosed district/cell metadata for legibility.
 
 **Migration plan:**
 1. Address fields remain temporarily for Tier 2 address collection
@@ -415,7 +417,7 @@ Tier 2 inserts a new path BEFORE step 2: "Just verify your address" → address 
 
 ### Definition
 
-User has verified their identity with a government credential (mDL / EUDIW via Digital Credentials API). Their identity commitment (Poseidon2 hash) is registered in the Shadow Atlas Merkle tree. They can generate zero-knowledge proofs of district membership without revealing their identity. Messages are witness-encrypted to the TEE public key and delivered through the CWC API.
+User has verified their identity with a government credential (mDL / EUDIW via Digital Credentials API). Their identity commitment (Poseidon2 hash) is registered in the Shadow Atlas Merkle tree. They can generate zero-knowledge proofs of district membership without revealing their identity in public proof outputs. Messages use a short-lived delivery witness and the CWC API; AWS Nitro Enclave is the target delivery boundary, not the current one.
 
 > **Note (Cycle 15):** Previously, Tier 3 supported passport via self.xyz NFC and government ID via Didit.me. These providers have been removed. Identity verification now flows exclusively through the mDL path (Tier 4 Digital Credentials API), which also satisfies Tier 3 requirements.
 
@@ -428,14 +430,14 @@ User has verified their identity with a government credential (mDL / EUDIW via D
 - Credential policy with action-based TTL (`credential-policy.ts`)
 - Shadow Atlas registration handler (`shadow-atlas-handler.ts`)
 - Shadow Atlas API client (`shadow-atlas/client.ts`)
-- Convex schema for all Tier 3 models (`shadowAtlasRegistrations`, `submissions`, `encryptedDeliveryData` in `convex/schema.ts`)
+- Convex schema for all Tier 3 models (`shadowAtlasRegistrations`, `submissions`, `groundVaults`, `groundCellMetadata`, `passkeyVaultWrappers`, `submissionDeliveryReceipts` in `convex/schema.ts`)
 - Sybil resistance via identity_hash uniqueness
 - Cross-provider deduplication via identity_commitment
 
 **What's missing:**
 - ~~self.xyz NFC passport integration~~ (removed — Cycle 15; mDL is the sole verification path)
 - Browser-side ZK prover integration (voter-protocol has the prover, Commons hasn't wired it)
-- Browser-side witness encryption (XChaCha20-Poly1305 — no libsodium.js integration)
+- Ground Vault PRF and witness encryption hardening across all send paths
 - TEE infrastructure (AWS Nitro Enclave — provider interface exists, deployment missing)
 - CWC API submission (client code exists at `cwc-client.ts`, not connected to delivery pipeline)
 - On-chain proof verification (Scroll zkEVM — schema fields exist, integration missing)
@@ -457,11 +459,11 @@ This is the largest tier. The work breaks into five workstreams:
 - Build witness construction from Shadow Atlas credentials
 - UX: progress indicator, error handling, retry
 
-**Workstream B: Witness Encryption**
+**Workstream B: Ground Vault And Witness Encryption**
 - Integrate libsodium.js (or tweetnacl) for XChaCha20-Poly1305
-- Fetch TEE public key from attestation endpoint
-- Encrypt address + message content to TEE key
-- Store encrypted blob via EncryptedDeliveryData model
+- Unlock or re-enter the ground address for delivery
+- Encrypt a short-lived delivery witness
+- Persist address custody through Ground Vault tables, not EncryptedDeliveryData
 
 **Workstream C: TEE Infrastructure**
 - Deploy AWS Nitro Enclave
@@ -780,7 +782,7 @@ Shadow Atlas handler has its own IndexedDB logic. District credentials need stor
 | 0 | None | None | High (no identity) |
 | 1 | Low (passkey per device, but unlimited devices) | Medium (passkey is unforgeable) | Medium (pseudonymous) |
 | 2 | Medium (one address per credential, but addresses can be faked) | Medium (address verification is soft) | Low (district known) |
-| 3 | High (identity_commitment is unique per human, enforced by document scan) | High (ZK proof is unforgeable) | High (anonymous delivery) |
+| 3 | High (identity_commitment is unique per human, enforced by document scan) | High (ZK proof is unforgeable) | High (official-channel delivery with bounded address disclosure) |
 | 4 | Very high (government-issued, state-backed) | Very high (government PKI) | Medium (government credential metadata) |
 
 ### Offline / degraded mode

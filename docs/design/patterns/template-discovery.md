@@ -137,7 +137,9 @@ async function requestPreciseLocation(): Promise<PreciseLocation | null> {
 }
 ```
 
-**Privacy:** Standard browser permission flow. User opts in. Location never transmitted to server. Stored locally in IndexedDB.
+**Privacy:** Standard browser permission flow. User opts in. Location disclosure
+must be tied to a visible verification or delivery boundary and represented as
+encrypted ground-vault state plus disclosed district/cell metadata.
 
 **UI Response:**
 ```
@@ -222,7 +224,7 @@ async function onIdentityVerification(verificationResult: VerificationResult): P
   // Resolve to ALL governance units (Census Bureau API, client-side)
   const governance = await resolveAllGovernanceUnits(address);
 
-  // Store in IndexedDB (local-only, never transmitted)
+  // Store readable cache locally; canonical custody is encrypted Ground Vault.
   await indexedDB.put('verified_governance', {
     ...governance,
     verified: true,
@@ -231,17 +233,20 @@ async function onIdentityVerification(verificationResult: VerificationResult): P
   });
 
   // Generate ZK proof of congressional district (for federal delivery)
-  // Address used ONLY for proof generation, then discarded from memory
+  // Address used for proof generation and, when needed, official delivery.
   const zkProof = await generateDistrictProof(address, governance.congressional_district);
 
   // Submit ZK proof to chain (reveals only district hash, not address)
   await submitProofToScroll(zkProof);
 
-  // Address now destroyed - only governance units remain in IndexedDB
+  // Address remains persistable only as encrypted ground-vault material.
 }
 ```
 
-**Privacy:** Address required for identity verification anyway (mDL via Digital Credentials API). We're not asking for NEW data, just using verification flow. Address never transmitted to server, only stored locally and used for ZK proof generation (in TEE, then destroyed).
+**Privacy:** Address required for identity verification and official delivery is
+not new data, but the custody model must be explicit: encrypted ground-vault
+material at rest, disclosed district/cell metadata for legibility, readable
+address fields only at declared processing boundaries.
 
 **UI Response:**
 ```
@@ -782,8 +787,8 @@ Active vote Thursday 3/21
 ```
 ✅ mDL via Digital Credentials API (sole provider; self.xyz and Didit.me removed in Cycle 15)
 ✅ Address extracted from mobile driver's license
-✅ Address stored in IndexedDB only (never transmitted)
-✅ ZK proof generation uses address, then destroys it
+✅ Address stored as encrypted ground-vault material, with local cache when readable
+✅ ZK proof generation and official delivery use the readable address only at declared boundaries
 ✅ All governance units resolved and stored locally
 ```
 

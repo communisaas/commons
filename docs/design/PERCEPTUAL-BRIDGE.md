@@ -7,6 +7,12 @@
 **Depends on:** design-system.md, voice.md, ORG-ACQUISITION-SURFACE.md
 **Context:** Both layers are now shipping. The person-facing layer is deeply built (Postal Bubble, Power Landscape, RelayLoom, trust journey, three-zone template flow). The org-facing layer is operational (campaigns, supporter management, email delivery, RBAC, embeddable widgets). This document defines how they connect — not as two products stitched together, but as two perspectives on one event.
 
+> **Design reconciliation (2026-04-30):** The bridge principle remains
+> canonical. Recipient/staffer-facing packet language is now governed by
+> `VERIFICATION-LEGIBILITY.md`: engagement tier labels and raw integrity scores
+> are internal/org audit vocabulary unless translated into recipient-legible
+> evidence.
+
 ---
 
 ## The Event
@@ -95,7 +101,8 @@ SUBJECT: Rent Stabilization — 248 verified, 6 districts
 Jane,
 
 248 verified residents of District 6 have already sent this
-to Council Member Rodriguez. 12 Pillars. 43 Veterans.
+to Council Member Rodriguez. 156 government ID verified.
+196 individually composed.
 
 [Add your verified voice →]
 
@@ -209,7 +216,7 @@ This asymmetry is the privacy invariant in perceptual form. The person is a full
 2. Person sees campaign page (person-layer experience: Postal Bubble, mDL, compose pane)
 3. Person sends verified letter
 4. On-chain: nullifier recorded, action counted
-5. Org dashboard: +1 verified, tier distribution updates, GDS recomputes
+5. Org dashboard: +1 verified, identity/authorship fields update, audit metrics recompute
 6. Person never sees org dashboard. Org never sees person's identity.
 
 The transition is invisible. The person's experience is uninterrupted by the org's existence. They don't know they're "part of a campaign." They know they're sending a verified letter to their council member. The org is infrastructure they never see.
@@ -217,7 +224,7 @@ The transition is invisible. The person's experience is uninterrupted by the org
 ### Org → Decision-Maker (Org ships verification packet)
 
 1. Org admin previews verification packet
-2. Packet shows: verified count, tier distribution, GDS, ALD, debate signal
+2. Packet shows: verified count, identity breakdown, authorship texture, geography, timing, deduplication, and collapsed audit details
 3. Org clicks "Send Report"
 4. Decision-maker receives email with packet as structured footer
 5. Decision-maker clicks verification link → proof dashboard

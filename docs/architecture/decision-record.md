@@ -1,7 +1,7 @@
 # Architecture Decision Record: Zero-Knowledge Proof Generation
 
 **Date**: 2025-10-24
-**Status**: ✅ DECIDED - Browser-Native WASM Proving
+**Status**: DECIDED - Browser-Native WASM Proving; superseded for address custody by Ground Vault PRF
 **Decision Maker**: Technical Architecture Team
 **Impact**: Critical - defines entire cryptographic privacy model
 
@@ -11,15 +11,27 @@
 
 **CHOSEN: Browser-Native WebAssembly Proving**
 
-Zero-knowledge proofs will be generated entirely client-side in the user's browser using WebAssembly-compiled Noir circuits (UltraHonk backend via Barretenberg). User addresses will never leave the browser in any form—encrypted or unencrypted.
+Zero-knowledge proofs will be generated client-side in the user's browser using
+WebAssembly-compiled Noir circuits (UltraHonk backend via Barretenberg). Address
+custody is now governed by the Ground Vault PRF model: the original normalized
+address persists only as encrypted vault material, disclosed district/cell
+metadata is stored separately, and readable address fields appear only in memory
+for district resolution or government delivery requirements.
 
 ---
 
 ## Context
 
-VOTER Protocol requires zero-knowledge proofs of congressional district membership. Users must cryptographically prove they live in a specific district without revealing their residential address to anyone—not congressional offices, not platform operators, not network observers.
+VOTER Protocol requires zero-knowledge proofs of congressional district
+membership. Users must cryptographically prove they live in a specific district
+without making their residential address part of public proof or reporting
+surfaces. Official government delivery endpoints may still require readable
+postal identity fields.
 
-**Core Privacy Requirement**: User addresses must remain completely private. No trusted third party should ever have access to plaintext addresses.
+**Core Privacy Requirement**: plaintext addresses must not be stored at rest by
+Commons. They may be processed transiently for district resolution and official
+government delivery, while vault ciphertext and disclosed cell/district metadata
+carry the persistent state.
 
 ---
 
@@ -33,7 +45,7 @@ VOTER Protocol requires zero-knowledge proofs of congressional district membersh
 3. Web Workers generate Merkle witness (4 parallel workers for Poseidon hashing)
 4. Noir circuit compiled to WASM generates zero-knowledge proof (600ms-10s device-dependent)
 5. Proof sent to blockchain for on-chain verification
-6. **Address never leaves browser, never sent anywhere**
+6. **Address persists only as encrypted ground-vault material after verification**
 
 **Proving Performance**:
 - Desktop (modern CPU): 600-800ms
@@ -52,21 +64,22 @@ VOTER Protocol requires zero-knowledge proofs of congressional district membersh
 
 ### Why Browser-Native WASM?
 
-**1. Absolute Privacy Guarantee**
+**1. Proof Privacy and Bounded Address Custody**
 
-Browser-native proving provides the strongest possible privacy guarantee:
-- ✅ Address never leaves browser in any form
-- ✅ No encrypted transmission (nothing to intercept)
-- ✅ No trusted execution environment required
-- ✅ No server-side decryption point (no honeypot)
-- ✅ Mathematical impossibility of address leakage
+Browser-native proving provides the strongest proof privacy guarantee:
+- District proof generation does not require the plaintext address in the public proof
+- Ground Vault persists the original normalized address only as ciphertext
+- Disclosed H3/cell metadata is explicit product state, not hidden plaintext storage
+- Delivery may handle plaintext only long enough to satisfy official endpoint requirements
 
-**Alternative architectures** (TEE-based proving, cloud proving services) require transmitting encrypted addresses to servers. While encryption provides security, browser-native proving eliminates the attack surface entirely.
+TEE-based proving and cloud proving remain non-goals for the proof path. Delivery
+and address custody are separate concerns handled by encrypted witnesses,
+Ground Vault, and the future enclave boundary when it is actually deployed.
 
 **2. Trustless Architecture**
 
 Users don't need to trust:
-- ❌ Server operators (address never sent to servers)
+- ❌ Server operators with plaintext address at rest
 - ❌ Cloud providers (no cloud infrastructure for proving)
 - ❌ TEE manufacturers (no hardware trust assumptions)
 - ❌ Attestation verification (no remote attestation needed)
@@ -86,16 +99,16 @@ Browser-native proving aligns with web3 decentralization principles:
 
 **4. Regulatory Clarity**
 
-Address collection and transmission create legal compliance complexity:
+Plaintext address collection and transmission create legal compliance complexity:
 - GDPR: Address is personally identifiable information (PII)
 - CCPA: California residents have data deletion rights
 - State privacy laws: Growing patchwork of regulations
 
-**Browser-native architecture eliminates compliance burden**:
-- No address storage (nothing to delete)
-- No address transmission (nothing to breach)
-- No data processor agreements (no third-party involvement)
-- No cross-border data transfer (address never leaves device)
+**Ground-vault architecture reduces the compliance surface**:
+- No plaintext address storage at rest
+- Encrypted vault material and disclosed cell/district metadata have explicit retention semantics
+- Official government delivery disclosure is separated from public proof/reporting surfaces
+- Browser-native proving still avoids a centralized proof service
 
 **5. Long-Term Privacy Durability**
 
@@ -182,11 +195,11 @@ Encrypted data today may become decryptable tomorrow:
 ### Threat Model
 
 **Attackers CANNOT**:
-- ❌ Access plaintext address (never transmitted)
-- ❌ Decrypt address (never encrypted)
+- ❌ Read plaintext address from Commons storage
+- ❌ Decrypt the ground vault without local cache, passkey PRF unlock, or address re-entry
 - ❌ Infer address from proof (zero-knowledge property)
 - ❌ Reverse-engineer address from Shadow Atlas (Merkle tree reveals nothing)
-- ❌ Compromise server to steal addresses (address never sent to servers)
+- ❌ Compromise storage and recover plaintext addresses from vault ciphertext alone
 
 **Attackers CAN** (by design):
 - ✅ See which district user lives in (public output of proof)
@@ -304,7 +317,11 @@ Encrypted data today may become decryptable tomorrow:
 
 ## Conclusion
 
-**Browser-native WASM proving is the correct architecture** for VOTER Protocol's privacy requirements. While slightly slower on budget devices (5-10s vs hypothetical 2-5s TEE proving), the elimination of all server-side address handling provides **absolute privacy guarantees** that no alternative architecture can match.
+**Browser-native WASM proving remains the correct proof architecture** for VOTER
+Protocol's privacy requirements. Address custody is no longer described as
+browser-only; Ground Vault PRF is the authoritative model for encrypted address
+persistence, cross-device unlock where PRF is available, address re-entry
+fallback, and CWC delivery disclosure.
 
 **Privacy is not negotiable.** Speed optimizations are secondary to trustless, decentralized, censorship-resistant privacy preservation.
 

@@ -10,6 +10,10 @@
 > - **Files claimed "Created":** `src/lib/core/zkp/witness-builder.ts` and `src/lib/stores/proof-generation.svelte.ts` do not exist. Witness construction lives in `prover-client.ts` and `*-client.ts` per-circuit builders.
 > - **Feature gates:** `FEATURES.CONGRESSIONAL` is `false` (`src/lib/config/features.ts:24`); `FEATURES.DEBATE` was flipped to `true` in 2026-04. The CWC-delivery flow described here is still gated off; the debate-market flow is live.
 > - **TEE delivery:** `sendToTEE()` does not exist. Submissions validate a proof but do not hand the ciphertext to a TEE. AWS Nitro Enclave integration is in `docs/implementation-status.md` as "Planned."
+> - **Ground Vault PRF:** identity-blob / `encryptedDeliveryData` storage is
+>   retired. Current address custody is encrypted `groundVaults` ciphertext,
+>   disclosed `groundCellMetadata`, optional `passkeyVaultWrappers`, and address
+>   re-entry fallback. Delivery receipts live in `submissionDeliveryReceipts`.
 > - **Gas / cost:** "~2.2M gas" and "~$0.01 per verification" appear throughout without a backing benchmark; `contracts/test/` has no UltraHonk verifier gas harness that produces these numbers. Treat as unverified estimates, not measured values.
 
 > **Updated 2026-02-02**: Reflects Wave 2.3 browser prover integration completion.
@@ -37,20 +41,21 @@
 
 ## Executive Summary
 
-**What This Solves**: Anonymous, verifiable Congressional advocacy without revealing identity to offices or platform.
+**What This Solves**: verifiable Congressional advocacy with district proof,
+bounded address custody, and explicit official-delivery disclosure.
 
 **How It Works**:
 1. **Identity Verification**: User proves personhood via mDL (Digital Credentials API) (FREE, 30s-2min). self.xyz and Didit.me were removed in Cycle 15.
 2. **Shadow Atlas Registration**: Identity commitment added to district Merkle tree (tree size depends on depth: 260K-16M)
 3. **Zero-Knowledge Proof**: Browser generates Noir/UltraHonk proof of district membership **without revealing identity**
-4. **Witness Encryption**: Message content encrypted to TEE public key (XChaCha20-Poly1305 AEAD)
-5. **Encrypted Delivery**: TEE decrypts message, delivers via CWC API to congressional office
+4. **Ground Vault / Witness**: address is unlocked or re-entered to build a short-lived delivery witness
+5. **Official Delivery**: current resolver validates proof/cell consistency and delivers via CWC API; Nitro enclave is the target boundary
 6. **Reputation Update**: On-chain ERC-8004 reputation increase (domain: 'congressional-advocacy')
 
 **Privacy Guarantees**:
-- Congressional offices: See message, NOT identity (anonymous constituent)
-- Commons platform: See encrypted blob, NOT message or identity
-- TEE (AWS Nitro Enclave): Sees message + address only during delivery (ephemeral, no logging)
+- Congressional offices: See the message and any address fields required by official delivery
+- Commons storage: Holds encrypted vault/witness material and receipt metadata, not plaintext address fields at rest
+- Resolver: Sees message/address only during delivery processing; AWS Nitro Enclave is not current
 - Blockchain: Sees nullifier (prevents double-voting), NOT identity or message
 
 ---
@@ -115,7 +120,7 @@
 │ │ //   districtId                                                  ││
 │ └─────────────────────────────────────────────────────────────────┘│
 │           ↓                                                          │
-│ STEP 5: Witness Encryption (XChaCha20-Poly1305 AEAD)                │
+│ STEP 5: Delivery Witness Encryption (XChaCha20-Poly1305 AEAD)       │
 │ ┌─────────────────────────────────────────────────────────────────┐│
 │ │ const encryptedWitness = encrypt(                               ││
 │ │   witnessData: {                                                 ││
@@ -125,11 +130,12 @@
 │ │     zip: "20500",                                                ││
 │ │     congressional_district: "DC-00"                              ││
 │ │   },                                                             ││
-│ │   teePublicKey,  // TEE's public key (from /api/tee/pubkey)     ││
+│ │   resolverPublicKey,  // Current resolver key; future Nitro key ││
 │ │   algorithm: 'XChaCha20-Poly1305'                                ││
 │ │ );                                                               ││
 │ │                                                                  ││
-│ │ // Only TEE can decrypt this - not Commons, not blockchain   ││
+│ │ // Current: LocalConstituentResolver resolves this in process   ││
+│ │ // Target: Nitro moves key use into enclave memory              ││
 │ └─────────────────────────────────────────────────────────────────┘│
 │           ↓                                                          │
 │ STEP 6: Submit to Commons Backend                                │
@@ -154,21 +160,22 @@
 │ COMMONS BACKEND (SvelteKit API Routes)                              │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│ STEP 7: Store Encrypted Blobs (Convex: submissions table)           │
+│ STEP 7: Store Submission Metadata (Convex: submissions table)       │
 │ ┌─────────────────────────────────────────────────────────────────┐│
 │ │ submissions: defineTable({                                      ││
 │ │   proofBytes: v.bytes(),         // ZK proof (~7.3KB keccak)    ││
 │ │   districtRoot: v.string(),      // Public output 1             ││
 │ │   nullifier: v.string(),         // Public output 2 (indexed)   ││
 │ │   actionId: v.string(),          // Public output 3             ││
-│ │   encryptedWitness: v.bytes(),   // Address (TEE-encrypted)     ││
-│ │   encryptedMessage: v.bytes(),   // Message (TEE-encrypted)     ││
+│ │   encryptedWitness: v.bytes(),   // Short-lived witness         ││
+│ │   encryptedMessage: v.bytes(),   // Legacy/target ciphertext    ││
 │ │   templateId: v.id("templates"),                                ││
 │ │   status: v.string(),            // pending | verified | ...    ││
 │ │ }).index("by_nullifier_action", ["nullifier", "actionId"]);     ││
 │ │ // Uniqueness enforced in the mutation (mutations are atomic)   ││
 │ │                                                                  ││
-│ │ // Commons CANNOT read encrypted data — only the TEE can        ││
+│ │ // Commons does not persist plaintext address fields at rest    ││
+│ │ // Local resolver handles plaintext only at delivery boundary   ││
 │ └─────────────────────────────────────────────────────────────────┘│
 │           ↓                                                          │
 │ STEP 8: Submit ZK Proof to Scroll L2                                │
@@ -184,33 +191,33 @@
 │ │ // Rejects if: invalid proof, nullifier reused, wrong root      ││
 │ └─────────────────────────────────────────────────────────────────┘│
 │           ↓                                                          │
-│ STEP 9: Send to TEE for Delivery                                    │
+│ STEP 9: Resolve Delivery Witness                                    │
 │ ┌─────────────────────────────────────────────────────────────────┐│
-│ │ POST https://<tee-endpoint>/decrypt-and-deliver                 ││
+│ │ POST https://<resolver-endpoint>/resolve-and-deliver            ││
 │ │ {                                                                ││
-│ │   encrypted_witness,  // Address (only TEE can decrypt)         ││
-│ │   encrypted_message,  // Message content                        ││
+│ │   encrypted_witness,  // Short-lived delivery witness           ││
+│ │   encrypted_message,  // Legacy/target message ciphertext       ││
 │ │   submission_id,      // For tracking                           ││
 │ │   representative_ids  // Target congressional offices           ││
 │ │ }                                                                ││
 │ │                                                                  ││
-│ │ // TEE decrypts, delivers via CWC API, destroys plaintext       ││
+│ │ // Resolver validates proof/cell and delivers via CWC API       ││
 │ └─────────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────────┘
            ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│ AWS NITRO ENCLAVE (ARM Graviton, hypervisor-isolated TEE)           │
+│ DELIVERY RESOLVER (CURRENT LOCAL; FUTURE NITRO TARGET)              │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│ STEP 10: Decrypt Witness (ephemeral, no logging)                    │
+│ STEP 10: Resolve Witness (ephemeral, no logging)                    │
 │ ┌─────────────────────────────────────────────────────────────────┐│
 │ │ const witnessData = decrypt(                                    ││
 │ │   encrypted_witness,                                             ││
-│ │   teePrivateKey  // Never leaves enclave                         ││
+│ │   resolverPrivateKey                                             ││
 │ │ );                                                               ││
 │ │                                                                  ││
-│ │ // Now TEE knows: "1600 Pennsylvania Ave NW, DC-00"             ││
-│ │ // Address exists ONLY in enclave memory during delivery        ││
+│ │ // Current: LocalConstituentResolver handles plaintext in memory││
+│ │ // Target: Nitro keeps private key/plaintext inside the enclave ││
 │ └─────────────────────────────────────────────────────────────────┘│
 │           ↓                                                          │
 │ STEP 11: Call CWC API (Congressional Offices)                       │
@@ -232,11 +239,11 @@
 │ │ // Constituent in DC-00" - identity NOT revealed                ││
 │ └─────────────────────────────────────────────────────────────────┘│
 │           ↓                                                          │
-│ STEP 12: Destroy Plaintext (cryptographic erasure)                  │
+│ STEP 12: Discard Plaintext                                         │
 │ ┌─────────────────────────────────────────────────────────────────┐│
-│ │ // Enclave terminates after delivery                            ││
-│ │ // Address + message exist ONLY in volatile memory              ││
-│ │ // No disk writes, no logging, hypervisor-isolated              ││
+│ │ // Resolver drops local references after delivery               ││
+│ │ // No plaintext address/message persistence or logging          ││
+│ │ // Future Nitro adds hardware-isolated volatile memory          ││
 │ └─────────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────────┘
            ↓
@@ -666,10 +673,10 @@ function generateMerklePath(leaves: string[], leafIndex: number, depth: number):
  *
  * Receives:
  * - ZK proof of district membership
- * - Encrypted witness (address, only TEE can decrypt)
- * - Encrypted message (content)
+ * - Encrypted delivery witness
+ * - Message content or target encrypted-message field
  *
- * Stores encrypted blobs, submits proof to blockchain, sends to TEE
+ * Stores submission metadata, submits proof to blockchain, and schedules delivery
  */
 
 import { json } from '@sveltejs/kit';
@@ -709,7 +716,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}, { status: 409 });
 	}
 
-	// Store submission in database (encrypted blobs)
+	// Store submission in database (proof + encrypted witness metadata)
 	const submission = await db.submission.create({
 		data: {
 			proof_bytes: proofBytes,
@@ -808,8 +815,8 @@ submissions: defineTable({
   nullifier: v.string(),               // Public output 2 (prevents double-action)
   actionId: v.string(),                // Public output 3 (identifies action type)
 
-  // Encrypted data (only TEE can decrypt)
-  encryptedWitness: v.bytes(),         // Address + district (XChaCha20-Poly1305)
+  // Delivery data
+  encryptedWitness: v.bytes(),         // Short-lived delivery witness
   encryptedMessage: v.bytes(),         // Message content
 
   // Metadata
@@ -860,15 +867,15 @@ submissions: defineTable({
 ### Privacy Properties
 
 1. **Identity Privacy**:
-   - Congressional offices: See encrypted message + district, NOT identity
-   - Commons platform: See encrypted blobs, NOT message or identity
-   - TEE: Sees address + message only during delivery (ephemeral, no logging)
+   - Congressional offices: See message and any address fields required by official delivery
+   - Commons storage: Keeps encrypted vault/witness material and receipt metadata, not plaintext address fields at rest
+   - Resolver: Sees address + message only during delivery processing; Nitro enclave is not current
    - Blockchain: Sees nullifier (anonymous identifier), NOT identity
 
 2. **Message Privacy**:
-   - Encrypted with XChaCha20-Poly1305 AEAD to TEE public key
-   - Only TEE (AWS Nitro Enclave) can decrypt
-   - Commons backend stores encrypted blobs (cannot read plaintext)
+   - Delivery witness is encrypted for resolver processing
+   - AWS Nitro Enclave is the target hardware boundary
+   - Commons backend does not persist plaintext address request bodies
 
 3. **Double-Action Prevention**:
    - Nullifier = hash(userSecret, actionDomain)
@@ -885,18 +892,18 @@ submissions: defineTable({
 1. **Noir/UltraHonk Security**: Relies on Aztec's UltraHonk proving system with efficient recursion
 2. **Poseidon Hash**: Collision-resistant hash function optimized for ZK circuits
 3. **XChaCha20-Poly1305**: AEAD cipher (standardized, widely audited)
-4. **TEE Isolation**: AWS Nitro Enclaves hypervisor isolation (AMD SEV-SNP or ARM TrustZone)
+4. **Resolver Isolation Target**: current `LocalConstituentResolver` process isolation, with AWS Nitro Enclaves planned as the future hardware boundary
 
 ### Threat Model
 
 **Protects Against**:
-- ✅ Platform surveillance (Commons cannot read messages/identities)
+- ✅ Plaintext-at-rest surveillance (Commons storage does not retain plaintext address fields)
 - ✅ Congressional office profiling (cannot link messages to specific constituents)
 - ✅ Double-voting (nullifier prevents action reuse)
 - ✅ Non-residents (ZK proof verifies district membership)
 
 **Does NOT Protect Against**:
-- ❌ TEE compromise (if Nitro Enclave is fully compromised, ephemeral data could leak)
+- ❌ Resolver-boundary compromise (current process compromise, or future Nitro compromise, could leak ephemeral delivery data)
 - ❌ Side-channel attacks (timing analysis of delivery patterns)
 - ❌ Coordinated identity linkage (if congressional offices collude with identity providers)
 
@@ -940,7 +947,7 @@ submissions: defineTable({
 - [x] Build `/api/congressional/submit` endpoint
 - [x] Implement nullifier-enforced submission
 - [x] Implement proof → blockchain submission (async)
-- [ ] Implement encrypted blob → TEE delivery (Deferred to Phase 2)
+- [ ] Move local resolver delivery boundary into Nitro Enclave when deployed
 
 ### Phase 1.5: Testing & Optimization (COMPLETE - Wave 3.4)
 

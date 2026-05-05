@@ -10,6 +10,15 @@
 **Depends on:** Seed data (13 templates), `topicEmbedding` / `locationEmbedding` on the Convex `templates` table, `TemplateScope`, `TemplateJurisdiction`, `deriveTargetPresentation()`
 **Companion specs:** `POWER-LANDSCAPE-SPEC.md` (detail view), `decision-maker-enrichment-pipeline.md`
 
+> **Design reconciliation (2026-04-30):** The neighborhood colors in this
+> spec are a local categorical palette, not global Commons semantic colors.
+> They classify topic neighborhoods only. Teal, emerald, and indigo remain
+> the only global product semantics for routes, verification, and sharing.
+> Neighborhood color must be redundant with proximity, position, labels, and
+> density; it must not style CTAs, verification status, delivery status, or
+> proof strength. Any rounded containers in this spec normalize to
+> `rounded-lg` (8px) under `docs/design/design-system.md`.
+
 ---
 
 ## Problem Statement
@@ -941,14 +950,14 @@ static/geo/
 
 ## Appendix A: Color Palette
 
-### Neighborhood Colors (Semantic, Consistent Across All Views)
+### Neighborhood Colors (Local Categorical, Consistent Across Browse Views)
 
 | Neighborhood | Token | Hex | Use |
 |---|---|---|---|
-| Health & Safety | `health` | rose-500 `#f43f5e` | Left border, cluster fill, toggle pill |
-| Rights & Justice | `rights` | violet-500 `#8b5cf6` | Left border, cluster fill, toggle pill |
-| Place & Infrastructure | `place` | amber-500 `#f59e0b` | Left border, cluster fill, toggle pill |
-| Education & Opportunity | `education` | cyan-500 `#06b6d4` | Left border, cluster fill, toggle pill |
+| Health & Safety | `health` | rose-500 `#f43f5e` | Left border, cluster fill, neighborhood toggle |
+| Rights & Justice | `rights` | violet-500 `#8b5cf6` | Left border, cluster fill, neighborhood toggle |
+| Place & Infrastructure | `place` | amber-500 `#f59e0b` | Left border, cluster fill, neighborhood toggle |
+| Education & Opportunity | `education` | cyan-500 `#06b6d4` | Left border, cluster fill, neighborhood toggle |
 
 ### Power Emphasis Colors (Existing, Extended)
 

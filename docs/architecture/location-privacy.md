@@ -42,11 +42,18 @@
 
 ---
 
-**The server never knows a user's exact address. Location is inferred progressively, stored client-side, and revealed only through user action. All geocoding runs on self-hosted open-source infrastructure (Shadow Atlas: Nominatim + R-tree + SQLite). No runtime API calls are made to government services or third parties. Census TIGER/Line data is the underlying source data, downloaded and processed locally.**
+**Location privacy now follows the Ground Vault PRF model.** Commons stores
+disclosed district/cell metadata and encrypted ground-vault ciphertext, not
+plaintext address fields at rest. Some flows resolve an address server-side or
+submit readable address fields to official government delivery APIs; those are
+explicit processing boundaries, not hidden storage guarantees. Census
+TIGER/Line data remains the underlying source data for district geometry.
 
 ## Design Principle
 
-Location data follows a one-way funnel: raw signals enter, only derived facts (district codes, hashes) leave the privacy boundary. The server learns location implicitly — through which templates a user selects — not through direct disclosure.
+Location data follows a narrow-custody funnel: raw signals enter only at
+declared verification or delivery boundaries, derived facts become the visible
+state, and the original address persists only as encrypted vault material.
 
 ---
 

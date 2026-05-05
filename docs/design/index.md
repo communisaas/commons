@@ -20,6 +20,14 @@ Start here. Everything else references this.
 
 **Satoshi + JetBrains Mono.** Font loading, Tailwind classes, migration guide.
 
+### [RECONCILIATION.md](RECONCILIATION.md) — Documentation Reconciliation
+
+**How to resolve conflicts across old specs, aspirational docs, divergence banners, and the canonical design system.** Read this when a feature spec conflicts with the design system.
+
+### [GROUND-VAULT-PRF-TASK-GRAPH.md](GROUND-VAULT-PRF-TASK-GRAPH.md) — Ground Vault PRF Task Graph
+
+**Passkey PRF vault, address re-entry fallback, disclosed cell state, and review gates.** Read this before changing profile ground state, address verification, passkey vault unlock, or CWC delivery address handling.
+
 ### [PERCEPTUAL-BRIDGE.md](PERCEPTUAL-BRIDGE.md) — Person Layer / Org Layer Bridge
 
 **How one verified action appears in three worlds.** The design philosophy connecting the person-facing experience (built) to the org-facing experience (building). Read this before designing any org-layer surface.
@@ -129,14 +137,16 @@ Identity verification flows. "Stealthily cypherpunk."
 ## For Developers
 
 1. Read [design-system.md](design-system.md)
-2. Check [TYPOGRAPHY-SYSTEM.md](TYPOGRAPHY-SYSTEM.md) for implementation
-3. Reference [patterns/](patterns/) for specific UX solutions
+2. Check [RECONCILIATION.md](RECONCILIATION.md) when feature specs disagree
+3. Check [TYPOGRAPHY-SYSTEM.md](TYPOGRAPHY-SYSTEM.md) for implementation
+4. Reference [patterns/](patterns/) for specific UX solutions
 
 ## For Designers
 
 1. Read [design-system.md](design-system.md) — Philosophy and standards
-2. Read [voice.md](voice.md) — Writing style
-3. Check the standard: "Does this make coordination feel heavier?"
+2. Read [RECONCILIATION.md](RECONCILIATION.md) — Conflict resolution across docs
+3. Read [voice.md](voice.md) — Writing style
+4. Check the standard: "Does this make coordination feel heavier?"
 
 ---
 

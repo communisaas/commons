@@ -153,6 +153,8 @@ Design system, voice, architecture plans, and security hardening.
 
 **Core design:**
 - `design-system.md`, `voice.md`, `TYPOGRAPHY-SYSTEM.md` — Design system, voice, typography
+- `RECONCILIATION.md` — Authority order and conflict resolution across design docs/specs
+- `GROUND-VAULT-PRF-TASK-GRAPH.md` — Passkey PRF vault, address re-entry fallback, disclosed cell state, and review gates
 - `PERCEPTUAL-BRIDGE.md` — Person/org layer design bridge
 - `jurisdiction-ux-strategy.md` — Jurisdiction UX patterns
 - `patterns/` — UX patterns (4 files): identity-verification, location-filtering, privacy-governance, template-discovery

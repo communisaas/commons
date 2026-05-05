@@ -81,7 +81,9 @@ Dashboard for congressional offices to view verified constituent messages.
 - Aggregate constituent sentiment
 - Issue tracking by volume
 
-**Privacy**: Offices see district verification proof, not plaintext addresses.
+**Privacy**: Public/reporting surfaces show district verification proof. Official
+government delivery endpoints may still require readable address fields in the
+request body.
 
 **Scope**: US Congress (CWC API messages only)
 
@@ -143,17 +145,17 @@ Dashboard for congressional offices to view verified constituent messages.
 - ✅ Timestamp
 - ✅ Template category
 
-**What congressional offices DON'T see**:
-- ❌ Plaintext address
-- ❌ User's email address (unless user includes it in message)
-- ❌ User's identity (unless user includes name in message)
+**What public/reporting surfaces DON'T show**:
+- Plaintext address
+- User's email address
+- User's identity unless the user includes a name in the message
 
 **Privacy guarantees**:
-- Address encrypted in browser using witness encryption
-- TEE decrypts only during proving (2-5s window)
-- Address never persists in TEE memory
-- Proof is zero-knowledge (reveals district, not address)
-- CWC API receives proof + message, not address
+- Address is encrypted at rest in the ground vault
+- Passkey PRF unlock is used where the browser/authenticator supports it; re-entry is the fallback
+- Proof is zero-knowledge for district membership
+- CWC delivery may require readable address fields in the official government request
+- Delivery receipts store provider/status metadata, not plaintext request bodies
 
 **For direct email privacy**, see `/docs/strategy/delivery-verification.md`
 

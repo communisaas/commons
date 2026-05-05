@@ -7,6 +7,10 @@
 > - **Public-input count:** The submit endpoint enforces `publicInputs.length === 31` (three-tree circuit). Older sections describe a 29-element two-tree shape.
 > - **ReputationAgent proxy:** the `/api/expertise/verify` SvelteKit proxy described below does not exist in the repo; treat that whole section as aspirational infrastructure, not shipped glue.
 > - **TEE enclave:** not deployed. Witness encryption is scaffolded on the client; `LocalConstituentResolver` is the only active resolver. See `docs/architecture/tee-systems.md`.
+> - **Ground Vault PRF:** encrypted identity blobs and `encryptedDeliveryData`
+>   are retired for address custody. Use `groundVaults`,
+>   `groundCellMetadata`, `passkeyVaultWrappers`, and
+>   `submissionDeliveryReceipts`.
 > - **Identity providers:** self.xyz / Didit retired Cycle 15. Legacy enum values remain for stored-record compatibility but no new intake goes through them.
 > - **Data model:** canonical schema is `convex/schema.ts`. Any DDL here is illustrative.
 > - **`encryptedMessage`:** accepted by the schema but dropped on insert in `convex/submissions.ts`; do not rely on it being stored until TEE delivery ships.
@@ -29,7 +33,7 @@
 
 **Commons handles:**
 - UI/UX for address collection
-- Browser-side encryption (XChaCha20-Poly1305)
+- Ground Vault encryption, PRF unlock, and address re-entry fallback
 - Calling voter-protocol APIs
 - Displaying verification status
 
@@ -114,7 +118,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 ## Submission Endpoint (IMPLEMENTED)
 
-**Status:** Live; `FEATURES.CONGRESSIONAL = false` gates downstream CWC delivery in prod.
+**Status:** Implemented, not publicly launched. `FEATURES.CONGRESSIONAL = false`
+keeps CWC templates out of discovery/direct routes in prod, and
+`/api/submissions/create` still requires Tier 4+ proof authority before CWC
+delivery can run.
 **Implementation:** `src/routes/api/submissions/create/+server.ts` (SvelteKit route) → `convex/submissions.ts:create` (Convex action). The old `/api/congressional/submit` path does not exist; any reference to it in docs is stale.
 **Documentation:** `docs/congressional/congressional-submit.md`
 
@@ -138,7 +145,7 @@ Content-Type: application/json
     ...                       // [29..30] Engagement tier / additional public outputs
   ],
   "verifierDepth": 20,        // Circuit depth (18|20|22|24)
-  "encryptedWitness": "...",  // Witness encryption blob (to TEE public key). TEE Nitro enclave not deployed yet — `LocalConstituentResolver` is the only active resolver. See `docs/architecture/tee-systems.md`.
+  "encryptedWitness": "...",  // Short-lived delivery witness. TEE Nitro enclave not deployed yet — `LocalConstituentResolver` is the only active resolver. See `docs/architecture/tee-systems.md`.
   "templateId": "template-123"
   // NOTE: `encryptedMessage` is accepted by the schema but is currently dropped on insert (`convex/submissions.ts` hardcodes `encryptedMessage: undefined`). Do not rely on it being stored until the TEE delivery path ships.
 }
@@ -172,11 +179,11 @@ Content-Type: application/json
 ```
 1. Validate proof structure and public inputs (29 elements, two-tree)
 2. Check nullifier uniqueness (prevent double-voting)
-3. Store submission in Postgres (encrypted blobs)
+3. Store submission in Convex with encrypted witness and proof metadata
 4. Queue blockchain submission (async, non-blocking)
 5. Return submission ID immediately
 6. Background: Submit to DistrictGate on Scroll (0x6eD37CC3D42c788d09657Af3D81e35A69e295930)
-7. Background: Forward encrypted blobs to TEE for delivery
+7. Background: Deliver through resolver/CWC path and record sanitized receipts
 ```
 
 ### Security Invariants
@@ -203,26 +210,28 @@ CWC_DELIVERY_AGENT_NAME="Commons PBC"
 CWC_DELIVERY_AGENT_CONTACT=contact@commons.email
 ```
 
-### Delivery Flow (Inside TEE)
+### Delivery Flow (Current Resolver; TEE Target)
 
-**Critical:** CWC API called INSIDE AWS Nitro Enclave (not from Commons directly)
+**Critical:** AWS Nitro Enclave is the target boundary, not the current one.
+The current resolver handles plaintext address fields in process memory only for
+the official delivery request and must not persist them.
 
 ```
-1. User browser encrypts address to TEE public key
-2. Encrypted blob stored in Postgres
+1. User browser unlocks or re-enters the ground address
+2. Address is represented at rest by encrypted Ground Vault ciphertext
 3. Message delivery triggered
-4. TEE fetches encrypted blob
-5. TEE decrypts address (exists only in TEE memory)
-6. TEE calls CWC API with plaintext address
+4. Resolver decrypts the short-lived witness
+5. Resolver verifies proof and reconciles address/cell
+6. Delivery worker calls CWC API with plaintext address if required
 7. CWC delivers to congressional office
-8. TEE returns confirmation
-9. Address DESTROYED (zeroed from TEE memory)
+8. Commons stores sanitized per-recipient receipt metadata
+9. Plaintext address discarded after the official request boundary
 ```
 
-### CWC API Client (Inside TEE)
+### CWC API Client (Current Local Resolver; Future TEE)
 
 ```typescript
-// voter-protocol TEE code (NOT in Commons)
+// Current Commons resolver path; future Nitro moves this boundary into the enclave.
 interface CWCSubmission {
   campaign_id: string;
   delivery_agent_id: string;
@@ -264,7 +273,9 @@ async function submitToCWC(submission: CWCSubmission): Promise<{ success: boolea
 - 10 requests per hour per user
 - 100 requests per hour per delivery agent
 
-**Commons enforces rate limits BEFORE calling TEE.**
+**Commons enforces rate limits before entering the delivery resolver/CWC call.**
+Today that resolver is `LocalConstituentResolver`; the future Nitro deployment
+keeps the same pre-resolver rate-limit boundary.
 
 ---
 
@@ -530,22 +541,23 @@ Phase 2 (planned):
 
 ---
 
-## TEE Encrypted Delivery
+## Encrypted Delivery Boundary
 
-**AWS Nitro Enclaves (voter-protocol deployment, NOT Commons)**
+**Current:** `LocalConstituentResolver` in the Commons server/worker process.
+**Target:** AWS Nitro Enclave resolver deployment.
 
 ### Flow Overview
 
 ```
-1. Browser encrypts address (XChaCha20-Poly1305 to TEE public key)
-2. Encrypted blob stored in Postgres
+1. Browser unlocks or re-enters the ground address
+2. Encrypted Ground Vault ciphertext remains the address-at-rest record
 3. Message delivery triggered
-4. Commons fetches encrypted blob from database
-5. Commons sends encrypted blob to voter-protocol TEE endpoint
-6. TEE decrypts inside hardware enclave (ARM Graviton)
-7. TEE calls CWC API with plaintext address
-8. TEE returns delivery confirmation
-9. Address DESTROYED (zeroed from TEE memory)
+4. Commons builds and resolves a short-lived delivery witness
+5. Local resolver handles plaintext only for proof/cell reconciliation and CWC submission
+6. Future Nitro resolver moves this boundary into hardware-isolated memory
+7. CWC API receives plaintext address fields where required
+8. Resolver records delivery confirmation
+9. Plaintext address discarded after the official request boundary
 10. Commons creates Message record (PUBLIC content + verification proof)
 ```
 
@@ -592,22 +604,22 @@ export async function encryptAddressBlob(
 > (witness encryption, `/api/tee/public-key`, resolver HTTP call) is shipped,
 > but the active resolver is `LocalConstituentResolver` — an in-process
 > fallback. The block below describes the target architecture once the
-> enclave deploys; treat any "exists ONLY in enclave" claim in this section
-> as aspirational until the deployment ships.
+> enclave deploys; treat enclave-only residency claims in this section as
+> aspirational until the deployment ships.
 
 ```rust
 // voter-protocol TEE code (Rust inside AWS Nitro Enclave) — PLANNED
 async fn decrypt_and_deliver(encrypted_blob: EncryptedBlob) -> Result<()> {
-  // 1. Decrypt using TEE private key (exists ONLY in enclave)
+  // 1. Decrypt with the Nitro-held private key once the target deploys
   let identity_blob = decrypt_blob(encrypted_blob, TEE_PRIVATE_KEY)?;
 
-  // 2. Parse address (plaintext exists ONLY in TEE memory)
+  // 2. Parse address (current path: process memory; target path: TEE memory)
   let address = identity_blob.address;
 
   // 3. Call CWC API with plaintext address
   cwc_submit_message(&address, &message_content).await?;
 
-  // 4. ZERO all secrets (address never leaves enclave)
+  // 4. Clear delivery secrets after the official request boundary
   zero_memory(&address);
   zero_memory(&identity_blob);
 

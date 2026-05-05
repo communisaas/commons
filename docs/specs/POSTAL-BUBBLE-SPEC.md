@@ -15,6 +15,11 @@
 **Supersedes:** Address verification paradigm in `location-picker-spec.md`
 **Companion specs:** `SPATIAL-BROWSE-SPEC.md`, `GEOGRAPHIC-IDENTITY-ROUTING.md`, [`voter-protocol/specs/CRYPTOGRAPHY-SPEC.md`](../../../voter-protocol/specs/CRYPTOGRAPHY-SPEC.md) (canonical crypto)
 
+> **Design reconciliation (2026-04-30):** Person-layer prompts in this spec
+> follow `docs/design/voice.md`: use location names or "templates," not
+> "campaigns." The bubble concept remains valid; stale prompt examples should
+> be normalized to the current voice guide.
+
 ---
 
 ## The Fundamental Error
@@ -1209,10 +1214,10 @@ If the shadow-atlas API is unreachable, the bubble degrades to **postal-code-onl
 Some postal codes (e.g., US PO Boxes, Canadian "H0H 0H0" for Santa Claus) map to a building, not a region. Nominatim returns a point with no extent. The bubble seeds at the point with a minimal radius (~100m) — which usually puts the user squarely in one district for all layers. Message: "This looks like a PO Box. The bubble is placed at its location — adjust if needed."
 
 ### Bubble at maximum extent (country selection only)
-If the user's only signal is country selection (no postal code, no GPS), the bubble is the entire country. Radius ~2,000km for the US. This is valid. The bubble terrain shows only the country outline (no district fences at this zoom — too many to render). Precision = country. The user accesses national-scope templates. The prompt is gentle: "Enter a postal code to see local campaigns." No gate, no demand.
+If the user's only signal is country selection (no postal code, no GPS), the bubble is the entire country. Radius ~2,000km for the US. This is valid. The bubble terrain shows only the country outline (no district fences at this zoom — too many to render). Precision = country. The user accesses national-scope templates. The prompt is gentle: "Enter a postal code to see local templates." No gate, no demand.
 
 ### Zero-signal state (brand new user, no location at all)
-No bubble exists. The user sees templates with `minimum_precision_required: 'none'` (international/universal scope). The browse page shows: "Add your location to see campaigns near you." This is the only state where the bubble literally does not exist — it has not been born yet.
+No bubble exists. The user sees templates with `minimum_precision_required: 'none'` (international/universal scope). The browse page shows: "Add your location to see templates near you." This is the only state where the bubble literally does not exist — it has not been born yet.
 
 ---
 

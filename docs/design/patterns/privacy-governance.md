@@ -37,17 +37,17 @@
 
 ### Federal Level (Fully Cryptographic - CURRENT)
 ```
-✅ Zero-knowledge district proof (Noir browser-native, address never leaves device)
-✅ Address encrypted in browser (XChaCha20-Poly1305 to TEE public key)
-✅ AWS Nitro Enclave verifies address, generates proof (2-5s TEE-based)
+✅ Zero-knowledge district proof (Noir browser-native)
+✅ Ground Vault persists normalized address as encrypted vault material
+✅ Passkey PRF unlock where supported; address re-entry fallback everywhere else
 ✅ CWC API delivery (SOAP XML, whitelisted static IP)
 ✅ Congressional offices receive: address + message content (required for delivery)
-✅ Platform operators never see address or message content
+✅ Commons avoids plaintext address storage at rest
 ```
 
 **Privacy Guarantee (Federal):**
-- Your address: Never seen by platform operators
-- Your message content: Never seen by platform operators (encrypted to TEE)
+- Your address: encrypted at rest, readable only during verification or official delivery boundaries
+- Your message content: delivered through the official channel and visible to the receiving office
 - Congressional offices: Receive both (CWC API requirement)
 - Employers/data brokers: Cannot trace (no database exists mapping identity → wallet)
 
@@ -154,7 +154,7 @@ submissions: defineTable({
 
 **Federal Level (Maximum Privacy):**
 - **ZK proof reveals**: District hash only (e.g., "TX-18" on-chain)
-- **Platform never sees**: Exact address (stays in browser, only TEE sees it during proving)
+- **Platform storage avoids**: Plaintext exact address; Ground Vault stores ciphertext
 - **Employers cannot trace**: No database links wallet → address
 
 **State Level (Moderate Privacy):**
@@ -175,11 +175,12 @@ submissions: defineTable({
 - **Platform never sees**: Exact address or neighborhood
 - **Employers cannot trace**: Whether you live in 78701 or 78704
 
-### Implementation: Client-Side Geographic Resolution
+### Implementation: Ground Vault Geographic Resolution
 
 **Step 1: User enters address ONCE during onboarding**
 ```typescript
-// Browser-only, never transmitted
+// Address is resolved at an explicit verification boundary and persisted only
+// as encrypted ground-vault material.
 async function resolveUserLocation(address: string): Promise<LocalGovernanceUnits> {
   // 1. Geocode address client-side (Census Bureau API)
   const coords = await geocodeAddress(address);
@@ -237,7 +238,7 @@ async function filterTemplatesForUser(): Promise<Template[]> {
     return false;
   });
 
-  // 4. Return filtered list to UI (server never learned what matched)
+  // 4. Return filtered list to UI (template filtering remains client-side)
   return relevant;
 }
 ```
@@ -281,7 +282,7 @@ async function submitLocalTemplate(templateId: string): Promise<void> {
 
 **After federal ZK proof submission:**
 - **On-chain public data**: District hash "TX-18" (anyone can see this)
-- **Platform still doesn't know**: Exact address (ZK proof hides it, only TEE saw it during proving)
+- **Platform storage still avoids**: Plaintext exact address; the ground vault holds ciphertext
 
 ### Privacy Preservation Through Action-Based Revelation
 
@@ -289,7 +290,7 @@ async function submitLocalTemplate(templateId: string): Promise<void> {
 
 **Example 1: Privacy-conscious user**
 ```
-1. Onboarding: Enters address (stored locally in IndexedDB, never transmitted)
+1. Onboarding: Enters address (saved as encrypted ground-vault material)
 2. Browses templates: Client-side filtering shows Austin + Texas + Federal templates
 3. Clicks only federal template: Platform learns only that user is in some Texas congressional district
 4. ZK proof generated: On-chain TX-18 district hash visible, but address remains hidden
@@ -448,7 +449,7 @@ Why we need this:
 ✓ Show relevant templates for your area
 ✓ Generate zero-knowledge proofs for federal delivery
 
-Your address never leaves your device.
+Your address is saved encrypted and used only for verification or official delivery.
 ```
 
 **Screen 2: Processing (client-side)**
@@ -467,13 +468,14 @@ Finding your representatives...
 
 **Screen 3: Privacy explanation**
 ```
-Your address is stored locally on this device only.
+Your address is stored as encrypted ground-vault material. This device may also
+keep a readable encrypted cache for delivery convenience.
 
 When you participate:
-- Federal level: Zero-knowledge proof (address never seen by anyone except TEE during proving)
+- Federal level: Zero-knowledge proof for district membership plus bounded address disclosure for official delivery
 - State/county/city: We learn which area ONLY when you choose to send a template there
 
-Our platform never stores your address in any database.
+Commons does not store plaintext address fields at rest.
 ```
 
 ### Template Browser UI
@@ -503,7 +505,7 @@ Impact: Correlated with H.R. 3337 introduction (85% confidence)
 
 [Button] Send to Representative
 
-Privacy note: Generates zero-knowledge proof (address never leaves your device)
+Privacy note: Generates a zero-knowledge proof and uses encrypted ground state for delivery.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -642,22 +644,22 @@ Response: { acknowledged: true }
 ### Phase 1 Launch (3 months):
 
 **Federal Delivery:**
-- ✅ Zero-knowledge proofs (Noir browser-native, address never leaves device)
-- ✅ AWS Nitro Enclave verification (address seen only in TEE during proving, then destroyed)
+- ✅ Zero-knowledge proofs (Noir browser-native)
+- ✅ Ground Vault PRF address custody (PRF unlock where supported, re-entry fallback)
 - ✅ CWC API delivery (verified on-chain, congressional offices receive address + message)
-- ✅ Platform operators never see address or message content
+- ✅ Commons stores no plaintext address fields at rest
 
 **Local/State Delivery:**
 - ✅ Client-side `mailto:` link generation (opens user's email client)
 - ✅ Recipient names exposed (public officials, acceptable privacy trade-off)
 - ✅ User location inferred from template selection (action-based revelation)
-- ✅ Platform never stores exact address (only IndexedDB, browser-local)
+- ✅ Platform never stores plaintext exact address at rest
 - ✅ No delivery confirmation (email is fire-and-forget)
 - ❌ No reputation tracking (can't verify delivery without on-chain proof)
 
 **Template Discovery:**
 - ✅ Client-side filtering (ALL templates downloaded, filtered locally in browser)
-- ✅ User's governance units stored in IndexedDB (never transmitted to server)
+- ✅ User's governance units cached locally; disclosed district/cell metadata may also persist as ground state
 - ✅ Platform learns location ONLY when user selects template (action-based)
 - ✅ Privacy scales by governance level (federal = most private, city = least private)
 
@@ -681,13 +683,13 @@ Response: { acknowledged: true }
 
 **Federal (Maximum Privacy):**
 - ZK proof reveals district hash only
-- Address never leaves browser (only TEE sees it during proving, then destroyed)
-- Platform operators architecturally cannot access address or message content
+- Address persists only as encrypted ground-vault material
+- Official delivery may disclose readable address fields to the government endpoint
 
 **State/County/City (Action-Based Privacy):**
 - Clicking "Austin mayor template" reveals you care about Austin politics
 - Platform infers you're likely in Austin (not confirmed, could be concerned outsider)
-- Exact address remains unknown (stored locally in IndexedDB, never transmitted)
+- Exact address is not stored as plaintext at rest
 - Recipient names exposed (public officials, acceptable)
 
 **UI Agency Without Surveillance:**

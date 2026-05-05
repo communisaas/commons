@@ -51,7 +51,7 @@ Infrastructure that took years. Zero of this exists in any competitor's stack.
 | AI agents (DM discovery, message writer, subject line, sources) | Production | 8,188 |
 | Identity verification (mDL, passkey, address, district credentials) | Production | 8,665 |
 | Debate participation (propose, argue, stake, resolve) | Production | Full lifecycle |
-| Congressional submission (CWC + encrypted witness) | Production | 305 |
+| Congressional submission (CWC + encrypted witness) | Implemented, launch-gated | 305 |
 | Template system (create, share, browse) | Production | Full CRUD |
 | Spatial Browse (3 views) | Production | Production |
 | Chain abstraction (3 wallet paths) | Production | Production |

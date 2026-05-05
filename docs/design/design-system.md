@@ -4,6 +4,20 @@
 
 ---
 
+## Authority
+
+This document is the canonical design contract for Commons. When docs conflict, resolve them in this order:
+
+1. `docs/design/design-system.md` for visual philosophy, containment, typography, color, motion, and dimensional primitives.
+2. `docs/design/voice.md` for product language and audience register.
+3. `src/lib/design/DESIGN.md` for the short agent/developer contract that implements this document.
+4. Shipped code plus explicit divergence banners for current implementation reality.
+5. Feature specs for local intent. Aspirational specs do not override the design system unless they declare a scoped exception.
+
+Feature specs may define local patterns, but they cannot redefine the global visual vocabulary. If an older spec says `rounded-xl`, uses a non-core color as a semantic action/status color, or headlines a platform-internal metric to a recipient, normalize it back to this contract.
+
+---
+
 ## The Generative Constraints
 
 Two rules produce every visual decision:
@@ -98,6 +112,8 @@ Each action carries an engagement tier: new, active, established, veteran, pilla
 Data: per-action `engagementTier` → `tiers[]` + `cai` on the packet.
 Primitives: `Rings` (tier depth), tier distribution bars.
 
+**Audience scope:** Engagement depth is real, but it is not a default staffer-facing trust claim. Use engagement for org operations, debate weighting, rate limiting, platform analytics, and the individual's own civic record. Decision-maker packets should lead with constituency, identity verification method, authorship, geography, timing, and deduplication. If engagement appears outside internal/org contexts, translate it into plain behavioral evidence ("12 supporters with 2+ years sustained engagement") or move it into collapsed audit details. Do not headline `Pillar`, `Veteran`, `GDS`, `ALD`, entropy, or CAI to recipients.
+
 ### Cross-Dimensional Interaction
 
 Dimensions are not independent. Geography × Time = "where did the surge come from?" Identity × Geography = "are the gov-ID-verified people concentrated or spread?" Voice × Time = "did the individual compositions come first, then the template echoes?"
@@ -108,7 +124,7 @@ When the design system matures, dimensional primitives should cross-filter: hove
 
 ## Color
 
-Three semantic colors. No others.
+Three global semantic colors. No other global semantic colors.
 
 ```css
 /* Semantic */
@@ -128,9 +144,10 @@ Three semantic colors. No others.
 --text-muted: #94a3b8;                     /* Slate-400 */
 ```
 
-Teal for routes. Indigo for sharing. Emerald for verification. **No other semantic colors.** Violet, purple, blue as semantic accent colors are prohibited — they fragment the vocabulary. If you reach for violet, ask whether the element is a route (teal), a share (indigo), or a verification signal (emerald). It's always one of the three.
+Teal for routes. Indigo for sharing. Emerald for verification. **No other global semantic colors.** Violet, purple, blue as action/status/proof accent colors are prohibited — they fragment the vocabulary. If you reach for violet as a product semantic, ask whether the element is a route (teal), a share (indigo), or a verification signal (emerald). It's always one of the three.
 
 **Scoped exceptions:**
+- **Local categorical palettes** — permitted when color classifies a local domain taxonomy, not product semantics. Examples: Spatial Browse topic neighborhoods, map country fills, power-level categories, source-type categories in intelligence panels. These palettes must be confined to the component/spec, redundant with shape/position/text, and unavailable for CTAs, verification status, delivery status, proof strength, or global navigation.
 - **Debate subsystem** — violet is permitted within `src/lib/components/debate/` as an AI-reasoning / evaluation-phase signal. It separates AI-contributed outputs (machine scores, AI evaluation phase) from human deliberation (amber) and semantic verdicts (emerald/red/amber). This is subsystem-local vocabulary, not a global semantic. Prohibited outside the debate subsystem.
 - **Party indicators** — purple for Independent is a political convention, not a design decision. Permitted on representative/decision-maker indicators only.
 
@@ -310,7 +327,7 @@ Use the minimum structure the task requires for the user to perceive, chunk, and
 
 - **Proximity ratio** — the default. Entity lists, form sections, metric displays, settings groups. No borders, no backgrounds, no cards. Tight internal spacing (4-8px), generous void between clusters (32-48px). The void IS the boundary.
 - **Cards** — ONLY for bounded artifacts. The email preview IS a card (it's a document). A template card IS a card (it's a browsable object). The proof specimen IS a card (it's evidence). A list of supporters is NOT a card. A settings section is NOT a card. A metric display is NOT a card.
-- **`rounded-xl` (12px)** — prohibited. Civic infrastructure has edges. Use `rounded-lg` (8px) sparingly for actual cards. `rounded` (4px) for inputs. Nothing for typographic layouts.
+- **`rounded-xl` (12px)** — prohibited. Civic infrastructure has edges. Use `rounded-lg` (8px) sparingly for actual cards. `rounded` (4px) for inputs. Nothing for typographic layouts. If an older feature spec says 12px radius, normalize to 8px unless a shipped shared primitive explicitly owns a different radius.
 - **`shadow-sm` on static elements** — prohibited. Shadow means "this floats above the ground plane." If nothing is below it, the shadow is lying. Reserve shadow for overlays, dropdowns, and modals — things that genuinely occlude content below them.
 - **`bg-white` containers** — prohibited as a default wrapper. The warm cream ground (`--surface-base`) is the surface. Content sits on it. White (`--surface-artifact`) is reserved for artifacts that need to feel like documents placed on a desk.
 - **Pill badges** (`rounded-full bg-{color}-50 text-{color}-700 text-xs px-2 py-0.5`) — prohibited. Replace with typographic annotations: mono text at reduced size, no background, no border. The information is in the words, not the container.

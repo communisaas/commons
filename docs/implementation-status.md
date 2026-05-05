@@ -13,7 +13,9 @@
 >
 > - **Data Model section** describes the current Convex-only backend.
 > - **Congressional + Passkey rows** now carry `(FEATURE-GATED, flag=false)`
->   annotations — code ships, flag is off.
+>   annotations. Congressional/CWC code ships but is not launched at runtime:
+>   public discovery excludes CWC templates, direct CWC template routes 404,
+>   and `/api/submissions/create` requires Tier 4+ authority before delivery.
 > - **Feature flag values** in the flags table reflect
 >   `src/lib/config/features.ts` today (CONGRESSIONAL=false,
 >   LEGISLATION/ACCOUNTABILITY=true).
@@ -46,9 +48,9 @@ Commons is live. The full verification loop works end-to-end: org creates campai
 | Address verification (Census geocoding, district credential) | Production |
 | mDL identity verification (W3C Digital Credentials API) | Production |
 | ZK proof generation (browser WASM, Noir/UltraHonk) | Production |
-| Congressional submission (CWC API, encrypted witness) | Production (FEATURE-GATED, `CONGRESSIONAL=false`) |
+| Congressional submission (CWC API, encrypted witness) | Implemented, not launched (FEATURE-GATED, `CONGRESSIONAL=false`; runtime routes hide CWC templates; submission requires Tier 4+) |
 | Encrypted delivery (XChaCha20-Poly1305, X25519) | Production (TEE decryption Planned — `LocalConstituentResolver` active) |
-| Trust tier computation (6 tiers, 0-5) | Production (Tier 4 passport unreachable in `deriveAuthorityLevel`) |
+| Trust tier computation (6 tiers, 0-5) | Production (Congressional submission requires Tier 4+; legacy Tier 4 passport label is unreachable in `deriveAuthorityLevel`) |
 | Engagement tiers (0-4, on-chain portable) | Production |
 | Shadow Atlas (94,166 districts, chunked IPFS) | Production (pinning on Storacha — sunsetting 2026-05-31) |
 | OAuth (Google, Facebook, LinkedIn, Coinbase) | Production |
@@ -159,7 +161,7 @@ Source: `src/lib/config/features.ts`
 
 | Flag | Value | Notes |
 |------|-------|-------|
-| CONGRESSIONAL | `false` | CWC delivery pipeline (code ships, flag off) |
+| CONGRESSIONAL | `false` | CWC delivery pipeline is implemented but not launched; discovery and direct CWC routes are hidden while false; submit endpoint requires Tier 4+ |
 | WALLET | `true` | EVM + NEAR providers |
 | STANCE_POSITIONS | `true` | Position registration |
 | PUBLIC_API | `true` | V1 RESTful API |

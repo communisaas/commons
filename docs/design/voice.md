@@ -41,11 +41,11 @@ This document defines how Commons communicates. State what is. Show what exists.
 
 ❌ "UltraHonk zero-knowledge proofs verify you live in the district without revealing your address"
 ✅ Primary: "Verify residency"
-✅ Popover: "Zero-knowledge proof. Congress sees verification, not your address."
+✅ Popover: "Zero-knowledge proof for district membership. Official delivery may still require address fields."
 
-❌ "Your message is encrypted in your browser, decrypted only inside an AWS Nitro Enclave (hardware-isolated environment), then sent to Congress via their official API"
+❌ "Your message uses a live AWS Nitro Enclave today, then goes to Congress via their official API"
 ✅ Primary: "Send to Congress"
-✅ Popover: "Encrypted delivery via AWS Nitro Enclave to congressional offices."
+✅ Popover: "Encrypted delivery witness. Hardware-isolated enclave is the target boundary; current delivery still discloses required address fields to the official API."
 
 ### 4. No Pre-Defending
 
@@ -143,11 +143,11 @@ This document defines how Commons communicates. State what is. Show what exists.
 
 **Example 2: Message delivery**
 - Primary: "Send to Congress"
-- Popover: "Encrypted in browser → AWS Nitro Enclave → Congressional office API"
+- Popover: "Encrypted witness -> delivery worker -> Congressional office API"
 
 **Example 3: Identity verification**
 - Primary: "Verify residency"
-- Popover: "Zero-knowledge proof. We see verification, not your address."
+- Popover: "Zero-knowledge proof plus encrypted ground vault for future delivery."
 
 ### Feature Descriptions
 
@@ -298,7 +298,7 @@ This document defines how Commons communicates. State what is. Show what exists.
 ```svelte
 <button>
   Verify residency
-  <InfoIcon tooltip="Zero-knowledge proof. We see verification, not your address. Congress sees your full message + address." />
+  <InfoIcon tooltip="Zero-knowledge proof plus encrypted ground vault. Congress sees your message and any address fields required by its official API." />
 </button>
 ```
 
@@ -490,7 +490,8 @@ Before shipping copy, verify:
 ```
 Your address is encrypted in your browser using XChaCha20-Poly1305,
 sent to an AWS Nitro Enclave that generates a Noir zero-knowledge proof,
-then deleted. The proof goes on-chain. Your address never touches our servers.
+then deleted. The proof goes on-chain. The copy claims the address avoids every
+server boundary.
 ```
 
 **CORRECT (target architecture — post-enclave deployment):**
@@ -499,7 +500,7 @@ then deleted. The proof goes on-chain. Your address never touches our servers.
 
 **CORRECT (current reality, 2026-04):**
 - Primary: "Send to Congress"
-- Popover: "Encrypted in browser → our delivery worker → Congressional office API. Hardware-isolated enclave is on the roadmap. ZK proof of residency goes on-chain."
+- Popover: "Encrypted witness -> our delivery worker -> Congressional office API. Hardware-isolated enclave is on the roadmap. ZK proof of residency goes on-chain. Government delivery may require address fields."
 
 ### Example: Location detection
 

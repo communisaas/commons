@@ -40,7 +40,10 @@ Schema is defined in `convex/schema.ts` using `defineTable({...}).index(...)` / 
 | `verificationAudits` | Compliance audit trail for verification attempts. No PII — only method, result, timestamps. |
 | `districtCredentials` | Verifiable credentials for district residency. |
 | `shadowAtlasRegistrations` | Three-Tree ZK identity architecture. Leaf hash and Merkle proof; user secret is never persisted. |
-| `encryptedDeliveryData` | XChaCha20-Poly1305 encrypted identity blob. Platform cannot decrypt; only TEE can. |
+| `encryptedDeliveryData` | Legacy tombstone for retired identity blobs. New writes fail closed; use `groundVaults`, `groundCellMetadata`, and `passkeyVaultWrappers`. |
+| `groundVaults` | Encrypted normalized address vault ciphertext and envelope metadata. No plaintext address fields at rest. |
+| `groundCellMetadata` | Disclosed district/cell metadata linked to the active credential and vault. |
+| `passkeyVaultWrappers` | Optional WebAuthn PRF wrappers for vault DEK unlock on capable devices. |
 
 ### Templates & Content
 

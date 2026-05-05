@@ -41,6 +41,14 @@
 >   the code** — the integration uses `SHADOW_ATLAS_URL` env-var HTTP
 >   calls, not a typed helper of that name.
 
+> **Design reconciliation (2026-04-30):** This spec follows
+> `docs/design/design-system.md` for containment, radius, motion, color, and
+> voice. Older mentions of 12px node cards normalize to `rounded-lg` (8px).
+> Role groups should rely on proximity and hierarchy; card treatment is
+> reserved for addressable decision-maker objects that need bounded-object
+> affordance. No batch affordance may imply mail-merge delivery; labels must
+> distinguish position registration from message delivery.
+
 ---
 
 ## Vision
@@ -191,7 +199,7 @@ The citizen tapped "I support this." The interface transforms — not a page cha
 ```
 
 **Card design:**
-- White background, node-style border (`rgba(148, 163, 184, 0.45)`), 12px radius
+- White background, node-style border (`rgba(148, 163, 184, 0.45)`), 8px radius (`rounded-lg`)
 - Name: Satoshi bold, base size, slate-900
 - Title/org: Satoshi regular, sm, slate-600
 - Accountability opener: Satoshi regular, sm, indigo-600. NOT italic (contradicts voice — confident, not literary). Factual tone.
@@ -840,7 +848,7 @@ const ROLE_LABELS: Record<RoleCategory, string> = {
 ```
 
 **DecisionMakerLandscapeCard spec:**
-- Node-style card (white bg, subtle border, 12px radius, existing shadow pattern)
+- Node-style card (white bg, subtle border, 8px radius, existing shadow pattern)
 - Name: Satoshi bold, base, slate-900
 - Title + org: Satoshi regular, sm, slate-600
 - Accountability opener (if present): Satoshi regular, sm, indigo-600. Below title. Max 2 lines, overflow ellipsis.

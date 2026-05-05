@@ -729,13 +729,14 @@ async function searchCounties(query: string): Promise<JurisdictionSuggestion[]> 
 
 **No Server-Side Location Tracking:**
 - Jurisdiction picker operates client-side
-- Census data cached in IndexedDB (never transmitted)
-- Server only receives selected jurisdictions (public info, not PII)
+- Census data can be cached locally
+- Server-side ground state may retain disclosed district/cell metadata and encrypted vault material
+- Server only receives selected jurisdictions for public browsing actions
 
 **Template Discovery Privacy:**
-- User location resolved client-side (5-signal inference)
+- User location may come from disclosed ground metadata or client-side inference
 - ALL templates downloaded to client
-- Filtering happens locally (server never knows user location)
+- Filtering can happen locally; server-side recommendations must use disclosed location state honestly
 
 **Action-Based Revelation:**
 - Server learns "user clicked Austin template" (minimal disclosure)

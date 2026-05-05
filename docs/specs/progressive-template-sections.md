@@ -6,6 +6,14 @@
 **Owner:** Engineering
 **Last Updated:** 2025-01-12
 
+> **Design reconciliation (2026-04-30):** This is an older aspirational spec.
+> Follow `docs/design/design-system.md`, `docs/design/voice.md`, and
+> `docs/specs/SPATIAL-BROWSE-SPEC.md` for current browse-surface direction.
+> Person-layer language uses "templates" or location names, not "campaigns."
+> Container radius normalizes to `rounded-lg` (8px), white/gradient card
+> treatment must be earned, and non-core colors are local categorical signals
+> only.
+
 ## Executive Summary
 
 Replace hard toggle + clickable breadcrumb with auto-grouped template sections that unlock progressively as user provides more precise location data. Zero cognitive load, familiar pattern (Netflix/YouTube), drives location funnel completion.
@@ -32,13 +40,13 @@ Users think in **geographic tiers**, not relevance scores:
 Stage 1: IP (Country + State)
 ├─ Statewide (12)
 ├─ Nationwide (50)
-└─ 💡 23 campaigns in your city → Enter address
+└─ 23 templates in your city -> Enter address
 
 Stage 2: GPS (City)
 ├─ In Your City (5)          ← NEW
 ├─ Statewide (12)
 ├─ Nationwide (50)
-└─ 💡 3 campaigns in your district → Verify address
+└─ 3 templates in your district -> Verify address
 
 Stage 3: Verified (District)
 ├─ In Your District (3)      ← NEW
@@ -413,13 +421,13 @@ const { groups, selectedId, onSelect, loading = false }: Props = $props();
     {/each}
   {:else if groups.length === 0}
     <!-- Empty state -->
-    <div class="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center">
+    <div class="rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center">
       <div class="mb-3 text-slate-400">
         <svg class="mx-auto h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
       </div>
-      <h3 class="mb-1 text-sm font-medium text-slate-900">No campaigns yet</h3>
+      <h3 class="mb-1 text-sm font-medium text-slate-900">No templates here yet</h3>
       <p class="text-xs text-slate-600">Someone has to move first. Start one.</p>
     </div>
   {:else}
@@ -609,12 +617,12 @@ Add AFTER template browser, BEFORE end of file:
 ```svelte
 <!-- Next Tier Preview Card -->
 {#if nextTierPreview}
-  <div class="mt-8 rounded-xl border-2 border-dashed border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50 p-6 shadow-sm">
+  <div class="mt-8 rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 p-6">
     <div class="flex items-start gap-4">
       <!-- Icon -->
       <div class="flex-shrink-0">
-        <div class="flex h-12 w-12 items-center justify-center rounded-full bg-blue-100">
-          <svg class="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div class="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
+          <svg class="h-6 w-6 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
         </div>
@@ -622,10 +630,10 @@ Add AFTER template browser, BEFORE end of file:
 
       <!-- Content -->
       <div class="flex-1 min-w-0">
-        <p class="text-lg font-bold text-blue-900">
-          {nextTierPreview.count} {nextTierPreview.count === 1 ? 'campaign' : 'campaigns'} in your {nextTierPreview.level}
+        <p class="text-lg font-bold text-slate-900">
+          {nextTierPreview.count} {nextTierPreview.count === 1 ? 'template' : 'templates'} in your {nextTierPreview.level}
         </p>
-        <p class="mt-1 text-sm text-blue-700">
+        <p class="mt-1 text-sm text-slate-700">
           {nextTierPreview.cta}
         </p>
       </div>
@@ -633,7 +641,7 @@ Add AFTER template browser, BEFORE end of file:
       <!-- Action Button -->
       <button
         onclick={nextTierPreview.onClick}
-        class="flex-shrink-0 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700 hover:shadow-md active:scale-95"
+        class="flex-shrink-0 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-teal-700 active:scale-95"
       >
         {nextTierPreview.action} →
       </button>
@@ -666,7 +674,7 @@ const nextTierPreview = $derived.by((): NextTierPreview | null => {
       return {
         count: cityTemplateCount,
         level: 'city',
-        cta: 'Share your location to see campaigns in your community',
+        cta: 'Share your location to see templates in your community',
         action: 'Enable GPS',
         onClick: handleUpdateLocation
       };
@@ -716,14 +724,14 @@ No changes - maintain existing design.
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  ⚡  23 campaigns in your city                      │
-│      Share your location to see campaigns in your  │
+│      23 templates in your city                     │
+│      Share your location to see templates in your  │
 │      community                            Enable GPS│
 └─────────────────────────────────────────────────────┘
-├─ Border: 2px dashed blue-200
-├─ Background: Gradient from-blue-50 to-indigo-50
-├─ Icon: 48px circle with lightning bolt
-└─ Button: bg-blue-600, rounded-lg, shadow
+├─ Border: 2px dashed slate-200
+├─ Background: slate-50
+├─ Icon: optional, only if it clarifies precision
+└─ Button: teal route/action color, rounded-lg
 ```
 
 ## User Testing Checkpoints
@@ -742,7 +750,7 @@ No changes - maintain existing design.
 
 ### Checkpoint 3: Desire Creation
 
-**Test:** User sees preview card: "23 campaigns in your city".
+**Test:** User sees preview card: "23 templates in your city".
 **Expect:** User clicks "Enable GPS" to unlock.
 **Fail:** User ignores preview card.
 
@@ -790,7 +798,7 @@ No changes - maintain existing design.
 ### Edge Case 1: No Templates in Any Tier
 
 **Scenario:** New geographic region, zero templates.
-**Solution:** Show empty state: "No campaigns yet. Start one."
+**Solution:** Show empty state: "No templates here yet. Start one."
 
 ### Edge Case 2: Only Nationwide Templates
 

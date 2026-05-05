@@ -123,13 +123,15 @@
 1. **Address verification** (zero-knowledge proof):
    - You enter your address
    - We generate cryptographic proof you're in the district
-   - Congressional office gets proof, NOT your address
+   - Public/reporting surfaces show proof; official delivery APIs may require
+     readable address fields in the government request
    - Can't be forged, preserves privacy
 
 2. **Message delivery**:
-   - We deliver message + zero-knowledge proof
-   - Congressional office verifies proof cryptographically
-   - They know you're a verified constituent without seeing your address
+   - We deliver message + verification proof through the official delivery channel
+   - Congressional offices can verify constituent status cryptographically
+   - Where CWC requires postal identity fields, plaintext exists only at that
+     government delivery boundary
 
 3. **Protocol participation** (if you connected OAuth):
    - We verify delivery
@@ -286,7 +288,9 @@ function handleSendMessage(template: Template) {
 
 **For Congressional Messages**:
 - **Address verification**: Zero-knowledge proof (we don't store plaintext address)
-- **Congressional office sees**: Cryptographic proof of district membership, NOT your address
+- **Congressional office sees**: Cryptographic proof of district membership and,
+  where the official delivery API requires it, the readable address fields in
+  that government request
 - **OAuth access**: Read-only Sent folder (to verify you sent the message)
 - **What we verify**: Template was sent, message epistemically intact
 - **What we DON'T read**: Full email content (zero-knowledge verification)

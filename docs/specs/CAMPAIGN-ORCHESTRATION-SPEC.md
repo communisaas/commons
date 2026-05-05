@@ -37,6 +37,14 @@
 > - **`debateThreshold`** defaults to 50; code does **not** validate
 >   the 25–500 bounds claimed here.
 
+> **Design reconciliation (2026-04-30):** This spec predates
+> `VERIFICATION-LEGIBILITY.md`. Org dashboards may expose raw audit metrics
+> for diagnosis, but decision-maker reports and previews must lead with
+> staffer-legible evidence: verified constituents, jurisdiction, verification
+> method, authorship, geography, timing, and deduplication. Engagement tier
+> names and raw `GDS`/`ALD`/entropy/`CAI` values belong in collapsed audit
+> details or internal sorting labels, not report headlines.
+
 ---
 
 ## Purpose
@@ -162,7 +170,7 @@ The verification section does not explain what ZK proofs are. It states: "Distri
 
 ## 2. Campaign Dashboard
 
-The dashboard shows what the decision-maker will see. The org's job is to make the packet as strong as possible. The dashboard is the packet, assembling live.
+The dashboard shows the packet assembling live. The recipient preview uses staffer-legible evidence; the org can expand audit details for internal diagnosis. The org's job is to make the packet as credible as possible before shipping it.
 
 ### 2.1 Layout
 
@@ -176,25 +184,22 @@ The dashboard shows what the decision-maker will see. The org's job is to make t
 │  │   total acts  │  │   verified   │  │  verified %  │           │
 │  └──────────────┘  └──────────────┘  └──────────────┘           │
 │                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
-│  │     0.91     │  │     0.87     │  │     3.42     │           │
-│  │     GDS      │  │     ALD      │  │   entropy    │           │
-│  └──────────────┘  └──────────────┘  └──────────────┘           │
+│  ─── Identity Verification ──────────────────────────────────── │
 │                                                                  │
-│  ─── Tier Distribution ──────────────────────────────────────── │
+│  Government ID verified     156  ████████                       │
+│  Address matched            735  ████████████████████████████   │
 │                                                                  │
-│  Pillar   ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  12                 │
-│  Veteran  ████████░░░░░░░░░░░░░░░░░░░░░░░░  43                 │
-│  Establ.  █████████████████░░░░░░░░░░░░░░░░  89                 │
-│  Active   ██████████████████████████████░░░░ 104                │
-│  New      ████████████████████████████████████████████████ 643   │
+│  ─── Authorship ─────────────────────────────────────────────── │
+│                                                                  │
+│  Individually composed      196  ███████                        │
+│  Shared statement           695  █████████████████████████       │
 │                                                                  │
 │  ─── Geographic Spread ──────────────────────────────────────── │
 │                                                                  │
 │  [ map: CA Assembly districts, shaded by verified count ]        │
 │  94 / 80 districts reached (14 cross-boundary postal matches)   │
 │                                                                  │
-│  ─── Coordination Integrity ─────────────────────────────────── │
+│  ─── Coordination Audit (collapsed by default) ──────────────── │
 │                                                                  │
 │  GDS   0.91   Geographic Diversity Score                        │
 │  ALD   0.87   Author Linkage Diversity                          │
@@ -443,19 +448,19 @@ The widget iframe loads from `commons.email`. Origin validation prevents unautho
 │                                                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │  Housing Reform Act              ACTIVE      Letter       │  │
-│  │  1,247 total   891 verified   71%   GDS 0.91   94 dists  │  │
+│  │  1,247 total   891 verified   71%   94 districts         │  │
 │  │  Last action: 4 min ago                                   │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                                                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │  Water Board Accountability      ACTIVE      Letter       │  │
-│  │    312 total   204 verified   65%   GDS 0.78   12 dists  │  │
+│  │    312 total   204 verified   65%   12 districts         │  │
 │  │  Last action: 2 hours ago                                 │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                                                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │  Zoning Hearing RSVP             COMPLETE    Event        │  │
-│  │     87 total    62 verified   71%   GDS 0.83    4 dists  │  │
+│  │     87 total    62 verified   71%    4 districts         │  │
 │  │  Report sent: 2026-03-01                                  │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                                                                  │
@@ -468,7 +473,7 @@ The widget iframe loads from `commons.email`. Origin validation prevents unautho
 |-------------|-----------------|
 | Most recent (default) | Last action timestamp. Active work floats up. |
 | Verified count | Strongest verification packets first. |
-| GDS | Geographic reach. High-GDS campaigns at top. |
+| Geographic spread | Campaigns with broader constituent coverage first. Uses GDS internally. |
 | Oldest | Long-running campaigns that may need attention. |
 
 | Filter | Options |
@@ -492,7 +497,7 @@ interface OrgVerificationPosture {
 }
 ```
 
-This is the org's verification health at a glance. An org with 12 active campaigns, 4,200 verified actions across 312 districts, average GDS 0.88 — that is a credible operation. The numbers speak.
+This is the org's verification health at a glance. An org with 12 active campaigns, 4,200 verified actions across 312 districts, and strong geographic spread has a credible operation. The packet dimensions speak; raw audit values stay available for diagnosis.
 
 ---
 
@@ -514,26 +519,24 @@ Generated 2026-03-06 14:22 UTC
 891 verified constituents in your jurisdiction
 94 districts represented
 
-Tier Distribution
-  Pillar (4):       12     ██
-  Veteran (3):      43     ████████
-  Established (2):  89     █████████████████
-  Active (1):      104     ████████████████████
-  New (0):         643     ████████████████████████████████████████████████
+Identity verification
+  156 government ID verified
+  735 address matched
 
-Coordination Integrity
-  GDS:   0.91  (geographic diversity — 1.0 = one action per district)
-  ALD:   0.87  (message uniqueness — 1.0 = every message distinct)
-  H(t):  3.42  (temporal entropy — high = organic spread over time)
-  BV:    1.8   (burst velocity — low = no coordinated surge)
-  CAI:   0.12  (L3/L1 graduation rate — genuine engagement arc)
+Authorship
+  196 individually composed
+  695 shared statement
+
+Deduplication
+  One submission per verified person.
+  Duplicates removed before this count.
 
 Debate Market (if applicable)
   Consensus: AMEND (62%)  |  Depth: $247  |  14 participants
   Top argument: "Bill should index to CPI, not flat rate."
   Argument score: 0.84 (5-model AI panel median)
 
-Verify these numbers: https://commons.email/verify/clx9abc123
+Verify these numbers and audit details: https://commons.email/verify/clx9abc123
 ─────────────────────────────────────────────────────────
 ```
 
@@ -581,7 +584,7 @@ interface DeliveryRecord {
 }
 ```
 
-Each send freezes the verification packet at that moment. If the org sends again two weeks later with a stronger packet, the decision-maker sees progression: "891 verified → 2,104 verified. GDS improved from 0.91 to 0.94."
+Each send freezes the verification packet at that moment. If the org sends again two weeks later with a stronger packet, the decision-maker sees progression: "891 verified -> 2,104 verified. 94 districts -> 127 districts. Individually composed messages increased."
 
 ---
 
@@ -625,7 +628,7 @@ These carry forward from `org-data-model.md`. They are not repeated as guideline
 
 3. **Decision-maker sees verification status, not identity.** The proof dashboard shows "Verified constituent #247" — identity verified, not identity revealed.
 
-4. **Coordination scores are structural, not optional.** The org cannot hide GDS, ALD, or temporal entropy from the verification packet. These ship with every report. An org with a low GDS cannot suppress that signal.
+4. **Coordination audit is structural, not optional.** The org cannot hide GDS, ALD, or temporal entropy from the verification packet's audit details. These remain available with every report, but the recipient-facing headline translates them into geography, authorship, timing, and anomaly notes. An org with weak geographic spread cannot suppress that signal.
 
 5. **Analytics use Laplace noise.** All aggregate metrics displayed to the org include differential-privacy noise via the existing `AnalyticsAggregate` pipeline. At scale (100+ actions) the noise is negligible. At small counts, it prevents re-identification.
 

@@ -18,6 +18,10 @@
 > - Proof size (~4.6KB) → unvalidated.
 > - Integration roadmap checklist at the bottom of this doc → all items
 >   shipped; leave the boxes as-is as an artifact.
+> - Address custody language below predates Ground Vault PRF. Current custody is
+>   encrypted `groundVaults` ciphertext, disclosed `groundCellMetadata`, optional
+>   `passkeyVaultWrappers`, and address re-entry fallback. `encryptedDeliveryData`
+>   and identity-blob storage are retired.
 >
 > **Canonical references for the shipped system:**
 > - Protocol: [`voter-protocol/specs/CRYPTOGRAPHY-SPEC.md`](../../../voter-protocol/specs/CRYPTOGRAPHY-SPEC.md)
@@ -44,14 +48,17 @@ They don't need to know it's "zero-knowledge proofs" or "UltraHonk verifiers." T
 > "Verify you're a constituent without sharing your exact address"
 
 **What's actually happening beneath:**
-- XChaCha20-Poly1305 encryption to TEE public key
+- Ground Vault encryption with optional WebAuthn PRF unlock
 - Noir zero-knowledge proof generation in browser
 - Poseidon-based Merkle tree witness
 - BN254 elliptic curve cryptography
-- AWS Nitro Enclaves (ARM Graviton, no Intel ME/AMD PSP)
+- Current local delivery resolver; AWS Nitro Enclave is the future isolation boundary
 - On-chain reputation tracking via ERC-8004
 
-The user should **intuit** that this is different. They should feel empowered. They should understand that the platform **cannot** decrypt their data even if compelled.
+The user should **intuit** that this is different. They should feel empowered.
+They should understand the practical boundary: encrypted at rest, unlocked or
+re-entered for delivery, plaintext only where verification or government
+delivery requires it.
 
 ## Current Flow (Phase 1: Identity Verification)
 
@@ -68,50 +75,31 @@ The user should **intuit** that this is different. They should feel empowered. T
 **What happens under the hood:**
 
 ```typescript
-// verification-handler.ts:84-145
+// Current ground-vault flow (sketch)
 export async function handleVerificationComplete(
   userId: string,
   verificationResult: VerificationResult
 ): Promise<VerificationHandlerResult> {
-  // 1. Fetch TEE public key from AWS Nitro Enclave
-  const teePublicKey = await fetchTEEPublicKey();
+  // 1. Resolve/attest district and cell metadata.
+  const ground = await verifyAddressAndIssueCredential(verificationResult);
 
-  // 2. Build identity blob (address + verification credential)
-  const identityBlob: IdentityBlob = {
-    address: {
-      street: verificationResult.address.street,
-      city: verificationResult.address.city,
-      state: verificationResult.address.state,
-      zip: verificationResult.address.zip
-    },
-    verificationCredential: verificationResult.providerData,
-    district: verificationResult.district
-  };
-
-  // 3. Encrypt blob in browser (XChaCha20-Poly1305 to TEE public key)
-  const encryptedBlob = await encryptIdentityBlob(identityBlob, teePublicKey);
-
-  // 4. Store encrypted blob in Postgres
-  // Platform CANNOT decrypt this - only TEE can
-  const blobId = await blobStorage.store(userId, encryptedBlob);
-
-  // 5. Cache session credential in IndexedDB
-  // No PII - just verification status + district + blob pointer
-  await storeSessionCredential({
+  // 2. Encrypt normalized address into Ground Vault ciphertext.
+  const vault = await persistGroundVaultForAddress({
     userId,
-    isVerified: true,
-    verificationMethod: verificationResult.method,
-    congressionalDistrict: verificationResult.district?.congressional,
-    blobId,
-    expiresAt: calculateExpirationDate() // 6 months
+    address: verificationResult.address,
+    ground,
+    verificationMethod: verificationResult.method
   });
+
+  // 3. Add a passkey PRF wrapper when supported; otherwise delivery uses re-entry.
+  return { success: true, groundVaultId: vault?.groundVaultId };
 }
 ```
 
 **Privacy guarantee achieved:**
-- ✅ Address encrypted in browser before transmission
-- ✅ Platform stores only encrypted blob (cannot decrypt)
-- ✅ Session credential has NO address data (just district + blob ID)
+- ✅ Plaintext address is not stored at rest
+- ✅ Encrypted Ground Vault can survive browser cache loss
+- ✅ PRF unlock is opportunistic; address re-entry is a supported state
 - ✅ 6-month session means verification once every 6 months
 
 ### Step 2: Progressive Verification (Instant Send)
@@ -139,30 +127,31 @@ export async function checkVerification(): Promise<boolean> {
 ```
 
 **Privacy guarantee maintained:**
-- ✅ No server round-trip for verification check (IndexedDB only)
-- ✅ Platform still cannot decrypt address blob
+- ✅ Verification status can be checked without requiring local plaintext address
+- ✅ Address readability is represented separately from verified status
 - ✅ User skips re-verification for 6 months
 
 ---
 
 ## Phase 2: Browser-Native ZK Proof Generation (Where WASM Prover Fits)
 
-**This is the missing piece.** Right now, users trust that the TEE won't leak their address. In Phase 2, they prove they're in a district **without the TEE ever seeing their address.**
+**This is the proof layer.** Address custody is Ground Vault PRF; the proof layer
+shows district membership without putting the address into public proof outputs.
 
 ### The Problem We're Solving
 
 **Current Phase 1 trust model:**
-- User encrypts address to TEE public key
-- TEE decrypts address during message delivery
-- TEE looks up congressional district
-- TEE sends message to congressional office
-- TEE deletes address from memory
+- User saves encrypted ground-vault material
+- Delivery unlocks or re-enters the address when CWC requires it
+- Resolver validates proof/cell consistency before official delivery
+- `LocalConstituentResolver` currently sends message to congressional office
+- Plaintext address exists only for the delivery-time server/worker handoff
 
-**Trust requirement:** User must trust AWS Nitro Enclaves won't log/leak address
+**Current trust requirement:** User must trust the Commons server/worker delivery boundary not to log/leak the address during the CWC handoff. AWS Nitro Enclave is the planned future isolation boundary, not the active one.
 
 **Phase 2 zero-knowledge trust model:**
 - User proves they're in a district WITHOUT revealing address
-- TEE never sees exact address (only ZK proof)
+- Future TEE boundary should not see exact address for proof generation; delivery may still require CWC plaintext fields
 - Congressional office gets cryptographic proof of district membership
 - Proof is publicly verifiable on-chain
 
@@ -182,7 +171,7 @@ After identity verification completes:
    - "This proves you're in [District] without revealing your exact address"
    - "Your message will be prioritized by congressional staff"
 4. Proof completes → message sends
-5. **No address** sent to TEE - only ZK proof
+5. **No address** sent to the proof layer - only ZK proof
 
 **What happens under the hood:**
 
@@ -199,8 +188,9 @@ export async function generateDistrictProof(
   // 2. Fetch Shadow Atlas (district Merkle tree)
   const shadowAtlas = await fetchShadowAtlas(sessionCredential.congressionalDistrict);
 
-  // 3. Get user's address from session (decrypted client-side from IndexedDB)
-  // NOTE: Address never leaves browser, never sent to server
+  // 3. Get user's address from readable local cache, PRF-unlocked vault, or re-entry
+  // NOTE: Persistent address custody is encrypted ground-vault material; official
+  // delivery may still require plaintext address fields in memory.
   const address = await getDecryptedAddress(sessionCredential.blobId);
 
   // 4. Compute Poseidon hash of address
@@ -430,7 +420,8 @@ If proof fails (invalid inputs) or times out:
 **Deep cypherpunk philosophy:**
 
 1. **Mathematics > Trust**
-   - Phase 1: Trust AWS Nitro Enclaves (hardware TEE)
+   - Current Phase 1: Trust Commons server/worker delivery boundary (`LocalConstituentResolver`)
+   - Future delivery boundary: Trust AWS Nitro Enclaves (hardware TEE)
    - Phase 2: Trust UltraHonk/Noir soundness (math proof)
    - ZK proofs are cryptographic guarantees, not promises
 
@@ -440,7 +431,8 @@ If proof fails (invalid inputs) or times out:
    - Zero-knowledge = zero leverage
 
 3. **Decentralized Verification**
-   - Phase 1: TEE verifies you're in district (centralized)
+   - Current Phase 1: Local resolver verifies delivery consistency (centralized)
+   - Future delivery boundary: TEE verifies delivery consistency (centralized)
    - Phase 2: Anyone can verify proof on-chain (decentralized)
    - Public verifiability = no trusted third party
 

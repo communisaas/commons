@@ -5,6 +5,14 @@
 **Status**: Phases 1–3 shipped (~2026-04-11 onward); Phase 4 (engagement tier label replacement) in progress.
 **Scope**: Data model, packet computation, UI presentation, org page specimen
 
+> **Design reconciliation (2026-04-30):** This is the canonical reference for
+> recipient/staffer-facing verification packets. Older specs that headline
+> engagement tier names (`Pillar`, `Veteran`, `Established`, `Active`) or raw
+> integrity scores (`GDS`, `ALD`, entropy, `CAI`) to decision-makers should be
+> read through this document: those values remain useful infrastructure, but
+> recipient-facing surfaces lead with constituency, verification method,
+> authorship, geography, timing, and deduplication.
+
 > ⚠️ **2026-04-23 audit — corrections:**
 >
 > - **`computeVerificationPacketCached` is live** (`src/lib/server/verification-packet.ts:~58-91`,
@@ -144,10 +152,10 @@ These questions are fatal to a front-facing trust signal. The metrics are valuab
 
 | Current | Better |
 |---|---|
-| Trust tier: "Signal Strength: Noise → Undeniable" | Already well-designed on profile page |
+| Address verification and readability | Profile copy must distinguish verification status from address readability: readable now, saved address locked, or address needs re-entry. |
 | Engagement tier: Mostly hidden, shown in debate | Could be "Your civic record: X actions, Y templates, Z months active" |
 
-The profile page's signal strength bar (Noise → Weak → Constituent → Verified → Undeniable) is already a good translation of trust tiers. Engagement tiers are less visible and less critical to translate for individuals.
+The rejected profile signal-strength ladder ("Noise → Weak → Constituent → Verified → Undeniable") is not current profile language. Profile surfaces should translate address state into the readable/locked/re-entry model and keep verification status separate from whether the address can be read for proof generation or official delivery.
 
 ---
 

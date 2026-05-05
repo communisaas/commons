@@ -8,6 +8,12 @@
 **Depends on:** Org Data Model (`docs/architecture/org-data-model.md`), Platform Extension (`docs/architecture/platform-extension.md`), Import Spec (`docs/specs/IMPORT-SPEC.md`), Reputation Architecture (`voter-protocol/specs/REPUTATION-ARCHITECTURE-SPEC.md`), Shadow Atlas
 **Implements:** `src/lib/server/lists/`, `src/lib/server/email/`, `src/routes/admin/supporters/`, `src/routes/admin/emails/`
 
+> **Design reconciliation (2026-04-30):** Supporter-list segmentation may use
+> engagement tiers as org/internal protocol vocabulary. Email blocks that face
+> supporters or decision-makers should not headline engagement tier names or raw
+> integrity scores. Verification context blocks lead with verified count,
+> geography, identity method, authorship, and the action needed next.
+
 ---
 
 ## Premise
@@ -216,8 +222,8 @@ Power use cases:
   │  ─────────────────────────────────────────────────────────── │
   │  ┌─ Verification Context Block (auto-injected) ────────────┐ │
   │  │  This campaign has 89 verified constituents across       │ │
-  │  │  12 districts. Tier distribution: 4 Pillars,             │ │
-  │  │  12 Veterans, 73 Established.                            │ │
+  │  │  12 districts. 31 government ID verified.                │ │
+  │  │  48 individually composed messages.                      │ │
   │  └─────────────────────────────────────────────────────────┘ │
   │                                                               │
   └───────────────────────────────────────────────────────────────┘
@@ -347,8 +353,8 @@ The verification context block renders differently depending on the campaign's v
 ```
 ───────────────────────────────────────────
 This campaign reaches 248 verified constituents
-across 94 districts. 12 Pillars. 43 Veterans.
-89 Established. Coordination integrity: 0.91 GDS.
+across 94 districts. 156 government ID verified.
+196 individually composed messages.
 ───────────────────────────────────────────
 ```
 

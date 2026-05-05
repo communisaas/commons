@@ -58,7 +58,7 @@ This document covers SvelteKit 5 patterns, state management with runes, componen
 
 **Styling:**
 - **Tailwind CSS**: Utility-first CSS framework
-- **Design System**: See `docs/design-system.md` for comprehensive design tokens
+- **Design System**: See `docs/design/design-system.md` and `src/lib/design/DESIGN.md` for the canonical design contract
 
 **Database & Backend:**
 - **Convex**: Managed backend and database. Schema in `convex/schema.ts` (~71 tables, 232 indexes). Server handlers use `serverQuery(api.*)` / `serverMutation(api.*)` from `convex-sveltekit`; Convex functions read auth via `ctx.auth.getUserIdentity()` (RS256 JWT bridged from SvelteKit sessions).
@@ -125,8 +125,9 @@ src/
 **Client-Side Rendered (CSR):**
 - Template editor (`/create`) - Rich interactive UI
 - Address collection modal - Client-side validation
-- Message encryption - Browser-only cryptography (XChaCha20-Poly1305 to TEE for congressional delivery)
-- ZK proof generation - Browser WASM Noir/UltraHonk proving (address never leaves browser)
+- Ground vault unlock/re-entry - browser-readable address restored from PRF unlock where supported, otherwise re-entered
+- Message witness construction - encrypted delivery witness, with plaintext address only in memory at official delivery boundaries
+- ZK proof generation - Browser WASM Noir/UltraHonk proving, with disclosed district/cell metadata tracked separately from the encrypted address vault
 
 **Progressive Enhancement Pattern:**
 
@@ -703,7 +704,7 @@ const state = $state<TemplateState>({
 > "I'm sending a message to my representative about healthcare."
 
 **What's actually happening:**
-> Browser generates Noir/UltraHonk zero-knowledge proof, encrypts witness to TEE public key, submits proof to Scroll L2 blockchain, sends encrypted blob to AWS Nitro Enclave for decryption and CWC API delivery, updates on-chain ERC-8004 reputation, and creates pseudonymous Message record in Postgres.
+> Browser generates Noir/UltraHonk zero-knowledge proof, unlocks or re-enters the ground address when CWC delivery needs it, builds a short-lived encrypted witness, submits the proof to Scroll L2 blockchain, sends delivery through the current resolver/CWC path, updates on-chain ERC-8004 reputation, and creates a pseudonymous Message record in storage.
 
 **Commons's job:**
 > Make the second paragraph COMPLETELY INVISIBLE unless the user explicitly wants to see it.
@@ -713,31 +714,31 @@ const state = $state<TemplateState>({
 1. Pick a template about an issue I care about
 2. Add my personal story (30 seconds)
 3. Click "Send to My Representatives"
-4. Done. Message delivered anonymously.
+4. Done. Message delivered with verified constituent status.
 
 **What user sees:**
 ```
-⏳ Preparing anonymous delivery... (~10 seconds)
+[Progress state: Preparing verified delivery... (~10 seconds)]
 [Progress bar: 60%]
 ```
 
 Then:
 ```
-✅ Delivered anonymously to Representative Smith
+✅ Delivered to Representative Smith
 ```
 
-**What user NEVER sees:** WASM proving, Noir circuits, Poseidon hashes, nullifiers, Merkle paths, TEE attestation, gas fees, blockchain transactions.
+**What user NEVER sees:** WASM proving, Noir circuits, Poseidon hashes, nullifiers, Merkle paths, gas fees, blockchain transactions.
 
 ### The Invisible Work
 
 **Identity Verification (30s-2min):**
 - mDL via Digital Credentials API (sole provider; self.xyz and Didit.me removed in Cycle 15)
 - Returns `identity_commitment` (Poseidon hash)
-- Browser encrypts address to TEE public key (XChaCha20-Poly1305)
-- Encrypted blob stored in Postgres
-- TEE decrypts → geocodes → returns district ("TX-07")
+- Browser stores an encrypted ground vault when address custody is needed for future delivery
+- Disclosed district/cell metadata records what was verified without storing plaintext address fields at rest
+- Passkey PRF can unlock the vault on supporting browser/authenticator pairs; address re-entry is the fallback
 - Session credential cached: "Verified TX-07 constituent"
-- **User is verified - NEVER ASKED AGAIN**
+- **User stays verified even if this device can no longer read the address; delivery then asks for unlock or re-entry**
 
 **ZK Proof Generation (8-15s mobile, 600ms-2s desktop):**
 - WASM module loaded (Noir/UltraHonk prover)
@@ -747,13 +748,12 @@ Then:
 - **User sees loading state with accurate time estimate**
 
 **Encrypted Delivery:**
-- Message encrypted in browser (XChaCha20-Poly1305)
-- Sent to AWS Nitro Enclave (ARM Graviton, hypervisor-isolated)
-- TEE decrypts inside hardware enclave
-- Calls CWC API with plaintext address
+- Message and delivery witness encrypted in the browser
+- Current resolver decrypts only for delivery processing; hardware-isolated enclave is the target deployment
+- Calls CWC API with plaintext address when the official endpoint requires it
 - Receives delivery confirmation
-- **Address destroyed (zeroed from memory)**
-- **Congressional office sees: "Verified Constituent (TX-07)"**
+- **Plaintext address is not stored at rest by Commons**
+- **Congressional office sees the verified message and any address fields required by its official delivery API**
 
 **On-Chain Reputation:**
 - Smart contract verifies ZK proof (~2.2M gas on Scroll L2)
@@ -790,7 +790,7 @@ Then:
     <h3>Privacy Technology</h3>
     <ul>
       <li><strong>Zero-Knowledge Proofs:</strong> You prove you're a TX-07 constituent without revealing which one</li>
-      <li><strong>Encrypted Delivery:</strong> Your address is encrypted in your browser, decrypted only inside a secure enclave</li>
+      <li><strong>Encrypted Delivery:</strong> Your address is encrypted at rest, unlocked or re-entered for official delivery, and disclosed only where the government endpoint requires it</li>
       <li><strong>On-Chain Reputation:</strong> Your civic action score is tracked on Scroll blockchain, not linked to your identity</li>
       <li><strong>Pseudonymous Messaging:</strong> Congressional offices see "Verified TX-07 Constituent", not your name</li>
     </ul>
@@ -838,7 +838,7 @@ Trust comes from transparency WHEN ASKED, not from forcing users to understand N
 - **Template System**: See `docs/features/templates.md` for variable extraction, editor, moderation
 - **Integrations**: See `docs/integration.md` for CWC API, OAuth, geocoding, mDL identity verification
 - **Development**: See `docs/development/` for testing, seeding, deployment
-- **Design System**: See `design-system.md` for comprehensive component library
+- **Design System**: See `docs/design/design-system.md` and `src/lib/design/DESIGN.md` for the canonical design contract
 
 ---
 

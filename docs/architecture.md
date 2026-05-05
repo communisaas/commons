@@ -36,7 +36,7 @@ Together they form a system where every civic action carries a cryptographic pro
 - **AI Agents** — DM discovery, message writer, subject line generation (Gemini API)
 - **Org Layer** — Campaign management, email engine (SES), supporter management, billing (Stripe), events, fundraising, automation workflows, SMS/calling (Twilio), multi-org networks, public API v1
 - **Verification Packets** — Coordination integrity scores (GDS, ALD, temporal entropy, burst velocity, CAI)
-- **Browser Encryption** — XChaCha20-Poly1305 address encryption to TEE public key (scaffolded; enclave itself not deployed)
+- **Ground Vault PRF** — encrypted address vault, disclosed cell metadata, PRF unlock where supported, address re-entry fallback
 - **Intelligence Layer** — DecisionMaker entity, bill ingestion, activity feed, accountability receipts
 
 ### voter-protocol (sibling repo)
@@ -74,20 +74,21 @@ Together they form a system where every civic action carries a cryptographic pro
 - Noir/UltraHonk circuits are production-ready in voter-protocol
 - Browser WASM proving via `@voter-protocol/noir-prover` (600ms–10s)
 - No server-side proving — cypherpunk-compliant
-- Address never leaves browser — encrypted to TEE public key, destroyed after proving
+- Address custody is split: proof generation uses district/cell commitments, while
+  the original address persists only as encrypted ground-vault material and is
+  unlocked or re-entered for official delivery
 
 ### Principle 2: Session-Based Verification
 
 ```
 FIRST TIME (one-time identity verification):
 1. User verifies via mDL (Digital Credentials API)
-2. Browser encrypts address to TEE public key (XChaCha20-Poly1305)
-3. Encrypted blob stored in PostgreSQL (platform cannot decrypt)
-4. TEE decrypts in isolated memory, geocodes to district
-5. TEE generates session credential: "Verified constituent, TX-07"
-6. Address DESTROYED (existed only in TEE memory)
-7. Session credential cached on device (90-day absolute expiry)
-8. User is now verified — no re-verification needed
+2. Server-side or client-assisted resolver derives district/cell metadata
+3. Browser encrypts the normalized address into a ground vault
+4. Server stores vault ciphertext plus disclosed district/cell metadata
+5. Passkey PRF wrapper is added when the browser/authenticator supports it
+6. Session credential cached on device (90-day absolute expiry)
+7. User is now verified; future delivery may need vault unlock or address re-entry
 
 SUBSEQUENT SENDS (using cached credential):
 1. User selects template, adds personal story
@@ -95,12 +96,14 @@ SUBSEQUENT SENDS (using cached credential):
 3. User signs message with cached session credential
 4. Platform verifies signature (proves valid session)
 5. Moderation reviews PUBLIC content (2-layer Llama Guard)
-6. Message delivered with verification proof
-7. Decision-maker sees: PUBLIC message + proof sender is verified constituent
+6. Delivery flow unlocks the saved address or asks for re-entry if needed
+7. Message delivered with verification proof and any address fields required by
+   the official government endpoint
 ```
 
 **What's Private:**
-- Your address (verified once, cached as session credential)
+- Your address at rest (encrypted ground vault; browser-readable only after
+  local cache, passkey PRF unlock, or re-entry)
 - Your real identity (employer can't link pseudonymous ID)
 - PII linkage (decision-maker can't Google your name)
 
@@ -114,10 +117,14 @@ SUBSEQUENT SENDS (using cached credential):
 - Reputation score (on-chain, not linked to real identity)
 - Message history (traceable to pseudonym, not to you)
 
-### Principle 3: Encrypted Blob Storage
+### Principle 3: Ground Vault Storage
 
-**Current (PostgreSQL):**
-Encrypted blob stored in PostgreSQL — platform cannot decrypt (TEE private key never leaves enclave). XChaCha20-Poly1305 with X25519 ephemeral key exchange.
+**Current:**
+Encrypted ground-vault ciphertext is stored server-side with disclosed
+district/cell metadata. The vault DEK can be wrapped by passkey WebAuthn PRF
+where supported; otherwise address re-entry recreates the usable address state.
+Plaintext address is allowed only in memory for district resolution and official
+government delivery requests.
 
 **Future (IPFS + On-Chain Pointer):**
 Encrypted blob on IPFS, pointer on Scroll zkEVM. 99.97% cost reduction ($500/month → $10 one-time). Users own their blob — portable across platforms.
@@ -185,8 +192,8 @@ VERIFICATION PACKET:
 ├─────────────────────────────────────────────────────────────────┤
 │ 1. OAuth Login (Google/Facebook/LinkedIn/Coinbase/Passkey)       │
 │ 2. Identity Verification UI (mDL via Digital Credentials API)    │
-│ 3. Address Encryption (XChaCha20-Poly1305 to TEE public key)    │
-│ 4. ZK Proof Generation (WASM Noir/UltraHonk prover, 600ms-10s) │
+│ 3. Ground Vault encryption + PRF unlock/re-entry fallback        │
+│ 4. ZK Proof Generation (WASM Noir/UltraHonk prover, 600ms-10s)   │
 │ 5. Template Customization (PUBLIC content + personal story)      │
 └─────────────────────────────────────────────────────────────────┘
                             ↓
@@ -215,7 +222,7 @@ VERIFICATION PACKET:
 │ • ~71 tables, 232 indexes in `convex/schema.ts`                   │
 │ • 180+ functions (queries, mutations, actions, HTTP actions)      │
 │ • Convex vector index for semantic search (Gemini embeddings)     │
-│ • submissions (ciphertext, proofBytes — platform cannot decrypt) │
+│ • submissions (encrypted witness, proofBytes, delivery receipts) │
 │ • DecisionMaker + Institution (universal, multi-system identity) │
 │ • Auth bridge: RS256 JWT (hooks.server.ts) → ctx.auth.getUser…() │
 └─────────────────────────────────────────────────────────────────┘
@@ -231,14 +238,14 @@ VERIFICATION PACKET:
 └─────────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ AWS NITRO ENCLAVES (Trusted Execution Environment)               │
+│ DELIVERY RESOLVER (Local today, Nitro Enclave target)            │
 ├─────────────────────────────────────────────────────────────────┤
-│ 1. Fetch encrypted blob from PostgreSQL                          │
-│ 2. Decrypt address inside hardware enclave (ARM Graviton)        │
-│ 3. Address exists ONLY in TEE memory (never persisted)           │
-│ 4. Call CWC API with plaintext address (inside enclave)          │
+│ 1. Fetch encrypted witness / unlocked delivery address           │
+│ 2. Resolve recipient and validate witness commitment             │
+│ 3. Hold plaintext address only in memory for delivery            │
+│ 4. Call CWC API with required plaintext address fields           │
 │ 5. Receive delivery confirmation                                 │
-│ 6. ZERO all secrets (address destroyed)                          │
+│ 6. Record sanitized per-recipient delivery receipt               │
 └─────────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────────┐

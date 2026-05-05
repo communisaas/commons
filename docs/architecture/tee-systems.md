@@ -1,6 +1,6 @@
 # TEE Systems Overview
 
-**VOTER Protocol uses TEE for two purposes: message delivery and debate evaluation. ZK proof generation remains in-browser.**
+**VOTER Protocol plans TEE boundaries for two purposes: message delivery and debate evaluation. Today, message delivery uses `LocalConstituentResolver`; ZK proof generation remains in-browser.**
 
 > **⚠️ AUDIT NOTE (2026-04-23):** Client-side wiring (witness encryption, public-key endpoint, HTTP resolver invocation from `deliverToCongress`) is in place, but **no AWS Nitro Enclave is deployed**. `docs/implementation-status.md` (~line 113) is the authoritative tracker — it lists "TEE deployment" as **Planned**. Debate-evaluation TEE (Use Case 2) remains the long-term design: the daily Convex cron (`convex/debates.ts:resolveExpiredDebates`) now dispatches to `/api/debates/[id]/evaluate` on the SvelteKit host (no-TEE path) which runs `resolveDebateWithAI`. `FEATURES.DEBATE = true` as of 2026-04-23; TEE replaces the no-TEE evaluator when deployed. Cost figures in this doc are notional, not measured against a running deployment.
 
@@ -21,11 +21,13 @@
 - Nitro Enclave container / deployment: **not deployed.** No CloudFormation/Terraform/container definitions in-repo.
 - Cost: ~$350-400/month is a **notional target** — no deployment is running against which to measure this.
 
-**Flow**:
+**Target Flow (future Nitro deployment)**:
 1. Browser encrypts message with XChaCha20-Poly1305
 2. TEE decrypts message in hardware-isolated memory
 3. TEE forwards plaintext to CWC API
 4. Plaintext cleared from memory after delivery
+
+**Current Flow**: `LocalConstituentResolver` runs in the server/worker process and performs the delivery-time validation and plaintext handoff without a deployed hardware TEE boundary.
 
 ---
 
@@ -72,16 +74,17 @@
 **Zero-knowledge proofs are generated entirely in browser** using WebAssembly-compiled Noir circuits (UltraHonk backend via Barretenberg).
 
 **Why Browser WASM, Not TEE**:
-- ✅ **Absolute Privacy**: Address never leaves browser (not even encrypted)
+- ✅ **Proof Privacy**: proof generation does not require a server-side prover
 - ✅ **Trustless**: No hardware trust assumptions required
 - ✅ **Decentralized**: No centralized proving service
-- ✅ **Regulatory Clarity**: No address transmission = no PII compliance burden
+- ✅ **Clear custody**: address persistence is handled by Ground Vault, not proof infrastructure
 
 **Implementation**: Week 9-10 (Browser WASM Integration)
 - Shadow Atlas loaded from IPFS (progressive loading, IndexedDB caching)
 - Web Workers for parallel Poseidon hashing
 - Noir proof generation in browser (600ms-10s device-dependent)
-- Address never sent to any server
+- Address disclosure is modeled separately through encrypted vault custody,
+  verification resolution, and government delivery boundaries
 
 **See**: `docs/architecture/ARCHITECTURE-DECISION-RECORD.md` for detailed rationale.
 
@@ -91,12 +94,13 @@
 
 | System | Purpose | Status | Cost |
 |--------|---------|--------|------|
-| **Message Delivery TEE** | Decrypt messages for CWC delivery | ✅ Implemented | $350-400/month (always-on) |
+| **LocalConstituentResolver** | Current delivery-time validation and CWC handoff | ✅ Current | Existing server/worker cost |
+| **Message Delivery TEE** | Future Nitro boundary for CWC delivery plaintext handling | ⏳ Scaffolded / planned, not deployed | $350-400/month notional (always-on) |
 | **Debate Evaluation TEE** | Verifiable AI scoring of debate arguments | ⏳ Planned | ~$0.12/debate (on-demand) |
 | **ZK Proving (Browser WASM)** | Generate district membership proofs | ✅ Implemented | $0/month |
 
-**Total Monthly Cost**: $350-400 (message delivery) + ~$3/month at 25 debates/day (evaluation)
+**Current Additional TEE Cost**: $0. Nitro costs above are future/notional targets, not active spend.
 
 ---
 
-*Three systems, three purposes. TEE for message delivery, TEE for verifiable evaluation, browser WASM for privacy-preserving ZK proofs.*
+*Three systems, three purposes. Local resolver for current delivery, future TEE boundaries for message delivery and verifiable evaluation, browser WASM for privacy-preserving ZK proofs.*
