@@ -110,7 +110,7 @@ export async function processCredentialResponse(
 ): Promise<MdlVerificationResult> {
 	try {
 		if (protocol === 'org-iso-mdoc') {
-			return await processMdocResponse(encryptedData, ephemeralPrivateKey, nonce, options?.vicalKv);
+			return await processMdocResponse(encryptedData, ephemeralPrivateKey, nonce, options);
 		} else if (protocol === OPENID4VP_DC_API_PROTOCOL) {
 			return await processOid4vpResponse(
 				encryptedData,
@@ -152,8 +152,9 @@ async function processMdocResponse(
 	data: unknown,
 	_ephemeralPrivateKey: CryptoKey,
 	nonce: string,
-	vicalKv?: KVNamespace
+	options?: MdlVerificationOptions
 ): Promise<MdlVerificationResult> {
+	const vicalKv = options?.vicalKv;
 	// Nonce is required for replay protection
 	if (!nonce) {
 		return {
@@ -217,56 +218,34 @@ async function processMdocResponse(
 			};
 		}
 
-		// Step 2.5: DeviceAuth presence gate (F-1.3, partial — full T3 pending)
+		// Step 2.5: DeviceAuth structure check.
 		// ISO 18013-5 §9.1.3.6: DeviceAuthentication = [
 		//   "DeviceAuthentication", SessionTranscript, docType, DeviceNameSpacesBytes
 		// ]
 		//
-		// What this gate ACTUALLY does (revised after F-1.3 review round 2):
-		//   - REJECTS DeviceResponses whose deviceSigned is missing or whose
-		//     deviceAuth has neither deviceMac nor deviceSignature. ISO 18013-5
-		//     §9.1.3 requires DeviceAuthentication on every conformant response;
-		//     this gate enforces that minimum.
-		//
-		// What this gate DOES NOT do — DO NOT MISTAKE THIS FOR REPLAY DEFENSE:
-		//   - Does NOT verify the deviceMac / deviceSignature bytes
-		//   - Does NOT extract or compare the SessionTranscript nonce against
-		//     the OID4VP request nonce
-		//   - Does NOT prevent capture-replay: an attacker who captured Alice's
-		//     DeviceResponse can replay it verbatim — the deviceAuth bytes copy
-		//     across cleanly because the gate only checks key presence.
-		//
-		// Net value: rejects wallets that emit non-conformant responses (e.g.,
-		// negligent vendors, broken test rigs). Provides ZERO defense against
-		// the capture-replay threat that F-1.3 was opened against. Full T3
-		// (DeviceAuth verification against reconstructed SessionTranscript) is
-		// REQUIRED before the raw mdoc lane (`FEATURES.MDL_MDOC`) is opened.
-		// See `docs/security/KNOWN-LIMITATIONS.md` F-1.3 section.
+		// Pre-I1 this gate was presence-only ("F-1.3 partial"), defending
+		// against malformed wallets but providing zero replay defense. I1 lifts
+		// the raw mdoc lane to full DeviceAuth verification using the same
+		// shared helper as the DC API path. The structure check below stays as
+		// a fast-path: it returns a precise error code before we spend cycles
+		// on issuer-auth + MSO digest checks for a response that's missing
+		// DeviceAuth entirely.
 		const deviceSigned = doc?.deviceSigned as Record<string, unknown> | undefined;
 		const deviceAuth = deviceSigned?.deviceAuth as Record<string, unknown> | undefined;
 		if (!deviceAuth) {
 			return {
 				success: false,
 				error: 'replay_protection_missing',
-				message:
-					'DeviceAuthentication structure missing — replay protection cannot be evaluated. Full DeviceAuth verification ships with T3 (mDL launch gate).'
+				message: 'DeviceAuthentication structure missing — DeviceResponse cannot be accepted'
 			};
 		}
-		const hasMac = 'deviceMac' in deviceAuth;
-		const hasSig = 'deviceSignature' in deviceAuth;
-		if (!hasMac && !hasSig) {
+		if (!('deviceMac' in deviceAuth) && !('deviceSignature' in deviceAuth)) {
 			return {
 				success: false,
 				error: 'replay_protection_missing',
 				message: 'DeviceAuth has neither deviceMac nor deviceSignature'
 			};
 		}
-		// Positive-case telemetry — useful when triaging T3 rollout.
-		console.log(
-			'[mDL] DeviceAuth structure present (kind:',
-			hasMac ? 'mac' : 'sig',
-			') — full HPKE verification deferred to T3'
-		);
 
 		// Step 3: COSE_Sign1 verification
 		const issuerAuth = issuerSigned.issuerAuth;
@@ -336,6 +315,34 @@ async function processMdocResponse(
 								message: 'MSO digest validation failed — field values do not match signed digests'
 							};
 						}
+					}
+
+					// I1 — DeviceAuth verification (full SessionTranscript binding).
+					// The MSO is verified above; deviceKeyInfo.deviceKey is the
+					// public key the wallet bound to its DeviceAuth. Reconstruct
+					// SessionTranscript from (origin, nonce, jwkThumbprint) and
+					// verify deviceSignature against DeviceAuthenticationBytes.
+					// Required by ISO 18013-5 §9.1.3.6 and closes the F-1.3
+					// replay window for the raw mdoc lane.
+					if (!coseResult.mso.deviceKeyInfo?.deviceKey) {
+						return {
+							success: false,
+							error: 'replay_protection_missing',
+							message:
+								'MSO deviceKeyInfo.deviceKey missing — DeviceAuth cannot be verified'
+						};
+					}
+					const docType = (doc?.docType as string | undefined) ?? 'org.iso.18013.5.1.mDL';
+					const deviceAuthCheck = await verifyMdocDeviceAuth({
+						deviceSigned,
+						deviceAuth,
+						deviceKey: coseResult.mso.deviceKeyInfo.deviceKey,
+						docType,
+						nonce,
+						options: options ?? {}
+					});
+					if (!deviceAuthCheck.valid) {
+						return deviceAuthCheck.result;
 					}
 				}
 			} else {
@@ -589,7 +596,7 @@ async function processOid4vpResponse(
 				message: 'Signed OpenID4VP DC API responses must be encrypted dc_api.jwt responses'
 			};
 		}
-		if (protocol === OPENID4VP_DC_API_PROTOCOL && !isSha256Digest(options.dcApiJwkThumbprint)) {
+		if (protocol === OPENID4VP_DC_API_PROTOCOL && !isSha256Digest(options?.dcApiJwkThumbprint)) {
 			return {
 				success: false,
 				error: 'invalid_format',
@@ -692,8 +699,7 @@ async function processOpenId4VpMsoMdocPresentation(
 		};
 	}
 
-	const { verifyCoseSign1, validateMsoDigests, verifyDeviceSignature } =
-		await import('./cose-verify');
+	const { verifyCoseSign1, validateMsoDigests } = await import('./cose-verify');
 	const { getIACARootsForVerification, supportedIACAStates } = await import('./iaca-roots');
 	const roots = getIACARootsForVerification();
 	if (roots.length === 0) {
@@ -772,48 +778,19 @@ async function processOpenId4VpMsoMdocPresentation(
 		};
 	}
 
-	const deviceSignature = asCoseSign1Array(getMdocValue(deviceAuth, 'deviceSignature'));
-	if (!deviceSignature) {
-		return {
-			success: false,
-			error: 'replay_protection_missing',
-			message: 'OpenID4VP mso_mdoc DeviceAuth.deviceSignature is required for verification'
-		};
-	}
-
-	const deviceNameSpacesValue =
-		getMdocValue(deviceSigned, 'nameSpaces') ?? getMdocValue(deviceSigned, 'namespaces');
-	const deviceNameSpacesBytes = getTaggedCborBytes(deviceNameSpacesValue);
-	if (!deviceNameSpacesBytes) {
-		return {
-			success: false,
-			error: 'replay_protection_missing',
-			message: 'DeviceSigned.nameSpaces bytes missing — DeviceAuthenticationBytes cannot be rebuilt'
-		};
-	}
-
-	const sessionTranscript = await buildOpenId4VpMdocSessionTranscript(nonce, options);
-	const deviceAuthentication = [
-		'DeviceAuthentication',
-		sessionTranscript,
+	// I1 — DeviceAuth verification via shared helper. Pre-I1 this path had
+	// the verification inline; the helper now lets the raw `org-iso-mdoc`
+	// lane reach the same security floor.
+	const deviceAuthCheck = await verifyMdocDeviceAuth({
+		deviceSigned,
+		deviceAuth,
+		deviceKey: coseResult.mso.deviceKeyInfo.deviceKey,
 		docType,
-		taggedCborBytes(24, deviceNameSpacesBytes)
-	] as const;
-	const deviceAuthenticationBytes = encodeMdocAuthCbor(
-		taggedCborBytes(24, encodeMdocAuthCbor(deviceAuthentication))
-	);
-
-	const deviceAuthResult = await verifyDeviceSignature(
-		deviceSignature,
-		coseResult.mso.deviceKeyInfo.deviceKey,
-		deviceAuthenticationBytes
-	);
-	if (!deviceAuthResult.valid) {
-		return {
-			success: false,
-			error: 'signature_invalid',
-			message: `DeviceAuth.deviceSignature verification failed: ${deviceAuthResult.reason}`
-		};
+		nonce,
+		options: options ?? {}
+	});
+	if (!deviceAuthCheck.valid) {
+		return deviceAuthCheck.result;
 	}
 
 	const mdlNamespace = namespaceRecord['org.iso.18013.5.1'];
@@ -901,6 +878,106 @@ async function buildOpenId4VpMdocSessionTranscript(nonce: string, options: MdlVe
 	}
 
 	throw new Error('OpenID4VP mso_mdoc handover context missing');
+}
+
+/**
+ * I1 — Shared DeviceAuth verification used by both the raw `org-iso-mdoc`
+ * lane (`processMdocResponse`) and the encrypted `dc_api.jwt` lane
+ * (`processOpenId4VpMsoMdocPresentation`).
+ *
+ * Reconstructs the canonical DeviceAuthentication CBOR per ISO 18013-5
+ * §9.1.3.6 ("DeviceAuthentication" || SessionTranscript || docType ||
+ * DeviceNameSpacesBytes), encodes the deviceAuthenticationBytes input,
+ * and verifies the COSE_Sign1 deviceSignature against the MSO's deviceKey.
+ *
+ * Replay defense: the SessionTranscript embeds (origin, nonce,
+ * jwkThumbprint). A captured DeviceResponse replayed in a fresh session
+ * fails because the new session's nonce + jwkThumbprint differ from the
+ * bytes the wallet originally signed.
+ *
+ * Pre-I1: this verification only ran for the DC API path. The raw mdoc
+ * path did a presence-only F-1.3 gate that left the replay window open.
+ * I1 lifts both paths to the same security floor by extracting this
+ * helper and calling it from both lanes.
+ */
+async function verifyMdocDeviceAuth(args: {
+	deviceSigned: unknown;
+	deviceAuth: unknown;
+	deviceKey: import('./cose-verify').CoseEc2Key;
+	docType: string;
+	nonce: string;
+	options: MdlVerificationOptions;
+}): Promise<{ valid: true } | { valid: false; result: MdlVerificationResult }> {
+	const { deviceSigned, deviceAuth, deviceKey, docType, nonce, options } = args;
+
+	if (!options.verifierOrigin) {
+		return {
+			valid: false,
+			result: {
+				success: false,
+				error: 'replay_protection_missing',
+				message:
+					'mdoc DeviceAuth verification requires verifierOrigin (stored handover context). The raw `org-iso-mdoc` lane is being asked to verify a DeviceResponse without a SessionTranscript binding context — refuse rather than fall back.'
+			}
+		};
+	}
+
+	const deviceSignature = asCoseSign1Array(getMdocValue(deviceAuth, 'deviceSignature'));
+	if (!deviceSignature) {
+		return {
+			valid: false,
+			result: {
+				success: false,
+				error: 'replay_protection_missing',
+				message: 'mdoc DeviceAuth.deviceSignature is required for verification'
+			}
+		};
+	}
+
+	const deviceNameSpacesValue =
+		getMdocValue(deviceSigned, 'nameSpaces') ?? getMdocValue(deviceSigned, 'namespaces');
+	const deviceNameSpacesBytes = getTaggedCborBytes(deviceNameSpacesValue);
+	if (!deviceNameSpacesBytes) {
+		return {
+			valid: false,
+			result: {
+				success: false,
+				error: 'replay_protection_missing',
+				message:
+					'DeviceSigned.nameSpaces bytes missing — DeviceAuthenticationBytes cannot be rebuilt'
+			}
+		};
+	}
+
+	const sessionTranscript = await buildOpenId4VpMdocSessionTranscript(nonce, options);
+	const deviceAuthentication = [
+		'DeviceAuthentication',
+		sessionTranscript,
+		docType,
+		taggedCborBytes(24, deviceNameSpacesBytes)
+	] as const;
+	const deviceAuthenticationBytes = encodeMdocAuthCbor(
+		taggedCborBytes(24, encodeMdocAuthCbor(deviceAuthentication))
+	);
+
+	const { verifyDeviceSignature } = await import('./cose-verify');
+	const deviceAuthResult = await verifyDeviceSignature(
+		deviceSignature,
+		deviceKey,
+		deviceAuthenticationBytes
+	);
+	if (!deviceAuthResult.valid) {
+		return {
+			valid: false,
+			result: {
+				success: false,
+				error: 'signature_invalid',
+				message: `DeviceAuth.deviceSignature verification failed: ${deviceAuthResult.reason}`
+			}
+		};
+	}
+
+	return { valid: true };
 }
 
 async function deriveMdlResultFromFields(
