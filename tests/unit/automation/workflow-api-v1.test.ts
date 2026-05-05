@@ -1,17 +1,11 @@
 /**
  * Unit Tests: Workflow API v1 endpoints
  *
- * Tests GET /api/v1/workflows — List workflows with API key auth
- * Tests GET /api/v1/workflows/[id] — Workflow detail
- *
- * Auth, rate limiting, scope, feature gate, pagination.
+ * Current implementation authenticates in SvelteKit and delegates reads to
+ * Convex internal v1 API queries via convex-sveltekit serverQuery().
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-// =============================================================================
-// MOCKS
-// =============================================================================
 
 const {
 	mockFeatures,
@@ -19,9 +13,8 @@ const {
 	mockRequireScope,
 	mockRequirePublicApi,
 	mockCheckApiPlanRateLimit,
-	mockDbWorkflowFindMany,
-	mockDbWorkflowFindFirst,
-	mockDbWorkflowCount
+	mockServerQuery,
+	mockInternal
 } = vi.hoisted(() => ({
 	mockFeatures: {
 		AUTOMATION: true as boolean,
@@ -40,34 +33,36 @@ const {
 	mockRequireScope: vi.fn(),
 	mockRequirePublicApi: vi.fn(),
 	mockCheckApiPlanRateLimit: vi.fn(),
-	mockDbWorkflowFindMany: vi.fn(),
-	mockDbWorkflowFindFirst: vi.fn(),
-	mockDbWorkflowCount: vi.fn()
-}));
-
-vi.mock('$lib/config/features', () => ({ FEATURES: mockFeatures }));
-
-vi.mock('$lib/core/db', () => ({
-	db: {
-		workflow: {
-			findMany: (...args: any[]) => mockDbWorkflowFindMany(...args),
-			findFirst: (...args: any[]) => mockDbWorkflowFindFirst(...args),
-			count: (...args: any[]) => mockDbWorkflowCount(...args)
+	mockServerQuery: vi.fn(),
+	mockInternal: {
+		v1api: {
+			listWorkflowsV1: 'internal.v1api.listWorkflowsV1',
+			getWorkflowById: 'internal.v1api.getWorkflowById'
 		}
 	}
 }));
 
+vi.mock('$lib/config/features', () => ({ FEATURES: mockFeatures }));
+
+vi.mock('convex-sveltekit', () => ({
+	serverQuery: (...args: unknown[]) => mockServerQuery(...args)
+}));
+
+vi.mock('$lib/convex', () => ({
+	internal: mockInternal
+}));
+
 vi.mock('$lib/server/api-v1/auth', () => ({
-	authenticateApiKey: (...args: any[]) => mockAuthenticateApiKey(...args),
-	requireScope: (...args: any[]) => mockRequireScope(...args)
+	authenticateApiKey: (...args: unknown[]) => mockAuthenticateApiKey(...args),
+	requireScope: (...args: unknown[]) => mockRequireScope(...args)
 }));
 
 vi.mock('$lib/server/api-v1/gate', () => ({
-	requirePublicApi: (...args: any[]) => mockRequirePublicApi(...args)
+	requirePublicApi: (...args: unknown[]) => mockRequirePublicApi(...args)
 }));
 
 vi.mock('$lib/server/api-v1/rate-limit', () => ({
-	checkApiPlanRateLimit: (...args: any[]) => mockCheckApiPlanRateLimit(...args)
+	checkApiPlanRateLimit: (...args: unknown[]) => mockCheckApiPlanRateLimit(...args)
 }));
 
 vi.mock('$lib/server/api-v1/response', () => ({
@@ -87,23 +82,6 @@ vi.mock('$lib/server/api-v1/response', () => ({
 	})
 }));
 
-vi.mock('@sveltejs/kit', () => ({
-	json: (data: unknown, init?: { status?: number }) =>
-		new Response(JSON.stringify(data), {
-			status: init?.status ?? 200,
-			headers: { 'Content-Type': 'application/json' }
-		}),
-	error: (status: number, message: string) => {
-		const e = new Error(message);
-		(e as any).status = status;
-		throw e;
-	}
-}));
-
-// =============================================================================
-// HELPERS
-// =============================================================================
-
 function makeRequest(): Request {
 	return {
 		headers: new Headers({ Authorization: 'Bearer test-key' })
@@ -114,22 +92,18 @@ const defaultAuth = { orgId: 'org-1', scopes: ['read'], planSlug: 'starter' };
 
 function makeWorkflow(overrides: Record<string, unknown> = {}) {
 	return {
-		id: 'wf-1',
+		_id: 'wf-1',
 		orgId: 'org-1',
 		name: 'Test Workflow',
 		description: null,
 		trigger: { type: 'supporter_created' },
 		steps: [{ type: 'send_email', emailSubject: 'Hi', emailBody: '<p>Hi</p>' }],
 		enabled: true,
-		createdAt: new Date('2026-03-12T10:00:00Z'),
-		updatedAt: new Date('2026-03-12T10:00:00Z'),
+		_creationTime: Date.parse('2026-03-12T10:00:00Z'),
+		updatedAt: Date.parse('2026-03-12T10:01:00Z'),
 		...overrides
 	};
 }
-
-// =============================================================================
-// GET /api/v1/workflows
-// =============================================================================
 
 describe('GET /api/v1/workflows', () => {
 	beforeEach(() => {
@@ -140,8 +114,7 @@ describe('GET /api/v1/workflows', () => {
 		mockRequireScope.mockReturnValue(null);
 		mockRequirePublicApi.mockReturnValue(undefined);
 		mockCheckApiPlanRateLimit.mockResolvedValue(null);
-		mockDbWorkflowFindMany.mockResolvedValue([]);
-		mockDbWorkflowCount.mockResolvedValue(0);
+		mockServerQuery.mockResolvedValue({ items: [], cursor: null, hasMore: false, total: 0 });
 	});
 
 	it('returns auth error when API key is invalid', async () => {
@@ -151,25 +124,26 @@ describe('GET /api/v1/workflows', () => {
 		);
 		mockAuthenticateApiKey.mockResolvedValue(authError);
 
-		const { GET } = await import(
-			'../../../src/routes/api/v1/workflows/+server.ts'
-		);
+		const { GET } = await import('../../../src/routes/api/v1/workflows/+server');
 		const res = await GET({
 			request: makeRequest(),
 			url: new URL('http://localhost/api/v1/workflows')
 		} as any);
 
 		expect(res.status).toBe(401);
+		expect(mockServerQuery).not.toHaveBeenCalled();
 	});
 
 	it('returns workflows with pagination metadata', async () => {
-		const workflows = [makeWorkflow({ id: 'wf-1' }), makeWorkflow({ id: 'wf-2' })];
-		mockDbWorkflowFindMany.mockResolvedValue(workflows);
-		mockDbWorkflowCount.mockResolvedValue(2);
+		const workflows = [makeWorkflow({ _id: 'wf-1' }), makeWorkflow({ _id: 'wf-2' })];
+		mockServerQuery.mockResolvedValue({
+			items: workflows,
+			cursor: null,
+			hasMore: false,
+			total: 2
+		});
 
-		const { GET } = await import(
-			'../../../src/routes/api/v1/workflows/+server.ts'
-		);
+		const { GET } = await import('../../../src/routes/api/v1/workflows/+server');
 		const res = await GET({
 			request: makeRequest(),
 			url: new URL('http://localhost/api/v1/workflows')
@@ -178,48 +152,41 @@ describe('GET /api/v1/workflows', () => {
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(body.data).toHaveLength(2);
+		expect(body.data[0].id).toBe('wf-1');
+		expect(body.data[0].stepCount).toBe(1);
 		expect(body.meta.total).toBe(2);
 		expect(body.meta.hasMore).toBe(false);
 	});
 
-	it('filters by enabled parameter', async () => {
-		mockDbWorkflowFindMany.mockResolvedValue([]);
-		mockDbWorkflowCount.mockResolvedValue(0);
-
-		const { GET } = await import(
-			'../../../src/routes/api/v1/workflows/+server.ts'
-		);
+	it('delegates enabled filter and pagination to Convex', async () => {
+		const { GET } = await import('../../../src/routes/api/v1/workflows/+server');
 		await GET({
 			request: makeRequest(),
-			url: new URL('http://localhost/api/v1/workflows?enabled=true')
+			url: new URL('http://localhost/api/v1/workflows?enabled=true&limit=5&cursor=wf-0')
 		} as any);
 
-		const callArgs = mockDbWorkflowFindMany.mock.calls[0][0];
-		expect(callArgs.where.enabled).toBe(true);
+		expect(mockServerQuery).toHaveBeenCalledWith(mockInternal.v1api.listWorkflowsV1, {
+			orgId: 'org-1',
+			limit: 5,
+			cursor: 'wf-0',
+			enabled: true
+		});
 	});
 
-	it('scopes to auth orgId', async () => {
-		mockDbWorkflowFindMany.mockResolvedValue([]);
-		mockDbWorkflowCount.mockResolvedValue(0);
-
-		const { GET } = await import(
-			'../../../src/routes/api/v1/workflows/+server.ts'
-		);
+	it('scopes Convex query to auth orgId', async () => {
+		const { GET } = await import('../../../src/routes/api/v1/workflows/+server');
 		await GET({
 			request: makeRequest(),
 			url: new URL('http://localhost/api/v1/workflows')
 		} as any);
 
-		const callArgs = mockDbWorkflowFindMany.mock.calls[0][0];
-		expect(callArgs.where.orgId).toBe('org-1');
+		expect(mockServerQuery.mock.calls[0][1].orgId).toBe('org-1');
 	});
 
 	it('returns 404 when AUTOMATION feature is false', async () => {
 		mockFeatures.AUTOMATION = false;
 
-		const { GET } = await import(
-			'../../../src/routes/api/v1/workflows/+server.ts'
-		);
+		const { GET } = await import('../../../src/routes/api/v1/workflows/+server');
 		const res = await GET({
 			request: makeRequest(),
 			url: new URL('http://localhost/api/v1/workflows')
@@ -228,6 +195,7 @@ describe('GET /api/v1/workflows', () => {
 		expect(res.status).toBe(404);
 		const body = await res.json();
 		expect(body.error.code).toBe('NOT_FOUND');
+		expect(mockServerQuery).not.toHaveBeenCalled();
 	});
 
 	it('returns rate limit response when exceeded', async () => {
@@ -237,39 +205,33 @@ describe('GET /api/v1/workflows', () => {
 		);
 		mockCheckApiPlanRateLimit.mockResolvedValue(rateLimitResponse);
 
-		const { GET } = await import(
-			'../../../src/routes/api/v1/workflows/+server.ts'
-		);
+		const { GET } = await import('../../../src/routes/api/v1/workflows/+server');
 		const res = await GET({
 			request: makeRequest(),
 			url: new URL('http://localhost/api/v1/workflows')
 		} as any);
 
 		expect(res.status).toBe(429);
+		expect(mockServerQuery).not.toHaveBeenCalled();
 	});
 
-	it('returns scope error when write scope used', async () => {
+	it('returns scope error when read scope is missing', async () => {
 		const scopeError = new Response(
 			JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Insufficient scope' } }),
 			{ status: 403 }
 		);
 		mockRequireScope.mockReturnValue(scopeError);
 
-		const { GET } = await import(
-			'../../../src/routes/api/v1/workflows/+server.ts'
-		);
+		const { GET } = await import('../../../src/routes/api/v1/workflows/+server');
 		const res = await GET({
 			request: makeRequest(),
 			url: new URL('http://localhost/api/v1/workflows')
 		} as any);
 
 		expect(res.status).toBe(403);
+		expect(mockServerQuery).not.toHaveBeenCalled();
 	});
 });
-
-// =============================================================================
-// GET /api/v1/workflows/[id]
-// =============================================================================
 
 describe('GET /api/v1/workflows/[id]', () => {
 	beforeEach(() => {
@@ -283,11 +245,9 @@ describe('GET /api/v1/workflows/[id]', () => {
 	});
 
 	it('returns single workflow', async () => {
-		mockDbWorkflowFindFirst.mockResolvedValue(makeWorkflow());
+		mockServerQuery.mockResolvedValue(makeWorkflow());
 
-		const { GET } = await import(
-			'../../../src/routes/api/v1/workflows/[id]/+server.ts'
-		);
+		const { GET } = await import('../../../src/routes/api/v1/workflows/[id]/+server');
 		const res = await GET({
 			params: { id: 'wf-1' },
 			request: makeRequest()
@@ -298,14 +258,16 @@ describe('GET /api/v1/workflows/[id]', () => {
 		expect(body.data.id).toBe('wf-1');
 		expect(body.data.name).toBe('Test Workflow');
 		expect(body.data.stepCount).toBe(1);
+		expect(mockServerQuery).toHaveBeenCalledWith(mockInternal.v1api.getWorkflowById, {
+			workflowId: 'wf-1',
+			orgId: 'org-1'
+		});
 	});
 
-	it('returns 404 for workflow belonging to wrong org', async () => {
-		mockDbWorkflowFindFirst.mockResolvedValue(null);
+	it('returns 404 for workflow outside the authenticated org', async () => {
+		mockServerQuery.mockResolvedValue(null);
 
-		const { GET } = await import(
-			'../../../src/routes/api/v1/workflows/[id]/+server.ts'
-		);
+		const { GET } = await import('../../../src/routes/api/v1/workflows/[id]/+server');
 		const res = await GET({
 			params: { id: 'wf-other' },
 			request: makeRequest()
@@ -314,19 +276,5 @@ describe('GET /api/v1/workflows/[id]', () => {
 		expect(res.status).toBe(404);
 		const body = await res.json();
 		expect(body.error.code).toBe('NOT_FOUND');
-	});
-
-	it('returns 404 for non-existent workflow', async () => {
-		mockDbWorkflowFindFirst.mockResolvedValue(null);
-
-		const { GET } = await import(
-			'../../../src/routes/api/v1/workflows/[id]/+server.ts'
-		);
-		const res = await GET({
-			params: { id: 'wf-nonexistent' },
-			request: makeRequest()
-		} as any);
-
-		expect(res.status).toBe(404);
 	});
 });

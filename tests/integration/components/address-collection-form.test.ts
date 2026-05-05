@@ -19,10 +19,15 @@ import type { AddressResolutionResult } from '../../../src/lib/core/shadow-atlas
 // Mock the Shadow Atlas client module
 // ---------------------------------------------------------------------------
 
-const mockResolveAddress = vi.fn<
-	[{ street: string; city: string; state: string; zip: string; country?: 'US' | 'CA' }],
-	Promise<AddressResolutionResult>
->();
+type ResolveAddressFn = (address: {
+	street: string;
+	city: string;
+	state: string;
+	zip: string;
+	country?: 'US' | 'CA';
+}) => Promise<AddressResolutionResult>;
+
+const mockResolveAddress = vi.fn<ResolveAddressFn>();
 
 vi.mock('$lib/core/shadow-atlas/client', () => ({
 	resolveAddress: (...args: Parameters<typeof mockResolveAddress>) => mockResolveAddress(...args)
@@ -552,6 +557,30 @@ describe('POST /api/location/resolve-address', () => {
 
 			expect(data.address.street).toBe('12 MINT PLZ');
 			expect(data.address.city).toBe('SAN FRANCISCO');
+			expect(data.address.state).toBe('CA');
+			expect(data.address.zip).toBe('94103');
+		});
+
+		it('parses Nominatim display names without moving neighborhood fields into address slots', async () => {
+			mockResolveAddress.mockResolvedValueOnce(
+				shadowAtlasResponse({
+					matchedAddress:
+						'12, Mint Plaza, Tenderloin, San Francisco, California, 94103, United States',
+					districtId: 'CA-11'
+				})
+			);
+
+			const event = createResolveRequest({
+				street: '12 Mint Plaza',
+				city: 'San Francisco',
+				state: 'CA',
+				zip: '94103'
+			});
+			const response = await POST(event as any);
+			const data = await response.json();
+
+			expect(data.address.street).toBe('12 Mint Plaza');
+			expect(data.address.city).toBe('San Francisco');
 			expect(data.address.state).toBe('CA');
 			expect(data.address.zip).toBe('94103');
 		});

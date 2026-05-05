@@ -1,14 +1,17 @@
 /**
- * Australian Resolver Tests
+ * Australian postcode resolver tests.
  *
- * Tests coordinate → electorate resolution and MP lookup via mocked API calls.
+ * The old AUResolver class was deleted; current code resolves Australian
+ * postcodes through resolveAustraliaPostcode().
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { AUResolver } from '$lib/server/location/resolvers/au';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+	isValidAustraliaPostcode,
+	resolveAustraliaPostcode
+} from '$lib/core/location/resolvers/australia-aec';
 
-describe('AUResolver', () => {
-	const resolver = new AUResolver();
+describe('Australia postcode resolver', () => {
 	const originalFetch = globalThis.fetch;
 
 	beforeEach(() => {
@@ -19,179 +22,111 @@ describe('AUResolver', () => {
 		globalThis.fetch = originalFetch;
 	});
 
-	describe('resolveDistrict', () => {
-		it('should resolve Sydney coordinates to an electorate', async () => {
-			// First call: Nominatim reverse geocode
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: true,
-				json: async () => ({
-					address: {
-						postcode: '2000',
-						state: 'New South Wales',
-					},
-				}),
-			});
+	describe('isValidAustraliaPostcode', () => {
+		it('accepts four-digit Australian postcodes', () => {
+			expect(isValidAustraliaPostcode('2000')).toBe(true);
+			expect(isValidAustraliaPostcode(' 3000 ')).toBe(true);
+		});
 
-			// Second call: AEC electorate lookup
+		it('rejects malformed postcodes', () => {
+			expect(isValidAustraliaPostcode('K1A 0A9')).toBe(false);
+			expect(isValidAustraliaPostcode('20000')).toBe(false);
+		});
+	});
+
+	describe('resolveAustraliaPostcode', () => {
+		it('resolves an electorate from AEC array responses', async () => {
 			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 				ok: true,
 				json: async () => [
 					{
 						id: 'sydney',
 						name: 'Sydney',
-						state: 'NSW',
-					},
-				],
+						state: 'NSW'
+					}
+				]
 			});
 
-			const result = await resolver.resolveDistrict(-33.8688, 151.2093);
-			expect(result).not.toBeNull();
-			expect(result!.districtId).toBe('sydney');
-			expect(result!.districtName).toBe('Sydney');
-			expect(result!.districtType).toBe('electorate');
-			expect(result!.country).toBe('AU');
-			expect(result!.extra?.state).toBe('NSW');
-		});
+			const result = await resolveAustraliaPostcode('2000');
 
-		it('should return null when Nominatim fails', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: false,
-				status: 500,
-			});
-
-			const result = await resolver.resolveDistrict(-33.8688, 151.2093);
-			expect(result).toBeNull();
-		});
-
-		it('should return null when no postcode in geocode result', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: true,
-				json: async () => ({
-					address: {
-						state: 'New South Wales',
-					},
-				}),
-			});
-
-			const result = await resolver.resolveDistrict(-33.8688, 151.2093);
-			expect(result).toBeNull();
-		});
-
-		it('should return null when AEC returns no electorates', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: true,
-				json: async () => ({
-					address: { postcode: '9999' },
-				}),
-			});
-
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: true,
-				json: async () => [],
-			});
-
-			const result = await resolver.resolveDistrict(-33.8688, 151.2093);
-			expect(result).toBeNull();
-		});
-
-		it('should return null on network error', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-				new Error('Network error')
+			expect(globalThis.fetch).toHaveBeenCalledWith(
+				'https://electorate.aec.gov.au/api/Electorates?postcode=2000',
+				expect.objectContaining({
+					headers: { Accept: 'application/json' }
+				})
 			);
-
-			const result = await resolver.resolveDistrict(-33.8688, 151.2093);
-			expect(result).toBeNull();
+			expect(result).toEqual({
+				electorateId: 'sydney',
+				electorateName: 'Sydney',
+				state: 'NSW'
+			});
 		});
 
-		it('should handle AEC API failure gracefully', async () => {
+		it('resolves an electorate from object-wrapped responses', async () => {
 			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 				ok: true,
 				json: async () => ({
-					address: { postcode: '2000' },
-				}),
+					electorates: [
+						{
+							electorate_name: 'Melbourne',
+							state_ab: 'VIC'
+						}
+					]
+				})
 			});
 
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: false,
-				status: 503,
+			const result = await resolveAustraliaPostcode('3000');
+
+			expect(result).toEqual({
+				electorateId: '',
+				electorateName: 'Melbourne',
+				state: 'VIC'
 			});
-
-			const result = await resolver.resolveDistrict(-33.8688, 151.2093);
-			expect(result).toBeNull();
-		});
-	});
-
-	describe('getOfficials', () => {
-		it('should return MP for an electorate', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: true,
-				json: async () => [
-					{
-						person_id: '10001',
-						full_name: 'Tanya Plibersek',
-						party: 'Australian Labor Party',
-						electorate: 'Sydney',
-					},
-				],
-			});
-
-			const officials = await resolver.getOfficials('Sydney');
-			expect(officials.length).toBe(1);
-			expect(officials[0].name).toBe('Tanya Plibersek');
-			expect(officials[0].party).toBe('Australian Labor Party');
-			expect(officials[0].chamber).toBe('house-of-representatives');
-			expect(officials[0].isVoting).toBe(true);
 		});
 
-		it('should construct name from first/last when full_name missing', async () => {
+		it('normalizes electorate names into IDs when an explicit ID is missing', async () => {
 			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 				ok: true,
-				json: async () => [
-					{
-						person_id: '10002',
-						first_name: 'John',
-						last_name: 'Doe',
-						party: 'Independent',
-						electorate: 'Test',
-					},
-				],
+				json: async () => ({
+					results: [
+						{
+							name: 'North Sydney',
+							state: 'NSW'
+						}
+					]
+				})
 			});
 
-			const officials = await resolver.getOfficials('Test');
-			expect(officials[0].name).toBe('John Doe');
+			const result = await resolveAustraliaPostcode('2060');
+
+			expect(result.electorateId).toBe('north-sydney');
 		});
 
-		it('should return empty array on API failure', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: false,
-				status: 500,
-			});
-
-			const officials = await resolver.getOfficials('Sydney');
-			expect(officials).toEqual([]);
-		});
-
-		it('should return empty array on network error', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-				new Error('Network error')
+		it('rejects invalid postcode input without calling fetch', async () => {
+			await expect(resolveAustraliaPostcode('not-valid')).rejects.toThrow(
+				'Invalid Australian postcode format'
 			);
-
-			const officials = await resolver.getOfficials('Sydney');
-			expect(officials).toEqual([]);
+			expect(globalThis.fetch).not.toHaveBeenCalled();
 		});
-	});
 
-	describe('getJurisdictionLevels', () => {
-		it('should return federal, state, local', () => {
-			expect(resolver.getJurisdictionLevels()).toEqual([
-				'federal',
-				'state',
-				'local',
-			]);
+		it('rejects API failures', async () => {
+			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+				ok: false,
+				status: 503
+			});
+
+			await expect(resolveAustraliaPostcode('2000')).rejects.toThrow('AEC API returned 503');
 		});
-	});
 
-	it('should have country = AU', () => {
-		expect(resolver.country).toBe('AU');
+		it('rejects when no electorate is found', async () => {
+			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+				ok: true,
+				json: async () => []
+			});
+
+			await expect(resolveAustraliaPostcode('9999')).rejects.toThrow(
+				'No electorate found for postcode'
+			);
+		});
 	});
 });

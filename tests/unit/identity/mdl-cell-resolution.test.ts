@@ -25,7 +25,7 @@ describe('resolveCellIdFromAddress', () => {
 		mockResolveAddress.mockResolvedValue({
 			geocode: { lat: 39.7392, lng: -104.9903, matched_address: 'Denver, CO 80202', confidence: 0.9, country: 'US' },
 			district: { id: 'CO-01', name: 'Congressional District 1', jurisdiction: 'US', district_type: 'cd' },
-			officials: { district_code: 'CO-01', state: 'CO', officials: [], special_status: null, cached: true, source: 'ipfs' },
+			officials: { district_code: 'CO-01', state: 'CO', officials: [], special_status: null, cached: true, source: 'congress-legislators' },
 			cell_id: '08031000100',
 			vintage: 'shadow-atlas-nominatim'
 		});
@@ -91,7 +91,7 @@ describe('resolveCellIdFromAddress', () => {
 		mockResolveAddress.mockResolvedValue({
 			geocode: { lat: 38.9072, lng: -77.0369, matched_address: 'Washington, DC 20001', confidence: 0.9, country: 'US' },
 			district: { id: 'DC-AL', name: 'At-Large Congressional District', jurisdiction: 'US', district_type: 'cd' },
-			officials: { district_code: 'DC-AL', state: 'DC', officials: [], special_status: { type: 'dc', message: 'DC residents have a non-voting delegate', has_senators: false, has_voting_representative: false }, cached: true, source: 'ipfs' },
+			officials: { district_code: 'DC-AL', state: 'DC', officials: [], special_status: { type: 'dc', message: 'DC residents have a non-voting delegate', has_senators: false, has_voting_representative: false }, cached: true, source: 'congress-legislators' },
 			cell_id: '11001000101',
 			vintage: 'shadow-atlas-nominatim'
 		});

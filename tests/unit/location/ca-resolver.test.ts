@@ -1,14 +1,17 @@
 /**
- * Canadian Resolver Tests
+ * Canadian postal resolver tests.
  *
- * Tests coordinate → riding resolution and MP lookup via mocked API calls.
+ * The old CAResolver class was deleted; current code resolves Canadian postal
+ * codes through resolveCanadaPostalCode().
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { CAResolver } from '$lib/server/location/resolvers/ca';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+	isValidCanadaPostalCode,
+	resolveCanadaPostalCode
+} from '$lib/core/location/resolvers/canada-postal';
 
-describe('CAResolver', () => {
-	const resolver = new CAResolver();
+describe('Canada postal resolver', () => {
 	const originalFetch = globalThis.fetch;
 
 	beforeEach(() => {
@@ -19,120 +22,103 @@ describe('CAResolver', () => {
 		globalThis.fetch = originalFetch;
 	});
 
-	describe('resolveDistrict', () => {
-		it('should resolve Ottawa coordinates to a riding', async () => {
+	describe('isValidCanadaPostalCode', () => {
+		it('accepts Canadian postal code formats with or without a space', () => {
+			expect(isValidCanadaPostalCode('K1A 0A9')).toBe(true);
+			expect(isValidCanadaPostalCode('K1A0A9')).toBe(true);
+		});
+
+		it('rejects malformed postal codes', () => {
+			expect(isValidCanadaPostalCode('12345')).toBe(false);
+			expect(isValidCanadaPostalCode('SW1A 1AA')).toBe(false);
+		});
+	});
+
+	describe('resolveCanadaPostalCode', () => {
+		it('resolves a federal riding from centroid boundaries', async () => {
 			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 				ok: true,
 				json: async () => ({
-					objects: [
+					province: 'ON',
+					boundaries_centroid: [
 						{
+							boundary_set_name: 'Federal electoral district',
 							external_id: '35075',
-							name: 'Ottawa Centre',
-							metadata: { province: 'ON' },
-						},
-					],
-				}),
+							name: 'Ottawa Centre'
+						}
+					]
+				})
 			});
 
-			const result = await resolver.resolveDistrict(45.4215, -75.6972);
-			expect(result).not.toBeNull();
-			expect(result!.districtId).toBe('35075');
-			expect(result!.districtName).toBe('Ottawa Centre');
-			expect(result!.districtType).toBe('riding');
-			expect(result!.country).toBe('CA');
-			expect(result!.extra?.province).toBe('ON');
-		});
+			const result = await resolveCanadaPostalCode('K1A 0A9');
 
-		it('should return null for coordinates outside Canada', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: true,
-				json: async () => ({
-					objects: [],
-				}),
-			});
-
-			const result = await resolver.resolveDistrict(0, 0);
-			expect(result).toBeNull();
-		});
-
-		it('should return null on API failure', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: false,
-				status: 500,
-			});
-
-			const result = await resolver.resolveDistrict(45.4215, -75.6972);
-			expect(result).toBeNull();
-		});
-
-		it('should return null on network error', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-				new Error('Network error')
+			expect(globalThis.fetch).toHaveBeenCalledWith(
+				'https://represent.opennorth.ca/postcodes/K1A0A9/',
+				expect.objectContaining({
+					headers: { Accept: 'application/json' }
+				})
 			);
-
-			const result = await resolver.resolveDistrict(45.4215, -75.6972);
-			expect(result).toBeNull();
+			expect(result).toEqual({
+				ridingId: '35075',
+				ridingName: 'Ottawa Centre',
+				province: 'ON'
+			});
 		});
-	});
 
-	describe('getOfficials', () => {
-		it('should return MP for a riding', async () => {
+		it('falls back to concordance boundaries when centroid has no federal riding', async () => {
 			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 				ok: true,
 				json: async () => ({
-					objects: [
+					boundaries_centroid: [{ boundary_set_name: 'Municipal ward', name: 'Ward 1' }],
+					boundaries_concordance: [
 						{
-							name: 'Yasir Naqvi',
-							party_name: 'Liberal',
-							district_name: 'Ottawa Centre',
-							elected_office: 'MP',
-							email: 'yasir.naqvi@parl.gc.ca',
-							personal_url: 'https://yasirnaqvi.libparl.ca',
-						},
-					],
-				}),
+							boundary_set_name: 'Federal electoral district',
+							name: 'Toronto Centre',
+							metadata: { province: 'ON' }
+						}
+					]
+				})
 			});
 
-			const officials = await resolver.getOfficials('35075');
-			expect(officials.length).toBe(1);
-			expect(officials[0].name).toBe('Yasir Naqvi');
-			expect(officials[0].party).toBe('Liberal');
-			expect(officials[0].chamber).toBe('house-of-commons');
-			expect(officials[0].email).toBe('yasir.naqvi@parl.gc.ca');
-			expect(officials[0].isVoting).toBe(true);
+			const result = await resolveCanadaPostalCode('M5V 2T6');
+
+			expect(result).toEqual({
+				ridingId: 'Toronto Centre',
+				ridingName: 'Toronto Centre',
+				province: 'ON'
+			});
 		});
 
-		it('should return empty array on API failure', async () => {
+		it('rejects invalid postal code input without calling fetch', async () => {
+			await expect(resolveCanadaPostalCode('not-valid')).rejects.toThrow(
+				'Invalid Canadian postal code format'
+			);
+			expect(globalThis.fetch).not.toHaveBeenCalled();
+		});
+
+		it('rejects API failures', async () => {
 			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 				ok: false,
-				status: 500,
+				status: 500
 			});
 
-			const officials = await resolver.getOfficials('35075');
-			expect(officials).toEqual([]);
-		});
-
-		it('should return empty array on network error', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-				new Error('Network error')
+			await expect(resolveCanadaPostalCode('K1A 0A9')).rejects.toThrow(
+				'represent.opennorth.ca returned 500'
 			);
-
-			const officials = await resolver.getOfficials('35075');
-			expect(officials).toEqual([]);
 		});
-	});
 
-	describe('getJurisdictionLevels', () => {
-		it('should return federal, provincial, municipal', () => {
-			expect(resolver.getJurisdictionLevels()).toEqual([
-				'federal',
-				'provincial',
-				'municipal',
-			]);
+		it('rejects when no federal riding is found', async () => {
+			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({
+					boundaries_centroid: [],
+					boundaries_concordance: []
+				})
+			});
+
+			await expect(resolveCanadaPostalCode('K1A 0A9')).rejects.toThrow(
+				'No federal riding found for postal code'
+			);
 		});
-	});
-
-	it('should have country = CA', () => {
-		expect(resolver.country).toBe('CA');
 	});
 });

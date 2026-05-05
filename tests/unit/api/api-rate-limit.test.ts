@@ -44,6 +44,7 @@ vi.mock('$lib/server/api-v1/response', async () => {
 // Import AFTER mocks
 import { checkApiPlanRateLimit } from '../../../src/lib/server/api-v1/rate-limit';
 import type { ApiKeyContext } from '../../../src/lib/server/api-v1/auth';
+import type { Id } from '../../../convex/_generated/dataModel';
 
 // =============================================================================
 // HELPERS
@@ -51,8 +52,8 @@ import type { ApiKeyContext } from '../../../src/lib/server/api-v1/auth';
 
 function makeCtx(overrides: Partial<ApiKeyContext> = {}): ApiKeyContext {
 	return {
-		orgId: 'org-1',
-		keyId: 'key-1',
+		orgId: 'org-1' as Id<'organizations'>,
+		keyId: 'key-1' as Id<'apiKeys'>,
 		scopes: ['read', 'write'],
 		planSlug: 'free',
 		...overrides
@@ -203,7 +204,7 @@ describe('checkApiPlanRateLimit', () => {
 		it('uses keyId (not orgId) in the rate limit key', async () => {
 			mockCheck.mockResolvedValueOnce({ allowed: true, remaining: 99, limit: 100, reset: Date.now() / 1000 + 60 });
 
-			await checkApiPlanRateLimit(makeCtx({ orgId: 'org-A', keyId: 'key-abc' }));
+			await checkApiPlanRateLimit(makeCtx({ orgId: 'org-A' as Id<'organizations'>, keyId: 'key-abc' as Id<'apiKeys'> }));
 			expect(mockCheck).toHaveBeenCalledWith(
 				'ratelimit:api-v1:plan:key-abc',
 				expect.any(Object)
@@ -213,8 +214,8 @@ describe('checkApiPlanRateLimit', () => {
 		it('different keyIds produce different rate limit keys', async () => {
 			mockCheck.mockResolvedValue({ allowed: true, remaining: 99, limit: 100, reset: Date.now() / 1000 + 60 });
 
-			await checkApiPlanRateLimit(makeCtx({ keyId: 'key-1' }));
-			await checkApiPlanRateLimit(makeCtx({ keyId: 'key-2' }));
+			await checkApiPlanRateLimit(makeCtx({ keyId: 'key-1' as Id<'apiKeys'> }));
+			await checkApiPlanRateLimit(makeCtx({ keyId: 'key-2' as Id<'apiKeys'> }));
 
 			expect(mockCheck).toHaveBeenCalledWith('ratelimit:api-v1:plan:key-1', expect.any(Object));
 			expect(mockCheck).toHaveBeenCalledWith('ratelimit:api-v1:plan:key-2', expect.any(Object));

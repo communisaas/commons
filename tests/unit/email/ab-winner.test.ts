@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import type { AbTestConfig } from '$lib/server/email/ab-winner';
+
+interface AbTestConfig {
+	splitPct: number;
+	winnerMetric: 'open' | 'click' | string;
+	testDurationMs: number;
+	testGroupPct: number;
+}
 
 /**
  * Tests for A/B test winner selection logic.

@@ -39,6 +39,10 @@ vi.mock('$lib/core/identity/credential-policy', () => ({
 	formatValidationError: (v: unknown) => v
 }));
 
+vi.mock('$lib/config/features', () => ({
+	FEATURES: { CONGRESSIONAL: true }
+}));
+
 import { POST } from '../../../src/routes/api/submissions/create/+server';
 import { buildActionDomain } from '$lib/core/zkp/action-domain-builder';
 

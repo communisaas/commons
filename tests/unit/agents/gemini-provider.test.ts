@@ -1263,7 +1263,7 @@ describe('isSentinelName', () => {
 describe('processDecisionMakers — sentinel filtering', () => {
 	let provider: GeminiDecisionMakerProvider;
 	beforeEach(() => {
-		provider = new GeminiDecisionMakerProvider('test-key');
+		provider = new GeminiDecisionMakerProvider();
 	});
 
 	function processDecisionMakers(candidates: Array<Record<string, unknown>>, pages: Array<{ url: string; title: string; text: string }>) {

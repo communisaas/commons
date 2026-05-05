@@ -9,6 +9,14 @@ import { computeCampaignPseudonym } from '$lib/core/crypto/campaign-pseudonym';
 
 const TEST_KEY = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2';
 
+function setNodeEnv(value: string): void {
+	(process.env as Record<string, string | undefined>).NODE_ENV = value;
+}
+
+function clearNodeEnv(): void {
+	Reflect.deleteProperty(process.env, 'NODE_ENV');
+}
+
 describe('Campaign Pseudonym', () => {
 	let originalKey: string | undefined;
 	let originalNodeEnv: string | undefined;
@@ -26,9 +34,9 @@ describe('Campaign Pseudonym', () => {
 			process.env.CAMPAIGN_PSEUDONYM_KEY = originalKey;
 		}
 		if (originalNodeEnv === undefined) {
-			delete process.env.NODE_ENV;
+			clearNodeEnv();
 		} else {
-			process.env.NODE_ENV = originalNodeEnv;
+			setNodeEnv(originalNodeEnv);
 		}
 	});
 
@@ -58,7 +66,7 @@ describe('Campaign Pseudonym', () => {
 
 	it('should use dev fallback when CAMPAIGN_PSEUDONYM_KEY is not set', () => {
 		delete process.env.CAMPAIGN_PSEUDONYM_KEY;
-		process.env.NODE_ENV = 'test';
+		setNodeEnv('test');
 
 		const pseudonym = computeCampaignPseudonym('cluser123abc');
 		expect(pseudonym).toMatch(/^[0-9a-f]{64}$/);
@@ -76,7 +84,7 @@ describe('Campaign Pseudonym', () => {
 
 	it('should throw in production when key is missing', () => {
 		delete process.env.CAMPAIGN_PSEUDONYM_KEY;
-		process.env.NODE_ENV = 'production';
+		setNodeEnv('production');
 
 		expect(() => computeCampaignPseudonym('cluser123abc')).toThrow(
 			'CAMPAIGN_PSEUDONYM_KEY environment variable not configured'

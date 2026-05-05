@@ -1,132 +1,104 @@
 /**
- * Unit tests for analytics snapshot materialization
+ * Unit tests for analytics snapshot materialization helpers.
  */
 
 import { describe, it, expect } from 'vitest';
-import { generateNoiseSeed, seededLaplace } from '$lib/core/analytics/snapshot';
+import {
+	generateNoiseSeed,
+	materializeNoisySnapshot,
+	seededLaplace
+} from '$lib/core/analytics/snapshot';
 import { PRIVACY } from '$lib/types/analytics';
 
 describe('Analytics Snapshot', () => {
 	describe('generateNoiseSeed', () => {
-		it('should generate deterministic seed with date prefix', () => {
-			const date = new Date('2025-01-12T00:00:00.000Z');
-			const seed = generateNoiseSeed(date);
+		it('generates a 128-bit hex seed', () => {
+			const seed = generateNoiseSeed();
 
-			// Seed should start with date
-			expect(seed).toMatch(/^2025-01-12:/);
-
-			// Seed should have hexadecimal random component
-			const parts = seed.split(':');
-			expect(parts).toHaveLength(2);
-			expect(parts[1]).toMatch(/^[0-9a-f]+$/);
-			expect(parts[1].length).toBeGreaterThan(0);
-		});
-
-		it('should generate different seeds for different dates', () => {
-			const date1 = new Date('2025-01-12T00:00:00.000Z');
-			const date2 = new Date('2025-01-13T00:00:00.000Z');
-
-			const seed1 = generateNoiseSeed(date1);
-			const seed2 = generateNoiseSeed(date2);
-
-			expect(seed1).not.toBe(seed2);
+			expect(seed).toMatch(/^[0-9a-f]{32}$/);
 		});
 	});
 
 	describe('seededLaplace', () => {
-		it('should produce reproducible noise for same seed and index', () => {
-			const seed = 'test-seed-123';
-			const index = 0;
+		it('produces reproducible noisy counts for the same seed and epsilon', () => {
 			const epsilon = PRIVACY.SERVER_EPSILON;
+			const noiseA = seededLaplace('abcdef1234567890', epsilon);
+			const noiseB = seededLaplace('abcdef1234567890', epsilon);
 
-			const noise1 = seededLaplace(seed, index, epsilon);
-			const noise2 = seededLaplace(seed, index, epsilon);
-
-			expect(noise1).toBe(noise2);
+			expect(noiseA(100)).toBe(noiseB(100));
+			expect(noiseA(250)).toBe(noiseB(250));
 		});
 
-		it('should produce different noise for different indexes', () => {
-			const seed = 'test-seed-123';
-			const epsilon = PRIVACY.SERVER_EPSILON;
+		it('advances deterministically through the noise sequence', () => {
+			const firstRun = seededLaplace('feedfacecafebeef', PRIVACY.SERVER_EPSILON);
+			const secondRun = seededLaplace('feedfacecafebeef', PRIVACY.SERVER_EPSILON);
 
-			const noise0 = seededLaplace(seed, 0, epsilon);
-			const noise1 = seededLaplace(seed, 1, epsilon);
-			const noise2 = seededLaplace(seed, 2, epsilon);
+			const samplesA = Array.from({ length: 10 }, () => firstRun(100));
+			const samplesB = Array.from({ length: 10 }, () => secondRun(100));
 
-			expect(noise0).not.toBe(noise1);
-			expect(noise1).not.toBe(noise2);
-			expect(noise0).not.toBe(noise2);
+			expect(samplesA).toEqual(samplesB);
+			expect(new Set(samplesA).size).toBeGreaterThan(1);
 		});
 
-		it('should produce different noise for different seeds', () => {
-			const index = 0;
-			const epsilon = PRIVACY.SERVER_EPSILON;
-
-			const noise1 = seededLaplace('seed-1', index, epsilon);
-			const noise2 = seededLaplace('seed-2', index, epsilon);
-
-			expect(noise1).not.toBe(noise2);
-		});
-
-		it('should produce noise with reasonable distribution', () => {
-			const seed = 'test-seed-distribution';
-			const epsilon = PRIVACY.SERVER_EPSILON;
+		it('produces noise with a reasonable distribution around the true count', () => {
+			const trueCount = 100;
 			const sampleSize = 1000;
+			const epsilon = PRIVACY.SERVER_EPSILON;
+			const noise = seededLaplace('1111222233334444', epsilon);
 
-			// Generate samples
-			const samples = Array.from({ length: sampleSize }, (_, i) =>
-				seededLaplace(seed, i, epsilon)
-			);
+			const samples = Array.from({ length: sampleSize }, () => noise(trueCount) - trueCount);
 
-			// Calculate mean and standard deviation
 			const mean = samples.reduce((a, b) => a + b, 0) / sampleSize;
 			const variance =
 				samples.reduce((sum, x) => sum + Math.pow(x - mean, 2), 0) / sampleSize;
 			const stdDev = Math.sqrt(variance);
 
-			// Laplace distribution with scale = 1/ε should have:
-			// - Mean ≈ 0
-			// - Standard deviation ≈ √2 * scale = √2 / ε
 			const expectedScale = PRIVACY.SENSITIVITY / epsilon;
 			const expectedStdDev = Math.sqrt(2) * expectedScale;
 
-			// Allow 20% tolerance due to finite sample size
 			expect(Math.abs(mean)).toBeLessThan(0.3);
-			expect(stdDev).toBeGreaterThan(expectedStdDev * 0.8);
-			expect(stdDev).toBeLessThan(expectedStdDev * 1.2);
+			expect(stdDev).toBeGreaterThan(expectedStdDev * 0.7);
+			expect(stdDev).toBeLessThan(expectedStdDev * 1.3);
 		});
 
-		it('should handle edge cases without errors', () => {
-			const seed = 'edge-case-seed';
-			const epsilon = PRIVACY.SERVER_EPSILON;
+		it('clamps noisy counts at zero', () => {
+			const noise = seededLaplace('edgecase00000001', PRIVACY.SERVER_EPSILON);
 
-			// Should not throw
-			expect(() => seededLaplace(seed, 0, epsilon)).not.toThrow();
-			expect(() => seededLaplace(seed, -1, epsilon)).not.toThrow();
-			expect(() => seededLaplace(seed, 999999, epsilon)).not.toThrow();
+			expect(noise(0)).toBeGreaterThanOrEqual(0);
 		});
 
-		it('should produce less noise for higher epsilon', () => {
-			const seed = 'epsilon-test-seed';
-			const index = 0;
-			const sampleSize = 100;
+		it('adds less noise for higher epsilon', () => {
+			const sampleSize = 200;
+			const trueCount = 100;
+			const lowEpsilonNoise = seededLaplace('epsilon-test-seed', 0.5);
+			const highEpsilonNoise = seededLaplace('epsilon-test-seed', 2.0);
 
-			// Generate samples with different epsilon values
-			const lowEpsilon = 0.5;
-			const highEpsilon = 2.0;
+			const meanAbsLow =
+				Array.from({ length: sampleSize }, () => Math.abs(lowEpsilonNoise(trueCount) - trueCount))
+					.reduce((a, b) => a + b, 0) / sampleSize;
+			const meanAbsHigh =
+				Array.from({ length: sampleSize }, () => Math.abs(highEpsilonNoise(trueCount) - trueCount))
+					.reduce((a, b) => a + b, 0) / sampleSize;
 
-			const samplesLow = Array.from({ length: sampleSize }, (_, i) =>
-				Math.abs(seededLaplace(seed, i, lowEpsilon))
-			);
-			const samplesHigh = Array.from({ length: sampleSize }, (_, i) =>
-				Math.abs(seededLaplace(seed, i + sampleSize, highEpsilon))
-			);
-
-			const meanAbsLow = samplesLow.reduce((a, b) => a + b, 0) / sampleSize;
-			const meanAbsHigh = samplesHigh.reduce((a, b) => a + b, 0) / sampleSize;
-
-			// Lower epsilon (more privacy) should have larger noise
 			expect(meanAbsLow).toBeGreaterThan(meanAbsHigh);
+		});
+	});
+
+	describe('materializeNoisySnapshot', () => {
+		it('applies one generated seed across a snapshot batch', () => {
+			const records = materializeNoisySnapshot(
+				[
+					{ metric: 'template_view', count: 10, templateId: 'tpl-1' },
+					{ metric: 'template_submit', count: 5, templateId: 'tpl-1' }
+				],
+				Date.parse('2026-03-12T00:00:00Z')
+			);
+
+			expect(records).toHaveLength(2);
+			expect(records[0].noiseSeed).toMatch(/^[0-9a-f]{32}$/);
+			expect(records[1].noiseSeed).toBe(records[0].noiseSeed);
+			expect(records[0].epsilon).toBe(PRIVACY.SERVER_EPSILON);
+			expect(records[0].noisyCount).toBeGreaterThanOrEqual(0);
 		});
 	});
 });

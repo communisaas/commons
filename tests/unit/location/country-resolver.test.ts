@@ -1,164 +1,111 @@
 /**
- * Country Resolver Framework Tests
+ * Unified postal district resolver dispatcher tests.
  *
- * Tests the factory, interface compliance, and per-country resolver behavior.
- * External API calls are mocked — these are unit tests, not integration tests.
+ * The deleted server/location resolver factory has been replaced by
+ * src/lib/core/location/resolvers, which dispatches GB/CA/AU postal inputs.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import {
-	getCountryResolver,
-	isSupportedCountry,
-	SUPPORTED_COUNTRIES,
-	detectCountryFromCoordinates,
-} from '$lib/server/location/resolver-factory';
-import type { CountryResolver } from '$lib/server/location/country-resolver';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// ============================================================================
-// Factory Tests
-// ============================================================================
+const {
+	mockResolveUKPostcode,
+	mockResolveCanadaPostalCode,
+	mockResolveAustraliaPostcode
+} = vi.hoisted(() => ({
+	mockResolveUKPostcode: vi.fn(),
+	mockResolveCanadaPostalCode: vi.fn(),
+	mockResolveAustraliaPostcode: vi.fn()
+}));
 
-describe('Country Resolver Factory', () => {
-	describe('getCountryResolver', () => {
-		it('should return a US resolver for "US"', () => {
-			const resolver = getCountryResolver('US');
-			expect(resolver.country).toBe('US');
-		});
+vi.mock('$lib/core/location/resolvers/uk-postcodes', () => ({
+	resolveUKPostcode: (...args: unknown[]) => mockResolveUKPostcode(...args),
+	isValidUKPostcode: vi.fn()
+}));
 
-		it('should return a CA resolver for "CA"', () => {
-			const resolver = getCountryResolver('CA');
-			expect(resolver.country).toBe('CA');
-		});
+vi.mock('$lib/core/location/resolvers/canada-postal', () => ({
+	resolveCanadaPostalCode: (...args: unknown[]) => mockResolveCanadaPostalCode(...args),
+	isValidCanadaPostalCode: vi.fn()
+}));
 
-		it('should return a GB resolver for "GB"', () => {
-			const resolver = getCountryResolver('GB');
-			expect(resolver.country).toBe('GB');
-		});
+vi.mock('$lib/core/location/resolvers/australia-aec', () => ({
+	resolveAustraliaPostcode: (...args: unknown[]) => mockResolveAustraliaPostcode(...args),
+	isValidAustraliaPostcode: vi.fn()
+}));
 
-		it('should return an AU resolver for "AU"', () => {
-			const resolver = getCountryResolver('AU');
-			expect(resolver.country).toBe('AU');
-		});
+const { resolveDistrict } = await import('$lib/core/location/resolvers');
 
-		it('should be case-insensitive', () => {
-			expect(getCountryResolver('us').country).toBe('US');
-			expect(getCountryResolver('ca').country).toBe('CA');
-			expect(getCountryResolver('gb').country).toBe('GB');
-			expect(getCountryResolver('au').country).toBe('AU');
-		});
-
-		it('should throw for unsupported countries', () => {
-			expect(() => getCountryResolver('FR')).toThrow('Unsupported country: FR');
-			expect(() => getCountryResolver('JP')).toThrow('Unsupported country: JP');
-			expect(() => getCountryResolver('XX')).toThrow('Unsupported country: XX');
-		});
-
-		it('should cache resolver instances (same object returned)', () => {
-			const first = getCountryResolver('CA');
-			const second = getCountryResolver('CA');
-			expect(first).toBe(second);
-		});
-	});
-
-	describe('isSupportedCountry', () => {
-		it('should return true for supported countries', () => {
-			expect(isSupportedCountry('US')).toBe(true);
-			expect(isSupportedCountry('CA')).toBe(true);
-			expect(isSupportedCountry('GB')).toBe(true);
-			expect(isSupportedCountry('AU')).toBe(true);
-		});
-
-		it('should return false for unsupported countries', () => {
-			expect(isSupportedCountry('FR')).toBe(false);
-			expect(isSupportedCountry('DE')).toBe(false);
-			expect(isSupportedCountry('XX')).toBe(false);
-		});
-	});
-
-	describe('SUPPORTED_COUNTRIES', () => {
-		it('should include exactly US, CA, GB, AU', () => {
-			expect(SUPPORTED_COUNTRIES).toEqual(['US', 'CA', 'GB', 'AU']);
-		});
-	});
-
-	describe('interface compliance', () => {
-		const countries = ['US', 'CA', 'GB', 'AU'] as const;
-
-		for (const code of countries) {
-			it(`${code} resolver implements CountryResolver interface`, () => {
-				const resolver: CountryResolver = getCountryResolver(code);
-				expect(typeof resolver.country).toBe('string');
-				expect(typeof resolver.resolveDistrict).toBe('function');
-				expect(typeof resolver.getOfficials).toBe('function');
-				expect(typeof resolver.getJurisdictionLevels).toBe('function');
-			});
-
-			it(`${code} resolver returns jurisdiction levels`, () => {
-				const resolver = getCountryResolver(code);
-				const levels = resolver.getJurisdictionLevels();
-				expect(Array.isArray(levels)).toBe(true);
-				expect(levels.length).toBeGreaterThan(0);
-				expect(levels[0]).toBe('federal');
-			});
-		}
-	});
+beforeEach(() => {
+	vi.clearAllMocks();
 });
 
-// ============================================================================
-// detectCountryFromCoordinates Tests
-// ============================================================================
-
-describe('detectCountryFromCoordinates', () => {
-	const originalFetch = globalThis.fetch;
-
-	beforeEach(() => {
-		globalThis.fetch = vi.fn();
-	});
-
-	afterEach(() => {
-		globalThis.fetch = originalFetch;
-	});
-
-	it('should return country code from Nominatim response', async () => {
-		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-			ok: true,
-			json: async () => ({
-				address: { country_code: 'us' },
-			}),
+describe('resolveDistrict dispatcher', () => {
+	it('dispatches GB postcodes to the UK resolver', async () => {
+		mockResolveUKPostcode.mockResolvedValue({
+			constituencyId: 'E14000639',
+			constituencyName: 'Cities of London and Westminster',
+			council: 'City of London',
+			region: 'London'
 		});
 
-		const result = await detectCountryFromCoordinates(38.8977, -77.0365);
-		expect(result).toBe('US');
+		const result = await resolveDistrict('GB', 'SW1A 1AA');
+
+		expect(mockResolveUKPostcode).toHaveBeenCalledWith('SW1A 1AA');
+		expect(result).toEqual({
+			districtId: 'E14000639',
+			districtName: 'Cities of London and Westminster',
+			districtType: 'uk-constituency',
+			country: 'GB',
+			extra: { council: 'City of London', region: 'London' }
+		});
 	});
 
-	it('should return null when Nominatim fails', async () => {
-		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-			ok: false,
-			status: 500,
+	it('dispatches CA postal codes to the Canada resolver', async () => {
+		mockResolveCanadaPostalCode.mockResolvedValue({
+			ridingId: '35075',
+			ridingName: 'Ottawa Centre',
+			province: 'ON'
 		});
 
-		const result = await detectCountryFromCoordinates(0, 0);
-		expect(result).toBeNull();
+		const result = await resolveDistrict('CA', 'K1A 0A9');
+
+		expect(mockResolveCanadaPostalCode).toHaveBeenCalledWith('K1A 0A9');
+		expect(result).toEqual({
+			districtId: '35075',
+			districtName: 'Ottawa Centre',
+			districtType: 'ca-riding',
+			country: 'CA',
+			extra: { province: 'ON' }
+		});
 	});
 
-	it('should return null when fetch throws', async () => {
-		(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-			new Error('Network error')
+	it('dispatches AU postcodes to the Australia resolver', async () => {
+		mockResolveAustraliaPostcode.mockResolvedValue({
+			electorateId: 'sydney',
+			electorateName: 'Sydney',
+			state: 'NSW'
+		});
+
+		const result = await resolveDistrict('au', '2000');
+
+		expect(mockResolveAustraliaPostcode).toHaveBeenCalledWith('2000');
+		expect(result).toEqual({
+			districtId: 'sydney',
+			districtName: 'Sydney',
+			districtType: 'au-electorate',
+			country: 'AU',
+			extra: { state: 'NSW' }
+		});
+	});
+
+	it('rejects US because Shadow Atlas handles US district lookup', async () => {
+		await expect(resolveDistrict('US', 'CA-12')).rejects.toThrow(
+			'US resolution uses Shadow Atlas'
 		);
-
-		const result = await detectCountryFromCoordinates(0, 0);
-		expect(result).toBeNull();
 	});
 
-	it('should uppercase the country code', async () => {
-		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-			ok: true,
-			json: async () => ({
-				address: { country_code: 'gb' },
-			}),
-		});
-
-		const result = await detectCountryFromCoordinates(51.5074, -0.1278);
-		expect(result).toBe('GB');
+	it('rejects unsupported countries with the normalized country code', async () => {
+		await expect(resolveDistrict('fr', '75001')).rejects.toThrow(
+			'Unsupported country code: FR. Supported: GB, CA, AU'
+		);
 	});
 });

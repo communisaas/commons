@@ -1,7 +1,8 @@
 /**
  * Identity Encryption Integration Tests
  *
- * Tests browser-side encryption → server storage → retrieval flow
+ * Historical identity-blob encryption tests. Storage is retired in favor of
+ * Ground Vault PRF and must fail closed.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -25,7 +26,7 @@ describe('Identity Blob Encryption', () => {
 		expect(sodium).toBeDefined();
 	});
 
-	it('should encrypt identity blob with XChaCha20-Poly1305', async () => {
+	it('keeps historical identity blob encryption deterministic enough for migrations', async () => {
 		const testBlob: IdentityBlob = {
 			address: {
 				street: '123 Main St',
@@ -75,10 +76,11 @@ describe('Identity Blob Encryption', () => {
 		expect(isValidEncryptedBlob(invalidBlob2)).toBe(false);
 	});
 
-	it('should get server blob storage by default', () => {
+	it('should fail closed on retired server blob storage', async () => {
 		const storage = getBlobStorage();
 		expect(storage).toBeDefined();
 		expect(storage.constructor.name).toBe('ServerBlobStorage');
+		await expect(storage.retrieve('user_123')).rejects.toThrow('DEPRECATED_IDENTITY_BLOB_PATH');
 	});
 
 	it('should encrypt with deterministic nonce generation', async () => {

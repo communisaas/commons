@@ -3,7 +3,7 @@
  * Tests fuzzyMatch pattern matching and Levenshtein tolerance.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('$lib/utils/levenshtein', async () => {
 	const actual = await vi.importActual('$lib/utils/levenshtein');

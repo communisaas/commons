@@ -1094,7 +1094,7 @@ describe('oauth-providers', () => {
 				statusText: 'OK',
 				json: vi.fn().mockResolvedValue({ id: 'test-user' })
 			});
-			global.fetch = mockFetch;
+			global.fetch = mockFetch as unknown as typeof fetch;
 		});
 
 		afterEach(() => {

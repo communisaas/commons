@@ -306,7 +306,10 @@ describe('reconcileCellGate — AR.4a cell mismatch rejected', () => {
 		mockShadowAtlasCell('872830828ffffff');
 		const result = await reconcileCellGate({
 			address: addr,
-			witnessCellId: '872830828ffffff'
+			// G7: H3-to-H3 comparison. witnessCellId retained for type compat
+			// (comparison path uses witnessH3Cell now).
+			witnessH3Cell: '872830828ffffff',
+			witnessCellId: '0xabcdef1234'
 		});
 		expect(result.success).toBe(true);
 		if (result.success) expect(result.districtCode).toBe('CA-12');
@@ -316,7 +319,10 @@ describe('reconcileCellGate — AR.4a cell mismatch rejected', () => {
 		mockShadowAtlasCell('872830828FFFFFF');
 		const result = await reconcileCellGate({
 			address: addr,
-			witnessCellId: '872830828ffffff'
+			// G7: H3-to-H3 comparison. witnessCellId retained for type compat
+			// (comparison path uses witnessH3Cell now).
+			witnessH3Cell: '872830828ffffff',
+			witnessCellId: '0xabcdef1234'
 		});
 		expect(result.success).toBe(true);
 		if (result.success) expect(result.districtCode).toBe('CA-12');
@@ -334,7 +340,10 @@ describe('reconcileCellGate — AR.4a cell mismatch rejected', () => {
 		});
 		const result = await reconcileCellGate({
 			address: addr,
-			witnessCellId: '872830828ffffff'
+			// G7: H3-to-H3 comparison. witnessCellId retained for type compat
+			// (comparison path uses witnessH3Cell now).
+			witnessH3Cell: '872830828ffffff',
+			witnessCellId: '0xabcdef1234'
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -347,7 +356,10 @@ describe('reconcileCellGate — AR.4a cell mismatch rejected', () => {
 		mockShadowAtlasCell('872830829ffffff'); // one char off
 		const result = await reconcileCellGate({
 			address: addr,
-			witnessCellId: '872830828ffffff'
+			// G7: H3-to-H3 comparison. witnessCellId retained for type compat
+			// (comparison path uses witnessH3Cell now).
+			witnessH3Cell: '872830828ffffff',
+			witnessCellId: '0xabcdef1234'
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -360,7 +372,10 @@ describe('reconcileCellGate — AR.4a cell mismatch rejected', () => {
 		mockShadowAtlasCell('872830829ffffff');
 		const result = await reconcileCellGate({
 			address: addr,
-			witnessCellId: '872830828ffffff'
+			// G7: H3-to-H3 comparison. witnessCellId retained for type compat
+			// (comparison path uses witnessH3Cell now).
+			witnessH3Cell: '872830828ffffff',
+			witnessCellId: '0xabcdef1234'
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) {
@@ -378,6 +393,24 @@ describe('reconcileCellGate — AR.4a cell mismatch rejected', () => {
 		if (!result.success) expect(result.errorCode).toBe('PROOF_INVALID');
 	});
 
+	it('G7: rejects pre-G7 credential lacking witnessH3Cell with CREDENTIAL_MIGRATION_REQUIRED', async () => {
+		// Pre-G7 credentials have only BN254 cellId, not h3Cell. The encoding
+		// split means we cannot meaningfully compare against the H3 returned
+		// by resolveAddress. Fail with a dedicated error code so UX can route
+		// to mDL recovery, not "fix your address."
+		mockShadowAtlasCell('872830828ffffff');
+		const result = await reconcileCellGate({
+			address: addr,
+			witnessCellId: '0xabcdef1234',
+			witnessH3Cell: undefined
+		});
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.errorCode).toBe('CREDENTIAL_MIGRATION_REQUIRED');
+			expect(result.error).toBe('witness_missing_h3_cell');
+		}
+	});
+
 	it('rejects when Shadow Atlas returns no cell for the address', async () => {
 		mockResolveAddress.mockResolvedValueOnce({
 			geocode: { lat: 0, lng: 0, matched_address: 'none', confidence: 0, country: 'US' },
@@ -386,7 +419,10 @@ describe('reconcileCellGate — AR.4a cell mismatch rejected', () => {
 		});
 		const result = await reconcileCellGate({
 			address: addr,
-			witnessCellId: '872830828ffffff'
+			// G7: H3-to-H3 comparison. witnessCellId retained for type compat
+			// (comparison path uses witnessH3Cell now).
+			witnessH3Cell: '872830828ffffff',
+			witnessCellId: '0xabcdef1234'
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) expect(result.errorCode).toBe('ADDRESS_UNRESOLVABLE');
@@ -396,7 +432,10 @@ describe('reconcileCellGate — AR.4a cell mismatch rejected', () => {
 		mockResolveAddress.mockRejectedValueOnce(new Error('network down'));
 		const result = await reconcileCellGate({
 			address: addr,
-			witnessCellId: '872830828ffffff'
+			// G7: H3-to-H3 comparison. witnessCellId retained for type compat
+			// (comparison path uses witnessH3Cell now).
+			witnessH3Cell: '872830828ffffff',
+			witnessCellId: '0xabcdef1234'
 		});
 		expect(result.success).toBe(false);
 		if (!result.success) expect(result.errorCode).toBe('ADDRESS_UNRESOLVABLE');

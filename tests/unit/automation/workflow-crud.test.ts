@@ -1,30 +1,17 @@
 /**
  * Unit Tests: Workflow CRUD endpoints
  *
- * Tests POST/GET /api/org/[slug]/workflows — Create + List workflows
- * Tests PATCH/DELETE /api/org/[slug]/workflows/[id] — Update + Delete
- * Tests GET /api/org/[slug]/workflows/[id]/executions — List executions
- *
- * Feature gate, plan check, validation, role guard, pagination.
+ * Current routes are thin SvelteKit wrappers over Convex workflow queries and
+ * mutations. Validation and role checks live in Convex requireOrgRole handlers.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// =============================================================================
-// MOCKS
-// =============================================================================
-
 const {
 	mockFeatures,
-	mockLoadOrgContext,
-	mockRequireRole,
-	mockOrgMeetsPlan,
-	mockDbWorkflowCreate,
-	mockDbWorkflowFindMany,
-	mockDbWorkflowFindFirst,
-	mockDbWorkflowUpdate,
-	mockDbWorkflowDelete,
-	mockDbExecutionFindMany
+	mockServerMutation,
+	mockServerQuery,
+	mockApi
 } = vi.hoisted(() => ({
 	mockFeatures: {
 		AUTOMATION: true as boolean,
@@ -39,47 +26,29 @@ const {
 		EVENTS: true,
 		FUNDRAISING: true
 	},
-	mockLoadOrgContext: vi.fn(),
-	mockRequireRole: vi.fn(),
-	mockOrgMeetsPlan: vi.fn(),
-	mockDbWorkflowCreate: vi.fn(),
-	mockDbWorkflowFindMany: vi.fn(),
-	mockDbWorkflowFindFirst: vi.fn(),
-	mockDbWorkflowUpdate: vi.fn(),
-	mockDbWorkflowDelete: vi.fn(),
-	mockDbExecutionFindMany: vi.fn()
-}));
-
-vi.mock('$lib/config/features', () => ({ FEATURES: mockFeatures }));
-
-vi.mock('$lib/core/db', () => ({
-	db: {
-		workflow: {
-			create: (...args: any[]) => mockDbWorkflowCreate(...args),
-			findMany: (...args: any[]) => mockDbWorkflowFindMany(...args),
-			findFirst: (...args: any[]) => mockDbWorkflowFindFirst(...args),
-			update: (...args: any[]) => mockDbWorkflowUpdate(...args),
-			delete: (...args: any[]) => mockDbWorkflowDelete(...args)
-		},
-		workflowExecution: {
-			findMany: (...args: any[]) => mockDbExecutionFindMany(...args)
+	mockServerMutation: vi.fn(),
+	mockServerQuery: vi.fn(),
+	mockApi: {
+		workflows: {
+			create: 'api.workflows.create',
+			list: 'api.workflows.list',
+			update: 'api.workflows.update',
+			remove: 'api.workflows.remove',
+			getExecutions: 'api.workflows.getExecutions'
 		}
 	}
 }));
 
-vi.mock('$lib/server/org', () => ({
-	loadOrgContext: (...args: any[]) => mockLoadOrgContext(...args),
-	requireRole: (...args: any[]) => mockRequireRole(...args)
+vi.mock('$lib/config/features', () => ({ FEATURES: mockFeatures }));
+
+vi.mock('convex-sveltekit', () => ({
+	serverMutation: (...args: unknown[]) => mockServerMutation(...args),
+	serverQuery: (...args: unknown[]) => mockServerQuery(...args)
 }));
 
-vi.mock('$lib/server/billing/plan-check', () => ({
-	orgMeetsPlan: (...args: any[]) => mockOrgMeetsPlan(...args)
+vi.mock('$lib/convex', () => ({
+	api: mockApi
 }));
-
-vi.mock('$lib/server/automation/types', async () => {
-	const actual = await vi.importActual('$lib/server/automation/types');
-	return actual;
-});
 
 vi.mock('@sveltejs/kit', () => ({
 	json: (data: unknown, init?: { status?: number }) =>
@@ -94,10 +63,6 @@ vi.mock('@sveltejs/kit', () => ({
 	}
 }));
 
-// =============================================================================
-// HELPERS
-// =============================================================================
-
 function makeRequest(body: Record<string, unknown>): Request {
 	return {
 		json: () => Promise.resolve(body)
@@ -108,191 +73,89 @@ function makeLocals(userId: string | null = 'user-1') {
 	return userId ? { user: { id: userId } } : {};
 }
 
-const defaultOrg = { id: 'org-1', slug: 'test-org' };
-const defaultMembership = { role: 'editor' };
-
 const validTrigger = { type: 'supporter_created' };
 const validSteps = [{ type: 'send_email', emailSubject: 'Hello', emailBody: '<p>Hi</p>' }];
 
 function makeWorkflow(overrides: Record<string, unknown> = {}) {
 	return {
-		id: 'wf-1',
-		orgId: 'org-1',
+		_id: 'wf-1',
 		name: 'Test Workflow',
 		description: null,
 		trigger: validTrigger,
 		steps: validSteps,
 		enabled: false,
-		createdAt: new Date('2026-03-12T10:00:00Z'),
-		updatedAt: new Date('2026-03-12T10:00:00Z'),
+		_creationTime: Date.parse('2026-03-12T10:00:00Z'),
+		updatedAt: Date.parse('2026-03-12T10:01:00Z'),
 		...overrides
 	};
 }
-
-// =============================================================================
-// POST /api/org/[slug]/workflows
-// =============================================================================
 
 describe('POST /api/org/[slug]/workflows', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockFeatures.AUTOMATION = true;
-		mockLoadOrgContext.mockResolvedValue({ org: defaultOrg, membership: defaultMembership });
-		mockRequireRole.mockReturnValue(undefined);
-		mockOrgMeetsPlan.mockResolvedValue(true);
-		mockDbWorkflowCreate.mockResolvedValue({ id: 'wf-new' });
+		mockServerMutation.mockResolvedValue('wf-new');
 	});
 
-	it('creates a valid workflow and returns 201', async () => {
-		const { POST } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
+	it('creates a workflow through Convex and returns 201', async () => {
+		const { POST } = await import('../../../src/routes/api/org/[slug]/workflows/+server');
 		const res = await POST({
 			params: { slug: 'test-org' },
-			request: makeRequest({ name: 'Welcome Series', trigger: validTrigger, steps: validSteps }),
+			request: makeRequest({
+				name: '  Welcome Series  ',
+				description: '  First touch  ',
+				trigger: validTrigger,
+				steps: validSteps
+			}),
 			locals: makeLocals()
 		} as any);
 
 		expect(res.status).toBe(201);
 		const body = await res.json();
 		expect(body.id).toBe('wf-new');
-		expect(mockDbWorkflowCreate).toHaveBeenCalledWith(
-			expect.objectContaining({
-				data: expect.objectContaining({
-					orgId: 'org-1',
-					name: 'Welcome Series',
-					enabled: false
-				})
-			})
-		);
-	});
-
-	it('rejects missing name with 400', async () => {
-		const { POST } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
-		await expect(
-			POST({
-				params: { slug: 'test-org' },
-				request: makeRequest({ trigger: validTrigger, steps: validSteps }),
-				locals: makeLocals()
-			} as any)
-		).rejects.toThrow('Name is required');
-	});
-
-	it('rejects name shorter than 3 characters with 400', async () => {
-		const { POST } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
-		await expect(
-			POST({
-				params: { slug: 'test-org' },
-				request: makeRequest({ name: 'ab', trigger: validTrigger, steps: validSteps }),
-				locals: makeLocals()
-			} as any)
-		).rejects.toThrow('minimum 3 characters');
-	});
-
-	it('rejects missing trigger with 400', async () => {
-		const { POST } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
-		await expect(
-			POST({
-				params: { slug: 'test-org' },
-				request: makeRequest({ name: 'Test Workflow', steps: validSteps }),
-				locals: makeLocals()
-			} as any)
-		).rejects.toThrow('Trigger is required');
-	});
-
-	it('rejects invalid trigger type with 400', async () => {
-		const { POST } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
-		await expect(
-			POST({
-				params: { slug: 'test-org' },
-				request: makeRequest({
-					name: 'Test Workflow',
-					trigger: { type: 'invalid_trigger' },
-					steps: validSteps
-				}),
-				locals: makeLocals()
-			} as any)
-		).rejects.toThrow('Invalid trigger type');
-	});
-
-	it('rejects empty steps array with 400', async () => {
-		const { POST } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
-		await expect(
-			POST({
-				params: { slug: 'test-org' },
-				request: makeRequest({ name: 'Test Workflow', trigger: validTrigger, steps: [] }),
-				locals: makeLocals()
-			} as any)
-		).rejects.toThrow('At least one step is required');
-	});
-
-	it('rejects step with invalid type', async () => {
-		const { POST } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
-		await expect(
-			POST({
-				params: { slug: 'test-org' },
-				request: makeRequest({
-					name: 'Test Workflow',
-					trigger: validTrigger,
-					steps: [{ type: 'explode' }]
-				}),
-				locals: makeLocals()
-			} as any)
-		).rejects.toThrow('invalid type');
-	});
-
-	it('rejects non-editor role', async () => {
-		mockRequireRole.mockImplementation(() => {
-			const e = new Error('Insufficient role');
-			(e as any).status = 403;
-			throw e;
+		expect(mockServerMutation).toHaveBeenCalledWith(mockApi.workflows.create, {
+			slug: 'test-org',
+			name: 'Welcome Series',
+			description: 'First touch',
+			trigger: validTrigger,
+			steps: validSteps
 		});
-
-		const { POST } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
-		await expect(
-			POST({
-				params: { slug: 'test-org' },
-				request: makeRequest({ name: 'Test Workflow', trigger: validTrigger, steps: validSteps }),
-				locals: makeLocals()
-			} as any)
-		).rejects.toThrow('Insufficient role');
 	});
 
-	it('rejects free plan with 403', async () => {
-		mockOrgMeetsPlan.mockResolvedValue(false);
+	it('omits blank descriptions when creating', async () => {
+		const { POST } = await import('../../../src/routes/api/org/[slug]/workflows/+server');
+		await POST({
+			params: { slug: 'test-org' },
+			request: makeRequest({
+				name: 'Welcome Series',
+				description: '   ',
+				trigger: validTrigger,
+				steps: validSteps
+			}),
+			locals: makeLocals()
+		} as any);
 
-		const { POST } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
+		expect(mockServerMutation.mock.calls[0][1].description).toBeUndefined();
+	});
+
+	it('requires authentication before calling Convex', async () => {
+		const { POST } = await import('../../../src/routes/api/org/[slug]/workflows/+server');
+
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
 				request: makeRequest({ name: 'Test Workflow', trigger: validTrigger, steps: validSteps }),
-				locals: makeLocals()
+				locals: makeLocals(null)
 			} as any)
-		).rejects.toThrow('Starter plan');
+		).rejects.toThrow('Authentication required');
+
+		expect(mockServerMutation).not.toHaveBeenCalled();
 	});
 
 	it('returns 404 when AUTOMATION feature is disabled', async () => {
 		mockFeatures.AUTOMATION = false;
 
-		const { POST } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
+		const { POST } = await import('../../../src/routes/api/org/[slug]/workflows/+server');
 		await expect(
 			POST({
 				params: { slug: 'test-org' },
@@ -300,30 +163,38 @@ describe('POST /api/org/[slug]/workflows', () => {
 				locals: makeLocals()
 			} as any)
 		).rejects.toThrow('Not found');
+
+		expect(mockServerMutation).not.toHaveBeenCalled();
+	});
+
+	it('surfaces Convex validation errors', async () => {
+		mockServerMutation.mockRejectedValue(new Error('Workflow name is required'));
+
+		const { POST } = await import('../../../src/routes/api/org/[slug]/workflows/+server');
+		await expect(
+			POST({
+				params: { slug: 'test-org' },
+				request: makeRequest({ name: '', trigger: validTrigger, steps: validSteps }),
+				locals: makeLocals()
+			} as any)
+		).rejects.toThrow('Workflow name is required');
 	});
 });
-
-// =============================================================================
-// GET /api/org/[slug]/workflows
-// =============================================================================
 
 describe('GET /api/org/[slug]/workflows', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockFeatures.AUTOMATION = true;
-		mockLoadOrgContext.mockResolvedValue({ org: defaultOrg, membership: defaultMembership });
+		mockServerQuery.mockResolvedValue([]);
 	});
 
-	it('returns workflows with pagination', async () => {
-		const workflows = [makeWorkflow({ id: 'wf-1' }), makeWorkflow({ id: 'wf-2' })];
-		mockDbWorkflowFindMany.mockResolvedValue(workflows);
+	it('lists workflows through Convex', async () => {
+		const workflows = [makeWorkflow({ _id: 'wf-1' }), makeWorkflow({ _id: 'wf-2' })];
+		mockServerQuery.mockResolvedValue(workflows);
 
-		const { GET } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
+		const { GET } = await import('../../../src/routes/api/org/[slug]/workflows/+server');
 		const res = await GET({
 			params: { slug: 'test-org' },
-			url: new URL('http://localhost/api/org/test-org/workflows'),
 			locals: makeLocals()
 		} as any);
 
@@ -331,79 +202,64 @@ describe('GET /api/org/[slug]/workflows', () => {
 		const body = await res.json();
 		expect(body.data).toHaveLength(2);
 		expect(body.meta.hasMore).toBe(false);
+		expect(mockServerQuery).toHaveBeenCalledWith(mockApi.workflows.list, {
+			slug: 'test-org'
+		});
 	});
 
-	it('filters by enabled status', async () => {
-		mockDbWorkflowFindMany.mockResolvedValue([]);
+	it('requires authentication before listing workflows', async () => {
+		const { GET } = await import('../../../src/routes/api/org/[slug]/workflows/+server');
 
-		const { GET } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
-		await GET({
-			params: { slug: 'test-org' },
-			url: new URL('http://localhost/api/org/test-org/workflows?enabled=true'),
-			locals: makeLocals()
-		} as any);
+		await expect(
+			GET({
+				params: { slug: 'test-org' },
+				locals: makeLocals(null)
+			} as any)
+		).rejects.toThrow('Authentication required');
 
-		const callArgs = mockDbWorkflowFindMany.mock.calls[0][0];
-		expect(callArgs.where.enabled).toBe(true);
-	});
-
-	it('returns empty result', async () => {
-		mockDbWorkflowFindMany.mockResolvedValue([]);
-
-		const { GET } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/+server.ts'
-		);
-		const res = await GET({
-			params: { slug: 'test-org' },
-			url: new URL('http://localhost/api/org/test-org/workflows'),
-			locals: makeLocals()
-		} as any);
-
-		const body = await res.json();
-		expect(body.data).toHaveLength(0);
-		expect(body.meta.hasMore).toBe(false);
-		expect(body.meta.cursor).toBeNull();
+		expect(mockServerQuery).not.toHaveBeenCalled();
 	});
 });
-
-// =============================================================================
-// PATCH /api/org/[slug]/workflows/[id]
-// =============================================================================
 
 describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockFeatures.AUTOMATION = true;
-		mockLoadOrgContext.mockResolvedValue({ org: defaultOrg, membership: defaultMembership });
-		mockRequireRole.mockReturnValue(undefined);
-		mockOrgMeetsPlan.mockResolvedValue(true);
-		mockDbWorkflowFindFirst.mockResolvedValue(makeWorkflow());
-		mockDbWorkflowUpdate.mockResolvedValue(makeWorkflow({ name: 'Updated' }));
+		mockServerMutation.mockResolvedValue('wf-1');
 	});
 
-	it('updates workflow name', async () => {
+	it('updates workflow fields through Convex', async () => {
 		const { PATCH } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server'
 		);
 		const res = await PATCH({
 			params: { slug: 'test-org', id: 'wf-1' },
-			request: makeRequest({ name: 'Updated Name' }),
+			request: makeRequest({
+				name: 'Updated Name',
+				description: 'Updated description',
+				trigger: validTrigger,
+				steps: validSteps
+			}),
 			locals: makeLocals()
 		} as any);
 
 		expect(res.status).toBe(200);
-		expect(mockDbWorkflowUpdate).toHaveBeenCalledWith(
-			expect.objectContaining({
-				data: expect.objectContaining({ name: 'Updated Name' })
-			})
-		);
+		const body = await res.json();
+		expect(body.id).toBe('wf-1');
+		expect(mockServerMutation).toHaveBeenCalledWith(mockApi.workflows.update, {
+			workflowId: 'wf-1',
+			slug: 'test-org',
+			name: 'Updated Name',
+			description: 'Updated description',
+			trigger: validTrigger,
+			steps: validSteps,
+			enabled: undefined
+		});
 	});
 
-	it('toggles enabled status', async () => {
+	it('passes enabled status to the current route mutation call', async () => {
 		const { PATCH } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server'
 		);
 		await PATCH({
 			params: { slug: 'test-org', id: 'wf-1' },
@@ -411,35 +267,18 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 			locals: makeLocals()
 		} as any);
 
-		expect(mockDbWorkflowUpdate).toHaveBeenCalledWith(
-			expect.objectContaining({
-				data: expect.objectContaining({ enabled: true })
-			})
-		);
+		expect(mockServerMutation.mock.calls[0][1].enabled).toBe(true);
 	});
 
-	it('rejects invalid trigger on update', async () => {
+	it('surfaces Convex not-found errors', async () => {
+		mockServerMutation.mockRejectedValue(new Error('Workflow not found'));
+
 		const { PATCH } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server'
 		);
 		await expect(
 			PATCH({
-				params: { slug: 'test-org', id: 'wf-1' },
-				request: makeRequest({ trigger: { type: 'bogus' } }),
-				locals: makeLocals()
-			} as any)
-		).rejects.toThrow('Invalid trigger type');
-	});
-
-	it('returns 404 for non-existent workflow', async () => {
-		mockDbWorkflowFindFirst.mockResolvedValue(null);
-
-		const { PATCH } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
-		);
-		await expect(
-			PATCH({
-				params: { slug: 'test-org', id: 'wf-nonexistent' },
+				params: { slug: 'test-org', id: 'wf-missing' },
 				request: makeRequest({ name: 'Updated' }),
 				locals: makeLocals()
 			} as any)
@@ -447,23 +286,16 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 	});
 });
 
-// =============================================================================
-// DELETE /api/org/[slug]/workflows/[id]
-// =============================================================================
-
 describe('DELETE /api/org/[slug]/workflows/[id]', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockFeatures.AUTOMATION = true;
-		mockLoadOrgContext.mockResolvedValue({ org: defaultOrg, membership: defaultMembership });
-		mockRequireRole.mockReturnValue(undefined);
-		mockDbWorkflowFindFirst.mockResolvedValue(makeWorkflow());
-		mockDbWorkflowDelete.mockResolvedValue(makeWorkflow());
+		mockServerMutation.mockResolvedValue(undefined);
 	});
 
-	it('deletes workflow and returns success', async () => {
+	it('deletes workflow through Convex and returns success', async () => {
 		const { DELETE } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server'
 		);
 		const res = await DELETE({
 			params: { slug: 'test-org', id: 'wf-1' },
@@ -473,96 +305,79 @@ describe('DELETE /api/org/[slug]/workflows/[id]', () => {
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(body.success).toBe(true);
-		expect(mockDbWorkflowDelete).toHaveBeenCalledWith({ where: { id: 'wf-1' } });
+		expect(mockServerMutation).toHaveBeenCalledWith(mockApi.workflows.remove, {
+			slug: 'test-org',
+			workflowId: 'wf-1'
+		});
 	});
 
-	it('returns 404 when workflow belongs to wrong org', async () => {
-		mockDbWorkflowFindFirst.mockResolvedValue(null);
-
+	it('requires authentication before deleting workflows', async () => {
 		const { DELETE } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/[id]/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server'
 		);
+
 		await expect(
 			DELETE({
-				params: { slug: 'test-org', id: 'wf-wrong' },
-				locals: makeLocals()
+				params: { slug: 'test-org', id: 'wf-1' },
+				locals: makeLocals(null)
 			} as any)
-		).rejects.toThrow('Workflow not found');
+		).rejects.toThrow('Authentication required');
+
+		expect(mockServerMutation).not.toHaveBeenCalled();
 	});
 });
-
-// =============================================================================
-// GET /api/org/[slug]/workflows/[id]/executions
-// =============================================================================
 
 describe('GET /api/org/[slug]/workflows/[id]/executions', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockFeatures.AUTOMATION = true;
-		mockLoadOrgContext.mockResolvedValue({ org: defaultOrg, membership: defaultMembership });
-		mockDbWorkflowFindFirst.mockResolvedValue({ id: 'wf-1' });
+		mockServerQuery.mockResolvedValue([]);
 	});
 
-	it('returns executions with supporter info', async () => {
-		mockDbExecutionFindMany.mockResolvedValue([
+	it('returns executions from Convex', async () => {
+		mockServerQuery.mockResolvedValue([
 			{
-				id: 'exec-1',
+				_id: 'exec-1',
 				status: 'completed',
 				currentStep: 2,
 				triggerEvent: { type: 'supporter_created', entityId: 's-1' },
 				error: null,
-				supporter: { id: 's-1', name: 'Jane Doe', email: 'jane@example.com' },
-				createdAt: new Date('2026-03-12T10:00:00Z'),
-				updatedAt: new Date('2026-03-12T10:01:00Z'),
-				completedAt: new Date('2026-03-12T10:01:00Z'),
+				supporterId: 's-1',
+				_creationTime: Date.parse('2026-03-12T10:00:00Z'),
+				completedAt: Date.parse('2026-03-12T10:01:00Z'),
 				nextRunAt: null
 			}
 		]);
 
 		const { GET } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/[id]/executions/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/executions/+server'
 		);
 		const res = await GET({
 			params: { slug: 'test-org', id: 'wf-1' },
-			url: new URL('http://localhost/api/org/test-org/workflows/wf-1/executions'),
 			locals: makeLocals()
 		} as any);
 
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(body.data).toHaveLength(1);
-		expect(body.data[0].supporter.name).toBe('Jane Doe');
 		expect(body.data[0].status).toBe('completed');
+		expect(mockServerQuery).toHaveBeenCalledWith(mockApi.workflows.getExecutions, {
+			workflowId: 'wf-1',
+			slug: 'test-org'
+		});
 	});
 
-	it('filters by status parameter', async () => {
-		mockDbExecutionFindMany.mockResolvedValue([]);
+	it('surfaces Convex workflow ownership errors', async () => {
+		mockServerQuery.mockRejectedValue(new Error('Workflow not found in this organization'));
 
 		const { GET } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/[id]/executions/+server.ts'
-		);
-		await GET({
-			params: { slug: 'test-org', id: 'wf-1' },
-			url: new URL('http://localhost/api/org/test-org/workflows/wf-1/executions?status=failed'),
-			locals: makeLocals()
-		} as any);
-
-		const callArgs = mockDbExecutionFindMany.mock.calls[0][0];
-		expect(callArgs.where.status).toBe('failed');
-	});
-
-	it('returns 404 when workflow not found for this org', async () => {
-		mockDbWorkflowFindFirst.mockResolvedValue(null);
-
-		const { GET } = await import(
-			'../../../src/routes/api/org/[slug]/workflows/[id]/executions/+server.ts'
+			'../../../src/routes/api/org/[slug]/workflows/[id]/executions/+server'
 		);
 		await expect(
 			GET({
 				params: { slug: 'test-org', id: 'wf-wrong' },
-				url: new URL('http://localhost/api/org/test-org/workflows/wf-wrong/executions'),
 				locals: makeLocals()
 			} as any)
-		).rejects.toThrow('Workflow not found');
+		).rejects.toThrow('Workflow not found in this organization');
 	});
 });

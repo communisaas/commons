@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { requireScope, type ApiKeyContext } from '$lib/server/api-v1/auth';
+import type { Id } from '../../../convex/_generated/dataModel';
 
 function makeContext(scopes: string[]): ApiKeyContext {
 	return {
-		orgId: 'org_test123',
-		keyId: 'key_test123',
-		scopes
+		orgId: 'org_test123' as Id<'organizations'>,
+		keyId: 'key_test123' as Id<'apiKeys'>,
+		scopes,
+		planSlug: 'free'
 	};
 }
 

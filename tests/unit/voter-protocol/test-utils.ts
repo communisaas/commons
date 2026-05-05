@@ -10,7 +10,7 @@
  * - Provides factories for common test scenarios
  */
 
-import { setupServer, SetupServerApi } from 'msw/node';
+import { setupServer, type SetupServer } from 'msw/node';
 import { http, HttpResponse } from 'msw';
 import type { Page } from '@playwright/test';
 import {
@@ -285,7 +285,7 @@ export function createNullifierRegistryHandlers(options?: {
 // MSW Server Setup
 // ============================================================================
 
-let server: SetupServerApi | null = null;
+let server: SetupServer | null = null;
 
 /**
  * Initialize the MSW server with all handlers
@@ -295,7 +295,7 @@ export function setupTestServer(options?: {
 	diditOptions?: Parameters<typeof createDiditHandlers>[0];
 	congressionalOptions?: Parameters<typeof createCongressionalHandlers>[0];
 	nullifierOptions?: Parameters<typeof createNullifierRegistryHandlers>[0];
-}): SetupServerApi {
+}): SetupServer {
 	const handlers = [
 		...createShadowAtlasHandlers(options?.shadowAtlasOptions),
 		...createDiditHandlers(options?.diditOptions),
@@ -310,7 +310,7 @@ export function setupTestServer(options?: {
 /**
  * Get the current MSW server instance
  */
-export function getTestServer(): SetupServerApi | null {
+export function getTestServer(): SetupServer | null {
 	return server;
 }
 

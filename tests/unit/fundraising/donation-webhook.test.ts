@@ -1,329 +1,251 @@
 /**
- * Unit Tests: Donation webhook handling
+ * Unit Tests: Convex donation webhook mutations
  *
- * Tests the donation-specific branches in POST /api/billing/webhook:
- * - checkout.session.completed with metadata.type='donation'
- * - charge.refunded for completed donations
- * - Idempotency: ignores non-pending/non-completed donations
- * - Existing subscription flow unchanged
+ * The old SvelteKit /api/billing/webhook route was removed. Stripe HTTP
+ * webhooks now enter through convex/http.ts and delegate donation state changes
+ * to these Convex internal mutations.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { completeDonation, refundDonation } from '../../../convex/webhooks';
 
-// =============================================================================
-// MOCKS
-// =============================================================================
-
-const {
-	mockStripeConstructEvent,
-	mockStripeSubsRetrieve,
-	mockDbDonationFindUnique,
-	mockDbDonationFindFirst,
-	mockDbDonationUpdate,
-	mockDbDonationUpdateMany,
-	mockDbCampaignUpdate,
-	mockDbSubscriptionUpsert,
-	mockDbSubscriptionFindUnique,
-	mockDbSubscriptionUpdate,
-	mockDbOrganizationUpdate
-} = vi.hoisted(() => ({
-	mockStripeConstructEvent: vi.fn(),
-	mockStripeSubsRetrieve: vi.fn(),
-	mockDbDonationFindUnique: vi.fn(),
-	mockDbDonationFindFirst: vi.fn(),
-	mockDbDonationUpdate: vi.fn(),
-	mockDbDonationUpdateMany: vi.fn(),
-	mockDbCampaignUpdate: vi.fn(),
-	mockDbSubscriptionUpsert: vi.fn(),
-	mockDbSubscriptionFindUnique: vi.fn(),
-	mockDbSubscriptionUpdate: vi.fn(),
-	mockDbOrganizationUpdate: vi.fn()
-}));
-
-vi.mock('$lib/server/billing/stripe', () => ({
-	getStripe: () => ({
-		webhooks: { constructEvent: mockStripeConstructEvent },
-		subscriptions: { retrieve: mockStripeSubsRetrieve }
-	})
-}));
-
-vi.mock('$lib/server/billing/plans', () => ({
-	PLANS: {
-		free: { priceCents: 0, maxSeats: 3, maxTemplatesMonth: 5 },
-		starter: { priceCents: 1000, maxSeats: 10, maxTemplatesMonth: 25 }
-	}
-}));
-
-vi.mock('$lib/core/db', () => ({
-	db: {
-		donation: { findUnique: mockDbDonationFindUnique, findFirst: mockDbDonationFindFirst, update: mockDbDonationUpdate, updateMany: mockDbDonationUpdateMany },
-		campaign: { update: mockDbCampaignUpdate },
-		subscription: {
-			upsert: mockDbSubscriptionUpsert,
-			findUnique: mockDbSubscriptionFindUnique,
-			update: mockDbSubscriptionUpdate
-		},
-		organization: { update: mockDbOrganizationUpdate }
-	}
-}));
-
-vi.mock('@sveltejs/kit', () => ({
-	json: (data: unknown, init?: { status?: number }) =>
-		new Response(JSON.stringify(data), {
-			status: init?.status ?? 200,
-			headers: { 'Content-Type': 'application/json' }
-		}),
-	error: (status: number, message: string) => {
-		const e = new Error(message);
-		(e as any).status = status;
-		throw e;
-	}
-}));
-
-// =============================================================================
-// HELPERS
-// =============================================================================
-
-function makeWebhookRequest(body = 'raw-body') {
-	return {
-		text: () => Promise.resolve(body),
-		headers: new Headers({
-			'stripe-signature': 'sig_test'
-		})
-	} as unknown as Request;
+function handler<TArgs, TResult>(
+	fn: unknown
+): (ctx: unknown, args: TArgs) => Promise<TResult> {
+	return (fn as { _handler: (ctx: unknown, args: TArgs) => Promise<TResult> })._handler;
 }
 
-function makeDonationCheckoutEvent(metadata: Record<string, string>) {
+function makeDonation(overrides: Record<string, unknown> = {}) {
 	return {
-		type: 'checkout.session.completed',
-		data: {
-			object: {
-				metadata,
-				mode: 'payment',
-				payment_intent: 'pi_test',
-				subscription: null
-			}
-		}
+		_id: 'don-1',
+		campaignId: 'camp-1',
+		supporterId: 'sup-1',
+		status: 'pending',
+		amountCents: 5000,
+		stripeSessionId: 'cs_test',
+		stripePaymentIntentId: 'pi_test',
+		...overrides
 	};
 }
 
-function makeRefundEvent(paymentIntentId: string | null) {
+function makeCampaign(overrides: Record<string, unknown> = {}) {
 	return {
-		type: 'charge.refunded',
-		data: {
-			object: {
-				payment_intent: paymentIntentId
-			}
-		}
+		_id: 'camp-1',
+		raisedAmountCents: 1000,
+		donorCount: 2,
+		...overrides
 	};
 }
 
-// Need env var for webhook secret
-const originalEnv = process.env;
+function createQueryChain(options: { collect?: unknown[]; first?: unknown }) {
+	const collect = vi.fn().mockResolvedValue(options.collect ?? []);
+	const first = vi.fn().mockResolvedValue(options.first ?? null);
+	const filter = vi.fn().mockReturnValue({ collect });
+	const withIndex = vi.fn().mockReturnValue({ filter, collect, first });
+	return {
+		query: vi.fn().mockReturnValue({ withIndex }),
+		withIndex,
+		filter,
+		collect,
+		first
+	};
+}
 
-// =============================================================================
-// TESTS
-// =============================================================================
+describe('completeDonation', () => {
+	let patch: ReturnType<typeof vi.fn>;
+	let get: ReturnType<typeof vi.fn>;
 
-describe('Donation Webhook - POST /api/billing/webhook', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		process.env = { ...originalEnv, STRIPE_WEBHOOK_SECRET: 'whsec_test' };
+		patch = vi.fn().mockResolvedValue(undefined);
+		get = vi.fn().mockResolvedValue(makeCampaign());
 	});
 
-	it('completes pending donation on checkout.session.completed', async () => {
-		const event = makeDonationCheckoutEvent({
-			type: 'donation',
-			donationId: 'don-1',
-			orgId: 'org-1',
-			campaignId: 'camp-1'
-		});
-		mockStripeConstructEvent.mockReturnValue(event);
-		mockDbDonationUpdateMany.mockResolvedValue({ count: 1 });
-		mockDbDonationFindUnique.mockResolvedValue({
-			id: 'don-1', status: 'completed', amountCents: 5000
-		});
-		mockDbCampaignUpdate.mockResolvedValue({});
+	it('completes a pending donation and stores Stripe IDs', async () => {
+		const donation = makeDonation();
+		const chain = createQueryChain({ collect: [donation] });
+		const ctx = { db: { query: chain.query, patch, get } };
 
-		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
-		const res = await POST({ request: makeWebhookRequest() } as any);
-		expect(res.status).toBe(200);
+		const result = await handler<
+			{
+				donationId: string;
+				campaignId?: string;
+				stripePaymentIntentId?: string;
+				stripeSubscriptionId?: string;
+			},
+			{ processed: boolean; amountCents?: number; supporterId?: string }
+		>(completeDonation)(ctx, {
+			donationId: 'cs_test',
+			campaignId: 'camp-1',
+			stripePaymentIntentId: 'pi_test',
+			stripeSubscriptionId: 'sub_test'
+		});
 
-		expect(mockDbDonationUpdateMany).toHaveBeenCalledWith({
-			where: { id: 'don-1', status: 'pending' },
-			data: expect.objectContaining({
+		expect(result).toEqual({
+			processed: true,
+			amountCents: 5000,
+			supporterId: 'sup-1'
+		});
+		expect(chain.query).toHaveBeenCalledWith('donations');
+		expect(chain.withIndex).toHaveBeenCalledWith('by_status', expect.any(Function));
+		expect(chain.filter).toHaveBeenCalledWith(expect.any(Function));
+		expect(patch).toHaveBeenCalledWith(
+			'don-1',
+			expect.objectContaining({
 				status: 'completed',
 				stripePaymentIntentId: 'pi_test',
-				completedAt: expect.any(Date)
+				stripeSubscriptionId: 'sub_test',
+				completedAt: expect.any(Number),
+				updatedAt: expect.any(Number)
 			})
-		});
+		);
 	});
 
-	it('increments campaign raisedAmountCents and donorCount', async () => {
-		const event = makeDonationCheckoutEvent({
-			type: 'donation',
-			donationId: 'don-1',
-			orgId: 'org-1',
-			campaignId: 'camp-1'
-		});
-		mockStripeConstructEvent.mockReturnValue(event);
-		mockDbDonationUpdateMany.mockResolvedValue({ count: 1 });
-		mockDbDonationFindUnique.mockResolvedValue({
-			id: 'don-1', status: 'completed', amountCents: 5000
-		});
-		mockDbCampaignUpdate.mockResolvedValue({});
+	it('increments campaign totals when the donation has a campaign', async () => {
+		const chain = createQueryChain({ collect: [makeDonation()] });
+		const ctx = { db: { query: chain.query, patch, get } };
 
-		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
-		await POST({ request: makeWebhookRequest() } as any);
-
-		expect(mockDbCampaignUpdate).toHaveBeenCalledWith({
-			where: { id: 'camp-1' },
-			data: {
-				raisedAmountCents: { increment: 5000 },
-				donorCount: { increment: 1 }
-			}
+		await handler<
+			{ donationId: string; stripePaymentIntentId?: string },
+			{ processed: boolean }
+		>(completeDonation)(ctx, {
+			donationId: 'cs_test',
+			stripePaymentIntentId: 'pi_test'
 		});
+
+		expect(get).toHaveBeenCalledWith('camp-1');
+		expect(patch).toHaveBeenCalledWith(
+			'camp-1',
+			expect.objectContaining({
+				raisedAmountCents: 6000,
+				donorCount: 3,
+				updatedAt: expect.any(Number)
+			})
+		);
 	});
 
-	it('ignores non-pending donations (idempotent)', async () => {
-		const event = makeDonationCheckoutEvent({
-			type: 'donation',
-			donationId: 'don-1',
-			orgId: 'org-1',
-			campaignId: 'camp-1'
+	it('is idempotent when no pending donation matches', async () => {
+		const chain = createQueryChain({ collect: [] });
+		const ctx = { db: { query: chain.query, patch, get } };
+
+		const result = await handler<{ donationId: string }, { processed: boolean }>(
+			completeDonation
+		)(ctx, {
+			donationId: 'missing'
 		});
-		mockStripeConstructEvent.mockReturnValue(event);
-		mockDbDonationUpdateMany.mockResolvedValue({ count: 0 });
 
-		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
-		const res = await POST({ request: makeWebhookRequest() } as any);
-		expect(res.status).toBe(200);
-
-		// updateMany returns count: 0, so campaign counters should not be incremented
-		expect(mockDbCampaignUpdate).not.toHaveBeenCalled();
+		expect(result.processed).toBe(false);
+		expect(patch).not.toHaveBeenCalled();
 	});
 
-	it('handles charge.refunded — updates donation status to refunded', async () => {
-		const event = makeRefundEvent('pi_test');
-		mockStripeConstructEvent.mockReturnValue(event);
-		mockDbDonationFindFirst.mockResolvedValue({
-			id: 'don-1', campaignId: 'camp-1', status: 'completed',
-			amountCents: 5000, stripePaymentIntentId: 'pi_test'
-		});
-		mockDbDonationUpdate.mockResolvedValue({});
-		mockDbCampaignUpdate.mockResolvedValue({});
+	it('does not increment counters when the campaign is missing', async () => {
+		get.mockResolvedValue(null);
+		const chain = createQueryChain({ collect: [makeDonation()] });
+		const ctx = { db: { query: chain.query, patch, get } };
 
-		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
-		const res = await POST({ request: makeWebhookRequest() } as any);
-		expect(res.status).toBe(200);
-
-		expect(mockDbDonationUpdate).toHaveBeenCalledWith({
-			where: { id: 'don-1' },
-			data: { status: 'refunded' }
+		await handler<{ donationId: string }, { processed: boolean }>(completeDonation)(ctx, {
+			donationId: 'cs_test'
 		});
+
+		expect(patch).toHaveBeenCalledTimes(1);
+		expect(patch).toHaveBeenCalledWith(
+			'don-1',
+			expect.objectContaining({ status: 'completed' })
+		);
+	});
+});
+
+describe('refundDonation', () => {
+	let patch: ReturnType<typeof vi.fn>;
+	let get: ReturnType<typeof vi.fn>;
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		patch = vi.fn().mockResolvedValue(undefined);
+		get = vi.fn().mockResolvedValue(makeCampaign({ raisedAmountCents: 8000, donorCount: 4 }));
 	});
 
-	it('decrements campaign counters on refund', async () => {
-		const event = makeRefundEvent('pi_test');
-		mockStripeConstructEvent.mockReturnValue(event);
-		mockDbDonationFindFirst.mockResolvedValue({
-			id: 'don-1', campaignId: 'camp-1', status: 'completed',
-			amountCents: 3000, stripePaymentIntentId: 'pi_test'
-		});
-		mockDbDonationUpdate.mockResolvedValue({});
-		mockDbCampaignUpdate.mockResolvedValue({});
+	it('marks a completed donation as refunded', async () => {
+		const donation = makeDonation({ status: 'completed', amountCents: 3000 });
+		const chain = createQueryChain({ first: donation });
+		const ctx = { db: { query: chain.query, patch, get } };
 
-		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
-		await POST({ request: makeWebhookRequest() } as any);
-
-		expect(mockDbCampaignUpdate).toHaveBeenCalledWith({
-			where: { id: 'camp-1' },
-			data: {
-				raisedAmountCents: { decrement: 3000 },
-				donorCount: { decrement: 1 }
-			}
+		await handler<{ stripePaymentIntentId: string }, void>(refundDonation)(ctx, {
+			stripePaymentIntentId: 'pi_test'
 		});
+
+		expect(chain.query).toHaveBeenCalledWith('donations');
+		expect(chain.withIndex).toHaveBeenCalledWith(
+			'by_stripePaymentIntentId',
+			expect.any(Function)
+		);
+		expect(patch).toHaveBeenCalledWith(
+			'don-1',
+			expect.objectContaining({
+				status: 'refunded',
+				updatedAt: expect.any(Number)
+			})
+		);
 	});
 
-	it('ignores refund for non-completed donations', async () => {
-		const event = makeRefundEvent('pi_test');
-		mockStripeConstructEvent.mockReturnValue(event);
-		mockDbDonationFindFirst.mockResolvedValue({
-			id: 'don-1', status: 'pending', amountCents: 5000
+	it('decrements campaign counters without going below zero', async () => {
+		const donation = makeDonation({ status: 'completed', amountCents: 3000 });
+		const chain = createQueryChain({ first: donation });
+		const ctx = { db: { query: chain.query, patch, get } };
+
+		await handler<{ stripePaymentIntentId: string }, void>(refundDonation)(ctx, {
+			stripePaymentIntentId: 'pi_test'
 		});
 
-		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
-		const res = await POST({ request: makeWebhookRequest() } as any);
-		expect(res.status).toBe(200);
-
-		expect(mockDbDonationUpdate).not.toHaveBeenCalled();
+		expect(get).toHaveBeenCalledWith('camp-1');
+		expect(patch).toHaveBeenCalledWith(
+			'camp-1',
+			expect.objectContaining({
+				raisedAmountCents: 5000,
+				donorCount: 3,
+				updatedAt: expect.any(Number)
+			})
+		);
 	});
 
-	it('ignores refund when no paymentIntentId', async () => {
-		const event = makeRefundEvent(null);
-		mockStripeConstructEvent.mockReturnValue(event);
+	it('clamps decremented campaign counters at zero', async () => {
+		get.mockResolvedValue(makeCampaign({ raisedAmountCents: 1000, donorCount: 0 }));
+		const donation = makeDonation({ status: 'completed', amountCents: 3000 });
+		const chain = createQueryChain({ first: donation });
+		const ctx = { db: { query: chain.query, patch, get } };
 
-		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
-		const res = await POST({ request: makeWebhookRequest() } as any);
-		expect(res.status).toBe(200);
-
-		expect(mockDbDonationFindFirst).not.toHaveBeenCalled();
-	});
-
-	it('returns 200 for unrecognized event types', async () => {
-		mockStripeConstructEvent.mockReturnValue({
-			type: 'some.unknown.event',
-			data: { object: {} }
+		await handler<{ stripePaymentIntentId: string }, void>(refundDonation)(ctx, {
+			stripePaymentIntentId: 'pi_test'
 		});
 
-		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
-		const res = await POST({ request: makeWebhookRequest() } as any);
-		expect(res.status).toBe(200);
+		expect(patch).toHaveBeenCalledWith(
+			'camp-1',
+			expect.objectContaining({
+				raisedAmountCents: 0,
+				donorCount: 0
+			})
+		);
 	});
 
-	it('existing subscription flow still works', async () => {
-		const event = {
-			type: 'checkout.session.completed',
-			data: {
-				object: {
-					metadata: { orgId: 'org-1', plan: 'starter' },
-					mode: 'subscription',
-					subscription: 'sub_test'
-				}
-			}
-		};
-		mockStripeConstructEvent.mockReturnValue(event);
-		mockStripeSubsRetrieve.mockResolvedValue({
-			id: 'sub_test',
-			status: 'active',
-			items: {
-				data: [{
-					current_period_start: Math.floor(Date.now() / 1000),
-					current_period_end: Math.floor(Date.now() / 1000) + 2592000
-				}]
-			}
+	it('ignores refunds for non-completed donations', async () => {
+		const chain = createQueryChain({ first: makeDonation({ status: 'pending' }) });
+		const ctx = { db: { query: chain.query, patch, get } };
+
+		await handler<{ stripePaymentIntentId: string }, void>(refundDonation)(ctx, {
+			stripePaymentIntentId: 'pi_test'
 		});
-		mockDbSubscriptionUpsert.mockResolvedValue({});
-		mockDbOrganizationUpdate.mockResolvedValue({});
 
-		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
-		const res = await POST({ request: makeWebhookRequest() } as any);
-		expect(res.status).toBe(200);
-
-		// Should not touch donation tables
-		expect(mockDbDonationFindUnique).not.toHaveBeenCalled();
-		expect(mockDbDonationUpdate).not.toHaveBeenCalled();
-
-		// Should process subscription as usual
-		expect(mockDbSubscriptionUpsert).toHaveBeenCalledOnce();
+		expect(patch).not.toHaveBeenCalled();
 	});
 
-	it('throws 400 for invalid signature', async () => {
-		mockStripeConstructEvent.mockImplementation(() => {
-			throw new Error('Signature verification failed');
+	it('ignores refunds when no donation matches the payment intent', async () => {
+		const chain = createQueryChain({ first: null });
+		const ctx = { db: { query: chain.query, patch, get } };
+
+		await handler<{ stripePaymentIntentId: string }, void>(refundDonation)(ctx, {
+			stripePaymentIntentId: 'pi_missing'
 		});
 
-		const { POST } = await import('../../../src/routes/api/billing/webhook/+server');
-		await expect(POST({ request: makeWebhookRequest() } as any)).rejects.toThrow('Invalid signature');
+		expect(patch).not.toHaveBeenCalled();
 	});
 });

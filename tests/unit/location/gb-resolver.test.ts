@@ -1,14 +1,17 @@
 /**
- * UK Resolver Tests
+ * UK postcode resolver tests.
  *
- * Tests coordinate → constituency resolution and MP lookup via mocked API calls.
+ * The old GBResolver class was deleted; current code resolves UK postcodes
+ * through resolveUKPostcode().
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { GBResolver } from '$lib/server/location/resolvers/gb';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+	isValidUKPostcode,
+	resolveUKPostcode
+} from '$lib/core/location/resolvers/uk-postcodes';
 
-describe('GBResolver', () => {
-	const resolver = new GBResolver();
+describe('UK postcode resolver', () => {
 	const originalFetch = globalThis.fetch;
 
 	beforeEach(() => {
@@ -19,154 +22,100 @@ describe('GBResolver', () => {
 		globalThis.fetch = originalFetch;
 	});
 
-	describe('resolveDistrict', () => {
-		it('should resolve London coordinates to a constituency', async () => {
+	describe('isValidUKPostcode', () => {
+		it('accepts common UK postcode formats', () => {
+			expect(isValidUKPostcode('SW1A 1AA')).toBe(true);
+			expect(isValidUKPostcode('EC1A1BB')).toBe(true);
+		});
+
+		it('rejects malformed postcodes', () => {
+			expect(isValidUKPostcode('2000')).toBe(false);
+			expect(isValidUKPostcode('K1A 0A9')).toBe(false);
+		});
+	});
+
+	describe('resolveUKPostcode', () => {
+		it('resolves a parliamentary constituency', async () => {
 			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 				ok: true,
 				json: async () => ({
 					status: 200,
-					result: [
-						{
-							parliamentary_constituency: 'Cities of London and Westminster',
-							codes: {
-								parliamentary_constituency: 'E14000639',
-							},
-							region: 'London',
-							admin_district: 'City of London',
+					result: {
+						parliamentary_constituency: 'Cities of London and Westminster',
+						codes: {
+							parliamentary_constituency: 'E14000639'
 						},
-					],
-				}),
+						region: 'London',
+						admin_district: 'City of London'
+					}
+				})
 			});
 
-			const result = await resolver.resolveDistrict(51.5128, -0.0918);
-			expect(result).not.toBeNull();
-			expect(result!.districtId).toBe('E14000639');
-			expect(result!.districtName).toBe('Cities of London and Westminster');
-			expect(result!.districtType).toBe('constituency');
-			expect(result!.country).toBe('GB');
-			expect(result!.extra?.region).toBe('London');
-			expect(result!.extra?.council).toBe('City of London');
+			const result = await resolveUKPostcode('SW1A 1AA');
+
+			expect(globalThis.fetch).toHaveBeenCalledWith(
+				'https://api.postcodes.io/postcodes/SW1A+1AA',
+				expect.objectContaining({
+					headers: { Accept: 'application/json' }
+				})
+			);
+			expect(result).toEqual({
+				constituencyId: 'E14000639',
+				constituencyName: 'Cities of London and Westminster',
+				council: 'City of London',
+				region: 'London'
+			});
 		});
 
-		it('should return null for coordinates outside UK', async () => {
+		it('falls back to constituency name when code is missing', async () => {
 			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 				ok: true,
 				json: async () => ({
 					status: 200,
-					result: [],
-				}),
+					result: {
+						parliamentary_constituency: 'Edinburgh East and Musselburgh'
+					}
+				})
 			});
 
-			const result = await resolver.resolveDistrict(0, 0);
-			expect(result).toBeNull();
+			const result = await resolveUKPostcode('EH8 8BG');
+
+			expect(result).toEqual({
+				constituencyId: 'Edinburgh East and Musselburgh',
+				constituencyName: 'Edinburgh East and Musselburgh',
+				council: 'Unknown',
+				region: 'Unknown'
+			});
 		});
 
-		it('should return null on API failure', async () => {
+		it('rejects invalid postcode input without calling fetch', async () => {
+			await expect(resolveUKPostcode('not-valid')).rejects.toThrow(
+				'Invalid UK postcode format'
+			);
+			expect(globalThis.fetch).not.toHaveBeenCalled();
+		});
+
+		it('rejects API failures', async () => {
 			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 				ok: false,
-				status: 500,
+				status: 500
 			});
 
-			const result = await resolver.resolveDistrict(51.5074, -0.1278);
-			expect(result).toBeNull();
-		});
-
-		it('should return null on network error', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-				new Error('Network error')
+			await expect(resolveUKPostcode('SW1A 1AA')).rejects.toThrow(
+				'postcodes.io returned 500'
 			);
-
-			const result = await resolver.resolveDistrict(51.5074, -0.1278);
-			expect(result).toBeNull();
 		});
 
-		it('should handle postcodes.io non-200 status', async () => {
+		it('rejects postcodes.io non-200 result status', async () => {
 			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 				ok: true,
 				json: async () => ({
 					status: 404,
-					result: null,
-				}),
+					result: null
+				})
 			});
 
-			const result = await resolver.resolveDistrict(51.5074, -0.1278);
-			expect(result).toBeNull();
+			await expect(resolveUKPostcode('SW1A 1AA')).rejects.toThrow('Postcode not found');
 		});
-	});
-
-	describe('getOfficials', () => {
-		it('should return MP for a constituency', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: true,
-				json: async () => ({
-					items: [
-						{
-							value: {
-								id: 4514,
-								nameDisplayAs: 'Nickie Aiken',
-								nameFullTitle: 'Mrs Nickie Aiken MP',
-								latestParty: { name: 'Conservative' },
-								latestHouseMembership: {
-									membershipFrom: 'Cities of London and Westminster',
-								},
-							},
-						},
-					],
-				}),
-			});
-
-			const officials = await resolver.getOfficials('Cities of London and Westminster');
-			expect(officials.length).toBe(1);
-			expect(officials[0].name).toBe('Nickie Aiken');
-			expect(officials[0].party).toBe('Conservative');
-			expect(officials[0].chamber).toBe('house-of-commons');
-			expect(officials[0].isVoting).toBe(true);
-			expect(officials[0].websiteUrl).toContain('4514');
-		});
-
-		it('should return empty array on API failure', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: false,
-				status: 500,
-			});
-
-			const officials = await resolver.getOfficials('Cities of London and Westminster');
-			expect(officials).toEqual([]);
-		});
-
-		it('should return empty array on network error', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-				new Error('Network error')
-			);
-
-			const officials = await resolver.getOfficials('Cities of London and Westminster');
-			expect(officials).toEqual([]);
-		});
-
-		it('should handle empty items array', async () => {
-			(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-				ok: true,
-				json: async () => ({
-					items: [],
-				}),
-			});
-
-			const officials = await resolver.getOfficials('NonexistentConstituency');
-			expect(officials).toEqual([]);
-		});
-	});
-
-	describe('getJurisdictionLevels', () => {
-		it('should return federal, devolved, local', () => {
-			expect(resolver.getJurisdictionLevels()).toEqual([
-				'federal',
-				'devolved',
-				'local',
-			]);
-		});
-	});
-
-	it('should have country = GB', () => {
-		expect(resolver.country).toBe('GB');
 	});
 });

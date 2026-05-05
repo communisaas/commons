@@ -110,22 +110,22 @@ describe('invite expiry', () => {
 
 describe('invite email match validation', () => {
 	it('should match when emails are identical', () => {
-		const inviteEmail = 'user@test.com';
-		const userEmail = 'user@test.com';
+		const inviteEmail: string = 'user@test.com';
+		const userEmail: string = 'user@test.com';
 		expect(inviteEmail === userEmail).toBe(true);
 	});
 
 	it('should not match when emails differ', () => {
-		const inviteEmail = 'user@test.com';
-		const userEmail = 'other@test.com';
+		const inviteEmail: string = 'user@test.com';
+		const userEmail: string = 'other@test.com';
 		expect(inviteEmail === userEmail).toBe(false);
 	});
 
 	it('should not match case-different emails (pre-normalization required)', () => {
 		// The invite route normalizes on creation, so stored emails are lowercase.
 		// The user email must also be lowercase for comparison to work.
-		const inviteEmail = 'user@test.com'; // normalized on creation
-		const userEmail = 'User@Test.com'; // not normalized
+		const inviteEmail: string = 'user@test.com'; // normalized on creation
+		const userEmail: string = 'User@Test.com'; // not normalized
 		expect(inviteEmail === userEmail).toBe(false);
 	});
 });
@@ -159,10 +159,14 @@ describe('invite role validation', () => {
 });
 
 describe('invite batch limits', () => {
+	function exceedsBatchLimit(count: number, maxBatch: number): boolean {
+		return count > maxBatch;
+	}
+
 	it('should enforce maximum of 20 invites per batch', () => {
 		const MAX_BATCH = 20;
-		expect(21 > MAX_BATCH).toBe(true);
-		expect(20 > MAX_BATCH).toBe(false);
-		expect(1 > MAX_BATCH).toBe(false);
+		expect(exceedsBatchLimit(21, MAX_BATCH)).toBe(true);
+		expect(exceedsBatchLimit(20, MAX_BATCH)).toBe(false);
+		expect(exceedsBatchLimit(1, MAX_BATCH)).toBe(false);
 	});
 });

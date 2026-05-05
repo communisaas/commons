@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { walletState, type PageUser } from '$lib/stores/walletState.svelte';
 
+type WalletStatusResponse = {
+	wallet_address?: string;
+	wallet_type?: string;
+	near_derived_scroll_address?: string;
+};
+
 vi.mock('$lib/core/wallet/evm-provider', () => ({
 	connectInjectedWallet: vi.fn().mockResolvedValue({
 		address: '0xTEST_ADDRESS',
@@ -18,32 +24,45 @@ beforeEach(async () => {
 	await walletState.disconnect();
 });
 
+async function flushWalletStatus(): Promise<void> {
+	await Promise.resolve();
+	await Promise.resolve();
+	await Promise.resolve();
+}
+
+async function initFromWalletStatus(data: WalletStatusResponse | null): Promise<void> {
+	global.fetch = vi.fn().mockResolvedValue({
+		ok: true,
+		json: vi.fn().mockResolvedValue(data)
+	});
+
+	const user: PageUser = { hasWallet: true };
+	walletState.initFromPageData(user);
+	await flushWalletStatus();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // initFromPageData
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('initFromPageData', () => {
-	it('hydrates EVM user — wallet_address + wallet_type=evm', () => {
-		const user: PageUser = {
+	it('hydrates EVM user from wallet status', async () => {
+		await initFromWalletStatus({
 			wallet_address: '0xABCDEF1234567890abcdef1234567890ABCDEF12',
 			wallet_type: 'evm'
-		};
-
-		walletState.initFromPageData(user);
+		});
 
 		expect(walletState.connected).toBe(true);
 		expect(walletState.address).toBe('0xABCDEF1234567890abcdef1234567890ABCDEF12');
 		expect(walletState.walletType).toBe('evm');
 		expect(walletState.error).toBeNull();
+		expect(global.fetch).toHaveBeenCalledWith('/api/wallet/status');
 	});
 
-	it('hydrates NEAR user — near_derived_scroll_address, no wallet_address', () => {
-		const user: PageUser = {
-			near_account_id: 'alice.near',
+	it('hydrates NEAR user from wallet status', async () => {
+		await initFromWalletStatus({
 			near_derived_scroll_address: '0xNEAR_DERIVED_0000000000000000000000001'
-		};
-
-		walletState.initFromPageData(user);
+		});
 
 		expect(walletState.connected).toBe(true);
 		expect(walletState.address).toBe('0xNEAR_DERIVED_0000000000000000000000001');
@@ -51,20 +70,18 @@ describe('initFromPageData', () => {
 		expect(walletState.error).toBeNull();
 	});
 
-	it('does NOT set connected when wallet_type is not evm', () => {
-		const user: PageUser = {
+	it('does NOT set connected when wallet status is inconsistent', async () => {
+		await initFromWalletStatus({
 			wallet_address: '0x1234',
 			wallet_type: 'near'
-		};
-
-		walletState.initFromPageData(user);
+		});
 
 		expect(walletState.connected).toBe(false);
 		expect(walletState.address).toBeNull();
 	});
 
-	it('resets to disconnected state for null user', () => {
-		walletState.initFromPageData({
+	it('resets to disconnected state for null user', async () => {
+		await initFromWalletStatus({
 			wallet_address: '0xABC',
 			wallet_type: 'evm'
 		});
@@ -82,16 +99,15 @@ describe('initFromPageData', () => {
 		expect(walletState.error).toBeNull();
 	});
 
-	it('calling initFromPageData twice resets previous state', () => {
-		walletState.initFromPageData({
+	it('calling initFromPageData twice resets previous state', async () => {
+		await initFromWalletStatus({
 			wallet_address: '0xFIRST',
 			wallet_type: 'evm'
 		});
 		expect(walletState.address).toBe('0xFIRST');
 		expect(walletState.walletType).toBe('evm');
 
-		walletState.initFromPageData({
-			near_account_id: 'bob.near',
+		await initFromWalletStatus({
 			near_derived_scroll_address: '0xSECOND'
 		});
 		expect(walletState.address).toBe('0xSECOND');
@@ -104,17 +120,14 @@ describe('initFromPageData', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('derived getters', () => {
-	it('isEVM returns true only when walletType=evm', () => {
-		walletState.initFromPageData({ wallet_address: '0xABC', wallet_type: 'evm' });
+	it('isEVM returns true only when walletType=evm', async () => {
+		await initFromWalletStatus({ wallet_address: '0xABC', wallet_type: 'evm' });
 		expect(walletState.isEVM).toBe(true);
 		expect(walletState.isNEAR).toBe(false);
 	});
 
-	it('isNEAR returns true only when walletType=near', () => {
-		walletState.initFromPageData({
-			near_derived_scroll_address: '0xNEAR',
-			near_account_id: 'alice.near'
-		});
+	it('isNEAR returns true only when walletType=near', async () => {
+		await initFromWalletStatus({ near_derived_scroll_address: '0xNEAR' });
 		expect(walletState.isNEAR).toBe(true);
 		expect(walletState.isEVM).toBe(false);
 	});
@@ -124,8 +137,8 @@ describe('derived getters', () => {
 		expect(walletState.isNEAR).toBe(false);
 	});
 
-	it('displayAddress truncates long addresses', () => {
-		walletState.initFromPageData({
+	it('displayAddress truncates long addresses', async () => {
+		await initFromWalletStatus({
 			wallet_address: '0x1234567890abcdef',
 			wallet_type: 'evm'
 		});
@@ -136,8 +149,8 @@ describe('derived getters', () => {
 		expect(walletState.displayAddress).toBeNull();
 	});
 
-	it('displayAddress returns short addresses unchanged', () => {
-		walletState.initFromPageData({
+	it('displayAddress returns short addresses unchanged', async () => {
+		await initFromWalletStatus({
 			wallet_address: '0x12345678',
 			wallet_type: 'evm'
 		});
@@ -145,8 +158,8 @@ describe('derived getters', () => {
 		expect(walletState.displayAddress).toBe('0x12345678');
 	});
 
-	it('displayAddress returns 12-char address unchanged', () => {
-		walletState.initFromPageData({
+	it('displayAddress returns 12-char address unchanged', async () => {
+		await initFromWalletStatus({
 			wallet_address: '0x1234567890',
 			wallet_type: 'evm'
 		});
@@ -154,8 +167,8 @@ describe('derived getters', () => {
 		expect(walletState.displayAddress).toBe('0x1234567890');
 	});
 
-	it('displayAddress truncates 13-char address', () => {
-		walletState.initFromPageData({
+	it('displayAddress truncates 13-char address', async () => {
+		await initFromWalletStatus({
 			wallet_address: '0x12345678901',
 			wallet_type: 'evm'
 		});
@@ -170,7 +183,7 @@ describe('derived getters', () => {
 
 describe('disconnect', () => {
 	it('resets all state to defaults', async () => {
-		walletState.initFromPageData({
+		await initFromWalletStatus({
 			wallet_address: '0xABC',
 			wallet_type: 'evm'
 		});
@@ -202,7 +215,7 @@ describe('disconnect', () => {
 
 describe('refreshBalance', () => {
 	it('fetches and sets balance when connected', async () => {
-		walletState.initFromPageData({
+		await initFromWalletStatus({
 			wallet_address: '0xABCDEF1234567890abcdef1234567890ABCDEF12',
 			wallet_type: 'evm'
 		});
@@ -233,7 +246,7 @@ describe('refreshBalance', () => {
 	});
 
 	it('does not throw when fetch returns ok: false', async () => {
-		walletState.initFromPageData({
+		await initFromWalletStatus({
 			wallet_address: '0xABC123',
 			wallet_type: 'evm'
 		});
@@ -249,7 +262,7 @@ describe('refreshBalance', () => {
 	});
 
 	it('does not throw when fetch rejects', async () => {
-		walletState.initFromPageData({
+		await initFromWalletStatus({
 			wallet_address: '0xABC123',
 			wallet_type: 'evm'
 		});
@@ -261,7 +274,7 @@ describe('refreshBalance', () => {
 	});
 
 	it('preserves existing balance when fetch fails', async () => {
-		walletState.initFromPageData({
+		await initFromWalletStatus({
 			wallet_address: '0xABC123',
 			wallet_type: 'evm'
 		});
@@ -286,7 +299,7 @@ describe('refreshBalance', () => {
 	});
 
 	it('sets balanceRaw to null when response balance is null', async () => {
-		walletState.initFromPageData({
+		await initFromWalletStatus({
 			wallet_address: '0xABC123',
 			wallet_type: 'evm'
 		});
@@ -325,7 +338,7 @@ describe('handleChainChanged', () => {
 
 describe('handleAccountChanged', () => {
 	it('sets address and triggers refreshBalance', async () => {
-		walletState.initFromPageData({
+		await initFromWalletStatus({
 			wallet_address: '0xOLD',
 			wallet_type: 'evm'
 		});

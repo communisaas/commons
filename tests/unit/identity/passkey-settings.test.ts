@@ -1,29 +1,46 @@
 /**
- * Unit tests for Passkey Settings Page + Management API
+ * Unit tests for passkey settings loader and management endpoint.
  *
- * Tests:
- *   - Security page server loader: auth requirement, passkey data shape
- *   - Passkey DELETE endpoint: auth requirement, clears all passkey fields
- *   - Edge cases: no passkey registered, unauthenticated access
+ * Current API shape:
+ * - The security page reads passkey state from Convex users.getProfile.
+ * - The DELETE endpoint clears passkeys through Convex users.clearPasskey.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+type SecuritySettingsLoadData = {
+	passkey: {
+		createdAt: string | null;
+		lastUsedAt: string | null;
+	} | null;
+};
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks
 // ---------------------------------------------------------------------------
 
-const mockDbUser = vi.hoisted(() => ({
-	findUnique: vi.fn(),
-	update: vi.fn()
+const { mockServerQuery, mockServerMutation, mockApi } = vi.hoisted(() => ({
+	mockServerQuery: vi.fn(),
+	mockServerMutation: vi.fn(),
+	mockApi: {
+		users: {
+			getProfile: 'users:getProfile',
+			clearPasskey: 'users:clearPasskey'
+		}
+	}
 }));
 
-const mockDb = vi.hoisted(() => ({
-	user: mockDbUser
+vi.mock('convex-sveltekit', () => ({
+	serverQuery: (...args: unknown[]) => mockServerQuery(...args),
+	serverMutation: (...args: unknown[]) => mockServerMutation(...args)
 }));
 
-vi.mock('$lib/core/db', () => ({
-	db: mockDb
+vi.mock('$lib/convex', () => ({
+	api: mockApi
+}));
+
+vi.mock('$convex/_generated/api', () => ({
+	api: mockApi
 }));
 
 // Mock SvelteKit
@@ -40,20 +57,14 @@ vi.mock('@sveltejs/kit', () => ({
 		mockError(...args);
 		throw { status: args[0], body: { message: args[1] } };
 	},
-	json: (data: unknown) => {
-		mockJson(data);
+	json: (data: unknown, init?: ResponseInit) => {
+		mockJson(data, init);
 		return new Response(JSON.stringify(data), {
+			status: init?.status ?? 200,
 			headers: { 'Content-Type': 'application/json' }
 		});
 	}
 }));
-
-// ---------------------------------------------------------------------------
-// Test imports (after mocks)
-// ---------------------------------------------------------------------------
-
-// We test the loader and endpoint logic by importing after mocks
-// Note: SvelteKit route modules need careful import handling
 
 describe('Security Settings Page Loader', () => {
 	beforeEach(() => {
@@ -74,86 +85,52 @@ describe('Security Settings Page Loader', () => {
 				locals: { user: null }
 			} as never)
 		).rejects.toMatchObject({ status: 302, location: '/' });
+
+		expect(mockServerQuery).not.toHaveBeenCalled();
 	});
 
-	it('returns null when user has no passkey', async () => {
-		mockDbUser.findUnique.mockResolvedValue({
-			passkey_credential_id: null,
-			passkey_created_at: null,
-			passkey_last_used_at: null
-		});
+	it('returns null when Convex profile has no passkey', async () => {
+		mockServerQuery.mockResolvedValue({ hasPasskey: false });
 
 		const { load } = await import(
 			'../../../src/routes/profile/security/+page.server'
 		);
 
-		const result = await load({
+		const result = (await load({
 			locals: { user: { id: 'user-123', email: 'test@example.com', name: 'Test' } }
-		} as never);
+		} as never)) as SecuritySettingsLoadData;
 
 		expect(result.passkey).toBeNull();
-		expect(mockDbUser.findUnique).toHaveBeenCalledWith({
-			where: { id: 'user-123' },
-			select: {
-				passkey_credential_id: true,
-				passkey_created_at: true,
-				passkey_last_used_at: true
-			}
-		});
+		expect(mockServerQuery).toHaveBeenCalledWith(mockApi.users.getProfile, {});
 	});
 
-	it('returns passkey data when user has a registered passkey', async () => {
-		const createdAt = new Date('2026-03-20T10:00:00Z');
-		const lastUsed = new Date('2026-03-22T14:30:00Z');
-
-		mockDbUser.findUnique.mockResolvedValue({
-			passkey_credential_id: 'cred-abc123',
-			passkey_created_at: createdAt,
-			passkey_last_used_at: lastUsed
-		});
+	it('returns passkey placeholder metadata when Convex profile has a passkey', async () => {
+		mockServerQuery.mockResolvedValue({ hasPasskey: true });
 
 		const { load } = await import(
 			'../../../src/routes/profile/security/+page.server'
 		);
 
-		const result = await load({
+		const result = (await load({
 			locals: { user: { id: 'user-456', email: 'test@example.com', name: 'Test' } }
-		} as never);
+		} as never)) as SecuritySettingsLoadData;
 
-		expect(result.passkey).not.toBeNull();
-		expect(result.passkey!.createdAt).toBe(createdAt.toISOString());
-		expect(result.passkey!.lastUsedAt).toBe(lastUsed.toISOString());
-	});
-
-	it('handles passkey without last_used_at', async () => {
-		mockDbUser.findUnique.mockResolvedValue({
-			passkey_credential_id: 'cred-abc123',
-			passkey_created_at: new Date('2026-03-20T10:00:00Z'),
-			passkey_last_used_at: null
+		expect(result.passkey).toEqual({
+			createdAt: null,
+			lastUsedAt: null
 		});
-
-		const { load } = await import(
-			'../../../src/routes/profile/security/+page.server'
-		);
-
-		const result = await load({
-			locals: { user: { id: 'user-789', email: 'test@example.com', name: 'Test' } }
-		} as never);
-
-		expect(result.passkey).not.toBeNull();
-		expect(result.passkey!.lastUsedAt).toBeNull();
 	});
 
-	it('returns null when user record not found', async () => {
-		mockDbUser.findUnique.mockResolvedValue(null);
+	it('returns null when Convex profile is missing', async () => {
+		mockServerQuery.mockResolvedValue(null);
 
 		const { load } = await import(
 			'../../../src/routes/profile/security/+page.server'
 		);
 
-		const result = await load({
+		const result = (await load({
 			locals: { user: { id: 'nonexistent', email: 'test@example.com', name: 'Test' } }
-		} as never);
+		} as never)) as SecuritySettingsLoadData;
 
 		expect(result.passkey).toBeNull();
 	});
@@ -178,12 +155,12 @@ describe('Passkey DELETE Endpoint', () => {
 				locals: { user: null }
 			} as never)
 		).rejects.toMatchObject({ status: 401 });
+
+		expect(mockServerMutation).not.toHaveBeenCalled();
 	});
 
 	it('returns 404 when no passkey is registered', async () => {
-		mockDbUser.findUnique.mockResolvedValue({
-			passkey_credential_id: null
-		});
+		mockServerMutation.mockRejectedValue(new Error('No passkey registered'));
 
 		const { DELETE } = await import(
 			'../../../src/routes/api/auth/passkey/+server'
@@ -196,11 +173,8 @@ describe('Passkey DELETE Endpoint', () => {
 		).rejects.toMatchObject({ status: 404 });
 	});
 
-	it('clears all passkey fields on successful delete', async () => {
-		mockDbUser.findUnique.mockResolvedValue({
-			passkey_credential_id: 'cred-abc123'
-		});
-		mockDbUser.update.mockResolvedValue({});
+	it('clears passkey state through Convex on successful delete', async () => {
+		mockServerMutation.mockResolvedValue(null);
 
 		const { DELETE } = await import(
 			'../../../src/routes/api/auth/passkey/+server'
@@ -211,18 +185,23 @@ describe('Passkey DELETE Endpoint', () => {
 		} as never);
 
 		expect(response).toBeInstanceOf(Response);
-		const body = await response.json();
-		expect(body.success).toBe(true);
-
-		expect(mockDbUser.update).toHaveBeenCalledWith({
-			where: { id: 'user-123' },
-			data: {
-				passkey_credential_id: null,
-				passkey_public_key_jwk: null,
-				passkey_created_at: null,
-				passkey_last_used_at: null,
-				did_key: null
-			}
+		await expect(response.json()).resolves.toEqual({ success: true });
+		expect(mockServerMutation).toHaveBeenCalledWith(mockApi.users.clearPasskey, {
+			userId: 'user-123'
 		});
+	});
+
+	it('maps unexpected Convex failures to 500', async () => {
+		mockServerMutation.mockRejectedValue(new Error('Convex unavailable'));
+
+		const { DELETE } = await import(
+			'../../../src/routes/api/auth/passkey/+server'
+		);
+
+		await expect(
+			DELETE({
+				locals: { user: { id: 'user-123' } }
+			} as never)
+		).rejects.toMatchObject({ status: 500 });
 	});
 });

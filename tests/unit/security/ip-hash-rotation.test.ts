@@ -14,23 +14,24 @@ const TEST_SALT = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456
 describe('IP Hash Salt Rotation', () => {
 	let originalSalt: string | undefined;
 	let originalEnv: string | undefined;
+	const mutableEnv = process.env as Record<string, string | undefined>;
 
 	beforeEach(() => {
-		originalSalt = process.env.IP_HASH_SALT;
-		originalEnv = process.env.NODE_ENV;
-		process.env.IP_HASH_SALT = TEST_SALT;
+		originalSalt = mutableEnv.IP_HASH_SALT;
+		originalEnv = mutableEnv.NODE_ENV;
+		mutableEnv.IP_HASH_SALT = TEST_SALT;
 	});
 
 	afterEach(() => {
 		if (originalSalt === undefined) {
-			delete process.env.IP_HASH_SALT;
+			delete mutableEnv.IP_HASH_SALT;
 		} else {
-			process.env.IP_HASH_SALT = originalSalt;
+			mutableEnv.IP_HASH_SALT = originalSalt;
 		}
 		if (originalEnv === undefined) {
-			delete process.env.NODE_ENV;
+			delete mutableEnv.NODE_ENV;
 		} else {
-			process.env.NODE_ENV = originalEnv;
+			mutableEnv.NODE_ENV = originalEnv;
 		}
 	});
 
@@ -80,16 +81,16 @@ describe('IP Hash Salt Rotation', () => {
 
 	describe('missing ENV key fallback', () => {
 		it('works without IP_HASH_SALT in non-production (fallback)', () => {
-			delete process.env.IP_HASH_SALT;
-			process.env.NODE_ENV = 'test';
+			delete mutableEnv.IP_HASH_SALT;
+			mutableEnv.NODE_ENV = 'test';
 
 			const hash = hashIPAddress('192.168.1.1', '2026-03-21');
 			expect(hash).toMatch(/^[0-9a-f]{64}$/);
 		});
 
 		it('fallback still provides same-day consistency', () => {
-			delete process.env.IP_HASH_SALT;
-			process.env.NODE_ENV = 'development';
+			delete mutableEnv.IP_HASH_SALT;
+			mutableEnv.NODE_ENV = 'development';
 
 			const hash1 = hashIPAddress('192.168.1.1', '2026-03-21');
 			const hash2 = hashIPAddress('192.168.1.1', '2026-03-21');
@@ -97,8 +98,8 @@ describe('IP Hash Salt Rotation', () => {
 		});
 
 		it('fallback still provides cross-day decorrelation', () => {
-			delete process.env.IP_HASH_SALT;
-			process.env.NODE_ENV = 'development';
+			delete mutableEnv.IP_HASH_SALT;
+			mutableEnv.NODE_ENV = 'development';
 
 			const hash1 = hashIPAddress('192.168.1.1', '2026-03-21');
 			const hash2 = hashIPAddress('192.168.1.1', '2026-03-22');
@@ -106,8 +107,8 @@ describe('IP Hash Salt Rotation', () => {
 		});
 
 		it('throws in production without IP_HASH_SALT', () => {
-			delete process.env.IP_HASH_SALT;
-			process.env.NODE_ENV = 'production';
+			delete mutableEnv.IP_HASH_SALT;
+			mutableEnv.NODE_ENV = 'production';
 
 			expect(() => hashIPAddress('192.168.1.1', '2026-03-21')).toThrow(
 				'IP_HASH_SALT environment variable not configured'
@@ -117,10 +118,10 @@ describe('IP Hash Salt Rotation', () => {
 
 	describe('HKDF properties', () => {
 		it('different master salts produce different hashes', () => {
-			process.env.IP_HASH_SALT = 'salt-a-0000000000000000000000000000000000000000000000000000';
+			mutableEnv.IP_HASH_SALT = 'salt-a-0000000000000000000000000000000000000000000000000000';
 			const hash1 = hashIPAddress('192.168.1.1', '2026-03-21');
 
-			process.env.IP_HASH_SALT = 'salt-b-0000000000000000000000000000000000000000000000000000';
+			mutableEnv.IP_HASH_SALT = 'salt-b-0000000000000000000000000000000000000000000000000000';
 			const hash2 = hashIPAddress('192.168.1.1', '2026-03-21');
 
 			expect(hash1).not.toBe(hash2);

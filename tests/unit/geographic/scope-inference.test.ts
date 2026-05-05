@@ -48,9 +48,7 @@ beforeEach(() => {
 
 describe('POST /api/geographic/infer-scope', () => {
 	it('requires authentication', async () => {
-		const { POST } = await import(
-			'../../../src/routes/api/geographic/infer-scope/+server.ts'
-		);
+		const { POST } = await import('../../../src/routes/api/geographic/infer-scope/+server');
 
 		const response = await POST({
 			request: new Request('http://localhost', {
@@ -75,9 +73,7 @@ describe('POST /api/geographic/infer-scope', () => {
 			confidence: 0.9
 		});
 
-		const { POST } = await import(
-			'../../../src/routes/api/geographic/infer-scope/+server.ts'
-		);
+		const { POST } = await import('../../../src/routes/api/geographic/infer-scope/+server');
 
 		const response = await POST({
 			request: new Request('http://localhost', {
@@ -98,9 +94,7 @@ describe('POST /api/geographic/infer-scope', () => {
 	it('returns null match when no pattern found', async () => {
 		mockFuzzyMatch.mockReturnValue(null);
 
-		const { POST } = await import(
-			'../../../src/routes/api/geographic/infer-scope/+server.ts'
-		);
+		const { POST } = await import('../../../src/routes/api/geographic/infer-scope/+server');
 
 		const response = await POST({
 			request: new Request('http://localhost', {
@@ -117,9 +111,7 @@ describe('POST /api/geographic/infer-scope', () => {
 	});
 
 	it('rejects requests without text', async () => {
-		const { POST } = await import(
-			'../../../src/routes/api/geographic/infer-scope/+server.ts'
-		);
+		const { POST } = await import('../../../src/routes/api/geographic/infer-scope/+server');
 
 		const response = await POST({
 			request: new Request('http://localhost', {
@@ -138,9 +130,7 @@ describe('POST /api/geographic/infer-scope', () => {
 	it('truncates input in response for safety', async () => {
 		mockFuzzyMatch.mockReturnValue(null);
 
-		const { POST } = await import(
-			'../../../src/routes/api/geographic/infer-scope/+server.ts'
-		);
+		const { POST } = await import('../../../src/routes/api/geographic/infer-scope/+server');
 
 		const longText = 'a'.repeat(500);
 		const response = await POST({

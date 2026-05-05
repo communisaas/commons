@@ -142,11 +142,11 @@ async function buildCoseSign1(
 	// Node.js Web Crypto returns raw (IEEE P1363) format: r || s, 64 bytes
 	// This matches COSE's expected signature format directly.
 	const rawSignature = new Uint8Array(
-		await crypto.subtle.sign(
-			{ name: 'ECDSA', hash: 'SHA-256' },
-			privateKey,
-			sigStructureEncoded
-		)
+			await crypto.subtle.sign(
+				{ name: 'ECDSA', hash: 'SHA-256' },
+				privateKey,
+				sigStructureEncoded as BufferSource
+			)
 	);
 
 	return [protectedHeadersCBOR, unprotectedHeaders, payload, rawSignature];
@@ -260,11 +260,11 @@ async function buildDeviceSignature(
 		deviceAuthenticationBytes
 	);
 	const rawSignature = new Uint8Array(
-		await crypto.subtle.sign(
-			{ name: 'ECDSA', hash: 'SHA-256' },
-			privateKey,
-			sigStructure
-		)
+			await crypto.subtle.sign(
+				{ name: 'ECDSA', hash: 'SHA-256' },
+				privateKey,
+				sigStructure as BufferSource
+			)
 	);
 	return [protectedHeadersCBOR, new Map(), options?.payload ?? null, rawSignature];
 }

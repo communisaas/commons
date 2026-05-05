@@ -52,6 +52,10 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 	return btoa(binary);
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+	return bytes.slice().buffer as ArrayBuffer;
+}
+
 /**
  * Build a synthetic X.509 DER certificate with the given EC curve OID.
  * Contains just enough DER structure for extractVICALRoots' curve detection
@@ -462,10 +466,7 @@ describe('VICAL Service', () => {
 			]);
 
 			const { kv, store } = createMockKV();
-			store.set('vical:current', vicalBytes.buffer.slice(
-				vicalBytes.byteOffset,
-				vicalBytes.byteOffset + vicalBytes.byteLength
-			));
+			store.set('vical:current', toArrayBuffer(vicalBytes));
 
 			// Mock fetch — should NOT be called
 			const mockFetch = vi.fn();
@@ -497,10 +498,7 @@ describe('VICAL Service', () => {
 				})
 				.mockResolvedValueOnce({
 					ok: true,
-					arrayBuffer: async () => vicalBytes.buffer.slice(
-						vicalBytes.byteOffset,
-						vicalBytes.byteOffset + vicalBytes.byteLength
-					)
+					arrayBuffer: async () => toArrayBuffer(vicalBytes)
 				});
 			vi.stubGlobal('fetch', mockFetch);
 
@@ -569,10 +567,7 @@ describe('VICAL Service', () => {
 				})
 				.mockResolvedValueOnce({
 					ok: true,
-					arrayBuffer: async () => vicalBytes.buffer.slice(
-						vicalBytes.byteOffset,
-						vicalBytes.byteOffset + vicalBytes.byteLength
-					)
+					arrayBuffer: async () => toArrayBuffer(vicalBytes)
 				});
 			vi.stubGlobal('fetch', mockFetch);
 
@@ -602,10 +597,7 @@ describe('VICAL Service', () => {
 				})
 				.mockResolvedValueOnce({
 					ok: true,
-					arrayBuffer: async () => vicalBytes.buffer.slice(
-						vicalBytes.byteOffset,
-						vicalBytes.byteOffset + vicalBytes.byteLength
-					)
+					arrayBuffer: async () => toArrayBuffer(vicalBytes)
 				});
 			vi.stubGlobal('fetch', mockFetch);
 
@@ -686,10 +678,7 @@ describe('VICAL Service', () => {
 			]);
 
 			const { kv, store } = createMockKV();
-			store.set('vical:current', vicalBytes.buffer.slice(
-				vicalBytes.byteOffset,
-				vicalBytes.byteOffset + vicalBytes.byteLength
-			));
+			store.set('vical:current', toArrayBuffer(vicalBytes));
 
 			// Mock fetch — should not be called since KV has cached bytes
 			const mockFetch = vi.fn();

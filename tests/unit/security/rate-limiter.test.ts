@@ -708,156 +708,137 @@ describe('RATE_LIMIT_EXEMPT_PATHS', () => {
 		expect(RATE_LIMIT_EXEMPT_PATHS).toContain('/api/cron/');
 	});
 
-	it('should have at least 3 exempt paths', () => {
-		expect(RATE_LIMIT_EXEMPT_PATHS.length).toBeGreaterThanOrEqual(3);
+	it('should only include current explicit exemptions', () => {
+		expect(RATE_LIMIT_EXEMPT_PATHS).toEqual(['/api/health', '/api/cron/']);
 	});
 });
 
 // =============================================================================
-// InMemoryRateLimiter (src/lib/server/rate-limiter.ts)
+// rateLimiter adapter (src/lib/server/rate-limiter.ts)
 // =============================================================================
 
-describe('InMemoryRateLimiter (server)', () => {
-	let serverLimiter: InstanceType<typeof import('$lib/server/rate-limiter').InMemoryRateLimiter>;
+describe('rateLimiter server adapter', () => {
+	let serverLimiter: typeof import('$lib/server/rate-limiter').rateLimiter;
+	let keyPrefix = 0;
 
 	beforeEach(async () => {
 		vi.useFakeTimers();
 		const serverMod = await import('$lib/server/rate-limiter');
-		serverLimiter = new serverMod.InMemoryRateLimiter();
+		serverLimiter = serverMod.rateLimiter;
+		keyPrefix++;
 	});
 
 	afterEach(() => {
-		serverLimiter.destroy();
 		vi.useRealTimers();
 	});
 
+	function key(name: string): string {
+		return `server-adapter:${keyPrefix}:${name}`;
+	}
+
 	describe('basic rate limiting', () => {
 		it('should allow the first request', async () => {
-			const result = await serverLimiter.limit('key:1', 5, 60000);
+			const result = await serverLimiter.limit(key('first'), 5, 60000);
 			expect(result.success).toBe(true);
 			expect(result.remaining).toBe(4);
-			expect(result.limit).toBe(5);
 		});
 
 		it('should allow requests under the limit', async () => {
-			const r1 = await serverLimiter.limit('key:2', 3, 60000);
-			const r2 = await serverLimiter.limit('key:2', 3, 60000);
+			const limitKey = key('under');
+			const r1 = await serverLimiter.limit(limitKey, 3, 60000);
+			const r2 = await serverLimiter.limit(limitKey, 3, 60000);
 			expect(r1.success).toBe(true);
 			expect(r2.success).toBe(true);
 			expect(r2.remaining).toBe(1);
 		});
 
 		it('should block requests over the limit', async () => {
-			await serverLimiter.limit('key:3', 2, 60000);
-			await serverLimiter.limit('key:3', 2, 60000);
-			const r3 = await serverLimiter.limit('key:3', 2, 60000);
+			const limitKey = key('over');
+			await serverLimiter.limit(limitKey, 2, 60000);
+			await serverLimiter.limit(limitKey, 2, 60000);
+			const r3 = await serverLimiter.limit(limitKey, 2, 60000);
 			expect(r3.success).toBe(false);
 			expect(r3.remaining).toBe(0);
 		});
 
-		it('should report correct limit', async () => {
-			const result = await serverLimiter.limit('key:4', 10, 60000);
-			expect(result.limit).toBe(10);
-		});
-
-		it('should include reset timestamp', async () => {
-			const result = await serverLimiter.limit('key:5', 5, 60000);
+		it('should include reset timestamp in milliseconds', async () => {
+			const result = await serverLimiter.limit(key('reset'), 5, 60000);
 			expect(result.reset).toBeDefined();
 			expect(result.reset).toBeGreaterThan(Date.now());
+			expect(result.reset % 1000).toBe(0);
 		});
 	});
 
 	describe('window expiry', () => {
 		it('should allow requests after window expires', async () => {
-			await serverLimiter.limit('exp:1', 1, 5000);
-			const blocked = await serverLimiter.limit('exp:1', 1, 5000);
+			const limitKey = key('expiry');
+			await serverLimiter.limit(limitKey, 1, 5000);
+			const blocked = await serverLimiter.limit(limitKey, 1, 5000);
 			expect(blocked.success).toBe(false);
 
 			// Advance past window
 			vi.advanceTimersByTime(5001);
 
-			const allowed = await serverLimiter.limit('exp:1', 1, 5000);
+			const allowed = await serverLimiter.limit(limitKey, 1, 5000);
 			expect(allowed.success).toBe(true);
 		});
 
 		it('should reset the count after window expires', async () => {
-			await serverLimiter.limit('exp:2', 3, 5000);
-			await serverLimiter.limit('exp:2', 3, 5000);
+			const limitKey = key('reset-count');
+			await serverLimiter.limit(limitKey, 3, 5000);
+			await serverLimiter.limit(limitKey, 3, 5000);
 
 			vi.advanceTimersByTime(5001);
 
-			const result = await serverLimiter.limit('exp:2', 3, 5000);
+			const result = await serverLimiter.limit(limitKey, 3, 5000);
 			expect(result.success).toBe(true);
 			expect(result.remaining).toBe(2);
 		});
 
 		it('should not expire entries within the window', async () => {
-			await serverLimiter.limit('exp:3', 2, 60000);
-			await serverLimiter.limit('exp:3', 2, 60000);
+			const limitKey = key('window');
+			await serverLimiter.limit(limitKey, 2, 60000);
+			await serverLimiter.limit(limitKey, 2, 60000);
 
 			vi.advanceTimersByTime(59999);
 
-			const result = await serverLimiter.limit('exp:3', 2, 60000);
+			const result = await serverLimiter.limit(limitKey, 2, 60000);
 			expect(result.success).toBe(false);
 		});
 	});
 
 	describe('per-key isolation', () => {
 		it('should track different keys independently', async () => {
-			await serverLimiter.limit('iso:alice', 1, 60000);
-			const aliceBlocked = await serverLimiter.limit('iso:alice', 1, 60000);
+			await serverLimiter.limit(key('alice'), 1, 60000);
+			const aliceBlocked = await serverLimiter.limit(key('alice'), 1, 60000);
 			expect(aliceBlocked.success).toBe(false);
 
-			const bobAllowed = await serverLimiter.limit('iso:bob', 1, 60000);
+			const bobAllowed = await serverLimiter.limit(key('bob'), 1, 60000);
 			expect(bobAllowed.success).toBe(true);
 		});
 	});
 
 	describe('edge cases', () => {
 		it('should handle maxRequests of 1', async () => {
-			const first = await serverLimiter.limit('edge:1', 1, 60000);
+			const limitKey = key('one');
+			const first = await serverLimiter.limit(limitKey, 1, 60000);
 			expect(first.success).toBe(true);
 			expect(first.remaining).toBe(0);
 
-			const second = await serverLimiter.limit('edge:1', 1, 60000);
+			const second = await serverLimiter.limit(limitKey, 1, 60000);
 			expect(second.success).toBe(false);
 		});
 
 		it('should handle exactly at the limit', async () => {
-			await serverLimiter.limit('edge:bound', 3, 60000);
-			await serverLimiter.limit('edge:bound', 3, 60000);
-			const atLimit = await serverLimiter.limit('edge:bound', 3, 60000);
+			const limitKey = key('boundary');
+			await serverLimiter.limit(limitKey, 3, 60000);
+			await serverLimiter.limit(limitKey, 3, 60000);
+			const atLimit = await serverLimiter.limit(limitKey, 3, 60000);
 			expect(atLimit.success).toBe(true);
 			expect(atLimit.remaining).toBe(0);
 
-			const overLimit = await serverLimiter.limit('edge:bound', 3, 60000);
+			const overLimit = await serverLimiter.limit(limitKey, 3, 60000);
 			expect(overLimit.success).toBe(false);
-		});
-	});
-
-	describe('getStats', () => {
-		it('should report in-memory implementation', () => {
-			const stats = serverLimiter.getStats();
-			expect(stats.implementation).toBe('in-memory');
-		});
-
-		it('should track total entries', async () => {
-			await serverLimiter.limit('stat:1', 5, 60000);
-			await serverLimiter.limit('stat:2', 5, 60000);
-			const stats = serverLimiter.getStats();
-			expect(stats.totalEntries).toBe(2);
-		});
-	});
-
-	describe('destroy', () => {
-		it('should clear all entries on destroy', async () => {
-			await serverLimiter.limit('dest:1', 5, 60000);
-			await serverLimiter.limit('dest:2', 5, 60000);
-
-			serverLimiter.destroy();
-
-			const stats = serverLimiter.getStats();
-			expect(stats.totalEntries).toBe(0);
 		});
 	});
 });
