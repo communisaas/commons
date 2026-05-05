@@ -52,10 +52,13 @@
 		storeConstituentAddress,
 		getConstituentAddress
 	} from '$lib/core/identity/constituent-address';
+	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
+	import { unlockGroundVaultWithPasskey } from '$lib/core/identity/ground-vault-unlock';
 	import {
 		credentialMeetsMinimumTier,
 		getUsableProofCredential
 	} from '$lib/core/identity/recovery-detector';
+	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
 	import type { ComponentTemplate } from '$lib/types/component-props';
 	import type { Representative } from '$lib/types/any-replacements';
 	import type { Representative as ProviderRepresentative } from '$lib/core/legislative/types';
@@ -79,6 +82,9 @@
 
 	// Modal States - access from modalActions (not a store, just a getter)
 	const currentState = $derived(modalActions.modalState);
+	const isAuthenticatedCongressional = $derived(
+		template.deliveryMethod === 'cwc' && Boolean(user)
+	);
 
 	let showCopied = $state(false);
 	let _showShareMenu = $state(false);
@@ -105,6 +111,37 @@
 		district?: string;
 	} | null>(null);
 
+	interface TemplateGroundState {
+		vault?: {
+			status?: string;
+			ciphertext?: string;
+			nonce?: string;
+			aeadAssociatedData?: string;
+		} | null;
+		cell?: {
+			cellId?: string | null;
+			h3Cell?: string | null;
+			districts?: string[] | null;
+			source?: string | null;
+		} | null;
+		wrappers?: Array<{
+			status?: string | null;
+			passkeyCredentialId?: string | null;
+			prfSalt?: string | null;
+			wrappedDek?: string | null;
+			hkdfInfo?: string | null;
+		}> | null;
+	}
+
+	type DeliveryAddressState = 'ready' | 'locked' | 'reentry' | 'missing';
+
+	let groundState = $state<TemplateGroundState | null>(null);
+	let groundStateLoaded = $state(false);
+	let groundStateLoading = $state(false);
+	let groundStateError = $state<string | null>(null);
+	let groundUnlocking = $state(false);
+	let groundUnlockError = $state<string | null>(null);
+
 	// Enhanced URL copy component state
 	let copyButtonScale = spring(1, { stiffness: 0.4, damping: 0.8 });
 	let copyButtonRotation = spring(0, { stiffness: 0.3, damping: 0.7 });
@@ -129,6 +166,27 @@
 
 	// Generate share URL for template
 	const shareUrl = $derived(`${$page.url.origin}/s/${template.slug}`);
+	const activeGroundWrapperCount = $derived(
+		groundState?.wrappers?.filter((wrapper) => wrapper.status === 'active').length ?? 0
+	);
+	const disclosedGroundCell = $derived(
+		groundState?.cell?.h3Cell ?? groundState?.cell?.cellId ?? null
+	);
+	const disclosedGroundDistrict = $derived(
+		verifiedAddress?.district ??
+			($page.data?.user as { congressional_district?: string } | undefined)
+				?.congressional_district ??
+			groundState?.cell?.districts?.find((value) => value && !/^0x0+$/i.test(value)) ??
+			null
+	);
+	const hasServerGroundVault = $derived(Boolean(groundState?.vault));
+	const hasDisclosedGroundMetadata = $derived(Boolean(groundState?.cell));
+	const deliveryAddressState = $derived.by((): DeliveryAddressState => {
+		if (hasVerifiedDeliveryAddress()) return 'ready';
+		if (hasServerGroundVault && activeGroundWrapperCount > 0) return 'locked';
+		if (hasServerGroundVault || hasDisclosedGroundMetadata || groundStateLoaded) return 'reentry';
+		return 'missing';
+	});
 
 	// Pre-written share messages for different contexts
 	const shareMessages = $derived(() => {
@@ -165,6 +223,63 @@
 		return 0;
 	}
 
+	function setVerifiedAddressFromStored(stored: Awaited<ReturnType<typeof getConstituentAddress>>) {
+		if (!stored) return;
+		verifiedAddress = {
+			street: stored.street,
+			city: stored.city,
+			state: stored.state,
+			zip: stored.zip,
+			district: stored.district
+		};
+	}
+
+	async function fetchGroundState(): Promise<TemplateGroundState | null> {
+		const response = await fetch('/api/ground/state', {
+			headers: { Accept: 'application/json' }
+		});
+		if (response.status === 401) return null;
+		if (!response.ok) {
+			throw new Error(`Ground state unavailable (${response.status})`);
+		}
+		return (await response.json()) as TemplateGroundState;
+	}
+
+	async function hydrateGroundForDelivery() {
+		if (!user?.id) return;
+
+		groundStateLoading = true;
+		groundStateError = null;
+
+		const [storedResult, groundResult] = await Promise.allSettled([
+			getConstituentAddress(user.id),
+			fetchGroundState()
+		]);
+
+		if (storedResult.status === 'fulfilled') {
+			setVerifiedAddressFromStored(storedResult.value);
+			if (storedResult.value) {
+				console.log('[TemplateModal] Hydrated address from encrypted local store');
+			}
+		} else {
+			console.warn('[TemplateModal] Failed to hydrate local address:', storedResult.reason);
+		}
+
+		if (groundResult.status === 'fulfilled') {
+			groundState = groundResult.value;
+			groundStateLoaded = true;
+		} else {
+			console.warn('[TemplateModal] Failed to load ground state:', groundResult.reason);
+			groundStateError =
+				groundResult.reason instanceof Error
+					? groundResult.reason.message
+					: 'Ground state unavailable';
+			groundStateLoaded = false;
+		}
+
+		groundStateLoading = false;
+	}
+
 	// Store event handlers for proper cleanup
 	let mailAppBlurHandler: (() => void) | null = null;
 	let mailAppVisibilityHandler: (() => void) | null = null;
@@ -189,19 +304,10 @@
 				console.log('[TemplateModal] Guest on congressional template — mailto relay');
 				handleUnifiedEmailFlow();
 			} else if ((user.trust_tier ?? 0) >= 2) {
-				// Tier 2+ (address-verified): hydrate stored address, then ZKP
-				const stored = await getConstituentAddress(user.id);
-				if (stored) {
-						verifiedAddress = {
-							street: stored.street,
-							city: stored.city,
-							state: stored.state,
-							zip: stored.zip,
-							district: stored.district
-						};
-					console.log('[TemplateModal] Tier 2+ — hydrated address from encrypted store');
-				}
-				handleSendConfirmation(true);
+				// Tier 2+ means district proof exists. Delivery still needs the address
+				// locally available, PRF-unlockable, or re-entered for the government POST.
+				await hydrateGroundForDelivery();
+				modalActions.setState('confirmation');
 			} else {
 				// Tier 1 (OAuth-only): needs address verification before ZKP
 				console.log(
@@ -409,53 +515,52 @@
 		verified: boolean;
 		streetAddress: string;
 		city: string;
-			state: string;
-			zip: string;
-			representatives?: Representative[] | ProviderRepresentative[];
-			districtCommitment?: string;
-			commitmentSlotCount?: number;
-			coordinates?: { lat: number; lng: number } | null;
-		}) {
-			console.log('[Template Modal] Address complete:', {
-				street: data.streetAddress,
-				city: data.city,
-				state: data.state,
-				zip: data.zip,
-				verified: data.verified
-			});
+		state: string;
+		zip: string;
+		representatives?: Representative[] | ProviderRepresentative[];
+		districtCommitment?: string;
+		commitmentSlotCount?: number;
+		coordinates?: { lat: number; lng: number } | null;
+		cellProof?: ClientCellProofResult | null;
+	}) {
+		console.log('[Template Modal] Address complete:', {
+			verified: data.verified,
+			hasDistrictCommitment: typeof data.districtCommitment === 'string',
+			hasCoordinates: Boolean(data.coordinates)
+		});
 
-			if (data.verified !== true) {
-				verifiedAddress = null;
-				collectingAddress = false;
-				needsAddress = true;
-				submissionError = 'Address verification must complete before sending to Congress.';
-				modalActions.setState('error');
-				return;
-			}
+		if (data.verified !== true) {
+			verifiedAddress = null;
+			collectingAddress = false;
+			needsAddress = true;
+			submissionError = 'Address verification must complete before sending to Congress.';
+			modalActions.setState('error');
+			return;
+		}
 
-			// Extract congressional district from verified representative data.
-			// Supports DecisionMaker shapes (title field derives chamber)
-			const houseRep = data.representatives?.find((r) => {
+		// Extract congressional district from verified representative data.
+		// Supports DecisionMaker shapes (title field derives chamber)
+		const houseRep = data.representatives?.find((r) => {
 			if ('chamber' in r && r.chamber === 'house') return true;
 			if ('title' in r && typeof r.title === 'string') {
 				const t = r.title.toLowerCase();
 				return !t.includes('senator') && !t.includes('senate');
-				}
-				return false;
-			}) as Representative | undefined;
-			if (!houseRep?.district) {
-				verifiedAddress = null;
-				collectingAddress = false;
-				needsAddress = true;
-				submissionError = 'A congressional district could not be resolved for this address.';
-				modalActions.setState('error');
-				return;
 			}
+			return false;
+		}) as Representative | undefined;
+		if (!houseRep?.district) {
+			verifiedAddress = null;
+			collectingAddress = false;
+			needsAddress = true;
+			submissionError = 'A congressional district could not be resolved for this address.';
+			modalActions.setState('error');
+			return;
+		}
 
-			const rawDistrict = houseRep.district;
-			// district may already be a full code like "CA-11" — extract the number suffix
-			const districtNumber = rawDistrict.includes('-') ? rawDistrict.split('-').pop()! : rawDistrict;
-			const district = `${data.state}-${districtNumber.toString().padStart(2, '0')}`;
+		const rawDistrict = houseRep.district;
+		// district may already be a full code like "CA-11" — extract the number suffix
+		const districtNumber = rawDistrict.includes('-') ? rawDistrict.split('-').pop()! : rawDistrict;
+		const district = `${data.state}-${districtNumber.toString().padStart(2, '0')}`;
 		const nextVerifiedAddress = {
 			street: data.streetAddress,
 			city: data.city,
@@ -489,18 +594,23 @@
 				// Always call verify-address — even for Tier 2+ users re-entering address.
 				// This updates district_hash, UserDMRelation, and credential on the server.
 				// Without this, a user who moves districts keeps their old district forever.
+				// H1: include trust-context (cellStraddles / cellAnchorMode / atlasVersion)
+				// from session credential so the row carries it at issuance.
+				const { readH1TrustContext } = await import('$lib/core/identity/session-credentials');
+				const h1TrustContext = await readH1TrustContext(user.id);
 				const verifyRes = await fetch('/api/identity/verify-address', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							district,
-							verification_method: 'civic_api',
-							officials: data.representatives,
-							district_commitment: data.districtCommitment,
-							slot_count: data.commitmentSlotCount,
-							coordinates: data.coordinates
-						})
-					});
+					body: JSON.stringify({
+						district,
+						verification_method: 'civic_api',
+						officials: data.representatives,
+						district_commitment: data.districtCommitment,
+						slot_count: data.commitmentSlotCount,
+						coordinates: data.coordinates,
+						...h1TrustContext
+					})
+				});
 				const verifyResult = await verifyRes.json();
 
 				if (!verifyRes.ok || !verifyResult.success) {
@@ -514,9 +624,30 @@
 					return;
 				}
 
-				verifiedAddress = nextVerifiedAddress;
-				collectingAddress = false;
-				needsAddress = false;
+				try {
+					const persisted = await persistGroundVaultForAddress({
+						userId: user.id,
+						address: nextVerifiedAddress,
+						ground: verifyResult.ground ?? {},
+						verificationMethod: verifyResult.ground?.source ?? 'civic_api',
+						coordinates: data.coordinates,
+						cellProof: data.cellProof,
+						migrationSource: 'template-delivery-reentry'
+					});
+					if (!persisted) {
+						throw new Error('GROUND_VAULT_NOT_PERSISTED');
+					}
+				} catch (e) {
+					console.warn('[Template Modal] Ground vault persistence failed:', e);
+					verifiedAddress = null;
+					collectingAddress = false;
+					needsAddress = true;
+					groundStateError =
+						'Your district was attested, but encrypted ground could not be saved. Re-enter your address before official delivery.';
+					submissionError = groundStateError;
+					modalActions.setState('ground-restore');
+					return;
+				}
 
 				// Retire stale address/proof caches after the new district is durable.
 				try {
@@ -544,12 +675,29 @@
 				}
 
 				// Persist encrypted in IndexedDB only after stale caches are retired.
-				await storeConstituentAddress(user.id, { ...verifiedAddress, district });
+				try {
+					await storeConstituentAddress(user.id, nextVerifiedAddress);
+				} catch (e) {
+					console.warn('[Template Modal] Local address persistence failed:', e);
+					verifiedAddress = null;
+					collectingAddress = false;
+					needsAddress = true;
+					groundStateError =
+						'Your encrypted ground was saved, but this device could not store the readable address. Re-enter before official delivery.';
+					submissionError = groundStateError;
+					modalActions.setState('ground-restore');
+					return;
+				}
+
+				verifiedAddress = nextVerifiedAddress;
+				collectingAddress = false;
+				needsAddress = false;
+				await hydrateGroundForDelivery();
 
 				// Refresh server data so locals.user has updated district_hash
 				await invalidateAll();
 
-				await continueCongressionalProofFlow();
+				modalActions.setState('confirmation');
 			} catch (e) {
 				console.error('[Template Modal] Address verification failed:', e);
 				verifiedAddress = null;
@@ -591,10 +739,10 @@
 	function hasVerifiedDeliveryAddress(): boolean {
 		return Boolean(
 			verifiedAddress?.street &&
-				verifiedAddress.city &&
-				verifiedAddress.state &&
-				verifiedAddress.zip &&
-				verifiedAddress.district
+			verifiedAddress.city &&
+			verifiedAddress.state &&
+			verifiedAddress.zip &&
+			verifiedAddress.district
 		);
 	}
 
@@ -603,10 +751,52 @@
 			return true;
 		}
 
-		console.log('[Template Modal] Congressional template needs address - showing inline collection');
-		collectingAddress = true;
 		needsAddress = true;
+		if (deliveryAddressState === 'locked' || deliveryAddressState === 'reentry') {
+			console.log(
+				'[Template Modal] Delivery address is not locally readable; showing restore state'
+			);
+			collectingAddress = false;
+			modalActions.setState('ground-restore');
+			return false;
+		}
+
+		console.log(
+			'[Template Modal] Congressional template needs address - showing inline collection'
+		);
+		collectingAddress = true;
 		return false;
+	}
+
+	function beginAddressReentry() {
+		submissionError = null;
+		groundUnlockError = null;
+		needsAddress = true;
+		collectingAddress = true;
+	}
+
+	async function unlockSavedGroundAddress() {
+		if (!groundState || !user?.id) return;
+
+		groundUnlocking = true;
+		groundUnlockError = null;
+		try {
+			const payload = await unlockGroundVaultWithPasskey(groundState);
+			const address = {
+				street: payload.address.street,
+				city: payload.address.city,
+				state: payload.address.state,
+				zip: payload.address.zip,
+				district: payload.district
+			};
+			verifiedAddress = address;
+			await storeConstituentAddress(user.id, address);
+			modalActions.setState('confirmation');
+		} catch (e) {
+			groundUnlockError = e instanceof Error ? e.message : 'Could not unlock saved address.';
+		} finally {
+			groundUnlocking = false;
+		}
 	}
 
 	function normalizeDistrictCode(district: string | undefined): string | null {
@@ -739,6 +929,11 @@
 	}
 
 	function handleProofReverify() {
+		if (!hasVerifiedDeliveryAddress()) {
+			console.log('[Template Modal] Delivery address required, opening address re-entry');
+			beginAddressReentry();
+			return;
+		}
 		console.log('[Template Modal] Credential expired, re-opening verification gate');
 		showVerificationGate = true;
 	}
@@ -795,14 +990,14 @@
 				return;
 			}
 
-				if (isCongressional) {
-					// STEP 1: Check if user has address (for CWC delivery)
-					// CWC requires full address encrypted into the ZKP witness.
-					// Address is hydrated from encrypted IndexedDB on mount (Tier 2+)
-					// or collected inline via AddressCollectionForm.
-					if (!requireCongressionalDeliveryAddress()) {
-						return; // Stop until address collected
-					}
+			if (isCongressional) {
+				// STEP 1: Check if user has address (for CWC delivery)
+				// CWC requires full address encrypted into the ZKP witness.
+				// Address is hydrated from encrypted IndexedDB on mount (Tier 2+)
+				// or collected inline via AddressCollectionForm.
+				if (!requireCongressionalDeliveryAddress()) {
+					return; // Stop until address collected
+				}
 
 				// STEP 2: Progressive verification gate. If it passes, proof-grade
 				// local credentials exist and we can enter the ZKP → TEE → CWC path.
@@ -1025,8 +1220,17 @@
 			>
 				<Send class="text-participation-primary-600 h-8 w-8 sm:h-10 sm:w-10" />
 			</div>
-			<h3 class="mb-2 text-xl font-bold text-slate-900 sm:text-2xl">Did you send it?</h3>
-			<p class="mb-4 text-sm text-slate-600 sm:mb-6 sm:text-base">Confirm to track this action.</p>
+			<h3 class="mb-2 text-xl font-bold text-slate-900 sm:text-2xl">
+				{isAuthenticatedCongressional ? 'Send officially?' : 'Did you send it?'}
+			</h3>
+			<p class="mb-4 text-sm text-slate-600 sm:mb-6 sm:text-base">
+				{#if isAuthenticatedCongressional}
+					Congress requires your name, email, and address for official delivery. We decrypt
+					the address only for this send.
+				{:else}
+					Confirm to track this action.
+				{/if}
+			</p>
 
 			<div class="flex justify-center gap-2 sm:gap-3">
 				<Button
@@ -1036,16 +1240,17 @@
 					onclick={() => handleSendConfirmation(true)}
 				>
 					<CheckCircle2 class="mr-2 h-5 w-5 shrink-0" />
-					Yes, sent
+					{isAuthenticatedCongressional ? 'Send officially' : 'Yes, sent'}
 				</Button>
 				<Button
 					variant="secondary"
 					size="lg"
 					classNames="flex-1 min-w-[120px] sm:min-w-[140px] whitespace-nowrap"
-					onclick={() => handleSendConfirmation(false)}
+					onclick={() =>
+						isAuthenticatedCongressional ? handleClose() : handleSendConfirmation(false)}
 				>
 					<ArrowRight class="mr-2 h-5 w-5 shrink-0 rotate-180" />
-					Try again
+					{isAuthenticatedCongressional ? 'Not now' : 'Try again'}
 				</Button>
 			</div>
 		</div>
@@ -1264,10 +1469,10 @@
 						class="rounded-lg border border-emerald-200 bg-gradient-to-r from-emerald-50 to-emerald-100 p-4"
 						in:fly={{ y: 10, duration: 400, delay: 300 }}
 					>
-						<p class="mb-1 text-sm font-semibold text-indigo-900">Generate a ZK proof next time</p>
+						<p class="mb-1 text-sm font-semibold text-indigo-900">Use proof delivery next time</p>
 						<p class="mb-3 text-xs text-indigo-700">
-							You're identity-verified. Next time, send with a zero-knowledge proof — mathematically
-							verified district residency. Maximum weight.
+							You're identity-verified. Next time, send with a district proof and official delivery
+							receipt.
 						</p>
 					</div>
 				{/if}
@@ -1366,6 +1571,101 @@
 				{/if}
 			</div>
 		</div>
+	{:else if currentState === 'ground-restore'}
+		<!-- Ground restore: verified proof exists, delivery address is not readable locally -->
+		<div class="relative p-6 sm:p-8" in:scale={{ duration: 500, easing: backOut }}>
+			<button
+				onclick={handleClose}
+				class="absolute top-4 right-4 rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
+			>
+				<X class="h-5 w-5" />
+			</button>
+
+			<div class="mb-6 text-center">
+				<div
+					class="mb-3 inline-flex h-14 w-14 items-center justify-center rounded-full bg-slate-100"
+				>
+					<MapPin class="h-7 w-7 text-slate-600" />
+				</div>
+				{#if groundStateLoading}
+					<h3 class="mb-1 text-xl font-bold text-slate-900">Checking saved address</h3>
+					<p class="text-sm text-slate-500">Looking for a readable address on this device.</p>
+				{:else if deliveryAddressState === 'locked'}
+					<h3 class="mb-1 text-xl font-bold text-slate-900">Saved address is locked</h3>
+					<p class="text-sm text-slate-500">
+						Your district proof is active, but this browser cannot read the saved address right now.
+						Congress requires address fields for official delivery.
+					</p>
+				{:else}
+					<h3 class="mb-1 text-xl font-bold text-slate-900">Address needs re-entry</h3>
+					<p class="text-sm text-slate-500">
+						Your district proof is active, but this device does not have the address needed for
+						official delivery.
+					</p>
+				{/if}
+			</div>
+
+			{#if disclosedGroundDistrict || disclosedGroundCell}
+				<div class="mb-5 rounded-md border border-slate-200 bg-slate-50 p-4 text-left">
+					<p class="mb-2 text-xs font-medium tracking-wide text-slate-500 uppercase">
+						Disclosed location
+					</p>
+					<div class="space-y-1 text-sm text-slate-700">
+						{#if disclosedGroundDistrict}
+							<p>District: {disclosedGroundDistrict}</p>
+						{/if}
+						{#if disclosedGroundCell}
+							<p>Cell: {disclosedGroundCell}</p>
+						{/if}
+					</div>
+				</div>
+			{/if}
+
+			{#if groundUnlockError}
+				<p class="mb-4 text-center text-sm text-amber-700">{groundUnlockError}</p>
+			{:else if groundStateError}
+				<p class="mb-4 text-center text-sm text-amber-700">{groundStateError}</p>
+			{/if}
+
+			<div class="flex flex-col gap-3">
+				{#if deliveryAddressState === 'locked'}
+					<Button
+						variant="primary"
+						size="lg"
+						classNames="w-full"
+						disabled={groundUnlocking}
+						onclick={unlockSavedGroundAddress}
+					>
+						<Fingerprint class="mr-2 h-5 w-5" />
+						{groundUnlocking ? 'Unlocking...' : 'Unlock saved address'}
+					</Button>
+				{/if}
+				<Button
+					variant={deliveryAddressState === 'locked' ? 'secondary' : 'primary'}
+					size="lg"
+					classNames="w-full"
+					onclick={beginAddressReentry}
+				>
+					<MapPin class="mr-2 h-5 w-5" />
+					Re-enter address
+				</Button>
+				<Button
+					variant="secondary"
+					size="lg"
+					classNames="w-full"
+					disabled={groundStateLoading}
+					onclick={async () => {
+						await hydrateGroundForDelivery();
+						if (hasVerifiedDeliveryAddress()) {
+							await continueCongressionalProofFlow();
+						}
+					}}
+				>
+					<ArrowRight class="mr-2 h-5 w-5" />
+					Check this device again
+				</Button>
+			</div>
+		</div>
 	{:else if collectingAddress}
 		<!-- Address Collection State - Inline for Congressional templates -->
 		<div class="relative p-6 sm:p-8" in:scale={{ duration: 500, easing: backOut }}>
@@ -1408,18 +1708,18 @@
 					</div>
 					<h3 class="mb-1 text-xl font-bold text-slate-900">Strengthen your signal</h3>
 					<p class="text-sm text-slate-500">
-						Congressional offices prioritize verified constituents
+						Congressional delivery requires a verified district and a readable address
 					</p>
 				</div>
 
 				<div class="space-y-3">
 					{#if isAnyMdlProtocolEnabled()}
-							<!-- mDL: Highest signal — verify with digital ID -->
-							<button
-								onclick={() => {
-									if (!requireCongressionalDeliveryAddress()) return;
-									showVerificationGate = true;
-								}}
+						<!-- mDL: Highest signal — verify with digital ID -->
+						<button
+							onclick={() => {
+								if (!requireCongressionalDeliveryAddress()) return;
+								showVerificationGate = true;
+							}}
 							class="group flex w-full items-center gap-4 rounded-md border-2 border-emerald-200 bg-slate-50 p-4 text-left transition-all hover:border-emerald-300 hover:shadow-md"
 						>
 							<div
@@ -1432,7 +1732,7 @@
 									>Verify with Digital ID</span
 								>
 								<span class="block text-xs text-emerald-600"
-									>Cryptographic proof of identity. Undeniable signal.</span
+									>Adds a stronger proof when available.</span
 								>
 							</div>
 							<ArrowRight
@@ -1456,7 +1756,7 @@
 						<div class="min-w-0 flex-1">
 							<span class="block text-sm font-semibold text-emerald-900">Verify your address</span>
 							<span class="block text-xs text-emerald-600"
-								>Confirms your district. Your message gets read.</span
+								>Confirms your district for official delivery.</span
 							>
 						</div>
 						<ArrowRight

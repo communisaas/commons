@@ -49,16 +49,21 @@
 		getConstituentAddress,
 		type ConstituentAddress
 	} from '$lib/core/identity/constituent-address';
-	import { clearSessionCredential } from '$lib/core/identity/session-credentials';
+	import {
+		clearSessionCredential,
+		readH1TrustContext
+	} from '$lib/core/identity/session-credentials';
 	import { addVerifiedLocationSignal } from '$lib/core/location/inference-engine';
 	import { FEATURES } from '$lib/config/features';
 	import {
 		lookupDistrictsFromBrowser,
 		getOfficialsFromBrowser,
-		getFullCellDataFromBrowser
+		getFullCellDataFromBrowser,
+		type ClientCellProofResult
 	} from '$lib/core/shadow-atlas/browser-client';
 	import { convertDistrictId } from '$lib/core/shadow-atlas/district-format';
 	import { poseidon2Sponge24 } from '$lib/core/crypto/poseidon';
+	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
 	import { trackAddressChanged } from '$lib/core/analytics/client';
 	import MapPinSelector from './MapPinSelector.svelte';
 	import RegroundingAddressCapture from './address-steps/RegroundingAddressCapture.svelte';
@@ -149,6 +154,7 @@
 	// B-3: 24 district slots from IPFS (for Poseidon2 commitment)
 	let districtSlots: string[] = $state([]);
 	let commitmentCoordinates = $state<{ lat: number; lng: number } | null>(null);
+	let clientCellProof = $state<ClientCellProofResult | null>(null);
 
 	// B-3: Client-side district resolution (when SHADOW_ATLAS_VERIFICATION enabled)
 	const clientSideEnabled = FEATURES.SHADOW_ATLAS_VERIFICATION;
@@ -189,9 +195,42 @@
 		}
 	}
 
+	async function persistGroundVaultOrThrow(input: {
+		address: ConstituentAddress;
+		ground: unknown;
+		method: string;
+		migrationSource: string;
+	}) {
+		const result = await persistGroundVaultForAddress({
+			userId,
+			address: input.address,
+			ground: input.ground && typeof input.ground === 'object' ? input.ground : {},
+			verificationMethod: input.method,
+			coordinates: commitmentCoordinates,
+			cellProof: clientCellProof,
+			migrationSource: input.migrationSource
+		});
+		if (!result) {
+			throw new Error('GROUND_VAULT_NOT_PERSISTED');
+		}
+	}
+
+	function failGroundPersistence(error: unknown) {
+		console.warn('[AddressVerificationFlow] Ground vault persistence failed:', error);
+		errorMessage =
+			'Your district was attested, but encrypted ground could not be saved. Re-enter your address to finish setup.';
+		flowStep = 'address-input';
+		if (regroundingMode) {
+			markRegroundingStep('attest', 'done');
+			markRegroundingStep('retire', 'pending');
+			emitRegroundingPhase('capture');
+		}
+	}
+
 	function resetCommitmentState() {
 		districtSlots = [];
 		commitmentCoordinates = null;
+		clientCellProof = null;
 	}
 
 	// Signal capture phase on mount when in re-grounding mode so the parent
@@ -254,6 +293,7 @@
 			const cellData = await getFullCellDataFromBrowser({ lat, lng });
 			if (cellData?.districts?.length === 24) {
 				districtSlots = cellData.districts;
+				clientCellProof = cellData;
 			}
 
 			// Slot 0 = congressional district (substrate FIPS format → display format)
@@ -452,6 +492,12 @@
 		}
 
 		try {
+			// H1 — pull trust-context (cellStraddles / cellAnchorMode / atlasVersion)
+			// from the session credential so the districtCredentials row can capture
+			// it at issuance. Helper guarantees H0r-compliant semantics (missing
+			// fields stay missing; never defaulted).
+			const h1TrustContext = await readH1TrustContext(userId);
+
 			// Compute Poseidon2 commitment over 24 district slots (client-side ZKP)
 			// Server never sees which districts the user belongs to — only the commitment
 			let requestBody: Record<string, unknown>;
@@ -464,7 +510,8 @@
 					district_commitment: commitment,
 					slot_count: nonZeroSlots,
 					verification_method: 'shadow_atlas',
-					coordinates: commitmentCoordinates ?? undefined
+					coordinates: commitmentCoordinates ?? undefined,
+					...h1TrustContext
 				};
 			} else {
 				// Fallback: no IPFS data available (client-side resolution failed)
@@ -473,7 +520,8 @@
 					state_senate_district: verifiedStateSenate || undefined,
 					state_assembly_district: verifiedStateAssembly || undefined,
 					verification_method: 'civic_api',
-					officials: representatives
+					officials: representatives,
+					...h1TrustContext
 				};
 			}
 
@@ -514,6 +562,16 @@
 			}
 
 			const method = districtSlots.length === 24 ? 'shadow_atlas' : 'civic_api';
+			const capturedAddress =
+				verificationMethod === 'address' && street && city && stateCode && zipCode
+					? {
+							street: street.trim(),
+							city: city.trim(),
+							state: stateCode.trim().toUpperCase(),
+							zip: zipCode.trim(),
+							district: verifiedDistrict || ''
+						}
+					: null;
 
 			if (regroundingMode) {
 				markRegroundingStep('attest', 'done');
@@ -521,6 +579,23 @@
 					onAttested?.({ district: verifiedDistrict, method });
 				} catch (e) {
 					console.warn('[AddressVerificationFlow] onAttested threw:', e);
+				}
+
+				if (!capturedAddress) {
+					failGroundPersistence(new Error('GROUND_ADDRESS_MISSING'));
+					return;
+				}
+
+				try {
+					await persistGroundVaultOrThrow({
+						address: capturedAddress,
+						ground: data.ground ?? {},
+						method,
+						migrationSource: 'regrounding'
+					});
+				} catch (e) {
+					failGroundPersistence(e);
+					return;
 				}
 
 				// Now retire — old ground is being replaced and new credential is
@@ -543,33 +618,27 @@
 				// not allow coordinate-only sources; profile affordance semantics are
 				// "change verified address", so the browser-local cache must carry
 				// the new address text after successful attestation.
-				if (verificationMethod === 'address' && street && city && stateCode && zipCode) {
-					try {
-						await storeConstituentAddress(userId, {
-							street: street.trim(),
-							city: city.trim(),
-							state: stateCode.trim().toUpperCase(),
-							zip: zipCode.trim(),
-							district: verifiedDistrict || ''
-						});
-					} catch (e) {
-						console.warn('[AddressVerificationFlow] Store new ground failed:', e);
-					}
+				try {
+					await storeConstituentAddress(userId, capturedAddress);
+				} catch (e) {
+					failGroundPersistence(e);
+					return;
 				}
 			} else {
 				// Initial (non-regrounding) verification: persist the address now
 				// that `handleAddressPath` no longer writes eagerly.
-				if (verificationMethod === 'address' && street && city && stateCode && zipCode) {
+				if (capturedAddress) {
 					try {
-						await storeConstituentAddress(userId, {
-							street: street.trim(),
-							city: city.trim(),
-							state: stateCode.trim().toUpperCase(),
-							zip: zipCode.trim(),
-							district: verifiedDistrict || ''
+						await persistGroundVaultOrThrow({
+							address: capturedAddress,
+							ground: data.ground ?? {},
+							method,
+							migrationSource: 'initial-address-verification'
 						});
+						await storeConstituentAddress(userId, capturedAddress);
 					} catch (e) {
-						console.warn('[AddressVerificationFlow] Store address failed (non-fatal):', e);
+						failGroundPersistence(e);
+						return;
 					}
 				}
 
@@ -910,7 +979,8 @@
 							Location and map paths avoid address entry; server verification checks the selected
 							point against the district commitment.
 						{:else}
-							Your address is matched to a district, then forgotten. Nothing is stored.
+							Your address is matched to a district, then saved only as encrypted ground state for
+							verified delivery.
 						{/if}
 					</p>
 				</div>
@@ -1117,8 +1187,9 @@
 						Your address is sent to our server, geocoded via self-hosted infrastructure, and matched
 						to your {detectedCountry === 'CA'
 							? 'federal electoral district (riding)'
-							: 'congressional district'}. After verification, the address is encrypted locally.
-						Only your district is sent to issue a verifiable credential.
+							: 'congressional district'}. After verification, the address may be saved into your
+						encrypted ground vault, with district/cell metadata retained to explain and deliver the
+						credential.
 					</p>
 				</details>
 			</div>
@@ -1526,8 +1597,8 @@
 						<span class="text-slate-500">s=</span>{stateChanged ? 1 : 0}
 					</p>
 					<p class="text-[12px] leading-relaxed text-slate-500">
-						Two booleans, no district codes, no addresses, no IDs. Coordinates never left this
-						browser.
+						Two booleans, no district codes, no addresses, no IDs. The saved ground record keeps
+						only the encrypted address vault and disclosed cell/district metadata.
 					</p>
 				</div>
 

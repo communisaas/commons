@@ -47,6 +47,8 @@
 	import type { TemplateWithJurisdictions } from '$lib/core/location/types';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
+	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
+	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
 
 	let { data }: { data: PageData } = $props();
 
@@ -414,7 +416,94 @@
 		districtCommitment?: string;
 		commitmentSlotCount?: number;
 		coordinates?: { lat: number; lng: number } | null;
+		cellProof?: ClientCellProofResult | null;
 		[key: string]: unknown;
+	}
+
+	function normalizeAddressDistrict(
+		rawDistrict: string | null | undefined,
+		state: string
+	): string | null {
+		if (!rawDistrict) return null;
+		const district = rawDistrict.toUpperCase();
+		if (/^[A-Z]{2}-(\d{1,2}|AL)$/.test(district)) {
+			const [prefix, suffix] = district.split('-');
+			return `${prefix}-${suffix === 'AL' ? 'AL' : suffix.padStart(2, '0')}`;
+		}
+		if (/^\d{1,2}$/.test(district)) return `${state}-${district.padStart(2, '0')}`;
+		if (district === 'AL') return `${state}-AL`;
+		return null;
+	}
+
+	function houseDistrictFromDetail(detail: OnCompleteDetail): string | null {
+		if (!Array.isArray(detail.representatives)) return null;
+		const state = typeof detail.state === 'string' ? detail.state.trim().toUpperCase() : '';
+		for (const representative of detail.representatives) {
+			if (!representative || typeof representative !== 'object') continue;
+			const record = representative as Record<string, unknown>;
+			const chamber = typeof record.chamber === 'string' ? record.chamber.toLowerCase() : '';
+			const title = typeof record.title === 'string' ? record.title.toLowerCase() : '';
+			const isHouse =
+				chamber === 'house' ||
+				(title.length > 0 && !title.includes('senator') && !title.includes('senate'));
+			if (!isHouse) continue;
+			const district = normalizeAddressDistrict(
+				typeof record.district === 'string' ? record.district : null,
+				state
+			);
+			if (district) return district;
+		}
+		return null;
+	}
+
+	function addressFromDetail(
+		detail: OnCompleteDetail,
+		districtOverride?: string | null
+	): { street: string; city: string; state: string; zip: string; district?: string } | null {
+		const street = detail.streetAddress?.trim();
+		const city = detail.city?.trim();
+		const state = detail.state?.trim().toUpperCase();
+		const zip = detail.zip?.trim();
+		if (!street || !city || !state || !zip) return null;
+		const district =
+			normalizeAddressDistrict(districtOverride, state) ?? houseDistrictFromDetail(detail);
+		return {
+			street,
+			city,
+			state,
+			zip,
+			...(district ? { district } : {})
+		};
+	}
+
+	async function persistAttestedGround(
+		userId: string,
+		detail: OnCompleteDetail,
+		verifyResult: { ground?: { source?: string | null } } | null,
+		districtOverride?: string | null
+	) {
+		const address = addressFromDetail(detail, districtOverride);
+		if (!address) return;
+		const persisted = await persistGroundVaultForAddress({
+			userId,
+			address,
+			ground: verifyResult?.ground ?? {},
+			verificationMethod: verifyResult?.ground?.source ?? 'civic_api',
+			coordinates: detail.coordinates,
+			cellProof: detail.cellProof,
+			migrationSource: 'address-modal'
+		});
+		if (!persisted) throw new Error('GROUND_VAULT_NOT_PERSISTED');
+		await persistAddressCompletion(userId, detail, districtOverride);
+	}
+
+	function showGroundPersistenceFailure(error: unknown) {
+		console.error('[HomePage] encrypted ground persistence failed:', error);
+		if (browser) {
+			window.alert(
+				'Address verification could not finish because encrypted ground was not saved. Re-enter your address before sending.'
+			);
+		}
 	}
 
 	async function handleSendMessage(template: Template) {
@@ -459,6 +548,11 @@
 					// Verify address (ZKP commitment or fallback) before navigating
 					if (data.user) {
 						try {
+							// H1 — trust-context spread shared across both branches below.
+							const { readH1TrustContext } = await import(
+								'$lib/core/identity/session-credentials'
+							);
+							const h1TrustContext = await readH1TrustContext(data.user.id);
 							if (detail.districtCommitment) {
 								const verifyRes = await fetch('/api/identity/verify-address', {
 									method: 'POST',
@@ -469,11 +563,19 @@
 										verification_method: 'shadow_atlas',
 										// FU-1.1: forward coordinates so the server can recompute
 										// the expected commitment from IPFS cell data.
-										coordinates: detail.coordinates ?? undefined
+										coordinates: detail.coordinates ?? undefined,
+										...h1TrustContext
 									})
 								});
+								const verifyResult = await verifyRes.json().catch(() => ({}));
 								if (verifyRes.ok) {
-									await persistAddressCompletion(data.user.id, detail);
+									await persistAttestedGround(data.user.id, detail, verifyResult);
+								} else {
+									throw new Error(
+										typeof verifyResult.error === 'string'
+											? verifyResult.error
+											: 'Address verification failed'
+									);
 								}
 							} else if (detail?.address) {
 								// Fallback: resolve + verify with plaintext
@@ -496,17 +598,31 @@
 											body: JSON.stringify({
 												district: resolved.district.code,
 												verification_method: 'civic_api',
-												officials: resolved.officials ?? []
+												officials: resolved.officials ?? [],
+												...h1TrustContext
 											})
 										});
+										const verifyResult = await verifyRes.json().catch(() => ({}));
 										if (verifyRes.ok) {
-											await persistAddressCompletion(data.user.id, detail, resolved.district.code);
+											await persistAttestedGround(
+												data.user.id,
+												detail,
+												verifyResult,
+												resolved.district.code
+											);
+										} else {
+											throw new Error(
+												typeof verifyResult.error === 'string'
+													? verifyResult.error
+													: 'Address verification failed'
+											);
 										}
 									}
 								}
 							}
-						} catch {
-							// Non-fatal: navigate anyway
+						} catch (groundErr) {
+							showGroundPersistenceFailure(groundErr);
+							return;
 						}
 					}
 
@@ -699,6 +815,12 @@
 							source: 'mobile',
 							user: data.user,
 							onComplete: async (detail: OnCompleteDetail) => {
+								// H1 — trust-context shared across both branches.
+								const h1TrustContext = data.user
+									? await (
+											await import('$lib/core/identity/session-credentials')
+										).readH1TrustContext(data.user.id)
+									: {};
 								if (data.user && detail.districtCommitment) {
 									try {
 										const verifyRes = await fetch('/api/identity/verify-address', {
@@ -709,14 +831,23 @@
 												slot_count: detail.commitmentSlotCount,
 												verification_method: 'shadow_atlas',
 												// FU-1.1: forward coordinates for server-side authenticity check.
-												coordinates: detail.coordinates ?? undefined
+												coordinates: detail.coordinates ?? undefined,
+												...h1TrustContext
 											})
 										});
+										const verifyResult = await verifyRes.json().catch(() => ({}));
 										if (verifyRes.ok) {
-											await persistAddressCompletion(data.user.id, detail);
+											await persistAttestedGround(data.user.id, detail, verifyResult);
+										} else {
+											throw new Error(
+												typeof verifyResult.error === 'string'
+													? verifyResult.error
+													: 'Address verification failed'
+											);
 										}
-									} catch {
-										/* non-fatal */
+									} catch (groundErr) {
+										showGroundPersistenceFailure(groundErr);
+										return;
 									}
 								} else if (data.user && detail.address) {
 									try {
@@ -739,20 +870,30 @@
 													body: JSON.stringify({
 														district: resolved.district.code,
 														verification_method: 'civic_api',
-														officials: resolved.officials ?? []
+														officials: resolved.officials ?? [],
+														...h1TrustContext
 													})
 												});
+												const verifyResult = await verifyRes.json().catch(() => ({}));
 												if (verifyRes.ok) {
-													await persistAddressCompletion(
+													await persistAttestedGround(
 														data.user.id,
 														detail,
+														verifyResult,
 														resolved.district.code
+													);
+												} else {
+													throw new Error(
+														typeof verifyResult.error === 'string'
+															? verifyResult.error
+															: 'Address verification failed'
 													);
 												}
 											}
 										}
-									} catch {
-										/* non-fatal */
+									} catch (groundErr) {
+										showGroundPersistenceFailure(groundErr);
+										return;
 									}
 								}
 								const templateUrl = `/s/${selectedTemplate.slug}`;

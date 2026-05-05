@@ -41,6 +41,8 @@
 	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 	import { topicHue } from '$lib/utils/topic-hue';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
+	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
+	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
 
 	let { data }: { data: PageData } = $props();
 
@@ -194,14 +196,101 @@
 		districtCommitment?: string;
 		commitmentSlotCount?: number;
 		coordinates?: { lat: number; lng: number } | null;
+		cellProof?: ClientCellProofResult | null;
 		[key: string]: unknown;
+	}
+
+	function normalizeAddressDistrict(
+		rawDistrict: string | null | undefined,
+		state: string
+	): string | null {
+		if (!rawDistrict) return null;
+		const district = rawDistrict.toUpperCase();
+		if (/^[A-Z]{2}-(\d{1,2}|AL)$/.test(district)) {
+			const [prefix, suffix] = district.split('-');
+			return `${prefix}-${suffix === 'AL' ? 'AL' : suffix.padStart(2, '0')}`;
+		}
+		if (/^\d{1,2}$/.test(district)) return `${state}-${district.padStart(2, '0')}`;
+		if (district === 'AL') return `${state}-AL`;
+		return null;
+	}
+
+	function houseDistrictFromDetail(detail: AddressModalDetail): string | null {
+		if (!Array.isArray(detail.representatives)) return null;
+		const state = typeof detail.state === 'string' ? detail.state.trim().toUpperCase() : '';
+		for (const representative of detail.representatives) {
+			if (!representative || typeof representative !== 'object') continue;
+			const record = representative as Record<string, unknown>;
+			const chamber = typeof record.chamber === 'string' ? record.chamber.toLowerCase() : '';
+			const title = typeof record.title === 'string' ? record.title.toLowerCase() : '';
+			const isHouse =
+				chamber === 'house' ||
+				(title.length > 0 && !title.includes('senator') && !title.includes('senate'));
+			if (!isHouse) continue;
+			const district = normalizeAddressDistrict(
+				typeof record.district === 'string' ? record.district : null,
+				state
+			);
+			if (district) return district;
+		}
+		return null;
+	}
+
+	function addressFromDetail(
+		detail: AddressModalDetail,
+		districtOverride?: string | null
+	): { street: string; city: string; state: string; zip: string; district?: string } | null {
+		const street = detail.streetAddress?.trim();
+		const city = detail.city?.trim();
+		const state = detail.state?.trim().toUpperCase();
+		const zip = detail.zip?.trim();
+		if (!street || !city || !state || !zip) return null;
+		const district =
+			normalizeAddressDistrict(districtOverride, state) ?? houseDistrictFromDetail(detail);
+		return {
+			street,
+			city,
+			state,
+			zip,
+			...(district ? { district } : {})
+		};
+	}
+
+	async function persistAttestedGround(
+		userId: string,
+		detail: AddressModalDetail,
+		verifyResult: { ground?: { source?: string | null } } | null,
+		districtOverride?: string | null
+	) {
+		const address = addressFromDetail(detail, districtOverride);
+		if (!address) return;
+		const persisted = await persistGroundVaultForAddress({
+			userId,
+			address,
+			ground: verifyResult?.ground ?? {},
+			verificationMethod: verifyResult?.ground?.source ?? 'civic_api',
+			coordinates: detail.coordinates,
+			cellProof: detail.cellProof,
+			migrationSource: 'address-modal'
+		});
+		if (!persisted) throw new Error('GROUND_VAULT_NOT_PERSISTED');
+		await persistAddressCompletion(userId, detail, districtOverride);
+	}
+
+	function showGroundPersistenceFailure(_cause?: unknown) {
+		console.error('[TemplateFlow] encrypted ground persistence failed');
+		if (browser) {
+			window.alert(
+				'Address verification could not finish because encrypted ground was not saved. Re-enter your address before sending.'
+			);
+		}
 	}
 
 	function handlePostAuthFlow() {
 		const trustTier = data.user?.trust_tier ?? 0;
 
 		// CWC templates: TemplateModal handles tier-based routing in onMount
-		// (trust-upgrade for Tier 1-2, ZKP flow for Tier 3+)
+		// (address/ground restore first, Tier 4+ proof before delivery)
 		// Skip address gate — it shows the old NFC/Gov ID modal which is wrong here
 		if (FEATURES.CONGRESSIONAL && template.deliveryMethod === 'cwc' && data.user) {
 			modalActions.openModal('template-modal', 'template_modal', { template, user: data.user });
@@ -255,9 +344,6 @@
 	const landscape = $derived(
 		mergeLandscape(pl.recipientConfig?.decisionMakers ?? [], pl.districtOfficials ?? [])
 	);
-
-	// Identity commitment for position registration
-	const identityCommitment = $derived(data.user?.identity_commitment ?? null);
 
 	// UI state
 	let contactedRecipients = $state(new Set<string>());
@@ -586,6 +672,11 @@
 			// Bump trust_tier to 2 (Constituent) via address verification
 			if (data.user) {
 				try {
+					// H1 — trust-context shared across both verify-address branches.
+					const { readH1TrustContext } = await import(
+						'$lib/core/identity/session-credentials'
+					);
+					const h1TrustContext = await readH1TrustContext(data.user.id);
 					if (detail.districtCommitment) {
 						// ZKP path: commitment already computed client-side by AddressCollectionForm.
 						// Server uses the geocoded coordinates (FU-1.1) to recompute the expected
@@ -600,18 +691,23 @@
 								verification_method: 'shadow_atlas',
 								coordinates:
 									(detail as { coordinates?: { lat: number; lng: number } | null }).coordinates ??
-									undefined
+									undefined,
+								...h1TrustContext
 							})
 						});
+						const verifyResult = await verifyRes.json().catch(() => ({}));
 						if (!verifyRes.ok) {
-							const err = await verifyRes.json().catch(() => ({}));
 							console.error(
 								'[TemplateFlow] verify-address (shadow_atlas) failed:',
-								verifyRes.status,
-								err
+								verifyRes.status
+							);
+							throw new Error(
+								typeof verifyResult.error === 'string'
+									? verifyResult.error
+									: 'Address verification failed'
 							);
 						} else {
-							await persistAddressCompletion(data.user.id, detail);
+							await persistAttestedGround(data.user.id, detail, verifyResult);
 						}
 					} else if (detail.streetAddress && detail.city && detail.state && detail.zip) {
 						// Fallback: IPFS unavailable, resolve server-side
@@ -634,17 +730,33 @@
 									body: JSON.stringify({
 										district: resolved.district.code,
 										verification_method: 'civic_api',
-										officials: resolved.officials ?? []
+										officials: resolved.officials ?? [],
+										...h1TrustContext
 									})
 								});
+								const verifyResult = await verifyRes.json().catch(() => ({}));
 								if (verifyRes.ok) {
-									await persistAddressCompletion(data.user.id, detail, resolved.district.code);
+									await persistAttestedGround(
+										data.user.id,
+										detail,
+										verifyResult,
+										resolved.district.code
+									);
+								} else {
+									throw new Error(
+										typeof verifyResult.error === 'string'
+											? verifyResult.error
+											: 'Address verification failed'
+									);
 								}
 							}
 						}
 					}
 				} catch (verifyErr) {
-					console.error('[TemplateFlow] verify-address failed:', verifyErr);
+					console.error('[TemplateFlow] verify-address failed');
+					showGroundPersistenceFailure(verifyErr);
+					_addressSubmitted = false;
+					return;
 				}
 			}
 
@@ -658,8 +770,12 @@
 			// Refresh page data so trust tier updates everywhere
 			await invalidateAll();
 		} catch (error) {
-			console.error('[TemplateFlow] Error in _handleAddressSubmit:', error);
-			// Proceed anyway — address is cached locally
+			console.error('[TemplateFlow] Error in _handleAddressSubmit');
+			if (data.user) {
+				showGroundPersistenceFailure(error);
+				_addressSubmitted = false;
+				return;
+			}
 			modalActions.closeModal('address-modal');
 			modalActions.openModal('template-modal', 'template_modal', { template, user: data.user });
 		} finally {
@@ -728,7 +844,7 @@
 					>
 				{/if}
 			{/if}
-			{#if FEATURES.CONGRESSIONAL && (data.user?.trust_tier ?? 0) >= 2 && template.deliveryMethod === 'cwc'}
+			{#if FEATURES.CONGRESSIONAL && (data.user?.trust_tier ?? 0) >= 4 && template.deliveryMethod === 'cwc'}
 				<span class="flex items-center gap-1 text-green-600">
 					<VerificationBadge showText={false} />
 					Enhanced Credibility
@@ -760,7 +876,7 @@
 				<DebateSignal debate={(data.debate as DebateData) ?? null} variant="inline" />
 			{/if}
 
-			{#if data.user && identityCommitment}
+			{#if data.user && data.user.is_verified}
 				<!-- Authenticated: real stance registration -->
 				<StanceRegistration
 					templateId={template.id}
