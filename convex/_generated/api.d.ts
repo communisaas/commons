@@ -9,6 +9,7 @@
  */
 
 import type * as _authHelpers from "../_authHelpers.js";
+import type * as _bufferSource from "../_bufferSource.js";
 import type * as _credentialSelect from "../_credentialSelect.js";
 import type * as _cwcXml from "../_cwcXml.js";
 import type * as _downgradeGuard from "../_downgradeGuard.js";
@@ -30,13 +31,16 @@ import type * as delegation from "../delegation.js";
 import type * as donations from "../donations.js";
 import type * as email from "../email.js";
 import type * as events from "../events.js";
+import type * as ground from "../ground.js";
 import type * as http from "../http.js";
 import type * as intelligence from "../intelligence.js";
 import type * as invites from "../invites.js";
 import type * as legislation from "../legislation.js";
 import type * as messageJobs from "../messageJobs.js";
 import type * as networks from "../networks.js";
+import type * as observability from "../observability.js";
 import type * as organizations from "../organizations.js";
+import type * as passkeys from "../passkeys.js";
 import type * as positions from "../positions.js";
 import type * as resolvedContacts from "../resolvedContacts.js";
 import type * as revocations from "../revocations.js";
@@ -64,6 +68,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   _authHelpers: typeof _authHelpers;
+  _bufferSource: typeof _bufferSource;
   _credentialSelect: typeof _credentialSelect;
   _cwcXml: typeof _cwcXml;
   _downgradeGuard: typeof _downgradeGuard;
@@ -85,13 +90,16 @@ declare const fullApi: ApiFromModules<{
   donations: typeof donations;
   email: typeof email;
   events: typeof events;
+  ground: typeof ground;
   http: typeof http;
   intelligence: typeof intelligence;
   invites: typeof invites;
   legislation: typeof legislation;
   messageJobs: typeof messageJobs;
   networks: typeof networks;
+  observability: typeof observability;
   organizations: typeof organizations;
+  passkeys: typeof passkeys;
   positions: typeof positions;
   resolvedContacts: typeof resolvedContacts;
   revocations: typeof revocations;

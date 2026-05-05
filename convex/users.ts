@@ -285,6 +285,19 @@ export const getByWalletAddress = internalQuery({
 // PASSKEY
 // =============================================================================
 
+async function markActiveGroundVaultsForRewrap(ctx: { db: any }, userId: unknown, now: number) {
+	const activeVaults = await ctx.db
+		.query('groundVaults')
+		.withIndex('by_userId_status', (q: any) => q.eq('userId', userId).eq('status', 'active'))
+		.collect();
+	for (const vault of activeVaults) {
+		await ctx.db.patch(vault._id, {
+			status: 'rewrap_needed',
+			updatedAt: now
+		});
+	}
+}
+
 /**
  * Check if user has a passkey registered.
  */
@@ -300,6 +313,61 @@ export const getPasskeyStatus = query({
 });
 
 /**
+ * Store the user's current passkey credential after server-side WebAuthn
+ * registration verification.
+ *
+ * The historic passkeyPublicKeyJwk field is retained for existing rows, but
+ * SimpleWebAuthn v13 verifies authentication with COSE public key bytes.
+ */
+export const storePasskey = mutation({
+	args: {
+		userId: v.id('users'),
+		credentialId: v.string(),
+		publicKey: v.string(),
+		counter: v.number(),
+		transports: v.optional(v.array(v.string())),
+		deviceType: v.optional(v.string()),
+		backedUp: v.optional(v.boolean()),
+		aaguid: v.optional(v.string()),
+		didKey: v.optional(v.string())
+	},
+	handler: async (ctx, args) => {
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+		const user = await ctx.db.get(args.userId);
+		if (!user) throw new Error('User not found');
+
+		const now = Date.now();
+		const activeWrappers = await ctx.db
+			.query('passkeyVaultWrappers')
+			.withIndex('by_userId_status', (q) => q.eq('userId', args.userId).eq('status', 'active'))
+			.collect();
+		for (const wrapper of activeWrappers) {
+			await ctx.db.patch(wrapper._id, {
+				status: 'revoked',
+				revokedAt: now,
+				updatedAt: now
+			});
+		}
+		await markActiveGroundVaultsForRewrap(ctx, args.userId, now);
+
+		await ctx.db.patch(args.userId, {
+			passkeyCredentialId: args.credentialId,
+			passkeyPublicKey: args.publicKey,
+			passkeyCounter: args.counter,
+			passkeyTransports: args.transports,
+			passkeyDeviceType: args.deviceType,
+			passkeyBackedUp: args.backedUp,
+			passkeyAaguid: args.aaguid,
+			didKey: args.didKey,
+			passkeyCreatedAt: now,
+			passkeyLastUsedAt: now,
+			updatedAt: now
+		});
+	}
+});
+
+/**
  * Clear all passkey fields from a user.
  */
 export const clearPasskey = mutation({
@@ -310,13 +378,32 @@ export const clearPasskey = mutation({
 		const user = await ctx.db.get(args.userId);
 		if (!user) throw new Error('User not found');
 		if (!user.passkeyCredentialId) throw new Error('No passkey registered');
+		const now = Date.now();
+		const wrappers = await ctx.db
+			.query('passkeyVaultWrappers')
+			.withIndex('by_userId_status', (q) => q.eq('userId', args.userId).eq('status', 'active'))
+			.collect();
+		for (const wrapper of wrappers) {
+			await ctx.db.patch(wrapper._id, {
+				status: 'revoked',
+				revokedAt: now,
+				updatedAt: now
+			});
+		}
+		await markActiveGroundVaultsForRewrap(ctx, args.userId, now);
 		await ctx.db.patch(args.userId, {
 			passkeyCredentialId: undefined,
 			passkeyPublicKeyJwk: undefined,
+			passkeyPublicKey: undefined,
+			passkeyCounter: undefined,
+			passkeyTransports: undefined,
+			passkeyDeviceType: undefined,
+			passkeyBackedUp: undefined,
+			passkeyAaguid: undefined,
 			passkeyCreatedAt: undefined,
 			passkeyLastUsedAt: undefined,
 			didKey: undefined,
-			updatedAt: Date.now()
+			updatedAt: now
 		});
 	}
 });
@@ -467,6 +554,20 @@ export const finalizeMdlVerification = internalMutation({
  * Bypass at trust_tier >= 3 (mDL/passport verified identity).
  */
 const ADDRESS_VERIFICATION_METHODS = ['shadow_atlas', 'civic_api', 'postal'] as const;
+
+// H1 — must stay in sync with src/lib/core/identity/session-credentials.ts
+// CELL_ANCHOR_MODES. Convex functions cannot import from src/lib (different
+// runtime root), so we duplicate the allowlist here. If you add a value to
+// the canonical list, update this allowlist or the mutation will reject it.
+const CELL_ANCHOR_MODES_ALLOWLIST = [
+	'address-resolved',
+	'random-fallback',
+	'recovery-explicit',
+	'recovery-pivot',
+	'legacy-inferred',
+	'legacy-unknown',
+] as const;
+
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const ONE_EIGHTY_DAYS_MS = 180 * 24 * 60 * 60 * 1000;
 const MAX_REVERIFICATIONS_PER_180D = 6;
@@ -499,7 +600,14 @@ export const verifyAddress = mutation({
 					phone: v.optional(v.string())
 				})
 			)
-		)
+		),
+		// H1 — trust-context plumbed through from the client when available.
+		// All optional. Server snapshots `user.trustTier` separately (clients
+		// must not be able to self-assert tier). Legacy callers omit these and
+		// the corresponding fields stay undefined on the credential row.
+		cellStraddles: v.optional(v.boolean()),
+		cellAnchorMode: v.optional(v.string()),
+		atlasVersion: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
 		const { userId: authUserId } = await requireAuth(ctx);
@@ -515,6 +623,56 @@ export const verifyAddress = mutation({
 			)
 		) {
 			throw new Error('INVALID_VERIFICATION_METHOD');
+		}
+
+		// H1 — defend cellAnchorMode at the handler boundary. Schema is permissive
+		// (v.optional(v.string())) for forward-compat, but unknown values would
+		// silently corrupt H6 outbound copy and H5 cross-check semantics. Reject
+		// at the door instead.
+		if (
+			args.cellAnchorMode !== undefined &&
+			!CELL_ANCHOR_MODES_ALLOWLIST.includes(
+				args.cellAnchorMode as (typeof CELL_ANCHOR_MODES_ALLOWLIST)[number]
+			)
+		) {
+			throw new Error('INVALID_CELL_ANCHOR_MODE');
+		}
+
+		// H5 — structural cross-check on client-asserted cellAnchorMode. Defense
+		// in depth: the cell-anchor mode is provenance metadata, but it's
+		// client-supplied and unverified. We can't crypto-prove it, but we CAN
+		// check that the asserted value is consistent with server-known facts:
+		//   - 'legacy-*' values are reserved for READ-side backfill (pre-G8
+		//     credentials get them inferred at session-credential read). A
+		//     fresh write must never claim a legacy mode — if it does, the
+		//     client is buggy or malicious.
+		//   - 'address-resolved' implies the user had a real cell to resolve
+		//     to. A user at tier 0 (no verification at all) cannot have a
+		//     real cell — they came in via the random-fallback path. NOTE:
+		//     verifyAddress itself bumps tier to ≥ 2 for civic_api/postal
+		//     paths, so user.trustTier read at the START of the handler is
+		//     pre-bump. mDL users come in already at 5.
+		//   - 'random-fallback' AND user.trustTier ≥ 3 (mDL-verified) is a
+		//     structural inconsistency: mDL users have a wallet-derived cell.
+		//     Could be a legitimate edge (atlas migration mid-flight) so we
+		//     warn rather than reject.
+		if (
+			args.cellAnchorMode === 'legacy-inferred' ||
+			args.cellAnchorMode === 'legacy-unknown'
+		) {
+			throw new Error('INVALID_CELL_ANCHOR_MODE_LEGACY_RESERVED');
+		}
+		if (args.cellAnchorMode === 'address-resolved' && user.trustTier < 1) {
+			throw new Error('INVALID_CELL_ANCHOR_MODE_TIER_MISMATCH');
+		}
+		if (args.cellAnchorMode === 'random-fallback' && user.trustTier >= 3) {
+			// Soft-warn (don't reject) — legitimate edge cases exist (mDL
+			// completed but client lost cell during atlas migration). Ops
+			// should grep for this in logs to spot client tampering trends.
+			console.warn(
+				'[verifyAddress H5] cellAnchorMode=random-fallback inconsistent with trustTier>=3',
+				{ userId: args.userId, trustTier: user.trustTier },
+			);
 		}
 
 		const existing = await ctx.db
@@ -618,8 +776,28 @@ export const verifyAddress = mutation({
 			}
 		}
 
+		// H1r F3 — capture the EFFECTIVE trustTier (post-userPatch), not the
+		// pre-flow tier. For a tier-0/1 user verifying via civic_api, the credential
+		// itself ESTABLISHES tier 2; rendering /v/[hash] as "tier 1 credential"
+		// would be misleading. mDL users (tier ≥ 3) keep their tier (Math.max
+		// preserves the higher value). The userPatch below applies the same
+		// formula to users.trustTier, so the credential row matches user state
+		// at end-of-mutation.
+		const effectiveTrustTier = Math.max(user.trustTier, 2);
+
 		// Create new credential.
-		await ctx.db.insert('districtCredentials', {
+		//
+		// H1 — trust-context fields. trustTier is server-derived (effective
+		// post-issuance value, see above), not client-supplied: clients must
+		// not be able to forge their own tier label. The other three
+		// (cellStraddles, cellAnchorMode, atlasVersion) are pass-through-
+		// when-known: the client knows them from session-credentials state,
+		// and H5 will structurally cross-check cellAnchorMode against
+		// authorityLevel and h3Cell-presence. H0r CRITICAL: omit each field
+		// when args don't supply it, do NOT default — `undefined` on the row
+		// means "unknown at issuance", and H6 must surface that distinctly
+		// from "false/clean".
+		const districtCredentialId = await ctx.db.insert('districtCredentials', {
 			userId: args.userId,
 			credentialType: 'district_residency',
 			congressionalDistrict: args.district ?? '',
@@ -630,12 +808,20 @@ export const verifyAddress = mutation({
 			expiresAt: args.expiresAt,
 			credentialHash: args.credentialHash ?? '',
 			districtCommitment: args.districtCommitment,
-			slotCount: args.slotCount
+			slotCount: args.slotCount,
+			// H1 trust-context snapshot. trustTier reflects the user's state at
+			// end-of-mutation (after the userPatch below). The other three are
+			// spread-conditional so omitted args produce undefined fields, not
+			// literal defaults.
+			trustTier: effectiveTrustTier,
+			...(args.cellStraddles !== undefined ? { cellStraddles: args.cellStraddles } : {}),
+			...(args.cellAnchorMode !== undefined ? { cellAnchorMode: args.cellAnchorMode } : {}),
+			...(args.atlasVersion !== undefined ? { atlasVersion: args.atlasVersion } : {})
 		});
 
 		// Update user
 		const userPatch: Record<string, unknown> = {
-			trustTier: Math.max(user.trustTier, 2),
+			trustTier: effectiveTrustTier,
 			districtVerified: true,
 			addressVerifiedAt: now,
 			addressVerificationMethod: args.verificationMethod,
@@ -736,6 +922,11 @@ export const verifyAddress = mutation({
 				}
 			}
 		}
+
+		return {
+			districtCredentialId,
+			revokedCredentialIds: credentialsToRevoke.map((cred) => cred._id)
+		};
 	}
 });
 
@@ -825,6 +1016,9 @@ export const getReverificationBudget = query({
 export const getActiveCredentialDistrictCommitment = query({
 	args: { userId: v.id('users') },
 	handler: async (ctx, args) => {
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+
 		// Canonical selector (see convex/_credentialSelect.ts) — picks the same
 		// authoritative row that `hasActiveDistrictCredential` picks. KG-4 closure:
 		// if two active rows ever coexist, both call sites agree on which wins.
@@ -904,7 +1098,7 @@ export const resolveCredentialHash = query({
 });
 
 // =============================================================================
-// ENCRYPTED DELIVERY DATA (Identity blobs)
+// ENCRYPTED DELIVERY DATA (Identity blobs) — retired
 // =============================================================================
 
 export const upsertEncryptedBlob = mutation({
@@ -919,30 +1113,7 @@ export const upsertEncryptedBlob = mutation({
 	handler: async (ctx, args) => {
 		const { userId: authUserId } = await requireAuth(ctx);
 		if (args.userId !== authUserId) throw new Error('Unauthorized');
-		const existing = await ctx.db
-			.query('encryptedDeliveryData')
-			.withIndex('by_userId', (q) => q.eq('userId', args.userId))
-			.first();
-		if (existing) {
-			await ctx.db.patch(existing._id, {
-				ciphertext: args.ciphertext,
-				nonce: args.nonce,
-				ephemeralPublicKey: args.ephemeralPublicKey,
-				teeKeyId: args.teeKeyId,
-				encryptionVersion: args.encryptionVersion,
-				updatedAt: Date.now()
-			});
-			return existing._id;
-		}
-		return await ctx.db.insert('encryptedDeliveryData', {
-			userId: args.userId,
-			ciphertext: args.ciphertext,
-			nonce: args.nonce,
-			ephemeralPublicKey: args.ephemeralPublicKey,
-			teeKeyId: args.teeKeyId,
-			encryptionVersion: args.encryptionVersion,
-			updatedAt: Date.now()
-		});
+		throw new Error('DEPRECATED_IDENTITY_BLOB_PATH');
 	}
 });
 
@@ -951,10 +1122,7 @@ export const getEncryptedBlob = query({
 	handler: async (ctx, args) => {
 		const { userId: authUserId } = await requireAuth(ctx);
 		if (args.userId !== authUserId) throw new Error('Unauthorized');
-		return await ctx.db
-			.query('encryptedDeliveryData')
-			.withIndex('by_userId', (q) => q.eq('userId', args.userId))
-			.first();
+		throw new Error('DEPRECATED_IDENTITY_BLOB_PATH');
 	}
 });
 
@@ -963,12 +1131,7 @@ export const deleteEncryptedBlob = mutation({
 	handler: async (ctx, args) => {
 		const { userId: authUserId } = await requireAuth(ctx);
 		if (args.userId !== authUserId) throw new Error('Unauthorized');
-		const existing = await ctx.db
-			.query('encryptedDeliveryData')
-			.withIndex('by_userId', (q) => q.eq('userId', args.userId))
-			.first();
-		if (!existing) throw new Error('NOT_FOUND');
-		await ctx.db.delete(existing._id);
+		throw new Error('DEPRECATED_IDENTITY_BLOB_PATH');
 	}
 });
 

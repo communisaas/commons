@@ -96,6 +96,45 @@ export interface IdentitySecrets {
 }
 
 /**
+ * Cell-anchor provenance values (G8). Hoisted so adding a new mode
+ * (e.g. 'registry-attested' from G7r) is one edit, not five.
+ *
+ *   'address-resolved'  — T3+ flow: cellId comes from postal_code+city+state
+ *                          via Nominatim → H3. Honest name (NOT 'mdl-derived' —
+ *                          the wallet provides the address fields, but the
+ *                          cell is geocoder-derived).
+ *   'random-fallback'   — T0 flow: random cell in the verified district.
+ *                          No constituency anchor; preserves anonymity at the
+ *                          cost of audit signal.
+ *   'recovery-explicit' — User invoked IdentityRecoveryFlow after device-loss
+ *                          / IndexedDB clear / atlas rotation. Old leaf zeroed
+ *                          via replace:true.
+ *   'recovery-pivot'    — verify-mdl flow detected the user was already
+ *                          registered (server returned "Already registered")
+ *                          and pivoted to recovery. Different incident class
+ *                          than 'recovery-explicit' — multi-device, race, or
+ *                          UX defect rather than device-loss.
+ *   'legacy-inferred'   — Backfilled on read for pre-G8 credentials whose
+ *                          structural fields imply mode. Kept distinct so
+ *                          metrics don't conflate with primary writes.
+ *   'legacy-unknown'    — Backfilled when structural fields don't disambiguate.
+ */
+export const CELL_ANCHOR_MODES = [
+	'address-resolved',
+	'random-fallback',
+	'recovery-explicit',
+	'recovery-pivot',
+	'legacy-inferred',
+	'legacy-unknown',
+] as const;
+export type CellAnchorMode = (typeof CELL_ANCHOR_MODES)[number];
+
+/** Runtime validator — defends against client-supplied garbage at the handler. */
+export function isCellAnchorMode(v: unknown): v is CellAnchorMode {
+	return typeof v === 'string' && (CELL_ANCHOR_MODES as readonly string[]).includes(v);
+}
+
+/**
  * Tree state — refreshable TTL, can expire and be re-fetched.
  *
  * Contains Merkle proofs and engagement data that change as the
@@ -122,6 +161,26 @@ export interface TreeState {
 
 	/** Census Block GEOID (15-digit cell identifier) */
 	cellId?: string;
+
+	/**
+	 * H3 cell string at H3_RESOLUTION (G7). Persisted alongside cellId so the
+	 * TEE delivery resolver can compare H3-to-H3. Must round-trip through
+	 * extractTreeState / mergeToSessionCredential or post-G7 credentials
+	 * silently degrade to pre-G7-equivalent on the first reload.
+	 */
+	h3Cell?: string;
+	/** G2: boundary-cell flag (see SessionCredential for semantics).
+	 *  Must round-trip through extract/merge or G2's mark-not-block becomes
+	 *  silent-and-forgotten after the first IndexedDB reload. */
+	cellStraddles?: boolean;
+	/** G6: atlas version string from manifest.currentVersion at registration.
+	 *  Round-trip required so app-load migration check has a comparison
+	 *  baseline; without this, every page load thinks the credential is
+	 *  fresh-versioned. */
+	atlasVersion?: string;
+	/** G8: cell-anchor provenance. See {@link CellAnchorMode}. Round-trip
+	 *  required to preserve the audit signal across IndexedDB reloads. */
+	cellAnchorMode?: CellAnchorMode;
 
 	/** Tree 2 (Cell-District Map) root hash */
 	cellMapRoot?: string;
@@ -204,6 +263,58 @@ export interface SessionCredential {
 
 	credentialType?: 'three-tree';
 	cellId?: string;
+	/**
+	 * H3 cell string at H3_RESOLUTION — same hex-cell as cellId, but in H3
+	 * encoding rather than BN254 field hex. Carried so the TEE delivery
+	 * resolver can compare H3-to-H3 with the address-derived H3 from
+	 * resolveAddress, eliminating the H3-vs-BN254 encoding split (G7).
+	 * Optional during the migration window — pre-G7 credentials don't have it.
+	 */
+	h3Cell?: string;
+	/**
+	 * G2: Tree 2's slot[0] for this cell disagreed with the verified district
+	 * at registration time. The cell straddles a district boundary; Tree 2
+	 * assigned by centroid but the verified address polygon-hits a different
+	 * district. Receipt UI labels boundary-cell users via this flag (G5);
+	 * audit metrics aggregate it (G3). Mark, not block.
+	 */
+	cellStraddles?: boolean;
+	/**
+	 * G6: atlas version at the time of registration (e.g., "v20260503").
+	 * Read from manifest.currentVersion when the credential was issued.
+	 * Used by the app-load migration check: if credential.atlasVersion
+	 * differs from the current manifest.currentVersion, prompt the user
+	 * to re-verify so their leaf binds to the new Tree 2 root.
+	 *
+	 * Why string-version not cellMapRoot: cellMapRoot is the cryptographic
+	 * anchor per-chunk, but the user-facing version pointer the manifest
+	 * publishes is the readable string. We persist both — cellMapRoot is
+	 * the security check, atlasVersion is the UX delta.
+	 */
+	atlasVersion?: string;
+	/**
+	 * G8: which code path produced this credential's cell anchor.
+	 * See {@link CELL_ANCHOR_MODES} for the canonical value list.
+	 *
+	 * Scope: client-side IndexedDB only. The handler never transmits this
+	 * field to /api/shadow-atlas/register (which receives only `{ leaf }`).
+	 * Server-side metrics consumers do NOT see it. The G3 measurement
+	 * script reads BAF directly, not credential rows.
+	 *
+	 * Use cases supported today:
+	 *   - Client-side incident forensics ("did my credential get the random-
+	 *     fallback anchor?") via DevTools or a future audit-export.
+	 *   - Future credential lifecycle decisions (e.g., recovery-pivot
+	 *     credentials might warrant additional UX warnings).
+	 *
+	 * Without this field, post-G1 credentials are bit-identical between
+	 * mdl-derived and random-fallback modes — diagnostics impossible.
+	 *
+	 * G8r honesty correction: the value formerly named 'mdl-derived' is
+	 * 'address-resolved' — the cellId comes from postal_code+city+state
+	 * via Nominatim+H3, not from any wallet-attested coordinate.
+	 */
+	cellAnchorMode?: CellAnchorMode;
 	cellMapRoot?: string;
 	cellMapPath?: string[];
 	cellMapPathBits?: number[];
@@ -609,6 +720,16 @@ function extractTreeState(credential: SessionCredential): TreeState {
 		congressionalDistrict: credential.congressionalDistrict,
 		credentialType: credential.credentialType,
 		cellId: credential.cellId,
+		// G7: must round-trip with cellId or every post-G7 credential degrades
+		// to pre-G7-equivalent on the first reload from IndexedDB.
+		h3Cell: credential.h3Cell,
+		// G2: same round-trip discipline — without this, cellStraddles flag
+		// silently disappears on first reload and G3/G5 see uniformly false.
+		cellStraddles: credential.cellStraddles,
+		// G6: round-trip atlas version for migration delta check.
+		atlasVersion: credential.atlasVersion,
+		// G8: round-trip cell-anchor provenance for audit/metrics.
+		cellAnchorMode: credential.cellAnchorMode,
 		cellMapRoot: credential.cellMapRoot,
 		cellMapPath: credential.cellMapPath,
 		cellMapPathBits: credential.cellMapPathBits,
@@ -629,6 +750,30 @@ function extractTreeState(credential: SessionCredential): TreeState {
 	};
 }
 
+/**
+ * G8: backfill cellAnchorMode for pre-G8 credentials. Without this, every
+ * legacy credential collapses into a "field absent" cohort that can't be
+ * distinguished from a current write bug.
+ *
+ * Inference rules:
+ *   - Tier-5 credential with h3Cell present → 'legacy-inferred'
+ *     (post-G7, pre-G8: structurally an address-resolved registration)
+ *   - Anything else → 'legacy-unknown'
+ *     (pre-G7 credentials, or partial states we can't disambiguate)
+ *
+ * 'legacy-*' values stay distinct from primary writes so audit queries
+ * can filter them out.
+ */
+function inferLegacyAnchorMode(
+	treeState: TreeState,
+	identity: IdentitySecrets,
+): CellAnchorMode {
+	if (identity.authorityLevel === 5 && treeState.h3Cell) {
+		return 'legacy-inferred';
+	}
+	return 'legacy-unknown';
+}
+
 function mergeToSessionCredential(
 	userId: string,
 	identity: IdentitySecrets,
@@ -643,6 +788,18 @@ function mergeToSessionCredential(
 		congressionalDistrict: treeState.congressionalDistrict,
 		credentialType: treeState.credentialType,
 		cellId: treeState.cellId,
+		// G7: round-trip h3Cell through merge/extract.
+		h3Cell: treeState.h3Cell,
+		// G2: round-trip cellStraddles flag.
+		cellStraddles: treeState.cellStraddles,
+		// G6: round-trip atlas version for migration delta.
+		atlasVersion: treeState.atlasVersion,
+		// G8: round-trip cell-anchor provenance with backfill inference for
+		// pre-G8 credentials. Without inference, all legacy credentials look
+		// identical to "we forgot to set the field" — uninterpretable for
+		// any audit query.
+		cellAnchorMode:
+			treeState.cellAnchorMode ?? inferLegacyAnchorMode(treeState, identity),
 		cellMapRoot: treeState.cellMapRoot,
 		cellMapPath: treeState.cellMapPath,
 		cellMapPathBits: treeState.cellMapPathBits,
@@ -921,6 +1078,39 @@ export async function updateTreeState(userId: string, treeState: TreeState): Pro
 export async function hasValidCredential(userId: string): Promise<boolean> {
 	const credential = await getSessionCredential(userId);
 	return credential !== null;
+}
+
+/**
+ * H1 — read the trust-context fields the verify-address endpoint expects.
+ *
+ * Centralized helper so every /api/identity/verify-address caller (TemplateModal,
+ * AddressVerificationFlow, root +page.svelte, share-page +page.svelte, …) can
+ * spread the same payload shape into its request body without duplicating the
+ * IndexedDB read or the snake-case mapping. H0r CRITICAL: missing fields stay
+ * missing — we do NOT default `cell_straddles=false` or `cell_anchor_mode='legacy-*'`
+ * here, because that would manufacture trust state the credential never had.
+ *
+ * Failure mode: if the IndexedDB read throws (corrupt store, browser denied
+ * persistence) we return an empty object. Issuance proceeds; the row's H1
+ * fields stay undefined and the H6 outbound surface renders "unknown".
+ */
+export async function readH1TrustContext(userId: string): Promise<{
+	cell_straddles?: boolean;
+	cell_anchor_mode?: string;
+	atlas_version?: string;
+}> {
+	try {
+		const session = await getSessionCredential(userId);
+		if (!session) return {};
+		const out: { cell_straddles?: boolean; cell_anchor_mode?: string; atlas_version?: string } = {};
+		if (typeof session.cellStraddles === 'boolean') out.cell_straddles = session.cellStraddles;
+		if (typeof session.cellAnchorMode === 'string') out.cell_anchor_mode = session.cellAnchorMode;
+		if (typeof session.atlasVersion === 'string') out.atlas_version = session.atlasVersion;
+		return out;
+	} catch (err) {
+		console.warn('[session-credentials] readH1TrustContext failed:', err);
+		return {};
+	}
 }
 
 /**

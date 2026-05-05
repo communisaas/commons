@@ -13,8 +13,9 @@
  *  6. Update User record (trust_tier, district_verified, etc.) in a transaction
  *  7. Return credential JSON to client (for IndexedDB storage)
  *
- * Privacy: The plaintext address never reaches this endpoint. Only the geocoded
- * district identifier is received and stored as a SHA-256 hash on the User record.
+ * Privacy: this endpoint receives derived district/cell metadata, not a raw
+ * address form payload. Address resolution and government delivery have their
+ * own plaintext boundaries; persistent custody is the encrypted ground vault.
  *
  * B-3c: shadow_atlas verification method allows commitment-only requests
  * (no plaintext district). The client computes a Poseidon2 commitment over
@@ -23,14 +24,11 @@
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api } from '$lib/convex';
 import {
-	issueDistrictCredential,
-	hashCredential,
-	hashDistrict
-} from '$lib/core/identity/district-credential';
-import { TIER_CREDENTIAL_TTL } from '$lib/core/identity/credential-policy';
+	isGroundServiceError,
+	issueGroundCredential,
+	verifyGroundCommitmentAuthenticity
+} from '$lib/server/ground/ground-service';
 
 // ============================================================================
 // Input Validation
@@ -75,6 +73,19 @@ interface VerifyAddressInput {
 	// Server fetches the same IPFS cell data and recomputes the expected
 	// commitment; mismatch is rejected as COMMITMENT_AUTHENTICITY_MISMATCH.
 	coordinates?: { lat: number; lng: number };
+	cell_id?: string;
+	h3_cell?: string;
+	cell_map_root?: string;
+	cell_map_version?: string;
+	atlas_root?: string;
+	atlas_version?: string;
+	// H1 — trust-context fields the client may carry from session-credentials.
+	// cell_straddles  : G2 boundary-cell mark.
+	// cell_anchor_mode: G8 audit-trail mode (one of CELL_ANCHOR_MODES; server
+	//                   re-validates against the canonical list at the Convex
+	//                   handler — duplicate validation here would drift).
+	cell_straddles?: boolean;
+	cell_anchor_mode?: string;
 }
 
 function validateInput(body: unknown): VerifyAddressInput {
@@ -206,7 +217,28 @@ function validateInput(body: unknown): VerifyAddressInput {
 		officials,
 		district_commitment: districtCommitment,
 		slot_count: slotCount,
-		coordinates
+		coordinates,
+		cell_id: typeof b.cell_id === 'string' ? b.cell_id : undefined,
+		h3_cell: typeof b.h3_cell === 'string' ? b.h3_cell : undefined,
+		cell_map_root: typeof b.cell_map_root === 'string' ? b.cell_map_root : undefined,
+		cell_map_version: typeof b.cell_map_version === 'string' ? b.cell_map_version : undefined,
+		atlas_root: typeof b.atlas_root === 'string' ? b.atlas_root : undefined,
+		// H1r F5: atlas_version is a short publisher-controlled label (today
+		// "v20260503"-ish). Cap at 64 chars at the boundary so a hostile client
+		// can't waste storage with megabyte version strings before the Convex
+		// args validator sees them.
+		atlas_version:
+			typeof b.atlas_version === 'string' && b.atlas_version.length <= 64
+				? b.atlas_version
+				: undefined,
+		// H1 — trust-context pass-through. cell_anchor_mode allowlist is enforced
+		// at the Convex handler (single source of truth); here we only require
+		// the right primitive shape so we don't leak garbage further.
+		cell_straddles: typeof b.cell_straddles === 'boolean' ? b.cell_straddles : undefined,
+		cell_anchor_mode:
+			typeof b.cell_anchor_mode === 'string' && b.cell_anchor_mode.length <= 64
+				? b.cell_anchor_mode
+				: undefined
 	};
 }
 
@@ -243,81 +275,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	// learn anything new — `/api/location/resolve-address` already gave it
 	// the lat/lng during geocoding; the client just echoes them back.
 	if (input.district_commitment) {
-		if (!input.coordinates) {
-			return json(
-				{
-					success: false,
-					error:
-						'Address coordinates are required to verify the district commitment. Please retry the address resolution step.',
-					code: 'COMMITMENT_AUTHENTICITY_REQUIRES_COORDINATES'
-				},
-				{ status: 400 }
-			);
-		}
 		try {
-			const { verifyDistrictCommitment } = await import(
-				'$lib/server/identity/verify-commitment'
-			);
-			await verifyDistrictCommitment({
-				lat: input.coordinates.lat,
-				lng: input.coordinates.lng,
-				clientCommitment: input.district_commitment
-			});
+			await verifyGroundCommitmentAuthenticity(userId, input);
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			if (msg.includes('COMMITMENT_AUTHENTICITY_MISMATCH')) {
-				console.warn('[verify-address] commitment authenticity mismatch', {
-					userId,
-					detail: msg.slice(0, 200)
-				});
-				return json(
-					{
-						success: false,
-						error:
-							'The district commitment you submitted does not match the address. Please retry; if the problem persists, your client may have stale data.',
-						code: 'COMMITMENT_AUTHENTICITY_MISMATCH'
-					},
-					{ status: 400 }
-				);
+			if (isGroundServiceError(err)) {
+				return json({ success: false, error: err.message, code: err.code }, { status: err.status });
 			}
-			if (
-				msg.includes('COMMITMENT_VERIFY_IPFS_UNAVAILABLE') ||
-				msg.includes('COMMITMENT_VERIFY_IPFS_TIMEOUT')
-			) {
-				// IPFS-side outage / slow: cannot verify, request is well-formed.
-				// Surface as 503 so the client retries; do NOT issue a credential
-				// without verification. Timeout vs unavailable is logged but the
-				// user-facing message is unified (operationally the same path).
-				const isTimeout = msg.includes('COMMITMENT_VERIFY_IPFS_TIMEOUT');
-				console.error(
-					`[verify-address] IPFS ${isTimeout ? 'timeout' : 'unavailable'} for authenticity check`,
-					{ userId, detail: msg.slice(0, 200) }
-				);
-				return json(
-					{
-						success: false,
-						error:
-							'Verification service temporarily unavailable. Please retry in a moment.',
-						code: isTimeout
-							? 'COMMITMENT_VERIFY_IPFS_TIMEOUT'
-							: 'COMMITMENT_VERIFY_IPFS_UNAVAILABLE'
-					},
-					{ status: 503 }
-				);
-			}
-			if (msg.includes('COMMITMENT_VERIFY_BAD_CELL_DATA')) {
-				return json(
-					{
-						success: false,
-						error:
-							'Your address is in a region without supported district data (US territories, some rural areas). Please use district-attested verification instead.',
-						code: 'COMMITMENT_VERIFY_BAD_CELL_DATA'
-					},
-					{ status: 422 }
-				);
-			}
-			// Unknown failure — fail-closed.
-			console.error('[verify-address] commitment verification failed:', msg);
+			console.error('[verify-address] commitment verification failed:', err);
 			return json(
 				{
 					success: false,
@@ -329,74 +293,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}
 
 	try {
-		const now = Date.now();
-		const expiresAt = now + TIER_CREDENTIAL_TTL[2];
-		const isCommitmentOnly = input.verification_method === 'shadow_atlas' && !!input.district_commitment;
-
-		// Fetch user's did_key for the credential subject ID
-		const userDidKey = await serverQuery(api.users.getDidKey, { userId: userId as any });
-
-		// 3. Issue the VC — use district if available, null for commitment-only
-		const credential = input.district
-			? await issueDistrictCredential({
-				userId,
-				didKey: userDidKey?.didKey ?? null,
-				congressional: input.district,
-				stateSenate: input.state_senate_district,
-				stateAssembly: input.state_assembly_district,
-				verificationMethod: input.verification_method
-			})
-			: null;
-
-		// 4. Compute integrity hash
-		const credentialHash = credential ? await hashCredential(credential) : null;
-
-		// 5. Compute privacy-preserving district hash — skip for commitment-only
-		const districtHash = input.district ? await hashDistrict(input.district) : null;
-
-		// 7. Convex mutation: revoke old credentials, create new one, update user, upsert DM relations
-		await serverMutation(api.users.verifyAddress, {
-			userId: userId as any,
-			district: input.district,
-			stateSenateDistrict: input.state_senate_district,
-			stateAssemblyDistrict: input.state_assembly_district,
-			verificationMethod: input.verification_method,
-			credentialHash: credentialHash ?? undefined,
-			districtHash: districtHash ?? undefined,
-			districtCommitment: input.district_commitment,
-			slotCount: input.slot_count,
-			expiresAt,
-			isCommitmentOnly,
-			officials: (!isCommitmentOnly && input.officials && input.officials.length > 0)
-				? input.officials.map((o) => ({
-					name: o.name,
-					chamber: o.chamber,
-					party: o.party,
-					state: o.state,
-					district: o.district,
-					bioguideId: o.bioguide_id,
-					isVotingMember: o.is_voting_member,
-					delegateType: o.delegate_type ?? undefined,
-					phone: o.phone,
-				}))
-				: undefined,
-		});
-
-		// 8. Return credential to client
-		if (credential && credentialHash) {
-			return json({
-				success: true,
-				credential,
-				credentialHash
-			});
-		}
-
-		// Commitment-only response
-		return json({
-			success: true,
-			commitment: input.district_commitment
-		});
+		return json(await issueGroundCredential(userId, input));
 	} catch (err) {
+		if (isGroundServiceError(err)) {
+			return json({ success: false, error: err.message, code: err.code }, { status: err.status });
+		}
 		// Surface throttle / allowlist errors from verifyAddress mutation with
 		// the right HTTP status so the UI can distinguish user-correctable
 		// conditions from internal errors.

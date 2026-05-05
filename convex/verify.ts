@@ -41,6 +41,13 @@ export const getCampaignForVerify = query({
 
 /**
  * Get district credential by hash for verification page.
+ *
+ * H6 — projects the H1 trust-context snapshot (trustTier, cellStraddles,
+ * cellAnchorMode, atlasVersion) so /v/[hash] can render the same honest
+ * tier-display copy as AttestationFooter and emailService, plus the
+ * atlas-version drift surface when the credential predates the current
+ * atlas. All four fields are optional in the schema; legacy rows return
+ * `undefined` and the UI must render "unknown" rather than a default.
  */
 export const getCredentialByHash = query({
   args: { credentialHash: v.string() },
@@ -56,6 +63,13 @@ export const getCredentialByHash = query({
       issuedAt: cred.issuedAt ?? null,
       expiresAt: cred.expiresAt ?? null,
       revokedAt: cred.revokedAt ?? null,
+      // H6: project H1 trust-context. `undefined` means "this credential
+      // predates the field" — surface as "unknown" upstream, NOT as a
+      // synonym for "false" / a default tier.
+      trustTier: cred.trustTier ?? null,
+      cellStraddles: cred.cellStraddles ?? null,
+      cellAnchorMode: cred.cellAnchorMode ?? null,
+      atlasVersion: cred.atlasVersion ?? null,
     };
   },
 });

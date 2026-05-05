@@ -66,6 +66,12 @@ export default defineSchema({
 		// Passkey / WebAuthn
 		passkeyCredentialId: v.optional(v.string()),
 		passkeyPublicKeyJwk: v.optional(v.any()), // JSON
+		passkeyPublicKey: v.optional(v.string()), // Base64url COSE public key bytes
+		passkeyCounter: v.optional(v.number()),
+		passkeyTransports: v.optional(v.array(v.string())),
+		passkeyDeviceType: v.optional(v.string()),
+		passkeyBackedUp: v.optional(v.boolean()),
+		passkeyAaguid: v.optional(v.string()),
 		didKey: v.optional(v.string()),
 		passkeyCreatedAt: v.optional(v.number()),
 		passkeyLastUsedAt: v.optional(v.number()),
@@ -131,6 +137,22 @@ export default defineSchema({
 	})
 		.index('by_userId', ['userId'])
 		.index('by_expiresAt', ['expiresAt']),
+
+	passkeyCeremonySessions: defineTable({
+		userId: v.id('users'),
+		email: v.optional(v.string()),
+		type: v.string(), // 'registration' | 'authentication'
+		challenge: v.string(),
+		passkeyCredentialId: v.optional(v.string()),
+		status: v.string(), // 'pending' | 'consumed' | 'expired'
+		expiresAt: v.number(),
+		consumedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_userId', ['userId'])
+		.index('by_expiresAt', ['expiresAt'])
+		.index('by_challenge', ['challenge'])
+		.index('by_status', ['status']),
 
 	accounts: defineTable({
 		userId: v.id('users'),
@@ -425,9 +447,12 @@ export default defineSchema({
 		.index('by_userId_metric', ['userId', 'metric'])
 		.index('by_windowStart_metric', ['windowStart', 'metric']),
 
-	// ===========================================================================
-	// ENCRYPTED DELIVERY DATA
-	// ===========================================================================
+		// ===========================================================================
+		// ENCRYPTED DELIVERY DATA — legacy tombstone
+		// ===========================================================================
+		// Retired by Ground Vault PRF. Kept temporarily so historical rows can be
+		// migrated or purged without deleting the table out from under deployments.
+		// No active mutation should write or read this table.
 
 	encryptedDeliveryData: defineTable({
 		userId: v.id('users'),
@@ -447,6 +472,113 @@ export default defineSchema({
 	})
 		.index('by_userId', ['userId'])
 		.index('by_teeKeyId', ['teeKeyId']),
+
+	// ===========================================================================
+	// GROUND VAULTS — encrypted address custody for government delivery
+	// ===========================================================================
+
+	groundVaults: defineTable({
+		userId: v.id('users'),
+		status: v.string(), // 'active' | 'locked' | 'rewrap_needed' | 'retired' | 'legacy_device_key'
+
+		// Client-side encrypted normalized address payload
+		ciphertext: v.string(),
+		nonce: v.string(),
+		schemaVersion: v.number(),
+		encryptionVersion: v.string(),
+		dekVersion: v.number(),
+
+		// AEAD envelope contract. The server cannot inspect the encrypted payload,
+		// so version/provenance metadata that affects decryption is duplicated here.
+		aeadAssociatedData: v.string(),
+		associatedDataHash: v.string(),
+		resolveResultHash: v.optional(v.string()),
+		resolveSigningKeyId: v.optional(v.string()),
+
+		// Canonical links for the active ground artifact
+		activeCredentialId: v.optional(v.id('districtCredentials')),
+		activeGroundCellMetadataId: v.optional(v.id('groundCellMetadata')),
+
+		// Lifecycle
+		createdByMethod: v.string(), // 'address' | 'mdl' | 'migration' | 'reentry'
+		migrationSource: v.optional(v.string()),
+		retiredAt: v.optional(v.number()),
+		retiredReason: v.optional(v.string()),
+		lastUnlockedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_userId', ['userId'])
+		.index('by_userId_status', ['userId', 'status'])
+		.index('by_activeCredentialId', ['activeCredentialId'])
+		.index('by_activeGroundCellMetadataId', ['activeGroundCellMetadataId'])
+		.index('by_status', ['status']),
+
+	groundCellMetadata: defineTable({
+		userId: v.id('users'),
+		districtCredentialId: v.id('districtCredentials'),
+		groundVaultId: v.optional(v.id('groundVaults')),
+
+		// Disclosed location artifact. This is not plaintext address storage, but it
+		// is still precise location metadata and must be treated accordingly.
+		cellId: v.optional(v.string()),
+		h3Cell: v.optional(v.string()),
+		cellMapRoot: v.optional(v.string()),
+		cellMapVersion: v.optional(v.string()),
+		atlasRoot: v.optional(v.string()),
+		atlasVersion: v.optional(v.string()),
+		districtCommitment: v.optional(v.string()),
+		districts: v.optional(v.array(v.string())),
+		slotCount: v.optional(v.number()),
+
+		// Resolution provenance
+		source: v.string(), // 'address' | 'mdl' | 'shadow_atlas' | 'migration'
+		confidence: v.optional(v.float64()),
+		resolveResultHash: v.optional(v.string()),
+		resolveSigningKeyId: v.optional(v.string()),
+
+		// Lifecycle
+		issuedAt: v.number(),
+		expiresAt: v.optional(v.number()),
+		retiredAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_userId_expiresAt', ['userId', 'expiresAt'])
+		.index('by_districtCredentialId', ['districtCredentialId'])
+		.index('by_groundVaultId', ['groundVaultId'])
+		.index('by_cellId', ['cellId'])
+		.index('by_h3Cell', ['h3Cell'])
+		.index('by_districtCommitment', ['districtCommitment']),
+
+	passkeyVaultWrappers: defineTable({
+		userId: v.id('users'),
+		groundVaultId: v.id('groundVaults'),
+
+		// Duplicates current passkey credential id until passkeys are normalized into
+		// a one-to-many credential table. Wrapper status is not auth status.
+		passkeyCredentialId: v.string(),
+		rpId: v.string(),
+
+		// PRF/HKDF wrapping metadata
+		prfSaltId: v.string(),
+		prfSalt: v.string(),
+		saltVersion: v.number(),
+		wrappedDek: v.string(),
+		wrapAlg: v.string(),
+		hkdfInfo: v.string(),
+		wrapperVersion: v.number(),
+		status: v.string(), // 'active' | 'revoked' | 'rotated' | 'retired'
+
+		// Lifecycle
+		lastUsedAt: v.optional(v.number()),
+		revokedAt: v.optional(v.number()),
+		rotatedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_userId', ['userId'])
+		.index('by_groundVaultId', ['groundVaultId'])
+		.index('by_passkeyCredentialId', ['passkeyCredentialId'])
+		.index('by_userId_status', ['userId', 'status'])
+		.index('by_groundVaultId_status', ['groundVaultId', 'status']),
 
 	// ===========================================================================
 	// ZK PROOF SUBMISSIONS
@@ -531,6 +663,37 @@ export default defineSchema({
 		.index('by_witnessExpiresAt', ['witnessExpiresAt'])
 		.index('by_issuingCredentialId', ['issuingCredentialId']),
 
+	submissionDeliveryReceipts: defineTable({
+		submissionId: v.id('submissions'),
+		templateId: v.string(),
+
+		// May be absent for pseudonymous proof submissions that intentionally avoid a
+		// direct user FK in delivery/reporting paths.
+		userId: v.optional(v.id('users')),
+		pseudonymousId: v.optional(v.string()),
+
+		// Recipient identity and transport
+		recipientKey: v.string(),
+		recipientName: v.optional(v.string()),
+		recipientDistrict: v.optional(v.string()),
+		chamber: v.optional(v.string()),
+		provider: v.string(), // 'house_cwc' | 'senate_cwc' | 'demo'
+		providerReceiptId: v.optional(v.string()),
+
+		// Delivery lifecycle
+		status: v.string(), // 'queued' | 'processing' | 'delivered' | 'failed' | 'demo'
+		attempt: v.number(),
+		errorCode: v.optional(v.string()),
+		errorClass: v.optional(v.string()),
+		deliveredAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_submissionId', ['submissionId'])
+		.index('by_templateId', ['templateId'])
+		.index('by_recipientKey', ['recipientKey'])
+		.index('by_status', ['status'])
+		.index('by_providerReceiptId', ['providerReceiptId']),
+
 	// ===========================================================================
 	// VERIFICATION SESSIONS
 	// ===========================================================================
@@ -566,6 +729,40 @@ export default defineSchema({
 		// Privacy-preserving district storage
 		districtCommitment: v.optional(v.string()),
 		slotCount: v.optional(v.number()),
+
+		// H1 — trust-context snapshot at credential issuance.
+		//
+		// All four are STRICTLY OPTIONAL and MUST stay so. H0r CRITICAL: do not
+		// backfill defaults for legacy rows. `undefined` means "this credential
+		// pre-dates the field" — downstream surfaces (H6 outbound honesty) must
+		// treat it as "unknown", NOT as a synonym for the field's "false/clean"
+		// value. Backfilling `trustTier=3` retroactively manufactures mDL
+		// attestation that never happened; backfilling `cellStraddles=false`
+		// claims precision the credential never measured.
+		//
+		// trustTier:        effective tier conferred by this credential =
+		//                   max(user.trustTier_pre, 2). Matches users.trustTier
+		//                   immediately after the issuance mutation. Captures
+		//                   credential-state at issuance and does NOT track
+		//                   later upgrades or revocations.
+		// cellStraddles:    G2 boundary-cell mark — client-supplied at issuance,
+		//                   true iff Tree 2 slot[0] district disagreed with the
+		//                   wallet-attested district. T0 / non-T3 paths leave
+		//                   this undefined (the field is meaningless without a
+		//                   real cellId).
+		// cellAnchorMode:   G8 audit trail — one of CELL_ANCHOR_MODES. Tells
+		//                   apart 'address-resolved' (T3+ from wallet ZIP) from
+		//                   'random-fallback' (T0 anonymity-cell), 'recovery-*'
+		//                   (recovery flow), 'legacy-inferred' / 'legacy-unknown'
+		//                   (read-side backfill for pre-G8 rows — which we do
+		//                   NOT write to the field; legacy rows stay undefined).
+		// atlasVersion:     G6 atlas-rotation — version string of the atlas the
+		//                   client used during issuance. H6 surfaces drift when
+		//                   credential.atlasVersion < currentAtlasVersion.
+		trustTier: v.optional(v.number()),
+		cellStraddles: v.optional(v.boolean()),
+		cellAnchorMode: v.optional(v.string()),
+		atlasVersion: v.optional(v.string()),
 
 		// F1 closure (Stage 5) — on-chain revocation propagation state.
 		// Orthogonal to `revokedAt`: revokedAt marks the credential inactive for
