@@ -6,10 +6,18 @@
  -->
 
 <script lang="ts">
-	import { Fingerprint, ShieldCheck, Trash2, Loader2, CheckCircle2, AlertCircle } from '@lucide/svelte';
+	import {
+		Fingerprint,
+		ShieldCheck,
+		Trash2,
+		Loader2,
+		CheckCircle2,
+		AlertCircle
+	} from '@lucide/svelte';
 	import { startRegistration } from '@simplewebauthn/browser';
 	import { browser } from '$app/environment';
 	import { invalidateAll } from '$app/navigation';
+	import { backfillActiveGroundVaultPasskeyWrapper } from '$lib/core/identity/ground-vault-persistence';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -74,7 +82,23 @@
 				throw new Error(err.message || 'Failed to verify passkey');
 			}
 
-			successMessage = 'Passkey registered successfully.';
+			let wrapperBackfillStatus: Awaited<
+				ReturnType<typeof backfillActiveGroundVaultPasskeyWrapper>
+			>['status'] = 'no-active-vault';
+			if (data.user?.id) {
+				try {
+					wrapperBackfillStatus = (
+						await backfillActiveGroundVaultPasskeyWrapper({ userId: data.user.id })
+					).status;
+				} catch (err) {
+					console.warn('[ground-vault] Passkey wrapper backfill skipped:', err);
+				}
+			}
+
+			successMessage =
+				wrapperBackfillStatus === 'wrapper-added' || wrapperBackfillStatus === 'already-wrapped'
+					? 'Passkey registered. Saved address recovery is ready.'
+					: 'Passkey registered. Saved address recovery will use address re-entry until the address is readable here.';
 			await invalidateAll();
 		} catch (err) {
 			if (err instanceof Error) {
@@ -125,7 +149,10 @@
 <div class="space-y-8">
 	<!-- Header -->
 	<div>
-		<h1 class="text-xl font-bold text-slate-900 sm:text-2xl" style="font-family: 'Satoshi', system-ui, sans-serif">
+		<h1
+			class="text-xl font-bold text-slate-900 sm:text-2xl"
+			style="font-family: 'Satoshi', system-ui, sans-serif"
+		>
 			Security
 		</h1>
 		<p class="mt-1 text-sm text-slate-600">Manage your authentication methods.</p>
@@ -133,7 +160,9 @@
 
 	<!-- Status messages -->
 	{#if successMessage}
-		<div class="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+		<div
+			class="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3"
+		>
 			<CheckCircle2 class="h-4 w-4 flex-shrink-0 text-emerald-600" />
 			<p class="text-sm text-emerald-800">{successMessage}</p>
 		</div>
@@ -155,7 +184,9 @@
 				</div>
 				<div>
 					<h2 class="text-sm font-semibold text-slate-900">Passkeys</h2>
-					<p class="text-xs text-slate-500">Phishing-resistant sign-in with biometrics or security keys</p>
+					<p class="text-xs text-slate-500">
+						Phishing-resistant sign-in with biometrics or security keys
+					</p>
 				</div>
 			</div>
 		</div>
@@ -163,7 +194,8 @@
 		<div class="px-5 py-5 sm:px-6">
 			{#if !isSupported}
 				<p class="text-sm text-slate-500">
-					Your browser does not support passkeys. Try Chrome, Safari, or Edge on a device with biometric authentication.
+					Your browser does not support passkeys. Try Chrome, Safari, or Edge on a device with
+					biometric authentication.
 				</p>
 			{:else if data.passkey}
 				<!-- Existing passkey -->
@@ -216,7 +248,8 @@
 				<!-- No passkey — registration prompt -->
 				<div class="space-y-4">
 					<p class="text-sm text-slate-600">
-						No passkeys registered. Add one for faster, more secure sign-in using biometrics or a security key.
+						No passkeys registered. Add one for faster, more secure sign-in using biometrics or a
+						security key.
 					</p>
 					<button
 						onclick={handleRegister}
@@ -251,7 +284,8 @@
 		</div>
 		<div class="px-5 py-5 sm:px-6">
 			<p class="text-sm text-slate-500">
-				Your account is linked via OAuth (Google or LinkedIn). This provides email verification, which is required for your civic identity.
+				Your account is linked via OAuth (Google or LinkedIn). This provides email verification,
+				which is required for your civic identity.
 			</p>
 		</div>
 	</section>

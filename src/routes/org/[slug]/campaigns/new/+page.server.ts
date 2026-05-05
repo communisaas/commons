@@ -22,7 +22,7 @@ export const load: PageServerLoad = async ({ parent, url, params }) => {
 		fromAlertId
 			? serverQuery(api.legislation.getAlertWithBill, {
 				slug: params.slug,
-				alertId: fromAlertId
+				alertId: fromAlertId as any
 			}).catch(() => null)
 			: Promise.resolve(null)
 	]);
@@ -87,7 +87,7 @@ export const actions: Actions = {
 			debateThreshold,
 			targetCountry,
 			targetJurisdiction: targetJurisdiction ?? undefined,
-			billId: billId ?? undefined,
+			billId: billId as any,
 			position: position ?? undefined
 		});
 
@@ -95,8 +95,7 @@ export const actions: Actions = {
 		if (fromAlertId) {
 			await serverMutation(api.legislation.dismissAlert, {
 				slug: params.slug,
-				alertId: fromAlertId,
-				status: 'acted'
+				alertId: fromAlertId as any
 			}).catch(() => {});
 		}
 

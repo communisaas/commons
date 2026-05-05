@@ -7,7 +7,7 @@ import sharp from 'sharp';
 export const GET: RequestHandler = async ({ params }) => {
 	try {
 		// Fetch template from Convex
-		const template = await serverQuery(api.templates.getBySlug, { slug: params.slug });
+		const template = await serverQuery(api.templates.getBySlugPublic, { slug: params.slug });
 
 		if (!template) {
 			return new Response('Template not found', { status: 404 });

@@ -1,7 +1,56 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 
-	let { data }: { data: PageData } = $props();
+	type DecisionMaker = {
+		id: string;
+		name: string;
+		photoUrl?: string | null;
+		party: string | null;
+		active: boolean;
+		title?: string | null;
+		jurisdiction: string | null;
+		district: string | null;
+		termStart: string | null;
+		termEnd: string | null;
+		phone?: string | null;
+		email?: string | null;
+		websiteUrl?: string | null;
+		officeAddress?: string | null;
+	};
+
+	type BillSummary = {
+		id: string;
+		externalId: string | null;
+		title: string;
+	};
+
+	type DecisionMakerAction = {
+		id: string;
+		action: string;
+		detail?: string | null;
+		sourceUrl?: string | null;
+		occurredAt: string;
+		bill: BillSummary;
+	};
+
+	type ProofReceipt = {
+		id: string;
+		proofWeight: number;
+		dmAction?: string | null;
+		alignment?: string | null;
+		causalityClass?: string | null;
+		status: string;
+		proofDeliveredAt: string;
+		bill: BillSummary;
+	};
+
+	type ViewData = Omit<PageData, 'decisionMaker' | 'actions' | 'receipts'> & {
+		decisionMaker: DecisionMaker;
+		actions: DecisionMakerAction[];
+		receipts: ProofReceipt[];
+	};
+
+	let { data }: { data: ViewData } = $props();
 
 	const dm = $derived(data.decisionMaker);
 

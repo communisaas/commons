@@ -1,7 +1,42 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 
-	let { data }: { data: PageData } = $props();
+	type Bill = {
+		id: string;
+		externalId: string;
+		title: string;
+		summary: string | null;
+		status: string;
+		statusDate: string;
+		jurisdiction: string;
+		jurisdictionLevel?: string;
+		chamber: string | null;
+		sourceUrl?: string;
+	};
+
+	type WatchedBill = {
+		id: string;
+		billId: string;
+		reason: string;
+		position: string | null;
+		createdAt: string | null;
+		bill: Bill;
+	};
+
+	type RelevantBill = {
+		id: string;
+		billId: string;
+		score: number;
+		matchedOn: string[];
+		bill: Bill;
+	};
+
+	type ViewData = Omit<PageData, 'watching' | 'relevant'> & {
+		watching: WatchedBill[];
+		relevant: RelevantBill[];
+	};
+
+	let { data }: { data: ViewData } = $props();
 
 	// Search state
 	let searchQuery = $state('');

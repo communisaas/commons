@@ -4,25 +4,35 @@ import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
 import type { PageServerLoad } from './$types';
+import type { Id } from '$convex/_generated/dataModel';
+
+const toDateStr = (value: number | string | null, fmt: 'date' | 'month' = 'date'): string | null => {
+	if (typeof value === 'number') {
+		return new Date(value).toISOString().slice(0, fmt === 'month' ? 7 : 10);
+	}
+	return typeof value === 'string' ? value.slice(0, fmt === 'month' ? 7 : 10) : null;
+};
 
 export const load: PageServerLoad = async ({ params }) => {
 	const { id } = params;
 
-	const result = await serverQuery(api.legislation.getDmScorecard, { dmId: id });
+	const result = await serverQuery(api.legislation.getDmScorecard, {
+		dmId: id as Id<'decisionMakers'>
+	});
 
 	if (!result) {
 		throw error(404, 'Decision-maker not found');
 	}
 
-	const toDateStr = (v: unknown, fmt: 'date' | 'month' = 'date') =>
-		typeof v === 'number'
-			? new Date(v as number).toISOString().slice(0, fmt === 'month' ? 7 : 10)
-			: null;
-
 	return {
 		decisionMaker: {
-			...(result.decisionMaker as Record<string, unknown>),
-			id: result.decisionMaker._id
+			id: result.decisionMaker._id,
+			name: result.decisionMaker.name,
+			title: result.decisionMaker.title,
+			photoUrl: result.decisionMaker.photoUrl,
+			party: result.decisionMaker.party,
+			district: result.decisionMaker.district,
+			jurisdiction: result.decisionMaker.jurisdiction
 		},
 		current: result.current
 			? {
@@ -44,11 +54,11 @@ export const load: PageServerLoad = async ({ params }) => {
 					totalScoredVotes: result.current.totalScoredVotes
 				}
 			: null,
-		history: result.history.map((s: Record<string, unknown>) => ({
-			period: toDateStr(s.period, 'month'),
-			responsiveness: s.responsiveness,
-			alignment: s.alignment,
-			composite: s.composite
+		history: result.history.map((snapshot) => ({
+			period: toDateStr(snapshot.period, 'month') ?? 'Unknown',
+			responsiveness: snapshot.responsiveness,
+			alignment: snapshot.alignment,
+			composite: snapshot.composite
 		}))
 	};
 };

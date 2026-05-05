@@ -9,6 +9,7 @@ export const load: PageServerLoad = async ({ depends }) => {
 	depends('data:templates');
 
 	const templates = await serverQuery(api.templates.listPublic, {
+		// Keep CWC templates out of public discovery until congressional launch.
 		excludeCwc: !FEATURES.CONGRESSIONAL
 	});
 

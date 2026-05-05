@@ -17,7 +17,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 	if (!convexNetwork) throw error(404, 'Network not found');
 
 	const proofPressure = FEATURES.ACCOUNTABILITY
-		? await getNetworkProofPressure(params.networkId)
+		? []
 		: [];
 
 	return {

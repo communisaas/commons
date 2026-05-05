@@ -2,7 +2,11 @@
 	import { enhance } from '$app/forms';
 	import type { PageData, ActionData } from './$types';
 
+	type TagView = { id: string; name: string };
+
 	let { data, form }: { data: PageData; form: ActionData } = $props();
+	const supporterTags = $derived((data.supporter.tags ?? []) as TagView[]);
+	const allTags = $derived((data.allTags ?? []) as TagView[]);
 
 	// ── Client-side PII decryption ──
 	let decryptedEmail = $state('');
@@ -49,8 +53,8 @@
 				: 'Imported'
 	);
 
-	const currentTagIds = $derived(new Set(data.supporter.tags.map((t) => t.id)));
-	const availableTags = $derived(data.allTags.filter((t) => !currentTagIds.has(t.id)));
+	const currentTagIds = $derived(new Set(supporterTags.map((t) => t.id)));
+	const availableTags = $derived(allTags.filter((t) => !currentTagIds.has(t.id)));
 
 	function sourceLabel(s: string | null): string {
 		switch (s) {
@@ -202,16 +206,16 @@
 
 		<!-- Current tags -->
 		<div class="flex flex-wrap gap-2">
-			{#if data.supporter.tags.length === 0}
+			{#if supporterTags.length === 0}
 				<span class="text-xs text-text-quaternary">No tags</span>
 			{/if}
-			{#each data.supporter.tags as tag}
+			{#each supporterTags as tag}
 				<span class="inline-flex items-center gap-1.5 rounded-full bg-surface-overlay pl-3 pr-1.5 py-1 text-xs text-text-secondary">
 					{tag.name}
 					{#if canEdit}
 						<form method="POST" action="?/removeTag" use:enhance class="inline">
 							<input type="hidden" name="tagId" value={tag.id} />
-							<button type="submit" class="rounded-full p-0.5 hover:bg-surface-border-strong transition-colors">
+							<button type="submit" aria-label="Remove tag {tag.name}" class="rounded-full p-0.5 hover:bg-surface-border-strong transition-colors">
 								<svg class="w-3 h-3 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 									<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 								</svg>

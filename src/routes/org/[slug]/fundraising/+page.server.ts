@@ -6,6 +6,14 @@ import { api } from '$lib/convex';
 
 import type { PageServerLoad } from './$types';
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!FEATURES.FUNDRAISING) throw error(404, 'Not found');
 
@@ -27,15 +35,15 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	return {
 		org: { name: convexOrg?.name ?? params.slug, slug: params.slug },
 		campaigns: fundraisers.map((c: Record<string, unknown>) => ({
-			id: c._id,
-			title: c.title,
-			status: c.status,
-			goalAmountCents: c.goalAmountCents ?? 0,
-			raisedAmountCents: c.raisedAmountCents ?? 0,
-			donorCount: c.donorCount ?? 0,
-			donationCurrency: (c.donationCurrency as string) ?? 'usd',
+			id: asString(c._id),
+			title: asString(c.title, 'Untitled fundraiser'),
+			status: asString(c.status, 'draft'),
+			goalAmountCents: typeof c.goalAmountCents === 'number' ? c.goalAmountCents : null,
+			raisedAmountCents: asNumber(c.raisedAmountCents),
+			donorCount: asNumber(c.donorCount),
+			donationCurrency: asString(c.donationCurrency, 'usd'),
 			createdAt: typeof c._creationTime === 'number'
-				? new Date(c._creationTime as number).toISOString()
+				? new Date(c._creationTime).toISOString()
 				: new Date().toISOString()
 		}))
 	};

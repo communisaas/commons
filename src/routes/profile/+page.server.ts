@@ -1,7 +1,92 @@
 import { redirect } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { PageServerLoad } from './$types';
+
+type ProfileTemplateDTO = {
+	id: string;
+	title: string;
+	slug: string;
+	status: string;
+	isPublic: boolean;
+	createdAt: string;
+	useCount: number;
+};
+
+type ProfileRepresentativeDTO = {
+	name: string;
+	party: string | null;
+	chamber: string;
+	state: string | null;
+	district: string | null;
+};
+
+function toProfileGroundState(state: unknown) {
+	if (!state || typeof state !== 'object') return null;
+	const record = state as {
+		vault?: { status?: string } | null;
+		cell?: {
+			cellId?: string;
+			h3Cell?: string;
+			source?: string;
+			expiresAt?: number;
+		} | null;
+		wrappers?: Array<{ status?: string }>;
+	};
+
+	return {
+		vault: record.vault
+			? {
+					status: record.vault.status
+				}
+			: null,
+		cell: record.cell
+			? {
+					cellId: record.cell.cellId,
+					h3Cell: record.cell.h3Cell,
+					source: record.cell.source,
+					expiresAt: record.cell.expiresAt
+				}
+			: null,
+		wrappers: Array.isArray(record.wrappers)
+			? record.wrappers.map((wrapper) => ({ status: wrapper.status }))
+			: []
+	};
+}
+
+function toProfileGroundCredential(state: unknown) {
+	if (!state || typeof state !== 'object') return null;
+	const credential = (state as { credential?: unknown }).credential;
+	if (!credential || typeof credential !== 'object') return null;
+	const record = credential as {
+		district?: string | null;
+		districtCredentialId?: string | null;
+		districtCommitment?: string | null;
+		slotCount?: number | null;
+		source?: string | null;
+		issuedAt?: number | null;
+		expiresAt?: number | null;
+	};
+	return {
+		district: record.district ?? null,
+		districtCredentialId: record.districtCredentialId ?? null,
+		districtCommitment: record.districtCommitment ?? null,
+		slotCount: record.slotCount ?? null,
+		source: record.source ?? null,
+		issuedAt: record.issuedAt ?? null,
+		expiresAt: record.expiresAt ?? null
+	};
+}
+
+const isoDate = (value: number | string | Date | null | undefined): string | null => {
+	if (value instanceof Date) return value.toISOString();
+	if (typeof value === 'number') return new Date(value).toISOString();
+	if (typeof value === 'string') return value;
+	return null;
+};
+
+const countRelations = (value: unknown): number => (Array.isArray(value) ? value.length : 0);
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) {
@@ -11,6 +96,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	let convexProfile = null;
 	let convexTemplates = null;
 	let convexReps = null;
+	let convexGroundState = null;
+	let convexGroundRestoreState = null;
 	let convexBudget: {
 		tierBypass: boolean;
 		nextAllowedAt: number | null;
@@ -20,12 +107,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 		emailSybilTripped: boolean;
 	} | null = null;
 	try {
-		[convexProfile, convexTemplates, convexReps, convexBudget] = await Promise.all([
-			serverQuery(api.users.getProfile, {}),
-			serverQuery(api.users.getMyTemplates, {}),
-			serverQuery(api.users.getMyRepresentatives, {}),
-			serverQuery(api.users.getReverificationBudget, { userId: locals.user.id as any })
-		]);
+		[
+			convexProfile,
+			convexTemplates,
+			convexReps,
+			convexBudget,
+			convexGroundState,
+			convexGroundRestoreState
+		] =
+			await Promise.all([
+				serverQuery(api.users.getProfile, {}),
+				serverQuery(api.users.getMyTemplates, {}),
+				serverQuery(api.users.getMyRepresentatives, {}),
+				serverQuery(api.users.getReverificationBudget, { userId: locals.user.id as Id<'users'> }),
+				serverQuery(api.ground.getMyGroundState, {}),
+				serverQuery(api.ground.getMyGroundRestoreState, {})
+			]);
 	} catch (err) {
 		console.error(
 			'[Profile Page] Convex query failed:',
@@ -33,13 +130,21 @@ export const load: PageServerLoad = async ({ locals }) => {
 		);
 	}
 
-	const templates = (convexTemplates ?? []).map((t: Record<string, unknown>) => t);
+	const templates: ProfileTemplateDTO[] = (convexTemplates ?? []).map((template) => ({
+		id: template._id,
+		title: template.title,
+		slug: template.slug,
+		status: template.status,
+		isPublic: template.isPublic,
+		createdAt: isoDate(template._creationTime) ?? new Date(0).toISOString(),
+		useCount: countRelations((template as { campaigns?: unknown }).campaigns)
+	}));
 	const templateStats = templates.reduce(
-		(acc: Record<string, number>, template: Record<string, unknown>) => {
+		(acc, template) => {
 			acc.total++;
 			if (template.status === 'published') acc.published++;
 			if (template.isPublic) acc.public++;
-			acc.totalUses += ((template.campaigns as unknown[]) ?? []).length;
+			acc.totalUses += template.useCount;
 			return acc;
 		},
 		{ total: 0, published: 0, public: 0, totalUses: 0, totalSent: 0, totalDelivered: 0 }
@@ -47,6 +152,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const addressVerifiedAt = convexProfile?.addressVerifiedAt
 		? new Date(convexProfile.addressVerifiedAt).toISOString()
 		: (locals.user.address_verified_at?.toISOString() ?? null);
+	const profileGroundState = toProfileGroundState(convexGroundState);
 
 	return {
 		user: {
@@ -59,6 +165,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 			address_verified_at: addressVerifiedAt
 		},
 		reverificationBudget: convexBudget,
+		groundState: {
+			...(profileGroundState ?? { vault: null, cell: null, wrappers: [] }),
+			credential: toProfileGroundCredential(convexGroundRestoreState)
+		},
 		streamed: {
 			userDetails: Promise.resolve(
 				convexProfile
@@ -70,7 +180,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 							profile: {
 								role: convexProfile.role,
 								organization: convexProfile.organization,
-								location: convexProfile.location,
 								connection: convexProfile.connection,
 								completed_at: convexProfile.profileCompletedAt ?? null,
 								visibility: convexProfile.profileVisibility
@@ -97,7 +206,27 @@ export const load: PageServerLoad = async ({ locals }) => {
 					: null
 			),
 			templatesData: Promise.resolve({ templates, templateStats }),
-			representatives: Promise.resolve(convexReps ?? [])
+			representatives: Promise.resolve(
+				(convexReps ?? []).flatMap((rep): ProfileRepresentativeDTO[] => {
+					if (!rep) return [];
+					const record = rep as {
+						name: string;
+						party?: string | null;
+						chamber?: string;
+						state?: string | null;
+						district?: string | null;
+						};
+						return [
+							{
+								name: record.name,
+								party: record.party ?? null,
+								chamber: record.chamber ?? '',
+								state: record.state ?? null,
+								district: record.district ?? null
+							}
+						];
+					})
+				)
 		}
 	};
 };

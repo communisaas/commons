@@ -9,7 +9,7 @@
 	let { data }: { data: PageData } = $props();
 
 	const user = $derived(data.user);
-	const orgs = $derived(user?.orgMemberships ?? []);
+	const orgs = $derived((user?.orgMemberships ?? []).filter((org) => org !== null));
 
 	// Specimen: real CA-11 (San Francisco)
 	// Boundary: simplified from Census TIGER/Line 119th Congress (689 → 47 vertices)

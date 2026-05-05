@@ -840,11 +840,11 @@
 						<img src={member.avatar} alt="" class="w-8 h-8 rounded-full" />
 					{:else}
 						<div class="w-8 h-8 rounded-full bg-surface-border-strong flex items-center justify-center text-text-secondary text-xs font-medium">
-							{(member.name ?? member.email).charAt(0).toUpperCase()}
+							{(member.name ?? member.email ?? '?').charAt(0).toUpperCase()}
 						</div>
 					{/if}
 					<div class="min-w-0 flex-1">
-						<p class="text-sm text-text-primary truncate">{member.name ?? member.email}</p>
+						<p class="text-sm text-text-primary truncate">{member.name ?? member.email ?? 'Unknown member'}</p>
 						{#if member.name}
 							<p class="text-xs text-text-tertiary truncate">{member.email}</p>
 						{/if}

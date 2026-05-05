@@ -1,14 +1,17 @@
 <script lang="ts">
 	import { ShieldCheck, ExternalLink, Copy, Check } from '@lucide/svelte';
+	import type { PageData } from './$types';
 
-	let { data } = $props();
+	let { data }: { data: PageData } = $props();
 
 	const r = $derived(data.receipt);
 	const bill = $derived(data.bill);
+	const billTitle = $derived(bill?.title ?? 'Unknown bill');
+	const billStatus = $derived(bill?.status ?? 'unknown');
 
 	// Status badge colors
 	const statusColor = $derived.by(() => {
-		switch (bill.status) {
+		switch (billStatus) {
 			case 'passed': return 'bg-green-100 text-green-800';
 			case 'failed': return 'bg-red-100 text-red-800';
 			case 'floor': return 'bg-yellow-100 text-yellow-800';
@@ -72,7 +75,7 @@
 
 <svelte:head>
 	<title>Accountability Receipt | {r.dmName} | Commons</title>
-	<meta name="description" content="Verified accountability receipt for {r.dmName} on {bill.title}" />
+	<meta name="description" content="Verified accountability receipt for {r.dmName} on {billTitle}" />
 </svelte:head>
 
 <div class="mx-auto max-w-2xl px-4 py-12">
@@ -84,18 +87,18 @@
 			</div>
 			<span class="text-sm font-medium text-green-700">Verified Accountability Receipt</span>
 		</div>
-		<h1 class="text-xl font-bold text-slate-900 sm:text-2xl">{bill.title}</h1>
+		<h1 class="text-xl font-bold text-slate-900 sm:text-2xl">{billTitle}</h1>
 		<div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
-			{#if bill.externalId}
+			{#if bill?.externalId}
 				<span class="font-mono text-slate-500">{bill.externalId}</span>
 			{/if}
-			<span class="rounded-full px-2.5 py-0.5 text-xs font-medium {statusColor}" aria-label="Bill status: {bill.status}">
-				{bill.status}
+			<span class="rounded-full px-2.5 py-0.5 text-xs font-medium {statusColor}" aria-label="Bill status: {billStatus}">
+				{billStatus}
 			</span>
-			{#if bill.chamber}
+			{#if bill?.chamber}
 				<span class="text-slate-400">{bill.chamber}</span>
 			{/if}
-			{#if bill.jurisdiction}
+			{#if bill?.jurisdiction}
 				<span class="text-slate-400">{bill.jurisdiction}</span>
 			{/if}
 		</div>
@@ -105,8 +108,8 @@
 	<section class="mb-6 rounded-lg border border-slate-200 bg-white p-5" aria-labelledby="dm-heading">
 		<h2 id="dm-heading" class="mb-1 text-sm font-medium text-slate-500">Decision Maker</h2>
 		<p class="text-lg font-semibold text-slate-900">{r.dmName}</p>
-		{#if r.bioguideId}
-			<p class="mt-0.5 font-mono text-xs text-slate-400">{r.bioguideId}</p>
+		{#if r.decisionMakerId}
+			<p class="mt-0.5 font-mono text-xs text-slate-400">{r.decisionMakerId}</p>
 		{/if}
 	</section>
 

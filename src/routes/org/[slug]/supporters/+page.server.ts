@@ -1,12 +1,35 @@
 // CONVEX: Fully migrated — form actions use Convex tag mutations
 import { fail, redirect } from '@sveltejs/kit';
 
-import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { api, internal } from '$lib/convex';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 import type { PageServerLoad, Actions } from './$types';
 
 const PAGE_SIZE = 50;
+
+type SupporterListResult = {
+	supporters: Array<{
+		_id: string;
+		_creationTime: number;
+		encryptedEmail?: string | null;
+		encryptedName?: string | null;
+		encryptedPhone?: string | null;
+		postalCode?: string | null;
+		country?: string | null;
+		identityVerified?: boolean;
+		verified?: boolean;
+		emailStatus?: string;
+		source?: string | null;
+		tags?: Array<{ _id: string; name: string }>;
+	}>;
+	hasMore: boolean;
+	nextCursor: string | null;
+};
+
+type CampaignListResult = {
+	page: Array<{ _id: string; title: string }>;
+};
 
 export const load: PageServerLoad = async ({ parent, url }) => {
 	const { org, membership } = await parent();
@@ -47,15 +70,18 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 			orgSlug: org.slug,
 			paginationOpts: { cursor: cursor || null, numItems: PAGE_SIZE },
 			filters: Object.keys(convexFilters).length > 0 ? convexFilters : undefined
-		}),
+		}) as Promise<SupporterListResult>,
 		serverQuery(api.supporters.getSummaryStats, { orgSlug: org.slug }),
 		serverQuery(api.supporters.getTags, { orgSlug: org.slug }),
-		serverQuery(api.campaigns.listForOrg, { orgSlug: org.slug })
+		serverQuery(api.campaigns.list, {
+			slug: org.slug,
+			paginationOpts: { cursor: null, numItems: 100 }
+		}) as Promise<CampaignListResult>
 	]);
 
 	// Pass encrypted blobs through — client decrypts with org key
 	const supporters = convexResult.supporters
-		.map((s: Record<string, unknown>) => ({
+		.map((s) => ({
 			id: s._id,
 			encryptedEmail: s.encryptedEmail ?? null,
 			encryptedName: s.encryptedName ?? null,
@@ -66,10 +92,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 			verified: s.verified ?? false,
 			emailStatus: s.emailStatus ?? 'subscribed',
 			source: s.source ?? null,
-			createdAt: typeof s._creationTime === 'number'
-				? new Date(s._creationTime as number).toISOString()
-				: String(s._creationTime),
-			tags: ((s.tags as Array<{ _id: string; name: string }>) ?? []).map(t => ({
+			createdAt: new Date(s._creationTime).toISOString(),
+			tags: (s.tags ?? []).map(t => ({
 				id: t._id,
 				name: t.name
 			}))
@@ -81,7 +105,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		hasMore: convexResult.hasMore,
 		nextCursor: convexResult.nextCursor,
 		tags: (tags ?? []).map((t: Record<string, unknown>) => ({ id: t._id ?? t.id, name: t.name, supporterCount: t.supporterCount ?? 0 })),
-		campaigns: (campaigns ?? []).map((c: Record<string, unknown>) => ({ id: c._id ?? c.id, title: c.title })),
+		campaigns: campaigns.page.map((c) => ({ id: c._id, title: c.title })),
 		summary: {
 			verified: summaryStats.identityVerified,
 			postal: summaryStats.postalResolved,
@@ -111,16 +135,7 @@ export const actions: Actions = {
 			return fail(404, { error: 'Organization not found', action: 'createTag' });
 		}
 
-		const result = await serverMutation(internal.v1api.createTag, {
-			orgId: org._id,
-			name
-		});
-
-		if (result && 'duplicate' in result && result.duplicate) {
-			return fail(409, { error: 'A tag with this name already exists', action: 'createTag' });
-		}
-
-		return { success: true, action: 'createTag' };
+		return fail(501, { error: 'Tag creation is not available until a public Convex mutation is exposed', action: 'createTag' });
 	},
 
 	renameTag: async ({ request, params, locals }) => {
@@ -141,20 +156,7 @@ export const actions: Actions = {
 			return fail(404, { error: 'Organization not found', action: 'renameTag' });
 		}
 
-		const result = await serverMutation(internal.v1api.updateTag, {
-			tagId,
-			orgId: org._id,
-			name
-		});
-
-		if (!result) {
-			return fail(404, { error: 'Tag not found', action: 'renameTag' });
-		}
-		if ('duplicate' in result && result.duplicate) {
-			return fail(409, { error: 'A tag with this name already exists', action: 'renameTag' });
-		}
-
-		return { success: true, action: 'renameTag' };
+		return fail(501, { error: 'Tag rename is not available until a public Convex mutation is exposed', action: 'renameTag' });
 	},
 
 	deleteTag: async ({ request, params, locals }) => {
@@ -174,15 +176,6 @@ export const actions: Actions = {
 			return fail(404, { error: 'Organization not found', action: 'deleteTag' });
 		}
 
-		const deleted = await serverMutation(internal.v1api.deleteTag, {
-			tagId,
-			orgId: org._id
-		});
-
-		if (!deleted) {
-			return fail(404, { error: 'Tag not found', action: 'deleteTag' });
-		}
-
-		return { success: true, action: 'deleteTag' };
+		return fail(501, { error: 'Tag deletion is not available until a public Convex mutation is exposed', action: 'deleteTag' });
 	}
 };

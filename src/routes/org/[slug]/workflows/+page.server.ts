@@ -4,6 +4,10 @@ import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
 export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!FEATURES.AUTOMATION) throw error(404, 'Not found');
 
@@ -17,19 +21,19 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	return {
 		org: { name: convexOrg?.name ?? params.slug, slug: params.slug },
 		workflows: convexWorkflows.map((w: Record<string, unknown>) => ({
-			id: w._id,
-			name: w.name,
-			description: w.description ?? null,
+			id: asString(w._id),
+			name: asString(w.name, 'Untitled workflow'),
+			description: typeof w.description === 'string' ? w.description : null,
 			trigger: w.trigger as { type: string; tagId?: string; campaignId?: string },
 			stepCount: Array.isArray(w.steps) ? (w.steps as unknown[]).length : 0,
-			enabled: w.enabled,
+			enabled: w.enabled === true,
 			// TODO: add executionCount to convex/workflows.list (requires joining workflowExecutions)
 			executionCount: 0,
 			createdAt: typeof w._creationTime === 'number'
-				? new Date(w._creationTime as number).toISOString()
+				? new Date(w._creationTime).toISOString()
 				: String(w._creationTime),
 			updatedAt: typeof w.updatedAt === 'number'
-				? new Date(w.updatedAt as number).toISOString()
+				? new Date(w.updatedAt).toISOString()
 				: String(w.updatedAt)
 		}))
 	};

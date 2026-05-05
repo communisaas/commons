@@ -6,7 +6,10 @@
 	import VerificationPipeline from '$lib/components/org/VerificationPipeline.svelte';
 	import type { PageData } from './$types';
 
+	type TagView = { id: string; name: string; supporterCount?: number };
+
 	let { data }: { data: PageData } = $props();
+	const tags = $derived((data.tags ?? []) as TagView[]);
 
 	// ── Client-side PII decryption ──
 	let decryptedPii = $state<Record<string, { email: string; name: string; phone: string }>>({});
@@ -70,25 +73,24 @@
 	let deletingTagId = $state<string | null>(null);
 
 	// Local state for "load more" accumulation
-	let allSupporters = $state(data.supporters);
-	let hasMore = $state(data.hasMore);
-	let nextCursor = $state(data.nextCursor);
+	const allSupporters = $derived(data.supporters);
+	const hasMore = $derived(data.hasMore);
+	const nextCursor = $derived(data.nextCursor);
 	let loadingMore = $state(false);
 
-	// Reset accumulated list when filters/data change from URL navigation
-	$effect(() => {
-		allSupporters = data.supporters;
-		hasMore = data.hasMore;
-		nextCursor = data.nextCursor;
-	});
-
 	// Search debounce
-	let searchInput = $state(data.filters.q);
+	let searchInputOverride = $state<string | undefined>();
+	const searchInput = $derived(searchInputOverride ?? data.filters.q);
 	let searchTimeout: ReturnType<typeof setTimeout> | undefined;
+
+	$effect(() => {
+		data.filters.q;
+		searchInputOverride = undefined;
+	});
 
 	function onSearchInput(e: Event) {
 		const value = (e.target as HTMLInputElement).value;
-		searchInput = value;
+		searchInputOverride = value;
 		clearTimeout(searchTimeout);
 		searchTimeout = setTimeout(() => {
 			updateFilter('q', value || null);
@@ -110,7 +112,7 @@
 
 	function removeFilter(key: string) {
 		updateFilter(key, null);
-		if (key === 'q') searchInput = '';
+		if (key === 'q') searchInputOverride = '';
 	}
 
 	// Active filter chips
@@ -123,7 +125,7 @@
 		if (data.filters.verified) chips.push({ key: 'verified', label: data.filters.verified === 'true' ? 'Verified' : 'Unverified' });
 		if (data.filters.source) chips.push({ key: 'source', label: `Source: ${sourceLabel(data.filters.source)}` });
 		if (data.filters.tagId) {
-			const tag = data.tags.find((t) => t.id === data.filters.tagId);
+			const tag = tags.find((t) => t.id === data.filters.tagId);
 			if (tag) chips.push({ key: 'tag', label: `Tag: ${tag.name}` });
 		}
 		return chips;
@@ -338,7 +340,7 @@
 		</div>
 
 		<!-- Tag dropdown -->
-		{#if data.tags.length > 0}
+		{#if tags.length > 0}
 			<select
 				class="rounded-lg border border-surface-border bg-surface-raised px-3 py-1.5 text-xs text-text-tertiary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
 				onchange={(e) => {
@@ -347,7 +349,7 @@
 				}}
 			>
 				<option value="" selected={!data.filters.tagId}>All tags</option>
-				{#each data.tags as tag}
+				{#each tags as tag}
 					<option value={tag.id} selected={data.filters.tagId === tag.id}>{tag.name}</option>
 				{/each}
 			</select>
@@ -404,7 +406,7 @@
 		<div class="rounded-md bg-surface-base border border-surface-border p-5">
 			<SegmentBuilder
 				orgSlug={data.org.slug}
-				tags={data.tags}
+				tags={tags}
 				campaigns={data.campaigns}
 				showBulkActions={true}
 			/>
@@ -470,11 +472,11 @@
 			{/if}
 
 			<!-- Tag list -->
-			{#if data.tags.length === 0}
+			{#if tags.length === 0}
 				<p class="text-sm text-text-quaternary">No tags yet. Create one above.</p>
 			{:else}
 				<div class="divide-y divide-surface-border rounded-lg border border-surface-border overflow-hidden">
-					{#each data.tags as tag (tag.id)}
+					{#each tags as tag (tag.id)}
 						<div class="flex items-center justify-between px-3 py-2 bg-surface-raised hover:bg-surface-overlay transition-colors group">
 							{#if editingTagId === tag.id}
 								<!-- Inline rename form -->
@@ -615,7 +617,7 @@
 					onclick={() => {
 						const url = new URL($page.url);
 						url.search = '';
-						searchInput = '';
+						searchInputOverride = '';
 						goto(url.toString(), { replaceState: true });
 					}}
 				>

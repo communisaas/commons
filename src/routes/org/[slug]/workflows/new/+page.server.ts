@@ -5,12 +5,29 @@ import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';
 
+type OrgContext = {
+	org: {
+		name: string;
+		slug: string;
+	};
+};
+
+type SegmentOption = {
+	_id: string;
+	name: string;
+};
+
+type SegmentListResult = {
+	segments: SegmentOption[];
+};
+
 export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!FEATURES.AUTOMATION) throw error(404, 'Not found');
 	if (!locals.user) throw redirect(302, '/auth/login');
 
-	const orgCtx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
-	const segments = await serverQuery(api.segments.list, { slug: params.slug });
+	const orgCtx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug }) as OrgContext;
+	const segmentResult = await serverQuery(api.segments.list, { slug: params.slug }) as SegmentListResult;
+	const segments = segmentResult.segments;
 
 	// Tags come from supporter tags — extract unique tag names
 	return {

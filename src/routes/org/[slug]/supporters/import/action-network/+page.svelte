@@ -3,7 +3,17 @@
 	import { invalidateAll } from '$app/navigation';
 	import type { PageData, ActionData } from './$types';
 
-	let { data, form }: { data: PageData; form: ActionData } = $props();
+	type ActionNetworkSync = NonNullable<PageData['sync']> & {
+		totalResources: number;
+		processedResources: number;
+		currentResource?: string | null;
+	};
+
+	type ViewData = Omit<PageData, 'sync'> & {
+		sync: ActionNetworkSync | null;
+	};
+
+	let { data, form }: { data: ViewData; form: ActionData } = $props();
 
 	let apiKeyInput = $state('');
 	let connecting = $state(false);
@@ -90,7 +100,7 @@
 	{/if}
 
 	<!-- Success messages -->
-	{#if form?.connected}
+	{#if form && 'connected' in form && form.connected}
 		<div class="rounded-lg border border-teal-500/30 bg-teal-500/10 px-4 py-3 text-sm text-teal-300">
 			API key connected successfully. You can now start a sync.
 		</div>
@@ -382,7 +392,7 @@
 		{/if}
 
 		<!-- ── Idle / no sync yet ───────────────────────────────── -->
-		{#if sync?.status === 'idle' && !form?.connected}
+		{#if sync?.status === 'idle' && !(form && 'connected' in form && form.connected)}
 			<div class="rounded-lg border border-surface-border bg-surface-base px-4 py-3 text-sm text-text-tertiary">
 				Ready to sync. Click "Full Sync" to import all supporters from Action Network.
 			</div>

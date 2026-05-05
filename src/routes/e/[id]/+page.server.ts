@@ -3,11 +3,12 @@ import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
+import type { Id } from '$convex/_generated/dataModel';
 
 export const load: PageServerLoad = async ({ params }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
 
-	const event = await serverQuery(api.events.getPublic, { eventId: params.id });
+	const event = await serverQuery(api.events.getPublic, { eventId: params.id as Id<'events'> });
 
 	if (!event) throw error(404, 'Event not found');
 

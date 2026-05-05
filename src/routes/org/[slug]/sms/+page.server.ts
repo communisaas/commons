@@ -5,11 +5,24 @@ import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';
 
+type SmsBlast = {
+	_id: string;
+	body: string;
+	status: string;
+	sentCount: number;
+	deliveredCount: number;
+	failedCount: number;
+	totalRecipients: number;
+	messageCount: number;
+	_creationTime: number;
+	sentAt?: number | null;
+};
+
 export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw redirect(302, '/auth/login');
 
-	const blasts = await serverQuery(api.sms.listBlasts, { slug: params.slug });
+	const blasts = await serverQuery(api.sms.listBlasts, { slug: params.slug }) as SmsBlast[];
 
 	return {
 		org: { name: params.slug, slug: params.slug },

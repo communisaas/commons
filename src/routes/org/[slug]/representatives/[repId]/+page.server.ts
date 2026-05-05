@@ -15,7 +15,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 
 	const result = await serverQuery(api.legislation.getDmDetail, {
 		slug: org.slug,
-		dmId: params.repId
+		dmId: params.repId as any
 	});
 
 	if (!result) {

@@ -3,6 +3,18 @@ import type { PageServerLoad } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function asIso(value: unknown): string {
+	return typeof value === 'number' ? new Date(value).toISOString() : asString(value, new Date().toISOString());
+}
+
 export const load: PageServerLoad = async ({ parent }) => {
 	const { org } = await parent();
 
@@ -12,16 +24,17 @@ export const load: PageServerLoad = async ({ parent }) => {
 	// Fields that Convex doesn't carry yet get safe defaults so the
 	// frontend handles them gracefully.
 	const campaigns = (dashboard.recentCampaigns ?? []).map((c: Record<string, unknown>) => ({
-		id: c._id,
-		title: c.title,
-		type: c.type,
-		status: c.status,
-		totalActions: c.actionCount ?? 0,
-		verifiedActions: c.verifiedActionCount ?? 0,
-		updatedAt: typeof c.updatedAt === 'number' ? new Date(c.updatedAt as number).toISOString() : c.updatedAt
+		id: asString(c._id),
+		title: asString(c.title, 'Untitled campaign'),
+		type: asString(c.type),
+		status: asString(c.status, 'DRAFT'),
+		totalActions: asNumber(c.actionCount),
+		verifiedActions: asNumber(c.verifiedActionCount),
+		updatedAt: asIso(c.updatedAt)
 	}));
 
-	const activeCampaignCount = campaigns.filter((c: { status: string }) => c.status === 'ACTIVE').length;
+	const activeCampaignCount = campaigns.filter((c) => c.status === 'ACTIVE').length;
+	const topCampaignId = (campaigns.find((c) => c.status === 'ACTIVE') || campaigns[0])?.id ?? null;
 
 	// Use real member data from Convex getDashboard
 	const membersFromConvex = (dashboard.members ?? []).map((m: Record<string, unknown>) => ({
@@ -48,7 +61,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 			count: 0
 		})),
 		campaigns,
-		topCampaignId: (campaigns.find((c: { status: string }) => c.status === 'ACTIVE') || campaigns[0])?.id ?? null,
+		topCampaignId,
 		stats: {
 			supporters: dashboard.stats?.supporters ?? 0,
 			campaigns: dashboard.stats?.campaigns ?? 0,
@@ -93,7 +106,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 			hasSentEmail: dashboard.onboardingState?.hasSentEmail ?? false,
 			postalResolvedCount: 0,
 			totalSupporters: dashboard.stats?.supporters ?? 0,
-			topCampaignId: (campaigns.find((c: { status: string }) => c.status === 'ACTIVE') || campaigns[0])?.id ?? null
+			topCampaignId
 		},
 		onboardingComplete: dashboard.onboardingComplete ?? false,
 		// TODO: enhance convex/organizations.getDashboard to include followed reps

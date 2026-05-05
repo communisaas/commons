@@ -5,14 +5,26 @@ import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';
 
+type CampaignOption = {
+	_id: string;
+	title: string;
+};
+
+type CampaignPage = {
+	page: CampaignOption[];
+};
+
 export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw redirect(302, '/auth/login');
 
-	const campaigns = await serverQuery(api.campaigns.list, { slug: params.slug });
+	const campaigns = await serverQuery(api.campaigns.list, {
+		slug: params.slug,
+		paginationOpts: { numItems: 100, cursor: null }
+	}) as CampaignPage;
 
 	return {
 		org: { name: params.slug, slug: params.slug },
-		campaigns: campaigns.map((c) => ({ id: c._id, title: c.title }))
+		campaigns: campaigns.page.map((c) => ({ id: c._id, title: c.title }))
 	};
 };

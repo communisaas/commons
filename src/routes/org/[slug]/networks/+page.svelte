@@ -2,14 +2,29 @@
 	import NetworkCard from '$lib/components/networks/NetworkCard.svelte';
 	import type { PageData } from './$types';
 
+	type NetworkView = {
+		id: string;
+		name: string;
+		slug: string;
+		description: string | null;
+		status: string;
+		role: string;
+		membershipStatus: 'active' | 'pending' | string;
+		memberCount: number;
+		ownerOrg: { id: string; name: string; slug: string };
+		isOwner: boolean;
+		joinedAt: string;
+	};
+
 	let { data }: { data: PageData } = $props();
+	const networks = $derived((data.networks ?? []) as NetworkView[]);
 
 	let accepting = $state<string | null>(null);
 	let declining = $state<string | null>(null);
 	let errorMsg = $state('');
 
-	const activeNetworks = $derived(data.networks.filter((n) => n.membershipStatus === 'active'));
-	const pendingNetworks = $derived(data.networks.filter((n) => n.membershipStatus === 'pending'));
+	const activeNetworks = $derived(networks.filter((n) => n.membershipStatus === 'active'));
+	const pendingNetworks = $derived(networks.filter((n) => n.membershipStatus === 'pending'));
 
 	async function respondToInvite(networkId: string, action: 'accept' | 'decline') {
 		if (action === 'accept') accepting = networkId;

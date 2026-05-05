@@ -5,9 +5,20 @@
 	import TrendChart from '$lib/components/scorecard/TrendChart.svelte';
 	import TransparencyTable from '$lib/components/scorecard/TransparencyTable.svelte';
 	import AttestationBlock from '$lib/components/scorecard/AttestationBlock.svelte';
+	import type { PageData } from './$types';
 
-	let { data } = $props();
-	let dm = $derived(data.decisionMaker);
+	type DecisionMakerView = {
+		id: string;
+		name: string;
+		title?: string | null;
+		photoUrl?: string | null;
+		party?: string | null;
+		district?: string | null;
+		jurisdiction?: string | null;
+	};
+
+	let { data }: { data: PageData } = $props();
+	let dm = $derived(data.decisionMaker as DecisionMakerView);
 	let current = $derived(data.current);
 
 	function partyColor(party: string | null): string {

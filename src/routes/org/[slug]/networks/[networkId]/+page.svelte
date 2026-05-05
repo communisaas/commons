@@ -3,7 +3,42 @@
 	import { FEATURES } from '$lib/config/features';
 	import type { PageData } from './$types';
 
-	let { data }: { data: PageData } = $props();
+	type NetworkMember = {
+		id: string;
+		orgId?: string;
+		orgName: string;
+		orgSlug?: string;
+		role: string;
+		status: string;
+		supporterCount: number;
+		joinedAt: string;
+		isOwnerOrg: boolean;
+	};
+
+	type ProofPressureBill = {
+		billId: string;
+		billTitle: string;
+		alignment: number;
+		dmAction?: string | null;
+	};
+
+	type ProofPressure = {
+		decisionMakerId: string;
+		dmName: string;
+		orgCount: number;
+		combinedProofWeight: number;
+		totalVerifiedConstituents: number;
+		totalDistricts: number;
+		receiptCount: number;
+		bills: ProofPressureBill[];
+	};
+
+	type ViewData = Omit<PageData, 'members' | 'proofPressure'> & {
+		members: NetworkMember[];
+		proofPressure: ProofPressure[];
+	};
+
+	let { data }: { data: ViewData } = $props();
 
 	let inviteSlug = $state('');
 	let inviting = $state(false);
@@ -135,9 +170,11 @@
 				{#if data.network.description}
 					<p class="text-sm text-text-tertiary">{data.network.description}</p>
 				{/if}
-				<p class="mt-1 text-xs text-text-tertiary">
-					Owned by {data.network.ownerOrg.name}
-				</p>
+				{#if data.network.ownerOrg}
+					<p class="mt-1 text-xs text-text-tertiary">
+						Owned by {data.network.ownerOrg.name}
+					</p>
+				{/if}
 			</div>
 		</div>
 

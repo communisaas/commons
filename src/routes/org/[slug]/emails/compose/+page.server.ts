@@ -17,11 +17,52 @@ interface RecipientFilter {
 	verified?: 'any' | 'verified' | 'unverified';
 }
 
+type SupporterCountPage = {
+	supporters: Array<{ emailStatus?: string }>;
+	hasMore: boolean;
+	nextCursor: string | null;
+};
+
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
 function requireRole(role: string, required: string): void {
 	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
 	if (hierarchy.indexOf(role) < hierarchy.indexOf(required)) {
 		throw new Error(`Role '${required}' required, got '${role}'`);
 	}
+}
+
+async function countRecipientsByFilter(orgSlug: string, filter: RecipientFilter): Promise<number | null> {
+	if (filter.tagIds && filter.tagIds.length > 1) {
+		return null;
+	}
+
+	const listFilter: Record<string, unknown> = {};
+	if (filter.verified === 'verified') listFilter.verified = true;
+	if (filter.verified === 'unverified') listFilter.verified = false;
+	if (filter.tagIds?.[0]) listFilter.tagId = filter.tagIds[0];
+
+	let cursor: string | null = null;
+	let count = 0;
+	let scanned = 0;
+
+	do {
+		const result = await serverQuery(api.supporters.list, {
+			orgSlug,
+			paginationOpts: { cursor, numItems: 100 },
+			filters: Object.keys(listFilter).length > 0 ? listFilter : undefined
+		}) as SupporterCountPage;
+
+		for (const supporter of result.supporters) {
+			if ((supporter.emailStatus ?? 'subscribed') === 'subscribed') count++;
+		}
+		scanned += result.supporters.length;
+		cursor = result.hasMore ? result.nextCursor : null;
+	} while (cursor && scanned < 10_000);
+
+	return count;
 }
 
 export const load: PageServerLoad = async ({ parent, params }) => {
@@ -34,7 +75,7 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 		}),
 		serverQuery(api.supporters.getSummaryStats, { orgSlug: params.slug }),
 		serverQuery(api.supporters.getTags, { orgSlug: params.slug }),
-		serverQuery(api.subscriptions.getByOrg, { slug: params.slug }),
+		serverQuery(api.subscriptions.getByOrg, { orgSlug: params.slug }),
 		serverQuery(api.organizations.getOrgKeyVerifier, { slug: params.slug })
 	]);
 
@@ -43,11 +84,14 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 
 	return {
 		campaigns: convexCampaigns.page.map((c: Record<string, unknown>) => ({
-			id: c._id,
-			title: c.title,
-			status: c.status
+			id: asString(c._id),
+			title: asString(c.title, 'Untitled campaign'),
+			status: asString(c.status, 'DRAFT')
 		})),
-		tags: (convexTags ?? []).map((t: Record<string, unknown>) => ({ id: t._id ?? t.id, name: t.name })),
+		tags: (convexTags ?? []).map((t: Record<string, unknown>) => ({
+			id: asString(t._id ?? t.id),
+			name: asString(t.name)
+		})),
 		subscribedCount: convexSupporterStats.emailHealth?.subscribed ?? 0,
 		abTestingAllowed,
 		orgKeyVerifier: orgKeyResult?.orgKeyVerifier ?? null
@@ -81,10 +125,10 @@ export const actions: Actions = {
 
 		const formData = await request.formData();
 		const filter = parseFilter(formData);
-		const count = await serverQuery(api.supporters.countByFilter, {
-			orgSlug: params.slug,
-			filter
-		});
+		const count = await countRecipientsByFilter(params.slug, filter);
+		if (count == null) {
+			return fail(501, { error: 'Recipient counting for multiple tags is not available yet.', count: 0 });
+		}
 
 		return { count };
 	},
@@ -186,10 +230,10 @@ export const actions: Actions = {
 		const filter = parseFilter(formData);
 
 		// Count recipients via Convex
-		const recipientCount = await serverQuery(api.supporters.countByFilter, {
-			orgSlug: params.slug,
-			filter
-		});
+		const recipientCount = await countRecipientsByFilter(params.slug, filter);
+		if (recipientCount == null) {
+			return fail(501, { error: 'Sending to multiple tags is not available yet.' });
+		}
 		if (recipientCount === 0) {
 			return fail(400, { error: 'No recipients match your filters. Adjust filters and try again.' });
 		}
@@ -216,7 +260,7 @@ export const actions: Actions = {
 		requireRole(ctx.membership.role, 'editor');
 
 		// Check plan via Convex
-		const sub = await serverQuery(api.subscriptions.getByOrg, { slug: params.slug });
+		const sub = await serverQuery(api.subscriptions.getByOrg, { orgSlug: params.slug });
 		if (!FEATURES.AB_TESTING || sub?.plan === 'free') {
 			return fail(403, { error: 'A/B testing requires a Starter plan or above.' });
 		}
@@ -278,20 +322,35 @@ export const actions: Actions = {
 		const abParentId = crypto.randomUUID();
 		const abTestConfig = { splitPct, winnerMetric, testDurationMs, testGroupPct };
 
-		// Create A/B test blasts via Convex (recipient splitting handled server-side)
-		await serverMutation(api.email.createAbTestBlasts, {
-			orgSlug: params.slug,
-			subjectA,
-			subjectB,
-			bodyHtmlA,
-			bodyHtmlB,
-			fromName,
-			fromEmail,
-			recipientFilter: filter,
-			campaignId: campaignId ?? undefined,
-			abParentId,
-			abTestConfig
-		});
+		// A/B winner automation is not exposed as a public Convex mutation yet; create linked draft variants.
+		await Promise.all([
+			serverMutation(api.email.createBlast, {
+				orgSlug: params.slug,
+				subject: subjectA,
+				bodyHtml: bodyHtmlA,
+				fromName,
+				fromEmail,
+				recipientFilter: filter,
+				campaignId: campaignId ?? undefined,
+				isAbTest: true,
+				abVariant: 'A',
+				abParentId,
+				abTestConfig
+			}),
+			serverMutation(api.email.createBlast, {
+				orgSlug: params.slug,
+				subject: subjectB,
+				bodyHtml: bodyHtmlB,
+				fromName,
+				fromEmail,
+				recipientFilter: filter,
+				campaignId: campaignId ?? undefined,
+				isAbTest: true,
+				abVariant: 'B',
+				abParentId,
+				abTestConfig
+			})
+		]);
 
 		throw redirect(302, `/org/${params.slug}/emails`);
 	},

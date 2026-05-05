@@ -3,11 +3,14 @@ import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
+import type { Id } from '$convex/_generated/dataModel';
 
 export const load: PageServerLoad = async ({ params }) => {
 	if (!FEATURES.FUNDRAISING) throw error(404, 'Not found');
 
-	const campaign = await serverQuery(api.campaigns.getPublic, { campaignId: params.campaignId });
+	const campaign = await serverQuery(api.campaigns.getPublic, {
+		campaignId: params.campaignId as Id<'campaigns'>
+	});
 
 	if (!campaign) throw error(404, 'Campaign not found');
 

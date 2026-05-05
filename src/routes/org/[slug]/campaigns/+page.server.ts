@@ -3,6 +3,14 @@ import { api } from '$lib/convex';
 
 import type { PageServerLoad } from './$types';
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 export const load: PageServerLoad = async ({ parent }) => {
 	const { org } = await parent();
 
@@ -16,17 +24,17 @@ export const load: PageServerLoad = async ({ parent }) => {
 
 	return {
 		campaigns: convexResult.page.map((c: Record<string, unknown>) => ({
-			id: c._id,
-			title: c.title,
-			type: c.type,
-			status: c.status,
-			body: c.body ?? null,
-			templateId: c.templateId ?? null,
-			templateTitle: c.templateTitle ?? null,
-			debateEnabled: c.debateEnabled ?? false,
-			debateThreshold: c.debateThreshold ?? 50,
+			id: asString(c._id),
+			title: asString(c.title, 'Untitled campaign'),
+			type: asString(c.type),
+			status: asString(c.status, 'DRAFT'),
+			body: typeof c.body === 'string' ? c.body : null,
+			templateId: typeof c.templateId === 'string' ? c.templateId : null,
+			templateTitle: typeof c.templateTitle === 'string' ? c.templateTitle : null,
+			debateEnabled: c.debateEnabled === true,
+			debateThreshold: asNumber(c.debateThreshold, 50),
 			updatedAt: typeof c.updatedAt === 'number'
-				? new Date(c.updatedAt as number).toISOString()
+				? new Date(c.updatedAt).toISOString()
 				: String(c.updatedAt)
 		})),
 		counts: statusCounts

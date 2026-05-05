@@ -5,9 +5,44 @@
 	import DebateMarketCard from '$lib/components/debate/DebateMarketCard.svelte';
 	import DebateParticipationPanel from '$lib/components/wallet/debate/DebateParticipationPanel.svelte';
 	import { buildArgumentStanceMap } from '$lib/utils/debate-stats';
+	import type { DebateData } from '$lib/stores/debateState.svelte';
 	import type { PageData, ActionData } from './$types';
 
-	let { data, form }: { data: PageData; form: ActionData } = $props();
+	type PublicCampaignTarget = {
+		name: string;
+		title?: string | null;
+	};
+
+	type PublicDebateSignal = Pick<
+		DebateData,
+		| 'id'
+		| 'debateIdOnchain'
+		| 'propositionText'
+		| 'status'
+		| 'argumentCount'
+		| 'totalStake'
+		| 'uniqueParticipants'
+		| 'deadline'
+		| 'currentPrices'
+		| 'currentEpoch'
+		| 'arguments'
+	> & {
+		templateSlug?: string | null;
+	};
+
+	type ViewData = Omit<PageData, 'campaign'> & {
+		campaign: PageData['campaign'] & {
+			orgAvatar?: string | null;
+			targets?: PublicCampaignTarget[];
+		};
+		stats: {
+			verifiedActions: number;
+			uniqueDistricts: number;
+		};
+		debateSignal?: PublicDebateSignal | null;
+	};
+
+	let { data, form }: { data: ViewData; form: ActionData } = $props();
 
 	// ── Feature checks ──
 	const districtEnabled = FEATURES.ADDRESS_SPECIFICITY === 'district';
@@ -140,7 +175,7 @@
 			districtVerified = true;
 			verificationTier = 2;
 
-			// Store encrypted address client-side (privacy: never reaches server)
+			// Store encrypted address client-side for this public campaign flow.
 			if (browser) {
 				try {
 					const { storeConstituentAddress } = await import('$lib/core/identity/constituent-address');
@@ -504,7 +539,8 @@
 				<path stroke-linecap="round" stroke-linejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
 			</svg>
 			<p class="text-xs text-blue-700">
-				Your address is used once to find your district, then discarded. Only the district is recorded — never your address.
+				Your address is used to find your district. For official delivery flows, address
+				fields may be disclosed where the government endpoint requires them.
 			</p>
 		</div>
 

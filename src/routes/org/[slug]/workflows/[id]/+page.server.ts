@@ -4,6 +4,14 @@ import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!FEATURES.AUTOMATION) throw error(404, 'Not found');
 
@@ -42,14 +50,14 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 				: String(convexWorkflow.updatedAt)
 		},
 		executions: convexExecutions.map((e: Record<string, unknown>) => ({
-			id: e._id,
-			supporterName: (e.supporterName as string) ?? 'Unknown',
-			supporterEmail: (e.supporterEmail as string) ?? '',
-			status: e.status,
-			currentStep: e.currentStep,
-			error: e.error ?? null,
+			id: asString(e._id),
+			supporterName: asString(e.supporterName, 'Unknown'),
+			supporterEmail: asString(e.supporterEmail),
+			status: asString(e.status, 'pending'),
+			currentStep: asNumber(e.currentStep),
+			error: typeof e.error === 'string' ? e.error : null,
 			createdAt: typeof e._creationTime === 'number'
-				? new Date(e._creationTime as number).toISOString()
+				? new Date(e._creationTime).toISOString()
 				: String(e._creationTime),
 			completedAt: typeof e.completedAt === 'number'
 				? new Date(e.completedAt as number).toISOString()

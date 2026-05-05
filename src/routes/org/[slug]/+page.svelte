@@ -7,7 +7,66 @@
 	import { SPRINGS } from '$lib/design/motion';
 	import type { PageData } from './$types';
 
-	let { data }: { data: PageData } = $props();
+	type DashboardCampaign = {
+		id: string;
+		title: string;
+		status: string;
+		totalActions: number;
+		verifiedActions: number;
+		updatedAt: string;
+	};
+
+	type EndorsedTemplate = {
+		id: string;
+		templateId: string;
+		slug: string;
+		title: string;
+		description: string;
+		sends: number;
+		districts: number;
+		endorsedAt: string;
+	};
+
+	type FollowedRep = {
+		id: string;
+		name: string;
+		party: string | null;
+		jurisdiction: string | null;
+	};
+
+	type WatchedBill = {
+		id: string;
+		title: string;
+		status: string;
+		position: string | null;
+	};
+
+	type RecentActivity = {
+		type: 'signup' | 'action';
+		id: string;
+		label: string;
+		detail: string;
+		verified: boolean;
+		tier: number;
+		timestamp: string;
+	};
+
+	type ViewData = Omit<PageData, 'campaigns' | 'endorsedTemplates' | 'followedReps' | 'watchedBills' | 'recentActivity'> & {
+		billingEmail?: string | null;
+		campaigns: DashboardCampaign[];
+		endorsedTemplates: EndorsedTemplate[];
+		recentActivity: RecentActivity[];
+		followedReps: {
+			count: number;
+			top: FollowedRep[];
+		};
+		watchedBills: {
+			count: number;
+			top: WatchedBill[];
+		};
+	};
+
+	let { data }: { data: ViewData } = $props();
 
 	function relativeTime(iso: string): string {
 		const diff = Date.now() - new Date(iso).getTime();

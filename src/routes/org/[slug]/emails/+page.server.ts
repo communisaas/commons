@@ -3,6 +3,14 @@ import { api } from '$lib/convex';
 
 import type { PageServerLoad } from './$types';
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 export const load: PageServerLoad = async ({ parent }) => {
 	const { org } = await parent();
 
@@ -13,23 +21,23 @@ export const load: PageServerLoad = async ({ parent }) => {
 
 	return {
 		blasts: convexResult.page.map((b: Record<string, unknown>) => ({
-			id: b._id,
-			subject: b.subject,
-			status: b.status,
-			totalRecipients: b.totalRecipients ?? 0,
-			totalSent: b.totalSent ?? 0,
-			totalBounced: b.totalBounced ?? 0,
+			id: asString(b._id),
+			subject: asString(b.subject, '(no subject)'),
+			status: asString(b.status, 'draft'),
+			totalRecipients: asNumber(b.totalRecipients),
+			totalSent: asNumber(b.totalSent),
+			totalBounced: asNumber(b.totalBounced),
 			sentAt: typeof b.sentAt === 'number'
-				? new Date(b.sentAt as number).toISOString()
+				? new Date(b.sentAt).toISOString()
 				: null,
 			createdAt: typeof b._creationTime === 'number'
-				? new Date(b._creationTime as number).toISOString()
+				? new Date(b._creationTime).toISOString()
 				: new Date().toISOString(),
-			campaignId: b.campaignId ?? null,
+			campaignId: typeof b.campaignId === 'string' ? b.campaignId : null,
 			campaignTitle: null,
-			isAbTest: b.isAbTest ?? false,
-			abVariant: b.abVariant ?? null,
-			abParentId: b.abParentId ?? null
+			isAbTest: b.isAbTest === true,
+			abVariant: typeof b.abVariant === 'string' ? b.abVariant : null,
+			abParentId: typeof b.abParentId === 'string' ? b.abParentId : null
 		}))
 	};
 };

@@ -2,7 +2,40 @@
 	import { FEATURES } from '$lib/config/features';
 	import type { PageData } from './$types';
 
-	let { data }: { data: PageData } = $props();
+	type EmailBlast = {
+		id: string;
+		subject: string;
+		status: string;
+		abVariant?: string | null;
+		totalRecipients: number;
+		totalSent: number;
+		totalBounced: number;
+		totalOpened: number;
+		totalClicked: number;
+		totalComplained?: number;
+		sentAt: string | null;
+		createdAt?: string;
+		abWinnerPickedAt?: string | null;
+	};
+
+	type BounceEvent = {
+		email: string;
+		timestamp: string | null;
+	};
+
+	type ViewData = Omit<PageData, 'blast' | 'variants' | 'winnerBlast' | 'bounceEvents'> & {
+		abConfig?: {
+			winnerMetric?: string | null;
+			testGroupPct?: number | null;
+			splitPct?: number | null;
+		} | null;
+		blast: EmailBlast;
+		variants: Array<EmailBlast | null>;
+		winnerBlast: EmailBlast | null;
+		bounceEvents: BounceEvent[];
+	};
+
+	let { data }: { data: ViewData } = $props();
 
 	function pct(num: number, denom: number): string {
 		if (denom === 0) return '0.0%';

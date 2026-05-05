@@ -170,7 +170,7 @@
 				<span class="hero-spec-sep" aria-hidden="true">·</span>
 				<Cite
 					form="whisper"
-					provenance={() => 'three-tree membership · position note · debate weight · bubble membership'}
+					cite="three-tree membership · position note · debate weight · bubble membership"
 				><Datum value={4} class="hero-spec-datum" /> live circuits</Cite>
 			</p>
 			<a
@@ -1354,12 +1354,6 @@
 		text-align: center;
 	}
 
-	.section-centered .binding-explain {
-		text-align: left;
-		max-width: 42rem;
-		margin: 2rem auto 0;
-	}
-
 	.section-head {
 		display: flex;
 		align-items: baseline;
@@ -1399,15 +1393,6 @@
 	.section-lede.center {
 		margin-left: auto;
 		margin-right: auto;
-	}
-
-	.section-aside {
-		font-size: 0.8125rem;
-		color: var(--text-tertiary);
-		font-style: italic;
-		max-width: 42rem;
-		margin: 1.5rem 0 0 0;
-		line-height: 1.55;
 	}
 
 	/* ───────────────────────────────────────────────────────────────────
@@ -1843,10 +1828,6 @@
 		border-bottom-color: var(--text-primary);
 	}
 
-	.attest-body sub {
-		font-size: 0.6875em;
-	}
-
 	/* ───────────────────────────────────────────────────────────────────
 	   DATA STRUCTURES — topology + kinship clusters
 	   ─────────────────────────────────────────────────────────────────── */
@@ -2043,29 +2024,6 @@
 
 	.evo-arrow-label {
 		text-transform: uppercase;
-	}
-
-	.nul-explain {
-		font-size: 0.9375rem;
-		color: var(--text-secondary);
-		line-height: 1.65;
-		max-width: 42rem;
-	}
-
-	.nul-explain p {
-		margin: 0 0 1rem 0;
-	}
-
-	.nul-explain p:last-child {
-		margin-bottom: 0;
-	}
-
-	.nul-explain code {
-		font-family: 'JetBrains Mono', monospace;
-		font-size: 0.8125rem;
-		color: var(--text-primary);
-		background: none;
-		padding: 0;
 	}
 
 	/* ─── Nullifier pedagogy: lede → attack → fix → formal → property card ─── */
@@ -2370,12 +2328,6 @@
 		letter-spacing: -0.01em;
 	}
 
-	.srs-wall-count-plus {
-		font-size: 1.25rem;
-		color: var(--text-tertiary);
-		margin-left: 0.0625rem;
-	}
-
 	.srs-wall-desc {
 		font-size: 0.875rem;
 		color: var(--text-secondary);
@@ -2656,15 +2608,6 @@
 		margin-top: 5rem;
 		padding-top: 3rem;
 		border-top: 1px solid var(--coord-node-border);
-	}
-
-	.footer-manifesto {
-		font-size: 0.9375rem;
-		color: var(--text-secondary);
-		font-style: italic;
-		line-height: 1.6;
-		max-width: 40rem;
-		margin: 0 0 2rem 0;
 	}
 
 	.footer-links {

@@ -13,7 +13,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		throw error(404, 'Template not found');
 	}
 
-	// Gate CWC templates behind CONGRESSIONAL feature flag
+	// Congressional delivery is implemented but not launched while the flag is false.
 	if (!FEATURES.CONGRESSIONAL && convexTemplate.deliveryMethod === 'cwc') {
 		throw error(404, 'Template not found');
 	}
@@ -31,7 +31,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			subject: convexTemplate.title,
 			message_body: convexTemplate.message_body,
 			preview: convexTemplate.preview,
-			metrics: convexTemplate.metrics,
+			metrics: (convexTemplate as { metrics?: unknown }).metrics,
 			delivery_config: convexTemplate.delivery_config,
 			recipient_config: convexTemplate.recipient_config,
 			recipientEmails: convexTemplate.recipientEmails ?? [],

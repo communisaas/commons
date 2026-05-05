@@ -51,6 +51,33 @@
 		expired: 'text-slate-500'
 	};
 
+	const textValue = (value: unknown) => (typeof value === 'string' ? value : String(value ?? ''));
+	const dateValue = (value: unknown): string | number | Date =>
+		typeof value === 'string' || typeof value === 'number' || value instanceof Date ? value : '';
+	const numberValue = (value: unknown) => (typeof value === 'number' ? value : Number(value ?? 0));
+	type GrantView = {
+		id: string;
+		status: string;
+		scope: string;
+		policyText: string;
+		totalActions: number;
+		maxActionsPerDay: number;
+		issueFilter: string[];
+		expiresAt: string | number | Date | null;
+	};
+	const grants = $derived(
+		data.grants.map((grant): GrantView => ({
+			id: textValue(grant.id),
+			status: textValue(grant.status),
+			scope: textValue(grant.scope),
+			policyText: textValue(grant.policyText),
+			totalActions: numberValue(grant.totalActions),
+			maxActionsPerDay: numberValue(grant.maxActionsPerDay),
+			issueFilter: Array.isArray(grant.issueFilter) ? grant.issueFilter.map(textValue) : [],
+			expiresAt: grant.expiresAt ? dateValue(grant.expiresAt) : null
+		}))
+	);
+
 	async function parsePolicy() {
 		parsing = true;
 		createError = '';
@@ -210,14 +237,14 @@
 				</button>
 			</div>
 
-			{#if data.grants.length === 0}
+			{#if grants.length === 0}
 				<div class="rounded-md border border-dashed border-slate-200 p-8 text-center">
 					<Bot class="mx-auto h-10 w-10 text-slate-300 mb-3" />
 					<p class="text-sm text-slate-500">No delegation grants yet. Create one to get started.</p>
 				</div>
 			{:else}
 				<div class="space-y-3">
-					{#each data.grants as grant}
+					{#each grants as grant}
 						<div class="rounded-md border border-slate-200 bg-white p-5">
 							<div class="flex items-start justify-between mb-3">
 								<div>
@@ -414,21 +441,21 @@
 									<p class="text-xs text-slate-500 mt-1">{review.reasoning}</p>
 									<div class="flex items-center gap-3 mt-2 text-xs text-slate-400">
 										<span>Proof weight: {review.proofWeight}</span>
-										<span>{new Date(review.createdAt).toLocaleDateString()}</span>
+										<span>{new Date(dateValue(review.createdAt)).toLocaleDateString()}</span>
 									</div>
 								</div>
 								<div class="flex items-center gap-1 ml-4 shrink-0">
 									<button
-										onclick={() => reviewAction(review.id, 'approve')}
-										disabled={actionLoading[review.id]}
+										onclick={() => reviewAction(textValue(review.id), 'approve')}
+										disabled={actionLoading[textValue(review.id)]}
 										class="rounded-lg bg-emerald-50 p-1.5 text-emerald-600 hover:bg-emerald-100 transition-colors"
 										title="Approve"
 									>
 										<Check class="h-4 w-4" />
 									</button>
 									<button
-										onclick={() => reviewAction(review.id, 'reject')}
-										disabled={actionLoading[review.id]}
+										onclick={() => reviewAction(textValue(review.id), 'reject')}
+										disabled={actionLoading[textValue(review.id)]}
 										class="rounded-lg bg-red-50 p-1.5 text-red-600 hover:bg-red-100 transition-colors"
 										title="Reject"
 									>
@@ -454,14 +481,14 @@
 									<div class="flex items-center gap-2 mb-0.5">
 										<span class="text-sm font-medium text-slate-700">{action.targetTitle}</span>
 										<span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-											{scopeLabels[action.actionType] || action.actionType}
+											{scopeLabels[textValue(action.actionType)] || textValue(action.actionType)}
 										</span>
 									</div>
 									<p class="text-xs text-slate-400 line-clamp-1">{action.reasoning}</p>
 								</div>
 								<div class="text-right text-xs text-slate-400 shrink-0 ml-4">
-									<div>{new Date(action.createdAt).toLocaleDateString()}</div>
-									<div>Score: {action.relevanceScore.toFixed(2)}</div>
+									<div>{new Date(dateValue(action.createdAt)).toLocaleDateString()}</div>
+									<div>Score: {numberValue(action.relevanceScore).toFixed(2)}</div>
 								</div>
 							</div>
 						</div>

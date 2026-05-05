@@ -11,8 +11,11 @@
 		Weight,
 		Link2
 	} from '@lucide/svelte';
+	import type { PageData } from './$types';
 
-	let { data } = $props();
+	type AlignmentReceipt = { alignment: number };
+
+	let { data }: { data: PageData } = $props();
 
 	let expandedBills = $state<Set<string>>(new Set());
 
@@ -86,6 +89,11 @@
 	function proofWeightPercent(weight: number): number {
 		// Normalize: proof weight of 1.0 = 100%, cap at 100
 		return Math.min(Math.round(weight * 100), 100);
+	}
+
+	function averageAlignment(receipts: AlignmentReceipt[]): number {
+		if (receipts.length === 0) return 0;
+		return receipts.reduce((sum, receipt) => sum + receipt.alignment, 0) / receipts.length;
 	}
 </script>
 
@@ -230,9 +238,7 @@
 
 		{#each data.bills as billEntry (billEntry.bill.id)}
 			{@const isExpanded = expandedBills.has(billEntry.bill.id)}
-			{@const align = alignmentIcon(
-				billEntry.receipts.reduce((s, r) => s + r.alignment, 0) / billEntry.receipts.length
-			)}
+			{@const align = alignmentIcon(averageAlignment(billEntry.receipts))}
 
 			<div class="mb-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
 				<!-- Bill Header (clickable) -->

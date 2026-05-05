@@ -4,6 +4,14 @@ import type { PageServerLoad } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 export const load: PageServerLoad = async ({ parent, params }) => {
 	const { org, membership } = await parent();
 
@@ -44,29 +52,29 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			userId: m.userId,
 			name: (m.name as string | null) ?? null,
 			email: (m.email as string | null) ?? null,
-			avatar: m.avatar,
-			role: m.role,
+			avatar: typeof m.avatar === 'string' ? m.avatar : null,
+			role: asString(m.role, 'member'),
 			joinedAt: typeof m.joinedAt === 'number'
-				? new Date(m.joinedAt as number).toISOString()
+				? new Date(m.joinedAt).toISOString()
 				: String(m.joinedAt)
 		})),
 		invites,
 		issueDomains: (data.issueDomains ?? []).map((d: Record<string, unknown>) => ({
-			id: d._id,
-			label: d.label,
-			description: d.description,
-			weight: d.weight,
+			id: asString(d._id),
+			label: asString(d.label),
+			description: typeof d.description === 'string' ? d.description : null,
+			weight: asNumber(d.weight, 1),
 			createdAt: typeof d._creationTime === 'number'
-				? new Date(d._creationTime as number).toISOString()
+				? new Date(d._creationTime).toISOString()
 				: String(d._creationTime),
 			updatedAt: typeof d.updatedAt === 'number'
-				? new Date(d.updatedAt as number).toISOString()
+				? new Date(d.updatedAt).toISOString()
 				: String(d.updatedAt)
 		})),
 		encryption: {
 			orgKeyVerifier: keyInfo.orgKeyVerifier,
 			hasRecoveryKey: keyInfo.hasRecoveryKey,
-			recoveryWrappedOrgKey: keyInfo.recoveryWrappedOrgKey,
+			recoveryWrappedOrgKey: 'recoveryWrappedOrgKey' in keyInfo ? keyInfo.recoveryWrappedOrgKey : null,
 			piiVersion: keyInfo.piiVersion
 		}
 	};

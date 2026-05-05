@@ -5,6 +5,14 @@ import { api } from '$lib/convex';
 import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import { renderReportEmail } from '$lib/server/email/report-template';
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 function requireRole(role: string, required: string): void {
 	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
 	if (hierarchy.indexOf(role) < hierarchy.indexOf(required)) {
@@ -51,11 +59,48 @@ export const load: PageServerLoad = async ({ params, parent, locals, platform })
 	});
 
 	return {
-		campaign: preview.campaign,
-		targets: preview.targets,
+		campaign: {
+			id: asString(preview.campaign._id),
+			title: asString(preview.campaign.title, 'Untitled campaign'),
+			status: asString(preview.campaign.status),
+			type: asString(preview.campaign.type)
+		},
+		targets: preview.targets.map((target: Record<string, unknown>) => ({
+			email: asString(target.email),
+			name: typeof target.name === 'string' ? target.name : null,
+			title: typeof target.title === 'string' ? target.title : null,
+			district: typeof target.district === 'string' ? target.district : null
+		})).filter((target: { email: string }) => target.email),
 		packet: preview.packet,
 		renderedHtml,
-		pastDeliveries: pastDeliveries ?? []
+		pastDeliveries: (pastDeliveries ?? []).map((delivery: Record<string, unknown>) => ({
+			id: asString(delivery._id ?? delivery.id),
+			targetEmail: asString(delivery.targetEmail),
+			targetName: typeof delivery.targetName === 'string' ? delivery.targetName : null,
+			targetTitle: typeof delivery.targetTitle === 'string' ? delivery.targetTitle : null,
+			targetDistrict: typeof delivery.targetDistrict === 'string' ? delivery.targetDistrict : null,
+			status: asString(delivery.status, 'sent'),
+			sentAt: typeof delivery.sentAt === 'number' ? new Date(delivery.sentAt).toISOString() : null,
+			createdAt: typeof delivery.createdAt === 'number'
+				? new Date(delivery.createdAt).toISOString()
+				: asString(delivery.createdAt, new Date().toISOString()),
+			proofStrength: delivery.proofWeight
+				? {
+						verified: asNumber(delivery.proofWeight),
+						districtCount: 0
+					}
+				: null,
+			responses: Array.isArray(delivery.responses)
+				? delivery.responses.map((response: Record<string, unknown>) => ({
+						type: asString(response.type),
+						confidence: asString(response.confidence, 'reported'),
+						occurredAt: typeof response.occurredAt === 'number'
+							? new Date(response.occurredAt).toISOString()
+							: asString(response.occurredAt, new Date().toISOString()),
+						detail: typeof response.detail === 'string' ? response.detail : null
+					}))
+				: []
+		}))
 	};
 };
 

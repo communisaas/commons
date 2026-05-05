@@ -7,6 +7,10 @@ import { computeVerificationPacketCached } from '$lib/server/verification-packet
 import { loadCampaignAnalytics } from '$lib/server/campaign-analytics';
 import type { PageServerLoad, Actions } from './$types';
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
 export const load: PageServerLoad = async ({ params, parent, platform }) => {
 	const { org, membership } = await parent();
 
@@ -57,7 +61,10 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 			createdAt: new Date(campaign.createdAt).toISOString(),
 			updatedAt: new Date(campaign.updatedAt).toISOString()
 		},
-		templates,
+		templates: templates.map((template: Record<string, unknown>) => ({
+			id: asString(template._id ?? template.id),
+			title: asString(template.title, 'Untitled template')
+		})),
 		packet,
 		analytics,
 		debate: debate

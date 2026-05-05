@@ -5,10 +5,28 @@
 	import type { PageData } from './$types';
 	import { coordinated } from '$lib/utils/timerCoordinator';
 	import { trackTemplateView } from '$lib/core/analytics/client';
+	import type { ComponentTemplate } from '$lib/types/component-props';
 
 	let { data }: { data: PageData } = $props();
 
 	let showModal = $state(true);
+
+	function normalizeMetrics(
+		metrics: unknown
+	): { sent?: number; delivered?: number; views?: number } {
+		if (!metrics || typeof metrics !== 'object') return {};
+		const record = metrics as Record<string, unknown>;
+		return {
+			...(typeof record.sent === 'number' ? { sent: record.sent } : {}),
+			...(typeof record.delivered === 'number' ? { delivered: record.delivered } : {}),
+			...(typeof record.views === 'number' ? { views: record.views } : {})
+		};
+	}
+
+	const template = $derived({
+		...data.template,
+		metrics: normalizeMetrics(data.template.metrics)
+	} satisfies ComponentTemplate);
 
 	// Convert full user object to simplified type for TemplateModal
 	const simplifiedUser = $derived(
@@ -17,7 +35,7 @@
 
 	onMount(() => {
 		// Track view via DP analytics pipeline
-		trackTemplateView(data.template.id);
+		trackTemplateView(template.id);
 
 		// Check for pending template action from OAuth flow
 		const pendingAction = sessionStorage.getItem('pending_template_action');
@@ -30,12 +48,12 @@
 	function handleModalClose() {
 		showModal = false;
 		// Navigate to template page instead of closing modal
-		goto(`/s/${data.template.slug}`);
+		goto(`/s/${template.slug}`);
 	}
 
 	const componentId = 'TemplateModalPage_' + Math.random().toString(36).substr(2, 9);
 
-	function handleTemplateUsed(_data: { templateId: string; action: string }) {
+	function handleTemplateUsed(_data: { templateId: string; action: 'mailto_opened' }) {
 		// Track successful conversion
 
 		// Optionally redirect to profile or success page
@@ -60,7 +78,7 @@
 
 {#if showModal}
 	<TemplateModal
-		template={data.template}
+		template={template}
 		user={simplifiedUser}
 		onclose={handleModalClose}
 		onused={handleTemplateUsed}

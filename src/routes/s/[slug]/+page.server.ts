@@ -6,39 +6,73 @@ import { parseRecipientConfig } from '$lib/types/template';
 import { getOfficials } from '$lib/core/shadow-atlas/client';
 import type { DistrictOfficialInput } from '$lib/utils/landscapeMerge';
 import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
+import type { Id } from '$convex/_generated/dataModel';
+
+type DebateArgumentRow = {
+	_id: string;
+	_creationTime: number;
+	argumentIndex: number;
+	stance: string;
+	body: string;
+	amendmentText: string | null;
+	stakeAmount: number;
+	engagementTier: number;
+	weightedScore: number;
+	totalStake: number;
+	coSignCount: number;
+	aiScores: unknown;
+	aiWeighted: number | null;
+	finalScore: number | null;
+	modelAgreement: number | null;
+};
+
+type DebateRow = {
+	_id: string;
+	templateId: string;
+	debateIdOnchain: string | number | null;
+	propositionText: string;
+	propositionHash: string;
+	actionDomain: string;
+	deadline: number | string;
+	jurisdictionSize: number;
+	status: 'active' | 'resolving' | 'resolved' | 'awaiting_governance' | 'under_appeal';
+	argumentCount: number;
+	uniqueParticipants: number;
+	totalStake: number;
+	winningArgumentIndex: number | null;
+	winningStance: string | null;
+	resolvedAt: number | null;
+	aiResolution: unknown;
+	resolutionMethod: string | null;
+	aiSignatureCount: number | null;
+	appealDeadline: number | null;
+	governanceJustification: string | null;
+	arguments: DebateArgumentRow[];
+};
+
+type UserDeliveryDTO = {
+	recipientKey?: string | null;
+	recipientName?: string | null;
+};
+
+const onchainId = (value: string | number | null | undefined): string =>
+	value == null ? '' : String(value);
 
 /**
  * Transform Convex debate row into store-compatible AIResolutionData.
  */
-function buildAIResolution(
-	dbDebate: {
-		ai_resolution: unknown;
-		ai_signature_count: number | null;
-		ai_panel_consensus: number | null;
-		resolution_method: string | null;
-		appeal_deadline: number | null;
-		governance_justification: string | null;
-		arguments: Array<{
-			argument_index: number;
-			ai_scores: unknown;
-			ai_weighted: number | null;
-			final_score: number | null;
-			model_agreement: number | null;
-			weighted_score: unknown;
-		}>;
-	}
-): AIResolutionData {
-	const blob = (dbDebate.ai_resolution ?? {}) as Record<string, unknown>;
+function buildAIResolution(dbDebate: DebateRow): AIResolutionData {
+	const blob = (dbDebate.aiResolution ?? {}) as Record<string, unknown>;
 	const models = (blob.models ?? []) as Array<unknown>;
 
-	const scoredArgs = dbDebate.arguments.filter((a) => a.ai_scores != null);
-	const maxWeightedScore = Math.max(...scoredArgs.map((a) => Number(a.weighted_score ?? 0)), 1);
+	const scoredArgs = dbDebate.arguments.filter((a) => a.aiScores != null);
+	const maxWeightedScore = Math.max(...scoredArgs.map((a) => a.weightedScore), 1);
 
 	const argumentScores: ArgumentAIScore[] = scoredArgs
 		.map((a) => {
-			const dims = (a.ai_scores ?? {}) as Record<string, number>;
+			const dims = (a.aiScores ?? {}) as Record<string, number>;
 			return {
-				argumentIndex: a.argument_index,
+				argumentIndex: a.argumentIndex,
 				dimensions: {
 					reasoning: dims.reasoning ?? 0,
 					accuracy: dims.accuracy ?? 0,
@@ -46,10 +80,10 @@ function buildAIResolution(
 					constructiveness: dims.constructiveness ?? 0,
 					feasibility: dims.feasibility ?? 0
 				},
-				weightedAIScore: a.ai_weighted ?? 0,
-				communityScore: Math.round((Number(a.weighted_score ?? 0) / maxWeightedScore) * 10000),
-				finalScore: a.final_score ?? 0,
-				modelAgreement: a.model_agreement ?? 0
+				weightedAIScore: a.aiWeighted ?? 0,
+				communityScore: Math.round((a.weightedScore / maxWeightedScore) * 10000),
+				finalScore: a.finalScore ?? 0,
+				modelAgreement: a.modelAgreement ?? 0
 			};
 		});
 
@@ -61,16 +95,16 @@ function buildAIResolution(
 		argumentScores,
 		alphaWeight: 4000,
 		modelCount: minerCount ?? (models.length || 5),
-		signatureCount: dbDebate.ai_signature_count ?? 0,
+		signatureCount: dbDebate.aiSignatureCount ?? 0,
 		quorumRequired: 4,
-		resolutionMethod: (dbDebate.resolution_method as AIResolutionData['resolutionMethod']) ?? 'ai_community',
+		resolutionMethod: (dbDebate.resolutionMethod as AIResolutionData['resolutionMethod']) ?? 'ai_community',
 		evaluatedAt: (blob.evaluatedAt as string) ?? undefined,
 		source: source as AIResolutionData['source'],
 		minerCount,
 		minerEvaluations: rawMinerEvals,
-		appealDeadline: dbDebate.appeal_deadline ? new Date(dbDebate.appeal_deadline).toISOString() : undefined,
+		appealDeadline: dbDebate.appealDeadline ? new Date(dbDebate.appealDeadline).toISOString() : undefined,
 		hasAppeal: false,
-		governanceJustification: dbDebate.governance_justification ?? undefined
+		governanceJustification: dbDebate.governanceJustification ?? undefined
 	};
 }
 
@@ -123,7 +157,7 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 
 		// User representative (for district code) via Convex
 		userId && userDistrictHash
-			? serverQuery(api.templatePage.getUserDmRelation, { userId })
+			? serverQuery(api.templatePage.getUserDmRelation, { userId: userId as Id<'users'> })
 					.catch(() => null)
 			: Promise.resolve(null)
 	]);
@@ -142,53 +176,48 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 	const positionCounts = positionCountsResult;
 
 	const existingPosition = existingPositionResult
-		? { stance: (existingPositionResult as any).stance, registrationId: (existingPositionResult as any)._id }
+		? { stance: existingPositionResult.stance, registrationId: existingPositionResult._id }
 		: null;
 
 	// Build debate object (same transform logic as original)
 	let debate = null;
 	if (debateResult) {
-		const dbDebate = debateResult as any;
-		const aiResolution = dbDebate.ai_resolution ? buildAIResolution(dbDebate) : undefined;
+		const dbDebate = debateResult as DebateRow;
+		const aiResolution = dbDebate.aiResolution ? buildAIResolution(dbDebate) : undefined;
 
 		debate = {
-			id: dbDebate._id ?? dbDebate.id,
-			debateIdOnchain: dbDebate.debateIdOnchain ?? dbDebate.debate_id_onchain,
-			templateId: dbDebate.templateId ?? dbDebate.template_id,
-			propositionText: dbDebate.propositionText ?? dbDebate.proposition_text,
-			propositionHash: dbDebate.propositionHash ?? dbDebate.proposition_hash,
-			actionDomain: dbDebate.actionDomain ?? dbDebate.action_domain,
+			id: dbDebate._id,
+			debateIdOnchain: onchainId(dbDebate.debateIdOnchain),
+			templateId: dbDebate.templateId,
+			propositionText: dbDebate.propositionText,
+			propositionHash: dbDebate.propositionHash,
+			actionDomain: dbDebate.actionDomain,
 			deadline: typeof dbDebate.deadline === 'number' ? new Date(dbDebate.deadline).toISOString() : dbDebate.deadline,
-			jurisdictionSize: dbDebate.jurisdictionSize ?? dbDebate.jurisdiction_size,
-			status: dbDebate.status as
-				| 'active'
-				| 'resolving'
-				| 'resolved'
-				| 'awaiting_governance'
-				| 'under_appeal',
-			argumentCount: dbDebate.argumentCount ?? dbDebate.argument_count,
-			uniqueParticipants: dbDebate.uniqueParticipants ?? dbDebate.unique_participants,
-			totalStake: String(dbDebate.totalStake ?? dbDebate.total_stake),
-			winningArgumentIndex: dbDebate.winningArgumentIndex ?? dbDebate.winning_argument_index,
-			winningStance: dbDebate.winningStance ?? dbDebate.winning_stance,
-			resolvedAt: dbDebate.resolvedAt ? new Date(dbDebate.resolvedAt).toISOString() : (dbDebate.resolved_at?.toISOString?.() ?? null),
+			jurisdictionSize: dbDebate.jurisdictionSize,
+			status: dbDebate.status,
+			argumentCount: dbDebate.argumentCount,
+			uniqueParticipants: dbDebate.uniqueParticipants,
+			totalStake: String(dbDebate.totalStake),
+			winningArgumentIndex: dbDebate.winningArgumentIndex,
+			winningStance: dbDebate.winningStance,
+			resolvedAt: dbDebate.resolvedAt ? new Date(dbDebate.resolvedAt).toISOString() : null,
 			aiResolution,
-			arguments: (dbDebate.arguments ?? []).map((arg: any) => ({
-				id: arg._id ?? arg.id,
-				argumentIndex: arg.argumentIndex ?? arg.argument_index,
+			arguments: dbDebate.arguments.map((arg) => ({
+				id: arg._id,
+				argumentIndex: arg.argumentIndex,
 				stance: arg.stance,
 				body: arg.body,
-				amendmentText: arg.amendmentText ?? arg.amendment_text,
-				stakeAmount: String(arg.stakeAmount ?? arg.stake_amount),
-				engagementTier: arg.engagementTier ?? arg.engagement_tier,
-				weightedScore: String(arg.weightedScore ?? arg.weighted_score),
-				totalStake: String(arg.totalStake ?? arg.total_stake),
-				coSignCount: arg.coSignCount ?? arg.co_sign_count,
-				createdAt: typeof arg.createdAt === 'number' ? new Date(arg.createdAt).toISOString() : (arg.created_at?.toISOString?.() ?? new Date(arg._creationTime ?? 0).toISOString()),
-				aiScore: (arg.aiScores ?? arg.ai_scores) as Record<string, number> | undefined,
-				weightedAIScore: arg.aiWeighted ?? arg.ai_weighted ?? undefined,
-				finalScore: arg.finalScore ?? arg.final_score ?? undefined,
-				modelAgreement: arg.modelAgreement ?? arg.model_agreement ?? undefined
+				amendmentText: arg.amendmentText,
+				stakeAmount: String(arg.stakeAmount),
+				engagementTier: arg.engagementTier,
+				weightedScore: String(arg.weightedScore),
+				totalStake: String(arg.totalStake),
+				coSignCount: arg.coSignCount,
+				createdAt: new Date(arg._creationTime).toISOString(),
+				aiScore: arg.aiScores as Record<string, number> | undefined,
+				weightedAIScore: arg.aiWeighted ?? undefined,
+				finalScore: arg.finalScore ?? undefined,
+				modelAgreement: arg.modelAgreement ?? undefined
 			}))
 		};
 	}
@@ -210,7 +239,11 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 							identityCommitment: identityCommitment ?? undefined,
 							deliveryMethod: 'email'
 						})
-						.then((deliveries: any[]) => deliveries.map((d) => d.recipientKey ?? d.recipientName))
+						.then((deliveries: UserDeliveryDTO[]) =>
+							deliveries
+								.map((delivery) => delivery.recipientKey ?? delivery.recipientName)
+								.filter((recipient): recipient is string => Boolean(recipient))
+						)
 						.catch(() => []);
 			} catch {
 				return Promise.resolve([]);
@@ -259,8 +292,7 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 			email: locals.user.email,
 			avatar: locals.user.avatar,
 			trust_tier: locals.user.trust_tier,
-			is_verified: locals.user.is_verified,
-			identity_commitment: locals.user.identity_commitment
+			is_verified: locals.user.is_verified
 		} : null,
 		template: parentData.template,
 		channel: parentData.channel,

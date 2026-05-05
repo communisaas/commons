@@ -166,22 +166,23 @@
 				<strong class="text-text-primary">Address fields — mDL path:</strong> when you
 				verify with a state-issued mobile driver's license, your wallet shares postal
 				code, city, and state with our servers. Those fields are used to derive your
-				congressional district and are discarded within seconds, before the response
-				returns. We do not log them, do not persist them in databases, and do not
-				back them up.
+				congressional district and may be represented afterward as encrypted
+				ground-vault material and disclosed district/cell metadata. We do not store
+				identity documents or keep plaintext address fields at rest.
 			</li>
 			<li>
 				<strong class="text-text-primary">Address fields — Shadow Atlas path:</strong>
-				your full street address never leaves your device. Your browser computes a
-				cryptographic commitment to your district. Approximate coordinates transit our
-				servers briefly (under 5 seconds for typical requests) so we can confirm the
-				district mapping is authentic, then are discarded. We do not log raw coordinates.
+				your browser computes a cryptographic commitment to your district. Approximate
+				coordinates may transit our servers briefly so we can confirm the district mapping
+				is authentic. After successful attestation, the address can be saved as encrypted
+				ground-vault material for future delivery.
 			</li>
 			<li>
 				<strong class="text-text-primary">What we persist:</strong> a one-way district
-				hash, your account email (for sign-in and anti-sybil), engagement-tier
-				counters, the actions you take through the platform, and operational logs
-				stripped of identifying address fields.
+				hash, disclosed district/cell metadata, encrypted ground-vault material, your
+				account email (for sign-in and anti-sybil), engagement-tier counters, the actions
+				you take through the platform, and operational logs stripped of plaintext address
+				fields.
 			</li>
 			<li>
 				<strong class="text-text-primary">Hardware-isolated processing (TEE / enclave)</strong>

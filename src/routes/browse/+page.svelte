@@ -5,19 +5,28 @@
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import type { PageData } from './$types';
 
+	type BrowseTemplate = {
+		id: string;
+		slug: string;
+		title: string;
+		description: string;
+		domain: string;
+	};
+
 	// Load data from server
 	let { data }: { data: PageData } = $props();
+	const templates = $derived((data.templates ?? []) as BrowseTemplate[]);
 
 	// State management with Svelte 5 runes
 	let searchQuery = $state<string>('');
 	let selectedDomain = $state<string>('all');
 
 	// Available domains derived from server data
-	const domains = $derived(['all', ...new Set(data.templates.map((t) => t.domain).filter(Boolean))]);
+	const domains = $derived(['all', ...new Set(templates.map((t) => t.domain).filter(Boolean))]);
 
 	// Filtered templates based on search and domain
 	const filteredTemplates = $derived(
-		data.templates.filter((template) => {
+		templates.filter((template) => {
 			// Domain filter
 			if (selectedDomain !== 'all' && template.domain !== selectedDomain) {
 				return false;

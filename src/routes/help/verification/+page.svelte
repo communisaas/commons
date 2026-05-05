@@ -63,7 +63,8 @@
 	<h1 class="text-2xl font-bold text-slate-900 sm:text-3xl">Identity Verification</h1>
 	<p class="mt-3 text-base text-slate-600 leading-relaxed">
 		Commons verifies your identity using your state-issued mobile driver's license (mDL).
-		This confirms you're a real constituent in your district without storing your personal information.
+		This confirms you're a real constituent in your district while keeping plaintext address
+		custody bounded to verification and official delivery.
 	</p>
 
 	<!-- How it works -->
@@ -94,7 +95,7 @@
 				<span class="mt-0.5 block h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>
 				Your wallet shares postal code, city, state, birth date, and document number.
 				Those fields transit our servers briefly to derive your congressional district
-				and a private identity commitment, then are discarded. We never persist them.
+				and a private identity commitment. We do not store identity documents.
 			</li>
 			<li class="flex items-start gap-2 text-sm text-slate-700">
 				<span class="mt-0.5 block h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>
@@ -102,7 +103,8 @@
 			</li>
 			<li class="flex items-start gap-2 text-sm text-slate-700">
 				<span class="mt-0.5 block h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>
-				Only your district (not your street address) is recorded
+				Commons may store encrypted ground-vault material plus disclosed district/cell
+				metadata, not plaintext address fields at rest
 			</li>
 			<li class="flex items-start gap-2 text-sm text-slate-700">
 				<span class="mt-0.5 block h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>

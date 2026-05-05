@@ -5,6 +5,14 @@ import type { PageServerLoad } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function asNumberOrNull(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw redirect(302, '/auth/login');
@@ -25,15 +33,15 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 			title: c.title
 		})),
 		calls: convexCalls.map((c: Record<string, unknown>) => ({
-			id: c._id,
-			supporterName: c.supporterName ?? 'Unknown',
-			targetPhone: c.targetPhone,
-			targetName: c.targetName,
-			status: c.status,
-			duration: c.duration,
-			campaignId: c.campaignId,
+			id: asString(c._id),
+			supporterName: asString(c.supporterName, 'Unknown'),
+			targetPhone: asString(c.targetPhone),
+			targetName: typeof c.targetName === 'string' ? c.targetName : null,
+			status: asString(c.status, 'initiated'),
+			duration: asNumberOrNull(c.duration),
+			campaignId: typeof c.campaignId === 'string' ? c.campaignId : null,
 			createdAt: typeof c._creationTime === 'number'
-				? new Date(c._creationTime as number).toISOString()
+				? new Date(c._creationTime).toISOString()
 				: String(c._creationTime),
 			completedAt: c.completedAt
 				? new Date(c.completedAt as number).toISOString()

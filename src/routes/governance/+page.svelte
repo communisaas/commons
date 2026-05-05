@@ -328,7 +328,7 @@
 										{#if arg.aiScores}
 											<div class="mt-3 ml-8 space-y-3">
 												<AIScoreBreakdown
-													scores={arg.aiScores as DimensionScores}
+													scores={arg.aiScores as unknown as DimensionScores}
 												/>
 
 												<!-- Miner evidence if available -->
@@ -341,7 +341,7 @@
 															<MinerLens
 																argumentIndex={arg.argumentIndex}
 																minerEvaluations={relevantMiners}
-																medianScores={arg.aiScores as DimensionScores}
+																medianScores={arg.aiScores as unknown as DimensionScores}
 															/>
 															<EvidenceChain
 																argumentIndex={arg.argumentIndex}

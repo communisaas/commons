@@ -1,7 +1,31 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 
-	let { data }: { data: PageData } = $props();
+	type DecisionMaker = {
+		id: string;
+		name: string;
+		photoUrl?: string | null;
+		party: string | null;
+		title?: string | null;
+		jurisdiction: string | null;
+		district: string | null;
+		active?: boolean;
+	};
+
+	type FollowedDecisionMaker = {
+		id: string;
+		reason: string;
+		alertsEnabled?: boolean;
+		followedAt?: string;
+		decisionMaker: DecisionMaker;
+	};
+
+	type ViewData = Omit<PageData, 'followed' | 'discover'> & {
+		followed: FollowedDecisionMaker[];
+		discover: DecisionMaker[];
+	};
+
+	let { data }: { data: ViewData } = $props();
 
 	// Search / filter state
 	let searchQuery = $state('');

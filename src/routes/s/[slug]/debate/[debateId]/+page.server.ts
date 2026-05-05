@@ -3,12 +3,18 @@ import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/st
 import { error } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
+
+const onchainId = (value: string | number | null | undefined): string =>
+	value == null ? '' : String(value);
 
 export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	const { debateId } = params;
 	const parentData = await parent();
 
-	const result = await serverQuery(api.debates.getPublicDetail, { debateId });
+	const result = await serverQuery(api.debates.getPublicDetail, {
+		debateId: debateId as Id<'debates'>
+	});
 
 	if (!result) throw error(404, 'Debate not found');
 
@@ -21,18 +27,16 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	const aiBlob = result.aiResolution as Record<string, unknown> | null;
 	let aiResolution: AIResolutionData | undefined;
 	if (aiBlob) {
-		const scoredArgs = result.arguments.filter(
-			(a: Record<string, unknown>) => a.aiScores != null
-		);
+		const scoredArgs = result.arguments.filter((argument) => argument.aiScores != null);
 		const maxWeightedScore = Math.max(
-			...scoredArgs.map((a: Record<string, unknown>) => Number(a.weightedScore ?? 0)),
+			...scoredArgs.map((argument) => argument.weightedScore),
 			1
 		);
 		const argumentScores: ArgumentAIScore[] = scoredArgs.map(
-			(a: Record<string, unknown>) => {
-				const dims = (a.aiScores ?? {}) as Record<string, number>;
+			(argument) => {
+				const dims = (argument.aiScores ?? {}) as Record<string, number>;
 				return {
-					argumentIndex: a.argumentIndex as number,
+					argumentIndex: argument.argumentIndex,
 					dimensions: {
 						reasoning: dims.reasoning ?? 0,
 						accuracy: dims.accuracy ?? 0,
@@ -40,12 +44,12 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 						constructiveness: dims.constructiveness ?? 0,
 						feasibility: dims.feasibility ?? 0
 					},
-					weightedAIScore: (a.aiWeighted as number) ?? 0,
+					weightedAIScore: argument.aiWeighted ?? 0,
 					communityScore: Math.round(
-						(Number(a.weightedScore ?? 0) / maxWeightedScore) * 10000
+						(argument.weightedScore / maxWeightedScore) * 10000
 					),
-					finalScore: (a.finalScore as number) ?? 0,
-					modelAgreement: (a.modelAgreement as number) ?? 0
+					finalScore: argument.finalScore ?? 0,
+					modelAgreement: argument.modelAgreement ?? 0
 				};
 			}
 		);
@@ -89,7 +93,7 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 		channel: parentData.channel,
 		debate: {
 			id: result._id,
-			debateIdOnchain: result.debateIdOnchain,
+			debateIdOnchain: onchainId(result.debateIdOnchain),
 			templateId: result.templateId,
 			propositionText: result.propositionText,
 			propositionHash: result.propositionHash,
@@ -106,7 +110,7 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 				? new Date(result.resolvedAt as number).toISOString()
 				: undefined,
 			aiResolution,
-			arguments: result.arguments.map((arg: Record<string, unknown>) => ({
+			arguments: result.arguments.map((arg) => ({
 				id: arg._id,
 				argumentIndex: arg.argumentIndex,
 				stance: arg.stance,
@@ -117,11 +121,11 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 				weightedScore: String(arg.weightedScore),
 				totalStake: String(arg.totalStake),
 				coSignCount: arg.coSignCount,
-				createdAt: new Date(arg._creationTime as number).toISOString(),
+				createdAt: new Date(arg._creationTime).toISOString(),
 				aiScore: arg.aiScores as Record<string, number> | undefined,
-				weightedAIScore: (arg.aiWeighted as number) ?? undefined,
-				finalScore: (arg.finalScore as number) ?? undefined,
-				modelAgreement: (arg.modelAgreement as number) ?? undefined
+				weightedAIScore: arg.aiWeighted ?? undefined,
+				finalScore: arg.finalScore ?? undefined,
+				modelAgreement: arg.modelAgreement ?? undefined
 			}))
 		}
 	};

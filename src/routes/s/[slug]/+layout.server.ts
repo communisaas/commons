@@ -22,7 +22,7 @@ export const load: LayoutServerLoad = async ({ params, request }) => {
 		throw error(404, 'Template not found');
 	}
 
-	// Gate CWC templates behind CONGRESSIONAL feature flag
+	// Congressional delivery is implemented but not launched while the flag is false.
 	if (!FEATURES.CONGRESSIONAL && convexTemplate.deliveryMethod === 'cwc') {
 		throw error(404, 'Template not found');
 	}

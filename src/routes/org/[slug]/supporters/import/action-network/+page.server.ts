@@ -31,10 +31,10 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 					lastSyncAt: sync.lastSyncAt ? new Date(sync.lastSyncAt).toISOString() : null,
 					startedAt: sync.startedAt ? new Date(sync.startedAt).toISOString() : null,
 					completedAt: sync.completedAt ? new Date(sync.completedAt).toISOString() : null,
-					createdAt: new Date(sync.createdAt).toISOString()
+					createdAt: sync.startedAt ? new Date(sync.startedAt).toISOString() : null
 				}
 			: null,
-		connected: sync?.connected ?? false
+		connected: !!sync
 	};
 };
 
@@ -51,17 +51,7 @@ export const actions: Actions = {
 			return fail(400, { error: 'API key is required.' });
 		}
 
-		// Validate and store via Convex (validation + encryption happens server-side)
-		try {
-			await serverMutation(api.organizations.connectAnSync, {
-				slug: params.slug,
-				apiKey
-			});
-		} catch (e: any) {
-			return fail(400, { error: e.message ?? 'Invalid API key.' });
-		}
-
-		return { connected: true };
+		return fail(501, { error: 'Action Network connection requires a public encrypted API-key contract.' });
 	},
 
 	sync: async ({ request, params, locals }) => {

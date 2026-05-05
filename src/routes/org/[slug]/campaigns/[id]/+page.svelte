@@ -12,10 +12,22 @@
 	import DebateSettlement from '$lib/components/debate/DebateSettlement.svelte';
 	import type { PageData, ActionData } from './$types';
 
+	type CampaignView = PageData['campaign'] & {
+		districtCode?: string;
+		districtCentroid?: { lat: number; lng: number };
+	};
+
 	let { data, form }: { data: PageData; form: ActionData } = $props();
+	const campaign = $derived(data.campaign as CampaignView);
 
 	// Live verification packet — starts from server data, updates via SSE
-	let packet = $state(data.packet);
+	let packetOverride = $state<PageData['packet'] | undefined>();
+	const packet = $derived(packetOverride === undefined ? data.packet : packetOverride);
+
+	$effect(() => {
+		data.campaign.id;
+		packetOverride = undefined;
+	});
 
 	// SSE connection for live packet updates on active campaigns
 	$effect(() => {
@@ -27,7 +39,7 @@
 
 		es.addEventListener('packet', (e: MessageEvent) => {
 			try {
-				packet = JSON.parse(e.data);
+				packetOverride = JSON.parse(e.data);
 			} catch {
 				// Invalid JSON, skip
 			}
@@ -41,7 +53,13 @@
 	});
 
 	// Live debate data — starts from server, updates via SSE
-	let liveDebate = $state(data.debate);
+	let liveDebateOverride = $state<PageData['debate'] | undefined>();
+	const liveDebate = $derived(liveDebateOverride === undefined ? data.debate : liveDebateOverride);
+
+	$effect(() => {
+		data.debate?.id;
+		liveDebateOverride = undefined;
+	});
 
 	// Debate SSE connection for real-time updates
 	$effect(() => {
@@ -56,7 +74,7 @@
 			try {
 				const d = JSON.parse(e.data);
 				if (liveDebate && typeof d.argumentCount === 'number') {
-					liveDebate = { ...liveDebate, argumentCount: d.argumentCount, uniqueParticipants: d.uniqueParticipants ?? liveDebate.uniqueParticipants };
+					liveDebateOverride = { ...liveDebate, argumentCount: d.argumentCount, uniqueParticipants: d.uniqueParticipants ?? liveDebate.uniqueParticipants };
 				}
 			} catch { /* skip */ }
 		});
@@ -65,7 +83,7 @@
 			try {
 				const d = JSON.parse(e.data);
 				if (liveDebate && typeof d.uniqueParticipants === 'number') {
-					liveDebate = { ...liveDebate, uniqueParticipants: d.uniqueParticipants };
+					liveDebateOverride = { ...liveDebate, uniqueParticipants: d.uniqueParticipants };
 				}
 			} catch { /* skip */ }
 		});
@@ -74,7 +92,7 @@
 			try {
 				const d = JSON.parse(e.data);
 				if (liveDebate) {
-					liveDebate = { ...liveDebate, status: 'resolved', winningStance: d.winningStance ?? liveDebate.winningStance };
+					liveDebateOverride = { ...liveDebate, status: 'resolved', winningStance: d.winningStance ?? liveDebate.winningStance };
 				}
 			} catch { /* skip */ }
 		});
@@ -85,7 +103,7 @@
 				try {
 					const d = JSON.parse(e.data);
 					if (liveDebate) {
-						liveDebate = { ...liveDebate, status: 'resolved', winningStance: d.winningStance ?? liveDebate.winningStance };
+						liveDebateOverride = { ...liveDebate, status: 'resolved', winningStance: d.winningStance ?? liveDebate.winningStance };
 					}
 				} catch { /* skip */ }
 			});
@@ -98,9 +116,12 @@
 		return () => es.close();
 	});
 
-	let debateEnabled = $state(data.campaign.debateEnabled);
-	let targetCountry = $state(data.campaign.targetCountry ?? 'US');
-	let targetJurisdiction = $state(data.campaign.targetJurisdiction ?? '');
+	let debateEnabledOverride = $state<boolean | undefined>();
+	let targetCountryOverride = $state<string | undefined>();
+	let targetJurisdictionOverride = $state<string | undefined>();
+	const debateEnabled = $derived(debateEnabledOverride ?? data.campaign.debateEnabled);
+	const targetCountry = $derived(targetCountryOverride ?? data.campaign.targetCountry ?? 'US');
+	const targetJurisdiction = $derived(targetJurisdictionOverride ?? data.campaign.targetJurisdiction ?? '');
 	let embedOpen = $state(false);
 	let embedCopied = $state(false);
 
@@ -284,8 +305,8 @@
 	<!-- HERO: Verification Packet — the proof this campaign has assembled -->
 	<VerificationPacket
 		packet={packet}
-		districtCode={data.campaign.districtCode}
-		districtCentroid={data.campaign.districtCentroid}
+		districtCode={campaign.districtCode}
+		districtCentroid={campaign.districtCentroid}
 		interactive
 	>
 		{#snippet actions()}
@@ -357,7 +378,7 @@
 					canSettle={canEdit}
 					onSettled={(result) => {
 						if (liveDebate) {
-							liveDebate = { ...liveDebate, status: 'resolved', winningStance: result.outcome.toUpperCase() };
+							liveDebateOverride = { ...liveDebate, status: 'resolved', winningStance: result.outcome.toUpperCase() };
 						}
 					}}
 				/>
@@ -607,7 +628,7 @@
 								<label for="targetCountry" class="block text-sm font-medium text-text-secondary mb-1.5">Country</label>
 								<input type="hidden" name="targetCountry" value={targetCountry} />
 								{#if canEdit && isEditable}
-									<CountrySelector value={targetCountry} onchange={(c) => { targetCountry = c; targetJurisdiction = ''; }} />
+									<CountrySelector value={targetCountry} onchange={(c) => { targetCountryOverride = c; targetJurisdictionOverride = ''; }} />
 								{:else}
 									<p class="py-2 text-sm text-text-tertiary">{targetCountry}</p>
 								{/if}
@@ -616,7 +637,7 @@
 								<label for="targetJurisdiction" class="block text-sm font-medium text-text-secondary mb-1.5">Jurisdiction</label>
 								<input type="hidden" name="targetJurisdiction" value={targetJurisdiction} />
 								{#if canEdit && isEditable}
-									<JurisdictionPicker value={targetJurisdiction || null} country={targetCountry} onchange={(j) => { targetJurisdiction = j; }} />
+									<JurisdictionPicker value={targetJurisdiction || null} country={targetCountry} onchange={(j) => { targetJurisdictionOverride = j; }} />
 								{:else}
 									<p class="py-2 text-sm text-text-tertiary">{targetJurisdiction || 'Not set'}</p>
 								{/if}
@@ -643,7 +664,8 @@
 									name="debateEnabled"
 									class="sr-only peer"
 									disabled={!canEdit || !isEditable}
-									bind:checked={debateEnabled}
+									checked={debateEnabled}
+									onchange={(e) => { debateEnabledOverride = (e.currentTarget as HTMLInputElement).checked; }}
 								/>
 								<div class="w-9 h-5 bg-surface-border-strong peer-focus:ring-2 peer-focus:ring-teal-500/40 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-tertiary after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-teal-600 peer-checked:after:bg-white disabled:opacity-50"></div>
 							</label>
