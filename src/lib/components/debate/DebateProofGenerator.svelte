@@ -53,14 +53,35 @@
 	let proofState: ProofState = $state({ status: 'idle' });
 	let educationIndex = $state(0);
 
+	// H2 — pre-send boundary-cell honesty banner state. Shared semantics with
+	// ProofGenerator.svelte: NON-modal banner, banner gate also blocks
+	// autoStart so boundary users don't sail past the disclosure.
+	let cellStraddles = $state<boolean>(false);
+	let h2BoundaryHelpOpen = $state(false);
+
 	const educationalMessages = [
 		{ icon: '✓', text: 'Your argument is anonymous but verified' },
 		{ icon: '✓', text: 'Only constituents from this district can participate' },
 		{ icon: '✓', text: 'Your stake is locked until resolution' }
 	];
 
-	onMount(() => {
-		if (autoStart) {
+	onMount(async () => {
+		// H2 — read cellStraddles before honoring autoStart. Same contract as
+		// ProofGenerator: boundary users always see idle state with the banner.
+		let resolvedCellStraddles = false;
+		try {
+			const { getSessionCredential } = await import(
+				'$lib/core/identity/session-credentials'
+			);
+			const session = await getSessionCredential(userId);
+			if (session && typeof session.cellStraddles === 'boolean') {
+				resolvedCellStraddles = session.cellStraddles;
+			}
+		} catch {
+			// Silent — banner-absent is the safe default.
+		}
+		cellStraddles = resolvedCellStraddles;
+		if (autoStart && !resolvedCellStraddles) {
 			generateProof();
 		}
 	});
@@ -158,9 +179,45 @@
 
 <div class="space-y-4">
 	{#if proofState.status === 'idle'}
-		<div class="text-center py-4">
+		<div class="text-center py-4 space-y-3">
 			<ShieldCheck class="h-8 w-8 text-indigo-400 mx-auto mb-2" />
 			<p class="text-sm text-slate-600">Ready to generate your anonymous proof</p>
+			{#if cellStraddles}
+				<!-- H2 — boundary-cell honesty banner (NON-modal); same shape as
+				     ProofGenerator. Mirrors the population-number copy so the user
+				     sees consistent honesty regardless of which proof surface they
+				     reach. -->
+				<aside
+					class="rounded-lg border border-amber-300 bg-amber-50 p-3 text-left text-xs text-amber-900"
+					aria-label="Boundary-cell debate notice"
+				>
+					<p class="font-medium">Your address sits on a district boundary.</p>
+					<p class="mt-1 leading-relaxed">
+						About <strong>~16% of California census blocks</strong> are in cells
+						that cross congressional districts (G3 measurement; other states
+						pending). Your debate participation routes through the district your
+						credential bound to at registration, not necessarily the polygon-hit
+						district.
+					</p>
+					<button
+						type="button"
+						class="mt-2 underline decoration-dotted underline-offset-2 hover:no-underline"
+						aria-expanded={h2BoundaryHelpOpen}
+						onclick={() => (h2BoundaryHelpOpen = !h2BoundaryHelpOpen)}
+					>
+						{h2BoundaryHelpOpen ? 'Hide details' : 'Why does this happen?'}
+					</button>
+					{#if h2BoundaryHelpOpen}
+						<p class="mt-2 leading-relaxed">
+							Cells are assigned a primary district by their centroid; addresses
+							inside a boundary cell may sit on either side of the line. The
+							proof commits to the cell, so debate routing follows the centroid
+							rule. Re-verify after moving and your credential rebinds to the
+							new cell.
+						</p>
+					{/if}
+				</aside>
+			{/if}
 			<button
 				class="mt-3 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg
 					hover:bg-indigo-700 transition-colors"

@@ -65,19 +65,60 @@
 	let proofState: ProofGenerationState = $state({ status: 'idle' });
 	let educationIndex = $state(0);
 
+	// H2 — pre-send honesty banner state (NON-modal). Loaded from the session
+	// credential during onMount so the user sees the divergence BEFORE the
+	// cryptographic commitment is generated. H0r CRITICAL: this is a banner,
+	// NOT a blocking modal — gating send on cellStraddles would itself be the
+	// G2 reversal we explicitly avoided. Modal escalation reserved for an
+	// affirmative "tell me more" click only.
+	let cellStraddles = $state<boolean>(false);
+	let h2BoundaryHelpOpen = $state(false);
+
 	// Educational messages that cycle during proof generation
 	const educationalMessages = [
-		{ icon: '✓', text: 'Your exact address stays private' },
-		{
-			icon: '✓',
-			text: 'Congressional staff see: "Verified constituent from your district"'
-		},
-		{ icon: '✓', text: 'Building your civic reputation on-chain' }
+		{ icon: '✓', text: 'Your district proof stays separate from your delivery address' },
+		{ icon: '✓', text: 'Your address is disclosed only where official delivery requires it' },
+		{ icon: '✓', text: 'Preparing one delivery witness for this message' }
 	];
 
-	// Auto-start proof generation if requested (skips idle confirmation step)
-	onMount(() => {
-		if (autoStart) {
+	function hasCompleteDeliveryAddress(): boolean {
+		return Boolean(
+			deliveryAddress?.name &&
+				deliveryAddress.email &&
+				deliveryAddress.street &&
+				deliveryAddress.city &&
+				deliveryAddress.state &&
+				deliveryAddress.zip
+		);
+	}
+
+	// Auto-start proof generation if requested (skips idle confirmation step).
+	//
+	// H2r — when cellStraddles=true, we MUST land on the idle state so the
+	// banner is visible before the cryptographic commitment, even if the
+	// parent passed autoStart=true (the parent's "they confirmed already"
+	// assumption misses the boundary disclosure). Read the session credential
+	// FIRST, then only autoStart if no boundary divergence exists.
+	onMount(async () => {
+		let resolvedCellStraddles = false;
+		try {
+			const { getSessionCredential } = await import(
+				'$lib/core/identity/session-credentials'
+			);
+			const session = await getSessionCredential(userId);
+			if (session && typeof session.cellStraddles === 'boolean') {
+				resolvedCellStraddles = session.cellStraddles;
+			}
+		} catch {
+			// Silent — banner-absent is the safe default; resolvedCellStraddles
+			// stays false and the legacy autoStart behavior preserves liveness.
+		}
+		cellStraddles = resolvedCellStraddles;
+		// Only autoStart when there is NO boundary disclosure to show. Boundary
+		// users get the idle state with the banner; their click on "Send to
+		// Representative" then starts the proof, exactly the same code path,
+		// just one extra honest beat.
+		if (autoStart && !resolvedCellStraddles) {
 			generateAndSubmit();
 		}
 	});
@@ -97,6 +138,20 @@
 	 */
 	async function generateAndSubmit() {
 		try {
+			if (!hasCompleteDeliveryAddress()) {
+				proofState = {
+					status: 'error',
+					message:
+						'Official delivery needs a readable address on this device. Re-enter your address before sending.',
+					recoverable: true,
+					retryLabel: 'Enter Address',
+					retryAction: () => {
+						onreverify?.();
+					}
+				};
+				return;
+			}
+
 			// Step 1: Load session credential from IndexedDB
 			proofState = { status: 'loading-credential' };
 
@@ -299,6 +354,9 @@
 				engagementTier: credential.engagementTier ?? 0,
 				userSecret: credential.userSecret!,
 				cellId: credential.cellId!,
+				// G7: include H3 encoding so TEE resolver can compare H3-to-H3.
+				// undefined for pre-G7 credentials; resolver handles the fallback.
+				h3Cell: credential.h3Cell,
 				registrationSalt: credential.registrationSalt!,
 				identityCommitment: credential.identityCommitment,
 				userPath: credential.merklePath,
@@ -430,24 +488,70 @@
 					</div>
 
 					<div class="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-						<p class="mb-2 font-medium">Privacy Protection:</p>
+						<p class="mb-2 font-medium">Delivery boundary:</p>
 						<ul class="space-y-1 text-sm">
 							<li class="flex items-start gap-2">
 								<span class="text-blue-600">✓</span>
-								<span>Your message will be delivered anonymously</span>
+								<span>Your proof confirms district residency without exposing your identity</span>
 							</li>
 							<li class="flex items-start gap-2">
 								<span class="text-blue-600">✓</span>
-								<span>Congressional staff will only see "Verified constituent"</span>
+								<span>Your address is used for the official government delivery request</span>
 							</li>
 							<li class="flex items-start gap-2">
 								<span class="text-blue-600">✓</span>
-								<span>Your reputation will be updated on-chain</span>
+								<span>The address remains encrypted until delivery processing</span>
 							</li>
 						</ul>
 					</div>
 				</div>
 			</div>
+
+			{#if cellStraddles}
+				<!-- H2 — pre-send boundary-cell honesty banner (NON-modal).
+				     Visible BEFORE the cryptographic commitment so the user can
+				     judge before they cannot un-sign. NOT a blocking gate: the
+				     send button below is unaffected, only the user's awareness
+				     is. Modal escalation only behind explicit "tell me more". -->
+				<aside
+					class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"
+					aria-label="Boundary-cell delivery notice"
+				>
+					<p class="mb-2 font-medium">Your address sits on a district boundary.</p>
+					<p class="leading-relaxed">
+						Atlas H3 cells are roughly 5&nbsp;km² hexagons. Your address falls in a
+						cell that crosses two congressional districts. By measurement,
+						<strong>~16% of California census blocks</strong>
+						are in such cells (G3 measurement; other states pending). Your
+						message will route to the district your credential bound to at
+						registration, which may differ from the district your street
+						address polygon-hits.
+					</p>
+					<button
+						type="button"
+						class="mt-2 underline decoration-dotted underline-offset-2 hover:no-underline"
+						aria-expanded={h2BoundaryHelpOpen}
+						onclick={() => (h2BoundaryHelpOpen = !h2BoundaryHelpOpen)}
+					>
+						{h2BoundaryHelpOpen ? 'Hide details' : 'Why does this happen?'}
+					</button>
+					{#if h2BoundaryHelpOpen}
+						<div class="mt-3 space-y-2 border-t border-amber-200 pt-3 text-xs leading-relaxed">
+							<p>
+								Cells are assigned a primary district by their centroid; your
+								address polygon may sit on the other side of the boundary line
+								within the same cell. The proof system commits to the cell, not
+								the polygon, so delivery follows the centroid rule.
+							</p>
+							<p>
+								If you believe this is wrong for your address, re-verify after
+								moving — the new credential will rebind to the new cell. Your
+								message will still send to the district below.
+							</p>
+						</div>
+					{/if}
+				</aside>
+			{/if}
 
 			<div class="flex gap-3">
 				<button
@@ -497,7 +601,7 @@
 			<ShieldCheck class="mb-4 h-12 w-12 animate-pulse text-blue-600" />
 			<h3 class="mb-2 text-lg font-semibold text-slate-900">Preparing secure delivery...</h3>
 			<p class="mb-6 text-sm text-slate-600">
-				Proving you're a constituent without revealing your identity
+				Proving district residency and preparing official delivery
 			</p>
 
 			<!-- Progress bar -->
@@ -528,14 +632,14 @@
 		<div class="flex flex-col items-center justify-center py-12 text-center">
 			<ShieldCheck class="mb-4 h-12 w-12 animate-pulse text-blue-600" />
 			<h3 class="mb-2 text-lg font-semibold text-slate-900">Encrypting delivery...</h3>
-			<p class="mb-6 text-sm text-slate-600">Securing your message with XChaCha20-Poly1305 encryption</p>
+			<p class="mb-6 text-sm text-slate-600">Encrypting the short-lived delivery witness</p>
 		</div>
 	{:else if proofState.status === 'submitting'}
 		<!-- Submitting to backend -->
 		<div class="flex flex-col items-center justify-center py-12 text-center">
 			<Loader2 class="mb-4 h-12 w-12 animate-spin text-blue-600" />
 			<h3 class="mb-2 text-lg font-semibold text-slate-900">Submitting...</h3>
-			<p class="text-sm text-slate-600">Sending to congressional offices</p>
+			<p class="text-sm text-slate-600">Submitting for official delivery</p>
 		</div>
 	{:else if proofState.status === 'complete'}
 		<!-- Success state (parent transitions away on auto-dispatch; user rarely sees this) -->
@@ -546,9 +650,9 @@
 				<Check class="h-10 w-10 text-white" strokeWidth={3} />
 			</div>
 
-			<h3 class="mb-2 text-2xl font-bold text-slate-900">Message Delivered!</h3>
+			<h3 class="mb-2 text-2xl font-bold text-slate-900">Message Submitted</h3>
 			<p class="mb-6 text-sm text-slate-600">
-				Your message was delivered anonymously to congressional offices
+				Your message is being processed for official delivery.
 			</p>
 
 			<div class="w-full max-w-md">
