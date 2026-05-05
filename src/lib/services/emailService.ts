@@ -18,6 +18,7 @@ import type { HeaderTemplate } from '$lib/types/any-replacements';
 import type { EmailServiceUser } from '$lib/types/user';
 import { extractRecipientEmails as _extractRecipientEmails } from '$lib/types/templateConfig';
 import { resolveTemplate } from '$lib/utils/templateResolver';
+import { formatTierEmailFooter } from '$lib/core/identity/tier-display';
 // Confirmation token generation is server-only (HMAC + JWT_SECRET).
 // Handled via server endpoint, not client-side mailto generation.
 
@@ -299,9 +300,18 @@ export function generateMailtoUrl(
 				`[Template: ${template.slug || template.id}]\n` +
 				`[From: ${user?.email || 'Guest'}]`;
 
-			// Proof footer — what the recipient sees
+			// Proof footer — what the recipient sees.
+			// H6 — use the tier-display helper so the email-body proof line is
+			// consistent with /v/[hash] and AttestationFooter. The helper takes
+			// `method` when available and produces an honest tier-class label;
+			// pre-H6 the email said "Verified sender · Gov ID" or "Verified
+			// resident" without distinguishing mDL vs civic_api, which over-
+			// claimed for self-reported users.
 			if (trustTier >= 2) {
-				const proofLine = trustTier >= 3 ? 'Verified sender · Gov ID' : 'Verified resident';
+				const proofLine = formatTierEmailFooter({
+					method: (user as { verificationMethod?: string })?.verificationMethod,
+					trustTier,
+				});
 				footer += `\n${proofLine}`;
 				if (user?.credentialHash) {
 					footer += `\ncommons.email/v/${user.credentialHash}`;
