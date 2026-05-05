@@ -11,6 +11,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$convex/_generated/api';
+import type { Id } from '$convex/_generated/dataModel';
 
 export const DELETE: RequestHandler = async ({ locals }) => {
 	if (!locals.user) {
@@ -18,7 +19,7 @@ export const DELETE: RequestHandler = async ({ locals }) => {
 	}
 
 	try {
-		await serverMutation(api.users.clearPasskey, { userId: locals.user.id });
+		await serverMutation(api.users.clearPasskey, { userId: locals.user.id as Id<'users'> });
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		if (msg.includes('No passkey registered')) {
