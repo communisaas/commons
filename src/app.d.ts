@@ -1,6 +1,40 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 // for information about these interfaces
 declare global {
+	interface KVNamespaceListKey<Metadata = unknown, Key extends string = string> {
+		name: Key;
+		expiration?: number;
+		metadata?: Metadata;
+	}
+
+	interface KVNamespaceListResult<Metadata = unknown, Key extends string = string> {
+		keys: KVNamespaceListKey<Metadata, Key>[];
+		list_complete: boolean;
+		cursor?: string;
+	}
+
+	interface KVNamespace<Key extends string = string> {
+		get(key: Key): Promise<string | null>;
+		get(key: Key, type: 'text'): Promise<string | null>;
+		get(key: Key, type: 'json'): Promise<unknown | null>;
+		get(key: Key, type: 'arrayBuffer'): Promise<ArrayBuffer | null>;
+		put(
+			key: Key,
+			value: string | ArrayBuffer | ArrayBufferView | ReadableStream,
+			options?: { expiration?: number; expirationTtl?: number; metadata?: unknown }
+		): Promise<void>;
+		delete(key: Key): Promise<void>;
+		list?(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<
+			KVNamespaceListResult<unknown, Key>
+		>;
+	}
+
+	interface KVNamespaceWithList<Key extends string = string> extends KVNamespace<Key> {
+		list(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<
+			KVNamespaceListResult<unknown, Key>
+		>;
+	}
+
 	namespace App {
 		interface Error {
 			message: string;
@@ -66,7 +100,7 @@ declare global {
 		interface Platform {
 			env?: {
 				DC_SESSION_KV?: KVNamespace;
-				REGISTRATION_RETRY_KV?: KVNamespace;
+				REGISTRATION_RETRY_KV?: KVNamespaceWithList;
 				REJECTION_MONITOR_KV?: KVNamespace;
 				VICAL_KV?: KVNamespace;
 				PACKET_CACHE_KV?: KVNamespace;

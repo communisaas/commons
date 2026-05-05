@@ -162,7 +162,12 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			createdAt: new Date(user._creationTime),
 			updatedAt: new Date(user.updatedAt)
 		};
-		event.locals.session = session;
+		event.locals.session = {
+			id: session.id as string,
+			userId: session.userId,
+			createdAt: new Date(0),
+			expiresAt: new Date(session.expiresAt)
+		};
 
 		// Mint Convex JWT for authenticated server-side queries
 		if (event.locals.user && PUBLIC_CONVEX_URL) {
