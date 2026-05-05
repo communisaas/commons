@@ -27,6 +27,93 @@ const FIPS_TO_STATE: Record<string, string> = {
 };
 
 /**
+ * Canonical slot index for the congressional district within the 24-slot
+ * districts[] array stored in atlas chunks and proof public inputs.
+ *
+ * MUST match position 0 of US_SLOT_NAMES in client.ts AND voter-protocol's
+ * CIRCUIT_SLOT_NAMES. Any divergence is a correctness bug — registration,
+ * proof generation, and TEE delivery all assume slot 0 = CD.
+ *
+ * Hardcoding `0` at call sites instead of importing this constant has been
+ * a recurring source of bugs (see G2r findings); always import.
+ */
+export const CONGRESSIONAL_SLOT_INDEX = 0;
+
+/**
+ * Compare two BN254 field hex strings by numeric value, not string equality.
+ *
+ * `0x1`, `0x01`, `0x0001` all represent the same field element but compare
+ * unequal as strings. Atlas data, district indexes, and witness values can
+ * each canonicalize differently — `BigInt(hex) === BigInt(hex)` covers all
+ * representations including missing-prefix and case variation.
+ *
+ * Returns false if either input is malformed (non-hex, missing). Caller
+ * MUST validate non-undefined separately if "missing" should distinguish
+ * from "value mismatch" (atlas corruption vs boundary cell, per G2r).
+ */
+export function bn254HexEqual(a: string | undefined, b: string | undefined): boolean {
+	if (typeof a !== 'string' || typeof b !== 'string') return false;
+	if (a === '' || b === '') return false;
+	try {
+		const ah = a.startsWith('0x') || a.startsWith('0X') ? a : '0x' + a;
+		const bh = b.startsWith('0x') || b.startsWith('0X') ? b : '0x' + b;
+		return BigInt(ah) === BigInt(bh);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Decode a BN254 field hex string back to its substrate-encoded source.
+ *
+ * The build pipeline encodes substrate IDs (e.g., "cd-0601") into BN254
+ * field elements via UTF-8 byte-packing in `encodeUsGeoid` (voter-protocol/
+ * packages/shadow-atlas/src/jurisdiction.ts:227). This is the inverse:
+ * BN254 hex → bigint → bytes → UTF-8 string.
+ *
+ * Numeric paths (encoded as `BigInt(geoid)` directly): the bigint's UTF-8
+ * decode yields garbage; caller falls through to `convertDistrictId` which
+ * passes the input through unchanged.
+ *
+ * Used by the TEE delivery path (G7 option-c routing) so the resolver can
+ * read witness.districts[0] — which is bound to the cellId via the SMT
+ * inclusion proof — and convert it to the display code consumers expect.
+ *
+ * Returns the original hex if decoding fails (consumer treats as opaque).
+ */
+export function decodeBN254HexToSubstrate(hexValue: string): string {
+	if (!hexValue || typeof hexValue !== 'string') return hexValue;
+	const clean = hexValue.startsWith('0x') ? hexValue.slice(2) : hexValue;
+	if (clean.length === 0 || !/^[0-9a-fA-F]+$/.test(clean)) return hexValue;
+
+	let value: bigint;
+	try {
+		value = BigInt('0x' + clean);
+	} catch {
+		return hexValue;
+	}
+	if (value === 0n) return hexValue;
+
+	// Reverse UTF-8 byte-packing. encodeUsGeoid packs bytes left-to-right
+	// (`result = (result << 8) | byte`), so the bigint is big-endian bytes.
+	const bytes: number[] = [];
+	let v = value;
+	while (v > 0n) {
+		bytes.unshift(Number(v & 0xffn));
+		v >>= 8n;
+	}
+	if (bytes.length === 0) return hexValue;
+
+	// All bytes must be printable ASCII for the result to be a substrate ID.
+	// If any byte is outside [0x20, 0x7e], this was a numeric-path encoding
+	// (BigInt(geoid)) and the bytes don't form a string — return as-is.
+	for (const b of bytes) {
+		if (b < 0x20 || b > 0x7e) return hexValue;
+	}
+	return String.fromCharCode(...bytes);
+}
+
+/**
  * Convert substrate's district ID format to commons' display format.
  * "cd-0601" -> "CA-01", "cd-5000" -> "VT-AL"
  *

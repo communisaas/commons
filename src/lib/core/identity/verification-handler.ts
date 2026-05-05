@@ -1,32 +1,24 @@
 /**
  * Verification Handler
  *
- * Orchestrates the complete verification → encryption → storage flow.
+ * Retired encrypted-blob verification handler. Ground Vault PRF now owns
+ * address custody and delivery readiness.
  *
  * Progressive Verification Paradigm:
  * 1. User completes identity verification (Digital Credentials API / mDL)
  * 2. Extract verified address data
- * 3. Encrypt address blob with TEE public key (XChaCha20-Poly1305)
- * 4. Store encrypted blob in Convex (platform cannot decrypt)
+ * 3. Persist encrypted Ground Vault ciphertext and disclosed cell metadata
+ * 4. Add passkey PRF wrapper where supported; use address re-entry otherwise
  * 5. Cache session credential in IndexedDB
  * 6. Return session data for future use
  *
  * Privacy Flow:
- * - Address encrypted in browser before leaving device
- * - Platform stores only encrypted blob (cannot decrypt)
- * - TEE decrypts only during message delivery
+ * - Address persisted as encrypted ground-vault material
+ * - Plaintext address may be handled during verification or official delivery
  * - Session credential allows skip re-verification for 3-6 months
  */
 
-import {
-	encryptIdentityBlob,
-	fetchTEEPublicKey,
-	getBlobStorage,
-	type IdentityBlob,
-	type EncryptedBlob
-} from './blob-encryption';
 import type { SessionCredential } from './session-cache';
-import { storeSessionCredential } from './session-cache';
 
 // ============================================================================
 // Types
@@ -64,8 +56,8 @@ export interface VerificationHandlerResult {
 	success: boolean;
 	/** Session credential for future use */
 	sessionCredential?: SessionCredential;
-	/** Encrypted blob ID */
-	blobId?: string;
+	/** Legacy encrypted blob ID, no longer issued */
+	blobId?: never;
 	/** Error message if failed */
 	error?: string;
 }
@@ -85,93 +77,9 @@ export async function handleVerificationComplete(
 	userId: string,
 	verificationResult: VerificationResult
 ): Promise<VerificationHandlerResult> {
-	try {
-		// Validate verification result
-		if (!verificationResult.verified) {
-			return {
-				success: false,
-				error: 'Verification failed'
-			};
-		}
-
-		// If no address data, we can't proceed with encryption
-		// This might happen with some verification methods
-		if (!verificationResult.address) {
-			console.warn('[Verification] No address data in verification result');
-			return {
-				success: false,
-				error: 'Address data not available from verification provider'
-			};
-		}
-
-		// Step 1: Fetch TEE public key
-		const teePublicKey = await fetchTEEPublicKey();
-
-		// Step 2: Build identity blob
-		const identityBlob: IdentityBlob = {
-			address: {
-				street: verificationResult.address.street,
-				city: verificationResult.address.city,
-				state: verificationResult.address.state,
-				zip: verificationResult.address.zip
-			},
-			verificationCredential: verificationResult.providerData,
-			district: verificationResult.district,
-			templateData: {
-				// Optional: Add template personalization data if needed
-			}
-		};
-
-		// Step 3: Encrypt blob with TEE public key
-		const encryptedBlob = await encryptIdentityBlob(identityBlob, teePublicKey);
-
-		// Step 4: Store encrypted blob in Convex
-		const blobStorage = getBlobStorage();
-		const blobId = await blobStorage.store(userId, encryptedBlob);
-
-		// Step 5: Create session credential
-		const sessionCredential: SessionCredential = {
-			userId,
-			isVerified: true,
-			verificationMethod: verificationResult.method,
-			congressionalDistrict: verificationResult.district?.congressional,
-			blobId,
-			encryptedAt: new Date().toISOString(),
-			expiresAt: calculateExpirationDate()
-		};
-
-		// Step 6: Cache session credential in IndexedDB
-		await storeSessionCredential(sessionCredential);
-
-		console.debug('[Verification] Complete flow successful:', {
-			userId,
-			method: verificationResult.method,
-			blobId,
-			district: verificationResult.district?.congressional
-		});
-
-		return {
-			success: true,
-			sessionCredential,
-			blobId
-		};
-	} catch (error) {
-		console.error('[Verification] Handler failed:', error);
-		return {
-			success: false,
-			error: error instanceof Error ? error.message : 'Unknown error during verification processing'
-		};
-	}
-}
-
-/**
- * Calculate session expiration (3-6 months from now)
- */
-function calculateExpirationDate(): string {
-	const now = new Date();
-	// Default: 6 months
-	now.setMonth(now.getMonth() + 6);
-	return now.toISOString();
+	void userId;
+	void verificationResult;
+	throw new Error('DEPRECATED_IDENTITY_BLOB_PATH');
 }
 
 // ============================================================================

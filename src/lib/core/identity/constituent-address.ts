@@ -12,14 +12,15 @@
  *  - The Shadow Atlas client-side ZKP path (Path A) computes the district
  *    commitment in the browser; only the commitment + approximate coordinates
  *    transit the server (the latter for the F-1.1 authenticity gate).
- *  - From this store onwards, only encrypted forms reach the server: CWC
- *    delivery uses the encrypted blob as ZKP witness payload; the server
- *    never decrypts.
+ *  - From this legacy cache onwards, canonical address custody is the
+ *    ground vault: encrypted server-side vault material plus disclosed
+ *    cell/district metadata. CWC delivery may require a readable address at
+ *    the government request boundary.
  *
- * Why we keep the address client-side: CWC delivery requires the full address
- * encrypted into the ZKP witness, and users shouldn't re-enter it every
- * session. AES-256-GCM, device-bound key, auto-expires with the session
- * credential (6 months).
+ * Why we still keep a browser-readable cache: CWC delivery requires the full
+ * address, and users should not re-enter it every session when this device can
+ * still decrypt it. AES-256-GCM, device-bound key, auto-expires with the
+ * session credential (6 months).
  *
  * Threat model: Same as session-credentials.ts — protects against XSS,
  * malicious extensions, devtools inspection. Same-origin scripts with full

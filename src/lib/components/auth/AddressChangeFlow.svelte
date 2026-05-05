@@ -19,7 +19,7 @@
       time; the new ground arrives beside it. No structural duplication.
 
   Parent responsibility:
-    - Disable the close × while `onPhaseChange('witnessing')` is the last
+    - Disable the close control while `onPhaseChange('witnessing')` is the last
       emission, because retiring credentials is irreversible.
 -->
 <script lang="ts">
@@ -70,7 +70,7 @@
 		budget?: ReverificationBudget | null;
 		/**
 		 * Emitted on every re-grounding phase transition (capture/witnessing/complete).
-		 * Parent uses this to disable its close × during the witnessing ceremony,
+		 * Parent uses this to disable its close control during the witnessing ceremony,
 		 * since the retire step is irreversible once started.
 		 */
 		onPhaseChange?: (phase: RegroundingPhase) => void;

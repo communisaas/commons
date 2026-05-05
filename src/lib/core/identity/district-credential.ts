@@ -158,6 +158,10 @@ function buildCredentialBody(
 	issuanceDate: string,
 	expirationDate: string
 ): Omit<DistrictResidencyCredential, 'proof'> {
+	if (!params.congressional) {
+		throw new Error('Cannot issue district credential without congressional district');
+	}
+
 	const membership: DistrictMembership = {
 		congressional: params.congressional
 	};

@@ -83,10 +83,11 @@
 							<p class="flex items-start gap-2">
 								<span class="mt-0.5 font-bold text-green-600">✓</span>
 								<span>
-									<span class="font-semibold">Your full street address stays on your device.</span>
-									We compute a cryptographic commitment to your district in your browser. Approximate
-									coordinates transit our servers briefly to confirm the district mapping is authentic,
-									then are discarded. We never persist your street address or commit it to our database.
+									<span class="font-semibold">Your address is encrypted at rest.</span>
+									After verification, Commons may save an encrypted address vault and disclosed
+									district/cell metadata so official delivery can work without making you repeat the
+									same step. Plaintext is handled only where district resolution or government delivery
+									requires it.
 								</span>
 							</p>
 							<p class="flex items-start gap-2">
@@ -100,15 +101,17 @@
 							<p class="flex items-start gap-2">
 								<span class="mt-0.5 font-bold text-green-600">✓</span>
 								<span>
-									<span class="font-semibold">What we store:</span> Verification status (yes/no) + timestamp.
-									That's it. No names, no addresses, no documents.
+									<span class="font-semibold">What we store:</span> Verification status, timestamps,
+									encrypted ground-vault material, and the district/cell facts needed to explain and
+									deliver verified constituent messages. We do not store identity documents.
 								</span>
 							</p>
 							<p class="flex items-start gap-2">
 								<span class="mt-0.5 font-bold text-green-600">✓</span>
 								<span>
-									<span class="font-semibold">Congressional offices see:</span> "✓ Verified constituent
-									from District X" – never your personal information.
+									<span class="font-semibold">Congressional offices see:</span> verified constituent
+									status for public/reporting surfaces. Official delivery APIs may require the readable
+									address fields in the government request.
 								</span>
 							</p>
 						</div>
@@ -131,8 +134,8 @@
 				<div class="flex items-start gap-2">
 					<Lock class="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600" />
 					<p class="text-xs text-slate-700">
-						<span class="font-semibold">Private by design:</span> Your address never stored. Congress sees
-						only verification status.
+						<span class="font-semibold">Private by design:</span> Your address is saved encrypted
+						and disclosed only where official delivery requires it.
 					</p>
 				</div>
 			</div>
@@ -145,7 +148,7 @@
 			<span class="font-semibold text-blue-900"
 				>Verified messages prove you're a real constituent.</span
 			>
-			<span class="text-blue-700">Your privacy is protected — we never store your address.</span>
+			<span class="text-blue-700">Your address is encrypted at rest and handled only for delivery.</span>
 		</div>
 	</div>
 {/if}

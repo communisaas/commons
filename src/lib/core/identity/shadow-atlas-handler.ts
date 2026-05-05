@@ -22,6 +22,8 @@
 import {
 	storeSessionCredential,
 	calculateExpirationDate,
+	isCellAnchorMode,
+	type CellAnchorMode,
 	type SessionCredential
 } from './session-credentials';
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
@@ -55,6 +57,28 @@ export interface ThreeTreeRegistrationRequest {
 	 *  The caller resolves this via getFullCellDataFromBrowser() BEFORE
 	 *  computing the leaf, ensuring consistency across Tree 1 and Tree 2. */
 	cellId: string;
+	/** H3 cell string at H3_RESOLUTION (the cell containing the user's
+	 *  ZIP centroid for T3+; client-derived from lat/lng for T0). Carried
+	 *  alongside cellId so the TEE delivery resolver can compare H3-to-H3
+	 *  with the address-derived H3 from resolveAddress, without
+	 *  needing to re-fetch the chunk to canonicalize encodings.
+	 *  Resolves the H3-vs-BN254 encoding split (G7).
+	 *  Optional during the migration window — pre-G7 credentials don't have it. */
+	h3Cell?: string;
+	/** G2: Tree 2's slot[0] for this cell disagrees with the verified district.
+	 *  The cell straddles a district boundary — Tree 2 assigned by centroid
+	 *  but the verified address polygon-hits a different district. Persisted
+	 *  on the credential so receipts can label the boundary-cell modifier
+	 *  (G5) and audit metrics can count the affected population (G3). */
+	cellStraddles?: boolean;
+	/** G6: atlas version string from manifest.currentVersion at registration.
+	 *  Persisted so app-load migration check can compare and prompt re-verify
+	 *  when the atlas rotates. */
+	atlasVersion?: string;
+	/** G8: cell-anchor provenance for audit metrics + incident forensics.
+	 *  Without this field, post-G1 registrations are bit-identical between
+	 *  mdl-derived and random-fallback modes; G3 metrics would be unmeasurable. */
+	cellAnchorMode?: CellAnchorMode;
 	/** Pre-resolved Tree 2 proof data from IPFS.
 	 *  Must be resolved via getFullCellDataFromBrowser() before calling. */
 	tree2: {
@@ -86,6 +110,16 @@ export interface ThreeTreeRecoveryRequest {
 	leaf: string;
 	/** Cell ID as 0x-hex BN254 field element */
 	cellId: string;
+	/** H3 cell string at H3_RESOLUTION — same role as in ThreeTreeRegistrationRequest.
+	 *  See G7 fix: TEE resolver compares H3-to-H3 instead of H3-to-BN254. */
+	h3Cell?: string;
+	/** G2: same boundary-cell straddle flag as in registration. Persisted on
+	 *  the recovered credential so receipts can label the modifier. */
+	cellStraddles?: boolean;
+	/** G6: atlas version at recovery time. */
+	atlasVersion?: string;
+	/** G8: cell-anchor provenance — for recovery, typically 'recovery-derived'. */
+	cellAnchorMode?: CellAnchorMode;
 	/** Pre-resolved Tree 2 proof data from IPFS.
 	 *  Must be resolved via getFullCellDataFromBrowser() before calling. */
 	tree2: {
@@ -335,6 +369,23 @@ export async function registerThreeTree(
 			// Three-tree specific fields
 			credentialType: 'three-tree',
 			cellId: request.cellId,
+			// G7: persist H3 encoding alongside BN254. TEE delivery resolver
+			// (resolver-gates.ts:reconcileCellGate) compares H3-to-H3 against
+			// the address-derived H3 from resolveAddress — without this, witness
+			// has BN254 hex but resolver derives H3, comparison always fails.
+			h3Cell: request.h3Cell,
+			// G2: boundary-cell flag — Tree 2 disagrees with verified district
+			// (cell straddles boundary). Surfaced in receipt UI as "boundary-cell"
+			// modifier (G5); counted by audit metrics (G3).
+			cellStraddles: request.cellStraddles,
+			// G6: atlas version pin for migration delta check.
+			atlasVersion: request.atlasVersion,
+			// G8: cell-anchor provenance — runtime-validated to defend against
+			// caller-supplied garbage. Unknown values silently drop to undefined
+			// rather than persisting attacker-readable strings.
+			cellAnchorMode: isCellAnchorMode(request.cellAnchorMode)
+				? request.cellAnchorMode
+				: undefined,
 			cellMapRoot: tree2Data.cellMapRoot,
 			cellMapPath: tree2Data.cellMapPath,
 			cellMapPathBits: tree2Data.cellMapPathBits,
@@ -470,6 +521,14 @@ export async function recoverThreeTree(
 
 			credentialType: 'three-tree',
 			cellId: request.cellId,
+			// G7 parity with registration path: persist H3 encoding for TEE resolver.
+			h3Cell: request.h3Cell,
+			// G2 parity: persist boundary-cell flag.
+			cellStraddles: request.cellStraddles,
+			// G6 parity: persist atlas version.
+			atlasVersion: request.atlasVersion,
+			// G8 parity: persist cell-anchor provenance.
+			cellAnchorMode: request.cellAnchorMode,
 			cellMapRoot: tree2Data.cellMapRoot,
 			cellMapPath: tree2Data.cellMapPath,
 			cellMapPathBits: tree2Data.cellMapPathBits,

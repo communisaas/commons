@@ -1,17 +1,15 @@
 /**
- * Browser-side encryption for identity blobs
+ * Browser-side encryption for identity blobs (retired)
  *
- * Implements XChaCha20-Poly1305 authenticated encryption for address data.
- * Blobs are encrypted to TEE public key before storage.
- *
- * Phase 1: Convex storage (platform cannot decrypt)
- * Phase 2: IPFS storage + on-chain pointers (portable credentials)
+ * Ground Vault PRF is the active address-custody path. This module remains only
+ * for historical tests/migration readers; storage methods fail closed so new
+ * code cannot keep writing the deprecated encrypted identity blob trajectory.
  */
 
 import sodium from 'libsodium-wrappers';
 
 /**
- * Identity blob contents (encrypted to TEE)
+ * Historical identity blob contents. Do not use for new address custody.
  */
 export interface IdentityBlob {
 	// REQUIRED: Congressional delivery
@@ -76,8 +74,8 @@ export async function initCrypto(): Promise<void> {
 /**
  * Fetch TEE public key from server
  *
- * In Phase 1, this fetches AWS Nitro Enclave public key.
- * In Phase 2, this might be cached on-chain.
+ * Today this fetches the local resolver's delivery encryption key.
+ * AWS Nitro Enclave keys are the planned future deployment boundary.
  */
 export async function fetchTEEPublicKey(): Promise<TEEPublicKey> {
 	const response = await fetch('/api/tee/public-key');
@@ -102,7 +100,7 @@ export async function fetchTEEPublicKey(): Promise<TEEPublicKey> {
 }
 
 /**
- * Encrypt identity blob to TEE public key
+ * Historical identity blob encryption helper.
  *
  * Uses XChaCha20-Poly1305 authenticated encryption:
  * - 192-bit nonce (safe for random generation)
@@ -110,7 +108,7 @@ export async function fetchTEEPublicKey(): Promise<TEEPublicKey> {
  * - Authenticated encryption (prevents tampering)
  *
  * @param blob - Identity data to encrypt
- * @param teePublicKey - TEE public key (from fetchTEEPublicKey)
+ * @param teePublicKey - Retired TEE public key wrapper
  * @returns Encrypted blob ready for storage
  */
 export async function encryptIdentityBlob(
@@ -163,47 +161,19 @@ export interface BlobStorage {
  */
 export class ServerBlobStorage implements BlobStorage {
 	async store(userId: string, blob: EncryptedBlob): Promise<string> {
-		const response = await fetch('/api/identity/store-blob', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ userId, blob })
-		});
-
-		if (!response.ok) {
-			throw new Error(`Failed to store encrypted blob: ${response.statusText}`);
-		}
-
-		const data = await response.json();
-		return data.blobId;
+		void userId;
+		void blob;
+		throw new Error('DEPRECATED_IDENTITY_BLOB_PATH');
 	}
 
 	async retrieve(userId: string): Promise<EncryptedBlob | null> {
-		const response = await fetch(
-			`/api/identity/retrieve-blob?userId=${encodeURIComponent(userId)}`
-		);
-
-		if (response.status === 404) {
-			return null;
-		}
-
-		if (!response.ok) {
-			throw new Error(`Failed to retrieve encrypted blob: ${response.statusText}`);
-		}
-
-		const data = await response.json();
-		return data.blob;
+		void userId;
+		throw new Error('DEPRECATED_IDENTITY_BLOB_PATH');
 	}
 
 	async delete(userId: string): Promise<void> {
-		const response = await fetch('/api/identity/delete-blob', {
-			method: 'DELETE',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ userId })
-		});
-
-		if (!response.ok) {
-			throw new Error(`Failed to delete encrypted blob: ${response.statusText}`);
-		}
+		void userId;
+		throw new Error('DEPRECATED_IDENTITY_BLOB_PATH');
 	}
 }
 

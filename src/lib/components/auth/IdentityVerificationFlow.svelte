@@ -51,6 +51,11 @@
 	let oncompletePending = $state(false);
 	let retryDisabled = $state(false);
 	let savedDistrict = $state<string | null>(null);
+	// G1: H3 cellId from verify-mdl (server-derived from postal+city+state via
+	// Nominatim). Saved alongside savedDistrict so retry preserves the
+	// constituency anchor — without this, retry would fall back to the random-
+	// cell path and silently downgrade the user. See specs/CONSTITUENCY-PROOF-SEMANTICS.md §4 G1.
+	let savedCellId = $state<string | null>(null);
 	let verificationData = $state<{
 		verified: boolean;
 		method: string;
@@ -108,7 +113,17 @@
 		// This registers the user's leaf hash in Tree 1 and fetches Tree 2/3 proofs,
 		// enabling ZK proof generation for congressional submissions.
 		if (data.district) {
-			await triggerShadowAtlasRegistration(data.district);
+			// G1: pass the H3 cellId returned by verify-mdl (data.cell_id is the
+			// H3 string at H3_RESOLUTION=7, derived from the wallet's ZIP+city+state).
+			// triggerShadowAtlasRegistration uses this as the constituency anchor.
+			// Empty-string normalization: some geocoders return "" instead of null
+			// on failure; treat both as missing to trigger the T3+ hard-fail in
+			// triggerShadowAtlasRegistration.
+			const normalizedCellId =
+				typeof data.cell_id === 'string' && data.cell_id.trim() !== ''
+					? data.cell_id.trim()
+					: null;
+			await triggerShadowAtlasRegistration(data.district, normalizedCellId);
 
 			// If registration succeeded, fire oncomplete immediately
 			if (registrationComplete) {
@@ -129,19 +144,32 @@
 	 * Register in Shadow Atlas three-tree architecture after identity verification.
 	 *
 	 * Flow:
-	 *   1. Resolve district hex from display format via district index
-	 *   2. Fetch full cell data from IPFS (Tree 2 proof + cellId as BN254 field element)
-	 *   3. Generate client-side secrets (userSecret, registrationSalt) — NEVER leave browser
-	 *   4. Compute leaf hash using IPFS-resolved cellId
-	 *   5. Call registerThreeTree with tree2 data
+	 *   1. Resolve district hex from display format via district index (for the
+	 *      leaf's expected-district public input).
+	 *   2. Fetch full cell data from IPFS — for T3+ users with a server-resolved
+	 *      cellId, fetch the chunk for THAT cell (constituency anchor = user's
+	 *      ZIP-derived cell). Without cellId (T0 fallback), pick a random cell
+	 *      in the district (privacy preserved, no constituency anchor).
+	 *   3. Generate client-side secrets (userSecret, registrationSalt) — NEVER leave browser.
+	 *   4. Compute leaf hash using the cellId from step 2.
+	 *   5. Call registerThreeTree with tree2 data.
 	 *
 	 * @param verifiedDistrict - Display format district code from mDL verification (e.g. "CA-12")
+	 * @param verifiedCellId - H3 cell string at H3_RESOLUTION (7) returned by verify-mdl,
+	 *                          or null when not available. When non-null, the leaf binds
+	 *                          to the user's actual ZIP-derived cell instead of a random
+	 *                          cell in the district. See specs/CONSTITUENCY-PROOF-SEMANTICS.md §4 G1.
 	 */
-	async function triggerShadowAtlasRegistration(verifiedDistrict: string) {
+	async function triggerShadowAtlasRegistration(
+		verifiedDistrict: string,
+		verifiedCellId: string | null
+	) {
 		registrationInProgress = true;
 		registrationError = null;
-		// Save district for retry
+		// Save both for retry — without cellId, retry would silently downgrade
+		// to the random-cell path even though we have a real cellId in hand.
 		savedDistrict = verifiedDistrict;
+		savedCellId = verifiedCellId;
 
 		try {
 			const { findDistrictHex, getFullCellDataFromBrowser } =
@@ -156,11 +184,113 @@
 				throw new Error(`District "${verifiedDistrict}" not found in Shadow Atlas index`);
 			}
 
-			// Step 2: Fetch full cell data from IPFS (Tree 2 proof + cellId)
-			// This is zero-server-contact — data comes from content-addressed IPFS via Storacha CDN
-			const cellData = await getFullCellDataFromBrowser({ districtHex, slot: 0 });
+			// Step 2: Fetch full cell data from IPFS.
+			// G1: branch on authorityLevel, NOT cellId presence.
+			// Spec defense-in-depth (CONSTITUENCY-PROOF-SEMANTICS.md §4 G1):
+			// "a future bug shouldn't downgrade T3+ to T0 silently."
+			// If a T3+ user reaches this path with null cellId (geocoder
+			// transient failure inside privacy boundary, mDL postal_code
+			// missing, etc.), we hard-fail rather than silently anchor them
+			// to a random cell while keeping authorityLevel=5. This flow runs
+			// only after mDL verification succeeded, so T3+ is mandatory here.
+			const authorityLevel = 5;
+			const isT3Plus = authorityLevel >= 3;
+
+			// Local cellAnchorMode type — runtime constant union; canonical type
+			// is CellAnchorMode in session-credentials.ts. This block uses only
+			// the address-resolved/random-fallback/recovery-pivot subset.
+			let cellData: Awaited<ReturnType<typeof getFullCellDataFromBrowser>>;
+			let cellAnchorMode:
+				| 'address-resolved'
+				| 'random-fallback'
+				| 'recovery-explicit'
+				| 'recovery-pivot';
+			if (isT3Plus) {
+				if (!verifiedCellId) {
+					// Hard-fail: T3+ requires the constituency anchor. The geocoder
+					// returned null (Nominatim degradation, mDL postal_code missing,
+					// or address resolution failure). User-actionable: retry, or
+					// re-verify after the geocoder recovers.
+					throw new Error(
+						'T3+ verification requires a resolved cellId; geocoder returned no cell ' +
+							'for this address. Retry, or wait for geocoder recovery.'
+					);
+				}
+				cellData = await getFullCellDataFromBrowser({ cellId: verifiedCellId });
+				// G8r honesty: the cellId is Nominatim/H3-derived from postal_code+
+				// city+state. The wallet provides the address fields, NOT the cell.
+				cellAnchorMode = 'address-resolved';
+			} else {
+				// T0 path: random-chunk anonymity-cell. Reserved for unverified flows.
+				// (Currently unreachable — this component runs only post-mDL — but
+				// kept as the structural T0 branch for future T0 entry points.)
+				cellData = await getFullCellDataFromBrowser({ districtHex, slot: 0 });
+				cellAnchorMode = 'random-fallback';
+			}
 			if (!cellData) {
 				throw new Error('Failed to fetch cell proof data from IPFS');
+			}
+
+			// G6: capture atlas version for migration delta. Best-effort —
+			// if manifest fetch fails the credential persists without it
+			// and the migration check returns "unknown" rather than blocking.
+			let atlasVersion: string | undefined;
+			try {
+				const { getCurrentAtlasVersion } = await import(
+					'$lib/core/shadow-atlas/district-bundle'
+				);
+				atlasVersion = (await getCurrentAtlasVersion()) ?? undefined;
+			} catch {
+				atlasVersion = undefined;
+			}
+
+			// G2: detect boundary-cell mismatch. Tree 2's slot[0] for the
+			// user's cell may disagree with the verified district when the
+			// cell straddles a district boundary (the cell's centroid is in
+			// district X but the user's address polygon-hits district Y).
+			// MARK don't BLOCK for boundary mismatch — continue registration
+			// with cellStraddles=true so the disagreement is visible. G5
+			// receipt UI surfaces this so the user sees that delivery routes
+			// to the cell-bound district, not necessarily the wallet-endorsed
+			// one. (Resolver routes from witness.districts[0], cryptographically
+			// bound to cellId via SMT inclusion — that's the G7r option-c
+			// security guarantee, can't be weakened to "trust the wallet
+			// district" without breaking the cell-splitting attack defense.)
+			//
+			// HARD-FAIL on atlas corruption: if districts[0] is missing or
+			// malformed, that's not a boundary cell — it's broken atlas data.
+			// Continuing would persist garbage into the credential's leaf
+			// hash and Stage 2.7 districtCommitment.
+			//
+			// Compare via BigInt so 0x1 / 0x01 / no-prefix variations don't
+			// produce false-positive boundaries.
+			const { CONGRESSIONAL_SLOT_INDEX, bn254HexEqual } = await import(
+				'$lib/core/shadow-atlas/district-format'
+			);
+			const tree2DistrictHex = cellData.districts[CONGRESSIONAL_SLOT_INDEX];
+			if (
+				isT3Plus &&
+				(!tree2DistrictHex || tree2DistrictHex === '0x0' || tree2DistrictHex === '0')
+			) {
+				throw new Error(
+					'Atlas chunk is corrupt: cellData.districts[0] is missing or zero. ' +
+						'This indicates broken atlas data, not a boundary cell. Refusing ' +
+						'to register a credential with garbage district binding.'
+				);
+			}
+			const cellStraddles = isT3Plus
+				? !bn254HexEqual(tree2DistrictHex, districtHex)
+				: false;
+			if (cellStraddles && import.meta.env.DEV) {
+				// Dev-only: production console must not log district + hexes.
+				// G5 surfaces boundary status to the user via the receipt UI;
+				// G8: cellAnchorMode is local-only forensics (handler doesn't
+				// transmit it). G3 metrics read BAF directly, not credentials.
+				console.warn('[Verification] Boundary-cell mismatch detected', {
+					verifiedDistrict,
+					tree2DistrictHex,
+					expectedDistrictHex: districtHex,
+				});
 			}
 
 			// Step 3: Generate client-side secrets (never sent to server)
@@ -181,11 +311,10 @@
 			const userSecret = generateFieldElement();
 			const registrationSalt = generateFieldElement();
 
-			// Step 4: Compute leaf using IPFS-resolved cellId (already 0x-hex BN254 field element)
-			// Authority level 5 = mDL verified. This flow only runs after mDL verification
-			// which sets trustTier=5. The server derives authorityLevel from trustTier via
-			// getIdentityForAtlas, so both sides agree on the value used in the leaf hash.
-			const authorityLevel = 5;
+			// Step 4: Compute leaf using IPFS-resolved cellId (already 0x-hex BN254 field element).
+			// authorityLevel was set above (Step 2) — mDL flow always uses tier 5.
+			// The server derives authorityLevel from trustTier via getIdentityForAtlas,
+			// so both sides agree on the value used in the leaf hash.
 			const authorityHex = '0x' + authorityLevel.toString(16).padStart(64, '0');
 
 			// leaf = Poseidon2_H4(userSecret, cellId, registrationSalt, authorityLevel)
@@ -197,11 +326,20 @@
 				authorityHex
 			);
 
-			// Step 5: Register with tree2 data from IPFS
+			// Step 5: Register with tree2 data from IPFS.
+			// G7: thread the H3 encoding alongside the BN254 cellId so the TEE
+			// resolver can compare H3-to-H3 (resolveAddress returns H3, witness
+			// previously only carried BN254). h3Cell is the same value as the
+			// verifiedCellId we used to fetch the chunk (T3+ path) — for T0,
+			// it's null because the leaf binds to a random cell, not the user's.
 			const result = await registerThreeTree({
 				userId,
 				leaf,
 				cellId: cellData.cellId,
+				h3Cell: verifiedCellId ?? undefined,
+				cellStraddles,
+				atlasVersion,
+				cellAnchorMode,
 				tree2: {
 					cellMapRoot: cellData.cellMapRoot,
 					cellMapPath: cellData.cellMapPath,
@@ -235,6 +373,13 @@
 					userId,
 					leaf,
 					cellId: cellData.cellId,
+					h3Cell: verifiedCellId ?? undefined,
+					cellStraddles,
+					atlasVersion,
+					// G8: registration→recovery pivot — server returned "Already
+					// registered." Distinct from explicit IdentityRecoveryFlow
+					// (device-loss): this is multi-device, race, or UX defect.
+					cellAnchorMode: 'recovery-pivot',
 					tree2: {
 						cellMapRoot: cellData.cellMapRoot,
 						cellMapPath: cellData.cellMapPath,
@@ -421,7 +566,9 @@
 									setTimeout(() => {
 										retryDisabled = false;
 									}, 3000);
-									triggerShadowAtlasRegistration(savedDistrict!);
+									// G1: preserve the constituency anchor across retry —
+									// pass the saved cellId, not just the district.
+									triggerShadowAtlasRegistration(savedDistrict!, savedCellId);
 								}}
 								disabled={registrationInProgress || retryDisabled}
 								class="mt-2 rounded-md border border-amber-300 bg-amber-100 px-3 py-1.5 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-200 disabled:opacity-50"

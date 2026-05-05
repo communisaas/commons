@@ -8,6 +8,10 @@
 		stateCode = $bindable(),
 		zipCode = $bindable(),
 		detectedCountry = 'US',
+		eyebrow = 'New ground',
+		title = 'Enter your new address.',
+		description = '',
+		footer = '',
 		errorMessage = '',
 		geoPermissionDenied = false,
 		onSubmit,
@@ -19,6 +23,10 @@
 		stateCode: string;
 		zipCode: string;
 		detectedCountry?: 'US' | 'CA';
+		eyebrow?: string;
+		title?: string;
+		description?: string;
+		footer?: string;
 		errorMessage?: string;
 		geoPermissionDenied?: boolean;
 		onSubmit: () => void;
@@ -44,17 +52,17 @@
 <section class="pt-2 pb-2" data-testid="regrounding-address-capture">
 	<div class="mb-5">
 		<p class="font-mono text-[10px] text-slate-500 uppercase" style="letter-spacing: 0.22em">
-			New ground
+			{eyebrow}
 		</p>
 		<h2
 			class="mt-1.5 text-xl leading-tight font-semibold text-slate-900"
 			style="font-family: 'Satoshi', system-ui, sans-serif"
 		>
-			Enter your new address.
+			{title}
 		</h2>
 		<p class="mt-2 text-sm leading-relaxed text-slate-500">
-			We resolve the address to your {regionLabel}, then replace the verified address on this device
-			after attestation.
+			{description ||
+				`We resolve the address to your ${regionLabel}, then replace the verified address on this device after attestation.`}
 		</p>
 		{#if geoPermissionDenied}
 			<p class="mt-2 flex items-center gap-1.5 text-xs text-amber-700">
@@ -167,8 +175,8 @@
 	<div class="mt-4 flex items-start gap-2 text-xs leading-relaxed text-slate-500">
 		<Home class="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
 		<p>
-			Address text is required for a verified address change. It is geocoded for the district check
-			and stored only in the browser-local encrypted address cache after success.
+			{footer ||
+				'Address text is required for a verified address change. It is geocoded for the district check and saved as encrypted ground-vault material plus a browser-readable cache after success.'}
 		</p>
 	</div>
 </section>

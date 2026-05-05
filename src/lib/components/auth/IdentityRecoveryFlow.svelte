@@ -45,6 +45,9 @@
 	let currentStep = $state<FlowStep>('explain');
 	let recoveryError = $state<string | null>(null);
 	let savedDistrict = $state<string | null>(null);
+	// G1 parity: preserve cellId across retry so recovery doesn't regress
+	// to random-cell anchor. See specs/CONSTITUENCY-PROOF-SEMANTICS.md §4 G1.
+	let savedCellId = $state<string | null>(null);
 	let retryDisabled = $state(false);
 
 	/**
@@ -65,7 +68,13 @@
 		};
 	}) {
 		if (data.district) {
-			await triggerRecovery(data.district);
+			// G1: thread cellId so recovery binds to user's ZIP-derived cell,
+			// matching the original registration's constituency anchor.
+			const normalizedCellId =
+				typeof data.cell_id === 'string' && data.cell_id.trim() !== ''
+					? data.cell_id.trim()
+					: null;
+			await triggerRecovery(data.district, normalizedCellId);
 		} else {
 			recoveryError = 'No district returned from verification. Please try again.';
 			currentStep = 'explain';
@@ -100,10 +109,11 @@
 	 * here — the handler owns that step so every post-recovery credential has
 	 * a v2-compatible districtCommitment without callers needing to know.
 	 */
-	async function triggerRecovery(verifiedDistrict: string) {
+	async function triggerRecovery(verifiedDistrict: string, verifiedCellId: string | null) {
 		currentStep = 'recovering';
 		recoveryError = null;
 		savedDistrict = verifiedDistrict;
+		savedCellId = verifiedCellId;
 
 		try {
 			const { findDistrictHex, getFullCellDataFromBrowser } =
@@ -117,10 +127,65 @@
 				throw new Error(`District "${verifiedDistrict}" not found in Shadow Atlas index`);
 			}
 
-			// Step 2: Fetch full cell data from IPFS (zero server contact)
-			const cellData = await getFullCellDataFromBrowser({ districtHex, slot: 0 });
+			// Step 2: Fetch full cell data from IPFS (zero server contact).
+			// G1: branch on authorityLevel (recovery is always tier-5 mDL flow,
+			// so isT3Plus is true). Hard-fail on null cellId — we don't silently
+			// recover into a random-cell anchor.
+			const authorityLevel = 5;
+			const isT3Plus = authorityLevel >= 3;
+
+			let cellData: Awaited<ReturnType<typeof getFullCellDataFromBrowser>>;
+			if (isT3Plus) {
+				if (!verifiedCellId) {
+					throw new Error(
+						'T3+ recovery requires a resolved cellId; geocoder returned no cell ' +
+							'for this address. Retry, or wait for geocoder recovery.'
+					);
+				}
+				cellData = await getFullCellDataFromBrowser({ cellId: verifiedCellId });
+			} else {
+				cellData = await getFullCellDataFromBrowser({ districtHex, slot: 0 });
+			}
 			if (!cellData) {
 				throw new Error('Failed to fetch cell proof data from IPFS');
+			}
+
+			// G6: capture atlas version for migration delta on the recovered credential.
+			let atlasVersion: string | undefined;
+			try {
+				const { getCurrentAtlasVersion } = await import(
+					'$lib/core/shadow-atlas/district-bundle'
+				);
+				atlasVersion = (await getCurrentAtlasVersion()) ?? undefined;
+			} catch {
+				atlasVersion = undefined;
+			}
+
+			// G2: same boundary-cell mismatch detection as registration. See
+			// IdentityVerificationFlow for the full reasoning (mark-not-block,
+			// hard-fail on atlas corruption, BigInt compare, slot constant).
+			const { CONGRESSIONAL_SLOT_INDEX, bn254HexEqual } = await import(
+				'$lib/core/shadow-atlas/district-format'
+			);
+			const tree2DistrictHex = cellData.districts[CONGRESSIONAL_SLOT_INDEX];
+			if (
+				isT3Plus &&
+				(!tree2DistrictHex || tree2DistrictHex === '0x0' || tree2DistrictHex === '0')
+			) {
+				throw new Error(
+					'Atlas chunk is corrupt: cellData.districts[0] is missing or zero. ' +
+						'Refusing to recover a credential with garbage district binding.'
+				);
+			}
+			const cellStraddles = isT3Plus
+				? !bn254HexEqual(tree2DistrictHex, districtHex)
+				: false;
+			if (cellStraddles && import.meta.env.DEV) {
+				console.warn('[Recovery] Boundary-cell mismatch detected', {
+					verifiedDistrict,
+					tree2DistrictHex,
+					expectedDistrictHex: districtHex,
+				});
 			}
 
 			// Step 3: Generate client-side secrets (never sent to server)
@@ -139,9 +204,8 @@
 			const userSecret = generateFieldElement();
 			const registrationSalt = generateFieldElement();
 
-			// Step 4: Compute leaf using IPFS-resolved cellId
-			// Authority level 5 = mDL verified (recovery is always for tier-5 users)
-			const authorityLevel = 5;
+			// Step 4: Compute leaf using IPFS-resolved cellId.
+			// authorityLevel was set above (Step 2) — recovery is always tier-5 mDL.
 			const authorityHex = '0x' + authorityLevel.toString(16).padStart(64, '0');
 
 			const leaf = await poseidon2Hash4(
@@ -151,11 +215,20 @@
 				authorityHex
 			);
 
-			// Step 5: Recover via recoverThreeTree (replace: true)
+			// Step 5: Recover via recoverThreeTree (replace: true).
+			// G7: thread H3 encoding alongside BN254 cellId so TEE resolver
+			// can compare H3-to-H3.
 			const result = await recoverThreeTree({
 				userId,
 				leaf,
 				cellId: cellData.cellId,
+				h3Cell: verifiedCellId ?? undefined,
+				cellStraddles,
+				atlasVersion,
+				// G8: explicit IdentityRecoveryFlow — device-loss / IndexedDB clear /
+				// atlas rotation. Distinct from 'recovery-pivot' (already-registered
+				// detection in the verify flow).
+				cellAnchorMode: 'recovery-explicit',
 				tree2: {
 					cellMapRoot: cellData.cellMapRoot,
 					cellMapPath: cellData.cellMapPath,
@@ -321,7 +394,8 @@
 										setTimeout(() => {
 											retryDisabled = false;
 										}, 3000);
-										triggerRecovery(savedDistrict!);
+										// G1: preserve constituency anchor across retry
+										triggerRecovery(savedDistrict!, savedCellId);
 									}}
 									disabled={retryDisabled}
 									class="mt-2 rounded-md border border-red-300 bg-red-100 px-3 py-1.5 text-sm font-medium text-red-800 transition-colors hover:bg-red-200 disabled:opacity-50"

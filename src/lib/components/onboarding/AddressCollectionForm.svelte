@@ -6,7 +6,10 @@
 	import type { AddressVerificationResult, Representative } from '$lib/types/any-replacements.js';
 	import type { Representative as ProviderRepresentative } from '$lib/core/legislative/types';
 	import { FEATURES } from '$lib/config/features';
-	import { getFullCellDataFromBrowser } from '$lib/core/shadow-atlas/browser-client';
+	import {
+		getFullCellDataFromBrowser,
+		type ClientCellProofResult
+	} from '$lib/core/shadow-atlas/browser-client';
 	import { poseidon2Sponge24 } from '$lib/core/crypto/poseidon';
 	let {
 		_template,
@@ -24,6 +27,10 @@
 			state: string;
 			zip: string;
 			representatives?: Representative[] | ProviderRepresentative[];
+			districtCommitment?: string;
+			commitmentSlotCount?: number;
+			coordinates?: { lat: number; lng: number } | null;
+			cellProof?: ClientCellProofResult | null;
 		}) => void;
 	} = $props();
 
@@ -43,6 +50,7 @@
 	// ZKP: Poseidon2 commitment over 24 district slots (computed client-side)
 	let districtCommitment = $state<string | null>(null);
 	let commitmentSlotCount = $state(0);
+	let cellProof = $state<ClientCellProofResult | null>(null);
 
 	function validateAddress(): boolean {
 		addressError = '';
@@ -74,6 +82,9 @@
 		addressError = '';
 
 		try {
+			districtCommitment = null;
+			commitmentSlotCount = 0;
+			cellProof = null;
 			const fullAddress = `${streetAddress}, ${city}, ${stateCode} ${zipCode}`;
 
 			// Unified address resolution: geocode + district + officials in one call
@@ -108,6 +119,7 @@
 						lng: data.coordinates.lng,
 					});
 					if (cellData?.districts?.length === 24) {
+						cellProof = cellData;
 						districtCommitment = await poseidon2Sponge24(cellData.districts);
 						commitmentSlotCount = cellData.districts.filter(
 							(s: string) => s !== '0x' + '0'.repeat(64)
@@ -190,7 +202,8 @@
 				commitmentSlotCount: districtCommitment ? commitmentSlotCount : undefined,
 				// FU-1.1: include coordinates so the verify-address handler can
 				// recompute expected commitment for authenticity check.
-				coordinates: verificationResult?.coordinates ?? null
+				coordinates: verificationResult?.coordinates ?? null,
+				cellProof
 			});
 		} else {
 			console.warn('[AddressForm] No oncomplete callback registered!');
@@ -298,10 +311,10 @@
 							</svg>
 						</div>
 						<div>
-							<h3 class="text-sm font-semibold text-blue-900">Your address stays private</h3>
+							<h3 class="text-sm font-semibold text-blue-900">Address handling</h3>
 							<p class="mt-1 text-xs leading-relaxed text-blue-700">
-								Used once to find your district, then <strong>discarded</strong>.
-								We never store or share your address.
+								We save the address encrypted and disclose it only where official delivery
+								requires it.
 							</p>
 						</div>
 					</div>

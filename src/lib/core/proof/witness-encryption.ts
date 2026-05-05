@@ -44,8 +44,17 @@ export interface WitnessData {
 	// Private inputs
 	/** User's secret key material */
 	userSecret: string;
-	/** Census tract cell ID */
+	/** Cell ID as 0x-hex BN254 field element (for the leaf hash + circuit). */
 	cellId: string;
+	/**
+	 * H3 cell string at H3_RESOLUTION — same hex-cell as cellId in a different
+	 * encoding. Carried alongside cellId so the TEE delivery resolver can
+	 * compare H3-to-H3 with the address-derived H3 from resolveAddress (G7).
+	 * Optional during the migration window — pre-G7 credentials don't have it,
+	 * and the resolver falls through to the prior comparison path with a
+	 * warning when missing.
+	 */
+	h3Cell?: string;
 	/** Random salt from registration */
 	registrationSalt: string;
 	/** Identity commitment for nullifier derivation and engagement binding */

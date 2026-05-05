@@ -88,24 +88,34 @@ export interface ClientCellProofResult {
 /**
  * Fetch cell proof data entirely from IPFS — zero server contact.
  *
- * Two paths:
+ * Three paths, in priority order if multiple are supplied:
  *
- * **District path (recommended, most private):**
- *   User already verified their district at Tier 2. Pass the district's field
- *   element hex (from the district index) and slot number. The function fetches
- *   exactly one chunk via the index — O(1), no scanning.
- *   User discloses nothing beyond their verified district type.
+ * **CellId path (T3+ recommended, post-G1):**
+ *   Caller already has the user's H3 cell — typically derived server-side from
+ *   the mDL's postal+city+state via Nominatim and returned to the client. The
+ *   leaf binds to the user's actual ZIP-derived cell, not a random one.
+ *   See specs/CONSTITUENCY-PROOF-SEMANTICS.md §4 G1.
  *
- * **Lat/lng path (fallback):**
- *   Direct H3 cell lookup. Used when the caller has coordinates.
+ * **District path (T0 fallback):**
+ *   User has no verified address. Pass the district's field element hex and
+ *   slot number; we pick a random chunk to maximize anonymity. The leaf binds
+ *   to a random cell of the right district — no constituency anchor, but no
+ *   address disclosure either.
  *
+ * **Lat/lng path:**
+ *   Direct H3 cell lookup from coordinates. Used by paths that already have a
+ *   geocoded point (boundary visualization, address-entry flows).
+ *
+ * @param options.cellId - H3 cell string at H3_RESOLUTION (e.g. "872830828ffffff").
+ *                          Canonicalized to BN254 field hex internally via chunk.h3Index.
  * @param options.districtHex - District field element hex (from district index). Use with `slot`.
  * @param options.slot - District slot number (0=congressional, 2=state senate, etc.)
- * @param options.lat - Latitude (alternative to district)
- * @param options.lng - Longitude (alternative to district)
+ * @param options.lat - Latitude (alternative to district / cellId)
+ * @param options.lng - Longitude (alternative to district / cellId)
  * @param options.country - ISO 3166-1 alpha-2 (default: "US")
  */
 export async function getFullCellDataFromBrowser(options: {
+	cellId?: string;
 	districtHex?: string;
 	slot?: number;
 	lat?: number;
@@ -119,7 +129,14 @@ export async function getFullCellDataFromBrowser(options: {
 
 	const country = options.country ?? 'US';
 
-	// Path A: District hex + slot → O(1) index lookup → one chunk fetch
+	// Path C: H3 cellId → direct chunk fetch. Caller already knows the cell;
+	// no random selection, no scanning. This is the T3+ path (G1).
+	if (options.cellId != null) {
+		return findCellByH3Index(options.cellId, country);
+	}
+
+	// Path A: District hex + slot → O(1) index lookup → random chunk fetch
+	// (T0 fallback — preserves anonymity at the cost of a random cell anchor).
 	if (options.districtHex != null && options.slot != null) {
 		return findCellForDistrict(options.districtHex, options.slot, country);
 	}
@@ -129,7 +146,7 @@ export async function getFullCellDataFromBrowser(options: {
 		return findCellByLocation(options.lat, options.lng, country);
 	}
 
-	console.warn('[browser-client] Neither district nor lat/lng provided');
+	console.warn('[browser-client] No lookup parameters provided');
 	return null;
 }
 
@@ -188,18 +205,38 @@ async function findCellForDistrict(
 }
 
 /**
- * Find cell by exact H3 location.
+ * Find cell entry by exact H3 cell index (string at H3_RESOLUTION).
  *
- * Cell chunks are keyed by cellId (GEOID string). The optional `h3Index`
- * field provides O(1) H3 res-7 → cellId reverse lookup. Falls back to
- * direct key lookup for backwards compatibility with H3-keyed chunks.
+ * Cell chunks are keyed by cellId (GEOID-encoded BN254 field hex). The
+ * optional `h3Index` field provides O(1) H3 → cellId reverse lookup.
+ * Falls back to direct key lookup for backwards compatibility with
+ * H3-keyed chunks.
+ *
+ * The G1 (T3+) entry point: callers pass the H3 string they received from
+ * verify-mdl directly, without going through latLngToCell.
+ *
+ * G9 trust assumption: chunk.h3Index and chunk.cells are both UNAUTHENTICATED
+ * server input. A compromised atlas operator could swap h3Index["872..."]
+ * to point at a different cell's entry (cell-redirection attack). Defenses:
+ *   - The atlas operator is already trusted to publish correct Tree 2 SMT
+ *     data; trusting them to also publish correct h3Index → entry mappings
+ *     is consistent with the existing trust tier.
+ *   - G2 (boundary-cell mismatch) detects the attack visibly to the user:
+ *     if h3Index points to a cell whose slot[0] disagrees with the verified
+ *     district, the credential is marked cellStraddles=true. The user sees
+ *     the divergence in the receipt UI (G5). Not silently exploitable.
+ *   - G7r option-(c) routing reads from witness.districts[0] (cryptographically
+ *     bound to cellId via SMT inclusion), so a redirected entry routes
+ *     delivery to whatever district the atlas claimed — which the user is
+ *     already informed of via cellStraddles.
+ * Real fix (deferred): Merkle inclusion proofs over h3Index entries against
+ * the chunk's cellMapRoot. Substantial schema + build-pipeline lift not
+ * justified by the residual risk after G2+G7r.
  */
-async function findCellByLocation(
-	lat: number,
-	lng: number,
+async function findCellByH3Index(
+	h3Cell: string,
 	country: string,
 ): Promise<ClientCellProofResult | null> {
-	const h3Cell = latLngToCell(lat, lng, H3_RESOLUTION);
 	const parentKey = cellToParent(h3Cell, 3);
 
 	const chunk = await getCellChunkByParent(parentKey, country);
@@ -230,6 +267,19 @@ async function findCellByLocation(
 		cellMapPathBits: [...entry.b],
 		districts: [...entry.d],
 	};
+}
+
+/**
+ * Find cell by exact lat/lng. Computes the H3 cell at H3_RESOLUTION,
+ * then delegates to findCellByH3Index.
+ */
+async function findCellByLocation(
+	lat: number,
+	lng: number,
+	country: string,
+): Promise<ClientCellProofResult | null> {
+	const h3Cell = latLngToCell(lat, lng, H3_RESOLUTION);
+	return findCellByH3Index(h3Cell, country);
 }
 
 /**
