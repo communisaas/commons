@@ -44,6 +44,12 @@ function base64ToBytes(base64: string): Uint8Array {
 	return bytes;
 }
 
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+	const buffer = new ArrayBuffer(bytes.byteLength);
+	new Uint8Array(buffer).set(bytes);
+	return buffer;
+}
+
 /**
  * Derive an org-level AES-256-GCM key from a passphrase.
  * PBKDF2 stretches the passphrase, then HKDF domain-separates for org PII.
@@ -126,9 +132,9 @@ export async function decryptWithOrgKey(
 	const aad = encoder.encode(`${entityId}:${fieldName}`);
 
 	const plaintext = await crypto.subtle.decrypt(
-		{ name: 'AES-GCM', iv, additionalData: aad },
+		{ name: 'AES-GCM', iv: bytesToArrayBuffer(iv), additionalData: bytesToArrayBuffer(aad) },
 		orgKey,
-		ciphertext
+		bytesToArrayBuffer(ciphertext)
 	);
 
 	return decoder.decode(plaintext);
@@ -165,7 +171,7 @@ export async function generateRecoveryKey(): Promise<{ key: Uint8Array; words: s
 	const key = crypto.getRandomValues(new Uint8Array(32));
 
 	// BIP39: 256 bits entropy + 8 bits checksum (SHA-256) = 264 bits = 24 × 11-bit words
-	const hash = await crypto.subtle.digest('SHA-256', key);
+	const hash = await crypto.subtle.digest('SHA-256', bytesToArrayBuffer(key));
 	const checksum = new Uint8Array(hash)[0]; // first 8 bits of SHA-256(entropy)
 
 	let bits = '';
@@ -205,7 +211,7 @@ export async function mnemonicToRecoveryKey(words: string[]): Promise<Uint8Array
 
 	// Verify checksum
 	const providedChecksum = parseInt(bits.slice(256, 264), 2);
-	const hash = await crypto.subtle.digest('SHA-256', key);
+	const hash = await crypto.subtle.digest('SHA-256', bytesToArrayBuffer(key));
 	const expectedChecksum = new Uint8Array(hash)[0];
 	if (providedChecksum !== expectedChecksum) {
 		throw new Error('Invalid recovery mnemonic — checksum failed. Check for typos.');
@@ -226,14 +232,14 @@ export async function wrapOrgKeyForRecovery(
 
 	const wrappingKey = await crypto.subtle.importKey(
 		'raw',
-		recoveryKey,
+		bytesToArrayBuffer(recoveryKey),
 		{ name: 'AES-GCM' },
 		false,
 		['encrypt']
 	);
 
 	const iv = crypto.getRandomValues(new Uint8Array(12));
-	const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrappingKey, rawKey);
+	const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrappingKey, bytesToArrayBuffer(rawKey));
 
 	return JSON.stringify({
 		ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
@@ -252,16 +258,16 @@ export async function unwrapOrgKeyFromRecovery(
 
 	const wrappingKey = await crypto.subtle.importKey(
 		'raw',
-		recoveryKey,
+		bytesToArrayBuffer(recoveryKey),
 		{ name: 'AES-GCM' },
 		false,
 		['decrypt']
 	);
 
 	const rawKey = await crypto.subtle.decrypt(
-		{ name: 'AES-GCM', iv: base64ToBytes(iv) },
+		{ name: 'AES-GCM', iv: bytesToArrayBuffer(base64ToBytes(iv)) },
 		wrappingKey,
-		base64ToBytes(ciphertext)
+		bytesToArrayBuffer(base64ToBytes(ciphertext))
 	);
 
 	return crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, true, [
@@ -299,7 +305,7 @@ export async function wrapOrgKeyForDevice(
 	);
 
 	const iv = crypto.getRandomValues(new Uint8Array(12));
-	const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrappingKey, rawKey);
+	const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrappingKey, bytesToArrayBuffer(rawKey));
 
 	return JSON.stringify({
 		ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
@@ -335,9 +341,9 @@ export async function unwrapOrgKeyFromDevice(
 	);
 
 	const rawKey = await crypto.subtle.decrypt(
-		{ name: 'AES-GCM', iv: base64ToBytes(iv) },
+		{ name: 'AES-GCM', iv: bytesToArrayBuffer(base64ToBytes(iv)) },
 		wrappingKey,
-		base64ToBytes(ciphertext)
+		bytesToArrayBuffer(base64ToBytes(ciphertext))
 	);
 
 	return crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, true, [

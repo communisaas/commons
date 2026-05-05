@@ -288,6 +288,20 @@ function hexToUint8Array(hex: string): Uint8Array {
 
 interface ReconcileInput {
 	address: { street: string; city: string; state: string; zip: string };
+	/**
+	 * H3 cell string at H3_RESOLUTION from witness (G7 fix).
+	 * `resolveAddress` returns the address-derived cellId AS H3 — comparison
+	 * needs same-encoding to match. Pre-G7 credentials don't carry h3Cell
+	 * and fall through to the witnessCellId path, where the encoding split
+	 * forces a structural CELL_MISMATCH; this is correct: pre-G7 credentials
+	 * cannot be reconciled against the address path and must re-register.
+	 */
+	witnessH3Cell?: string | undefined;
+	/**
+	 * BN254 field hex cellId from witness. Retained for backward compatibility
+	 * with pre-G7 credentials, but cannot be compared directly against the
+	 * H3 returned by resolveAddress — see witnessH3Cell.
+	 */
 	witnessCellId: string | undefined;
 }
 
@@ -297,7 +311,7 @@ interface ReconcileInput {
  *
  * Derives (cellId, district) from the typed address via Shadow Atlas (same pipeline
  * used for verification-time district resolution: Nominatim geocode → H3 cell →
- * district). Compares cellId to `witness.cellId` using constant-time equality.
+ * district). Compares H3-to-H3 with the witness's h3Cell field (G7).
  *
  * Mismatch means the user proved residency in cell X and typed a delivery
  * address in cell Y. The request is rejected; ConstituentData is never returned.
@@ -306,6 +320,15 @@ interface ReconcileInput {
  * as the authoritative district for CWC routing — NEVER trust a
  * `congressional_district` field in the decrypted witness, which is
  * user-controlled and can mis-name the district even when the cellId matches.
+ *
+ * G7 encoding-split fix:
+ * Pre-G7, this function compared `derivedCellId` (H3 string from resolveAddress)
+ * to `witnessCellId` (BN254 hex from credential.cellId). They never matched;
+ * every T3+ submission would fail CELL_MISMATCH at delivery. The fix carries
+ * h3Cell in the witness alongside cellId, so we can compare H3-to-H3 directly.
+ * Pre-G7 credentials (no h3Cell) cannot be reconciled here and produce a
+ * structural CELL_MISMATCH; users with old credentials must re-register
+ * (atlas migration handles this in G6).
  */
 export async function reconcileCellGate(input: ReconcileInput): Promise<ReconcileResult> {
 	if (!input.witnessCellId) {
@@ -327,8 +350,20 @@ export async function reconcileCellGate(input: ReconcileInput): Promise<Reconcil
 		return { success: false, errorCode: 'ADDRESS_UNRESOLVABLE', error: 'no_cell_for_address' };
 	}
 
-	if (!constantTimeEqual(derivedCellId.toLowerCase(), input.witnessCellId.toLowerCase())) {
-		// Intentionally do NOT echo derivedCellId or witnessCellId in the error — that
+	// G7: prefer H3-to-H3 comparison via the witness's h3Cell field.
+	// Pre-G7 credentials lack h3Cell — the only available comparison is
+	// H3 (derived) vs BN254 (witness), which is meaningless and would let
+	// any address through. Fail with a dedicated error code so the UX can
+	// route to the mDL recovery flow rather than the "fix your address" UI.
+	if (!input.witnessH3Cell) {
+		return {
+			success: false,
+			errorCode: 'CREDENTIAL_MIGRATION_REQUIRED',
+			error: 'witness_missing_h3_cell',
+		};
+	}
+	if (!constantTimeEqual(derivedCellId.toLowerCase(), input.witnessH3Cell.toLowerCase())) {
+		// Intentionally do NOT echo derivedCellId or witnessH3Cell in the error — that
 		// leaks cell membership and can be used as an oracle.
 		return { success: false, errorCode: 'CELL_MISMATCH', error: 'cell_mismatch' };
 	}

@@ -26,7 +26,12 @@ export const FEATURES = {
 	/** Deliberation surfaces, argument submission, LMSR market, resolution/appeal */
 	DEBATE: true,
 
-	/** CWC delivery, district officials, congressional template routing */
+	/**
+	 * CWC delivery, district officials, congressional template routing.
+	 * Code exists, but this is a launch gate: when false, CWC templates are
+	 * excluded from discovery and direct CWC template routes 404. The submission
+	 * endpoint also requires Tier 4+ proof authority before delivery can run.
+	 */
 	CONGRESSIONAL: false,
 
 	/**

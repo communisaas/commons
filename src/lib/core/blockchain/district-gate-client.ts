@@ -507,12 +507,14 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 			if (val < 0n || val >= BN254_MODULUS) {
 				return {
 					success: false,
+					kind: 'relayer_config',
 					error: `Public input [${i}] out of BN254 field range`
 				};
 			}
 		} catch {
 			return {
 				success: false,
+				kind: 'relayer_config',
 				error: `Public input [${i}] is not a valid integer or hex string`
 			};
 		}
@@ -531,6 +533,7 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 		);
 		return {
 			success: false,
+			kind: 'relayer_config',
 			error: `Blockchain not configured (set ${missing.join(', ')} env vars)`
 		};
 	}
@@ -544,6 +547,7 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 		if (balance < BALANCE_CRITICAL_THRESHOLD) {
 			return {
 				success: false,
+				kind: 'relayer_config',
 				error: `Relayer balance critically low (${Number(balance) / 1e18} ETH). Cannot submit transaction.`
 			};
 		}
@@ -553,6 +557,7 @@ export async function verifyOnChain(params: VerifyParams): Promise<VerifyResult>
 		recordRpcFailure();
 		return {
 			success: false,
+			kind: 'rpc_transient',
 			error: 'Unable to verify relayer balance. Transaction not submitted.'
 		};
 	}

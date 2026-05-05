@@ -25,10 +25,10 @@
  *      (compute_revocation_smt_root — circuit must agree with this code's hashing)
  */
 
-import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { internal } from '$lib/convex';
 import { poseidon2Hash2 } from '$lib/core/crypto/poseidon';
 import { getZeroHashes as getSharedZeroHashes } from '$lib/core/crypto/zero-hashes';
+import { serverInternalMutation, serverInternalQuery } from '$lib/server/convex-internal';
 
 // F-1.4 (2026-04-25 brutalist audit) — widened from 64 to 128 to close the
 // targeted-lockout grinding attack against the revocation SMT keyspace.
@@ -164,9 +164,9 @@ export async function insertRevocationNullifier(
 
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		// Step 1: read the current path + root.
-		const path = await serverQuery(internal.revocations.getRevocationSMTPath, {
+		const path = await serverInternalQuery(internal.revocations.getRevocationSMTPath, {
 			leafKey: leafKey.toString(16),
-		} as unknown as never);
+		});
 
 		// Idempotent re-emit: leaf already occupied. Return current root with
 		// isFresh=false so the caller can re-issue the chain write. The chain
@@ -223,12 +223,12 @@ export async function insertRevocationNullifier(
 
 		// Step 3: write back, gated on seq.
 		try {
-			const result = (await serverMutation(internal.revocations.applyRevocationSMTUpdate, {
+			const result = (await serverInternalMutation(internal.revocations.applyRevocationSMTUpdate, {
 				leafKey: leafKey.toString(16),
 				nodeUpdates,
 				newRoot,
 				expectedSequenceNumber: path.expectedSequenceNumber,
-			} as unknown as never)) as { newRoot: string; newSequenceNumber: number };
+			})) as { newRoot: string; newSequenceNumber: number };
 
 			// FU-2.2 (Wave 8) — post-write read-back verification. The Convex
 			// mutation cannot recompute Poseidon (no bb.js in its runtime), so
@@ -256,9 +256,9 @@ export async function insertRevocationNullifier(
 			// Flip the kill-switch (FU-2.1) so all subsequent emits halt until
 			// an operator investigates. Then throw to caller.
 			try {
-				const verifyPath = await serverQuery(internal.revocations.getRevocationSMTPath, {
+				const verifyPath = await serverInternalQuery(internal.revocations.getRevocationSMTPath, {
 					leafKey: leafKey.toString(16),
-				} as unknown as never);
+				});
 				if (verifyPath.currentLeaf === null) {
 					throw new Error(
 						'SMT_POSTWRITE_LEAF_MISSING: applied insert but read-back returned no leaf'
@@ -316,9 +316,9 @@ export async function insertRevocationNullifier(
 					// FU-2.1 path after investigation.
 					try {
 						const { internal: internalApi } = await import('$lib/convex');
-						await serverMutation(internalApi.revocations.setRevocationHalt, {
+						await serverInternalMutation(internalApi.revocations.setRevocationHalt, {
 							reason: 'postwrite_verification_failed'
-						} as unknown as never);
+						});
 					} catch (haltErr) {
 						console.error(
 							'[insertRevocationNullifier] kill-switch flip failed during post-write halt',

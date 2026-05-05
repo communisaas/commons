@@ -7,12 +7,12 @@
  *
  * Tokens include an embedded timestamp and expire after 7 days.
  *
- * Token format: base64url(id:timestamp).base64url(hmac(id:timestamp))
+ * Token format: base64url(submissionId:timestamp).base64url(hmac(submissionId:timestamp))
  *
  * Flow:
- * 1. generateConfirmationToken(templateId) → opaque token
+ * 1. generateConfirmationToken(submissionId) → opaque token
  * 2. User sends email, clicks confirmation link in footer
- * 3. validateConfirmationToken(token) → templateId or null
+ * 3. validateConfirmationToken(token) → submissionId or null
  * 4. Update Submission.delivery_status = 'user_confirmed'
  */
 

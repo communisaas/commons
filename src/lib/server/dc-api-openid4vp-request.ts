@@ -264,7 +264,7 @@ function normalizePem(raw: string | undefined): string {
 	return raw?.replace(/\\n/g, '\n').trim() ?? '';
 }
 
-function base64ToUint8Array(value: string): Uint8Array {
+function base64ToUint8Array(value: string): Uint8Array<ArrayBuffer> {
 	const binary = atob(value.replace(/\s+/g, ''));
 	const bytes = new Uint8Array(binary.length);
 	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
