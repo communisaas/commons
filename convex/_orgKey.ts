@@ -7,6 +7,8 @@
  * after receiving the unsealed org key.
  */
 
+import { toArrayBuffer } from "./_bufferSource";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -45,11 +47,12 @@ export async function encryptWithOrgKey(
 ): Promise<OrgEncryptedPii> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const aad = encoder.encode(`${entityId}:${fieldName}`);
+  const plaintextBytes = encoder.encode(plaintext);
 
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv, additionalData: aad },
+    { name: "AES-GCM", iv: toArrayBuffer(iv), additionalData: toArrayBuffer(aad) },
     orgKey,
-    encoder.encode(plaintext),
+    toArrayBuffer(plaintextBytes),
   );
 
   return {
@@ -73,9 +76,9 @@ export async function decryptWithOrgKey(
   const aad = encoder.encode(`${entityId}:${fieldName}`);
 
   const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv, additionalData: aad },
+    { name: "AES-GCM", iv: toArrayBuffer(iv), additionalData: toArrayBuffer(aad) },
     orgKey,
-    ciphertext,
+    toArrayBuffer(ciphertext),
   );
 
   return decoder.decode(plaintext);

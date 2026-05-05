@@ -13,9 +13,15 @@ import {
   internalAction,
   internalQuery,
 } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireAuth } from "./_authHelpers";
+
+declare const process: { env: Record<string, string | undefined> };
+
+const insertDebateRef = makeFunctionReference<"mutation">("debates:insertDebate") as unknown as FunctionReference<"mutation", "internal">;
+const getExpiredDebatesRef = makeFunctionReference<"query">("debates:getExpiredDebates") as unknown as FunctionReference<"query", "internal">;
 
 // =============================================================================
 // QUERIES
@@ -516,9 +522,10 @@ export const updateStatus = mutation({
     // Verify caller has org editor/owner role if debate is tied to a template with an org
     if (debate.templateId) {
       const template = await ctx.db.get(debate.templateId);
-      if (template?.orgId) {
+      const templateOrgId = template?.orgId;
+      if (templateOrgId) {
         const membership = await ctx.db.query("orgMemberships")
-          .withIndex("by_userId_orgId", (q) => q.eq("userId", user.userId).eq("orgId", template.orgId))
+          .withIndex("by_userId_orgId", (q) => q.eq("userId", user.userId).eq("orgId", templateOrgId))
           .unique();
         if (!membership || (membership.role !== "owner" && membership.role !== "editor")) {
           throw new Error("Only org editors/owners can change debate status");
@@ -603,7 +610,7 @@ export const spawnDebate = action({
 
     const deadline = Date.now() + durationSeconds * 1000;
 
-    const debateId = await ctx.runMutation(internal.debates.insertDebate, {
+    const debateId = await ctx.runMutation(insertDebateRef, {
       templateId: args.templateId,
       debateIdOnchain,
       actionDomain,
@@ -726,7 +733,7 @@ export const resolveExpiredDebates = internalAction({
       return { total: 0, triggered: 0, skipped: 0, failed: 0, envMissing: true };
     }
 
-    const expired = await ctx.runQuery(internal.debates.getExpiredDebates, { now });
+    const expired = await ctx.runQuery(getExpiredDebatesRef, { now });
 
     let triggered = 0;
     let skipped = 0;

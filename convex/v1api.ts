@@ -522,12 +522,12 @@ export const createCampaign = internalMutation({
       orgId: args.orgId,
       title: args.title,
       type: args.type,
-      body: args.body ?? null,
-      templateId: args.templateId ?? null,
+      body: args.body ?? undefined,
+      templateId: args.templateId ?? undefined,
       status: "DRAFT",
       debateEnabled: false,
       debateThreshold: 100,
-      targetJurisdiction: args.targetJurisdiction ?? null,
+      targetJurisdiction: args.targetJurisdiction ?? undefined,
       targetCountry: args.targetCountry,
       targets: [],
       actionCount: 0,
@@ -1218,9 +1218,19 @@ export const getSubmissionStatus = internalQuery({
     if (!submission) return null;
     if (submission.pseudonymousId !== pseudonymousId) return { forbidden: true };
 
-    const deliveryCount = submission.cwcSubmissionId
-      ? submission.cwcSubmissionId.split(",").length
-      : 0;
+    const receipts = await ctx.db
+      .query("submissionDeliveryReceipts")
+      .withIndex("by_submissionId", (q) => q.eq("submissionId", submission._id))
+      .collect();
+
+    const deliveredReceiptCount = receipts.filter((r) => r.status === "delivered").length;
+    const demoReceiptCount = receipts.filter((r) => r.status === "demo").length;
+    const deliveryCount =
+      receipts.length > 0
+        ? deliveredReceiptCount
+        : submission.cwcSubmissionId
+          ? submission.cwcSubmissionId.split(",").length
+          : 0;
 
     return {
       forbidden: false,
@@ -1239,6 +1249,23 @@ export const getSubmissionStatus = internalQuery({
       anchorStatus: submission.anchorStatus,
       anchorTxHash: submission.anchorTxHash,
       anchorAt: submission.anchorAt,
+      receipts: receipts.map((receipt) => ({
+        recipientKey: receipt.recipientKey,
+        recipientName: receipt.recipientName ?? null,
+        chamber: receipt.chamber ?? null,
+        provider: receipt.provider,
+        status: receipt.status,
+        providerReceiptId: receipt.providerReceiptId ?? null,
+        errorCode: receipt.errorCode ?? null,
+        deliveredAt: receipt.deliveredAt ?? null,
+        updatedAt: receipt.updatedAt,
+      })),
+      receiptSummary: {
+        total: receipts.length,
+        delivered: deliveredReceiptCount,
+        failed: receipts.filter((r) => r.status === "failed").length,
+        demo: demoReceiptCount,
+      },
     };
   },
 });
@@ -1248,29 +1275,29 @@ export const getSubmissionStatus = internalQuery({
 // =============================================================================
 
 export const confirmEmailDelivery = internalMutation({
-  args: { templateId: v.string() },
-  handler: async (ctx, { templateId }) => {
+  args: { submissionId: v.string() },
+  handler: async (ctx, { submissionId }) => {
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
-    // Find recent pending/delivered submissions for this template
-    const submissions = await ctx.db
-      .query("submissions")
-      .withIndex("by_templateId", (q) => q.eq("templateId", templateId))
-      .order("desc")
-      .take(100);
-
-    const submission = submissions.find(
-      (s) =>
-        (s.deliveryStatus === "pending" || s.deliveryStatus === "delivered") &&
-        s._creationTime >= sevenDaysAgo
-    );
+    const normalizedSubmissionId = (ctx.db as any).normalizeId?.(
+      "submissions",
+      submissionId
+    ) as Id<"submissions"> | null | undefined;
+    const submission = normalizedSubmissionId
+      ? await ctx.db.get(normalizedSubmissionId)
+      : null;
 
     if (!submission) {
       return { confirmed: false, message: "No pending submission found for this confirmation" };
     }
-
+    if (submission._creationTime < sevenDaysAgo) {
+      return { confirmed: false, message: "Confirmation token is too old for this submission" };
+    }
     if (submission.deliveryStatus === "user_confirmed") {
       return { confirmed: true, already_confirmed: true, message: "Delivery was already confirmed" };
+    }
+    if (submission.deliveryStatus !== "pending" && submission.deliveryStatus !== "delivered") {
+      return { confirmed: false, message: "Submission is not awaiting email confirmation" };
     }
 
     await ctx.db.patch(submission._id, {

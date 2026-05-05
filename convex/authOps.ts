@@ -12,6 +12,56 @@
 import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireAuth } from "./_authHelpers";
+import { toArrayBuffer } from "./_bufferSource";
+import type { Doc, Id } from "./_generated/dataModel";
+
+type UpsertFromOAuthResult = {
+  userId: Id<"users">;
+  isNew: boolean;
+};
+
+type CreateSessionResult = {
+  sessionId: string;
+};
+
+type ValidateSessionResult = {
+  session: {
+    id: Id<"sessions">;
+    userId: string;
+    expiresAt: number;
+  };
+  user: Doc<"users">;
+  renewed: boolean;
+} | null;
+
+type AuthOpsQuery<T> = {
+  withIndex(indexName: string, cb: (q: any) => any): AuthOpsQuery<T>;
+  filter(cb: (q: any) => any): AuthOpsQuery<T>;
+  first(): Promise<T | null>;
+  collect(): Promise<T[]>;
+};
+
+type AuthOpsDb = {
+  query(tableName: "accounts"): AuthOpsQuery<Doc<"accounts">>;
+  query(tableName: "users"): AuthOpsQuery<Doc<"users">>;
+  query(tableName: "sessions"): AuthOpsQuery<Doc<"sessions">>;
+  get(id: Id<"users">): Promise<Doc<"users"> | null>;
+  get(id: Id<"sessions">): Promise<Doc<"sessions"> | null>;
+  normalizeId(tableName: "users", id: string): Id<"users"> | null;
+  normalizeId(tableName: "sessions", id: string): Id<"sessions"> | null;
+  insert(tableName: "users", value: Record<string, unknown>): Promise<Id<"users">>;
+  insert(tableName: "accounts", value: Record<string, unknown>): Promise<Id<"accounts">>;
+  insert(tableName: "sessions", value: Record<string, unknown>): Promise<Id<"sessions">>;
+  patch(
+    id: Id<"users"> | Id<"accounts"> | Id<"sessions">,
+    value: Record<string, unknown>,
+  ): Promise<void>;
+  delete(id: Id<"sessions">): Promise<void>;
+};
+
+function authOpsDb(ctx: any): AuthOpsDb {
+  return ctx.db as AuthOpsDb;
+}
 
 // =============================================================================
 // OAUTH USER UPSERT
@@ -46,11 +96,16 @@ export const upsertFromOAuth = mutation({
     encryptedRefreshToken: v.optional(v.any()),
     expiresAt: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
+  returns: v.object({
+    userId: v.id("users"),
+    isNew: v.boolean(),
+  }),
+  handler: async (ctx: any, args): Promise<UpsertFromOAuthResult> => {
+    const db = authOpsDb(ctx);
     const now = Date.now();
 
     // Step 1: Check for existing OAuth account
-    const existingAccount = await ctx.db
+    const existingAccount = await db
       .query("accounts")
       .withIndex("by_provider_providerAccountId", (q) =>
         q.eq("provider", args.provider).eq("providerAccountId", args.providerAccountId),
@@ -59,7 +114,7 @@ export const upsertFromOAuth = mutation({
 
     if (existingAccount) {
       // Update existing account tokens
-      await ctx.db.patch(existingAccount._id, {
+      await db.patch(existingAccount._id, {
         expiresAt: args.expiresAt,
         encryptedAccessToken: args.encryptedAccessToken,
         encryptedRefreshToken: args.encryptedRefreshToken,
@@ -68,7 +123,7 @@ export const upsertFromOAuth = mutation({
       });
 
       // Backfill tokenIdentifier + plaintext email if missing
-      const existingUser0 = await ctx.db.get(existingAccount.userId);
+      const existingUser0 = await db.get(existingAccount.userId);
       if (existingUser0) {
         const patch: Record<string, unknown> = {};
         if (!existingUser0.tokenIdentifier) {
@@ -80,7 +135,7 @@ export const upsertFromOAuth = mutation({
           patch.custodyMode = "plaintext";
         }
         if (Object.keys(patch).length > 0) {
-          await ctx.db.patch(existingAccount.userId, patch);
+          await db.patch(existingAccount.userId, patch);
         }
       }
 
@@ -89,7 +144,7 @@ export const upsertFromOAuth = mutation({
 
     // Step 2: Check for existing user by email (dedup for existing accounts)
     const existingUser = args.email
-      ? await ctx.db
+      ? await db
           .query("users")
           .withIndex("by_email", (q) => q.eq("email", args.email))
           .first()
@@ -97,7 +152,7 @@ export const upsertFromOAuth = mutation({
 
     if (existingUser) {
       // Link OAuth account to existing user
-      await ctx.db.insert("accounts", {
+      await db.insert("accounts", {
         userId: existingUser._id,
         type: "oauth",
         provider: args.provider,
@@ -122,7 +177,7 @@ export const upsertFromOAuth = mutation({
         userPatch.custodyMode = "plaintext";
       }
       if (Object.keys(userPatch).length > 0) {
-        await ctx.db.patch(existingUser._id, userPatch);
+        await db.patch(existingUser._id, userPatch);
       }
 
       return { userId: existingUser._id, isNew: false };
@@ -132,7 +187,7 @@ export const upsertFromOAuth = mutation({
     const baseTrustScore = args.emailVerified ? 100 : 50;
     const baseReputationTier = args.emailVerified ? "verified" : "novice";
 
-    const userId = await ctx.db.insert("users", {
+    const userId = await db.insert("users", {
       avatar: args.avatar,
       email: args.email,
       name: args.name,
@@ -158,12 +213,12 @@ export const upsertFromOAuth = mutation({
 
     // Store tokenIdentifier so requireAuth() can resolve JWT identity → user.
     // Format matches Convex's `<issuer>|<sub>` convention for custom JWT providers.
-    await ctx.db.patch(userId, {
+    await db.patch(userId, {
       tokenIdentifier: `https://commons.email|${userId}`,
     });
 
     // Create linked account
-    await ctx.db.insert("accounts", {
+    await db.insert("accounts", {
       userId,
       type: "oauth",
       provider: args.provider,
@@ -198,7 +253,11 @@ export const createSession = mutation({
     expiresAt: v.number(),
     proof: v.string(), // HMAC-SHA256(userId, SESSION_CREATION_SECRET) — hex
   },
-  handler: async (ctx, args) => {
+  returns: v.object({
+    sessionId: v.string(),
+  }),
+  handler: async (ctx: any, args): Promise<CreateSessionResult> => {
+    const db = authOpsDb(ctx);
     // Verify the caller knows SESSION_CREATION_SECRET
     const secret = process.env.SESSION_CREATION_SECRET;
     if (!secret) {
@@ -223,11 +282,13 @@ export const createSession = mutation({
     }
 
     // Proof is bound to userId + expiresAt to prevent replay
+    const proofBytes = toArrayBuffer(hexToBytes(args.proof));
+    const payloadBytes = toArrayBuffer(encoder.encode(`${args.userId}|${args.expiresAt}`));
     const valid = await crypto.subtle.verify(
       "HMAC",
       key,
-      hexToBytes(args.proof),
-      encoder.encode(`${args.userId}|${args.expiresAt}`)
+      proofBytes,
+      payloadBytes
     );
 
     if (!valid) {
@@ -241,21 +302,19 @@ export const createSession = mutation({
     }
 
     // Validate the userId refers to an actual user
-    const user = await ctx.db
-      .query("users")
-      .filter((q) => q.eq(q.field("_id"), args.userId))
-      .first();
+    const userId = db.normalizeId("users", args.userId);
+    const user = userId ? await db.get(userId) : null;
 
     if (!user) {
       throw new Error("User not found");
     }
 
-    const sessionId = await ctx.db.insert("sessions", {
+    const sessionId = await db.insert("sessions", {
       userId: user._id,
       expiresAt: args.expiresAt,
     });
 
-    return { sessionId: sessionId as string };
+    return { sessionId };
   },
 });
 
@@ -267,17 +326,17 @@ export const invalidateSession = mutation({
   args: {
     sessionId: v.string(),
   },
-  handler: async (ctx, args) => {
+  returns: v.null(),
+  handler: async (ctx: any, args): Promise<null> => {
+    const db = authOpsDb(ctx);
     const { userId: authUserId } = await requireAuth(ctx);
-    const sessions = await ctx.db
-      .query("sessions")
-      .filter((q) => q.eq(q.field("_id"), args.sessionId))
-      .collect();
-
-    for (const session of sessions) {
+    const sessionId = db.normalizeId("sessions", args.sessionId);
+    const session = sessionId ? await db.get(sessionId) : null;
+    if (session) {
       if (session.userId !== authUserId) throw new Error("Unauthorized");
-      await ctx.db.delete(session._id);
+      await db.delete(session._id);
     }
+    return null;
   },
 });
 
@@ -295,11 +354,10 @@ const MAX_SESSION_LIFETIME_MS = 90 * DAY_MS;
  */
 export const validateSession = query({
   args: { sessionId: v.string() },
-  handler: async (ctx, { sessionId }) => {
-    const session = await ctx.db
-      .query("sessions")
-      .filter((q) => q.eq(q.field("_id"), sessionId))
-      .first();
+  handler: async (ctx: any, { sessionId }): Promise<ValidateSessionResult> => {
+    const db = authOpsDb(ctx);
+    const normalizedSessionId = db.normalizeId("sessions", sessionId);
+    const session = normalizedSessionId ? await db.get(normalizedSessionId) : null;
 
     if (!session) return null;
 
@@ -316,7 +374,7 @@ export const validateSession = query({
       return null;
     }
 
-    const user = await ctx.db.get(session.userId);
+    const user = await db.get(session.userId);
     if (!user) return null;
 
     // Check if renewal is needed (within 15 days of expiry)
@@ -341,16 +399,17 @@ export const validateSession = query({
  */
 export const backfillTokenIdentifier = mutation({
   args: { userId: v.string() },
-  handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .filter((q) => q.eq(q.field("_id"), args.userId))
-      .first();
+  returns: v.null(),
+  handler: async (ctx: any, args): Promise<null> => {
+    const db = authOpsDb(ctx);
+    const userId = db.normalizeId("users", args.userId);
+    const user = userId ? await db.get(userId) : null;
     if (user && !user.tokenIdentifier) {
-      await ctx.db.patch(user._id, {
+      await db.patch(user._id, {
         tokenIdentifier: `https://commons.email|${user._id}`,
       });
     }
+    return null;
   },
 });
 
@@ -360,16 +419,17 @@ export const backfillTokenIdentifier = mutation({
  */
 export const renewSession = mutation({
   args: { sessionId: v.string() },
-  handler: async (ctx, { sessionId }) => {
+  returns: v.null(),
+  handler: async (ctx: any, { sessionId }): Promise<null> => {
+    const db = authOpsDb(ctx);
     const { userId: authUserId } = await requireAuth(ctx);
-    const session = await ctx.db
-      .query("sessions")
-      .filter((q) => q.eq(q.field("_id"), sessionId))
-      .first();
-    if (!session) return;
+    const normalizedSessionId = db.normalizeId("sessions", sessionId);
+    const session = normalizedSessionId ? await db.get(normalizedSessionId) : null;
+    if (!session) return null;
     if (session.userId !== authUserId) throw new Error("Unauthorized");
-    await ctx.db.patch(session._id, {
+    await db.patch(session._id, {
       expiresAt: Date.now() + DAY_MS * 30,
     });
+    return null;
   },
 });

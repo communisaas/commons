@@ -5,9 +5,39 @@
  */
 
 import { query, mutation, action } from "./_generated/server";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+
+type ExportMatchingRow = {
+  _id: string;
+  encryptedEmail: string | null;
+  encryptedName: string | null;
+  encryptedPhone: string | null;
+  tagNames: string[];
+};
+
+type ExportDecryptedRow = {
+  email: string;
+  name: string;
+  phone: string;
+  tags: string;
+};
+
+const getOrganizationBySlugRef = makeFunctionReference<"query">("organizations:getBySlug") as unknown as FunctionReference<
+  "query",
+  "public",
+  { slug: string },
+  { _id: Id<"organizations"> } | null
+>;
+const exportMatchingRef = makeFunctionReference<"query">("segments:exportMatching") as unknown as FunctionReference<
+  "query",
+  "public",
+  { slug: string; filters: unknown },
+  ExportMatchingRow[]
+>;
 
 // =============================================================================
 // SEGMENT FILTER ENGINE (in-memory equivalent of buildSegmentWhere)
@@ -364,24 +394,23 @@ export const exportMatching = query({
  */
 export const exportDecrypted = action({
   args: { slug: v.string(), filters: v.any() },
-  handler: async (ctx, { slug, filters }) => {
-    const { api } = await import("./_generated/api");
+  handler: async (ctx, { slug, filters }): Promise<ExportDecryptedRow[]> => {
     const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
     const { decryptWithOrgKey } = await import("./_orgKey");
 
     // Get org context
-    const org = await ctx.runQuery(api.organizations.getBySlug, { slug });
+    const org = await ctx.runQuery(getOrganizationBySlugRef, { slug });
     if (!org) throw new Error("Organization not found");
 
     const orgKey = await getOrgKeyForAction(ctx, org._id);
     if (!orgKey) throw new Error("Organization encryption not configured");
 
     // Get encrypted supporters
-    const supporters = await ctx.runQuery(api.segments.exportMatching, { slug, filters });
+    const supporters = await ctx.runQuery(exportMatchingRef, { slug, filters });
 
     // Decrypt each supporter's PII
     return Promise.all(
-      supporters.map(async (s: any) => {
+      supporters.map(async (s) => {
         let email = "[encrypted]";
         let name = "";
         let phone = "";

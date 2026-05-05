@@ -7,9 +7,21 @@ import {
   action,
 } from "./_generated/server";
 import { v } from "convex/values";
-import { internal } from "./_generated/api";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireOrgRole } from "./_authHelpers";
+
+declare const process: { env: Record<string, string | undefined> };
+
+const upsertBillRef = makeFunctionReference<"mutation">("legislation:upsertBill") as unknown as FunctionReference<"mutation", "internal">;
+const getBillInternalRef = makeFunctionReference<"query">("legislation:getBillInternal") as unknown as FunctionReference<"query", "internal">;
+const getIssueDomainInternalRef = makeFunctionReference<"query">("legislation:getIssueDomainInternal") as unknown as FunctionReference<"query", "internal">;
+const upsertRelevanceRef = makeFunctionReference<"mutation">("legislation:upsertRelevance") as unknown as FunctionReference<"mutation", "internal">;
+const listDmsWithReceiptsSinceRef = makeFunctionReference<"query">("legislation:listDmsWithReceiptsSince") as unknown as FunctionReference<"query", "internal">;
+const aggregateReceiptsForDmRef = makeFunctionReference<"query">("legislation:aggregateReceiptsForDm") as unknown as FunctionReference<"query", "internal">;
+const upsertScorecardSnapshotRef = makeFunctionReference<"mutation">("legislation:upsertScorecardSnapshot") as unknown as FunctionReference<"mutation", "internal">;
+const scoreBillRelevanceRef = makeFunctionReference<"action">("legislation:scoreBillRelevance") as unknown as FunctionReference<"action", "internal">;
 
 // =============================================================================
 // QUERIES
@@ -28,15 +40,14 @@ export const listBills = query({
   handler: async (ctx, args) => {
     const limit = args.limit ?? 50;
 
-    let q = ctx.db.query("bills");
-
-    if (args.jurisdiction && args.status) {
-      q = q.withIndex("by_jurisdiction_status", (idx) =>
-        idx.eq("jurisdiction", args.jurisdiction!).eq("status", args.status!),
-      );
-    } else {
-      q = q.withIndex("by_statusDate");
-    }
+    const q =
+      args.jurisdiction && args.status
+        ? ctx.db
+            .query("bills")
+            .withIndex("by_jurisdiction_status", (idx) =>
+              idx.eq("jurisdiction", args.jurisdiction!).eq("status", args.status!),
+            )
+        : ctx.db.query("bills").withIndex("by_statusDate");
 
     const results = await q
       .order("desc")
@@ -295,7 +306,7 @@ export const followDm = mutation({
       .first();
 
     if (existing) {
-      return { _id: existing._id, created: false, ...existing };
+      return { ...existing, created: false };
     }
 
     const now = Date.now();
@@ -1303,7 +1314,7 @@ export const syncPipeline = internalAction({
         const status = inferBillStatus(detail.bill.latestAction?.text);
         const chamber = detail.bill.originChamber?.toLowerCase() === "senate" ? "senate" : "house";
 
-        const result = await ctx.runMutation(internal.legislation.upsertBill, {
+        const result = await ctx.runMutation(upsertBillRef, {
           externalId,
           jurisdiction: "us-federal",
           jurisdictionLevel: "federal",
@@ -1352,7 +1363,7 @@ export const scoreBillRelevance = internalAction({
   args: { billId: v.id("bills") },
   handler: async (ctx, { billId }) => {
     // Read the bill's embedding
-    const bill = await ctx.runQuery(internal.legislation.getBillInternal, {
+    const bill = await ctx.runQuery(getBillInternalRef, {
       billId,
     });
     if (!bill?.topicEmbedding) {
@@ -1380,7 +1391,7 @@ export const scoreBillRelevance = internalAction({
       if (match._score < RELEVANCE_THRESHOLD) continue;
 
       const doc = await ctx.runQuery(
-        internal.legislation.getIssueDomainInternal,
+        getIssueDomainInternalRef,
         { id: match._id },
       );
       if (!doc) continue;
@@ -1401,7 +1412,7 @@ export const scoreBillRelevance = internalAction({
     // Upsert relevance rows
     let rowsUpserted = 0;
     for (const [orgIdStr, { bestScore, labels }] of orgMap) {
-      await ctx.runMutation(internal.legislation.upsertRelevance, {
+      await ctx.runMutation(upsertRelevanceRef, {
         orgId: orgIdStr as Id<"organizations">,
         billId,
         score: bestScore,
@@ -2413,7 +2424,7 @@ export const computeScorecards = internalAction({
     const periodStart = now - SCORECARD_WINDOW_MS;
 
     const dmIds: Id<"decisionMakers">[] = await ctx.runQuery(
-      internal.legislation.listDmsWithReceiptsSince,
+      listDmsWithReceiptsSinceRef,
       { since: periodStart },
     );
 
@@ -2424,7 +2435,7 @@ export const computeScorecards = internalAction({
     for (const dmId of dmIds) {
       try {
         const aggregate: ScorecardAggregate | null = await ctx.runQuery(
-          internal.legislation.aggregateReceiptsForDm,
+          aggregateReceiptsForDmRef,
           { decisionMakerId: dmId, periodStart, periodEnd },
         );
 
@@ -2441,7 +2452,7 @@ export const computeScorecards = internalAction({
           ...aggregate,
         });
 
-        await ctx.runMutation(internal.legislation.upsertScorecardSnapshot, {
+        await ctx.runMutation(upsertScorecardSnapshotRef, {
           decisionMakerId: dmId,
           periodStart,
           periodEnd,
@@ -2678,7 +2689,7 @@ export const rescoreBills = action({
     const errors: string[] = [];
     for (const billId of billIds) {
       try {
-        const result = await ctx.runAction(internal.legislation.scoreBillRelevance, { billId });
+        const result = await ctx.runAction(scoreBillRelevanceRef, { billId });
         rowsUpserted += result.rowsUpserted;
       } catch (err) {
         errors.push(`${billId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -2687,4 +2698,3 @@ export const rescoreBills = action({
     return { billsScored: billIds.length, rowsUpserted, errors: errors.length > 0 ? errors : undefined };
   },
 });
-

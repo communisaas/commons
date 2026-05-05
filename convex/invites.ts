@@ -8,10 +8,51 @@
  */
 
 import { query, mutation, action, internalMutation } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole, requireAuth } from "./_authHelpers";
 import { hashInviteToken } from "./_orgHash";
+
+type PreparedInviteForInsert = {
+  emailHash: string;
+  encryptedEmail: string;
+  role: string;
+  tokenHash: string;
+};
+
+type InsertInvitesResult = {
+  sent: number;
+  results: Array<{ emailHash: string; status: "sent" | "skipped" }>;
+};
+
+type CreateInvitesResult = InsertInvitesResult & {
+  tokens: Array<{ emailHash: string; token: string }>;
+};
+
+type ResendInviteMutationResult = {
+  _id: string;
+  encryptedEmail: string;
+  role: string;
+  expiresAt: number;
+};
+
+type ResendInviteResult = {
+  invite: ResendInviteMutationResult & { token: string };
+};
+
+const insertInvitesRef = makeFunctionReference<"mutation">("invites:insertInvites") as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  { slug: string; invites: PreparedInviteForInsert[] },
+  InsertInvitesResult
+>;
+const resendInviteRef = makeFunctionReference<"mutation">("invites:resendInvite") as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  { slug: string; inviteId: string; tokenHash: string; expiresAt: number },
+  ResendInviteMutationResult
+>;
 
 // =============================================================================
 // QUERIES
@@ -113,7 +154,7 @@ export const create = action({
       }),
     ),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<CreateInvitesResult> => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
@@ -160,7 +201,7 @@ export const create = action({
     }
 
     // Delegate to internal mutation for the actual inserts
-    const results = await ctx.runMutation(internal.invites.insertInvites, {
+    const results = await ctx.runMutation(insertInvitesRef, {
       slug: args.slug,
       invites: prepared.map((inv) => ({
         emailHash: inv.emailHash,
@@ -194,7 +235,7 @@ export const resend = action({
     slug: v.string(),
     inviteId: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<ResendInviteResult> => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
@@ -202,7 +243,7 @@ export const resend = action({
     const tokenH = await hashInviteToken(token);
     const expiresAt = Date.now() + 72 * 3_600_000; // 72 hours
 
-    const invite = await ctx.runMutation(internal.invites.resendInvite, {
+    const invite = await ctx.runMutation(resendInviteRef, {
       slug: args.slug,
       inviteId: args.inviteId,
       tokenHash: tokenH,

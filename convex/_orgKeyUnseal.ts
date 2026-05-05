@@ -13,6 +13,7 @@
  */
 
 import { importOrgKey } from "./_orgKey";
+import { toArrayBuffer } from "./_bufferSource";
 
 const encoder = new TextEncoder();
 
@@ -59,7 +60,7 @@ function getWrappingKey(): Uint8Array {
 async function importWrappingKey(): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     "raw",
-    getWrappingKey(),
+    toArrayBuffer(getWrappingKey()),
     { name: "AES-GCM", length: 256 },
     false,
     ["encrypt", "decrypt"],
@@ -83,9 +84,9 @@ export async function sealOrgKey(rawKeyBase64: string, orgId: string): Promise<s
   const aad = encoder.encode(`commons-server-sealed-org-key-v1:${orgId}`);
 
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv, additionalData: aad },
+    { name: "AES-GCM", iv: toArrayBuffer(iv), additionalData: toArrayBuffer(aad) },
     wrappingKey,
-    rawKeyBytes,
+    toArrayBuffer(rawKeyBytes),
   );
 
   const sealed: SealedOrgKey = {
@@ -115,9 +116,9 @@ export async function unsealOrgKey(sealedBlob: string, orgId: string): Promise<C
   const aad = encoder.encode(`commons-server-sealed-org-key-v1:${orgId}`);
 
   const rawKeyBytes = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv, additionalData: aad },
+    { name: "AES-GCM", iv: toArrayBuffer(iv), additionalData: toArrayBuffer(aad) },
     wrappingKey,
-    ciphertext,
+    toArrayBuffer(ciphertext),
   );
 
   return importOrgKey(rawKeyBytes);

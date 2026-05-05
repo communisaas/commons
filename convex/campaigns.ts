@@ -1,11 +1,87 @@
 import { query, mutation, action, internalMutation, internalQuery, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole, loadOrg, requireAuth } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
 import { computeOrgScopedEmailHash } from "./_orgHash";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
 import { encryptWithOrgKey } from "./_orgKey";
+
+type ActiveCampaignForSubmission = {
+  _id: Id<"campaigns">;
+  orgId: Id<"organizations">;
+};
+
+type UserTrustTier = {
+  trustTier?: number;
+  engagementTier: number;
+} | null;
+
+type FindOrCreateSupporterResult = {
+  supporterId: Id<"supporters">;
+  isNew: boolean;
+};
+
+type CreateCampaignActionResult = {
+  alreadySubmitted: boolean;
+  actionCount: number;
+  totalCount?: number;
+};
+
+type SubmitActionResult = {
+  success: true;
+  actionCount: number;
+  supporterName: string;
+  alreadySubmitted?: true;
+  totalCount?: number;
+  verified?: boolean;
+};
+
+const getActiveCampaignRef = makeFunctionReference<"query">("campaigns:getActiveCampaign") as unknown as FunctionReference<
+  "query",
+  "internal",
+  { campaignId: string },
+  ActiveCampaignForSubmission | null
+>;
+const getUserTrustTierRef = makeFunctionReference<"query">("campaigns:getUserTrustTier") as unknown as FunctionReference<
+  "query",
+  "internal",
+  { email: string },
+  UserTrustTier
+>;
+const findOrCreateSupporterRef = makeFunctionReference<"mutation">("campaigns:findOrCreateSupporter") as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  {
+    orgId: Id<"organizations">;
+    emailHash: string;
+    encryptedEmail: string;
+    encryptedName?: string;
+    postalCode?: string;
+    encryptedPhone?: string;
+    phoneHash?: string;
+    source: string;
+  },
+  FindOrCreateSupporterResult
+>;
+const createCampaignActionRef = makeFunctionReference<"mutation">("campaigns:createCampaignAction") as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  {
+    campaignId: Id<"campaigns">;
+    supporterId: Id<"supporters">;
+    verified: boolean;
+    engagementTier: number;
+    districtHash?: string;
+    h3Cell?: string;
+    messageHash?: string;
+    trustTier?: number;
+    compositionMode?: string;
+  },
+  CreateCampaignActionResult
+>;
 
 // =============================================================================
 // QUERIES
@@ -852,7 +928,7 @@ export const submitAction = action({
     source: v.optional(v.string()),
     compositionMode: v.optional(v.string()), // 'individual' | 'shared' | 'edited'
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<SubmitActionResult> => {
     // Validate early
     if (!args.email) throw new Error("Email is required");
     if (!args.name) throw new Error("Name is required");
@@ -866,7 +942,7 @@ export const submitAction = action({
     const normalizedEmail = args.email.trim().toLowerCase();
 
     // Get campaign first — needed for orgId
-    const campaign = await ctx.runQuery(internal.campaigns.getActiveCampaign, {
+    const campaign = await ctx.runQuery(getActiveCampaignRef, {
       campaignId: args.campaignId,
     });
     if (!campaign) {
@@ -891,7 +967,7 @@ export const submitAction = action({
 
     // Step 1: Find or create supporter with placeholder email
     const { supporterId, isNew } = await ctx.runMutation(
-      internal.campaigns.findOrCreateSupporter,
+      findOrCreateSupporterRef,
       {
         orgId: campaign.orgId,
         emailHash,
@@ -963,7 +1039,7 @@ export const submitAction = action({
 
     // Resolve trust tier + engagement tier from registered user, fall back to verification heuristics
     const userData = await ctx.runQuery(
-      internal.campaigns.getUserTrustTier,
+      getUserTrustTierRef,
       { email: normalizedEmail },
     );
     const trustTier = userData?.trustTier ?? (districtVerified ? 2 : args.postalCode ? 1 : 0);
@@ -973,10 +1049,10 @@ export const submitAction = action({
     const verified = districtVerified || !!args.postalCode;
 
     const result = await ctx.runMutation(
-      internal.campaigns.createCampaignAction,
+      createCampaignActionRef,
       {
-        campaignId: campaign._id as Id<"campaigns">,
-        supporterId: supporterId as Id<"supporters">,
+        campaignId: campaign._id,
+        supporterId,
         verified,
         engagementTier,
         districtHash,
@@ -1343,6 +1419,12 @@ export const dispatchReportEmails = internalAction({
     const awsRegion = process.env.AWS_REGION || "us-east-1";
     const fromEmail = process.env.SES_FROM_EMAIL || "reports@commons.email";
 
+    // Get queued deliveries first so configuration failures can mark them failed.
+    const deliveries = await ctx.runQuery(internal.campaigns.getQueuedDeliveries, {
+      campaignId: args.campaignId,
+    });
+    if (deliveries.length === 0) return;
+
     if (!awsAccessKeyId || !awsSecretAccessKey) {
       console.error("[dispatchReportEmails] AWS SES credentials not configured — marking deliveries as failed");
       for (const delivery of deliveries) {
@@ -1359,12 +1441,6 @@ export const dispatchReportEmails = internalAction({
       campaignId: args.campaignId,
     });
     if (!campaign) return;
-
-    // Get queued deliveries
-    const deliveries = await ctx.runQuery(internal.campaigns.getQueuedDeliveries, {
-      campaignId: args.campaignId,
-    });
-    if (deliveries.length === 0) return;
 
     // Build the report email subject — "constituent actions" is honest across
     // both tier-2 heuristic and tier-3+ ID-verified rows. The ID-verified subset

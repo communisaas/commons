@@ -1,14 +1,7 @@
-import {
-	internalMutationGeneric as internalMutation,
-	mutationGeneric as mutation,
-	queryGeneric as query
-} from 'convex/server';
+import { internalMutation, mutation, query } from './_generated/server';
 import { v } from 'convex/values';
 import { requireAuth } from './_authHelpers';
 
-const publicMutation = mutation as any;
-const publicQuery = query as any;
-const privateMutation = internalMutation as any;
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'expired']);
 
 function isExpired(job: any) {
@@ -61,7 +54,7 @@ async function loadOwnedJob(ctx: any, jobId: string) {
 	return { userId, job };
 }
 
-export const startOrGet = publicMutation({
+export const startOrGet = mutation({
 	args: {
 		jobId: v.string(),
 		inputHash: v.string(),
@@ -110,7 +103,7 @@ export const startOrGet = publicMutation({
 	}
 });
 
-export const getForUser = publicQuery({
+export const getForUser = query({
 	args: { jobId: v.string() },
 	handler: async (ctx: any, args: any) => {
 		const { job } = await loadOwnedJob(ctx, args.jobId);
@@ -118,7 +111,7 @@ export const getForUser = publicQuery({
 	}
 });
 
-export const markRunning = publicMutation({
+export const markRunning = mutation({
 	args: { jobId: v.string(), phase: v.optional(v.string()) },
 	handler: async (ctx: any, args: any) => {
 		const { job } = await loadOwnedJob(ctx, args.jobId);
@@ -138,7 +131,7 @@ export const markRunning = publicMutation({
 	}
 });
 
-export const checkpointPhase = publicMutation({
+export const checkpointPhase = mutation({
 	args: {
 		jobId: v.string(),
 		phase: v.string()
@@ -160,7 +153,7 @@ export const checkpointPhase = publicMutation({
 	}
 });
 
-export const completeEncrypted = publicMutation({
+export const completeEncrypted = mutation({
 	args: {
 		jobId: v.string(),
 		encryptedResult: v.any(),
@@ -188,7 +181,7 @@ export const completeEncrypted = publicMutation({
 	}
 });
 
-export const fail = publicMutation({
+export const fail = mutation({
 	args: {
 		jobId: v.string(),
 		errorCode: v.optional(v.string()),
@@ -212,7 +205,7 @@ export const fail = publicMutation({
 	}
 });
 
-export const cleanupExpired = privateMutation({
+export const cleanupExpired = internalMutation({
 	args: {},
 	handler: async (ctx: any) => {
 		const now = Date.now();

@@ -5,7 +5,7 @@
  * No SvelteKit imports — pure Convex code.
  */
 
-import { QueryCtx, MutationCtx } from "./_generated/server";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 
 export type OrgRole = "owner" | "editor" | "member";

@@ -109,7 +109,6 @@ export const createCall = mutation({
       campaignId: args.campaignId ?? null,
       districtHash: args.districtHash ?? null,
       status: "initiated",
-      updatedAt: Date.now(),
     };
     const id = await ctx.db.insert("patchThroughCalls", doc as any);
     return { _id: id };
@@ -122,7 +121,7 @@ export const createCall = mutation({
 export const updateCallSid = mutation({
   args: { callId: v.id("patchThroughCalls"), twilioCallSid: v.string() },
   handler: async (ctx, { callId, twilioCallSid }) => {
-    await ctx.db.patch(callId, { twilioCallSid, updatedAt: Date.now() });
+    await ctx.db.patch(callId, { twilioCallSid });
     const call = await ctx.db.get(callId);
     return call;
   },
@@ -134,7 +133,7 @@ export const updateCallSid = mutation({
 export const updateCallStatus = mutation({
   args: { callId: v.id("patchThroughCalls"), status: v.string() },
   handler: async (ctx, { callId, status }) => {
-    await ctx.db.patch(callId, { status, updatedAt: Date.now() });
+    await ctx.db.patch(callId, { status });
   },
 });
 
@@ -184,7 +183,7 @@ export const listCallsPaginated = query({
             supporter: supporter
               ? { _id: supporter._id, encryptedName: supporter.encryptedName ?? null }
               : null,
-            updatedAt: c.updatedAt,
+            updatedAt: c.completedAt ?? c._creationTime,
           };
         }),
       ),

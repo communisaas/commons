@@ -6,11 +6,23 @@ import {
   internalQuery,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
 import { computeOrgScopedEmailHash } from "./_orgHash";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
 import { decryptWithOrgKey } from "./_orgKey";
+
+declare const process: { env: Record<string, string | undefined> };
+
+const getBlastByIdRef = makeFunctionReference<"query">("email:getBlastById") as unknown as FunctionReference<"query", "internal">;
+const getBlastRecipientsRef = makeFunctionReference<"query">("email:getBlastRecipients") as unknown as FunctionReference<"query", "internal">;
+const updateBlastStatusRef = makeFunctionReference<"mutation">("email:updateBlastStatus") as unknown as FunctionReference<"mutation", "internal">;
+const incrementBlastCountersRef = makeFunctionReference<"mutation">("email:incrementBlastCounters") as unknown as FunctionReference<"mutation", "internal">;
+const sendBlastBatchRef = makeFunctionReference<"action">("email:sendBlastBatch") as unknown as FunctionReference<"action", "internal">;
+const getStaleBounceReportsRef = makeFunctionReference<"query">("email:getStaleBounceReports") as unknown as FunctionReference<"query", "internal">;
+const resolveBounceReportRef = makeFunctionReference<"mutation">("email:resolveBounceReport") as unknown as FunctionReference<"mutation", "internal">;
 
 // =============================================================================
 // EMAIL BLASTS — Queries, Mutations, Actions
@@ -345,7 +357,7 @@ export const sendBlast = internalAction({
   },
   handler: async (ctx, args) => {
     // Defense-in-depth: check email quota before sending
-    const blastForQuota = await ctx.runQuery(internal.email.getBlastById, {
+    const blastForQuota = await ctx.runQuery(getBlastByIdRef, {
       blastId: args.blastId,
     });
     if (blastForQuota?.orgId) {
@@ -358,31 +370,31 @@ export const sendBlast = internalAction({
     }
 
     // Transition to sending (the mutation enforces draft → sending)
-    await ctx.runMutation(internal.email.updateBlastStatus, {
+    await ctx.runMutation(updateBlastStatusRef, {
       blastId: args.blastId,
       status: "sending",
     });
 
     // Load blast
-    const blast = await ctx.runQuery(internal.email.getBlastById, {
+    const blast = await ctx.runQuery(getBlastByIdRef, {
       blastId: args.blastId,
     });
     if (!blast) throw new Error("Blast not found");
 
     // Get recipients to count them
-    const recipients = await ctx.runQuery(internal.email.getBlastRecipients, {
+    const recipients = await ctx.runQuery(getBlastRecipientsRef, {
       orgId: blast.orgId,
       limit: 10000,
     });
 
-    await ctx.runMutation(internal.email.updateBlastStatus, {
+    await ctx.runMutation(updateBlastStatusRef, {
       blastId: args.blastId,
       status: "sending",
       totalRecipients: recipients.length,
     });
 
     if (recipients.length === 0) {
-      await ctx.runMutation(internal.email.updateBlastStatus, {
+      await ctx.runMutation(updateBlastStatusRef, {
         blastId: args.blastId,
         status: "sent",
         totalSent: 0,
@@ -392,7 +404,7 @@ export const sendBlast = internalAction({
     }
 
     // Schedule the first batch (offset 0)
-    await ctx.scheduler.runAfter(0, internal.email.sendBlastBatch, {
+    await ctx.scheduler.runAfter(0, sendBlastBatchRef, {
       blastId: args.blastId,
       offset: 0,
     });
@@ -414,7 +426,7 @@ export const sendBlastBatch = internalAction({
     const BATCH_SIZE = 100;
 
     // Load blast
-    const blast = await ctx.runQuery(internal.email.getBlastById, {
+    const blast = await ctx.runQuery(getBlastByIdRef, {
       blastId: args.blastId,
     });
     if (!blast) {
@@ -432,7 +444,7 @@ export const sendBlastBatch = internalAction({
     const awsRegion = process.env.AWS_REGION || "us-east-1";
 
     if (!awsAccessKeyId || !awsSecretAccessKey) {
-      await ctx.runMutation(internal.email.updateBlastStatus, {
+      await ctx.runMutation(updateBlastStatusRef, {
         blastId: args.blastId,
         status: "failed",
       });
@@ -441,7 +453,7 @@ export const sendBlastBatch = internalAction({
 
     try {
       // Get all recipients (bounded by getBlastRecipients limit)
-      const allRecipients = await ctx.runQuery(internal.email.getBlastRecipients, {
+      const allRecipients = await ctx.runQuery(getBlastRecipientsRef, {
         orgId: blast.orgId,
         limit: 10000,
       });
@@ -449,7 +461,7 @@ export const sendBlastBatch = internalAction({
       const batch = allRecipients.slice(args.offset, args.offset + BATCH_SIZE);
       if (batch.length === 0) {
         // No more recipients — finalize
-        await ctx.runMutation(internal.email.updateBlastStatus, {
+        await ctx.runMutation(updateBlastStatusRef, {
           blastId: args.blastId,
           status: "sent",
           sentAt: Date.now(),
@@ -489,7 +501,7 @@ export const sendBlastBatch = internalAction({
       }
 
       // Update running counters
-      await ctx.runMutation(internal.email.incrementBlastCounters, {
+      await ctx.runMutation(incrementBlastCountersRef, {
         blastId: args.blastId,
         sentDelta: batchSent,
         bouncedDelta: batchFailed,
@@ -498,13 +510,13 @@ export const sendBlastBatch = internalAction({
       // Schedule next batch if more recipients remain
       const nextOffset = args.offset + BATCH_SIZE;
       if (nextOffset < allRecipients.length) {
-        await ctx.scheduler.runAfter(0, internal.email.sendBlastBatch, {
+        await ctx.scheduler.runAfter(0, sendBlastBatchRef, {
           blastId: args.blastId,
           offset: nextOffset,
         });
       } else {
         // All done — finalize
-        await ctx.runMutation(internal.email.updateBlastStatus, {
+        await ctx.runMutation(updateBlastStatusRef, {
           blastId: args.blastId,
           status: "sent",
           sentAt: Date.now(),
@@ -514,7 +526,7 @@ export const sendBlastBatch = internalAction({
       const message = err instanceof Error ? err.message : "Unknown error";
       console.error(`[sendBlastBatch] Blast ${args.blastId} batch at offset ${args.offset} failed:`, message);
 
-      await ctx.runMutation(internal.email.updateBlastStatus, {
+      await ctx.runMutation(updateBlastStatusRef, {
         blastId: args.blastId,
         status: "failed",
       });
@@ -665,13 +677,13 @@ export const processBounceReports = internalAction({
     const staleThreshold = now - 30 * 24 * 60 * 60 * 1000; // 30 days
 
     // Find unresolved bounce reports older than 30 days and auto-resolve
-    const stale = await ctx.runQuery(internal.email.getStaleBounceReports, {
+    const stale = await ctx.runQuery(getStaleBounceReportsRef, {
       threshold: staleThreshold,
     });
 
     let staleResolved = 0;
     for (const report of stale) {
-      await ctx.runMutation(internal.email.resolveBounceReport, {
+      await ctx.runMutation(resolveBounceReportRef, {
         reportId: report._id,
         resolution: "auto_resolved_stale",
       });

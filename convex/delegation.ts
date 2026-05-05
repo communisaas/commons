@@ -12,8 +12,11 @@
 
 import { query, mutation, action, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireAuth } from "./_authHelpers";
+import type { Id } from "./_generated/dataModel";
 // Policy text stored plaintext — server sees it in action args anyway.
 // Feature gated behind FEATURES.DELEGATION = false.
 
@@ -24,6 +27,22 @@ const VALID_SCOPES = [
   "message_generate",
   "full",
 ] as const;
+
+const insertGrantRef = makeFunctionReference<"mutation">("delegation:insertGrant") as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  {
+    scope: string;
+    policyText: string;
+    issueFilter: string[];
+    orgFilter: string[];
+    stanceProfileId?: string;
+    maxActionsPerDay: number;
+    requireReviewAbove: number;
+    expiresAt?: number;
+  },
+  Id<"delegationGrants">
+>;
 
 // =============================================================================
 // QUERIES
@@ -235,7 +254,7 @@ export const createGrant = action({
     requireReviewAbove: v.optional(v.float64()),
     expiresAt: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<Id<"delegationGrants">> => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
@@ -254,7 +273,7 @@ export const createGrant = action({
     const user = await ctx.runQuery(internal.users.getByEmail, { email: identity.email! });
     if (!user) throw new Error("User not found");
 
-    return await ctx.runMutation(internal.delegation.insertGrant, {
+    return await ctx.runMutation(insertGrantRef, {
       scope: args.scope,
       policyText: args.policyText.trim(),
       issueFilter: (args.issueFilter ?? [])

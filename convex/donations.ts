@@ -6,11 +6,20 @@ import {
   internalQuery,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
 import { computeOrgScopedEmailHash } from "./_orgHash";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
 import { encryptWithOrgKey } from "./_orgKey";
+
+declare const process: { env: Record<string, string | undefined> };
+
+const getCampaignRef = makeFunctionReference<"query">("donations:getCampaign") as unknown as FunctionReference<"query", "internal">;
+const insertDonationRef = makeFunctionReference<"mutation">("donations:insertDonation") as unknown as FunctionReference<"mutation", "internal">;
+const patchDonationEncryptedPiiRef = makeFunctionReference<"mutation">("donations:patchEncryptedPii") as unknown as FunctionReference<"mutation", "internal">;
+const setStripeSessionIdRef = makeFunctionReference<"mutation">("donations:setStripeSessionId") as unknown as FunctionReference<"mutation", "internal">;
 
 // =============================================================================
 // DONATIONS — Queries, Mutations, Actions
@@ -161,8 +170,6 @@ export const create = internalMutation({
       campaignId: args.campaignId,
       orgId: args.orgId,
       supporterId: args.supporterId,
-      email: "",  // PII: use encryptedEmail for reads
-      name: "",   // PII: use encryptedName for reads
       emailHash: args.emailHash,
       encryptedEmail: args.encryptedEmail,
       encryptedName: args.encryptedName,
@@ -259,8 +266,6 @@ export const insertDonation = internalMutation({
       campaignId: args.campaignId,
       orgId: args.orgId,
       supporterId: args.supporterId,
-      email: "",  // PII: use encryptedEmail for reads
-      name: "",   // PII: use encryptedName for reads
       emailHash: args.emailHash,
       encryptedEmail: args.encryptedEmail,
       encryptedName: args.encryptedName,
@@ -329,7 +334,7 @@ export const processCheckout = action({
     }
 
     // Load campaign
-    const campaign = await ctx.runQuery(internal.donations.getCampaign, {
+    const campaign = await ctx.runQuery(getCampaignRef, {
       campaignId: args.campaignId,
     });
     if (!campaign) throw new Error("Campaign not found");
@@ -364,7 +369,7 @@ export const processCheckout = action({
     if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
 
     // Step 1: Insert with placeholder encrypted fields, get real _id
-    const { id: donationDocId } = await ctx.runMutation(internal.donations.insertDonation, {
+    const { id: donationDocId } = await ctx.runMutation(insertDonationRef, {
       campaignId: args.campaignId,
       orgId: campaign.orgId,
       emailHash,
@@ -388,7 +393,7 @@ export const processCheckout = action({
     const encryptedName = JSON.stringify(encName);
 
     // Step 3: Patch with correctly-bound ciphertext
-    await ctx.runMutation(internal.donations.patchEncryptedPii, {
+    await ctx.runMutation(patchDonationEncryptedPiiRef, {
       donationId: donationDocId,
       encryptedEmail,
       encryptedName,
@@ -450,7 +455,7 @@ export const processCheckout = action({
     const session = await stripeResponse.json();
 
     // Update donation with Stripe session ID
-    await ctx.runMutation(internal.donations.setStripeSessionId, {
+    await ctx.runMutation(setStripeSessionIdRef, {
       donationId: donationDocId,
       stripeSessionId: session.id,
     });
@@ -586,10 +591,13 @@ export const createFundraiser = mutation({
       body: args.description?.trim() || undefined,
       type: "FUNDRAISER",
       status: "DRAFT",
+      debateEnabled: false,
+      debateThreshold: 100,
       goalAmountCents: args.goalAmountCents ?? undefined,
       raisedAmountCents: 0,
       donorCount: 0,
       donationCurrency: args.currency || "usd",
+      targetCountry: org.countryCode,
       updatedAt: Date.now(),
     });
 

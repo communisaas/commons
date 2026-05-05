@@ -8,6 +8,13 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
+import type { Id } from "./_generated/dataModel";
+
+type EncryptedSupporterForBlast = {
+  _id: Id<"supporters">;
+  encryptedEmail: string;
+  emailHash: string;
+};
 
 // =============================================================================
 // TEE-SEALED BLAST ORCHESTRATION
@@ -155,7 +162,7 @@ export const triggerEnclaveSend = internalAction({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sealedOrgKey: blast.sealedOrgKey,
-          supporters: supporters.map((s) => ({
+          supporters: supporters.map((s: EncryptedSupporterForBlast) => ({
             _id: String(s._id),
             encryptedEmail: s.encryptedEmail,
             emailHash: s.emailHash,
@@ -359,6 +366,7 @@ export const updateClientBlastProgress = mutation({
     if (!blast || blast.orgId !== org._id) {
       throw new Error("Blast not found");
     }
+    const previousStatus = blast.status;
 
     // Only allow updates from client-direct sends in valid states
     if (blast.sendMode !== "client-direct" && args.status !== "sending") {
@@ -388,7 +396,7 @@ export const updateClientBlastProgress = mutation({
     await ctx.db.patch(args.blastId, patch);
 
     // Increment org-level email counter on transition to "sent"
-    if (args.status === "sent" && blast.status !== "sent") {
+    if (args.status === "sent" && previousStatus !== "sent") {
       const orgDoc = await ctx.db.get(org._id);
       if (orgDoc) {
         const currentCount = (orgDoc as any).sentEmailCount ?? 0;

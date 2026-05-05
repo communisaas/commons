@@ -16,6 +16,9 @@ import { computeOrgScopedEmailHash, computeOrgScopedPhoneHash } from "./_orgHash
 
 const BATCH_SIZE = 50;
 
+type LegacySupporterPii = { name?: string; phone?: string; email?: string };
+type LegacyDonationPii = { name?: string; email?: string };
+
 // =============================================================================
 // INTERNAL QUERIES — fetch rows needing backfill
 // =============================================================================
@@ -29,24 +32,30 @@ export const getSupportersNeedingBackfill = internalQuery({
       .paginate({ numItems: limit * 5, cursor: (paginationCursor ?? null) as any });
 
     // Filter in memory but from a paginated source (not capped at 10K)
-    const needsWork = result.page.filter(
-      (s) =>
+    const needsWork = result.page.filter((doc) => {
+      const s = doc as typeof doc & LegacySupporterPii;
+      return (
         (s.name && !s.encryptedName) ||
         (s.phone && !s.encryptedPhone) ||
-        !s.encryptedEmail || s.encryptedEmail === "",
-    );
+        !s.encryptedEmail ||
+        s.encryptedEmail === ""
+      );
+    });
 
     return {
-      items: needsWork.slice(0, limit).map((s) => ({
-        _id: s._id,
-        orgId: s.orgId,
-        name: s.name ?? null,
-        phone: s.phone ?? null,
-        encryptedName: s.encryptedName ?? null,
-        encryptedPhone: s.encryptedPhone ?? null,
-        encryptedEmail: s.encryptedEmail,
-        email: (s as any).email ?? null,
-      })),
+      items: needsWork.slice(0, limit).map((doc) => {
+        const s = doc as typeof doc & LegacySupporterPii;
+        return {
+          _id: s._id,
+          orgId: s.orgId,
+          name: s.name ?? null,
+          phone: s.phone ?? null,
+          encryptedName: s.encryptedName ?? null,
+          encryptedPhone: s.encryptedPhone ?? null,
+          encryptedEmail: s.encryptedEmail,
+          email: s.email ?? null,
+        };
+      }),
       continueCursor: result.continueCursor,
       isDone: result.isDone,
     };
@@ -70,14 +79,17 @@ export const getDonationsNeedingBackfill = internalQuery({
     );
 
     return {
-      items: needsWork.slice(0, limit).map((d) => ({
-        _id: d._id,
-        orgId: d.orgId,
-        email: d.email,
-        name: d.name,
-        encryptedEmail: d.encryptedEmail ?? null,
-        encryptedName: d.encryptedName ?? null,
-      })),
+      items: needsWork.slice(0, limit).map((doc) => {
+        const d = doc as typeof doc & LegacyDonationPii;
+        return {
+          _id: d._id,
+          orgId: d.orgId,
+          email: d.email ?? null,
+          name: d.name ?? null,
+          encryptedEmail: d.encryptedEmail ?? null,
+          encryptedName: d.encryptedName ?? null,
+        };
+      }),
       continueCursor: result.continueCursor,
       isDone: result.isDone,
     };

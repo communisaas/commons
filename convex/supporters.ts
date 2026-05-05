@@ -8,8 +8,15 @@
  */
 
 import { query, mutation, action, internalMutation } from "./_generated/server";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
+
+const getOrganizationBySlugRef = makeFunctionReference<"query">("organizations:getBySlug");
+const importBatchRef = makeFunctionReference<"mutation">("supporters:importBatch");
+const findByEmailHashRef = makeFunctionReference<"query">("supporters:findByEmailHash");
+const patchEncryptedPiiRef = makeFunctionReference<"mutation">("supporters:patchEncryptedPii") as unknown as FunctionReference<"mutation", "internal">;
 
 // =============================================================================
 // QUERIES (return encrypted blobs — client decrypts with org key)
@@ -769,6 +776,7 @@ export const importBatch = mutation({
             country: s.country ?? undefined,
             emailStatus: s.emailStatus,
             smsStatus: s.smsStatus,
+            verified: false,
             source: "csv",
             encryptedEmail: s.encryptedEmail,
             emailHash: s.emailHash,
@@ -822,10 +830,9 @@ export const importWithEncryption = action({
     const { computeOrgScopedEmailHash, computeOrgScopedPhoneHash } = await import("./_orgHash");
     const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
     const { encryptWithOrgKey } = await import("./_orgKey");
-    const { api, internal } = await import("./_generated/api");
 
     // Get org ID from slug
-    const org = await ctx.runQuery(api.organizations.getBySlug, { slug: args.slug });
+    const org = await ctx.runQuery(getOrganizationBySlugRef, { slug: args.slug });
     if (!org) throw new Error("Organization not found");
 
     // Unseal org key
@@ -858,7 +865,7 @@ export const importWithEncryption = action({
 
     // importBatch returns { imported, updated, skipped } — but we need the IDs
     // Use a dedicated mutation that returns IDs for patching
-    const result = await ctx.runMutation(api.supporters.importBatch, {
+    const result = await ctx.runMutation(importBatchRef, {
       slug: args.slug,
       supporters: placeholders,
     });
@@ -870,7 +877,7 @@ export const importWithEncryption = action({
       const emailHash = placeholders[i].emailHash;
 
       // Find the supporter by emailHash
-      const supporter = await ctx.runQuery(api.supporters.findByEmailHash, {
+      const supporter = await ctx.runQuery(findByEmailHashRef, {
         slug: args.slug,
         emailHash,
       });
@@ -884,7 +891,7 @@ export const importWithEncryption = action({
         s.phone ? encryptWithOrgKey(s.phone.trim(), orgKey, entityId, "phone") : null,
       ]);
 
-      await ctx.runMutation(internal.supporters.patchEncryptedPii, {
+      await ctx.runMutation(patchEncryptedPiiRef, {
         supporterId: supporter._id as any,
         encryptedEmail: JSON.stringify(encEmail),
         encryptedName: encName ? JSON.stringify(encName) : undefined,

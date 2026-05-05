@@ -26,10 +26,15 @@
  */
 
 import { internalAction, internalMutation, internalQuery, query } from "./_generated/server";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
-import { internal } from "./_generated/api";
+
+declare const process: { env: Record<string, string | undefined> };
 
 const TREE_ID = "revocation";
+const setRevocationHaltRef = makeFunctionReference<"mutation">("revocations:setRevocationHalt") as unknown as FunctionReference<"mutation", "internal", { reason: string }, unknown>;
+const getRevocationRootInternalRef = makeFunctionReference<"query">("revocations:getRevocationRootInternal") as unknown as FunctionReference<"query", "internal">;
 // F-1.4 (2026-04-25 brutalist audit) — widened from 64 to 128 to close
 // targeted-lockout preimage grinding (was 2^64 single / 2^44 multi-target
 // at N=10^6; now 2^128 / 2^108 — infeasible). See `revocation-smt.ts`
@@ -608,14 +613,19 @@ export const getRevocationHaltAuditLog = query({
  * the error to dashboard logs (paged via standard cron-failure alerting).
  */
 async function flipHaltWithRetry(
-  ctx: { runMutation: (ref: unknown, args: unknown) => Promise<unknown> },
+  ctx: {
+    runMutation: (
+      ref: FunctionReference<"mutation", "internal", { reason: string }, unknown>,
+      args: { reason: string },
+    ) => Promise<unknown>;
+  },
   reason: string,
 ): Promise<void> {
   const maxAttempts = 3;
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      await ctx.runMutation(internal.revocations.setRevocationHalt, { reason });
+      await ctx.runMutation(setRevocationHaltRef, { reason });
       return;
     } catch (err) {
       lastErr = err;
@@ -657,7 +667,7 @@ export const reconcileSMTRoot = internalAction({
   args: {},
   handler: async (ctx) => {
     const localRoot = await ctx.runQuery(
-      internal.revocations.getRevocationRootInternal,
+      getRevocationRootInternalRef,
       {},
     );
 

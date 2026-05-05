@@ -762,12 +762,12 @@ export const insertSupporters = internalAction({
   args: {
     orgIds: v.array(v.string()),
   },
-  handler: async (ctx, { orgIds }): Promise<string[]> => {
+  handler: async (ctx, { orgIds }): Promise<Id<"supporters">[]> => {
     const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
     const { encryptWithOrgKey } = await import("./_orgKey");
     const { computeOrgScopedEmailHash } = await import("./_orgHash");
 
-    const ids: string[] = [];
+    const ids: Id<"supporters">[] = [];
     const distribution = [8, 7, 5];
     let globalIdx = 0;
 
@@ -822,7 +822,7 @@ export const insertSupporters = internalAction({
         })),
         orgId,
         orgIdx,
-      });
+      }) as Id<"supporters">[];
 
       // Now encrypt with real IDs as AAD (matches production decrypt path)
       for (let i = 0; i < batchIds.length; i++) {
@@ -859,8 +859,8 @@ export const insertSupporterBatch = internalMutation({
     orgId: v.string(),
     orgIdx: v.number(),
   },
-  handler: async (ctx, { supporters, orgId, orgIdx }) => {
-    const ids: string[] = [];
+  handler: async (ctx, { supporters, orgId, orgIdx }): Promise<Id<"supporters">[]> => {
+    const ids: Id<"supporters">[] = [];
     for (const s of supporters) {
       const id = await ctx.db.insert("supporters", {
         orgId: s.orgId as any,
@@ -924,7 +924,7 @@ export const insertTags = internalMutation({
 
 export const assignSupporterTags = internalMutation({
   args: {
-    supporterIds: v.array(v.string()),
+    supporterIds: v.array(v.id("supporters")),
     tagIds: v.array(v.id("tags")),
     orgIds: v.array(v.id("organizations")),
   },
@@ -1156,7 +1156,7 @@ export const insertEvents = internalMutation({
 export const insertEventRsvps = internalMutation({
   args: {
     eventIds: v.array(v.id("events")),
-    supporterIds: v.array(v.string()),
+    supporterIds: v.array(v.id("supporters")),
     orgIds: v.array(v.id("organizations")),
   },
   handler: async (ctx, { eventIds, supporterIds }) => {
@@ -1215,7 +1215,7 @@ export const insertDonations = internalMutation({
   args: {
     orgIds: v.array(v.id("organizations")),
     campaignIds: v.array(v.id("campaigns")),
-    supporterIds: v.array(v.string()),
+    supporterIds: v.array(v.id("supporters")),
   },
   handler: async (ctx, { orgIds, campaignIds, supporterIds }) => {
     const now = Date.now();
@@ -1347,7 +1347,7 @@ export const insertWorkflows = internalMutation({
 export const insertWorkflowExecutions = internalMutation({
   args: {
     workflowIds: v.array(v.id("workflows")),
-    supporterIds: v.array(v.string()),
+    supporterIds: v.array(v.id("supporters")),
   },
   handler: async (ctx, { workflowIds, supporterIds }) => {
     const executionDefs = [
@@ -1634,7 +1634,7 @@ export const insertOrgInvites = internalMutation({
 export const insertCampaignActions = internalMutation({
   args: {
     campaignIds: v.array(v.id("campaigns")),
-    supporterIds: v.array(v.string()),
+    supporterIds: v.array(v.id("supporters")),
     orgIds: v.array(v.id("organizations")),
   },
   handler: async (ctx, { campaignIds, supporterIds, orgIds }) => {
@@ -1939,12 +1939,15 @@ export const getOrgDonations = internalQuery({
       .query("donations")
       .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId as any))
       .collect();
-    return all.map((d) => ({
-      _id: String(d._id),
-      encryptedEmail: d.encryptedEmail,
-      encryptedName: d.encryptedName,
-      rawName: d.name ?? (d.encryptedName && !d.encryptedName.startsWith("{") ? d.encryptedName : null),
-    }));
+    return all.map((doc) => {
+      const d = doc as typeof doc & { name?: string };
+      return {
+        _id: String(d._id),
+        encryptedEmail: d.encryptedEmail,
+        encryptedName: d.encryptedName,
+        rawName: d.name ?? (d.encryptedName && !d.encryptedName.startsWith("{") ? d.encryptedName : null),
+      };
+    });
   },
 });
 

@@ -53,6 +53,45 @@ interface AggregateIncrement {
   errorType?: string;
 }
 
+interface MaterializeSnapshotResult {
+  success: boolean;
+  snapshotsCreated: number;
+  message?: string;
+  budgetSpent?: number;
+  aggregatesDeleted?: number;
+  snapshotDate?: number;
+}
+
+interface BudgetStatus {
+  exhausted: boolean;
+  consumed: number;
+  limit: number;
+}
+
+interface DeleteAggregatesResult {
+  deleted: number;
+}
+
+interface AnalyticsAggregate {
+  recordType?: string;
+  date?: number;
+  metric?: string;
+  count?: number;
+  templateId?: string;
+  jurisdiction?: string;
+  deliveryMethod?: string;
+  utmSource?: string;
+  errorType?: string;
+}
+
+type AnalyticsInternalApi = {
+  checkBudgetExhausted: any;
+  getAllAggregates: any;
+  storeSnapshot: any;
+  updatePrivacyBudget: any;
+  deleteAggregatesForDate: any;
+};
+
 // =============================================================================
 // MUTATIONS
 // =============================================================================
@@ -290,12 +329,21 @@ export const deleteAggregatesForDate = internalMutation({
  */
 export const materializeSnapshot = internalAction({
   args: {},
-  handler: async (ctx) => {
+  returns: v.object({
+    success: v.boolean(),
+    snapshotsCreated: v.number(),
+    message: v.optional(v.string()),
+    budgetSpent: v.optional(v.number()),
+    aggregatesDeleted: v.optional(v.number()),
+    snapshotDate: v.optional(v.number()),
+  }),
+  handler: async (ctx: any): Promise<MaterializeSnapshotResult> => {
+    const analyticsInternal = (internal as any).analytics as AnalyticsInternalApi;
     const now = Date.now();
     const yesterday = Math.floor((now - 86400000) / 86400000) * 86400000;
 
     // Budget guard: reject if daily epsilon exhausted
-    const budgetStatus = await ctx.runQuery(internal.analytics.checkBudgetExhausted, {
+    const budgetStatus: BudgetStatus = await ctx.runQuery(analyticsInternal.checkBudgetExhausted, {
       windowStart: yesterday,
     });
     if (budgetStatus.exhausted) {
@@ -304,9 +352,11 @@ export const materializeSnapshot = internalAction({
     }
 
     // Get all aggregates
-    const allAggregates = await ctx.runQuery(internal.analytics.getAllAggregates);
+    const allAggregates: AnalyticsAggregate[] = await ctx.runQuery(
+      analyticsInternal.getAllAggregates,
+    );
     const yesterdayAggregates = allAggregates.filter(
-      (agg: any) => agg.date === yesterday && agg.recordType === "aggregate"
+      (agg) => agg.date === yesterday && agg.recordType === "aggregate"
     );
 
     if (yesterdayAggregates.length === 0) {
@@ -334,7 +384,7 @@ export const materializeSnapshot = internalAction({
       const noisyCount = noiseFn(agg.count ?? 0);
 
       // Store snapshot record
-      await ctx.runMutation(internal.analytics.storeSnapshot, {
+      await ctx.runMutation(analyticsInternal.storeSnapshot, {
         metric: agg.metric ?? "",
         noisyCount,
         snapshotDate: yesterday,
@@ -352,7 +402,7 @@ export const materializeSnapshot = internalAction({
     }
 
     // Record budget spend ONCE per materialization run (one composition unit)
-    await ctx.runMutation(internal.analytics.updatePrivacyBudget, {
+    await ctx.runMutation(analyticsInternal.updatePrivacyBudget, {
       metric: "system",
       epsilonSpent: SERVER_EPSILON,
       windowStart: yesterday,
@@ -360,7 +410,7 @@ export const materializeSnapshot = internalAction({
     });
 
     // Clean up aggregates from yesterday
-    const cleanupResult = await ctx.runMutation(internal.analytics.deleteAggregatesForDate, {
+    const cleanupResult: DeleteAggregatesResult = await ctx.runMutation(analyticsInternal.deleteAggregatesForDate, {
       date: yesterday,
     });
 

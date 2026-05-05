@@ -7,6 +7,37 @@
 
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
+
+type RateLimitResult = {
+  allowed: boolean;
+  remaining: number;
+};
+
+type RateLimitRecord = {
+  _id: Id<"rateLimits">;
+  key: string;
+  windowStart: number;
+  count: number;
+  updatedAt: number;
+};
+
+type RateLimitQuery = {
+  withIndex(
+    indexName: "by_key_windowStart",
+    cb: (q: any) => any,
+  ): RateLimitQuery;
+  collect(): Promise<RateLimitRecord[]>;
+};
+
+type RateLimitDb = {
+  query(tableName: "rateLimits"): RateLimitQuery;
+  delete(id: Id<"rateLimits">): Promise<void>;
+  insert(
+    tableName: "rateLimits",
+    value: Omit<RateLimitRecord, "_id">,
+  ): Promise<Id<"rateLimits">>;
+};
 
 /**
  * Check (and consume one slot from) a rate-limit bucket.
@@ -20,23 +51,31 @@ export const check = internalMutation({
     windowMs: v.number(),
     maxRequests: v.number(),
   },
-  handler: async (ctx, { key, windowMs, maxRequests }) => {
+  returns: v.object({
+    allowed: v.boolean(),
+    remaining: v.number(),
+  }),
+  handler: async (
+    ctx: any,
+    { key, windowMs, maxRequests },
+  ): Promise<RateLimitResult> => {
+    const db = ctx.db as RateLimitDb;
     const now = Date.now();
     const windowStart = now - windowMs;
 
     // Clean old entries for this key
-    const old = await ctx.db
+    const old = await db
       .query("rateLimits")
       .withIndex("by_key_windowStart", (q) =>
         q.eq("key", key).lt("windowStart", windowStart),
       )
       .collect();
     for (const entry of old) {
-      await ctx.db.delete(entry._id);
+      await db.delete(entry._id);
     }
 
     // Count current-window entries
-    const current = await ctx.db
+    const current = await db
       .query("rateLimits")
       .withIndex("by_key_windowStart", (q) =>
         q.eq("key", key).gte("windowStart", windowStart),
@@ -48,7 +87,7 @@ export const check = internalMutation({
     }
 
     // Consume a slot
-    await ctx.db.insert("rateLimits", {
+    await db.insert("rateLimits", {
       key,
       windowStart: now,
       count: 1,

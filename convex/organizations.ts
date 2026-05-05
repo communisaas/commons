@@ -824,8 +824,11 @@ export const connectAnSync = mutation({
         apiKey: encryptedApiKey,
         status: "idle",
         syncType: "full",
-        connected: true,
-        createdAt: Date.now(),
+        totalResources: 0,
+        processedResources: 0,
+        imported: 0,
+        updated: 0,
+        skipped: 0,
       },
     });
     return { connected: true };
@@ -880,7 +883,7 @@ export const getUserOrgPlan = query({
     const { userId } = await requireAuth(ctx);
     const membership = await ctx.db
       .query("orgMemberships")
-      .withIndex("by_userId", (idx) => idx.eq("userId", userId))
+      .withIndex("by_userId_orgId", (idx) => idx.eq("userId", userId))
       .first();
     if (!membership) return null;
     const org = await ctx.db.get(membership.orgId);

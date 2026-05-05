@@ -9,6 +9,7 @@ import { query, mutation, internalAction, internalMutation, internalQuery } from
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireAuth, requireOrgRole } from "./_authHelpers";
+import type { Id } from "./_generated/dataModel";
 
 // Plan limits — mirrored from src/lib/server/billing/plans.ts (MUST stay in sync)
 const PLANS: Record<
@@ -598,7 +599,8 @@ export const upsertFromStripe = internalMutation({
   },
   handler: async (ctx, args) => {
     // orgId from Stripe metadata is the Convex document ID
-    const org = await ctx.db.get(args.orgId as any);
+    const orgId = args.orgId as Id<"organizations">;
+    const org = await ctx.db.get(orgId);
 
     if (!org) {
       console.warn(`[subscriptions] Org not found for Stripe webhook: ${args.orgId}`);

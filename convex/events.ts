@@ -6,9 +6,40 @@ import {
   internalQuery,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
 import { computeOrgScopedEmailHash } from "./_orgHash";
+import type { Doc, Id } from "./_generated/dataModel";
+
+type InsertRsvpResult = {
+  id: Id<"eventRsvps">;
+  updated: boolean;
+};
+
+const getEventInternalRef = makeFunctionReference<"query">("events:getEventInternal") as unknown as FunctionReference<
+  "query",
+  "internal",
+  { eventId: Id<"events"> },
+  Doc<"events"> | null
+>;
+const insertRsvpRef = makeFunctionReference<"mutation">("events:insertRsvp") as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  {
+    eventId: Id<"events">;
+    supporterId?: Id<"supporters">;
+    encryptedEmail: string;
+    emailHash: string;
+    encryptedRsvpName?: string;
+    status: string;
+    guestCount: number;
+    districtHash?: string;
+    engagementTier: number;
+  },
+  InsertRsvpResult
+>;
 
 // =============================================================================
 // EVENTS — Queries, Mutations, Actions
@@ -418,9 +449,9 @@ export const createRsvp = action({
     engagementTier: v.optional(v.number()),
     supporterId: v.optional(v.id("supporters")),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<InsertRsvpResult> => {
     // Verify event exists and is accepting RSVPs
-    const event = await ctx.runQuery(internal.events.getEventInternal, { eventId: args.eventId });
+    const event = await ctx.runQuery(getEventInternalRef, { eventId: args.eventId });
     if (!event) throw new Error("Event not found");
     if (event.status !== "PUBLISHED") throw new Error("Event is not accepting RSVPs");
     if (event.capacity && event.rsvpCount >= event.capacity && !event.waitlistEnabled) {
@@ -457,7 +488,7 @@ export const createRsvp = action({
       encryptedRsvpName = JSON.stringify(encName);
     }
 
-    const result = await ctx.runMutation(internal.events.insertRsvp, {
+    const result = await ctx.runMutation(insertRsvpRef, {
       eventId: args.eventId,
       supporterId: args.supporterId,
       encryptedEmail,

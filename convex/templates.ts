@@ -1,9 +1,20 @@
 import { query, mutation, action, internalAction, internalQuery, internalMutation } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth, requireOrgRole } from "./_authHelpers";
 import anchorsData from "./domain-anchors.json";
+
+declare const process: { env: Record<string, string | undefined> };
+
+const rateLimitCheckRef = makeFunctionReference<"mutation">("_rateLimit:check") as unknown as FunctionReference<"mutation", "internal">;
+const getByIdsRef = makeFunctionReference<"query">("templates:getByIds") as unknown as FunctionReference<"query", "internal">;
+const textSearchRef = makeFunctionReference<"query">("templates:textSearch") as unknown as FunctionReference<"query", "internal">;
+const listMissingEmbeddingsRef = makeFunctionReference<"query">("templates:listMissingEmbeddings") as unknown as FunctionReference<"query", "internal">;
+const patchEmbeddingsRef = makeFunctionReference<"mutation">("templates:patchEmbeddings") as unknown as FunctionReference<"mutation", "internal">;
+const listMissingDomainHueRef = makeFunctionReference<"query">("templates:_listMissingDomainHue") as unknown as FunctionReference<"query", "internal">;
+const patchDomainHueRef = makeFunctionReference<"mutation">("templates:_patchDomainHue") as unknown as FunctionReference<"mutation", "internal">;
 
 // ── Domain hue projection (cosine similarity → circular hue interpolation) ──
 
@@ -316,7 +327,7 @@ export const getBySlugPublic = query({
     if (!template || !template.isPublic) return null;
 
     // Fetch author info
-    let author: { name: string | null; avatar: string | null } | null = null;
+    let author: { name: string | null; avatar: string | null; encryptedName?: string | null } | null = null;
     if (template.userId) {
       const user = await ctx.db.get(template.userId);
       if (user) {
@@ -459,7 +470,7 @@ export const search = action({
     // Rate limit per user (authenticated search)
     const identity = await ctx.auth.getUserIdentity();
     const rlKey = `templates.search:${identity?.subject ?? 'anon'}:${args.query.slice(0, 20)}`;
-    const rl = await ctx.runMutation(internal._rateLimit.check, {
+    const rl = await ctx.runMutation(rateLimitCheckRef, {
       key: rlKey,
       windowMs: 60_000,
       maxRequests: 30,
@@ -512,9 +523,9 @@ export const search = action({
 
       // Hydrate full docs
       const templateIds = vectorResults.map((r) => r._id);
-      const templates = await ctx.runQuery(internal.templates.getByIds, {
+      const templates = await ctx.runQuery(getByIdsRef, {
         ids: templateIds,
-      });
+      }) as Array<Doc<"templates"> | null>;
 
       // Build score map from vector results
       const scoreMap = new Map(
@@ -543,12 +554,12 @@ export const search = action({
       };
     } catch {
       // Fallback: text search via Convex search index
-      const textResults = await ctx.runQuery(internal.templates.textSearch, {
+      const textResults = await ctx.runQuery(textSearchRef, {
         query: queryText,
         limit,
         domain: args.domain,
         countryCode: args.countryCode,
-      });
+      }) as Doc<"templates">[];
 
       return {
         templates: textResults.map((t) => ({ ...t, _score: null })),
@@ -977,16 +988,19 @@ export const createTemplate = mutation({
         }
       }
 
-      await ctx.db.insert("templateScopes", {
-        templateId,
-        countryCode,
-        regionCode,
-        localityCode,
-        displayText,
-        scopeLevel,
-        confidence: 1.0,
-        extractionMethod: "gemini_inline",
-      } as any);
+      await ctx.db.patch(templateId, {
+        scopes: [
+          {
+            countryCode,
+            ...(regionCode ? { regionCode } : {}),
+            ...(localityCode ? { localityCode } : {}),
+            displayText,
+            scopeLevel,
+            confidence: 1.0,
+            extractionMethod: "gemini_inline",
+          },
+        ],
+      });
     }
 
     const template = await ctx.db.get(templateId);
@@ -1047,7 +1061,7 @@ export const setCwcVerification = mutation({
 export const backfillEmbeddings = internalAction({
   args: {},
   handler: async (ctx) => {
-    const missing = await ctx.runQuery(internal.templates.listMissingEmbeddings);
+    const missing = await ctx.runQuery(listMissingEmbeddingsRef);
 
     if (missing.length === 0) {
       console.log("[backfill] All templates have embeddings.");
@@ -1094,7 +1108,7 @@ export const backfillEmbeddings = internalAction({
 
         const domainHue = projectToHue(topEmb);
 
-        await ctx.runMutation(internal.templates.patchEmbeddings, {
+        await ctx.runMutation(patchEmbeddingsRef, {
           templateId: t._id,
           locationEmbedding: locEmb,
           topicEmbedding: topEmb,
@@ -1196,13 +1210,13 @@ export const backfillDomainHue = internalAction({
     })),
   },
   handler: async (ctx, args) => {
-    const candidates = await ctx.runQuery(internal.templates._listMissingDomainHue, {});
+    const candidates = await ctx.runQuery(listMissingDomainHueRef, {});
     console.log(`[backfillDomainHue] ${candidates.length} templates need domainHue`);
 
     let processed = 0;
     for (const t of candidates) {
       const hue = _projectToHue(t.topicEmbedding, args.anchors);
-      await ctx.runMutation(internal.templates._patchDomainHue, {
+      await ctx.runMutation(patchDomainHueRef, {
         templateId: t._id,
         domainHue: hue,
       });
