@@ -9,11 +9,13 @@
 >   raw compact JWE, and `identityToken` response shapes. Browser-mediated
 >   OpenID4VP now accepts only encrypted `dc_api.jwt` envelopes carrying
 >   `mso_mdoc` DeviceResponse payloads.
-> - **OpenID4VP mdoc nonce/origin binding is live on the signed DC API path.**
->   The verifier reconstructs the DC API SessionTranscript and verifies mDL
->   DeviceAuth for encrypted `mso_mdoc` responses. The raw `org-iso-mdoc`
->   lane remains disabled until Apple/Safari ReaderAuth and response handling
->   are implemented.
+> - **OpenID4VP mdoc nonce/origin binding is live on BOTH the signed DC API
+>   path AND the raw `org-iso-mdoc` path** (I1, 2026-05-04). The verifier
+>   reconstructs the DC API SessionTranscript and verifies mDL DeviceAuth via
+>   a shared `verifyMdocDeviceAuth` helper called from both lanes. The raw
+>   lane (`FEATURES.MDL_MDOC = false` today) is now ready for the flag flip
+>   from a security standpoint; remaining work is Apple/Safari ReaderAuth and
+>   raw-mdoc-specific response handling, both ops/integration concerns.
 > - **`SKIP_ISSUER_VERIFICATION` bypass** was removed from verifier code.
 >   `tests/unit/identity/issuer-bypass-removed.test.ts` guards against
 >   reintroduction.
@@ -26,9 +28,16 @@
 >   providers. R2 (`atlas.commons.email`) carries the production read
 >   path. Pinata/Lighthouse/Fleek implementations preserved for
 >   future reactivation when IPFS matures.
+> - **(RESOLVED 2026-05-04, I3)** Chunked-atlas R2 read path lacked
+>   integration test coverage (#22 since storacha sunset). Now exercised
+>   end-to-end in `tests/integration/ipfs-chunked-atlas.test.ts` with
+>   mocked fetch responses covering manifest reads, chunk-for-cell with
+>   H3 parent computation, district index, 404 → null mapping, 5xx
+>   throw, network failure throw, and path-traversal hardening.
 > - **TEE is MVP-only — `LocalConstituentResolver`, not an attested
 >   enclave.** Witness decryption runs in-process in the CF Worker
->   runtime. Nitro deployment is Phase 2 (see
+>   runtime. Nitro deployment is J-phase (see
+>   `voter-protocol/specs/I-PHASE-SCOPE.md` §6 post-launch ledger and
 >   `docs/implementation-status.md`). The prior entry framed TEE as
 >   shippable; treat as gap.
 > - **Client storage lacks per-user keying.** `templateDraftStore`,
@@ -38,6 +47,13 @@
 > - **`FEATURES.PASSKEY=false`** — passkey authentication routes exist
 >   but are not the live sign-in path. Treat any claim that WebAuthn
 >   is a live auth channel as aspirational.
+> - **(NEW 2026-05-04, I2)** Boundary-cell observability — the H1
+>   `cellStraddles` field now powers a Convex cron alert that fires when
+>   the trailing-24h boundary-cell rate exceeds 28% (CA G3 baseline:
+>   ~16.4%). Alert fan-out reaches Sentry via `/api/internal/alert`.
+>   Alert payload is aggregate-counts only — no user IDs or hashes. Cron
+>   schedule: every 60 minutes (`monitor-boundary-cell-rate`). Threshold
+>   re-tuning is required if multi-state launch shifts the baseline.
 
 ## Issuer Verification Bypass Removed
 
@@ -55,54 +71,42 @@ The following gaps exist in `src/lib/core/identity/mdl-verification.ts` and are 
 |-----|--------|------|
 | OID4VP JWT signature not verified | Deleted/non-launch path after DC-4; JWT/string VP tokens are rejected | DC-4 ✓ |
 | Signed OpenID4VP `mso_mdoc` nonce binding to SessionTranscript | Implemented for encrypted `dc_api.jwt` responses | DC-3a/DC-4 ✓ |
-| Raw `org-iso-mdoc` DeviceAuth/ReaderAuth | Deferred — REQUIRED before Apple/Safari/raw mdoc launch flag flip | DC-5 |
+| Raw `org-iso-mdoc` DeviceAuth (deviceSignature against reconstructed SessionTranscript) | **Implemented (I1, 2026-05-04)** — shared `verifyMdocDeviceAuth` helper called from both lanes | DC-5 ✓ |
+| Raw `org-iso-mdoc` ReaderAuth + Apple/Safari handover handling | Deferred — required for actual `MDL_MDOC` flag flip; I1 closed the cryptographic gate, ops/integration remain | future epic |
 
-### F-1.3 — mdoc DeviceAuth nonce-binding partial closure (2026-04-25)
+### F-1.3 / I1 — mdoc DeviceAuth full closure (2026-05-04)
 
-**Threat**: Replay/relay of captured mdoc responses on the raw org-iso-mdoc path
-(Safari/iOS native when enabled). A captured `DeviceResponse` can be
-re-submitted by an attacker against any later `verify-mdl/start` nonce.
+**Status: closed via I1.** The raw `org-iso-mdoc` path now performs full
+DeviceAuth verification using the shared `verifyMdocDeviceAuth` helper in
+`src/lib/core/identity/mdl-verification.ts`. Both lanes — encrypted
+`dc_api.jwt` (DC-3a/DC-4) and raw `org-iso-mdoc` (I1) — call the same helper
+after MSO digest validation, reconstructing SessionTranscript from
+`(verifierOrigin, nonce, jwkThumbprint)` and verifying the
+COSE_Sign1 deviceSignature against the canonical DeviceAuthenticationBytes
+per ISO 18013-5 §9.1.3.6.
 
-**Replay window** (corrected after review round 2 — earlier framing was wrong):
-On the org-iso-mdoc path, the `nonce` parameter is checked for *presence* but
-NEVER extracted from the response or compared against `deviceAuth`. The
-verification therefore does not bound the replay window by the OID4VP nonce
-TTL. **A captured mdoc response remains replayable until the wallet rotates the
-device-bound key in the credential** — which for AAMVA-issued mDLs is typically
-the credential's `validFrom`/`validUntil` window (months to years), not minutes.
-This is a structural exposure, not a bounded incident, until DC-5 ships.
+**Original threat (pre-I1)**: replay/relay of captured mdoc responses on the
+raw org-iso-mdoc path. A captured `DeviceResponse` could be re-submitted
+against any later `verify-mdl/start` nonce. The pre-I1 partial gate (F-1.3,
+2026-04-25) only checked deviceAuth structure presence; it provided zero
+defense against capture-replay.
 
-**What's protected today**:
-- COSE_Sign1 IACA root verification — proves the mDL itself was issued by a
-  state in our trust store; not forgeable.
-- MSO digest validation — proves extracted field values match signed digests.
-- Signed OpenID4VP-path DeviceAuth check — the encrypted `mso_mdoc`
-  DeviceResponse is verified against the issued DC API nonce and origin-bound
-  SessionTranscript. **Does not apply to org-iso-mdoc.**
-- **DeviceAuth presence gate (F-1.3, narrow scope)**: `processMdocResponse`
-  rejects with `replay_protection_missing` when `deviceSigned.deviceAuth` is
-  absent or has neither `deviceMac` nor `deviceSignature`. This rejects
-  non-conformant wallets (negligent vendors, broken test rigs); it provides
-  **zero defense against capture-replay** because the captured bytes pass
-  the presence check trivially.
+**Post-I1 protection**: a captured response replayed in a fresh session fails
+because the new session's nonce + jwkThumbprint differ from the bytes the
+wallet originally signed. The replay window is now bounded by the OID4VP
+nonce TTL, not by the credential's `validUntil`.
 
-**What's NOT protected on raw `org-iso-mdoc`**:
-- Raw mdoc DeviceAuth bytes are NOT verified. Cryptographic binding of the
-  response to OUR session requires reconstructing the raw mdoc
-  SessionTranscript from the request + ephemeral key material and verifying
-  `deviceMac` / `deviceSignature` against it. That is DC-5.
-- Reader authentication (`ReaderAuthentication`) is NOT included in the raw mdoc
-  request — `verify-mdl/start` omits `readerAuth`. When DC-5 lands the
-  reconstructed SessionTranscript will be reader-less, so a captured
-  reader-less response could in principle be replayed at any other reader-less
-  verifier (mitigated weakly by `eDeviceKey` mismatch enforced via HPKE).
+**Remaining gaps (post-I1, scoped for the future Apple/Safari epic)**:
+- `ReaderAuthentication` is still NOT included in the raw mdoc request —
+  `verify-mdl/start` omits `readerAuth`. The reconstructed SessionTranscript
+  on the raw path is reader-less, so a captured reader-less response could in
+  principle be replayed at any *other* reader-less verifier. Mitigated weakly
+  by `eDeviceKey` mismatch enforced via HPKE; closing this fully requires
+  ReaderAuth wiring on raw-mdoc requests.
+- The `MDL_MDOC` flag remains `false` until Apple/Safari handover handling is
+  complete. I1 closed the cryptographic gate; the ops/integration story for
+  in-person NFC/BLE flows is a separate launch decision.
 
-**Defense-in-depth (deferred — H-1)**: a credentialHash re-use cool-down
-(detect: same `credentialHash` from two `userId`s within N minutes) is the
-cheapest pre-T3 mitigation against the stated threat. Not implemented today.
-
-**Launch gate**: DC-5 must ship before the raw mdoc flag (`FEATURES.MDL_MDOC`)
-or iOS lane (`FEATURES.MDL_IOS`) is flipped true. Signed OpenID4VP can remain
-enabled through `FEATURES.MDL_ANDROID_OID4VP`; raw mdoc remains closed until
-Apple/Safari ReaderAuth, response handling, SessionTranscript reconstruction,
-and DeviceAuth verification are complete.
+**Shared helper as forward investment**: future protocol additions (e.g.,
+ReaderAuth-bound paths) can call the same helper, inheriting the
+SessionTranscript binding by construction.
