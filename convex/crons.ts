@@ -225,4 +225,16 @@ crons.interval(
   internal.messageJobs.cleanupExpired,
 );
 
+// ---------------------------------------------------------------------------
+// 19. Boundary-cell observability (I2 — 2026-05-04). Computes the rolling
+//     24 h boundary_cell_send_rate over post-H1 districtCredentials and
+//     emits a Sentry alert when the rate exceeds the threshold. H1 stored
+//     the cellStraddles field; I2 is what makes the field actionable.
+// ---------------------------------------------------------------------------
+crons.interval(
+  "monitor-boundary-cell-rate",
+  { hours: 1 },
+  internal.observability.monitorBoundaryCellRate,
+);
+
 export default crons;
