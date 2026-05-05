@@ -51,7 +51,10 @@ import { LocalConstituentResolver } from '$lib/server/tee/local-resolver';
 const VALID_PROOF = '0x' + 'ab'.repeat(1500);
 const ACTION_DOMAIN = '0x' + '1'.padStart(64, '0');
 const NULLIFIER = '0x' + 'be'.padStart(64, 'e');
-const CELL_ID = '872830828ffffff';
+// CELL_ID is the BN254 hex of "cd-0612" UTF-8 byte-packed (matches encodeUsGeoid).
+// 0x63=c, 0x64=d, 0x2d='-', 0x30=0, 0x36=6, 0x31=1, 0x32=2 → 0x63642d30363132
+const CELL_ID = '0x' + '63642d30363132'.padStart(64, '0');
+const H3_CELL = '872830828ffffff';
 
 const FULL_ADDRESS = {
 	name: 'Jane Doe',
@@ -67,9 +70,19 @@ const FULL_ADDRESS = {
 // Stage 2.7: 24-slot districts + deterministic commitment derived by the same
 // folding formula as the hoisted mockPoseidonSponge24 above. Declared in module
 // scope so every test uses the same pair — binding gate passes by default.
-const HAPPY_DISTRICTS: string[] = Array.from({ length: 24 }, (_, i) =>
-	'0x' + (i + 1).toString(16).padStart(64, '0')
-);
+//
+// G7 option-c: districts[0] must decode to a valid substrate ID for the
+// resolver's option-(c) routing path to produce a display code. Slot 0 = the
+// CD as "cd-0612" UTF-8 byte-packed → BN254 hex (matches CELL_ID encoding).
+// Other slots stay as numeric placeholders — they don't decode but aren't
+// consulted for routing.
+const HAPPY_DISTRICTS: string[] = (() => {
+	const arr = Array.from({ length: 24 }, (_, i) =>
+		'0x' + (i + 1).toString(16).padStart(64, '0')
+	);
+	arr[0] = CELL_ID; // share the encoding fixture; cd-0612 → CA-12
+	return arr;
+})();
 function computeMockSponge24(districts: string[]): string {
 	const combined = districts.join('|');
 	let hash = 0n;
@@ -83,6 +96,10 @@ const HAPPY_COMMITMENT = computeMockSponge24(HAPPY_DISTRICTS);
 const VALID_WITNESS = {
 	deliveryAddress: FULL_ADDRESS,
 	cellId: CELL_ID,
+	// G7: post-G7 credentials carry h3Cell alongside cellId. resolver-gates
+	// compares H3-to-H3 (witness.h3Cell vs derived from address). Without it,
+	// reconciliation fails CREDENTIAL_MIGRATION_REQUIRED.
+	h3Cell: H3_CELL,
 	nullifier: NULLIFIER,
 	actionDomain: ACTION_DOMAIN,
 	districts: HAPPY_DISTRICTS
@@ -119,7 +136,10 @@ function buildRequest(overrides: Partial<{
 	};
 }
 
-function mockShadowAtlasSuccess(cellId = CELL_ID) {
+function mockShadowAtlasSuccess(cellId = H3_CELL) {
+	// G7: resolveAddress returns H3 string in cell_id; reconcileCellGate
+	// compares this to witness.h3Cell. Default to H3_CELL so the happy path
+	// matches VALID_WITNESS.h3Cell.
 	mockResolveAddress.mockResolvedValueOnce({
 		geocode: { lat: 34.05, lng: -118.24, matched_address: 'mock', confidence: 0.95, country: 'US' },
 		district: { id: 'CA-12', name: 'District CA-12', jurisdiction: 'congressional', district_type: 'congressional' },
@@ -350,6 +370,113 @@ describe('LocalConstituentResolver — three-gate atomic check', () => {
 
 		expect(result.success).toBe(false);
 		expect(result.errorCode).toBe('ADDRESS_UNRESOLVABLE');
+	});
+
+	it('G7 option-c: routes from witness.districts[0], not reconcile-derived district', async () => {
+		// Cell-splitting attack regression: a malicious client could legitimately
+		// register for cell X but craft a witness with h3Cell=Y AND deliveryAddress
+		// in district Y, route delivery to Y while the proof is bound to X. The
+		// fix: route from witness.districts[0] (cryptographically bound to cellId
+		// via the Tree 2 SMT inclusion proof).
+		//
+		// In this test:
+		//   - witness.h3Cell = H3_CELL (matches address resolveAddress returns) → reconcile passes
+		//   - witness.districts[0] = CELL_ID encoding "cd-0612" → routes to CA-12
+		//   - mockShadowAtlasSuccess returns districtCode "CA-12" so both happen
+		//     to agree here. The point: the resolver MUST consult districts[0]
+		//     (proof-bound), not reconcileResult.districtCode (witness-bound).
+		mockDecryptWitness.mockResolvedValueOnce(VALID_WITNESS);
+		mockShadowAtlasSuccess();
+
+		const result = await resolver.resolve(buildRequest());
+
+		expect(result.success).toBe(true);
+		expect(result.constituent?.congressionalDistrict).toBe('CA-12');
+	});
+
+	it('G7 option-c: rejects PROOF_INVALID when witness.districts[0] is missing', async () => {
+		// Note: an empty districts[0] also breaks the Stage 2.7 binding gate
+		// (verifyWitnessDistrictCommitment would compute a different sponge24
+		// from HAPPY_COMMITMENT), so this test exercises Gate 2's earlier check
+		// rather than the option-c routing's missing-routing-hex check. Either
+		// way we expect PROOF_INVALID — the routing branch is a defense-in-depth
+		// fallback for the case where Gate 2 would have somehow passed.
+		mockDecryptWitness.mockResolvedValueOnce({
+			...VALID_WITNESS,
+			districts: ['', ...VALID_WITNESS.districts.slice(1)]
+		});
+		// No mockShadowAtlasSuccess() — Gate 2 fails before reconcile runs,
+		// so resolveAddress is never called. Queueing an unused mock would
+		// pollute the next test's mock queue.
+
+		const result = await resolver.resolve(buildRequest());
+
+		expect(result.success).toBe(false);
+		expect(result.errorCode).toBe('PROOF_INVALID');
+	});
+
+	it('G7: rejects pre-G7 credential (no h3Cell) with CREDENTIAL_MIGRATION_REQUIRED', async () => {
+		const preG7Witness = { ...VALID_WITNESS };
+		delete (preG7Witness as Partial<typeof preG7Witness>).h3Cell;
+		mockDecryptWitness.mockResolvedValueOnce(preG7Witness);
+		mockShadowAtlasSuccess();
+
+		const result = await resolver.resolve(buildRequest());
+
+		expect(result.success).toBe(false);
+		expect(result.errorCode).toBe('CREDENTIAL_MIGRATION_REQUIRED');
+	});
+
+	it('H4: fails closed when districts[0] hex does not decode (no fallback to reconcile-derived district)', async () => {
+		// G7r CRITICAL → H4: the previous fallback to reconcileResult.districtCode
+		// recreated the cell-splitting attack vector. A malicious client could
+		// register with cellId=X, present a witness whose districts[0] is
+		// undecodable, and the fallback would route to whatever reconcile
+		// returned (which derives from witness.h3Cell, client-controlled).
+		//
+		// Build a witness where districts[0] passes the binding gate but does
+		// NOT decode to a substrate ID. We need a value that:
+		//   1. Is a valid hex string (otherwise an earlier check rejects it).
+		//   2. Decodes via decodeBN254HexToSubstrate → output that
+		//      convertDistrictId cannot map to a known CD.
+		//
+		// Mock convertDistrictId to return null directly — that's the codepath
+		// the H4 fix guards. We mock the whole module so the resolver picks up
+		// our shim when it dynamically imports.
+		const undecodableDistrictHex =
+			'0x' + 'ff'.repeat(32); // arbitrary hex, will fail the convertDistrictId mapping
+
+		const wireDistricts: string[] = [...HAPPY_DISTRICTS];
+		wireDistricts[0] = undecodableDistrictHex;
+
+		// Re-derive HAPPY_COMMITMENT for this wire so Stage 2.7 binding still passes.
+		const undecodableCommitment = computeMockSponge24(wireDistricts);
+
+		mockDecryptWitness.mockResolvedValueOnce({
+			...VALID_WITNESS,
+			districts: wireDistricts
+		});
+		mockShadowAtlasSuccess();
+
+		const result = await resolver.resolve(
+			buildRequest({
+				expected: {
+					actionDomain: ACTION_DOMAIN,
+					templateId: 'tpl-1',
+					districtCommitment: undecodableCommitment
+				}
+			})
+		);
+
+		// Pre-H4: result.success would have been true with constituent.congressionalDistrict
+		// silently set to reconcileResult.districtCode. Post-H4: PROOF_INVALID.
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.errorCode).toBe('PROOF_INVALID');
+			expect(result.error).toBe('witness_district_decode_failed');
+			// Sanity: error payload doesn't leak the witness district hex.
+			expect(result.error).not.toContain(undecodableDistrictHex.slice(2, 10));
+		}
 	});
 
 	// ---------------------------------------------------------------------------

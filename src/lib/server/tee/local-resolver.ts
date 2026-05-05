@@ -2,8 +2,10 @@
  * Local Constituent Resolver (MVP)
  *
  * Decrypts witness in-process using the server's X25519 private key.
- * PII exists only in function-scoped variables and is garbage-collected
- * after the delivery completes.
+ * This is a bounded-memory processing path, not a hardware isolation boundary:
+ * JavaScript strings cannot be reliably zeroed. Keep plaintext out of logs,
+ * databases, and response errors; replace with NitroEnclaveResolver when the
+ * enclave boundary is actually deployed.
  *
  * Crypto: X25519 ECDH → BLAKE2b KDF → XChaCha20-Poly1305
  * (mirrors client-side encryption in witness-encryption.ts)
@@ -79,13 +81,81 @@ export class LocalConstituentResolver implements ConstituentResolver {
 		// `congressional_district` field is user-controlled and MUST NOT be trusted
 		// (an attacker can provide an honest cellId+address but lie about the district
 		// string, routing the message to another district's reps).
-		const reconcileResult = await reconcileCellGate({
-			address: { street: addr.street, city: addr.city, state: addr.state, zip: addr.zip },
-			witnessCellId: witness.cellId
-		});
+			// G7: prefer H3 encoding when present (post-G7 credentials carry both
+			// h3Cell and cellId; resolveAddress returns H3, so H3-to-H3 comparison
+			// is the canonical path). Pre-G7 credentials only have cellId (BN254
+			// hex) — reconcileCellGate falls through with a clear error since the
+			// encoding split means meaningful comparison is impossible there.
+			const witnessH3Cell = typeof witness.h3Cell === 'string' ? witness.h3Cell : undefined;
+			const witnessCellId = typeof witness.cellId === 'string' ? witness.cellId : undefined;
+			const reconcileResult = await reconcileCellGate({
+				address: { street: addr.street, city: addr.city, state: addr.state, zip: addr.zip },
+				witnessH3Cell,
+				witnessCellId
+			});
 		if (!reconcileResult.success) {
 			return { success: false, errorCode: reconcileResult.errorCode, error: reconcileResult.error };
 		}
+
+		// G7 option-(c): route from witness.districts[0] (cryptographically
+		// bound to cellId via the SMT inclusion proof verified in Gate 2),
+		// NOT from reconcileResult.districtCode (which derives from the
+		// witness-supplied h3Cell — client-controlled).
+		//
+		// Why: G7 added h3Cell to the witness so the resolver could compare
+		// H3-to-H3 with the address-derived H3. But h3Cell is client-supplied
+		// and not bound to cellId in the leaf hash. A malicious client could
+		// register with cellId=X, present witness.h3Cell=Y, deliver to an
+		// address in Y — H3-to-H3 reconcile passes, delivery routes to Y's
+		// district even though the proof is bound to X.
+		//
+		// The fix: read the routing district from witness.districts[0]. That
+		// array is in the proof's public inputs (Gate 2 verifies the proof's
+		// cellMapRoot + Stage 2.7 verifies witness.districts hashes to the
+		// expected districtCommitment, which was bound to cellId at issuance
+		// time). The H3-to-H3 reconcile in Gate 3 stays as a plausibility
+		// check — "the typed delivery address is in the cell you proved" —
+		// but is no longer the trust root for routing.
+		const witnessDistricts = (witness as { districts?: unknown[] }).districts;
+		const routingHex =
+			Array.isArray(witnessDistricts) && typeof witnessDistricts[0] === 'string'
+				? (witnessDistricts[0] as string)
+				: undefined;
+		if (!routingHex) {
+			return {
+				success: false,
+				errorCode: 'PROOF_INVALID',
+				error: 'witness_missing_congressional_slot',
+			};
+		}
+		const { decodeBN254HexToSubstrate, convertDistrictId } = await import(
+			'$lib/core/shadow-atlas/district-format'
+		);
+		const substrateId = decodeBN254HexToSubstrate(routingHex);
+		const districtCode = convertDistrictId(substrateId);
+		if (!districtCode || districtCode === routingHex) {
+			// H4 — fail closed. The previous fallback to reconcileResult.districtCode
+			// (which derives from the witness-supplied h3Cell) recreates exactly the
+			// cell-splitting attack the G7r option-(c) routing was added to close:
+			// a malicious client could register with cellId=X, present
+			// witness.h3Cell=Y in a boundary cell, and the decode-failure path would
+			// happily route to Y. The "preserves liveness" justification was wrong —
+			// liveness for the operator at the cost of the security guarantee for
+			// every other constituent. With current encoding, decode-failure should
+			// never happen; if it does, the credential is malformed and we want the
+			// retry/incident response path, not silent re-routing.
+			console.error(
+				`[LocalResolver] districts[0] hex did not decode to a substrate ID; ` +
+					`failing closed (was previously a fail-open security regression — ` +
+					`see specs/H-PHASE-SCOPE.md H4).`,
+			);
+			return {
+				success: false,
+				errorCode: 'PROOF_INVALID',
+				error: 'witness_district_decode_failed',
+			};
+		}
+		const routedDistrict = districtCode;
 
 		// All three gates passed — release ConstituentData.
 		return {
@@ -100,7 +170,7 @@ export class LocalConstituentResolver implements ConstituentResolver {
 					state: addr.state,
 					zip: addr.zip
 				},
-				congressionalDistrict: reconcileResult.districtCode
+				congressionalDistrict: routedDistrict
 			}
 		};
 	}
