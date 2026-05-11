@@ -30,6 +30,31 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 	const body = await request.json();
 
+	// typed bounds on each preference field at the boundary.
+	if (
+		body.minRelevanceScore !== undefined &&
+		body.minRelevanceScore !== null &&
+		(typeof body.minRelevanceScore !== 'number' ||
+			!Number.isFinite(body.minRelevanceScore) ||
+			body.minRelevanceScore < 0 ||
+			body.minRelevanceScore > 1)
+	) {
+		throw error(400, 'minRelevanceScore must be a number 0-1');
+	}
+	if (body.digestOnly !== undefined && body.digestOnly !== null && typeof body.digestOnly !== 'boolean') {
+		throw error(400, 'digestOnly must be a boolean');
+	}
+	if (
+		body.autoArchiveDays !== undefined &&
+		body.autoArchiveDays !== null &&
+		(typeof body.autoArchiveDays !== 'number' ||
+			!Number.isInteger(body.autoArchiveDays) ||
+			body.autoArchiveDays < 1 ||
+			body.autoArchiveDays > 365)
+	) {
+		throw error(400, 'autoArchiveDays must be an integer 1-365');
+	}
+
 	const result = await serverMutation(api.legislation.updateAlertPreferences, {
 		slug: params.slug,
 		minRelevanceScore: body.minRelevanceScore ?? undefined,

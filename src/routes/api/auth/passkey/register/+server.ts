@@ -36,6 +36,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const { rpName, rpID, origin } = getPasskeyRPConfig();
 
 	if (body?.response && body?.sessionId) {
+		// bound sessionId (Convex doc id; cap at 64).
+		if (typeof body.sessionId !== 'string' || body.sessionId.length > 64) {
+			throw error(400, 'Invalid passkey session');
+		}
 		const ceremony = await serverMutation(api.passkeys.consumeRegistrationCeremony, {
 			sessionId: body.sessionId
 		});

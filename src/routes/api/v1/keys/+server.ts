@@ -29,11 +29,22 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const { orgSlug, name, scopes } = body as { orgSlug?: string; name?: string; scopes?: string[] };
 	if (!orgSlug) return apiError('BAD_REQUEST', 'orgSlug is required', 400);
 
+	// Bound caller-supplied fields. orgSlug ≤64 (boundary across creation
+	// paths); key name ≤100; scopes array ≤8 (only "read"/"write" are
+	// valid, but cap unbounded array regardless).
+	if (orgSlug.length > 64) return apiError('BAD_REQUEST', 'Invalid orgSlug', 400);
+	if (name && typeof name === 'string' && name.length > 100) {
+		return apiError('BAD_REQUEST', 'Key name must be 100 characters or fewer', 400);
+	}
+	if (scopes && (!Array.isArray(scopes) || scopes.length > 8)) {
+		return apiError('BAD_REQUEST', 'scopes must be an array of ≤8 strings', 400);
+	}
+
 	const ctx = await serverQuery(api.organizations.getOrgContext, { slug: orgSlug });
 	requireRole(ctx.membership.role, 'editor');
 
 	const validScopes = ['read', 'write'];
-	const keyScopes = scopes?.filter((s) => validScopes.includes(s)) ?? ['read'];
+	const keyScopes = scopes?.filter((s) => typeof s === 'string' && validScopes.includes(s)) ?? ['read'];
 	if (keyScopes.length === 0) keyScopes.push('read');
 
 	const { plaintext, hash, prefix } = await generateApiKey();

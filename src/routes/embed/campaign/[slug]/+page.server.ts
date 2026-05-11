@@ -60,6 +60,23 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid email address' });
 		}
 
+		// Parity with c/[slug] form-action + campaigns.submitAction caps.
+		if (email.length > 254) {
+			return fail(400, { error: 'Email too long' });
+		}
+		if (name.length > 200) {
+			return fail(400, { error: 'Name too long' });
+		}
+		if (postalCode && postalCode.length > 16) {
+			return fail(400, { error: 'Postal code too long' });
+		}
+		if (phone && phone.length > 32) {
+			return fail(400, { error: 'Phone too long' });
+		}
+		if (h3Cell && h3Cell.length > 32) {
+			return fail(400, { error: 'h3Cell too long' });
+		}
+
 		// Determine composition mode by comparing message to campaign template
 		let compositionMode: 'individual' | 'shared' | 'edited' | undefined;
 		if (message) {

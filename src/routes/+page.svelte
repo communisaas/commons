@@ -642,14 +642,13 @@
 </script>
 
 <svelte:head>
-	<title>Commons</title>
+	<title>Commons — public record for civic communication</title>
 	<meta
 		name="description"
-		content="Write once, share the link, everyone can send it. Coordinated messages make impact."
+		content="Commons is a public-record substrate for civic messages. Write a template, share a link, send to your representatives or other decision-makers. Sends are recorded; outcomes are not promised."
 	/>
 </svelte:head>
 
-<!-- Activation Surface - Primary Affordances Immediately Visible -->
 <section class="activation-page">
 	<!-- Main Content: Split Layout -->
 	<div class="activation-container">
@@ -713,36 +712,20 @@
 				<!-- Template Preview (desktop only) -->
 				<div class="template-preview-column">
 					{#if hasError}
-						<div class="rounded-md border border-orange-200 bg-orange-50 p-6 text-center">
-							<div class="mb-4 flex justify-center">
-								<div class="flex h-16 w-16 items-center justify-center rounded-full bg-orange-100">
-									<svg
-										class="h-8 w-8 text-orange-600"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-									>
-										<path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											stroke-width="2"
-											d="M12 8v4m0 4h.01M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z"
-										/>
-									</svg>
-								</div>
-							</div>
-							<h3 class="mb-2 text-lg font-medium text-gray-900">
-								Templates temporarily unavailable
-							</h3>
-							<p class="mb-4 text-sm text-gray-600">
-								We're having trouble loading templates right now.
+						<div class="border-y border-slate-200 px-6 py-8 text-center">
+							<p class="font-brand text-base font-semibold text-slate-800">
+								Templates aren't loading right now.
+							</p>
+							<p class="mt-2 font-brand text-sm text-slate-500">
+								The list will return when the server responds.
 							</p>
 							<button
+								type="button"
 								onclick={() => templateStore.fetchTemplates()}
 								data-testid="retry-templates-button"
-								class="inline-flex items-center rounded-lg bg-orange-600 px-4 py-2 text-white transition-colors hover:bg-orange-700"
+								class="mt-4 rounded-lg border border-teal-500 px-4 py-2 font-brand text-sm font-medium text-teal-600 transition-colors hover:bg-teal-50"
 							>
-								Try Again
+								Try again
 							</button>
 						</div>
 					{:else if isLoading && !selectedTemplate}
@@ -755,24 +738,13 @@
 							onSendMessage={async () => handleSendMessage(selectedTemplate)}
 						/>
 					{:else}
-						<div class="rounded-md border border-slate-200 bg-slate-50 p-12 text-center">
-							<div class="mb-4 text-slate-400">
-								<svg
-									class="mx-auto h-16 w-16"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke="currentColor"
-								>
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="1.5"
-										d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-									/>
-								</svg>
-							</div>
-							<h3 class="mb-2 text-lg font-medium text-slate-900">No campaigns running yet</h3>
-							<p class="text-slate-600">Someone has to move first. Start one.</p>
+						<div class="px-6 py-12 text-center">
+							<p class="font-brand text-base font-semibold text-slate-800">
+								No templates yet.
+							</p>
+							<p class="mt-2 font-brand text-sm text-slate-500">
+								You can write the first one.
+							</p>
 						</div>
 					{/if}
 				</div>
@@ -1089,14 +1061,13 @@
 		/* Container queries: children size relative to column width, not viewport */
 		container-type: inline-size;
 		container-name: creation;
-		/* Mobile/Tablet: show as expandable card */
+		/* Mobile/Tablet: hairline-bordered region on the warm cream ground.
+		   No bg-white (reserved for <Artifact>); no static box-shadow
+		   (it lies about what's underneath); 8px radius max per
+		   src/lib/design/DESIGN.md prohibitions. */
 		padding: 1.5rem;
-		border-radius: 16px;
+		border-radius: 8px;
 		border: 1px solid oklch(0.9 0.02 250);
-		background: white;
-		box-shadow:
-			0 1px 3px oklch(0 0 0 / 0.05),
-			0 10px 30px -10px oklch(0.3 0.05 250 / 0.1);
 	}
 
 	@media (min-width: 1280px) {

@@ -7,6 +7,7 @@ import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 
@@ -23,7 +24,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 	const result = await serverQuery(api.networks.get, {
 		orgSlug: params.slug,
-		networkId: params.networkId as any
+		networkId: params.networkId as Id<'orgNetworks'>
 	});
 	return json({ data: result });
 };
@@ -46,7 +47,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 
 	const result = await serverMutation(api.networks.update, {
 		orgSlug: params.slug,
-		networkId: params.networkId as any,
+		networkId: params.networkId as Id<'orgNetworks'>,
 		name: parsed.data.name,
 		description: parsed.data.description
 	});

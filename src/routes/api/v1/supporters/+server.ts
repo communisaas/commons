@@ -12,17 +12,29 @@ import { serverInternalQuery, serverInternalMutation } from '$lib/server/convex-
 import { internal } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
+// Bounds reflect realistic ciphertext sizes for org-encrypted PII.
+// AES-256-GCM of a 254-char email is ~370 base64 chars; 512 is generous slack.
+// emailHash / phoneHash are SHA-256 hex (64); 128 covers any encoding variant.
+// encryptedCustomFields is the only large blob — 16 KiB caps abuse without
+// breaking real-world structured-field exports.
 const CreateSupporterSchema = z.object({
-	encryptedEmail: z.string().min(1, 'Encrypted email is required'),
-	emailHash: z.string().min(1, 'Email hash is required'),
-	encryptedName: z.string().optional(),
+	encryptedEmail: z.string().min(1, 'Encrypted email is required').max(512),
+	emailHash: z.string().min(1, 'Email hash is required').max(128),
+	// Paired global hashes for cross-org webhook lookup (SES bounce/complaint,
+	// TCPA STOP/START). Optional during rollout — old client SDKs that don't
+	// yet compute them will create supporters that are invisible to webhooks
+	// until the operator runs `backfillSupporterGlobalHashes`. Same hex-128
+	// cap as the org-scoped hashes.
+	globalEmailHash: z.string().max(128).optional(),
+	encryptedName: z.string().max(512).optional(),
 	postalCode: z.string().max(20).optional(),
 	country: z.string().max(10).optional(),
-	encryptedPhone: z.string().optional(),
-	phoneHash: z.string().optional(),
+	encryptedPhone: z.string().max(256).optional(),
+	phoneHash: z.string().max(128).optional(),
+	globalPhoneHash: z.string().max(128).optional(),
 	source: z.string().max(50).optional(),
-	encryptedCustomFields: z.string().optional(),
-	tags: z.array(z.string()).optional()
+	encryptedCustomFields: z.string().max(16_384).optional(),
+	tags: z.array(z.string().max(64)).max(100).optional()
 });
 
 export const GET: RequestHandler = async ({ request, url }) => {
@@ -114,11 +126,13 @@ export const POST: RequestHandler = async ({ request }) => {
 	const {
 		encryptedEmail,
 		emailHash,
+		globalEmailHash,
 		encryptedName,
 		postalCode,
 		country,
 		encryptedPhone,
 		phoneHash,
+		globalPhoneHash,
 		source,
 		encryptedCustomFields,
 		tags
@@ -129,11 +143,13 @@ export const POST: RequestHandler = async ({ request }) => {
 		orgId: auth.orgId,
 		encryptedEmail,
 		emailHash,
+		globalEmailHash,
 		encryptedName,
 		postalCode: postalCode || undefined,
 		country: country || 'US',
 		encryptedPhone,
 		phoneHash,
+		globalPhoneHash,
 		source: source || 'api',
 		encryptedCustomFields,
 		tagIds: tags

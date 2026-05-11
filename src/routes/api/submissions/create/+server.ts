@@ -3,6 +3,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverAction, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import {
 	isCredentialValidForAction,
 	formatValidationError,
@@ -116,7 +117,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		// ── S2: Structural proof validation (ZKP-INTEGRITY-TASK-GRAPH.md § S2) ──
-		// Blocks garbage proofs at the door. Does NOT verify ZK math (Cycle 2).
+		// Blocks garbage proofs at the door. Does NOT verify ZK math.
 
 		// Proof must be non-empty valid hex
 		if (typeof proof !== 'string' || !/^(0x)?[0-9a-fA-F]+$/.test(proof)) {
@@ -249,8 +250,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		if (rawInputsArray.length === 33) {
 			const claimedRoot = rawInputsArray[32] as string;
 			const [convexRoot, haltStatus] = await Promise.all([
-				serverQuery(api.revocations.getRevocationRoot, {} as unknown as never),
-				serverQuery(api.revocations.getRevocationHaltStatus, {} as unknown as never)
+				serverQuery(api.revocations.getRevocationRoot, {}),
+				serverQuery(api.revocations.getRevocationHaltStatus, {})
 			]);
 			if ((haltStatus as { halted?: boolean })?.halted === true) {
 				return json(
@@ -306,11 +307,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// close F2 district-hopping amplification. Sourcing from Convex (not
 		// the client-submitted payload) prevents a malicious client from
 		// supplying a fake commitment to forge a new nullifier scope.
-		// TODO(stage-2.5-codegen): the `as unknown as never` cast is a temporary
-		// workaround until `npx convex dev` regenerates api.d.ts with the new
-		// getActiveCredentialDistrictCommitment export. Remove after codegen.
 		const credData = await serverQuery(api.users.getActiveCredentialDistrictCommitment, {
-			userId: locals.user.id as unknown as never
+			userId: locals.user.id as Id<'users'>
 		});
 		if (!credData?.districtCommitment) {
 			return json(

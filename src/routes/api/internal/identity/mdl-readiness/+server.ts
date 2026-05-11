@@ -1,9 +1,8 @@
 import { dev } from '$app/environment';
 import { json, error } from '@sveltejs/kit';
-import { env as privateEnv } from '$env/dynamic/private';
+import { matchInternalSecret } from '$lib/server/internal/secret-auth';
 import { CompactEncrypt, importJWK } from 'jose';
 import type { RequestHandler } from './$types';
-import { verifyCronSecretRaw } from '$lib/server/cron-auth';
 import { FEATURES, OPENID4VP_DC_API_PROTOCOL } from '$lib/config/features';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 import {
@@ -80,10 +79,15 @@ export const GET = (async ({ request, platform, url }: MdlReadinessRequestEvent)
 }) satisfies RequestHandler;
 
 function requireInternalSecret(request: Request): void {
-	const expected = privateEnv.INTERNAL_API_SECRET;
-	if (!expected) throw error(503, 'INTERNAL_API_SECRET not configured');
-	const provided = request.headers.get('x-internal-secret');
-	if (!verifyCronSecretRaw(provided, expected)) throw error(403, 'Invalid internal secret');
+	const auth = matchInternalSecret(request.headers.get('x-internal-secret'));
+	if (!auth.ok) {
+		throw error(
+			auth.reason === 'not_configured' ? 503 : 403,
+			auth.reason === 'not_configured'
+				? 'INTERNAL_API_SECRET not configured'
+				: 'Invalid internal secret'
+		);
+	}
 }
 
 function readinessRequestOrigin(request: Request, fallback: string): string {

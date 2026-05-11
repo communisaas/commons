@@ -8,6 +8,7 @@
 import { json, error } from '@sveltejs/kit';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import crypto from 'node:crypto';
 import type { RequestHandler } from './$types';
@@ -34,7 +35,15 @@ export const POST: RequestHandler = async ({ locals, request, getClientAddress }
 		userId = locals.user.id;
 	} else {
 		const body = await request.json().catch(() => null);
-		if (!body?.email || typeof body.email !== 'string' || !EMAIL_RE.test(body.email)) {
+		// bound email length (RFC 5321 max 254) before regex test +
+		// downstream hash + Convex insert. Without this, a malicious client could
+		// submit megabyte-scale strings to burn compute.
+		if (
+			!body?.email ||
+			typeof body.email !== 'string' ||
+			body.email.length > 254 ||
+			!EMAIL_RE.test(body.email)
+		) {
 			throw error(400, 'Valid email is required');
 		}
 		email = body.email;
@@ -45,7 +54,7 @@ export const POST: RequestHandler = async ({ locals, request, getClientAddress }
 	await serverMutation(api.waitlist.join, {
 		email: normalized,
 		emailHash: hashEmail(normalized),
-		userId: userId as any,
+		userId: userId as Id<'users'> | undefined,
 		source: 'landing'
 	});
 

@@ -22,6 +22,15 @@ export const GET: RequestHandler = async ({ params }) => {
 		throw error(400, 'Missing confirmation token');
 	}
 
+	// cap token length before HMAC parse cycles. Real tokens
+	// are base64url(payload).base64url(hmac) where payload is `${id}:${timestamp}`
+	// — typically ~80-90 chars. 256 is generous slack while bounding work on
+	// adversarial megabyte URL inputs that Cloudflare wouldn't have already
+	// rejected (CF caps URL at 16 KiB).
+	if (token.length > 256) {
+		throw error(400, 'Invalid confirmation token');
+	}
+
 	const id = validateConfirmationToken(token);
 	if (!id) {
 		throw error(400, 'Invalid or expired confirmation token');

@@ -2,9 +2,9 @@ import { error } from '@sveltejs/kit';
 
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { canonicalizeOrRedirect } from '$lib/server/canonical-slug';
 
 import type { PageServerLoad } from './$types';
-import type { Id } from '$convex/_generated/dataModel';
 
 const toDateStr = (value: number | string | null, fmt: 'date' | 'month' = 'date'): string | null => {
 	if (typeof value === 'number') {
@@ -17,12 +17,18 @@ export const load: PageServerLoad = async ({ params }) => {
 	const { id } = params;
 
 	const result = await serverQuery(api.legislation.getDmScorecard, {
-		dmId: id as Id<'decisionMakers'>
+		identifier: id
 	});
 
 	if (!result) {
 		throw error(404, 'Decision-maker not found');
 	}
+
+	canonicalizeOrRedirect(
+		result.canonicalSlug,
+		id,
+		(slug) => `/dm/${slug}/scorecard`
+	);
 
 	return {
 		decisionMaker: {

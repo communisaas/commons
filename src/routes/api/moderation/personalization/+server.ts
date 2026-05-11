@@ -23,6 +23,12 @@ export const POST: RequestHandler = async ({ request }) => {
 			return json({ error: 'text field required (string)' }, { status: 400 });
 		}
 
+		// bound input length before paid Groq moderation call.
+		// Personalization deltas are short user inserts; 10,000 is generous.
+		if (text.length > 10_000) {
+			return json({ error: 'text must be ≤10,000 characters' }, { status: 400 });
+		}
+
 		const result = await moderatePersonalization(text);
 
 		return json({

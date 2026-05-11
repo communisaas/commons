@@ -1,7 +1,7 @@
 /**
  * Internal endpoint: read the current on-chain RevocationRegistry root.
  *
- * Wave 2 (KG-2 closure) — consumed by the `reconcileSMTRoot` Convex cron.
+ * (KG-2 closure) — consumed by the `reconcileSMTRoot` Convex cron.
  * The Convex runtime cannot directly call ethers/RPC, so we keep the chain
  * read on the SvelteKit side (where the relayer wallet + provider already
  * live).
@@ -17,22 +17,23 @@
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { env } from '$env/dynamic/private';
 import {
 	getRevocationRegistryAddress,
 	getRevocationRegistryEmptyTreeRoot,
 	getRevocationRegistryRoot
 } from '$lib/core/blockchain/district-gate-client';
 import { getEmptyTreeRoot as getComputedEmptyTreeRoot } from '$lib/server/smt/revocation-smt';
+import { matchInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const GET: RequestHandler = async ({ request }) => {
-	const expected = env.INTERNAL_API_SECRET;
-	if (!expected) {
-		throw error(503, 'INTERNAL_API_SECRET not configured');
-	}
-	const provided = request.headers.get('x-internal-secret');
-	if (!provided || provided !== expected) {
-		throw error(403, 'Invalid internal secret');
+	const auth = matchInternalSecret(request.headers.get('x-internal-secret'));
+	if (!auth.ok) {
+		throw error(
+			auth.reason === 'not_configured' ? 503 : 403,
+			auth.reason === 'not_configured'
+				? 'INTERNAL_API_SECRET not configured'
+				: 'Invalid internal secret'
+		);
 	}
 
 	// computedEmptyRoot is independent of chain state — return even when the

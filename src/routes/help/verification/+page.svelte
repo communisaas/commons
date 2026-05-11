@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { ShieldCheck, Smartphone, ScanLine, MapPin, ChevronDown, ChevronUp } from '@lucide/svelte';
 	import type { PageData } from './$types';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 
 	let { data }: { data: PageData } = $props();
+
+	const labels = getJurisdictionLabels();
 
 	let openFaq = $state<number | null>(null);
 
@@ -94,7 +97,7 @@
 			<li class="flex items-start gap-2 text-sm text-slate-700">
 				<span class="mt-0.5 block h-1.5 w-1.5 shrink-0 rounded-full bg-green-500"></span>
 				Your wallet shares postal code, city, state, birth date, and document number.
-				Those fields transit our servers briefly to derive your congressional district
+				Those fields transit our servers briefly to derive your {labels.legislativeAdjective} district
 				and a private identity commitment. We do not store identity documents.
 			</li>
 			<li class="flex items-start gap-2 text-sm text-slate-700">

@@ -3,6 +3,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { claimSettlement, settlePrivatePosition } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
 
@@ -48,7 +49,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
 
 	if (!debate) {
 		throw error(404, 'Debate not found');

@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 /**
@@ -23,7 +24,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 
 	const result = await serverQuery(api.legislation.getDmActivity, {
 		slug: params.slug,
-		decisionMakerId: params.dmId as any,
+		decisionMakerId: params.dmId as Id<'decisionMakers'>,
 		limit
 	});
 	return json({ ...result, limit, offset, nextCursor: null });

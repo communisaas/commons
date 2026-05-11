@@ -1,9 +1,8 @@
 import type { PageServerLoad } from './$types';
 import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
-import { error } from '@sveltejs/kit';
+import { error, redirect } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import type { Id } from '$convex/_generated/dataModel';
 
 const onchainId = (value: string | number | null | undefined): string =>
 	value == null ? '' : String(value);
@@ -13,7 +12,7 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	const parentData = await parent();
 
 	const result = await serverQuery(api.debates.getPublicDetail, {
-		debateId: debateId as Id<'debates'>
+		identifier: debateId
 	});
 
 	if (!result) throw error(404, 'Debate not found');
@@ -21,6 +20,16 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	// Verify this debate belongs to this template
 	if (parentData.template && result.templateId !== parentData.template.id) {
 		throw error(404, 'Debate not found for this template');
+	}
+
+	// Public URLs pin to `debateIdOnchain` (CONSTITUTION.md §1.3); the route
+	// accepts a Convex doc id via the same query but redirects 302 to the
+	// canonical form so shared URLs do not encode storage ids.
+	if (result.canonicalDebateId && result.canonicalDebateId !== debateId) {
+		throw redirect(
+			302,
+			`/s/${params.slug}/debate/${result.canonicalDebateId}`
+		);
 	}
 
 	// Build AI resolution from Convex data if available

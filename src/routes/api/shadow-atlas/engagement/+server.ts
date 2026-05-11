@@ -23,6 +23,7 @@
 import { json } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 import {
 	registerEngagement,
@@ -56,7 +57,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// Look up canonical identity commitment and signer address
 		const user = await serverQuery(api.users.getIdentityForEngagement, {
-			userId: session.userId as any,
+			userId: session.userId as Id<'users'>,
 		});
 
 		if (!user?.identityCommitment) {

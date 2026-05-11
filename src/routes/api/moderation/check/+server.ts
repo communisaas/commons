@@ -31,6 +31,19 @@ export const POST: RequestHandler = async ({ request }) => {
 			);
 		}
 
+		// bound input length before paid Groq moderation call.
+		// Mirrors `/api/templates` POST caps: title ≤200, message_body ≤10,000.
+		if (title.length > 200 || message_body.length > 10_000) {
+			return json(
+				{
+					approved: false,
+					rejection_reason: 'invalid_input',
+					summary: 'title must be ≤200 characters and message_body must be ≤10,000 characters'
+				},
+				{ status: 400 }
+			);
+		}
+
 		const result = await moderateTemplate({ title, message_body });
 
 		return json(result, { status: result.approved ? 200 : 400 });

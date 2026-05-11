@@ -1,9 +1,13 @@
 import { error, fail, redirect } from '@sveltejs/kit';
+import { env } from '$env/dynamic/public';
 import type { PageServerLoad, Actions } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { computeVerificationPacketCached } from '$lib/server/verification-packet';
-import { renderReportEmail } from '$lib/server/email/report-template';
+import { renderReport } from '$lib/server/email/report-template';
+
+const baseUrl = env.PUBLIC_BASE_URL?.replace(/\/$/, '') ?? 'https://commons.email';
 
 function asString(value: unknown, fallback = ''): string {
 	return typeof value === 'string' ? value : fallback;
@@ -27,7 +31,7 @@ export const load: PageServerLoad = async ({ params, parent, locals, platform })
 	requireRole(ctx.membership.role, 'editor');
 
 	const preview = await serverQuery(api.campaigns.getReportPreview, {
-		campaignId: params.id as any,
+		campaignId: params.id as Id<'campaigns'>,
 		orgSlug: params.slug
 	});
 
@@ -45,16 +49,17 @@ export const load: PageServerLoad = async ({ params, parent, locals, platform })
 		packetKV
 	);
 
-	// Render the email HTML using the staffer-legible template
-	const renderedHtml = renderReportEmail({
+	const rendered = await renderReport({
+		campaignId: String(preview.campaign._id),
 		campaignTitle: preview.campaign.title,
 		orgName: org.name ?? org.slug,
 		packet: fullPacket,
-		verificationUrl: `https://commons.email/v/${preview.campaign._id}`
+		verificationUrl: `${baseUrl}/v/${preview.campaign._id}`
 	});
+	const renderedHtml = rendered.html;
 
 	const pastDeliveries = await serverQuery(api.campaigns.getPastDeliveries, {
-		campaignId: params.id as any,
+		campaignId: params.id as Id<'campaigns'>,
 		orgSlug: params.slug
 	});
 
@@ -119,10 +124,19 @@ export const actions: Actions = {
 		if (selectedEmails.length === 0) {
 			return fail(400, { error: 'No targets selected' });
 		}
+		// Cap target count + per-email length. Reports go to decision-makers
+		// per send; 50 matches the campaign target cap (campaigns.addTarget enforces
+		// "Maximum of 50"). 254 is RFC 5321 email length cap.
+		if (selectedEmails.length > 50) {
+			return fail(400, { error: 'Cannot send to more than 50 targets at once' });
+		}
+		if (selectedEmails.some((e) => e.length > 254)) {
+			return fail(400, { error: 'One or more target emails are too long' });
+		}
 
 		// Check usage limits via Convex
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
-		if (limits && limits.current && (limits.current as any).emailsSent >= (limits.limits as any).maxEmails) {
+		if (limits && limits.current && limits.current.emailsSent >= limits.limits.maxEmails) {
 			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
 		}
 
@@ -133,23 +147,25 @@ export const actions: Actions = {
 		let renderedHtml: string | undefined;
 		try {
 			const preview = await serverQuery(api.campaigns.getReportPreview, {
-				campaignId: params.id as any, orgSlug: params.slug
+				campaignId: params.id as Id<'campaigns'>, orgSlug: params.slug
 			});
 			if (preview) {
 				const fullPacket = await computeVerificationPacketCached(preview.campaign._id, ctx.org._id, packetKV);
-				renderedHtml = renderReportEmail({
+				const rendered = await renderReport({
+					campaignId: String(preview.campaign._id),
 					campaignTitle: preview.campaign.title,
 					orgName: ctx.org.name ?? params.slug,
 					packet: fullPacket,
-					verificationUrl: `https://commons.email/v/${preview.campaign._id}`
+					verificationUrl: `${baseUrl}/v/${preview.campaign._id}`
 				});
+				renderedHtml = rendered.html;
 			}
 		} catch {
 			// Non-fatal: dispatch will use fallback template
 		}
 
 		const result = await serverMutation(api.campaigns.sendReport, {
-			campaignId: params.id as any,
+			campaignId: params.id as Id<'campaigns'>,
 			orgSlug: params.slug,
 			targetEmails: selectedEmails,
 			renderedHtml

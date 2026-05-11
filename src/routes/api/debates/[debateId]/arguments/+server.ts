@@ -3,6 +3,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { solidityPackedKeccak256 } from 'ethers';
 import { FEATURES } from '$lib/config/features';
 
@@ -31,7 +32,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	const offset = parseInt(url.searchParams.get('offset') ?? '0');
 
 	const result = await serverQuery(api.debates.listArguments, {
-		debateId: debateId as any,
+		debateId: debateId as Id<'debates'>,
 		stance: stance ?? undefined,
 		limit,
 		offset
@@ -61,7 +62,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(403, 'Tier 3+ verification required to submit arguments');
 	}
 
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
 	if (!debate) {
 		throw error(404, 'Debate not found');
 	}
@@ -96,7 +97,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	// Nullifier dedup
 	if (nullifierHex) {
 		const existingNullifier = await serverQuery(api.debates.findNullifier, {
-			debateId: debateId as any,
+			debateId: debateId as Id<'debates'>,
 			nullifierHash: nullifierHex
 		});
 		if (existingNullifier) {
@@ -158,7 +159,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	// ── Convex DB write (atomic) ─────────────────────────────────────
 	const argId = await serverMutation(api.debates.createArgument, {
-		debateId: debateId as any,
+		debateId: debateId as Id<'debates'>,
 		stance,
 		body: argumentBody,
 		bodyHash,

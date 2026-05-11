@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 const IssueDomainSchema = z.object({
@@ -49,7 +50,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const PatchSchema = z.object({ id: z.string().min(1) }).merge(IssueDomainSchema.partial());
+	// Bound id (Convex doc ids are 32 chars; 64 = slack).
+	const PatchSchema = z.object({ id: z.string().min(1).max(64) }).merge(IssueDomainSchema.partial());
 
 	let id: string;
 	let fields: Partial<z.infer<typeof IssueDomainSchema>>;
@@ -68,7 +70,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 
 	const result = await serverMutation(api.organizations.updateIssueDomain, {
 		slug: params.slug,
-		domainId: id as any,
+		domainId: id as Id<'orgIssueDomains'>,
 		label: fields.label,
 		description: fields.description ?? undefined,
 		weight: fields.weight
@@ -84,10 +86,11 @@ export const DELETE: RequestHandler = async ({ locals, params, request }) => {
 	const { id } = body as { id?: string };
 
 	if (!id) throw error(400, 'id is required');
+	if (typeof id !== 'string' || id.length > 64) throw error(400, 'Invalid id');
 
 	await serverMutation(api.organizations.deleteIssueDomain, {
 		slug: params.slug,
-		domainId: id as any
+		domainId: id as Id<'orgIssueDomains'>
 	});
 	return json({ ok: true });
 };

@@ -1,6 +1,6 @@
 // CONVEX: Fully migrated — segment CRUD + bulk operations via Convex
 import { json, error } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation, serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
@@ -53,11 +53,14 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			throw error(400, validationError);
 		}
 
-		const result = await serverQuery(api.segments.countMatching, {
+		// countMatching is an action (paginated dispatch instead of bounded
+		// query). Returns exact count + partial flag when the action hit
+		// its per-invocation page cap.
+		const result = await serverAction(api.segments.countMatching, {
 			slug: params.slug,
 			filters
 		});
-		return json({ count: result.count });
+		return json({ count: result.count, partial: result.partial ?? false });
 	}
 
 	if (action === 'save') {
@@ -73,6 +76,10 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		}
 
 		if (body.id) {
+			// Convex doc ids are typically 32 chars; cap at 64.
+			if (typeof body.id !== 'string' || body.id.length > 64) {
+				throw error(400, 'Invalid segment id');
+			}
 			const result = await serverMutation(api.segments.update, {
 				slug: params.slug,
 				segmentId: body.id,
@@ -97,29 +104,35 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		);
 		if (!bulkLimit.allowed) throw error(429, 'Bulk operations limited to 1 per minute');
 
+		// bound tagId length (Convex doc id is 32 chars; cap at 64).
 		const tagId = body.tagId as string;
-		if (!tagId) throw error(400, 'tagId is required');
+		if (!tagId || typeof tagId !== 'string' || tagId.length > 64) {
+			throw error(400, 'tagId is required (≤64 characters)');
+		}
 
 		const filters = body.filters as SegmentFilter;
 		const validationError = validateSegmentFilter(filters);
 		if (validationError) throw error(400, validationError);
 
 		if (action === 'apply_tag') {
-			const result = await serverMutation(api.segments.bulkApplyTag, {
+			// bulkApplyTag is an action (paginated dispatch). Returns
+			// affected + partial flag for orgs that exceed the
+			// per-invocation page cap.
+			const result = await serverAction(api.segments.bulkApplyTag, {
 				slug: params.slug,
-				tagId: tagId as any,
+				tagId: tagId as Id<'tags'>,
 				filters
 			});
-			console.info(`[bulk] apply_tag org=${params.slug} user=${safeUserId(locals.user.id)} tag=${tagId} affected=${result.affected}`);
-			return json({ affected: result.affected });
+			console.info(`[bulk] apply_tag org=${params.slug} user=${safeUserId(locals.user.id)} tag=${tagId} affected=${result.affected} partial=${result.partial}`);
+			return json({ affected: result.affected, partial: result.partial ?? false });
 		} else {
-			const result = await serverMutation(api.segments.bulkRemoveTag, {
+			const result = await serverAction(api.segments.bulkRemoveTag, {
 				slug: params.slug,
-				tagId: tagId as any,
+				tagId: tagId as Id<'tags'>,
 				filters
 			});
-			console.info(`[bulk] remove_tag org=${params.slug} user=${safeUserId(locals.user.id)} tag=${tagId} affected=${result.affected}`);
-			return json({ affected: result.affected });
+			console.info(`[bulk] remove_tag org=${params.slug} user=${safeUserId(locals.user.id)} tag=${tagId} affected=${result.affected} partial=${result.partial}`);
+			return json({ affected: result.affected, partial: result.partial ?? false });
 		}
 	}
 
@@ -134,13 +147,18 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		);
 		if (!bulkLimit.allowed) throw error(429, 'Bulk operations limited to 1 per minute');
 
-		const supporters = await serverQuery(api.segments.exportMatching, {
+		// exportMatching is an action (paginated dispatch). Reads the
+		// rowset directly via serverAction; truncation surfaced via the
+		// .partial flag on the result instead of an in-band marker.
+		const supporters = await serverAction(api.segments.exportMatching, {
 			slug: params.slug,
 			filters
 		});
+		if ((supporters as { partial?: boolean }).partial) {
+			console.warn(`[bulk] export_csv partial org=${params.slug} — action hit per-invocation page cap`);
+		}
 
 		// Decrypt via Convex action (uses org key)
-		const { serverAction } = await import('convex-sveltekit');
 		let decryptedRows: Array<{ email: string; name: string; phone: string; tags: string }>;
 		try {
 			decryptedRows = await serverAction(api.segments.exportDecrypted, {

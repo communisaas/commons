@@ -9,6 +9,7 @@
 import { error } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import type { PageServerLoad } from './$types';
 
@@ -22,7 +23,7 @@ export const load: PageServerLoad = async ({ params, platform }) => {
 	// Try resolving as a campaign ID (report verification links use campaign._id as hash)
 	try {
 		const stats = await serverQuery(api.campaigns.getStats, {
-			campaignId: hash as any
+			campaignId: hash as Id<'campaigns'>
 		});
 
 		if (stats) {
@@ -35,7 +36,11 @@ export const load: PageServerLoad = async ({ params, platform }) => {
 			// Note: orgId not available in this context — pass campaignId as cache namespace
 			let packet;
 			try {
-				packet = await computeVerificationPacketCached(hash as any, hash as any, packetKV);
+				packet = await computeVerificationPacketCached(
+					hash as Id<'campaigns'>,
+					hash as Id<'organizations'>,
+					packetKV
+				);
 			} catch {
 				packet = null;
 			}

@@ -58,6 +58,26 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 		}
 	});
 
+	// SECURITY NOTE (deferred architectural):
+	// This endpoint issues 15-minute STS credentials to the BROWSER.
+	// The browser is expected to forward them to the Lambda proxy along
+	// with a server-signed dispatch claim; the Lambda then calls SES
+	// using those credentials. The session policy below restricts the
+	// FromAddress to `{slug}@commons.email` — but it does NOT restrict:
+	//   - which Lambda the credentials are sent to,
+	//   - whether the credentials are sent to a Lambda at all,
+	//   - which recipients receive messages,
+	//   - send rate or volume within the 15-minute window.
+	// A compromised editor browser (XSS, malicious extension) holding
+	// these credentials can call SES directly, bypassing the Lambda's
+	// dispatch-claim verification entirely. Dispatch claims bind only
+	// the Lambda proxy path, not the AWS send authority itself.
+	//
+	// The architectural fix is to issue credentials Lambda-side and
+	// route the browser through a `/api/blast/[blastId]/dispatch` server
+	// endpoint that calls the Lambda directly with credentials never
+	// leaving the server. That refactor is tracked in REALIGNMENT-TASK-
+	// GRAPH.md as a deferred-architectural item alongside F-125 path A.
 	const sessionPolicy = JSON.stringify({
 		Version: '2012-10-17',
 		Statement: [

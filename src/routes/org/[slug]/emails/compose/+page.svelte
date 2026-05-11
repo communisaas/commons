@@ -9,6 +9,7 @@
 	import type { PageData, ActionData } from './$types';
 	import type { Editor as EditorType } from '@tiptap/core';
 	import type { BlastProgress } from '$lib/services/client-blast-sender';
+	import type { Id } from '$convex/_generated/dataModel';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -32,6 +33,10 @@
 	let blastProgress = $state<BlastProgress | null>(null);
 	let blastResult = $state<{ sent: number; failed: number; errors: Array<{ emailHash: string; error: string }> } | null>(null);
 	let pendingBlastData = $state<{ blastId: string; orgId: string; fromEmail: string; fromName: string; subject: string; bodyHtml: string } | null>(null);
+	// Surfaces preflight failures (e.g., dispatch-claim 503) before the blast
+	// reaches Lambda — operator-actionable error message instead of a confusing
+	// 403 mid-blast.
+	let blastError = $state<string | null>(null);
 
 	const useClientDirect = $derived(recipientCount < CLIENT_DIRECT_THRESHOLD && recipientCount > 0);
 	const hasOrgKey = $derived(!!data.orgKeyVerifier);
@@ -316,18 +321,57 @@
 		const convex = useConvexClient();
 
 		sending = true;
+		blastError = null; // clear any stale preflight error from a previous attempt
 		blastProgress = { total: 0, sent: 0, failed: 0, currentBatch: 0, totalBatches: 0, status: 'fetching-credentials' };
 
 		try {
-			// Fetch encrypted supporters via Convex client
+			// Fetch encrypted supporters via Convex client — pass blastId so the
+			// recipientFilter persisted at compose time is enforced at load
+			// (F-119 closure: filter is no longer just a count-time UI hint).
 			const supporters = await convex.query(api.blasts.getEncryptedSupportersForBlast, {
-				orgSlug: data.org.slug
+				orgSlug: data.org.slug,
+				blastId: blastData.blastId as Id<'emailBlasts'>
 			});
+
+			// Fetch dispatch claim once per blast (caller-cohort
+			// validation). Claim is server-signed and binds (orgId, blastId,
+			// allowedHashes[]); Lambda enforces per-recipient before SES
+			// dispatch. Failure here means we cannot guarantee cohort
+			// validation; surface as a hard error so the operator knows.
+			// Dispatch claim is REQUIRED — Lambda will reject any send without
+			// it. Surface every failure mode (including 503 from a misconfigured
+			// BLAST_DISPATCH_SECRET) as a hard error so operators see the root
+			// cause instead of a confusing 403 from Lambda mid-blast.
+			let dispatchClaim: string;
+			try {
+				const claimResp = await fetch(
+					`/api/blast/${blastData.blastId}/dispatch-claim?orgSlug=${encodeURIComponent(data.org.slug)}`
+				);
+				if (!claimResp.ok) {
+					if (claimResp.status === 503) {
+						throw new Error(
+							'Bulk-send dispatch is not configured (operator: set BLAST_DISPATCH_SECRET on both SvelteKit and Lambda env)'
+						);
+					}
+					throw new Error(`Dispatch claim fetch failed: ${claimResp.status}`);
+				}
+				const parsed = await claimResp.json();
+				if (typeof parsed.claim !== 'string' || parsed.claim.length === 0) {
+					throw new Error('Dispatch claim response missing `claim` field');
+				}
+				dispatchClaim = parsed.claim;
+			} catch (err) {
+				console.error('[blast] failed to fetch dispatch claim', err);
+				blastError = err instanceof Error ? err.message : 'Failed to authorize blast send';
+				sending = false;
+				blastProgress = null;
+				return;
+			}
 
 			// Update blast to sending
 			await convex.mutation(api.blasts.updateClientBlastProgress, {
 				orgSlug: data.org.slug,
-				blastId: blastData.blastId as any,
+				blastId: blastData.blastId as Id<'emailBlasts'>,
 				status: 'sending',
 				totalSent: 0,
 				totalBounced: 0,
@@ -345,13 +389,51 @@
 				fromName: blastData.fromName,
 				lambdaUrl: env.PUBLIC_SES_PROXY_URL || '',
 				encryptedSupporters: supporters,
-				onProgress: (p) => { blastProgress = p; }
+				dispatchClaim,
+				onProgress: (p) => { blastProgress = p; },
+				onBatchReceipts: async (receipts) => {
+					try {
+						await convex.mutation(api.blasts.recordBlastReceipts, {
+							orgSlug: data.org.slug,
+							blastId: blastData.blastId as Id<'emailBlasts'>,
+							receipts
+						});
+					} catch (err) {
+						// Receipt persistence is best-effort — a transient Convex
+						// failure must not block the in-flight send. Surface in the
+						// error log; the next batch will still attempt to write.
+						console.error('[blast] failed to persist receipts batch', err);
+					}
+				},
+				resolveUnsubscribeUrls: async (supporterIds) => {
+					// Vend per-recipient unsubscribe URLs from the SvelteKit endpoint
+					// so the HMAC secret stays server-side. The endpoint pulls the
+					// authoritative orgId from the blast row (not from the caller),
+					// which prevents cross-org token vending. Failure here surfaces
+					// in the sender as "no List-Unsubscribe header for this batch" —
+					// the bulk send still proceeds (Lambda falls back to SendEmail).
+					const resp = await fetch(
+						`/api/blast/${blastData.blastId}/unsubscribe-tokens?orgSlug=${encodeURIComponent(data.org.slug)}`,
+						{
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({
+								supporters: supporterIds.map((supporterId) => ({ supporterId }))
+							})
+						}
+					);
+					if (!resp.ok) {
+						throw new Error(`Token endpoint ${resp.status}`);
+					}
+					const { urls } = (await resp.json()) as { urls: string[] };
+					return urls;
+				}
 			});
 
 			// Finalize blast status
 			await convex.mutation(api.blasts.updateClientBlastProgress, {
 				orgSlug: data.org.slug,
-				blastId: blastData.blastId as any,
+				blastId: blastData.blastId as Id<'emailBlasts'>,
 				status: result.failed === result.total ? 'failed' : 'sent',
 				totalSent: result.sent,
 				totalBounced: result.failed,
@@ -1083,6 +1165,11 @@
 									Send invitation to {recipientCount.toLocaleString()} supporter{recipientCount === 1 ? '' : 's'}
 								{/if}
 							</button>
+							{#if blastError}
+								<div class="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+									{blastError}
+								</div>
+							{/if}
 							<p class="text-xs text-text-quaternary text-center mt-2">
 								Emails decrypted in this browser, never on our servers
 							</p>

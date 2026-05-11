@@ -69,6 +69,11 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		data.country = country;
 	}
 	if (typeof encryptedCustomFields === 'string') {
+		// Parity with POST schema cap. 16 KiB ciphertext covers any
+		// real-world structured-field export.
+		if (encryptedCustomFields.length > 16_384) {
+			return apiError('BAD_REQUEST', 'encryptedCustomFields must be 16,384 characters or fewer', 400);
+		}
 		data.encryptedCustomFields = encryptedCustomFields;
 	}
 

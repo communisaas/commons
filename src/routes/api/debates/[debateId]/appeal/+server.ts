@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { appealResolution } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
 
@@ -22,7 +23,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 	const { debateId } = params;
 	if (!debateId) throw error(400, 'Missing debateId');
 
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
 	if (!debate) throw error(404, 'Debate not found');
 	if (debate.status !== 'resolved' && debate.status !== 'resolving') {
 		throw error(400, 'Can only appeal resolved or resolving debates');

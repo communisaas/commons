@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ShieldCheck, ExternalLink, Copy, Check } from '@lucide/svelte';
+	import { ShieldCheck, ExternalLink, Copy, Check, ChevronRight } from '@lucide/svelte';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -20,21 +20,19 @@
 		}
 	});
 
-	// Causality badge
-	const causalityColor = $derived.by(() => {
-		switch (r.causalityClass) {
-			case 'strong': return 'bg-green-100 text-green-800';
-			case 'moderate': return 'bg-yellow-100 text-yellow-800';
-			case 'weak': return 'bg-orange-100 text-orange-800';
-			case 'none': return 'bg-red-100 text-red-800';
-			default: return 'bg-slate-100 text-slate-600';
-		}
-	});
+	// Causality and alignment are INFERENCES from public records (the
+	// scope section explicitly says so), not editorial judgments by the
+	// substrate. Colored chips would imply substrate-issued approval. Per
+	// design memory ("registry, not celebration"; "metrics are
+	// infrastructure not headlines") the chips are uniformly slate — they
+	// retain category as text but don't signal editorial color. Color is
+	// reserved for genuinely categorical state (bill status).
+	const causalityColor = $derived('bg-slate-100 text-slate-700');
 
 	// Alignment display
 	const alignmentLabel = $derived.by(() => {
-		if (r.alignment > 0.3) return { text: 'Aligned', color: 'text-green-700' };
-		if (r.alignment < -0.3) return { text: 'Opposed', color: 'text-red-700' };
+		if (r.alignment > 0.3) return { text: 'Aligned', color: 'text-slate-700' };
+		if (r.alignment < -0.3) return { text: 'Opposed', color: 'text-slate-700' };
 		return { text: 'Neutral', color: 'text-slate-600' };
 	});
 
@@ -75,17 +73,24 @@
 
 <svelte:head>
 	<title>Accountability Receipt | {r.dmName} | Commons</title>
-	<meta name="description" content="Verified accountability receipt for {r.dmName} on {billTitle}" />
+	<meta name="description" content="Accountability receipt for {r.dmName} on {billTitle}" />
 </svelte:head>
 
 <div class="mx-auto max-w-2xl px-4 py-12">
 	<!-- Header -->
+	<!--
+		Header uses slate registry voice rather than celebratory green.
+		The "Verified" prefix is omitted because the receipt itemizes its
+		verifications below — naming verification at the top is both
+		redundant (the body proves it) and celebratory; the design memory
+		retired the celebration register in favor of the registry voice.
+	-->
 	<div class="mb-8">
 		<div class="mb-3 flex items-center gap-2">
-			<div class="inline-flex h-10 w-10 items-center justify-center rounded-full bg-green-100">
-				<ShieldCheck class="h-5 w-5 text-green-600" aria-hidden="true" />
+			<div class="inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-100">
+				<ShieldCheck class="h-5 w-5 text-slate-500" aria-hidden="true" />
 			</div>
-			<span class="text-sm font-medium text-green-700">Verified Accountability Receipt</span>
+			<span class="text-sm font-medium text-slate-700">Accountability receipt</span>
 		</div>
 		<h1 class="text-xl font-bold text-slate-900 sm:text-2xl">{billTitle}</h1>
 		<div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
@@ -139,38 +144,75 @@
 		</div>
 
 		<!-- Proof Weight Bar -->
+		<!--
+			Proof Weight rendered honestly. A green-500 fill would make an
+			aggregate of audit signals (the same signals hidden behind
+			<details> below as infrastructure) read as a celebratory
+			headline. Per design memory "metrics are infrastructure not
+			headlines", the fill is neutral slate-700 — present as a
+			numeric reading, not an editorial judgment of "more = greener
+			= better".
+		-->
 		<div class="mt-4">
 			<div class="mb-1 flex items-center justify-between">
-				<span class="text-xs text-slate-400">Proof Weight</span>
+				<span class="text-xs text-slate-500">Proof Weight</span>
 				<span class="text-xs font-medium text-slate-600">{(r.proofWeight * 100).toFixed(0)}%</span>
 			</div>
 			<div class="h-2 w-full rounded-full bg-slate-100" role="progressbar" aria-valuenow={r.proofWeight * 100} aria-valuemin={0} aria-valuemax={100} aria-label="Proof weight">
 				<div
-					class="h-2 rounded-full bg-green-500 transition-all"
+					class="h-2 rounded-full bg-slate-700 transition-all"
 					style="width: {Math.min(r.proofWeight * 100, 100)}%"
 				></div>
 			</div>
 		</div>
 
-		<!-- Coordination Integrity -->
+		<!--
+			Coordination-integrity audit metrics. Per design memory:
+			"tiers/metrics are infrastructure not headlines." These are
+			anti-coordination-fraud audit signals (GDS = geographic
+			spread, ALD = author independence, CAI = tier-mix
+			authenticity) — they belong in an audit-on-demand
+			disclosure, not the consumer headline. Consumers who want
+			to verify the substrate can open the disclosure or read
+			the full methodology at /about/integrity.
+		-->
 		{#if r.gds !== null || r.ald !== null || r.cai !== null}
-			<div class="mt-4 border-t border-slate-100 pt-3">
-				<p class="mb-2 text-xs text-slate-400">Coordination Integrity</p>
-				<div class="grid grid-cols-3 gap-3">
+			<details class="group mt-4 border-t border-slate-100 pt-3">
+				<summary
+					class="flex cursor-pointer list-none items-center gap-2 rounded text-xs text-slate-500 transition-colors hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-500"
+				>
+					<ChevronRight class="h-3.5 w-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+					<span>Audit details</span>
+				</summary>
+				<div class="mt-3 grid grid-cols-3 gap-3">
 					<div>
-						<p class="text-xs text-slate-500">GDS</p>
-						<p class="font-mono text-sm font-medium text-slate-700">{pct(r.gds)}</p>
+						<p class="text-xs text-slate-500">
+							Geographic spread
+							<span class="ml-1 font-mono text-xs uppercase tracking-wider text-slate-500">GDS</span>
+						</p>
+						<p class="mt-0.5 font-mono text-sm font-medium text-slate-700">{pct(r.gds)}</p>
 					</div>
 					<div>
-						<p class="text-xs text-slate-500">ALD</p>
-						<p class="font-mono text-sm font-medium text-slate-700">{pct(r.ald)}</p>
+						<p class="text-xs text-slate-500">
+							Author independence
+							<span class="ml-1 font-mono text-xs uppercase tracking-wider text-slate-500">ALD</span>
+						</p>
+						<p class="mt-0.5 font-mono text-sm font-medium text-slate-700">{pct(r.ald)}</p>
 					</div>
 					<div>
-						<p class="text-xs text-slate-500">CAI</p>
-						<p class="font-mono text-sm font-medium text-slate-700">{pct(r.cai)}</p>
+						<p class="text-xs text-slate-500">
+							Tier-mix authenticity
+							<span class="ml-1 font-mono text-xs uppercase tracking-wider text-slate-500">CAI</span>
+						</p>
+						<p class="mt-0.5 font-mono text-sm font-medium text-slate-700">{pct(r.cai)}</p>
 					</div>
 				</div>
-			</div>
+				<p class="mt-3 text-xs text-slate-500">
+					<a href="/about/integrity" class="underline decoration-slate-300 underline-offset-2 hover:decoration-slate-500">
+						How these are computed →
+					</a>
+				</p>
+			</details>
 		{/if}
 	</section>
 
@@ -237,6 +279,37 @@
 				<dd class="font-medium text-slate-700">{formatDate(r.actionOccurredAt)}</dd>
 			</div>
 		</dl>
+	</section>
+
+	<!--
+		Honest scope. The page is named "Accountability Receipt" and
+		correlates a constituent message with a legislator's later
+		action. It is not a read-receipt: CWC has no acknowledgement
+		channel and Congressional staff have no API to confirm a
+		message was opened. The substrate proves delivery to the
+		correct office and a verifiable record of the constituent's
+		identity tier. Whether the legislator read or acted because
+		of the message is observed via votes/sponsorships, not
+		guaranteed by the receipt. Naming this here so the second-time
+		user does not conclude the receipt is theatre.
+	-->
+	<section class="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-5" aria-labelledby="scope-heading">
+		<h2 id="scope-heading" class="mb-3 text-sm font-medium text-slate-700">What this receipt proves</h2>
+		<!-- Registry voice — facts about the artifact, not facts about
+		     the reader. Serves the staffer and the org admin reading
+		     the permalink without pronoun-swapping in their head. -->
+		<ul class="list-disc space-y-1.5 pl-5 text-sm text-slate-600 marker:text-slate-700">
+			<li>Message delivered to {r.dmName}'s office.</li>
+			<li>Identity tier and constituency recorded at time of send and verifiable on the substrate.</li>
+			<li>Later action on this bill recorded against the timeline above.</li>
+		</ul>
+		<h2 class="mt-4 mb-2 text-sm font-medium text-slate-500">What it does not prove</h2>
+		<p class="text-sm leading-relaxed text-slate-600">
+			Congressional offices do not return read-receipts. The receipt cannot
+			confirm a staffer opened, read, or acted because of the message —
+			only that the message arrived and the official acted. Alignment and
+			causality above are inferences from public records, not guarantees.
+		</p>
 	</section>
 
 	<!-- Attestation & Anchor -->

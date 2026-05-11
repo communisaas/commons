@@ -5,6 +5,9 @@
 	import { Datum } from '$lib/design';
 	import VerificationPacketComponent from '$lib/components/org/VerificationPacket.svelte';
 	import ProofClaim from '$lib/components/crypto/ProofClaim.svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	let { data }: { data: PageData } = $props();
 
@@ -305,7 +308,7 @@
 				</p>
 
 				<p class="problem__counter">
-					Only <span class="problem__stat problem__stat--weak"><Datum value={51} />%</span> of Congressional staff say form emails influence undecided votes. Half believe those messages are sent <em>without</em> the constituent's knowledge. <span class="problem__stat problem__stat--weak"><Datum value={92} />%</span> say individualized emails DO influence &mdash; which is the filter staffers apply.
+					Only <span class="problem__stat problem__stat--weak"><Datum value={51} />%</span> of {labels.legislativeBody} staff say form emails influence undecided votes. Half believe those messages are sent <em>without</em> the constituent's knowledge. <span class="problem__stat problem__stat--weak"><Datum value={92} />%</span> say individualized emails DO influence &mdash; which is the filter staffers apply.
 				</p>
 
 				<p class="problem__citation">
@@ -323,7 +326,7 @@
 					Shared-office mailbox, <span class="beat__subheading-num"><Datum value={6} /></span>-minute window, one morning in March.
 				</p>
 
-				<figure class="inbox-artifact" aria-label="Congressional staff shared inbox showing mass-mail spray pattern">
+				<figure class="inbox-artifact" aria-label="{labels.legislativeBody} staff shared inbox showing mass-mail spray pattern">
 					<div class="inbox-artifact__chrome">
 						<span class="inbox-artifact__dot"></span>
 						<span class="inbox-artifact__dot"></span>
@@ -547,11 +550,11 @@
 			<section class="beat beat--reach" aria-labelledby="reach-heading">
 				<h2 id="reach-heading" class="beat__heading">One packet model across fragmented intake.</h2>
 				<p class="beat__subheading">
-					Commons delivers verified packets across US Congress, state legislatures, federal agencies, and local boards.
+					Commons delivers verified packets across US {labels.legislativeBody}, state legislatures, federal agencies, and local boards.
 				</p>
 
 				<ul class="reach__list" role="list">
-					<li class="reach__item">U.S. Congress</li>
+					<li class="reach__item">U.S. {labels.legislativeBody}</li>
 					<li class="reach__item"><a href="/org/for/state-legislature" class="reach__link">State legislatures</a></li>
 					<li class="reach__item"><a href="/org/for/agency-rulemaking" class="reach__link">Federal agency dockets</a></li>
 					<li class="reach__item">Governor's offices</li>

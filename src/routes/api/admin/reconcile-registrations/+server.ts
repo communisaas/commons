@@ -17,6 +17,7 @@
 import { json } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 import { verifyCronSecret } from '$lib/server/cron-auth';
@@ -76,7 +77,7 @@ export const POST: RequestHandler = async (event) => {
 					};
 
 					await serverMutation(api.users.upsertRegistration, {
-						userId: data.userId,
+						userId: data.userId as Id<'users'>,
 						identityCommitment: data.identityCommitment,
 						leafIndex: data.atlasResult.leafIndex,
 						merkleRoot: data.atlasResult.userRoot,

@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 /**
  * GET /api/debates/[debateId]/ai-resolution
@@ -19,7 +20,7 @@ export const GET: RequestHandler = async ({ params }) => {
 	const { debateId } = params;
 
 	const debate = await serverQuery(api.debates.get, {
-		debateId: debateId as any
+		debateId: debateId as Id<'debates'>
 	});
 	if (!debate) {
 		throw error(404, 'Debate not found');

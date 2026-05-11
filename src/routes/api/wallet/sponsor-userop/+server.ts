@@ -228,9 +228,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		return json({ success: false, error: 'Missing or invalid field: userOp' }, { status: 400 });
 	}
 
-	if (!signature || typeof signature !== 'string' || !signature.startsWith('0x')) {
+	// bound signature length. ECDSA EIP-712 signatures are
+	// 65 bytes = 132 chars hex + 0x = 134; cap at 200 for slack.
+	if (
+		!signature ||
+		typeof signature !== 'string' ||
+		!signature.startsWith('0x') ||
+		signature.length > 200
+	) {
 		return json(
-			{ success: false, error: 'Missing or invalid field: signature (must be 0x-prefixed hex)' },
+			{ success: false, error: 'Missing or invalid field: signature (must be 0x-prefixed hex ≤200 chars)' },
 			{ status: 400 }
 		);
 	}

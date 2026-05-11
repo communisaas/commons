@@ -4,6 +4,7 @@ import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { escalateToGovernance, readChainResolution } from '$lib/core/blockchain/debate-market-client';
 import { verifyCronSecret } from '$lib/server/cron-auth';
 import { FEATURES } from '$lib/config/features';
@@ -54,7 +55,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 		throw error(429, rateLimitError);
 	}
 
-	const debate = await serverQuery(api.debates.getPublicDetail, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.getPublicDetail, { identifier: debateId });
 	if (!debate) {
 		throw error(404, 'Debate not found');
 	}
@@ -129,7 +130,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 			const escResult = await escalateToGovernance(debate.debateIdOnchain);
 
 			await serverMutation(api.debates.updateStatus, {
-				debateId: debateId as any,
+				debateId: debateId as Id<'debates'>,
 				status: 'awaiting_governance',
 				aiResolution: {
 					scores: evaluationResult.aggregatedScores,
@@ -218,7 +219,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
 		// Update debate status via Convex
 		await serverMutation(api.debates.updateStatus, {
-			debateId: debateId as any,
+			debateId: debateId as Id<'debates'>,
 			status: 'resolved',
 			aiResolution: {
 				scores: evaluationResult.aggregatedScores,
@@ -242,7 +243,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
 		// Update per-argument AI scores via Convex
 		await serverMutation(api.debates.updateArgumentScores, {
-			debateId: debateId as any,
+			debateId: debateId as Id<'debates'>,
 			scores: evaluationResult.aggregatedScores.map((agg) => ({
 				argumentIndex: agg.argumentIndex,
 				aiScores: agg.medianScores,

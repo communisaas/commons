@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { ShieldCheck, AlertCircle, Clock } from '@lucide/svelte';
 	import { formatDistrictName } from '$lib/utils/district-names';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	let { data } = $props();
 
@@ -120,7 +123,7 @@
 				{#if isMdlMethod}
 					<p class="text-slate-500 mt-2 leading-relaxed">
 						"Address-resolved" means the wallet disclosed postal code, city, and
-						state at issuance, which were geocoded to a congressional district.
+						state at issuance, which were geocoded to a {labels.legislativeAdjective} district.
 						The credential does NOT attest to a current street-level address.
 					</p>
 				{:else if isCivicApiMethod}

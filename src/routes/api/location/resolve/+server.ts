@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
 import { lookupDistrict, getOfficials, resolveLocation } from '$lib/core/shadow-atlas/client';
+import { issueGeolocationResolutionToken } from '$lib/server/auth/address-resolution-token';
 
 /**
  * POST /api/location/resolve
@@ -203,6 +204,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// ZK eligibility: requires cell_id
 		const zk_eligible = resolvedCellId != null;
 
+		// F-2.4 follow-up: mint a geo-mode address-resolution token so the
+		// browser-geolocation path can pass /api/identity/verify-address's
+		// "coordinates require token" gate. Geo-mode binds (userId, lat, lng,
+		// expiresAt) without an addressHash. This does not authenticate GPS —
+		// `navigator.geolocation` remains client-spoofable — but it closes
+		// the bypass where a manual-address client could omit the
+		// address_hash to skip the verify-address token check.
+		const issued = await issueGeolocationResolutionToken({
+			userId: locals.user.id,
+			lat,
+			lng
+		});
+
 		return json({
 			resolved: true,
 			district: {
@@ -215,7 +229,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			zk_eligible,
 			...(resolvedCellId ? { cell_id: resolvedCellId } : {}),
 			confidence,
-			signal_type
+			signal_type,
+			addressToken: issued.token,
+			addressTokenExpiresAt: issued.expiresAt
 		});
 	} catch (error) {
 		console.error(

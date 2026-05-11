@@ -3,6 +3,7 @@ import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
 import { env } from '$env/dynamic/private';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
 import { error } from '@sveltejs/kit';
@@ -59,7 +60,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		if (closed) return;
 
 		try {
-			const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
+			const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
 
 			if (!debate || closed) return;
 
@@ -172,7 +173,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 	// Initialize: fetch current state so we only emit on transitions
 	try {
-		const initial = await serverQuery(api.debates.get, { debateId: debateId as any });
+		const initial = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
 		if (initial) {
 			lastStatus = initial.status;
 			lastSignatureCount = initial.aiSignatureCount;

@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 /**
@@ -16,10 +17,17 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	const body = await request.json().catch(() => ({}));
 
+	// parity with /api/org/[slug]/decision-makers/[dmId]/follow —
+	// truncate `reason` at 100 chars rather than passing through unbounded.
+	const reason =
+		typeof body.reason === 'string' && body.reason.length > 0
+			? body.reason.slice(0, 100)
+			: 'manual';
+
 	const result = await serverMutation(api.legislation.watchBill, {
 		slug: params.slug,
-		billId: params.billId as any,
-		reason: typeof body.reason === 'string' ? body.reason : 'manual',
+		billId: params.billId as Id<'bills'>,
+		reason,
 		position: typeof body.position === 'string' && ['support', 'oppose'].includes(body.position)
 			? body.position
 			: undefined
@@ -42,7 +50,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 
 	const result = await serverMutation(api.legislation.updateBillWatch, {
 		slug: params.slug,
-		billId: params.billId as any,
+		billId: params.billId as Id<'bills'>,
 		position: body.position
 	});
 	return json(result);
@@ -54,7 +62,7 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 
 	const result = await serverMutation(api.legislation.unwatchBill, {
 		slug: params.slug,
-		billId: params.billId as any
+		billId: params.billId as Id<'bills'>
 	});
 	return json(result);
 };

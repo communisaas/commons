@@ -163,6 +163,12 @@ export const actions: Actions = {
 			return fail(400, { error: 'File too large. Maximum size is 10MB.' });
 		}
 
+		// Bound the JSON mapping payload before JSON.parse.
+		// 64KB covers any reasonable per-column mapping (200 columns × per-column kv).
+		if (mappingJson && mappingJson.length > 65_536) {
+			return fail(400, { error: 'Column mapping is too large.' });
+		}
+
 		let text: string;
 		try {
 			text = await file.text();

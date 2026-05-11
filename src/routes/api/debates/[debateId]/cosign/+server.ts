@@ -3,6 +3,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
 
@@ -37,7 +38,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(403, 'Tier 3+ verification required to co-sign arguments');
 	}
 
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
 	if (!debate) {
 		throw error(404, 'Debate not found');
 	}
@@ -66,7 +67,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	// Nullifier dedup
 	if (nullifierHex) {
 		const existingNullifier = await serverQuery(api.debates.findNullifier, {
-			debateId: debateId as any,
+			debateId: debateId as Id<'debates'>,
 			nullifierHash: nullifierHex
 		});
 		if (existingNullifier) {
@@ -126,7 +127,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	// ── Convex DB write (atomic) ─────────────────────────────────────
 	await serverMutation(api.debates.cosign, {
-		debateId: debateId as any,
+		debateId: debateId as Id<'debates'>,
 		argumentIndex,
 		stakeAmount: stakeNum,
 		nullifierHash: nullifierHex,

@@ -2,6 +2,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';
 
@@ -37,7 +38,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	const result = await serverQuery(api.sms.getBlast, {
 		slug: params.slug,
-		blastId: params.id as any
+		blastId: params.id as Id<'smsBlasts'>
 	}) as SmsBlastDetail | null;
 
 	if (!result) throw error(404, 'SMS campaign not found');

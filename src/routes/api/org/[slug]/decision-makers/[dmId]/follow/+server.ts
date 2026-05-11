@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 /**
@@ -18,7 +19,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	const result = await serverMutation(api.legislation.followDm, {
 		slug: params.slug,
-		decisionMakerId: params.dmId as any,
+		decisionMakerId: params.dmId as Id<'decisionMakers'>,
 		reason: typeof body.reason === 'string' ? body.reason.slice(0, 100) : 'manual',
 		note: typeof body.note === 'string' ? body.note.slice(0, 1000) : undefined,
 		alertsEnabled: typeof body.alertsEnabled === 'boolean' ? body.alertsEnabled : true
@@ -37,7 +38,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 
 	const result = await serverMutation(api.legislation.updateDmFollow, {
 		slug: params.slug,
-		decisionMakerId: params.dmId as any,
+		decisionMakerId: params.dmId as Id<'decisionMakers'>,
 		alertsEnabled: typeof body.alertsEnabled === 'boolean' ? body.alertsEnabled : undefined,
 		note: typeof body.note === 'string' ? body.note.slice(0, 1000) : undefined
 	});
@@ -50,7 +51,7 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 
 	const result = await serverMutation(api.legislation.unfollowDm, {
 		slug: params.slug,
-		decisionMakerId: params.dmId as any
+		decisionMakerId: params.dmId as Id<'decisionMakers'>
 	});
 	return json(result);
 };

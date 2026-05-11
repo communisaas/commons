@@ -137,6 +137,15 @@ declare global {
 	}
 }
 
+// Vite `?raw` query — string contents at build time. Used by the public
+// record route to inline canonical markdown sources without runtime fs
+// access (the project deploys on Cloudflare's adapter where node:fs is
+// unavailable).
+declare module '*.md?raw' {
+	const content: string;
+	export default content;
+}
+
 declare global {
 	namespace NodeJS {
 		interface ProcessEnv {

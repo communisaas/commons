@@ -2,8 +2,11 @@
 	import type { PageData } from './$types';
 	import { goto } from '$app/navigation';
 	import { modalActions } from '$lib/stores/modalSystem.svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 
 	let { data }: { data: PageData } = $props();
+
+	const labels = getJurisdictionLabels();
 
 	const user = $derived(data.user);
 
@@ -224,7 +227,7 @@
 		</p>
 
 		<p class="displacement__citation">
-			CMF 2017: 91% of Congressional staff weight district-specific impact information &mdash; the same geographic specificity that drives credibility in local intake &middot; Walker &amp; Le, <cite>Socius</cite> 2023 (astroturf harm)
+			CMF 2017: 91% of {labels.legislativeBody} staff weight district-specific impact information &mdash; the same geographic specificity that drives credibility in local intake &middot; Walker &amp; Le, <cite>Socius</cite> 2023 (astroturf harm)
 		</p>
 
 		<!-- ═══ CATEGORY NAMING ═══ -->
@@ -276,7 +279,7 @@
 			</h2>
 
 			<p class="window__body">
-				The shared-mailbox problem is the intake. There is no staff layer to sort it. Identical subject lines arrive from generic campaign domains; the clerk rule-files them into a folder the board members never open. When a verified packet arrives &mdash; one page, named authors, census-tract provenance &mdash; it enters the packet <em>itself</em>, not the Exhibit A appendix. The same district-specific geographic specificity CMF 2017 found decisive for Congressional staff applies here: local clerks assemble what they can verify.
+				The shared-mailbox problem is the intake. There is no staff layer to sort it. Identical subject lines arrive from generic campaign domains; the clerk rule-files them into a folder the board members never open. When a verified packet arrives &mdash; one page, named authors, census-tract provenance &mdash; it enters the packet <em>itself</em>, not the Exhibit A appendix. The same district-specific geographic specificity CMF 2017 found decisive for {labels.legislativeBody} staff applies here: local clerks assemble what they can verify.
 			</p>
 
 			<p class="window__citation">

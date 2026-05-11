@@ -89,7 +89,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}
 
 	if (body?.action === 'verify') {
-		if (typeof body.sessionId !== 'string' || !body.sessionId) {
+		// bound sessionId (Convex doc id; cap at 64).
+		if (typeof body.sessionId !== 'string' || !body.sessionId || body.sessionId.length > 64) {
 			throw error(400, 'Passkey session is required');
 		}
 

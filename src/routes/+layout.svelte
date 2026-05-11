@@ -47,6 +47,10 @@
 	const isEmbedPage = $derived($page.url?.pathname?.startsWith('/embed/') ?? false);
 	const isCampaignPage = $derived($page.url?.pathname?.startsWith('/c/') ?? false);
 	const isVerificationPage = $derived($page.url?.pathname?.startsWith('/v/') ?? false);
+	// Public-record routes are reading-room artifacts. They render as bare
+	// documents on a plain-white ground plane: no header, no footer, no
+	// global gradient, no marketing affordances. Treated like /embed and /c.
+	const isRecordPage = $derived($page.url?.pathname?.startsWith('/record/') ?? false);
 
 	let {
 		children,
@@ -152,8 +156,8 @@
 
 <NavigationProgress />
 
-{#if isEmbedPage || isCampaignPage}
-	<!-- Embed and campaign pages: Own layout, no root chrome -->
+{#if isEmbedPage || isCampaignPage || isRecordPage}
+	<!-- Embed, campaign, and public-record pages: Own layout, no root chrome -->
 	{@render children()}
 {:else}
 	{#if !isOrgPage}

@@ -2,6 +2,7 @@
 import { json } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import type { RequestHandler } from './$types';
 
@@ -15,7 +16,7 @@ export const GET: RequestHandler = async ({ params, getClientAddress }) => {
 	}
 
 	const stats = await serverQuery(api.campaigns.getStats, {
-		campaignId: params.slug as any
+		campaignId: params.slug as Id<'campaigns'>
 	});
 
 	return json(

@@ -13,10 +13,14 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	const { id } = params;
 
 	const result = await serverQuery(api.legislation.getDmScorecard, {
-		dmId: id as any
+		identifier: id
 	});
 	if (!result) throw error(404, 'Decision-maker not found');
 
+	// Embed consumers paste the URL into third-party pages where it is
+	// effectively immutable; emit the canonical-slug form (CONSTITUTION.md
+	// §1.3) regardless of what slug the caller supplied.
+	const slug = result.canonicalSlug ?? id;
 	const baseUrl = `${url.protocol}//${url.host}`;
 	return json({
 		decisionMaker: {
@@ -35,7 +39,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 					end: new Date(result.current.period.end).toISOString().slice(0, 10)
 				}
 			: null,
-		scorecardUrl: `${baseUrl}/dm/${id}/scorecard`,
+		scorecardUrl: `${baseUrl}/dm/${slug}/scorecard`,
 		poweredBy: 'Commons'
 	});
 };

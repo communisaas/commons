@@ -232,6 +232,23 @@
 		{/if}
 	{/if}
 
+	<!-- Delivery receipts surface — durable per-recipient send register -->
+	<div class="rounded-md border border-surface-border bg-surface-base p-6 flex items-center justify-between gap-4">
+		<div>
+			<h3 class="text-sm font-medium text-text-secondary">Delivery receipts</h3>
+			<p class="mt-1 font-brand text-xs text-text-tertiary">
+				Per-recipient SES messageId, status, and error per dispatch — recorded by the
+				bulk-send Lambda after each batch.
+			</p>
+		</div>
+		<a
+			href="receipts"
+			class="font-brand text-sm font-medium text-indigo-600 hover:text-indigo-800"
+		>
+			View receipts →
+		</a>
+	</div>
+
 	<!-- Bounced Recipients -->
 	{#if FEATURES.ENGAGEMENT_METRICS && data.bounceEvents.length > 0}
 		<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-3">

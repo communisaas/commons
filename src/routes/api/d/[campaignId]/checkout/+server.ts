@@ -7,6 +7,7 @@
 import { json, error } from '@sveltejs/kit';
 import { serverQuery, serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import type { RequestHandler } from './$types';
@@ -27,14 +28,17 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 	const body = await request.json();
 	const { email, name, amountCents, recurring, recurringInterval, postalCode, districtCode } = body;
 
-	// Validate email
-	if (!email || typeof email !== 'string' || !EMAIL_RE.test(email)) {
+	// Validate email — shape + length cap (Stripe metadata ≤500 chars; SES practical max 254 per RFC 5321)
+	if (!email || typeof email !== 'string' || email.length > 254 || !EMAIL_RE.test(email)) {
 		throw error(400, 'Valid email is required');
 	}
 
-	// Validate name
-	if (!name || typeof name !== 'string' || !name.trim()) {
-		throw error(400, 'Name is required');
+	// Validate name — max-length cap. Without this, a malicious or
+	// malformed client could submit megabyte-scale strings; we'd waste compute on
+	// PII encryption + Convex doc serialization before Stripe rejects (its
+	// metadata fields cap at 500 chars). 200 is generous for human names.
+	if (!name || typeof name !== 'string' || !name.trim() || name.length > 200) {
+		throw error(400, 'Name is required (max 200 characters)');
 	}
 
 	// Validate amount: integer, $1 min, $1M max
@@ -47,9 +51,19 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 		throw error(400, 'Recurring interval must be one of: month, year, week');
 	}
 
+	// bound caller-supplied string fields before Convex + Stripe
+	// see them. Postal codes (US 5/9, UK 6-8, CA 6+space, etc.) fit in 16; district
+	// codes ("CA-12", "ocd-division/...") fit in 64. Reject obvious abuse early.
+	if (postalCode !== undefined && (typeof postalCode !== 'string' || postalCode.length > 16)) {
+		throw error(400, 'Invalid postal code');
+	}
+	if (districtCode !== undefined && (typeof districtCode !== 'string' || districtCode.length > 64)) {
+		throw error(400, 'Invalid district code');
+	}
+
 	// Fetch campaign via Convex
 	const campaign = await serverQuery(api.campaigns.getPublic, {
-		campaignId: params.campaignId as any
+		campaignId: params.campaignId as Id<'campaigns'>
 	});
 
 	if (!campaign) throw error(404, 'Campaign not found');
@@ -63,7 +77,7 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 
 	// Convex owns PII encryption, donation record creation, Stripe checkout creation, and session persistence.
 	const donationResult = await serverAction(api.donations.processCheckout, {
-		campaignId: params.campaignId as any,
+		campaignId: params.campaignId as Id<'campaigns'>,
 		email: email.toLowerCase(),
 		name: name.trim(),
 		amountCents,

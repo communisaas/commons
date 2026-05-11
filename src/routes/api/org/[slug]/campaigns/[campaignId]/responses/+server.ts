@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 const VALID_TYPES = ['replied', 'meeting_requested', 'vote_cast', 'public_statement'] as const;
@@ -37,7 +38,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	const result = await serverMutation(api.campaigns.recordResponse, {
 		slug: params.slug,
-		campaignId: params.campaignId as any,
+		campaignId: params.campaignId as Id<'campaigns'>,
 		deliveryId,
 		type,
 		detail

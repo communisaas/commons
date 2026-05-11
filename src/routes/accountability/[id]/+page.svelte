@@ -8,10 +8,10 @@
 		Users,
 		FileText,
 		TrendingUp,
-		Weight,
-		Link2
+		Weight
 	} from '@lucide/svelte';
 	import type { PageData } from './$types';
+	import { RegistryMark } from '$lib/design';
 
 	type AlignmentReceipt = { alignment: number };
 
@@ -116,7 +116,14 @@
 			<ShieldCheck class="h-8 w-8 text-indigo-600" />
 		</div>
 		<h1 class="text-2xl font-bold text-slate-900">{data.dmName}</h1>
-		<p class="mt-1 font-mono text-sm text-slate-500">{data.decisionMakerId}</p>
+		<p class="mt-1">
+			<RegistryMark
+				variant="tag"
+				value={data.routeIdentifier}
+				truncate={false}
+				class="text-[11px] text-slate-500"
+			/>
+		</p>
 		<p class="mt-2 text-sm font-medium text-indigo-600">Accountability Report</p>
 	</header>
 
@@ -316,9 +323,7 @@
 										<th class="px-4 py-2 font-medium">Verified</th>
 										<th class="px-4 py-2 font-medium">Causality</th>
 										<th class="px-4 py-2 font-medium">Action</th>
-										<th class="px-4 py-2 font-medium">
-											<span class="sr-only">Verify</span>
-										</th>
+										<th class="px-4 py-2 font-medium">Receipt</th>
 									</tr>
 								</thead>
 								<tbody>
@@ -370,13 +375,13 @@
 												{/if}
 											</td>
 											<td class="px-4 py-2">
-												<a
+												<RegistryMark
+													variant="sha256"
+													value={receipt.attestationDigest}
+													truncate={true}
 													href="/verify/receipt/{receipt.id}"
-													class="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800"
-													title="Verify receipt"
-												>
-													<Link2 class="h-3.5 w-3.5" />
-												</a>
+													class="text-[11px] text-indigo-600"
+												/>
 											</td>
 										</tr>
 									{/each}

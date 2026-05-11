@@ -7,6 +7,7 @@
 import { json, error } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { initiatePatchThroughCall } from '$lib/server/sms/twilio';
 import type { RequestHandler } from './$types';
@@ -34,7 +35,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 	if (campaignId) {
 		const campaign = await serverQuery(api.calls.validateCampaign, {
 			slug: params.slug,
-			campaignId: campaignId as any
+			campaignId: campaignId as Id<'campaigns'>
 		});
 		if (!campaign) {
 			return json({ error: 'Campaign not found in this organization' }, { status: 400 });
@@ -44,7 +45,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 	// Look up supporter and verify they belong to this org
 	const supporter = await serverQuery(api.calls.validateSupporter, {
 		slug: params.slug,
-		supporterId: supporterId as any
+		supporterId: supporterId as Id<'supporters'>
 	});
 	if (!supporter) throw error(404, 'Supporter not found');
 	if (!supporter.encryptedPhone) throw error(400, 'Supporter does not have a phone number on file');
@@ -52,15 +53,23 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 	// Client must decrypt supporter phone with org key and pass it in the body
 	const callerPhone = (body as Record<string, unknown>).callerPhone as string | undefined;
 	if (!callerPhone) throw error(400, 'callerPhone required — decrypt supporter phone with org key first');
+	// callerPhone format check (parity with targetPhone regex above).
+	if (typeof callerPhone !== 'string' || !/^\+\d{10,15}$/.test(callerPhone)) {
+		throw error(400, 'Invalid callerPhone format (E.164 required)');
+	}
+	// districtHash is SHA-256 hex (64 chars) optionally with 0x prefix.
+	if (districtHash !== undefined && (typeof districtHash !== 'string' || districtHash.length > 128)) {
+		throw error(400, 'Invalid districtHash format');
+	}
 
 	// Create call record
 	const callResult = await serverMutation(api.calls.createCall, {
 		slug: params.slug,
-		supporterId: supporterId as any,
+		supporterId: supporterId as Id<'supporters'>,
 		callerPhone,
 		targetPhone,
 		targetName: targetName || undefined,
-		campaignId: campaignId ? (campaignId as any) : undefined,
+		campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined,
 		districtHash: districtHash || undefined
 	});
 
@@ -75,6 +84,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 
 	if (result.success) {
 		const updated = await serverMutation(api.calls.updateCallSid, {
+			slug: params.slug,
 			callId: callResult._id,
 			twilioCallSid: result.callSid!
 		});
@@ -93,6 +103,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 		);
 	} else {
 		await serverMutation(api.calls.updateCallStatus, {
+			slug: params.slug,
 			callId: callResult._id,
 			status: 'failed'
 		});

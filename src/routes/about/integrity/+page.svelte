@@ -1,3 +1,9 @@
+<script lang="ts">
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
+</script>
+
 <svelte:head>
 	<title>Coordination Integrity Scores | Commons</title>
 	<meta name="description" content="How Commons measures whether campaign participation is organic, diverse, and sustained." />
@@ -166,7 +172,7 @@
 				<strong class="text-text-primary">Address fields — mDL path:</strong> when you
 				verify with a state-issued mobile driver's license, your wallet shares postal
 				code, city, and state with our servers. Those fields are used to derive your
-				congressional district and may be represented afterward as encrypted
+				{labels.legislativeAdjective} district and may be represented afterward as encrypted
 				ground-vault material and disclosed district/cell metadata. We do not store
 				identity documents or keep plaintext address fields at rest.
 			</li>

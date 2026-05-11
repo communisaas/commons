@@ -260,7 +260,25 @@
 
 		<!-- Email Preview -->
 		<div class="rounded-md border border-surface-border bg-surface-base p-6 space-y-4">
-			<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Email Preview</p>
+			<div class="flex items-baseline justify-between gap-3">
+				<p class="text-xs font-mono uppercase tracking-wider text-text-tertiary">Email Preview</p>
+				<div class="flex items-center gap-3">
+					<a
+						href="email-html"
+						target="_blank"
+						rel="noopener"
+						class="text-xs font-brand text-indigo-600 hover:text-indigo-800"
+					>
+						Open for printing →
+					</a>
+					<a
+						href="email-html?download=1"
+						class="text-xs font-brand text-indigo-600 hover:text-indigo-800"
+					>
+						Download HTML
+					</a>
+				</div>
+			</div>
 			<div class="rounded-lg border border-surface-border bg-surface-raised overflow-hidden" style="max-height: 600px; overflow-y: auto;">
 				<iframe
 					srcdoc={data.renderedHtml}
@@ -270,6 +288,12 @@
 					sandbox=""
 				></iframe>
 			</div>
+			<p class="text-[11px] font-brand text-text-tertiary">
+				Open for printing renders the same email body as a standalone page; use your browser's
+				File → Print → Save as PDF for a staffer-grade artifact. The attestation hash on the page
+				is exposed in the response's <code class="font-mono">X-Attestation-Hash</code> header for
+				verification chain-of-custody.
+			</p>
 		</div>
 
 		<!-- Send button -->

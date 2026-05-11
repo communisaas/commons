@@ -72,6 +72,51 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(400, 'Policy text must not exceed 5000 characters');
 	}
 
+	// bound remaining caller-supplied fields.
+	// issueFilter/orgFilter are arrays of strings per the Convex action
+	// signature (`v.optional(v.array(v.string()))`). Validate as arrays
+	// with per-entry caps — bounding them as scalar strings would break
+	// every legitimate client request.
+	if (issueFilter !== undefined && issueFilter !== null) {
+		if (
+			!Array.isArray(issueFilter) ||
+			issueFilter.length > 32 ||
+			issueFilter.some((s) => typeof s !== 'string' || s.length > 200)
+		) {
+			throw error(400, 'issueFilter must be an array of ≤32 strings (each ≤200 characters)');
+		}
+	}
+	if (orgFilter !== undefined && orgFilter !== null) {
+		if (
+			!Array.isArray(orgFilter) ||
+			orgFilter.length > 32 ||
+			orgFilter.some((s) => typeof s !== 'string' || s.length > 64)
+		) {
+			throw error(400, 'orgFilter must be an array of ≤32 strings (each ≤64 characters)');
+		}
+	}
+	if (stanceProfileId !== undefined && stanceProfileId !== null && (typeof stanceProfileId !== 'string' || stanceProfileId.length > 64)) {
+		throw error(400, 'stanceProfileId must be ≤64 characters');
+	}
+	if (
+		maxActionsPerDay !== undefined &&
+		maxActionsPerDay !== null &&
+		(typeof maxActionsPerDay !== 'number' || !Number.isInteger(maxActionsPerDay) || maxActionsPerDay < 0 || maxActionsPerDay > 10_000)
+	) {
+		throw error(400, 'maxActionsPerDay must be an integer 0-10,000');
+	}
+	if (
+		requireReviewAbove !== undefined &&
+		requireReviewAbove !== null &&
+		(typeof requireReviewAbove !== 'number' || !Number.isFinite(requireReviewAbove))
+	) {
+		throw error(400, 'requireReviewAbove must be a finite number');
+	}
+	const expiresAtMs = expiresAt ? new Date(expiresAt).getTime() : undefined;
+	if (expiresAt !== undefined && expiresAt !== null && (expiresAtMs === undefined || !Number.isFinite(expiresAtMs))) {
+		throw error(400, 'expiresAt must be a valid date');
+	}
+
 	const result = await serverAction(api.delegation.createGrant, {
 		scope,
 		policyText: policyText.trim(),
@@ -80,7 +125,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		stanceProfileId: stanceProfileId || undefined,
 		maxActionsPerDay: maxActionsPerDay ?? undefined,
 		requireReviewAbove: requireReviewAbove ?? undefined,
-		expiresAt: expiresAt ? new Date(expiresAt).getTime() : undefined
+		expiresAt: expiresAtMs
 	});
 	return json({ grant: result }, { status: 201 });
 };

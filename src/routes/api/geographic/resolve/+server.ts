@@ -5,7 +5,10 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { SUPPORTED_RESOLVER_COUNTRIES } from '$lib/server/geographic/types';
+import {
+	LIVE_RESOLVER_COUNTRIES,
+	SUPPORTED_RESOLVER_COUNTRIES
+} from '$lib/server/geographic/types';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -29,6 +32,22 @@ export const POST: RequestHandler = async ({ request }) => {
 		return json(
 			{ error: 'US resolution uses /api/shadow-atlas/bubble endpoint' },
 			{ status: 400 }
+		);
+	}
+
+	// Non-US countries are SUPPORTED at the resolver level (postcode → district
+	// works) but `lookupRepresentatives` is unimplemented for them, and the
+	// jurisdiction-specific legal-compliance work hasn't been scoped. Returning
+	// a successful response with `representatives: []` would dress up an
+	// inactive flow as success and accept legal exposure for users we can't
+	// actually serve. Reject until the country is promoted to LIVE.
+	if (!LIVE_RESOLVER_COUNTRIES.includes(countryCode)) {
+		return json(
+			{
+				error: `District resolution for ${countryCode} is not yet available. Currently live: ${LIVE_RESOLVER_COUNTRIES.join(', ')}.`,
+				code: 'COUNTRY_NOT_LIVE'
+			},
+			{ status: 503 }
 		);
 	}
 

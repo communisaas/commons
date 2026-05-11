@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api, internal } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { serverInternalMutation } from '$lib/server/convex-internal';
 import { solidityPackedKeccak256 } from 'ethers';
 import { proposeDebate, deriveDomain } from '$lib/core/blockchain/debate-market-client';
@@ -43,10 +44,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!propositionText || typeof propositionText !== 'string' || propositionText.length < 10) {
 		throw error(400, 'propositionText must be at least 10 characters');
 	}
+	if (propositionText.length > 4000) {
+		throw error(400, 'propositionText must be 4000 characters or fewer');
+	}
 
 	// Check for existing active debate on this template
 	const existingDebate = await serverQuery(api.debates.getByTemplateId, {
-		templateId: templateId as any
+		templateId: templateId as Id<'templates'>
 	});
 	if (existingDebate) {
 		throw error(409, 'An active debate already exists for this template');
@@ -106,7 +110,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	// Create debate record via Convex
 	const debateId = await serverInternalMutation(internal.debates.insertDebate, {
-		templateId: templateId as any,
+		templateId: templateId as Id<'templates'>,
 		debateIdOnchain: debateIdOnchain!,
 		actionDomain: actionDomain!,
 		propositionHash,

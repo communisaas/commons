@@ -2,7 +2,7 @@
  * Browser-callable endpoint that fetches the V2 prover's non-membership
  * witness for a given revocation_nullifier.
  *
- * Wave 3 — wires the V2 client glue path. The browser cannot directly call
+ *  wires the V2 client glue path. The browser cannot directly call
  * the Convex `internal.revocations.getRevocationNonMembershipPath` query
  * (auth scope mismatch), so this thin SvelteKit endpoint runs the query
  * server-side and returns the path + bits + currentRoot.
@@ -46,6 +46,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const revocationNullifier = (body as { revocationNullifier?: unknown }).revocationNullifier;
 	if (typeof revocationNullifier !== 'string') {
 		throw error(400, 'revocationNullifier must be a string');
+	}
+	// BN254 field elements fit in 32 bytes (64 hex chars + optional 0x prefix); cap at 80
+	// to allow leading-zero variants without admitting unbounded inputs to Convex.
+	if (revocationNullifier.length > 80) {
+		throw error(400, 'revocationNullifier must be 80 characters or fewer');
 	}
 	if (!/^(0x)?[0-9a-fA-F]+$/.test(revocationNullifier)) {
 		throw error(400, 'revocationNullifier must be hex');

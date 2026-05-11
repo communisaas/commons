@@ -2,6 +2,7 @@ import { error, redirect } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { PageServerLoad } from './$types';
 
 function asString(value: unknown, fallback = ''): string {
@@ -20,11 +21,11 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const [convexWorkflow, convexExecutions, convexOrg] = await Promise.all([
 		serverQuery(api.workflows.get, {
 			slug: params.slug,
-			workflowId: params.id as any
+			workflowId: params.id as Id<'workflows'>
 		}),
 		serverQuery(api.workflows.getExecutions, {
 			slug: params.slug,
-			workflowId: params.id as any,
+			workflowId: params.id as Id<'workflows'>,
 			limit: 20
 		}),
 		serverQuery(api.organizations.getBySlug, { slug: params.slug })

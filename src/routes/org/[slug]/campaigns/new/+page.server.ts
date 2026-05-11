@@ -3,6 +3,7 @@ import type { PageServerLoad, Actions } from './$types';
 
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 function requireRole(role: string, required: string): void {
 	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
@@ -22,7 +23,7 @@ export const load: PageServerLoad = async ({ parent, url, params }) => {
 		fromAlertId
 			? serverQuery(api.legislation.getAlertWithBill, {
 				slug: params.slug,
-				alertId: fromAlertId as any
+				alertId: fromAlertId as Id<'legislativeAlerts'>
 			}).catch(() => null)
 			: Promise.resolve(null)
 	]);
@@ -66,8 +67,27 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid campaign type', title, type, body, targetCountry, targetJurisdiction });
 		}
 
-		if (debateEnabled && (isNaN(debateThreshold) || debateThreshold < 1)) {
-			return fail(400, { error: 'Debate threshold must be at least 1', title, type, body, targetCountry, targetJurisdiction });
+		// Parity with /api/org/[slug]/campaigns POST — bound the same caller-supplied
+		// fields at this form-action boundary so `campaigns.create` never sees
+		// outsized writes from either path.
+		if (title.length > 200) {
+			return fail(400, { error: 'Title must be 200 characters or fewer', title, type, body, targetCountry, targetJurisdiction });
+		}
+		if (body && body.length > 10_000) {
+			return fail(400, { error: 'Body must be 10,000 characters or fewer', title, type, body, targetCountry, targetJurisdiction });
+		}
+		if (templateId && templateId.length > 64) {
+			return fail(400, { error: 'Invalid templateId', title, type, body, targetCountry, targetJurisdiction });
+		}
+		if (targetJurisdiction && targetJurisdiction.length > 64) {
+			return fail(400, { error: 'targetJurisdiction must be 64 characters or fewer', title, type, body, targetCountry, targetJurisdiction });
+		}
+		if (targetCountry.length > 8) {
+			return fail(400, { error: 'targetCountry must be 8 characters or fewer', title, type, body, targetCountry, targetJurisdiction });
+		}
+
+		if (debateEnabled && (isNaN(debateThreshold) || debateThreshold < 1 || debateThreshold > 1_000_000)) {
+			return fail(400, { error: 'Debate threshold must be 1 to 1,000,000', title, type, body, targetCountry, targetJurisdiction });
 		}
 
 		if (billId && !position) {
@@ -87,7 +107,7 @@ export const actions: Actions = {
 			debateThreshold,
 			targetCountry,
 			targetJurisdiction: targetJurisdiction ?? undefined,
-			billId: billId as any,
+			billId: (billId ?? undefined) as Id<'bills'> | undefined,
 			position: position ?? undefined
 		});
 
@@ -95,7 +115,7 @@ export const actions: Actions = {
 		if (fromAlertId) {
 			await serverMutation(api.legislation.dismissAlert, {
 				slug: params.slug,
-				alertId: fromAlertId as any
+				alertId: fromAlertId as Id<'legislativeAlerts'>
 			}).catch(() => {});
 		}
 

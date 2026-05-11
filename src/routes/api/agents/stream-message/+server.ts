@@ -33,6 +33,7 @@ import type { DecisionMaker } from '$lib/core/agents';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { EvaluatedSource } from '$lib/core/agents/types';
 import { encryptMessageJobResult } from '$lib/server/message-job-encryption';
 
@@ -101,6 +102,22 @@ export const POST: RequestHandler = async (event) => {
 			status: 400,
 			headers: { 'Content-Type': 'application/json' }
 		});
+	}
+	// parity: bound input lengths before Gemini billing path.
+	// Subject lines are short (200); core_message + voice_sample + raw_input are
+	// the long-form fields; topic strings are short tags. Total payload could
+	// otherwise exceed Gemini's context window expensively.
+	if (
+		body.subject_line.length > 200 ||
+		body.core_message.length > 16_000 ||
+		(body.voice_sample && body.voice_sample.length > 16_000) ||
+		(body.raw_input && body.raw_input.length > 16_000) ||
+		(Array.isArray(body.topics) && (body.topics.length > 20 || body.topics.some((t) => typeof t !== 'string' || t.length > 64)))
+	) {
+		return new Response(
+			JSON.stringify({ error: 'Input field exceeds maximum length' }),
+			{ status: 400, headers: { 'Content-Type': 'application/json' } },
+		);
 	}
 
 	const usesRecoverableJob = Boolean(
@@ -266,7 +283,7 @@ export const POST: RequestHandler = async (event) => {
 			if (body.template_id) {
 				try {
 					const template = await serverQuery(api.templates.getSourceCache, {
-						templateId: body.template_id as any
+						templateId: body.template_id as Id<'templates'>
 					});
 
 					if (
@@ -367,7 +384,7 @@ export const POST: RequestHandler = async (event) => {
 				result.evaluatedSources.length > 0
 			) {
 				serverMutation(api.templates.updateSourceCache, {
-					templateId: body.template_id as any,
+					templateId: body.template_id as Id<'templates'>,
 					cachedSources: result.evaluatedSources,
 					sourcesCachedAt: Date.now()
 				}).catch((err: unknown) => {

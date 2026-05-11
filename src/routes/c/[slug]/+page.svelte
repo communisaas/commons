@@ -7,6 +7,9 @@
 	import { buildArgumentStanceMap } from '$lib/utils/debate-stats';
 	import type { DebateData } from '$lib/stores/debateState.svelte';
 	import type { PageData, ActionData } from './$types';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	type PublicCampaignTarget = {
 		name: string;
@@ -167,7 +170,7 @@
 			}
 
 			if (!result.district?.code) {
-				districtError = 'Congressional district could not be determined. Please verify your address.';
+				districtError = `${labels.districtType} could not be determined. Please verify your address.`;
 				return;
 			}
 
@@ -243,14 +246,14 @@
 	<meta property="og:title" content={data.campaign.title} />
 	<meta property="og:description" content={data.campaign.body || `Take action with ${data.campaign.orgName}`} />
 	<meta property="og:type" content="website" />
-	<meta property="og:url" content={`https://commons.email/c/${data.campaign.id}`} />
-	<meta property="og:image" content={`https://commons.email/og/campaign/${data.campaign.id}`} />
+	<meta property="og:url" content={`${data.baseUrl}/c/${data.campaign.id}`} />
+	<meta property="og:image" content={`${data.baseUrl}/og/campaign/${data.campaign.id}`} />
 	<meta property="og:image:width" content="1200" />
 	<meta property="og:image:height" content="630" />
 	<meta name="twitter:card" content="summary_large_image" />
 	<meta name="twitter:title" content={data.campaign.title} />
 	<meta name="twitter:description" content={data.campaign.body || `Take action with ${data.campaign.orgName}`} />
-	<meta name="twitter:image" content={`https://commons.email/og/campaign/${data.campaign.id}`} />
+	<meta name="twitter:image" content={`${data.baseUrl}/og/campaign/${data.campaign.id}`} />
 </svelte:head>
 
 <div class="mx-auto min-h-[80vh] max-w-lg px-4 py-6 sm:py-10">
@@ -530,7 +533,7 @@
 
 		<h2 class="text-xl font-bold text-slate-900">Verify Your District</h2>
 		<p class="mt-1 text-sm text-slate-500">
-			Enter your street address to verify your congressional district. This strengthens your action.
+			Enter your street address to verify your {labels.legislativeAdjective} district. This strengthens your action.
 		</p>
 
 		<!-- Privacy note -->

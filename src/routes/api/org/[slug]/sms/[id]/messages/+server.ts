@@ -6,6 +6,7 @@
 import { json, error } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 
@@ -17,7 +18,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 
 	const messages = await serverQuery(api.sms.getBlastMessages, {
 		slug: params.slug,
-		blastId: params.id as any,
+		blastId: params.id as Id<'smsBlasts'>,
 		limit
 	});
 

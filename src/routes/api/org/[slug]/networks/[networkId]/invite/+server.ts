@@ -6,11 +6,13 @@ import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 
+// orgSlug max-length parity with /api/org POST (slug 2-48 chars).
 const InviteSchema = z.object({
-	orgSlug: z.string().min(1, 'orgSlug is required')
+	orgSlug: z.string().min(2).max(48)
 });
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
@@ -31,7 +33,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	const result = await serverMutation(api.networks.invite, {
 		orgSlug: params.slug,
-		networkId: params.networkId as any,
+		networkId: params.networkId as Id<'orgNetworks'>,
 		targetOrgSlug: parsed.data.orgSlug
 	});
 	return json({ data: { id: result } }, { status: 201 });

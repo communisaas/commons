@@ -24,6 +24,7 @@
 
 	type ProofPressure = {
 		decisionMakerId: string;
+		canonicalSlug?: string | null;
 		dmName: string;
 		orgCount: number;
 		combinedProofWeight: number;
@@ -240,12 +241,13 @@
 							{#each data.proofPressure as dm (dm.decisionMakerId)}
 								{@const maxWeight = data.proofPressure[0]?.combinedProofWeight ?? 1}
 								{@const barWidth = Math.max(4, (dm.combinedProofWeight / maxWeight) * 100)}
+								{@const slug = dm.canonicalSlug ?? dm.decisionMakerId}
 								<tr class="border-b border-surface-border last:border-0">
 									<td class="px-4 py-3">
-										<a href="/accountability/{dm.decisionMakerId}" class="text-text-primary hover:text-teal-400 transition-colors font-medium">
+										<a href="/accountability/{slug}" class="text-text-primary hover:text-teal-400 transition-colors font-medium">
 											{dm.dmName}
 										</a>
-										<span class="block text-xs text-text-quaternary font-mono">{dm.decisionMakerId}</span>
+										<span class="block text-xs text-text-quaternary font-mono">{slug}</span>
 									</td>
 									<td class="px-4 py-3 text-text-secondary">{dm.orgCount} org{dm.orgCount !== 1 ? 's' : ''}</td>
 									<td class="px-4 py-3 min-w-[140px]">

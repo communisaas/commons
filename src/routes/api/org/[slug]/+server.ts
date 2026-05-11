@@ -4,12 +4,15 @@ import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
-// F-R8-02: Zod schema replaces unsafe `body as { ... }` cast
+// F-R8-02: Zod schema replaces unsafe `body as { ... }` cast.
+// tighten caps on encrypted blob + hash. encryptWithOrgKey
+// produces JSON {ciphertext, iv, v} ~200 bytes; 4096 is generous. SHA-256
+// hex is 64 chars + optional 0x prefix; 128 covers org-scoped variants.
 const OrgUpdateSchema = z.object({
 	description: z.string().max(1000).optional(),
-	billing_email: z.string().email().optional(),
-	encryptedBillingEmail: z.string().optional(),
-	billingEmailHash: z.string().optional(),
+	billing_email: z.string().email().max(254).optional(),
+	encryptedBillingEmail: z.string().max(4096).optional(),
+	billingEmailHash: z.string().max(128).optional(),
 	avatar: z.string().max(2048).optional()
 });
 

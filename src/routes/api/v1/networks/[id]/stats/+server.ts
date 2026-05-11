@@ -5,6 +5,7 @@
 
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
@@ -25,8 +26,8 @@ export const GET: RequestHandler = async ({ params, request }) => {
 
 	// Verify the requesting org is an active member
 	const membership = await serverQuery(api.networks.checkMembership, {
-		networkId: params.id as any,
-		orgId: auth.orgId as any
+		networkId: params.id as Id<'orgNetworks'>,
+		orgId: auth.orgId as Id<'organizations'>
 	});
 
 	if (!membership) {

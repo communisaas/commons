@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 
 /**
@@ -22,10 +23,16 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	const { debateId } = params;
 
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as any });
+	const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
 	if (!debate) throw error(404, 'Debate not found');
 
-	if (!(debate as any).campaign) {
+	// verify debate is linked to a campaign via reverse index
+	// (campaign.debateId → debate._id). `debates.get` returns no campaign field,
+	// so the prior `(debate as any).campaign` always tripped the guard regardless.
+	const linkedCampaign = await serverQuery(api.campaigns.getCampaignByDebateId, {
+		debateId: debateId as Id<'debates'>
+	});
+	if (!linkedCampaign) {
 		throw error(400, 'This debate is not linked to a campaign');
 	}
 
@@ -56,13 +63,20 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	const winningStance = outcome.toUpperCase();
-	const matchingArg = (debate as any).arguments?.find(
-		(a: any) => a.stance === winningStance
-	);
-	const winningArgumentIndex = matchingArg?.argumentIndex ?? undefined;
+	// fetch arguments via listArguments query, filtered to
+	// the winning stance, take the highest-weighted one. The prior
+	// `(debate as any).arguments` access was undefined since `debates.get` returns
+	// no arguments field; on Convex, the listArguments query already sorts by
+	// weightedScore descending so `[0]` is the top-stake winning argument.
+	const stanceResult = await serverQuery(api.debates.listArguments, {
+		debateId: debateId as Id<'debates'>,
+		stance: winningStance,
+		limit: 1
+	});
+	const winningArgumentIndex = stanceResult?.arguments?.[0]?.argumentIndex ?? undefined;
 
 	await serverMutation(api.debates.updateStatus, {
-		debateId: debateId as any,
+		debateId: debateId as Id<'debates'>,
 		status: 'resolved',
 		winningStance,
 		winningArgumentIndex,

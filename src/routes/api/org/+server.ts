@@ -20,6 +20,16 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		throw error(400, 'slug must be 2-48 lowercase alphanumeric characters or hyphens');
 	}
 
+	// bound caller-supplied strings before they hit Convex.
+	// Org names render in headers, emails, and reports — 200 is generous.
+	// Descriptions are short marketing blurbs — 2,000 covers any realistic use.
+	if (typeof name !== 'string' || name.length > 200) {
+		throw error(400, 'name must be a string ≤200 characters');
+	}
+	if (description !== undefined && (typeof description !== 'string' || description.length > 2000)) {
+		throw error(400, 'description must be a string ≤2,000 characters');
+	}
+
 	const result = await serverMutation(api.organizations.create, {
 		name,
 		slug,

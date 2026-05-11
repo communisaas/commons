@@ -17,5 +17,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(400, 'vault and cell are required');
 	}
 
+	// bound serialized JSON blob sizes. Encrypted vault + cell
+	// metadata are typically a few KB; 64KB is generous defense-in-depth.
+	for (const [field, value] of [
+		['vault', vault],
+		['cell', cell],
+		['wrapper', wrapper]
+	] as const) {
+		if (value !== undefined && value !== null) {
+			const serialized = JSON.stringify(value);
+			if (serialized.length > 65_536) {
+				throw error(400, `${field} payload must be ≤64KB serialized`);
+			}
+		}
+	}
+
 	return json(await persistGroundBundle({ vault, cell, wrapper }));
 };

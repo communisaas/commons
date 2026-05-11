@@ -4,6 +4,7 @@ import type { RequestHandler } from './$types';
 import { serverMutation } from 'convex-sveltekit';
 import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { isAnyMdlProtocolEnabled, isMdlProtocolEnabled } from '$lib/config/features';
 import { processCredentialResponse } from '$lib/core/identity/mdl-verification';
 import { readBoundedJson } from '$lib/server/bounded-json';
@@ -158,7 +159,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		let bindingResult;
 		try {
 			bindingResult = await serverInternalMutation(internal.users.finalizeMdlVerification, {
-				userId: session.userId as any,
+				userId: session.userId as Id<'users'>,
 				identityCommitment,
 				credentialHash: result.credentialHash,
 				nonce,

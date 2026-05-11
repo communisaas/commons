@@ -2,6 +2,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';
 
@@ -24,7 +25,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	const orgCtx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
 	const campaign = await serverQuery(api.campaigns.get, {
-		campaignId: params.id as any
+		campaignId: params.id as Id<'campaigns'>
 	});
 
 	if (!campaign || campaign.type !== 'FUNDRAISER')
@@ -32,7 +33,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	const donors = await serverQuery(api.donations.listDonors, {
 		orgSlug: params.slug,
-		campaignId: params.id as any
+		campaignId: params.id as Id<'campaigns'>
 	}) as DonorResult;
 
 	return {

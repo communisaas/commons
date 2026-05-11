@@ -86,11 +86,15 @@
 		submitResult[caseId] = null;
 
 		try {
+			// Dev-time cron secret: a test harness or browser extension may inject
+			// `window.__CRON_SECRET` to authenticate the governance-resolve call.
+			// Production: this header is rejected and the page surfaces an auth error.
+			const devCronSecret = (window as Window & { __CRON_SECRET?: string }).__CRON_SECRET;
 			const res = await fetch(`/api/debates/${caseId}/governance-resolve`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${(window as any).__CRON_SECRET ?? ''}`
+					'Authorization': `Bearer ${devCronSecret ?? ''}`
 				},
 				body: JSON.stringify({
 					winningArgumentIndex: winner,

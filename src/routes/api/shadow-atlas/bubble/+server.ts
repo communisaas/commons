@@ -47,8 +47,37 @@ export const POST: RequestHandler = async (event) => {
 		return json({ error: 'center must be { lat: number, lng: number }' }, { status: 400 });
 	}
 
-	if (typeof radius !== 'number' || radius < 1 || radius > 50_000) {
+	if (typeof radius !== 'number' || !Number.isFinite(radius) || radius < 1 || radius > 50_000) {
 		return json({ error: 'radius must be 1-50000 meters' }, { status: 400 });
+	}
+
+	// bound caller-supplied postal_code + layers before proxy
+	// to Shadow Atlas. Shadow Atlas does Zod validation downstream but fail-fast
+	// at our boundary to avoid forwarding megabyte payloads upstream.
+	if (postal_code !== undefined && (typeof postal_code !== 'string' || postal_code.length > 16)) {
+		return json({ error: 'postal_code must be a string ≤16 characters' }, { status: 400 });
+	}
+	if (
+		layers !== undefined &&
+		(!Array.isArray(layers) ||
+			layers.length > 32 ||
+			layers.some((l) => typeof l !== 'string' || (l as string).length > 64))
+	) {
+		return json(
+			{ error: 'layers must be an array of ≤32 strings (each ≤64 characters)' },
+			{ status: 400 }
+		);
+	}
+
+	// Validate center.lat/lng physical ranges before proxy.
+	const centerObj = center as Record<string, unknown>;
+	const lat = centerObj.lat as number;
+	const lng = centerObj.lng as number;
+	if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+		return json(
+			{ error: 'center.lat must be -90..90 and center.lng must be -180..180' },
+			{ status: 400 }
+		);
 	}
 
 	try {
@@ -61,7 +90,7 @@ export const POST: RequestHandler = async (event) => {
 			headers: {
 				'Content-Type': 'application/json',
 				Accept: 'application/json',
-				'X-Client-Version': 'commons-v1',
+				'X-Client-Version': 'voter-protocol-v1',
 				'X-Forwarded-For': clientIp,
 				'X-Request-ID': requestId
 			},

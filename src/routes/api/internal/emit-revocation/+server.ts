@@ -26,7 +26,7 @@
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { env } from '$env/dynamic/private';
+import { matchInternalSecret } from '$lib/server/internal/secret-auth';
 import { enforceInternalRateLimit } from '$lib/server/internal/rate-limit';
 import { computeRevocationNullifier } from '$lib/core/crypto/poseidon';
 import {
@@ -47,13 +47,14 @@ interface EmitRevocationRequestBody {
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	const expected = env.INTERNAL_API_SECRET;
-	if (!expected) {
-		throw error(503, 'INTERNAL_API_SECRET not configured');
-	}
-	const provided = request.headers.get('x-internal-secret');
-	if (!provided || provided !== expected) {
-		throw error(403, 'Invalid internal secret');
+	const auth = matchInternalSecret(request.headers.get('x-internal-secret'));
+	if (!auth.ok) {
+		throw error(
+			auth.reason === 'not_configured' ? 503 : 403,
+			auth.reason === 'not_configured'
+				? 'INTERNAL_API_SECRET not configured'
+				: 'Invalid internal secret'
+		);
 	}
 
 	// Gas-expensive: every accepted call is a chain write via the relayer
@@ -116,7 +117,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		);
 	}
 
-	// Compute the new SMT root the contract will commit. Wave 2 (KG-2 closure):
+	// Compute the new SMT root the contract will commit. (KG-2 closure):
 	// the canonical Poseidon2 sparse Merkle tree is persisted in Convex and
 	// updated atomically here. Optimistic concurrency: if a parallel emit
 	// landed between read and write, `insertRevocationNullifier` retries with
@@ -143,7 +144,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		if (msg === 'REVOCATION_EMITS_HALTED') {
-			// Wave 5 / FU-2.1 — drift kill-switch active. Terminal `config`
+			// FU-2.1 — drift kill-switch active. Terminal `config`
 			// error so the Convex worker stops retrying and alerts ops.
 			console.error('[emit-revocation] kill-switch active — emit refused', {
 				credentialId: body.credentialId?.slice(0, 8)

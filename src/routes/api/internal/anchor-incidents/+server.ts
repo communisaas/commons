@@ -11,20 +11,21 @@
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { env } from '$env/dynamic/private';
 import { serverQuery } from 'convex-sveltekit';
 import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
 import { enforceInternalRateLimit } from '$lib/server/internal/rate-limit';
+import { matchInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const GET: RequestHandler = async ({ request, url }) => {
-	const expected = env.INTERNAL_API_SECRET;
-	if (!expected) {
-		throw error(503, 'INTERNAL_API_SECRET not configured');
-	}
-	const provided = request.headers.get('x-internal-secret');
-	if (!provided || provided !== expected) {
-		throw error(403, 'Invalid internal secret');
+	const auth = matchInternalSecret(request.headers.get('x-internal-secret'));
+	if (!auth.ok) {
+		throw error(
+			auth.reason === 'not_configured' ? 503 : 403,
+			auth.reason === 'not_configured'
+				? 'INTERNAL_API_SECRET not configured'
+				: 'Invalid internal secret'
+		);
 	}
 
 	// Read-only dashboard query. 120/min is plenty for an operator refreshing

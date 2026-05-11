@@ -46,18 +46,26 @@ export const POST: RequestHandler = async (event) => {
 
 	const { proof, publicInputs, epochDate } = body as Record<string, unknown>;
 
-	// Validate proof
-	if (typeof proof !== 'string' || !proof.startsWith('0x')) {
-		return json({ error: 'proof must be a 0x-prefixed hex string' }, { status: 400 });
+	// Validate proof.
+	// cap proof length (bb.js proofs are typically a few
+	// thousand hex chars; 131,072 is generous defense-in-depth).
+	if (typeof proof !== 'string' || !proof.startsWith('0x') || proof.length > 131_072) {
+		return json(
+			{ error: 'proof must be a 0x-prefixed hex string ≤131,072 chars' },
+			{ status: 400 }
+		);
 	}
 
-	// Validate publicInputs
+	// Validate publicInputs — BN254 field elements are 32 bytes = 64 hex + 0x = 66 chars; cap at 80.
 	if (!Array.isArray(publicInputs) || publicInputs.length !== 5) {
 		return json({ error: 'publicInputs must be an array of 5 field elements' }, { status: 400 });
 	}
 	for (const pi of publicInputs) {
-		if (typeof pi !== 'string' || !pi.startsWith('0x')) {
-			return json({ error: 'Each publicInput must be a 0x-prefixed hex string' }, { status: 400 });
+		if (typeof pi !== 'string' || !pi.startsWith('0x') || pi.length > 80) {
+			return json(
+				{ error: 'Each publicInput must be a 0x-prefixed hex string ≤80 chars (BN254 element)' },
+				{ status: 400 }
+			);
 		}
 	}
 
@@ -95,7 +103,7 @@ export const POST: RequestHandler = async (event) => {
 		const headers: Record<string, string> = {
 			'Content-Type': 'application/json',
 			Accept: 'application/json',
-			'X-Client-Version': 'commons-v1',
+			'X-Client-Version': 'voter-protocol-v1',
 			'X-Forwarded-For': clientIp,
 			'X-Request-ID': requestId
 		};

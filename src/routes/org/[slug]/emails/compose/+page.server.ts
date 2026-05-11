@@ -1,8 +1,11 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { env } from '$env/dynamic/public';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import {
 	compileEmail,
+	compileEmailShell,
 	buildTierContext,
 	type MergeContext,
 	type VerificationBlock
@@ -11,6 +14,8 @@ import { sanitizeEmailBody } from '$lib/server/email/sanitize';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad, Actions } from './$types';
+
+const baseUrl = env.PUBLIC_BASE_URL?.replace(/\/$/, '') ?? 'https://commons.email';
 
 interface RecipientFilter {
 	tagIds?: string[];
@@ -151,6 +156,9 @@ export const actions: Actions = {
 		const formData = await request.formData();
 		const subject = formData.get('subject')?.toString().trim() || '(No subject)';
 		const rawBodyHtml = formData.get('bodyHtml')?.toString() || '';
+		if (rawBodyHtml.length > 524_288) {
+			return fail(400, { error: 'Email body must not exceed 512 KB for preview.' });
+		}
 		const bodyHtml = sanitizeEmailBody(rawBodyHtml);
 
 		const sampleMerge: MergeContext = {
@@ -167,11 +175,16 @@ export const actions: Actions = {
 			totalRecipients: 150,
 			verifiedCount: 45,
 			verifiedPct: 30,
-			districtCount: 8,
-			tierSummary: '3 Pillars, 12 Veterans, 30 Established'
+			districtCount: 8
 		};
 
-		const compiledHtml = compileEmail(bodyHtml, sampleMerge, sampleVerification, 'https://commons.email/unsubscribe/sample/token');
+		const compiledHtml = compileEmail(
+			bodyHtml,
+			sampleMerge,
+			sampleVerification,
+			`${baseUrl}/unsubscribe/sample/token`,
+			baseUrl
+		);
 
 		return { previewHtml: compiledHtml, previewSubject: subject };
 	},
@@ -193,7 +206,7 @@ export const actions: Actions = {
 
 		// Billing usage check via Convex
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
-		if (limits?.current && (limits.current as any).emailsSent >= (limits.limits as any).maxEmails) {
+		if (limits?.current && limits.current.emailsSent >= limits.limits.maxEmails) {
 			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
 		}
 
@@ -215,12 +228,18 @@ export const actions: Actions = {
 		if (!rawBodyHtml) {
 			return fail(400, { error: 'Email body is required' });
 		}
+		// Cap raw body before sanitize — emailBlasts.bodyHtml writes have to fit
+		// Convex's 1MiB doc cap; 512KiB is well above any real marketing email
+		// (typical 50-200KB) and leaves headroom for sanitize overhead.
+		if (rawBodyHtml.length > 524_288) {
+			return fail(400, { error: 'Email body must not exceed 512 KB. Trim images or split into multiple sends.' });
+		}
 		const bodyHtml = sanitizeEmailBody(rawBodyHtml);
 
 		// Validate campaignId via Convex
 		if (campaignId) {
 			const campaign = await serverQuery(api.campaigns.get, {
-				campaignId: campaignId as any
+				campaignId: campaignId as Id<'campaigns'>
 			});
 			if (!campaign) {
 				return fail(400, { error: 'Invalid campaign selection' });
@@ -238,15 +257,49 @@ export const actions: Actions = {
 			return fail(400, { error: 'No recipients match your filters. Adjust filters and try again.' });
 		}
 
-		// Create and send blast via Convex
-		await serverMutation(api.email.createBlast, {
+		// Wrap in canonical email shell — same path as `createClientDraft`,
+		// for parity if the server-side `sendBlast` action is ever revived.
+		// Verification block is filter-scoped or omitted (see createClientDraft).
+		let verificationBlock: VerificationBlock | null = null;
+		if (filter.verified === 'verified') {
+			verificationBlock = {
+				totalRecipients: recipientCount,
+				verifiedCount: recipientCount,
+				verifiedPct: 100,
+				districtCount: 0
+			};
+		} else if (filter.verified === 'unverified') {
+			verificationBlock = {
+				totalRecipients: recipientCount,
+				verifiedCount: 0,
+				verifiedPct: 0,
+				districtCount: 0
+			};
+		}
+		const BLAST_ID_PLACEHOLDER = '__BLAST_ID__';
+		const wrappedBodyTemplate = compileEmailShell(bodyHtml, verificationBlock, {
+			platformUrl: baseUrl,
+			unsubscribeUrl: `${baseUrl}/unsubscribe?blast=${BLAST_ID_PLACEHOLDER}`
+		});
+
+		// Create blast then patch the per-blast unsubscribe URL with the real
+		// row id. See `createClientDraft` for the rationale.
+		const sendResult = await serverMutation(api.email.createBlast, {
 			orgSlug: params.slug,
 			subject,
-			bodyHtml,
+			bodyHtml: wrappedBodyTemplate,
 			fromName,
 			fromEmail,
 			recipientFilter: filter,
 			campaignId: campaignId ?? undefined
+		});
+		await serverMutation(api.email.updateBlast, {
+			orgSlug: params.slug,
+			blastId: sendResult.id as Id<'emailBlasts'>,
+			bodyHtml: wrappedBodyTemplate.replaceAll(
+				BLAST_ID_PLACEHOLDER,
+				String(sendResult.id)
+			)
 		});
 
 		throw redirect(302, `/org/${params.slug}/emails`);
@@ -275,7 +328,7 @@ export const actions: Actions = {
 
 		// Billing usage check via Convex
 		const abLimits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
-		if (abLimits?.current && (abLimits.current as any).emailsSent >= (abLimits.limits as any).maxEmails) {
+		if (abLimits?.current && abLimits.current.emailsSent >= abLimits.limits.maxEmails) {
 			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
 		}
 
@@ -292,6 +345,9 @@ export const actions: Actions = {
 
 		if (!subjectA || !subjectB) return fail(400, { error: 'Both variant subjects are required' });
 		if (!rawBodyHtmlA || !rawBodyHtmlB) return fail(400, { error: 'Both variant bodies are required' });
+		if (rawBodyHtmlA.length > 524_288 || rawBodyHtmlB.length > 524_288) {
+			return fail(400, { error: 'Each variant body must not exceed 512 KB.' });
+		}
 
 		const bodyHtmlA = sanitizeEmailBody(rawBodyHtmlA);
 		const bodyHtmlB = sanitizeEmailBody(rawBodyHtmlB);
@@ -313,7 +369,7 @@ export const actions: Actions = {
 		// Validate campaignId via Convex
 		if (campaignId) {
 			const campaign = await serverQuery(api.campaigns.get, {
-				campaignId: campaignId as any
+				campaignId: campaignId as Id<'campaigns'>
 			});
 			if (!campaign) return fail(400, { error: 'Invalid campaign selection' });
 		}
@@ -322,12 +378,20 @@ export const actions: Actions = {
 		const abParentId = crypto.randomUUID();
 		const abTestConfig = { splitPct, winnerMetric, testDurationMs, testGroupPct };
 
+		// Wrap both variants in the canonical email shell (parity with `send` /
+		// `createClientDraft`). Verification block omitted for A/B variants —
+		// the test cohort is a sub-fraction of the full filter cohort and
+		// per-variant verification truth is not knowable without per-variant
+		// recipient resolution; honest absence beats approximation.
+		const wrappedA = compileEmailShell(bodyHtmlA, null, { platformUrl: baseUrl });
+		const wrappedB = compileEmailShell(bodyHtmlB, null, { platformUrl: baseUrl });
+
 		// A/B winner automation is not exposed as a public Convex mutation yet; create linked draft variants.
 		await Promise.all([
 			serverMutation(api.email.createBlast, {
 				orgSlug: params.slug,
 				subject: subjectA,
-				bodyHtml: bodyHtmlA,
+				bodyHtml: wrappedA,
 				fromName,
 				fromEmail,
 				recipientFilter: filter,
@@ -340,7 +404,7 @@ export const actions: Actions = {
 			serverMutation(api.email.createBlast, {
 				orgSlug: params.slug,
 				subject: subjectB,
-				bodyHtml: bodyHtmlB,
+				bodyHtml: wrappedB,
 				fromName,
 				fromEmail,
 				recipientFilter: filter,
@@ -371,7 +435,7 @@ export const actions: Actions = {
 		}
 
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
-		if (limits?.current && (limits.current as any).emailsSent >= (limits.limits as any).maxEmails) {
+		if (limits?.current && limits.current.emailsSent >= limits.limits.maxEmails) {
 			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
 		}
 
@@ -387,23 +451,76 @@ export const actions: Actions = {
 
 		if (!subject) return fail(400, { error: 'Subject is required' });
 		if (!rawBodyHtml) return fail(400, { error: 'Email body is required' });
+		if (rawBodyHtml.length > 524_288) {
+			return fail(400, { error: 'Email body must not exceed 512 KB. Trim images or split into multiple sends.' });
+		}
 		const bodyHtml = sanitizeEmailBody(rawBodyHtml);
 
 		if (campaignId) {
-			const campaign = await serverQuery(api.campaigns.get, { campaignId: campaignId as any });
+			const campaign = await serverQuery(api.campaigns.get, { campaignId: campaignId as Id<'campaigns'> });
 			if (!campaign) return fail(400, { error: 'Invalid campaign selection' });
 		}
 
-		// Create blast record as draft with client-direct send mode
+		const filter = parseFilter(formData);
+		const totalRecipients = (await countRecipientsByFilter(params.slug, filter)) ?? 0;
+
+		// Verification block is filter-scoped: only emit it when the filter
+		// constrains the cohort to a known verification state. A 'any' filter
+		// would force an org-wide approximation that can diverge from the
+		// actual cohort — false verification context is worse than no
+		// verification context.
+		let verificationBlock: VerificationBlock | null = null;
+		if (filter.verified === 'verified') {
+			verificationBlock = {
+				totalRecipients,
+				verifiedCount: totalRecipients,
+				verifiedPct: 100,
+				districtCount: 0
+			};
+		} else if (filter.verified === 'unverified') {
+			verificationBlock = {
+				totalRecipients,
+				verifiedCount: 0,
+				verifiedPct: 0,
+				districtCount: 0
+			};
+		}
+
+		// Wrap the author body in the canonical email shell + (optional)
+		// verification block + platform footer + per-blast unsubscribe URL.
+		// Bulk-mode shell does not personalize merge fields — the Lambda proxy
+		// sends one bodyHtml to N recipients per batch — so the unsubscribe URL
+		// is per-blast (form-based: recipient enters their email to apply).
+		// Per-recipient one-click unsubscribe (RFC 8058 List-Unsubscribe-Post +
+		// HMAC token) is tracked separately and requires Lambda templating.
+		// `__BLAST_ID__` is a single-use placeholder substituted after
+		// createBlast returns the row id.
+		const BLAST_ID_PLACEHOLDER = '__BLAST_ID__';
+		const wrappedBodyTemplate = compileEmailShell(bodyHtml, verificationBlock, {
+			platformUrl: baseUrl,
+			unsubscribeUrl: `${baseUrl}/unsubscribe?blast=${BLAST_ID_PLACEHOLDER}`
+		});
+
+		// Create blast record as draft with client-direct send mode. Body is
+		// substituted with the real blast id immediately after creation.
 		const result = await serverMutation(api.email.createBlast, {
 			orgSlug: params.slug,
 			subject,
-			bodyHtml,
+			bodyHtml: wrappedBodyTemplate,
 			fromName,
 			fromEmail,
 			sendMode: 'client-direct',
-			recipientFilter: parseFilter(formData),
+			recipientFilter: filter,
 			campaignId: campaignId ?? undefined
+		});
+		const wrappedBodyHtml = wrappedBodyTemplate.replaceAll(
+			BLAST_ID_PLACEHOLDER,
+			String(result.id)
+		);
+		await serverMutation(api.email.updateBlast, {
+			orgSlug: params.slug,
+			blastId: result.id as Id<'emailBlasts'>,
+			bodyHtml: wrappedBodyHtml
 		});
 
 		return {
@@ -412,7 +529,7 @@ export const actions: Actions = {
 			fromEmail,
 			fromName,
 			subject,
-			bodyHtml
+			bodyHtml: wrappedBodyHtml
 		};
 	}
 };

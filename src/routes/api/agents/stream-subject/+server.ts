@@ -70,6 +70,13 @@ export const POST: RequestHandler = async (event) => {
 			headers: { 'Content-Type': 'application/json' }
 		});
 	}
+	// parity with /api/agents/generate-subject + embeddings/generate.
+	if (body.message.length > 16_000) {
+		return new Response(
+			JSON.stringify({ error: 'Message too long (max 16,000 characters)' }),
+			{ status: 400, headers: { 'Content-Type': 'application/json' } },
+		);
+	}
 
 	console.log('[stream-subject] trace:', {
 		traceId,

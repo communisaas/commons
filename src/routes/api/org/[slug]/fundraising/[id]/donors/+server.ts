@@ -6,6 +6,7 @@ import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params, locals }) => {
@@ -14,7 +15,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 	const result = await serverQuery(api.donations.listDonors, {
 		orgSlug: params.slug,
-		campaignId: params.id as any
+		campaignId: params.id as Id<'campaigns'>
 	});
 	return json(result);
 };

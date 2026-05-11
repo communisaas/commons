@@ -127,12 +127,29 @@ export const POST: RequestHandler = async ({ request }) => {
 		const body = await request.json();
 		const increments: unknown[] = body?.increments ?? [];
 
+		// bound the batch size at the boundary. The caller-side
+		// flusher batches in groups of ≤50, so 200 is generous defense-in-depth.
+		// Without this cap, a malicious client could submit a million increments
+		// in one POST and burn validation cycles + Convex serialization.
+		if (!Array.isArray(increments) || increments.length > 200) {
+			return json({ success: true, processed: 0, dropped: 0 });
+		}
+
 		// Get hashed IP for rate limiting
 		const clientIP = getClientIP(request);
 		const hashedIP = hashIP(clientIP);
 
 		// Validate and filter increments
 		const valid: Array<{ metric: Metric; dimensions?: Dimensions }> = [];
+
+		// cap each dimension string at 256 chars before persist.
+		// Convex v.string() doesn't enforce length; without this cap, dimension
+		// values could grow to megabytes.
+		const boundDim = (v: unknown): string | undefined => {
+			if (v === undefined || v === null) return undefined;
+			if (typeof v !== 'string') return undefined;
+			return v.length > 256 ? undefined : v;
+		};
 
 		for (const inc of increments) {
 			if (
@@ -147,9 +164,19 @@ export const POST: RequestHandler = async ({ request }) => {
 				// Check server-side contribution limit
 				const allowed = checkContributionLimit(hashedIP, typed.metric as Metric);
 				if (allowed) {
+					// bound each dimension string before persist.
+					const dims = typed.dimensions
+						? ({
+								template_id: boundDim(typed.dimensions.template_id),
+								jurisdiction: boundDim(typed.dimensions.jurisdiction),
+								delivery_method: boundDim(typed.dimensions.delivery_method),
+								utm_source: boundDim(typed.dimensions.utm_source),
+								error_type: boundDim(typed.dimensions.error_type)
+							} as Dimensions)
+						: undefined;
 					valid.push({
 						metric: typed.metric,
-						dimensions: typed.dimensions
+						dimensions: dims
 					});
 				}
 				// Silently drop if rate limit exceeded

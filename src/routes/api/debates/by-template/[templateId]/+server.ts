@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 /**
  * GET /api/debates/by-template/[templateId]
@@ -24,7 +25,7 @@ export const GET: RequestHandler = async ({ params }) => {
 	}
 
 	const result = await serverQuery(api.debates.getFullByTemplateId, {
-		templateId: templateId as any
+		templateId: templateId as Id<'templates'>
 	});
 	return json({ debate: result ?? null });
 };

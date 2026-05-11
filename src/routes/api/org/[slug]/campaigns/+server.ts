@@ -11,12 +11,30 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	const body = await request.json();
 	const { title, type, body: campaignBody, templateId, debateEnabled, debateThreshold } = body;
 
-	if (!title || typeof title !== 'string' || !title.trim()) {
-		throw error(400, 'Title is required');
+	if (!title || typeof title !== 'string' || !title.trim() || title.length > 200) {
+		throw error(400, 'Title is required (≤200 characters)');
 	}
 
 	if (!type || !['LETTER', 'EVENT', 'FORM'].includes(type)) {
 		throw error(400, 'Invalid campaign type');
+	}
+
+	// bound caller-supplied strings + numeric ranges.
+	if (campaignBody !== undefined && campaignBody !== null && (typeof campaignBody !== 'string' || campaignBody.length > 10_000)) {
+		throw error(400, 'body must be ≤10,000 characters');
+	}
+	if (templateId !== undefined && templateId !== null && (typeof templateId !== 'string' || templateId.length > 64)) {
+		throw error(400, 'templateId must be a Convex doc id (≤64 chars)');
+	}
+	if (
+		debateThreshold !== undefined &&
+		debateThreshold !== null &&
+		(typeof debateThreshold !== 'number' ||
+			!Number.isFinite(debateThreshold) ||
+			debateThreshold < 0 ||
+			debateThreshold > 100_000)
+	) {
+		throw error(400, 'debateThreshold must be a number 0-100,000');
 	}
 
 	const campaignId = await serverMutation(api.campaigns.create, {

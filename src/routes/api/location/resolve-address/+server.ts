@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
 import { resolveAddress } from '$lib/core/shadow-atlas/client';
+import { issueAddressResolutionToken } from '$lib/server/auth/address-resolution-token';
 
 /**
  * POST /api/location/resolve-address
@@ -59,22 +60,44 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Privacy: log only district code, never address
 		console.info(`[resolve-address] Resolved via Shadow Atlas district=${districtCode}`);
 
+		// F-2.4 — bind the geocoded coordinates to the user-supplied address
+		// via an HMAC token so a downstream verify-address call cannot
+		// substitute coordinates without server-side detection. The client is
+		// expected to echo `addressToken` + `addressHash` back in the
+		// verify-address request.
+		const parsedAddress = parseMatchedAddress(result.geocode.matched_address, {
+			street,
+			city,
+			state,
+			zip,
+			country: country ?? result.geocode.country
+		});
+		const issued = await issueAddressResolutionToken({
+			userId: locals.user.id,
+			lat: result.geocode.lat,
+			lng: result.geocode.lng,
+			address: {
+				street: parsedAddress.street,
+				city: parsedAddress.city,
+				state: parsedAddress.state,
+				zip: parsedAddress.zip,
+				country: country ?? result.geocode.country
+			}
+		});
+
 		return json({
 			resolved: true,
 			address: {
 				matched: result.geocode.matched_address,
-				...parseMatchedAddress(result.geocode.matched_address, {
-					street,
-					city,
-					state,
-					zip,
-					country: country ?? result.geocode.country
-				})
+				...parsedAddress
 			},
 			coordinates: {
 				lat: result.geocode.lat,
 				lng: result.geocode.lng
 			},
+			addressToken: issued.token,
+			addressHash: issued.addressHash,
+			addressTokenExpiresAt: issued.expiresAt,
 			district: districtCode
 				? {
 						code: districtCode,

@@ -8,14 +8,16 @@ import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { SMS_MAX_LENGTH } from '$lib/server/sms/types';
 import type { RequestHandler } from './$types';
 
+// Per-entry caps on tag/segment ids (Convex doc ids are 32 chars).
 const RecipientFilterSchema = z.object({
-	tags: z.array(z.string()).max(20).optional(),
-	segments: z.array(z.string()).max(10).optional(),
-	excludeTags: z.array(z.string()).max(20).optional()
+	tags: z.array(z.string().max(64)).max(20).optional(),
+	segments: z.array(z.string().max(64)).max(10).optional(),
+	excludeTags: z.array(z.string().max(64)).max(20).optional()
 }).strict();
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
@@ -25,7 +27,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	// Verify blast belongs to this org
 	const existing = await serverQuery(api.sms.getBlast, {
 		slug: params.slug,
-		blastId: params.id as any
+		blastId: params.id as Id<'smsBlasts'>
 	});
 	if (!existing) throw error(404, 'SMS blast not found');
 
@@ -93,7 +95,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 
 	await serverMutation(api.sms.updateBlast, {
 		slug: params.slug,
-		blastId: params.id as any,
+		blastId: params.id as Id<'smsBlasts'>,
 		...updateArgs
 	});
 
@@ -111,7 +113,7 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 	// Verify blast belongs to this org
 	const existing = await serverQuery(api.sms.getBlast, {
 		slug: params.slug,
-		blastId: params.id as any
+		blastId: params.id as Id<'smsBlasts'>
 	});
 	if (!existing) throw error(404, 'SMS blast not found');
 
@@ -121,7 +123,7 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 
 	await serverMutation(api.sms.deleteBlast, {
 		slug: params.slug,
-		blastId: params.id as any
+		blastId: params.id as Id<'smsBlasts'>
 	});
 
 	return new Response(null, { status: 204 });

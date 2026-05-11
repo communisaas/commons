@@ -1,5 +1,6 @@
 // CONVEX: Form action migrated to Convex submitAction. Load uses Convex queries.
 import { error, fail } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad, Actions } from './$types';
@@ -13,6 +14,9 @@ export const load: PageServerLoad = async ({ params }) => {
 		throw error(404, 'Campaign not found or inactive');
 	}
 
+	// Site origin for OG meta — peer impls override via PUBLIC_BASE_URL.
+	const baseUrl = (env.PUBLIC_BASE_URL || 'https://commons.email').replace(/\/$/, '');
+
 	return {
 		campaign: {
 			id: campaign._id,
@@ -22,7 +26,8 @@ export const load: PageServerLoad = async ({ params }) => {
 			orgName: campaign.orgName ?? '',
 			orgSlug: campaign.orgSlug ?? '',
 			verifiedActions: campaign.verifiedActionCount ?? 0
-		}
+		},
+		baseUrl
 	};
 };
 
@@ -59,6 +64,24 @@ export const actions: Actions = {
 		// Basic email validation
 		if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
 			return fail(400, { error: 'Please enter a valid email address' });
+		}
+
+		// Parity with campaigns.submitAction action-side caps.
+		// Fail-fast at the form-action boundary before invoking the action.
+		if (email.length > 254) {
+			return fail(400, { error: 'Email too long' });
+		}
+		if (name.length > 200) {
+			return fail(400, { error: 'Name too long' });
+		}
+		if (postalCode && postalCode.length > 16) {
+			return fail(400, { error: 'Postal code too long' });
+		}
+		if (rawDistrictCode && rawDistrictCode.length > 64) {
+			return fail(400, { error: 'District code too long' });
+		}
+		if (h3Cell && h3Cell.length > 32) {
+			return fail(400, { error: 'h3Cell too long' });
 		}
 
 		// Determine composition mode by comparing message to campaign template

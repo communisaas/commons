@@ -1,6 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, parent }) => {
@@ -8,7 +9,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 
 	const convexBlast = await serverQuery(api.email.getBlast, {
 		orgSlug: org.slug,
-		blastId: params.blastId as any
+		blastId: params.blastId as Id<'emailBlasts'>
 	});
 
 	if (!convexBlast) throw error(404, 'Email not found');

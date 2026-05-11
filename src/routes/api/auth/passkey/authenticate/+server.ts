@@ -23,8 +23,9 @@ function sessionSecret(): string {
 }
 
 function normalizeEmail(value: unknown): string {
-	if (typeof value !== 'string' || !value.trim()) {
-		throw error(400, 'Email is required');
+	// cap email at RFC 5321 max (254) before normalize.
+	if (typeof value !== 'string' || !value.trim() || value.length > 254) {
+		throw error(400, 'Email is required (max 254 characters)');
 	}
 	return value.trim().toLowerCase();
 }
@@ -95,7 +96,8 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 	}
 
 	if (body?.action === 'verify') {
-		if (typeof body.sessionId !== 'string' || !body.sessionId) {
+		// bound sessionId (Convex doc id; cap at 64).
+		if (typeof body.sessionId !== 'string' || !body.sessionId || body.sessionId.length > 64) {
 			throw error(400, 'Passkey session is required');
 		}
 		const response = parseAuthenticationResponse(body.response);

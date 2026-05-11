@@ -72,7 +72,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 
 					try {
 						await serverMutation(api.templates.updateEmbeddings, {
-							templateId: templateId as any,
+							templateId,
 							locationEmbedding: embeddings[j * 2],
 							topicEmbedding: embeddings[j * 2 + 1]
 						});

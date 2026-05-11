@@ -2,8 +2,11 @@
 	import type { PageData } from './$types';
 	import { goto } from '$app/navigation';
 	import { modalActions } from '$lib/stores/modalSystem.svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 
 	let { data }: { data: PageData } = $props();
+
+	const labels = getJurisdictionLabels();
 
 	const user = $derived(data.user);
 
@@ -197,7 +200,7 @@
 					<dt class="filter-map__field">Geography</dt>
 					<dd class="filter-map__answer">answers:</dd>
 					<dd class="filter-map__question">&ldquo;What district is this? What communities are represented?&rdquo;</dd>
-					<dd class="filter-map__citation">CMF 2017 &middot; district-specific impact information weighted by 91% of Congressional staff; the same geographic specificity drives local credibility in state offices</dd>
+					<dd class="filter-map__citation">CMF 2017 &middot; district-specific impact information weighted by 91% of {labels.legislativeBody} staff; the same geographic specificity drives local credibility in state offices</dd>
 				</div>
 				<div class="filter-map__row">
 					<dt class="filter-map__field">Authorship</dt>

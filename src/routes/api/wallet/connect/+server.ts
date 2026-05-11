@@ -41,13 +41,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const { address, signature, nonce } = body;
 
-	if (!address || typeof address !== 'string') {
+	if (!address || typeof address !== 'string' || address.length > 64) {
 		return json({ error: 'Missing or invalid field: address' }, { status: 400 });
 	}
-	if (!signature || typeof signature !== 'string') {
+	// bound signature + nonce. EIP-191 signatures are 132 chars
+	// (0x + 130 hex); cap at 200 for slack. Nonces are short tokens (UUIDs are
+	// 36 chars); cap at 128.
+	if (!signature || typeof signature !== 'string' || signature.length > 200) {
 		return json({ error: 'Missing or invalid field: signature' }, { status: 400 });
 	}
-	if (!nonce || typeof nonce !== 'string') {
+	if (!nonce || typeof nonce !== 'string' || nonce.length > 128) {
 		return json({ error: 'Missing or invalid field: nonce' }, { status: 400 });
 	}
 

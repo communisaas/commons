@@ -4,6 +4,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import {
 	createApiError,
 	createValidationError,
@@ -139,6 +140,29 @@ function validateTemplateData(data: unknown): {
 		errors.push(
 			createValidationError('deliveryMethod', 'VALIDATION_REQUIRED', 'Delivery method is required')
 		);
+	}
+
+	// bound remaining caller-supplied strings + arrays before
+	// they hit Gemini moderation + Convex insert. type/deliveryMethod are
+	// enum-like (downstream Convex validates the actual values); cap length
+	// here for defense-in-depth.
+	if (typeof templateData.type === 'string' && templateData.type.length > 64) {
+		errors.push(createValidationError('type', 'VALIDATION_TOO_LONG', 'type must be ≤64 characters'));
+	}
+	if (typeof templateData.deliveryMethod === 'string' && templateData.deliveryMethod.length > 64) {
+		errors.push(createValidationError('deliveryMethod', 'VALIDATION_TOO_LONG', 'deliveryMethod must be ≤64 characters'));
+	}
+	if (typeof templateData.description === 'string' && templateData.description.length > 1000) {
+		errors.push(createValidationError('description', 'VALIDATION_TOO_LONG', 'description must be ≤1,000 characters'));
+	}
+	if (typeof templateData.domain === 'string' && templateData.domain.length > 200) {
+		errors.push(createValidationError('domain', 'VALIDATION_TOO_LONG', 'domain must be ≤200 characters'));
+	}
+	if (Array.isArray(templateData.sources) && templateData.sources.length > 50) {
+		errors.push(createValidationError('sources', 'VALIDATION_TOO_LONG', 'sources must have ≤50 entries'));
+	}
+	if (Array.isArray(templateData.research_log) && templateData.research_log.length > 200) {
+		errors.push(createValidationError('research_log', 'VALIDATION_TOO_LONG', 'research_log must have ≤200 entries'));
 	}
 
 	if (errors.length > 0) {
@@ -336,7 +360,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 					if (needsMetadataPatch) {
 						await serverMutation(api.templates.patchMetadata, {
-							templateId: existingByContent._id as any,
+							templateId: existingByContent._id,
 							...(incomingDomain ? { domain: incomingDomain } : {}),
 							...(incomingTopics.length > 0 ? { topics: incomingTopics } : {})
 						});
@@ -415,7 +439,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 				// Create template via Convex (includes quota check + geographic scope)
 				const newTemplate = await serverMutation(api.templates.createTemplate, {
-					userId: user.id,
+					userId: user.id as Id<'users'>,
 					title: validData.title,
 					slug,
 					description: validData.description || '',
@@ -455,7 +479,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						if (isCwc) {
 							try {
 								await serverMutation(api.templates.setCwcVerification, {
-									templateId: templateId as any,
+									templateId: templateId as Id<'templates'>,
 									verificationStatus: 'pending',
 									countryCode: 'US',
 									reputationApplied: false
@@ -479,7 +503,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 								const domainHue = projectToHue(embeddings[1]);
 
 								await serverMutation(api.templates.updateEmbeddings, {
-									templateId: templateId as any,
+									templateId: templateId as Id<'templates'>,
 									locationEmbedding: embeddings[0],
 									topicEmbedding: embeddings[1],
 									domainHue

@@ -1,6 +1,6 @@
 /**
 // CONVEX: Keep SvelteKit
- * Batch Delivery Registration Endpoint — Power Landscape (Cycle 37)
+ * Batch Delivery Registration Endpoint — Power Landscape
  *
  * POST: Create delivery records for a position registration.
  * Requires authentication. Associates recipients with an existing registration.

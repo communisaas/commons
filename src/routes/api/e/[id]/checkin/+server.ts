@@ -5,6 +5,7 @@
 import { json, error } from '@sveltejs/kit';
 import { serverMutation } from 'convex-sveltekit';
 import { api, internal } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { computeOrgScopedEmailHash } from '$lib/core/crypto/org-scoped-hash';
@@ -29,7 +30,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	}
 
 	// Look up the full event server-side so check-in codes are never exposed publicly.
-	const event = await serverInternalQuery(internal.events.getEventInternal, { eventId: params.id as any });
+	const event = await serverInternalQuery(internal.events.getEventInternal, { eventId: params.id as Id<'events'> });
 	if (!event) throw error(404, 'Event not found');
 	if (event.status !== 'PUBLISHED') throw error(400, 'Event is not active');
 
@@ -44,9 +45,14 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// Org-scoped email hash for RSVP lookup — no server-held key
 	const emailHash = await computeOrgScopedEmailHash(String(event.orgId), email.toLowerCase());
 
-	// Perform checkin via Convex mutation
+	// Perform checkin via Convex mutation. Forward the raw checkinCode
+	// so the mutation can re-validate server-side. The mutation derives
+	// `verifiedTrust` from a constant-time compare against
+	// `event.checkinCode` and ignores the caller-supplied `verified`
+	// flag for the verifiedAttendees counter.
 	const result = await serverMutation(api.events.publicCheckIn, {
-		eventId: params.id as any,
+		eventId: params.id as Id<'events'>,
+		checkinCode: typeof checkinCode === 'string' ? checkinCode : undefined,
 		emailHash,
 		verified,
 		verificationMethod: verificationMethod || (checkinCode ? 'checkin_code' : undefined),

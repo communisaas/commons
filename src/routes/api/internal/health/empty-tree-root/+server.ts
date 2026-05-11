@@ -1,5 +1,5 @@
 /**
- * Wave 5 — FU-3.3 Startup EMPTY_TREE_ROOT assertion.
+ *  FU-3.3 Startup EMPTY_TREE_ROOT assertion.
  *
  * Endpoint the deploy pipeline hits AFTER deploying RevocationRegistry to
  * confirm the contract's `EMPTY_TREE_ROOT()` immutable agrees with what
@@ -22,6 +22,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
+import { matchInternalSecret } from '$lib/server/internal/secret-auth';
 import {
 	getRevocationRegistryAddress,
 	getRevocationRegistryEmptyTreeRoot
@@ -29,13 +30,14 @@ import {
 import { getEmptyTreeRoot } from '$lib/server/smt/revocation-smt';
 
 export const GET: RequestHandler = async ({ request, url }) => {
-	const expected = env.INTERNAL_API_SECRET;
-	if (!expected) {
-		throw error(503, 'INTERNAL_API_SECRET not configured');
-	}
-	const provided = request.headers.get('x-internal-secret');
-	if (!provided || provided !== expected) {
-		throw error(403, 'Invalid internal secret');
+	const auth = matchInternalSecret(request.headers.get('x-internal-secret'));
+	if (!auth.ok) {
+		throw error(
+			auth.reason === 'not_configured' ? 503 : 403,
+			auth.reason === 'not_configured'
+				? 'INTERNAL_API_SECRET not configured'
+				: 'Invalid internal secret'
+		);
 	}
 
 	// REVIEW 5-1 fix — fail-CLOSED on missing config in production. The original

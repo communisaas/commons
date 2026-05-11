@@ -3,6 +3,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 /**
  * Submission Retry Endpoint
@@ -22,7 +23,7 @@ export const POST: RequestHandler = async ({ locals, params }) => {
 
 	try {
 		const result = await serverAction(api.submissions.retryDelivery, {
-			submissionId: id as any
+			submissionId: id as Id<'submissions'>
 		});
 
 		return json({ status: result.status });
@@ -36,6 +37,17 @@ export const POST: RequestHandler = async ({ locals, params }) => {
 		}
 		if (message.includes('not in a retryable state')) {
 			return json({ error: 'Submission is not in a retryable state' }, { status: 409 });
+		}
+		if (message.includes('MAX_RETRIES_EXCEEDED')) {
+			return json(
+				{
+					error: 'Maximum retry attempts exceeded',
+					code: 'MAX_RETRIES_EXCEEDED',
+					message:
+						'This submission has exceeded the retry cap. Contact support if you believe this is an error.'
+				},
+				{ status: 429 }
+			);
 		}
 		throw error(500, message);
 	}

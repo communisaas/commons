@@ -3,6 +3,7 @@
 import { json } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
 import { z } from 'zod';
@@ -47,7 +48,7 @@ export const POST: RequestHandler = async ({ request, params, getClientAddress }
 
 	// Validate campaign exists (prevents blind address enumeration)
 	const campaign = await serverQuery(api.campaigns.getPublicActive, {
-		campaignId: params.slug as any
+		campaignId: params.slug as Id<'campaigns'>
 	});
 
 	if (!campaign) {

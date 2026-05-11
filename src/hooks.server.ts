@@ -102,22 +102,47 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 				expires: new Date(session.expiresAt),
 				secure: !dev
 			});
-			// Fire-and-forget: persist the renewal in Convex
-			serverMutation(api.authOps.renewSession, { sessionId }).catch(() => {});
+			// Log Convex renewal failures rather than swallowing silently.
+			// The cookie expiry has been extended on the response, but if the
+			// Convex renewal fails (transient outage, schema drift, race
+			// with revocation) the DB row stays at the OLD expiry. Every
+			// subsequent request will see the renewal flag re-fire and
+			// the same failure will repeat, masking a real outage. Logging
+			// restores observability without changing the request outcome
+			// (cookie was already set).
+			serverMutation(api.authOps.renewSession, { sessionId }).catch((err) => {
+				console.warn(
+					'[hooks.server] Session renewal failed for sessionId=' +
+						sessionId.slice(0, 8) +
+						'...:',
+					err instanceof Error ? err.message : String(err)
+				);
+			});
 		}
 
 		// Backfill tokenIdentifier for sessions created before the fix.
-		// Fire-and-forget — doesn't block the request.
+		// Backfill failure leaves the user without a tokenIdentifier, which
+		// the Convex helpers fall back to email lookup for — degraded but
+		// not broken. Worth logging so an operator sees if the backfill
+		// itself is stuck (would surface as 100% backfill-call rate vs
+		// expected one-shot decay as legacy users get migrated).
 		if (!user.tokenIdentifier) {
 			serverMutation(api.authOps.backfillTokenIdentifier, {
 				userId: user._id as string
-			}).catch(() => {});
+			}).catch((err) => {
+				console.warn(
+					'[hooks.server] tokenIdentifier backfill failed for user=' +
+						(user._id as string).slice(0, 8) +
+						'...:',
+					err instanceof Error ? err.message : String(err)
+				);
+			});
 		}
 
 		event.locals.user = {
 			id: user._id as string,
-			email: (user as any).email ?? null,
-			name: (user as any).name ?? null,
+			email: user.email ?? null,
+			name: user.name ?? null,
 			avatar: user.avatar ?? null,
 			// PII custody
 			email_hash: user.emailHash ?? null,

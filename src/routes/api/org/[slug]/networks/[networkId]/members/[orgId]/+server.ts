@@ -6,6 +6,7 @@ import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 export const DELETE: RequestHandler = async ({ params, locals }) => {
@@ -14,8 +15,8 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 
 	await serverMutation(api.networks.updateMemberStatus, {
 		orgSlug: params.slug,
-		networkId: params.networkId as any,
-		targetOrgId: params.orgId as any,
+		networkId: params.networkId as Id<'orgNetworks'>,
+		targetOrgId: params.orgId as Id<'organizations'>,
 		status: 'removed'
 	});
 	return json({ data: { removed: true } });

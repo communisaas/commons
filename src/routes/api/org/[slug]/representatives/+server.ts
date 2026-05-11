@@ -22,19 +22,34 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'Maximum 100 representatives per request');
 	}
 
+	// bound each per-rep string. Without these, an attacker
+	// could submit 100 reps × 10 fields × megabytes each before downstream
+	// rejected. Generous caps cover real-world ID/name/URL lengths.
+	function bound(value: unknown, max: number): string | undefined {
+		if (value === undefined || value === null || value === '') return undefined;
+		if (typeof value !== 'string' || value.length > max) {
+			throw error(400, `representative field exceeds ${max} characters`);
+		}
+		return value;
+	}
+	function require_(value: unknown, max: number): string {
+		const v = bound(value, max);
+		return v ?? '';
+	}
+
 	const result = await serverMutation(api.legislation.importRepresentatives, {
 		slug: params.slug,
 		representatives: representatives.map((r: any) => ({
-			countryCode: r.countryCode ?? '',
-			constituencyId: r.constituencyId ?? '',
-			constituencyName: r.constituencyName ?? '',
-			name: r.name ?? '',
-			party: r.party || undefined,
-			office: r.office || undefined,
-			phone: r.phone || undefined,
-			email: r.email || undefined,
-			websiteUrl: r.websiteUrl || undefined,
-			photoUrl: r.photoUrl || undefined
+			countryCode: require_(r.countryCode, 8),
+			constituencyId: require_(r.constituencyId, 128),
+			constituencyName: require_(r.constituencyName, 200),
+			name: require_(r.name, 200),
+			party: bound(r.party, 100),
+			office: bound(r.office, 200),
+			phone: bound(r.phone, 32),
+			email: bound(r.email, 254),
+			websiteUrl: bound(r.websiteUrl, 2048),
+			photoUrl: bound(r.photoUrl, 2048)
 		}))
 	});
 	return json({ success: true, data: result }, { status: 201 });

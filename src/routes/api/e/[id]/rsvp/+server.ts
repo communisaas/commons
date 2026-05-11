@@ -8,6 +8,7 @@
 import { json, error } from '@sveltejs/kit';
 import { serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import crypto from 'node:crypto';
@@ -32,11 +33,26 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	const body = await request.json();
 	const { email, name, postalCode, districtCode, guestCount } = body;
 
-	if (!email || typeof email !== 'string' || !EMAIL_RE.test(email)) {
+	if (!email || typeof email !== 'string' || email.length > 254 || !EMAIL_RE.test(email)) {
 		throw error(400, 'Valid email is required');
 	}
-	if (!name || typeof name !== 'string' || !name.trim()) {
-		throw error(400, 'Name is required');
+	if (!name || typeof name !== 'string' || !name.trim() || name.length > 200) {
+		throw error(400, 'Name is required (max 200 characters)');
+	}
+
+	// parity with /api/d/[campaignId]/checkout: bound caller-supplied
+	// strings + numeric counts before they hit Convex action / hashing pipeline.
+	if (postalCode !== undefined && (typeof postalCode !== 'string' || postalCode.length > 16)) {
+		throw error(400, 'Invalid postal code');
+	}
+	if (districtCode !== undefined && (typeof districtCode !== 'string' || districtCode.length > 64)) {
+		throw error(400, 'Invalid district code');
+	}
+	if (
+		guestCount !== undefined &&
+		(typeof guestCount !== 'number' || !Number.isFinite(guestCount) || guestCount < 0 || guestCount > 100)
+	) {
+		throw error(400, 'Invalid guest count (0-100)');
 	}
 
 	// Compute district hash
@@ -54,7 +70,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	try {
 		// Convex action handles: event validation, capacity claiming, PII encryption, upsert dedup, rsvpCount
 		const result = await serverAction(api.events.createRsvp, {
-			eventId: params.id as any,
+			eventId: params.id as Id<'events'>,
 			email: email.toLowerCase(),
 			name: name.trim(),
 			guestCount: typeof guestCount === 'number' && guestCount >= 0 ? guestCount : 1,

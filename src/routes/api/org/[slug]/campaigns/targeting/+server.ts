@@ -7,6 +7,7 @@ import { json, error } from '@sveltejs/kit';
 import { VALID_JURISDICTIONS, VALID_COUNTRY_CODES } from '$lib/server/geographic/types';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
@@ -15,8 +16,9 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	const body = await request.json();
 	const { campaignId, targetJurisdiction, targetCountry } = body;
 
-	if (!campaignId) {
-		throw error(400, 'campaignId is required');
+	// Convex doc ids are typically 32 chars; cap at 64.
+	if (!campaignId || typeof campaignId !== 'string' || campaignId.length > 64) {
+		throw error(400, 'campaignId is required (≤64 characters)');
 	}
 
 	// Validate jurisdiction if provided
@@ -38,7 +40,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	await serverMutation(api.campaigns.update, {
-		campaignId,
+		campaignId: campaignId as Id<'campaigns'>,
 		slug: params.slug,
 		...(targetJurisdiction !== undefined ? { targetJurisdiction } : {})
 	});

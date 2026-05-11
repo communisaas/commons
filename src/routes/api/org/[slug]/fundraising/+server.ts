@@ -16,13 +16,20 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	const body = await request.json();
 	const { title, description, goalAmountCents, currency } = body;
 
-	if (!title || typeof title !== 'string' || title.trim().length < 3) {
-		throw error(400, 'Title is required (minimum 3 characters)');
+	if (!title || typeof title !== 'string' || title.trim().length < 3 || title.length > 200) {
+		throw error(400, 'Title is required (3-200 characters)');
 	}
 
+	// bound description + currency + goal amount (defense-in-depth).
+	if (description !== undefined && description !== null && (typeof description !== 'string' || description.length > 5000)) {
+		throw error(400, 'Description must be a string ≤5,000 characters');
+	}
+	if (currency !== undefined && currency !== null && (typeof currency !== 'string' || currency.length > 8)) {
+		throw error(400, 'Currency must be a 3-letter ISO 4217 code');
+	}
 	if (goalAmountCents !== undefined && goalAmountCents !== null) {
-		if (typeof goalAmountCents !== 'number' || !Number.isInteger(goalAmountCents) || goalAmountCents <= 0) {
-			throw error(400, 'Goal amount must be a positive integer (in cents)');
+		if (typeof goalAmountCents !== 'number' || !Number.isInteger(goalAmountCents) || goalAmountCents <= 0 || goalAmountCents > 100_000_000_000) {
+			throw error(400, 'Goal amount must be a positive integer (in cents) ≤ $1,000,000,000');
 		}
 	}
 

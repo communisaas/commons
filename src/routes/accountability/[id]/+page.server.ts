@@ -2,6 +2,7 @@ import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { canonicalizeOrRedirect } from '$lib/server/canonical-slug';
 import type { PageServerLoad } from './$types';
 
 type PublicBill = {
@@ -21,6 +22,7 @@ type PublicReceipt = {
 	alignment: number;
 	proofDeliveredAt: number | string;
 	actionOccurredAt: number | string | null;
+	attestationDigest: string;
 };
 
 const isoDate = (value: number | string | null): string | null =>
@@ -31,14 +33,23 @@ export const load: PageServerLoad = async ({ params }) => {
 		throw error(404, 'Not found');
 	}
 
-	const { bioguideId } = params;
+	const { id } = params;
 
-	const result = await serverQuery(api.legislation.getDmPublicProfile, { identifier: bioguideId });
+	const result = await serverQuery(api.legislation.getDmPublicProfile, { identifier: id });
 
-	if (!result) throw error(404, 'No accountability records found');
+	// `getDmPublicProfile` now returns identity even when no receipts exist
+	// (so the public /dm/[id] route can render an identity-only state). The
+	// accountability detail view requires receipts; 404 explicitly when empty.
+	if (!result || result.bills.length === 0) throw error(404, 'No accountability records found');
+
+	canonicalizeOrRedirect(
+		result.canonicalSlug,
+		id,
+		(slug) => `/accountability/${slug}`
+	);
 
 	return {
-		decisionMakerId: result.decisionMakerId,
+		routeIdentifier: id,
 		dmName: result.dmName,
 		summary: result.summary,
 		bills: result.bills
@@ -61,7 +72,8 @@ export const load: PageServerLoad = async ({ params }) => {
 						dmAction: receipt.dmAction,
 						alignment: receipt.alignment,
 						proofDeliveredAt: isoDate(receipt.proofDeliveredAt) ?? '',
-						actionOccurredAt: isoDate(receipt.actionOccurredAt)
+						actionOccurredAt: isoDate(receipt.actionOccurredAt),
+						attestationDigest: receipt.attestationDigest
 					})),
 					maxProofWeight: entry.maxProofWeight,
 					totalVerified: entry.totalVerified,

@@ -2,6 +2,7 @@ import { error, redirect } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -12,11 +13,11 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const [convexEvent, convexRsvps, convexOrg, convexMembership] = await Promise.all([
 		serverQuery(api.events.get, {
 			orgSlug: params.slug,
-			eventId: params.id as any
+			eventId: params.id as Id<'events'>
 		}),
 		serverQuery(api.events.getRsvps, {
 			orgSlug: params.slug,
-			eventId: params.id as any,
+			eventId: params.id as Id<'events'>,
 			paginationOpts: { numItems: 100, cursor: null }
 		}),
 		serverQuery(api.organizations.getBySlug, { slug: params.slug }),

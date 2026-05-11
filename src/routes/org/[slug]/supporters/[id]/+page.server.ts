@@ -2,6 +2,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params, parent }) => {
@@ -13,7 +14,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 	const [convexSupporter, allTags, keyInfo] = await Promise.all([
 		serverQuery(api.supporters.get, {
 			orgSlug: org.slug,
-			supporterId: params.id as any
+			supporterId: params.id as Id<'supporters'>
 		}),
 		serverQuery(api.supporters.getTags, { orgSlug: org.slug }),
 		isEditor
@@ -68,12 +69,16 @@ export const actions: Actions = {
 		if (!tagId) {
 			return fail(400, { error: 'Tag is required' });
 		}
+		// Bound at form-action boundary (Convex doc id ≤ 32; 64 = slack).
+		if (tagId.length > 64) {
+			return fail(400, { error: 'Invalid tag' });
+		}
 
 		try {
 			await serverMutation(api.supporters.addTag, {
 				orgSlug: params.slug,
-				supporterId: params.id as any,
-				tagId: tagId as any
+				supporterId: params.id as Id<'supporters'>,
+				tagId: tagId as Id<'tags'>
 			});
 		} catch (e: any) {
 			if (e.message?.includes('not found')) {
@@ -96,12 +101,16 @@ export const actions: Actions = {
 		if (!tagId) {
 			return fail(400, { error: 'Tag is required' });
 		}
+		// Bound at form-action boundary.
+		if (tagId.length > 64) {
+			return fail(400, { error: 'Invalid tag' });
+		}
 
 		try {
 			await serverMutation(api.supporters.removeTag, {
 				orgSlug: params.slug,
-				supporterId: params.id as any,
-				tagId: tagId as any
+				supporterId: params.id as Id<'supporters'>,
+				tagId: tagId as Id<'tags'>
 			});
 		} catch (e: any) {
 			if (e.message?.includes('not found')) {
@@ -129,7 +138,7 @@ export const actions: Actions = {
 		try {
 			await serverMutation(api.supporters.updateSmsStatus, {
 				orgSlug: params.slug,
-				supporterId: params.id as any,
+				supporterId: params.id as Id<'supporters'>,
 				smsStatus
 			});
 		} catch (e: any) {

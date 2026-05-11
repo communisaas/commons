@@ -48,6 +48,14 @@ export const POST: RequestHandler = async (event) => {
 	if (!body.message?.trim()) {
 		return json({ error: 'Message is required' }, { status: 400 });
 	}
+	// parity: bound input length before Gemini billing path.
+	// LLM rate limiter caps daily-call-count; without per-call length cap, a
+	// single huge message can consume disproportionate cost. 16k chars is
+	// generous for civic message bodies; mirrors `/api/embeddings/generate`'s
+	// 8k cap doubled (subjects ingest message+context).
+	if (body.message.length > 16_000) {
+		return json({ error: 'Message too long (max 16,000 characters)' }, { status: 400 });
+	}
 
 	console.log('[generate-subject] trace:', {
 		traceId,

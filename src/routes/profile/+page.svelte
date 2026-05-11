@@ -48,6 +48,7 @@
 	let showEditModal = $state(false);
 	let editingSection = $state<EditSection>('basic');
 	let showVerificationGate = $state(false);
+	let verificationGateRef = $state<VerificationGate | null>(null);
 	let showAddressChange = $state(false);
 	let showAddressRestore = $state(false);
 	let groundCardKey = $state(0);
@@ -239,7 +240,20 @@
 		refreshLocalRepresentatives();
 	});
 
-	function handleVerifyAddress(): void {
+	async function handleVerifyAddress(): Promise<void> {
+		// Ask the gate whether the user already meets the address-tier
+		// requirement BEFORE opening the modal. The gate has a defensive
+		// auto-dismiss, but opening then immediately dismissing still
+		// flashes modal chrome — the cleaner UX is to never open in the
+		// first place. Mirrors the `TemplateModal.svelte` pre-check pattern.
+		// `checkVerification` also handles tier-5 lost-credential recovery state
+		// so a tier-5 user with cleared local creds still gets routed correctly.
+		if (verificationGateRef) {
+			const isVerified = await verificationGateRef.checkVerification();
+			if (isVerified) {
+				return; // already verified at tier-2; nothing to do
+			}
+		}
 		showVerificationGate = true;
 	}
 
@@ -700,6 +714,7 @@
 
 {#if user}
 	<VerificationGate
+		bind:this={verificationGateRef}
 		userId={user.id}
 		bind:showModal={showVerificationGate}
 		minimumTier={2}

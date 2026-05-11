@@ -26,6 +26,7 @@
 import { json } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler, RequestEvent } from './$types';
 import { registerLeaf, replaceLeaf, type RegistrationResult } from '$lib/core/shadow-atlas/client';
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
@@ -86,7 +87,7 @@ export const POST: RequestHandler = async (event) => {
 		// NUL-001: Look up canonical identity commitment (set during verification).
 		// Required for nullifier binding — prevents Sybil via re-registration.
 		const user = await serverQuery(api.users.getIdentityForAtlas, {
-			userId: session.userId as any,
+			userId: session.userId as Id<'users'>,
 		});
 
 		if (!user?.identityCommitment) {
@@ -101,10 +102,13 @@ export const POST: RequestHandler = async (event) => {
 		const body = await request.json();
 		const { leaf, replace: isReplace } = body;
 
-		// Validate leaf is present and hex-formatted
-		if (!leaf || typeof leaf !== 'string') {
+		// Validate leaf is present and hex-formatted.
+		// cap length before BigInt parse — BN254 elements are
+		// 32 bytes = 64 hex chars + optional 0x prefix; cap at 80 to allow some
+		// slack while preventing megabyte payloads from burning BigInt parse cycles.
+		if (!leaf || typeof leaf !== 'string' || leaf.length > 80) {
 			return json(
-				{ error: 'Missing required field: leaf (hex-encoded field element)' },
+				{ error: 'Missing or oversized leaf (hex-encoded field element ≤80 chars)' },
 				{ status: 400 }
 			);
 		}
@@ -131,7 +135,7 @@ export const POST: RequestHandler = async (event) => {
 
 		// Check if user is already registered
 		const existingRegistration = await serverQuery(api.users.getShadowAtlasRegistration, {
-			userId: session.userId as any,
+			userId: session.userId as Id<'users'>,
 		});
 
 		if (existingRegistration) {
@@ -154,7 +158,7 @@ export const POST: RequestHandler = async (event) => {
 				// NOTE: pathIndices not stored — derived from leafIndex on read
 				try {
 					await serverMutation(api.users.updateShadowAtlasRegistration, {
-						userId: session.userId as any,
+						userId: session.userId as Id<'users'>,
 						identityCommitment,
 						leafIndex: replacementResult.leafIndex,
 						merkleRoot: replacementResult.userRoot,
@@ -237,7 +241,7 @@ export const POST: RequestHandler = async (event) => {
 		// NOTE: We store the leaf hash (not private inputs) and the Merkle proof
 		try {
 			await serverMutation(api.users.createShadowAtlasRegistration, {
-				userId: session.userId as any,
+				userId: session.userId as Id<'users'>,
 				identityCommitment, // NUL-001: canonical commitment from verification
 				leafIndex: registrationResult.leafIndex,
 				merkleRoot: registrationResult.userRoot,

@@ -2,6 +2,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import { loadCampaignAnalytics } from '$lib/server/campaign-analytics';
@@ -16,7 +17,7 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 
 	const result = await serverQuery(api.campaigns.getForOrgPage, {
 		slug: params.slug,
-		campaignId: params.id as any
+		campaignId: params.id as Id<'campaigns'>
 	});
 
 	if (!result) {
@@ -112,13 +113,30 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid campaign type' });
 		}
 
-		if (debateEnabled && (isNaN(debateThreshold) || debateThreshold < 1)) {
-			return fail(400, { error: 'Debate threshold must be at least 1' });
+		// Parity with /new/ form action + /api/org/[slug]/campaigns POST.
+		if (title.length > 200) {
+			return fail(400, { error: 'Title must be 200 characters or fewer' });
+		}
+		if (body && body.length > 10_000) {
+			return fail(400, { error: 'Body must be 10,000 characters or fewer' });
+		}
+		if (templateId && templateId.length > 64) {
+			return fail(400, { error: 'Invalid templateId' });
+		}
+		if (targetJurisdiction && targetJurisdiction.length > 64) {
+			return fail(400, { error: 'targetJurisdiction must be 64 characters or fewer' });
+		}
+		if (targetCountry.length > 8) {
+			return fail(400, { error: 'targetCountry must be 8 characters or fewer' });
+		}
+
+		if (debateEnabled && (isNaN(debateThreshold) || debateThreshold < 1 || debateThreshold > 1_000_000)) {
+			return fail(400, { error: 'Debate threshold must be 1 to 1,000,000' });
 		}
 
 		try {
 			await serverMutation(api.campaigns.update, {
-				campaignId: params.id as any,
+				campaignId: params.id as Id<'campaigns'>,
 				slug: params.slug,
 				title,
 				type,
@@ -157,9 +175,23 @@ export const actions: Actions = {
 			return fail(400, { error: 'A valid email address is required' });
 		}
 
+		// Bound caller-supplied target fields at the form-action boundary.
+		if (name.length > 200) {
+			return fail(400, { error: 'Target name must be 200 characters or fewer' });
+		}
+		if (email.length > 254) {
+			return fail(400, { error: 'Email is too long' });
+		}
+		if (title && title.length > 200) {
+			return fail(400, { error: 'Title must be 200 characters or fewer' });
+		}
+		if (district && district.length > 64) {
+			return fail(400, { error: 'District must be 64 characters or fewer' });
+		}
+
 		try {
 			await serverMutation(api.campaigns.addTarget, {
-				campaignId: params.id as any,
+				campaignId: params.id as Id<'campaigns'>,
 				slug: params.slug,
 				target: { name, email, title, district }
 			});
@@ -190,10 +222,13 @@ export const actions: Actions = {
 		if (!email) {
 			return fail(400, { error: 'Target email is required' });
 		}
+		if (email.length > 254) {
+			return fail(400, { error: 'Email is too long' });
+		}
 
 		try {
 			await serverMutation(api.campaigns.removeTarget, {
-				campaignId: params.id as any,
+				campaignId: params.id as Id<'campaigns'>,
 				slug: params.slug,
 				email
 			});
@@ -221,7 +256,7 @@ export const actions: Actions = {
 
 		try {
 			await serverMutation(api.campaigns.updateStatus, {
-				campaignId: params.id as any,
+				campaignId: params.id as Id<'campaigns'>,
 				slug: params.slug,
 				status: newStatus
 			});

@@ -15,6 +15,7 @@ import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 export const GET: RequestHandler = async ({ params, url }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');
@@ -28,7 +29,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 
 		const userDistrict = url.searchParams.get('userDistrict') ?? undefined;
 		const engagement = await serverQuery(api.positions.getFullEngagementByDistrict, {
-			templateId: templateId as any,
+			templateId: templateId as Id<'templates'>,
 			userDistrictCode: userDistrict
 		});
 

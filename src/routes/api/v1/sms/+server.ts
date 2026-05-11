@@ -7,7 +7,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
-import { VALID_BLAST_STATUSES } from '$lib/server/sms/types';
+import { isSmsBlastStatus } from '$lib/server/sms/types';
 import { serverQuery } from 'convex-sveltekit';
 import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
 import { internal } from '$lib/convex';
@@ -31,7 +31,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
-		status: statusFilter && VALID_BLAST_STATUSES.includes(statusFilter as any) ? statusFilter : undefined
+		status: statusFilter && isSmsBlastStatus(statusFilter) ? statusFilter : undefined
 	});
 
 	const data = result.items.map((b: any) => ({

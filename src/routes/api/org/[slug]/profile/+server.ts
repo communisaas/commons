@@ -28,6 +28,9 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	}
 
 	if (typeof websiteUrl === 'string') {
+		// bound length before URL parse so a megabyte string
+		// can't burn V8 parsing cycles. 2048 matches the logoUrl cap below.
+		if (websiteUrl.length > 2048) throw error(400, 'Website URL too long');
 		if (websiteUrl.length > 0) {
 			try {
 				const parsed = new URL(websiteUrl);

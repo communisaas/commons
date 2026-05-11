@@ -9,20 +9,21 @@
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { env } from '$env/dynamic/private';
 import { captureWithContext } from '$lib/server/monitoring/sentry';
 import { enforceInternalRateLimit } from '$lib/server/internal/rate-limit';
+import { matchInternalSecret } from '$lib/server/internal/secret-auth';
 
 type Severity = 'fatal' | 'error' | 'warning';
 
 export const POST: RequestHandler = async ({ request }) => {
-	const expected = env.INTERNAL_API_SECRET;
-	if (!expected) {
-		throw error(503, 'INTERNAL_API_SECRET not configured');
-	}
-	const provided = request.headers.get('x-internal-secret');
-	if (!provided || provided !== expected) {
-		throw error(403, 'Invalid internal secret');
+	const auth = matchInternalSecret(request.headers.get('x-internal-secret'));
+	if (!auth.ok) {
+		throw error(
+			auth.reason === 'not_configured' ? 503 : 403,
+			auth.reason === 'not_configured'
+				? 'INTERNAL_API_SECRET not configured'
+				: 'Invalid internal secret'
+		);
 	}
 
 	// Alert fan-out hits Sentry (costs quota). 300/min tolerates burst alerts

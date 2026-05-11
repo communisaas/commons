@@ -8,14 +8,16 @@ import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { SMS_MAX_LENGTH } from '$lib/server/sms/types';
 import type { RequestHandler } from './$types';
 
+// Per-entry caps on tag/segment ids (Convex doc ids are 32 chars).
 const RecipientFilterSchema = z.object({
-	tags: z.array(z.string()).max(20).optional(),
-	segments: z.array(z.string()).max(10).optional(),
-	excludeTags: z.array(z.string()).max(20).optional()
+	tags: z.array(z.string().max(64)).max(20).optional(),
+	segments: z.array(z.string().max(64)).max(10).optional(),
+	excludeTags: z.array(z.string().max(64)).max(20).optional()
 }).strict();
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
@@ -50,11 +52,16 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		}
 	}
 
+	// Bound campaignId before downstream lookup.
+	if (campaignId && (typeof campaignId !== 'string' || campaignId.length > 64)) {
+		throw error(400, 'Invalid campaignId');
+	}
+
 	// Validate campaignId belongs to this org (prevent IDOR)
 	if (campaignId) {
 		const campaign = await serverQuery(api.calls.validateCampaign, {
 			slug: params.slug,
-			campaignId: campaignId as any
+			campaignId: campaignId as Id<'campaigns'>
 		});
 		if (!campaign) throw error(400, 'Campaign not found in this organization');
 	}
@@ -63,7 +70,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		slug: params.slug,
 		body: smsBody.trim(),
 		fromNumber: fromNumber || '',
-		campaignId: campaignId ? (campaignId as any) : undefined,
+		campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined,
 		recipientFilter: parsedFilter,
 		totalRecipients: 0
 	});

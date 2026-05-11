@@ -29,6 +29,7 @@ import {
 	issueGroundCredential,
 	verifyGroundCommitmentAuthenticity
 } from '$lib/server/ground/ground-service';
+import { verifyAddressResolutionToken } from '$lib/server/auth/address-resolution-token';
 
 // ============================================================================
 // Input Validation
@@ -73,6 +74,13 @@ interface VerifyAddressInput {
 	// Server fetches the same IPFS cell data and recomputes the expected
 	// commitment; mismatch is rejected as COMMITMENT_AUTHENTICITY_MISMATCH.
 	coordinates?: { lat: number; lng: number };
+	// F-2.4: server-issued HMAC token from a prior /api/location/resolve-address
+	// call, binding (userId, lat, lng, addressHash, expiresAt). When the client
+	// supplies coordinates, it MUST also supply the token + addressHash so the
+	// server can verify the coordinates were produced by the geocoder for the
+	// claimed address (and not substituted by a malicious client).
+	address_token?: string;
+	address_hash?: string;
 	cell_id?: string;
 	h3_cell?: string;
 	cell_map_root?: string;
@@ -207,22 +215,47 @@ function validateInput(body: unknown): VerifyAddressInput {
 			}));
 	}
 
+	// Each remaining string field gets a realistic boundary cap so a hostile
+	// client can't waste downstream storage with megabyte values before
+	// Convex arg validation. Caps mirror atlas_version=64.
+	//
+	// Both type-mismatch AND over-cap surface as 400 (not silently dropped):
+	// these fields have known sizes (h3 16-char, BN254 hex 64-char, etc.), so
+	// any deviation is malformed input. Silently dropping would mask attack
+	// fuzzing telemetry and cause downstream code to operate on undefined
+	// instead of rejecting the payload.
+	const checkCap = (value: unknown, maxLen: number, fieldName: string): string | undefined => {
+		if (value === undefined || value === null) return undefined;
+		if (typeof value !== 'string') {
+			throw new Error(`${fieldName} must be a string`);
+		}
+		if (value.length > maxLen) {
+			throw new Error(`${fieldName} must be ${maxLen} characters or fewer`);
+		}
+		return value;
+	};
+
 	return {
 		district,
-		state_senate_district:
-			typeof b.state_senate_district === 'string' ? b.state_senate_district : undefined,
-		state_assembly_district:
-			typeof b.state_assembly_district === 'string' ? b.state_assembly_district : undefined,
+		state_senate_district: checkCap(b.state_senate_district, 64, 'state_senate_district'),
+		state_assembly_district: checkCap(b.state_assembly_district, 64, 'state_assembly_district'),
 		verification_method: verificationMethod,
 		officials,
 		district_commitment: districtCommitment,
 		slot_count: slotCount,
 		coordinates,
-		cell_id: typeof b.cell_id === 'string' ? b.cell_id : undefined,
-		h3_cell: typeof b.h3_cell === 'string' ? b.h3_cell : undefined,
-		cell_map_root: typeof b.cell_map_root === 'string' ? b.cell_map_root : undefined,
-		cell_map_version: typeof b.cell_map_version === 'string' ? b.cell_map_version : undefined,
-		atlas_root: typeof b.atlas_root === 'string' ? b.atlas_root : undefined,
+		// F-2.4 token + address hash. Token is `v1.<expiresAt>.<hex>`; cap at 256
+		// to keep malformed inputs from chewing memory. Address hash is SHA-256
+		// hex (64 chars). Cap is 80 to allow leading-zero / 0x-prefix variants.
+		address_token: checkCap(b.address_token, 256, 'address_token'),
+		address_hash: checkCap(b.address_hash, 80, 'address_hash'),
+		// h3 indices are 16-char hex; cell ids are similar size. 64 = generous slack.
+		cell_id: checkCap(b.cell_id, 64, 'cell_id'),
+		h3_cell: checkCap(b.h3_cell, 64, 'h3_cell'),
+		// Roots are 64-char Poseidon2 hex (BN254). 80 = slack for 0x prefix + edge formats.
+		cell_map_root: checkCap(b.cell_map_root, 80, 'cell_map_root'),
+		cell_map_version: checkCap(b.cell_map_version, 64, 'cell_map_version'),
+		atlas_root: checkCap(b.atlas_root, 80, 'atlas_root'),
 		// H1r F5: atlas_version is a short publisher-controlled label (today
 		// "v20260503"-ish). Cap at 64 chars at the boundary so a hostile client
 		// can't waste storage with megabyte version strings before the Convex
@@ -264,6 +297,50 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			{ success: false, error: err instanceof Error ? err.message : 'Invalid request body' },
 			{ status: 400 }
 		);
+	}
+
+	// F-2.4 — coordinate authenticity. Whenever the client supplies
+	// coordinates, the request MUST carry a matching server-issued
+	// HMAC token: `addr` mode if `address_hash` is also supplied (manual
+	// address path), `geo` mode otherwise (browser geolocation path).
+	// Without this, a malicious client could substitute coordinates between
+	// the resolve step and verify-address to poison Tier 2 storage. The
+	// gate fires on `input.coordinates` alone — dropping `address_hash`
+	// does not downgrade the request to an un-gated state because the
+	// server demands a token in either case.
+	if (input.coordinates) {
+		if (!input.address_token) {
+			return json(
+				{
+					success: false,
+					error:
+						'address_token is required when coordinates are supplied. Re-run /api/location/resolve or /api/location/resolve-address to obtain a fresh binding.',
+					code: 'ADDRESS_TOKEN_MISSING'
+				},
+				{ status: 400 }
+			);
+		}
+		const tokenCheck = await verifyAddressResolutionToken({
+			token: input.address_token,
+			userId,
+			lat: input.coordinates.lat,
+			lng: input.coordinates.lng,
+			addressHash: input.address_hash ?? null
+		});
+		if (!tokenCheck.valid) {
+			return json(
+				{
+					success: false,
+					error:
+						tokenCheck.reason === 'expired'
+							? 'Address resolution expired. Re-run address lookup.'
+							: 'Address binding could not be verified. Re-run address lookup.',
+					code:
+						tokenCheck.reason === 'expired' ? 'ADDRESS_TOKEN_EXPIRED' : 'ADDRESS_TOKEN_INVALID'
+				},
+				{ status: 400 }
+			);
+		}
 	}
 
 	// FU-1.1 — issuance-time commitment authenticity. When the client

@@ -31,8 +31,11 @@
 	} from '$lib/utils/landscapeMerge';
 	import type { ProcessedDecisionMaker } from '$lib/types/template';
 	import { generateShareMessage } from '$lib/utils/share-messages';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 
 	import { spring } from 'svelte/motion';
+
+	const labels = getJurisdictionLabels();
 	import { browser } from '$app/environment';
 	import { invalidateAll } from '$app/navigation';
 	import type { PageData } from './$types';
@@ -504,7 +507,7 @@
 						message_body: (template.message_body || '').replace(/\[Personal Connection\]/g, pc)
 					}
 				: template;
-			const resolved = resolveTemplate(templateWithPC as any, (data.user as any) ?? null);
+			const resolved = resolveTemplate(templateWithPC, data.user ?? null);
 			const resolvedBody = resolved.body.replace(/\[District\]/g, districtName);
 
 			const result = generatePersonalizedMailto({
@@ -575,7 +578,7 @@
 			const trustTier = data.user?.trust_tier ?? 0;
 			const attestation = buildProofFooter(trustTier, districtName || data.userDistrictCode);
 
-			const resolved = resolveTemplate(template as any, (data.user as any) ?? null);
+			const resolved = resolveTemplate(template, data.user ?? null);
 			const resolvedBody = resolved.body.replace(/\[District\]/g, districtName).trim();
 
 			const bodyParts: string[] = [];
@@ -827,7 +830,7 @@
 				size="sm"
 			/>
 			<Badge variant={isCongressional ? 'congressional' : 'direct'}>
-				{isCongressional ? 'Congressional Delivery' : 'Direct Outreach'}
+				{isCongressional ? `${labels.legislativeBody} Delivery` : 'Direct Outreach'}
 			</Badge>
 			{#if template.domain}
 				<span class="font-brand text-sm font-medium" style="color: oklch(0.45 0.08 {hue})"

@@ -3,6 +3,7 @@ import { FEATURES } from '$lib/config/features';
 
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 import type { PageServerLoad } from './$types';
 
@@ -15,7 +16,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 
 	const result = await serverQuery(api.legislation.getDmDetail, {
 		slug: org.slug,
-		dmId: params.repId as any
+		dmId: params.repId as Id<'decisionMakers'>
 	});
 
 	if (!result) {

@@ -1,5 +1,5 @@
 /**
- * Wave 6 / FU-1.3 — client-side metric ingestion endpoint.
+ * FU-1.3 — client-side metric ingestion endpoint.
  *
  * Receives best-effort `navigator.sendBeacon` posts from the browser when
  * commitment generation fails (IPFS gateway slow, Poseidon WASM init bug,
@@ -28,9 +28,9 @@ const ALLOWED_METRICS = new Set([
 ]);
 
 export const POST: RequestHandler = async ({ request }) => {
-	// SELF-REVIEW F: cap log spam from misbehaving / malicious clients.
-	// Per-IP-keyed rate limit; legitimate clients should hit this < 1/minute.
-	// 60/min/IP is generous; sustained spam is a misconfiguration to investigate.
+	// Cap log spam from misbehaving / malicious clients. Per-IP rate limit;
+	// legitimate clients should hit this < 1/minute. 60/min/IP is generous;
+	// sustained spam is a misconfiguration to investigate.
 	await enforceInternalRateLimit({
 		endpoint: 'metrics-client-event' as InternalEndpointLimit['endpoint'],
 		maxRequests: 60,
