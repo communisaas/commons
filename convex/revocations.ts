@@ -1,12 +1,13 @@
 /**
- * Wave 2 — KG-2 closure. Persistent state for the off-chain Poseidon2-SMT
+ *  KG-2 closure. Persistent state for the off-chain Poseidon2-SMT
  * that backs the on-chain RevocationRegistry.
  *
  * Two responsibilities, no Poseidon2 here:
  *   1. `getRevocationSMTPath` — read the 128-deep sibling path for a leaf key
- *      and the current root + sequence number (F-1.4 widened from 64 to 128
- *      on 2026-04-25). Missing nodes are returned as `null` so the caller
- *      (SvelteKit) substitutes the empty-subtree value at the matching depth.
+ *      and the current root + sequence number (depth widened from 64 to 128
+ *      to close adversarial preimage grinding). Missing nodes are returned as
+ *      `null` so the SvelteKit caller substitutes the empty-subtree value at
+ *      the matching depth.
  *   2. `applyRevocationSMTUpdate` — atomically write 128 path-node updates +
  *      new root, gated on the caller's expected sequence number. Optimistic
  *      concurrency: if `sequenceNumber` advanced between read and write
@@ -35,12 +36,18 @@ declare const process: { env: Record<string, string | undefined> };
 const TREE_ID = "revocation";
 const setRevocationHaltRef = makeFunctionReference<"mutation">("revocations:setRevocationHalt") as unknown as FunctionReference<"mutation", "internal", { reason: string }, unknown>;
 const getRevocationRootInternalRef = makeFunctionReference<"query">("revocations:getRevocationRootInternal") as unknown as FunctionReference<"query", "internal">;
-// F-1.4 (2026-04-25 brutalist audit) — widened from 64 to 128 to close
-// targeted-lockout preimage grinding (was 2^64 single / 2^44 multi-target
-// at N=10^6; now 2^128 / 2^108 — infeasible). See `revocation-smt.ts`
-// header for full threat-model math. MUST stay in lockstep with `SMT_DEPTH`
-// in src/lib/server/smt/revocation-smt.ts and `REVOCATION_SMT_DEPTH` in
-// voter-protocol's three_tree_membership Noir circuit.
+const recordReconcileSkipRef = makeFunctionReference<"mutation">("revocations:recordReconcileSkip") as unknown as FunctionReference<"mutation", "internal", { treeId: string; reason: string }, { consecutiveSkips: number }>;
+const clearReconcileSkipsRef = makeFunctionReference<"mutation">("revocations:clearReconcileSkips") as unknown as FunctionReference<"mutation", "internal", { treeId: string }, unknown>;
+
+// Alert when the reconciler has skipped at least this many consecutive ticks.
+// Cron fires hourly; 3 ticks = ~3 hours of silent skips before paging.
+const RECONCILE_SKIP_ALERT_THRESHOLD = 3;
+// SMT depth: widened from 64 to 128 to close targeted-lockout preimage
+// grinding (was 2^64 single / 2^44 multi-target at N=10^6; now 2^128 /
+// 2^108 — infeasible). See `revocation-smt.ts` header for full threat-model
+// math. MUST stay in lockstep with `SMT_DEPTH` in src/lib/server/smt/
+// revocation-smt.ts and `REVOCATION_SMT_DEPTH` in voter-protocol's
+// three_tree_membership Noir circuit.
 const SMT_DEPTH = 128;
 
 /**
@@ -190,14 +197,14 @@ export const applyRevocationSMTUpdate = internalMutation({
       .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
       .first();
 
-    // Wave 5 / FU-2.1 — drift kill-switch. When the reconciliation cron
-    // detects critical divergence (Convex root != on-chain root, or contract
-    // EMPTY_TREE_ROOT mismatch), it sets `revocationFlags.isHalted=true`.
-    // Until an operator investigates and explicitly clears the halt via
+    // Drift kill-switch. When the reconciliation cron detects critical
+    // divergence (Convex root != on-chain root, or contract EMPTY_TREE_ROOT
+    // mismatch), it sets `revocationFlags.isHalted=true`. Until an operator
+    // investigates and explicitly clears the halt via
     // `operatorClearRevocationHalt`, all new emits are refused.
     //
-    // REVIEW 5-2 fix: halt state lives in a separate table so it doesn't
-    // pollute `smtRoots.root` with a placeholder zero at genesis.
+    // Halt state lives in a separate table so it doesn't pollute
+    // `smtRoots.root` with a placeholder zero at genesis.
     const haltRow = await ctx.db
       .query("revocationFlags")
       .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
@@ -229,8 +236,8 @@ export const applyRevocationSMTUpdate = internalMutation({
 
     // Validate every depth d's pathKey equals (leafKey >> d). This catches
     // caller-side bit-decomposition bugs that would otherwise persist as a
-    // structurally-impossible tree (REVIEW 2 — Codex's structural-validation
-    // concern). Cheap: 128 bigint shifts + string compares, no Poseidon2.
+    // structurally-impossible tree. Cheap: 128 bigint shifts + string
+    // compares, no Poseidon2.
     const leafKeyBig = BigInt("0x" + canonicalLeaf);
     const seenDepths = new Set<number>();
     for (const u of args.nodeUpdates) {
@@ -313,16 +320,15 @@ export const applyRevocationSMTUpdate = internalMutation({
 });
 
 /**
- * Public: fetch a NON-MEMBERSHIP proof path for a given revocation nullifier.
+ * Internal: fetch a NON-MEMBERSHIP proof path for a given revocation nullifier.
  *
- * Wave 3 — V2 prover wiring. The V2 circuit's
- * `compute_revocation_smt_root(0, path, bits)` requires the prover to supply
- * 128 sibling hashes (matching the current SMT state) plus the bit decomposition
- * of the nullifier's low-128 bits (F-1.4 widened from 64 to 128 on 2026-04-25).
- * The circuit then verifies that walking
- * leaf=0 through this path produces `revocation_registry_root` (public input).
- * If the slot is actually occupied (nullifier was revoked), the computed root
- * will diverge from the on-chain root and the proof fails.
+ * The V2 circuit's `compute_revocation_smt_root(0, path, bits)` requires the
+ * prover to supply 128 sibling hashes (matching the current SMT state) plus
+ * the bit decomposition of the nullifier's low-128 bits. The circuit then
+ * verifies that walking leaf=0 through this path produces
+ * `revocation_registry_root` (public input). If the slot is actually occupied
+ * (nullifier was revoked), the computed root will diverge from the on-chain
+ * root and the proof fails.
  *
  * Returns:
  *   - `path`: 128 sibling hashes at depths 0..127. `null` entries replaced with
@@ -337,12 +343,12 @@ export const applyRevocationSMTUpdate = internalMutation({
  * returns additional context (leaf value, sequenceNumber) needed for write
  * coordination.
  */
-export const getRevocationNonMembershipPath = query({
+export const getRevocationNonMembershipPath = internalQuery({
   args: { revocationNullifier: v.string() },
   handler: async (ctx, { revocationNullifier }) => {
     // Truncate to low 128 bits — same convention as
     // src/lib/server/smt/revocation-smt.ts `nullifierToLeafKey`.
-    // F-1.4 (2026-04-25): widened from 64 to 128.
+    // SMT_DEPTH widened to 128 to close targeted-lockout grinding (see header).
     const cleaned = revocationNullifier.startsWith("0x")
       ? revocationNullifier.slice(2)
       : revocationNullifier;
@@ -430,7 +436,7 @@ export const getRevocationRootInternal = internalQuery({
 });
 
 /**
- * Wave 5 / FU-2.1 — set the drift kill-switch.
+ * Set the drift kill-switch.
  *
  * Called only by `reconcileSMTRoot` when it detects critical or high-severity
  * divergence between Convex and on-chain state. Sets `revocationFlags.isHalted`
@@ -440,10 +446,9 @@ export const getRevocationRootInternal = internalQuery({
  * Safe to call repeatedly — if the halt is already set, this is a no-op
  * (preserves the original `haltedAt` and updates the reason if it changed).
  *
- * REVIEW 5-2 fixes:
- *   - Halt state stored in `revocationFlags` (separate from `smtRoots`)
- *     so the canonical SMT root is never polluted by a placeholder zero.
- *   - Every set is appended to `revocationHaltAuditLog` for forensic recovery.
+ * Halt state stored in `revocationFlags` (separate from `smtRoots`) so the
+ * canonical SMT root is never polluted by a placeholder zero. Every set is
+ * appended to `revocationHaltAuditLog` for forensic recovery.
  */
 export const setRevocationHalt = internalMutation({
   args: { reason: v.string() },
@@ -487,19 +492,18 @@ export const setRevocationHalt = internalMutation({
 });
 
 /**
- * Wave 5 / FU-2.1 — operator clears the drift kill-switch after manual
- * investigation.
+ * Operator clears the drift kill-switch after manual investigation.
  *
- * REVIEW 5-2 fix (Critical A): converted from `mutation` to `internalMutation`.
- * Public mutations are reachable from any authenticated client; the magic-
- * string check was a soft gate, not real authorization. As an internalMutation
- * this is callable ONLY via `npx convex run revocations:operatorClearRevocationHalt`,
- * which requires `CONVEX_DEPLOY_KEY` — the same credential used for prod
- * deploys. That's the correct authorization scope for a kill-switch clear.
+ * Implemented as `internalMutation` — public mutations are reachable from any
+ * authenticated client and a magic-string check would be a soft gate, not real
+ * authorization. As an internalMutation this is callable ONLY via
+ * `npx convex run revocations:operatorClearRevocationHalt`, which requires
+ * `CONVEX_DEPLOY_KEY` — the same credential used for prod deploys. That's
+ * the correct authorization scope for a kill-switch clear.
  *
  * The `confirmation` and `incidentRef` checks remain as defense-in-depth
  * against operator typos. Audit log is durable in the `revocationHaltAuditLog`
- * table (REVIEW 5-2 fix B) — replaces the prior console.warn.
+ * table.
  *
  * Operator invocation:
  *   npx convex run revocations:operatorClearRevocationHalt \
@@ -567,8 +571,8 @@ export const operatorClearRevocationHalt = internalMutation({
 });
 
 /**
- * Wave 5 / FU-2.1 — observability query for the kill-switch state. Operator
- * dashboards / runbook scripts read this to confirm halt status.
+ * Observability query for the kill-switch state. Operator dashboards and
+ * runbook scripts read this to confirm halt status.
  */
 export const getRevocationHaltStatus = query({
   args: {},
@@ -586,8 +590,8 @@ export const getRevocationHaltStatus = query({
 });
 
 /**
- * Wave 5 / FU-2.1 — read recent halt audit log entries for forensic review.
- * Limited to the most recent 100 records — paginate if needed for older incidents.
+ * Read recent halt audit log entries for forensic review. Limited to the most
+ * recent 100 records — paginate if needed for older incidents.
  */
 export const getRevocationHaltAuditLog = query({
   args: { limit: v.optional(v.number()) },
@@ -603,11 +607,11 @@ export const getRevocationHaltAuditLog = query({
 
 /**
  * Bounded-retry wrapper for the halt-flip mutation call from inside the cron
- * action. REVIEW 5-2 (G): a single transient `runMutation` failure during
- * drift detection would otherwise leave the system in "drift detected, halt
- * not set" for an entire 1h cron interval. Three attempts with linear
- * backoff is enough to cover a transient Convex blip without delaying the
- * cron return on a sustained outage.
+ * action. A single transient `runMutation` failure during drift detection
+ * would otherwise leave the system in "drift detected, halt not set" for an
+ * entire 1h cron interval. Three attempts with linear backoff is enough to
+ * cover a transient Convex blip without delaying the cron return on a
+ * sustained outage.
  *
  * Throws on persistent failure — the cron's outer scheduler will surface
  * the error to dashboard logs (paged via standard cron-failure alerting).
@@ -642,7 +646,7 @@ async function flipHaltWithRetry(
 }
 
 /**
- * Wave 2 (KG-2 closure) — reconciliation cron. Runs hourly via crons.ts.
+ * (KG-2 closure) — reconciliation cron. Runs hourly via crons.ts.
  *
  * Compares Convex's persisted SMT root against the on-chain RevocationRegistry
  * currentRoot. Drift modes:
@@ -663,6 +667,161 @@ async function flipHaltWithRetry(
  * Future: move RPC into the Convex action with a "use node" pragma if the
  * endpoint becomes a maintenance burden.
  */
+/**
+ * Counter helpers for reconciler observability. `recordReconcileSkip` increments
+ * the consecutive-skip counter; `clearReconcileSkips` resets it to zero. The
+ * reconciler calls clear on every non-skip outcome (genesis, healthy, drift,
+ * critical) and record on every skip path (missing_env, rpc_unavailable,
+ * fetch_failed). When the counter crosses `RECONCILE_SKIP_ALERT_THRESHOLD` the
+ * reconciler emits a Sentry alert via /api/internal/alert.
+ */
+/**
+ * Emit a Sentry alert if consecutive reconciler skips have crossed the
+ * threshold. PII-free aggregate payload (counter + reason only). Mirrors the
+ * `BOUNDARY_CELL_RATE_HIGH` alert pattern in `convex/observability.ts`.
+ *
+ * No-op when the alert env is missing — this helper is also called from the
+ * missing-env skip path itself, in which case the counter is still incremented
+ * and surfaced in the action's return value. Operators reading function logs
+ * see the increment even when alert delivery is impossible.
+ */
+/**
+ * Emit a Sentry alert when the reconciler detects on-chain / Convex SMT
+ * drift. Distinct from the skip-counter alert: drift means the cron
+ * SUCCEEDED in reading both sides and found divergence (the SMT is
+ * already inconsistent), whereas the skip alert means the cron itself is
+ * stuck. Drift halts new emits via `setRevocationHalt`, but without an
+ * explicit alert the only signal to operators is downstream
+ * `REVOCATION_EMITS_HALTED` user-facing errors. PII-free payload.
+ */
+async function emitReconcileDriftAlert(args: {
+  severity: "critical" | "high";
+  reason: string;
+  baseUrl: string;
+  internalSecret: string;
+  context: Record<string, unknown>;
+}): Promise<void> {
+  if (!args.baseUrl || !args.internalSecret) {
+    console.warn(
+      "[reconcileSMTRoot] drift detected but alert env missing; halt was set, no Sentry alert emitted",
+      { reason: args.reason, severity: args.severity },
+    );
+    return;
+  }
+  try {
+    const res = await fetch(`${args.baseUrl}/api/internal/alert`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-internal-secret": args.internalSecret,
+      },
+      body: JSON.stringify({
+        code: "RECONCILE_DRIFT_DETECTED",
+        message: `reconcileSMTRoot detected ${args.severity} on-chain/Convex divergence (${args.reason}); kill-switch flipped`,
+        severity: "error",
+        context: { ...args.context, severity: args.severity, reason: args.reason },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      console.error(
+        `[reconcileSMTRoot] drift-alert emission failed: HTTP ${res.status}`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      "[reconcileSMTRoot] drift-alert fetch failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+async function maybeEmitReconcileSkipAlert(
+  consecutiveSkips: number,
+  reason: string,
+  baseUrl: string,
+  internalSecret: string,
+): Promise<void> {
+  if (consecutiveSkips < RECONCILE_SKIP_ALERT_THRESHOLD) return;
+  if (!baseUrl || !internalSecret) return;
+  try {
+    const res = await fetch(`${baseUrl}/api/internal/alert`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-internal-secret": internalSecret,
+      },
+      body: JSON.stringify({
+        code: "RECONCILE_SKIP_HIGH",
+        message: `reconcileSMTRoot has skipped ${consecutiveSkips} consecutive ticks (last reason: ${reason})`,
+        severity: "error",
+        context: {
+          consecutiveSkips,
+          lastReason: reason,
+          threshold: RECONCILE_SKIP_ALERT_THRESHOLD,
+        },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      console.error(
+        `[reconcileSMTRoot] skip-alert emission failed: HTTP ${res.status}`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      "[reconcileSMTRoot] skip-alert fetch failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+export const recordReconcileSkip = internalMutation({
+  args: { treeId: v.string(), reason: v.string() },
+  handler: async (ctx, args) => {
+    const state = await ctx.db
+      .query("revocationReconcileState")
+      .withIndex("by_treeId", (q) => q.eq("treeId", args.treeId))
+      .first();
+    const now = Date.now();
+    if (!state) {
+      await ctx.db.insert("revocationReconcileState", {
+        treeId: args.treeId,
+        consecutiveSkips: 1,
+        lastSkipReason: args.reason,
+        lastSkipAt: now,
+        updatedAt: now,
+      });
+      return { consecutiveSkips: 1 };
+    }
+    const next = state.consecutiveSkips + 1;
+    await ctx.db.patch(state._id, {
+      consecutiveSkips: next,
+      lastSkipReason: args.reason,
+      lastSkipAt: now,
+      updatedAt: now,
+    });
+    return { consecutiveSkips: next };
+  },
+});
+
+export const clearReconcileSkips = internalMutation({
+  args: { treeId: v.string() },
+  handler: async (ctx, args) => {
+    const state = await ctx.db
+      .query("revocationReconcileState")
+      .withIndex("by_treeId", (q) => q.eq("treeId", args.treeId))
+      .first();
+    if (!state || state.consecutiveSkips === 0) {
+      return;
+    }
+    await ctx.db.patch(state._id, {
+      consecutiveSkips: 0,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
 export const reconcileSMTRoot = internalAction({
   args: {},
   handler: async (ctx) => {
@@ -673,13 +832,18 @@ export const reconcileSMTRoot = internalAction({
 
     // Read on-chain root via the existing internal endpoint. This keeps the
     // ethers dependency in one place (the SvelteKit /api/internal layer).
-    const baseUrl = process.env.CONVEX_SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? "";
+    const baseUrl = process.env.CONVEX_SITE_URL ?? "";
     const internalSecret = process.env.INTERNAL_API_SECRET ?? "";
     if (!baseUrl || !internalSecret) {
       console.warn(
         "[reconcileSMTRoot] CONVEX_SITE_URL or INTERNAL_API_SECRET not set; skipping reconciliation",
       );
-      return { skipped: true, reason: "missing_env" };
+      const { consecutiveSkips } = await ctx.runMutation(recordReconcileSkipRef, {
+        treeId: TREE_ID,
+        reason: "missing_env",
+      });
+      await maybeEmitReconcileSkipAlert(consecutiveSkips, "missing_env", baseUrl, internalSecret);
+      return { skipped: true, reason: "missing_env", consecutiveSkips };
     }
 
     let onChainRoot: string | null = null;
@@ -694,7 +858,12 @@ export const reconcileSMTRoot = internalAction({
         console.warn(
           `[reconcileSMTRoot] on-chain root read failed: HTTP ${res.status}`,
         );
-        return { skipped: true, reason: "rpc_unavailable" };
+        const { consecutiveSkips } = await ctx.runMutation(recordReconcileSkipRef, {
+          treeId: TREE_ID,
+          reason: "rpc_unavailable",
+        });
+        await maybeEmitReconcileSkipAlert(consecutiveSkips, "rpc_unavailable", baseUrl, internalSecret);
+        return { skipped: true, reason: "rpc_unavailable", consecutiveSkips };
       }
       const body = (await res.json()) as {
         root?: string;
@@ -709,16 +878,21 @@ export const reconcileSMTRoot = internalAction({
         "[reconcileSMTRoot] fetch failed:",
         err instanceof Error ? err.message : String(err),
       );
-      return { skipped: true, reason: "fetch_failed" };
+      const { consecutiveSkips } = await ctx.runMutation(recordReconcileSkipRef, {
+        treeId: TREE_ID,
+        reason: "fetch_failed",
+      });
+      await maybeEmitReconcileSkipAlert(consecutiveSkips, "fetch_failed", baseUrl, internalSecret);
+      return { skipped: true, reason: "fetch_failed", consecutiveSkips };
     }
 
     // Independent check: the contract's EMPTY_TREE_ROOT immutable MUST agree
     // with SvelteKit's Poseidon2-computed empty root. If they diverge, the
     // contract was deployed against the wrong constant — every future emit
     // will produce roots that the genesis-anchored proof chain rejects.
-    // REVIEW 2 fix — earlier genesis carve-out compared the chain to itself
-    // (chain currentRoot === chain EMPTY_TREE_ROOT), losing the cross-side
-    // detection capability. This restores it.
+    // (Compare across sides — comparing the chain to itself, e.g.
+    // `chain currentRoot === chain EMPTY_TREE_ROOT`, would only confirm the
+    // chain is internally consistent, not that it agrees with this runtime.)
     if (
       onChainEmptyRoot !== null &&
       computedEmptyRoot !== null &&
@@ -728,10 +902,18 @@ export const reconcileSMTRoot = internalAction({
         "[reconcileSMTRoot] CRITICAL: contract EMPTY_TREE_ROOT diverges from SvelteKit-computed empty root",
         { onChainEmptyRoot, computedEmptyRoot },
       );
-      // Wave 5 / FU-2.1 — flip kill-switch to halt new emits. Bounded retry
-      // (REVIEW 5-2 G fix): a single transient runMutation failure must not
-      // leave drift detected but un-halted for the next 1h cron interval.
+      // Flip kill-switch to halt new emits. Bounded retry: a single transient
+      // runMutation failure must not leave drift detected but un-halted for
+      // the next 1h cron interval.
       await flipHaltWithRetry(ctx, "empty_tree_root_mismatch");
+      await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
+      await emitReconcileDriftAlert({
+        severity: "critical",
+        reason: "empty_tree_root_mismatch",
+        baseUrl,
+        internalSecret,
+        context: { onChainEmptyRoot, computedEmptyRoot },
+      });
       return {
         drift: true,
         severity: "critical",
@@ -757,6 +939,7 @@ export const reconcileSMTRoot = internalAction({
       console.debug("[reconcileSMTRoot] healthy genesis", {
         emptyTreeRoot: onChainEmptyRoot,
       });
+      await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
       return {
         drift: false,
         severity: "genesis",
@@ -774,6 +957,14 @@ export const reconcileSMTRoot = internalAction({
         { onChainRoot, onChainEmptyRoot },
       );
       await flipHaltWithRetry(ctx, "convex_empty_chain_nonempty");
+      await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
+      await emitReconcileDriftAlert({
+        severity: "critical",
+        reason: "convex_empty_chain_nonempty",
+        baseUrl,
+        internalSecret,
+        context: { onChainRoot, emptyTreeRoot: onChainEmptyRoot },
+      });
       return {
         drift: true,
         severity: "critical",
@@ -789,6 +980,14 @@ export const reconcileSMTRoot = internalAction({
         { localRoot: localRoot.root },
       );
       await flipHaltWithRetry(ctx, "chain_root_null_with_local_set");
+      await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
+      await emitReconcileDriftAlert({
+        severity: "critical",
+        reason: "chain_root_null_with_local_set",
+        baseUrl,
+        internalSecret,
+        context: { localRoot: localRoot.root },
+      });
       return {
         drift: true,
         severity: "critical",
@@ -810,6 +1009,14 @@ export const reconcileSMTRoot = internalAction({
       // High-severity drift also flips the halt — letting new emits land
       // while Convex and chain disagree just compounds the divergence.
       await flipHaltWithRetry(ctx, "convex_chain_root_diverged");
+      await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
+      await emitReconcileDriftAlert({
+        severity: "high",
+        reason: "convex_chain_root_diverged",
+        baseUrl,
+        internalSecret,
+        context: { localRoot: localRoot.root, onChainRoot },
+      });
       return {
         drift: true,
         severity: "high",
@@ -823,6 +1030,7 @@ export const reconcileSMTRoot = internalAction({
       root: localRoot.root,
       leafCount: localRoot.leafCount,
     });
+    await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
     return {
       drift: false,
       severity: "ok",

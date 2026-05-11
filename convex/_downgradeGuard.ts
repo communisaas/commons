@@ -1,5 +1,5 @@
 /**
- * Wave 7 / FU-1.2 — pure helper for the commitment-downgrade guard.
+ * FU-1.2 — pure helper for the commitment-downgrade guard.
  *
  * Extracted from `verifyAddress` so it can be tested directly without the
  * MockConvex mirror in `regrounding-attack-sims.test.ts`. The mirror was a

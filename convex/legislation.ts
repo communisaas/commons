@@ -5,12 +5,14 @@ import {
   internalAction,
   internalQuery,
   action,
+  type QueryCtx,
 } from "./_generated/server";
 import { v } from "convex/values";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireOrgRole } from "./_authHelpers";
+import { upsertExternalId } from "./_externalIds";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -22,6 +24,7 @@ const listDmsWithReceiptsSinceRef = makeFunctionReference<"query">("legislation:
 const aggregateReceiptsForDmRef = makeFunctionReference<"query">("legislation:aggregateReceiptsForDm") as unknown as FunctionReference<"query", "internal">;
 const upsertScorecardSnapshotRef = makeFunctionReference<"mutation">("legislation:upsertScorecardSnapshot") as unknown as FunctionReference<"mutation", "internal">;
 const scoreBillRelevanceRef = makeFunctionReference<"action">("legislation:scoreBillRelevance") as unknown as FunctionReference<"action", "internal">;
+const requireRescoreBillsAuthRef = makeFunctionReference<"query">("legislation:requireRescoreBillsAuth") as unknown as FunctionReference<"query", "internal", { slug: string }, { ok: true }>;
 
 // =============================================================================
 // QUERIES
@@ -316,7 +319,7 @@ export const followDm = mutation({
       reason,
       note: args.note?.slice(0, 1000),
       alertsEnabled: args.alertsEnabled ?? true,
-      followedBy: userId as any,
+      followedBy: userId,
       followedAt: now,
     });
 
@@ -628,7 +631,7 @@ export const watchBill = mutation({
       billId: args.billId,
       reason: args.reason ?? "manual",
       position,
-      addedBy: userId as any,
+      addedBy: userId,
     });
 
     return { _id: id, created: true };
@@ -883,11 +886,7 @@ export const importRepresentatives = mutation({
         updatedAt: Date.now(),
       });
 
-      await ctx.db.insert("externalIds", {
-        decisionMakerId: dmId,
-        system: "constituency",
-        value: rep.constituencyId,
-      });
+      await upsertExternalId(ctx, dmId, "constituency", rep.constituencyId);
 
       imported++;
     }
@@ -1267,7 +1266,10 @@ export const syncPipeline = internalAction({
     }> = [];
 
     try {
-      const resp = await fetch(listUrl);
+      // 15s per Congress.gov request — they tarpit slow connections; without
+      // a timeout the action holds the full Convex 10-min budget and gets
+      // sweep-killed silently.
+      const resp = await fetch(listUrl, { signal: AbortSignal.timeout(15_000) });
       if (!resp.ok) {
         summary.errors.push(`Congress.gov list fetch failed: HTTP ${resp.status}`);
         return summary;
@@ -1292,7 +1294,9 @@ export const syncPipeline = internalAction({
       try {
         const billType = bill.type.toLowerCase().replace(/\./g, "");
         const detailUrl = `${CONGRESS_API_BASE}/bill/${bill.congress}/${billType}/${bill.number}?api_key=${apiKey}&format=json`;
-        const detailResp = await fetch(detailUrl);
+        // Same 15s cap as the list fetch above; per-bill timeout means one
+        // tarpitted detail fetch loses one bill, not the entire sync.
+        const detailResp = await fetch(detailUrl, { signal: AbortSignal.timeout(15_000) });
 
         if (!detailResp.ok) {
           summary.errors.push(`Detail fetch failed for ${bill.type} ${bill.number}`);
@@ -1835,35 +1839,87 @@ export const getDmDetail = query({
  * accountability receipt summaries with k-anonymity thresholds.
  * Used by: src/routes/accountability/[bioguideId]/+page.server.ts
  */
+// Resolve a public DM identifier to its document plus a canonical public slug.
+// Accepts either a registered externalId value (e.g., bioguide for US federal,
+// constituency for international) or a Convex `decisionMakers` doc id. Returns
+// null when no match. CONSTITUTION.md §1.3: callers redirect to canonicalSlug
+// when the request slug differs, so public URLs do not encode storage ids.
+export async function resolveDmAndCanonical(
+  ctx: QueryCtx,
+  identifier: string,
+): Promise<{
+  decisionMakerId: Id<"decisionMakers">;
+  dm: Doc<"decisionMakers">;
+  canonicalSlug: string | null;
+} | null> {
+  // Length guard — the four-system forward chain amplifies validator cost,
+  // and externalId values in practice fit well under 256 chars (bioguide=7,
+  // constituency codes ~32, openstates ~64, wikidata Q-ids ~16). Anything
+  // longer is either a Convex doc id (32 chars) or junk; cap defensively.
+  if (identifier.length === 0 || identifier.length > 256) return null;
+
+  const slugPriority = [
+    "bioguide",
+    "constituency",
+    "openstates",
+    "wikidata",
+  ] as const;
+  let dm: Doc<"decisionMakers"> | null = null;
+
+  // Forward lookup walks the same priority chain so a constituency-code URL
+  // resolves the same way a bioguide URL does. Whichever system matches first
+  // wins; the canonical slug is then computed independently below.
+  for (const system of slugPriority) {
+    const ext = await ctx.db
+      .query("externalIds")
+      .withIndex("by_system_value", (q) =>
+        q.eq("system", system).eq("value", identifier),
+      )
+      .first();
+    if (ext) {
+      dm = await ctx.db.get(ext.decisionMakerId);
+      if (dm) break;
+    }
+  }
+  if (!dm) {
+    // Fallback: identifier is a direct Convex doc id. ctx.db.get already
+    // returned the doc; reuse it instead of fetching again below.
+    try {
+      dm = await ctx.db.get(identifier as Id<"decisionMakers">);
+    } catch {
+      // Invalid id format — not found.
+    }
+  }
+
+  if (!dm) return null;
+  const decisionMakerId = dm._id;
+
+  // Canonical slug: same priority chain as the forward lookup, applied to
+  // this DM's complete externalId set.
+  const externalIdsForDm = await ctx.db
+    .query("externalIds")
+    .withIndex("by_decisionMakerId_system", (q) =>
+      q.eq("decisionMakerId", decisionMakerId!),
+    )
+    .collect();
+  let canonicalSlug: string | null = null;
+  for (const system of slugPriority) {
+    const ext = externalIdsForDm.find((row) => row.system === system);
+    if (ext) {
+      canonicalSlug = ext.value;
+      break;
+    }
+  }
+
+  return { decisionMakerId, dm, canonicalSlug };
+}
+
 export const getDmPublicProfile = query({
   args: { identifier: v.string() },
   handler: async (ctx, { identifier }) => {
-    let decisionMakerId: Id<"decisionMakers"> | null = null;
-
-    // Try ExternalId lookup first (bioguide -> decisionMakerId)
-    const externalId = await ctx.db
-      .query("externalIds")
-      .withIndex("by_system_value", (q) =>
-        q.eq("system", "bioguide").eq("value", identifier),
-      )
-      .first();
-
-    if (externalId) {
-      decisionMakerId = externalId.decisionMakerId;
-    } else {
-      // Fallback: treat identifier as a direct decisionMakerId
-      try {
-        const dm = await ctx.db.get(identifier as Id<"decisionMakers">);
-        if (dm) decisionMakerId = dm._id;
-      } catch {
-        // Invalid ID format — not found
-      }
-    }
-
-    if (!decisionMakerId) return null;
-
-    const dm = await ctx.db.get(decisionMakerId);
-    if (!dm) return null;
+    const resolved = await resolveDmAndCanonical(ctx, identifier);
+    if (!resolved) return null;
+    const { decisionMakerId, dm, canonicalSlug } = resolved;
 
     // All accountability receipts for this DM (cross-org aggregate)
     const receipts = await ctx.db
@@ -1874,7 +1930,59 @@ export const getDmPublicProfile = query({
       .order("desc")
       .collect();
 
-    if (receipts.length === 0) return null;
+    // Identity is honored even when no receipts exist yet — substrate accepts
+    // institutions and citizens alike (CONSTITUTION.md §3.2). Callers that
+    // require receipt-detail (the accountability route) check `bills.length`
+    // themselves; the public /dm/[id] route shows identity + an empty state.
+    if (receipts.length === 0) {
+      return {
+        decisionMakerId: dm._id,
+        canonicalSlug,
+        dmName: dm.name,
+        decisionMaker: {
+          _id: dm._id,
+          name: dm.name,
+          title: dm.title ?? null,
+          party: dm.party ?? null,
+          jurisdiction: dm.jurisdiction ?? null,
+          district: dm.district ?? null,
+          photoUrl: dm.photoUrl ?? null,
+        },
+        summary: {
+          accountabilityScore: 50,
+          weightedAlignment: 0,
+          totalReceipts: 0,
+          totalVerifiedConstituents: null as number | null,
+          uniqueBills: 0,
+          causalityRate: 0,
+          avgProofWeight: 0,
+        },
+        bills: [] as Array<{
+          bill: {
+            _id: Id<"bills">;
+            externalId: string;
+            title: string;
+            status: string;
+            jurisdiction: string;
+          } | null;
+          receipts: Array<{
+            _id: Id<"accountabilityReceipts">;
+            proofWeight: number;
+            verifiedCount: number | null;
+            districtCount: number | null;
+            causalityClass: string;
+            dmAction: string | null;
+            alignment: number;
+            proofDeliveredAt: number;
+            actionOccurredAt: number | null;
+            attestationDigest: string;
+          }>;
+          maxProofWeight: number;
+          totalVerified: number;
+          latestAction: string | null;
+        }>,
+      };
+    }
 
     // Enrich with bill info
     const enrichedReceipts = await Promise.all(
@@ -1924,6 +2032,7 @@ export const getDmPublicProfile = query({
           alignment: number;
           proofDeliveredAt: number;
           actionOccurredAt: number | null;
+          attestationDigest: string;
         }>;
         maxProofWeight: number;
         totalVerified: number;
@@ -1961,6 +2070,7 @@ export const getDmPublicProfile = query({
         alignment: r.alignment,
         proofDeliveredAt: r.proofDeliveredAt,
         actionOccurredAt: r.actionOccurredAt ?? null,
+        attestationDigest: r.attestationDigest,
       });
       entry.maxProofWeight = Math.max(entry.maxProofWeight, r.proofWeight);
       entry.totalVerified += r.verifiedCount;
@@ -1969,6 +2079,7 @@ export const getDmPublicProfile = query({
 
     return {
       decisionMakerId: dm._id,
+      canonicalSlug,
       dmName: dm.name,
       decisionMaker: {
         _id: dm._id,
@@ -2000,24 +2111,26 @@ export const getDmPublicProfile = query({
  * Get DM + scorecard snapshots (public, no org auth needed).
  */
 export const getDmScorecard = query({
-  args: { dmId: v.id("decisionMakers") },
-  handler: async (ctx, { dmId }) => {
-    const dm = await ctx.db.get(dmId);
-    if (!dm) return null;
+  args: { identifier: v.string() },
+  handler: async (ctx, { identifier }) => {
+    const resolved = await resolveDmAndCanonical(ctx, identifier);
+    if (!resolved) return null;
+    const { decisionMakerId, dm, canonicalSlug } = resolved;
 
     const latest = await ctx.db
       .query("scorecardSnapshots")
-      .withIndex("by_decisionMakerId", (q) => q.eq("decisionMakerId", dmId))
+      .withIndex("by_decisionMakerId", (q) => q.eq("decisionMakerId", decisionMakerId))
       .order("desc")
       .first();
 
     const history = await ctx.db
       .query("scorecardSnapshots")
-      .withIndex("by_decisionMakerId", (q) => q.eq("decisionMakerId", dmId))
+      .withIndex("by_decisionMakerId", (q) => q.eq("decisionMakerId", decisionMakerId))
       .order("desc")
       .take(12);
 
     return {
+      canonicalSlug,
       decisionMaker: {
         _id: dm._id,
         name: dm.name,
@@ -2505,12 +2618,15 @@ export const listDmsWithReceiptsSince = internalQuery({
   args: { since: v.number() },
   handler: async (ctx, args): Promise<Id<"decisionMakers">[]> => {
     const dms = new Set<string>();
-    // Scan by proofDeliveredAt via a paginated walk through receipts in window.
-    // The by_decisionMakerId_proofDeliveredAt index orders per-DM, so we do a
-    // full scan once per run and filter — acceptable for weekly cron cadence.
-    const receipts = await ctx.db.query("accountabilityReceipts").collect();
-    for (const r of receipts) {
-      if (r.proofDeliveredAt >= args.since) dms.add(r.decisionMakerId);
+    // Range scan via `by_proofDeliveredAt` reads only rows whose
+    // proofDeliveredAt >= args.since — bounded by the time window, not by
+    // table cardinality. The previous `.collect()` was an unbounded
+    // append-only scan that would hit Convex's row-scan cap (~16K) and
+    // throw silently inside the vote-tracker cron, breaking correlation.
+    for await (const r of ctx.db
+      .query("accountabilityReceipts")
+      .withIndex("by_proofDeliveredAt", (q) => q.gte("proofDeliveredAt", args.since))) {
+      dms.add(r.decisionMakerId);
     }
     return Array.from(dms) as Id<"decisionMakers">[];
   },
@@ -2673,7 +2789,7 @@ export const listRecentBills = query({
       .order("desc")
       .take(max * 2);
     const withEmbeddings = bills
-      .filter((b) => (b as any).topicEmbedding != null)
+      .filter((b) => b.topicEmbedding != null)
       .slice(0, max);
     return withEmbeddings.map((b) => ({ _id: b._id }));
   },
@@ -2682,9 +2798,38 @@ export const listRecentBills = query({
 /**
  * Public action: rescore bills against org issue domains.
  */
+/**
+ * Explicit auth+editor-role gate for the `rescoreBills` action.
+ * Without this gate, a direct Convex-client call from any caller
+ * (authenticated or not) could trigger 200 × vector searches over all
+ * orgs' issue domains via `scoreBillRelevance`. The SvelteKit endpoint
+ * at `/api/org/[slug]/issue-domains/rescore/+server.ts` happens to call
+ * `listRecentBills` first (which DOES enforce editor role), but the
+ * Convex action surface is also reachable directly. This explicit gate
+ * makes the slug semantically meaningful and binds the action to the
+ * SvelteKit endpoint's role contract.
+ */
+export const requireRescoreBillsAuth = internalQuery({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }): Promise<{ ok: true }> => {
+    await requireOrgRole(ctx, slug, "editor");
+    return { ok: true };
+  },
+});
+
 export const rescoreBills = action({
   args: { slug: v.string(), billIds: v.array(v.id("bills")) },
   handler: async (ctx, { slug, billIds }) => {
+    // action-boundary length caps. v.id() bounds the per-id
+    // shape; slug + array-length are the unbounded surfaces.
+    if (slug.length > 64) throw new Error("SLUG_TOO_LARGE");
+    if (billIds.length > 200) throw new Error("BILL_IDS_TOO_MANY");
+
+    // Explicit editor-role gate at the top, mirroring the SvelteKit
+    // endpoint's contract. The slug argument semantically scopes who
+    // can trigger the (expensive) vector-search loop.
+    await ctx.runQuery(requireRescoreBillsAuthRef, { slug });
+
     let rowsUpserted = 0;
     const errors: string[] = [];
     for (const billId of billIds) {

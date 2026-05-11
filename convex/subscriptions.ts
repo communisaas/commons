@@ -122,7 +122,7 @@ export const checkPlanLimits = query({
     // Grace period: past_due orgs retain paid access for 7 days from initial delinquency
     // Uses dedicated pastDueSince field (not updatedAt, which resets on every mutation)
     const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
-    const pastDueSince = (sub as any)?.pastDueSince;
+    const pastDueSince = sub?.pastDueSince;
     const isWithinGrace =
       sub?.status === "past_due" &&
       pastDueSince &&
@@ -169,7 +169,7 @@ export const checkPlanLimits = query({
       .collect();
     let emailsSent = 0;
     for (const blast of emailBlasts) {
-      if (blast.status === "sent" && (blast as any).sentAt >= periodStart) {
+      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
         emailsSent += blast.totalSent ?? 0;
       }
     }
@@ -181,8 +181,8 @@ export const checkPlanLimits = query({
       .collect();
     let smsSent = 0;
     for (const blast of smsBlasts) {
-      if ((blast as any).status === "sent" && (blast as any).sentAt >= periodStart) {
-        smsSent += (blast as any).sentCount ?? 0;
+      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
+        smsSent += blast.sentCount ?? 0;
       }
     }
 
@@ -228,7 +228,7 @@ export const checkPlanLimitsByOrgId = internalQuery({
     // Grace period: past_due orgs retain paid access for 7 days from initial delinquency
     // Uses dedicated pastDueSince field (not updatedAt, which resets on every mutation)
     const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
-    const pastDueSince = (sub as any)?.pastDueSince;
+    const pastDueSince = sub?.pastDueSince;
     const isWithinGrace =
       sub?.status === "past_due" &&
       pastDueSince &&
@@ -266,7 +266,7 @@ export const checkPlanLimitsByOrgId = internalQuery({
       .collect();
     let emailsSent = 0;
     for (const blast of emailBlasts) {
-      if (blast.status === "sent" && (blast as any).sentAt >= periodStart) {
+      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
         emailsSent += blast.totalSent ?? 0;
       }
     }
@@ -277,8 +277,8 @@ export const checkPlanLimitsByOrgId = internalQuery({
       .collect();
     let smsSent = 0;
     for (const blast of smsBlasts) {
-      if ((blast as any).status === "sent" && (blast as any).sentAt >= periodStart) {
-        smsSent += (blast as any).sentCount ?? 0;
+      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
+        smsSent += blast.sentCount ?? 0;
       }
     }
 
@@ -392,6 +392,18 @@ export const cancel = mutation({
     } else {
       const { userId } = await requireAuth(ctx);
       if (sub.userId !== userId) throw new Error("Not authorized");
+    }
+
+    // refuse to direct-cancel a Stripe-managed subscription.
+    // Production cancellation flow is via Stripe billing portal → webhook
+    // `customer.subscription.deleted` → `updateByStripeId(status='canceled')`.
+    // Direct-canceling here would desync Stripe (still billing) from Convex
+    // (says canceled). Allow direct cancel only for non-Stripe subs (legacy /
+    // crypto-paid / never-Stripe paths).
+    if (sub.stripeSubscriptionId) {
+      throw new Error(
+        "Cancel via the Stripe billing portal — direct cancellation would desync billing state",
+      );
     }
 
     await ctx.db.patch(args.subscriptionId, {
@@ -702,10 +714,10 @@ export const backfillCampaignActionOrgIds = internalMutation({
   handler: async (ctx) => {
     const actions = await ctx.db.query("campaignActions").collect();
     let updated = 0;
-    const campaignCache = new Map<string, string | undefined>();
+    const campaignCache = new Map<string, Id<"organizations"> | undefined>();
 
     for (const action of actions) {
-      if ((action as any).orgId) continue; // Already has orgId
+      if (action.orgId) continue; // Already has orgId
 
       let orgId = campaignCache.get(action.campaignId);
       if (orgId === undefined) {
@@ -715,7 +727,7 @@ export const backfillCampaignActionOrgIds = internalMutation({
       }
 
       if (orgId) {
-        await ctx.db.patch(action._id, { orgId } as any);
+        await ctx.db.patch(action._id, { orgId });
         updated++;
       }
     }
@@ -790,7 +802,7 @@ export const updateByStripeId = internalMutation({
       patch.pastDueSince = now;
     }
     // Clear pastDueSince when transitioning back to active
-    if (args.status === "active" && (sub as any).pastDueSince) {
+    if (args.status === "active" && sub.pastDueSince) {
       patch.pastDueSince = null;
     }
 

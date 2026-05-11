@@ -269,6 +269,21 @@ export const createGrant = action({
       throw new Error("Policy text must not exceed 5000 characters");
     }
 
+    // action-boundary length caps. SvelteKit /api/delegation
+    // gates these too, but defense-in-depth catches direct Convex
+    // client invocations.
+    if (args.issueFilter !== undefined) {
+      if (args.issueFilter.length > 32) throw new Error("ISSUE_FILTER_TOO_MANY");
+      if (args.issueFilter.some((s) => s.length > 200)) throw new Error("ISSUE_FILTER_ENTRY_TOO_LARGE");
+    }
+    if (args.orgFilter !== undefined) {
+      if (args.orgFilter.length > 32) throw new Error("ORG_FILTER_TOO_MANY");
+      if (args.orgFilter.some((s) => s.length > 64)) throw new Error("ORG_FILTER_ENTRY_TOO_LARGE");
+    }
+    if (args.stanceProfileId !== undefined && args.stanceProfileId.length > 64) {
+      throw new Error("STANCE_PROFILE_ID_TOO_LARGE");
+    }
+
     // Look up the user's Convex _id
     const user = await ctx.runQuery(internal.users.getByEmail, { email: identity.email! });
     if (!user) throw new Error("User not found");
@@ -306,6 +321,22 @@ export const updateGrant = action({
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
+
+    // action-boundary length caps — parity with createGrant.
+    if (args.status !== undefined && args.status.length > 32) {
+      throw new Error("STATUS_TOO_LARGE");
+    }
+    if (args.policyText !== undefined && args.policyText.length > 5000) {
+      throw new Error("POLICY_TEXT_TOO_LARGE");
+    }
+    if (args.issueFilter !== undefined) {
+      if (args.issueFilter.length > 32) throw new Error("ISSUE_FILTER_TOO_MANY");
+      if (args.issueFilter.some((s) => s.length > 200)) throw new Error("ISSUE_FILTER_ENTRY_TOO_LARGE");
+    }
+    if (args.orgFilter !== undefined) {
+      if (args.orgFilter.length > 32) throw new Error("ORG_FILTER_TOO_MANY");
+      if (args.orgFilter.some((s) => s.length > 64)) throw new Error("ORG_FILTER_ENTRY_TOO_LARGE");
+    }
 
     await ctx.runMutation(internal.delegation.patchGrant, {
       grantId: args.grantId,

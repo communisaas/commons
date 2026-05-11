@@ -134,6 +134,112 @@ export const get = query({
 });
 
 /**
+ * Public founding-charter view, slug-keyed. Returns identity + the published
+ * charter text + the founding cohort (orgs whose membership joinedAt <
+ * charterPublishedAt). 404-shaped null when the slug is unknown OR the charter
+ * has not been published; the network's existence is not surfaced publicly
+ * until the founding charter is on the record.
+ *
+ * Founding-charter substrate citation `charterHash` is computed here from a
+ * versioned canonical preimage covering identity (slug + name), substantive
+ * content (mission + principles + charterText), scope (applicableCountries),
+ * binding moment (charterPublishedAt), and signatories (orderedfounder slug +
+ * joinedAt + role). A reader who recomputes the same preimage with the same
+ * canonical sort order arrives at the same hash; a single field change shifts
+ * the hash. The current-state `activeMemberCount` is intentionally excluded
+ * — the charter is a frozen artifact, current membership belongs on the
+ * members-only surface.
+ */
+export const getPublicCharter = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    if (slug.length === 0 || slug.length > 256) return null;
+
+    const network = await ctx.db
+      .query("orgNetworks")
+      .withIndex("by_slug", (idx) => idx.eq("slug", slug))
+      .first();
+    if (!network || !network.charterPublishedAt) return null;
+
+    const ownerOrg = await ctx.db.get(network.ownerOrgId);
+
+    const allMembers = await ctx.db
+      .query("orgNetworkMembers")
+      .withIndex("by_networkId", (idx) => idx.eq("networkId", network._id))
+      .collect();
+
+    const founders = allMembers.filter(
+      (m) =>
+        m.status === "active" &&
+        m.joinedAt < network.charterPublishedAt!,
+    );
+
+    const founderDetails = (
+      await Promise.all(
+        founders.map(async (m) => {
+          const org = await ctx.db.get(m.orgId);
+          return org
+            ? {
+                orgName: org.name,
+                orgSlug: org.slug,
+                role: m.role,
+                joinedAt: m.joinedAt,
+              }
+            : null;
+        }),
+      )
+    )
+      .filter((f): f is NonNullable<typeof f> => f !== null)
+      // Stable order: joinedAt asc, then orgSlug asc as tiebreaker so charters
+      // do not reshuffle their signatory list across renders when two orgs
+      // share a millisecond stamp from a seed/import.
+      .sort((a, b) =>
+        a.joinedAt !== b.joinedAt
+          ? a.joinedAt - b.joinedAt
+          : a.orgSlug.localeCompare(b.orgSlug),
+      );
+
+    // Versioned canonical preimage. New domain string + version cuts a clean
+    // line if the structure ever changes; readers must recompute under the
+    // same version to verify.
+    const canonical = [
+      "voter-protocol-charter-v1",
+      network.slug,
+      network.name,
+      String(network.charterPublishedAt),
+      network.applicableCountries.slice().sort().join("|"),
+      network.mission ?? "",
+      (network.principles ?? []).join("\n"),
+      network.charterText ?? "",
+      founderDetails
+        .map((f) => `${f.orgSlug}\t${f.joinedAt}\t${f.role}`)
+        .join("\n"),
+    ].join("\n---\n");
+    const canonicalBytes = new TextEncoder().encode(canonical);
+    const digest = await crypto.subtle.digest("SHA-256", canonicalBytes);
+    const charterHash = Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    return {
+      _id: network._id,
+      name: network.name,
+      slug: network.slug,
+      applicableCountries: network.applicableCountries,
+      mission: network.mission ?? null,
+      principles: network.principles ?? [],
+      charterText: network.charterText ?? null,
+      charterPublishedAt: network.charterPublishedAt,
+      charterHash,
+      ownerOrg: ownerOrg
+        ? { name: ownerOrg.name, slug: ownerOrg.slug }
+        : null,
+      founders: founderDetails,
+    };
+  },
+});
+
+/**
  * Get members of a network (convenience query).
  */
 export const getMembers = query({

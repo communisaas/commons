@@ -132,5 +132,11 @@ export async function requireResourceOwnership(
 ): Promise<void> {
   const doc = await ctx.db.get(resourceId);
   if (!doc) throw new Error("Resource not found");
-  if ((doc as any)[orgIdField] !== orgId) throw new Error("Access denied — resource belongs to another organization");
+  // `table` is `string` and `orgIdField` is dynamic, so we can't preserve the
+  // generic Doc<TableName> shape here. Narrow to a string-keyed record so the
+  // dynamic field access is at least typed against "doc has string keys",
+  // not the full `any` escape hatch.
+  if ((doc as Record<string, unknown>)[orgIdField] !== orgId) {
+    throw new Error("Access denied — resource belongs to another organization");
+  }
 }

@@ -98,41 +98,71 @@ export const createCall = mutation({
   },
   handler: async (ctx, args) => {
     const { org } = await requireOrgRole(ctx, args.slug, "editor");
-    const doc: Record<string, unknown> = {
+    const id = await ctx.db.insert("patchThroughCalls", {
       orgId: org._id,
       supporterId: args.supporterId,
       encryptedCallerPhone: args.encryptedCallerPhone ?? "",
       encryptedTargetPhone: args.encryptedTargetPhone ?? "",
-      callerPhoneHash: args.callerPhoneHash ?? null,
-      targetPhoneHash: args.targetPhoneHash ?? null,
-      targetName: args.targetName ?? null,
-      campaignId: args.campaignId ?? null,
-      districtHash: args.districtHash ?? null,
+      callerPhoneHash: args.callerPhoneHash ?? undefined,
+      targetPhoneHash: args.targetPhoneHash ?? undefined,
+      targetName: args.targetName ?? undefined,
+      campaignId: args.campaignId ?? undefined,
+      districtHash: args.districtHash ?? undefined,
       status: "initiated",
-    };
-    const id = await ctx.db.insert("patchThroughCalls", doc as any);
+    });
     return { _id: id };
   },
 });
 
 /**
+ * Known call statuses. Free-form `v.string()` would accept any value
+ * — a tampering caller could write `'pwned'` and break downstream
+ * invariants. Pin to the values produced by the SvelteKit call-
+ * initiation path and Twilio webhook.
+ */
+const ALLOWED_CALL_STATUSES = ["initiated", "ringing", "in-progress", "completed", "failed", "busy", "no-answer", "canceled"] as const;
+
+/**
  * Update call with Twilio SID after initiation.
+ *
+ * Auth: requires slug + editor role + ownership verification. Without
+ * these gates, any authenticated user could flip any org's call records
+ * (mark calls 'failed', overwrite twilioCallSid).
  */
 export const updateCallSid = mutation({
-  args: { callId: v.id("patchThroughCalls"), twilioCallSid: v.string() },
-  handler: async (ctx, { callId, twilioCallSid }) => {
-    await ctx.db.patch(callId, { twilioCallSid });
+  args: { slug: v.string(), callId: v.id("patchThroughCalls"), twilioCallSid: v.string() },
+  handler: async (ctx, { slug, callId, twilioCallSid }) => {
+    const { org } = await requireOrgRole(ctx, slug, "editor");
     const call = await ctx.db.get(callId);
-    return call;
+    if (!call) throw new Error("Call not found");
+    if (String(call.orgId) !== String(org._id)) {
+      throw new Error("Call does not belong to this organization");
+    }
+    if (twilioCallSid.length > 256) throw new Error("TWILIO_CALL_SID_TOO_LARGE");
+    await ctx.db.patch(callId, { twilioCallSid });
+    return await ctx.db.get(callId);
   },
 });
 
 /**
  * Update call status (e.g., failed).
+ *
+ * Status is restricted to documented Twilio call statuses — free-form
+ * input would let a caller poison the invariant. Auth/ownership gates
+ * mirror `updateCallSid`.
  */
 export const updateCallStatus = mutation({
-  args: { callId: v.id("patchThroughCalls"), status: v.string() },
-  handler: async (ctx, { callId, status }) => {
+  args: { slug: v.string(), callId: v.id("patchThroughCalls"), status: v.string() },
+  handler: async (ctx, { slug, callId, status }) => {
+    const { org } = await requireOrgRole(ctx, slug, "editor");
+    if (!ALLOWED_CALL_STATUSES.includes(status as typeof ALLOWED_CALL_STATUSES[number])) {
+      throw new Error("INVALID_CALL_STATUS");
+    }
+    const call = await ctx.db.get(callId);
+    if (!call) throw new Error("Call not found");
+    if (String(call.orgId) !== String(org._id)) {
+      throw new Error("Call does not belong to this organization");
+    }
     await ctx.db.patch(callId, { status });
   },
 });

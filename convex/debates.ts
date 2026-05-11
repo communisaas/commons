@@ -15,6 +15,7 @@ import {
 } from "./_generated/server";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { requireAuth } from "./_authHelpers";
 
@@ -22,6 +23,7 @@ declare const process: { env: Record<string, string | undefined> };
 
 const insertDebateRef = makeFunctionReference<"mutation">("debates:insertDebate") as unknown as FunctionReference<"mutation", "internal">;
 const getExpiredDebatesRef = makeFunctionReference<"query">("debates:getExpiredDebates") as unknown as FunctionReference<"query", "internal">;
+const rateLimitCheckRef = makeFunctionReference<"mutation">("_rateLimit:check") as unknown as FunctionReference<"mutation", "internal", { key: string; windowMs: number; maxRequests: number }, { allowed: boolean }>;
 
 // =============================================================================
 // QUERIES
@@ -185,10 +187,30 @@ export const listArguments = query({
  * Used by: src/routes/s/[slug]/debate/[debateId]/+page.server.ts
  */
 export const getPublicDetail = query({
-  args: { debateId: v.id("debates") },
-  handler: async (ctx, { debateId }) => {
-    const debate = await ctx.db.get(debateId);
+  args: { identifier: v.string() },
+  handler: async (ctx, { identifier }) => {
+    if (identifier.length === 0 || identifier.length > 256) return null;
+
+    // Forward lookup by `debateIdOnchain` first; falls back to direct Convex
+    // doc id. The canonical public form is `debateIdOnchain` for both real
+    // on-chain debates (bytes32) and off-chain placeholders (`offchain-*`),
+    // since both are stable identifiers external to storage.
+    let debate = await ctx.db
+      .query("debates")
+      .withIndex("by_debateIdOnchain", (idx) =>
+        idx.eq("debateIdOnchain", identifier),
+      )
+      .first();
+    if (!debate) {
+      try {
+        debate = await ctx.db.get(identifier as Id<"debates">);
+      } catch {
+        debate = null;
+      }
+    }
     if (!debate) return null;
+    const debateId = debate._id;
+    const canonicalDebateId = debate.debateIdOnchain;
 
     // Load arguments, sorted by weighted score descending
     const allArgs = await ctx.db
@@ -201,6 +223,7 @@ export const getPublicDetail = query({
     return {
       _id: debate._id,
       _creationTime: debate._creationTime,
+      canonicalDebateId,
       templateId: debate.templateId,
       debateIdOnchain: debate.debateIdOnchain,
       actionDomain: debate.actionDomain,
@@ -239,6 +262,68 @@ export const getPublicDetail = query({
         finalScore: arg.finalScore ?? null,
         modelAgreement: arg.modelAgreement ?? null,
       })),
+    };
+  },
+});
+
+/**
+ * Public deliberation index — paginates debates by status with the
+ * accompanying template handle. Active sorts soonest-deadline-first; resolved
+ * sorts latest-deadline-first via the `by_status_deadline` index. Sorting
+ * resolved debates by `resolvedAt` would be more accurate (a debate that
+ * lapses past its deadline before resolving belongs at the top of the
+ * resolved list, not buried by deadline order) and is a follow-up dependent
+ * on a `by_status_resolvedAt` index.
+ */
+export const listPublic = query({
+  args: {
+    status: v.optional(v.string()),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const status = args.status ?? "active";
+    const limit = Math.min(Math.max(args.limit ?? 20, 1), 50);
+
+    const orderDir: "asc" | "desc" = status === "active" ? "asc" : "desc";
+    const page = await ctx.db
+      .query("debates")
+      .withIndex("by_status_deadline", (idx) => idx.eq("status", status))
+      .order(orderDir)
+      .paginate({ numItems: limit, cursor: args.cursor ?? null });
+
+    const enriched = await Promise.all(
+      page.page.map(async (debate) => {
+        const template = await ctx.db.get(debate.templateId);
+        return {
+          _id: debate._id,
+          debateIdOnchain: debate.debateIdOnchain,
+          propositionText: debate.propositionText,
+          propositionHash: debate.propositionHash,
+          status: debate.status,
+          deadline: debate.deadline,
+          argumentCount: debate.argumentCount,
+          uniqueParticipants: debate.uniqueParticipants,
+          totalStake: debate.totalStake,
+          winningStance: debate.winningStance ?? null,
+          resolvedAt: debate.resolvedAt ?? null,
+          resolutionMethod: debate.resolutionMethod ?? null,
+          updatedAt: debate.updatedAt,
+          template: template
+            ? {
+                _id: template._id,
+                slug: template.slug,
+                title: template.title,
+              }
+            : null,
+        };
+      }),
+    );
+
+    return {
+      data: enriched,
+      cursor: page.continueCursor,
+      hasMore: !page.isDone,
     };
   },
 });
@@ -361,7 +446,7 @@ export const createArgument = mutation({
     const user = await ctx.db.get(userId);
     const engagementTier = user?.trustTier ?? 0;
 
-    // TODO: On-chain stake verification is Phase B. Cap client-provided stakeAmount for now.
+    // TODO: on-chain stake verification not yet wired; cap client-provided stakeAmount for now.
     const MAX_STAKE = 1_000_000; // $1 in micro-units
     const stakeAmount = Math.min(Math.max(0, args.stakeAmount), MAX_STAKE);
 
@@ -459,7 +544,7 @@ export const cosign = mutation({
     const user = await ctx.db.get(userId);
     const engagementTier = user?.trustTier ?? 0;
 
-    // TODO: On-chain stake verification is Phase B. Cap client-provided stakeAmount for now.
+    // TODO: on-chain stake verification not yet wired; cap client-provided stakeAmount for now.
     const MAX_STAKE = 1_000_000; // $1 in micro-units
     const stakeAmount = Math.min(Math.max(0, args.stakeAmount), MAX_STAKE);
 
@@ -594,6 +679,30 @@ export const spawnDebate = action({
 
     if (!args.propositionText || args.propositionText.length < 10) {
       throw new Error("propositionText must be at least 10 characters");
+    }
+    if (args.propositionText.length > 4000) {
+      throw new Error("propositionText must be 4000 characters or fewer");
+    }
+
+    // Rate-limit per-user to 5 debate spawns per hour. The canonical
+    // product flow has an ON-CHAIN bond + deriveDomain step (see
+    // comment below); off-chain placeholder mode currently has no
+    // bond, so an authenticated user could spawn unlimited debates on
+    // any template — debate-list spam + reputation pollution. The rate
+    // limit is the pre-on-chain-wiring stopgap; when proposeDebate()
+    // moves on-chain the bond becomes the natural rate limiter and this
+    // gate can be relaxed. Key includes identity.subject so spammers
+    // can't rotate templates to amplify; max 5 per hour is generous
+    // for legitimate use (one debate per major topic per day) but
+    // caps spam at one digit.
+    const rlKey = `debates.spawnDebate:${identity.subject}`;
+    const rl = await ctx.runMutation(rateLimitCheckRef, {
+      key: rlKey,
+      windowMs: 60 * 60 * 1000,
+      maxRequests: 5,
+    });
+    if (!rl.allowed) {
+      throw new Error("Debate spawn rate limit exceeded — try again in an hour");
     }
 
     // In this action we would call the on-chain proposeDebate() and deriveDomain().

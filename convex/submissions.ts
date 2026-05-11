@@ -34,6 +34,7 @@ type ActiveCredentialStatus =
 			credentialId: Id<'districtCredentials'>;
 			userId: Id<'users'>;
 			credentialHash: string;
+			trustTier: number;
 	  }
 	| {
 			active: false;
@@ -198,6 +199,23 @@ export const create = action({
 			throw new Error('Authentication required');
 		}
 
+		// bound caller-supplied string sizes at the action
+		// boundary. v.string() doesn't enforce length and Convex caps doc
+		// size at 1 MiB — a verified user with quota could otherwise submit
+		// megabyte payloads that store before downstream resolver-gates
+		// (which cap proof at 131,072 hex) reject. Cap matches the resolver
+		// boundary; encryptedWitness is typically ~few KB; nonces/keys are short.
+		if (args.proof.length > 131_072) throw new Error('PROOF_TOO_LARGE');
+		if (args.encryptedWitness.length > 65_536) throw new Error('ENCRYPTED_WITNESS_TOO_LARGE');
+		if (args.witnessNonce.length > 128) throw new Error('WITNESS_NONCE_TOO_LARGE');
+		if (args.ephemeralPublicKey.length > 128) throw new Error('EPHEMERAL_PUBLIC_KEY_TOO_LARGE');
+		if (args.teeKeyId.length > 128) throw new Error('TEE_KEY_ID_TOO_LARGE');
+		if (args.nullifier.length > 80) throw new Error('NULLIFIER_TOO_LARGE');
+		if (args.templateId.length > 64) throw new Error('TEMPLATE_ID_TOO_LARGE');
+		if (args.idempotencyKey !== undefined && args.idempotencyKey.length > 128) {
+			throw new Error('IDEMPOTENCY_KEY_TOO_LARGE');
+		}
+
 		assertCongressionalDeliveryLaunched();
 
 		const template: CongressionalDeliveryTemplate | null = await ctx.runQuery(internal.submissions.getTemplateForDelivery, {
@@ -219,6 +237,21 @@ export const create = action({
 		);
 		if (!credentialStatus.active) {
 			throw new Error('NO_ACTIVE_DISTRICT_CREDENTIAL');
+		}
+		// Defense-in-depth tier-4 gate at the Convex action.
+		// The SvelteKit endpoint at `/api/submissions/create/+server.ts:221`
+		// enforces tier 4 (REQUIRED_CONGRESSIONAL_PROOF_TIER) via both the
+		// proof's `publicInputs.authorityLevel` AND `locals.user.trust_tier`.
+		// But this public Convex action is reachable directly via the
+		// Convex client by any authenticated user with an active credential,
+		// bypassing the SvelteKit endpoint entirely. Without this check, a
+		// tier-2 user with an active address credential could call
+		// `api.submissions.create` and reach `deliverToCongress`. Tier 4 is
+		// the documented launch-floor for congressional delivery — see
+		// `REQUIRED_CONGRESSIONAL_PROOF_TIER` in the SvelteKit handler.
+		const REQUIRED_CONGRESSIONAL_PROOF_TIER = 4;
+		if (credentialStatus.trustTier < REQUIRED_CONGRESSIONAL_PROOF_TIER) {
+			throw new Error('INSUFFICIENT_AUTHORITY');
 		}
 		// Use credentialId (always set) not credentialHash (empty for commitment-only
 		// shadow_atlas credentials — would bypass delivery recheck on falsy guard).
@@ -252,7 +285,8 @@ export const create = action({
 			teeKeyId: args.teeKeyId,
 			idempotencyKey: args.idempotencyKey,
 			witnessExpiresAt: Date.now() + WITNESS_TTL_MS,
-			issuingCredentialId
+			issuingCredentialId,
+			trustTier: credentialStatus.trustTier
 		});
 
 		if (result.existing) {
@@ -275,7 +309,7 @@ export const create = action({
 
 		// promoteTier removed: trust tier escalation must wait until
 		// verificationStatus === 'verified' (ZKP-INTEGRITY-TASK-GRAPH.md § S1/2E).
-		// Re-enable in Cycle 2 after verification status lifecycle is wired.
+		// Re-enable once the verification status lifecycle is wired.
 
 		return {
 			success: true,
@@ -302,18 +336,45 @@ export const insertSubmission = internalMutation({
 		teeKeyId: v.optional(v.string()),
 		idempotencyKey: v.optional(v.string()),
 		witnessExpiresAt: v.number(),
-		issuingCredentialId: v.optional(v.id('districtCredentials'))
+		issuingCredentialId: v.optional(v.id('districtCredentials')),
+		trustTier: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
-		// Check idempotency key (client retry protection)
+		// Idempotency key must be user-scoped. A bare key match
+		// (returning `{submissionId, existing: true}` for ANY matching
+		// key regardless of `pseudonymousId`) produces two failure modes:
+		//   (1) Silent drop — user B picks the same UUID as user A
+		//       (low-entropy client RNG, predictable timestamps);
+		//       B's valid proof is discarded, B sees success:true with
+		//       status:'existing'; no submission is recorded for B.
+		//   (2) Cross-user disclosure — the returned submissionId
+		//       belongs to user A. Caller can then query that
+		//       submission and observe templateId / anchor status /
+		//       trustTier of another user's action.
+		// Require BOTH idempotencyKey AND pseudonymousId match for the
+		// existing-row return. A bare key match without pseudonymousId
+		// match falls through to the nullifier check (which is already
+		// user-scoped at line 362) and on to insert. The unique-index
+		// constraint on idempotencyKey itself is preserved (so a re-
+		// insert with conflicting key + different user would fail at
+		// insert time, which is the desired behavior — alert ops to
+		// the collision rather than silently drop or leak).
 		if (args.idempotencyKey) {
 			const existingByKey = await ctx.db
 				.query('submissions')
 				.withIndex('by_idempotencyKey', (q) => q.eq('idempotencyKey', args.idempotencyKey!))
 				.first();
 
-			if (existingByKey) {
+			if (existingByKey && existingByKey.pseudonymousId === args.pseudonymousId) {
 				return { submissionId: existingByKey._id, existing: true };
+			}
+			if (existingByKey) {
+				// Key exists but belongs to a different user — refuse to
+				// disclose or overwrite. The caller should generate a fresh
+				// key. This is the canonical "key collision across users"
+				// case; rare with high-entropy UUIDs but possible with
+				// low-entropy client RNGs.
+				throw new Error('IDEMPOTENCY_KEY_COLLISION');
 			}
 		}
 
@@ -349,6 +410,7 @@ export const insertSubmission = internalMutation({
 			verificationStatus: 'pending',
 			witnessExpiresAt: args.witnessExpiresAt,
 			issuingCredentialId: args.issuingCredentialId,
+			trustTier: args.trustTier,
 			updatedAt: Date.now()
 		});
 
@@ -380,7 +442,8 @@ export const hasActiveDistrictCredential = internalQuery({
 			active: true as const,
 			credentialId: active._id,
 			userId: user._id,
-			credentialHash: active.credentialHash
+			credentialHash: active.credentialHash,
+			trustTier: user.trustTier
 		};
 	}
 });
@@ -730,18 +793,62 @@ export const sweepStuckProcessing = internalAction({
 	args: {},
 	handler: async (ctx) => {
 		const STUCK_THRESHOLD_MS = 15 * 60 * 1000;
+		// Sweep-cycle escalation threshold. A submission that has been swept
+		// 3+ times means the underlying delivery path is broken (not just the
+		// worker), so cycling `processing → failed → processing → failed`
+		// indefinitely is just hiding the real failure mode. Emit a Sentry
+		// alert so an operator can investigate the persistent stuck-state.
+		const SWEEP_ALERT_THRESHOLD = 3;
 		const cutoff = Date.now() - STUCK_THRESHOLD_MS;
 
 		const stuck = await ctx.runQuery(internal.submissions.listStuckProcessing, {
 			olderThan: cutoff
 		});
 
+		const baseUrl = process.env.CONVEX_SITE_URL ?? '';
+		const internalSecret = process.env.INTERNAL_API_SECRET ?? '';
 		for (const row of stuck) {
 			await ctx.runMutation(internal.submissions.updateDeliveryStatus, {
 				submissionId: row._id,
 				deliveryStatus: 'failed',
 				deliveryError: 'worker_stuck_timeout'
 			});
+			// Escalate per-submission when sweep cycles repeat. `deliveryAttempts`
+			// is incremented by claimForDelivery on every transition pending/failed
+			// → processing, so a row at attempts >= 3 has cycled multiple times.
+			// Sentry dedupes by code so a stuck-pool storm collapses to one issue.
+			if (
+				typeof row.deliveryAttempts === 'number' &&
+				row.deliveryAttempts >= SWEEP_ALERT_THRESHOLD &&
+				baseUrl &&
+				internalSecret
+			) {
+				try {
+					await fetch(`${baseUrl}/api/internal/alert`, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+							'x-internal-secret': internalSecret,
+						},
+						body: JSON.stringify({
+							code: 'SUBMISSION_SWEEP_REPEAT',
+							message: `Submission swept ${row.deliveryAttempts}+ times — delivery path likely broken, not just the worker`,
+							severity: 'warning',
+							context: {
+								submissionId: String(row._id),
+								deliveryAttempts: row.deliveryAttempts,
+								threshold: SWEEP_ALERT_THRESHOLD,
+							},
+						}),
+						signal: AbortSignal.timeout(10_000),
+					});
+				} catch (err) {
+					console.error(
+						'[sweepStuckProcessing] sweep-repeat alert failed:',
+						err instanceof Error ? err.message : String(err),
+					);
+				}
+			}
 		}
 
 		// Same semantic for anchors that got stuck in 'pending'. Threshold safely
@@ -1435,7 +1542,12 @@ export const deliverToCongress = internalAction({
 				throw new Error('No congressional_district in delivery address');
 			}
 
-			// Shadow Atlas lookup
+			// Shadow Atlas lookup.
+			// Default is the reference commons.email atlas; peer implementations
+			// override via SHADOW_ATLAS_URL set in the Convex dashboard.
+			// NOTE: distinct from PUBLIC_ATLAS_HOST (browser-side) — this var is
+			// read at Convex action runtime; both should point at the same atlas
+			// host for a coherent deployment. See docs/design/FEDERATION-DEPLOY.md.
 			const saUrl = process.env.SHADOW_ATLAS_URL || 'https://atlas.commons.email';
 			const saResponse = await fetch(`${saUrl}/api/officials/${districtCode}`);
 			if (!saResponse.ok) {
@@ -1648,7 +1760,9 @@ export const deliverToCongress = internalAction({
 					});
 					await ctx.runMutation(internal.submissions.incrementTemplateReach, {
 						templateId: submission.templateId,
-						districtCode
+						districtCode,
+						verifiedAt: Date.now(),
+						trustTier: submission.trustTier
 					});
 				} catch (counterErr) {
 					console.error(
@@ -1680,6 +1794,11 @@ export const registerEngagement = internalAction({
 		try {
 			// Look up user's wallet + identity commitment
 			// userSubject is the auth token subject — need to find user by email
+			// Default is the reference commons.email atlas; peer implementations
+			// override via SHADOW_ATLAS_URL set in the Convex dashboard.
+			// NOTE: distinct from PUBLIC_ATLAS_HOST (browser-side) — this var is
+			// read at Convex action runtime; both should point at the same atlas
+			// host for a coherent deployment. See docs/design/FEDERATION-DEPLOY.md.
 			const saUrl = process.env.SHADOW_ATLAS_URL || 'https://atlas.commons.email';
 
 			// This is fire-and-forget — failures are logged but don't block
@@ -1699,7 +1818,7 @@ export const registerEngagement = internalAction({
 });
 
 // promoteTier DELETED (S1): unconditional tier escalation.
-// Re-implement in Cycle 2 (task 2E) gated on verificationStatus === 'verified'.
+// Re-implementby a follow-up cure (task 2E) gated on verificationStatus === 'verified'.
 // See docs/design/ZKP-INTEGRITY-TASK-GRAPH.md § S1/2E.
 
 /**
@@ -1730,9 +1849,15 @@ export const updateResolvedDistrict = internalMutation({
 export const incrementTemplateReach = internalMutation({
 	args: {
 		templateId: v.string(),
-		districtCode: v.string()
+		districtCode: v.string(),
+		verifiedAt: v.optional(v.number()),
+		trustTier: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
+		const DAILY_WINDOW = 30;
+		const DISTRICT_CAP = 500;
+		const dayMs = 86400000;
+
 		// Resolve template by slug (same pattern as getTemplateForDelivery)
 		const template = await ctx.db
 			.query('templates')
@@ -1744,16 +1869,66 @@ export const incrementTemplateReach = internalMutation({
 			return;
 		}
 
+		// Reach counter: union of districts that have ever delivered, plus a count.
 		const districts = template.deliveredDistricts ?? [];
 		const isNewDistrict = !districts.includes(args.districtCode);
-
-		// Hard cap: 500 districts (435 congressional + territories + safety margin)
-		const shouldTrackDistrict = isNewDistrict && districts.length < 500;
-
+		const shouldTrackDistrict = isNewDistrict && districts.length < DISTRICT_CAP;
 		const newDistricts = shouldTrackDistrict ? [...districts, args.districtCode] : districts;
+
+		// Daily arrival rhythm: rolling 30-day window, oldest first. The last
+		// bucket is always the current day; older buckets shift left as days roll.
+		const verifiedAt = args.verifiedAt ?? Date.now();
+		const day = Math.floor(verifiedAt / dayMs) * dayMs;
+		let dailyArrivals = template.dailyArrivals ?? new Array(DAILY_WINDOW).fill(0);
+		if (dailyArrivals.length !== DAILY_WINDOW) {
+			dailyArrivals = new Array(DAILY_WINDOW).fill(0);
+		}
+		const lastDay = template.dailyArrivalsLastDay ?? day;
+		let newLastDay = lastDay;
+		if (day === lastDay) {
+			dailyArrivals[DAILY_WINDOW - 1]++;
+		} else if (day > lastDay) {
+			const daysToShift = Math.min(DAILY_WINDOW, Math.floor((day - lastDay) / dayMs));
+			dailyArrivals = [
+				...dailyArrivals.slice(daysToShift),
+				...new Array(daysToShift).fill(0)
+			];
+			dailyArrivals[DAILY_WINDOW - 1]++;
+			newLastDay = day;
+		}
+		// else day < lastDay: out-of-order verifiedAt; drop the temporal update.
+
+		// Per-district counts: capped at DISTRICT_CAP. Read-time consumers
+		// (TemplateList per-row Ratio, hero Ratio) sort and truncate.
+		let districtCounts = template.districtCounts ?? [];
+		const dcIdx = districtCounts.findIndex((d) => d.code === args.districtCode);
+		if (dcIdx >= 0) {
+			const updated = { code: args.districtCode, count: districtCounts[dcIdx].count + 1 };
+			districtCounts = [
+				...districtCounts.slice(0, dcIdx),
+				updated,
+				...districtCounts.slice(dcIdx + 1)
+			];
+		} else if (districtCounts.length < DISTRICT_CAP) {
+			districtCounts = [...districtCounts, { code: args.districtCode, count: 1 }];
+		}
+
+		// Trust-tier breakdown: 6 buckets, index = tier 0-5.
+		let tierCounts = template.tierCounts ?? [0, 0, 0, 0, 0, 0];
+		if (tierCounts.length !== 6) {
+			tierCounts = [0, 0, 0, 0, 0, 0];
+		}
+		if (args.trustTier !== undefined && args.trustTier >= 0 && args.trustTier <= 5) {
+			tierCounts = [...tierCounts];
+			tierCounts[args.trustTier]++;
+		}
 
 		await ctx.db.patch(template._id, {
 			verifiedSends: (template.verifiedSends || 0) + 1,
+			dailyArrivals,
+			dailyArrivalsLastDay: newLastDay,
+			districtCounts,
+			tierCounts,
 			...(shouldTrackDistrict
 				? {
 						deliveredDistricts: newDistricts,
@@ -1802,7 +1977,7 @@ export const getTemplateForDelivery = internalQuery({
 				deliveryMethod: results.deliveryMethod,
 				status: results.status,
 				isPublic: results.isPublic,
-				orgId: (results as any).orgId ?? null,
+				orgId: results.orgId ?? null,
 				deliveryConfig: results.deliveryConfig ?? {},
 				recipientConfig: results.recipientConfig ?? {}
 			};
@@ -1947,6 +2122,111 @@ export const getPublicById = query({
 });
 
 /**
+ * Aggregate verified-submission stats for the homepage hero region.
+ *
+ * One scan over the `by_verificationStatus` index returns three derived
+ * shapes — total count, daily-bucketed arrival rhythm, and top-district
+ * composition — so SSR makes one round trip instead of three. Each
+ * submission counted here is anchored on-chain individually
+ * (`anchorTxHash` + `blockNumber`); the aggregate is publicly verifiable
+ * by re-running the same scan.
+ *
+ * District composition uses k-anonymity: districts with fewer than
+ * `K_ANON_THRESHOLD` verified sends in the window are folded into
+ * `otherCount` rather than disclosed individually. Districts above the
+ * threshold but outside the top N also fold into `otherCount`.
+ */
+export const aggregateForHero = query({
+	args: {
+		windowDays: v.optional(v.number()),
+		topDistrictCount: v.optional(v.number())
+	},
+	handler: async (ctx, args) => {
+		const windowDays = args.windowDays ?? 30;
+		const topN = args.topDistrictCount ?? 6;
+		const dayMs = 86400000;
+		const now = Date.now();
+		const windowStart = now - windowDays * dayMs;
+		const K_ANON_THRESHOLD = 5;
+
+		// Range scan on verifiedAt within the verified status — bounded to
+		// the rolling window. Avoids the full-table scan that the prior
+		// `by_verificationStatus.collect()` triggered on every homepage SSR.
+		const verifiedSubs = await ctx.db
+			.query('submissions')
+			.withIndex('by_verificationStatus_verifiedAt', (q) =>
+				q.eq('verificationStatus', 'verified').gte('verifiedAt', windowStart)
+			)
+			.collect();
+
+		let count = 0;
+		const buckets: number[] = new Array(windowDays).fill(0);
+		const districtCounts = new Map<string, number>();
+		const tierCounts: number[] = [0, 0, 0, 0, 0, 0];
+
+		for (const s of verifiedSubs) {
+			if (s.verifiedAt === undefined) continue;
+			count++;
+			const dayIndex = Math.floor((s.verifiedAt - windowStart) / dayMs);
+			if (dayIndex >= 0 && dayIndex < windowDays) {
+				buckets[dayIndex]++;
+			}
+			if (s.resolvedDistrict) {
+				districtCounts.set(
+					s.resolvedDistrict,
+					(districtCounts.get(s.resolvedDistrict) ?? 0) + 1
+				);
+			}
+			if (s.trustTier !== undefined && s.trustTier >= 0 && s.trustTier <= 5) {
+				tierCounts[s.trustTier]++;
+			}
+		}
+
+		// Districts: split the leftover bucket into k-anon-suppressed (privacy
+		// floor) vs display-truncated (top-N cap). Same merged shape downstream
+		// for compactness, but caller can render the two semantics distinctly.
+		const sorted = [...districtCounts.entries()].sort((a, b) => b[1] - a[1]);
+		const topDistricts: Array<{ code: string; count: number }> = [];
+		let belowThresholdCount = 0;
+		let displayTruncationCount = 0;
+		for (const [code, c] of sorted) {
+			if (c < K_ANON_THRESHOLD) {
+				belowThresholdCount += c;
+			} else if (topDistricts.length < topN) {
+				topDistricts.push({ code, count: c });
+			} else {
+				displayTruncationCount += c;
+			}
+		}
+
+		// Tiers: apply the same k-anon floor. A single tier-5 user under a
+		// thin cohort would otherwise reveal a tier-5 presence to anyone
+		// viewing the homepage. Counts below threshold collapse to 0 in the
+		// returned shape; the suppressed mass is reflected via `count` minus
+		// the sum of revealed tiers (caller can compute the gap if needed).
+		const tierBreakdown = tierCounts.map((c, tier) => ({
+			tier,
+			count: c < K_ANON_THRESHOLD ? 0 : c
+		}));
+
+		return {
+			count,
+			windowDays,
+			windowStart,
+			windowEnd: now,
+			buckets,
+			topDistricts,
+			belowThresholdCount,
+			displayTruncationCount,
+			otherCount: belowThresholdCount + displayTruncationCount,
+			totalDistricts: districtCounts.size,
+			tierBreakdown,
+			kAnonymityThreshold: K_ANON_THRESHOLD
+		};
+	}
+});
+
+/**
  * Retry a failed submission — reset delivery status to pending
  * and re-trigger the delivery pipeline.
  */
@@ -1970,6 +2250,21 @@ export const retryDelivery = action({
 			throw new Error('Submission is not in a retryable state');
 		}
 
+		// Cap retries to prevent the public retry endpoint from
+		// amplifying one submit into repeated provider deliveries. If an upstream
+		// CWC request throws after acceptance but before a receipt is recorded,
+		// the catch path records `failed` and a caller could retry indefinitely.
+		// `claimForDelivery` increments `deliveryAttempts` atomically (see :621);
+		// at 5 the submission is permanently failed and requires operator
+		// intervention. Cap matches the sweep-stuck escalation threshold curve
+		// (SWEEP_ALERT_THRESHOLD = 3 alerts; MAX = 5 hard-stops) so on-call has
+		// 2 sweep cycles of warning before the hard cap fires.
+		const MAX_RETRY_ATTEMPTS = 5;
+		const attempts = sub.deliveryAttempts ?? 0;
+		if (attempts >= MAX_RETRY_ATTEMPTS) {
+			throw new Error('MAX_RETRIES_EXCEEDED');
+		}
+
 		// Reset status
 		await ctx.runMutation(internal.submissions.updateDeliveryStatus, {
 			submissionId,
@@ -1982,5 +2277,254 @@ export const retryDelivery = action({
 		});
 
 		return { status: 'retrying' };
+	}
+});
+
+// =============================================================================
+// BACKFILL — denormalize trustTier onto submissions; derive per-template
+// dimensional aggregates (dailyArrivals / districtCounts / tierCounts) from
+// historical submissions. One-shot operations invoked at deployment time.
+// =============================================================================
+
+/**
+ * Internal: paginated user list for trustTier backfill driver.
+ *
+ * Returns only users with a tokenIdentifier (the input to computePseudonymousId).
+ * Users without one have no submissions to backfill.
+ */
+export const _listUsersForTrustTierBackfill = internalQuery({
+	args: { paginationCursor: v.optional(v.string()), limit: v.number() },
+	handler: async (ctx, { paginationCursor, limit }) => {
+		const result = await ctx.db
+			.query('users')
+			.paginate({ numItems: limit, cursor: (paginationCursor ?? null) as any });
+		return {
+			items: result.page
+				.filter((u) => u.tokenIdentifier !== undefined)
+				.map((u) => ({
+					_id: u._id,
+					tokenIdentifier: u.tokenIdentifier as string,
+					trustTier: u.trustTier
+				})),
+			continueCursor: result.continueCursor,
+			isDone: result.isDone
+		};
+	}
+});
+
+/**
+ * Internal: patch every submission for one pseudonymousId with the user's
+ * trustTier. Called once per user during backfill. Idempotent — only writes
+ * to rows where trustTier is currently undefined.
+ */
+export const _patchTrustTierForPseudonymousId = internalMutation({
+	args: {
+		pseudonymousId: v.string(),
+		trustTier: v.number()
+	},
+	handler: async (ctx, { pseudonymousId, trustTier }) => {
+		const subs = await ctx.db
+			.query('submissions')
+			.withIndex('by_pseudonymousId', (q) => q.eq('pseudonymousId', pseudonymousId))
+			.collect();
+		let patched = 0;
+		for (const s of subs) {
+			if (s.trustTier === undefined) {
+				await ctx.db.patch(s._id, { trustTier });
+				patched++;
+			}
+		}
+		return { patched };
+	}
+});
+
+/**
+ * Backfill trustTier on existing submissions.
+ *
+ * Walks the users table page-by-page, computes each user's pseudonymousId,
+ * and patches their submissions. Pseudonymous IDs are HMAC of tokenIdentifier;
+ * the HMAC is irreversible, so the only path to backfill is forward from the
+ * user side.
+ *
+ * Run once at deployment time after the schema field lands. Subsequent
+ * submissions populate trustTier at insert time via insertSubmission.
+ */
+export const backfillSubmissionTrustTier = internalAction({
+	args: { batchSize: v.optional(v.number()) },
+	handler: async (ctx, { batchSize }): Promise<{ usersProcessed: number; submissionsPatched: number; failed: number }> => {
+		const limit = batchSize ?? 100;
+		let usersProcessed = 0;
+		let submissionsPatched = 0;
+		let failed = 0;
+		let isDone = false;
+		let paginationCursor: string | undefined;
+
+		while (!isDone) {
+			const batch: { items: Array<{ _id: Id<'users'>; tokenIdentifier: string; trustTier: number }>; continueCursor: string; isDone: boolean } = await ctx.runQuery(
+				internal.submissions._listUsersForTrustTierBackfill,
+				{ paginationCursor, limit }
+			);
+			isDone = batch.isDone;
+			paginationCursor = batch.continueCursor;
+
+			for (const u of batch.items) {
+				try {
+					const pid = await computePseudonymousId(u.tokenIdentifier);
+					const result: { patched: number } = await ctx.runMutation(
+						internal.submissions._patchTrustTierForPseudonymousId,
+						{ pseudonymousId: pid, trustTier: u.trustTier }
+					);
+					submissionsPatched += result.patched;
+					usersProcessed++;
+				} catch (err) {
+					console.error(`[backfillSubmissionTrustTier] Failed user ${u._id}:`, err);
+					failed++;
+				}
+			}
+		}
+
+		return { usersProcessed, submissionsPatched, failed };
+	}
+});
+
+/**
+ * Internal: paginated template list for aggregate backfill driver.
+ *
+ * Filters to templates with at least one verified send AND missing at least
+ * one of the new dimensional fields. Empty templates and already-backfilled
+ * templates are skipped.
+ */
+export const _listTemplatesForAggregateBackfill = internalQuery({
+	args: { paginationCursor: v.optional(v.string()), limit: v.number() },
+	handler: async (ctx, { paginationCursor, limit }) => {
+		const result = await ctx.db
+			.query('templates')
+			.paginate({ numItems: limit, cursor: (paginationCursor ?? null) as any });
+		return {
+			items: result.page
+				.filter((t) => (t.verifiedSends ?? 0) > 0)
+				.filter(
+					(t) =>
+						t.dailyArrivals === undefined ||
+						t.districtCounts === undefined ||
+						t.tierCounts === undefined
+				)
+				.map((t) => ({ _id: t._id, slug: t.slug })),
+			continueCursor: result.continueCursor,
+			isDone: result.isDone
+		};
+	}
+});
+
+/**
+ * Internal: derive dailyArrivals / districtCounts / tierCounts for one template
+ * from its verified submissions, and patch the template with the result.
+ *
+ * dailyArrivals is bucketed against a 30-day window ending at "today" (UTC).
+ * districtCounts is the full per-district histogram, capped at 500 (matches
+ * deliveredDistricts cap; read-time consumers truncate to top-N). tierCounts
+ * is a length-6 array indexed by trustTier 0-5.
+ */
+export const _backfillOneTemplate = internalMutation({
+	args: { slug: v.string() },
+	handler: async (ctx, { slug }) => {
+		const DAILY_WINDOW = 30;
+		const DISTRICT_CAP = 500;
+		const dayMs = 86400000;
+		const now = Date.now();
+		const today = Math.floor(now / dayMs) * dayMs;
+		const oldestDay = today - (DAILY_WINDOW - 1) * dayMs;
+
+		const template = await ctx.db
+			.query('templates')
+			.withIndex('by_slug', (q) => q.eq('slug', slug))
+			.first();
+		if (!template) return { patched: false };
+
+		const subs = await ctx.db
+			.query('submissions')
+			.withIndex('by_templateId', (q) => q.eq('templateId', template._id))
+			.collect();
+
+		const dailyArrivals: number[] = new Array(DAILY_WINDOW).fill(0);
+		const districtMap = new Map<string, number>();
+		const tierCounts: number[] = [0, 0, 0, 0, 0, 0];
+
+		for (const s of subs) {
+			if (s.verificationStatus !== 'verified') continue;
+			if (s.verifiedAt !== undefined) {
+				const day = Math.floor(s.verifiedAt / dayMs) * dayMs;
+				if (day >= oldestDay && day <= today) {
+					const dayIndex = Math.round((day - oldestDay) / dayMs);
+					if (dayIndex >= 0 && dayIndex < DAILY_WINDOW) {
+						dailyArrivals[dayIndex]++;
+					}
+				}
+			}
+			if (s.resolvedDistrict) {
+				districtMap.set(
+					s.resolvedDistrict,
+					(districtMap.get(s.resolvedDistrict) ?? 0) + 1
+				);
+			}
+			if (s.trustTier !== undefined && s.trustTier >= 0 && s.trustTier <= 5) {
+				tierCounts[s.trustTier]++;
+			}
+		}
+
+		const districtCounts = [...districtMap.entries()]
+			.sort((a, b) => b[1] - a[1])
+			.slice(0, DISTRICT_CAP)
+			.map(([code, count]) => ({ code, count }));
+
+		await ctx.db.patch(template._id, {
+			dailyArrivals,
+			dailyArrivalsLastDay: today,
+			districtCounts,
+			tierCounts
+		});
+
+		return { patched: true };
+	}
+});
+
+/**
+ * Backfill per-template dimensional aggregates on existing templates.
+ *
+ * Walks templates page-by-page, derives dailyArrivals / districtCounts /
+ * tierCounts from the template's verified submissions, and patches the
+ * template. tierCounts is meaningful only after `backfillSubmissionTrustTier`
+ * has run (otherwise all submissions have trustTier === undefined and
+ * tierCounts will all be zero).
+ */
+export const backfillTemplateAggregates = internalAction({
+	args: { batchSize: v.optional(v.number()) },
+	handler: async (ctx, { batchSize }): Promise<{ processed: number; failed: number }> => {
+		const limit = batchSize ?? 50;
+		let processed = 0;
+		let failed = 0;
+		let isDone = false;
+		let paginationCursor: string | undefined;
+
+		while (!isDone) {
+			const batch: { items: Array<{ _id: Id<'templates'>; slug: string }>; continueCursor: string; isDone: boolean } = await ctx.runQuery(
+				internal.submissions._listTemplatesForAggregateBackfill,
+				{ paginationCursor, limit }
+			);
+			isDone = batch.isDone;
+			paginationCursor = batch.continueCursor;
+
+			for (const t of batch.items) {
+				try {
+					await ctx.runMutation(internal.submissions._backfillOneTemplate, { slug: t.slug });
+					processed++;
+				} catch (err) {
+					console.error(`[backfillTemplateAggregates] Failed template ${t._id}:`, err);
+					failed++;
+				}
+			}
+		}
+
+		return { processed, failed };
 	}
 });

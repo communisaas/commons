@@ -70,22 +70,35 @@ const BOUNDARY_RATE_ALERT_THRESHOLD = 0.28;
  */
 const MIN_DENOMINATOR_FOR_ALERT = 50;
 
+/**
+ * Coverage-bias floor. The boundary-rate denominator excludes legacy rows
+ * (no `cellStraddles` field) per H0r honesty. Over time, if pre-H1 users
+ * never re-issue, the post-H1 fraction shrinks vs the total recent
+ * credentials, and the boundary rate becomes increasingly biased toward
+ * power users who DO re-issue. When the post-H1 fraction drops below
+ * this threshold, the alert fires once per cron tick to push operators
+ * to either backfill `cellStraddles` from a re-resolution sweep or accept
+ * the bias and document.
+ */
+const COVERAGE_FLOOR = 0.5;
+
 export const getBoundaryCellRate24h = internalQuery({
 	args: {},
 	handler: async (ctx) => {
 		const cutoff = Date.now() - TWENTY_FOUR_HOURS_MS;
 
-		// Full scan of districtCredentials. No index on issuedAt today; for
-		// pre-first-org volumes (<10K rows) the scan is sub-100ms. If volume
-		// grows, add `.index('by_issuedAt', ['issuedAt'])` to schema.ts and
-		// switch to `.withIndex('by_issuedAt', q => q.gte('issuedAt', cutoff))`.
-		const rows = await ctx.db.query('districtCredentials').collect();
-
+		// Range scan via `by_issuedAt` reads only credentials issued within
+		// the 24h window — bounded by window-rate, not table cardinality.
+		// Previous `.collect()` would hit Convex's row-scan cap somewhere
+		// between 5K-16K active credentials and throw silently in the
+		// hourly cron, killing the boundary alert precisely when there are
+		// enough users for boundary mistakes to matter.
 		let postH1Count = 0;
 		let boundaryCount = 0;
 		let totalRecent = 0;
-		for (const row of rows) {
-			if (row.issuedAt < cutoff) continue;
+		for await (const row of ctx.db
+			.query('districtCredentials')
+			.withIndex('by_issuedAt', (q) => q.gte('issuedAt', cutoff))) {
 			totalRecent++;
 			// H0r CRITICAL: only rows with cellStraddles defined contribute to
 			// the denominator. Legacy rows (undefined) are "unknown," not "no
@@ -124,6 +137,47 @@ export const monitorBoundaryCellRate = internalAction({
 			return { alerted: false, reason: 'insufficient_denominator', stats };
 		}
 
+		// Coverage-bias check — see COVERAGE_FLOOR rationale. Fires when
+		// post-H1 rows are < COVERAGE_FLOOR of total recent credentials,
+		// signaling the rate is becoming biased toward re-issuers. Sentry
+		// dedupes by code so persistent low-coverage doesn't spam.
+		if (stats.totalRecent > 0 && stats.postH1Count / stats.totalRecent < COVERAGE_FLOOR) {
+			const baseUrlCov = process.env.CONVEX_SITE_URL ?? '';
+			const internalSecretCov = process.env.INTERNAL_API_SECRET ?? '';
+			if (baseUrlCov && internalSecretCov) {
+				try {
+					await fetch(`${baseUrlCov}/api/internal/alert`, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+							'x-internal-secret': internalSecretCov,
+						},
+						body: JSON.stringify({
+							code: 'BOUNDARY_CELL_COVERAGE_LOW',
+							message: `Only ${stats.postH1Count}/${stats.totalRecent} (${((stats.postH1Count / stats.totalRecent) * 100).toFixed(1)}%) of recent credentials carry cellStraddles — boundary-rate denominator is biased toward re-issuers`,
+							severity: 'warning',
+							context: {
+								postH1Count: stats.postH1Count,
+								totalRecent: stats.totalRecent,
+								coverageFraction: stats.postH1Count / stats.totalRecent,
+								floor: COVERAGE_FLOOR,
+								periodMs: stats.periodMs,
+							},
+						}),
+						signal: AbortSignal.timeout(10_000),
+					});
+				} catch (err) {
+					console.error(
+						'[observability] coverage-low alert failed:',
+						err instanceof Error ? err.message : String(err),
+					);
+				}
+			}
+			// NOTE: continue past the coverage alert — rate alert below still
+			// fires on its own threshold so a high biased rate is at least
+			// surfaced even when the bias warning is also active.
+		}
+
 		// rate is non-null when postH1Count > 0; we just guarded that.
 		const rate = stats.rate as number;
 		if (rate <= BOUNDARY_RATE_ALERT_THRESHOLD) {
@@ -138,7 +192,7 @@ export const monitorBoundaryCellRate = internalAction({
 		// Threshold exceeded — emit Sentry alert via the existing
 		// /api/internal/alert endpoint. Pattern mirrors revocations.ts
 		// reconcileSMTRoot.
-		const baseUrl = process.env.CONVEX_SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? '';
+		const baseUrl = process.env.CONVEX_SITE_URL ?? '';
 		const internalSecret = process.env.INTERNAL_API_SECRET ?? '';
 		if (!baseUrl || !internalSecret) {
 			console.warn(
@@ -190,5 +244,61 @@ export const monitorBoundaryCellRate = internalAction({
 		}
 
 		return { alerted: true, stats };
+	},
+});
+
+/**
+ * Daily heartbeat to the alert pipe. Fires a known-OK Sentry event at a
+ * predictable cadence so operators can detect "the alert pipe itself is
+ * down" — when this stops arriving in Sentry for >24h+slack, an external
+ * monitor (Sentry's expected-interval feature, an UptimeRobot probe on
+ * the Sentry project, etc.) pages on-call independent of `/api/internal/
+ * alert`. Without this, the only liveness signal for the alerting path
+ * is the alerts themselves; a broken pipe stays silent until a real
+ * incident also fails to alert.
+ *
+ * Severity 'info' so it doesn't pollute the alert-counts dashboard but
+ * still creates a Sentry event with a fingerprintable code. Best-effort
+ * — alert-env missing falls back to a console line that operators
+ * monitoring the Convex log stream can still see.
+ */
+export const heartbeatAlertPipe = internalAction({
+	args: {},
+	handler: async (): Promise<{ ok: boolean; reason?: string }> => {
+		const baseUrl = process.env.CONVEX_SITE_URL ?? '';
+		const internalSecret = process.env.INTERNAL_API_SECRET ?? '';
+		if (!baseUrl || !internalSecret) {
+			console.warn(
+				'[observability] heartbeat: alert env missing; logged here but not emitted to Sentry',
+			);
+			return { ok: false, reason: 'missing_alert_env' };
+		}
+		try {
+			const res = await fetch(`${baseUrl}/api/internal/alert`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'x-internal-secret': internalSecret,
+				},
+				body: JSON.stringify({
+					code: 'HEARTBEAT_DAILY',
+					message: 'Daily alert-pipe heartbeat — if you see this, /api/internal/alert is reachable from Convex',
+					severity: 'warning',
+					context: { emittedAt: Date.now() },
+				}),
+				signal: AbortSignal.timeout(10_000),
+			});
+			if (!res.ok) {
+				console.error(`[observability] heartbeat: HTTP ${res.status}`);
+				return { ok: false, reason: 'http_error' };
+			}
+			return { ok: true };
+		} catch (err) {
+			console.error(
+				'[observability] heartbeat: fetch failed:',
+				err instanceof Error ? err.message : String(err),
+			);
+			return { ok: false, reason: 'fetch_failed' };
+		}
 	},
 });

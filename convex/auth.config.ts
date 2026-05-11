@@ -10,15 +10,17 @@
  *   → ctx.auth.getUserIdentity() returns { sub, email, name }
  */
 
+// Trailing slash is stripped on both `issuer` and JWKS URI to prevent
+// operator-typo drift between the SvelteKit minter and the Convex consumer.
+const ISSUER = (process.env.CONVEX_AUTH_ISSUER || "https://commons.email").replace(/\/$/, "");
+
 export default {
 	providers: [
 		{
 			type: "customJwt" as const,
 			applicationID: "convex",
-			issuer: process.env.CONVEX_AUTH_ISSUER || "https://commons.email",
-			jwks:
-				(process.env.CONVEX_AUTH_ISSUER || "https://commons.email") +
-				"/.well-known/jwks.json",
+			issuer: ISSUER,
+			jwks: ISSUER + "/.well-known/jwks.json",
 			algorithm: "RS256" as const,
 		},
 	],

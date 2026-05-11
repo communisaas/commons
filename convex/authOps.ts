@@ -15,6 +15,15 @@ import { requireAuth } from "./_authHelpers";
 import { toArrayBuffer } from "./_bufferSource";
 import type { Doc, Id } from "./_generated/dataModel";
 
+// Issuer prefix for `tokenIdentifier` (Convex's `<issuer>|<sub>` convention
+// for custom JWT providers). MUST match the SvelteKit JWT minter
+// (src/lib/server/convex-jwt.ts) and convex/auth.config.ts. Defaults to the
+// reference commons.email deployment; peer implementations override via the
+// CONVEX_AUTH_ISSUER env var (set in Convex dashboard).
+// Trailing slash is stripped to prevent operator-typo drift between this
+// stored prefix and the SvelteKit-minted JWT `iss` claim.
+const ISSUER_PREFIX = (process.env.CONVEX_AUTH_ISSUER || "https://commons.email").replace(/\/$/, "");
+
 type UpsertFromOAuthResult = {
   userId: Id<"users">;
   isNew: boolean;
@@ -127,7 +136,7 @@ export const upsertFromOAuth = mutation({
       if (existingUser0) {
         const patch: Record<string, unknown> = {};
         if (!existingUser0.tokenIdentifier) {
-          patch.tokenIdentifier = `https://commons.email|${existingAccount.userId}`;
+          patch.tokenIdentifier = `${ISSUER_PREFIX}|${existingAccount.userId}`;
         }
         if (!existingUser0.email && args.email) {
           patch.email = args.email;
@@ -169,7 +178,7 @@ export const upsertFromOAuth = mutation({
       // Backfill tokenIdentifier + plaintext email if missing
       const userPatch: Record<string, unknown> = {};
       if (!existingUser.tokenIdentifier) {
-        userPatch.tokenIdentifier = `https://commons.email|${existingUser._id}`;
+        userPatch.tokenIdentifier = `${ISSUER_PREFIX}|${existingUser._id}`;
       }
       if (!existingUser.email && args.email) {
         userPatch.email = args.email;
@@ -214,7 +223,7 @@ export const upsertFromOAuth = mutation({
     // Store tokenIdentifier so requireAuth() can resolve JWT identity → user.
     // Format matches Convex's `<issuer>|<sub>` convention for custom JWT providers.
     await db.patch(userId, {
-      tokenIdentifier: `https://commons.email|${userId}`,
+      tokenIdentifier: `${ISSUER_PREFIX}|${userId}`,
     });
 
     // Create linked account
@@ -258,20 +267,23 @@ export const createSession = mutation({
   }),
   handler: async (ctx: any, args): Promise<CreateSessionResult> => {
     const db = authOpsDb(ctx);
-    // Verify the caller knows SESSION_CREATION_SECRET
-    const secret = process.env.SESSION_CREATION_SECRET;
-    if (!secret) {
+    // Verify the caller knows SESSION_CREATION_SECRET. Dual-secret rotation:
+    // try the active secret first, then the optional previous (set during
+    // a rotation window). Web Crypto's subtle.verify is the constant-time
+    // primitive; iterating candidates does NOT leak which secret matched
+    // (every candidate runs to completion via verify; we simply OR the
+    // results).
+    const activeSecret = process.env.SESSION_CREATION_SECRET;
+    if (!activeSecret) {
       throw new Error("SESSION_CREATION_SECRET not configured");
     }
+    if (activeSecret.length < 32) {
+      throw new Error("SESSION_CREATION_SECRET must be >= 32 bytes");
+    }
+    const previousSecret = process.env.SESSION_CREATION_SECRET_PREVIOUS;
+    const candidates = previousSecret ? [activeSecret, previousSecret] : [activeSecret];
 
     const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["verify"]
-    );
 
     function hexToBytes(hex: string): Uint8Array {
       const bytes = new Uint8Array(hex.length / 2);
@@ -281,15 +293,27 @@ export const createSession = mutation({
       return bytes;
     }
 
-    // Proof is bound to userId + expiresAt to prevent replay
+    // Proof is bound to userId + expiresAt to prevent replay.
     const proofBytes = toArrayBuffer(hexToBytes(args.proof));
     const payloadBytes = toArrayBuffer(encoder.encode(`${args.userId}|${args.expiresAt}`));
-    const valid = await crypto.subtle.verify(
-      "HMAC",
-      key,
-      proofBytes,
-      payloadBytes
-    );
+
+    let valid = false;
+    for (const secret of candidates) {
+      const key = await crypto.subtle.importKey(
+        "raw",
+        encoder.encode(secret),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["verify"]
+      );
+      const candidateValid = await crypto.subtle.verify("HMAC", key, proofBytes, payloadBytes);
+      if (candidateValid) {
+        valid = true;
+        // Don't break early — keep timing comparable between rotation and
+        // single-secret operation. The cost is one extra subtle.verify
+        // when running with _PREVIOUS set, only during the rotation window.
+      }
+    }
 
     if (!valid) {
       throw new Error("Invalid session creation proof");
@@ -406,7 +430,7 @@ export const backfillTokenIdentifier = mutation({
     const user = userId ? await db.get(userId) : null;
     if (user && !user.tokenIdentifier) {
       await db.patch(user._id, {
-        tokenIdentifier: `https://commons.email|${user._id}`,
+        tokenIdentifier: `${ISSUER_PREFIX}|${user._id}`,
       });
     }
     return null;

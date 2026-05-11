@@ -8,11 +8,11 @@ import {
 import { internal } from "./_generated/api";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
-import { computeOrgScopedEmailHash } from "./_orgHash";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
-import { decryptWithOrgKey } from "./_orgKey";
+import { decryptOrgPii } from "./_orgKey";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -82,6 +82,27 @@ export const getBlast = query({
 });
 
 /**
+ * Editor-only blast lookup — returns just the (orgId, blastId) tuple after
+ * verifying the caller is an editor of the blast's owning org. Used by
+ * privileged endpoints that need to mint per-recipient artifacts on behalf
+ * of the blast (unsubscribe URLs, dispatch claims) where member-level
+ * access on `getBlast` would let lower-role users mint valid tokens that
+ * change supporter state. cure shipped.
+ */
+export const getBlastForEditor = query({
+  args: {
+    orgSlug: v.string(),
+    blastId: v.id("emailBlasts"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+    const blast = await ctx.db.get(args.blastId);
+    if (!blast || blast.orgId !== org._id) return null;
+    return { orgId: blast.orgId, blastId: blast._id };
+  },
+});
+
+/**
  * Get email events (opens, clicks, bounces) for a blast.
  */
 export const getBlastEvents = query({
@@ -118,6 +139,86 @@ export const getBlastEvents = query({
       numItems: Math.min(args.paginationOpts.numItems, 100),
       cursor: args.paginationOpts.cursor ?? null,
     });
+  },
+});
+
+/**
+ * Apply an unsubscribe by (blastId + plaintext email). Resolves the blast to
+ * org, hashes the email under the org's namespace, looks up the supporter,
+ * patches `emailStatus`. Internal-only — called from the SvelteKit
+ * `/unsubscribe` form action; the email is supplied by the recipient. This
+ * is the per-blast form-based unsubscribe fallback. Full-compliance handling
+ * (per-recipient HMAC token in body + List-Unsubscribe header) requires
+ * Lambda-side per-recipient SendEmail and lands separately.
+ */
+export const applyUnsubscribeByBlastEmail = internalMutation({
+  args: {
+    blastId: v.id("emailBlasts"),
+    email: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { computeOrgScopedEmailHash } = await import("./_orgHash");
+    const blast = await ctx.db.get(args.blastId);
+    if (!blast) {
+      return { applied: false, reason: "blast-not-found" as const };
+    }
+    const emailHash = await computeOrgScopedEmailHash(blast.orgId, args.email);
+    const supporter = await ctx.db
+      .query("supporters")
+      .withIndex("by_orgId_emailHash", (idx) =>
+        idx.eq("orgId", blast.orgId).eq("emailHash", emailHash),
+      )
+      .first();
+    if (!supporter) {
+      // Don't reveal whether the address is on file — the form succeeds
+      // either way to avoid being a probe oracle.
+      return { applied: false, reason: "not-on-list" as const };
+    }
+    if (
+      supporter.emailStatus === "unsubscribed" ||
+      supporter.emailStatus === "complained"
+    ) {
+      return { applied: true, reason: "already-unsubscribed" as const };
+    }
+    await ctx.db.patch(supporter._id, {
+      emailStatus: "unsubscribed",
+      updatedAt: Date.now(),
+    });
+    return { applied: true, reason: "ok" as const };
+  },
+});
+
+/**
+ * Public org-scoped read for per-recipient send receipts. emailEvents records
+ * post-delivery activity (open/click/bounce/complaint); this returns the
+ * underlying delivery receipts — what was attempted, with which SES messageId,
+ * and the immediate outcome.
+ */
+export const listReceiptsForBlast = query({
+  args: {
+    orgSlug: v.string(),
+    blastId: v.id("emailBlasts"),
+    paginationOpts: v.object({
+      numItems: v.number(),
+      cursor: v.union(v.string(), v.null()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+
+    const blast = await ctx.db.get(args.blastId);
+    if (!blast || blast.orgId !== org._id) {
+      throw new Error("Blast not found in this organization");
+    }
+
+    return await ctx.db
+      .query("emailDeliveryReceipts")
+      .withIndex("by_blastId", (qb) => qb.eq("blastId", args.blastId))
+      .order("desc")
+      .paginate({
+        numItems: Math.min(args.paginationOpts.numItems, 100),
+        cursor: args.paginationOpts.cursor ?? null,
+      });
   },
 });
 
@@ -211,51 +312,6 @@ export const updateBlast = mutation({
   },
 });
 
-/**
- * Record an email event (open, click, bounce, complaint) from webhook.
- * Internal-only: called from webhook processing, not exposed to clients.
- */
-export const recordEmailEvent = internalMutation({
-  args: {
-    blastId: v.id("emailBlasts"),
-    recipientEmail: v.string(),
-    eventType: v.string(),
-    linkUrl: v.optional(v.string()),
-    linkIndex: v.optional(v.number()),
-    timestamp: v.number(),
-  },
-  handler: async (ctx, args) => {
-    // Org-scoped email hash for dedup — no server-held key
-    const blast = await ctx.db.get(args.blastId);
-    const orgId = blast?.orgId ? String(blast.orgId) : "";
-    const recipientEmailHash = orgId
-      ? await computeOrgScopedEmailHash(orgId, args.recipientEmail)
-      : undefined;
-
-    await ctx.db.insert("emailEvents", {
-      blastId: args.blastId,
-      recipientEmailHash,
-      eventType: args.eventType,
-      linkUrl: args.linkUrl,
-      linkIndex: args.linkIndex,
-      timestamp: args.timestamp,
-    });
-
-    // Update aggregate counters on the blast (re-fetch for latest counters)
-    const blastForCounters = await ctx.db.get(args.blastId);
-    if (blastForCounters) {
-      const patch: Record<string, unknown> = {};
-      if (args.eventType === "open") patch.totalOpened = (blastForCounters.totalOpened || 0) + 1;
-      if (args.eventType === "click") patch.totalClicked = (blastForCounters.totalClicked || 0) + 1;
-      if (args.eventType === "bounce") patch.totalBounced = (blastForCounters.totalBounced || 0) + 1;
-      if (args.eventType === "complaint") patch.totalComplained = (blastForCounters.totalComplained || 0) + 1;
-
-      if (Object.keys(patch).length > 0) {
-        await ctx.db.patch(args.blastId, patch);
-      }
-    }
-  },
-});
 
 // =============================================================================
 // INTERNAL: Batch send helpers
@@ -299,12 +355,12 @@ export const updateBlastStatus = internalMutation({
     if (args.status === "sent" && blast.status !== "sent" && blast.orgId) {
       const org = await ctx.db.get(blast.orgId);
       if (org) {
-        const currentCount = (org as any).sentEmailCount ?? 0;
+        const currentCount = org.sentEmailCount ?? 0;
         const blastSent = args.totalSent ?? blast.totalSent ?? 0;
         await ctx.db.patch(blast.orgId, {
           sentEmailCount: currentCount + blastSent,
           updatedAt: Date.now(),
-        } as any);
+        });
       }
     }
   },
@@ -318,17 +374,78 @@ export const getBlastRecipients = internalQuery({
     orgId: v.id("organizations"),
     limit: v.number(),
     cursor: v.optional(v.string()),
+    blastId: v.optional(v.id("emailBlasts")),
   },
   handler: async (ctx, args) => {
-    // Fetch subscribed supporters for this org
+    // Server-side mirror of the blast recipientFilter shape validation.
+    // When a blastId is supplied, the persisted recipientFilter is
+    // enforced here at recipient-load. Without blastId the entire
+    // subscribed cohort returns — matches legacy caller behavior so
+    // wiring this in does not regress them.
+    //
+    // An unchecked `as typeof filter` cast lets a malformed write (e.g.
+    // `tagIds: "abc"` instead of `["abc"]`) propagate: (a) `.length > 1`
+    // becomes a string-length comparison, bypassing the multi-tag guard;
+    // (b) `[0]` returns `'a'` which poisons the tagId lookup → throw →
+    // every dispatch on the blast is permanently broken until DB
+    // surgery. The shape check below must match the equivalent guard in
+    // `blasts.ts` — this is the server-driven send path's mirror.
+    let filter: {
+      tagIds?: string[];
+      verified?: "any" | "verified" | "unverified";
+    } = {};
+    if (args.blastId) {
+      const blast = await ctx.db.get(args.blastId);
+      if (!blast || blast.orgId !== args.orgId) {
+        throw new Error("Blast not found in this organization");
+      }
+      const raw = blast.recipientFilter as unknown;
+      if (raw && typeof raw === "object") {
+        const candidate = raw as Record<string, unknown>;
+        const safeFilter: typeof filter = {};
+        if (
+          Array.isArray(candidate.tagIds) &&
+          candidate.tagIds.every((t) => typeof t === "string" && t.length > 0 && t.length <= 64)
+        ) {
+          safeFilter.tagIds = candidate.tagIds as string[];
+        }
+        if (
+          candidate.verified === "any" ||
+          candidate.verified === "verified" ||
+          candidate.verified === "unverified"
+        ) {
+          safeFilter.verified = candidate.verified;
+        }
+        filter = safeFilter;
+      }
+    }
+    if (filter.tagIds && filter.tagIds.length > 1) {
+      throw new Error(
+        "Multi-tag recipient filtering is not yet supported — split into separate blasts per tag",
+      );
+    }
+
     const results = await ctx.db
       .query("supporters")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
       .order("asc")
       .take(args.limit + 1);
 
-    // Filter for subscribed email status
-    const subscribed = results.filter((s) => s.emailStatus === "subscribed");
+    let subscribed = results.filter((s) => s.emailStatus === "subscribed");
+    if (filter.verified === "verified") {
+      subscribed = subscribed.filter((s) => s.verified === true);
+    } else if (filter.verified === "unverified") {
+      subscribed = subscribed.filter((s) => s.verified === false);
+    }
+    if (filter.tagIds?.[0]) {
+      const tagId = filter.tagIds[0] as Id<"tags">;
+      const tagLinks = await ctx.db
+        .query("supporterTags")
+        .withIndex("by_tagId", (idx) => idx.eq("tagId", tagId))
+        .collect();
+      const supporterIds = new Set(tagLinks.map((t) => t.supporterId));
+      subscribed = subscribed.filter((s) => supporterIds.has(s._id));
+    }
 
     return subscribed;
   },
@@ -381,10 +498,12 @@ export const sendBlast = internalAction({
     });
     if (!blast) throw new Error("Blast not found");
 
-    // Get recipients to count them
+    // Get recipients to count them — pass blastId so the persisted
+    // recipientFilter is enforced at load  (cured).
     const recipients = await ctx.runQuery(getBlastRecipientsRef, {
       orgId: blast.orgId,
       limit: 10000,
+      blastId: args.blastId,
     });
 
     await ctx.runMutation(updateBlastStatusRef, {
@@ -452,10 +571,13 @@ export const sendBlastBatch = internalAction({
     }
 
     try {
-      // Get all recipients (bounded by getBlastRecipients limit)
+      // Get all recipients (bounded by getBlastRecipients limit) — pass
+      // blastId so the persisted recipientFilter is enforced at load
+      //  (cured).
       const allRecipients = await ctx.runQuery(getBlastRecipientsRef, {
         orgId: blast.orgId,
         limit: 10000,
+        blastId: args.blastId,
       });
 
       const batch = allRecipients.slice(args.offset, args.offset + BATCH_SIZE);
@@ -479,7 +601,17 @@ export const sendBlastBatch = internalAction({
       for (const recipient of batch) {
         try {
           const parsed = JSON.parse(recipient.encryptedEmail);
-          const email = await decryptWithOrgKey(parsed, orgKey, `supporter:${recipient._id}`, "email");
+          // Version-aware decrypt dispatch (v=org-1 legacy AAD vs
+          // v=org-2 emailHash AAD from the single-phase writes). The
+          // recipient row carries the emailHash so the dispatcher can
+          // route either way.
+          const email = await decryptOrgPii(
+            parsed,
+            orgKey,
+            recipient.emailHash,
+            `supporter:${recipient._id}`,
+            "email",
+          );
           const success = await sendViaSes(
             email,
             blast.fromEmail,
@@ -646,6 +778,10 @@ async function sendViaSes(
   const authHeader = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
   try {
+    // 30s SES timeout — typical SendEmail responds in <1s; a hung fetch here
+    // burns Convex action budget per stuck request. SES throttling/5xx
+    // surfaces as `response.ok === false`; transport hangs surface as the
+    // catch below returning `false`.
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -654,10 +790,28 @@ async function sendViaSes(
         Authorization: authHeader,
       },
       body,
+      signal: AbortSignal.timeout(30_000),
     });
 
+    if (!response.ok) {
+      // Structured logging on SES failure so operators can distinguish
+      // throttling (429), credential rejection (403), 5xx, and address
+      // rejection (400) — bare boolean masks all of these. PII guard:
+      // log the response status + truncated AWS error type/code, never
+      // the recipient address.
+      const errBody = await response.text().catch(() => '');
+      const truncated = errBody.slice(0, 300);
+      console.warn(
+        `[sendViaSes] SES rejected: status=${response.status} body=${truncated}`,
+      );
+    }
     return response.ok;
-  } catch {
+  } catch (err) {
+    // Transport failure (timeout, DNS, network) — distinct from SES-rejected.
+    // Same PII guard.
+    console.warn(
+      `[sendViaSes] transport error: ${err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)}`,
+    );
     return false;
   }
 }

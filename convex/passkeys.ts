@@ -29,24 +29,38 @@ function rawBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 async function verifyServerProof(parts: Array<string | number>, proof: string): Promise<void> {
-	const secret = process.env.SESSION_CREATION_SECRET;
-	if (!secret) throw new Error('SESSION_CREATION_SECRET not configured');
+	// Dual-secret rotation support — try active first, then optional
+	// _PREVIOUS so passkey login keeps working through a SESSION_CREATION_SECRET
+	// rotation. Mirrors authOps.createSession's verify path. SvelteKit signs
+	// only with the active secret; verify accepts either.
+	const activeSecret = process.env.SESSION_CREATION_SECRET;
+	if (!activeSecret) throw new Error('SESSION_CREATION_SECRET not configured');
+	if (activeSecret.length < 32) {
+		throw new Error('SESSION_CREATION_SECRET must be >= 32 bytes');
+	}
+	const previousSecret = process.env.SESSION_CREATION_SECRET_PREVIOUS;
+	const candidates = previousSecret ? [activeSecret, previousSecret] : [activeSecret];
 
 	const encoder = new TextEncoder();
-	const key = await crypto.subtle.importKey(
-		'raw',
-		rawBuffer(encoder.encode(secret)),
-		{ name: 'HMAC', hash: 'SHA-256' },
-		false,
-		['verify']
-	);
+	const proofBytes = rawBuffer(hexToBytes(proof));
+	const messageBytes = rawBuffer(encoder.encode(proofMessage(parts)));
 
-	const valid = await crypto.subtle.verify(
-		'HMAC',
-		key,
-		rawBuffer(hexToBytes(proof)),
-		rawBuffer(encoder.encode(proofMessage(parts)))
-	);
+	let valid = false;
+	for (const secret of candidates) {
+		const key = await crypto.subtle.importKey(
+			'raw',
+			rawBuffer(encoder.encode(secret)),
+			{ name: 'HMAC', hash: 'SHA-256' },
+			false,
+			['verify']
+		);
+		const candidateValid = await crypto.subtle.verify('HMAC', key, proofBytes, messageBytes);
+		if (candidateValid) {
+			valid = true;
+			// Don't break early — keep timing comparable between rotation
+			// and single-secret modes.
+		}
+	}
 	if (!valid) throw new Error('PASSKEY_INVALID_PROOF');
 }
 

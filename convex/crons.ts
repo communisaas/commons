@@ -65,11 +65,13 @@ crons.weekly(
 
 // ---------------------------------------------------------------------------
 // 5. Cleanup Expired Witnesses — NULL out PII from expired submissions
-//    Original: daily 01:00 UTC
+//    01:11 UTC (off :00 to avoid colliding with workflow-scheduler /
+//    process-scheduled-blasts / process-bounces / sweep-stuck-processing
+//    minute-cadence crons that align on :00).
 // ---------------------------------------------------------------------------
 crons.daily(
   "cleanup-witness",
-  { hourUTC: 1, minuteUTC: 0 },
+  { hourUTC: 1, minuteUTC: 11 },
   internal.submissions.cleanupExpiredWitnesses,
 );
 
@@ -155,11 +157,13 @@ crons.interval(
 
 // ---------------------------------------------------------------------------
 // 13. Cleanup Stale Sealed Keys — clear sealedOrgKey on stuck blasts (24h TTL)
-//     Runs every 1 hour.
+//     Hourly at :07 to stagger off the :00 storm with daily 01:00 crons +
+//     other hourly crons (interval-anchored crons can converge on :00 if
+//     deployed at the same minute).
 // ---------------------------------------------------------------------------
-crons.interval(
+crons.hourly(
   "cleanup-sealed-keys",
-  { hours: 1 },
+  { minuteUTC: 7 },
   internal.blastCleanup.cleanupStaleSealedKeys,
 );
 
@@ -168,8 +172,11 @@ crons.interval(
 //     A worker that claimed a submission (deliveryStatus='processing') but died
 //     mid-flight leaves the submission unrecoverable — claimForDelivery refuses
 //     to re-claim a processing row. Every 2 minutes, revert rows that have been
-//     stuck in 'processing' for >5 minutes back to 'failed' so the next claim
-//     can retry.
+//     stuck in 'processing' for >15 minutes back to 'failed' so the next claim
+//     can retry. The threshold is implemented as STUCK_THRESHOLD_MS in
+//     `submissions.ts:sweepStuckProcessing` (15 min, not 5 — exceeds the
+//     /anchor-proof default 10-min execution budget so a slow-but-live worker
+//     isn't racially classified as stuck).
 // ---------------------------------------------------------------------------
 crons.interval(
   "sweep-stuck-processing",
@@ -202,16 +209,16 @@ crons.interval(
 );
 
 // ---------------------------------------------------------------------------
-// 17. Reconcile Revocation SMT Root — Wave 2 (KG-2 closure).
+// 17. Reconcile Revocation SMT Root — (KG-2 closure).
 //     Compares Convex's smtRoots.root against the on-chain RevocationRegistry
 //     currentRoot. Drift indicates either (a) on-chain emit failed silently
 //     after Convex committed, (b) operator wrote a divergent root through a
 //     different path, or (c) the precomputed EMPTY_TREE_ROOT in the contract
 //     constructor disagrees with our computed value. Every 1 hour.
 // ---------------------------------------------------------------------------
-crons.interval(
+crons.hourly(
   "reconcile-revocation-smt-root",
-  { hours: 1 },
+  { minuteUTC: 13 },
   internal.revocations.reconcileSMTRoot,
 );
 
@@ -219,9 +226,9 @@ crons.interval(
 // 18. Cleanup Message Generation Jobs — removes encrypted recovery envelopes
 //     after their short retention window.
 // ---------------------------------------------------------------------------
-crons.interval(
+crons.hourly(
   "cleanup-message-generation-jobs",
-  { hours: 1 },
+  { minuteUTC: 21 },
   internal.messageJobs.cleanupExpired,
 );
 
@@ -231,10 +238,55 @@ crons.interval(
 //     emits a Sentry alert when the rate exceeds the threshold. H1 stored
 //     the cellStraddles field; I2 is what makes the field actionable.
 // ---------------------------------------------------------------------------
-crons.interval(
+crons.hourly(
   "monitor-boundary-cell-rate",
-  { hours: 1 },
+  { minuteUTC: 47 },
   internal.observability.monitorBoundaryCellRate,
+);
+
+// ---------------------------------------------------------------------------
+// 20. Alert-pipe heartbeat — fires a known-OK Sentry event daily so an
+//     external monitor (Sentry's expected-interval, UptimeRobot, etc.) can
+//     detect "the alert pipe itself is down" independent of /api/internal/
+//     alert. Without this, a broken pipe stays silent until a real incident
+//     also fails to alert. 12:23 UTC chosen for stagger.
+// ---------------------------------------------------------------------------
+crons.daily(
+  "alert-pipe-heartbeat",
+  { hourUTC: 12, minuteUTC: 23 },
+  internal.observability.heartbeatAlertPipe,
+);
+
+// ---------------------------------------------------------------------------
+// 21. Sweep stranded placeholder supporters — recover from crashed
+//     submitAction/importWithEncryption invocations that inserted a row with
+//     `encryptedEmail: ""` but never landed the follow-up patchEncryptedPii
+//     ciphertext. Deletes rows >15 min old still in the placeholder state.
+//     Bounds the PII-triple invariant violation to "one lost
+//     submission" instead of "permanent zombie row". Every 30 minutes,
+//     staggered to :17 so it's well off the :00 storm.
+// ---------------------------------------------------------------------------
+crons.cron(
+  "sweep-stranded-placeholders",
+  "17,47 * * * *",
+  internal.supporters.sweepStrandedPlaceholders,
+);
+
+// ---------------------------------------------------------------------------
+// 22. Sweep stranded donation placeholders — recover from crashed
+//     processCheckout invocations that inserted a donation row with
+//     `encryptedEmail: ""` but never landed the follow-up
+//     `patchEncryptedPii`. Parallels the supporters sweep + cross-tick
+//     checkpoint pattern. Donation-specific: rows in `completed`/`refunded`
+//     status are PRESERVED (money moved, audit trail must survive).
+//     Threshold 30 min — Stripe sessions expire after 24 h so a
+//     30-min-old pending row that never patched is genuinely stranded.
+//     Runs at :23/:53 (staggered off supporters sweep).
+// ---------------------------------------------------------------------------
+crons.cron(
+  "sweep-stranded-donations",
+  "23,53 * * * *",
+  internal.donations.sweepStrandedDonations,
 );
 
 export default crons;

@@ -11,6 +11,7 @@ import { internal } from './_generated/api';
 import { requireAuth } from './_authHelpers';
 import { selectActiveCredentialForUser } from './_credentialSelect';
 import { applyDowngradeGuard } from './_downgradeGuard';
+import { upsertExternalId } from './_externalIds';
 
 // =============================================================================
 // USERS — Queries & Mutations
@@ -699,7 +700,7 @@ export const verifyAddress = mutation({
 		// localized to a buggy client rather than propagating to a persistent
 		// server-side downgrade. Server-side commitment recomputation from the
 		// verified coordinates would close this remaining gap, but requires
-		// server access to the H3 cell data and is out of scope for Wave 1.
+		// server access to the H3 cell data and is out of scope for step.
 		//
 		// Ordering: runs BEFORE the throttle check. A rejected attempt does NOT
 		// increment the 24h throttle counter — the user can retry immediately
@@ -889,11 +890,7 @@ export const verifyAddress = mutation({
 						lastSyncedAt: now,
 						updatedAt: now
 					});
-					await ctx.db.insert('externalIds', {
-						decisionMakerId: dmId,
-						system: 'bioguide',
-						value: official.bioguideId
-					});
+					await upsertExternalId(ctx, dmId, 'bioguide', official.bioguideId);
 				}
 
 				const existingRel = await ctx.db
@@ -1250,13 +1247,31 @@ export const createCommunityFieldContribution = mutation({
 // =============================================================================
 
 /**
- * Count all shadow atlas registrations.
+ * Count all shadow atlas registrations. Uses a paginated walk so growth past
+ * Convex's per-query row-scan cap (~16K) doesn't throw — admin reconcile
+ * uses this for sanity comparisons and must not break at scale.
+ *
+ * If counts get expensive enough to matter (>5min runtime at 1M+ rows), the
+ * cure is to maintain a denormalized counter document; for now, walking is
+ * cheaper than the migration risk of introducing a counter.
  */
 export const countRegistrations = query({
 	args: {},
 	handler: async (ctx) => {
-		const regs = await ctx.db.query('shadowAtlasRegistrations').collect();
-		return regs.length;
+		let count = 0;
+		let cursor: string | null = null;
+		// 1024-row page size; loop until isDone. Each page is well under the
+		// per-query cap and accumulates a single integer counter, not row data.
+		while (true) {
+			const page: { page: unknown[]; isDone: boolean; continueCursor: string } =
+				await ctx.db
+					.query('shadowAtlasRegistrations')
+					.paginate({ numItems: 1024, cursor });
+			count += page.page.length;
+			if (page.isDone) break;
+			cursor = page.continueCursor;
+		}
+		return count;
 	}
 });
 
@@ -1335,7 +1350,7 @@ export const bindIdentityCommitment = mutation({
 
 export const upsertRegistration = mutation({
 	args: {
-		userId: v.string(),
+		userId: v.id('users'),
 		identityCommitment: v.string(),
 		leafIndex: v.number(),
 		merkleRoot: v.string(),
@@ -1346,10 +1361,10 @@ export const upsertRegistration = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { userId: authUserId } = await requireAuth(ctx);
-		if (args.userId !== (authUserId as string)) throw new Error('Unauthorized');
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
 		const existing = await ctx.db
 			.query('shadowAtlasRegistrations')
-			.withIndex('by_userId', (q) => q.eq('userId', args.userId as any))
+			.withIndex('by_userId', (q) => q.eq('userId', args.userId))
 			.first();
 
 		if (args.isReplace && existing) {
@@ -1370,7 +1385,7 @@ export const upsertRegistration = mutation({
 			});
 		} else {
 			await ctx.db.insert('shadowAtlasRegistrations', {
-				userId: args.userId as any,
+				userId: args.userId,
 				congressionalDistrict: 'three-tree',
 				identityCommitment: args.identityCommitment,
 				leafIndex: args.leafIndex,
@@ -1478,6 +1493,44 @@ export const updateRevocationState = internalMutation({
 });
 
 /**
+ * Atomic claim CAS for `emitOnChainRevocation`. Without this CAS, a
+ * status-only filter (status ∈ {confirmed, failed}) lets two concurrent
+ * invocations (cron re-fire racing a `verifyAddressInternal`-scheduled
+ * emit, etc.) both pass the filter, both read `revocationAttempts`,
+ * both increment (last-write-wins → counter loses a tick), both POST to
+ * the relayer (gas burn + duplicate emit), and the terminal-write race
+ * could leave the row in a non-deterministic confirmed/failed state.
+ *
+ * The claim is CAS-style: status MUST be 'pending' AND the read-modify-
+ * write of `revocationAttempts` happens INSIDE the mutation (Convex
+ * mutations are serializable, so only one invocation's claim succeeds).
+ * The handler still patches `revocationStatus` back to 'pending' for the
+ * retry pattern, but the increment-once invariant holds.
+ */
+export const claimEmitRevocation = internalMutation({
+	args: { credentialId: v.id('districtCredentials') },
+	handler: async (
+		ctx,
+		{ credentialId }
+	): Promise<{ ok: boolean; reason?: string; attempts?: number }> => {
+		const credential = await ctx.db.get(credentialId);
+		if (!credential) return { ok: false, reason: 'not_found' };
+		if (credential.revocationStatus !== 'pending') {
+			return { ok: false, reason: `wrong_status:${credential.revocationStatus ?? 'unset'}` };
+		}
+		if (!credential.districtCommitment) {
+			return { ok: false, reason: 'no_district_commitment' };
+		}
+		const attempts = (credential.revocationAttempts ?? 0) + 1;
+		await ctx.db.patch(credentialId, {
+			revocationAttempts: attempts,
+			revocationLastAttemptAt: Date.now()
+		});
+		return { ok: true, attempts };
+	}
+});
+
+/**
  * Internal action: submit a single credential's revocation nullifier to the
  * on-chain RevocationRegistry via the operator-funded relayer endpoint.
  *
@@ -1496,41 +1549,52 @@ export const updateRevocationState = internalMutation({
 export const emitOnChainRevocation = internalAction({
 	args: { credentialId: v.id('districtCredentials') },
 	handler: async (ctx, { credentialId }) => {
-		const credential = await ctx.runQuery(internal.users.getCredentialForRevocation, {
-			credentialId
-		});
-		if (!credential) return;
-		if (credential.revocationStatus === 'confirmed' || credential.revocationStatus === 'failed') {
-			return;
-		}
-		if (!credential.districtCommitment) {
-			// Cannot derive revocation_nullifier without a commitment. Mark failed
-			// so ops can audit; server-layer gate is still in effect.
-			await ctx.runMutation(internal.users.updateRevocationState, {
-				credentialId,
-				revocationStatus: 'failed',
-				revocationLastAttemptAt: Date.now()
-			});
-			return;
-		}
-
+		// Env-check first — don't burn a claim attempt on env
+		// misconfiguration. The claim flow is cleaner with the env gate
+		// ahead of the claim mutation.
 		const internalUrl = process.env.COMMONS_INTERNAL_URL;
 		const internalSecret = process.env.INTERNAL_API_SECRET;
 		if (!internalUrl || !internalSecret) {
 			console.error(
 				`[emitOnChainRevocation] Missing COMMONS_INTERNAL_URL or INTERNAL_API_SECRET — credential=${credentialId} stays pending`
 			);
-			// Do not advance attempts; this is an env misconfiguration, not a
-			// failure we want to retry-limit.
 			return;
 		}
 
-		const attempts = (credential.revocationAttempts ?? 0) + 1;
-		await ctx.runMutation(internal.users.updateRevocationState, {
-			credentialId,
-			revocationAttempts: attempts,
-			revocationLastAttemptAt: Date.now()
+		// Atomic claim CAS. Without it, concurrent invocations (cron
+		// re-fire racing a `verifyAddressInternal`-scheduled emit) both
+		// pass the status filter, both increment attempts (last-write-
+		// wins), both POST to the relayer → gas burn + duplicate
+		// revocation emit + non-deterministic terminal state. With the
+		// CAS only one invocation gets `{ok:true}`; the other returns
+		// early. Mirrors `submissions.claimForAnchor` +
+		// `blasts.claimForBlastDispatch` + `workflows.claimExecution`.
+		const claim: { ok: boolean; reason?: string; attempts?: number } = await ctx.runMutation(
+			internal.users.claimEmitRevocation,
+			{ credentialId }
+		);
+		if (!claim.ok) {
+			// reason cases: not_found, wrong_status, no_district_commitment.
+			// `no_district_commitment` is the case that previously marked
+			// the row as failed; do that here so ops audit still works.
+			if (claim.reason === 'no_district_commitment') {
+				await ctx.runMutation(internal.users.updateRevocationState, {
+					credentialId,
+					revocationStatus: 'failed',
+					revocationLastAttemptAt: Date.now()
+				});
+			}
+			return;
+		}
+		const attempts = claim.attempts ?? 1;
+
+		// Re-fetch credential AFTER claim — we need districtCommitment +
+		// other fields for the relayer payload, and the claim's atomic
+		// increment guarantees this read sees post-claim state.
+		const credential = await ctx.runQuery(internal.users.getCredentialForRevocation, {
+			credentialId
 		});
+		if (!credential) return;
 
 		try {
 			const response = await fetch(`${internalUrl}/api/internal/emit-revocation`, {

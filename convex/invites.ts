@@ -7,7 +7,7 @@
  *   - Server never sees plaintext email — only emailHash + encryptedEmail
  */
 
-import { query, mutation, action, internalMutation } from "./_generated/server";
+import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
@@ -46,6 +46,13 @@ const insertInvitesRef = makeFunctionReference<"mutation">("invites:insertInvite
   "internal",
   { slug: string; invites: PreparedInviteForInsert[] },
   InsertInvitesResult
+>;
+
+const requireCreateInvitesAuthRef = makeFunctionReference<"query">("invites:requireCreateInvitesAuth") as unknown as FunctionReference<
+  "query",
+  "internal",
+  { slug: string },
+  { ok: true }
 >;
 const resendInviteRef = makeFunctionReference<"mutation">("invites:resendInvite") as unknown as FunctionReference<
   "mutation",
@@ -165,6 +172,25 @@ export const create = action({
       throw new Error("Maximum 20 invites at once");
     }
 
+    // Explicit editor-role gate at the action's top, BEFORE the 20×
+    // token generation + hash work. The inner `insertInvites` mutation
+    // also does `requireOrgRole(slug, "editor")` — defense in depth.
+    // Mirrors the same explicit-gate pattern on the segments and
+    // supporters action surfaces. If a 4th site adopts this pattern,
+    // extract a shared per-module helper.
+    await ctx.runQuery(requireCreateInvitesAuthRef, { slug: args.slug });
+
+    // action-boundary length caps. encryptedEmail is base64+IV+
+    // ciphertext for a ≤254-byte email — 512 covers it. emailHash is SHA-256 hex (64).
+    if (args.slug.length > 64) throw new Error("SLUG_TOO_LARGE");
+    for (const inv of args.invites) {
+      if (inv.emailHash.length > 128) throw new Error("EMAIL_HASH_TOO_LARGE");
+      if (inv.encryptedEmail.length > 512) throw new Error("ENCRYPTED_EMAIL_TOO_LARGE");
+      if (inv.role !== undefined && inv.role.length > 32) {
+        throw new Error("ROLE_TOO_LARGE");
+      }
+    }
+
     const validRoles = ["editor", "member"];
     const cleaned = args.invites
       .map((inv) => ({
@@ -238,6 +264,17 @@ export const resend = action({
   handler: async (ctx, args): Promise<ResendInviteResult> => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
+
+    // action-boundary length caps.
+    if (args.slug.length > 64) throw new Error("SLUG_TOO_LARGE");
+    if (args.inviteId.length > 64) throw new Error("INVITE_ID_TOO_LARGE");
+
+    // Explicit editor-role gate at the action's top, BEFORE the token
+    // generation + hash work. Same fragility shape as `invites.create`
+    // — the inner `resendInvite` mutation also enforces the role, but
+    // only after the action has done CPU work. Reuses
+    // `requireCreateInvitesAuth` — same semantics (editor role on slug).
+    await ctx.runQuery(requireCreateInvitesAuthRef, { slug: args.slug });
 
     const token = generateToken();
     const tokenH = await hashInviteToken(token);
@@ -419,6 +456,20 @@ export const accept = mutation({
  * won't match org-scoped SHA-256 hashes. Will be fixed when member emailHash
  * is migrated to org-scoped format.
  */
+/**
+ * Explicit auth+editor-role gate for the `create` action. Called BEFORE
+ * token generation + hashing so a non-member can't amplify CPU via the
+ * public action surface. The inner `insertInvites` mutation also
+ * enforces the same gate — belt-and-suspenders.
+ */
+export const requireCreateInvitesAuth = internalQuery({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }): Promise<{ ok: true }> => {
+    await requireOrgRole(ctx, slug, "editor");
+    return { ok: true };
+  },
+});
+
 export const insertInvites = internalMutation({
   args: {
     slug: v.string(),

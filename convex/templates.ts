@@ -237,7 +237,7 @@ export const listPublic = query({
         title: template.title,
         description: template.description,
         domain: resolveDomain(template),
-        domainHue: (template as any).domainHue ?? undefined,
+        domainHue: template.domainHue ?? undefined,
         topics: template.topics ?? [],
         type: template.type,
         deliveryMethod: template.deliveryMethod,
@@ -253,6 +253,19 @@ export const listPublic = query({
         verified_sends: template.verifiedSends,
         unique_districts: template.uniqueDistricts,
         send_count: template.verifiedSends,
+        daily_arrivals: template.dailyArrivals ?? [],
+        // K-anon at trust boundary: filter districts with count < 5 out of
+        // the public payload, zero tier counts below the same threshold.
+        // Consumers still see the visible-shape but not the thin-cohort
+        // contributions. earlier hero work applied this; the per-template path
+        // mirrors it so all consumers (org pages, share cards, public API,
+        // future surfaces) inherit the floor without re-implementing.
+        district_counts: (template.districtCounts ?? []).filter(
+          (d: { code: string; count: number }) => d.count >= 5,
+        ),
+        tier_counts: (template.tierCounts ?? []).map((c: number) =>
+          c < 5 ? 0 : c,
+        ),
         delivery_config: template.deliveryConfig,
         cwc_config: template.cwcConfig ?? null,
         recipient_config: template.recipientConfig,
@@ -324,15 +337,28 @@ export const getBySlugPublic = query({
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
 
-    if (!template || !template.isPublic) return null;
+    // Also gate on `status === 'published'`. The CWC delivery path at
+    // `convex/submissions.ts:105 getTemplateDeliveryError` already
+    // rejects non-published templates as `CWC_TEMPLATE_NOT_PUBLISHED`.
+    // But this PUBLIC query (the modal's loader at
+    // `/s/[slug]/+layout.server.ts`) must also enforce the status gate:
+    // returning any `isPublic` template regardless of status would let
+    // an unpublished-but-public CWC template open the modal, and for
+    // guests `TemplateModal.svelte:333` routes to `handleUnifiedEmailFlow`
+    // (mailto relay), bypassing the official publish gate for unofficial
+    // sends. Authors who need to preview unpublished templates should
+    // use an authenticated preview route, not the public `/s/[slug]`
+    // page.
+    if (!template || !template.isPublic || template.status !== 'published') return null;
 
-    // Fetch author info
-    let author: { name: string | null; avatar: string | null; encryptedName?: string | null } | null = null;
+    // Fetch author info. Post-PII-elimination (2026-04-10) the users table
+    // stores plaintext `name`; the legacy `encryptedName` blob is deprecated
+    // and not produced for new users.
+    let author: { name: string | null; avatar: string | null } | null = null;
     if (template.userId) {
       const user = await ctx.db.get(template.userId);
       if (user) {
-        // Return encrypted name blob — client decrypts locally
-        author = { name: null, avatar: user.avatar ?? null, encryptedName: user.encryptedName ?? null };
+        author = { name: user.name ?? null, avatar: user.avatar ?? null };
       }
     }
 
@@ -342,7 +368,7 @@ export const getBySlugPublic = query({
       title: template.title,
       description: template.description,
       domain: resolveDomain(template),
-      domainHue: (template as any).domainHue ?? undefined,
+      domainHue: template.domainHue ?? undefined,
       type: template.type,
       deliveryMethod: template.deliveryMethod,
       subject: template.title,
@@ -376,8 +402,9 @@ function extractRecipientEmailsConvex(recipientConfig: unknown): string[] {
   if (Array.isArray(config.recipients)) {
     for (const r of config.recipients) {
       if (typeof r === "string") emails.push(r);
-      else if (r && typeof r === "object" && typeof (r as any).email === "string") {
-        emails.push((r as any).email);
+      else if (r && typeof r === "object") {
+        const email = (r as { email?: unknown }).email;
+        if (typeof email === "string") emails.push(email);
       }
     }
   }
@@ -485,6 +512,16 @@ export const search = action({
       throw new Error("Query too long (max 200 characters)");
     }
 
+    // Bound domain + countryCode at the action boundary. The SvelteKit
+    // boundary takes a separate path and does not enforce these caps
+    // for direct Convex callers.
+    if (args.domain !== undefined && args.domain.length > 64) {
+      throw new Error("DOMAIN_TOO_LARGE");
+    }
+    if (args.countryCode !== undefined && args.countryCode.length > 8) {
+      throw new Error("COUNTRY_CODE_TOO_LARGE");
+    }
+
     const limit = Math.min(Math.max(args.limit ?? 10, 1), 20);
 
     // Try semantic search first
@@ -496,23 +533,26 @@ export const search = action({
 
       const embedding = await generateQueryEmbedding(queryText, apiKey);
 
-      // Build filter for vector search
-      const filter: Record<string, string> = {};
-      if (args.domain) filter.domain = args.domain;
-      if (args.countryCode) filter.countryCode = args.countryCode;
+      // Build filter for vector search. Convex's VectorFilterBuilder only
+      // exposes `.eq` and `.or` — there is no `.and`, so multi-field
+      // conjunction must be handled via post-filter in JS. With one filter
+      // field the builder applies it natively; with two we apply one in
+      // the builder and post-filter the hydrated docs against the other.
+      const filterEntries: Array<['domain' | 'countryCode', string]> = [];
+      if (args.domain) filterEntries.push(['domain', args.domain]);
+      if (args.countryCode) filterEntries.push(['countryCode', args.countryCode]);
+      const [primaryFilter, secondaryFilter] = filterEntries;
 
-      // Fetch more candidates to allow for quality filtering
-      const candidateLimit = limit + 10;
+      // Fetch more candidates to allow for quality filtering. When a
+      // post-filter applies, widen further so the post-filter has room to
+      // shed candidates without starving the result set.
+      const candidateLimit = limit + 10 + (secondaryFilter ? 20 : 0);
 
       const vectorResults = await ctx.vectorSearch("templates", "by_topicEmbedding", {
         vector: embedding,
         limit: candidateLimit,
-        filter: Object.keys(filter).length > 0
-          ? (Object.entries(filter).map(([field, value]) => ({
-              fieldPath: field,
-              op: "eq" as const,
-              value,
-            })) as never)
+        filter: primaryFilter
+          ? (q) => q.eq(primaryFilter[0], primaryFilter[1])
           : undefined,
       });
 
@@ -532,9 +572,13 @@ export const search = action({
         vectorResults.map((r) => [r._id, r._score]),
       );
 
-      // Apply quality boost and similarity floor
+      // Apply quality boost, similarity floor, and the secondary post-filter
+      // for multi-field AND that VectorFilterBuilder can't express natively.
       const scored = templates
         .filter((t): t is NonNullable<typeof t> => t != null)
+        .filter((t) =>
+          secondaryFilter ? t[secondaryFilter[0]] === secondaryFilter[1] : true,
+        )
         .map((t) => {
           const rawScore = Number(scoreMap.get(t._id) ?? 0);
           const sends = t.verifiedSends || 0;
@@ -627,7 +671,7 @@ export const listByUser = query({
       title: t.title,
       description: t.description,
       domain: resolveDomain(t),
-      domainHue: (t as any).domainHue ?? undefined,
+      domainHue: t.domainHue ?? undefined,
       status: t.status,
       isPublic: t.isPublic,
       verifiedSends: t.verifiedSends,
@@ -799,7 +843,7 @@ export const listMissingEmbeddings = query({
       .collect();
     // Filter to those without topic_embedding
     return templates
-      .filter((t) => !(t as any).topicEmbedding)
+      .filter((t) => !t.topicEmbedding)
       .sort((a, b) => b._creationTime - a._creationTime)
       .map((t) => ({
         _id: t._id,
@@ -829,7 +873,7 @@ export const updateEmbeddings = mutation({
       embeddingVersion: "v1",
       embeddingsUpdatedAt: Date.now(),
       ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
-    } as any);
+    });
   },
 });
 
@@ -884,7 +928,7 @@ export const getUserOrgId = query({
  */
 export const createTemplate = mutation({
   args: {
-    userId: v.string(),
+    userId: v.id("users"),
     title: v.string(),
     slug: v.string(),
     description: v.string(),
@@ -907,6 +951,26 @@ export const createTemplate = mutation({
     domainHue: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
+    // Require auth + force-match `args.userId` to the auth identity.
+    // Without this, the mutation would trust `userId`, `consensusApproved`,
+    // and `status` from the caller. The SvelteKit route at
+    // `src/routes/api/templates/+server.ts:441` populates `userId` from
+    // the authenticated `user.id`, but Convex public mutations are
+    // callable directly — a caller could (a) impersonate another user
+    // as template author, (b) self-approve via `consensusApproved: true`
+    // to bypass the LLM moderation gate, (c) write arbitrary `status`
+    // strings to poison downstream invariants. The `consensusApproved`
+    // + `status` trust gaps remain pending a moderation-via-Convex
+    // refactor; impersonation is the worst leg and is closed here.
+    const { userId: authUserId } = await requireAuth(ctx);
+    if (String(authUserId) !== String(args.userId)) {
+      throw new Error("Authenticated user does not match args.userId");
+    }
+    const ALLOWED_TEMPLATE_STATUSES = ["draft", "published", "archived", "pending"] as const;
+    if (!ALLOWED_TEMPLATE_STATUSES.includes(args.status as typeof ALLOWED_TEMPLATE_STATUSES[number])) {
+      throw new Error("INVALID_TEMPLATE_STATUS");
+    }
+
     // Check org quota
     const membership = await ctx.db
       .query("orgMemberships")
@@ -915,7 +979,7 @@ export const createTemplate = mutation({
 
     if (membership) {
       const org = await ctx.db.get(membership.orgId);
-      if (org && (org as any).maxTemplatesMonth) {
+      if (org && org.maxTemplatesMonth) {
         const startOfMonth = new Date();
         startOfMonth.setDate(1);
         startOfMonth.setHours(0, 0, 0, 0);
@@ -924,14 +988,14 @@ export const createTemplate = mutation({
           .withIndex("by_orgId", (q) => q.eq("orgId", membership.orgId))
           .filter((q) => q.gte(q.field("_creationTime"), startOfMonth.getTime()))
           .collect();
-        if (templates.length >= (org as any).maxTemplatesMonth) {
+        if (templates.length >= org.maxTemplatesMonth) {
           throw new Error("TEMPLATE_QUOTA_EXCEEDED");
         }
       }
     }
 
     const templateId = await ctx.db.insert("templates", {
-      userId: args.userId as any,
+      userId: args.userId,
       orgId: membership?.orgId,
       title: args.title,
       slug: args.slug,
@@ -960,7 +1024,7 @@ export const createTemplate = mutation({
       flaggedByModeration: !args.consensusApproved,
       reputationDelta: 0.0,
       updatedAt: Date.now(),
-    } as any);
+    });
 
     // Create geographic scope if provided
     if (args.geographicScope && args.geographicScope.type !== "international") {
@@ -1027,10 +1091,11 @@ export const patchMetadata = mutation({
     topics: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const patch: Record<string, unknown> = { updatedAt: Date.now() };
-    if (args.domain !== undefined) patch.domain = args.domain;
-    if (args.topics !== undefined) patch.topics = args.topics;
-    await ctx.db.patch(args.templateId, patch as any);
+    await ctx.db.patch(args.templateId, {
+      updatedAt: Date.now(),
+      ...(args.domain !== undefined ? { domain: args.domain } : {}),
+      ...(args.topics !== undefined ? { topics: args.topics } : {}),
+    });
   },
 });
 
@@ -1050,7 +1115,7 @@ export const setCwcVerification = mutation({
       verificationStatus: args.verificationStatus,
       countryCode: args.countryCode,
       reputationApplied: args.reputationApplied,
-    } as any);
+    });
   },
 });
 
@@ -1144,7 +1209,7 @@ export const patchEmbeddings = internalMutation({
       embeddingVersion: "gemini-001-768",
       embeddingsUpdatedAt: Date.now(),
       ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
-    } as any);
+    });
   },
 });
 
@@ -1234,10 +1299,12 @@ export const _listMissingDomainHue = internalQuery({
   handler: async (ctx) => {
     const all = await ctx.db.query("templates").collect();
     return all
-      .filter((t) => (t as any).topicEmbedding && !(t as any).domainHue)
+      .filter((t): t is typeof t & { topicEmbedding: number[] } =>
+        t.topicEmbedding != null && !t.domainHue
+      )
       .map((t) => ({
         _id: t._id,
-        topicEmbedding: (t as any).topicEmbedding as number[],
+        topicEmbedding: t.topicEmbedding,
       }));
   },
 });
@@ -1249,6 +1316,6 @@ export const _patchDomainHue = internalMutation({
     domainHue: v.float64(),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.templateId, { domainHue: args.domainHue } as any);
+    await ctx.db.patch(args.templateId, { domainHue: args.domainHue });
   },
 });

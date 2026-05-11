@@ -319,16 +319,19 @@ export const batchRegisterDeliveries = mutation({
 
     let created = 0;
     for (const r of recipients) {
-      const doc: Record<string, unknown> = {
+      // Schema requires `recipientName`; an unguarded `doc as any` cast
+      // would mask the missing required field and the mutation would
+      // be rejected by Convex's runtime validator.
+      await ctx.db.insert("positionDeliveries", {
         registrationId,
+        recipientName: r.name,
         recipientKey: slugify(r.name),
         deliveryMethod: r.deliveryMethod,
         deliveryStatus: "pending",
-      };
-      if (r.encryptedRecipientEmail) doc.encryptedRecipientEmail = r.encryptedRecipientEmail;
-      if (r.recipientEmailHash) doc.recipientEmailHash = r.recipientEmailHash;
-      if (r.encryptedRecipientName) doc.encryptedRecipientName = r.encryptedRecipientName;
-      await ctx.db.insert("positionDeliveries", doc as any);
+        ...(r.encryptedRecipientEmail ? { encryptedRecipientEmail: r.encryptedRecipientEmail } : {}),
+        ...(r.recipientEmailHash ? { recipientEmailHash: r.recipientEmailHash } : {}),
+        ...(r.encryptedRecipientName ? { encryptedRecipientName: r.encryptedRecipientName } : {}),
+      });
       created++;
     }
 
@@ -390,7 +393,7 @@ export const recordDirectDeliveries = mutation({
       const recipientKey = slugify(r.name);
       if (existingKeys.has(recipientKey)) continue;
 
-      const doc: Record<string, unknown> = {
+      await ctx.db.insert("positionDeliveries", {
         pseudonymousId,
         templateId,
         recipientKey,
@@ -398,12 +401,11 @@ export const recordDirectDeliveries = mutation({
         deliveryMethod: r.deliveryMethod,
         deliveryStatus: "pending",
         deliveredAt: now,
-      };
-      if (districtCode) doc.districtCode = districtCode;
-      if (r.encryptedRecipientEmail) doc.encryptedRecipientEmail = r.encryptedRecipientEmail;
-      if (r.recipientEmailHash) doc.recipientEmailHash = r.recipientEmailHash;
-      if (r.encryptedRecipientName) doc.encryptedRecipientName = r.encryptedRecipientName;
-      await ctx.db.insert("positionDeliveries", doc as any);
+        ...(districtCode ? { districtCode } : {}),
+        ...(r.encryptedRecipientEmail ? { encryptedRecipientEmail: r.encryptedRecipientEmail } : {}),
+        ...(r.recipientEmailHash ? { recipientEmailHash: r.recipientEmailHash } : {}),
+        ...(r.encryptedRecipientName ? { encryptedRecipientName: r.encryptedRecipientName } : {}),
+      });
       existingKeys.add(recipientKey);
       created++;
     }
