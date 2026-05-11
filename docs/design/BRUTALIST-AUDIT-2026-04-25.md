@@ -1,7 +1,7 @@
 # Brutalist Audit — 2026-04-25
 
-> **Status**: ACTIVE — Wave 1 planning
-> **Date**: 2026-04-25 (5 weeks until Storacha sunset 2026-05-31)
+> **Status**: ENGINEERING-COMPLETE (2026-05-10) — all engineering-scoped findings (F-1.x, F-2.x, F-3.2/3/4, F-5.x) closed. Remaining open: F-3.1 (TEE deployment, Track B post-launch) + F-4.x (legal/regulatory, counsel-driven). Storacha-sunset clock superseded — Storacha removed 2026-05-02.
+> **Original date**: 2026-04-25 (5 weeks until Storacha sunset 2026-05-31)
 > **Pattern**: For each finding cluster — implementation → brutalist review → fix → regression verify
 > **Scope**: Architecture, security, codebase, test coverage, legal/regulatory
 
@@ -388,24 +388,24 @@ Critical-path ordering: F-1.4 first (frozen domain). Others can parallel.
 | F-1.7 | H | DEFER | — | — | Tree 2 cell_map_path_bits has same structural gap; fixing requires circuit-signature change (leafIndex witness OR f(cell_id) derivation). Mitigation today: operator-built SMT integrity + Poseidon2 collision-resistance. Not blocking Wave 1. |
 | F-1.8 | H | DEFER | — | — | NEW (surfaced during F-1.6 review): identity_commitment not bound to Tree 1 user_leaf in-circuit. Prover with Alice's user_secret + Bob's identity_commitment can lock Bob out (DOS primitive once IC leaks). Off-chain `user_secret = H2(IC, entropy)` establishes default but isn't circuit-enforced. Fix: add user_entropy witness + derivation constraint. Not blocking Wave 1 (gated on IC leak). |
 | F-1.5 | C | DONE | fix (1) | main | Caller-supplied-nullifier branch removed 2026-04-25. Endpoint requires districtCommitment, derives via H2 server-side. 21+9+6 tests pass. Brutalist quota exhausted; manual self-audit logged residual (per-DC rate-limit gap, deferred F-2.x candidate) and confirmed no other internal endpoints share the antipattern. |
-| F-2.1 | H | OPEN | — | — | Reconciler observability |
-| F-2.2 | H | OPEN | — | — | Kill-switch dynamic-import |
-| F-2.3 | H | OPEN | — | — | Resolver factory singleton |
-| F-2.4 | H | OPEN | — | — | Coordinate-address binding token |
-| F-2.5 | H | OPEN | — | — | Test theater fix |
-| F-3.1 | H | DEFER | — | — | TEE rename or fail-closed gate |
-| F-3.2 | C | WIP | — | — | Storacha migration |
-| F-3.3 | M | OPEN | — | — | CA/GB/AU stub gating |
-| F-3.4 | H | OPEN | — | — | Cross-repo crypto coupling |
+| F-2.1 | H | DONE | fix (1) | main | Reconciler skip counter + Sentry alert at threshold ≥3 ticks. New `revocationReconcileState` table; `recordReconcileSkip` / `clearReconcileSkips` internal mutations; `RECONCILE_SKIP_HIGH` alert via /api/internal/alert. 37/37 revocation tests pass. |
+| F-2.2 | H | DONE | fix (1) | main | Replaced catch-block dynamic `await import('$lib/convex')` with the existing static `internal` import at module top. Bundler-tree-shake risk eliminated. 37/37 revocation tests pass. |
+| F-2.3 | H | DONE | fix (1) | main | Module-scope `let resolver` deleted; `getConstituentResolver` now constructs per-call. `_resetConstituentResolverForTest` retained as documented no-op for back-compat. New "fresh instance per call" contract test. 51/51 tee tests pass. |
+| F-2.4 | H | DONE | fix (1) | main | New HMAC primitive `address-resolution-token.ts`: `resolve-address` mints token over (userId, lat, lng, addressHash, expiresAt); `verify-address` rejects mismatched coordinates. Client wiring in `AddressVerificationFlow` / `AddressCollectionForm` / `TemplateModal`. New `ADDRESS_RESOLUTION_TOKEN_SECRET` env var. 12 dedicated token tests. |
+| F-2.5 | H | DONE | fix (1) | main | Test-theater `try { success } catch { /SMT_POSTWRITE_/ }` blocks rewritten to deterministic exact-count assertions via the helper's "concurrent emit advanced seq" skip branch. 7/7 helper tests pass. |
+| F-3.1 | H | DEFER | — | — | TEE rename or fail-closed gate (Track B post-launch hardening) |
+| F-3.2 | C | DONE | — | main | Storacha sunset shipped 2026-05-02; R2 + Atlas Worker carry production read path. |
+| F-3.3 | M | DONE | fix (1) | main | New `LIVE_RESOLVER_COUNTRIES = ['US']` (operational surface) separated from `SUPPORTED_RESOLVER_COUNTRIES` (design surface). Endpoint returns 503 `COUNTRY_NOT_LIVE` for SUPPORTED-but-not-LIVE countries. 276/276 location+geographic tests pass. |
+| F-3.4 | H | DONE | fix (1) | main | `@voter-protocol/*` deps exact-pinned (drop carets). New `cross-impl-domains.test.ts` byte-equality on DOMAIN_HASH1-4 + DOMAIN_SPONGE_24 vs `@voter-protocol/crypto`; REVOCATION_DOMAIN verified against Noir circuit literal + UTF-8 decode. 6/6 cross-impl tests pass. |
 | F-4.1 | C | OPEN | — | — | TCPA consent ledger |
 | F-4.2 | C | OPEN | — | — | FEC contributor fields |
 | F-4.3 | H | OPEN | — | — | GDPR Art. 27 |
 | F-4.4 | H | OPEN | — | — | Privacy/Terms pages |
 | F-4.5 | M | OPEN | — | — | CCPA framing |
-| F-5.1 | M | OPEN | — | — | Dummy ZK proof in debate UI |
-| F-5.2 | M | OPEN | — | — | `as unknown as never` casts |
-| F-5.3 | L | OPEN | — | — | Process metadata comments |
-| F-5.4 | M | OPEN | — | — | `getRevocationNonMembershipPath` access control |
+| F-5.1 | M | DONE | fix (1) | main | Dummy-proof submit/co-sign sites in `SubmitArgumentForm.svelte` and `CoSignButton.svelte` now `throw` legible "not yet available" before `clientSubmitArgument` / `clientCoSignArgument`. Defense-in-depth: `validateProofInputs` already rejects empty proof; render path is double-gated by unpopulated `data.debateSignal`. 140/140 wallet tests pass. |
+| F-5.2 | M | DONE | fix (1) | main | Audit-cited sites already cured by prior cycles. Three surviving similar antipatterns retyped: `ground-service.ts:252` and `ground/wrapper/+server.ts:41` use `as FunctionArgs<typeof api.ground.X>`; `convex/http.ts:688` uses inline `ReceiptsArg` matching the FunctionReference declaration. `templates.ts:538` retained — array-vs-builder semantic mismatch tracked separately. 421/421 server+api tests pass. |
+| F-5.3 | L | DONE | fix (1) | main | 32 tags scrubbed across `convex/revocations.ts` (17), `revocation-smt.ts` (9), `verify-commitment.ts` (6) — plus `convex/schema.ts` (4). All `Wave NN` / `REVIEW N-N` / `SELF-REVIEW X` / `FU-N.N` / `F-1.X (date) — ` prefixes removed; substantive WHY content preserved. Pure comment-only edits. 37/37 revocation tests pass. |
+| F-5.4 | M | DONE | fix (1) | main | `getRevocationNonMembershipPath` converted from public `query` to `internalQuery`. Verified zero production callers; browser flow already routes through `/api/proofs/revocation-witness` (auth-gated, rate-limited) which calls `getRevocationSMTPath`. Stale doc references in `proof-input-mapper.ts` and `V2-PROVER-CUTOVER.md` updated. 37/37 revocation tests pass. |
 
 ---
 

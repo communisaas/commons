@@ -118,15 +118,16 @@ The hasher executes the Noir `fixtures` / `sponge_helper` circuits internally, s
 
 ---
 
-## Commons-Specific Domain Strings (Frozen Post-Launch)
+## Protocol-Wide Domain Strings (Frozen Post-Launch)
 
-These strings are used by Commons, not by the circuits. They have no effect on ZK proof verification but must remain stable to preserve Commons-encrypted credentials across releases.
+These strings are encoded into cryptographic contexts shared by every conforming implementation of the protocol. They have no effect on ZK proof verification but must remain stable across releases. **Renamed 2026-05-05** from the `commons-*` namespace to the neutral `voter-protocol-*` namespace before launch made them immutable; see voter-protocol `specs/CRYPTOGRAPHY-SPEC.md` §0 for the amendment record.
 
 | String | Use |
 |---|---|
-| `commons-identity-v1` | Identity commitment domain prefix (SHA-256 mod BN254, used during pre-circuit derivation) |
-| `commons-credential-v2` | HKDF salt for per-user AES-256-GCM credential encryption (IndexedDB at-rest) |
-| `commons-witness-encryption-v1` | BLAKE2b **keyed-hash** key (passed as the 3rd arg to libsodium `crypto_generichash`, `src/lib/core/proof/witness-encryption.ts:~202`) deriving the X25519 → XChaCha20 witness-encryption key |
+| `voter-protocol-identity-v1` | Identity commitment domain prefix (SHA-256 mod BN254, used during pre-circuit derivation) |
+| `voter-protocol-credential-v2` | HKDF salt for per-user AES-256-GCM credential encryption (IndexedDB at-rest) |
+| `voter-protocol-witness-encryption-v1` | BLAKE2b **keyed-hash** key (passed as the 3rd arg to libsodium `crypto_generichash`, `src/lib/core/proof/witness-encryption.ts:~202`) deriving the X25519 → XChaCha20 witness-encryption key |
+| `voter-protocol-revocation-v1` | `REVOCATION_DOMAIN` — second input to the `H2(district_commitment, REVOCATION_DOMAIN)` revocation nullifier |
 
 ---
 

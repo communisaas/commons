@@ -205,7 +205,7 @@ SHA-256("address-attestation:{userId}:{district}") mod BN254
 ```
 Tier 3+ (`identity-binding`):
 ```
-SHA-256("commons-identity-v1:{SALT}:{passport}:{nationality}:{birthYear}:{documentType}") mod BN254
+SHA-256("voter-protocol-identity-v1:{SALT}:{passport}:{nationality}:{birthYear}:{documentType}") mod BN254
 ```
 
 Tier 2 commitments are tied to `userId`, not to the person. Same person, two OAuth accounts, two Tier 2 verifications = two different commitments. These commitments produce invalid nullifiers in the three-tree circuit.

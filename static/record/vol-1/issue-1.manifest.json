@@ -1,0 +1,28 @@
+{
+  "version": "v1.0.0",
+  "date": "2026-05-06",
+  "commit": "20b772f9eb9f84ed680065e4b2ce664a1a101e00",
+  "git_tag": "record/vol-1-issue-1-v1.0.0",
+  "documents": {
+    "constitution.md": {
+      "path": "CONSTITUTION.md",
+      "sha256": "6f707fec2ff3be443eca2a871754654af1218280b3dd699707d24cfc04c9d93c",
+      "form": "source · markdown"
+    },
+    "issue-1.md": {
+      "path": "docs/record/vol-1/issue-1.md",
+      "sha256": "f8e2f2e7c6a0e317e06a8ee5da778eeeb8c02a5756fb57a754d15c6a9c569dfe",
+      "form": "source · markdown"
+    },
+    "issue-1.pdf": {
+      "path": "static/record/vol-1/issue-1.pdf",
+      "sha256": "36f91375045b1b4183610948d4b01d9f77963489a991b28a862cbc7d0b3adb77",
+      "form": "rendered · print"
+    },
+    "issue-1.txt": {
+      "path": "static/record/vol-1/issue-1.txt",
+      "sha256": "db68447cddc7ef14e3abd13ef3a5d3415af93b89e9d0801be9ecb0080632e556",
+      "form": "rendered · plain-text"
+    }
+  }
+}

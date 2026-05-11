@@ -124,13 +124,18 @@ Client-side per-proof flow:
 
 1. Compute `district_commitment` = Poseidon2 sponge over user's 24 cell-district slots (already done in V1).
 2. Compute `revocation_nullifier` = `H2(district_commitment, REVOCATION_DOMAIN)`.
-   _(REVOCATION_DOMAIN is FROZEN at `0x636f6d6d6f6e732d7265766f636174696f6e2d7631` — UTF-8 "commons-revocation-v1".)_
-3. Fetch non-membership path from Convex:
+   _(REVOCATION_DOMAIN is FROZEN at `0x766f7465722d70726f746f636f6c2d7265766f636174696f6e2d7631` — UTF-8 "voter-protocol-revocation-v1". Renamed from `commons-revocation-v1` on 2026-05-05; see voter-protocol CRYPTOGRAPHY-SPEC.md §0.)_
+3. Fetch non-membership path via the auth-gated SvelteKit endpoint (the
+   underlying Convex query is internal-only — browsers cannot reach it
+   directly):
    ```ts
-   const { path, pathBits, currentRoot } = await client.query(
-     internal.revocations.getRevocationNonMembershipPath,
-     { revocationNullifier }
-   );
+   const response = await fetch('/api/proofs/revocation-witness', {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     credentials: 'same-origin',
+     body: JSON.stringify({ revocationNullifier })
+   });
+   const { path, pathBits, currentRoot } = await response.json();
    ```
 4. Replace any `null` siblings with the depth-d empty-subtree value (computed via `getEmptyTreeRoot()`-style recurrence).
 5. Pass to prover:

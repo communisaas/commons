@@ -121,7 +121,7 @@ Spot-check these tables via the Convex dashboard or a quick query:
 
 ## PII Encryption Keys
 
-User PII is encrypted with `commons-credential-v2` domain AES-256-GCM
+User PII is encrypted with `voter-protocol-credential-v2` domain AES-256-GCM
 keys. A Convex restore is only usable if the corresponding keys are
 still available:
 

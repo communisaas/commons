@@ -156,7 +156,7 @@ PUBLIC INPUTS (visible to agent and on-chain):
   [26] nullifier         — H2(identityCommitment, actionDomain). Agent checks NullifierRegistry
                            to avoid double-action before prompting constituent for proof.
   [27] actionDomain      — Template-scoped domain. Agent derives from campaign metadata:
-                           keccak256("commons.v1" || country || legislature || template || session) % BN254
+                           keccak256("voter-protocol.v2" || country || legislature || template || session || district_commitment) % BN254
   [28] authorityLevel    — mDL verification tier [1-5]. Agent reads from last proof.
   [29] engagementRoot    — Tree 3 root. Agent reads from EngagementRootRegistry.
   [30] engagementTier    — Engagement tier [0-4]. Agent uses for delegation authority ceiling.

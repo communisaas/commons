@@ -1,5 +1,9 @@
 # Language & Voice Guidelines
 
+> **Status: SUPERSEDED** — 2026-05-06
+> 
+> The doctrine in this document was superseded by `CONSTITUTION.md` §3.3 (plain English) effective with the publication of `docs/record/vol-1/issue-1.md`. See that issue's §B *Editorial note: voice register supersession* for the rationale. This document is retained for historical reference only; do not use it as the operative voice guide.
+
 **Direct. Specific. Institutional.**
 
 This document defines how Commons communicates. State what is. Show what exists. Don't justify, don't hedge, don't decorate. The cypherpunk substrate is present in the engineering (ZK proofs, client-side encryption, sovereign identity) — the voice has matured toward civic precision.

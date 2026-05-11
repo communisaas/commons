@@ -23,7 +23,7 @@
 >   The "reputation" concepts in this doc live on Merkle Tree 3 via
 >   `shadow-atlas-handler.ts`; UI doesn't expose engagement tier yet.
 > - **Credential crypto is load-bearing but undocumented here.**
->   Per-user AES-256-GCM via HKDF with `commons-credential-v2` salt
+>   Per-user AES-256-GCM via HKDF with `voter-protocol-credential-v2` salt
 >   (`src/lib/core/identity/credential-encryption.ts`). The
 >   "sealed credential" in any description above lives in IndexedDB +
 >   server cache.

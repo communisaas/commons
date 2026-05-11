@@ -6,33 +6,71 @@
 
 ## Authority
 
-This document is the canonical design contract for Commons. When docs conflict, resolve them in this order:
+This document is the canonical design contract for the reference implementation of Commons. When docs conflict, resolve them in this order:
 
-1. `docs/design/design-system.md` for visual philosophy, containment, typography, color, motion, and dimensional primitives.
-2. `docs/design/voice.md` for product language and audience register.
-3. `src/lib/design/DESIGN.md` for the short agent/developer contract that implements this document.
+1. `CONSTITUTION.md` (root) — the design constitution promulgated by `docs/record/vol-1/issue-1.md`. Nine principles in three layers. Supreme authority for the reference implementation.
+2. `docs/design/design-system.md` (this document) — visual philosophy, generative axes, typography, color, motion, structural primitives.
+3. `src/lib/design/DESIGN.md` — short agent/developer contract that implements this document.
 4. Shipped code plus explicit divergence banners for current implementation reality.
-5. Feature specs for local intent. Aspirational specs do not override the design system unless they declare a scoped exception.
+5. Feature specs for local intent. Aspirational specs do not override the constitution or this document unless they declare a scoped exception.
+
+`docs/design/voice.md` is **SUPERSEDED** by `CONSTITUTION.md` §3.3 (plain English) effective with the publication of `docs/record/vol-1/issue-1.md` on 2026-05-06. It is retained for historical reference and is not in the authority chain.
 
 Feature specs may define local patterns, but they cannot redefine the global visual vocabulary. If an older spec says `rounded-xl`, uses a non-core color as a semantic action/status color, or headlines a platform-internal metric to a recipient, normalize it back to this contract.
 
 ---
 
-## The Generative Constraints
+## The Generative Framework
 
-Two rules produce every visual decision:
+The reference implementation is governed by **nine principles**, codified in `CONSTITUTION.md`, organized in three layers:
 
-> **1. Every visual element is either verifiable or honestly labeled as interpretive.**
+**Substrate** — what holds plurality together
+1. The mathematics is the only authority (`CONSTITUTION.md` §1.1)
+2. Federation by default (§1.2)
+3. Permanence over product cycles (§1.3)
 
-> **2. Information has shape. Express the shape, not just the value.**
+**Artifact** — every entry in the public record is an artifact
+4. Verifiable or honestly interpretive (§2.1)
+5. Information has shape; express the shape (§2.2)
+6. The cryptographic substrate is visible as registry marks (§2.3)
 
-The first constraint generates the typographic system — which register a claim belongs to. The second generates the dimensional system — how compressed data decompresses into the fields it was measured from.
+**Commons** — how plurality coexists
+7. Plurality encoded, not curated (§3.1)
+8. Decision-makers and constitutional moments share the substrate (§3.2)
+9. Plain English (§3.3)
+
+These nine principles produce every visual decision through two derived axes — one generative, one structural.
+
+### Axis 1 — Dimensional causation (generative)
+
+> **Every visual variation cites a substrate entity, and its rendering is governed by the entity's dimensions or proof state — not by a designer's hierarchy preference.**
+
+For any variation in scale, position, motion, density, color emphasis, or composition, name:
+1. The substrate entity it cites.
+2. The citizen dimension (geography / time / identity / voice / engagement) or proof state (verified / pending / expired / revoked) that drives it.
+
+If both cannot be named, the variation is unauthorized. This is the rule that distinguishes controlled chaos from decorative chaos. Without it, principle 5 ("information has shape") collapses into ornament and principle 7 ("plurality encoded, not curated") collapses into stylistic posture.
+
+This axis is invariant. It applies to every surface regardless of content state.
+
+### Axis 2 — Content state (structural)
+
+> **Surfaces vary by content state on a single spectrum: settled artifact ⇄ active field. The same primitives, register, prohibitions, and voice apply at both ends. Only occupancy density varies.**
+
+**Settled artifacts** are closed-and-hashed: the constitution, the verification packet, the receipt, errata, audit records, the finalized coalition charter. Their content is one entity in one state. They collapse to a single ledger column with generous margins. No multi-region composition.
+
+**Active fields** are open-and-living: the homepage masthead, the debate index, the atlas activity overlay, the public DM activity stream. Their content is many entities cited at once. They expand to multi-region composition where the same dimensions that govern Axis 1 drive scale, position, and motion.
+
+A constitution should not look like a homepage. A homepage should not look like a constitution. Both should read as expressions of the same system. A surface that needs to communicate both states (an artifact-of-record nested in a coalition's living operating page) renders the artifact in settled mode inside an active-field frame.
+
+### How the framework cashes out at the visual layer
 
 "248 verified" is not a number. It is a compression of geography (where those people are), time (when they acted), identity depth (how strongly they're verified), and voice (whether they composed or echoed). Rendering it as three digits in a monospace font expresses one dimension — quantity — and erases the rest. The design system's job is to make the erased dimensions available.
 
-- **Typographic register = epistemic status.** JetBrains Mono for verifiable claims — counts, scores, dates, hashes, district codes. Anything a third party could audit. Satoshi for interpretive context — explanations, descriptions, calls to action, editorial framing. The reader learns, without being told, which parts of the surface are proven and which are contextual.
-- **Numbers are compressions, not endpoints.** "248 verified constituents" is backed by a geographic distribution, a temporal arrival pattern, an identity tier structure, and an authorship texture. The scalar is the headline. The dimensions behind it are the story. Both must be accessible.
-- **Dimensions are visual, not textual.** A geographic distribution is a spatial field, not "GDS: 0.94." A temporal pattern is a rhythm, not "14 days." An identity composition is a depth gradient, not "104 gov ID, 89 address." If a dimension can be felt as shape, show the shape. Text descriptions of dimensions are a design failure.
+- **Typographic register = epistemic status.** JetBrains Mono for verifiable claims — counts, scores, dates, hashes, district codes. Anything a third party could audit. Satoshi for interpretive context — explanations, descriptions, calls to action, editorial framing. The reader learns, without being told, which parts of the surface are proven and which are contextual. (Principle 4.)
+- **Numbers are compressions, not endpoints.** "248 verified constituents" is backed by a geographic distribution, a temporal arrival pattern, an identity tier structure, and an authorship texture. The scalar is the headline. The dimensions behind it are the story. Both must be accessible. (Principle 5.)
+- **Dimensions are visual, not textual.** A geographic distribution is a spatial field, not "GDS: 0.94." A temporal pattern is a rhythm, not "14 days." An identity composition is a depth gradient, not "104 gov ID, 89 address." If a dimension can be felt as shape, show the shape. Text descriptions of dimensions are a design failure. (Principle 5.)
+- **The cryptographic substrate is always visible.** Hashes, nullifiers, Merkle roots, signatures, and version anchors appear in margins and footers as marks of the substrate, not behind copy. The reader of any artifact can find the cryptographic facts that hold the artifact together without leaving the artifact. The `<RegistryMark>` primitive expresses this. (Principle 6.)
 - **The warm cream ground says "institution."** Content sits ON the ground, not IN white boxes. White is reserved for bounded artifacts — the proof specimen, the email preview — objects that need to float above the ground plane.
 - **Borders earn their place.** A hairline rule between the specimen and contextual copy says "these are different registers." A border around a card says "this is a bounded object." Borders that say nothing are decoration. Kill them.
 
@@ -150,6 +188,7 @@ Teal for routes. Indigo for sharing. Emerald for verification. **No other global
 - **Local categorical palettes** — permitted when color classifies a local domain taxonomy, not product semantics. Examples: Spatial Browse topic neighborhoods, map country fills, power-level categories, source-type categories in intelligence panels. These palettes must be confined to the component/spec, redundant with shape/position/text, and unavailable for CTAs, verification status, delivery status, proof strength, or global navigation.
 - **Debate subsystem** — violet is permitted within `src/lib/components/debate/` as an AI-reasoning / evaluation-phase signal. It separates AI-contributed outputs (machine scores, AI evaluation phase) from human deliberation (amber) and semantic verdicts (emerald/red/amber). This is subsystem-local vocabulary, not a global semantic. Prohibited outside the debate subsystem.
 - **Party indicators** — purple for Independent is a political convention, not a design decision. Permitted on representative/decision-maker indicators only.
+- **Email shell (`src/lib/server/email/`)** — emails render in clients we do not control (Outlook, Gmail, Apple Mail, dozens of mobile clients) where warm cream surfaces drift toward pink/peach under client-imposed colour adjustments. The email shell uses a dark cabinet palette (`#09090b` outer, `#18181b` card, `#27272a` border, `#d4d4d8` body text) for cross-client predictability and to read as "from the platform" against an inbox of arbitrary-coloured messages. The embedded verification block uses muted slate tones inside that cabinet for high-contrast staffer reading on phone. This is a register-rule, not a free choice — outside `src/lib/server/email/` the canonical warm-cream substrate applies. The compose preview deliberately renders inside the same dark shell so authors see what recipients see.
 
 ---
 
@@ -401,25 +440,29 @@ SVG paths with stroke-dasharray animation. Draw on load, then static.
 
 ## Voice
 
-### Core Principles
+The voice register is **plain English**, per `CONSTITUTION.md` §3.3. Sentences a fourteen-year-old reads without help. No marketing superlatives. No emotional manipulation. No cypherpunk performance. Honest about what the system does and does not do.
 
-From voice.md—still accurate:
+The supersession is recorded in `docs/record/vol-1/issue-1.md` §B *Editorial note: voice register supersession* (2026-05-06). The prior register documented in `docs/design/voice.md` ("Direct. Specific. Institutional.") is retained for historical reference and is not the operative guide.
 
-1. **Confident & Direct** — State what is. Don't justify.
-2. **Technical Details in Popovers** — Primary UI stays simple.
-3. **Imperative Voice** — Commands, not suggestions.
-4. **No Category Labels** — "CA-11" not "Campaigns in CA-11"
+### What this means in practice
 
-### What We Don't Say
+- **State what is, plainly.** "Issues in CA-11" beats both "Find campaigns in your area" (marketing) and "Civic-action templates filtered by user-resolved district" (technical density).
+- **Honest about gaps.** When the system does not yet do something, say so. The constitution itself models this with "Currently observed / Currently absent" gap markers in §1, §2, §3.
+- **Plural, not directive.** Plain English serves all readers — civic staffers, citizens, designers, auditors, and future maintainers reading at a thirty-year horizon. No reader population is privileged.
+- **Imperative is permitted, not required.** "Send. Coordinate. Verify." is fine when an action is being requested. Imperative is one tone the voice can take, not the voice itself.
 
-- issues, community, platform, content, engagement, solutions, empower
-- "campaigns" on person-layer surfaces (org layer uses it as a technical noun — see voice.md)
+### What we don't say
 
-### What We Do Say
+- Marketing fillers: empower, solutions, engagement (as a verb), platform, community, content
+- Hype superlatives: revolutionary, the only, perfect, finally
+- Cypherpunk performance: trustless, sovereign, immutable (without explanation), cryptographic (as boast)
+
+### What we do say
 
 - Send. Coordinate. Verify.
-- Location names stand alone: "California" / "CA-11"
+- Locations stand alone: "California" / "CA-11"
 - Counts speak for themselves: "847 sent this"
+- Plain naming of state: "verified" / "pending" / "expired" / "revoked"
 
 ---
 
@@ -462,20 +505,25 @@ Already covered. All animations respect `prefers-reduced-motion`.
 
 ## Structural Primitives (`$lib/design/`)
 
-The design philosophy is encoded as components. Import from `$lib/design`. See `$lib/design/DESIGN.md` for the agent-readable decision tree.
+The design philosophy is encoded as components. Import from `$lib/design`. See `$lib/design/DESIGN.md` for the agent-readable decision tree. All primitives are governed by Axis 1 (dimensional causation) and apply at both ends of Axis 2 (content state).
 
 ### Register Layer
 - **`Datum`** — Verifiable numeric claim. Always JetBrains Mono + tabular-nums. Optional spring animation, optional cite provenance. The font IS the truth claim.
 - **`Cite`** — Contextual provenance. Four forms: whisper (materializes on hover), mark (dotted underline), footnote (collects at Artifact bottom), ghost (aria-only). Provenance should be visual (use dimensional primitives inside), not textual.
 
+### Substrate Layer
+- **`RegistryMark`** — Cryptographic substrate visible as a mark, per `CONSTITUTION.md` §2.3. Eight variants (sha256, nullifier, merkle-root, signature, version, commit, block, tag) × full or truncate display × span/button/anchor element. Always JetBrains Mono with tabular-nums. Click-to-copy copies the FULL value regardless of truncation. Aria-label decodes variant + value + interaction. Lives in margins and footers, not behind copy.
+
 ### Dimensional Layer
-- **`Ratio`** — Composition as color proportion. A thin segmented bar showing what a count is made of. 3-5px tall. No labels. For identity breakdown, authorship texture, geographic distribution.
-- **`Pulse`** — Temporal rhythm as sparkline. A tiny smooth curve showing when things happened. 56×12px default. For arrival cadence, momentum patterns.
-- **`Rings`** — Depth/tier as concentric glyph. 14-16px. Shows how deep verification goes. Citation-scale TrustTierIndicator.
+- **`Ratio`** — Composition as color proportion. A segmented bar showing what a count is made of. **Citation:** 3-5px. **Display:** 12-24px. No labels. For identity breakdown, authorship texture, geographic distribution.
+- **`Pulse`** — Temporal rhythm as sparkline. A smooth curve showing when things happened. **Citation:** 56×12px default. **Display:** 120-400×32-120px (stroke width and padding auto-scale with height; pass `strokeWidth` to override). For arrival cadence, momentum patterns.
+- **`Rings`** — Depth/tier as concentric glyph. **Citation:** 14-16px. **Display:** 48-128px (stroke and ring spacing auto-scale). Shows how deep verification goes. The TrustTierIndicator at any scale.
+
+> All four dimensional primitives — `Ratio`, `Pulse`, `Rings`, `EntityCluster` — serve both ends of Axis 2 (citation ⇄ display) without forking the API. The same component is used at both scales: stroke widths, padding, and ring spacing scale automatically with size; `EntityCluster` exposes `density="display"` (80px gap) for active-field hero spacing. Display-scale typography is achieved at the call site via Tailwind text-5xl through text-9xl — see `docs/design/TYPOGRAPHY-SYSTEM.md` §Display Scale.
 
 ### Spatial Layer
-- **`Artifact`** — Bounded white object that earns card treatment. Proof specimens, email previews, templates. Provides footnote context for Cite footnotes.
-- **`EntityCluster`** — Proximity-ratio layout. Generous void between entities (32px default). No borders. The void IS the boundary.
+- **`Artifact`** — Bounded white object that earns card treatment. Proof specimens, email previews, templates. Provides footnote context for Cite footnotes. The only surface where `bg-white` is permitted.
+- **`EntityCluster`** — Proximity-ratio layout. The void IS the boundary. Densities: `tight` (24px), `default` (32px), `spacious` (48px), `display` (80px, active-field hero spacing). No borders.
 
 ### Motion Layer
 - **`SPRINGS`** — Six canonical spring configs. See Motion section above.
@@ -486,14 +534,34 @@ The design philosophy is encoded as components. Import from `$lib/design`. See `
 
 ## Decision Rules
 
+### "Is this visual variation authorized?" (Axis 1 — dimensional causation)
+
+For every variation in scale, position, motion, density, color emphasis, or composition, name:
+1. The substrate entity it cites.
+2. The citizen dimension (geography / time / identity / voice / engagement) or proof state (verified / pending / expired / revoked) that drives it.
+
+If both cannot be named, the variation is unauthorized. Remove it. This is the rule that distinguishes controlled chaos from decorative chaos.
+
+### "What is the content state of this surface?" (Axis 2 — settled ⇄ active)
+
+If the surface is **settled** (closed-and-hashed: constitution, verification packet, receipt, errata, audit record, finalized coalition charter) — collapse to a single ledger column. One entity. One state. Generous margins. No multi-region composition.
+
+If the surface is **active** (open-and-living: homepage masthead, debate index, atlas activity overlay, public DM activity stream) — expand to multi-region composition. Many entities cited at once. Composition density is data-driven (Axis 1 governs).
+
+A surface that needs to communicate both states (artifact-of-record nested in a living operating page) renders the artifact in settled mode inside an active-field frame.
+
+### "Is this hash, nullifier, signature, or version anchor?"
+
+→ Use `<RegistryMark>` from `$lib/design`. Per `CONSTITUTION.md` §2.3, registry marks live in margins and footers as marks of the substrate, not behind copy. Don't card-chrome them.
+
 ### "Does this number have dimensions behind it?"
 
 **If yes**, express them. Use Ratio (composition), Pulse (time), Rings (depth). Prefer visual shape over text description. A scalar with its dimensions hidden is an incomplete rendering.
 
 ### "Should this animate?"
 
-**Yes** if it's a coordination signal (send, share, count update, dimension transition).
-**No** if it's anything else.
+**Yes** if it's a coordination signal (send, share, count update, dimension transition) — and the variation passes Axis 1 (a substrate event drives it).
+**No** if it's anything else. Hover scale transitions, scroll-triggered fade-ins, gradient sweeps fail Axis 1 regardless of how they look.
 
 ### "What color?"
 
@@ -505,6 +573,7 @@ The design philosophy is encoded as components. Import from `$lib/design`. See `
 
 **Satoshi** — Words, explanations, citations (interpretive)
 **Mono** — Numbers, dates, hashes, district codes (verifiable)
+**Mono via `<RegistryMark>`** — Verifiable cryptographic strings (not numeric counts)
 
 ### "Text or shape?"
 
@@ -531,4 +600,4 @@ If it manipulates rather than serves, it's wrong. If it decorates rather than co
 
 ---
 
-*Commons PBC | Design System | 2026-04*
+*Commons Design System | Maintained by Communiqué PBC | Aligned to CONSTITUTION.md@v1.0.0*

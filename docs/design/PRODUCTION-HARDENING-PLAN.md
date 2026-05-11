@@ -293,7 +293,7 @@ PUBLIC_ENVIRONMENT="production|staging|development"
 
 ### Current State
 - **Backups**: None found. No scripts, cron jobs, or restore procedures
-- **PII Encryption**: At rest in Convex (`commons-credential-v2` domain string for AES-256-GCM)
+- **PII Encryption**: At rest in Convex (`voter-protocol-credential-v2` domain string for AES-256-GCM; renamed from `commons-credential-v2` 2026-05-05)
 - **Key Storage**: Unknown — likely `$env/dynamic/private` but not documented
 - **Recovery**: Unknown RTO/RPO SLAs
 
@@ -321,9 +321,10 @@ can re-import (or use Convex's PITR slider). There is no bespoke
 
 PII is already encrypted at rest in the Convex schema
 (`encryptedEmail`, `encryptedName`, `encryptedAddress`, etc.). The
-domain keys (`commons-credential-v2`, `commons-witness-encryption-v1`,
-`commons-identity-v1`) remain frozen in `$env/dynamic/private` and
-are not part of the backup flow.
+domain keys (`voter-protocol-credential-v2`, `voter-protocol-witness-encryption-v1`,
+`voter-protocol-identity-v1`) remain frozen in `$env/dynamic/private` and
+are not part of the backup flow. (Renamed 2026-05-05 from the `commons-*`
+namespace; see voter-protocol CRYPTOGRAPHY-SPEC.md §0.)
 
 #### DR Drill Script
 
@@ -983,7 +984,7 @@ DB_STATEMENT_TIMEOUT_MS="30000"
 - **Rate Limiter**: `/src/lib/core/security/rate-limiter.ts` (703 lines, excellent)
 - **Billing**: `/src/routes/api/billing/webhook/+server.ts` (Stripe sync)
 - **Storage**: `/storage_isolation_gaps.md` (gap inventory)
-- **Backup Domain Strings** (FROZEN): `commons-credential-v2` (PII encryption key domain)
+- **Backup Domain Strings** (FROZEN): `voter-protocol-credential-v2` (PII encryption key domain; renamed 2026-05-05 from `commons-credential-v2`)
 
 ---
 

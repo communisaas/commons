@@ -718,7 +718,7 @@ This section documents critical integration findings from the 2026-02-08 coordin
 
 The ZK proof generated in `ProofGenerator.svelte` is not cryptographically bound to the message content. The EIP-712 signature covers `proofHash` and `publicInputsHash` but not the message body. A valid proof for action domain X can be paired with arbitrary message content.
 
-**Why this is acceptable for Phase 1:** The `action_domain = keccak256("commons.v1" || jurisdiction || template_id || session_id)` binds the proof to a specific campaign context. Per-message content binding is deferred to Phase 2 TEE delivery (where the TEE verifies message-template correspondence server-side).
+**Why this is acceptable for Phase 1:** The `action_domain = keccak256("voter-protocol.v2" || jurisdiction || template_id || session_id || district_commitment)` binds the proof to a specific campaign context (the `commons.v1` form was the predecessor schema; current canonical is `voter-protocol.v2` per `voter-protocol/specs/CRYPTOGRAPHY-SPEC.md` §6.4 and §0). Per-message content binding is deferred to Phase 2 TEE delivery (where the TEE verifies message-template correspondence server-side).
 
 **Why contentHash on-chain is rejected:** Templates are public. On-chain content hashes would enable a **template fingerprinting attack** — an adversary precomputes `keccak256(template_text)` for every template and correlates on-chain hashes with political positions, deanonymizing users. This is documented in COORDINATION-INTEGRITY-SPEC.md Section 3.
 
