@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite';
 import wasm from 'vite-plugin-wasm';
 import alias from '@rollup/plugin-alias';
 import { fileURLToPath } from 'url';
+import { execSync } from 'node:child_process';
 
 // Suppress spurious MaxListenersExceededWarning from SvelteKit HMR child processes.
 // process.setMaxListeners covers the global process EventEmitter;
@@ -11,6 +12,35 @@ import { fileURLToPath } from 'url';
 import { EventEmitter } from 'events';
 EventEmitter.defaultMaxListeners = 20;
 process.setMaxListeners(20);
+
+// Resolve the current commit SHA at config-load time so it can be inlined
+// into the bundle via `define`. This runs in Node during build/dev (not on
+// Cloudflare Workers at runtime), so `node:child_process` is fine here.
+// The 12-char short SHA is exposed as `import.meta.env.VITE_COMMIT_SHA` and
+// is used by routes that need to pin source links to an immutable revision
+// (e.g. the public record's footer source-link manifest).
+//
+// CI overrides via env var are honoured first (CF Pages exposes
+// `CF_PAGES_COMMIT_SHA`); local dev falls back to `git rev-parse HEAD`.
+// If neither is available, we fall back to the literal string `'main'` so
+// the link resolves to the moving branch — drift is then visible because
+// the displayed SHA reads `main`.
+const COMMIT_SHA: string = (() => {
+	const fromEnv =
+		process.env.VITE_COMMIT_SHA ||
+		process.env.COMMIT_SHA ||
+		process.env.CF_PAGES_COMMIT_SHA ||
+		process.env.GITHUB_SHA;
+	if (fromEnv) return fromEnv.slice(0, 12);
+	try {
+		return execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+			.toString()
+			.trim()
+			.slice(0, 12);
+	} catch {
+		return 'main';
+	}
+})();
 
 // Resolve paths for alias configuration
 const bufferShimPath = fileURLToPath(
@@ -188,6 +218,10 @@ export default defineConfig({
 
 	// Separate configuration for Svelte component tests
 	define: {
-		'import.meta.vitest': undefined
+		'import.meta.vitest': undefined,
+		// Inline the 12-char short commit SHA at build time so server and
+		// client code can reference an immutable revision without a runtime
+		// `node:child_process` call (unavailable on Cloudflare Workers).
+		'import.meta.env.VITE_COMMIT_SHA': JSON.stringify(COMMIT_SHA)
 	}
 });

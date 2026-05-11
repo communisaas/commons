@@ -26,10 +26,14 @@ async function main() {
 	const pem = await exportPKCS8(privateKey);
 
 	// Export public key as JWK (for reference)
+	// kid defaults to 'commons-convex-1' (preserves current deployment behavior);
+	// peer implementations override via CONVEX_JWT_KID. Must match the value
+	// used in src/lib/server/convex-jwt.ts at runtime.
+	const kid = process.env.CONVEX_JWT_KID || 'commons-convex-1';
 	const jwk = await exportJWK(publicKey);
 	jwk.alg = 'RS256';
 	jwk.use = 'sig';
-	jwk.kid = 'commons-convex-1';
+	jwk.kid = kid;
 
 	// Format PEM for .env file (replace newlines with \n)
 	const envPem = pem.trim().replace(/\n/g, '\\n');

@@ -1,6 +1,18 @@
 import adapterCloudflare from '@sveltejs/adapter-cloudflare';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
+// Atlas host is read from PUBLIC_ATLAS_HOST at config-evaluation time.
+// commons.email's atlas remains in the connect-src list as the default fallback,
+// so the reference deployment is unchanged when PUBLIC_ATLAS_HOST is unset or
+// already equals 'https://atlas.commons.email'. Peer implementations point
+// PUBLIC_ATLAS_HOST at their own R2/IPFS-backed atlas; the resulting host is
+// appended to connect-src so browser fetches aren't CSP-blocked.
+const DEFAULT_ATLAS_HOST = 'https://atlas.commons.email';
+const configuredAtlasHost = (process.env.PUBLIC_ATLAS_HOST || '').trim().replace(/\/$/, '');
+const atlasHosts = configuredAtlasHost && configuredAtlasHost !== DEFAULT_ATLAS_HOST
+	? [DEFAULT_ATLAS_HOST, configuredAtlasHost]
+	: [DEFAULT_ATLAS_HOST];
+
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
 	preprocess: [vitePreprocess()],
@@ -49,9 +61,11 @@ const config = {
 					'https://tile.openstreetmap.org',
 					'https://*.basemaps.cartocdn.com',
 					// Shadow Atlas data: R2 custom domain (primary read path).
+					// commons.email is the default; peer impls add their own host via
+					// PUBLIC_ATLAS_HOST (read at build time, see top of this file).
 					// IPFS gateways are dormant — re-add gateway domains here when
 					// IPFS_CID_ROOT is set and the IPFS fallback path is reactivated.
-					'https://atlas.commons.email',
+					...atlasHosts,
 					// Convex: HTTP queries + WebSocket subscriptions (dual-stack, Cycle 1)
 					'https://*.convex.cloud',
 					'wss://*.convex.cloud'

@@ -93,3 +93,6 @@ commons-desktop-a11y.md
 # Playwright MCP artifacts
 .playwright-mcp/
 tests/e2e/.auth/
+
+# Nested SvelteKit generated artifacts (infra/lambda hosts a SvelteKit app)
+infra/lambda/*/.svelte-kit/

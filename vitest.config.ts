@@ -81,57 +81,49 @@ export default defineConfig({
 			// See: docs/testing/svelte-component-testing.md for migration path
 			'tests/unit/ProofGenerator.test.ts',
 			'tests/unit/components/AddressChangeFlow.test.ts',
+			// Cycle 268: behavioral test for VerificationGate auto-dismiss
+			// requires the components-lane config for @testing-library/svelte
+			// + stub modules.
+			'tests/unit/components/VerificationGate-auto-dismiss.test.ts',
+			// Cycle 280: behavioral test for GovernmentCredentialVerification
+			// conditional dead-end copy. Same components-lane setup.
+			'tests/unit/components/GovernmentCredentialVerification-conditional-copy.test.ts',
+			// Same Svelte 5 lifecycle_function_unavailable issue.
+			// `mount(...)` is not available on the server-side render path that
+			// runs under the current vitest jsdom + MSW config.
+			'tests/unit/components/GroundCard.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',
 			'tests/integration/oauth-resumption.test.ts',
 			'tests/integration/dp-end-to-end.test.ts',
 			'tests/unit/agents/source-cache.test.ts',
-			'tests/unit/analytics-snapshot.test.ts',
-			'tests/unit/api/cron-analytics-snapshot.test.ts',
-			'tests/unit/api/public-api-gate.test.ts',
-			'tests/unit/auth/oauth-callback-handler.test.ts',
-			'tests/unit/auth/oauth-security.test.ts',
-			'tests/unit/automation/workflow-api-v1.test.ts',
-			'tests/unit/automation/workflow-crud.test.ts',
-			'tests/unit/automation/workflow-engine.test.ts',
-			'tests/unit/billing/usage.test.ts',
-			'tests/unit/delegation/grant-crud.test.ts',
-			'tests/unit/dp-contribution-bounding.test.ts',
-			'tests/unit/events/event-checkin.test.ts',
+			// Tests below mock the deleted `$lib/core/db` Prisma path or import
+			// removed source modules; legitimately need rewriting against the
+			// Convex-only stack. Identified via `vi.mock('$lib/core/db', ...)`
+			// grep — re-run that grep before adding to this list.
 			'tests/unit/events/event-crud.test.ts',
-			'tests/unit/events/event-rsvp.test.ts',
 			'tests/unit/fundraising/donation-api-v1.test.ts',
 			'tests/unit/fundraising/donation-checkout.test.ts',
-			'tests/unit/fundraising/donation-webhook.test.ts',
 			'tests/unit/fundraising/fundraising-crud.test.ts',
 			'tests/unit/geographic/api-v1-reps.test.ts',
 			'tests/unit/geographic/campaign-targeting.test.ts',
-			'tests/unit/geographic/rep-lookup.test.ts',
-			'tests/unit/identity/passkey-authentication-decrypt.test.ts',
-			'tests/unit/identity/passkey-authentication.test.ts',
-			'tests/unit/identity/passkey-settings.test.ts',
-			'tests/unit/location/au-resolver.test.ts',
-			'tests/unit/location/ca-resolver.test.ts',
-			'tests/unit/location/country-resolver.test.ts',
-			'tests/unit/location/gb-resolver.test.ts',
-			'tests/unit/location/us-resolver.test.ts',
 			'tests/unit/networks/network-api-v1.test.ts',
 			'tests/unit/scorecard/api.test.ts',
-			'tests/unit/scorecard/compute.test.ts',
-			'tests/unit/security/rate-limiter.test.ts',
-			'tests/unit/server/reacher-client.test.ts',
-			'tests/unit/sms/billing-limits.test.ts',
 			'tests/unit/sms/patch-through-call.test.ts',
 			'tests/unit/sms/sms-api-v1.test.ts',
 			'tests/unit/sms/sms-crud.test.ts',
-			'tests/unit/sms/twilio-integration.test.ts',
-			'tests/unit/supporters/find-by-email.test.ts',
 			'tests/unit/wallet/wallet-api.test.ts',
-			'tests/unit/wallet/wallet-state.test.ts',
-			// Directly import convex/_generated/api which isn't available in CI
-			'tests/unit/agents/stream-endpoints.test.ts',
-			'tests/unit/api-v1/auth.test.ts'
+			// Skip-only stub tests for deleted helpers (5-line files with single
+			// `describe.skip` block). Still need rewriting against the new
+			// implementation; left excluded to keep the runner output clean.
+			'tests/unit/api/cron-analytics-snapshot.test.ts',
+			'tests/unit/billing/usage.test.ts',
+			'tests/unit/dp-contribution-bounding.test.ts',
+			'tests/unit/scorecard/compute.test.ts',
+			'tests/unit/server/reacher-client.test.ts',
+			// Directly imports convex/_generated/api which isn't available in CI:
+			'tests/unit/agents/stream-endpoints.test.ts'
 		],
 
 		// Environment configuration

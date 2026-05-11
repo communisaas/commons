@@ -255,7 +255,7 @@ export default {
 				'participation-verified': '0 4px 14px 0 rgb(16 185 129 / 0.15)',
 				'participation-community': '0 4px 14px 0 rgb(14 165 233 / 0.15)',
 
-				// Atmospheric shadows (Phase 3: Cypherpunk Newsroom)
+				// Atmospheric shadows (cypherpunk newsroom register)
 				'atmospheric-card':
 					'inset 0 1px 0 0 rgba(255, 255, 255, 0.6), 0 1px 2px 0 rgba(0, 0, 0, 0.05)',
 				'atmospheric-card-hover':

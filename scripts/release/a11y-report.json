@@ -1,0 +1,60 @@
+{
+  "url": "http://localhost:5173/record/vol-1/issue-1",
+  "timestamp": "2026-05-06T09:07:29.665Z",
+  "tags": [
+    "wcag2a",
+    "wcag2aa",
+    "wcag21a",
+    "wcag21aa",
+    "best-practice"
+  ],
+  "violationCount": 0,
+  "passCount": 33,
+  "incompleteCount": 1,
+  "violations": [],
+  "incomplete": [
+    {
+      "id": "color-contrast",
+      "impact": "serious",
+      "description": "Ensure the contrast between foreground and background colors meets WCAG 2 AA minimum contrast ratio thresholds",
+      "nodes": [
+        {
+          "target": [
+            "#constitution-marker > .sep[aria-hidden=\"true\"]"
+          ],
+          "html": "<span class=\"sep svelte-veblyc\" aria-hidden=\"true\">·</span>"
+        },
+        {
+          "target": [
+            ".record-footer__sources > .sep[aria-hidden=\"true\"]:nth-child(2)"
+          ],
+          "html": "<span class=\"sep svelte-veblyc\" aria-hidden=\"true\">·</span>"
+        },
+        {
+          "target": [
+            ".record-footer__sources > .sep[aria-hidden=\"true\"]:nth-child(4)"
+          ],
+          "html": "<span class=\"sep svelte-veblyc\" aria-hidden=\"true\">·</span>"
+        },
+        {
+          "target": [
+            ".sep[aria-hidden=\"true\"]:nth-child(6)"
+          ],
+          "html": "<span class=\"sep svelte-veblyc\" aria-hidden=\"true\">·</span>"
+        },
+        {
+          "target": [
+            ".record-footer__plain > .sep[aria-hidden=\"true\"]:nth-child(2)"
+          ],
+          "html": "<span class=\"sep svelte-veblyc\" aria-hidden=\"true\">·</span>"
+        },
+        {
+          "target": [
+            ".record-footer__plain > .sep[aria-hidden=\"true\"]:nth-child(4)"
+          ],
+          "html": "<span class=\"sep svelte-veblyc\" aria-hidden=\"true\">·</span>"
+        }
+      ]
+    }
+  ]
+}

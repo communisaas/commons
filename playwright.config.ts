@@ -54,7 +54,7 @@ export default defineConfig({
 		trace: 'on-first-retry'
 	},
 	projects: [
-		// Wave 7 / FU-4.1 — auth setup project. Runs `auth.setup.ts` before
+		// FU-4.1 — auth setup project. Runs `auth.setup.ts` before
 		// the main chromium project to persist a session cookie. The setup
 		// itself skips when `PLAYWRIGHT_DEV_LOGIN_TOKEN` is unset, so this
 		// project is a no-op until the operator wires the dev-login endpoint.
