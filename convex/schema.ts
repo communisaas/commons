@@ -85,10 +85,13 @@ export default defineSchema({
 		walletType: v.optional(v.string()), // 'evm' | 'near'
 		districtHash: v.optional(v.string()),
 
-		// PII — plaintext
+		// PII — plaintext (post-PII-elimination model)
 		email: v.optional(v.string()),
 		name: v.optional(v.string()),
-		// Deprecated — retained until existing rows are cleaned up
+		// Deprecated — server-held PII encryption was eliminated; these fields
+		// are NEITHER written NOR read by current code. They remain in the
+		// schema only because Convex schema removal requires clearing all
+		// existing data first; the cleanup is bookkeeping, not load-bearing.
 		encryptedEmail: v.optional(v.string()),
 		encryptedName: v.optional(v.string()),
 		emailHash: v.optional(v.string()),
@@ -209,6 +212,21 @@ export default defineSchema({
 		deliveredDistricts: v.optional(v.array(v.string())), // bounded: max 435 congressional districts
 		avgReputation: v.optional(v.float64()),
 		endorsementCount: v.optional(v.number()),
+
+		// Per-template dimensional aggregates, denormalized at delivery time so
+		// the homepage TemplateList can render citation-scale Pulse / Ratio /
+		// Rings inline per row without joining or re-aggregating per request.
+		// Updated by submissions.incrementTemplateReach on each verified delivery.
+		// dailyArrivals: rolling 30-day daily-bucketed counts (oldest first).
+		// dailyArrivalsLastDay: epoch ms of the most recent day, used to detect
+		// day-rollover and shift the array left when a new day arrives.
+		// districtCounts: per-district send counts, capped at 500 entries (matches
+		// deliveredDistricts cap). Read-time consumers truncate to top-N.
+		// tierCounts: counts per identity tier, length 6 (index = tier 0-5).
+		dailyArrivals: v.optional(v.array(v.number())),
+		dailyArrivalsLastDay: v.optional(v.number()),
+		districtCounts: v.optional(v.array(v.object({ code: v.string(), count: v.number() }))),
+		tierCounts: v.optional(v.array(v.number())),
 
 		// Semantic embeddings (768-dim Gemini vectors)
 		locationEmbedding: v.optional(v.array(v.float64())),
@@ -651,6 +669,12 @@ export default defineSchema({
 		// which would bypass the delivery recheck.
 		issuingCredentialId: v.optional(v.id('districtCredentials')),
 
+		// User identity tier at submission time, denormalized from users.trustTier
+		// at insertSubmission so per-template tier breakdowns can be computed
+		// without joining (mirrors campaignActions.trustTier). Optional for
+		// backward compat with pre-denormalization rows; backfill via cron.
+		trustTier: v.optional(v.number()),
+
 		updatedAt: v.number()
 	})
 		.index('by_nullifier', ['nullifier'])
@@ -659,6 +683,10 @@ export default defineSchema({
 		.index('by_templateId', ['templateId'])
 		.index('by_deliveryStatus', ['deliveryStatus'])
 		.index('by_verificationStatus', ['verificationStatus'])
+		// Range scan on verifiedAt within a verification status — required by
+		// `aggregateForHero` to avoid a full-table scan over all verified
+		// submissions every homepage SSR.
+		.index('by_verificationStatus_verifiedAt', ['verificationStatus', 'verifiedAt'])
 		.index('by_anchorStatus', ['anchorStatus'])
 		.index('by_witnessExpiresAt', ['witnessExpiresAt'])
 		.index('by_issuingCredentialId', ['issuingCredentialId']),
@@ -789,7 +817,13 @@ export default defineSchema({
 		.index('by_userId_expiresAt', ['userId', 'expiresAt'])
 		.index('by_congressionalDistrict', ['congressionalDistrict'])
 		.index('by_credentialHash', ['credentialHash'])
-		.index('by_revocationStatus', ['revocationStatus']),
+		.index('by_revocationStatus', ['revocationStatus'])
+		// Time-windowed scan for boundary-cell observability (`getBoundaryCellRate24h`).
+		// Without this index, the cron does a full-table `.collect()` and
+		// hits Convex's row-scan cap somewhere between 5K-16K active
+		// credentials — the boundary alert dies precisely when there are
+		// enough users for boundary mistakes to matter.
+		.index('by_issuedAt', ['issuedAt']),
 
 	// ===========================================================================
 	// MDL PRESENTATION REUSE COOLDOWN
@@ -810,7 +844,7 @@ export default defineSchema({
 		.index('by_expiresAt', ['expiresAt']),
 
 	// ===========================================================================
-	// SPARSE MERKLE TREE STATE (Wave 2 — KG-2 closure)
+	// SPARSE MERKLE TREE STATE (— KG-2 closure)
 	// ===========================================================================
 	//
 	// Persistent off-chain state for the Poseidon2 sparse Merkle tree backing
@@ -849,14 +883,12 @@ export default defineSchema({
 		lastUpdatedAt: v.number()
 	}).index('by_treeId', ['treeId']),
 
-	// Wave 5 / FU-2.1 — drift kill-switch state, separated from `smtRoots`.
-	//
-	// REVIEW 5-2 (Critic E): keeping halt fields on `smtRoots` forced
-	// `setRevocationHalt` to pre-seed a row with `root: "0x0...0"` at genesis-
-	// pre-emit, which is NOT the canonical Poseidon2 empty-tree root. Any caller
-	// that read `currentRoot` post-clear-pre-first-emit got the wrong value.
-	// This table holds halt state independently so the SMT canonical state
-	// stays clean.
+	// Drift kill-switch state, separated from `smtRoots`. Keeping halt fields
+	// on `smtRoots` would force `setRevocationHalt` to pre-seed a row with
+	// `root: "0x0...0"` at genesis-pre-emit, which is NOT the canonical
+	// Poseidon2 empty-tree root. Any caller that read `currentRoot` post-
+	// clear-pre-first-emit would then get the wrong value. This table holds
+	// halt state independently so the SMT canonical state stays clean.
 	revocationFlags: defineTable({
 		treeId: v.string(),
 		isHalted: v.boolean(),
@@ -864,9 +896,8 @@ export default defineSchema({
 		haltedReason: v.optional(v.string())
 	}).index('by_treeId', ['treeId']),
 
-	// Wave 5 / FU-2.1 — append-only audit trail for halt set/clear events.
-	//
-	// REVIEW 5-2 (Critic B): the only halt-clear record was console.warn, which
+	// Append-only audit trail for halt set/clear events. Without this, the
+	// only halt-clear record would be `console.warn`, which
 	// goes to ephemeral, operator-mutable Convex function logs. Forensic
 	// reconstruction of "who cleared the halt under which incident" was
 	// impossible. This table is append-only by convention (no patch/delete code
@@ -881,6 +912,20 @@ export default defineSchema({
 		previousReason: v.optional(v.string()),
 		previousHaltedAt: v.optional(v.number())
 	}).index('by_treeId_timestamp', ['treeId', 'timestamp']),
+
+	// Reconciler skip counter — tracks consecutive missing_env / rpc_unavailable
+	// / fetch_failed outcomes from `reconcileSMTRoot`. Reset to 0 on any non-skip
+	// outcome (genesis, healthy, drift, critical). When the counter crosses
+	// `RECONCILE_SKIP_ALERT_THRESHOLD`, the reconciler emits a Sentry alert so a
+	// stuck cron (rotated `INTERNAL_API_SECRET`, dead RPC) can't fail silently
+	// and let Convex SMT and on-chain RevocationRegistry diverge unboundedly.
+	revocationReconcileState: defineTable({
+		treeId: v.string(),
+		consecutiveSkips: v.number(),
+		lastSkipReason: v.optional(v.string()),
+		lastSkipAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_treeId', ['treeId']),
 
 	// ===========================================================================
 	// RATE LIMITS
@@ -1388,6 +1433,20 @@ export default defineSchema({
 		ownerOrgId: v.id('organizations'),
 		status: v.string(), // 'active' | 'suspended'
 		applicableCountries: v.array(v.string()),
+		// Founding charter — public when charterPublishedAt is set. Mission is the
+		// short purpose statement; principles is the enumerated commitments list;
+		// charterText is optional long-form prose. Founding cohort = members whose
+		// joinedAt < charterPublishedAt; later joiners are not founders.
+		// Publish-flow mutation MUST validate (no schema-level cap so authors can
+		// iterate during draft): mission ≤ 500 chars, principles ≤ 20 items × 200
+		// chars each, charterText ≤ 10000 chars, charterPublishedAt strictly
+		// greater than max(founding-cohort joinedAt) so the strict-less-than
+		// founder filter holds. Once charterPublishedAt is set, content fields
+		// MUST be treated as append-only (any edit invalidates the charter hash).
+		mission: v.optional(v.string()),
+		principles: v.optional(v.array(v.string())),
+		charterText: v.optional(v.string()),
+		charterPublishedAt: v.optional(v.number()),
 		updatedAt: v.number()
 	})
 		.index('by_slug', ['slug'])
@@ -1434,8 +1493,12 @@ export default defineSchema({
 		phoneHash: v.optional(v.string()),
 		encryptedCustomFields: v.optional(v.string()),
 
-		// Cross-org bounce/complaint correlation (unkeyed SHA-256 of normalized email)
+		// Cross-org bounce/complaint correlation (unkeyed SHA-256 of normalized email).
+		// Paired `globalPhoneHash` enables TCPA STOP/START webhook lookup —
+		// the inbound Twilio webhook only has the `From` phone (no org
+		// context). Both producers in `convex/_orgHash.ts`.
 		globalEmailHash: v.optional(v.string()),
+		globalPhoneHash: v.optional(v.string()),
 
 		// ZK identity binding
 		identityCommitment: v.optional(v.string()),
@@ -1455,6 +1518,7 @@ export default defineSchema({
 		.index('by_orgId_emailHash', ['orgId', 'emailHash'])
 		.index('by_orgId_phoneHash', ['orgId', 'phoneHash'])
 		.index('by_globalEmailHash', ['globalEmailHash'])
+		.index('by_globalPhoneHash', ['globalPhoneHash'])
 		.index('by_emailStatus', ['emailStatus'])
 		.index('by_smsStatus', ['smsStatus'])
 		.index('by_source', ['source'])
@@ -1517,6 +1581,11 @@ export default defineSchema({
 		// Fundraising
 		goalAmountCents: v.optional(v.number()),
 		raisedAmountCents: v.number(),
+		// Counts donations completed, NOT unique donors. Field name is legacy
+		// (renaming is a Convex migration); UI labels it "Donations" to match
+		// the actual semantics. True unique-donor tracking is deferred to
+		// Phase 9 substrate work — would need a (campaignId, supporterId)
+		// composite index plus refund-aware decrement logic. (cure shipped).
 		donorCount: v.number(),
 		donationCurrency: v.optional(v.string()),
 
@@ -1534,6 +1603,12 @@ export default defineSchema({
 		// Denormalized counters
 		actionCount: v.optional(v.number()),
 		verifiedActionCount: v.optional(v.number()),
+		// Tier-3+ (document-verified, ZKP-grade) action count, maintained
+		// by `createCampaignAction` on every verified insert with
+		// trustTier >= 3. Without this denormalized counter,
+		// `getCampaignForReport` would have to read every campaignAction
+		// row just to count this subset in memory.
+		tier3VerifiedActionCount: v.optional(v.number()),
 
 		updatedAt: v.number()
 	})
@@ -1569,6 +1644,7 @@ export default defineSchema({
 		.index('by_campaignId', ['campaignId'])
 		.index('by_campaignId_verified', ['campaignId', 'verified'])
 		.index('by_campaignId_districtHash', ['campaignId', 'districtHash'])
+		.index('by_campaignId_supporterId', ['campaignId', 'supporterId'])
 		.index('by_orgId_verified', ['orgId', 'verified']),
 
 	campaignDeliveries: defineTable({
@@ -1584,6 +1660,15 @@ export default defineSchema({
 		status: v.string(), // 'queued' | 'sent' | 'delivered' | 'bounced' | 'opened'
 		sentAt: v.optional(v.number()),
 		sesMessageId: v.optional(v.string()),
+		// Append-only history of sesMessageIds that previously bound to
+		// this row (cleared by collision-steal in updateDeliveryStatus).
+		// Lets operators reconstruct webhook correlation during incident
+		// response — the loser of a collision steal still carries its
+		// original SES-assigned id here as forensic context. Bounded
+		// length: collisions are rare (SES guarantees uniqueness; non-
+		// collision writes never append) so the array stays single-digit
+		// in normal operation.
+		previousSesMessageIds: v.optional(v.array(v.string())),
 		packetSnapshot: v.optional(v.any()),
 		packetDigest: v.optional(v.string()),
 		proofWeight: v.optional(v.number()),
@@ -1591,7 +1676,13 @@ export default defineSchema({
 	})
 		.index('by_campaignId', ['campaignId'])
 		.index('by_actionId', ['actionId'])
-		.index('by_status', ['status']),
+		.index('by_status', ['status'])
+		// SES bounce/delivery webhook (`webhooks.handleDeliveryEvent`) uses
+		// this to correlate inbound notifications to the queued delivery
+		// row. Pre-index path was `.filter(q.eq("sesMessageId", ...))` —
+		// O(n) over every campaign delivery, ever. With the index this is
+		// a bounded read by SES MessageId, which is unique per send.
+		.index('by_sesMessageId', ['sesMessageId']),
 
 	// ===========================================================================
 	// EMAIL BLASTS (with flattened email_batch)
@@ -1668,6 +1759,30 @@ export default defineSchema({
 		.index('by_blastId', ['blastId'])
 		.index('by_blastId_eventType', ['blastId', 'eventType'])
 		.index('by_blastId_recipientEmailHash', ['blastId', 'recipientEmailHash']),
+
+	// Per-recipient send receipts — one row per (blast, recipient) at the moment
+	// the SES Lambda dispatches the message. Closes (no durable
+	// per-recipient receipt register). emailEvents records what happens AFTER
+	// the send (open/click/bounce/complaint); emailDeliveryReceipts records
+	// THAT a send was attempted, with which sesMessageId, and the immediate
+	// outcome from SES. The (blastId, recipientEmailHash) tuple is logically
+	// unique — writers MUST upsert via the by_blastId_recipientEmailHash index
+	// rather than blind-insert (so retries don't double-write).
+	emailDeliveryReceipts: defineTable({
+		blastId: v.id('emailBlasts'),
+		recipientEmailHash: v.string(),
+		// Set ONLY when status === 'sent'. The `by_sesMessageId` index over an
+		// optional field would group all `failed` rows under undefined; SNS
+		// bounce-correlation lookups must filter by `status === 'sent'` before
+		// dereferencing this field.
+		sesMessageId: v.optional(v.string()),
+		status: v.union(v.literal('sent'), v.literal('failed')),
+		sentAt: v.number(),
+		error: v.optional(v.string())
+	})
+		.index('by_blastId', ['blastId'])
+		.index('by_blastId_recipientEmailHash', ['blastId', 'recipientEmailHash'])
+		.index('by_sesMessageId', ['sesMessageId']),
 
 	// ===========================================================================
 	// SUBSCRIPTIONS
@@ -1805,7 +1920,18 @@ export default defineSchema({
 		attendanceVerified: v.optional(v.boolean()),
 		attendanceVerificationMethod: v.optional(v.string()), // 'mdl' | 'passkey' | 'checkin_code'
 		attendanceIdentityCommitment: v.optional(v.string()),
-		attendanceDistrictHash: v.optional(v.string())
+		attendanceDistrictHash: v.optional(v.string()),
+		// Distinguishes a "real" RSVP (user pre-registered for the event)
+		// from a "walk-in" sentinel row inserted by `publicCheckIn` for
+		// dedup purposes (the walk-in had no prior RSVP, but we need a row
+		// keyed on emailHash to refuse a second counter-tick). Walk-ins
+		// carry status="GOING" + checkedInAt + walkIn=true so the RSVP
+		// roster query (`getRsvps`) can filter them out by default while
+		// the dedup branch in `publicCheckIn` still finds them via
+		// `by_eventId_emailHash`. The roster surface is staffer-facing
+		// and showing rows with `encryptedEmail: ""` would crash
+		// client-side decrypt.
+		walkIn: v.optional(v.boolean())
 	})
 		.index('by_eventId', ['eventId'])
 		.index('by_eventId_emailHash', ['eventId', 'emailHash'])
@@ -1834,7 +1960,15 @@ export default defineSchema({
 		stripePaymentIntentId: v.optional(v.string()),
 		stripeSubscriptionId: v.optional(v.string()),
 
-		status: v.string(), // 'pending' | 'completed' | 'failed' | 'refunded'
+		// Closed enum so consumers (UI filters, SDK clients, analytics)
+		// see the full set at the type system level. Free-form
+		// `v.string()` would allow drift between writers and readers.
+		status: v.union(
+			v.literal('pending'),
+			v.literal('completed'),
+			v.literal('failed'),
+			v.literal('refunded')
+		),
 
 		districtHash: v.optional(v.string()),
 		engagementTier: v.number(),
@@ -1870,7 +2004,21 @@ export default defineSchema({
 		supporterId: v.optional(v.id('supporters')),
 
 		triggerEvent: v.any(), // snapshot of trigger
-		status: v.string(), // 'pending' | 'running' | 'completed' | 'failed' | 'paused'
+		// Status enum as a union literal so consumers (UI filters,
+		// SDK clients, analytics queries) see the full set including
+		// `partial_no_op` — a row that completed all steps but at
+		// least one step was an unimplemented verb (the executor logs
+		// success:false but advances currentStep so downstream delays
+		// still fire). Plain `v.string()` left consumers free to filter
+		// on a closed `completed` set and silently miss these rows.
+		status: v.union(
+			v.literal('pending'),
+			v.literal('running'),
+			v.literal('paused'),
+			v.literal('completed'),
+			v.literal('partial_no_op'),
+			v.literal('failed'),
+		),
 		currentStep: v.number(),
 		nextRunAt: v.optional(v.number()),
 		error: v.optional(v.string()),
@@ -2108,7 +2256,13 @@ export default defineSchema({
 		.index('by_orgId_billId_decisionMakerId', ['orgId', 'billId', 'decisionMakerId'])
 		.index('by_status', ['status'])
 		.index('by_causalityClass', ['causalityClass'])
-		.index('by_deliveryId', ['deliveryId']),
+		.index('by_deliveryId', ['deliveryId'])
+		// Time-windowed scan for `listDmsWithReceiptsSince` (vote-tracker cron).
+		// `accountabilityReceipts` is append-only and grows unboundedly; the
+		// previous `.collect()` would hit Convex's row-scan cap somewhere
+		// between 5K-16K rows. Range scan via this index reads only rows in
+		// the requested window.
+		.index('by_proofDeliveredAt', ['proofDeliveredAt']),
 
 	orgIssueDomains: defineTable({
 		orgId: v.id('organizations'),
@@ -2374,5 +2528,43 @@ export default defineSchema({
 	})
 		.index('by_emailHash', ['emailHash'])
 		.index('by_status', ['status'])
-		.index('by_userId', ['userId'])
+		.index('by_userId', ['userId']),
+
+	// Cross-tick pagination cursors for table-scanning cron actions.
+	// Per-key (one row per sweep name). The `sweepStrandedPlaceholders`
+	// cron uses this to resume from the previous tick's cursor instead
+	// of restarting at null every 30 minutes — without the checkpoint,
+	// for tables >10K rows the sweep would traverse the same prefix
+	// forever and never reach new strandeds. `wrapCount` increments
+	// when the sweep reaches `isDone` and resets to null; lets operators
+	// verify the sweep is making full passes through the table.
+	sweepCheckpoints: defineTable({
+		key: v.string(),
+		cursor: v.optional(v.string()),
+		wrapCount: v.number(),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Registry mapping a Twilio destination number (an org's verified
+	// outbound sender) to the org that owns it. The inbound Twilio
+	// webhook resolves an incoming SMS's `To` field through this table
+	// to scope STOP/START semantics to the org context that prompted
+	// the user's reply — pre-registry, a START reply re-subscribed the
+	// phone across EVERY org that had it as a supporter, even orgs the
+	// user never knowingly engaged. Phone numbers stored as E.164
+	// (`+E164`) for hash-stable cross-reference with smsBlasts.fromNumber.
+	// `verifiedAt` tracks whether the org owner has confirmed
+	// ownership of the number (initial placeholder pattern — registration
+	// flow not yet wired). Unique-per-number is enforced
+	// by the application layer (no native unique constraint in Convex);
+	// the webhook treats multiple matches as ambiguous and
+	// falls back to STOP-style cross-org behavior with a console.warn.
+	orgTwilioNumbers: defineTable({
+		orgId: v.id('organizations'),
+		phoneNumber: v.string(),
+		verifiedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_phoneNumber', ['phoneNumber'])
+		.index('by_orgId', ['orgId'])
 });
