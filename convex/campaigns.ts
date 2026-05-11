@@ -7,7 +7,6 @@ import { requireOrgRole, loadOrg, requireAuth } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
 import { computeOrgScopedEmailHash } from "./_orgHash";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
-import { encryptWithOrgKey } from "./_orgKey";
 
 type ActiveCampaignForSubmission = {
   _id: Id<"campaigns">;
@@ -62,6 +61,8 @@ const findOrCreateSupporterRef = makeFunctionReference<"mutation">("campaigns:fi
     postalCode?: string;
     encryptedPhone?: string;
     phoneHash?: string;
+    globalEmailHash?: string;
+    globalPhoneHash?: string;
     source: string;
   },
   FindOrCreateSupporterResult
@@ -770,6 +771,12 @@ export const findOrCreateSupporter = internalMutation({
     postalCode: v.optional(v.string()),
     encryptedPhone: v.optional(v.string()),
     phoneHash: v.optional(v.string()),
+    // Global hash pair (computed by the caller from plaintext, same
+    // helpers as `supporters.create`) so existing legacy supporters
+    // get backfilled when they submit a campaign action — closes the
+    // gap where only NEW writes would otherwise populate globals.
+    globalEmailHash: v.optional(v.string()),
+    globalPhoneHash: v.optional(v.string()),
     source: v.string(),
   },
   handler: async (ctx, args) => {
@@ -788,6 +795,12 @@ export const findOrCreateSupporter = internalMutation({
       if (args.postalCode && !existing.postalCode) patch.postalCode = args.postalCode;
       if (args.encryptedPhone && !existing.encryptedPhone) patch.encryptedPhone = args.encryptedPhone;
       if (args.phoneHash && !existing.phoneHash) patch.phoneHash = args.phoneHash;
+      // Backfill global hashes on existing rows when the caller now
+      // supplies them — legacy supporters submitting a new action
+      // become reachable from the SES/TCPA webhooks without waiting
+      // for the operator to run `backfillSupporterGlobalHashes`.
+      if (args.globalEmailHash && !existing.globalEmailHash) patch.globalEmailHash = args.globalEmailHash;
+      if (args.globalPhoneHash && !existing.globalPhoneHash) patch.globalPhoneHash = args.globalPhoneHash;
       if (Object.keys(patch).length > 0) {
         patch.updatedAt = Date.now();
         await ctx.db.patch(existing._id, patch);
@@ -801,11 +814,13 @@ export const findOrCreateSupporter = internalMutation({
       orgId: args.orgId,
       encryptedEmail: args.encryptedEmail,
       emailHash: args.emailHash,
+      globalEmailHash: args.globalEmailHash,
       encryptedName: args.encryptedName,
       postalCode: args.postalCode,
       country: "US",
       encryptedPhone: args.encryptedPhone,
       phoneHash: args.phoneHash,
+      globalPhoneHash: args.globalPhoneHash,
       source: args.source,
       verified: false,
       emailStatus: "subscribed",
@@ -853,23 +868,33 @@ export const createCampaignAction = internalMutation({
     compositionMode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Deduplicate: one action per supporter per campaign
-    const existing = await ctx.db
+    // Dedup via the composite index. Without `by_campaignId_supporterId`,
+    // a `withIndex("by_campaignId").collect()` would return every action
+    // for the campaign so the in-memory `.find()` could match the
+    // supporter, then re-filter the SAME list for verified count — two
+    // O(n) passes on a list that grows linearly with campaign size, and
+    // popular campaigns would hit Convex's row-scan cap. With the
+    // composite index this is a single-doc lookup.
+    const alreadySubmitted = await ctx.db
       .query("campaignActions")
-      .withIndex("by_campaignId", (q) => q.eq("campaignId", args.campaignId))
-      .collect();
+      .withIndex("by_campaignId_supporterId", (q) =>
+        q.eq("campaignId", args.campaignId).eq("supporterId", args.supporterId),
+      )
+      .first();
 
-    const alreadySubmitted = existing.find(
-      (a) => a.supporterId === args.supporterId,
-    );
-    if (alreadySubmitted) {
-      const verifiedCount = existing.filter((a) => a.verified).length;
-      return { alreadySubmitted: true, actionCount: verifiedCount };
-    }
-
-    // Denormalize orgId from campaign for billing query performance
+    // Denormalize orgId from campaign for billing query performance.
+    // Also: returns `verifiedActionCount` from the denormalized
+    // counter on the campaign row instead of re-scanning every
+    // action — the counter is maintained below on every insert path.
     const campaign = await ctx.db.get(args.campaignId);
     const orgId = campaign?.orgId;
+
+    if (alreadySubmitted) {
+      return {
+        alreadySubmitted: true,
+        actionCount: campaign?.verifiedActionCount ?? 0,
+      };
+    }
 
     // Validate h3Cell format: H3 res-7 indices are 15-char hex strings starting with '87'
     const h3Cell = args.h3Cell && /^8[0-9a-f]{14}$/.test(args.h3Cell) ? args.h3Cell : undefined;
@@ -889,23 +914,34 @@ export const createCampaignAction = internalMutation({
       sentAt: Date.now(),
     });
 
-    // Update campaign counters (reuse campaign from orgId lookup above)
+    // Update campaign counters (reuse campaign from orgId lookup above).
+    // Tier-3+ counter incremented when the action is BOTH verified AND
+    // carries trustTier >= 3 (document-verified, ZKP-grade). The
+    // denormalized `tier3VerifiedActionCount` lets `getCampaignForReport`
+    // avoid a `.collect()` scan-cliff for this count.
+    const isTier3Plus = args.verified && (args.trustTier ?? 0) >= 3;
     if (campaign) {
       const newActionCount = (campaign.actionCount ?? 0) + 1;
       const newVerifiedCount = args.verified
         ? (campaign.verifiedActionCount ?? 0) + 1
         : campaign.verifiedActionCount ?? 0;
+      const newTier3Count = isTier3Plus
+        ? (campaign.tier3VerifiedActionCount ?? 0) + 1
+        : campaign.tier3VerifiedActionCount ?? 0;
       await ctx.db.patch(args.campaignId, {
         actionCount: newActionCount,
         verifiedActionCount: newVerifiedCount,
+        tier3VerifiedActionCount: newTier3Count,
         updatedAt: Date.now(),
       });
     }
 
-    // Count for return value
-    const verifiedCount = existing.filter((a) => a.verified).length + (args.verified ? 1 : 0);
-    const totalCount = existing.length + 1;
-
+    // Use the just-patched campaign counters for the return value
+    // instead of re-scanning every action via `.collect()`. The new
+    // value is what we just wrote, so it's exact.
+    const totalCount = (campaign?.actionCount ?? 0) + 1;
+    const verifiedCount =
+      (campaign?.verifiedActionCount ?? 0) + (args.verified ? 1 : 0);
     return { alreadySubmitted: false, actionCount: verifiedCount, totalCount };
   },
 });
@@ -939,6 +975,30 @@ export const submitAction = action({
       throw new Error("Message too long (5000 character maximum)");
     }
 
+    // action-boundary length caps. SvelteKit gates are public-
+    // facing, but Convex actions are also directly callable — defense-in-depth.
+    if (args.email.length > 254) throw new Error("EMAIL_TOO_LARGE");
+    if (args.name.length > 200) throw new Error("NAME_TOO_LARGE");
+    if (args.campaignId.length > 64) throw new Error("CAMPAIGN_ID_TOO_LARGE");
+    if (args.postalCode !== undefined && args.postalCode.length > 16) {
+      throw new Error("POSTAL_CODE_TOO_LARGE");
+    }
+    if (args.phone !== undefined && args.phone.length > 32) {
+      throw new Error("PHONE_TOO_LARGE");
+    }
+    if (args.districtCode !== undefined && args.districtCode.length > 64) {
+      throw new Error("DISTRICT_CODE_TOO_LARGE");
+    }
+    if (args.h3Cell !== undefined && args.h3Cell.length > 32) {
+      throw new Error("H3_CELL_TOO_LARGE");
+    }
+    if (args.source !== undefined && args.source.length > 64) {
+      throw new Error("SOURCE_TOO_LARGE");
+    }
+    if (args.compositionMode !== undefined && args.compositionMode.length > 16) {
+      throw new Error("COMPOSITION_MODE_TOO_LARGE");
+    }
+
     const normalizedEmail = args.email.trim().toLowerCase();
 
     // Get campaign first — needed for orgId
@@ -965,40 +1025,65 @@ export const submitAction = action({
     });
     if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
 
-    // Step 1: Find or create supporter with placeholder email
-    const { supporterId, isNew } = await ctx.runMutation(
+    // Compute the global-hash pair from plaintext BEFORE the find-or-create
+    // mutation so existing legacy supporters get backfilled in the same
+    // mutation call. Computing globals only inside an `if (isNew)` branch
+    // would leave existing rows invisible to the SES/TCPA webhooks until
+    // an operator ran the backfill action.
+    const {
+      computeOrgScopedPhoneHash,
+      computeGlobalEmailHash,
+      computeGlobalPhoneHash,
+    } = await import("./_orgHash");
+    const globalEmailHash = await computeGlobalEmailHash(normalizedEmail);
+    let phoneHash: string | undefined;
+    let globalPhoneHash: string | undefined;
+    if (args.phone) {
+      const trimmedPhone = args.phone.trim();
+      try {
+        phoneHash = await computeOrgScopedPhoneHash(campaign.orgId, trimmedPhone);
+        globalPhoneHash = await computeGlobalPhoneHash(trimmedPhone);
+      } catch {
+        // Non-E.164 input — both hashes intentionally undefined. The
+        // supporter row still lands (email-only path); SMS opt-in/out
+        // for this phone is unreachable until the user submits a valid
+        // E.164-formatted number on a subsequent action.
+        phoneHash = undefined;
+        globalPhoneHash = undefined;
+      }
+    }
+
+    // Encrypt PII pre-insert with the v=org-2 AAD scheme
+    // (`eh:${emailHash}` anchor). Real ciphertext goes into the row on
+    // the first insert — no placeholder, no patchEncryptedPii follow-up.
+    // The two-phase create's crash window (where an insert could land a
+    // placeholder row that the follow-up patch never reaches) is
+    // structurally eliminated for new supporters. Existing supporters
+    // reached via findOrCreateSupporter's existing-row branch still get
+    // their global hashes backfilled but skip the placeholder ciphertext
+    // write entirely.
+    const { encryptForSupporterV2 } = await import("./_orgKey");
+    const [encEmail, encName, encPhone] = await Promise.all([
+      encryptForSupporterV2(normalizedEmail, orgKey, emailHash, "email"),
+      args.name ? encryptForSupporterV2(args.name.trim(), orgKey, emailHash, "name") : null,
+      args.phone ? encryptForSupporterV2(args.phone.trim(), orgKey, emailHash, "phone") : null,
+    ]);
+
+    const { supporterId } = await ctx.runMutation(
       findOrCreateSupporterRef,
       {
         orgId: campaign.orgId,
         emailHash,
-        encryptedEmail: "", // placeholder
-        postalCode: args.postalCode,
-        source: args.source ?? "campaign",
-      },
-    );
-
-    // Step 2: Encrypt PII with real supporter ID and patch
-    if (isNew) {
-      const entityId = `supporter:${supporterId}`;
-      const { computeOrgScopedPhoneHash } = await import("./_orgHash");
-
-      const [encEmail, encName, encPhone] = await Promise.all([
-        encryptWithOrgKey(normalizedEmail, orgKey, entityId, "email"),
-        args.name ? encryptWithOrgKey(args.name.trim(), orgKey, entityId, "name") : null,
-        args.phone ? encryptWithOrgKey(args.phone.trim(), orgKey, entityId, "phone") : null,
-      ]);
-      const phoneHash = args.phone
-        ? await computeOrgScopedPhoneHash(campaign.orgId, args.phone.trim())
-        : undefined;
-
-      await ctx.runMutation(internal.supporters.patchEncryptedPii, {
-        supporterId: supporterId as Id<"supporters">,
+        globalEmailHash,
+        globalPhoneHash,
         encryptedEmail: JSON.stringify(encEmail),
         encryptedName: encName ? JSON.stringify(encName) : undefined,
         encryptedPhone: encPhone ? JSON.stringify(encPhone) : undefined,
         phoneHash,
-      });
-    }
+        postalCode: args.postalCode,
+        source: args.source ?? "campaign",
+      },
+    );
 
     // Compute district hash
     let districtHash: string | undefined;
@@ -1454,7 +1539,7 @@ export const dispatchReportEmails = internalAction({
       const htmlBody = (delivery as Record<string, any>).packetHtml ?? fallbackHtml;
 
       try {
-        const success = await sendReportViaSes(
+        const sesResult = await sendReportViaSes(
           delivery.targetEmail,
           fromEmail,
           campaign.orgName,
@@ -1467,8 +1552,9 @@ export const dispatchReportEmails = internalAction({
 
         await ctx.runMutation(internal.campaigns.updateDeliveryStatus, {
           deliveryId: delivery._id,
-          status: success ? "sent" : "failed",
-          sentAt: success ? Date.now() : undefined,
+          status: sesResult.ok ? "sent" : "failed",
+          sentAt: sesResult.ok ? Date.now() : undefined,
+          sesMessageId: sesResult.ok ? (sesResult.messageId ?? undefined) : undefined,
         });
       } catch (err) {
         console.error(`[dispatchReportEmails] Failed for ${delivery.targetEmail}:`, err instanceof Error ? err.message : err);
@@ -1489,24 +1575,19 @@ export const getCampaignForReport = internalQuery({
     if (!campaign) return null;
     const org = await ctx.db.get(campaign.orgId);
 
-    // (1e) Tier partition for honest reporting: query-time count of
-    // tier-3+ (document-verified) actions. F2 closure — staffer reports
-    // must not conflate heuristic tier-2 (postal-code/self-claim) with
-    // ZKP-grade tier-3 (ID-verified) constituent evidence.
-    const actions = await ctx.db
-      .query("campaignActions")
-      .withIndex("by_campaignId", (q) => q.eq("campaignId", campaignId))
-      .collect();
-    const tier3VerifiedActionCount = actions.filter(
-      (a) => a.verified && (a.trustTier ?? 0) >= 3
-    ).length;
-
+    // Tier partition for honest reporting: tier-3+ (document-verified,
+    // ZKP-grade) action count. `.collect()`-ing every campaignAction and
+    // filtering in memory would hit Convex's row-scan cap on popular
+    // campaigns (10K+ actions) exactly during the report email build
+    // phase. `tier3VerifiedActionCount` is denormalized on the campaign
+    // row and maintained by `createCampaignAction` on every insert; we
+    // read it directly.
     return {
       _id: campaign._id,
       title: campaign.title,
       orgName: org?.name ?? org?.slug ?? "Organization",
       verifiedActionCount: campaign.verifiedActionCount ?? 0,
-      tier3VerifiedActionCount,
+      tier3VerifiedActionCount: campaign.tier3VerifiedActionCount ?? 0,
       actionCount: campaign.actionCount ?? 0,
     };
   },
@@ -1538,10 +1619,80 @@ export const updateDeliveryStatus = internalMutation({
     deliveryId: v.id("campaignDeliveries"),
     status: v.string(),
     sentAt: v.optional(v.number()),
+    // Persisted so the SES bounce/delivery webhook
+    // (`webhooks.handleDeliveryEvent`) can find this row by its
+    // SES-assigned MessageId. Without this field set, the webhook's
+    // `by_sesMessageId` lookup always returns zero rows and
+    // delivered/bounced/opened state never lands.
+    sesMessageId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const patch: Record<string, unknown> = { status: args.status };
     if (args.sentAt) patch.sentAt = args.sentAt;
+    if (args.sesMessageId) {
+      // Convex has no native unique indexes; the webhook reads via
+      // `.first()` and would silently update only one row if the
+      // SES-assigned MessageId ever collided across our rows. SES
+      // guarantees uniqueness per send, but if our state were ever
+      // corrupted (manual seed insert, replay of a stale event with
+      // wrong delivery id, etc.) the divergence would be invisible.
+      //
+      // Collision policy: the EARLIER row keeps the binding by
+      // default. Two exceptions where we steal the binding:
+      //   (1) The colliding row's status is `failed` — the earlier
+      //       binding is stale (the SES attempt failed; the
+      //       MessageId on that row is from a defunct send).
+      //       Clear the earlier row's sesMessageId and take it here.
+      //   (2) The colliding row's sentAt predates ours by more than
+      //       SES-RECEIPT-MAX-AGE (30 days, SES retention boundary)
+      //       — the earlier binding can no longer receive webhook
+      //       updates anyway.
+      // Otherwise drop our write: the earlier delivery keeps the
+      // webhook correlation deterministically; our row's status still
+      // moves to `sent` but its sesMessageId stays undefined.
+      const colliding = await ctx.db
+        .query("campaignDeliveries")
+        .withIndex("by_sesMessageId", (q) =>
+          q.eq("sesMessageId", args.sesMessageId),
+        )
+        .first();
+      if (colliding && colliding._id !== args.deliveryId) {
+        const SES_RECEIPT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+        const collidingIsStaleFailed = colliding.status === "failed";
+        const collidingIsExpired =
+          colliding.sentAt !== undefined &&
+          Date.now() - colliding.sentAt > SES_RECEIPT_MAX_AGE_MS;
+        if (collidingIsStaleFailed || collidingIsExpired) {
+          console.warn(
+            `[updateDeliveryStatus] sesMessageId collision: stealing binding from ${String(colliding._id).slice(0, 8)} (${collidingIsStaleFailed ? "failed-status" : "expired"}) → ${String(args.deliveryId).slice(0, 8)}`,
+          );
+          // Preserve the cleared binding on the loser row so operators
+          // can reconstruct the prior webhook correlation during
+          // incident response. Bounded to last 16 ids so a pathological
+          // sequence of collisions on the same row can't grow the
+          // array toward Convex's 1 MiB doc limit. Real collisions
+          // are rare (SES guarantees unique MessageId per send) — 16
+          // is conservatively above any plausible forensic need.
+          const PREVIOUS_IDS_CAP = 16;
+          const priorIds = colliding.previousSesMessageIds ?? [];
+          const nextIds = [...priorIds, args.sesMessageId as string].slice(
+            -PREVIOUS_IDS_CAP,
+          );
+          await ctx.db.patch(colliding._id, {
+            sesMessageId: undefined,
+            previousSesMessageIds: nextIds,
+          });
+          patch.sesMessageId = args.sesMessageId;
+        } else {
+          console.warn(
+            `[updateDeliveryStatus] sesMessageId collision: keeping earlier binding on ${String(colliding._id).slice(0, 8)} (status=${colliding.status}), dropping write on ${String(args.deliveryId).slice(0, 8)} (webhook correlation lost for this row)`,
+          );
+          // Intentionally do NOT set patch.sesMessageId.
+        }
+      } else {
+        patch.sesMessageId = args.sesMessageId;
+      }
+    }
     await ctx.db.patch(args.deliveryId, patch);
   },
 });
@@ -1580,6 +1731,10 @@ export const getDeliveryMetrics = query({
  * Build a simple report email HTML inline (for Convex action context where
  * SvelteKit imports aren't available). The full rich template from
  * report-template.ts is used in the server-side preview.
+ *
+ * Site origin is read from PUBLIC_BASE_URL (default: https://commons.email).
+ * Peer implementations override via the Convex dashboard so report links
+ * resolve to their own deployment instead of the reference one.
  */
 function buildReportEmailHtml(campaign: {
   title: string;
@@ -1589,6 +1744,7 @@ function buildReportEmailHtml(campaign: {
   _id: any;
 }): string {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const baseUrl = (process.env.PUBLIC_BASE_URL || "https://commons.email").replace(/\/$/, "");
   const tier3 = campaign.tier3VerifiedActionCount ?? 0;
   const hasTier3 = tier3 > 0;
   const tier3Line = hasTier3
@@ -1613,11 +1769,11 @@ ${tier3Line}
 <tr><td style="padding:28px 0 0 0;">
 <table role="presentation" cellpadding="0" cellspacing="0"><tr>
 <td style="background:#f5f5f4;border:1px solid #e5e5e5;border-radius:6px;padding:12px 20px;">
-<a href="https://commons.email/v/${campaign._id}" style="font-size:13px;color:#525252;text-decoration:none;">Verify these claims independently &rarr;</a>
+<a href="${baseUrl}/v/${campaign._id}" style="font-size:13px;color:#525252;text-decoration:none;">Verify these claims independently &rarr;</a>
 </td></tr></table>
 </td></tr>
 <tr><td style="padding:40px 0 0 0;">
-<p style="margin:0;font-size:11px;color:#a3a3a3;line-height:1.6;">This report was generated by <a href="https://commons.email" style="color:#a3a3a3;text-decoration:underline;">commons.email</a>. Every claim is cryptographically attested and independently auditable.</p>
+<p style="margin:0;font-size:11px;color:#a3a3a3;line-height:1.6;">This report was generated by <a href="${baseUrl}" style="color:#a3a3a3;text-decoration:underline;">${esc(new URL(baseUrl).host)}</a>. Every claim is cryptographically attested and independently auditable.</p>
 </td></tr>
 </table></td></tr></table>
 </body></html>`;
@@ -1629,7 +1785,7 @@ ${tier3Line}
 async function sendReportViaSes(
   to: string, from: string, fromName: string, subject: string,
   htmlBody: string, accessKeyId: string, secretAccessKey: string, region: string,
-): Promise<boolean> {
+): Promise<{ ok: false } | { ok: true; messageId: string | null }> {
   const endpoint = `https://email.${region}.amazonaws.com/v2/email/outbound-emails`;
   const safeFromName = fromName.replace(/[\r\n\x00-\x1f\x7f]/g, "");
   const safeSubject = subject.replace(/[\r\n\x00-\x1f\x7f]/g, "");
@@ -1678,9 +1834,34 @@ async function sendReportViaSes(
       headers: { "Content-Type": "application/json", "X-Amz-Date": amzDate, Authorization: authorization },
       body,
     });
-    return res.ok;
+    if (!res.ok) return { ok: false };
+    // Parse the SES v2 response for the MessageId so the caller can
+    // persist it on the campaignDelivery row. Without this, the SES
+    // bounce/delivery webhook (`webhooks.handleDeliveryEvent`) has no
+    // way to correlate inbound notifications to the delivery row —
+    // the field stays undefined and every webhook call returns
+    // `{ found: false }`. Treat parse failure as soft (the send did
+    // succeed); the row still moves to `sent`, just without a
+    // messageId. Operators see the soft case via the warn log below.
+    let messageId: string | null = null;
+    try {
+      const payload = (await res.json()) as { MessageId?: unknown };
+      if (typeof payload.MessageId === "string" && payload.MessageId.length > 0) {
+        messageId = payload.MessageId;
+      }
+    } catch {
+      // Soft fail: don't unwind the send because we couldn't read the
+      // response. The send was accepted by SES (res.ok); we just lose
+      // webhook correlation for this row.
+    }
+    if (!messageId) {
+      console.warn(
+        "[sendReportViaSes] SES accepted send but response had no MessageId — webhook correlation will miss this row",
+      );
+    }
+    return { ok: true, messageId };
   } catch {
-    return false;
+    return { ok: false };
   }
 }
 
@@ -1719,5 +1900,117 @@ export const getPastDeliveries = query({
           proofWeight: d.proofWeight ?? null,
         };
       });
+  },
+});
+
+/**
+ * Look up the campaign linked to a debate (reverse of `campaign.debateId`).
+ *
+ * Used by `/api/debates/[debateId]/settle` to verify a debate is associated
+ * with a campaign before allowing org-admin settlement. cure shipped.
+ */
+export const getCampaignByDebateId = query({
+  args: { debateId: v.id("debates") },
+  handler: async (ctx, { debateId }) => {
+    const campaign = await ctx.db
+      .query("campaigns")
+      .withIndex("by_debateId", (idx) => idx.eq("debateId", debateId))
+      .first();
+    if (!campaign) return null;
+    return {
+      _id: campaign._id,
+      orgId: campaign.orgId,
+      title: campaign.title,
+      status: campaign.status,
+      templateId: campaign.templateId ?? null,
+    };
+  },
+});
+
+/**
+ * Operator-driven reconciliation for the denormalized counters on
+ * `campaigns`. `actionCount`/`verifiedActionCount`/`tier3VerifiedActionCount`
+ * are maintained by `createCampaignAction` on every insert; the contract
+ * is APPEND-ONLY (no current code path deletes campaignActions). That
+ * contract lives in a comment, not a constraint — if a future writer
+ * (or a manual data fix) ever deleted an action row, the counter would
+ * silently desync.
+ *
+ * This action recomputes the canonical counts from the source table
+ * and reports drift. Operators run on demand (or via cron) and can
+ * inspect divergence; not auto-corrected because a drift indicates
+ * something is wrong upstream and silent repair would mask the cause.
+ */
+export const reconcileCampaignCounters = internalAction({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (
+    ctx,
+    { campaignId },
+  ): Promise<{
+    storedActionCount: number;
+    storedVerifiedActionCount: number;
+    storedTier3VerifiedActionCount: number;
+    actualActionCount: number;
+    actualVerifiedActionCount: number;
+    actualTier3VerifiedActionCount: number;
+    drift: boolean;
+  }> => {
+    const result = await ctx.runQuery(
+      internal.campaigns.recomputeCampaignCounters,
+      { campaignId },
+    );
+    if (result.drift) {
+      console.error(
+        `[reconcileCampaignCounters] DRIFT detected for campaign ${campaignId}: ` +
+          `stored=(${result.storedActionCount},${result.storedVerifiedActionCount},${result.storedTier3VerifiedActionCount}) ` +
+          `actual=(${result.actualActionCount},${result.actualVerifiedActionCount},${result.actualTier3VerifiedActionCount})`,
+      );
+    }
+    return result;
+  },
+});
+
+/** Internal query: recompute campaign counters from source rows.
+ *  Uses `for await` over the by_campaignId index — bounded memory
+ *  per iteration (one doc at a time) so this still works on large
+ *  campaigns where a `.collect()` would hit Convex's row-scan cap
+ *  exactly when operators need forensic data the most. */
+export const recomputeCampaignCounters = internalQuery({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign) {
+      throw new Error("CAMPAIGN_NOT_FOUND");
+    }
+    let actualActionCount = 0;
+    let actualVerifiedActionCount = 0;
+    let actualTier3VerifiedActionCount = 0;
+    for await (const action of ctx.db
+      .query("campaignActions")
+      .withIndex("by_campaignId", (q) => q.eq("campaignId", campaignId))) {
+      actualActionCount++;
+      if (action.verified) {
+        actualVerifiedActionCount++;
+        if ((action.trustTier ?? 0) >= 3) {
+          actualTier3VerifiedActionCount++;
+        }
+      }
+    }
+    const storedActionCount = campaign.actionCount ?? 0;
+    const storedVerifiedActionCount = campaign.verifiedActionCount ?? 0;
+    const storedTier3VerifiedActionCount = campaign.tier3VerifiedActionCount ?? 0;
+    const drift =
+      storedActionCount !== actualActionCount ||
+      storedVerifiedActionCount !== actualVerifiedActionCount ||
+      storedTier3VerifiedActionCount !== actualTier3VerifiedActionCount;
+    return {
+      storedActionCount,
+      storedVerifiedActionCount,
+      storedTier3VerifiedActionCount,
+      actualActionCount,
+      actualVerifiedActionCount,
+      actualTier3VerifiedActionCount,
+      drift,
+    };
   },
 });

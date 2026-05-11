@@ -2,6 +2,7 @@ import {
   query,
   mutation,
   action,
+  internalAction,
   internalMutation,
   internalQuery,
 } from "./_generated/server";
@@ -12,13 +13,12 @@ import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
 import { computeOrgScopedEmailHash } from "./_orgHash";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
-import { encryptWithOrgKey } from "./_orgKey";
+import type { Id } from "./_generated/dataModel";
 
 declare const process: { env: Record<string, string | undefined> };
 
 const getCampaignRef = makeFunctionReference<"query">("donations:getCampaign") as unknown as FunctionReference<"query", "internal">;
 const insertDonationRef = makeFunctionReference<"mutation">("donations:insertDonation") as unknown as FunctionReference<"mutation", "internal">;
-const patchDonationEncryptedPiiRef = makeFunctionReference<"mutation">("donations:patchEncryptedPii") as unknown as FunctionReference<"mutation", "internal">;
 const setStripeSessionIdRef = makeFunctionReference<"mutation">("donations:setStripeSessionId") as unknown as FunctionReference<"mutation", "internal">;
 
 // =============================================================================
@@ -144,6 +144,13 @@ export const listPublicByCampaign = query({
  * Create a donation record (typically from Stripe webhook after payment).
  * Internal-only: called from webhook processing, not exposed to clients.
  */
+const DONATION_STATUS_VALIDATOR = v.union(
+  v.literal("pending"),
+  v.literal("completed"),
+  v.literal("failed"),
+  v.literal("refunded"),
+);
+
 export const create = internalMutation({
   args: {
     campaignId: v.id("campaigns"),
@@ -163,7 +170,7 @@ export const create = internalMutation({
     stripeSubscriptionId: v.optional(v.string()),
     districtHash: v.optional(v.string()),
     engagementTier: v.number(),
-    status: v.string(),
+    status: DONATION_STATUS_VALIDATOR,
   },
   handler: async (ctx, args) => {
     const id = await ctx.db.insert("donations", {
@@ -198,7 +205,16 @@ export const create = internalMutation({
 export const updateStatus = internalMutation({
   args: {
     donationId: v.id("donations"),
-    status: v.string(),
+    // Closed union — freeform `v.string()` would let a webhook payload
+    // (or a buggy caller) write a garbage status string that downstream
+    // consumers couldn't enumerate. Mirrors the tightening on
+    // `workflowExecutions.status`.
+    status: v.union(
+      v.literal("pending"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("refunded"),
+    ),
     stripePaymentIntentId: v.optional(v.string()),
     stripeSubscriptionId: v.optional(v.string()),
     completedAt: v.optional(v.number()),
@@ -224,8 +240,15 @@ export const updateStatus = internalMutation({
       patch.completedAt = args.completedAt;
     }
 
-    // On completion, update campaign fundraising totals
-    if (args.status === "completed" && donation.status !== "completed") {
+    // On completion, update campaign fundraising totals.
+    // Guard with `completedAt` (one-shot field set on first completion)
+    // rather than `status !== "completed"`: a donation transitioning
+    // refunded → completed (refund-and-recharge scenario) would pass a
+    // `status !== "completed"` check and DOUBLE BUMP `raisedAmountCents`
+    // + `donorCount`. The completedAt discriminator is set exactly once
+    // and never cleared so the bump fires at most once per donation
+    // lifetime.
+    if (args.status === "completed" && donation.completedAt === undefined) {
       patch.completedAt = patch.completedAt ?? Date.now();
 
       // Update campaign totals
@@ -259,7 +282,7 @@ export const insertDonation = internalMutation({
     recurringInterval: v.optional(v.string()),
     districtHash: v.optional(v.string()),
     engagementTier: v.number(),
-    status: v.string(),
+    status: DONATION_STATUS_VALIDATOR,
   },
   handler: async (ctx, args) => {
     const id = await ctx.db.insert("donations", {
@@ -328,6 +351,22 @@ export const processCheckout = action({
       throw new Error("Amount must be between $1.00 and $1,000,000.00");
     }
 
+    // action-boundary length caps — parity with /api/d/[id]/checkout
+    // SvelteKit boundary, so direct Convex invocations also fail-fast.
+    if (args.email.length > 254) throw new Error("EMAIL_TOO_LARGE");
+    if (args.name.length > 200) throw new Error("NAME_TOO_LARGE");
+    if (args.postalCode !== undefined && args.postalCode.length > 16) {
+      throw new Error("POSTAL_CODE_TOO_LARGE");
+    }
+    if (args.districtCode !== undefined && args.districtCode.length > 64) {
+      throw new Error("DISTRICT_CODE_TOO_LARGE");
+    }
+    if (args.recurringInterval !== undefined && args.recurringInterval.length > 16) {
+      throw new Error("RECURRING_INTERVAL_TOO_LARGE");
+    }
+    if (args.successUrl.length > 2048) throw new Error("SUCCESS_URL_TOO_LARGE");
+    if (args.cancelUrl.length > 2048) throw new Error("CANCEL_URL_TOO_LARGE");
+
     // Validate email format
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.email)) {
       throw new Error("Valid email is required");
@@ -368,13 +407,29 @@ export const processCheckout = action({
     });
     if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
 
-    // Step 1: Insert with placeholder encrypted fields, get real _id
+    // Single-phase encrypt-then-insert via the v=org-2 AAD scheme. AAD
+    // anchors on `eh:${emailHash}`, derivable from plaintext BEFORE any
+    // DB write, so the donation lands in the table with real ciphertext
+    // on the first insert. No follow-up patch, no placeholder window.
+    // An older two-phase pattern (insert placeholder ⇒ encrypt with
+    // post-insert id ⇒ patch) could strand rows on a crash between
+    // steps. Legacy donations (v=org-1) keep decrypting via the post-id
+    // AAD; the sweep cron still bounds any future regression that
+    // re-introduces the two-phase pattern.
+    const { encryptForSupporterV2 } = await import("./_orgKey");
+    const [encEmail, encName] = await Promise.all([
+      encryptForSupporterV2(normalizedEmail, orgKey, emailHash, "email"),
+      encryptForSupporterV2(args.name.trim(), orgKey, emailHash, "name"),
+    ]);
+    const encryptedEmail = JSON.stringify(encEmail);
+    const encryptedName = JSON.stringify(encName);
+
     const { id: donationDocId } = await ctx.runMutation(insertDonationRef, {
       campaignId: args.campaignId,
       orgId: campaign.orgId,
       emailHash,
-      encryptedEmail: "", // placeholder — will be patched with real _id binding
-      encryptedName: "",
+      encryptedEmail,
+      encryptedName,
       amountCents: args.amountCents,
       currency: campaign.donationCurrency || "usd",
       recurring: args.recurring,
@@ -382,21 +437,6 @@ export const processCheckout = action({
       districtHash,
       engagementTier,
       status: "pending",
-    });
-
-    // Step 2: Encrypt PII with real doc _id (AAD binding must match decrypt path)
-    const [encEmail, encName] = await Promise.all([
-      encryptWithOrgKey(normalizedEmail, orgKey, `donation:${donationDocId}`, "email"),
-      encryptWithOrgKey(args.name.trim(), orgKey, `donation:${donationDocId}`, "name"),
-    ]);
-    const encryptedEmail = JSON.stringify(encEmail);
-    const encryptedName = JSON.stringify(encName);
-
-    // Step 3: Patch with correctly-bound ciphertext
-    await ctx.runMutation(patchDonationEncryptedPiiRef, {
-      donationId: donationDocId,
-      encryptedEmail,
-      encryptedName,
     });
 
     // Create Stripe Checkout Session
@@ -474,24 +514,14 @@ export const getCampaign = internalQuery({
   },
 });
 
-/**
- * Internal mutation: Patch encrypted PII on donation after insert-then-encrypt.
- */
-export const patchEncryptedPii = internalMutation({
-  args: {
-    donationId: v.id("donations"),
-    encryptedEmail: v.string(),
-    encryptedName: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const patch: Record<string, unknown> = {
-      encryptedEmail: args.encryptedEmail,
-      updatedAt: Date.now(),
-    };
-    if (args.encryptedName !== undefined) patch.encryptedName = args.encryptedName;
-    await ctx.db.patch(args.donationId, patch);
-  },
-});
+// `patchEncryptedPii` is intentionally absent. The two-phase create
+// pattern that needed it (insert placeholder ⇒ encrypt with post-insert
+// id ⇒ patch) is replaced by single-phase v=org-2 encrypt-then-insert.
+// If a non-checkout caller ever needs to update a donation's encrypted
+// blob (e.g. operator-driven re-encryption migration), add a new helper
+// that consumes a caller-supplied `eh:${emailHash}`-bound ciphertext
+// rather than re-deriving AAD server-side — same invariant as the
+// `email.recordEmailEvent` removal.
 
 /**
  * Internal mutation: Set Stripe session ID on donation.
@@ -751,3 +781,185 @@ async function sha256Hex(data: string): Promise<string> {
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
+
+// =============================================================================
+// PLACEHOLDER DONATION CLEANUP (parallels supporters placeholder sweep)
+// =============================================================================
+
+const SWEEP_KEY_STRANDED_DONATIONS = "donations.strandedPlaceholders";
+
+/**
+ * Internal query: collect a page of donations whose encryptedEmail is
+ * still the empty-string placeholder set by the two-phase create
+ * pattern (`donations.processCheckout` → `insertDonation` writes
+ * `encryptedEmail: ""`, then `patchEncryptedPii` lands real ciphertext).
+ * If the action crashes between those two mutations, the row is
+ * stranded with empty ciphertext forever — same shape as the
+ * supporters placeholder case.
+ *
+ * Uses cursor-based pagination across the donations table (no order
+ * assumption) so the sweep can drain even very large tables across
+ * multiple cron ticks via the `sweepCheckpoints` checkpoint table.
+ */
+export const getStrandedDonationPlaceholders = internalQuery({
+  args: {
+    olderThanMs: v.number(),
+    paginationCursor: v.optional(v.string()),
+    limit: v.number(),
+  },
+  handler: async (ctx, { olderThanMs, paginationCursor, limit }) => {
+    const cutoff = Date.now() - olderThanMs;
+    const result = await ctx.db
+      .query("donations")
+      .paginate({ numItems: limit * 10, cursor: paginationCursor ?? null });
+    const stranded = result.page.filter(
+      (d) =>
+        (d.encryptedEmail === "" || d.encryptedEmail === undefined) &&
+        d._creationTime < cutoff,
+    );
+    return {
+      items: stranded.slice(0, limit).map((d) => ({
+        _id: d._id,
+        orgId: d.orgId,
+        campaignId: d.campaignId,
+        status: d.status,
+        ageMs: Date.now() - d._creationTime,
+      })),
+      continueCursor: result.continueCursor,
+      isDone: result.isDone,
+    };
+  },
+});
+
+/**
+ * Internal mutation: delete a stranded donation placeholder row.
+ * OCC-guarded — re-reads inside the mutation transaction and refuses
+ * if a follow-up patchEncryptedPii landed concurrent with the sweep's
+ * pagination. Mirrors `supporters.deleteStrandedPlaceholder`.
+ */
+export const deleteStrandedDonationPlaceholder = internalMutation({
+  args: { donationId: v.id("donations") },
+  handler: async (ctx, { donationId }) => {
+    const current = await ctx.db.get(donationId);
+    if (!current) return { ok: false, reason: "not_found" } as const;
+    if (current.encryptedEmail && current.encryptedEmail !== "") {
+      return { ok: false, reason: "not_placeholder" } as const;
+    }
+    await ctx.db.delete(donationId);
+    return { ok: true } as const;
+  },
+});
+
+/**
+ * Cleanup action: sweep stranded donation placeholders.
+ *
+ * `processCheckout` uses a two-phase create: insert with placeholder
+ * `encryptedEmail: ""`, then patch with real ciphertext via
+ * `patchEncryptedPii`. If the action crashes between, the row is
+ * permanently broken — empty ciphertext (undecryptable) + populated
+ * `emailHash` (so it shows up in dedup checks for future donations
+ * from the same email). Bounds the blast radius of a crash to "one
+ * lost donation attempt" instead of "permanent zombie row".
+ *
+ * Donation-specific preservation: rows in `pending` status that fail
+ * could have a pending Stripe session in flight. We only sweep rows
+ * older than 30 minutes AND not in `completed` status (a completed
+ * row with empty ciphertext is forensic — the campaign counter
+ * already bumped, the money already moved). Status `failed` and
+ * `pending` past 30 min are safe to delete: Stripe sessions expire
+ * after 24 h so a 30-min-old pending row that never got patched
+ * is genuinely stranded.
+ */
+export const sweepStrandedDonations = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const STRANDED_THRESHOLD_MS = 30 * 60 * 1000;
+    const BATCH = 50;
+    // Completed/refunded rows that somehow lost their ciphertext are
+    // PRESERVED — the donation's financial state is real (money moved),
+    // and the row carries audit data (sentAt, stripePaymentIntentId,
+    // amountCents). Deleting it would erase the audit trail.
+    const PRESERVE_STATUSES = new Set(["completed", "refunded"]);
+
+    let deleted = 0;
+    let preserved = 0;
+    let skipped = 0;
+    let totalSeen = 0;
+    let isDone = false;
+    let pagesScanned = 0;
+
+    const checkpoint: {
+      cursor?: string;
+      wrapCount: number;
+      checkpointId: Id<"sweepCheckpoints">;
+    } = await ctx.runMutation(internal.supporters.loadSweepCheckpoint, {
+      key: SWEEP_KEY_STRANDED_DONATIONS,
+    });
+    let paginationCursor: string | undefined = checkpoint.cursor;
+
+    while (!isDone && pagesScanned < 20) {
+      const result: {
+        items: Array<{
+          _id: Id<"donations">;
+          orgId: Id<"organizations">;
+          campaignId: Id<"campaigns">;
+          status: string;
+          ageMs: number;
+        }>;
+        continueCursor: string;
+        isDone: boolean;
+      } = await ctx.runQuery(
+        internal.donations.getStrandedDonationPlaceholders,
+        {
+          olderThanMs: STRANDED_THRESHOLD_MS,
+          paginationCursor,
+          limit: BATCH,
+        },
+      );
+      pagesScanned++;
+      isDone = result.isDone;
+      paginationCursor = result.continueCursor;
+      totalSeen += result.items.length;
+
+      for (const d of result.items) {
+        if (PRESERVE_STATUSES.has(d.status)) {
+          console.warn(
+            `[sweepStrandedDonations] PRESERVING completed/refunded donation ${d._id} (status=${d.status}, ageMs=${d.ageMs}) — financial audit trail must survive cleanup`,
+          );
+          preserved++;
+          continue;
+        }
+        const deleteResult: { ok: boolean; reason?: string } = await ctx.runMutation(
+          internal.donations.deleteStrandedDonationPlaceholder,
+          { donationId: d._id },
+        );
+        if (deleteResult.ok) {
+          console.warn(
+            `[sweepStrandedDonations] Deleted stranded donation ${d._id} (orgId=${d.orgId}, campaignId=${d.campaignId}, status=${d.status}, ageMs=${d.ageMs}) — processCheckout crashed mid-flight`,
+          );
+          deleted++;
+        } else {
+          skipped++;
+        }
+      }
+
+      if (deleted + preserved >= BATCH * 4) break;
+    }
+
+    await ctx.runMutation(internal.supporters.saveSweepCheckpoint, {
+      checkpointId: checkpoint.checkpointId,
+      cursor: paginationCursor,
+      wrapped: isDone,
+    });
+
+    return {
+      deleted,
+      preserved,
+      skipped,
+      totalSeen,
+      pagesScanned,
+      wrapCount: isDone ? checkpoint.wrapCount + 1 : checkpoint.wrapCount,
+      wrapped: isDone,
+    };
+  },
+});

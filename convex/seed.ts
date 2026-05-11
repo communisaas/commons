@@ -181,7 +181,7 @@ export const seedAll = internalAction({
 
     console.log("[seed] Phase 2: Inserting organizations + encryption + memberships...");
     const orgIds = await ctx.runMutation(internal.seed.insertOrgs);
-    await ctx.runAction(internal.seed.configureOrgEncryption, { orgIds: orgIds.map(String) });
+    await ctx.runAction(internal.seed.configureOrgEncryption, { orgIds });
     await ctx.runMutation(internal.seed.insertMemberships, { userIds, orgIds });
 
     console.log("[seed] Phase 3: Inserting templates...");
@@ -191,7 +191,7 @@ export const seedAll = internalAction({
     const campaignIds = await ctx.runMutation(internal.seed.insertCampaigns, { orgIds, templateIds });
 
     console.log("[seed] Phase 5: Inserting supporters + tags...");
-    const supporterIds = await ctx.runAction(internal.seed.insertSupporters, { orgIds: orgIds.map(String) });
+    const supporterIds = await ctx.runAction(internal.seed.insertSupporters, { orgIds });
     const tagIds = await ctx.runMutation(internal.seed.insertTags, { orgIds });
     await ctx.runMutation(internal.seed.assignSupporterTags, { supporterIds, tagIds, orgIds });
 
@@ -231,7 +231,7 @@ export const seedAll = internalAction({
     await ctx.runMutation(internal.seed.grantDevAccount, { orgIds });
 
     console.log("[seed] Phase 17: Encrypting seed PII (donations, RSVPs, invites)...");
-    await ctx.runAction(internal.seed.encryptSeedPii, { orgIds: orgIds.map(String) });
+    await ctx.runAction(internal.seed.encryptSeedPii, { orgIds });
 
     console.log(
       `[seed] Complete! Created ${userIds.length} users, ${orgIds.length} orgs, ` +
@@ -392,7 +392,7 @@ export const insertOrgs = internalMutation({
 // =============================================================================
 
 export const configureOrgEncryption = internalAction({
-  args: { orgIds: v.array(v.string()) },
+  args: { orgIds: v.array(v.id("organizations")) },
   handler: async (ctx, { orgIds }) => {
     const { sealOrgKey } = await import("./_orgKeyUnseal");
     const { encryptWithOrgKey, importOrgKey } = await import("./_orgKey");
@@ -426,17 +426,17 @@ export const configureOrgEncryption = internalAction({
 
 export const patchOrgEncryption = internalMutation({
   args: {
-    orgId: v.string(),
+    orgId: v.id("organizations"),
     orgKeyVerifier: v.string(),
     serverSealedOrgKey: v.string(),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.orgId as any, {
+    await ctx.db.patch(args.orgId, {
       orgKeyVerifier: args.orgKeyVerifier,
       serverSealedOrgKey: args.serverSealedOrgKey,
       piiVersion: "org-1",
       updatedAt: Date.now(),
-    } as any);
+    });
   },
 });
 
@@ -760,12 +760,12 @@ function seedEmail(name: string, idx: number): string {
 
 export const insertSupporters = internalAction({
   args: {
-    orgIds: v.array(v.string()),
+    orgIds: v.array(v.id("organizations")),
   },
   handler: async (ctx, { orgIds }): Promise<Id<"supporters">[]> => {
     const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
     const { encryptWithOrgKey } = await import("./_orgKey");
-    const { computeOrgScopedEmailHash } = await import("./_orgHash");
+    const { computeOrgScopedEmailHash, computeGlobalEmailHash } = await import("./_orgHash");
 
     const ids: Id<"supporters">[] = [];
     const distribution = [8, 7, 5];
@@ -835,13 +835,18 @@ export const insertSupporters = internalAction({
           encryptWithOrgKey(s.name, orgKey, entityId, "name"),
         ]);
         const emailHash = await computeOrgScopedEmailHash(orgId, s.email);
+        // Seed fixtures get globalEmailHash so dev-mode SES webhook
+        // lookups can find these rows (consistent with prod path).
+        const globalEmailHash = await computeGlobalEmailHash(s.email);
 
         await ctx.runMutation(internal.seed.patchSeedRecord, {
+          table: "supporters",
           id: supporterId,
           patch: {
             encryptedEmail: JSON.stringify(encEmail),
             encryptedName: JSON.stringify(encName),
             emailHash,
+            globalEmailHash,
           },
         });
       }
@@ -856,14 +861,21 @@ export const insertSupporters = internalAction({
 export const insertSupporterBatch = internalMutation({
   args: {
     supporters: v.array(v.any()),
-    orgId: v.string(),
+    orgId: v.id("organizations"),
     orgIdx: v.number(),
   },
   handler: async (ctx, { supporters, orgId, orgIdx }): Promise<Id<"supporters">[]> => {
     const ids: Id<"supporters">[] = [];
     for (const s of supporters) {
+      // Use the validated `orgId` arg for every insert and ignore
+      // `s.orgId` entirely. The supporters payload is untyped
+      // (`v.array(v.any())`), so trusting `s.orgId` is a single fork
+      // away from a cross-org write primitive: any future internal
+      // action that wires user-derived `supporters` into this mutation
+      // would inherit that hazard. The arg-level `orgId` is validated
+      // as v.id("organizations") and is the only safe source.
       const id = await ctx.db.insert("supporters", {
-        orgId: s.orgId as any,
+        orgId,
         encryptedEmail: s.encryptedEmail,
         emailHash: s.emailHash,
         encryptedName: s.encryptedName,
@@ -878,7 +890,7 @@ export const insertSupporterBatch = internalMutation({
       ids.push(id);
     }
 
-    await ctx.db.patch(orgId as any, {
+    await ctx.db.patch(orgId, {
       supporterCount: supporters.length,
       onboardingState: {
         hasDescription: true,
@@ -1222,20 +1234,20 @@ export const insertDonations = internalMutation({
 
     const donationDefs = [
       // Climate Action Now — Emergency Fund (campaign[3])
-      { orgIdx: 0, campaignIdx: 3, sIdx: 0, amount: 5000, recurring: false, status: "completed", daysAgoN: 10 },
-      { orgIdx: 0, campaignIdx: 3, sIdx: 1, amount: 2500, recurring: true, status: "completed", daysAgoN: 8 },
-      { orgIdx: 0, campaignIdx: 3, sIdx: 2, amount: 10000, recurring: false, status: "completed", daysAgoN: 7 },
-      { orgIdx: 0, campaignIdx: 3, sIdx: 3, amount: 25000, recurring: false, status: "completed", daysAgoN: 5 },
-      { orgIdx: 0, campaignIdx: 3, sIdx: 4, amount: 7500, recurring: true, status: "completed", daysAgoN: 3 },
-      { orgIdx: 0, campaignIdx: 3, sIdx: 5, amount: 50000, recurring: false, status: "completed", daysAgoN: 2 },
-      { orgIdx: 0, campaignIdx: 3, sIdx: 6, amount: 15000, recurring: false, status: "completed", daysAgoN: 1 },
-      { orgIdx: 0, campaignIdx: 3, sIdx: 7, amount: 10000, recurring: false, status: "completed", daysAgoN: 1 },
+      { orgIdx: 0, campaignIdx: 3, sIdx: 0, amount: 5000, recurring: false, status: "completed" as const, daysAgoN: 10 },
+      { orgIdx: 0, campaignIdx: 3, sIdx: 1, amount: 2500, recurring: true, status: "completed" as const, daysAgoN: 8 },
+      { orgIdx: 0, campaignIdx: 3, sIdx: 2, amount: 10000, recurring: false, status: "completed" as const, daysAgoN: 7 },
+      { orgIdx: 0, campaignIdx: 3, sIdx: 3, amount: 25000, recurring: false, status: "completed" as const, daysAgoN: 5 },
+      { orgIdx: 0, campaignIdx: 3, sIdx: 4, amount: 7500, recurring: true, status: "completed" as const, daysAgoN: 3 },
+      { orgIdx: 0, campaignIdx: 3, sIdx: 5, amount: 50000, recurring: false, status: "completed" as const, daysAgoN: 2 },
+      { orgIdx: 0, campaignIdx: 3, sIdx: 6, amount: 15000, recurring: false, status: "completed" as const, daysAgoN: 1 },
+      { orgIdx: 0, campaignIdx: 3, sIdx: 7, amount: 10000, recurring: false, status: "completed" as const, daysAgoN: 1 },
       // Pending / failed
-      { orgIdx: 0, campaignIdx: 3, sIdx: 0, amount: 3000, recurring: false, status: "pending", daysAgoN: 0 },
-      { orgIdx: 0, campaignIdx: 3, sIdx: 1, amount: 1500, recurring: false, status: "failed", daysAgoN: 6 },
+      { orgIdx: 0, campaignIdx: 3, sIdx: 0, amount: 3000, recurring: false, status: "pending" as const, daysAgoN: 0 },
+      { orgIdx: 0, campaignIdx: 3, sIdx: 1, amount: 1500, recurring: false, status: "failed" as const, daysAgoN: 6 },
       // Other orgs (via their letter campaigns)
-      { orgIdx: 1, campaignIdx: 1, sIdx: 9, amount: 2000, recurring: false, status: "completed", daysAgoN: 12 },
-      { orgIdx: 2, campaignIdx: 2, sIdx: 16, amount: 5000, recurring: true, status: "completed", daysAgoN: 9 },
+      { orgIdx: 1, campaignIdx: 1, sIdx: 9, amount: 2000, recurring: false, status: "completed" as const, daysAgoN: 12 },
+      { orgIdx: 2, campaignIdx: 2, sIdx: 16, amount: 5000, recurring: true, status: "completed" as const, daysAgoN: 9 },
     ];
 
     for (const d of donationDefs) {
@@ -1352,13 +1364,13 @@ export const insertWorkflowExecutions = internalMutation({
   handler: async (ctx, { workflowIds, supporterIds }) => {
     const executionDefs = [
       // Welcome workflow — 2 completed, 1 running
-      { wfIdx: 0, sIdx: 0, status: "completed", currentStep: 2, completedDaysAgo: 5 },
-      { wfIdx: 0, sIdx: 1, status: "completed", currentStep: 2, completedDaysAgo: 3 },
-      { wfIdx: 0, sIdx: 2, status: "running", currentStep: 1, completedDaysAgo: null },
+      { wfIdx: 0, sIdx: 0, status: "completed" as const, currentStep: 2, completedDaysAgo: 5 },
+      { wfIdx: 0, sIdx: 1, status: "completed" as const, currentStep: 2, completedDaysAgo: 3 },
+      { wfIdx: 0, sIdx: 2, status: "running" as const, currentStep: 1, completedDaysAgo: null },
       // Donor Thank You — 1 completed
-      { wfIdx: 1, sIdx: 3, status: "completed", currentStep: 1, completedDaysAgo: 2 },
+      { wfIdx: 1, sIdx: 3, status: "completed" as const, currentStep: 1, completedDaysAgo: 2 },
       // Event Follow-up — 1 pending
-      { wfIdx: 2, sIdx: 8, status: "pending", currentStep: 0, completedDaysAgo: null },
+      { wfIdx: 2, sIdx: 8, status: "pending" as const, currentStep: 0, completedDaysAgo: null },
     ];
 
     for (const e of executionDefs) {
@@ -1881,7 +1893,7 @@ export const grantDevAccount = internalMutation({
 // =============================================================================
 
 export const encryptSeedPii = internalAction({
-  args: { orgIds: v.array(v.string()) },
+  args: { orgIds: v.array(v.id("organizations")) },
   handler: async (ctx, { orgIds }) => {
     const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
     const { encryptWithOrgKey } = await import("./_orgKey");
@@ -1903,6 +1915,7 @@ export const encryptSeedPii = internalAction({
         ]);
         const emailHash = await computeOrgScopedEmailHash(orgId, email);
         await ctx.runMutation(internal.seed.patchSeedRecord, {
+          table: "donations",
           id: d._id,
           patch: {
             encryptedEmail: JSON.stringify(encEmail),
@@ -1920,6 +1933,7 @@ export const encryptSeedPii = internalAction({
         const encEmail = await encryptWithOrgKey(email, orgKey, inv.emailHash, "email");
         const emailHash = await computeOrgScopedEmailHash(orgId, email);
         await ctx.runMutation(internal.seed.patchSeedRecord, {
+          table: "orgInvites",
           id: inv._id,
           patch: {
             encryptedEmail: JSON.stringify(encEmail),
@@ -1933,11 +1947,11 @@ export const encryptSeedPii = internalAction({
 });
 
 export const getOrgDonations = internalQuery({
-  args: { orgId: v.string() },
+  args: { orgId: v.id("organizations") },
   handler: async (ctx, { orgId }) => {
     const all = await ctx.db
       .query("donations")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId as any))
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId))
       .collect();
     return all.map((doc) => {
       const d = doc as typeof doc & { name?: string };
@@ -1952,11 +1966,11 @@ export const getOrgDonations = internalQuery({
 });
 
 export const getOrgInvites = internalQuery({
-  args: { orgId: v.string() },
+  args: { orgId: v.id("organizations") },
   handler: async (ctx, { orgId }) => {
     const all = await ctx.db
       .query("orgInvites")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId as any))
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId))
       .collect();
     return all.map((i) => ({
       _id: String(i._id),
@@ -1966,10 +1980,28 @@ export const getOrgInvites = internalQuery({
   },
 });
 
+/**
+ * Table-scoped patch primitive. Plain `id: v.string()` + `patch: v.any()`
+ * with `ctx.db.patch(id as any, patch)` would be a universal write
+ * primitive. Same defense pattern as `backfill.patchRow`: require
+ * `table` arg + allowlist + `normalizeId` so a malformed call can't
+ * reach into sensitive tables (organizations, subscriptions,
+ * identityCredentials, mDLCredentials, anchorStatus). Seed callers
+ * only ever patch supporters, donations, and orgInvites.
+ */
+const ALLOWED_SEED_TABLES = ["supporters", "donations", "orgInvites"] as const;
+
 export const patchSeedRecord = internalMutation({
-  args: { id: v.string(), patch: v.any() },
-  handler: async (ctx, { id, patch }) => {
-    await ctx.db.patch(id as any, patch);
+  args: { table: v.string(), id: v.string(), patch: v.any() },
+  handler: async (ctx, { table, id, patch }) => {
+    if (!ALLOWED_SEED_TABLES.includes(table as typeof ALLOWED_SEED_TABLES[number])) {
+      throw new Error(`PATCH_TABLE_NOT_ALLOWED: ${table}`);
+    }
+    const normalizedId = ctx.db.normalizeId(table as typeof ALLOWED_SEED_TABLES[number], id);
+    if (!normalizedId) {
+      throw new Error(`PATCH_ID_INVALID_FOR_TABLE: ${table}`);
+    }
+    await ctx.db.patch(normalizedId, patch);
   },
 });
 

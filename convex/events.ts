@@ -148,6 +148,12 @@ export const getRsvps = query({
     orgSlug: v.string(),
     eventId: v.id("events"),
     status: v.optional(v.string()),
+    // When true, include walk-in sentinel rows (status="GOING" +
+    // walkIn=true + encryptedEmail=""). Default false — staffer-facing
+    // roster queries get only real RSVPs. The attendance/walk-in
+    // surface is exposed separately so consumers don't crash on the
+    // empty encrypted blob during client-side decrypt.
+    includeWalkIns: v.optional(v.boolean()),
     paginationOpts: v.object({
       numItems: v.number(),
       cursor: v.union(v.string(), v.null()),
@@ -178,7 +184,17 @@ export const getRsvps = query({
       cursor: args.paginationOpts.cursor ?? null,
     });
 
-    // Names are client-encrypted blobs — return as-is for client-side decryption
+    // Filter out walk-in sentinels by default. Their encryptedEmail is
+    // the empty string, which the staffer-facing roster cannot decrypt;
+    // showing them would either crash the client or render a row with
+    // "[encrypted]" + empty name. Operators viewing walk-in attendance
+    // get it from a dedicated surface (or by passing includeWalkIns).
+    if (!args.includeWalkIns) {
+      return {
+        ...results,
+        page: results.page.filter((r) => !r.walkIn),
+      };
+    }
     return results;
   },
 });
@@ -373,6 +389,31 @@ export const insertRsvp = internalMutation({
       return { id: existing._id, updated: true };
     }
 
+    // Re-read the event inside this mutation and gate capacity here, not
+    // only in the calling action. Convex mutations are serializable with
+    // OCC — concurrent mutations that touch the same row have their
+    // read-write set conflict-detected at commit, so a fresh
+    // `event.rsvpCount` read followed by a conditional increment is
+    // atomic against other RSVP writers. The action-level check at
+    // `createRsvp` runs outside this transaction and reads a stale row
+    // under contention — two concurrent RSVPs could both see
+    // `rsvpCount < capacity` there and both attempt this mutation. The
+    // gate here is the only one that holds under load. Waitlist-enabled
+    // events skip the throw because overflow is allowed (the action
+    // stamps `WAITLISTED`).
+    const event = await ctx.db.get(args.eventId);
+    if (!event) throw new Error("Event not found");
+    if (
+      event.capacity &&
+      event.rsvpCount >= event.capacity &&
+      !event.waitlistEnabled
+    ) {
+      // Match the action-level error string so the SvelteKit
+      // endpoint's translator at `/api/e/[id]/rsvp:91` (substring
+      // match `'at capacity'`) routes to the same 400 response.
+      throw new Error("Event is at capacity");
+    }
+
     // Insert new RSVP
     const id = await ctx.db.insert("eventRsvps", {
       eventId: args.eventId,
@@ -392,13 +433,11 @@ export const insertRsvp = internalMutation({
       attendanceDistrictHash: undefined,
     });
 
-    // Increment event RSVP counter
-    const event = await ctx.db.get(args.eventId);
-    if (event) {
-      await ctx.db.patch(args.eventId, {
-        rsvpCount: event.rsvpCount + 1,
-      });
-    }
+    // Increment event RSVP counter using the just-fetched event row
+    // (already loaded above for the capacity check).
+    await ctx.db.patch(args.eventId, {
+      rsvpCount: event.rsvpCount + 1,
+    });
 
     return { id, updated: false };
   },
@@ -450,6 +489,27 @@ export const createRsvp = action({
     supporterId: v.optional(v.id("supporters")),
   },
   handler: async (ctx, args): Promise<InsertRsvpResult> => {
+    // Action-boundary length caps. The SvelteKit `/api/e/[id]/rsvp`
+    // route enforces these too, but Convex actions are directly
+    // callable from any authenticated client.
+    if (args.email.length > 254) throw new Error("EMAIL_TOO_LARGE");
+    if (args.name.length > 200) throw new Error("NAME_TOO_LARGE");
+    // Pin to the documented schema enum so a griefer can't submit
+    // `status='JUNK'` rows that still bump `event.rsvpCount` — a
+    // capped event would fill with unrecognized values that the
+    // analytics status-filter would skip, yielding an empty-event
+    // illusion.
+    const ALLOWED_RSVP_STATUSES = ["GOING", "MAYBE", "NOT_GOING", "WAITLISTED"] as const;
+    if (args.status !== undefined) {
+      if (args.status.length > 16) throw new Error("STATUS_TOO_LARGE");
+      if (!ALLOWED_RSVP_STATUSES.includes(args.status as typeof ALLOWED_RSVP_STATUSES[number])) {
+        throw new Error("INVALID_RSVP_STATUS");
+      }
+    }
+    if (args.districtHash !== undefined && args.districtHash.length > 128) {
+      throw new Error("DISTRICT_HASH_TOO_LARGE");
+    }
+
     // Verify event exists and is accepting RSVPs
     const event = await ctx.runQuery(getEventInternalRef, { eventId: args.eventId });
     if (!event) throw new Error("Event not found");
@@ -562,27 +622,69 @@ export const checkIn = mutation({
 export const publicCheckIn = mutation({
   args: {
     eventId: v.id("events"),
-    emailHash: v.optional(v.string()),
+    // Optional checkin code. The mutation derives `verifiedTrust`
+    // server-side via constant-time compare against `event.checkinCode`;
+    // caller-supplied `args.verified` is ignored unless the code
+    // matches. Without this gate, anyone with an eventId could call
+    // this mutation directly and inflate `verifiedAttendees`. Walk-ins
+    // (no code) are still allowed but cannot earn verified-attendance
+    // credit.
+    checkinCode: v.optional(v.string()),
+    // Required. The SvelteKit `/api/e/[id]/checkin` route requires
+    // `email` and computes the org-scoped hash server-side, so making
+    // this required has no client-facing impact; it closes the
+    // direct-Convex-call inflation path where a missing emailHash
+    // would skip the `by_eventId_emailHash` dedup branch and let a
+    // repeated call inflate `event.attendeeCount` against any
+    // non-`requireVerification` event.
+    emailHash: v.string(),
     verified: v.boolean(),
     verificationMethod: v.optional(v.string()),
     identityCommitment: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    if (!args.emailHash || args.emailHash.length === 0 || args.emailHash.length > 128) {
+      throw new Error("EMAIL_HASH_INVALID");
+    }
     const event = await ctx.db.get(args.eventId);
     if (!event) throw new Error("Event not found");
 
-    // Find RSVP by email hash (optional — walk-ins allowed)
-    let rsvp = null;
-    if (args.emailHash) {
-      rsvp = await ctx.db
-        .query("eventRsvps")
-        .withIndex("by_eventId_emailHash", (idx) =>
-          idx.eq("eventId", args.eventId).eq("emailHash", args.emailHash!)
-        )
-        .first();
+    // Derive verifiedTrust server-side from checkinCode equality.
+    // Constant-time compare avoids leaking length/position via wall-
+    // clock timing on a public endpoint. Caller-supplied `args.verified`
+    // is ignored unless the code matches — the arg stays in the
+    // signature for SvelteKit-side compatibility but is overwritten
+    // server-side regardless.
+    let codeMatched = false;
+    if (event.checkinCode && args.checkinCode && args.checkinCode.length === event.checkinCode.length) {
+      let mismatch = 0;
+      for (let i = 0; i < args.checkinCode.length; i++) {
+        mismatch |= args.checkinCode.charCodeAt(i) ^ event.checkinCode.charCodeAt(i);
+      }
+      codeMatched = mismatch === 0;
     }
+    // If the event requires verification, refuse the check-in entirely
+    // without a valid code (matches the SvelteKit endpoint contract).
+    if (event.requireVerification && !codeMatched) {
+      throw new Error("EVENT_CHECKIN_CODE_REQUIRED");
+    }
+    const verifiedTrust = codeMatched;
 
-    // Dedup: if this RSVP already checked in, return early
+    // Find RSVP by email hash. The hash is now required (see args
+    // validator above), so we always have a stable identifier and can
+    // always dedup before incrementing the counter.
+    const rsvp = await ctx.db
+      .query("eventRsvps")
+      .withIndex("by_eventId_emailHash", (idx) =>
+        idx.eq("eventId", args.eventId).eq("emailHash", args.emailHash)
+      )
+      .first();
+
+    // Dedup against the existing RSVP row if it's already been
+    // checked in. Whether the RSVP was created by `createRsvp` (real
+    // RSVP) or by an earlier walk-in branch of this same mutation
+    // (sentinel RSVP, see insert below), the `checkedInAt` flag is
+    // the canonical "already counted" signal.
     if (rsvp?.checkedInAt) {
       return {
         attendeeCount: event.attendeeCount,
@@ -590,23 +692,78 @@ export const publicCheckIn = mutation({
       };
     }
 
-    // Mark RSVP as checked in (if found)
+    // Mark RSVP as checked in. Use the server-derived `verifiedTrust`,
+    // not the caller-supplied `args.verified` — a malicious direct
+    // Convex caller cannot earn verification credit without proving
+    // the checkinCode.
     if (rsvp) {
       await ctx.db.patch(rsvp._id, {
         checkedInAt: Date.now(),
-        attendanceVerified: args.verified,
-        attendanceVerificationMethod: args.verificationMethod,
-        attendanceIdentityCommitment: args.identityCommitment,
+        attendanceVerified: verifiedTrust,
+        attendanceVerificationMethod: verifiedTrust
+          ? args.verificationMethod
+          : undefined,
+        attendanceIdentityCommitment: verifiedTrust
+          ? args.identityCommitment
+          : undefined,
         updatedAt: Date.now(),
       });
+    } else {
+      // Walk-in dedup: no prior RSVP for this emailHash, but the
+      // counter must only tick once per identity. Insert a sentinel
+      // RSVP — `encryptedEmail: ""` (the walk-in didn't supply one),
+      // `checkedInAt` set, `walkIn: true` so the RSVP roster query
+      // (`getRsvps`) can filter these out (attendance-dedup rows, not
+      // real RSVPs). Subsequent calls with the same emailHash hit the
+      // dedup branch above. Without this insert, direct Convex
+      // callers could inflate `attendeeCount` indefinitely against
+      // any non-`requireVerification` event.
+      await ctx.db.insert("eventRsvps", {
+        eventId: args.eventId,
+        encryptedEmail: "",
+        emailHash: args.emailHash,
+        status: "GOING",
+        guestCount: 1,
+        engagementTier: 0,
+        walkIn: true,
+        checkedInAt: Date.now(),
+        attendanceVerified: verifiedTrust,
+        attendanceVerificationMethod: verifiedTrust
+          ? args.verificationMethod
+          : undefined,
+        attendanceIdentityCommitment: verifiedTrust
+          ? args.identityCommitment
+          : undefined,
+        updatedAt: Date.now(),
+      });
+      // Post-insert sanity check: Convex serializable OCC over the
+      // empty `by_eventId_emailHash` range read at the top of this
+      // handler SHOULD detect any concurrent walk-in insert on the
+      // same emailHash and retry one of them so it falls into the
+      // dedup branch — but the guarantee has no test, so this read-
+      // back is a forensic safety net. We don't try to repair
+      // (deleting "ours" when "theirs" already won is a different
+      // race); the error log makes the divergence visible.
+      const sanity = await ctx.db
+        .query("eventRsvps")
+        .withIndex("by_eventId_emailHash", (idx) =>
+          idx.eq("eventId", args.eventId).eq("emailHash", args.emailHash),
+        )
+        .collect();
+      if (sanity.length > 1) {
+        console.error(
+          `[publicCheckIn] OCC INVARIANT VIOLATED: ${sanity.length} eventRsvps rows share eventId+emailHash after walk-in insert. attendeeCount may double-count.`,
+        );
+      }
     }
 
-    // Increment event counters
+    // Increment event counters. `verifiedAttendees` only ticks on a
+    // server-verified code match — caller-supplied flag is ignored.
     const newCount = (event.attendeeCount ?? 0) + 1;
     const countPatch: Record<string, unknown> = {
       attendeeCount: newCount,
     };
-    if (args.verified) {
+    if (verifiedTrust) {
       countPatch.verifiedAttendees = (event.verifiedAttendees ?? 0) + 1;
     }
     await ctx.db.patch(args.eventId, countPatch);

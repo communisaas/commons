@@ -8,6 +8,7 @@
 import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { resolveDmAndCanonical } from "./legislation";
 // PII returned as encrypted blobs — v1 API consumers decrypt with org key
 
 // =============================================================================
@@ -289,33 +290,53 @@ export const createSupporter = internalMutation({
     orgId: v.id("organizations"),
     encryptedEmail: v.string(),
     emailHash: v.string(),
+    // Paired global hashes for cross-org webhook lookup. Same contract
+    // as `supporters.create` — optional during rollout but webhook
+    // lookups (SES bounce/complaint, TCPA STOP/START) need them to
+    // find this row.
+    globalEmailHash: v.optional(v.string()),
     encryptedName: v.optional(v.string()),
     postalCode: v.optional(v.string()),
     country: v.string(),
     encryptedPhone: v.optional(v.string()),
     phoneHash: v.optional(v.string()),
+    globalPhoneHash: v.optional(v.string()),
     source: v.string(),
     encryptedCustomFields: v.optional(v.string()),
     tagIds: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    // Check for duplicate by emailHash
-    const existing = await ctx.db
+    // Enforce the PII triple invariant at the v1 API boundary so
+    // third-party API consumers can't write partial-coherence rows
+    // any more than internal callers can. Shares the same helper +
+    // error names as `supporters.create` and `importBatch`.
+    const { assertPiiTripleCreate } = await import("./_orgHash");
+    assertPiiTripleCreate(args);
+
+    // Check for duplicate by emailHash via the dedicated composite
+    // index. A naive `.take(10_000).find(...)` would scan only the
+    // first 10K supporter rows for the org and miss any duplicate past
+    // that boundary — so orgs >10K supporters could create a duplicate
+    // via the v1 API. The schema has `by_orgId_emailHash`; use it.
+    const dup = await ctx.db
       .query("supporters")
-      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
-      .take(10_000);
-    const dup = existing.find((s) => s.emailHash === args.emailHash);
+      .withIndex("by_orgId_emailHash", (q) =>
+        q.eq("orgId", args.orgId).eq("emailHash", args.emailHash),
+      )
+      .first();
     if (dup) return { duplicate: true, id: dup._id };
 
     const id = await ctx.db.insert("supporters", {
       orgId: args.orgId,
       encryptedEmail: args.encryptedEmail,
       emailHash: args.emailHash,
+      globalEmailHash: args.globalEmailHash,
       encryptedName: args.encryptedName,
       postalCode: args.postalCode,
       country: args.country,
       encryptedPhone: args.encryptedPhone,
       phoneHash: args.phoneHash,
+      globalPhoneHash: args.globalPhoneHash,
       source: args.source,
       verified: false,
       emailStatus: "subscribed",
@@ -1059,10 +1080,11 @@ export const getOrgForApiKey = internalQuery({
 // =============================================================================
 
 export const getDmScorecard = internalQuery({
-  args: { dmId: v.string() },
-  handler: async (ctx, { dmId }) => {
-    const dm = await ctx.db.get(dmId as Id<"decisionMakers">);
-    if (!dm) return null;
+  args: { identifier: v.string() },
+  handler: async (ctx, { identifier }) => {
+    const resolved = await resolveDmAndCanonical(ctx, identifier);
+    if (!resolved) return null;
+    const { dm, canonicalSlug } = resolved;
 
     const snapshots = await ctx.db
       .query("scorecardSnapshots")
@@ -1074,6 +1096,7 @@ export const getDmScorecard = internalQuery({
     const history = snapshots.slice(1);
 
     return {
+      canonicalSlug,
       decisionMaker: {
         id: dm._id,
         name: dm.name,
