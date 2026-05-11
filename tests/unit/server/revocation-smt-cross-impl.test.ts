@@ -1,5 +1,5 @@
 /**
- * Wave 3 / FU-2.4 — Cross-implementation byte-equality between the TypeScript
+ * FU-2.4 — Cross-implementation byte-equality between the TypeScript
  * SMT helper (`src/lib/server/smt/revocation-smt.ts`) and the Noir circuit
  * (`voter-protocol/packages/crypto/noir/three_tree_membership/src/main.nr`).
  *
@@ -57,18 +57,18 @@ const CROSS_IMPL_SLOT_MIXED_A5_ROOT =
 	'0x085c4d84b90354433f78e35e479043af61dd448d4d449307829d93bac8000150';
 const CROSS_IMPL_TWO_LEAF_SLOT0_THEN_SLOT1_ROOT =
 	'0x12cbb2bd70670646d2ea6c8a8ec136131605ced78c3f1a4b90fa64f19bec3426';
-// F-1.4.fix R4 (2026-04-25) — closes the brutalist's coverage gap: existing
-// fixtures only cross the d=63→d=64 boundary with EMPTY siblings. This
-// fixture inserts slot 0, then walks slot 2^64 — slot 2^64's sibling at
-// d=64 (pathKey=0) was written by slot 0's walk, forcing a non-empty
-// sibling at the depth boundary. Catches bit-decomposition or array-shift
-// bugs that emerge specifically at the 64-bit word boundary.
+// F-1.4.fix R4 closes a coverage gap: prior fixtures only cross the
+// d=63→d=64 boundary with EMPTY siblings. This fixture inserts slot 0,
+// then walks slot 2^64 — slot 2^64's sibling at d=64 (pathKey=0) was
+// written by slot 0's walk, forcing a non-empty sibling at the depth
+// boundary. Catches bit-decomposition or array-shift bugs that emerge
+// specifically at the 64-bit word boundary.
 const CROSS_IMPL_SLOT_0_AND_2POW64_ROOT =
 	'0x253cd6055d0b1f11495ca6be08bdb894cb860f2e275f2c4ffcacfba26290eda1';
 
 const FIELD_ZERO = '0x' + '0'.repeat(64);
 
-// Wave 3c: route through the shared module so the test exercises THE SAME
+// Helper: route through the shared module so the test exercises THE SAME
 // recurrence the production helper and the browser fetcher use. If the
 // shared module drifts, this test fails — closing the "fourth source of
 // truth" gap REVIEW 2 flagged.

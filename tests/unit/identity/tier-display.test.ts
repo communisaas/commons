@@ -1,11 +1,11 @@
 /**
- * H6 — tier-display single-source-of-truth helper.
+ * Tier-display single-source-of-truth helper.
  *
- * Pre-H6 each surface (AttestationFooter, emailService, /v/[hash]) owned its
- * own tier copy and they drifted apart. formatTierDisplay now produces a
- * single payload all three surfaces consume. These tests pin the
- * epistemic-class boundaries — getting them wrong is exactly the over-claim
- * the H-phase brutalist reviews kept catching in G5/G5r.
+ * Each surface (AttestationFooter, emailService, /v/[hash]) previously
+ * owned its own tier copy and the copies drifted apart. formatTierDisplay
+ * now produces a single payload all three surfaces consume. These tests
+ * pin the epistemic-class boundaries — getting them wrong is exactly the
+ * over-claim ("verified" used as a default) the helper exists to prevent.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -38,7 +38,7 @@ describe('formatTierDisplay — confidence class', () => {
 		expect(display.headline).toBe('Address-Resolved Constituent');
 	});
 
-	it("classes 'digital-credentials-api' identically to 'mdl' (taxonomy fix from G5r)", () => {
+	it("classes 'digital-credentials-api' identically to 'mdl' (taxonomy normalization)", () => {
 		const display = formatTierDisplay({ method: 'digital-credentials-api' });
 		expect(display.confidenceClass).toBe('mdl');
 		expect(display.headline).toBe('Address-Resolved Constituent');
@@ -92,7 +92,7 @@ describe('formatTierDisplay — atlas-version drift', () => {
 		expect(display.atlasDriftLabel).toMatch(/v20260503/);
 	});
 
-	it('does NOT claim drift when either side is missing — H0r honesty about "unknown" state', () => {
+	it('does NOT claim drift when either side is missing — "unknown" is not "no drift"', () => {
 		// currentAtlasVersion=null can mean manifest fetch failed; atlasDriftLabel
 		// should be null so the UI suppresses the drift surface (NOT shows "no
 		// drift", which would be a positive claim we cannot make).

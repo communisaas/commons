@@ -25,7 +25,7 @@ const {
 	mockInsertRevocationNullifier
 } = vi.hoisted(() => ({
 	mockPrivateEnv: {
-		INTERNAL_API_SECRET: 'test-secret'
+		INTERNAL_API_SECRET: 'a'.repeat(64)
 	} as Record<string, string | undefined>,
 	mockEmitOnChainRevocation: vi.fn(),
 	mockGetRevocationRegistryAddress: vi.fn(),
@@ -53,7 +53,7 @@ vi.mock('$lib/server/internal/rate-limit', () => ({
 	enforceInternalRateLimit: (...args: unknown[]) => mockEnforceInternalRateLimit(...args)
 }));
 
-// Wave 2 — emit-revocation now delegates root computation to the SMT helper
+//  emit-revocation now delegates root computation to the SMT helper
 // (replacing the keccak placeholder). The mock returns a deterministic newRoot
 // per test so we can verify the on-chain call receives the SMT-derived value.
 vi.mock('$lib/server/smt/revocation-smt', () => ({
@@ -73,7 +73,7 @@ function makeRequest(body: unknown, headers: Record<string, string> = {}): Reque
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
-			'x-internal-secret': 'test-secret',
+			'x-internal-secret': 'a'.repeat(64),
 			...headers
 		},
 		body: JSON.stringify(body)
@@ -110,7 +110,7 @@ describe('POST /api/internal/emit-revocation', () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		// Restore INTERNAL_API_SECRET which some tests mutate.
-		mockPrivateEnv.INTERNAL_API_SECRET = 'test-secret';
+		mockPrivateEnv.INTERNAL_API_SECRET = 'a'.repeat(64);
 	});
 
 	// -------------------------------------------------------------------------
@@ -331,7 +331,7 @@ describe('POST /api/internal/emit-revocation', () => {
 	});
 
 	// -------------------------------------------------------------------------
-	// Wave 2 — SMT-specific failure paths
+	//  SMT-specific failure paths
 	// -------------------------------------------------------------------------
 
 	it('idempotent re-emit: SMT leaf exists, chain emit STILL fires (recovers stuck state)', async () => {

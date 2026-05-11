@@ -1,5 +1,5 @@
 /**
- * Wave 2 — KG-2 closure. SMT correctness tests.
+ *  KG-2 closure. SMT correctness tests.
  *
  * The production code splits the SMT between Convex storage (path read/write)
  * and SvelteKit hashing (Poseidon2). This file tests the HASHING contract:

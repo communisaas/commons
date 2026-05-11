@@ -63,7 +63,8 @@ function encryptWithNoble(
 
 	const encryptionKey = blake2b(sharedSecret, {
 		dkLen: 32,
-		key: new TextEncoder().encode('commons-witness-encryption-v1')
+		// Renamed 2026-05-05 (FROZEN namespace migration)
+		key: new TextEncoder().encode('voter-protocol-witness-encryption-v1')
 	});
 
 	const nonce = randomBytes(24);

@@ -1,5 +1,5 @@
 /**
- * Wave 2 review-2 follow-up — helper-level tests for `insertRevocationNullifier`.
+ * Follow-up: helper-level tests for `insertRevocationNullifier`.
  *
  * The existing tests in `revocation-smt.test.ts` exercise a reference SMT
  * implemented inline; they verify the hashing convention but not the helper's
@@ -49,8 +49,14 @@ beforeEach(() => {
 describe('insertRevocationNullifier — helper branches', () => {
 	it('isFresh: true on first insert (empty leaf)', async () => {
 		// Convex returns "no leaf, all siblings null" → fresh insert path.
-		// FU-2.2: a SECOND query happens AFTER the mutation for post-write
-		// read-back verification. Mock both reads.
+		// A SECOND query happens after the mutation for post-write read-back
+		// verification. To make the test deterministic without orchestrating
+		// real Poseidon math against a hand-rolled root, the post-write read
+		// returns expectedSequenceNumber > our newSequenceNumber so the helper
+		// takes the "concurrent emit advanced seq" branch and skips Poseidon
+		// recomputation. This still exercises every helper code path EXCEPT
+		// the recompute itself (which is covered by the integration tests that
+		// run real Poseidon against the reference SMT in revocation-smt.test.ts).
 		const expectedRoot = '0x' + 'cc'.repeat(32);
 		mockServerQuery
 			.mockResolvedValueOnce({
@@ -60,13 +66,11 @@ describe('insertRevocationNullifier — helper branches', () => {
 				expectedSequenceNumber: 0,
 				leafCount: 0
 			})
-			// Post-write verification re-fetches: leaf is now occupied,
-			// siblings are still empty (single-insert tree).
 			.mockResolvedValueOnce({
 				siblings: new Array(128).fill(null),
 				currentLeaf: '0x' + '0'.repeat(63) + '1',
 				currentRoot: expectedRoot,
-				expectedSequenceNumber: 1,
+				expectedSequenceNumber: 99, // > newSequenceNumber=1 → skip recompute
 				leafCount: 1
 			});
 		mockServerMutation.mockResolvedValueOnce({
@@ -74,23 +78,14 @@ describe('insertRevocationNullifier — helper branches', () => {
 			newSequenceNumber: 1
 		});
 
-		// We can't easily assert post-write equality without mocking Poseidon,
-		// so loosen the check: helper either returns success OR throws a
-		// SMT_POSTWRITE_* error (acceptable — verification just doesn't agree
-		// with our hand-rolled mock root, but the production path runs).
-		try {
-			const result = await insertRevocationNullifier(VALID_NULLIFIER);
-			expect(result.isFresh).toBe(true);
-			expect(result.newRoot).toBe(expectedRoot);
-			expect(result.leafCount).toBe(1);
-		} catch (err) {
-			expect((err as Error).message).toMatch(/SMT_POSTWRITE_/);
-		}
-		// At least 2 reads (initial path read + post-write verification read).
-		// Mutation count varies: 1 for the apply, possibly +1 for setRevocationHalt
-		// if post-write verification fires the kill-switch on the synthetic root.
-		expect(mockServerQuery.mock.calls.length).toBeGreaterThanOrEqual(2);
-		expect(mockServerMutation.mock.calls.length).toBeGreaterThanOrEqual(1);
+		const result = await insertRevocationNullifier(VALID_NULLIFIER);
+		expect(result.isFresh).toBe(true);
+		expect(result.newRoot).toBe(expectedRoot);
+		expect(result.leafCount).toBe(1);
+		// 2 reads: initial path read + post-write verification read.
+		// 1 mutation: the apply. No kill-switch flip because verification skipped.
+		expect(mockServerQuery.mock.calls.length).toBe(2);
+		expect(mockServerMutation.mock.calls.length).toBe(1);
 	});
 
 	it('isFresh: false when leaf already present (idempotent retry)', async () => {
@@ -161,11 +156,14 @@ describe('insertRevocationNullifier — helper branches', () => {
 				leafCount: 2
 			})
 			// Post-write verification on the successful third attempt.
+			// expectedSequenceNumber > newSequenceNumber so the helper skips
+			// Poseidon recompute (same deterministic-test pattern as the
+			// "fresh insert" branch above).
 			.mockResolvedValueOnce({
 				siblings: new Array(128).fill(null),
 				currentLeaf: '0x' + '0'.repeat(63) + '1',
 				currentRoot: expectedRoot,
-				expectedSequenceNumber: 3,
+				expectedSequenceNumber: 99,
 				leafCount: 3
 			});
 
@@ -177,19 +175,14 @@ describe('insertRevocationNullifier — helper branches', () => {
 				newSequenceNumber: 3
 			});
 
-		try {
-			const result = await insertRevocationNullifier(VALID_NULLIFIER);
-			expect(result.isFresh).toBe(true);
-			expect(result.newRoot).toBe(expectedRoot);
-		} catch (err) {
-			// Acceptable: post-write verification may not agree with the
-			// stub's pseudo-root. Production path executed correctly.
-			expect((err as Error).message).toMatch(/SMT_POSTWRITE_/);
-		}
-		// At least 4 reads (3 retries + 1 post-write) and at least 3 mutations
-		// (3 retry attempts; halt mutation may add 1 if verify fails).
-		expect(mockServerQuery.mock.calls.length).toBeGreaterThanOrEqual(4);
-		expect(mockServerMutation.mock.calls.length).toBeGreaterThanOrEqual(3);
+		const result = await insertRevocationNullifier(VALID_NULLIFIER);
+		expect(result.isFresh).toBe(true);
+		expect(result.newRoot).toBe(expectedRoot);
+		// 4 reads: 3 retry path-reads + 1 post-write read. 3 mutations: 3 apply
+		// attempts (first two reject, third succeeds). No halt mutation because
+		// post-write verification was skipped via the seq-advanced branch.
+		expect(mockServerQuery.mock.calls.length).toBe(4);
+		expect(mockServerMutation.mock.calls.length).toBe(3);
 	}, 10000);
 
 	it('SMT_LEAF_OCCUPIED race: re-reads and returns isFresh=false', async () => {

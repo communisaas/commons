@@ -33,7 +33,7 @@ import {
 	TEST_COORDINATES
 } from './fixtures';
 
-// NOTE: didit-client module removed (Cycle 15 — mDL-only consolidation).
+// NOTE: didit-client module removed — mDL-only consolidation.
 // Webhook signature validation and parseVerificationResult tests replaced
 // with mDL-equivalent flow tests below.
 

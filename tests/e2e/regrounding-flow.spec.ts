@@ -1,5 +1,5 @@
 /**
- * Wave 4 — Browser E2E for the re-grounding flow.
+ *  Browser E2E for the re-grounding flow.
  *
  * STATUS: active when PLAYWRIGHT_DEV_LOGIN_TOKEN is set. Without that token,
  * the suite skips explicitly because it cannot authenticate a profile user.
@@ -116,7 +116,7 @@ async function completeRegrounding(page: import('@playwright/test').Page) {
 	await expect(page.getByText(/^re-grounded$/i)).toBeVisible({ timeout: 15000 });
 }
 
-test.describe('Re-grounding flow — browser-unique coverage (Wave 4)', () => {
+test.describe('Re-grounding flow — browser-unique coverage ', () => {
 	test.skip(
 		!process.env.PLAYWRIGHT_DEV_LOGIN_TOKEN,
 		'PLAYWRIGHT_DEV_LOGIN_TOKEN not set — re-grounding E2E needs dev-login auth state.'
@@ -134,7 +134,7 @@ test.describe('Re-grounding flow — browser-unique coverage (Wave 4)', () => {
 		// test in this suite that genuinely needs Playwright.
 		await openAddressForm(page);
 
-		// data-testid stable across refactors (added in Wave 4b).
+		// data-testid stable across refactors (added later).
 		const priorPane = page.getByTestId('prior-ground-pane');
 		await expect(priorPane).toBeVisible();
 		const before = await priorPane.boundingBox();
@@ -175,7 +175,7 @@ test.describe('Re-grounding flow — browser-unique coverage (Wave 4)', () => {
 		// at OS level. The unit harness simulates phase changes; only a
 		// real browser tests "user pressed ESC, browser tried to close".
 		//
-		// Wave 7 / FU-4.2 verified: AddressVerificationFlow witnessing items
+		// FU-4.2 verified: AddressVerificationFlow witnessing items
 		// already carry data-step="retire"|"attest" + data-state. Selector
 		// uses those for tight phase assertion (no more text-match looseness).
 		await openAddressForm(page);

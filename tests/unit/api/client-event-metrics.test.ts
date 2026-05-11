@@ -1,5 +1,5 @@
 /**
- * Wave 6 / FU-1.3 — client-event metrics endpoint tests.
+ * FU-1.3 — client-event metrics endpoint tests.
  *
  * Asserts the allowlist + rate-limit enforcement so a misbehaving client
  * cannot spam the log stream. SELF-REVIEW F closure.

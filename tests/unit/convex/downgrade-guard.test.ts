@@ -1,5 +1,5 @@
 /**
- * Wave 7 / FU-1.2 — pure-helper tests for `applyDowngradeGuard`.
+ * FU-1.2 — pure-helper tests for `applyDowngradeGuard`.
  *
  * Replaces the mock-mirror tax in `regrounding-attack-sims.test.ts` with
  * direct assertions against the extracted helper. The MockConvex mirror

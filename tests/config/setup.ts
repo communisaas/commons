@@ -42,6 +42,28 @@ beforeEach(() => {
 
 	// Mock browser APIs that may be accessed during tests
 	if (typeof window !== 'undefined') {
+		// JSDOM doesn't implement Web Animations API; Svelte 5 transitions
+		// (`fade`, `scale`, `slide`, etc.) call `element.animate()` on
+		// mount/unmount and crash the test. Polyfill once, here, so every
+		// behavioral test in the components lane gets the no-op for free
+		// rather than each file adding its own `beforeAll`.
+		if (!Element.prototype.animate) {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			(Element.prototype as any).animate = function () {
+				return {
+					cancel: () => {},
+					finish: () => {},
+					play: () => {},
+					pause: () => {},
+					addEventListener: () => {},
+					removeEventListener: () => {},
+					onfinish: null,
+					oncancel: null,
+					playState: 'finished'
+				};
+			};
+		}
+
 		// localStorage mock for analytics and browser utilities
 		const localStorageMock = {
 			getItem: vi.fn(() => null),

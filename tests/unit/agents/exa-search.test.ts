@@ -1,7 +1,10 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 const mockSearch = vi.fn();
-const mockScrapeUrl = vi.fn();
+// `scrape` is the v4+ Firecrawl SDK method; `scrapeUrl` is the legacy
+// alias. Production code calls `firecrawl.scrape(url, { formats: [...] })`
+// (see exa-search.ts:253), so the mock client must expose `scrape`.
+const mockScrape = vi.fn();
 
 // Mock rate limiter that executes immediately without throttling
 const createMockRateLimiter = () => ({
@@ -39,7 +42,7 @@ vi.mock('$lib/server/exa', () => ({
 
 vi.mock('$lib/server/firecrawl', () => ({
 	getFirecrawlClient: () => ({
-		scrapeUrl: mockScrapeUrl
+		scrape: mockScrape
 	}),
 	getFirecrawlRateLimiter: () => mockFirecrawlRateLimiter
 }));
@@ -136,11 +139,11 @@ describe('searchWeb', () => {
 
 describe('readPage', () => {
 	beforeEach(() => {
-		mockScrapeUrl.mockReset();
+		mockScrape.mockReset();
 	});
 
 	it('calls firecrawl.scrapeUrl with markdown+links+rawHtml format', async () => {
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: '# Test Page\nSome content',
 			links: [],
@@ -149,14 +152,14 @@ describe('readPage', () => {
 
 		await readPage('https://example.com');
 
-		expect(mockScrapeUrl).toHaveBeenCalledTimes(1);
-		const [url, options] = mockScrapeUrl.mock.calls[0];
+		expect(mockScrape).toHaveBeenCalledTimes(1);
+		const [url, options] = mockScrape.mock.calls[0];
 		expect(url).toBe('https://example.com');
 		expect(options.formats).toEqual(['markdown', 'links', 'rawHtml']);
 	});
 
 	it('returns page content with correct shape', async () => {
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: 'Mayor Ted Wheeler\nEmail: mayor@portlandoregon.gov',
 			links: ['mailto:mayor@portlandoregon.gov'],
@@ -179,7 +182,7 @@ describe('readPage', () => {
 	it('captures emails from JS-rendered pages that Exa would miss', async () => {
 		// Firecrawl renders the full page with headless browser —
 		// emails in mailto: links and contact widgets are captured inline
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: 'The Federal Trade Commission\n\nContact us: [opa@ftc.gov](mailto:opa@ftc.gov)\n\nOffice of Public Affairs',
 			links: ['mailto:opa@ftc.gov', 'https://ftc.gov/about'],
@@ -196,7 +199,7 @@ describe('readPage', () => {
 
 	it('ignores legacy maxCharacters option (returns full text)', async () => {
 		const longContent = 'A'.repeat(20000);
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: longContent,
 			links: [],
@@ -211,7 +214,7 @@ describe('readPage', () => {
 
 	it('returns full page content (no artificial truncation)', async () => {
 		const longContent = 'B'.repeat(50000);
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: longContent,
 			links: [],
@@ -225,7 +228,7 @@ describe('readPage', () => {
 
 	it('applies 200K safety cap on pathological pages', async () => {
 		const hugeContent = 'X'.repeat(300000);
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: hugeContent,
 			links: [],
@@ -238,7 +241,7 @@ describe('readPage', () => {
 	});
 
 	it('returns null when scrape has no markdown content', async () => {
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: '',
 			metadata: { title: 'Empty', statusCode: 200 }
@@ -249,7 +252,7 @@ describe('readPage', () => {
 	});
 
 	it('returns null when scrape fails', async () => {
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: false,
 			error: 'Page not found'
 		});
@@ -259,14 +262,14 @@ describe('readPage', () => {
 	});
 
 	it('returns null when scrapeUrl throws', async () => {
-		mockScrapeUrl.mockRejectedValue(new Error('Network error'));
+		mockScrape.mockRejectedValue(new Error('Network error'));
 
 		const result = await readPage('https://example.com');
 		expect(result).toBeNull();
 	});
 
 	it('handles missing metadata gracefully', async () => {
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: '# Content here',
 			links: [],
@@ -280,7 +283,7 @@ describe('readPage', () => {
 	});
 
 	it('extracts emails from rawHtml that markdown missed', async () => {
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: 'Mayor Mike Johnston\nContact the office for inquiries.',
 			links: [],
@@ -296,7 +299,7 @@ describe('readPage', () => {
 	});
 
 	it('does not duplicate emails already in markdown', async () => {
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: 'Contact: mayor@city.gov for questions.',
 			links: [],
@@ -313,7 +316,7 @@ describe('readPage', () => {
 	});
 
 	it('filters false positive emails from HTML (image filenames, noreply)', async () => {
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: 'Some content here',
 			links: [],
@@ -329,7 +332,7 @@ describe('readPage', () => {
 	});
 
 	it('works when rawHtml is not returned', async () => {
-		mockScrapeUrl.mockResolvedValue({
+		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: 'Content without HTML',
 			links: [],

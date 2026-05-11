@@ -1,7 +1,7 @@
 /**
- * Wave 7 / FU-3.4 — property-based SMT correctness tests.
+ * FU-3.4 — property-based SMT correctness tests.
  *
- * The Wave 3 cross-impl byte-equality fixtures (slot 0, 1, 2^63, mixed-bit,
+ * Thecross-impl byte-equality fixtures (slot 0, 1, 2^63, mixed-bit,
  * two-leaf) are hand-picked. A symmetric bug in the production helper that
  * also exists in the test reference would produce matching wrong roots, and
  * those fixtures wouldn't catch it.

@@ -13,6 +13,14 @@ vi.mock('$lib/convex', () => ({
 			getMyTemplates: 'users.getMyTemplates',
 			getMyRepresentatives: 'users.getMyRepresentatives',
 			getReverificationBudget: 'users.getReverificationBudget'
+		},
+		// The route reads ground-state queries; without these stubs
+		// accessing `api.ground.*` throws "cannot read of undefined"
+		// inside Promise.all → catch block → all convex* values stay null →
+		// result.user falls back to locals.user, breaking the assertion.
+		ground: {
+			getMyGroundState: 'ground.getMyGroundState',
+			getMyGroundRestoreState: 'ground.getMyGroundRestoreState'
 		}
 	}
 }));
@@ -61,7 +69,10 @@ describe('profile page load', () => {
 				periodCap: 3,
 				windowMs: 15_552_000_000,
 				emailSybilTripped: false
-			});
+			})
+			// Two ground-state queries — null is fine; route's helpers handle null.
+			.mockResolvedValueOnce(null)
+			.mockResolvedValueOnce(null);
 
 		const result = (await load({
 			locals: {

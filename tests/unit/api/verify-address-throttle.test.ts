@@ -43,7 +43,7 @@ vi.mock('$lib/core/identity/credential-policy', () => ({
 	TIER_CREDENTIAL_TTL: { 2: 6 * 30 * 24 * 60 * 60 * 1000 }
 }));
 
-// FU-1.1 (Wave 6) added a server-side commitment authenticity check that
+// FU-1.1 added a server-side commitment authenticity check that
 // runs BEFORE the mutation. These tests target throttle surfacing post-
 // mutation, so we mock the helper to a no-op success.
 vi.mock('$lib/server/identity/verify-commitment', () => ({
@@ -52,6 +52,22 @@ vi.mock('$lib/server/identity/verify-commitment', () => ({
 		expectedCommitment: '0x' + 'a'.repeat(64)
 	})
 }));
+
+// F-2.4: verify-address now requires an address_token whenever
+// coordinates are supplied. These tests target throttle / error surfacing,
+// not token binding, so we mock the verification helper to always return
+// valid. The token primitive's own behavior (substitution rejection,
+// expiry, mode mismatch) is covered by tests/unit/server/address-
+// resolution-token.test.ts. Mocking a single named export of the module
+// is safe because the verify-address handler is the only file in this
+// test file's import graph that consumes the helper.
+vi.mock('$lib/server/auth/address-resolution-token', () => ({
+	verifyAddressResolutionToken: vi.fn().mockResolvedValue({ valid: true, mode: 'geo' })
+}));
+
+// Token presence is required by the gate but the value is irrelevant
+// because verifyAddressResolutionToken is mocked above.
+const STUB_ADDRESS_TOKEN = 'v1.geo.9999999999999.deadbeef';
 
 import { POST } from '../../../src/routes/api/identity/verify-address/+server';
 
@@ -84,8 +100,11 @@ describe('POST /api/identity/verify-address — throttle surfacing', () => {
 				district: 'OR-03',
 				verification_method: 'shadow_atlas',
 				district_commitment: '0x' + 'a'.repeat(64),
-				// FU-1.1 (Wave 6): coordinates required when commitment is provided.
-				coordinates: { lat: 45.5, lng: -122.7 }
+				// FU-1.1 — coordinates required when commitment is provided.
+				coordinates: { lat: 45.5, lng: -122.7 },
+				// F-2.4: gate requires a token whenever coordinates
+				// are supplied. Verification is mocked to valid above.
+				address_token: STUB_ADDRESS_TOKEN
 			})
 		);
 
@@ -209,7 +228,7 @@ describe('POST /api/identity/verify-address — throttle surfacing', () => {
 	});
 
 	it('surfaces commitment-downgrade rejection as 400 with COMMITMENT_DOWNGRADE code', async () => {
-		// Wave 1b: verifyAddress now rejects when the user previously held a
+		// Sub-step: verifyAddress now rejects when the user previously held a
 		// commitment-bearing credential but the incoming request omits one. The
 		// API must surface this as a 400 with a machine-readable code so the
 		// UI can prompt the user to retry rather than silently succeed.

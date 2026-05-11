@@ -29,7 +29,7 @@ import {
 	BN254_MODULUS
 } from './fixtures';
 
-// NOTE: didit-client module removed (Cycle 15 — mDL-only consolidation).
+// NOTE: didit-client module removed — mDL-only consolidation.
 // Webhook signature validation, parseVerificationResult, and isAgeEligible
 // tests have been replaced with mDL-equivalent or pure-logic tests below.
 

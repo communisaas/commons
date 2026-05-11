@@ -1,5 +1,5 @@
 /**
- * Wave 5 R1 fix — endpoint test for FU-3.3 health gate.
+ * Fix — endpoint test for FU-3.3 health gate.
  *
  * Pins the auth + status-code semantics so the runbook's deploy-pipeline curl
  * command can rely on them:
@@ -19,7 +19,7 @@ const {
 	mockGetRevocationRegistryEmptyTreeRoot,
 	mockGetEmptyTreeRoot
 } = vi.hoisted(() => ({
-	mockPrivateEnv: { INTERNAL_API_SECRET: 'test-secret' } as Record<string, string | undefined>,
+	mockPrivateEnv: { INTERNAL_API_SECRET: 'a'.repeat(64) } as Record<string, string | undefined>,
 	mockGetRevocationRegistryAddress: vi.fn(),
 	mockGetRevocationRegistryEmptyTreeRoot: vi.fn(),
 	mockGetEmptyTreeRoot: vi.fn()
@@ -50,14 +50,14 @@ function makeEvent(headers: Record<string, string> = {}, urlSuffix = ''): Parame
 	const url = new URL('https://example.test/api/internal/health/empty-tree-root' + urlSuffix);
 	const request = new Request(url.toString(), {
 		method: 'GET',
-		headers: { 'x-internal-secret': 'test-secret', ...headers }
+		headers: { 'x-internal-secret': 'a'.repeat(64), ...headers }
 	});
 	return { request, url } as Parameters<typeof GET>[0];
 }
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	mockPrivateEnv.INTERNAL_API_SECRET = 'test-secret';
+	mockPrivateEnv.INTERNAL_API_SECRET = 'a'.repeat(64);
 	mockPrivateEnv.NODE_ENV = 'development';
 	mockGetRevocationRegistryAddress.mockReturnValue('0x1234');
 	mockGetRevocationRegistryEmptyTreeRoot.mockResolvedValue(MATCHING_ROOT);
@@ -66,7 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.restoreAllMocks();
-	mockPrivateEnv.INTERNAL_API_SECRET = 'test-secret';
+	mockPrivateEnv.INTERNAL_API_SECRET = 'a'.repeat(64);
 });
 
 describe('GET /api/internal/health/empty-tree-root', () => {

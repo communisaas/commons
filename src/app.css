@@ -38,16 +38,6 @@
 }
 
 @layer base {
-	/*
-	=== VISUAL FOUNDATION — PERCEPTUAL ENGINEERING ===
-
-	The background is not empty space—it's the ground plane.
-	Human perception evolved in warm-lit environments (fire, sun).
-	Pure white is perceptually "machine" - warm cream is "inhabited".
-
-	Subtle gradient creates depth without distraction.
-	The eye perceives this as "livable space" not "blank canvas".
-	*/
 	html {
 		background: linear-gradient(
 			180deg,
@@ -81,15 +71,7 @@
 	}
 
 	:root {
-		/*
-		=== COMMONS DESIGN SYSTEM ===
-		"The weight of numbers."
-
-		Coordination graph aesthetic derived from RelayLoom.
-		Teal for routes. Indigo for sharing. Emerald for verification.
-		*/
-
-		/* === COORDINATION GRAPH COLORS (Primary) === */
+		/* Coordination-graph palette: teal=routes, indigo=sharing, emerald=verified. */
 		--coord-route: rgba(59, 196, 184, 0.9); /* #3BC4B8 — Message routes to targets */
 		--coord-route-solid: #3bc4b8;
 		--coord-share: rgba(79, 70, 229, 0.9); /* #4F46E5 — Sharing/spreading connections */
@@ -105,17 +87,14 @@
 		--coord-edge-width: 1.3;
 		--coord-edge-shadow: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.12));
 
-		/* === DOCUMENT TYPE COLORS (Peripheral Encoding) ===
-		   For L1/L2/L3 document disclosure - type recognized peripherally via color
-		   before focal attention reads labels */
+		/* Document-type tokens for L1/L2/L3 disclosure surfaces. */
 		--doc-legislative: oklch(0.75 0.15 85);   /* Amber - bills, resolutions */
 		--doc-official: oklch(0.55 0.03 260);     /* Slate - agency reports, filings */
 		--doc-media: oklch(0.6 0.15 250);         /* Blue - news, analysis */
 		--doc-corporate: oklch(0.6 0.15 160);     /* Emerald - SEC filings, announcements */
 		--doc-academic: oklch(0.6 0.15 300);      /* Purple - research papers, studies */
 
-		/* === LEGACY TOKENS (backward compatibility) === */
-		/* Core Brand Colors—Vibrant Trust */
+		/* Legacy tokens — kept only for components not yet migrated to coord-* / doc-*. */
 		--participation-primary-50: #eef2ff;
 		--participation-primary-100: #e0e7ff;
 		--participation-primary-200: #c7d2fe;
@@ -185,22 +164,10 @@
 		--status-neutral-500: #6b7280; /* Draft, inactive */
 		--status-neutral-700: #374151;
 
-		/*
-		=== SURFACE COLORS — PERCEPTUAL ENGINEERING ===
-
-		Pure white (#ffffff) is perceptually "dead":
-		- Zero peripheral information
-		- Maximally flat (no depth cues)
-		- Cold/clinical emotional temperature
-		- Maximum contrast = eye strain
-
-		Commons is about COLLECTIVE HUMAN ACTION.
-		Visual foundation should feel: warm, alive, inhabited.
-
-		oklch color space for perceptual uniformity.
-		Warm amber undertone (hue ~55-60) signals human presence.
-		*/
-		--surface-base: oklch(0.993 0.003 60); /* Warm off-white: human, not machine */
+		/* Surface tokens use oklch with hue ~55-60 (warm cream) instead of pure
+		   white so successive surfaces can lift via lightness without losing
+		   chromatic continuity. */
+		--surface-base: oklch(0.993 0.003 60);
 		--surface-raised: oklch(0.985 0.004 60); /* Slightly elevated, warmer */
 		--surface-overlay: oklch(0.975 0.005 55); /* Modals: warm cream */
 		--surface-inverted: #111827; /* Dark mode, headers */
@@ -231,12 +198,6 @@
 		--focus-ring-verified: 0 0 0 3px rgb(16 185 129 / 0.1); /* Emerald focus */
 		--focus-ring-community: 0 0 0 3px rgb(14 165 233 / 0.1); /* Sky focus */
 		--focus-ring-accent: 0 0 0 3px rgb(147 51 234 / 0.1); /* Violet accent focus */
-
-		/*
-		=== HEADER SYSTEM (Perceptual Engineering) ===
-		Minimal cognitive load. Header provides orientation only.
-		oklch color space for perceptual uniformity.
-		*/
 
 		/* Header surfaces */
 		--header-bg: oklch(0.99 0.005 250 / 0.85);
@@ -269,7 +230,7 @@
 		--header-easing: cubic-bezier(0.4, 0, 0.2, 1);
 		--header-easing-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-		/* === ORG SIDEBAR — Warm Dark Navigation === */
+		/* Org sidebar — warm dark navigation */
 		--org-sidebar-bg: oklch(0.16 0.015 55);
 		--org-sidebar-border: oklch(0.28 0.02 55 / 0.6);
 		--org-sidebar-text: oklch(0.92 0.005 55);
@@ -278,16 +239,8 @@
 		--org-sidebar-hover: oklch(0.22 0.02 55);
 		--org-sidebar-active: oklch(0.25 0.02 55);
 
-		/*
-		=== FLUID TYPE SCALE ===
-		Smooth interpolation between 320px and 1600px viewport width.
-		Below 320px: clamp to minimum. Above 1600px: clamp to maximum.
-		Extended range ensures scaling continues on laptops (1440px+).
-
-		Formula: clamp(min, yIntercept + slope×vw, max)
-		  slope = (maxPx − minPx) / (1600 − 320) × 100 / 16
-		  yIntercept = min − slope × 320 / 16
-		*/
+		/* Fluid type scale: clamp(min, yIntercept + slope×vw, max), smooth
+		   between 320–1600px viewport. slope = (maxPx − minPx) / 1280 × 100 / 16. */
 		--fluid-xs: 0.75rem;
 		--fluid-sm: 0.875rem;
 		--fluid-base: 1rem;
@@ -301,12 +254,7 @@
 }
 
 @layer components {
-	/* 
-	=== COMPONENT DESIGN SYSTEM ===
-	Participation interaction patterns with global accessibility
-	*/
-
-	/* Typography Hierarchy—Clear Information Architecture */
+	/* Typography Hierarchy */
 	.text-primary {
 		color: var(--text-primary);
 		font-weight: 600;
@@ -454,27 +402,9 @@
 		box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.12);
 	}
 
-	/*
-	=== TEMPLATE CARD — Topic-Driven Color ===
-
-	Each template derives a hue from its content domain (category/topics).
-	Set --card-hue inline per card.
-
-	Design principle: text carries semantic load, color carries atmospheric load.
-	The category label names the domain; the hue provides a confirming warmth
-	that's felt rather than decoded. Chroma is pulled back so cards read as
-	paper-like documents, not color-coded tiles.
-
-	  Surface  → 0.01   — atmospheric hint (barely perceptible)
-	  Border   → 0.02   — structural, not categorical
-	  Icon     → 0.16   — focal anchor (small, intentional)
-	  Label    → 0.10   — readable colored text (recipient names)
-
-	Delivery type (congressional vs. direct) is weight-only (shadow depth).
-	*/
-
-	/* Topic-tinted surface: atmospheric, not categorical.
-	   Tighter radius (6px) and single-layer shadow — structure without pillowiness. */
+	/* Template card uses topic-tinted surface with --card-hue set inline per
+	   card (derived from content domain). Chroma values: surface 0.006, border
+	   0.015, icon 0.16, label 0.10. Delivery weight is shadow-depth only. */
 	.card-topic {
 		background: oklch(0.99 0.006 var(--card-hue) / 0.9);
 		border: 1px solid oklch(0.88 0.015 var(--card-hue) / 0.25);
@@ -589,19 +519,9 @@
 		white-space: nowrap;
 	}
 
-	/*
-	=== VOICE CARD — Topic-Harmonized Personal Connection ===
-
-	The voice card lives inside a topic-tinted template card.
-	Its colors derive from --card-hue so it reads as part of the
-	same visual world, not a foreign element dropped inside.
-
-	Chroma is one tier above the parent card surface — visible
-	as a distinct zone without breaking the topic atmosphere.
-
-	Three intensities: resting (invitation), active (writing),
-	spoken (filled). CSS transitions handle state morphing.
-	*/
+	/* Voice card lives inside a topic-tinted template card and harmonizes via
+	   --card-hue. Three intensities: resting (invitation), active (writing),
+	   spoken (filled); CSS transitions handle state morphing. */
 	.voice-card {
 		transition: background 300ms cubic-bezier(0.4, 0, 0.2, 1),
 			border-color 300ms cubic-bezier(0.4, 0, 0.2, 1),

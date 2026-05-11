@@ -7,7 +7,16 @@
  * operators can act.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// `getConstituentResolver` reads `TEE_PUBLIC_KEY_URL` from `$env/dynamic/private`
+// because `process.env` is empty on CF Pages. Use a hoisted mutable mock so
+// vi.mock's factory can capture it and individual tests can flip the value
+// before invoking the factory.
+const { envMock } = vi.hoisted(() => ({
+	envMock: {} as Record<string, string | undefined>
+}));
+vi.mock('$env/dynamic/private', () => ({ env: envMock }));
 
 import { NitroEnclaveResolver } from '$lib/server/tee/nitro-resolver';
 import {
@@ -27,7 +36,7 @@ const FAKE_REQUEST = {
 
 afterEach(() => {
 	_resetConstituentResolverForTest();
-	delete process.env.TEE_PUBLIC_KEY_URL;
+	delete envMock.TEE_PUBLIC_KEY_URL;
 });
 
 describe('NitroEnclaveResolver — stub fails loud', () => {
@@ -76,27 +85,34 @@ describe('getConstituentResolver — env-based selection', () => {
 	});
 
 	it('returns LocalConstituentResolver when TEE_PUBLIC_KEY_URL is empty string', () => {
-		process.env.TEE_PUBLIC_KEY_URL = '';
+		envMock.TEE_PUBLIC_KEY_URL = '';
 		const r = getConstituentResolver();
 		expect(r).toBeInstanceOf(LocalConstituentResolver);
 	});
 
 	it('returns LocalConstituentResolver when TEE_PUBLIC_KEY_URL is whitespace', () => {
-		process.env.TEE_PUBLIC_KEY_URL = '   ';
+		envMock.TEE_PUBLIC_KEY_URL = '   ';
 		const r = getConstituentResolver();
 		expect(r).toBeInstanceOf(LocalConstituentResolver);
 	});
 
 	it('returns NitroEnclaveResolver when TEE_PUBLIC_KEY_URL is set to https URL', () => {
-		process.env.TEE_PUBLIC_KEY_URL = 'https://tee.example.com/resolve';
+		envMock.TEE_PUBLIC_KEY_URL = 'https://tee.example.com/resolve';
 		const r = getConstituentResolver();
 		expect(r).toBeInstanceOf(NitroEnclaveResolver);
 	});
 
-	it('memoizes the resolver — second call returns same instance', () => {
-		process.env.TEE_PUBLIC_KEY_URL = 'https://tee.example.com/resolve';
+	it('returns a fresh instance per call (no module-scope memoization)', () => {
+		// Per-call factory contract: CF Worker isolates reuse across requests, so
+		// any module-scope memoization invites cross-request state bleed if a
+		// resolver implementation ever adds instance state. Both calls must be
+		// the same TYPE (env-driven selection still applies) but distinct
+		// INSTANCES.
+		envMock.TEE_PUBLIC_KEY_URL = 'https://tee.example.com/resolve';
 		const r1 = getConstituentResolver();
 		const r2 = getConstituentResolver();
-		expect(r1).toBe(r2);
+		expect(r1).not.toBe(r2);
+		expect(r1).toBeInstanceOf(NitroEnclaveResolver);
+		expect(r2).toBeInstanceOf(NitroEnclaveResolver);
 	});
 });

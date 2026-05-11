@@ -12,7 +12,7 @@ const {
 	mockProcessCredentialResponse
 } = vi.hoisted(() => ({
 	mockDev: { value: false },
-	mockPrivateEnv: { INTERNAL_API_SECRET: 'test-secret' } as Record<string, string | undefined>,
+	mockPrivateEnv: { INTERNAL_API_SECRET: 'a'.repeat(64) } as Record<string, string | undefined>,
 	mockFeatures: {
 		MDL_ANDROID_OID4VP: true,
 		MDL_MDOC: false,
@@ -73,7 +73,7 @@ function makeEvent(options: {
 	const url = new URL(`${origin}/api/internal/identity/mdl-readiness`);
 	const request = new Request(url.toString(), {
 		method: 'GET',
-		headers: { 'x-internal-secret': 'test-secret', ...options.headers }
+		headers: { 'x-internal-secret': 'a'.repeat(64), ...options.headers }
 	});
 	return {
 		request,
@@ -93,7 +93,7 @@ function makeEvent(options: {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mockDev.value = false;
-	mockPrivateEnv.INTERNAL_API_SECRET = 'test-secret';
+	mockPrivateEnv.INTERNAL_API_SECRET = 'a'.repeat(64);
 	mockFeatures.MDL_ANDROID_OID4VP = true;
 	mockFeatures.MDL_MDOC = false;
 	mockFeatures.MDL_IOS = false;

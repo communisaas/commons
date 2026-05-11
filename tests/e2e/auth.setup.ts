@@ -1,5 +1,5 @@
 /**
- * Wave 7 / FU-4.1 — Playwright authentication fixture.
+ * FU-4.1 — Playwright authentication fixture.
  *
  * Run before all E2E tests to persist a session cookie as `storageState`,
  * including IndexedDB, which downstream tests load to skip OAuth and start
@@ -104,7 +104,7 @@ async function seedEncryptedAddress(page: Page, userId: string) {
 				{
 					name: 'HKDF',
 					hash: 'SHA-256',
-					salt: encoder.encode('commons-credential-v2'),
+					salt: encoder.encode('voter-protocol-credential-v2'),
 					info: encoder.encode(userId)
 				},
 				hkdfKey,

@@ -1,5 +1,5 @@
 /**
- * Wave 5 / FU-2.1 — Convex-side kill-switch state-management tests.
+ * FU-2.1 — Convex-side kill-switch state-management tests.
  *
  * Mirrors the convex-test pattern used in this repo (in-memory state
  * simulation, since `convex-test` isn't wired). Asserts:

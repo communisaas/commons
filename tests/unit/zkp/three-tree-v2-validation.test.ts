@@ -1,5 +1,5 @@
 /**
- * Wave 3 — V2 three-tree proof input validation.
+ *  V2 three-tree proof input validation.
  *
  * The V2 circuit (post F1 closure) consumes two additional witness inputs:
  *   - revocationPath: 128 sibling hashes (BN254 field elements)
@@ -81,7 +81,7 @@ function makeBaseInputs(): ThreeTreeProofInputs {
 	};
 }
 
-describe('three-tree V2 input validation (Wave 3 prover wiring)', () => {
+describe('three-tree V2 input validation (prover wiring)', () => {
 	it('partial V2 fields are rejected: revocationPath without bits or root', async () => {
 		const inputs = makeBaseInputs();
 		inputs.revocationPath = Array.from({ length: 128 }, () => FIELD_VALUE);

@@ -16,6 +16,17 @@ import { createMockRequestEvent } from '../../setup/api-test-setup';
 import type { AddressResolutionResult } from '../../../src/lib/core/shadow-atlas/client';
 
 // ---------------------------------------------------------------------------
+// Mock $env/dynamic/private — the resolve-address endpoint mints an HMAC-bound
+// address-resolution token (F-2.4 cure) that requires this secret.
+// ---------------------------------------------------------------------------
+
+vi.mock('$env/dynamic/private', () => ({
+	env: {
+		ADDRESS_RESOLUTION_TOKEN_SECRET: 'a'.repeat(64)
+	}
+}));
+
+// ---------------------------------------------------------------------------
 // Mock the Shadow Atlas client module
 // ---------------------------------------------------------------------------
 

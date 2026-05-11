@@ -1,5 +1,5 @@
 /**
- * Wave 6 / FU-1.1 — issuance-time commitment authenticity tests.
+ * FU-1.1 — issuance-time commitment authenticity tests.
  *
  * Asserts: given (lat, lng) the server fetches the same IPFS cell data the
  * client used, recomputes Poseidon2 sponge over 24 districts, and rejects

@@ -1,11 +1,11 @@
 /**
- * I2 — Boundary-cell observability.
+ * Boundary-cell observability contracts.
  *
  * Convex internal queries / actions can't easily be unit-imported (Convex
- * runtime + generated types). Static-source assertions pin the contract,
- * mirroring H3 / I1 patterns. The behavioral guarantees we care about:
- *   - Denominator excludes legacy rows (no `cellStraddles` field)
- *     [H0r honesty: "unknown" is not "false"]
+ * runtime + generated types). Static-source assertions pin the contract.
+ * Behavioral guarantees:
+ *   - Denominator excludes legacy rows (no `cellStraddles` field) so
+ *     "unknown" is not silently treated as "false"
  *   - Threshold + minimum-denominator are explicit, not magic
  *   - Alert payload carries aggregate counts only — NO user IDs / hashes
  *   - Cron schedule wires `monitorBoundaryCellRate` to fire hourly
@@ -17,7 +17,7 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 
-describe('I2 — observability module', () => {
+describe('observability module', () => {
 	const observabilityPath = path.resolve(ROOT, 'convex/observability.ts');
 
 	it('exports the boundary-cell rate query and the monitor action', async () => {
@@ -68,8 +68,8 @@ describe('I2 — observability module', () => {
 
 	it('alert fetch is bounded by AbortSignal.timeout (no hung requests)', async () => {
 		const source = await fs.readFile(observabilityPath, 'utf8');
-		// Same hardening as H3 — alert emission must be bounded so a stuck
-		// alert endpoint doesn't pin the cron action.
+		// Alert emission must be bounded so a stuck alert endpoint doesn't
+		// pin the cron action.
 		expect(source).toMatch(/signal:\s*AbortSignal\.timeout\(/);
 	});
 
@@ -85,7 +85,7 @@ describe('I2 — observability module', () => {
 	});
 });
 
-describe('I2 — cron schedule', () => {
+describe('observability cron schedule', () => {
 	const cronsPath = path.resolve(ROOT, 'convex/crons.ts');
 
 	it('wires monitorBoundaryCellRate to fire hourly', async () => {
@@ -94,9 +94,11 @@ describe('I2 — cron schedule', () => {
 		expect(source).toMatch(/internal\.observability\.monitorBoundaryCellRate/);
 		// Anchor the cadence: hourly. If someone tunes this to e.g. minutes:5
 		// they should see this test bark — the threshold + 24h window were
-		// designed for hourly cadence, not high-frequency polling.
+		// designed for hourly cadence, not high-frequency polling. Accepts
+		// either `interval({ hours: 1 })` or `hourly({ minuteUTC: N })`
+		// (the latter staggers off the :00 cron-storm).
 		const crontStart = source.indexOf('monitor-boundary-cell-rate');
 		const cronWindow = source.slice(crontStart - 200, crontStart + 200);
-		expect(cronWindow).toMatch(/\{\s*hours:\s*1\s*\}/);
+		expect(cronWindow).toMatch(/(\{\s*hours:\s*1\s*\}|crons\.hourly\b|\{\s*minuteUTC:\s*\d+\s*\})/);
 	});
 });

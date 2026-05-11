@@ -168,8 +168,23 @@ describe('POST /api/org/[slug]/workflows', () => {
 	});
 
 	it('surfaces Convex validation errors', async () => {
-		mockServerMutation.mockRejectedValue(new Error('Workflow name is required'));
+		// Boundary validation rejects empty name at the SvelteKit edge before
+		// it can reach Convex. Use a non-empty name that passes the boundary
+		// check but trigger a downstream error from the Convex mock to assert
+		// the surfacing path still works.
+		mockServerMutation.mockRejectedValue(new Error('Workflow trigger is invalid'));
 
+		const { POST } = await import('../../../src/routes/api/org/[slug]/workflows/+server');
+		await expect(
+			POST({
+				params: { slug: 'test-org' },
+				request: makeRequest({ name: 'Test Workflow', trigger: validTrigger, steps: validSteps }),
+				locals: makeLocals()
+			} as any)
+		).rejects.toThrow('Workflow trigger is invalid');
+	});
+
+	it('rejects empty name at the boundary', async () => {
 		const { POST } = await import('../../../src/routes/api/org/[slug]/workflows/+server');
 		await expect(
 			POST({
@@ -177,7 +192,8 @@ describe('POST /api/org/[slug]/workflows', () => {
 				request: makeRequest({ name: '', trigger: validTrigger, steps: validSteps }),
 				locals: makeLocals()
 			} as any)
-		).rejects.toThrow('Workflow name is required');
+		).rejects.toThrow(/name is required/i);
+		expect(mockServerMutation).not.toHaveBeenCalled();
 	});
 });
 
@@ -267,7 +283,12 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 			locals: makeLocals()
 		} as any);
 
-		expect(mockServerMutation.mock.calls[0][1].enabled).toBe(true);
+		// The route splits PATCH into two mutations: `workflows.update` first
+		// (carries name/description/trigger/steps; no `enabled`), then
+		// `workflows.setEnabled` only when `enabled` is supplied. Assert the
+		// second call carries the enabled flag.
+		expect(mockServerMutation).toHaveBeenCalledTimes(2);
+		expect(mockServerMutation.mock.calls[1][1].enabled).toBe(true);
 	});
 
 	it('surfaces Convex not-found errors', async () => {

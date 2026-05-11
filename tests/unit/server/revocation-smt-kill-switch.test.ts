@@ -1,5 +1,5 @@
 /**
- * Wave 5 / FU-2.1 — drift kill-switch tests (SvelteKit-side surface).
+ * FU-2.1 — drift kill-switch tests (SvelteKit-side surface).
  *
  * Asserts: when the Convex mutation throws REVOCATION_EMITS_HALTED,
  * `insertRevocationNullifier` surfaces it as a distinct error class (not a

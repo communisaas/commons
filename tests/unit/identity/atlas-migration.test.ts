@@ -4,6 +4,15 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// district-bundle.ts imports from `$env/dynamic/public` for the atlas host
+// override. The vitest jsdom env doesn't auto-stub the SvelteKit dynamic
+// env module, so we mock it explicitly.
+vi.mock('$env/dynamic/public', () => ({
+	env: {
+		PUBLIC_ATLAS_HOST: ''
+	}
+}));
+
 import { checkAtlasMigration } from '$lib/core/identity/atlas-migration';
 import { _resetManifestCacheForTest } from '$lib/core/shadow-atlas/district-bundle';
 import type { SessionCredential } from '$lib/core/identity/session-credentials';

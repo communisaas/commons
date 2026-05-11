@@ -31,7 +31,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-// FU-1.2 (Wave 7) — MockConvex now imports the production guard helper
+// FU-1.2  — MockConvex now imports the production guard helper
 // instead of reimplementing it inline. Eliminates the drift surface where
 // the inline copy could diverge from `convex/users.ts:438`.
 import { applyDowngradeGuard } from '../../convex/_downgradeGuard';
@@ -112,7 +112,7 @@ class MockConvex {
 	private nextSubId = 1;
 
 	// Mirrors convex/users.ts:363-432 — the throttle + sybil gate + downgrade
-	// guard (Wave 1b). The issuing logic after that is covered by
+	// guard . The issuing logic after that is covered by
 	// tests/integration/regrounding-cross-state. `districtCommitment` is
 	// optional to let tests simulate the "client-side Poseidon failed, proceeds
 	// without commitment" scenario that the downgrade guard must reject.
@@ -126,7 +126,7 @@ class MockConvex {
 
 		const existing = Array.from(this.credentials.values()).filter((c) => c.userId === userId);
 
-		// (Wave 1b / Wave 7 FU-1.2) Commitment-downgrade guard via the
+		// (FU-1.2) Commitment-downgrade guard via the
 		// production helper. The mock auto-generates a default commitment for
 		// convenience; an explicit empty string opts into "no commitment"
 		// (simulating the silent-catch path the guard exists to reject).
@@ -499,7 +499,7 @@ describe('F2 — district-hop throttle + email-sybil', () => {
 	});
 
 	it('downgrade guard: user with prior v2 credential cannot verify without a new commitment', () => {
-		// Wave 1b — self-DoS prevention. AddressCollectionForm.svelte silently
+		// Step — self-DoS prevention. AddressCollectionForm.svelte silently
 		// catches client-side Poseidon2 failures and re-submits verify-address
 		// with no district_commitment. Pre-guard, that request would retire the
 		// prior v2 row and issue a commitment-less one → every submission 403s
