@@ -12,11 +12,65 @@
  * - POST /webhooks/twilio/call-status — Twilio call status updates
  */
 
-import { httpRouter } from "convex/server";
+import { httpRouter, makeFunctionReference } from "convex/server";
+import type { FunctionReference } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+
+/**
+ * Constant-time match of `presented` against any of the candidate secrets
+ * (active + optional rotation-window previous). Convex's V8 isolate runtime
+ * exposes Web Crypto but not `node:crypto.timingSafeEqual`, so this uses an
+ * inline XOR-accumulator over equal-length byte arrays. Length mismatch
+ * is rejected before the comparison loop — that leaks the secret's length
+ * class, but operators set the secret format to a known length anyway.
+ *
+ * Exported so tests can exercise the rotation contract without setting up
+ * a Convex httpAction harness.
+ */
+export function bearerSecretMatches(presented: string, candidates: string[]): boolean {
+  const validCandidates = candidates.filter((s) => typeof s === "string" && s.length > 0);
+  if (validCandidates.length === 0 || !presented) return false;
+  const presentedBytes = new TextEncoder().encode(presented);
+  for (const secret of validCandidates) {
+    const secretBytes = new TextEncoder().encode(secret);
+    if (presentedBytes.length !== secretBytes.length) continue;
+    let mismatch = 0;
+    for (let i = 0; i < presentedBytes.length; i++) {
+      mismatch |= presentedBytes[i] ^ secretBytes[i];
+    }
+    if (mismatch === 0) return true;
+  }
+  return false;
+}
 
 const http = httpRouter();
+
+// Manual reference for the SNS signature verifier — tracked under
+// `convex/_snsVerify.ts` (node runtime). Replace with `internal._snsVerify`
+// once `npx convex dev` regenerates `_generated/api.d.ts`.
+const verifySnsSignatureRef = makeFunctionReference<"action">(
+  "_snsVerify:verifySnsSignature",
+) as unknown as FunctionReference<
+  "action",
+  "internal",
+  {
+    Type: string;
+    MessageId: string;
+    TopicArn: string;
+    Timestamp: string;
+    Message: string;
+    Signature: string;
+    SignatureVersion: string;
+    SigningCertURL: string;
+    Subject?: string;
+    SubscribeURL?: string;
+    Token?: string;
+    expectedTopicArn?: string;
+  },
+  { valid: boolean; error?: string }
+>;
 
 // =============================================================================
 // PUBLIC API v1 — SUPPORTERS
@@ -94,16 +148,28 @@ http.route({
       return new Response("Internal server error", { status: 500 });
     }
 
-    // Parse signature header: t=timestamp,v1=signature
-    const parts = Object.fromEntries(
-      signature.split(",").map((p) => {
-        const [k, v] = p.split("=");
-        return [k, v];
-      }),
-    );
-    const timestamp = parts["t"];
-    const sig = parts["v1"];
-    if (!timestamp || !sig) {
+    // Parse signature header: t=timestamp,v1=signature[,v1=signature...]
+    //
+    // Stripe explicitly permits MULTIPLE `v1=` entries in the header
+    // during secret rotation. `Object.fromEntries(...)` would collapse
+    // duplicate keys to the LAST value — if Stripe emitted
+    // `t=...,v1=<active>,v1=<previous>` and the deployment only had the
+    // active secret configured, the verifier would read the
+    // previous-key signature and reject valid traffic, causing a silent
+    // outage on the donation + subscription pipeline. Extract ALL `v1=`
+    // candidates and try each against the computed expected signature
+    // — verified if ANY constant-time-equals.
+    let timestamp: string | undefined;
+    const v1Candidates: string[] = [];
+    for (const p of signature.split(",")) {
+      const eq = p.indexOf("=");
+      if (eq <= 0) continue;
+      const k = p.slice(0, eq);
+      const v = p.slice(eq + 1);
+      if (k === "t" && !timestamp) timestamp = v;
+      else if (k === "v1") v1Candidates.push(v);
+    }
+    if (!timestamp || v1Candidates.length === 0) {
       return new Response(
         JSON.stringify({ error: "Invalid signature format" }),
         { status: 400, headers: { "Content-Type": "application/json" } },
@@ -128,22 +194,42 @@ http.route({
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
 
-    // Constant-time comparison to prevent timing oracle
-    const sigBytes = new TextEncoder().encode(sig);
+    // Constant-time comparison across ALL candidates. Verified if any
+    // candidate matches the expected signature for the configured secret.
+    // Each comparison is constant-time over equal-length byte arrays;
+    // we iterate all candidates rather than short-circuiting so the
+    // wall-clock signal is uniform across "first match" / "any match"
+    // / "no match" (defense-in-depth against statistical timing).
     const expectedBytes = new TextEncoder().encode(expected);
-    if (sigBytes.length !== expectedBytes.length) {
-      return new Response("Invalid signature", { status: 400 });
+    let anyMatch = false;
+    for (const sig of v1Candidates) {
+      const sigBytes = new TextEncoder().encode(sig);
+      if (sigBytes.length !== expectedBytes.length) continue;
+      let mismatch = 0;
+      for (let i = 0; i < sigBytes.length; i++) {
+        mismatch |= sigBytes[i] ^ expectedBytes[i];
+      }
+      if (mismatch === 0) anyMatch = true;
     }
-    let mismatch = 0;
-    for (let i = 0; i < sigBytes.length; i++) {
-      mismatch |= sigBytes[i] ^ expectedBytes[i];
-    }
-    if (mismatch !== 0) {
+    if (!anyMatch) {
       return new Response("Invalid signature", { status: 400 });
     }
 
-    // Verify timestamp is within 5 minutes (prevent replay attacks)
-    if (Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) {
+    // Verify timestamp is within 5 minutes (prevent replay attacks).
+    // Number-of-seconds since epoch per Stripe's signature scheme. Validate
+    // finiteness explicitly before the abs compare — without the isFinite
+    // gate, a non-numeric `t` parses to NaN, and `NaN > 300` is `false`,
+    // which would defeat the replay window. The HMAC verification above
+    // already prevents a forged-t-with-valid-sig combination (HMAC binds t),
+    // so this is hardening, not a closed exploit. (cure shipped).
+    const tSeconds = Number(timestamp);
+    if (!Number.isFinite(tSeconds)) {
+      return new Response(
+        JSON.stringify({ error: "Invalid timestamp format" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (Math.abs(Date.now() / 1000 - tSeconds) > 300) {
       return new Response(
         JSON.stringify({ error: "Timestamp too old" }),
         { status: 400, headers: { "Content-Type": "application/json" } },
@@ -253,28 +339,77 @@ http.route({
       );
     }
 
-    // SNS signature verification
-    // Validate SigningCertURL is from amazonaws.com (SSRF prevention)
-    const certURL = body.SigningCertURL as string | undefined;
-    if (certURL) {
-      try {
-        const url = new URL(certURL);
-        const validCert =
-          url.protocol === "https:" &&
-          url.pathname.endsWith(".pem") &&
-          /^sns\.[a-z0-9-]+\.amazonaws\.com$/.test(url.hostname);
-        if (!validCert) {
-          return new Response(
-            JSON.stringify({ ok: false, error: "invalid SigningCertURL" }),
-            { status: 403, headers: { "Content-Type": "application/json" } },
-          );
-        }
-      } catch {
+    // SNS signature verification — full RSA signature check via the node
+    // runtime helper. Forged payloads cannot poison email-health state even
+    // if the endpoint is reachable and the topic ARN is known.
+    const requiredFields = [
+      "Type",
+      "MessageId",
+      "TopicArn",
+      "Timestamp",
+      "Message",
+      "Signature",
+      "SignatureVersion",
+      "SigningCertURL",
+    ] as const;
+    for (const field of requiredFields) {
+      if (typeof body[field] !== "string") {
         return new Response(
-          JSON.stringify({ ok: false, error: "invalid SigningCertURL" }),
-          { status: 403, headers: { "Content-Type": "application/json" } },
+          JSON.stringify({ ok: false, error: `missing or invalid ${field}` }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
         );
       }
+    }
+    const verification = await ctx.runAction(verifySnsSignatureRef, {
+        Type: body.Type as string,
+        MessageId: body.MessageId as string,
+        TopicArn: body.TopicArn as string,
+        Timestamp: body.Timestamp as string,
+        Message: body.Message as string,
+        Signature: body.Signature as string,
+        SignatureVersion: body.SignatureVersion as string,
+        SigningCertURL: body.SigningCertURL as string,
+        Subject: typeof body.Subject === "string" ? body.Subject : undefined,
+        SubscribeURL:
+          typeof body.SubscribeURL === "string" ? body.SubscribeURL : undefined,
+        Token: typeof body.Token === "string" ? body.Token : undefined,
+        expectedTopicArn: allowedTopic,
+      },
+    );
+    if (!verification.valid) {
+      console.error("[ses-webhook] SNS signature verification failed:", verification.error);
+      return new Response(
+        JSON.stringify({ ok: false, error: "signature verification failed" }),
+        { status: 403, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    // Replay-window enforcement. Without this, validating only the RSA
+    // signature + TopicArn leaves the Timestamp in the signing string
+    // but never compared against `Date.now()`. Captured signed
+    // bounce/complaint notifications could be replayed indefinitely to
+    // mark a recovered supporter back into `bounced`/`complained`
+    // (one-way mark — not idempotent in the recovery direction).
+    // Mirrors the Stripe-webhook freshness gate at `:213` (5-minute
+    // window). SNS uses 8601 ISO timestamps; parse + abs-diff against
+    // now. 10-minute window covers legitimate clock skew + SNS retry
+    // latency; anything older is replay.
+    const SNS_REPLAY_WINDOW_MS = 10 * 60 * 1000;
+    const snsTimestampMs = Date.parse(body.Timestamp as string);
+    if (!Number.isFinite(snsTimestampMs)) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "invalid Timestamp" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (Math.abs(Date.now() - snsTimestampMs) > SNS_REPLAY_WINDOW_MS) {
+      console.warn(
+        `[ses-webhook] Rejected SNS notification outside replay window. MessageId=${body.MessageId} age=${Date.now() - snsTimestampMs}ms`,
+      );
+      return new Response(
+        JSON.stringify({ ok: false, error: "Timestamp outside replay window" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
     }
 
     // Parse the inner SES message for Notification type
@@ -358,13 +493,23 @@ async function validateTwilioSignature(
 
 /**
  * Parse Twilio form-encoded body into a Record.
+ *
+ * `application/x-www-form-urlencoded` represents space as `+` (RFC 1866
+ * §8.2.1, W3C URL spec); `decodeURIComponent` alone does NOT convert `+`
+ * to space — that's a URI-component decoding behavior. To match Twilio's
+ * signature input (which uses form-decoded values), `+` MUST be replaced
+ * with space BEFORE percent-decoding. Without this, every SMS message
+ * containing a space (effectively all of them) fails signature verify
+ * with a 403, silently dropping all status updates. (cure shipped).
  */
 function parseTwilioFormBody(body: string): Record<string, string> {
   const params: Record<string, string> = {};
   for (const pair of body.split("&")) {
     const [key, value] = pair.split("=");
     if (key) {
-      params[decodeURIComponent(key)] = decodeURIComponent(value ?? "");
+      const decodedKey = decodeURIComponent(key.replace(/\+/g, " "));
+      const decodedValue = decodeURIComponent((value ?? "").replace(/\+/g, " "));
+      params[decodedKey] = decodedValue;
     }
   }
   return params;
@@ -445,6 +590,7 @@ http.route({
     }
 
     const from = params.From;
+    const to = params.To;
     const body = (params.Body || "").trim();
 
     if (!from) {
@@ -457,6 +603,14 @@ http.route({
     try {
       await ctx.runMutation(internal.webhooks.handleInboundSms, {
         from,
+        // `To` is the Twilio destination number the user replied to.
+        // Forward it to the handler so START semantics can be scoped to
+        // the org that owns the number (via `orgTwilioNumbers` registry)
+        // instead of resubscribing the user across every org that ever
+        // sent them SMS. Optional because legacy webhooks may not have
+        // populated `To` and we want the handler to remain defensible
+        // without it.
+        to: typeof to === "string" && to.length > 0 ? to : undefined,
         body,
       });
     } catch (err) {
@@ -544,6 +698,121 @@ http.route({
       JSON.stringify({ ok: true }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
+  }),
+});
+
+// =============================================================================
+// LAMBDA-FORWARDED BLAST RECEIPTS
+// =============================================================================
+
+// Lambda calls this after each batch with the resolved per-recipient receipts.
+// Auth via shared `BLAST_RECEIPTS_SECRET` (Bearer token). The Lambda sees
+// recipient outcomes that the browser may never observe (browser disconnect
+// mid-blast, fetch timeouts, etc.) — making this the durable receipt path.
+const recordBlastReceiptsInternalRef = makeFunctionReference<"mutation">(
+  "blasts:recordBlastReceiptsInternal",
+) as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  {
+    blastId: Id<"emailBlasts">;
+    receipts: Array<{
+      recipientEmailHash: string;
+      sesMessageId?: string;
+      status: "sent" | "failed";
+      sentAt: number;
+      error?: string;
+    }>;
+  },
+  { written: number; updated: number }
+>;
+
+http.route({
+  path: "/webhooks/blast-receipts",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const activeSecret = process.env.BLAST_RECEIPTS_SECRET;
+    if (!activeSecret) {
+      console.error("[blast-receipts] BLAST_RECEIPTS_SECRET not configured");
+      return new Response(
+        JSON.stringify({ ok: false, error: "endpoint not configured" }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (activeSecret.length < 32) {
+      console.error(
+        "[blast-receipts] BLAST_RECEIPTS_SECRET must be >= 32 bytes (operator misconfig)",
+      );
+      return new Response(
+        JSON.stringify({ ok: false, error: "endpoint misconfigured" }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    // Dual-secret rotation: Lambda may send claims signed under the previous
+    // secret while a deploy is mid-rotation. `bearerSecretMatches` does
+    // constant-time XOR-accumulator comparison per candidate, but iterates
+    // sequentially with early-return on match — an attacker observing
+    // wall-clock could in principle distinguish "matched active" from
+    // "matched previous". Acceptable because both outcomes return the same
+    // 200 response and the timing leak only reveals which secret signed a
+    // VALID token (not the secret itself).
+    const previousSecret = process.env.BLAST_RECEIPTS_SECRET_PREVIOUS;
+    const candidates = previousSecret ? [activeSecret, previousSecret] : [activeSecret];
+
+    const auth = request.headers.get("authorization") ?? "";
+    const presented = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+    if (!presented || !bearerSecretMatches(presented, candidates)) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "unauthorized" }),
+        { status: 401, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    let body: { blastId?: string; receipts?: unknown };
+    try {
+      body = await request.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ ok: false, error: "invalid JSON" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (!body.blastId || !Array.isArray(body.receipts)) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "blastId and receipts[] required" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    // The mutation's FunctionReference (declared above) carries the typed
+    // receipts shape; assert here so the runtime mutation receives the same
+    // type contract its validator will enforce.
+    type ReceiptsArg = Array<{
+      recipientEmailHash: string;
+      sesMessageId?: string;
+      status: "sent" | "failed";
+      sentAt: number;
+      error?: string;
+    }>;
+    try {
+      const result = await ctx.runMutation(recordBlastReceiptsInternalRef, {
+        blastId: body.blastId as Id<"emailBlasts">,
+        receipts: body.receipts as ReceiptsArg,
+      });
+      return new Response(
+        JSON.stringify({ ok: true, ...result }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    } catch (err) {
+      console.error("[blast-receipts] mutation failed:", err);
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: err instanceof Error ? err.message : "mutation failed",
+        }),
+        { status: 500, headers: { "Content-Type": "application/json" } },
+      );
+    }
   }),
 });
 

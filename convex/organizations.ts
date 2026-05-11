@@ -923,7 +923,7 @@ export const getBillingContext = query({
       org: {
         _id: org._id,
         slug: org.slug,
-        stripeCustomerId: (org as any).stripeCustomerId ?? null,
+        stripeCustomerId: org.stripeCustomerId ?? null,
         encryptedBillingEmail: org.encryptedBillingEmail ?? null,
       },
       membership: { role: membership.role },
@@ -952,7 +952,7 @@ export const updateStripeCustomerId = mutation({
     if (!org) throw new Error("Organization not found");
     await requireOrgRole(ctx, org.slug, "owner");
 
-    await ctx.db.patch(orgId, { stripeCustomerId } as any);
+    await ctx.db.patch(orgId, { stripeCustomerId });
   },
 });
 
@@ -972,7 +972,7 @@ export const getOrgKeyVerifier = query({
       recoveryWrappedOrgKey: membership.role === "owner"
         ? (org.recoveryWrappedOrgKey ?? null)
         : null,
-      piiVersion: (org as any).piiVersion ?? "legacy",
+      piiVersion: org.piiVersion ?? "legacy",
     };
   },
 });
@@ -1001,7 +1001,7 @@ export const setOrgKeyVerifier = mutation({
       ...(args.serverSealedOrgKey ? { serverSealedOrgKey: args.serverSealedOrgKey } : {}),
       piiVersion: "legacy",
       updatedAt: Date.now(),
-    } as any);
+    });
   },
 });
 
@@ -1016,6 +1016,11 @@ export const sealOrgKey = action({
     rawKeyBase64: v.string(),
   },
   handler: async (ctx, args) => {
+    // action-boundary length caps. AES-256 raw key base64 = 44
+    // chars; 128 is generous slack with no realistic legitimate exceedance.
+    if (args.slug.length > 64) throw new Error("SLUG_TOO_LARGE");
+    if (args.rawKeyBase64.length > 128) throw new Error("RAW_KEY_TOO_LARGE");
+
     // Verify caller is org owner via query
     const orgData = await ctx.runQuery(internal.organizations.verifyOwner, {
       slug: args.slug,
@@ -1056,7 +1061,7 @@ export const rotateOrgPassphrase = mutation({
       orgKeyVerifier: args.orgKeyVerifier,
       recoveryWrappedOrgKey: args.recoveryWrappedOrgKey,
       updatedAt: Date.now(),
-    } as any);
+    });
   },
 });
 
@@ -1065,13 +1070,13 @@ export const rotateOrgPassphrase = mutation({
  * in action contexts where ctx.db is not available.
  */
 export const getOrgById = internalQuery({
-  args: { orgId: v.string() },
+  args: { orgId: v.id("organizations") },
   handler: async (ctx, { orgId }) => {
-    const org = await ctx.db.get(orgId as any);
+    const org = await ctx.db.get(orgId);
     if (!org) return null;
     return {
       _id: org._id,
-      serverSealedOrgKey: (org as any).serverSealedOrgKey ?? null,
+      serverSealedOrgKey: org.serverSealedOrgKey ?? null,
     };
   },
 });
@@ -1097,6 +1102,112 @@ export const patchServerSealedKey = internalMutation({
     await ctx.db.patch(args.orgId, {
       serverSealedOrgKey: args.serverSealedOrgKey,
       updatedAt: Date.now(),
-    } as any);
+    });
+  },
+});
+
+// =============================================================================
+// TWILIO NUMBER REGISTRY
+// =============================================================================
+
+/**
+ * List the Twilio numbers registered for this org. Owner-only — exposes
+ * which inbound destination numbers route STOP/START to which org.
+ */
+export const listTwilioNumbers = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { org } = await requireOrgRole(ctx, slug, "owner");
+    const rows = await ctx.db
+      .query("orgTwilioNumbers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .collect();
+    return rows.map((r) => ({
+      _id: r._id,
+      phoneNumber: r.phoneNumber,
+      verifiedAt: r.verifiedAt ?? null,
+      updatedAt: r.updatedAt,
+    }));
+  },
+});
+
+/**
+ * Register a Twilio destination number for this org. Owner-only. Refuses
+ * if another org already registered the same number (per-application
+ * uniqueness enforcement — Convex has no native unique index).
+ *
+ * `verifiedAt` is null at registration; a future verification step can
+ * wire the Twilio webhook signature against an owner-controlled secret
+ * to flip the verified bit. Until then, registration alone scopes START
+ * correctly but operators should audit the registry for unverified rows.
+ */
+export const registerTwilioNumber = mutation({
+  args: {
+    slug: v.string(),
+    phoneNumber: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "owner");
+
+    // E.164 sanity check — match the supporters phone normalization
+    // contract so a registered number actually compares equal to the
+    // `To` field on inbound webhooks (which Twilio sends in E.164).
+    const trimmed = args.phoneNumber.trim();
+    if (!trimmed.startsWith("+")) {
+      throw new Error("PHONE_NUMBER_MUST_START_WITH_PLUS");
+    }
+    const digits = trimmed.slice(1).replace(/\D/g, "");
+    if (digits.length < 7 || digits.length > 15) {
+      throw new Error("PHONE_NUMBER_NOT_E164");
+    }
+    const normalized = "+" + digits;
+    if (normalized.length > 32) {
+      throw new Error("PHONE_NUMBER_TOO_LARGE");
+    }
+
+    // Cross-org uniqueness: only one org may own a given Twilio number.
+    // Shared-pool numbers should not be registered — the inbound SMS
+    // webhook treats multi-match as ambiguous and falls back to cross-
+    // org behavior, so registering a shared number would defeat scoping.
+    const existing = await ctx.db
+      .query("orgTwilioNumbers")
+      .withIndex("by_phoneNumber", (q) => q.eq("phoneNumber", normalized))
+      .first();
+    if (existing) {
+      if (String(existing.orgId) === String(org._id)) {
+        return { _id: existing._id, alreadyRegistered: true };
+      }
+      throw new Error("PHONE_NUMBER_OWNED_BY_OTHER_ORG");
+    }
+
+    const _id = await ctx.db.insert("orgTwilioNumbers", {
+      orgId: org._id,
+      phoneNumber: normalized,
+      verifiedAt: undefined,
+      updatedAt: Date.now(),
+    });
+    return { _id, alreadyRegistered: false };
+  },
+});
+
+/**
+ * Remove a Twilio number from the org's registry. Owner-only. After
+ * removal, inbound STOP/START on that number falls back to cross-org
+ * resubscribe (matches pre-registry behavior). Deleted numbers can be
+ * re-registered.
+ */
+export const unregisterTwilioNumber = mutation({
+  args: {
+    slug: v.string(),
+    twilioNumberId: v.id("orgTwilioNumbers"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "owner");
+    const existing = await ctx.db.get(args.twilioNumberId);
+    if (!existing || String(existing.orgId) !== String(org._id)) {
+      throw new Error("TWILIO_NUMBER_NOT_FOUND");
+    }
+    await ctx.db.delete(existing._id);
+    return { ok: true };
   },
 });

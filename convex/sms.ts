@@ -135,6 +135,22 @@ export const getBlastMessages = query({
 });
 
 /**
+ * SMS body cap. SMS messages are typically ≤160 chars (1 GSM segment);
+ * multi-segment messages can reach 1600 chars (10 segments) but each
+ * segment is billed separately. 2048 is generous for line breaks /
+ * non-GSM encoding while preventing arbitrarily large blast bodies
+ * from poisoning the persistence layer.
+ */
+const MAX_SMS_BODY_LENGTH = 2048;
+
+/**
+ * Known SMS blast statuses. Free-form `v.string()` would accept
+ * arbitrary values → downstream branches on `status === 'sent'` see
+ * a blast stuck in undefined state.
+ */
+const ALLOWED_SMS_BLAST_STATUSES = ["draft", "sending", "sent", "failed"] as const;
+
+/**
  * Create an SMS blast (draft).
  */
 export const createBlast = mutation({
@@ -148,6 +164,18 @@ export const createBlast = mutation({
   },
   handler: async (ctx, args) => {
     const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    // Bounds + sanity. Body length capped — without the cap, a 1 MiB
+    // body would persist and consume billing rows on dispatch.
+    // fromNumber capped at E.164 max (15 digits + leading + ≤ 16 chars,
+    // pad to 32 for safety); totalRecipients non-negative + bounded.
+    if (args.body.length > MAX_SMS_BODY_LENGTH) {
+      throw new Error("SMS_BODY_TOO_LARGE");
+    }
+    if (args.body.length === 0) throw new Error("SMS_BODY_EMPTY");
+    if (args.fromNumber.length > 32) throw new Error("FROM_NUMBER_TOO_LARGE");
+    if (args.totalRecipients < 0) throw new Error("TOTAL_RECIPIENTS_NEGATIVE");
+    if (args.totalRecipients > 1_000_000) throw new Error("TOTAL_RECIPIENTS_TOO_LARGE");
 
     const id = await ctx.db.insert("smsBlasts", {
       orgId: org._id,
@@ -177,13 +205,32 @@ export const updateBlast = mutation({
     body: v.optional(v.string()),
     recipientFilter: v.optional(v.any()),
     totalRecipients: v.optional(v.number()),
-    status: v.optional(v.string()),
+    // Pin status to documented enum; free-form `v.string()` would let
+    // writers drift from the four known states.
+    status: v.optional(
+      v.union(
+        v.literal("draft"),
+        v.literal("sending"),
+        v.literal("sent"),
+        v.literal("failed"),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const { org } = await requireOrgRole(ctx, args.slug, "editor");
 
     const blast = await ctx.db.get(args.blastId);
     if (!blast || blast.orgId !== org._id) throw new Error("Blast not found");
+
+    // Bounds on updateable fields (parallel to createBlast).
+    if (args.body !== undefined) {
+      if (args.body.length > MAX_SMS_BODY_LENGTH) throw new Error("SMS_BODY_TOO_LARGE");
+      if (args.body.length === 0) throw new Error("SMS_BODY_EMPTY");
+    }
+    if (args.totalRecipients !== undefined) {
+      if (args.totalRecipients < 0) throw new Error("TOTAL_RECIPIENTS_NEGATIVE");
+      if (args.totalRecipients > 1_000_000) throw new Error("TOTAL_RECIPIENTS_TOO_LARGE");
+    }
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.body !== undefined) patch.body = args.body;

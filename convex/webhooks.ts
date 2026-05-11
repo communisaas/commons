@@ -8,27 +8,21 @@
 import { internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 /**
  * Unkeyed SHA-256 hash of normalized email — for cross-org bounce/complaint
  * correlation. No server-held secret key needed.
  */
-async function computeGlobalEmailHash(email: string): Promise<string> {
-  const normalized = email.toLowerCase().trim();
-  const encoder = new TextEncoder();
-  const hash = await crypto.subtle.digest("SHA-256", encoder.encode(normalized));
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function computeGlobalPhoneHash(phone: string): Promise<string> {
-  const normalized = phone.replace(/\D/g, "");
-  const encoder = new TextEncoder();
-  const hash = await crypto.subtle.digest("SHA-256", encoder.encode(normalized));
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+// Global hash helpers are imported from `convex/_orgHash.ts` so the
+// webhook lookup uses byte-identical normalization as the producer-
+// side `computeOrgScoped*Hash` writers. Divergent normalization would
+// silently produce `globalEmailHash`/`globalPhoneHash` values that
+// never match the stored row — SES bounce/complaint and TCPA
+// STOP/START would fail to find any supporter.
+import {
+  computeGlobalEmailHash,
+  computeGlobalPhoneHash,
+} from "./_orgHash";
 
 // =============================================================================
 // SES WEBHOOK — INTERNAL MUTATIONS
@@ -141,6 +135,28 @@ export const recordEmailClick = internalMutation({
       }
 
       if (hasOpen || (blast.batches && blast.batches.length > 0)) {
+        // Dedup against duplicate SNS click delivery (AWS retries the same
+        // MessageId on transient downstream failures). Without this check,
+        // a re-delivered click event inflates totalClicked. Per-link dedup
+        // (matching linkUrl) so a user legitimately clicking two links in
+        // the same email still produces two click rows. (cure shipped).
+        if (emailHash) {
+          const existingClick = await ctx.db
+            .query("emailEvents")
+            .withIndex("by_blastId_recipientEmailHash", (q) =>
+              q.eq("blastId", blast._id).eq("recipientEmailHash", emailHash),
+            )
+            .filter((q) =>
+              q.and(
+                q.eq(q.field("eventType"), "click"),
+                q.eq(q.field("linkUrl"), args.linkUrl),
+              ),
+            )
+            .first();
+          if (existingClick) {
+            return;
+          }
+        }
         await ctx.db.insert("emailEvents", {
           blastId: blast._id,
           recipientEmailHash: emailHash ?? undefined,
@@ -168,13 +184,17 @@ export const handleDeliveryEvent = internalMutation({
     linkUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Find campaign delivery by sesMessageId
-    const deliveries = await ctx.db
+    // Find campaign delivery by sesMessageId via the `by_sesMessageId`
+    // index — `.filter(q.eq(...))` would full-scan every campaign
+    // delivery row. `.first()` is sufficient because the field is
+    // unique by construction (SES guarantees one MessageId per send);
+    // collisions are operator-investigable via the warn log emitted
+    // from `updateDeliveryStatus`.
+    const delivery = await ctx.db
       .query("campaignDeliveries")
-      .filter((q) => q.eq(q.field("sesMessageId"), args.sesMessageId))
-      .collect();
+      .withIndex("by_sesMessageId", (q) => q.eq("sesMessageId", args.sesMessageId))
+      .first();
 
-    const delivery = deliveries[0];
     if (!delivery) return { found: false };
 
     const now = Date.now();
@@ -222,17 +242,38 @@ export const handleDeliveryEvent = internalMutation({
         if (receipt) {
           const responses = receipt.responses ?? [];
           const isVerifyClick = args.linkUrl?.includes("/verify/") ?? false;
-          await ctx.db.patch(receipt._id, {
-            responses: [
-              ...responses,
-              {
-                type: isVerifyClick ? "clicked_verify" : "opened",
-                detail: isVerifyClick ? args.linkUrl : undefined,
-                confidence: "observed",
-                occurredAt: now,
-              },
-            ],
-          });
+          const newType = isVerifyClick ? "clicked_verify" : "opened";
+          const newDetail = isVerifyClick ? args.linkUrl : undefined;
+
+          // dedup against duplicate SNS click delivery.
+          // Same retry-inflation pattern as elsewhere (SNS click on emailEvents)
+          // and (Twilio delivered counter). For verify clicks, dedup
+          // on (type, detail) so multiple distinct verify links each register
+          // but a retried delivery for the same link doesn't double-count.
+          // For non-verify clicks (type="opened"), match the Open case's
+          // global dedup ("opened" entry exists at all → skip).
+          const alreadyRecorded = isVerifyClick
+            ? responses.some(
+                (r: { type: string; detail?: string }) =>
+                  r.type === newType && r.detail === newDetail,
+              )
+            : responses.some(
+                (r: { type: string }) => r.type === "opened",
+              );
+
+          if (!alreadyRecorded) {
+            await ctx.db.patch(receipt._id, {
+              responses: [
+                ...responses,
+                {
+                  type: newType,
+                  detail: newDetail,
+                  confidence: "observed",
+                  occurredAt: now,
+                },
+              ],
+            });
+          }
         }
         break;
       }
@@ -365,13 +406,24 @@ export const updateSmsStatus = internalMutation({
 
     if (!message) return;
 
+    // Capture the previous status BEFORE patching so we can detect a real
+    // status transition vs a duplicate-delivery callback. Twilio retries
+    // status callbacks on transient downstream failures (network hiccups
+    // between Twilio and our endpoint); without this guard, every retry
+    // of a `delivered` callback re-increments the blast's deliveredCount.
+    // Same class of bug as elsewhere (SNS click-event retry inflation), now
+    // closed for SMS via the previous-status check. (cure shipped).
+    const previousStatus = message.status;
+
     await ctx.db.patch(message._id, {
       status: args.status,
       errorCode: args.errorCode ?? undefined,
     });
 
-    // Update blast delivered counter
-    if (args.status === "delivered") {
+    // Only increment the blast's deliveredCount when the message TRANSITIONED
+    // into 'delivered' — not when an already-delivered message receives a
+    // duplicate callback.
+    if (args.status === "delivered" && previousStatus !== "delivered") {
       const blast = await ctx.db.get(message.blastId);
       if (blast) {
         await ctx.db.patch(blast._id, {
@@ -389,6 +441,14 @@ export const updateSmsStatus = internalMutation({
 export const handleInboundSms = internalMutation({
   args: {
     from: v.string(), // E.164 phone number
+    // Twilio destination number the user replied to. When present +
+    // registered in `orgTwilioNumbers`, START is scoped to just that
+    // org's supporters — without this, a START response would
+    // resubscribe the phone across every org that ever had it as a
+    // supporter, even orgs the user never knowingly engaged. Optional
+    // because legacy webhook configs may not populate it; the handler
+    // falls back to cross-org with a warn when missing.
+    to: v.optional(v.string()),
     body: v.string(),
   },
   handler: async (ctx, args) => {
@@ -397,15 +457,42 @@ export const handleInboundSms = internalMutation({
 
     const body = args.body.trim().toLowerCase();
 
-    // Compute phone hash for lookup (phone field is encrypted now)
-    const fromPhoneHash = await computeGlobalPhoneHash(args.from).catch(() => null);
+    // Compute phone hash for lookup (phone field is encrypted at rest).
+    // If `crypto.subtle.digest` ever errors (e.g. sandbox/edge runtime
+    // swap), the catch must be visible — silently dropping a hash
+    // failure would honor a TCPA STOP as opt-IN. Log structured
+    // context so an operator sees the failure before the silent
+    // return; throwing would force Twilio retry but a retry storm on
+    // STOP is worse than one visible drop.
+    const fromPhoneHash = await computeGlobalPhoneHash(args.from).catch((err) => {
+      console.error(
+        '[webhooks.handleInboundSms] computeGlobalPhoneHash failed — TCPA opt-in/out cannot be honored without phone hash. Body keyword="' +
+          body +
+          '":',
+        err instanceof Error ? err.message : String(err),
+      );
+      return null;
+    });
 
     if (STOP_KEYWORDS.has(body)) {
       // Mark all supporters with this phone as stopped
-      if (!fromPhoneHash) return;
+      if (!fromPhoneHash) {
+        console.error(
+          '[webhooks.handleInboundSms] DROPPED TCPA STOP — phone hash unavailable. Body="' +
+            body +
+            '". This MUST be investigated; user remains opted-in.',
+        );
+        return;
+      }
+      // Index lookup via `by_globalPhoneHash`. A `.filter()` on the
+      // org-scoped `phoneHash` would not match because that hash
+      // family is per-org keyed; the cross-org STOP needs the global
+      // hash family that supporter writers populate alongside the
+      // org-scoped one. Bounded by the small number of supporters
+      // sharing this phone across orgs, not the full table.
       const supporters = await ctx.db
         .query("supporters")
-        .filter((q) => q.eq(q.field("phoneHash"), fromPhoneHash))
+        .withIndex("by_globalPhoneHash", (q) => q.eq("globalPhoneHash", fromPhoneHash))
         .collect();
 
       for (const s of supporters) {
@@ -413,18 +500,53 @@ export const handleInboundSms = internalMutation({
       }
     } else if (START_KEYWORDS.has(body)) {
       // Re-subscribe supporters that were previously stopped
-      if (!fromPhoneHash) return;
+      if (!fromPhoneHash) {
+        console.error(
+          '[webhooks.handleInboundSms] DROPPED TCPA START — phone hash unavailable. Body="' +
+            body +
+            '". User remains opted-out.',
+        );
+        return;
+      }
+
+      // Scope START to the org that owns the `To` Twilio number when
+      // registered. STOP stays cross-org (carrier-level opt-out is
+      // TCPA-universal), but START is the re-engagement signal —
+      // resubscribing every org that ever had this phone as a
+      // supporter would be consent scope collapse. Registry-miss /
+      // multi-match falls back to cross-org with a warn: better to
+      // honor an ambiguous START than leave the user stuck opted-out.
+      let scopedOrgId: Id<"organizations"> | null = null;
+      if (args.to) {
+        const matches = await ctx.db
+          .query("orgTwilioNumbers")
+          .withIndex("by_phoneNumber", (q) => q.eq("phoneNumber", args.to as string))
+          .collect();
+        if (matches.length === 1) {
+          scopedOrgId = matches[0].orgId;
+        } else if (matches.length > 1) {
+          console.warn(
+            '[webhooks.handleInboundSms] START to=' + args.to + ' matched ' +
+              matches.length + ' orgTwilioNumbers rows (ambiguous registry) — falling back to cross-org resubscribe',
+          );
+        }
+      }
+
+      // Index lookup via `by_globalPhoneHash`, then filter for
+      // `smsStatus === "stopped"` post-fetch — the index doesn't
+      // carry status; the additional filter is a small fan-out over
+      // only the rows that share this phone across orgs.
       const supporters = await ctx.db
         .query("supporters")
-        .filter((q) =>
-          q.and(
-            q.eq(q.field("phoneHash"), fromPhoneHash),
-            q.eq(q.field("smsStatus"), "stopped"),
-          ),
-        )
+        .withIndex("by_globalPhoneHash", (q) => q.eq("globalPhoneHash", fromPhoneHash))
         .collect();
 
       for (const s of supporters) {
+        if (s.smsStatus !== "stopped") continue;
+        // When scopedOrgId is resolved, only resubscribe supporters
+        // belonging to that org. Cross-org rows stay opted-out until
+        // those orgs re-prompt and get their own START.
+        if (scopedOrgId !== null && String(s.orgId) !== String(scopedOrgId)) continue;
         await ctx.db.patch(s._id, { smsStatus: "subscribed", updatedAt: Date.now() });
       }
     }

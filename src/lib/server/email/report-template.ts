@@ -1,45 +1,34 @@
-/**
- * Report Email Template — What the Decision-Maker Receives
- *
- * This is the most important email Commons sends. It must speak
- * the staffer's language at every line. No platform jargon, no
- * engagement tier labels, no coordination integrity scores.
- *
- * Design principle: the same DIMENSIONS the org sees in the dashboard
- * should be visible here — identity composition, authorship texture,
- * geographic spread, temporal rhythm. Simplified for email intake,
- * but dimensional, not just textual.
- *
- * Email client constraints: table-based layout, inline styles,
- * no external CSS. Simple table-cell ratio bars work everywhere.
- */
-
 import type { VerificationPacket } from '$lib/types/verification-packet';
+import { escapeHtml } from './escape';
 
 interface ReportContext {
+	campaignId: string;
 	campaignTitle: string;
 	orgName: string;
 	packet: VerificationPacket;
-	verificationUrl: string; // e.g. https://commons.email/v/{hash}
+	verificationUrl: string;
 }
 
-function escapeHtml(str: string): string {
-	return str
-		.replace(/&/g, '&amp;')
-		.replace(/</g, '&lt;')
-		.replace(/>/g, '&gt;')
-		.replace(/"/g, '&quot;');
+export interface RenderedReport {
+	html: string;
+	text: string;
+	attestationHash: string;
+	subject: string;
 }
 
 function fmtDate(iso: string): string {
-	const d = new Date(iso + 'T00:00:00');
-	return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+	// Anchor to UTC explicitly so a worker rotating regions does not shift the
+	// rendered date by ±1 day.
+	const d = new Date(iso + 'T00:00:00Z');
+	return d.toLocaleDateString('en-US', {
+		month: 'short',
+		day: 'numeric',
+		year: 'numeric',
+		timeZone: 'UTC'
+	});
 }
 
-/**
- * Render an email-safe ratio bar using table cells.
- * Works in all email clients (Outlook, Gmail, Apple Mail).
- */
+// Email-safe ratio bar via table cells. Outlook/Gmail/Apple Mail compatible.
 function ratioBar(
 	segments: Array<{ pct: number; color: string }>,
 	height: number = 4
@@ -55,15 +44,56 @@ function ratioBar(
 	return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:2px;overflow:hidden;"><tr>${cells}</tr></table>`;
 }
 
-/**
- * Render the report email HTML.
- * Institutional tone. Table-based layout. Dimensional evidence.
- */
-export function renderReportEmail(ctx: ReportContext): string {
+// Canonical preimage for the attestation hash. Includes the substrate fields a
+// staffer reads in the email so any silent change shifts the hash. Domain-
+// prefixed (`voter-protocol-report-v1`) so future preimage changes cut a clean
+// version line. The verificationUrl is intentionally NOT in the preimage —
+// it is environment-coupled (PUBLIC_BASE_URL differs per deployment) and
+// would make staging vs prod hashes diverge for the same data; we use the
+// deployment-agnostic `campaignId` instead.
+export function canonicalPreimage(ctx: ReportContext): string {
+	const { campaignId, campaignTitle, orgName, packet } = ctx;
+	const { verified, districtCount, authorship, dateRange, identityBreakdown, geography } = packet;
+	const ib = identityBreakdown
+		? `${identityBreakdown.govId}|${identityBreakdown.addressVerified}|${identityBreakdown.emailOnly}`
+		: '';
+	// Sort by count desc (matches the visible bar-chart ordering) with hash
+	// ascending as tiebreaker (deterministic when counts tie). Without this
+	// alignment a malicious input could permute the visible chart away from
+	// the hashed ordering while the hash held  — see hash-ordering note.
+	const geo = (geography ?? [])
+		.slice()
+		.sort((a, b) =>
+			b.count !== a.count ? b.count - a.count : a.hash.localeCompare(b.hash),
+		)
+		.map((g) => `${g.hash}=${g.count}`)
+		.join(',');
+	return [
+		'voter-protocol-report-v1',
+		`campaign:${campaignId}`,
+		campaignTitle,
+		orgName,
+		String(verified),
+		String(districtCount),
+		ib,
+		`${authorship.individual}|${authorship.shared}|${authorship.explicit ? 1 : 0}`,
+		`${dateRange.earliest}|${dateRange.latest}|${dateRange.spanDays}`,
+		geo
+	].join('\n---\n');
+}
+
+async function sha256Hex(input: string): Promise<string> {
+	const bytes = new TextEncoder().encode(input);
+	const digest = await crypto.subtle.digest('SHA-256', bytes);
+	return Array.from(new Uint8Array(digest))
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('');
+}
+
+function renderHtml(ctx: ReportContext, attestationHash: string): string {
 	const { campaignTitle, orgName, packet, verificationUrl } = ctx;
 	const { verified, districtCount, authorship, dateRange, identityBreakdown } = packet;
 
-	// ── Identity dimension ──
 	let identityHtml = '';
 	if (identityBreakdown) {
 		const total = identityBreakdown.govId + identityBreakdown.addressVerified + identityBreakdown.emailOnly;
@@ -91,7 +121,6 @@ export function renderReportEmail(ctx: ReportContext): string {
 		}
 	}
 
-	// ── Authorship dimension ──
 	let authorshipHtml = '';
 	const authorTotal = authorship.individual + authorship.shared;
 	if (authorTotal > 0) {
@@ -119,11 +148,17 @@ export function renderReportEmail(ctx: ReportContext): string {
           </tr>`;
 	}
 
-	// ── Geographic dimension ──
 	let geographyHtml = '';
 	if (packet.geography && packet.geography.length > 1) {
 		const geoTotal = packet.geography.reduce((s, d) => s + d.count, 0);
-		const topDistricts = packet.geography.slice(0, 8); // Show top 8
+		// Same sort as the canonical preimage so what the staffer sees in the
+		// bar chart is the same ordering bound by the attestation hash.
+		const sortedGeography = packet.geography
+			.slice()
+			.sort((a, b) =>
+				b.count !== a.count ? b.count - a.count : a.hash.localeCompare(b.hash),
+			);
+		const topDistricts = sortedGeography.slice(0, 8);
 
 		const bar = ratioBar(
 			topDistricts.map((d, i) => ({
@@ -150,7 +185,6 @@ export function renderReportEmail(ctx: ReportContext): string {
           </tr>`;
 	}
 
-	// ── Temporal dimension ──
 	let temporalHtml = '';
 	if (dateRange.spanDays > 0) {
 		temporalHtml = `
@@ -174,7 +208,6 @@ export function renderReportEmail(ctx: ReportContext): string {
       <td align="center" style="padding:40px 20px;">
         <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
 
-          <!-- Header -->
           <tr>
             <td style="padding:0 0 32px 0;">
               <p style="margin:0;font-size:12px;font-weight:600;color:#a3a3a3;text-transform:uppercase;letter-spacing:0.08em;">
@@ -183,7 +216,6 @@ export function renderReportEmail(ctx: ReportContext): string {
             </td>
           </tr>
 
-          <!-- Campaign + Org -->
           <tr>
             <td style="padding:0 0 8px 0;">
               <p style="margin:0;font-size:18px;font-weight:600;color:#171717;line-height:1.4;">
@@ -199,19 +231,17 @@ export function renderReportEmail(ctx: ReportContext): string {
             </td>
           </tr>
 
-          <!-- Hero Count -->
           <tr>
             <td style="padding:24px 0;border-top:1px solid #e5e5e5;border-bottom:1px solid #e5e5e5;">
               <p style="margin:0 0 4px 0;font-size:36px;font-weight:700;color:#171717;font-family:'Courier New',Courier,monospace;">
                 ${verified.toLocaleString()}
               </p>
               <p style="margin:0;font-size:15px;color:#525252;">
-                verified constituents across ${districtCount} ${districtCount === 1 ? 'community' : 'communities'}
+                verified contacts across ${districtCount} ${districtCount === 1 ? 'community' : 'communities'}
               </p>
             </td>
           </tr>
 
-          <!-- Dimensional Evidence -->
           <tr>
             <td style="padding:20px 0 0 0;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
@@ -221,14 +251,13 @@ export function renderReportEmail(ctx: ReportContext): string {
                 ${temporalHtml}
                 <tr>
                   <td style="padding:4px 0;">
-                    <p style="margin:0;font-size:13px;color:#737373;">One submission per person · duplicates removed</p>
+                    <p style="margin:0;font-size:13px;color:#737373;">One submission per person. Duplicates removed.</p>
                   </td>
                 </tr>
               </table>
             </td>
           </tr>
 
-          <!-- Verification Link -->
           <tr>
             <td style="padding:28px 0 0 0;">
               <table role="presentation" cellpadding="0" cellspacing="0">
@@ -243,13 +272,26 @@ export function renderReportEmail(ctx: ReportContext): string {
             </td>
           </tr>
 
-          <!-- Footer -->
           <tr>
-            <td style="padding:40px 0 0 0;border-top:none;">
+            <td style="padding:24px 0 0 0;">
               <p style="margin:0;font-size:11px;color:#a3a3a3;line-height:1.6;">
-                This report was generated by <a href="https://commons.email" style="color:#a3a3a3;text-decoration:underline;">commons.email</a>.
-                Every claim is cryptographically attested and independently auditable.
-                The platform cannot access constituent identities — only verification proofs.
+                Attestation hash · recompute the canonical preimage from the verification page to confirm this report.
+              </p>
+              <p style="margin:4px 0 0 0;font-size:11px;color:#525252;line-height:1.6;font-family:'Courier New',Courier,monospace;letter-spacing:0.02em;word-break:break-all;">
+                sha256:${escapeHtml(attestationHash)}
+              </p>
+              <p style="margin:4px 0 0 0;font-size:11px;color:#a3a3a3;line-height:1.6;">
+                Spec: <a href="https://github.com/communisaas/voter-protocol/blob/main/specs/REPORT-ATTESTATION-SPEC.md" style="color:#525252;text-decoration:underline;">REPORT-ATTESTATION-SPEC v1</a>
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:32px 0 0 0;">
+              <p style="margin:0;font-size:11px;color:#a3a3a3;line-height:1.6;">
+                Generated by Commons. Constituent emails are encrypted under a
+                per-organization key; the platform decrypts them only at send
+                time and does not retain plaintext.
               </p>
             </td>
           </tr>
@@ -262,9 +304,114 @@ export function renderReportEmail(ctx: ReportContext): string {
 </html>`;
 }
 
-/**
- * Generate the email subject line for a report delivery.
- */
+function renderText(ctx: ReportContext, attestationHash: string): string {
+	const { campaignTitle, orgName, packet, verificationUrl } = ctx;
+	const { verified, districtCount, authorship, dateRange, identityBreakdown, geography } = packet;
+	const rule = '─'.repeat(48);
+	const lines: string[] = [];
+
+	lines.push('VERIFICATION REPORT');
+	lines.push('');
+	lines.push(campaignTitle);
+	lines.push(`from ${orgName}`);
+	lines.push('');
+	lines.push(rule);
+	lines.push(
+		`${verified.toLocaleString()} verified contacts across ${districtCount} ${districtCount === 1 ? 'community' : 'communities'}`
+	);
+	lines.push(rule);
+
+	if (identityBreakdown) {
+		const total =
+			identityBreakdown.govId + identityBreakdown.addressVerified + identityBreakdown.emailOnly;
+		if (total > 0) {
+			lines.push('');
+			lines.push('Identity composition:');
+			if (identityBreakdown.govId > 0) lines.push(`  - ${identityBreakdown.govId} government ID`);
+			if (identityBreakdown.addressVerified > 0)
+				lines.push(`  - ${identityBreakdown.addressVerified} address verified`);
+			if (identityBreakdown.emailOnly > 0) lines.push(`  - ${identityBreakdown.emailOnly} email`);
+		}
+	}
+
+	const authorTotal = authorship.individual + authorship.shared;
+	if (authorTotal > 0) {
+		lines.push('');
+		lines.push('Authorship:');
+		if (authorship.individual > 0) {
+			lines.push(
+				`  - ${authorship.individual} ${authorship.explicit ? 'individually composed' : 'distinct messages'}`
+			);
+		}
+		if (authorship.shared > 0) {
+			lines.push(
+				`  - ${authorship.shared} shared ${authorship.shared === 1 ? 'statement' : 'statements'}`
+			);
+		}
+	}
+
+	if (geography && geography.length > 0) {
+		const geoTotal = geography.reduce((s, d) => s + d.count, 0);
+		const sorted = geography
+			.slice()
+			.sort((a, b) =>
+				b.count !== a.count ? b.count - a.count : a.hash.localeCompare(b.hash),
+			);
+		const top = sorted.slice(0, 8);
+		const topShare = geoTotal > 0
+			? Math.round((top.reduce((s, d) => s + d.count, 0) / geoTotal) * 100)
+			: 0;
+		lines.push('');
+		lines.push('Geography:');
+		lines.push(
+			`  ${districtCount} ${districtCount === 1 ? 'community' : 'communities'} represented; top ${top.length} carry ${topShare}% of contacts.`
+		);
+		lines.push(
+			'  District identifiers are hashed at the platform layer; aggregate-only.'
+		);
+	}
+
+	if (dateRange.spanDays > 0) {
+		lines.push('');
+		lines.push(`Submissions: ${fmtDate(dateRange.earliest)} – ${fmtDate(dateRange.latest)}`);
+	}
+
+	lines.push('');
+	lines.push('One submission per person. Duplicates removed.');
+	lines.push('');
+	lines.push(rule);
+	lines.push('');
+	lines.push('Verify these claims independently:');
+	lines.push(`  ${verificationUrl}`);
+	lines.push('');
+	lines.push(`Attestation: sha256:${attestationHash}`);
+	lines.push(
+		'  Recompute via REPORT-ATTESTATION-SPEC v1 at:'
+	);
+	lines.push(
+		'  https://github.com/communisaas/voter-protocol/blob/main/specs/REPORT-ATTESTATION-SPEC.md'
+	);
+	lines.push('');
+	lines.push(rule);
+	lines.push('');
+	lines.push('Generated by Commons. Every claim is cryptographically attested.');
+	lines.push('Constituent emails are encrypted under a per-organization key;');
+	lines.push('the platform decrypts them only at send time and does not retain');
+	lines.push('plaintext.');
+
+	return lines.join('\n');
+}
+
 export function reportSubject(campaignTitle: string, verified: number): string {
-	return `${verified} verified constituents — ${campaignTitle}`;
+	return `${verified.toLocaleString()} verified contacts — ${campaignTitle}`;
+}
+
+export async function renderReport(ctx: ReportContext): Promise<RenderedReport> {
+	const attestationHash = await sha256Hex(canonicalPreimage(ctx));
+	return {
+		html: renderHtml(ctx, attestationHash),
+		text: renderText(ctx, attestationHash),
+		attestationHash,
+		subject: reportSubject(ctx.campaignTitle, ctx.packet.verified)
+	};
 }
