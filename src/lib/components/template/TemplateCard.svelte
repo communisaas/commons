@@ -5,6 +5,9 @@
 	import { topicHue } from '$lib/utils/topic-hue';
 	import SimpleTooltip from '$lib/components/ui/SimpleTooltip.svelte';
 	import { FEATURES } from '$lib/config/features';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	interface Props {
 		template: Template;
@@ -249,7 +252,7 @@
 						</span>
 
 						<SimpleTooltip
-							content="{uniqueDistricts > 0 ? Math.round((uniqueDistricts / 435) * 100) + '%' : '0%'} of congressional districts reached"
+							content="{uniqueDistricts > 0 ? Math.round((uniqueDistricts / 435) * 100) + '%' : '0%'} of {labels.legislativeAdjective} districts reached"
 							placement="top"
 							show={hoveredMetric === 'districts'}
 						/>

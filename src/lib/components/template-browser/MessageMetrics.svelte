@@ -4,6 +4,9 @@
 	import { extractRecipientEmails } from '$lib/types/templateConfig';
 	import SimpleTooltip from '$lib/components/ui/SimpleTooltip.svelte';
 	import { z } from 'zod';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	interface Props {
 		template: Template;
@@ -71,7 +74,7 @@
 			secondaryIcon: shouldShowRecipients ? (recipientCount > 1 ? Users : User) : MapPin,
 			secondaryTooltip: shouldShowRecipients
 				? 'Total recipient addresses targeted'
-				: 'Percentage of congressional districts covered',
+				: `Percentage of ${labels.legislativeAdjective} districts covered`,
 			secondaryValue: shouldShowRecipients
 				? `${formatNumber(recipientCount)} recipients`
 				: `${getDistrictCoverage()} districts covered`

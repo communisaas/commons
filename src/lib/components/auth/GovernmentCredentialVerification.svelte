@@ -17,12 +17,33 @@
 		requestCredential,
 		type CredentialRequestResult
 	} from '$lib/core/identity/digital-credentials-api';
+	import { clampTier } from '$lib/core/identity/clamp-tier';
 
 	interface Props {
 		userId: string;
 		/** Deprecated account hint retained for parent compatibility. */
 		userEmail?: string;
 		templateSlug?: string;
+		/**
+		 * Minimum trust tier the gating action requires. The dead-end copy
+		 * (state-unsupported / browser-unsupported) needs to know whether
+		 * address-tier verification is enough for their goal. The address
+		 * flow tops out at tier 2, so tier ≤ 2 ⇒ address fallback covers
+		 * the action; tier ≥ 3 ⇒ genuinely needs a digital ID. Clamped to
+		 * [0,5]; non-integer / NaN / out-of-range values default to 5
+		 * (the strictest reading).
+		 */
+		minimumTier?: number;
+		/**
+		 * The user's actual server-side trust tier at component mount.
+		 * Threaded so the dead-end copy says "address-tier verification
+		 * still works for you" ONLY when the user actually has tier ≥ 2.
+		 * Without this, a tier-0 user seeing the dead-end would be told
+		 * the address-tier path covers them — false reassurance, since
+		 * the substrate still has to gate the action at submission.
+		 * Defaults to 0 (anonymous), the strictest reading.
+		 */
+		userTrustTier?: number;
 		oncomplete?: (data: {
 			verified: boolean;
 			method: string;
@@ -41,7 +62,27 @@
 		oncancel?: () => void;
 	}
 
-	let { userId, templateSlug, oncomplete, onerror, oncancel }: Props = $props();
+	let {
+		userId,
+		templateSlug,
+		minimumTier: rawMinimumTier = 5,
+		userTrustTier: rawUserTrustTier = 0,
+		oncomplete,
+		onerror,
+		oncancel
+	}: Props = $props();
+
+	const minimumTier = $derived(clampTier(rawMinimumTier, 5));
+	const userTrustTier = $derived(clampTier(rawUserTrustTier, 0));
+
+	/**
+	 * True when the user has the address-verification tier AND the gating
+	 * action requires tier ≤ 2. Both conditions must hold: a tier-0 user
+	 * can't be told "address-tier still works for you" because they don't
+	 * have address-tier; and a tier-2 user can't be told that about a
+	 * tier-4+ action because address-tier doesn't satisfy the requirement.
+	 */
+	const addressTierIsEnough = $derived(minimumTier <= 2 && userTrustTier >= 2);
 
 	function shouldOfferDigitalCredentialsMdl(): boolean {
 		return shouldUseDigitalCredentialsFlow();
@@ -242,26 +283,31 @@
 			</button>
 		</div>
 	{:else if verificationState === 'unsupported_state'}
-		<!-- State not supported -->
+		<!-- State not supported. The "supported (N)" list was removed
+		     because it implied the product was multi-state-live; in
+		     fact CA is the single launch state. Misleading users into
+		     thinking their state was almost-live caused a check-back-
+		     soon dead end with no callback hook. -->
 		<div class="mx-auto max-w-sm space-y-4">
 			<div class="flex items-start gap-3">
 				<Info class="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" />
 				<div>
-					<p class="text-sm font-medium text-slate-900">Your state isn't supported yet</p>
-					<p class="mt-1 text-sm text-slate-600">We're adding more states. Check back soon.</p>
+					<p class="text-sm font-medium text-slate-900">
+						Your state issues a digital ID we don't yet read
+					</p>
+					<p class="mt-1 text-sm text-slate-600">
+						California is the only state currently live for digital-ID
+						verification.
+						{#if addressTierIsEnough}
+							Anything that only requires address-tier verification still
+							works for you; this action does not need a digital ID.
+						{:else}
+							This action requires a digital ID; it won't be available
+							to you until your state is live.
+						{/if}
+					</p>
 				</div>
 			</div>
-
-			{#if supportedStates.length > 0}
-				<div class="border-t border-slate-100 pt-3">
-					<p class="mb-2 font-mono text-xs font-semibold tracking-wider text-slate-400 uppercase">
-						Supported ({supportedStates.length})
-					</p>
-					<p class="text-sm text-slate-600">
-						{supportedStates.sort().join(', ')}
-					</p>
-				</div>
-			{/if}
 
 			{#if oncancel}
 				<button
@@ -275,16 +321,34 @@
 			{/if}
 		</div>
 	{:else if verificationState === 'unsupported'}
+		<!-- Browser path (typically iPhone Safari pre-Apple-Business-
+		     Connect) can't read a wallet credential. Copy was previously
+		     dense ("Digital Credentials," "an enabled protocol") which
+		     left users stuck in jargon. Replaced with plain-voice
+		     fallback to address verification — the substrate still
+		     produces a verified-tier send, just without the gov-issued
+		     credential. -->
 		<div class="mx-auto max-w-sm">
 			<div class="text-center">
 				<Info class="mx-auto mb-4 h-8 w-8 text-amber-500" />
-				<h3 class="font-brand text-xl font-bold text-slate-900">Digital ID unavailable</h3>
+				<h3 class="font-brand text-xl font-bold text-slate-900">
+					This browser can't read a digital ID
+				</h3>
 				<p class="mt-2 text-sm text-slate-600">
-					Use a browser and wallet that support Digital Credentials for an enabled protocol.
+					Most iPhones don't support digital-ID readers in the
+					browser yet.
+					{#if addressTierIsEnough}
+						Anything that only requires address-tier verification still
+						works for you; this action does not need a digital ID.
+					{:else}
+						This action requires a digital ID; it won't be available
+						from this browser until iOS support lands.
+					{/if}
 				</p>
 				{#if enabledProtocols.mdoc && !enabledProtocols.openid4vp}
 					<p class="mt-2 text-xs leading-relaxed text-slate-400">
-						This browser supports mobile documents, but that verification lane is not enabled yet.
+						This browser supports the mobile-document protocol;
+						the OID4VP lane it would need is not yet enabled.
 					</p>
 				{/if}
 			</div>

@@ -32,8 +32,12 @@
 		getUsableProofCredential,
 		needsCredentialRecovery
 	} from '$lib/core/identity/recovery-detector';
+	import { clampTier } from '$lib/core/identity/clamp-tier';
 	import { decryptedUser } from '$lib/stores/decryptedUser.svelte';
 	import { isAnyMdlProtocolEnabled } from '$lib/config/features';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	interface Props {
 		userId: string;
@@ -103,12 +107,114 @@
 			});
 	});
 
-	// Derived: which verification flow to show
+	// Defense-in-depth tier clamp at the gate boundary.
+	// `userTrustTier` is consumed raw in multiple branches (lines 85, 90,
+	// 96, 112, 114, 418); a non-integer/string/Infinity value would coerce
+	// via `>=` and route around verification logic. Uses the shared
+	// `clampTier` helper so the contract is in exactly one place across
+	// this component and `GovernmentCredentialVerification.svelte`.
+	// Declared before the routing derivations so source order matches the
+	// reactive-graph order (TypeScript checks block-scope before runtime).
+	const safeUserTrustTier = $derived(clampTier(userTrustTier, 0));
+	const safeMinimumTier = $derived(clampTier(minimumTier, 5));
+
+	// Derived: which verification flow to show. Routing reads from the
+	// clamped tier values so that a junk/non-integer/out-of-range prop
+	// (corrupt session, Convex contract drift, modal-payload cast) falls
+	// to the conservative reading instead of coercing through `>=`.
+	//
 	// `forceAddressFlow` overrides tier checks — used by AddressChangeFlow to
 	// re-enter the flow for an already-verified user (re-grounding / move).
-	let needsTier2: boolean = $derived(forceAddressFlow || (minimumTier <= 2 && userTrustTier < 2));
+	let needsTier2: boolean = $derived(
+		forceAddressFlow || (safeMinimumTier <= 2 && safeUserTrustTier < 2)
+	);
 	let needsTier4Plus: boolean = $derived(
-		!forceAddressFlow && minimumTier >= 4 && userTrustTier < minimumTier
+		!forceAddressFlow && safeMinimumTier >= 4 && safeUserTrustTier < safeMinimumTier
+	);
+
+	// Defense against callers that flip `showModal=true` without first
+	// invoking `checkVerification()` (e.g., `profile/+page.svelte:243`
+	// opens the gate unconditionally on "Verify Address" click). When the
+	// modal opens for a user who already meets the address-tier requirement
+	// and no re-grounding is forced, the catch-all `else` branch would
+	// otherwise mount the mDL upgrade flow with `minimumTier=2` — bouncing
+	// a verified user into an upgrade ceremony they didn't ask for. Tier-4+
+	// actions remain on the existing path because they need separate proof-
+	// credential material checks beyond the tier number.
+	//
+	// The check uses a SNAPSHOT of `userTrustTier` taken at the moment the
+	// modal opens. Otherwise a successful mid-flow address verification
+	// (which causes `userTrustTier` to reactively update from 0→2 just
+	// before `handleAddressVerificationComplete` fires) would race with
+	// the success callback and call `oncancel` for a user who actually
+	// completed.
+	//
+	// The `alreadyMetsAddressTier` derived blocks the `else` branch from
+	// mounting `IdentityVerificationFlow` synchronously in template space,
+	// so no onMount-equivalent (telemetry, eager
+	// /api/identity/verify-mdl/start prefetch, wallet-protocol probes)
+	// runs even for one render tick.
+	//
+	// Rising-edge tracking via `wasOpen` is required: a single
+	// `if (!showModal) reset` leaves the snapshot stale across same-tick
+	// false→true coalescing — Svelte batches state mutations and the
+	// effect runs once with the final `showModal=true`, so the reset
+	// branch is never taken.
+	//
+	// `dismissedAtSnapshot` prevents oncancel re-entrancy. If a parent's
+	// `oncancel` handler synchronously re-opens, the stale snapshot would
+	// dismiss again — unbounded loop. The flag requires `tierSnapshotAtOpen`
+	// to refresh before another dismiss can fire.
+	//
+	// The auto-dismiss path also resets `showRecovery = false` so stale
+	// recovery flags don't leak into a future open (`handleCancel` resets
+	// it on the cancel path).
+	let tierSnapshotAtOpen = $state<number | null>(null);
+	let wasOpen = $state(false);
+	let dismissedAtSnapshot = $state<number | null>(null);
+	$effect(() => {
+		if (!showModal) {
+			tierSnapshotAtOpen = null;
+			dismissedAtSnapshot = null;
+			wasOpen = false;
+			return;
+		}
+		// Rising edge: snapshot exactly once per open cycle.
+		if (!wasOpen) {
+			tierSnapshotAtOpen = safeUserTrustTier;
+			dismissedAtSnapshot = null;
+			wasOpen = true;
+		}
+		const snapshot = tierSnapshotAtOpen;
+		if (snapshot === null) return;
+		if (dismissedAtSnapshot === snapshot) return; // F4: already dismissed this snapshot
+		if (
+			!forceAddressFlow &&
+			safeMinimumTier <= 2 &&
+			snapshot >= 2
+		) {
+			console.log(
+				'[Verification Gate] User already meets address-tier requirement; auto-dismissing',
+				{ minimumTier: safeMinimumTier, tierSnapshotAtOpen: snapshot }
+			);
+			dismissedAtSnapshot = snapshot;
+			showRecovery = false; // F5: don't leak recovery state into the dismiss
+			showModal = false;
+			oncancel?.();
+		}
+	});
+
+	// The template guard MUST be synchronously evaluable at first render
+	// or `IdentityVerificationFlow` still mounts for one tick before the
+	// snapshot-driven derived flips. Use the live clamped tier here, not
+	// the snapshot — the snapshot's purpose is race-resistance for the
+	// AUTO-DISMISS decision (don't cancel a user who just succeeded), not
+	// for routing-decision freshness. Template routing should reflect the
+	// user's actual current tier at render time.
+	const alreadyMetsAddressTier = $derived(
+		!forceAddressFlow &&
+			safeMinimumTier <= 2 &&
+			safeUserTrustTier >= 2
 	);
 
 	// mDL launch gate: every path inside this gate that mounts the mDL flow
@@ -313,7 +419,7 @@
 						Verify Your Identity to Send
 					</h2>
 					<p class="mt-2 text-slate-600">
-						Congressional offices prioritize verified constituents. This one-time verification takes
+						{labels.legislativeBody} offices prioritize verified constituents. This one-time verification takes
 						30 seconds and lets you send instantly in the future.
 					</p>
 				</div>
@@ -366,11 +472,25 @@
 						onComplete={handleAddressVerificationComplete}
 						onCancel={handleCancel}
 					/>
+				{:else if alreadyMetsAddressTier}
+					<!-- Synchronous guard before the `$effect` auto-dismiss
+					     fires. Without this, IdentityVerificationFlow would
+					     mount for one render tick — long enough to fire onMount
+					     telemetry / eager /api/identity/verify-mdl/start prefetch
+					     / wallet-protocol probes — before the effect tears it
+					     down. The placeholder here is intentionally minimal
+					     because the modal is about to dismiss; rendering nothing
+					     would briefly show empty modal chrome. -->
+					<div class="mx-auto max-w-sm py-12 text-center text-slate-500">
+						<p class="text-sm">You're already verified for this action.</p>
+					</div>
 				{:else}
 					<IdentityVerificationFlow
 						{userId}
 						userEmail={decryptedUser.email ?? undefined}
 						{templateSlug}
+						{minimumTier}
+						{userTrustTier}
 						skipValueProp={true}
 						oncomplete={handleVerificationComplete}
 						oncancel={handleCancel}

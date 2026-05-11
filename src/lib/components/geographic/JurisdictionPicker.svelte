@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
 	let {
 		value,
 		country,
@@ -14,11 +16,13 @@
 		items: Array<{ value: string; label: string }>;
 	}
 
+	const usLabels = getJurisdictionLabels();
+
 	const US_GROUPS: JurisdictionGroup[] = [
 		{
 			label: 'Federal',
 			items: [
-				{ value: 'congressional', label: 'Congressional District' },
+				{ value: 'congressional', label: usLabels.districtType },
 				{ value: 'federal-senate', label: 'U.S. Senate' }
 			]
 		},

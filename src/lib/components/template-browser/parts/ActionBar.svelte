@@ -5,6 +5,9 @@
 	import { type Spring } from 'svelte/motion';
 	import { extractRecipientEmails } from '$lib/types/templateConfig';
 	import { parseRecipientConfig } from '$lib/utils/deriveTargetPresentation';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	let {
 		template,
@@ -56,7 +59,7 @@
 			return count > 0 ? `Deliver as verified constituent to ${count}` : 'Deliver as verified constituent';
 		}
 		if (isCwcTemplate) {
-			return 'Deliver to Congress';
+			return `Deliver to ${labels.legislativeBody}`;
 		}
 		return count > 0 ? `Deliver to ${count} decision-maker${count !== 1 ? 's' : ''}` : 'Send to Decision-Makers';
 	});

@@ -2,6 +2,9 @@
 	import { Check, Loader2, ArrowRight, Swords } from '@lucide/svelte';
 	import { positionState } from '$lib/stores/positionState.svelte';
 	import PositionCount from './PositionCount.svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	let {
 		templateId,
@@ -29,7 +32,7 @@
 				? `${recipientCount} representative${recipientCount !== 1 ? 's' : ''}`
 				: `${recipientCount} decision-maker${recipientCount !== 1 ? 's' : ''}`
 			: isCongressional
-				? 'your congressional representatives'
+				? `your ${labels.legislativeAdjective} representatives`
 				: 'decision-makers'
 	);
 

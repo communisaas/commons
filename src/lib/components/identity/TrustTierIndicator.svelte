@@ -248,8 +248,13 @@
 						</svg>
 					</div>
 					<div class="tti__popover-title-group">
+						<!-- The tier name is the human-readable signal. The
+						     numeric position ("Tier N of 5") is intentionally
+						     omitted: it triggered a "you're N/5ths credible"
+						     reading and a ladder-shame failure mode for users
+						     locked below 5 by state/device. Per design
+						     memory: tiers are infrastructure, not headlines. -->
 						<h3 class="tti__popover-title">{tierLabel}</h3>
-						<p class="tti__popover-subtitle">Tier {tier} of 5</p>
 					</div>
 				</div>
 

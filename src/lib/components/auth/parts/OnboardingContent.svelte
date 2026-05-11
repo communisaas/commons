@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { fly } from 'svelte/transition';
 	import { Users, HelpCircle, Mail, CheckCircle2 } from '@lucide/svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 	// import Button from '$lib/components/ui/Button.svelte';
+
+	const labels = getJurisdictionLabels();
 
 	let {
 		template,
@@ -37,58 +40,60 @@
 	const sourceMessages = $derived(getSourceMessages(isCongressional, isDirectOutreach));
 
 	function getSourceMessages(congressional: boolean, directOutreach: boolean) {
+		const sendCount = (template.send_count || 0).toLocaleString();
 		if (congressional) {
 			return {
 				'social-link': {
-					headline: `You're joining ${template.send_count || 0} others on this`,
-					subtext: 'They shared this because groups move decisions.',
+					headline: `${sendCount} people have sent this template`,
+					subtext: 'You can review the message before sending.',
 					cta: 'Send your message'
 				},
 				'direct-link': {
-					headline: 'They count every message',
-					subtext: 'Your district matters to their next vote.',
-					cta: 'Speak up'
+					headline: 'Your message will be sent to your district office',
+					subtext:
+						`${labels.legislativeBody} offices log constituent messages by district. Outcomes are not promised.`,
+					cta: 'Send your message'
 				},
 				share: {
-					headline: 'Pressure is building',
-					subtext: `Add yours to ${template.send_count || 0} others.`,
-					cta: 'Join them'
+					headline: `${sendCount} people have sent this template`,
+					subtext: 'You can review the message before sending.',
+					cta: 'Send your message'
 				}
 			};
 		} else if (directOutreach) {
 			return {
 				'social-link': {
-					headline: 'Make decision-makers listen',
-					subtext: 'Coordinated messages move decisions. Someone shared this.',
+					headline: 'Send your message to the decision-maker',
+					subtext: 'They receive it directly. You can review the message before sending.',
 					cta: 'Send your message'
 				},
 				'direct-link': {
-					headline: 'Decision-makers need to hear from you',
-					subtext: 'Stakeholders move decisions. Speak as one.',
+					headline: 'Send your position to the decision-maker',
+					subtext: 'They receive it directly. Outcomes are not promised.',
 					cta: 'Send your position'
 				},
 				share: {
-					headline: 'Join the pressure',
-					subtext: 'Add yours to the growing numbers on this.',
-					cta: 'Join them'
+					headline: `${sendCount} people have sent this template`,
+					subtext: 'You can review the message before sending.',
+					cta: 'Send your message'
 				}
 			};
 		} else {
 			return {
 				'social-link': {
-					headline: 'Coordinated messages drive change',
-					subtext: 'Someone shared this. Add your pressure.',
+					headline: 'Send your message',
+					subtext: 'Someone shared this template with you. You can review it before sending.',
 					cta: 'Send your message'
 				},
 				'direct-link': {
 					headline: 'Send your position',
-					subtext: 'Numbers create pressure. Add yours.',
+					subtext: `${sendCount} people have sent this template. You can review it before sending.`,
 					cta: 'Send your position'
 				},
 				share: {
 					headline: 'Shared with you',
-					subtext: 'Someone shared this. Join them.',
-					cta: 'Join them'
+					subtext: 'You can review this template before sending.',
+					cta: 'Send your message'
 				}
 			};
 		}
@@ -99,47 +104,55 @@
 			return [
 				{
 					icon: Mail,
-					title: 'Hits their tracking system',
-					desc: 'Goes straight into the official congressional database'
+					title: `Sent through the official ${labels.legislativeAdjective} system`,
+					desc: 'Your message is delivered via Communicating with Congress (CWC).'
 				},
 				{
 					icon: Users,
-					title: 'Gets logged with your district',
-					desc: 'They track exactly how many constituents care about each issue'
+					title: 'Recorded in the office constituent log',
+					desc: `${labels.legislativeBody} offices log messages by district and issue.`
 				},
 				{
 					icon: CheckCircle2,
-					title: 'Moves their decision calculus',
-					desc: 'When the numbers shift, so do the votes'
+					title: 'Receipt added to the public record',
+					desc: 'A delivery receipt is recorded. Outcomes are not promised.'
 				}
 			];
 		} else if (directOutreach) {
 			return [
 				{
 					icon: Mail,
-					title: 'Direct delivery to decision-makers',
-					desc: 'Your message reaches executives, officials, or stakeholders'
+					title: 'Sent by email to the decision-maker',
+					desc: 'Your message is delivered to the address on file for the recipient.'
 				},
 				{
 					icon: Users,
-					title: 'Strengthened by your credentials',
-					desc: "Your role and connection amplify your message's impact"
+					title: 'Your verified identity is attached',
+					desc: 'Your role and verification tier are included so the recipient can read context.'
 				},
 				{
 					icon: CheckCircle2,
-					title: 'Creates pressure for change',
-					desc: 'Decision-makers respond when stakeholders speak up'
+					title: 'Receipt added to the public record',
+					desc: 'A delivery receipt is recorded. The recipient may or may not reply.'
 				}
 			];
 		} else {
 			return [
 				{
 					icon: Mail,
-					title: 'Direct message delivery',
-					desc: 'Your message is sent to the right people'
+					title: 'Sent by email to the listed recipient',
+					desc: 'Your message is delivered to the address configured for this template.'
 				},
-				{ icon: Users, title: 'Tracked for impact', desc: 'We monitor campaign effectiveness' },
-				{ icon: CheckCircle2, title: 'Drives change', desc: 'Collective voices create real impact' }
+				{
+					icon: Users,
+					title: 'Recorded in the public log',
+					desc: 'The send count is incremented; your identity tier is attached.'
+				},
+				{
+					icon: CheckCircle2,
+					title: 'Receipt added to the public record',
+					desc: 'A delivery receipt is recorded. Outcomes are not promised.'
+				}
 			];
 		}
 	}
@@ -201,11 +214,11 @@
 			</h2>
 			<p class="text-sm text-slate-600">
 				{#if isCongressional}
-					Your message goes directly to Congress
+					Your message is sent to your district office through the official {labels.legislativeAdjective} system.
 				{:else if isDirectOutreach}
-					Your message reaches decision-makers
+					Your message is sent by email to the decision-maker.
 				{:else}
-					Your message gets delivered with impact
+					Your message is sent by email and a receipt is recorded.
 				{/if}
 			</p>
 		</div>
@@ -221,19 +234,12 @@
 				{template.description}
 			</p>
 
-			<!-- Social Proof -->
+			<!-- Send count (factual) -->
 			<div class="flex items-center gap-3 text-xs text-slate-500">
 				<div class="flex items-center gap-1">
 					<Users class="h-3 w-3" />
 					<span>{(template.send_count || 0).toLocaleString()} sent</span>
 				</div>
-				{#if (template.send_count || 0) > 100}
-					<span class="font-medium text-blue-600">📈 Growing momentum</span>
-				{:else if (template.send_count || 0) > 50}
-					<span class="font-medium text-green-600">🎯 Building pressure</span>
-				{:else}
-					<span class="font-medium text-amber-600">🚀 Early adopter</span>
-				{/if}
 			</div>
 		</div>
 

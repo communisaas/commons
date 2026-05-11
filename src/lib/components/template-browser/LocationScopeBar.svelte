@@ -1,20 +1,14 @@
 <script lang="ts">
 	/**
-	 * LocationScopeBar: Unified location search + breadcrumb navigation
+	 * LocationScopeBar — geographic scope selector and breadcrumb display.
 	 *
-	 * PERCEPTUAL ENGINEERING:
-	 * - Omnibar + breadcrumbs in a single bar — search any place, resolve to breadcrumbs
-	 * - Placeholder text communicates "type anything geographic" directly
-	 * - Level badges (city/state/country) on results reinforce multi-level affordance
-	 * - Clickable "Try" examples in empty dropdown concretize with action
-	 * - Breadcrumbs are the resolved output, not a hierarchical input
-	 * - Each breadcrumb chip toggles scope filtering (existing behavior)
-	 * - Search icon is always visible when breadcrumbs are present
+	 * Renders in one of three states:
+	 *   invitation — no scope set; the bar is the search field
+	 *   display    — scope set; breadcrumb chips with search and clear actions
+	 *   searching  — input active; grouped results dropdown
 	 *
-	 * States:
-	 * 1. invitation — no scope, bar IS the search field
-	 * 2. display — has scope, breadcrumb chips + search trigger
-	 * 3. searching — input active, grouped results dropdown
+	 * Each breadcrumb chip toggles scope filtering (city/state/country).
+	 * Selecting a result resolves to a GeoScope and emits onScopeChange.
 	 */
 
 	import { searchLocations, type LocationHierarchy } from '$lib/core/location/location-search';
@@ -457,8 +451,8 @@
 				/>
 			</svg>
 			<div class="invitation-content">
-				<span class="invitation-primary">Search any city, state, or country...</span>
-				<span class="invitation-hint">See campaigns and representatives near you</span>
+				<span class="invitation-primary">Search any city, state, or country.</span>
+				<span class="invitation-hint">Templates and decision-makers near you.</span>
 			</div>
 		</button>
 	{/if}
@@ -472,7 +466,7 @@
 	.location-bar {
 		position: relative;
 		background: oklch(0.975 0.006 250);
-		border-radius: 0.625rem;
+		border-radius: 8px;
 		border: 1px solid transparent;
 		transition:
 			background 150ms ease-out,
@@ -481,9 +475,8 @@
 	}
 
 	.location-bar.is-searching {
-		background: white;
-		border-color: oklch(0.7 0.12 250);
-		box-shadow: 0 0 0 3px oklch(0.7 0.12 250 / 0.08);
+		border-color: oklch(0.55 0.15 195);
+		box-shadow: 0 0 0 3px oklch(0.7 0.1 195 / 0.12);
 	}
 
 	/* =========================================================================
@@ -554,7 +547,7 @@
 		max-height: 20rem;
 		overflow-y: auto;
 		background: white;
-		border-radius: 0.75rem;
+		border-radius: 8px;
 		border: 1px solid oklch(0.92 0.01 250);
 		box-shadow:
 			0 8px 24px oklch(0 0 0 / 0.08),
@@ -690,32 +683,28 @@
 		text-overflow: ellipsis;
 	}
 
-	/* --- Level badges --- */
+	/* Level annotations — typographic mono, color-tinted text only */
 
 	.level-badge {
 		flex-shrink: 0;
-		font-size: 0.5625rem;
-		font-weight: 600;
-		text-transform: uppercase;
+		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-feature-settings: 'tnum';
+		font-size: 0.6875rem;
+		font-weight: 500;
 		letter-spacing: 0.04em;
-		padding: 0.125rem 0.375rem;
-		border-radius: 0.25rem;
-		font-family: 'Satoshi', system-ui, sans-serif;
+		text-transform: uppercase;
 	}
 
 	.level-city {
 		color: oklch(0.42 0.1 165);
-		background: oklch(0.95 0.03 165);
 	}
 
 	.level-state {
 		color: oklch(0.42 0.1 250);
-		background: oklch(0.95 0.03 250);
 	}
 
 	.level-country {
 		color: oklch(0.42 0.1 55);
-		background: oklch(0.95 0.03 55);
 	}
 
 	/* =========================================================================
@@ -816,7 +805,7 @@
 		width: 100%;
 		padding: 0.5rem 0.75rem;
 		border: none;
-		border-radius: 0.625rem;
+		border-radius: 8px;
 		background: transparent;
 		cursor: pointer;
 		transition: background 120ms ease-out;

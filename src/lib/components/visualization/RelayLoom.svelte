@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 
 	// ─────────────────────────────────────────────────────────────
 	// Props
@@ -11,6 +12,8 @@
 	 * with parent containers like CoordinationExplainer.
 	 */
 	let { embedded = false }: { embedded?: boolean } = $props();
+
+	const labels = getJurisdictionLabels();
 
 	// ─────────────────────────────────────────────────────────────
 	// Types
@@ -478,7 +481,7 @@
 		rep: {
 			headline: 'They count every constituent.',
 			body: [
-				'Congressional offices tally every email, every call, every contact. Staff report contact volume to the member.',
+				`${labels.legislativeBody} offices tally every email, every call, every contact. Staff report contact volume to the member.`,
 				"One email from their district? Filed. Fifty from the same zip code on the same issue? That's a crisis meeting."
 			],
 			insight: 'They work for you. Remind them.',

@@ -136,7 +136,7 @@
 	});
 
 	function handlePhaseChange(next: RegroundingPhase) {
-		// Wave 4 (KG-3) — view-transition for the vertical-stack → 2-column
+		// KG-3 — view-transition for the vertical-stack → 2-column
 		// morph at `phase === 'complete'`. The browser snapshots the before-
 		// state, applies the layout change, then crossfades between the two.
 		// Old/new ground panes naturally morph into their grid columns.
@@ -207,7 +207,7 @@
 		  pane the user has inhabited since mount continues to inhabit that
 		  same position — no dismount, no structural duplication.
 
-		Wave 4 (KG-3): the persistent Zone 1 pane carries
+		KG-3: the persistent Zone 1 pane carries
 		`view-transition-name: regrounding-prior-ground` so when
 		`document.startViewTransition` fires on capture/witnessing → complete,
 		the browser identifies it as a single morphing element (not a

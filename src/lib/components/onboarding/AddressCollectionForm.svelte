@@ -30,6 +30,8 @@
 			districtCommitment?: string;
 			commitmentSlotCount?: number;
 			coordinates?: { lat: number; lng: number } | null;
+			addressToken?: string | null;
+			addressHash?: string | null;
 			cellProof?: ClientCellProofResult | null;
 		}) => void;
 	} = $props();
@@ -160,12 +162,22 @@
 					? { lat: data.coordinates.lat as number, lng: data.coordinates.lng as number }
 					: null;
 
+			// F-2.4: capture the server-issued HMAC token + address hash so the
+			// verify-address handler can confirm the coordinates we forward
+			// were the geocoder's output for the address the user entered.
+			const capturedAddressToken =
+				typeof data.addressToken === 'string' ? (data.addressToken as string) : null;
+			const capturedAddressHash =
+				typeof data.addressHash === 'string' ? (data.addressHash as string) : null;
+
 			verificationResult = {
 				verified: true,
 				correctedAddress: data.address.matched,
 				representatives: officials,
 				zk_eligible: data.zk_eligible as boolean | undefined,
-				coordinates: capturedCoordinates
+				coordinates: capturedCoordinates,
+				addressToken: capturedAddressToken,
+				addressHash: capturedAddressHash
 			};
 			selectedAddress = data.address.matched || fullAddress;
 			currentStep = 'verify';
@@ -203,6 +215,11 @@
 				// FU-1.1: include coordinates so the verify-address handler can
 				// recompute expected commitment for authenticity check.
 				coordinates: verificationResult?.coordinates ?? null,
+				// F-2.4: forward the resolve-address token + hash so verify-address
+				// can validate that the coordinates we send weren't substituted
+				// after geocoding.
+				addressToken: verificationResult?.addressToken ?? null,
+				addressHash: verificationResult?.addressHash ?? null,
 				cellProof
 			});
 		} else {

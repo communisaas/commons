@@ -6,6 +6,10 @@
 	import { onMount } from 'svelte';
 	import { ShieldCheck, AlertCircle, Check, Loader2 } from '@lucide/svelte';
 	import type { WitnessData } from '$lib/core/proof/witness-encryption';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import { RegistryMark } from '$lib/design';
+
+	const labels = getJurisdictionLabels();
 
 	interface Props {
 		userId: string;
@@ -59,7 +63,7 @@
 		| { status: 'generating-proof'; progress: number }
 		| { status: 'encrypting-witness' }
 		| { status: 'submitting' }
-		| { status: 'complete'; submissionId: string }
+		| { status: 'complete'; submissionId: string; nullifierHex?: string }
 		| { status: 'error'; message: string; recoverable: boolean; retryAction?: () => void; retryLabel?: string };
 
 	let proofState: ProofGenerationState = $state({ status: 'idle' });
@@ -425,8 +429,13 @@
 
 			const data = await response.json();
 
-			// Success!
-			proofState = { status: 'complete', submissionId: data.submissionId };
+			// Success! Persist the per-action nullifier alongside the submissionId
+			// so the complete-state UI can cite the substrate fact (Principle 2.3).
+			proofState = {
+				status: 'complete',
+				submissionId: data.submissionId,
+				nullifierHex
+			};
 			oncomplete?.({ submissionId: data.submissionId });
 		} catch (error) {
 			console.error('[ProofGenerator] Generation failed:', error);
@@ -520,7 +529,7 @@
 					<p class="mb-2 font-medium">Your address sits on a district boundary.</p>
 					<p class="leading-relaxed">
 						Atlas H3 cells are roughly 5&nbsp;km² hexagons. Your address falls in a
-						cell that crosses two congressional districts. By measurement,
+						cell that crosses two {labels.legislativeAdjective} districts. By measurement,
 						<strong>~16% of California census blocks</strong>
 						are in such cells (G3 measurement; other states pending). Your
 						message will route to the district your credential bound to at
@@ -564,7 +573,7 @@
 				<button
 					type="button"
 					onclick={generateAndSubmit}
-					class="flex-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-md"
+					class="flex-1 rounded-lg bg-slate-700 px-6 py-3 text-base font-semibold text-white shadow-lg transition-all hover:bg-slate-800 hover:shadow-md"
 				>
 					Send to Representative
 				</button>
@@ -588,7 +597,7 @@
 			<div class="w-full max-w-md">
 				<div class="h-2 w-full rounded-full bg-slate-200">
 					<div
-						class="h-full rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-300"
+						class="h-full rounded-full bg-slate-700 transition-all duration-300"
 						style="width: {proofState.progress}%"
 					></div>
 				</div>
@@ -608,7 +617,7 @@
 			<div class="mb-6 w-full max-w-md">
 				<div class="h-2 w-full rounded-full bg-slate-200">
 					<div
-						class="h-full rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-300"
+						class="h-full rounded-full bg-slate-700 transition-all duration-300"
 						style="width: {proofState.progress}%"
 					></div>
 				</div>
@@ -662,19 +671,29 @@
 						<li class="flex items-start gap-2">
 							<span class="text-green-600">✓</span>
 							<span
-								>Delivered to {templateData.recipientOffices.length} congressional office(s)</span
+								>Submitted to {templateData.recipientOffices.length} {labels.legislativeAdjective} office(s) for delivery</span
 							>
 						</li>
 						<li class="flex items-start gap-2">
 							<span class="text-green-600">✓</span>
-							<span>Your identity was protected with zero-knowledge cryptography</span>
+							<span>Identity protected — zero-knowledge proof verified locally</span>
 						</li>
 						<li class="flex items-start gap-2">
 							<span class="text-green-600">✓</span>
-							<span>Your civic reputation was updated on-chain</span>
+							<span>Awaiting on-chain anchor</span>
 						</li>
 					</ul>
 				</div>
+				{#if proofState.status === 'complete' && proofState.nullifierHex}
+					<p class="mt-3 text-right">
+						<RegistryMark
+							variant="nullifier"
+							value={proofState.nullifierHex}
+							truncate={true}
+							class="text-[11px] text-slate-500"
+						/>
+					</p>
+				{/if}
 			</div>
 
 			<!-- oncomplete already dispatched automatically on success (line above).
@@ -682,7 +701,7 @@
 			<button
 				type="button"
 				onclick={() => { /* Parent already notified via auto-dispatch */ }}
-				class="mt-6 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-md"
+				class="mt-6 rounded-lg bg-slate-700 px-8 py-3 text-base font-semibold text-white shadow-lg transition-all hover:bg-slate-800 hover:shadow-md"
 			>
 				Done
 			</button>
@@ -706,7 +725,7 @@
 					<button
 						type="button"
 						onclick={handleRetry}
-						class="rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-3 text-base font-semibold text-white shadow-lg transition-all hover:from-blue-700 hover:to-indigo-700 hover:shadow-md"
+						class="rounded-lg bg-slate-700 px-6 py-3 text-base font-semibold text-white shadow-lg transition-all hover:bg-slate-800 hover:shadow-md"
 					>
 						{proofState.retryLabel ?? 'Try Again'}
 					</button>

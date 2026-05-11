@@ -24,7 +24,7 @@
 	let circleEl = $state<SVGCircleElement | null>(null);
 	let gestureEl = $state<HTMLDivElement | null>(null);
 
-	// Store outside $state for teardown closure correctness (brutalist #1b)
+	// Store outside $state for teardown closure correctness
 	let currentInertia: InertiaState | null = null;
 	let currentAnimation: Animation | null = null;
 
@@ -97,7 +97,7 @@
 		};
 	});
 
-	// Cancel previous animation before starting a new one (brutalist #1a)
+	// Cancel previous animation before starting a new one
 	function cancelPrevAnimation() {
 		currentAnimation?.cancel();
 		currentAnimation = null;

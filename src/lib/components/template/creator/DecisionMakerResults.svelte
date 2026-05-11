@@ -6,6 +6,9 @@
 	import DecisionMakerCard from './DecisionMakerCard.svelte';
 	import CustomDecisionMakerForm from './CustomDecisionMakerForm.svelte';
 	import { isDuplicateEmail } from '$lib/utils/decision-maker-processing';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	interface Props {
 		decisionMakers: ProcessedDecisionMaker[];
@@ -167,7 +170,7 @@
 					class="mt-0.5 h-5 w-5 rounded border-slate-300 text-participation-primary-600 focus:ring-2 focus:ring-participation-primary-500"
 				/>
 				<div class="flex-1">
-					<p class="font-medium text-slate-900">Also send to my congressional representatives</p>
+					<p class="font-medium text-slate-900">Also send to my {labels.legislativeAdjective} representatives</p>
 					<p class="mt-0.5 text-sm text-slate-600">
 						Your message will be sent via certified delivery to your House rep and both Senators
 					</p>
@@ -180,7 +183,7 @@
 	{#if (decisionMakers?.length || 0) === 0 && (customRecipients?.length || 0) === 0 && !includesCongress}
 		<div class="rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center">
 			<p class="text-sm text-slate-600">
-				No decision-makers found. Add contacts manually{#if FEATURES.CONGRESSIONAL} or include congressional representatives{/if}.
+				No decision-makers found. Add contacts manually{#if FEATURES.CONGRESSIONAL} or include {labels.legislativeAdjective} representatives{/if}.
 			</p>
 		</div>
 	{/if}

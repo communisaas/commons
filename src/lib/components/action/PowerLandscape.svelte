@@ -4,6 +4,9 @@
 	import type { ProcessedDecisionMaker, Template } from '$lib/types/template';
 	import { MapPin, ChevronRight, Mail, Loader2 } from '@lucide/svelte';
 	import { onMount } from 'svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	let {
 		template,
@@ -94,7 +97,7 @@
 					Your representatives
 				</h2>
 				<p class="text-sm text-slate-500 leading-relaxed mb-4">
-					Congressional offices prioritize messages from their own constituents. Verify your address to see who represents you.
+					{labels.legislativeBody} offices prioritize messages from their own constituents. Verify your address to see who represents you.
 				</p>
 				<button
 					type="button"

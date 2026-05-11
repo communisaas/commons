@@ -23,13 +23,31 @@ language, normalize to this contract.
 **Does this number have dimensions?**
 → Numbers compress dimensions. Show them. Don't describe them.
   `<Ratio>` — segmented bar showing what a count is made of (identity,
-  authorship, any composition). 3-5px tall, colored proportionally.
-  `<Pulse>` — tiny sparkline showing temporal rhythm (when things
-  happened). 56×12px default, Catmull-Rom smooth.
-  `<Rings>` — concentric circles showing depth/tier distribution
-  at 14-16px glyph scale. Citation-scale TrustTierIndicator.
-  Use these INSIDE `<Cite>` provenance snippets or standalone.
+  authorship, any composition). Citation: 3-5px. Display: 12-24px.
+  `<Pulse>` — sparkline showing temporal rhythm (when things
+  happened). Citation: 56×12px default. Display: 120-400×32-120px.
+  Stroke width and padding scale with height; pass `strokeWidth`
+  to override.
+  `<Rings>` — concentric circles showing depth/tier distribution.
+  Citation: 14-16px. Display: 48-128px. Stroke and ring spacing
+  already scale with size.
+  Use citation scale INSIDE `<Cite>` provenance snippets or standalone
+  in settled artifacts. Use display scale in active-field surfaces
+  where the dimension is the headline (not a footnote).
   Prefer visual dimensions over text explanations.
+
+**Showing a cryptographic substrate fact (hash, nullifier, Merkle root, signature, version anchor, commit SHA, block height)?**
+→ Use `<RegistryMark>` from `$lib/design`. JetBrains Mono with tabular-nums.
+  Pick `variant` to drive prefix + screen-reader decoding. Default is full
+  value; pass `truncate` for middle-elided form (8…4) when space matters
+  (margin sidenotes, footers, breadcrumbs). `copy` defaults true — click
+  copies the FULL value, not the truncated display. Add `href` to link to
+  a verifier (explorer, registry route).
+  Per CONSTITUTION.md §2.3: registry marks live in margins and footers as
+  marks of the substrate, not behind copy. Don't card-chrome them. Don't
+  embed in prose where the mono register competes with reading flow —
+  exceptions: inline citations of a specific hash in technical prose,
+  which is what `<code>` already covers.
 
 **Does this claim have provenance?**
 → Every verifiable number should cite its source. Four forms:
@@ -48,8 +66,10 @@ language, normalize to this contract.
 
 **Showing a list of entities (supporters, campaigns, settings)?**
 → Use `<EntityCluster>` from `$lib/design`. No cards. No borders.
-  The void between entities IS the boundary (32px default gap).
-  Internal spacing within each entity stays tight (4-8px).
+  The void between entities IS the boundary. Densities:
+  `tight` (24px) | `default` (32px, citation) | `spacious` (48px) |
+  `display` (80px, active-field hero spacing). Internal spacing
+  within each entity stays tight (4-8px).
 
 **Rendering recipient/staffer-facing proof?**
 → Lead with what answers recipient triage: verified constituents,
@@ -85,6 +105,8 @@ language, normalize to this contract.
 - **JetBrains Mono** (font-mono): Counts, scores, dates, hashes, district codes.
   If a value is verifiable or auditable, use Datum. Citations are
   always Satoshi — they explain, they don't assert.
+- Verifiable cryptographic claims (hashes, signatures, Merkle roots, versions): use `<RegistryMark>`.
+  Datum is for numeric counts; RegistryMark is for non-numeric verifiable strings.
 
 ## Three Semantic Colors
 
@@ -99,9 +121,12 @@ verification, delivery, proof strength, or global navigation.
 
 ## Voice
 
-- **Person layer**: Imperative. Never "campaign." Never defensive.
-- **Org layer**: Observational. "Campaign" permitted here.
-- Words in Satoshi. Numbers in Mono. Citations in Satoshi.
+Plain English per `CONSTITUTION.md` §3.3. The supersession of the prior "Direct. Specific. Institutional." register is recorded in `docs/record/vol-1/issue-1.md` §B (2026-05-06). `docs/design/voice.md` is **SUPERSEDED** and not in the authority chain.
+
+- State what is, plainly. "Issues in CA-11" beats "Find campaigns in your area" (marketing) and "Civic-action templates filtered by user-resolved district" (technical density).
+- Honest about gaps. When something does not yet ship, say so.
+- Imperative is permitted, not required. "Send. Coordinate. Verify." when an action is being requested.
+- Words in Satoshi. Numbers in Mono. Citations in Satoshi. Cryptographic strings via `<RegistryMark>`.
 
 ## Motion
 

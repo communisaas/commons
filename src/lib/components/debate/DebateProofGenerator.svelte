@@ -11,6 +11,9 @@
 
 	import { onMount } from 'svelte';
 	import { ShieldCheck, AlertCircle, Check, Loader2 } from '@lucide/svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	interface Props {
 		userId: string;
@@ -194,7 +197,7 @@
 					<p class="font-medium">Your address sits on a district boundary.</p>
 					<p class="mt-1 leading-relaxed">
 						About <strong>~16% of California census blocks</strong> are in cells
-						that cross congressional districts (G3 measurement; other states
+						that cross {labels.legislativeAdjective} districts (G3 measurement; other states
 						pending). Your debate participation routes through the district your
 						credential bound to at registration, not necessarily the polygon-hit
 						district.

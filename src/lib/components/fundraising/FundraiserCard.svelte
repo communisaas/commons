@@ -54,7 +54,7 @@
 			<p class="text-sm text-zinc-400">{formatDate(campaign.createdAt)}</p>
 
 			<p class="mt-0.5 text-sm text-zinc-500">
-				{campaign.donorCount} {campaign.donorCount === 1 ? 'donor' : 'donors'}
+				{campaign.donorCount} {campaign.donorCount === 1 ? 'donation' : 'donations'}
 			</p>
 		</div>
 

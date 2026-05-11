@@ -9,6 +9,9 @@
 	import UnifiedObjectiveEntry from './creator/UnifiedObjectiveEntry.svelte';
 	import DecisionMakerResolver from './creator/DecisionMakerResolver.svelte';
 	import MessageGenerationResolver from './creator/MessageGenerationResolver.svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	let {
 		context,
@@ -394,7 +397,7 @@
 		audience: {
 			title: 'Who Controls This?',
 			icon: Users,
-			description: 'Congress, CEO, school board—who makes the call?'
+			description: `${labels.legislativeBody}, CEO, school board—who makes the call?`
 		},
 		content: {
 			title: 'Load Your Message',

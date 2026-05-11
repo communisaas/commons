@@ -11,6 +11,9 @@
 	import { analyzeEmailFlow } from '$lib/services/emailService';
 	import { toEmailServiceUser } from '$lib/types/user';
 	import type { HeaderTemplate, HeaderUser, TemplateUseEvent } from '$lib/types/any-replacements';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	let {
 		template,
@@ -65,7 +68,7 @@
 		if (!user) {
 			return 'Sign in to send';
 		}
-		return isCongressional ? 'Contact Congress' : 'Send message';
+		return isCongressional ? `Contact ${labels.legislativeBody}` : 'Send message';
 	});
 </script>
 

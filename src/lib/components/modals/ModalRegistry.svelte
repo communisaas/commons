@@ -253,10 +253,20 @@
 					</div>
 				</section>
 			{:else}
+				<!-- The identity-verification modal is a generic entry; the
+				     caller's intent (tier requirement) is not threaded through
+				     modal data today, so `minimumTier` defaults to 5 — the
+				     strictest reading. Dead-end copy in the inner flow will
+				     say "This action requires a digital ID" which is the
+				     conservative truth for an unknown caller. If a future
+				     caller needs to open this modal for a tier-2-only action
+				     and wants the more permissive "address-tier fallback
+				     covers you" copy, thread `data.minimumTier` here. -->
 				<GovernmentCredentialVerification
 					userId={data.userId as string}
 					userEmail={data.userEmail as string | undefined}
 					templateSlug={data.templateSlug as string | undefined}
+					minimumTier={(data.minimumTier as number | undefined) ?? 5}
 					oncomplete={async () => {
 						const onComplete = getCallback<() => void>(data, 'onComplete');
 						await onComplete?.();

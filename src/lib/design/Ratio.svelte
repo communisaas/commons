@@ -1,16 +1,28 @@
 <script lang="ts">
 	/**
-	 * Ratio — Dimensional composition at citation scale.
+	 * Ratio — Dimensional composition. Scales from citation to display.
 	 *
-	 * A thin segmented bar that shows what a number is MADE OF.
+	 * A segmented bar that shows what a number is MADE OF.
 	 * No labels. No text. Pure proportion felt as color.
 	 *
 	 * 248 verified → bar shows: 40% deep emerald (gov ID),
 	 * 35% teal (address), 25% muted (email). The identity
 	 * dimension, experienced as visual weight, not read as text.
 	 *
-	 * Lives inside Cite provenance slots, or standalone as
-	 * a subordinate element below any count.
+	 * Citation scale (default 3px, 5px for emphasis): lives inside
+	 * Cite provenance or standalone as a subordinate element below
+	 * any count.
+	 *
+	 * Display scale (12-24px): lives in active-field surfaces where
+	 * the composition is the headline, not a footnote. Border-radius
+	 * scales with height so the bar reads as a unified ribbon at any
+	 * size.
+	 *
+	 * Per CONSTITUTION.md §2.2 (information has shape), the same
+	 * primitive serves both content states (Axis 2). The dimension
+	 * cited (composition) and the substrate facts driving each
+	 * segment (per-action trustTier/compositionMode) are constant
+	 * across scales (Axis 1).
 	 */
 
 	interface Segment {
@@ -29,7 +41,7 @@
 	}: {
 		/** Composition segments. Order = left to right. */
 		segments: Segment[];
-		/** Bar height in px. Default 3 — subordinate. Use 5 for emphasis. */
+		/** Bar height in px. Default 3 (citation: subordinate). 5 for citation emphasis. Display range: 12-24. */
 		height?: number;
 		/** Additional CSS classes */
 		class?: string;

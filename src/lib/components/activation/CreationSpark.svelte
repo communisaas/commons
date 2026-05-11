@@ -1,21 +1,11 @@
 <script lang="ts">
 	/**
-	 * CreationSpark - Perceptual Engineering
+	 * CreationSpark — visible writing surface for the template creator.
 	 *
-	 * The visible entry point for template creation.
-	 * NOT a button that opens a modal. A SURFACE that invites writing.
-	 *
-	 * Cognitive principle: Recognition > Recall
-	 * Users see the writing surface, understand what "create" means,
-	 * and can begin immediately without predicting modal contents.
-	 *
-	 * Draft continuation: Integrates directly into the surface.
-	 * User's saved work pre-fills the textarea - they SEE their words
-	 * and recognize their work. No separate "resume draft" UI needed.
-	 *
-	 * Low commitment: typing in a field is lower friction than clicking
-	 * an abstract button. The spark captures initial intent, then
-	 * transitions to the full wizard.
+	 * The component is the entry point: a textarea, a continue button,
+	 * and a draft-resume affordance when a recent draft exists. Pressing
+	 * continue or ⌘/Ctrl+Enter activates the parent's onactivate handler,
+	 * which transitions to the full wizard.
 	 */
 
 	import { onMount } from 'svelte';
@@ -282,18 +272,6 @@
 </div>
 
 <style>
-	/*
-	 * CreationSpark - Perceptual Engineering Styles
-	 *
-	 * Visual hierarchy:
-	 * 1. Headline establishes context (200ms)
-	 * 2. Writing surface draws focus (immediate affordance)
-	 * 3. Continue action reveals on engagement
-	 *
-	 * Color: Uses participation-primary (cyan) for activation states
-	 * Typography: Satoshi for brand voice
-	 */
-
 	.creation-spark {
 		display: flex;
 		flex-direction: column;
@@ -393,16 +371,11 @@
 		margin: 0;
 	}
 
-	/* Draft indicator - subtle peripheral awareness */
 	.draft-indicator {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.375rem;
-		padding: 0.25rem 0.625rem;
-		background: oklch(0.96 0.02 155);
-		border: 1px solid oklch(0.88 0.04 155);
-		border-radius: 100px;
-		animation: draftPulse 2s ease-in-out;
+		gap: 0.25rem;
+		animation: draftPulse 600ms ease-out;
 	}
 
 	@keyframes draftPulse {
@@ -413,39 +386,35 @@
 	.draft-indicator :global(.draft-icon) {
 		width: 0.75rem;
 		height: 0.75rem;
-		color: oklch(0.5 0.1 155);
+		color: oklch(0.5 0.12 155);
 	}
 
 	.draft-text {
-		font-family: 'Satoshi', system-ui, sans-serif;
+		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-feature-settings: 'tnum';
 		font-size: 0.6875rem;
 		font-weight: 500;
-		color: oklch(0.4 0.06 155);
+		color: oklch(0.4 0.08 155);
 	}
 
 	.input-container {
 		position: relative;
-		border-radius: 12px;
-		border: 2px solid oklch(0.85 0.02 250);
+		border-radius: 8px;
+		border: 1px solid oklch(0.85 0.02 250);
 		background: oklch(0.99 0.005 250);
 		transition:
 			border-color 200ms ease-out,
-			box-shadow 200ms ease-out,
-			background 200ms ease-out;
+			box-shadow 200ms ease-out;
 	}
 
 	.input-container.focused {
-		border-color: oklch(0.65 0.12 195);
-		box-shadow:
-			0 0 0 3px oklch(0.7 0.1 195 / 0.15),
-			0 4px 12px -2px oklch(0.5 0.1 195 / 0.1);
-		background: white;
+		border-color: oklch(0.55 0.15 195);
+		box-shadow: 0 0 0 3px oklch(0.7 0.1 195 / 0.12);
 	}
 
-	/* Draft Artifact - Settled state presentation */
 	.draft-artifact {
-		border-radius: 12px;
-		border: 2px solid oklch(0.75 0.08 155);
+		border-radius: 8px;
+		border: 1px solid oklch(0.78 0.06 155);
 		background: oklch(0.995 0.005 155);
 		overflow: hidden;
 	}
@@ -484,7 +453,7 @@
 		width: 100%;
 		padding: 1rem;
 		border: none;
-		border-radius: 10px;
+		border-radius: 8px;
 		background: transparent;
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 1rem;
@@ -569,8 +538,8 @@
 		gap: 0.5rem;
 		padding: 0.875rem 1.5rem;
 		border: none;
-		border-radius: 10px;
-		background: oklch(0.85 0.02 250);
+		border-radius: 8px;
+		background: oklch(0.88 0.02 250);
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.9375rem;
 		font-weight: 600;
@@ -578,33 +547,25 @@
 		cursor: not-allowed;
 		transition:
 			background 200ms ease-out,
-			color 200ms ease-out,
-			transform 150ms ease-out,
-			box-shadow 200ms ease-out;
+			color 200ms ease-out;
 	}
 
 	.continue-btn.ready {
-		background: linear-gradient(135deg, oklch(0.55 0.15 195), oklch(0.48 0.17 195));
+		background: oklch(0.55 0.15 195);
 		color: white;
 		cursor: pointer;
 	}
 
-	/* Draft continuation - emerald accent for preserved work */
 	.continue-btn.ready.is-draft {
-		background: linear-gradient(135deg, oklch(0.52 0.12 155), oklch(0.45 0.14 155));
+		background: oklch(0.5 0.13 155);
 	}
 
 	.continue-btn.ready:hover {
-		transform: translateY(-1px);
-		box-shadow: 0 4px 12px -2px oklch(0.5 0.15 195 / 0.35);
+		background: oklch(0.48 0.17 195);
 	}
 
 	.continue-btn.ready.is-draft:hover {
-		box-shadow: 0 4px 12px -2px oklch(0.45 0.12 155 / 0.35);
-	}
-
-	.continue-btn.ready:active {
-		transform: translateY(0);
+		background: oklch(0.43 0.15 155);
 	}
 
 	.continue-btn:disabled {

@@ -1,16 +1,27 @@
 <script lang="ts">
 	/**
-	 * Rings — Depth/strength at citation scale.
+	 * Rings — Depth/strength. Scales from citation to display.
 	 *
 	 * Concentric arcs that show HOW DEEP verification goes.
 	 * Not a badge. Not a meter. A glyph of accumulated trust.
 	 *
 	 * 5 tiers → 5 potential rings. Filled rings = earned.
-	 * Color deepens with depth. At 14-16px, this is a
-	 * citation-scale summary of the TrustTierIndicator.
+	 * Color deepens with depth.
 	 *
-	 * Lives inside Cite provenance, or inline next to
-	 * any count that has a tier distribution behind it.
+	 * Citation scale (default 14-16px): a citation-scale summary
+	 * of the TrustTierIndicator. Lives inside Cite provenance,
+	 * or inline next to any count that has a tier distribution
+	 * behind it.
+	 *
+	 * Display scale (48-128px): lives in active-field surfaces
+	 * where the verification depth is the headline. Stroke width
+	 * (size/8) and ring spacing already scale automatically — no
+	 * additional code path is needed.
+	 *
+	 * Per CONSTITUTION.md §2.2 (information has shape), the same
+	 * primitive serves both content states (Axis 2). The dimension
+	 * cited (identity depth) and the substrate facts driving each
+	 * ring (per-action trustTier) are constant across scales (Axis 1).
 	 */
 
 	interface TierWeight {
@@ -30,7 +41,7 @@
 		tiers: TierWeight[];
 		/** Maximum possible tier (determines ring count). Default 5. */
 		maxTier?: number;
-		/** Diameter in px. Default 14 — citation scale. */
+		/** Diameter in px. Default 14 (citation). Display range: 48-128. */
 		size?: number;
 		/** Additional CSS classes */
 		class?: string;

@@ -11,7 +11,6 @@
 	import {
 		X,
 		Send,
-		Users,
 		Eye as _Eye,
 		Share2,
 		Copy,
@@ -21,7 +20,6 @@
 		ArrowRight,
 		Heart as _Heart,
 		Trophy as _Trophy,
-		Flame,
 		QrCode,
 		Download,
 		ShieldCheck,
@@ -35,6 +33,7 @@
 	// import TemplateMeta from '$lib/components/template/TemplateMeta.svelte';
 	// import MessagePreview from '$lib/components/landing/template/MessagePreview.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
+	import { Datum } from '$lib/design';
 	import {
 		modalActions,
 		modalState as _modalState,
@@ -52,6 +51,7 @@
 		storeConstituentAddress,
 		getConstituentAddress
 	} from '$lib/core/identity/constituent-address';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
 	import { unlockGroundVaultWithPasskey } from '$lib/core/identity/ground-vault-unlock';
 	import {
@@ -85,6 +85,8 @@
 	const isAuthenticatedCongressional = $derived(
 		template.deliveryMethod === 'cwc' && Boolean(user)
 	);
+
+	const jurisdictionLabels = getJurisdictionLabels();
 
 	let showCopied = $state(false);
 	let _showShareMenu = $state(false);
@@ -152,6 +154,33 @@
 	let qrCodeDataUrl = $state<string>('');
 	let showQRCode = $state(false);
 
+	// Timestamp captured the first time we enter the celebration (sent) state
+	let sentAt = $state<Date | null>(null);
+	$effect(() => {
+		if (currentState === 'celebration' && !sentAt) {
+			sentAt = new Date();
+		}
+	});
+
+	function formatSentAt(d: Date | null): string {
+		if (!d) return '';
+		const pad = (n: number) => n.toString().padStart(2, '0');
+		const year = d.getUTCFullYear();
+		const month = pad(d.getUTCMonth() + 1);
+		const day = pad(d.getUTCDate());
+		const hh = pad(d.getUTCHours());
+		const mm = pad(d.getUTCMinutes());
+		return `${year}-${month}-${day} at ${hh}:${mm} UTC`;
+	}
+
+	function deliveryMethodLabel(method: string | undefined): string {
+		if (method === 'cwc') return `Through the ${jurisdictionLabels.legislativeAdjective} message system (CWC)`;
+		if (method === 'certified') return 'Through certified delivery';
+		if (method === 'email') return 'Direct email to the recipient';
+		if (method === 'auth') return 'Through the authenticated message channel';
+		return 'Through the configured delivery channel';
+	}
+
 	// Submission error message for error state UI
 	let submissionError = $state<string | null>(null);
 
@@ -159,9 +188,9 @@
 	type TrustUpgradePhase = 'choice' | 'simulating';
 	let trustUpgradePhase = $state<TrustUpgradePhase>('choice');
 
-	// TODO(Phase 2): Wire to delivery-worker SSE/polling response.
-	// Currently false: delivery-worker runs via waitUntil(), modal can't await result.
-	// UI block at ~line 993 is correctly gated behind this flag.
+	// TODO: wire to delivery-worker SSE/polling response. Currently false because
+	// delivery-worker runs via waitUntil() and the modal can't await its result; the
+	// downstream UI block is gated behind this flag.
 	let hasSenateDelivery = $state(false);
 
 	// Generate share URL for template
@@ -521,6 +550,8 @@
 		districtCommitment?: string;
 		commitmentSlotCount?: number;
 		coordinates?: { lat: number; lng: number } | null;
+		addressToken?: string | null;
+		addressHash?: string | null;
 		cellProof?: ClientCellProofResult | null;
 	}) {
 		console.log('[Template Modal] Address complete:', {
@@ -533,7 +564,7 @@
 			verifiedAddress = null;
 			collectingAddress = false;
 			needsAddress = true;
-			submissionError = 'Address verification must complete before sending to Congress.';
+			submissionError = `Address verification must complete before sending to ${jurisdictionLabels.legislativeBody}.`;
 			modalActions.setState('error');
 			return;
 		}
@@ -552,7 +583,7 @@
 			verifiedAddress = null;
 			collectingAddress = false;
 			needsAddress = true;
-			submissionError = 'A congressional district could not be resolved for this address.';
+			submissionError = `A ${jurisdictionLabels.legislativeAdjective} district could not be resolved for this address.`;
 			modalActions.setState('error');
 			return;
 		}
@@ -608,6 +639,13 @@
 						district_commitment: data.districtCommitment,
 						slot_count: data.commitmentSlotCount,
 						coordinates: data.coordinates,
+						// F-2.4: forward the resolve-address token + hash when present.
+						// Server requires both whenever address_hash is supplied; absence
+						// keeps the legacy permissive path so non-AddressCollectionForm
+						// callers (browser-geolocation flows) keep working.
+						...(data.addressToken && data.addressHash
+							? { address_token: data.addressToken, address_hash: data.addressHash }
+							: {}),
 						...h1TrustContext
 					})
 				});
@@ -1176,7 +1214,7 @@
 		a.click();
 	}
 
-	// TODO(Phase 2): Poll submission delivery status from TEE confirmation endpoint
+	// TODO: poll submission delivery status from TEE confirmation endpoint
 </script>
 
 <!-- Modal Content (no backdrop - UnifiedModal handles that) -->
@@ -1225,7 +1263,7 @@
 			</h3>
 			<p class="mb-4 text-sm text-slate-600 sm:mb-6 sm:text-base">
 				{#if isAuthenticatedCongressional}
-					Congress requires your name, email, and address for official delivery. We decrypt
+					{jurisdictionLabels.legislativeBody} requires your name, email, and address for official delivery. We decrypt
 					the address only for this send.
 				{:else}
 					Confirm to track this action.
@@ -1300,25 +1338,25 @@
 			</div>
 		</div>
 	{:else if currentState === 'celebration'}
-		<!-- Enhanced Celebration State -->
+		<!-- Sent state: plain receipt -->
 		<div class="flex h-full flex-col">
-			<!-- Celebration Header -->
-			<div class="border-b border-slate-100 p-6">
+			<!-- Receipt header -->
+			<div class="border-b border-slate-200 p-6">
 				<div class="flex items-center justify-between">
 					<div class="flex items-center gap-3">
 						<div
-							class="inline-flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-green-100 to-blue-100"
-							style="transform: scale({$celebrationScale})"
+							class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-slate-50"
 						>
-							<CheckCircle2 class="h-5 w-5 text-green-600" />
+							<CheckCircle2 class="h-5 w-5 text-slate-700" />
 						</div>
 						<div>
-							<h2 class="text-lg font-semibold text-slate-900">🎉 Mission Accomplished!</h2>
-							<p class="text-sm text-slate-600">Your message has been sent</p>
+							<h2 class="text-lg font-semibold text-slate-900">Sent</h2>
+							<p class="text-sm text-slate-600">Your message has been sent.</p>
 						</div>
 					</div>
 					<button
 						onclick={handleClose}
+						aria-label="Close"
 						class="rounded-full p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-600"
 					>
 						<X class="h-5 w-5" />
@@ -1326,73 +1364,56 @@
 				</div>
 			</div>
 
-			<!-- Enhanced Celebration Content -->
+			<!-- Receipt body -->
 			<div class="flex-1 space-y-6 overflow-y-auto p-6">
-				<!-- Pioneer Badge (first 10 users) or Impact Counter -->
-				{#if numericCount(template.send_count) <= 10}
-					{@const sentCount = numericCount(template.send_count)}
-					<!-- Pioneer Badge -->
-					<div
-						class="rounded-lg border-2 border-orange-300 bg-gradient-to-br from-orange-50 via-amber-50 to-yellow-50 p-6"
-					>
-						<div class="text-center">
-							<div
-								class="mb-3 inline-flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-orange-500 to-amber-600 shadow-lg"
-							>
-								<Flame class="h-8 w-8 text-white" />
-							</div>
-							<div class="mb-2 text-3xl font-bold text-slate-900">
-								{#if sentCount === 0}
-									🔥 FIRST SENDER 🔥
-								{:else}
-									Pioneer #{sentCount + 1}
-								{/if}
-							</div>
-							<p class="mb-3 text-sm font-medium text-orange-900">
-								{#if sentCount === 0}
-									You just launched this movement
-								{:else}
-									Early adopter • Setting the standard
-								{/if}
-							</p>
-							<div class="rounded-lg bg-white/50 px-4 py-3 text-xs text-slate-700">
-								<p class="font-semibold">Your impact matters most:</p>
-								<p class="mt-1">Every movement starts with pioneers like you who act first.</p>
-							</div>
+				<!-- Plain receipt: what, when, how, count -->
+				<div class="rounded-lg border border-slate-200 bg-white p-4">
+					<dl class="space-y-3 text-sm">
+						<div>
+							<dt class="text-xs font-medium tracking-wide text-slate-500 uppercase">
+								What was sent
+							</dt>
+							<dd class="mt-1 text-slate-900">{template.title}</dd>
 						</div>
-					</div>
-				{:else}
-					{@const sentCount = template.send_count ?? 0}
-					<!-- Standard Impact Counter -->
-					<div class="rounded-lg border border-slate-200 p-4">
-						<div class="text-center">
-							<div class="mb-2 text-3xl font-bold text-slate-900">
-								You + {sentCount.toLocaleString()} others
-							</div>
-							<p class="text-sm text-slate-600">Real voices creating real change</p>
-							<div class="mt-3 flex items-center justify-center gap-2 text-xs text-slate-500">
-								<Users class="h-3 w-3" />
-								<span>Part of a movement</span>
-							</div>
+						<div>
+							<dt class="text-xs font-medium tracking-wide text-slate-500 uppercase">When</dt>
+							<dd class="mt-1 font-mono tabular-nums text-slate-900">
+								Sent {formatSentAt(sentAt)}
+							</dd>
 						</div>
-					</div>
-				{/if}
+						<div>
+							<dt class="text-xs font-medium tracking-wide text-slate-500 uppercase">How</dt>
+							<dd class="mt-1 text-slate-900">
+								{deliveryMethodLabel(template.deliveryMethod)}
+							</dd>
+						</div>
+						<div>
+							<dt class="text-xs font-medium tracking-wide text-slate-500 uppercase">
+								Send count
+							</dt>
+							<dd class="mt-1 text-slate-900">
+								<Datum
+									value={numericCount(template.send_count)}
+									class="text-base text-slate-900"
+								/>
+							</dd>
+						</div>
+						<!-- TODO: surface receipt hash when receipt-generation lands -->
+					</dl>
+				</div>
 
 				<!-- Upgrade CTAs (mutually exclusive: guest → auth, tier 1 → address verification) -->
 				{#if !user}
-					<div
-						class="rounded-lg border border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50 p-4"
-						in:fly={{ y: 10, duration: 400, delay: 300 }}
-					>
-						<p class="mb-1 text-sm font-semibold text-blue-900">
+					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+						<p class="mb-1 text-sm font-semibold text-slate-900">
 							{template.deliveryMethod === 'cwc'
-								? 'Want verified constituent delivery?'
-								: 'Want to track your impact?'}
+								? 'Verified-constituent delivery requires an account.'
+								: 'Track delivery and review past sends with an account.'}
 						</p>
-						<p class="mb-3 text-xs text-blue-700">
+						<p class="mb-3 text-xs text-slate-700">
 							{template.deliveryMethod === 'cwc'
-								? 'Create a free account to send through official congressional channels with verified constituent status.'
-								: 'Create a free account to track delivery and join the movement.'}
+								? `Verified messages route through CWC with constituent-status confirmation. Account creation is free.`
+								: 'An account lets you track delivery and review past sends. Account creation is free.'}
 						</p>
 						<button
 							onclick={() => {
@@ -1403,22 +1424,17 @@
 									skipDirectSend: true
 								});
 							}}
-							class="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700"
+							class="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-100"
 						>
-							Create free account
+							Create account
 						</button>
 					</div>
 				{:else if user && (user.trust_tier ?? 0) < 2}
-					<div
-						class="rounded-lg border border-indigo-200 bg-gradient-to-r from-indigo-50 to-blue-50 p-4"
-						in:fly={{ y: 10, duration: 400, delay: 300 }}
-					>
-						<p class="mb-1 text-sm font-semibold text-indigo-900">
-							Verify your address for faster delivery
-						</p>
-						<p class="mb-3 text-xs text-indigo-700">
-							Congressional offices prioritize verified constituents. Add your address to ensure
-							your message is counted.
+					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+						<p class="mb-1 text-sm font-semibold text-slate-900">Verify your address.</p>
+						<p class="mb-3 text-xs text-slate-700">
+							Address verification establishes your district. The {jurisdictionLabels.legislativeBody}
+							office uses district to route and prioritise constituent messages.
 						</p>
 						<button
 							onclick={() => {
@@ -1428,22 +1444,19 @@
 									source: 'post-send-tier-upgrade'
 								});
 							}}
-							class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-indigo-700"
+							class="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-100"
 						>
-							Verify your address
+							Verify address
 						</button>
 					</div>
 				{:else if user && (user.trust_tier ?? 0) === 2 && template.deliveryMethod === 'cwc'}
-					<div
-						class="rounded-lg border border-emerald-200 bg-slate-50 p-4"
-						in:fly={{ y: 10, duration: 400, delay: 300 }}
-					>
-						<p class="mb-1 text-sm font-semibold text-emerald-900">
-							Verify your identity for cryptographic delivery
+					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+						<p class="mb-1 text-sm font-semibold text-slate-900">
+							Identity verification enables cryptographic delivery.
 						</p>
-						<p class="mb-3 text-xs text-emerald-700">
-							Your message was delivered as a constituent. Verify your identity to send with a
-							zero-knowledge proof next time — unfakeable, unbottable.
+						<p class="mb-3 text-xs text-slate-700">
+							This message was delivered as a constituent. Identity verification lets the next send
+							carry a zero-knowledge proof of constituent status.
 						</p>
 						<button
 							onclick={() => {
@@ -1459,30 +1472,27 @@
 									});
 								}
 							}}
-							class="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-700"
+							class="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-100"
 						>
 							Verify identity
 						</button>
 					</div>
 				{:else if user && (user.trust_tier ?? 0) === 3 && template.deliveryMethod === 'cwc'}
-					<div
-						class="rounded-lg border border-emerald-200 bg-gradient-to-r from-emerald-50 to-emerald-100 p-4"
-						in:fly={{ y: 10, duration: 400, delay: 300 }}
-					>
-						<p class="mb-1 text-sm font-semibold text-indigo-900">Use proof delivery next time</p>
-						<p class="mb-3 text-xs text-indigo-700">
-							You're identity-verified. Next time, send with a district proof and official delivery
-							receipt.
+					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+						<p class="mb-1 text-sm font-semibold text-slate-900">
+							Identity verified. Proof delivery is available on the next send.
+						</p>
+						<p class="text-xs text-slate-700">
+							The next send can attach a district proof and a delivery receipt.
 						</p>
 					</div>
 				{/if}
 
-				<!-- Next Steps / Share -->
+				<!-- Share -->
 				<div class="space-y-3">
-					<!-- Primary: Universal Share Button -->
 					<button
 						onclick={handleUniversalShare}
-						class="bg-participation-primary-600 hover:bg-participation-primary-700 flex w-full items-center justify-center gap-2 rounded-lg px-6 py-3 font-semibold text-white shadow-sm transition-all active:scale-95"
+						class="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-50"
 					>
 						<Share2 class="h-5 w-5" />
 						<span
@@ -1495,15 +1505,15 @@
 
 				{#if showCopied}
 					<div
-						class="rounded-lg bg-green-50 px-4 py-2 text-center text-sm text-green-700"
-						in:scale={{ duration: 200 }}
+						class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-center text-sm text-slate-700"
+						in:fade={{ duration: 200 }}
 						out:fade={{ duration: 200 }}
 					>
-						✓ Copied to clipboard!
+						Copied to clipboard.
 					</div>
 				{/if}
 
-				<!-- QR Code -->
+				<!-- QR code -->
 				<button
 					onclick={loadQRCode}
 					class="w-full text-sm text-slate-600 underline hover:text-slate-900"
@@ -1513,14 +1523,12 @@
 				</button>
 
 				{#if showQRCode && qrCodeDataUrl}
-					<div class="rounded-lg border border-slate-200 bg-white p-4" in:scale={{ duration: 300 }}>
+					<div class="rounded-lg border border-slate-200 bg-white p-4" in:fade={{ duration: 300 }}>
 						<img src={qrCodeDataUrl} alt="QR code for {template.title}" class="mx-auto" />
-						<p class="mt-2 mb-3 text-center text-xs text-slate-600">
-							Print this for protests, meetings, or events
-						</p>
+						<p class="mt-2 mb-3 text-center text-xs text-slate-600">Print for in-person sharing.</p>
 						<button
 							onclick={downloadQRCode}
-							class="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+							class="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
 						>
 							<Download class="h-4 w-4" />
 							Download for printing
@@ -1528,7 +1536,7 @@
 					</div>
 				{/if}
 
-				<!-- Always Visible: Raw URL -->
+				<!-- Raw URL -->
 				<div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
 					<input
 						type="text"
@@ -1538,31 +1546,28 @@
 						class="mb-2 w-full rounded border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-700"
 					/>
 					<div class="flex items-center justify-between text-xs text-slate-500">
-						<span>Share this link anywhere</span>
-						<button
-							onclick={copyTemplateUrl}
-							class="text-participation-primary-600 hover:underline"
-						>
+						<span>Share link</span>
+						<button onclick={copyTemplateUrl} class="text-slate-700 hover:underline">
 							Copy URL
 						</button>
 					</div>
 				</div>
 
-				<!-- Senate Delivery Verification (only if actual Senate submission) -->
+				<!-- Senate delivery verification (only if actual Senate submission) -->
 				{#if hasSenateDelivery}
-					<div class="rounded-lg border border-blue-200 bg-blue-50 p-4" in:fade={{ duration: 400 }}>
+					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
 						<div class="mb-2 flex items-center gap-2">
-							<CheckCircle2 class="h-4 w-4 text-blue-600" />
-							<p class="text-sm font-semibold text-blue-900">Senate Delivery Confirmed</p>
+							<CheckCircle2 class="h-4 w-4 text-slate-700" />
+							<p class="text-sm font-semibold text-slate-900">Senate delivery confirmed</p>
 						</div>
-						<p class="mb-2 text-xs text-blue-800">
-							Your message was delivered through the official Senate messaging system
+						<p class="mb-2 text-xs text-slate-700">
+							Delivered through the official Senate messaging system.
 						</p>
 						<a
 							href="https://soapbox.senate.gov/api"
 							target="_blank"
 							rel="noopener noreferrer"
-							class="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
+							class="flex items-center gap-1 text-xs font-medium text-slate-700 hover:text-slate-900 hover:underline"
 						>
 							<ExternalLink class="h-3 w-3" />
 							soapbox.senate.gov/api
@@ -1594,7 +1599,7 @@
 					<h3 class="mb-1 text-xl font-bold text-slate-900">Saved address is locked</h3>
 					<p class="text-sm text-slate-500">
 						Your district proof is active, but this browser cannot read the saved address right now.
-						Congress requires address fields for official delivery.
+						{jurisdictionLabels.legislativeBody} requires address fields for official delivery.
 					</p>
 				{:else}
 					<h3 class="mb-1 text-xl font-bold text-slate-900">Address needs re-entry</h3>
@@ -1708,7 +1713,7 @@
 					</div>
 					<h3 class="mb-1 text-xl font-bold text-slate-900">Strengthen your signal</h3>
 					<p class="text-sm text-slate-500">
-						Congressional delivery requires a verified district and a readable address
+						{jurisdictionLabels.legislativeBody} delivery requires a verified district and a readable address
 					</p>
 				</div>
 
@@ -1874,7 +1879,7 @@
 						<AlertCircle class="mb-4 h-12 w-12 text-amber-500" />
 						<h3 class="mb-2 text-lg font-semibold text-slate-900">Authentication Required</h3>
 						<p class="mb-6 text-sm text-slate-600">
-							Sign in to send verified messages to Congress.
+							Sign in to send verified messages to {jurisdictionLabels.legislativeBody}.
 						</p>
 						<div class="flex gap-3">
 							<Button variant="secondary" size="lg" onclick={handleClose}>Cancel</Button>

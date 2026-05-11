@@ -46,24 +46,24 @@
 
 			uiState = 'submitting';
 
-			// TODO: For MVP, using placeholder proof. Real ZK proof generation
-			// requires identity commitment flow (FEATURES.WALLET + identity verification).
-			const result = await clientSubmitArgument(walletState.provider, {
-				debateId,
-				stance,
-				bodyHash,
-				amendmentHash,
-				stakeAmount: parsedStake,
-				proof: '0x',
-				publicInputs: Array(31).fill('0'),
-				verifierDepth: 20,
-				districtGateAddress: DISTRICT_GATE_ADDRESS,
-				chainId: 534351
-			});
-
-			txHash = result.txHash;
-			uiState = 'confirmed';
-			onsubmitted?.(result.txHash);
+			// Real ZK proof generation requires the identity-commitment flow
+			// (district credential → V2 prover witness → proof). That work is
+			// post-launch substrate. Until it lands, this submit path is
+			// inactive — surface a legible "not implemented" rather than a
+			// cryptic "Proof is empty" from validateProofInputs. The
+			// `clientSubmitArgument` call site to wire when the proof flow
+			// lands receives:
+			//   { debateId, stance, bodyHash, amendmentHash, stakeAmount,
+			//     proof, publicInputs, verifierDepth: 20,
+			//     districtGateAddress: DISTRICT_GATE_ADDRESS, chainId: 534351 }
+			void clientSubmitArgument;
+			void onsubmitted;
+			void txHash;
+			throw new Error(
+				'Argument submission via on-chain debate is not yet available. ' +
+					'Real ZK proof generation (identity commitment + V2 prover) is post-launch work; ' +
+					'this UI is staged but inactive.'
+			);
 		} catch (err: unknown) {
 			const error = err as { code?: number; message?: string };
 			if (error.code === 4001) {

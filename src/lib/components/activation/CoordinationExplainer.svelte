@@ -1,17 +1,10 @@
 <script lang="ts">
 	/**
-	 * CoordinationExplainer - Perceptual Engineering
+	 * CoordinationExplainer — collapsed teaser, expanded RelayLoom + steps.
 	 *
-	 * The "how it works" section containing the RelayLoom visualization.
-	 * This is CONTEXTUAL content - users who want to understand the
-	 * coordination mechanism can expand this section.
-	 *
-	 * Cognitive principle: Progressive disclosure
-	 * Primary affordances (create/browse) are immediately visible.
-	 * The "why" explanation is available but not required for action.
-	 *
-	 * The collapsed state shows a compelling teaser. Expansion
-	 * reveals the full RelayLoom with narrative content.
+	 * The visible header is the entry point. Expansion reveals the full
+	 * RelayLoom visualization and a three-step description of how a send
+	 * enters the public record.
 	 */
 
 	import { ChevronDown } from '@lucide/svelte';
@@ -39,7 +32,6 @@
 </script>
 
 <section class="coordination-explainer" class:expanded={isExpanded}>
-	<!-- Teaser header - always visible -->
 	<button
 		type="button"
 		class="explainer-header"
@@ -48,27 +40,25 @@
 		aria-controls="explainer-content"
 	>
 		<div class="header-content">
-			<h2 class="header-title">How coordination works</h2>
+			<h2 class="header-title">How sends are recorded</h2>
 			<p class="header-teaser">
 				{isExpanded
-					? 'Click any node to learn more'
-					: 'One message gets buried. Coordinated voices make impact.'}
+					? 'Hover any node for detail.'
+					: 'Alone, your send is one voice. Joined with your district, it’s a record.'}
 			</p>
 		</div>
 		<div class="header-toggle">
-			<span class="toggle-label">{isExpanded ? 'Collapse' : 'See how'}</span>
+			<span class="toggle-label">{isExpanded ? 'Hide' : 'Show'}</span>
 			<ChevronDown class="toggle-icon {isExpanded ? 'rotated' : ''}" />
 		</div>
 	</button>
 
-	<!-- Expandable content -->
 	<div
 		id="explainer-content"
 		class="explainer-content"
 		class:visible={isExpanded}
 		aria-hidden={!isExpanded}
 	>
-		<!-- Single inner wrapper for proper grid collapse -->
 		<div class="content-inner">
 			<div class="loom-container">
 				{#if shouldRenderLoom}
@@ -78,38 +68,36 @@
 				{/if}
 			</div>
 
-			<!-- Summary points -->
-			<div class="summary-points">
-				<div class="point">
-					<span class="point-number">1</span>
+			<ol class="summary-points">
+				<li class="point">
+					<span class="point-index" aria-hidden="true">1.</span>
 					<div class="point-content">
-						<strong>Write once</strong>
+						<strong>Write once.</strong>
 						<span>Describe your message. Pick who decides.</span>
 					</div>
-				</div>
-				<div class="point">
-					<span class="point-number">2</span>
+				</li>
+				<li class="point">
+					<span class="point-index" aria-hidden="true">2.</span>
 					<div class="point-content">
-						<strong>Share the link</strong>
+						<strong>Share the link.</strong>
 						<span>Anyone who shares your problem can send it too.</span>
 					</div>
-				</div>
-				<div class="point">
-					<span class="point-number">3</span>
+				</li>
+				<li class="point">
+					<span class="point-index" aria-hidden="true">3.</span>
 					<div class="point-content">
-						<strong>Impact together</strong>
-						<span>Decision-makers see coordinated voices, not isolated messages.</span>
+						<strong>It joins the record.</strong>
+						<span>Verified sends from one district arrive together. The volume is the evidence.</span>
 					</div>
-				</div>
-			</div>
+				</li>
+			</ol>
 
-			<!-- Org layer whisper — visible only in expanded state -->
 			<div class="org-whisper">
 				<p class="org-whisper__text">
-					Run campaigns. Track verified action. Deliver proof.
+					Organizations assemble proof, verify constituents, and deliver evidence to decision-makers.
 				</p>
 				<a href="/org" class="org-whisper__link">
-					Organizations <span class="org-whisper__arrow" aria-hidden="true">→</span>
+					Organization tools <span class="org-whisper__arrow" aria-hidden="true">→</span>
 				</a>
 			</div>
 		</div>
@@ -117,57 +105,27 @@
 </section>
 
 <style>
-	/*
-	 * CoordinationExplainer Styles
-	 *
-	 * Collapsed: Minimal teaser with subtle invitation
-	 * Expanded: Full loom visualization with summary points
-	 */
-
 	.coordination-explainer {
-		border-radius: 16px;
-		border: 1.5px solid oklch(0.75 0.08 195);
-		background: linear-gradient(135deg, oklch(0.98 0.015 240) 0%, oklch(0.99 0.008 220) 100%);
+		border-radius: 8px;
+		border: 1px solid oklch(0.9 0.02 250);
 		overflow: hidden;
-		transition: box-shadow 300ms ease-out;
-		/* Subtle breathing animation for peripheral salience */
-		animation: breathe 8s ease-in-out infinite;
+		transition: border-color 200ms ease-out;
 	}
 
-	@keyframes breathe {
-		0%,
-		100% {
-			box-shadow: 0 1px 3px oklch(0 0 0 / 0.04);
-		}
-		50% {
-			box-shadow:
-				0 2px 8px oklch(0.55 0.1 195 / 0.08),
-				0 8px 24px oklch(0.55 0.1 195 / 0.04);
-		}
-	}
-
-	/*
-	 * Allow expanded nodes to overflow container bounds.
-	 * CRITICAL: Must use :global() because .is-expanded is in RelayLoom.svelte
-	 * which has a different Svelte scope hash. Without :global(), selector never matches.
-	 */
 	.coordination-explainer:has(:global(.is-expanded)) {
 		overflow: visible;
 	}
 
 	.coordination-explainer.expanded {
-		box-shadow:
-			0 4px 20px -4px oklch(0.5 0.05 250 / 0.12),
-			0 12px 40px -8px oklch(0.4 0.08 250 / 0.08);
+		border-color: oklch(0.85 0.04 250);
 	}
 
-	/* Header - always visible */
 	.explainer-header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		width: 100%;
-		padding: 1.25rem 1.5rem;
+		padding: 1rem 1.25rem;
 		border: none;
 		background: transparent;
 		cursor: pointer;
@@ -176,7 +134,7 @@
 	}
 
 	.explainer-header:hover {
-		background: oklch(0.96 0.02 240);
+		background: oklch(0.97 0.005 55);
 	}
 
 	.header-content {
@@ -210,7 +168,7 @@
 	.toggle-label {
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.8125rem;
-		font-weight: 600;
+		font-weight: 500;
 		color: oklch(0.5 0.15 195);
 	}
 
@@ -225,7 +183,6 @@
 		transform: rotate(180deg);
 	}
 
-	/* Content - expandable */
 	.explainer-content {
 		display: grid;
 		grid-template-rows: 0fr;
@@ -240,15 +197,10 @@
 		opacity: 1;
 	}
 
-	/* Single wrapper gets overflow hidden for proper collapse */
 	.content-inner {
 		overflow: hidden;
 	}
 
-	/*
-	 * When a node is expanded, allow it to overflow the container.
-	 * CRITICAL: Must use :global() - same scoping issue as above.
-	 */
 	.content-inner:has(:global(.is-expanded)) {
 		overflow: visible;
 	}
@@ -263,13 +215,13 @@
 		}
 	}
 
-	/* Summary points */
 	.summary-points {
 		display: grid;
 		gap: 1rem;
-		padding: 1rem 1.5rem;
+		padding: 1.25rem 1.25rem;
+		margin: 0;
+		list-style: none;
 		border-top: 1px solid oklch(0.92 0.01 250);
-		background: oklch(0.98 0.005 250);
 	}
 
 	@media (min-width: 640px) {
@@ -281,22 +233,17 @@
 
 	.point {
 		display: flex;
-		gap: 0.75rem;
+		gap: 0.5rem;
+		align-items: baseline;
 	}
 
-	.point-number {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 1.5rem;
-		height: 1.5rem;
+	.point-index {
+		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-feature-settings: 'tnum';
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: oklch(0.55 0.02 250);
 		flex-shrink: 0;
-		border-radius: 50%;
-		background: oklch(0.6 0.12 195);
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.75rem;
-		font-weight: 700;
-		color: white;
 	}
 
 	.point-content {
@@ -316,25 +263,21 @@
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.8125rem;
 		color: oklch(0.5 0.02 250);
-		line-height: 1.4;
+		line-height: 1.5;
 	}
 
-	/* Org whisper — atmospheric, not promotional.
-	 * Lower visual intensity than the 3 steps.
-	 * The teal accent links it to the org dashboard world. */
 	.org-whisper {
 		display: flex;
 		align-items: baseline;
 		justify-content: space-between;
 		gap: 1rem;
-		padding: 0.875rem 1.5rem;
+		padding: 1rem 1.25rem;
 		border-top: 1px solid oklch(0.92 0.01 250);
-		background: oklch(0.985 0.003 180 / 0.5);
 	}
 
 	.org-whisper__text {
 		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.75rem;
+		font-size: 0.8125rem;
 		color: oklch(0.5 0.02 250);
 		line-height: 1.5;
 		margin: 0;
@@ -342,7 +285,7 @@
 
 	.org-whisper__link {
 		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.75rem;
+		font-size: 0.8125rem;
 		font-weight: 500;
 		color: oklch(0.45 0.08 180);
 		text-decoration: none;
@@ -364,20 +307,12 @@
 		transform: translateX(2px);
 	}
 
-	/* Reduced motion */
 	@media (prefers-reduced-motion: reduce) {
-		.coordination-explainer {
-			animation: none;
-			box-shadow:
-				0 2px 6px oklch(0.55 0.1 195 / 0.06),
-				0 6px 16px oklch(0.55 0.1 195 / 0.03);
-		}
-
-		.explainer-content {
-			transition: none;
-		}
-
-		.header-toggle :global(.toggle-icon) {
+		.coordination-explainer,
+		.explainer-content,
+		.header-toggle :global(.toggle-icon),
+		.org-whisper__link,
+		.org-whisper__link:hover .org-whisper__arrow {
 			transition: none;
 		}
 	}

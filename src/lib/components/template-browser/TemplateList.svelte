@@ -4,6 +4,7 @@
 	import type { Template, TemplateGroup } from '$lib/types/template';
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import MessageMetrics from './MessageMetrics.svelte';
+	import { Pulse, Ratio, Rings } from '$lib/design';
 	import SkeletonTemplate from '$lib/components/ui/SkeletonTemplate.svelte';
 	import { deriveTargetPresentation } from '$lib/utils/deriveTargetPresentation';
 	import { topicHue } from '$lib/utils/topic-hue';
@@ -36,25 +37,13 @@
 		}
 	});
 
-	/**
-	 * PERCEPTUAL ENGINEERING: Progressive Rendering Constants
-	 *
-	 * These constants define the rhythm of template materialization.
-	 * - INITIAL_VISIBLE: Must be tall enough to push sentinel below viewport
-	 * - BATCH_SIZE: Cognitive chunk size for progressive loading
-	 * - VIEWPORT_BUFFER: Distance before bottom edge to trigger next batch
-	 *
-	 * CRITICAL: Initial batch must exceed viewport height + buffer to prevent
-	 * immediate sentinel visibility on mount (causes runaway observer firing)
-	 *
-	 * Math: Template height ~120px × 12 templates = 1440px
-	 * Mobile viewport: 667px, Desktop: 1080px
-	 * Buffer: 200px
-	 * Result: 1440px > (1080px + 200px) ✓ Sentinel starts off-screen
-	 */
-	const INITIAL_VISIBLE = 12; // Increased from 8 to ensure sentinel below viewport
+	// Initial batch must exceed viewport height + buffer so the sentinel starts
+	// below the fold; otherwise the IntersectionObserver fires on mount and
+	// loads the rest of the list in one tick. At ~120px per template, 12 rows
+	// = 1440px > (desktop 1080 + buffer 200).
+	const INITIAL_VISIBLE = 12;
 	const BATCH_SIZE = 8;
-	const VIEWPORT_BUFFER = 200; // Reduced from 400px to prevent overeager triggering
+	const VIEWPORT_BUFFER = 200;
 
 	// Search state
 	let searchQuery = $state('');
@@ -109,29 +98,10 @@
 	// Match count for feedback
 	const matchCount = $derived(filteredGroups.reduce((sum, g) => sum + g.templates.length, 0));
 
-	/**
-	 * PERCEPTUAL ENGINEERING: Viewport-Aware Progressive Rendering
-	 *
-	 * Instead of "show more" buttons (discrete state change), we use IntersectionObserver
-	 * to progressively reveal templates as the user scrolls (continuous revelation).
-	 *
-	 * Cognitive Benefits:
-	 * - Preserves spatial memory (templates above don't shift)
-	 * - Matches prediction (templates appear at scrolling rhythm)
-	 * - Zero interaction cost (scrolling IS the query)
-	 * - Peripheral awareness (motion signals "more below")
-	 */
-
-	/**
-	 * PERCEPTUAL ENGINEERING: Progressive rendering state
-	 *
-	 * We track visible counts separately from initialization to avoid circular dependencies.
-	 * - visibleCounts: Mutable map updated by IntersectionObserver
-	 * - getVisibleCount(): Reads from visibleCounts, falls back to INITIAL_VISIBLE
-	 *
-	 * This avoids the effect_update_depth_exceeded error by never writing to
-	 * visibleCounts in a reactive context that reads from it.
-	 */
+	// Visible counts are tracked separately from initialization to avoid
+	// reactive cycles. The IntersectionObserver writes; getVisibleCount reads.
+	// Writing inside a $derived that reads from visibleCounts triggers
+	// effect_update_depth_exceeded.
 	let visibleCounts = $state<Map<string, number>>(new Map());
 
 	// Sentinel elements for intersection observation (one per group)
@@ -162,71 +132,41 @@
 		visibleCounts = new Map(visibleCounts);
 	}
 
-	/**
-	 * Svelte Action: Register sentinel element and setup observer
-	 *
-	 * CRITICAL FIXES (per brutalist feedback):
-	 * 1. rootMargin must specify ALL sides (top, right, bottom, left)
-	 *    - '400px' applies 400px to ALL sides (creates 800x800px trigger zone)
-	 *    - '0px 0px 200px 0px' applies buffer ONLY to bottom edge
-	 * 2. Delay observer initialization until after layout completes
-	 *    - Double RAF ensures templates have rendered and calculated heights
-	 *    - Prevents immediate intersection on mount
-	 * 3. Remove redundant Map recreation (Svelte 5 $state tracks Map.set())
-	 */
+	// rootMargin needs all four sides — `0px 0px ${VIEWPORT_BUFFER}px 0px`
+	// applies the buffer only to the bottom edge so the observer doesn't
+	// trigger from off-screen above. Double-RAF delays observation until
+	// the initial templates have rendered and layout has settled; observing
+	// earlier fires immediately on mount. Map reassignment is required for
+	// Svelte 5 $state reactivity — `.set()` alone doesn't trigger.
 	function registerSentinel(element: HTMLElement, groupTitle: string) {
 		sentinelElements.set(groupTitle, element);
 
 		let observer: IntersectionObserver | null = null;
 
-		// CRITICAL: Wait for browser layout to complete before observing
 		requestAnimationFrame(() => {
 			requestAnimationFrame(() => {
-				// Double RAF ensures initial templates have rendered + layout calculated
 				observer = new IntersectionObserver(
 					(entries) => {
 						entries.forEach((entry) => {
-							console.log('[IntersectionObserver]', {
-								groupTitle,
-								isIntersecting: entry.isIntersecting,
-								intersectionRatio: entry.intersectionRatio,
-								boundingRect: entry.boundingClientRect,
-								rootBounds: entry.rootBounds
-							});
-
 							if (entry.isIntersecting) {
-								// User scrolled near sentinel, load next batch
 								const current = visibleCounts.get(groupTitle) || INITIAL_VISIBLE;
 								const newCount = current + BATCH_SIZE;
-								console.log('[Progressive Load]', {
-									groupTitle,
-									current,
-									newCount,
-									totalTemplates: filteredGroups.find((g) => g.title === groupTitle)?.templates
-										.length
-								});
-
-								// CRITICAL: Svelte 5 $state requires reassignment for Map reactivity
-								// .set() alone doesn't trigger - must create new Map
 								visibleCounts = new Map(visibleCounts.set(groupTitle, newCount));
 							}
 						});
 					},
 					{
-						// CRITICAL: Apply buffer ONLY to bottom (not all sides)
 						rootMargin: `0px 0px ${VIEWPORT_BUFFER}px 0px`,
 						threshold: 0
 					}
 				);
 
 				observer.observe(element);
-				console.log('[Sentinel Registered]', { groupTitle, element });
 			});
 		});
 
 		return {
 			destroy() {
-				console.log('[Sentinel Destroyed]', { groupTitle });
 				observer?.disconnect();
 				sentinelElements.delete(groupTitle);
 			}
@@ -321,23 +261,20 @@
 			{/if}
 		</div>
 
-		<!-- Create New Template Card -->
 		{#if onCreateTemplate}
 			<button
 				type="button"
 				onclick={onCreateTemplate}
-				class="group relative flex w-full items-center gap-4 rounded-md border-2 border-dashed border-slate-300 bg-slate-50/50 p-4 text-left transition-all duration-300 hover:border-cyan-400 hover:bg-cyan-50/50 hover:shadow-md md:p-5"
+				class="group flex w-full items-center gap-3 rounded-lg border border-dashed border-slate-300 p-4 text-left transition-colors hover:border-teal-400 md:p-5"
 			>
-				<div
-					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-200 transition-colors group-hover:bg-cyan-100"
-				>
-					<PenLine class="h-5 w-5 text-slate-500 transition-colors group-hover:text-cyan-600" />
-				</div>
+				<PenLine class="h-5 w-5 shrink-0 text-slate-500 transition-colors group-hover:text-teal-600" />
 				<div>
-					<h3 class="font-medium text-slate-700 transition-colors group-hover:text-cyan-700">
-						Start something new
+					<h3 class="font-brand text-base font-semibold text-slate-800">
+						Write a new template.
 					</h3>
-					<p class="text-sm text-slate-500">Write the message others will send</p>
+					<p class="font-brand text-sm text-slate-500">
+						The message others will send.
+					</p>
 				</div>
 			</button>
 		{/if}
@@ -368,7 +305,7 @@
 						data-template-button
 						data-template-id={template.id}
 						data-testid="template-button-{template.id}"
-						class="template-card card-topic relative flex w-full items-start justify-between gap-3 rounded-md p-3 text-left transition-all duration-300 hover:scale-[1.02] motion-reduce:transition-none motion-reduce:hover:scale-100 md:p-4 {isCongressional
+						class="template-card card-topic relative flex w-full items-start justify-between gap-3 rounded-md p-3 text-left transition-colors duration-200 md:p-4 {isCongressional
 							? 'card-weight-heavy'
 							: 'card-weight-light'}"
 						class:newly-revealed={isNewlyRevealed}
@@ -434,6 +371,46 @@
 
 							<MessageMetrics {template} />
 
+							{#if (template.send_count ?? 0) > 0}
+								{@const arrivals = template.daily_arrivals ?? []}
+								{@const districts = (template.district_counts ?? [])
+									.slice()
+									.sort((a, b) => b.count - a.count)
+									.slice(0, 6)}
+								{@const tiers = (template.tier_counts ?? []).map(
+									(c, tier) => ({ tier, count: c })
+								)}
+								<dl class="template-dimensions" aria-hidden="true">
+									{#if arrivals.length > 0}
+										<div class="template-dimension">
+											<Pulse
+												values={arrivals}
+												width={64}
+												height={14}
+												color="oklch(0.45 0.02 250)"
+											/>
+										</div>
+									{/if}
+									{#if districts.length >= 2}
+										<div class="template-dimension">
+											<Ratio
+												height={4}
+												segments={districts.map((d) => ({
+													value: d.count,
+													color: 'var(--coord-route-solid, #3bc4b8)',
+													label: d.code
+												}))}
+											/>
+										</div>
+									{/if}
+									{#if tiers.some((t) => t.count > 0)}
+										<div class="template-dimension">
+											<Rings {tiers} maxTier={5} size={16} />
+										</div>
+									{/if}
+								</dl>
+							{/if}
+
 							{#if FEATURES.DEBATE && template.hasActiveDebate}
 								<div class="mt-1 flex items-center gap-2 text-sm">
 									<span class="debate-pulse h-2 w-2 shrink-0 rounded-full bg-amber-500"></span>
@@ -453,16 +430,7 @@
 					</button>
 				{/each}
 
-				<!-- Sentinel Element for Infinite Scroll -->
-				<!--
-					PERCEPTUAL ENGINEERING: This invisible element triggers the next batch.
-					When it enters the viewport (+ buffer), the IntersectionObserver fires.
-
-					Why this works:
-					- Zero interaction cost (scrolling IS the query)
-					- Preserves spatial memory (no layout shifts)
-					- Peripheral motion signals "more below" naturally
-				-->
+				<!-- Sentinel: when it enters the viewport (plus buffer), the observer loads the next batch -->
 				{#if getVisibleCount(group) < group.templates.length}
 					<div
 						class="sentinel"
@@ -552,15 +520,7 @@
 		margin-top: 0.375rem;
 	}
 
-	/**
-	 * PERCEPTUAL ENGINEERING: Template Entrance Animation
-	 *
-	 * Newly revealed templates fade in with subtle upward motion.
-	 * This creates peripheral awareness without demanding focal attention.
-	 *
-	 * Timing: 200ms ease-out (natural deceleration, like friction)
-	 * Motion: 8px upward (just enough for motion detection)
-	 */
+	/* Newly revealed templates fade in with a small upward motion (8px). */
 	.template-card.newly-revealed {
 		animation: reveal 200ms ease-out forwards;
 	}
@@ -636,6 +596,25 @@
 			opacity: 1;
 			transform: scale(1.2);
 		}
+	}
+
+	/* Per-template dimensional row — citation-scale Pulse / Ratio / Rings
+	   citing the substrate (rhythm / districts / identity-depth) of this
+	   template's verified sends. K-anon floor (<5) applied at render time so
+	   thin cohorts cannot be re-identified from the row. */
+	.template-dimensions {
+		margin: 0.5rem 0 0 0;
+		padding: 0;
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.template-dimension {
+		display: flex;
+		align-items: center;
+		margin: 0;
 	}
 
 	/* Debate Deliberation Indicator (Ambient Status Signal) */

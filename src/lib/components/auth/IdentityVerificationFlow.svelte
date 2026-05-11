@@ -4,6 +4,10 @@
 
 	import VerificationValueProp from './address-steps/VerificationValueProp.svelte';
 	import GovernmentCredentialVerification from './GovernmentCredentialVerification.svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import { RegistryMark } from '$lib/design';
+
+	const labels = getJurisdictionLabels();
 
 	interface Props {
 		userId: string;
@@ -12,6 +16,19 @@
 		templateSlug?: string;
 		/** Skip value proposition (if already shown earlier in flow) */
 		skipValueProp?: boolean;
+		/**
+		 * Minimum trust tier the gating action requires. Threaded through
+		 * to `GovernmentCredentialVerification` so the dead-end copy can
+		 * tell the user honestly whether address-tier fallback is enough
+		 * for their goal.
+		 */
+		minimumTier?: number;
+		/**
+		 * The user's actual server-side trust tier at flow mount. Threaded
+		 * through so the dead-end copy says "address-tier still works for
+		 * you" only when the user actually has tier ≥ 2.
+		 */
+		userTrustTier?: number;
 		oncomplete?: (data: {
 			verified: boolean;
 			method: string;
@@ -36,6 +53,8 @@
 		userEmail,
 		templateSlug,
 		skipValueProp = false,
+		minimumTier = 5,
+		userTrustTier = 0,
 		oncomplete,
 		oncancel,
 		onback
@@ -457,18 +476,14 @@
 						Step 2 of 2: Complete Verification
 					{/if}
 				</span>
-				<span class="text-slate-500">
-					{#if currentStep === 'value-prop'}
-						50%
-					{:else}
-						99%
-					{/if}
-				</span>
+				<!-- No percentage label — a public record doesn't withhold the
+				     last percent to push users through a funnel. The step
+				     label above ("Step N of M") is the honest signal. -->
 			</div>
 			<div class="mt-2 h-2 w-full rounded-full bg-slate-200">
 				<div
-					class="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-700 transition-all duration-500"
-					style="width: {currentStep === 'value-prop' ? '50%' : '99%'}"
+					class="h-full rounded-full bg-slate-700 transition-all duration-500"
+					style="width: {currentStep === 'value-prop' ? '50%' : '100%'}"
 				></div>
 			</div>
 		</div>
@@ -507,6 +522,8 @@
 				{userId}
 				{userEmail}
 				{templateSlug}
+				{minimumTier}
+				{userTrustTier}
 				oncomplete={handleMdlComplete}
 				onerror={handleMdlError}
 				oncancel={handleMdlCancel}
@@ -520,29 +537,18 @@
 					<Check class="h-10 w-10 text-white" strokeWidth={3} />
 				</div>
 
-				<h2 class="mb-3 text-3xl font-bold text-slate-900">Verification Complete!</h2>
+				<!-- Success as record, not celebration. Per design memory:
+				     "tiers/metrics are infrastructure not headlines";
+				     "verification-first hierarchy". The headline names the
+				     fact (a credential was witnessed); decorative
+				     "build reputation" copy is dropped because it's a
+				     marketing promise the substrate doesn't make. -->
+				<h2 class="mb-3 text-3xl font-semibold text-slate-900">Credential witnessed</h2>
 
-				<p class="mb-2 text-lg text-slate-600">Your identity has been successfully verified</p>
-
-				<div class="mx-auto mb-8 max-w-md">
-					<div class="mt-6 rounded-lg border border-green-200 bg-green-50 p-4">
-						<p class="text-sm font-medium text-green-900">What happens next:</p>
-						<ul class="mt-2 space-y-1 text-sm text-green-800">
-							<li class="flex items-start gap-2">
-								<span class="text-green-600">✓</span>
-								<span>Your messages will be marked as verified</span>
-							</li>
-							<li class="flex items-start gap-2">
-								<span class="text-green-600">✓</span>
-								<span>Congressional offices will prioritize your message</span>
-							</li>
-							<li class="flex items-start gap-2">
-								<span class="text-green-600">✓</span>
-								<span>You'll build reputation with every civic action</span>
-							</li>
-						</ul>
-					</div>
-				</div>
+				<p class="mb-2 text-base text-slate-600">
+					Your messages to {labels.legislativeBody} offices will carry verified
+					provenance.
+				</p>
 
 				<!-- Shadow Atlas registration status -->
 				{#if registrationInProgress}
@@ -582,12 +588,23 @@
 						{/if}
 					</div>
 				{:else if registrationComplete}
-					<div class="mx-auto mb-6 max-w-md rounded-lg border border-green-200 bg-green-50 p-3">
+					<div class="mx-auto mb-2 max-w-md rounded-lg border border-green-200 bg-green-50 p-3">
 						<div class="flex items-center gap-2 text-sm text-green-700">
 							<Check class="h-4 w-4" />
 							<span>Proof credentials ready</span>
 						</div>
 					</div>
+					{#if verificationData?.providerData?.credentialHash}
+						<p class="mx-auto mb-6 max-w-md text-right">
+							<RegistryMark
+								variant="sha256"
+								value={verificationData.providerData.credentialHash}
+								truncate={true}
+								copy={false}
+								class="text-[11px] text-slate-500"
+							/>
+						</p>
+					{/if}
 				{/if}
 
 				{#if registrationComplete}

@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { AlertCircle, Home, Search, X } from '@lucide/svelte';
 	import Button from '$lib/components/ui/Button.svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const jurisdictionLabels = getJurisdictionLabels();
 
 	let {
 		streetAddress = $bindable(),
@@ -35,7 +38,7 @@
 	} = $props();
 
 	const regionLabel = $derived(
-		detectedCountry === 'CA' ? 'federal electoral district' : 'congressional district'
+		detectedCountry === 'CA' ? 'federal electoral district' : `${jurisdictionLabels.legislativeAdjective} district`
 	);
 	const postalLabel = $derived(detectedCountry === 'CA' ? 'Postal' : 'ZIP');
 	const postalPlaceholder = $derived(detectedCountry === 'CA' ? 'K1A 0B1' : '94102');

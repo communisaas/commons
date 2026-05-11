@@ -16,6 +16,7 @@ backdrop handling, and keyboard navigation.
 		id,
 		type,
 		title = '',
+		ariaLabel = '',
 		size = 'md',
 		showCloseButton = true,
 		closeOnBackdrop = true,
@@ -25,6 +26,16 @@ backdrop handling, and keyboard navigation.
 		id: string;
 		type: ModalType;
 		title?: string;
+		/**
+		 * Fallback aria-label when `title` is empty. Without it,
+		 * `aria-labelledby` becomes undefined when title is unset,
+		 * leaving titleless modals (debate-modal, wallet-connect-modal,
+		 * sign-in-modal, identity-verification-modal) as unnamed dialogs
+		 * for screen readers. If neither title nor ariaLabel is provided,
+		 * falls back to "Modal dialog" as a last resort so the dialog at
+		 * minimum has a name.
+		 */
+		ariaLabel?: string;
 		size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
 		showCloseButton?: boolean;
 		closeOnBackdrop?: boolean;
@@ -34,6 +45,79 @@ backdrop handling, and keyboard navigation.
 
 	// Connect to modal system (one-shot init with prop values)
 	const modal = untrack(() => createModalStore(id, type));
+
+	// Focus management. WCAG 2.1 + 2.4.3 / 4.1.2.
+	// Track the previously-focused element so we can restore focus on close.
+	// Capture inside an $effect that fires on `modal.isOpen` flipping true;
+	// move focus into the dialog; restore on flip-back-to-false.
+	let dialogEl = $state<HTMLDivElement | null>(null);
+	let containerEl = $state<HTMLDivElement | null>(null);
+	let previouslyFocused: HTMLElement | null = null;
+
+	$effect(() => {
+		if (!modal.isOpen) {
+			// Restore focus to the trigger element if we tracked one.
+			if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+				try {
+					previouslyFocused.focus();
+				} catch {
+					/* element may have been removed from DOM — silent */
+				}
+				previouslyFocused = null;
+			}
+			return;
+		}
+		// Modal opened — capture current focus (the trigger) BEFORE moving
+		// focus inside, so we can restore on close.
+		if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+			previouslyFocused = document.activeElement;
+		}
+		// Move focus into the dialog. Prefer the first focusable element
+		// inside the container so a screen reader announces it; fall back
+		// to the dialog itself if there's no focusable child.
+		queueMicrotask(() => {
+			if (!containerEl) return;
+			const focusables = containerEl.querySelectorAll<HTMLElement>(
+				'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+			);
+			const first = focusables[0];
+			if (first) {
+				first.focus();
+			} else if (dialogEl) {
+				dialogEl.focus();
+			}
+		});
+	});
+
+	function handleKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape' && closeOnEscape) {
+			modal.close();
+			return;
+		}
+		// Focus trap: cycle Tab within the dialog so keyboard users can't
+		// escape into the background page.
+		if (e.key === 'Tab' && containerEl) {
+			const focusables = Array.from(
+				containerEl.querySelectorAll<HTMLElement>(
+					'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+				)
+			);
+			if (focusables.length === 0) {
+				e.preventDefault();
+				return;
+			}
+			const first = focusables[0];
+			const last = focusables[focusables.length - 1];
+			const active = document.activeElement;
+			if (e.shiftKey && active === first) {
+				e.preventDefault();
+				last.focus();
+			} else if (!e.shiftKey && active === last) {
+				e.preventDefault();
+				first.focus();
+			}
+		}
+	}
 
 	// Size classes
 	const sizeClasses = {
@@ -57,6 +141,7 @@ backdrop handling, and keyboard navigation.
 {#if modal.isOpen}
 	<!-- Modal Backdrop -->
 	<div
+		bind:this={dialogEl}
 		class="modal-backdrop fixed inset-0 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
 		style="z-index: {modal.zIndex}"
 		in:fade={{ duration: 200 }}
@@ -66,21 +151,16 @@ backdrop handling, and keyboard navigation.
 				modal.close();
 			}
 		}}
-		onkeydown={(e) => {
-			if (e.key === 'Escape' && closeOnEscape) {
-				modal.close();
-			}
-			if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget && closeOnBackdrop) {
-				modal.close();
-			}
-		}}
+		onkeydown={handleKeydown}
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby={title ? `${id}-title` : undefined}
-		tabindex="0"
+		aria-label={!title ? (ariaLabel || 'Modal dialog') : undefined}
+		tabindex="-1"
 	>
 		<!-- Modal Container -->
 		<div
+			bind:this={containerEl}
 			class="relative flex min-h-0 w-full flex-col overflow-hidden rounded-lg bg-white shadow-md {sizeClasses[
 				size
 			]} max-h-[90dvh]"

@@ -20,9 +20,15 @@
   EntityCluster handles only the BETWEEN-entity spacing.
 
   Density:
-    'default'  — 32px gap (8:32 = 1:4 ratio with typical 8px internal)
-    'tight'    — 24px gap (for constrained spaces, still 1:3+)
-    'spacious' — 48px gap (for hero layouts, 1:6 ratio)
+    'tight'    — 24px gap (constrained spaces, still 1:3+ ratio)
+    'default'  — 32px gap (8:32 = 1:4 with typical 8px internal)
+    'spacious' — 48px gap (citation-scale hero layouts, 1:6 ratio)
+    'display'  — 80px gap (active-field hero, 1:10+ ratio)
+
+  The display density is for active-field surfaces where the void
+  between entities reads as architectural space, not spatial rhythm.
+  Per Axis 2 (CONSTITUTION.md §2.2 / docs/design/design-system.md),
+  the same primitive serves both content states.
 
   The component also provides a subtle visual "peak" for scanning:
   each direct child is positioned as a cluster on the ground plane.
@@ -37,7 +43,7 @@
 		children
 	}: {
 		/** Gap between entities. */
-		density?: 'tight' | 'default' | 'spacious';
+		density?: 'tight' | 'default' | 'spacious' | 'display';
 		/** Wrapper element. Use 'ul' for lists. */
 		as?: 'div' | 'ul' | 'section';
 		/** Additional CSS classes */
@@ -45,7 +51,12 @@
 		children: Snippet;
 	} = $props();
 
-	const GAP_MAP = { tight: 'gap-6', default: 'gap-8', spacious: 'gap-12' } as const;
+	const GAP_MAP = {
+		tight: 'gap-6',     // 24px
+		default: 'gap-8',    // 32px
+		spacious: 'gap-12',  // 48px
+		display: 'gap-20'    // 80px — active-field hero
+	} as const;
 	const gapClass = $derived(GAP_MAP[density]);
 </script>
 

@@ -21,6 +21,8 @@
 			: null
 	);
 
+	// Average is per-donation (raisedAmountCents / donationCount), not per-donor.
+	// Matches the relabeled "Donations" tile above. (cure shipped).
 	const averageCents = $derived(
 		campaign.donorCount > 0
 			? Math.round(campaign.raisedAmountCents / campaign.donorCount)
@@ -48,9 +50,14 @@
 		{/if}
 	</div>
 
-	<!-- Donor Count -->
+	<!-- Donation Count.
+	     Field is `donorCount` for legacy reasons (schema rename is a migration);
+	     value is donations completed, NOT unique donors. UI label and average
+	     calculation below treat the value as donations consistently. True
+	     unique-donor tracking would need a composite index + refund-aware
+	     decrement and is a separate refactor. -->
 	<div class="rounded-lg border border-zinc-800/60 p-4">
-		<p class="text-xs font-medium text-zinc-500">Donors</p>
+		<p class="text-xs font-medium text-zinc-500">Donations</p>
 		<p class="mt-1 text-2xl font-bold text-zinc-100">{campaign.donorCount}</p>
 	</div>
 

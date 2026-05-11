@@ -38,21 +38,24 @@
 
 			uiState = 'submitting';
 
-			// TODO: Placeholder proof for MVP — real ZK proof requires identity commitment flow
-			const result = await clientCoSignArgument(walletState.provider, {
-				debateId,
-				argumentIndex,
-				stakeAmount: parsedStake,
-				proof: '0x',
-				publicInputs: Array(31).fill('0'),
-				verifierDepth: 20,
-				districtGateAddress: DISTRICT_GATE_ADDRESS,
-				chainId: 534351
-			});
-
-			txHash = result.txHash;
-			uiState = 'confirmed';
-			oncosigned?.(result.txHash);
+			// Real ZK proof generation requires the identity-commitment flow
+			// (district credential → V2 prover witness → proof). That work is
+			// post-launch substrate. Until it lands, this co-sign path is
+			// inactive — surface a legible "not implemented" rather than a
+			// cryptic "Proof is empty" from validateProofInputs. The
+			// `clientCoSignArgument` call site to wire when the proof flow
+			// lands receives:
+			//   { debateId, argumentIndex, stakeAmount, proof, publicInputs,
+			//     verifierDepth: 20, districtGateAddress: DISTRICT_GATE_ADDRESS,
+			//     chainId: 534351 }
+			void clientCoSignArgument;
+			void oncosigned;
+			void txHash;
+			throw new Error(
+				'Co-signing via on-chain debate is not yet available. ' +
+					'Real ZK proof generation (identity commitment + V2 prover) is post-launch work; ' +
+					'this UI is staged but inactive.'
+			);
 		} catch (err: unknown) {
 			const error = err as { code?: number; message?: string };
 			if (error.code === 4001) {

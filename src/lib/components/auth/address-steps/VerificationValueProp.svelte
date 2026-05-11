@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Shield, MessageSquare, Lock, Award } from '@lucide/svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 
 	interface Props {
 		/** Variant style */
@@ -9,6 +10,8 @@
 	}
 
 	let { variant = 'full', showPrivacy = true }: Props = $props();
+
+	const labels = getJurisdictionLabels();
 </script>
 
 {#if variant === 'full'}
@@ -22,16 +25,16 @@
 			</div>
 			<h2 class="mb-3 text-3xl font-bold text-slate-900">Why Verify Your Identity?</h2>
 			<p class="mx-auto max-w-2xl text-lg text-slate-600">
-				Congressional offices receive thousands of messages daily. Verification proves you're a real
+				{labels.legislativeBody} offices receive thousands of messages daily. Verification proves you're a real
 				constituent—not a bot, not spam, not someone from another district.
 			</p>
 		</div>
 
-		<!-- What Congress Sees -->
+		<!-- What the legislature Sees -->
 		<div class="rounded-md border border-slate-200 bg-white p-6">
 			<h3 class="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-900">
 				<MessageSquare class="h-5 w-5 text-blue-600" />
-				What Congressional Offices See
+				What {labels.legislativeBody} Offices See
 			</h3>
 			<div class="space-y-3">
 				<div class="flex items-start gap-3 rounded-lg bg-green-50 p-4">
@@ -41,7 +44,7 @@
 					<div class="flex-1">
 						<p class="font-medium text-green-900">✓ Verified Constituent</p>
 						<p class="mt-1 text-sm text-green-700">
-							From Congressional District [Your District Number]
+							From {labels.districtType} [Your District Number]
 						</p>
 					</div>
 				</div>
@@ -61,7 +64,7 @@
 					<div class="flex-1">
 						<p class="font-medium text-slate-900">Your Message Content</p>
 						<p class="mt-1 text-sm text-slate-600">
-							Encrypted delivery ensures only the congressional office can read it
+							Encrypted delivery ensures only the {labels.legislativeAdjective} office can read it
 						</p>
 					</div>
 				</div>
@@ -109,7 +112,7 @@
 							<p class="flex items-start gap-2">
 								<span class="mt-0.5 font-bold text-green-600">✓</span>
 								<span>
-									<span class="font-semibold">Congressional offices see:</span> verified constituent
+									<span class="font-semibold">{labels.legislativeBody} offices see:</span> verified constituent
 									status for public/reporting surfaces. Official delivery APIs may require the readable
 									address fields in the government request.
 								</span>

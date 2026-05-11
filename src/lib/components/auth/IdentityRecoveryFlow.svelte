@@ -428,10 +428,15 @@
 					</div>
 				</div>
 			{:else if currentStep === 'verify-mdl'}
-				<!-- mDL Verification -->
+				<!-- mDL Verification. minimumTier=5 is explicit (not the
+				     default) because recovery is by definition tier-5-required:
+				     a user with a lost mDL credential needs to re-verify via
+				     a government-issued digital ID; the address-tier fallback
+				     does not produce a credential the recovery flow accepts. -->
 				<GovernmentCredentialVerification
 					{userId}
 					{userEmail}
+					minimumTier={5}
 					oncomplete={handleMdlComplete}
 					onerror={handleMdlError}
 					oncancel={handleMdlCancel}

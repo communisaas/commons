@@ -67,6 +67,9 @@
 	import { trackAddressChanged } from '$lib/core/analytics/client';
 	import MapPinSelector from './MapPinSelector.svelte';
 	import RegroundingAddressCapture from './address-steps/RegroundingAddressCapture.svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const jurisdictionLabels = getJurisdictionLabels();
 
 	type FlowStep =
 		| 'path-select'
@@ -154,6 +157,11 @@
 	// B-3: 24 district slots from IPFS (for Poseidon2 commitment)
 	let districtSlots: string[] = $state([]);
 	let commitmentCoordinates = $state<{ lat: number; lng: number } | null>(null);
+	// F-2.4: server-issued HMAC token + addressHash from /api/location/resolve-address.
+	// Echoed back to /api/identity/verify-address to bind issuance-time coordinates
+	// to the geocoded address.
+	let addressResolutionToken = $state<string | null>(null);
+	let addressResolutionHash = $state<string | null>(null);
 	let clientCellProof = $state<ClientCellProofResult | null>(null);
 
 	// B-3: Client-side district resolution (when SHADOW_ATLAS_VERIFICATION enabled)
@@ -381,6 +389,14 @@
 			});
 
 			const data = await response.json();
+			// F-2.4 follow-up: capture geo-mode token (no addressHash) so the
+			// downstream verify-address call can satisfy the "coordinates
+			// require token" gate. Browser-geolocation path issues this from
+			// /api/location/resolve.
+			if (typeof data.addressToken === 'string') {
+				addressResolutionToken = data.addressToken;
+				addressResolutionHash = null;
+			}
 			processResolveResponse(data, response.ok);
 		} catch (err) {
 			console.error('[AddressVerificationFlow] Geolocation error:', err);
@@ -438,6 +454,16 @@
 			if (data.address?.city) city = data.address.city;
 			if (data.address?.state) stateCode = data.address.state;
 			if (data.address?.zip) zipCode = data.address.zip;
+
+			// F-2.4: capture the server-issued address-resolution token + hash so
+			// /api/identity/verify-address can validate the coordinates we'll
+			// echo back below. Only the manual-address path issues these (the
+			// browser-geolocation path uses a different endpoint and is gated
+			// downstream by reconcileCellGate at submission time).
+			if (typeof data.addressToken === 'string' && typeof data.addressHash === 'string') {
+				addressResolutionToken = data.addressToken;
+				addressResolutionHash = data.addressHash;
+			}
 
 			// B-3: Use server-geocoded coordinates for client-side district resolution
 			if (clientSideEnabled && data.coordinates?.lat != null && data.coordinates?.lng != null) {
@@ -511,6 +537,18 @@
 					slot_count: nonZeroSlots,
 					verification_method: 'shadow_atlas',
 					coordinates: commitmentCoordinates ?? undefined,
+					// F-2.4: forward the resolve-address (addr-mode) or
+					// /api/location/resolve (geo-mode) token. Server requires
+					// SOME token whenever coordinates are supplied; the
+					// addressHash is forwarded only when present (manual-address
+					// path). The mode is encoded in the token itself, so server
+					// chooses the right validation branch.
+					...(addressResolutionToken
+						? {
+								address_token: addressResolutionToken,
+								...(addressResolutionHash ? { address_hash: addressResolutionHash } : {})
+							}
+						: {}),
 					...h1TrustContext
 				};
 			} else {
@@ -914,7 +952,7 @@
 					</div>
 					<h3 class="text-lg font-semibold text-slate-900">Verify Your District</h3>
 					<p class="mt-1 text-sm text-slate-600">
-						Choose how to confirm your congressional district.
+						Choose how to confirm your {jurisdictionLabels.legislativeAdjective} district.
 					</p>
 				</div>
 
@@ -1187,7 +1225,7 @@
 						Your address is sent to our server, geocoded via self-hosted infrastructure, and matched
 						to your {detectedCountry === 'CA'
 							? 'federal electoral district (riding)'
-							: 'congressional district'}. After verification, the address may be saved into your
+							: `${jurisdictionLabels.legislativeAdjective} district`}. After verification, the address may be saved into your
 						encrypted ground vault, with district/cell metadata retained to explain and deliver the
 						credential.
 					</p>
@@ -1223,7 +1261,7 @@
 					<Loader2 class="h-8 w-8 animate-spin text-emerald-600" />
 				</div>
 				<h3 class="text-lg font-semibold text-slate-900">Resolving District</h3>
-				<p class="mt-2 text-sm text-slate-600">Looking up your congressional district...</p>
+				<p class="mt-2 text-sm text-slate-600">Looking up your {jurisdictionLabels.legislativeAdjective} district...</p>
 			</div>
 		{/if}
 

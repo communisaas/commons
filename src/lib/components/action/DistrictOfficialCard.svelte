@@ -8,6 +8,9 @@
 	 */
 	import { Mail, ChevronRight, ExternalLink, Phone } from '@lucide/svelte';
 	import type { LandscapeMember } from '$lib/utils/landscapeMerge';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+
+	const labels = getJurisdictionLabels();
 
 	const ROLE_SHORT: Record<string, string> = {
 		votes: 'Votes',
@@ -54,7 +57,7 @@
 	<div class="flex items-baseline gap-2">
 		<h4 class="text-xl font-bold text-slate-900 font-brand leading-tight">{member.name}</h4>
 		{#if member.deliveryRoute === 'cwc'}
-			<span class="text-xs font-medium text-emerald-600 shrink-0">Congressional</span>
+			<span class="text-xs font-medium text-emerald-600 shrink-0 capitalize">{labels.legislativeAdjective}</span>
 		{:else if showRoleBadge && member.roleCategory}
 			<span class="role-badge shrink-0">{ROLE_SHORT[member.roleCategory] || member.roleCategory}</span>
 		{/if}
@@ -87,7 +90,7 @@
 				</span>
 			{:else if member.deliveryRoute === 'cwc'}
 				<span class="action-link flex items-center gap-0.5 text-xs text-slate-400 transition-colors duration-150">
-					Send via Congress
+					Send via {labels.legislativeBody}
 					<ChevronRight class="h-3.5 w-3.5 transition-all duration-150 opacity-0 -translate-x-1" />
 				</span>
 			{:else if member.deliveryRoute === 'email'}

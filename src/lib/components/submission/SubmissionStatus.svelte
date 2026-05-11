@@ -2,6 +2,10 @@
 	import { CheckCircle2, Send, AlertCircle, ExternalLink, RotateCcw, FlaskConical } from '@lucide/svelte';
 	import { onMount, onDestroy, untrack } from 'svelte';
 	import { z } from 'zod';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import { RegistryMark } from '$lib/design';
+
+	const labels = getJurisdictionLabels();
 
 	let {
 		submissionId,
@@ -229,8 +233,8 @@
 		},
 		delivered: {
 			icon: CheckCircle2,
-			text: deliveryCount ? `Delivered to ${deliveryCount} offices` : 'Delivered to Congress',
-			description: 'Message received by congressional offices',
+			text: deliveryCount ? `Delivered to ${deliveryCount} offices` : `Delivered to ${labels.legislativeBody}`,
+			description: `Message received by ${labels.legislativeAdjective} offices`,
 			color: 'green'
 		},
 		partial: {
@@ -242,7 +246,7 @@
 		demo: {
 			icon: FlaskConical,
 			text: 'Demo send — no delivery',
-			description: 'CWC transport is not configured on this deploy. Your message was validated but NOT sent to any congressional office.',
+			description: `CWC transport is not configured on this deploy. Your message was validated but NOT sent to any ${labels.legislativeAdjective} office.`,
 			color: 'amber'
 		},
 		failed: {
@@ -281,10 +285,10 @@
 		}
 
 		// On-chain anchor — DistrictGate independently verifies the proof.
-		if (anchorStatus === 'anchored') {
-			const short = anchorTxHash ? `${anchorTxHash.slice(0, 10)}…${anchorTxHash.slice(-8)}` : 'anchored';
-			lines.push({ label: 'On-chain', value: short, tone: 'verified' });
-		} else if (anchorStatus === 'divergent') {
+		// The 'anchored' case (hash present) renders separately below as a
+		// RegistryMark with click-through to the chain explorer; only the
+		// non-hash status flavors flow through proofLines here.
+		if (anchorStatus === 'divergent') {
 			lines.push({ label: 'On-chain', value: 'under review · chain disagreement', tone: 'warn' });
 		} else if (anchorStatus === 'poisoned') {
 			lines.push({ label: 'On-chain', value: 'anchor unavailable · retry exhausted', tone: 'warn' });
@@ -395,7 +399,7 @@
 		</div>
 	{/if}
 
-	{#if proofLines.length > 0}
+	{#if proofLines.length > 0 || (anchorStatus === 'anchored' && anchorTxHash)}
 		<div class="mt-3 border-t border-slate-100 pt-2">
 			<dl class="space-y-0.5 text-xs">
 				{#each proofLines as line (line.label)}
@@ -412,6 +416,20 @@
 						</dd>
 					</div>
 				{/each}
+				{#if anchorStatus === 'anchored' && anchorTxHash}
+					<div class="flex gap-2">
+						<dt class="w-16 shrink-0 font-medium text-slate-500">On-chain</dt>
+						<dd>
+							<RegistryMark
+								variant="transaction"
+								value={anchorTxHash}
+								truncate={true}
+								href="https://scrollscan.com/tx/{anchorTxHash}"
+								class="text-[11px] text-emerald-700"
+							/>
+						</dd>
+					</div>
+				{/if}
 			</dl>
 		</div>
 	{/if}

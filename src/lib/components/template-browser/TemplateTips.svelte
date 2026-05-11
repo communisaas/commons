@@ -1,10 +1,13 @@
 <script lang="ts">
 	import { Info } from '@lucide/svelte';
+	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 	interface Props {
 		isCertified?: boolean;
 	}
 
 	const { isCertified = false }: Props = $props();
+
+	const labels = getJurisdictionLabels();
 </script>
 
 {#if isCertified}
@@ -15,7 +18,7 @@
 	>
 		<div class="flex items-center gap-2">
 			<Info class="h-4 w-4 text-blue-500" aria-hidden="true" />
-			<span>Address verification required for Congressional delivery</span>
+			<span>Address verification required for {labels.legislativeBody} delivery</span>
 		</div>
 	</div>
 {/if}

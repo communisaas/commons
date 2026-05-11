@@ -21,6 +21,9 @@ export { default as Ratio } from './Ratio.svelte';
 export { default as Pulse } from './Pulse.svelte';
 export { default as Rings } from './Rings.svelte';
 
+// Cryptographic substrate marks — visible as marginal/footer registry marks per CONSTITUTION.md §2.3
+export { default as RegistryMark } from './RegistryMark.svelte';
+
 // Spatial primitives
 export { default as Artifact } from './Artifact.svelte';
 export { default as EntityCluster } from './EntityCluster.svelte';
