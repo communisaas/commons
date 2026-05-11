@@ -120,7 +120,7 @@ export function computePacket(actions: RawAction[]): VerificationPacket {
 	// Date range from sentAt
 	const dateRange = computeDateRange(actions);
 
-	// Identity breakdown (Cycle 2: from trustTier per action)
+	// Identity breakdown from trustTier per action
 	const identityBreakdown = computeIdentityBreakdown(actions);
 
 	// Integrity metrics — derived from the preserved dimensions

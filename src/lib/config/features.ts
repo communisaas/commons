@@ -119,7 +119,7 @@ export const FEATURES = {
 	MDL: false,
 
 	/**
-	 * Wave 3 — V2 three-tree proof generation (F1 closure).
+	 *  V2 three-tree proof generation (F1 closure).
 	 *
 	 * When `false` (default): the client generates V1 proofs (31 public inputs).
 	 * The server-side resolver-gates and submission endpoint accept BOTH V1 and

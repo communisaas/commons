@@ -22,11 +22,41 @@ import { SignJWT, importPKCS8, exportJWK, type JWK } from 'jose';
 type ConvexJwtPrivateKey = Awaited<ReturnType<typeof importPKCS8>>;
 
 // ─── Configuration ───
+//
+// Env vars MUST be read lazily (inside functions), NOT captured at
+// module-evaluation time. On Cloudflare Workers, this module is imported by
+// `hooks.server.ts` at boot, before `event.platform.env` exists. The env
+// shim in handlePlatformEnv populates `process.env` at request time — but
+// any module-level `const X = process.env.Y` would have already captured
+// `undefined` before the shim ran. Reading inside `getIssuer()` / `getKid()`
+// guarantees the latest value (and the shim only runs once per isolate, so
+// the cost is negligible).
 
 const ALG = 'RS256';
-const ISSUER = 'https://commons.email';
 const AUDIENCE = 'convex';
 const TOKEN_TTL_SECONDS = 3600; // 1 hour
+const DEFAULT_ISSUER = 'https://commons.email';
+const DEFAULT_KID = 'commons-convex-1';
+
+/**
+ * JWT issuer URL. MUST match `convex/auth.config.ts` and `convex/authOps.ts`
+ * `tokenIdentifier` prefix. Defaults to the reference commons.email
+ * deployment; peer implementations override via CONVEX_AUTH_ISSUER.
+ * Trailing slash is stripped to prevent operator-typo drift between
+ * SvelteKit-minted `iss` and Convex-stored tokenIdentifier.
+ */
+function getIssuer(): string {
+	return (process.env.CONVEX_AUTH_ISSUER || DEFAULT_ISSUER).replace(/\/$/, '');
+}
+
+/**
+ * JWKS key id. Default `commons-convex-1` preserves current behavior;
+ * peer implementations may override via CONVEX_JWT_KID. Changing the kid
+ * invalidates active sessions because Convex caches JWKS by kid.
+ */
+function getKid(): string {
+	return process.env.CONVEX_JWT_KID || DEFAULT_KID;
+}
 
 // ─── Cached key material ───
 
@@ -71,7 +101,7 @@ export async function getPublicJwk(): Promise<JWK | null> {
 		e: jwk.e,
 		alg: ALG,
 		use: 'sig',
-		kid: 'commons-convex-1',
+		kid: getKid(),
 	};
 
 	return _publicJwk;
@@ -103,8 +133,8 @@ export async function mintConvexToken(user: {
 		email: user.email,
 		name: user.name ?? undefined,
 	})
-		.setProtectedHeader({ alg: ALG, kid: 'commons-convex-1' })
-		.setIssuer(ISSUER)
+		.setProtectedHeader({ alg: ALG, kid: getKid() })
+		.setIssuer(getIssuer())
 		.setAudience(AUDIENCE)
 		.setIssuedAt()
 		.setExpirationTime(`${TOKEN_TTL_SECONDS}s`)

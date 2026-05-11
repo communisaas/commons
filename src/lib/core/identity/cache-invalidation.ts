@@ -23,6 +23,8 @@ const SESSION_DB_NAME_LEGACY = 'commons-sessions';
 const SESSION_DB_NAME = 'commons-session';
 const ADDRESS_DB_NAME = 'commons-address';
 const LOCATION_DB_NAME = 'commons_location';
+const SEARCH_CACHE_DB_NAME = 'commons-search-cache';
+const MESSAGE_JOB_RECOVERY_DB_NAME = 'commons-message-jobs';
 
 // localStorage keys
 const GUEST_STATE_KEY = 'commons_guest_template';
@@ -178,6 +180,31 @@ export async function clearAllClientCaches(): Promise<void> {
 		// credential-encryption may not be loaded — safe to ignore
 	}
 
+	// Clear decision-maker search results — surveillance-leak vector on shared
+	// devices. No economic cost: search results re-fetch on demand.
+	try {
+		await clearDatabase(SEARCH_CACHE_DB_NAME);
+	} catch (error) {
+		console.error('[CacheInvalidation] Failed to clear search cache:', error);
+	}
+
+	// Clear message-job recovery keys — activity-pattern leak (jobId+timestamp
+	// visibility for next user) and per-user keys aren't enforced here. Keys are
+	// non-extractable so the in-flight cipher cost is bounded; acceptable to
+	// drop unfetched job results on logout (very rare in practice — jobs
+	// complete in seconds and users rarely log out mid-flow).
+	try {
+		await clearDatabase(MESSAGE_JOB_RECOVERY_DB_NAME);
+	} catch (error) {
+		console.error('[CacheInvalidation] Failed to clear message-job recovery:', error);
+	}
+
+	// NOTE: trade preimages (commons-trade-preimages) are intentionally NOT cleared
+	// on logout. Logout would forfeit committed-but-unrevealed trades — real
+	// economic loss. The shared-device leak vector exists but is bounded: preimages
+	// reveal trading intent that's already committed on-chain. Cure is per-user
+	// keying, not destructive clearing.
+
 	// Clear guest state entirely
 	try {
 		localStorage.removeItem(GUEST_STATE_KEY);
@@ -186,13 +213,17 @@ export async function clearAllClientCaches(): Promise<void> {
 		console.error('[CacheInvalidation] Failed to clear guest state:', error);
 	}
 
-	// Clear any other localStorage items specific to the user
+	// Clear localStorage items specific to the user. Sweep covers the
+	// `commons*` prefix plus analytics tracker keys (`analytics_*`,
+	// `viewed:*`, `acted:*`) which are activity-pattern leaks on shared devices.
+	// If you add a new client-side localStorage key, add its prefix here OR use
+	// a `commons_` / `commons-` prefix so the existing sweep catches it.
 	try {
-		// Only clear commons-prefixed items
+		const PREFIX_PATTERNS = ['commons', 'analytics_', 'viewed:', 'acted:'];
 		const keysToRemove: string[] = [];
 		for (let i = 0; i < localStorage.length; i++) {
 			const key = localStorage.key(i);
-			if (key && key.startsWith('commons')) {
+			if (key && PREFIX_PATTERNS.some((p) => key.startsWith(p))) {
 				keysToRemove.push(key);
 			}
 		}

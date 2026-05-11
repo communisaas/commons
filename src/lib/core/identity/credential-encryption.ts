@@ -28,7 +28,9 @@ const DEVICE_KEY_ID = 'device-credential-key';
 const DERIVATION_KEY_ID = 'device-derivation-key-v2';
 
 // FROZEN: changing this salt would break decryption of all existing encrypted credentials
-const HKDF_SALT = new TextEncoder().encode('commons-credential-v2');
+// Pre-launch namespace migration (2026-05-05): renamed from `commons-credential-v2` to
+// `voter-protocol-credential-v2`. See voter-protocol CRYPTOGRAPHY-SPEC.md §0.
+const HKDF_SALT = new TextEncoder().encode('voter-protocol-credential-v2');
 
 /** Current encryption version for migration support */
 const ENCRYPTION_VERSION = 2;
@@ -190,7 +192,7 @@ export async function getOrCreateMasterBytes(): Promise<ArrayBuffer> {
 /**
  * Derive a per-user AES-256-GCM key via HKDF.
  *
- * HKDF(SHA-256, masterKey, salt="commons-credential-v2", info=userId) -> AES-256-GCM
+ * HKDF(SHA-256, masterKey, salt="voter-protocol-credential-v2", info=userId) -> AES-256-GCM
  *
  * The derived key is:
  * - Deterministic: same master + same userId = same key (survives page reload)

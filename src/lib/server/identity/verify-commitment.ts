@@ -1,7 +1,7 @@
 /**
- * Wave 6 / FU-1.1 — Issuance-time district-commitment authenticity check.
+ * Issuance-time district-commitment authenticity check.
  *
- * The downgrade guard (Wave 1b, `convex/users.ts`) ensures any user who has
+ * The downgrade guard (`convex/users.ts`) ensures any user who has
  * held a v2 credential MUST supply a `district_commitment` on every
  * subsequent verify-address. But the guard checks PRESENCE, not CONTENT —
  * a malicious client could submit a valid 64-hex string that doesn't
@@ -46,8 +46,8 @@ interface VerifyCommitmentArgs {
 	country?: string;
 	/** IPFS fetch timeout in ms (default 8000). Cloudflare Workers cap at
 	 *  30s end-to-end, so 8s leaves room for Poseidon + downstream Convex
-	 *  calls. SELF-REVIEW B fix: explicit timeout prevents hung verify
-	 *  requests when IPFS is slow but not down. */
+	 *  calls. Explicit timeout prevents hung verify requests when IPFS is
+	 *  slow but not down. */
 	timeoutMs?: number;
 }
 
@@ -57,10 +57,9 @@ interface VerifyCommitmentResult {
 }
 
 /**
- * SELF-REVIEW B fix — race the IPFS fetch against a timer so a slow gateway
- * surfaces as `COMMITMENT_VERIFY_IPFS_TIMEOUT` (mapped to 503 retry by the
- * caller) instead of a 30s platform-edge timeout that abandons the request
- * mid-flight.
+ * Race the IPFS fetch against a timer so a slow gateway surfaces as
+ * `COMMITMENT_VERIFY_IPFS_TIMEOUT` (mapped to 503 retry by the caller)
+ * instead of a 30s platform-edge timeout that abandons the request mid-flight.
  */
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 	let timerId: ReturnType<typeof setTimeout> | undefined;
@@ -117,12 +116,12 @@ export async function verifyDistrictCommitment(
 		);
 	}
 
-	// F-1.1 (partial): SMT-path authenticity gate. Closes chunk *fabrication*
-	// (forging an unpublished `(cellId, districts)` pair) by requiring the
-	// chunk's SMT path to resolve to the externally-pinned Tree 2 root.
-	// Does NOT close chunk *substitution* (attacker swaps in a different
-	// real leaf under the user's h3 key) — that's F-1.1b, deferred to the
-	// circuit-signature change that binds h3Cell into the leaf encoding.
+	// SMT-path authenticity gate. Closes chunk *fabrication* (forging an
+	// unpublished `(cellId, districts)` pair) by requiring the chunk's SMT
+	// path to resolve to the externally-pinned Tree 2 root. Does NOT close
+	// chunk *substitution* (attacker swaps in a different real leaf under
+	// the user's h3 key) — that's a separate finding, deferred to a circuit-
+	// signature change that binds h3Cell into the leaf encoding.
 	const expectedRoot = getExpectedCellMapRoot();
 	const expectedDepth = getExpectedCellMapDepth();
 	const isProduction =
@@ -167,8 +166,8 @@ export async function verifyDistrictCommitment(
 		}
 	} else if (isProduction && !allowUnpinned) {
 		// Fail-closed in production when no pin is configured. The atlas-
-		// authenticity gate is load-bearing for F-1.1 — operating without it
-		// re-opens the poisoned-gateway forgery primitive. The escape hatch
+		// authenticity gate is load-bearing — operating without it re-opens
+		// the poisoned-gateway forgery primitive. The escape hatch
 		// (ATLAS_AUTHENTICITY_ALLOW_UNPINNED=1) exists for the brief rotation
 		// window where the new atlas is published but the env var hasn't
 		// propagated; ops sets it deliberately and then unsets it.
@@ -210,11 +209,10 @@ export async function verifyDistrictCommitment(
 	})();
 
 	if (expectedBig !== clientBig) {
-		// SELF-REVIEW C: surface the active CID in failure logs so when this
-		// fires, ops can compare server-side `IPFS_CID_ROOT` to client-side
-		// `VITE_IPFS_CID_ROOT` (build-time embedded). Mismatch between the
-		// two is the most common cause of legitimate-user rejections during
-		// shadow-atlas rollout windows.
+		// Surface the active CID in failure logs so ops can compare server-side
+		// `IPFS_CID_ROOT` to client-side `VITE_IPFS_CID_ROOT` (build-time
+		// embedded). CID drift between the two is the most common cause of
+		// legitimate-user rejections during shadow-atlas rollout windows.
 		try {
 			const { IPFS_CIDS } = await import('$lib/core/shadow-atlas/ipfs-store');
 			console.warn('[verify-commitment] authenticity mismatch — server CID', {

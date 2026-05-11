@@ -803,9 +803,10 @@ export async function clientCommitTrade(
 		}
 	}
 
-	// 9. Persist preimage in IndexedDB
+	// 9. Persist preimage in IndexedDB (per-user keyed via wallet.address)
 	try {
 		await storePreimage({
+			userAddress: wallet.address.toLowerCase(),
 			debateId: params.debateId,
 			epoch,
 			commitIndex,
@@ -854,8 +855,8 @@ export async function clientRevealTrade(
 	wallet: EVMWalletProvider,
 	params: ClientRevealTradeParams
 ): Promise<{ txHash: string }> {
-	// 1. Retrieve preimage
-	const preimage = await getPreimage(params.debateId, params.epoch);
+	// 1. Retrieve preimage (V2 lookup keyed by wallet, falls back to V1 legacy)
+	const preimage = await getPreimage(params.debateId, params.epoch, wallet.address);
 	if (!preimage) {
 		throw new Error(
 			`No stored preimage for debate ${params.debateId.slice(0, 12)}... epoch ${params.epoch}. ` +
@@ -887,7 +888,7 @@ export async function clientRevealTrade(
 
 	// 3. Clear preimage (trade is revealed, no longer needed)
 	try {
-		await clearPreimage(params.debateId, params.epoch);
+		await clearPreimage(params.debateId, params.epoch, wallet.address);
 	} catch {
 		// Non-critical — preimage is just stale data at this point
 		console.warn('[debate-client] Failed to clear preimage from IndexedDB (non-critical)');

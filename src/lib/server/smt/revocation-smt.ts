@@ -1,5 +1,5 @@
 /**
- * Wave 2 — KG-2 closure. Server-side Poseidon2 SMT computation for the
+ *  KG-2 closure. Server-side Poseidon2 SMT computation for the
  * revocation tree. Pairs with `convex/revocations.ts` (storage boundary).
  *
  * Flow:
@@ -30,8 +30,8 @@ import { poseidon2Hash2 } from '$lib/core/crypto/poseidon';
 import { getZeroHashes as getSharedZeroHashes } from '$lib/core/crypto/zero-hashes';
 import { serverInternalMutation, serverInternalQuery } from '$lib/server/convex-internal';
 
-// F-1.4 (2026-04-25 brutalist audit) — widened from 64 to 128 to close the
-// targeted-lockout grinding attack against the revocation SMT keyspace.
+// SMT depth widened from 64 to 128 to close the targeted-lockout grinding
+// attack against the revocation keyspace.
 //
 // Threat model — preimage attack (the realistic exploit):
 //   An attacker grinds candidate `district_commitment` values and computes
@@ -73,7 +73,7 @@ export const SMT_OCCUPIED_LEAF_VALUE = '0x' + '0'.repeat(63) + '1';
  * RevocationRegistry contract is deployed with. Both must agree byte-for-byte
  * or the very first emit's root won't validate against the contract.
  *
- * Wave 3c: delegates to `getZeroHashes` from `$lib/core/crypto/zero-hashes`
+ * Helper: delegates to `getZeroHashes` from `$lib/core/crypto/zero-hashes`
  * (single source of truth for both server and browser).
  */
 export async function getEmptyTreeRoot(): Promise<string> {
@@ -84,10 +84,10 @@ export async function getEmptyTreeRoot(): Promise<string> {
 /**
  * Truncate a BN254 nullifier to the SMT keyspace (low 128 bits).
  *
- * Returns the lower 128 bits as a bigint. F-1.4 (2026-04-25) widened from
- * 64 to 128 to close adversarial preimage grinding (single-target was 2^64,
- * multi-target with N=10^6 was 2^44; widened to 2^128 / 2^108 respectively).
- * Honest birthday collision at 10^6 revocations drops from ~2.7e-8 to ~1.5e-27.
+ * Returns the lower 128 bits as a bigint. The widening from 64 to 128
+ * closed adversarial preimage grinding (single-target was 2^64, multi-target
+ * with N=10^6 was 2^44; widened to 2^128 / 2^108 respectively). Honest
+ * birthday collision at 10^6 revocations drops from ~2.7e-8 to ~1.5e-27.
  *
  * The circuit's `compute_revocation_smt_root` walks 128 levels and consumes
  * `revocation_path_bits` provided by the prover. Both the prover and this
@@ -137,7 +137,7 @@ export interface SMTInsertResult {
  * Pure side effect on Convex SMT state. Does NOT write on-chain — the caller
  * (emit-revocation endpoint) does that with the returned root.
  *
- * IDEMPOTENT semantics — Wave 2 review #1 finding:
+ * IDEMPOTENT semantics — Review finding:
  *   The first emit's chain write may fail (RPC outage, transient revert).
  *   On retry, this function MUST NOT short-circuit; otherwise the chain
  *   never receives the write and the system stays in "Convex ahead of chain"
@@ -185,13 +185,12 @@ export async function insertRevocationNullifier(
 			};
 		}
 
-		// F-1.4 review R2 (2026-04-25): fail-CLOSED if Convex returned a stale
-		// short sibling array. Without this, `path.siblings[d] ?? zeros[d]`
-		// below would silently pad missing depths 64..127 with empty hashes
-		// during a partial deploy where SvelteKit moved to depth 128 but
-		// Convex is still on depth 64. The synthesized "Frankenstein root"
-		// would then commit to chain. Loud failure here forces the operator
-		// to investigate the deploy mismatch.
+		// Fail-CLOSED if Convex returned a stale short sibling array. Without
+		// this, `path.siblings[d] ?? zeros[d]` below would silently pad missing
+		// depths 64..127 with empty hashes during a partial deploy where
+		// SvelteKit moved to depth 128 but Convex was still on depth 64. The
+		// synthesized "Frankenstein root" would then commit to chain. Loud
+		// failure forces the operator to investigate the deploy mismatch.
 		if (!Array.isArray(path.siblings) || path.siblings.length !== SMT_DEPTH) {
 			throw new Error(
 				`SMT_PATH_LENGTH_MISMATCH: expected ${SMT_DEPTH} siblings from Convex, got ${path.siblings?.length}`
@@ -230,31 +229,31 @@ export async function insertRevocationNullifier(
 				expectedSequenceNumber: path.expectedSequenceNumber,
 			})) as { newRoot: string; newSequenceNumber: number };
 
-			// FU-2.2 (Wave 8) — post-write read-back verification. The Convex
-			// mutation cannot recompute Poseidon (no bb.js in its runtime), so
-			// it accepts caller-supplied `newRoot` verbatim. A caller bug
-			// (off-by-one in bit decomposition, wrong sibling lookup, etc.)
-			// could persist a structurally-impossible tree that survives until
-			// the on-chain proof verifier rejects.
+			// Post-write read-back verification. The Convex mutation cannot
+			// recompute Poseidon (no bb.js in its runtime), so it accepts the
+			// caller-supplied `newRoot` verbatim. A caller bug (off-by-one in
+			// bit decomposition, wrong sibling lookup, etc.) could persist a
+			// structurally-impossible tree that survives until the on-chain
+			// proof verifier rejects.
 			//
 			// We re-fetch the path AFTER the write and recompute the root from
 			// the freshly-stored siblings + the leaf we just wrote. If the
 			// stored hashes don't reproduce the root we computed locally,
 			// something between the in-memory walk and Convex storage diverged.
 			//
-			// Concurrency (SELF-REVIEW W8 A): a CONCURRENT emit between our
-			// mutation and our post-write read may have advanced the SMT and
-			// changed the siblings. We detect this by comparing the post-read's
+			// Concurrency: a CONCURRENT emit between our mutation and our
+			// post-write read may have advanced the SMT and changed the
+			// siblings. We detect this by comparing the post-read's
 			// `expectedSequenceNumber` to our `result.newSequenceNumber` — if
 			// the seq advanced, we trust the mutation's atomicity guarantee
 			// (Convex serializes table writes) and SKIP the verification
 			// instead of falsely flagging concurrent inserts.
 			//
-			// Failure semantics (SELF-REVIEW W8 G): if verification finds real
-			// drift, the SMT is corrupted and we MUST NOT proceed with the
-			// chain emit (which would commit a bad root to RevocationRegistry).
-			// Flip the kill-switch (FU-2.1) so all subsequent emits halt until
-			// an operator investigates. Then throw to caller.
+			// Failure semantics: if verification finds real drift, the SMT is
+			// corrupted and we MUST NOT proceed with the chain emit (which
+			// would commit a bad root to RevocationRegistry). Flip the
+			// kill-switch so all subsequent emits halt until an operator
+			// investigates. Then throw to caller.
 			try {
 				const verifyPath = await serverInternalQuery(internal.revocations.getRevocationSMTPath, {
 					leafKey: leafKey.toString(16),
@@ -264,11 +263,10 @@ export async function insertRevocationNullifier(
 						'SMT_POSTWRITE_LEAF_MISSING: applied insert but read-back returned no leaf'
 					);
 				}
-				// F-1.4 review R2 (2026-04-25): fail-CLOSED on short read-back.
-				// Same defense as the pre-walk assertion above — a stale Convex
-				// returning fewer siblings than SMT_DEPTH would cause the
-				// recomputation walk to pad with empty hashes and silently
-				// "pass" verification against a corrupted root.
+				// Fail-CLOSED on short read-back. Same defense as the pre-walk
+				// assertion above — a stale Convex returning fewer siblings than
+				// SMT_DEPTH would cause the recomputation walk to pad with empty
+				// hashes and silently "pass" verification against a corrupted root.
 				if (
 					!Array.isArray(verifyPath.siblings) ||
 					verifyPath.siblings.length !== SMT_DEPTH
@@ -312,11 +310,13 @@ export async function insertRevocationNullifier(
 						error: msg
 					});
 					// Halt the system before throwing — chain emit must NOT
-					// proceed with a corrupted SMT. Operator clears via the
-					// FU-2.1 path after investigation.
+					// proceed with a corrupted SMT. Operator clears the halt via
+					// the audit-logged path after investigation. The kill-switch
+					// flip uses the module-top `internal` import (statically
+					// resolvable; not subject to bundler tree-shaking that could
+					// silently drop a catch-only dynamic import).
 					try {
-						const { internal: internalApi } = await import('$lib/convex');
-						await serverInternalMutation(internalApi.revocations.setRevocationHalt, {
+						await serverInternalMutation(internal.revocations.setRevocationHalt, {
 							reason: 'postwrite_verification_failed'
 						});
 					} catch (haltErr) {
@@ -362,9 +362,9 @@ export async function insertRevocationNullifier(
 				continue;
 			}
 			if (msg.includes('REVOCATION_EMITS_HALTED')) {
-				// Wave 5 / FU-2.1 — kill-switch tripped. Surface as a
-				// distinct error class so the endpoint can map to terminal
-				// `config` (operator must clear the halt before retry).
+				// Kill-switch tripped. Surface as a distinct error class so the
+				// endpoint can map to terminal `config` (operator must clear the
+				// halt before retry).
 				throw new Error('REVOCATION_EMITS_HALTED');
 			}
 			throw err;

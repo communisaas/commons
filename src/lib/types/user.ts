@@ -21,9 +21,9 @@ export interface UserProfile {
 	updated_at: Date;
 }
 
-// NOTE: UserLocation interface removed - coordinates data now part of enhanced User model
-// All location data (latitude, longitude, political_embedding, community_sheaves)
-// is now directly accessible on the User object after Phase 2 consolidation
+// NOTE: UserLocation interface removed — coordinates data lives directly on the
+// User model. All location data (latitude, longitude, political_embedding,
+// community_sheaves) is accessed off the User object.
 
 export interface Representative {
 	id: string;
@@ -38,7 +38,7 @@ export interface Representative {
 	phone?: string;
 	email?: string;
 
-	// Enhanced office information (from Phase 5 consolidation)
+	// Enhanced office information
 	member_name?: string; // May differ from name field
 	office_address?: string;
 	office_city?: string;

@@ -61,17 +61,18 @@ export interface ProofContext {
 	authorityLevel?: 1 | 2 | 3 | 4 | 5;
 
 	/**
-	 * V2-only F1 closure inputs (Wave 3 — REVOCATION-NULLIFIER-SPEC §2.4).
+	 * V2-only F1 closure inputs (— REVOCATION-NULLIFIER-SPEC §2.4).
 	 *
 	 * When the caller is generating a V2 three-tree proof, ALL THREE fields
 	 * MUST be provided together; the mapper threads them through to
 	 * `ThreeTreeProofInputs`. The downstream validator
 	 * (`validateThreeTreeProofInputs`) enforces all-or-nothing presence.
 	 *
-	 * Computed via `fetchRevocationWitness()` on the SvelteKit/browser side
-	 * by querying `internal.revocations.getRevocationNonMembershipPath` and
-	 * filling any null sibling slots with the depth-d empty-subtree value
-	 * from `getEmptyTreeRoot()`-style recurrence.
+	 * Computed via `fetchRevocationWitness()` on the browser side, which posts
+	 * to the auth-gated, rate-limited `/api/proofs/revocation-witness` endpoint
+	 * (which in turn calls the internal-only `getRevocationSMTPath` Convex
+	 * query). Null sibling slots are filled with the depth-d empty-subtree
+	 * value from `getEmptyTreeRoot()`-style recurrence.
 	 *
 	 * Absent (undefined) when generating against the V1 prover. The
 	 * `FEATURES.V2_PROOF_GENERATION` flag in `src/lib/config/features.ts`

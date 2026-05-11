@@ -58,7 +58,10 @@ export async function decryptWitness(
 	const encryptionKey = blake2b(sharedSecret, {
 		dkLen: 32,
 		// FROZEN: must match client-side domain in witness-encryption.ts
-		key: new TextEncoder().encode('commons-witness-encryption-v1')
+		// Pre-launch namespace migration (2026-05-05): renamed from
+		// `commons-witness-encryption-v1` to `voter-protocol-witness-encryption-v1`.
+		// See voter-protocol CRYPTOGRAPHY-SPEC.md §0.
+		key: new TextEncoder().encode('voter-protocol-witness-encryption-v1')
 	});
 
 	// Step 3: Decrypt with XChaCha20-Poly1305
@@ -74,8 +77,10 @@ export async function decryptWitness(
 function hexToBytes(hex: string): Uint8Array {
 	const cleanHex = hex.replace(/^0x/, '');
 	const bytes = new Uint8Array(cleanHex.length / 2);
+	// `substr` is deprecated; use `slice(start, end)` with end = start + 2.
+	// Functionally identical for ASCII hex but keeps lint clean.
 	for (let i = 0; i < cleanHex.length; i += 2) {
-		bytes[i / 2] = parseInt(cleanHex.substr(i, 2), 16);
+		bytes[i / 2] = parseInt(cleanHex.slice(i, i + 2), 16);
 	}
 	return bytes;
 }

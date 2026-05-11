@@ -102,6 +102,25 @@ function createModalSystem() {
 				this.close(existingId);
 			}
 
+			// Reset legacy template-modal state on EVERY open of a
+			// `template_modal` (whether via this `openModal` API or the
+			// legacy `open()` API which does its own reset at line 260+).
+			// `TemplateModal.svelte:84` reads `currentState = $derived(
+			// modalActions.modalState)` which proxies `legacyModalState.state`
+			// — without this reset, opening template B while template A's
+			// flow has set state to 'sending' / 'confirmation' / 'error'
+			// would leak that state into B's render. Same-id reuse at line
+			// `modalSystemState.activeModals[id] = modalState` may preserve
+			// the existing TemplateModal instance (Svelte keying), so local
+			// `$state` for `submissionId` / `proofSubmissionBlocked` may not
+			// remount-reset either; legacy reset here is the deterministic
+			// gate.
+			if (type === 'template_modal') {
+				legacyModalState.state = 'loading';
+				legacyModalState.sendConfirmed = false;
+				legacyModalState.mailtoUrl = undefined;
+			}
+
 			const zIndex = modalSystemState.baseZIndex + modalSystemState.modalStack.length;
 
 			const modalState: ModalState = {

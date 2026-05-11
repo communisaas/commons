@@ -19,7 +19,7 @@ export interface AuthorshipBreakdown {
 	shared: number;
 	/** Actions with null messageHash (data unavailable) */
 	unknown: number;
-	/** True when compositionMode was explicitly captured (Cycle 2+), false = heuristic from messageHash */
+	/** True when compositionMode was explicitly captured on the action, false = heuristic from messageHash */
 	explicit: boolean;
 }
 
@@ -101,7 +101,7 @@ export interface VerificationPacket {
 	authorship: AuthorshipBreakdown;
 	/** Submission date range */
 	dateRange: DateRange;
-	/** Identity verification breakdown — null until Cycle 2 adds trustTier per action */
+	/** Identity verification breakdown — null until a follow-up adds trustTier per action */
 	identityBreakdown: IdentityBreakdown | null;
 
 	// ── Coordination audit metrics ──

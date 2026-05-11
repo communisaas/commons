@@ -394,12 +394,12 @@ export class SlidingWindowRateLimiter {
  * 3. /api/legislative/submit - 3 requests/hour per user
  * 4. /api/submissions/* - 5 requests/minute per IP
  *
- * Anti-Astroturf (Cycle 3, G-02/G-10):
+ * Anti-Astroturf:
  * 6. /api/templates - 10 requests/day per user (template farming prevention)
  * 7. /api/moderation/* - 30 requests/minute per IP (moderation abuse prevention)
  * 8. /api/email/* - 10 requests/minute per user (email send throttle)
  *
- * Wallet infrastructure (Wave 7, F-11):
+ * Wallet infrastructure:
  * 9. /api/wallet/nonce - 10 req/min per IP (nonce generation)
  * 10. /api/wallet/connect - 5 req/min per user (wallet binding)
  * 11. /api/wallet/near/sponsor - 10 req/min per user (meta-tx relay)
@@ -483,7 +483,7 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		keyStrategy: 'ip',
 		includeGet: true
 	},
-	// ── Debate market rate limits (Wave 7B — endpoint hardening) ──
+	// ── Debate market rate limits (endpoint hardening) ──
 	// Blanket limit on all debate mutations. The prefix /api/debates/ catches
 	// all sub-endpoints (arguments, commit, reveal, cosign, appeal, resolve, etc.)
 	// since the rate limiter uses segment-boundary prefix matching.
@@ -495,7 +495,7 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		keyStrategy: 'user',
 		includeGet: true
 	},
-	// ── Wallet infrastructure rate limits (Wave 7 — F-11) ──
+	// ── Wallet infrastructure rate limits ──
 	{
 		pattern: '/api/wallet/nonce',
 		maxRequests: 10,
@@ -556,7 +556,7 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		keyStrategy: 'user',
 		includeGet: true
 	},
-	// ── Events (Phase 2 Wave 1) ──
+	// ── Events  ──
 	{
 		pattern: '/api/e/',
 		maxRequests: 10,
@@ -564,7 +564,7 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		keyStrategy: 'ip',
 		includeGet: true
 	},
-	// ── Fundraising (Phase 2 Wave 2) ──
+	// ── Fundraising  ──
 	{
 		pattern: '/api/d/',
 		maxRequests: 10,
@@ -572,21 +572,21 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		keyStrategy: 'ip',
 		includeGet: true
 	},
-	// ── Automation (Phase 2 Wave 3) ──
+	// ── Automation  ──
 	{
 		pattern: '/api/automation/',
 		maxRequests: 5,
 		windowMs: 60 * 1000, // 5 req/min — scheduler endpoint
 		keyStrategy: 'ip'
 	},
-	// ── SMS + Calling (Phase 2 Wave 4) ──
+	// ── SMS + Calling  ──
 	{
 		pattern: '/api/sms/',
 		maxRequests: 5,
 		windowMs: 60 * 1000, // 5 req/min per IP — webhook + status
 		keyStrategy: 'ip'
 	},
-	// ── Geographic Expansion (Phase 2 Wave 5) ──
+	// ── Geographic Expansion  ──
 	{
 		pattern: '/api/geographic/resolve',
 		maxRequests: 10,
@@ -606,6 +606,15 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		windowMs: 60 * 1000, // 30 req/min per IP — stats polling (every 30s) + action submission
 		keyStrategy: 'ip',
 		includeGet: true
+	},
+	// ── ZK proof support endpoints ──
+	// Browser-callable witness retrieval for non-membership SMT paths. Auth-gated;
+	// also rate-limited to bound Convex read amplification during hot proof phases.
+	{
+		pattern: '/api/proofs/',
+		maxRequests: 30,
+		windowMs: 60 * 1000, // 30 req/min per user — proof generation fans out a few witness fetches
+		keyStrategy: 'user'
 	}
 ];
 

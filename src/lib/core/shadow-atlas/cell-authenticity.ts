@@ -18,8 +18,8 @@
  *
  * The structural fix requires changing the leaf to include `h3Cell`:
  *   leaf = H3(h3Cell, cellId, sponge24(districts))
- * which is a circuit-signature change deferred to the next atlas-builder
- * cycle. See F-1.1b in BRUTALIST-AUDIT-2026-04-25.md.
+ * which is a circuit-signature change deferred to a future atlas-builder
+ * version.
  *
  * Pre-fix the server had no authenticity gate at all, so this still cuts the
  * attacker's options materially: chunk *substitution* requires having

@@ -208,7 +208,10 @@ export async function encryptWitness(witness: WitnessData): Promise<EncryptedWit
 			32, // 32 bytes for XChaCha20-Poly1305
 			sharedSecret,
 			// FROZEN: changing this domain would break decryption of existing witness ciphertexts
-			sodium.from_string('commons-witness-encryption-v1')
+			// Pre-launch namespace migration (2026-05-05): renamed from
+			// `commons-witness-encryption-v1` to `voter-protocol-witness-encryption-v1`.
+			// See voter-protocol CRYPTOGRAPHY-SPEC.md §0.
+			sodium.from_string('voter-protocol-witness-encryption-v1')
 		);
 
 		// Step 5: Generate random 24-byte nonce (full XChaCha20 nonce, no truncation)

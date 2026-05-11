@@ -487,7 +487,7 @@ export async function registerLeaf(leaf: string, options?: { attestationHash?: s
 
 	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
-		'X-Client-Version': 'commons-v1',
+		'X-Client-Version': 'voter-protocol-v1',
 	};
 	if (WRITE_RELAY_TOKEN) {
 		headers['Authorization'] = `Bearer ${WRITE_RELAY_TOKEN}`;
@@ -567,7 +567,7 @@ export async function replaceLeaf(
 
 	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
-		'X-Client-Version': 'commons-v1',
+		'X-Client-Version': 'voter-protocol-v1',
 	};
 	if (WRITE_RELAY_TOKEN) {
 		headers['Authorization'] = `Bearer ${WRITE_RELAY_TOKEN}`;
@@ -699,7 +699,7 @@ export async function registerEngagement(
 
 	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
-		'X-Client-Version': 'commons-v1',
+		'X-Client-Version': 'voter-protocol-v1',
 	};
 	if (WRITE_RELAY_TOKEN) {
 		headers['Authorization'] = `Bearer ${WRITE_RELAY_TOKEN}`;
@@ -782,7 +782,7 @@ export async function getEngagementPath(leafIndex: number): Promise<EngagementPa
 	const response = await fetch(url, {
 		headers: {
 			Accept: 'application/json',
-			'X-Client-Version': 'commons-v1',
+			'X-Client-Version': 'voter-protocol-v1',
 		},
 		signal: AbortSignal.timeout(10_000),
 	});
@@ -838,7 +838,7 @@ export async function getEngagementMetrics(identityCommitment: string): Promise<
 	const response = await fetch(url, {
 		headers: {
 			Accept: 'application/json',
-			'X-Client-Version': 'commons-v1',
+			'X-Client-Version': 'voter-protocol-v1',
 		},
 		signal: AbortSignal.timeout(10_000),
 	});
@@ -900,7 +900,7 @@ export async function getEngagementBreakdown(identityCommitment: string): Promis
 	const response = await fetch(url, {
 		headers: {
 			Accept: 'application/json',
-			'X-Client-Version': 'commons-v1',
+			'X-Client-Version': 'voter-protocol-v1',
 		},
 		signal: AbortSignal.timeout(10_000),
 	});

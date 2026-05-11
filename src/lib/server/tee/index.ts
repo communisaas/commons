@@ -47,37 +47,50 @@
  * the implementation, not the architecture.
  */
 
+import { env } from '$env/dynamic/private';
 import type { ConstituentResolver } from './constituent-resolver';
 import { LocalConstituentResolver } from './local-resolver';
 import { NitroEnclaveResolver } from './nitro-resolver';
 
-let resolver: ConstituentResolver | null = null;
-
 /**
- * Get the active constituent resolver.
+ * Get the active constituent resolver. Per-call factory: NO module-scope
+ * memoization. CF Workers reuse isolates across requests; a memoized resolver
+ * with per-instance state (cache, DB handle, key material) would bleed state
+ * across users. Today both implementations are stateless, but the factory
+ * shape is what guards against future regressions — the moment a resolver
+ * subclass adds instance state, this no-memoization contract is what keeps
+ * cross-request bleed impossible.
  *
- * Selection happens at first call and is memoized. Production startup should
- * fail loud if TEE_PUBLIC_KEY_URL is set but unreachable — see
- * NitroEnclaveResolver constructor + resolve() for the failure semantics.
+ * Construction is cheap: `LocalConstituentResolver` has no constructor work;
+ * `NitroEnclaveResolver` validates the endpoint URL once. Per-request cost is
+ * negligible compared to the actual resolve() work.
+ *
+ * If you find yourself wanting to add caching here, push the cache INTO the
+ * resolver implementation with explicit per-request scoping (e.g., a request-id
+ * key) — never back to module scope.
  */
 export function getConstituentResolver(): ConstituentResolver {
-	if (!resolver) {
-		const teeUrl = typeof process !== 'undefined' ? process.env?.TEE_PUBLIC_KEY_URL : undefined;
-		if (teeUrl && teeUrl.trim() !== '') {
-			resolver = new NitroEnclaveResolver(teeUrl.trim());
-		} else {
-			resolver = new LocalConstituentResolver();
-		}
+	// Read via SvelteKit's `$env/dynamic/private` (NOT `process.env`). On
+	// Cloudflare Pages with `nodejs_compat`, `process` is polyfilled but
+	// `process.env` is empty — the platform binds env vars through the
+	// `platform.env` interface that `$env/dynamic/private` reads. Using
+	// `process.env` here would silently fall back to LocalConstituentResolver
+	// even when the operator has configured `TEE_PUBLIC_KEY_URL`. (MEMORY.md
+	// "CF Workers: process.env is empty" is the operative gotcha.)
+	const teeUrl = env.TEE_PUBLIC_KEY_URL;
+	if (teeUrl && teeUrl.trim() !== '') {
+		return new NitroEnclaveResolver(teeUrl.trim());
 	}
-	return resolver;
+	return new LocalConstituentResolver();
 }
 
 /**
- * Reset the singleton. Tests only — never call from production paths.
- * Without this, env-var changes inside a test don't propagate.
+ * No-op retained for test-source compatibility. The factory no longer caches
+ * any state — there is nothing to reset. Kept exported so the existing afterEach
+ * hooks in `tests/unit/tee/nitro-resolver.test.ts` continue to compile.
  */
 export function _resetConstituentResolverForTest(): void {
-	resolver = null;
+	// no-op
 }
 
 export type { ConstituentResolver, EncryptedWitnessRef, ResolverResult } from './constituent-resolver';

@@ -373,7 +373,7 @@ export async function addBrowserGeolocationSignal(): Promise<LocationSignal | nu
 
 /**
  * Trigger behavioral location inference.
- * @deprecated Behavioral tracking removed in Cycle 40 (replaced by Postal Bubble).
+ * @deprecated Behavioral tracking removedby a follow-up cure (replaced by Postal Bubble).
  */
 export async function inferBehavioralLocation(): Promise<LocationSignal | null> {
 	return null;

@@ -9,7 +9,7 @@
  * - Originally shimmed three-tree because @voter-protocol/noir-prover@0.2.0
  *   only exported two-tree. The npm package now exports all provers, but
  *   the shim is retained as a stable internal interface and fallback boundary.
- * - Debate weight and position note provers added (Cycle 18).
+ * - Debate weight and position note provers added later.
  *
  * When this shim becomes unnecessary (all provers stable in npm), delete it
  * and import directly from '@voter-protocol/noir-prover'.

@@ -371,12 +371,17 @@ export async function computeNullifier(
 /**
  * REVOCATION_DOMAIN — F1 closure protocol constant (FROZEN post-launch).
  *
- * The BN254 field element derived from UTF-8 "commons-revocation-v1",
- * interpreted big-endian. 21 bytes (168 bits), well under BN254 modulus so
+ * The BN254 field element derived from UTF-8 "voter-protocol-revocation-v1",
+ * interpreted big-endian. 28 bytes (224 bits), well under BN254 modulus so
  * no modular reduction is applied.
  *
+ * Pre-launch namespace migration (2026-05-05): renamed from
+ * `commons-revocation-v1` to `voter-protocol-revocation-v1` to decouple the
+ * FROZEN substrate from the Communiqué brand. See voter-protocol
+ * CRYPTOGRAPHY-SPEC.md §0 for the full amendment.
+ *
  * Must match voter-protocol Noir circuit:
- *   global REVOCATION_DOMAIN: Field = 0x636f6d6d6f6e732d7265766f636174696f6e2d7631;
+ *   global REVOCATION_DOMAIN: Field = 0x766f7465722d70726f746f636f6c2d7265766f636174696f6e2d7631;
  *
  * NOTE on "v1": this version tag identifies the Poseidon2 H2 input string
  * ONLY — i.e., the domain-separation byte sequence. It is INDEPENDENT of
@@ -390,7 +395,7 @@ export async function computeNullifier(
  * See REVOCATION-NULLIFIER-SPEC-001 §2.1.
  */
 export const REVOCATION_DOMAIN =
-	'0x' + (0x636f6d6d6f6e732d7265766f636174696f6e2d7631n).toString(16).padStart(64, '0');
+	'0x' + (0x766f7465722d70726f746f636f6c2d7265766f636174696f6e2d7631n).toString(16).padStart(64, '0');
 
 /**
  * Compute revocation nullifier = H2(districtCommitment, REVOCATION_DOMAIN).

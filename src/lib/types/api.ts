@@ -2,7 +2,7 @@
  * API TYPES - Eliminate 'any' pollution in API handlers
  */
 
-// Analytics Event Types - Updated for Phase 1 Consolidation
+// Analytics Event Types
 export interface AnalyticsEventCreate {
 	name: string;
 	event_type: 'pageview' | 'interaction' | 'conversion' | 'funnel' | 'campaign';

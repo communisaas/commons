@@ -3,7 +3,7 @@ import type { GeoScope } from '$lib/core/agents/types';
 import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
 
 // ============================================================================
-// Power Landscape Types (Cycle 37)
+// Power Landscape Types
 // ============================================================================
 
 /** Functional role a decision-maker plays in the decision */
@@ -86,6 +86,13 @@ export interface Template {
 	send_count: number; // Verified sends
 	verified_sends?: number; // Alias (Convex field name)
 	unique_districts?: number; // Unique congressional districts reached
+
+	// Dimensional substrate per template (denormalized at
+	// `incrementTemplateReach` time). 30-day rolling rhythm, top-K districts
+	// (capped at 500 in storage; consumers truncate), tier breakdown 0-5.
+	daily_arrivals?: number[];
+	district_counts?: Array<{ code: string; count: number }>;
+	tier_counts?: number[];
 
 	// Geographic scope (populated by scope-filtering; computed, not stored on the template row)
 	applicable_countries?: string[];
@@ -215,7 +222,7 @@ export interface ProcessedDecisionMaker {
 	/** true if discovered from page content rather than the initial identity list */
 	discovered?: boolean;
 
-	// === Power Landscape fields (Cycle 37) ===
+	// === Power Landscape fields ===
 	/** Factual accountability line from Phase 4 agent */
 	accountabilityOpener?: string | null;
 	/** Functional role in the decision */

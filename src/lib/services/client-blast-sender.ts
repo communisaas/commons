@@ -8,7 +8,7 @@
  * Used for blasts with <500 recipients where the admin is online.
  */
 
-import { decryptWithOrgKey, type OrgEncryptedPii } from '$lib/core/crypto/org-pii-encryption';
+import { decryptOrgPii, type OrgEncryptedPii } from '$lib/core/crypto/org-pii-encryption';
 
 export interface BlastSendOptions {
 	orgSlug: string;
@@ -26,6 +26,44 @@ export interface BlastSendOptions {
 		emailHash: string;
 	}>;
 	onProgress?: (progress: BlastProgress) => void;
+	/**
+	 * Optional sink for per-recipient send receipts. Invoked after each Lambda
+	 * batch with the resolved {sesMessageId | error, status, sentAt} per
+	 * recipient. Caller persists via `api.blasts.recordBlastReceipts` so the
+	 * receipt register has a durable per-recipient row even when the browser
+	 * session ends mid-blast.
+	 */
+	onBatchReceipts?: (
+		receipts: Array<{
+			recipientEmailHash: string;
+			sesMessageId?: string;
+			status: 'sent' | 'failed';
+			sentAt: number;
+			error?: string;
+		}>
+	) => Promise<void> | void;
+	/**
+	 * Optional resolver for per-recipient unsubscribe URLs. When provided,
+	 * each Lambda batch is preceded by a call to fetch URLs for the batch's
+	 * supporter ids; URLs flow into Lambda 1:1 with recipients and Lambda
+	 * injects them as `List-Unsubscribe` MIME headers  (Lambda-side cure path,
+	 * Gmail/Yahoo bulk-sender compliance). When omitted, Lambda falls back to
+	 * SendEmail without the header.
+	 */
+	resolveUnsubscribeUrls?: (
+		supporterIds: string[]
+	) => Promise<string[]>;
+	/**
+	 * Server-signed dispatch claim. Lambda HARD-REQUIRES this — every
+	 * recipient hash must be present in the claim's allowed-hash set
+	 * before SES dispatch (bounds the blast-send oracle even when the
+	 * browser holds 15-minute STS credentials). Caller obtains via
+	 * `/api/blast/[blastId]/dispatch-claim`. Marked optional in the
+	 * TypeScript interface for back-compat with older callers, but
+	 * Lambda will return 403 "Dispatch claim required" if omitted —
+	 * any production caller MUST supply this.
+	 */
+	dispatchClaim?: string;
 }
 
 export interface BlastProgress {
@@ -79,7 +117,10 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 		fromName,
 		lambdaUrl,
 		encryptedSupporters,
-		onProgress
+		onProgress,
+		onBatchReceipts,
+		resolveUnsubscribeUrls,
+		dispatchClaim
 	} = options;
 
 	const total = encryptedSupporters.length;
@@ -107,7 +148,13 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 
 	// 2. Decrypt all supporter emails
 	report('decrypting', 0);
-	const decrypted: Array<{ email: string; emailHash: string }> = [];
+	const decrypted: Array<{ email: string; emailHash: string; supporterId: string }> = [];
+	const decryptFailures: Array<{
+		recipientEmailHash: string;
+		status: 'failed';
+		sentAt: number;
+		error: string;
+	}> = [];
 
 	for (const supporter of encryptedSupporters) {
 		// Skip already-sent hashes (dedup on retry)
@@ -115,15 +162,34 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 
 		try {
 			const blob: OrgEncryptedPii = JSON.parse(supporter.encryptedEmail);
-			const email = await decryptWithOrgKey(blob, orgKey, `supporter:${supporter._id}`, 'email');
-			decrypted.push({ email, emailHash: supporter.emailHash });
+			// Version-aware dispatcher: v=org-2 (single-phase writes) uses
+			// emailHash AAD; v=org-1 (legacy + pre-migration) falls back to
+			// the post-insert `supporter:${_id}` AAD.
+			const email = await decryptOrgPii(
+				blob,
+				orgKey,
+				supporter.emailHash,
+				`supporter:${supporter._id}`,
+				'email'
+			);
+			decrypted.push({ email, emailHash: supporter.emailHash, supporterId: supporter._id });
 		} catch (err) {
 			failed++;
-			errors.push({
-				emailHash: supporter.emailHash,
-				error: `Decryption failed: ${err instanceof Error ? err.message : 'Unknown'}`
+			const errMsg = `Decryption failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+			errors.push({ emailHash: supporter.emailHash, error: errMsg });
+			decryptFailures.push({
+				recipientEmailHash: supporter.emailHash,
+				status: 'failed',
+				sentAt: Date.now(),
+				error: errMsg
 			});
 		}
+	}
+
+	// Persist pre-dispatch decryption failures as receipts so the durable
+	// register reconciles with the in-memory `failed` counter.
+	if (onBatchReceipts && decryptFailures.length > 0) {
+		await onBatchReceipts(decryptFailures);
 	}
 
 	// 3. Batch and send via Lambda proxy
@@ -147,6 +213,25 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 
 		const recipients = batch.map((s) => s.email);
 
+		// Fetch per-recipient unsubscribe URLs once per batch when a resolver
+		// is wired. Lambda will inject these as `List-Unsubscribe` MIME
+		// headers; absent the resolver Lambda falls back to plain SendEmail.
+		let unsubscribeUrls: string[] | undefined;
+		if (resolveUnsubscribeUrls) {
+			try {
+				unsubscribeUrls = await resolveUnsubscribeUrls(batch.map((s) => s.supporterId));
+				if (unsubscribeUrls.length !== batch.length) {
+					console.warn(
+						`[blast] unsubscribe URL count mismatch (${unsubscribeUrls.length} vs batch ${batch.length}); dropping headers for this batch`
+					);
+					unsubscribeUrls = undefined;
+				}
+			} catch (err) {
+				console.warn('[blast] unsubscribe URL resolver failed; sending without List-Unsubscribe header', err);
+				unsubscribeUrls = undefined;
+			}
+		}
+
 		try {
 			const response = await fetch(lambdaUrl, {
 				method: 'POST',
@@ -154,11 +239,14 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 				body: JSON.stringify({
 					credentials,
 					recipients,
+					recipientHashes: batch.map((s) => s.emailHash),
 					subject,
 					bodyHtml,
 					fromEmail,
 					fromName,
-					blastId
+					blastId,
+					unsubscribeUrls,
+					dispatchClaim
 				})
 			});
 
@@ -166,8 +254,10 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 				const text = await response.text();
 				const batchFailed = batch.length;
 				failed += batchFailed;
+				const sentAt = Date.now();
+				const lambdaError = `Lambda ${response.status}: ${text}`;
 				for (const s of batch) {
-					errors.push({ emailHash: s.emailHash, error: `Lambda ${response.status}: ${text}` });
+					errors.push({ emailHash: s.emailHash, error: lambdaError });
 				}
 				batchRecords.push({
 					batchIndex: batchIdx,
@@ -176,21 +266,52 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 					failedCount: batchFailed,
 					error: `Lambda ${response.status}`
 				});
+				if (onBatchReceipts) {
+					await onBatchReceipts(
+						batch.map((s) => ({
+							recipientEmailHash: s.emailHash,
+							status: 'failed' as const,
+							sentAt,
+							error: lambdaError
+						}))
+					);
+				}
 				continue;
 			}
 
 			const result: LambdaResponse = await response.json();
 			sent += result.sent;
 			failed += result.failed;
+			const sentAt = Date.now();
 
 			// Track sent hashes for dedup and collect errors
+			const receipts: Array<{
+				recipientEmailHash: string;
+				sesMessageId?: string;
+				status: 'sent' | 'failed';
+				sentAt: number;
+				error?: string;
+			}> = [];
 			for (const r of result.results) {
 				const supporter = batch.find((s) => s.email === r.email);
-				if (r.status === 'sent' && supporter) {
+				if (!supporter) continue;
+				if (r.status === 'sent') {
 					sentHashes.add(supporter.emailHash);
-				} else if (r.status === 'failed' && supporter) {
+					receipts.push({
+						recipientEmailHash: supporter.emailHash,
+						sesMessageId: r.messageId,
+						status: 'sent',
+						sentAt
+					});
+				} else {
 					errors.push({
 						emailHash: supporter.emailHash,
+						error: r.error || 'SES send failed'
+					});
+					receipts.push({
+						recipientEmailHash: supporter.emailHash,
+						status: 'failed',
+						sentAt,
 						error: r.error || 'SES send failed'
 					});
 				}
@@ -201,13 +322,23 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 				status: result.failed > 0 ? 'failed' : 'sent',
 				sentCount: result.sent,
 				failedCount: result.failed,
-				sentAt: Date.now()
+				sentAt
 			});
+
+			if (onBatchReceipts && receipts.length > 0) {
+				await onBatchReceipts(receipts);
+			}
 		} catch (err) {
-			// Network error for this batch — don't abort remaining batches
+			// Network error for this batch — don't abort remaining batches.
+			// Note: this branch fires when fetch() throws (timeout, abort,
+			// CORS, DNS). The Lambda may have actually delivered the message;
+			// we record the receipts as 'failed' here because the browser
+			// cannot confirm delivery, and a later reconciliation pass over
+			// SES events will repair status if the messages did land.
 			const batchFailed = batch.length;
 			failed += batchFailed;
 			const errMsg = err instanceof Error ? err.message : 'Network error';
+			const sentAt = Date.now();
 			for (const s of batch) {
 				errors.push({ emailHash: s.emailHash, error: errMsg });
 			}
@@ -218,6 +349,16 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 				failedCount: batchFailed,
 				error: errMsg
 			});
+			if (onBatchReceipts) {
+				await onBatchReceipts(
+					batch.map((s) => ({
+						recipientEmailHash: s.emailHash,
+						status: 'failed' as const,
+						sentAt,
+						error: errMsg
+					}))
+				);
+			}
 		}
 	}
 

@@ -1,7 +1,7 @@
 /**
  * V2 prover witness fetcher (browser-side).
  *
- * Wave 3 — closes the V2 client glue gap. The V2 three-tree circuit consumes
+ *  closes the V2 client glue gap. The V2 three-tree circuit consumes
  * three additional inputs at proof time:
  *   - revocationPath:   128 sibling hashes from leaf to root in the on-chain
  *                       RevocationRegistry SMT (F-1.4 widening 2026-04-25)
@@ -55,7 +55,7 @@ export interface RevocationWitness {
 	revocationRegistryRoot: string;
 }
 
-// Wave 3c — ZERO_HASHES come from the shared module so server, browser, and
+// Step — ZERO_HASHES come from the shared module so server, browser, and
 // cross-impl test all derive from one source. Drift across boundaries is
 // detectable by the byte-equality test against the Noir circuit.
 

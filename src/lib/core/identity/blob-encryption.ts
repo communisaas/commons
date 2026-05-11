@@ -178,13 +178,11 @@ export class ServerBlobStorage implements BlobStorage {
 }
 
 /**
- * Get active storage implementation
- *
- * Phase 1: Always server-backed (Convex via `/api/identity/*`)
- * Phase 2: IPFS for new users, server-backed for legacy
+ * Get active storage implementation. Server-backed via `/api/identity/*` (Convex).
+ * Indirection retained so a future storage backend can be swapped in without changing
+ * callers, but no alternative backend is currently planned.
  */
 export function getBlobStorage(): BlobStorage {
-	// TODO: Phase 2 - Check feature flag or user preference
 	return new ServerBlobStorage();
 }
 

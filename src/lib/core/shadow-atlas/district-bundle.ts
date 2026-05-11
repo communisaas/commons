@@ -19,9 +19,13 @@
  */
 
 import type { Feature, MultiPolygon, Polygon } from 'geojson';
+import { env as publicEnv } from '$env/dynamic/public';
 import { displayDistrictToGEOID } from './district-format.js';
 
-const ATLAS_HOST = 'https://atlas.commons.email';
+// Atlas host. Defaults to the reference commons.email deployment;
+// peer implementations override via PUBLIC_ATLAS_HOST. The default is
+// preserved so commons.email's current deployment is unaffected.
+const ATLAS_HOST = publicEnv.PUBLIC_ATLAS_HOST || 'https://atlas.commons.email';
 
 interface SourceManifest {
 	currentVersion: string;

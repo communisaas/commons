@@ -20,7 +20,7 @@
  *   rebuild the inputs to confirm correctness. Without that, attestation
  *   is "trust-me-bro with hardware glitter".
  *
- * Failure semantics (per G4r, brutalist hard-line):
+ * Failure semantics:
  *   - Enclave unreachable → return a typed ResolverResult failure, do NOT
  *     silently fall back to LocalConstituentResolver. Mid-flight degradation
  *     defeats the attestation contract.
@@ -28,10 +28,9 @@
  *     ALL T3+ submissions fail (delivery error logged, retryable) until
  *     the enclave recovers. Operational consequence is acknowledged in
  *     tee/index.ts.
- *   - Pre-G4r the stub THREW; post-G4r it RETURNS the failure as a
- *     ResolverResult so the interface contract is preserved and Convex's
- *     existing errorCode persistence path handles it without try/catch
- *     additions.
+ *   - Failures RETURN as ResolverResult (not thrown) so the interface
+ *     contract is preserved and Convex's existing errorCode persistence
+ *     path handles it without try/catch additions.
  *
  * Out-of-scope for the stub (deployment work):
  *   - Actual KMS/attestation document fetching

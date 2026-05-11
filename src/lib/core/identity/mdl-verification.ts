@@ -1506,7 +1506,9 @@ async function computeIdentityCommitmentInBoundary(
 	birthYear: number
 ): Promise<string | null> {
 	// FROZEN: changing this prefix would invalidate all existing identity commitments
-	const DOMAIN_PREFIX = 'commons-identity-v1';
+	// Pre-launch namespace migration (2026-05-05): renamed from `commons-identity-v1` to
+	// `voter-protocol-identity-v1`. See voter-protocol CRYPTOGRAPHY-SPEC.md §0.
+	const DOMAIN_PREFIX = 'voter-protocol-identity-v1';
 	const COMMITMENT_SALT = process.env.IDENTITY_COMMITMENT_SALT;
 
 	if (!COMMITMENT_SALT) {

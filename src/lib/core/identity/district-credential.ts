@@ -64,7 +64,9 @@ export interface IssueDistrictCredentialParams {
 // Constants
 // ============================================================================
 
-const ISSUER_DID = 'did:web:commons.email';
+// Issuer DID for W3C Verifiable Credentials. Defaults to the reference
+// commons.email deployment; peer implementations override via env.
+const ISSUER_DID = process.env.ISSUER_DID || 'did:web:commons.email';
 const VERIFICATION_METHOD = `${ISSUER_DID}#district-attestation-key`;
 
 // ============================================================================

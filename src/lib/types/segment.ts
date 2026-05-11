@@ -91,9 +91,16 @@ export const FIELD_OPTIONS: Array<{
 		label: 'Verification Status',
 		operators: [{ value: 'equals', label: 'is' }]
 	},
+	// engagementTier is kept here labeled "(legacy)" so saved segments still
+	// render in the SegmentBuilder dropdown, but the suffix discourages new
+	// use. Server-side handler in convex/segments.ts is a no-op pass-through
+	// (always matches) — supporters have no engagementTier field; the metric
+	// lives on action tables (campaignActions, debateArguments, eventRsvps).
+	// A real aggregate-from-actions implementation should replace this when
+	// engagement-tier becomes a surfaced product metric.
 	{
 		value: 'engagementTier',
-		label: 'Engagement Tier',
+		label: 'Engagement Tier (legacy)',
 		operators: [
 			{ value: 'equals', label: 'is' },
 			{ value: 'gte', label: 'at least' },

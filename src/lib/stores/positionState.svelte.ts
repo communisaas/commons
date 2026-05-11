@@ -1,5 +1,5 @@
 /**
- * Position State — Power Landscape (Cycle 38)
+ * Position State — Power Landscape
  *
  * Manages position registration for template detail page.
  * Tracks stance, registration status, count signal, and delivery state.

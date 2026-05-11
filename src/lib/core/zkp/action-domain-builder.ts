@@ -15,7 +15,7 @@
  *   recipientSubdivision,
  *   templateId,
  *   sessionId,
- *   district_commitment        // <-- added in commons.v2
+ *   district_commitment        // <-- added in voter-protocol.v2 (was commons.v2 pre-2026-05-05)
  * )) → reduced mod BN254_MODULUS for circuit compatibility
  *
  * WHY KECCAK256 (not Poseidon2):
@@ -74,10 +74,14 @@ import { BN254_MODULUS } from '$lib/core/crypto/bn254';
  * for identical (country, jurisdictionType, recipientSubdivision, templateId,
  * sessionId) because the version tag itself differs.
  *
+ * Pre-launch namespace migration (2026-05-05): renamed from `commons.v2` to
+ * `voter-protocol.v2` to decouple the FROZEN substrate from the Communiqué
+ * brand. See voter-protocol CRYPTOGRAPHY-SPEC.md §0.
+ *
  * All v1 action domains must be revoked or migrated per
  * voter-protocol/specs/CIRCUIT-REVISION-MIGRATION.md before v2 deployment.
  */
-const PROTOCOL_VERSION = 'commons.v2';
+const PROTOCOL_VERSION = 'voter-protocol.v2';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -144,7 +148,7 @@ export interface ActionDomainParams {
 	 * commitment when issuing the Ed25519-signed VC; the client reads it out of
 	 * the credential before calling this builder.
 	 *
-	 * Added in commons.v2 (Stage 2 re-grounding).
+	 * Added in voter-protocol.v2 (Stage 2 re-grounding; renamed from commons.v2 on 2026-05-05).
 	 */
 	districtCommitment: string;
 }

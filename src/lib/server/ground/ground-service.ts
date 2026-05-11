@@ -1,5 +1,7 @@
 import { serverMutation, serverQuery } from 'convex-sveltekit';
+import type { FunctionArgs } from 'convex/server';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import {
 	hashCredential,
 	hashDistrict,
@@ -160,7 +162,7 @@ export async function issueGroundCredential(
 	const isCommitmentOnly =
 		input.verification_method === 'shadow_atlas' && Boolean(input.district_commitment);
 
-	const userDidKey = await serverQuery(api.users.getDidKey, { userId: userId as never });
+	const userDidKey = await serverQuery(api.users.getDidKey, { userId: userId as Id<'users'> });
 	const credential = input.district
 		? await issueDistrictCredential({
 				userId,
@@ -176,7 +178,7 @@ export async function issueGroundCredential(
 	const districtHash = input.district ? await hashDistrict(input.district) : null;
 
 	const verified = await serverMutation(api.users.verifyAddress, {
-		userId: userId as never,
+		userId: userId as Id<'users'>,
 		district: input.district,
 		stateSenateDistrict: input.state_senate_district,
 		stateAssemblyDistrict: input.state_assembly_district,
@@ -248,5 +250,11 @@ export async function persistGroundBundle(input: {
 	cell: unknown;
 	wrapper?: unknown;
 }): Promise<unknown> {
-	return serverMutation(api.ground.persistGroundBundle, input as never);
+	// Convex validates the structured args at runtime via `v.object({...})`.
+	// The cast asserts our `unknown`-typed blob will satisfy that validator;
+	// any mismatch surfaces as a Convex 400 with the offending field path.
+	return serverMutation(
+		api.ground.persistGroundBundle,
+		input as FunctionArgs<typeof api.ground.persistGroundBundle>
+	);
 }

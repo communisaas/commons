@@ -173,6 +173,12 @@ export interface AddressVerificationResult {
 	 *  so the server can recompute the expected districtCommitment from IPFS
 	 *  cell data and authenticate the client-supplied value. */
 	coordinates?: { lat: number; lng: number } | null;
+	/** F-2.4: server-issued HMAC token binding (userId, lat, lng, addressHash,
+	 *  expiresAt). The verify-address handler requires this whenever
+	 *  `addressHash` is also supplied to confirm the coordinates were the
+	 *  geocoder's output for the user's claimed address. */
+	addressToken?: string | null;
+	addressHash?: string | null;
 	special_status?: {
 		type: string;
 		message: string;

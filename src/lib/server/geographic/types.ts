@@ -80,7 +80,26 @@ export const VALID_JURISDICTIONS: JurisdictionType[] = [
 
 export const VALID_COUNTRY_CODES: CountryCode[] = ['US', 'GB', 'CA', 'AU', 'FR', 'JP', 'BR'];
 
+/**
+ * Countries the resolver dispatcher and type system know about — the design
+ * surface. Adding a country here without also adding it to
+ * `LIVE_RESOLVER_COUNTRIES` tells consumers the API surface exists but
+ * representative lookup is not yet wired.
+ */
 export const SUPPORTED_RESOLVER_COUNTRIES: CountryCode[] = ['US', 'GB', 'CA', 'AU'];
+
+/**
+ * Countries with real `lookupRepresentatives` data sources wired and live —
+ * the operational surface. Public endpoints reject countries that are
+ * `SUPPORTED` but not `LIVE` so international users don't receive a hollow
+ * `representatives: []` response dressed up as success, and so onboarding
+ * stays inside the countries we've actually scoped legal-compliance work for.
+ *
+ * To promote a country: implement `lookupRepresentatives` for it in
+ * `src/lib/server/geographic/rep-lookup.ts`, then resolve the legal-compliance
+ * gate (GDPR / privacy / consent ledger as applicable for the jurisdiction).
+ */
+export const LIVE_RESOLVER_COUNTRIES: CountryCode[] = ['US'];
 
 export const COUNTRY_LABELS: Record<CountryCode, string> = {
 	US: 'United States',

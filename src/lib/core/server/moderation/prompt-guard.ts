@@ -125,7 +125,13 @@ export async function detectPromptInjection(
 	const score = parseFloat(scoreString);
 
 	if (Number.isNaN(score)) {
-		return unavailableResult(threshold, `GROQ returned non-numeric score: "${scoreString}"`);
+		// Cap echoed Groq response to 200 chars to bound log volume on
+		// adversarial / pathological API output (matches the sibling
+		// errorText path at line 114). (cure shipped).
+		return unavailableResult(
+			threshold,
+			`GROQ returned non-numeric score: "${scoreString.slice(0, 200)}"`,
+		);
 	}
 
 	const latencyMs = Date.now() - startTime;

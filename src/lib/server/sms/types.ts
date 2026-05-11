@@ -39,6 +39,14 @@ export const VALID_CALL_STATUSES: CallStatus[] = [
 	'initiated', 'ringing', 'in-progress', 'completed', 'failed', 'no-answer', 'busy'
 ];
 
+export function isCallStatus(value: string): value is CallStatus {
+	return (VALID_CALL_STATUSES as string[]).includes(value);
+}
+
+export function isSmsBlastStatus(value: string): value is SmsBlastStatus {
+	return (VALID_BLAST_STATUSES as string[]).includes(value);
+}
+
 /** Maximum SMS body length (multi-segment) */
 export const SMS_MAX_LENGTH = 1600;
 

@@ -1,7 +1,7 @@
 /**
  * Empty-subtree value recurrence for the revocation SMT.
  *
- * Wave 3c — single source of truth for the depth-d empty-subtree value used
+ * Step — single source of truth for the depth-d empty-subtree value used
  * by both the server-side SMT helper (`$lib/server/smt/revocation-smt.ts`)
  * and the browser-side V2 prover witness fetcher
  * (`$lib/core/zkp/revocation-witness.ts`). Previously each had its own
