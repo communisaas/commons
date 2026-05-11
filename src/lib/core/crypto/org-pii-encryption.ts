@@ -6,8 +6,8 @@
  *   HKDF(stretched, salt="commons-org-pii-v1", info=orgId) → AES-256-GCM key
  *
  * Domain separation from other keys:
- *   Credentials:   salt="commons-credential-v2"  (credential-encryption.ts)
- *   Org PII:       salt="commons-org-pii-v1"     (this file)
+ *   Credentials:   salt="voter-protocol-credential-v2"  (credential-encryption.ts)
+ *   Org PII:       salt="commons-org-pii-v1"            (this file; not in FROZEN set)
  *   Person email/name: plaintext (no longer encrypted)
  */
 
@@ -21,10 +21,16 @@ const ORG_KEY_CACHE_SALT = encoder.encode('commons-org-key-cache-v1');
 const KEY_CHECK_SENTINEL = 'commons-org-key-check-v1';
 const PBKDF2_ITERATIONS = 600_000;
 
+// Versioned blob format mirrors `convex/_orgKey.ts:OrgEncryptedPii`.
+// `v: "org-1"` uses AAD `${entityId}:${fieldName}` (legacy two-phase
+// pattern with post-insert `_id` binding); `v: "org-2"` uses AAD
+// `eh:${emailHash}:${fieldName}` so the AAD is deterministic from
+// plaintext and encryption can happen BEFORE the DB insert.
+// Client-side dispatcher routes by `v` field.
 export interface OrgEncryptedPii {
 	ciphertext: string; // base64
 	iv: string; // base64
-	v: 'org-1'; // version tag
+	v: 'org-1' | 'org-2'; // version tag
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -119,7 +125,10 @@ export async function encryptWithOrgKey(
 }
 
 /**
- * Decrypt a PII field with the org key.
+ * Decrypt a PII field with the org key. v=org-1 uses the
+ * `${entityId}:${fieldName}` AAD; v=org-2 callers should route via
+ * `decryptOrgPii` (the version-aware dispatcher below) which derives
+ * the AAD from `emailHash` automatically.
  */
 export async function decryptWithOrgKey(
 	encrypted: OrgEncryptedPii,
@@ -138,6 +147,50 @@ export async function decryptWithOrgKey(
 	);
 
 	return decoder.decode(plaintext);
+}
+
+/**
+ * Encrypt with the v=org-2 AAD scheme (`eh:${emailHash}:${fieldName}`).
+ * Caller passes the emailHash directly — derivable from plaintext
+ * pre-insert. Mirrors `convex/_orgKey.ts:encryptForSupporterV2`.
+ */
+export async function encryptForSupporterV2(
+	plaintext: string,
+	orgKey: CryptoKey,
+	emailHash: string,
+	fieldName: string
+): Promise<OrgEncryptedPii> {
+	const iv = crypto.getRandomValues(new Uint8Array(12));
+	const aad = encoder.encode(`eh:${emailHash}:${fieldName}`);
+	const ciphertext = await crypto.subtle.encrypt(
+		{ name: 'AES-GCM', iv, additionalData: aad },
+		orgKey,
+		encoder.encode(plaintext)
+	);
+	return {
+		ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+		iv: bytesToBase64(iv),
+		v: 'org-2'
+	};
+}
+
+/**
+ * Version-aware decrypt. Routes by `blob.v`: v=org-2 uses
+ * `eh:${emailHash}` AAD; v=org-1 uses the supplied `rowIdForLegacy`
+ * entityId. Mixed legacy/post-migration data passes through a
+ * single call site. Mirrors `convex/_orgKey.ts:decryptOrgPii`.
+ */
+export async function decryptOrgPii(
+	encrypted: OrgEncryptedPii,
+	orgKey: CryptoKey,
+	emailHash: string,
+	rowIdForLegacy: string,
+	fieldName: string
+): Promise<string> {
+	if (encrypted.v === 'org-2') {
+		return decryptWithOrgKey(encrypted, orgKey, `eh:${emailHash}`, fieldName);
+	}
+	return decryptWithOrgKey(encrypted, orgKey, rowIdForLegacy, fieldName);
 }
 
 /**

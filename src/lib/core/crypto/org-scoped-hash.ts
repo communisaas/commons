@@ -68,3 +68,42 @@ export async function computeOrgScopedPhoneHash(orgId: string, phone: string): P
 	const hash = await crypto.subtle.digest('SHA-256', data);
 	return bytesToHex(new Uint8Array(hash));
 }
+
+/**
+ * Global (cross-org) email hash for inbound webhook lookup.
+ *
+ * Stored on the supporter row alongside the org-scoped `emailHash`. The SES
+ * bounce/complaint webhook only has the recipient email (no org context) —
+ * it has to find ALL supporters across orgs to mark the address bounced.
+ * This is the hash it queries via `by_globalEmailHash`.
+ *
+ * Same normalization as the org-scoped helper above. Domain prefix
+ * `"email:"` (no orgId) keeps it distinct from phone hashes. Mirrors
+ * `convex/_orgHash.ts:computeGlobalEmailHash`.
+ */
+export async function computeGlobalEmailHash(email: string): Promise<string> {
+	const normalized = normalizeEmail(email);
+	const data = encoder.encode('email:' + normalized);
+	const hash = await crypto.subtle.digest('SHA-256', data);
+	return bytesToHex(new Uint8Array(hash));
+}
+
+/**
+ * Global (cross-org) phone hash for inbound webhook lookup.
+ *
+ * Stored on the supporter row alongside the org-scoped `phoneHash`. The
+ * Twilio inbound webhook (TCPA STOP/START) only has the `From` phone (no
+ * org context) — it has to find ALL supporters across orgs. This is the
+ * hash it queries via `by_globalPhoneHash`. Mirrors
+ * `convex/_orgHash.ts:computeGlobalPhoneHash`.
+ *
+ * Throws on non-E.164 input (delegates to `normalizePhone`) — TCPA opt-outs
+ * from a poorly-normalized phone must NOT silently produce a different hash
+ * that fails to find the supporter.
+ */
+export async function computeGlobalPhoneHash(phone: string): Promise<string> {
+	const normalized = normalizePhone(phone);
+	const data = encoder.encode('phone:' + normalized);
+	const hash = await crypto.subtle.digest('SHA-256', data);
+	return bytesToHex(new Uint8Array(hash));
+}
