@@ -8,9 +8,9 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, params }) => {
@@ -22,7 +22,8 @@ export const GET: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const supporter = await serverInternalQuery(internal.v1api.getSupporterById, { supporterId: params.id, orgId: auth.orgId });
+	const supporter = await serverQuery(api.v1api.getSupporterById, {
+ _secret: getInternalSecret(), supporterId: params.id, orgId: auth.orgId});
 	if (!supporter) return apiError('NOT_FOUND', 'Supporter not found', 404);
 
 	// Return encrypted blobs — client decrypts with org key
@@ -79,7 +80,8 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 
 	if (Object.keys(data).length === 0) return apiError('BAD_REQUEST', 'No fields to update', 400);
 
-	const result = await serverInternalMutation(internal.v1api.updateSupporter, { supporterId: params.id, orgId: auth.orgId, data });
+	const result = await serverMutation(api.v1api.updateSupporter, {
+ _secret: getInternalSecret(), supporterId: params.id, orgId: auth.orgId, data});
 	if (!result) return apiError('NOT_FOUND', 'Supporter not found', 404);
 	return apiOk({ id: result.id, updatedAt: new Date(result.updatedAt).toISOString() });
 };
@@ -93,7 +95,8 @@ export const DELETE: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'write');
 	if (scopeErr) return scopeErr;
 
-	const deleted = await serverInternalMutation(internal.v1api.deleteSupporter, { supporterId: params.id, orgId: auth.orgId });
+	const deleted = await serverMutation(api.v1api.deleteSupporter, {
+ _secret: getInternalSecret(), supporterId: params.id, orgId: auth.orgId});
 	if (!deleted) return apiError('NOT_FOUND', 'Supporter not found', 404);
 	return apiOk({ deleted: true });
 };

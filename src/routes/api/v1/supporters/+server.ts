@@ -8,8 +8,9 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
-import { serverInternalQuery, serverInternalMutation } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
 import type { RequestHandler } from './$types';
 
 // Bounds reflect realistic ciphertext sizes for org-encrypted PII.
@@ -57,7 +58,8 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const source = url.searchParams.get('source');
 	const tagId = url.searchParams.get('tag');
 
-	const result = await serverInternalQuery(internal.v1api.listSupporters, {
+	const result = await serverQuery(api.v1api.listSupporters, {
+		_secret: getInternalSecret(),
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
@@ -71,8 +73,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			source && ['csv', 'action_network', 'organic', 'widget'].includes(source)
 				? source
 				: undefined,
-		tagId: tagId ?? undefined
-	});
+		tagId: tagId ?? undefined});
 
 	// Return encrypted blobs — client decrypts with org key
 	const data = result.items
@@ -139,7 +140,8 @@ export const POST: RequestHandler = async ({ request }) => {
 	} = parsed;
 
 	// Pass pre-encrypted blobs through to Convex — no server-side encryption
-	const result = await serverInternalMutation(internal.v1api.createSupporter, {
+	const result = await serverMutation(api.v1api.createSupporter, {
+		_secret: getInternalSecret(),
 		orgId: auth.orgId,
 		encryptedEmail,
 		emailHash,
@@ -152,8 +154,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		globalPhoneHash,
 		source: source || 'api',
 		encryptedCustomFields,
-		tagIds: tags
-	});
+		tagIds: tags});
 
 	if (result.duplicate) {
 		return apiError('CONFLICT', 'A supporter with this email already exists', 409);

@@ -1,9 +1,9 @@
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { api, internal } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
-import { serverInternalMutation } from '$lib/server/convex-internal';
 import { solidityPackedKeccak256 } from 'ethers';
 import { proposeDebate, deriveDomain } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
@@ -109,7 +109,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const deadlineMs = Date.now() + durationMs;
 
 	// Create debate record via Convex
-	const debateId = await serverInternalMutation(internal.debates.insertDebate, {
+	const debateId = await serverMutation(api.debates.insertDebateForCaller, {
+		_secret: getInternalSecret(),
 		templateId: templateId as Id<'templates'>,
 		debateIdOnchain: debateIdOnchain!,
 		actionDomain: actionDomain!,
@@ -119,8 +120,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		jurisdictionSize: jurisdictionHint,
 		proposerAddress: '0x0000000000000000000000000000000000000000',
 		proposerBond: Number(bond),
-		txHash: txHash ?? undefined
-	});
+		txHash: txHash ?? undefined});
 
 	return json({
 		debateId,

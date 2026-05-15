@@ -2,8 +2,8 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
 import { serverMutation } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * PATCH /api/delegation/review/[reviewId]
@@ -31,11 +31,11 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, "Decision must be 'approve' or 'reject'");
 	}
 
-	const result = await serverInternalMutation(internal.v1api.submitDelegationReview, {
+	const result = await serverMutation(api.v1api.submitDelegationReview, {
+		_secret: getInternalSecret(),
 		reviewId: params.reviewId,
 		userId: session.userId,
-		decision
-	});
+		decision});
 
 	if (!result) throw error(404, 'Review not found');
 	if ('forbidden' in result && result.forbidden) throw error(403, 'Not authorized to review this action');

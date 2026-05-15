@@ -8,8 +8,8 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params, request }) => {
@@ -23,7 +23,8 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const result = await serverInternalQuery(internal.v1api.getNetworkByIdV1, { networkId: params.id, orgId: auth.orgId });
+	const result = await serverQuery(api.v1api.getNetworkByIdV1, {
+ _secret: getInternalSecret(), networkId: params.id, orgId: auth.orgId});
 	if (!result) return apiError('NOT_FOUND', 'Network not found', 404);
 	if (result.forbidden) return apiError('FORBIDDEN', 'Organization is not an active member of this network', 403);
 

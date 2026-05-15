@@ -8,8 +8,8 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
 import { serverQuery } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
 
 function maskEmail(email: string): string {
@@ -33,13 +33,13 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const status = url.searchParams.get('status');
 	const campaignId = url.searchParams.get('campaignId');
 
-	const result = await serverInternalQuery(internal.v1api.listDonationsV1, {
+	const result = await serverQuery(api.v1api.listDonationsV1, {
+		_secret: getInternalSecret(),
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
 		status: status && ['pending', 'completed', 'refunded'].includes(status) ? status : undefined,
-		campaignId: campaignId ?? undefined
-	});
+		campaignId: campaignId ?? undefined});
 
 	const data = result.items.map((d: any) => ({
 		id: d._id,

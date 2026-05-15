@@ -17,12 +17,12 @@ describe('mDL verification finalization', () => {
 		expect(schema).toMatch(/\.index\(["']by_expiresAt["'], \[["']expiresAt["']\]\)/);
 	});
 
-	it('keeps mDL commitment binding and tier mutation behind an internal Convex finalizer', () => {
+	it('keeps mDL commitment binding and tier mutation behind a secret-gated Convex finalizer', () => {
 		const convexUsers = source('convex/users.ts');
 
-		expect(convexUsers).toContain('export const finalizeMdlVerification = internalMutation');
+		expect(convexUsers).toContain('export const finalizeMdlVerification = mutation');
+		expect(convexUsers).toContain('requireInternalSecret(args._secret)');
 		expect(convexUsers).toContain('export const updateMdlVerification = internalMutation');
-		expect(convexUsers).not.toContain('export const updateMdlVerification = mutation');
 		expect(convexUsers).toContain('identityCommitment: args.identityCommitment');
 		expect(convexUsers).toMatch(/query\(["']mdlCredentialUses["']\)/);
 		expect(convexUsers).toMatch(/withIndex\(["']by_credentialHash["']/);
@@ -35,15 +35,13 @@ describe('mDL verification finalization', () => {
 		expect(convexUsers).toContain('requireReauth: linkedToExisting');
 	});
 
-	it('uses the internal finalizer from the Digital Credentials verification route', () => {
+	it('uses the secret-gated finalizer from the Digital Credentials verification route', () => {
 		const route = source('src/routes/api/identity/verify-mdl/verify/+server.ts');
 
-		expect(route).toContain("import { internal } from '$lib/convex'");
-		// H7 — route was migrated from serverMutation to serverInternalMutation
-		// to keep the auth-bridge boundary explicit. The internal-mutation API
-		// scopes the call to a server-only path; the public mutation API would
-		// require a session JWT we don't have here.
-		expect(route).toContain('serverInternalMutation(internal.users.finalizeMdlVerification');
+		expect(route).toContain("import { api } from '$lib/convex'");
+		expect(route).toContain("import { getInternalSecret }");
+		expect(route).toContain('serverMutation(api.users.finalizeMdlVerification');
+		expect(route).toContain('_secret: getInternalSecret()');
 		expect(route).toContain('credentialHash: result.credentialHash');
 		expect(route).toContain("error: 'credential_reuse_detected'");
 		expect(route).not.toContain('api.users.bindIdentityCommitment');

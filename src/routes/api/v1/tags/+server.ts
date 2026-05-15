@@ -7,8 +7,9 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
-import { serverInternalQuery, serverInternalMutation } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
@@ -20,7 +21,8 @@ export const GET: RequestHandler = async ({ request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const tags = await serverInternalQuery(internal.v1api.listTags, { orgId: auth.orgId });
+	const tags = await serverQuery(api.v1api.listTags, {
+ _secret: getInternalSecret(), orgId: auth.orgId});
 
 	return apiOk(tags);
 };
@@ -49,10 +51,10 @@ export const POST: RequestHandler = async ({ request }) => {
 		return apiError('BAD_REQUEST', 'Tag name must be 100 characters or fewer', 400);
 	}
 
-	const result = await serverInternalMutation(internal.v1api.createTag, {
+	const result = await serverMutation(api.v1api.createTag, {
+		_secret: getInternalSecret(),
 		orgId: auth.orgId,
-		name: name.trim()
-	});
+		name: name.trim()});
 	if (result.duplicate) return apiError('CONFLICT', 'A tag with this name already exists', 409);
 	if (!result.tag) return apiError('SERVER_ERROR', 'Tag could not be created', 500);
 

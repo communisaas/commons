@@ -8,9 +8,9 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { VALID_JURISDICTIONS, VALID_COUNTRY_CODES } from '$lib/server/geographic/types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { JurisdictionType, CountryCode } from '$lib/server/geographic/types';
 import type { RequestHandler } from './$types';
 
@@ -28,13 +28,13 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const status = url.searchParams.get('status');
 	const type = url.searchParams.get('type');
 
-	const result = await serverInternalQuery(internal.v1api.listCampaigns, {
+	const result = await serverQuery(api.v1api.listCampaigns, {
+		_secret: getInternalSecret(),
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
 		status: status && ['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETE'].includes(status) ? status : undefined,
-		type: type && ['LETTER', 'EVENT', 'FORM'].includes(type) ? type : undefined
-	});
+		type: type && ['LETTER', 'EVENT', 'FORM'].includes(type) ? type : undefined});
 
 	const data = result.items.map((c: any) => ({
 		id: c._id,
@@ -96,15 +96,15 @@ export const POST: RequestHandler = async ({ request }) => {
 		return apiError('BAD_REQUEST', `Invalid country code: ${targetCountry}`, 400);
 	}
 
-	const campaign = await serverInternalMutation(internal.v1api.createCampaign, {
+	const campaign = await serverMutation(api.v1api.createCampaign, {
+		_secret: getInternalSecret(),
 		orgId: auth.orgId,
 		title: title.trim(),
 		type,
 		body: campaignBody?.trim() || undefined,
 		templateId: templateId || undefined,
 		targetJurisdiction: targetJurisdiction || undefined,
-		targetCountry: targetCountry?.toUpperCase() || 'US'
-	});
+		targetCountry: targetCountry?.toUpperCase() || 'US'});
 
 	return apiOk(
 		{

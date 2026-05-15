@@ -7,8 +7,8 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk } from '$lib/server/api-v1/response';
 import { serverQuery } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
@@ -21,9 +21,9 @@ export const GET: RequestHandler = async ({ request }) => {
 	if (scopeErr) return scopeErr;
 
 	// auth.orgId is a Convex document ID, not a slug — use internal query
-	const usage = await serverInternalQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
-		orgId: auth.orgId
-	});
+	const usage = await serverQuery(api.subscriptions.checkPlanLimitsByOrgIdForCaller, {
+		_secret: getInternalSecret(),
+		orgId: auth.orgId});
 
 	if (!usage) {
 		return apiOk({ verifiedActions: 0, maxVerifiedActions: 0, emailsSent: 0, maxEmails: 0 });

@@ -9,6 +9,7 @@ import { query, mutation, internalAction, internalMutation, internalQuery } from
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { requireAuth, requireOrgRole } from "./_authHelpers";
+import { requireInternalSecret } from "./_internalAuth";
 import type { Id } from "./_generated/dataModel";
 
 // Plan limits — mirrored from src/lib/server/billing/plans.ts (MUST stay in sync)
@@ -301,6 +302,40 @@ export const checkPlanLimitsByOrgId = internalQuery({
         smsSent,
       },
     };
+  },
+});
+
+/**
+ * Public-API wrapper for `checkPlanLimitsByOrgId`. SvelteKit `/api/v1/usage`
+ * calls this via the HTTP API; the internal version stays in place for
+ * in-Convex callers (`email.ts:481`, `submissions.ts:262`) which already hold
+ * full trust and pre-validate the orgId before calling.
+ */
+type PlanLimitsResult = {
+  plan: string;
+  status: string;
+  periodStart: number;
+  limits: {
+    maxSeats: number;
+    maxTemplatesMonth: number;
+    maxVerifiedActions: number;
+    maxEmails: number;
+    maxSms: number;
+  };
+  current: {
+    seats: number;
+    supporterCount: number;
+    verifiedActions: number;
+    emailsSent: number;
+    smsSent: number;
+  };
+} | null;
+
+export const checkPlanLimitsByOrgIdForCaller = query({
+  args: { _secret: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, orgId }): Promise<PlanLimitsResult> => {
+    requireInternalSecret(_secret);
+    return await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, { orgId });
   },
 });
 

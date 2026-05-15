@@ -6,8 +6,9 @@
  */
 
 import { hashApiKey } from '$lib/core/security/api-key';
-import { internal } from '$lib/convex';
-import { serverInternalMutation, serverInternalQuery } from '$lib/server/convex-internal';
+import { api } from '$lib/convex';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { apiError } from './response';
 import type { Id } from '../../../../convex/_generated/dataModel';
 
@@ -41,14 +42,20 @@ export async function authenticateApiKey(
 
 	const keyHash = await hashApiKey(plaintext);
 
-	const result = await serverInternalQuery(internal.v1api.authenticateApiKey, { keyHash });
+	const result = await serverQuery(api.v1api.authenticateApiKey, {
+		_secret: getInternalSecret(),
+		keyHash
+	});
 
 	if (!result) {
 		return apiError('UNAUTHORIZED', 'Invalid API key', 401);
 	}
 
 	// Fire-and-forget: update lastUsedAt and increment requestCount
-	serverInternalMutation(internal.v1api.trackApiKeyUsage, { keyId: result.keyId }).catch(() => {
+	serverMutation(api.v1api.trackApiKeyUsage, {
+		_secret: getInternalSecret(),
+		keyId: result.keyId
+	}).catch(() => {
 		// Swallow — usage tracking is non-critical
 	});
 

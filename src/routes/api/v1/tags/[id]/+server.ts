@@ -7,8 +7,9 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
-import { serverInternalMutation } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { serverMutation } from 'convex-sveltekit';
 import type { RequestHandler } from './$types';
 
 export const PATCH: RequestHandler = async ({ request, params }) => {
@@ -33,11 +34,11 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (name.trim().length > 100)
 		return apiError('BAD_REQUEST', 'Tag name must be 100 characters or fewer', 400);
 
-	const result = await serverInternalMutation(internal.v1api.updateTag, {
+	const result = await serverMutation(api.v1api.updateTag, {
+		_secret: getInternalSecret(),
 		tagId: params.id,
 		orgId: auth.orgId,
-		name: name.trim()
-	});
+		name: name.trim()});
 	if (!result) return apiError('NOT_FOUND', 'Tag not found', 404);
 	if ('duplicate' in result)
 		return apiError('CONFLICT', 'A tag with this name already exists', 409);
@@ -54,10 +55,10 @@ export const DELETE: RequestHandler = async ({ request, params }) => {
 	const scopeErr = requireScope(auth, 'write');
 	if (scopeErr) return scopeErr;
 
-	const deleted = await serverInternalMutation(internal.v1api.deleteTag, {
+	const deleted = await serverMutation(api.v1api.deleteTag, {
+		_secret: getInternalSecret(),
 		tagId: params.id,
-		orgId: auth.orgId
-	});
+		orgId: auth.orgId});
 	if (!deleted) return apiError('NOT_FOUND', 'Tag not found', 404);
 
 	return apiOk({ deleted: true });

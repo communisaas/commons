@@ -26,6 +26,16 @@ vi.mock('$env/dynamic/private', () => ({
 	}
 }));
 
+// The error route surfaces the raw exception message in dev and the opaque
+// "temporarily unavailable" copy in prod. These tests assert the prod-facing
+// contract; force the prod branch.
+vi.mock('$app/environment', () => ({
+	dev: false,
+	browser: false,
+	building: false,
+	version: 'test'
+}));
+
 // ---------------------------------------------------------------------------
 // Mock the Shadow Atlas client module
 // ---------------------------------------------------------------------------

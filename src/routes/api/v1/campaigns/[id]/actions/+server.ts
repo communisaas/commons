@@ -7,8 +7,8 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { serverQuery } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, params, url }) => {
@@ -23,13 +23,13 @@ export const GET: RequestHandler = async ({ request, params, url }) => {
 	const { cursor, limit } = parsePagination(url);
 	const verified = url.searchParams.get('verified');
 
-	const result = await serverInternalQuery(internal.v1api.listCampaignActions, {
+	const result = await serverQuery(api.v1api.listCampaignActions, {
+		_secret: getInternalSecret(),
 		campaignId: params.id,
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
-		verified: verified === 'true' ? true : verified === 'false' ? false : undefined
-	});
+		verified: verified === 'true' ? true : verified === 'false' ? false : undefined});
 
 	if (!result) return apiError('NOT_FOUND', 'Campaign not found', 404);
 

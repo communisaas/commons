@@ -10,6 +10,7 @@ import { internal } from './_generated/api';
 import type { Id } from './_generated/dataModel';
 import { v } from 'convex/values';
 import { requireAuth } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
 import { CWCXmlGenerator } from './_cwcXml';
 import { selectActiveCredentialForUser } from './_credentialSelect';
 
@@ -970,12 +971,14 @@ export const listFailedAnchors = internalQuery({
  * more, we keep returning pages with isDone=false until BOTH classes are done.
  * This is intentional — operators want a single "last cursor" to anchor on.
  */
-export const listAnchorIncidents = internalQuery({
+export const listAnchorIncidents = query({
 	args: {
+		_secret: v.string(),
 		limit: v.optional(v.number()),
 		cursor: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
 		const pageSize = Math.min(Math.max(args.limit ?? 50, 1), 500);
 
 		let divCursor: string | null = null;

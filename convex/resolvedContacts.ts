@@ -7,8 +7,9 @@
  * TTL: 14 days from resolution. Verification status tracked separately —
  * stale-verified contacts are re-checked via SMTP in Phase 3.5.
  */
-import { internalQuery, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { requireInternalSecret } from "./_internalAuth";
 
 const CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 
@@ -29,14 +30,16 @@ function normalizeOrgKey(org: string): string {
  * Look up cached contacts by org+title pairs.
  * Returns only non-expired entries with an email.
  */
-export const getCached = internalQuery({
+export const getCached = query({
 	args: {
+		_secret: v.string(),
 		pairs: v.array(v.object({
 			orgKey: v.string(),
 			title: v.string(),
 		})),
 	},
-	handler: async (ctx, { pairs }) => {
+	handler: async (ctx, { _secret, pairs }) => {
+		requireInternalSecret(_secret);
 		const now = Date.now();
 		const results = [];
 
@@ -70,8 +73,9 @@ export const getCached = internalQuery({
 /**
  * Upsert resolved contacts after synthesis. Inserts or updates by orgKey+title.
  */
-export const upsert = internalMutation({
+export const upsert = mutation({
 	args: {
+		_secret: v.string(),
 		contacts: v.array(v.object({
 			orgKey: v.string(),
 			title: v.string(),
@@ -80,7 +84,8 @@ export const upsert = internalMutation({
 			emailSource: v.optional(v.string()),
 		})),
 	},
-	handler: async (ctx, { contacts }) => {
+	handler: async (ctx, { _secret, contacts }) => {
+		requireInternalSecret(_secret);
 		const now = Date.now();
 		const expiresAt = now + CACHE_TTL_MS;
 
@@ -118,15 +123,17 @@ export const upsert = internalMutation({
 /**
  * Update verification status after SMTP check (Phase 3.5).
  */
-export const updateVerification = internalMutation({
+export const updateVerification = mutation({
 	args: {
+		_secret: v.string(),
 		updates: v.array(v.object({
 			orgKey: v.string(),
 			title: v.string(),
 			verificationStatus: v.union(v.literal("deliverable"), v.literal("risky"), v.literal("undeliverable")),
 		})),
 	},
-	handler: async (ctx, { updates }) => {
+	handler: async (ctx, { _secret, updates }) => {
+		requireInternalSecret(_secret);
 		const now = Date.now();
 
 		for (const update of updates) {

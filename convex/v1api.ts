@@ -5,10 +5,11 @@
  * pre-validated orgId from the SvelteKit API key auth middleware.
  */
 
-import { internalQuery, internalMutation } from "./_generated/server";
+import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { resolveDmAndCanonical } from "./legislation";
+import { requireInternalSecret } from "./_internalAuth";
 // PII returned as encrypted blobs — v1 API consumers decrypt with org key
 
 // =============================================================================
@@ -19,9 +20,10 @@ import { resolveDmAndCanonical } from "./legislation";
  * Authenticate an API key by its hash.
  * Returns the key's org, scopes, and plan — or null if invalid/revoked/expired.
  */
-export const authenticateApiKey = internalQuery({
-  args: { keyHash: v.string() },
-  handler: async (ctx, { keyHash }) => {
+export const authenticateApiKey = query({
+  args: { _secret: v.string(), keyHash: v.string() },
+  handler: async (ctx, { _secret, keyHash }) => {
+    requireInternalSecret(_secret);
     const apiKey = await ctx.db
       .query("apiKeys")
       .withIndex("by_keyHash", (q) => q.eq("keyHash", keyHash))
@@ -52,9 +54,10 @@ export const authenticateApiKey = internalQuery({
 /**
  * Fire-and-forget usage tracking for API key.
  */
-export const trackApiKeyUsage = internalMutation({
-  args: { keyId: v.id("apiKeys") },
-  handler: async (ctx, { keyId }) => {
+export const trackApiKeyUsage = mutation({
+  args: { _secret: v.string(), keyId: v.id("apiKeys") },
+  handler: async (ctx, { _secret, keyId }) => {
+    requireInternalSecret(_secret);
     const key = await ctx.db.get(keyId);
     if (!key || key.revokedAt) return;
     await ctx.db.patch(keyId, {
@@ -68,8 +71,9 @@ export const trackApiKeyUsage = internalMutation({
 // API KEY MANAGEMENT (session-auth, not API key auth)
 // =============================================================================
 
-export const createApiKey = internalMutation({
+export const createApiKey = mutation({
   args: {
+    _secret: v.string(),
     orgSlug: v.string(),
     keyHash: v.string(),
     keyPrefix: v.string(),
@@ -78,6 +82,7 @@ export const createApiKey = internalMutation({
     createdBy: v.string(),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     const org = await ctx.db
       .query("organizations")
       .withIndex("by_slug", (q) => q.eq("slug", args.orgSlug))
@@ -99,13 +104,15 @@ export const createApiKey = internalMutation({
   },
 });
 
-export const renameApiKey = internalMutation({
+export const renameApiKey = mutation({
   args: {
+    _secret: v.string(),
     keyId: v.string(),
     orgId: v.string(),
     name: v.string(),
   },
-  handler: async (ctx, { keyId, orgId, name }) => {
+  handler: async (ctx, { _secret, keyId, orgId, name }) => {
+    requireInternalSecret(_secret);
     // Scan by org to verify ownership
     const keys = await ctx.db
       .query("apiKeys")
@@ -118,12 +125,14 @@ export const renameApiKey = internalMutation({
   },
 });
 
-export const revokeApiKey = internalMutation({
+export const revokeApiKey = mutation({
   args: {
+    _secret: v.string(),
     keyId: v.string(),
     orgId: v.string(),
   },
-  handler: async (ctx, { keyId, orgId }) => {
+  handler: async (ctx, { _secret, keyId, orgId }) => {
+    requireInternalSecret(_secret);
     const keys = await ctx.db
       .query("apiKeys")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId as Id<"organizations">))
@@ -139,8 +148,9 @@ export const revokeApiKey = internalMutation({
 // SUPPORTERS (v1 API)
 // =============================================================================
 
-export const listSupporters = internalQuery({
+export const listSupporters = query({
   args: {
+    _secret: v.string(),
     orgId: v.id("organizations"),
     limit: v.number(),
     cursor: v.optional(v.string()),
@@ -151,6 +161,7 @@ export const listSupporters = internalQuery({
     tagId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     const allDocs = await ctx.db
       .query("supporters")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
@@ -217,9 +228,10 @@ export const listSupporters = internalQuery({
   },
 });
 
-export const getSupporterById = internalQuery({
-  args: { supporterId: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, { supporterId, orgId }) => {
+export const getSupporterById = query({
+  args: { _secret: v.string(), supporterId: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, supporterId, orgId }) => {
+    requireInternalSecret(_secret);
     const supporters = await ctx.db
       .query("supporters")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -243,8 +255,9 @@ export const getSupporterById = internalQuery({
   },
 });
 
-export const updateSupporter = internalMutation({
+export const updateSupporter = mutation({
   args: {
+    _secret: v.string(),
     supporterId: v.string(),
     orgId: v.id("organizations"),
     data: v.object({
@@ -253,7 +266,8 @@ export const updateSupporter = internalMutation({
       encryptedCustomFields: v.optional(v.string()),
     }),
   },
-  handler: async (ctx, { supporterId, orgId, data }) => {
+  handler: async (ctx, { _secret, supporterId, orgId, data }) => {
+    requireInternalSecret(_secret);
     const supporters = await ctx.db
       .query("supporters")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -271,9 +285,10 @@ export const updateSupporter = internalMutation({
   },
 });
 
-export const deleteSupporter = internalMutation({
-  args: { supporterId: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, { supporterId, orgId }) => {
+export const deleteSupporter = mutation({
+  args: { _secret: v.string(), supporterId: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, supporterId, orgId }) => {
+    requireInternalSecret(_secret);
     const supporters = await ctx.db
       .query("supporters")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -285,8 +300,9 @@ export const deleteSupporter = internalMutation({
   },
 });
 
-export const createSupporter = internalMutation({
+export const createSupporter = mutation({
   args: {
+    _secret: v.string(),
     orgId: v.id("organizations"),
     encryptedEmail: v.string(),
     emailHash: v.string(),
@@ -306,6 +322,7 @@ export const createSupporter = internalMutation({
     tagIds: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     // Enforce the PII triple invariant at the v1 API boundary so
     // third-party API consumers can't write partial-coherence rows
     // any more than internal callers can. Shares the same helper +
@@ -367,9 +384,10 @@ export const createSupporter = internalMutation({
 // TAGS (v1 API)
 // =============================================================================
 
-export const listTags = internalQuery({
-  args: { orgId: v.id("organizations") },
-  handler: async (ctx, { orgId }) => {
+export const listTags = query({
+  args: { _secret: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, orgId }) => {
+    requireInternalSecret(_secret);
     const tags = await ctx.db
       .query("tags")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -389,9 +407,10 @@ export const listTags = internalQuery({
   },
 });
 
-export const createTag = internalMutation({
-  args: { orgId: v.id("organizations"), name: v.string() },
-  handler: async (ctx, { orgId, name }) => {
+export const createTag = mutation({
+  args: { _secret: v.string(), orgId: v.id("organizations"), name: v.string() },
+  handler: async (ctx, { _secret, orgId, name }) => {
+    requireInternalSecret(_secret);
     // Check for duplicate
     const existing = await ctx.db
       .query("tags")
@@ -409,9 +428,10 @@ export const createTag = internalMutation({
   },
 });
 
-export const updateTag = internalMutation({
-  args: { tagId: v.string(), orgId: v.id("organizations"), name: v.string() },
-  handler: async (ctx, { tagId, orgId, name }) => {
+export const updateTag = mutation({
+  args: { _secret: v.string(), tagId: v.string(), orgId: v.id("organizations"), name: v.string() },
+  handler: async (ctx, { _secret, tagId, orgId, name }) => {
+    requireInternalSecret(_secret);
     const tags = await ctx.db
       .query("tags")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -428,9 +448,10 @@ export const updateTag = internalMutation({
   },
 });
 
-export const deleteTag = internalMutation({
-  args: { tagId: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, { tagId, orgId }) => {
+export const deleteTag = mutation({
+  args: { _secret: v.string(), tagId: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, tagId, orgId }) => {
+    requireInternalSecret(_secret);
     const tags = await ctx.db
       .query("tags")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -456,8 +477,9 @@ export const deleteTag = internalMutation({
 // CAMPAIGNS (v1 API)
 // =============================================================================
 
-export const listCampaigns = internalQuery({
+export const listCampaigns = query({
   args: {
+    _secret: v.string(),
     orgId: v.id("organizations"),
     limit: v.number(),
     cursor: v.optional(v.string()),
@@ -465,6 +487,7 @@ export const listCampaigns = internalQuery({
     type: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     const all = await ctx.db
       .query("campaigns")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
@@ -505,9 +528,10 @@ export const listCampaigns = internalQuery({
   },
 });
 
-export const getCampaignById = internalQuery({
-  args: { campaignId: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, { campaignId, orgId }) => {
+export const getCampaignById = query({
+  args: { _secret: v.string(), campaignId: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, campaignId, orgId }) => {
+    requireInternalSecret(_secret);
     const campaigns = await ctx.db
       .query("campaigns")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -528,8 +552,9 @@ export const getCampaignById = internalQuery({
   },
 });
 
-export const createCampaign = internalMutation({
+export const createCampaign = mutation({
   args: {
+    _secret: v.string(),
     orgId: v.id("organizations"),
     title: v.string(),
     type: v.string(),
@@ -539,6 +564,7 @@ export const createCampaign = internalMutation({
     targetCountry: v.string(),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     const id = await ctx.db.insert("campaigns", {
       orgId: args.orgId,
       title: args.title,
@@ -562,8 +588,9 @@ export const createCampaign = internalMutation({
   },
 });
 
-export const updateCampaign = internalMutation({
+export const updateCampaign = mutation({
   args: {
+    _secret: v.string(),
     campaignId: v.string(),
     orgId: v.id("organizations"),
     data: v.object({
@@ -574,7 +601,8 @@ export const updateCampaign = internalMutation({
       targetCountry: v.optional(v.string()),
     }),
   },
-  handler: async (ctx, { campaignId, orgId, data }) => {
+  handler: async (ctx, { _secret, campaignId, orgId, data }) => {
+    requireInternalSecret(_secret);
     const campaigns = await ctx.db
       .query("campaigns")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -598,8 +626,9 @@ export const updateCampaign = internalMutation({
 // CAMPAIGN ACTIONS (v1 API)
 // =============================================================================
 
-export const listCampaignActions = internalQuery({
+export const listCampaignActions = query({
   args: {
+    _secret: v.string(),
     campaignId: v.string(),
     orgId: v.id("organizations"),
     limit: v.number(),
@@ -607,6 +636,7 @@ export const listCampaignActions = internalQuery({
     verified: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     // Verify campaign belongs to org
     const campaigns = await ctx.db
       .query("campaigns")
@@ -644,8 +674,9 @@ export const listCampaignActions = internalQuery({
 // CALLS (v1 API)
 // =============================================================================
 
-export const listCallsV1 = internalQuery({
+export const listCallsV1 = query({
   args: {
+    _secret: v.string(),
     orgId: v.id("organizations"),
     limit: v.number(),
     cursor: v.optional(v.string()),
@@ -653,6 +684,7 @@ export const listCallsV1 = internalQuery({
     campaignId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     let all = await ctx.db
       .query("patchThroughCalls")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
@@ -681,8 +713,9 @@ export const listCallsV1 = internalQuery({
 // DONATIONS (v1 API)
 // =============================================================================
 
-export const listDonationsV1 = internalQuery({
+export const listDonationsV1 = query({
   args: {
+    _secret: v.string(),
     orgId: v.id("organizations"),
     limit: v.number(),
     cursor: v.optional(v.string()),
@@ -690,6 +723,7 @@ export const listDonationsV1 = internalQuery({
     campaignId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     let all = await ctx.db
       .query("donations")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
@@ -714,9 +748,10 @@ export const listDonationsV1 = internalQuery({
   },
 });
 
-export const getDonationById = internalQuery({
-  args: { donationId: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, { donationId, orgId }) => {
+export const getDonationById = query({
+  args: { _secret: v.string(), donationId: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, donationId, orgId }) => {
+    requireInternalSecret(_secret);
     const donations = await ctx.db
       .query("donations")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -732,14 +767,16 @@ export const getDonationById = internalQuery({
 // SMS BLASTS (v1 API)
 // =============================================================================
 
-export const listSmsBlastsV1 = internalQuery({
+export const listSmsBlastsV1 = query({
   args: {
+    _secret: v.string(),
     orgId: v.id("organizations"),
     limit: v.number(),
     cursor: v.optional(v.string()),
     status: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     let all = await ctx.db
       .query("smsBlasts")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
@@ -767,8 +804,9 @@ export const listSmsBlastsV1 = internalQuery({
 // EVENTS (v1 API)
 // =============================================================================
 
-export const listEventsV1 = internalQuery({
+export const listEventsV1 = query({
   args: {
+    _secret: v.string(),
     orgId: v.id("organizations"),
     limit: v.number(),
     cursor: v.optional(v.string()),
@@ -776,6 +814,7 @@ export const listEventsV1 = internalQuery({
     eventType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     let all = await ctx.db
       .query("events")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
@@ -800,9 +839,10 @@ export const listEventsV1 = internalQuery({
   },
 });
 
-export const getEventById = internalQuery({
-  args: { eventId: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, { eventId, orgId }) => {
+export const getEventById = query({
+  args: { _secret: v.string(), eventId: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, eventId, orgId }) => {
+    requireInternalSecret(_secret);
     const events = await ctx.db
       .query("events")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -815,14 +855,16 @@ export const getEventById = internalQuery({
 // WORKFLOWS (v1 API)
 // =============================================================================
 
-export const listWorkflowsV1 = internalQuery({
+export const listWorkflowsV1 = query({
   args: {
+    _secret: v.string(),
     orgId: v.id("organizations"),
     limit: v.number(),
     cursor: v.optional(v.string()),
     enabled: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     let all = await ctx.db
       .query("workflows")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
@@ -846,9 +888,10 @@ export const listWorkflowsV1 = internalQuery({
   },
 });
 
-export const getWorkflowById = internalQuery({
-  args: { workflowId: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, { workflowId, orgId }) => {
+export const getWorkflowById = query({
+  args: { _secret: v.string(), workflowId: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, workflowId, orgId }) => {
+    requireInternalSecret(_secret);
     const workflows = await ctx.db
       .query("workflows")
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
@@ -861,13 +904,15 @@ export const getWorkflowById = internalQuery({
 // NETWORKS (v1 API)
 // =============================================================================
 
-export const listNetworksV1 = internalQuery({
+export const listNetworksV1 = query({
   args: {
+    _secret: v.string(),
     orgId: v.id("organizations"),
     limit: v.number(),
     cursor: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     let members = await ctx.db
       .query("orgNetworkMembers")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
@@ -916,9 +961,10 @@ export const listNetworksV1 = internalQuery({
   },
 });
 
-export const getNetworkByIdV1 = internalQuery({
-  args: { networkId: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, { networkId, orgId }) => {
+export const getNetworkByIdV1 = query({
+  args: { _secret: v.string(), networkId: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, networkId, orgId }) => {
+    requireInternalSecret(_secret);
     // Check membership
     const members = await ctx.db
       .query("orgNetworkMembers")
@@ -975,14 +1021,16 @@ export const getNetworkByIdV1 = internalQuery({
 // REPRESENTATIVES (v1 API — international DMs)
 // =============================================================================
 
-export const listRepresentativesV1 = internalQuery({
+export const listRepresentativesV1 = query({
   args: {
+    _secret: v.string(),
     limit: v.number(),
     cursor: v.optional(v.string()),
     country: v.optional(v.string()),
     constituencyId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     let all = await ctx.db
       .query("decisionMakers")
       .withIndex("by_jurisdiction_jurisdictionLevel", (q) =>
@@ -1040,9 +1088,10 @@ export const listRepresentativesV1 = internalQuery({
 // ORG (v1 API — org detail)
 // =============================================================================
 
-export const getOrgForApiKey = internalQuery({
-  args: { orgId: v.id("organizations") },
-  handler: async (ctx, { orgId }) => {
+export const getOrgForApiKey = query({
+  args: { _secret: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, orgId }) => {
+    requireInternalSecret(_secret);
     const org = await ctx.db.get(orgId);
     if (!org) return null;
 
@@ -1079,9 +1128,10 @@ export const getOrgForApiKey = internalQuery({
 // SCORECARDS (public, no auth)
 // =============================================================================
 
-export const getDmScorecard = internalQuery({
-  args: { identifier: v.string() },
-  handler: async (ctx, { identifier }) => {
+export const getDmScorecard = query({
+  args: { _secret: v.string(), identifier: v.string() },
+  handler: async (ctx, { _secret, identifier }) => {
+    requireInternalSecret(_secret);
     const resolved = await resolveDmAndCanonical(ctx, identifier);
     if (!resolved) return null;
     const { dm, canonicalSlug } = resolved;
@@ -1139,9 +1189,10 @@ export const getDmScorecard = internalQuery({
   },
 });
 
-export const compareDmScorecards = internalQuery({
-  args: { dmIds: v.array(v.string()) },
-  handler: async (ctx, { dmIds }) => {
+export const compareDmScorecards = query({
+  args: { _secret: v.string(), dmIds: v.array(v.string()) },
+  handler: async (ctx, { _secret, dmIds }) => {
+    requireInternalSecret(_secret);
     const results = await Promise.all(
       dmIds.map(async (dmId) => {
         const dm = await ctx.db.get(dmId as Id<"decisionMakers">);
@@ -1188,9 +1239,10 @@ export const compareDmScorecards = internalQuery({
 // CAMPAIGN STATS (public, no auth)
 // =============================================================================
 
-export const getCampaignStats = internalQuery({
-  args: { campaignId: v.id("campaigns") },
-  handler: async (ctx, { campaignId }) => {
+export const getCampaignStats = query({
+  args: { _secret: v.string(), campaignId: v.id("campaigns") },
+  handler: async (ctx, { _secret, campaignId }) => {
+    requireInternalSecret(_secret);
     const campaign = await ctx.db.get(campaignId);
     if (!campaign) return null;
     return {
@@ -1206,9 +1258,10 @@ export const getCampaignStats = internalQuery({
 // EVENT STATS (public, no auth)
 // =============================================================================
 
-export const getEventStats = internalQuery({
-  args: { eventId: v.string() },
-  handler: async (ctx, { eventId }) => {
+export const getEventStats = query({
+  args: { _secret: v.string(), eventId: v.string() },
+  handler: async (ctx, { _secret, eventId }) => {
+    requireInternalSecret(_secret);
     const event = await ctx.db.get(eventId as Id<"events">);
     if (!event) return null;
 
@@ -1234,9 +1287,10 @@ export const getEventStats = internalQuery({
 // SUBMISSION STATUS (authenticated)
 // =============================================================================
 
-export const getSubmissionStatus = internalQuery({
-  args: { submissionId: v.string(), pseudonymousId: v.string() },
-  handler: async (ctx, { submissionId, pseudonymousId }) => {
+export const getSubmissionStatus = query({
+  args: { _secret: v.string(), submissionId: v.string(), pseudonymousId: v.string() },
+  handler: async (ctx, { _secret, submissionId, pseudonymousId }) => {
+    requireInternalSecret(_secret);
     const submission = await ctx.db.get(submissionId as Id<"submissions">);
     if (!submission) return null;
     if (submission.pseudonymousId !== pseudonymousId) return { forbidden: true };
@@ -1297,9 +1351,10 @@ export const getSubmissionStatus = internalQuery({
 // EMAIL CONFIRMATION
 // =============================================================================
 
-export const confirmEmailDelivery = internalMutation({
-  args: { submissionId: v.string() },
-  handler: async (ctx, { submissionId }) => {
+export const confirmEmailDelivery = mutation({
+  args: { _secret: v.string(), submissionId: v.string() },
+  handler: async (ctx, { _secret, submissionId }) => {
+    requireInternalSecret(_secret);
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
     const normalizedSubmissionId = (ctx.db as any).normalizeId?.(
@@ -1336,9 +1391,10 @@ export const confirmEmailDelivery = internalMutation({
 // DELEGATION (authenticated)
 // =============================================================================
 
-export const getDelegationGrant = internalQuery({
-  args: { grantId: v.string() },
-  handler: async (ctx, { grantId }) => {
+export const getDelegationGrant = query({
+  args: { _secret: v.string(), grantId: v.string() },
+  handler: async (ctx, { _secret, grantId }) => {
+    requireInternalSecret(_secret);
     const grant = await ctx.db.get(grantId as Id<"delegationGrants">);
     if (!grant) return null;
 
@@ -1358,8 +1414,9 @@ export const getDelegationGrant = internalQuery({
   },
 });
 
-export const updateDelegationGrant = internalMutation({
+export const updateDelegationGrant = mutation({
   args: {
+    _secret: v.string(),
     grantId: v.string(),
     userId: v.string(),
     data: v.object({
@@ -1371,7 +1428,8 @@ export const updateDelegationGrant = internalMutation({
       policyText: v.optional(v.string()),
     }),
   },
-  handler: async (ctx, { grantId, userId, data }) => {
+  handler: async (ctx, { _secret, grantId, userId, data }) => {
+    requireInternalSecret(_secret);
     const grant = await ctx.db.get(grantId as Id<"delegationGrants">);
     if (!grant) return null;
     if (String(grant.userId) !== userId) return { forbidden: true };
@@ -1390,13 +1448,15 @@ export const updateDelegationGrant = internalMutation({
   },
 });
 
-export const submitDelegationReview = internalMutation({
+export const submitDelegationReview = mutation({
   args: {
+    _secret: v.string(),
     reviewId: v.string(),
     userId: v.string(),
     decision: v.string(),
   },
-  handler: async (ctx, { reviewId, userId, decision }) => {
+  handler: async (ctx, { _secret, reviewId, userId, decision }) => {
+    requireInternalSecret(_secret);
     const review = await ctx.db.get(reviewId as Id<"delegationReviews">);
     if (!review) return null;
 

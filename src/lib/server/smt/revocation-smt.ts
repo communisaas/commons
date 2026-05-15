@@ -25,11 +25,11 @@
  *      (compute_revocation_smt_root — circuit must agree with this code's hashing)
  */
 
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { poseidon2Hash2 } from '$lib/core/crypto/poseidon';
 import { getZeroHashes as getSharedZeroHashes } from '$lib/core/crypto/zero-hashes';
-import { serverInternalMutation, serverInternalQuery } from '$lib/server/convex-internal';
-
 // SMT depth widened from 64 to 128 to close the targeted-lockout grinding
 // attack against the revocation keyspace.
 //
@@ -164,9 +164,9 @@ export async function insertRevocationNullifier(
 
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		// Step 1: read the current path + root.
-		const path = await serverInternalQuery(internal.revocations.getRevocationSMTPath, {
-			leafKey: leafKey.toString(16),
-		});
+		const path = await serverQuery(api.revocations.getRevocationSMTPath, {
+			_secret: getInternalSecret(),
+			leafKey: leafKey.toString(16),});
 
 		// Idempotent re-emit: leaf already occupied. Return current root with
 		// isFresh=false so the caller can re-issue the chain write. The chain
@@ -222,12 +222,12 @@ export async function insertRevocationNullifier(
 
 		// Step 3: write back, gated on seq.
 		try {
-			const result = (await serverInternalMutation(internal.revocations.applyRevocationSMTUpdate, {
+			const result = (await serverMutation(api.revocations.applyRevocationSMTUpdate, {
+				_secret: getInternalSecret(),
 				leafKey: leafKey.toString(16),
 				nodeUpdates,
 				newRoot,
-				expectedSequenceNumber: path.expectedSequenceNumber,
-			})) as { newRoot: string; newSequenceNumber: number };
+				expectedSequenceNumber: path.expectedSequenceNumber,})) as { newRoot: string; newSequenceNumber: number };
 
 			// Post-write read-back verification. The Convex mutation cannot
 			// recompute Poseidon (no bb.js in its runtime), so it accepts the
@@ -255,9 +255,9 @@ export async function insertRevocationNullifier(
 			// kill-switch so all subsequent emits halt until an operator
 			// investigates. Then throw to caller.
 			try {
-				const verifyPath = await serverInternalQuery(internal.revocations.getRevocationSMTPath, {
-					leafKey: leafKey.toString(16),
-				});
+				const verifyPath = await serverQuery(api.revocations.getRevocationSMTPath, {
+					_secret: getInternalSecret(),
+					leafKey: leafKey.toString(16),});
 				if (verifyPath.currentLeaf === null) {
 					throw new Error(
 						'SMT_POSTWRITE_LEAF_MISSING: applied insert but read-back returned no leaf'
@@ -316,9 +316,9 @@ export async function insertRevocationNullifier(
 					// resolvable; not subject to bundler tree-shaking that could
 					// silently drop a catch-only dynamic import).
 					try {
-						await serverInternalMutation(internal.revocations.setRevocationHalt, {
-							reason: 'postwrite_verification_failed'
-						});
+						await serverMutation(api.revocations.setRevocationHaltForCaller, {
+							_secret: getInternalSecret(),
+							reason: 'postwrite_verification_failed'});
 					} catch (haltErr) {
 						console.error(
 							'[insertRevocationNullifier] kill-switch flip failed during post-write halt',

@@ -1,8 +1,8 @@
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation } from '$lib/server/convex-internal';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { api, internal } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 
@@ -18,7 +18,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const grant = await serverInternalQuery(internal.v1api.getDelegationGrant, { grantId: params.id });
+	const grant = await serverQuery(api.v1api.getDelegationGrant, {
+ _secret: getInternalSecret(), grantId: params.id});
 	if (!grant) {
 		throw error(404, 'Delegation grant not found');
 	}
@@ -77,11 +78,11 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'No valid fields to update');
 	}
 
-	const result = await serverInternalMutation(internal.v1api.updateDelegationGrant, {
+	const result = await serverMutation(api.v1api.updateDelegationGrant, {
+		_secret: getInternalSecret(),
 		grantId: params.id,
 		userId: session.userId,
-		data
-	});
+		data});
 
 	if (!result) throw error(404, 'Delegation grant not found');
 	if ('forbidden' in result && result.forbidden) throw error(403, 'Not authorized to modify this grant');

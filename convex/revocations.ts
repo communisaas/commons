@@ -26,10 +26,12 @@
  * @see voter-protocol/packages/crypto/noir/three_tree_membership/src/main.nr
  */
 
-import { internalAction, internalMutation, internalQuery, query } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
+import { requireInternalSecret } from "./_internalAuth";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -96,9 +98,10 @@ function computeSiblingPathKeys(leafKey: bigint): string[] {
  * `leafKey` is the canonicalized lower-128 bits of the revocation nullifier.
  * Caller is responsible for the truncation to the SMT keyspace.
  */
-export const getRevocationSMTPath = internalQuery({
-  args: { leafKey: v.string() },
-  handler: async (ctx, { leafKey }) => {
+export const getRevocationSMTPath = query({
+  args: { _secret: v.string(), leafKey: v.string() },
+  handler: async (ctx, { _secret, leafKey }) => {
+    requireInternalSecret(_secret);
     const canonicalLeaf = canonicalizePathKey(leafKey);
     const leafKeyBig = BigInt("0x" + canonicalLeaf);
     const siblingKeys = computeSiblingPathKeys(leafKeyBig);
@@ -166,8 +169,9 @@ export const getRevocationSMTPath = internalQuery({
  * the caller can short-circuit the on-chain write — RevocationRegistry would
  * revert with AlreadyRevoked anyway, but failing fast here saves the gas.
  */
-export const applyRevocationSMTUpdate = internalMutation({
+export const applyRevocationSMTUpdate = mutation({
   args: {
+    _secret: v.string(),
     leafKey: v.string(),
     // 128 entries, indexed by depth 0..127. Depth 0 is the leaf itself; its
     // pathKey MUST match the canonical leafKey. The root (depth 128) lives in
@@ -183,6 +187,7 @@ export const applyRevocationSMTUpdate = internalMutation({
     expectedSequenceNumber: v.number(),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     if (args.nodeUpdates.length !== SMT_DEPTH) {
       throw new Error(
         `SMT_PATH_LENGTH_MISMATCH: expected ${SMT_DEPTH} nodeUpdates (depths 0..${SMT_DEPTH - 1}), got ${args.nodeUpdates.length}`,
@@ -343,9 +348,10 @@ export const applyRevocationSMTUpdate = internalMutation({
  * returns additional context (leaf value, sequenceNumber) needed for write
  * coordination.
  */
-export const getRevocationNonMembershipPath = internalQuery({
-  args: { revocationNullifier: v.string() },
-  handler: async (ctx, { revocationNullifier }) => {
+export const getRevocationNonMembershipPath = query({
+  args: { _secret: v.string(), revocationNullifier: v.string() },
+  handler: async (ctx, { _secret, revocationNullifier }) => {
+    requireInternalSecret(_secret);
     // Truncate to low 128 bits — same convention as
     // src/lib/server/smt/revocation-smt.ts `nullifierToLeafKey`.
     // SMT_DEPTH widened to 128 to close targeted-lockout grinding (see header).
@@ -488,6 +494,20 @@ export const setRevocationHalt = internalMutation({
       previousHaltedAt,
     });
     return { halted: true, reason: args.reason };
+  },
+});
+
+/**
+ * Public-API wrapper for `setRevocationHalt`. Allows the SvelteKit revocation
+ * SMT helper (`src/lib/server/smt/revocation-smt.ts`) to flip the kill-switch
+ * via the public HTTP API. The internal version stays in place for in-Convex
+ * cron callers (`reconcileSMTRoot` at line 632) which already hold full trust.
+ */
+export const setRevocationHaltForCaller = mutation({
+  args: { _secret: v.string(), reason: v.string() },
+  handler: async (ctx, { _secret, reason }): Promise<{ halted: boolean; reason: string }> => {
+    requireInternalSecret(_secret);
+    return await ctx.runMutation(internal.revocations.setRevocationHalt, { reason });
   },
 });
 

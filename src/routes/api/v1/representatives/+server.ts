@@ -7,8 +7,8 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, parsePagination } from '$lib/server/api-v1/response';
 import { serverQuery } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, url }) => {
@@ -25,12 +25,12 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const countryCode = url.searchParams.get('country');
 	const constituencyId = url.searchParams.get('constituency');
 
-	const result = await serverInternalQuery(internal.v1api.listRepresentativesV1, {
+	const result = await serverQuery(api.v1api.listRepresentativesV1, {
+		_secret: getInternalSecret(),
 		limit,
 		cursor: cursor ?? undefined,
 		country: countryCode ?? undefined,
-		constituencyId: constituencyId ?? undefined
-	});
+		constituencyId: constituencyId ?? undefined});
 
 	const data = result.items.map((r: any) => ({
 		id: r._id,

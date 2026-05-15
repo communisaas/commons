@@ -3,9 +3,10 @@
  * witness for a given revocation_nullifier.
  *
  *  wires the V2 client glue path. The browser cannot directly call
- * the Convex `internal.revocations.getRevocationNonMembershipPath` query
- * (auth scope mismatch), so this thin SvelteKit endpoint runs the query
- * server-side and returns the path + bits + currentRoot.
+ * the secret-gated `api.revocations.getRevocationNonMembershipPath` query
+ * (the function is public-on-the-wire but requires `INTERNAL_API_SECRET`),
+ * so this thin SvelteKit endpoint runs the query server-side and returns
+ * the path + bits + currentRoot.
  *
  * Auth: requires an authenticated session. The witness data itself is not
  * sensitive (the SMT root is already public on-chain), but rate-limiting
@@ -28,8 +29,9 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { internal } from '$lib/convex';
-import { serverInternalQuery } from '$lib/server/convex-internal';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { serverQuery } from 'convex-sveltekit';
 import { getEmptyTreeRoot } from '$lib/server/smt/revocation-smt';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -56,9 +58,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(400, 'revocationNullifier must be hex');
 	}
 
-	const result = await serverInternalQuery(internal.revocations.getRevocationSMTPath, {
-		leafKey: revocationNullifier
-	});
+	const result = await serverQuery(api.revocations.getRevocationSMTPath, {
+		_secret: getInternalSecret(),
+		leafKey: revocationNullifier});
 
 	const computedEmptyRoot = await getEmptyTreeRoot();
 

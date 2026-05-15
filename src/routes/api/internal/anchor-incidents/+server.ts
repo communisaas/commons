@@ -12,8 +12,8 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { enforceInternalRateLimit } from '$lib/server/internal/rate-limit';
 import { matchInternalSecret } from '$lib/server/internal/secret-auth';
 
@@ -35,10 +35,10 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 500);
 	const cursor = url.searchParams.get('cursor') ?? undefined;
 
-	const incidents = await serverInternalQuery(internal.submissions.listAnchorIncidents, {
+	const incidents = await serverQuery(api.submissions.listAnchorIncidents, {
+		_secret: getInternalSecret(),
 		limit,
-		cursor
-	});
+		cursor});
 
 	return json({
 		divergentCount: incidents.divergent.length,

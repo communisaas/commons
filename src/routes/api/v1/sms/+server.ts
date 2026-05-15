@@ -9,8 +9,8 @@ import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
 import { isSmsBlastStatus } from '$lib/server/sms/types';
 import { serverQuery } from 'convex-sveltekit';
-import { serverInternalQuery, serverInternalMutation, serverInternalAction } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, url }) => {
@@ -27,12 +27,12 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const { cursor, limit } = parsePagination(url);
 	const statusFilter = url.searchParams.get('status');
 
-	const result = await serverInternalQuery(internal.v1api.listSmsBlastsV1, {
+	const result = await serverQuery(api.v1api.listSmsBlastsV1, {
+		_secret: getInternalSecret(),
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
-		status: statusFilter && isSmsBlastStatus(statusFilter) ? statusFilter : undefined
-	});
+		status: statusFilter && isSmsBlastStatus(statusFilter) ? statusFilter : undefined});
 
 	const data = result.items.map((b: any) => ({
 		id: b._id,

@@ -1,15 +1,15 @@
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 /**
  * POST /api/e/[id]/checkin — Attendance check-in
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { api, internal } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { computeOrgScopedEmailHash } from '$lib/core/crypto/org-scoped-hash';
-import { serverInternalQuery } from '$lib/server/convex-internal';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
@@ -30,7 +30,8 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	}
 
 	// Look up the full event server-side so check-in codes are never exposed publicly.
-	const event = await serverInternalQuery(internal.events.getEventInternal, { eventId: params.id as Id<'events'> });
+	const event = await serverQuery(api.events.getEventInternalForCaller, {
+ _secret: getInternalSecret(), eventId: params.id as Id<'events'>});
 	if (!event) throw error(404, 'Event not found');
 	if (event.status !== 'PUBLISHED') throw error(400, 'Event is not active');
 

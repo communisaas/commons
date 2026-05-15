@@ -8,8 +8,9 @@
  * update the cache so future hits can skip re-verification when fresh.
  */
 
-import { internal } from '$lib/convex';
-import { serverInternalMutation, serverInternalQuery } from '$lib/server/convex-internal';
+import { api } from '$lib/convex';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 export interface ResolvedContact {
 	orgKey: string;
@@ -44,7 +45,8 @@ export async function getCachedContacts(
 			title: p.title,
 		}));
 
-		const results = await serverInternalQuery(internal.resolvedContacts.getCached, {
+		const results = await serverQuery(api.resolvedContacts.getCached, {
+			_secret: getInternalSecret(),
 			pairs: normalizedPairs,
 		});
 
@@ -87,7 +89,8 @@ export async function upsertResolvedContacts(
 	if (withEmail.length === 0) return;
 
 	try {
-		await serverInternalMutation(internal.resolvedContacts.upsert, {
+		await serverMutation(api.resolvedContacts.upsert, {
+			_secret: getInternalSecret(),
 			contacts: withEmail.map(c => ({
 				orgKey: normalizeOrgKey(c.organization),
 				title: c.title,
@@ -117,7 +120,8 @@ export async function updateContactVerification(
 	if (updates.length === 0) return;
 
 	try {
-		await serverInternalMutation(internal.resolvedContacts.updateVerification, {
+		await serverMutation(api.resolvedContacts.updateVerification, {
+			_secret: getInternalSecret(),
 			updates: updates.map(u => ({
 				orgKey: normalizeOrgKey(u.organization),
 				title: u.title,

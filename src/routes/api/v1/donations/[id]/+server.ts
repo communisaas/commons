@@ -7,8 +7,9 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
-import { serverInternalQuery } from '$lib/server/convex-internal';
-import { internal } from '$lib/convex';
+import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { serverQuery } from 'convex-sveltekit';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params, request }) => {
@@ -22,10 +23,10 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
-	const donation = await serverInternalQuery(internal.v1api.getDonationById, {
+	const donation = await serverQuery(api.v1api.getDonationById, {
+		_secret: getInternalSecret(),
 		donationId: params.id,
-		orgId: auth.orgId
-	});
+		orgId: auth.orgId});
 	if (!donation) return apiError('NOT_FOUND', 'Donation not found', 404);
 
 	return apiOk({
