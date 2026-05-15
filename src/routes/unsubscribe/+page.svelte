@@ -14,20 +14,15 @@
 </svelte:head>
 
 <main class="mx-auto max-w-2xl px-4 py-16">
-	{#if form?.applied && form?.reason === 'ok'}
-		<h1 class="font-brand text-2xl font-bold text-slate-900">You're unsubscribed</h1>
+	{#if form?.received}
+		<!-- Single indistinguishable response across {ok, already-unsubscribed,
+		     not-on-list, blast-not-found}. The server intentionally returns no
+		     `reason` discriminator — keeping the form from being a probe oracle
+		     for the org's supporter list. -->
+		<h1 class="font-brand text-2xl font-bold text-slate-900">Request received</h1>
 		<p class="mt-3 font-brand text-base text-slate-700">
-			You will not receive further messages from this organization on Commons.
-		</p>
-	{:else if form?.applied && form?.reason === 'already-unsubscribed'}
-		<h1 class="font-brand text-2xl font-bold text-slate-900">Already unsubscribed</h1>
-		<p class="mt-3 font-brand text-base text-slate-700">
-			Your address is already marked as unsubscribed. No action required.
-		</p>
-	{:else if form?.applied === false && form?.reason === 'not-on-list'}
-		<h1 class="font-brand text-2xl font-bold text-slate-900">No further action required</h1>
-		<p class="mt-3 font-brand text-base text-slate-700">
-			If your address is on file with this organization, you have been unsubscribed.
+			If your address is on file with this organization, it has been unsubscribed.
+			No further action required.
 		</p>
 	{:else if form?.error}
 		<h1 class="font-brand text-2xl font-bold text-slate-900">We couldn't process that</h1>
