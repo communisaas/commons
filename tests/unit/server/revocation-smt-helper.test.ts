@@ -26,7 +26,7 @@ vi.mock('convex-sveltekit', () => ({
 }));
 
 vi.mock('$lib/convex', () => ({
-	internal: {
+	api: {
 		revocations: {
 			getRevocationSMTPath: 'revocations.getRevocationSMTPath',
 			applyRevocationSMTUpdate: 'revocations.applyRevocationSMTUpdate'

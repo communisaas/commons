@@ -14,7 +14,7 @@ const {
 	mockRequirePublicApi,
 	mockCheckApiPlanRateLimit,
 	mockServerQuery,
-	mockInternal
+	mockApi
 } = vi.hoisted(() => ({
 	mockFeatures: {
 		AUTOMATION: true as boolean,
@@ -34,10 +34,10 @@ const {
 	mockRequirePublicApi: vi.fn(),
 	mockCheckApiPlanRateLimit: vi.fn(),
 	mockServerQuery: vi.fn(),
-	mockInternal: {
+	mockApi: {
 		v1api: {
-			listWorkflowsV1: 'internal.v1api.listWorkflowsV1',
-			getWorkflowById: 'internal.v1api.getWorkflowById'
+			listWorkflowsV1: 'api.v1api.listWorkflowsV1',
+			getWorkflowById: 'api.v1api.getWorkflowById'
 		}
 	}
 }));
@@ -49,7 +49,7 @@ vi.mock('convex-sveltekit', () => ({
 }));
 
 vi.mock('$lib/convex', () => ({
-	internal: mockInternal
+	api: mockApi
 }));
 
 vi.mock('$lib/server/api-v1/auth', () => ({
@@ -165,7 +165,8 @@ describe('GET /api/v1/workflows', () => {
 			url: new URL('http://localhost/api/v1/workflows?enabled=true&limit=5&cursor=wf-0')
 		} as any);
 
-		expect(mockServerQuery).toHaveBeenCalledWith(mockInternal.v1api.listWorkflowsV1, {
+		expect(mockServerQuery).toHaveBeenCalledWith(mockApi.v1api.listWorkflowsV1, {
+			_secret: expect.any(String),
 			orgId: 'org-1',
 			limit: 5,
 			cursor: 'wf-0',
@@ -258,7 +259,8 @@ describe('GET /api/v1/workflows/[id]', () => {
 		expect(body.data.id).toBe('wf-1');
 		expect(body.data.name).toBe('Test Workflow');
 		expect(body.data.stepCount).toBe(1);
-		expect(mockServerQuery).toHaveBeenCalledWith(mockInternal.v1api.getWorkflowById, {
+		expect(mockServerQuery).toHaveBeenCalledWith(mockApi.v1api.getWorkflowById, {
+			_secret: expect.any(String),
 			workflowId: 'wf-1',
 			orgId: 'org-1'
 		});
