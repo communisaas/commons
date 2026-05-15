@@ -3,6 +3,7 @@ import { error, json, type RequestEvent } from '@sveltejs/kit';
 import { serverMutation } from 'convex-sveltekit';
 import type { RequestHandler } from './$types';
 import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 const SESSION_COOKIE = 'auth-session';
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -91,6 +92,7 @@ export const POST: RequestHandler = async (event) => {
 	}
 
 	const result = await serverMutation(api.authOps.upsertFromOAuth, {
+		_secret: getInternalSecret(),
 		provider: 'dev-login',
 		providerAccountId: email,
 		scope: 'dev-login',

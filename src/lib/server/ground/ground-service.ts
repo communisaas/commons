@@ -2,6 +2,7 @@ import { serverMutation, serverQuery } from 'convex-sveltekit';
 import type { FunctionArgs } from 'convex/server';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import {
 	hashCredential,
 	hashDistrict,
@@ -178,6 +179,7 @@ export async function issueGroundCredential(
 	const districtHash = input.district ? await hashDistrict(input.district) : null;
 
 	const verified = await serverMutation(api.users.verifyAddress, {
+		_secret: getInternalSecret(),
 		userId: userId as Id<'users'>,
 		district: input.district,
 		stateSenateDistrict: input.state_senate_district,

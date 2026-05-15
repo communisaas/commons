@@ -9,6 +9,7 @@ import {
 import { v } from 'convex/values';
 import { internal } from './_generated/api';
 import { requireAuth } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
 import { selectActiveCredentialForUser } from './_credentialSelect';
 import { applyDowngradeGuard } from './_downgradeGuard';
 import { upsertExternalId } from './_externalIds';
@@ -460,8 +461,9 @@ const MDL_CREDENTIAL_HASH_INVALID = 'MDL_CREDENTIAL_HASH_INVALID';
  *   - direct wallet completion failing because the phone request has no Convex auth
  *   - account-merge flows failing when the canonical user is not the session user
  */
-export const finalizeMdlVerification = internalMutation({
+export const finalizeMdlVerification = mutation({
 	args: {
+		_secret: v.string(),
 		userId: v.id('users'),
 		identityCommitment: v.string(),
 		credentialHash: v.string(),
@@ -474,6 +476,7 @@ export const finalizeMdlVerification = internalMutation({
 		identityHash: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
 		const existing = await ctx.db
 			.query('users')
 			.filter((q) => q.eq(q.field('identityCommitment'), args.identityCommitment))
@@ -576,6 +579,7 @@ const MAX_USERIDS_PER_EMAIL_HASH_180D = 3;
 
 export const verifyAddress = mutation({
 	args: {
+		_secret: v.string(),
 		userId: v.id('users'),
 		district: v.optional(v.string()),
 		stateSenateDistrict: v.optional(v.string()),
@@ -611,6 +615,14 @@ export const verifyAddress = mutation({
 		atlasVersion: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
+		// Trust gate: only SvelteKit's `/api/identity/verify-address` route
+		// (which validates the address_token proving the user actually
+		// completed address verification) may invoke this. Without this gate,
+		// any authenticated user could self-issue district credentials with
+		// arbitrary claims via direct Convex call — bypassing the address-
+		// verification artifact check and inflating their own trust tier.
+		requireInternalSecret(args._secret);
+
 		const { userId: authUserId } = await requireAuth(ctx);
 		if (args.userId !== authUserId) throw new Error('Unauthorized');
 		const user = await ctx.db.get(args.userId);

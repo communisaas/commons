@@ -12,6 +12,7 @@
 import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireAuth } from "./_authHelpers";
+import { requireInternalSecret } from "./_internalAuth";
 import { toArrayBuffer } from "./_bufferSource";
 import type { Doc, Id } from "./_generated/dataModel";
 
@@ -90,6 +91,7 @@ function authOpsDb(ctx: any): AuthOpsDb {
  */
 export const upsertFromOAuth = mutation({
   args: {
+    _secret: v.string(),
     provider: v.string(),
     providerAccountId: v.string(),
     scope: v.string(),
@@ -110,6 +112,16 @@ export const upsertFromOAuth = mutation({
     isNew: v.boolean(),
   }),
   handler: async (ctx: any, args): Promise<UpsertFromOAuthResult> => {
+    // Trust gate: only SvelteKit's OAuth callback (which has verified the
+    // provider's `code → token → user-info` round-trip) should be able to
+    // link a provider account to a user record. Without this gate, an
+    // attacker could call api.authOps.upsertFromOAuth directly with a
+    // chosen providerAccountId and a victim's email — the email-match path
+    // at line 154 would link the attacker's provider identity to the
+    // victim's user record, enabling account takeover on the next legitimate
+    // OAuth login.
+    requireInternalSecret(args._secret);
+
     const db = authOpsDb(ctx);
     const now = Date.now();
 

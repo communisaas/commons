@@ -3,6 +3,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { verifyUnsubscribeToken } from '$lib/server/email/unsubscribe';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { PageServerLoad, Actions } from './$types';
 
 // param-length caps prevent the HMAC update from burning CPU on
@@ -27,6 +28,7 @@ export const load: PageServerLoad = async ({ params }) => {
 
 	// Token valid — check supporter status
 	const supporter = await serverQuery(api.supporters.getEmailStatus, {
+		_secret: getInternalSecret(),
 		supporterId: supporterId as Id<'supporters'>
 	});
 
@@ -56,6 +58,7 @@ export const actions: Actions = {
 		}
 
 		const supporter = await serverQuery(api.supporters.getEmailStatus, {
+			_secret: getInternalSecret(),
 			supporterId: supporterId as Id<'supporters'>
 		});
 
@@ -68,6 +71,7 @@ export const actions: Actions = {
 		}
 
 		await serverMutation(api.supporters.unsubscribe, {
+			_secret: getInternalSecret(),
 			supporterId: supporterId as Id<'supporters'>
 		});
 

@@ -10,7 +10,8 @@ import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { requireOrgRole } from "./_authHelpers";
+import { requireOrgRole, requireAuth } from "./_authHelpers";
+import { requireInternalSecret } from "./_internalAuth";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
 import { decryptOrgPii } from "./_orgKey";
 
@@ -151,12 +152,14 @@ export const getBlastEvents = query({
  * (per-recipient HMAC token in body + List-Unsubscribe header) requires
  * Lambda-side per-recipient SendEmail and lands separately.
  */
-export const applyUnsubscribeByBlastEmail = internalMutation({
+export const applyUnsubscribeByBlastEmail = mutation({
   args: {
+    _secret: v.string(),
     blastId: v.id("emailBlasts"),
     email: v.string(),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     const { computeOrgScopedEmailHash } = await import("./_orgHash");
     const blast = await ctx.db.get(args.blastId);
     if (!blast) {
@@ -906,11 +909,17 @@ export const pickAbWinners = internalAction({
 });
 
 /**
- * Count unresolved bounce reports for a user (per-user cap).
+ * Count unresolved bounce reports for a user (per-user cap). Only the user
+ * themselves can query their own count — anonymous callers can't poll random
+ * userIds to learn who has filed bounce reports.
  */
 export const countActiveReports = query({
   args: { userId: v.string() },
   handler: async (ctx, { userId }) => {
+    const { userId: callerId } = await requireAuth(ctx);
+    if (callerId !== (userId as Id<"users">)) {
+      throw new Error("Cannot query another user's report count");
+    }
     const reports = await ctx.db
       .query("bounceReports")
       .filter((q) =>
@@ -925,13 +934,15 @@ export const countActiveReports = query({
 });
 
 /**
- * Find unresolved bounce report for same user + email (dedup).
- * Uses emailHash for lookup instead of plaintext email.
+ * Find unresolved bounce report for same user + email (dedup). Internal-only:
+ * caller-supplied (userId, emailHash) makes this a probe oracle otherwise
+ * (`did user X report email Y?`). SvelteKit's /api/emails/report-bounce is
+ * the legitimate caller and passes the internal secret.
  */
 export const findUnresolvedReport = query({
-  args: { userId: v.string(), emailHash: v.string() },
-  handler: async (ctx, { userId, emailHash }) => {
-    // Client sends pre-computed hash — no server-held key needed
+  args: { _secret: v.string(), userId: v.string(), emailHash: v.string() },
+  handler: async (ctx, { _secret, userId, emailHash }) => {
+    requireInternalSecret(_secret);
     const report = await ctx.db
       .query("bounceReports")
       .withIndex("by_emailHash_resolved", (q) =>
@@ -944,16 +955,20 @@ export const findUnresolvedReport = query({
 });
 
 /**
- * Create a bounce report with emailHash for hash-primary lookups.
- * Called from /api/emails/report-bounce route.
+ * Create a bounce report. Internal-only: caller-supplied `reportedBy` would
+ * otherwise let an anonymous caller impersonate any user as the reporter and
+ * inject pollution rows. SvelteKit's /api/emails/report-bounce checks session
+ * + trust-tier + per-user cap before invoking.
  */
 export const createBounceReport = mutation({
   args: {
+    _secret: v.string(),
     emailHash: v.string(),
     domain: v.string(),
     reportedBy: v.string(),
   },
-  handler: async (ctx, { emailHash, domain, reportedBy }) => {
+  handler: async (ctx, { _secret, emailHash, domain, reportedBy }) => {
+    requireInternalSecret(_secret);
     const id = await ctx.db.insert("bounceReports", {
       emailHash,
       domain,

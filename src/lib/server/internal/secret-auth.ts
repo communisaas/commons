@@ -35,6 +35,21 @@ function isStringSecret(value: string | undefined | null): value is string {
 	return typeof value === 'string' && value.length >= MIN_SECRET_BYTES;
 }
 
+/**
+ * Read `INTERNAL_API_SECRET` for outbound use (SvelteKit→Convex public
+ * functions that gate on `_secret`, e.g. `applyUnsubscribeByBlastEmail`).
+ * Throws loud at the SvelteKit boundary if the env var is missing or
+ * under-length so a misconfigured deployment can't silently send empty
+ * secrets the Convex side will reject anyway.
+ */
+export function getInternalSecret(): string {
+	const secret = env.INTERNAL_API_SECRET;
+	if (!secret || secret.length < MIN_SECRET_BYTES) {
+		throw new Error('INTERNAL_API_SECRET not configured');
+	}
+	return secret;
+}
+
 export function matchInternalSecret(presented: string | null | undefined): InternalSecretMatchResult {
 	const active = env.INTERNAL_API_SECRET;
 	if (!isStringSecret(active)) {

@@ -12,6 +12,7 @@
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_EMAIL_LENGTH = 254; // RFC 5321
@@ -83,6 +84,7 @@ export const POST: RequestHandler = async (event) => {
 	// Deduplicate: same user can't report same email twice while unresolved
 	// Returns identical 202 to prevent resolution-state oracle
 	const existing = await serverQuery(api.email.findUnresolvedReport, {
+		_secret: getInternalSecret(),
 		userId: session.userId,
 		emailHash
 	});
@@ -98,6 +100,7 @@ export const POST: RequestHandler = async (event) => {
 
 	try {
 		await serverMutation(api.email.createBounceReport, {
+			_secret: getInternalSecret(),
 			emailHash,
 			domain,
 			reportedBy: session.userId

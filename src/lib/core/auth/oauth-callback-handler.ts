@@ -22,6 +22,7 @@ import { validateReturnTo } from '$lib/core/auth/oauth';
 import { encryptOAuthToken } from '$lib/core/crypto/oauth-token-encryption';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * NEAR IMPLICIT ACCOUNT CREATION (fire-and-forget)
@@ -256,6 +257,7 @@ export class OAuthCallbackHandler {
 
 		// Call Convex mutation to upsert user + account
 		const result = await serverMutation(api.authOps.upsertFromOAuth, {
+			_secret: getInternalSecret(),
 			provider: config.provider,
 			providerAccountId: userData.id,
 			scope: config.scope,

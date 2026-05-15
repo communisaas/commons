@@ -14,6 +14,7 @@ import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
+import { requireInternalSecret } from "./_internalAuth";
 
 const getOrganizationBySlugRef = makeFunctionReference<"query">("organizations:getBySlug");
 const importBatchRef = makeFunctionReference<"mutation">("supporters:importBatch");
@@ -704,12 +705,17 @@ export const updateSmsStatus = mutation({
 });
 
 /**
- * Public: get supporter email status for unsubscribe page (no auth required).
- * Returns minimal fields only — no PII.
+ * Internal: get supporter email status for the unsubscribe page. Caller must
+ * present INTERNAL_API_SECRET — SvelteKit's `/unsubscribe/[supporterId]/[orgId]/[token]`
+ * route is the only legitimate caller. The HMAC token + length-cap gate live
+ * in the SvelteKit route; this gate prevents an anonymous Convex client from
+ * directly querying supporter unsubscribe state (which would otherwise serve
+ * as a supporter-membership oracle).
  */
 export const getEmailStatus = query({
-  args: { supporterId: v.id("supporters") },
-  handler: async (ctx, { supporterId }) => {
+  args: { _secret: v.string(), supporterId: v.id("supporters") },
+  handler: async (ctx, { _secret, supporterId }) => {
+    requireInternalSecret(_secret);
     const supporter = await ctx.db.get(supporterId);
     if (!supporter) return null;
     return {
@@ -721,12 +727,16 @@ export const getEmailStatus = query({
 });
 
 /**
- * Public: unsubscribe a supporter by ID (called from unsubscribe page action).
- * HMAC token verification happens in the SvelteKit route before calling this.
+ * Internal: unsubscribe a supporter by ID. Same trust model as getEmailStatus:
+ * SvelteKit's unsubscribe route verifies the HMAC token, then passes the
+ * INTERNAL_API_SECRET so this Convex mutation can validate the caller is the
+ * trusted server. Without this gate, anyone with a supporterId could force
+ * an opt-out without the email-recipient's HMAC token.
  */
 export const unsubscribe = mutation({
-  args: { supporterId: v.id("supporters") },
-  handler: async (ctx, { supporterId }) => {
+  args: { _secret: v.string(), supporterId: v.id("supporters") },
+  handler: async (ctx, { _secret, supporterId }) => {
+    requireInternalSecret(_secret);
     const supporter = await ctx.db.get(supporterId);
     if (!supporter) throw new Error("Supporter not found");
     await ctx.db.patch(supporterId, {
