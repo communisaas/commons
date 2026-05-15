@@ -45,6 +45,13 @@ interface KVLike {
 
 const CACHE_TTL_SECONDS = 30;
 const K_ANONYMITY_THRESHOLD = 5;
+// Cell-level identity/authorship sub-buckets are NOT emitted on CellWeight.
+// Any deterministic per-cell category count is bypassable by an adversary that
+// pads each category to L-1 with sockpuppets — they then subtract the known
+// padding from the published count to recover the victim's category. So no
+// L-diversity floor saves this; the only safe answer is to publish only the
+// cell count, never the per-category breakdown. The campaign-level
+// `identityBreakdown` field is preserved (geo-decoupled = harder to attribute).
 const TIER_LABELS: Record<number, string> = {
 	0: 'New',
 	1: 'Active',
@@ -212,9 +219,14 @@ function computeAuthorship(actions: RawAction[]): AuthorshipBreakdown {
 }
 
 function computeDateRange(actions: RawAction[]): DateRange {
-	const timestamps = actions.map((a) => a.sentAt);
-	const earliest = Math.min(...timestamps);
-	const latest = Math.max(...timestamps);
+	// Iterative min/max — Math.min(...arr) hits V8's argument-count ceiling
+	// (~65k) for very-popular campaigns.
+	let earliest = actions[0].sentAt;
+	let latest = earliest;
+	for (const a of actions) {
+		if (a.sentAt < earliest) earliest = a.sentAt;
+		if (a.sentAt > latest) latest = a.sentAt;
+	}
 	const spanMs = latest - earliest;
 	const spanDays = Math.floor(spanMs / (1000 * 60 * 60 * 24));
 
@@ -281,46 +293,9 @@ function computeCellGeography(
 	const results: CellWeight[] = [];
 	for (const [h3, acts] of cellActions) {
 		if (acts.length < K_ANONYMITY_THRESHOLD) continue;
-
-		// Identity breakdown
-		let govId = 0, address = 0, email = 0;
-		for (const a of acts) {
-			const t = a.trustTier ?? 0;
-			if (t >= 3) govId++;
-			else if (t === 2) address++;
-			else email++;
-		}
-
-		// Authorship breakdown — explicit compositionMode preferred, heuristic via hash uniqueness
-		let individual = 0, shared = 0;
-		const hashCounts = new Map<string, number>();
-		for (const a of acts) {
-			if (a.messageHash) hashCounts.set(a.messageHash, (hashCounts.get(a.messageHash) ?? 0) + 1);
-		}
-		for (const a of acts) {
-			if (a.compositionMode === 'individual' || a.compositionMode === 'edited') individual++;
-			else if (a.compositionMode === 'shared') shared++;
-			else if (a.messageHash && hashCounts.get(a.messageHash) === 1) individual++;
-			else shared++;
-		}
-
-		// Temporal bins (aligned to packet-level temporal field)
-		let temporalBins: number[] | undefined;
-		if (temporal) {
-			temporalBins = new Array(temporal.bins.length).fill(0);
-			for (const a of acts) {
-				const bin = Math.floor((a.sentAt - temporal.startMs) / temporal.binWidthMs);
-				if (bin >= 0 && bin < temporalBins.length) temporalBins[bin]++;
-			}
-		}
-
-		results.push({
-			h3,
-			count: acts.length,
-			identity: { govId, address, email },
-			temporalBins,
-			authorship: { individual, shared }
-		});
+		// Cell-level sub-buckets (identity / authorship / temporalBins) are
+		// intentionally omitted — see the header comment by K_ANONYMITY_THRESHOLD.
+		results.push({ h3, count: acts.length });
 	}
 
 	return results.sort((a, b) => b.count - a.count);
@@ -357,9 +332,13 @@ function computeALD(actions: RawAction[]): number | null {
 function computeTemporalField(actions: RawAction[]): TemporalField | null {
 	if (actions.length < 2) return null;
 
-	const timestamps = actions.map((a) => a.sentAt);
-	const minT = Math.min(...timestamps);
-	const maxT = Math.max(...timestamps);
+	// Iterative min/max — spread on actions.map(...) hits V8's argument ceiling.
+	let minT = actions[0].sentAt;
+	let maxT = minT;
+	for (const a of actions) {
+		if (a.sentAt < minT) minT = a.sentAt;
+		if (a.sentAt > maxT) maxT = a.sentAt;
+	}
 	const rangeMs = maxT - minT;
 
 	if (rangeMs < 3600000) return null; // Less than 1 hour span
@@ -368,8 +347,8 @@ function computeTemporalField(actions: RawAction[]): TemporalField | null {
 	const binCount = Math.ceil(rangeMs / binWidthMs) + 1;
 	const bins = new Array<number>(binCount).fill(0);
 
-	for (const ts of timestamps) {
-		const bin = Math.floor((ts - minT) / binWidthMs);
+	for (const a of actions) {
+		const bin = Math.floor((a.sentAt - minT) / binWidthMs);
 		bins[bin]++;
 	}
 
@@ -389,10 +368,18 @@ function computeEntropyFromBins(bins: number[], totalActions: number): number {
 
 /** Burst velocity from pre-computed bins: peak / mean of non-zero bins. */
 function computeVelocityFromBins(bins: number[]): number | null {
-	const nonZero = bins.filter((b) => b > 0);
-	if (nonZero.length === 0) return null;
-	const max = Math.max(...nonZero);
-	const mean = nonZero.reduce((a, b) => a + b, 0) / nonZero.length;
+	let max = 0;
+	let sum = 0;
+	let nonZeroCount = 0;
+	for (const b of bins) {
+		if (b > 0) {
+			if (b > max) max = b;
+			sum += b;
+			nonZeroCount++;
+		}
+	}
+	if (nonZeroCount === 0) return null;
+	const mean = sum / nonZeroCount;
 	if (mean === 0) return null;
 	return Math.round((max / mean) * 10) / 10;
 }

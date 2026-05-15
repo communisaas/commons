@@ -20,7 +20,11 @@
 	const chartData = $derived.by(() => {
 		if (timeline.length === 0) return null;
 
-		const maxVal = Math.max(...timeline.map((b) => b.total), 1);
+		// Iterative max — Math.max(...arr) hits the V8 argument ceiling on long campaigns.
+		let maxVal = 1;
+		for (const b of timeline) {
+			if (b.total > maxVal) maxVal = b.total;
+		}
 		const n = timeline.length;
 
 		// Compute x,y coordinates for each bucket
