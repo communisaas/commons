@@ -30,6 +30,16 @@ jobs:
       LINKEDIN_CLIENT_SECRET: test-linkedin-client-secret
       TWITTER_CLIENT_ID: test-twitter-client-id
       TWITTER_CLIENT_SECRET: test-twitter-client-secret
+      # Shared HMAC test secrets — must be >= 32 bytes (MIN_SECRET_BYTES) or
+      # getInternalSecret/requireInternalSecret throw and route handlers
+      # return 500 on every test call.
+      INTERNAL_API_SECRET: ci-test-internal-api-secret-padding-32b
+      INTERNAL_API_SECRET_PREVIOUS: ci-test-internal-api-secret-previous-32b
+      UNSUBSCRIBE_SECRET: ci-test-unsubscribe-secret-padding-32-bytes
+      ADDRESS_RESOLUTION_TOKEN_SECRET: ci-test-address-resolution-token-32b-pad
+      SESSION_CREATION_SECRET: ci-test-session-creation-secret-32b-padding
+      BLAST_DISPATCH_SECRET: ci-test-blast-dispatch-secret-32b-padding-x
+      BLAST_RECEIPTS_SECRET: ci-test-blast-receipts-secret-32b-padding-x
 
     steps:
       - name: Checkout code
