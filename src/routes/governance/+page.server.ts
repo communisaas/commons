@@ -23,8 +23,9 @@ interface GovernanceCase {
 	actionDomain: string;
 	deadline: string;
 	totalStake: string;
-	argumentCount: number;
-	uniqueParticipants: number;
+	// K-floor at 5 (null below 5, exact above) by listAwaitingGovernance in Convex.
+	argumentCount: number | null;
+	uniqueParticipants: number | null;
 	aiPanelConsensus: number | null;
 	escalatedAt: string;
 	arguments: {

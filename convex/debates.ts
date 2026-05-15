@@ -13,11 +13,13 @@ import {
   internalAction,
   internalQuery,
 } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { requireAuth } from "./_authHelpers";
+import { requireInternalSecret } from "./_internalAuth";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -55,8 +57,8 @@ export const getByTemplateId = query({
       deadline: debate.deadline,
       jurisdictionSize: debate.jurisdictionSize,
       status: debate.status,
-      argumentCount: debate.argumentCount,
-      uniqueParticipants: debate.uniqueParticipants,
+      argumentCount: debate.argumentCount < 5 ? null : debate.argumentCount,
+      uniqueParticipants: debate.uniqueParticipants < 5 ? null : debate.uniqueParticipants,
       totalStake: debate.totalStake,
       winningStance: debate.winningStance ?? null,
       winningArgumentIndex: debate.winningArgumentIndex ?? null,
@@ -93,8 +95,8 @@ export const get = query({
       deadline: debate.deadline,
       jurisdictionSize: debate.jurisdictionSize,
       status: debate.status,
-      argumentCount: debate.argumentCount,
-      uniqueParticipants: debate.uniqueParticipants,
+      argumentCount: debate.argumentCount < 5 ? null : debate.argumentCount,
+      uniqueParticipants: debate.uniqueParticipants < 5 ? null : debate.uniqueParticipants,
       totalStake: debate.totalStake,
       winningStance: debate.winningStance ?? null,
       winningArgumentIndex: debate.winningArgumentIndex ?? null,
@@ -166,11 +168,14 @@ export const listArguments = query({
         engagementTier: arg.engagementTier,
         weightedScore: arg.weightedScore,
         totalStake: arg.totalStake,
-        coSignCount: arg.coSignCount,
+        // coSignCount + positionCount K-floor at 5: sub-K cohort sizes name a
+        // specific co-signer / position holder. Above K, debate participation
+        // is intentionally public (deliberation visibility is the product).
+        coSignCount: arg.coSignCount < 5 ? null : arg.coSignCount,
         verificationStatus: arg.verificationStatus,
         currentPrice: arg.currentPrice ?? null,
         priceHistory: arg.priceHistory ?? null,
-        positionCount: arg.positionCount,
+        positionCount: arg.positionCount < 5 ? null : arg.positionCount,
         aiScores: arg.aiScores ?? null,
         aiWeighted: arg.aiWeighted ?? null,
         finalScore: arg.finalScore ?? null,
@@ -232,8 +237,8 @@ export const getPublicDetail = query({
       deadline: debate.deadline,
       jurisdictionSize: debate.jurisdictionSize,
       status: debate.status,
-      argumentCount: debate.argumentCount,
-      uniqueParticipants: debate.uniqueParticipants,
+      argumentCount: debate.argumentCount < 5 ? null : debate.argumentCount,
+      uniqueParticipants: debate.uniqueParticipants < 5 ? null : debate.uniqueParticipants,
       totalStake: debate.totalStake,
       winningStance: debate.winningStance ?? null,
       winningArgumentIndex: debate.winningArgumentIndex ?? null,
@@ -302,8 +307,8 @@ export const listPublic = query({
           propositionHash: debate.propositionHash,
           status: debate.status,
           deadline: debate.deadline,
-          argumentCount: debate.argumentCount,
-          uniqueParticipants: debate.uniqueParticipants,
+          argumentCount: debate.argumentCount < 5 ? null : debate.argumentCount,
+          uniqueParticipants: debate.uniqueParticipants < 5 ? null : debate.uniqueParticipants,
           totalStake: debate.totalStake,
           winningStance: debate.winningStance ?? null,
           resolvedAt: debate.resolvedAt ?? null,
@@ -361,8 +366,8 @@ export const getFullByTemplateId = query({
       deadline: debate.deadline,
       jurisdictionSize: debate.jurisdictionSize,
       status: debate.status,
-      argumentCount: debate.argumentCount,
-      uniqueParticipants: debate.uniqueParticipants,
+      argumentCount: debate.argumentCount < 5 ? null : debate.argumentCount,
+      uniqueParticipants: debate.uniqueParticipants < 5 ? null : debate.uniqueParticipants,
       totalStake: debate.totalStake,
       winningStance: debate.winningStance ?? null,
       winningArgumentIndex: debate.winningArgumentIndex ?? null,
@@ -802,6 +807,32 @@ export const insertDebate = internalMutation({
   },
 });
 
+/**
+ * Public-API wrapper for `insertDebate`. SvelteKit `/api/debates/create` calls
+ * this via the HTTP API; the internal version stays in place for the in-Convex
+ * caller (`spawnDebate` action at line 722) which already holds full trust.
+ */
+export const insertDebateForCaller = mutation({
+  args: {
+    _secret: v.string(),
+    templateId: v.id("templates"),
+    debateIdOnchain: v.string(),
+    actionDomain: v.string(),
+    propositionHash: v.string(),
+    propositionText: v.string(),
+    deadline: v.number(),
+    jurisdictionSize: v.number(),
+    proposerAddress: v.string(),
+    proposerBond: v.number(),
+    txHash: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<Id<"debates">> => {
+    requireInternalSecret(args._secret);
+    const { _secret, ...rest } = args;
+    return await ctx.runMutation(internal.debates.insertDebate, rest);
+  },
+});
+
 // =============================================================================
 // CRON STUBS — internal actions called by convex/crons.ts
 // =============================================================================
@@ -982,8 +1013,8 @@ export const getSnapshot = query({
     return {
       id: debate._id,
       status: debate.status,
-      argumentCount: debate.argumentCount,
-      uniqueParticipants: debate.uniqueParticipants,
+      argumentCount: debate.argumentCount < 5 ? null : debate.argumentCount,
+      uniqueParticipants: debate.uniqueParticipants < 5 ? null : debate.uniqueParticipants,
       winningStance: debate.winningStance ?? null,
       aiPanelConsensus: debate.aiPanelConsensus ?? null,
     };
@@ -1068,8 +1099,8 @@ export const listAwaitingGovernance = query({
           actionDomain: d.actionDomain,
           deadline: d.deadline,
           totalStake: d.totalStake?.toString() ?? "0",
-          argumentCount: d.argumentCount,
-          uniqueParticipants: d.uniqueParticipants,
+          argumentCount: d.argumentCount < 5 ? null : d.argumentCount,
+          uniqueParticipants: d.uniqueParticipants < 5 ? null : d.uniqueParticipants,
           aiPanelConsensus: d.aiPanelConsensus ?? null,
           updatedAt: d.updatedAt,
           aiResolution: d.aiResolution ?? null,

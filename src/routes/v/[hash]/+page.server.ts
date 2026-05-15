@@ -10,10 +10,9 @@ import { error } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
-import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ params, platform }) => {
+export const load: PageServerLoad = async ({ params }) => {
 	const { hash } = params;
 
 	if (!hash || hash.length < 6) {
@@ -22,27 +21,23 @@ export const load: PageServerLoad = async ({ params, platform }) => {
 
 	// Try resolving as a campaign ID (report verification links use campaign._id as hash)
 	try {
+		// getStats returns K-floored counts (null below 5 for *Actions, null below
+		// 3 for uniqueDistricts; exact above). Sub-K cohort sizes would name
+		// specific submitters; above K the count is the public-civic-action signal.
 		const stats = await serverQuery(api.campaigns.getStats, {
 			campaignId: hash as Id<'campaigns'>
 		});
 
 		if (stats) {
-			// This hash resolves to a campaign — show campaign-level verification
-			const packetKV = platform?.env?.PACKET_CACHE_KV as
-				| { get(key: string): Promise<string | null>; put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> }
-				| undefined;
-
-			// Attempt full packet computation for richer data
-			// Note: orgId not available in this context — pass campaignId as cache namespace
-			let packet;
+			// Aggregate-only packet summary (computed inside Convex; no per-action
+			// or per-cell data crosses the boundary to the public surface).
+			let summary;
 			try {
-				packet = await computeVerificationPacketCached(
-					hash as Id<'campaigns'>,
-					hash as Id<'organizations'>,
-					packetKV
-				);
+				summary = await serverQuery(api.campaigns.getCampaignPacketSummary, {
+					campaignId: hash as Id<'campaigns'>
+				});
 			} catch {
-				packet = null;
+				summary = null;
 			}
 
 			return {
@@ -54,7 +49,7 @@ export const load: PageServerLoad = async ({ params, platform }) => {
 					method: 'mixed' as 'email' | 'gov-id' | 'mixed'
 				},
 				location: {
-					verified: stats.uniqueDistricts > 0,
+					verified: (stats.uniqueDistricts ?? 0) > 0,
 					method: null as 'civic_api' | 'mdl' | 'postal' | null,
 					state: null as string | null,
 					districts: [] as { slot: number; label: string; value: string }[]
@@ -68,9 +63,7 @@ export const load: PageServerLoad = async ({ params, platform }) => {
 					verified: stats.verifiedActions,
 					total: stats.totalActions,
 					districtCount: stats.uniqueDistricts,
-					authorship: packet?.authorship ?? null,
-					dateRange: packet?.dateRange ?? null,
-					identityBreakdown: packet?.identityBreakdown ?? null,
+					dateRange: summary?.dateRange ?? null,
 				}
 			};
 		}

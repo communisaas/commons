@@ -98,15 +98,22 @@ export const getReceipt = query({
       }
     }
 
+    // K-floor at 5 on counts, 3 on districts at the query level so any direct
+    // Convex caller (not just /verify/receipt/[id]/+page.server.ts) gets the
+    // sub-K suppression. Above the floor, counts are exact — the receipt is a
+    // staffer-facing accountability artifact whose value depends on precision.
+    const kFloor5 = (n: number): number | null => (n < 5 ? null : n);
+    const kFloor3 = (n: number): number | null => (n < 3 ? null : n);
+
     return {
       _id: receipt._id,
       dmName: receipt.dmName,
       decisionMakerId: receipt.decisionMakerId,
       dmAction: receipt.dmAction ?? null,
       proofWeight: receipt.proofWeight ?? null,
-      verifiedCount: receipt.verifiedCount ?? 0,
-      totalCount: receipt.totalCount ?? 0,
-      districtCount: receipt.districtCount ?? 0,
+      verifiedCount: kFloor5(receipt.verifiedCount ?? 0),
+      totalCount: kFloor5(receipt.totalCount ?? 0),
+      districtCount: kFloor3(receipt.districtCount ?? 0),
       gds: receipt.gds ?? null,
       ald: receipt.ald ?? null,
       cai: receipt.cai ?? null,

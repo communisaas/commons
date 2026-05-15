@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
-import { requireOrgRole, loadOrg, requireAuth } from "./_authHelpers";
+import { requireOrgRole, loadOrg, requireAuth, requireOrgMembership } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
 import { computeOrgScopedEmailHash } from "./_orgHash";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
@@ -31,10 +31,11 @@ type CreateCampaignActionResult = {
 
 type SubmitActionResult = {
   success: true;
-  actionCount: number;
+  // K-floor at 5 (null below 5, exact above) — see submitAction return.
+  actionCount: number | null;
   supporterName: string;
   alreadySubmitted?: true;
-  totalCount?: number;
+  totalCount?: number | null;
   verified?: boolean;
 };
 
@@ -165,6 +166,13 @@ export const getPublicAny = query({
 
     const org = await ctx.db.get(campaign.orgId);
 
+    // verifiedActionCount has a K-floor at 5 (null below 5, exact above) on
+    // this public surface — sub-K cohort sizes name specific submitters; above
+    // K the count is the product (campaign visibility). Org-admin paths read
+    // the exact denormalized counter directly without the floor.
+    const raw = campaign.verifiedActionCount ?? 0;
+    const verifiedActionCount = raw < 5 ? null : raw;
+
     return {
       _id: campaign._id,
       title: campaign.title,
@@ -174,7 +182,7 @@ export const getPublicAny = query({
       orgName: org?.name ?? null,
       orgSlug: org?.slug ?? null,
       orgAvatar: org?.avatar ?? null,
-      verifiedActionCount: campaign.verifiedActionCount ?? 0,
+      verifiedActionCount,
       targets: campaign.targets ?? null,
     };
   },
@@ -1148,10 +1156,16 @@ export const submitAction = action({
       },
     );
 
+    // K-floor at 5 on the returned count: sub-K cohorts name specific
+    // submitters, but above K the just-submitted user expects to see their
+    // action counted precisely.
+    const kFloor = (n: number | undefined): number | null =>
+      n === undefined || n < 5 ? null : n;
+
     if (result.alreadySubmitted) {
       return {
         success: true,
-        actionCount: result.actionCount,
+        actionCount: kFloor(result.actionCount),
         supporterName: args.name,
         alreadySubmitted: true,
       };
@@ -1159,8 +1173,8 @@ export const submitAction = action({
 
     return {
       success: true,
-      actionCount: result.actionCount,
-      totalCount: result.totalCount,
+      actionCount: kFloor(result.actionCount),
+      totalCount: kFloor(result.totalCount),
       supporterName: args.name,
       verified,
     };
@@ -1305,7 +1319,19 @@ export const getPublicActive = query({
 });
 
 /**
- * Public campaign stats — action counts and district breakdown.
+ * Public campaign stats — K-floor at 5 (sub-K suppressed, exact above).
+ *
+ * Threat model: we defend against unique-identification at sub-K cohort
+ * sizes — a count of 1-4 would name a specific submitter. Above K, counts
+ * are exact by design because aggregate civic participation is the product
+ * (decision-makers and the public are entitled to see "127 verified
+ * constituents from 14 districts sent this"). Users at high risk of
+ * timing-correlation attacks (state-level adversaries with out-of-band
+ * signals on a specific target) should use pseudonymous submission modes;
+ * we do not attempt to mask above-K +1 polling deltas.
+ *
+ * uniqueDistricts uses a lower floor (3) because rural campaigns often
+ * have low district counts and the marginal anonymity gain past 3 is small.
  */
 export const getStats = query({
   args: { campaignId: v.id("campaigns") },
@@ -1321,12 +1347,6 @@ export const getStats = query({
         .filter((a) => a.districtHash)
         .map((a) => a.districtHash!),
     );
-
-    // (1e) Tier partition — staffer-legible reports need to distinguish
-    // heuristic tier-2 rows from ZKP-backed tier-3+ rows. Query-time
-    // aggregation from campaignActions.trustTier; no denormalized counter.
-    // `verifiedActions` remains the current billable meter (unchanged
-    // semantics); `tier3VerifiedActions` is additive, for display partitioning.
     const tier3Verified = verified.filter((a) => (a.trustTier ?? 0) >= 3);
     const tier3DistrictSet = new Set(
       tier3Verified
@@ -1334,24 +1354,34 @@ export const getStats = query({
         .map((a) => a.districtHash!),
     );
 
+    const kFloor5 = (n: number): number | null => (n < 5 ? null : n);
+    const kFloor3 = (n: number): number | null => (n < 3 ? null : n);
+
     return {
-      verifiedActions: verified.length,
-      totalActions: actions.length,
-      uniqueDistricts: districtSet.size,
-      tier3VerifiedActions: tier3Verified.length,
-      tier3UniqueDistricts: tier3DistrictSet.size,
+      verifiedActions: kFloor5(verified.length),
+      totalActions: kFloor5(actions.length),
+      uniqueDistricts: kFloor3(districtSet.size),
+      tier3VerifiedActions: kFloor5(tier3Verified.length),
+      tier3UniqueDistricts: kFloor3(tier3DistrictSet.size),
     };
   },
 });
 
 /**
  * Raw action data for server-side verification packet computation.
- * Returns anonymized per-action fields (hashes, tiers, timestamps).
- * No PII — safe for public query since all fields are hashed or numeric.
+ * Gated to org-members of the campaign owner: h3Cell is a raw H3 res-7 cell
+ * (~5km²) and sentAt is an exact timestamp; together they let a caller
+ * de-anonymize individual senders. Anonymous public callers receive
+ * "Not authenticated"; use getCampaignPacketSummary for the public aggregate.
  */
 export const getActionsForPacket = query({
   args: { campaignId: v.id("campaigns") },
   handler: async (ctx, { campaignId }) => {
+    const { userId } = await requireAuth(ctx);
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign) throw new Error("Campaign not found");
+    await requireOrgMembership(ctx, campaign.orgId, userId);
+
     const actions = await ctx.db
       .query("campaignActions")
       .withIndex("by_campaignId", (idx) => idx.eq("campaignId", campaignId))
@@ -1367,6 +1397,48 @@ export const getActionsForPacket = query({
       trustTier: a.trustTier ?? null,
       compositionMode: a.compositionMode ?? null,
     }));
+  },
+});
+
+/**
+ * Anonymous-safe campaign packet summary for /v/[hash]. Returns only date
+ * precision (YYYY-MM-DD), no counts. Per-category breakdowns (authorship,
+ * identityBreakdown) were removed because any deterministic exact count is
+ * a polling oracle: an attacker watches a category tick from N to N+1 and
+ * attributes that increment to their target's known activity window.
+ * Bucketing each category to multiples of K only delays single-step
+ * differencing; padding-bypass survives any L-diversity floor. The org-auth
+ * surfaces get the full packet with exact breakdowns.
+ */
+export const getCampaignPacketSummary = query({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign) return null;
+
+    const actions = await ctx.db
+      .query("campaignActions")
+      .withIndex("by_campaignId", (idx) => idx.eq("campaignId", campaignId))
+      .collect();
+
+    if (actions.length === 0) {
+      return { dateRange: null };
+    }
+
+    // Iterative min/max — spread hits the V8 argument-count ceiling on popular campaigns.
+    let earliest = actions[0].sentAt;
+    let latest = earliest;
+    for (const a of actions) {
+      if (a.sentAt < earliest) earliest = a.sentAt;
+      if (a.sentAt > latest) latest = a.sentAt;
+    }
+    const dateRange = {
+      earliest: new Date(earliest).toISOString().split("T")[0],
+      latest: new Date(latest).toISOString().split("T")[0],
+      spanDays: Math.floor((latest - earliest) / (1000 * 60 * 60 * 24)),
+    };
+
+    return { dateRange };
   },
 });
 

@@ -28,7 +28,8 @@
 	let districtError = $state('');
 
 	// Live RSVP count
-	let displayCount = $state(data.event.rsvpCount);
+	// rsvpCount is K-floored (null below 5, exact above) by the public Convex query.
+	let displayCount = $state<number>(data.event.rsvpCount ?? 0);
 
 	// Format date with timezone
 	function formatDate(iso: string): string {

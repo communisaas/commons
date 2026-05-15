@@ -10,6 +10,7 @@ import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
+import { requireInternalSecret } from "./_internalAuth";
 import { computeOrgScopedEmailHash } from "./_orgHash";
 import type { Doc, Id } from "./_generated/dataModel";
 
@@ -111,9 +112,12 @@ export const getPublic = query({
       longitude: event.longitude ?? null,
       virtualUrl: event.virtualUrl ?? null,
       capacity: event.capacity ?? null,
-      rsvpCount: event.rsvpCount,
-      attendeeCount: event.attendeeCount,
-      verifiedAttendees: event.verifiedAttendees,
+      // Public counters K-floor at 5 (null below 5, exact above). Sub-K
+      // cohort sizes would name a specific attendee; above K, attendance is
+      // intentionally public — events advertise turnout.
+      rsvpCount: event.rsvpCount < 5 ? null : event.rsvpCount,
+      attendeeCount: event.attendeeCount < 5 ? null : event.attendeeCount,
+      verifiedAttendees: event.verifiedAttendees < 5 ? null : event.verifiedAttendees,
       status: event.status,
       requireVerification: event.requireVerification,
       waitlistEnabled: event.waitlistEnabled,
@@ -450,6 +454,19 @@ export const getEventInternal = internalQuery({
   args: { eventId: v.id("events") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.eventId);
+  },
+});
+
+/**
+ * Public-API wrapper for `getEventInternal`. SvelteKit `/api/e/[id]/checkin`
+ * calls this via the HTTP API; the internal version stays in place for the
+ * in-Convex action caller at line 514 which already holds full trust.
+ */
+export const getEventInternalForCaller = query({
+  args: { _secret: v.string(), eventId: v.id("events") },
+  handler: async (ctx, { _secret, eventId }): Promise<Doc<"events"> | null> => {
+    requireInternalSecret(_secret);
+    return await ctx.runQuery(internal.events.getEventInternal, { eventId });
   },
 });
 

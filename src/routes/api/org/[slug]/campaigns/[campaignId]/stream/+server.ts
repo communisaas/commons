@@ -7,12 +7,13 @@ import { computeVerificationPacketCached } from '$lib/server/verification-packet
 import type { RequestHandler } from './$types';
 import type { Id } from '$convex/_generated/dataModel';
 
-/** Minimal debate snapshot for change detection. */
+/** Minimal debate snapshot for change detection. Counts are K-floored at 5
+ * (null below 5, exact above) by the Convex query — see convex/debates.ts:getSnapshot. */
 interface DebateSnapshot {
 	id: string;
 	status: string;
-	argumentCount: number;
-	uniqueParticipants: number;
+	argumentCount: number | null;
+	uniqueParticipants: number | null;
 	winningStance: string | null;
 	aiPanelConsensus: number | null;
 }

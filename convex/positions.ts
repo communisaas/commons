@@ -8,7 +8,10 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 
 /**
- * Get aggregate position counts for a template.
+ * Get aggregate position counts for a template. K-floor at 5 on stance counts,
+ * 3 on district count: sub-K cohort sizes would name specific submitters. Above
+ * the floor, counts are exact — position-taking on a public template is
+ * intentionally visible.
  */
 export const getCounts = query({
   args: { templateId: v.id("templates") },
@@ -28,7 +31,11 @@ export const getCounts = query({
       if (r.districtCode) districtSet.add(r.districtCode);
     }
 
-    return { support, oppose, districts: districtSet.size };
+    return {
+      support: support < 5 ? null : support,
+      oppose: oppose < 5 ? null : oppose,
+      districts: districtSet.size < 3 ? null : districtSet.size,
+    };
   },
 });
 
@@ -178,30 +185,36 @@ export const getEngagementByDistrict = query({
       }
     }
 
-    // Build per-district engagement, sorted by total descending, top 20
+    // K-floor at 5 on per-district totals: sub-K cohort sizes would name a
+    // specific resident. Above the floor, counts are exact — per-district
+    // engagement is the staffer-facing signal that drives this view.
     const districts = Object.entries(byDistrict)
-      .map(([code, counts]) => {
-        const total = counts.support + counts.oppose;
-        return {
-          district_code: code,
-          support: counts.support,
-          oppose: counts.oppose,
-          total,
-          support_percent: total > 0 ? Math.round((counts.support / total) * 100) : 0,
-          is_user_district: code === userDistrictCode,
-        };
-      })
+      .map(([code, counts]) => ({
+        code,
+        support: counts.support,
+        oppose: counts.oppose,
+        total: counts.support + counts.oppose,
+      }))
+      .filter((d) => d.total >= 5)
       .sort((a, b) => b.total - a.total)
-      .slice(0, 20);
+      .slice(0, 20)
+      .map((d) => ({
+        district_code: d.code,
+        support: d.support,
+        oppose: d.oppose,
+        total: d.total,
+        support_percent: d.total > 0 ? Math.round((d.support / d.total) * 100) : 0,
+        is_user_district: d.code === userDistrictCode,
+      }));
 
     return {
       template_id: templateId,
       districts,
       aggregate: {
-        total_districts: Object.keys(byDistrict).length,
-        total_positions: registrations.length,
-        total_support: totalSupport,
-        total_oppose: totalOppose,
+        total_districts: Object.keys(byDistrict).length < 3 ? null : Object.keys(byDistrict).length,
+        total_positions: registrations.length < 5 ? null : registrations.length,
+        total_support: totalSupport < 5 ? null : totalSupport,
+        total_oppose: totalOppose < 5 ? null : totalOppose,
       },
     };
   },
@@ -423,8 +436,6 @@ export const getFullEngagementByDistrict = query({
     userDistrictCode: v.optional(v.string()),
   },
   handler: async (ctx, { templateId, userDistrictCode }) => {
-    const PRIVACY_THRESHOLD = 3;
-
     const registrations = await ctx.db
       .query("positionRegistrations")
       .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
@@ -432,7 +443,6 @@ export const getFullEngagementByDistrict = query({
 
     if (registrations.length === 0) return null;
 
-    // Aggregate by district + stance
     const byDistrict = new Map<string, { support: number; oppose: number }>();
     for (const r of registrations) {
       if (r.districtCode) {
@@ -443,6 +453,10 @@ export const getFullEngagementByDistrict = query({
       }
     }
 
+    let totalPositions = 0;
+    let totalSupport = 0;
+    let totalOppose = 0;
+
     const districts: Array<{
       district_code: string;
       support: number;
@@ -452,17 +466,15 @@ export const getFullEngagementByDistrict = query({
       is_user_district: boolean;
     }> = [];
 
-    let totalPositions = 0;
-    let totalSupport = 0;
-    let totalOppose = 0;
-
     for (const [code, counts] of byDistrict) {
       const total = counts.support + counts.oppose;
       totalPositions += total;
       totalSupport += counts.support;
       totalOppose += counts.oppose;
 
-      if (total >= PRIVACY_THRESHOLD) {
+      // K-floor at 5 on per-district totals: sub-K cohorts name a specific
+      // resident. Above the floor, exact counts power the engagement view.
+      if (total >= 5) {
         districts.push({
           district_code: code,
           support: counts.support,
@@ -482,10 +494,10 @@ export const getFullEngagementByDistrict = query({
       template_id: templateId,
       districts,
       aggregate: {
-        total_districts: byDistrict.size,
-        total_positions: totalPositions,
-        total_support: totalSupport,
-        total_oppose: totalOppose,
+        total_districts: byDistrict.size < 3 ? null : byDistrict.size,
+        total_positions: totalPositions < 5 ? null : totalPositions,
+        total_support: totalSupport < 5 ? null : totalSupport,
+        total_oppose: totalOppose < 5 ? null : totalOppose,
       },
     };
   },

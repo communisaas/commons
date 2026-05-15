@@ -17,10 +17,12 @@ export const load: PageServerLoad = async ({ params }) => {
 		throw error(404, 'Receipt not found');
 	}
 
-	// K-anonymity: suppress counts below thresholds to prevent pool-size inference
-	const safeVerifiedCount = receipt.verifiedCount >= 5 ? receipt.verifiedCount : null;
-	const safeTotalCount = receipt.totalCount >= 5 ? receipt.totalCount : null;
-	const safeDistrictCount = receipt.districtCount >= 3 ? receipt.districtCount : null;
+	// K-anonymity is enforced at the Convex query level (verify.getReceipt
+	// already buckets/floors before returning); these locals are kept for
+	// downstream readability and as defense-in-depth.
+	const safeVerifiedCount = receipt.verifiedCount;
+	const safeTotalCount = receipt.totalCount;
+	const safeDistrictCount = receipt.districtCount;
 
 	const narrative = generateNarrative({
 		dmName: receipt.dmName,

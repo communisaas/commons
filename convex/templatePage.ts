@@ -12,7 +12,9 @@ import { v } from "convex/values";
 
 /**
  * Get message delivery counts grouped by district hash for a template.
- * Returns districtCounts map + totalDistricts.
+ * K-floor at 5 (districts with <5 deliveries are dropped). Above the floor
+ * counts are exact: per-district coverage is the staffer-facing signal that
+ * makes a template page useful. `totalDistricts` reflects the visible count.
  */
 export const getMessageDistrictCounts = query({
   args: { templateId: v.id("templates") },
@@ -22,14 +24,18 @@ export const getMessageDistrictCounts = query({
       .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
       .collect();
 
-    // Only count delivered messages
     const delivered = messages.filter((m) => m.deliveryStatus === "delivered");
 
-    const districtCounts: Record<string, number> = {};
+    const raw: Record<string, number> = {};
     for (const msg of delivered) {
       if (msg.districtHash) {
-        districtCounts[msg.districtHash] = (districtCounts[msg.districtHash] || 0) + 1;
+        raw[msg.districtHash] = (raw[msg.districtHash] || 0) + 1;
       }
+    }
+
+    const districtCounts: Record<string, number> = {};
+    for (const [hash, count] of Object.entries(raw)) {
+      if (count >= 5) districtCounts[hash] = count;
     }
 
     return {

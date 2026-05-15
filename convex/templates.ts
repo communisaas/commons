@@ -218,8 +218,8 @@ export const listPublic = query({
         ? {
             status: debate.status as "active" | "resolving" | "resolved" | "awaiting_governance" | "under_appeal",
             winningStance: debate.winningStance ?? undefined,
-            uniqueParticipants: debate.uniqueParticipants ?? 0,
-            argumentCount: debate.argumentCount ?? 0,
+            uniqueParticipants: (debate.uniqueParticipants ?? 0) < 5 ? null : (debate.uniqueParticipants ?? 0),
+            argumentCount: (debate.argumentCount ?? 0) < 5 ? null : (debate.argumentCount ?? 0),
             deadline: debate.deadline ? new Date(debate.deadline).toISOString() : undefined,
           }
         : undefined;
@@ -250,10 +250,14 @@ export const listPublic = query({
         isNew,
         hasActiveDebate,
         debateSummary,
-        verified_sends: template.verifiedSends,
-        unique_districts: template.uniqueDistricts,
-        send_count: template.verifiedSends,
-        daily_arrivals: template.dailyArrivals ?? [],
+        // Public counters K-floor at 5 (3 for unique_districts): sub-K cohort
+        // sizes name specific submitters. Above the floor, counts are exact —
+        // template visibility is the product. daily_arrivals zeroes sub-K days
+        // so a singleton-day doesn't reveal the day's only sender.
+        verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
+        unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
+        send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
+        daily_arrivals: (template.dailyArrivals ?? []).map((c: number) => (c < 5 ? 0 : c)),
         // K-anon at trust boundary: filter districts with count < 5 out of
         // the public payload, zero tier counts below the same threshold.
         // Consumers still see the visible-shape but not the thin-cohort
@@ -377,9 +381,9 @@ export const getBySlugPublic = query({
       research_log: template.researchLog ?? [],
       preview: template.preview,
       is_public: template.isPublic,
-      verified_sends: template.verifiedSends,
-      unique_districts: template.uniqueDistricts,
-      send_count: template.verifiedSends,
+      verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
+      unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
+      send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
       delivery_config: template.deliveryConfig,
       recipient_config: template.recipientConfig,
       recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
