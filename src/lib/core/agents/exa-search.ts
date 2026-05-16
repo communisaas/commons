@@ -223,9 +223,7 @@ async function fetchViaExaFallback(url: string): Promise<ExaPageContent | null> 
 			enrichedText += '\n\n--- CONTACT EMAILS (regex-extracted) ---\n' + htmlEmails.join('\n');
 		}
 
-		console.debug(`[page-fetch] Exa fallback: recovered ${enrichedText.length} chars from "${(first.title || '').slice(0, 60)}"`);
-
-		return {
+		const content: ExaPageContent = {
 			url,
 			title: first.title || '',
 			text: enrichedText,
@@ -233,6 +231,14 @@ async function fetchViaExaFallback(url: string): Promise<ExaPageContent | null> 
 			publishedDate: first.publishedDate,
 			statusCode: undefined
 		};
+		if (isUnusablePage(content)) {
+			console.debug(
+				`[page-fetch] Exa fallback: dropping unusable page ${url} (title="${content.title.slice(0, 40)}", chars=${content.text.length})`
+			);
+			return null;
+		}
+		console.debug(`[page-fetch] Exa fallback: recovered ${enrichedText.length} chars from "${(first.title || '').slice(0, 60)}"`);
+		return content;
 	} catch (err) {
 		console.debug(`[page-fetch] Exa fallback threw for ${url}:`, err instanceof Error ? err.message : err);
 		return null;
@@ -311,8 +317,32 @@ export async function readPage(
 		statusCode: scrapeData.metadata?.statusCode
 	};
 
+	// Drop 404 / empty / not-found pages so they don't poison synthesis context.
+	// Without this gate they're counted in "N pages readable" and the LLM sees
+	// "Not Found | SF.gov" alongside real pages.
+	if (isUnusablePage(content)) {
+		console.debug(
+			`[page-fetch] readPage: dropping unusable page ${url} (status=${content.statusCode ?? '?'}, title="${content.title.slice(0, 40)}", chars=${content.text.length}, emails=${mailtoEmails.length})`
+		);
+		return null;
+	}
+
 	console.debug(`[page-fetch] readPage: ${content.text.length} chars from "${content.title.slice(0, 60)}"`);
 	return content;
+}
+
+/**
+ * Reject pages whose content can't meaningfully inform synthesis:
+ * - HTTP 4xx/5xx (statusCode present and >= 400)
+ * - Title matches a "Not Found" pattern from common gov CMS error pages
+ * - Body under 200 chars AND no extracted emails (effectively empty)
+ */
+function isUnusablePage(content: ExaPageContent): boolean {
+	if (typeof content.statusCode === 'number' && content.statusCode >= 400) return true;
+	if (/^(not found|404|page not found|error)/i.test(content.title.trim())) return true;
+	const hasEmails = (content.highlights?.length ?? 0) > 0;
+	if (content.text.length < 200 && !hasEmails) return true;
+	return false;
 }
 
 // ============================================================================

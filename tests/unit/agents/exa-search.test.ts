@@ -268,10 +268,13 @@ describe('readPage', () => {
 		expect(result).toBeNull();
 	});
 
-	it.skip('handles missing metadata gracefully', async () => {
+	it('handles missing metadata gracefully', async () => {
+		// Body must be ≥200 chars to clear the isUnusablePage gate on metadata-less pages
+		// (no statusCode, no title → only the text-length/email check can save it).
+		const body = '# Content here\n\n' + 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. '.repeat(6);
 		mockScrape.mockResolvedValue({
 			success: true,
-			markdown: '# Content here',
+			markdown: body,
 			links: [],
 			metadata: {}
 		});
@@ -279,7 +282,7 @@ describe('readPage', () => {
 		const result = await readPage('https://example.com');
 
 		expect(result!.title).toBe('');
-		expect(result!.text).toBe('# Content here');
+		expect(result!.text).toBe(body);
 	});
 
 	it('extracts emails from rawHtml that markdown missed', async () => {
@@ -298,12 +301,18 @@ describe('readPage', () => {
 		expect(result!.highlights).toContain('MOComms@denvergov.org');
 	});
 
-	it.skip('does not duplicate emails already in markdown', async () => {
+	it('does not duplicate emails already in markdown', async () => {
+		// Body must be ≥200 chars so isUnusablePage doesn't drop the page —
+		// the email being only in markdown text (no mailto link) leaves highlights
+		// empty, which trips the short-text-no-email branch unless we pad.
+		const body =
+			'Contact: mayor@city.gov for questions. ' +
+			'The mayors office handles inquiries from residents on a rolling basis. '.repeat(4);
 		mockScrape.mockResolvedValue({
 			success: true,
-			markdown: 'Contact: mayor@city.gov for questions.',
+			markdown: body,
 			links: [],
-			rawHtml: '<html><body><p>Contact: mayor@city.gov</p></body></html>',
+			rawHtml: `<html><body><p>${body}</p></body></html>`,
 			metadata: { title: 'Contact', statusCode: 200 }
 		});
 
@@ -331,17 +340,21 @@ describe('readPage', () => {
 		expect(result!.highlights).not.toContain('noreply@system.gov');
 	});
 
-	it.skip('works when rawHtml is not returned', async () => {
+	it('works when rawHtml is not returned', async () => {
+		// Body must be ≥200 chars so isUnusablePage doesn't drop the page —
+		// no mailto links and no rawHtml means highlights stays empty, which
+		// trips the short-text-no-email branch unless we pad the body.
+		const body = 'Content without HTML. ' + 'This page intentionally has no raw HTML returned. '.repeat(6);
 		mockScrape.mockResolvedValue({
 			success: true,
-			markdown: 'Content without HTML',
+			markdown: body,
 			links: [],
 			metadata: { title: 'Page', statusCode: 200 }
 		});
 
 		const result = await readPage('https://example.com');
 
-		expect(result!.text).toBe('Content without HTML');
+		expect(result!.text).toBe(body);
 	});
 });
 
