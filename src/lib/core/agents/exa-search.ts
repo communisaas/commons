@@ -340,17 +340,48 @@ export async function readPage(
  *   highlights OR the body markdown (concise official contact pages
  *   routinely surface emails in markdown only).
  */
+/** Phrase forms only — bare lexemes like "gone", "forbidden", and "500" trip
+ * legitimate titles ("Gone with the Wind: Voting Rights", "500 Cities Project").
+ * 404 stays as a single token: it's overwhelmingly an HTTP status in title
+ * context and the false-positive surface is narrow. */
 const UNUSABLE_TITLE_RE =
-	/(^|\W)(not found|page not found|page missing|404|403 forbidden|forbidden|gone|access denied|server error|500|service unavailable)(\W|$)/i;
-const EMAIL_IN_BODY_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+	/(^|\W)(not found|page not found|page missing|404|403 forbidden|access denied|server error|service unavailable)(\W|$)/i;
+const EMAIL_IN_BODY_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+/** Same false-positive filter the HTML extractor uses (see extractEmailsFromHtml).
+ * A short page whose only email is `noreply@…` or `example.com` is still empty
+ * from a recipient-extraction perspective. */
+function hasUsableBodyEmail(text: string): boolean {
+	const matches = text.match(EMAIL_IN_BODY_RE);
+	if (!matches) return false;
+	for (const e of matches) {
+		const lower = e.toLowerCase();
+		if (
+			lower.endsWith('.png') ||
+			lower.endsWith('.jpg') ||
+			lower.endsWith('.gif') ||
+			lower.endsWith('.svg') ||
+			lower.endsWith('.webp') ||
+			lower.includes('noreply') ||
+			lower.includes('no-reply') ||
+			lower.includes('example.com') ||
+			lower.includes('sentry.io') ||
+			lower.includes('webpack') ||
+			lower.includes('localhost')
+		) {
+			continue;
+		}
+		return true;
+	}
+	return false;
+}
 
 function isUnusablePage(content: ExaPageContent): boolean {
 	if (typeof content.statusCode === 'number' && content.statusCode >= 400) return true;
 	if (UNUSABLE_TITLE_RE.test(content.title)) return true;
 	if (content.text.length < 200) {
 		const hasHighlightEmail = (content.highlights?.length ?? 0) > 0;
-		const hasBodyEmail = EMAIL_IN_BODY_RE.test(content.text);
-		if (!hasHighlightEmail && !hasBodyEmail) return true;
+		if (!hasHighlightEmail && !hasUsableBodyEmail(content.text)) return true;
 	}
 	return false;
 }

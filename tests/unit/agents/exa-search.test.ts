@@ -414,6 +414,36 @@ describe('readPage', () => {
 		const result = await readPage('https://example.com/stub');
 		expect(result).toBeNull();
 	});
+
+	it('does NOT trip the title regex on legitimate phrases containing bare lexemes', async () => {
+		// "Gone with the Wind: Voting Rights" and "500 Cities Project" are real
+		// page titles that the original bare-lexeme regex would have false-dropped.
+		// The tightened phrase-form regex keeps these alive.
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Long article body about voting rights. '.repeat(20),
+			links: [],
+			metadata: { title: 'Gone with the Wind: Voting Rights', statusCode: 200 }
+		});
+
+		const result = await readPage('https://example.com/article');
+		expect(result).not.toBeNull();
+	});
+
+	it('drops a short page whose only email is noreply@ (junk filter)', async () => {
+		// Body-email fallback shares the same false-positive filter as the HTML
+		// extractor — noreply / example.com / asset extensions don't count as
+		// genuine contact value.
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Auto-reply only: noreply@city.gov',
+			links: [],
+			metadata: { title: 'System', statusCode: 200 }
+		});
+
+		const result = await readPage('https://example.com/auto');
+		expect(result).toBeNull();
+	});
 });
 
 describe('prunePageContent', () => {

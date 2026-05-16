@@ -12,13 +12,18 @@ import { describe, expect, it } from 'vitest';
  *
  * SCOPE: this file pins the 7 functions newly gated in cycles 10-11
  * (2026-05-14..16). The earlier F-157 cure (commit 8e5ff3d0) converted
- * ~13 additional internal-to-public-with-_secret functions across
+ * many additional internal-to-public-with-_secret functions across
  * convex/{resolvedContacts, revocations, submissions, subscriptions,
- * v1api}.ts. Those are NOT pinned here — they predate this work and
- * are protected by the F-157 commit history. If a future audit wants
- * full parity, extend the describe blocks below using the same shape.
- * Total `requireInternalSecret(args._secret)` call sites in convex/
- * as of 2026-05-16: 20.
+ * v1api}.ts; those are NOT pinned here — they predate this work and are
+ * protected by the F-157 commit history. Trigger to extend coverage:
+ * the next time we audit the trust boundary or add a new gated function.
+ *
+ * Reference counts as of 2026-05-16:
+ *   - `requireInternalSecret(args._secret)` exact pattern: 20 call sites
+ *   - `requireInternalSecret(` total (including v1api's per-arg shape
+ *     where some files call the gate from helpers or repeat per
+ *     endpoint): ~61 call sites; 40 in v1api.ts alone.
+ * The pinned 7 are the ones added by cycles 10-11; the surface is wider.
  */
 function source(path: string): string {
 	return readFileSync(resolve(process.cwd(), path), 'utf8');
