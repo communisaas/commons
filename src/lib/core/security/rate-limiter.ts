@@ -290,20 +290,33 @@ export class SlidingWindowRateLimiter {
 			console.debug('[RateLimiter] Using Redis backend');
 			this.store = new RedisStore(url);
 		} else {
-			// Fail-fast in production: the in-memory backend is per-isolate and
-			// provides no global enforcement on CF Workers, which means rate
-			// limits are effectively bypassed. Require REDIS_URL for any
-			// real deployment; allow opt-out via RATE_LIMITER_ALLOW_MEMORY=1
-			// for local smoke tests that explicitly want the memory backend.
+			// In-memory per-isolate fallback. Accepted as the production posture:
+			// this limiter is defense-in-depth atop Cloudflare edge protections
+			// (DDoS, Bot Fight Mode, IP throttling — Class 1 public-anti-abuse
+			// surfaces) and Convex billing limits (Class 2/3 org and API-key
+			// surfaces, where `maxEmails`/`maxSms`/`maxVerifiedActions`/etc. in
+			// `convex/subscriptions.checkPlanLimits` are the global source of
+			// truth). Per-isolate leakage is bounded by those upstream layers;
+			// it is not the primary security boundary in any current call site.
+			// See memory: production_hardening_gaps.md for the threat-model audit
+			// and the trigger-condition for migrating to Convex-atomic counters
+			// (sustained-abuse incident, or traffic > ~100k req/day). Redis is
+			// NOT required — Convex-as-store is the natural cheaper migration if
+			// the trigger fires.
+			//
+			// In NODE_ENV=production without RATE_LIMITER_ALLOW_MEMORY=1, throw
+			// at boot anyway so the operator-set env var documents the choice
+			// rather than the codebase silently degrading.
 			const nodeEnv = env.NODE_ENV ?? process.env.NODE_ENV;
 			const allowMemory =
 				env.RATE_LIMITER_ALLOW_MEMORY === '1' ||
 				process.env.RATE_LIMITER_ALLOW_MEMORY === '1';
 			if (nodeEnv === 'production' && !allowMemory) {
 				throw new Error(
-					'[RateLimiter] REDIS_URL is required in production. ' +
-						'In-memory fallback is per-isolate on Workers and provides no global rate limiting. ' +
-						'Set REDIS_URL, or RATE_LIMITER_ALLOW_MEMORY=1 to explicitly opt into the memory backend.'
+					'[RateLimiter] In-memory fallback in production must be explicit. ' +
+						'Set RATE_LIMITER_ALLOW_MEMORY=1 to acknowledge the per-isolate posture ' +
+						'(defense-in-depth atop CF edge + Convex billing — see rate-limiter.ts comment), ' +
+						'or set REDIS_URL if your deployment actually warrants global atomic counters.'
 				);
 			}
 			console.warn(
