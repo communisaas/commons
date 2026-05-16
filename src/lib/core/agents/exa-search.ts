@@ -334,14 +334,24 @@ export async function readPage(
 /**
  * Reject pages whose content can't meaningfully inform synthesis:
  * - HTTP 4xx/5xx (statusCode present and >= 400)
- * - Title matches a "Not Found" pattern from common gov CMS error pages
- * - Body under 200 chars AND no extracted emails (effectively empty)
+ * - Title matches a broken-page pattern (404, gone, forbidden, etc.) anywhere
+ *   in the title — common CMS formats interleave prefix/suffix branding.
+ * - Body under 200 chars AND no extracted email evidence in EITHER Exa
+ *   highlights OR the body markdown (concise official contact pages
+ *   routinely surface emails in markdown only).
  */
+const UNUSABLE_TITLE_RE =
+	/(^|\W)(not found|page not found|page missing|404|403 forbidden|forbidden|gone|access denied|server error|500|service unavailable)(\W|$)/i;
+const EMAIL_IN_BODY_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
 function isUnusablePage(content: ExaPageContent): boolean {
 	if (typeof content.statusCode === 'number' && content.statusCode >= 400) return true;
-	if (/^(not found|404|page not found|error)/i.test(content.title.trim())) return true;
-	const hasEmails = (content.highlights?.length ?? 0) > 0;
-	if (content.text.length < 200 && !hasEmails) return true;
+	if (UNUSABLE_TITLE_RE.test(content.title)) return true;
+	if (content.text.length < 200) {
+		const hasHighlightEmail = (content.highlights?.length ?? 0) > 0;
+		const hasBodyEmail = EMAIL_IN_BODY_RE.test(content.text);
+		if (!hasHighlightEmail && !hasBodyEmail) return true;
+	}
 	return false;
 }
 

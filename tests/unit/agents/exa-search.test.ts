@@ -356,6 +356,64 @@ describe('readPage', () => {
 
 		expect(result!.text).toBe(body);
 	});
+
+	// Affirmative gate tests — prove `isUnusablePage` filters what the comment
+	// claims, not just that happy paths still work with padded fixtures.
+	it('drops a page when statusCode is 404', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Real-looking long content '.repeat(50),
+			links: [],
+			metadata: { title: 'Some Title', statusCode: 404 }
+		});
+
+		const result = await readPage('https://example.com/missing');
+		expect(result).toBeNull();
+	});
+
+	it('drops a page when title matches broken-page suffix pattern (regex covers suffix form)', async () => {
+		// "Page Not Found | SF.gov" — common CMS pattern where the error
+		// indicator follows the site brand. The original anchored regex
+		// `^(not found|...)` missed this; the fix uses word-boundary matching.
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Long body that would otherwise pass the short-text check. '.repeat(20),
+			links: [],
+			metadata: { title: 'Page Not Found | SF.gov', statusCode: 200 }
+		});
+
+		const result = await readPage('https://example.com/broken');
+		expect(result).toBeNull();
+	});
+
+	it('keeps a SHORT page when its markdown body contains a contact email (no false-drop)', async () => {
+		// Concise official contact pages (e.g., "Email: mayor@city.gov") legitimately
+		// fall under the 200-char floor. The original gate only checked Exa highlights
+		// for email evidence and would false-drop these. The fix scans the body markdown
+		// for email patterns before deciding the page is empty.
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Contact: mayor@city.gov',
+			links: [],
+			metadata: { title: 'Contact', statusCode: 200 }
+		});
+
+		const result = await readPage('https://example.com/contact');
+		expect(result).not.toBeNull();
+		expect(result!.text).toContain('mayor@city.gov');
+	});
+
+	it('drops a short page when there are neither highlights nor markdown emails', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Short.',
+			links: [],
+			metadata: { title: 'Stub', statusCode: 200 }
+		});
+
+		const result = await readPage('https://example.com/stub');
+		expect(result).toBeNull();
+	});
 });
 
 describe('prunePageContent', () => {
