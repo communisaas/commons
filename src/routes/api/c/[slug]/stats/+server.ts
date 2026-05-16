@@ -15,9 +15,18 @@ export const GET: RequestHandler = async ({ params, getClientAddress }) => {
 		return json({ error: 'Too many requests' }, { status: 429 });
 	}
 
-	const stats = await serverQuery(api.campaigns.getStats, {
-		campaignId: params.slug as Id<'campaigns'>
-	});
+	// `params.slug as Id<'campaigns'>` is a type cast, not validation. Convex's
+	// `v.id("campaigns")` throws on bad format — fold that into the zero-default
+	// response shape rather than letting it bubble as a 500 (consistent with
+	// the sibling /api/d and /api/e stats routes' clean-404-on-bad-id pattern).
+	let stats: typeof api.campaigns.getStats._returnType | null = null;
+	try {
+		stats = await serverQuery(api.campaigns.getStats, {
+			campaignId: params.slug as Id<'campaigns'>
+		});
+	} catch {
+		stats = null;
+	}
 
 	return json(
 		stats ?? { verifiedActions: 0, totalActions: 0, uniqueDistricts: 0 },
