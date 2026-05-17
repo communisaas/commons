@@ -106,6 +106,9 @@ declare global {
 				PACKET_CACHE_KV?: KVNamespace;
 				PUBLIC_APP_URL?: string;
 				SENTRY_DSN?: string;
+				SENTRY_ENVIRONMENT?: string;
+				PUBLIC_SENTRY_DSN?: string;
+				PUBLIC_SENTRY_ENVIRONMENT?: string;
 				ENVIRONMENT?: string;
 				MDL_OPENID4VP_REQUEST_PRIVATE_KEY?: string;
 				MDL_OPENID4VP_REQUEST_X5C?: string;

@@ -516,7 +516,16 @@ const handleSentryInit: Handle = async ({ event, resolve }) => {
 	const dsn = event.platform?.env?.SENTRY_DSN as string | undefined;
 	if (!dsn) return resolve(event);
 
-	const env = (event.platform?.env?.ENVIRONMENT as string) || 'development';
+	// Read the environment tag from `SENTRY_ENVIRONMENT` (CF Pages secret,
+	// canonical) with `PUBLIC_SENTRY_ENVIRONMENT` as fallback so server and
+	// client init pick up the same string from the same source family. The
+	// previous read of `ENVIRONMENT` was wrong — that var isn't set on CF
+	// Pages, so every prod event was tagged `development` and indistinguishable
+	// from local dev in the Sentry dashboard.
+	const env =
+		(event.platform?.env?.SENTRY_ENVIRONMENT as string) ||
+		(event.platform?.env?.PUBLIC_SENTRY_ENVIRONMENT as string) ||
+		'development';
 	return initCloudflareSentryHandle({
 		dsn,
 		environment: env,
