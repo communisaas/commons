@@ -40,6 +40,13 @@ declare global {
 			message: string;
 			code?: string;
 			status?: number;
+			/**
+			 * Sentry event ID for the captured error. Set by handleError in
+			 * hooks.{server,client}.ts when Sentry is initialized. Displayed
+			 * on /+error.svelte as a copy-able reference so users contacting
+			 * support can paste it and we can resolve to the full trace.
+			 */
+			eventId?: string;
 		}
 		interface Locals {
 			/** RS256 JWT for authenticating server-side Convex queries via convex-sveltekit's serverQuery(). */

@@ -4,6 +4,31 @@
 	const status = $derived($page.status);
 	const message = $derived($page.error?.message ?? '');
 	const pathname = $derived($page.url?.pathname ?? '');
+	const eventId = $derived($page.error?.eventId);
+
+	// Format the Sentry event ID into a short, copy-friendly reference:
+	// first 12 hex chars in three 4-char groups (e.g. "7af9-b3c2-5e81").
+	// Sentry's dashboard search resolves on prefix, so the short form is
+	// unambiguous and easier to read aloud / paste into a support email.
+	const referenceCode = $derived.by(() => {
+		if (!eventId || typeof eventId !== 'string') return null;
+		const head = eventId.slice(0, 12);
+		if (head.length < 12) return null;
+		return `${head.slice(0, 4)}-${head.slice(4, 8)}-${head.slice(8, 12)}`;
+	});
+
+	let copied = $state(false);
+	async function copyReference() {
+		if (!referenceCode) return;
+		try {
+			await navigator.clipboard.writeText(referenceCode);
+			copied = true;
+			setTimeout(() => (copied = false), 2000);
+		} catch {
+			// Clipboard API can fail (HTTPS-only, permissions). The reference
+			// is still visible; user can copy manually.
+		}
+	}
 
 	// Record-vocabulary is earned on routes that participate in the
 	// public-record / proof / accountability surface — users have been
@@ -94,10 +119,31 @@
 	<!-- Subtle technical footer. Status + path in mono so a user who
 	     screenshots this page for support gives us something legible,
 	     without making the protocol-level detail the most prominent thing
-	     on the page. -->
+	     on the page. Reference code is the user↔support bridge: paste it
+	     to us and we resolve to the full trace in Sentry. -->
 	{#if pathname}
-		<p class="mt-12 font-mono text-xs text-slate-400">
-			Status {status} · {pathname}
-		</p>
+		<div class="mt-12 space-y-2 font-mono text-xs text-slate-400">
+			<p>Status {status} · {pathname}</p>
+			{#if referenceCode}
+				<p class="flex items-center gap-2">
+					<span>Reference: <span class="text-slate-600">{referenceCode}</span></span>
+					<button
+						type="button"
+						onclick={copyReference}
+						class="rounded border border-slate-300 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+						aria-label="Copy reference code"
+					>
+						{copied ? 'Copied' : 'Copy'}
+					</button>
+				</p>
+				<p class="text-slate-400">
+					If this keeps happening, email <a
+						href="mailto:hello@commons.email?subject=Error%20{status}%20-%20{referenceCode}"
+						class="underline decoration-dotted underline-offset-2 hover:text-slate-600"
+						>hello@commons.email</a
+					> with that reference.
+				</p>
+			{/if}
+		</div>
 	{/if}
 </div>

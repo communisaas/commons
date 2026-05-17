@@ -2,6 +2,7 @@ import * as Sentry from '@sentry/sveltekit';
 import { initConvex } from 'convex-sveltekit';
 import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { env as publicEnv } from '$env/dynamic/public';
+import type { HandleClientError } from '@sveltejs/kit';
 
 // Sentry DSN comes from CF Pages runtime secret `PUBLIC_SENTRY_DSN` via
 // SvelteKit's `$env/dynamic/public`. The previous read of
@@ -34,4 +35,15 @@ if (PUBLIC_CONVEX_URL) {
 	initConvex(PUBLIC_CONVEX_URL);
 }
 
-export const handleError = Sentry.handleErrorWithSentry();
+export const handleError = Sentry.handleErrorWithSentry(
+	(input: Parameters<HandleClientError>[0]) => {
+		// Same as the server-side handler: attach the Sentry event ID to the
+		// error object so /+error.svelte can render the copy-able reference.
+		console.error('[handleError:client]', input.error);
+		const eventId = Sentry.lastEventId();
+		return {
+			message: 'Internal Error',
+			eventId
+		};
+	}
+);

@@ -11,6 +11,7 @@ import { deriveTrustTier } from '$lib/core/identity/authority-level';
 import { trackForRejection } from '$lib/services/rejectionMonitor';
 import { configure } from '$lib/core/shadow-atlas/ipfs-store';
 import { initCloudflareSentryHandle, sentryHandle, handleErrorWithSentry } from '@sentry/sveltekit';
+import * as Sentry from '@sentry/sveltekit';
 import { initConvex, serverQuery, serverMutation } from 'convex-sveltekit';
 import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { mintConvexToken } from '$lib/server/convex-jwt';
@@ -31,6 +32,15 @@ if (typeof PUBLIC_CONVEX_URL === 'string' && PUBLIC_CONVEX_URL) {
 export const handleError = handleErrorWithSentry((input: Parameters<HandleServerError>[0]) => {
 	const { error: err } = input;
 	console.error('[handleError]', err);
+	// Surface the Sentry event ID on the page error object so /+error.svelte
+	// can render it as a copy-able reference. The wrapping
+	// handleErrorWithSentry runs the capture before our handler, so
+	// lastEventId() resolves to the just-captured event.
+	const eventId = Sentry.lastEventId();
+	return {
+		message: 'Internal Error',
+		eventId
+	};
 });
 
 // On Cloudflare Workers, process.env is empty. Secrets are only available
