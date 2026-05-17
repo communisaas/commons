@@ -29,8 +29,9 @@
  *   - Update the constant if multi-state launch shifts the baseline.
  */
 
-import { internalAction, internalQuery } from './_generated/server';
+import { internalAction, internalQuery, type ActionCtx } from './_generated/server';
 import { makeFunctionReference, type FunctionReference } from 'convex/server';
+import { captureToSentry } from './_sentry';
 
 // Break circular type inference between the action and the query in the same
 // file (mirrors the revocations.ts pattern). Calling `internal.observability.*`
@@ -119,9 +120,32 @@ export const getBoundaryCellRate24h = internalQuery({
 	},
 });
 
+/**
+ * Outer try/catch + direct-HTTP Sentry capture covers the case the
+ * `/api/internal/alert` path can't: the cron handler itself throws
+ * unexpectedly (DB timeout, malformed data, transient Convex outage).
+ * Intentional alerts (threshold-cross, coverage-low) still go through
+ * `/api/internal/alert` below — that path uses the SvelteKit Sentry SDK
+ * for full breadcrumbs/release attribution. This wrapper is the safety
+ * net for *unhandled* throws so they don't disappear into Convex
+ * dashboard logs only.
+ */
 export const monitorBoundaryCellRate = internalAction({
 	args: {},
 	handler: async (ctx) => {
+		try {
+			return await runMonitorBoundaryCellRate(ctx);
+		} catch (err) {
+			await captureToSentry(err, {
+				action: 'monitorBoundaryCellRate',
+				level: 'error',
+			});
+			throw err;
+		}
+	},
+});
+
+async function runMonitorBoundaryCellRate(ctx: ActionCtx): Promise<unknown> {
 		const stats = await ctx.runQuery(getBoundaryCellRate24hRef, {});
 
 		// Insufficient signal — log silently, do NOT alert (would just
@@ -244,8 +268,7 @@ export const monitorBoundaryCellRate = internalAction({
 		}
 
 		return { alerted: true, stats };
-	},
-});
+}
 
 /**
  * Daily heartbeat to the alert pipe. Fires a known-OK Sentry event at a
