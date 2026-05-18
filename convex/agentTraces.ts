@@ -320,29 +320,71 @@ export const expire = internalMutation({
 /**
  * GDPR right-to-erasure: delete every trace event for one userId.
  *
- * Internal — called from the user-deletion pipeline. Batches the delete
- * to stay within mutation op budget; returns `more: true` when there
- * are additional rows to delete on the next call. Callers loop until
- * `more === false`.
+ * Internal — called from the user-deletion pipeline. Two-pass: find
+ * the unique traceIds anchored to this user via `by_userId`, then
+ * delete every event for each of those traces via `by_traceId`. The
+ * second pass is necessary because the writer only stamps `userId` on
+ * the `trace.start` event — phase events and `trace.end` carry the
+ * same `traceId` but no userId — so a single-pass scan by `by_userId`
+ * would orphan the rest of the trace.
  *
- * The `by_userId` index makes this an indexed scan rather than a table
- * walk. Without this helper, deleting a user leaves their trace rows
- * to age out via TTL (up to 7 days of plaintext retention after they
- * asked to be forgotten) — which doesn't satisfy "the moment they
- * delete."
+ * Batched against the mutation op budget: returns `more: true` if
+ * the per-trace deletes saturate `EXPIRE_BATCH_SIZE`, so callers can
+ * loop until `more === false`.
+ *
+ * Without this helper, deleting a user leaves their trace rows to age
+ * out via TTL (up to 7 days of plaintext retention after they asked
+ * to be forgotten) — which doesn't satisfy "the moment they delete."
  */
 export const deleteByUserId = internalMutation({
 	args: { userId: v.string() },
 	handler: async (ctx, args) => {
-		const rows = await ctx.db
+		// Pass 1: collect every unique traceId anchored to this user.
+		const userRows = await ctx.db
 			.query("agentTraces")
 			.withIndex("by_userId", (q) => q.eq("userId", args.userId))
-			.take(EXPIRE_BATCH_SIZE);
+			.collect();
+		const traceIds = Array.from(new Set(userRows.map((r) => r.traceId)));
 
-		for (const row of rows) {
-			await ctx.db.delete(row._id);
+		// Pass 2: delete every event for each traceId, bounded by
+		// EXPIRE_BATCH_SIZE across the whole call. Per-row try/catch so a
+		// poison row can't block the rest (same posture as `expire`).
+		let deleted = 0;
+		let failed = 0;
+		let saturated = false;
+		for (const traceId of traceIds) {
+			if (deleted + failed >= EXPIRE_BATCH_SIZE) {
+				saturated = true;
+				break;
+			}
+			const events = await ctx.db
+				.query("agentTraces")
+				.withIndex("by_traceId", (q) => q.eq("traceId", traceId))
+				.collect();
+			for (const evt of events) {
+				if (deleted + failed >= EXPIRE_BATCH_SIZE) {
+					saturated = true;
+					break;
+				}
+				try {
+					await ctx.db.delete(evt._id);
+					deleted++;
+				} catch (err) {
+					failed++;
+					console.warn(
+						`[agentTraces.deleteByUserId] Delete failed for _id=${evt._id}: ${
+							err instanceof Error ? err.message : String(err)
+						}`
+					);
+				}
+			}
 		}
 
-		return { deleted: rows.length, more: rows.length === EXPIRE_BATCH_SIZE };
+		return {
+			deleted,
+			failed,
+			traceCount: traceIds.length,
+			more: saturated,
+		};
 	},
 });

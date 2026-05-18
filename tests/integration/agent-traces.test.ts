@@ -64,18 +64,37 @@ function mirrorRecordClamp(requestedExpiresAt: number, now: number): number {
 }
 
 // ── Mirror: deleteByUserId handler ──────────────────────────────────────────
+// Two-pass: find user's traceIds via by_userId, then delete all events per
+// traceId via by_traceId. Mirrors production exactly because the single-pass
+// scan would orphan phase events / trace.end that don't carry userId.
 function mirrorDeleteByUserId(
 	rows: TraceEventRow[],
 	userId: string
-): { kept: TraceEventRow[]; deleted: number; more: boolean } {
-	const matching = rows.filter((r) => r.userId === userId).slice(0, EXPIRE_BATCH_SIZE);
-	const matchingIds = new Set(matching.map((r) => r._id));
-	const kept = rows.filter((r) => !matchingIds.has(r._id));
-	return {
-		kept,
-		deleted: matching.length,
-		more: matching.length === EXPIRE_BATCH_SIZE
-	};
+): { kept: TraceEventRow[]; deleted: number; traceCount: number; more: boolean } {
+	const userRows = rows.filter((r) => r.userId === userId);
+	const traceIds = Array.from(new Set(userRows.map((r) => r.traceId)));
+
+	let deleted = 0;
+	let saturated = false;
+	const deletedIds = new Set<string>();
+	for (const traceId of traceIds) {
+		if (deleted >= EXPIRE_BATCH_SIZE) {
+			saturated = true;
+			break;
+		}
+		const events = rows.filter((r) => r.traceId === traceId);
+		for (const evt of events) {
+			if (deleted >= EXPIRE_BATCH_SIZE) {
+				saturated = true;
+				break;
+			}
+			deletedIds.add(evt._id);
+			deleted++;
+		}
+	}
+
+	const kept = rows.filter((r) => !deletedIds.has(r._id));
+	return { kept, deleted, traceCount: traceIds.length, more: saturated };
 }
 function mirrorExpire(rows: TraceEventRow[], now: number): { kept: TraceEventRow[]; deleted: number } {
 	const expired = rows
@@ -271,32 +290,49 @@ describe('agentTraces — record TTL clamp mirror', () => {
 });
 
 describe('agentTraces — deleteByUserId mirror', () => {
-	it('deletes only rows for the target userId', () => {
+	it('deletes ALL events for traceIds anchored to the user (not just userId-stamped rows)', () => {
+		// Writer stamps userId only on trace.start; phase events + trace.end
+		// share the same traceId but have undefined userId. A single-pass
+		// by_userId scan would orphan those.
 		const rows: TraceEventRow[] = [
-			evt({ _id: 'a', userId: 'alice' }),
-			evt({ _id: 'b', userId: 'bob' }),
-			evt({ _id: 'c', userId: 'alice' }),
-			evt({ _id: 'd', userId: undefined })
+			evt({ _id: 'a1', traceId: 'A', userId: 'alice', eventType: 'trace.start' }),
+			evt({ _id: 'a2', traceId: 'A', userId: undefined, eventType: 'phase' }),
+			evt({ _id: 'a3', traceId: 'A', userId: undefined, eventType: 'trace.end' }),
+			evt({ _id: 'b1', traceId: 'B', userId: 'bob', eventType: 'trace.start' }),
+			evt({ _id: 'b2', traceId: 'B', userId: undefined, eventType: 'trace.end' }),
+			evt({ _id: 'a4', traceId: 'A2', userId: 'alice', eventType: 'trace.start' })
 		];
-		const { kept, deleted } = mirrorDeleteByUserId(rows, 'alice');
-		expect(deleted).toBe(2);
-		expect(kept.map((r) => r._id).sort()).toEqual(['b', 'd']);
+		const { kept, deleted, traceCount } = mirrorDeleteByUserId(rows, 'alice');
+		expect(traceCount).toBe(2); // 'A' and 'A2'
+		expect(deleted).toBe(4); // all 3 of A + 1 of A2
+		expect(kept.map((r) => r._id).sort()).toEqual(['b1', 'b2']);
 	});
 
-	it('signals more=true when batch saturated', () => {
-		const rows = Array.from({ length: EXPIRE_BATCH_SIZE + 5 }, (_, i) =>
-			evt({ _id: `r${i}`, userId: 'alice' })
-		);
+	it('returns zero when user has no traces', () => {
+		const rows: TraceEventRow[] = [
+			evt({ _id: 'x', userId: 'bob', eventType: 'trace.start' })
+		];
 		const result = mirrorDeleteByUserId(rows, 'alice');
-		expect(result.deleted).toBe(EXPIRE_BATCH_SIZE);
-		expect(result.more).toBe(true);
-	});
-
-	it('signals more=false when fewer than batch matched', () => {
-		const rows: TraceEventRow[] = [evt({ _id: 'a', userId: 'alice' })];
-		const result = mirrorDeleteByUserId(rows, 'alice');
-		expect(result.deleted).toBe(1);
+		expect(result.deleted).toBe(0);
+		expect(result.traceCount).toBe(0);
 		expect(result.more).toBe(false);
+	});
+
+	it('signals more=true when per-call batch saturated', () => {
+		// Build EXPIRE_BATCH_SIZE+5 events split across (EXPIRE_BATCH_SIZE+5)/3
+		// traces so the per-trace inner loop crosses the cap.
+		const rows: TraceEventRow[] = [];
+		const totalTraces = Math.ceil((EXPIRE_BATCH_SIZE + 100) / 3);
+		for (let t = 0; t < totalTraces; t++) {
+			rows.push(
+				evt({ _id: `s-${t}`, traceId: `T${t}`, userId: 'alice', eventType: 'trace.start' }),
+				evt({ _id: `p-${t}`, traceId: `T${t}`, userId: undefined, eventType: 'phase' }),
+				evt({ _id: `e-${t}`, traceId: `T${t}`, userId: undefined, eventType: 'trace.end' })
+			);
+		}
+		const result = mirrorDeleteByUserId(rows, 'alice');
+		expect(result.more).toBe(true);
+		expect(result.deleted).toBe(EXPIRE_BATCH_SIZE);
 	});
 });
 
