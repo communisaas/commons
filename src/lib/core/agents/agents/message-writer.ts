@@ -21,6 +21,7 @@ import { extractJsonFromGroundingResponse, isSuccessfulExtraction } from '../uti
 import { discoverSources, formatSourcesForPrompt } from './source-discovery';
 import type { MessageResponse, DecisionMaker, TokenUsage, ExternalApiCounts, EvaluatedSource } from '../types';
 import { sumTokenUsage, emptyExternalCounts } from '../types';
+import { traceEvent } from '$lib/server/agent-trace';
 
 // ============================================================================
 // Zod Schema for Runtime Validation
@@ -264,6 +265,7 @@ The stranger who shares this link should think "I need to send that too." Every 
 
 	console.debug('[message-writer] Phase 2: Generating message with verified sources...');
 
+	const messageWriteStart = Date.now();
 	// Generate WITHOUT grounding — we already have verified sources
 	// This prevents the model from hallucinating additional URLs
 	// Temperature 0.8: let the model's full linguistic range serve the writing.
@@ -281,6 +283,25 @@ The stranger who shares this link should think "I need to send that too." Every 
 	);
 
 	const messageTokenUsage = result.tokenUsage;
+	const messageWriteLatencyMs = Date.now() - messageWriteStart;
+
+	// Trace: Phase 2 Gemini call — FULL prompt + FULL response captured.
+	// Privacy carried by TTL + `_secret` gate; replay needs the exact inputs
+	// the model saw and the exact text it returned.
+	if (options.traceId) {
+		traceEvent(options.traceId, 'message-generation', 'message-write', {
+			systemPrompt,
+			userPrompt: prompt,
+			rawResponse: result.rawText ?? null,
+			tokenUsage: messageTokenUsage,
+			latencyMs: messageWriteLatencyMs,
+			model: 'gemini',
+			temperature: 0.8,
+			thinkingLevel: 'high',
+			groundingEnabled: false,
+			verifiedSourceCount: verifiedSources.length
+		});
+	}
 
 	// Extract JSON from response
 	const extraction = extractJsonFromGroundingResponse<MessageResponse>(result.rawText || '');

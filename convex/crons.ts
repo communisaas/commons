@@ -289,4 +289,16 @@ crons.cron(
   internal.donations.sweepStrandedDonations,
 );
 
+// ---------------------------------------------------------------------------
+// 23. Agent-trace expiry — delete rows past expiresAt (TTL from SK writer,
+//     default 7 days). 1000-row batches per tick (= 24k/day capacity, ~2.4x
+//     headroom over a 10k events/day baseline); runs hourly at :37 to
+//     stagger off the other hourly crons (:07, :13, :21, :47).
+// ---------------------------------------------------------------------------
+crons.hourly(
+  "agent-traces-expire",
+  { minuteUTC: 37 },
+  internal.agentTraces.expire,
+);
+
 export default crons;

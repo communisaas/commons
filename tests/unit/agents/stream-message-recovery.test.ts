@@ -59,7 +59,8 @@ vi.mock('$lib/server/llm-cost-protection', () => ({
 	rateLimitResponse: vi.fn(() => new Response(JSON.stringify({ error: 'Rate limited' }), { status: 429 })),
 	addRateLimitHeaders: vi.fn(),
 	getUserContext: vi.fn(() => ({ userId: 'test-user', tier: 'authenticated' })),
-	logLLMOperation: vi.fn()
+	logLLMOperation: vi.fn(),
+	computeCostUsd: vi.fn(() => undefined)
 }));
 
 vi.mock('$lib/core/agents/agents/message-writer', () => ({

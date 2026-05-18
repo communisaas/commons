@@ -431,7 +431,7 @@ describe('Source Discovery — discoverSources', () => {
 		expect(evalContext.decisionMakers[0].organization).toBe('City of Flint');
 	});
 
-	it('fires trace events for source-search and source-evaluation when traceId provided', async () => {
+	it('fires trace events for source-search, source-fetch, and source-evaluation when traceId provided', async () => {
 		setupSuccessfulPipeline();
 
 		await discoverSources({
@@ -439,12 +439,22 @@ describe('Source Discovery — discoverSources', () => {
 			traceId: 'test-trace-123'
 		});
 
-		// Should fire at least 2 trace events: source-search and source-evaluation
+		// Should fire 3 trace events: source-search, source-fetch, source-evaluation
 		expect(mockTraceEvent).toHaveBeenCalledWith(
 			'test-trace-123',
 			'message-generation',
 			'source-search',
 			expect.objectContaining({ exaSearches: 3 })
+		);
+		expect(mockTraceEvent).toHaveBeenCalledWith(
+			'test-trace-123',
+			'message-generation',
+			'source-fetch',
+			expect.objectContaining({
+				firecrawlReads: expect.any(Number),
+				candidatesFetched: expect.any(Number),
+				failedFetches: expect.any(Number)
+			})
 		);
 		expect(mockTraceEvent).toHaveBeenCalledWith(
 			'test-trace-123',
@@ -741,6 +751,66 @@ describe('Message Writer — generateMessage', () => {
 
 			// Should only have 1 stream call (Phase 2), not 2 (Phase 1 + Phase 2)
 			expect(mockGenerateContentStream).toHaveBeenCalledTimes(1);
+		});
+
+		it('fires message-write trace event with FULL prompt + response when traceId provided', async () => {
+			const verifiedSources = [makeEvaluatedSource()];
+			const responseText = makeMessageResponse();
+
+			mockGenerateContentStream.mockResolvedValueOnce(
+				makeStream([
+					{ text: responseText, usageMetadata: { promptTokenCount: 800, candidatesTokenCount: 400, thoughtsTokenCount: 100, totalTokenCount: 1300 } }
+				])
+			);
+
+			await generateMessage({
+				...baseOptions,
+				verifiedSources,
+				traceId: 'msg-trace-1'
+			});
+
+			expect(mockTraceEvent).toHaveBeenCalledWith(
+				'msg-trace-1',
+				'message-generation',
+				'message-write',
+				expect.objectContaining({
+					systemPrompt: expect.any(String),
+					userPrompt: expect.any(String),
+					rawResponse: expect.any(String),
+					latencyMs: expect.any(Number),
+					model: 'gemini',
+					temperature: 0.8,
+					thinkingLevel: 'high',
+					groundingEnabled: false,
+					verifiedSourceCount: 1
+				})
+			);
+
+			// FULL fidelity: the prompt and response must be present (no truncation
+			// in the producer — the writer handles size cap downstream).
+			const callArgs = mockTraceEvent.mock.calls.find(
+				([_traceId, _ep, evt]: any[]) => evt === 'message-write'
+			);
+			expect(callArgs).toBeDefined();
+			const payload = callArgs![3];
+			expect(payload.userPrompt).toContain('Urgent: Water Quality Crisis');
+			expect(payload.rawResponse).toBe(responseText);
+		});
+
+		it('does not fire message-write trace event when no traceId provided', async () => {
+			const verifiedSources = [makeEvaluatedSource()];
+
+			mockGenerateContentStream.mockResolvedValueOnce(
+				makeStream([{ text: makeMessageResponse() }])
+			);
+
+			await generateMessage({ ...baseOptions, verifiedSources });
+
+			// No message-write event in the call list
+			const messageWriteCalls = mockTraceEvent.mock.calls.filter(
+				([_traceId, _ep, evt]: any[]) => evt === 'message-write'
+			);
+			expect(messageWriteCalls.length).toBe(0);
 		});
 
 		it('replaces generated sources with verified source pool', async () => {
