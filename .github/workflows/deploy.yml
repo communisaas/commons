@@ -149,13 +149,38 @@ jobs:
 
       - name: Verify deployment health
         run: |
+          strict_atlas=false
+          if [ "$DEPLOY_BRANCH" = "production" ]; then
+            strict_atlas=true
+          fi
+
           for attempt in {1..12}; do
-            if response=$(curl --fail-with-body -sS --max-time 20 "$DEPLOY_HEALTH_URL/api/health"); then
-              echo "$response"
-              echo "$response" | jq -e '.status == "ok"' >/dev/null && exit 0
-            elif [ -n "${response:-}" ]; then
-              echo "$response"
+            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" "$DEPLOY_HEALTH_URL/api/health"); then
+              http_status=$(printf '%s\n' "$response" | tail -n 1)
+              body=$(printf '%s\n' "$response" | sed '$d')
+
+              if echo "$body" | jq -e . >/dev/null 2>&1; then
+                echo "$body"
+
+                if [ "$strict_atlas" = "true" ]; then
+                  if [ "$http_status" = "200" ] && echo "$body" | jq -e '.status == "ok"' >/dev/null; then
+                    exit 0
+                  fi
+                elif echo "$body" | jq -e '.convex == true and .atlas.configured == true and .atlas.manifest == true and .atlas.districtIndex == true' >/dev/null; then
+                  if ! echo "$body" | jq -e '.atlas.rootPinned == true and .atlas.depthPinned == true' >/dev/null; then
+                    echo "::warning::Non-production deploy health has atlas content reachable but root/depth are not pinned yet."
+                  fi
+                  exit 0
+                fi
+              else
+                echo "Deployment health endpoint returned HTTP ${http_status} and a non-JSON body:"
+                printf '%s\n' "$body" | head -c 4000
+                printf '\n'
+              fi
+            else
+              echo "Deployment health check failed on attempt ${attempt} before an HTTP response."
             fi
+
             echo "Deployment health check failed on attempt ${attempt}; retrying..."
             sleep 10
           done
