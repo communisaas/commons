@@ -120,7 +120,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
 
       - name: Purge CDN cache
-        if: github.event.workflow_run.head_branch == 'production'
+        if: env.DEPLOY_BRANCH == 'production'
         run: |
           response=$(curl -sS --max-time 30 -w "\n%{http_code}" -X POST "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/purge_cache" \
             -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
@@ -187,7 +187,7 @@ jobs:
           exit 1
 
       - name: Probe production domain health
-        if: github.event.workflow_run.head_branch == 'production'
+        if: env.DEPLOY_BRANCH == 'production'
         run: |
           domain_challenged=false
           domain_hard_failure=false
@@ -237,7 +237,7 @@ jobs:
           done
 
       - name: Probe production browser-mediated mDL route
-        if: github.event.workflow_run.head_branch == 'production'
+        if: env.DEPLOY_BRANCH == 'production'
         run: |
           route_challenged=false
           route_hard_failure=false
@@ -285,7 +285,7 @@ jobs:
           done
 
       - name: Probe production mDL readiness
-        if: github.event.workflow_run.head_branch == 'production'
+        if: env.DEPLOY_BRANCH == 'production'
         env:
           INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
         run: |
