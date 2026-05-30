@@ -925,6 +925,7 @@ Rules:
 					systemInstruction: synthesisSystem,
 					temperature: 0.2,
 					maxOutputTokens: 32768,
+					thinkingLevel: 'low',
 					responseSchema: PERSON_LOOKUP_RESPONSE_SCHEMA
 				});
 				tokenUsages.push(extractTokenUsage(response));

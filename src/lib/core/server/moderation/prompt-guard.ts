@@ -111,6 +111,29 @@ export async function detectPromptInjection(
 
 	if (!response.ok) {
 		const errorText = await response.text().catch(() => '(unreadable)');
+		// 403 on Groq for prompt-guard models is almost always a model-permission
+		// block at the org or project level (see
+		// https://console.groq.com/docs/model-permissions). Surface the specific
+		// code so an operator can flip the right toggle instead of chasing a
+		// generic "GROQ 403". Other 4xx/5xx fall through to a plain log.
+		if (response.status === 403) {
+			let code: string | undefined;
+			try {
+				const parsed = JSON.parse(errorText) as { error?: { code?: string } };
+				code = parsed?.error?.code;
+			} catch {
+				/* errorText is not JSON; leave code undefined */
+			}
+			const remediation =
+				code === 'model_permission_blocked_org'
+					? 'org admin must enable meta-llama/llama-prompt-guard-2-86m at console.groq.com/settings'
+					: code === 'model_permission_blocked_project'
+						? 'project admin must enable meta-llama/llama-prompt-guard-2-86m for this Groq project'
+						: 'check Groq API key scope and model permissions';
+			console.error(
+				`[prompt-guard] LAYER 1 MODERATION DISABLED — Groq 403${code ? ` (${code})` : ''}: ${remediation}`
+			);
+		}
 		return unavailableResult(threshold, `GROQ ${response.status}: ${errorText.slice(0, 200)}`);
 	}
 

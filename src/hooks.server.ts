@@ -102,6 +102,19 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 		}
 
 		const { session, user, renewed } = result;
+		const userEmail = user.email;
+
+		if (!userEmail) {
+			console.warn(
+				'[hooks.server] Valid session resolved to user without email; clearing auth cookie for user=' +
+					(user._id as string).slice(0, 8) +
+					'...'
+			);
+			event.cookies.delete(SESSION_COOKIE, { path: '/' });
+			event.locals.user = null;
+			event.locals.session = null;
+			return resolve(event);
+		}
 
 		if (renewed) {
 			// Extend cookie expiry to match renewed session
@@ -151,7 +164,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 
 		event.locals.user = {
 			id: user._id as string,
-			email: user.email ?? null,
+			email: userEmail,
 			name: user.name ?? null,
 			avatar: user.avatar ?? null,
 			// PII custody

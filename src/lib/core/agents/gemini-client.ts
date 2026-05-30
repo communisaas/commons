@@ -166,12 +166,16 @@ export async function generate(
 		config.systemInstruction = options.systemInstruction;
 	}
 
-	// Note: thinkingConfig.thinkingLevel is not yet supported in SDK v1.28.0
-	// Keeping parameter for future API compatibility
-	// When available, uncomment:
-	// if (options.thinkingLevel) {
-	//   config.thinkingConfig = { thinkingLevel: options.thinkingLevel };
-	// }
+	// Thinking budget. `maxOutputTokens` on Gemini 3 caps combined
+	// thinking+output, so unbounded thinking starves output and trips MAX_TOKENS
+	// on mechanical extraction tasks. Mirror the budget map used by
+	// generateStream/generateStreamWithThoughts.
+	if (options.thinkingLevel) {
+		config.thinkingConfig = {
+			thinkingBudget:
+				options.thinkingLevel === 'high' ? 8192 : options.thinkingLevel === 'low' ? 1024 : 4096
+		};
+	}
 
 	// Retry logic with exponential backoff
 	const maxRetries = 3;

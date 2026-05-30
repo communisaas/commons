@@ -9,9 +9,12 @@ import { execSync } from 'node:child_process';
 // Suppress spurious MaxListenersExceededWarning from SvelteKit HMR child processes.
 // process.setMaxListeners covers the global process EventEmitter;
 // events.defaultMaxListeners covers ChildProcess instances spawned by Vite/SvelteKit.
+// The decision-maker pipeline fan-out (parallel Exa/Firecrawl/Gemini calls) pushes
+// per-resolution listener counts past the old 20 cap; 64 keeps headroom while still
+// surfacing genuine leaks.
 import { EventEmitter } from 'events';
-EventEmitter.defaultMaxListeners = 20;
-process.setMaxListeners(20);
+EventEmitter.defaultMaxListeners = 64;
+process.setMaxListeners(64);
 
 // Resolve the current commit SHA at config-load time so it can be inlined
 // into the bundle via `define`. This runs in Node during build/dev (not on
