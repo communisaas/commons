@@ -422,3 +422,48 @@ export interface ListRepresentativesParams {
   country?: string;
   constituency?: string;
 }
+
+// ---- Webhooks ----
+
+export type WebhookEvent =
+  | 'campaign_action.created'
+  | 'campaign.updated'
+  | 'supporter.created'
+  | 'supporter.updated'
+  | 'supporter.deleted'
+  | 'donation.completed'
+  | 'donation.refunded'
+  | 'event.rsvp_created';
+
+export interface Webhook {
+  id: string;
+  url: string;
+  events: WebhookEvent[];
+  enabled: boolean;
+  description: string | null;
+  createdAt: number;
+  lastDeliveredAt: number | null;
+  failureCount: number;
+}
+
+export interface WebhookCreated extends Webhook {
+  signingSecret: string;
+}
+
+export interface WebhookSecretRotated {
+  id: string;
+  signingSecret: string;
+}
+
+export interface CreateWebhookInput {
+  url: string;
+  events: WebhookEvent[];
+  description?: string;
+}
+
+export interface UpdateWebhookInput {
+  url?: string;
+  events?: WebhookEvent[];
+  enabled?: boolean;
+  description?: string;
+}

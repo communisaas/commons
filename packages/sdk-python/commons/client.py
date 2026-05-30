@@ -22,6 +22,7 @@ from .types import (
     CampaignDetail,
     CampaignFull,
     CreateSupporterInput,
+    CreateWebhookInput,
     Donation,
     DonationDetail,
     Event,
@@ -36,7 +37,11 @@ from .types import (
     Supporter,
     Tag,
     UpdateSupporterInput,
+    UpdateWebhookInput,
     Usage,
+    Webhook,
+    WebhookCreated,
+    WebhookSecretRotated,
     Workflow,
     WorkflowDetail,
 )
@@ -412,6 +417,30 @@ class KeyResource:
         ]
 
 
+class WebhookResource:
+    def __init__(self, client: _HttpClient) -> None:
+        self._client = client
+
+    def list(self) -> List[Webhook]:
+        return self._client.request("GET", "/webhooks")["data"]
+
+    def get(self, webhook_id: str) -> Webhook:
+        return self._client.request("GET", f"/webhooks/{webhook_id}")["data"]
+
+    def create(self, data: CreateWebhookInput) -> WebhookCreated:
+        # signingSecret is returned ONCE on creation — persist it now.
+        return self._client.request("POST", "/webhooks", json=data)["data"]
+
+    def update(self, webhook_id: str, data: UpdateWebhookInput) -> Webhook:
+        return self._client.request("PATCH", f"/webhooks/{webhook_id}", json=data)["data"]
+
+    def rotate_secret(self, webhook_id: str) -> WebhookSecretRotated:
+        return self._client.request("POST", f"/webhooks/{webhook_id}/rotate-secret")["data"]
+
+    def delete(self, webhook_id: str) -> Dict[str, Any]:
+        return self._client.request("DELETE", f"/webhooks/{webhook_id}")["data"]
+
+
 # ---------------------------------------------------------------------------
 # Async resource classes
 # ---------------------------------------------------------------------------
@@ -701,3 +730,76 @@ class AsyncKeyResource:
                 "DELETE", f"/keys/{key_id}", params={"orgSlug": org_slug}
             )
         )["data"]
+
+
+class AsyncWebhookResource:
+    def __init__(self, client: _AsyncHttpClient) -> None:
+        self._client = client
+
+    async def list(self) -> List[Webhook]:
+        return (await self._client.request("GET", "/webhooks"))["data"]
+
+    async def get(self, webhook_id: str) -> Webhook:
+        return (await self._client.request("GET", f"/webhooks/{webhook_id}"))["data"]
+
+    async def create(self, data: CreateWebhookInput) -> WebhookCreated:
+        return (await self._client.request("POST", "/webhooks", json=data))["data"]
+
+    async def update(self, webhook_id: str, data: UpdateWebhookInput) -> Webhook:
+        return (await self._client.request("PATCH", f"/webhooks/{webhook_id}", json=data))["data"]
+
+    async def rotate_secret(self, webhook_id: str) -> WebhookSecretRotated:
+        return (await self._client.request("POST", f"/webhooks/{webhook_id}/rotate-secret"))[
+            "data"
+        ]
+
+    async def delete(self, webhook_id: str) -> Dict[str, Any]:
+        return (await self._client.request("DELETE", f"/webhooks/{webhook_id}"))["data"]
+
+
+# ---------------------------------------------------------------------------
+# Signature verification helper
+# ---------------------------------------------------------------------------
+
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+import time as _time  # noqa: E402
+
+
+def verify_webhook_signature(
+    payload: str,
+    header: str,
+    secrets: List[str] | str,
+    tolerance_seconds: int = 300,
+) -> bool:
+    """Verify ``X-Commons-Signature-256: t=<ts>,v1=<hex>``.
+
+    Reconstructs ``HMAC-SHA256(timestamp + "." + payload, secret)`` and
+    constant-time compares. Accepts a list of secrets so callers can supply
+    current + previous during a rotation window.
+    """
+    parts: Dict[str, str] = {}
+    for p in header.split(","):
+        if "=" in p:
+            k, v = p.split("=", 1)
+            parts[k.strip()] = v.strip()
+
+    ts_str = parts.get("t")
+    sig = parts.get("v1")
+    if not ts_str or not sig:
+        return False
+    try:
+        ts = int(ts_str)
+    except ValueError:
+        return False
+    now_ms = int(_time.time() * 1000)
+    if abs(now_ms - ts) > tolerance_seconds * 1000:
+        return False
+
+    secret_list = [secrets] if isinstance(secrets, str) else secrets
+    message = f"{ts_str}.{payload}".encode("utf-8")
+    for secret in secret_list:
+        mac = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(mac, sig):
+            return True
+    return False

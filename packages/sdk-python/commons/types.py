@@ -394,3 +394,42 @@ class Representative(TypedDict, total=False):
     photoUrl: Optional[str]
     createdAt: str
     updatedAt: str
+
+
+# ---------------------------------------------------------------------------
+# Webhooks
+# ---------------------------------------------------------------------------
+
+
+class Webhook(TypedDict, total=False):
+    id: str
+    url: str
+    events: List[str]
+    enabled: bool
+    description: Optional[str]
+    createdAt: int
+    lastDeliveredAt: Optional[int]
+    failureCount: int
+
+
+class WebhookCreated(Webhook, total=False):
+    # signingSecret returned ONCE on creation
+    signingSecret: str
+
+
+class WebhookSecretRotated(TypedDict, total=False):
+    id: str
+    signingSecret: str
+
+
+class CreateWebhookInput(TypedDict, total=False):
+    url: str
+    events: List[str]
+    description: Optional[str]
+
+
+class UpdateWebhookInput(TypedDict, total=False):
+    url: Optional[str]
+    events: Optional[List[str]]
+    enabled: Optional[bool]
+    description: Optional[str]

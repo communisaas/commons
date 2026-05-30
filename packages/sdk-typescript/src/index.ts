@@ -39,6 +39,12 @@ import type {
   NetworkStats,
   NetworkMember,
   ListNetworksParams,
+  Webhook,
+  WebhookCreated,
+  WebhookSecretRotated,
+  WebhookEvent,
+  CreateWebhookInput,
+  UpdateWebhookInput,
   PaginationMeta
 } from './types.js';
 
@@ -82,6 +88,12 @@ export type {
   NetworkStats,
   NetworkMember,
   ListNetworksParams,
+  Webhook,
+  WebhookCreated,
+  WebhookSecretRotated,
+  WebhookEvent,
+  CreateWebhookInput,
+  UpdateWebhookInput,
   PaginationMeta
 };
 export { CursorPage } from './pagination.js';
@@ -383,6 +395,50 @@ class KeyResource {
   }
 }
 
+class WebhookResource {
+  constructor(private readonly _client: HttpClient) {}
+
+  async list(): Promise<Webhook[]> {
+    const { data } = await this._client.request<Webhook[]>('GET', '/webhooks');
+    return data;
+  }
+
+  async get(id: string): Promise<Webhook> {
+    const { data } = await this._client.request<Webhook>('GET', `/webhooks/${encodeURIComponent(id)}`);
+    return data;
+  }
+
+  async create(input: CreateWebhookInput): Promise<WebhookCreated> {
+    const { data } = await this._client.request<WebhookCreated>('POST', '/webhooks', { body: input });
+    return data;
+  }
+
+  async update(id: string, input: UpdateWebhookInput): Promise<Webhook> {
+    const { data } = await this._client.request<Webhook>(
+      'PATCH',
+      `/webhooks/${encodeURIComponent(id)}`,
+      { body: input }
+    );
+    return data;
+  }
+
+  async rotateSecret(id: string): Promise<WebhookSecretRotated> {
+    const { data } = await this._client.request<WebhookSecretRotated>(
+      'POST',
+      `/webhooks/${encodeURIComponent(id)}/rotate-secret`
+    );
+    return data;
+  }
+
+  async delete(id: string): Promise<{ deleted: true }> {
+    const { data } = await this._client.request<{ deleted: true }>(
+      'DELETE',
+      `/webhooks/${encodeURIComponent(id)}`
+    );
+    return data;
+  }
+}
+
 // ---- Main client ----
 
 export class Commons {
@@ -399,6 +455,7 @@ export class Commons {
   readonly networks: NetworkResource;
   readonly usage: UsageResource;
   readonly keys: KeyResource;
+  readonly webhooks: WebhookResource;
 
   constructor(options: ClientOptions) {
     const client = new HttpClient(options);
@@ -415,5 +472,63 @@ export class Commons {
     this.networks = new NetworkResource(client);
     this.usage = new UsageResource(client);
     this.keys = new KeyResource(client);
+    this.webhooks = new WebhookResource(client);
   }
+}
+
+/**
+ * Verify a webhook signature.
+ *
+ * Reconstructs HMAC-SHA256(timestamp + "." + payload, signingSecret) and
+ * constant-time compares it against the v1 component of the
+ * `X-Commons-Signature-256` header (format: `t=<ts>,v1=<hex>`).
+ *
+ * If you have rotated secrets recently, pass both current and previous —
+ * either is accepted within the rotation window.
+ */
+export async function verifyWebhookSignature(args: {
+  payload: string;
+  header: string;
+  secrets: string[] | string;
+  toleranceSeconds?: number;
+}): Promise<boolean> {
+  const tolerance = (args.toleranceSeconds ?? 300) * 1000;
+  const parts = args.header.split(',').reduce<Record<string, string>>((acc, p) => {
+    const [k, v] = p.split('=');
+    if (k && v) acc[k.trim()] = v.trim();
+    return acc;
+  }, {});
+  const ts = Number(parts.t);
+  const sig = parts.v1;
+  if (!ts || !sig) return false;
+  if (Math.abs(Date.now() - ts) > tolerance) return false;
+
+  const secrets = Array.isArray(args.secrets) ? args.secrets : [args.secrets];
+  const message = `${parts.t}.${args.payload}`;
+  const enc = new TextEncoder();
+
+  for (const secret of secrets) {
+    const key = await crypto.subtle.importKey(
+      'raw',
+      enc.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const macBuf = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+    const mac = Array.from(new Uint8Array(macBuf))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    if (constantTimeEqual(mac, sig)) return true;
+  }
+  return false;
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
 }
