@@ -1,0 +1,4 @@
+{
+  "_notes": "No chokepoints in this hypergraph. All tasks are engineering-bound: reading code (V-*), editing seed.ts (S-*), tightening schema (D-*), or writing vitest specs (T-*). No external ops/vendor/partnership gates.",
+  "chokepoints": []
+}

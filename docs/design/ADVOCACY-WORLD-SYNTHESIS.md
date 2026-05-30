@@ -1,8 +1,10 @@
 # Advocacy World — Cross-Lens Research Synthesis
 
-**Date:** 2026-04-18
+**Date:** 2026-04-18 (refresh pointer added 2026-05-27)
 **Purpose:** Document the globally-approximal findings from four independent research lenses on the advocacy ecosystem. Grounds the Commons /org landing page design in evidence rather than assumption.
 **Status:** Reference document for design decisions. Not canonical strategy — the citations are.
+
+> **2026-05-27 refresh:** A 13-lane parallel research pass on 2026-05-26 produced material updates to the platform-market lens (Lens 3). See `docs/research/competitive-analysis.md` "Material Updates — May 2026" section for: FiscalNote going-concern + NYSE delisting (Apr 13 2026); Bonterra ActionKit functional deprecation (MoveOn departed May 31 2025); NGP VAN 2024 near-collapse verified detail + TMC RFP timeline (H1 2026 migration); Senate Commerce 2024 primary-source documentation of conservative deplatforming; A2P 10DLC Feb 2025 enforcement; civic-data API cascade (Google Civic, ProPublica, OpenSecrets, Congress.gov); plus 7 newly-profiled platforms (New/Mode, Empower Project, Engaging Networks, Civitech, Indigov, Solidarity Tech, TouchStone). The "incumbent ecosystem is structurally unstable RIGHT NOW" finding (Bedrock 3) is reinforced and dated.
 
 ---
 

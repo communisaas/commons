@@ -224,7 +224,7 @@ Every choice below was made against the constraint: **the pinch gesture → visu
 │  │ MapLibre GL JS canvas (z-0)                           │   │
 │  │ - 5-layer hand-crafted muted style                    │   │
 │  │ - interactive: false (zero event handlers)            │   │
-│  │ - PMTiles from Cloudflare R2 (no tile server)         │   │
+│  │ - PMTiles from build.protomaps.com (third-party)      │   │
 │  │ - GeoJSON source for ALL fences (native line layer)   │   │
 │  │ - Fence opacity driven by data-driven expressions     │   │
 │  └───────────────────────────────────────────────────────┘   │
@@ -252,8 +252,8 @@ Every choice below was made against the constraint: **the pinch gesture → visu
 | Component | Choice | Why | Bundle |
 |-----------|--------|-----|--------|
 | Terrain basemap | MapLibre GL JS 5.x | Vector tiles, custom styling, `project()` for coordinate bridge, GPU-accelerated. Non-interactive = zero event overhead. | 262 KB gz |
-| Tile source | Protomaps PMTiles on Cloudflare R2 | Single static file, HTTP Range Requests, no tile server, no API key. R2 egress free <10GB/mo. | 7.5 KB gz (protocol lib) |
-| Tile style | Hand-crafted 5-layer JSON | 5 layers (background, earth, water, roads, boundaries) vs ~80 in a stock style. Fewer layers = fewer GL draw calls = faster mobile render. No glyphs, no sprites, no symbols. | 0 (inline JSON) |
+| Tile source | Protomaps PMTiles at `build.protomaps.com` | Single static file, HTTP Range Requests, no tile server, no API key. Third-party fetch from Protomaps' public CDN; Range Requests amortize bytes. Self-hosting on R2 is a deferred move — the URL is in `bubble-terrain-style.ts:14`. | 7.5 KB gz (protocol lib) |
+| Tile style | Hand-crafted JSON | Minimal layer set vs ~80 in a stock style. Fewer layers = fewer GL draw calls = faster mobile render. Includes one symbol layer for place labels, glyphs loaded from `demotiles.maplibre.org`. | 0 (inline JSON) |
 | Bubble circle | SVG `<circle>` | Single DOM element. Animated via `transform: scale()` (compositor thread). Supports `aria-*` attributes. CSS `filter: drop-shadow()` for glow (compositor thread). | 0 |
 | Fence rendering | MapLibre GeoJSON layer | Fences are geographic data — they must project correctly with the basemap. MapLibre renders them via WebGL natively. Opacity toggled per-fence via data-driven paint expressions. | 0 (MapLibre handles) |
 | Gesture input | Pointer Events Level 3 (raw) | Unified touch/mouse/pen. `getCoalescedEvents()` for 120Hz tracking. `getPredictedEvents()` for fence precomputation. No library needed. | 0 |
@@ -1268,7 +1268,7 @@ No bubble exists. The user sees templates with `minimum_precision_required: 'non
 - **The raw postal code is not stored.** Only `bubble_lat`, `bubble_lng`, `bubble_radius` are persisted on the User model. The postal code is a seed — once the bubble is born, the string is discarded.
 - Shadow-atlas logs queries for rate limiting only (TTL 1 hour, no PII association, keyed by IP hash not user ID)
 - No geolocation API is called — the postal code is user-volunteered, not observed
-- The bubble visualization is rendered entirely client-side from the shadow-atlas geometry response — no third-party map tile requests that could leak location
+- The bubble's fence + district overlays are rendered client-side from the shadow-atlas geometry response. The terrain basemap underneath is Protomaps PMTiles loaded from `build.protomaps.com`, with glyphs from `demotiles.maplibre.org` — third-party fetches keyed by viewport. As the user drags the bubble (`Bubble.svelte` setCenter handlers → `BubbleTerrain.svelte` jumpTo), each new center triggers fresh tile fetches; Protomaps therefore sees a sequence of viewports along the drag path, not a single point. The leak surface is "current bubble centers and the in-between path at the configured zoom" — coarser than continuous geolocation but more than the initial postal-derived seed.
 - When the user makes the bubble larger, previously resolved district_ids are erased from client state (not just hidden — gone). The bubble forgets what it no longer encompasses.
 
 ---

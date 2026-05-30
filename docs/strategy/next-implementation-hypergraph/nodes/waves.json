@@ -1,0 +1,44 @@
+{
+  "waves": [
+    {
+      "id": "W-0",
+      "name": "Pre-launch ops gate",
+      "gate": "first-org mDL launch readiness",
+      "exit_criteria": "ABC enrollment complete (Apple-side weeks) + Sentry on-call wiring + launch-day runbook + first-org staging walk + ses-proxy Lambda deployed + BLAST_RECEIPTS_SECRET synced + FEATURES.CONGRESSIONAL=true PR merged",
+      "tracks": ["TR-A"],
+      "blocking_for": ["W-1"]
+    },
+    {
+      "id": "W-1",
+      "name": "First-org launch + substrate cleanup",
+      "gate": "W-0 complete",
+      "exit_criteria": "First org runs first verified campaign through the platform; substrate writer wire-ups (TR-E) complete so reputationTier promotion, atlasVersion drift surfacing, debate field population, and brandingAccent UI all work as advertised",
+      "tracks": ["TR-A", "TR-E"],
+      "blocking_for": ["W-2"]
+    },
+    {
+      "id": "W-2",
+      "name": "Post-launch hardening",
+      "gate": "W-1 complete (org live, substrate honest)",
+      "exit_criteria": "TEE Nitro Enclave deployed + delegation executor running; mainnet contracts deployed (Safe multisig + audit complete); receipt Merkle anchoring pipeline live; audit log + observability digests wired",
+      "tracks": ["TR-B"],
+      "blocking_for": ["W-3"]
+    },
+    {
+      "id": "W-3",
+      "name": "Phase 2 precision + platform partnerships",
+      "gate": "W-2 complete",
+      "exit_criteria": "ACS + density-aware K-anonymity layer; SLDU/SLDL coverage; multi-state G3 measurement; Postal Bubble disambiguation UX; AN OSDI sync live; OSDI namespace shipped; SDK publish pipelines running; developer portal up",
+      "tracks": ["TR-C", "TR-F"],
+      "blocking_for": ["W-4"]
+    },
+    {
+      "id": "W-4",
+      "name": "International expansion",
+      "gate": "W-3 complete + per-country compliance review",
+      "exit_criteria": "CA/GB/AU rep-lookup live; cross-border schema; multi-country coalition delivery; TIGER 2026 monitoring + DOGE resilience playbook",
+      "tracks": ["TR-D"],
+      "blocking_for": []
+    }
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "clusters": [
+    {
+      "id": "C-verification",
+      "slug": "verification",
+      "name": "Verification",
+      "description": "ZK proof of constituency, mDL credential verification, Cross-Device Bridge, browser-side proving. The substrate that enables agentic provenance, accountability receipts, and reader-side verifiability.",
+      "shipped_substrate": [
+        "mDL Android OID4VP (HPKE + COSE_Sign1 + I1 SessionTranscript binding)",
+        "Three-tree ZK circuit (browser WASM via @voter-protocol/noir-prover)",
+        "Cross-Device Bridge (KV+SSE, HMAC, AES-256-GCM, 6 brutalist cycles)",
+        "Witness encryption (X25519 + BLAKE2b + XChaCha20-Poly1305)",
+        "858 Foundry tests on Scroll Sepolia"
+      ],
+      "completion_target": "Mainnet contracts + TEE deployment + tier honesty fixes",
+      "contributing_tasks": ["T3-6", "T5-3", "T10-1", "T10-2", "T10-5"]
+    },
+    {
+      "id": "C-reach",
+      "slug": "reach",
+      "name": "Reach",
+      "description": "24 boundary types per H3 cell, country-code-keyed protocol, $0 marginal district resolution. The capability that addresses the local-government void and 50,000-special-district gap no incumbent covers.",
+      "shipped_substrate": [
+        "Shadow Atlas with 24 boundary types, 94,166 districts, R-tree <50ms p95",
+        "R2-chunked distribution via Atlas Worker",
+        "Country-code-keyed DistrictRegistry contract",
+        "Federal congress-legislators data ingested"
+      ],
+      "completion_target": "State + local + special district officeholder data; CA/GB/AU rep-lookup live; mainnet DistrictRegistry; multi-jurisdiction routing at campaign layer",
+      "contributing_tasks": ["T3-1", "T3-2", "T3-3", "T3-4", "T3-5", "T3-6", "T3-7", "T3-8", "T3-9", "T3-10"]
+    },
+    {
+      "id": "C-composability",
+      "slug": "composability",
+      "name": "Composability",
+      "description": "Protocol-level identity portability, coalition aggregation, cross-border composition, cross-org reputation. The architectural feature app-layer competitors cannot retrofit.",
+      "shipped_substrate": [
+        "Identity commitment as shared BN254 field element across orgs",
+        "Tree 3 engagement leaf is protocol-global",
+        "Verification packet as portable artifact with SHA-256 attestation hash",
+        "orgNetworks + orgNetworkMembers tables with full CRUD"
+      ],
+      "completion_target": "Coalition aggregation API (currently 501); cross-org reputation portability query; cross-border campaign schema; shared supporter pools; coalition packet computation",
+      "contributing_tasks": ["T7-1", "T7-2", "T7-3", "T7-4", "T7-5", "T7-6", "T7-7", "T7-8", "T7-9"]
+    },
+    {
+      "id": "C-agentic",
+      "slug": "agentic-systems",
+      "name": "Agentic Systems",
+      "description": "Agent-as-civic-actor with cryptographic provenance. The categorical differentiator: every incumbent ships AI for the org user; Commons ships AI for the constituent side with ZK proof attached.",
+      "shipped_substrate": [
+        "3-phase agentic DM resolution (role discovery → identity → contact hunting)",
+        "Message writer agent with grounding-verified composition",
+        "Subject line agent (Gemini structured output)",
+        "AI evaluator with 5-model panel + EIP-712 multi-model signatures",
+        "Delegation Convex CRUD complete (FEATURES.DELEGATION=false, no executor)"
+      ],
+      "completion_target": "Delegation executor running; per-supporter bill alerts; agentic legislative monitoring across 24 boundary types; agent-as-civic-actor pricing model",
+      "contributing_tasks": ["T4-1", "T4-2", "T4-3", "T4-4", "T4-5", "T4-6", "T4-7", "T4-8", "T4-9", "T4-10"]
+    },
+    {
+      "id": "C-quality-signaling",
+      "slug": "quality-signaling",
+      "name": "Quality Signaling",
+      "description": "DebateMarket with LMSR + AI panel + EIP-712 signatures + position privacy ZK. Quality of reasoning, not just count. AI verdicts that are themselves verifiable.",
+      "shipped_substrate": [
+        "DebateMarket contract on Sepolia (~6,550 LOC tests)",
+        "LMSR via PRB-math SD59x18",
+        "AI panel evaluation via @voter-protocol/ai-evaluator",
+        "Commit-reveal trade scheme with ZK debate-weight proofs",
+        "Stance positions with identity-commitment-keyed nullifier dedup"
+      ],
+      "completion_target": "Auto-debate-spawn from campaign threshold; on-chain stake verification production; mainnet DebateMarket; TEE-attested AI panel; debate→tier promotion",
+      "contributing_tasks": ["T5-1", "T5-2", "T5-3", "T5-4", "T5-5", "T5-6", "T5-7", "T5-8", "T5-9", "T5-10"]
+    },
+    {
+      "id": "C-accountability",
+      "slug": "accountability",
+      "name": "Accountability",
+      "description": "Receipts with attestation hash, legislator scorecards, Merkle anchoring. Long-term-survivable artifacts that outlast the platform.",
+      "shipped_substrate": [
+        "accountabilityReceipts schema with attestationDigest, packetDigest, proofWeight, responses[]",
+        "Legislator scorecards (90-day rolling responsiveness + alignment + composite, methodology versioned)",
+        "SnapshotAnchor contract live on Sepolia (anchors Shadow Atlas root, not yet receipt batches)",
+        "Receipt Merkle tree function (buildAnchorMerkleTree, no caller)"
+      ],
+      "completion_target": "Receipt Merkle anchoring pipeline; mainnet anchor; constituent-side receipt access; browser verification UI; state-bill ingestion for non-federal scorecards",
+      "contributing_tasks": ["T6-1", "T6-2", "T6-3", "T6-4", "T6-5", "T6-6", "T6-7", "T6-8", "T6-9", "T6-10"]
+    },
+    {
+      "id": "C-coordination-integrity",
+      "slug": "coordination-integrity",
+      "name": "Coordination Integrity",
+      "description": "GDS, ALD, temporal entropy, burst velocity, CAI as mathematical anti-astroturf signals. Walker & Le (Socius 2023) peer-reviewed validation.",
+      "shipped_substrate": [
+        "All 5 metrics implemented in src/lib/server/verification-packet.ts",
+        "Anti-astroturf signal surfacing (burst velocity > 5 → amber warning)",
+        "K-anonymity floors throughout"
+      ],
+      "completion_target": "Substrate honesty (reputationTier writer, engagementTier cross-check) so CAI inputs reflect real engagement; coordination integrity time series; engagement tier histogram rendered",
+      "contributing_tasks": ["T10-1", "T10-2", "T10-4", "T10-10"]
+    },
+    {
+      "id": "C-reader-side",
+      "slug": "reader-side",
+      "name": "Reader-side UX",
+      "description": "Verification packet rendered for the staffer; /v/[hash] independent verification; reader dashboard. The category nobody else builds because every incumbent optimizes for the org buyer.",
+      "shipped_substrate": [
+        "/v/[hash] page with anonymized summary (dateRange only)",
+        "Campaign report HTML template with attestation hash referenced to REPORT-ATTESTATION-SPEC v1",
+        "/accountability/[id] DM public profile"
+      ],
+      "completion_target": "Full staffer-legible packet on /v/[hash]; in-browser attestation verification UI; DM office profile + email domain verification; reader dashboard; CRM integration feed; weekly digest",
+      "contributing_tasks": ["T8-1", "T8-2", "T8-3", "T8-4", "T8-5", "T8-7", "T8-8", "T8-9", "T8-10"]
+    },
+    {
+      "id": "C-data-sovereignty",
+      "slug": "data-sovereignty",
+      "name": "Data Sovereignty",
+      "description": "Owned Shadow Atlas at $0 marginal; PII-free architecture; outside the PE rollup cycle. Independence from the dying civic-data API layer (Google Civic, ProPublica, OpenSecrets, Congress.gov all dead).",
+      "shipped_substrate": [
+        "Shadow Atlas owned in-house with 24 boundary types",
+        "PII-free architecture (eliminated 2026-04-10; _pii.ts removed)",
+        "Frozen voter-protocol/* domain strings",
+        "Independent of Cicero monopoly"
+      ],
+      "completion_target": "Mainnet contracts (Sepolia today); TIGER 2026 monitoring + DOGE/Census resilience plan",
+      "contributing_tasks": ["T3-6", "T3-7", "T6-2"]
+    }
+  ]
+}

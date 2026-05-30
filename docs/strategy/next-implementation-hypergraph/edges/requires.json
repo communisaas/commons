@@ -1,0 +1,14 @@
+{
+  "_notes": "requires edges: soft prerequisite — target benefits from source landing first but doesn't strictly block. Used for sequencing intuition + cycle planning.",
+  "requires": [
+    {"source": "NEW-A-5", "target": "NEW-A-6", "kind": "informs", "reason": "Staging surfaces real failure modes that should be in the runbook"},
+    {"source": "NEW-A-6", "target": "NEW-A-7", "kind": "informs", "reason": "Runbook references CONGRESSIONAL flag behavior"},
+    {"source": "NEW-E-1", "target": "NEW-E-2", "kind": "co-located", "reason": "Both writer wire-ups touch /api/submissions/create — easier in one PR"},
+    {"source": "NEW-E-3", "target": "NEW-E-5", "kind": "informs", "reason": "AttestationVerifier preimage shape includes the debate field"},
+    {"source": "NEW-T6-1", "target": "NEW-T8-8", "kind": "informs", "reason": "Reader webhooks fire after anchored receipts; design depends on anchor cadence"},
+    {"source": "NEW-T8-1a", "target": "NEW-T6-9", "kind": "informs", "reason": "Inbound SES reply parser uses dmOfficeProfile to attribute"},
+    {"source": "NEW-T9-1", "target": "NEW-T9-4", "kind": "informs", "reason": "OSDI namespace exposed via published TS SDK"},
+    {"source": "NEW-T9-2", "target": "NEW-T9-4", "kind": "informs", "reason": "OSDI namespace exposed via published Python SDK"},
+    {"source": "NEW-T6-6", "target": "NEW-T6-1", "kind": "informs", "reason": "State-bill ingestion adds new receipt sources that anchor pipeline must handle"}
+  ]
+}

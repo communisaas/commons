@@ -1,0 +1,32 @@
+{
+  "tracks": [
+    {
+      "id": "TR-V",
+      "slug": "verify-substrate",
+      "name": "TR-V — Verify substrate honesty",
+      "description": "For each substrate item shipped in v1+v2 (T9-3 webhooks, T2-5 soft-bounce, T1-6 A/B picker, T6-9 vote-cast auto-detect, T5-1 auto-debate-spawn, NEW-E-1..5 wire-ups), trace the writer side and confirm it actually fires under realistic conditions. Each verify task either confirms honesty with file:line citations or surfaces a new fix task.",
+      "wave_ceiling": "W-0"
+    },
+    {
+      "id": "TR-D",
+      "slug": "drift-cleanup",
+      "name": "TR-D — Schema drift cleanup",
+      "description": "Catalog and remove orphaned fields / unmaintained denormalized counters / unused indexes. Memory already flags users.encryptedEmail/encryptedName as deprecated post-PII-elimination — full sweep across the 90 tables.",
+      "wave_ceiling": "W-1"
+    },
+    {
+      "id": "TR-S",
+      "slug": "seed-coverage",
+      "name": "TR-S — Seed coverage expansion",
+      "description": "Bring seed.ts up to date with v1+v2 substrate. 9 product-meaningful unseeded tables (orgWebhooks, accountabilityReceipts, bills+legislativeActions, scorecardSnapshots, agentTraces, apiKeys, smsBlasts, templateEndorsements, notifications) plus per-table example records demonstrating end-to-end flow.",
+      "wave_ceiling": "W-1"
+    },
+    {
+      "id": "TR-T",
+      "slug": "test-fixtures",
+      "name": "TR-T — Integration tests over substrate",
+      "description": "Vitest integration specs proving the substrate works end-to-end against seeded data. Catches regression of the substrate-honesty claims this hypergraph is verifying.",
+      "wave_ceiling": "W-2"
+    }
+  ]
+}

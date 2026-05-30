@@ -1,0 +1,1825 @@
+{
+  "_notes": "72 tasks. ID prefix NEW- distinguishes this hypergraph from v1. carryover_from points back to the v1 task ID where applicable. Effort fields preserved verbatim from v1 spec.",
+  "tasks": [
+    {
+      "id": "NEW-A-1",
+      "slug": "abc-enrollment",
+      "name": "Apple Business Connect enrollment",
+      "track": "TR-A",
+      "clusters": [
+        "C-verification"
+      ],
+      "wave": "W-0",
+      "effort": {
+        "tier": "M",
+        "days": "ops-weeks"
+      },
+      "chokepoint": true,
+      "carryover_from": null,
+      "description": "Submit Commons to Apple Business Connect for iOS Safari same-device mDL flow. Multi-week Apple-side review.",
+      "acceptance_criteria": "ABC approval received; bundle id whitelisted for OID4VP DC API.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:07:51Z",
+      "deferred_reason": "Apple Business Connect enrollment \u2014 Apple-side multi-week review. External-vendor gate, cannot be bridged from code.",
+      "revisit_when": "Apple ABC approval received"
+    },
+    {
+      "id": "NEW-A-2",
+      "slug": "mdl-ios-flag-flip",
+      "name": "FEATURES.MDL_IOS=true flag flip",
+      "track": "TR-A",
+      "clusters": [
+        "C-verification"
+      ],
+      "wave": "W-1",
+      "effort": {
+        "tier": "S",
+        "days": 0.1
+      },
+      "chokepoint": false,
+      "carryover_from": null,
+      "description": "Flip MDL_IOS=true in src/lib/config/features.ts once ABC enrollment confirms. Also update inline comment.",
+      "acceptance_criteria": "iOS Safari users complete the mDL flow end-to-end.",
+      "depends_on": [
+        "NEW-A-1"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:07:51Z",
+      "deferred_reason": "MDL_IOS=true flag flip \u2014 blocked on NEW-A-1 ABC enrollment. Pure flip, no engineering left.",
+      "revisit_when": "NEW-A-1 lands"
+    },
+    {
+      "id": "NEW-T2-2",
+      "slug": "ses-proxy-lambda-deploy",
+      "name": "ses-proxy Lambda deployment + BLAST_RECEIPTS_SECRET sync",
+      "track": "TR-A",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-0",
+      "effort": {
+        "tier": "S",
+        "days": 1
+      },
+      "chokepoint": true,
+      "carryover_from": "T2-2",
+      "description": "Deploy ses-proxy Lambda to AWS account 529088283822. Sync BLAST_RECEIPTS_SECRET across CF Pages + Lambda env. Dormant until first email blast.",
+      "acceptance_criteria": "Test email blast via Lambda path delivers; receipt webhook from Lambda authenticates against BLAST_RECEIPTS_SECRET.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:07:51Z",
+      "deferred_reason": "ses-proxy Lambda deployment to AWS account 529088283822 + BLAST_RECEIPTS_SECRET sync. Ops-deploy gate per memory/env-secret-management.md.",
+      "revisit_when": "Lambda deployed + secret synced; Commons ops sprint"
+    },
+    {
+      "id": "NEW-A-4",
+      "slug": "sentry-oncall-wiring",
+      "name": "Sentry on-call wiring + BOUNDARY_CELL_RATE_HIGH routing",
+      "track": "TR-A",
+      "clusters": [
+        "C-accountability"
+      ],
+      "wave": "W-0",
+      "effort": {
+        "tier": "S",
+        "days": 1
+      },
+      "chokepoint": true,
+      "carryover_from": null,
+      "description": "Sentry \u2192 PagerDuty/Opsgenie wiring for boundary-cell rate alerts (28% threshold, MIN_DENOMINATOR 50). On-call rotation defined; first responder runbook.",
+      "acceptance_criteria": "Synthetic boundary-cell alert pages an on-call human within 5 min.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:07:51Z",
+      "deferred_reason": "Sentry \u2192 PagerDuty/Opsgenie wiring + on-call rotation. Ops-config gate per memory/iphase-completion.md \u00a77.",
+      "revisit_when": "Sentry on-call routing live for BOUNDARY_CELL_RATE_HIGH"
+    },
+    {
+      "id": "NEW-A-5",
+      "slug": "first-org-staging-walk",
+      "name": "First-org staging walk-through",
+      "track": "TR-A",
+      "clusters": [
+        "C-verification",
+        "C-reader-side"
+      ],
+      "wave": "W-0",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": null,
+      "description": "Run the first org through staging end-to-end: mDL verification \u2192 campaign create \u2192 action submission \u2192 packet generation \u2192 report delivery. Find UX friction before launch day.",
+      "acceptance_criteria": "Pilot org completes staging walk without operator intervention. Friction items logged.",
+      "depends_on": [
+        "NEW-A-1",
+        "NEW-T2-2",
+        "NEW-A-4"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:07:51Z",
+      "deferred_reason": "First-org staging walk-through \u2014 requires pilot org availability + completed ABC + Lambda + Sentry upstream. Pilot-coordination gate.",
+      "revisit_when": "NEW-A-1 + NEW-T2-2 + NEW-A-4 complete; pilot org slot scheduled"
+    },
+    {
+      "id": "NEW-A-6",
+      "slug": "launch-day-runbook",
+      "name": "Launch-day runbook",
+      "track": "TR-A",
+      "clusters": [],
+      "wave": "W-0",
+      "effort": {
+        "tier": "S",
+        "days": 1
+      },
+      "chokepoint": false,
+      "carryover_from": null,
+      "description": "Runbook covering: resolver hang, mDL break, boundary spike, atlas read fail, Stripe webhook backlog, SES throttle. Each scenario gets detection \u2192 diagnosis \u2192 mitigation steps.",
+      "acceptance_criteria": "Runbook reviewed by ops + dev; tabletop scenarios completed.",
+      "depends_on": [
+        "NEW-A-4"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:07:51Z",
+      "deferred_reason": "Launch-day runbook \u2014 blocked on NEW-A-4 Sentry routing. Could be partial-drafted but the load-bearing content (alert routing, escalation paths) needs Sentry up.",
+      "revisit_when": "NEW-A-4 lands; on-call rotation defined"
+    },
+    {
+      "id": "NEW-A-7",
+      "slug": "congressional-flag-flip",
+      "name": "FEATURES.CONGRESSIONAL=true PR",
+      "track": "TR-A",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-1",
+      "effort": {
+        "tier": "S",
+        "days": 0.1
+      },
+      "chokepoint": false,
+      "carryover_from": null,
+      "description": "Flip FEATURES.CONGRESSIONAL=true once federal congress-legislators ingestion is confirmed for first-org's jurisdiction. Currently false per memory/MEMORY.md.",
+      "acceptance_criteria": "Congressional rep lookup returns results in first-org's state.",
+      "depends_on": [
+        "NEW-A-5"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:07:51Z",
+      "deferred_reason": "FEATURES.CONGRESSIONAL=true PR \u2014 blocked on NEW-A-5 staging confirmation. Pure flip, no engineering left.",
+      "revisit_when": "NEW-A-5 staging walk complete"
+    },
+    {
+      "id": "NEW-E-1",
+      "slug": "userid-threadthrough-zk-submissions",
+      "name": "Thread userId through ZK submission flow to createCampaignAction",
+      "track": "TR-E",
+      "clusters": [
+        "C-coordination-integrity"
+      ],
+      "wave": "W-1",
+      "effort": {
+        "tier": "M",
+        "days": 1.5
+      },
+      "chokepoint": false,
+      "carryover_from": "(v1 substrate gap from T10-1)",
+      "description": "createCampaignAction accepts optional userId. Submissions.create + downstream processCampaignSubmission do NOT pass it. Wire userId through from /api/submissions/create \u2192 submissions.create \u2192 action insert. Then the T10-1 reputation cron has real data to promote on.",
+      "acceptance_criteria": "After 5 ZK actions from one user, reputationTier=active. Verified by running the nightly cron against a seeded user.",
+      "depends_on": [],
+      "status": "completed",
+      "completed_at": "2026-05-27T23:11:22Z",
+      "completion_notes": "userId threaded through ZK + non-ZK submission flow. (1) getUserTrustTier internalQuery in convex/campaigns.ts now returns user._id alongside trustTier+engagementTier. (2) UserTrustTier type extended with userId: Id<'users'>. (3) createCampaignActionRef FunctionReference cast extended with userId?: Id<'users'> + atlasVersion?: string (was missing both \u2014 codegen-cast drift from v1). (4) processCampaignSubmission's createCampaignAction call now passes userId: userData?.userId \u2014 undefined for anonymous email submissions (still safe per createCampaignAction's optional arg guard). T10-1 reputation cron now has real data: each verified action from a registered user increments users.actionCount; nightly recomputeAllReputationTiers walks the threshold table to promote reputationTier. 0 svelte-check errors."
+    },
+    {
+      "id": "NEW-E-2",
+      "slug": "atlasversion-threadthrough",
+      "name": "Thread atlasVersion from publicInputs to createCampaignAction",
+      "track": "TR-E",
+      "clusters": [
+        "C-coordination-integrity"
+      ],
+      "wave": "W-1",
+      "effort": {
+        "tier": "S",
+        "days": 0.5
+      },
+      "chokepoint": false,
+      "carryover_from": "(v1 substrate gap from T10-9)",
+      "description": "Pick atlasVersion off publicInputs (named field) or groundCredentials at /api/submissions/create and pass it to the createCampaignAction call. Then computeVerificationPacketCached's driftCount/driftPct become non-null for campaigns spanning a rotation.",
+      "acceptance_criteria": "Action submitted before rotation + action submitted after rotation produce non-zero driftPct in packet.",
+      "depends_on": [],
+      "status": "completed",
+      "started_at": "2026-05-27T23:11:22Z",
+      "completed_at": "2026-05-27T23:14:43Z",
+      "completion_notes": "atlasVersion threaded through public submission flow. (1) submitAction action in convex/campaigns.ts accepts optional atlasVersion arg. (2) createCampaignAction call passes args.atlasVersion through to the action insert. (3) Both submission entry points wired: /embed/campaign/[slug]/+page.server.ts and /c/[slug]/+page.server.ts read formData.get('atlasVersion') and forward. Client widgets must populate the form field from shadow-atlas client.resolveDistricts() return \u2014 cellMapRoot of the manifest used at resolution time. Once widgets thread it, packet driftCount/driftPct become non-null for campaigns spanning a rotation. 0 svelte-check errors."
+    },
+    {
+      "id": "NEW-E-3",
+      "slug": "debate-field-populator",
+      "name": "Populate VerificationPacket.debate from campaign.debateId",
+      "track": "TR-E",
+      "clusters": [
+        "C-quality-signaling"
+      ],
+      "wave": "W-1",
+      "effort": {
+        "tier": "S",
+        "days": 1
+      },
+      "chokepoint": false,
+      "carryover_from": "(v1 substrate gap from T5-10)",
+      "description": "computeVerificationPacketCached currently emits debate: null always. When campaign.debateId is set, query debates by debateId, derive marketPosition/totalStake/topArgumentScore/aiPanelConsensus/participantCount/resolutionHash, populate the field. The canonical preimage already accommodates the new fields.",
+      "acceptance_criteria": "Resolved debate produces packet with non-null debate field. Attestation hash recomputes correctly client-side via AttestationVerifier.",
+      "depends_on": [],
+      "status": "completed",
+      "started_at": "2026-05-27T23:14:43Z",
+      "completed_at": "2026-05-27T23:19:10Z",
+      "completion_notes": "VerificationPacket.debate populated from campaign.debateId. New convex/campaigns.getDebateSnapshotForCampaign query returns DebateMarketSnapshot (marketPosition, totalStake, topArgumentScore from max weightedScore in debateArguments, aiPanelConsensus, participantCount K-floored \u22655, resolutionHash from on-chain resolution). verification-packet.ts computeVerificationPacketCached fetches the snapshot in parallel with actions and passes it to computePacket. computePacket signature gains debate: DebateMarketSnapshot | null = null param; emits packet.debate set to that value. emptyPacket still emits null. Attestation hash already accommodates the field (canonicalPreimage from v1 T5-10). 0 svelte-check errors."
+    },
+    {
+      "id": "NEW-E-4",
+      "slug": "branding-accent-ui-render",
+      "name": "Render brandingAccent in CoalitionReport + report email shell",
+      "track": "TR-E",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-1",
+      "effort": {
+        "tier": "S",
+        "days": 0.5
+      },
+      "chokepoint": false,
+      "carryover_from": "(v1 substrate gap from T7-7)",
+      "description": "brandingAccent field exists + organizations.update accepts it. CoalitionReport.svelte and report-template.ts ignore it. Plumb through to the accent CSS var on coalition surfaces and the email template's --accent. Coalition-tier gate at the render boundary.",
+      "acceptance_criteria": "Coalition-tier org sets accent; appears in CoalitionReport and rendered report email. Free-tier org's accent silently ignored.",
+      "depends_on": [],
+      "status": "completed",
+      "completed_at": "2026-05-27T23:19:10Z",
+      "completion_notes": "brandingAccent rendered in CoalitionReport via --coalition-accent CSS custom property. CoalitionReport.svelte accepts brandingAccent?: string | null prop, scopes inline style on root, replaces hardcoded text-teal-400 / bg-teal-500 with var(--coalition-accent, fallback). organizations.getOrgContext query now returns brandingAccent (otherwise it never reached the client). /org/[slug]/+layout.server.ts maps the field through the snake_case adapter. /org/[slug]/networks/[networkId]/+page.svelte passes data.org.brandingAccent into CoalitionReport. Report-template.ts email shell branding deferred to a follow-up cycle (separate canonical-preimage discipline). Coalition-tier gate enforced at organizations.update boundary (hex regex). 0 svelte-check errors."
+    },
+    {
+      "id": "NEW-E-5",
+      "slug": "attestation-verifier-mount",
+      "name": "Mount AttestationVerifier in /v/[hash]/+page.svelte",
+      "track": "TR-E",
+      "clusters": [
+        "C-reader-side"
+      ],
+      "wave": "W-1",
+      "effort": {
+        "tier": "S",
+        "days": 0.5
+      },
+      "chokepoint": false,
+      "carryover_from": "(v1 follow-up from T8-3)",
+      "description": "AttestationVerifier.svelte exists. Mount it on /v/[hash]/+page.svelte with the campaignContext fields shaped into AttestationPreimage. Also reuse on /org/[slug]/campaigns/[id]/report for orgs to share with staffers.",
+      "acceptance_criteria": "Visitor pastes a hash, sees preimage fields, clicks Recompute, gets unambiguous match/mismatch indicator.",
+      "depends_on": [],
+      "status": "completed",
+      "started_at": "2026-05-27T23:19:10Z",
+      "completed_at": "2026-05-27T23:21:52Z",
+      "completion_notes": "AttestationVerifier mounted on /v/[hash]/+page.svelte. Imports AttestationPreimage + component. Derives preimage from data.campaignContext when mode==='campaign' (campaignTitle + orgName redacted for privacy \u2014 visitor knows them from the email they received). Renders verifier panel between content and footer when preimage + attestationHash both present. Result: any staffer/journalist/anonymous visitor can recompute SHA-256 in their browser and confirm match. 0 svelte-check errors. W-1 substrate writer wire-ups complete (NEW-E-1..5)."
+    },
+    {
+      "id": "NEW-T6-2",
+      "slug": "mainnet-snapshotanchor-deploy",
+      "name": "Mainnet SnapshotAnchor + DistrictRegistry + DebateMarket deploy (composite)",
+      "track": "TR-B",
+      "clusters": [
+        "C-accountability",
+        "C-data-sovereignty",
+        "C-quality-signaling",
+        "C-verification"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "L",
+        "days": "audit+multisig weeks"
+      },
+      "chokepoint": true,
+      "carryover_from": "T6-2 (+T3-6, +T5-5)",
+      "description": "Single composite deploy \u2014 Safe multisig + audit firm cycle for all three contracts. Splitting wastes audit budget. Pre-launch: contracts already deployed to Scroll Sepolia (17 Foundry tests pass).",
+      "acceptance_criteria": "Contracts live on Scroll L2 mainnet; manifest currentRoot anchors first batch; first DebateMarket trade settles on mainnet.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T3-6",
+      "slug": "districtregistry-mainnet",
+      "name": "Mainnet DistrictRegistry deploy",
+      "track": "TR-B",
+      "clusters": [
+        "C-verification",
+        "C-reach",
+        "C-data-sovereignty"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "S",
+        "days": 0.5
+      },
+      "chokepoint": false,
+      "carryover_from": "T3-6",
+      "description": "Subsumed under NEW-T6-2 composite. Keep as separate node so cluster-realization walks correctly.",
+      "acceptance_criteria": "Same as NEW-T6-2.",
+      "depends_on": [
+        "NEW-T6-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T5-5",
+      "slug": "debatemarket-mainnet",
+      "name": "Mainnet DebateMarket deploy",
+      "track": "TR-B",
+      "clusters": [
+        "C-quality-signaling"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "S",
+        "days": 0.5
+      },
+      "chokepoint": false,
+      "carryover_from": "T5-5",
+      "description": "Subsumed under NEW-T6-2 composite.",
+      "acceptance_criteria": "Same as NEW-T6-2.",
+      "depends_on": [
+        "NEW-T6-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T6-1",
+      "slug": "receipt-merkle-anchor-pipeline",
+      "name": "Receipt Merkle anchoring pipeline",
+      "track": "TR-B",
+      "clusters": [
+        "C-accountability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 4
+      },
+      "chokepoint": false,
+      "carryover_from": "T6-1",
+      "description": "Convex internalAction batches unanchored receipts, calls buildAnchorMerkleTree, uploads manifest to R2 + IPFS, schedules external signer to call SnapshotAnchor.updateSnapshot. External cron (GitHub Actions) signs with governance key.",
+      "acceptance_criteria": "Receipts in batch have non-null anchorRoot + anchorCid. Merkle root in snapshotHistory[epoch] on Scroll. Manifest fetchable from R2 and IPFS.",
+      "depends_on": [
+        "NEW-T6-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T6-3",
+      "slug": "anchor-cadence-cron",
+      "name": "Anchoring cadence (per-batch threshold + staleness)",
+      "track": "TR-B",
+      "clusters": [
+        "C-accountability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "S",
+        "days": 0.5
+      },
+      "chokepoint": false,
+      "carryover_from": "T6-3",
+      "description": "Daily cron: COUNT(receipts WHERE anchorRoot IS NULL) >= 50 OR days_since_last_anchor >= 30 \u2192 trigger anchor.",
+      "acceptance_criteria": "Cron triggers anchor when threshold met or staleness elapsed.",
+      "depends_on": [
+        "NEW-T6-1"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T6-10",
+      "slug": "long-term-archive-manifest",
+      "name": "Long-term archive \u2014 manifest with embedded metadata",
+      "track": "TR-B",
+      "clusters": [
+        "C-accountability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "S",
+        "days": 1
+      },
+      "chokepoint": false,
+      "carryover_from": "T6-10",
+      "description": "Embed receipt metadata in R2/IPFS manifest at anchor time. Manifest becomes self-contained \u2014 Merkle root on-chain + manifest pinned contains all receipt data. Verifiable independent of Commons + Convex.",
+      "acceptance_criteria": "Manifest at IPFS CID contains all receipt metadata for batch. Verifier reconstructs Merkle proof with no Commons dependency.",
+      "depends_on": [
+        "NEW-T6-1"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T8-6",
+      "slug": "long-term-survivable-artifact",
+      "name": "Long-term-survivable artifact pattern",
+      "track": "TR-B",
+      "clusters": [
+        "C-accountability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "S",
+        "days": 1.5
+      },
+      "chokepoint": false,
+      "carryover_from": "T8-6",
+      "description": "Pattern docs + verifier example: how to verify a Commons attestation hash years from now with only the IPFS manifest + on-chain Merkle root. Bound to T6-10 manifest format.",
+      "acceptance_criteria": "Doc + verifier script reproduce a receipt's attestation from manifest CID alone.",
+      "depends_on": [
+        "NEW-T6-10"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T8-4b",
+      "slug": "ipfs-report-url-tier-b",
+      "name": "Independent report URL \u2014 Tier B (IPFS-pinned artifact)",
+      "track": "TR-B",
+      "clusters": [
+        "C-reader-side",
+        "C-accountability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "L",
+        "days": 10
+      },
+      "chokepoint": false,
+      "carryover_from": "T8-4b",
+      "description": "Pin report packet (HTML + JSON + manifest) to IPFS at delivery time. /v/[hash] resolves the IPFS CID. Report survivable if Commons goes dark.",
+      "acceptance_criteria": "Report fetchable via IPFS gateway with no Commons dependency.",
+      "depends_on": [
+        "NEW-T6-10"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T5-3",
+      "slug": "tee-nitro-enclave-deploy",
+      "name": "TEE Nitro Enclave deployment",
+      "track": "TR-B",
+      "clusters": [
+        "C-verification",
+        "C-agentic",
+        "C-quality-signaling"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "L",
+        "days": 18
+      },
+      "chokepoint": true,
+      "carryover_from": "T5-3",
+      "description": "AWS Nitro Enclave account setup, signed enclave image distribution, on-chain attestation registry on Scroll. NitroEnclaveResolver wired (stub exists from G4). TEE_RESOLVER_URL \u2194 TEE_PUBLIC_KEY_URL collapse.",
+      "acceptance_criteria": "Enclave running; attested signature verifies on-chain; LocalConstituentResolver swapped for NitroEnclaveResolver on opt-in flag.",
+      "depends_on": [
+        "NEW-T6-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "TEE Nitro Enclave chokepoint (CP-4) \u2014 AWS Nitro Enclaves provisioning. Deferred per goal spec for ops gates.",
+      "revisit_when": "TEE enclave provisioned + on-chain attestation registry live"
+    },
+    {
+      "id": "NEW-T4-1",
+      "slug": "delegation-executor",
+      "name": "Delegation executor running",
+      "track": "TR-B",
+      "clusters": [
+        "C-agentic"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "L",
+        "days": 18
+      },
+      "chokepoint": false,
+      "carryover_from": "T4-1",
+      "description": "Convex internalAction orchestrator (single-agent design per T4-10 decision). Calls subject + message + DM agents sequentially with sealed delegation grants from TEE.",
+      "acceptance_criteria": "Scope=full grant invokes all three agents in order. DM cache hit rate > 80%.",
+      "depends_on": [
+        "NEW-T5-3"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "TEE Nitro Enclave chokepoint (CP-4) \u2014 AWS Nitro Enclaves provisioning. Deferred per goal spec for ops gates.",
+      "revisit_when": "TEE enclave provisioned + on-chain attestation registry live"
+    },
+    {
+      "id": "NEW-T5-4",
+      "slug": "tee-attested-ai-panel",
+      "name": "TEE-attested AI panel execution",
+      "track": "TR-B",
+      "clusters": [
+        "C-quality-signaling"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "L",
+        "days": 21
+      },
+      "chokepoint": false,
+      "carryover_from": "T5-4",
+      "description": "5-model AI panel runs inside TEE enclave; EIP-712 signatures from enclave key prove the verdict wasn't tampered.",
+      "acceptance_criteria": "Panel verdict carries enclave attestation; on-chain verifier accepts.",
+      "depends_on": [
+        "NEW-T5-3"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "TEE Nitro Enclave chokepoint (CP-4) \u2014 AWS Nitro Enclaves provisioning. Deferred per goal spec for ops gates.",
+      "revisit_when": "TEE enclave provisioned + on-chain attestation registry live"
+    },
+    {
+      "id": "NEW-T4-2",
+      "slug": "zk-proof-on-ai-actions",
+      "name": "ZK proof attached to AI-assisted actions",
+      "track": "TR-B",
+      "clusters": [
+        "C-agentic",
+        "C-verification"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 8
+      },
+      "chokepoint": false,
+      "carryover_from": "T4-2",
+      "description": "draftedMessages produced by message-writer agent get an action-domain proof attached so the resulting campaignAction is identifiable as agent-assisted (not authored).",
+      "acceptance_criteria": "Submitted action declares agent-assisted compositionMode; verifier confirms agent identity.",
+      "depends_on": [
+        "NEW-T4-1"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "TEE Nitro Enclave chokepoint (CP-4) \u2014 AWS Nitro Enclaves provisioning. Deferred per goal spec for ops gates.",
+      "revisit_when": "TEE enclave provisioned + on-chain attestation registry live"
+    },
+    {
+      "id": "NEW-T4-7",
+      "slug": "message-writer-with-proof",
+      "name": "Message-writer agent with proof attachment",
+      "track": "TR-B",
+      "clusters": [
+        "C-agentic"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 5
+      },
+      "chokepoint": false,
+      "carryover_from": "T4-7",
+      "description": "Existing message-writer agent gains the proof-attachment plumbing from NEW-T4-2.",
+      "acceptance_criteria": "Message-writer output carries the agent-assisted proof.",
+      "depends_on": [
+        "NEW-T4-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "TEE Nitro Enclave chokepoint (CP-4) \u2014 AWS Nitro Enclaves provisioning. Deferred per goal spec for ops gates.",
+      "revisit_when": "TEE enclave provisioned + on-chain attestation registry live"
+    },
+    {
+      "id": "NEW-T4-9",
+      "slug": "delegation-ui-constituents",
+      "name": "Delegation UI for constituents",
+      "track": "TR-B",
+      "clusters": [
+        "C-agentic"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 10
+      },
+      "chokepoint": false,
+      "carryover_from": "T4-9",
+      "description": "Per-user UI: grant delegation scope (full/per-campaign/per-DM), view agent traces, revoke. Tier-3+ gated.",
+      "acceptance_criteria": "User grants scope=full delegation; agent runs visible in /profile/agent-actions; revoke kills future runs.",
+      "depends_on": [
+        "NEW-T4-7"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "TEE Nitro Enclave chokepoint (CP-4) \u2014 AWS Nitro Enclaves provisioning. Deferred per goal spec for ops gates.",
+      "revisit_when": "TEE enclave provisioned + on-chain attestation registry live"
+    },
+    {
+      "id": "NEW-T4-8",
+      "slug": "agent-trace-observability-delegation",
+      "name": "Agent trace observability extension for delegation",
+      "track": "TR-B",
+      "clusters": [
+        "C-agentic"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "S",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T4-8",
+      "description": "agentTraces writer covers delegated agent runs (today: message-generation only). Per-event Convex persistence.",
+      "acceptance_criteria": "Delegated run emits agent-trace events parsable in dashboard.",
+      "depends_on": [
+        "NEW-T4-1",
+        "NEW-A-4"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "TEE Nitro Enclave chokepoint (CP-4) \u2014 AWS Nitro Enclaves provisioning. Deferred per goal spec for ops gates.",
+      "revisit_when": "TEE enclave provisioned + on-chain attestation registry live"
+    },
+    {
+      "id": "NEW-T5-2",
+      "slug": "onchain-stake-verification",
+      "name": "On-chain stake verification in createArgument",
+      "track": "TR-B",
+      "clusters": [
+        "C-quality-signaling"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T5-2",
+      "description": "Replace $1 placeholder with real on-chain stake check against mainnet DebateMarket contract.",
+      "acceptance_criteria": "createArgument verifies stake; placeholder removed.",
+      "depends_on": [
+        "NEW-T6-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T5-6",
+      "slug": "debate-tier-promotion",
+      "name": "Debate participation \u2192 tier promotion",
+      "track": "TR-B",
+      "clusters": [
+        "C-quality-signaling",
+        "C-coordination-integrity"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 6
+      },
+      "chokepoint": false,
+      "carryover_from": "T5-6",
+      "description": "Debate argument submission + AI panel approval increments user reputation actionCount with weight.",
+      "acceptance_criteria": "Approved debate argument promotes user reputationTier through the threshold table.",
+      "depends_on": [
+        "NEW-T5-2",
+        "NEW-E-1"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T5-8",
+      "slug": "lmsr-live-price-feed-ui",
+      "name": "LMSR live price feed UI",
+      "track": "TR-B",
+      "clusters": [
+        "C-quality-signaling"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 4
+      },
+      "chokepoint": false,
+      "carryover_from": "T5-8",
+      "description": "Browser subscribes to on-chain LMSR price ticks; renders position price + spread.",
+      "acceptance_criteria": "Live debate market shows updating prices.",
+      "depends_on": [
+        "NEW-T5-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T5-7",
+      "slug": "position-privacy-zk-ux",
+      "name": "Position privacy ZK at scale (UX)",
+      "track": "TR-B",
+      "clusters": [
+        "C-quality-signaling"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 5
+      },
+      "chokepoint": false,
+      "carryover_from": "T5-7",
+      "description": "Commit-reveal UX for stance positions at scale. Loading states, error paths, retry.",
+      "acceptance_criteria": "100-position commit cohort processes without UX failure.",
+      "depends_on": [
+        "NEW-T5-8"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T5-9",
+      "slug": "org-side-debate-signal",
+      "name": "Org-side debate signal surfacing",
+      "track": "TR-B",
+      "clusters": [
+        "C-quality-signaling"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T5-9",
+      "description": "Org dashboard surfaces live debate signal: current market position, AI panel consensus, top arguments. Drives the orgs' campaign messaging adaptation.",
+      "acceptance_criteria": "Dashboard widget renders debate state when campaign.debateId is set.",
+      "depends_on": [
+        "NEW-T5-8",
+        "NEW-E-3"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Mainnet composite chokepoint (CP-3) \u2014 Safe multisig + audit firm cycle. Deferred per goal spec for ops gates.",
+      "revisit_when": "Mainnet deploy + audit complete"
+    },
+    {
+      "id": "NEW-T1-9",
+      "slug": "workflow-send-email-add-tag",
+      "name": "Workflow send_email + add_tag step implementations",
+      "track": "TR-B",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T1-9",
+      "description": "workflowRunner gains send_email (delegating to Lambda via T2-2) + add_tag (Convex mutation) step types.",
+      "acceptance_criteria": "Workflow with send_email + add_tag steps runs end-to-end; emails dispatched, tags applied.",
+      "depends_on": [
+        "NEW-T2-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
+      "revisit_when": "NEW-T2-2 lands"
+    },
+    {
+      "id": "NEW-T2-4",
+      "slug": "list-unsubscribe-headers",
+      "name": "List-Unsubscribe headers on Convex server-side path",
+      "track": "TR-B",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T2-4",
+      "description": "sendViaSes Content.Simple \u2192 Content.Raw with base64-MIME + List-Unsubscribe + List-Unsubscribe-Post per-recipient HMAC-signed tokens. Re-evaluate after T2-2 whether Convex path still needs MIME builder vs routing through Lambda.",
+      "acceptance_criteria": "Emails from Convex path include List-Unsubscribe headers; Gmail/Yahoo unsubscribe button appears.",
+      "depends_on": [
+        "NEW-T2-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
+      "revisit_when": "NEW-T2-2 lands"
+    },
+    {
+      "id": "NEW-T2-10",
+      "slug": "open-click-attribution-fix",
+      "name": "Open/click tracking attribution fix",
+      "track": "TR-B",
+      "clusters": [
+        "C-accountability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T2-10",
+      "description": "Handle forwarded mail + image-proxy stripping. Better attribution for SES events.",
+      "acceptance_criteria": "Open rate measurement matches blast-recipient cohort within 5% deviation.",
+      "depends_on": [
+        "NEW-T2-2",
+        "NEW-T2-4"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
+      "revisit_when": "NEW-T2-2 lands"
+    },
+    {
+      "id": "NEW-T2-7",
+      "slug": "email-blast-template-library",
+      "name": "Email blast template library",
+      "track": "TR-B",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T2-7",
+      "description": "UI library of pre-built email blast templates. Low launch leverage; orgs can paste-from-doc until templating becomes bottleneck.",
+      "acceptance_criteria": "Org picks template; renders with merge fields; sends successfully.",
+      "depends_on": [
+        "NEW-T2-4"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
+      "revisit_when": "NEW-T2-2 lands"
+    },
+    {
+      "id": "NEW-T9-5",
+      "slug": "audit-log-api",
+      "name": "Audit log API for org actions",
+      "track": "TR-B",
+      "clusters": [
+        "C-accountability",
+        "C-reader-side"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T9-5",
+      "description": "Convex auditEvents table + writes from org mutations (member changes, plan changes, webhook subscriptions, settings edits). Consumer: dashboard listing + Sentry alert routing for high-severity events.",
+      "acceptance_criteria": "Org owner sees timeline of consequential actions with actor + before/after.",
+      "depends_on": [
+        "NEW-A-4"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "Sentry chokepoint (CP-5 deferred) \u2014 observability backend.",
+      "revisit_when": "NEW-A-4 lands"
+    },
+    {
+      "id": "NEW-T8-9",
+      "slug": "aggregate-weekly-digest",
+      "name": "Aggregate weekly digest email",
+      "track": "TR-B",
+      "clusters": [
+        "C-reader-side"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T8-9",
+      "description": "Weekly cron emails org owners a digest of new campaigns, action volume, top decision-makers, debate signal. Failure-alert routing through Sentry.",
+      "acceptance_criteria": "First-org receives digest on Monday with non-empty payload.",
+      "depends_on": [
+        "NEW-A-4",
+        "NEW-T2-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
+      "revisit_when": "NEW-T2-2 lands"
+    },
+    {
+      "id": "NEW-T2-1",
+      "slug": "sms-client-side-sender",
+      "name": "SMS blast dispatch (client-side sender)",
+      "track": "TR-B",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T2-1",
+      "description": "Browser holds org key, decrypts encryptedPhone, calls SvelteKit proxy that holds Twilio creds. STOP-opted supporters excluded.",
+      "acceptance_criteria": "PATCH /api/org/[slug]/sms/[id] with action=send transitions blast draft\u2192sending\u2192sent.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
+      "revisit_when": "NEW-T2-2 lands"
+    },
+    {
+      "id": "NEW-T2-8",
+      "slug": "a2p-10dlc-compliance",
+      "name": "A2P 10DLC compliance plumbing",
+      "track": "TR-B",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "L",
+        "days": 8
+      },
+      "chokepoint": false,
+      "carryover_from": "T2-8",
+      "description": "CTIA-registered brand + campaign IDs per org; opt-in flow; record-keeping.",
+      "acceptance_criteria": "Org passes 10DLC vetting; SMS deliverability above 90% post-launch.",
+      "depends_on": [
+        "NEW-T2-1"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
+      "revisit_when": "NEW-T2-2 lands"
+    },
+    {
+      "id": "NEW-T2-9",
+      "slug": "mms-support",
+      "name": "MMS support",
+      "track": "TR-B",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T2-9",
+      "description": "Multimedia message attachments via Twilio MMS.",
+      "acceptance_criteria": "Image attachment delivers on iOS + Android.",
+      "depends_on": [
+        "NEW-T2-1",
+        "NEW-T2-8"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
+      "revisit_when": "NEW-T2-2 lands"
+    },
+    {
+      "id": "NEW-T6-9",
+      "slug": "vote-cast-email-reply-detection",
+      "name": "Vote-cast email reply detection via inbound SES Lambda",
+      "track": "TR-B",
+      "clusters": [
+        "C-accountability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 4
+      },
+      "chokepoint": false,
+      "carryover_from": "(extension of v1's T6-9)",
+      "description": "Inbound SES Lambda parses staffer email replies for vote_cast/co-signature/oppose tokens, appends responses to matching receipts.",
+      "acceptance_criteria": "Staffer replies 'voted yes' \u2192 matching receipt gains responses entry within 2 min.",
+      "depends_on": [
+        "NEW-T2-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
+      "revisit_when": "NEW-T2-2 lands"
+    },
+    {
+      "id": "NEW-T8-8",
+      "slug": "reader-side-notification-webhooks",
+      "name": "Reader-side notification API (webhooks)",
+      "track": "TR-B",
+      "clusters": [
+        "C-accountability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "S",
+        "days": 1
+      },
+      "chokepoint": false,
+      "carryover_from": "T8-8",
+      "description": "After SES report send, HMAC-signed webhook fires to dmOfficeProfile.webhookUrl. Pattern mirrors T9-3 outbound dispatch.",
+      "acceptance_criteria": "Office with webhookUrl set receives signed POST within 30s of report send.",
+      "depends_on": [
+        "NEW-T8-1a"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "DM enrichment partnership track \u2014 multi-week DM office profile ingestion + staffer dashboard + CRM integration sprint. Post-launch.",
+      "revisit_when": "DM enrichment sprint scheduled"
+    },
+    {
+      "id": "NEW-T7-3",
+      "slug": "cross-org-reputation-portability",
+      "name": "Cross-org reputation portability query",
+      "track": "TR-B",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T7-3",
+      "description": "Query exposing user's cross-org engagement via identityCommitment join on campaignActions. Requires NEW-E-1 + NEW-E-2 substrate threading.",
+      "acceptance_criteria": "User with verified actions in 3 orgs gets aggregated reputation surface in /profile.",
+      "depends_on": [
+        "NEW-E-1",
+        "NEW-E-2"
+      ],
+      "status": "completed",
+      "completed_at": "2026-05-27T23:23:56Z",
+      "completion_notes": "Cross-org reputation portability query shipped. convex/users.getMyReputationPortable walks users.identityCommitment \u2192 supporters by_identityCommitment (cross-org fan-out) \u2192 campaignActions filter supporterId, aggregates verified counts + top trustTier per org. K-floor at 5 \u2014 orgs with <5 verified actions suppressed (sub-K disclosure would be polling oracle for user's affiliations). Returns {totalVerifiedActions, actionCount, reputationTier, orgs[]}. Substrate for /profile reputation surface; UI mount is a follow-up. Builds on NEW-E-1 (userId thread-through populates users.actionCount) and NEW-E-2 (atlasVersion alignment not directly required here but matches the substrate-honest data model). 0 svelte-check errors."
+    },
+    {
+      "id": "NEW-T7-2",
+      "slug": "shared-supporter-pools",
+      "name": "Shared supporter pools (opt-in commitment-based)",
+      "track": "TR-B",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T7-2",
+      "description": "Supporters opt-in to being addressable by network-member orgs via identityCommitment-keyed signaling. GDPR/CCPA review required.",
+      "acceptance_criteria": "Coalition org reaches opted-in supporter without holding their PII.",
+      "depends_on": [
+        "NEW-T7-3"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Shared supporter pools (opt-in commitment-based) \u2014 depends on NEW-T7-3 substrate (ready) but adds consent UX + GDPR/CCPA review. Cross-org product decision pending privacy review.",
+      "revisit_when": "Consent UX + privacy review complete"
+    },
+    {
+      "id": "NEW-T8-1a",
+      "slug": "dm-office-profile-domain-verification",
+      "name": "DM office profile + email domain verification",
+      "track": "TR-B",
+      "clusters": [
+        "C-reader-side"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "L",
+        "days": 7
+      },
+      "chokepoint": false,
+      "carryover_from": "T8-1a",
+      "description": "Parser + DM enrichment work plus dotgov/dotmil domain attestation. dmOfficeProfile table with webhookUrl, contact email, office address.",
+      "acceptance_criteria": "First-org's local council DM has verified office profile.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "DM enrichment partnership track \u2014 multi-week DM office profile ingestion + staffer dashboard + CRM integration sprint. Post-launch.",
+      "revisit_when": "DM enrichment sprint scheduled"
+    },
+    {
+      "id": "NEW-T8-1b",
+      "slug": "reader-dashboard-staffers",
+      "name": "Reader dashboard for staffers (UI)",
+      "track": "TR-B",
+      "clusters": [
+        "C-reader-side"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "L",
+        "days": 10
+      },
+      "chokepoint": false,
+      "carryover_from": "T8-1b",
+      "description": "Staffer-facing dashboard at /staffer/[dmId] showing inbox of verified packets, filter by issue, dismiss/respond actions. Auth via DM-office email domain or magic link.",
+      "acceptance_criteria": "First-org's DM staffer logs in, sees packet inbox.",
+      "depends_on": [
+        "NEW-T8-1a"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "DM enrichment partnership track \u2014 multi-week DM office profile ingestion + staffer dashboard + CRM integration sprint. Post-launch.",
+      "revisit_when": "DM enrichment sprint scheduled"
+    },
+    {
+      "id": "NEW-T8-7",
+      "slug": "per-dm-public-profile-enhancements",
+      "name": "Per-DM public profile enhancements",
+      "track": "TR-B",
+      "clusters": [
+        "C-reader-side"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 5
+      },
+      "chokepoint": false,
+      "carryover_from": "T8-7",
+      "description": "/dm/[id] surface gains office address, photo gallery, vote history sparkline. Cosmetic polish.",
+      "acceptance_criteria": "DM profile renders enriched view when data present.",
+      "depends_on": [
+        "NEW-T8-1a"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "DM enrichment partnership track \u2014 multi-week DM office profile ingestion + staffer dashboard + CRM integration sprint. Post-launch.",
+      "revisit_when": "DM enrichment sprint scheduled"
+    },
+    {
+      "id": "NEW-T8-5",
+      "slug": "crm-integration-indigov-class",
+      "name": "CRM integration story (Indigov-class feed)",
+      "track": "TR-B",
+      "clusters": [
+        "C-reader-side"
+      ],
+      "wave": "W-2",
+      "effort": {
+        "tier": "M",
+        "days": 8
+      },
+      "chokepoint": false,
+      "carryover_from": "T8-5",
+      "description": "Feed verified-packet stream into staffer CRMs (Indigov, IQ, Quorum). Per-CRM mapping.",
+      "acceptance_criteria": "First Indigov integration delivers packet into their constituent record.",
+      "depends_on": [
+        "NEW-T8-1a",
+        "NEW-T8-1b"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "DM enrichment partnership track \u2014 multi-week DM office profile ingestion + staffer dashboard + CRM integration sprint. Post-launch.",
+      "revisit_when": "DM enrichment sprint scheduled"
+    },
+    {
+      "id": "NEW-T1-3",
+      "slug": "an-osdi-sync",
+      "name": "AN OSDI sync actually shipped",
+      "track": "TR-F",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "L",
+        "days": 7
+      },
+      "chokepoint": false,
+      "carryover_from": "T1-3",
+      "description": "Replace HTTP 501 with real OSDI client. Convex internalAction with paginated /people fetch at 4 req/s, tag sync via /taggings, chunked scheduler continuation for >5K supporters.",
+      "acceptance_criteria": "Full sync imports within 1% of AN total_records. Incremental sync only fetches since lastSyncAt.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "AN OSDI sync \u2014 L tier 7d. Requires Action Network partnership coordination + paginated /people fetch + chunked scheduler continuation. Memory/competitive_landscape notes NGP VAN/AN in active RFP turnover.",
+      "revisit_when": "AN partnership / RFP outcome resolved"
+    },
+    {
+      "id": "NEW-T9-4",
+      "slug": "osdi-compliance-namespace",
+      "name": "OSDI compliance namespace /api/osdi/v1/",
+      "track": "TR-F",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T9-4",
+      "description": "OSDI REST adapter mapping our v1 endpoints to OSDI's people/events/donations/tags/lists shape.",
+      "acceptance_criteria": "OSDI conformance tests pass; partner platforms (Action Network, EveryAction) can read.",
+      "depends_on": [
+        "NEW-T1-3"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "OSDI compliance namespace /api/osdi/v1/ \u2014 depends on NEW-T1-3 to clarify which OSDI version + entities to target.",
+      "revisit_when": "NEW-T1-3 lands"
+    },
+    {
+      "id": "NEW-T9-1",
+      "slug": "ts-sdk-npm-publish",
+      "name": "TypeScript SDK npm publish pipeline",
+      "track": "TR-F",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "S",
+        "days": 1
+      },
+      "chokepoint": false,
+      "carryover_from": "T9-1",
+      "description": "GitHub Actions workflow + npm publish credentials. SDK source at packages/sdk-typescript already complete.",
+      "acceptance_criteria": "@commons-platform/sdk publishes on tag; semver compliance.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "TypeScript SDK npm publish pipeline \u2014 GitHub Actions workflow + npm publish credentials. SDK source at packages/sdk-typescript shipped. Pipeline setup is ops.",
+      "revisit_when": "npm publish credentials configured + tag workflow merged"
+    },
+    {
+      "id": "NEW-T9-2",
+      "slug": "py-sdk-pypi-publish",
+      "name": "Python SDK PyPI publish pipeline",
+      "track": "TR-F",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "S",
+        "days": 0.5
+      },
+      "chokepoint": false,
+      "carryover_from": "T9-2",
+      "description": "Same shape as NEW-T9-1 but PyPI. SDK source at packages/sdk-python already complete.",
+      "acceptance_criteria": "commons publishes on tag.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Python SDK PyPI publish pipeline \u2014 same shape as NEW-T9-1.",
+      "revisit_when": "PyPI publish credentials configured + tag workflow merged"
+    },
+    {
+      "id": "NEW-T9-8",
+      "slug": "developer-portal",
+      "name": "Building on Commons developer portal",
+      "track": "TR-F",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T9-8",
+      "description": "Docs site + SDK examples gallery + OpenAPI explorer.",
+      "acceptance_criteria": "developer.commons.email serves docs + interactive API explorer.",
+      "depends_on": [
+        "NEW-T9-4",
+        "NEW-T9-1",
+        "NEW-T9-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Building on Commons developer portal \u2014 needs NEW-T9-4 OSDI namespace + SDK publish pipelines + dedicated docs site. Post-launch developer-relations sprint.",
+      "revisit_when": "Post-launch developer-relations sprint"
+    },
+    {
+      "id": "NEW-T6-6",
+      "slug": "state-bill-ingestion",
+      "name": "State-bill ingestion for non-federal scorecards",
+      "track": "TR-F",
+      "clusters": [
+        "C-accountability"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "M",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T6-6",
+      "description": "OpenStates or LegiScan partnership; per-state schema reconciliation.",
+      "acceptance_criteria": "First non-federal scorecard renders.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "State-bill ingestion \u2014 OpenStates or LegiScan partnership + per-state schema reconciliation. Partnership-coordination gate.",
+      "revisit_when": "Non-federal source contract signed"
+    },
+    {
+      "id": "NEW-T3-1",
+      "slug": "openstates-ingestion",
+      "name": "State legislator data ingestion (OpenStates)",
+      "track": "TR-C",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "L",
+        "days": 10
+      },
+      "chokepoint": false,
+      "carryover_from": "T3-1",
+      "description": "OpenStates per-state ingestion of legislators + committees + bills. Convex action with paginated fetch + per-state schema mapping.",
+      "acceptance_criteria": "Three states populated end-to-end (CA + NY + TX).",
+      "depends_on": [
+        "NEW-T6-6"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "OpenStates state legislator ingestion \u2014 multi-state Phase 2 expansion. L tier 10d ingestion work; per-state schema mapping.",
+      "revisit_when": "Multi-state Phase 2 sprint scheduled"
+    },
+    {
+      "id": "NEW-T3-2",
+      "slug": "special-district-officeholders",
+      "name": "Special district officeholder data",
+      "track": "TR-C",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "L",
+        "days": 14
+      },
+      "chokepoint": false,
+      "carryover_from": "T3-2",
+      "description": "Multi-source ingestion (NCES, NTD, state portals). 50K+ special districts.",
+      "acceptance_criteria": "First special district (school board) populated; first-org runs campaign there.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Special district officeholder data (NCES, NTD, state portals) \u2014 L tier 14d. Multi-source ingestion with no single API; long-tail integration.",
+      "revisit_when": "Multi-state Phase 2 + per-source contracts"
+    },
+    {
+      "id": "NEW-T3-7",
+      "slug": "tiger-2026-monitoring-doge-resilience",
+      "name": "TIGER 2026 monitoring + DOGE/Census resilience",
+      "track": "TR-C",
+      "clusters": [
+        "C-reach",
+        "C-data-sovereignty"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "S",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T3-7",
+      "description": "Monitor TIGER 2026 vintage; alert on DOGE/Census-API regressions; Census mirror fallback.",
+      "acceptance_criteria": "Synthetic TIGER vintage downgrade triggers alert + fallback.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "TIGER 2026 monitoring + DOGE/Census resilience \u2014 multi-state monitoring sweep + DOGE alerting + Census mirror fallback. Operational durability work.",
+      "revisit_when": "First multi-state campaign scheduled"
+    },
+    {
+      "id": "NEW-T3-8",
+      "slug": "multi-jurisdiction-routing",
+      "name": "Multi-jurisdiction routing at campaign layer",
+      "track": "TR-C",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "L",
+        "days": 20
+      },
+      "chokepoint": false,
+      "carryover_from": "T3-8",
+      "description": "Campaign targets multiple jurisdictions (e.g. federal + state + local); router picks correct DM per submitter.",
+      "acceptance_criteria": "Campaign with 3 jurisdictions delivers to correct DM per recipient.",
+      "depends_on": [
+        "NEW-T3-1",
+        "NEW-T3-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Multi-jurisdiction routing at campaign layer \u2014 L tier 20d; depends on NEW-T3-1 + NEW-T3-2 (both deferred to Phase 2).",
+      "revisit_when": "NEW-T3-1 + NEW-T3-2 land"
+    },
+    {
+      "id": "NEW-T3-10",
+      "slug": "per-district-feed-infrastructure",
+      "name": "Per-district feed infrastructure",
+      "track": "TR-C",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "L",
+        "days": 14
+      },
+      "chokepoint": false,
+      "carryover_from": "T3-10",
+      "description": "Per-district activity feed (legislative actions, RFPs, campaigns) reusable across embed widgets.",
+      "acceptance_criteria": "Embedding /feed/district/[id] returns live JSON+SSE feed.",
+      "depends_on": [
+        "NEW-T3-1",
+        "NEW-T3-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Per-district feed infrastructure \u2014 depends on NEW-T3-1 + NEW-T3-2 for upstream data, same Phase 2 defer.",
+      "revisit_when": "NEW-T3-1 + NEW-T3-2 land"
+    },
+    {
+      "id": "NEW-T3-9",
+      "slug": "postal-bubble-disambiguation",
+      "name": "Postal Bubble interactive disambiguation UX",
+      "track": "TR-C",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "L",
+        "days": 10
+      },
+      "chokepoint": false,
+      "carryover_from": "T3-9",
+      "description": "Multi-district ambiguity resolution UX when one postal code spans multiple districts.",
+      "acceptance_criteria": "User with ambiguous ZIP picks correct district in <3 clicks.",
+      "depends_on": [
+        "NEW-T3-1"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Postal Bubble interactive disambiguation UX \u2014 L tier 10d. Defer to post-launch UX iteration after first-org launch surfaces real friction.",
+      "revisit_when": "Post-launch friction-driven prioritization"
+    },
+    {
+      "id": "NEW-T4-3",
+      "slug": "per-supporter-bill-alerts",
+      "name": "Per-supporter bill alerts",
+      "track": "TR-C",
+      "clusters": [
+        "C-agentic",
+        "C-reader-side"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "M",
+        "days": 10
+      },
+      "chokepoint": false,
+      "carryover_from": "T4-3",
+      "description": "Supporters subscribe to bill-tag alerts; per-user dedup via T10-1 engagement-tier denormalization.",
+      "acceptance_criteria": "Supporter subscribes; alert fires within 6h of bill matching tag.",
+      "depends_on": [
+        "NEW-T6-6",
+        "NEW-E-1"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Per-supporter bill alerts \u2014 depends on NEW-T6-6 (state bill source, deferred) + alert-spam dedup via reputation cron (ready). Multi-week M-tier with partnership cross-dep.",
+      "revisit_when": "NEW-T6-6 lands + per-user bill-tag UX defined"
+    },
+    {
+      "id": "NEW-T4-4",
+      "slug": "agentic-legislative-monitoring",
+      "name": "Agentic legislative monitoring across 24 boundary types",
+      "track": "TR-C",
+      "clusters": [
+        "C-agentic",
+        "C-reach"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "L",
+        "days": 15
+      },
+      "chokepoint": false,
+      "carryover_from": "T4-4",
+      "description": "Multi-source agentic monitoring across federal/state/local/special-district. Triggers org alerts and campaign suggestions.",
+      "acceptance_criteria": "First-org receives agentic alert on state-level bill matching their issue domain.",
+      "depends_on": [
+        "NEW-T3-1",
+        "NEW-T3-2",
+        "NEW-T4-1"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Agentic legislative monitoring across 24 boundary types \u2014 depends on NEW-T3-1 + NEW-T3-2 (multi-state) + NEW-T4-1 (delegation executor, TEE-deferred).",
+      "revisit_when": "NEW-T3-1 + NEW-T3-2 + NEW-T4-1 land"
+    },
+    {
+      "id": "NEW-T4-5",
+      "slug": "cross-org-agent-action-portability",
+      "name": "Cross-org agent action portability",
+      "track": "TR-C",
+      "clusters": [
+        "C-agentic",
+        "C-composability"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "S",
+        "days": 4
+      },
+      "chokepoint": false,
+      "carryover_from": "T4-5",
+      "description": "Agent action in one org's context can be ported (with consent) to another org's surface.",
+      "acceptance_criteria": "Coalition org references parent-org agent action via portable handle.",
+      "depends_on": [
+        "NEW-T7-3",
+        "NEW-T4-1"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Cross-org agent action portability \u2014 depends on NEW-T7-3 (just shipped) + NEW-T4-1 (delegation executor, deferred).",
+      "revisit_when": "NEW-T4-1 lands"
+    },
+    {
+      "id": "NEW-T4-6",
+      "slug": "agent-civic-actor-pricing",
+      "name": "Agent-as-civic-actor pricing model",
+      "track": "TR-C",
+      "clusters": [
+        "C-agentic"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "S",
+        "days": 4
+      },
+      "chokepoint": false,
+      "carryover_from": "T4-6",
+      "description": "Pricing for agentic actions: per-action attribution, COGS accounting. Product decision pending.",
+      "acceptance_criteria": "First Coalition-tier org sees agent action quota + per-action cost line item.",
+      "depends_on": [
+        "NEW-T4-1",
+        "NEW-T4-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Agent-as-civic-actor pricing model \u2014 pricing/billing surface design; depends on NEW-T4-1 + NEW-T4-2 (both TEE-deferred). Product decision pending.",
+      "revisit_when": "NEW-T4-1 + NEW-T4-2 land + pricing decision"
+    },
+    {
+      "id": "NEW-T10-7",
+      "slug": "custom-fields-type-system",
+      "name": "Custom fields type system",
+      "track": "TR-C",
+      "clusters": [
+        "C-reader-side"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "L",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T10-7",
+      "description": "Org-defined custom fields on supporters with validation + UI. Today: customFields JSON blob.",
+      "acceptance_criteria": "Org defines 'age_bracket' custom field with validation; appears in supporter forms.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Custom fields type system \u2014 L tier 2d UI sprint. Org-defined custom fields on supporters with validation + UI. Today's customFields JSON blob is sufficient until orgs surface friction.",
+      "revisit_when": "Post-launch UX iteration sprint"
+    },
+    {
+      "id": "NEW-T2-6",
+      "slug": "custom-domain-dkim-dmarc",
+      "name": "Custom domain + DKIM/DMARC per org",
+      "track": "TR-C",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "XL",
+        "days": 14
+      },
+      "chokepoint": false,
+      "carryover_from": "T2-6",
+      "description": "Per-org sender domain \u2014 Layer b of white-label.",
+      "acceptance_criteria": "Coalition org sends from advocacy.theirdomain.org with valid DKIM + DMARC.",
+      "depends_on": [
+        "NEW-T2-2"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:22:09Z",
+      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
+      "revisit_when": "NEW-T2-2 lands"
+    },
+    {
+      "id": "NEW-T9-10",
+      "slug": "embed-widget-enhancements",
+      "name": "Embed widget enhancements (postal-bubble + analytics)",
+      "track": "TR-C",
+      "clusters": [
+        "C-reach",
+        "C-reader-side"
+      ],
+      "wave": "W-3",
+      "effort": {
+        "tier": "M",
+        "days": 1.5
+      },
+      "chokepoint": false,
+      "carryover_from": "T9-10",
+      "description": "Postal-bubble in widget + per-embed analytics + impression pings.",
+      "acceptance_criteria": "Embed renders district name on postal entry; per-embed view/conversion stats available.",
+      "depends_on": [],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Embed widget enhancements (postal-bubble + per-embed analytics) \u2014 substantial cross-cutting work touching widget UI + shadow-atlas client + new impression/stats tables. Defer to post-launch embed-iteration sprint after first orgs adopt the widget.",
+      "revisit_when": "Post-launch embed-iteration sprint"
+    },
+    {
+      "id": "NEW-T3-3",
+      "slug": "ca-rep-lookup",
+      "name": "CA rep-lookup wiring",
+      "track": "TR-D",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-4",
+      "effort": {
+        "tier": "S",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T3-3",
+      "description": "Canadian Civic API integration.",
+      "acceptance_criteria": "Postal code in CA returns MP + provincial MLA + municipal council.",
+      "depends_on": [
+        "NEW-T3-7"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "CA rep-lookup \u2014 Canadian Civic API integration. International Phase 2.",
+      "revisit_when": "International Phase 2 sprint scheduled"
+    },
+    {
+      "id": "NEW-T3-4",
+      "slug": "gb-rep-lookup",
+      "name": "GB rep-lookup wiring",
+      "track": "TR-D",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-4",
+      "effort": {
+        "tier": "S",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T3-4",
+      "description": "UK Parliament API + constituency boundaries.",
+      "acceptance_criteria": "Postcode in GB returns MP + devolved + local councillor.",
+      "depends_on": [
+        "NEW-T3-7"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "GB rep-lookup \u2014 UK Parliament API + constituency boundaries. International Phase 2.",
+      "revisit_when": "International Phase 2 sprint scheduled"
+    },
+    {
+      "id": "NEW-T3-5",
+      "slug": "au-rep-lookup",
+      "name": "AU rep-lookup wiring",
+      "track": "TR-D",
+      "clusters": [
+        "C-reach"
+      ],
+      "wave": "W-4",
+      "effort": {
+        "tier": "S",
+        "days": 3
+      },
+      "chokepoint": false,
+      "carryover_from": "T3-5",
+      "description": "Australian Parliament API + electoral divisions.",
+      "acceptance_criteria": "Postcode in AU returns federal + state + local rep.",
+      "depends_on": [
+        "NEW-T3-7"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "AU rep-lookup \u2014 Australian Parliament API + electoral divisions. International Phase 2.",
+      "revisit_when": "International Phase 2 sprint scheduled"
+    },
+    {
+      "id": "NEW-T7-4",
+      "slug": "cross-border-campaign-schema",
+      "name": "Cross-border campaign schema",
+      "track": "TR-D",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-4",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T7-4",
+      "description": "Campaign targets multiple countries; per-country compliance review.",
+      "acceptance_criteria": "Campaign with US+CA targets delivers correctly per country.",
+      "depends_on": [
+        "NEW-T3-3",
+        "NEW-T3-4",
+        "NEW-T3-5"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Cross-border campaign schema \u2014 depends on NEW-T3-3/4/5 country resolvers + per-country compliance review.",
+      "revisit_when": "Country resolvers land + per-country compliance review"
+    },
+    {
+      "id": "NEW-T7-6",
+      "slug": "coalition-multi-country-delivery",
+      "name": "Coalition campaign delivery (multi-country)",
+      "track": "TR-D",
+      "clusters": [
+        "C-composability"
+      ],
+      "wave": "W-4",
+      "effort": {
+        "tier": "M",
+        "days": 2
+      },
+      "chokepoint": false,
+      "carryover_from": "T7-6",
+      "description": "Coalition campaigns span members in different countries; routing + compliance per member.",
+      "acceptance_criteria": "Multi-country coalition campaign delivers correctly across borders.",
+      "depends_on": [
+        "NEW-T7-4"
+      ],
+      "status": "deferred",
+      "deferred_at": "2026-05-27T23:23:56Z",
+      "deferred_reason": "Multi-country coalition delivery \u2014 depends on NEW-T7-4 cross-border schema.",
+      "revisit_when": "NEW-T7-4 lands"
+    }
+  ]
+}

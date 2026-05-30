@@ -1,0 +1,85 @@
+{
+  "waves": [
+    {
+      "id": "W-1",
+      "name": "Sales-Blocker Fixes",
+      "duration": "days 1-7",
+      "goal": "Stop showing prospects empty bars and broken features. Eleven items, all under 1 day each, no blocking dependencies. After completion, every demo-blocker is closed and Phase 0-2 claim aligns with delivered capability.",
+      "completion_signal": "Org demo at /org/[slug] renders real packet, real funnel, real tier distribution; bulk email merge fields apply; donation receipts send; member management works; A/B winner picker fires; workflow verbs execute; OG images render on acquisition pages.",
+      "task_ids": ["T1-1", "T1-2", "T1-4", "T1-5", "T1-6", "T1-7", "T1-8", "T1-9", "T1-10", "T10-3", "T10-5", "T10-11"],
+      "concurrent_with": [],
+      "approximate_parallel_capacity": "3 engineers, 2-3 days"
+    },
+    {
+      "id": "W-2",
+      "name": "Launch Enablement",
+      "duration": "weeks 1-4",
+      "goal": "First-paying-org operational. Items here are larger but parallelizable across four tracks (comms infrastructure, developer platform, migration unblockers, substrate honesty).",
+      "completion_signal": "First org signs up, imports from AN via OSDI sync, sends a verified campaign, dispatches SMS, receives donation receipts, manages team. Substrate metrics (CAI, tier distribution) reflect real engagement. Outbound webhooks live. SDKs published. ses-proxy Lambda deployed.",
+      "task_ids": [
+        "T1-3",
+        "T2-1", "T2-2", "T2-3", "T2-4", "T2-5",
+        "T9-1", "T9-2", "T9-3", "T9-4", "T9-9",
+        "T10-1", "T10-2", "T10-4", "T10-6", "T10-7", "T10-8", "T10-9", "T10-10"
+      ],
+      "chokepoints": ["T9-3"],
+      "concurrent_with": [],
+      "approximate_parallel_capacity": "4 engineers, 2-3 weeks"
+    },
+    {
+      "id": "W-3",
+      "name": "Capability Realization",
+      "duration": "months 1-3",
+      "goal": "Capability transcendence claims start being true at substrate level. Mainnet contracts deployed; TEE attesting resolution; delegation executor running; receipt anchoring in production; coalition aggregation API working; cross-border schema shipped; state legislator data ingested; three countries live (CA, GB, AU).",
+      "completion_signal": "Mainnet DistrictRegistry + DebateMarket + SnapshotAnchor on Scroll Mainnet. TEE Nitro Enclave attesting constituent resolution. FEATURES.DELEGATION=true with executor running scheduled cron. Receipt Merkle batches anchoring to Scroll. /api/v1/networks/[id]/stats returns real aggregation. CA/GB/AU postal codes resolve to representatives.",
+      "task_ids": [
+        "T3-1", "T3-2", "T3-3", "T3-4", "T3-5", "T3-6", "T3-7", "T3-9",
+        "T4-1", "T4-2", "T4-6", "T4-7", "T4-8", "T4-9", "T4-10",
+        "T5-1", "T5-2", "T5-3", "T5-5", "T5-6", "T5-7", "T5-8", "T5-9", "T5-10",
+        "T6-1", "T6-2", "T6-3", "T6-4", "T6-5", "T6-7", "T6-10",
+        "T7-1", "T7-2", "T7-3", "T7-4", "T7-5", "T7-9",
+        "T8-2", "T8-3", "T8-4a",
+        "T9-5"
+      ],
+      "chokepoints": ["T5-3", "Mainnet-Deployment-Composite", "T4-1"],
+      "concurrent_with": [],
+      "approximate_parallel_capacity": "5-6 engineers, full 3 months"
+    },
+    {
+      "id": "W-4",
+      "name": "Phase 3 Differentiators",
+      "duration": "months 3-6",
+      "goal": "Realize the categorical differentiators no incumbent can match. Multi-jurisdiction campaigns; agentic monitoring across 24 boundary types; reader dashboard; CRM integration; state-bill scorecards; coalition tier features fully justifying $200/mo differential.",
+      "completion_signal": "A constituent's agent monitors all 24 jurisdictions for their H3 cell. A single campaign delivers to federal + state + local + special district officials in one operation. A staffer with verified office profile sees their incoming verified campaigns in a dashboard. Indigov-class CRM consumes Commons feed via /api/v1/reader/incoming.",
+      "task_ids": [
+        "T3-8", "T3-10",
+        "T4-3", "T4-4", "T4-5",
+        "T5-4",
+        "T6-6", "T6-8", "T6-9",
+        "T7-6", "T7-7", "T7-8",
+        "T8-1a", "T8-1b", "T8-5", "T8-7", "T8-8", "T8-9", "T8-10",
+        "T9-6", "T9-7", "T9-10"
+      ],
+      "concurrent_with": [],
+      "approximate_parallel_capacity": "4 engineers, 3 months"
+    },
+    {
+      "id": "W-5",
+      "name": "Continuous / J-phase",
+      "duration": "ongoing post-launch",
+      "goal": "Long-tail items operating on slower cadences: open-weight model integration into TEE; CivicEngine licensing decision; custom domain + DKIM per org; subdomain routing for white-label; receipt response email reply detection; provincial/state-second-chamber legislators internationally.",
+      "completion_signal": "Continuous improvements; no discrete completion milestone.",
+      "task_ids": [
+        "T2-6",
+        "T2-8", "T2-9",
+        "T4-9-extended",
+        "T7-7c",
+        "T8-4b",
+        "T8-6",
+        "T9-8"
+      ],
+      "concurrent_with": "all earlier waves",
+      "approximate_parallel_capacity": "1-2 engineers continuous"
+    }
+  ]
+}

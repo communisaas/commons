@@ -1,0 +1,54 @@
+{
+  "chokepoints": [
+    {
+      "id": "CP-1",
+      "task_id": "NEW-A-1",
+      "name": "Apple Business Connect enrollment",
+      "unblocks_count": 4,
+      "gate_kind": "external-vendor",
+      "gate_owner": "Apple (multi-week review cycle)",
+      "unblocks": ["NEW-A-2 MDL_IOS flag flip", "NEW-A-5 iOS Safari mDL flow staging walk", "NEW-A-6 launch runbook (iOS path)", "first-org launch on iOS"],
+      "rationale": "Apple-side weeks-long enrollment; cannot be parallelized from inside the codebase. Without it, the iOS Safari same-device lane stays gated."
+    },
+    {
+      "id": "CP-2",
+      "task_id": "NEW-A-3",
+      "name": "ses-proxy Lambda deployment + secret sync",
+      "unblocks_count": 6,
+      "gate_kind": "ops-deploy",
+      "gate_owner": "Commons ops (AWS account 529088283822)",
+      "unblocks": ["NEW-T2-2 inferred (deploy step itself)", "NEW-T1-9 workflow send_email", "NEW-T2-4 List-Unsubscribe headers", "NEW-T2-10 open/click attribution", "NEW-T8-9 aggregate weekly digest", "first-org email blast"],
+      "rationale": "Lambda is dormant until first email blast goes live. Per memory/env-secret-management: BLAST_RECEIPTS_SECRET must sync across CF Pages ↔ Lambda."
+    },
+    {
+      "id": "CP-3",
+      "task_id": "NEW-T6-2",
+      "name": "Mainnet deploy composite (SnapshotAnchor + DistrictRegistry + DebateMarket)",
+      "unblocks_count": 8,
+      "gate_kind": "ops-deploy + audit + multisig",
+      "gate_owner": "Safe multisig signers + audit firm",
+      "unblocks": ["NEW-T6-1 receipt Merkle anchoring", "NEW-T6-3 anchor cadence", "NEW-T6-10 archive manifest", "NEW-T8-6 long-term artifact", "NEW-T8-4b IPFS report URL", "NEW-T5-2 on-chain stake", "NEW-T5-5 DebateMarket mainnet", "NEW-T3-6 DistrictRegistry mainnet"],
+      "rationale": "Single composite — all three contracts share the multisig + audit cycle. Splitting them would burn duplicate audit cost. Treat as one chokepoint."
+    },
+    {
+      "id": "CP-4",
+      "task_id": "NEW-T5-3",
+      "name": "TEE Nitro Enclave provisioning",
+      "unblocks_count": 5,
+      "gate_kind": "ops-deploy + AWS account setup",
+      "gate_owner": "Commons ops (AWS Nitro Enclaves)",
+      "unblocks": ["NEW-T4-1 delegation executor", "NEW-T5-4 TEE AI panel", "NEW-T4-2 ZK proof on AI actions", "NEW-T4-7 message-writer with proof", "NEW-T4-9 delegation UI"],
+      "rationale": "Nitro Enclave account + signed image distribution + on-chain attestation registry are all single-purpose for the TEE lane. Client wiring already shipped in I-phase; this is the runtime."
+    },
+    {
+      "id": "CP-5",
+      "task_id": "NEW-A-4",
+      "name": "Sentry on-call wiring + observability stack",
+      "unblocks_count": 4,
+      "gate_kind": "ops-config",
+      "gate_owner": "Commons ops",
+      "unblocks": ["NEW-T9-5 audit log API", "NEW-T8-9 weekly digest (failure alerts)", "NEW-T4-8 agent trace observability", "first-org launch (boundary-cell alert routing)"],
+      "rationale": "Sentry → PagerDuty wiring + BOUNDARY_CELL_RATE_HIGH human routing per memory/iphase_completion.md §7. Substrate complete; ops needs to point alerts at a human."
+    }
+  ]
+}

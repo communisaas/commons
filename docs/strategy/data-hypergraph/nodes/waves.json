@@ -1,0 +1,28 @@
+{
+  "waves": [
+    {
+      "id": "W-0",
+      "name": "Verify",
+      "gate": "none (initial)",
+      "exit_criteria": "All 10 verify tasks closed. Each carries a substrate-honesty verdict: HONEST (code-grounded confirmation) | GAP (new fix task added) | NOT-EXERCISABLE-WITHOUT-OPS (deferred per chokepoint-defer pattern from v2).",
+      "tracks": ["TR-V"],
+      "blocking_for": ["W-1"]
+    },
+    {
+      "id": "W-1",
+      "name": "Cleanup + Seed",
+      "gate": "W-0 verify complete; any GAPs documented",
+      "exit_criteria": "Drift sweep landed (deprecated fields removed where safe); seed.ts populates all 9 product-meaningful unseeded tables; new fix tasks from W-0 either landed or deferred with revisit_when.",
+      "tracks": ["TR-D", "TR-S"],
+      "blocking_for": ["W-2"]
+    },
+    {
+      "id": "W-2",
+      "name": "Test fixtures",
+      "gate": "W-1 complete (seed reflects substrate; schema drift cleared)",
+      "exit_criteria": "Integration tests exist for each substrate claim audited in W-0. Test suite runs against seedAll output.",
+      "tracks": ["TR-T"],
+      "blocking_for": []
+    }
+  ]
+}

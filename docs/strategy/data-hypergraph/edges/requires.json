@@ -1,0 +1,10 @@
+{
+  "_notes": "Soft prerequisites — informs but doesn't strictly block.",
+  "requires": [
+    {"source": "V-1", "target": "S-6", "kind": "informs", "reason": "Seeded apiKey design includes the userId promotion path"},
+    {"source": "V-2", "target": "S-1", "kind": "informs", "reason": "Webhook seed events benefit from atlasVersion-aware payload examples"},
+    {"source": "D-1", "target": "S-*", "kind": "informs", "reason": "Don't seed into deprecated fields the cleanup is about to remove"},
+    {"source": "S-1", "target": "S-2", "kind": "co-located", "reason": "Both add to seed.ts — coordinate insert ordering"},
+    {"source": "S-3", "target": "S-4", "kind": "informs", "reason": "Scorecard snapshots reference seeded bills"}
+  ]
+}

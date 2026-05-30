@@ -1,0 +1,12 @@
+{
+  "_notes": "parallel edges: tasks that can execute concurrently in the same wave without resource contention. Useful for cycle batching.",
+  "parallel": [
+    {"group": "W-0 ops parallel", "tasks": ["NEW-A-1", "NEW-T2-2", "NEW-A-4"], "rationale": "Three independent ops tracks. ABC is Apple-side, Lambda is AWS, Sentry is observability config. Run concurrently."},
+    {"group": "W-1 substrate wire-ups parallel", "tasks": ["NEW-E-1", "NEW-E-2", "NEW-E-3", "NEW-E-4", "NEW-E-5"], "rationale": "Five small focused cleanups touching different files; pair into a single PR or split arbitrarily."},
+    {"group": "W-2 anchoring + TEE parallel", "tasks": ["NEW-T6-1", "NEW-T5-3"], "rationale": "Anchor pipeline (Convex action + R2 + on-chain) and TEE provisioning (AWS Nitro + image build) are independent ops/engineering tracks once their CP-3/CP-4 gates clear."},
+    {"group": "W-2 DM enrichment parallel", "tasks": ["NEW-T8-1a", "NEW-T8-7"], "rationale": "Office profile ingestion and per-DM profile UI both consume the same enriched data once T8-1a substrate lands; T8-7 UI iteration can layer in parallel with T8-1b dashboard."},
+    {"group": "W-3 country resolvers parallel", "tasks": ["NEW-T3-3", "NEW-T3-4", "NEW-T3-5"], "rationale": "CA, GB, AU are independent country integrations. No shared code; can execute concurrently once T3-7 resilience playbook is documented."},
+    {"group": "W-3 SDK pipelines parallel", "tasks": ["NEW-T9-1", "NEW-T9-2"], "rationale": "npm and PyPI publish pipelines are independent."},
+    {"group": "W-3 Phase-2 state data parallel", "tasks": ["NEW-T3-1", "NEW-T3-2"], "rationale": "OpenStates and special-district ingestion target different data sources; can execute concurrently."}
+  ]
+}

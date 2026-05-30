@@ -1,0 +1,104 @@
+{
+  "tracks": [
+    {
+      "id": "TR-1",
+      "name": "Launch Readiness",
+      "description": "Top-10 P0/P1 launch blockers. Closing these moves the org product from 'looks finished, partially is' to 'actually launchable to first paying orgs.'",
+      "lead_capability_cluster": "C-coordination-integrity",
+      "secondary_clusters": ["C-verification", "C-reader-side"],
+      "task_count": 10,
+      "total_effort_days": "6-8 single engineer | 3-4 with three engineers",
+      "task_ids": ["T1-1", "T1-2", "T1-3", "T1-4", "T1-5", "T1-6", "T1-7", "T1-8", "T1-9", "T1-10"]
+    },
+    {
+      "id": "TR-2",
+      "name": "Comms Infrastructure Completion",
+      "description": "Close the 23-stub inventory items in email/SMS/calling. ses-proxy Lambda deploy, plaintext multipart, List-Unsubscribe on Convex path, soft-bounce categorization, custom domain + DKIM, A/B winner picker, SMS dispatch, template library, A2P 10DLC, MMS, tracking attribution.",
+      "lead_capability_cluster": "C-verification",
+      "secondary_clusters": ["C-coordination-integrity"],
+      "task_count": 10,
+      "total_effort_days": "10-14",
+      "task_ids": ["T2-1", "T2-2", "T2-3", "T2-4", "T2-5", "T2-6", "T2-7", "T2-8", "T2-9", "T2-10"]
+    },
+    {
+      "id": "TR-3",
+      "name": "Reach Extension",
+      "description": "State + local + special district officeholder data; CA/GB/AU rep-lookup wiring; mainnet DistrictRegistry; multi-jurisdiction routing at campaign layer; TIGER 2026 monitoring + DOGE/Census resilience; postal bubble disambiguation; per-district feed infrastructure.",
+      "lead_capability_cluster": "C-reach",
+      "secondary_clusters": ["C-data-sovereignty", "C-agentic"],
+      "task_count": 10,
+      "total_effort_days": "9-12 months full closure (state-leg via OpenStates is 2 weeks; international country lookup is 3 days each after hydration; mainnet contracts 1-2 weeks; multi-jurisdiction routing 4 weeks)",
+      "task_ids": ["T3-1", "T3-2", "T3-3", "T3-4", "T3-5", "T3-6", "T3-7", "T3-8", "T3-9", "T3-10"]
+    },
+    {
+      "id": "TR-4",
+      "name": "Agentic Systems Realization",
+      "description": "Delegation executor (FEATURES.DELEGATION=false, Convex CRUD complete); ZK proof attached to AI-assisted actions; per-supporter bill alerts; agentic legislative monitoring; cross-org agent action portability; agent-as-civic-actor pricing; message-writer proof attachment; agent trace observability extension; delegation UI; coordinated multi-agent flows.",
+      "lead_capability_cluster": "C-agentic",
+      "secondary_clusters": ["C-verification", "C-composability"],
+      "task_count": 10,
+      "total_effort_days": "12-16 weeks",
+      "task_ids": ["T4-1", "T4-2", "T4-3", "T4-4", "T4-5", "T4-6", "T4-7", "T4-8", "T4-9", "T4-10"]
+    },
+    {
+      "id": "TR-5",
+      "name": "Quality Signaling Completion",
+      "description": "Auto-debate-spawn from campaign threshold; on-chain stake verification (Convex currently caps at $1); TEE Nitro Enclave deployment; TEE-attested AI panel execution; mainnet DebateMarket; debate→tier promotion; position privacy UX; LMSR live price feed UI; org-side debate signal surfacing; debate signal composed into verification packet.",
+      "lead_capability_cluster": "C-quality-signaling",
+      "secondary_clusters": ["C-verification", "C-agentic"],
+      "task_count": 10,
+      "total_effort_days": "8-12 weeks elapsed (mainnet 1-2 weeks; TEE 2-3 weeks; TEE AI panel +3-4 weeks; code items 2-3 weeks)",
+      "task_ids": ["T5-1", "T5-2", "T5-3", "T5-4", "T5-5", "T5-6", "T5-7", "T5-8", "T5-9", "T5-10"]
+    },
+    {
+      "id": "TR-6",
+      "name": "Accountability Anchoring",
+      "description": "Receipt Merkle anchoring pipeline; mainnet SnapshotAnchor; anchoring cadence; constituent-side receipt access; receipt API for orgs; state-bill ingestion; browser-based receipt verification UI; scorecard methodology versioning; receipt response auto-detection; long-term archive.",
+      "lead_capability_cluster": "C-accountability",
+      "secondary_clusters": ["C-reader-side", "C-data-sovereignty"],
+      "task_count": 10,
+      "total_effort_days": "15-18",
+      "task_ids": ["T6-1", "T6-2", "T6-3", "T6-4", "T6-5", "T6-6", "T6-7", "T6-8", "T6-9", "T6-10"]
+    },
+    {
+      "id": "TR-7",
+      "name": "Composability Surfaces",
+      "description": "Coalition aggregation API (currently 501); shared supporter pools (commitment-based); cross-org reputation portability; cross-border campaign schema; coalition packet computation; coalition campaign delivery; white-label/per-org branding; child org hierarchy; network-level rate limits + quota aggregation; cross-org reputation Merkle tree decision.",
+      "lead_capability_cluster": "C-composability",
+      "secondary_clusters": ["C-reach", "C-agentic"],
+      "task_count": 10,
+      "total_effort_days": "10-14",
+      "task_ids": ["T7-1", "T7-2", "T7-3", "T7-4", "T7-5", "T7-6", "T7-7", "T7-8", "T7-9", "T7-10"]
+    },
+    {
+      "id": "TR-8",
+      "name": "Reader-Side Product",
+      "description": "Reader dashboard for staffers; /v/[hash] page enhancements; in-browser attestation verification UI; independent campaign report URL; CRM integration story (Indigov class); long-term-survivable artifact pattern; per-DM public profile enhancements; reader-side notification API; aggregate weekly digest; privacy model.",
+      "lead_capability_cluster": "C-reader-side",
+      "secondary_clusters": ["C-accountability", "C-verification"],
+      "task_count": 10,
+      "total_effort_days": "8-12 cycles (R1 immediate, R2-R4 phased)",
+      "task_ids": ["T8-1", "T8-2", "T8-3", "T8-4", "T8-5", "T8-6", "T8-7", "T8-8", "T8-9", "T8-10"]
+    },
+    {
+      "id": "TR-9",
+      "name": "Developer Platform",
+      "description": "TypeScript SDK npm publish; Python SDK PyPI publish; outbound webhooks (CHOKEPOINT); OSDI compliance (separate /api/osdi/v1/ namespace); audit log API; activity feed v1; real-time subscriptions v1; Building on Commons developer portal; rate limit policy reconciliation; embed widget enhancements.",
+      "lead_capability_cluster": "C-composability",
+      "secondary_clusters": ["C-agentic", "C-reader-side"],
+      "task_count": 10,
+      "total_effort_days": "14-16",
+      "task_ids": ["T9-1", "T9-2", "T9-3", "T9-4", "T9-5", "T9-6", "T9-7", "T9-8", "T9-9", "T9-10"]
+    },
+    {
+      "id": "TR-10",
+      "name": "Tier System + Structural Cleanup",
+      "description": "reputationTier writer post-signup; engagementTier server-side cross-check; tierMap key mismatch fix; CAI grounded in real engagement; MDL_MDOC flag flip post-I1; member removal + role change mutations; custom fields type system; audit log for org actions; atlasVersion per campaignAction; engagement tier histogram rendered; Stripe trialing as active.",
+      "lead_capability_cluster": "C-coordination-integrity",
+      "secondary_clusters": ["C-verification", "C-agentic"],
+      "task_count": 11,
+      "total_effort_days": "3-4 core honesty fixes + 5-6 completeness track",
+      "task_ids": ["T10-1", "T10-2", "T10-3", "T10-4", "T10-5", "T10-6", "T10-7", "T10-8", "T10-9", "T10-10", "T10-11"]
+    }
+  ]
+}

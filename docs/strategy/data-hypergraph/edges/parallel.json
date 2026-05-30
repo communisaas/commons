@@ -1,0 +1,9 @@
+{
+  "_notes": "parallel edges: tasks executable concurrently in the same wave.",
+  "parallel": [
+    {"group": "W-0 verify (all 10)", "tasks": ["V-1", "V-2", "V-3", "V-4", "V-5", "V-6", "V-7", "V-8", "V-9", "V-10"], "rationale": "Verify tasks read different parts of the codebase; no shared mutable state. Run all 10 in parallel."},
+    {"group": "W-1 drift catalog", "tasks": ["D-1", "D-2", "D-3"], "rationale": "Three independent code-scan tasks. D-4 depends on D-1; D-5 depends on D-3."},
+    {"group": "W-1 seed coverage (11 tasks)", "tasks": ["S-1", "S-2", "S-3", "S-4", "S-5", "S-6", "S-7", "S-8", "S-9", "S-10", "S-11"], "rationale": "Seed sections are append-only to convex/seed.ts in distinct sections. Coordinate write merge but each design is independent."},
+    {"group": "W-2 tests (6 specs)", "tasks": ["T-1", "T-2", "T-3", "T-4", "T-5", "T-6"], "rationale": "Each test is a separate vitest spec; no shared mutable test state."}
+  ]
+}
