@@ -1,6 +1,18 @@
 <script lang="ts">
 	import { cellToBoundary, cellToLatLng, isValidCell } from 'h3-js';
-	import { getDistrictBoundary } from '$lib/core/shadow-atlas/district-bundle';
+	import { FEATURES } from '$lib/config/features';
+	import {
+		getDistrictBasemapUrl,
+		getDistrictBoundary
+	} from '$lib/core/shadow-atlas/district-bundle';
+	import {
+		bboxCenter,
+		fitZoom,
+		projectToImage,
+		unwrapBBoxAntimeridian,
+		unwrapLon,
+		type BBox
+	} from '$lib/core/shadow-atlas/projection';
 
 	type LngLat = [number, number];
 	type PolygonGeometry = {
@@ -25,11 +37,17 @@
 	let status = $state<MapStatus>('idle');
 	let boundaryName = $state<string | null>(null);
 	let districtGeometry = $state<DistrictGeometry | null>(null);
+	let basemapUrl = $state<string | null>(null);
+	let basemapLoaded = $state(false);
 	let loadToken = 0;
 
 	const WIDTH = 360;
 	const HEIGHT = 220;
-	const PAD = 18;
+	// Padding (per side, fraction of image dimension) — MUST match the
+	// publish-side renderer in voter-protocol/packages/shadow-atlas/scripts/
+	// render-district-basemaps.ts. Drift here = the SVG polygon will not
+	// trace the basemap district boundary.
+	const PADDING_PCT = 0.06;
 
 	function asH3Cell(value: string | null | undefined): string | null {
 		const cell = value?.trim();
@@ -55,67 +73,86 @@
 		return geometry.coordinates.flatMap((polygon) => polygon.map(closeRing));
 	}
 
-	function boundsFor(rings: LngLat[][]) {
+	function boundsFor(rings: LngLat[][]): BBox | null {
 		const points = rings.flat();
 		if (points.length === 0) return null;
-		let minLng = Infinity;
-		let maxLng = -Infinity;
+		let minLon = Infinity;
+		let maxLon = -Infinity;
 		let minLat = Infinity;
 		let maxLat = -Infinity;
 		for (const [lng, lat] of points) {
-			minLng = Math.min(minLng, lng);
-			maxLng = Math.max(maxLng, lng);
+			minLon = Math.min(minLon, lng);
+			maxLon = Math.max(maxLon, lng);
 			minLat = Math.min(minLat, lat);
 			maxLat = Math.max(maxLat, lat);
 		}
-		if (![minLng, maxLng, minLat, maxLat].every(Number.isFinite)) return null;
-		return { minLng, maxLng, minLat, maxLat };
+		if (![minLon, maxLon, minLat, maxLat].every(Number.isFinite)) return null;
+		return { minLon, maxLon, minLat, maxLat };
 	}
 
-	function projectLngLat(point: LngLat, bounds: NonNullable<ReturnType<typeof boundsFor>>) {
-		const lngSpan = Math.max(bounds.maxLng - bounds.minLng, 0.0001);
-		const latSpan = Math.max(bounds.maxLat - bounds.minLat, 0.0001);
-		const scale = Math.min((WIDTH - PAD * 2) / lngSpan, (HEIGHT - PAD * 2) / latSpan);
-		const mapWidth = lngSpan * scale;
-		const mapHeight = latSpan * scale;
-		const offsetX = (WIDTH - mapWidth) / 2;
-		const offsetY = (HEIGHT - mapHeight) / 2;
-		const [lng, lat] = point;
+	interface Frame {
+		bbox: BBox;
+		center: { lon: number; lat: number };
+		zoom: number;
+		unwrapped: boolean;
+	}
 
+	function frameFor(rings: LngLat[][]): Frame | null {
+		const raw = boundsFor(rings);
+		if (!raw) return null;
+		const { bbox, unwrapped } = unwrapBBoxAntimeridian(raw);
 		return {
-			x: offsetX + (lng - bounds.minLng) * scale,
-			y: offsetY + (bounds.maxLat - lat) * scale
+			bbox,
+			center: bboxCenter(bbox),
+			zoom: fitZoom(bbox, WIDTH, HEIGHT, PADDING_PCT),
+			unwrapped,
 		};
 	}
 
-	function makePaths(rings: LngLat[][], bounds: NonNullable<ReturnType<typeof boundsFor>>) {
+	function makePaths(rings: LngLat[][], frame: Frame) {
 		return rings.map((ring) =>
 			ring
 				.map(([lng, lat], index) => {
-					const { x, y } = projectLngLat([lng, lat], bounds);
+					const { x, y } = projectToImage(
+						unwrapLon(lng, frame.unwrapped),
+						lat,
+						frame.center.lon,
+						frame.center.lat,
+						frame.zoom,
+						WIDTH,
+						HEIGHT,
+					);
 					return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
 				})
 				.join(' ')
-				.concat(' Z')
+				.concat(' Z'),
 		);
 	}
 
 	const safeH3Cell = $derived(asH3Cell(h3Cell));
 	const districtRings = $derived(geometryRings(districtGeometry));
 	const cellRings = $derived(h3Rings(safeH3Cell));
-	// Project against the DISTRICT bounds only when the district has loaded; this
+	// Project against the DISTRICT frame only when the district has loaded; this
 	// keeps the H3 cell rendered at its true small footprint inside the district
 	// rather than zoomed to fill the frame.
-	const mapBounds = $derived(
-		districtRings.length > 0 ? boundsFor(districtRings) : null
-	);
-	const districtPaths = $derived(mapBounds ? makePaths(districtRings, mapBounds) : []);
-	const cellPaths = $derived(mapBounds ? makePaths(cellRings, mapBounds) : []);
+	const mapFrame = $derived(districtRings.length > 0 ? frameFor(districtRings) : null);
+	const districtPaths = $derived(mapFrame ? makePaths(districtRings, mapFrame) : []);
+	const cellPaths = $derived(mapFrame ? makePaths(cellRings, mapFrame) : []);
 	const cellAnchor = $derived.by(() => {
-		if (!safeH3Cell || !mapBounds) return null;
+		if (!safeH3Cell || !mapFrame) return null;
 		const [lat, lng] = cellToLatLng(safeH3Cell);
-		return projectLngLat([lng, lat], mapBounds);
+		return projectToImage(
+			unwrapLon(lng, mapFrame.unwrapped),
+			lat,
+			mapFrame.center.lon,
+			mapFrame.center.lat,
+			mapFrame.zoom,
+			WIDTH,
+			HEIGHT,
+		);
 	});
+
+	const showBasemap = $derived(FEATURES.PROFILE_BASEMAP && basemapUrl !== null && basemapLoaded);
 
 	$effect(() => {
 		const district = districtCode?.trim().toUpperCase() ?? null;
@@ -125,6 +162,8 @@
 
 		districtGeometry = null;
 		boundaryName = null;
+		basemapUrl = null;
+		basemapLoaded = false;
 
 		if (!cell) {
 			status = 'missing';
@@ -137,8 +176,8 @@
 
 		status = 'loading';
 
-		// Fetch directly from atlas.commons.email — no /api/shadow-atlas/boundary
-		// proxy, no lat/lng sent up, no auth gate on a public dataset.
+		// Fetch directly from atlas.commons.email — no proxy, no lat/lng sent
+		// up, no auth gate on a public dataset.
 		getDistrictBoundary(district, controller.signal)
 			.then((result) => {
 				if (token !== loadToken) return;
@@ -151,6 +190,35 @@
 				status = 'cell-only';
 			});
 
+		// Basemap URL resolves only when the flag is on. The preload uses an
+		// HTML Image() rather than the SVG `<image>` load event, because SVG
+		// `<image>`'s load event has spotty cross-browser support — relying
+		// on it produced opacity-0 rasters on Safari in past spikes. The
+		// preloader fires the well-supported HTMLImageElement events, and the
+		// SVG mount conditions on `basemapLoaded` (set true only after a
+		// successful preload).
+		if (FEATURES.PROFILE_BASEMAP) {
+			getDistrictBasemapUrl(district, controller.signal)
+				.then((url) => {
+					if (token !== loadToken || !url) return;
+					basemapUrl = url;
+					if (typeof Image !== 'function') return;
+					const img = new Image();
+					img.decoding = 'async';
+					img.onload = () => {
+						if (token === loadToken) basemapLoaded = true;
+					};
+					img.onerror = () => {
+						if (token === loadToken) basemapLoaded = false;
+					};
+					img.src = url;
+				})
+				.catch(() => {
+					if (token !== loadToken) return;
+					basemapUrl = null;
+				});
+		}
+
 		return () => {
 			controller.abort();
 		};
@@ -162,7 +230,9 @@
 {:else if status === 'ready'}
 	<figure
 		class="ground-figure"
-		title="District boundary from disclosed metadata. No third-party map tiles are loaded."
+		title={showBasemap
+			? 'District boundary and pre-rendered basemap from the atlas; no per-user tile requests.'
+			: 'District boundary from disclosed metadata. No third-party map tiles are loaded.'}
 	>
 		<svg
 			viewBox="0 0 {WIDTH} {HEIGHT}"
@@ -172,9 +242,32 @@
 				: 'Disclosed privacy hex inside district'}
 			preserveAspectRatio="xMidYMid meet"
 		>
-			{#each districtPaths as path}
-				<path d={path} class="ground-figure__district" />
-			{/each}
+			{#if showBasemap && basemapUrl}
+				<!-- Mounted only after the HTMLImageElement preloader confirmed
+				     the asset is fetchable. The SVG `<image>` element's own load
+				     event has spotty cross-browser support, so the preload is
+				     the actual gate; this element just renders. -->
+				<image
+					href={basemapUrl}
+					x="0"
+					y="0"
+					width={WIDTH}
+					height={HEIGHT}
+					preserveAspectRatio="xMidYMid meet"
+					class="ground-figure__basemap"
+				/>
+			{/if}
+			{#if districtPaths.length > 0}
+				<!-- Single combined path with even-odd fill: outer rings fill,
+				     hole rings cut out. Without this, GeoJSON Polygon holes
+				     (interior carve-outs) render as if they were territory. -->
+				<path
+					d={districtPaths.join(' ')}
+					class="ground-figure__district"
+					class:ground-figure__district--with-basemap={showBasemap}
+					fill-rule="evenodd"
+				/>
+			{/if}
 			{#each cellPaths as path}
 				<path d={path} class="ground-figure__cell" />
 			{/each}
@@ -237,6 +330,21 @@
 		stroke-width: 1.5;
 		stroke-linejoin: round;
 		vector-effect: non-scaling-stroke;
+	}
+
+	/* With a basemap underneath, the emerald fill would muddy the cartography
+	 * — drop the fill, raise the stroke chroma so the boundary still reads.
+	 */
+	.ground-figure__district--with-basemap {
+		fill: none;
+		stroke: oklch(0.5 0.16 155 / 0.95);
+		stroke-width: 1.75;
+	}
+
+	/* Basemap raster sits underneath the polygons. Mount is preload-gated,
+	 * so the element only appears once the asset is known fetchable. */
+	.ground-figure__basemap {
+		opacity: 1;
 	}
 
 	/* H3 cell inside district: teal — your route within the verified shape. */

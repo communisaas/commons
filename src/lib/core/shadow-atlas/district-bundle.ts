@@ -25,7 +25,11 @@ import { displayDistrictToGEOID } from './district-format.js';
 // Atlas host. Defaults to the reference commons.email deployment;
 // peer implementations override via PUBLIC_ATLAS_HOST. The default is
 // preserved so commons.email's current deployment is unaffected.
-const ATLAS_HOST = publicEnv.PUBLIC_ATLAS_HOST || 'https://atlas.commons.email';
+// Strip any trailing slash so URL composition below produces clean
+// `https://host/source/...` paths regardless of how operators write the env
+// var. Without this, `https://host//source/...` slips past validation here
+// but trips the atlas Worker's allowlist regex.
+const ATLAS_HOST = (publicEnv.PUBLIC_ATLAS_HOST || 'https://atlas.commons.email').replace(/\/$/, '');
 
 interface SourceManifest {
 	currentVersion: string;
@@ -130,4 +134,26 @@ export async function getDistrictBoundary(
 		// "boundary unavailable, fall back to non-spatial UI."
 		return null;
 	}
+}
+
+/**
+ * Deterministic URL for a district's pre-rendered basemap raster, derived
+ * from the same atlas manifest that backs `getDistrictBoundary`. Returns null
+ * if the display code is unknown or the manifest is unavailable — the caller
+ * must treat null as "fall back to tile-less rendering."
+ *
+ * No fetch happens here. The URL points at an immutable per-version asset
+ * served from the same R2 origin as the boundary GeoJSON.
+ */
+export async function getDistrictBasemapUrl(
+	displayCode: string,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	const geoid = displayDistrictToGEOID(displayCode);
+	if (!geoid) return null;
+
+	const manifest = await getManifest(signal);
+	if (!manifest) return null;
+
+	return `${ATLAS_HOST}/source/${manifest.currentVersion}/us/cd/cd-${geoid}-base.png`;
 }

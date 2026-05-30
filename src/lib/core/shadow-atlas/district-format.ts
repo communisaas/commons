@@ -150,13 +150,23 @@ const STATE_TO_FIPS: Record<string, string> = Object.fromEntries(
 );
 
 /**
+ * Non-voting delegate jurisdictions: DC + the five inhabited territories.
+ * Their atlas GEOIDs use the `98` district suffix; ordinary at-large states
+ * (Vermont, Wyoming, Alaska, etc.) use `00`. Both surface as `-AL` in display
+ * form, so the disambiguation lives here at the FIPS layer.
+ */
+const DELEGATE_FIPS = new Set(['11', '60', '66', '69', '72', '78']);
+
+/**
  * Convert display district format to raw GEOID.
- * "CA-12" → "0612", "VT-AL" → "5000"
+ * "CA-12" → "0612", "VT-AL" → "5000", "DC-AL" → "1198"
  *
  * Returns null if the state abbreviation is unknown.
  */
 export function displayDistrictToGEOID(display: string): string | null {
-	const match = display.match(/^([A-Z]{2})-(.+)$/);
+	// Strict shape: state code, dash, then either "AL" or 1-2 digits. The dot-star
+	// version accepted query/path segments and let them flow into atlas asset URLs.
+	const match = display.match(/^([A-Z]{2})-(AL|\d{1,2})$/);
 	if (!match) return null;
 
 	const stateAbbr = match[1];
@@ -164,7 +174,11 @@ export function displayDistrictToGEOID(display: string): string | null {
 	const fips = STATE_TO_FIPS[stateAbbr];
 	if (!fips) return null;
 
-	// At-large: "AL" → "00"
-	const districtNum = districtPart === 'AL' ? '00' : districtPart.padStart(2, '0');
+	const districtNum =
+		districtPart === 'AL'
+			? DELEGATE_FIPS.has(fips)
+				? '98'
+				: '00'
+			: districtPart.padStart(2, '0');
 	return `${fips}${districtNum}`;
 }

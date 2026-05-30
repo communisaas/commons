@@ -49,11 +49,12 @@ const OUTPUT_PATTERN =
  * browsers fetch for district bundle visualization.
  *
  * Shape:
- *   `/source/manifest.json`                              (moving index)
- *   `/source/manifest.json.sig`                          (Ed25519 signature)
- *   `/source/v{YYYYMMDD}/<filename>.{db|sha256}`         (top-level CI artifacts)
- *   `/source/v{YYYYMMDD}/<country>/<layer>/index.json`   (per-layer district index)
- *   `/source/v{YYYYMMDD}/<country>/<layer>/<id>.geojson` (per-district feature)
+ *   `/source/manifest.json`                                   (moving index)
+ *   `/source/manifest.json.sig`                               (Ed25519 signature)
+ *   `/source/v{YYYYMMDD}/<filename>.{db|sha256}`              (top-level CI artifacts)
+ *   `/source/v{YYYYMMDD}/<country>/<layer>/index.json`        (per-layer district index)
+ *   `/source/v{YYYYMMDD}/<country>/<layer>/<id>.geojson`      (per-district feature)
+ *   `/source/v{YYYYMMDD}/<country>/<layer>/<id>-base.png`     (per-district basemap raster)
  *
  *   <country> — lowercase 2-3 letter (us, ca, gb, au)
  *   <layer>   — lowercase alphanumeric + hyphen (cd, sldu, sldl, county, can-fed)
@@ -64,9 +65,12 @@ const OUTPUT_PATTERN =
  * run 150 MB (cd) to 450 MB (sldl) uncompressed — too large for browser fetches
  * every page render. Per-district files are 50 KB to ~1.5 MB each; the browser
  * fetches just what it needs plus a small per-layer index.
+ *
+ * Basemap PNGs are pre-rendered at publish time per district. The browser
+ * fetches one per district view at most; the edge cache absorbs repeats.
  */
 const SOURCE_PATTERN =
-	/^\/source\/(?:manifest\.json(?:\.sig)?|v\d{8}\/(?:[a-z][A-Za-z0-9._-]*\.(?:db|sha256)|[a-z]{2,3}\/[a-z][a-z0-9-]*\/(?:index\.json|[a-z][a-z0-9-]*\.geojson)))$/;
+	/^\/source\/(?:manifest\.json(?:\.sig)?|v\d{8}\/(?:[a-z][A-Za-z0-9._-]*\.(?:db|sha256)|[a-z]{2,3}\/[a-z][a-z0-9-]*\/(?:index\.json|[a-z][a-z0-9-]*\.(?:geojson|png))))$/;
 
 function isAllowedPath(path: string): boolean {
 	// Defense-in-depth: even though CF normalizes URLs before they reach
@@ -82,6 +86,7 @@ function contentTypeFor(path: string): string {
 	if (path.endsWith('.json')) return 'application/json';
 	if (path.endsWith('.db')) return 'application/vnd.sqlite3';
 	if (path.endsWith('.sha256')) return 'text/plain; charset=utf-8';
+	if (path.endsWith('.png')) return 'image/png';
 	return 'application/octet-stream';
 }
 
@@ -158,6 +163,11 @@ export default {
 			headHeaders.set('Content-Type', contentTypeFor(path));
 			headHeaders.set('Content-Length', String(head.size));
 			headHeaders.set('Access-Control-Allow-Origin', '*');
+			// Permits embedding from origins that set COEP: require-corp (the
+			// /profile and /s/ routes do this for SharedArrayBuffer in ZK
+			// proving). Without it, the browser blocks the response before the
+			// app sees a success status.
+			headHeaders.set('Cross-Origin-Resource-Policy', 'cross-origin');
 			headHeaders.set('Cache-Control', cacheControlFor(path));
 			headHeaders.set('Accept-Ranges', 'bytes');
 			headHeaders.set('ETag', head.httpEtag);
@@ -203,6 +213,7 @@ export default {
 		const headers = new Headers();
 		headers.set('Content-Type', contentTypeFor(path));
 		headers.set('Access-Control-Allow-Origin', '*');
+		headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
 		headers.set('Cache-Control', cacheControlFor(path));
 		headers.set('Accept-Ranges', 'bytes');
 		headers.set('ETag', object.httpEtag);
