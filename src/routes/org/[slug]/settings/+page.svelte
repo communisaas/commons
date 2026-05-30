@@ -21,6 +21,59 @@
 	let resendingId = $state<string | null>(null);
 	let revokingId = $state<string | null>(null);
 
+	// Member action loading states (keyed by membership id)
+	let memberMutatingId = $state<string | null>(null);
+	let memberMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
+
+	async function changeMemberRole(membershipId: string, role: 'owner' | 'editor' | 'member') {
+		if (memberMutatingId) return;
+		memberMutatingId = membershipId;
+		memberMessage = null;
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/members`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ membershipId, role })
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ message: 'Failed to update role' }));
+				memberMessage = { type: 'error', text: err.message ?? 'Failed to update role' };
+				return;
+			}
+			memberMessage = { type: 'success', text: 'Role updated' };
+			await invalidateAll();
+		} catch {
+			memberMessage = { type: 'error', text: 'Network error. Please try again.' };
+		} finally {
+			memberMutatingId = null;
+		}
+	}
+
+	async function removeMember(membershipId: string, label: string) {
+		if (memberMutatingId) return;
+		if (!confirm(`Remove ${label} from the organization?`)) return;
+		memberMutatingId = membershipId;
+		memberMessage = null;
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/members`, {
+				method: 'DELETE',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ membershipId })
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ message: 'Failed to remove member' }));
+				memberMessage = { type: 'error', text: err.message ?? 'Failed to remove member' };
+				return;
+			}
+			memberMessage = { type: 'success', text: 'Member removed' };
+			await invalidateAll();
+		} catch {
+			memberMessage = { type: 'error', text: 'Network error. Please try again.' };
+		} finally {
+			memberMutatingId = null;
+		}
+	}
+
 	async function resendInvite(inviteId: string) {
 		if (resendingId) return;
 		resendingId = inviteId;
@@ -849,11 +902,42 @@
 							<p class="text-xs text-text-tertiary truncate">{member.email}</p>
 						{/if}
 					</div>
-					<span class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-tertiary capitalize">
-						{member.role}
-					</span>
+					{#if isOwner}
+						<select
+							value={member.role}
+							disabled={memberMutatingId === member.id}
+							onchange={(e) => {
+								const next = (e.target as HTMLSelectElement).value as 'owner' | 'editor' | 'member';
+								if (next !== member.role) changeMemberRole(String(member.id), next);
+							}}
+							class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-secondary focus:outline-none focus:border-teal-500 disabled:opacity-50"
+						>
+							<option value="member">Member</option>
+							<option value="editor">Editor</option>
+							<option value="owner">Owner</option>
+						</select>
+						<button
+							type="button"
+							onclick={() => removeMember(String(member.id), member.name ?? member.email ?? 'this member')}
+							disabled={memberMutatingId === member.id}
+							class="text-xs px-2 py-0.5 rounded border border-surface-border-strong text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+						>
+							Remove
+						</button>
+					{:else}
+						<span class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-tertiary capitalize">
+							{member.role}
+						</span>
+					{/if}
 				</div>
 			{/each}
+			{#if memberMessage}
+				<div class="px-5 py-2">
+					<p class="text-xs {memberMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}">
+						{memberMessage.text}
+					</p>
+				</div>
+			{/if}
 		</div>
 
 		<!-- Invite Form (editor+ only) -->

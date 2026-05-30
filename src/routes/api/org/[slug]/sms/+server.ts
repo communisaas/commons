@@ -71,7 +71,17 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		body: smsBody.trim(),
 		fromNumber: fromNumber || '',
 		campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined,
-		recipientFilter: parsedFilter,
+		// Form-validated zod shape carries strings; Convex args validator
+		// expects Id<'tags'>/Id<'segments'>. The zod ≤64-char gate above
+		// already constrains shape; cast at the boundary so the Convex
+		// validator can do its final Id-format check.
+		recipientFilter: parsedFilter
+			? {
+					tags: parsedFilter.tags as Id<'tags'>[] | undefined,
+					segments: parsedFilter.segments as Id<'segments'>[] | undefined,
+					excludeTags: parsedFilter.excludeTags as Id<'tags'>[] | undefined
+				}
+			: undefined,
 		totalRecipients: 0
 	});
 

@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
@@ -42,7 +43,13 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		title,
 		type,
 		body: campaignBody?.trim() || undefined,
-		templateId: templateId || undefined,
+		// Caller-supplied string validated above (≤64 chars); cast to
+		// Id<'templates'> at the API boundary so the Convex args
+		// validator (now v.id('templates')) can reject malformed Ids
+		// before the write hits the schema validator. Without this cast
+		// the JSON-body `any` types let TS through, but the runtime
+		// validator throws and turns a recoverable 400 into a 500.
+		templateId: templateId ? (templateId as Id<'templates'>) : undefined,
 		debateEnabled: Boolean(debateEnabled),
 		debateThreshold: typeof debateThreshold === 'number' ? debateThreshold : 50
 	});

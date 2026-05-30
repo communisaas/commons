@@ -18,7 +18,10 @@ import type { PageServerLoad, Actions } from './$types';
 const baseUrl = env.PUBLIC_BASE_URL?.replace(/\/$/, '') ?? 'https://commons.email';
 
 interface RecipientFilter {
-	tagIds?: string[];
+	// tagIds are sourced from form data (raw strings); the Convex
+	// recipientFilterValidator expects Id<'tags'>. parseFilter casts
+	// at the API boundary so this local shape stays string-typed.
+	tagIds?: Id<'tags'>[];
 	verified?: 'any' | 'verified' | 'unverified';
 }
 
@@ -103,12 +106,33 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 	};
 };
 
+// Convex doc Id format: lowercase base32, ~32 chars in practice. Reject
+// obviously-malformed input at the boundary so a bad client posts a
+// controllable 400 instead of riding through to the Convex args validator
+// (which throws as 500). Charset/length tightened after a brutalist round
+// caught the earlier /^[a-z0-9_]{20,64}$/i admitting underscores and
+// uppercase that no real Convex Id contains.
+const CONVEX_ID_RE = /^[a-z0-9]{30,40}$/;
+const VERIFIED_VALUES = new Set(['any', 'verified', 'unverified']);
+
 function parseFilter(formData: FormData): RecipientFilter {
-	const tagIds = formData.getAll('tagIds').map(String).filter(Boolean);
-	const verified = formData.get('verified')?.toString() || 'any';
+	const rawTagIds = formData.getAll('tagIds').map(String).filter(Boolean);
+	// Drop any tagId that doesn't match the Convex Id shape — the cast at
+	// the bottom would otherwise lie about a runtime invariant the args
+	// validator checks downstream. Keeps shape-defense local to the
+	// boundary instead of relying on Convex throwing an unhandled error.
+	const tagIds = rawTagIds.filter((t) => CONVEX_ID_RE.test(t));
+	const rawVerified = formData.get('verified')?.toString() ?? 'any';
+	// Normalize unknown verified-axis values to 'any' rather than letting
+	// the cast lie to the type system. The Convex validator's union
+	// literals would reject anything outside the set with a 500; this
+	// degrades unrecognized values to no-op locally.
+	const verified = VERIFIED_VALUES.has(rawVerified)
+		? (rawVerified as 'any' | 'verified' | 'unverified')
+		: 'any';
 	return {
-		tagIds: tagIds.length > 0 ? tagIds : undefined,
-		verified: verified as 'any' | 'verified' | 'unverified'
+		tagIds: tagIds.length > 0 ? (tagIds as Id<'tags'>[]) : undefined,
+		verified
 	};
 }
 
@@ -291,7 +315,9 @@ export const actions: Actions = {
 			fromName,
 			fromEmail,
 			recipientFilter: filter,
-			campaignId: campaignId ?? undefined
+			// campaignId is form-data string validated against campaigns.get above;
+			// narrow to the schema's Id<'campaigns'> at the call boundary.
+			campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined
 		});
 		await serverMutation(api.email.updateBlast, {
 			orgSlug: params.slug,
@@ -395,7 +421,7 @@ export const actions: Actions = {
 				fromName,
 				fromEmail,
 				recipientFilter: filter,
-				campaignId: campaignId ?? undefined,
+				campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined,
 				isAbTest: true,
 				abVariant: 'A',
 				abParentId,
@@ -408,7 +434,7 @@ export const actions: Actions = {
 				fromName,
 				fromEmail,
 				recipientFilter: filter,
-				campaignId: campaignId ?? undefined,
+				campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined,
 				isAbTest: true,
 				abVariant: 'B',
 				abParentId,
@@ -511,7 +537,7 @@ export const actions: Actions = {
 			fromEmail,
 			sendMode: 'client-direct',
 			recipientFilter: filter,
-			campaignId: campaignId ?? undefined
+			campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined
 		});
 		const wrappedBodyHtml = wrappedBodyTemplate.replaceAll(
 			BLAST_ID_PLACEHOLDER,

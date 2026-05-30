@@ -42,6 +42,7 @@ export const actions: Actions = {
 		const phone = formData.get('phone')?.toString().trim() || null;
 		const message = formData.get('message')?.toString().trim() || null;
 		const h3Cell = formData.get('h3Cell')?.toString().trim() || null;
+		const atlasVersion = formData.get('atlasVersion')?.toString().trim() || null;
 
 		if (message && message.length > 5000) {
 			return fail(400, { error: 'Message too long (5000 character maximum)' });
@@ -102,6 +103,7 @@ export const actions: Actions = {
 				phone: phone ?? undefined,
 				message: message ?? undefined,
 				h3Cell: h3Cell ?? undefined,
+				atlasVersion: atlasVersion ?? undefined,
 				source: 'widget',
 				compositionMode
 			});

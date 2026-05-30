@@ -657,24 +657,46 @@
 			<CreationSpark onactivate={handleSparkActivate}>
 				{#snippet context()}
 					<footer class="creation-footer">
-						<a href="mailto:hello@commons.email" class="contact-link contact-link--mailto">
-							<span class="link-text">hello@commons.email</span>
-						</a>
-						<span class="creation-footer__sep" aria-hidden="true"></span>
-						<a href="/org" class="contact-link contact-link--org">
-							<span class="link-text">Organization tools</span>
+						<div class="creation-footer__row">
+							<a href="mailto:hello@commons.email" class="contact-link contact-link--mailto">
+								<span class="link-text">hello@commons.email</span>
+							</a>
+							<span class="creation-footer__sep" aria-hidden="true"></span>
+							<a href="/org" class="contact-link contact-link--org">
+								<span class="link-text">Organization tools</span>
+								<svg
+									class="link-arrow"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								>
+									<line x1="5" y1="12" x2="19" y2="12"></line>
+									<polyline points="12 5 19 12 12 19"></polyline>
+								</svg>
+							</a>
+						</div>
+						<a
+							href="https://github.com/communisaas/commons"
+							target="_blank"
+							rel="noopener noreferrer"
+							class="contact-link contact-link--source"
+							aria-label="View the commons source code on GitHub"
+						>
 							<svg
-								class="link-arrow"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
+								class="source-mark"
+								viewBox="0 0 16 16"
+								aria-hidden="true"
+								focusable="false"
 							>
-								<line x1="5" y1="12" x2="19" y2="12"></line>
-								<polyline points="12 5 19 12 12 19"></polyline>
+								<path
+									fill="currentColor"
+									d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"
+								/>
 							</svg>
+							<span class="link-text">the commons is open source</span>
 						</a>
 					</footer>
 				{/snippet}
@@ -1171,6 +1193,19 @@
 	.creation-footer {
 		margin-top: auto;
 		padding-top: 0.75rem;
+		/*
+		 * Footer is a vertical stack of two related-but-distinct categories:
+		 * (1) inline contact row, (2) the open-source credit. Column flex
+		 * with a small gap keeps the credit visually anchored to the row
+		 * above without merging the two into one wrapping line.
+		 */
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.375rem;
+	}
+
+	.creation-footer__row {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -1179,6 +1214,10 @@
 	@media (min-width: 1280px) {
 		.creation-footer {
 			padding-top: 1.5rem;
+			align-items: flex-start;
+		}
+
+		.creation-footer__row {
 			justify-content: flex-start;
 		}
 	}
@@ -1252,5 +1291,80 @@
 
 	.contact-link--mailto:hover .link-text {
 		background-size: 100% 1px;
+	}
+
+	/*
+	 * Source link: declarative credit, not a primary action.
+	 *
+	 * Visual tone sits between the neutral mailto and the teal --org —
+	 * a touch dimmer than the cool grays around it so the eye reads it
+	 * as a signature rather than an invitation. The github mark carries
+	 * the destination signal; the text carries the statement.
+	 *
+	 * Hover warms toward the brand-mark amber (oklch 0.42 0.08 55, same
+	 * hue/lightness as `.brand-mark` in CreationSpark) — a semantic
+	 * gesture: touching "open source" reveals the brand identity color,
+	 * binding the value to the project's name.
+	 *
+	 * The mark itself sits at 70% opacity in rest state so the text leads
+	 * the read; hover lifts it to 100% to confirm "this goes to GitHub."
+	 */
+	.contact-link--source {
+		color: oklch(0.6 0.015 250);
+		gap: 0.4rem;
+	}
+
+	.source-mark {
+		width: 14px;
+		height: 14px;
+		flex-shrink: 0;
+		opacity: 0.7;
+		transition:
+			opacity 200ms ease-out,
+			transform 200ms ease-out;
+	}
+
+	@media (min-width: 1280px) {
+		.source-mark {
+			width: 15px;
+			height: 15px;
+		}
+	}
+
+	.contact-link--source .link-text {
+		background-image: linear-gradient(currentColor, currentColor);
+		background-size: 0% 1px;
+		background-position: 0% 100%;
+		background-repeat: no-repeat;
+		transition: background-size 300ms ease-out;
+	}
+
+	.contact-link--source:hover {
+		color: oklch(0.42 0.08 55);
+	}
+
+	.contact-link--source:hover .source-mark {
+		opacity: 1;
+		transform: rotate(-4deg);
+	}
+
+	.contact-link--source:hover .link-text {
+		background-size: 100% 1px;
+	}
+
+	.contact-link--source:focus-visible {
+		outline: 2px solid oklch(0.55 0.15 195);
+		outline-offset: 3px;
+		border-radius: 2px;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.source-mark {
+			transition: none;
+		}
+
+		.contact-link--source:hover .source-mark {
+			transform: none;
+		}
 	}
 </style>

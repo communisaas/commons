@@ -52,7 +52,10 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 
 	const result = await serverQuery(api.donations.listByOrgWithDonors, {
 		orgSlug: params.slug,
-		status: status && ['DRAFT', 'ACTIVE', 'COMPLETE'].includes(status) ? status : undefined,
+		status:
+			status && ['DRAFT', 'ACTIVE', 'COMPLETE'].includes(status)
+				? (status as 'DRAFT' | 'ACTIVE' | 'COMPLETE')
+				: undefined,
 		limit
 	});
 	return json(result);

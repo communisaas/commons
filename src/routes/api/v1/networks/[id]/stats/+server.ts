@@ -11,6 +11,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
+import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params, request }) => {
@@ -18,11 +19,28 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	requirePublicApi();
 	const auth = await authenticateApiKey(request);
 	if (auth instanceof Response) return auth;
-	const rateLimit = await checkApiPlanRateLimit(auth);
+	const rateLimit = await checkApiPlanRateLimit(auth, { method: request.method });
 	if (rateLimit) return rateLimit;
 
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
+
+	// T7-9 — Network-level rate limit. Coalition stats is expensive (joins
+	// across all member orgs). Cap at 5 req/min per network so a single org
+	// in a coalition can't budget-starve the others. Quota pooling (Mode B)
+	// is product-definition-first; defer until the first paying coalition
+	// customer surfaces a real need.
+	const networkRl = await getRateLimiter().check(
+		`network-stats:${params.id}`,
+		{ maxRequests: 5, windowMs: 60_000 }
+	);
+	if (!networkRl.allowed) {
+		return apiError(
+			'RATE_LIMITED',
+			`Network stats rate limit exceeded. Retry after ${networkRl.retryAfter} seconds.`,
+			429
+		);
+	}
 
 	// Verify the requesting org is an active member
 	const membership = await serverQuery(api.networks.checkMembership, {
@@ -34,5 +52,8 @@ export const GET: RequestHandler = async ({ params, request }) => {
 		return apiError('FORBIDDEN', 'Organization is not an active member of this network', 403);
 	}
 
-	return apiError('NOT_IMPLEMENTED', 'Network stats are not available in this API boundary', 501);
+	const stats = await serverQuery(api.networks.getStats, {
+		networkId: params.id as Id<'orgNetworks'>
+	});
+	return apiOk(stats);
 };

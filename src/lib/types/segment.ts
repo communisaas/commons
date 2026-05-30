@@ -9,7 +9,9 @@ export type ConditionField =
 	| 'source'
 	| 'emailStatus'
 	| 'dateRange'
-	| 'campaignParticipation';
+	| 'campaignParticipation'
+	| 'postalCode'
+	| 'country';
 
 export type ConditionOperator =
 	| 'includes'
@@ -21,7 +23,8 @@ export type ConditionOperator =
 	| 'after'
 	| 'between'
 	| 'participated'
-	| 'notParticipated';
+	| 'notParticipated'
+	| 'startsWith';
 
 export interface SegmentCondition {
 	id: string;
@@ -37,11 +40,13 @@ export interface SegmentFilter {
 
 const VALID_FIELDS = new Set<string>([
 	'tag', 'verification', 'engagementTier', 'source',
-	'emailStatus', 'dateRange', 'campaignParticipation'
+	'emailStatus', 'dateRange', 'campaignParticipation',
+	'postalCode', 'country'
 ]);
 const VALID_OPERATORS = new Set<string>([
 	'includes', 'excludes', 'equals', 'gte', 'lte',
-	'before', 'after', 'between', 'participated', 'notParticipated'
+	'before', 'after', 'between', 'participated', 'notParticipated',
+	'startsWith'
 ]);
 
 /**
@@ -139,6 +144,19 @@ export const FIELD_OPTIONS: Array<{
 			{ value: 'participated', label: 'participated in' },
 			{ value: 'notParticipated', label: 'did not participate in' }
 		]
+	},
+	{
+		value: 'postalCode',
+		label: 'Postal Code',
+		operators: [
+			{ value: 'equals', label: 'is' },
+			{ value: 'startsWith', label: 'starts with' }
+		]
+	},
+	{
+		value: 'country',
+		label: 'Country',
+		operators: [{ value: 'equals', label: 'is' }]
 	}
 ];
 

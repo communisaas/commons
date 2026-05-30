@@ -77,6 +77,9 @@
 			startMs: new Date('2026-02-12T00:00:00Z').getTime(),
 			binWidthMs: 3600000 * 24
 		},
+		driftCount: null,
+		driftPct: null,
+		debate: null,
 		lastUpdated: '2026-03-04T18:00:00Z'
 	};
 
@@ -213,6 +216,13 @@
 		name="description"
 		content="312 signatures, no proof. A petition counts names; a verification packet documents constituents — each individually authored, identity-proven, district-matched, screened for duplicates."
 	/>
+	<meta property="og:type" content="website" />
+	<meta property="og:url" content="https://commons.email/org" />
+	<meta property="og:title" content="Commons for Organizations" />
+	<meta property="og:description" content="Verified civic action. Receipts that hold up." />
+	<meta property="og:image" content="https://commons.email/og/org" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:image" content="https://commons.email/og/org" />
 </svelte:head>
 
 <div class="org-page">

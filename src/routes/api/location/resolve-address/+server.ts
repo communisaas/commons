@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
 import { resolveAddress } from '$lib/core/shadow-atlas/client';
@@ -127,14 +128,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			county_fips: null
 		});
 	} catch (error) {
-		console.error(
-			'[resolve-address] Unhandled error:',
-			error instanceof Error ? error.message : 'Unknown error'
-		);
+		const message = error instanceof Error ? error.message : 'Unknown error';
+		console.error('[resolve-address] Unhandled error:', message);
 		return json(
 			{
 				resolved: false,
-				error: 'Address resolution service temporarily unavailable'
+				// Surface the real message in dev so missing env vars / config drift
+				// show up in the browser instead of the generic prod copy. Prod
+				// callers still see the opaque "temporarily unavailable" string.
+				error: dev ? message : 'Address resolution service temporarily unavailable'
 			},
 			{ status: 500 }
 		);

@@ -1,5 +1,7 @@
-import { serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { fail, redirect, type Actions } from '@sveltejs/kit';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 import type { PageServerLoad } from './$types';
 
@@ -39,4 +41,24 @@ export const load: PageServerLoad = async ({ parent }) => {
 		})),
 		counts: statusCounts
 	};
+};
+
+export const actions: Actions = {
+	clone: async ({ request, params }) => {
+		const data = await request.formData();
+		const sourceCampaignId = String(data.get('campaignId') ?? '');
+		if (!sourceCampaignId) return fail(400, { error: 'campaignId is required' });
+
+		try {
+			const newId = await serverMutation(api.campaigns.clone, {
+				slug: params.slug!,
+				sourceCampaignId: sourceCampaignId as Id<'campaigns'>
+			});
+			throw redirect(303, `/org/${params.slug}/campaigns/${newId}`);
+		} catch (e) {
+			if (e && typeof e === 'object' && 'status' in e) throw e; // re-throw SvelteKit redirect
+			const message = e instanceof Error ? e.message : 'Failed to clone campaign';
+			return fail(400, { error: message });
+		}
+	}
 };

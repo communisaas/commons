@@ -3,6 +3,7 @@
  * POST /api/v1/campaigns — Create a new campaign.
  */
 
+import type { Id } from '$convex/_generated/dataModel';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
@@ -18,7 +19,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	requirePublicApi();
 	const auth = await authenticateApiKey(request);
 	if (auth instanceof Response) return auth;
-	const rateLimit = await checkApiPlanRateLimit(auth);
+	const rateLimit = await checkApiPlanRateLimit(auth, { method: request.method });
 	if (rateLimit) return rateLimit;
 
 	const scopeErr = requireScope(auth, 'read');
@@ -62,7 +63,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	requirePublicApi();
 	const auth = await authenticateApiKey(request);
 	if (auth instanceof Response) return auth;
-	const rateLimit = await checkApiPlanRateLimit(auth);
+	const rateLimit = await checkApiPlanRateLimit(auth, { method: request.method });
 	if (rateLimit) return rateLimit;
 
 	const scopeErr = requireScope(auth, 'write');
@@ -100,9 +101,12 @@ export const POST: RequestHandler = async ({ request }) => {
 		_secret: getInternalSecret(),
 		orgId: auth.orgId,
 		title: title.trim(),
-		type,
+		// type was validated upstream against the LETTER/EVENT/FORM/FUNDRAISER
+		// allowlist; cast at the boundary to match the Convex args union.
+		type: type as 'LETTER' | 'EVENT' | 'FORM' | 'FUNDRAISER',
 		body: campaignBody?.trim() || undefined,
-		templateId: templateId || undefined,
+		// Form-input string cast; Convex args validator rejects malformed Ids.
+		templateId: templateId ? (templateId as Id<'templates'>) : undefined,
 		targetJurisdiction: targetJurisdiction || undefined,
 		targetCountry: targetCountry?.toUpperCase() || 'US'});
 

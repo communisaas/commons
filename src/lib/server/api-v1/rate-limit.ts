@@ -17,11 +17,27 @@ const API_PLAN_LIMITS: Record<string, { maxRequests: number; windowMs: number }>
 	coalition: { maxRequests: 3000, windowMs: 60_000 }
 };
 
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 /**
  * Check plan-tiered rate limit for an API v1 request.
- * Returns null if allowed, or a 429 Response if rate-limited.
+ *
+ * Reads on the free plan are intentionally uncapped — aligns the "no rate
+ * cap" marketing claim with code behavior. Writes (POST/PATCH/PUT/DELETE)
+ * remain capped at the plan's request-per-minute limit. Higher plans keep
+ * their flat ceilings across all methods. Pass the request method so the
+ * gate can distinguish; defaults to capping when method is absent (safer).
  */
-export async function checkApiPlanRateLimit(ctx: ApiKeyContext): Promise<Response | null> {
+export async function checkApiPlanRateLimit(
+	ctx: ApiKeyContext,
+	opts?: { method?: string }
+): Promise<Response | null> {
+	const method = opts?.method?.toUpperCase();
+	const isRead = method !== undefined && READ_METHODS.has(method);
+	if (ctx.planSlug === 'free' && isRead) {
+		return null;
+	}
+
 	const limits = API_PLAN_LIMITS[ctx.planSlug] ?? API_PLAN_LIMITS.free;
 	const limiter = getRateLimiter();
 	const result = await limiter.check(`ratelimit:api-v1:plan:${ctx.keyId}`, limits);

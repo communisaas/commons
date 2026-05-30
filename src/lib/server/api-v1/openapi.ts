@@ -992,6 +992,173 @@ export const openApiSpec = {
 					'404': { $ref: '#/components/responses/NotFound' }
 				}
 			}
+		},
+		'/webhooks': {
+			get: {
+				operationId: 'listWebhooks',
+				summary: 'List webhook subscriptions',
+				description:
+					'Returns all webhook subscriptions for the authenticated org. Requires read scope.',
+				responses: {
+					'200': {
+						description: 'Array of webhook subscriptions',
+						content: {
+							'application/json': {
+								schema: {
+									type: 'object',
+									properties: {
+										data: {
+											type: 'array',
+											items: { $ref: '#/components/schemas/Webhook' }
+										}
+									}
+								}
+							}
+						}
+					},
+					'401': { $ref: '#/components/responses/Unauthorized' },
+					'403': { $ref: '#/components/responses/Forbidden' }
+				}
+			},
+			post: {
+				operationId: 'createWebhook',
+				summary: 'Create webhook subscription',
+				description:
+					'Subscribes an HTTPS endpoint to one or more org events. Returns the signing secret ONCE — store it now; Commons will never display it again. Requires write scope.',
+				requestBody: {
+					required: true,
+					content: {
+						'application/json': {
+							schema: { $ref: '#/components/schemas/CreateWebhookInput' }
+						}
+					}
+				},
+				responses: {
+					'201': {
+						description: 'Webhook created (with one-time signingSecret)',
+						content: {
+							'application/json': {
+								schema: {
+									type: 'object',
+									properties: { data: { $ref: '#/components/schemas/WebhookCreated' } }
+								}
+							}
+						}
+					},
+					'400': { $ref: '#/components/responses/BadRequest' },
+					'401': { $ref: '#/components/responses/Unauthorized' },
+					'403': { $ref: '#/components/responses/Forbidden' }
+				}
+			}
+		},
+		'/webhooks/{id}': {
+			get: {
+				operationId: 'getWebhook',
+				summary: 'Get webhook subscription',
+				parameters: [{ $ref: '#/components/parameters/resourceId' }],
+				responses: {
+					'200': {
+						description: 'Webhook subscription',
+						content: {
+							'application/json': {
+								schema: {
+									type: 'object',
+									properties: { data: { $ref: '#/components/schemas/Webhook' } }
+								}
+							}
+						}
+					},
+					'401': { $ref: '#/components/responses/Unauthorized' },
+					'403': { $ref: '#/components/responses/Forbidden' },
+					'404': { $ref: '#/components/responses/NotFound' }
+				}
+			},
+			patch: {
+				operationId: 'updateWebhook',
+				summary: 'Update webhook subscription',
+				description:
+					'Update URL, events, enabled state, or description. Re-enabling resets the failureCount. Requires write scope.',
+				parameters: [{ $ref: '#/components/parameters/resourceId' }],
+				requestBody: {
+					required: true,
+					content: {
+						'application/json': {
+							schema: { $ref: '#/components/schemas/UpdateWebhookInput' }
+						}
+					}
+				},
+				responses: {
+					'200': {
+						description: 'Updated webhook subscription',
+						content: {
+							'application/json': {
+								schema: {
+									type: 'object',
+									properties: { data: { $ref: '#/components/schemas/Webhook' } }
+								}
+							}
+						}
+					},
+					'400': { $ref: '#/components/responses/BadRequest' },
+					'401': { $ref: '#/components/responses/Unauthorized' },
+					'403': { $ref: '#/components/responses/Forbidden' },
+					'404': { $ref: '#/components/responses/NotFound' }
+				}
+			},
+			delete: {
+				operationId: 'deleteWebhook',
+				summary: 'Delete webhook subscription',
+				description: 'Removes the subscription and its delivery history. Requires write scope.',
+				parameters: [{ $ref: '#/components/parameters/resourceId' }],
+				responses: {
+					'200': {
+						description: 'Webhook deleted',
+						content: {
+							'application/json': {
+								schema: {
+									type: 'object',
+									properties: {
+										data: {
+											type: 'object',
+											properties: { deleted: { type: 'boolean', enum: [true] } }
+										}
+									}
+								}
+							}
+						}
+					},
+					'401': { $ref: '#/components/responses/Unauthorized' },
+					'403': { $ref: '#/components/responses/Forbidden' },
+					'404': { $ref: '#/components/responses/NotFound' }
+				}
+			}
+		},
+		'/webhooks/{id}/rotate-secret': {
+			post: {
+				operationId: 'rotateWebhookSecret',
+				summary: 'Rotate webhook signing secret',
+				description:
+					'Issues a new signing secret. The previous secret continues to verify within the rotation window so receivers can roll over without dropped deliveries. The new secret is returned ONCE. Requires write scope.',
+				parameters: [{ $ref: '#/components/parameters/resourceId' }],
+				responses: {
+					'200': {
+						description: 'New signing secret (returned once)',
+						content: {
+							'application/json': {
+								schema: {
+									type: 'object',
+									properties: {
+										data: { $ref: '#/components/schemas/WebhookSecretRotated' }
+									}
+								}
+							}
+						}
+					},
+					'401': { $ref: '#/components/responses/Unauthorized' },
+					'403': { $ref: '#/components/responses/Forbidden' },
+					'404': { $ref: '#/components/responses/NotFound' }
+				}
+			}
 		}
 	},
 	components: {
@@ -1477,6 +1644,83 @@ export const openApiSpec = {
 						additionalProperties: { type: 'integer' },
 						description: 'Geographic distribution by region code'
 					}
+				}
+			},
+			WebhookEvent: {
+				type: 'string',
+				enum: [
+					'campaign_action.created',
+					'campaign.updated',
+					'supporter.created',
+					'supporter.updated',
+					'supporter.deleted',
+					'donation.completed',
+					'donation.refunded',
+					'event.rsvp_created'
+				],
+				description:
+					'Org-scoped event name. Payload schema is event-specific (JSON-encoded by sender).'
+			},
+			Webhook: {
+				type: 'object',
+				properties: {
+					id: { type: 'string' },
+					url: { type: 'string', format: 'uri' },
+					events: { type: 'array', items: { $ref: '#/components/schemas/WebhookEvent' } },
+					enabled: { type: 'boolean' },
+					description: { type: ['string', 'null'] },
+					createdAt: { type: 'integer', description: 'Unix ms timestamp' },
+					lastDeliveredAt: { type: ['integer', 'null'], description: 'Unix ms timestamp of last successful delivery' },
+					failureCount: { type: 'integer', description: 'Consecutive delivery failures since last success. Auto-disable at 5 dead deliveries.' }
+				}
+			},
+			WebhookCreated: {
+				allOf: [
+					{ $ref: '#/components/schemas/Webhook' },
+					{
+						type: 'object',
+						required: ['signingSecret'],
+						properties: {
+							signingSecret: {
+								type: 'string',
+								description:
+									'Signing secret used to verify deliveries via HMAC-SHA256(timestamp + "." + payload). Returned ONCE on creation — store it now. Cannot be retrieved later; rotate to generate a new one.'
+							}
+						}
+					}
+				]
+			},
+			WebhookSecretRotated: {
+				type: 'object',
+				required: ['id', 'signingSecret'],
+				properties: {
+					id: { type: 'string' },
+					signingSecret: {
+						type: 'string',
+						description: 'New signing secret. The previous secret continues to verify within the rotation window.'
+					}
+				}
+			},
+			CreateWebhookInput: {
+				type: 'object',
+				required: ['url', 'events'],
+				properties: {
+					url: { type: 'string', format: 'uri', description: 'HTTPS endpoint to receive POST deliveries' },
+					events: {
+						type: 'array',
+						minItems: 1,
+						items: { $ref: '#/components/schemas/WebhookEvent' }
+					},
+					description: { type: 'string', maxLength: 500 }
+				}
+			},
+			UpdateWebhookInput: {
+				type: 'object',
+				properties: {
+					url: { type: 'string', format: 'uri' },
+					events: { type: 'array', items: { $ref: '#/components/schemas/WebhookEvent' } },
+					enabled: { type: 'boolean', description: 'Re-enabling resets failureCount to 0.' },
+					description: { type: 'string', maxLength: 500 }
 				}
 			},
 			ErrorEnvelope: {

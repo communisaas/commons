@@ -49,6 +49,10 @@
 	let editingSection = $state<EditSection>('basic');
 	let showVerificationGate = $state(false);
 	let verificationGateRef = $state<VerificationGate | null>(null);
+	// Which tier the next gate-open is aiming for. Address-verify needs 2,
+	// government-ID needs 4 (matches TemplateModal's cwc path), re-verify
+	// needs 5 so the gate's short-circuit doesn't fire for a tier-4 user.
+	let pendingMinimumTier = $state<number>(2);
 	let showAddressChange = $state(false);
 	let showAddressRestore = $state(false);
 	let groundCardKey = $state(0);
@@ -248,12 +252,35 @@
 		// first place. Mirrors the `TemplateModal.svelte` pre-check pattern.
 		// `checkVerification` also handles tier-5 lost-credential recovery state
 		// so a tier-5 user with cleared local creds still gets routed correctly.
+		pendingMinimumTier = 2;
 		if (verificationGateRef) {
 			const isVerified = await verificationGateRef.checkVerification();
 			if (isVerified) {
 				return; // already verified at tier-2; nothing to do
 			}
 		}
+		showVerificationGate = true;
+	}
+
+	async function handleVerifyGovernmentId(): Promise<void> {
+		// `minimumTier=4` routes the gate into `needsTier4Plus`, mounting the
+		// mDL ceremony. Any lower value would short-circuit for tier-2/3 users
+		// since they already meet it.
+		pendingMinimumTier = 4;
+		if (verificationGateRef) {
+			const isVerified = await verificationGateRef.checkVerification();
+			if (isVerified) {
+				return;
+			}
+		}
+		showVerificationGate = true;
+	}
+
+	function handleReVerifyIdentity(): void {
+		// Skip the pre-check: a tier-5 user with a valid proof credential
+		// already passes `checkVerification`, but the explicit re-verify ask
+		// should still open the flow.
+		pendingMinimumTier = 5;
 		showVerificationGate = true;
 	}
 
@@ -352,6 +379,8 @@
 			<img
 				bind:this={avatarEl}
 				src={user.avatar}
+				crossorigin="anonymous"
+				referrerpolicy="no-referrer"
 				alt=""
 				class="h-12 w-12 rounded-full lg:h-14 lg:w-14"
 				style="box-shadow: 0 0 0 2.5px oklch(0.94 0.01 60)"
@@ -442,7 +471,7 @@
 		<p class="mt-2.5 text-sm lg:text-base">
 			<button
 				class="font-medium text-indigo-600 transition-colors hover:text-indigo-800"
-				onclick={handleVerifyAddress}
+				onclick={handleVerifyGovernmentId}
 			>
 				Verify with Government ID &rarr;
 			</button>
@@ -451,7 +480,7 @@
 		<p class="mt-2.5 text-sm lg:text-base">
 			<button
 				class="font-medium text-indigo-600 transition-colors hover:text-indigo-800"
-				onclick={handleVerifyAddress}
+				onclick={handleReVerifyIdentity}
 			>
 				Re-verify identity &rarr;
 			</button>
@@ -717,7 +746,7 @@
 		bind:this={verificationGateRef}
 		userId={user.id}
 		bind:showModal={showVerificationGate}
-		minimumTier={2}
+		minimumTier={pendingMinimumTier}
 		userTrustTier={trustTier}
 		onverified={handleVerificationComplete}
 		oncancel={() => (showVerificationGate = false)}

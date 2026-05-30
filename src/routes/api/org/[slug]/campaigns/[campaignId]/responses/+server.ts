@@ -40,7 +40,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		slug: params.slug,
 		campaignId: params.campaignId as Id<'campaigns'>,
 		deliveryId,
-		type,
+		// type validated against the same allowlist the Convex args
+		// union enforces; cast at the boundary.
+		type: type as 'replied' | 'meeting_requested' | 'vote_cast' | 'public_statement',
 		detail
 	});
 	return json(result, { status: 201 });

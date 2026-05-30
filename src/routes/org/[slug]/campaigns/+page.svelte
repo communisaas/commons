@@ -113,9 +113,10 @@
 	{:else}
 		<div class="space-y-3">
 			{#each filtered as campaign (campaign.id)}
+				<div class="relative group">
 				<a
 					href="/org/{data.org.slug}/campaigns/{campaign.id}"
-					class="block rounded-md bg-surface-base border border-surface-border p-5 hover:bg-surface-raised hover:border-[var(--coord-route-solid)] transition-colors group"
+					class="block rounded-md bg-surface-base border border-surface-border p-5 hover:bg-surface-raised hover:border-[var(--coord-route-solid)] transition-colors"
 				>
 					<div class="flex items-start justify-between gap-4">
 						<div class="min-w-0 flex-1">
@@ -161,6 +162,21 @@
 						</svg>
 					</div>
 				</a>
+				<form
+					method="POST"
+					action="?/clone"
+					class="absolute top-3 right-3 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
+				>
+					<input type="hidden" name="campaignId" value={campaign.id} />
+					<button
+						type="submit"
+						class="text-xs px-2 py-1 rounded border border-surface-border-strong bg-surface-overlay text-text-tertiary hover:text-text-primary hover:bg-surface-raised"
+						title="Duplicate as draft"
+					>
+						Duplicate
+					</button>
+				</form>
+				</div>
 			{/each}
 		</div>
 	{/if}
