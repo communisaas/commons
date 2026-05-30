@@ -8,6 +8,7 @@
 import { query, mutation, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { subscriptionPlan, subscriptionStatus, subscriptionPaymentMethod } from "./_validators";
 import { requireAuth, requireOrgRole } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
 import type { Id } from "./_generated/dataModel";
@@ -129,7 +130,12 @@ export const checkPlanLimits = query({
       pastDueSince &&
       Date.now() - pastDueSince < GRACE_PERIOD_MS;
 
-    const effectivelyActive = sub?.status === "active" || isWithinGrace;
+    // 'trialing' counts as active so trial orgs receive their plan tier limits
+    // — not free-tier — until Stripe transitions them to 'active' on first
+    // successful payment. Without this, an org granted a paid trial would hit
+    // free-tier quotas during the trial window.
+    const effectivelyActive =
+      sub?.status === "active" || sub?.status === "trialing" || isWithinGrace;
     const plan = effectivelyActive ? (sub?.plan ?? "free") : "free";
     const limits = PLANS[plan] ?? PLANS.free;
 
@@ -234,7 +240,12 @@ export const checkPlanLimitsByOrgId = internalQuery({
       sub?.status === "past_due" &&
       pastDueSince &&
       Date.now() - pastDueSince < GRACE_PERIOD_MS;
-    const effectivelyActive = sub?.status === "active" || isWithinGrace;
+    // 'trialing' counts as active so trial orgs receive their plan tier limits
+    // — not free-tier — until Stripe transitions them to 'active' on first
+    // successful payment. Without this, an org granted a paid trial would hit
+    // free-tier quotas during the trial window.
+    const effectivelyActive =
+      sub?.status === "active" || sub?.status === "trialing" || isWithinGrace;
     const plan = effectivelyActive ? (sub?.plan ?? "free") : "free";
     const limits = PLANS[plan] ?? PLANS.free;
 
@@ -350,10 +361,10 @@ export const create = internalMutation({
   args: {
     orgId: v.optional(v.id("organizations")),
     userId: v.optional(v.id("users")),
-    plan: v.string(),
+    plan: subscriptionPlan,
     priceCents: v.number(),
-    status: v.string(),
-    paymentMethod: v.string(),
+    status: subscriptionStatus,
+    paymentMethod: subscriptionPaymentMethod,
     stripeSubscriptionId: v.optional(v.string()),
     currentPeriodStart: v.number(),
     currentPeriodEnd: v.number(),
@@ -606,7 +617,7 @@ export const processStripeWebhook = internalAction({
   },
 });
 
-function mapStripeStatus(status: string): string {
+function mapStripeStatus(status: string): "active" | "past_due" | "canceled" | "trialing" {
   switch (status) {
     case "active":
       return "active";
@@ -637,9 +648,9 @@ function mapStripeStatus(status: string): string {
 export const upsertFromStripe = internalMutation({
   args: {
     orgId: v.string(),
-    plan: v.string(),
+    plan: subscriptionPlan,
     priceCents: v.number(),
-    status: v.string(),
+    status: subscriptionStatus,
     stripeSubscriptionId: v.string(),
     currentPeriodStart: v.number(),
     currentPeriodEnd: v.number(),
@@ -794,8 +805,8 @@ export const getByStripeId = internalQuery({
 export const updateByStripeId = internalMutation({
   args: {
     stripeSubscriptionId: v.string(),
-    status: v.string(),
-    plan: v.optional(v.string()),
+    status: subscriptionStatus,
+    plan: v.optional(subscriptionPlan),
     priceCents: v.optional(v.number()),
     currentPeriodStart: v.optional(v.number()),
     currentPeriodEnd: v.optional(v.number()),

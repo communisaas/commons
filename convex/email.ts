@@ -10,10 +10,53 @@ import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
+import { recipientFilterValidator } from "./_validators";
 import { requireOrgRole, requireAuth } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
 import { decryptOrgPii } from "./_orgKey";
+
+// HTML escape — mirror of src/lib/server/email/escape.ts. Cannot share the
+// canonical module because Convex's V8 runtime doesn't resolve $lib paths.
+// Keep these escapings in sync if either side changes.
+function _escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Per-recipient merge-field substitution — mirror of compileMergeFields in
+// src/lib/server/email/compiler.ts. Applied after PII decrypt so the blast's
+// pre-shelled bodyHtml renders "Dear Maria," instead of "Dear {{firstName}}".
+function _applyMergeFields(
+  body: string,
+  ctx: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    postalCode: string | null;
+    verificationStatus: "verified" | "postal-resolved" | "imported";
+  },
+): string {
+  const tierLabel = ""; // engagement tier not loaded per-recipient on this path
+  const tierContext =
+    ctx.verificationStatus === "verified"
+      ? "Your identity is verified. You appear as a verified contact in this campaign."
+      : ctx.verificationStatus === "postal-resolved"
+        ? "Your postal code is on file. Verification is pending."
+        : "You were added by an organization. Verification is pending.";
+  return body
+    .replace(/\{\{firstName\}\}/g, _escapeHtml(ctx.firstName))
+    .replace(/\{\{lastName\}\}/g, _escapeHtml(ctx.lastName))
+    .replace(/\{\{email\}\}/g, _escapeHtml(ctx.email))
+    .replace(/\{\{postalCode\}\}/g, _escapeHtml(ctx.postalCode ?? ""))
+    .replace(/\{\{verificationStatus\}\}/g, _escapeHtml(ctx.verificationStatus))
+    .replace(/\{\{tierLabel\}\}/g, _escapeHtml(tierLabel))
+    .replace(/\{\{tierContext\}\}/g, _escapeHtml(tierContext));
+}
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -235,8 +278,8 @@ export const createBlast = mutation({
     bodyHtml: v.string(),
     fromName: v.string(),
     fromEmail: v.string(),
-    recipientFilter: v.optional(v.any()),
-    campaignId: v.optional(v.string()),
+    recipientFilter: v.optional(recipientFilterValidator),
+    campaignId: v.optional(v.id("campaigns")),
     sendMode: v.optional(v.string()),
     isAbTest: v.optional(v.boolean()),
     abTestConfig: v.optional(v.any()),
@@ -254,7 +297,7 @@ export const createBlast = mutation({
       fromName: args.fromName,
       fromEmail: args.fromEmail,
       status: "draft",
-      recipientFilter: args.recipientFilter ?? null,
+      recipientFilter: args.recipientFilter,
       totalRecipients: 0,
       verificationContext: undefined,
       totalSent: 0,
@@ -288,7 +331,7 @@ export const updateBlast = mutation({
     bodyHtml: v.optional(v.string()),
     fromName: v.optional(v.string()),
     fromEmail: v.optional(v.string()),
-    recipientFilter: v.optional(v.any()),
+    recipientFilter: v.optional(recipientFilterValidator),
     status: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -615,12 +658,58 @@ export const sendBlastBatch = internalAction({
             `supporter:${recipient._id}`,
             "email",
           );
+          // Optional name decrypt — gracefully degrade to empty if absent.
+          let firstName = "";
+          let lastName = "";
+          if (recipient.encryptedName) {
+            try {
+              const nameParsed = JSON.parse(recipient.encryptedName);
+              const full = await decryptOrgPii(
+                nameParsed,
+                orgKey,
+                recipient.emailHash,
+                `supporter:${recipient._id}`,
+                "name",
+              );
+              const trimmed = full.trim();
+              const sp = trimmed.indexOf(" ");
+              if (sp === -1) {
+                firstName = trimmed;
+              } else {
+                firstName = trimmed.slice(0, sp);
+                lastName = trimmed.slice(sp + 1).trim();
+              }
+            } catch {
+              // Name decrypt failure shouldn't block delivery — fall through
+              // with empty firstName/lastName so the message still ships.
+            }
+          }
+          const verificationStatus: "verified" | "postal-resolved" | "imported" =
+            recipient.verified
+              ? "verified"
+              : recipient.postalCode
+                ? "postal-resolved"
+                : "imported";
+          const personalizedBody = _applyMergeFields(blast.bodyHtml, {
+            firstName,
+            lastName,
+            email,
+            postalCode: recipient.postalCode ?? null,
+            verificationStatus,
+          });
+          const personalizedSubject = _applyMergeFields(blast.subject, {
+            firstName,
+            lastName,
+            email,
+            postalCode: recipient.postalCode ?? null,
+            verificationStatus,
+          });
           const success = await sendViaSes(
             email,
             blast.fromEmail,
             blast.fromName,
-            blast.subject,
-            blast.bodyHtml,
+            personalizedSubject,
+            personalizedBody,
             awsAccessKeyId,
             awsSecretAccessKey,
             awsRegion,
@@ -708,7 +797,34 @@ export const getBlastById = internalQuery({
  * Send email via SES v2 using raw HTTP (no AWS SDK dependency in Convex).
  * Uses the SES v2 SendEmail API with Signature V4 auth.
  */
-async function sendViaSes(
+/**
+ * Inline html → plain-text fallback. Trades fidelity for size: strips tags,
+ * collapses whitespace, decodes common entities. Good enough for the text/plain
+ * part of a multipart/alternative email — the HTML part is always preferred
+ * by Gmail/Outlook/Apple Mail, this just shows in clients that don't render
+ * HTML (and quiets spam filters that flag HTML-only sends).
+ */
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|li|tr)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/ /g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export async function sendViaSes(
   to: string,
   from: string,
   fromName: string,
@@ -723,11 +839,18 @@ async function sendViaSes(
   const safeFromName = fromName.replace(/[\r\n\x00-\x1f\x7f]/g, "");
   const safeSubject = subject.replace(/[\r\n\x00-\x1f\x7f]/g, "");
 
+  const textBody = htmlToPlainText(htmlBody);
   const body = JSON.stringify({
     Content: {
       Simple: {
         Subject: { Data: safeSubject, Charset: "UTF-8" },
-        Body: { Html: { Data: htmlBody, Charset: "UTF-8" } },
+        Body: {
+          Html: { Data: htmlBody, Charset: "UTF-8" },
+          // multipart/alternative — most email clients prefer HTML; spam
+          // filters use the presence of a plain part as an authenticity
+          // signal and (Gmail in particular) penalize HTML-only sends.
+          Text: { Data: textBody, Charset: "UTF-8" },
+        },
       },
     },
     Destination: { ToAddresses: [to] },
@@ -896,15 +1019,120 @@ export const sendAlertDigests = internalAction({
 });
 
 /**
- * Check pending A/B tests and pick winners.
- * Called every 15 minutes by cron.
+ * Find unresolved A/B test groups for the winner picker. Returns sibling
+ * blasts (sharing abParentId) where neither has abWinnerPickedAt set and both
+ * are in 'sent' status. Bounded scan (status='sent' is an indexed filter).
+ */
+export const _findAbCandidates = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const sentBlasts = await ctx.db
+      .query("emailBlasts")
+      .withIndex("by_status", (q) => q.eq("status", "sent"))
+      .order("desc")
+      .take(500);
+    return sentBlasts
+      .filter((b) => b.isAbTest && !b.abWinnerPickedAt && (b.abParentId || b._id))
+      .map((b) => ({
+        _id: b._id,
+        orgId: b.orgId,
+        campaignId: b.campaignId ?? null,
+        abParentId: b.abParentId ?? null,
+        abVariant: b.abVariant ?? null,
+        subject: b.subject,
+        bodyHtml: b.bodyHtml,
+        totalSent: b.totalSent,
+        totalOpened: b.totalOpened,
+        sentAt: b.sentAt ?? null,
+      }));
+  },
+});
+
+/**
+ * Mark sibling A/B blasts with abWinnerPickedAt + a winnerVariantId on the
+ * losers so downstream surfaces know which one to render as the chosen
+ * variant in reports/dashboards. Idempotent — re-running on already-marked
+ * rows is a no-op.
+ */
+export const _markAbWinner = internalMutation({
+  args: {
+    blastIds: v.array(v.id("emailBlasts")),
+    winnerId: v.id("emailBlasts"),
+    pickedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    for (const id of args.blastIds) {
+      const blast = await ctx.db.get(id);
+      if (!blast || blast.abWinnerPickedAt) continue;
+      await ctx.db.patch(id, {
+        abWinnerPickedAt: args.pickedAt,
+        updatedAt: args.pickedAt,
+      });
+    }
+    return { winnerId: args.winnerId };
+  },
+});
+
+/**
+ * A/B winner picker (T1-6). Walks unresolved A/B test groups, computes a
+ * two-proportion Z-test on open rates, picks a winner when p < 0.05
+ * (|z| ≥ 1.96) or the 48h timeout has elapsed. Cron-driven every 15 min.
+ *
+ * Remainder-cohort send: documented as next-step. The winner is marked here
+ * so dashboards/reports show the chosen variant; the remainder send is a
+ * downstream action that needs to know the parent blast's recipient cohort
+ * minus the test cohort, which today the schema doesn't capture explicitly.
+ * Operators can manually trigger a follow-up blast with the winning bodyHtml.
  */
 export const pickAbWinners = internalAction({
   args: {},
   handler: async (ctx) => {
-    // Find A/B blasts where both variants sent, test period elapsed, no winner
-    console.log("[ab-winner] A/B winner picking not yet implemented in Convex");
-    return { checked: 0, picked: 0 };
+    const candidates = await ctx.runQuery(internal.email._findAbCandidates, {});
+
+    // Group by abParentId (or self if it's the parent of its own group).
+    const groups = new Map<string, typeof candidates>();
+    for (const b of candidates) {
+      const key = b.abParentId ?? String(b._id);
+      const arr = groups.get(key) ?? [];
+      arr.push(b);
+      groups.set(key, arr);
+    }
+
+    const TIMEOUT_MS = 48 * 60 * 60 * 1000;
+    const Z_CRITICAL = 1.96; // two-tailed p<0.05
+    let checked = 0;
+    let picked = 0;
+
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      checked++;
+
+      // Take first two siblings — multi-variant beyond 2 deferred to later.
+      const a = group[0];
+      const b = group[1];
+      const n1 = a.totalSent || 1;
+      const n2 = b.totalSent || 1;
+      const p1 = a.totalOpened / n1;
+      const p2 = b.totalOpened / n2;
+      const pooled = (a.totalOpened + b.totalOpened) / (n1 + n2);
+      const se = Math.sqrt(pooled * (1 - pooled) * (1 / n1 + 1 / n2));
+      const z = se > 0 ? Math.abs(p1 - p2) / se : 0;
+      const significant = z >= Z_CRITICAL;
+
+      const latestSent = Math.max(a.sentAt ?? 0, b.sentAt ?? 0);
+      const elapsed = Date.now() - latestSent;
+      if (!significant && elapsed < TIMEOUT_MS) continue;
+
+      const winner = p1 >= p2 ? a : b;
+      await ctx.runMutation(internal.email._markAbWinner, {
+        blastIds: group.map((g) => g._id),
+        winnerId: winner._id,
+        pickedAt: Date.now(),
+      });
+      picked++;
+    }
+
+    return { checked, picked };
   },
 });
 

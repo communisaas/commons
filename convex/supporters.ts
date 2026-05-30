@@ -416,6 +416,20 @@ export const create = mutation({
       }
     }
 
+    // Emit supporter.created event (T9-3). No PII in payload — supporter
+    // identity remains in encrypted columns. Webhook consumers can fetch
+    // the supporter via the v1 API using their API key if they need details.
+    await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+      orgId: org._id,
+      event: "supporter.created",
+      payload: JSON.stringify({
+        supporterId,
+        source: args.source ?? "organic",
+        country: args.country ?? "US",
+        timestamp: now,
+      }),
+    });
+
     // Increment org supporterCount
     const newCount = (org.supporterCount ?? 0) + 1;
     const onboarding = org.onboardingState ?? {

@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as _actionDomain from "../_actionDomain.js";
 import type * as _authHelpers from "../_authHelpers.js";
 import type * as _bufferSource from "../_bufferSource.js";
 import type * as _credentialSelect from "../_credentialSelect.js";
@@ -22,6 +23,7 @@ import type * as _rateLimit from "../_rateLimit.js";
 import type * as _sentry from "../_sentry.js";
 import type * as _snsVerify from "../_snsVerify.js";
 import type * as _snsVerifyHelpers from "../_snsVerifyHelpers.js";
+import type * as _validators from "../_validators.js";
 import type * as agentTraces from "../agentTraces.js";
 import type * as analytics from "../analytics.js";
 import type * as authOps from "../authOps.js";
@@ -45,6 +47,7 @@ import type * as legislation from "../legislation.js";
 import type * as messageJobs from "../messageJobs.js";
 import type * as networks from "../networks.js";
 import type * as observability from "../observability.js";
+import type * as orgWebhooks from "../orgWebhooks.js";
 import type * as organizations from "../organizations.js";
 import type * as passkeys from "../passkeys.js";
 import type * as positions from "../positions.js";
@@ -73,6 +76,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  _actionDomain: typeof _actionDomain;
   _authHelpers: typeof _authHelpers;
   _bufferSource: typeof _bufferSource;
   _credentialSelect: typeof _credentialSelect;
@@ -87,6 +91,7 @@ declare const fullApi: ApiFromModules<{
   _sentry: typeof _sentry;
   _snsVerify: typeof _snsVerify;
   _snsVerifyHelpers: typeof _snsVerifyHelpers;
+  _validators: typeof _validators;
   agentTraces: typeof agentTraces;
   analytics: typeof analytics;
   authOps: typeof authOps;
@@ -110,6 +115,7 @@ declare const fullApi: ApiFromModules<{
   messageJobs: typeof messageJobs;
   networks: typeof networks;
   observability: typeof observability;
+  orgWebhooks: typeof orgWebhooks;
   organizations: typeof organizations;
   passkeys: typeof passkeys;
   positions: typeof positions;

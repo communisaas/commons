@@ -29,6 +29,8 @@ import type { Id } from "./_generated/dataModel";
  * Exported so tests can exercise the rotation contract without setting up
  * a Convex httpAction harness.
  */
+
+declare const process: { env: Record<string, string | undefined> };
 export function bearerSecretMatches(presented: string, candidates: string[]): boolean {
   const validCandidates = candidates.filter((s) => typeof s === "string" && s.length > 0);
   if (validCandidates.length === 0 || !presented) return false;
@@ -548,9 +550,20 @@ http.route({
     }
 
     try {
+      // Twilio MessageStatus enum is broader than what we store
+      // (failed/sent/queued/delivered). Map intermediate Twilio states
+      // (accepted/scheduled/sending/...) to our closed set, defaulting
+      // to 'queued' for unknowns so the webhook never throws and the
+      // operator sees a row land. If Twilio sends a value outside the
+      // closed set, the updateSmsStatus validator now catches it before
+      // poisoning smsMessages.status downstream.
+      const ALLOWED = ["queued", "sent", "delivered", "failed"] as const;
+      const normalizedStatus = (ALLOWED.includes(messageStatus as typeof ALLOWED[number])
+        ? messageStatus
+        : "queued") as (typeof ALLOWED)[number];
       await ctx.runMutation(internal.webhooks.updateSmsStatus, {
         twilioSid: messageSid,
-        status: messageStatus,
+        status: normalizedStatus,
         errorCode: errorCode || undefined,
       });
     } catch (err) {

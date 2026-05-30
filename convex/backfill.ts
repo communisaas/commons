@@ -9,6 +9,7 @@
 
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { encryptWithOrgKey } from "./_orgKey";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
@@ -608,3 +609,350 @@ export const migrateEmailHashes = internalAction({
     return { migrated, skipped, failed };
   },
 });
+
+// =============================================================================
+// RECIPIENT FILTER NORMALIZATION (F20)
+// =============================================================================
+// Closes the v.any() → closed-shape schema migration on
+// emailBlasts.recipientFilter. Schemas with `schemaValidation: true`
+// (the default) reject existing rows that don't match the new
+// validator at push time. Run this BEFORE pushing the closed-shape
+// schema against any deployment with pre-2026-05-26 blast rows.
+// Idempotent. Operator invokes via:
+//   npx convex run backfill:normalizeBlastRecipientFilters
+
+const isConformingRecipientFilter = (raw: unknown): boolean => {
+  if (raw === null || raw === undefined) return true;
+  if (typeof raw !== "object") return false;
+  const obj = raw as Record<string, unknown>;
+  const allowedKeys = new Set(["tagIds", "verified"]);
+  for (const k of Object.keys(obj)) {
+    if (!allowedKeys.has(k)) return false;
+  }
+  if (obj.tagIds !== undefined) {
+    if (!Array.isArray(obj.tagIds)) return false;
+    if (!obj.tagIds.every((t) => typeof t === "string")) return false;
+  }
+  if (
+    obj.verified !== undefined &&
+    obj.verified !== "any" &&
+    obj.verified !== "verified" &&
+    obj.verified !== "unverified"
+  ) {
+    return false;
+  }
+  return true;
+};
+
+export const normalizeBlastRecipientFilters = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ scanned: number; normalized: number }> => {
+    const rows: Array<{ _id: Id<"emailBlasts">; recipientFilter: unknown }> =
+      await ctx.runQuery(internal.backfill.listEmailBlastsForFilterAudit);
+    let normalized = 0;
+    for (const row of rows) {
+      if (!isConformingRecipientFilter(row.recipientFilter)) {
+        await ctx.runMutation(internal.backfill.patchEmailBlastFilter, {
+          id: row._id,
+          recipientFilter: { verified: "any" as const },
+        });
+        normalized++;
+      }
+    }
+    const result = { scanned: rows.length, normalized };
+    console.log(`[normalizeBlastRecipientFilters] ${JSON.stringify(result)}`);
+    return result;
+  },
+});
+
+export const listEmailBlastsForFilterAudit = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("emailBlasts").collect();
+    return rows.map((r) => ({ _id: r._id, recipientFilter: r.recipientFilter as unknown }));
+  },
+});
+
+export const patchEmailBlastFilter = internalMutation({
+  args: {
+    id: v.id("emailBlasts"),
+    recipientFilter: v.object({
+      tagIds: v.optional(v.array(v.id("tags"))),
+      verified: v.optional(
+        v.union(v.literal("any"), v.literal("verified"), v.literal("unverified")),
+      ),
+    }),
+  },
+  handler: async (ctx, { id, recipientFilter }) => {
+    await ctx.db.patch(id, { recipientFilter, updatedAt: Date.now() });
+  },
+});
+
+// =============================================================================
+// CAMPAIGN templateId NORMALIZATION (F19)
+// =============================================================================
+// Closes the v.string() → v.id('templates') schema migration on
+// campaigns.templateId. Schemas with `schemaValidation: true` (default)
+// reject existing rows that don't match the new validator at push time.
+// Run this BEFORE pushing the closed-shape schema against any deployment
+// with pre-2026-05-26 campaign rows that might carry non-Id strings
+// (legacy slugs, sentinel values, empty strings). Idempotent. Invoke:
+//   npx convex run backfill:normalizeCampaignTemplateIds
+
+export const normalizeCampaignTemplateIds = internalAction({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<{ scanned: number; cleared: number; valid: number }> => {
+    const rows: Array<{ _id: Id<"campaigns">; templateId: string | undefined }> =
+      await ctx.runQuery(internal.backfill.listCampaignsForTemplateIdAudit);
+    let cleared = 0;
+    let valid = 0;
+    for (const row of rows) {
+      if (row.templateId === undefined || row.templateId === null) {
+        continue;
+      }
+      const normalized = await ctx.runQuery(
+        internal.backfill.checkTemplateIdValid,
+        { templateId: row.templateId },
+      );
+      if (normalized) {
+        valid++;
+        continue;
+      }
+      // Non-Id string (legacy slug / sentinel / corrupt) — clear the field
+      // so the typed schema validator accepts the row at push time.
+      await ctx.runMutation(internal.backfill.clearCampaignTemplateId, {
+        id: row._id,
+      });
+      cleared++;
+    }
+    const result = { scanned: rows.length, cleared, valid };
+    console.log(`[normalizeCampaignTemplateIds] ${JSON.stringify(result)}`);
+    return result;
+  },
+});
+
+export const listCampaignsForTemplateIdAudit = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("campaigns").collect();
+    return rows.map((r) => ({
+      _id: r._id,
+      templateId: r.templateId as string | undefined,
+    }));
+  },
+});
+
+export const checkTemplateIdValid = internalQuery({
+  args: { templateId: v.string() },
+  handler: async (ctx, { templateId }): Promise<boolean> => {
+    const normalized = ctx.db.normalizeId("templates", templateId);
+    return normalized !== null;
+  },
+});
+
+export const clearCampaignTemplateId = internalMutation({
+  args: { id: v.id("campaigns") },
+  handler: async (ctx, { id }) => {
+    await ctx.db.patch(id, { templateId: undefined, updatedAt: Date.now() });
+  },
+});
+
+// =============================================================================
+// SMS RECIPIENT FILTER NORMALIZATION (F34)
+// =============================================================================
+// Closes the v.any() → smsRecipientFilterValidator migration on
+// smsBlasts.recipientFilter. SMS dispatch isn't wired yet (memory: 'SMS
+// recipient filtering TODO'), but any pre-2026-05-26 fixture rows with
+// non-Id strings in `tags`/`segments`/`excludeTags` will block the
+// schema push. Run BEFORE pushing the closed-shape schema:
+//   npx convex run backfill:normalizeSmsRecipientFilters
+
+const isConformingSmsRecipientFilter = (raw: unknown): boolean => {
+  if (raw === null || raw === undefined) return true;
+  if (typeof raw !== "object") return false;
+  const obj = raw as Record<string, unknown>;
+  const allowedKeys = new Set(["tags", "segments", "excludeTags"]);
+  for (const k of Object.keys(obj)) {
+    if (!allowedKeys.has(k)) return false;
+  }
+  for (const k of ["tags", "segments", "excludeTags"]) {
+    const arr = obj[k];
+    if (arr === undefined) continue;
+    if (!Array.isArray(arr)) return false;
+    if (!arr.every((t) => typeof t === "string" && /^[a-z0-9]{30,40}$/.test(t))) {
+      return false;
+    }
+  }
+  return true;
+};
+
+export const normalizeSmsRecipientFilters = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ scanned: number; cleared: number }> => {
+    const rows: Array<{ _id: Id<"smsBlasts">; recipientFilter: unknown }> =
+      await ctx.runQuery(internal.backfill.listSmsBlastsForFilterAudit);
+    let cleared = 0;
+    for (const row of rows) {
+      if (!isConformingSmsRecipientFilter(row.recipientFilter)) {
+        await ctx.runMutation(internal.backfill.clearSmsBlastFilter, {
+          id: row._id,
+        });
+        cleared++;
+      }
+    }
+    const result = { scanned: rows.length, cleared };
+    console.log(`[normalizeSmsRecipientFilters] ${JSON.stringify(result)}`);
+    return result;
+  },
+});
+
+export const listSmsBlastsForFilterAudit = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("smsBlasts").collect();
+    return rows.map((r) => ({ _id: r._id, recipientFilter: r.recipientFilter as unknown }));
+  },
+});
+
+export const clearSmsBlastFilter = internalMutation({
+  args: { id: v.id("smsBlasts") },
+  handler: async (ctx, { id }) => {
+    // Non-conforming legacy filter — null it out so the row passes the
+    // closed-shape validator at schema push. Operator can manually
+    // reconstruct in the SMS compose UI if needed.
+    await ctx.db.patch(id, { recipientFilter: undefined, updatedAt: Date.now() });
+  },
+});
+
+// =============================================================================
+// PRE-PROD ENUM CONFORMANCE AUDIT (F46)
+// =============================================================================
+// Schema-tightening pushes (C12 swept campaigns.type/status,
+// events.eventType/status, subscriptions.{plan,status,paymentMethod})
+// reject existing rows that don't match the new closed-shape unions
+// at deploy time. Run this BEFORE pushing to prod:
+//   npx convex run --prod backfill:auditEnumConformance
+// Output: per-field counts grouped by value. Any value outside the
+// canonical set requires EITHER widening the union (legacy admit) OR
+// writing a backfill mutation to normalize (legacy migrate). Don't
+// guess — count first, decide second.
+
+const CANONICAL_VALUES: Record<string, ReadonlyArray<string>> = {
+  // C12 enums
+  "campaigns.type": ["LETTER", "EVENT", "FORM", "FUNDRAISER"],
+  "campaigns.status": ["DRAFT", "ACTIVE", "PAUSED", "COMPLETE"],
+  "events.eventType": ["IN_PERSON", "VIRTUAL", "HYBRID"],
+  "events.status": ["DRAFT", "PUBLISHED", "CANCELLED", "COMPLETED"],
+  "subscriptions.plan": ["free", "starter", "organization", "coalition"],
+  "subscriptions.status": ["active", "past_due", "canceled", "trialing"],
+  "subscriptions.paymentMethod": ["stripe", "crypto"],
+  // C15+C16 enums — added after brutalist caught the audit coverage gap
+  "emailBlasts.status": ["draft", "scheduled", "sending", "sent", "failed"],
+  "smsBlasts.status": ["draft", "sending", "sent", "failed"],
+  "smsMessages.status": ["queued", "sent", "delivered", "failed"],
+  "eventRsvps.status": ["GOING", "MAYBE", "NOT_GOING", "WAITLISTED"],
+  "debates.status": ["active", "resolving", "resolved", "awaiting_governance", "under_appeal"],
+  "accountabilityReceipts.causalityClass": ["strong", "moderate", "weak", "none", "pending"],
+};
+
+type FieldAudit = {
+  field: string;
+  total: number;
+  byValue: Record<string, number>;
+  nonConforming: Record<string, number>;
+};
+
+// All 7 audited fields are REQUIRED in convex/schema.ts (none v.optional).
+// undefined/null rows therefore block the schema push the same way a
+// non-canonical value does. Brutalist caught the prior version silently
+// classifying them as conformant.
+const REQUIRED_FIELDS = new Set([
+  "campaigns.type",
+  "campaigns.status",
+  "events.eventType",
+  "events.status",
+  "subscriptions.plan",
+  "subscriptions.status",
+  "subscriptions.paymentMethod",
+  "emailBlasts.status",
+  "smsBlasts.status",
+  "smsMessages.status",
+  "eventRsvps.status",
+  "debates.status",
+  "accountabilityReceipts.causalityClass",
+]);
+
+export const auditEnumConformance = internalQuery({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<{
+    summary: FieldAudit[];
+    blockingDeploy: boolean;
+    siblingChecklist: string[];
+  }> => {
+    const summary: FieldAudit[] = [];
+
+    const campaigns = await ctx.db.query("campaigns").collect();
+    summary.push(buildFieldAudit("campaigns.type", campaigns, (r) => r.type));
+    summary.push(buildFieldAudit("campaigns.status", campaigns, (r) => r.status));
+
+    const events = await ctx.db.query("events").collect();
+    summary.push(buildFieldAudit("events.eventType", events, (r) => r.eventType));
+    summary.push(buildFieldAudit("events.status", events, (r) => r.status));
+
+    const subscriptions = await ctx.db.query("subscriptions").collect();
+    summary.push(buildFieldAudit("subscriptions.plan", subscriptions, (r) => r.plan));
+    summary.push(buildFieldAudit("subscriptions.status", subscriptions, (r) => r.status));
+    summary.push(buildFieldAudit("subscriptions.paymentMethod", subscriptions, (r) => r.paymentMethod));
+
+    summary.push(buildFieldAudit("emailBlasts.status", await ctx.db.query("emailBlasts").collect(), (r) => r.status));
+    summary.push(buildFieldAudit("smsBlasts.status", await ctx.db.query("smsBlasts").collect(), (r) => r.status));
+    summary.push(buildFieldAudit("smsMessages.status", await ctx.db.query("smsMessages").collect(), (r) => r.status));
+    summary.push(buildFieldAudit("eventRsvps.status", await ctx.db.query("eventRsvps").collect(), (r) => r.status));
+    summary.push(buildFieldAudit("debates.status", await ctx.db.query("debates").collect(), (r) => r.status));
+    summary.push(buildFieldAudit("accountabilityReceipts.causalityClass", await ctx.db.query("accountabilityReceipts").collect(), (r) => r.causalityClass));
+
+    const blockingDeploy = summary.some(
+      (s) => Object.keys(s.nonConforming).length > 0,
+    );
+
+    // This audit covers enum-union tightenings ONLY. Sibling schema
+    // changes that also block a prod push have their own normalizer
+    // mutations — run them all before push. Surfacing the list here so
+    // a green blockingDeploy:false isn't misread as "schema push is safe."
+    const siblingChecklist = [
+      "npx convex run --prod backfill:normalizeBlastRecipientFilters",
+      "npx convex run --prod backfill:normalizeSmsRecipientFilters",
+      "npx convex run --prod backfill:normalizeCampaignTemplateIds",
+      "// emailBlasts.campaignId and debateNullifiers.argumentId are v.id() migrations with no normalizer — verify all rows carry valid Convex Id-format strings before push",
+    ];
+
+    return { summary, blockingDeploy, siblingChecklist };
+  },
+});
+
+function buildFieldAudit(
+  field: string,
+  rows: Array<Record<string, unknown>>,
+  getValue: (r: Record<string, unknown>) => unknown,
+): FieldAudit {
+  const canonical = new Set(CANONICAL_VALUES[field]);
+  const fieldIsRequired = REQUIRED_FIELDS.has(field);
+  const byValue: Record<string, number> = {};
+  const nonConforming: Record<string, number> = {};
+  for (const r of rows) {
+    const raw = getValue(r);
+    const key = raw === undefined ? "<undefined>" : raw === null ? "<null>" : String(raw);
+    byValue[key] = (byValue[key] ?? 0) + 1;
+    const isMissing = raw === undefined || raw === null;
+    if (isMissing && fieldIsRequired) {
+      nonConforming[key] = (nonConforming[key] ?? 0) + 1;
+    } else if (!isMissing && !canonical.has(String(raw))) {
+      nonConforming[key] = (nonConforming[key] ?? 0) + 1;
+    }
+  }
+  return { field, total: rows.length, byValue, nonConforming };
+}

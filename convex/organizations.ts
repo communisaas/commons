@@ -203,6 +203,88 @@ export const getDashboard = query({
 });
 
 /**
+ * Dashboard stats: funnel, engagement-tier histogram, growth. Held separately
+ * from `getDashboard` because these aggregates scan supporters + actions and
+ * we don't want them slowing the main load.
+ *
+ * - funnel: imported → postal resolved → identity verified → district verified.
+ *   imported/postalResolved/identityVerified are supporter-level; districtVerified
+ *   counts distinct supporters with at least one action carrying a districtHash
+ *   (the strongest district-of-record signal we hold).
+ * - tiers: action-level engagementTier histogram (T0 New ... T4 Pillar). Page
+ *   labels confirm this is the engagement axis, not the identity-trust axis.
+ * - growth: verified actions this week vs last week.
+ */
+export const getDashboardStats = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const { org } = await requireOrgRole(ctx, slug, "member");
+
+    const supporters = await ctx.db
+      .query("supporters")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .collect();
+
+    let imported = 0;
+    let postalResolved = 0;
+    let identityVerified = 0;
+    for (const s of supporters) {
+      imported++;
+      if (s.postalCode) postalResolved++;
+      if (s.verified) identityVerified++;
+    }
+
+    // campaignActions are denormalized with orgId — use it.
+    const actions = await ctx.db
+      .query("campaignActions")
+      .withIndex("by_orgId_verified", (q) => q.eq("orgId", org._id))
+      .collect();
+
+    const supportersWithDistrict = new Set<string>();
+    const tierCounts = [0, 0, 0, 0, 0];
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    let verifiedThisWeek = 0;
+    let verifiedLastWeek = 0;
+    for (const a of actions) {
+      if (a.districtHash && a.supporterId) {
+        supportersWithDistrict.add(a.supporterId);
+      }
+      const t = a.engagementTier;
+      if (typeof t === "number" && t >= 0 && t <= 4) {
+        tierCounts[t]++;
+      }
+      if (a.verified) {
+        const age = now - a.sentAt;
+        if (age <= WEEK_MS) verifiedThisWeek++;
+        else if (age <= 2 * WEEK_MS) verifiedLastWeek++;
+      }
+    }
+
+    const TIER_LABELS = ["New", "Active", "Established", "Veteran", "Pillar"];
+    const tiers = tierCounts.map((count, tier) => ({
+      tier,
+      label: TIER_LABELS[tier],
+      count,
+    }));
+
+    return {
+      funnel: {
+        imported,
+        postalResolved,
+        identityVerified,
+        districtVerified: supportersWithDistrict.size,
+      },
+      tiers,
+      growth: {
+        thisWeek: verifiedThisWeek,
+        lastWeek: verifiedLastWeek,
+      },
+    };
+  },
+});
+
+/**
  * Authenticated query: org members with user details.
  */
 export const getMembers = query({
@@ -253,6 +335,7 @@ export const getOrgContext = query({
         maxTemplatesMonth: org.maxTemplatesMonth,
         dmCacheTtlDays: org.dmCacheTtlDays ?? 7,
         identityCommitment: org.identityCommitment ?? null,
+        brandingAccent: org.brandingAccent ?? null,
         _creationTime: org._creationTime,
       },
       membership: {
@@ -307,6 +390,105 @@ export const getMyMemberships = query({
 // MUTATIONS
 // =============================================================================
 
+const ROLE_RANK: Record<string, number> = { owner: 3, editor: 2, member: 1 };
+
+/**
+ * Remove a member from the organization. Requires owner role. Owners cannot
+ * be removed if they are the last remaining owner (would lock out the org).
+ * Members may self-leave via the same path.
+ */
+export const removeMember = mutation({
+  args: {
+    slug: v.string(),
+    membershipId: v.id("orgMemberships"),
+  },
+  handler: async (ctx, { slug, membershipId }) => {
+    const { org, membership: actor, userId } = await requireOrgRole(
+      ctx,
+      slug,
+      "member",
+    );
+
+    const target = await ctx.db.get(membershipId);
+    if (!target || target.orgId !== org._id) {
+      throw new Error("Membership not found");
+    }
+
+    const isSelf = target.userId === userId;
+    if (!isSelf && actor.role !== "owner") {
+      throw new Error("Only owners can remove other members");
+    }
+
+    if (target.role === "owner") {
+      const owners = await ctx.db
+        .query("orgMemberships")
+        .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+        .collect()
+        .then((rows) => rows.filter((m) => m.role === "owner"));
+      if (owners.length <= 1) {
+        throw new Error(
+          "Cannot remove the last owner — promote another member to owner first",
+        );
+      }
+    }
+
+    await ctx.db.delete(target._id);
+    const currentCount = org.memberCount ?? 1;
+    await ctx.db.patch(org._id, {
+      memberCount: Math.max(0, currentCount - 1),
+    });
+    return { removed: true as const };
+  },
+});
+
+/**
+ * Change a member's role. Requires owner role. Owners may not self-demote
+ * if they are the sole owner — same lockout guard as removal.
+ */
+export const updateMemberRole = mutation({
+  args: {
+    slug: v.string(),
+    membershipId: v.id("orgMemberships"),
+    role: v.union(v.literal("owner"), v.literal("editor"), v.literal("member")),
+  },
+  handler: async (ctx, { slug, membershipId, role }) => {
+    const { org, membership: actor, userId } = await requireOrgRole(
+      ctx,
+      slug,
+      "owner",
+    );
+
+    const target = await ctx.db.get(membershipId);
+    if (!target || target.orgId !== org._id) {
+      throw new Error("Membership not found");
+    }
+    if (target.role === role) return { updated: false as const };
+
+    if (target.role === "owner" && role !== "owner") {
+      const owners = await ctx.db
+        .query("orgMemberships")
+        .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+        .collect()
+        .then((rows) => rows.filter((m) => m.role === "owner"));
+      if (owners.length <= 1) {
+        throw new Error(
+          "Cannot demote the last owner — promote another member to owner first",
+        );
+      }
+    }
+
+    // Defense-in-depth: keep the rank ladder simple. Actor must always be at
+    // least equal in rank to the new role they're assigning.
+    if ((ROLE_RANK[role] ?? 0) > (ROLE_RANK[actor.role] ?? 0)) {
+      throw new Error("Cannot assign a role higher than your own");
+    }
+
+    void userId; // self-check is implicit in owner-required gate
+    await ctx.db.patch(target._id, { role });
+    return { updated: true as const };
+  },
+});
+
 /**
  * Update org profile fields. Requires editor+ role.
  */
@@ -320,6 +502,7 @@ export const update = mutation({
     mission: v.optional(v.string()),
     websiteUrl: v.optional(v.string()),
     logoUrl: v.optional(v.string()),
+    brandingAccent: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { org } = await requireOrgRole(ctx, args.slug, "editor");
@@ -339,6 +522,31 @@ export const update = mutation({
     if (args.mission !== undefined) updates.mission = args.mission;
     if (args.websiteUrl !== undefined) updates.websiteUrl = args.websiteUrl;
     if (args.logoUrl !== undefined) updates.logoUrl = args.logoUrl;
+    if (args.brandingAccent !== undefined) {
+      // FIX-V4: Coalition-tier gate. brandingAccent (white-label Layer a) is
+      // a Coalition plan feature only. v2 spec said 'Coalition-tier gate
+      // enforced at organizations.update boundary' but the original v2
+      // shipped only hex-format validation. Plan check added here.
+      // Empty string is always allowed (clears the override).
+      if (args.brandingAccent !== '') {
+        const sub = await ctx.db
+          .query('subscriptions')
+          .withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+          .first();
+        const plan = sub?.status === 'active' || sub?.status === 'trialing'
+          ? (sub.plan ?? 'free')
+          : 'free';
+        if (plan !== 'coalition') {
+          throw new Error('brandingAccent requires Coalition tier');
+        }
+      }
+      const hexPattern = /^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
+      if (args.brandingAccent === '' || hexPattern.test(args.brandingAccent)) {
+        updates.brandingAccent = args.brandingAccent === '' ? undefined : args.brandingAccent;
+      } else {
+        throw new Error('brandingAccent must be a valid hex color (e.g. #0d9488)');
+      }
+    }
 
     // Update onboarding state if description was set
     if (args.description !== undefined) {

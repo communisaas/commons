@@ -10,9 +10,12 @@ import { internal } from "./_generated/api";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
+import { campaignStatus, donationStatus } from "./_validators";
 import { requireOrgRole } from "./_authHelpers";
 import { computeOrgScopedEmailHash } from "./_orgHash";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
+import { decryptOrgPii } from "./_orgKey";
+import { sendViaSes } from "./email";
 import type { Id } from "./_generated/dataModel";
 
 declare const process: { env: Record<string, string | undefined> };
@@ -33,7 +36,7 @@ const setStripeSessionIdRef = makeFunctionReference<"mutation">("donations:setSt
 export const listByOrg = query({
   args: {
     orgSlug: v.string(),
-    status: v.optional(v.string()),
+    status: v.optional(donationStatus),
     paginationOpts: v.object({
       numItems: v.number(),
       cursor: v.union(v.string(), v.null()),
@@ -550,7 +553,10 @@ export const setStripeSessionId = internalMutation({
 export const listByOrgWithDonors = query({
   args: {
     orgSlug: v.string(),
-    status: v.optional(v.string()),
+    // Filters FUNDRAISER campaigns by campaignStatus (DRAFT/ACTIVE/...),
+    // NOT donations by donationStatus. The handler at line 569+ filters
+    // campaigns table, not donations table.
+    status: v.optional(campaignStatus),
     limit: v.optional(v.number()),
     cursor: v.optional(v.union(v.string(), v.null())),
   },
@@ -644,7 +650,11 @@ export const updateFundraiser = mutation({
     campaignId: v.id("campaigns"),
     title: v.optional(v.string()),
     description: v.optional(v.string()),
-    status: v.optional(v.string()),
+    // Fundraiser is a campaign (type='FUNDRAISER') — status uses
+    // campaignStatus (DRAFT/ACTIVE/PAUSED/COMPLETE), NOT donationStatus
+    // (pending/completed/...). donationStatus applies to individual
+    // donation rows.
+    status: v.optional(campaignStatus),
     goalAmountCents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -870,6 +880,163 @@ export const deleteStrandedDonationPlaceholder = internalMutation({
  * after 24 h so a 30-min-old pending row that never got patched
  * is genuinely stranded.
  */
+// =============================================================================
+// DONATION RECEIPTS
+// =============================================================================
+
+/**
+ * Donation row + minimal org context needed to send a receipt — pulled in a
+ * single query so the action doesn't N+1 across runs.
+ */
+export const getDonationForReceipt = internalQuery({
+  args: { donationId: v.id("donations") },
+  handler: async (ctx, { donationId }) => {
+    const d = await ctx.db.get(donationId);
+    if (!d) return null;
+    if (d.status !== "completed") return null;
+    if (!d.encryptedEmail || !d.emailHash) return null;
+    const org = await ctx.db.get(d.orgId);
+    if (!org) return null;
+    const campaign = d.campaignId ? await ctx.db.get(d.campaignId) : null;
+    return {
+      donation: {
+        _id: d._id,
+        encryptedEmail: d.encryptedEmail,
+        emailHash: d.emailHash,
+        encryptedName: d.encryptedName ?? null,
+        amountCents: d.amountCents,
+        currency: d.currency,
+        recurring: d.recurring,
+        completedAt: d.completedAt ?? Date.now(),
+      },
+      org: {
+        _id: org._id,
+        name: org.name,
+        slug: org.slug,
+      },
+      campaign: campaign ? { _id: campaign._id, title: campaign.title } : null,
+    };
+  },
+});
+
+/**
+ * Send a donor receipt for a completed donation. Idempotent: no-op if the
+ * donation isn't in `completed` status. Scheduled from completeDonation, so
+ * delivery happens out-of-band of the Stripe webhook ack — a slow SES doesn't
+ * back up the webhook handler.
+ *
+ * Generic receipt content: org name, campaign (if any), amount, recurring
+ * cadence (if any), completedAt timestamp. No EIN / tax language — orgs that
+ * need 501(c)(3) acknowledgments send their own templated receipt; this is a
+ * baseline transactional confirmation.
+ */
+export const sendReceiptEmail = internalAction({
+  args: { donationId: v.id("donations") },
+  handler: async (ctx, { donationId }) => {
+    const ctxData = await ctx.runQuery(internal.donations.getDonationForReceipt, {
+      donationId,
+    });
+    if (!ctxData) return { sent: false, reason: "not_eligible" as const };
+
+    const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
+    const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+    const awsRegion = process.env.AWS_REGION || "us-east-1";
+    const fromEmail = process.env.RECEIPT_FROM_EMAIL || process.env.SES_FROM_EMAIL;
+    if (!awsAccessKeyId || !awsSecretAccessKey || !fromEmail) {
+      console.warn(
+        "[sendReceiptEmail] SES creds or RECEIPT_FROM_EMAIL not configured — skipping receipt",
+      );
+      return { sent: false, reason: "not_configured" as const };
+    }
+
+    const orgKey = await getOrgKeyForAction(ctx, ctxData.org._id);
+    if (!orgKey) return { sent: false, reason: "org_key_unavailable" as const };
+
+    let donorEmail: string;
+    try {
+      const parsed = JSON.parse(ctxData.donation.encryptedEmail);
+      donorEmail = await decryptOrgPii(
+        parsed,
+        orgKey,
+        ctxData.donation.emailHash,
+        `donation:${ctxData.donation._id}`,
+        "email",
+      );
+    } catch {
+      return { sent: false, reason: "decrypt_failed" as const };
+    }
+
+    let donorFirstName = "";
+    if (ctxData.donation.encryptedName) {
+      try {
+        const parsed = JSON.parse(ctxData.donation.encryptedName);
+        const full = await decryptOrgPii(
+          parsed,
+          orgKey,
+          ctxData.donation.emailHash,
+          `donation:${ctxData.donation._id}`,
+          "name",
+        );
+        donorFirstName = full.trim().split(/\s+/)[0] ?? "";
+      } catch {
+        // Name decrypt failure is non-fatal — receipt sends with empty greeting
+      }
+    }
+
+    const amount = (ctxData.donation.amountCents / 100).toLocaleString(undefined, {
+      style: "currency",
+      currency: (ctxData.donation.currency || "USD").toUpperCase(),
+    });
+    const greeting = donorFirstName ? `Hi ${escape(donorFirstName)},` : "Hello,";
+    const campaignLine = ctxData.campaign
+      ? `<p style="margin:0 0 12px 0;">Campaign: <strong>${escape(ctxData.campaign.title)}</strong></p>`
+      : "";
+    const recurringLine = ctxData.donation.recurring
+      ? '<p style="margin:0 0 12px 0;">This is a recurring contribution.</p>'
+      : "";
+    const subject = `Receipt for your donation to ${ctxData.org.name}`;
+    const html = `<!DOCTYPE html>
+<html><body style="font-family:sans-serif;background:#09090b;color:#e4e4e7;padding:24px;">
+  <div style="max-width:560px;margin:0 auto;background:#18181b;border:1px solid #27272a;border-radius:8px;padding:20px;">
+    <p style="margin:0 0 12px 0;">${greeting}</p>
+    <p style="margin:0 0 12px 0;">
+      Thank you for your donation to <strong>${escape(ctxData.org.name)}</strong>.
+    </p>
+    ${campaignLine}
+    <p style="margin:0 0 12px 0;">Amount: <strong>${amount}</strong></p>
+    ${recurringLine}
+    <p style="margin:0 0 12px 0;font-size:12px;color:#71717a;">
+      Completed at ${new Date(ctxData.donation.completedAt).toISOString()}.
+    </p>
+    <p style="margin:0;font-size:11px;color:#52525b;">
+      Reference: ${escape(String(ctxData.donation._id))}
+    </p>
+  </div>
+</body></html>`;
+
+    const ok = await sendViaSes(
+      donorEmail,
+      fromEmail,
+      ctxData.org.name,
+      subject,
+      html,
+      awsAccessKeyId,
+      awsSecretAccessKey,
+      awsRegion,
+    );
+    return { sent: ok, reason: ok ? ("delivered" as const) : ("ses_failed" as const) };
+  },
+});
+
+function escape(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export const sweepStrandedDonations = internalAction({
   args: {},
   handler: async (ctx) => {

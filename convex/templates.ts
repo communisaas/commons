@@ -214,9 +214,13 @@ export const listPublic = query({
 
       // Debate summary
       const hasActiveDebate = debate?.status === "active";
-      const debateSummary = debate && debate.status !== "cancelled"
+      // debate.status was tightened to a closed union; the prior
+      // `!== "cancelled"` defensive check is now dead (the validator
+      // would reject any row with that value at write time). Keep the
+      // null-guard on `debate` itself; drop the obsolete value check.
+      const debateSummary = debate
         ? {
-            status: debate.status as "active" | "resolving" | "resolved" | "awaiting_governance" | "under_appeal",
+            status: debate.status,
             winningStance: debate.winningStance ?? undefined,
             uniqueParticipants: (debate.uniqueParticipants ?? 0) < 5 ? null : (debate.uniqueParticipants ?? 0),
             argumentCount: (debate.argumentCount ?? 0) < 5 ? null : (debate.argumentCount ?? 0),

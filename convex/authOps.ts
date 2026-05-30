@@ -23,6 +23,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 // CONVEX_AUTH_ISSUER env var (set in Convex dashboard).
 // Trailing slash is stripped to prevent operator-typo drift between this
 // stored prefix and the SvelteKit-minted JWT `iss` claim.
+
+declare const process: { env: Record<string, string | undefined> };
 const ISSUER_PREFIX = (process.env.CONVEX_AUTH_ISSUER || "https://commons.email").replace(/\/$/, "");
 
 type UpsertFromOAuthResult = {
@@ -62,6 +64,9 @@ type AuthOpsDb = {
   insert(tableName: "users", value: Record<string, unknown>): Promise<Id<"users">>;
   insert(tableName: "accounts", value: Record<string, unknown>): Promise<Id<"accounts">>;
   insert(tableName: "sessions", value: Record<string, unknown>): Promise<Id<"sessions">>;
+  // Insert-only — written by the OAuth email-change tripwire path;
+  // never read or patched from this file. No consumer wired in-tree.
+  insert(tableName: "verificationAudits", value: Record<string, unknown>): Promise<Id<"verificationAudits">>;
   patch(
     id: Id<"users"> | Id<"accounts"> | Id<"sessions">,
     value: Record<string, unknown>,
@@ -96,8 +101,15 @@ export const upsertFromOAuth = mutation({
     providerAccountId: v.string(),
     scope: v.string(),
 
-    // User data from provider
-    email: v.optional(v.string()),
+    // User data from provider. email is REQUIRED — per
+    // [[feedback_email_sybil]] anti-sybil throttle at users.ts:747
+    // keys off emailHash, which is derived from this field. Both
+    // callers (oauth-callback-handler at line 167, dev-login at :94)
+    // already guard against missing email before invoking; the args
+    // validator now matches that real-world invariant. A future
+    // OAuth provider that legitimately omits email needs an
+    // explicit feature-flag carve-out (none today).
+    email: v.string(),
     name: v.optional(v.string()),
     avatar: v.optional(v.string()),
     emailVerified: v.boolean(),
@@ -122,8 +134,32 @@ export const upsertFromOAuth = mutation({
     // OAuth login.
     requireInternalSecret(args._secret);
 
+    // v.string() accepts "" — the sybil throttle would then hash the
+    // empty string and collide every empty-email caller onto one
+    // emailHash bucket. Reject at the runtime gate so the validator
+    // shape stays simple.
+    if (args.email.trim().length === 0) {
+      throw new Error("UPSERT_OAUTH_EMAIL_EMPTY");
+    }
+
     const db = authOpsDb(ctx);
     const now = Date.now();
+
+    // SHA-256(email.toLowerCase().trim()) — canonical pattern shared with
+    // waitlist (src/routes/api/waitlist/+server.ts:18) and bounce reports.
+    // user.emailHash is the dedup key for the email-sybil throttle at
+    // convex/users.ts:747-758 + :992-998; leaving it unset on signup
+    // silently neutered the gate. Set on every code path below (new user,
+    // existing-account backfill, existing-user-by-email backfill).
+    const emailHashFor = async (email: string): Promise<string> => {
+      const buf = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(email.toLowerCase().trim()),
+      );
+      return Array.from(new Uint8Array(buf))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    };
 
     // Step 1: Check for existing OAuth account
     const existingAccount = await db
@@ -143,20 +179,65 @@ export const upsertFromOAuth = mutation({
         updatedAt: now,
       });
 
-      // Backfill tokenIdentifier + plaintext email if missing
+      // Backfill tokenIdentifier + plaintext email + emailHash if missing.
+      //
+      // F37-drift cure: an OAuth provider may return a NEW email for an
+      // existing account (Google/Microsoft email-change without account
+      // re-link). The lookup above is by providerAccountId, so args.email
+      // can diverge from existingUser0.email. Hashing args.email and
+      // storing the hash without updating existingUser0.email would
+      // create a drift: by_email index points at OLD, by_emailHash index
+      // points at NEW. The sybil throttle would then mis-attribute the
+      // user. Fix: derive emailHash from the CANONICAL stored email
+      // (existingUser0.email), not args.email. If existingUser0.email is
+      // empty (legacy user), use args.email AND set existingUser0.email
+      // atomically so both indices agree.
+      //
+      // Provider-returned email-change: the stored email wins (drift
+      // cure preserves canonical state). A verificationAudits row is
+      // written below as a tripwire — see the email-change audit
+      // block.
       const existingUser0 = await db.get(existingAccount.userId);
       if (existingUser0) {
         const patch: Record<string, unknown> = {};
         if (!existingUser0.tokenIdentifier) {
           patch.tokenIdentifier = `${ISSUER_PREFIX}|${existingAccount.userId}`;
         }
-        if (!existingUser0.email && args.email) {
+        const canonicalEmail = existingUser0.email ?? args.email;
+        if (!existingUser0.email) {
           patch.email = args.email;
           patch.name = args.name ?? existingUser0.name;
           patch.custodyMode = "plaintext";
         }
+        if (!existingUser0.emailHash && canonicalEmail) {
+          patch.emailHash = await emailHashFor(canonicalEmail);
+        }
         if (Object.keys(patch).length > 0) {
           await db.patch(existingAccount.userId, patch);
+        }
+
+        // Provider-returned email-change observability. When the OAuth
+        // provider returns an email different from the canonical stored
+        // email (Google/Microsoft account email-change without re-link),
+        // write a verificationAudits row so ops sees the drift. The
+        // stored email is preserved (drift cure); this row is the
+        // tripwire — it does NOT carry old/new email values (privacy
+        // minimization; verificationAudits has no oldEmailHash /
+        // newEmailHash fields). Ops investigation requires correlating
+        // verificationAudits.userId with provider-side audit logs.
+        // result='success' because the OAuth handshake succeeded and
+        // the user logs in normally; this is an observation event, not
+        // a verification failure. errorCode carries the divergence
+        // signal for query filtering. Duplicate rows can land under
+        // OCC retry; dedup is a consumer responsibility (no consumer
+        // wired in-tree yet).
+        if (args.email !== existingUser0.email) {
+          await db.insert("verificationAudits", {
+            userId: existingAccount.userId,
+            verificationMethod: `oauth-email-change:${args.provider}`,
+            result: "success",
+            errorCode: "PROVIDER_EMAIL_DIFFERS_FROM_STORED",
+          });
         }
       }
 
@@ -187,7 +268,10 @@ export const upsertFromOAuth = mutation({
         updatedAt: now,
       });
 
-      // Backfill tokenIdentifier + plaintext email if missing
+      // Backfill tokenIdentifier + plaintext email + emailHash if missing.
+      // In this branch, existingUser was FOUND via the by_email index
+      // against args.email, so the two are guaranteed equal at lookup
+      // time — no F37-drift risk here. Hash whichever is present.
       const userPatch: Record<string, unknown> = {};
       if (!existingUser.tokenIdentifier) {
         userPatch.tokenIdentifier = `${ISSUER_PREFIX}|${existingUser._id}`;
@@ -196,6 +280,10 @@ export const upsertFromOAuth = mutation({
         userPatch.email = args.email;
         userPatch.name = args.name ?? existingUser.name;
         userPatch.custodyMode = "plaintext";
+      }
+      const canonicalEmail = existingUser.email ?? args.email ?? undefined;
+      if (!existingUser.emailHash && canonicalEmail) {
+        userPatch.emailHash = await emailHashFor(canonicalEmail);
       }
       if (Object.keys(userPatch).length > 0) {
         await db.patch(existingUser._id, userPatch);
@@ -206,11 +294,16 @@ export const upsertFromOAuth = mutation({
 
     // Step 3: Create new user + account
     const baseTrustScore = args.emailVerified ? 100 : 50;
-    const baseReputationTier = args.emailVerified ? "verified" : "novice";
+    // Reputation tier starts at 'new' regardless of email-verification — email
+    // verification raises trustTier to 1, but reputation is a behavioral
+    // axis (templates contributed, peer endorsements, etc.) that begins at 0.
+    // The T10-1 cron is the only writer for promotions.
+    const baseReputationTier = "new";
 
     const userId = await db.insert("users", {
       avatar: args.avatar,
       email: args.email,
+      emailHash: args.email ? await emailHashFor(args.email) : undefined,
       name: args.name,
       updatedAt: now,
 

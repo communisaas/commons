@@ -3,17 +3,21 @@ import { internal } from "./_generated/api";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
+import { campaignType, campaignStatus } from "./_validators";
 import { requireOrgRole, loadOrg, requireAuth, requireOrgMembership } from "./_authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
 import { computeOrgScopedEmailHash } from "./_orgHash";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
 
+
+declare const process: { env: Record<string, string | undefined> };
 type ActiveCampaignForSubmission = {
   _id: Id<"campaigns">;
   orgId: Id<"organizations">;
 };
 
 type UserTrustTier = {
+  userId: Id<"users">;
   trustTier?: number;
   engagementTier: number;
 } | null;
@@ -81,6 +85,8 @@ const createCampaignActionRef = makeFunctionReference<"mutation">("campaigns:cre
     messageHash?: string;
     trustTier?: number;
     compositionMode?: string;
+    atlasVersion?: string;
+    userId?: Id<"users">;
   },
   CreateCampaignActionResult
 >;
@@ -110,12 +116,16 @@ export const list = query({
       .order("desc")
       .paginate({ numItems: paginationOpts.numItems, cursor: paginationOpts.cursor });
 
-    // Resolve template titles for campaigns that reference a template
+    // Resolve template titles for campaigns that reference a template.
+    // Pre-F19 the schema stored templateId as v.string() which forced a
+    // dead lookup path (this block was empty). Post-F19 templateId is
+    // v.id('templates'), so a direct ctx.db.get(c.templateId) works.
     const campaigns = await Promise.all(
       results.page.map(async (c) => {
         let templateTitle: string | null = null;
         if (c.templateId) {
-          // templateId is stored as string (not v.id) so look up by slug index or iterate
+          const tmpl = await ctx.db.get(c.templateId);
+          templateTitle = tmpl?.title ?? null;
         }
 
         return {
@@ -318,9 +328,14 @@ export const create = mutation({
   args: {
     slug: v.string(),
     title: v.string(),
-    type: v.string(), // 'LETTER' | 'EVENT' | 'FORM'
+    type: v.union(
+      v.literal("LETTER"),
+      v.literal("EVENT"),
+      v.literal("FORM"),
+      v.literal("FUNDRAISER"),
+    ),
     body: v.optional(v.string()),
-    templateId: v.optional(v.string()),
+    templateId: v.optional(v.id("templates")),
     debateEnabled: v.optional(v.boolean()),
     debateThreshold: v.optional(v.number()),
     targetCountry: v.optional(v.string()),
@@ -335,7 +350,12 @@ export const create = mutation({
       throw new Error("Title is required");
     }
 
-    const validTypes = ["LETTER", "EVENT", "FORM"];
+    // Runtime allowlist must mirror the campaignType union in
+    // convex/_validators.ts. Pre-fix the two disagreed: validator
+    // accepted FUNDRAISER (donations.ts:622 writes it for goal-amount
+    // campaigns) but this runtime check rejected it. Single source
+    // would be cleaner; for now keep them in sync explicitly.
+    const validTypes = ["LETTER", "EVENT", "FORM", "FUNDRAISER"];
     if (!validTypes.includes(args.type)) {
       throw new Error("Invalid campaign type");
     }
@@ -387,6 +407,65 @@ export const create = mutation({
 });
 
 /**
+ * Clone a campaign. Copies content fields onto a new DRAFT with all counters
+ * reset; status starts as DRAFT regardless of the source status. The new
+ * title gets a " (copy)" suffix. Requires editor+ role.
+ *
+ * Linked donation page IDs are intentionally NOT carried over — a clone is a
+ * fresh DRAFT, not a continuation; the editor wires a new donation page if
+ * they want one. `debateId` is also dropped for the same reason.
+ */
+export const clone = mutation({
+  args: {
+    slug: v.string(),
+    sourceCampaignId: v.id("campaigns"),
+  },
+  handler: async (ctx, { slug, sourceCampaignId }) => {
+    const { org } = await requireOrgRole(ctx, slug, "editor");
+
+    const source = await ctx.db.get(sourceCampaignId);
+    if (!source || source.orgId !== org._id) {
+      throw new Error("Campaign not found");
+    }
+
+    const now = Date.now();
+    const newCampaignId = await ctx.db.insert("campaigns", {
+      orgId: org._id,
+      title: `${source.title} (copy)`,
+      type: source.type,
+      body: source.body,
+      status: "DRAFT",
+      templateId: source.templateId,
+      debateEnabled: source.debateEnabled,
+      debateThreshold: source.debateThreshold,
+      targetCountry: source.targetCountry,
+      targetJurisdiction: source.targetJurisdiction,
+      targets: source.targets,
+      billId: source.billId,
+      position: source.position,
+      districtCode: source.districtCode,
+      districtCentroid: source.districtCentroid,
+      goalAmountCents: source.goalAmountCents,
+      donationCurrency: source.donationCurrency,
+      raisedAmountCents: 0,
+      donorCount: 0,
+      actionCount: 0,
+      verifiedActionCount: 0,
+      tier3VerifiedActionCount: 0,
+      updatedAt: now,
+    });
+
+    const newCount = (org.campaignCount ?? 0) + 1;
+    await ctx.db.patch(org._id, {
+      campaignCount: newCount,
+      updatedAt: now,
+    });
+
+    return newCampaignId;
+  },
+});
+
+/**
  * Update campaign fields. Requires editor+ role.
  */
 export const update = mutation({
@@ -394,10 +473,10 @@ export const update = mutation({
     campaignId: v.id("campaigns"),
     slug: v.string(),
     title: v.optional(v.string()),
-    type: v.optional(v.string()),
+    type: v.optional(campaignType),
     body: v.optional(v.string()),
-    status: v.optional(v.string()),
-    templateId: v.optional(v.string()),
+    status: v.optional(campaignStatus),
+    templateId: v.optional(v.id("templates")),
     debateEnabled: v.optional(v.boolean()),
     debateThreshold: v.optional(v.number()),
     targetCountry: v.optional(v.string()),
@@ -421,7 +500,12 @@ export const update = mutation({
       updates.title = args.title.trim();
     }
     if (args.type !== undefined) {
-      const validTypes = ["LETTER", "EVENT", "FORM"];
+      // Runtime allowlist must mirror the campaignType union in
+    // convex/_validators.ts. Pre-fix the two disagreed: validator
+    // accepted FUNDRAISER (donations.ts:622 writes it for goal-amount
+    // campaigns) but this runtime check rejected it. Single source
+    // would be cleaner; for now keep them in sync explicitly.
+    const validTypes = ["LETTER", "EVENT", "FORM", "FUNDRAISER"];
       if (!validTypes.includes(args.type)) {
         throw new Error("Invalid campaign type");
       }
@@ -507,7 +591,12 @@ export const recordResponse = mutation({
     slug: v.string(),
     campaignId: v.id("campaigns"),
     deliveryId: v.string(),
-    type: v.string(), // 'replied' | 'meeting_requested' | 'vote_cast' | 'public_statement'
+    type: v.union(
+      v.literal("replied"),
+      v.literal("meeting_requested"),
+      v.literal("vote_cast"),
+      v.literal("public_statement"),
+    ),
     detail: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -575,7 +664,12 @@ export const updateStatus = mutation({
   args: {
     campaignId: v.id("campaigns"),
     slug: v.string(),
-    status: v.string(),
+    status: v.union(
+      v.literal("DRAFT"),
+      v.literal("ACTIVE"),
+      v.literal("PAUSED"),
+      v.literal("COMPLETE"),
+    ),
   },
   handler: async (ctx, args) => {
     const { org } = await requireOrgRole(ctx, args.slug, "editor");
@@ -760,6 +854,7 @@ export const getUserTrustTier = internalQuery({
     const engagementTier = tierMap[user.reputationTier?.toLowerCase() ?? 'new'] ?? 0;
 
     return {
+      userId: user._id,
       trustTier: user.trustTier,
       engagementTier,
     };
@@ -874,6 +969,8 @@ export const createCampaignAction = internalMutation({
     messageHash: v.optional(v.string()),
     trustTier: v.optional(v.number()),
     compositionMode: v.optional(v.string()),
+    atlasVersion: v.optional(v.string()),
+    userId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
     // Dedup via the composite index. Without `by_campaignId_supporterId`,
@@ -907,7 +1004,7 @@ export const createCampaignAction = internalMutation({
     // Validate h3Cell format: H3 res-7 indices are 15-char hex strings starting with '87'
     const h3Cell = args.h3Cell && /^8[0-9a-f]{14}$/.test(args.h3Cell) ? args.h3Cell : undefined;
 
-    await ctx.db.insert("campaignActions", {
+    const actionId = await ctx.db.insert("campaignActions", {
       campaignId: args.campaignId,
       orgId,
       supporterId: args.supporterId,
@@ -918,6 +1015,7 @@ export const createCampaignAction = internalMutation({
       messageHash: args.messageHash,
       trustTier: args.trustTier,
       compositionMode: args.compositionMode,
+      atlasVersion: args.atlasVersion,
       delegated: false,
       sentAt: Date.now(),
     });
@@ -941,6 +1039,56 @@ export const createCampaignAction = internalMutation({
         verifiedActionCount: newVerifiedCount,
         tier3VerifiedActionCount: newTier3Count,
         updatedAt: Date.now(),
+      });
+    }
+
+    // Reputation-tier on-action increment (T10-1 hybrid model). Only ZK
+    // paths supply userId — non-ZK actions rely on the nightly cron to
+    // recompute. Only verified actions count toward reputation; unverified
+    // imports + bot submissions don't promote anyone.
+    if (args.userId && args.verified) {
+      const user = await ctx.db.get(args.userId);
+      if (user) {
+        await ctx.db.patch(args.userId, {
+          actionCount: (user.actionCount ?? 0) + 1,
+          updatedAt: Date.now(),
+        });
+      }
+    }
+
+    // T5-1 — Auto-spawn debate when the verified-action count crosses the
+    // configured threshold. Scheduled rather than synchronous so a slow
+    // action-domain derivation doesn't block the action's response. The
+    // mutation it calls is idempotent — re-checks campaign.debateId so
+    // simultaneous threshold-crossers don't double-spawn.
+    if (
+      args.verified &&
+      campaign?.debateEnabled &&
+      !campaign?.debateId &&
+      ((campaign?.verifiedActionCount ?? 0) + 1) >= (campaign?.debateThreshold ?? 0)
+    ) {
+      await ctx.scheduler.runAfter(0, internal.debates.atomicSpawnIfEligible, {
+        campaignId: args.campaignId,
+      });
+    }
+
+    // Emit campaign_action.created event for outbound webhooks (T9-3) + SSE
+    // subscribers (T9-7). Both share orgEvents via queueEvent. Per-org throttle
+    // is enforced inside queueEvent's downstream consumers, not here. Skip if
+    // orgId is undefined (defensive — should not occur if campaign exists).
+    if (orgId) {
+      await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+        orgId,
+        event: "campaign_action.created",
+        payload: JSON.stringify({
+          campaignId: args.campaignId,
+          actionId,
+          verified: args.verified,
+          engagementTier: args.engagementTier,
+          trustTier: args.trustTier ?? null,
+          districtHash: args.districtHash ?? null,
+          timestamp: Date.now(),
+        }),
       });
     }
 
@@ -971,6 +1119,10 @@ export const submitAction = action({
     h3Cell: v.optional(v.string()), // H3 res-7 cell index from client-side district resolution
     source: v.optional(v.string()),
     compositionMode: v.optional(v.string()), // 'individual' | 'shared' | 'edited'
+    // NEW-E-2: atlas snapshot at action-time. Callers that resolved districts
+    // via the shadow-atlas client know the manifest's cellMapRoot; pass it
+    // here so packets can surface driftCount when the atlas rotates.
+    atlasVersion: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<SubmitActionResult> => {
     // Validate early
@@ -1153,6 +1305,14 @@ export const submitAction = action({
         messageHash,
         trustTier,
         compositionMode: args.compositionMode,
+        // NEW-E-1: thread userId so reputation cron (T10-1) has real data
+        // to promote on. Only set when the submitter is a registered user
+        // — anonymous-email submissions stay null.
+        userId: userData?.userId,
+        // NEW-E-2: atlas snapshot at action-time. driftCount in the packet
+        // (verification-packet.ts) compares against the modal value across
+        // the campaign; rotations surface as non-zero drift.
+        atlasVersion: args.atlasVersion,
       },
     );
 
@@ -1396,7 +1556,43 @@ export const getActionsForPacket = query({
       sentAt: a.sentAt,
       trustTier: a.trustTier ?? null,
       compositionMode: a.compositionMode ?? null,
+      atlasVersion: a.atlasVersion ?? null,
     }));
+  },
+});
+
+/**
+ * NEW-E-3 — debate field populator for VerificationPacket. Returns the
+ * DebateMarketSnapshot shape when the campaign has a linked debateId and
+ * debate row exists; null otherwise. Top argument score is the max
+ * weightedScore on any single debateArguments row.
+ */
+export const getDebateSnapshotForCampaign = query({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign?.debateId) return null;
+    const debate = await ctx.db.get(campaign.debateId);
+    if (!debate) return null;
+    const args = await ctx.db
+      .query("debateArguments")
+      .withIndex("by_debateId", (idx) => idx.eq("debateId", debate._id))
+      .collect();
+    let topScore = 0n;
+    for (const a of args) {
+      const ws = BigInt(a.weightedScore ?? 0);
+      if (ws > topScore) topScore = ws;
+    }
+    const participantCount = debate.uniqueParticipants ?? 0;
+    // K-anon floor: surface null below K=5 (same K as packet cells)
+    return {
+      marketPosition: debate.aiResolution ?? "pending",
+      totalStake: String(debate.totalStake ?? 0),
+      topArgumentScore: topScore.toString(),
+      aiPanelConsensus: debate.aiPanelConsensus ?? null,
+      participantCount: participantCount >= 5 ? participantCount : null,
+      resolutionHash: debate.resolvedFromChain ? (debate.aiResolution ?? null) : null,
+    };
   },
 });
 
@@ -1422,7 +1618,16 @@ export const getCampaignPacketSummary = query({
       .collect();
 
     if (actions.length === 0) {
-      return { dateRange: null };
+      return {
+        dateRange: null,
+        verified: 0,
+        total: 0,
+        identityPhrase: null,
+        authorshipPhrase: null,
+        integrityPhrase: null,
+        topDistricts: [] as Array<{ hash: string; count: number }>,
+        attestationHash: null,
+      };
     }
 
     // Iterative min/max — spread hits the V8 argument-count ceiling on popular campaigns.
@@ -1438,7 +1643,109 @@ export const getCampaignPacketSummary = query({
       spanDays: Math.floor((latest - earliest) / (1000 * 60 * 60 * 24)),
     };
 
-    return { dateRange };
+    // T8-2 — staffer-legible aggregates, all K-floored.
+    const K = 5;
+    const verifiedActions = actions.filter((a) => a.verified);
+    const total = actions.length;
+    const verified = verifiedActions.length;
+
+    // Identity breakdown — qualitative prose, not raw counts
+    let identityPhrase: string | null = null;
+    if (verified >= K) {
+      let govId = 0;
+      let address = 0;
+      let email = 0;
+      for (const a of verifiedActions) {
+        const t = a.trustTier ?? 0;
+        if (t >= 3) govId++;
+        else if (t === 2) address++;
+        else email++;
+      }
+      const parts: string[] = [];
+      if (govId >= K) parts.push("identity-document verified");
+      if (address >= K) parts.push("address verified");
+      if (email >= K) parts.push("email authenticated");
+      identityPhrase = parts.length > 0 ? parts.join(" + ") : "verification mixed";
+    }
+
+    // Authorship — qualitative
+    let authorshipPhrase: string | null = null;
+    if (verified >= K) {
+      const messageHashes = new Set<string>();
+      let withHash = 0;
+      for (const a of verifiedActions) {
+        if (a.messageHash) {
+          messageHashes.add(a.messageHash);
+          withHash++;
+        }
+      }
+      if (withHash >= K) {
+        const ratio = messageHashes.size / withHash;
+        if (ratio >= 0.7) authorshipPhrase = "messages mostly individually composed";
+        else if (ratio >= 0.3) authorshipPhrase = "messages mixed between individual and shared";
+        else authorshipPhrase = "messages mostly shared template";
+      }
+    }
+
+    // Integrity — qualitative prose covering the same axes the IntegrityAssessment
+    // component renders, computed from action distribution.
+    let integrityPhrase: string | null = null;
+    if (verified >= K) {
+      const districtCounts = new Map<string, number>();
+      const hourlyBins = new Map<number, number>();
+      for (const a of verifiedActions) {
+        if (a.districtHash) {
+          districtCounts.set(a.districtHash, (districtCounts.get(a.districtHash) ?? 0) + 1);
+        }
+        const h = Math.floor(a.sentAt / (3600 * 1000));
+        hourlyBins.set(h, (hourlyBins.get(h) ?? 0) + 1);
+      }
+      let hhi = 0;
+      for (const c of districtCounts.values()) {
+        const share = c / verified;
+        hhi += share * share;
+      }
+      const gds = districtCounts.size > 0 ? 1 - hhi : null;
+      const parts: string[] = [];
+      if (gds !== null && gds >= 0.7) parts.push("spread across multiple areas");
+      else if (gds !== null) parts.push("concentrated in a few areas");
+      if (hourlyBins.size >= 5) parts.push("submitted over time");
+      integrityPhrase = parts.length > 0 ? parts.join(", ") : null;
+    }
+
+    // Top districts — K-floored. Sort by count desc, then hash for determinism.
+    const districtCounts = new Map<string, number>();
+    for (const a of verifiedActions) {
+      if (!a.districtHash) continue;
+      districtCounts.set(a.districtHash, (districtCounts.get(a.districtHash) ?? 0) + 1);
+    }
+    const topDistricts = Array.from(districtCounts.entries())
+      .filter(([, count]) => count >= K)
+      .map(([hash, count]) => ({ hash, count }))
+      .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.hash.localeCompare(b.hash)))
+      .slice(0, 10);
+
+    // Attestation hash from latest delivery's packetSnapshot
+    let attestationHash: string | null = null;
+    const latestDelivery = await ctx.db
+      .query("campaignDeliveries")
+      .withIndex("by_campaignId", (q) => q.eq("campaignId", campaignId))
+      .order("desc")
+      .take(1);
+    if (latestDelivery[0]?.packetDigest) {
+      attestationHash = latestDelivery[0].packetDigest;
+    }
+
+    return {
+      dateRange,
+      verified: verified >= K ? verified : null,
+      total: total >= K ? total : null,
+      identityPhrase,
+      authorshipPhrase,
+      integrityPhrase,
+      topDistricts,
+      attestationHash,
+    };
   },
 });
 

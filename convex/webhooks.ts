@@ -8,6 +8,7 @@
 import { internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { smsMessageStatus as smsMessageStatusV } from "./_validators";
 import type { Id } from "./_generated/dataModel";
 /**
  * Unkeyed SHA-256 hash of normalized email — for cross-org bounce/complaint
@@ -48,6 +49,74 @@ export const updateSupporterEmailStatus = internalMutation({
         // Complaints always win — once complained, never re-emailed
         if (args.status === "bounced" && s.emailStatus === "complained") continue;
         await ctx.db.patch(s._id, { emailStatus: args.status, updatedAt: Date.now() });
+      }
+    }
+  },
+});
+
+/**
+ * Process a batch of soft bounces. For each email hash:
+ *   - increment supporter.softBounceCount
+ *   - on the 3rd increment, set emailStatus='bounced' and write a
+ *     suppressedEmails row with 30-day TTL so blast recipient resolution
+ *     stops pulling the address. Complaints still trump bounces.
+ *
+ * Called by the bounce branch in the SNS webhook handler when bounceType is
+ * 'Transient' or 'Undetermined' (i.e. not Permanent).
+ */
+export const recordSoftBounces = internalMutation({
+  args: { emailHashes: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const SOFT_BOUNCE_THRESHOLD = 3;
+    const SUPPRESSION_MS = 30 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    for (const hash of args.emailHashes) {
+      const supporters = await ctx.db
+        .query("supporters")
+        .withIndex("by_globalEmailHash", (q) => q.eq("globalEmailHash", hash))
+        .collect();
+
+      for (const s of supporters) {
+        if (s.emailStatus === "complained") continue; // complaints win
+        const next = (s.softBounceCount ?? 0) + 1;
+        const patch: Record<string, unknown> = {
+          softBounceCount: next,
+          updatedAt: now
+        };
+        if (next >= SOFT_BOUNCE_THRESHOLD && s.emailStatus !== "bounced") {
+          patch.emailStatus = "bounced";
+          await ctx.db.insert("suppressedEmails", {
+            emailHash: hash,
+            domain: "unknown",
+            reason: "bounce_report",
+            source: "verification",
+            expiresAt: now + SUPPRESSION_MS
+          });
+        }
+        await ctx.db.patch(s._id, patch);
+      }
+    }
+  },
+});
+
+/**
+ * Reset the soft-bounce counter for one or more supporters when SES reports
+ * a successful Delivery. A cleared counter means a future transient blip
+ * doesn't carry over from a previous send.
+ */
+export const resetSoftBounce = internalMutation({
+  args: { emailHashes: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    for (const hash of args.emailHashes) {
+      const supporters = await ctx.db
+        .query("supporters")
+        .withIndex("by_globalEmailHash", (q) => q.eq("globalEmailHash", hash))
+        .collect();
+      for (const s of supporters) {
+        if ((s.softBounceCount ?? 0) > 0) {
+          await ctx.db.patch(s._id, { softBounceCount: 0, updatedAt: Date.now() });
+        }
       }
     }
   },
@@ -332,21 +401,45 @@ export const processSesWebhook = internalAction({
     // Fall through to EmailBlast logic
     if (notificationType === "Bounce") {
       const bounce = message.bounce;
-      if (bounce?.bounceType !== "Permanent") return { ok: true };
-
-      const emails: string[] = (bounce.bouncedRecipients ?? []).map(
+      const emails: string[] = (bounce?.bouncedRecipients ?? []).map(
         (r: { emailAddress: string }) => r.emailAddress.toLowerCase(),
       );
+      if (emails.length === 0) return { ok: true };
 
+      const hashes = (
+        await Promise.all(emails.map((email: string) => computeGlobalEmailHash(email)))
+      ).filter((h): h is string => h !== null);
+
+      if (hashes.length === 0) return { ok: true };
+
+      if (bounce?.bounceType === "Permanent") {
+        await ctx.runMutation(internal.webhooks.updateSupporterEmailStatus, {
+          emailHashes: hashes,
+          status: "bounced",
+        });
+      } else {
+        // Transient / Undetermined — increment soft-bounce tally; SES sends
+        // these even on successful retries, so we only flip emailStatus once
+        // we cross the threshold inside recordSoftBounces.
+        await ctx.runMutation(internal.webhooks.recordSoftBounces, {
+          emailHashes: hashes,
+        });
+      }
+    } else if (notificationType === "Delivery") {
+      // SES confirms the address still accepts mail. Reset any soft-bounce
+      // counter so a stale transient blip doesn't tip over the threshold.
+      const emails: string[] = (
+        message.delivery?.recipients ??
+        message.mail?.destination ??
+        []
+      ).map((e: string) => e.toLowerCase());
       if (emails.length > 0) {
         const hashes = (
           await Promise.all(emails.map((email: string) => computeGlobalEmailHash(email)))
         ).filter((h): h is string => h !== null);
-
         if (hashes.length > 0) {
-          await ctx.runMutation(internal.webhooks.updateSupporterEmailStatus, {
+          await ctx.runMutation(internal.webhooks.resetSoftBounce, {
             emailHashes: hashes,
-            status: "bounced",
           });
         }
       }
@@ -395,7 +488,7 @@ export const processSesWebhook = internalAction({
 export const updateSmsStatus = internalMutation({
   args: {
     twilioSid: v.string(),
-    status: v.string(),
+    status: smsMessageStatusV,
     errorCode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -629,6 +722,29 @@ export const completeDonation = internalMutation({
         });
       }
     }
+
+    // Emit donation.completed event (T9-3). Org webhook subscribers receive
+    // a signed POST; SSE subscribers see it via orgEvents within their poll
+    // window. No PII in the payload — donor identity stays in encryptedEmail
+    // on the donation row, not in the webhook.
+    await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+      orgId: donation.orgId,
+      event: "donation.completed",
+      payload: JSON.stringify({
+        donationId: donation._id,
+        campaignId: donation.campaignId ?? null,
+        amountCents: donation.amountCents,
+        recurring: donation.recurring ?? false,
+        timestamp: Date.now(),
+      }),
+    });
+
+    // Schedule donor receipt (out-of-band so a slow SES doesn't back up the
+    // Stripe webhook ack). The action self-checks completed status, so a
+    // retry of completeDonation won't double-send.
+    await ctx.scheduler.runAfter(0, internal.donations.sendReceiptEmail, {
+      donationId: donation._id,
+    });
 
     return { processed: true, amountCents: donation.amountCents, supporterId: donation.supporterId };
   },
