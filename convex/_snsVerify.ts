@@ -2,6 +2,10 @@
 
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
+// node:crypto is provided by the Convex Node runtime (this file is "use node").
+// Its types aren't visible because convex/tsconfig.json is V8-default (no @types/node,
+// to keep the minimal `process` shim valid in V8 files). Runtime resolution is correct.
+// @ts-expect-error -- node builtin types absent from the V8-default convex tsconfig
 import { createVerify, X509Certificate } from "node:crypto";
 import { validateCertURL, buildSigningString } from "./_snsVerifyHelpers";
 

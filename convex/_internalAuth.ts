@@ -16,6 +16,8 @@
  * shared with the other 5 HMAC secrets (cycle 195).
  */
 
+
+declare const process: { env: Record<string, string | undefined> };
 const MIN_SECRET_BYTES = 32;
 
 function bufferEq(a: string, b: string): boolean {

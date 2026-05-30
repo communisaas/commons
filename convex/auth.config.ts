@@ -12,6 +12,8 @@
 
 // Trailing slash is stripped on both `issuer` and JWKS URI to prevent
 // operator-typo drift between the SvelteKit minter and the Convex consumer.
+
+declare const process: { env: Record<string, string | undefined> };
 const ISSUER = (process.env.CONVEX_AUTH_ISSUER || "https://commons.email").replace(/\/$/, "");
 
 export default {

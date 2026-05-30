@@ -18,6 +18,8 @@ import { selectActiveCredentialForUser } from './_credentialSelect';
 // SUBMISSIONS — ZK proof creation + congressional delivery
 // =============================================================================
 
+
+declare const process: { env: Record<string, string | undefined> };
 const WITNESS_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const CONGRESSIONAL_NOT_LAUNCHED = 'CONGRESSIONAL_NOT_LAUNCHED';
 const CONGRESSIONAL_TRANSPORT_NOT_CONFIGURED = 'CONGRESSIONAL_TRANSPORT_NOT_CONFIGURED';

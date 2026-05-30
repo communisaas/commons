@@ -10,6 +10,8 @@ import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
 import type { Id } from "./_generated/dataModel";
 
+
+declare const process: { env: Record<string, string | undefined> };
 type EncryptedSupporterForBlast = {
   _id: Id<"supporters">;
   encryptedEmail: string;

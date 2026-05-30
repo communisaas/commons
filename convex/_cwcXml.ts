@@ -9,6 +9,8 @@
  * action and Convex functions cannot import from SvelteKit's src/.
  */
 
+
+declare const process: { env: Record<string, string | undefined> };
 interface CwcTemplate {
 	id: string;
 	title: string;

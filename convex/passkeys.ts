@@ -3,6 +3,8 @@ import { v } from 'convex/values';
 import { requireAuth } from './_authHelpers';
 import type { Doc } from './_generated/dataModel';
 
+
+declare const process: { env: Record<string, string | undefined> };
 const CEREMONY_TTL_MAX_MS = 10 * 60 * 1000;
 const SERVER_PROOF_WINDOW_MS = 5 * 60 * 1000;
 const PROOF_SEPARATOR = '\u001f';
