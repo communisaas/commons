@@ -64,6 +64,12 @@ export const load: PageServerLoad = async ({ params }) => {
 					total: stats.totalActions,
 					districtCount: stats.uniqueDistricts,
 					dateRange: summary?.dateRange ?? null,
+					// T8-2 — qualitative phrases + K-floored top districts + attestation
+					identityPhrase: summary?.identityPhrase ?? null,
+					authorshipPhrase: summary?.authorshipPhrase ?? null,
+					integrityPhrase: summary?.integrityPhrase ?? null,
+					topDistricts: summary?.topDistricts ?? [],
+					attestationHash: summary?.attestationHash ?? null
 				}
 			};
 		}

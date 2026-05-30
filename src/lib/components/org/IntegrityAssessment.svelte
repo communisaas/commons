@@ -9,6 +9,12 @@
 		class?: string;
 	} = $props();
 
+	// Privacy model (see docs/design/READER-PRIVACY-MODEL.md): this prose is
+	// the only surface where integrity metrics reach the reader. We render
+	// qualitative thresholds ("spread across multiple areas") instead of raw
+	// numeric values (0.71, 0.84) because a 0.71 → 0.72 increment is a polling
+	// oracle — an adversary watching the value tick by one can attribute that
+	// increment to a single new action, defeating per-campaign K-anonymity.
 	function assessIntegrity(p: IntegrityMetrics): string {
 		if (p.burstVelocity !== null && p.burstVelocity > 5)
 			return 'Unusual activity spike detected. May warrant review.';
