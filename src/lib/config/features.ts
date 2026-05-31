@@ -109,13 +109,14 @@ export const FEATURES = {
 	/**
 	 * Raw ISO mdoc (`org-iso-mdoc`) lane.
 	 *
-	 * T3 is closed: the I1 cycle (2026-05-05) lifted this lane to the same
+	 * The verifier is ready: this lane was lifted to the same
 	 * SessionTranscript-binding floor as the DC API path via the shared
-	 * `verifyMdocDeviceAuth` helper. DeviceMAC / DeviceSignature are now
-	 * verified per ISO 18013-5 §9.1.3 on both lanes; capture-replay is bounded
-	 * by the OID4VP nonce lifetime.
+	 * `verifyMdocDeviceAuth` helper — DeviceMAC / DeviceSignature are verified
+	 * per ISO 18013-5 §9.1.3 on both lanes, and capture-replay is bounded by
+	 * the OID4VP nonce lifetime. Kept false until the mDL launch is ready;
+	 * flip on deliberately alongside the umbrella MDL flag.
 	 */
-	MDL_MDOC: true,
+	MDL_MDOC: false,
 
 	/**
 	 * iOS/Safari same-device lane. Keep false until `org-iso-mdoc` verifier
