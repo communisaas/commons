@@ -51,12 +51,15 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 		expect(svelte).toContain('SMS_BODY_TOO_LARGE');
 		expect(svelte).toContain('FROM_NUMBER_TOO_LARGE');
 		expect(svelte).toContain('TOTAL_RECIPIENTS_TOO_LARGE');
-		// updateBlast.status is a union literal (not v.string()).
+		// updateBlast.status is constrained to the shared smsBlastStatus enum
+		// validator (not a free v.string()); the union literal lives in _validators.
 		const update = svelte.slice(
 			svelte.indexOf('export const updateBlast = mutation'),
 			svelte.indexOf('export const updateBlast = mutation') + 1500
 		);
-		expect(update).toMatch(/v\.union\(\s*v\.literal\("draft"\)/);
+		expect(update).toMatch(/status:\s*v\.optional\(smsBlastStatus\)/);
+		const validators = source('convex/_validators.ts');
+		expect(validators).toMatch(/smsBlastStatus\s*=\s*v\.union\(\s*v\.literal\('draft'\)/);
 	});
 
 	it('submissions idempotency key is user-scoped', () => {

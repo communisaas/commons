@@ -26,7 +26,8 @@ vi.mock('convex-sveltekit', () => ({
 vi.mock('$lib/convex', () => ({
 	api: {
 		users: {
-			getActiveCredentialDistrictCommitment: 'users.getActiveCredentialDistrictCommitment'
+			getActiveCredentialDistrictCommitment: 'users.getActiveCredentialDistrictCommitment',
+			getMyActionCount: 'users.getMyActionCount'
 		},
 		submissions: {
 			create: 'submissions.create'
@@ -72,6 +73,7 @@ function buildBody(overrides: Record<string, unknown> = {}) {
 	publicInputsArray[26] = VALID_NULLIFIER;
 	publicInputsArray[27] = CANONICAL_DOMAIN;
 	publicInputsArray[28] = '5';
+		publicInputsArray[30] = '0'; // claimed engagement tier; matches server-derived tier 0
 
 	// Proof: 2049 hex chars of '11' — well above min 2048, below max 131072
 	const proofHex = '0x' + '11'.repeat(1025);
@@ -121,9 +123,22 @@ function buildEvent(body: unknown, overrides: Record<string, unknown> = {}) {
 	} as unknown as Parameters<typeof POST>[0];
 }
 
+const SERVER_ACTION_COUNT = 0; // server-derived engagement tier 0; matches publicInputs[30]='0'
+let mockCommitment: unknown = null;
+
 beforeEach(() => {
 	vi.clearAllMocks();
 	globalThis.fetch = vi.fn();
+	mockCommitment = null;
+	// T10-2 engagement cross-check (getMyActionCount) precedes the Stage 2.5
+	// credential lookup; route serverQuery by ref so each test sets only the
+	// credential value. V1 proofs here don't hit the V2 revocation reads.
+	mockServerQuery.mockImplementation((ref: string) => {
+		if (ref === 'users.getMyActionCount') return Promise.resolve(SERVER_ACTION_COUNT);
+		if (ref === 'users.getActiveCredentialDistrictCommitment')
+			return Promise.resolve(mockCommitment);
+		return Promise.resolve(null);
+	});
 });
 
 afterEach(() => {
@@ -132,7 +147,7 @@ afterEach(() => {
 
 describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', () => {
 	it('returns 403 CREDENTIAL_MIGRATION_REQUIRED when user has no active commitment', async () => {
-		mockServerQuery.mockResolvedValueOnce(null);
+		mockCommitment = null;
 
 		const response = await POST(buildEvent(buildBody()));
 
@@ -145,7 +160,7 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 	});
 
 	it('returns 403 when commitment query returns empty object', async () => {
-		mockServerQuery.mockResolvedValueOnce({}); // row without districtCommitment
+		mockCommitment = {}; // row without districtCommitment
 
 		const response = await POST(buildEvent(buildBody()));
 
@@ -169,12 +184,13 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 			districtCommitment: forgedCommitment
 		});
 
-		mockServerQuery.mockResolvedValueOnce({ districtCommitment: ACTIVE_COMMITMENT });
+		mockCommitment = { districtCommitment: ACTIVE_COMMITMENT };
 
 		const publicInputsArray = new Array(31).fill('0x' + '01'.repeat(32));
 		publicInputsArray[26] = VALID_NULLIFIER;
 		publicInputsArray[27] = forgedDomain;
 		publicInputsArray[28] = '5';
+		publicInputsArray[30] = '0'; // claimed engagement tier; matches server-derived tier 0
 
 		const body = buildBody({
 			publicInputs: {
@@ -201,7 +217,7 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 	});
 
 	it('happy path: matching domain passes to downstream action', async () => {
-		mockServerQuery.mockResolvedValueOnce({ districtCommitment: ACTIVE_COMMITMENT });
+		mockCommitment = { districtCommitment: ACTIVE_COMMITMENT };
 		mockServerAction.mockResolvedValueOnce({
 			submissionId: 'sub-1',
 			status: 'accepted'
@@ -217,12 +233,13 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 	});
 
 	it('returns 403 when the proof authority public input is below the CWC tier', async () => {
-		mockServerQuery.mockResolvedValueOnce({ districtCommitment: ACTIVE_COMMITMENT });
+		mockCommitment = { districtCommitment: ACTIVE_COMMITMENT };
 
 		const publicInputsArray: string[] = new Array(31).fill('0x' + '01'.repeat(32));
 		publicInputsArray[26] = VALID_NULLIFIER;
 		publicInputsArray[27] = CANONICAL_DOMAIN;
 		publicInputsArray[28] = '3';
+		publicInputsArray[30] = '0'; // claimed engagement tier; matches server-derived tier 0
 
 		const response = await POST(
 			buildEvent(
@@ -245,7 +262,7 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 	});
 
 	it('returns 403 when the server-side user tier is below the CWC tier', async () => {
-		mockServerQuery.mockResolvedValueOnce({ districtCommitment: ACTIVE_COMMITMENT });
+		mockCommitment = { districtCommitment: ACTIVE_COMMITMENT };
 
 		const response = await POST(
 			buildEvent(buildBody(), {
@@ -267,7 +284,7 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 	});
 
 	it('queries the canonical districtCommitment endpoint with the authenticated userId', async () => {
-		mockServerQuery.mockResolvedValueOnce({ districtCommitment: ACTIVE_COMMITMENT });
+		mockCommitment = { districtCommitment: ACTIVE_COMMITMENT };
 		mockServerAction.mockResolvedValueOnce({
 			submissionId: 'sub-2',
 			status: 'accepted'

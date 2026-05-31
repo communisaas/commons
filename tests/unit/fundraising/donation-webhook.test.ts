@@ -64,7 +64,11 @@ describe('completeDonation', () => {
 	it('completes a pending donation and stores Stripe IDs', async () => {
 		const donation = makeDonation();
 		const chain = createQueryChain({ collect: [donation] });
-		const ctx = { db: { query: chain.query, patch, get } };
+		const ctx = {
+				db: { query: chain.query, patch, get },
+				runMutation: vi.fn().mockResolvedValue(null),
+				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+			};
 
 		const result = await handler<
 			{
@@ -103,7 +107,11 @@ describe('completeDonation', () => {
 
 	it('increments campaign totals when the donation has a campaign', async () => {
 		const chain = createQueryChain({ collect: [makeDonation()] });
-		const ctx = { db: { query: chain.query, patch, get } };
+		const ctx = {
+				db: { query: chain.query, patch, get },
+				runMutation: vi.fn().mockResolvedValue(null),
+				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+			};
 
 		await handler<
 			{ donationId: string; stripePaymentIntentId?: string },
@@ -126,7 +134,11 @@ describe('completeDonation', () => {
 
 	it('is idempotent when no pending donation matches', async () => {
 		const chain = createQueryChain({ collect: [] });
-		const ctx = { db: { query: chain.query, patch, get } };
+		const ctx = {
+				db: { query: chain.query, patch, get },
+				runMutation: vi.fn().mockResolvedValue(null),
+				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+			};
 
 		const result = await handler<{ donationId: string }, { processed: boolean }>(
 			completeDonation
@@ -141,7 +153,11 @@ describe('completeDonation', () => {
 	it('does not increment counters when the campaign is missing', async () => {
 		get.mockResolvedValue(null);
 		const chain = createQueryChain({ collect: [makeDonation()] });
-		const ctx = { db: { query: chain.query, patch, get } };
+		const ctx = {
+				db: { query: chain.query, patch, get },
+				runMutation: vi.fn().mockResolvedValue(null),
+				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+			};
 
 		await handler<{ donationId: string }, { processed: boolean }>(completeDonation)(ctx, {
 			donationId: 'cs_test'
@@ -168,7 +184,11 @@ describe('refundDonation', () => {
 	it('marks a completed donation as refunded', async () => {
 		const donation = makeDonation({ status: 'completed', amountCents: 3000 });
 		const chain = createQueryChain({ first: donation });
-		const ctx = { db: { query: chain.query, patch, get } };
+		const ctx = {
+				db: { query: chain.query, patch, get },
+				runMutation: vi.fn().mockResolvedValue(null),
+				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+			};
 
 		await handler<{ stripePaymentIntentId: string }, void>(refundDonation)(ctx, {
 			stripePaymentIntentId: 'pi_test'
@@ -191,7 +211,11 @@ describe('refundDonation', () => {
 	it('decrements campaign counters without going below zero', async () => {
 		const donation = makeDonation({ status: 'completed', amountCents: 3000 });
 		const chain = createQueryChain({ first: donation });
-		const ctx = { db: { query: chain.query, patch, get } };
+		const ctx = {
+				db: { query: chain.query, patch, get },
+				runMutation: vi.fn().mockResolvedValue(null),
+				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+			};
 
 		await handler<{ stripePaymentIntentId: string }, void>(refundDonation)(ctx, {
 			stripePaymentIntentId: 'pi_test'
@@ -212,7 +236,11 @@ describe('refundDonation', () => {
 		get.mockResolvedValue(makeCampaign({ raisedAmountCents: 1000, donorCount: 0 }));
 		const donation = makeDonation({ status: 'completed', amountCents: 3000 });
 		const chain = createQueryChain({ first: donation });
-		const ctx = { db: { query: chain.query, patch, get } };
+		const ctx = {
+				db: { query: chain.query, patch, get },
+				runMutation: vi.fn().mockResolvedValue(null),
+				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+			};
 
 		await handler<{ stripePaymentIntentId: string }, void>(refundDonation)(ctx, {
 			stripePaymentIntentId: 'pi_test'
@@ -229,7 +257,11 @@ describe('refundDonation', () => {
 
 	it('ignores refunds for non-completed donations', async () => {
 		const chain = createQueryChain({ first: makeDonation({ status: 'pending' }) });
-		const ctx = { db: { query: chain.query, patch, get } };
+		const ctx = {
+				db: { query: chain.query, patch, get },
+				runMutation: vi.fn().mockResolvedValue(null),
+				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+			};
 
 		await handler<{ stripePaymentIntentId: string }, void>(refundDonation)(ctx, {
 			stripePaymentIntentId: 'pi_test'
@@ -240,7 +272,11 @@ describe('refundDonation', () => {
 
 	it('ignores refunds when no donation matches the payment intent', async () => {
 		const chain = createQueryChain({ first: null });
-		const ctx = { db: { query: chain.query, patch, get } };
+		const ctx = {
+				db: { query: chain.query, patch, get },
+				runMutation: vi.fn().mockResolvedValue(null),
+				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+			};
 
 		await handler<{ stripePaymentIntentId: string }, void>(refundDonation)(ctx, {
 			stripePaymentIntentId: 'pi_missing'
