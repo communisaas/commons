@@ -137,6 +137,67 @@ describe('convex/email.ts — findUnresolvedReport + createBounceReport + applyU
 	});
 });
 
+describe('convex/agentTraces.ts — record + listByTrace + recentByEndpoint + findStuck', () => {
+	const src = source('convex/agentTraces.ts');
+
+	it('record handler calls requireInternalSecret(args._secret)', () => {
+		expect(src).toContain('export const record = mutation');
+		expect(src).toMatch(/record\s*=\s*mutation\(\{[\s\S]*?_secret:\s*v\.string\(\)/);
+		expect(src).toMatch(/record\s*=\s*mutation\(\{[\s\S]*?requireInternalSecret\(args\._secret\)/);
+	});
+
+	it('listByTrace handler calls requireInternalSecret(args._secret)', () => {
+		expect(src).toContain('export const listByTrace = query');
+		expect(src).toMatch(/listByTrace\s*=\s*query\(\{[\s\S]*?_secret:\s*v\.string\(\)/);
+		expect(src).toMatch(
+			/listByTrace\s*=\s*query\(\{[\s\S]*?requireInternalSecret\(args\._secret\)/
+		);
+	});
+
+	it('recentByEndpoint handler calls requireInternalSecret(args._secret)', () => {
+		expect(src).toContain('export const recentByEndpoint = query');
+		expect(src).toMatch(/recentByEndpoint\s*=\s*query\(\{[\s\S]*?_secret:\s*v\.string\(\)/);
+		expect(src).toMatch(
+			/recentByEndpoint\s*=\s*query\(\{[\s\S]*?requireInternalSecret\(args\._secret\)/
+		);
+	});
+
+	it('findStuck handler calls requireInternalSecret(args._secret)', () => {
+		expect(src).toContain('export const findStuck = query');
+		expect(src).toMatch(/findStuck\s*=\s*query\(\{[\s\S]*?_secret:\s*v\.string\(\)/);
+		expect(src).toMatch(
+			/findStuck\s*=\s*query\(\{[\s\S]*?requireInternalSecret\(args\._secret\)/
+		);
+	});
+
+	it('all four gates run before first ctx.* call', () => {
+		assertFirstGuard(src, 'record');
+		assertFirstGuard(src, 'listByTrace');
+		assertFirstGuard(src, 'recentByEndpoint');
+		assertFirstGuard(src, 'findStuck');
+	});
+
+	it('expire is an internalMutation (no _secret needed)', () => {
+		expect(src).toContain('export const expire = internalMutation');
+		// Internal mutations are not reachable from the public API; no gate needed.
+		// Just sanity-check it doesn't accidentally become a public mutation.
+		expect(src).not.toMatch(/expire\s*=\s*mutation\(/);
+	});
+
+	it('deleteByUserId is an internalMutation (no _secret needed)', () => {
+		expect(src).toContain('export const deleteByUserId = internalMutation');
+		// Same internal-only posture as `expire`. The user-deletion pipeline
+		// calls this from internalAction context where the public _secret
+		// gate is structurally unreachable.
+		expect(src).not.toMatch(/deleteByUserId\s*=\s*mutation\(/);
+	});
+
+	it('record clamps expiresAt to MAX_TTL_MS (defense against caller bugs)', () => {
+		expect(src).toContain('MAX_TTL_MS');
+		expect(src).toMatch(/Math\.min\(args\.expiresAt,\s*Date\.now\(\)\s*\+\s*MAX_TTL_MS\)/);
+	});
+});
+
 describe('SvelteKit callers pass getInternalSecret()', () => {
 	it('oauth-callback-handler.ts wires _secret on upsertFromOAuth', () => {
 		const src = source('src/lib/core/auth/oauth-callback-handler.ts');

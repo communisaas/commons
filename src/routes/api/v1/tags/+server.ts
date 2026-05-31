@@ -16,7 +16,7 @@ export const GET: RequestHandler = async ({ request }) => {
 	requirePublicApi();
 	const auth = await authenticateApiKey(request);
 	if (auth instanceof Response) return auth;
-	const rateLimit = await checkApiPlanRateLimit(auth);
+	const rateLimit = await checkApiPlanRateLimit(auth, { method: request.method });
 	if (rateLimit) return rateLimit;
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
@@ -31,7 +31,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	requirePublicApi();
 	const auth = await authenticateApiKey(request);
 	if (auth instanceof Response) return auth;
-	const rateLimit = await checkApiPlanRateLimit(auth);
+	const rateLimit = await checkApiPlanRateLimit(auth, { method: request.method });
 	if (rateLimit) return rateLimit;
 	const scopeErr = requireScope(auth, 'write');
 	if (scopeErr) return scopeErr;

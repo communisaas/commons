@@ -18,12 +18,18 @@ import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
+import { debateStatus as debateStatusV } from "./_validators";
 import { requireAuth } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
 
 declare const process: { env: Record<string, string | undefined> };
 
 const insertDebateRef = makeFunctionReference<"mutation">("debates:insertDebate") as unknown as FunctionReference<"mutation", "internal">;
+const getCallerTrustTierRef = makeFunctionReference<"query">("debates:_getCallerTrustTier") as unknown as FunctionReference<"query", "internal", { tokenIdentifier: string }, number>;
+// Re-imported here so the listPublic args validator can reference the
+// closed union — declared inline because debates.ts already manages
+// many makeFunctionReference helpers and centralizing imports keeps
+// the top of file consistent.
 const getExpiredDebatesRef = makeFunctionReference<"query">("debates:getExpiredDebates") as unknown as FunctionReference<"query", "internal">;
 const rateLimitCheckRef = makeFunctionReference<"mutation">("_rateLimit:check") as unknown as FunctionReference<"mutation", "internal", { key: string; windowMs: number; maxRequests: number }, { allowed: boolean }>;
 
@@ -282,7 +288,7 @@ export const getPublicDetail = query({
  */
 export const listPublic = query({
   args: {
-    status: v.optional(v.string()),
+    status: v.optional(debateStatusV),
     cursor: v.optional(v.union(v.string(), v.null())),
     limit: v.optional(v.number()),
   },
@@ -682,6 +688,24 @@ export const spawnDebate = action({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
+    // Mirror the tier-3 gate that the SvelteKit route enforces at
+    // src/routes/api/debates/create/+server.ts:34. Pre-fix, this public
+    // action accepted authenticated-only callers — any client wired
+    // directly to Convex (e.g., the JS SDK) could spawn debates while
+    // bypassing the HTTP-route gate. Both entry points now have the
+    // same authorization posture: tier-3+ (mDL or higher) required.
+    // identity.tokenIdentifier is non-optional in Convex's UserIdentity
+    // type. The pre-existing `?? identity.subject` fallback was dead AND
+    // misleading — users.tokenIdentifier is stored as `${ISSUER}|${userId}`
+    // (authOps.ts:167,266), not the bare JWT sub. Drop the fallback so the
+    // code reads as honestly as it executes.
+    const callerTier = await ctx.runQuery(getCallerTrustTierRef, {
+      tokenIdentifier: identity.tokenIdentifier,
+    });
+    if (callerTier < 3) {
+      throw new Error("DEBATE_SPAWN_REQUIRES_TIER_3");
+    }
+
     if (!args.propositionText || args.propositionText.length < 10) {
       throw new Error("propositionText must be at least 10 characters");
     }
@@ -716,11 +740,23 @@ export const spawnDebate = action({
     const bond = args.bondAmount ?? 1_000_000;
     const jurisdictionSize = args.jurisdictionSizeHint ?? 100;
 
-    // Off-chain fallback IDs
+    // Off-chain identifiers must conform to the same 0x-prefixed
+    // 32-byte format the downstream ZK proof pipeline validates
+    // (`isValidActionDomain` at src/lib/core/zkp/action-domain-builder.ts:372,
+    // `buildDebateActionDomain` propositionHash regex at :311). The
+    // previous human-readable strings (`offchain-...`, `domain-...`,
+    // `hash-...`) crashed any consumer that ran proof generation
+    // against an off-chain debate. The helpers in `./_actionDomain`
+    // use Web Crypto SHA-256 (Convex V8 lacks keccak) to produce
+    // format-valid placeholders; values are not on-chain-verifiable
+    // and the contract verifier will reject them — by design for the
+    // off-chain branch.
+    const { hashTextToBytes32, offchainDebateId, offchainActionDomain } =
+      await import("./_actionDomain");
     const timestamp = Math.floor(Date.now() / 1000);
-    const debateIdOnchain = `offchain-${timestamp}-${Math.random().toString(36).slice(2, 10)}`;
-    const actionDomain = `domain-${debateIdOnchain}`;
-    const propositionHash = `hash-${args.propositionText.slice(0, 20)}`;
+    const propositionHash = await hashTextToBytes32(args.propositionText);
+    const debateIdOnchain = await offchainDebateId(propositionHash, timestamp);
+    const actionDomain = await offchainActionDomain(debateIdOnchain, propositionHash);
 
     const deadline = Date.now() + durationSeconds * 1000;
 
@@ -743,6 +779,23 @@ export const spawnDebate = action({
       propositionHash,
       deadline,
     };
+  },
+});
+
+// Resolve the caller's trust tier from token identifier. Used by
+// spawnDebate to enforce the tier-3 gate that mirrors the SvelteKit
+// /api/debates/create:34 enforcement. Defined here (not in users.ts)
+// so the action's runQuery call sites stay local to the feature.
+export const _getCallerTrustTier = internalQuery({
+  args: { tokenIdentifier: v.string() },
+  handler: async (ctx, { tokenIdentifier }): Promise<number> => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_tokenIdentifier", (q) =>
+        q.eq("tokenIdentifier", tokenIdentifier),
+      )
+      .first();
+    return user?.trustTier ?? 0;
   },
 });
 
@@ -1121,5 +1174,252 @@ export const listAwaitingGovernance = query({
         };
       }),
     );
+  },
+});
+
+// =============================================================================
+// AUTO-SPAWN FROM CAMPAIGN THRESHOLD (T5-1)
+// =============================================================================
+
+/**
+ * Atomic "spawn debate iff campaign crossed the threshold AND no debate yet
+ * exists" — run via scheduler.runAfter from createCampaignAction. Race
+ * concerns: two simultaneous threshold-crossing actions could each schedule a
+ * spawn. The eligibility re-check inside the insert mutation makes this
+ * idempotent: whichever fires first wins; the second sees campaign.debateId
+ * already set and exits.
+ *
+ * Authorization: this is a SYSTEM-initiated spawn driven by a metric the org
+ * editor already authorized when they set campaign.debateEnabled + threshold.
+ * No tier-3 gate applies — the editor's act of configuring the campaign IS
+ * the authorization.
+ */
+export const atomicSpawnIfEligible = internalAction({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (
+    ctx,
+    { campaignId }
+  ): Promise<
+    | { spawned: false; reason: string }
+    | { spawned: true; debateId: Id<"debates"> }
+  > => {
+    const campaign: {
+      _id: Id<"campaigns">;
+      title: string;
+      templateId: Id<"templates"> | null;
+      debateEnabled: boolean;
+      debateThreshold: number;
+      debateId: Id<"debates"> | null;
+      verifiedActionCount: number;
+    } | null = await ctx.runQuery(internal.debates._getCampaignForSpawn, {
+      campaignId,
+    });
+    if (!campaign) return { spawned: false as const, reason: "no_campaign" };
+    if (campaign.debateId) return { spawned: false as const, reason: "already_spawned" };
+    if (!campaign.debateEnabled) return { spawned: false as const, reason: "disabled" };
+    if (!campaign.templateId) return { spawned: false as const, reason: "no_template" };
+    if ((campaign.verifiedActionCount ?? 0) < (campaign.debateThreshold ?? 0)) {
+      return { spawned: false as const, reason: "below_threshold" };
+    }
+
+    // Derive action-domain values the same way spawnDebate does.
+    const { hashTextToBytes32, offchainDebateId, offchainActionDomain } =
+      await import("./_actionDomain");
+    const propositionText =
+      campaign.title.length >= 10
+        ? campaign.title
+        : `${campaign.title} — auto-spawned from threshold crossing`;
+    const timestamp = Math.floor(Date.now() / 1000);
+    const propositionHash = await hashTextToBytes32(propositionText);
+    const debateIdOnchain = await offchainDebateId(propositionHash, timestamp);
+    const actionDomain = await offchainActionDomain(debateIdOnchain, propositionHash);
+
+    const result = await ctx.runMutation(internal.debates._spawnDebateIfEligible, {
+      campaignId,
+      templateId: campaign.templateId as Id<"templates">,
+      debateIdOnchain,
+      actionDomain,
+      propositionHash,
+      propositionText,
+      durationSeconds: 7 * 24 * 60 * 60,
+      jurisdictionSize: campaign.debateThreshold ?? 100,
+    });
+    return result;
+  },
+});
+
+/**
+ * Manual force-spawn — for the /api/campaigns/[id]/debate route. Bypasses
+ * the threshold check (org editor explicitly asked for it via the API) but
+ * still re-checks debateId so the manual path is idempotent against the
+ * auto-spawn path. Takes optional propositionText so editors can override
+ * the title-derived default.
+ */
+export const forceSpawnDebateForCampaign = action({
+  args: {
+    campaignId: v.id("campaigns"),
+    propositionText: v.optional(v.string()),
+    duration: v.optional(v.number()),
+    jurisdictionSizeHint: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<
+    | { spawned: false; reason: string }
+    | { spawned: true; debateId: Id<"debates"> }
+  > => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const campaign: {
+      _id: Id<"campaigns">;
+      title: string;
+      templateId: Id<"templates"> | null;
+      debateEnabled: boolean;
+      debateThreshold: number;
+      debateId: Id<"debates"> | null;
+      verifiedActionCount: number;
+    } | null = await ctx.runQuery(internal.debates._getCampaignForSpawn, {
+      campaignId: args.campaignId,
+    });
+    if (!campaign) return { spawned: false as const, reason: "no_campaign" };
+    if (campaign.debateId) return { spawned: false as const, reason: "already_spawned" };
+    if (!campaign.debateEnabled) return { spawned: false as const, reason: "disabled" };
+    if (!campaign.templateId) return { spawned: false as const, reason: "no_template" };
+
+    const { hashTextToBytes32, offchainDebateId, offchainActionDomain } =
+      await import("./_actionDomain");
+    const fallbackText = `${campaign.title} — debate spawned manually`;
+    const propositionText =
+      args.propositionText && args.propositionText.length >= 10
+        ? args.propositionText
+        : fallbackText;
+    const timestamp = Math.floor(Date.now() / 1000);
+    const propositionHash = await hashTextToBytes32(propositionText);
+    const debateIdOnchain = await offchainDebateId(propositionHash, timestamp);
+    const actionDomain = await offchainActionDomain(debateIdOnchain, propositionHash);
+    const durationSeconds = args.duration ?? 7 * 24 * 60 * 60;
+
+    const result: { spawned: false; reason: string } | { spawned: true; debateId: Id<"debates"> } =
+      await ctx.runMutation(internal.debates._spawnDebateIfEligibleForce, {
+        campaignId: args.campaignId,
+        templateId: campaign.templateId as Id<"templates">,
+        debateIdOnchain,
+        actionDomain,
+        propositionHash,
+        propositionText,
+        durationSeconds,
+        jurisdictionSize: args.jurisdictionSizeHint ?? campaign.debateThreshold ?? 100,
+      });
+    return result;
+  },
+});
+
+export const _spawnDebateIfEligibleForce = internalMutation({
+  args: {
+    campaignId: v.id("campaigns"),
+    templateId: v.id("templates"),
+    debateIdOnchain: v.string(),
+    actionDomain: v.string(),
+    propositionHash: v.string(),
+    propositionText: v.string(),
+    durationSeconds: v.number(),
+    jurisdictionSize: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign) return { spawned: false as const, reason: "no_campaign" };
+    if (campaign.debateId) return { spawned: false as const, reason: "already_spawned" };
+
+    const now = Date.now();
+    const debateId = await ctx.db.insert("debates", {
+      templateId: args.templateId,
+      debateIdOnchain: args.debateIdOnchain,
+      actionDomain: args.actionDomain,
+      propositionHash: args.propositionHash,
+      propositionText: args.propositionText,
+      deadline: now + args.durationSeconds * 1000,
+      jurisdictionSize: args.jurisdictionSize,
+      status: "active",
+      argumentCount: 0,
+      uniqueParticipants: 0,
+      totalStake: 0,
+      resolvedFromChain: false,
+      proposerAddress: "0x0000000000000000000000000000000000000000",
+      proposerBond: 0,
+      marketStatus: "pre_market",
+      currentEpoch: 0,
+      updatedAt: now,
+    });
+    await ctx.db.patch(args.campaignId, {
+      debateId,
+      updatedAt: now,
+    });
+    return { spawned: true as const, debateId };
+  },
+});
+
+export const _getCampaignForSpawn = internalQuery({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const c = await ctx.db.get(campaignId);
+    if (!c) return null;
+    return {
+      _id: c._id,
+      title: c.title,
+      templateId: c.templateId ?? null,
+      debateEnabled: c.debateEnabled,
+      debateThreshold: c.debateThreshold ?? 0,
+      debateId: c.debateId ?? null,
+      verifiedActionCount: c.verifiedActionCount ?? 0,
+    };
+  },
+});
+
+export const _spawnDebateIfEligible = internalMutation({
+  args: {
+    campaignId: v.id("campaigns"),
+    templateId: v.id("templates"),
+    debateIdOnchain: v.string(),
+    actionDomain: v.string(),
+    propositionHash: v.string(),
+    propositionText: v.string(),
+    durationSeconds: v.number(),
+    jurisdictionSize: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign) return { spawned: false as const, reason: "no_campaign" };
+    if (campaign.debateId) return { spawned: false as const, reason: "already_spawned" };
+    if ((campaign.verifiedActionCount ?? 0) < (campaign.debateThreshold ?? 0)) {
+      return { spawned: false as const, reason: "below_threshold" };
+    }
+
+    const now = Date.now();
+    const debateId = await ctx.db.insert("debates", {
+      templateId: args.templateId,
+      debateIdOnchain: args.debateIdOnchain,
+      actionDomain: args.actionDomain,
+      propositionHash: args.propositionHash,
+      propositionText: args.propositionText,
+      deadline: now + args.durationSeconds * 1000,
+      jurisdictionSize: args.jurisdictionSize,
+      status: "active",
+      argumentCount: 0,
+      uniqueParticipants: 0,
+      totalStake: 0,
+      resolvedFromChain: false,
+      proposerAddress: "0x0000000000000000000000000000000000000000",
+      proposerBond: 0,
+      marketStatus: "pre_market",
+      currentEpoch: 0,
+      updatedAt: now,
+    });
+    await ctx.db.patch(args.campaignId, {
+      debateId,
+      updatedAt: now,
+    });
+    return { spawned: true as const, debateId };
   },
 });

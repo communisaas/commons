@@ -20,7 +20,8 @@ import type {
 	IdentityBreakdown,
 	DistrictWeight,
 	CellWeight,
-	TemporalField
+	TemporalField,
+	DebateMarketSnapshot
 } from '$lib/types/verification-packet';
 
 // ── Types ──
@@ -34,6 +35,7 @@ interface RawAction {
 	sentAt: number;
 	trustTier: number | null;
 	compositionMode: string | null;
+	atlasVersion?: string | null;
 }
 
 interface KVLike {
@@ -82,8 +84,16 @@ export async function computeVerificationPacketCached(
 	// Fetch raw actions from Convex
 	const actions = await serverQuery(api.campaigns.getActionsForPacket, { campaignId });
 
+	// NEW-E-3: fetch debate snapshot when campaign has a linked debate.
+	// Query returns null when no debate is set; computePacket emits debate=null
+	// in that case, so the field is honest about "no debate" vs "debate not
+	// loaded yet."
+	const debate = await serverQuery(api.campaigns.getDebateSnapshotForCampaign, {
+		campaignId
+	});
+
 	// Compute packet
-	const packet = computePacket(actions);
+	const packet = computePacket(actions, debate);
 
 	// Write to cache
 	if (kv) {
@@ -99,7 +109,10 @@ export async function computeVerificationPacketCached(
 
 // ── Pure computation (exported for testing) ──
 
-export function computePacket(actions: RawAction[]): VerificationPacket {
+export function computePacket(
+	actions: RawAction[],
+	debate: DebateMarketSnapshot | null = null
+): VerificationPacket {
 	const now = new Date().toISOString();
 
 	if (actions.length === 0) {
@@ -140,6 +153,13 @@ export function computePacket(actions: RawAction[]): VerificationPacket {
 	// Tier distribution
 	const tiers = computeTierDistribution(actions);
 
+	// Atlas-rotation drift. The "current" version is whichever version the
+	// majority of actions carry — taking the mode keeps the computation pure
+	// (no env reads), and on a healthy campaign all-but-the-pre-rotation actions
+	// converge on the latest root. Null when no atlasVersion signal is present
+	// (pre-T10-9 rows) so consumers can distinguish "no drift" from "no data".
+	const { driftCount, driftPct } = computeAtlasDrift(actions, total);
+
 	return {
 		verified: verifiedCount,
 		total,
@@ -157,8 +177,35 @@ export function computePacket(actions: RawAction[]): VerificationPacket {
 		geography,
 		cells,
 		temporal,
+		driftCount,
+		driftPct,
+		debate,
 		lastUpdated: now
 	};
+}
+
+function computeAtlasDrift(
+	actions: RawAction[],
+	total: number
+): { driftCount: number | null; driftPct: number | null } {
+	const versions = actions
+		.map((a) => a.atlasVersion ?? null)
+		.filter((v): v is string => typeof v === 'string' && v.length > 0);
+	if (versions.length === 0) return { driftCount: null, driftPct: null };
+	const tally = new Map<string, number>();
+	for (const v of versions) tally.set(v, (tally.get(v) ?? 0) + 1);
+	let currentVersion: string | null = null;
+	let currentCount = 0;
+	for (const [v, c] of tally) {
+		if (c > currentCount) {
+			currentVersion = v;
+			currentCount = c;
+		}
+	}
+	const driftCount = versions.length - currentCount;
+	const driftPct = total > 0 ? Math.round((driftCount / total) * 100) : 0;
+	void currentVersion;
+	return { driftCount, driftPct };
 }
 
 // ── Staffer-legible computations ──
@@ -387,6 +434,16 @@ function computeVelocityFromBins(bins: number[]): number | null {
 /**
  * Coordination Authenticity Index: (tier3 + tier4) / max(tier1, 1).
  * High = campaign backed by deeply engaged participants.
+ *
+ * Lag bound (T10-1 + T10-4): the engagementTier on each action is the value
+ * stamped at action-time. Reputation promotion runs as a nightly cron
+ * (recomputeAllReputationTiers, 03:11 UTC), so a user who crosses an
+ * action-count threshold on day N appears in CAI at their old tier until the
+ * cron writes the new tier on day N+1. The cross-check at /api/submissions/create
+ * (T10-2) tolerates ±1 drift specifically to absorb this lag. The drift is
+ * bounded by the cron interval, never worse than 24h — the index is meaningful
+ * for "is this campaign drawing on deep engagement vs new users?" questions,
+ * not for real-time second-order accounting.
  */
 function computeCAI(actions: RawAction[]): number | null {
 	if (actions.length < 2) return null;
@@ -440,6 +497,9 @@ function emptyPacket(lastUpdated: string): VerificationPacket {
 		geography: null,
 		cells: null,
 		temporal: null,
+		driftCount: null,
+		driftPct: null,
+		debate: null,
 		lastUpdated
 	};
 }

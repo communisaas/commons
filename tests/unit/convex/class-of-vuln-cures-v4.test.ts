@@ -452,7 +452,7 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		const svelte = source('convex/segments.ts');
 		const fn = svelte.slice(
 			svelte.indexOf('function matchCondition'),
-			svelte.indexOf('function matchCondition') + 4000,
+			svelte.indexOf('function matchCondition') + 5200,
 		);
 		// Default unknown-field branch returns false (not true).
 		expect(fn).toMatch(/default:\s*\n[\s\S]{0,200}console\.warn\([\s\S]{0,200}unknown field[\s\S]{0,100}return false;/);

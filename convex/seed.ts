@@ -55,29 +55,60 @@ function daysFromNow(n: number): number {
 // SEED DATA DEFINITIONS
 // =============================================================================
 
+// Tier↔method coherence per canonical mapping:
+//   tier 0 = unverified
+//   tier 1 = emailOnly
+//   tier 2 = addressVerified (addressVerificationMethod ∈
+//            ADDRESS_VERIFICATION_METHODS)
+//   tier 3+ = govId (verificationMethod = 'mdl' → tier 5 per
+//            convex/users.ts:529-538 mDL flow)
+// See src/lib/server/verification-packet.ts:241-248 and
+// convex/users.ts for canonical refs. The previous seed paired
+// verificationMethod='mdl' with trustTier=1 — internally
+// contradictory; verification-packet's identityBreakdown counted
+// these as emailOnly while the user record claimed mDL.
+// Seed user shapes mirror production state-machine writes:
+//   - convex/users.ts:529-540 mDL finalize writes verificationMethod='mdl'
+//     AND addressVerificationMethod=<paired-address-method> AND
+//     addressVerifiedAt in one patch — the seed must therefore pair the
+//     mDL user with a concrete address-resolution method (shadow_atlas).
+//   - convex/users.ts:838-845 verifyAddress writes BOTH user.verificationMethod
+//     AND user.addressVerificationMethod to the same value (one of the
+//     ADDRESS_VERIFICATION_METHODS allowlist). The seed mirrors that
+//     overload for the T2 user to stay production-reachable.
+// See [[brutalist_audit_2026_05_25]] C3 review for the full trace.
 const SEED_USERS = [
   {
     email: "seed-1@commons.email",
     name: "Alex Rivera",
     isVerified: true,
-    verificationMethod: "mdl",
-    trustTier: 1,
+    verificationMethod: "mdl" as string | undefined,
+    addressVerificationMethod: "shadow_atlas" as string | undefined,
+    trustTier: 5,
+    authorityLevel: 3,
+    reputationTier: "established",
     tokenIdentifier: "seed|seed-1@commons.email",
   },
   {
     email: "seed-2@commons.email",
     name: "Jordan Chen",
     isVerified: true,
-    verificationMethod: "mdl",
-    trustTier: 1,
+    verificationMethod: "shadow_atlas" as string | undefined,
+    addressVerificationMethod: "shadow_atlas" as string | undefined,
+    trustTier: 2,
+    authorityLevel: 2,
+    reputationTier: "established",
     tokenIdentifier: "seed|seed-2@commons.email",
   },
   {
     email: "seed-3@commons.email",
     name: "Morgan Tremblay",
     isVerified: false,
-    verificationMethod: undefined,
+    verificationMethod: undefined as string | undefined,
+    addressVerificationMethod: undefined as string | undefined,
     trustTier: 0,
+    authorityLevel: 1,
+    reputationTier: "newcomer",
     tokenIdentifier: "seed|seed-3@commons.email",
   },
 ] as const;
@@ -179,6 +210,9 @@ export const seedAll = internalAction({
     console.log("[seed] Phase 1: Inserting users...");
     const userIds = await ctx.runMutation(internal.seed.insertUsers);
 
+    console.log("[seed] Phase 1.5: Inserting district credentials for verified users...");
+    await ctx.runMutation(internal.seed.insertCredentials, { userIds });
+
     console.log("[seed] Phase 2: Inserting organizations + encryption + memberships...");
     const orgIds = await ctx.runMutation(internal.seed.insertOrgs);
     await ctx.runAction(internal.seed.configureOrgEncryption, { orgIds });
@@ -233,6 +267,13 @@ export const seedAll = internalAction({
     console.log("[seed] Phase 17: Encrypting seed PII (donations, RSVPs, invites)...");
     await ctx.runAction(internal.seed.encryptSeedPii, { orgIds });
 
+    console.log("[seed] Phase 18: Inserting decision makers + user constituent relations...");
+    const dmIds = await ctx.runMutation(internal.seed.insertDecisionMakers);
+    await ctx.runMutation(internal.seed.insertUserDmRelations, { userIds, dmIds });
+
+    console.log("[seed] Phase 19: Inserting org subscriptions...");
+    await ctx.runMutation(internal.seed.insertSubscriptions, { orgIds });
+
     console.log(
       `[seed] Complete! Created ${userIds.length} users, ${orgIds.length} orgs, ` +
       `${templateIds.length} templates, ${campaignIds.length} campaigns, ` +
@@ -258,14 +299,21 @@ export const seedPublic = internalAction({
     console.log("[seedPublic] Phase 1: Inserting users...");
     const userIds = await ctx.runMutation(internal.seed.insertUsers);
 
+    console.log("[seedPublic] Phase 1.5: Inserting district credentials for verified users...");
+    await ctx.runMutation(internal.seed.insertCredentials, { userIds });
+
     console.log("[seedPublic] Phase 2: Inserting templates (no org assignment)...");
     const templateIds = await ctx.runMutation(internal.seed.insertTemplatesPublic, { userIds });
 
     console.log("[seedPublic] Phase 3: Inserting debates + arguments...");
     await ctx.runMutation(internal.seed.insertDebates, { templateIds });
 
+    console.log("[seedPublic] Phase 4: Inserting decision makers + constituent relations...");
+    const dmIds = await ctx.runMutation(internal.seed.insertDecisionMakers);
+    await ctx.runMutation(internal.seed.insertUserDmRelations, { userIds, dmIds });
+
     console.log(
-      `[seedPublic] Complete! Created ${userIds.length} users, ${templateIds.length} templates (public, no org).`,
+      `[seedPublic] Complete! Created ${userIds.length} users, ${templateIds.length} templates, ${dmIds.length} decision makers (public, no org).`,
     );
   },
 });
@@ -314,11 +362,29 @@ export const insertUsers = internalMutation({
     const now = Date.now();
     const ids: Id<"users">[] = [];
 
+    // SHA-256(email.toLowerCase().trim()) — matches the canonical pattern
+    // used by waitlist (src/routes/api/waitlist/+server.ts:18) and bounce
+    // reports. user.emailHash is the dedup key for the email-sybil
+    // throttle at convex/users.ts:747-758; leaving it unset (the prior
+    // state) silently bypassed the throttle. Production OAuth signup
+    // does not yet compute this — see [[F37-prod-user-emailHash-writer]].
+    const sha256Hex = async (text: string): Promise<string> => {
+      const buf = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(text),
+      );
+      return Array.from(new Uint8Array(buf))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    };
+
     for (let i = 0; i < SEED_USERS.length; i++) {
       const u = SEED_USERS[i];
+      const emailHash = await sha256Hex(u.email.toLowerCase().trim());
       const id = await ctx.db.insert("users", {
         tokenIdentifier: u.tokenIdentifier,
         email: u.email,
+        emailHash,
         name: u.name,
         updatedAt: now,
 
@@ -326,15 +392,21 @@ export const insertUsers = internalMutation({
         isVerified: u.isVerified,
         verificationMethod: u.verificationMethod,
         verifiedAt: u.isVerified ? daysAgo(30) : undefined,
+        addressVerificationMethod: u.addressVerificationMethod,
+        addressVerifiedAt: u.addressVerificationMethod ? daysAgo(28) : undefined,
 
-        // Trust & authority
+        // Trust & authority — declared per-user so tier/method coherence is
+        // explicit, not derived from isVerified alone (which conflates
+        // identity-verification with address-verification).
         trustTier: u.trustTier,
-        authorityLevel: u.isVerified ? 2 : 1,
+        authorityLevel: u.authorityLevel,
         trustScore: u.isVerified ? 50 : 0,
-        reputationTier: u.isVerified ? "established" : "newcomer",
+        reputationTier: u.reputationTier,
 
-        // ZK / district
-        districtVerified: false,
+        // ZK / district — districtVerified is true once a backing
+        // districtCredential is in place (Phase 1.5 below). True here for
+        // T2+ users; the credential row is asserted in insertCredentials.
+        districtVerified: u.trustTier >= 2,
 
         // Reputation counters
         templatesContributed: 0,
@@ -349,6 +421,169 @@ export const insertUsers = internalMutation({
     }
 
     return ids;
+  },
+});
+
+// =============================================================================
+// PHASE 1.5: INSERT DISTRICT CREDENTIALS
+// =============================================================================
+// Verified users (trustTier ≥ 2) need a backing districtCredential row so
+// any join from users → credential renders honest trust-context. Without
+// this, isVerified=true users have nothing behind the claim — the H-phase
+// tier-display SSOT helper (H6) would see undefined trust-context fields
+// and render "unknown" badges for every verified seed user.
+//
+// Trust-context fields (trustTier, cellStraddles, cellAnchorMode,
+// atlasVersion) per schema.ts:760-794: STRICTLY OPTIONAL, MUST NOT be
+// backfilled for legacy rows. New seed rows are NOT legacy; populating
+// them is correct and matches what the production verifyAddress / mDL
+// flows would write.
+
+const SEED_ATLAS_VERSION = "atlas-2026-Q1";
+
+export const insertCredentials = internalMutation({
+  args: {
+    userIds: v.array(v.id("users")),
+  },
+  handler: async (ctx, { userIds }) => {
+    // Deterministic 0x-prefixed 32-byte hex for districtCommitment.
+    // Submission gates fail-closed when this field is missing (see
+    // convex/submissions.ts:1414 'credential_commitment_missing' and
+    // src/routes/api/submissions/create/+server.ts:318
+    // 'CREDENTIAL_MIGRATION_REQUIRED'); seeding without it would leave
+    // verified users unable to drive end-to-end submission flows.
+    const seedCommitment = (slot: number): string => {
+      const value = (BigInt(0xc0) << 240n) | BigInt(slot + 1);
+      return "0x" + value.toString(16).padStart(64, "0");
+    };
+
+    const credentialDefs = [
+      {
+        userIdx: 0, // seed-1 Alex — mDL identity, shadow_atlas address, T5
+        congressionalDistrict: "CA-11",
+        trustTier: 5,
+        // T3+ from address-resolved wallet ZIP: cellStraddles is a real
+        // boundary-cell signal; cellAnchorMode is 'address-resolved'.
+        // NB: substrate (groundCellMetadata) is intentionally NOT seeded
+        // — see [[F30-groundCellMetadata-substrate]] for the gap. Read
+        // surfaces that join credential → cell metadata return null;
+        // submission flows (which need an encrypted witness derived from
+        // vault contents) are not seed-exercisable. Display surfaces and
+        // org-layer flows that read only the credential ARE.
+        cellStraddles: false,
+        cellAnchorMode: "address-resolved" as string | undefined,
+        // Per H6 tier-display SSOT (src/lib/core/identity/tier-display.ts):
+        // mDL users carry an address-resolution method on their credential
+        // ('shadow_atlas' renders as address-resolved, not 'civic_api'
+        // which renders amber "Self-Reported Constituent"). Production
+        // mDL finalize pairs mDL with shadow_atlas; the seed mirrors that.
+        verificationMethod: "shadow_atlas" as string,
+      },
+      {
+        userIdx: 1, // seed-2 Jordan — shadow_atlas address-verified, T2
+        congressionalDistrict: "CA-12",
+        trustTier: 2,
+        // T<3 paths leave cellStraddles/cellAnchorMode UNDEFINED per the
+        // schema spec — the fields are meaningless without a real cellId.
+        cellStraddles: undefined as boolean | undefined,
+        cellAnchorMode: undefined as string | undefined,
+        verificationMethod: "shadow_atlas" as string,
+      },
+    ];
+
+    const now = Date.now();
+
+    for (const c of credentialDefs) {
+      const credentialId = await ctx.db.insert("districtCredentials", {
+        userId: userIds[c.userIdx],
+        credentialType: "three-tree",
+        congressionalDistrict: c.congressionalDistrict,
+        verificationMethod: c.verificationMethod,
+        issuedAt: daysAgo(30 - c.userIdx * 5),
+        expiresAt: daysFromNow(335),
+        credentialHash: `seed-credhash-${c.userIdx}`,
+        districtCommitment: seedCommitment(c.userIdx),
+        slotCount: 32,
+        trustTier: c.trustTier,
+        cellStraddles: c.cellStraddles,
+        cellAnchorMode: c.cellAnchorMode,
+        atlasVersion: SEED_ATLAS_VERSION,
+      });
+
+      // Insert groundVault + groundCellMetadata so the credential's
+      // cellAnchorMode='address-resolved' claim has backing substrate.
+      // Without these rows, read paths that join credential → vault →
+      // cell-metadata (ground.ts:405 getMyGroundState, restore flows)
+      // return null for verified users — the credential lies about its
+      // resolution provenance. Mirrors production write order at
+      // convex/ground.ts:244-307 (vault → cell-metadata → patch vault
+      // with activeGroundCellMetadataId).
+      //
+      // Ciphertext/nonce/AAD are seed placeholders — real values come
+      // from client-side AES-GCM encryption of the address payload
+      // keyed by the user's PRF-derived DEK. Seed submission flows
+      // that require decrypting the witness are NOT seed-exercisable;
+      // display + restore-metadata surfaces ARE.
+      const slot = c.userIdx;
+      // Envelope fields match the runtime constants in convex/ground.ts:7-10
+      // so a future cron or backfill that runs assertVaultEnvelopeForUser
+      // against stored rows does not flag every seed row as malformed.
+      // Ciphertext/nonce are still placeholders (no real DEK to encrypt
+      // under) — only the envelope SHAPE is production-conformant; the
+      // payload semantics are not.
+      const aadEnvelope = JSON.stringify({
+        purpose: "commons.ground-vault",
+        userId: String(userIds[c.userIdx]),
+        version: 1,
+        dekVersion: 1,
+      });
+      const groundVaultId = await ctx.db.insert("groundVaults", {
+        userId: userIds[c.userIdx],
+        status: "active",
+        ciphertext: `seed-vault-ct-${slot}`,
+        nonce: `seed-vault-nonce-${slot}`,
+        schemaVersion: 1,
+        encryptionVersion: "aes-256-gcm:v1",
+        dekVersion: 1,
+        aeadAssociatedData: aadEnvelope,
+        associatedDataHash: seedCommitment(0x10 + slot),
+        activeCredentialId: credentialId,
+        // Production passthrough at src/lib/core/identity/ground-vault-persistence.ts:276
+        // sets createdByMethod = input.verificationMethod verbatim. Mirror
+        // that here so seed-2's address-verified vault carries 'shadow_atlas'
+        // (matching credential.verificationMethod and cell.source for the
+        // same user) instead of the previously-divergent 'address'.
+        createdByMethod: c.verificationMethod,
+        updatedAt: now,
+      });
+
+      const groundCellMetadataId = await ctx.db.insert("groundCellMetadata", {
+        userId: userIds[c.userIdx],
+        districtCredentialId: credentialId,
+        groundVaultId,
+        // H3 res-7 cell — neighborhood scale. Format is 15-char hex per
+        // h3 spec; placeholder values keyed by slot so they're unique.
+        cellId: `8a2a1072${(slot + 0xb59).toString(16).padStart(3, "0")}fff`,
+        h3Cell: `872a10072${(slot + 0xffe).toString(16).padStart(4, "0")}f`,
+        cellMapRoot: seedCommitment(0x20 + slot),
+        cellMapVersion: SEED_ATLAS_VERSION,
+        atlasRoot: seedCommitment(0x30 + slot),
+        atlasVersion: SEED_ATLAS_VERSION,
+        districtCommitment: seedCommitment(slot),
+        slotCount: 32,
+        source: c.verificationMethod,
+        confidence: 0.95,
+        issuedAt: daysAgo(30 - c.userIdx * 5),
+        expiresAt: daysFromNow(335),
+        updatedAt: now,
+      });
+
+      // Close the cyclic FK: patch vault with its active cell metadata.
+      await ctx.db.patch(groundVaultId, {
+        activeGroundCellMetadataId: groundCellMetadataId,
+        updatedAt: now,
+      });
+    }
   },
 });
 
@@ -503,10 +738,20 @@ export const insertMemberships = internalMutation({
       joinedAt: daysAgo(15),
     });
 
-    // Update member counts
-    await ctx.db.patch(climate, { memberCount: 3 });
-    await ctx.db.patch(voterRights, { memberCount: 2 });
-    await ctx.db.patch(localFirst, { memberCount: 2 });
+    // Reconcile org.memberCount against actually-inserted membership
+    // rows. Literal counter values were truthful when written but
+    // would drift the moment a future seed-author adds/removes a
+    // membership without remembering to update the patch — same
+    // anti-pattern F8 cured for sentEmailCount. Iterates orgIds (not
+    // the destructured triple) so adding a 4th SEED_ORGS entry
+    // doesn't silently bypass reconciliation.
+    for (const orgId of orgIds) {
+      const memberships = await ctx.db
+        .query("orgMemberships")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .collect();
+      await ctx.db.patch(orgId, { memberCount: memberships.length });
+    }
   },
 });
 
@@ -721,7 +966,7 @@ export const insertCampaigns = internalMutation({
     for (const c of campaignDefs) {
       const id = await ctx.db.insert("campaigns", {
         orgId: orgIds[c.orgIdx],
-        templateId: c.templateIdx >= 0 ? (templateIds[c.templateIdx] as string) : undefined,
+        templateId: c.templateIdx >= 0 ? templateIds[c.templateIdx] : undefined,
         type: c.type,
         title: c.title,
         body: c.body,
@@ -738,10 +983,15 @@ export const insertCampaigns = internalMutation({
       ids.push(id);
     }
 
-    // Update campaignCount on orgs (org 0 has 2, others have 1)
-    await ctx.db.patch(orgIds[0], { campaignCount: 2 });
-    await ctx.db.patch(orgIds[1], { campaignCount: 1 });
-    await ctx.db.patch(orgIds[2], { campaignCount: 1 });
+    // Reconcile org.campaignCount against actually-inserted campaign
+    // rows. Same row-derived pattern as memberCount above.
+    for (const orgId of orgIds) {
+      const orgCampaigns = await ctx.db
+        .query("campaigns")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .collect();
+      await ctx.db.patch(orgId, { campaignCount: orgCampaigns.length });
+    }
 
     return ids;
   },
@@ -984,6 +1234,36 @@ export const insertSegments = internalMutation({
   handler: async (ctx, { orgIds, userIds }) => {
     const now = Date.now();
 
+    // Cached counts are derived from the actually-inserted supporters/tags/
+    // supporterTags rows. Hardcoded literals here previously over-claimed
+    // (Active Donors 5 vs truth 4; Verified Volunteers 4 vs truth 2) — see
+    // [[brutalist_audit_2026_05_25]] C1 review.
+    const countSegment = async (
+      orgId: Id<"organizations">,
+      tagName: string,
+    ): Promise<number> => {
+      const supporters = await ctx.db
+        .query("supporters")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .collect();
+      const verifiedIds = new Set(
+        supporters.filter((s) => s.verified).map((s) => s._id),
+      );
+      const tag = await ctx.db
+        .query("tags")
+        .withIndex("by_orgId_name", (q) => q.eq("orgId", orgId).eq("name", tagName))
+        .first();
+      if (!tag) return 0;
+      const tagged = await ctx.db
+        .query("supporterTags")
+        .withIndex("by_tagId", (q) => q.eq("tagId", tag._id))
+        .collect();
+      return tagged.filter((st) => verifiedIds.has(st.supporterId)).length;
+    };
+
+    const activeDonorsCount = await countSegment(orgIds[0], "donor");
+    const verifiedVolunteersCount = await countSegment(orgIds[1], "volunteer");
+
     // Active Donors — Climate Action Now
     await ctx.db.insert("segments", {
       orgId: orgIds[0],
@@ -996,7 +1276,7 @@ export const insertSegments = internalMutation({
           { field: "verified", operator: "eq", value: true },
         ],
       },
-      cachedCount: 5,
+      cachedCount: activeDonorsCount,
       countedAt: hoursAgo(2),
       createdBy: userIds[0],
       updatedAt: now,
@@ -1014,7 +1294,7 @@ export const insertSegments = internalMutation({
           { field: "verified", operator: "eq", value: true },
         ],
       },
-      cachedCount: 4,
+      cachedCount: verifiedVolunteersCount,
       countedAt: hoursAgo(1),
       createdBy: userIds[0],
       updatedAt: now,
@@ -1035,6 +1315,10 @@ export const insertEvents = internalMutation({
     const now = Date.now();
     const ids: Id<"events">[] = [];
 
+    // Aggregate counters are initialized to 0 and reconciled by
+    // `insertEventRsvps` against actually-inserted rows. Inflated demo
+    // numbers here would re-create the denormalization-vs-truth gap the
+    // K-floor read path is designed to guard against.
     const eventDefs = [
       {
         orgIdx: 0,
@@ -1054,9 +1338,6 @@ export const insertEvents = internalMutation({
         virtualUrl: "https://meet.commons.email/climate-town-hall",
         capacity: 150,
         status: "PUBLISHED",
-        rsvpCount: 42,
-        attendeeCount: 0,
-        verifiedAttendees: 0,
       },
       {
         orgIdx: 1,
@@ -1076,9 +1357,6 @@ export const insertEvents = internalMutation({
         virtualUrl: "https://meet.commons.email/phone-bank",
         capacity: 50,
         status: "PUBLISHED",
-        rsvpCount: 18,
-        attendeeCount: 0,
-        verifiedAttendees: 0,
       },
       {
         orgIdx: 2,
@@ -1098,9 +1376,6 @@ export const insertEvents = internalMutation({
         virtualUrl: undefined,
         capacity: 500,
         status: "PUBLISHED",
-        rsvpCount: 85,
-        attendeeCount: 0,
-        verifiedAttendees: 0,
       },
       {
         orgIdx: 0,
@@ -1120,9 +1395,6 @@ export const insertEvents = internalMutation({
         virtualUrl: "https://meet.commons.email/clean-energy-101",
         capacity: 100,
         status: "COMPLETED",
-        rsvpCount: 67,
-        attendeeCount: 51,
-        verifiedAttendees: 38,
       },
     ];
 
@@ -1132,7 +1404,7 @@ export const insertEvents = internalMutation({
         campaignId: campaignIds[e.campaignIdx],
         title: e.title,
         description: e.description,
-        eventType: e.eventType,
+        eventType: e.eventType as "IN_PERSON" | "VIRTUAL" | "HYBRID",
         startAt: e.startAt,
         endAt: e.endAt,
         timezone: "America/Los_Angeles",
@@ -1146,12 +1418,12 @@ export const insertEvents = internalMutation({
         virtualUrl: e.virtualUrl,
         capacity: e.capacity,
         waitlistEnabled: true,
-        rsvpCount: e.rsvpCount,
-        attendeeCount: e.attendeeCount,
-        verifiedAttendees: e.verifiedAttendees,
+        rsvpCount: 0,
+        attendeeCount: 0,
+        verifiedAttendees: 0,
         checkinCode: `CHK-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
         requireVerification: false,
-        status: e.status,
+        status: e.status as "DRAFT" | "PUBLISHED" | "CANCELLED" | "COMPLETED",
         updatedAt: now,
       });
       ids.push(id);
@@ -1175,46 +1447,89 @@ export const insertEventRsvps = internalMutation({
     const now = Date.now();
     const statuses = ["GOING", "MAYBE", "GOING", "GOING"] as const;
 
-    // RSVPs for the completed webinar (event 3) — with attendance data
-    const completedEventId = eventIds[3];
-    for (let i = 0; i < 6; i++) {
-      const supporterId = supporterIds[i % supporterIds.length];
-      const isCheckedIn = i < 4;
-      await ctx.db.insert("eventRsvps", {
-        eventId: completedEventId,
-        supporterId,
-        encryptedEmail: "",
-        emailHash: `seed-rsvp-completed-${i}`,
-        encryptedRsvpName: SUPPORTER_NAMES[i % SUPPORTER_NAMES.length],
-        status: "GOING",
-        guestCount: 1,
-        engagementTier: i < 3 ? 2 : 1,
-        updatedAt: daysAgo(4),
-        // Attendance data for completed event
-        checkedInAt: isCheckedIn ? daysAgo(3) : undefined,
-        attendanceVerified: isCheckedIn ? i < 3 : undefined,
-        attendanceVerificationMethod: isCheckedIn && i < 3 ? "checkin_code" : undefined,
-      });
+    // Classify events by their persisted status, NOT by their position
+    // in eventIds. Pre-refactor, the RSVP loops used `eventIds[3]` for
+    // the completed event and `for eIdx<3` for future events — coupled
+    // to the eventDefs ordering at insertEvents. A reorder there would
+    // silently assign attendance semantics to the wrong event. Now
+    // status drives the classification; rsvp count per event drives
+    // its own tally.
+    const events = await Promise.all(eventIds.map((id) => ctx.db.get(id)));
+    const completedEventIdx = events.findIndex((e) => e?.status === "COMPLETED");
+    const futureEventIndices = events
+      .map((e, i) => (e?.status === "COMPLETED" ? -1 : i))
+      .filter((i) => i >= 0);
+
+    // Per-event tallies — patched back onto events at end so denormalized
+    // counters match the actual eventRsvps rows. The K-floor in
+    // events.ts:118 hides counts below 5; a counter that lies past the
+    // floor is still a lie.
+    const tallies = eventIds.map(() => ({
+      rsvpCount: 0,
+      attendeeCount: 0,
+      verifiedAttendees: 0,
+    }));
+
+    // RSVPs + attendance for the completed event.
+    if (completedEventIdx >= 0) {
+      const completedEventId = eventIds[completedEventIdx];
+      for (let i = 0; i < 6; i++) {
+        const supporterId = supporterIds[i % supporterIds.length];
+        const isCheckedIn = i < 4;
+        const isVerified = isCheckedIn && i < 3;
+        await ctx.db.insert("eventRsvps", {
+          eventId: completedEventId,
+          supporterId,
+          encryptedEmail: "",
+          emailHash: `seed-rsvp-completed-${i}`,
+          encryptedRsvpName: SUPPORTER_NAMES[i % SUPPORTER_NAMES.length],
+          status: "GOING",
+          guestCount: 1,
+          engagementTier: i < 3 ? 2 : 1,
+          updatedAt: daysAgo(4),
+          checkedInAt: isCheckedIn ? daysAgo(3) : undefined,
+          attendanceVerified: isCheckedIn ? i < 3 : undefined,
+          attendanceVerificationMethod: isVerified ? "checkin_code" : undefined,
+        });
+        tallies[completedEventIdx].rsvpCount += 1;
+        if (isCheckedIn) tallies[completedEventIdx].attendeeCount += 1;
+        if (isVerified) tallies[completedEventIdx].verifiedAttendees += 1;
+      }
     }
 
-    // RSVPs for future events
-    for (let eIdx = 0; eIdx < 3; eIdx++) {
+    // RSVPs for future events. Per-event RSVP count cycles through
+    // [5, 4, 6, ...] so the K-floor display logic gets a mix of
+    // above-and-below-threshold rows in the seed.
+    const futureCounts = [5, 4, 6, 7, 5, 4];
+    for (let i = 0; i < futureEventIndices.length; i++) {
+      const eIdx = futureEventIndices[i];
       const eventId = eventIds[eIdx];
-      const rsvpCount = [5, 4, 6][eIdx];
-      for (let i = 0; i < rsvpCount; i++) {
-        const sIdx = (eIdx * 5 + i) % supporterIds.length;
+      const rsvpCount = futureCounts[i % futureCounts.length];
+      for (let j = 0; j < rsvpCount; j++) {
+        const sIdx = (i * 5 + j) % supporterIds.length;
         await ctx.db.insert("eventRsvps", {
           eventId,
           supporterId: supporterIds[sIdx],
           encryptedEmail: "",
-          emailHash: `seed-rsvp-${eIdx}-${i}`,
+          emailHash: `seed-rsvp-${eIdx}-${j}`,
           encryptedRsvpName: SUPPORTER_NAMES[sIdx % SUPPORTER_NAMES.length],
-          status: statuses[i % statuses.length],
-          guestCount: i % 3 === 0 ? 2 : 1,
-          engagementTier: i < 2 ? 2 : 1,
+          status: statuses[j % statuses.length],
+          guestCount: j % 3 === 0 ? 2 : 1,
+          engagementTier: j < 2 ? 2 : 1,
           updatedAt: now,
         });
+        tallies[eIdx].rsvpCount += 1;
       }
+    }
+
+    // Reconcile event counters against actual rows.
+    for (let i = 0; i < eventIds.length; i++) {
+      await ctx.db.patch(eventIds[i], {
+        rsvpCount: tallies[i].rsvpCount,
+        attendeeCount: tallies[i].attendeeCount,
+        verifiedAttendees: tallies[i].verifiedAttendees,
+        updatedAt: now,
+      });
     }
   },
 });
@@ -1415,13 +1730,18 @@ export const insertEmailBlasts = internalMutation({
     // 1. Completed blast — Climate Action Now
     await ctx.db.insert("emailBlasts", {
       orgId: orgIds[0],
-      campaignId: campaignIds[0] as unknown as string,
+      campaignId: campaignIds[0],
       subject: "Urgent: Clean Energy Act Needs Your Voice This Week",
       bodyHtml: `<h1>The Clean Energy Investment Act</h1><p>Dear supporter,</p><p>The committee vote on the Clean Energy Investment Act is scheduled for next week. We need every voice counted. <a href="https://commons.email/act/clean-energy">Take action now</a>.</p><p>Together we can make a difference.</p><p>— Climate Action Now</p>`,
       fromName: "Climate Action Now",
       fromEmail: "action@climateactionnow.org",
       status: "sent",
-      recipientFilter: { tags: ["volunteer", "donor"], emailStatus: "subscribed" },
+      // Empty closed-shape filter — sends to the org's full subscribed
+      // cohort. The previous `{ tags: [...], emailStatus: ... }` shape
+      // did not match the canonical recipientFilterValidator and would
+      // be defensively coerced to empty at email.ts:405 — equivalent
+      // outcome, honest shape.
+      recipientFilter: { verified: "any" as const },
       totalRecipients: 8,
       totalSent: 8,
       totalBounced: 0,
@@ -1439,13 +1759,13 @@ export const insertEmailBlasts = internalMutation({
     // 2. Sending blast — Voter Rights Coalition
     await ctx.db.insert("emailBlasts", {
       orgId: orgIds[1],
-      campaignId: campaignIds[1] as unknown as string,
+      campaignId: campaignIds[1],
       subject: "Registration Deadline Approaching — Spread the Word",
       bodyHtml: `<h1>Voter Registration Deadline</h1><p>Time is running out. Help us reach every eligible voter before the registration deadline closes. <a href="https://commons.email/act/voter-reg">Share our campaign</a>.</p><p>— Voter Rights Coalition</p>`,
       fromName: "Voter Rights Coalition",
       fromEmail: "outreach@voterrightscoalition.org",
       status: "sending",
-      recipientFilter: { emailStatus: "subscribed" },
+      recipientFilter: { verified: "any" as const },
       totalRecipients: 7,
       totalSent: 4,
       totalBounced: 0,
@@ -1478,6 +1798,31 @@ export const insertEmailBlasts = internalMutation({
       updatedAt: now,
       isAbTest: false,
     });
+
+    // Reconcile org.sentEmailCount AND onboardingState.hasSentEmail against
+    // actually-inserted blasts. Per-org totals must agree with the
+    // emailBlasts rows above and with the supporters phase's onboardingState
+    // (which seeds hasSentEmail=false for non-org[0]); without this merge,
+    // org[1] would carry sentEmailCount=4 alongside hasSentEmail=false —
+    // an internal contradiction. blastSents is the single source for each
+    // per-org total; reuse it for both the blast rows above (when they're
+    // refactored to read from this constant) and the org reconciliation
+    // here. For now the literals match — keep them indexed by orgIdx to
+    // make drift loud.
+    const blastSents: Record<number, number> = { 0: 8, 1: 4, 2: 0 };
+    for (let i = 0; i < orgIds.length; i++) {
+      const totalSent = blastSents[i] ?? 0;
+      if (totalSent <= 0) continue;
+      const org = await ctx.db.get(orgIds[i]);
+      if (!org) continue;
+      await ctx.db.patch(orgIds[i], {
+        sentEmailCount: totalSent,
+        onboardingState: org.onboardingState
+          ? { ...org.onboardingState, hasSentEmail: true }
+          : undefined,
+        updatedAt: now,
+      });
+    }
   },
 });
 
@@ -1667,6 +2012,7 @@ export const insertCampaignActions = internalMutation({
 
         const actionId = await ctx.db.insert("campaignActions", {
           campaignId: campaignIds[lc.campaignIdx],
+          orgId: orgIds[lc.orgIdx],
           supporterId: supporterIds[sIdx],
           verified: isVerified,
           engagementTier: isVerified ? 2 : 1,
@@ -1717,17 +2063,41 @@ export const insertDebates = internalMutation({
   handler: async (ctx, { templateIds }) => {
     const now = Date.now();
 
+    // Generate deterministic 0x-prefixed 32-byte hex strings for seed
+    // cryptographic fields. Format mirrors canonical bytes32 / BN254 field
+    // elements per `isValidActionDomain` in
+    // src/lib/core/zkp/action-domain-builder.ts so DebateProofGenerator and
+    // any consumer that runs `buildDebateActionDomain` accepts the value.
+    // The strings are NOT real on-chain derivations — seed debates are
+    // fixtures, not on-chain debates. Production paths derive actionDomain
+    // via contract.deriveDomain() or computeActionDomainLocally
+    // (src/routes/api/debates/create/+server.ts:88-105). Channel byte
+    // (high 8 bits) tags the field role for debugging; remaining bits
+    // encode the slot — all values stay safely < BN254 modulus.
+    const seedBytes32 = (channel: number, slot: number): string => {
+      const value = (BigInt(channel) << 240n) | BigInt(slot + 1);
+      return "0x" + value.toString(16).padStart(64, "0");
+    };
+
+    // Argument fixtures hoisted so the debate's totalStake/uniqueParticipants
+    // can be derived from what the inner loop will actually insert. Previous
+    // hand-written literals overshot truth by 10-38% per debate.
+    const argumentDefs = [
+      { stance: "SUPPORT", body: "This proposal addresses a critical need and has broad community backing. The evidence supports immediate action.", stakeAmount: 100 },
+      { stance: "OPPOSE", body: "While the intent is good, the implementation details are insufficient. We need more specific language before committing resources.", stakeAmount: 80 },
+      { stance: "AMEND", body: "The core proposal is sound but should include sunset provisions and measurable benchmarks for success.", stakeAmount: 60 },
+      { stance: "SUPPORT", body: "Strong precedent from other jurisdictions shows this approach works. We should move forward decisively.", stakeAmount: 50 },
+    ];
+
     const debateDefs = [
       {
         templateIdx: 0,
         status: "resolved",
         deadline: daysAgo(7),
         argumentCount: 4,
-        uniqueParticipants: 4,
-        totalStake: 400,
-        winningStance: "SUPPORT",
-        winningArgumentIndex: 0,
-        resolvedAt: daysAgo(7),
+        winningStance: "SUPPORT" as string | undefined,
+        winningArgumentIndex: 0 as number | undefined,
+        resolvedAt: daysAgo(7) as number | undefined,
         marketStatus: "resolved",
       },
       {
@@ -1735,11 +2105,9 @@ export const insertDebates = internalMutation({
         status: "active",
         deadline: daysFromNow(14),
         argumentCount: 3,
-        uniqueParticipants: 3,
-        totalStake: 250,
-        winningStance: undefined,
-        winningArgumentIndex: undefined,
-        resolvedAt: undefined,
+        winningStance: undefined as string | undefined,
+        winningArgumentIndex: undefined as number | undefined,
+        resolvedAt: undefined as number | undefined,
         marketStatus: "active",
       },
       {
@@ -1747,11 +2115,9 @@ export const insertDebates = internalMutation({
         status: "awaiting_governance",
         deadline: daysAgo(1),
         argumentCount: 3,
-        uniqueParticipants: 3,
-        totalStake: 300,
-        winningStance: undefined,
-        winningArgumentIndex: undefined,
-        resolvedAt: undefined,
+        winningStance: undefined as string | undefined,
+        winningArgumentIndex: undefined as number | undefined,
+        resolvedAt: undefined as number | undefined,
         marketStatus: "active",
       },
       {
@@ -1759,29 +2125,50 @@ export const insertDebates = internalMutation({
         status: "under_appeal",
         deadline: daysAgo(3),
         argumentCount: 2,
-        uniqueParticipants: 2,
-        totalStake: 200,
-        winningStance: "OPPOSE",
-        winningArgumentIndex: 1,
-        resolvedAt: daysAgo(3),
+        winningStance: "OPPOSE" as string | undefined,
+        winningArgumentIndex: 1 as number | undefined,
+        resolvedAt: daysAgo(3) as number | undefined,
         marketStatus: "resolved",
       },
     ];
 
     for (let dIdx = 0; dIdx < debateDefs.length; dIdx++) {
       const d = debateDefs[dIdx];
+
+      // Derive aggregate metrics from the actual arguments we will insert
+      // for this debate (cycled via aIdx % argumentDefs.length below).
+      // uniqueParticipants reflects this fixture's one-arg-per-participant
+      // convention; production-grade truth would query distinct authors.
+      const argsToInsert = Array.from(
+        { length: d.argumentCount },
+        (_, i) => argumentDefs[i % argumentDefs.length],
+      );
+      const totalStake = argsToInsert.reduce((s, a) => s + a.stakeAmount, 0);
+      const uniqueParticipants = d.argumentCount;
+
+      // debateIdOnchain, propositionHash, actionDomain all conform to the
+      // 0x-prefixed 32-byte format that DebateProofGenerator and
+      // buildDebateActionDomain require. The convex/debates.ts:722
+      // `domain-${id}` literal that the seed previously mirrored is a
+      // self-described placeholder ("In this action we would call the
+      // on-chain proposeDebate() and deriveDomain(). For now, generate
+      // off-chain IDs"), and would fail `isValidActionDomain` validation
+      // on every downstream consumer. Fix tracked at [[F16-spawnDebate-stub]].
+      const debateIdOnchain = seedBytes32(0x10, dIdx);
+      const propositionHash = seedBytes32(0x20, dIdx);
+      const actionDomain = seedBytes32(0x30, dIdx);
       const debateId = await ctx.db.insert("debates", {
         templateId: templateIds[d.templateIdx],
-        debateIdOnchain: `debate-onchain-${dIdx}`,
-        actionDomain: "commons-debate-v1",
-        propositionHash: `prop-hash-${dIdx}`,
+        debateIdOnchain,
+        actionDomain,
+        propositionHash,
         propositionText: `Should the ${SEED_TEMPLATES[d.templateIdx].title} be adopted as a community priority?`,
         deadline: d.deadline,
         jurisdictionSize: 50000,
-        status: d.status,
+        status: d.status as "active" | "resolving" | "resolved" | "awaiting_governance" | "under_appeal",
         argumentCount: d.argumentCount,
-        uniqueParticipants: d.uniqueParticipants,
-        totalStake: d.totalStake,
+        uniqueParticipants,
+        totalStake,
         winningArgumentIndex: d.winningArgumentIndex,
         winningStance: d.winningStance,
         resolvedAt: d.resolvedAt,
@@ -1798,17 +2185,8 @@ export const insertDebates = internalMutation({
         updatedAt: now,
       });
 
-      // Insert arguments for each debate
-      const argumentDefs = [
-        { stance: "SUPPORT", body: "This proposal addresses a critical need and has broad community backing. The evidence supports immediate action.", stakeAmount: 100 },
-        { stance: "OPPOSE", body: "While the intent is good, the implementation details are insufficient. We need more specific language before committing resources.", stakeAmount: 80 },
-        { stance: "AMEND", body: "The core proposal is sound but should include sunset provisions and measurable benchmarks for success.", stakeAmount: 60 },
-        { stance: "SUPPORT", body: "Strong precedent from other jurisdictions shows this approach works. We should move forward decisively.", stakeAmount: 50 },
-      ];
-
-      const argCount = d.argumentCount;
-      for (let aIdx = 0; aIdx < argCount; aIdx++) {
-        const a = argumentDefs[aIdx % argumentDefs.length];
+      for (let aIdx = 0; aIdx < argsToInsert.length; aIdx++) {
+        const a = argsToInsert[aIdx];
         await ctx.db.insert("debateArguments", {
           debateId,
           argumentIndex: aIdx,
@@ -1832,6 +2210,28 @@ export const insertDebates = internalMutation({
           modelAgreement: 0.7 + Math.random() * 0.25,
           verificationStatus: "verified",
           verifiedAt: daysAgo(dIdx + aIdx + 1),
+        });
+      }
+
+      // FIX-V3: wire the first matching campaign to this debate so
+      // computeVerificationPacketCached emits a non-null packet.debate
+      // for at least one seeded campaign. Without this, the NEW-E-3
+      // populator never fires in dev because no seeded campaign points
+      // at a debate.
+      const matchingCampaign = await ctx.db
+        .query("campaigns")
+        .filter((q) =>
+          q.and(
+            q.eq(q.field("templateId"), templateIds[d.templateIdx]),
+            q.eq(q.field("debateId"), undefined),
+          ),
+        )
+        .first();
+      if (matchingCampaign) {
+        await ctx.db.patch(matchingCampaign._id, {
+          debateId,
+          debateEnabled: true,
+          updatedAt: now,
         });
       }
     }
@@ -1887,6 +2287,201 @@ export const grantDevAccount = internalMutation({
 // org[0] which has a completed email blast). The insertSupporters mutation
 // runs before insertEmailBlasts in the seedAll orchestrator.
 // =============================================================================
+
+// =============================================================================
+// PHASE 18: INSERT DECISION MAKERS + USER DM RELATIONS
+// =============================================================================
+// Production verifyAddress at convex/users.ts:864-933 upserts decisionMakers
+// + userDmRelations atomically when officials arrive from the resolver.
+// Without seeding these, profile/templatePage joins (getMyRepresentatives,
+// getUserDmRelation) return empty for verified seed users — Intelligence
+// Loop UX is hollow despite the surrounding org/campaign activity.
+
+// Per-rep structured shape used by both decisionMakers seed and
+// userDmRelations lookup. Mirrors users.ts production-insert shape.
+interface SeedRep {
+  fullName: string;
+  firstName: string;
+  lastName: string;
+  title: string;
+  email: string;
+  party?: string;
+  district: string; // 'CA' (statewide) | 'CA-11' (congressional) | 'SD-11' | 'AD-17' | 'D3' | 'SF'
+  jurisdiction: string; // 'CA'
+  jurisdictionLevel: string; // 'federal' | 'state' | 'municipal'
+  type: string; // 'legislator' | 'executive'
+  chamber?: string; // 'house' | 'senate' | undefined
+}
+
+// Note: REPRESENTATIVES (above) carries duplicate CA-11 entries (Sarah Kim
+// and Nancy Pelosi) for orgResolvedContacts cache fixtures. The
+// decisionMakers seed deliberately deduplicates — only one House rep per
+// district — so userDmRelations matches reality (one constituent
+// relationship to the seated representative, not two).
+const SEED_REPS: SeedRep[] = [
+  { fullName: "Sen. Maria Lopez", firstName: "Maria", lastName: "Lopez", title: "U.S. Senator", email: "lopez@senate.gov", party: "D", district: "CA", jurisdiction: "CA", jurisdictionLevel: "federal", type: "legislator", chamber: "senate" },
+  { fullName: "Sen. James Park", firstName: "James", lastName: "Park", title: "U.S. Senator", email: "park@senate.gov", party: "D", district: "CA", jurisdiction: "CA", jurisdictionLevel: "federal", type: "legislator", chamber: "senate" },
+  { fullName: "Rep. David Okonkwo", firstName: "David", lastName: "Okonkwo", title: "U.S. Representative", email: "okonkwo@house.gov", party: "D", district: "CA-12", jurisdiction: "CA", jurisdictionLevel: "federal", type: "legislator", chamber: "house" },
+  { fullName: "Rep. Nancy Pelosi", firstName: "Nancy", lastName: "Pelosi", title: "U.S. Representative", email: "pelosi@house.gov", party: "D", district: "CA-11", jurisdiction: "CA", jurisdictionLevel: "federal", type: "legislator", chamber: "house" },
+  { fullName: "Sen. Robert Huang", firstName: "Robert", lastName: "Huang", title: "State Senator", email: "huang@senate.ca.gov", party: "D", district: "SD-11", jurisdiction: "CA", jurisdictionLevel: "state", type: "legislator", chamber: "senate" },
+  { fullName: "Asm. Lisa Chen", firstName: "Lisa", lastName: "Chen", title: "State Assembly", email: "chen@assembly.ca.gov", party: "D", district: "AD-17", jurisdiction: "CA", jurisdictionLevel: "state", type: "legislator" },
+  { fullName: "Sup. Aaron Peskin", firstName: "Aaron", lastName: "Peskin", title: "Supervisor", email: "peskin@sfgov.org", district: "D3", jurisdiction: "San Francisco", jurisdictionLevel: "municipal", type: "legislator" },
+  { fullName: "Sup. Hillary Ronen", firstName: "Hillary", lastName: "Ronen", title: "Supervisor", email: "ronen@sfgov.org", district: "D9", jurisdiction: "San Francisco", jurisdictionLevel: "municipal", type: "legislator" },
+  { fullName: "Sup. Dean Preston", firstName: "Dean", lastName: "Preston", title: "Supervisor", email: "preston@sfgov.org", district: "D5", jurisdiction: "San Francisco", jurisdictionLevel: "municipal", type: "legislator" },
+  { fullName: "Sup. Matt Dorsey", firstName: "Matt", lastName: "Dorsey", title: "Supervisor", email: "dorsey@sfgov.org", district: "D6", jurisdiction: "San Francisco", jurisdictionLevel: "municipal", type: "legislator" },
+  { fullName: "Mayor London Breed", firstName: "London", lastName: "Breed", title: "Mayor", email: "mayor@sfgov.org", district: "SF", jurisdiction: "San Francisco", jurisdictionLevel: "municipal", type: "executive" },
+];
+
+export const insertDecisionMakers = internalMutation({
+  args: {},
+  handler: async (ctx): Promise<Id<"decisionMakers">[]> => {
+    const now = Date.now();
+    const ids: Id<"decisionMakers">[] = [];
+    for (let i = 0; i < SEED_REPS.length; i++) {
+      const r = SEED_REPS[i];
+      const id = await ctx.db.insert("decisionMakers", {
+        type: r.type,
+        title: r.title,
+        name: r.fullName,
+        firstName: r.firstName,
+        lastName: r.lastName,
+        party: r.party,
+        jurisdiction: r.jurisdiction,
+        jurisdictionLevel: r.jurisdictionLevel,
+        district: r.district,
+        email: r.email,
+        active: true,
+        lastSyncedAt: now,
+        updatedAt: now,
+      });
+      ids.push(id);
+      // Match production parity: verifyAddress at users.ts:905 always
+      // writes an externalIds row keyed by bioguideId for federal
+      // legislators. State/municipal seeds get a synthetic 'seed' system
+      // value so the externalIds join surface remains uniform.
+      const isFederal = r.jurisdictionLevel === "federal" && r.type === "legislator";
+      await ctx.db.insert("externalIds", {
+        decisionMakerId: id,
+        system: isFederal ? "bioguide" : "seed",
+        value: `SEED${(i + 1).toString().padStart(6, "0")}`,
+      });
+    }
+    return ids;
+  },
+});
+
+// Wire verified seed users to their constituent reps. Matches the
+// upsert pattern in users.ts:931-933 ('constituent' relationship,
+// source = the user's verificationMethod).
+export const insertUserDmRelations = internalMutation({
+  args: {
+    userIds: v.array(v.id("users")),
+    dmIds: v.array(v.id("decisionMakers")),
+  },
+  handler: async (ctx, { userIds, dmIds }) => {
+    const now = Date.now();
+
+    // SEED_REPS index → district lookup. Federal senators apply to all CA
+    // users; congressional reps apply by district match. Local SF reps
+    // are not constituent-bound to seed users (Alex/Jordan are not in
+    // SF supervisor districts in this fixture).
+    const findByDistrict = (district: string): number[] => {
+      const idx: number[] = [];
+      for (let i = 0; i < SEED_REPS.length; i++) {
+        if (SEED_REPS[i].district === district) idx.push(i);
+      }
+      return idx;
+    };
+
+    const userDistrictMap: Array<{ userIdx: number; district: string; method: string }> = [
+      { userIdx: 0, district: "CA-11", method: "shadow_atlas" }, // seed-1 Alex
+      { userIdx: 1, district: "CA-12", method: "shadow_atlas" }, // seed-2 Jordan
+    ];
+
+    for (const { userIdx, district, method } of userDistrictMap) {
+      // Statewide senators (district='CA') + congressional rep for the user's district.
+      const repIndices = [...findByDistrict("CA"), ...findByDistrict(district)];
+      for (const repIdx of repIndices) {
+        await ctx.db.insert("userDmRelations", {
+          userId: userIds[userIdx],
+          decisionMakerId: dmIds[repIdx],
+          relationship: "constituent",
+          isActive: true,
+          assignedAt: now,
+          lastValidated: now,
+          source: method,
+        });
+      }
+    }
+  },
+});
+
+// =============================================================================
+// PHASE 19: INSERT SUBSCRIPTIONS
+// =============================================================================
+// Seed orgs default to free tier unless a subscription row exists. Without
+// realistic plan assignments, `subscriptions.checkPlanLimits` returns the
+// free-tier ceiling for every seeded org — Climate Action Now (8
+// supporters, $1.25K raised, sent blast) looking free-tier is incoherent
+// with the rest of its activity. Plans canonical at
+// src/lib/server/billing/plans.ts.
+
+export const insertSubscriptions = internalMutation({
+  args: {
+    orgIds: v.array(v.id("organizations")),
+  },
+  handler: async (ctx, { orgIds }) => {
+    const now = Date.now();
+    // Realistic posture: a heavy-activity org pays Organization tier; a
+    // mid-activity org pays Starter; a low-activity org stays on free
+    // (no subscription row needed). priceCents mirror plans.ts exactly.
+    const subscriptionDefs = [
+      { orgIdx: 0, plan: "organization", priceCents: 7_500 }, // Climate Action Now
+      { orgIdx: 1, plan: "starter", priceCents: 1_000 },      // Voter Rights Coalition
+      // Local First SF (orgIds[2]) intentionally omitted — defaults to free tier.
+    ];
+
+    // 30-day billing cycle anchored so the seed represents an active
+    // mid-period state (15 days in, 15 days remaining).
+    const halfMonth = 15 * 86_400_000;
+    for (const s of subscriptionDefs) {
+      await ctx.db.insert("subscriptions", {
+        orgId: orgIds[s.orgIdx],
+        plan: s.plan as "free" | "starter" | "organization" | "coalition",
+        priceCents: s.priceCents,
+        status: "active",
+        currentPeriodStart: now - halfMonth,
+        currentPeriodEnd: now + halfMonth,
+        paymentMethod: "stripe",
+        stripeSubscriptionId: `sub_seed_${s.plan}_${s.orgIdx}`,
+        updatedAt: now,
+      });
+      // Patch the org's stripeCustomerId so Stripe webhook handlers that
+      // match by customerId can resolve to this org. organizations table
+      // also carries plan-derived limits (maxSeats, maxTemplatesMonth);
+      // backfillOrgLimits at convex/subscriptions.ts:707-740 is the
+      // production sync path. Mirror it here so the seed's view of plan
+      // limits matches what backfill would set.
+      const planDef = PLANS_SEED[s.plan];
+      await ctx.db.patch(orgIds[s.orgIdx], {
+        stripeCustomerId: `cus_seed_${s.orgIdx}`,
+        maxSeats: planDef.maxSeats,
+        maxTemplatesMonth: planDef.maxTemplatesMonth,
+        updatedAt: now,
+      });
+    }
+  },
+});
+
+// Plan-limits mirror for the seed. Mirrors the canonical
+// src/lib/server/billing/plans.ts PLANS — Convex functions cannot import
+// from src/lib (different runtime root), so the seed duplicates the
+// minimum needed (maxSeats, maxTemplatesMonth) for the slugs it
+// references. If plans.ts shifts, update here too.
+const PLANS_SEED: Record<string, { maxSeats: number; maxTemplatesMonth: number }> = {
+  starter: { maxSeats: 5, maxTemplatesMonth: 100 },
+  organization: { maxSeats: 10, maxTemplatesMonth: 500 },
+};
 
 // =============================================================================
 // PHASE 17: ENCRYPT SEED PII — backfill donations, RSVPs, invites
@@ -2009,7 +2604,9 @@ export const patchSeedRecord = internalMutation({
 // CLEAR SEED — wipe all seeded data so seedAll can re-run
 // =============================================================================
 
-// Every table in the schema, ordered children-first to avoid dangling refs
+// Every table in the schema, ordered children-first to avoid dangling refs.
+// Audited 2026-05-25 against schema.ts via [[brutalist_audit_2026_05_25]] C2;
+// 17 tables that were silently skipped have been added in dependency order.
 const SEED_TABLES = [
   // Leaf tables (no dependents)
   "delegationReviews", "delegatedActions", "delegationGrants",
@@ -2019,45 +2616,116 @@ const SEED_TABLES = [
   "scopeCorrections", "patchThroughCalls", "smsMessages", "smsBlasts",
   "workflowActionLogs", "workflowExecutions", "workflows",
   "donations", "eventRsvps", "events",
-  "emailEvents", "emailBlasts",
+  // emailDeliveryReceipts + emailEvents both FK emailBlasts → clear before blasts.
+  "emailDeliveryReceipts", "emailEvents", "emailBlasts",
   "campaignDeliveries", "campaignActions",
-  "debateArguments", "debateNullifiers", "debates",
+  // debateNullifiers references debateArguments via argumentId (declared
+  // v.optional(v.string()) — see [[F18-debateNullifiers-argumentId-schema]]
+  // — but the writer at convex/debates.ts:575 stores a real Id). Clear
+  // nullifiers first so the children-first invariant holds even though
+  // Convex does not enforce the FK.
+  "debateNullifiers", "debateArguments", "debates",
   "positionDeliveries", "positionRegistrations", "communityFieldContributions",
   "templateEndorsements", "segments", "supporterTags", "tags", "supporters",
   "orgInvites", "orgResolvedContacts", "orgNetworkMembers", "orgNetworks",
   "apiKeys", "subscriptions",
+  // orgTwilioNumbers and notifications both reference organizations
+  // (notifications.orgId is optional, but children-first means clear here).
+  "orgTwilioNumbers", "notifications",
   "campaigns", "templates", "messages", "userDmRelations",
   "orgMemberships", "organizations",
   // Auth + identity
   "shadowAtlasRegistrations", "verificationAudits", "submissionRetries",
-  "submissions", "encryptedDeliveryData", "districtCredentials",
+  // submissionDeliveryReceipts FKs submissions → clear before submissions.
+  "submissionDeliveryReceipts", "submissions",
+  // Revocation tables reference credentials/submissions for audit but are
+  // operationally leaf; clear before districtCredentials.
+  "revocationFlags", "revocationHaltAuditLog", "revocationReconcileState",
+  // Ground vault chain: passkey wrapper → groundVaults ↔ groundCellMetadata
+  // → districtCredentials. Wrappers FK groundVaults; vaults and cell
+  // metadata reference each other via OPTIONAL FKs (clear-order tolerant);
+  // both FK districtCredentials.
+  "passkeyVaultWrappers", "groundCellMetadata", "groundVaults",
+  // mdlCredentialUses has no FK to districtCredentials (it stores
+  // credentialHash + userId, not a credential Id) — clear here for
+  // proximity to credential lifecycle.
+  "mdlCredentialUses",
+  "encryptedDeliveryData", "districtCredentials",
   "verificationSessions", "privacyBudgets", "analytics",
   "agentTraces", "intelligence", "parsedDocumentCache",
   "resolvedContacts", "suppressedEmails", "bounceReports", "rateLimits",
+  // SMT state (sparse merkle tree for revocation). Standalone state, but
+  // semantically tied to credentials — clear here for completeness.
+  "smtNodes", "smtRoots",
+  // Operator/queue state. Standalone; users-adjacent.
+  "sweepCheckpoints", "waitlist",
+  // User-scoped state cleared just before users.
+  "messageGenerationJobs", "passkeyCeremonySessions",
   "sessions", "accounts", "users",
 ] as const;
 
 export const clearSeed = internalAction({
   args: {},
-  handler: async (ctx) => {
+  handler: async (ctx): Promise<{ tables: number; deleted: number; failedRows: number; failedTables: number }> => {
+    let totalDeleted = 0;
+    let totalFailed = 0;
+    let failedTables = 0;
     for (const table of SEED_TABLES) {
-      await ctx.runMutation(internal.seed.clearTable, { table });
+      const result: { deleted: number; failed: number } = await ctx.runMutation(
+        internal.seed.clearTable,
+        { table },
+      );
+      totalDeleted += result.deleted;
+      totalFailed += result.failed;
+      if (result.failed > 0) failedTables++;
     }
-    console.log("[seed] All seed data cleared.");
+    if (totalFailed > 0) {
+      console.error(
+        `[seed] Cleared ${totalDeleted} rows across ${SEED_TABLES.length} tables — ${failedTables} tables had partial failures (${totalFailed} rows). Inspect per-table logs above.`,
+      );
+    } else {
+      console.log(`[seed] All ${totalDeleted} rows across ${SEED_TABLES.length} tables cleared.`);
+    }
+    return {
+      tables: SEED_TABLES.length,
+      deleted: totalDeleted,
+      failedRows: totalFailed,
+      failedTables,
+    };
   },
 });
 
 export const clearTable = internalMutation({
   args: { table: v.string() },
-  handler: async (ctx, { table }) => {
+  handler: async (ctx, { table }): Promise<{ deleted: number; failed: number }> => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const docs = await (ctx.db as any).query(table).collect();
-    let count = 0;
+    let deleted = 0;
+    let failed = 0;
+    const errors: string[] = [];
     for (const doc of docs) {
-      await ctx.db.delete(doc._id);
-      count++;
+      try {
+        await ctx.db.delete(doc._id);
+        deleted++;
+      } catch (err) {
+        // Without per-doc try/catch the inner throw propagates to
+        // clearSeed and silently skips every remaining table in
+        // SEED_TABLES — operator sees a half-wiped database with no
+        // aggregate status. Capture the error per-row so partial
+        // failures are visible.
+        failed++;
+        if (errors.length < 5) {
+          errors.push(`${doc._id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     }
-    if (count > 0) console.log(`  Cleared ${count} ${table}`);
+    if (deleted > 0 || failed > 0) {
+      console.log(`  ${table}: cleared=${deleted} failed=${failed}`);
+    }
+    if (failed > 0) {
+      console.error(`  ${table}: first ${errors.length} errors → ${errors.join("; ")}`);
+    }
+    return { deleted, failed };
   },
 });
 
@@ -2068,9 +2736,13 @@ export const clearTable = internalMutation({
 export const reseedTemplates = internalAction({
   args: {},
   handler: async (ctx) => {
-    // 1. Delete debates + arguments (they reference template IDs)
-    await ctx.runMutation(internal.seed.clearTable, { table: "debateArguments" });
+    // 1. Delete debates + arguments + nullifiers. Order matches the
+    // children-first invariant in SEED_TABLES — debateNullifiers
+    // references debateArguments via argumentId (typed v.id() post-F18),
+    // so clear nullifiers BEFORE arguments to avoid leaving dangling
+    // refs if the clear is interrupted mid-action.
     await ctx.runMutation(internal.seed.clearTable, { table: "debateNullifiers" });
+    await ctx.runMutation(internal.seed.clearTable, { table: "debateArguments" });
     await ctx.runMutation(internal.seed.clearTable, { table: "debates" });
     // 2. Delete campaigns + dependents
     await ctx.runMutation(internal.seed.clearTable, { table: "campaignDeliveries" });
@@ -2079,7 +2751,10 @@ export const reseedTemplates = internalAction({
     // 3. Delete position data
     await ctx.runMutation(internal.seed.clearTable, { table: "positionDeliveries" });
     await ctx.runMutation(internal.seed.clearTable, { table: "positionRegistrations" });
-    // 4. Delete templates
+    // 4. Delete other tables that FK templates so the reinsert below
+    // doesn't leave orphans pointing at the old template Ids.
+    await ctx.runMutation(internal.seed.clearTable, { table: "templateEndorsements" });
+    // 5. Delete templates
     await ctx.runMutation(internal.seed.clearTable, { table: "templates" });
 
     // 5. Get existing user + org IDs to reassign templates

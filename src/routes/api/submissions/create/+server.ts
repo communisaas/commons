@@ -218,6 +218,37 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			throw error(400, 'publicInputs.authorityLevel is not a valid field element');
 		}
 
+		// T10-2 — Engagement-tier cross-check. The circuit emits the user's
+		// claimed engagement tier in publicInputs[30] (0-4). The server
+		// derives the same tier from users.actionCount via the same threshold
+		// table the nightly cron uses (see T10-1). A drift of more than 1
+		// tier is the gap between "honest off-by-one because the cron hasn't
+		// run today" and "the circuit is lying about how active this user
+		// is." Reject with HTTP 422 on the latter; tolerate the former.
+		const claimedEngagementTier = Number(rawInputsArray[30] ?? 0);
+		const userActionCount = await serverQuery(api.users.getMyActionCount, {});
+		const serverEngagementTier =
+			userActionCount >= 500
+				? 4
+				: userActionCount >= 100
+					? 3
+					: userActionCount >= 25
+						? 2
+						: userActionCount >= 5
+							? 1
+							: 0;
+		if (Math.abs(claimedEngagementTier - serverEngagementTier) > 1) {
+			return json(
+				{
+					success: false,
+					error: 'tier_mismatch',
+					code: 'TIER_MISMATCH',
+					message: `Claimed engagement tier ${claimedEngagementTier} differs from server-derived tier ${serverEngagementTier} by more than 1 — reputation accounting drift.`
+				},
+				{ status: 422 }
+			);
+		}
+
 		if (
 			canonicalAuthorityLevel < BigInt(REQUIRED_CONGRESSIONAL_PROOF_TIER) ||
 			(locals.user.trust_tier ?? 0) < REQUIRED_CONGRESSIONAL_PROOF_TIER
@@ -349,12 +380,54 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			throw error(400, 'Invalid action domain binding');
 		}
 
+		// Coerce array elements to canonical decimal-string form. The
+		// BigInt(...) validation loop at line 155 accepts number, string,
+		// or bigint, but downstream consumers (the TEE resolver's
+		// constantTimeEqual at resolver-gates.ts and the anchor cron
+		// JSON-fwd) expect strings. Without this coercion a bare-array
+		// client posting numbers would store mixed-type elements.
+		const normalizedInputsArray: string[] = rawInputsArray.map((x) =>
+			BigInt(x as string | number | bigint).toString(10)
+		);
+
+		// Normalize publicInputs into the canonical stored object shape
+		// BEFORE handing off to Convex. Two paths:
+		//   1. Bare-array client: construct from array indices + the
+		//      named fields we validated above. Per the TEE resolver gate
+		//      at src/lib/server/tee/resolver-gates.ts:121-123, the
+		//      stored payload MUST include named `nullifier` +
+		//      `actionDomain` + `publicInputsArray` (extracts at lines
+		//      131-133 cross-check named vs array positions).
+		//   2. Object-form client (the ProofGenerator at
+		//      src/lib/components/template/ProofGenerator.svelte:303-319
+		//      ships 9-11 named fields): preserve ALL named fields the
+		//      producer sent, just ensure publicInputsArray is set to
+		//      our locally-validated copy. Dropping fields here breaks
+		//      downstream consumers — anchor cron only needs
+		//      publicInputsArray, but the TEE resolver needs nullifier,
+		//      userRoot, cellMapRoot, districts, engagementRoot,
+		//      engagementTier, revocation* (V2). Passing through is the
+		//      only safe form when we don't enumerate the contract.
+		const normalizedPublicInputs: Record<string, unknown> = Array.isArray(
+			publicInputs
+		)
+			? {
+					publicInputsArray: normalizedInputsArray,
+					nullifier: canonicalNullifier,
+					actionDomain: namedActionDomain,
+					authorityLevel: namedAuthorityLevel
+				}
+			: {
+					...(publicInputs as Record<string, unknown>),
+					publicInputsArray: rawInputsArray as string[]
+				};
+
 		// Use Convex action — handles atomic insert, idempotency, nullifier dedup,
 		// and schedules background tasks (delivery, engagement)
 		const result = await serverAction(api.submissions.create, {
 			templateId,
 			proof,
-			publicInputs,
+			publicInputs: normalizedPublicInputs,
 			nullifier: canonicalNullifier,
 			encryptedWitness,
 			witnessNonce,

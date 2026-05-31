@@ -80,6 +80,15 @@ export const FEATURES = {
 	/** Shadow Atlas client-side verification: browser computes district commitment (no plaintext to server) */
 	SHADOW_ATLAS_VERIFICATION: forceShadowAtlasOff ? false : true,
 
+	/**
+	 * Profile-page basemap layer beneath the district + privacy-hex SVG.
+	 * When false: tile-less SVG only (abstract polygons on white).
+	 * When true: a pre-rendered per-district raster is fetched from the same atlas
+	 * host as the GeoJSON boundary and mounted beneath the SVG paths. Enabled
+	 * once the publish pipeline produced the assets for every published district.
+	 */
+	PROFILE_BASEMAP: true,
+
 	/** Agentic delegation: AI proxy civic actions under user-defined policy constraints (Tier 3+) */
 	DELEGATION: false,
 
@@ -100,9 +109,12 @@ export const FEATURES = {
 	/**
 	 * Raw ISO mdoc (`org-iso-mdoc`) lane.
 	 *
-	 * Keep this false until T3 lands: reconstruct SessionTranscript and verify
-	 * DeviceMAC / DeviceSignature per ISO 18013-5 §9.1.3. The current presence
-	 * gate rejects malformed wallets but does not stop capture-replay.
+	 * The verifier is ready: this lane was lifted to the same
+	 * SessionTranscript-binding floor as the DC API path via the shared
+	 * `verifyMdocDeviceAuth` helper — DeviceMAC / DeviceSignature are verified
+	 * per ISO 18013-5 §9.1.3 on both lanes, and capture-replay is bounded by
+	 * the OID4VP nonce lifetime. Kept false until the mDL launch is ready;
+	 * flip on deliberately alongside the umbrella MDL flag.
 	 */
 	MDL_MDOC: false,
 

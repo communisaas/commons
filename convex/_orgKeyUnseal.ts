@@ -15,6 +15,8 @@
 import { importOrgKey } from "./_orgKey";
 import { toArrayBuffer } from "./_bufferSource";
 
+
+declare const process: { env: Record<string, string | undefined> };
 const encoder = new TextEncoder();
 
 interface SealedOrgKey {

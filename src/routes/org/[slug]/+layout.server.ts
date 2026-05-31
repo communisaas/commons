@@ -23,6 +23,7 @@ export const load: LayoutServerLoad = async ({ params, locals }) => {
 				max_templates_month: result.org.maxTemplatesMonth,
 				dm_cache_ttl_days: result.org.dmCacheTtlDays,
 				identity_commitment: result.org.identityCommitment,
+				brandingAccent: result.org.brandingAccent ?? null,
 				createdAt: new Date(result.org._creationTime)
 			},
 			membership: {

@@ -9,6 +9,11 @@ import { internal } from "./_generated/api";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
+import {
+  eventType as eventTypeV,
+  eventStatus as eventStatusV,
+  eventRsvpStatus as eventRsvpStatusV,
+} from "./_validators";
 import { requireOrgRole } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
 import { computeOrgScopedEmailHash } from "./_orgHash";
@@ -52,7 +57,7 @@ const insertRsvpRef = makeFunctionReference<"mutation">("events:insertRsvp") as 
 export const list = query({
   args: {
     orgSlug: v.string(),
-    status: v.optional(v.string()),
+    status: v.optional(eventStatusV),
     paginationOpts: v.object({
       numItems: v.number(),
       cursor: v.union(v.string(), v.null()),
@@ -151,7 +156,9 @@ export const getRsvps = query({
   args: {
     orgSlug: v.string(),
     eventId: v.id("events"),
-    status: v.optional(v.string()),
+    // Filter on RSVP status (GOING/MAYBE/...), NOT event status —
+    // earlier C12 sweep confused the two; query is `eventRsvps.by_eventId_status`.
+    status: v.optional(eventRsvpStatusV),
     // When true, include walk-in sentinel rows (status="GOING" +
     // walkIn=true + encryptedEmail=""). Default false — staffer-facing
     // roster queries get only real RSVPs. The attendance/walk-in
@@ -211,7 +218,7 @@ export const create = mutation({
     orgSlug: v.string(),
     title: v.string(),
     description: v.optional(v.string()),
-    eventType: v.optional(v.string()),
+    eventType: v.optional(eventTypeV),
     startAt: v.number(),
     endAt: v.optional(v.number()),
     timezone: v.optional(v.string()),
@@ -292,7 +299,7 @@ export const update = mutation({
     eventId: v.id("events"),
     title: v.optional(v.string()),
     description: v.optional(v.string()),
-    eventType: v.optional(v.string()),
+    eventType: v.optional(eventTypeV),
     startAt: v.optional(v.number()),
     endAt: v.optional(v.number()),
     timezone: v.optional(v.string()),
@@ -307,7 +314,7 @@ export const update = mutation({
     capacity: v.optional(v.number()),
     waitlistEnabled: v.optional(v.boolean()),
     requireVerification: v.optional(v.boolean()),
-    status: v.optional(v.string()),
+    status: v.optional(eventStatusV),
     campaignId: v.optional(v.id("campaigns")),
   },
   handler: async (ctx, args) => {
@@ -369,7 +376,7 @@ export const insertRsvp = internalMutation({
     encryptedEmail: v.string(),
     emailHash: v.string(),
     encryptedRsvpName: v.optional(v.string()),
-    status: v.string(),
+    status: eventRsvpStatusV,
     guestCount: v.number(),
     districtHash: v.optional(v.string()),
     engagementTier: v.number(),
@@ -404,7 +411,11 @@ export const insertRsvp = internalMutation({
     // `rsvpCount < capacity` there and both attempt this mutation. The
     // gate here is the only one that holds under load. Waitlist-enabled
     // events skip the throw because overflow is allowed (the action
-    // stamps `WAITLISTED`).
+    // ought to stamp `WAITLISTED`). NB: the action at line 582 does
+    // NOT actually auto-stamp WAITLISTED — it forwards args.status ||
+    // "GOING". WAITLISTED is reachable only when a caller passes it
+    // explicitly. The auto-promotion-on-overflow product feature is
+    // tracked but not yet implemented.
     const event = await ctx.db.get(args.eventId);
     if (!event) throw new Error("Event not found");
     if (
@@ -499,7 +510,8 @@ export const createRsvp = action({
     eventId: v.id("events"),
     email: v.string(),
     name: v.string(),
-    status: v.optional(v.string()),
+    // RSVP status, NOT event status — same mis-mapping as getRsvps.
+    status: v.optional(eventRsvpStatusV),
     guestCount: v.optional(v.number()),
     districtHash: v.optional(v.string()),
     engagementTier: v.optional(v.number()),
@@ -575,6 +587,21 @@ export const createRsvp = action({
       guestCount: args.guestCount ?? 1,
       districtHash: args.districtHash,
       engagementTier: args.engagementTier ?? 0,
+    });
+
+    // Emit event.rsvp_created (T9-3). No PII in payload. Use event.orgId
+    // (the Id-typed value) rather than the String()-coerced local orgId.
+    await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+      orgId: event.orgId,
+      event: "event.rsvp_created",
+      payload: JSON.stringify({
+        eventId: args.eventId,
+        rsvpId: (result as { rsvpId?: string } | null)?.rsvpId ?? null,
+        status: args.status || "GOING",
+        guestCount: args.guestCount ?? 1,
+        engagementTier: args.engagementTier ?? 0,
+        timestamp: Date.now(),
+      }),
     });
 
     return result;

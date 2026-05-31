@@ -29,6 +29,13 @@
 		name="description"
 		content="Local intake is a clerk-assembled PDF packet, distributed Friday, skimmed Monday. Commons produces a verification packet with named authors and census-tract provenance — testimony, not Item 7's form-letter bloat."
 	/>
+	<meta property="og:type" content="website" />
+	<meta property="og:url" content="https://commons.email/org/for/local-government" />
+	<meta property="og:title" content="Commons for municipal advocacy" />
+	<meta property="og:description" content="Verified residents. Ward-level proof your council can trust." />
+	<meta property="og:image" content="https://commons.email/og/org-for/local-government" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:image" content="https://commons.email/og/org-for/local-government" />
 </svelte:head>
 
 <div class="seg-page">

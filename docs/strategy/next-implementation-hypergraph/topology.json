@@ -1,0 +1,74 @@
+{
+  "version": "2.0.0",
+  "name": "commons-next-hypergraph",
+  "predecessor": "docs/strategy/implementation-hypergraph (v1.x, sealed 2026-05-28)",
+  "horizon": "first-org launch → Track B post-launch hardening → Phase 2 precision (CT/non-CA G3 + ACS + density-K-anon) → international + partnerships",
+  "premise": "v1 closed 103 tasks (42 done + 61 deferred). This hypergraph continues from those deferrals plus operational items the v1 graph never modeled (ABC enrollment, Sentry on-call wiring, first-org staging walk, runbook). The substrate-honesty constraint carries over: writer wire-ups for T10-1/T10-9/T5-10/T7-7 must run before claiming those capabilities are user-visible.",
+  "node_types": [
+    {
+      "id": "cluster",
+      "description": "Capability cluster from capability-transcendence.md. 9 clusters carry over from v1. Completion target shifts to reflect remaining scope after v1 partial-realization.",
+      "fields": ["id", "slug", "name", "v1_status", "remaining_target", "contributing_tasks"]
+    },
+    {
+      "id": "track",
+      "description": "Execution track grouping tasks by operational domain. Six tracks mirror the memory's What's Next layout.",
+      "fields": ["id", "slug", "name", "description", "wave_ceiling"]
+    },
+    {
+      "id": "wave",
+      "description": "Execution wave. Strict dependency: a wave starts when its predecessor's gating items are closed.",
+      "fields": ["id", "name", "gate", "exit_criteria"]
+    },
+    {
+      "id": "task",
+      "description": "Concrete unit of work. Inherits effort tier (S/M/L/XL) from v1 spec where applicable.",
+      "fields": ["id", "slug", "name", "track", "clusters", "wave", "effort", "chokepoint", "carryover_from", "description", "files_touch", "files_create", "key_decisions", "risks", "acceptance_criteria", "depends_on", "status"]
+    },
+    {
+      "id": "chokepoint",
+      "description": "Single task whose completion unblocks ≥ 3 downstream tasks AND whose gate is external (ops, partnership, audit).",
+      "fields": ["id", "task_id", "unblocks_count", "gate_kind", "gate_owner"]
+    }
+  ],
+  "edge_types": [
+    {
+      "id": "blocks",
+      "description": "Source must reach status ∈ {completed, deferred} before target can start."
+    },
+    {
+      "id": "composes",
+      "description": "Source contributes to target cluster's remaining_target. Many-to-many."
+    },
+    {
+      "id": "unblocks",
+      "description": "Source's completion lifts a chokepoint or unlocks a wave transition."
+    },
+    {
+      "id": "requires",
+      "description": "Soft prerequisite — target benefits from source landing first but doesn't strictly block."
+    },
+    {
+      "id": "parallel",
+      "description": "Tasks that can execute concurrently in the same wave without resource contention."
+    }
+  ],
+  "statistics": {
+    "tasks_total": 73,
+    "tasks_from_v1_deferred": 61,
+    "tasks_from_v1_substrate_wireups": 5,
+    "tasks_new_operational": 7,
+    "clusters": 9,
+    "tracks": 6,
+    "waves": 5,
+    "chokepoints": 5,
+    "blocks_edges": 76,
+    "composes_edges": 88,
+    "parallel_groups": 7,
+    "by_track": {"TR-A": 7, "TR-B": 37, "TR-C": 13, "TR-D": 5, "TR-E": 5, "TR-F": 6},
+    "by_wave": {"W-0": 5, "W-1": 7, "W-2": 37, "W-3": 19, "W-4": 5}
+  },
+  "completion_signal": "ALL tasks status ∈ {completed, deferred} AND every cluster's remaining_target met (walk contributing_tasks). Same shape as v1.",
+  "promotion_target": "docs/strategy/next-implementation-hypergraph/",
+  "created_at": "2026-05-28"
+}

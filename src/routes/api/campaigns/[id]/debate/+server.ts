@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 // CONVEX: Keep SvelteKit
-import { serverQuery } from 'convex-sveltekit';
+import { serverAction, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
@@ -83,11 +83,21 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'Proposition text must be at least 10 characters');
 	}
 
-	return json(
-		{
-			error: 'campaign_debate_helper_unavailable',
-			message: 'Campaign-linked debate creation is not available in this API boundary.'
-		},
-		{ status: 501 }
-	);
+	const result = await serverAction(api.debates.forceSpawnDebateForCampaign, {
+		campaignId: params.id as Id<'campaigns'>,
+		propositionText: propositionText || undefined,
+		duration: durationSeconds,
+		jurisdictionSizeHint: jurisdictionHint
+	});
+
+	if (!result.spawned) {
+		const reason = (result as { reason: string }).reason;
+		if (reason === 'no_campaign') throw error(404, 'Campaign not found');
+		if (reason === 'already_spawned') throw error(409, 'Debate already linked to this campaign');
+		if (reason === 'disabled') throw error(400, 'Debate is not enabled for this campaign');
+		if (reason === 'no_template') throw error(400, 'Campaign has no template');
+		throw error(400, `Debate spawn failed: ${reason}`);
+	}
+
+	return json({ debateId: result.debateId, campaignId: params.id }, { status: 201 });
 };

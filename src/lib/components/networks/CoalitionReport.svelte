@@ -8,10 +8,21 @@
 		stateDistribution: { state: string; count: number }[];
 	};
 
-	let { stats, loading }: {
+	let { stats, loading, brandingAccent = null }: {
 		stats: NetworkStats | null;
 		loading: boolean;
+		// NEW-E-4: hex like '#0d9488'. Only set on Coalition-tier orgs. When
+		// present, overrides the default teal accent on stat highlights + tier
+		// bar fills. Validated upstream by organizations.update mutation.
+		brandingAccent?: string | null;
 	} = $props();
+
+	// CSS custom property scoping — if brandingAccent is set, apply it inline
+	// on the component root so child --coalition-accent vars cascade. Falls
+	// back to the default brand teal via CSS.
+	const accentStyle = $derived(
+		brandingAccent ? `--coalition-accent: ${brandingAccent};` : ''
+	);
 
 	const tierLabels: Record<number, string> = {
 		0: 'Guest',
@@ -72,6 +83,7 @@
 		</div>
 	</div>
 {:else if stats}
+<div style={accentStyle}>
 	<!-- Stats grid -->
 	<div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
 		<div class="rounded-lg bg-zinc-900/50 p-3">
@@ -84,7 +96,7 @@
 		</div>
 		<div class="rounded-lg bg-zinc-900/50 p-3">
 			<p class="text-xs font-medium text-zinc-500">Unique Districts</p>
-			<p class="mt-1 text-xl font-bold text-teal-400">{stats.uniqueDistricts.toLocaleString()}</p>
+			<p class="mt-1 text-xl font-bold" style="color: var(--coalition-accent, #2dd4bf);">{stats.uniqueDistricts.toLocaleString()}</p>
 		</div>
 		<div class="rounded-lg bg-zinc-900/50 p-3">
 			<p class="text-xs font-medium text-zinc-500">Verified Supporters</p>
@@ -102,8 +114,8 @@
 						<span class="w-28 shrink-0 text-xs text-zinc-400">{tierLabels[tier.tier] ?? `Tier ${tier.tier}`}</span>
 						<div class="flex-1 overflow-hidden rounded-full bg-zinc-800 h-2">
 							<div
-								class="h-full rounded-full bg-teal-500 transition-all"
-								style="width: {(tier.count / maxTierCount) * 100}%"
+								class="h-full rounded-full transition-all"
+								style="width: {(tier.count / maxTierCount) * 100}%; background-color: var(--coalition-accent, #14b8a6);"
 							></div>
 						</div>
 						<span class="w-10 shrink-0 text-right text-xs text-zinc-500">{tier.count.toLocaleString()}</span>
@@ -127,6 +139,7 @@
 			</div>
 		</div>
 	{/if}
+</div>
 {:else}
 	<p class="py-4 text-center text-sm text-zinc-500">
 		Generate a coalition report to see aggregated verification data.

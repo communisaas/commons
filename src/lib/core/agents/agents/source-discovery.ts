@@ -406,6 +406,20 @@ export async function discoverSources(
 		failed: failed.length
 	});
 
+	// Trace: Phase 1b firecrawl fetch results
+	if (traceId) {
+		traceEvent(traceId, 'message-generation', 'source-fetch', {
+			firecrawlReads,
+			candidatesFetched: candidates.length,
+			failedFetches: failed.length,
+			failureSamples: failed.slice(0, 5).map((f) => ({
+				url: f.source.url,
+				error: f.error
+			})),
+			candidateUrls: candidates.map((c) => ({ url: c.url, stratum: c.stratum }))
+		});
+	}
+
 	if (candidates.length === 0) {
 		onPhase?.('complete', 'No source content could be fetched');
 		return {
@@ -440,6 +454,8 @@ export async function discoverSources(
 
 	let evaluated: EvaluatedSource[];
 	let evaluationTokenUsage: TokenUsage | undefined;
+	let evaluationFallback = false;
+	let evaluationFallbackError: string | undefined;
 
 	try {
 		const evalResult = await evaluateSources(
@@ -451,6 +467,8 @@ export async function discoverSources(
 		evaluationTokenUsage = evalResult.tokenUsage;
 	} catch (error) {
 		console.error('[source-discovery] Source evaluation failed, using candidates as fallback:', error);
+		evaluationFallback = true;
+		evaluationFallbackError = error instanceof Error ? error.message : String(error);
 		// Fallback: convert candidates to basic EvaluatedSource without Gemini evaluation
 		evaluated = candidates.map((c, idx) => ({
 			num: idx + 1,
@@ -473,7 +491,10 @@ export async function discoverSources(
 		source.num = index + 1;
 	});
 
-	// Trace: Phase 1c evaluation results
+	// Trace: Phase 1c evaluation results.
+	// `evaluationFallback` distinguishes "Gemini classified all-neutral" from
+	// "Gemini threw and we defaulted to neutral" — without it, the operator
+	// cannot tell those apart from the incentiveBreakdown alone.
 	if (traceId) {
 		const incentiveBreakdown = {
 			adversarial: evaluated.filter(s => s.incentive_position === 'adversarial').length,
@@ -490,7 +511,9 @@ export async function discoverSources(
 				opinion: evaluated.filter(s => s.source_order === 'opinion').length
 			},
 			firecrawlReads,
-			evaluationTokens: evaluationTokenUsage?.totalTokens ?? null
+			evaluationTokens: evaluationTokenUsage?.totalTokens ?? null,
+			evaluationFallback,
+			evaluationFallbackError
 		});
 	}
 

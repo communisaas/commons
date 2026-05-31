@@ -1,0 +1,158 @@
+{
+  "name": "commons-implementation-hypergraph",
+  "version": "1.0.0",
+  "created": "2026-05-28",
+  "source": "10-lane planning synthesis (2026-05-28) over 9-cluster capability framing (2026-05-27) over 9-agent capability scope (2026-05-27)",
+  "purpose": "Structured dependency graph for realizing Commons capability transcendence end-to-end. Each node is a work unit; each hyperedge captures composition or blocking semantics.",
+
+  "schema": {
+    "node_types": {
+      "cluster": {
+        "description": "Capability cluster from capability-transcendence.md",
+        "count": 9,
+        "id_pattern": "C-{slug}",
+        "key_fields": ["name", "description", "shipped_substrate", "completion_target"]
+      },
+      "track": {
+        "description": "Implementation track from 10-lane planning synthesis",
+        "count": 10,
+        "id_pattern": "TR-{n}",
+        "key_fields": ["name", "lead_capability_cluster", "task_count", "total_effort"]
+      },
+      "wave": {
+        "description": "Temporal grouping for sequencing",
+        "count": 5,
+        "id_pattern": "W-{n}",
+        "key_fields": ["name", "duration", "goal", "completion_signal"]
+      },
+      "task": {
+        "description": "Atomic work unit with file paths, effort estimate, acceptance criteria",
+        "count": 101,
+        "id_pattern": "T{track}-{item}",
+        "key_fields": ["slug", "name", "track", "clusters", "wave", "effort", "chokepoint", "description", "files_touch", "files_create", "key_decisions", "risks", "acceptance_criteria", "status"]
+      },
+      "chokepoint_marker": {
+        "description": "Meta-node tagging a task as critical-path with high fan-out",
+        "count": 4,
+        "id_pattern": "CP-{slug}",
+        "key_fields": ["target_task_id", "downstream_count", "elapsed_time_dependency"]
+      }
+    },
+
+    "edge_types": {
+      "blocks": {
+        "direction": "directed",
+        "arity": "binary",
+        "semantics": "source task must reach status=completed before target task can begin. Hard dependency.",
+        "encoding": "{source: task_id, target: task_id, reason: string}"
+      },
+      "composes": {
+        "direction": "directed_hyperedge",
+        "arity": "n-to-1",
+        "semantics": "Multiple source tasks (and shipped substrate) together realize the target capability cluster.",
+        "encoding": "{sources: [task_id], target: cluster_id, additional_substrate: [string]}"
+      },
+      "unblocks": {
+        "direction": "directed_hyperedge",
+        "arity": "1-to-n",
+        "semantics": "Single source task (chokepoint) removes blocker for many downstream tasks. Fan-out from chokepoints.",
+        "encoding": "{source: task_id, targets: [task_id], downstream_count: int}"
+      },
+      "requires": {
+        "direction": "directed_hyperedge",
+        "arity": "n-to-1",
+        "semantics": "Target task needs multiple upstream tasks. Fan-in. Distinct from blocks (which is binary).",
+        "encoding": "{sources: [task_id], target: task_id, all_required: bool}"
+      },
+      "parallel_with": {
+        "direction": "undirected",
+        "arity": "binary",
+        "semantics": "Two tasks can execute concurrently without resource conflict or shared modifications.",
+        "encoding": "{nodes: [task_id, task_id]}"
+      },
+      "belongs_to_track": {
+        "direction": "directed",
+        "arity": "binary",
+        "semantics": "Task belongs to a single track.",
+        "encoding": "{task: task_id, track: track_id}"
+      },
+      "belongs_to_wave": {
+        "direction": "directed",
+        "arity": "binary",
+        "semantics": "Task is scheduled in a single wave.",
+        "encoding": "{task: task_id, wave: wave_id}"
+      },
+      "contributes_to_cluster": {
+        "direction": "directed",
+        "arity": "binary",
+        "semantics": "Task advances one or more capability clusters.",
+        "encoding": "{task: task_id, cluster: cluster_id, contribution_type: 'substrate|surface|integration'}"
+      }
+    },
+
+    "task_lifecycle": {
+      "states": ["not_started", "in_progress", "blocked", "completed", "deferred"],
+      "default": "not_started",
+      "transitions": {
+        "not_started": ["in_progress", "blocked", "deferred"],
+        "in_progress": ["completed", "blocked", "deferred"],
+        "blocked": ["in_progress", "deferred"],
+        "deferred": ["not_started", "in_progress"]
+      }
+    },
+
+    "effort_tiers": {
+      "S": "<= 1 day single engineer",
+      "M": "2-5 days",
+      "L": "1-2 weeks",
+      "XL": "2+ weeks; multi-engineer or multi-component"
+    }
+  },
+
+  "statistics": {
+    "total_nodes": 129,
+    "total_clusters": 9,
+    "total_tracks": 10,
+    "total_waves": 5,
+    "total_tasks": 101,
+    "total_chokepoints": 4,
+    "total_edges_estimated": 280,
+    "tasks_by_wave": {
+      "W-1_sales_blockers": 11,
+      "W-2_launch_enablement": 26,
+      "W-3_capability_realization": 38,
+      "W-4_phase_3_differentiators": 18,
+      "W-5_continuous": 8
+    },
+    "tasks_by_effort": {
+      "S": 38,
+      "M": 41,
+      "L": 16,
+      "XL": 6
+    }
+  },
+
+  "file_layout": {
+    "topology.json": "this file — schemas + statistics",
+    "nodes/clusters.json": "9 capability cluster nodes",
+    "nodes/tracks.json": "10 implementation track nodes",
+    "nodes/waves.json": "5 wave nodes",
+    "nodes/tasks.json": "101 task nodes with full metadata",
+    "nodes/chokepoints.json": "4 chokepoint markers",
+    "edges/blocks.json": "directed blocking dependencies",
+    "edges/composes.json": "task→cluster composition hyperedges",
+    "edges/unblocks.json": "chokepoint fan-out hyperedges",
+    "edges/requires.json": "fan-in dependencies",
+    "edges/parallel.json": "non-conflicting concurrent tasks",
+    "docs/INDEX.md": "human-readable navigation",
+    "docs/CRITICAL_PATH.md": "the 4 chokepoints with their downstream chains",
+    "docs/WAVE_SCHEDULE.md": "wave-by-wave execution sequence"
+  },
+
+  "conventions": {
+    "task_id_format": "T{track_number}-{item_number}",
+    "slug_format": "kebab-case",
+    "file_paths": "absolute paths from monorepo root /Users/noot/Documents/commons/ or /Users/noot/Documents/voter-protocol/",
+    "effort_format": "tier + estimated_days field for finer granularity"
+  }
+}

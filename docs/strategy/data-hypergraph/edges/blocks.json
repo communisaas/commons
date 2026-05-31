@@ -1,0 +1,17 @@
+{
+  "_notes": "Sparse blocks graph. Most W-0 verify tasks are independent. W-1 D-4 + D-5 depend on their catalogs. W-2 tests depend on the corresponding W-0 verify (so test reflects honest behavior) + W-1 seed (so test has data).",
+  "blocks": [
+    {"source": "D-1", "target": "D-4", "reason": "Removal needs catalog of dead fields"},
+    {"source": "D-3", "target": "D-5", "reason": "Fix needs catalog of unmaintained counters"},
+
+    {"source": "V-6", "target": "T-1", "reason": "Test bakes in verified webhook behavior"},
+    {"source": "S-1", "target": "T-1", "reason": "Test needs seeded webhook subscription"},
+    {"source": "V-5", "target": "T-2", "reason": "Test bakes in attestation-hash discrepancy resolution"},
+    {"source": "S-2", "target": "T-2", "reason": "Test needs seeded receipt"},
+    {"source": "V-9", "target": "T-3", "reason": "Test bakes in vote-cast auto-detect behavior"},
+    {"source": "S-2", "target": "T-3", "reason": "Test needs seeded receipt"},
+    {"source": "S-3", "target": "T-3", "reason": "Test needs seeded bills + legislativeAction"},
+    {"source": "V-2", "target": "T-5", "reason": "Test bakes in atlasVersion thread behavior"},
+    {"source": "V-3", "target": "T-6", "reason": "Test bakes in debate field populator behavior"}
+  ]
+}

@@ -4,7 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"start": "node build",
-		"dev": "vite dev --host",
+		"dev": "NODE_OPTIONS=\"--dns-result-order=ipv4first --no-network-family-autoselection\" vite dev --host",
 		"build": "svelte-kit sync && vite build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

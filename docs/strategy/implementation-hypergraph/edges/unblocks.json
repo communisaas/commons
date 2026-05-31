@@ -1,0 +1,88 @@
+{
+  "type": "unblocks",
+  "description": "Directed hyperedges from chokepoint sources to many downstream targets. Captures the fan-out from critical-path items.",
+  "edges": [
+    {
+      "source": "T9-3",
+      "chokepoint_id": "CP-outbound-webhooks",
+      "targets": ["T9-7", "T8-8", "T9-8", "T7-1-external-aggregation"],
+      "downstream_count": 4,
+      "fan_out_semantics": "Webhook event-dispatch substrate. orgEvents table populated by T9-3 is shared by real-time subscriptions (T9-7), reader-side office notifier (T8-8), and dev portal documentation (T9-8). Coalition aggregation can read external webhook events as an integration.",
+      "wave_lift": "W-2 work unblocks W-3 and W-4 dependents"
+    },
+    {
+      "source": "T3-6+T5-5+T6-2",
+      "chokepoint_id": "CP-mainnet-deployment",
+      "is_composite": true,
+      "composite_members": ["T3-6", "T5-5", "T6-2"],
+      "targets": ["T5-2-production", "T5-1-real-economics", "T5-6b", "T6-1", "T6-7", "T6-10", "T8-4b", "T8-6"],
+      "downstream_count": 8,
+      "fan_out_semantics": "Mainnet contracts are the substrate for production receipt anchoring, production on-chain stake verification, on-chain engagement tree updates, browser verification against mainnet root, IPFS-pinned artifact Merkle proofs, long-term-survivable claims. Wave 3 lift.",
+      "elapsed_time_dependency": "1-2 weeks engineering + 2-4 weeks elapsed (security audit, Safe multisig setup)"
+    },
+    {
+      "source": "T5-3",
+      "chokepoint_id": "CP-tee-nitro-enclave",
+      "targets": ["T5-4", "C-verification-substrate-completeness", "T5-7-attestation"],
+      "downstream_count": 3,
+      "fan_out_semantics": "TEE deployment unblocks AI panel attestation (T5-4), completes Cluster 1 verification substrate (LocalConstituentResolver replaced by attested NitroEnclaveResolver), and position privacy ZK + reveal attestation can chain to enclave key.",
+      "elapsed_time_dependency": "2-3 weeks elapsed (AWS Nitro account, EC2 provisioning, enclave build, PCR0 measurement, vsock proxy)"
+    },
+    {
+      "source": "T4-1",
+      "chokepoint_id": "CP-delegation-executor",
+      "targets": ["T4-3", "T4-4", "T4-5", "T4-6", "T4-8", "T4-9", "T4-10"],
+      "downstream_count": 7,
+      "fan_out_semantics": "Delegation executor unblocks all Cluster 4 surface items: per-supporter alerts (T4-3), agentic monitoring (T4-4), cross-org portability (T4-5), pricing enforcement (T4-6), trace observability (T4-8), delegation UI (T4-9), multi-agent flows (T4-10). Without executor, FEATURES.DELEGATION stays false and capability transcendence agentic claims remain aspirational.",
+      "elapsed_time_dependency": "3-4 weeks for executor + 1.5-2 weeks for proof attachment infra (T4-2)"
+    },
+    {
+      "source": "T3-1",
+      "chokepoint_id": "CP-state-legislator-data",
+      "targets": ["T3-8", "T3-10", "T4-4", "T6-6"],
+      "downstream_count": 4,
+      "fan_out_semantics": "State legislator officeholder data (OpenStates ingestion) is the foundation for multi-jurisdiction routing (T3-8), per-district feeds (T3-10), agentic monitoring across boundary types (T4-4), and state-bill scorecards (T6-6). Foundational to half of Wave 3-4 reach work.",
+      "wave_lift": "W-3 work unblocks W-4 dependents"
+    },
+    {
+      "source": "T7-1",
+      "chokepoint_id": "CP-coalition-aggregation-api",
+      "targets": ["T7-2", "T7-3", "T7-5", "T7-9", "T8-7"],
+      "downstream_count": 5,
+      "fan_out_semantics": "Coalition aggregation API (replacing HTTP 501) establishes cross-org query pattern that shared supporter pools (T7-2), reputation portability (T7-3), coalition packet computation (T7-5), network rate limits (T7-9), and per-DM cross-org profile (T8-7) all build on.",
+      "wave_lift": "Internal to Wave 3"
+    },
+    {
+      "source": "T8-1a",
+      "chokepoint_id": "CP-dm-office-profile",
+      "targets": ["T8-1b", "T8-5", "T8-8", "T8-9"],
+      "downstream_count": 4,
+      "fan_out_semantics": "DM office profile + email verification is the auth foundation for all reader-side personalization: dashboard UI (T8-1b), CRM integration feed (T8-5), webhook notifier (T8-8), weekly digest (T8-9).",
+      "wave_lift": "W-4 internal sequence"
+    },
+    {
+      "source": "T6-1",
+      "chokepoint_id": "CP-receipt-anchoring-pipeline",
+      "targets": ["T6-3", "T6-7", "T6-10", "T8-4b", "T8-6"],
+      "downstream_count": 5,
+      "fan_out_semantics": "Receipt Merkle anchoring pipeline unlocks anchoring cadence (T6-3), browser verification UI (T6-7), long-term archive (T6-10), IPFS-pinned artifact (T8-4b), and long-term-survivable pattern (T8-6).",
+      "wave_lift": "Internal to Wave 3"
+    },
+    {
+      "source": "T4-2",
+      "chokepoint_id": "CP-zk-proof-attachment",
+      "targets": ["T4-1", "T4-7", "T4-9"],
+      "downstream_count": 3,
+      "fan_out_semantics": "draftedMessages table + proof attachment pattern is required by executor (T4-1), message writer proof binding (T4-7), and delegation UI for showing pending approvals (T4-9).",
+      "wave_lift": "Within agentic stack"
+    },
+    {
+      "source": "T10-1",
+      "chokepoint_id": "CP-reputation-tier-writer",
+      "targets": ["T10-2", "T10-4", "T10-10", "T5-6"],
+      "downstream_count": 4,
+      "fan_out_semantics": "reputationTier writer is the foundation for engagementTier cross-check (T10-2), CAI honesty (T10-4), engagement tier histogram showing real data (T10-10), and debate-to-tier promotion (T5-6).",
+      "wave_lift": "W-2 substrate"
+    }
+  ]
+}

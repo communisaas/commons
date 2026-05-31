@@ -1,0 +1,50 @@
+{
+  "_notes": "Clusters are CONTEXT only in this hypergraph — they carry over the 9 capability clusters from v1/v2 but the realization metric here is substrate-honesty + coverage, not capability completion. Each task's `clusters` field names which capability clusters it addresses uncertainty within.",
+  "clusters": [
+    {
+      "id": "C-coordination-integrity",
+      "carryover_clusters": ["C-coordination-integrity"],
+      "remaining_uncertainty": "Reputation cron promotion + atlasVersion drift surfacing both claim 'realized' after v2. Verify: does the cron actually promote a seeded user? Does packet.driftCount return non-null when atlasVersion varies?"
+    },
+    {
+      "id": "C-composability",
+      "carryover_clusters": ["C-composability"],
+      "remaining_uncertainty": "Coalition aggregation (T7-1), packet attestation hash (T7-5), cross-org reputation portability (NEW-T7-3), branding accent UI (NEW-E-4) — verify each produces non-empty results against seeded coalition data."
+    },
+    {
+      "id": "C-quality-signaling",
+      "carryover_clusters": ["C-quality-signaling"],
+      "remaining_uncertainty": "Auto-debate-spawn (T5-1) + debate field populator (NEW-E-3) — verify threshold crossing actually spawns + populated packet.debate is non-null."
+    },
+    {
+      "id": "C-accountability",
+      "carryover_clusters": ["C-accountability"],
+      "remaining_uncertainty": "T6-4/T6-5 read-side surfaces + T6-9 vote-cast detection — verify constituent receipts query returns >0 when supporters have actions, CSV export streams correctly, legislativeAction creation backfills matching receipts."
+    },
+    {
+      "id": "C-reader-side",
+      "carryover_clusters": ["C-reader-side"],
+      "remaining_uncertainty": "T8-2 K-anon aggregates + T8-3/NEW-E-5 AttestationVerifier — verify /v/[hash] preimage recomputation matches server hash."
+    },
+    {
+      "id": "C-reach",
+      "carryover_clusters": ["C-reach"],
+      "remaining_uncertainty": "Email path (T2-3 multipart + T2-5 soft-bounce) — verify multipart emission, soft-bounce threshold behavior."
+    },
+    {
+      "id": "C-agentic",
+      "carryover_clusters": ["C-agentic"],
+      "remaining_uncertainty": "agentTraces writer (shipped 2026-05-18) — verify event emission visible against seeded message generation."
+    },
+    {
+      "id": "C-verification",
+      "carryover_clusters": ["C-verification"],
+      "remaining_uncertainty": "Trust tier honesty (T10-1..5) — verify reputationTier defaults to 'new' on new inserts, cross-check rejects drift > 1."
+    },
+    {
+      "id": "C-data-sovereignty",
+      "carryover_clusters": ["C-data-sovereignty"],
+      "remaining_uncertainty": "No substrate shipped in v1/v2 (all mainnet-gated). Nothing to verify in this hypergraph."
+    }
+  ]
+}

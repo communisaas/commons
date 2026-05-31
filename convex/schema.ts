@@ -1,5 +1,16 @@
 import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
+import {
+	recipientFilterValidator,
+	smsRecipientFilterValidator,
+	eventRsvpStatus,
+	emailBlastStatus,
+	smsBlastStatus,
+	smsMessageStatus,
+	debateStatus,
+	accountabilityCausalityClass,
+	accountabilityResponseType,
+} from './_validators';
 
 // =============================================================================
 // Commons Convex Schema
@@ -116,6 +127,13 @@ export default defineSchema({
 		peerEndorsements: v.number(),
 		activeMonths: v.number(),
 
+		// Verified-action count for reputation-tier promotion. Hybrid model:
+		// incremented on-action inside createCampaignAction (ZK paths supplying
+		// userId), then nightly cron `recomputeAllReputationTiers` recomputes
+		// reputationTier from this counter against a threshold table. Optional
+		// because pre-T10-1 rows didn't carry it; cron treats missing as 0.
+		actionCount: v.optional(v.number()),
+
 		// Profile
 		role: v.optional(v.string()),
 		organization: v.optional(v.string()),
@@ -202,6 +220,16 @@ export default defineSchema({
 		deliveryConfig: v.any(),
 		cwcConfig: v.optional(v.any()),
 		recipientConfig: v.any(),
+		// DEAD FIELD: no writer anywhere in convex/ or src/ sets
+		// templates.campaignId. Three readers echo it null to the v1 API
+		// contract for stability:
+		//   - convex/templates.ts:276 (paginated list)
+		//   - src/routes/api/templates/+server.ts:399 (existing-by-content)
+		//   - src/routes/api/templates/+server.ts:553 (newly-created)
+		// All emit `campaign_id: ... ?? null`. Field removal requires
+		// consumers to drop the key, then a schema deploy. Template→
+		// campaign linkage goes the other way (campaigns.templateId).
+		// See [[F22-templates-campaignId-dead]].
 		campaignId: v.optional(v.string()),
 		status: v.string(), // 'draft' | 'published' | etc.
 		isPublic: v.boolean(),
@@ -518,7 +546,14 @@ export default defineSchema({
 		activeGroundCellMetadataId: v.optional(v.id('groundCellMetadata')),
 
 		// Lifecycle
-		createdByMethod: v.string(), // 'address' | 'mdl' | 'migration' | 'reentry'
+		// Passthrough of verificationMethod from the persisting client —
+		// see src/lib/core/identity/ground-vault-persistence.ts:276. The
+		// previous comment claimed an 'address'|'mdl'|'migration'|'reentry'
+		// enum but production writes any of the ADDRESS_VERIFICATION_METHODS
+		// values ('shadow_atlas'|'civic_api'|'postal') verbatim plus
+		// 'mdl'|'migration'|'reentry' from non-address paths. v.string() is
+		// the honest typing; the field is observational, not constraint.
+		createdByMethod: v.string(),
 		migrationSource: v.optional(v.string()),
 		retiredAt: v.optional(v.number()),
 		retiredReason: v.optional(v.string()),
@@ -604,11 +639,36 @@ export default defineSchema({
 
 	submissions: defineTable({
 		pseudonymousId: v.string(),
+		// Polymorphic by design — accepts EITHER an Id<'templates'>
+		// (the canonical case) OR a template slug. The handler at
+		// convex/submissions.ts:1961-1962 disambiguates via
+		// `ctx.db.normalizeId('templates', templateId)`; if the
+		// normalize returns null, the string is treated as a slug and
+		// looked up via the `by_slug` index. Keep as v.string() (not
+		// v.id) — Convex Id validator rejects slug-shaped strings.
 		templateId: v.string(),
 
 		// ZK proof data
 		proofHex: v.string(),
-		publicInputs: v.any(), // JSON array
+		// Stored shape is an OBJECT with named fields + a nested
+		// publicInputsArray. The +server.ts boundary accepts either
+		// `unknown[]` (bare array) or `{ publicInputsArray, actionDomain,
+		// authorityLevel, ... }` from the client and forwards the
+		// un-normalized value to Convex; the Convex-side reader at
+		// convex/submissions.ts:1151 expects the object form
+		// (`pi.publicInputsArray[i]`), so a bare-array submission
+		// reaches the anchor cron as `public_inputs_array_missing`
+		// and fails terminal. The named fields (actionDomain, etc.)
+		// are cross-checked against the array positions at +server.ts
+		// (e.g., :179-200 ensures rawInputsArray[27] === named
+		// actionDomain) — the array indices encode the noir circuit
+		// public-input ordering (idx 26=nullifier, 27=actionDomain,
+		// 28=authorityLevel, ...). v.any() is the pragmatic compromise;
+		// tightening to `v.object({publicInputsArray: v.array(v.string()),
+		// actionDomain: v.string(), ...})` would close the divergence
+		// but requires +server.ts to normalize at the boundary first.
+		// See [[F39-publicInputs-normalize-at-boundary]].
+		publicInputs: v.any(),
 		nullifier: v.string(),
 		actionId: v.string(),
 
@@ -1083,7 +1143,7 @@ export default defineSchema({
 		// Debate parameters
 		deadline: v.number(),
 		jurisdictionSize: v.number(),
-		status: v.string(), // 'active' | 'resolving' | 'resolved' | 'awaiting_governance' | 'under_appeal'
+		status: debateStatus,
 
 		// Aggregate metrics
 		argumentCount: v.number(),
@@ -1174,7 +1234,12 @@ export default defineSchema({
 		// On-chain verification
 		verificationStatus: v.string(), // 'pending' | 'verified' | 'rejected'
 		cosignWeight: v.optional(v.number()),
-		argumentId: v.optional(v.string()),
+		// Migrated v.string() → v.id('debateArguments') 2026-05-26. The
+		// writer at convex/debates.ts:575 has always passed argument._id
+		// — the string typing was schema dishonesty. SEED_TABLES already
+		// orders debateNullifiers before debateArguments per F10 sweep,
+		// so clear-time FK semantics hold.
+		argumentId: v.optional(v.id('debateArguments')),
 		txHash: v.optional(v.string())
 	})
 		.index('by_debateId', ['debateId'])
@@ -1348,6 +1413,13 @@ export default defineSchema({
 		logoUrl: v.optional(v.string()),
 		isPublic: v.boolean(),
 
+		// White-label accent — Coalition-tier branding override (T7-7). Hex
+		// string like '#0d9488'. Applied in CoalitionReport.svelte, the
+		// campaign report email shell, and the embed widget (which already
+		// reads `?accent=`). Custom sender domain (Layer b) and subdomain
+		// routing (Layer c) are deferred per spec.
+		brandingAccent: v.optional(v.string()),
+
 		// Org-level PII encryption (passphrase-derived, multi-admin)
 		orgKeyVerifier: v.optional(v.string()), // Sentinel encrypted with org key — verifies passphrase
 		recoveryWrappedOrgKey: v.optional(v.string()), // Org key wrapped with recovery key — emergency recovery
@@ -1447,10 +1519,19 @@ export default defineSchema({
 		principles: v.optional(v.array(v.string())),
 		charterText: v.optional(v.string()),
 		charterPublishedAt: v.optional(v.number()),
+
+		// Most recent computed coalition-packet attestation hash. Deterministic
+		// SHA-256 over sorted (orgId, campaignId, packetDigest) tuples of all
+		// active member orgs. Cached for /v/[hash] resolution + invalidated on
+		// member roster change. T7-5.
+		lastPacketHash: v.optional(v.string()),
+		lastPacketComputedAt: v.optional(v.number()),
+
 		updatedAt: v.number()
 	})
 		.index('by_slug', ['slug'])
-		.index('by_ownerOrgId', ['ownerOrgId']),
+		.index('by_ownerOrgId', ['ownerOrgId'])
+		.index('by_lastPacketHash', ['lastPacketHash']),
 
 	orgNetworkMembers: defineTable({
 		networkId: v.id('orgNetworks'),
@@ -1508,6 +1589,13 @@ export default defineSchema({
 		emailStatus: v.string(), // 'subscribed' | 'unsubscribed' | 'bounced' | 'complained'
 		smsStatus: v.string(), // 'none' | 'subscribed' | 'unsubscribed' | 'stopped'
 
+		// Soft-bounce tally. Transient/Undetermined SES bounces increment this;
+		// a successful Delivery resets it. Crosses threshold (=3) → emailStatus
+		// flips to 'bounced' and a suppressedEmails row gets a 30-day TTL so
+		// blast recipient resolution stops pulling this address. See
+		// convex/webhooks.ts:recordSoftBounces.
+		softBounceCount: v.optional(v.number()),
+
 		// Import tracking
 		source: v.optional(v.string()), // 'csv' | 'action_network' | 'organic' | 'widget'
 		importedAt: v.optional(v.number()),
@@ -1562,16 +1650,41 @@ export default defineSchema({
 
 	campaigns: defineTable({
 		orgId: v.id('organizations'),
-		type: v.string(), // 'LETTER' | 'EVENT' | 'FORM'
+		// Closed union — the enum has been stable since the org-layer
+		// migration. Adding a new type requires a schema deploy +
+		// matching read-side branches; that's the right friction.
+		// LETTER/EVENT/FORM are the user-facing types; FUNDRAISER is the
+		// donation-flow campaign carved out by convex/donations.ts (a
+		// campaign that holds a goalAmountCents + receives stripe
+		// payments). Brutalist sweep caught FUNDRAISER missing from the
+		// initial union — donations.ts:622 inserts it directly.
+		type: v.union(
+			v.literal('LETTER'),
+			v.literal('EVENT'),
+			v.literal('FORM'),
+			v.literal('FUNDRAISER')
+		),
 		title: v.string(),
 		body: v.optional(v.string()),
-		status: v.string(), // 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETE'
+		status: v.union(
+			v.literal('DRAFT'),
+			v.literal('ACTIVE'),
+			v.literal('PAUSED'),
+			v.literal('COMPLETE')
+		),
 
 		// Target resolution
 		targets: v.optional(v.any()),
 
-		// Template linkage
-		templateId: v.optional(v.string()),
+		// Template linkage. Migrated v.string() → v.id('templates') 2026-05-26.
+		// The writer at convex/campaigns.ts:351 always wrote a templates Id
+		// at runtime; the string typing forced campaigns.ts:117-119 to do
+		// "look up by slug index or iterate" instead of a direct
+		// `ctx.db.get(campaign.templateId)`. Existing rows pass v.id()
+		// validation because the prior cast preserved Id-format strings.
+		// Production migration: run backfill:normalizeCampaignTemplateIds
+		// (see convex/backfill.ts) to clear any pre-migration non-Id strings.
+		templateId: v.optional(v.id('templates')),
 
 		// Debate market
 		debateEnabled: v.boolean(),
@@ -1635,6 +1748,14 @@ export default defineSchema({
 		// How the message was composed: 'individual' | 'shared' | 'edited'
 		compositionMode: v.optional(v.string()),
 
+		// Shadow Atlas root version at action-time. Used by the verification
+		// packet to compute drift counts when the atlas rotates — actions
+		// stamped with the previous version aren't invalidated, but their
+		// proportion of the campaign's total is surfaced as `driftCount` /
+		// `driftPct` so consumers can see how much of a campaign predates a
+		// rotation. Optional because pre-T10-9 rows didn't carry it.
+		atlasVersion: v.optional(v.string()),
+
 		// Agentic delegation
 		delegated: v.boolean(),
 		delegationGrantId: v.optional(v.string()),
@@ -1690,17 +1811,26 @@ export default defineSchema({
 
 	emailBlasts: defineTable({
 		orgId: v.id('organizations'),
-		campaignId: v.optional(v.string()),
+		// Migrated from v.optional(v.string()) on 2026-05-25 — the field has
+		// always held a campaigns Id at runtime (compose route casts via
+		// `as Id<'campaigns'>` after validating via campaigns.get); the
+		// string typing was a legacy API-boundary artifact. Stripe is still
+		// test-mode in Convex prod so no live blast traffic exists to
+		// migrate; any pre-2026-05-25 dev rows must be cleared with
+		// `npx convex run seed:clearSeed` before pushing schema.
+		campaignId: v.optional(v.id('campaigns')),
 
 		subject: v.string(),
 		bodyHtml: v.string(),
 		fromName: v.string(),
 		fromEmail: v.string(),
 
-		status: v.string(), // 'draft' | 'sending' | 'sent' | 'failed'
+		status: emailBlastStatus,
 
-		// Recipient targeting
-		recipientFilter: v.optional(v.any()),
+		// Recipient targeting. Closed shape (see convex/_validators.ts) so a
+		// malformed write cannot widen a targeted blast to the entire
+		// subscribed cohort — the failure mode the prior `v.any()` allowed.
+		recipientFilter: v.optional(recipientFilterValidator),
 		totalRecipients: v.number(),
 
 		// Verification context
@@ -1793,16 +1923,40 @@ export default defineSchema({
 		userId: v.optional(v.id('users')),
 		orgId: v.optional(v.id('organizations')),
 
-		plan: v.string(), // 'pro' | 'org'
+		// Plan slug — canonical values at src/lib/server/billing/plans.ts.
+		// Tightened from v.string() to a closed union 2026-05-26 to catch
+		// silent free-tier downgrade at write time (the read-side fallback
+		// `PLANS[plan] ?? PLANS.free` at convex/subscriptions.ts:134
+		// degrades gracefully but observability is poor — a writer that
+		// silently passes 'Organization' (capitalized) would never be
+		// noticed by ops). Adding a new tier requires editing this union
+		// + plans.ts in lockstep; that's the right friction.
+		plan: v.union(
+			v.literal('free'),
+			v.literal('starter'),
+			v.literal('organization'),
+			v.literal('coalition')
+		),
 		planDescription: v.optional(v.string()),
 		priceCents: v.number(),
 
-		status: v.string(), // 'active' | 'past_due' | 'canceled' | 'trialing'
+		// Tightened in the same C12 sweep as `plan`. Brutalist caught the
+		// asymmetry — args validators in subscriptions.ts had been
+		// updated to use the union but the schema fields were left at
+		// v.string() with comment-as-enum, defeating the closure.
+		status: v.union(
+			v.literal('active'),
+			v.literal('past_due'),
+			v.literal('canceled'),
+			v.literal('trialing')
+		),
 		currentPeriodStart: v.number(),
 		currentPeriodEnd: v.number(),
 
-		// Payment method
-		paymentMethod: v.string(), // 'stripe' | 'crypto'
+		paymentMethod: v.union(
+			v.literal('stripe'),
+			v.literal('crypto')
+		),
 
 		// Stripe
 		stripeSubscriptionId: v.optional(v.string()),
@@ -1856,7 +2010,11 @@ export default defineSchema({
 
 		title: v.string(),
 		description: v.optional(v.string()),
-		eventType: v.string(), // 'IN_PERSON' | 'VIRTUAL' | 'HYBRID'
+		eventType: v.union(
+			v.literal('IN_PERSON'),
+			v.literal('VIRTUAL'),
+			v.literal('HYBRID')
+		),
 
 		// When
 		startAt: v.number(),
@@ -1888,7 +2046,12 @@ export default defineSchema({
 		checkinCode: v.optional(v.string()),
 		requireVerification: v.boolean(),
 
-		status: v.string(), // 'DRAFT' | 'PUBLISHED' | 'CANCELLED' | 'COMPLETED'
+		status: v.union(
+			v.literal('DRAFT'),
+			v.literal('PUBLISHED'),
+			v.literal('CANCELLED'),
+			v.literal('COMPLETED')
+		),
 
 		updatedAt: v.number()
 	})
@@ -1905,7 +2068,7 @@ export default defineSchema({
 		encryptedEmail: v.string(),
 		emailHash: v.string(),
 		encryptedRsvpName: v.optional(v.string()),
-		status: v.string(), // 'GOING' | 'MAYBE' | 'NOT_GOING' | 'WAITLISTED'
+		status: eventRsvpStatus,
 		guestCount: v.number(),
 
 		// Verification context
@@ -2049,14 +2212,17 @@ export default defineSchema({
 		body: v.string(),
 		fromNumber: v.string(),
 
-		recipientFilter: v.optional(v.any()),
+		// Closed-shape per smsRecipientFilterValidator. Differs from
+		// emailBlasts.recipientFilter — SMS uses tags/segments/excludeTags
+		// matching the zod schema at src/routes/api/org/[slug]/sms/+server.ts:17-21.
+		recipientFilter: v.optional(smsRecipientFilterValidator),
 		totalRecipients: v.number(),
 
 		sentCount: v.number(),
 		deliveredCount: v.number(),
 		failedCount: v.number(),
 
-		status: v.string(), // 'draft' | 'sending' | 'sent' | 'failed'
+		status: smsBlastStatus,
 
 		sentAt: v.optional(v.number()),
 		updatedAt: v.number()
@@ -2071,7 +2237,7 @@ export default defineSchema({
 		toHash: v.optional(v.string()),
 		body: v.string(),
 		twilioSid: v.optional(v.string()),
-		status: v.string(), // 'queued' | 'sent' | 'delivered' | 'failed'
+		status: smsMessageStatus,
 		errorCode: v.optional(v.string())
 	})
 		.index('by_blastId', ['blastId'])
@@ -2221,7 +2387,7 @@ export default defineSchema({
 		proofDeliveredAt: v.number(),
 		proofVerifiedAt: v.optional(v.number()),
 		actionOccurredAt: v.optional(v.number()),
-		causalityClass: v.string(), // 'pending' | etc.
+		causalityClass: accountabilityCausalityClass,
 
 		// Decision-maker action
 		dmAction: v.optional(v.string()),
@@ -2232,16 +2398,26 @@ export default defineSchema({
 		anchorCid: v.optional(v.string()),
 		anchorRoot: v.optional(v.string()),
 
-		// Metadata
-		status: v.string(), // 'pending' | etc.
+		// Metadata. Left v.string() because no writer exists in the
+		// codebase yet — accountabilityReceipts is read-side-only
+		// today, populated by external/offline pipelines. The 'pending
+		// | etc.' comment was honest about the unknown; replacing it
+		// with a union would be premature guessing. Tighten when the
+		// writer lands and enumerates the value set.
+		status: v.string(),
 		updatedAt: v.number(),
 
 		// ── FLATTENED: ReportResponse[] ──
-		// Decision-maker responses (was separate report_response table)
+		// Decision-maker responses (was separate report_response table).
+		// type closed-shape per accountabilityResponseType — sources at
+		// convex/campaigns.ts:536 (writer) + convex/legislation.ts:2667
+		// (reader). Brutalist sweep caught the earlier "no writer in
+		// this repo" comment as factually wrong — campaigns.recordResponse
+		// is the in-tree writer.
 		responses: v.optional(
 			v.array(
 				v.object({
-					type: v.string(), // 'opened' | 'clicked_verify' | 'replied' | etc.
+					type: accountabilityResponseType,
 					detail: v.optional(v.string()),
 					confidence: v.string(),
 					occurredAt: v.number()
@@ -2566,5 +2742,67 @@ export default defineSchema({
 		updatedAt: v.number()
 	})
 		.index('by_phoneNumber', ['phoneNumber'])
+		.index('by_orgId', ['orgId']),
+
+	// ===========================================================================
+	// WEBHOOKS — outbound event subscriptions for org developer integrations
+	// ===========================================================================
+
+	// Org-managed webhook subscriptions. Each row is one endpoint URL plus
+	// the events it wants to receive. signingSecret + signingSecretPrevious
+	// follow the dual-rotation pattern used elsewhere (UNSUBSCRIBE_SECRET,
+	// BLAST_DISPATCH_SECRET) — on rotation, set secret to the new value and
+	// move existing to secretPrevious. Receivers verify either is valid for
+	// one rotation window then drop the previous.
+	// failureCount is a running tally; orgWebhookDeliveries dead-letter
+	// handling can trip a "disable after N failures" safety circuit.
+	orgWebhooks: defineTable({
+		orgId: v.id('organizations'),
+		url: v.string(),
+		events: v.array(v.string()), // event taxonomy: supporter.created, campaign_action.created, donation.completed, etc.
+		signingSecret: v.string(), // HMAC-SHA256 secret used to sign payload
+		signingSecretPrevious: v.optional(v.string()), // dual-rotation window
+		enabled: v.boolean(),
+		description: v.optional(v.string()),
+		createdAt: v.number(),
+		lastDeliveredAt: v.optional(v.number()),
+		failureCount: v.number() // running count of consecutive failures
+	})
 		.index('by_orgId', ['orgId'])
+		.index('by_orgId_enabled', ['orgId', 'enabled']),
+
+	// Per-attempt delivery log for orgWebhooks. attempt 1..5; nextRetryAt
+	// drives cron pickup for retries with 2^attempt*60s backoff. isDead is
+	// set when attempts are exhausted — at that point the parent webhook is
+	// auto-disabled and the org notified via email. Per-org index supports
+	// the delivery-history UI; nextRetryAt index supports the retry cron's
+	// "due now" query; isDead index supports cleanup + dashboards.
+	orgWebhookDeliveries: defineTable({
+		webhookId: v.id('orgWebhooks'),
+		orgId: v.id('organizations'),
+		event: v.string(),
+		payload: v.string(), // JSON-serialized event payload (signed)
+		statusCode: v.optional(v.number()), // HTTP response code from receiver
+		attempt: v.number(),
+		deliveredAt: v.optional(v.number()), // set on 2xx response
+		nextRetryAt: v.optional(v.number()), // set on retry-able failure
+		errorMessage: v.optional(v.string()),
+		isDead: v.boolean()
+	})
+		.index('by_webhookId', ['webhookId'])
+		.index('by_orgId', ['orgId'])
+		.index('by_nextRetryAt', ['nextRetryAt'])
+		.index('by_isDead', ['isDead']),
+
+	// Lightweight event notification table — shared by webhook dispatch
+	// (T9-3) and real-time SSE subscriptions v1 (T9-7). Each row is one
+	// emitted event for one org. Polling consumers (SSE handler) query
+	// by_orgId_emittedAt with a since-cursor for cursor-paginated reads.
+	// Retain 7 days; daily cron purges older rows.
+	orgEvents: defineTable({
+		orgId: v.id('organizations'),
+		event: v.string(),
+		payload: v.string(), // JSON-serialized event payload (same shape as webhook payload)
+		emittedAt: v.number()
+	}).index('by_orgId_emittedAt', ['orgId', 'emittedAt'])
 });

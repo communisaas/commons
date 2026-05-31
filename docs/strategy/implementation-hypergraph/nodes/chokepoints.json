@@ -1,0 +1,44 @@
+{
+  "chokepoints": [
+    {
+      "id": "CP-outbound-webhooks",
+      "target_task_id": "T9-3",
+      "name": "Outbound Webhooks",
+      "rationale": "Event-emission substrate that real-time subscriptions, reader-side notifications, and coalition aggregation triggers all read from. The orgEvents table the webhook system creates is shared infrastructure.",
+      "downstream_count": 5,
+      "downstream_task_ids": ["T7-1", "T8-8", "T9-6", "T9-7", "T6-9"],
+      "elapsed_time_dependency": "None — engineering-only, 3 days",
+      "wave": "W-2"
+    },
+    {
+      "id": "CP-mainnet-deployment",
+      "target_task_id": "T3-6+T5-5+T6-2",
+      "name": "Scroll Mainnet Deployment (Composite)",
+      "rationale": "DistrictRegistry + DebateMarket + SnapshotAnchor on Scroll Mainnet together. DeployScrollMainnet.s.sol has never been broadcast. Until mainnet ships, accountability anchoring is testnet-only, debate stake verification is $1 placeholder, mainnet DistrictRegistry is missing, and 5-year-survivable claims are aspirational.",
+      "downstream_count": 8,
+      "downstream_task_ids": ["T5-2-production", "T5-1-real-economics", "T5-6b", "T6-1-production", "T6-7", "T6-10", "T8-6", "T8-4b"],
+      "elapsed_time_dependency": "1-2 weeks engineering + 2-4 weeks elapsed (security audit completion, Safe multisig coordination, HonkVerifier pre-deployment, governance signing)",
+      "wave": "W-3"
+    },
+    {
+      "id": "CP-tee-nitro-enclave",
+      "target_task_id": "T5-3",
+      "name": "TEE Nitro Enclave Deployment",
+      "rationale": "Long-lead-time infra. NitroEnclaveResolver is wired stub; LocalConstituentResolver is active path. Without TEE, the 'AI panel verdicts are themselves verifiable' claim is positional only, and TEE-attested constituent resolution remains aspirational.",
+      "downstream_count": 3,
+      "downstream_task_ids": ["T5-4", "C-verification-substrate-honesty", "T8-attestation-completeness"],
+      "elapsed_time_dependency": "2-3 weeks elapsed (AWS Nitro account setup, EC2 provisioning, enclave build, PCR0 measurement, vsock proxy implementation, attestation document chain validation)",
+      "wave": "W-3"
+    },
+    {
+      "id": "CP-delegation-executor",
+      "target_task_id": "T4-1",
+      "name": "Delegation Executor + ZK Proof Attachment",
+      "rationale": "Agent-as-civic-actor with cryptographic provenance is the headline categorical differentiator. FEATURES.DELEGATION=false today. Convex CRUD is complete; no executor exists. Without it, Cluster 4 stays as 'we have some AI for org users' rather than 'AI on action with provenance.'",
+      "downstream_count": 7,
+      "downstream_task_ids": ["T4-2", "T4-3", "T4-4", "T4-5", "T4-6", "T4-9", "T8-1b"],
+      "elapsed_time_dependency": "3-4 weeks for executor + 1.5-2 weeks for proof attachment via draftedMessages table",
+      "wave": "W-3"
+    }
+  ]
+}

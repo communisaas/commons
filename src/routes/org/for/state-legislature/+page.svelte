@@ -29,6 +29,13 @@
 		name="description"
 		content="State-leg intake is fragmented. In 24 states, your testimony is read by one session aide. Commons produces a verification packet the aide can route — identity-proven, district-matched, authored."
 	/>
+	<meta property="og:type" content="website" />
+	<meta property="og:url" content="https://commons.email/org/for/state-legislature" />
+	<meta property="og:title" content="Commons for state-level advocacy" />
+	<meta property="og:description" content="Verified district reach. Real receipts your committee can verify." />
+	<meta property="og:image" content="https://commons.email/og/org-for/state-legislature" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:image" content="https://commons.email/og/org-for/state-legislature" />
 </svelte:head>
 
 <div class="leg-page">

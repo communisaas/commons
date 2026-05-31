@@ -2,6 +2,12 @@
 
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
+// node:crypto is provided by the Convex Node runtime (this file is "use node").
+// Two typecheckers see this file: Convex's (convex/tsconfig.json, V8-default, no
+// @types/node) can't resolve node builtins, but svelte-check's root tsconfig can.
+// So this must be @ts-ignore, not @ts-expect-error — the latter would itself error
+// as "unused" under the root tsconfig where the import already resolves.
+// @ts-ignore -- node builtin types absent under convex tsconfig, present under root
 import { createVerify, X509Certificate } from "node:crypto";
 import { validateCertURL, buildSigningString } from "./_snsVerifyHelpers";
 

@@ -23,6 +23,9 @@ const basePacket: VerificationPacket = {
 	],
 	cells: null,
 	temporal: null,
+	driftCount: null,
+	driftPct: null,
+	debate: null,
 	lastUpdated: '2026-02-15T00:00:00Z'
 };
 

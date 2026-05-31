@@ -300,7 +300,11 @@
 					{reportLoading ? 'Generating...' : 'Generate Coalition Report'}
 				</button>
 			</div>
-			<CoalitionReport stats={reportStats} loading={reportLoading} />
+			<CoalitionReport
+				stats={reportStats}
+				loading={reportLoading}
+				brandingAccent={data.org?.brandingAccent ?? null}
+			/>
 		</div>
 
 		<!-- Membership Admin (collapsed) -->

@@ -36,6 +36,8 @@ import { captureToSentry } from './_sentry';
 // Break circular type inference between the action and the query in the same
 // file (mirrors the revocations.ts pattern). Calling `internal.observability.*`
 // from monitorBoundaryCellRate would create a self-referential type.
+
+declare const process: { env: Record<string, string | undefined> };
 const getBoundaryCellRate24hRef = makeFunctionReference<'query'>(
 	'observability:getBoundaryCellRate24h',
 ) as unknown as FunctionReference<

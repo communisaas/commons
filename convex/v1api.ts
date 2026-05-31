@@ -8,6 +8,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { campaignType } from "./_validators";
 import { resolveDmAndCanonical } from "./legislation";
 import { requireInternalSecret } from "./_internalAuth";
 // PII returned as encrypted blobs — v1 API consumers decrypt with org key
@@ -557,9 +558,9 @@ export const createCampaign = mutation({
     _secret: v.string(),
     orgId: v.id("organizations"),
     title: v.string(),
-    type: v.string(),
+    type: campaignType,
     body: v.optional(v.string()),
-    templateId: v.optional(v.string()),
+    templateId: v.optional(v.id("templates")),
     targetJurisdiction: v.optional(v.string()),
     targetCountry: v.string(),
   },
@@ -1129,18 +1130,37 @@ export const getOrgForApiKey = query({
 // =============================================================================
 
 export const getDmScorecard = query({
-  args: { _secret: v.string(), identifier: v.string() },
-  handler: async (ctx, { _secret, identifier }) => {
+  args: {
+    _secret: v.string(),
+    identifier: v.string(),
+    // T6-8 — optional methodology pin. Without it, returns the latest
+    // methodology snapshots; with it, returns the requested version for
+    // backwards-compatible reads. Canonical changelog at
+    // docs/design/SCORECARD-METHODOLOGY-CHANGELOG.md.
+    methodologyVersion: v.optional(v.number()),
+  },
+  handler: async (ctx, { _secret, identifier, methodologyVersion }) => {
     requireInternalSecret(_secret);
     const resolved = await resolveDmAndCanonical(ctx, identifier);
     if (!resolved) return null;
     const { dm, canonicalSlug } = resolved;
 
-    const snapshots = await ctx.db
+    const rawSnapshots = await ctx.db
       .query("scorecardSnapshots")
       .withIndex("by_decisionMakerId", (q) => q.eq("decisionMakerId", dm._id))
       .order("desc")
-      .take(13);
+      .take(52); // wider take so the version filter still yields 13 results
+
+    // Default: take the most recent snapshot's methodology and stay
+    // consistent through the history window. Lets a consumer overlay v1 and
+    // v2 history by passing methodologyVersion explicitly per request.
+    const defaultVersion = rawSnapshots[0]?.methodologyVersion ?? null;
+    const targetVersion = methodologyVersion ?? defaultVersion;
+    const snapshots = targetVersion === null
+      ? rawSnapshots.slice(0, 13)
+      : rawSnapshots
+          .filter((s) => s.methodologyVersion === targetVersion)
+          .slice(0, 13);
 
     const latest = snapshots[0] ?? null;
     const history = snapshots.slice(1);
@@ -1470,5 +1490,390 @@ export const submitDelegationReview = mutation({
     });
 
     return { message: `Review ${decision}d` };
+  },
+});
+
+// =============================================================================
+// WEBHOOKS — outbound event subscriptions (T9-3, Cluster 3 Composability)
+// =============================================================================
+
+// Generate a cryptographically strong signing secret. 32 bytes = 256 bits
+// (matches HMAC-SHA256 key size) hex-encoded → 64-char string. Convex V8
+// has crypto.getRandomValues but not crypto.randomBytes.
+function generateSigningSecret(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// Allowed event names. Restricts what subscribers can claim to receive.
+// Adding a new event here ALSO requires the emit site to call queueEvent
+// with the matching string. Keep in sync with the dispatch in convex/orgWebhooks.ts.
+const ALLOWED_WEBHOOK_EVENTS = new Set([
+  "campaign_action.created",
+  "campaign.updated",
+  "supporter.created",
+  "supporter.updated",
+  "supporter.deleted",
+  "donation.completed",
+  "donation.refunded",
+  "event.rsvp_created",
+]);
+
+export const listWebhooks = query({
+  args: { _secret: v.string(), orgId: v.id("organizations") },
+  handler: async (ctx, { _secret, orgId }) => {
+    requireInternalSecret(_secret);
+    const hooks = await ctx.db
+      .query("orgWebhooks")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    // Never return signingSecret/signingSecretPrevious to API consumers
+    // after creation — the create endpoint returns it once, then it's
+    // server-only. Listing returns the metadata + URL + events only.
+    return hooks.map((h) => ({
+      id: h._id,
+      url: h.url,
+      events: h.events,
+      enabled: h.enabled,
+      description: h.description ?? null,
+      createdAt: h.createdAt,
+      lastDeliveredAt: h.lastDeliveredAt ?? null,
+      failureCount: h.failureCount,
+    }));
+  },
+});
+
+export const createWebhook = mutation({
+  args: {
+    _secret: v.string(),
+    orgId: v.id("organizations"),
+    url: v.string(),
+    events: v.array(v.string()),
+    description: v.optional(v.string()),
+  },
+  handler: async (ctx, { _secret, orgId, url, events, description }) => {
+    requireInternalSecret(_secret);
+
+    // Validate URL — must be https in prod (http allowed locally for testing).
+    // Use URL constructor for structural validation; reject non-http(s) schemes.
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return { error: "invalid_url" as const };
+    }
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return { error: "invalid_url_scheme" as const };
+    }
+
+    // Validate event names against allowlist
+    if (events.length === 0) return { error: "empty_events" as const };
+    for (const e of events) {
+      if (!ALLOWED_WEBHOOK_EVENTS.has(e)) {
+        return { error: "unknown_event" as const, event: e };
+      }
+    }
+
+    const signingSecret = generateSigningSecret();
+    const id = await ctx.db.insert("orgWebhooks", {
+      orgId,
+      url: parsed.toString(),
+      events,
+      signingSecret,
+      enabled: true,
+      description,
+      createdAt: Date.now(),
+      failureCount: 0,
+    });
+
+    // Return signingSecret EXACTLY ONCE — caller must persist it.
+    // Subsequent list/get endpoints do not return secrets.
+    return {
+      error: null,
+      webhook: {
+        id,
+        url: parsed.toString(),
+        events,
+        enabled: true,
+        description: description ?? null,
+        signingSecret, // ONE-TIME response field
+      },
+    };
+  },
+});
+
+export const getWebhook = query({
+  args: { _secret: v.string(), orgId: v.id("organizations"), webhookId: v.string() },
+  handler: async (ctx, { _secret, orgId, webhookId }) => {
+    requireInternalSecret(_secret);
+    const hooks = await ctx.db
+      .query("orgWebhooks")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    const h = hooks.find((x) => x._id === webhookId);
+    if (!h) return null;
+    return {
+      id: h._id,
+      url: h.url,
+      events: h.events,
+      enabled: h.enabled,
+      description: h.description ?? null,
+      createdAt: h.createdAt,
+      lastDeliveredAt: h.lastDeliveredAt ?? null,
+      failureCount: h.failureCount,
+    };
+  },
+});
+
+export const updateWebhook = mutation({
+  args: {
+    _secret: v.string(),
+    orgId: v.id("organizations"),
+    webhookId: v.string(),
+    url: v.optional(v.string()),
+    events: v.optional(v.array(v.string())),
+    enabled: v.optional(v.boolean()),
+    description: v.optional(v.string()),
+  },
+  handler: async (ctx, { _secret, orgId, webhookId, url, events, enabled, description }) => {
+    requireInternalSecret(_secret);
+    const hooks = await ctx.db
+      .query("orgWebhooks")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    const h = hooks.find((x) => x._id === webhookId);
+    if (!h) return { error: "not_found" as const };
+
+    const patch: Record<string, unknown> = {};
+
+    if (url !== undefined) {
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        return { error: "invalid_url" as const };
+      }
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        return { error: "invalid_url_scheme" as const };
+      }
+      patch.url = parsed.toString();
+    }
+
+    if (events !== undefined) {
+      if (events.length === 0) return { error: "empty_events" as const };
+      for (const e of events) {
+        if (!ALLOWED_WEBHOOK_EVENTS.has(e)) {
+          return { error: "unknown_event" as const, event: e };
+        }
+      }
+      patch.events = events;
+    }
+
+    if (enabled !== undefined) {
+      patch.enabled = enabled;
+      // Re-enabling a previously-disabled webhook resets the failureCount so
+      // the auto-disable circuit doesn't trip immediately on a single new failure.
+      if (enabled && !h.enabled) patch.failureCount = 0;
+    }
+
+    if (description !== undefined) patch.description = description;
+
+    await ctx.db.patch(h._id, patch);
+    const updated = await ctx.db.get(h._id);
+    if (!updated) return { error: "not_found" as const };
+    return {
+      error: null,
+      webhook: {
+        id: updated._id,
+        url: updated.url,
+        events: updated.events,
+        enabled: updated.enabled,
+        description: updated.description ?? null,
+      },
+    };
+  },
+});
+
+// Rotate the signing secret. Moves current secret to signingSecretPrevious
+// (rotation window) and generates a new active secret. Returns the new
+// secret ONCE — caller must update their verifier config. Receivers can
+// verify against either secret during the window; on next rotation the
+// previous is dropped.
+export const rotateWebhookSecret = mutation({
+  args: { _secret: v.string(), orgId: v.id("organizations"), webhookId: v.string() },
+  handler: async (ctx, { _secret, orgId, webhookId }) => {
+    requireInternalSecret(_secret);
+    const hooks = await ctx.db
+      .query("orgWebhooks")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    const h = hooks.find((x) => x._id === webhookId);
+    if (!h) return { error: "not_found" as const };
+
+    const newSecret = generateSigningSecret();
+    await ctx.db.patch(h._id, {
+      signingSecret: newSecret,
+      signingSecretPrevious: h.signingSecret, // current becomes previous
+    });
+    return { error: null, signingSecret: newSecret };
+  },
+});
+
+export const deleteWebhook = mutation({
+  args: { _secret: v.string(), orgId: v.id("organizations"), webhookId: v.string() },
+  handler: async (ctx, { _secret, orgId, webhookId }) => {
+    requireInternalSecret(_secret);
+    const hooks = await ctx.db
+      .query("orgWebhooks")
+      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+      .collect();
+    const h = hooks.find((x) => x._id === webhookId);
+    if (!h) return false;
+
+    // Delete delivery history first (no orphan rows)
+    const deliveries = await ctx.db
+      .query("orgWebhookDeliveries")
+      .withIndex("by_webhookId", (q) => q.eq("webhookId", h._id))
+      .collect();
+    for (const d of deliveries) {
+      await ctx.db.delete(d._id);
+    }
+
+    await ctx.db.delete(h._id);
+    return true;
+  },
+});
+
+// =============================================================================
+// ACTIVITY FEED (T9-6) — public API surface mirroring the internal feed.
+// =============================================================================
+
+export const listActivityFeed = query({
+  args: {
+    _secret: v.string(),
+    orgId: v.id("organizations"),
+    limit: v.number(),
+    cursor: v.optional(v.string()),
+    decisionMakerId: v.optional(v.id("decisionMakers")),
+    activityType: v.optional(v.string()), // 'vote' | 'sponsor' | 'receipt'
+  },
+  handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
+
+    // Resolve scope: a specific DM if passed, else all followed DMs.
+    let dmIds: Id<"decisionMakers">[];
+    if (args.decisionMakerId) {
+      dmIds = [args.decisionMakerId];
+    } else {
+      const follows = await ctx.db
+        .query("orgDmFollows")
+        .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+        .collect();
+      dmIds = follows.map((f) => f.decisionMakerId);
+    }
+
+    if (dmIds.length === 0) return { items: [], nextCursor: null, total: 0 };
+
+    type FeedItem = {
+      type: "vote" | "sponsor" | "receipt";
+      id: string;
+      date: number;
+      decisionMakerId: string;
+      [k: string]: unknown;
+    };
+    const items: FeedItem[] = [];
+
+    for (const dmId of dmIds) {
+      if (args.activityType !== "receipt") {
+        const actions = await ctx.db
+          .query("legislativeActions")
+          .withIndex("by_decisionMakerId_occurredAt", (q) =>
+            q.eq("decisionMakerId", dmId),
+          )
+          .order("desc")
+          .take(50);
+        for (const a of actions) {
+          const isVote = a.action.startsWith("voted_") || a.action === "abstained";
+          const t: "vote" | "sponsor" = isVote ? "vote" : "sponsor";
+          if (args.activityType && args.activityType !== t) continue;
+          items.push({
+            type: t,
+            id: a._id,
+            date: a.occurredAt,
+            decisionMakerId: dmId,
+            billId: a.billId,
+            value: a.action,
+            detail: a.detail ?? null,
+          });
+        }
+      }
+      if (args.activityType !== "vote" && args.activityType !== "sponsor") {
+        const receipts = await ctx.db
+          .query("accountabilityReceipts")
+          .withIndex("by_decisionMakerId_proofDeliveredAt", (q) =>
+            q.eq("decisionMakerId", dmId),
+          )
+          .order("desc")
+          .take(50);
+        for (const r of receipts) {
+          items.push({
+            type: "receipt",
+            id: r._id,
+            date: r.proofDeliveredAt ?? r._creationTime,
+            decisionMakerId: dmId,
+            billId: r.billId,
+            proofWeight: r.proofWeight ?? null,
+          });
+        }
+      }
+    }
+
+    // Sort desc by date; then cursor + limit.
+    items.sort((a, b) => b.date - a.date);
+    let startIdx = 0;
+    if (args.cursor) {
+      const idx = items.findIndex((i) => i.id === args.cursor);
+      if (idx >= 0) startIdx = idx + 1;
+    }
+    const page = items.slice(startIdx, startIdx + args.limit + 1);
+    const hasMore = page.length > args.limit;
+    const trimmed = page.slice(0, args.limit);
+    const nextCursor =
+      hasMore && trimmed.length > 0 ? trimmed[trimmed.length - 1].id : null;
+    return { items: trimmed, nextCursor, total: items.length };
+  },
+});
+
+/**
+ * Poll the orgEvents stream for one org. Used by the SSE endpoint to fan out
+ * new events to subscribers. Returns events strictly newer than the `since`
+ * cursor (ms epoch). T9-7.
+ */
+export const pollOrgEvents = query({
+  args: {
+    _secret: v.string(),
+    orgId: v.id("organizations"),
+    sinceMs: v.number(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
+    const limit = Math.min(args.limit ?? 100, 500);
+    const events = await ctx.db
+      .query("orgEvents")
+      .withIndex("by_orgId_emittedAt", (q) =>
+        q.eq("orgId", args.orgId).gt("emittedAt", args.sinceMs),
+      )
+      .order("asc")
+      .take(limit);
+    return events.map((e) => ({
+      id: e._id,
+      event: e.event,
+      payload: e.payload,
+      emittedAt: e.emittedAt,
+    }));
   },
 });

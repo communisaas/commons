@@ -2,6 +2,8 @@ import type { PageServerLoad } from './$types';
 
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { computeVerificationPacketCached } from '$lib/server/verification-packet';
+import type { Id } from '$convex/_generated/dataModel';
 
 function asString(value: unknown, fallback = ''): string {
 	return typeof value === 'string' ? value : fallback;
@@ -15,10 +17,13 @@ function asIso(value: unknown): string {
 	return typeof value === 'number' ? new Date(value).toISOString() : asString(value, new Date().toISOString());
 }
 
-export const load: PageServerLoad = async ({ parent }) => {
+export const load: PageServerLoad = async ({ parent, platform }) => {
 	const { org } = await parent();
 
-	const dashboard = await serverQuery(api.organizations.getDashboard, { slug: org.slug });
+	const [dashboard, dashboardStats] = await Promise.all([
+		serverQuery(api.organizations.getDashboard, { slug: org.slug }),
+		serverQuery(api.organizations.getDashboardStats, { slug: org.slug })
+	]);
 
 	// Map Convex denormalized payload → shape +page.svelte expects.
 	// Fields that Convex doesn't carry yet get safe defaults so the
@@ -36,6 +41,28 @@ export const load: PageServerLoad = async ({ parent }) => {
 	const activeCampaignCount = campaigns.filter((c) => c.status === 'ACTIVE').length;
 	const topCampaignId = (campaigns.find((c) => c.status === 'ACTIVE') || campaigns[0])?.id ?? null;
 
+	// Verification packet for the org's top campaign. Null on new orgs (no campaigns
+	// yet) — page renders the empty state. KV cache is 30s; reuses the per-campaign
+	// computeVerificationPacketCached path so the dashboard sees the same numbers
+	// as the campaign report.
+	const packet =
+		topCampaignId && dashboard.org?._id
+			? await computeVerificationPacketCached(
+					topCampaignId as Id<'campaigns'>,
+					dashboard.org._id as Id<'organizations'>,
+					(platform as { env?: { KV?: unknown } })?.env?.KV as
+						| {
+								get(key: string): Promise<string | null>;
+								put(
+									key: string,
+									value: string,
+									options?: { expirationTtl?: number }
+								): Promise<void>;
+						  }
+						| undefined
+				).catch(() => null)
+			: null;
+
 	// Use real member data from Convex getDashboard
 	const membersFromConvex = (dashboard.members ?? []).map((m: Record<string, unknown>) => ({
 		id: m._id,
@@ -47,19 +74,8 @@ export const load: PageServerLoad = async ({ parent }) => {
 	}));
 
 	return {
-		// TODO: enhance convex/organizations.getDashboard to include funnel detail (postalResolved, identityVerified, districtVerified)
-		funnel: {
-			imported: dashboard.stats?.supporters ?? 0,
-			postalResolved: 0,
-			identityVerified: 0,
-			districtVerified: 0
-		},
-		// TODO: enhance convex/organizations.getDashboard to include tier distribution
-		tiers: [0, 1, 2, 3, 4].map(tier => ({
-			tier,
-			label: ['New', 'Active', 'Established', 'Veteran', 'Pillar'][tier],
-			count: 0
-		})),
+		funnel: dashboardStats.funnel,
+		tiers: dashboardStats.tiers,
 		campaigns,
 		topCampaignId,
 		stats: {
@@ -79,8 +95,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 			complained: 0,
 			total: dashboard.stats?.supporters ?? 0
 		},
-		// TODO: enhance convex/organizations.getDashboard to include verification packet
-		packet: null,
+		packet,
 		recentActivity: (dashboard.recentSupporters ?? []).map((s: Record<string, unknown>) => ({
 			type: 'signup' as const,
 			id: s._id,
@@ -94,8 +109,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 		})),
 		// TODO: enhance convex/organizations.getDashboard to include endorsed templates
 		endorsedTemplates: [],
-		// TODO: enhance convex/organizations.getDashboard to include growth (thisWeek/lastWeek verified actions)
-		growth: { thisWeek: 0, lastWeek: 0 },
+		growth: dashboardStats.growth,
 		encryptedBillingEmail: dashboard.encryptedBillingEmail ?? null,
 		onboardingState: {
 			hasDescription: dashboard.onboardingState?.hasDescription ?? false,

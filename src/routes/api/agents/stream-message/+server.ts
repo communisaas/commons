@@ -27,7 +27,8 @@ import {
 	rateLimitResponse,
 	addRateLimitHeaders,
 	getUserContext,
-	logLLMOperation
+	logLLMOperation,
+	computeCostUsd
 } from '$lib/server/llm-cost-protection';
 import type { DecisionMaker } from '$lib/core/agents';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
@@ -36,6 +37,19 @@ import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { EvaluatedSource } from '$lib/core/agents/types';
 import { encryptMessageJobResult } from '$lib/server/message-job-encryption';
+import { traceStart, traceEnd, traceEvent } from '$lib/server/agent-trace';
+
+const TRACE_ENDPOINT = 'message-generation';
+
+/**
+ * Truncate a stack trace to the first 20 frames, joined back into a string.
+ * Keeps the trace replay-useful without exploding the payload on deep
+ * V8 stacks.
+ */
+function truncatedStack(err: unknown): string | undefined {
+	if (!(err instanceof Error) || !err.stack) return undefined;
+	return err.stack.split('\n').slice(0, 20).join('\n');
+}
 
 /** 72-hour cache TTL for template source cache */
 const SOURCE_CACHE_TTL_MS = 72 * 60 * 60 * 1000;
@@ -162,6 +176,31 @@ export const POST: RequestHandler = async (event) => {
 		geographicScopeType: body.geographic_scope?.type || null
 	});
 
+	// Emit trace.start with the FULL input snapshot. Privacy posture: TTL
+	// (default 7d) + `_secret`-gated reads carry the privacy load; full
+	// capture is required for replay.
+	traceStart(traceId, TRACE_ENDPOINT, session.userId, {
+		inputHash: body.input_hash ?? null,
+		templateId: body.template_id ?? null,
+		usesRecoverableJob,
+		hasRecoveryKey: Boolean(body.recovery_public_key_jwk),
+		subjectLine: body.subject_line,
+		coreMessage: body.core_message,
+		topics: body.topics ?? [],
+		decisionMakers: body.decision_makers ?? [],
+		voiceSample: body.voice_sample ?? null,
+		rawInput: body.raw_input ?? null,
+		geographicScope: body.geographic_scope ?? null,
+		sizes: {
+			subjectLength: body.subject_line.length,
+			coreMessageLength: body.core_message.length,
+			topicCount: (body.topics ?? []).length,
+			decisionMakerCount: (body.decision_makers ?? []).length,
+			voiceSampleLength: (body.voice_sample ?? '').length,
+			rawInputLength: (body.raw_input ?? '').length
+		}
+	});
+
 	// Prompt injection detection
 	// Content includes AI-refined text (core_message, voice_sample) which can contain
 	// meta-phrasing like "The user is demanding..." that triggers false positives.
@@ -178,10 +217,28 @@ export const POST: RequestHandler = async (event) => {
 
 	const injectionCheck = await moderatePromptOnly(contentToCheck, 0.8);
 
+	traceEvent(traceId, TRACE_ENDPOINT, 'prompt-injection', {
+		score: injectionCheck.score,
+		threshold: injectionCheck.threshold,
+		safe: injectionCheck.safe,
+		contentLength: contentToCheck.length
+	});
+
 	if (!injectionCheck.safe) {
 		console.log('[stream-message] Prompt injection detected:', {
 			score: injectionCheck.score.toFixed(4),
 			threshold: injectionCheck.threshold
+		});
+
+		traceEvent(traceId, TRACE_ENDPOINT, 'error', {
+			phase: 'prompt-injection',
+			code: 'PROMPT_INJECTION_DETECTED',
+			score: injectionCheck.score,
+			threshold: injectionCheck.threshold
+		});
+		traceEnd(traceId, TRACE_ENDPOINT, false, Date.now() - startTime, {
+			finalPhase: 'prompt-injection',
+			errorCode: 'PROMPT_INJECTION_DETECTED'
 		});
 
 		return new Response(
@@ -223,6 +280,15 @@ export const POST: RequestHandler = async (event) => {
 			messageJobCreated = start.created;
 		} catch (jobError) {
 			console.error('[stream-message] Message job start failed:', jobError);
+			traceEvent(traceId, TRACE_ENDPOINT, 'error', {
+				phase: 'message-job-start',
+				errorName: jobError instanceof Error ? jobError.name : 'unknown',
+				errorMessage: jobError instanceof Error ? jobError.message : String(jobError),
+				stack: truncatedStack(jobError)
+			});
+			traceEnd(traceId, TRACE_ENDPOINT, false, Date.now() - startTime, {
+				finalPhase: 'message-job-start'
+			});
 			return new Response(JSON.stringify({ error: 'Could not start message generation job' }), {
 				status: 500,
 				headers: { 'Content-Type': 'application/json' }
@@ -310,6 +376,36 @@ export const POST: RequestHandler = async (event) => {
 					templateId: body.template_id,
 					sourceCount: verifiedSources?.length ?? 0
 				});
+
+				traceEvent(traceId, TRACE_ENDPOINT, 'source-cache', {
+					templateId: body.template_id,
+					cacheHit,
+					sourceCount: verifiedSources?.length ?? 0,
+					// Capture URLs/titles explicitly when the cache hits so a
+					// cache-served trace can be replayed without parsing the
+					// prompt block in `message-write`.
+					sources: cacheHit
+						? (verifiedSources ?? []).map((s) => ({
+								num: s.num,
+								title: s.title,
+								url: s.url,
+								type: s.type
+							}))
+						: []
+				});
+
+				// When the cache hits, source-discovery is bypassed entirely
+				// (no source-search / source-fetch / source-evaluation events
+				// will fire). Emit an explicit skip so an operator reading
+				// the trace doesn't suspect data loss between source-cache
+				// and message-write.
+				if (cacheHit) {
+					traceEvent(traceId, TRACE_ENDPOINT, 'source-discovery-skipped', {
+						reason: 'cache-hit',
+						templateId: body.template_id,
+						sourceCount: verifiedSources?.length ?? 0
+					});
+				}
 			}
 
 			const result = await generateMessage({
@@ -400,6 +496,12 @@ export const POST: RequestHandler = async (event) => {
 			});
 		} catch (error) {
 			console.error('[stream-message] Generation failed:', error);
+			traceEvent(traceId, TRACE_ENDPOINT, 'error', {
+				phase: 'generation',
+				errorName: error instanceof Error ? error.name : 'unknown',
+				errorMessage: error instanceof Error ? error.message : String(error),
+				stack: truncatedStack(error)
+			});
 			if (messageJob) {
 				await serverMutation(api.messageJobs.fail, {
 					jobId: messageJob.jobId,
@@ -409,6 +511,29 @@ export const POST: RequestHandler = async (event) => {
 			}
 			emitter.error(error instanceof Error ? error.message : 'Generation failed');
 		} finally {
+			// trace.end MUST fire on every exit from generationTask — success,
+			// error, or short-circuit return from the recoverable-job branch.
+			// logLLMOperation also fires traceCompletion for the cost record;
+			// the two events coexist (different eventTypes). Hoist costUsd to
+			// the top-level column so `recentByEndpoint` summaries surface it
+			// without joining against the completion event.
+			const finalBreakdown = computeCostUsd(resultTokenUsage, resultExternalCounts);
+			traceEnd(
+				traceId,
+				TRACE_ENDPOINT,
+				streamSuccess,
+				Date.now() - startTime,
+				{
+					finalPhase: streamSuccess ? 'completed' : 'error',
+					hasRecoverableJob: Boolean(messageJob),
+					inputTokens: resultTokenUsage?.promptTokens,
+					outputTokens: resultTokenUsage?.candidatesTokens,
+					thoughtsTokens: resultTokenUsage?.thoughtsTokens,
+					totalTokens: resultTokenUsage?.totalTokens,
+					externalCounts: resultExternalCounts
+				},
+				finalBreakdown?.totalCostUsd
+			);
 			logLLMOperation(
 				'message-generation',
 				userContext,

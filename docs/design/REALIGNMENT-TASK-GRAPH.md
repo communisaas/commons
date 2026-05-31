@@ -196,5 +196,15 @@ CA/GB/AU country resolvers (currently stubs).
 
 > Planning-residue scrub completed 2026-05-11: source files + tests now speak from engineering only — no Cycle/F-NN/brutalist references remain in `convex/`, `src/`, or `tests/` across commons + voter-protocol.
 
+### Cross-org reputation aggregation (T7-10, 2026-05-28)
+
+**Decision:** Cross-org reputation is computed app-layer at query time, not via a per-network Merkle subtree. The voter-protocol Tree 3 (engagement/reputation) is **protocol-global** — each user contributes once across all orgs and networks.
+
+**Why not per-network subtree:**
+- The ZK circuit verifies engagement membership against a single root. A per-network subtree would either require multi-root verification (circuit redesign) or per-network circuit instances (each org issues its own deployment) — both break the "one identity, one circuit, any campaign" invariant that the chunked atlas + revocation registry rely on.
+- Per-network roots fork the dedup story: a user with active engagement in two coalitions would need separate nullifiers per network, defeating the global nullifier privacy guarantee.
+
+**Path forward:** T7-3 (coalition aggregation API) is the correct surface — it computes cross-org metrics from app-layer joins on `campaignActions` keyed by `users.identityCommitment`. The query is plan-quota-bounded, not crypto-bound.
+
 
 *Maintained 2026-05-04 → present. See also `memory/design_realignment_2026_05.md` and `voter-protocol/specs/CRYPTOGRAPHY-SPEC.md`.*

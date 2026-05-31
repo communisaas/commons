@@ -147,7 +147,13 @@
 				aria-label={firstName ? `Account menu for ${firstName}` : 'Account menu'}
 			>
 				{#if user.picture}
-					<img src={user.picture} alt="" class="ambient-user-avatar" />
+					<img
+						src={user.picture}
+						crossorigin="anonymous"
+						referrerpolicy="no-referrer"
+						alt=""
+						class="ambient-user-avatar"
+					/>
 				{:else if initials}
 					<div class="ambient-user-avatar ambient-user-avatar--fallback">
 						{initials}
@@ -177,7 +183,13 @@
 								onclick={(e) => handleOrgClick(e, org.orgSlug)}
 							>
 								{#if org.orgAvatar}
-									<img src={org.orgAvatar} alt="" class="ambient-org-avatar" />
+									<img
+										src={org.orgAvatar}
+										crossorigin="anonymous"
+										referrerpolicy="no-referrer"
+										alt=""
+										class="ambient-org-avatar"
+									/>
 								{:else}
 									<div class="ambient-org-avatar ambient-org-avatar--fallback">
 										{org.orgName.charAt(0).toUpperCase()}

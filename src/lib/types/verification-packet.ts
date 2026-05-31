@@ -130,9 +130,37 @@ export interface VerificationPacket {
 	/** Hourly action bins — the temporal rhythm that entropy/velocity compress. */
 	temporal: TemporalField | null;
 
+	// ── Atlas drift (T10-9) ──
+
+	/** Count of actions whose atlasVersion does not match the current atlas root.
+	 *  Null when no actions carry atlasVersion (pre-T10-9 rows) or when there's
+	 *  no signal to compare against. */
+	driftCount: number | null;
+	/** driftCount / total as a percentage (0-100), or null when driftCount is null. */
+	driftPct: number | null;
+
+	// ── Debate market (T5-10) — present only when campaign has a linked debate ──
+
+	debate: DebateMarketSnapshot | null;
+
 	// ── Metadata ──
 
 	lastUpdated: string;
+}
+
+export interface DebateMarketSnapshot {
+	/** 'support' | 'oppose' | 'neutral' — winning position from AI panel + market-weighted score */
+	marketPosition: string;
+	/** Total tokens staked across all arguments. Stringified bigint for JSON safety. */
+	totalStake: string;
+	/** Highest weightedScore on any single argument. Stringified bigint. */
+	topArgumentScore: string;
+	/** AI panel consensus score (0-1) when resolution computed; null pre-resolution. */
+	aiPanelConsensus: number | null;
+	/** K-anonymized participant count (null if below floor). */
+	participantCount: number | null;
+	/** SHA-256 over the resolution payload — included in attestation preimage. */
+	resolutionHash: string | null;
 }
 
 // ── Subset types for components that only need audit metrics ──

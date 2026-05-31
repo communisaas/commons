@@ -111,6 +111,35 @@ function matchCondition(
       console.warn(`[segments.matchCondition] unknown dateRange operator='${cond.operator}' — matching nothing`);
       return false;
     }
+    case "postalCode": {
+      // Case-insensitive prefix/exact match across postal formats (UK uses
+      // letters, US uses digits). Server normalizes via toUpperCase since
+      // postal codes are ASCII and case is not semantically meaningful.
+      const target = String(cond.value ?? "").trim().toUpperCase();
+      const actual = (supporter.postalCode ?? "").trim().toUpperCase();
+      if (!target || !actual) return false;
+      if (cond.operator === "equals") return actual === target;
+      if (cond.operator === "startsWith") return actual.startsWith(target);
+      console.warn(`[segments.matchCondition] unknown postalCode operator='${cond.operator}' — matching nothing`);
+      return false;
+    }
+    case "country": {
+      // ISO 3166-1 alpha-2 codes are uppercase by convention; normalize.
+      const target = String(cond.value ?? "").trim().toUpperCase();
+      const actual = (supporter.country ?? "").trim().toUpperCase();
+      if (!target || !actual) return false;
+      if (cond.operator === "equals") return actual === target;
+      console.warn(`[segments.matchCondition] unknown country operator='${cond.operator}' — matching nothing`);
+      return false;
+    }
+    case "campaignParticipation":
+      // Cannot evaluate participation from a single supporter row — the
+      // signal lives in campaignActions keyed by supporterId. matchFilter
+      // sees only the supporter; an enriched-context implementation would
+      // pre-load action sets per supporter and join here. Until that's in
+      // place, fail closed (no participation match) rather than fail open.
+      console.warn(`[segments.matchCondition] campaignParticipation needs enriched context — matching nothing for now`);
+      return false;
     default:
       console.warn(`[segments.matchCondition] unknown field='${cond.field}' — matching nothing`);
       return false;

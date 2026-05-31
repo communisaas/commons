@@ -1,10 +1,40 @@
 # Implementation Status
 
-**Date:** 2026-03-19 (partially reconciled 2026-04-23 — see banner)
-**Status:** Phase 0-2 COMPLETE, security hardened, deployed to production
+**Date:** 2026-03-19 (partially reconciled 2026-04-23 — see banner; further reconciled 2026-05-27 — see banner below)
+**Status:** Phase 0-2 COMPLETE *as a development milestone* — see ORG-CAPABILITY-SCOPE.md for execution-path gaps
 **Deploy:** commons.email on Cloudflare Pages (~13 MiB bundle)
 **Tests:** ~4,000 unit tests (3,891 passing, as of 2026-03-18 — not re-counted post-Convex migration)
 **Security:** 27 brutalist audit rounds, 180+ findings addressed
+
+> 🔍 **CAPABILITY RECONCILIATION (2026-05-27 audit).** A 9-agent code-grounded
+> inventory pass identified **23 explicit stubs** (HTTP 501s, no-ops, hardcoded
+> zeros) plus ~30 partial gaps in the org-layer surface. The full inventory
+> with file:line citations is at `docs/design/ORG-CAPABILITY-SCOPE.md`. Key
+> headlines:
+>
+> - **Phase 2 "COMPLETE" claim is a development milestone, not a functional
+>   one.** SMS blast dispatch returns HTTP 501, A/B winner picker is a stub,
+>   workflow action verbs are no-ops, coalition aggregation stats return
+>   HTTP 501, AN OSDI sync returns HTTP 501.
+> - **Dashboard demo experience is broken.** Org home packet is `null`,
+>   verification funnel hardcoded `0`s, tier distribution hardcoded `0`s
+>   (all with `// TODO` comments at `src/routes/org/[slug]/+page.server.ts:51-83`).
+> - **Pricing UI lists features not built.** Custom domain, SQL mirror,
+>   white-label (Coalition) appear in `settings/+page.svelte:170` plan
+>   comparison grid with no implementation.
+> - **Tier system has structural honesty gaps.** `reputationTier` has no
+>   writer post-signup; `engagementTier` client-trusted in non-ZK actions;
+>   CAI measures the string map, not on-chain engagement.
+> - **Substrate IS shipped.** Verification packet computation, coordination
+>   integrity, mDL Android OID4VP, three-tree ZK circuit, 858 contract tests
+>   on Sepolia, SnapshotAnchor with live updateSnapshot tx — these work
+>   end-to-end. The gap is the surrounding surface.
+>
+> Top 10 launch blockers (ordered): dashboard wiring → bulk merge fields →
+> AN OSDI sync → donation receipts + trial-as-active → member removal →
+> A/B winner picker → campaign clone → district segmentation filter →
+> workflow verb impls → OG images. See ORG-CAPABILITY-SCOPE.md for evidence
+> and effort estimates.
 
 > ⚠️ **PARTIAL RECONCILIATION (2026-04-23 audit).** This file is cited
 > as canonical by many other docs, so concrete corrections are inlined

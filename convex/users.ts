@@ -13,6 +13,7 @@ import { requireInternalSecret } from './_internalAuth';
 import { selectActiveCredentialForUser } from './_credentialSelect';
 import { applyDowngradeGuard } from './_downgradeGuard';
 import { upsertExternalId } from './_externalIds';
+import type { Id } from './_generated/dataModel';
 
 // =============================================================================
 // USERS — Queries & Mutations
@@ -22,6 +23,8 @@ import { upsertExternalId } from './_externalIds';
  * Internal: Look up user by email hash (used by auth helpers and delegation).
  * Accepts either an email (computes hash) or a pre-computed emailHash.
  */
+
+declare const process: { env: Record<string, string | undefined> };
 export const getByEmail = internalQuery({
 	args: { email: v.optional(v.string()) },
 	handler: async (ctx, args) => {
@@ -72,7 +75,7 @@ export const getProfile = query({
 			districtVerified: user.districtVerified ?? false,
 			hasWallet: Boolean(user.walletAddress),
 			trustScore: user.trustScore ?? 0,
-			reputationTier: user.reputationTier ?? 'novice',
+			reputationTier: user.reputationTier ?? 'new',
 			role: user.role ?? null,
 			organization: user.organization ?? null,
 			location: user.location ?? null,
@@ -1869,5 +1872,144 @@ export const rescueFailedRevocation = internalMutation({
 		});
 
 		return { rescued: true as const };
+	}
+});
+
+// =============================================================================
+// CROSS-ORG REPUTATION (NEW-T7-3)
+// =============================================================================
+
+/**
+ * Return the authenticated user's cross-org engagement aggregate. Walks
+ * users.identityCommitment → supporters by_identityCommitment (cross-org
+ * fan-out) → campaignActions per supporter → sum verified + by-tier counts +
+ * unique-org list. K-anon floor: only surface orgs where the user has ≥ 5
+ * verified actions (otherwise a single-org-with-one-action surface is a
+ * polling oracle for the user's affiliations).
+ */
+export const getMyReputationPortable = query({
+	args: {},
+	handler: async (ctx) => {
+		const { userId } = await requireAuth(ctx);
+		const user = await ctx.db.get(userId);
+		const identityCommitment = user?.identityCommitment;
+		if (!identityCommitment) {
+			return {
+				totalVerifiedActions: 0,
+				actionCount: user?.actionCount ?? 0,
+				reputationTier: user?.reputationTier ?? 'new',
+				orgs: [] as Array<{ orgSlug: string; verifiedActions: number; topTier: number }>
+			};
+		}
+
+		const supporters = await ctx.db
+			.query('supporters')
+			.withIndex('by_identityCommitment', (q) =>
+				q.eq('identityCommitment', identityCommitment)
+			)
+			.collect();
+
+		// Per-org aggregate: walk actions for each supporter, group by org.
+		const perOrg = new Map<string, { verified: number; topTier: number; orgId: string }>();
+		let totalVerified = 0;
+		for (const s of supporters) {
+			const actions = await ctx.db
+				.query('campaignActions')
+				.filter((q) => q.eq(q.field('supporterId'), s._id))
+				.collect();
+			for (const a of actions) {
+				if (!a.verified) continue;
+				totalVerified++;
+				const orgId = String(s.orgId);
+				const cur = perOrg.get(orgId) ?? { verified: 0, topTier: 0, orgId };
+				cur.verified++;
+				if ((a.trustTier ?? 0) > cur.topTier) cur.topTier = a.trustTier ?? 0;
+				perOrg.set(orgId, cur);
+			}
+		}
+
+		const K = 5;
+		const orgs: Array<{ orgSlug: string; verifiedActions: number; topTier: number }> = [];
+		for (const [, agg] of perOrg) {
+			if (agg.verified < K) continue;
+			const org = await ctx.db.get(agg.orgId as Id<'organizations'>);
+			if (!org) continue;
+			orgs.push({
+				orgSlug: org.slug,
+				verifiedActions: agg.verified,
+				topTier: agg.topTier
+			});
+		}
+		orgs.sort((a, b) => b.verifiedActions - a.verifiedActions);
+
+		return {
+			totalVerifiedActions: totalVerified,
+			actionCount: user?.actionCount ?? 0,
+			reputationTier: user?.reputationTier ?? 'new',
+			orgs
+		};
+	}
+});
+
+// =============================================================================
+// REPUTATION TIER RECOMPUTE (T10-1)
+// =============================================================================
+
+// Threshold table — actionCount → tier label. Order matters; pick the highest
+// matching label. Tier labels mirror the engagement-tier vocabulary (New /
+// Active / Established / Veteran / Pillar) because the UI already labels the
+// reputationTier field with those words. Tune thresholds as real distribution
+// emerges; these starting values keep early users 'new' until they've done
+// real work (≥5 verified actions = active) and reserve 'pillar' for users
+// who've sustained engagement across many campaigns.
+const REPUTATION_THRESHOLDS: ReadonlyArray<{ min: number; tier: string }> = [
+	{ min: 500, tier: 'pillar' },
+	{ min: 100, tier: 'veteran' },
+	{ min: 25, tier: 'established' },
+	{ min: 5, tier: 'active' },
+	{ min: 0, tier: 'new' }
+];
+
+function reputationTierFor(actionCount: number): string {
+	for (const { min, tier } of REPUTATION_THRESHOLDS) {
+		if (actionCount >= min) return tier;
+	}
+	return 'new';
+}
+
+/**
+ * Return the calling user's actionCount (0 if absent). Used by the
+ * /api/submissions/create boundary for T10-2 cross-check — no PII exposure.
+ */
+export const getMyActionCount = query({
+	args: {},
+	handler: async (ctx) => {
+		const { userId } = await requireAuth(ctx);
+		const user = await ctx.db.get(userId);
+		return user?.actionCount ?? 0;
+	}
+});
+
+/**
+ * Recompute reputationTier for all users from their actionCount counter. Run
+ * nightly via cron — see convex/crons.ts. Idempotent (only patches rows whose
+ * computed tier differs from the stored value) and sweeps the legacy
+ * 'verified'/'novice' strings T10-3 retired into the threshold-derived values
+ * over time. Chunked to bound any single run.
+ */
+export const recomputeAllReputationTiers = internalMutation({
+	args: { limit: v.optional(v.number()) },
+	handler: async (ctx, { limit }) => {
+		const BATCH = limit ?? 500;
+		const users = await ctx.db.query('users').take(BATCH);
+		let updated = 0;
+		for (const u of users) {
+			const next = reputationTierFor(u.actionCount ?? 0);
+			if (u.reputationTier !== next) {
+				await ctx.db.patch(u._id, { reputationTier: next, updatedAt: Date.now() });
+				updated++;
+			}
+		}
+		return { scanned: users.length, updated };
 	}
 });

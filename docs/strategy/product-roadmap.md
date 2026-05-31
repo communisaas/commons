@@ -242,22 +242,37 @@ Campaign reaches traction threshold → org enables debate market → verified s
 
 ## Competitive Positioning
 
+The positioning is **capability composition**, not feature parity or single-axis differentiation. Verification is one capability cluster among nine; agentic systems are another. The composition is what the union of incumbents cannot match. See `docs/strategy/capability-transcendence.md` for the full argument.
+
+The nine capability clusters:
+1. **Verification** — mDL Android OID4VP production + three-tree ZK + Cross-Device Bridge + 858 contract tests
+2. **Reach** — 24 boundary types per H3 cell + country-code-keyed registries + $0 marginal per lookup (independent of the dying Cicero/Google Civic/ProPublica API layer)
+3. **Composability** — Protocol-level identity portability + coalition aggregation + cross-border composition
+4. **Agentic systems** — DM resolution + message writer + subject line + AI panel for debates; Phase 3 verified delegation + agentic legislative monitoring + agent-as-civic-actor pricing inversion
+5. **Quality signaling** — DebateMarket (LMSR + AI panel + EIP-712) + position privacy + AI verdicts that are themselves verifiable
+6. **Accountability** — Receipts with attestation hash + legislator scorecards + Merkle anchoring (substrate live on Sepolia; pipeline pending)
+7. **Coordination integrity** — GDS + ALD + temporal entropy + burst velocity + CAI implemented; anti-astroturf math
+8. **Reader-side UX** — Verification packet for the staffer + /v/[hash] independent verification + future reader dashboard
+9. **Data sovereignty** — Owned Shadow Atlas + PII-free architecture + outside the PE rollup cycle
+
 ```
-                    High Verification
-                          |
-                    Debate |  COMMONS
-                   Markets |
-                          |
-   Low Cost ──────────────┼────────────── High Cost
-                          |
-        Action Network    |         Quorum
-         NationBuilder    |       EveryAction
-              Muster      |      VoterVoice
-                          |
-                    Low Verification
+                  Multi-cluster capability composition
+                                |
+                       COMMONS  |
+                                |
+   Volume-only ─────────────────┼──────────── Volume + AI for org user
+                                |
+        Action Network          |    Quorum (+Quincy)
+         NationBuilder          |    Bonterra (+Que)
+              Muster            |    FiscalNote (+PolicyNote)
+                                |    Salesforce (+Agentforce)
+                                |
+                        Single-axis advocacy
 ```
 
-Commons occupies the only quadrant no competitor can reach: high verification at low cost. Debate markets add a vertical axis no one else has — quality signals, not just volume. 24 boundary types add a depth axis no one else has — local government, not just federal/state.
+Commons occupies the composition quadrant no incumbent can reach. The substrate (Clusters 1 + 2 + 9) cannot be retrofitted to app-layer competitors. Every incumbent's AI ships for the org user; none on the constituent side with cryptographic provenance. FiscalNote's April 2026 District Matching API launch under going-concern pressure is market validation — an incumbent in distress arguing the same moat thesis.
+
+The transcendent reframing: **civic action as cryptographic primitive, with agentic systems as the compose layer.** Every existing advocacy modality (email/SMS/calling/petitions/events/donations/debate/monitoring) gets reinstantiated on top of the capability composition. Each becomes a categorically different artifact than the unverified equivalent the union of incumbents produces.
 
 **Against Quorum ($10K-$30K+/yr, 9 modules, Quincy AI):** Don't compete on legislative intelligence breadth. Compete on output — what the staffer receives. Quorum helps a lobbyist analyze bills. Commons helps verified constituents prove they exist. A trade association paying Quorum $30K/yr for grassroots advocacy gets AI-generated message variants from unverified senders. Commons Organization tier at $75/mo gets verification packets with ZK proof of identity, district membership across 24 boundary types, and coordination integrity scores. 10-30x cheaper. Structurally more credible.
 

@@ -483,6 +483,58 @@ export const updateMemberStatus = mutation({
 });
 
 /**
+ * Promote/demote a member org's role within a network. Owner org cannot be
+ * demoted. Distinct from updateMemberStatus (which moves between
+ * active/pending/removed). T7-8.
+ */
+export const updateMemberRole = mutation({
+  args: {
+    orgSlug: v.string(),
+    networkId: v.id("orgNetworks"),
+    targetOrgId: v.id("organizations"),
+    role: v.union(v.literal("admin"), v.literal("member")),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+
+    // Caller must be a network admin
+    const callerMembership = await ctx.db
+      .query("orgNetworkMembers")
+      .withIndex("by_networkId_orgId", (idx) =>
+        idx.eq("networkId", args.networkId).eq("orgId", org._id),
+      )
+      .first();
+    if (
+      !callerMembership ||
+      callerMembership.status !== "active" ||
+      callerMembership.role !== "admin"
+    ) {
+      throw new Error("Network admin role required");
+    }
+
+    // Owner org of the network cannot be demoted — that would orphan the
+    // network. Load the network to check ownerOrgId.
+    const network = await ctx.db.get(args.networkId);
+    if (!network) throw new Error("Network not found");
+    if (network.ownerOrgId === args.targetOrgId && args.role !== "admin") {
+      throw new Error("Owner org of the network cannot be demoted");
+    }
+
+    const target = await ctx.db
+      .query("orgNetworkMembers")
+      .withIndex("by_networkId_orgId", (idx) =>
+        idx.eq("networkId", args.networkId).eq("orgId", args.targetOrgId),
+      )
+      .first();
+    if (!target) throw new Error("Membership not found");
+    if (target.role === args.role) return { success: true, changed: false };
+
+    await ctx.db.patch(target._id, { role: args.role });
+    return { success: true, changed: true };
+  },
+});
+
+/**
  * Update network name/description. Requires admin role in the network.
  */
 export const update = mutation({
@@ -579,5 +631,243 @@ export const checkMembership = query({
       .filter((q) => q.and(q.eq(q.field("orgId"), orgId), q.eq(q.field("status"), "active")))
       .first();
     return member ? { _id: member._id } : null;
+  },
+});
+
+/**
+ * Coalition packet attestation hash (T7-5). Deterministic SHA-256 over
+ * sorted (orgId, campaignId, packetDigest) tuples for all active member
+ * orgs. Writes orgNetworks.lastPacketHash + lastPacketComputedAt so /v/[hash]
+ * can resolve coalition attestations. Pure mutation — recomputes on call;
+ * cron schedule TBD if cost dominates.
+ */
+export const refreshCoalitionPacketHash = mutation({
+  args: {
+    orgSlug: v.string(),
+    networkId: v.id("orgNetworks"),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+
+    // Caller must be active member (or network admin)
+    const membership = await ctx.db
+      .query("orgNetworkMembers")
+      .withIndex("by_networkId_orgId", (idx) =>
+        idx.eq("networkId", args.networkId).eq("orgId", org._id),
+      )
+      .first();
+    if (!membership || membership.status !== "active") {
+      throw new Error("Not an active member of this network");
+    }
+
+    const network = await ctx.db.get(args.networkId);
+    if (!network) throw new Error("Network not found");
+
+    const members = await ctx.db
+      .query("orgNetworkMembers")
+      .withIndex("by_networkId", (idx) => idx.eq("networkId", args.networkId))
+      .filter((q) => q.eq(q.field("status"), "active"))
+      .collect();
+
+    // Collect (orgId, campaignId, packetDigest) tuples for each active member.
+    // Source of truth for packetDigest is campaignDeliveries.packetDigest
+    // (per-delivery cached digest) — we take the most recent per campaign per
+    // org. Falls back to "" when a campaign has no delivered digests yet,
+    // which keeps the hash stable for in-flight campaigns rather than
+    // mutating on each new delivery.
+    const tuples: Array<{ orgId: string; campaignId: string; packetDigest: string }> = [];
+    for (const m of members) {
+      const campaigns = await ctx.db
+        .query("campaigns")
+        .withIndex("by_orgId", (q) => q.eq("orgId", m.orgId))
+        .collect();
+      for (const c of campaigns) {
+        const deliveries = await ctx.db
+          .query("campaignDeliveries")
+          .withIndex("by_campaignId", (q) => q.eq("campaignId", c._id))
+          .order("desc")
+          .take(1);
+        const digest = deliveries[0]?.packetDigest ?? "";
+        tuples.push({
+          orgId: String(m.orgId),
+          campaignId: String(c._id),
+          packetDigest: digest,
+        });
+      }
+    }
+
+    // Canonical preimage — sort lexicographically for determinism.
+    tuples.sort((a, b) => {
+      if (a.orgId !== b.orgId) return a.orgId.localeCompare(b.orgId);
+      if (a.campaignId !== b.campaignId)
+        return a.campaignId.localeCompare(b.campaignId);
+      return a.packetDigest.localeCompare(b.packetDigest);
+    });
+    const preimage = [
+      "voter-protocol-coalition-v1",
+      `network:${args.networkId}`,
+      ...tuples.map((t) => `${t.orgId}|${t.campaignId}|${t.packetDigest}`),
+    ].join("\n---\n");
+
+    const bytes = new TextEncoder().encode(preimage);
+    const digestBuf = await crypto.subtle.digest("SHA-256", bytes);
+    const lastPacketHash = Array.from(new Uint8Array(digestBuf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    const now = Date.now();
+    await ctx.db.patch(args.networkId, {
+      lastPacketHash,
+      lastPacketComputedAt: now,
+      updatedAt: now,
+    });
+
+    return { coalitionAttestationHash: lastPacketHash, tupleCount: tuples.length };
+  },
+});
+
+/**
+ * Coalition stats — union of verified campaignActions across all active
+ * member orgs, district-deduped via districtHash. Computes the same packet
+ * scalars as a single-org packet (GDS / ALD / temporal entropy / CAI) so the
+ * coalition surface is comparable to the per-org one. T7-1.
+ */
+export const getStats = query({
+  args: { networkId: v.id("orgNetworks") },
+  handler: async (ctx, { networkId }) => {
+    const members = await ctx.db
+      .query("orgNetworkMembers")
+      .withIndex("by_networkId", (idx) => idx.eq("networkId", networkId))
+      .filter((q) => q.eq(q.field("status"), "active"))
+      .collect();
+
+    const memberOrgIds = members.map((m) => m.orgId);
+    if (memberOrgIds.length === 0) {
+      return {
+        memberCount: 0,
+        totalSupporters: 0,
+        uniqueSupporters: 0,
+        verifiedSupporters: 0,
+        totalCampaignActions: 0,
+        verifiedCampaignActions: 0,
+        stateDistribution: {} as Record<string, number>,
+        gds: null,
+        ald: null,
+        temporalEntropy: null,
+        cai: null,
+        districtCount: 0,
+      };
+    }
+
+    let totalSupporters = 0;
+    let verifiedSupporters = 0;
+    const uniqueEmailHashes = new Set<string>();
+    const stateDistribution: Record<string, number> = {};
+
+    for (const orgId of memberOrgIds) {
+      const supporters = await ctx.db
+        .query("supporters")
+        .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
+        .collect();
+      totalSupporters += supporters.length;
+      for (const s of supporters) {
+        if (s.verified) verifiedSupporters++;
+        if (s.globalEmailHash) uniqueEmailHashes.add(s.globalEmailHash);
+        if (s.country) {
+          stateDistribution[s.country] = (stateDistribution[s.country] ?? 0) + 1;
+        }
+      }
+    }
+
+    let totalCampaignActions = 0;
+    let verifiedCampaignActions = 0;
+    const districtHashes = new Set<string>();
+    const messageHashes = new Set<string>();
+    let messageHashedTotal = 0;
+    const hourlyBins = new Map<number, number>();
+    let firstTime = Infinity;
+    let lastTime = -Infinity;
+    let tier1 = 0;
+    let tier3 = 0;
+    let tier4 = 0;
+
+    for (const orgId of memberOrgIds) {
+      const actions = await ctx.db
+        .query("campaignActions")
+        .withIndex("by_orgId_verified", (q) => q.eq("orgId", orgId))
+        .collect();
+      for (const a of actions) {
+        totalCampaignActions++;
+        if (a.verified) verifiedCampaignActions++;
+        if (a.districtHash) districtHashes.add(a.districtHash);
+        if (a.messageHash) {
+          messageHashes.add(a.messageHash);
+          messageHashedTotal++;
+        }
+        const hour = Math.floor(a.sentAt / (3600 * 1000));
+        hourlyBins.set(hour, (hourlyBins.get(hour) ?? 0) + 1);
+        if (a.sentAt < firstTime) firstTime = a.sentAt;
+        if (a.sentAt > lastTime) lastTime = a.sentAt;
+        if (a.engagementTier === 1) tier1++;
+        else if (a.engagementTier === 3) tier3++;
+        else if (a.engagementTier === 4) tier4++;
+      }
+    }
+
+    // GDS — 1 - HHI over per-district action share. Sparse: collect per-hash
+    // counts, then sum (count / total)^2.
+    let gds: number | null = null;
+    if (districtHashes.size > 0 && totalCampaignActions > 0) {
+      const perDistrict = new Map<string, number>();
+      for (const orgId of memberOrgIds) {
+        const actions = await ctx.db
+          .query("campaignActions")
+          .withIndex("by_orgId_verified", (q) => q.eq("orgId", orgId))
+          .collect();
+        for (const a of actions) {
+          if (!a.districtHash) continue;
+          perDistrict.set(a.districtHash, (perDistrict.get(a.districtHash) ?? 0) + 1);
+        }
+      }
+      let hhi = 0;
+      for (const count of perDistrict.values()) {
+        const share = count / totalCampaignActions;
+        hhi += share * share;
+      }
+      gds = Math.max(0, Math.min(1, 1 - hhi));
+    }
+
+    const ald: number | null = messageHashedTotal > 0
+      ? Math.max(0, Math.min(1, messageHashes.size / messageHashedTotal))
+      : null;
+
+    let temporalEntropy: number | null = null;
+    if (hourlyBins.size > 0 && totalCampaignActions > 0) {
+      let h = 0;
+      for (const count of hourlyBins.values()) {
+        const p = count / totalCampaignActions;
+        if (p > 0) h -= p * Math.log2(p);
+      }
+      temporalEntropy = h;
+    }
+
+    const cai: number | null = tier1 + tier3 + tier4 === 0
+      ? null
+      : Math.round(((tier3 + tier4) / Math.max(tier1, 1)) * 100) / 100;
+
+    return {
+      memberCount: members.length,
+      totalSupporters,
+      uniqueSupporters: uniqueEmailHashes.size,
+      verifiedSupporters,
+      totalCampaignActions,
+      verifiedCampaignActions,
+      stateDistribution,
+      gds,
+      ald,
+      temporalEntropy,
+      cai,
+      districtCount: districtHashes.size,
+    };
   },
 });

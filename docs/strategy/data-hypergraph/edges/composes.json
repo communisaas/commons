@@ -1,0 +1,34 @@
+{
+  "_notes": "composes edges: task → cluster uncertainty addressed. Subset since drift/test tasks don't always map to a single cluster.",
+  "composes": [
+    {"task": "V-1", "cluster": "C-coordination-integrity"},
+    {"task": "V-2", "cluster": "C-coordination-integrity"},
+    {"task": "V-3", "cluster": "C-quality-signaling"},
+    {"task": "V-4", "cluster": "C-composability"},
+    {"task": "V-5", "cluster": "C-reader-side"},
+    {"task": "V-6", "cluster": "C-composability"},
+    {"task": "V-7", "cluster": "C-reach"},
+    {"task": "V-8", "cluster": "C-quality-signaling"},
+    {"task": "V-9", "cluster": "C-accountability"},
+    {"task": "V-10", "cluster": "C-quality-signaling"},
+
+    {"task": "S-1", "cluster": "C-composability"},
+    {"task": "S-2", "cluster": "C-accountability"},
+    {"task": "S-3", "cluster": "C-accountability"},
+    {"task": "S-3", "cluster": "C-reach"},
+    {"task": "S-4", "cluster": "C-accountability"},
+    {"task": "S-5", "cluster": "C-accountability"},
+    {"task": "S-6", "cluster": "C-composability"},
+    {"task": "S-7", "cluster": "C-reach"},
+    {"task": "S-8", "cluster": "C-agentic"},
+    {"task": "S-11", "cluster": "C-composability"},
+
+    {"task": "T-1", "cluster": "C-composability"},
+    {"task": "T-2", "cluster": "C-accountability"},
+    {"task": "T-2", "cluster": "C-reader-side"},
+    {"task": "T-3", "cluster": "C-accountability"},
+    {"task": "T-4", "cluster": "C-composability"},
+    {"task": "T-5", "cluster": "C-coordination-integrity"},
+    {"task": "T-6", "cluster": "C-quality-signaling"}
+  ]
+}

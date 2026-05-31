@@ -26,6 +26,13 @@
 		name="description"
 		content="Mass comment campaigns get one sample posted and a thematic paragraph in the preamble. Commons delivers comments the docket officer reads individually — identity-verified, proximate-impact, rule-section specific."
 	/>
+	<meta property="og:type" content="website" />
+	<meta property="og:url" content="https://commons.email/org/for/agency-rulemaking" />
+	<meta property="og:title" content="Commons for agency rulemaking" />
+	<meta property="og:description" content="Verified comment authorship. No bot floods. Standing intact." />
+	<meta property="og:image" content="https://commons.email/og/org-for/agency-rulemaking" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:image" content="https://commons.email/og/org-for/agency-rulemaking" />
 </svelte:head>
 
 <div class="reg-page">

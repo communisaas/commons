@@ -1,0 +1,18 @@
+{
+  "_notes": "verifies edges: V-* tasks audit specific v1/v2 substrate claims. NEW edge type vs prior hypergraphs — tracks the audit-claim linkage so substrate-honesty failures are traceable to the audit task that surfaced them.",
+  "verifies": [
+    {"verify_task": "V-1", "substrate": "NEW-E-1", "claim": "userId threaded from /api/submissions/create through to createCampaignAction; reputation cron has real data"},
+    {"verify_task": "V-2", "substrate": "NEW-E-2", "claim": "atlasVersion threaded through submitAction; packet driftCount/driftPct non-null when atlas rotates"},
+    {"verify_task": "V-3", "substrate": "NEW-E-3", "claim": "VerificationPacket.debate populated from campaign.debateId via getDebateSnapshotForCampaign"},
+    {"verify_task": "V-4", "substrate": "NEW-E-4", "claim": "brandingAccent renders via --coalition-accent CSS var in CoalitionReport"},
+    {"verify_task": "V-5", "substrate": "NEW-E-5", "claim": "AttestationVerifier client-side recompute matches server's canonicalPreimage hash"},
+    {"verify_task": "V-6", "substrate": "T9-3 (v1)", "claim": "queueEvent → deliverWebhook → signed POST; signature verifies via SDK"},
+    {"verify_task": "V-7", "substrate": "T2-5 (v1)", "claim": "3 Transient bounces → emailStatus=bounced + suppressedEmails row with 30-day TTL; Delivery resets softBounceCount"},
+    {"verify_task": "V-8", "substrate": "T1-6 (v1)", "claim": "Z-test for proportions picks A/B winner at p<0.05 or 48h timeout"},
+    {"verify_task": "V-9", "substrate": "T6-9 (v1)", "claim": "createAction with voted_* backfills matching accountabilityReceipt response; idempotent per occurredAt"},
+    {"verify_task": "V-10", "substrate": "T5-1 (v1)", "claim": "Verified action crossing campaign.debateThreshold schedules debate spawn; race-safe re-check inside mutation"},
+    {"verify_task": "V-1", "substrate": "T10-1 (v1 substrate)", "claim": "users.actionCount increments + nightly cron promotes reputationTier"},
+    {"verify_task": "V-2", "substrate": "T10-9 (v1 substrate)", "claim": "campaignActions.atlasVersion field populated; packet computeAtlasDrift surfaces non-null"},
+    {"verify_task": "V-4", "substrate": "T7-7 (v1)", "claim": "brandingAccent validation + Coalition-tier gate; UI renders override"}
+  ]
+}

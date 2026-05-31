@@ -1,0 +1,84 @@
+{
+  "type": "requires",
+  "description": "Fan-in hyperedges where a target task requires multiple upstream sources to be complete. Distinct from 'blocks' (which is binary). Captures multi-input convergence points.",
+  "edges": [
+    {
+      "target": "T4-9",
+      "sources": ["T4-1", "T4-2", "T4-7", "T4-8"],
+      "all_required": true,
+      "description": "Delegation UI requires executor + proof attachment + message writer proof binding + trace observability all to be working before FEATURES.DELEGATION can flip to true."
+    },
+    {
+      "target": "T4-4",
+      "sources": ["T4-1", "T4-3", "T3-1", "T3-2"],
+      "all_required": true,
+      "description": "Agentic legislative monitoring requires delegation executor + per-supporter alert infrastructure + state legislator data + special district data. Without any one, the 'monitor 24 boundary types' claim is not realizable."
+    },
+    {
+      "target": "T7-6",
+      "sources": ["T7-4", "T3-3", "T3-4", "T3-5"],
+      "all_required": true,
+      "description": "Coalition cross-border campaign delivery requires cross-border campaign schema + CA + GB + AU rep-lookup. UK-only or CA-only delivery shells can ship earlier with partial requires."
+    },
+    {
+      "target": "T9-8",
+      "sources": ["T9-3", "T9-4", "T9-6", "T9-7"],
+      "all_required": true,
+      "description": "Developer portal documents webhooks + OSDI + activity feed + real-time subscriptions. Per the planning agent's reframing, this must hold until all four endpoint families exist; an aspirational dev portal is worse than no portal."
+    },
+    {
+      "target": "T10-2",
+      "sources": ["T10-1", "T10-3"],
+      "all_required": true,
+      "description": "engagementTier cross-check requires reputationTier writer (so server-side derived tier is non-zero) and tierMap default fix (so tierMap returns canonical values)."
+    },
+    {
+      "target": "T10-4",
+      "sources": ["T10-1", "T10-3"],
+      "all_required": true,
+      "description": "CAI honest requires tier writer + tierMap fix. Both are upstream substrate; CAI is editorial cleanup confirming inputs are honest."
+    },
+    {
+      "target": "T5-6",
+      "sources": ["T5-2", "T10-1"],
+      "all_required": true,
+      "description": "Debate-to-tier promotion requires on-chain stake verification (so debate engagement only accrues from verified stakes) AND reputationTier writer (so promotion logic has a place to write)."
+    },
+    {
+      "target": "T8-4b",
+      "sources": ["T6-1", "T6-2"],
+      "all_required": true,
+      "description": "IPFS-pinned campaign report artifact requires receipt anchoring pipeline (so Merkle proof exists) and mainnet anchor (so chain root is permanent)."
+    },
+    {
+      "target": "T5-5",
+      "sources": ["T3-6", "Multisig-Safe-Setup", "AIEvaluationRegistry-Pre-Registration"],
+      "all_required": true,
+      "description": "Mainnet DebateMarket deployment requires mainnet DistrictRegistry + governance multisig (3-of-5 Safe on Scroll Mainnet) + AIEvaluationRegistry with pre-registered model signers (currently absent from script). Three operational prerequisites."
+    },
+    {
+      "target": "T5-4",
+      "sources": ["T5-3", "AI-Evaluator-Enclave-Image"],
+      "all_required": true,
+      "description": "TEE-attested AI panel requires Nitro Enclave deployed (T5-3) + separate evaluator enclave image with vsock proxy whitelist for 5 API providers."
+    },
+    {
+      "target": "T2-9",
+      "sources": ["T2-1", "T2-8"],
+      "all_required": true,
+      "description": "MMS support requires SMS dispatch live + A2P 10DLC registered (carriers reject MMS without proper brand registration)."
+    },
+    {
+      "target": "T3-8",
+      "sources": ["T3-1", "T3-2"],
+      "all_required": false,
+      "description": "Multi-jurisdiction routing benefits from both state and special district data but can ship with state-leg-only support (slot 2/3) before special districts are populated. Partial requires."
+    },
+    {
+      "target": "T3-10",
+      "sources": ["T3-1", "T3-2"],
+      "all_required": false,
+      "description": "Per-district feed infrastructure same partial requires as T3-8 — state legislators give 2 slots of meaningful feeds; special districts add more later."
+    }
+  ]
+}

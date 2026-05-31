@@ -1,30 +1,49 @@
 name: Deploy to Cloudflare Pages
 
 on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch/environment to deploy'
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - main
+          - staging
+      ref:
+        description: 'Git ref to deploy. Defaults to branch.'
+        required: false
+        type: string
+        default: ''
   workflow_run:
     workflows: [CI Tests]
     types: [completed]
     branches: [production, main, staging]
 
 concurrency:
-  group: deploy-${{ github.event.workflow_run.head_branch }}
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:
   deploy:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      DEPLOY_BRANCH: ${{ github.event.workflow_run.head_branch }}
-      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+      DEPLOY_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
+      DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref || inputs.branch) || github.event.workflow_run.head_sha }}
     permissions:
       contents: read
       deployments: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.DEPLOY_SHA }}
+          ref: ${{ env.DEPLOY_REF }}
+
+      - name: Resolve deploy SHA
+        run: echo "DEPLOY_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -32,6 +51,55 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Load Shadow Atlas build vars
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          CF_PAGES_PROJECT: communique-site
+        run: |
+          response=$(curl -fsS \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}")
+
+          atlas_url=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.ATLAS_BASE_URL.value // empty')
+          vite_atlas_url=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.VITE_ATLAS_BASE_URL.value // empty')
+          cell_map_root=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.EXPECTED_CELL_MAP_ROOT.value // empty')
+          cell_map_depth=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.EXPECTED_CELL_MAP_DEPTH.value // empty')
+
+          if [ -z "$atlas_url" ]; then
+            echo "::error::ATLAS_BASE_URL is not set on Cloudflare Pages project ${CF_PAGES_PROJECT}."
+            exit 1
+          fi
+          if [ -z "$vite_atlas_url" ]; then
+            vite_atlas_url="$atlas_url"
+          fi
+          if [ "$DEPLOY_BRANCH" = "production" ]; then
+            if ! [[ "$atlas_url" =~ ^https://atlas\.commons\.email/v[0-9]{8}$ ]]; then
+              echo "::error::Production ATLAS_BASE_URL must be versioned, got: $atlas_url"
+              exit 1
+            fi
+            if ! [[ "$cell_map_root" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
+              echo "::error::EXPECTED_CELL_MAP_ROOT is missing or invalid on Cloudflare Pages project ${CF_PAGES_PROJECT}."
+              exit 1
+            fi
+            if ! [[ "$cell_map_depth" =~ ^(18|20|22|24)$ ]]; then
+              echo "::error::EXPECTED_CELL_MAP_DEPTH is missing or invalid on Cloudflare Pages project ${CF_PAGES_PROJECT}."
+              exit 1
+            fi
+          fi
+
+          if [ -z "$cell_map_root" ] || [ -z "$cell_map_depth" ]; then
+            echo "::warning::Cell map root/depth are not pinned for ${DEPLOY_BRANCH}; non-production health may warn."
+          fi
+
+          echo "ATLAS_BASE_URL=$atlas_url" >> "$GITHUB_ENV"
+          echo "VITE_ATLAS_BASE_URL=$vite_atlas_url" >> "$GITHUB_ENV"
+          echo "EXPECTED_CELL_MAP_ROOT=$cell_map_root" >> "$GITHUB_ENV"
+          echo "EXPECTED_CELL_MAP_DEPTH=$cell_map_depth" >> "$GITHUB_ENV"
+          echo "Using ATLAS_BASE_URL=$atlas_url"
+          echo "Using VITE_ATLAS_BASE_URL=$vite_atlas_url"
 
       - name: Resolve build environment
         run: |
@@ -47,11 +115,73 @@ jobs:
               ;;
           esac
 
+      - name: Sync Shadow Atlas vars into Wrangler config
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'wrangler.toml';
+          const updates = {
+            ATLAS_BASE_URL: process.env.ATLAS_BASE_URL,
+            VITE_ATLAS_BASE_URL: process.env.VITE_ATLAS_BASE_URL,
+            EXPECTED_CELL_MAP_ROOT: process.env.EXPECTED_CELL_MAP_ROOT,
+            EXPECTED_CELL_MAP_DEPTH: process.env.EXPECTED_CELL_MAP_DEPTH,
+          };
+
+          for (const [key, value] of Object.entries(updates)) {
+            if (!value) {
+              throw new Error(`${key} is missing; refusing to deploy stale Shadow Atlas vars.`);
+            }
+          }
+
+          const lines = fs.readFileSync(path, 'utf8').split(/\r?\n/);
+          const start = lines.findIndex((line) => line.trim() === '[vars]');
+          if (start === -1) {
+            throw new Error('wrangler.toml has no [vars] section.');
+          }
+
+          let end = lines.length;
+          for (let i = start + 1; i < lines.length; i += 1) {
+            if (/^\s*\[/.test(lines[i])) {
+              end = i;
+              break;
+            }
+          }
+
+          const block = lines.slice(start + 1, end);
+          for (const [key, value] of Object.entries(updates)) {
+            const rendered = `${key} = ${JSON.stringify(value)}`;
+            const existing = block.findIndex((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
+            if (existing >= 0) {
+              block[existing] = rendered;
+            } else {
+              block.push(rendered);
+            }
+          }
+
+          lines.splice(start + 1, end - start - 1, ...block);
+          fs.writeFileSync(path, lines.join('\n'));
+          NODE
+
+          echo "Synced Shadow Atlas runtime vars into wrangler.toml for this deploy."
+
+      - name: Validate Wrangler Shadow Atlas vars
+        run: |
+          for key in ATLAS_BASE_URL VITE_ATLAS_BASE_URL EXPECTED_CELL_MAP_ROOT EXPECTED_CELL_MAP_DEPTH; do
+            if ! grep -q "^${key} = " wrangler.toml; then
+              echo "::error::wrangler.toml is missing ${key} after sync."
+              exit 1
+            fi
+          done
+
       - name: Build
         run: npm run build
         env:
           PUBLIC_CONVEX_URL: https://quirky-chinchilla-352.convex.cloud
           VITE_ENVIRONMENT: ${{ env.VITE_ENVIRONMENT }}
+          VITE_ATLAS_BASE_URL: ${{ env.VITE_ATLAS_BASE_URL }}
+          ATLAS_BASE_URL: ${{ env.ATLAS_BASE_URL }}
+          EXPECTED_CELL_MAP_ROOT: ${{ env.EXPECTED_CELL_MAP_ROOT }}
+          EXPECTED_CELL_MAP_DEPTH: ${{ env.EXPECTED_CELL_MAP_DEPTH }}
 
       - name: Resolve deployment URL
         run: |
@@ -81,7 +211,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
 
       - name: Purge CDN cache
-        if: github.event.workflow_run.head_branch == 'production'
+        if: env.DEPLOY_BRANCH == 'production'
         run: |
           response=$(curl -sS --max-time 30 -w "\n%{http_code}" -X POST "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/purge_cache" \
             -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
@@ -110,20 +240,45 @@ jobs:
 
       - name: Verify deployment health
         run: |
+          strict_atlas=false
+          if [ "$DEPLOY_BRANCH" = "production" ]; then
+            strict_atlas=true
+          fi
+
           for attempt in {1..12}; do
-            if response=$(curl --fail-with-body -sS --max-time 20 "$DEPLOY_HEALTH_URL/api/health"); then
-              echo "$response"
-              echo "$response" | jq -e '.status == "ok"' >/dev/null && exit 0
-            elif [ -n "${response:-}" ]; then
-              echo "$response"
+            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" "$DEPLOY_HEALTH_URL/api/health"); then
+              http_status=$(printf '%s\n' "$response" | tail -n 1)
+              body=$(printf '%s\n' "$response" | sed '$d')
+
+              if echo "$body" | jq -e . >/dev/null 2>&1; then
+                echo "$body"
+
+                if [ "$strict_atlas" = "true" ]; then
+                  if [ "$http_status" = "200" ] && echo "$body" | jq -e '.status == "ok"' >/dev/null; then
+                    exit 0
+                  fi
+                elif echo "$body" | jq -e '.convex == true and .atlas.configured == true and .atlas.manifest == true and .atlas.districtIndex == true' >/dev/null; then
+                  if ! echo "$body" | jq -e '.atlas.rootPinned == true and .atlas.depthPinned == true' >/dev/null; then
+                    echo "::warning::Non-production deploy health has atlas content reachable but root/depth are not pinned yet."
+                  fi
+                  exit 0
+                fi
+              else
+                echo "Deployment health endpoint returned HTTP ${http_status} and a non-JSON body:"
+                printf '%s\n' "$body" | head -c 4000
+                printf '\n'
+              fi
+            else
+              echo "Deployment health check failed on attempt ${attempt} before an HTTP response."
             fi
+
             echo "Deployment health check failed on attempt ${attempt}; retrying..."
             sleep 10
           done
           exit 1
 
       - name: Probe production domain health
-        if: github.event.workflow_run.head_branch == 'production'
+        if: env.DEPLOY_BRANCH == 'production'
         run: |
           domain_challenged=false
           domain_hard_failure=false
@@ -173,7 +328,7 @@ jobs:
           done
 
       - name: Probe production browser-mediated mDL route
-        if: github.event.workflow_run.head_branch == 'production'
+        if: env.DEPLOY_BRANCH == 'production'
         run: |
           route_challenged=false
           route_hard_failure=false
@@ -221,7 +376,7 @@ jobs:
           done
 
       - name: Probe production mDL readiness
-        if: github.event.workflow_run.head_branch == 'production'
+        if: env.DEPLOY_BRANCH == 'production'
         env:
           INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
         run: |

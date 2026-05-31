@@ -1,0 +1,18 @@
+{
+  "_notes": "unblocks edges: source's completion lifts a chokepoint or unlocks a wave transition. Subset of blocks pointing at chokepoint tasks or wave boundaries.",
+  "unblocks": [
+    {"source": "NEW-A-1", "chokepoint": "CP-1", "wave_transition": "W-0 → W-1 (iOS lane)"},
+    {"source": "NEW-T2-2", "chokepoint": "CP-2", "wave_transition": "W-0 → W-1 (email blast lane)"},
+    {"source": "NEW-A-4", "chokepoint": "CP-5", "wave_transition": "W-0 → W-1 (observability)"},
+    {"source": "NEW-A-5", "chokepoint": null, "wave_transition": "W-0 → W-1 (staging gate)"},
+    {"source": "NEW-A-6", "chokepoint": null, "wave_transition": "W-0 → W-1 (runbook gate)"},
+    {"source": "NEW-A-7", "chokepoint": null, "wave_transition": "W-0 → W-1 (CONGRESSIONAL flag)"},
+    {"source": "NEW-T6-2", "chokepoint": "CP-3", "wave_transition": "W-1 → W-2 (mainnet enables anchor/stake/registry tracks)"},
+    {"source": "NEW-T5-3", "chokepoint": "CP-4", "wave_transition": "W-1 → W-2 (TEE enables agentic + AI-panel tracks)"},
+    {"source": "NEW-E-1", "chokepoint": null, "wave_transition": "W-1 substrate-honest readiness"},
+    {"source": "NEW-E-2", "chokepoint": null, "wave_transition": "W-1 substrate-honest readiness"},
+    {"source": "NEW-E-3", "chokepoint": null, "wave_transition": "W-1 substrate-honest readiness"},
+    {"source": "NEW-E-4", "chokepoint": null, "wave_transition": "W-1 substrate-honest readiness"},
+    {"source": "NEW-E-5", "chokepoint": null, "wave_transition": "W-1 substrate-honest readiness"}
+  ]
+}

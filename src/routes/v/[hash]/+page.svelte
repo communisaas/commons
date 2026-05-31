@@ -14,8 +14,37 @@
 	 * - Staggered fade-in on load
 	 */
 	import type { PageData } from './$types';
+	import AttestationVerifier from '$lib/components/verify/AttestationVerifier.svelte';
+	import type { AttestationPreimage } from '$lib/core/crypto/attestation-verify';
 
 	let { data }: { data: PageData } = $props();
+
+	// NEW-E-5: build AttestationPreimage shape from campaignContext when
+	// the v/[hash] page is rendering a campaign-mode verification. The
+	// component recomputes SHA-256 client-side and compares — staffers
+	// distrustful of Commons can verify the platform's claim without
+	// trusting the platform.
+	const preimage = $derived.by<AttestationPreimage | null>(() => {
+		const ctx = data.mode === 'campaign' ? data.campaignContext : null;
+		if (!ctx || !ctx.attestationHash || !ctx.dateRange) return null;
+		// Synthesize the campaignTitle/orgName placeholders since they aren't
+		// surfaced on this anonymous endpoint (privacy). Verifier surfaces
+		// these as opaque — the staffer who received the email knows them.
+		return {
+			campaignId: data.hash,
+			campaignTitle: '(redacted on public surface)',
+			orgName: '(redacted on public surface)',
+			verified: ctx.verified ?? 0,
+			districtCount: ctx.districtCount ?? 0,
+			authorship: { individual: 0, shared: 0, explicit: false },
+			dateRange: ctx.dateRange,
+			identityBreakdown: null,
+			geography: (ctx.topDistricts ?? []).map((d) => ({ hash: d.hash, count: d.count }))
+		};
+	});
+	const attestationHash = $derived(
+		data.mode === 'campaign' ? data.campaignContext?.attestationHash ?? null : null
+	);
 
 	const verifiedDate = $derived(
 		new Date(data.verifiedAt).toLocaleDateString('en-US', {
@@ -153,6 +182,17 @@
 			</div>
 		</div>
 	</div>
+
+	<!-- T8-3 / NEW-E-5: browser-side attestation recomputation -->
+	{#if preimage && attestationHash}
+		<div class="w-full max-w-lg mx-auto verify-stagger" style="--stagger: 5">
+			<AttestationVerifier
+				{preimage}
+				expectedHash={attestationHash}
+				titleRedacted={true}
+			/>
+		</div>
+	{/if}
 
 	<!-- Footer: explanation flows into attribution -->
 	<footer class="mt-auto w-full max-w-lg mx-auto pb-6 pt-6 verify-stagger" style="--stagger: 5">

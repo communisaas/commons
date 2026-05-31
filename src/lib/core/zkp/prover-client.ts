@@ -186,7 +186,7 @@ export interface ThreeTreeProofInputs {
 	 * Revocation SMT non-membership siblings (length = 128, REVOCATION_SMT_DEPTH).
 	 * Each entry is the sibling hash at depth d on the path from the user's
 	 * revocation_nullifier slot to the root. Sourced from Convex via
-	 * `internal.revocations.getRevocationSMTPath` against the user's
+	 * `api.revocations.getRevocationSMTPath` against the user's
 	 * districtCommitment-derived nullifier. Must be derived from the SAME
 	 * SMT state that `revocationRegistryRoot` references.
 	 *

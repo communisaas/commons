@@ -7,6 +7,13 @@
 <svelte:head>
 	<title>Coordination Integrity Scores | Commons</title>
 	<meta name="description" content="How Commons measures whether campaign participation is organic, diverse, and sustained." />
+	<meta property="og:type" content="article" />
+	<meta property="og:url" content="https://commons.email/about/integrity" />
+	<meta property="og:title" content="Coordination Integrity Scores | Commons" />
+	<meta property="og:description" content="Five metrics. Real campaign data. No self-report." />
+	<meta property="og:image" content="https://commons.email/og/integrity" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:image" content="https://commons.email/og/integrity" />
 </svelte:head>
 
 <div class="mx-auto max-w-3xl space-y-12">

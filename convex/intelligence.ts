@@ -16,6 +16,8 @@ import { requireAuth } from "./_authHelpers";
 /**
  * Query intelligence items with optional filters.
  */
+
+declare const process: { env: Record<string, string | undefined> };
 export const queryItems = query({
   args: {
     category: v.optional(v.string()),

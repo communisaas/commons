@@ -18,12 +18,19 @@ import type { RequestHandler } from './$types';
  * to canonicalize their own URL state without re-following the redirect.
  * Field added 2026-05-07 alongside the F-77/F-80 canonicalization cures.
  */
-export const GET: RequestHandler = async ({ params }) => {
+export const GET: RequestHandler = async ({ params, url }) => {
 	const { id } = params;
+
+	// T6-8 — optional ?methodologyVersion=N for backwards-compatible reads.
+	// Default omits the field → server returns the latest snapshot's version.
+	const versionParam = url.searchParams.get('methodologyVersion');
+	const methodologyVersion = versionParam ? Number(versionParam) : undefined;
 
 	const result = await serverQuery(api.v1api.getDmScorecard, {
 		_secret: getInternalSecret(),
-		identifier: id});
+		identifier: id!,
+		methodologyVersion
+	});
 	if (!result) {
 		throw error(404, 'Decision-maker not found');
 	}

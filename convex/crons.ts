@@ -289,4 +289,52 @@ crons.cron(
   internal.donations.sweepStrandedDonations,
 );
 
+// ---------------------------------------------------------------------------
+// 23. Agent-trace expiry — delete rows past expiresAt (TTL from SK writer,
+//     default 7 days). 1000-row batches per tick (= 24k/day capacity, ~2.4x
+//     headroom over a 10k events/day baseline); runs hourly at :37 to
+//     stagger off the other hourly crons (:07, :13, :21, :47).
+// ---------------------------------------------------------------------------
+crons.hourly(
+  "agent-traces-expire",
+  { minuteUTC: 37 },
+  internal.agentTraces.expire,
+);
+
+// ---------------------------------------------------------------------------
+// 24. Webhook retry — pick up orgWebhookDeliveries with nextRetryAt due and
+//     re-fire deliverWebhook. Every minute keeps the latency floor low while
+//     each tick is bounded to RETRY_BATCH=50 (caps action time).
+// ---------------------------------------------------------------------------
+crons.interval(
+  "webhook-retry",
+  { minutes: 1 },
+  internal.orgWebhooks.retryPendingDeliveries,
+);
+
+// ---------------------------------------------------------------------------
+// 25. orgEvents retention — daily TTL purge for the SSE event table. Rows
+//     older than 7 days are dead weight; SSE consumers only read recent. Runs
+//     at :47 to stagger off the other hourly crons (:07, :13, :21, :37, :47).
+// ---------------------------------------------------------------------------
+crons.hourly(
+  "org-events-expire",
+  { minuteUTC: 47 },
+  internal.orgWebhooks.expireOldEvents,
+);
+
+// ---------------------------------------------------------------------------
+// 26. Reputation tier recompute (T10-1) — nightly sweep. Recomputes
+//     reputationTier from users.actionCount against the threshold table. Also
+//     migrates legacy 'verified'/'novice' strings (pre-T10-3) into the new
+//     threshold-derived values. Runs at 03:11 UTC to avoid the other UTC-day
+//     boundary work concentrated near midnight.
+// ---------------------------------------------------------------------------
+crons.daily(
+  "reputation-recompute",
+  { hourUTC: 3, minuteUTC: 11 },
+  internal.users.recomputeAllReputationTiers,
+  {},
+);
+
 export default crons;

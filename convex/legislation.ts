@@ -11,7 +11,7 @@ import { v } from "convex/values";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireOrgRole } from "./_authHelpers";
+import { requireAuth, requireOrgRole } from "./_authHelpers";
 import { upsertExternalId } from "./_externalIds";
 
 declare const process: { env: Record<string, string | undefined> };
@@ -199,18 +199,28 @@ export const getAlertWithBill = query({
  * Get scorecard snapshots for a decision-maker.
  */
 export const getScorecard = query({
-  args: { decisionMakerId: v.id("decisionMakers") },
-  handler: async (ctx, { decisionMakerId }) => {
+  args: {
+    decisionMakerId: v.id("decisionMakers"),
+    // T6-8 — opt into an older methodology for backwards-compatible reads.
+    // Default: the writer-side constant (SCORECARD_METHODOLOGY_VERSION below),
+    // which produces v2-and-up snapshots in parallel with archived v1 rows.
+    // Public API surfaces (api/dm/[id]/scorecard) use the default; the
+    // canonical changelog lives at docs/design/SCORECARD-METHODOLOGY-CHANGELOG.md.
+    methodologyVersion: v.optional(v.number()),
+  },
+  handler: async (ctx, { decisionMakerId, methodologyVersion }) => {
     const dm = await ctx.db.get(decisionMakerId);
     if (!dm) return null;
 
+    const version = methodologyVersion ?? SCORECARD_METHODOLOGY_VERSION;
     const snapshots = await ctx.db
       .query("scorecardSnapshots")
       .withIndex("by_decisionMakerId", (q) =>
         q.eq("decisionMakerId", decisionMakerId),
       )
       .order("desc")
-      .take(12); // last 12 months
+      .take(48) // wider take so version filter still yields 12 results when v1+v2 coexist
+      .then((rows) => rows.filter((r) => r.methodologyVersion === version).slice(0, 12));
 
     return {
       decisionMaker: {
@@ -1135,7 +1145,232 @@ export const dismissAlert = mutation({
 });
 
 /**
+ * List accountability receipts for a single campaign. Org-scoped + filtered to
+ * the requested campaign. Returns attestation digest + key audit fields (no
+ * PII). T6-5.
+ */
+export const listReceiptsByCampaign = query({
+  args: {
+    slug: v.string(),
+    campaignId: v.id("campaigns"),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "member");
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign || campaign.orgId !== org._id) {
+      throw new Error("Campaign not found");
+    }
+    const limit = Math.min(args.limit ?? 50, 200);
+
+    // Receipts have orgId denormalized — use by_orgId for read, filter campaignId in memory via deliveryId join.
+    const receipts = await ctx.db
+      .query("accountabilityReceipts")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .order("desc")
+      .take(limit * 4); // overfetch to absorb the campaign filter
+
+    // Join via deliveryId → campaignDeliveries → campaignId match. Bound the
+    // join by overfetched batch.
+    const matched: typeof receipts = [];
+    for (const r of receipts) {
+      if (!r.deliveryId) continue;
+      const delivery = await ctx.db.get(r.deliveryId as Id<"campaignDeliveries">);
+      if (delivery && delivery.campaignId === args.campaignId) {
+        matched.push(r);
+        if (matched.length >= limit + 1) break;
+      }
+    }
+
+    let startIdx = 0;
+    if (args.cursor) {
+      const idx = matched.findIndex((r) => r._id === args.cursor);
+      if (idx >= 0) startIdx = idx + 1;
+    }
+    const page = matched.slice(startIdx, startIdx + limit + 1);
+    const hasMore = page.length > limit;
+    const items = page.slice(0, limit);
+    const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
+
+    return {
+      items: items.map((r) => ({
+        id: r._id,
+        decisionMakerId: r.decisionMakerId,
+        dmName: r.dmName,
+        billId: r.billId,
+        attestationDigest: r.attestationDigest,
+        proofWeight: r.proofWeight,
+        verifiedCount: r.verifiedCount,
+        totalCount: r.totalCount,
+        districtCount: r.districtCount,
+        alignment: r.alignment,
+        causalityClass: r.causalityClass,
+        proofDeliveredAt: r.proofDeliveredAt,
+        proofVerifiedAt: r.proofVerifiedAt ?? null,
+        anchorCid: r.anchorCid ?? null,
+        anchorRoot: r.anchorRoot ?? null,
+      })),
+      nextCursor,
+    };
+  },
+});
+
+/**
+ * List accountability receipts grouped by decision-maker. T6-5 batch view.
+ */
+export const listReceiptsByOrg = query({
+  args: {
+    slug: v.string(),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { org } = await requireOrgRole(ctx, args.slug, "member");
+    const limit = Math.min(args.limit ?? 200, 500);
+
+    const receipts = await ctx.db
+      .query("accountabilityReceipts")
+      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+      .order("desc")
+      .take(limit + 1);
+
+    let startIdx = 0;
+    if (args.cursor) {
+      const idx = receipts.findIndex((r) => r._id === args.cursor);
+      if (idx >= 0) startIdx = idx + 1;
+    }
+    const page = receipts.slice(startIdx, startIdx + limit + 1);
+    const hasMore = page.length > limit;
+    const items = page.slice(0, limit);
+    const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
+
+    return {
+      items: items.map((r) => ({
+        id: r._id,
+        decisionMakerId: r.decisionMakerId,
+        dmName: r.dmName,
+        billId: r.billId,
+        attestationDigest: r.attestationDigest,
+        proofWeight: r.proofWeight,
+        verifiedCount: r.verifiedCount,
+        totalCount: r.totalCount,
+        districtCount: r.districtCount,
+        alignment: r.alignment,
+        causalityClass: r.causalityClass,
+        proofDeliveredAt: r.proofDeliveredAt,
+        proofVerifiedAt: r.proofVerifiedAt ?? null,
+        anchorCid: r.anchorCid ?? null,
+        anchorRoot: r.anchorRoot ?? null,
+      })),
+      nextCursor,
+    };
+  },
+});
+
+/**
+ * Constituent receipt access — list (bill, DM, alignment, causality)
+ * tuples for the calling user's verified actions, K-anonymized.
+ *
+ * Path: users.identityCommitment → supporters with same commitment (cross-org)
+ *   → campaignActions for those supporters → campaignDeliveries via actionId
+ *   → accountabilityReceipts via deliveryId.
+ *
+ * K-anon: only return receipts where receipt.totalCount >= 5 (the same
+ * K-anonymity floor the public verification packet uses). Below-K receipts
+ * are not exposed even to the contributor, because they'd let an attacker
+ * who knows a target's email confirm the target participated in a small
+ * campaign. T6-4.
+ */
+export const listMyReceipts = query({
+  args: {},
+  handler: async (ctx) => {
+    const { userId } = await requireAuth(ctx);
+    const user = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("_id"), userId))
+      .first();
+    const identityCommitment = user?.identityCommitment;
+    if (!identityCommitment) {
+      return { items: [], total: 0 };
+    }
+
+    // Cross-org supporters tied to this user's identity commitment.
+    const supporters = await ctx.db
+      .query("supporters")
+      .withIndex("by_identityCommitment", (q) =>
+        q.eq("identityCommitment", identityCommitment),
+      )
+      .collect();
+    const supporterIds = supporters.map((s) => s._id);
+    if (supporterIds.length === 0) return { items: [], total: 0 };
+
+    // Verified actions by those supporters (per-campaign index — scan
+    // bounded by the user's actual activity).
+    const actionIds: Id<"campaignActions">[] = [];
+    for (const sid of supporterIds) {
+      const actions = await ctx.db
+        .query("campaignActions")
+        .filter((q) => q.eq(q.field("supporterId"), sid))
+        .collect();
+      for (const a of actions) if (a.verified) actionIds.push(a._id);
+    }
+    if (actionIds.length === 0) return { items: [], total: 0 };
+
+    // Deliveries for those actions
+    const deliveryIds: string[] = [];
+    for (const aid of actionIds) {
+      const ds = await ctx.db
+        .query("campaignDeliveries")
+        .withIndex("by_actionId", (q) => q.eq("actionId", aid))
+        .collect();
+      for (const d of ds) deliveryIds.push(d._id);
+    }
+    if (deliveryIds.length === 0) return { items: [], total: 0 };
+
+    // Receipts via deliveryId — accountabilityReceipts has by_deliveryId.
+    const receipts = [];
+    for (const did of deliveryIds) {
+      const rs = await ctx.db
+        .query("accountabilityReceipts")
+        .withIndex("by_deliveryId", (q) => q.eq("deliveryId", did))
+        .collect();
+      for (const r of rs) {
+        // K-anonymity floor: only surface receipts the public packet would
+        // also surface. K=5 matches verification-packet.ts.
+        if (r.totalCount >= 5) receipts.push(r);
+      }
+    }
+
+    // De-duplicate (a receipt might join via multiple deliveries) and shape.
+    const seen = new Set<string>();
+    const items = [];
+    for (const r of receipts) {
+      if (seen.has(r._id)) continue;
+      seen.add(r._id);
+      items.push({
+        receiptId: r._id,
+        billId: r.billId,
+        decisionMakerId: r.decisionMakerId,
+        dmName: r.dmName,
+        alignment: r.alignment,
+        causalityClass: r.causalityClass,
+        proofDeliveredAt: r.proofDeliveredAt,
+      });
+    }
+    items.sort((a, b) => b.proofDeliveredAt - a.proofDeliveredAt);
+    return { items, total: items.length };
+  },
+});
+
+/**
  * Create a legislative action (vote/sponsor record). Internal.
+ *
+ * T6-9: When the action is a vote (action starts with "voted_" or "abstained"),
+ * backfill matching accountabilityReceipts by (decisionMakerId, billId) with
+ * a `vote_cast` response so the response chain reflects the legislator's
+ * observed behavior. Idempotent — skips receipts that already carry a
+ * vote_cast for this same action.
  */
 export const createAction = internalMutation({
   args: {
@@ -1159,6 +1394,42 @@ export const createAction = internalMutation({
       sourceUrl: args.sourceUrl,
       occurredAt: args.occurredAt,
     });
+
+    // T6-9 auto-detect: only votes (not arbitrary sponsorships) trigger response backfill.
+    const isVote =
+      args.decisionMakerId !== undefined &&
+      (args.action.startsWith("voted_") || args.action === "abstained");
+    if (isVote && args.decisionMakerId) {
+      const receipts = await ctx.db
+        .query("accountabilityReceipts")
+        .withIndex("by_decisionMakerId", (q) =>
+          q.eq("decisionMakerId", args.decisionMakerId as Id<"decisionMakers">),
+        )
+        .collect();
+      const matching = receipts.filter((r) => r.billId === args.billId);
+      for (const r of matching) {
+        const existing = r.responses ?? [];
+        // Skip if a vote_cast already recorded at the same occurredAt — keeps
+        // the dedup tight without over-broadening (a re-vote in a later session
+        // would carry a different occurredAt and still append).
+        const alreadyRecorded = existing.some(
+          (resp) => resp.type === "vote_cast" && resp.occurredAt === args.occurredAt,
+        );
+        if (alreadyRecorded) continue;
+        await ctx.db.patch(r._id, {
+          responses: [
+            ...existing,
+            {
+              type: "vote_cast",
+              detail: args.action,
+              confidence: "observed",
+              occurredAt: args.occurredAt,
+            },
+          ],
+        });
+      }
+    }
+
     return id;
   },
 });

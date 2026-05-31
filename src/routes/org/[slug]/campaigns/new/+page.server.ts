@@ -100,9 +100,13 @@ export const actions: Actions = {
 		const campaignId = await serverMutation(api.campaigns.create, {
 			slug: params.slug,
 			title,
-			type,
+			// type was validated above against the LETTER/EVENT/FORM/FUNDRAISER
+			// allowlist; cast at the boundary to match the Convex args union.
+			type: type as 'LETTER' | 'EVENT' | 'FORM' | 'FUNDRAISER',
 			body: body ?? undefined,
-			templateId: templateId ?? undefined,
+			// Form-data string cast at API boundary; Convex args validator
+			// (now v.id('templates')) rejects malformed Ids.
+			templateId: templateId ? (templateId as Id<'templates'>) : undefined,
 			debateEnabled,
 			debateThreshold,
 			targetCountry,

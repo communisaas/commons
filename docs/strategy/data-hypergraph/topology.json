@@ -1,0 +1,40 @@
+{
+  "version": "3.0.0",
+  "name": "commons-data-hypergraph",
+  "predecessors": [
+    "docs/strategy/implementation-hypergraph (v1, sealed 2026-05-28)",
+    "docs/strategy/next-implementation-hypergraph (v2, sealed 2026-05-28)"
+  ],
+  "horizon": "data-model + seed audit. Verify substrate-honesty for v1+v2 claims, close seed coverage gaps for the 9 product-meaningful unseeded tables, reduce schema drift, add integration tests proving the substrate works end-to-end.",
+  "premise": "Two capability hypergraphs (v1, v2) shipped 73 tasks of substrate. This hypergraph is the foundation audit — does the substrate actually do what its code claims? Are seed/test environments coherent with shipped substrate? Are there orphaned schema fields the migration left behind? No new feature work; reductive + verifying.",
+  "node_types": [
+    {"id": "cluster", "description": "Carry-over context from v1/v2 capability clusters. NOT the realization metric here — this hypergraph addresses substrate honesty within already-claimed clusters.", "fields": ["id", "carryover_clusters", "remaining_uncertainty"]},
+    {"id": "track", "description": "Four execution tracks: verify substrate · seed coverage · schema drift · test fixtures.", "fields": ["id", "slug", "name", "description"]},
+    {"id": "wave", "description": "Three waves — verify before seed (so seed targets real gaps), drift before tests (so tests don't bake in dead fields).", "fields": ["id", "name", "gate", "exit_criteria"]},
+    {"id": "task", "description": "Concrete data/seed/test unit. Most tasks are S-tier; the audit work is reading code, the seed work is appending to seed.ts, the tests are vitest specs.", "fields": ["id", "slug", "name", "track", "clusters", "wave", "effort", "depends_on", "carryover_substrate", "description", "files_touch", "files_create", "acceptance_criteria", "status"]},
+    {"id": "chokepoint", "description": "None in this hypergraph — no ops gates. All engineering-bound.", "fields": []}
+  ],
+  "edge_types": [
+    {"id": "blocks", "description": "Source must close before target can start."},
+    {"id": "composes", "description": "Source task addresses uncertainty in a v1/v2 cluster claim. Many-to-many."},
+    {"id": "verifies", "description": "Source verifies the honesty of a v1/v2 substrate claim. New edge type vs previous hypergraphs — used to track the audit linkage."},
+    {"id": "parallel", "description": "Tasks executable concurrently in the same wave."}
+  ],
+  "statistics": {
+    "tasks_total": 28,
+    "verify_tasks": 10,
+    "seed_tasks": 11,
+    "drift_tasks": 5,
+    "test_tasks": 6,
+    "tracks": 4,
+    "waves": 3,
+    "chokepoints": 0,
+    "blocks_edges": 22,
+    "verifies_edges": 13,
+    "by_track": {"TR-V": 10, "TR-D": 5, "TR-S": 11, "TR-T": 6},
+    "by_wave": {"W-0": 10, "W-1": 16, "W-2": 6}
+  },
+  "completion_signal": "ALL tasks status ∈ {completed, deferred} AND every verify task either (a) confirms substrate is honest with a code-grounded note, or (b) discovers a gap and adds a fix task to W-1.",
+  "promotion_target": "docs/strategy/data-hypergraph/",
+  "created_at": "2026-05-28"
+}

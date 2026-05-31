@@ -1,0 +1,139 @@
+{
+  "clusters": [
+    {
+      "id": "C-verification",
+      "slug": "verification",
+      "name": "Verification",
+      "v1_status": "60% in v1 (3/5 tasks). Tier honesty fixes shipped (T10-1/T10-2/T10-5). Mainnet contracts + TEE deferred.",
+      "remaining_target": "Mainnet DistrictRegistry deploy (NEW-T3-6); TEE Nitro Enclave provisioning (NEW-T5-3); MDL_IOS flag flip after ABC enrollment (NEW-A-2)",
+      "contributing_tasks": [
+        "NEW-T3-6",
+        "NEW-T5-3",
+        "NEW-A-2"
+      ]
+    },
+    {
+      "id": "C-reach",
+      "slug": "reach",
+      "name": "Reach",
+      "v1_status": "0% in v1 (0/10). All international + multi-state deferred to this hypergraph.",
+      "remaining_target": "OpenStates ingestion (NEW-T3-1); special districts (NEW-T3-2); CA/GB/AU rep-lookup (NEW-T3-3/4/5); TIGER 2026 monitoring (NEW-T3-7); multi-jurisdiction routing (NEW-T3-8); per-district feed (NEW-T3-10); Postal Bubble UX (NEW-T3-9)",
+      "contributing_tasks": [
+        "NEW-T3-1",
+        "NEW-T3-2",
+        "NEW-T3-3",
+        "NEW-T3-4",
+        "NEW-T3-5",
+        "NEW-T3-6",
+        "NEW-T3-7",
+        "NEW-T3-8",
+        "NEW-T3-9",
+        "NEW-T3-10"
+      ]
+    },
+    {
+      "id": "C-composability",
+      "slug": "composability",
+      "name": "Composability",
+      "v1_status": "56% in v1 (5/9). Coalition aggregation API + attestation hash shipped; cross-border + supporter pools + reputation portability deferred.",
+      "remaining_target": "Cross-org reputation portability writer wire-up (NEW-E-2); cross-border campaign schema (NEW-T7-4); shared supporter pools (NEW-T7-2); coalition multi-country delivery (NEW-T7-6)",
+      "contributing_tasks": [
+        "NEW-T7-2",
+        "NEW-T7-3",
+        "NEW-T7-4",
+        "NEW-T7-6",
+        "NEW-E-4"
+      ]
+    },
+    {
+      "id": "C-agentic",
+      "slug": "agentic-systems",
+      "name": "Agentic Systems",
+      "v1_status": "10% in v1 (1/10). Only architectural decision (T4-10) shipped; delegation executor + 8 dependents deferred on TEE.",
+      "remaining_target": "Delegation executor running (NEW-T4-1); ZK proof on AI actions (NEW-T4-2); per-supporter bill alerts (NEW-T4-3); agentic legislative monitoring (NEW-T4-4); cross-org agent portability (NEW-T4-5); pricing (NEW-T4-6); message-writer with proof (NEW-T4-7); trace observability (NEW-T4-8); delegation UI (NEW-T4-9)",
+      "contributing_tasks": [
+        "NEW-T4-1",
+        "NEW-T4-2",
+        "NEW-T4-3",
+        "NEW-T4-4",
+        "NEW-T4-5",
+        "NEW-T4-6",
+        "NEW-T4-7",
+        "NEW-T4-8",
+        "NEW-T4-9"
+      ]
+    },
+    {
+      "id": "C-quality-signaling",
+      "slug": "quality-signaling",
+      "name": "Quality Signaling",
+      "v1_status": "20% in v1 (2/10). Auto-debate-spawn + packet substrate shipped; on-chain stake + LMSR + TEE AI panel deferred.",
+      "remaining_target": "On-chain stake (NEW-T5-2); mainnet DebateMarket (NEW-T5-5); TEE AI panel (NEW-T5-4); debate\u2192tier promotion (NEW-T5-6); position privacy UX (NEW-T5-7); LMSR feed (NEW-T5-8); org-side debate signal (NEW-T5-9); debate field populator (NEW-E-3)",
+      "contributing_tasks": [
+        "NEW-T5-2",
+        "NEW-T5-4",
+        "NEW-T5-5",
+        "NEW-T5-6",
+        "NEW-T5-7",
+        "NEW-T5-8",
+        "NEW-T5-9",
+        "NEW-E-3"
+      ]
+    },
+    {
+      "id": "C-accountability",
+      "slug": "accountability",
+      "name": "Accountability",
+      "v1_status": "50% in v1 (5/10). Read-side surfaces shipped; anchor pipeline + state-bill ingestion deferred.",
+      "remaining_target": "Receipt Merkle anchoring (NEW-T6-1); mainnet SnapshotAnchor (NEW-T6-2); anchor cadence (NEW-T6-3); state-bill ingestion (NEW-T6-6); long-term archive manifest (NEW-T6-10); reader-side notification webhooks (NEW-T8-8)",
+      "contributing_tasks": [
+        "NEW-T6-1",
+        "NEW-T6-2",
+        "NEW-T6-3",
+        "NEW-T6-6",
+        "NEW-T6-10",
+        "NEW-T8-8"
+      ]
+    },
+    {
+      "id": "C-coordination-integrity",
+      "slug": "coordination-integrity",
+      "name": "Coordination Integrity",
+      "v1_status": "100% REALIZED in v1 (4/4). No further work in this hypergraph beyond carry-effects from substrate wire-ups.",
+      "remaining_target": "atlasVersion writer wire-up (NEW-E-4) so packet driftCount/driftPct surfaces real signal instead of always-null",
+      "contributing_tasks": [
+        "NEW-E-1",
+        "NEW-E-2"
+      ]
+    },
+    {
+      "id": "C-reader-side",
+      "slug": "reader-side",
+      "name": "Reader-side",
+      "v1_status": "33% in v1 (3/9). /v/[hash] K-anon aggregates + browser verifier + privacy doc shipped; dashboard + DM enrichment + CRM deferred.",
+      "remaining_target": "DM office profile + email-domain verification (NEW-T8-1a); reader dashboard for staffers (NEW-T8-1b); CRM integration (NEW-T8-5); per-DM profile enhancements (NEW-T8-7); aggregate weekly digest (NEW-T8-9); independent report URL Tier B (NEW-T8-4b); long-term-survivable artifact (NEW-T8-6); AttestationVerifier wired into /v/[hash] UI (NEW-E-5)",
+      "contributing_tasks": [
+        "NEW-T8-1a",
+        "NEW-T8-1b",
+        "NEW-T8-4b",
+        "NEW-T8-5",
+        "NEW-T8-6",
+        "NEW-T8-7",
+        "NEW-T8-9",
+        "NEW-E-5"
+      ]
+    },
+    {
+      "id": "C-data-sovereignty",
+      "slug": "data-sovereignty",
+      "name": "Data Sovereignty",
+      "v1_status": "0% in v1 (0/3). All mainnet-gated.",
+      "remaining_target": "Mainnet DistrictRegistry (NEW-T3-6) + SnapshotAnchor (NEW-T6-2); TIGER 2026 monitoring + DOGE/Census resilience (NEW-T3-7)",
+      "contributing_tasks": [
+        "NEW-T3-6",
+        "NEW-T3-7",
+        "NEW-T6-2"
+      ]
+    }
+  ]
+}

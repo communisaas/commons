@@ -53,7 +53,8 @@ function ratioBar(
 // deployment-agnostic `campaignId` instead.
 export function canonicalPreimage(ctx: ReportContext): string {
 	const { campaignId, campaignTitle, orgName, packet } = ctx;
-	const { verified, districtCount, authorship, dateRange, identityBreakdown, geography } = packet;
+	const { verified, districtCount, authorship, dateRange, identityBreakdown, geography, debate } =
+		packet;
 	const ib = identityBreakdown
 		? `${identityBreakdown.govId}|${identityBreakdown.addressVerified}|${identityBreakdown.emailOnly}`
 		: '';
@@ -68,6 +69,19 @@ export function canonicalPreimage(ctx: ReportContext): string {
 		)
 		.map((g) => `${g.hash}=${g.count}`)
 		.join(',');
+	// Debate field — only contributes to the preimage when present, otherwise
+	// emits an empty string so pre-debate campaigns keep their existing hash
+	// stable.
+	const debatePreimage = debate
+		? [
+				debate.marketPosition,
+				debate.totalStake,
+				debate.topArgumentScore,
+				debate.aiPanelConsensus === null ? '' : String(debate.aiPanelConsensus),
+				debate.participantCount === null ? '' : String(debate.participantCount),
+				debate.resolutionHash ?? ''
+			].join('|')
+		: '';
 	return [
 		'voter-protocol-report-v1',
 		`campaign:${campaignId}`,
@@ -78,7 +92,8 @@ export function canonicalPreimage(ctx: ReportContext): string {
 		ib,
 		`${authorship.individual}|${authorship.shared}|${authorship.explicit ? 1 : 0}`,
 		`${dateRange.earliest}|${dateRange.latest}|${dateRange.spanDays}`,
-		geo
+		geo,
+		debatePreimage
 	].join('\n---\n');
 }
 
@@ -391,6 +406,44 @@ function renderText(ctx: ReportContext, attestationHash: string): string {
 	lines.push(
 		'  https://github.com/communisaas/voter-protocol/blob/main/specs/REPORT-ATTESTATION-SPEC.md'
 	);
+	lines.push('');
+	// T8-4a — Offline verify block. If Commons.email is unreachable or the
+	// org distrusts the platform's verify URL, any SHA-256 implementation can
+	// reproduce this attestation from the listed fields. Order matters: must
+	// match `canonicalPreimage` exactly.
+	lines.push(rule);
+	lines.push('');
+	lines.push('Verify offline (no Commons URL required):');
+	lines.push('');
+	lines.push('  Compute SHA-256 of the following fields joined with the line');
+	lines.push("  separator '\\n---\\n':");
+	lines.push('');
+	lines.push('    voter-protocol-report-v1');
+	lines.push(`    campaign:${ctx.campaignId}`);
+	lines.push(`    ${ctx.campaignTitle}`);
+	lines.push(`    ${ctx.orgName}`);
+	lines.push(`    ${verified}`);
+	lines.push(`    ${districtCount}`);
+	lines.push(
+		`    ${identityBreakdown ? `${identityBreakdown.govId}|${identityBreakdown.addressVerified}|${identityBreakdown.emailOnly}` : '(no identity breakdown)'}`
+	);
+	lines.push(
+		`    ${authorship.individual}|${authorship.shared}|${authorship.explicit ? 1 : 0}`
+	);
+	lines.push(`    ${dateRange.earliest}|${dateRange.latest}|${dateRange.spanDays}`);
+	lines.push(
+		`    ${(geography ?? [])
+			.slice()
+			.sort((a, b) =>
+				b.count !== a.count ? b.count - a.count : a.hash.localeCompare(b.hash)
+			)
+			.map((g) => `${g.hash}=${g.count}`)
+			.join(',') || '(empty)'}`
+	);
+	lines.push('');
+	lines.push('  Result must equal the attestation hash above.');
+	lines.push('  Any platform-independent SHA-256 tool reproduces it:');
+	lines.push('    printf "<lines>" | shasum -a 256');
 	lines.push('');
 	lines.push(rule);
 	lines.push('');

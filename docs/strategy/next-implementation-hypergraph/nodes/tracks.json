@@ -1,0 +1,46 @@
+{
+  "tracks": [
+    {
+      "id": "TR-A",
+      "slug": "pre-launch-ops",
+      "name": "Track A — Pre-launch ops (gating)",
+      "description": "Operational gates that must close before first-org mDL launch. Engineering for the launch path is already complete per memory/iphase_completion.md; this track is the operator-driven sequence.",
+      "wave_ceiling": "W-1"
+    },
+    {
+      "id": "TR-B",
+      "slug": "post-launch-hardening",
+      "name": "Track B — Post-launch hardening (engineering, not gating)",
+      "description": "Hardening that lifts the launch into the J-phase posture: TEE Nitro Enclave + delegation executor, mainnet contracts (DistrictRegistry, SnapshotAnchor, DebateMarket), on-chain receipt anchoring, Merkle h3Index inclusion proofs. Engineering-bound but does not gate first-org launch.",
+      "wave_ceiling": "W-2"
+    },
+    {
+      "id": "TR-C",
+      "slug": "phase-2-precision",
+      "name": "Track C — Phase 2 precision",
+      "description": "ACS population layer + density-aware K-anonymity + SLDU/SLDL expansion + multi-state G3 measurement + Postal Bubble disambiguation + CT BAF/TIGER vintage shim. Post-launch, US-only expansion of measurement precision.",
+      "wave_ceiling": "W-3"
+    },
+    {
+      "id": "TR-D",
+      "slug": "international",
+      "name": "Track D — International expansion",
+      "description": "CA / GB / AU rep-lookup wiring, cross-border campaign schema, multi-country coalition delivery, TIGER 2026 monitoring + DOGE/Census resilience playbook. Post-Phase-2, requires Phase 2 substrate to be sound.",
+      "wave_ceiling": "W-4"
+    },
+    {
+      "id": "TR-E",
+      "slug": "substrate-cleanup",
+      "name": "Track E — Substrate writer wire-ups",
+      "description": "Four substrate-shipped-but-writer-unbound items from v1 sweep. Each has the type/field/mutation but the producer side isn't threaded — keeping them visible so 'reputationTier', 'atlasVersion', 'debate field', and 'brandingAccent' eventually surface as advertised. Cheap, focused cleanup.",
+      "wave_ceiling": "W-2"
+    },
+    {
+      "id": "TR-F",
+      "slug": "partnership-platform",
+      "name": "Track F — Partnership + platform",
+      "description": "AN OSDI sync, OSDI compliance namespace, developer portal, CRM integration story, SDK publish pipelines. Each gated on a partnership or RFP outcome — bundling so the sequencing is visible.",
+      "wave_ceiling": "W-3"
+    }
+  ]
+}

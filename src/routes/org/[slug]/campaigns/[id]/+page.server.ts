@@ -139,9 +139,11 @@ export const actions: Actions = {
 				campaignId: params.id as Id<'campaigns'>,
 				slug: params.slug,
 				title,
-				type,
+				// type was validated upstream against the runtime allowlist; cast
+				// at the boundary to match the Convex args union (campaignType).
+				type: type as 'LETTER' | 'EVENT' | 'FORM' | 'FUNDRAISER',
 				body: body ?? undefined,
-				templateId: templateId ?? undefined,
+				templateId: templateId ? (templateId as Id<'templates'>) : undefined,
 				debateEnabled,
 				debateThreshold,
 				targetCountry,
@@ -258,7 +260,9 @@ export const actions: Actions = {
 			await serverMutation(api.campaigns.updateStatus, {
 				campaignId: params.id as Id<'campaigns'>,
 				slug: params.slug,
-				status: newStatus
+				// newStatus was validated against the allowlist above; cast at
+				// the boundary to match the Convex args union.
+				status: newStatus as 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETE'
 			});
 		} catch (e: any) {
 			if (e.message?.includes('not found')) {

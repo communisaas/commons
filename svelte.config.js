@@ -40,7 +40,24 @@ const config = {
 				'default-src': ['self'],
 				'script-src': ['self', 'wasm-unsafe-eval'],
 				'style-src': ['self', 'unsafe-inline', 'https://fonts.googleapis.com'],
-				'img-src': ['self', 'data:', 'blob:', 'https://tile.openstreetmap.org', 'https://*.basemaps.cartocdn.com'],
+				'img-src': [
+					'self',
+					'data:',
+					'blob:',
+					'https://tile.openstreetmap.org',
+					'https://*.basemaps.cartocdn.com',
+					// Shadow Atlas pre-rendered per-district basemap PNGs. Same host
+					// as the GeoJSON; mirrors connect-src's atlasHosts treatment.
+					...atlasHosts,
+					// OAuth provider avatar CDNs (consumed via `user.image` from the
+					// providers wired in src/lib/core/auth/oauth-providers.ts).
+					'https://*.googleusercontent.com',
+					'https://*.fbcdn.net',
+					'https://media.licdn.com',
+					'https://pbs.twimg.com',
+					'https://cdn.discordapp.com',
+					'https://avatars.githubusercontent.com'
+				],
 				'font-src': ['self', 'https://fonts.gstatic.com'],
 				'connect-src': [
 					'self',

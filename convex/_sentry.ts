@@ -36,6 +36,8 @@
  * surfaces the original failure to the user.
  */
 
+
+declare const process: { env: Record<string, string | undefined> };
 const SENTRY_CLIENT = "commons-convex/1.0";
 
 export type SentryLevel = "fatal" | "error" | "warning" | "info" | "debug";

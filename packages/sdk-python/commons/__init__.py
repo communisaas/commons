@@ -15,6 +15,7 @@ from .client import (
     AsyncSupporterResource,
     AsyncTagResource,
     AsyncUsageResource,
+    AsyncWebhookResource,
     AsyncWorkflowResource,
     CallResource,
     CampaignResource,
@@ -28,9 +29,11 @@ from .client import (
     SupporterResource,
     TagResource,
     UsageResource,
+    WebhookResource,
     WorkflowResource,
     _AsyncHttpClient,
     _HttpClient,
+    verify_webhook_signature,
 )
 from .errors import (
     AuthenticationError,
@@ -48,6 +51,7 @@ from .types import (
     CampaignDetail,
     CampaignFull,
     CreateSupporterInput,
+    CreateWebhookInput,
     Donation,
     DonationDetail,
     Event,
@@ -62,7 +66,11 @@ from .types import (
     Supporter,
     Tag,
     UpdateSupporterInput,
+    UpdateWebhookInput,
     Usage,
+    Webhook,
+    WebhookCreated,
+    WebhookSecretRotated,
     Workflow,
     WorkflowDetail,
 )
@@ -104,6 +112,13 @@ __all__ = [
     "Network",
     "NetworkDetail",
     "NetworkStats",
+    "Webhook",
+    "WebhookCreated",
+    "WebhookSecretRotated",
+    "CreateWebhookInput",
+    "UpdateWebhookInput",
+    # Helpers
+    "verify_webhook_signature",
 ]
 
 _DEFAULT_BASE_URL = "https://commons.email/api/v1"
@@ -144,6 +159,7 @@ class Commons:
         self.usage = UsageResource(self._client)
         self.org = OrgResource(self._client)
         self.keys = KeyResource(self._client)
+        self.webhooks = WebhookResource(self._client)
 
     def close(self) -> None:
         self._client.close()
@@ -185,6 +201,7 @@ class AsyncCommons:
         self.usage = AsyncUsageResource(self._client)
         self.org = AsyncOrgResource(self._client)
         self.keys = AsyncKeyResource(self._client)
+        self.webhooks = AsyncWebhookResource(self._client)
 
     async def close(self) -> None:
         await self._client.close()

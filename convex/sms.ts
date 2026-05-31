@@ -5,6 +5,7 @@
 
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { smsRecipientFilterValidator, smsBlastStatus } from "./_validators";
 import { requireOrgRole } from "./_authHelpers";
 
 /**
@@ -159,7 +160,7 @@ export const createBlast = mutation({
     body: v.string(),
     fromNumber: v.string(),
     campaignId: v.optional(v.id("campaigns")),
-    recipientFilter: v.optional(v.any()),
+    recipientFilter: v.optional(smsRecipientFilterValidator),
     totalRecipients: v.number(),
   },
   handler: async (ctx, args) => {
@@ -203,18 +204,11 @@ export const updateBlast = mutation({
     slug: v.string(),
     blastId: v.id("smsBlasts"),
     body: v.optional(v.string()),
-    recipientFilter: v.optional(v.any()),
+    recipientFilter: v.optional(smsRecipientFilterValidator),
     totalRecipients: v.optional(v.number()),
     // Pin status to documented enum; free-form `v.string()` would let
     // writers drift from the four known states.
-    status: v.optional(
-      v.union(
-        v.literal("draft"),
-        v.literal("sending"),
-        v.literal("sent"),
-        v.literal("failed"),
-      ),
-    ),
+    status: v.optional(smsBlastStatus),
   },
   handler: async (ctx, args) => {
     const { org } = await requireOrgRole(ctx, args.slug, "editor");

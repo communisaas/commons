@@ -913,7 +913,6 @@ const addressSchema = z.object({
 ┌──────────────────────────────────────────────────────────────┐
 │  JOB: notify (always)                                         │
 │  1. Create GitHub issue with results                          │
-│  2. Optional Slack webhook                                    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
