@@ -31,17 +31,38 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 
 	it('email.getBlastRecipients has runtime filter validation (no unchecked cast)', () => {
 		const svelte = source('convex/email.ts');
-		// The unchecked `as typeof filter` cast must be gone.
-		const getRecip = svelte.slice(
-			svelte.indexOf('let filter: {'),
-			svelte.indexOf('let filter: {') + 2000
+		// The unchecked `as typeof filter` cast must be gone (file-wide).
+		expect(svelte).not.toMatch(/blast\.recipientFilter as typeof filter/);
+		// Shape validation now lives in readSafeRecipientFilter: fail-closed
+		// object check + per-field validation.
+		const readSafeStart = svelte.indexOf('function readSafeRecipientFilter');
+		expect(readSafeStart).toBeGreaterThan(-1);
+		const readSafe = svelte.slice(readSafeStart, readSafeStart + 2000);
+		expect(readSafe).toContain("if (!raw || typeof raw !== 'object') return {};");
+		expect(readSafe).toMatch(/cleanStringArray\(\s*candidate\.tagIds/);
+		expect(readSafe).toMatch(/tagId\.length > 0 && tagId\.length <= 64/);
+		expect(readSafe).toMatch(/candidate\.verified === ['"]any['"]/);
+		expect(readSafe).toMatch(/candidate\.verified === ['"]verified['"]/);
+		expect(readSafe).toMatch(/candidate\.verified === ['"]unverified['"]/);
+		// Per-item validation: cleanStringArray rejects non-arrays and filters
+		// each item through the predicate (replaces Array.isArray + .every pin).
+		const cleanStart = svelte.indexOf('function cleanStringArray');
+		expect(cleanStart).toBeGreaterThan(-1);
+		const clean = svelte.slice(cleanStart, cleanStart + 800);
+		expect(clean).toContain('if (!Array.isArray(value)) return undefined;');
+		expect(clean).toMatch(/typeof item === ['"]string['"] && predicate\(item\)/);
+		// getBlastRecipients validates the persisted filter at recipient-load
+		// (org-scoped lookup, fail-closed) and applies it via the shared
+		// _emailRecipientFilter module.
+		const blastStart = svelte.indexOf('export const getBlastRecipients = internalQuery');
+		expect(blastStart).toBeGreaterThan(-1);
+		const getRecip = svelte.slice(blastStart, blastStart + 3000);
+		expect(getRecip).toMatch(/if \(!blast \|\| blast\.orgId !== args\.orgId\)/);
+		expect(getRecip).toContain('readSafeRecipientFilter(blast.recipientFilter)');
+		expect(getRecip).toContain('applyEmailRecipientFilter(ctx, args.orgId, results, filter)');
+		expect(svelte).toContain(
+			"import { applyEmailRecipientFilter } from './_emailRecipientFilter';"
 		);
-		expect(getRecip).not.toMatch(/blast\.recipientFilter as typeof filter/);
-		// Required: candidate object check + per-field validation.
-		expect(getRecip).toContain('raw && typeof raw === "object"');
-		expect(getRecip).toMatch(/Array\.isArray\(candidate\.tagIds\)/);
-		expect(getRecip).toMatch(/candidate\.tagIds\.every\(/);
-		expect(getRecip).toMatch(/candidate\.verified === "any"/);
 	});
 
 	it('sms.createBlast/updateBlast has body cap + status enum', () => {
@@ -74,7 +95,11 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 	it('workflow step shape validation (allow-list types + bounds)', () => {
 		const svelte = source('convex/workflows.ts');
 		expect(svelte).toContain('function validateWorkflowSteps');
-		expect(svelte).toMatch(/ALLOWED_STEP_TYPES.*=\s*\["send_email",\s*"add_tag",\s*"delay",\s*"condition"\]/);
+		// Allow-list grew remove_tag when the workflow runner was armed
+		// (FEATURES.WORKFLOW_EXECUTION); pin the exact current list.
+		expect(svelte).toMatch(
+			/ALLOWED_STEP_TYPES\s*=\s*\[\s*['"]send_email['"],\s*['"]add_tag['"],\s*['"]remove_tag['"],\s*['"]delay['"],\s*['"]condition['"]\s*\]/
+		);
 		// delayMinutes bounded.
 		expect(svelte).toContain('MAX_DELAY_MINUTES');
 		expect(svelte).toContain('STEP_${i}_DELAY_OUT_OF_RANGE');
@@ -95,6 +120,7 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 	it('importBatch pre-validates cross-org tagIds + logs row errors', () => {
 		const svelte = source('convex/supporters.ts');
 		const start = svelte.indexOf('export const importBatch = mutation');
+		expect(start).toBeGreaterThan(-1);
 		const next = svelte.indexOf('export const ', start + 30);
 		const importB = svelte.slice(start, next > 0 ? next : start + 9000);
 		// Pre-validation loop over allTagIds.
@@ -104,7 +130,7 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 		expect(importB).toContain('TAG_ID_INVALID');
 		expect(importB).toContain('String(tag.orgId) !== String(org._id)');
 		// `as any` cast on tagId must be gone; normalizeId used instead.
-		expect(importB).toContain('ctx.db.normalizeId("tags"');
+		expect(importB).toMatch(/ctx\.db\.normalizeId\(['"]tags['"]/);
 		expect(importB).not.toMatch(/tagId:\s*tagId as any/);
 		// Silent catch retired — must log per-row errors.
 		expect(importB).toContain('errors: string[]');

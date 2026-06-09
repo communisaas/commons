@@ -54,15 +54,21 @@ describe('public Convex action auth gates', () => {
 	it('supporters.importWithEncryption has explicit editor gate before HMAC + unseal', () => {
 		const svelte = source('convex/supporters.ts');
 		expect(svelte).toContain('export const requireImportAuth = internalQuery');
-		const action = svelte.slice(
-			svelte.indexOf('export const importWithEncryption = action'),
-			svelte.indexOf('export const importWithEncryption = action') + 3000
-		);
+		// Slice the whole action body (bounded by the next top-level
+		// export) rather than a fixed char window: the handler's
+		// action-boundary length-cap block precedes the gate and grows
+		// with the supporter schema.
+		const start = svelte.indexOf('export const importWithEncryption = action');
+		expect(start).toBeGreaterThan(-1);
+		const end = svelte.indexOf('\nexport const ', start + 1);
+		const action = svelte.slice(start, end === -1 ? undefined : end);
 		expect(action).toContain('runQuery(requireImportAuthRef');
 		const gatePos = action.indexOf('runQuery(requireImportAuthRef');
 		const hmacPos = action.indexOf('computeOrgScopedEmailHash');
+		const unsealPos = action.indexOf('getOrgKeyForAction');
 		expect(gatePos).toBeGreaterThan(0);
 		expect(hmacPos).toBeGreaterThan(gatePos);
+		expect(unsealPos).toBeGreaterThan(gatePos);
 	});
 
 	it('invites.create and invites.resend share requireCreateInvitesAuth gate', () => {

@@ -199,7 +199,9 @@ describe('POST /api/agents/stream-message recoverable jobs', () => {
 
 		expect(response.status).toBe(200);
 		expect(mockGenerateMessage).not.toHaveBeenCalled();
-		expect(mockEmitter.send).toHaveBeenCalledWith('job-running', { job: activeJob });
+		expect(mockEmitter.send).toHaveBeenCalledWith('job-running', {
+			job: { ...activeJob, traceId: expect.any(String) }
+		});
 	});
 
 	it('persists encrypted completion for a newly created recoverable job', async () => {

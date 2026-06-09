@@ -1,16 +1,25 @@
 /**
  * Unit Tests: Representative lookup service.
  *
- * The current service is an explicit no-data stub until country-specific
- * representative data sources are wired in.
+ * The current service is an explicit fail-closed boundary until
+ * country-specific representative data sources are wired in.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { lookupRepresentatives } from '$lib/server/geographic/rep-lookup';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+	RepresentativeLookupNotConfiguredError,
+	lookupRepresentatives
+} from '$lib/server/geographic/rep-lookup';
 import type { CountryCode } from '$lib/server/geographic/types';
 
+let debugSpy: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
-	vi.clearAllMocks();
+	debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+});
+
+afterEach(() => {
+	debugSpy.mockRestore();
 });
 
 describe('lookupRepresentatives', () => {
@@ -20,23 +29,29 @@ describe('lookupRepresentatives', () => {
 		['CA', '35075'],
 		['AU', 'sydney']
 	] satisfies Array<[CountryCode, string]>)(
-		'returns an empty list for %s until data sources are configured',
+		'fails closed for %s until data sources are configured',
 		async (countryCode, districtId) => {
-			await expect(lookupRepresentatives(countryCode, districtId)).resolves.toEqual([]);
+			await expect(lookupRepresentatives(countryCode, districtId)).rejects.toMatchObject({
+				code: 'REP_LOOKUP_NOT_CONFIGURED',
+				countryCode,
+				districtId
+			});
 		}
 	);
 
-	it('logs the stub lookup for observability', async () => {
-		const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
-
-		await lookupRepresentatives('GB', 'E14000639');
+	it('logs the boundary lookup for observability', async () => {
+		await expect(lookupRepresentatives('GB', 'E14000639')).rejects.toBeInstanceOf(
+			RepresentativeLookupNotConfiguredError
+		);
 
 		expect(debugSpy).toHaveBeenCalledWith(
-			'[rep-lookup] Stub: lookupRepresentatives(GB, E14000639) — no data source configured'
+			'[rep-lookup] Boundary: lookupRepresentatives(GB, E14000639) has no configured data source'
 		);
 	});
 
-	it('returns an empty list for valid but currently unsupported future countries', async () => {
-		await expect(lookupRepresentatives('FR', '75001')).resolves.toEqual([]);
+	it('names valid but currently unsupported future countries as dependency-first', async () => {
+		await expect(lookupRepresentatives('FR', '75001')).rejects.toThrow(
+			'Representative lookup is not configured for FR'
+		);
 	});
 });

@@ -384,6 +384,8 @@ describe('Source Discovery — discoverSources', () => {
 
 		// Should fall back to basic candidates derived from fetched pages
 		expect(result.evaluated.length).toBeGreaterThan(0);
+		expect(result.evaluationFallback).toBe(true);
+		expect(result.evaluationFallbackError).toContain('Evaluator unavailable');
 		expect(result.evaluated[0].credibility_rationale).toContain('Evaluation unavailable');
 
 		warnSpy.mockRestore();
@@ -589,7 +591,7 @@ describe('formatSourcesForPrompt', () => {
 
 	it('returns no-citations message when sources array is empty', () => {
 		const formatted = formatSourcesForPrompt([]);
-		expect(formatted).toContain('No verified sources available');
+		expect(formatted).toContain('No source ground available');
 		expect(formatted).toContain('without citations');
 	});
 
@@ -753,6 +755,37 @@ describe('Message Writer — generateMessage', () => {
 			expect(mockGenerateContentStream).toHaveBeenCalledTimes(1);
 		});
 
+		it('marks cached fallback sources as search-only source evidence', async () => {
+			const verifiedSources = [
+				makeEvaluatedSource({
+					credibility_rationale: 'Evaluation unavailable — source included based on search relevance.',
+					incentive_position: 'neutral'
+				})
+			];
+			const onSourceEvidence = vi.fn();
+
+			mockGenerateContentStream.mockResolvedValueOnce(
+				makeStream([{ text: makeMessageResponse() }])
+			);
+
+			const result = await generateMessage({
+				...baseOptions,
+				verifiedSources,
+				onSourceEvidence
+			});
+
+			expect(onSourceEvidence).toHaveBeenCalledWith(
+				expect.objectContaining({
+					sourceCount: 1,
+					mode: 'preverified',
+					evaluatedSourceCount: 0,
+					searchOnlySourceCount: 1,
+					evaluationFallback: true
+				})
+			);
+			expect(result.sources[0].credibility_rationale).toContain('Evaluation unavailable');
+		});
+
 		it('fires message-write trace event with FULL prompt + response when traceId provided', async () => {
 			const verifiedSources = [makeEvaluatedSource()];
 			const responseText = makeMessageResponse();
@@ -782,7 +815,9 @@ describe('Message Writer — generateMessage', () => {
 					temperature: 0.8,
 					thinkingLevel: 'high',
 					groundingEnabled: false,
-					verifiedSourceCount: 1
+					sourceGroundCount: 1,
+					evaluatedSourceCount: 1,
+					searchOnlySourceCount: 0
 				})
 			);
 
@@ -1147,7 +1182,7 @@ describe('Message Writer — generateMessage', () => {
 			expect(callConfig.systemInstruction).toContain(String(currentYear));
 		});
 
-		it('includes verified sources block in prompt', async () => {
+		it('includes source-ground block in prompt', async () => {
 			const verifiedSources = [
 				makeEvaluatedSource({ num: 1, title: 'Test EPA Report', url: 'https://epa.gov/test' })
 			];
@@ -1162,6 +1197,8 @@ describe('Message Writer — generateMessage', () => {
 			});
 
 			const callContents = mockGenerateContentStream.mock.calls[0][0].contents;
+			expect(callContents).toContain('## Source Ground');
+			expect(callContents).toContain('Evaluation note: 1 source passed');
 			expect(callContents).toContain('Test EPA Report');
 			expect(callContents).toContain('https://epa.gov/test');
 		});
@@ -1222,7 +1259,7 @@ describe('Message Writer — generateMessage', () => {
 				}
 			});
 
-			expect(completeMessage).toContain('2 verified sources');
+			expect(completeMessage).toContain('2 source rows');
 		});
 	});
 });

@@ -27,7 +27,7 @@ describe('compileEmailShell', () => {
 		expect(out).toContain('8 districts');
 	});
 
-	it('does NOT process merge fields (bulk-mode contract)', () => {
+	it('leaves merge fields for the dispatch path to resolve per recipient', () => {
 		const out = compileEmailShell('Hi {{firstName}}!', verification, {});
 		expect(out).toContain('{{firstName}}');
 	});

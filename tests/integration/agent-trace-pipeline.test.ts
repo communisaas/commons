@@ -245,6 +245,35 @@ describe('agent-trace pipeline — happy path', () => {
 			safe: true
 		});
 	});
+
+	it('forwards evaluated source evidence as typed SSE and trace evidence', async () => {
+		const event = createEvent(baseBody());
+		await POST(event);
+		await event.waitUntilPromise;
+
+		const [traceId] = mockTraceStart.mock.calls[0];
+		const options = mockGenerateMessage.mock.calls[0][0];
+		const evidence = {
+			sourceCount: 3,
+			mode: 'discovery',
+			evaluatedSourceCount: 2,
+			searchOnlySourceCount: 1,
+			evaluationFallback: true,
+			candidateCount: 9,
+			failedCount: 1,
+			searchQueryCount: 3
+		};
+
+		options.onSourceEvidence(evidence);
+
+		expect(mockEmitter.send).toHaveBeenCalledWith('source-evidence', evidence);
+		expect(mockTraceEvent).toHaveBeenCalledWith(
+			traceId,
+			'message-generation',
+			'source-evidence',
+			evidence
+		);
+	});
 });
 
 describe('agent-trace pipeline — error path', () => {

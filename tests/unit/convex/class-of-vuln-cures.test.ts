@@ -50,8 +50,10 @@ describe('class-of-vulnerability cures (source-text pins)', () => {
 			svelte.indexOf('export const triggerEnclaveSend'),
 			svelte.indexOf('export const triggerEnclaveSend') + 2500
 		);
-		expect(trigger).toContain('blast.status !== "sending"');
-		expect(trigger).not.toContain('blast.status !== "scheduled" && blast.status !== "sending"');
+		expect(trigger).toMatch(/blast\.status !== ['"]sending['"]/);
+		expect(trigger).not.toMatch(
+			/blast\.status !== ['"]scheduled['"] && blast\.status !== ['"]sending['"]/
+		);
 	});
 
 	it('webhooks.handleInboundSms logs TCPA drop instead of silent swallow', () => {
@@ -70,7 +72,9 @@ describe('class-of-vulnerability cures (source-text pins)', () => {
 			svelte.indexOf('export const createRsvp = action'),
 			svelte.indexOf('export const createRsvp = action') + 2000
 		);
-		expect(action).toMatch(/ALLOWED_RSVP_STATUSES.*=\s*\["GOING",\s*"MAYBE",\s*"NOT_GOING",\s*"WAITLISTED"\]/);
+		expect(action).toMatch(
+			/ALLOWED_RSVP_STATUSES.*=\s*\[['"]GOING['"],\s*['"]MAYBE['"],\s*['"]NOT_GOING['"],\s*['"]WAITLISTED['"]\]/
+		);
 		expect(action).toContain('INVALID_RSVP_STATUS');
 	});
 
