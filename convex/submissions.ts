@@ -102,6 +102,41 @@ function getCongressionalTransportConfig(): CongressionalTransportConfig {
 	};
 }
 
+export const getCongressionalDeliveryReadiness = query({
+	args: {},
+	handler: async (ctx) => {
+		await requireAuth(ctx);
+
+		const launched = isCongressionalDeliveryLaunched();
+		const transport = getCongressionalTransportConfig();
+		const missing: string[] = [];
+
+		if (!launched) {
+			missing.push('CONGRESSIONAL_DELIVERY_LAUNCHED/CWC_DELIVERY_LAUNCHED/FEATURE_CONGRESSIONAL');
+		}
+		if (!transport.houseProxyUrl) missing.push('GCP_PROXY_URL');
+		if (!transport.houseProxyToken) missing.push('GCP_PROXY_AUTH_TOKEN');
+		if (!transport.senateBaseUrl) missing.push('CWC_API_BASE_URL');
+		if (!transport.senateKey) missing.push('CWC_API_KEY');
+
+		const ready = launched && transport.hasHouseConfig && transport.hasSenateConfig;
+		const dependency =
+			'congressional launch flag + House CWC proxy env + Senate CWC API env + per-submission proof/template checks';
+
+		return {
+			ready,
+			launched,
+			houseTransportConfigured: transport.hasHouseConfig,
+			senateTransportConfigured: transport.hasSenateConfig,
+			missing,
+			dependency,
+			message: ready
+				? 'Congressional delivery transport is configured; submission-local proof, template, witness, chamber, and representative checks still gate each CWC side effect.'
+				: `Congressional delivery transport is not armed; missing ${missing.join(', ')}.`
+		};
+	}
+});
+
 function getTemplateDeliveryError(template: CongressionalDeliveryTemplate | null): string | null {
 	if (!template) return 'CWC_TEMPLATE_NOT_FOUND';
 	if (template.deliveryMethod !== 'cwc') return 'CWC_TEMPLATE_NOT_CWC';

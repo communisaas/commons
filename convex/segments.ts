@@ -10,7 +10,13 @@ import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
 import { internal } from "./_generated/api";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Id } from "./_generated/dataModel";
+import {
+  filterNeedsActionContext,
+  matchFilter,
+  normalizeSegmentFilter,
+  type SegmentActionContext,
+} from "./_segmentMatch";
 
 type ExportMatchingRow = {
   _id: string;
@@ -44,138 +50,6 @@ const exportMatchingRef = makeFunctionReference<"query">("segments:exportMatchin
   { slug: string; filters: unknown },
   ExportMatchingRow[]
 >;
-
-// =============================================================================
-// SEGMENT FILTER ENGINE (in-memory equivalent of buildSegmentWhere)
-// =============================================================================
-
-interface SegmentCondition {
-  id: string;
-  field: string;
-  operator: string;
-  value: unknown;
-}
-
-interface SegmentFilter {
-  logic: "AND" | "OR";
-  conditions: SegmentCondition[];
-}
-
-function matchCondition(
-  supporter: Doc<"supporters">,
-  supporterTagIds: Set<string>,
-  cond: SegmentCondition,
-): boolean {
-  // Unknown fields and unknown operators FAIL CLOSED (return false →
-  // "matches nothing") instead of fail-open (return true → "matches
-  // everything"). Without this, a typo'd or malicious filter like
-  // {field: "tag", operator: "typo"} would match every supporter — and
-  // `bulkApplyTag`/`bulkRemoveTag` would happily apply the tag to the
-  // entire org. The `engagementTier` case is the one INTENTIONAL
-  // pass-through (documented legacy); every other unknown path returns
-  // false. A `console.warn` per unknown surface lets operators see
-  // malformed filters in logs without breaking the action's transaction.
-  switch (cond.field) {
-    case "tag":
-      if (cond.operator === "includes") return supporterTagIds.has(String(cond.value));
-      if (cond.operator === "excludes") return !supporterTagIds.has(String(cond.value));
-      console.warn(`[segments.matchCondition] unknown tag operator='${cond.operator}' — matching nothing`);
-      return false;
-    case "emailStatus":
-      if (cond.operator === "equals") return supporter.emailStatus === String(cond.value);
-      console.warn(`[segments.matchCondition] unknown emailStatus operator='${cond.operator}' — matching nothing`);
-      return false;
-    case "source":
-      if (cond.operator === "equals") return supporter.source === String(cond.value);
-      console.warn(`[segments.matchCondition] unknown source operator='${cond.operator}' — matching nothing`);
-      return false;
-    case "verification":
-      if (cond.operator === "equals" && cond.value === "verified") return supporter.verified === true;
-      if (cond.operator === "equals" && cond.value === "unverified") return supporter.verified !== true;
-      console.warn(`[segments.matchCondition] unknown verification op='${cond.operator}' value='${String(cond.value)}' — matching nothing`);
-      return false;
-    case "engagementTier":
-      // No-op pass-through — every supporter matches. engagementTier is
-      // not a supporter-level field; the metric lives on action tables
-      // (campaignActions, debateArguments, eventRsvps). This case stays
-      // for compatibility with legacy SegmentFilter JSON (the
-      // SegmentBuilder labels the option "(legacy)" to discourage new
-      // use). Replace with an aggregate-from-actions implementation when
-      // engagement-tier becomes a surfaced product metric. Intentional
-      // fail-OPEN — only documented exception to the fail-closed default.
-      return true;
-    case "dateRange": {
-      const created = supporter._creationTime;
-      if (cond.operator === "after") return created >= new Date(String(cond.value)).getTime();
-      if (cond.operator === "before") return created <= new Date(String(cond.value)).getTime();
-      console.warn(`[segments.matchCondition] unknown dateRange operator='${cond.operator}' — matching nothing`);
-      return false;
-    }
-    case "postalCode": {
-      // Case-insensitive prefix/exact match across postal formats (UK uses
-      // letters, US uses digits). Server normalizes via toUpperCase since
-      // postal codes are ASCII and case is not semantically meaningful.
-      const target = String(cond.value ?? "").trim().toUpperCase();
-      const actual = (supporter.postalCode ?? "").trim().toUpperCase();
-      if (!target || !actual) return false;
-      if (cond.operator === "equals") return actual === target;
-      if (cond.operator === "startsWith") return actual.startsWith(target);
-      console.warn(`[segments.matchCondition] unknown postalCode operator='${cond.operator}' — matching nothing`);
-      return false;
-    }
-    case "country": {
-      // ISO 3166-1 alpha-2 codes are uppercase by convention; normalize.
-      const target = String(cond.value ?? "").trim().toUpperCase();
-      const actual = (supporter.country ?? "").trim().toUpperCase();
-      if (!target || !actual) return false;
-      if (cond.operator === "equals") return actual === target;
-      console.warn(`[segments.matchCondition] unknown country operator='${cond.operator}' — matching nothing`);
-      return false;
-    }
-    case "campaignParticipation":
-      // Cannot evaluate participation from a single supporter row — the
-      // signal lives in campaignActions keyed by supporterId. matchFilter
-      // sees only the supporter; an enriched-context implementation would
-      // pre-load action sets per supporter and join here. Until that's in
-      // place, fail closed (no participation match) rather than fail open.
-      console.warn(`[segments.matchCondition] campaignParticipation needs enriched context — matching nothing for now`);
-      return false;
-    default:
-      console.warn(`[segments.matchCondition] unknown field='${cond.field}' — matching nothing`);
-      return false;
-  }
-}
-
-/**
- * Condition-count cap on segment filters. `filters: v.any()` across 6
- * sites would otherwise let a malicious editor send `{logic:'AND',
- * conditions: <10k-element array>}` against a 10k-supporter org → ~10⁸
- * predicate evaluations per query call. Combined with unbounded
- * `.collect()` on supporters this blows Convex's per-query read limit
- * and leaves the segment endpoints inaccessible. Cap matches a
- * generous-but-bounded realistic limit: 32 conditions is well beyond
- * what real segment UIs produce (Action Network caps at ~10), and the
- * explicit error makes the failure self-explanatory rather than a
- * vague timeout.
- */
-const MAX_SEGMENT_CONDITIONS = 32;
-
-function matchFilter(
-  supporter: Doc<"supporters">,
-  tagIds: Set<string>,
-  filter: SegmentFilter,
-): boolean {
-  if (!filter.conditions || filter.conditions.length === 0) return true;
-  if (filter.conditions.length > MAX_SEGMENT_CONDITIONS) {
-    throw new Error(
-      `SEGMENT_FILTER_TOO_MANY_CONDITIONS (max ${MAX_SEGMENT_CONDITIONS})`,
-    );
-  }
-  if (filter.logic === "AND") {
-    return filter.conditions.every((c) => matchCondition(supporter, tagIds, c));
-  }
-  return filter.conditions.some((c) => matchCondition(supporter, tagIds, c));
-}
 
 // =============================================================================
 // QUERIES
@@ -340,10 +214,9 @@ export const getMatchingSupportersPage = internalQuery({
       .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
       .paginate({ numItems: pageSize, cursor: paginationCursor ?? null });
 
-    const noFilter =
-      !filters ||
-      !filters.conditions ||
-      (filters as SegmentFilter).conditions.length === 0;
+    const typedFilter = normalizeSegmentFilter(filters);
+    const noFilter = typedFilter.conditions.length === 0;
+    const needsActionContext = !noFilter && filterNeedsActionContext(typedFilter);
 
     const matches: Array<{
       _id: Id<"supporters">;
@@ -366,10 +239,37 @@ export const getMatchingSupportersPage = internalQuery({
           .withIndex("by_supporterId", (idx) => idx.eq("supporterId", s._id))
           .collect();
         tagIdsArr = tags.map((t) => t.tagId as string);
+        let actionContext: SegmentActionContext | undefined;
+        if (needsActionContext) {
+          const actions = await ctx.db
+            .query("campaignActions")
+            .withIndex("by_orgId_supporterId", (idx) =>
+              idx.eq("orgId", orgId).eq("supporterId", s._id),
+            )
+            .collect();
+          actionContext = {
+            campaignIds: new Set(actions.map((action) => String(action.campaignId))),
+            districtHashes: new Set(
+              actions
+                .map((action) => action.districtHash?.trim().toLowerCase())
+                .filter((hash): hash is string => !!hash),
+            ),
+            districtCodes: new Set(
+              actions
+                .map((action) => action.districtCode?.trim().toUpperCase())
+                .filter((code): code is string => !!code),
+            ),
+            maxEngagementTier: actions.reduce(
+              (max, action) => Math.max(max, action.engagementTier ?? 0),
+              0,
+            ),
+          };
+        }
         isMatch = matchFilter(
           s,
           new Set(tagIdsArr),
-          filters as SegmentFilter,
+          typedFilter,
+          actionContext,
         );
       }
       if (isMatch) {

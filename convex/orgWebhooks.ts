@@ -33,9 +33,20 @@ import {
 } from './_generated/server';
 import { internal } from './_generated/api';
 import { requireOrgRole } from './_authHelpers';
+import type { Id } from './_generated/dataModel';
 
 const MAX_ATTEMPTS = 5;
 const RETRY_BASE_MS = 60_000; // 1 minute; backoff is 2^attempt * RETRY_BASE_MS
+const WEBHOOK_TEST_EVENT = 'webhook.test';
+
+type WebhookTestDeliveryResult =
+	| {
+			error: null;
+			deliveryId: Id<'orgWebhookDeliveries'>;
+			event: typeof WEBHOOK_TEST_EVENT;
+			queuedAt: number;
+	  }
+	| { error: 'not_found' | 'disabled' };
 
 /**
  * Sign a payload with HMAC-SHA256. Pattern matches the Stripe webhook scheme:
@@ -125,6 +136,68 @@ export const queueEvent = internalMutation({
 				deliveryId
 			});
 		}
+	}
+});
+
+/**
+ * Enqueue a targeted signed test delivery for one endpoint. This deliberately
+ * bypasses subscription matching: operators need to verify the endpoint,
+ * signing secret, and retry log without creating a real supporter/campaign
+ * side effect or fanning out to every subscriber.
+ */
+export const enqueueTestDelivery = internalMutation({
+	args: {
+		orgId: v.id('organizations'),
+		webhookId: v.id('orgWebhooks'),
+		trigger: v.union(v.literal('session'), v.literal('api'))
+	},
+	handler: async (ctx, { orgId, webhookId, trigger }): Promise<WebhookTestDeliveryResult> => {
+		const webhook = await ctx.db.get(webhookId);
+		if (!webhook || webhook.orgId !== orgId) {
+			return { error: 'not_found' as const };
+		}
+		if (!webhook.enabled) {
+			return { error: 'disabled' as const };
+		}
+
+		const now = Date.now();
+		const payload = JSON.stringify({
+			event: WEBHOOK_TEST_EVENT,
+			timestamp: now,
+			orgId,
+			data: {
+				webhookId,
+				trigger,
+				note: 'Synthetic Commons webhook test delivery. No supporter, campaign, donation, or event record was changed.'
+			}
+		});
+
+		await ctx.db.insert('orgEvents', {
+			orgId,
+			event: WEBHOOK_TEST_EVENT,
+			payload,
+			emittedAt: now
+		});
+
+		const deliveryId = await ctx.db.insert('orgWebhookDeliveries', {
+			webhookId,
+			orgId,
+			event: WEBHOOK_TEST_EVENT,
+			payload,
+			attempt: 1,
+			isDead: false
+		});
+
+		await ctx.scheduler.runAfter(0, internal.orgWebhooks.deliverWebhook, {
+			deliveryId
+		});
+
+		return {
+			error: null,
+			deliveryId,
+			event: WEBHOOK_TEST_EVENT,
+			queuedAt: now
+		};
 	}
 });
 
@@ -370,6 +443,7 @@ export const sessionListRecentDeliveries = query({
 			.filter((d) => d.orgId === org._id)
 			.map((d) => ({
 				id: d._id,
+				createdAt: d._creationTime,
 				event: d.event,
 				attempt: d.attempt,
 				statusCode: d.statusCode ?? null,
@@ -378,6 +452,24 @@ export const sessionListRecentDeliveries = query({
 				errorMessage: d.errorMessage ?? null,
 				isDead: d.isDead
 			}));
+	}
+});
+
+export const sessionListRecentEvents = query({
+	args: { slug: v.string(), limit: v.optional(v.number()) },
+	handler: async (ctx, { slug, limit }) => {
+		const { org } = await requireOrgRole(ctx, slug, 'member');
+		const rows = await ctx.db
+			.query('orgEvents')
+			.withIndex('by_orgId_emittedAt', (q) => q.eq('orgId', org._id))
+			.order('desc')
+			.take(Math.min(limit ?? 8, 40));
+
+		return rows.map((row) => ({
+			id: row._id,
+			event: row.event,
+			emittedAt: row.emittedAt
+		}));
 	}
 });
 
@@ -423,6 +515,18 @@ export const sessionCreateWebhook = mutation({
 			webhook: { id, url: parsed.toString(), events, enabled: true, description: description ?? null },
 			signingSecret
 		};
+	}
+});
+
+export const sessionTestWebhook = mutation({
+	args: { slug: v.string(), webhookId: v.string() },
+	handler: async (ctx, { slug, webhookId }): Promise<WebhookTestDeliveryResult> => {
+		const { org } = await requireOrgRole(ctx, slug, 'editor');
+		return (await ctx.runMutation(internal.orgWebhooks.enqueueTestDelivery, {
+			orgId: org._id,
+			webhookId: webhookId as Id<'orgWebhooks'>,
+			trigger: 'session'
+		})) as WebhookTestDeliveryResult;
 	}
 });
 

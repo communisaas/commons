@@ -763,8 +763,9 @@ export const clearCampaignTemplateId = internalMutation({
 // SMS RECIPIENT FILTER NORMALIZATION (F34)
 // =============================================================================
 // Closes the v.any() → smsRecipientFilterValidator migration on
-// smsBlasts.recipientFilter. SMS dispatch isn't wired yet (memory: 'SMS
-// recipient filtering TODO'), but any pre-2026-05-26 fixture rows with
+// smsBlasts.recipientFilter. The bounded SMS proxy runner now accepts an
+// explicit client-decrypted batch, but the org UI cohort/decrypt sender still
+// needs conforming saved filters. Any pre-2026-05-26 fixture rows with
 // non-Id strings in `tags`/`segments`/`excludeTags` will block the
 // schema push. Run BEFORE pushing the closed-shape schema:
 //   npx convex run backfill:normalizeSmsRecipientFilters

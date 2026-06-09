@@ -9,7 +9,7 @@ import {
 	smsMessageStatus,
 	debateStatus,
 	accountabilityCausalityClass,
-	accountabilityResponseType,
+	accountabilityResponseType
 } from './_validators';
 
 // =============================================================================
@@ -493,12 +493,12 @@ export default defineSchema({
 		.index('by_userId_metric', ['userId', 'metric'])
 		.index('by_windowStart_metric', ['windowStart', 'metric']),
 
-		// ===========================================================================
-		// ENCRYPTED DELIVERY DATA — legacy tombstone
-		// ===========================================================================
-		// Retired by Ground Vault PRF. Kept temporarily so historical rows can be
-		// migrated or purged without deleting the table out from under deployments.
-		// No active mutation should write or read this table.
+	// ===========================================================================
+	// ENCRYPTED DELIVERY DATA — legacy tombstone
+	// ===========================================================================
+	// Retired by Ground Vault PRF. Kept temporarily so historical rows can be
+	// migrated or purged without deleting the table out from under deployments.
+	// No active mutation should write or read this table.
 
 	encryptedDeliveryData: defineTable({
 		userId: v.id('users'),
@@ -1102,6 +1102,7 @@ export default defineSchema({
 		resolved: v.boolean()
 	})
 		.index('by_emailHash_resolved', ['emailHash', 'resolved'])
+		.index('by_resolved', ['resolved'])
 		.index('by_reportedBy', ['reportedBy']),
 
 	// ===========================================================================
@@ -1433,8 +1434,13 @@ export default defineSchema({
 		anSync: v.optional(
 			v.object({
 				apiKey: v.string(),
-				status: v.string(), // 'idle' | 'running' | 'completed' | 'failed'
-				syncType: v.string(), // 'full' | 'incremental'
+				adapterSource: v.optional(v.string()),
+				credentialStoredAt: v.optional(v.number()),
+				credentialVersion: v.optional(v.string()),
+				credentialProbeCompletedAt: v.optional(v.number()),
+				credentialProbeVersion: v.optional(v.string()),
+				status: v.string(), // 'credential_stored' | 'idle' | 'running' | 'completed' | 'failed'
+				syncType: v.string(), // 'credential-only' | 'full' | 'incremental'
 				totalResources: v.number(),
 				processedResources: v.number(),
 				currentResource: v.optional(v.string()),
@@ -1564,6 +1570,8 @@ export default defineSchema({
 	supporters: defineTable({
 		orgId: v.id('organizations'),
 		postalCode: v.optional(v.string()),
+		stateCode: v.optional(v.string()),
+		congressionalDistrict: v.optional(v.string()),
 		country: v.optional(v.string()),
 
 		// PII encryption at rest
@@ -1588,6 +1596,12 @@ export default defineSchema({
 		verified: v.boolean(),
 		emailStatus: v.string(), // 'subscribed' | 'unsubscribed' | 'bounced' | 'complained'
 		smsStatus: v.string(), // 'none' | 'subscribed' | 'unsubscribed' | 'stopped'
+		emailConsentSource: v.optional(v.string()),
+		emailConsentedAt: v.optional(v.number()),
+		emailConsentText: v.optional(v.string()),
+		smsConsentSource: v.optional(v.string()),
+		smsConsentedAt: v.optional(v.number()),
+		smsConsentText: v.optional(v.string()),
 
 		// Soft-bounce tally. Transient/Undetermined SES bounces increment this;
 		// a successful Delivery resets it. Crosses threshold (=3) → emailStatus
@@ -1597,7 +1611,7 @@ export default defineSchema({
 		softBounceCount: v.optional(v.number()),
 
 		// Import tracking
-		source: v.optional(v.string()), // 'csv' | 'action_network' | 'organic' | 'widget'
+		source: v.optional(v.string()), // 'csv' | platform profile id | 'organic' | 'widget'
 		importedAt: v.optional(v.number()),
 
 		updatedAt: v.number()
@@ -1701,6 +1715,15 @@ export default defineSchema({
 		// composite index plus refund-aware decrement logic. (cure shipped).
 		donorCount: v.number(),
 		donationCurrency: v.optional(v.string()),
+		donationReceiptPolicy: v.optional(
+			v.object({
+				mode: v.union(v.literal('confirmation_only'), v.literal('tax_acknowledgment_policy')),
+				legalName: v.optional(v.string()),
+				acknowledgmentText: v.optional(v.string()),
+				configuredAt: v.number(),
+				configuredBy: v.optional(v.id('users'))
+			})
+		),
 
 		// Geographic targeting
 		targetJurisdiction: v.optional(v.string()),
@@ -1737,6 +1760,7 @@ export default defineSchema({
 		verified: v.boolean(),
 		engagementTier: v.number(), // 0-4
 		districtHash: v.optional(v.string()),
+		districtCode: v.optional(v.string()),
 		// H3 res-7 cell index (~5.16 km², neighborhood scale). Resolved during
 		// district verification via latLngToCell(lat, lng, 7). Stored for
 		// intra-district geographic visualization in verification packets.
@@ -1766,11 +1790,14 @@ export default defineSchema({
 		.index('by_campaignId_verified', ['campaignId', 'verified'])
 		.index('by_campaignId_districtHash', ['campaignId', 'districtHash'])
 		.index('by_campaignId_supporterId', ['campaignId', 'supporterId'])
+		.index('by_orgId_supporterId', ['orgId', 'supporterId'])
 		.index('by_orgId_verified', ['orgId', 'verified']),
 
 	campaignDeliveries: defineTable({
 		campaignId: v.id('campaigns'),
 		actionId: v.optional(v.id('campaignActions')),
+		decisionMakerId: v.optional(v.id('decisionMakers')),
+		billId: v.optional(v.id('bills')),
 		targetEmail: v.string(),
 		targetName: v.string(),
 		encryptedTargetEmail: v.optional(v.string()),
@@ -1793,6 +1820,32 @@ export default defineSchema({
 		packetSnapshot: v.optional(v.any()),
 		packetDigest: v.optional(v.string()),
 		proofWeight: v.optional(v.number()),
+		// Sender-side delivery rows become receipt-eligible only when they
+		// are bound to both a Power target and a bill. This is readiness,
+		// not a Merkle-anchored accountability receipt.
+		receiptEligibility: v.optional(
+			v.union(
+				v.literal('eligible'),
+				v.literal('missing_bill'),
+				v.literal('unresolved_target'),
+				v.literal('missing_bill_and_target')
+			)
+		),
+		receiptBlockers: v.optional(v.array(v.string())),
+		// Delivery-local response history for campaign report sends that do
+		// not yet have a full accountabilityReceipt. When a receipt exists,
+		// readers should prefer accountabilityReceipts.responses because it
+		// carries the stronger proof packet context.
+		responses: v.optional(
+			v.array(
+				v.object({
+					type: accountabilityResponseType,
+					detail: v.optional(v.string()),
+					confidence: v.string(),
+					occurredAt: v.number()
+				})
+			)
+		),
 		createdAt: v.number()
 	})
 		.index('by_campaignId', ['campaignId'])
@@ -1877,6 +1930,23 @@ export default defineSchema({
 		.index('by_status', ['status'])
 		.index('by_abParentId', ['abParentId']),
 
+	emailAbTestCohorts: defineTable({
+		orgId: v.id('organizations'),
+		abParentId: v.string(),
+		baseFilter: recipientFilterValidator,
+		variantAEmailHashes: v.array(v.string()),
+		variantBEmailHashes: v.array(v.string()),
+		remainderEmailHashes: v.array(v.string()),
+		totalCount: v.number(),
+		testCount: v.number(),
+		remainderCount: v.number(),
+		remainderBlastId: v.optional(v.id('emailBlasts')),
+		createdAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_org_abParentId', ['orgId', 'abParentId'])
+		.index('by_remainderBlastId', ['remainderBlastId']),
+
 	emailEvents: defineTable({
 		blastId: v.id('emailBlasts'),
 		encryptedRecipientEmail: v.optional(v.string()),
@@ -1953,10 +2023,7 @@ export default defineSchema({
 		currentPeriodStart: v.number(),
 		currentPeriodEnd: v.number(),
 
-		paymentMethod: v.union(
-			v.literal('stripe'),
-			v.literal('crypto')
-		),
+		paymentMethod: v.union(v.literal('stripe'), v.literal('crypto')),
 
 		// Stripe
 		stripeSubscriptionId: v.optional(v.string()),
@@ -2010,11 +2077,7 @@ export default defineSchema({
 
 		title: v.string(),
 		description: v.optional(v.string()),
-		eventType: v.union(
-			v.literal('IN_PERSON'),
-			v.literal('VIRTUAL'),
-			v.literal('HYBRID')
-		),
+		eventType: v.union(v.literal('IN_PERSON'), v.literal('VIRTUAL'), v.literal('HYBRID')),
 
 		// When
 		startAt: v.number(),
@@ -2133,6 +2196,17 @@ export default defineSchema({
 			v.literal('refunded')
 		),
 
+		// Baseline donor confirmation email outcome. This is deliberately
+		// separate from accountabilityReceipts and tax acknowledgments.
+		confirmationEmailStatus: v.optional(
+			v.union(v.literal('sending'), v.literal('sent'), v.literal('skipped'), v.literal('failed'))
+		),
+		confirmationEmailAttemptedAt: v.optional(v.number()),
+		confirmationEmailSentAt: v.optional(v.number()),
+		confirmationEmailFailureReason: v.optional(v.string()),
+		confirmationEmailProvider: v.optional(v.string()),
+		confirmationEmailProviderMessageId: v.optional(v.string()),
+
 		districtHash: v.optional(v.string()),
 		engagementTier: v.number(),
 
@@ -2180,7 +2254,7 @@ export default defineSchema({
 			v.literal('paused'),
 			v.literal('completed'),
 			v.literal('partial_no_op'),
-			v.literal('failed'),
+			v.literal('failed')
 		),
 		currentStep: v.number(),
 		nextRunAt: v.optional(v.number()),
@@ -2240,6 +2314,21 @@ export default defineSchema({
 		status: smsMessageStatus,
 		errorCode: v.optional(v.string())
 	})
+		.index('by_blastId', ['blastId'])
+		.index('by_supporterId', ['supporterId'])
+		.index('by_twilioSid', ['twilioSid']),
+
+	smsReplies: defineTable({
+		orgId: v.id('organizations'),
+		supporterId: v.optional(v.id('supporters')),
+		blastId: v.optional(v.id('smsBlasts')),
+		fromHash: v.optional(v.string()),
+		toNumber: v.optional(v.string()),
+		body: v.string(),
+		twilioSid: v.optional(v.string()),
+		receivedAt: v.number()
+	})
+		.index('by_orgId', ['orgId'])
 		.index('by_blastId', ['blastId'])
 		.index('by_supporterId', ['supporterId'])
 		.index('by_twilioSid', ['twilioSid']),
@@ -2530,6 +2619,7 @@ export default defineSchema({
 		)
 	})
 		.index('by_type', ['type'])
+		.index('by_email', ['email'])
 		.index('by_jurisdiction_jurisdictionLevel', ['jurisdiction', 'jurisdictionLevel'])
 		.index('by_party', ['party'])
 		.index('by_lastName', ['lastName'])
