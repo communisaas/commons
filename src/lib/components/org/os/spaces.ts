@@ -204,6 +204,7 @@ export type PlatformApiSyncGroundData = {
 	adapterSource: string | null;
 	profileCount: number;
 	runnerImplemented: boolean;
+	armedAdapterSources: string[];
 	runtimeMissing: string[];
 	runtimeDependency: string;
 	runtimeMessage: string;

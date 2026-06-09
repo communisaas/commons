@@ -4,6 +4,25 @@ Append-only record of do→review cycles. Each entry captures one task or one bo
 
 ---
 
+## 2026-06-09T20:01:31Z Bounded platform import runner — Action Network adapter armed (T1-3 partial)
+
+**Status:** armed per adapter; `PLATFORM_API_SYNC_RUNNER_IMPLEMENTED` flipped true with arming derived from the `PLATFORM_SYNC_ADAPTERS` registry. T1-3 stays deferred for its un-met scope (tag/list sync, remaining nine adapters, full-count acceptance).
+**Files touched:** `src/lib/server/platform-sync/types.ts`, `src/lib/server/platform-sync/action-network.ts`, `src/lib/server/platform-sync/runner.ts` (new), `src/lib/server/platform-api-sync-readiness.ts`, `convex/organizations.ts`, `convex/schema.ts`, `src/routes/org/[slug]/supporters/import/platform-api/+page.server.ts`, `src/routes/org/[slug]/supporters/import/platform-api/+page.svelte`, `src/lib/data/capability-hypergraph.ts`, `src/lib/components/org/os/spaces.ts`, `src/routes/org/[slug]/+layout.server.ts`, `tests/unit/platform-sync/platform-sync-runner.test.ts` (new), `tests/unit/capability-launch-pressure.test.ts`, `docs/design/ORG-OS-AUTHORING-FIRST.md`, `docs/design/ORG-CAPABILITY-SCOPE.md`
+
+**Work done:**
+- Built the bounded sync runner: Action Network OSDI adapter (paginated `people` fetch under `OSDI-API-Token`, incremental `modified_date` filters from `lastSyncAt`, typed auth/rate-limit/http/malformed error taxonomy), slice runner capped at `MAX_PAGES_PER_SLICE` (4) vendor pages with 300ms spacing, and a `?/import` route action that opens the sealed credential server-side, hands normalized records to `supporters.importWithEncryption` in 100-row chunks, and persists continuation cursors in `anSync.checkpoint` via editor-gated `startPlatformApiSync`/`recordPlatformApiSyncProgress`/`completePlatformApiSync`/`failPlatformApiSync`.
+- Consent honesty: subscription status maps onto the import pipeline's email/SMS vocabulary; consent provenance is never fabricated. Vendor poison rows are bounded to the pipeline's published caps in the adapter (email 254, name 200, custom fields 100×80×2000/8 KiB) so one oversized row cannot abort a chunk.
+- Per-adapter arming threaded end-to-end: `getPlatformApiSyncReadiness.armedAdapterSources` → `OrgSpacesData.operating.platformApiSync` → `buildPlatformIntakeReadiness` per-profile `apiState`, direct-sync stage, proof rows, and launch-pressure row — the capability map shows action_network as bounded/partial while the other nine profiles stay dependency-first, with no hand-edited posture.
+- Three-lens adversarial review (correctness/security/honesty) before commit; cured findings: stale running-row reclaim (10-minute claim window) + 409 on claim contention instead of an unhandled 500; `failPlatformApiSync` no-ops on terminal states so a losing concurrent racer cannot flip a completed run to failed; custody probes no longer clobber a parked run's checkpoint lifecycle; missing `total_pages` on a populated page parks as malformed instead of truncating the sync and advancing the watermark; `modifiedSince` validated at the filter sink; capped per-row import errors persist into `anSync.errors`; zero-row execution evidence cannot render for orgs that never ran an import; dead legacy `*AnSync` wrapper mutations deleted.
+- Accepted residuals (documented): page-offset checkpoints can skip/refetch records if the vendor list shifts mid-sync (full re-sync heals; refetches dedup); imported/updated split can drift after a mid-slice retry (sum stays correct via org-scoped email-hash dedup); concurrent same-checkpoint continues are not fully serialized (terminal states are protected; counters last-writer-wins).
+
+**Validation:**
+- `npx vitest --run tests/unit/platform-sync ... capability-launch-pressure` — 64 tests passed (31 new platform-sync tests + re-pinned slice gate).
+- Full suite green; `npx svelte-check` — 0 errors, 156-warning baseline.
+- `npx convex codegen` — functions typecheck; `npx prettier --check` + `git diff --check` — clean.
+
+---
+
 ## 2026-06-09T19:20:23Z Source-text pin reconciliation across nine drifted test files
 
 **Status:** reconciled; the full unit suite is green again after the 2026-06-02..08 org-OS refactor left 27 source-text-pin and behavior-pin tests asserting pre-refactor source.

@@ -392,6 +392,7 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 				: null,
 		profileCount: platformApiSyncReadiness.profileCount,
 		runnerImplemented: platformApiSyncReadiness.runnerImplemented,
+		armedAdapterSources: platformApiSyncReadiness.armedAdapterSources,
 		runtimeMissing: platformApiSyncReadiness.missing,
 		runtimeDependency: platformApiSyncReadiness.dependency,
 		runtimeMessage: platformApiSyncReadiness.message,

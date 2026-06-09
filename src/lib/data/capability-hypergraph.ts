@@ -1110,6 +1110,7 @@ export type PlatformIntakeReadinessInputs = {
 		credentialProbeCompletedAt?: string | null;
 		adapterSource?: string | null;
 		runnerImplemented?: boolean | null;
+		armedAdapterSources?: string[] | null;
 		profileCount?: number | null;
 	} | null;
 };
@@ -2718,8 +2719,10 @@ export function buildLaunchPressureRows(input: LaunchPressureInputs): LaunchPres
 	const platformApiSyncDependencyText =
 		platformApiSyncRuntimeDependency ??
 		'profile registry, encrypted credential custody, direct sync execution, and continuation checkpointing';
-	const platformApiSyncArmed =
-		platformApiSyncRuntimeReady === true && platformApiGate.state === 'live';
+	// Readiness.ready already requires the profile registry, credential custody,
+	// the sync runner, and at least one armed adapter; the T1-3 gate stays cited
+	// on the row for the un-met scope (remaining adapters + tag/list sync).
+	const platformApiSyncArmed = platformApiSyncRuntimeReady === true;
 	const workflowExecutionArmed =
 		features.WORKFLOW_EXECUTION && workflowEffectsGate.state === 'live';
 
@@ -2733,11 +2736,16 @@ export function buildLaunchPressureRows(input: LaunchPressureInputs): LaunchPres
 			action: platformApiSyncArmed ? 'open platform sync' : 'read platform sync boundary',
 			handoff: 'Platform portability boundary',
 			ground: 'CSV intake + source recognition',
-			effect: 'Direct import held',
+			effect: platformApiSyncArmed
+				? 'Bounded direct import armed per adapter'
+				: 'Direct import held',
 			nextLift: 'direct sync proof',
-			currentGround:
-				'CSV export import and platform source recognition are usable; direct sync remains separate proof.',
-			blocked: `Direct platform import still stops while ${platformApiSyncMissingText} are missing.`,
+			currentGround: platformApiSyncArmed
+				? 'CSV export import, platform source recognition, and bounded direct import for armed adapter sources are usable; remaining adapters stay separate proof.'
+				: 'CSV export import and platform source recognition are usable; direct sync remains separate proof.',
+			blocked: platformApiSyncArmed
+				? 'Direct platform import still stops for adapter sources without a registered runner, and tag/list sync stays gated.'
+				: `Direct platform import still stops while ${platformApiSyncMissingText} are missing.`,
 			futureLift: `Configure ${platformApiSyncDependencyText}, then verify adapter-specific pagination, rate limits, and continuation before direct sync is marked live.`,
 			gate: platformApiGate,
 			cluster: 'reach / data sovereignty'
@@ -4116,9 +4124,13 @@ export function buildPlatformIntakeReadiness(
 	const credentialStored = platformApiSync?.credentialStored === true;
 	const credentialProbeComplete = platformApiSync?.credentialProbeComplete === true;
 	const runnerImplemented = platformApiSync?.runnerImplemented === true;
+	const armedAdapterSources = (platformApiSync?.armedAdapterSources ?? []).filter(
+		(source): source is string => typeof source === 'string'
+	);
+	const armedAdapterCount = armedAdapterSources.length;
 	const custodyEvidenceCount =
 		(custodyReady ? 1 : 0) + (credentialStored ? 1 : 0) + (credentialProbeComplete ? 1 : 0);
-	const apiState = platformApiGate.state === 'live' && runtimeReady ? 'partial' : 'gated';
+	const anyAdapterArmed = runtimeReady && armedAdapterCount > 0;
 	const csvHref = `${base}/supporters/import#csv-intake`;
 	const apiHref = `${base}/supporters/import/platform-api#platform-connection-boundary`;
 	const apiAction = runtimeReady
@@ -4133,7 +4145,10 @@ export function buildPlatformIntakeReadiness(
 		label: profile.label,
 		source: profile.source,
 		csvState: 'live',
-		apiState,
+		apiState:
+			runtimeReady && armedAdapterSources.includes(profile.source)
+				? ('partial' as const)
+				: ('gated' as const),
 		href: csvHref,
 		csvHref,
 		apiHref,
@@ -4151,7 +4166,7 @@ export function buildPlatformIntakeReadiness(
 		clusters: 'C-data-sovereignty / C-reach'
 	}));
 	const profileCount = rows.length;
-	const apiBoundaryCount = rows.filter((row) => row.apiState !== 'live').length;
+	const apiBoundaryCount = rows.filter((row) => row.apiState === 'gated').length;
 	const csvContractCount = rows.filter((row) => row.csvState === 'live').length;
 	const profileLabel = profileCount === 1 ? 'profile' : 'profiles';
 	const apiLabel = apiBoundaryCount === 1 ? 'sync boundary' : 'sync boundaries';
@@ -4227,14 +4242,16 @@ export function buildPlatformIntakeReadiness(
 		{
 			id: 'direct-api-runner',
 			label: 'direct sync',
-			state: apiState,
+			state: anyAdapterArmed ? 'partial' : 'gated',
 			phase: 'RESOLVE',
 			href: `${base}/supporters/import/platform-api#platform-sync-boundary`,
 			action: apiAction,
 			handoff: 'Direct sync execution',
-			effect: runnerImplemented
-				? `Direct sync execution ground is present, but ${apiRunnerProofSummary} still bound each live import claim.`
-				: `${apiBoundaryCount} direct ${apiLabel} remain dependency-first until ${apiRunnerProofSummary} are proven.`,
+			effect: anyAdapterArmed
+				? `Bounded direct import is armed for ${armedAdapterCount} adapter ${armedAdapterCount === 1 ? 'source' : 'sources'}; ${apiBoundaryCount} direct ${apiLabel} stay dependency-first and ${apiRunnerProofSummary} still bound each live import claim.`
+				: runnerImplemented
+					? `Direct sync execution ground is present, but ${apiRunnerProofSummary} still bound each live import claim.`
+					: `${apiBoundaryCount} direct ${apiLabel} remain dependency-first until ${apiRunnerProofSummary} are proven.`,
 			gate: runnerGate,
 			clusters: 'C-reach / C-composability / C-data-sovereignty',
 			metric: {
@@ -4244,8 +4261,7 @@ export function buildPlatformIntakeReadiness(
 			}
 		}
 	];
-	const proofExecutionState: CapabilityState =
-		platformApiGate.state === 'live' && runtimeReady ? 'partial' : 'gated';
+	const proofExecutionState: CapabilityState = anyAdapterArmed ? 'partial' : 'gated';
 	const proofRows: PlatformApiProofRow[] = [
 		{
 			id: 'profile-registry',
@@ -4325,9 +4341,11 @@ export function buildPlatformIntakeReadiness(
 			href: `${base}/supporters/import/platform-api#platform-sync-boundary`,
 			action: runtimeReady ? 'prove direct sync' : 'read sync boundary',
 			handoff: 'Direct sync runner',
-			effect: runnerImplemented
-				? 'A direct sync runner is present, but each adapter still needs resource and import-safety proof before live import claims.'
-				: 'No direct platform runner executes vendor calls or imports people.',
+			effect: anyAdapterArmed
+				? `The bounded sync runner executes vendor calls for ${armedAdapterCount} armed adapter ${armedAdapterCount === 1 ? 'source' : 'sources'}; every other adapter still needs resource and import-safety proof before live import claims.`
+				: runnerImplemented
+					? 'A direct sync runner is present, but each adapter still needs resource and import-safety proof before live import claims.'
+					: 'No direct platform runner executes vendor calls or imports people.',
 			gate: runnerGate,
 			clusters: 'C-composability / C-data-sovereignty',
 			metric: {

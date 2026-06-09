@@ -2510,7 +2510,13 @@ describe('capability launch pressure contract', () => {
 		);
 		expect(launchPressure).toContain("handoff: 'Platform portability boundary'");
 		expect(launchPressure).toContain("ground: 'CSV intake + source recognition'");
-		expect(launchPressure).toContain("effect: 'Direct import held'");
+		// Armed/held effect splits on runtime readiness; both branches stay pinned
+		// so the armed claim cannot drop the held boundary for adapterless sources.
+		expect(launchPressure).toContain("? 'Bounded direct import armed per adapter'");
+		expect(launchPressure).toContain(": 'Direct import held'");
+		expect(launchPressure).toContain(
+			'Direct platform import still stops for adapter sources without a registered runner, and tag/list sync stays gated.'
+		);
 		expect(launchPressure).toContain("nextLift: 'direct sync proof'");
 		expect(launchPressure).toContain("id: 'text-carrier-dispatch'");
 		expect(launchPressure).toContain("handoff: 'Text dispatch boundary'");
@@ -4941,12 +4947,21 @@ describe('capability launch pressure contract', () => {
 			'Action Network OSDI is one adapter under this boundary.'
 		);
 		expect(platformApiBoundary).not.toContain('Action Network intake capability');
-		expect(platformApiSyncReadiness).toContain('PLATFORM_API_SYNC_RUNNER_IMPLEMENTED = false');
+		expect(platformApiSyncReadiness).toContain('PLATFORM_API_SYNC_RUNNER_IMPLEMENTED = true');
 		expect(platformApiSyncReadiness).toContain(
 			'profile registry, encrypted credential custody, direct sync execution, and continuation checkpointing'
 		);
 		expect(platformApiSyncReadiness).toContain('direct sync execution');
 		expect(platformApiSyncReadiness).toContain('continuation checkpointing');
+		// Arming is per-adapter: the runner flip must not collapse the boundary
+		// for platforms without a registered adapter, and tag/list sync stays an
+		// explicit hold rather than an implied capability.
+		expect(platformApiSyncReadiness).toContain('armedAdapterSources');
+		expect(platformApiSyncReadiness).toContain('heldAdapterSources');
+		expect(platformApiSyncReadiness).toContain(
+			"missing.push('at least one armed platform adapter')"
+		);
+		expect(platformApiSyncReadiness).toContain('tag/list sync stays gated');
 		expect(platformApiBoundaryServer).toContain('formatGateEvidence, getGateEvidence');
 		expect(platformApiBoundaryServer).toContain(
 			"const platformApiGate = getGateEvidence('CP-platform-api-sync', ['T1-3']"
@@ -12143,8 +12158,9 @@ describe('capability launch pressure contract', () => {
 			'Vendor names appear only as recognized export profiles or adapter formats; the capability surface stays platform-neutral.'
 		);
 		expect(canonicalDoc).toContain(
-			'Each profile contributes one armed CSV-recognition contract and one dependency-first direct-sync contract'
+			'Each profile contributes one armed CSV-recognition contract and one direct-sync contract whose state derives per adapter from `getPlatformApiSyncReadiness.armedAdapterSources`'
 		);
+		expect(canonicalDoc).toContain('Tag/list sync stays gated for all adapters');
 		expect(canonicalDoc).toContain(
 			'The OS map and boundary route now show the same platform intake operating-stage strip before the vendor grid'
 		);

@@ -83,18 +83,21 @@
 		credentialProbeCompletedAt,
 		adapterSource: sync?.adapterSource ?? null,
 		runnerImplemented: platformApiSyncRunnerImplemented,
+		armedAdapterSources: platformApiSyncReadiness?.armedAdapterSources ?? [],
 		profileCount: platformApiProfileCount
 	});
 	const platformApiRuntimeHeldCount = $derived(platformApiSyncRuntimeMissing.length);
+	// Execution evidence is per-org run output only. The runner/readiness flags
+	// are global capability ground and must not surface zero-row counters for an
+	// org that has never run an import (the page promises exactly that below).
 	const platformDirectImportEvidenceObserved = $derived(
-		platformApiSyncRuntimeReady ||
-			platformApiSyncRunnerImplemented ||
-			(sync?.totalResources ?? 0) > 0 ||
+		(sync?.totalResources ?? 0) > 0 ||
 			(sync?.processedResources ?? 0) > 0 ||
 			(sync?.imported ?? 0) > 0 ||
 			(sync?.updated ?? 0) > 0 ||
 			(sync?.skipped ?? 0) > 0 ||
-			Boolean(sync?.lastSyncAt)
+			Boolean(sync?.lastSyncAt) ||
+			Boolean(sync?.checkpoint)
 	);
 	const platformApiGate = getGateEvidence('CP-platform-api-sync', ['T1-3'], {
 		name: 'Direct platform sync',
@@ -699,6 +702,67 @@
 					</button>
 				</form>
 			</div>
+
+			{#if sync?.directImportArmed}
+				{@const resumable =
+					Boolean(sync?.checkpoint) && (sync?.status === 'running' || sync?.status === 'failed')}
+				<div class="border-surface-border bg-surface-base rounded-md border px-4 py-3">
+					<p class="text-text-primary text-sm font-medium">Bounded direct import</p>
+					<p class="text-text-tertiary mt-1 text-xs">
+						Each run fetches at most <Datum
+							value={form?.maxPagesPerSlice ?? data.maxPagesPerSlice}
+							cite="runner.MAX_PAGES_PER_SLICE"
+						/> vendor pages through the {adapterLabel ?? sync?.adapterLabel ?? 'platform'} adapter, hands
+						records to the existing encrypted import pipeline, and persists a continuation checkpoint.
+						Subscription status maps to email/SMS state in the stricter direction only — upstream re-subscribes
+						are not auto-applied — and consent text is not fabricated. Page-offset checkpoints can shift
+						if the vendor list changes mid-sync; a periodic full import reconciles. Tag and list sync
+						stay gated.
+					</p>
+					<div class="mt-3 flex flex-wrap items-center gap-2">
+						<form method="POST" action="?/import">
+							<button
+								type="submit"
+								class="bg-surface-overlay text-text-primary hover:bg-surface-raised rounded-md px-4 py-2 text-sm font-semibold"
+							>
+								{#if resumable}
+									Continue import (next: page {sync?.checkpoint})
+								{:else}
+									Run bounded import slice
+								{/if}
+							</button>
+						</form>
+						{#if !resumable && sync?.lastSyncAt}
+							<form method="POST" action="?/import">
+								<input type="hidden" name="sync_type" value="incremental" />
+								<button
+									type="submit"
+									class="border-surface-border text-text-secondary hover:bg-surface-raised rounded-md border px-4 py-2 text-sm font-medium"
+								>
+									Import changes since last sync
+								</button>
+							</form>
+						{/if}
+					</div>
+					{#if form?.sliceComplete}
+						<p class="text-text-tertiary mt-3 font-mono text-xs">
+							Slice fetched <Datum value={form.pagesFetched ?? 0} cite="?/import slice result" /> vendor
+							pages.
+							{form.syncComplete
+								? 'Sync complete; counters above are the stored run totals.'
+								: `Checkpoint persisted at page ${form.nextCheckpoint}; continue to fetch the next slice.`}
+							{#if (form.droppedNoEmail ?? 0) > 0}
+								<Datum value={form.droppedNoEmail} cite="adapter rows without email" /> vendor rows had
+								no usable email and were skipped.
+							{/if}
+							{#if (form.rowErrorCount ?? 0) > 0}
+								<Datum value={form.rowErrorCount} cite="importWithEncryption row errors" /> rows logged
+								import errors; see stored errors below.
+							{/if}
+						</p>
+					{/if}
+				</div>
+			{/if}
 
 			{#if errorList.length > 0}
 				<div class="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3">

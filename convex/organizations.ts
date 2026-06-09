@@ -1056,86 +1056,204 @@ export const recordPlatformApiCredentialProbe = mutation({
 		const { org } = await requireOrgRole(ctx, slug, 'editor');
 		const existing = org.anSync;
 		if (!existing) {
-			throw new Error('No platform credential configured. Store a credential before probing custody.');
+			throw new Error(
+				'No platform credential configured. Store a credential before probing custody.'
+			);
 		}
 		if (existing.adapterSource && existing.adapterSource !== adapterSource) {
 			throw new Error('Stored platform credential source does not match the opened envelope.');
 		}
 
+		// A parked or resumable run keeps its lifecycle fields: probing custody
+		// mid-run must not flip status/syncType and break checkpoint resume.
+		const runParked =
+			existing.status === 'running' || (existing.status === 'failed' && !!existing.checkpoint);
 		await ctx.db.patch(org._id, {
-			anSync: {
-				...existing,
-				adapterSource,
-				credentialVersion,
-				credentialProbeCompletedAt: probedAt,
-				credentialProbeVersion: credentialVersion,
-				status: 'credential_probe_complete',
-				syncType: 'credential-probe',
-				currentResource: 'credential-envelope',
-				completedAt: probedAt
-			}
+			anSync: runParked
+				? {
+						...existing,
+						adapterSource,
+						credentialVersion,
+						credentialProbeCompletedAt: probedAt,
+						credentialProbeVersion: credentialVersion
+					}
+				: {
+						...existing,
+						adapterSource,
+						credentialVersion,
+						credentialProbeCompletedAt: probedAt,
+						credentialProbeVersion: credentialVersion,
+						status: 'credential_probe_complete',
+						syncType: 'credential-probe',
+						currentResource: 'credential-envelope',
+						completedAt: probedAt
+					}
 		});
 		return { probed: true, probedAt };
 	}
 });
 
 /**
- * Legacy adapter-named wrappers retained for callers that still reference the
- * old Action Network sync name. New route code should use the platform-neutral
- * functions above.
+ * Claim a sync run for the bounded platform import runner. SvelteKit opens the
+ * credential and fetches vendor pages; this mutation only manages run state.
+ * `resume` continues from a persisted checkpoint; a fresh run resets counters.
  */
-export const getAnSync = query({
-	args: { slug: v.string() },
-	handler: async (ctx, { slug }) => {
+export const startPlatformApiSync = mutation({
+	args: {
+		slug: v.string(),
+		syncType: v.union(v.literal('full'), v.literal('incremental')),
+		resume: v.boolean()
+	},
+	handler: async (ctx, { slug, syncType, resume }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'editor');
-		return org.anSync ?? null;
-	}
-});
-
-export const connectAnSync = mutation({
-	args: { slug: v.string(), encryptedApiKey: v.string() },
-	handler: async (ctx, { slug, encryptedApiKey }) => {
-		const { org } = await requireOrgRole(ctx, slug, 'editor');
-		const now = Date.now();
-		await ctx.db.patch(org._id, {
-			anSync: {
-				apiKey: encryptedApiKey,
-				adapterSource: 'action_network',
-				credentialStoredAt: now,
-				credentialVersion: 'legacy-an-sync',
-				status: 'credential_stored',
-				syncType: 'credential-only',
-				totalResources: 0,
-				processedResources: 0,
-				imported: 0,
-				updated: 0,
-				skipped: 0
+		const existing = org.anSync;
+		if (!existing) {
+			throw new Error('No platform credential configured. Store a credential before syncing.');
+		}
+		if (resume && !existing.checkpoint) {
+			throw new Error('No continuation checkpoint to resume. Start a new sync instead.');
+		}
+		// A 'running' row with a checkpoint is a parked slice boundary. A
+		// running row without one is either a slice currently in flight or a
+		// run whose process died before its first checkpoint; slices are
+		// bounded to a few vendor pages, so anything older than the claim
+		// window is reclaimable rather than wedged behind an owner-only
+		// credential disconnect.
+		const STALE_SYNC_CLAIM_MS = 10 * 60 * 1000;
+		const startedAt = Date.now();
+		if (existing.status === 'running' && !existing.checkpoint && !resume) {
+			const claimAge = startedAt - (existing.startedAt ?? 0);
+			if (claimAge < STALE_SYNC_CLAIM_MS) {
+				throw new Error('A sync is already in progress.');
 			}
+		}
+		await ctx.db.patch(org._id, {
+			anSync: resume
+				? { ...existing, status: 'running', syncType, startedAt: existing.startedAt ?? startedAt }
+				: {
+						...existing,
+						status: 'running',
+						syncType,
+						startedAt,
+						checkpoint: undefined,
+						totalResources: 0,
+						processedResources: 0,
+						currentResource: undefined,
+						imported: 0,
+						updated: 0,
+						skipped: 0,
+						errors: undefined
+					}
 		});
-		return { connected: true };
+		return { started: true, resumed: resume, lastSyncAt: existing.lastSyncAt ?? null };
 	}
 });
 
 /**
- * Start AN sync — set status to running, return API key.
+ * Persist a continuation checkpoint between bounded slices. Counters are
+ * absolute (the route reads current state and adds its slice results).
  */
-export const startAnSync = mutation({
-	args: { slug: v.string(), syncType: v.string() },
-	handler: async (ctx, { slug, syncType }) => {
-		const { org } = await requireOrgRole(ctx, slug, 'editor');
+export const recordPlatformApiSyncProgress = mutation({
+	args: {
+		slug: v.string(),
+		processedResources: v.number(),
+		totalResources: v.number(),
+		imported: v.number(),
+		updated: v.number(),
+		skipped: v.number(),
+		checkpoint: v.string(),
+		currentResource: v.optional(v.string()),
+		rowErrors: v.optional(v.array(v.string()))
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.slug, 'editor');
 		const existing = org.anSync;
-		if (!existing) throw new Error('No API key configured. Please connect first.');
-		if (existing.status === 'running') throw new Error('A sync is already in progress.');
-
+		if (!existing || existing.status !== 'running') {
+			throw new Error('No running sync to checkpoint.');
+		}
 		await ctx.db.patch(org._id, {
 			anSync: {
 				...existing,
-				status: 'running',
-				syncType,
-				startedAt: Date.now()
+				processedResources: args.processedResources,
+				totalResources: args.totalResources,
+				imported: args.imported,
+				updated: args.updated,
+				skipped: args.skipped,
+				checkpoint: args.checkpoint,
+				currentResource: args.currentResource,
+				errors: args.rowErrors?.length ? args.rowErrors.slice(0, 20) : existing.errors
 			}
 		});
-		return { apiKey: existing.apiKey, lastSyncAt: existing.lastSyncAt ?? null };
+		return { checkpointed: true };
+	}
+});
+
+/**
+ * Complete a sync run. `lastSyncAt` is set to the run's start time so the next
+ * incremental sync also catches records modified while this run was fetching.
+ */
+export const completePlatformApiSync = mutation({
+	args: {
+		slug: v.string(),
+		processedResources: v.number(),
+		totalResources: v.number(),
+		imported: v.number(),
+		updated: v.number(),
+		skipped: v.number(),
+		rowErrors: v.optional(v.array(v.string()))
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.slug, 'editor');
+		const existing = org.anSync;
+		if (!existing || existing.status !== 'running') {
+			throw new Error('No running sync to complete.');
+		}
+		const completedAt = Date.now();
+		await ctx.db.patch(org._id, {
+			anSync: {
+				...existing,
+				processedResources: args.processedResources,
+				totalResources: args.totalResources,
+				imported: args.imported,
+				updated: args.updated,
+				skipped: args.skipped,
+				status: 'completed',
+				checkpoint: undefined,
+				currentResource: undefined,
+				lastSyncAt: existing.startedAt ?? completedAt,
+				completedAt,
+				errors: args.rowErrors?.length ? args.rowErrors.slice(0, 20) : existing.errors
+			}
+		});
+		return { completed: true, completedAt };
+	}
+});
+
+/**
+ * Mark a sync run failed. The checkpoint is preserved so a rate-limited or
+ * transiently failing run can resume instead of refetching from page one.
+ */
+export const failPlatformApiSync = mutation({
+	args: { slug: v.string(), errorMessage: v.string() },
+	handler: async (ctx, { slug, errorMessage }) => {
+		const { org } = await requireOrgRole(ctx, slug, 'editor');
+		const existing = org.anSync;
+		if (!existing) {
+			throw new Error('No platform sync state to fail.');
+		}
+		// Only a running run can be failed: a racer that lost a
+		// complete/record conflict must not stomp a terminal state.
+		if (existing.status !== 'running') {
+			return { failed: false, ignored: true };
+		}
+		await ctx.db.patch(org._id, {
+			anSync: {
+				...existing,
+				status: 'failed',
+				errors: [errorMessage]
+			}
+		});
+		return { failed: true };
 	}
 });
 
@@ -1143,15 +1261,6 @@ export const startAnSync = mutation({
  * Disconnect platform API credential state. Imported people are not deleted.
  */
 export const disconnectPlatformApiCredential = mutation({
-	args: { slug: v.string() },
-	handler: async (ctx, { slug }) => {
-		const { org } = await requireOrgRole(ctx, slug, 'owner');
-		await ctx.db.patch(org._id, { anSync: undefined });
-		return { disconnected: true };
-	}
-});
-
-export const disconnectAnSync = mutation({
 	args: { slug: v.string() },
 	handler: async (ctx, { slug }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'owner');

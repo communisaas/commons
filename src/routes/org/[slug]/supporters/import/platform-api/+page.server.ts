@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation, serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { PLATFORM_EXPORT_PROFILES } from '$lib/data/platform-export-profiles';
 import { formatGateEvidence, getGateEvidence } from '$lib/data/capability-hypergraph';
@@ -9,8 +9,17 @@ import {
 	sealPlatformApiCredential
 } from '$lib/server/platform-api-token-custody';
 import { getPlatformApiSyncReadiness } from '$lib/server/platform-api-sync-readiness';
+import {
+	isArmedPlatformSyncSource,
+	runPlatformApiSyncSlice,
+	MAX_PAGES_PER_SLICE
+} from '$lib/server/platform-sync/runner';
+import { PlatformSyncError } from '$lib/server/platform-sync/types';
 import type { EncryptedPlatformApiCredential } from '$lib/server/platform-api-token-custody';
 import type { PageServerLoad, Actions } from './$types';
+
+/** Records per importWithEncryption call; keeps each Convex action small. */
+const IMPORT_CHUNK_SIZE = 100;
 
 const platformApiGate = getGateEvidence('CP-platform-api-sync', ['T1-3'], {
 	name: 'Platform API sync',
@@ -102,10 +111,16 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 	});
 
 	return {
+		maxPagesPerSlice: MAX_PAGES_PER_SLICE,
 		sync: sync
 			? {
 					status: sync.status,
 					syncType: sync.syncType,
+					checkpoint: sync.checkpoint ?? null,
+					directImportArmed:
+						platformApiSyncReadiness.ready &&
+						typeof sync.adapterSource === 'string' &&
+						isArmedPlatformSyncSource(sync.adapterSource),
 					totalResources: sync.totalResources ?? 0,
 					processedResources: sync.processedResources ?? 0,
 					currentResource: sync.currentResource ?? null,
@@ -212,7 +227,9 @@ export const actions: Actions = {
 		}
 
 		const adapterSource = typeof sync.adapterSource === 'string' ? sync.adapterSource : '';
-		const profile = PLATFORM_EXPORT_PROFILES.find((candidate) => candidate.source === adapterSource);
+		const profile = PLATFORM_EXPORT_PROFILES.find(
+			(candidate) => candidate.source === adapterSource
+		);
 		if (!profile) {
 			return fail(400, {
 				error:
@@ -268,20 +285,197 @@ export const actions: Actions = {
 				runtimeMessage: readiness.message
 			};
 		} catch (err) {
-			return fail(
-				424,
-				{
-					...platformApiBoundaryPayload(readiness, {
-						code: 'platform_api_credential_probe_failed',
-						blockedVerb: 'open_platform_credential',
-						preservedArtifact: 'encrypted_credential_custody'
-					}),
-					error:
-						err instanceof Error
-							? err.message
-							: 'Stored platform credential could not be opened.'
-				}
+			return fail(424, {
+				...platformApiBoundaryPayload(readiness, {
+					code: 'platform_api_credential_probe_failed',
+					blockedVerb: 'open_platform_credential',
+					preservedArtifact: 'encrypted_credential_custody'
+				}),
+				error:
+					err instanceof Error ? err.message : 'Stored platform credential could not be opened.'
+			});
+		}
+	},
+
+	import: async ({ request, params, locals }) => {
+		if (!locals.user) {
+			throw redirect(
+				302,
+				`/auth/google?returnTo=/org/${params.slug}/supporters/import/platform-api`
 			);
+		}
+
+		const readiness = getPlatformApiSyncReadiness();
+		const sync = await serverQuery(api.organizations.getPlatformApiState, {
+			slug: params.slug
+		});
+		if (!sync) {
+			return fail(400, {
+				error: 'Store an encrypted platform credential before importing.',
+				code: 'platform_api_credential_required'
+			});
+		}
+
+		const adapterSource = typeof sync.adapterSource === 'string' ? sync.adapterSource : '';
+		const profile = PLATFORM_EXPORT_PROFILES.find(
+			(candidate) => candidate.source === adapterSource
+		);
+		if (!profile) {
+			return fail(400, {
+				error:
+					'Stored platform credential does not point at a supported platform profile. Reconnect it from the profile list.',
+				code: 'platform_api_profile_unknown'
+			});
+		}
+		if (!readiness.ready || !isArmedPlatformSyncSource(profile.source)) {
+			return fail(424, platformApiBoundaryPayload(readiness));
+		}
+
+		const formData = await request.formData();
+		// 'running' with a checkpoint is a parked slice boundary; 'failed' with a
+		// checkpoint is a rate-limited/transient stop. Both continue where they left off.
+		const resume =
+			Boolean(sync.checkpoint) && (sync.status === 'running' || sync.status === 'failed');
+		const requestedIncremental = formData.get('sync_type')?.toString() === 'incremental';
+		// Incremental needs a completed-run watermark; without one it honestly
+		// falls back to a full fetch instead of silently importing nothing.
+		const incremental = requestedIncremental && typeof sync.lastSyncAt === 'number';
+		const syncType: 'full' | 'incremental' = resume
+			? sync.syncType === 'incremental'
+				? 'incremental'
+				: 'full'
+			: incremental
+				? 'incremental'
+				: 'full';
+
+		let plaintextKey: string;
+		try {
+			const encryptedCredential = parseStoredPlatformCredential(sync.apiKey, profile.source);
+			plaintextKey = await openPlatformApiCredential(encryptedCredential, {
+				orgSlug: params.slug
+			});
+		} catch (err) {
+			return fail(424, {
+				...platformApiBoundaryPayload(readiness, {
+					code: 'platform_api_credential_probe_failed',
+					blockedVerb: 'open_platform_credential',
+					preservedArtifact: 'encrypted_credential_custody'
+				}),
+				error:
+					err instanceof Error ? err.message : 'Stored platform credential could not be opened.'
+			});
+		}
+
+		try {
+			await serverMutation(api.organizations.startPlatformApiSync, {
+				slug: params.slug,
+				syncType,
+				resume
+			});
+		} catch (err) {
+			return fail(409, {
+				error:
+					err instanceof Error && err.message.includes('already in progress')
+						? 'A sync slice is already in flight for this org. Wait for it to park or fail, then continue.'
+						: err instanceof Error
+							? err.message
+							: 'Could not claim the sync run.',
+				code: 'platform_api_sync_claim_failed'
+			});
+		}
+
+		const baseProcessed = resume ? (sync.processedResources ?? 0) : 0;
+		const baseImported = resume ? (sync.imported ?? 0) : 0;
+		const baseUpdated = resume ? (sync.updated ?? 0) : 0;
+		const baseSkipped = resume ? (sync.skipped ?? 0) : 0;
+
+		try {
+			const slice = await runPlatformApiSyncSlice({
+				source: profile.source,
+				apiKey: plaintextKey,
+				checkpoint: resume ? (sync.checkpoint ?? null) : null,
+				modifiedSince:
+					syncType === 'incremental' && typeof sync.lastSyncAt === 'number'
+						? new Date(sync.lastSyncAt).toISOString()
+						: undefined
+			});
+
+			let imported = 0;
+			let updated = 0;
+			let skipped = slice.droppedNoEmail;
+			const rowErrors: unknown[] = [];
+			for (let i = 0; i < slice.records.length; i += IMPORT_CHUNK_SIZE) {
+				const chunk = slice.records.slice(i, i + IMPORT_CHUNK_SIZE);
+				const result = await serverAction(api.supporters.importWithEncryption, {
+					slug: params.slug,
+					supporters: chunk
+				});
+				imported += result.imported ?? 0;
+				updated += result.updated ?? 0;
+				skipped += result.skipped ?? 0;
+				if (Array.isArray(result.errors) && result.errors.length) {
+					rowErrors.push(...result.errors);
+				}
+			}
+
+			const counters = {
+				processedResources: baseProcessed + slice.records.length + slice.droppedNoEmail,
+				totalResources: slice.totalRecords ?? sync.totalResources ?? 0,
+				imported: baseImported + imported,
+				updated: baseUpdated + updated,
+				skipped: baseSkipped + skipped
+			};
+
+			const persistedRowErrors = rowErrors.slice(0, 20).map((entry) => String(entry));
+			if (slice.nextCursor) {
+				await serverMutation(api.organizations.recordPlatformApiSyncProgress, {
+					slug: params.slug,
+					...counters,
+					checkpoint: slice.nextCursor,
+					currentResource: `people:page=${slice.nextCursor}`,
+					rowErrors: persistedRowErrors.length ? persistedRowErrors : undefined
+				});
+			} else {
+				await serverMutation(api.organizations.completePlatformApiSync, {
+					slug: params.slug,
+					...counters,
+					rowErrors: persistedRowErrors.length ? persistedRowErrors : undefined
+				});
+			}
+
+			return {
+				sliceComplete: true,
+				syncComplete: slice.nextCursor === null,
+				nextCheckpoint: slice.nextCursor,
+				pagesFetched: slice.pagesFetched,
+				maxPagesPerSlice: MAX_PAGES_PER_SLICE,
+				adapterLabel: profile.label,
+				syncType,
+				droppedNoEmail: slice.droppedNoEmail,
+				rowErrorCount: rowErrors.length,
+				...counters
+			};
+		} catch (err) {
+			const message =
+				err instanceof PlatformSyncError
+					? err.message
+					: err instanceof Error
+						? `Platform import failed: ${err.message}`
+						: 'Platform import failed.';
+			await serverMutation(api.organizations.failPlatformApiSync, {
+				slug: params.slug,
+				errorMessage: message
+			});
+			return fail(err instanceof PlatformSyncError && err.code === 'auth_failed' ? 401 : 502, {
+				error: message,
+				code:
+					err instanceof PlatformSyncError
+						? `platform_api_sync_${err.code}`
+						: 'platform_api_sync_failed',
+				// A fresh start cleared any prior checkpoint; only a resumed run
+				// still has one persisted for the next attempt.
+				checkpointPreserved: resume
+			});
 		}
 	},
 

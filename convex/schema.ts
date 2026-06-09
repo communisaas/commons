@@ -1440,10 +1440,11 @@ export default defineSchema({
 				credentialProbeCompletedAt: v.optional(v.number()),
 				credentialProbeVersion: v.optional(v.string()),
 				status: v.string(), // 'credential_stored' | 'idle' | 'running' | 'completed' | 'failed'
-				syncType: v.string(), // 'credential-only' | 'full' | 'incremental'
+				syncType: v.string(), // 'credential-only' | 'credential-probe' | 'full' | 'incremental'
 				totalResources: v.number(),
 				processedResources: v.number(),
 				currentResource: v.optional(v.string()),
+				checkpoint: v.optional(v.string()), // adapter continuation cursor between bounded slices
 				imported: v.number(),
 				updated: v.number(),
 				skipped: v.number(),
