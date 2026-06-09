@@ -1,5 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { env } from '$env/dynamic/public';
+import { env as publicEnv } from '$env/dynamic/public';
+import { env as privateEnv } from '$env/dynamic/private';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
@@ -11,28 +12,60 @@ import {
 	type VerificationBlock
 } from '$lib/server/email/compiler';
 import { sanitizeEmailBody } from '$lib/server/email/sanitize';
+import { getEmailServerDispatchReadiness } from '$lib/server/email/server-dispatch-readiness';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad, Actions } from './$types';
 
-const baseUrl = env.PUBLIC_BASE_URL?.replace(/\/$/, '') ?? 'https://commons.email';
+const baseUrl = publicEnv.PUBLIC_BASE_URL?.replace(/\/$/, '') ?? 'https://commons.email';
+
+function emailServerDispatchEnv() {
+	return {
+		AWS_ACCESS_KEY_ID: privateEnv.AWS_ACCESS_KEY_ID,
+		AWS_SECRET_ACCESS_KEY: privateEnv.AWS_SECRET_ACCESS_KEY,
+		UNSUBSCRIBE_SECRET: privateEnv.UNSUBSCRIBE_SECRET,
+		PUBLIC_BASE_URL: publicEnv.PUBLIC_BASE_URL
+	};
+}
 
 interface RecipientFilter {
 	// tagIds are sourced from form data (raw strings); the Convex
 	// recipientFilterValidator expects Id<'tags'>. parseFilter casts
 	// at the API boundary so this local shape stays string-typed.
 	tagIds?: Id<'tags'>[];
+	segmentIds?: Id<'segments'>[];
 	verified?: 'any' | 'verified' | 'unverified';
+	includeEmailHashes?: string[];
+	excludeEmailHashes?: string[];
 }
 
-type SupporterCountPage = {
-	supporters: Array<{ emailStatus?: string }>;
-	hasMore: boolean;
-	nextCursor: string | null;
+type AbCohortAllocation = {
+	variantAEmailHashes: string[];
+	variantBEmailHashes: string[];
+	remainderEmailHashes: string[];
+	totalCount: number;
+	testCount: number;
+	remainderCount: number;
+};
+
+type RecipientCountResult = {
+	totalCount: number;
+	sourceCounts: Record<string, number>;
 };
 
 function asString(value: unknown, fallback = ''): string {
 	return typeof value === 'string' ? value : fallback;
+}
+
+function asSourceCounts(value: unknown): Record<string, number> {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+	const counts: Record<string, number> = {};
+	for (const [source, count] of Object.entries(value)) {
+		if (typeof count === 'number' && Number.isFinite(count) && count > 0) {
+			counts[source] = count;
+		}
+	}
+	return counts;
 }
 
 function requireRole(role: string, required: string): void {
@@ -42,53 +75,85 @@ function requireRole(role: string, required: string): void {
 	}
 }
 
-async function countRecipientsByFilter(orgSlug: string, filter: RecipientFilter): Promise<number | null> {
-	if (filter.tagIds && filter.tagIds.length > 1) {
-		return null;
+function canEdit(role: string): boolean {
+	return role === 'owner' || role === 'editor';
+}
+
+async function countRecipientsByFilter(
+	orgSlug: string,
+	filter: RecipientFilter
+): Promise<RecipientCountResult> {
+	const result = (await serverQuery(api.email.countRecipientsForFilter, {
+		orgSlug,
+		recipientFilter: filter
+	})) as { totalCount: number; sourceCounts?: Record<string, number> };
+	return {
+		totalCount: result.totalCount,
+		sourceCounts: asSourceCounts(result.sourceCounts)
+	};
+}
+
+function allocateAbCohort(
+	emailHashes: string[],
+	testGroupPct: number,
+	splitPct: number
+): AbCohortAllocation {
+	const ordered = Array.from(new Set(emailHashes)).sort();
+	if (ordered.length < 2) {
+		throw new Error('A/B tests need at least two subscribed recipients in the selected cohort.');
 	}
-
-	const listFilter: Record<string, unknown> = {};
-	if (filter.verified === 'verified') listFilter.verified = true;
-	if (filter.verified === 'unverified') listFilter.verified = false;
-	if (filter.tagIds?.[0]) listFilter.tagId = filter.tagIds[0];
-
-	let cursor: string | null = null;
-	let count = 0;
-	let scanned = 0;
-
-	do {
-		const result = await serverQuery(api.supporters.list, {
-			orgSlug,
-			paginationOpts: { cursor, numItems: 100 },
-			filters: Object.keys(listFilter).length > 0 ? listFilter : undefined
-		}) as SupporterCountPage;
-
-		for (const supporter of result.supporters) {
-			if ((supporter.emailStatus ?? 'subscribed') === 'subscribed') count++;
-		}
-		scanned += result.supporters.length;
-		cursor = result.hasMore ? result.nextCursor : null;
-	} while (cursor && scanned < 10_000);
-
-	return count;
+	const testCount = Math.min(
+		ordered.length,
+		Math.max(2, Math.ceil((ordered.length * testGroupPct) / 100))
+	);
+	const variantACount = Math.min(
+		testCount - 1,
+		Math.max(1, Math.round((testCount * splitPct) / 100))
+	);
+	const variantAEmailHashes = ordered.slice(0, variantACount);
+	const variantBEmailHashes = ordered.slice(variantACount, testCount);
+	const remainderEmailHashes = ordered.slice(testCount);
+	return {
+		variantAEmailHashes,
+		variantBEmailHashes,
+		remainderEmailHashes,
+		totalCount: ordered.length,
+		testCount,
+		remainderCount: remainderEmailHashes.length
+	};
 }
 
 export const load: PageServerLoad = async ({ parent, params }) => {
-	const { org } = await parent();
+	const { org, membership } = await parent();
 
-	const [convexCampaigns, convexSupporterStats, convexTags, sub, orgKeyResult] = await Promise.all([
+	const [
+		convexCampaigns,
+		convexSupporterStats,
+		convexTags,
+		convexSegments,
+		sub,
+		orgKeyResult,
+		initialRecipientCount
+	] = await Promise.all([
 		serverQuery(api.campaigns.list, {
 			slug: params.slug,
 			paginationOpts: { numItems: 50, cursor: null }
 		}),
 		serverQuery(api.supporters.getSummaryStats, { orgSlug: params.slug }),
 		serverQuery(api.supporters.getTags, { orgSlug: params.slug }),
+		serverQuery(api.segments.list, { slug: params.slug }),
 		serverQuery(api.subscriptions.getByOrg, { orgSlug: params.slug }),
-		serverQuery(api.organizations.getOrgKeyVerifier, { slug: params.slug })
+		serverQuery(api.organizations.getOrgKeyVerifier, { slug: params.slug }),
+		canEdit(membership.role)
+			? countRecipientsByFilter(params.slug, { verified: 'any' }).catch(() => null)
+			: Promise.resolve(null)
 	]);
 
 	// A/B testing allowed if org has starter+ plan
-	const abTestingAllowed = FEATURES.AB_TESTING && (sub?.plan !== 'free');
+	const abTestingAllowed = FEATURES.AB_TESTING && sub?.plan !== 'free';
+	const serverDispatchReadiness = getEmailServerDispatchReadiness(emailServerDispatchEnv(), {
+		orgKeyConfigured: Boolean(orgKeyResult?.orgKeyVerifier)
+	});
 
 	return {
 		campaigns: convexCampaigns.page.map((c: Record<string, unknown>) => ({
@@ -100,9 +165,21 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			id: asString(t._id ?? t.id),
 			name: asString(t.name)
 		})),
-		subscribedCount: convexSupporterStats.emailHealth?.subscribed ?? 0,
+		segments: (
+			(convexSegments as { segments?: Array<Record<string, unknown>> } | null)?.segments ?? []
+		).map((segment: Record<string, unknown>) => ({
+			id: asString(segment._id ?? segment.id),
+			name: asString(segment.name)
+		})),
+		subscribedCount:
+			initialRecipientCount?.totalCount ?? convexSupporterStats.emailHealth?.subscribed ?? 0,
+		recipientSourceCounts: initialRecipientCount?.sourceCounts ?? {},
 		abTestingAllowed,
-		orgKeyVerifier: orgKeyResult?.orgKeyVerifier ?? null
+		orgKeyVerifier: orgKeyResult?.orgKeyVerifier ?? null,
+		serverDispatchRuntimeReady: serverDispatchReadiness.ready,
+		serverDispatchRuntimeMissing: serverDispatchReadiness.missing,
+		serverDispatchRuntimeDependency: serverDispatchReadiness.dependency,
+		serverDispatchRuntimeMessage: serverDispatchReadiness.message
 	};
 };
 
@@ -117,11 +194,13 @@ const VERIFIED_VALUES = new Set(['any', 'verified', 'unverified']);
 
 function parseFilter(formData: FormData): RecipientFilter {
 	const rawTagIds = formData.getAll('tagIds').map(String).filter(Boolean);
+	const rawSegmentIds = formData.getAll('segmentIds').map(String).filter(Boolean);
 	// Drop any tagId that doesn't match the Convex Id shape — the cast at
 	// the bottom would otherwise lie about a runtime invariant the args
 	// validator checks downstream. Keeps shape-defense local to the
 	// boundary instead of relying on Convex throwing an unhandled error.
-	const tagIds = rawTagIds.filter((t) => CONVEX_ID_RE.test(t));
+	const tagIds = Array.from(new Set(rawTagIds.filter((t) => CONVEX_ID_RE.test(t))));
+	const segmentIds = Array.from(new Set(rawSegmentIds.filter((t) => CONVEX_ID_RE.test(t))));
 	const rawVerified = formData.get('verified')?.toString() ?? 'any';
 	// Normalize unknown verified-axis values to 'any' rather than letting
 	// the cast lie to the type system. The Convex validator's union
@@ -132,6 +211,7 @@ function parseFilter(formData: FormData): RecipientFilter {
 		: 'any';
 	return {
 		tagIds: tagIds.length > 0 ? (tagIds as Id<'tags'>[]) : undefined,
+		segmentIds: segmentIds.length > 0 ? (segmentIds as Id<'segments'>[]) : undefined,
 		verified
 	};
 }
@@ -154,12 +234,9 @@ export const actions: Actions = {
 
 		const formData = await request.formData();
 		const filter = parseFilter(formData);
-		const count = await countRecipientsByFilter(params.slug, filter);
-		if (count == null) {
-			return fail(501, { error: 'Recipient counting for multiple tags is not available yet.', count: 0 });
-		}
+		const recipientCount = await countRecipientsByFilter(params.slug, filter);
 
-		return { count };
+		return { count: recipientCount.totalCount, sourceCounts: recipientCount.sourceCounts };
 	},
 
 	preview: async ({ request, params, locals }) => {
@@ -169,10 +246,13 @@ export const actions: Actions = {
 		const ctx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
 		requireRole(ctx.membership.role, 'editor');
 
-		const previewLimit = await getRateLimiter().check(`ratelimit:compose:preview:org:${ctx.org._id}`, {
-			maxRequests: 20,
-			windowMs: 60_000
-		});
+		const previewLimit = await getRateLimiter().check(
+			`ratelimit:compose:preview:org:${ctx.org._id}`,
+			{
+				maxRequests: 20,
+				windowMs: 60_000
+			}
+		);
 		if (!previewLimit.allowed) {
 			return fail(429, { error: 'Too many requests. Try again later.' });
 		}
@@ -231,7 +311,10 @@ export const actions: Actions = {
 		// Billing usage check via Convex
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
 		if (limits?.current && limits.current.emailsSent >= limits.limits.maxEmails) {
-			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
+			return fail(403, {
+				error:
+					'Email send limit reached for the current billing period. Upgrade your plan to send more.'
+			});
 		}
 
 		const formData = await request.formData();
@@ -256,7 +339,9 @@ export const actions: Actions = {
 		// Convex's 1MiB doc cap; 512KiB is well above any real marketing email
 		// (typical 50-200KB) and leaves headroom for sanitize overhead.
 		if (rawBodyHtml.length > 524_288) {
-			return fail(400, { error: 'Email body must not exceed 512 KB. Trim images or split into multiple sends.' });
+			return fail(400, {
+				error: 'Email body must not exceed 512 KB. Trim images or split into multiple sends.'
+			});
 		}
 		const bodyHtml = sanitizeEmailBody(rawBodyHtml);
 
@@ -273,12 +358,12 @@ export const actions: Actions = {
 		const filter = parseFilter(formData);
 
 		// Count recipients via Convex
-		const recipientCount = await countRecipientsByFilter(params.slug, filter);
-		if (recipientCount == null) {
-			return fail(501, { error: 'Sending to multiple tags is not available yet.' });
-		}
+		const recipientCountResult = await countRecipientsByFilter(params.slug, filter);
+		const recipientCount = recipientCountResult.totalCount;
 		if (recipientCount === 0) {
-			return fail(400, { error: 'No recipients match your filters. Adjust filters and try again.' });
+			return fail(400, {
+				error: 'No recipients match your filters. Adjust filters and try again.'
+			});
 		}
 
 		// Wrap in canonical email shell — same path as `createClientDraft`,
@@ -322,11 +407,34 @@ export const actions: Actions = {
 		await serverMutation(api.email.updateBlast, {
 			orgSlug: params.slug,
 			blastId: sendResult.id as Id<'emailBlasts'>,
-			bodyHtml: wrappedBodyTemplate.replaceAll(
-				BLAST_ID_PLACEHOLDER,
-				String(sendResult.id)
-			)
+			bodyHtml: wrappedBodyTemplate.replaceAll(BLAST_ID_PLACEHOLDER, String(sendResult.id))
 		});
+		if (FEATURES.EMAIL_SERVER_DISPATCH) {
+			const orgKeyVerifier = await serverQuery(api.organizations.getOrgKeyVerifier, {
+				slug: params.slug
+			});
+			const serverDispatchReadiness = getEmailServerDispatchReadiness(emailServerDispatchEnv(), {
+				orgKeyConfigured: Boolean(orgKeyVerifier?.orgKeyVerifier)
+			});
+			if (!serverDispatchReadiness.ready) {
+				return fail(424, {
+					error: serverDispatchReadiness.message,
+					errorCode: 'email_server_dispatch_dependency_missing',
+					blockedVerb: 'server_email_dispatch',
+					preservedArtifact: 'email_draft',
+					blastId: String(sendResult.id),
+					draftHref: `/org/${params.slug}/emails/${sendResult.id}`,
+					gate: 'CP-2',
+					taskIds: ['T2-2'],
+					dependency: serverDispatchReadiness.dependency,
+					missing: serverDispatchReadiness.missing
+				});
+			}
+			await serverMutation(api.email.enqueueServerDispatch, {
+				orgSlug: params.slug,
+				blastId: sendResult.id as Id<'emailBlasts'>
+			});
+		}
 
 		throw redirect(302, `/org/${params.slug}/emails`);
 	},
@@ -355,12 +463,25 @@ export const actions: Actions = {
 		// Billing usage check via Convex
 		const abLimits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
 		if (abLimits?.current && abLimits.current.emailsSent >= abLimits.limits.maxEmails) {
-			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
+			return fail(403, {
+				error:
+					'Email send limit reached for the current billing period. Upgrade your plan to send more.'
+			});
 		}
 
 		const formData = await request.formData();
-		const subjectA = formData.get('subjectA')?.toString().trim()?.replace(/[\r\n\x00-\x1f\x7f]/g, '').slice(0, 998);
-		const subjectB = formData.get('subjectB')?.toString().trim()?.replace(/[\r\n\x00-\x1f\x7f]/g, '').slice(0, 998);
+		const subjectA = formData
+			.get('subjectA')
+			?.toString()
+			.trim()
+			?.replace(/[\r\n\x00-\x1f\x7f]/g, '')
+			.slice(0, 998);
+		const subjectB = formData
+			.get('subjectB')
+			?.toString()
+			.trim()
+			?.replace(/[\r\n\x00-\x1f\x7f]/g, '')
+			.slice(0, 998);
 		const rawBodyHtmlA = formData.get('bodyHtmlA')?.toString();
 		const rawBodyHtmlB = formData.get('bodyHtmlB')?.toString();
 		const rawFromName = formData.get('fromName')?.toString().trim() || ctx.org.name;
@@ -370,7 +491,8 @@ export const actions: Actions = {
 		const campaignId = formData.get('campaignId')?.toString() || null;
 
 		if (!subjectA || !subjectB) return fail(400, { error: 'Both variant subjects are required' });
-		if (!rawBodyHtmlA || !rawBodyHtmlB) return fail(400, { error: 'Both variant bodies are required' });
+		if (!rawBodyHtmlA || !rawBodyHtmlB)
+			return fail(400, { error: 'Both variant bodies are required' });
 		if (rawBodyHtmlA.length > 524_288 || rawBodyHtmlB.length > 524_288) {
 			return fail(400, { error: 'Each variant body must not exceed 512 KB.' });
 		}
@@ -378,11 +500,18 @@ export const actions: Actions = {
 		const bodyHtmlA = sanitizeEmailBody(rawBodyHtmlA);
 		const bodyHtmlB = sanitizeEmailBody(rawBodyHtmlB);
 
-		const splitPct = Math.max(10, Math.min(90, parseInt(formData.get('splitPct')?.toString() || '50')));
-		const testGroupPct = Math.max(10, Math.min(50, parseInt(formData.get('testGroupPct')?.toString() || '20')));
-		const winnerMetric = (['open', 'click', 'verified_action'].includes(formData.get('winnerMetric')?.toString() || '')
-			? formData.get('winnerMetric')!.toString()
-			: 'open') as 'open' | 'click' | 'verified_action';
+		const splitPct = Math.max(
+			10,
+			Math.min(90, parseInt(formData.get('splitPct')?.toString() || '50'))
+		);
+		const testGroupPct = Math.max(
+			10,
+			Math.min(50, parseInt(formData.get('testGroupPct')?.toString() || '20'))
+		);
+		const rawWinnerMetric = formData.get('winnerMetric')?.toString() || '';
+		const winnerMetric = (
+			['open', 'click'].includes(rawWinnerMetric) ? rawWinnerMetric : 'open'
+		) as 'open' | 'click';
 
 		const durationMap: Record<string, number> = {
 			'1h': 60 * 60 * 1000,
@@ -401,8 +530,43 @@ export const actions: Actions = {
 		}
 
 		const filter = parseFilter(formData);
+		const resolvedCohort = (await serverQuery(api.email.resolveRecipientHashesForFilter, {
+			orgSlug: params.slug,
+			recipientFilter: filter
+		})) as {
+			emailHashes: string[];
+			totalCount: number;
+			limited: boolean;
+			maxSupported: number;
+		};
+		if (resolvedCohort.limited) {
+			return fail(400, {
+				error: `A/B cohort snapshots are currently capped at ${resolvedCohort.maxSupported.toLocaleString()} recipients. Narrow the audience before creating the test.`
+			});
+		}
+		let allocation: AbCohortAllocation;
+		try {
+			allocation = allocateAbCohort(resolvedCohort.emailHashes, testGroupPct, splitPct);
+		} catch (err) {
+			return fail(400, {
+				error: err instanceof Error ? err.message : 'A/B cohort could not be allocated.'
+			});
+		}
 		const abParentId = crypto.randomUUID();
-		const abTestConfig = { splitPct, winnerMetric, testDurationMs, testGroupPct };
+		const abTestConfig = {
+			splitPct,
+			winnerMetric,
+			testDurationMs,
+			testGroupPct,
+			cohortSnapshot: {
+				totalCount: allocation.totalCount,
+				testCount: allocation.testCount,
+				variantACount: allocation.variantAEmailHashes.length,
+				variantBCount: allocation.variantBEmailHashes.length,
+				remainderCount: allocation.remainderCount,
+				createdAt: Date.now()
+			}
+		};
 
 		// Wrap both variants in the canonical email shell (parity with `send` /
 		// `createClientDraft`). Verification block omitted for A/B variants —
@@ -412,35 +576,22 @@ export const actions: Actions = {
 		const wrappedA = compileEmailShell(bodyHtmlA, null, { platformUrl: baseUrl });
 		const wrappedB = compileEmailShell(bodyHtmlB, null, { platformUrl: baseUrl });
 
-		// A/B winner automation is not exposed as a public Convex mutation yet; create linked draft variants.
-		await Promise.all([
-			serverMutation(api.email.createBlast, {
-				orgSlug: params.slug,
-				subject: subjectA,
-				bodyHtml: wrappedA,
-				fromName,
-				fromEmail,
-				recipientFilter: filter,
-				campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined,
-				isAbTest: true,
-				abVariant: 'A',
-				abParentId,
-				abTestConfig
-			}),
-			serverMutation(api.email.createBlast, {
-				orgSlug: params.slug,
-				subject: subjectB,
-				bodyHtml: wrappedB,
-				fromName,
-				fromEmail,
-				recipientFilter: filter,
-				campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined,
-				isAbTest: true,
-				abVariant: 'B',
-				abParentId,
-				abTestConfig
-			})
-		]);
+		await serverMutation(api.email.createAbTestDrafts, {
+			orgSlug: params.slug,
+			subjectA,
+			subjectB,
+			bodyHtmlA: wrappedA,
+			bodyHtmlB: wrappedB,
+			fromName,
+			fromEmail,
+			recipientFilter: filter,
+			campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined,
+			abParentId,
+			abTestConfig,
+			variantAEmailHashes: allocation.variantAEmailHashes,
+			variantBEmailHashes: allocation.variantBEmailHashes,
+			remainderEmailHashes: allocation.remainderEmailHashes
+		});
 
 		throw redirect(302, `/org/${params.slug}/emails`);
 	},
@@ -462,7 +613,10 @@ export const actions: Actions = {
 
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
 		if (limits?.current && limits.current.emailsSent >= limits.limits.maxEmails) {
-			return fail(403, { error: 'Email send limit reached for the current billing period. Upgrade your plan to send more.' });
+			return fail(403, {
+				error:
+					'Email send limit reached for the current billing period. Upgrade your plan to send more.'
+			});
 		}
 
 		const formData = await request.formData();
@@ -478,17 +632,21 @@ export const actions: Actions = {
 		if (!subject) return fail(400, { error: 'Subject is required' });
 		if (!rawBodyHtml) return fail(400, { error: 'Email body is required' });
 		if (rawBodyHtml.length > 524_288) {
-			return fail(400, { error: 'Email body must not exceed 512 KB. Trim images or split into multiple sends.' });
+			return fail(400, {
+				error: 'Email body must not exceed 512 KB. Trim images or split into multiple sends.'
+			});
 		}
 		const bodyHtml = sanitizeEmailBody(rawBodyHtml);
 
 		if (campaignId) {
-			const campaign = await serverQuery(api.campaigns.get, { campaignId: campaignId as Id<'campaigns'> });
+			const campaign = await serverQuery(api.campaigns.get, {
+				campaignId: campaignId as Id<'campaigns'>
+			});
 			if (!campaign) return fail(400, { error: 'Invalid campaign selection' });
 		}
 
 		const filter = parseFilter(formData);
-		const totalRecipients = (await countRecipientsByFilter(params.slug, filter)) ?? 0;
+		const totalRecipients = (await countRecipientsByFilter(params.slug, filter)).totalCount;
 
 		// Verification block is filter-scoped: only emit it when the filter
 		// constrains the cohort to a known verification state. A 'any' filter
@@ -514,9 +672,11 @@ export const actions: Actions = {
 
 		// Wrap the author body in the canonical email shell + (optional)
 		// verification block + platform footer + per-blast unsubscribe URL.
-		// Bulk-mode shell does not personalize merge fields — the Lambda proxy
-		// sends one bodyHtml to N recipients per batch — so the unsubscribe URL
-		// is per-blast (form-based: recipient enters their email to apply).
+		// compileEmailShell leaves merge tokens intact. The client-direct
+		// browser sender resolves them after org-key decryption and switches to
+		// singleton Lambda calls when personalization is present. The
+		// unsubscribe URL here is per-blast (form-based: recipient enters their
+		// email to apply).
 		// Per-recipient one-click unsubscribe (RFC 8058 List-Unsubscribe-Post +
 		// HMAC token) is tracked separately and requires Lambda templating.
 		// `__BLAST_ID__` is a single-use placeholder substituted after
@@ -539,10 +699,7 @@ export const actions: Actions = {
 			recipientFilter: filter,
 			campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined
 		});
-		const wrappedBodyHtml = wrappedBodyTemplate.replaceAll(
-			BLAST_ID_PLACEHOLDER,
-			String(result.id)
-		);
+		const wrappedBodyHtml = wrappedBodyTemplate.replaceAll(BLAST_ID_PLACEHOLDER, String(result.id));
 		await serverMutation(api.email.updateBlast, {
 			orgSlug: params.slug,
 			blastId: result.id as Id<'emailBlasts'>,

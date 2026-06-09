@@ -9,6 +9,7 @@ import { FEATURES } from '$lib/config/features';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { resolveAddress } from '$lib/core/shadow-atlas/client';
+import { getCurrentAtlasVersion } from '$lib/core/shadow-atlas/district-bundle';
 
 /**
  * POST /api/c/[slug]/verify-district
@@ -21,7 +22,7 @@ import { resolveAddress } from '$lib/core/shadow-atlas/client';
  *
  * PRIVACY:
  * - Logs only district code, never address.
- * - Returns only district code — no officials, no coordinates.
+ * - Returns only district code plus submission metadata — no officials, no coordinates.
  * - Campaign ID validated to prevent blind enumeration.
  */
 
@@ -35,7 +36,10 @@ const addressSchema = z.object({
 export const POST: RequestHandler = async ({ request, params, getClientAddress }) => {
 	// Gate: only available when district verification is enabled
 	if (FEATURES.ADDRESS_SPECIFICITY !== 'district') {
-		return json({ resolved: false, error: 'District verification is not enabled' }, { status: 404 });
+		return json(
+			{ resolved: false, error: 'District verification is not enabled' },
+			{ status: 404 }
+		);
 	}
 
 	// Rate limit: 5 requests per minute per IP
@@ -43,7 +47,10 @@ export const POST: RequestHandler = async ({ request, params, getClientAddress }
 	const rlKey = `ratelimit:campaign-verify-district:${ip}`;
 	const rl = await getRateLimiter().check(rlKey, { maxRequests: 5, windowMs: 60_000 });
 	if (!rl.allowed) {
-		return json({ resolved: false, error: 'Too many requests. Please try again later.' }, { status: 429 });
+		return json(
+			{ resolved: false, error: 'Too many requests. Please try again later.' },
+			{ status: 429 }
+		);
 	}
 
 	// Validate campaign exists (prevents blind address enumeration)
@@ -61,7 +68,11 @@ export const POST: RequestHandler = async ({ request, params, getClientAddress }
 		const parseResult = addressSchema.safeParse(body);
 		if (!parseResult.success) {
 			return json(
-				{ resolved: false, error: 'Invalid address', details: parseResult.error.issues.map(i => i.message) },
+				{
+					resolved: false,
+					error: 'Invalid address',
+					details: parseResult.error.issues.map((i) => i.message)
+				},
 				{ status: 400 }
 			);
 		}
@@ -71,8 +82,10 @@ export const POST: RequestHandler = async ({ request, params, getClientAddress }
 		// Shadow Atlas: self-hosted Nominatim geocoding + R-tree district lookup
 		const result = await resolveAddress({ street, city, state, zip });
 
-		const districtCode = result.officials?.district_code ?? null;
-		const stateCode = result.officials?.state ?? state.toUpperCase();
+		const districtCode = result.officials?.district_code ?? result.district?.id ?? null;
+		const stateCode =
+			result.officials?.state ?? result.district?.id?.split('-')[0] ?? state.toUpperCase();
+		const atlasVersion = await getCurrentAtlasVersion().catch(() => null);
 
 		if (!districtCode) {
 			return json({ resolved: false, error: 'Congressional district could not be determined.' });
@@ -85,13 +98,12 @@ export const POST: RequestHandler = async ({ request, params, getClientAddress }
 			district: {
 				code: districtCode,
 				state: stateCode
-			}
+			},
+			h3Cell: result.cell_id ?? null,
+			atlasVersion
 		});
 	} catch (err) {
-		console.error(
-			'[verify-district] Error:',
-			err instanceof Error ? err.message : 'Unknown error'
-		);
+		console.error('[verify-district] Error:', err instanceof Error ? err.message : 'Unknown error');
 		return json(
 			{ resolved: false, error: 'Address resolution service temporarily unavailable' },
 			{ status: 500 }

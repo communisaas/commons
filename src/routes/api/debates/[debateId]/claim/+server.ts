@@ -6,6 +6,7 @@ import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { claimSettlement, settlePrivatePosition } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
+import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
 
 /** Returns true for a valid Ethereum address (0x-prefixed, 42 hex chars). */
 function isValidEthAddress(addr: unknown): addr is string {
@@ -99,6 +100,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		throw error(400, 'walletAddress must be a valid Ethereum address (0x-prefixed, 42 chars)');
 	}
 	const claimantWallet: string | null = isValidEthAddress(walletAddress) ? walletAddress : null;
+	let chainBoundary: string | null = null;
 
 	// Attempt on-chain settlement if the debate has been registered on-chain
 	if (debate.debateIdOnchain) {
@@ -128,8 +130,10 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 					winningStance: debate.winningStance
 				});
 			} else if (onchainResult.error?.includes('not configured')) {
-				console.warn('[debates/claim] Blockchain not configured, returning stub');
-				// Fall through to off-chain stub response
+				allowChainMisconfig({ op: 'debates/claim' });
+				chainBoundary =
+					'Blockchain runtime is not configured; no on-chain private-position settlement was executed.';
+				console.warn('[debates/claim] Blockchain not configured, recording off-chain claim boundary');
 			} else {
 				throw error(502, `On-chain private settlement failed: ${onchainResult.error}`);
 			}
@@ -155,15 +159,21 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 					winningStance: debate.winningStance
 				});
 			} else if (onchainResult.error?.includes('not configured')) {
-				console.warn('[debates/claim] Blockchain not configured, returning stub');
-				// Fall through to off-chain stub response
+				allowChainMisconfig({ op: 'debates/claim' });
+				chainBoundary =
+					'Blockchain runtime is not configured; no on-chain settlement claim was executed.';
+				console.warn('[debates/claim] Blockchain not configured, recording off-chain claim boundary');
 			} else {
 				throw error(502, `On-chain settlement claim failed: ${onchainResult.error}`);
 			}
 		}
+	} else {
+		allowChainMisconfig({ op: 'debates/claim' });
+		chainBoundary =
+			'Debate has no on-chain registration; settlement can only be recorded off-chain.';
 	}
 
-	// Fallback: blockchain not configured or debate not registered on-chain
+	// Fallback: dev/explicit opt-in off-chain record. No token payout or chain settlement occurred.
 	const settlementPath = isPrivateSettlement ? 'private_position' : 'simple_claim';
 	console.info('[debates/claim] Settlement claim recorded (off-chain)', {
 		debateId: debate._id,
@@ -179,6 +189,11 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		status: 'claim_recorded',
 		settlementPath,
 		winningStance: debate.winningStance,
-		message: 'Settlement claim recorded. On-chain execution pending contract integration.'
+		chainStatus: 'offchain_recorded',
+		txHash: null,
+		claimBoundary:
+			chainBoundary ??
+			'On-chain settlement was not executed; this response only records the claim boundary.',
+		message: 'Settlement claim recorded off-chain; no payout or on-chain settlement was executed.'
 	});
 };

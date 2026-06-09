@@ -5,12 +5,45 @@
  */
 
 import { json, error } from '@sveltejs/kit';
+import { env as privateEnv } from '$env/dynamic/private';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
+import { getCallInitiationReadiness } from '$lib/server/calls/call-initiation-readiness';
 import { initiatePatchThroughCall } from '$lib/server/sms/twilio';
 import type { RequestHandler } from './$types';
+
+function callInitiationEnv() {
+	return {
+		TWILIO_ACCOUNT_SID: privateEnv.TWILIO_ACCOUNT_SID,
+		TWILIO_AUTH_TOKEN: privateEnv.TWILIO_AUTH_TOKEN,
+		TWILIO_PHONE_NUMBER: privateEnv.TWILIO_PHONE_NUMBER
+	};
+}
+
+function callInitiationBoundary(
+	readiness: ReturnType<typeof getCallInitiationReadiness>,
+	status = 424
+) {
+	return json(
+		{
+			error: 'call_initiation_not_armed',
+			message: readiness.message,
+			blockedVerb: 'patch_through_call',
+			preservedArtifact: 'call_record_not_created',
+			gate: 'CP-call-initiation-ui',
+			taskIds: ['T2-1'],
+			dependency: readiness.dependency,
+			missing: readiness.missing,
+			runtimeFlag: readiness.runtimeFlag,
+			scope: readiness.scope,
+			surfaceMounted: readiness.surfaceMounted,
+			proxyImplemented: readiness.proxyImplemented
+		},
+		{ status }
+	);
+}
 
 export const POST: RequestHandler = async ({ params, request, locals, url }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
@@ -52,7 +85,18 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 
 	// Client must decrypt supporter phone with org key and pass it in the body
 	const callerPhone = (body as Record<string, unknown>).callerPhone as string | undefined;
-	if (!callerPhone) throw error(400, 'callerPhone required — decrypt supporter phone with org key first');
+	if (!callerPhone) {
+		return callInitiationBoundary(
+			getCallInitiationReadiness(callInitiationEnv(), {
+				featureEnabled: FEATURES.SMS,
+				canManageCalls: true,
+				scope: 'api_request',
+				supporterPhonePresent: Boolean(supporter.encryptedPhone),
+				callerPhoneProvided: false
+			}),
+			400
+		);
+	}
 	// callerPhone format check (parity with targetPhone regex above).
 	if (typeof callerPhone !== 'string' || !/^\+\d{10,15}$/.test(callerPhone)) {
 		throw error(400, 'Invalid callerPhone format (E.164 required)');
@@ -61,6 +105,15 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 	if (districtHash !== undefined && (typeof districtHash !== 'string' || districtHash.length > 128)) {
 		throw error(400, 'Invalid districtHash format');
 	}
+
+	const callReadiness = getCallInitiationReadiness(callInitiationEnv(), {
+		featureEnabled: FEATURES.SMS,
+		canManageCalls: true,
+		scope: 'api_request',
+		supporterPhonePresent: Boolean(supporter.encryptedPhone),
+		callerPhoneProvided: true
+	});
+	if (!callReadiness.ready) return callInitiationBoundary(callReadiness);
 
 	// Create call record
 	const callResult = await serverMutation(api.calls.createCall, {

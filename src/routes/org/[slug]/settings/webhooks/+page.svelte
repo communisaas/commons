@@ -1,8 +1,15 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
+	import {
+		buildSignedWebhookReadiness,
+		getGateEvidence,
+		type SignedWebhookReadinessRow
+	} from '$lib/data/capability-hypergraph';
+	import { Datum, RegistryMark } from '$lib/design';
 	import type { ActionData, PageData } from './$types';
 
-	const { data, form }: { data: PageData; form: ActionData } = $props();
+	const { data, form }: { data: PageData; form?: ActionData } = $props();
 
 	const AVAILABLE_EVENTS = [
 		'campaign_action.created',
@@ -15,302 +22,547 @@
 		'event.rsvp_created'
 	] as const;
 
+	type WebhookRow = PageData['webhooks'][number];
+	type RecentDelivery = PageData['recentDeliveries'][number];
+
 	let showCreate = $state(false);
+
+	const endpointCount = $derived(data.webhooks.length);
+	const activeEndpointCount = $derived(data.webhooks.filter((webhook) => webhook.enabled).length);
+	const pausedEndpointCount = $derived(endpointCount - activeEndpointCount);
+	const subscribedEventCount = $derived(
+		data.webhooks.reduce((sum, webhook) => sum + webhook.events.length, 0)
+	);
+	const recentDeliveryCount = $derived(data.recentDeliveries.length);
+	const deliveredCount = $derived(
+		data.recentDeliveries.filter((delivery) => delivery.deliveredAt).length
+	);
+	const retryingCount = $derived(
+		data.recentDeliveries.filter(
+			(delivery) => delivery.nextRetryAt && !delivery.deliveredAt && !delivery.isDead
+		).length
+	);
+	const deadCount = $derived(data.recentDeliveries.filter((delivery) => delivery.isDead).length);
+	const failureCount = $derived(
+		data.webhooks.reduce((sum, webhook) => sum + webhook.failureCount, 0)
+	);
+	const testedDeliveryId = $derived(
+		form?.tested && form.tested.error === null ? form.tested.deliveryId : null
+	);
+	const eventRecordsGate = getGateEvidence('CP-outbound-webhooks', ['T9-3', 'T9-7', 'T6-9'], {
+		name: 'Signed event delivery substrate',
+		downstream: 5,
+		dependency: 'orgEvents rows + orgWebhookDeliveries retry log + HMAC signed POST'
+	});
+	const readerOfficeGate = getGateEvidence('CP-dm-office-profile', ['T8-1b', 'T8-8'], {
+		name: 'Reader-office notification boundary',
+		downstream: 3,
+		dependency: 'Reader-side office profile + notification consumer'
+	});
+	const webhookArchiveGate = getGateEvidence('CP-receipt-anchoring', ['T6-1', 'T6-2', 'T6-9'], {
+		name: 'Durable event archive boundary',
+		downstream: 4,
+		dependency: 'Receipt manifest archive + anchored event receipt pattern'
+	});
+
+	const signedWebhookReadiness = $derived(
+		buildSignedWebhookReadiness({
+			base: `/org/${data.orgSlug}`,
+			webhooks: {
+				eventKindCount: AVAILABLE_EVENTS.length,
+				endpointCount,
+				activeEndpointCount,
+				subscribedEventCount,
+				recentDeliveryCount,
+				deliveredCount,
+				retryingCount,
+				deadCount,
+				failureCount
+			},
+			gates: {
+				eventRecordsGate,
+				readerOfficeGate,
+				webhookArchiveGate
+			}
+		})
+	);
+
+	function webhookCapabilityHref(row: SignedWebhookReadinessRow): string {
+		if (row.id === 'signed-event-substrate') return '#signed-event-ground';
+		if (row.id === 'endpoint-custody') return '#webhook-endpoints';
+		if (row.id === 'delivery-attempt-register') return '#webhook-delivery-evidence';
+		if (row.id === 'reader-office-notification-boundary') return '#reader-notification-boundary';
+		if (row.id === 'durable-event-archive-boundary') return '#webhook-archive-boundary';
+		return row.href;
+	}
+
+	const capabilityItems = $derived(
+		signedWebhookReadiness.rows.map((row) => ({
+			label: row.label,
+			state: row.state,
+			phase: row.phase,
+			cluster: row.clusters,
+			action: row.action,
+			handoff: row.handoff,
+			detail: row.ground,
+			unlock: row.boundary,
+			href: webhookCapabilityHref(row),
+			metric: row.metric
+		}))
+	);
 
 	function fmtDate(ms: number | null | undefined): string {
 		if (!ms) return '—';
 		return new Date(ms).toLocaleString();
 	}
+
+	function deliveryTimestamp(delivery: RecentDelivery): number | null {
+		return delivery.deliveredAt ?? delivery.nextRetryAt ?? delivery.createdAt ?? null;
+	}
+
+	function deliveryStatusLabel(delivery: RecentDelivery): string {
+		if (delivery.deliveredAt) return 'Delivered';
+		if (delivery.isDead) return 'Dead letter';
+		if (delivery.nextRetryAt) return 'Retry scheduled';
+		return 'Queued';
+	}
+
+	function deliveryStatusClass(delivery: RecentDelivery): string {
+		if (delivery.deliveredAt) return 'border-teal-500/30 bg-teal-500/10 text-teal-300';
+		if (delivery.isDead) return 'border-red-500/30 bg-red-500/10 text-red-400';
+		if (delivery.nextRetryAt) return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
+		return 'border-surface-border-strong bg-surface-overlay text-text-tertiary';
+	}
+
+	function endpointStatusClass(webhook: WebhookRow): string {
+		if (webhook.enabled) return 'border-teal-500/30 bg-teal-500/10 text-teal-300';
+		return 'border-surface-border-strong bg-surface-overlay text-text-tertiary';
+	}
 </script>
 
 <svelte:head>
-	<title>Webhooks · Settings</title>
+	<title>Signed event webhooks | Org authority</title>
 </svelte:head>
 
-<section class="webhooks">
-	<header>
-		<h1>Webhooks</h1>
-		<p class="lede">
-			Subscribe an external endpoint to org events. Each delivery is HMAC-SHA256
-			signed. Verify <code>X-Commons-Signature-256: t=&lt;ts&gt;,v1=&lt;hmac&gt;</code> as
-			<code>HMAC-SHA256({"timestamp"}.{"payload"}, signingSecret)</code>.
-		</p>
-		<button class="primary" type="button" onclick={() => (showCreate = !showCreate)}>
-			{showCreate ? 'Cancel' : 'New webhook'}
-		</button>
-	</header>
+<div class="bg-surface-raised text-text-primary min-h-screen">
+	<div class="mx-auto max-w-6xl space-y-6 px-4 py-8">
+		<header class="flex flex-wrap items-start justify-between gap-4">
+			<div class="min-w-0">
+				<nav class="text-text-tertiary mb-3 flex items-center gap-2 text-sm">
+					<a
+						href="/org/{data.orgSlug}/settings"
+						class="hover:text-text-secondary transition-colors"
+					>
+						Org authority
+					</a>
+					<span aria-hidden="true">/</span>
+					<span>Signed event webhooks</span>
+				</nav>
+				<h1 class="text-text-primary text-xl font-semibold">Signed event webhooks</h1>
+				<p class="text-text-tertiary mt-1 max-w-3xl text-sm">
+					Subscribe external systems to Commons org events. Deliveries are signed, retryable, and
+					visible as attempt records without claiming receiver-side processing or durable receipt
+					anchoring.
+				</p>
+			</div>
+			<button
+				type="button"
+				class="bg-surface-overlay text-text-primary hover:bg-surface-base rounded-md px-4 py-2 text-sm font-semibold transition-colors"
+				onclick={() => (showCreate = !showCreate)}
+			>
+				{showCreate ? 'Close form' : 'Add endpoint'}
+			</button>
+		</header>
 
-	{#if form?.signingSecret && form?.created}
-		<aside class="secret-reveal">
-			<h2>Signing secret (shown once)</h2>
-			<p>
-				Copy this now and store it securely. Commons will never display it again. If
-				you lose it, rotate to generate a new one.
-			</p>
-			<pre><code>{form.signingSecret}</code></pre>
-		</aside>
-	{/if}
+		<WorkspaceCapabilityStrip label="Signed event webhook capability" items={capabilityItems} />
 
-	{#if form?.rotated && form?.signingSecret}
-		<aside class="secret-reveal">
-			<h2>New signing secret (shown once)</h2>
-			<p>
-				The previous secret is still accepted during the rotation window. Update your
-				verifier now to use the new one.
-			</p>
-			<pre><code>{form.signingSecret}</code></pre>
-		</aside>
-	{/if}
+		{#if form?.signingSecret && form?.created}
+			<aside
+				class="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+			>
+				<p class="font-medium">Signing secret shown once</p>
+				<p class="mt-1 text-amber-100/80">
+					Store this in the receiver now. Commons will not display it again; rotation creates a new
+					active secret.
+				</p>
+				<pre
+					class="bg-surface-base text-text-primary mt-3 overflow-x-auto rounded-md px-3 py-2 text-xs"><code
+						>{form.signingSecret}</code
+					></pre>
+			</aside>
+		{/if}
 
-	{#if showCreate}
-		<form method="POST" action="?/create" use:enhance class="create-form">
-			<label>
-				<span>Endpoint URL</span>
-				<input type="url" name="url" required placeholder="https://example.com/hook" />
-			</label>
-			<fieldset>
-				<legend>Events</legend>
-				{#each AVAILABLE_EVENTS as ev (ev)}
-					<label class="event-check">
-						<input type="checkbox" name="events" value={ev} />
-						<code>{ev}</code>
+		{#if form?.rotated && form?.signingSecret}
+			<aside
+				class="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+			>
+				<p class="font-medium">New signing secret shown once</p>
+				<p class="mt-1 text-amber-100/80">
+					The previous secret remains available to the receiver during rotation. Update the receiver
+					verifier before dropping the old secret.
+				</p>
+				<pre
+					class="bg-surface-base text-text-primary mt-3 overflow-x-auto rounded-md px-3 py-2 text-xs"><code
+						>{form.signingSecret}</code
+					></pre>
+			</aside>
+		{/if}
+
+		{#if testedDeliveryId}
+			<aside
+				class="rounded-md border border-teal-500/30 bg-teal-500/10 px-4 py-3 text-sm text-teal-100"
+			>
+				<p class="font-medium">Test delivery queued</p>
+				<p class="mt-1 text-teal-100/80">
+					Commons queued a signed <code>webhook.test</code> POST. The attempt record below will show whether
+					the receiver accepted, retried, or dead-lettered the delivery.
+				</p>
+				<code class="text-text-secondary mt-3 block text-xs break-all">{testedDeliveryId}</code>
+			</aside>
+		{/if}
+
+		<section
+			id="signed-event-ground"
+			class="border-surface-border bg-surface-base rounded-md border p-4"
+		>
+			<div class="flex flex-wrap items-start justify-between gap-4">
+				<div>
+					<p class="text-text-primary text-sm font-medium">Signature contract</p>
+					<p class="text-text-tertiary mt-1 max-w-3xl text-sm">
+						Commons signs the raw JSON payload as <code>timestamp.payload</code> using the endpoint
+						signing secret and sends the result in
+						<RegistryMark
+							variant="tag"
+							value="X-Commons-Signature-256"
+							copy={false}
+							class="text-text-secondary"
+						/>. Receivers should verify the HMAC and enforce their replay window.
+					</p>
+				</div>
+				<div class="grid min-w-52 grid-cols-3 gap-3 text-right">
+					<div>
+						<p class="text-text-primary text-lg font-bold">
+							<Datum value={AVAILABLE_EVENTS.length} cite="orgWebhooks SESSION_ALLOWED_EVENTS" />
+						</p>
+						<p class="text-text-tertiary text-xs">event kinds</p>
+					</div>
+					<div>
+						<p class="text-text-primary text-lg font-bold">
+							<Datum value={subscribedEventCount} cite="orgWebhooks.events" />
+						</p>
+						<p class="text-text-tertiary text-xs">subscriptions</p>
+					</div>
+					<div>
+						<p class="text-text-primary text-lg font-bold">
+							<Datum value={failureCount} cite="orgWebhooks.failureCount" />
+						</p>
+						<p class="text-text-tertiary text-xs">failures</p>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<section id="webhook-endpoints" class="space-y-3">
+			<div class="flex flex-wrap items-end justify-between gap-3">
+				<div>
+					<p class="text-text-primary text-sm font-medium">Endpoint custody</p>
+					<p class="text-text-tertiary mt-1 text-sm">
+						Endpoint rows are org-scoped. Secrets are revealed only on creation or rotation.
+					</p>
+				</div>
+				<div class="flex gap-4 text-right text-xs">
+					<div>
+						<p class="text-text-primary text-base font-bold">
+							<Datum value={activeEndpointCount} cite="orgWebhooks.enabled" />
+						</p>
+						<p class="text-text-tertiary">enabled</p>
+					</div>
+					<div>
+						<p class="text-text-primary text-base font-bold">
+							<Datum value={pausedEndpointCount} cite="orgWebhooks.enabled" />
+						</p>
+						<p class="text-text-tertiary">paused</p>
+					</div>
+				</div>
+			</div>
+
+			{#if showCreate}
+				<form
+					method="POST"
+					action="?/create"
+					use:enhance
+					class="border-surface-border bg-surface-base grid gap-4 rounded-md border p-4"
+				>
+					<label class="grid gap-1">
+						<span class="text-text-secondary text-sm font-medium">Endpoint URL</span>
+						<input
+							type="url"
+							name="url"
+							required
+							placeholder="https://example.com/commons/events"
+							class="border-surface-border-strong bg-surface-raised text-text-primary placeholder:text-text-quaternary rounded-md border px-3 py-2 text-sm outline-none focus:border-teal-500/60"
+						/>
 					</label>
-				{/each}
-			</fieldset>
-			<label>
-				<span>Description (optional)</span>
-				<input type="text" name="description" maxlength="500" />
-			</label>
-			{#if form?.error}
-				<p class="error">{form.error}</p>
+					<fieldset class="border-surface-border-strong grid gap-2 rounded-md border p-3">
+						<legend class="text-text-secondary px-1 text-sm font-medium">Events</legend>
+						<div class="grid gap-2 sm:grid-cols-2">
+							{#each AVAILABLE_EVENTS as event (event)}
+								<label class="flex items-center gap-2 text-sm">
+									<input type="checkbox" name="events" value={event} class="accent-teal-500" />
+									<code class="text-text-secondary text-xs">{event}</code>
+								</label>
+							{/each}
+						</div>
+					</fieldset>
+					<label class="grid gap-1">
+						<span class="text-text-secondary text-sm font-medium">Description</span>
+						<input
+							type="text"
+							name="description"
+							maxlength="500"
+							placeholder="Optional receiver label"
+							class="border-surface-border-strong bg-surface-raised text-text-primary placeholder:text-text-quaternary rounded-md border px-3 py-2 text-sm outline-none focus:border-teal-500/60"
+						/>
+					</label>
+					{#if form?.error}
+						<p class="text-sm text-red-400">{form.error}</p>
+					{/if}
+					<button
+						type="submit"
+						class="w-fit rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-500"
+					>
+						Create endpoint
+					</button>
+				</form>
 			{/if}
-			<button type="submit" class="primary">Create webhook</button>
-		</form>
-	{/if}
 
-	<table class="list">
-		<thead>
-			<tr>
-				<th>URL</th>
-				<th>Events</th>
-				<th>Status</th>
-				<th>Last delivered</th>
-				<th>Failures</th>
-				<th>Actions</th>
-			</tr>
-		</thead>
-		<tbody>
-			{#if data.webhooks.length === 0}
-				<tr><td colspan="6" class="empty">No webhooks configured.</td></tr>
-			{/if}
-			{#each data.webhooks as w (w.id)}
-				<tr>
-					<td class="url"><code>{w.url}</code></td>
-					<td class="events">
-						{#each w.events as e}<span class="event">{e}</span>{/each}
-					</td>
-					<td>
-						<span class="status status-{w.enabled ? 'on' : 'off'}">
-							{w.enabled ? 'Enabled' : 'Disabled'}
-						</span>
-					</td>
-					<td>{fmtDate(w.lastDeliveredAt)}</td>
-					<td>{w.failureCount}</td>
-					<td class="actions">
-						<form method="POST" action="?/update" use:enhance>
-							<input type="hidden" name="webhookId" value={w.id} />
-							<input type="hidden" name="enabled" value={(!w.enabled).toString()} />
-							<button type="submit" class="link">{w.enabled ? 'Disable' : 'Enable'}</button>
-						</form>
-						<form method="POST" action="?/rotate" use:enhance>
-							<input type="hidden" name="webhookId" value={w.id} />
-							<button type="submit" class="link">Rotate secret</button>
-						</form>
-						<form
-							method="POST"
-							action="?/delete"
-							use:enhance
-							onsubmit={(e) => {
-								if (!confirm('Delete this webhook and its delivery history?')) {
-									e.preventDefault();
-								}
-							}}
-						>
-							<input type="hidden" name="webhookId" value={w.id} />
-							<button type="submit" class="link danger">Delete</button>
-						</form>
-					</td>
-				</tr>
-			{/each}
-		</tbody>
-	</table>
-</section>
+			<div class="border-surface-border bg-surface-base overflow-x-auto rounded-md border">
+				<table class="w-full min-w-[860px] text-left text-sm">
+					<thead class="text-text-tertiary border-surface-border border-b text-xs uppercase">
+						<tr>
+							<th class="px-3 py-3 font-semibold">Endpoint</th>
+							<th class="px-3 py-3 font-semibold">Events</th>
+							<th class="px-3 py-3 font-semibold">Status</th>
+							<th class="px-3 py-3 font-semibold">Last delivered</th>
+							<th class="px-3 py-3 font-semibold">Failures</th>
+							<th class="px-3 py-3 font-semibold">Actions</th>
+						</tr>
+					</thead>
+					<tbody class="divide-surface-border divide-y">
+						{#if data.webhooks.length === 0}
+							<tr>
+								<td colspan="6" class="text-text-tertiary px-3 py-10 text-center">
+									No endpoints configured. Add one before Commons can deliver org events to an
+									external system.
+								</td>
+							</tr>
+						{/if}
+						{#each data.webhooks as webhook (webhook.id)}
+							<tr>
+								<td class="px-3 py-3 align-top">
+									<code class="text-text-secondary text-xs break-all">{webhook.url}</code>
+									{#if webhook.description}
+										<p class="text-text-tertiary mt-1 text-xs">{webhook.description}</p>
+									{/if}
+								</td>
+								<td class="px-3 py-3 align-top">
+									<div class="flex max-w-md flex-wrap gap-1">
+										{#each webhook.events as event}
+											<span
+												class="border-surface-border-strong bg-surface-overlay text-text-secondary rounded-md border px-1.5 py-0.5 font-mono text-[0.68rem]"
+											>
+												{event}
+											</span>
+										{/each}
+									</div>
+								</td>
+								<td class="px-3 py-3 align-top">
+									<span
+										class="inline-flex rounded-md border px-2 py-0.5 text-xs font-medium {endpointStatusClass(
+											webhook
+										)}"
+									>
+										{webhook.enabled ? 'Enabled' : 'Paused'}
+									</span>
+								</td>
+								<td class="text-text-tertiary px-3 py-3 align-top text-xs">
+									{fmtDate(webhook.lastDeliveredAt)}
+								</td>
+								<td class="px-3 py-3 align-top">
+									<Datum value={webhook.failureCount} cite="orgWebhooks.failureCount" />
+								</td>
+								<td class="px-3 py-3 align-top">
+									<div class="flex flex-wrap gap-3">
+										<form method="POST" action="?/test" use:enhance>
+											<input type="hidden" name="webhookId" value={webhook.id} />
+											<button
+												type="submit"
+												disabled={!webhook.enabled}
+												title={webhook.enabled
+													? 'Queue signed webhook.test delivery'
+													: 'Enable endpoint before testing'}
+												class="disabled:text-text-quaternary text-sm font-medium text-teal-300 hover:text-teal-200 disabled:cursor-not-allowed"
+											>
+												Send test
+											</button>
+										</form>
+										<form method="POST" action="?/update" use:enhance>
+											<input type="hidden" name="webhookId" value={webhook.id} />
+											<input type="hidden" name="enabled" value={(!webhook.enabled).toString()} />
+											<button
+												type="submit"
+												class="text-sm font-medium text-teal-300 hover:text-teal-200"
+											>
+												{webhook.enabled ? 'Pause' : 'Enable'}
+											</button>
+										</form>
+										<form method="POST" action="?/rotate" use:enhance>
+											<input type="hidden" name="webhookId" value={webhook.id} />
+											<button
+												type="submit"
+												class="text-sm font-medium text-teal-300 hover:text-teal-200"
+											>
+												Rotate secret
+											</button>
+										</form>
+										<form
+											method="POST"
+											action="?/delete"
+											use:enhance
+											onsubmit={(event) => {
+												if (!confirm('Delete this endpoint and its delivery history?')) {
+													event.preventDefault();
+												}
+											}}
+										>
+											<input type="hidden" name="webhookId" value={webhook.id} />
+											<button
+												type="submit"
+												class="text-sm font-medium text-red-400 hover:text-red-300"
+											>
+												Delete
+											</button>
+										</form>
+									</div>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		</section>
 
-<style>
-	.webhooks {
-		max-width: 960px;
-		margin: 0 auto;
-		padding: 2rem 1rem;
-	}
-	header {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-		margin-bottom: 1.5rem;
-	}
-	h1 {
-		margin: 0;
-	}
-	.lede {
-		color: var(--zinc-500, #71717a);
-		font-size: 0.95rem;
-	}
-	.lede code {
-		font-size: 0.85rem;
-		background: var(--zinc-100, #f4f4f5);
-		padding: 0.05rem 0.3rem;
-		border-radius: 0.2rem;
-	}
-	button.primary {
-		background: var(--accent, #14b8a6);
-		color: white;
-		border: 0;
-		padding: 0.5rem 1rem;
-		border-radius: 0.3rem;
-		cursor: pointer;
-		font-weight: 500;
-		align-self: flex-start;
-	}
-	button.link {
-		background: transparent;
-		border: 0;
-		color: var(--accent, #14b8a6);
-		cursor: pointer;
-		padding: 0;
-		font: inherit;
-	}
-	button.link.danger {
-		color: var(--red-600, #dc2626);
-	}
-	.secret-reveal {
-		background: var(--amber-50, #fffbeb);
-		border: 1px solid var(--amber-300, #fcd34d);
-		border-radius: 0.4rem;
-		padding: 1rem;
-		margin: 1rem 0;
-	}
-	.secret-reveal h2 {
-		margin: 0 0 0.5rem 0;
-		font-size: 1rem;
-	}
-	.secret-reveal pre {
-		background: var(--zinc-900, #18181b);
-		color: var(--zinc-50, #fafafa);
-		padding: 0.6rem;
-		border-radius: 0.3rem;
-		overflow-x: auto;
-		word-break: break-all;
-		white-space: pre-wrap;
-	}
-	.create-form {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-		padding: 1rem;
-		background: var(--zinc-50, #fafafa);
-		border-radius: 0.4rem;
-		margin-bottom: 1.5rem;
-	}
-	.create-form label {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-	}
-	.create-form input[type='url'],
-	.create-form input[type='text'] {
-		padding: 0.4rem 0.6rem;
-		border: 1px solid var(--zinc-300, #d4d4d8);
-		border-radius: 0.3rem;
-		font: inherit;
-	}
-	fieldset {
-		border: 1px solid var(--zinc-300, #d4d4d8);
-		border-radius: 0.3rem;
-		padding: 0.6rem 1rem;
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 0.4rem;
-	}
-	fieldset legend {
-		padding: 0 0.4rem;
-		font-weight: 500;
-	}
-	.event-check {
-		display: flex;
-		align-items: center;
-		gap: 0.4rem;
-		flex-direction: row !important;
-	}
-	.error {
-		color: var(--red-600, #dc2626);
-		margin: 0;
-	}
-	table.list {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 0.9rem;
-	}
-	table.list th,
-	table.list td {
-		text-align: left;
-		padding: 0.6rem;
-		border-bottom: 1px solid var(--zinc-200, #e4e4e7);
-		vertical-align: top;
-	}
-	table.list th {
-		font-weight: 600;
-		color: var(--zinc-700, #3f3f46);
-	}
-	td.url code {
-		word-break: break-all;
-		font-size: 0.8rem;
-	}
-	td.events .event {
-		display: inline-block;
-		background: var(--zinc-100, #f4f4f5);
-		padding: 0.1rem 0.4rem;
-		border-radius: 0.2rem;
-		font-size: 0.75rem;
-		margin: 0.1rem;
-		font-family: ui-monospace, monospace;
-	}
-	td.actions {
-		display: flex;
-		gap: 0.6rem;
-		flex-wrap: wrap;
-	}
-	td.actions form {
-		display: inline;
-	}
-	.status {
-		display: inline-block;
-		padding: 0.1rem 0.5rem;
-		border-radius: 0.2rem;
-		font-size: 0.75rem;
-		font-weight: 500;
-	}
-	.status-on {
-		background: var(--green-100, #dcfce7);
-		color: var(--green-800, #166534);
-	}
-	.status-off {
-		background: var(--zinc-200, #e4e4e7);
-		color: var(--zinc-700, #3f3f46);
-	}
-	.empty {
-		text-align: center;
-		color: var(--zinc-500, #71717a);
-		font-style: italic;
-		padding: 2rem;
-	}
-</style>
+		<section id="webhook-delivery-evidence" class="space-y-3">
+			<div class="flex flex-wrap items-end justify-between gap-3">
+				<div>
+					<p class="text-text-primary text-sm font-medium">Delivery attempt evidence</p>
+					<p class="text-text-tertiary mt-1 text-sm">
+						This is the sender-side retry log. It does not prove the receiver processed the event.
+					</p>
+				</div>
+				<div class="grid grid-cols-3 gap-4 text-right text-xs">
+					<div>
+						<p class="text-text-primary text-base font-bold">
+							<Datum value={deliveredCount} cite="orgWebhookDeliveries.deliveredAt" />
+						</p>
+						<p class="text-text-tertiary">delivered</p>
+					</div>
+					<div>
+						<p class="text-text-primary text-base font-bold">
+							<Datum value={retryingCount} cite="orgWebhookDeliveries.nextRetryAt" />
+						</p>
+						<p class="text-text-tertiary">retrying</p>
+					</div>
+					<div>
+						<p class="text-text-primary text-base font-bold">
+							<Datum value={deadCount} cite="orgWebhookDeliveries.isDead" />
+						</p>
+						<p class="text-text-tertiary">dead</p>
+					</div>
+				</div>
+			</div>
+
+			<div class="border-surface-border bg-surface-base overflow-x-auto rounded-md border">
+				<table class="w-full min-w-[760px] text-left text-sm">
+					<thead class="text-text-tertiary border-surface-border border-b text-xs uppercase">
+						<tr>
+							<th class="px-3 py-3 font-semibold">Event</th>
+							<th class="px-3 py-3 font-semibold">Endpoint</th>
+							<th class="px-3 py-3 font-semibold">Status</th>
+							<th class="px-3 py-3 font-semibold">HTTP</th>
+							<th class="px-3 py-3 font-semibold">Attempt</th>
+							<th class="px-3 py-3 font-semibold">Timestamp</th>
+						</tr>
+					</thead>
+					<tbody class="divide-surface-border divide-y">
+						{#if data.recentDeliveries.length === 0}
+							<tr>
+								<td colspan="6" class="text-text-tertiary px-3 py-10 text-center">
+									No delivery attempts loaded yet. Attempts appear after a matching org event is
+									emitted.
+								</td>
+							</tr>
+						{/if}
+						{#each data.recentDeliveries as delivery (delivery.id)}
+							<tr>
+								<td class="px-3 py-3 align-top">
+									<code class="text-text-secondary text-xs">{delivery.event}</code>
+								</td>
+								<td class="px-3 py-3 align-top">
+									<code class="text-text-tertiary text-xs break-all">{delivery.webhookUrl}</code>
+								</td>
+								<td class="px-3 py-3 align-top">
+									<span
+										class="inline-flex rounded-md border px-2 py-0.5 text-xs font-medium {deliveryStatusClass(
+											delivery
+										)}"
+									>
+										{deliveryStatusLabel(delivery)}
+									</span>
+									{#if delivery.errorMessage}
+										<p class="text-text-tertiary mt-1 max-w-xs text-xs">{delivery.errorMessage}</p>
+									{/if}
+								</td>
+								<td class="px-3 py-3 align-top">
+									<Datum value={delivery.statusCode} cite="orgWebhookDeliveries.statusCode" />
+								</td>
+								<td class="px-3 py-3 align-top">
+									<Datum value={delivery.attempt} cite="orgWebhookDeliveries.attempt" />
+								</td>
+								<td class="text-text-tertiary px-3 py-3 align-top text-xs">
+									{fmtDate(deliveryTimestamp(delivery))}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		</section>
+
+		<div class="grid gap-3 lg:grid-cols-2">
+			<section
+				id="reader-notification-boundary"
+				class="border-surface-border bg-surface-base rounded-md border p-4"
+			>
+				<p class="text-text-primary text-sm font-medium">Reader-office notification boundary</p>
+				<p class="text-text-tertiary mt-1 text-sm">
+					External endpoints can receive signed Commons events today. Commons-owned notification
+					workflows for reader-side office profiles remain a separate consumer path and should not
+					be implied by endpoint delivery.
+				</p>
+			</section>
+
+			<section
+				id="webhook-archive-boundary"
+				class="border-surface-border bg-surface-base rounded-md border p-4"
+			>
+				<p class="text-text-primary text-sm font-medium">Durable event archive boundary</p>
+				<p class="text-text-tertiary mt-1 text-sm">
+					Delivery attempts are operational evidence from <code>orgWebhookDeliveries</code>.
+					Anchored receipt manifests, long-term event archives, and receiver attestations remain
+					outside this route’s claim.
+				</p>
+			</section>
+		</div>
+	</div>
+</div>

@@ -29,6 +29,7 @@ const CreateSupporterSchema = z.object({
 	globalEmailHash: z.string().max(128).optional(),
 	encryptedName: z.string().max(512).optional(),
 	postalCode: z.string().max(20).optional(),
+	stateCode: z.string().max(8).optional(),
 	country: z.string().max(10).optional(),
 	encryptedPhone: z.string().max(256).optional(),
 	phoneHash: z.string().max(128).optional(),
@@ -70,10 +71,26 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				? emailStatus
 				: undefined,
 		source:
-			source && ['csv', 'action_network', 'organic', 'widget'].includes(source)
+			source &&
+			[
+				'csv',
+				'action_network',
+				'everyaction',
+				'nationbuilder',
+				'mailchimp',
+				'salsa',
+				'mobilize',
+				'actblue',
+				'engaging_networks',
+				'civicrm',
+				'salesforce',
+				'organic',
+				'widget'
+			].includes(source)
 				? source
 				: undefined,
-		tagId: tagId ?? undefined});
+		tagId: tagId ?? undefined
+	});
 
 	// Return encrypted blobs — client decrypts with org key
 	const data = result.items
@@ -83,6 +100,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			encryptedEmail: s.encryptedEmail,
 			encryptedName: s.encryptedName ?? null,
 			postalCode: s.postalCode,
+			stateCode: s.stateCode ?? null,
 			country: s.country,
 			encryptedPhone: s.encryptedPhone ?? null,
 			verified: s.verified,
@@ -130,6 +148,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		globalEmailHash,
 		encryptedName,
 		postalCode,
+		stateCode,
 		country,
 		encryptedPhone,
 		phoneHash,
@@ -148,13 +167,15 @@ export const POST: RequestHandler = async ({ request }) => {
 		globalEmailHash,
 		encryptedName,
 		postalCode: postalCode || undefined,
+		stateCode: stateCode?.trim().toUpperCase() || undefined,
 		country: country || 'US',
 		encryptedPhone,
 		phoneHash,
 		globalPhoneHash,
 		source: source || 'api',
 		encryptedCustomFields,
-		tagIds: tags});
+		tagIds: tags
+	});
 
 	if (result.duplicate) {
 		return apiError('CONFLICT', 'A supporter with this email already exists', 409);
@@ -171,6 +192,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			encryptedEmail: s.encryptedEmail,
 			encryptedName: s.encryptedName ?? null,
 			postalCode: s.postalCode,
+			stateCode: s.stateCode ?? null,
 			country: s.country,
 			encryptedPhone: s.encryptedPhone ?? null,
 			verified: s.verified,

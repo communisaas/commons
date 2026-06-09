@@ -4,6 +4,7 @@ import type { PageServerLoad, Actions } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import type { CongressionalDeliveryGroundData } from '$lib/components/org/os/spaces';
 
 function requireRole(role: string, required: string): void {
 	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
@@ -12,20 +13,49 @@ function requireRole(role: string, required: string): void {
 	}
 }
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function buildCongressionalDeliveryGround(
+	result: unknown
+): CongressionalDeliveryGroundData | null {
+	if (!result || typeof result !== 'object') return null;
+	const runtime = result as Record<string, unknown>;
+	return {
+		runtimeReady: runtime.ready === true,
+		runtimeMissing: Array.isArray(runtime.missing)
+			? runtime.missing.filter((item): item is string => typeof item === 'string')
+			: [],
+		runtimeDependency: asString(
+			runtime.dependency,
+			'congressional launch flag + House CWC proxy env + Senate CWC API env + per-submission proof/template checks'
+		),
+		runtimeMessage: asString(
+			runtime.message,
+			'Congressional delivery runtime posture is unread.'
+		),
+		launched: runtime.launched === true,
+		houseTransportConfigured: runtime.houseTransportConfigured === true,
+		senateTransportConfigured: runtime.senateTransportConfigured === true
+	};
+}
+
 export const load: PageServerLoad = async ({ parent, url, params }) => {
 	const { membership } = await parent();
 	requireRole(membership.role, 'editor');
 
 	const fromAlertId = url.searchParams.get('fromAlert');
 
-	const [templates, alertPrefill] = await Promise.all([
+	const [templates, alertPrefill, congressionalDeliveryResult] = await Promise.all([
 		serverQuery(api.templates.listByOrg, { slug: params.slug }),
 		fromAlertId
 			? serverQuery(api.legislation.getAlertWithBill, {
 				slug: params.slug,
 				alertId: fromAlertId as Id<'legislativeAlerts'>
 			}).catch(() => null)
-			: Promise.resolve(null)
+			: Promise.resolve(null),
+		serverQuery(api.submissions.getCongressionalDeliveryReadiness, {}).catch(() => null)
 	]);
 
 	return {
@@ -33,7 +63,8 @@ export const load: PageServerLoad = async ({ parent, url, params }) => {
 			id: t._id,
 			title: t.title
 		})),
-		alertPrefill
+		alertPrefill,
+		congressionalDelivery: buildCongressionalDeliveryGround(congressionalDeliveryResult)
 	};
 };
 

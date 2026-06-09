@@ -49,21 +49,19 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		csvEscape(s.name as string),
 		csvEscape(s.title as string),
 		csvEscape(s.district as string),
-		s.reportsReceived,
-		s.reportsOpened,
-		s.verifyLinksClicked,
-		s.repliesLogged,
-		s.relevantVotes,
-		s.alignedVotes,
-		s.alignmentRate !== null ? ((s.alignmentRate as number) * 100).toFixed(1) + '%' : '',
-		s.avgResponseTime !== null ? (s.avgResponseTime as number).toFixed(1) : '',
+		csvValue(s.reportsReceived),
+		csvValue(s.reportsOpened),
+		csvValue(s.verifyLinksClicked),
+		csvValue(s.repliesLogged),
+		csvValue(s.relevantVotes),
+		csvValue(s.alignedVotes),
+		typeof s.alignmentRate === 'number' ? (s.alignmentRate * 100).toFixed(1) + '%' : '',
+		typeof s.avgResponseTime === 'number' ? s.avgResponseTime.toFixed(1) : '',
 		(s.lastContactDate as string) ?? '',
-		s.score
+		csvValue(s.score)
 	]);
 
-	const csv = [headers.join(','), ...rows.map((r: unknown[]) => r.join(','))].join(
-		'\n'
-	);
+	const csv = [headers.join(','), ...rows.map((r: unknown[]) => r.join(','))].join('\n');
 
 	return new Response(csv, {
 		headers: {
@@ -72,6 +70,10 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		}
 	});
 };
+
+function csvValue(value: unknown): string | number {
+	return value === null || value === undefined ? '' : (value as string | number);
+}
 
 function csvEscape(value: string): string {
 	let escaped = value;

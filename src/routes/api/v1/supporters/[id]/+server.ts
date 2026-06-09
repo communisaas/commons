@@ -23,7 +23,10 @@ export const GET: RequestHandler = async ({ request, params }) => {
 	if (scopeErr) return scopeErr;
 
 	const supporter = await serverQuery(api.v1api.getSupporterById, {
- _secret: getInternalSecret(), supporterId: params.id, orgId: auth.orgId});
+		_secret: getInternalSecret(),
+		supporterId: params.id,
+		orgId: auth.orgId
+	});
 	if (!supporter) return apiError('NOT_FOUND', 'Supporter not found', 404);
 
 	// Return encrypted blobs — client decrypts with org key
@@ -32,6 +35,7 @@ export const GET: RequestHandler = async ({ request, params }) => {
 		encryptedEmail: supporter.encryptedEmail,
 		encryptedName: supporter.encryptedName ?? null,
 		postalCode: supporter.postalCode,
+		stateCode: supporter.stateCode ?? null,
 		country: supporter.country,
 		encryptedPhone: supporter.encryptedPhone ?? null,
 		verified: supporter.verified,
@@ -54,26 +58,44 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (scopeErr) return scopeErr;
 
 	let body: Record<string, unknown>;
-	try { body = await request.json(); } catch { return apiError('BAD_REQUEST', 'Invalid JSON body', 400); }
+	try {
+		body = await request.json();
+	} catch {
+		return apiError('BAD_REQUEST', 'Invalid JSON body', 400);
+	}
 
-	const { postalCode, country, encryptedCustomFields } = body as {
-		postalCode?: string; country?: string; encryptedCustomFields?: string;
+	const { postalCode, stateCode, country, encryptedCustomFields } = body as {
+		postalCode?: string;
+		stateCode?: string;
+		country?: string;
+		encryptedCustomFields?: string;
 	};
 
 	const data: Record<string, unknown> = {};
 	if (typeof postalCode === 'string') {
-		if (postalCode.length > 20) return apiError('BAD_REQUEST', 'Postal code must be 20 characters or fewer', 400);
+		if (postalCode.length > 20)
+			return apiError('BAD_REQUEST', 'Postal code must be 20 characters or fewer', 400);
 		data.postalCode = postalCode;
 	}
+	if (typeof stateCode === 'string') {
+		if (stateCode.length > 8)
+			return apiError('BAD_REQUEST', 'State/province code must be 8 characters or fewer', 400);
+		data.stateCode = stateCode.trim().toUpperCase();
+	}
 	if (typeof country === 'string') {
-		if (country.length > 10) return apiError('BAD_REQUEST', 'Country code must be 10 characters or fewer', 400);
+		if (country.length > 10)
+			return apiError('BAD_REQUEST', 'Country code must be 10 characters or fewer', 400);
 		data.country = country;
 	}
 	if (typeof encryptedCustomFields === 'string') {
 		// Parity with POST schema cap. 16 KiB ciphertext covers any
 		// real-world structured-field export.
 		if (encryptedCustomFields.length > 16_384) {
-			return apiError('BAD_REQUEST', 'encryptedCustomFields must be 16,384 characters or fewer', 400);
+			return apiError(
+				'BAD_REQUEST',
+				'encryptedCustomFields must be 16,384 characters or fewer',
+				400
+			);
 		}
 		data.encryptedCustomFields = encryptedCustomFields;
 	}
@@ -81,7 +103,11 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (Object.keys(data).length === 0) return apiError('BAD_REQUEST', 'No fields to update', 400);
 
 	const result = await serverMutation(api.v1api.updateSupporter, {
- _secret: getInternalSecret(), supporterId: params.id, orgId: auth.orgId, data});
+		_secret: getInternalSecret(),
+		supporterId: params.id,
+		orgId: auth.orgId,
+		data
+	});
 	if (!result) return apiError('NOT_FOUND', 'Supporter not found', 404);
 	return apiOk({ id: result.id, updatedAt: new Date(result.updatedAt).toISOString() });
 };
@@ -96,7 +122,10 @@ export const DELETE: RequestHandler = async ({ request, params }) => {
 	if (scopeErr) return scopeErr;
 
 	const deleted = await serverMutation(api.v1api.deleteSupporter, {
- _secret: getInternalSecret(), supporterId: params.id, orgId: auth.orgId});
+		_secret: getInternalSecret(),
+		supporterId: params.id,
+		orgId: auth.orgId
+	});
 	if (!deleted) return apiError('NOT_FOUND', 'Supporter not found', 404);
 	return apiOk({ deleted: true });
 };

@@ -6,6 +6,7 @@ import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { solidityPackedKeccak256 } from 'ethers';
 import { FEATURES } from '$lib/config/features';
+import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
 
 function verifyTransactionAsync(_txHash: string, _context: Record<string, unknown>): void {
 	// Transaction verification worker is not wired in this API boundary yet.
@@ -119,6 +120,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	// ── On-chain submission ──────────────────────────────────────────
 	let txHash: string | undefined;
 	let serverVerified = false;
+	let offchainOnly = false;
 
 	const clientTxHash = body.txHash;
 	if (clientTxHash && typeof clientTxHash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(clientTxHash)) {
@@ -143,8 +145,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 				txHash = onchainResult.txHash;
 				serverVerified = true;
 			} else if (onchainResult.error?.includes('not configured')) {
+				allowChainMisconfig({ op: 'debates/arguments' });
 				console.warn('[debates/arguments] Blockchain not configured, creating off-chain only');
-				serverVerified = true;
+				offchainOnly = true;
 			} else {
 				throw error(502, `On-chain argument submission failed: ${onchainResult.error}`);
 			}
@@ -152,8 +155,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			if (err && typeof err === 'object' && 'status' in err) {
 				throw err;
 			}
+			allowChainMisconfig({ op: 'debates/arguments' });
 			console.warn('[debates/arguments] Blockchain not available, creating off-chain only:', err);
-			serverVerified = true;
+			offchainOnly = true;
 		}
 	}
 
@@ -183,6 +187,17 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	return json({
 		argumentId: argId,
 		verificationStatus: serverVerified ? 'verified' : 'pending',
+		chainStatus: offchainOnly
+			? 'offchain_only'
+			: serverVerified
+				? 'onchain_verified'
+				: 'pending_client_tx',
+		...(offchainOnly
+			? {
+					claimBoundary:
+						'Argument was recorded off-chain only; no on-chain stake transaction was executed.'
+				}
+			: {}),
 		...(txHash ? { txHash } : {})
 	});
 };

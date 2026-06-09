@@ -2,11 +2,52 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import SegmentBuilder from '$lib/components/segments/SegmentBuilder.svelte';
+	import { Upload } from '@lucide/svelte';
 	import VerificationPipeline from '$lib/components/org/VerificationPipeline.svelte';
+	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
+	import SegmentBuilder from '$lib/components/segments/SegmentBuilder.svelte';
+	import {
+		buildEmailListHealthReadiness,
+		buildPeopleSegmentationReadiness,
+		buildPeopleSourceProvenanceReadiness,
+		formatGateEvidence,
+		getDataHonestyEvidence,
+		getGateEvidence,
+		type CapabilityState
+	} from '$lib/data/capability-hypergraph';
+	import {
+		PEOPLE_SOURCE_FILTER_OPTIONS,
+		formatPeopleSourceLabel
+	} from '$lib/data/platform-export-profiles';
+	import {
+		operatorCapabilityActionLabel,
+		operatorCapabilityStateLabel
+	} from '$lib/data/capability-state-labels';
+	import { Datum } from '$lib/design';
 	import type { PageData } from './$types';
 
 	type TagView = { id: string; name: string; supporterCount?: number };
+	type CapabilityItem = {
+		label: string;
+		state: CapabilityState;
+		phase: string;
+		cluster: string;
+		action: string;
+		detail: string;
+		unlock: string;
+		href: string;
+		metric?: {
+			value: number | null;
+			label: string;
+			cite: string;
+		};
+	};
+	type PeopleLedgerMetric = {
+		value: number | null;
+		label: string;
+		cite: string;
+	};
+	type PeopleRowDrilldownMetric = PeopleLedgerMetric;
 
 	let { data }: { data: PageData } = $props();
 	const tags = $derived((data.tags ?? []) as TagView[]);
@@ -21,7 +62,7 @@
 	async function decryptSupporterPii(supporters: typeof data.supporters) {
 		try {
 			const { getOrPromptOrgKey } = await import('$lib/services/org-key-manager');
-			const { decryptWithOrgKey } = await import('$lib/core/crypto/org-pii-encryption');
+			const { decryptOrgPii } = await import('$lib/core/crypto/org-pii-encryption');
 
 			const verifierData = data.encryption;
 			if (!verifierData?.orgKeyVerifier) return;
@@ -32,22 +73,49 @@
 			const results: Record<string, { email: string; name: string; phone: string }> = {};
 			for (const s of supporters) {
 				const entityId = `supporter:${s.id}`;
-				let email = '', name = '', phone = '';
+				const emailHash = s.emailHash ?? '';
+				let email = '',
+					name = '',
+					phone = '';
 				try {
-					if (s.encryptedEmail) {
-						email = await decryptWithOrgKey(JSON.parse(s.encryptedEmail), orgKey, entityId, 'email');
+					if (s.encryptedEmail && emailHash) {
+						email = await decryptOrgPii(
+							JSON.parse(s.encryptedEmail),
+							orgKey,
+							emailHash,
+							entityId,
+							'email'
+						);
 					}
-				} catch { /* decryption failed */ }
+				} catch {
+					/* decryption failed */
+				}
 				try {
-					if (s.encryptedName) {
-						name = await decryptWithOrgKey(JSON.parse(s.encryptedName), orgKey, entityId, 'name');
+					if (s.encryptedName && emailHash) {
+						name = await decryptOrgPii(
+							JSON.parse(s.encryptedName),
+							orgKey,
+							emailHash,
+							entityId,
+							'name'
+						);
 					}
-				} catch { /* decryption failed */ }
+				} catch {
+					/* decryption failed */
+				}
 				try {
-					if (s.encryptedPhone) {
-						phone = await decryptWithOrgKey(JSON.parse(s.encryptedPhone), orgKey, entityId, 'phone');
+					if (s.encryptedPhone && emailHash) {
+						phone = await decryptOrgPii(
+							JSON.parse(s.encryptedPhone),
+							orgKey,
+							emailHash,
+							entityId,
+							'phone'
+						);
 					}
-				} catch { /* decryption failed */ }
+				} catch {
+					/* decryption failed */
+				}
 				results[s.id] = { email, name, phone };
 			}
 			decryptedPii = results;
@@ -115,6 +183,13 @@
 		if (key === 'q') searchInputOverride = '';
 	}
 
+	function weakestCapabilityState(states: CapabilityState[]): CapabilityState {
+		if (states.includes('gated')) return 'gated';
+		if (states.includes('draft-only')) return 'draft-only';
+		if (states.includes('partial')) return 'partial';
+		return 'live';
+	}
+
 	// Active filter chips
 	const activeChips = $derived(buildActiveChips());
 
@@ -122,8 +197,13 @@
 		const chips: Array<{ key: string; label: string }> = [];
 		if (data.filters.q) chips.push({ key: 'q', label: `Search: "${data.filters.q}"` });
 		if (data.filters.status) chips.push({ key: 'status', label: `Status: ${data.filters.status}` });
-		if (data.filters.verified) chips.push({ key: 'verified', label: data.filters.verified === 'true' ? 'Verified' : 'Unverified' });
-		if (data.filters.source) chips.push({ key: 'source', label: `Source: ${sourceLabel(data.filters.source)}` });
+		if (data.filters.verified)
+			chips.push({
+				key: 'verified',
+				label: data.filters.verified === 'true' ? 'Verified' : 'Unverified'
+			});
+		if (data.filters.source)
+			chips.push({ key: 'source', label: `Source: ${sourceLabel(data.filters.source)}` });
 		if (data.filters.tagId) {
 			const tag = tags.find((t) => t.id === data.filters.tagId);
 			if (tag) chips.push({ key: 'tag', label: `Tag: ${tag.name}` });
@@ -141,7 +221,7 @@
 			const response = await fetch(url.toString(), {
 				headers: { accept: 'application/json' }
 			});
-			// SvelteKit returns the page data when fetching with the same URL
+			// SvelteKit provides page data when fetching with the same URL
 			// We need to use goto and accumulate instead
 			// Actually, let's use the __data.json endpoint
 			const dataUrl = new URL($page.url);
@@ -156,27 +236,303 @@
 	}
 
 	// Role check
-	const canEdit = $derived(
-		data.membership.role === 'owner' || data.membership.role === 'editor'
+	const canEdit = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
+	const verificationTrustGate = getGateEvidence('CP-mainnet-deployment', ['T3-6', 'T5-3'], {
+		name: 'Verification trust hardening',
+		dependency: 'Scroll mainnet DistrictRegistry + TEE resolver attestation'
+	});
+	const platformApiGate = getGateEvidence('CP-platform-api-sync', ['T1-3'], {
+		name: 'Platform API sync',
+		downstream: 1,
+		dependency: 'Encrypted API-key contracts + paginated per-platform clients'
+	});
+	const emailProxyGate = getGateEvidence('CP-2', ['T2-2'], {
+		name: 'Email send proxy',
+		dependency: 'AWS Lambda deploy + BLAST receipts secret sync'
+	});
+	const listUnsubscribeGate = getGateEvidence('CP-list-unsubscribe', ['T2-4'], {
+		name: 'List-Unsubscribe headers',
+		downstream: 2,
+		dependency: 'SES v2 Simple.Headers + per-recipient HMAC URL on the Convex path'
+	});
+	const listUnsubscribeProviderGate = getGateEvidence(
+		'CP-list-unsubscribe-provider-rendering',
+		['T2-4b'],
+		{
+			name: 'Mailbox unsubscribe rendering',
+			downstream: 1,
+			dependency: 'Production Gmail/Yahoo seed sends confirming one-click affordance rendering'
+		}
 	);
+	const softBounceGate = getGateEvidence('CP-soft-bounce-categorization', ['T2-5'], {
+		name: 'Soft-bounce suppression',
+		downstream: 1,
+		dependency: '3-strike transient bounce threshold + suppressedEmails TTL'
+	});
+	const customDomainGate = getGateEvidence('CP-custom-domain-dkim', ['T2-6'], {
+		name: 'Sender domain authentication',
+		downstream: 2,
+		dependency: 'Per-org SES identity, DKIM, DMARC, and From-domain verification'
+	});
+	const civicGeographyLabelsGate = getGateEvidence('CP-civic-geography-labels', ['T1-8c'], {
+		name: 'Civic geography labels',
+		downstream: 1,
+		dependency: 'Supporter civic-label materialization/backfill'
+	});
+	const softBounceHonesty = getDataHonestyEvidence('V-7', null, {
+		live: 'Soft-bounce threshold evidence is verified against webhook and suppression rows.',
+		gated: 'Soft-bounce threshold evidence is unresolved.',
+		gate: 'Verify soft-bounce threshold handling before claiming suppression integrity.'
+	});
+	const verificationSignalCount = $derived(
+		Math.max(data.summary.postal, data.summary.district, data.summary.verified)
+	);
+	const verificationSignalState = $derived<CapabilityState>(
+		verificationTrustGate.state === 'live' && verificationSignalCount > 0
+			? 'live'
+			: verificationSignalCount > 0
+				? 'partial'
+				: 'draft-only'
+	);
+	const peopleLedgerMetrics = $derived<PeopleLedgerMetric[]>([
+		{
+			value: data.total,
+			label: 'people loaded',
+			cite: 'supporters.getSummaryStats total'
+		},
+		{
+			value: data.summary.postal,
+			label: 'address evidence',
+			cite: 'supporters.getSummaryStats postal'
+		},
+		{
+			value: data.summary.district,
+			label: 'district signal',
+			cite: 'supporters.getSummaryStats district'
+		},
+		{
+			value: data.summary.verified,
+			label: 'identity verified',
+			cite: 'supporters.getSummaryStats verified'
+		},
+		{
+			value: data.emailHealth.subscribed,
+			label: 'subscribed reach',
+			cite: 'supporters.getSummaryStats emailHealth.subscribed'
+		}
+	]);
+	const baseHref = $derived(`/org/${data.org.slug}`);
+	const peopleSourceProvenanceReadiness = $derived(
+		buildPeopleSourceProvenanceReadiness({
+			base: baseHref,
+			sourceCounts: data.sourceCounts,
+			totalPeople: data.total,
+			platformApiGate
+		})
+	);
+	const peopleSegmentation = $derived(data.segmentation ?? null);
+	const peopleSegmentationReadiness = $derived(
+		buildPeopleSegmentationReadiness({
+			base: baseHref,
+			segmentation: {
+				loaded: Boolean(peopleSegmentation),
+				segmentCount: peopleSegmentation?.segmentCount ?? null,
+				conditionCount: peopleSegmentation?.conditionCount ?? null,
+				tagConditionCount: peopleSegmentation?.tagConditionCount ?? null,
+				verificationConditionCount: peopleSegmentation?.verificationConditionCount ?? null,
+				sourceConditionCount: peopleSegmentation?.sourceConditionCount ?? null,
+				emailStatusConditionCount: peopleSegmentation?.emailStatusConditionCount ?? null,
+				dateConditionCount: peopleSegmentation?.dateConditionCount ?? null,
+				postalCountryConditionCount: peopleSegmentation?.postalCountryConditionCount ?? null,
+				stateCodeConditionCount: peopleSegmentation?.stateCodeConditionCount ?? null,
+				congressionalDistrictConditionCount:
+					peopleSegmentation?.congressionalDistrictConditionCount ?? null,
+				campaignParticipationConditionCount:
+					peopleSegmentation?.campaignParticipationConditionCount ?? null,
+				actionDistrictHashConditionCount:
+					peopleSegmentation?.actionDistrictHashConditionCount ?? null,
+				actionDistrictLabelConditionCount:
+					peopleSegmentation?.actionDistrictLabelConditionCount ?? null,
+				engagementTierConditionCount: peopleSegmentation?.engagementTierConditionCount ?? null,
+				humanReadableGeographyConditionCount:
+					peopleSegmentation?.humanReadableGeographyConditionCount ?? null
+			},
+			gates: {
+				civicGeographyLabelsGate,
+				platformApiGate
+			}
+		})
+	);
+	const emailListHealthReadiness = $derived(
+		buildEmailListHealthReadiness({
+			base: baseHref,
+			emailHealth: {
+				loaded: true,
+				subscribed: data.emailHealth.subscribed,
+				unsubscribed: data.emailHealth.unsubscribed,
+				bounced: data.emailHealth.bounced,
+				complained: data.emailHealth.complained,
+				consentEvidenceCount: data.consentEvidence?.email ?? null,
+				subscribedConsentEvidenceCount: data.consentEvidence?.emailSubscribed ?? null
+			},
+			gates: {
+				emailProxyGate,
+				listUnsubscribeGate,
+				listUnsubscribeProviderGate,
+				softBounceGate,
+				customDomainGate
+			},
+			honesty: {
+				softBounceThreshold: softBounceHonesty
+			}
+		})
+	);
+	const rowDrilldownState = $derived<CapabilityState>(
+		weakestCapabilityState([peopleSegmentationReadiness.state, civicGeographyLabelsGate.state])
+	);
+	const rowDrilldownAction = $derived(
+		operatorCapabilityActionLabel(
+			rowDrilldownState,
+			activeChips.length > 0 ? 'read filtered row evidence' : 'shape row drilldown'
+		)
+	);
+	const rowDrilldownNext = $derived(
+		formatGateEvidence(civicGeographyLabelsGate, {
+			prefix:
+				'Row drilldown can target imported and action-time labels; verified local and special district labels remain gated.',
+			density: 'operator'
+		})
+	);
+	const rowDrilldownMetrics = $derived<PeopleRowDrilldownMetric[]>([
+		{
+			value: allSupporters.length,
+			label: 'page rows',
+			cite: 'supporters.list page rows'
+		},
+		{
+			value: data.total,
+			label: 'total people',
+			cite: 'supporters.getSummaryStats total'
+		},
+		{
+			value: activeChips.length,
+			label: 'active filters',
+			cite: 'URL filter state'
+		},
+		{
+			value: tags.length,
+			label: 'tag labels',
+			cite: 'supporters.getTags'
+		}
+	]);
+	const capabilityItems = $derived<CapabilityItem[]>([
+		{
+			label: 'People verification signal',
+			state: verificationSignalState,
+			phase: 'GROUND',
+			cluster: 'C-verification / C-data-sovereignty',
+			action: data.total > 0 ? 'read proof weight' : 'import people',
+			detail:
+				'Postal, district, and identity signals are loaded as reach weight, not CRM decoration.',
+			unlock: formatGateEvidence(verificationTrustGate, {
+				prefix: 'Move district and resolver trust beyond testnet/local assumptions.'
+			}),
+			href:
+				data.total > 0
+					? '#people-verification'
+					: `/org/${data.org.slug}/supporters/import#csv-intake`,
+			metric: {
+				value: data.summary.verified,
+				label: 'identity verified',
+				cite: 'supporters.getSummaryStats'
+			}
+		},
+		{
+			label: 'People source custody',
+			state: peopleSourceProvenanceReadiness.state,
+			phase: 'GROUND',
+			cluster: 'C-data-sovereignty / C-reach',
+			action: peopleSourceProvenanceReadiness.action,
+			detail: peopleSourceProvenanceReadiness.effect,
+			unlock: peopleSourceProvenanceReadiness.gate,
+			href: peopleSourceProvenanceReadiness.href,
+			metric: peopleSourceProvenanceReadiness.metric
+		},
+		{
+			label: 'People segmentation posture',
+			state: peopleSegmentationReadiness.state,
+			phase: 'AUTHOR / GROUND',
+			cluster: 'C-reach / C-data-sovereignty',
+			action: peopleSegmentationReadiness.action,
+			detail: peopleSegmentationReadiness.effect,
+			unlock: formatGateEvidence(peopleSegmentationReadiness.nextGate, {
+				prefix: peopleSegmentationReadiness.detail,
+				density: 'operator'
+			}),
+			href: peopleSegmentationReadiness.href,
+			metric: peopleSegmentationReadiness.metric
+		},
+		{
+			label: 'Consent-bound reach',
+			state: emailListHealthReadiness.state,
+			phase: 'GROUND / SEND',
+			cluster: 'C-reach / C-data-sovereignty',
+			action: emailListHealthReadiness.action,
+			detail: emailListHealthReadiness.effect,
+			unlock: formatGateEvidence(emailListHealthReadiness.nextGate, {
+				prefix: emailListHealthReadiness.detail,
+				density: 'operator'
+			}),
+			href: emailListHealthReadiness.href,
+			metric: emailListHealthReadiness.metric
+		}
+	]);
 
 	// Verification status helper
-	function verificationState(s: typeof data.supporters[0]): 'Verified' | 'Resolved' | 'Imported' {
+	function verificationState(s: (typeof data.supporters)[0]): 'Verified' | 'Resolved' | 'Imported' {
 		if (s.identityVerified) return 'Verified';
 		if (s.postalCode) return 'Resolved';
 		return 'Imported';
 	}
 
-	// Source label
 	function sourceLabel(source: string | null): string {
-		switch (source) {
-			case 'csv': return 'CSV';
-			case 'action_network': return 'AN';
-			case 'organic': return 'ORG';
-			case 'widget': return 'WID';
-			default: return '\u2014';
-		}
+		return formatPeopleSourceLabel(source ?? 'unknown', {
+			style: 'record',
+			fallback: 'Unknown source'
+		});
 	}
+
+	function sourceFilterLabel(source: string): string {
+		return formatPeopleSourceLabel(source, { fallback: source || 'Unknown source' });
+	}
+
+	function buildSourceFilterOptions(
+		sourceCounts: Record<string, number> | null | undefined
+	): Array<{ value: string; label: string }> {
+		const knownSources = new Set(PEOPLE_SOURCE_FILTER_OPTIONS.map((option) => option.value));
+		const extraSources = Object.keys(sourceCounts ?? {})
+			.filter(
+				(source) =>
+					source &&
+					!knownSources.has(source as (typeof PEOPLE_SOURCE_FILTER_OPTIONS)[number]['value'])
+			)
+			.sort((a, b) => sourceFilterLabel(a).localeCompare(sourceFilterLabel(b)))
+			.map((source) => ({ value: source, label: sourceFilterLabel(source) }));
+
+		return [...PEOPLE_SOURCE_FILTER_OPTIONS, ...extraSources];
+	}
+
+	const sourceRows = $derived(
+		Object.entries(data.sourceCounts ?? {})
+			.filter(([, count]) => count > 0)
+			.map(([source, count]) => ({
+				source,
+				count,
+				label: sourceLabel(source)
+			}))
+			.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+	);
+	const visibleSourceRows = $derived(sourceRows.slice(0, 4));
 
 	// Relative time formatting
 	function relativeTime(iso: string): string {
@@ -204,91 +560,253 @@
 	// Email status filters
 	const emailStatuses = ['subscribed', 'unsubscribed', 'bounced', 'complained'] as const;
 
-	// Source options
-	const sourceOptions = [
-		{ value: 'csv', label: 'CSV' },
-		{ value: 'action_network', label: 'Action Network' },
-		{ value: 'organic', label: 'Organic' },
-		{ value: 'widget', label: 'Widget' }
-	] as const;
+	const sourceOptions = $derived(buildSourceFilterOptions(data.sourceCounts));
 </script>
 
 <div class="space-y-5">
 	<!-- Header -->
-	<div class="flex items-center justify-between gap-4">
-		<div class="flex items-baseline gap-3">
-			<h1 class="text-xl font-semibold text-text-primary">Supporters</h1>
-			<span class="font-mono tabular-nums text-lg text-text-tertiary">{fmt(data.total)}</span>
+	<div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+		<div class="min-w-0 space-y-3">
+			<h1 class="text-text-primary text-xl font-semibold">People ledger</h1>
+			<div
+				class="flex max-w-4xl flex-wrap items-center gap-x-4 gap-y-2"
+				aria-label="People ledger evidence counts"
+			>
+				{#each peopleLedgerMetrics as metric (metric.label)}
+					<span
+						class="text-text-secondary inline-flex min-w-0 items-baseline gap-1 font-mono text-[0.68rem] tracking-wider uppercase"
+					>
+						<Datum value={metric.value} cite={metric.cite} />
+						<span>{metric.label}</span>
+					</span>
+				{/each}
+			</div>
 		</div>
-		<div class="flex items-center gap-3">
+		<div class="flex items-center gap-3 md:justify-end">
 			{#if canEdit}
 				<a
 					href="/org/{data.org.slug}/supporters/import"
-					class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500 transition-colors"
+					class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500"
 				>
-					<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-					</svg>
-					Import
+					<Upload size={16} strokeWidth={1.8} aria-hidden="true" />
+					Import people
 				</a>
 			{/if}
 		</div>
 	</div>
 
+	<WorkspaceCapabilityStrip label="People capability" items={capabilityItems} />
+
 	<!-- Verification Pipeline Hero -->
 	{#if data.total > 0}
-		<VerificationPipeline
-			total={data.total}
-			postalResolved={data.summary.postal + data.summary.verified}
-			identityVerified={data.summary.verified}
-			districtVerified={data.summary.verified}
-		/>
-	{/if}
-
-	<!-- Email Health -->
-	{#if data.total > 0}
-		<div class="flex items-center gap-6 rounded-md border border-surface-border bg-surface-base px-5 py-3">
-			<span class="text-xs font-medium text-text-secondary">Email Health</span>
-			<span class="inline-flex items-center gap-1.5 text-xs">
-				<span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
-				<span class="text-text-tertiary">{fmt(data.emailHealth.subscribed)} subscribed</span>
-			</span>
-			<span class="inline-flex items-center gap-1.5 text-xs">
-				<span class="inline-block w-2 h-2 rounded-full bg-yellow-500"></span>
-				<span class="text-text-tertiary">{fmt(data.emailHealth.unsubscribed)} unsubscribed</span>
-			</span>
-			<span class="inline-flex items-center gap-1.5 text-xs">
-				<span class="inline-block w-2 h-2 rounded-full bg-red-500"></span>
-				<span class="text-text-tertiary">{fmt(data.emailHealth.bounced)} bounced</span>
-			</span>
-			<span class="inline-flex items-center gap-1.5 text-xs">
-				<span class="inline-block w-2 h-2 rounded-full bg-red-700"></span>
-				<span class="text-text-tertiary">{fmt(data.emailHealth.complained)} complained</span>
-			</span>
+		<div id="people-verification">
+			<VerificationPipeline
+				total={data.total}
+				postalResolved={data.summary.postal}
+				districtVerified={data.summary.district}
+				identityVerified={data.summary.verified}
+			/>
 		</div>
 	{/if}
 
+	<!-- Source custody -->
+	{#if data.total > 0}
+		<div
+			id="people-source-provenance"
+			aria-label="People source custody"
+			class="border-surface-border bg-surface-base flex flex-col gap-3 rounded-md border px-5 py-4"
+		>
+			<div class="flex flex-wrap items-center gap-3">
+				<span class="text-text-secondary text-xs font-medium">Source custody</span>
+				<span class="text-text-tertiary min-w-0 text-xs"
+					>{peopleSourceProvenanceReadiness.signal}</span
+				>
+			</div>
+			<p class="text-text-quaternary text-xs leading-relaxed">
+				{peopleSourceProvenanceReadiness.detail}
+			</p>
+			{#if visibleSourceRows.length > 0}
+				<div class="flex flex-wrap items-center gap-2">
+					{#each visibleSourceRows as row}
+						<span
+							class="bg-surface-overlay text-text-tertiary inline-flex min-w-0 items-center gap-2 rounded px-2 py-1 text-xs"
+						>
+							<span class="truncate">{row.label}</span>
+							<span class="font-mono tabular-nums">{fmt(row.count)}</span>
+						</span>
+					{/each}
+					{#if sourceRows.length > visibleSourceRows.length}
+						<span class="text-text-quaternary text-xs"
+							>+{sourceRows.length - visibleSourceRows.length} sources</span
+						>
+					{/if}
+				</div>
+			{/if}
+		</div>
+	{/if}
+
+	<!-- Consent-bound Reach -->
+	{#if data.total > 0}
+		<div
+			id="email-health"
+			aria-label="Consent-bound reach"
+			class="border-surface-border bg-surface-base flex flex-col gap-3 rounded-md border px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+		>
+			<div class="min-w-0 space-y-1">
+				<div class="flex flex-wrap items-center gap-3">
+					<span class="text-text-secondary text-xs font-medium">Consent-bound Reach</span>
+					<span class="text-text-tertiary min-w-0 text-xs">{emailListHealthReadiness.signal}</span>
+				</div>
+				<p class="text-text-quaternary text-xs leading-relaxed">
+					{emailListHealthReadiness.effect}
+				</p>
+			</div>
+			<div class="flex flex-wrap items-center gap-4">
+				<span class="inline-flex items-center gap-1.5 text-xs">
+					<span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>
+					<span class="text-text-tertiary">{fmt(data.emailHealth.subscribed)} subscribed</span>
+				</span>
+				<span class="inline-flex items-center gap-1.5 text-xs">
+					<span class="inline-block h-2 w-2 rounded-full bg-yellow-500"></span>
+					<span class="text-text-tertiary">{fmt(data.emailHealth.unsubscribed)} unsubscribed</span>
+				</span>
+				<span class="inline-flex items-center gap-1.5 text-xs">
+					<span class="inline-block h-2 w-2 rounded-full bg-red-500"></span>
+					<span class="text-text-tertiary">{fmt(data.emailHealth.bounced)} bounced</span>
+				</span>
+				<span class="inline-flex items-center gap-1.5 text-xs">
+					<span class="inline-block h-2 w-2 rounded-full bg-red-700"></span>
+					<span class="text-text-tertiary">{fmt(data.emailHealth.complained)} complained</span>
+				</span>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Ledger boundary -->
+	{#if data.total > 0}
+		<section
+			id="people-ledger-boundary"
+			aria-label="People ledger row evidence boundary"
+			class="border-surface-border bg-surface-base grid gap-4 rounded-md border px-5 py-4 md:grid-cols-[minmax(0,1fr)_auto]"
+		>
+			<div class="min-w-0 space-y-2">
+				<div class="space-y-1">
+					<p class="text-text-tertiary font-mono text-[0.68rem] tracking-wider uppercase">
+						Ledger boundary
+					</p>
+					<h2 class="text-text-primary text-sm font-medium">
+						Person rows are drilldown, not proof by themselves
+					</h2>
+				</div>
+				<p class="text-text-quaternary max-w-3xl text-xs leading-relaxed">
+					Rows below are encrypted person records and filter drilldown. Capability claims above come
+					from aggregate verification, source custody, segmentation, and consent evidence.
+				</p>
+				<p class="text-text-tertiary text-xs leading-relaxed">
+					{formatGateEvidence(civicGeographyLabelsGate, {
+						prefix:
+							'Imported state/congressional and action-time district labels are targetable; action-district hashes are evidence, not readable district labels.',
+						density: 'operator'
+					})}
+				</p>
+			</div>
+			<div class="grid min-w-0 grid-cols-3 gap-3 md:min-w-72">
+				<div class="bg-surface-overlay flex min-w-0 flex-col gap-1 rounded px-3 py-2">
+					<span class="text-text-primary text-sm leading-none">
+						<Datum value={allSupporters.length} cite="supporters.list page rows" />
+					</span>
+					<span class="text-text-quaternary truncate text-[0.68rem] uppercase">page rows</span>
+				</div>
+				<div class="bg-surface-overlay flex min-w-0 flex-col gap-1 rounded px-3 py-2">
+					<span class="text-text-primary text-sm leading-none">
+						<Datum value={data.total} cite="supporters.getSummaryStats total" />
+					</span>
+					<span class="text-text-quaternary truncate text-[0.68rem] uppercase">total people</span>
+				</div>
+				<div class="bg-surface-overlay flex min-w-0 flex-col gap-1 rounded px-3 py-2">
+					<span class="text-text-primary text-sm leading-none">
+						<Datum value={activeChips.length} cite="URL filter state" />
+					</span>
+					<span class="text-text-quaternary truncate text-[0.68rem] uppercase">filters</span>
+				</div>
+			</div>
+		</section>
+	{/if}
+
+	<section
+		id="people-row-drilldown-controls"
+		aria-label="People row drilldown controls"
+		data-state={rowDrilldownState}
+		class="border-surface-border bg-surface-base grid gap-4 rounded-md border px-5 py-4 md:grid-cols-[minmax(0,1fr)_auto]"
+	>
+		<div class="min-w-0 space-y-2">
+			<div class="flex flex-wrap items-center gap-2">
+				<span class="text-text-tertiary font-mono text-[0.68rem] tracking-wider uppercase">
+					Row drilldown
+				</span>
+				<span class="text-text-secondary font-mono text-[0.68rem] tracking-wider uppercase">
+					{operatorCapabilityStateLabel(rowDrilldownState)}
+				</span>
+				<span class="text-text-tertiary text-xs">{rowDrilldownAction}</span>
+			</div>
+			<h2 class="text-text-primary text-sm font-medium">
+				Encrypted rows stay drilldown; aggregate proof stays above
+			</h2>
+			<p class="text-text-quaternary max-w-3xl text-xs leading-relaxed">
+				Source, tag, status, and cohort controls constrain the ledger without promoting person rows
+				into People capability proof.
+			</p>
+			<p class="text-text-tertiary text-xs leading-relaxed">
+				<span class="text-text-secondary font-mono text-[0.68rem] tracking-wider uppercase"
+					>Next</span
+				>
+				{rowDrilldownNext}
+			</p>
+		</div>
+		<div class="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-4 md:min-w-[26rem]">
+			{#each rowDrilldownMetrics as metric (metric.label)}
+				<div class="bg-surface-overlay flex min-w-0 flex-col gap-1 rounded px-3 py-2">
+					<span class="text-text-primary text-sm leading-none">
+						<Datum value={metric.value} cite={metric.cite} />
+					</span>
+					<span class="text-text-quaternary truncate text-[0.68rem] uppercase">{metric.label}</span>
+				</div>
+			{/each}
+		</div>
+	</section>
+
 	<!-- Search -->
 	<div class="relative">
-		<svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-			<path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+		<svg
+			class="text-text-tertiary absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2"
+			fill="none"
+			viewBox="0 0 24 24"
+			stroke="currentColor"
+			stroke-width="1.5"
+		>
+			<path
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+			/>
 		</svg>
 		<input
 			type="text"
-			placeholder="Search by name or email..."
+			aria-label="Find encrypted person row"
+			placeholder="Find encrypted row..."
 			value={searchInput}
 			oninput={onSearchInput}
-			class="participation-input pl-10 pr-4 py-2 text-sm"
+			class="participation-input py-2 pr-4 pl-10 text-sm"
 		/>
 	</div>
 
 	<!-- Filter bar -->
-	<div class="flex flex-wrap items-center gap-3">
+	<div id="people-segments" class="flex flex-wrap items-center gap-3">
 		<!-- Verification toggle (primary filter) -->
-		<div class="flex items-center gap-1 rounded-lg border border-surface-border p-0.5">
+		<div class="border-surface-border flex items-center gap-1 rounded-lg border p-0.5">
 			<button
 				type="button"
-				class="px-3 py-1.5 text-xs rounded-md transition-colors {!data.filters.verified
+				class="rounded-md px-3 py-1.5 text-xs transition-colors {!data.filters.verified
 					? 'bg-surface-overlay text-text-primary'
 					: 'text-text-tertiary hover:text-text-secondary'}"
 				onclick={() => removeFilter('verified')}
@@ -297,7 +815,7 @@
 			</button>
 			<button
 				type="button"
-				class="px-3 py-1.5 text-xs rounded-md transition-colors {data.filters.verified === 'true'
+				class="rounded-md px-3 py-1.5 text-xs transition-colors {data.filters.verified === 'true'
 					? 'bg-surface-overlay text-text-primary'
 					: 'text-text-tertiary hover:text-text-secondary'}"
 				onclick={() => updateFilter('verified', 'true')}
@@ -306,7 +824,7 @@
 			</button>
 			<button
 				type="button"
-				class="px-3 py-1.5 text-xs rounded-md transition-colors {data.filters.verified === 'false'
+				class="rounded-md px-3 py-1.5 text-xs transition-colors {data.filters.verified === 'false'
 					? 'bg-surface-overlay text-text-primary'
 					: 'text-text-tertiary hover:text-text-secondary'}"
 				onclick={() => updateFilter('verified', 'false')}
@@ -316,10 +834,10 @@
 		</div>
 
 		<!-- Email status pills -->
-		<div class="flex items-center gap-1 rounded-lg border border-surface-border p-0.5">
+		<div class="border-surface-border flex items-center gap-1 rounded-lg border p-0.5">
 			<button
 				type="button"
-				class="px-3 py-1.5 text-xs rounded-md transition-colors {!data.filters.status
+				class="rounded-md px-3 py-1.5 text-xs transition-colors {!data.filters.status
 					? 'bg-surface-overlay text-text-primary'
 					: 'text-text-tertiary hover:text-text-secondary'}"
 				onclick={() => removeFilter('status')}
@@ -329,7 +847,8 @@
 			{#each emailStatuses as status}
 				<button
 					type="button"
-					class="px-3 py-1.5 text-xs rounded-md capitalize transition-colors {data.filters.status === status
+					class="rounded-md px-3 py-1.5 text-xs capitalize transition-colors {data.filters
+						.status === status
 						? 'bg-surface-overlay text-text-primary'
 						: 'text-text-tertiary hover:text-text-secondary'}"
 					onclick={() => updateFilter('status', status)}
@@ -342,20 +861,20 @@
 		<!-- Tag dropdown -->
 		{#if tags.length > 0}
 			<select
-				class="rounded-lg border border-surface-border bg-surface-raised px-3 py-1.5 text-xs text-text-tertiary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
+				class="border-surface-border bg-surface-raised text-text-tertiary rounded-lg border px-3 py-1.5 text-xs transition-colors focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 				onchange={(e) => {
 					const val = (e.target as HTMLSelectElement).value;
 					updateFilter('tag', val || null);
 				}}
 			>
-				<option value="" selected={!data.filters.tagId}>All tags</option>
+				<option value="" selected={!data.filters.tagId}>Any tag</option>
 				{#each tags as tag}
 					<option value={tag.id} selected={data.filters.tagId === tag.id}>{tag.name}</option>
 				{/each}
 			</select>
 		{/if}
 
-		<!-- Manage Tags toggle (editor+) -->
+		<!-- Tag custody toggle (editor+) -->
 		{#if canEdit}
 			<button
 				type="button"
@@ -364,17 +883,27 @@
 					: 'border-surface-border text-text-tertiary hover:text-text-secondary hover:border-surface-border-strong'}"
 				onclick={() => (showTagManager = !showTagManager)}
 			>
-				<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z" />
+				<svg
+					class="h-3.5 w-3.5"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="2"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z"
+					/>
 					<path stroke-linecap="round" stroke-linejoin="round" d="M6 6h.008v.008H6V6z" />
 				</svg>
-				Manage Tags
+				Tag custody
 			</button>
 		{/if}
 
 		<!-- Source dropdown -->
 		<select
-			class="rounded-lg border border-surface-border bg-surface-raised px-3 py-1.5 text-xs text-text-tertiary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-colors"
+			class="border-surface-border bg-surface-raised text-text-tertiary rounded-lg border px-3 py-1.5 text-xs transition-colors focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 			onchange={(e) => {
 				const val = (e.target as HTMLSelectElement).value;
 				updateFilter('source', val || null);
@@ -386,7 +915,7 @@
 			{/each}
 		</select>
 
-		<!-- Segment builder toggle -->
+		<!-- Cohort posture toggle -->
 		<button
 			type="button"
 			class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors {showSegmentBuilder
@@ -394,37 +923,58 @@
 				: 'border-surface-border text-text-tertiary hover:text-text-secondary hover:border-surface-border-strong'}"
 			onclick={() => (showSegmentBuilder = !showSegmentBuilder)}
 		>
-			<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z" />
+			<svg
+				class="h-3.5 w-3.5"
+				fill="none"
+				viewBox="0 0 24 24"
+				stroke="currentColor"
+				stroke-width="2"
+			>
+				<path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z"
+				/>
 			</svg>
-			Segments
+			Cohort posture
 		</button>
 	</div>
 
-	<!-- Segment Builder Panel -->
+	<!-- Cohort posture panel -->
 	{#if showSegmentBuilder}
-		<div class="rounded-md bg-surface-base border border-surface-border p-5">
+		<div class="bg-surface-base border-surface-border rounded-md border p-5">
 			<SegmentBuilder
 				orgSlug={data.org.slug}
-				tags={tags}
+				{tags}
 				campaigns={data.campaigns}
 				showBulkActions={true}
+				civicGeographyBoundary={formatGateEvidence(civicGeographyLabelsGate, {
+					prefix:
+						'Imported state/congressional and action-time district labels are targetable; verified local and special district labels remain gated.',
+					density: 'operator'
+				})}
 			/>
 		</div>
 	{/if}
 
-	<!-- Tag Manager Panel -->
+	<!-- Tag custody panel -->
 	{#if showTagManager && canEdit}
-		<div class="rounded-md bg-surface-base border border-surface-border p-5 space-y-4">
+		<div class="bg-surface-base border-surface-border space-y-4 rounded-md border p-5">
 			<div class="flex items-center justify-between">
-				<h2 class="text-sm font-medium text-text-primary">Manage Tags</h2>
+				<h2 class="text-text-primary text-sm font-medium">Tag custody</h2>
 				<button
 					type="button"
 					class="text-text-quaternary hover:text-text-tertiary transition-colors"
 					title="Close tag manager"
 					onclick={() => (showTagManager = false)}
 				>
-					<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+					<svg
+						class="h-4 w-4"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						stroke-width="2"
+					>
 						<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 					</svg>
 				</button>
@@ -453,18 +1003,24 @@
 					type="text"
 					name="name"
 					bind:value={newTagName}
-					placeholder="New tag name..."
-					class="participation-input px-3 py-1.5 text-sm flex-1"
+					placeholder="Row tag name..."
+					class="participation-input flex-1 px-3 py-1.5 text-sm"
 				/>
 				<button
 					type="submit"
 					disabled={!newTagName.trim()}
-					class="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+					class="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
 				>
-					<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+					<svg
+						class="h-3.5 w-3.5"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						stroke-width="2"
+					>
 						<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
 					</svg>
-					Add
+					Add tag
 				</button>
 			</form>
 			{#if tagError}
@@ -473,11 +1029,15 @@
 
 			<!-- Tag list -->
 			{#if tags.length === 0}
-				<p class="text-sm text-text-quaternary">No tags yet. Create one above.</p>
+				<p class="text-text-quaternary text-sm">No tags yet. Create one above.</p>
 			{:else}
-				<div class="divide-y divide-surface-border rounded-lg border border-surface-border overflow-hidden">
+				<div
+					class="divide-surface-border border-surface-border divide-y overflow-hidden rounded-lg border"
+				>
 					{#each tags as tag (tag.id)}
-						<div class="flex items-center justify-between px-3 py-2 bg-surface-raised hover:bg-surface-overlay transition-colors group">
+						<div
+							class="bg-surface-raised hover:bg-surface-overlay group flex items-center justify-between px-3 py-2 transition-colors"
+						>
 							{#if editingTagId === tag.id}
 								<!-- Inline rename form -->
 								<form
@@ -486,7 +1046,8 @@
 									use:enhance={() => {
 										return async ({ result }) => {
 											if (result.type === 'failure') {
-												tagError = (result.data as { error?: string })?.error ?? 'Failed to rename tag';
+												tagError =
+													(result.data as { error?: string })?.error ?? 'Failed to rename tag';
 											} else if (result.type === 'success') {
 												editingTagId = null;
 												editingTagName = '';
@@ -495,41 +1056,51 @@
 											}
 										};
 									}}
-									class="flex items-center gap-2 flex-1"
+									class="flex flex-1 items-center gap-2"
 								>
 									<input type="hidden" name="tagId" value={tag.id} />
 									<input
 										type="text"
 										name="name"
 										bind:value={editingTagName}
-										class="participation-input px-2 py-1 text-sm flex-1"
+										class="participation-input flex-1 px-2 py-1 text-sm"
 									/>
 									<button
 										type="submit"
 										disabled={!editingTagName.trim() || editingTagName.trim() === tag.name}
-										class="text-xs text-teal-400 hover:text-teal-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+										class="text-xs text-teal-400 transition-colors hover:text-teal-300 disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										Save
 									</button>
 									<button
 										type="button"
-										class="text-xs text-text-quaternary hover:text-text-tertiary transition-colors"
-										onclick={() => { editingTagId = null; editingTagName = ''; tagError = ''; }}
+										class="text-text-quaternary hover:text-text-tertiary text-xs transition-colors"
+										onclick={() => {
+											editingTagId = null;
+											editingTagName = '';
+											tagError = '';
+										}}
 									>
 										Cancel
 									</button>
 								</form>
 							{:else if deletingTagId === tag.id}
 								<!-- Delete confirmation -->
-								<div class="flex items-center gap-2 flex-1">
-									<span class="text-xs text-red-400">Delete "{tag.name}"? This removes it from {tag.supporterCount} supporter{tag.supporterCount === 1 ? '' : 's'}.</span>
+								<div class="flex flex-1 items-center gap-2">
+									<span class="text-xs text-red-400"
+										>Delete "{tag.name}"? This removes it from {tag.supporterCount} person{tag.supporterCount ===
+										1
+											? ''
+											: 's'}.</span
+									>
 									<form
 										method="POST"
 										action="?/deleteTag"
 										use:enhance={() => {
 											return async ({ result }) => {
 												if (result.type === 'failure') {
-													tagError = (result.data as { error?: string })?.error ?? 'Failed to delete tag';
+													tagError =
+														(result.data as { error?: string })?.error ?? 'Failed to delete tag';
 												} else if (result.type === 'success') {
 													deletingTagId = null;
 													tagError = '';
@@ -542,48 +1113,82 @@
 										<input type="hidden" name="tagId" value={tag.id} />
 										<button
 											type="submit"
-											class="text-xs font-medium text-red-400 hover:text-red-300 transition-colors"
+											class="text-xs font-medium text-red-400 transition-colors hover:text-red-300"
 										>
 											Confirm
 										</button>
 									</form>
 									<button
 										type="button"
-										class="text-xs text-text-quaternary hover:text-text-tertiary transition-colors"
-										onclick={() => { deletingTagId = null; tagError = ''; }}
+										class="text-text-quaternary hover:text-text-tertiary text-xs transition-colors"
+										onclick={() => {
+											deletingTagId = null;
+											tagError = '';
+										}}
 									>
 										Cancel
 									</button>
 								</div>
 							{:else}
 								<!-- Normal display -->
-								<div class="flex items-center gap-2 flex-1 min-w-0">
-									<span class="inline-flex items-center rounded-full bg-surface-overlay px-2 py-0.5 text-xs text-text-secondary">
+								<div class="flex min-w-0 flex-1 items-center gap-2">
+									<span
+										class="bg-surface-overlay text-text-secondary inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+									>
 										{tag.name}
 									</span>
-									<span class="text-xs text-text-quaternary font-mono tabular-nums">
+									<span class="text-text-quaternary font-mono text-xs tabular-nums">
 										{tag.supporterCount}
 									</span>
 								</div>
-								<div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+								<div
+									class="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100"
+								>
 									<button
 										type="button"
-										class="p-1 rounded text-text-quaternary hover:text-text-secondary hover:bg-surface-overlay transition-colors"
+										class="text-text-quaternary hover:text-text-secondary hover:bg-surface-overlay rounded p-1 transition-colors"
 										title="Rename tag"
-										onclick={() => { editingTagId = tag.id; editingTagName = tag.name; tagError = ''; }}
+										onclick={() => {
+											editingTagId = tag.id;
+											editingTagName = tag.name;
+											tagError = '';
+										}}
 									>
-										<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-											<path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z" />
+										<svg
+											class="h-3.5 w-3.5"
+											fill="none"
+											viewBox="0 0 24 24"
+											stroke="currentColor"
+											stroke-width="2"
+										>
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z"
+											/>
 										</svg>
 									</button>
 									<button
 										type="button"
-										class="p-1 rounded text-text-quaternary hover:text-red-400 hover:bg-surface-overlay transition-colors"
+										class="text-text-quaternary hover:bg-surface-overlay rounded p-1 transition-colors hover:text-red-400"
 										title="Delete tag"
-										onclick={() => { deletingTagId = tag.id; tagError = ''; }}
+										onclick={() => {
+											deletingTagId = tag.id;
+											tagError = '';
+										}}
 									>
-										<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-											<path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+										<svg
+											class="h-3.5 w-3.5"
+											fill="none"
+											viewBox="0 0 24 24"
+											stroke="currentColor"
+											stroke-width="2"
+										>
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
+											/>
 										</svg>
 									</button>
 								</div>
@@ -601,11 +1206,17 @@
 			{#each activeChips as chip}
 				<button
 					type="button"
-					class="inline-flex items-center gap-1.5 rounded-full bg-surface-overlay px-3 py-1 text-xs text-text-secondary hover:bg-surface-raised transition-colors"
+					class="bg-surface-overlay text-text-secondary hover:bg-surface-raised inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors"
 					onclick={() => removeFilter(chip.key)}
 				>
 					{chip.label}
-					<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+					<svg
+						class="h-3 w-3"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						stroke-width="2"
+					>
 						<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 					</svg>
 				</button>
@@ -613,7 +1224,7 @@
 			{#if activeChips.length > 1}
 				<button
 					type="button"
-					class="text-xs text-text-quaternary hover:text-text-tertiary transition-colors"
+					class="text-text-quaternary hover:text-text-tertiary text-xs transition-colors"
 					onclick={() => {
 						const url = new URL($page.url);
 						url.search = '';
@@ -627,60 +1238,96 @@
 		</div>
 	{/if}
 
-
 	<!-- Table -->
 	{#if allSupporters.length === 0}
 		<!-- Empty state -->
-		<div class="rounded-md bg-surface-base border border-surface-border p-12 text-center">
-			<div class="mx-auto w-12 h-12 rounded-full bg-surface-overlay flex items-center justify-center mb-4">
-				<svg class="w-6 h-6 text-text-quaternary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+		<div class="bg-surface-base border-surface-border rounded-md border p-12 text-center">
+			<div
+				class="bg-surface-overlay mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full"
+			>
+				<svg
+					class="text-text-quaternary h-6 w-6"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="1.5"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"
+					/>
 				</svg>
 			</div>
-			<p class="text-sm text-text-tertiary mb-1">No supporters yet.</p>
-			<p class="text-sm text-text-tertiary">
+			<p class="text-text-tertiary mb-1 text-sm">No people yet.</p>
+			<p class="text-text-tertiary text-sm">
 				{#if canEdit}
-					<a href="/org/{data.org.slug}/supporters/import" class="text-teal-400 hover:text-teal-300 transition-colors">Import from CSV or Action Network</a> to get started.
+					<a
+						href="/org/{data.org.slug}/supporters/import"
+						class="text-teal-400 transition-colors hover:text-teal-300"
+						>Import from CSV or platform export</a
+					> to get started.
 				{:else}
-					Ask an editor to import supporters.
+					Ask an editor to import people.
 				{/if}
 			</p>
 		</div>
 	{:else}
-		<div class="rounded-md border border-surface-border overflow-hidden">
+		<div class="border-surface-border overflow-hidden rounded-md border">
 			<div class="overflow-x-auto">
 				<table class="w-full text-left">
 					<thead>
-						<tr class="border-b border-surface-border bg-surface-raised">
-							<th class="px-4 py-3 text-xs font-medium text-text-tertiary uppercase tracking-wider w-24">Status</th>
-							<th class="px-4 py-3 text-xs font-medium text-text-tertiary uppercase tracking-wider">Name</th>
-							<th class="px-4 py-3 text-xs font-medium text-text-tertiary uppercase tracking-wider">Email</th>
-							<th class="px-4 py-3 text-xs font-medium text-text-tertiary uppercase tracking-wider hidden lg:table-cell">Postal</th>
-							<th class="px-4 py-3 text-xs font-medium text-text-tertiary uppercase tracking-wider hidden xl:table-cell">Tags</th>
-							<th class="px-4 py-3 text-xs font-medium text-text-tertiary uppercase tracking-wider hidden lg:table-cell w-16">Source</th>
-							<th class="px-4 py-3 text-xs font-medium text-text-tertiary uppercase tracking-wider hidden md:table-cell w-24">Added</th>
+						<tr class="border-surface-border bg-surface-raised border-b">
+							<th
+								class="text-text-tertiary w-24 px-4 py-3 text-xs font-medium tracking-wider uppercase"
+								>Status</th
+							>
+							<th class="text-text-tertiary px-4 py-3 text-xs font-medium tracking-wider uppercase"
+								>Name</th
+							>
+							<th class="text-text-tertiary px-4 py-3 text-xs font-medium tracking-wider uppercase"
+								>Email</th
+							>
+							<th
+								class="text-text-tertiary hidden px-4 py-3 text-xs font-medium tracking-wider uppercase lg:table-cell"
+								>Postal</th
+							>
+							<th
+								class="text-text-tertiary hidden px-4 py-3 text-xs font-medium tracking-wider uppercase xl:table-cell"
+								>Tags</th
+							>
+							<th
+								class="text-text-tertiary hidden w-16 px-4 py-3 text-xs font-medium tracking-wider uppercase lg:table-cell"
+								>Source</th
+							>
+							<th
+								class="text-text-tertiary hidden w-24 px-4 py-3 text-xs font-medium tracking-wider uppercase md:table-cell"
+								>Added</th
+							>
 						</tr>
 					</thead>
-					<tbody class="divide-y divide-surface-border">
+					<tbody class="divide-surface-border divide-y">
 						{#each allSupporters as supporter (supporter.id)}
 							{@const vState = verificationState(supporter)}
-							<tr class="hover:bg-surface-raised transition-colors group">
+							<tr class="hover:bg-surface-raised group transition-colors">
 								<!-- Verification status -->
 								<td class="px-4 py-3">
 									{#if vState === 'Verified'}
 										<span class="inline-flex items-center gap-1.5">
-											<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+											<span class="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
 											<span class="text-xs text-emerald-400">Verified</span>
 										</span>
 									{:else if vState === 'Resolved'}
 										<span class="inline-flex items-center gap-1.5">
-											<span class="inline-block w-2.5 h-2.5 rounded-full border-2 border-teal-500 bg-teal-500/30"></span>
+											<span
+												class="inline-block h-2.5 w-2.5 rounded-full border-2 border-teal-500 bg-teal-500/30"
+											></span>
 											<span class="text-xs text-teal-400">Resolved</span>
 										</span>
 									{:else}
 										<span class="inline-flex items-center gap-1.5">
-											<span class="inline-block w-2.5 h-2.5 rounded-full bg-text-quaternary"></span>
-											<span class="text-xs text-text-tertiary">Imported</span>
+											<span class="bg-text-quaternary inline-block h-2.5 w-2.5 rounded-full"></span>
+											<span class="text-text-tertiary text-xs">Imported</span>
 										</span>
 									{/if}
 								</td>
@@ -689,7 +1336,7 @@
 								<td class="px-4 py-3">
 									<a
 										href="/org/{data.org.slug}/supporters/{supporter.id}"
-										class="text-sm text-text-primary hover:text-teal-400 transition-colors"
+										class="text-text-primary text-sm transition-colors hover:text-teal-400"
 									>
 										{pii(supporter.id, 'name')}
 									</a>
@@ -697,36 +1344,50 @@
 
 								<!-- Email with status dot -->
 								<td class="px-4 py-3">
-									<div class="flex items-center gap-1.5 min-w-0">
+									<div class="flex min-w-0 items-center gap-1.5">
 										{#if supporter.emailStatus === 'unsubscribed'}
-											<span class="inline-block w-1.5 h-1.5 rounded-full bg-yellow-500 flex-shrink-0"></span>
+											<span
+												class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-yellow-500"
+											></span>
 										{:else if supporter.emailStatus === 'bounced'}
-											<span class="inline-block w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0"></span>
+											<span class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-red-500"
+											></span>
 										{:else if supporter.emailStatus === 'complained'}
-											<span class="inline-block w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0"></span>
+											<span class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-red-500"
+											></span>
 										{/if}
-										<span class="text-sm truncate max-w-48 {supporter.emailStatus === 'complained' ? 'text-text-tertiary line-through' : 'text-text-tertiary'}">
+										<span
+											class="max-w-48 truncate text-sm {supporter.emailStatus === 'complained'
+												? 'text-text-tertiary line-through'
+												: 'text-text-tertiary'}"
+										>
 											{pii(supporter.id, 'email')}
 										</span>
 									</div>
 								</td>
 
 								<!-- Postal -->
-								<td class="px-4 py-3 hidden lg:table-cell">
-									<span class="font-mono tabular-nums text-sm text-text-tertiary">{supporter.postalCode || '\u2014'}</span>
+								<td class="hidden px-4 py-3 lg:table-cell">
+									<span class="text-text-tertiary font-mono text-sm tabular-nums"
+										>{supporter.postalCode || '\u2014'}</span
+									>
 								</td>
 
 								<!-- Tags -->
-								<td class="px-4 py-3 hidden xl:table-cell">
+								<td class="hidden px-4 py-3 xl:table-cell">
 									{#if supporter.tags.length > 0}
-										<div class="flex items-center gap-1 flex-wrap">
+										<div class="flex flex-wrap items-center gap-1">
 											{#each supporter.tags.slice(0, 3) as tag}
-												<span class="inline-flex items-center rounded-full bg-surface-overlay px-2 py-0.5 text-xs text-text-tertiary">
+												<span
+													class="bg-surface-overlay text-text-tertiary inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+												>
 													{tag.name}
 												</span>
 											{/each}
 											{#if supporter.tags.length > 3}
-												<span class="text-xs text-text-quaternary">+{supporter.tags.length - 3} more</span>
+												<span class="text-text-quaternary text-xs"
+													>+{supporter.tags.length - 3} more</span
+												>
 											{/if}
 										</div>
 									{:else}
@@ -735,15 +1396,19 @@
 								</td>
 
 								<!-- Source -->
-								<td class="px-4 py-3 hidden lg:table-cell">
-									<span class="inline-flex items-center rounded bg-surface-overlay px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary uppercase">
+								<td class="hidden px-4 py-3 lg:table-cell">
+									<span
+										class="bg-surface-overlay text-text-tertiary inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[10px] uppercase"
+									>
 										{sourceLabel(supporter.source)}
 									</span>
 								</td>
 
 								<!-- Added -->
-								<td class="px-4 py-3 hidden md:table-cell">
-									<span class="font-mono tabular-nums text-xs text-text-quaternary">{relativeTime(supporter.createdAt)}</span>
+								<td class="hidden px-4 py-3 md:table-cell">
+									<span class="text-text-quaternary font-mono text-xs tabular-nums"
+										>{relativeTime(supporter.createdAt)}</span
+									>
 								</td>
 							</tr>
 						{/each}
@@ -758,13 +1423,24 @@
 				<button
 					type="button"
 					disabled={loadingMore}
-					class="inline-flex items-center gap-2 rounded-lg border border-surface-border-strong bg-surface-raised px-5 py-2.5 text-sm text-text-secondary hover:bg-surface-overlay hover:border-surface-border-strong transition-colors disabled:opacity-50"
+					class="border-surface-border-strong bg-surface-raised text-text-secondary hover:bg-surface-overlay hover:border-surface-border-strong inline-flex items-center gap-2 rounded-lg border px-5 py-2.5 text-sm transition-colors disabled:opacity-50"
 					onclick={loadMore}
 				>
 					{#if loadingMore}
-						<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+						<svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+							<circle
+								class="opacity-25"
+								cx="12"
+								cy="12"
+								r="10"
+								stroke="currentColor"
+								stroke-width="4"
+							></circle>
+							<path
+								class="opacity-75"
+								fill="currentColor"
+								d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+							></path>
 						</svg>
 						Loading...
 					{:else}

@@ -10,14 +10,41 @@ import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
 	try {
+		const slug = params.slug!;
 		const webhooks = await serverQuery(api.orgWebhooks.sessionListWebhooks, {
-			slug: params.slug!
+			slug
 		});
-		return { webhooks };
+		const recentDeliveriesByWebhook = await Promise.all(
+			webhooks.map(async (webhook) => {
+				const deliveries = await serverQuery(api.orgWebhooks.sessionListRecentDeliveries, {
+					slug,
+					webhookId: webhook.id,
+					limit: 5
+				});
+				return deliveries.map((delivery) => ({
+					...delivery,
+					webhookId: webhook.id,
+					webhookUrl: webhook.url
+				}));
+			})
+		);
+		const recentDeliveries = recentDeliveriesByWebhook
+			.flat()
+			.sort((a, b) => deliveryTimestamp(b) - deliveryTimestamp(a))
+			.slice(0, 20);
+		return { orgSlug: slug, webhooks, recentDeliveries };
 	} catch (e) {
 		throw error(403, e instanceof Error ? e.message : 'Forbidden');
 	}
 };
+
+function deliveryTimestamp(delivery: {
+	createdAt?: number | null;
+	deliveredAt: number | null;
+	nextRetryAt: number | null;
+}): number {
+	return delivery.deliveredAt ?? delivery.nextRetryAt ?? delivery.createdAt ?? 0;
+}
 
 export const actions: Actions = {
 	create: async ({ request, params }) => {
@@ -71,6 +98,20 @@ export const actions: Actions = {
 		});
 		if (result.error === 'not_found') return fail(404, { error: 'Webhook not found' });
 		return { rotated: webhookId, signingSecret: result.signingSecret };
+	},
+	test: async ({ request, params }) => {
+		const data = await request.formData();
+		const webhookId = String(data.get('webhookId') ?? '');
+		if (!webhookId) return fail(400, { error: 'webhookId required' });
+
+		const result = await serverMutation(api.orgWebhooks.sessionTestWebhook, {
+			slug: params.slug!,
+			webhookId
+		});
+		if (result.error === 'not_found') return fail(404, { error: 'Webhook not found' });
+		if (result.error === 'disabled')
+			return fail(409, { error: 'Enable the endpoint before sending a test delivery' });
+		return { tested: result };
 	},
 	delete: async ({ request, params }) => {
 		const data = await request.formData();

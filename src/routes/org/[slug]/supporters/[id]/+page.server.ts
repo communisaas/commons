@@ -28,31 +28,40 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 		supporter: {
 			id: convexSupporter._id,
 			encryptedEmail: convexSupporter.encryptedEmail ?? null,
+			emailHash: isEditor ? (convexSupporter.emailHash ?? null) : null,
 			encryptedName: convexSupporter.encryptedName ?? null,
 			encryptedPhone: convexSupporter.encryptedPhone ?? null,
 			postalCode: convexSupporter.postalCode ?? null,
+			stateCode: convexSupporter.stateCode ?? null,
+			congressionalDistrict: convexSupporter.congressionalDistrict ?? null,
 			country: convexSupporter.country ?? null,
 			identityVerified: convexSupporter.identityVerified ?? false,
 			verified: convexSupporter.verified ?? false,
 			emailStatus: convexSupporter.emailStatus ?? 'subscribed',
 			smsStatus: convexSupporter.smsStatus ?? 'none',
 			source: convexSupporter.source ?? null,
-			importedAt: typeof convexSupporter.importedAt === 'number'
-				? new Date(convexSupporter.importedAt).toISOString()
-				: convexSupporter.importedAt ?? null,
+			importedAt:
+				typeof convexSupporter.importedAt === 'number'
+					? new Date(convexSupporter.importedAt).toISOString()
+					: (convexSupporter.importedAt ?? null),
 			encryptedCustomFields: convexSupporter.encryptedCustomFields ?? null,
-			createdAt: typeof convexSupporter._creationTime === 'number'
-				? new Date(convexSupporter._creationTime).toISOString()
-				: String(convexSupporter._creationTime),
-			updatedAt: typeof convexSupporter.updatedAt === 'number'
-				? new Date(convexSupporter.updatedAt as number).toISOString()
-				: String(convexSupporter.updatedAt),
-			tags: ((convexSupporter.tags as Array<{ _id: string; name: string }>) ?? []).map(t => ({
+			createdAt:
+				typeof convexSupporter._creationTime === 'number'
+					? new Date(convexSupporter._creationTime).toISOString()
+					: String(convexSupporter._creationTime),
+			updatedAt:
+				typeof convexSupporter.updatedAt === 'number'
+					? new Date(convexSupporter.updatedAt as number).toISOString()
+					: String(convexSupporter.updatedAt),
+			tags: ((convexSupporter.tags as Array<{ _id: string; name: string }>) ?? []).map((t) => ({
 				id: t._id,
 				name: t.name
 			}))
 		},
-		allTags: (allTags ?? []).map((t: Record<string, unknown>) => ({ id: t._id ?? t.id, name: t.name })),
+		allTags: (allTags ?? []).map((t: Record<string, unknown>) => ({
+			id: t._id ?? t.id,
+			name: t.name
+		})),
 		encryption: { orgKeyVerifier: keyInfo.orgKeyVerifier }
 	};
 };
@@ -143,7 +152,9 @@ export const actions: Actions = {
 			});
 		} catch (e: any) {
 			if (e.message?.includes('STOP keyword')) {
-				return fail(400, { error: 'Cannot override STOP keyword opt-out. Supporter must text START to re-subscribe.' });
+				return fail(400, {
+					error: 'Cannot override STOP keyword opt-out. Supporter must text START to re-subscribe.'
+				});
 			}
 			if (e.message?.includes('not found')) {
 				throw error(404, 'Supporter not found');
