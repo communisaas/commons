@@ -46,10 +46,18 @@ ALL tasks status ∈ {completed, deferred} AND every verify task either confirms
 ## Anticipated discoveries
 
 Likely GAPs (per pre-hypergraph survey):
-- **V-2 atlasVersion**: no current client populates it. The substrate accepts it but no widget actually passes it from shadow-atlas client to the form. Fix → add to client + widget code.
+- **V-2 atlasVersion**: at audit time, no client populated it. The substrate accepted it but no widget passed it from shadow-atlas client to the form. Fix → add to client + widget code.
 - **V-5 AttestationVerifier**: page passes campaignTitle='(redacted on public surface)' but server's canonicalPreimage uses real title. Hash will mismatch. Fix → either return preimage from server or accept the privacy-vs-verifiability tradeoff and document.
 - **V-3 debate populator**: untested against seeded data since no seeded campaign has debateId actually set. Will need S-3-adjacent fix.
 - **D-3 unmaintained counters**: memory's "denormalized-counter-reset bugs" suggests there are still some.
 - **D-2 unused indexes**: schema is large (90 tables, many with 5+ indexes); likely several orphans.
 
 Each anticipated GAP becomes a new W-1 task if confirmed.
+
+## 2026-06-03 partial V-2 wiring
+
+The public campaign verified-address path now returns Shadow Atlas H3 cell evidence and the current atlas version from `POST /api/c/[slug]/verify-district`, and `/c/[slug]` submits those values as hidden `h3Cell` and `atlasVersion` fields only after district verification succeeds. At this point `FIX-V2` remained unresolved because `/embed/campaign/[slug]` was still postal-only and could not honestly produce an H3 cell or atlas version for drift accounting.
+
+## 2026-06-05 FIX-V2 embed bridge
+
+`FIX-V2` is closed for district-evidence submissions: `/embed/campaign/[slug]` now has an optional district-evidence drawer that calls the same `POST /api/c/[slug]/verify-district` resolver and submits `districtCode`, `h3Cell`, and `atlasVersion` only after successful resolution. Packet atlas drift remains row-evidence, not a universal action claim: postal-only or skipped district-evidence submissions still carry no atlas signal, and the embed remains anonymous/non-ZK.

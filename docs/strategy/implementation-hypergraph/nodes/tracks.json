@@ -13,12 +13,12 @@
     {
       "id": "TR-2",
       "name": "Comms Infrastructure Completion",
-      "description": "Close the 23-stub inventory items in email/SMS/calling. ses-proxy Lambda deploy, plaintext multipart, List-Unsubscribe on Convex path, soft-bounce categorization, custom domain + DKIM, A/B winner picker, SMS dispatch, template library, A2P 10DLC, MMS, tracking attribution.",
+      "description": "Close the 23-stub inventory items in email/SMS/calling. ses-proxy Lambda deploy, plaintext multipart, List-Unsubscribe on Convex path, provider rendering verification, soft-bounce categorization, custom domain + DKIM, A/B winner picker, SMS dispatch, template library, A2P 10DLC, MMS, tracking attribution.",
       "lead_capability_cluster": "C-verification",
       "secondary_clusters": ["C-coordination-integrity"],
-      "task_count": 10,
+      "task_count": 11,
       "total_effort_days": "10-14",
-      "task_ids": ["T2-1", "T2-2", "T2-3", "T2-4", "T2-5", "T2-6", "T2-7", "T2-8", "T2-9", "T2-10"]
+      "task_ids": ["T2-1", "T2-2", "T2-3", "T2-4", "T2-4b", "T2-5", "T2-6", "T2-7", "T2-8", "T2-9", "T2-10"]
     },
     {
       "id": "TR-3",

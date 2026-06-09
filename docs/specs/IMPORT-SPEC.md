@@ -5,14 +5,16 @@
 > ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** CSV path is production-ready
 > and ~85% of this spec is accurate against code. Concrete corrections:
 >
-> - **Action Network OSDI sync is NOT operational.** The `anSync` object
->   on `organizations` stores API key, `status`, `syncType`,
->   `totalResources`, `processedResources`, `currentResource`, and
->   counters; the `connectAnSync` / `startAnSync` / `disconnectAnSync`
->   mutations set state, but **no background worker consumes it** —
->   there is no job that actually calls the AN OSDI API, paginates
->   `people`, `taggings`, or `action_history`. Treat §2.2 as a design
->   target. Orgs must export CSV from AN for now.
+> - **Direct platform API sync is NOT operational.** The legacy `anSync`
+>   storage object on `organizations` now serves the platform-neutral boundary:
+>   it can hold an encrypted selected-platform credential plus `adapterSource`,
+>   `credentialStoredAt`, `credentialVersion`, `status`, `syncType`,
+>   `totalResources`, `processedResources`, `currentResource`, and counters.
+>   The platform API boundary can store credential custody when the server
+>   encryption key is configured, but **no background worker consumes it** —
+>   there is no job that actually calls OSDI or any vendor API, paginates
+>   `people`, `taggings`, or `action_history`. Treat §2.2 as a design target.
+>   Orgs must export CSV from incumbent platforms for now.
 > - **SMS phone filtering via `smsStatus` is unwired.** Schema field
 >   exists; `updateSmsStatus` enforces STOP keyword; **no segment
 >   filter / list query** actually scopes recipients by `smsStatus`.
@@ -33,6 +35,12 @@
 >   inference) and `country` (location). `Subscription Status` is
 >   inferred from `can_message` (false/0/no → unsubscribed) rather
 >   than a direct column.
+> - **Custom-field column custody is live for CSV imports.** Operators
+>   can mark nonstandard columns as `Encrypted custom field`; the server
+>   stores those per-person values as encrypted JSON in
+>   `encryptedCustomFields`. This is custody, not schema management:
+>   fields are not typed, segmentable, or field-mergeable on duplicate
+>   records yet.
 
 **Status:** Shipped
 **Author:** Architecture
@@ -118,7 +126,7 @@ Org uploads to Commons:
   /admin/import → drag-drop CSV → field mapping UI → preview → import
 ```
 
-Field mapping is semi-automatic. Commons recognizes common column names (`Email Address`, `First Name`, `Postal Code`, `Tags`, `Subscription Status`) and maps them. Custom fields appear as unmapped — org assigns them.
+Field mapping is semi-automatic. Commons recognizes common column names (`Email Address`, `First Name`, `Postal Code`, `Tags`, `Subscription Status`) and maps them. Custom fields appear as unmapped until an operator marks them for encrypted custom-field custody.
 
 **Tier 2: Platform Connectors (automated API sync)**
 

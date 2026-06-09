@@ -13,12 +13,22 @@
 > headlines:
 >
 > - **Phase 2 "COMPLETE" claim is a development milestone, not a functional
->   one.** SMS blast dispatch returns HTTP 501, A/B winner picker is a stub,
->   workflow action verbs are no-ops, coalition aggregation stats return
->   HTTP 501, AN OSDI sync returns HTTP 501.
-> - **Dashboard demo experience is broken.** Org home packet is `null`,
->   verification funnel hardcoded `0`s, tier distribution hardcoded `0`s
->   (all with `// TODO` comments at `src/routes/org/[slug]/+page.server.ts:51-83`).
+>   one.** SMS blast dispatch now has counted composer audience filters, a bounded
+>   browser-decrypted cohort sender, a Twilio proxy path for supplied batches, and
+>   a bounded inbound reply register, but broad one-click carrier dispatch remains
+>   gated; A/B cohort snapshots and
+>   remainder drafts and exact A/B queue hooks exist but production test/remainder dispatch is
+>   server-dispatch gated, workflow visible
+>   arming remains gated, and direct platform sync now has bounded credential
+>   custody/probe while direct import stays gated on per-platform direct sync proof. Platform CSV export profiles are live. Coalition
+>   aggregate stats are live through Convex/public API/org report
+>   paths, but cross-org supporter sharing and data-sharing policy remain absent.
+> - **Org root Results data has been reconciled.** `/org/[slug]` is now an
+>   addressability shim; the org layout loads `organizations.getDashboard`,
+>   `organizations.getDashboardStats`, bounded accountability receipt source-row
+>   evidence, and a top active/recent campaign packet into the mounted Results
+>   space. New orgs render honest empty packet/receipt states rather than
+>   fabricated dashboard zeros.
 > - **Pricing UI lists features not built.** Custom domain, SQL mirror,
 >   white-label (Coalition) appear in `settings/+page.svelte:170` plan
 >   comparison grid with no implementation.
@@ -30,11 +40,16 @@
 >   on Sepolia, SnapshotAnchor with live updateSnapshot tx — these work
 >   end-to-end. The gap is the surrounding surface.
 >
-> Top 10 launch blockers (ordered): dashboard wiring → bulk merge fields →
-> AN OSDI sync → donation receipts + trial-as-active → member removal →
-> A/B winner picker → campaign clone → district segmentation filter →
-> workflow verb impls → OG images. See ORG-CAPABILITY-SCOPE.md for evidence
-> and effort estimates.
+> Top launch blockers (ordered): direct platform sync across per-platform direct sync paths → broad SMS carrier dispatch → donation
+> mailbox/tax/anchored receipt compliance beyond provider send evidence → A/B automated dispatch (`T1-6b`) →
+> district labels beyond imported/action-time congressional cohorts and full local/special civic geography (`T1-8c`) →
+> workflow arming → server-side email dispatch. Org-root Results data, supported
+> email merge personalization, saved People segments as email recipient lists,
+> baseline donor-confirmation outcome tracking with provider-accepted send evidence, campaign clone,
+> org/segment/integrity OG images, member role/removal authority, and
+> campaign threshold debate spawn (`T5-1`) are
+> closed in the current org OS shell. See
+> ORG-CAPABILITY-SCOPE.md for evidence and effort estimates.
 
 > ⚠️ **PARTIAL RECONCILIATION (2026-04-23 audit).** This file is cited
 > as canonical by many other docs, so concrete corrections are inlined
@@ -97,7 +112,9 @@ Commons is live. The full verification loop works end-to-end: org creates campai
 | Org management (create, RBAC: owner/admin/editor/member) | Production |
 | Supporter management (list, search, filter, detail, tags) | Production |
 | CSV import (field mapping, dedup, tag assignment) | Production |
-| Action Network import (OSDI sync, incremental) | Production |
+| Platform CSV export profiles (10 recognized profiles: Action Network, EveryAction/NGP VAN, NationBuilder, Mailchimp, Salsa Engage, Mobilize, ActBlue, Engaging Networks, CiviCRM, Salesforce/Nonprofit Cloud) | Production |
+| People source provenance (`supporters.getSummaryStats.sourceCounts` → `OrgSpacesData.base.sourceCounts`) | Production |
+| Direct platform sync (platform-format sync, incremental) | Gated — credential custody and custody probe are bounded; direct import waits on per-platform direct sync execution, rate-limit/backoff, source-key upsert, and continuation proof |
 | Campaign management (create, edit, lifecycle) | Production |
 | Email compose (WYSIWYG, merge fields, preview, A/B testing) | Production |
 | Email engine (SES, batching, rate limiting, filtering) | Production |
@@ -179,6 +196,7 @@ Comprehensive brutalist security audit (2026-03-19). See `docs/design/SECURITY-H
 | SimpleAccount factory (NEAR ERC-4337) | Low | Gasless path not populated |
 | Rate limit storage (in-memory only) | Medium | Redis/KV for production multi-isolate |
 | CA/GB/AU country resolvers | Low | Stubs with hardcoded shapes |
+| Event export boundary | Low | ICS and non-PII attendance CSV are live on event detail; QR, decrypted attendee export, provider calendar sync, and waitlist auto-promotion remain partial |
 | SMS recipient phone filtering | Low | `smsStatus` field exists, query not wired |
 | max_templates_month billing limit | Low | Defined but not enforced (user-scoped) |
 | Client storage per-user isolation | Medium | Template drafts, search cache lack per-user keying |

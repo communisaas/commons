@@ -13,11 +13,12 @@
 >   `src/lib/core/location/resolvers/{canada-postal,uk-postcodes,australia-aec}.ts`
 >   call represent.opennorth.ca / postcodes.io / AEC. Keep this plan
 >   language for these.
-> - **Representative lookup is a stub.**
->   `src/lib/server/geographic/rep-lookup.ts:~26-34` returns `[]` for
->   all non-US countries. Plan language that treats rep-lookup as
->   "fallback" or "partially working" is inverted — postal resolvers
->   are fine; rep lookup is the gap.
+> - **Representative lookup is a fail-closed boundary.**
+>   `src/lib/server/geographic/rep-lookup.ts` throws
+>   `REP_LOOKUP_NOT_CONFIGURED` for non-hydrated countries instead of
+>   returning a hollow empty representative list. Plan language that
+>   treats rep-lookup as "fallback" or "partially working" is inverted —
+>   postal resolvers are fine; rep lookup is the gap.
 > - **Legislative abstraction layer has only `types.ts`.** No registry,
 >   no per-country adapters, no delivery pipeline. Any Phase 1 work in
 >   this plan that depends on `abstraction.md` is blocked until that

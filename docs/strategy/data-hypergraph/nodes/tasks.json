@@ -55,7 +55,7 @@
         "src/routes/c/[slug]/+page.server.ts:51 reads formData.get('atlasVersion')",
         "src/routes/embed/campaign/[slug]/+page.server.ts:45 reads formData.get('atlasVersion')"
       ],
-      "notes": "GAP: form action reads atlasVersion from formData but NO client UI writes that form field. Shadow-atlas resolver knows cellMapRoot but doesn't surface it to the submission form."
+      "notes": "Initial GAP: form actions read atlasVersion from formData but no client UI wrote that form field. Closed by FIX-V2 for the public campaign verified-address path and the embed district-evidence path; postal-only submissions still carry no atlas signal by design."
     },
     {
       "id": "V-3",
@@ -788,13 +788,12 @@
       },
       "carryover_substrate": "NEW-E-2",
       "discovered_by": "V-2",
-      "description": "Form actions at /c/[slug] + /embed/campaign/[slug] read formData.get('atlasVersion') but no client UI writes the field. Add hidden <input name=\"atlasVersion\"> in both pages, populated from shadow-atlas client.resolveDistricts() return (chunk.cellMapRoot per src/lib/core/shadow-atlas/browser-client.ts).",
-      "acceptance_criteria": "Manual test: form submission carries atlasVersion=cellMapRoot value; campaignActions row has non-null atlasVersion; computeAtlasDrift surfaces non-null driftPct when actions span versions.",
+      "description": "Form actions at /c/[slug] + /embed/campaign/[slug] read formData.get('atlasVersion') and h3Cell. The public campaign verified-address path and the embed district-evidence drawer now populate hidden h3Cell/atlasVersion fields from POST /api/c/[slug]/verify-district after successful address resolution.",
+      "acceptance_criteria": "Manual test: district-evidence form submission carries non-empty h3Cell and atlasVersion; campaignActions row has non-null atlasVersion; computeAtlasDrift surfaces non-null driftPct when actions span versions.",
       "depends_on": [],
-      "status": "deferred",
-      "deferred_at": "2026-05-28T02:23:53Z",
-      "deferred_reason": "atlasVersion population \u2014 discovered during W-1 fix attempt that the deeper gap is shadow-atlas-client\u2192submission-form integration, not just atlasVersion. h3Cell is similarly read by the form action but never written by any /c/[slug] or /embed/campaign/[slug] svelte file. atlasVersion can't be honestly fixed in isolation because the resolver\u2192form bridge for the entire client-side district resolution path is the unbuilt piece. Defer atlasVersion-specific fix until the broader form-integration sprint addresses h3Cell + atlasVersion + other district-resolver outputs together.",
-      "revisit_when": "Client-side district-resolver\u2192submission-form integration sprint scheduled"
+      "status": "completed",
+      "completed_at": "2026-06-05T19:04:49Z",
+      "completion_notes": "Public /c/[slug] already carried h3Cell and atlasVersion after verify-district. Embed campaign forms now expose an optional district-evidence drawer that calls the same public verify-district endpoint, stores returned districtCode/h3Cell/atlasVersion in hidden inputs only after successful resolution, and the embed server action passes districtCode when ADDRESS_SPECIFICITY='district'. Postal-only or skipped district-evidence submissions still carry no atlas signal, so packet drift must be read as row-evidence when present, not as a universal action claim."
     },
     {
       "id": "FIX-V4",
