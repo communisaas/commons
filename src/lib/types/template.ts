@@ -161,6 +161,17 @@ export interface TemplateCreationContext {
 	}>;
 }
 
+export interface TemplateDraftOrigin {
+	source: 'studio';
+	handoff: 'public-action-template';
+	label: string;
+	processId: string;
+	processTitle: string;
+	createdAt: number;
+	effect: string;
+	sourceRef: string;
+}
+
 export interface TemplateFormData {
 	objective: {
 		rawInput: string; // User's unstructured initial input
@@ -193,6 +204,8 @@ export interface TemplateFormData {
 		generatedForSubject?: string;
 		/** Active/recoverable message generation job for tab hibernation recovery */
 		activeMessageJob?: ActiveMessageJob | null;
+		/** Draft-local provenance for resumed route handoffs such as Studio -> public action. */
+		draftOrigin?: TemplateDraftOrigin | null;
 	};
 	review: Record<string, never>; // For validation purposes, no data to store
 }
@@ -257,6 +270,9 @@ export interface Source {
 	title: string; // Source title
 	url: string; // Source URL
 	type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other'; // Source type
+	credibility_rationale?: string; // Present when source evaluation produced rationale
+	incentive_position?: 'adversarial' | 'neutral' | 'aligned'; // Evaluation posture
+	source_order?: 'primary' | 'secondary' | 'opinion'; // Evaluation source-order class
 }
 
 // ============================================================================

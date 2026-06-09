@@ -1,8 +1,8 @@
 export interface ShareMessageContext {
 	template: { title: string; domain: string; description: string };
-	/** Empty array signals pre-send state. Populated signals post-send. */
+	/** Empty array signals pre-confirmation state. Populated signals route handoff evidence. */
 	contactedNames: string[];
-	/** Used when contactedNames is empty but recipients were still addressed. */
+	/** Used when contactedNames is empty but recipients are still addressable. */
 	totalRecipients: number;
 	shareUrl: string;
 }
@@ -46,15 +46,13 @@ function normalizeDomain(raw: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Pre-send variants (creator has published but not yet sent)
+// Pre-confirmation variants (creator has published an action page)
 // ---------------------------------------------------------------------------
 
 function preSendShort(ctx: ShareMessageContext): string {
 	// Target: <280 chars. Action-first. URL at end.
-	// Example: "Need people to pressure the city council on housing? Template's ready. Takes 2 min. https://..."
 	const domain = normalizeDomain(ctx.template.domain);
-	// ~130 chars base + URL
-	return `Working on ${domain}. I put together a template to contact the right people directly.\n\n"${ctx.template.title}"\n\nTakes 2 minutes. ${ctx.shareUrl}`;
+	return `Working on ${domain}. I put together an action page to confirm routes to the right decision-makers.\n\n"${ctx.template.title}"\n\nOpen it here: ${ctx.shareUrl}`;
 }
 
 function preSendMedium(ctx: ShareMessageContext): string {
@@ -62,7 +60,7 @@ function preSendMedium(ctx: ShareMessageContext): string {
 	const domain = normalizeDomain(ctx.template.domain);
 	const description = ctx.template.description?.trim();
 	const descLine = description ? `\n\n${description}` : '';
-	return `I put together a direct-contact template on ${domain}: "${ctx.template.title}"${descLine}\n\nIt pre-writes the message and routes it to the right decision-makers. ${ctx.shareUrl} — you fill in your name and send. Takes about 2 minutes.`;
+	return `I published an action page on ${domain}: "${ctx.template.title}"${descLine}\n\nEach reader reviews the message, confirms their route, and opens the right delivery path. ${ctx.shareUrl}`;
 }
 
 function preSendLong(ctx: ShareMessageContext): string {
@@ -70,32 +68,30 @@ function preSendLong(ctx: ShareMessageContext): string {
 	const domain = normalizeDomain(ctx.template.domain);
 	const description = ctx.template.description?.trim();
 	const descParagraph = description ? `\n\n${description}\n` : '\n';
-	return `On ${domain}: "${ctx.template.title}"${descParagraph}\nI built a contact template that writes the message for you and sends it directly to the decision-makers who can act on it — no petitions, no intermediaries.\n\nIf this issue matters to you, this is the most direct path: ${ctx.shareUrl}\n\nIt takes about 2 minutes. The message goes to the right people.`;
+	return `On ${domain}: "${ctx.template.title}"${descParagraph}\nI published an action page that resolves the right decision-makers before anyone claims a send or proof record.\n\nIf this issue matters to you, open the page and confirm your own route: ${ctx.shareUrl}`;
 }
 
 function preSendSms(ctx: ShareMessageContext): string {
 	// Target: <160 chars. Compressed, direct, URL only.
-	// "On housing: direct message template to city council. 2 min: https://..."
 	const domain = normalizeDomain(ctx.template.domain);
-	// Keep well under 160: category + short hook + URL
-	return `On ${domain}: "${ctx.template.title}" — write to decision-makers directly. 2 min: ${ctx.shareUrl}`;
+	return `On ${domain}: "${ctx.template.title}" - confirm your route to decision-makers: ${ctx.shareUrl}`;
 }
 
 // ---------------------------------------------------------------------------
-// Post-send variants (user has started emails, now recruiting)
+// Post-confirmation variants (reader has opened a route handoff, now recruiting)
 // ---------------------------------------------------------------------------
 
 function postSendShort(ctx: ShareMessageContext): string {
 	// Target: <280 chars. First-person. Name the decision-makers. Invitational.
 	const recipients = formatRecipients(ctx.contactedNames, ctx.totalRecipients);
-	return `I reached out to ${recipients} about "${ctx.template.title}". Send the same message: ${ctx.shareUrl}`;
+	return `I confirmed my route to ${recipients} about "${ctx.template.title}". Open the action page: ${ctx.shareUrl}`;
 }
 
 function postSendMedium(ctx: ShareMessageContext): string {
 	// Target: ~500 chars. First-person account, invitational close, URL in flow.
 	const recipients = formatRecipients(ctx.contactedNames, ctx.totalRecipients);
 	const domain = normalizeDomain(ctx.template.domain);
-	return `I reached out to ${recipients} about ${domain} — specifically: "${ctx.template.title}".\n\nThe template is here: ${ctx.shareUrl}\n\nSame message, your name. Add your voice.`;
+	return `My route to ${recipients} is confirmed for this ${domain} action: "${ctx.template.title}".\n\nThe action page is here: ${ctx.shareUrl}\n\nReview it and confirm your own route.`;
 }
 
 function postSendLong(ctx: ShareMessageContext): string {
@@ -104,13 +100,13 @@ function postSendLong(ctx: ShareMessageContext): string {
 	const domain = normalizeDomain(ctx.template.domain);
 	const description = ctx.template.description?.trim();
 	const descParagraph = description ? `\n\n${description}\n` : '\n';
-	return `I reached out to ${recipients} about "${ctx.template.title}"${descParagraph}\nThe issue is ${domain}. I used a direct-contact template — no petition, no form letter to an inbox nobody monitors. It goes to the people with actual authority to act on it.\n\nIf you agree this matters, send the same message with your name on it: ${ctx.shareUrl}\n\nTakes 2 minutes. The more people who send it, the harder it is to ignore.`;
+	return `I confirmed my route to ${recipients} about "${ctx.template.title}"${descParagraph}\nThe issue is ${domain}. Commons resolves who should receive the message before any send or proof claim is recorded.\n\nIf you agree this matters, open the action page and confirm your own route: ${ctx.shareUrl}`;
 }
 
 function postSendSms(ctx: ShareMessageContext): string {
 	// Target: <160 chars. First-person, name(s), direct CTA.
 	const recipients = formatRecipients(ctx.contactedNames, ctx.totalRecipients);
-	return `I reached out to ${recipients} about "${ctx.template.title}". Add your voice: ${ctx.shareUrl}`;
+	return `I confirmed my route to ${recipients} about "${ctx.template.title}". Confirm yours: ${ctx.shareUrl}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,10 +115,10 @@ function postSendSms(ctx: ShareMessageContext): string {
 
 /**
  * Generates a platform-appropriate share message for a given template and
- * send state. Pure function — no side effects, no external dependencies.
+ * route-confirmation state. Pure function; no side effects or external dependencies.
  *
- * Pre-send (contactedNames is empty): recruits others to act.
- * Post-send (contactedNames is populated): reports action taken, invites others.
+ * Pre-confirmation (contactedNames is empty): recruits readers to confirm route.
+ * Post-confirmation (contactedNames is populated): reports route handoff, invites others.
  *
  * Character budgets by variant:
  *   short  → <280 chars (Twitter, Discord)

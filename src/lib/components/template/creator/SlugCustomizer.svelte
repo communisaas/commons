@@ -202,11 +202,14 @@
 	<!-- Header -->
 	<p class="flex items-start gap-1.5 text-xs text-participation-primary-600/70 md:text-sm">
 		<Link2 class="mt-0.5 h-3 w-3 flex-shrink-0 md:h-3.5 md:w-3.5" aria-hidden="true" />
-		<span><span class="font-medium text-participation-primary-700">Your shareable link</span> — after publishing, anyone with this link can send your message.</span>
+		<span>
+			<span class="font-medium text-participation-primary-700">Action page link</span> —
+			after public-action publish, this opens reader confirmation. Send and proof stay route-owned.
+		</span>
 	</p>
 
 	<!-- URL Preview with inline availability -->
-	<div class="rounded-lg border border-participation-primary-200/50 bg-gradient-to-br from-participation-primary-50/40 to-white p-2 md:p-3">
+	<div class="slug-link-preview rounded-lg p-2 md:p-3">
 		<div class="flex flex-wrap items-center gap-1 font-mono text-xs md:gap-1.5 md:text-sm">
 			<span class="break-all text-participation-primary-400">{$page.url.origin}/</span>
 			<span class="font-semibold text-slate-900">{slug || 'your-template'}</span>
@@ -290,3 +293,10 @@
 	{/if}
 
 </div>
+
+<style>
+	.slug-link-preview {
+		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		background: var(--surface-raised, oklch(0.985 0.004 60));
+	}
+</style>

@@ -13,6 +13,18 @@
 	} from '@lucide/svelte';
 	import type { Template } from '$lib/types/template';
 	import { parseRecipientConfig } from '$lib/types/template';
+	import { Datum, Ratio } from '$lib/design';
+	import { formatCapabilityClusters } from '$lib/data/capability-clusters';
+	import {
+		buildPublicActionPublishContractRows,
+		getGateEvidence,
+		type PublicActionPublishContractRow
+	} from '$lib/data/capability-hypergraph';
+	import {
+		operatorCapabilityActionLabel,
+		operatorCapabilityStateLabel,
+		operatorCapabilityStateRatioSegments
+	} from '$lib/data/capability-state-labels';
 	import { supportsWebShare, copyToClipboard as clipboardCopy } from '$lib/utils/browserUtils';
 	import { generateShareMessage } from '$lib/utils/share-messages';
 
@@ -34,26 +46,33 @@
 		onsend?: () => void;
 	} = $props();
 
-	// Extract decision-maker names from recipient_config for the send preview
-	const recipientNames = $derived((() => {
-		const rc = parseRecipientConfig(template.recipient_config);
-		const dms = rc.decisionMakers ?? [];
-		return dms.map(dm => dm.name).filter(Boolean);
-	})());
+	const recipientConfig = $derived(parseRecipientConfig(template.recipient_config));
+	const targetCount = $derived(
+		(recipientConfig.decisionMakers?.length ?? 0) +
+			(recipientConfig.customRecipients?.length ?? 0) +
+			(recipientConfig.includesCongress ? 1 : 0)
+	);
+	// Extract decision-maker names from recipient_config for the reader-route preview.
+	const recipientNames = $derived(
+		(() => {
+			const dms = recipientConfig.decisionMakers ?? [];
+			return dms.map((dm) => dm.name).filter(Boolean);
+		})()
+	);
 
-	// Build the contextual send preview label
-	const sendPreviewText = $derived((() => {
-		if (recipientNames.length === 0) {
-			// Fall back to a congressional framing if cwc, otherwise generic
-			return template.deliveryMethod === 'cwc'
-				? 'Send to your representatives'
-				: 'Send your message';
-		}
-		const [first, second, ...rest] = recipientNames;
-		if (recipientNames.length === 1) return `Send to ${first}`;
-		if (rest.length === 0) return `Send to ${first} and ${second}`;
-		return `Send to ${first}, ${second}, and ${rest.length} other${rest.length === 1 ? '' : 's'}`;
-	})());
+	const actionRoutePreviewText = $derived(
+		(() => {
+			if (recipientNames.length === 0) {
+				return template.deliveryMethod === 'cwc'
+					? 'Action page opens representative confirmation'
+					: 'Action page opens reader confirmation';
+			}
+			const [first, second, ...rest] = recipientNames;
+			if (recipientNames.length === 1) return `Action page targets ${first}`;
+			if (rest.length === 0) return `Action page targets ${first} and ${second}`;
+			return `Action page targets ${first}, ${second}, and ${rest.length} other${rest.length === 1 ? '' : 's'}`;
+		})()
+	);
 
 	let copied = $state(false);
 	let shareUrl = $derived(
@@ -83,9 +102,64 @@
 	let isDraft = $derived(
 		!publishing && !error && (template.status === 'draft' || !template.is_public)
 	);
-	let showShareActions = $derived(publishing || isPublished);
+	let showShareActions = $derived(isPublished);
 	let hasError = $derived(!!error);
 	let useNativeShare = supportsWebShare();
+	const actionRouteTitle =
+		'Opens the public action route; reader-side send confirmation remains on that route.';
+	const SOURCE_EVALUATION_FALLBACK_PREFIX = 'Evaluation unavailable';
+	const sourceCount = $derived(template.sources?.length ?? 0);
+	const searchOnlySourceCount = $derived(
+		(template.sources ?? []).filter(
+			(source) =>
+				!source.incentive_position ||
+				(source.credibility_rationale ?? '').startsWith(SOURCE_EVALUATION_FALLBACK_PREFIX)
+		).length
+	);
+	const evaluatedSourceCount = $derived(sourceCount - searchOnlySourceCount);
+
+	const messageProofGate = getGateEvidence('CP-message-proof-binding', ['T4-2', 'T4-7'], {
+		name: 'Published action proof binding',
+		downstream: 3,
+		dependency: 'Drafted artifact proof attachment and writer proof plumbing'
+	});
+	const publishContractRows = $derived<PublicActionPublishContractRow[]>(
+		buildPublicActionPublishContractRows({
+			isPublished,
+			publishing,
+			isDraft: hasError ? false : isDraft,
+			targetCount,
+			evaluatedSourceCount,
+			searchOnlySourceCount,
+			messageProofGate
+		})
+	);
+	const publishRecordState = $derived(
+		publishContractRows.find((row) => row.id === 'publish-record')?.state ?? 'gated'
+	);
+	const publishContractStateCounts = $derived(
+		publishContractRows.reduce(
+			(acc, row) => {
+				acc[row.state] += 1;
+				return acc;
+			},
+			{ live: 0, partial: 0, 'draft-only': 0, gated: 0 } as Record<
+				PublicActionPublishContractRow['state'],
+				number
+			>
+		)
+	);
+	const publishContractSegments = $derived(
+		operatorCapabilityStateRatioSegments(publishContractStateCounts)
+	);
+
+	function publishContractStateLabel(row: PublicActionPublishContractRow): string {
+		return operatorCapabilityStateLabel(row.state);
+	}
+
+	function publishContractActionLabel(row: PublicActionPublishContractRow): string {
+		return operatorCapabilityActionLabel(row.state, row.action, { appendReadyArrow: true });
+	}
 
 	function handleClose() {
 		onclose?.();
@@ -98,11 +172,7 @@
 			url: shareUrl
 		};
 
-		if (
-			typeof navigator !== 'undefined' &&
-			navigator.share &&
-			navigator.canShare?.(shareData)
-		) {
+		if (typeof navigator !== 'undefined' && navigator.share && navigator.canShare?.(shareData)) {
 			try {
 				await navigator.share(shareData);
 			} catch (err) {
@@ -144,14 +214,14 @@
 	}}
 	role="dialog"
 	aria-modal="true"
-	aria-label="Template created successfully"
+	aria-label="Public action publish status"
 	tabindex="0"
 	in:fade={{ duration: 200 }}
 	out:fade={{ duration: 150 }}
 >
 	<!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 	<div
-		class="relative w-full max-w-md overflow-hidden rounded-md bg-white shadow-md"
+		class="success-modal-shell relative w-full max-w-md overflow-hidden rounded-md"
 		role="presentation"
 		onclick={(e) => e.stopPropagation()}
 		onkeydown={(e) => e.stopPropagation()}
@@ -164,22 +234,19 @@
 		<!-- Close button -->
 		<button
 			onclick={handleClose}
-			class="absolute right-4 top-4 z-10 rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+			class="absolute top-4 right-4 z-10 rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
 			aria-label="Close"
 		>
 			<X class="h-5 w-5" />
 		</button>
 
-		<!-- State-Aware Header -->
+		<!-- State-aware header -->
 		<div
-			class="px-6 pb-6 pt-8 text-center {hasError
-				? 'bg-gradient-to-br from-red-50 to-orange-50'
-				: isDraft
-					? 'bg-gradient-to-br from-amber-50 to-orange-50'
-					: 'bg-gradient-to-br from-emerald-50 to-blue-50'}"
+			class="publish-state px-6 pt-8 pb-6 text-center"
+			data-state={hasError ? 'error' : isDraft ? 'draft' : publishing ? 'publishing' : 'published'}
 		>
 			<div
-				class="mb-4 inline-flex h-20 w-20 items-center justify-center rounded-full bg-white shadow-lg"
+				class="publish-state-icon mb-4 inline-flex h-16 w-16 items-center justify-center"
 				class:publishing-pulse={publishing}
 				in:scale={{ duration: 600, delay: 200, start: 0 }}
 			>
@@ -193,25 +260,25 @@
 			</div>
 
 			{#if hasError}
-				<h2 class="mb-2 text-2xl font-bold text-slate-900">Couldn't publish</h2>
+				<h2 class="mb-2 text-2xl font-bold text-slate-900">Couldn't publish public action</h2>
 				<p class="text-sm text-red-600">{error}</p>
 			{:else if isDraft}
-				<h2 class="mb-2 text-2xl font-bold text-slate-900">Template Saved as Draft</h2>
-				<p class="text-slate-600">
-					Content is being reviewed. You'll be notified when it's published.
-				</p>
+				<h2 class="mb-2 text-2xl font-bold text-slate-900">Public action held as draft</h2>
+				<p class="text-slate-600">The action page is not public until review approves it.</p>
 			{:else if publishing}
-				<h2 class="mb-2 text-2xl font-bold text-slate-900">Publishing...</h2>
-				<p class="text-slate-600">Your link is ready to share</p>
+				<h2 class="mb-2 text-2xl font-bold text-slate-900">Publishing public action</h2>
+				<p class="text-slate-600">The action page unlocks after the server confirms creation.</p>
 			{:else}
-				<h2 class="mb-2 text-2xl font-bold text-slate-900">Published!</h2>
-				<p class="text-slate-600">Your template is live and ready to share</p>
+				<h2 class="mb-2 text-2xl font-bold text-slate-900">Public action published</h2>
+				<p class="text-slate-600">
+					The action page is live; reader confirmation and delivery remain route-owned.
+				</p>
 			{/if}
 		</div>
 
 		<!-- Template Preview -->
-		<div class="px-6 pb-4 pt-5">
-			<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+		<div class="px-6 pt-5 pb-4">
+			<div class="template-contract rounded-lg p-4">
 				<h3 class="mb-1 font-semibold text-slate-900">
 					{template.title}
 				</h3>
@@ -229,22 +296,75 @@
 			</div>
 		</div>
 
+		<section class="publish-contract px-6 pb-4" aria-label="Public action publish contract">
+			<div class="publish-contract-shell">
+				<header class="publish-contract-head">
+					<div class="publish-contract-main">
+						<span class="publish-contract-kicker">Publish contract</span>
+						<span class="publish-contract-title">Public action route, not delivery proof</span>
+					</div>
+					<div class="publish-contract-state" aria-label="Publish contract state counts">
+						<span>{operatorCapabilityStateLabel(publishRecordState)}</span>
+						<span>
+							<Datum
+								value={publishContractRows.length}
+								cite="TemplateSuccessModal publishContractRows"
+							/>
+							rows
+						</span>
+					</div>
+				</header>
+				<Ratio segments={publishContractSegments} height={6} />
+				<div class="publish-contract-grid">
+					{#each publishContractRows as row (row.label)}
+						<div
+							class="publish-contract-row"
+							data-state={row.state}
+							title="{row.label}: {row.effect} Gate: {row.gate}"
+							aria-label="{row.label}: {publishContractStateLabel(
+								row
+							)}. {row.effect} Gate: {row.gate}. Action: {publishContractActionLabel(row)}"
+						>
+							<div class="publish-contract-row-main">
+								<span class="publish-contract-row-top">
+									<span class="publish-contract-row-label">{row.label}</span>
+									<span class="publish-contract-row-state">{publishContractStateLabel(row)}</span>
+								</span>
+								<span class="publish-contract-row-cluster">
+									{formatCapabilityClusters(row.clusters)}
+								</span>
+								<span class="publish-contract-row-effect">{row.effect}</span>
+								<span class="publish-contract-row-gate">{row.gate}</span>
+							</div>
+							<div class="publish-contract-row-metric">
+								<span class="publish-contract-row-action">{publishContractActionLabel(row)}</span>
+								<Datum value={row.metric.value} cite={row.metric.cite} />
+								<span>{row.metric.label}</span>
+							</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+		</section>
+
 		{#if showShareActions}
 			{#if isPublished}
-				<!-- Beat 2: Decision-maker preview — fade+slide in at 800ms -->
-				<div class="beat-2 px-6 pb-3 pt-1">
+				<!-- Beat 2: reader-route preview -->
+				<div class="beat-2 px-6 pt-1 pb-3">
 					<p class="text-center text-sm font-medium text-slate-700">
-						{sendPreviewText}
+						{actionRoutePreviewText}
 					</p>
 				</div>
 
-				<!-- Beat 3: Primary action — "Send your message" -->
+				<!-- Beat 3: route handoff, not send execution -->
 				<div class="beat-3 px-6 pb-2">
 					<button
 						onclick={() => onsend?.()}
-						class="flex w-full items-center justify-center gap-2 rounded-lg bg-participation-primary-600 px-6 py-3 font-semibold text-white shadow-sm transition-all hover:bg-participation-primary-700 active:scale-95"
+						title={actionRouteTitle}
+						aria-label="Open public action page"
+						class="bg-participation-primary-600 hover:bg-participation-primary-700 flex w-full items-center justify-center gap-2 rounded-lg px-6 py-3 font-semibold text-white shadow-sm transition-all active:scale-95"
 					>
-						<span>Send your message</span>
+						<span>Open action page</span>
 						<ChevronRight class="h-5 w-5" />
 					</button>
 				</div>
@@ -258,7 +378,7 @@
 								class="flex items-center gap-1.5 text-sm text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-700 hover:decoration-slate-500"
 							>
 								<Share2 class="h-3.5 w-3.5" />
-								<span>Share link</span>
+								<span>Share action page</span>
 							</button>
 						</div>
 					{:else}
@@ -267,15 +387,15 @@
 							{#if copied}
 								<Check class="h-3.5 w-3.5 flex-shrink-0 text-emerald-600" />
 								<span class="flex-1 text-left text-sm font-medium text-emerald-600">
-									Link copied
+									Action page copied
 								</span>
 							{:else}
 								<Link class="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
 								<span class="flex-1 truncate text-left font-mono text-xs text-slate-500">
 									{shareUrl}
 								</span>
-								<span class="flex-shrink-0 text-xs font-semibold text-participation-primary-600">
-									Copy link
+								<span class="text-participation-primary-600 flex-shrink-0 text-xs font-semibold">
+									Copy action page
 								</span>
 							{/if}
 						</button>
@@ -283,73 +403,29 @@
 				</div>
 
 				<!-- Warm closing note -->
-				<div class="beat-4 px-6 pb-6 pt-0">
+				<div class="beat-4 px-6 pt-0 pb-6">
 					<p class="text-center text-sm leading-relaxed text-slate-500">
-						Share the link. Others send the same message.
-					</p>
-				</div>
-			{:else}
-				<!-- Publishing state: device-adaptive share surface (unchanged) -->
-				<div class="px-6 pb-2 pt-1">
-					{#if useNativeShare}
-						<button
-							onclick={handleShare}
-							class="flex w-full items-center justify-center gap-2 rounded-lg bg-participation-primary-600 px-6 py-3 font-semibold text-white shadow-sm transition-all hover:bg-participation-primary-700 active:scale-95"
-						>
-							<Share2 class="h-5 w-5" />
-							<span>Share</span>
-						</button>
-					{:else}
-						<button
-							onclick={handleCopy}
-							class="flex w-full items-center justify-center gap-2 rounded-lg px-6 py-3 font-semibold shadow-sm transition-all active:scale-95 {copied
-								? 'bg-emerald-600 text-white'
-								: 'bg-participation-primary-600 text-white hover:bg-participation-primary-700'}"
-						>
-							{#if copied}
-								<Check class="h-5 w-5" />
-								<span>Copied!</span>
-							{:else}
-								<Link class="h-5 w-5" />
-								<span>Copy link</span>
-							{/if}
-						</button>
-					{/if}
-				</div>
-
-				<div class="px-6 pb-4">
-					<button onclick={handleCopy} class="url-copy-bar" class:url-copy-bar--copied={copied}>
-						{#if copied}
-							<Check class="h-3.5 w-3.5 flex-shrink-0 text-emerald-600" />
-							<span class="flex-1 text-left text-sm font-medium text-emerald-600">
-								Link copied
-							</span>
-						{:else}
-							<Link class="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
-							<span class="flex-1 truncate text-left font-mono text-xs text-slate-500">
-								{shareUrl}
-							</span>
-							<span class="flex-shrink-0 text-xs font-semibold text-participation-primary-600">
-								Copy
-							</span>
-						{/if}
-					</button>
-				</div>
-
-				<div class="px-6 pb-6 pt-1">
-					<p class="text-center text-sm leading-relaxed text-slate-500">
-						Share the link. Others send the same message.
+						Share the action page. Each reader confirms their own route.
 					</p>
 				</div>
 			{/if}
+		{:else if publishing}
+			<div class="px-6 pt-1 pb-6">
+				<div class="publish-boundary rounded-lg p-4">
+					<p class="text-sm font-medium text-slate-800">Action page pending</p>
+					<p class="mt-1 text-sm leading-relaxed text-slate-600">
+						Share controls unlock only after the server confirms a public action.
+					</p>
+				</div>
+			</div>
 		{:else if isDraft}
 			<!-- Draft: Explain what's happening -->
 			<div class="px-6 pb-4">
-				<div class="rounded-lg bg-amber-50 p-4">
-					<p class="text-sm font-medium text-amber-800">Why is my template a draft?</p>
+				<div class="draft-boundary rounded-lg p-4">
+					<p class="text-sm font-medium text-amber-800">Why is this held?</p>
 					<p class="mt-1 text-sm text-amber-700">
-						Our automated review couldn't verify the content. This usually resolves within
-						a few minutes. Check your dashboard for updates.
+						Consensus review did not publish this public action. It is not shareable until review
+						approves it.
 					</p>
 				</div>
 			</div>
@@ -358,7 +434,7 @@
 			<div class="px-6 pb-2">
 				<button
 					onclick={handleDashboard}
-					class="flex w-full items-center justify-center gap-2 rounded-lg bg-participation-primary-600 px-6 py-3 font-semibold text-white shadow-sm transition-all hover:bg-participation-primary-700 active:scale-95"
+					class="bg-participation-primary-600 hover:bg-participation-primary-700 flex w-full items-center justify-center gap-2 rounded-lg px-6 py-3 font-semibold text-white shadow-sm transition-all active:scale-95"
 				>
 					<LayoutDashboard class="h-5 w-5" />
 					Go to Dashboard
@@ -366,11 +442,10 @@
 			</div>
 
 			<!-- Draft: What happens next -->
-			<div class="px-6 pb-3 pt-1">
+			<div class="px-6 pt-1 pb-3">
 				<p class="text-xs font-medium text-amber-800">What happens next</p>
 				<p class="mt-1.5 text-xs leading-relaxed text-amber-700">
-					Your template is being reviewed automatically. Most reviews complete within a few
-					minutes — check your dashboard for updates.
+					The draft remains private. Re-open it after review clears or revise the action content.
 				</p>
 			</div>
 
@@ -385,12 +460,12 @@
 			</div>
 		{:else if hasError}
 			<!-- Error: Retry -->
-			<div class="px-6 pb-4 pt-1">
+			<div class="px-6 pt-1 pb-4">
 				<button
 					onclick={() => onretry?.()}
-					class="flex w-full items-center justify-center gap-2 rounded-lg bg-participation-primary-600 px-6 py-3 font-semibold text-white shadow-sm transition-all hover:bg-participation-primary-700 active:scale-95"
+					class="bg-participation-primary-600 hover:bg-participation-primary-700 flex w-full items-center justify-center gap-2 rounded-lg px-6 py-3 font-semibold text-white shadow-sm transition-all active:scale-95"
 				>
-					Try again
+					Retry public action publish
 				</button>
 			</div>
 
@@ -407,6 +482,221 @@
 </div>
 
 <style>
+	.success-modal-shell {
+		background: var(--surface-base, oklch(0.993 0.003 60));
+		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		box-shadow: 0 18px 60px oklch(0.12 0.01 60 / 0.24);
+	}
+
+	.publish-state {
+		border-top: 3px solid var(--coord-route-solid, #3bc4b8);
+		border-bottom: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		background: var(--surface-raised, oklch(0.985 0.004 60));
+	}
+
+	.publish-state[data-state='published'] {
+		border-top-color: var(--coord-verified, #10b981);
+	}
+
+	.publish-state[data-state='draft'] {
+		border-top-color: oklch(0.75 0.13 82);
+	}
+
+	.publish-state[data-state='error'] {
+		border-top-color: oklch(0.58 0.18 28);
+	}
+
+	.publish-state-icon {
+		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		border-radius: 8px;
+		background: var(--surface-base, oklch(0.993 0.003 60));
+	}
+
+	.template-contract,
+	.publish-boundary,
+	.draft-boundary {
+		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		background: var(--surface-raised, oklch(0.985 0.004 60));
+	}
+
+	.publish-boundary {
+		border-left: 3px solid var(--coord-route-solid, #3bc4b8);
+	}
+
+	.publish-contract-shell {
+		display: grid;
+		gap: 0.7rem;
+		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		border-radius: 8px;
+		background: var(--surface-raised, oklch(0.985 0.004 60));
+		padding: 0.8rem;
+	}
+
+	.publish-contract-head {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+
+	.publish-contract-main {
+		display: grid;
+		gap: 0.14rem;
+		min-width: 0;
+	}
+
+	.publish-contract-kicker,
+	.publish-contract-state,
+	.publish-contract-row-state,
+	.publish-contract-row-action,
+	.publish-contract-row-metric {
+		font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+		text-transform: uppercase;
+		letter-spacing: 0;
+	}
+
+	.publish-contract-kicker {
+		color: var(--text-tertiary, oklch(0.48 0.012 60));
+		font-size: 0.62rem;
+		font-weight: 800;
+	}
+
+	.publish-contract-title {
+		color: var(--text-primary, oklch(0.22 0.015 60));
+		font-size: 0.84rem;
+		font-weight: 850;
+		line-height: 1.2;
+	}
+
+	.publish-contract-state {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 0.12rem;
+		color: var(--text-tertiary, oklch(0.48 0.012 60));
+		font-size: 0.6rem;
+		font-weight: 800;
+		white-space: nowrap;
+	}
+
+	.publish-contract-grid {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 0.45rem;
+	}
+
+	.publish-contract-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 0.65rem;
+		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		border-left-width: 3px;
+		border-radius: 8px;
+		background: var(--surface-base, oklch(0.993 0.003 60));
+		padding: 0.62rem;
+	}
+
+	.publish-contract-row[data-state='live'] {
+		border-left-color: var(--coord-verified, #10b981);
+	}
+
+	.publish-contract-row[data-state='partial'] {
+		border-left-color: var(--coord-route-solid, #3bc4b8);
+	}
+
+	.publish-contract-row[data-state='draft-only'] {
+		border-left-color: oklch(0.75 0.13 82);
+		background: oklch(0.988 0.006 74);
+	}
+
+	.publish-contract-row[data-state='gated'] {
+		border-left-color: oklch(0.55 0.02 60);
+		opacity: 0.88;
+	}
+
+	.publish-contract-row-main {
+		min-width: 0;
+	}
+
+	.publish-contract-row-top {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+	}
+
+	.publish-contract-row-label {
+		color: var(--text-primary, oklch(0.22 0.015 60));
+		font-size: 0.76rem;
+		font-weight: 850;
+		line-height: 1.2;
+	}
+
+	.publish-contract-row-state {
+		color: var(--text-tertiary, oklch(0.48 0.012 60));
+		font-size: 0.52rem;
+		font-weight: 850;
+		white-space: nowrap;
+	}
+
+	.publish-contract-row-cluster {
+		display: block;
+		margin-top: 0.28rem;
+		color: var(--text-tertiary, oklch(0.48 0.012 60));
+		font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.52rem;
+		font-weight: 800;
+		line-height: 1.25;
+		text-transform: uppercase;
+	}
+
+	.publish-contract-row-effect {
+		display: block;
+		margin-top: 0.4rem;
+		color: var(--text-secondary, oklch(0.38 0.012 60));
+		font-size: 0.66rem;
+		font-weight: 600;
+		line-height: 1.35;
+	}
+
+	.publish-contract-row-gate {
+		display: block;
+		margin-top: 0.38rem;
+		color: var(--text-tertiary, oklch(0.48 0.012 60));
+		font-size: 0.56rem;
+		font-weight: 600;
+		line-height: 1.35;
+	}
+
+	.publish-contract-row-metric {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 0.12rem;
+		min-width: 4.25rem;
+		color: var(--text-primary, oklch(0.22 0.015 60));
+		font-size: 0.88rem;
+		font-weight: 850;
+		line-height: 1;
+		text-align: right;
+	}
+
+	.publish-contract-row-action,
+	.publish-contract-row-metric span {
+		max-width: 5.75rem;
+		overflow: hidden;
+		color: var(--text-tertiary, oklch(0.48 0.012 60));
+		font-size: 0.52rem;
+		font-weight: 800;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.draft-boundary {
+		border-left: 3px solid oklch(0.75 0.13 82);
+		background: oklch(0.97 0.025 85);
+	}
+
 	.line-clamp-2 {
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
