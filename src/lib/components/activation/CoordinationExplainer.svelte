@@ -40,11 +40,11 @@
 		aria-controls="explainer-content"
 	>
 		<div class="header-content">
-			<h2 class="header-title">How sends are recorded</h2>
+			<h2 class="header-title">How action pages become records</h2>
 			<p class="header-teaser">
 				{isExpanded
 					? 'Hover any node for detail.'
-					: 'Alone, your send is one voice. Joined with your district, it’s a record.'}
+					: 'One confirmed route is one voice. Joined with your district, it becomes evidence.'}
 			</p>
 		</div>
 		<div class="header-toggle">
@@ -72,22 +72,22 @@
 				<li class="point">
 					<span class="point-index" aria-hidden="true">1.</span>
 					<div class="point-content">
-						<strong>Write once.</strong>
-						<span>Describe your message. Pick who decides.</span>
+						<strong>Author the action.</strong>
+						<span>Describe the issue. Pick who decides.</span>
 					</div>
 				</li>
 				<li class="point">
 					<span class="point-index" aria-hidden="true">2.</span>
 					<div class="point-content">
-						<strong>Share the link.</strong>
-						<span>Anyone who shares your problem can send it too.</span>
+						<strong>Publish the action page.</strong>
+						<span>Readers open confirmation before any send.</span>
 					</div>
 				</li>
 				<li class="point">
 					<span class="point-index" aria-hidden="true">3.</span>
 					<div class="point-content">
-						<strong>It joins the record.</strong>
-						<span>Verified sends from one district arrive together. The volume is the evidence.</span>
+						<strong>Aggregate proof.</strong>
+						<span>Verified confirmations and route-owned receipts become the record.</span>
 					</div>
 				</li>
 			</ol>

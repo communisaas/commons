@@ -159,10 +159,13 @@
 	<div class="spark-header">
 		<p class="brand-mark">commons</p>
 		<h1 class="headline">
-			Write once.
-			<span class="accent">Send together.</span>
+			Author once.
+			<span class="accent">Confirm together.</span>
 		</h1>
-		<p class="subhead">Write it once. Share the link. Everyone can send it.</p>
+		<p class="subhead">
+			Publish an action page. Each reader confirms their route before any send or proof is
+			recorded.
+		</p>
 	</div>
 
 	<!-- The writing surface - immediately visible -->

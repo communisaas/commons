@@ -311,7 +311,7 @@
 						{/if}
 					{/if}
 				</div>
-				<p class="checklist__step-hint">Deliver cryptographic proof of constituent support to a decision-maker</p>
+				<p class="checklist__step-hint">Queue a reader-legible proof packet for a decision-maker</p>
 			</div>
 		</div>
 	</div>

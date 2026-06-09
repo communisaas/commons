@@ -9,6 +9,12 @@
  */
 
 import { decryptOrgPii, type OrgEncryptedPii } from '$lib/core/crypto/org-pii-encryption';
+import {
+	applyEmailMergeFields,
+	buildEmailTierContext,
+	hasEmailMergeFields,
+	type VerificationStatus
+} from '$lib/core/email/merge-fields';
 
 export interface BlastSendOptions {
 	orgSlug: string;
@@ -24,6 +30,9 @@ export interface BlastSendOptions {
 		_id: string;
 		encryptedEmail: string;
 		emailHash: string;
+		encryptedName?: string;
+		postalCode?: string | null;
+		verified?: boolean;
 	}>;
 	onProgress?: (progress: BlastProgress) => void;
 	/**
@@ -50,9 +59,7 @@ export interface BlastSendOptions {
 	 * Gmail/Yahoo bulk-sender compliance). When omitted, Lambda falls back to
 	 * SendEmail without the header.
 	 */
-	resolveUnsubscribeUrls?: (
-		supporterIds: string[]
-	) => Promise<string[]>;
+	resolveUnsubscribeUrls?: (supporterIds: string[]) => Promise<string[]>;
 	/**
 	 * Server-signed dispatch claim. Lambda HARD-REQUIRES this — every
 	 * recipient hash must be present in the claim's allowed-hash set
@@ -124,16 +131,15 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 	} = options;
 
 	const total = encryptedSupporters.length;
-	const totalBatches = Math.ceil(total / BATCH_SIZE);
+	const usesMergePersonalization = hasEmailMergeFields(subject) || hasEmailMergeFields(bodyHtml);
+	const effectiveBatchSize = usesMergePersonalization ? 1 : BATCH_SIZE;
+	const totalBatches = Math.ceil(total / effectiveBatchSize);
 	let sent = 0;
 	let failed = 0;
 	const errors: Array<{ emailHash: string; error: string }> = [];
 	const sentHashes = new Set<string>();
 
-	const report = (
-		status: BlastProgress['status'],
-		currentBatch: number
-	) => {
+	const report = (status: BlastProgress['status'], currentBatch: number) => {
 		onProgress?.({ total, sent, failed, currentBatch, totalBatches, status });
 	};
 
@@ -148,7 +154,15 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 
 	// 2. Decrypt all supporter emails
 	report('decrypting', 0);
-	const decrypted: Array<{ email: string; emailHash: string; supporterId: string }> = [];
+	const decrypted: Array<{
+		email: string;
+		emailHash: string;
+		supporterId: string;
+		firstName: string;
+		lastName: string;
+		postalCode: string | null;
+		verificationStatus: VerificationStatus;
+	}> = [];
 	const decryptFailures: Array<{
 		recipientEmailHash: string;
 		status: 'failed';
@@ -172,7 +186,45 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 				`supporter:${supporter._id}`,
 				'email'
 			);
-			decrypted.push({ email, emailHash: supporter.emailHash, supporterId: supporter._id });
+			let firstName = '';
+			let lastName = '';
+			if (supporter.encryptedName) {
+				try {
+					const nameBlob: OrgEncryptedPii = JSON.parse(supporter.encryptedName);
+					const fullName = await decryptOrgPii(
+						nameBlob,
+						orgKey,
+						supporter.emailHash,
+						`supporter:${supporter._id}`,
+						'name'
+					);
+					const trimmed = fullName.trim();
+					const splitAt = trimmed.indexOf(' ');
+					if (splitAt === -1) {
+						firstName = trimmed;
+					} else {
+						firstName = trimmed.slice(0, splitAt);
+						lastName = trimmed.slice(splitAt + 1).trim();
+					}
+				} catch {
+					// Name is optional personalization context. Email delivery can
+					// still proceed with empty first/last merge values.
+				}
+			}
+			const verificationStatus: VerificationStatus = supporter.verified
+				? 'verified'
+				: supporter.postalCode
+					? 'postal-resolved'
+					: 'imported';
+			decrypted.push({
+				email,
+				emailHash: supporter.emailHash,
+				supporterId: supporter._id,
+				firstName,
+				lastName,
+				postalCode: supporter.postalCode ?? null,
+				verificationStatus
+			});
 		} catch (err) {
 			failed++;
 			const errMsg = `Decryption failed: ${err instanceof Error ? err.message : 'Unknown'}`;
@@ -194,8 +246,8 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 
 	// 3. Batch and send via Lambda proxy
 	const batches: Array<typeof decrypted> = [];
-	for (let i = 0; i < decrypted.length; i += BATCH_SIZE) {
-		batches.push(decrypted.slice(i, i + BATCH_SIZE));
+	for (let i = 0; i < decrypted.length; i += effectiveBatchSize) {
+		batches.push(decrypted.slice(i, i + effectiveBatchSize));
 	}
 
 	const batchRecords: Array<{
@@ -212,6 +264,30 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 		report('sending', batchIdx + 1);
 
 		const recipients = batch.map((s) => s.email);
+		const batchSubject = usesMergePersonalization
+			? applyEmailMergeFields(
+					subject,
+					{
+						firstName: batch[0]?.firstName ?? '',
+						lastName: batch[0]?.lastName ?? '',
+						email: batch[0]?.email ?? '',
+						postalCode: batch[0]?.postalCode ?? null,
+						verificationStatus: batch[0]?.verificationStatus ?? 'imported',
+						tierContext: buildEmailTierContext(batch[0]?.verificationStatus ?? 'imported')
+					},
+					'header'
+				)
+			: subject;
+		const batchBodyHtml = usesMergePersonalization
+			? applyEmailMergeFields(bodyHtml, {
+					firstName: batch[0]?.firstName ?? '',
+					lastName: batch[0]?.lastName ?? '',
+					email: batch[0]?.email ?? '',
+					postalCode: batch[0]?.postalCode ?? null,
+					verificationStatus: batch[0]?.verificationStatus ?? 'imported',
+					tierContext: buildEmailTierContext(batch[0]?.verificationStatus ?? 'imported')
+				})
+			: bodyHtml;
 
 		// Fetch per-recipient unsubscribe URLs once per batch when a resolver
 		// is wired. Lambda will inject these as `List-Unsubscribe` MIME
@@ -227,7 +303,10 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 					unsubscribeUrls = undefined;
 				}
 			} catch (err) {
-				console.warn('[blast] unsubscribe URL resolver failed; sending without List-Unsubscribe header', err);
+				console.warn(
+					'[blast] unsubscribe URL resolver failed; sending without List-Unsubscribe header',
+					err
+				);
 				unsubscribeUrls = undefined;
 			}
 		}
@@ -240,8 +319,8 @@ export async function sendBlastFromClient(options: BlastSendOptions): Promise<Bl
 					credentials,
 					recipients,
 					recipientHashes: batch.map((s) => s.emailHash),
-					subject,
-					bodyHtml,
+					subject: batchSubject,
+					bodyHtml: batchBodyHtml,
 					fromEmail,
 					fromName,
 					blastId,

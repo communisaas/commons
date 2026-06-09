@@ -1,7 +1,15 @@
 <script lang="ts">
-	import type { IntegrityMetrics } from '$lib/types/verification-packet';
+	import type { VerificationPacket } from '$lib/types/verification-packet';
+	import { Datum } from '$lib/design';
 
-	let { packet }: { packet: IntegrityMetrics } = $props();
+	type CoordinationIntegrityPacket = Pick<
+		VerificationPacket,
+		'gds' | 'ald' | 'temporalEntropy' | 'burstVelocity' | 'cai' | 'total' | 'districtCount'
+	>;
+
+	let { packet }: { packet: CoordinationIntegrityPacket } = $props();
+
+	const IDENTICAL_CONTENT_ALD_THRESHOLD = 0.5;
 
 	interface ScoreEntry {
 		key: string;
@@ -85,19 +93,44 @@
 		packet.burstVelocity === null &&
 		packet.cai === null
 	);
+	const burstVelocityWarning = $derived(packet.burstVelocity !== null && packet.burstVelocity > 5);
+	const identicalContentWarning = $derived(
+		packet.ald !== null && packet.ald < IDENTICAL_CONTENT_ALD_THRESHOLD
+	);
+	const absentGeographyWarning = $derived(packet.total > 0 && packet.districtCount === 0);
 </script>
 
 <div class="rounded-md bg-surface-base border border-surface-border p-6 space-y-4">
 	<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary">Coordination Integrity</p>
 
-	{#if allNull}
+	{#if allNull && !absentGeographyWarning}
 		<div class="py-4 text-center">
 			<p class="text-sm text-text-quaternary">Integrity scores appear after 10+ verified actions.</p>
 		</div>
 	{:else}
-		{#if packet.burstVelocity !== null && packet.burstVelocity > 5}
-			<div class="bg-amber-500/10 border border-amber-500/20 px-4 py-2 rounded text-sm font-medium text-amber-700">
-				Action rate spike detected — decision-makers may question authenticity.
+		{#if burstVelocityWarning || identicalContentWarning || absentGeographyWarning}
+			<div class="space-y-2">
+				{#if burstVelocityWarning}
+					<div class="bg-amber-500/10 border border-amber-500/20 px-4 py-2 rounded text-sm font-medium text-amber-700">
+						Action rate spike detected — decision-makers may question authenticity.
+					</div>
+				{/if}
+				{#if absentGeographyWarning}
+					<div class="bg-orange-500/10 border border-orange-500/20 px-4 py-2 rounded text-sm font-medium text-orange-800">
+						Geographic signal absent:
+						<span class="font-mono tabular-nums"><Datum value={packet.total} cite="computeVerificationPacketCached total" /> actions</span>
+						reached the packet, but
+						<span class="font-mono tabular-nums"><Datum value={packet.districtCount} cite="computeVerificationPacketCached districtCount" /> districts</span>
+						were available. Geographic diversity remains uncounted.
+					</div>
+				{/if}
+				{#if identicalContentWarning}
+					<div class="bg-orange-500/10 border border-orange-500/20 px-4 py-2 rounded text-sm font-medium text-orange-800">
+						Identical-content threshold crossed:
+						<span class="font-mono tabular-nums">ALD &lt; <Datum value={IDENTICAL_CONTENT_ALD_THRESHOLD} decimals={2} cite="computeALD threshold" /></span>.
+						Many actions share the same message hash.
+					</div>
+				{/if}
 			</div>
 		{/if}
 
@@ -113,6 +146,10 @@
 							{fmtScore(score.value)}
 							{#if score.invertedWarning}
 								<span class="text-[10px] text-amber-500 ml-1">high</span>
+							{:else if score.key === 'gds' && absentGeographyWarning}
+								<span class="text-[10px] text-orange-600 ml-1">missing</span>
+							{:else if score.key === 'ald' && identicalContentWarning}
+								<span class="text-[10px] text-orange-600 ml-1">threshold</span>
 							{/if}
 						</span>
 					</div>
