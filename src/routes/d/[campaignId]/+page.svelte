@@ -172,11 +172,13 @@
 	async function shareDonation() {
 		const url = window.location.origin + `/d/${data.campaign.id}`;
 		if (navigator.share) {
-			await navigator.share({
-				title: data.campaign.title,
-				text: `Support ${data.campaign.title}`,
-				url
-			}).catch(() => {});
+			await navigator
+				.share({
+					title: data.campaign.title,
+					text: `Support ${data.campaign.title}`,
+					url
+				})
+				.catch(() => {});
 		} else {
 			await navigator.clipboard.writeText(url);
 		}
@@ -197,7 +199,9 @@
 
 		{#if data.campaign.body}
 			<div class="mb-6">
-				<p class="whitespace-pre-line text-sm leading-relaxed text-slate-600">{data.campaign.body}</p>
+				<p class="text-sm leading-relaxed whitespace-pre-line text-slate-600">
+					{data.campaign.body}
+				</p>
 			</div>
 		{/if}
 
@@ -209,7 +213,9 @@
 					<p class="text-sm text-slate-500">
 						raised
 						{#if data.campaign.goalAmountCents}
-							<span class="text-slate-400">of {formatCents(data.campaign.goalAmountCents)} goal</span>
+							<span class="text-slate-400"
+								>of {formatCents(data.campaign.goalAmountCents)} goal</span
+							>
 						{/if}
 					</p>
 				</div>
@@ -234,10 +240,12 @@
 		>
 			Donate
 		</button>
-
 	{:else if currentStep === 'amount'}
 		<!-- Amount Selection -->
-		<button onclick={() => (currentStep = 'info')} class="mb-4 text-sm text-slate-500 hover:text-slate-700">
+		<button
+			onclick={() => (currentStep = 'info')}
+			class="mb-4 text-sm text-slate-500 hover:text-slate-700"
+		>
 			&larr; Back
 		</button>
 		<h2 class="mb-6 text-2xl font-bold text-slate-900">Choose Amount</h2>
@@ -246,7 +254,10 @@
 			{#each presets as preset}
 				<button
 					onclick={() => selectAmount(preset)}
-					class="rounded-lg border px-4 py-3 text-base font-semibold transition-colors {amountCents === preset && !customAmount ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 text-slate-700 hover:border-slate-400'}"
+					class="rounded-lg border px-4 py-3 text-base font-semibold transition-colors {amountCents ===
+						preset && !customAmount
+						? 'border-slate-900 bg-slate-900 text-white'
+						: 'border-slate-300 text-slate-700 hover:border-slate-400'}"
 				>
 					{formatCents(preset)}
 				</button>
@@ -254,9 +265,14 @@
 		</div>
 
 		<div class="mb-4">
-			<label for="customAmount" class="mb-1 block text-sm font-medium text-slate-700">Custom Amount</label>
+			<label for="customAmount" class="mb-1 block text-sm font-medium text-slate-700"
+				>Custom Amount</label
+			>
 			<div class="relative">
-				<span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">$</span>
+				<span
+					class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm text-slate-400"
+					>$</span
+				>
 				<input
 					id="customAmount"
 					type="number"
@@ -264,7 +280,7 @@
 					step="0.01"
 					bind:value={customAmount}
 					oninput={handleCustomAmount}
-					class="w-full rounded-lg border border-slate-300 py-2.5 pl-7 pr-3 text-sm focus:border-slate-500 focus:ring-1 focus:ring-slate-500 focus:outline-none"
+					class="w-full rounded-lg border border-slate-300 py-2.5 pr-3 pl-7 text-sm focus:border-slate-500 focus:ring-1 focus:ring-slate-500 focus:outline-none"
 					placeholder="Other amount"
 				/>
 			</div>
@@ -291,17 +307,20 @@
 		>
 			Continue with {formatCents(amountCents)}
 		</button>
-
 	{:else if currentStep === 'checkout'}
 		<!-- Checkout -->
-		<button onclick={() => (currentStep = 'amount')} class="mb-4 text-sm text-slate-500 hover:text-slate-700">
+		<button
+			onclick={() => (currentStep = 'amount')}
+			class="mb-4 text-sm text-slate-500 hover:text-slate-700"
+		>
 			&larr; Back
 		</button>
 		<h2 class="mb-6 text-2xl font-bold text-slate-900">Your Information</h2>
 
 		<div class="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
 			<p class="text-sm text-slate-500">
-				{recurring ? 'Monthly donation' : 'One-time donation'}: <span class="font-semibold text-slate-900">{formatCents(amountCents)}</span>
+				{recurring ? 'Monthly donation' : 'One-time donation'}:
+				<span class="font-semibold text-slate-900">{formatCents(amountCents)}</span>
 			</p>
 		</div>
 
@@ -399,20 +418,33 @@
 
 		<button
 			onclick={submitCheckout}
-			disabled={submitting || !name.trim() || !email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)}
+			disabled={submitting ||
+				!name.trim() ||
+				!email.trim() ||
+				!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)}
 			class="mt-6 w-full rounded-lg bg-slate-900 px-6 py-3 text-base font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
 		>
 			{submitting ? 'Processing...' : `Proceed to Payment - ${formatCents(amountCents)}`}
 		</button>
-
 	{:else if currentStep === 'success'}
 		<!-- Success -->
 		<div class="text-center">
-			<div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
-				<svg class="h-8 w-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+			<div
+				class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100"
+			>
+				<svg
+					class="h-8 w-8 text-green-600"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="2"
+					><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg
+				>
 			</div>
 			<h2 class="mb-2 text-2xl font-bold text-slate-900">Thank you for your donation!</h2>
-			<p class="mb-6 text-sm text-slate-500">A receipt will be sent to your email</p>
+			<p class="mb-6 text-sm text-slate-500">
+				When configured, a baseline confirmation email is attempted and recorded for the organization.
+			</p>
 		</div>
 
 		<!-- Proof Card -->
@@ -424,7 +456,8 @@
 			</div>
 			<div class="mt-3 border-t border-slate-100 pt-3">
 				<p class="text-xs text-slate-400">
-					{formatCents(displayRaised)} raised from {displayDonors} {displayDonors === 1 ? 'donor' : 'donors'}
+					{formatCents(displayRaised)} raised from {displayDonors}
+					{displayDonors === 1 ? 'donor' : 'donors'}
 				</p>
 			</div>
 		</div>

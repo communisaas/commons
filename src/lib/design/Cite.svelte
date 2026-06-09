@@ -192,9 +192,20 @@
 
 <style>
 	/* ─── Whisper ─────────────────────────────────────────── */
+	.cite-whisper,
+	.cite-content {
+		min-width: 0;
+		max-width: 100%;
+		overflow: hidden;
+	}
 
 	.cite-provenance {
 		display: block;
+		max-width: min(36ch, calc(100vw - 2rem));
+		overflow: hidden;
+		overflow-wrap: anywhere;
+		word-break: break-word;
+		max-height: 1.3em;
 		margin-top: 2px;
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 		font-size: 0.6875rem; /* 11px — subordinate */
@@ -206,13 +217,20 @@
 			opacity 150ms cubic-bezier(0.4, 0, 0.2, 1),
 			transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
 		pointer-events: none;
-		white-space: nowrap;
+		white-space: normal;
 	}
 
 	.cite-whisper:hover .cite-provenance,
 	.cite-whisper:focus-within .cite-provenance {
+		max-height: none;
 		opacity: 1;
 		transform: translateY(0);
+	}
+
+	.sr-only {
+		white-space: normal;
+		overflow-wrap: anywhere;
+		word-break: break-word;
 	}
 
 	/* ─── Mark ────────────────────────────────────────────── */

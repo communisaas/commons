@@ -1,6 +1,7 @@
 // CONVEX: Form action migrated to Convex submitAction. Load uses Convex queries.
 import { error, fail } from '@sveltejs/kit';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
+import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad, Actions } from './$types';
 
 import { serverQuery, serverAction } from 'convex-sveltekit';
@@ -41,6 +42,7 @@ export const actions: Actions = {
 		const postalCode = formData.get('postalCode')?.toString().trim() || null;
 		const phone = formData.get('phone')?.toString().trim() || null;
 		const message = formData.get('message')?.toString().trim() || null;
+		const rawDistrictCode = formData.get('districtCode')?.toString().trim() || null;
 		const h3Cell = formData.get('h3Cell')?.toString().trim() || null;
 		const atlasVersion = formData.get('atlasVersion')?.toString().trim() || null;
 
@@ -74,6 +76,9 @@ export const actions: Actions = {
 		if (phone && phone.length > 32) {
 			return fail(400, { error: 'Phone too long' });
 		}
+		if (rawDistrictCode && rawDistrictCode.length > 64) {
+			return fail(400, { error: 'District code too long' });
+		}
 		if (h3Cell && h3Cell.length > 32) {
 			return fail(400, { error: 'h3Cell too long' });
 		}
@@ -102,6 +107,10 @@ export const actions: Actions = {
 				postalCode: postalCode ?? undefined,
 				phone: phone ?? undefined,
 				message: message ?? undefined,
+				districtCode:
+					rawDistrictCode && FEATURES.ADDRESS_SPECIFICITY === 'district'
+						? rawDistrictCode
+						: undefined,
 				h3Cell: h3Cell ?? undefined,
 				atlasVersion: atlasVersion ?? undefined,
 				source: 'widget',
