@@ -30,21 +30,21 @@ export interface DecisionMakerScore {
 
 	// Engagement
 	reportsReceived: number;
-	reportsOpened: number;
-	verifyLinksClicked: number;
-	repliesLogged: number;
+	reportsOpened: number | null;
+	verifyLinksClicked: number | null;
+	repliesLogged: number | null;
 
 	// Legislative alignment
-	relevantVotes: number;
-	alignedVotes: number;
+	relevantVotes: number | null;
+	alignedVotes: number | null;
 	alignmentRate: number | null; // null if 0 relevant votes
 
 	// Responsiveness
 	avgResponseTime: number | null; // hours from report sent -> first response
 	lastContactDate: string | null;
 
-	// Composite (0-100)
-	score: number;
+	// Composite (0-100). Null when no scorecard snapshot exists.
+	score: number | null;
 
 	/** Proof-weighted score (null if no accountability receipts exist) */
 	proofWeighted: ProofWeightedScore | null;

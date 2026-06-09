@@ -70,14 +70,55 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listSupporters',
 				summary: 'List supporters',
-				description: 'List supporters with cursor pagination and optional filters. Requires read scope.',
+				description:
+					'List supporters with cursor pagination and optional filters. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
-					{ name: 'email', in: 'query', schema: { type: 'string' }, description: 'Filter by exact email (case-insensitive)' },
-					{ name: 'verified', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: 'Filter by verification status' },
-					{ name: 'email_status', in: 'query', schema: { type: 'string', enum: ['subscribed', 'unsubscribed', 'bounced', 'complained'] }, description: 'Filter by email subscription status' },
-					{ name: 'source', in: 'query', schema: { type: 'string', enum: ['csv', 'action_network', 'organic', 'widget'] }, description: 'Filter by import source' },
+					{
+						name: 'email',
+						in: 'query',
+						schema: { type: 'string' },
+						description: 'Filter by exact email (case-insensitive)'
+					},
+					{
+						name: 'verified',
+						in: 'query',
+						schema: { type: 'string', enum: ['true', 'false'] },
+						description: 'Filter by verification status'
+					},
+					{
+						name: 'email_status',
+						in: 'query',
+						schema: {
+							type: 'string',
+							enum: ['subscribed', 'unsubscribed', 'bounced', 'complained']
+						},
+						description: 'Filter by email subscription status'
+					},
+					{
+						name: 'source',
+						in: 'query',
+						schema: {
+							type: 'string',
+							enum: [
+								'csv',
+								'action_network',
+								'everyaction',
+								'nationbuilder',
+								'mailchimp',
+								'salsa',
+								'mobilize',
+								'actblue',
+								'engaging_networks',
+								'civicrm',
+								'salesforce',
+								'organic',
+								'widget'
+							]
+						},
+						description: 'Filter by import source'
+					},
 					{ name: 'tag', in: 'query', schema: { type: 'string' }, description: 'Filter by tag ID' }
 				],
 				responses: {
@@ -156,7 +197,8 @@ export const openApiSpec = {
 			patch: {
 				operationId: 'updateSupporter',
 				summary: 'Update supporter',
-				description: 'Update supporter fields. Requires write scope. At least one field must be provided.',
+				description:
+					'Update supporter fields. Requires write scope. At least one field must be provided.',
 				parameters: [{ $ref: '#/components/parameters/resourceId' }],
 				requestBody: {
 					required: true,
@@ -224,12 +266,23 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listCampaigns',
 				summary: 'List campaigns',
-				description: 'List campaigns with cursor pagination and optional filters. Requires read scope.',
+				description:
+					'List campaigns with cursor pagination and optional filters. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
-					{ name: 'status', in: 'query', schema: { type: 'string', enum: ['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETE'] }, description: 'Filter by campaign status' },
-					{ name: 'type', in: 'query', schema: { type: 'string', enum: ['LETTER', 'EVENT', 'FORM'] }, description: 'Filter by campaign type' }
+					{
+						name: 'status',
+						in: 'query',
+						schema: { type: 'string', enum: ['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETE'] },
+						description: 'Filter by campaign status'
+					},
+					{
+						name: 'type',
+						in: 'query',
+						schema: { type: 'string', enum: ['LETTER', 'EVENT', 'FORM'] },
+						description: 'Filter by campaign type'
+					}
 				],
 				responses: {
 					'200': {
@@ -306,7 +359,8 @@ export const openApiSpec = {
 			patch: {
 				operationId: 'updateCampaign',
 				summary: 'Update campaign',
-				description: 'Update campaign fields. Requires write scope. At least one field must be provided.',
+				description:
+					'Update campaign fields. Requires write scope. At least one field must be provided.',
 				parameters: [{ $ref: '#/components/parameters/resourceId' }],
 				requestBody: {
 					required: true,
@@ -347,12 +401,18 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listCampaignActions',
 				summary: 'List campaign actions',
-				description: 'List actions taken on a campaign with cursor pagination. Requires read scope.',
+				description:
+					'List actions taken on a campaign with cursor pagination. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/resourceId' },
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
-					{ name: 'verified', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: 'Filter by verification status' }
+					{
+						name: 'verified',
+						in: 'query',
+						schema: { type: 'string', enum: ['true', 'false'] },
+						description: 'Filter by verification status'
+					}
 				],
 				responses: {
 					'200': {
@@ -379,7 +439,8 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listTags',
 				summary: 'List tags',
-				description: 'List all tags for the organization. Requires read scope. Ordered alphabetically.',
+				description:
+					'List all tags for the organization. Requires read scope. Ordered alphabetically.',
 				responses: {
 					'200': {
 						description: 'List of tags',
@@ -521,7 +582,8 @@ export const openApiSpec = {
 			get: {
 				operationId: 'getUsage',
 				summary: 'Get billing usage',
-				description: 'Returns current billing period usage for the organization. Requires read scope.',
+				description:
+					'Returns current billing period usage for the organization. Requires read scope.',
 				responses: {
 					'200': {
 						description: 'Usage data',
@@ -545,7 +607,8 @@ export const openApiSpec = {
 			post: {
 				operationId: 'createApiKey',
 				summary: 'Create API key',
-				description: 'Create a new API key. Requires session authentication (org owner or editor role), not Bearer token auth. The full key is returned only once in the response.',
+				description:
+					'Create a new API key. Requires session authentication (org owner or editor role), not Bearer token auth. The full key is returned only once in the response.',
 				security: [],
 				requestBody: {
 					required: true,
@@ -576,11 +639,18 @@ export const openApiSpec = {
 			patch: {
 				operationId: 'renameApiKey',
 				summary: 'Rename API key',
-				description: 'Rename an API key. Requires session authentication (org owner or editor role). Pass orgSlug as query parameter.',
+				description:
+					'Rename an API key. Requires session authentication (org owner or editor role). Pass orgSlug as query parameter.',
 				security: [],
 				parameters: [
 					{ $ref: '#/components/parameters/resourceId' },
-					{ name: 'orgSlug', in: 'query', required: true, schema: { type: 'string' }, description: 'Organization slug' }
+					{
+						name: 'orgSlug',
+						in: 'query',
+						required: true,
+						schema: { type: 'string' },
+						description: 'Organization slug'
+					}
 				],
 				requestBody: {
 					required: true,
@@ -624,11 +694,18 @@ export const openApiSpec = {
 			delete: {
 				operationId: 'revokeApiKey',
 				summary: 'Revoke API key',
-				description: 'Revoke (soft-delete) an API key. Requires session authentication (org owner or editor role). Pass orgSlug as query parameter.',
+				description:
+					'Revoke (soft-delete) an API key. Requires session authentication (org owner or editor role). Pass orgSlug as query parameter.',
 				security: [],
 				parameters: [
 					{ $ref: '#/components/parameters/resourceId' },
-					{ name: 'orgSlug', in: 'query', required: true, schema: { type: 'string' }, description: 'Organization slug' }
+					{
+						name: 'orgSlug',
+						in: 'query',
+						required: true,
+						schema: { type: 'string' },
+						description: 'Organization slug'
+					}
 				],
 				responses: {
 					'200': {
@@ -656,12 +733,23 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listEvents',
 				summary: 'List events',
-				description: 'List events with cursor pagination and optional filters. Requires read scope.',
+				description:
+					'List events with cursor pagination and optional filters. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
-					{ name: 'status', in: 'query', schema: { type: 'string', enum: ['DRAFT', 'PUBLISHED', 'CANCELLED', 'COMPLETED'] }, description: 'Filter by event status' },
-					{ name: 'eventType', in: 'query', schema: { type: 'string', enum: ['IN_PERSON', 'VIRTUAL', 'HYBRID'] }, description: 'Filter by event type' }
+					{
+						name: 'status',
+						in: 'query',
+						schema: { type: 'string', enum: ['DRAFT', 'PUBLISHED', 'CANCELLED', 'COMPLETED'] },
+						description: 'Filter by event status'
+					},
+					{
+						name: 'eventType',
+						in: 'query',
+						schema: { type: 'string', enum: ['IN_PERSON', 'VIRTUAL', 'HYBRID'] },
+						description: 'Filter by event type'
+					}
 				],
 				responses: {
 					'200': {
@@ -711,12 +799,23 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listDonations',
 				summary: 'List donations',
-				description: 'List donations with cursor pagination and optional filters. Requires read scope.',
+				description:
+					'List donations with cursor pagination and optional filters. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
-					{ name: 'status', in: 'query', schema: { type: 'string', enum: ['pending', 'completed', 'refunded'] }, description: 'Filter by donation status' },
-					{ name: 'campaignId', in: 'query', schema: { type: 'string' }, description: 'Filter by campaign ID' }
+					{
+						name: 'status',
+						in: 'query',
+						schema: { type: 'string', enum: ['pending', 'completed', 'refunded'] },
+						description: 'Filter by donation status'
+					},
+					{
+						name: 'campaignId',
+						in: 'query',
+						schema: { type: 'string' },
+						description: 'Filter by campaign ID'
+					}
 				],
 				responses: {
 					'200': {
@@ -766,11 +865,17 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listWorkflows',
 				summary: 'List workflows',
-				description: 'List automation workflows with cursor pagination and optional filters. Requires read scope.',
+				description:
+					'List automation workflows with cursor pagination and optional filters. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
-					{ name: 'enabled', in: 'query', schema: { type: 'string', enum: ['true', 'false'] }, description: 'Filter by enabled status' }
+					{
+						name: 'enabled',
+						in: 'query',
+						schema: { type: 'string', enum: ['true', 'false'] },
+						description: 'Filter by enabled status'
+					}
 				],
 				responses: {
 					'200': {
@@ -820,11 +925,17 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listSmsBlasts',
 				summary: 'List SMS blasts',
-				description: 'List SMS blasts with cursor pagination and optional filters. Requires read scope.',
+				description:
+					'List SMS blasts with cursor pagination and optional filters. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
-					{ name: 'status', in: 'query', schema: { type: 'string', enum: ['draft', 'sending', 'sent', 'failed'] }, description: 'Filter by blast status' }
+					{
+						name: 'status',
+						in: 'query',
+						schema: { type: 'string', enum: ['draft', 'sending', 'sent', 'failed'] },
+						description: 'Filter by blast status'
+					}
 				],
 				responses: {
 					'200': {
@@ -850,12 +961,34 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listCalls',
 				summary: 'List patch-through calls',
-				description: 'List patch-through calls with cursor pagination and optional filters. Requires read scope.',
+				description:
+					'List patch-through calls with cursor pagination and optional filters. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
-					{ name: 'status', in: 'query', schema: { type: 'string', enum: ['initiated', 'ringing', 'in-progress', 'completed', 'failed', 'no-answer', 'busy'] }, description: 'Filter by call status' },
-					{ name: 'campaignId', in: 'query', schema: { type: 'string' }, description: 'Filter by campaign ID' }
+					{
+						name: 'status',
+						in: 'query',
+						schema: {
+							type: 'string',
+							enum: [
+								'initiated',
+								'ringing',
+								'in-progress',
+								'completed',
+								'failed',
+								'no-answer',
+								'busy'
+							]
+						},
+						description: 'Filter by call status'
+					},
+					{
+						name: 'campaignId',
+						in: 'query',
+						schema: { type: 'string' },
+						description: 'Filter by campaign ID'
+					}
 				],
 				responses: {
 					'200': {
@@ -865,7 +998,10 @@ export const openApiSpec = {
 								schema: {
 									type: 'object',
 									properties: {
-										data: { type: 'array', items: { $ref: '#/components/schemas/PatchThroughCall' } },
+										data: {
+											type: 'array',
+											items: { $ref: '#/components/schemas/PatchThroughCall' }
+										},
 										meta: { $ref: '#/components/schemas/PaginationMeta' }
 									}
 								}
@@ -881,12 +1017,23 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listRepresentatives',
 				summary: 'List representatives',
-				description: 'List international representatives with cursor pagination and optional filters. Requires read scope.',
+				description:
+					'List international representatives with cursor pagination and optional filters. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
-					{ name: 'country', in: 'query', schema: { type: 'string' }, description: 'Filter by ISO country code' },
-					{ name: 'constituency', in: 'query', schema: { type: 'string' }, description: 'Filter by constituency ID' }
+					{
+						name: 'country',
+						in: 'query',
+						schema: { type: 'string' },
+						description: 'Filter by ISO country code'
+					},
+					{
+						name: 'constituency',
+						in: 'query',
+						schema: { type: 'string' },
+						description: 'Filter by constituency ID'
+					}
 				],
 				responses: {
 					'200': {
@@ -912,7 +1059,8 @@ export const openApiSpec = {
 			get: {
 				operationId: 'listNetworks',
 				summary: 'List networks',
-				description: 'List coalition networks the authenticated org belongs to. Requires read scope.',
+				description:
+					'List coalition networks the authenticated org belongs to. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' }
@@ -941,10 +1089,9 @@ export const openApiSpec = {
 			get: {
 				operationId: 'getNetwork',
 				summary: 'Get network detail',
-				description: 'Returns network details including member list. Requires the org to be an active member. Requires read scope.',
-				parameters: [
-					{ $ref: '#/components/parameters/resourceId' }
-				],
+				description:
+					'Returns network details including member list. Requires the org to be an active member. Requires read scope.',
+				parameters: [{ $ref: '#/components/parameters/resourceId' }],
 				responses: {
 					'200': {
 						description: 'Network detail with members',
@@ -969,10 +1116,9 @@ export const openApiSpec = {
 			get: {
 				operationId: 'getNetworkStats',
 				summary: 'Get network stats',
-				description: 'Returns aggregate statistics across all active member orgs in the network. Requires the org to be an active member. Requires read scope.',
-				parameters: [
-					{ $ref: '#/components/parameters/resourceId' }
-				],
+				description:
+					'Returns aggregate statistics across all active member orgs in the network. Requires the org to be an active member. Requires read scope.',
+				parameters: [{ $ref: '#/components/parameters/resourceId' }],
 				responses: {
 					'200': {
 						description: 'Network aggregate statistics',
@@ -1159,6 +1305,41 @@ export const openApiSpec = {
 					'404': { $ref: '#/components/responses/NotFound' }
 				}
 			}
+		},
+		'/webhooks/{id}/test-fire': {
+			post: {
+				operationId: 'testWebhookDelivery',
+				summary: 'Queue a signed test delivery',
+				description:
+					'Queues a targeted webhook.test POST to one enabled endpoint. This proves only Commons sender-side dispatch; inspect delivery history for receiver status. Requires write scope.',
+				parameters: [{ $ref: '#/components/parameters/resourceId' }],
+				responses: {
+					'202': {
+						description: 'Test delivery queued',
+						content: {
+							'application/json': {
+								schema: {
+									type: 'object',
+									properties: {
+										data: { $ref: '#/components/schemas/WebhookTestDelivery' }
+									}
+								}
+							}
+						}
+					},
+					'401': { $ref: '#/components/responses/Unauthorized' },
+					'403': { $ref: '#/components/responses/Forbidden' },
+					'404': { $ref: '#/components/responses/NotFound' },
+					'409': {
+						description: 'Webhook is disabled',
+						content: {
+							'application/json': {
+								schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+							}
+						}
+					}
+				}
+			}
 		}
 	},
 	components: {
@@ -1194,7 +1375,10 @@ export const openApiSpec = {
 			PaginationMeta: {
 				type: 'object',
 				properties: {
-					cursor: { type: ['string', 'null'], description: 'Cursor for next page, or null if no more pages' },
+					cursor: {
+						type: ['string', 'null'],
+						description: 'Cursor for next page, or null if no more pages'
+					},
 					hasMore: { type: 'boolean' },
 					total: { type: 'integer', description: 'Total number of matching records' }
 				}
@@ -1230,14 +1414,22 @@ export const openApiSpec = {
 				type: 'object',
 				required: ['email'],
 				properties: {
-					email: { type: 'string', format: 'email', description: 'Supporter email (must contain @)' },
+					email: {
+						type: 'string',
+						format: 'email',
+						description: 'Supporter email (must contain @)'
+					},
 					name: { type: 'string' },
 					postalCode: { type: 'string' },
 					country: { type: 'string', default: 'US' },
 					phone: { type: 'string' },
 					source: { type: 'string', description: 'Import source identifier' },
 					customFields: { type: 'object', description: 'Arbitrary key-value metadata' },
-					tags: { type: 'array', items: { type: 'string' }, description: 'Array of tag IDs to attach' }
+					tags: {
+						type: 'array',
+						items: { type: 'string' },
+						description: 'Array of tag IDs to attach'
+					}
 				}
 			},
 			UpdateSupporterInput: {
@@ -1403,7 +1595,10 @@ export const openApiSpec = {
 				properties: {
 					id: { type: 'string' },
 					key: { type: 'string', description: 'Full API key — shown only once' },
-					prefix: { type: 'string', description: 'Key prefix for identification (e.g. ck_live_abc...)' },
+					prefix: {
+						type: 'string',
+						description: 'Key prefix for identification (e.g. ck_live_abc...)'
+					},
 					name: { type: 'string' },
 					scopes: { type: 'array', items: { type: 'string' } },
 					createdAt: { type: 'string', format: 'date-time' }
@@ -1521,7 +1716,11 @@ export const openApiSpec = {
 					name: { type: 'string' },
 					description: { type: ['string', 'null'] },
 					trigger: { type: 'string' },
-					steps: { type: 'array', items: { type: 'object' }, description: 'Array of workflow step definitions' },
+					steps: {
+						type: 'array',
+						items: { type: 'object' },
+						description: 'Array of workflow step definitions'
+					},
 					stepCount: { type: 'integer' },
 					enabled: { type: 'boolean' },
 					createdAt: { type: 'string', format: 'date-time' },
@@ -1551,7 +1750,18 @@ export const openApiSpec = {
 					callerPhone: { type: 'string' },
 					targetPhone: { type: 'string' },
 					targetName: { type: ['string', 'null'] },
-					status: { type: 'string', enum: ['initiated', 'ringing', 'in-progress', 'completed', 'failed', 'no-answer', 'busy'] },
+					status: {
+						type: 'string',
+						enum: [
+							'initiated',
+							'ringing',
+							'in-progress',
+							'completed',
+							'failed',
+							'no-answer',
+							'busy'
+						]
+					},
 					duration: { type: ['integer', 'null'] },
 					twilioCallSid: { type: ['string', 'null'] },
 					campaignId: { type: ['string', 'null'] },
@@ -1670,8 +1880,15 @@ export const openApiSpec = {
 					enabled: { type: 'boolean' },
 					description: { type: ['string', 'null'] },
 					createdAt: { type: 'integer', description: 'Unix ms timestamp' },
-					lastDeliveredAt: { type: ['integer', 'null'], description: 'Unix ms timestamp of last successful delivery' },
-					failureCount: { type: 'integer', description: 'Consecutive delivery failures since last success. Auto-disable at 5 dead deliveries.' }
+					lastDeliveredAt: {
+						type: ['integer', 'null'],
+						description: 'Unix ms timestamp of last successful delivery'
+					},
+					failureCount: {
+						type: 'integer',
+						description:
+							'Consecutive delivery failures since last success. Auto-disable at 5 dead deliveries.'
+					}
 				}
 			},
 			WebhookCreated: {
@@ -1697,15 +1914,36 @@ export const openApiSpec = {
 					id: { type: 'string' },
 					signingSecret: {
 						type: 'string',
-						description: 'New signing secret. The previous secret continues to verify within the rotation window.'
+						description:
+							'New signing secret. The previous secret continues to verify within the rotation window.'
 					}
+				}
+			},
+			WebhookTestDelivery: {
+				type: 'object',
+				required: ['deliveryId', 'event', 'queuedAt'],
+				properties: {
+					deliveryId: {
+						type: 'string',
+						description: 'orgWebhookDeliveries row queued for this targeted test'
+					},
+					event: {
+						type: 'string',
+						enum: ['webhook.test'],
+						description: 'Synthetic targeted diagnostic event; not a normal subscription event'
+					},
+					queuedAt: { type: 'integer', description: 'Unix ms timestamp' }
 				}
 			},
 			CreateWebhookInput: {
 				type: 'object',
 				required: ['url', 'events'],
 				properties: {
-					url: { type: 'string', format: 'uri', description: 'HTTPS endpoint to receive POST deliveries' },
+					url: {
+						type: 'string',
+						format: 'uri',
+						description: 'HTTPS endpoint to receive POST deliveries'
+					},
 					events: {
 						type: 'array',
 						minItems: 1,
@@ -1753,7 +1991,13 @@ export const openApiSpec = {
 				content: {
 					'application/json': {
 						schema: { $ref: '#/components/schemas/ErrorEnvelope' },
-						example: { data: null, error: { code: 'UNAUTHORIZED', message: 'Missing or invalid Authorization header. Use: Bearer <api_key>' } }
+						example: {
+							data: null,
+							error: {
+								code: 'UNAUTHORIZED',
+								message: 'Missing or invalid Authorization header. Use: Bearer <api_key>'
+							}
+						}
 					}
 				}
 			},
@@ -1762,7 +2006,10 @@ export const openApiSpec = {
 				content: {
 					'application/json': {
 						schema: { $ref: '#/components/schemas/ErrorEnvelope' },
-						example: { data: null, error: { code: 'FORBIDDEN', message: "API key does not have the 'write' scope" } }
+						example: {
+							data: null,
+							error: { code: 'FORBIDDEN', message: "API key does not have the 'write' scope" }
+						}
 					}
 				}
 			},
@@ -1780,7 +2027,10 @@ export const openApiSpec = {
 				content: {
 					'application/json': {
 						schema: { $ref: '#/components/schemas/ErrorEnvelope' },
-						example: { data: null, error: { code: 'CONFLICT', message: 'A resource with this identifier already exists' } }
+						example: {
+							data: null,
+							error: { code: 'CONFLICT', message: 'A resource with this identifier already exists' }
+						}
 					}
 				}
 			},
@@ -1789,7 +2039,10 @@ export const openApiSpec = {
 				content: {
 					'application/json': {
 						schema: { $ref: '#/components/schemas/ErrorEnvelope' },
-						example: { data: null, error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } }
+						example: {
+							data: null,
+							error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' }
+						}
 					}
 				}
 			}

@@ -37,8 +37,7 @@ export function compileMergeFields(template: string, ctx: MergeContext): string 
 // the count by verifying residency; no thresholded copy.
 export function renderVerificationBlock(block: VerificationBlock): string {
 	const { totalRecipients, verifiedCount, districtCount } = block;
-	const headline =
-		`${verifiedCount.toLocaleString()} of ${totalRecipients.toLocaleString()} ${totalRecipients === 1 ? 'recipient is' : 'recipients are'} verified${districtCount > 0 ? ` across ${districtCount} ${districtCount === 1 ? 'district' : 'districts'}` : ''}.`;
+	const headline = `${verifiedCount.toLocaleString()} of ${totalRecipients.toLocaleString()} ${totalRecipients === 1 ? 'recipient is' : 'recipients are'} verified${districtCount > 0 ? ` across ${districtCount} ${districtCount === 1 ? 'district' : 'districts'}` : ''}.`;
 	const detail =
 		verifiedCount === totalRecipients && totalRecipients > 0
 			? ''
@@ -108,14 +107,18 @@ export function compileEmail(
                 ${mergedBody}
               </div>
               ${verificationHtml}
-              ${unsubscribeUrl ? `
+              ${
+								unsubscribeUrl
+									? `
               <div style="margin-top:24px;padding-top:16px;border-top:1px solid #27272a;text-align:center;">
                 <p style="margin:0;font-size:11px;color:#52525b;">
                   <a href="${escapeHtml(unsubscribeUrl)}" style="color:#71717a;text-decoration:underline;">Unsubscribe</a>
                   &nbsp;&middot;&nbsp;
                   Sent via <a href="${escapeHtml(platformUrl)}" style="color:#71717a;text-decoration:underline;">${escapeHtml(platformHost)}</a>
                 </p>
-              </div>` : ''}
+              </div>`
+									: ''
+							}
             </td>
           </tr>
         </table>
@@ -129,7 +132,9 @@ export function compileEmail(
 // Tier context string for a supporter, derived from their verification
 // status. Plain status language only; no "weight" / "carries" / "strengthen"
 // register.
-export function buildTierContext(verificationStatus: 'verified' | 'postal-resolved' | 'imported'): string {
+export function buildTierContext(
+	verificationStatus: 'verified' | 'postal-resolved' | 'imported'
+): string {
 	switch (verificationStatus) {
 		case 'verified':
 			return 'Your identity is verified. You appear as a verified contact in this campaign.';
@@ -141,15 +146,14 @@ export function buildTierContext(verificationStatus: 'verified' | 'postal-resolv
 }
 
 // Bulk-send variant of `compileEmail`: wraps the author's body in the email
-// shell + (optional) verification context block + footer, but does NOT
-// process per-recipient merge fields. The bulk send path
-// (`sendBlastFromClient` → Lambda → SES) sends the same bodyHtml to every
-// recipient in a batch, so merge fields would render with empty values
-// regardless. Authors who include `{{...}}` tokens in the body will see them
-// literal in the delivered email — visible signal that bulk mode does not
-// personalize. Pass `verification: null` when filter-scoped verification
-// truth is unavailable; the shell omits the verification block rather than
-// rendering an approximated claim that may diverge from cohort reality.
+// shell + (optional) verification context block + footer, but deliberately
+// leaves per-recipient merge fields unresolved. Dispatch paths own the actual
+// recipient context: the Convex batch path resolves tokens after PII decrypt,
+// and the browser-direct path switches to singleton Lambda sends when
+// personalization is present. Pass `verification: null` when filter-scoped
+// verification truth is unavailable; the shell omits the verification block
+// rather than rendering an approximated claim that may diverge from cohort
+// reality.
 export function compileEmailShell(
 	body: string,
 	verification: VerificationBlock | null,
@@ -192,14 +196,18 @@ export function compileEmailShell(
                 ${body}
               </div>
               ${verificationHtml}
-              ${opts.unsubscribeUrl ? `
+              ${
+								opts.unsubscribeUrl
+									? `
               <div style="margin-top:24px;padding-top:16px;border-top:1px solid #27272a;text-align:center;">
                 <p style="margin:0;font-size:11px;color:#52525b;">
                   <a href="${escapeHtml(opts.unsubscribeUrl)}" style="color:#71717a;text-decoration:underline;">Unsubscribe</a>
                   &nbsp;&middot;&nbsp;
                   Sent via <a href="${escapeHtml(platformUrl)}" style="color:#71717a;text-decoration:underline;">${escapeHtml(platformHost)}</a>
                 </p>
-              </div>` : ''}
+              </div>`
+									: ''
+							}
             </td>
           </tr>
         </table>

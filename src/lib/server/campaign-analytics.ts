@@ -31,7 +31,6 @@ interface DeliveryMetrics {
 	opened: number;
 	clicked: number;
 	bounced: number;
-	complained: number;
 	deliveryRate: number;
 	openRate: number;
 	clickRate: number;
@@ -84,8 +83,15 @@ export async function loadCampaignAnalytics(
 	} catch {
 		// Fallback if query fails (e.g., no deliveries yet)
 		delivery = {
-			sent: 0, delivered: 0, opened: 0, clicked: 0, bounced: 0,
-			complained: 0, deliveryRate: 0, openRate: 0, clickRate: 0, bounceRate: 0
+			sent: 0,
+			delivered: 0,
+			opened: 0,
+			clicked: 0,
+			bounced: 0,
+			deliveryRate: 0,
+			openRate: 0,
+			clickRate: 0,
+			bounceRate: 0
 		};
 	}
 
