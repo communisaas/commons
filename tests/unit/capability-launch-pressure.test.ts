@@ -13552,20 +13552,23 @@ describe('capability launch pressure contract', () => {
 		expect(slugCustomizer).not.toContain('Your shareable link');
 		expect(slugCustomizer).not.toContain('anyone with this link can send your message');
 		expect(slugCustomizer).not.toContain('bg-gradient-to-br');
-		expect(creationSpark).toContain('Author once.');
-		expect(creationSpark).toContain('Confirm together.');
-		expect(creationSpark).toContain('Publish an action page.');
-		expect(creationSpark).toContain('Each reader confirms their route');
-		expect(creationSpark).toContain('before any send or proof is');
-		expect(creationSpark).not.toContain('Write it once. Share the link. Everyone can send it.');
-		expect(coordinationExplainer).toContain('How action pages become records');
-		expect(coordinationExplainer).toContain('One confirmed route is one voice');
-		expect(coordinationExplainer).toContain('Publish the action page.');
-		expect(coordinationExplainer).toContain('Readers open confirmation before any send.');
-		expect(coordinationExplainer).toContain('Verified confirmations and route-owned receipts');
-		expect(coordinationExplainer).not.toContain('How sends are recorded');
-		expect(coordinationExplainer).not.toContain('Share the link.');
-		expect(coordinationExplainer).not.toContain('Anyone who shares your problem can send it too.');
+		// The person-layer landing speaks plain reader language: sending is the
+		// product promise and it genuinely happens, so "send" is not an unarmed
+		// verb here. Route/confirmation/proof grammar belongs on operator
+		// surfaces (Studio, slug customizer, success modal), not the hero.
+		expect(creationSpark).toContain('Write once.');
+		expect(creationSpark).toContain('Send together.');
+		expect(creationSpark).toContain('Write it once. Share the link. Everyone can send it.');
+		expect(creationSpark).not.toContain('confirms their route');
+		expect(coordinationExplainer).toContain('How sends are recorded');
+		expect(coordinationExplainer).toContain('Alone, your send is one voice');
+		expect(coordinationExplainer).toContain('Share the link.');
+		expect(coordinationExplainer).toContain('Anyone who shares your problem can send it too.');
+		expect(coordinationExplainer).toContain('It joins the record.');
+		expect(coordinationExplainer).toContain(
+			'Verified sends from one district arrive together. The volume is the evidence.'
+		);
+		expect(coordinationExplainer).not.toContain('route-owned receipts');
 		expect(templateSuccessModal).toContain('let showShareActions = $derived(isPublished)');
 		expect(templateSuccessModal).toContain('Public action publish status');
 		expect(templateSuccessModal).toContain('Publishing public action');

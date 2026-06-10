@@ -159,13 +159,10 @@
 	<div class="spark-header">
 		<p class="brand-mark">commons</p>
 		<h1 class="headline">
-			Author once.
-			<span class="accent">Confirm together.</span>
+			Write once.
+			<span class="accent">Send together.</span>
 		</h1>
-		<p class="subhead">
-			Publish an action page. Each reader confirms their route before any send or proof is
-			recorded.
-		</p>
+		<p class="subhead">Write it once. Share the link. Everyone can send it.</p>
 	</div>
 
 	<!-- The writing surface - immediately visible -->
@@ -257,14 +254,17 @@
 					Press <kbd>⌘</kbd><kbd>Enter</kbd> to continue
 				</p>
 			{/if}
-
 		</div>
 	</div>
 
 	<!-- Or browse existing -->
 	<div class="spark-divider">
 		<span class="divider-line"></span>
-		<span class="divider-text"><span class="divider-text--mobile">or scroll to join an existing campaign</span><span class="divider-text--desktop">or join an existing campaign</span></span>
+		<span class="divider-text"
+			><span class="divider-text--mobile">or scroll to join an existing campaign</span><span
+				class="divider-text--desktop">or join an existing campaign</span
+			></span
+		>
 		<span class="divider-line"></span>
 	</div>
 
@@ -382,8 +382,14 @@
 	}
 
 	@keyframes draftPulse {
-		0% { opacity: 0; transform: translateX(4px); }
-		100% { opacity: 1; transform: translateX(0); }
+		0% {
+			opacity: 0;
+			transform: translateX(4px);
+		}
+		100% {
+			opacity: 1;
+			transform: translateX(0);
+		}
 	}
 
 	.draft-indicator :global(.draft-icon) {
