@@ -1,46 +1,42 @@
 <!--
-  ReturnSpace — Results: proof and response.
+  ReturnSpace — Results: the org's evidence page.
 
-  This is the org-root results readout, lifted out of `/org/[slug]/+page.svelte` into a
-  MOUNTED space. The org-OS shell holds all four spaces at once and toggles
-  visibility; Results no longer owns a route page render. Its data is loaded ONCE
-  by the layout server load (`+layout.server.ts` → `data.spaces.return`) and
-  threaded in as a prop, so switching INTO this space is a pure state toggle —
-  never a re-run of a SvelteKit load.
+  Answers the questions an organization actually brings here: did it deliver,
+  did anyone respond, what do we show the board. Four headline numbers
+  (verified constituents, districts reached, proof reports delivered,
+  responses logged), the Verification Packet as the proof artifact, and three
+  lists: action records, where actions landed, and response activity.
 
-  Results shows the Verification Packet as the gravitational artifact, then
-  delivery/coordination signal: campaigns with verified counts, receipt/response
-  posture, and the verification funnel + engagement tiers as depth.
+  This is a MOUNTED space: the org-OS shell holds all four spaces at once and
+  toggles visibility. Its data is loaded ONCE by the layout server load
+  (`+layout.server.ts` → `data.spaces.return`) and threaded in as a prop, so
+  switching into this space is a pure state toggle — never a re-run of a
+  SvelteKit load.
 
-  HONESTY RULE: only REAL data renders. The root fields the backend does not
-  carry yet (endorsed templates, followed-rep / watched-bill counts on the root,
-  legislative alerts, email-reach breakdown) are NOT faked as zeros — they are
-  either omitted or marked "not yet armed." A null slice renders a dormant state.
+  HONESTY RULE: only real data renders. A null slice means the results load
+  failed — rendered as a distinct unavailable state, never a fabricated zero.
+  Zero counts render as plain sentences about what is absent, not bare zeros.
 -->
 <script lang="ts">
 	import VerificationPacket from '$lib/components/org/VerificationPacket.svelte';
-	import { FEATURES } from '$lib/config/features';
-	import {
-		buildResultsProofReadiness,
-		getGateEvidence,
-		type ResultsProofRow
-	} from '$lib/data/capability-hypergraph';
 	import { Datum, Ratio } from '$lib/design';
 	import { SPRINGS, TIMING, EASING } from '$lib/design/motion';
-	import WorkspaceCapabilityStrip from './WorkspaceCapabilityStrip.svelte';
+	import {
+		NO_REPORTS_DELIVERED_SENTENCE,
+		NO_RESPONSES_LOGGED_SENTENCE,
+		NO_VERIFIED_ACTIONS_SENTENCE,
+		deriveDistrictReach,
+		deriveResultsHeadline,
+		describeResponseActivity,
+		formatReportDay
+	} from './results-evidence';
 	import type { ReturnSpaceData } from './spaces';
-
-	type ResultsHeaderMetric = {
-		value: number | null;
-		label: string;
-		cite: string;
-	};
 
 	let {
 		data,
 		base
 	}: {
-		/** Results slice from the layout load. Null when the results read failed. */
+		/** Results slice from the layout load. Null when the results load failed. */
 		data: ReturnSpaceData | null;
 		/** `/org/[slug]` — for deep-link CTAs into campaigns/reports. */
 		base: string;
@@ -57,6 +53,11 @@
 		const days = Math.floor(hours / 24);
 		return `${days}d ago`;
 	}
+
+	const headline = $derived(data ? deriveResultsHeadline(data) : null);
+	const campaigns = $derived(data?.campaigns ?? []);
+	const districtReach = $derived(deriveDistrictReach(data?.packet?.geography ?? null));
+	const responseActivity = $derived(data ? describeResponseActivity(data.receipts) : null);
 
 	const funnel = $derived(
 		data?.funnel ?? { imported: 0, postalResolved: 0, identityVerified: 0, districtVerified: 0 }
@@ -81,119 +82,16 @@
 		}
 	]);
 
-	const tiers = $derived(data?.tiers ?? []);
-	const tierTotal = $derived(tiers.reduce((s, t) => s + t.count, 0));
-	const tierMax = $derived(Math.max(...tiers.map((t) => t.count), 1));
-
-	const campaigns = $derived(data?.campaigns ?? []);
-	const activeCampaigns = $derived(data?.stats.activeCampaigns ?? 0);
-	const resultsHeaderMetrics = $derived<ResultsHeaderMetric[]>([
-		{
-			value: data?.packet?.verified ?? null,
-			label: 'packet verified',
-			cite: 'computeVerificationPacketCached top packet'
-		},
-		{
-			value: data?.receipts.loadedCount ?? null,
-			label: 'receipt rows',
-			cite: 'legislation.getOrgReceiptSummary bounded sample'
-		},
-		{
-			value: data?.receipts.responseLoggedCount ?? null,
-			label: 'logged responses',
-			cite: 'legislation.getOrgReceiptSummary responseLoggedCount'
-		},
-		{
-			value: data?.stats.activeCampaigns ?? null,
-			label: 'active records',
-			cite: 'organizations.getDashboardStats activeCampaigns'
-		}
-	]);
+	const actionRecordsHref = $derived(`${base}#action-records`);
 	const packetHref = $derived(
 		data?.topCampaignId
 			? `${base}/campaigns/${data.topCampaignId}/report#proof-preview`
 			: `${base}#results-packet`
 	);
-	const actionRecordsHref = $derived(`${base}#action-records`);
 	const proofDeliveryHref = $derived(
 		data?.topCampaignId
 			? `${base}/campaigns/${data.topCampaignId}/report#proof-delivery`
 			: actionRecordsHref
-	);
-	const packetLabel = $derived(
-		activeCampaigns > 0
-			? `Coordination Integrity · ${activeCampaigns} active action record${activeCampaigns === 1 ? '' : 's'}`
-			: 'Coordination Integrity'
-	);
-	const readerOfficeGate = getGateEvidence('CP-dm-office-profile', ['T8-1b', 'T8-8'], {
-		name: 'Reader office integration',
-		downstream: 4,
-		dependency: 'Office-facing reader surface + notification APIs'
-	});
-	const deliveryResponseGate = getGateEvidence('CP-receipt-anchoring', ['T6-1', 'T6-2', 'T6-9'], {
-		name: 'Receipt anchoring + response detection',
-		downstream: 4,
-		dependency: 'Receipt writer/mainnet anchoring + event-stream response detection'
-	});
-	const coordinationHistoryGate = getGateEvidence('CP-coordination-integrity', ['T10-10'], {
-		name: 'Coordination integrity history',
-		downstream: 1,
-		dependency: 'Longitudinal packet-local coordination metrics'
-	});
-	const resultsProofReadiness = $derived(
-		buildResultsProofReadiness({
-			base,
-			hrefs: {
-				actionRecordsHref,
-				packetHref,
-				resultsPacketHref: `${base}#results-packet`,
-				proofDeliveryHref
-			},
-			results: {
-				loaded: !!data,
-				hasPacket: !!data?.packet,
-				verifiedCount: data?.packet?.verified ?? null,
-				totalCount: data?.packet?.total ?? null,
-				districtCount: data?.packet?.districtCount ?? null,
-				sentEmails: data?.stats.sentEmails ?? null,
-				campaignCount: data?.stats.campaigns ?? null,
-				receiptCount: data?.receipts.loadedCount ?? null,
-				pendingReceiptCount: data?.receipts.pendingCount ?? null,
-				responseLoggedReceiptCount: data?.receipts.responseLoggedCount ?? null,
-				anchorFieldCount: data?.receipts.anchorFieldCount ?? null,
-				receiptSampleLimit: data?.receipts.sampleLimit ?? null,
-				receiptProofWeightTotal: data?.receipts.proofWeightTotal ?? null
-			},
-			features: {
-				ACCOUNTABILITY: FEATURES.ACCOUNTABILITY
-			},
-			gates: {
-				receiptAnchoringGate: deliveryResponseGate,
-				readerOfficeGate,
-				coordinationIntegrityGate: coordinationHistoryGate
-			}
-		})
-	);
-	const resultsProofRows = $derived<ResultsProofRow[]>(resultsProofReadiness.rows);
-	const receiptAnchoringRow = $derived(
-		resultsProofRows.find((row) => row.id === 'receipt-anchoring') ?? null
-	);
-	const proofDeliveryGateSummary = $derived(
-		`Proof delivery is a route handoff. ${receiptAnchoringRow?.boundary ?? resultsProofReadiness.gate}`
-	);
-	const capabilityItems = $derived(
-		resultsProofRows.map((row) => ({
-			label: row.label,
-			state: row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action: row.action,
-			handoff: row.handoff,
-			detail: row.ground,
-			unlock: row.boundary,
-			href: row.href,
-			metric: row.metric
-		}))
 	);
 </script>
 
@@ -202,18 +100,53 @@
 		<div class="return-head-copy">
 			<h1 class="return-title">Results</h1>
 			<p class="return-sub">
-				Proof, delivery, and response signal from the actions your organization sent.
+				What your campaigns delivered, who responded, and the proof behind it.
 			</p>
 		</div>
 		<div class="return-head-instrument">
-			<div class="return-proof-counts" aria-label="Results proof evidence counts">
-				{#each resultsHeaderMetrics as metric (metric.label)}
-					<span class="return-proof-count">
-						<Datum value={metric.value} cite={metric.cite} />
-						<span>{metric.label}</span>
-					</span>
-				{/each}
-			</div>
+			{#if data && headline}
+				<div class="evidence-band" aria-label="Delivery and response evidence">
+					{#if headline.verifiedConstituents > 0}
+						<span class="evidence-cell">
+							<Datum value={headline.verifiedConstituents} animate spring={SPRINGS.METRIC} />
+							<span class="evidence-label">verified constituents</span>
+						</span>
+					{/if}
+					{#if headline.districtsReached > 0}
+						<span class="evidence-cell">
+							<Datum value={headline.districtsReached} />
+							<span class="evidence-label">districts reached</span>
+						</span>
+					{/if}
+					{#if headline.proofReportsDelivered > 0}
+						<span class="evidence-cell">
+							<Datum value={headline.proofReportsDelivered} />
+							<span class="evidence-label">proof reports delivered</span>
+							{#if data.receipts.latestProofDeliveredAt}
+								<span class="evidence-note"
+									>last delivered {formatReportDay(data.receipts.latestProofDeliveredAt)}</span
+								>
+							{/if}
+						</span>
+					{/if}
+					{#if headline.responsesLogged > 0}
+						<span class="evidence-cell">
+							<Datum value={headline.responsesLogged} />
+							<span class="evidence-label">responses logged</span>
+						</span>
+					{/if}
+				</div>
+				{#if headline.verifiedConstituents === 0 || headline.responsesLogged === 0}
+					<div class="evidence-absent-group">
+						{#if headline.verifiedConstituents === 0}
+							<p class="evidence-absent">{NO_VERIFIED_ACTIONS_SENTENCE}</p>
+						{/if}
+						{#if headline.responsesLogged === 0}
+							<p class="evidence-absent">{NO_RESPONSES_LOGGED_SENTENCE}</p>
+						{/if}
+					</div>
+				{/if}
+			{/if}
 			<a class="return-deep" href={actionRecordsHref} data-sveltekit-preload-data="off"
 				>Action records →</a
 			>
@@ -221,32 +154,27 @@
 	</header>
 
 	{#if !data}
-		<!-- Dormant: the results read is unread. Not a fabricated zero. -->
+		<!-- Unavailable, not zero: the results load failed for this page view. -->
 		<p class="return-dormant">
-			This shell did not attach Results proof evidence; packet, delivery, receipt, and response
-			claims remain unclaimed and uncounted in this read.
+			Results didn't load with this page view — delivery and response counts are unavailable right
+			now, not zero. Reload the page to fetch them.
 		</p>
 	{:else}
-		<WorkspaceCapabilityStrip label="Results capability" items={capabilityItems} />
-
-		<!-- PROOF — the gravitational center. The packet is the reason Results exists. -->
+		<!-- PROOF — the centerpiece. The packet is what the org shows its board. -->
 		<section id="results-packet" class="packet-anchor" aria-label="Proof packet">
-			<VerificationPacket packet={data.packet} label={packetLabel}>
+			<VerificationPacket packet={data.packet}>
 				{#snippet actions()}
 					{#if data.packet && data.topCampaignId}
-						<div class="proof-handoff" aria-label="Proof packet handoff contract">
-							<div class="proof-cta">
-								<a href={proofDeliveryHref} class="cta cta--primary">Open proof delivery</a>
-								<a href={packetHref} class="cta cta--ghost">Preview packet</a>
-							</div>
-							<p class="proof-handoff-gate">{proofDeliveryGateSummary}</p>
+						<div class="proof-cta">
+							<a href={proofDeliveryHref} class="cta cta--primary">Open proof delivery</a>
+							<a href={packetHref} class="cta cta--ghost">Preview packet</a>
 						</div>
 					{/if}
 				{/snippet}
 			</VerificationPacket>
 		</section>
 
-		<!-- OPERATIONS — action records + sidebar -->
+		<!-- LISTS — action records + where it landed + response activity -->
 		<div id="action-records" class="operations">
 			<section class="campaigns-section">
 				<div class="section-head">
@@ -256,7 +184,9 @@
 
 				{#if campaigns.length === 0}
 					<div class="empty-state">
-						<p class="empty-text">No action records yet.</p>
+						<p class="empty-text">
+							No action records yet — actions you send appear here with their verified counts.
+						</p>
 						<a href="{base}/campaigns/new" class="empty-action">Create first action</a>
 					</div>
 				{:else}
@@ -304,70 +234,53 @@
 			</section>
 
 			<aside class="sidebar">
-				<!-- Receipt posture — bounded proof-row sample, not a CRM activity feed. -->
-				<div class="receipt-posture" aria-label="Results receipt response posture">
-					<span class="section-label">Receipt response posture</span>
-					<div class="receipt-posture-grid">
-						<div class="receipt-posture-cell">
-							<Datum
-								value={data.receipts.loadedCount}
-								cite="legislation.getOrgReceiptSummary bounded sample"
-							/>
-							<span>receipt rows</span>
+				<!-- Where it landed — top districts from the packet's geographic field. -->
+				<div class="district-reach" aria-label="Where actions landed">
+					<span class="section-label">Where it landed</span>
+					{#if districtReach.length === 0}
+						<p class="absence-note">
+							No district reach yet — districts appear here as constituents act.
+						</p>
+					{:else}
+						<div class="district-rows">
+							{#each districtReach as district (district.label)}
+								<div class="district-row">
+									<span class="district-label">{district.label}</span>
+									<div class="district-bar">
+										<div class="district-fill" style="width: {district.sharePct}%"></div>
+									</div>
+									<span class="district-count"><Datum value={district.count} /></span>
+								</div>
+							{/each}
 						</div>
-						<div class="receipt-posture-cell">
-							<Datum
-								value={data.receipts.responseLoggedCount}
-								cite="legislation.getOrgReceiptSummary responseLoggedCount"
-							/>
-							<span>logged responses</span>
-						</div>
-						<div class="receipt-posture-cell">
-							<Datum
-								value={data.receipts.pendingCount}
-								cite="legislation.getOrgReceiptSummary pendingCount"
-							/>
-							<span>pending rows</span>
-						</div>
-						<div class="receipt-posture-cell">
-							<Datum
-								value={data.receipts.anchorFieldCount}
-								cite="legislation.getOrgReceiptSummary anchorFieldCount"
-							/>
-							<span>anchor fields</span>
-						</div>
-					</div>
-					<p class="receipt-posture-note">
-						Bounded sample of the latest <Datum
-							value={data.receipts.sampleLimit}
-							cite="legislation.getOrgReceiptSummary sampleLimit"
-						/> receipt rows. {receiptAnchoringRow?.boundary ?? resultsProofReadiness.gate}
-						{#if data.receipts.latestProofDeliveredAt}
-							<span class="receipt-posture-latest">
-								Latest proof delivery: {relativeTime(data.receipts.latestProofDeliveredAt)}.
-							</span>
-						{/if}
-					</p>
+						<p class="district-note">
+							District identities are privacy-protected — the proof packet carries the verifiable
+							spread.
+						</p>
+					{/if}
 				</div>
 
-				<!-- Legislative response — latent. Marked, never faked with a zero. -->
-				<div class="latent">
-					<span class="section-label">Legislative response</span>
-					<p class="latent-note">
-						Not yet armed — vote-and-reply tracking surfaces here once decision-makers respond to
-						delivered proof.
-					</p>
+				<!-- Response activity — receipt evidence as sentences, not counters. -->
+				<div class="response-activity" aria-label="Response activity">
+					<span class="section-label">Response activity</span>
+					{#if responseActivity === null}
+						<p class="absence-note">{NO_REPORTS_DELIVERED_SENTENCE}</p>
+					{:else}
+						<p class="response-sentence">{responseActivity}</p>
+						{#if data.topCampaignId}
+							<a href={proofDeliveryHref} class="response-link">Open the latest report →</a>
+						{/if}
+					{/if}
 				</div>
 			</aside>
 		</div>
 
-		<!-- DEPTH — verification funnel + engagement tiers, on inquiry -->
+		<!-- DEPTH — supporter verification funnel, on inquiry -->
 		<div class="depth">
 			<details class="depth-section">
-				<summary class="depth-summary">Verification pipeline &amp; engagement tiers</summary>
+				<summary class="depth-summary">Verification funnel</summary>
 				<div class="depth-content">
 					<div class="depth-block">
-						<span class="section-label">Verification Funnel</span>
 						{#if funnel.imported === 0}
 							<p class="empty-hint">No people yet. Import people to see verification progress.</p>
 						{:else}
@@ -383,35 +296,6 @@
 											></div>
 										</div>
 										<span class="funnel-count"><Datum value={step.count} /></span>
-									</div>
-								{/each}
-							</div>
-						{/if}
-					</div>
-
-					<div class="depth-block">
-						<span class="section-label">Engagement Tier Distribution</span>
-						{#if tierTotal === 0}
-							<p class="empty-hint">
-								No action records yet. Tier distribution appears as people take action.
-							</p>
-						{:else}
-							<div class="tiers">
-								{#each [...tiers].reverse() as tier (tier.tier)}
-									<div class="tier-row">
-										<span class="tier-label"
-											>{tier.label} <span class="tier-num">T{tier.tier}</span></span
-										>
-										<div class="tier-bar">
-											<div
-												class="tier-fill"
-												data-tier={tier.tier}
-												style="width: {tier.count > 0
-													? Math.max((tier.count / tierMax) * 100, 2)
-													: 0}%"
-											></div>
-										</div>
-										<span class="tier-count"><Datum value={tier.count} /></span>
 									</div>
 								{/each}
 							</div>
@@ -470,31 +354,66 @@
 		}
 	}
 
-	.return-proof-counts {
+	.evidence-band {
 		display: flex;
-		max-width: 34rem;
+		max-width: 36rem;
 		flex-wrap: wrap;
 		justify-content: flex-start;
-		gap: 0.5rem 0.875rem;
+		gap: 0.625rem 1.25rem;
 	}
 
 	@media (min-width: 860px) {
-		.return-proof-counts {
+		.evidence-band {
 			justify-content: flex-end;
 		}
 	}
 
-	.return-proof-count {
+	.evidence-cell {
 		display: inline-flex;
-		align-items: baseline;
-		gap: 0.25rem;
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		flex-direction: column;
+		gap: 0.125rem;
+	}
+
+	.evidence-cell :global(.datum) {
+		font-size: 1.25rem;
+		font-weight: 700;
+		color: var(--text-primary, oklch(0.25 0.01 60));
+		line-height: 1;
+	}
+
+	.evidence-label {
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 		font-size: 0.6875rem;
-		font-variant-numeric: tabular-nums;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
 		color: var(--text-secondary, oklch(0.42 0.015 60));
 		white-space: nowrap;
+	}
+
+	.evidence-note {
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+		font-size: 0.625rem;
+		color: var(--text-tertiary, #6b7280);
+		white-space: nowrap;
+	}
+
+	.evidence-absent-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		max-width: 26rem;
+	}
+
+	.evidence-absent {
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+		font-size: 0.75rem;
+		line-height: 1.5;
+		color: var(--text-tertiary, #6b7280);
+		margin: 0;
+	}
+
+	@media (min-width: 860px) {
+		.evidence-absent {
+			text-align: right;
+		}
 	}
 
 	.return-title {
@@ -599,17 +518,20 @@
 		margin: 0;
 	}
 
-	/* ─── Proof CTA ─── */
-	.proof-handoff {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-		padding-top: 0.75rem;
+	.absence-note {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		line-height: 1.5;
+		color: oklch(0.6 0.01 250);
+		margin: 0;
 	}
+
+	/* ─── Proof CTA ─── */
 	.proof-cta {
 		display: flex;
 		gap: 0.75rem;
 		flex-wrap: wrap;
+		padding-top: 0.75rem;
 	}
 	.cta {
 		display: inline-flex;
@@ -644,14 +566,6 @@
 	.cta--ghost:hover {
 		border-color: oklch(0.7 0.06 180);
 		color: oklch(0.32 0.08 180);
-	}
-	.proof-handoff-gate {
-		margin: 0;
-		max-width: 44rem;
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.75rem;
-		line-height: 1.45;
-		color: var(--text-tertiary, oklch(0.55 0.01 250));
 	}
 
 	/* ─── Operations grid ─── */
@@ -753,63 +667,81 @@
 		color: oklch(0.45 0.12 180);
 	}
 
-	/* ─── Receipt posture ─── */
-	.receipt-posture {
+	/* ─── Where it landed ─── */
+	.district-reach {
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
 	}
-	.receipt-posture-grid {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 0.5rem;
-	}
-	.receipt-posture-cell {
+	.district-rows {
 		display: flex;
 		flex-direction: column;
-		gap: 0.125rem;
-		min-height: 4rem;
-		justify-content: center;
-		border: 1px solid oklch(0.86 0.01 70 / 0.8);
-		border-radius: 6px;
-		padding: 0.625rem;
-		background: oklch(0.96 0.006 70 / 0.72);
+		gap: 0.5rem;
 	}
-	.receipt-posture-cell :global(.datum) {
-		font-size: 1rem;
-		color: oklch(0.24 0.025 250);
+	.district-row {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
 	}
-	.receipt-posture-cell span {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.6875rem;
-		line-height: 1.2;
-		color: oklch(0.52 0.012 250);
-	}
-	.receipt-posture-note {
-		margin: 0;
+	.district-label {
+		width: 6.5rem;
+		flex-shrink: 0;
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.75rem;
-		line-height: 1.45;
-		color: oklch(0.5 0.012 250);
+		color: oklch(0.55 0.01 250);
+		text-align: right;
 	}
-	.receipt-posture-latest {
-		display: block;
-		margin-top: 0.35rem;
+	.district-bar {
+		flex: 1;
+		height: 0.875rem;
+		border-radius: 2px;
+		background: oklch(0.955 0.003 60);
+		overflow: hidden;
+	}
+	.district-fill {
+		height: 100%;
+		border-radius: 2px;
+		background: oklch(0.55 0.11 180 / 0.75);
+		transition: width 700ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+	.district-count {
+		width: 2.5rem;
+		text-align: right;
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: oklch(0.38 0.015 250);
+	}
+	.district-note {
+		margin: 0;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.6875rem;
+		line-height: 1.45;
+		color: oklch(0.58 0.012 250);
 	}
 
-	/* ─── Latent ─── */
-	.latent {
+	/* ─── Response activity ─── */
+	.response-activity {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: 0.75rem;
 	}
-	.latent-note {
+	.response-sentence {
+		margin: 0;
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.8125rem;
 		line-height: 1.5;
-		color: oklch(0.6 0.01 250);
-		font-style: italic;
-		margin: 0;
+		color: oklch(0.42 0.015 250);
+	}
+	.response-link {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.75rem;
+		color: var(--coord-route-solid, #3bc4b8);
+		text-decoration: none;
+	}
+	.response-link:hover,
+	.response-link:focus-visible {
+		text-decoration: underline;
+		outline: none;
 	}
 
 	/* ─── Depth ─── */
@@ -898,63 +830,6 @@
 		width: 3rem;
 		text-align: right;
 		font-size: 0.8125rem;
-		font-weight: 600;
-		color: oklch(0.38 0.015 250);
-	}
-
-	/* ─── Tiers ─── */
-	.tiers {
-		display: flex;
-		flex-direction: column;
-		gap: 0.375rem;
-	}
-	.tier-row {
-		display: flex;
-		align-items: center;
-		gap: 0.625rem;
-	}
-	.tier-label {
-		width: 5.5rem;
-		flex-shrink: 0;
-		font-family: 'JetBrains Mono', monospace;
-		font-size: 0.625rem;
-		color: oklch(0.55 0.01 250);
-		text-align: right;
-	}
-	.tier-num {
-		color: oklch(0.72 0.01 250);
-	}
-	.tier-bar {
-		flex: 1;
-		height: 0.875rem;
-		border-radius: 2px;
-		background: oklch(0.955 0.003 60);
-		overflow: hidden;
-	}
-	.tier-fill {
-		height: 100%;
-		border-radius: 2px;
-		transition: width 700ms cubic-bezier(0.4, 0, 0.2, 1);
-	}
-	.tier-fill[data-tier='0'] {
-		background: oklch(0.78 0.01 250);
-	}
-	.tier-fill[data-tier='1'] {
-		background: oklch(0.62 0.08 180 / 0.55);
-	}
-	.tier-fill[data-tier='2'] {
-		background: oklch(0.58 0.1 180 / 0.7);
-	}
-	.tier-fill[data-tier='3'] {
-		background: oklch(0.52 0.12 165 / 0.8);
-	}
-	.tier-fill[data-tier='4'] {
-		background: oklch(0.52 0.15 165);
-	}
-	.tier-count {
-		width: 2.5rem;
-		text-align: right;
-		font-size: 0.75rem;
 		font-weight: 600;
 		color: oklch(0.38 0.015 250);
 	}
