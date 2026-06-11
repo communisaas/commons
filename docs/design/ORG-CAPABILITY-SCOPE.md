@@ -601,8 +601,8 @@ Delivery metrics (gated by `ENGAGEMENT_METRICS=false`), verification timeline, g
 **Export — CSV / PDF / API** 🟡
 CSV import exists. **No supporter or analytics CSV export.** PDF: campaign proof report at `/report` (HTML, email-sendable). v1 API exposes usage endpoint.
 
-**First-run flow** ✅ (6-step, not 5)
-OnboardingChecklist: description, issue domains, supporters, verification power (postal resolved), campaign, sent email. Shown when `onboardingComplete === false`. Inline forms. Optimistic UI. `onboardingComplete = hasSupporters && hasCampaigns && hasSentEmail`.
+**First-run flow** 🔴
+No first-run checklist surface. A 6-step OnboardingChecklist component (description, issue domains, supporters, verification power, campaign, sent email) existed but was orphaned — zero importers — and has been deleted along with its IssueDomainOnboarding child; the `/api/org/[slug]/issue-domains` endpoints remain live for other consumers. A first-run flow, if wanted, is a fresh build.
 
 **Demo data / sandbox** 🔴
 Acquisition pages say "No demo required." No seed data for new orgs. `convex/seed.ts` is dev-only.
