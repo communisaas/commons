@@ -424,8 +424,8 @@
 	</nav>
 
 	<!-- Status bar -->
-	<div class="flex items-center justify-between">
-		<div class="flex items-center gap-3">
+	<div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+		<div class="flex flex-wrap items-center gap-3">
 			<span
 				class="inline-flex items-center rounded-md border px-2.5 py-1 font-mono text-xs {statusBadgeClass(
 					data.campaign.status
@@ -446,7 +446,7 @@
 		</div>
 
 		{#if canEdit && transitions.length > 0}
-			<div class="flex items-center gap-2">
+			<div class="flex flex-wrap items-center gap-2">
 				{#each transitions as t}
 					<form method="POST" action="?/updateStatus" use:enhance>
 						<input type="hidden" name="status" value={t.target} />
@@ -785,7 +785,7 @@
 				<div class="border-surface-border space-y-3 border-t px-6 py-4">
 					<p class="text-text-tertiary text-xs">
 						Each person who takes action through this embed strengthens your proof packet.
-						{#if packet}
+						{#if packet && packet.verified > 0}
 							<span class="font-mono text-teal-400 tabular-nums">{packet.verified}</span> verified and
 							counting.
 						{/if}

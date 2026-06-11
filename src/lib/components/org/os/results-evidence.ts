@@ -23,24 +23,31 @@ export type ResultsHeadline = {
 	districtsReached: number;
 	/** Proof reports delivered to decision-makers (bounded recent sample). */
 	proofReportsDelivered: number;
+	/** True when the delivered-report count filled its recent-sample bound. */
+	proofReportsAtSampleCap: boolean;
 	/** Delivered reports with a decision-maker response on record. */
 	responsesLogged: number;
 };
 
 /**
- * The four headline numbers. `packet.verified` is the canonical verified
- * count; when the packet has not been computed, the per-campaign verified
- * totals stand in so the org never sees a fabricated zero with real
- * campaigns underneath it.
+ * The four headline numbers. The packet covers a single campaign (the org's
+ * top one), so its `verified` count cannot speak for the whole org: the
+ * org-wide number is the sum of every campaign's verified actions, and the
+ * packet count stands in only when it is larger or no campaign rows loaded.
+ * A top campaign with zero actions must never mask verified actions on its
+ * siblings.
  */
 export function deriveResultsHeadline(data: ReturnSpaceData): ResultsHeadline {
-	const verifiedConstituents =
-		data.packet?.verified ??
-		data.campaigns.reduce((sum, campaign) => sum + campaign.verifiedActions, 0);
+	const campaignVerifiedSum = data.campaigns.reduce(
+		(sum, campaign) => sum + campaign.verifiedActions,
+		0
+	);
 	return {
-		verifiedConstituents,
+		verifiedConstituents: Math.max(campaignVerifiedSum, data.packet?.verified ?? 0),
 		districtsReached: data.packet?.districtCount ?? 0,
 		proofReportsDelivered: data.receipts.loadedCount,
+		proofReportsAtSampleCap:
+			data.receipts.sampleLimit > 0 && data.receipts.loadedCount >= data.receipts.sampleLimit,
 		responsesLogged: data.receipts.responseLoggedCount
 	};
 }

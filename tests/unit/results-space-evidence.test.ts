@@ -9,6 +9,7 @@ import {
 	describeResponseActivity
 } from '$lib/components/org/os/results-evidence';
 import type {
+	ReturnSpaceCampaign,
 	ReturnSpaceData,
 	ReturnSpaceReceiptSummary
 } from '$lib/components/org/os/spaces';
@@ -59,6 +60,19 @@ function makeReceipts(
 	};
 }
 
+function makeCampaign(overrides: Partial<ReturnSpaceCampaign> = {}): ReturnSpaceCampaign {
+	return {
+		id: 'c1',
+		title: 'One',
+		type: 'advocacy',
+		status: 'active',
+		totalActions: 40,
+		verifiedActions: 25,
+		updatedAt: '2026-06-01T00:00:00.000Z',
+		...overrides
+	};
+}
+
 function makeReturnSpaceData(overrides: Partial<ReturnSpaceData> = {}): ReturnSpaceData {
 	return {
 		funnel: { imported: 0, postalResolved: 0, identityVerified: 0, districtVerified: 0 },
@@ -80,6 +94,7 @@ describe('results headline numbers', () => {
 			verifiedConstituents: 120,
 			districtsReached: 14,
 			proofReportsDelivered: 12,
+			proofReportsAtSampleCap: false,
 			responsesLogged: 3
 		});
 	});
@@ -89,29 +104,65 @@ describe('results headline numbers', () => {
 			makeReturnSpaceData({
 				packet: null,
 				campaigns: [
-					{
-						id: 'c1',
-						title: 'One',
-						type: 'advocacy',
-						status: 'active',
-						totalActions: 40,
-						verifiedActions: 25,
-						updatedAt: '2026-06-01T00:00:00.000Z'
-					},
-					{
-						id: 'c2',
-						title: 'Two',
-						type: 'advocacy',
-						status: 'active',
-						totalActions: 20,
-						verifiedActions: 11,
-						updatedAt: '2026-06-01T00:00:00.000Z'
-					}
+					makeCampaign({ id: 'c1', totalActions: 40, verifiedActions: 25 }),
+					makeCampaign({ id: 'c2', title: 'Two', totalActions: 20, verifiedActions: 11 })
 				]
 			})
 		);
 		expect(headline.verifiedConstituents).toBe(36);
 		expect(headline.districtsReached).toBe(0);
+	});
+
+	it("never lets a zero-action top campaign's packet mask verified siblings", () => {
+		// The packet is computed for one campaign only. When that campaign has
+		// no actions, packet.verified = 0 — but the org-wide headline must still
+		// carry every sibling's verified actions.
+		const headline = deriveResultsHeadline(
+			makeReturnSpaceData({
+				topCampaignId: 'top',
+				packet: makePacket({ verified: 0, total: 0, districtCount: 0 }),
+				campaigns: [
+					makeCampaign({
+						id: 'top',
+						title: 'New Push',
+						status: 'active',
+						totalActions: 0,
+						verifiedActions: 0
+					}),
+					makeCampaign({
+						id: 'sibling',
+						title: 'Clean Energy Push',
+						status: 'complete',
+						totalActions: 8,
+						verifiedActions: 5
+					})
+				]
+			})
+		);
+		expect(headline.verifiedConstituents).toBe(5);
+	});
+
+	it('uses the packet count only when it exceeds the campaign sum', () => {
+		const headline = deriveResultsHeadline(
+			makeReturnSpaceData({
+				packet: makePacket({ verified: 120 }),
+				campaigns: [makeCampaign({ verifiedActions: 25 })]
+			})
+		);
+		expect(headline.verifiedConstituents).toBe(120);
+	});
+
+	it('flags the delivered-report count when it fills the recent-sample bound', () => {
+		expect(
+			deriveResultsHeadline(
+				makeReturnSpaceData({ receipts: makeReceipts({ loadedCount: 200, sampleLimit: 200 }) })
+			).proofReportsAtSampleCap
+		).toBe(true);
+		expect(
+			deriveResultsHeadline(
+				makeReturnSpaceData({ receipts: makeReceipts({ loadedCount: 12, sampleLimit: 200 }) })
+			).proofReportsAtSampleCap
+		).toBe(false);
 	});
 });
 
@@ -175,6 +226,29 @@ describe('Results surface contract', () => {
 		expect(source).toContain("'$lib/components/org/VerificationPacket.svelte'");
 		expect(source).toContain('id="results-packet"');
 		expect(source).toContain('id="action-records"');
+	});
+
+	it('names the campaign the proof packet covers', () => {
+		expect(source).toContain('Proof packet for {packetCampaignTitle}');
+	});
+
+	it('qualifies the delivered-report headline when the recent sample is full', () => {
+		expect(source).toContain("proofReportsAtSampleCap ? ' (recent)' : ''");
+	});
+
+	it('phrases zero-action rows as absence, not zero counters', () => {
+		expect(source).toContain('No actions yet');
+	});
+
+	it('keeps the operations and depth grids from widening past the viewport', () => {
+		// Every track is minmax(0, …) so no child's min-content can widen a
+		// column beyond the container at narrow viewports.
+		const declarations = source.match(/grid-template-columns:[^;]+/g) ?? [];
+		expect(declarations.length).toBeGreaterThan(0);
+		for (const declaration of declarations) {
+			const value = declaration.slice('grid-template-columns:'.length);
+			expect(value.replace(/minmax\(0,\s*[^)]+\)/g, '').trim()).toBe('');
+		}
 	});
 
 	// Excised vocabulary is assembled from fragments so it never appears

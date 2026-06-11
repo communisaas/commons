@@ -105,6 +105,13 @@ describe('coordination audit panel', () => {
 	it('shares the burst threshold with the assessment sentence', () => {
 		expect(source).toContain('BURST_VELOCITY_REVIEW_THRESHOLD');
 	});
+
+	it('states the real score threshold — the computations go live at two verified actions', () => {
+		// computeALD / computeTemporalField / computeCAI all return null below
+		// two actions and compute from two on (src/lib/server/verification-packet.ts).
+		expect(source).toContain('two or more verified actions');
+		expect(source).not.toMatch(/\b10\+/);
+	});
 });
 
 describe('coalition report coordination section', () => {

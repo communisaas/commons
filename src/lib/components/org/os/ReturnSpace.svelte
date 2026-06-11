@@ -56,6 +56,12 @@
 
 	const headline = $derived(data ? deriveResultsHeadline(data) : null);
 	const campaigns = $derived(data?.campaigns ?? []);
+	/** The packet is computed for one campaign — name it so the proof artifact carries its scope. */
+	const packetCampaignTitle = $derived(
+		data?.packet && data.topCampaignId
+			? (data.campaigns.find((campaign) => campaign.id === data.topCampaignId)?.title ?? null)
+			: null
+	);
 	const districtReach = $derived(deriveDistrictReach(data?.packet?.geography ?? null));
 	const responseActivity = $derived(data ? describeResponseActivity(data.receipts) : null);
 
@@ -121,7 +127,9 @@
 					{#if headline.proofReportsDelivered > 0}
 						<span class="evidence-cell">
 							<Datum value={headline.proofReportsDelivered} />
-							<span class="evidence-label">proof reports delivered</span>
+							<span class="evidence-label"
+								>proof reports delivered{headline.proofReportsAtSampleCap ? ' (recent)' : ''}</span
+							>
 							{#if data.receipts.latestProofDeliveredAt}
 								<span class="evidence-note"
 									>last delivered {formatReportDay(data.receipts.latestProofDeliveredAt)}</span
@@ -162,6 +170,9 @@
 	{:else}
 		<!-- PROOF — the centerpiece. The packet is what the org shows its board. -->
 		<section id="results-packet" class="packet-anchor" aria-label="Proof packet">
+			{#if packetCampaignTitle}
+				<p class="packet-scope">Proof packet for {packetCampaignTitle} — one campaign's evidence.</p>
+			{/if}
 			<VerificationPacket packet={data.packet}>
 				{#snippet actions()}
 					{#if data.packet && data.topCampaignId}
@@ -193,12 +204,14 @@
 					<div class="campaigns">
 						{#each campaigns as campaign (campaign.id)}
 							<a href="{base}/campaigns/{campaign.id}" class="campaign">
-								<div class="campaign-count">
-									<span class="count-value">
-										<Datum value={campaign.verifiedActions} animate spring={SPRINGS.METRIC} />
-									</span>
-									<span class="count-unit">verified</span>
-								</div>
+								{#if campaign.totalActions > 0}
+									<div class="campaign-count">
+										<span class="count-value">
+											<Datum value={campaign.verifiedActions} animate spring={SPRINGS.METRIC} />
+										</span>
+										<span class="count-unit">verified</span>
+									</div>
+								{/if}
 								<div class="campaign-body">
 									<span class="campaign-title">{campaign.title}</span>
 									{#if campaign.totalActions > 0}
@@ -217,12 +230,17 @@
 											]}
 											height={3}
 										/>
+										<span class="campaign-meta">
+											<Datum value={campaign.totalActions} class="meta-num" /> total &middot; {relativeTime(
+												campaign.updatedAt
+											)}
+										</span>
+									{:else}
+										<!-- Absence in plain words, never a bare zero counter. -->
+										<span class="campaign-meta">
+											No actions yet &middot; updated {relativeTime(campaign.updatedAt)}
+										</span>
 									{/if}
-									<span class="campaign-meta">
-										<Datum value={campaign.totalActions} class="meta-num" /> total &middot; {relativeTime(
-											campaign.updatedAt
-										)}
-									</span>
 								</div>
 								<span class="campaign-status" data-status={campaign.status.toLowerCase()}
 									>{campaign.status}</span
@@ -461,6 +479,14 @@
 		scroll-margin-top: 6rem;
 	}
 
+	.packet-scope {
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+		font-size: 0.75rem;
+		line-height: 1.5;
+		color: var(--text-tertiary, #6b7280);
+		margin: 0 0 0.625rem;
+	}
+
 	/* ─── Shared ─── */
 	.section-label {
 		font-family: 'JetBrains Mono', monospace;
@@ -475,6 +501,9 @@
 		display: flex;
 		align-items: baseline;
 		justify-content: space-between;
+		flex-wrap: wrap;
+		gap: 0.25rem 1rem;
+		min-width: 0;
 		margin-bottom: 1.25rem;
 	}
 
@@ -569,22 +598,28 @@
 	}
 
 	/* ─── Operations grid ─── */
+	/* minmax(0, …) tracks + min-width: 0 children: nothing inside may widen a
+	   track past the viewport — at 375px every row wraps instead of clipping. */
 	.operations {
 		display: grid;
-		grid-template-columns: 1fr;
+		grid-template-columns: minmax(0, 1fr);
 		gap: 2.5rem;
 	}
 	@media (min-width: 1024px) {
 		.operations {
-			grid-template-columns: 3fr 2fr;
+			grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
 			gap: 3rem;
 			align-items: start;
 		}
+	}
+	.campaigns-section {
+		min-width: 0;
 	}
 	.sidebar {
 		display: flex;
 		flex-direction: column;
 		gap: 2rem;
+		min-width: 0;
 	}
 
 	/* ─── Campaigns ─── */
@@ -747,17 +782,18 @@
 	/* ─── Depth ─── */
 	.depth {
 		display: grid;
-		grid-template-columns: 1fr;
+		grid-template-columns: minmax(0, 1fr);
 		gap: 0;
 	}
 	@media (min-width: 1024px) {
 		.depth {
-			grid-template-columns: 1fr 1fr;
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 			gap: 2rem;
 		}
 	}
 	.depth-section {
 		border-top: 1px solid oklch(0.91 0.006 60);
+		min-width: 0;
 	}
 	.depth-summary {
 		cursor: pointer;

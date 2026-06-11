@@ -117,7 +117,7 @@
 
 	<div class="mt-3 space-y-4">
 		{#if allNull && !absentGeographyWarning}
-			<p class="text-text-quaternary text-sm">Integrity scores appear after 10+ verified actions.</p>
+			<p class="text-text-quaternary text-sm">Integrity scores appear once a campaign has two or more verified actions.</p>
 		{:else}
 			{#if absentGeographyWarning || identicalContentWarning}
 				<div class="space-y-2">
