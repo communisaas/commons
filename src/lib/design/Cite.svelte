@@ -68,6 +68,33 @@
 		}
 	});
 
+	// ─── Whisper overlay positioning ─────────────────────────
+	// The provenance overlay must escape ancestor clipping contexts
+	// (overflow-x scroll wrappers around tables, overflow-x: clip
+	// frames). On reveal we lift it to position: fixed, computed from
+	// the anchor's viewport rect — clamped away from the right edge,
+	// flipped above the anchor when there is no room below. Before
+	// hydration the absolute CSS fallback applies unchanged.
+	let whisperEl = $state<HTMLElement>();
+	let whisperOverlayEl = $state<HTMLElement>();
+	let whisperStyle = $state('');
+
+	function placeWhisper() {
+		if (!whisperEl || !whisperOverlayEl) return;
+		const margin = 16; // breathing room from the viewport edges
+		const gap = 4; // matches the at-rest offset below the anchor
+		const anchor = whisperEl.getBoundingClientRect();
+		// The hidden overlay is rendered (opacity: 0), so its intrinsic
+		// size is measurable before the reveal.
+		const { offsetWidth: width, offsetHeight: height } = whisperOverlayEl;
+		const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - margin - width));
+		let top = anchor.bottom + gap;
+		if (top + height > window.innerHeight - margin && anchor.top - gap - height >= margin) {
+			top = anchor.top - gap - height;
+		}
+		whisperStyle = `position: fixed; top: ${top}px; left: ${left}px;`;
+	}
+
 	// ─── Mark popover state ──────────────────────────────────
 	let markOpen = $state(false);
 	let markTimer: ReturnType<typeof setTimeout> | null = null;
@@ -112,14 +139,22 @@
 	  the reveal never moves surrounding content.
 	-->
 	<span
+		bind:this={whisperEl}
 		class="cite-whisper group relative inline-flex flex-col items-start {className}"
 		aria-describedby={id}
 		role="group"
+		onmouseenter={placeWhisper}
+		onfocusin={placeWhisper}
 	>
 		<span class="cite-content">
 			{@render children()}
 		</span>
-		<span class="cite-provenance" aria-hidden="true">
+		<span
+			bind:this={whisperOverlayEl}
+			class="cite-provenance"
+			aria-hidden="true"
+			style={whisperStyle || undefined}
+		>
 			{#if provenance}
 				{@render provenance()}
 			{:else if cite}
@@ -209,7 +244,10 @@
 	/* Out of flow at rest: the citation reserves no height, and the
 	   reveal overlays surrounding content instead of pushing it.
 	   Same surface treatment as the mark popover so the text stays
-	   legible over whatever sits beneath the anchor. */
+	   legible over whatever sits beneath the anchor.
+	   Absolute is the pre-hydration fallback; on reveal an inline
+	   position: fixed (see placeWhisper) escapes ancestor overflow
+	   clipping and viewport edges. */
 	.cite-provenance {
 		position: absolute;
 		top: calc(100% + 4px);

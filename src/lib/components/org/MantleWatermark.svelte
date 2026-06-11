@@ -113,12 +113,4 @@
 		line-height: 0;
 		margin-left: auto;
 	}
-
-	/* The Cite whisper inherits a light-ground tertiary gray (oklch ~0.5) that is
-	   illegible on the near-black sidebar. Scope a dark-safe muted-cream override to
-	   THIS watermark only — the shared Cite primitive keeps its light-ground color
-	   everywhere else. Uses the same token the sidebar uses for subordinate text. */
-	.watermark :global(.cite-provenance) {
-		color: var(--org-sidebar-text-muted, oklch(0.6 0.01 55));
-	}
 </style>
