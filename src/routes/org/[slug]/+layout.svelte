@@ -1213,11 +1213,6 @@
 	const studioScopeCommandSignal = $derived(studioScopeReadiness.signal);
 	const studioScopeCommandGate = $derived(studioScopeReadiness.gate);
 	const studioScopeBoundaryCount = $derived(studioScopeReadiness.boundaryCount);
-	const mapCommandState = $derived<CapabilityCommandState>(
-		heldSendModeCount > 0 || unresolvedGateCount > 0 || unresolvedHonestyCount > 0
-			? 'partial'
-			: 'live'
-	);
 	const stateLedgerCommandState = $derived<CapabilityCommandState>(
 		heldSendModeCount > 0 || unresolvedGateCount > 0 || unresolvedBasisCount > 0
 			? 'partial'
@@ -1643,18 +1638,6 @@
 	]);
 
 	const capabilityDestinations = $derived<SpotlightDestination[]>([
-		{
-			id: 'capability-map',
-			label: 'Capability map',
-			sublabel: 'Whole operating field',
-			group: 'Capability',
-			kind: 'route' as const,
-			href: `${base}/canvas`,
-			state: mapCommandState,
-			signal: `${loadedSliceCount}/${totalOrgSliceCount} slices · ${launchPressureCount} pressure · ${unresolvedGateCount} gates`,
-			action: spotlightActionForState(mapCommandState, 'open capability map'),
-			gate: 'OrgSpacesData + configured gates + implementation hypergraphs'
-		},
 		{
 			id: 'capability-cluster-coverage',
 			label: 'Capability coverage',

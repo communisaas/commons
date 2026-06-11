@@ -152,7 +152,6 @@
 		content: 'Author'
 	};
 
-	const capabilityMapHref = $derived(`${base}/canvas`);
 	const capabilityLoopHref = $derived(`${base}/studio#capability-loop`);
 	const sendReadinessHref = $derived(`${base}/studio#capability-send`);
 	const gateRegisterHref = $derived(`${base}/studio#capability-gates`);
@@ -376,14 +375,6 @@
 		<div class="mantle-posture" aria-label="Capability posture across visible Commons surfaces">
 			<div class="mantle-posture-head">
 				<span class="mantle-posture-title">Capability posture</span>
-				<a
-					class="mantle-posture-map"
-					href={capabilityMapHref}
-					aria-label="Open capability map"
-					data-sveltekit-preload-data="off"
-				>
-					Capability map
-				</a>
 			</div>
 			<div class="mantle-posture-ratio" aria-label="Visible capability state mix">
 				<Ratio segments={postureSegments} height={8} />
@@ -898,7 +889,6 @@
 	}
 
 	.mantle-posture-title,
-	.mantle-posture-map,
 	.mantle-posture-action {
 		font-family: 'JetBrains Mono', ui-monospace, monospace;
 		font-size: 0.625rem;
@@ -909,18 +899,6 @@
 
 	.mantle-posture-title {
 		color: var(--org-sidebar-text-muted);
-	}
-
-	.mantle-posture-map {
-		color: var(--org-sidebar-text-dim);
-		text-decoration: none;
-		transition: color var(--timing-normal) var(--easing);
-	}
-
-	.mantle-posture-map:hover,
-	.mantle-posture-map:focus-visible {
-		color: var(--coord-route-solid);
-		outline: none;
 	}
 
 	.mantle-posture-ratio {
