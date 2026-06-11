@@ -64,6 +64,14 @@ export type OrgLimitNotice = {
 	operatorDetail: OrgLimitOperatorDetail | null;
 };
 
+/**
+ * Where direct platform sync stands, for import-adjacent surfaces with no
+ * single platform in context: the Action Network sync path is live; every
+ * other recognized platform export comes in by CSV.
+ */
+export const PLATFORM_SYNC_PATH_SENTENCE =
+	'Action Network syncs directly — other platforms import by CSV for now.';
+
 export function textDispatchLimitSentence(batchSize: number = MAX_DECRYPTED_SMS_DISPATCH): string {
 	return `Texts send in batches of ${batchSize} for now.`;
 }

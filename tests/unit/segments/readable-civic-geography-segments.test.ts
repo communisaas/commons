@@ -1,5 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import {
+	NO_SAVED_SEGMENTS_SENTENCE,
+	SEGMENTS_UNAVAILABLE_SENTENCE,
+	describeSavedSegments,
+	dominantSegmentFamilies
+} from '$lib/components/org/os/people-reach';
+import type { PeopleSegmentationGroundData } from '$lib/components/org/os/spaces';
 
 const platformProfiles = readFileSync('src/lib/data/platform-export-profiles.ts', 'utf8');
 const importPage = readFileSync(
@@ -97,5 +104,71 @@ describe('readable civic geography segment labels', () => {
 			"segmentConditionCount(conditions, [\n\t\t\t'congressionalDistrict'"
 		);
 		expect(supportersServer).toContain("segmentConditionCount(conditions, ['actionDistrictLabel'])");
+	});
+});
+
+describe('People space saved-segment sentences', () => {
+	function makeSegmentation(
+		overrides: Partial<PeopleSegmentationGroundData> = {}
+	): PeopleSegmentationGroundData {
+		return {
+			segmentCount: 0,
+			conditionCount: 0,
+			tagConditionCount: 0,
+			verificationConditionCount: 0,
+			sourceConditionCount: 0,
+			emailStatusConditionCount: 0,
+			dateConditionCount: 0,
+			postalCountryConditionCount: 0,
+			stateCodeConditionCount: 0,
+			congressionalDistrictConditionCount: 0,
+			campaignParticipationConditionCount: 0,
+			actionDistrictHashConditionCount: 0,
+			actionDistrictLabelConditionCount: 0,
+			engagementTierConditionCount: 0,
+			humanReadableGeographyConditionCount: 0,
+			...overrides
+		};
+	}
+
+	it('names the dominant condition families in plain words', () => {
+		const segmentation = makeSegmentation({
+			segmentCount: 4,
+			conditionCount: 5,
+			congressionalDistrictConditionCount: 2,
+			actionDistrictLabelConditionCount: 1,
+			tagConditionCount: 2
+		});
+		expect(dominantSegmentFamilies(segmentation)).toEqual(['by district', 'by tag']);
+		expect(describeSavedSegments(segmentation)).toBe('4 saved segments — by district, by tag');
+	});
+
+	it('does not double-count the human-readable geography rollup', () => {
+		const segmentation = makeSegmentation({
+			segmentCount: 2,
+			conditionCount: 2,
+			congressionalDistrictConditionCount: 1,
+			tagConditionCount: 1
+		});
+		const withRollup = makeSegmentation({
+			...segmentation,
+			humanReadableGeographyConditionCount: 9
+		});
+		expect(dominantSegmentFamilies(withRollup)).toEqual(dominantSegmentFamilies(segmentation));
+	});
+
+	it('reads a count without families when conditions are empty', () => {
+		expect(describeSavedSegments(makeSegmentation({ segmentCount: 1 }))).toBe('1 saved segment');
+	});
+
+	it('phrases zero and unavailable states as quiet sentences, not zeros', () => {
+		expect(describeSavedSegments(makeSegmentation())).toBe(NO_SAVED_SEGMENTS_SENTENCE);
+		expect(NO_SAVED_SEGMENTS_SENTENCE).toMatch(/^No saved segments yet/);
+		expect(SEGMENTS_UNAVAILABLE_SENTENCE).toMatch(/unavailable right now, not gone/);
+	});
+
+	it('links the People surface into the saved-segment anchor on the people list', () => {
+		const peopleSurface = readFileSync('src/lib/components/org/os/BaseSpace.svelte', 'utf8');
+		expect(peopleSurface).toContain('{base}/supporters#people-segments');
 	});
 });

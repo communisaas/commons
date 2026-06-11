@@ -1,5 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import {
+	CONSENT_SCOPE_SENTENCE,
+	NO_CONSENT_RECORDS_SENTENCE,
+	describeEmailConsent,
+	describeTextConsent
+} from '$lib/components/org/os/people-reach';
 
 const platformProfiles = readFileSync('src/lib/data/platform-export-profiles.ts', 'utf8');
 const importPage = readFileSync(
@@ -62,5 +68,39 @@ describe('People import consent evidence custody', () => {
 		expect(spaces).toContain('consentEvidence: {');
 		expect(layoutServer).toContain('consentEvidence: {');
 		expect(layoutServer).toContain('emailSubscribed: asNumber');
+	});
+});
+
+describe('People space consent sentences', () => {
+	const consentEvidence = { email: 940, emailSubscribed: 812, sms: 120, smsSubscribed: 98 };
+
+	it('reads email consent records as one plain sentence traced to the summary fields', () => {
+		expect(describeEmailConsent(consentEvidence)).toBe(
+			'Consent records on file for 940 people · 812 currently subscribed'
+		);
+	});
+
+	it('reads text consent records as one plain sentence traced to the summary fields', () => {
+		expect(describeTextConsent(consentEvidence)).toBe(
+			'Text consent records for 120 people · 98 currently opted in'
+		);
+	});
+
+	it('omits the text consent line when no text consent records exist', () => {
+		expect(describeTextConsent({ ...consentEvidence, sms: 0 })).toBeNull();
+	});
+
+	it('phrases zero consent records as a quiet sentence, not a zero', () => {
+		expect(describeEmailConsent({ ...consentEvidence, email: 0 })).toBe(
+			NO_CONSENT_RECORDS_SENTENCE
+		);
+		expect(NO_CONSENT_RECORDS_SENTENCE).toMatch(/^No consent records on file yet/);
+	});
+
+	it('keeps the honesty that consent records are origin, not permission to send', () => {
+		expect(CONSENT_SCOPE_SENTENCE).toMatch(/where permission came from/);
+		expect(CONSENT_SCOPE_SENTENCE).toMatch(/not permission to send/);
+		const peopleSurface = readFileSync('src/lib/components/org/os/BaseSpace.svelte', 'utf8');
+		expect(peopleSurface).toContain('CONSENT_SCOPE_SENTENCE');
 	});
 });
