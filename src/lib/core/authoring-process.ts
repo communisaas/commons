@@ -31,7 +31,7 @@ import type { ReasoningStage } from '$lib/components/org/studio/StudioReasoning.
 import type { StudioSource } from '$lib/components/org/studio/StudioSources.svelte';
 import type { GeoScope } from '$lib/core/agents/types';
 import type { SourceEvidenceUpdate } from '$lib/core/agents/agents/message-writer';
-import type { ResolutionStopReason } from '$lib/data/capability-hypergraph';
+import type { ResolutionStopReason } from '$lib/types/studio-process';
 import {
 	computeMessageInputHash,
 	decryptMessageJobResult,

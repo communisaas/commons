@@ -10,6 +10,7 @@ import {
 	PLATFORM_API_RUNNER_PROOF_REQUIREMENTS,
 	PLATFORM_EXPORT_PROFILES
 } from './platform-export-profiles';
+import type { StudioProcessEvidence } from '$lib/types/studio-process';
 
 export type CapabilityState = 'live' | 'partial' | 'draft-only' | 'gated';
 export type HypergraphStatus = 'not_started' | 'in_progress' | 'blocked' | 'completed' | 'deferred';
@@ -497,35 +498,7 @@ export type StudioAuthoringReadinessRow = {
 	};
 };
 
-export type ResolutionStopReason = 'no-target' | 'no-public-email' | 'stopped' | 'unknown';
-
-export type StudioProcessEvidence = {
-	processCount: number;
-	runningCount: number;
-	restoredCount: number;
-	focusedStatus: string | null;
-	contactableTargetCount: number;
-	droppedTargetCount: number;
-	resolutionStopReason: ResolutionStopReason | null;
-	resolutionStopDetail: string | null;
-	sourceEvidenceObserved: boolean;
-	sourceEvidenceCount: number;
-	sourceEvidenceMode: 'discovery' | 'preverified' | null;
-	sourceEvidenceEvaluationFallback: boolean;
-	sourceEvidenceCandidateCount: number | null;
-	sourceEvidenceFailedCount: number | null;
-	sourceEvidenceSearchQueryCount: number | null;
-	evaluatedSourceCount: number;
-	searchOnlySourceCount: number;
-	messageParagraphCount: number;
-	draftHandoffCount: number;
-	hasComposedMessage: boolean;
-	hasRecoveryJob: boolean;
-	recoveryJobStatus: string | null;
-	hasTraceHandle: boolean;
-	scopeLabel: string | null;
-	scopeSource: string | null;
-};
+export type { ResolutionStopReason, StudioProcessEvidence } from '$lib/types/studio-process';
 
 export type StudioAuthoringRuntimeGround = {
 	runtimeReady: boolean;
