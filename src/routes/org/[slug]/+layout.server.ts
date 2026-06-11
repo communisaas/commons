@@ -12,6 +12,7 @@ import { getMessageGenerationReadiness } from '$lib/server/agents/message-genera
 import { getEmailServerDispatchReadiness } from '$lib/server/email/server-dispatch-readiness';
 import { getPlatformApiSyncReadiness } from '$lib/server/platform-api-sync-readiness';
 import { getTextDispatchReadiness } from '$lib/server/sms/text-dispatch-readiness';
+import { CLIENT_DIRECT_EMAIL_THRESHOLD } from '$lib/data/org-limit-sentences';
 import type { Id } from '$convex/_generated/dataModel';
 import type {
 	ReturnSpaceData,
@@ -117,8 +118,6 @@ function buildPeopleSegmentationGround(
 		])
 	};
 }
-
-const CLIENT_DIRECT_EMAIL_THRESHOLD = 500;
 
 function messageGenerationEnv() {
 	return {

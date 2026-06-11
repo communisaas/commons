@@ -11,6 +11,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
+import { MAX_DECRYPTED_SMS_DISPATCH } from '$lib/data/org-limit-sentences';
 import { getTextDispatchReadiness } from '$lib/server/sms/text-dispatch-readiness';
 import { isValidE164, sendSms } from '$lib/server/sms/twilio';
 import { SMS_MAX_LENGTH } from '$lib/server/sms/types';
@@ -24,8 +25,6 @@ const RecipientFilterSchema = z
 		excludeTags: z.array(z.string().max(64)).max(20).optional()
 	})
 	.strict();
-
-const MAX_DECRYPTED_SMS_DISPATCH = 100;
 
 const DecryptedRecipientSchema = z
 	.object({
