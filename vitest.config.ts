@@ -92,6 +92,9 @@ export default defineConfig({
 			// `mount(...)` is not available on the server-side render path that
 			// runs under the current vitest jsdom + MSW config.
 			'tests/unit/components/GroundCard.test.ts',
+			// Behavioral first-paint test for the Datum spring primitive —
+			// needs the components-lane browser runtime to mount.
+			'tests/unit/components/datum-first-paint.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',
