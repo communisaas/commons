@@ -7,6 +7,7 @@
 		CellWeight
 	} from '$lib/types/verification-packet';
 	import DistrictMap from '$lib/components/geographic/DistrictMap.svelte';
+	import { participationDepth } from './participation-depth';
 	import { Datum, Pulse } from '$lib/design';
 	import { SPRINGS } from '$lib/design/motion';
 
@@ -57,10 +58,6 @@
 	const p = $derived(packet!);
 	const engagementTiers = $derived(
 		(packet?.tiers ?? []).filter((tier: TierCount) => tier.count !== 0)
-	);
-	const visibleEngagementTiers = $derived(engagementTiers.filter((tier) => tier.count > 0));
-	const engagementTierMax = $derived(
-		Math.max(...visibleEngagementTiers.map((tier) => tier.count), 1)
 	);
 	const suppressedEngagementTierCount = $derived(
 		engagementTiers.filter((tier) => tier.count < 0).length
@@ -133,45 +130,6 @@
 			<div class="vp__divider"></div>
 		{/if}
 
-		<!-- ═══ ENGAGEMENT DEPTH — K-floor protected participation history ═══ -->
-		{#if engagementTiers.length > 0}
-			<p class="vp__section-label">Engagement depth</p>
-			<div class="vp__tiers" role="list" aria-label="Engagement tier distribution">
-				{#each engagementTiers as tier (tier.tier)}
-					{@const visible = tier.count > 0}
-					{@const width = visible ? Math.max((tier.count / engagementTierMax) * 100, 7) : 0}
-					<div class="vp__tier-row" role="listitem">
-						<span class="vp__tier-key">
-							<span class="vp__tier-index">T{tier.tier}</span>
-							<span class="vp__tier-label">{tier.label}</span>
-						</span>
-						<span class="vp__tier-track" aria-hidden="true">
-							<span class="vp__tier-fill" data-tier={tier.tier} style="width: {width}%"></span>
-						</span>
-						<span class="vp__tier-count" class:vp__tier-count--suppressed={!visible}>
-							{#if visible}
-								<Datum value={tier.count} cite="computeTierDistribution" />
-							{:else}
-								<span aria-label="{tier.label} count suppressed below the K-anonymity floor"
-									>&lt;5</span
-								>
-							{/if}
-						</span>
-					</div>
-				{/each}
-			</div>
-			{#if suppressedEngagementTierCount > 0}
-				<p class="vp__tier-note">
-					<Datum value={suppressedEngagementTierCount} cite="computeTierDistribution" /> sub-K tier{suppressedEngagementTierCount ===
-					1
-						? ''
-						: 's'} suppressed.
-				</p>
-			{/if}
-
-			<div class="vp__divider"></div>
-		{/if}
-
 		<!-- ═══ AUTHORSHIP — self-labeling stacked bar ═══ -->
 		{#if p.authorship.individual > 0 || p.authorship.shared > 0}
 			<p class="vp__section-label">Authorship</p>
@@ -212,10 +170,9 @@
 			</div>
 			<div class="vp__geo-footer">
 				<p class="vp__geo-meta">
-					<Datum value={p.cells.length} /> cells &middot; diversity <Datum
-						value={p.gds}
-						decimals={2}
-					/>
+					Spread across <Datum value={p.cells.length} /> neighborhood{p.cells.length === 1
+						? ''
+						: 's'}
 					{#if hoveredCell}
 						<span class="vp__hover-inline">
 							&middot; <Datum value={hoveredCell.count} class="vp__hover-num" /> here
@@ -231,10 +188,7 @@
 		{:else if p.geography && p.geography.length > 1}
 			<p class="vp__section-label">Geographic spread</p>
 			<p class="vp__geo-meta">
-				<Datum value={p.geography.length} /> communities &middot; diversity <Datum
-					value={p.gds}
-					decimals={2}
-				/>
+				Spread across <Datum value={p.geography.length} /> communities
 			</p>
 
 			<div class="vp__divider"></div>
@@ -266,12 +220,10 @@
 			{@render actions()}
 		{/if}
 
-		<!-- Seal — click to drill into cryptographic audit trail -->
+		<!-- Seal — click to drill into the audit detail behind the headline evidence -->
 		<details class="vp__seal-details">
 			<summary class="vp__seal">
-				<span class="vp__seal-text"
-					>Cryptographic audit trail &middot; independently verifiable</span
-				>
+				<span class="vp__seal-text">Audit trail &middot; independently verifiable</span>
 				<span class="vp__seal-chevron" aria-hidden="true">›</span>
 			</summary>
 			<div class="vp__seal-drawer">
@@ -296,6 +248,40 @@
 							>)
 						</dd>
 					</div>
+					{#if engagementTiers.length > 0}
+						<div class="vp__seal-hash-row">
+							<dt>participation depth</dt>
+							<dd>
+								<ul class="vp__depth-list">
+									{#each engagementTiers as tier (tier.tier)}
+										<li>
+											{participationDepth(tier.tier)} &mdash;
+											{#if tier.count > 0}
+												<Datum value={tier.count} cite="computeTierDistribution" />
+											{:else}
+												fewer than 5
+											{/if}
+										</li>
+									{/each}
+								</ul>
+								{#if suppressedEngagementTierCount > 0}
+									<p class="vp__depth-privacy">
+										Groups smaller than five people are reported as &ldquo;fewer than 5&rdquo; so
+										no individual can be identified.
+									</p>
+								{/if}
+							</dd>
+						</div>
+					{/if}
+					{#if p.gds !== null}
+						<div class="vp__seal-hash-row">
+							<dt>geographic diversity</dt>
+							<dd>
+								<Datum value={p.gds} decimals={2} cite="computeGDSFromDistribution" /> on a 0&ndash;1
+								scale &mdash; higher means actions spread across more communities rather than one place
+							</dd>
+						</div>
+					{/if}
 				</dl>
 				<p class="vp__seal-footnote">
 					Every row in this packet carries a zero-knowledge proof. A decision-maker can verify the
@@ -310,8 +296,8 @@
 <style>
 	/* ═══ Verification Packet — the specimen IS the component ═══
 	   White artifact on warm cream ground. Document aesthetic.
-	   Every dimension gets a self-labeling stacked bar or map.
-	   No collapsed audit section — the dimensions ARE the presentation. */
+	   Every staffer-facing dimension gets a self-labeling stacked bar or map.
+	   Platform-internal metrics live behind the collapsed audit drawer. */
 
 	.vp {
 		background: #ffffff;
@@ -493,134 +479,6 @@
 	.vp__stack-seg--muted {
 		background: oklch(0.94 0.005 250);
 		color: oklch(0.4 0.015 250);
-	}
-
-	/* Engagement tiers */
-	.vp__tiers {
-		display: flex;
-		flex-direction: column;
-		gap: 0.375rem;
-		margin: 0 1.25rem;
-	}
-	@media (min-width: 640px) {
-		.vp__tiers {
-			margin-left: 2rem;
-			margin-right: 2rem;
-		}
-	}
-
-	.vp__tier-row {
-		display: grid;
-		grid-template-columns: minmax(5.5rem, 0.7fr) minmax(5rem, 1fr) minmax(2.5rem, auto);
-		align-items: center;
-		gap: 0.625rem;
-		min-height: 1.75rem;
-	}
-	@media (max-width: 479px) {
-		.vp__tier-row {
-			grid-template-columns: 1fr minmax(2.25rem, auto);
-			gap: 0.375rem 0.5rem;
-		}
-		.vp__tier-track {
-			grid-column: 1 / -1;
-			grid-row: 2;
-		}
-		.vp__tier-count {
-			justify-self: end;
-		}
-	}
-
-	.vp__tier-key {
-		display: flex;
-		align-items: center;
-		gap: 0.375rem;
-		min-width: 0;
-	}
-
-	.vp__tier-index {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 1.5rem;
-		height: 1.125rem;
-		border: 1px solid oklch(0.84 0.008 250);
-		border-radius: 2px;
-		font-size: 0.5625rem;
-		font-weight: 700;
-		color: oklch(0.42 0.016 250);
-		background: oklch(0.97 0.003 250);
-		flex-shrink: 0;
-	}
-
-	.vp__tier-label {
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.75rem;
-		font-weight: 600;
-		color: oklch(0.34 0.018 250);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.vp__tier-track {
-		height: 0.5rem;
-		border-radius: 999px;
-		overflow: hidden;
-		background: oklch(0.91 0.005 250);
-	}
-
-	.vp__tier-fill {
-		display: block;
-		height: 100%;
-		min-width: 0;
-		border-radius: inherit;
-		background: oklch(0.38 0.1 170);
-	}
-	.vp__tier-fill[data-tier='0'] {
-		background: oklch(0.56 0.025 250);
-	}
-	.vp__tier-fill[data-tier='1'] {
-		background: oklch(0.48 0.09 175);
-	}
-	.vp__tier-fill[data-tier='2'] {
-		background: oklch(0.48 0.105 205);
-	}
-	.vp__tier-fill[data-tier='3'] {
-		background: oklch(0.58 0.11 65);
-	}
-	.vp__tier-fill[data-tier='4'] {
-		background: oklch(0.45 0.12 20);
-	}
-
-	.vp__tier-count {
-		font-weight: 700;
-		font-size: 0.75rem;
-		color: oklch(0.3 0.02 250);
-		text-align: right;
-		white-space: nowrap;
-	}
-	@media (min-width: 640px) {
-		.vp__tier-count {
-			font-size: 0.8125rem;
-		}
-	}
-
-	.vp__tier-count--suppressed {
-		color: oklch(0.52 0.008 250);
-		font-weight: 600;
-	}
-
-	.vp__tier-note {
-		margin: 0.5rem 1.25rem 0;
-		font-family: 'Satoshi', system-ui, sans-serif;
-		font-size: 0.6875rem;
-		color: oklch(0.5 0.01 250);
-	}
-	@media (min-width: 640px) {
-		.vp__tier-note {
-			margin-left: 2rem;
-			margin-right: 2rem;
-		}
 	}
 
 	/* District map */
@@ -816,6 +674,21 @@
 		padding: 0.0625rem 0.25rem;
 		border-radius: 2px;
 		font-weight: 500;
+	}
+
+	.vp__depth-list {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.125rem 1rem;
+	}
+
+	.vp__depth-privacy {
+		margin: 0.375rem 0 0;
+		font-size: 0.6875rem;
+		color: oklch(0.5 0.01 250);
 	}
 
 	.vp__seal-footnote {

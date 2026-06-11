@@ -45,12 +45,12 @@
 			No supporters yet. Import supporters to see your verification pipeline.
 		</p>
 	{:else}
-		<!-- Stage 1: People in ledger -->
+		<!-- Stage 1: Supporters on the list -->
 		<div class="flex items-center gap-3">
 			<span class="text-text-tertiary w-6 text-center text-lg">○</span>
 			<p class="text-text-tertiary font-mono text-2xl font-bold tabular-nums">{fmt($animTotal)}</p>
 			<div>
-				<p class="text-text-secondary text-sm">people in ledger</p>
+				<p class="text-text-secondary text-sm">supporters on your list</p>
 			</div>
 		</div>
 
@@ -70,13 +70,13 @@
 		<!-- Connector -->
 		<div class="border-text-quaternary ml-[11px] h-4 border-l-2 border-dashed"></div>
 
-		<!-- Stage 3: District signal -->
+		<!-- Stage 3: District-verified -->
 		<div class="flex items-center gap-3">
 			<span class="w-6 text-center text-lg text-teal-500">◑</span>
 			<p class="font-mono text-2xl font-bold text-teal-500 tabular-nums">{fmt($animDistrict)}</p>
 			<div>
-				<p class="text-text-secondary text-sm">district signal</p>
-				<p class="text-text-quaternary text-xs">action records with district evidence</p>
+				<p class="text-text-secondary text-sm">district-verified</p>
+				<p class="text-text-quaternary text-xs">their actions carry proof of their district</p>
 			</div>
 		</div>
 
@@ -89,7 +89,7 @@
 			<p class="font-mono text-2xl font-bold text-emerald-400 tabular-nums">{fmt($animVerified)}</p>
 			<div>
 				<p class="text-text-secondary text-sm">identity-verified</p>
-				<p class="text-text-quaternary text-xs">identity commitment and verification</p>
+				<p class="text-text-quaternary text-xs">can appear in verified constituent reports</p>
 			</div>
 		</div>
 
