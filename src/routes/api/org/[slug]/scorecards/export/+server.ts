@@ -40,7 +40,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		'Relevant Votes',
 		'Aligned Votes',
 		'Alignment Rate',
-		'Avg Response Time (hrs)',
+		'Estimated Response Hours (from response rate)',
 		'Last Contact',
 		'Score'
 	];

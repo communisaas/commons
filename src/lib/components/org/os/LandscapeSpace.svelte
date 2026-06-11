@@ -1,48 +1,49 @@
 <!--
-  LandscapeSpace — Power: targets, bills, and accountability.
+  LandscapeSpace — Power: who decides, what they're doing, and whether your
+  pressure is registering.
 
-  Three reads folded into ONE surface: the decision-makers you follow, the bills
-  you watch, and the accountability scorecards you've earned. Each was its own
-  route (/representatives, /legislation, /scorecards); Power composes them as
-  a single object so the operator sees the whole terrain at a glance. Data is
-  loaded ONCE by the org layout (`+layout.server.ts` → `data.spaces.landscape`,
-  reusing the three routes' Convex reads) and threaded in as a prop — switching
-  into Power is a pure state toggle, no route load.
+  Three sections answer the org's questions in plain words: WHO DECIDES (the
+  decision-makers you follow, with where coverage honestly stands), WHAT
+  THEY'RE DOING (the bills you watch and your positions on them), and IS YOUR
+  PRESSURE REGISTERING (the accountability scorecards your reports have built).
+
+  Each section was its own route (/representatives, /legislation,
+  /scorecards); Power composes them as a single surface. Data is loaded ONCE
+  by the org layout (`+layout.server.ts` → `data.spaces.landscape`, reusing the
+  three routes' Convex reads) and threaded in as a prop — switching into Power
+  is a pure state toggle, no route load.
 
   The interactive tooling — follow/unfollow, watch/unwatch, set position, bill
-  search, CSV export — stays on the deep routes (still resolvable), which own the
-  mutation endpoints. Power is the composed view plus the doors into each tool.
+  search, CSV export — stays on the deep routes, which own the mutation
+  endpoints. Power is the composed view plus the doors into each tool.
 
-  HONESTY RULE: only REAL terrain renders. Empty follow/watch/scorecard sets get
-  honest empty states, never faked counts. When legislation is not configured,
-  bills + scorecards are marked "not yet armed" rather than shown as zero. A null
-  slice renders a dormant state.
+  HONESTY RULE: only real records render. Empty follow/watch/scorecard sets
+  get plain empty sentences, never fabricated counts. A failed read renders as
+  unavailable, not as zero. Sections for features this org does not have are
+  not shown at all.
 -->
 <script lang="ts">
 	import ScorecardCard from '$lib/components/org/ScorecardCard.svelte';
-	import {
-		buildPowerTerrainReadiness,
-		getGateEvidence,
-		type PowerTerrainRow
-	} from '$lib/data/capability-hypergraph';
 	import { Datum } from '$lib/design';
 	import { TIMING, EASING } from '$lib/design/motion';
-	import WorkspaceCapabilityStrip from './WorkspaceCapabilityStrip.svelte';
+	import {
+		DECISION_MAKER_COVERAGE_SENTENCE,
+		NO_FOLLOWED_DECISION_MAKERS_LEAD,
+		NO_WATCHED_BILLS_SENTENCE,
+		POWER_UNAVAILABLE_SENTENCE,
+		SCORECARDS_BUILD_SENTENCE,
+		describePowerPosition,
+		describeRelevantBills
+	} from './power-coverage';
 	import type { LandscapeSpaceData } from './spaces';
-
-	type PowerHeaderMetric = {
-		value: number | null;
-		label: string;
-		cite: string;
-	};
 
 	let {
 		data,
 		base
 	}: {
-		/** Power slice from the layout load. Null when the DM read failed. */
+		/** Power slice from the layout load. Null when the decision-maker read failed. */
 		data: LandscapeSpaceData | null;
-		/** `/org/[slug]` — for the deep links into each terrain tool. */
+		/** `/org/[slug]` — for the deep links into each tool. */
 		base: string;
 	} = $props();
 
@@ -85,162 +86,60 @@
 	const bills = $derived(data?.bills ?? []);
 	const scorecards = $derived(data?.scorecards ?? []);
 	const legislationEnabled = $derived(data?.legislationEnabled ?? false);
-	const stateLocalTerrainGate = getGateEvidence(
-		'CP-state-local-terrain',
-		['T3-1', 'T3-2', 'T3-10'],
-		{
-			name: 'State/local power terrain',
-			downstream: 3,
-			dependency: 'OpenStates, special-district officeholders, and per-district feeds'
-		}
+	const headline = $derived(
+		data
+			? describePowerPosition({
+					followedCount: data.followedCount,
+					watchedBillCount: bills.length,
+					scorecardSnapshotCount: data.scorecardSnapshotCount,
+					scorecardAvg: data.scorecardAvg,
+					legislationEnabled
+				})
+			: null
 	);
-	const internationalTerrainGate = getGateEvidence(
-		'CP-international-power-terrain',
-		['T3-3', 'T3-4', 'T3-5'],
-		{
-			name: 'International power resolver',
-			downstream: 3,
-			dependency: 'CA, GB, and AU representative lookup wiring'
-		}
-	);
-	const stateBillTerrainGate = getGateEvidence('CP-state-bill-terrain', ['T6-6', 'T3-1'], {
-		name: 'State bill terrain',
-		downstream: 4,
-		dependency: 'OpenStates or equivalent state-bill ingestion plus state legislator data'
-	});
-	const nonFederalScorecardGate = getGateEvidence('CP-non-federal-scorecards', ['T6-6', 'T3-1'], {
-		name: 'Non-federal scorecard terrain',
-		downstream: 3,
-		dependency: 'State bill ingestion + state officeholder coverage'
-	});
-	const readerOfficeGate = getGateEvidence('CP-reader-office-profile', ['T8-1a', 'T8-1b', 'T8-8'], {
-		name: 'Reader office response terrain',
-		downstream: 4,
-		dependency:
-			'Decision-maker office profile enrichment, office-response workflow, and notification webhooks'
-	});
-	const powerTerrainReadiness = $derived(
-		buildPowerTerrainReadiness({
-			base,
-			power: {
-				loaded: !!data,
-				legislationEnabled,
-				followedCount: data?.followedCount ?? null,
-				discoverableOfficialCount: null,
-				watchedBillCount: data?.bills.length ?? null,
-				scorecardCount: data?.scorecardSnapshotCount ?? null
-			},
-			gates: {
-				powerStateLocalTerrainGate: stateLocalTerrainGate,
-				powerInternationalTerrainGate: internationalTerrainGate,
-				powerStateBillTerrainGate: stateBillTerrainGate,
-				powerNonFederalScorecardGate: nonFederalScorecardGate,
-				powerOfficeResponseGate: readerOfficeGate
-			}
-		})
-	);
-	const powerTerrainRows = $derived<PowerTerrainRow[]>(powerTerrainReadiness.rows);
-	const capabilityItems = $derived(
-		powerTerrainRows.map((row) => ({
-			label: row.label,
-			state: row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action: row.action,
-			detail: row.ground,
-			unlock: row.boundary,
-			href: row.href,
-			metric: row.metric
-		}))
-	);
-	const terrainCountMetric = $derived({
-		value: powerTerrainReadiness.terrainCount,
-		label: 'loaded terrain records',
-		cite: 'legislation.listOrgDmFollows + legislation.listWatchedBills + legislation.listOrgScorecards'
-	});
-	const powerHeaderMetrics = $derived<PowerHeaderMetric[]>([
-		{
-			value: data?.followedCount ?? null,
-			label: 'followed targets',
-			cite: 'legislation.listOrgDmFollows followedCount'
-		},
-		{
-			value: data?.legislationEnabled ? bills.length : null,
-			label: 'watched bills',
-			cite: 'legislation.listWatchedBills'
-		},
-		{
-			value: data?.legislationEnabled ? data.scorecardSnapshotCount : null,
-			label: 'score snapshots',
-			cite: 'legislation.listOrgScorecards scored snapshots'
-		},
-		{
-			value: terrainCountMetric.value,
-			label: terrainCountMetric.label,
-			cite: terrainCountMetric.cite
-		}
-	]);
+	const relevantBillsLine = $derived(data ? describeRelevantBills(data.relevantBillCount) : null);
 </script>
 
-<div class="landscape" style="--timing-slow: {TIMING.SLOW}ms; --easing: {EASING};">
-	<header class="landscape-head">
-		<div class="landscape-head-copy">
-			<h1 class="landscape-title">Power</h1>
-			<p class="landscape-sub">
-				Decision-makers, bills, and accountability signals in one working surface.
+<div class="power" style="--timing-slow: {TIMING.SLOW}ms; --easing: {EASING};">
+	<header class="power-head">
+		<div class="power-head-copy">
+			<h1 class="power-title">Power</h1>
+			<p class="power-sub">
+				Who decides, what they're doing, and whether your pressure is registering.
 			</p>
 		</div>
-		<div class="landscape-head-instrument">
-			<div class="landscape-proof-counts" aria-label="Power terrain evidence counts">
-				{#each powerHeaderMetrics as metric (metric.label)}
-					<span class="landscape-proof-count">
-						<Datum value={metric.value} cite={metric.cite} />
-						<span>{metric.label}</span>
-					</span>
-				{/each}
+		{#if headline}
+			<div class="power-head-instrument">
+				<p class="power-headline">{headline}</p>
 			</div>
-		</div>
+		{/if}
 	</header>
 
 	{#if !data}
-		<p class="landscape-dormant">
-			This shell did not attach Power terrain evidence; target, bill, score, and wider-terrain
-			coverage claims remain unclaimed and uncounted in this read.
-		</p>
+		<!-- Unavailable, not zero: the decision-maker read failed for this page view. -->
+		<p class="power-dormant">{POWER_UNAVAILABLE_SENTENCE}</p>
 	{:else}
-		<WorkspaceCapabilityStrip label="Power capability" items={capabilityItems} />
-		<section class="terrain-readout" aria-label="Power terrain boundary">
-			<div class="terrain-readout-copy">
-				<span class="terrain-label">Power terrain coverage</span>
-				<p>{powerTerrainReadiness.effect} {powerTerrainReadiness.detail}</p>
-			</div>
-			<div class="terrain-readout-metric">
-				<Datum
-					value={terrainCountMetric.value}
-					cite={terrainCountMetric.cite}
-					class="terrain-readout-num"
-				/>
-				<span>{terrainCountMetric.label}</span>
-			</div>
-		</section>
-
-		<!-- POWER TARGETS -->
-		<section class="terrain" aria-label="Power targets">
-			<div class="terrain-head">
-				<span class="terrain-label">Power Targets</span>
-				<span class="terrain-count">
-					<Datum value={data.followedCount} class="terrain-count-num" /> followed
-				</span>
-				<a class="terrain-deep" href="{base}/representatives" data-sveltekit-preload-data="off"
-					>Open power targets →</a
+		<!-- WHO DECIDES — the decision-makers you follow. -->
+		<section class="block" aria-label="Decision-makers you follow">
+			<div class="block-head">
+				<span class="section-label">Who decides</span>
+				{#if followed.length > 0}
+					<span class="block-count">
+						<Datum value={data.followedCount} class="block-count-num" /> followed
+					</span>
+				{/if}
+				<a class="block-deep" href="{base}/representatives" data-sveltekit-preload-data="off"
+					>All decision-makers →</a
 				>
 			</div>
 
+			<!-- Coverage honesty: what the directory holds today, in plain words. -->
+			<p class="power-quiet">{DECISION_MAKER_COVERAGE_SENTENCE}</p>
+
 			{#if followed.length === 0}
-				<p class="terrain-empty">
-					No power targets tracked yet. <a class="terrain-empty-link" href="{base}/representatives"
-						>Open power targets</a
-					> to follow the people your actions need to move.
+				<p class="block-empty">
+					{NO_FOLLOWED_DECISION_MAKERS_LEAD} —
+					<a class="block-link" href="{base}/representatives">find yours</a>.
 				</p>
 			{:else}
 				<ul class="dm-list">
@@ -258,7 +157,7 @@
 								{#if dm.jurisdiction}{locationLabel(dm.jurisdiction, dm.district)}{/if}
 							</span>
 							<span class="dm-via"
-								>{dm.reason === 'campaign_delivery' ? 'via delivery' : 'manual'}</span
+								>{dm.reason === 'campaign_delivery' ? 'via delivery' : 'added by you'}</span
 							>
 						</li>
 					{/each}
@@ -266,92 +165,85 @@
 			{/if}
 		</section>
 
-		<!-- BILLS -->
-		<section class="terrain" aria-label="Bills">
-			<div class="terrain-head">
-				<span class="terrain-label">Bills</span>
-				{#if legislationEnabled}
-					<span class="terrain-count">
-						<Datum value={bills.length} class="terrain-count-num" /> watched
-					</span>
-					<a class="terrain-deep" href="{base}/legislation" data-sveltekit-preload-data="off"
-						>Open bills terrain →</a
+		{#if legislationEnabled}
+			<!-- WHAT THEY'RE DOING — the bills you watch and your positions. -->
+			<section class="block" aria-label="Bills you watch">
+				<div class="block-head">
+					<span class="section-label">What they're doing</span>
+					{#if bills.length > 0}
+						<span class="block-count">
+							<Datum value={bills.length} class="block-count-num" /> watched
+						</span>
+					{/if}
+					<a class="block-deep" href="{base}/legislation" data-sveltekit-preload-data="off"
+						>All bills →</a
 					>
-				{/if}
-			</div>
-
-			{#if !legislationEnabled}
-				<p class="terrain-latent">
-					Not yet armed — bill tracking lands when legislation features enable for this org.
-				</p>
-			{:else if bills.length === 0}
-				<p class="terrain-empty">
-					No bills being watched. <a class="terrain-empty-link" href="{base}/legislation"
-						>Open bills</a
-					> to track the bills your actions reference.
-				</p>
-			{:else}
-				<ul class="bill-list">
-					{#each bills as bill (bill.id)}
-						<li class="bill-item">
-							<span class="bill-status" style="color: {statusColor(bill.status)}"
-								>{bill.status || '—'}</span
-							>
-							<span class="bill-title">{bill.title}</span>
-							{#if bill.position}
-								<span class="bill-position" data-position={bill.position}>{bill.position}</span>
-							{/if}
-							<span class="bill-ext">{bill.externalId}</span>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</section>
-
-		<!-- ACCOUNTABILITY SCORES -->
-		<section class="terrain" aria-label="Accountability scores">
-			<div class="terrain-head">
-				<span class="terrain-label">Accountability Scores</span>
-				{#if legislationEnabled}
-					<span class="terrain-count">
-						<Datum value={data.scorecardSnapshotCount} class="terrain-count-num" /> snapshots
-						{#if data.scorecardSnapshotCount > 0}
-							<span class="terrain-sep">·</span> avg <Datum
-								value={data.scorecardAvg}
-								class="terrain-count-num"
-							/>
-						{/if}
-					</span>
-					<a class="terrain-deep" href="{base}/scorecards" data-sveltekit-preload-data="off"
-						>Open accountability scores →</a
-					>
-				{/if}
-			</div>
-
-			{#if !legislationEnabled}
-				<p class="terrain-latent">
-					Not yet armed — accountability scores compute once legislation features enable and proof
-					reports land.
-				</p>
-			{:else if scorecards.length === 0}
-				<p class="terrain-empty">
-					No accountability scores yet. <a class="terrain-empty-link" href="{base}/scorecards"
-						>Open accountability scores</a
-					> once proof reports begin moving power targets.
-				</p>
-			{:else}
-				<div class="card-list">
-					{#each scorecards as scorecard (scorecard.name + scorecard.district)}
-						<ScorecardCard {scorecard} />
-					{/each}
 				</div>
-			{/if}
-		</section>
+
+				{#if bills.length === 0}
+					<p class="block-empty">
+						{NO_WATCHED_BILLS_SENTENCE}
+						<a class="block-link" href="{base}/legislation">Find bills →</a>
+					</p>
+				{:else}
+					<ul class="bill-list">
+						{#each bills as bill (bill.id)}
+							<li class="bill-item">
+								<span class="bill-status" style="color: {statusColor(bill.status)}"
+									>{bill.status || '—'}</span
+								>
+								<span class="bill-title">{bill.title}</span>
+								{#if bill.position}
+									<span class="bill-position" data-position={bill.position}>{bill.position}</span>
+								{/if}
+								<span class="bill-ext">{bill.externalId}</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				{#if relevantBillsLine}
+					<p class="power-quiet">
+						{relevantBillsLine} —
+						<a class="block-link" href="{base}/legislation">review them</a>
+					</p>
+				{/if}
+			</section>
+
+			<!-- IS YOUR PRESSURE REGISTERING — accountability scorecards. -->
+			<section class="block" aria-label="Accountability scorecards">
+				<div class="block-head">
+					<span class="section-label">Is your pressure registering</span>
+					{#if data.scorecardSnapshotCount > 0}
+						<span class="block-count">
+							<Datum value={data.scorecardSnapshotCount} class="block-count-num" />
+							scorecard{data.scorecardSnapshotCount === 1 ? '' : 's'}
+							{#if data.scorecardAvg !== null}
+								<span class="block-sep">·</span> avg
+								<Datum value={data.scorecardAvg} class="block-count-num" />
+							{/if}
+						</span>
+					{/if}
+					<a class="block-deep" href="{base}/scorecards" data-sveltekit-preload-data="off"
+						>All scorecards →</a
+					>
+				</div>
+
+				{#if scorecards.length === 0}
+					<p class="block-empty">{SCORECARDS_BUILD_SENTENCE}</p>
+				{:else}
+					<div class="card-list">
+						{#each scorecards as scorecard (scorecard.name + scorecard.district)}
+							<ScorecardCard {scorecard} />
+						{/each}
+					</div>
+				{/if}
+			</section>
+		{/if}
 	{/if}
 </div>
 
 <style>
-	.landscape {
+	.power {
 		display: flex;
 		flex-direction: column;
 		gap: 2rem;
@@ -359,42 +251,28 @@
 	}
 
 	/* ─── Head ─── */
-	.landscape-head {
+	.power-head {
 		display: flex;
 		align-items: flex-start;
 		justify-content: space-between;
 		gap: 1rem;
 	}
-	.landscape-head-copy {
+	.power-head-copy {
 		min-width: 0;
 	}
-	.landscape-head-instrument {
-		display: flex;
+	.power-head-instrument {
 		flex-shrink: 0;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.625rem;
+		max-width: 24rem;
 	}
-	.landscape-proof-counts {
-		display: flex;
-		max-width: 36rem;
-		flex-wrap: wrap;
-		justify-content: flex-start;
-		gap: 0.5rem 0.875rem;
+	.power-headline {
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+		font-size: 0.8125rem;
+		line-height: 1.5;
+		color: var(--text-secondary, oklch(0.38 0.012 60));
+		margin: 0;
+		text-align: right;
 	}
-	.landscape-proof-count {
-		display: inline-flex;
-		align-items: baseline;
-		gap: 0.25rem;
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.6875rem;
-		font-variant-numeric: tabular-nums;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		color: var(--text-secondary, oklch(0.42 0.015 60));
-		white-space: nowrap;
-	}
-	.landscape-title {
+	.power-title {
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 		font-size: 1.5rem;
 		font-weight: 700;
@@ -402,14 +280,14 @@
 		color: var(--text-primary, oklch(0.25 0.01 60));
 		margin: 0;
 	}
-	.landscape-sub {
+	.power-sub {
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 		font-size: 0.875rem;
 		color: var(--text-tertiary, #6b7280);
 		margin: 0;
 		max-width: 36rem;
 	}
-	.landscape-dormant {
+	.power-dormant {
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 		font-size: 0.8125rem;
 		line-height: 1.5;
@@ -418,60 +296,28 @@
 		margin: 0;
 		max-width: 40rem;
 	}
-
-	.terrain-readout {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
-		padding: 0.875rem 1rem;
-		border-radius: 6px;
-		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
-		background: var(--surface-base, oklch(0.993 0.003 60));
-	}
-	.terrain-readout-copy {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-		min-width: 0;
-	}
-	.terrain-readout-copy p {
+	.power-quiet {
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.8125rem;
-		line-height: 1.45;
-		color: var(--text-secondary, oklch(0.38 0.012 60));
-		margin: 0;
-		max-width: 52rem;
-	}
-	.terrain-readout-metric {
-		display: inline-flex;
-		align-items: baseline;
-		gap: 0.35rem;
-		flex-shrink: 0;
-		font-family: 'JetBrains Mono', monospace;
-		font-size: 0.6875rem;
+		font-size: 0.75rem;
+		line-height: 1.5;
 		color: var(--text-tertiary, #6b7280);
-		white-space: nowrap;
-	}
-	.terrain-readout-metric :global(.terrain-readout-num) {
-		font-size: 0.875rem;
-		font-weight: 700;
-		color: var(--text-primary, oklch(0.25 0.01 60));
+		margin: 0;
+		max-width: 40rem;
 	}
 
-	/* ─── Terrain section ─── */
-	.terrain {
+	/* ─── Section blocks ─── */
+	.block {
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
 	}
-	.terrain-head {
+	.block-head {
 		display: flex;
 		align-items: baseline;
 		gap: 0.75rem;
 		flex-wrap: wrap;
 	}
-	.terrain-label {
+	.section-label {
 		font-family: 'JetBrains Mono', monospace;
 		font-size: 0.625rem;
 		font-weight: 600;
@@ -479,7 +325,7 @@
 		letter-spacing: 0.12em;
 		color: oklch(0.55 0.01 250);
 	}
-	.terrain-count {
+	.block-count {
 		display: inline-flex;
 		align-items: baseline;
 		gap: 0.3rem;
@@ -487,16 +333,16 @@
 		font-size: 0.75rem;
 		color: var(--text-tertiary, #6b7280);
 	}
-	.terrain :global(.terrain-count-num) {
+	.block :global(.block-count-num) {
 		font-size: 0.8125rem;
 		font-weight: 600;
 		color: var(--text-primary, oklch(0.25 0.01 60));
 	}
-	.terrain-sep,
+	.block-sep,
 	.dm-sep {
 		color: oklch(0.78 0.01 250);
 	}
-	.terrain-deep {
+	.block-deep {
 		margin-left: auto;
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 		font-size: 0.75rem;
@@ -504,13 +350,12 @@
 		text-decoration: none;
 		transition: color var(--timing-slow) var(--easing);
 	}
-	.terrain-deep:hover,
-	.terrain-deep:focus-visible {
+	.block-deep:hover,
+	.block-deep:focus-visible {
 		text-decoration: underline;
 		outline: none;
 	}
-	.terrain-empty,
-	.terrain-latent {
+	.block-empty {
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 		font-size: 0.8125rem;
 		line-height: 1.5;
@@ -518,15 +363,12 @@
 		margin: 0;
 		max-width: 40rem;
 	}
-	.terrain-latent {
-		font-style: italic;
-	}
-	.terrain-empty-link {
+	.block-link {
 		color: var(--coord-route-solid, #3bc4b8);
 		text-decoration: none;
 	}
-	.terrain-empty-link:hover,
-	.terrain-empty-link:focus-visible {
+	.block-link:hover,
+	.block-link:focus-visible {
 		text-decoration: underline;
 		outline: none;
 	}
@@ -651,17 +493,11 @@
 	}
 
 	@media (max-width: 760px) {
-		.landscape-head {
+		.power-head {
 			flex-direction: column;
 		}
-	}
-
-	@media (min-width: 860px) {
-		.landscape-head-instrument {
-			align-items: flex-end;
-		}
-		.landscape-proof-counts {
-			justify-content: flex-end;
+		.power-headline {
+			text-align: left;
 		}
 	}
 </style>

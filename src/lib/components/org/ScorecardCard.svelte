@@ -22,16 +22,14 @@
 		return value === null ? '--' : value.toLocaleString('en-US');
 	}
 
-	function formatHours(hours: number | null): string {
-		if (hours === null) return '--';
+	function formatHours(hours: number): string {
 		if (hours < 1) return '<1h';
 		if (hours < 24) return `${Math.round(hours)}h`;
 		const days = Math.round(hours / 24);
 		return `${days}d`;
 	}
 
-	function formatDate(iso: string | null): string {
-		if (!iso) return '--';
+	function formatDate(iso: string): string {
 		const d = new Date(iso);
 		return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	}
@@ -140,12 +138,23 @@
 				<div class="metric-section">
 					<p class="metric-label">Responsiveness</p>
 					<div class="metric-rows">
-						<div class="metric-row">
-							<span class="metric-key">Avg: {formatHours(scorecard.avgResponseTime)}</span>
-						</div>
-						<div class="metric-row">
-							<span class="metric-key">Last: {formatDate(scorecard.lastContactDate)}</span>
-						</div>
+						{#if scorecard.avgResponseTime !== null}
+							<div class="metric-row">
+								<span class="metric-key">Response time ~{formatHours(scorecard.avgResponseTime)}</span>
+							</div>
+							<div class="metric-row">
+								<span class="metric-key dim">Estimated from response rate</span>
+							</div>
+						{:else}
+							<div class="metric-row">
+								<span class="metric-key dim">No response estimate yet</span>
+							</div>
+						{/if}
+						{#if scorecard.lastContactDate}
+							<div class="metric-row">
+								<span class="metric-key">Last contact: {formatDate(scorecard.lastContactDate)}</span>
+							</div>
+						{/if}
 					</div>
 				</div>
 			</div>
