@@ -18,9 +18,9 @@ export const MAX_DECRYPTED_SMS_DISPATCH = 100;
 
 /**
  * Every boundary code that carries a limit sentence. The first seven are
- * boundary codes returned by the org server routes; `congressional_delivery`
- * is keyed explicitly because congressional readiness surfaces through load
- * data rather than a route error code.
+ * boundary codes returned by the org server routes; `authoring_runtime` and
+ * `congressional_delivery` are keyed explicitly because their readiness
+ * surfaces through load data rather than a route error code.
  */
 export const ORG_LIMIT_CODES = [
 	'text_dispatch_not_armed',
@@ -30,6 +30,7 @@ export const ORG_LIMIT_CODES = [
 	'platform_api_sync_not_armed',
 	'platform_api_credential_custody_not_configured',
 	'platform_api_credential_probe_failed',
+	'authoring_runtime',
 	'congressional_delivery'
 ] as const;
 
@@ -89,6 +90,8 @@ export function orgLimitSentence(code: OrgLimitCode): string {
 			return "Platform credentials can't be stored yet, so direct sync isn't available. CSV import works now.";
 		case 'platform_api_credential_probe_failed':
 			return "Your stored platform credential didn't open — reconnect it. CSV import still works.";
+		case 'authoring_runtime':
+			return "AI authoring isn't connected yet — the Studio loop opens once it is.";
 		case 'congressional_delivery':
 			return "Congressional delivery isn't available yet — messages save as drafts until it is.";
 	}
@@ -220,6 +223,25 @@ export function platformApiSyncLimitNotice(
 					missing: platformApiSync.runtimeMissing,
 					dependency: platformApiSync.runtimeDependency,
 					message: platformApiSync.runtimeMessage
+				}
+			: null
+	);
+}
+
+export function authoringRuntimeLimitNotice(
+	authoring?: {
+		runtimeMissing: string[];
+		runtimeDependency: string;
+		runtimeMessage: string;
+	} | null
+): OrgLimitNotice {
+	return buildOrgLimitNotice(
+		'authoring_runtime',
+		authoring
+			? {
+					missing: authoring.runtimeMissing,
+					dependency: authoring.runtimeDependency,
+					message: authoring.runtimeMessage
 				}
 			: null
 	);

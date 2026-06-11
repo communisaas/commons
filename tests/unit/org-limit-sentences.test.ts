@@ -3,6 +3,7 @@ import {
 	CLIENT_DIRECT_EMAIL_THRESHOLD,
 	MAX_DECRYPTED_SMS_DISPATCH,
 	ORG_LIMIT_CODES,
+	authoringRuntimeLimitNotice,
 	buildOrgLimitNotice,
 	callRoutingLimitNotice,
 	congressionalDeliveryLimitNotice,
@@ -49,6 +50,7 @@ describe('org limit sentences', () => {
 			/every other step runs/
 		);
 		expect(orgLimitSentence('call_initiation_not_armed')).toMatch(/phone service/);
+		expect(orgLimitSentence('authoring_runtime')).toMatch(/isn't connected yet/);
 		expect(orgLimitSentence('congressional_delivery')).toMatch(/save as drafts/);
 		// Each platform-api code carries its own sentence, true at the moment
 		// it renders, and each names the CSV path that works today.
@@ -186,6 +188,16 @@ describe('org limit sentences', () => {
 		expect(platformProbe.code).toBe('platform_api_credential_probe_failed');
 		expect(platformProbe.sentence).toBe(orgLimitSentence('platform_api_credential_probe_failed'));
 		expect(platformProbe.sentence).not.toBe(platform.sentence);
+
+		const authoring = authoringRuntimeLimitNotice({
+			runtimeMissing: ['GEMINI_API_KEY'],
+			runtimeDependency: 'model provider, source discovery, and page-read evaluation',
+			runtimeMessage: 'status'
+		});
+		expect(authoring.code).toBe('authoring_runtime');
+		expect(authoring.operatorDetail?.missing).toEqual(['GEMINI_API_KEY']);
+		expect(authoring.sentence).not.toContain('GEMINI');
+		expect(authoringRuntimeLimitNotice(null).operatorDetail).toBeNull();
 
 		const congressional = congressionalDeliveryLimitNotice({
 			runtimeMissing: ['CWC_API_KEY'],

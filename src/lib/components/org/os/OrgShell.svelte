@@ -129,7 +129,7 @@
 		aria-hidden={!show('studio')}
 		aria-label="{SPACE_LABELS.studio} workspace"
 	>
-		<StudioSpace {canPublish} {role} {spaces} />
+		<StudioSpace {canPublish} {spaces} />
 	</div>
 
 	<div
