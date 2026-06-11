@@ -7,6 +7,7 @@
 	import VerificationTimeline from '$lib/components/org/VerificationTimeline.svelte';
 	import GeographicSpread from '$lib/components/org/GeographicSpread.svelte';
 	import CoordinationIntegrity from '$lib/components/org/CoordinationIntegrity.svelte';
+	import IntegrityAssessment from '$lib/components/org/IntegrityAssessment.svelte';
 	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
 	import CountrySelector from '$lib/components/geographic/CountrySelector.svelte';
 	import JurisdictionPicker from '$lib/components/geographic/JurisdictionPicker.svelte';
@@ -510,6 +511,17 @@
 			{/if}
 		{/snippet}
 	</VerificationPacket>
+
+	<!-- Participation integrity: one plain-language reading; raw scores stay in the collapsed audit -->
+	{#if packet}
+		<div class="border-surface-border bg-surface-base space-y-3 rounded-md border p-6">
+			<h3 class="text-text-secondary text-sm font-medium">Participation integrity</h3>
+			<IntegrityAssessment {packet} />
+			<div class="border-surface-border border-t pt-3">
+				<CoordinationIntegrity {packet} />
+			</div>
+		</div>
+	{/if}
 
 	<!-- Inline Debate Section -->
 	{#if FEATURES.DEBATE}
@@ -1020,19 +1032,11 @@
 				<!-- Verification Timeline -->
 				<VerificationTimeline timeline={data.analytics.timeline} />
 
-				<!-- Analytics: two-column layout for geographic + coordination -->
-				<div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-					<!-- Geographic Spread -->
-					<GeographicSpread
-						topDistricts={data.analytics.topDistricts}
-						districtCount={packet?.districtCount ?? 0}
-					/>
-
-					<!-- Coordination Integrity -->
-					{#if packet}
-						<CoordinationIntegrity {packet} />
-					{/if}
-				</div>
+				<!-- Geographic Spread -->
+				<GeographicSpread
+					topDistricts={data.analytics.topDistricts}
+					districtCount={packet?.districtCount ?? 0}
+				/>
 			</div>
 		</details>
 	{/if}

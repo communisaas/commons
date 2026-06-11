@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { assessIntegrity } from '$lib/components/org/integrity-assessment';
+
 	type NetworkStats = {
 		memberCount: number;
 		totalSupporters: number;
@@ -54,20 +56,10 @@
 			{/each}
 		</div>
 
-		<!-- Packet scalar rows -->
-		<div class="mb-4">
-			<div class="mb-2 h-3 w-24 rounded bg-zinc-700/50"></div>
-			<div class="space-y-1.5">
-				{#each Array(4) as _, i}
-					<div class="flex items-center gap-2">
-						<div class="h-3 w-28 shrink-0 rounded bg-zinc-700/50"></div>
-						<div class="h-2 flex-1 overflow-hidden rounded-full bg-zinc-800">
-							<div class="h-full rounded-full bg-zinc-700/50" style="width: {80 - i * 15}%"></div>
-						</div>
-						<div class="h-3 w-10 shrink-0 rounded bg-zinc-700/50"></div>
-					</div>
-				{/each}
-			</div>
+		<!-- Coordination reading line -->
+		<div class="mb-4 space-y-2">
+			<div class="h-3 w-3/4 rounded bg-zinc-700/50"></div>
+			<div class="h-3 w-24 rounded bg-zinc-700/50"></div>
 		</div>
 
 		<!-- Country distribution skeleton -->
@@ -105,28 +97,41 @@
 		</div>
 	</div>
 
-	<!-- Packet scalar parity with single-org verification reports. -->
+	<!-- Coordination reading: one plain-language line; raw scores stay in the collapsed audit. -->
 	{#if stats.gds !== null || stats.ald !== null || stats.temporalEntropy !== null || stats.cai !== null}
 		<div class="mb-4">
-			<h4 class="mb-2 text-xs font-medium text-zinc-500">Coordination Scalars</h4>
-			<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-				<div class="rounded-lg bg-zinc-900/50 p-3">
-					<p class="text-xs font-medium text-zinc-500">GDS</p>
-					<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.gds)}</p>
+			<p class="text-sm text-zinc-400">
+				{assessIntegrity({
+					gds: stats.gds,
+					ald: stats.ald,
+					temporalEntropy: stats.temporalEntropy,
+					burstVelocity: null,
+					cai: stats.cai
+				})}
+			</p>
+			<details class="mt-2">
+				<summary class="cursor-pointer text-xs font-medium text-zinc-500 hover:text-zinc-400">
+					Coordination audit
+				</summary>
+				<div class="mt-2 grid grid-cols-2 gap-3 md:grid-cols-4">
+					<div class="rounded-lg bg-zinc-900/50 p-3">
+						<p class="text-xs font-medium text-zinc-500">Geographic diversity</p>
+						<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.gds)}</p>
+					</div>
+					<div class="rounded-lg bg-zinc-900/50 p-3">
+						<p class="text-xs font-medium text-zinc-500">Message distinctness</p>
+						<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.ald)}</p>
+					</div>
+					<div class="rounded-lg bg-zinc-900/50 p-3">
+						<p class="text-xs font-medium text-zinc-500">Timing spread</p>
+						<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.temporalEntropy)}</p>
+					</div>
+					<div class="rounded-lg bg-zinc-900/50 p-3">
+						<p class="text-xs font-medium text-zinc-500">Engagement depth</p>
+						<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.cai)}</p>
+					</div>
 				</div>
-				<div class="rounded-lg bg-zinc-900/50 p-3">
-					<p class="text-xs font-medium text-zinc-500">ALD</p>
-					<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.ald)}</p>
-				</div>
-				<div class="rounded-lg bg-zinc-900/50 p-3">
-					<p class="text-xs font-medium text-zinc-500">Entropy</p>
-					<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.temporalEntropy)}</p>
-				</div>
-				<div class="rounded-lg bg-zinc-900/50 p-3">
-					<p class="text-xs font-medium text-zinc-500">CAI</p>
-					<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.cai)}</p>
-				</div>
-			</div>
+			</details>
 		</div>
 	{/if}
 
