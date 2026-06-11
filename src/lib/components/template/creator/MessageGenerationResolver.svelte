@@ -12,20 +12,6 @@
 		type EncryptedMessageJobResult
 	} from '$lib/core/agents/message-job-recovery';
 	import AgentThinking from '$lib/components/ui/AgentThinking.svelte';
-	import { Artifact, Datum, Ratio } from '$lib/design';
-	import { formatCapabilityClusters } from '$lib/data/capability-clusters';
-	import {
-		buildMessageGenerationEvidence,
-		getGateEvidence,
-		messageGenerationSpineRows,
-		type MessageGenerationEvidenceRow
-	} from '$lib/data/capability-hypergraph';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel,
-		operatorCapabilityStateRatioSegments,
-		type OperatorCapabilityStateCounts
-	} from '$lib/data/capability-state-labels';
 	import MessageResults from './MessageResults.svelte';
 	import AuthGateOverlay from './AuthGateOverlay.svelte';
 	import SourceEditor from './SourceEditor.svelte';
@@ -80,108 +66,10 @@
 	let liveSearchOnlySourceCount = $state(0);
 	let liveSourceMode = $state<'discovery' | 'preverified' | null>(null);
 	const SOURCE_EVALUATION_FALLBACK_PREFIX = 'Evaluation unavailable';
-	const activeMessageJob = $derived(formData.content.activeMessageJob ?? null);
-	const liveTraceHandle = $derived(
-		activeMessageJob?.traceId ? activeMessageJob.traceId.slice(0, 8) : null
-	);
-	const messageCoreInput = $derived(
-		formData.objective.description || formData.objective.rawInput || formData.objective.title
-	);
-	const messageIntentFieldCount = $derived(
-		(formData.objective.title.trim() ? 1 : 0) + (messageCoreInput.trim() ? 1 : 0)
-	);
-	const selectedDecisionMakerCount = $derived(formData.audience.decisionMakers?.length ?? 0);
-	const messageProofGate = getGateEvidence('CP-message-proof-binding', ['T4-2', 'T4-7'], {
-		name: 'Authored artifact proof binding',
-		downstream: 3,
-		dependency: 'Drafted artifact proof attachment and writer proof plumbing'
-	});
-	const liveEvidenceSummary = $derived(
-		buildMessageGenerationEvidence({
-			intentFieldCount: messageIntentFieldCount,
-			targetCount: selectedDecisionMakerCount,
-			phase: currentPhase ?? 'preparing',
-			paragraphCount: 0,
-			sourceCount: liveSourceCount,
-			evaluatedSourceCount: liveEvaluatedSourceCount,
-			searchOnlySourceCount: liveSearchOnlySourceCount,
-			sourceEvidenceObserved: liveSourceMode !== null,
-			researchStepCount: thoughts.length,
-			hasRecoveryJob: Boolean(activeMessageJob),
-			recoveryJobStatus: activeMessageJob?.status ?? (isGenerating ? 'running' : null),
-			traceHandle: liveTraceHandle,
-			messageProofGate
-		})
-	);
-	const liveEvidenceRows = $derived<MessageGenerationEvidenceRow[]>(liveEvidenceSummary.rows);
-	const liveEvidenceStateCounts = $derived<OperatorCapabilityStateCounts>({
-		live: liveEvidenceRows.filter((row) => row.state === 'live').length,
-		partial: liveEvidenceRows.filter((row) => row.state === 'partial').length,
-		'draft-only': liveEvidenceRows.filter((row) => row.state === 'draft-only').length,
-		gated: liveEvidenceRows.filter((row) => row.state === 'gated').length
-	});
-	const liveEvidenceSegments = $derived(
-		operatorCapabilityStateRatioSegments(liveEvidenceStateCounts)
-	);
-	const liveFocusRows = $derived(
-		liveEvidenceRows.filter((row) =>
-			[
-				'intent-input',
-				'target-basis',
-				'stream-phase',
-				'source-basis',
-				'research-trace',
-				'recovery-job',
-				'proof-binding'
-			].includes(row.key)
-		)
-	);
-	const liveGenerationSpineRows = $derived(messageGenerationSpineRows(liveEvidenceRows));
-	const generationBoundaryState = $derived(
-		generationBoundary?.code === 'message_generation_rate_limited'
-			? 'draft-only'
-			: generationBoundary?.retryable === false
-				? 'gated'
-				: 'partial'
-	);
-	const generationBoundaryAction = $derived(
-		operatorCapabilityActionLabel(
-			generationBoundaryState,
-			generationBoundary?.code === 'message_generation_rate_limited'
-				? 'read quota boundary'
-				: generationBoundary?.retryable === false
-					? 'read runtime boundary'
-					: 'retry stream',
-			{
-				appendReadyArrow:
-					generationBoundary?.retryable !== false &&
-					generationBoundary?.code !== 'message_generation_rate_limited'
-			}
-		)
-	);
 	const generationBoundaryTitle = $derived(
 		generationBoundary?.code === 'message_generation_rate_limited'
-			? 'Authoring quota boundary'
-			: 'Authoring boundary'
-	);
-	const publicActionPublishAction = $derived(
-		operatorCapabilityActionLabel('partial', 'publish public action template', {
-			appendReadyArrow: true
-		})
-	);
-	const publicActionRetryAction = $derived(
-		operatorCapabilityActionLabel('partial', 'retry public action publish', {
-			appendReadyArrow: true
-		})
-	);
-	const publicActionPublishTitle =
-		'Publishes the authored public action template; delivery routes still own send, dispatch, receipt, and proof confirmation.';
-	const publicActionPublishLabel = $derived(
-		isPublishing
-			? 'Publishing public action template'
-			: publishError
-				? publicActionRetryAction
-				: publicActionPublishAction
+			? 'Message limit reached'
+			: "Couldn't finish your message"
 	);
 
 	/**
@@ -235,19 +123,11 @@
 	}
 
 	function phaseLabel(phase: PipelinePhase | 'recovering' | null): string {
-		if (phase === 'sources') return 'GROUND / source discovery';
-		if (phase === 'message') return 'AUTHOR / artifact authoring';
-		if (phase === 'complete') return 'AGGREGATE / artifact emitted';
-		if (phase === 'recovering') return 'AGGREGATE / recovery poll';
-		return 'INTENT / preparing run';
-	}
-
-	function rowStateLabel(row: MessageGenerationEvidenceRow): string {
-		return operatorCapabilityStateLabel(row.state);
-	}
-
-	function rowActionLabel(row: MessageGenerationEvidenceRow): string {
-		return operatorCapabilityActionLabel(row.state, row.action, { appendReadyArrow: true });
+		if (phase === 'sources') return 'Finding sources';
+		if (phase === 'message') return 'Writing your message';
+		if (phase === 'complete') return 'Message ready';
+		if (phase === 'recovering') return 'Picking up where you left off';
+		return 'Getting started';
 	}
 
 	function boundaryFromResponse(
@@ -269,7 +149,7 @@
 
 	function boundaryFromThrownError(err: unknown): GenerationBoundary {
 		const message =
-			err instanceof Error ? err.message : 'Authoring closed before an artifact emitted.';
+			err instanceof Error ? err.message : 'Message writing stopped before it finished.';
 		const inputNotReady =
 			message.includes('Missing subject line') || message.includes('No decision-makers selected');
 		return {
@@ -596,7 +476,7 @@
 		if (response.status === 404) return null;
 		if (!response.ok) {
 			const body = (await response.json().catch(() => ({}))) as RecoverableJobResponse;
-			throw new Error(body.error || 'Could not recover authoring job');
+			throw new Error(body.error || 'Could not check on your message');
 		}
 		const body = (await response.json()) as RecoverableJobResponse;
 		return body.job ?? null;
@@ -618,11 +498,11 @@
 		}
 
 		if (job.status === 'failed') {
-			throw new Error(job.errorMessage || 'Authoring failed');
+			throw new Error(job.errorMessage || 'Message generation failed');
 		}
 
 		if (job.status === 'expired') {
-			throw new Error('Authoring expired. Please try again.');
+			throw new Error('That message run expired. Please try again.');
 		}
 
 		return false;
@@ -648,21 +528,21 @@
 		isGenerating = true;
 		stage = 'generating';
 		errorMessage = null;
-		thoughts = ['Reconnecting to the authoring job...'];
+		thoughts = ['Reconnecting to your message...'];
 		liveSourceCount = 0;
 		liveEvaluatedSourceCount = 0;
 		liveSearchOnlySourceCount = 0;
 		liveSourceMode = null;
 		currentPhase = 'recovering';
-		currentPhaseMessage = 'Polling same-device recovery for the encrypted message result.';
+		currentPhaseMessage = 'Checking this device for your finished message.';
 
 		try {
 			const recovered = await pollActiveMessageJob(activeJob);
 			if (!recovered && !destroyed) {
-				throw new Error('Authoring is still running. Please try again in a moment.');
+				throw new Error('Your message is still being written. Please try again in a moment.');
 			}
 		} catch (err) {
-			errorMessage = err instanceof Error ? err.message : 'Could not recover authoring.';
+			errorMessage = err instanceof Error ? err.message : 'Could not recover your message.';
 			stage = 'error';
 		} finally {
 			isGenerating = false;
@@ -684,7 +564,7 @@
 			liveSearchOnlySourceCount = 0;
 			liveSourceMode = null;
 			currentPhase = null;
-			currentPhaseMessage = 'Preparing recoverable authoring boundary.';
+			currentPhaseMessage = 'Getting your message started.';
 			console.log('[MessageGenerationResolver] Starting streaming generation...');
 
 			const payload = buildGenerationPayload();
@@ -736,14 +616,14 @@
 				generationBoundary = boundaryFromResponse(
 					errorData,
 					response.status,
-					'Authoring did not emit an artifact'
+					'Your message could not be generated'
 				);
 				currentPhase = null;
 				currentPhaseMessage = generationBoundary.message;
 				throw new Error(
 					typeof errorData.error === 'string'
 						? errorData.error
-						: 'Authoring did not emit an artifact'
+						: 'Your message could not be generated'
 				);
 			}
 
@@ -825,12 +705,12 @@
 						if (sourceCount !== null) {
 							currentPhaseMessage =
 								sourceCount === 0
-									? 'No evaluated source ground attached; authoring can continue without citation support.'
+									? 'No sources attached yet — your message can still be written without citations.'
 									: liveSearchOnlySourceCount > 0
 										? `${liveEvaluatedSourceCount} evaluated · ${liveSearchOnlySourceCount} search-only source${liveSearchOnlySourceCount === 1 ? '' : 's'} attached.`
 										: liveSourceMode === 'preverified'
-											? `${liveEvaluatedSourceCount} cached evaluated source${liveEvaluatedSourceCount === 1 ? '' : 's'} ready for authoring.`
-											: `${liveEvaluatedSourceCount} evaluated source${liveEvaluatedSourceCount === 1 ? '' : 's'} ready for authoring.`;
+											? `${liveEvaluatedSourceCount} cached evaluated source${liveEvaluatedSourceCount === 1 ? '' : 's'} ready to cite.`
+											: `${liveEvaluatedSourceCount} evaluated source${liveEvaluatedSourceCount === 1 ? '' : 's'} ready to cite.`;
 						}
 						break;
 					}
@@ -838,7 +718,7 @@
 					case 'complete': {
 						streamCompleted = true;
 						currentPhase = 'complete';
-						currentPhaseMessage = 'Message artifact emitted with evidence boundaries.';
+						currentPhaseMessage = 'Your message is ready.';
 						const result = event.data as MessageGenerationResult;
 						applyMessageResult(result);
 
@@ -868,7 +748,9 @@
 					case 'error':
 						streamCompleted = true;
 						throw new Error(
-							typeof event.data.message === 'string' ? event.data.message : 'Authoring failed'
+							typeof event.data.message === 'string'
+								? event.data.message
+								: 'Message generation failed'
 						);
 				}
 			}
@@ -889,7 +771,7 @@
 				rateLimitMessage = err.message ?? null;
 				generationBoundary = {
 					code: 'message_generation_rate_limited',
-					message: rateLimitMessage || "You've used your available authoring runs for now.",
+					message: rateLimitMessage || "You've used your message generations for now.",
 					missing: ['available authoring quota'],
 					dependency: rateLimitResetAt
 						? `authoring quota reset at ${new Date(rateLimitResetAt).toLocaleString()}`
@@ -898,7 +780,8 @@
 				};
 				stage = 'rate-limited';
 			} else {
-				errorMessage = err instanceof Error ? err.message : 'Authoring failed. Please try again.';
+				errorMessage =
+					err instanceof Error ? err.message : 'Message generation failed. Please try again.';
 				generationBoundary ??= boundaryFromThrownError(err);
 				stage = 'error';
 			}
@@ -1006,77 +889,18 @@
 <div class="mx-auto max-w-3xl">
 	{#if stage === 'generating'}
 		<div class="generation-live">
-			<Artifact padding="compact" class="generation-contract-artifact">
-				<section class="generation-contract" aria-label="Live authored artifact contract">
-					<header class="generation-contract-head">
-						<div class="generation-contract-main">
-							<span class="generation-kicker">Live authoring contract</span>
-							<span class="generation-phase">{phaseLabel(currentPhase)}</span>
-							<span class="generation-message">
-								{currentPhaseMessage ?? liveEvidenceSummary.effect}
-							</span>
-						</div>
-						<div class="generation-state">
-							<span>{operatorCapabilityStateLabel(liveEvidenceSummary.state)}</span>
-							<span>
-								<Datum
-									value={liveEvidenceSummary.liveCount}
-									cite="buildMessageGenerationEvidence"
-								/>
-								/ <Datum value={liveEvidenceRows.length} cite="buildMessageGenerationEvidence" />
-							</span>
-						</div>
-					</header>
-					<Ratio segments={liveEvidenceSegments} height={6} />
-					<div class="generation-spine" aria-label="Authored artifact spine">
-						{#each liveGenerationSpineRows as row (row.key)}
-							<div
-								class="generation-spine-cell"
-								data-state={row.state}
-								title="{row.label}: {row.ground} Gate: {row.gate}"
-								aria-label="{row.label}: {rowStateLabel(row)}. {row.metric.value ?? 'unread'} {row
-									.metric.label}. {row.ground} Full gate: {row.gate}. Action: {rowActionLabel(row)}"
-							>
-								<span class="generation-spine-top">
-									<span class="generation-spine-label">{row.label}</span>
-									<span class="generation-spine-state">{rowStateLabel(row)}</span>
-								</span>
-								<span class="generation-spine-signal">
-									<Datum value={row.metric.value} cite={row.metric.cite} />
-									<span>{row.metric.label}</span>
-								</span>
-								<span class="generation-spine-ground">{row.ground}</span>
-								<span class="generation-spine-action">{rowActionLabel(row)}</span>
-							</div>
-						{/each}
-					</div>
-					<div class="generation-rows">
-						{#each liveFocusRows as row (row.key)}
-							<div class="generation-row" data-state={row.state}>
-								<div class="generation-row-main">
-									<span class="generation-row-label">{row.label}</span>
-									<span class="generation-row-meta">
-										{row.phase} / {formatCapabilityClusters(row.clusters)}
-									</span>
-									<span class="generation-row-ground">{row.ground}</span>
-									<span class="generation-row-effect">{row.effect}</span>
-								</div>
-								<div class="generation-row-metric">
-									<span class="generation-row-state">{rowStateLabel(row)}</span>
-									<span class="generation-row-action">{rowActionLabel(row)}</span>
-									<Datum value={row.metric.value} cite={row.metric.cite} />
-								</div>
-							</div>
-						{/each}
-					</div>
-				</section>
-			</Artifact>
+			<div class="generation-status" aria-live="polite">
+				<p class="generation-phase">{phaseLabel(currentPhase)}</p>
+				{#if currentPhaseMessage}
+					<p class="generation-note">{currentPhaseMessage}</p>
+				{/if}
+			</div>
 
 			<!-- Thought-centered loading: the agent's reasoning IS the experience -->
 			<AgentThinking
 				{thoughts}
 				isActive={stage === 'generating'}
-				context="Grounding and authoring"
+				context="Researching and writing"
 			/>
 		</div>
 	{:else if stage === 'results'}
@@ -1085,11 +909,8 @@
 			bind:geographicScope={formData.content.geographicScope}
 			message={formData.content.preview}
 			subject={formData.objective.title}
-			intentFieldCount={messageIntentFieldCount}
-			targetCount={selectedDecisionMakerCount}
 			sources={formData.content.sources || []}
 			researchLog={formData.content.researchLog || []}
-			activeMessageJob={formData.content.activeMessageJob}
 			draftOrigin={formData.content.draftOrigin ?? null}
 			onEdit={handleEdit}
 		/>
@@ -1133,8 +954,6 @@
 					type="button"
 					onclick={handleNext}
 					disabled={isPublishing}
-					title={publicActionPublishTitle}
-					aria-label={publicActionPublishLabel}
 					class="inline-flex items-center gap-2 rounded-lg px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all disabled:opacity-70
 						{publishError
 						? 'bg-red-600 hover:bg-red-700'
@@ -1144,25 +963,18 @@
 						<div
 							class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
 						></div>
-						Publishing public action...
+						Publishing...
 					{:else if publishError}
-						{publicActionRetryAction}
+						Try publishing again
 					{:else}
-						{publicActionPublishAction}
+						Publish action page
 					{/if}
 				</button>
 			</div>
 
-			<div
-				class="mt-3 flex flex-wrap items-center justify-end gap-2 text-xs text-slate-500"
-				aria-label="Public action publish boundary"
-				title={publicActionPublishTitle}
-			>
-				<span class="font-mono font-semibold tracking-wide text-slate-600 uppercase">
-					Public action template
-				</span>
-				<span>send / dispatch / receipt proof stay route-owned</span>
-			</div>
+			<p class="mt-3 text-right text-xs text-slate-500">
+				Publishing creates a public action page — sending happens from that page.
+			</p>
 		</div>
 	{:else if stage === 'editing'}
 		<!-- Message editor -->
@@ -1235,80 +1047,10 @@
 		</div>
 	{:else if stage === 'error'}
 		<div class="generation-live" data-state="error">
-			<Artifact padding="compact" class="generation-boundary-artifact">
-				<section
-					class="generation-contract generation-boundary"
-					data-state={generationBoundaryState}
-					aria-label={generationBoundaryTitle}
-				>
-					<header class="generation-contract-head">
-						<div class="generation-contract-main">
-							<span class="generation-kicker">{generationBoundaryTitle}</span>
-							<span class="generation-phase">{phaseLabel(currentPhase)}</span>
-							<span class="generation-message">
-								{generationBoundary?.message ?? errorMessage}
-							</span>
-						</div>
-						<div class="generation-state">
-							<span>{operatorCapabilityStateLabel(generationBoundaryState)}</span>
-							<span>{generationBoundaryAction}</span>
-						</div>
-					</header>
-					<Ratio segments={liveEvidenceSegments} height={6} />
-					{#if generationBoundary}
-						<div class="generation-boundary-meta" data-retryable={generationBoundary.retryable}>
-							<span>{generationBoundary.code}</span>
-							{#if generationBoundary.dependency}
-								<span>{generationBoundary.dependency}</span>
-							{/if}
-							{#if generationBoundary.missing.length > 0}
-								<span>missing: {generationBoundary.missing.join(', ')}</span>
-							{/if}
-						</div>
-					{/if}
-					<div class="generation-spine" aria-label="Authored artifact spine">
-						{#each liveGenerationSpineRows as row (row.key)}
-							<div
-								class="generation-spine-cell"
-								data-state={row.state}
-								title="{row.label}: {row.ground} Gate: {row.gate}"
-								aria-label="{row.label}: {rowStateLabel(row)}. {row.metric.value ?? 'unread'} {row
-									.metric.label}. {row.ground} Full gate: {row.gate}. Action: {rowActionLabel(row)}"
-							>
-								<span class="generation-spine-top">
-									<span class="generation-spine-label">{row.label}</span>
-									<span class="generation-spine-state">{rowStateLabel(row)}</span>
-								</span>
-								<span class="generation-spine-signal">
-									<Datum value={row.metric.value} cite={row.metric.cite} />
-									<span>{row.metric.label}</span>
-								</span>
-								<span class="generation-spine-ground">{row.ground}</span>
-								<span class="generation-spine-action">{rowActionLabel(row)}</span>
-							</div>
-						{/each}
-					</div>
-					<div class="generation-rows">
-						{#each liveFocusRows as row (row.key)}
-							<div class="generation-row" data-state={row.state}>
-								<div class="generation-row-main">
-									<span class="generation-row-label">{row.label}</span>
-									<span class="generation-row-meta">
-										{row.phase} / {formatCapabilityClusters(row.clusters)}
-									</span>
-									<span class="generation-row-ground">{row.ground}</span>
-									<span class="generation-row-effect">{row.effect}</span>
-								</div>
-								<div class="generation-row-metric">
-									<span class="generation-row-state">{rowStateLabel(row)}</span>
-									<span class="generation-row-action">{rowActionLabel(row)}</span>
-									<Datum value={row.metric.value} cite={row.metric.cite} />
-								</div>
-							</div>
-						{/each}
-					</div>
-				</section>
-			</Artifact>
+			<div class="generation-boundary" role="alert">
+				<p class="generation-boundary-title">{generationBoundaryTitle}</p>
+				<p class="generation-note">{generationBoundary?.message ?? errorMessage}</p>
+			</div>
 
 			<div class="flex items-center justify-center gap-4">
 				{#if generationBoundary?.retryable !== false}
@@ -1317,7 +1059,7 @@
 						onclick={generateMessage}
 						class="bg-participation-primary-600 hover:bg-participation-primary-700 inline-flex items-center gap-2 rounded-lg px-6 py-3 text-sm font-medium text-white transition-colors"
 					>
-						Retry stream
+						Try again
 					</button>
 				{/if}
 
@@ -1326,88 +1068,25 @@
 					onclick={onback}
 					class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
 				>
-					Review input
+					Go back
 				</button>
 			</div>
 		</div>
 	{:else if stage === 'rate-limited'}
 		<div class="generation-live" data-state="rate-limited">
-			<Artifact padding="compact" class="generation-boundary-artifact">
-				<section
-					class="generation-contract generation-boundary"
-					data-state={generationBoundaryState}
-					aria-label={generationBoundaryTitle}
-				>
-					<header class="generation-contract-head">
-						<div class="generation-contract-main">
-							<span class="generation-kicker">{generationBoundaryTitle}</span>
-							<span class="generation-phase">{phaseLabel(currentPhase)}</span>
-							<span class="generation-message">
-								{generationBoundary?.message ??
-									rateLimitMessage ??
-									"You've used your available authoring runs for now."}
-							</span>
-						</div>
-						<div class="generation-state">
-							<span>{operatorCapabilityStateLabel(generationBoundaryState)}</span>
-							<span>{generationBoundaryAction}</span>
-						</div>
-					</header>
-					<Ratio segments={liveEvidenceSegments} height={6} />
-					{#if generationBoundary}
-						<div class="generation-boundary-meta" data-retryable={generationBoundary.retryable}>
-							<span>{generationBoundary.code}</span>
-							{#if generationBoundary.dependency}
-								<span>{generationBoundary.dependency}</span>
-							{/if}
-							{#if generationBoundary.missing.length > 0}
-								<span>missing: {generationBoundary.missing.join(', ')}</span>
-							{/if}
-						</div>
-					{/if}
-					<div class="generation-spine" aria-label="Authored artifact spine">
-						{#each liveGenerationSpineRows as row (row.key)}
-							<div
-								class="generation-spine-cell"
-								data-state={row.state}
-								title="{row.label}: {row.ground} Gate: {row.gate}"
-								aria-label="{row.label}: {rowStateLabel(row)}. {row.metric.value ?? 'unread'} {row
-									.metric.label}. {row.ground} Full gate: {row.gate}. Action: {rowActionLabel(row)}"
-							>
-								<span class="generation-spine-top">
-									<span class="generation-spine-label">{row.label}</span>
-									<span class="generation-spine-state">{rowStateLabel(row)}</span>
-								</span>
-								<span class="generation-spine-signal">
-									<Datum value={row.metric.value} cite={row.metric.cite} />
-									<span>{row.metric.label}</span>
-								</span>
-								<span class="generation-spine-ground">{row.ground}</span>
-								<span class="generation-spine-action">{rowActionLabel(row)}</span>
-							</div>
-						{/each}
-					</div>
-					<div class="generation-rows">
-						{#each liveFocusRows as row (row.key)}
-							<div class="generation-row" data-state={row.state}>
-								<div class="generation-row-main">
-									<span class="generation-row-label">{row.label}</span>
-									<span class="generation-row-meta">
-										{row.phase} / {formatCapabilityClusters(row.clusters)}
-									</span>
-									<span class="generation-row-ground">{row.ground}</span>
-									<span class="generation-row-effect">{row.effect}</span>
-								</div>
-								<div class="generation-row-metric">
-									<span class="generation-row-state">{rowStateLabel(row)}</span>
-									<span class="generation-row-action">{rowActionLabel(row)}</span>
-									<Datum value={row.metric.value} cite={row.metric.cite} />
-								</div>
-							</div>
-						{/each}
-					</div>
-				</section>
-			</Artifact>
+			<div class="generation-boundary" role="status">
+				<p class="generation-boundary-title">{generationBoundaryTitle}</p>
+				<p class="generation-note">
+					{generationBoundary?.message ??
+						rateLimitMessage ??
+						"You've used your message generations for now."}
+				</p>
+				{#if rateLimitResetAt}
+					<p class="generation-note">
+						You can write again after {new Date(rateLimitResetAt).toLocaleString()}.
+					</p>
+				{/if}
+			</div>
 
 			<div class="flex items-center justify-center gap-4">
 				<button
@@ -1443,348 +1122,35 @@
 		padding-block: 1rem;
 	}
 
-	.generation-live :global(.generation-contract-artifact) {
-		padding: 0;
-		overflow: hidden;
-	}
-
-	.generation-live :global(.generation-boundary-artifact) {
-		padding: 0;
-		overflow: hidden;
-	}
-
-	.generation-contract {
+	.generation-status,
+	.generation-boundary {
 		display: grid;
-		gap: 0.75rem;
-		padding: 1rem 1.125rem;
+		gap: 0.35rem;
+		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		border-radius: 8px;
 		background: var(--surface-raised, oklch(0.985 0.004 60));
+		padding: 1rem 1.125rem;
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 	}
 
-	.generation-contract-head {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		gap: 1rem;
-	}
-
-	.generation-contract-main {
-		display: grid;
-		gap: 0.2rem;
-		min-width: 0;
-	}
-
-	.generation-kicker,
-	.generation-spine-label,
-	.generation-spine-state,
-	.generation-spine-action,
-	.generation-row-meta,
-	.generation-row-state,
-	.generation-state {
-		font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-		text-transform: uppercase;
-		letter-spacing: 0;
-	}
-
-	.generation-kicker {
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.66rem;
-		font-weight: 800;
-	}
-
-	.generation-phase {
+	.generation-phase,
+	.generation-boundary-title {
+		margin: 0;
 		color: var(--text-primary, oklch(0.22 0.015 60));
 		font-size: 0.95rem;
-		font-weight: 800;
+		font-weight: 700;
 		line-height: 1.2;
 	}
 
-	.generation-message {
+	.generation-note {
+		margin: 0;
 		color: var(--text-secondary, oklch(0.38 0.012 60));
-		font-size: 0.78rem;
+		font-size: 0.82rem;
 		font-weight: 500;
-		line-height: 1.35;
+		line-height: 1.45;
 	}
 
-	.generation-state {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-end;
-		gap: 0.15rem;
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.7rem;
-		font-weight: 800;
-		white-space: nowrap;
-	}
-
-	.generation-spine {
-		display: grid;
-		grid-template-columns: repeat(5, minmax(0, 1fr));
-		gap: 0.45rem;
-	}
-
-	.generation-spine-cell {
-		display: flex;
-		min-width: 0;
-		min-height: 6.8rem;
-		flex-direction: column;
-		gap: 0.32rem;
-		border-left: 2px solid transparent;
-		background: var(--surface-base, oklch(0.993 0.003 60));
-		padding: 0.56rem 0.62rem;
-	}
-
-	.generation-spine-cell[data-state='live'] {
-		border-left-color: var(--coord-verified, #10b981);
-	}
-
-	.generation-spine-cell[data-state='partial'] {
-		border-left-color: var(--coord-route-solid, #3bc4b8);
-	}
-
-	.generation-spine-cell[data-state='draft-only'] {
-		border-left-color: oklch(0.75 0.13 82);
-		background: oklch(0.984 0.005 65);
-	}
-
-	.generation-spine-cell[data-state='gated'] {
-		border-left-color: oklch(0.55 0.02 60);
-		background: oklch(0.982 0.004 60);
-		opacity: 0.88;
-	}
-
-	.generation-spine-top,
-	.generation-spine-signal {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 0.4rem;
-		min-width: 0;
-	}
-
-	.generation-spine-label,
-	.generation-spine-state {
-		font-size: 0.55rem;
-		font-weight: 850;
-		line-height: 1.2;
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-	}
-
-	.generation-spine-label {
-		color: var(--text-primary, oklch(0.22 0.015 60));
-	}
-
-	.generation-spine-state {
-		white-space: nowrap;
-	}
-
-	.generation-spine-signal {
-		justify-content: flex-start;
-		font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 0.64rem;
-		font-weight: 800;
-		color: var(--text-primary, oklch(0.22 0.015 60));
-	}
-
-	.generation-spine-signal span:last-child {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.generation-spine-ground {
-		display: -webkit-box;
-		-webkit-box-orient: vertical;
-		-webkit-line-clamp: 2;
-		overflow: hidden;
-		color: var(--text-secondary, oklch(0.38 0.012 60));
-		font-size: 0.66rem;
-		font-weight: 500;
-		line-height: 1.35;
-	}
-
-	.generation-spine-action {
-		margin-top: auto;
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.52rem;
-		font-weight: 850;
-		line-height: 1.2;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.generation-rows {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 0.5rem;
-	}
-
-	.generation-row {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		gap: 0.75rem;
-		min-height: 5.75rem;
-		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
-		border-left-width: 3px;
-		border-radius: 8px;
-		background: var(--surface-base, oklch(0.993 0.003 60));
-		padding: 0.7rem;
-	}
-
-	.generation-row[data-state='live'] {
-		border-left-color: var(--coord-verified, #10b981);
-	}
-
-	.generation-row[data-state='partial'] {
-		border-left-color: var(--coord-route-solid, #3bc4b8);
-	}
-
-	.generation-row[data-state='draft-only'] {
-		border-left-color: oklch(0.75 0.13 82);
-		background: oklch(0.984 0.005 65);
-	}
-
-	.generation-row[data-state='gated'] {
-		border-left-color: oklch(0.55 0.02 60);
-		opacity: 0.86;
-	}
-
-	.generation-row-main {
-		display: grid;
-		align-content: start;
-		gap: 0.28rem;
-		min-width: 0;
-	}
-
-	.generation-row-label {
-		color: var(--text-primary, oklch(0.22 0.015 60));
-		font-size: 0.78rem;
-		font-weight: 800;
-		line-height: 1.2;
-	}
-
-	.generation-row-meta,
-	.generation-row-state {
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.55rem;
-		font-weight: 800;
-		line-height: 1.25;
-	}
-
-	.generation-row-ground {
-		color: var(--text-secondary, oklch(0.38 0.012 60));
-		font-size: 0.72rem;
-		font-weight: 500;
-		line-height: 1.35;
-	}
-
-	.generation-row-effect,
-	.generation-row-action {
-		font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-		text-transform: uppercase;
-		letter-spacing: 0;
-	}
-
-	.generation-row-effect {
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.56rem;
-		font-weight: 750;
-		line-height: 1.3;
-	}
-
-	.generation-row-action {
-		max-width: 6.5rem;
-		overflow: hidden;
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.55rem;
-		font-weight: 850;
-		line-height: 1.2;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.generation-row-metric {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-end;
-		gap: 0.2rem;
-		min-width: 3.5rem;
-		color: var(--text-primary, oklch(0.22 0.015 60));
-		font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 0.88rem;
-		font-weight: 800;
-		line-height: 1;
-		text-align: right;
-	}
-
-	.generation-boundary {
-		border-left: 3px solid oklch(0.55 0.02 60);
-	}
-
-	.generation-boundary[data-state='partial'] {
-		border-left-color: var(--coord-route-solid, #3bc4b8);
-	}
-
-	.generation-boundary[data-state='draft-only'] {
-		border-left-color: oklch(0.75 0.13 82);
-	}
-
-	.generation-boundary[data-state='gated'] {
-		border-left-color: oklch(0.55 0.02 60);
-	}
-
-	.generation-boundary-meta {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4rem;
-		align-items: center;
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 0.62rem;
-		font-weight: 750;
-		line-height: 1.3;
-		text-transform: uppercase;
-	}
-
-	.generation-boundary-meta span {
-		max-width: 100%;
-		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
-		border-radius: 6px;
-		padding: 0.25rem 0.4rem;
-		background: var(--surface-base, oklch(0.993 0.003 60));
-		overflow-wrap: anywhere;
-	}
-
-	.generation-boundary-meta[data-retryable='false'] span:first-child {
-		border-color: oklch(0.65 0.11 30 / 0.35);
-		color: oklch(0.42 0.1 30);
-	}
-
-	@media (max-width: 640px) {
-		.generation-contract-head {
-			flex-direction: column;
-		}
-
-		.generation-state {
-			align-items: flex-start;
-		}
-
-		.generation-rows {
-			grid-template-columns: 1fr;
-		}
-
-		.generation-spine {
-			grid-template-columns: 1fr;
-		}
-
-		.generation-row {
-			min-height: 0;
-		}
-
-		.generation-spine-cell {
-			min-height: 0;
-		}
+	.generation-boundary[role='alert'] {
+		border-left: 3px solid oklch(0.58 0.18 28);
 	}
 </style>

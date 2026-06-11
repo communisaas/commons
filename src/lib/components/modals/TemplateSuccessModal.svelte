@@ -13,18 +13,7 @@
 	} from '@lucide/svelte';
 	import type { Template } from '$lib/types/template';
 	import { parseRecipientConfig } from '$lib/types/template';
-	import { Datum, Ratio } from '$lib/design';
-	import { formatCapabilityClusters } from '$lib/data/capability-clusters';
-	import {
-		buildPublicActionPublishContractRows,
-		getGateEvidence,
-		type PublicActionPublishContractRow
-	} from '$lib/data/capability-hypergraph';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel,
-		operatorCapabilityStateRatioSegments
-	} from '$lib/data/capability-state-labels';
+	import { orgLimitSentence } from '$lib/data/org-limit-sentences';
 	import { supportsWebShare, copyToClipboard as clipboardCopy } from '$lib/utils/browserUtils';
 	import { generateShareMessage } from '$lib/utils/share-messages';
 
@@ -47,11 +36,6 @@
 	} = $props();
 
 	const recipientConfig = $derived(parseRecipientConfig(template.recipient_config));
-	const targetCount = $derived(
-		(recipientConfig.decisionMakers?.length ?? 0) +
-			(recipientConfig.customRecipients?.length ?? 0) +
-			(recipientConfig.includesCongress ? 1 : 0)
-	);
 	// Extract decision-maker names from recipient_config for the reader-route preview.
 	const recipientNames = $derived(
 		(() => {
@@ -106,60 +90,10 @@
 	let hasError = $derived(!!error);
 	let useNativeShare = supportsWebShare();
 	const actionRouteTitle =
-		'Opens the public action route; reader-side send confirmation remains on that route.';
-	const SOURCE_EVALUATION_FALLBACK_PREFIX = 'Evaluation unavailable';
-	const sourceCount = $derived(template.sources?.length ?? 0);
-	const searchOnlySourceCount = $derived(
-		(template.sources ?? []).filter(
-			(source) =>
-				!source.incentive_position ||
-				(source.credibility_rationale ?? '').startsWith(SOURCE_EVALUATION_FALLBACK_PREFIX)
-		).length
+		'Opens the public action page; readers confirm their own sends from that page.';
+	const targetsCongress = $derived(
+		template.deliveryMethod === 'cwc' || Boolean(recipientConfig.includesCongress)
 	);
-	const evaluatedSourceCount = $derived(sourceCount - searchOnlySourceCount);
-
-	const messageProofGate = getGateEvidence('CP-message-proof-binding', ['T4-2', 'T4-7'], {
-		name: 'Published action proof binding',
-		downstream: 3,
-		dependency: 'Drafted artifact proof attachment and writer proof plumbing'
-	});
-	const publishContractRows = $derived<PublicActionPublishContractRow[]>(
-		buildPublicActionPublishContractRows({
-			isPublished,
-			publishing,
-			isDraft: hasError ? false : isDraft,
-			targetCount,
-			evaluatedSourceCount,
-			searchOnlySourceCount,
-			messageProofGate
-		})
-	);
-	const publishRecordState = $derived(
-		publishContractRows.find((row) => row.id === 'publish-record')?.state ?? 'gated'
-	);
-	const publishContractStateCounts = $derived(
-		publishContractRows.reduce(
-			(acc, row) => {
-				acc[row.state] += 1;
-				return acc;
-			},
-			{ live: 0, partial: 0, 'draft-only': 0, gated: 0 } as Record<
-				PublicActionPublishContractRow['state'],
-				number
-			>
-		)
-	);
-	const publishContractSegments = $derived(
-		operatorCapabilityStateRatioSegments(publishContractStateCounts)
-	);
-
-	function publishContractStateLabel(row: PublicActionPublishContractRow): string {
-		return operatorCapabilityStateLabel(row.state);
-	}
-
-	function publishContractActionLabel(row: PublicActionPublishContractRow): string {
-		return operatorCapabilityActionLabel(row.state, row.action, { appendReadyArrow: true });
-	}
 
 	function handleClose() {
 		onclose?.();
@@ -271,7 +205,7 @@
 			{:else}
 				<h2 class="mb-2 text-2xl font-bold text-slate-900">Public action published</h2>
 				<p class="text-slate-600">
-					The action page is live; reader confirmation and delivery remain route-owned.
+					Your action page is live. Each reader sends and confirms their own message from it.
 				</p>
 			{/if}
 		</div>
@@ -296,56 +230,13 @@
 			</div>
 		</div>
 
-		<section class="publish-contract px-6 pb-4" aria-label="Public action publish contract">
-			<div class="publish-contract-shell">
-				<header class="publish-contract-head">
-					<div class="publish-contract-main">
-						<span class="publish-contract-kicker">Publish contract</span>
-						<span class="publish-contract-title">Public action route, not delivery proof</span>
-					</div>
-					<div class="publish-contract-state" aria-label="Publish contract state counts">
-						<span>{operatorCapabilityStateLabel(publishRecordState)}</span>
-						<span>
-							<Datum
-								value={publishContractRows.length}
-								cite="TemplateSuccessModal publishContractRows"
-							/>
-							rows
-						</span>
-					</div>
-				</header>
-				<Ratio segments={publishContractSegments} height={6} />
-				<div class="publish-contract-grid">
-					{#each publishContractRows as row (row.label)}
-						<div
-							class="publish-contract-row"
-							data-state={row.state}
-							title="{row.label}: {row.effect} Gate: {row.gate}"
-							aria-label="{row.label}: {publishContractStateLabel(
-								row
-							)}. {row.effect} Gate: {row.gate}. Action: {publishContractActionLabel(row)}"
-						>
-							<div class="publish-contract-row-main">
-								<span class="publish-contract-row-top">
-									<span class="publish-contract-row-label">{row.label}</span>
-									<span class="publish-contract-row-state">{publishContractStateLabel(row)}</span>
-								</span>
-								<span class="publish-contract-row-cluster">
-									{formatCapabilityClusters(row.clusters)}
-								</span>
-								<span class="publish-contract-row-effect">{row.effect}</span>
-								<span class="publish-contract-row-gate">{row.gate}</span>
-							</div>
-							<div class="publish-contract-row-metric">
-								<span class="publish-contract-row-action">{publishContractActionLabel(row)}</span>
-								<Datum value={row.metric.value} cite={row.metric.cite} />
-								<span>{row.metric.label}</span>
-							</div>
-						</div>
-					{/each}
-				</div>
+		{#if targetsCongress}
+			<div class="px-6 pb-4">
+				<p class="congressional-note rounded-lg p-3 text-sm leading-relaxed text-slate-600">
+					{orgLimitSentence('congressional_delivery')}
+				</p>
 			</div>
-		</section>
+		{/if}
 
 		{#if showShareActions}
 			{#if isPublished}
@@ -523,173 +414,10 @@
 		border-left: 3px solid var(--coord-route-solid, #3bc4b8);
 	}
 
-	.publish-contract-shell {
-		display: grid;
-		gap: 0.7rem;
+	.congressional-note {
 		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
-		border-radius: 8px;
 		background: var(--surface-raised, oklch(0.985 0.004 60));
-		padding: 0.8rem;
-	}
-
-	.publish-contract-head {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		gap: 0.75rem;
-	}
-
-	.publish-contract-main {
-		display: grid;
-		gap: 0.14rem;
-		min-width: 0;
-	}
-
-	.publish-contract-kicker,
-	.publish-contract-state,
-	.publish-contract-row-state,
-	.publish-contract-row-action,
-	.publish-contract-row-metric {
-		font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-		text-transform: uppercase;
-		letter-spacing: 0;
-	}
-
-	.publish-contract-kicker {
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.62rem;
-		font-weight: 800;
-	}
-
-	.publish-contract-title {
-		color: var(--text-primary, oklch(0.22 0.015 60));
-		font-size: 0.84rem;
-		font-weight: 850;
-		line-height: 1.2;
-	}
-
-	.publish-contract-state {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-end;
-		gap: 0.12rem;
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.6rem;
-		font-weight: 800;
-		white-space: nowrap;
-	}
-
-	.publish-contract-grid {
-		display: grid;
-		grid-template-columns: 1fr;
-		gap: 0.45rem;
-	}
-
-	.publish-contract-row {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		gap: 0.65rem;
-		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
-		border-left-width: 3px;
-		border-radius: 8px;
-		background: var(--surface-base, oklch(0.993 0.003 60));
-		padding: 0.62rem;
-	}
-
-	.publish-contract-row[data-state='live'] {
-		border-left-color: var(--coord-verified, #10b981);
-	}
-
-	.publish-contract-row[data-state='partial'] {
-		border-left-color: var(--coord-route-solid, #3bc4b8);
-	}
-
-	.publish-contract-row[data-state='draft-only'] {
-		border-left-color: oklch(0.75 0.13 82);
-		background: oklch(0.988 0.006 74);
-	}
-
-	.publish-contract-row[data-state='gated'] {
-		border-left-color: oklch(0.55 0.02 60);
-		opacity: 0.88;
-	}
-
-	.publish-contract-row-main {
-		min-width: 0;
-	}
-
-	.publish-contract-row-top {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.5rem;
-	}
-
-	.publish-contract-row-label {
-		color: var(--text-primary, oklch(0.22 0.015 60));
-		font-size: 0.76rem;
-		font-weight: 850;
-		line-height: 1.2;
-	}
-
-	.publish-contract-row-state {
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.52rem;
-		font-weight: 850;
-		white-space: nowrap;
-	}
-
-	.publish-contract-row-cluster {
-		display: block;
-		margin-top: 0.28rem;
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 0.52rem;
-		font-weight: 800;
-		line-height: 1.25;
-		text-transform: uppercase;
-	}
-
-	.publish-contract-row-effect {
-		display: block;
-		margin-top: 0.4rem;
-		color: var(--text-secondary, oklch(0.38 0.012 60));
-		font-size: 0.66rem;
-		font-weight: 600;
-		line-height: 1.35;
-	}
-
-	.publish-contract-row-gate {
-		display: block;
-		margin-top: 0.38rem;
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.56rem;
-		font-weight: 600;
-		line-height: 1.35;
-	}
-
-	.publish-contract-row-metric {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-end;
-		gap: 0.12rem;
-		min-width: 4.25rem;
-		color: var(--text-primary, oklch(0.22 0.015 60));
-		font-size: 0.88rem;
-		font-weight: 850;
-		line-height: 1;
-		text-align: right;
-	}
-
-	.publish-contract-row-action,
-	.publish-contract-row-metric span {
-		max-width: 5.75rem;
-		overflow: hidden;
-		color: var(--text-tertiary, oklch(0.48 0.012 60));
-		font-size: 0.52rem;
-		font-weight: 800;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+		margin: 0;
 	}
 
 	.draft-boundary {
