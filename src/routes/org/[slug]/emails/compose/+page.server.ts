@@ -13,6 +13,7 @@ import {
 } from '$lib/server/email/compiler';
 import { sanitizeEmailBody } from '$lib/server/email/sanitize';
 import { getEmailServerDispatchReadiness } from '$lib/server/email/server-dispatch-readiness';
+import { orgLimitSentence } from '$lib/data/org-limit-sentences';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad, Actions } from './$types';
@@ -418,14 +419,15 @@ export const actions: Actions = {
 			});
 			if (!serverDispatchReadiness.ready) {
 				return fail(424, {
-					error: serverDispatchReadiness.message,
+					error: orgLimitSentence('email_server_dispatch_dependency_missing'),
 					errorCode: 'email_server_dispatch_dependency_missing',
 					blockedVerb: 'server_email_dispatch',
 					preservedArtifact: 'email_draft',
 					blastId: String(sendResult.id),
 					draftHref: `/org/${params.slug}/emails/${sendResult.id}`,
 					dependency: serverDispatchReadiness.dependency,
-					missing: serverDispatchReadiness.missing
+					missing: serverDispatchReadiness.missing,
+					runtimeMessage: serverDispatchReadiness.message
 				});
 			}
 			await serverMutation(api.email.enqueueServerDispatch, {

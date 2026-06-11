@@ -65,6 +65,10 @@
 	.limit-admin summary {
 		cursor: pointer;
 		width: fit-content;
+		/* 44px minimum touch target; padding keeps the quiet type size. */
+		min-height: 44px;
+		box-sizing: border-box;
+		padding: 0.8125rem 0.25rem 0.8125rem 0;
 		font-family: 'Satoshi', system-ui, sans-serif;
 		font-size: 0.75rem;
 		color: var(--text-tertiary, oklch(0.55 0.01 250));

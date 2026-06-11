@@ -70,7 +70,7 @@ export function textDispatchLimitSentence(batchSize: number = MAX_DECRYPTED_SMS_
 export function emailServerDispatchLimitSentence(
 	threshold: number = CLIENT_DIRECT_EMAIL_THRESHOLD
 ): string {
-	return `Sends over ${threshold} recipients are saved as drafts until your email infrastructure is connected.`;
+	return `Emails to more than ${threshold} recipients are saved as drafts until your email infrastructure is connected.`;
 }
 
 export function orgLimitSentence(code: OrgLimitCode): string {
@@ -84,11 +84,13 @@ export function orgLimitSentence(code: OrgLimitCode): string {
 		case 'call_initiation_not_armed':
 			return 'Calls connect once phone service is configured.';
 		case 'platform_api_sync_not_armed':
+			return "Direct sync isn't available for this platform yet. CSV import works now.";
 		case 'platform_api_credential_custody_not_configured':
+			return "Platform credentials can't be stored yet, so direct sync isn't available. CSV import works now.";
 		case 'platform_api_credential_probe_failed':
-			return 'Action Network syncs directly. Other platforms import by CSV for now.';
+			return "Your stored platform credential didn't open — reconnect it. CSV import still works.";
 		case 'congressional_delivery':
-			return 'Congressional delivery opens at launch — messages save as drafts until then.';
+			return "Congressional delivery isn't available yet — messages save as drafts until it is.";
 	}
 }
 

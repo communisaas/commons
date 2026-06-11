@@ -1,5 +1,5 @@
 /**
- * Constituent receipt access (T6-4) — authenticated user's verified-action
+ * Constituent receipt access — authenticated user's verified-action
  * receipts, K-anonymized.
  */
 

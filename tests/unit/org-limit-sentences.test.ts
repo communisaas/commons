@@ -26,7 +26,7 @@ const PLATFORM_API_CODES = [
 // verbatim in this file either.
 const ED = 'ed';
 const INTERNAL_VOCABULARY = new RegExp(
-	`\\b(arm${ED}|bound${ED}|draft-on${'ly'}|not arm${ED})\\b`
+	`\\b(arm${ED}|arm${'ing'}|bound${ED}|depend${'ency'}-bound|draft-on${'ly'}|gat${ED}|not arm${ED})\\b`
 );
 
 describe('org limit sentences', () => {
@@ -43,18 +43,27 @@ describe('org limit sentences', () => {
 			`batches of ${MAX_DECRYPTED_SMS_DISPATCH}`
 		);
 		expect(orgLimitSentence('email_server_dispatch_dependency_missing')).toContain(
-			`over ${CLIENT_DIRECT_EMAIL_THRESHOLD} recipients`
+			`more than ${CLIENT_DIRECT_EMAIL_THRESHOLD} recipients`
 		);
 		expect(orgLimitSentence('workflow_email_dependency_missing')).toMatch(
 			/every other step runs/
 		);
 		expect(orgLimitSentence('call_initiation_not_armed')).toMatch(/phone service/);
-		expect(orgLimitSentence('congressional_delivery')).toMatch(/opens at launch/);
-		for (const code of PLATFORM_API_CODES) {
-			const sentence = orgLimitSentence(code);
-			expect(sentence).toMatch(/Action Network/);
+		expect(orgLimitSentence('congressional_delivery')).toMatch(/save as drafts/);
+		// Each platform-api code carries its own sentence, true at the moment
+		// it renders, and each names the CSV path that works today.
+		expect(orgLimitSentence('platform_api_sync_not_armed')).toMatch(
+			/isn't available for this platform yet/
+		);
+		expect(orgLimitSentence('platform_api_credential_custody_not_configured')).toMatch(
+			/can't be stored yet/
+		);
+		expect(orgLimitSentence('platform_api_credential_probe_failed')).toMatch(/reconnect it/);
+		const platformSentences = PLATFORM_API_CODES.map((code) => orgLimitSentence(code));
+		for (const sentence of platformSentences) {
 			expect(sentence).toMatch(/CSV/);
 		}
+		expect(new Set(platformSentences).size).toBe(PLATFORM_API_CODES.length);
 	});
 
 	it('keeps internal vocabulary, identifiers, and paths out of member-facing copy', () => {
@@ -67,6 +76,7 @@ describe('org limit sentences', () => {
 				// Chokepoint-style and planning-task-style identifiers
 				expect(text).not.toMatch(/\bCP-/);
 				expect(text).not.toMatch(/\bT\d+-\d+\b/);
+				expect(text).not.toMatch(/\b[EAC]-\d+\b/);
 				// File paths and source extensions
 				expect(text).not.toMatch(/[\\/]/);
 				expect(text).not.toMatch(/\.(ts|svelte|md|json)\b/);
@@ -77,7 +87,7 @@ describe('org limit sentences', () => {
 	it('interpolates the batch size and threshold instead of hard-coding them', () => {
 		expect(textDispatchLimitSentence(7)).toContain('batches of 7');
 		expect(textDispatchLimitSentence(7)).not.toContain(String(MAX_DECRYPTED_SMS_DISPATCH));
-		expect(emailServerDispatchLimitSentence(9999)).toContain('over 9999 recipients');
+		expect(emailServerDispatchLimitSentence(9999)).toContain('more than 9999 recipients');
 		expect(emailServerDispatchLimitSentence(9999)).not.toContain(
 			String(CLIENT_DIRECT_EMAIL_THRESHOLD)
 		);
@@ -174,7 +184,8 @@ describe('org limit sentences', () => {
 			'platform_api_credential_probe_failed'
 		);
 		expect(platformProbe.code).toBe('platform_api_credential_probe_failed');
-		expect(platformProbe.sentence).toBe(platform.sentence);
+		expect(platformProbe.sentence).toBe(orgLimitSentence('platform_api_credential_probe_failed'));
+		expect(platformProbe.sentence).not.toBe(platform.sentence);
 
 		const congressional = congressionalDeliveryLimitNotice({
 			runtimeMissing: ['CWC_API_KEY'],

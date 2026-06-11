@@ -10,6 +10,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
+import { orgLimitSentence } from '$lib/data/org-limit-sentences';
 import { getCallInitiationReadiness } from '$lib/server/calls/call-initiation-readiness';
 import { initiatePatchThroughCall } from '$lib/server/sms/twilio';
 import type { RequestHandler } from './$types';
@@ -29,7 +30,7 @@ function callInitiationBoundary(
 	return json(
 		{
 			error: 'call_initiation_not_armed',
-			message: readiness.message,
+			message: orgLimitSentence('call_initiation_not_armed'),
 			blockedVerb: 'patch_through_call',
 			preservedArtifact: 'call_record_not_created',
 			dependency: readiness.dependency,
@@ -37,7 +38,8 @@ function callInitiationBoundary(
 			runtimeFlag: readiness.runtimeFlag,
 			scope: readiness.scope,
 			surfaceMounted: readiness.surfaceMounted,
-			proxyImplemented: readiness.proxyImplemented
+			proxyImplemented: readiness.proxyImplemented,
+			runtimeMessage: readiness.message
 		},
 		{ status }
 	);

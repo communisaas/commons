@@ -5,6 +5,7 @@ import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { getEmailServerDispatchReadiness } from '$lib/server/email/server-dispatch-readiness';
+import { orgLimitSentence } from '$lib/data/org-limit-sentences';
 import type { Id } from '$convex/_generated/dataModel';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -24,12 +25,13 @@ async function serverDispatchBoundary(orgSlug: string) {
 	});
 	if (readiness.ready) return null;
 	return {
-		error: readiness.message,
+		error: orgLimitSentence('email_server_dispatch_dependency_missing'),
 		errorCode: 'email_server_dispatch_dependency_missing',
 		blockedVerb: 'server_email_dispatch',
 		preservedArtifact: 'email_draft',
 		dependency: readiness.dependency,
-		missing: readiness.missing
+		missing: readiness.missing,
+		runtimeMessage: readiness.message
 	};
 }
 

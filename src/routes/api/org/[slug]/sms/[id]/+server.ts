@@ -11,7 +11,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
-import { MAX_DECRYPTED_SMS_DISPATCH } from '$lib/data/org-limit-sentences';
+import { MAX_DECRYPTED_SMS_DISPATCH, orgLimitSentence } from '$lib/data/org-limit-sentences';
 import { getTextDispatchReadiness } from '$lib/server/sms/text-dispatch-readiness';
 import { isValidE164, sendSms } from '$lib/server/sms/twilio';
 import { SMS_MAX_LENGTH } from '$lib/server/sms/types';
@@ -61,7 +61,7 @@ function textDispatchBoundary(readiness = getTextDispatchReadiness(textDispatchE
 	return json(
 		{
 			error: 'text_dispatch_not_armed',
-			message: readiness.message,
+			message: orgLimitSentence('text_dispatch_not_armed'),
 			blockedVerb: 'carrier_delivery',
 			preservedArtifact: 'sms_draft',
 			dependency: readiness.dependency,
@@ -69,7 +69,8 @@ function textDispatchBoundary(readiness = getTextDispatchReadiness(textDispatchE
 			runtimeFlag: readiness.runtimeFlag,
 			runnerImplemented: readiness.runnerImplemented,
 			clientDecryptorMounted: readiness.clientDecryptorMounted,
-			clientBatchRouteMounted: readiness.clientBatchRouteMounted
+			clientBatchRouteMounted: readiness.clientBatchRouteMounted,
+			runtimeMessage: readiness.message
 		},
 		{ status: 424 }
 	);

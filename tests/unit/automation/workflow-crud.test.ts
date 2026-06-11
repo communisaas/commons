@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { orgLimitSentence } from '../../../src/lib/data/org-limit-sentences';
 
 const {
 	mockFeatures,
@@ -364,10 +365,14 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 		expect(body.definitionSaved).toBe(false);
 		expect(body.missing).toContain('AWS_ACCESS_KEY_ID');
 		// The boundary speaks plainly: no internal gate identifiers ride along,
-		// and the message avoids internal state vocabulary.
+		// the member-facing headline is the shared limit sentence (not the
+		// readiness module's internal prose, which moves to runtimeMessage for
+		// operators), and the headline carries no internal state vocabulary.
 		expect(body).not.toHaveProperty('gate');
 		expect(body).not.toHaveProperty('taskIds');
-		expect(body.message).not.toMatch(/\barmed\b/i);
+		expect(body.message).toBe(orgLimitSentence('workflow_email_dependency_missing'));
+		expect(body.message).not.toMatch(/\b(arm(ed|ing)?|dependency-bound|draft-only|gated)\b/i);
+		expect(body.runtimeMessage).toBe('Workflow email is dependency-bound.');
 		// The org key verifier presence feeds the readiness check.
 		expect(mockEmailReadiness).toHaveBeenCalledWith({ orgKeyConfigured: false });
 		// Fail-closed: the workflow must NOT be enabled (no setEnabled call).

@@ -22,8 +22,8 @@ export const PLATFORM_API_SYNC_DEPENDENCY =
  * The bounded sync runner is implemented: paginated adapter fetch, normalized
  * handoff into supporters.importWithEncryption, and continuation checkpoints
  * persisted per slice. Arming is still per-adapter — only sources registered
- * in PLATFORM_SYNC_ADAPTERS may claim a live direct import; tag/list sync
- * remains gated by T1-3.
+ * in PLATFORM_SYNC_ADAPTERS may claim a live direct import; tag/list sync is
+ * not implemented yet, so direct import covers people records only.
  */
 export const PLATFORM_API_SYNC_RUNNER_IMPLEMENTED = true;
 

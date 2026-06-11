@@ -281,7 +281,8 @@ export const actions: Actions = {
 					blockedVerb: 'open_platform_credential',
 					preservedArtifact: 'encrypted_credential_custody'
 				}),
-				error:
+				// Raw exception text is operator detail, never the headline.
+				failureDetail:
 					err instanceof Error ? err.message : 'Stored platform credential could not be opened.'
 			});
 		}
@@ -351,7 +352,8 @@ export const actions: Actions = {
 					blockedVerb: 'open_platform_credential',
 					preservedArtifact: 'encrypted_credential_custody'
 				}),
-				error:
+				// Raw exception text is operator detail, never the headline.
+				failureDetail:
 					err instanceof Error ? err.message : 'Stored platform credential could not be opened.'
 			});
 		}
