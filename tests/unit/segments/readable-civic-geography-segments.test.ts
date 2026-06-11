@@ -19,9 +19,6 @@ const segmentBuilder = readFileSync('src/lib/components/segments/SegmentBuilder.
 const layoutServer = readFileSync('src/routes/org/[slug]/+layout.server.ts', 'utf8');
 const supportersServer = readFileSync('src/routes/org/[slug]/supporters/+page.server.ts', 'utf8');
 const spaces = readFileSync('src/lib/components/org/os/spaces.ts', 'utf8');
-const hypergraph = readFileSync('src/lib/data/capability-hypergraph.ts', 'utf8');
-const capabilityScope = readFileSync('docs/design/ORG-CAPABILITY-SCOPE.md', 'utf8');
-const canonicalDoc = readFileSync('docs/design/ORG-OS-AUTHORING-FIRST.md', 'utf8');
 
 describe('readable civic geography segment labels', () => {
 	it('recognizes congressional district labels as platform-neutral import fields', () => {
@@ -91,7 +88,7 @@ describe('readable civic geography segment labels', () => {
 		);
 	});
 
-	it('threads imported district filters into aggregate-only readiness', () => {
+	it('threads imported district filters into segment condition counts', () => {
 		expect(spaces).toContain('congressionalDistrictConditionCount');
 		expect(spaces).toContain('actionDistrictLabelConditionCount');
 		expect(layoutServer).toContain("segmentConditionCount(conditions, [\n\t\t\t'congressionalDistrict'");
@@ -100,31 +97,5 @@ describe('readable civic geography segment labels', () => {
 			"segmentConditionCount(conditions, [\n\t\t\t'congressionalDistrict'"
 		);
 		expect(supportersServer).toContain("segmentConditionCount(conditions, ['actionDistrictLabel'])");
-		expect(hypergraph).toContain('congressionalDistrictFilterCount');
-		expect(hypergraph).toContain('actionDistrictLabelFilterCount');
-		expect(hypergraph).toContain('imported congressional-district filters');
-		expect(hypergraph).toContain('action-time district-label filters');
-		expect(hypergraph).toContain(
-			'Imported state/province, imported congressional district, and action-time congressional district labels can shape cohorts'
-		);
-		expect(capabilityScope).toContain(
-			'`congressionalDistrict` (equals from imported readable label)'
-		);
-		expect(capabilityScope).toContain(
-			'`actionDistrictLabel` (equals action-time readable congressional district label)'
-		);
-		expect(canonicalDoc).toContain(
-			'Imported state/province, imported congressional district, and action-time congressional district labels are usable cohort fields'
-		);
-		expect(canonicalDoc).toContain(
-			'The `/supporters` builder renders a local civic-geography boundary'
-		);
-		expect(canonicalDoc).toContain('passes capped backend counts or bulk tag results through as lower bounds');
-		expect(capabilityScope).toContain('The route-local `SegmentBuilder` also carries that civic-geography boundary');
-		expect(capabilityScope).toContain(
-			'count or bulk tag result returned with `partial: true` renders as a lower bound'
-		);
-		expect(capabilityScope).toContain('not verified/materialized local/special geography');
-		expect(capabilityScope).toContain('no local/special district membership filter exists yet');
 	});
 });

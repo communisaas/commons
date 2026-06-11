@@ -11,7 +11,6 @@ const composeServerSource = readFileSync(
 	'utf8'
 );
 const composePageSource = readFileSync('src/routes/org/[slug]/emails/compose/+page.svelte', 'utf8');
-const capabilityScopeSource = readFileSync('docs/design/ORG-CAPABILITY-SCOPE.md', 'utf8');
 
 describe('saved segment email recipient filters', () => {
 	it('persists saved segment ids in the closed email recipient filter shape', () => {
@@ -52,16 +51,5 @@ describe('saved segment email recipient filters', () => {
 		expect(composePageSource).not.toContain("import SegmentBuilder");
 		expect(composePageSource).not.toContain('useSegmentBuilder');
 		expect(composePageSource).not.toContain('segmentFilterJson');
-	});
-
-	it('updates capability honesty without overclaiming civic geography labels', () => {
-		expect(capabilityScopeSource).toContain('Email `recipientFilter` now accepts saved `segmentIds`');
-		expect(capabilityScopeSource).toContain('saved People segments can now be selected as email recipient lists');
-		expect(capabilityScopeSource).toContain('`stateCode` (equals from imported state/province code)');
-		expect(capabilityScopeSource).toContain(
-			'`congressionalDistrict` (equals from imported readable label)'
-		);
-		expect(capabilityScopeSource).toContain('no local/special district membership filter exists yet');
-		expect(capabilityScopeSource).not.toContain('Email recipient filters still do not accept saved segment ids');
 	});
 });

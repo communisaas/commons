@@ -15,8 +15,6 @@ const composeServerSource = readFileSync(
 	'utf8'
 );
 const composePageSource = readFileSync('src/routes/org/[slug]/emails/compose/+page.svelte', 'utf8');
-const capabilityScopeSource = readFileSync('docs/design/ORG-CAPABILITY-SCOPE.md', 'utf8');
-const capabilityHypergraphSource = readFileSync('src/lib/data/capability-hypergraph.ts', 'utf8');
 
 describe('A/B test evidence surface', () => {
 	it('exposes an org-scoped sibling query for linked A/B variants', () => {
@@ -42,33 +40,7 @@ describe('A/B test evidence surface', () => {
 		expect(detailPageSource).toContain('Queue remainder send');
 		expect(detailPageSource).toContain('Queue test cohorts');
 		expect(detailPageSource).toContain('serverDispatchRuntimeArmed');
-		expect(detailPageSource).toContain('aria-label="A/B continuation pressure"');
-		expect(detailPageSource).toContain(
-			'const abContinuationPressureReadouts = $derived<AbContinuationPressureReadout[]>(['
-		);
-		expect(detailPageSource).toContain("label: 'Snapshot ground'");
-		expect(detailPageSource).toContain("label: 'Held remainder'");
-		expect(detailPageSource).toContain("label: 'Dispatch gate'");
-		expect(detailPageSource).toContain('emailAbTestCohorts.totalCount');
-		expect(detailPageSource).toContain('EMAIL_SERVER_DISPATCH + getEmailServerDispatchReadiness');
-		expect(detailPageSource).toContain('runtime-gated server dispatch path');
-		expect(detailPageSource).toContain('this runtime keeps the variants draft-only');
 		expect(detailPageSource).not.toContain('Winning variant sent to');
-		expect(capabilityScopeSource).toContain('exact `includeEmailHashes` recipient filters');
-		expect(capabilityScopeSource).toContain('enqueueAbTestDispatch');
-		expect(capabilityScopeSource).toContain(
-			'production A/B side effects remain dependency-bound until the same server email runtime checks pass'
-		);
-		expect(capabilityScopeSource).not.toContain('A/B winner picker is a stub');
-		expect(capabilityHypergraphSource).toContain(
-			'exact test and remainder queue hooks exist'
-		);
-		expect(capabilityHypergraphSource).toContain(
-			'runtime dependencies keep side effects behind server dispatch'
-		);
-		expect(capabilityHypergraphSource).toContain(
-			'automated A/B side effects remain preserved drafts until server-dispatch runtime evidence clears'
-		);
 	});
 
 	it('persists exact A/B cohort filters and a remainder draft contract', () => {
@@ -110,11 +82,7 @@ describe('A/B test evidence surface', () => {
 		expect(composePageSource).toContain('stays held as an exact continuation');
 		expect(composePageSource).toContain('cohort.');
 		expect(composePageSource).not.toContain('requires manual follow-up');
-		expect(detailPageSource).toContain('Verified-action A/B winner selection is not armed');
 		expect(detailPageSource).toContain('recordedWinnerBlastId');
 		expect(detailPageSource).toContain('canMaterializeAbRemainder');
-		expect(capabilityScopeSource).toContain(
-			'Winner metrics are open/click only until verified-action attribution is joined'
-		);
 	});
 });

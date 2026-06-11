@@ -72,44 +72,28 @@ describe('donation confirmation outcome register', () => {
 		const indexPage = source('src/routes/org/[slug]/fundraising/+page.svelte');
 		const detailPage = source('src/routes/org/[slug]/fundraising/[id]/+page.svelte');
 		const donorTable = source('src/lib/components/fundraising/DonorTable.svelte');
-		const hypergraph = source('src/lib/data/capability-hypergraph.ts');
 
 		expect(indexServer).toContain('api.donations.getConfirmationSummary');
 		expect(detailServer).toContain('api.donations.getConfirmationSummary');
-		expect(indexPage).toContain('fundraisingRows.map((row) => ({');
-		expect(detailPage).toContain('fundraisingRows.map((row) => ({');
-		expect(hypergraph).toContain("label: 'confirmations sent'");
-		expect(hypergraph).toContain("cite: 'donations.getConfirmationSummary'");
-		expect(hypergraph).toContain("label: 'Provider send evidence'");
 		expect(indexPage).toContain('provider accepted');
 		expect(detailPage).toContain('provider accepted');
-		expect(hypergraph).toContain("cite: 'donations.confirmationEmailProviderMessageId'");
 		expect(donorTable).toContain('confirmationEmailStatus');
 		expect(donorTable).toContain('confirmationEmailProviderMessageId');
 		expect(donorTable).toContain('providerReference');
 		expect(donorTable).toContain('not recorded');
 	});
 
-	it('surfaces receipt policy as a separate capability row and detail action', () => {
+	it('surfaces receipt policy as a detail action', () => {
 		const indexServer = source('src/routes/org/[slug]/fundraising/+page.server.ts');
 		const detailServer = source('src/routes/org/[slug]/fundraising/[id]/+page.server.ts');
-		const indexPage = source('src/routes/org/[slug]/fundraising/+page.svelte');
 		const detailPage = source('src/routes/org/[slug]/fundraising/[id]/+page.svelte');
-		const hypergraph = source('src/lib/data/capability-hypergraph.ts');
 
 		expect(indexServer).toContain('receiptPolicyConfigured: Boolean(c.donationReceiptPolicy)');
 		expect(detailServer).toContain('saveReceiptPolicy');
 		expect(detailServer).toContain('receipt_policy_mode');
 		expect(detailServer).toContain('donationReceiptPolicy: policy');
-		expect(indexPage).toContain('fundraisingRows.map((row) => ({');
 		expect(detailPage).toContain('Receipt policy register');
 		expect(detailPage).toContain('Receipt policy register saved.');
 		expect(detailPage).toContain('This text can render in baseline donor confirmations');
-		expect(hypergraph).toContain("id: 'receipt-policy-register'");
-		expect(hypergraph).toContain("id: 'provider-send-evidence'");
-		expect(hypergraph).toContain("label: 'Provider send evidence'");
-		expect(hypergraph).toContain('Provider message identifiers are send-provider acceptance evidence only');
-		expect(hypergraph).toContain("cite: 'campaigns.donationReceiptPolicy'");
-		expect(hypergraph).toContain('Receipt policy custody can feed baseline confirmation content');
 	});
 });

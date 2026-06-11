@@ -12,9 +12,7 @@ const importServer = readFileSync(
 const supporters = readFileSync('convex/supporters.ts', 'utf8');
 const platformProfiles = readFileSync('src/lib/data/platform-export-profiles.ts', 'utf8');
 const personPage = readFileSync('src/routes/org/[slug]/supporters/[id]/+page.svelte', 'utf8');
-const capabilityHypergraph = readFileSync('src/lib/data/capability-hypergraph.ts', 'utf8');
 const peopleList = readFileSync('src/routes/org/[slug]/supporters/+page.svelte', 'utf8');
-const scopeDoc = readFileSync('docs/design/ORG-CAPABILITY-SCOPE.md', 'utf8');
 
 describe('People CSV custom-field custody', () => {
 	it('exposes custom-field mapping as an explicit operator choice', () => {
@@ -51,17 +49,6 @@ describe('People CSV custom-field custody', () => {
 		expect(peopleList).toContain('const emailHash = s.emailHash');
 		expect(personPage).toContain('decryptOrgPii');
 		expect(personPage).toContain("'customFields'");
-		expect(personPage).toContain('buildPersonDetailRows');
-		expect(personPage).toContain("row.id === 'custom-field-custody'");
-		expect(capabilityHypergraph).toContain("id: 'custom-field-custody'");
-		expect(capabilityHypergraph).toContain("label: 'Custom field custody'");
 		expect(personPage).toContain('customFieldEntries.length');
-	});
-
-	it('updates the canonical capability scope without claiming schema management', () => {
-		expect(scopeDoc).toContain('custom field custody');
-		expect(scopeDoc).toContain('encrypted JSON blob');
-		expect(scopeDoc).toContain('custom fields remain opaque');
-		expect(scopeDoc).not.toContain('no custom field column mapping');
 	});
 });

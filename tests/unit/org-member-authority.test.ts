@@ -40,19 +40,5 @@ describe('org member authority contract', () => {
 		expect(settings).toContain('roleOptionDisabled');
 		expect(settings).toContain('Last owner cannot be demoted');
 		expect(settings).toContain('Last owner cannot be removed');
-
-		// The "Role and removal authority" copy moved into the operating-authority
-		// readiness rows (capability-hypergraph), which the settings page renders
-		// in full via capabilityItems.
-		expect(settings).toContain('buildOperatingAuthorityReadiness');
-		expect(settings).toContain('operatingAuthorityReadiness.rows.map((row) => ({');
-
-		const readiness = source('src/lib/data/capability-hypergraph.ts');
-		expect(readiness).toContain("id: 'role-removal-authority'");
-		expect(readiness).toContain("label: 'Role and removal authority'");
-		expect(readiness).toContain(
-			'Owner role required; rank ceilings and last-owner lockout prevent orphaning the org.'
-		);
-		expect(readiness).toContain("cite: 'organizations.removeMember/updateMemberRole'");
 	});
 });

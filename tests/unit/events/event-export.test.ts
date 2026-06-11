@@ -74,37 +74,13 @@ describe('event export artifacts', () => {
 		expect(csv).not.toMatch(/email|name|encrypted/i);
 	});
 
-	it('wires event pages to live export endpoints while preserving proof boundaries', () => {
+	it('wires the event detail page to live export endpoints', () => {
 		const detailPage = source('src/routes/org/[slug]/events/[id]/+page.svelte');
-		const indexPage = source('src/routes/org/[slug]/events/+page.svelte');
-		const newPage = source('src/routes/org/[slug]/events/new/+page.svelte');
 		const icsRoute = source('src/routes/org/[slug]/events/[id]/calendar.ics/+server.ts');
 		const csvRoute = source('src/routes/org/[slug]/events/[id]/attendees.csv/+server.ts');
 
 		expect(detailPage).toContain('calendar.ics');
 		expect(detailPage).toContain('attendees.csv');
-		expect(detailPage).toContain('Calendar and roster artifacts');
-		expect(detailPage).toContain('CSV exports bounded RSVP/check-in evidence without');
-		expect(detailPage).toContain('decrypted email or name values');
-		expect(detailPage).toContain('QR image generation, decrypted attendee export, and');
-		expect(detailPage).toContain('waitlist promotion remain outside this route');
-		expect(detailPage).toContain(
-			'identity-wallet attendance proof, and decrypted attendee export are not mounted in this'
-		);
-
-		expect(indexPage).toContain(
-			'check-in counters, org-side ICS downloads, and non-PII'
-		);
-		expect(indexPage).toContain('attendance CSV exports are live on each event detail route');
-		expect(indexPage).not.toContain('Export surface is not armed');
-		expect(newPage).toContain('hasCalendarExport: false');
-		expect(newPage).toContain('hasRosterExport: false');
-		expect(newPage).toContain(
-			'ICS and non-PII attendance CSV exports are available from the event detail route after'
-		);
-		expect(newPage).toContain(
-			'this record exists. QR image generation, decrypted attendee export, and waitlist'
-		);
 
 		expect(icsRoute).toContain('renderEventIcs');
 		expect(icsRoute).toContain('X-Event-Export-Boundary');

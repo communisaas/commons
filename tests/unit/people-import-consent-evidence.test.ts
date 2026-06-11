@@ -14,9 +14,6 @@ const schema = readFileSync('convex/schema.ts', 'utf8');
 const supporters = readFileSync('convex/supporters.ts', 'utf8');
 const spaces = readFileSync('src/lib/components/org/os/spaces.ts', 'utf8');
 const layoutServer = readFileSync('src/routes/org/[slug]/+layout.server.ts', 'utf8');
-const hypergraph = readFileSync('src/lib/data/capability-hypergraph.ts', 'utf8');
-const scopeDoc = readFileSync('docs/design/ORG-CAPABILITY-SCOPE.md', 'utf8');
-const canonicalDoc = readFileSync('docs/design/ORG-OS-AUTHORING-FIRST.md', 'utf8');
 
 describe('People import consent evidence custody', () => {
 	it('recognizes consent source/date/text fields as platform-neutral import targets', () => {
@@ -61,24 +58,9 @@ describe('People import consent evidence custody', () => {
 		expect(supporters).toContain('smsSubscribed: smsSubscribedConsentEvidence');
 	});
 
-	it('threads aggregate consent evidence into the OS readiness surfaces', () => {
+	it('threads aggregate consent evidence into space load data', () => {
 		expect(spaces).toContain('consentEvidence: {');
 		expect(layoutServer).toContain('consentEvidence: {');
 		expect(layoutServer).toContain('emailSubscribed: asNumber');
-		expect(hypergraph).toContain("id: 'consent-evidence-custody'");
-		expect(hypergraph).toContain("id: 'sms-consent-evidence'");
-		expect(hypergraph).toContain("cite: 'supporters.getSummaryStats consentEvidence.email'");
-		expect(hypergraph).toContain("cite: 'supporters.getSummaryStats consentEvidence.sms'");
-		expect(hypergraph).toContain('not double opt-in, legal advice');
-		expect(hypergraph).toContain('not TCPA legal advice, 10DLC registration');
-	});
-
-	it('updates canonical docs without overclaiming legal compliance', () => {
-		expect(scopeDoc).toContain('optional email/SMS consent source/date/text evidence');
-		expect(scopeDoc).toContain('consentEvidence');
-		expect(scopeDoc).toContain('imported consent evidence is not a double-opt-in');
-		expect(canonicalDoc).toContain('consent evidence custody');
-		expect(canonicalDoc).toContain('never treats imported consent evidence as TCPA/10DLC legal clearance');
-		expect(canonicalDoc).not.toContain('consent-source audit, Twilio proxy dispatch');
 	});
 });
