@@ -19,9 +19,9 @@
 	let { stats, loading, brandingAccent = null }: {
 		stats: NetworkStats | null;
 		loading: boolean;
-		// NEW-E-4: hex like '#0d9488'. Only set on Coalition-tier orgs. When
-		// present, overrides the default teal accent on stat highlights.
-		// Validated upstream by organizations.update mutation.
+		// Hex like '#0d9488'. Only set on Coalition-tier orgs. When present,
+		// overrides the default teal accent on stat highlights. Validated
+		// upstream by the organizations.update mutation.
 		brandingAccent?: string | null;
 	} = $props();
 
@@ -36,6 +36,16 @@
 		Object.entries(stats?.stateDistribution ?? {})
 			.map(([country, count]) => ({ country, count }))
 			.sort((a, b) => b.count - a.count || a.country.localeCompare(b.country))
+	);
+
+	// A coalition with nothing on record gets one quiet sentence, not a grid
+	// of zero tiles.
+	const hasStatRecords = $derived(
+		stats !== null &&
+			(stats.memberCount > 0 ||
+				stats.verifiedCampaignActions > 0 ||
+				stats.districtCount > 0 ||
+				stats.verifiedSupporters > 0)
 	);
 
 	function formatScalar(value: number | null): string {
@@ -77,30 +87,37 @@
 	</div>
 {:else if stats}
 <div style={accentStyle}>
-	<!-- Stats grid -->
-	<div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-		<div class="rounded-lg bg-zinc-900/50 p-3">
-			<p class="text-xs font-medium text-zinc-500">Member Orgs</p>
-			<p class="mt-1 text-xl font-bold text-zinc-100">{stats.memberCount}</p>
+	<!-- Stats grid — or one quiet sentence when nothing is on record yet. -->
+	{#if hasStatRecords}
+		<div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+			<div class="rounded-lg bg-zinc-900/50 p-3">
+				<p class="text-xs font-medium text-zinc-500">Member Orgs</p>
+				<p class="mt-1 text-xl font-bold text-zinc-100">{stats.memberCount}</p>
+			</div>
+			<div class="rounded-lg bg-zinc-900/50 p-3">
+				<p class="text-xs font-medium text-zinc-500">Verified Actions</p>
+				<p class="mt-1 text-xl font-bold text-zinc-100">{stats.verifiedCampaignActions.toLocaleString()}</p>
+			</div>
+			<div class="rounded-lg bg-zinc-900/50 p-3">
+				<p class="text-xs font-medium text-zinc-500">Unique Districts</p>
+				<p class="mt-1 text-xl font-bold" style="color: var(--coalition-accent, #2dd4bf);">{stats.districtCount.toLocaleString()}</p>
+			</div>
+			<div class="rounded-lg bg-zinc-900/50 p-3">
+				<p class="text-xs font-medium text-zinc-500">Verified Supporters</p>
+				<p class="mt-1 text-xl font-bold text-green-400">{stats.verifiedSupporters.toLocaleString()}</p>
+			</div>
 		</div>
-		<div class="rounded-lg bg-zinc-900/50 p-3">
-			<p class="text-xs font-medium text-zinc-500">Verified Actions</p>
-			<p class="mt-1 text-xl font-bold text-zinc-100">{stats.verifiedCampaignActions.toLocaleString()}</p>
-		</div>
-		<div class="rounded-lg bg-zinc-900/50 p-3">
-			<p class="text-xs font-medium text-zinc-500">Unique Districts</p>
-			<p class="mt-1 text-xl font-bold" style="color: var(--coalition-accent, #2dd4bf);">{stats.districtCount.toLocaleString()}</p>
-		</div>
-		<div class="rounded-lg bg-zinc-900/50 p-3">
-			<p class="text-xs font-medium text-zinc-500">Verified Supporters</p>
-			<p class="mt-1 text-xl font-bold text-green-400">{stats.verifiedSupporters.toLocaleString()}</p>
-		</div>
-	</div>
+	{:else}
+		<p class="text-text-tertiary mb-4 text-sm">
+			Nothing is on record for this coalition yet — member organizations, verified actions, and
+			district coverage appear here as they happen.
+		</p>
+	{/if}
 
 	<!-- Coordination reading: one plain-language line; raw scores stay in the collapsed audit. -->
 	{#if stats.gds !== null || stats.ald !== null || stats.temporalEntropy !== null || stats.cai !== null}
 		<div class="mb-4">
-			<p class="text-sm text-zinc-400">
+			<p class="text-text-secondary text-sm">
 				{assessIntegrity({
 					gds: stats.gds,
 					ald: stats.ald,
@@ -110,25 +127,29 @@
 				})}
 			</p>
 			<details class="mt-2">
-				<summary class="cursor-pointer text-xs font-medium text-zinc-500 hover:text-zinc-400">
+				<summary
+					class="text-text-tertiary hover:text-text-secondary cursor-pointer text-xs font-medium"
+				>
 					Coordination audit
 				</summary>
 				<div class="mt-2 grid grid-cols-2 gap-3 md:grid-cols-4">
-					<div class="rounded-lg bg-zinc-900/50 p-3">
-						<p class="text-xs font-medium text-zinc-500">Geographic diversity</p>
-						<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.gds)}</p>
+					<div class="border-surface-border bg-surface-raised rounded-lg border p-3">
+						<p class="text-text-tertiary text-xs font-medium">Geographic diversity</p>
+						<p class="text-text-primary mt-1 font-mono text-sm">{formatScalar(stats.gds)}</p>
 					</div>
-					<div class="rounded-lg bg-zinc-900/50 p-3">
-						<p class="text-xs font-medium text-zinc-500">Message distinctness</p>
-						<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.ald)}</p>
+					<div class="border-surface-border bg-surface-raised rounded-lg border p-3">
+						<p class="text-text-tertiary text-xs font-medium">Message distinctness</p>
+						<p class="text-text-primary mt-1 font-mono text-sm">{formatScalar(stats.ald)}</p>
 					</div>
-					<div class="rounded-lg bg-zinc-900/50 p-3">
-						<p class="text-xs font-medium text-zinc-500">Timing spread</p>
-						<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.temporalEntropy)}</p>
+					<div class="border-surface-border bg-surface-raised rounded-lg border p-3">
+						<p class="text-text-tertiary text-xs font-medium">Timing spread</p>
+						<p class="text-text-primary mt-1 font-mono text-sm">
+							{formatScalar(stats.temporalEntropy)}
+						</p>
 					</div>
-					<div class="rounded-lg bg-zinc-900/50 p-3">
-						<p class="text-xs font-medium text-zinc-500">Engagement depth</p>
-						<p class="mt-1 font-mono text-sm text-zinc-100">{formatScalar(stats.cai)}</p>
+					<div class="border-surface-border bg-surface-raised rounded-lg border p-3">
+						<p class="text-text-tertiary text-xs font-medium">Engagement depth</p>
+						<p class="text-text-primary mt-1 font-mono text-sm">{formatScalar(stats.cai)}</p>
 					</div>
 				</div>
 			</details>

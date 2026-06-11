@@ -110,11 +110,13 @@
 		<div>
 			<p class="dashboard-kicker">Power / Accountability</p>
 			<h1 class="dashboard-title">Accountability scores</h1>
-			<p class="dashboard-subtitle">
-				{orgName}: <Datum value={scoreSnapshotCount} />
-				score snapshot{scoreSnapshotCount === 1 ? '' : 's'}{#if meta.avgScore !== null}
-					&nbsp;&middot; Avg score <Datum value={meta.avgScore} />{/if}
-			</p>
+			{#if scoreSnapshotCount > 0}
+				<p class="dashboard-subtitle">
+					{orgName}: <Datum value={scoreSnapshotCount} />
+					score snapshot{scoreSnapshotCount === 1 ? '' : 's'}{#if meta.avgScore !== null}
+						&nbsp;&middot; Avg score <Datum value={meta.avgScore} />{/if}
+				</p>
+			{/if}
 			{#if scorecards.length > 0}
 				<p class="dashboard-signals">{reportSignals}</p>
 			{/if}

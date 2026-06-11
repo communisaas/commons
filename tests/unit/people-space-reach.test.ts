@@ -80,10 +80,20 @@ describe('text reach sentence', () => {
 		);
 	});
 
-	it('phrases a list with no phone numbers as a sentence about the missing column', () => {
-		expect(describeTextReach(makeSmsHealth({ phonePresent: 0 }))).toMatch(
-			/^No phone numbers on file/
-		);
+	it('phrases a list with no phone numbers and no opt-in signal as a sentence about the missing column', () => {
+		expect(
+			describeTextReach(
+				makeSmsHealth({ phonePresent: 0, subscribed: 0, unsubscribed: 0, stopped: 0 })
+			)
+		).toMatch(/^No phone numbers on file/);
+	});
+
+	it('never claims missing phones while opt-ins or opt-outs are recorded', () => {
+		// The sentence reads the same fields the reach bar draws from, so the
+		// two can never disagree: recorded opt-ins suppress the no-phones claim.
+		const sentence = describeTextReach(makeSmsHealth({ phonePresent: 0 }));
+		expect(sentence).not.toMatch(/No phone numbers on file/);
+		expect(sentence).toBe('342 opted in to texts · 14 opted out');
 	});
 
 	it('phrases zero opt-ins as a sentence, not a zero', () => {
@@ -123,7 +133,14 @@ describe('People surface contract', () => {
 		expect(source).toContain("'$lib/components/org/VerificationPipeline.svelte'");
 		expect(source).toContain('{base}/supporters/import');
 		expect(source).toContain('{base}/supporters/import/platform-api');
-		expect(source).toContain('{base}/supporters#people-segments');
+		expect(source).toContain('#people-segments');
+	});
+
+	it('routes the supporter-list links through the full-view opt-out so they leave the mounted space', () => {
+		// Without the opt-out these links would target the space path the
+		// operator is already on, and the supporter table would be unreachable.
+		expect(source).toContain('fullViewHref(`${base}/supporters`)');
+		expect(source).not.toContain('href="{base}/supporters"');
 	});
 
 	it('sources the platform-sync bound from the shared limit-sentence module', () => {

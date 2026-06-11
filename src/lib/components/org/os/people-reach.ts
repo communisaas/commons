@@ -63,15 +63,19 @@ export function describeEmailReach(emailHealth: BaseSpaceData['emailHealth']): s
 }
 
 /**
- * Text reach as a sentence. A list with no phone numbers gets a sentence
- * about the missing column, not a row of zeros. Opted out groups people who
- * unsubscribed and people who replied STOP — both mean do not text.
+ * Text reach as a sentence. Opted out groups people who unsubscribed and
+ * people who replied STOP — both mean do not text. The sentence reads the
+ * same opt-in/opt-out fields the reach bar draws from, so the two can never
+ * disagree: the no-phones sentence renders only when there is no opt-in or
+ * opt-out signal either, and a zero phone count is omitted rather than
+ * contradicting recorded opt-ins.
  */
 export function describeTextReach(smsHealth: BaseSpaceData['smsHealth']): string {
-	if (smsHealth.phonePresent === 0) {
+	const optedOut = smsHealth.unsubscribed + smsHealth.stopped;
+	const recorded = smsHealth.subscribed + optedOut;
+	if (recorded === 0 && smsHealth.phonePresent === 0) {
 		return 'No phone numbers on file — map a phone column on import to reach people by text.';
 	}
-	const optedOut = smsHealth.unsubscribed + smsHealth.stopped;
 	const parts = [
 		smsHealth.subscribed > 0
 			? `${fmt(smsHealth.subscribed)} opted in to texts`
@@ -80,7 +84,9 @@ export function describeTextReach(smsHealth: BaseSpaceData['smsHealth']): string
 	if (optedOut > 0) {
 		parts.push(`${fmt(optedOut)} opted out`);
 	}
-	parts.push(`${fmt(smsHealth.phonePresent)} with a phone number on file`);
+	if (smsHealth.phonePresent > 0) {
+		parts.push(`${fmt(smsHealth.phonePresent)} with a phone number on file`);
+	}
 	return parts.join(' · ');
 }
 

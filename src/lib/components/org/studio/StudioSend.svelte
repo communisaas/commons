@@ -91,7 +91,7 @@
 		<span class="send-gloss">Take the composed message to publishing or email.</span>
 	</header>
 
-	<div class="send-row" role="group" aria-label="Delivery handoffs">
+	<div class="send-row" role="group" aria-label="Send options">
 		{#each actions as action (action.key)}
 			{@const IconComponent = action.icon}
 			<button

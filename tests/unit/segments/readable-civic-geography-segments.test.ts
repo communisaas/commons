@@ -169,6 +169,8 @@ describe('People space saved-segment sentences', () => {
 
 	it('links the People surface into the saved-segment anchor on the people list', () => {
 		const peopleSurface = readFileSync('src/lib/components/org/os/BaseSpace.svelte', 'utf8');
-		expect(peopleSurface).toContain('{base}/supporters#people-segments');
+		// The link rides the full-view opt-out so it reaches the actual people
+		// list page instead of circling back to the mounted People space.
+		expect(peopleSurface).toContain('fullViewHref(`${base}/supporters`)}#people-segments');
 	});
 });

@@ -86,12 +86,12 @@ export function describeReportSignals(input: {
 }
 
 /**
- * Where decision-maker coverage honestly stands: congressional officeholders
- * are loaded for every district; state and local officials are looked up per
- * action at writing time rather than held in a standing directory.
+ * Where decision-maker coverage honestly stands: there is no standing
+ * directory to browse — congressional targets resolve when an action is
+ * written, and state and local officials are looked up per action.
  */
 export const DECISION_MAKER_COVERAGE_SENTENCE =
-	'Congress is fully loaded. State and local officials are found for each action when you write one.';
+	'Congressional targets resolve automatically when you write an action; state and local officials are looked up per action.';
 
 /**
  * Plain absence: the org is not following anyone yet. The lead is exported

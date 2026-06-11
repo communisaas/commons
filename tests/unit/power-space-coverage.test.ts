@@ -127,9 +127,12 @@ describe('report signals sentence', () => {
 });
 
 describe('coverage and absence sentences', () => {
-	it('states decision-maker coverage honestly, congress first', () => {
-		expect(DECISION_MAKER_COVERAGE_SENTENCE).toMatch(/^Congress is fully loaded/);
-		expect(DECISION_MAKER_COVERAGE_SENTENCE).toContain('State and local officials');
+	it('scopes decision-maker coverage to write-time resolution, never a standing directory', () => {
+		expect(DECISION_MAKER_COVERAGE_SENTENCE).toBe(
+			'Congressional targets resolve automatically when you write an action; state and local officials are looked up per action.'
+		);
+		expect(DECISION_MAKER_COVERAGE_SENTENCE).not.toMatch(/fully loaded/);
+		expect(DECISION_MAKER_COVERAGE_SENTENCE).not.toMatch(/are found/);
 	});
 
 	it('phrases empty follow and watch sets as plain sentences', () => {
@@ -195,6 +198,13 @@ describe('Power surface contract', () => {
 		expect(source).toContain('{base}/scorecards');
 	});
 
+	it('routes the directory links through the full-view opt-out so they leave the mounted space', () => {
+		// Without the opt-out these links would target the space path the
+		// operator is already on, and the directory would be unreachable.
+		expect(source).toContain('fullViewHref(`${base}/representatives`)');
+		expect(source).not.toContain('href="{base}/representatives"');
+	});
+
 	it('imports none of the internal capability machinery', () => {
 		expect(source).not.toMatch(MACHINERY_IMPORTS);
 	});
@@ -226,6 +236,10 @@ describe('Scorecard dashboard contract', () => {
 
 	it('uses the shared build sentence for the empty state', () => {
 		expect(source).toContain('SCORECARDS_BUILD_SENTENCE');
+	});
+
+	it('keeps the snapshot-count subtitle off the zero state so only the absence sentence shows', () => {
+		expect(source).toContain('{#if scoreSnapshotCount > 0}');
 	});
 
 	it('imports none of the internal capability machinery', () => {

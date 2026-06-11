@@ -117,6 +117,32 @@ export function isSpacePath(pathname: string, base: string): boolean {
 	);
 }
 
+/** The explicit opt-out from space-path suppression. A canonical space path
+ * normally renders its mounted space and suppresses the route page underneath;
+ * `?view=full` says "render the full page at this path instead" — the
+ * paginated supporter table at /supporters, the decision-maker directory at
+ * /representatives. The spaces link through `fullViewHref` so the deep tools
+ * they summarize stay reachable. */
+export const FULL_VIEW_PARAM = 'view';
+export const FULL_VIEW_VALUE = 'full';
+
+/** Append the full-view opt-out to a canonical space path. */
+export function fullViewHref(path: string): string {
+	return `${path}?${FULL_VIEW_PARAM}=${FULL_VIEW_VALUE}`;
+}
+
+/** True when this URL should render the mounted OrgShell space: the pathname
+ * is a canonical space path AND the URL does not carry the `?view=full`
+ * opt-out. With the opt-out, the deep route page renders at the same path. */
+export function rendersSpaceForUrl(
+	url: { pathname: string; searchParams: URLSearchParams },
+	base: string
+): boolean {
+	return (
+		isSpacePath(url.pathname, base) && url.searchParams.get(FULL_VIEW_PARAM) !== FULL_VIEW_VALUE
+	);
+}
+
 // ─── Processes ───────────────────────────────────────────────────────
 export type ProcessStatus =
 	| 'resolving' // RESOLVE stage running (decision-maker tool loop)

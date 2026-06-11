@@ -113,26 +113,31 @@
 	// Show the process subject (not the live input) above the authored message.
 	const procSubject = $derived(proc?.intent.subjectLine ?? '');
 
-	// A loop that closed without output explains itself in one plain line.
+	// A loop that closed without output explains itself in one plain line. A
+	// failed run gets a plain sentence — the raw failure detail rides in the
+	// line's tooltip, never in the headline.
 	const closedLoopSentence = $derived(
 		proc && !composedMessage
 			? proc.status === 'error'
-				? (proc.errorMessage ??
-					proc.resolutionStopDetail ??
-					'The loop failed before composing a message.')
+				? 'The run stopped before finishing — start it again.'
 				: proc.status === 'stopped'
-					? (proc.resolutionStopDetail ??
-						proc.errorMessage ??
-						'This loop stopped before composing a message.')
+					? (proc.resolutionStopDetail ?? 'This loop stopped before composing a message.')
 					: null
 			: null
+	);
+	const closedLoopDetail = $derived(
+		proc && !composedMessage && proc.status === 'error' ? proc.errorMessage : null
 	);
 
 	const activeMessageJob = $derived(proc?.activeMessageJob ?? null);
 	const activeTraceId = $derived(activeMessageJob?.traceId ?? null);
-	const traceReplayEventCount = $derived(
-		traceReplayTraceId === activeTraceId ? traceReplayEvents.length : 0
+	// A replay count only exists once a replay for THIS run has loaded. Before
+	// that, the count stays off the surface entirely — a loaded run with zero
+	// events gets a plain sentence instead.
+	const traceReplayLoaded = $derived(
+		traceReplayStatus === 'loaded' && traceReplayTraceId === activeTraceId
 	);
+	const traceReplayEventCount = $derived(traceReplayLoaded ? traceReplayEvents.length : 0);
 
 	function formatTraceTime(value: number): string {
 		return new Date(value).toLocaleTimeString([], {
@@ -293,7 +298,9 @@
 	<StudioReasoning {entries} {activeStage} {stageLabel} />
 
 	{#if closedLoopSentence}
-		<p class="loop-boundary" role="status">{closedLoopSentence}</p>
+		<p class="loop-boundary" role="status" title={closedLoopDetail ?? undefined}>
+			{closedLoopSentence}
+		</p>
 	{/if}
 
 	{#if activeTraceId}
@@ -308,10 +315,16 @@
 					<h2 class="trace-title">What this run did</h2>
 				</div>
 				<div class="trace-controls">
-					<span class="trace-count">
-						<Datum value={traceReplayEventCount || null} />
-						<span>events</span>
-					</span>
+					{#if traceReplayLoaded}
+						{#if traceReplayEventCount > 0}
+							<span class="trace-count">
+								<Datum value={traceReplayEventCount} />
+								<span>events</span>
+							</span>
+						{:else}
+							<span class="trace-count">No events were logged for this run.</span>
+						{/if}
+					{/if}
 					<button
 						type="button"
 						class="trace-load"
@@ -320,7 +333,7 @@
 					>
 						{traceReplayStatus === 'loading'
 							? 'Loading…'
-							: traceReplayEventCount > 0
+							: traceReplayLoaded
 								? 'Refresh replay'
 								: 'Load replay'}
 					</button>

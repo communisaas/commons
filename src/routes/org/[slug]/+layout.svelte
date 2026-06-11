@@ -44,7 +44,7 @@
 		type SpotlightDestination,
 		type SpotlightState
 	} from '$lib/components/org/os/Spotlight.svelte';
-	import { setOrgOS, spaceForPath, isSpacePath } from '$lib/components/org/os/orgOS.svelte';
+	import { setOrgOS, spaceForPath, rendersSpaceForUrl } from '$lib/components/org/os/orgOS.svelte';
 	import type {
 		WorkspaceCapabilityState,
 		WorkspaceMark
@@ -144,7 +144,11 @@
 	// redundant route page. A deep route (/campaigns, /settings, /legislation, …)
 	// is a full page the OS hasn't absorbed yet: we render its children() instead,
 	// while OrgShell stays mounted (hidden) so the STUDIO process keeps streaming.
-	const onSpacePath = $derived(isSpacePath($page.url.pathname, base));
+	// `?view=full` is the explicit opt-out: it renders the full page at a
+	// canonical space path (the supporter table at /supporters, the
+	// decision-maker directory at /representatives) — the spaces link through it
+	// so the deep tools they summarize stay reachable.
+	const onSpacePath = $derived(rendersSpaceForUrl($page.url, base));
 
 	function sumKnownScorecardMetric(
 		scorecards: LandscapeScorecard[] | null | undefined,

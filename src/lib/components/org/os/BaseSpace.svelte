@@ -29,6 +29,7 @@
 	import { formatPeopleSourceLabel } from '$lib/data/platform-export-profiles';
 	import { Datum, Ratio } from '$lib/design';
 	import { TIMING, EASING } from '$lib/design/motion';
+	import { fullViewHref } from './orgOS.svelte';
 	import {
 		CONSENT_SCOPE_SENTENCE,
 		NO_PEOPLE_SENTENCE,
@@ -149,8 +150,10 @@
 			{#if hasPeople && peopleOnFile}
 				<p class="people-headline">{peopleOnFile}</p>
 			{/if}
-			<a class="people-deep" href="{base}/supporters" data-sveltekit-preload-data="off"
-				>Your people list →</a
+			<a
+				class="people-deep"
+				href={fullViewHref(`${base}/supporters`)}
+				data-sveltekit-preload-data="off">Your people list →</a
 			>
 		</div>
 	</header>
@@ -245,7 +248,9 @@
 					<p class="card-sentence">{savedSegments}</p>
 				{/if}
 				<div class="card-links">
-					<a class="people-link" href="{base}/supporters#people-segments">Open segments →</a>
+					<a class="people-link" href="{fullViewHref(`${base}/supporters`)}#people-segments"
+						>Open segments →</a
+					>
 				</div>
 			</section>
 		</div>

@@ -26,6 +26,7 @@
 	import ScorecardCard from '$lib/components/org/ScorecardCard.svelte';
 	import { Datum } from '$lib/design';
 	import { TIMING, EASING } from '$lib/design/motion';
+	import { fullViewHref } from './orgOS.svelte';
 	import {
 		DECISION_MAKER_COVERAGE_SENTENCE,
 		NO_FOLLOWED_DECISION_MAKERS_LEAD,
@@ -128,8 +129,10 @@
 						<Datum value={data.followedCount} class="block-count-num" /> followed
 					</span>
 				{/if}
-				<a class="block-deep" href="{base}/representatives" data-sveltekit-preload-data="off"
-					>All decision-makers →</a
+				<a
+					class="block-deep"
+					href={fullViewHref(`${base}/representatives`)}
+					data-sveltekit-preload-data="off">All decision-makers →</a
 				>
 			</div>
 
@@ -139,7 +142,7 @@
 			{#if followed.length === 0}
 				<p class="block-empty">
 					{NO_FOLLOWED_DECISION_MAKERS_LEAD} —
-					<a class="block-link" href="{base}/representatives">find yours</a>.
+					<a class="block-link" href={fullViewHref(`${base}/representatives`)}>find yours</a>.
 				</p>
 			{:else}
 				<ul class="dm-list">

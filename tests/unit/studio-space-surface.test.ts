@@ -39,6 +39,21 @@ describe('studio space wiring', () => {
 		// from a readiness table rendered in place.
 		expect(space).toContain("from '$lib/data/org-limit-sentences'");
 	});
+
+	it('keeps the raw failure message out of the closed-loop headline', () => {
+		// A failed run reads as one plain sentence; the raw error detail rides
+		// in the title attribute only.
+		expect(space).toContain('The run stopped before finishing — start it again.');
+		expect(space).toContain('title={closedLoopDetail ?? undefined}');
+		expect(space).not.toMatch(/closedLoopSentence = \$derived\([\s\S]*?\(proc\.errorMessage/);
+	});
+
+	it('renders the replay count only after a replay has loaded, with a sentence for a loaded zero', () => {
+		expect(space).toContain('{#if traceReplayLoaded}');
+		expect(space).toContain('No events were logged for this run.');
+		// The not-loaded state stays quiet — no null Datum ghosting an em-dash.
+		expect(space).not.toContain('traceReplayEventCount || null');
+	});
 });
 
 describe('studio send actions', () => {
@@ -55,6 +70,11 @@ describe('studio send actions', () => {
 	it('holds actions with one quiet line instead of state machinery', () => {
 		expect(send).toContain('These open once the loop finishes composing a message.');
 		expect(send).toContain('need org authority');
+	});
+
+	it('names the action group in plain words for screen readers', () => {
+		expect(send).toContain('aria-label="Send options"');
+		expect(send).not.toContain('aria-label="Delivery handoffs"');
 	});
 });
 
