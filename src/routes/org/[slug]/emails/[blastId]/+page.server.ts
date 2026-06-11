@@ -28,8 +28,6 @@ async function serverDispatchBoundary(orgSlug: string) {
 		errorCode: 'email_server_dispatch_dependency_missing',
 		blockedVerb: 'server_email_dispatch',
 		preservedArtifact: 'email_draft',
-		gate: 'CP-2',
-		taskIds: ['T2-2'],
 		dependency: readiness.dependency,
 		missing: readiness.missing
 	};

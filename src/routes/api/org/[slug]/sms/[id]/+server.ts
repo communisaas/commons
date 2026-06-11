@@ -64,8 +64,6 @@ function textDispatchBoundary(readiness = getTextDispatchReadiness(textDispatchE
 			message: readiness.message,
 			blockedVerb: 'carrier_delivery',
 			preservedArtifact: 'sms_draft',
-			gate: 'CP-sms-dispatch',
-			taskIds: ['T2-1'],
 			dependency: readiness.dependency,
 			missing: readiness.missing,
 			runtimeFlag: readiness.runtimeFlag,
@@ -108,8 +106,6 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 						'Carrier delivery requires a client-decrypted recipient batch with E.164 phone numbers.',
 					blockedVerb: 'carrier_delivery',
 					preservedArtifact: 'sms_draft',
-					gate: 'CP-sms-dispatch',
-					taskIds: ['T2-1'],
 					issues: parsed.error.issues.map((issue) => ({
 						path: issue.path.join('.'),
 						message: issue.message
@@ -151,9 +147,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 						message:
 							'Carrier delivery can only use the next encrypted-phone batch from the saved text audience.',
 						blockedVerb: 'carrier_delivery',
-						preservedArtifact: 'sms_draft',
-						gate: 'CP-sms-dispatch',
-						taskIds: ['T2-1']
+						preservedArtifact: 'sms_draft'
 					},
 					{ status: 409 }
 				);
@@ -169,9 +163,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 					message:
 						'Final text dispatch can only be recorded after the current remaining eligible cohort is included.',
 					blockedVerb: 'carrier_delivery',
-					preservedArtifact: 'sms_draft',
-					gate: 'CP-sms-dispatch',
-					taskIds: ['T2-1']
+					preservedArtifact: 'sms_draft'
 				},
 				{ status: 409 }
 			);
@@ -186,9 +178,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 					message:
 						'Text dispatch expected total cannot be lower than the already recorded and current eligible batch.',
 					blockedVerb: 'carrier_delivery',
-					preservedArtifact: 'sms_draft',
-					gate: 'CP-sms-dispatch',
-					taskIds: ['T2-1']
+					preservedArtifact: 'sms_draft'
 				},
 				{ status: 409 }
 			);

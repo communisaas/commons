@@ -21,12 +21,10 @@ function workflowEmailDependencyBoundary(
 	return json(
 		{
 			error: 'workflow_email_dependency_missing',
-			message: `${readiness.message} Tag writes, branch conditions, delay/resume, and trigger dispatch remain armed for non-email definitions. Each email run still requires a supporter cursor and subscribed supporter before delivery.`,
+			message: `${readiness.message} Every other step in the workflow runs. Each email run still requires a supporter cursor and subscribed supporter before delivery.`,
 			blockedVerb: 'enable_workflow_email',
 			preservedArtifact: 'workflow_definition',
 			definitionSaved,
-			gate: 'CP-workflow-email',
-			taskIds: ['T1-9'],
 			dependency: readiness.dependency,
 			missing: readiness.missing,
 			perRunDependencies: readiness.perRunDependencies

@@ -424,8 +424,6 @@ export const actions: Actions = {
 					preservedArtifact: 'email_draft',
 					blastId: String(sendResult.id),
 					draftHref: `/org/${params.slug}/emails/${sendResult.id}`,
-					gate: 'CP-2',
-					taskIds: ['T2-2'],
 					dependency: serverDispatchReadiness.dependency,
 					missing: serverDispatchReadiness.missing
 				});

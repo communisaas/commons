@@ -2,7 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { serverQuery, serverMutation, serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { PLATFORM_EXPORT_PROFILES } from '$lib/data/platform-export-profiles';
-import { formatGateEvidence, getGateEvidence } from '$lib/data/capability-hypergraph';
+import { orgLimitSentence, type PlatformApiLimitCode } from '$lib/data/org-limit-sentences';
 import {
 	hasPlatformApiCredentialKey,
 	openPlatformApiCredential,
@@ -21,14 +21,8 @@ import type { PageServerLoad, Actions } from './$types';
 /** Records per importWithEncryption call; keeps each Convex action small. */
 const IMPORT_CHUNK_SIZE = 100;
 
-const platformApiGate = getGateEvidence('CP-platform-api-sync', ['T1-3'], {
-	name: 'Platform API sync',
-	downstream: 1,
-	dependency: 'Encrypted credential custody + direct sync execution'
-});
-
-function platformApiBoundaryError(prefix: string): string {
-	return formatGateEvidence(platformApiGate, { prefix });
+function platformApiBoundaryError(code: PlatformApiLimitCode): string {
+	return orgLimitSentence(code);
 }
 
 function requireRole(role: string, required: string): void {
@@ -56,13 +50,12 @@ function platformApiBoundaryPayload(
 		preservedArtifact?: 'csv_import_profile' | 'encrypted_credential_custody';
 	} = {}
 ) {
+	const code = options.code ?? 'platform_api_sync_not_armed';
 	return {
-		error: platformApiBoundaryError(readiness.message),
-		code: options.code ?? 'platform_api_sync_not_armed',
+		error: platformApiBoundaryError(code),
+		code,
 		blockedVerb: options.blockedVerb ?? 'direct_platform_import',
 		preservedArtifact: options.preservedArtifact ?? 'encrypted_credential_custody',
-		gate: 'CP-platform-api-sync',
-		taskIds: ['T1-3'],
 		dependency: readiness.dependency,
 		missing: readiness.missing,
 		runtimeFlag: readiness.runtimeFlag,
@@ -273,15 +266,12 @@ export const actions: Actions = {
 				credentialProbeCompletedAt: new Date(probedAt).toISOString(),
 				blockedVerb: 'direct_platform_import',
 				preservedArtifact: 'encrypted_credential_custody',
-				gate: 'CP-platform-api-sync',
-				taskIds: ['T1-3'],
 				dependency: readiness.dependency,
 				missing: readiness.missing,
 				runtimeFlag: readiness.runtimeFlag,
 				runnerImplemented: readiness.runnerImplemented,
 				credentialCustodyReady: readiness.credentialCustodyReady,
-				probeMessage:
-					'Credential custody probe passed. Direct platform import remains held until direct sync execution and continuation checkpoints are armed.',
+				probeMessage: 'Credential check passed — your stored key opens correctly.',
 				runtimeMessage: readiness.message
 			};
 		} catch (err) {

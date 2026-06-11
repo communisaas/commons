@@ -31,11 +31,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			{
 				error: 'workflow_execution_not_armed',
 				message:
-					'Coordination definitions can be saved; scheduled resume, tag writes, branch conditions, and trigger dispatch stay dependency-first until the workflow execution gate opens.',
+					'Workflow definitions are saved. Scheduled resume, tag writes, branch conditions, and trigger dispatch run once workflow execution is enabled.',
 				blockedVerb: 'process_workflow_schedule',
 				preservedArtifact: 'workflow_definition',
-				gate: 'CP-workflow-effects',
-				taskIds: ['T1-9a'],
 				dependency: 'Workflow execution feature gate',
 				runnerImplemented: true
 			},

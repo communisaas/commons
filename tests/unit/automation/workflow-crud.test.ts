@@ -363,6 +363,11 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 		expect(body.blockedVerb).toBe('enable_workflow_email');
 		expect(body.definitionSaved).toBe(false);
 		expect(body.missing).toContain('AWS_ACCESS_KEY_ID');
+		// The boundary speaks plainly: no internal gate identifiers ride along,
+		// and the message avoids internal state vocabulary.
+		expect(body).not.toHaveProperty('gate');
+		expect(body).not.toHaveProperty('taskIds');
+		expect(body.message).not.toMatch(/\barmed\b/i);
 		// The org key verifier presence feeds the readiness check.
 		expect(mockEmailReadiness).toHaveBeenCalledWith({ orgKeyConfigured: false });
 		// Fail-closed: the workflow must NOT be enabled (no setEnabled call).

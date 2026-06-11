@@ -32,8 +32,6 @@ function callInitiationBoundary(
 			message: readiness.message,
 			blockedVerb: 'patch_through_call',
 			preservedArtifact: 'call_record_not_created',
-			gate: 'CP-call-initiation-ui',
-			taskIds: ['T2-1'],
 			dependency: readiness.dependency,
 			missing: readiness.missing,
 			runtimeFlag: readiness.runtimeFlag,
