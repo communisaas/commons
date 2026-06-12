@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { Datum } from '$lib/design';
 	import VerificationPacketComponent from '$lib/components/org/VerificationPacket.svelte';
+	import { participationDepth } from '$lib/components/org/participation-depth';
 	import ProofClaim from '$lib/components/crypto/ProofClaim.svelte';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 	import { PLATFORM_EXPORT_PROFILES } from '$lib/data/platform-export-profiles';
@@ -88,10 +89,10 @@
 		burstVelocity: 1.8,
 		cai: 0.72,
 		tiers: [
-			{ tier: 1, label: 'New', count: 68 },
-			{ tier: 2, label: 'Active', count: 85 },
-			{ tier: 3, label: 'Established', count: 62 },
-			{ tier: 4, label: 'Veteran', count: 33 }
+			{ tier: 0, label: participationDepth(0), count: 68 },
+			{ tier: 1, label: participationDepth(1), count: 85 },
+			{ tier: 2, label: participationDepth(2), count: 62 },
+			{ tier: 3, label: participationDepth(3), count: 33 }
 		],
 		geography: [{ hash: 'ca11', count: 248 }],
 		cells: [

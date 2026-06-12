@@ -46,7 +46,7 @@
 
 	function workflowStatusLabel(): string {
 		if (!workflow.enabled) return 'draft';
-		return FEATURES.WORKFLOW_EXECUTION ? 'runner enabled' : 'enabled draft';
+		return FEATURES.WORKFLOW_EXECUTION ? 'active' : 'enabled draft';
 	}
 
 	function workflowStatusClass(): string {

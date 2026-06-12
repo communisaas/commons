@@ -27,8 +27,8 @@
 		</nav>
 		<h1 class="text-text-primary text-xl font-semibold">Draft action record</h1>
 		<p class="text-text-tertiary mt-1 text-sm">
-			Create saved authoring ground before reader participation, proof delivery, or settlement is
-			claimed.
+			Describe the action you're asking people to take. It saves as a draft — participation and
+			proof collection start after that.
 		</p>
 	</div>
 
@@ -228,9 +228,9 @@
 		>
 			<div class="flex items-center justify-between">
 				<div>
-					<p class="text-text-secondary text-sm font-medium">Quality settlement</p>
+					<p class="text-text-secondary text-sm font-medium">Debate</p>
 					<p class="text-text-tertiary mt-0.5 text-xs">
-						Store a debate threshold; settlement remains gated.
+						Let a debate open once enough verified people participate.
 					</p>
 				</div>
 				<label class="relative inline-flex cursor-pointer items-center">
@@ -248,8 +248,8 @@
 
 			{#if debateEnabled}
 				<p class="text-text-tertiary text-xs">
-					The draft can store a debate threshold. Debate spawning and settlement stay governed by
-					participation, quality, TEE, and mainnet gates.
+					The threshold saves with this draft. A debate doesn't open until that many verified
+					people have participated.
 				</p>
 				<div>
 					<label for="debateThreshold" class="text-text-secondary mb-1.5 block text-sm font-medium">

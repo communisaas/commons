@@ -317,7 +317,7 @@
 				{/if}
 			</div>
 
-			{#if audienceHasMoreThanBatchLimit}
+			{#if audienceHasMoreThanBatchLimit && !textLimitNotice}
 				<p class="text-text-tertiary mt-3 text-xs">
 					This audience sends in batches of {audienceBatchLimit} from the text's page.
 				</p>

@@ -3,7 +3,7 @@ import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireAuth, requireOrgRole } from "./_authHelpers";
+import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
 import anchorsData from "./domain-anchors.json";
 
 declare const process: { env: Record<string, string | undefined> };
@@ -695,7 +695,6 @@ export const listByUser = query({
 export const listByOrg = query({
   args: { slug: v.string() },
   handler: async (ctx, { slug }) => {
-    const { loadOrg } = await import("./_authHelpers");
     const org = await loadOrg(ctx, slug);
 
     const templates = await ctx.db

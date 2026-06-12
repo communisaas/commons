@@ -19,14 +19,17 @@
 	let {
 		emailStepCount,
 		readiness,
+		workflowSaved = false,
 		id = 'workflow-email-dependency-boundary'
 	}: {
 		emailStepCount: number;
 		readiness: WorkflowEmailReadiness;
+		/** Whether a saved workflow actually exists; gates the preserved-artifact reassurance. */
+		workflowSaved?: boolean;
 		id?: string;
 	} = $props();
 
-	const notice = $derived(workflowEmailLimitNotice(readiness));
+	const notice = $derived(workflowEmailLimitNotice(readiness, { artifactExists: workflowSaved }));
 </script>
 
 {#if emailStepCount > 0 && !readiness.ready}

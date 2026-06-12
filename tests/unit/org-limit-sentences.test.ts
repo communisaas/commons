@@ -9,6 +9,7 @@ import {
 	congressionalDeliveryLimitNotice,
 	emailDeliveryLimitNotice,
 	emailServerDispatchLimitSentence,
+	isClientDirectEmailCount,
 	orgLimitReassurance,
 	orgLimitSentence,
 	platformApiSyncLimitNotice,
@@ -70,7 +71,7 @@ describe('org limit sentences', () => {
 
 	it('keeps internal vocabulary, identifiers, and paths out of member-facing copy', () => {
 		for (const code of ORG_LIMIT_CODES) {
-			for (const text of [orgLimitSentence(code), orgLimitReassurance(code) ?? '']) {
+			for (const text of [orgLimitSentence(code), orgLimitReassurance(code, true) ?? '']) {
 				// Internal state-machine vocabulary
 				expect(text).not.toMatch(INTERNAL_VOCABULARY);
 				// Environment-variable-shaped tokens
@@ -108,13 +109,47 @@ describe('org limit sentences', () => {
 	});
 
 	it('reassures about preserved artifacts only where the sentence does not already', () => {
-		expect(orgLimitReassurance('text_dispatch_not_armed')).toMatch(/draft is saved/);
-		expect(orgLimitReassurance('workflow_email_dependency_missing')).toMatch(
+		expect(orgLimitReassurance('text_dispatch_not_armed', true)).toMatch(/draft is saved/);
+		expect(orgLimitReassurance('workflow_email_dependency_missing', true)).toMatch(
 			/workflow is saved/
 		);
 		// These sentences already state what is preserved
-		expect(orgLimitReassurance('email_server_dispatch_dependency_missing')).toBeNull();
-		expect(orgLimitReassurance('congressional_delivery')).toBeNull();
+		expect(orgLimitReassurance('email_server_dispatch_dependency_missing', true)).toBeNull();
+		expect(orgLimitReassurance('congressional_delivery', true)).toBeNull();
+	});
+
+	it('never reassures speculatively — the artifact must actually exist', () => {
+		// Default is no-artifact: nothing saved means no "saved" sentence.
+		expect(orgLimitReassurance('text_dispatch_not_armed')).toBeNull();
+		expect(orgLimitReassurance('text_dispatch_not_armed', false)).toBeNull();
+		expect(orgLimitReassurance('workflow_email_dependency_missing')).toBeNull();
+		expect(orgLimitReassurance('workflow_email_dependency_missing', false)).toBeNull();
+		// The notice builders thread the same signal through.
+		expect(buildOrgLimitNotice('text_dispatch_not_armed').reassurance).toBeNull();
+		expect(
+			buildOrgLimitNotice('text_dispatch_not_armed', null, { artifactExists: true }).reassurance
+		).toMatch(/draft is saved/);
+		expect(textDeliveryLimitNotice(null).reassurance).toBeNull();
+		expect(textDeliveryLimitNotice(null, { artifactExists: true }).reassurance).toMatch(
+			/draft is saved/
+		);
+		expect(workflowEmailLimitNotice(null).reassurance).toBeNull();
+		expect(workflowEmailLimitNotice(null, { artifactExists: true }).reassurance).toMatch(
+			/workflow is saved/
+		);
+	});
+
+	it('routes exactly the threshold client-direct and only above it to the server', () => {
+		// The docstring and the member-facing sentence agree: at or under the
+		// threshold goes out directly; only "more than" routes to the server path.
+		expect(isClientDirectEmailCount(CLIENT_DIRECT_EMAIL_THRESHOLD)).toBe(true);
+		expect(isClientDirectEmailCount(CLIENT_DIRECT_EMAIL_THRESHOLD + 1)).toBe(false);
+		expect(isClientDirectEmailCount(1)).toBe(true);
+		expect(isClientDirectEmailCount(0)).toBe(false);
+		expect(isClientDirectEmailCount(-1)).toBe(false);
+		// Custom thresholds keep the same at-or-under boundary.
+		expect(isClientDirectEmailCount(7, 7)).toBe(true);
+		expect(isClientDirectEmailCount(8, 7)).toBe(false);
 	});
 
 	it('keeps operator detail off the headline', () => {

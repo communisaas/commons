@@ -18,11 +18,14 @@
 	const textLimitNotice = $derived(
 		data.textDispatchRuntimeReady
 			? null
-			: textDeliveryLimitNotice({
-					dispatchRuntimeMissing: data.textDispatchRuntimeMissing,
-					dispatchRuntimeDependency: data.textDispatchRuntimeDependency,
-					dispatchRuntimeMessage: data.textDispatchRuntimeMessage
-				})
+			: textDeliveryLimitNotice(
+					{
+						dispatchRuntimeMissing: data.textDispatchRuntimeMissing,
+						dispatchRuntimeDependency: data.textDispatchRuntimeDependency,
+						dispatchRuntimeMessage: data.textDispatchRuntimeMessage
+					},
+					{ artifactExists: data.blasts.some((blast) => blast.status === 'draft') }
+				)
 	);
 </script>
 

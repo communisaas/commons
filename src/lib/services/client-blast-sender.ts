@@ -5,7 +5,8 @@
  * batches them to the Lambda proxy with STS credentials,
  * and reports progress back to Convex.
  *
- * Used for blasts with <500 recipients where the admin is online.
+ * Used for blasts at or under the client-direct threshold (500 recipients)
+ * where the admin is online.
  */
 
 import { decryptOrgPii, type OrgEncryptedPii } from '$lib/core/crypto/org-pii-encryption';

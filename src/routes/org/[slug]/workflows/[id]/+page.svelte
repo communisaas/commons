@@ -167,7 +167,11 @@
 			</div>
 		{/if}
 
-		<WorkflowEmailDependencyPanel {emailStepCount} readiness={data.workflowEmailReadiness} />
+		<WorkflowEmailDependencyPanel
+			{emailStepCount}
+			readiness={data.workflowEmailReadiness}
+			workflowSaved={true}
+		/>
 
 		<div
 			id="coordination-trigger"

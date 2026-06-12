@@ -17,7 +17,13 @@ import {
   type SegmentFilter,
 } from "./_segmentMatch";
 
-const SMS_CLIENT_DISPATCH_BATCH_LIMIT = 100;
+/**
+ * Carrier text dispatch accepts at most this many recipients per batch.
+ * Convex modules cannot import from src/lib, so this bound is duplicated as
+ * MAX_DECRYPTED_SMS_DISPATCH in src/lib/data/org-limit-sentences.ts; a parity
+ * test (tests/unit/convex/sms-batch-limit-parity.test.ts) pins the two equal.
+ */
+export const SMS_CLIENT_DISPATCH_BATCH_LIMIT = 100;
 
 type SmsRecipientFilterShape = {
   tags?: Id<"tags">[];
@@ -600,7 +606,8 @@ export const recordDispatchBatch = mutation({
       throw new Error("Only draft or sending text delivery records can be dispatched");
     }
     if (args.results.length === 0) throw new Error("SMS_DISPATCH_EMPTY_BATCH");
-    if (args.results.length > 100) throw new Error("SMS_DISPATCH_BATCH_TOO_LARGE");
+    if (args.results.length > SMS_CLIENT_DISPATCH_BATCH_LIMIT)
+      throw new Error("SMS_DISPATCH_BATCH_TOO_LARGE");
     if (args.expectedTotalRecipients !== undefined) {
       if (args.expectedTotalRecipients < args.results.length) {
         throw new Error("SMS_DISPATCH_EXPECTED_TOTAL_TOO_SMALL");

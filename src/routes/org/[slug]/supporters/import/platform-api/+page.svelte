@@ -113,11 +113,20 @@
 	{#if form?.error}
 		<div class="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
 			{form.error}
-			{#if formCode}
-				<p class="mt-2 font-mono text-xs text-red-300/80">{formCode}</p>
-			{/if}
-			{#if formMissing.length > 0}
-				<p class="mt-1 text-xs text-red-300/80">Missing: {formMissing.join(', ')}</p>
+			{#if formCode || formMissing.length > 0}
+				<details class="mt-2">
+					<summary class="cursor-pointer text-xs text-red-300/80">
+						Details for your administrator
+					</summary>
+					<ul class="mt-1 space-y-1 pl-4 font-mono text-xs text-red-300/80">
+						{#if formCode}
+							<li>{formCode}</li>
+						{/if}
+						{#if formMissing.length > 0}
+							<li>Missing: {formMissing.join(', ')}</li>
+						{/if}
+					</ul>
+				</details>
 			{/if}
 		</div>
 	{/if}
@@ -165,10 +174,7 @@
 
 		<div class="border-surface-border bg-surface-base rounded-md border p-5">
 			<p class="text-text-primary text-sm font-medium">Connect a platform</p>
-			<p class="text-text-tertiary mt-1 text-sm">
-				Your API credential is stored encrypted. Action Network connections can import directly;
-				other platforms import by CSV for now.
-			</p>
+			<p class="text-text-tertiary mt-1 text-sm">Your API credential is stored encrypted.</p>
 			<form method="POST" action="?/connect" class="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_auto]">
 				<label class="grid gap-1 text-sm">
 					<span class="text-text-tertiary text-xs font-medium">Platform</span>

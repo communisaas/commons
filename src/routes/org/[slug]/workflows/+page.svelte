@@ -34,7 +34,11 @@
 			</a>
 		</div>
 
-		<WorkflowEmailDependencyPanel {emailStepCount} readiness={data.workflowEmailReadiness} />
+		<WorkflowEmailDependencyPanel
+			{emailStepCount}
+			readiness={data.workflowEmailReadiness}
+			workflowSaved={data.workflows.length > 0}
+		/>
 
 		{#if data.workflows.length === 0}
 			<div class="border-surface-border rounded-md border py-16 text-center">

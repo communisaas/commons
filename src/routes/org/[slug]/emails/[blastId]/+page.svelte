@@ -511,7 +511,10 @@
 				{/if}
 			</p>
 		</div>
-		<a href="receipts" class="font-brand text-sm font-medium text-indigo-600 hover:text-indigo-800">
+		<a
+			href="/org/{data.org.slug}/emails/{data.blast.id}/receipts"
+			class="font-brand text-sm font-medium text-indigo-600 hover:text-indigo-800"
+		>
 			View receipts →
 		</a>
 	</div>

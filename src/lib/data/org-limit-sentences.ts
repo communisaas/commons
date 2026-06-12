@@ -13,6 +13,20 @@
  */
 export const CLIENT_DIRECT_EMAIL_THRESHOLD = 500;
 
+/**
+ * True when an audience of `count` recipients goes out directly from the
+ * sender's browser. Exactly the threshold still goes client-direct; only
+ * audiences above it route to server dispatch — the same boundary the
+ * email_server_dispatch_dependency_missing sentence describes ("more than
+ * N recipients").
+ */
+export function isClientDirectEmailCount(
+	count: number,
+	threshold: number = CLIENT_DIRECT_EMAIL_THRESHOLD
+): boolean {
+	return count > 0 && count <= threshold;
+}
+
 /** Carrier text dispatch accepts at most this many recipients per batch. */
 export const MAX_DECRYPTED_SMS_DISPATCH = 100;
 
@@ -107,9 +121,13 @@ export function orgLimitSentence(code: OrgLimitCode): string {
 
 /**
  * Preserved-artifact reassurance, present only where an artifact is kept and
- * the sentence itself does not already say so.
+ * the sentence itself does not already say so. The caller affirms that the
+ * artifact actually exists — the sentence never renders speculatively (for
+ * example on a list page with nothing saved, or a compose page before
+ * anything is typed).
  */
-export function orgLimitReassurance(code: OrgLimitCode): string | null {
+export function orgLimitReassurance(code: OrgLimitCode, artifactExists = false): string | null {
+	if (!artifactExists) return null;
 	switch (code) {
 		case 'text_dispatch_not_armed':
 			return 'Your draft is saved.';
@@ -126,9 +144,15 @@ type OperatorDetailSource = {
 	message?: string | null;
 };
 
+export type OrgLimitNoticeOptions = {
+	/** Whether a kept artifact (draft, workflow) actually exists for this surface. */
+	artifactExists?: boolean;
+};
+
 export function buildOrgLimitNotice(
 	code: OrgLimitCode,
-	detail?: OperatorDetailSource | null
+	detail?: OperatorDetailSource | null,
+	options?: OrgLimitNoticeOptions
 ): OrgLimitNotice {
 	const missing = (detail?.missing ?? []).filter(
 		(item): item is string => typeof item === 'string' && item.length > 0
@@ -140,7 +164,7 @@ export function buildOrgLimitNotice(
 	return {
 		code,
 		sentence: orgLimitSentence(code),
-		reassurance: orgLimitReassurance(code),
+		reassurance: orgLimitReassurance(code, options?.artifactExists ?? false),
 		operatorDetail: hasDetail ? { missing, dependency, message } : null
 	};
 }
@@ -154,7 +178,8 @@ export function textDeliveryLimitNotice(
 		dispatchRuntimeMissing: string[];
 		dispatchRuntimeDependency: string;
 		dispatchRuntimeMessage: string;
-	} | null
+	} | null,
+	options?: OrgLimitNoticeOptions
 ): OrgLimitNotice {
 	return buildOrgLimitNotice(
 		'text_dispatch_not_armed',
@@ -164,7 +189,8 @@ export function textDeliveryLimitNotice(
 					dependency: textDelivery.dispatchRuntimeDependency,
 					message: textDelivery.dispatchRuntimeMessage
 				}
-			: null
+			: null,
+		options
 	);
 }
 
@@ -192,9 +218,10 @@ export function workflowEmailLimitNotice(
 		missing: string[];
 		dependency: string;
 		message: string;
-	} | null
+	} | null,
+	options?: OrgLimitNoticeOptions
 ): OrgLimitNotice {
-	return buildOrgLimitNotice('workflow_email_dependency_missing', readiness);
+	return buildOrgLimitNotice('workflow_email_dependency_missing', readiness, options);
 }
 
 export function callRoutingLimitNotice(

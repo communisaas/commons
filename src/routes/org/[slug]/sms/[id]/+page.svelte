@@ -56,11 +56,14 @@
 	const textLimitNotice = $derived(
 		data.textDispatchRuntimeReady
 			? null
-			: textDeliveryLimitNotice({
-					dispatchRuntimeMissing: data.textDispatchRuntimeMissing,
-					dispatchRuntimeDependency: data.textDispatchRuntimeDependency,
-					dispatchRuntimeMessage: data.textDispatchRuntimeMessage
-				})
+			: textDeliveryLimitNotice(
+					{
+						dispatchRuntimeMissing: data.textDispatchRuntimeMissing,
+						dispatchRuntimeDependency: data.textDispatchRuntimeDependency,
+						dispatchRuntimeMessage: data.textDispatchRuntimeMessage
+					},
+					{ artifactExists: data.blast.status === 'draft' }
+				)
 	);
 	const routeDispatchBlockers = $derived(
 		data.textDispatchRuntimeMissing.filter((item) => item !== 'browser phone custody')
@@ -106,7 +109,7 @@
 		if (!canAttemptClientDispatch) {
 			dispatchError =
 				routeDispatchBlockers.length > 0
-					? `Sending isn't available yet: ${routeDispatchBlockers.join(', ')}.`
+					? "Sending isn't available yet."
 					: data.blast.status !== 'draft' && data.blast.status !== 'sending'
 						? 'This text has already been sent.'
 						: 'Your organization passphrase is required before phone numbers can be decrypted.';
@@ -268,7 +271,7 @@
 							{#if canAttemptClientDispatch}
 								Recipient phone numbers are decrypted in your browser and sent in batches of {MAX_DECRYPTED_SMS_DISPATCH}.
 							{:else if routeDispatchBlockers.length > 0}
-								Sending isn't available yet: {routeDispatchBlockers.join(', ')}.
+								Sending isn't available yet.
 							{:else if data.blast.status !== 'draft' && data.blast.status !== 'sending'}
 								This text has already been sent.
 							{:else}

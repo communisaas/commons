@@ -11,7 +11,8 @@
 	import {
 		CLIENT_DIRECT_EMAIL_THRESHOLD,
 		buildOrgLimitNotice,
-		emailDeliveryLimitNotice
+		emailDeliveryLimitNotice,
+		isClientDirectEmailCount
 	} from '$lib/data/org-limit-sentences';
 	import {
 		deleteOrgEmailComposeDraft,
@@ -147,11 +148,7 @@
 		FEATURES.EMAIL_SERVER_DISPATCH && data.serverDispatchRuntimeReady
 	);
 	const browserDirectReady = $derived(
-		canPublish &&
-			recipientCount > 0 &&
-			recipientCount < CLIENT_DIRECT_EMAIL_THRESHOLD &&
-			hasOrgKey &&
-			clientDirectConfigured
+		canPublish && isClientDirectEmailCount(recipientCount) && hasOrgKey && clientDirectConfigured
 	);
 	const browserDirectExecutable = $derived(browserDirectReady && !mergeFieldsBlockClientSend);
 	const emailLimitNotice = $derived(
@@ -1818,7 +1815,7 @@
 						</p>
 					</form>
 				{:else if browserDirectExecutable}
-					<!-- Client-Direct Send (<500 recipients, org key configured) -->
+					<!-- Client-Direct Send (at or under the client-direct threshold, org key configured) -->
 					{#if blastProgress && sending}
 						<!-- Progress indicator -->
 						<div class="space-y-3">
@@ -2023,7 +2020,7 @@
 							<div class="mt-3">
 								<BoundedNotice notice={emailLimitNotice} />
 							</div>
-						{:else if serverDispatchRuntimeArmed && recipientCount >= CLIENT_DIRECT_EMAIL_THRESHOLD}
+						{:else if serverDispatchRuntimeArmed && recipientCount > CLIENT_DIRECT_EMAIL_THRESHOLD}
 							<p class="text-text-quaternary mt-2 text-center text-xs">
 								Sends this large go out from our servers.
 							</p>

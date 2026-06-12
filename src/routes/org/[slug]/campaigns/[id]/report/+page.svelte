@@ -141,15 +141,15 @@
 		receiptBlockers: string[];
 	}): string {
 		if (delivery.receiptBacked) {
-			return 'Accountability receipt row is present; anchoring still waits on the receipt-root gate.';
+			return "Delivery receipt recorded. Permanent anchoring isn't available yet.";
 		}
 		if (delivery.receiptEligibility === 'eligible') {
-			return 'Power target and bill are bound; the receipt writer runs after SES accepts delivery, while mainnet anchoring remains gated.';
+			return "A receipt records automatically once delivery is accepted. Permanent anchoring isn't available yet.";
 		}
 		const blockers = delivery.receiptBlockers.map((blocker) =>
-			blocker === 'missing_bill' ? 'bill link' : 'resolved Power target'
+			blocker === 'missing_bill' ? 'a bill link' : 'a matched decision-maker'
 		);
-		return `Missing ${blockers.join(' + ')} before this sender row can become receipt-grade.`;
+		return `This delivery needs ${blockers.join(' and ')} before a receipt can be recorded.`;
 	}
 
 	function formatDate(iso: string): string {
