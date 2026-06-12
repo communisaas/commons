@@ -1,11 +1,4 @@
 <script lang="ts">
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
-	import { FEATURES } from '$lib/config/features';
-	import {
-		buildEmailDeliveryEvidenceReadiness,
-		getGateEvidence,
-		type EmailDeliveryEvidenceRow
-	} from '$lib/data/capability-hypergraph';
 	import { Datum, RegistryMark } from '$lib/design';
 	import type { PageData } from './$types';
 
@@ -15,81 +8,6 @@
 	const sentCount = $derived(data.receipts.filter((receipt) => receipt.status === 'sent').length);
 	const failedCount = $derived(
 		data.receipts.filter((receipt) => receipt.status === 'failed').length
-	);
-
-	const base = $derived(`/org/${data.orgSlug}`);
-	const emailProxyGate = getGateEvidence('CP-2', ['T2-2'], {
-		name: 'Email send proxy',
-		dependency: 'AWS Lambda deploy + BLAST receipts secret sync'
-	});
-	const receiptAnchoringGate = getGateEvidence('CP-receipt-anchoring', ['T6-1', 'T6-2', 'T8-8'], {
-		name: 'Email receipt and response',
-		downstream: 8,
-		dependency: 'Receipt writer/mainnet anchoring + reader-side notifications'
-	});
-	const listHealthGate = getGateEvidence('CP-2', ['T2-2'], {
-		name: 'Bounce and complaint attribution',
-		dependency: 'SES webhook correlation + List-Unsubscribe receipt path'
-	});
-	const abAutomationGate = getGateEvidence('CP-ab-automated-dispatch', ['T1-6b'], {
-		name: 'A/B automated dispatch',
-		downstream: 1,
-		dependency: 'Idempotent test-cohort and winning-remainder send runner'
-	});
-	const engagementTelemetryGate = getGateEvidence('CP-email-engagement-attribution', ['T2-10'], {
-		name: 'Email engagement attribution',
-		downstream: 1,
-		dependency: 'SES open/click attribution + Configuration Set evidence'
-	});
-
-	const emailDeliveryEvidence = $derived(
-		buildEmailDeliveryEvidenceReadiness({
-			base,
-			blastId: data.blast.id,
-			delivery: {
-				status: data.blast.status,
-				totalSent: data.blast.totalSent,
-				totalBounced: data.blast.totalBounced,
-				totalOpened: 0,
-				totalClicked: 0,
-				totalComplained: 0,
-				receiptPageCount: receiptRows,
-				receiptSentCount: sentCount,
-				receiptFailedCount: failedCount,
-				receiptHasMore: data.hasMore,
-				engagementMetricsEnabled: FEATURES.ENGAGEMENT_METRICS
-			},
-			receiptRegister: {
-				rowCount: receiptRows,
-				sentCount,
-				failedCount,
-				hasMore: data.hasMore
-			},
-			gates: {
-				emailProxyGate,
-				receiptAnchoringGate,
-				abAutomationGate,
-				listHealthGate,
-				engagementTelemetryGate
-			}
-		})
-	);
-
-	function receiptRegisterHref(row: EmailDeliveryEvidenceRow): string {
-		if (row.id === 'delivery-record')
-			return `/org/${data.orgSlug}/emails/${data.blast.id}#email-record`;
-		if (row.id === 'receipt-register') return '#email-receipt-register';
-		if (row.id === 'dispatch-outcomes') return '#email-dispatch-outcomes';
-		if (row.id === 'recipient-privacy') return '#recipient-hash-boundary';
-		if (row.id === 'anchored-receipt-proof') return '#email-receipt-anchoring-boundary';
-		return row.href;
-	}
-
-	const capabilityItems = $derived(
-		emailDeliveryEvidence.receiptRegisterRows.map((row) => ({
-			...row,
-			href: receiptRegisterHref(row)
-		}))
 	);
 
 	function formatTimestamp(ts: number): string {
@@ -115,75 +33,49 @@
 				<p class="text-text-quaternary font-mono text-xs font-semibold tracking-wider uppercase">
 					Email delivery evidence
 				</p>
-				<h1 class="text-text-primary mt-2 text-2xl font-bold">Delivery receipt register</h1>
+				<h1 class="text-text-primary mt-2 text-2xl font-bold">Delivery receipts</h1>
 				<p class="text-text-tertiary mt-1 max-w-3xl text-sm">
-					{data.blast.subject}. This page reads bounded per-recipient send outcomes. It does not
-					turn delivery counters into anchored accountability receipts.
+					{data.blast.subject}. Each receipt records one recipient's delivery outcome for this
+					send.
 				</p>
 			</div>
 
 			<div class="grid gap-3 sm:grid-cols-4">
 				<div class="border-surface-border bg-surface-base rounded-md border p-3">
 					<p class="text-text-primary font-mono text-lg font-bold tabular-nums">
-						<Datum value={data.blast.totalRecipients} cite="email.getBlast totalRecipients" />
+						<Datum value={data.blast.totalRecipients} />
 					</p>
 					<p class="text-text-tertiary text-xs">recipients</p>
 				</div>
 				<div class="border-surface-border bg-surface-base rounded-md border p-3">
 					<p class="text-text-primary font-mono text-lg font-bold tabular-nums">
-						<Datum value={data.blast.totalSent} cite="email.getBlast totalSent" />
+						<Datum value={data.blast.totalSent} />
 					</p>
-					<p class="text-text-tertiary text-xs">sent counter</p>
+					<p class="text-text-tertiary text-xs">sent</p>
 				</div>
 				<div class="border-surface-border bg-surface-base rounded-md border p-3">
 					<p class="text-text-primary font-mono text-lg font-bold tabular-nums">
-						<Datum value={receiptRows} cite="email.listReceiptsForBlast" />
+						<Datum value={receiptRows} />
 					</p>
-					<p class="text-text-tertiary text-xs">receipt rows</p>
+					<p class="text-text-tertiary text-xs">receipts</p>
 				</div>
 				<div class="border-surface-border bg-surface-base rounded-md border p-3">
 					<p class="font-mono text-lg font-bold text-red-500 tabular-nums">
-						<Datum value={failedCount} cite="emailDeliveryReceipts.status" />
+						<Datum value={failedCount} />
 					</p>
-					<p class="text-text-tertiary text-xs">failed rows</p>
+					<p class="text-text-tertiary text-xs">failed</p>
 				</div>
 			</div>
 		</header>
-
-		<WorkspaceCapabilityStrip label="Email receipt register capability" items={capabilityItems} />
-
-		<section
-			id="email-receipt-anchoring-boundary"
-			class="border-surface-border bg-surface-base rounded-md border px-4 py-3"
-		>
-			<p class="text-text-primary text-sm font-medium">Anchoring boundary</p>
-			<p class="text-text-tertiary mt-1 text-sm">
-				Rows here prove what this org can inspect about a blast dispatch attempt. Archive-grade
-				receipt batches, Merkle roots, and reader-office notification surfaces remain outside this
-				register.
-			</p>
-		</section>
-
-		<section
-			id="recipient-hash-boundary"
-			class="border-surface-border bg-surface-base rounded-md border px-4 py-3"
-		>
-			<p class="text-text-primary text-sm font-medium">Recipient privacy boundary</p>
-			<p class="text-text-tertiary mt-1 text-sm">
-				The register exposes deterministic org-scoped hashes and dispatch metadata only. It does not
-				decrypt names, emails, or message bodies.
-			</p>
-		</section>
 
 		{#if data.receipts.length === 0}
 			<section
 				id="email-receipt-register"
 				class="border-surface-border bg-surface-base rounded-md border py-14 text-center"
 			>
-				<p class="text-text-primary text-base font-medium">No receipt rows on this page.</p>
+				<p class="text-text-primary text-base font-medium">No delivery receipts yet.</p>
 				<p class="text-text-tertiary mx-auto mt-2 max-w-md text-sm">
-					Receipt rows appear after a dispatch path writes per-recipient outcomes. Until then, sent
-					counters stay separate from receipt proof.
+					Receipts appear here once this email is sent, one per recipient.
 				</p>
 			</section>
 		{:else}
@@ -196,17 +88,14 @@
 					class="border-surface-border flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3"
 				>
 					<div>
-						<p class="text-text-primary text-sm font-medium">Dispatch outcome rows</p>
+						<p class="text-text-primary text-sm font-medium">Delivery outcomes</p>
 						<p class="text-text-tertiary mt-1 text-xs">
-							Loaded {sentCount} sent row{sentCount === 1 ? '' : 's'} and {failedCount} failed row{failedCount ===
-							1
-								? ''
-								: 's'} from the current receipt page.
+							{sentCount} sent and {failedCount} failed on this page.
 						</p>
 					</div>
-					<p class="text-text-tertiary font-mono text-xs">
-						{data.hasMore ? 'paged' : 'complete page'}
-					</p>
+					{#if data.hasMore}
+						<p class="text-text-tertiary font-mono text-xs">more pages</p>
+					{/if}
 				</div>
 
 				<div class="overflow-x-auto">
@@ -279,9 +168,8 @@
 
 		<footer class="border-surface-border border-t pt-6">
 			<p class="text-text-tertiary text-xs">
-				Recipient identity stays encrypted under the org key elsewhere. This register exposes only
-				the deterministic hash, immediate dispatch status, optional SES message id, and any local
-				send error for the current blast.
+				Recipient names and emails stay encrypted. This page shows only a one-way hash for each
+				recipient, the delivery status, the provider message ID, and any send error.
 			</p>
 		</footer>
 	</div>

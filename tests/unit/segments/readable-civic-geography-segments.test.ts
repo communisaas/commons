@@ -86,7 +86,7 @@ describe('readable civic geography segment labels', () => {
 		expect(segmentBuilder).toContain('const actionReadableGeographyConditionCount = $derived');
 		expect(segmentBuilder).toContain('const actionDistrictHashConditionCount = $derived');
 		expect(segmentBuilder).toContain('aria-label="Segment civic geography boundary"');
-		expect(segmentBuilder).toContain('Civic geography boundary');
+		expect(segmentBuilder).toContain('Geography coverage');
 		expect(segmentBuilder).toContain('imported labels');
 		expect(segmentBuilder).toContain('action labels');
 		expect(segmentBuilder).toContain('hash evidence');

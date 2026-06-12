@@ -7,58 +7,13 @@
 		normalizePlatformExportHeader,
 		type PlatformExportProfile
 	} from '$lib/data/platform-export-profiles';
-	import { formatCapabilityClusters } from '$lib/data/capability-clusters';
-	import {
-		buildPlatformIntakeReadiness,
-		buildPeopleSourceProvenanceReadiness,
-		formatGateEvidence,
-		getGateEvidence,
-		type PlatformIntakeProfileRow,
-		type PlatformIntakeStageRow
-	} from '$lib/data/capability-hypergraph';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel,
-		operatorCapabilityStateRatioSegments
-	} from '$lib/data/capability-state-labels';
-	import { Datum, Ratio } from '$lib/design';
+	import { Datum } from '$lib/design';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	// ── Wizard state ──────────────────────────────────────────
 	type Step = 'upload' | 'mapping' | 'confirm';
-	type IntakeCapabilityState = 'live' | 'partial' | 'draft-only' | 'gated';
-	type IntakeContractRow = {
-		label: string;
-		state: IntakeCapabilityState;
-		phase: string;
-		cluster: string;
-		action: string;
-		effect: string;
-		gate: string;
-		metric: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
-	type IntakePressureReadout = {
-		id: 'recognized-exports' | 'source-custody' | 'direct-sync-boundary';
-		label: string;
-		title: string;
-		state: IntakeCapabilityState;
-		href: string;
-		action: string;
-		detail: string;
-		gate: string;
-		source: string;
-		metric: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
 	let step = $state<Step>('upload');
 
 	// ── Upload state ──────────────────────────────────────────
@@ -123,248 +78,6 @@
 			].includes(field)
 		).length
 	);
-	const platformApiGate = getGateEvidence('CP-platform-api-sync', ['T1-3'], {
-		name: 'Direct platform sync',
-		downstream: 1,
-		dependency: 'Encrypted credential custody + direct sync execution'
-	});
-	const platformApiSync = $derived(data.spaces.operating?.platformApiSync ?? null);
-	const platformIntakeReadiness = $derived(
-		buildPlatformIntakeReadiness({
-			base: `/org/${data.org.slug}`,
-			platformApiGate,
-			platformApiSync
-		})
-	);
-	const peopleSourceProvenanceReadiness = $derived(
-		buildPeopleSourceProvenanceReadiness({
-			base: `/org/${data.org.slug}`,
-			sourceCounts: data.spaces.base?.sourceCounts ?? null,
-			totalPeople: data.spaces.base?.total ?? null,
-			platformApiGate
-		})
-	);
-	const platformProfileRows = $derived<PlatformIntakeProfileRow[]>(platformIntakeReadiness.rows);
-	const platformIntakeStageRows = $derived<PlatformIntakeStageRow[]>(
-		platformIntakeReadiness.stageRows
-	);
-	const platformExportProfileCount = $derived(platformIntakeReadiness.profileCount);
-	const platformProfileStateCounts = $derived(
-		platformProfileRows
-			.flatMap((row) => [row.csvState, row.apiState])
-			.reduce(
-				(acc, state) => {
-					acc[state] += 1;
-					return acc;
-				},
-				{ live: 0, partial: 0, 'draft-only': 0, gated: 0 } as Record<IntakeCapabilityState, number>
-			)
-	);
-	const platformProfileSegments = $derived(
-		operatorCapabilityStateRatioSegments(platformProfileStateCounts, {
-			labelSuffix: ' source-custody contracts'
-		})
-	);
-	const exportRecognitionStage = $derived(
-		platformIntakeStageRows.find((row) => row.id === 'export-recognition') ?? null
-	);
-	const directPlatformSyncStage = $derived(
-		platformIntakeStageRows.find((row) => row.id === 'direct-api-runner') ?? null
-	);
-	const intakePressureReadouts = $derived<IntakePressureReadout[]>([
-		{
-			id: 'recognized-exports',
-			label: 'Recognized exports',
-			title: `${platformIntakeReadiness.csvContractCount}/${platformIntakeReadiness.profileCount} CSV contracts`,
-			state: exportRecognitionStage?.state ?? platformIntakeReadiness.state,
-			href: exportRecognitionStage?.href ?? `/org/${data.org.slug}/supporters/import#csv-intake`,
-			action: exportRecognitionStage?.action ?? 'upload CSV export',
-			detail:
-				exportRecognitionStage?.effect ??
-				`${platformIntakeReadiness.csvContractCount} CSV source-custody contracts preserve origin and header evidence across recognized exports.`,
-			gate:
-				exportRecognitionStage?.gate ?? 'Export-header recognition is armed for CSV export intake.',
-			source: 'buildPlatformIntakeReadiness',
-			metric: {
-				value: platformIntakeReadiness.csvContractCount,
-				label: 'CSV contracts',
-				cite: 'buildPlatformIntakeReadiness'
-			}
-		},
-		{
-			id: 'source-custody',
-			label: 'Source custody',
-			title: peopleSourceProvenanceReadiness.signal,
-			state: peopleSourceProvenanceReadiness.state,
-			href: peopleSourceProvenanceReadiness.href,
-			action: peopleSourceProvenanceReadiness.action,
-			detail: peopleSourceProvenanceReadiness.detail,
-			gate: peopleSourceProvenanceReadiness.gate,
-			source: 'buildPeopleSourceProvenanceReadiness',
-			metric: {
-				value: peopleSourceProvenanceReadiness.platformProfilePeopleCount,
-				label: 'profile-origin people',
-				cite: 'supporters.getSummaryStats.sourceCounts'
-			}
-		},
-		{
-			id: 'direct-sync-boundary',
-			label: 'Direct sync boundary',
-			title: directPlatformSyncStage?.handoff ?? 'Direct sync execution',
-			state: directPlatformSyncStage?.state ?? platformIntakeReadiness.state,
-			href:
-				directPlatformSyncStage?.href ??
-				`/org/${data.org.slug}/supporters/import/platform-api#platform-sync-boundary`,
-			action: directPlatformSyncStage?.action ?? 'read sync boundary',
-			detail:
-				directPlatformSyncStage?.effect ??
-				`${platformIntakeReadiness.apiBoundaryCount} direct sync paths remain dependency-first.`,
-			gate: directPlatformSyncStage?.gate ?? platformIntakeReadiness.gate,
-			source: 'getPlatformApiSyncReadiness',
-			metric: {
-				value: platformIntakeReadiness.apiBoundaryCount,
-				label: 'sync boundaries',
-				cite: 'buildPlatformIntakeReadiness'
-			}
-		}
-	]);
-	const detectedSourceLabel = $derived(
-		detectedPlatform?.label ?? (headers.length > 0 ? 'CSV / unknown export' : 'No file loaded')
-	);
-	const batchCount = $derived(totalRows > 0 ? Math.ceil(totalRows / 100) : 0);
-	const intakeContractRows = $derived<IntakeContractRow[]>([
-		{
-			label: 'Export recognition',
-			state: 'live',
-			phase: 'GROUND',
-			cluster: 'C-data-sovereignty / C-reach',
-			action: 'recognize export',
-			effect: `${platformIntakeReadiness.signal} can be detected from headers; unknown CSV remains importable through manual mapping.`,
-			gate: platformIntakeReadiness.boundary,
-			metric: {
-				value: platformExportProfileCount,
-				label: 'recognized profiles',
-				cite: 'src/lib/data/platform-export-profiles.ts'
-			}
-		},
-		{
-			label: 'Person key',
-			state: hasEmailMapping ? 'live' : 'gated',
-			phase: 'GROUND',
-			cluster: 'C-reach / C-data-sovereignty',
-			action: hasEmailMapping ? 'import people' : 'map email',
-			effect: hasEmailMapping
-				? 'An email column is mapped, so rows can become People records.'
-				: 'No person record is imported until an email column is mapped.',
-			gate: hasEmailMapping
-				? 'Email key mapped for this file.'
-				: 'Map at least one column to Email before import.',
-			metric: {
-				value: hasEmailMapping ? 1 : 0,
-				label: 'email key',
-				cite: 'columnMapping'
-			}
-		},
-		{
-			label: 'Source custody',
-			state: headers.length > 0 ? 'live' : 'partial',
-			phase: 'GROUND',
-			cluster: 'C-data-sovereignty / C-composability',
-			action: 'preserve source',
-			effect: `${detectedSourceLabel} will be stored as People source metadata; consent columns use strictest-wins merging.`,
-			gate: 'Imported people keep source custody; custom field typing and >5,000-row resume remain outside this path.',
-			metric: {
-				value: detectedPlatform ? 1 : headers.length > 0 ? 0 : null,
-				label: 'detected profile',
-				cite: 'detectPlatformExportProfile'
-			}
-		},
-		{
-			label: 'Consent evidence custody',
-			state:
-				consentEvidenceColumnCount > 0 ? 'partial' : headers.length > 0 ? 'draft-only' : 'gated',
-			phase: 'GROUND',
-			cluster: 'C-reach / C-data-sovereignty',
-			action: consentEvidenceColumnCount > 0 ? 'preserve consent evidence' : 'map consent evidence',
-			effect:
-				consentEvidenceColumnCount > 0
-					? `${consentEvidenceColumnCount} consent status/source/date/text columns will be carried into aggregate reach evidence.`
-					: headers.length > 0
-						? 'Consent can be imported as status plus source/date/text evidence; phone numbers alone are never treated as opt-in.'
-						: 'Upload an export before mapping consent status or evidence columns.',
-			gate: 'Consent evidence is custody ground for reach claims; it is not double opt-in, statutory legal advice, or carrier-dispatch permission by itself.',
-			metric: {
-				value: consentEvidenceColumnCount || null,
-				label: 'consent columns',
-				cite: 'columnMapping consent evidence'
-			}
-		},
-		{
-			label: 'Custom field custody',
-			state: customFieldColumnCount > 0 ? 'live' : headers.length > 0 ? 'partial' : 'gated',
-			phase: 'GROUND',
-			cluster: 'C-data-sovereignty',
-			action: customFieldColumnCount > 0 ? 'preserve fields' : 'map custom fields',
-			effect:
-				customFieldColumnCount > 0
-					? `${customFieldColumnCount} columns will be sealed as encrypted custom-field JSON on each imported person.`
-					: headers.length > 0
-						? 'Platform-specific columns stay skipped unless marked as encrypted custom fields.'
-						: 'Upload an export before choosing which nonstandard columns Commons should preserve.',
-			gate:
-				customFieldColumnCount > 0
-					? 'Custom fields are custody-only: no field typing, segmentation, or schema governance is claimed.'
-					: 'Choose Encrypted custom field for columns Commons should carry forward.',
-			metric: {
-				value: customFieldColumnCount || null,
-				label: 'custom columns',
-				cite: 'columnMapping custom'
-			}
-		},
-		{
-			label: 'Encrypted batch write',
-			state: totalRows > 0 && hasEmailMapping ? 'live' : 'gated',
-			phase: 'GROUND',
-			cluster: 'C-verification / C-data-sovereignty',
-			action: totalRows > 0 && hasEmailMapping ? 'write batches' : 'prepare import',
-			effect:
-				'Rows write through supporters.importWithEncryption in 100-row batches after mapping and validation.',
-			gate:
-				totalRows > 0 && hasEmailMapping
-					? 'Editor role, valid file, mapped email, and encrypted supporter write path are present.'
-					: 'Upload a CSV and map Email before the encrypted write path is armed.',
-			metric: {
-				value: batchCount || null,
-				label: '100-row batches',
-				cite: 'BATCH_SIZE'
-			}
-		},
-		{
-			label: 'Direct platform sync',
-			state: 'gated',
-			phase: 'GROUND',
-			cluster: 'C-composability / C-data-sovereignty',
-			action: 'read sync boundary',
-			effect: platformIntakeReadiness.futureLift,
-			gate: platformIntakeReadiness.gate,
-			metric: {
-				value: null,
-				label: 'sync boundaries',
-				cite: 'CP-platform-api-sync'
-			}
-		}
-	]);
-	const intakeStateCounts = $derived(
-		intakeContractRows.reduce(
-			(acc, row) => {
-				acc[row.state] += 1;
-				return acc;
-			},
-			{ live: 0, partial: 0, 'draft-only': 0, gated: 0 } as Record<IntakeCapabilityState, number>
-		)
-	);
-	const intakeStateSegments = $derived(operatorCapabilityStateRatioSegments(intakeStateCounts));
-
 	const fileSizeDisplay = $derived(() => {
 		if (!file) return '';
 		const bytes = file.size;
@@ -530,18 +243,6 @@
 		return FIELD_OPTIONS.find((o) => o.value === field)?.label ?? field;
 	}
 
-	function stateLabel(state: IntakeCapabilityState): string {
-		return operatorCapabilityStateLabel(state);
-	}
-
-	function actionFor(state: IntakeCapabilityState, action: string): string {
-		return operatorCapabilityActionLabel(state, action, { appendReadyArrow: true });
-	}
-
-	function actionLabel(row: IntakeContractRow): string {
-		return actionFor(row.state, row.action);
-	}
-
 	// ── Navigation ────────────────────────────────────────────
 	function goToUpload() {
 		step = 'upload';
@@ -583,7 +284,7 @@
 	<div>
 		<nav class="text-text-tertiary mb-4 flex items-center gap-2 text-sm">
 			<a href="/org/{data.org.slug}/supporters" class="hover:text-text-secondary transition-colors">
-				People ledger
+				People
 			</a>
 			<svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 				<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
@@ -592,104 +293,9 @@
 		</nav>
 		<h1 class="text-text-primary text-xl font-semibold">Import people</h1>
 		<p class="text-text-tertiary mt-1 text-sm">
-			Bring people into Commons through the shipped CSV path; platform APIs stay visibly gated.
+			Bring people into Commons from a CSV export of any other tool.
 		</p>
 	</div>
-
-	<section
-		class="border-surface-border bg-surface-base space-y-4 rounded-md border p-5"
-		aria-label="People import capability contract"
-	>
-		<div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-			<div>
-				<p class="text-text-tertiary font-mono text-xs tracking-wider uppercase">Import contract</p>
-				<h2 class="text-text-primary mt-1 text-base font-semibold">
-					Exports become source custody
-				</h2>
-				<p class="text-text-tertiary mt-1 max-w-2xl text-sm">
-					{platformIntakeReadiness.effect}
-					{platformIntakeReadiness.boundary}
-				</p>
-				<a
-					href="/org/{data.org.slug}/supporters/import/platform-api"
-					class="text-text-secondary hover:text-text-primary mt-3 inline-flex text-sm font-semibold transition-colors"
-				>
-					Read sync boundary
-				</a>
-			</div>
-			<div class="flex items-center gap-4">
-				<span class="text-text-tertiary flex items-baseline gap-1.5 font-mono text-xs">
-					<Datum value={platformExportProfileCount} cite="PLATFORM_EXPORT_PROFILES.length" />
-					<span>profiles</span>
-				</span>
-				<span class="text-text-tertiary flex items-baseline gap-1.5 font-mono text-xs">
-					<Datum value={totalRows || null} cite="clientParseCSV rows" />
-					<span>rows</span>
-				</span>
-			</div>
-		</div>
-
-		<Ratio segments={intakeStateSegments} height={8} />
-
-		<div class="grid gap-3 md:grid-cols-3" aria-label="Source portability pressure">
-			{#each intakePressureReadouts as readout (readout.id)}
-				<a
-					href={readout.href}
-					data-state={readout.state}
-					data-sveltekit-preload-data="off"
-					class="border-surface-border bg-surface-base hover:border-surface-border-strong grid min-h-[10.5rem] content-start gap-2 rounded-md border px-3 py-3 transition-colors focus:ring-1 focus:ring-teal-400/50 focus:outline-none"
-					aria-label="{readout.label}: {stateLabel(
-						readout.state
-					)}. {readout.detail} Gate: {readout.gate}"
-				>
-					<span class="text-text-tertiary font-mono text-[10px] tracking-wider uppercase">
-						{readout.label}
-					</span>
-					<span class="text-text-primary text-sm font-semibold">{readout.title}</span>
-					<span class="text-text-secondary flex items-baseline gap-1.5 font-mono text-xs">
-						<Datum value={readout.metric.value} cite={readout.metric.cite} />
-						<span>{readout.metric.label}</span>
-					</span>
-					<span class="text-text-tertiary text-xs">{readout.detail}</span>
-					<span class="text-text-quaternary text-xs">{readout.gate}</span>
-					<span class="text-text-secondary font-mono text-xs"
-						>{actionFor(readout.state, readout.action)}</span
-					>
-					<span class="text-text-quaternary font-mono text-[10px]">{readout.source}</span>
-				</a>
-			{/each}
-		</div>
-
-		<div class="divide-surface-border divide-y">
-			{#each intakeContractRows as row (row.label)}
-				<div
-					class="grid gap-2 py-3 text-sm lg:grid-cols-[minmax(10rem,1fr)_5.5rem_minmax(8rem,0.8fr)_auto_minmax(0,1.2fr)] lg:items-baseline"
-					data-state={row.state}
-				>
-					<div class="min-w-0">
-						<p class="text-text-primary font-medium">{row.label}</p>
-						<p class="text-text-tertiary mt-0.5 text-xs">{row.effect}</p>
-					</div>
-					<span class="font-mono text-[10px] tracking-wider text-teal-300 uppercase">
-						{stateLabel(row.state)}
-					</span>
-					<span class="text-text-tertiary font-mono text-[10px] tracking-wider uppercase">
-						{formatCapabilityClusters(row.cluster)}
-					</span>
-					<span class="text-text-secondary font-mono text-xs whitespace-nowrap">
-						{actionLabel(row)}
-					</span>
-					<span class="text-text-tertiary text-xs">{row.gate}</span>
-					<span
-						class="text-text-quaternary flex items-baseline gap-1.5 font-mono text-xs lg:col-start-3"
-					>
-						<Datum value={row.metric.value} cite={row.metric.cite} />
-						<span>{row.metric.label}</span>
-					</span>
-				</div>
-			{/each}
-		</div>
-	</section>
 
 	<!-- ── CSV Upload Section (hero) ──────────────────────────── -->
 	<div id="csv-intake" class="border-surface-border bg-surface-base rounded-md border p-5">
@@ -1250,62 +856,4 @@
 		{/if}
 	</div>
 
-	<!-- ── Platform Export Profiles ───────────────────────────── -->
-	<div class="space-y-3">
-		<div>
-			<p class="text-text-tertiary font-mono text-xs tracking-wider uppercase">
-				Platform export profiles
-			</p>
-			<p class="text-text-quaternary mt-1 text-xs">
-				{platformIntakeReadiness.signal} are tracked as CSV and API contracts. {platformIntakeReadiness.detail}
-			</p>
-		</div>
-
-		<Ratio segments={platformProfileSegments} height={8} />
-
-		<div class="grid gap-3 sm:grid-cols-2">
-			{#each platformProfileRows as row (row.source)}
-				<div class="border-surface-border bg-surface-base rounded-md border p-4">
-					<div class="flex items-start justify-between gap-3">
-						<div>
-							<p class="text-text-primary text-sm font-medium">{row.label}</p>
-							<p class="text-text-tertiary mt-1 text-xs">
-								{row.fingerprint} headers map into People and preserve source.
-							</p>
-							<p class="text-text-quaternary mt-1 text-xs">
-								Sync proof: {row.apiProofSummary}
-							</p>
-						</div>
-						<span class="text-text-tertiary font-mono text-[10px] tracking-wider uppercase"
-							>{formatCapabilityClusters(row.clusters)}</span
-						>
-					</div>
-					<div class="mt-3 flex flex-wrap gap-2">
-						<a
-							href={row.csvHref}
-							data-sveltekit-preload-data="off"
-							class="rounded border border-teal-500/30 bg-teal-500/10 px-2 py-1 font-mono text-[10px] tracking-wider text-teal-300 uppercase transition-colors hover:border-teal-400/60 hover:bg-teal-500/15 focus:ring-1 focus:ring-teal-400/50 focus:outline-none"
-						>
-							CSV profile · {stateLabel(row.csvState)}
-						</a>
-						<a
-							href={row.apiHref}
-							data-sveltekit-preload-data="off"
-							class="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 font-mono text-[10px] tracking-wider text-amber-300 uppercase transition-colors hover:border-amber-400/60 hover:bg-amber-500/15 focus:ring-1 focus:ring-amber-400/50 focus:outline-none"
-						>
-							Direct sync · {stateLabel(row.apiState)}
-						</a>
-						<span class="text-text-quaternary flex items-baseline gap-1.5 font-mono text-xs">
-							<Datum value={row.matchCount} cite="platform export profile header signatures" />
-							<span>signals</span>
-						</span>
-						<span class="text-text-quaternary flex items-baseline gap-1.5 font-mono text-xs">
-							<Datum value={row.apiProofCount} cite="direct sync proof checklist" />
-							<span>sync checks</span>
-						</span>
-					</div>
-				</div>
-			{/each}
-		</div>
-	</div>
 </div>

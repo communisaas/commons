@@ -97,7 +97,7 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 				features.push({
 					label: `${plan.maxSms.toLocaleString('en-US')} SMS quota reserved`,
 					state: 'draft-only',
-					detail: 'SMS quota exists; bulk SMS dispatch remains not armed.'
+					detail: 'Quota reserved for when bulk texting is fully available.'
 				});
 			}
 			if (slug !== 'free') {
@@ -105,7 +105,7 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 					label: 'A/B test setup',
 					state: 'draft-only',
 					detail:
-						'Variant setup stores exact test cohorts and can create a remainder draft after winner marking; automated dispatch is not armed.'
+						'Set up A/B tests with exact test groups and send the winner to the rest; automatic winner send-out is coming.'
 				});
 			}
 			if (slug === 'organization' || slug === 'coalition') {
@@ -113,12 +113,12 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 					{
 						label: 'Custom sending domain',
 						state: 'gated',
-						detail: 'No DNS/SES identity workflow is mounted yet.'
+						detail: 'Not available yet.'
 					},
 					{
 						label: 'SQL mirror',
 						state: 'gated',
-						detail: 'No SQL mirror or export pipeline is implemented.'
+						detail: 'Not available yet.'
 					}
 				);
 			}
@@ -127,12 +127,12 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 					{
 						label: 'Coalition network layer',
 						state: 'partial',
-						detail: 'Network membership exists; cross-border coalition aggregation remains gated.'
+						detail: 'Coalition networks work today; international coalition reporting is coming.'
 					},
 					{
 						label: 'White-label surface',
 						state: 'gated',
-						detail: 'No white-label routing or per-org CSS override is implemented.'
+						detail: 'Not available yet.'
 					}
 				);
 			}

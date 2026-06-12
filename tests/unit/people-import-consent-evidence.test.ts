@@ -29,7 +29,7 @@ describe('People import consent evidence custody', () => {
 		expect(platformProfiles).toContain("'sms consent date': 'sms_consented_at'");
 		expect(importPage).toContain("{ value: 'email_consent_source', label: 'Email consent source' }");
 		expect(importPage).toContain("{ value: 'sms_consent_text', label: 'SMS consent text' }");
-		expect(importPage).toContain("label: 'Consent evidence custody'");
+		expect(importPage).toContain('Consent evidence columns');
 		expect(importPage).toContain('consentEvidenceColumnCount');
 	});
 

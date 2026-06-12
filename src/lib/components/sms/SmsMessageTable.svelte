@@ -38,7 +38,7 @@
 </script>
 
 {#if messages.length === 0}
-	<p class="text-text-tertiary py-8 text-center text-sm">No carrier receipt rows yet.</p>
+	<p class="text-text-tertiary py-8 text-center text-sm">No deliveries yet.</p>
 {:else}
 	<div class="border-surface-border overflow-x-auto rounded-lg border">
 		<table class="w-full text-left text-sm">

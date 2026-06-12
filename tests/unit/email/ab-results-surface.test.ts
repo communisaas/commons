@@ -35,10 +35,10 @@ describe('A/B test evidence surface', () => {
 	it('describes winner marking separately from gated production dispatch', () => {
 		expect(detailPageSource).toContain('A/B Test Group');
 		expect(detailPageSource).toContain('A/B continuation');
-		expect(detailPageSource).toContain('Winner marker recorded');
+		expect(detailPageSource).toContain('won. A follow-up email for the held-back group');
 		expect(detailPageSource).toContain('Create remainder draft');
 		expect(detailPageSource).toContain('Queue remainder send');
-		expect(detailPageSource).toContain('Queue test cohorts');
+		expect(detailPageSource).toContain('Send to test groups');
 		expect(detailPageSource).toContain('serverDispatchRuntimeArmed');
 		expect(detailPageSource).not.toContain('Winning variant sent to');
 	});
@@ -79,8 +79,8 @@ describe('A/B test evidence surface', () => {
 		expect(composeServerSource).toContain("['open', 'click'].includes(rawWinnerMetric)");
 		expect(composeServerSource).not.toContain("['open', 'click', 'verified_action']");
 		expect(composePageSource).not.toContain('<option value="verified_action">');
-		expect(composePageSource).toContain('stays held as an exact continuation');
-		expect(composePageSource).toContain('cohort.');
+		expect(composePageSource).toContain('get the winning');
+		expect(composePageSource).toContain('The test groups are saved exactly as selected');
 		expect(composePageSource).not.toContain('requires manual follow-up');
 		expect(detailPageSource).toContain('recordedWinnerBlastId');
 		expect(detailPageSource).toContain('canMaterializeAbRemainder');

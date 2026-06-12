@@ -18,10 +18,9 @@ describe('People CSV custom-field custody', () => {
 	it('exposes custom-field mapping as an explicit operator choice', () => {
 		expect(platformProfiles).toContain("| 'custom'");
 		expect(importPage).toContain("{ value: 'custom', label: 'Encrypted custom field' }");
-		expect(importPage).toContain("label: 'Custom field custody'");
+		expect(importPage).toContain('Encrypted custom fields');
 		expect(importPage).toContain('preserveUnmappedAsCustomFields');
-		expect(importPage).toContain('Custom fields are custody-only');
-		expect(importPage).toContain('Custom fields are stored as encrypted JSON');
+			expect(importPage).toContain('Custom fields are stored as encrypted JSON');
 	});
 
 	it('maps selected CSV columns into plaintext customFields before Convex encryption', () => {

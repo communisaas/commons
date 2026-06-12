@@ -1,19 +1,8 @@
 <script lang="ts">
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
 	import CharacterCounter from '$lib/components/sms/CharacterCounter.svelte';
-	import { FEATURES } from '$lib/config/features';
+	import BoundedNotice from '$lib/components/org/BoundedNotice.svelte';
+	import { textDeliveryLimitNotice } from '$lib/data/org-limit-sentences';
 	import { Datum } from '$lib/design';
-	import {
-		buildTextDeliveryReadiness,
-		getGateEvidence,
-		type CapabilityState,
-		type TextCarrierProofRow,
-		type TextDeliveryReadinessRow
-	} from '$lib/data/capability-hypergraph';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel
-	} from '$lib/data/capability-state-labels';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -36,42 +25,10 @@
 	let audienceFirstRun = true;
 	let audienceRequestSeq = 0;
 
-	type CapabilityItem = {
-		label: string;
-		state: CapabilityState;
-		phase: string;
-		cluster: string;
-		action: string;
-		detail: string;
-		unlock: string;
-		href: string;
-		metric?: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
-	type TextDeliveryPressureReadout = {
-		id: string;
-		label: string;
-		state: CapabilityState;
-		title: string;
-		action: string;
-		detail: string;
-		gate: string;
-		href: string;
-		metric: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
-
 	const bodyLength = $derived(body.length);
 	const segmentCount = $derived(Math.ceil(bodyLength / 160) || 1);
 	const isValid = $derived(body.trim().length > 0 && bodyLength <= 1600);
 	const canContinueToDispatch = $derived(isValid && audienceCount > 0 && !audienceCounting);
-	const base = $derived(`/org/${data.org.slug}`);
 	const hasAudienceFilter = $derived(
 		selectedTagIds.length > 0 || excludedTagIds.length > 0 || selectedSegmentIds.length > 0
 	);
@@ -85,219 +42,15 @@
 			: null
 	);
 	const audienceFilterKey = $derived(JSON.stringify(recipientFilterPayload ?? {}));
-	const smsDispatchGate = getGateEvidence('CP-sms-dispatch', ['T2-1'], {
-		name: 'SMS dispatch',
-		downstream: 2,
-		dependency: 'Browser phone custody and Twilio dispatch runner'
-	});
-	const smsReceiptAnchoringGate = getGateEvidence('CP-receipt-anchoring', ['T6-1', 'T6-2'], {
-		name: 'SMS receipt anchoring',
-		downstream: 8,
-		dependency: 'SMS dispatch evidence plus receipt writer/mainnet anchoring'
-	});
-	const textReplyRegisterGate = getGateEvidence(
-		'CP-reader-office-profile',
-		['T8-1a', 'T8-1b', 'T8-8'],
-		{
-			name: 'Text reply workflow',
-			downstream: 3,
-			dependency: 'Reader-office profiles, office-response workflow, and notification webhooks'
-		}
+	const textLimitNotice = $derived(
+		data.textDispatchRuntimeReady
+			? null
+			: textDeliveryLimitNotice({
+					dispatchRuntimeMissing: data.textDispatchRuntimeMissing,
+					dispatchRuntimeDependency: data.textDispatchRuntimeDependency,
+					dispatchRuntimeMessage: data.textDispatchRuntimeMessage
+				})
 	);
-	const textDeliveryReadiness = $derived(
-		buildTextDeliveryReadiness({
-			base,
-			text: {
-				enabled: true,
-				dispatchEnabled: FEATURES.SMS_DISPATCH,
-				loaded: true,
-				draftCount: 0,
-				plannedRecipientCount: audienceCount,
-				sentCount: 0,
-				deliveredCount: 0,
-				failedCount: 0,
-				messageCount: 0,
-				replyCount: 0,
-				subscribedPhoneCount: data.smsHealth.subscribed,
-				unsubscribedPhoneCount: data.smsHealth.unsubscribed,
-				stoppedPhoneCount: data.smsHealth.stopped,
-				noSmsStatusCount: data.smsHealth.none,
-				phonePresentCount: data.smsHealth.phonePresent,
-				smsConsentEvidenceCount: data.consentEvidence.sms,
-				subscribedSmsConsentEvidenceCount: data.consentEvidence.smsSubscribed,
-				dispatchRuntimeReady: data.textDispatchRuntimeReady,
-				dispatchRuntimeMissing: data.textDispatchRuntimeMissing,
-				dispatchRuntimeDependency: data.textDispatchRuntimeDependency,
-				dispatchRuntimeMessage: data.textDispatchRuntimeMessage,
-				dispatchClientBatchRouteMounted: data.textDispatchClientBatchRouteMounted
-			},
-			gates: {
-				smsDispatchGate,
-				smsReceiptAnchoringGate,
-				textReplyRegisterGate
-			}
-		})
-	);
-	const textDeliveryRows = $derived<TextDeliveryReadinessRow[]>(textDeliveryReadiness.rows);
-	const textCarrierProofRows = $derived<TextCarrierProofRow[]>(
-		textDeliveryReadiness.proofRows.map((row) => ({
-			...row,
-			href:
-				row.id === 'saved-draft-packet'
-					? '#text-message'
-					: row.id === 'audience-scope'
-						? '#text-audience-snapshot'
-						: row.id === 'browser-phone-custody' || row.id === 'scope-revalidation'
-							? '#text-dispatch'
-							: row.href
-		}))
-	);
-	const textDispatchRow = $derived(
-		textDeliveryRows.find((row) => row.id === 'bulk-dispatch-runner')
-	);
-	const textPacketScopeProofRow = $derived(
-		textCarrierProofRows.find((row) => row.id === 'saved-draft-packet') ??
-			textCarrierProofRows.find((row) => row.id === 'audience-scope') ??
-			null
-	);
-	const textPhoneCustodyProofRow = $derived(
-		textCarrierProofRows.find((row) => row.id === 'browser-phone-custody') ??
-			textCarrierProofRows.find((row) => row.id === 'scope-revalidation') ??
-			null
-	);
-	const nextTextProofLiftRow = $derived(
-		textCarrierProofRows.find(
-			(row) =>
-				(row.id === 'carrier-acceptance' ||
-					row.id === 'reply-register' ||
-					row.id === 'receipt-anchoring') &&
-				row.state !== 'live'
-		) ??
-			textCarrierProofRows.find((row) => row.id === 'receipt-anchoring') ??
-			null
-	);
-	const textDeliveryPressureReadouts = $derived<TextDeliveryPressureReadout[]>([
-		{
-			id: 'packet-scope',
-			label: 'Packet scope',
-			state: body.trim()
-				? 'draft-only'
-				: (textPacketScopeProofRow?.state ?? textDeliveryReadiness.state),
-			title: 'SMS body and audience scope',
-			action: body.trim()
-				? 'save packet'
-				: (textPacketScopeProofRow?.action ?? 'compose text draft'),
-			detail: body.trim()
-				? `Draft body has ${bodyLength} characters across ${segmentCount} carrier segment${
-						segmentCount === 1 ? '' : 's'
-					}; ${audienceCount} eligible phones match the current scope.`
-				: (textPacketScopeProofRow?.effect ?? textDeliveryReadiness.signal),
-			gate:
-				textPacketScopeProofRow?.gate ??
-				'Saved audience scope is not phone decrypt, carrier delivery, reply handling, or receipt proof.',
-			href: '#text-message',
-			metric: {
-				value: bodyLength,
-				label: 'characters',
-				cite: 'local composer count'
-			}
-		},
-		{
-			id: 'phone-custody',
-			label: 'Phone custody',
-			state: textPhoneCustodyProofRow?.state ?? textDeliveryReadiness.state,
-			title: textPhoneCustodyProofRow?.handoff ?? 'Org-key phone decrypt',
-			action: textPhoneCustodyProofRow?.action ?? 'read custody boundary',
-			detail:
-				textPhoneCustodyProofRow?.effect ??
-				'Phone decrypt stays route-local and bounded before carrier dispatch.',
-			gate: textPhoneCustodyProofRow?.gate ?? textDeliveryReadiness.gate,
-			href: textPhoneCustodyProofRow?.href ?? '#text-dispatch',
-			metric: textPhoneCustodyProofRow?.metric ?? {
-				value: data.textDispatchClientBatchRouteMounted ? 1 : 0,
-				label: 'browser route',
-				cite: 'getTextDispatchReadiness.clientBatchRouteMounted'
-			}
-		},
-		{
-			id: 'next-proof-lift',
-			label: 'Next proof lift',
-			state: nextTextProofLiftRow?.state ?? textDeliveryReadiness.state,
-			title: nextTextProofLiftRow?.handoff ?? textDeliveryReadiness.nextGate.name,
-			action: nextTextProofLiftRow?.action ?? 'read text boundary',
-			detail:
-				nextTextProofLiftRow?.effect ??
-				'Carrier acceptance, reply handling, and durable receipt proof stay separated.',
-			gate: nextTextProofLiftRow?.gate ?? textDeliveryReadiness.gate,
-			href: nextTextProofLiftRow?.href ?? '#text-dispatch',
-			metric: nextTextProofLiftRow?.metric ?? {
-				value: textDeliveryReadiness.nextGate.downstream,
-				label: 'downstream gates',
-				cite: textDeliveryReadiness.nextGate.id
-			}
-		}
-	]);
-	const capabilityItems = $derived<CapabilityItem[]>(
-		textDeliveryRows.map((row) => ({
-			label: row.label,
-			state: row.id === 'text-draft-packets' && body.trim() ? 'draft-only' : row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action:
-				row.id === 'text-draft-packets'
-					? 'save packet'
-					: row.id === 'text-audience-snapshots'
-						? 'shape audience'
-						: row.action,
-			detail:
-				row.id === 'text-draft-packets'
-					? `Draft body has ${bodyLength} characters across ${segmentCount} carrier segment${segmentCount === 1 ? '' : 's'} if later dispatched.`
-					: row.id === 'text-audience-snapshots'
-						? `${audienceCount} subscribed-phone recipients match this draft audience after status and filter rules.`
-						: row.ground,
-			unlock: row.boundary,
-			href:
-				row.id === 'text-draft-packets'
-					? '#text-message'
-					: row.id === 'text-audience-snapshots'
-						? '#text-audience-snapshot'
-						: row.href,
-			metric:
-				row.id === 'text-draft-packets'
-					? {
-							value: bodyLength,
-							label: 'characters',
-							cite: 'local composer count'
-						}
-					: row.id === 'text-audience-snapshots'
-						? {
-								value: audienceCount,
-								label: 'eligible phones',
-								cite: 'sms.countEligibleRecipientsForFilter'
-							}
-						: row.metric
-		}))
-	);
-
-	function stateLabel(state: CapabilityState): string {
-		return operatorCapabilityStateLabel(state);
-	}
-
-	function actionLabel(state: CapabilityState, action: string): string {
-		return operatorCapabilityActionLabel(state, action, { appendReadyArrow: true });
-	}
-
-	function pressureCellClass(state: CapabilityState): string {
-		const stateClass =
-			state === 'live'
-				? 'border-teal-500/35 bg-teal-500/10'
-				: state === 'partial'
-					? 'border-blue-500/30 bg-blue-500/10'
-					: state === 'draft-only'
-						? 'border-amber-500/30 bg-amber-500/10'
-						: 'border-surface-border-strong bg-surface-overlay';
-		return `rounded-md border p-3 text-left transition hover:border-text-tertiary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500 ${stateClass}`;
-	}
 
 	function toggle(list: string[], id: string): string[] {
 		return list.includes(id) ? list.filter((item) => item !== id) : [...list, id];
@@ -406,7 +159,7 @@
 </script>
 
 <svelte:head>
-	<title>Compose Text Draft | {data.org.name}</title>
+	<title>Compose text | {data.org.name}</title>
 </svelte:head>
 
 <div id="text-delivery-draft" class="bg-surface-raised text-text-primary min-h-screen">
@@ -415,55 +168,22 @@
 			href="/org/{data.org.slug}/sms"
 			class="text-text-tertiary hover:text-text-primary mb-6 inline-block text-sm"
 		>
-			&larr; Text delivery
+			&larr; Texts
 		</a>
 
-		<h1 class="text-text-primary mb-2 text-2xl font-bold">Compose text draft</h1>
+		<h1 class="text-text-primary mb-2 text-2xl font-bold">Compose text</h1>
 		<p class="text-text-tertiary mb-6 text-sm">
-			{textDeliveryReadiness.effect}
+			Write the message, choose who gets it, then send from the text's page.
 		</p>
 
-		<WorkspaceCapabilityStrip label="Text draft capability" items={capabilityItems} />
-
-		<div class="mt-4 grid gap-3 md:grid-cols-3" aria-label="Text delivery pressure">
-			{#each textDeliveryPressureReadouts as readout (readout.id)}
-				<a
-					href={readout.href}
-					class={pressureCellClass(readout.state)}
-					data-sveltekit-preload-data="off"
-					aria-label={`${readout.label}: ${stateLabel(readout.state)}; ${readout.detail}; ${readout.gate}`}
-				>
-					<span
-						class="text-text-quaternary block font-mono text-[0.65rem] tracking-[0.18em] uppercase"
-						>{readout.label}</span
-					>
-					<span class="text-text-primary mt-2 block text-sm font-semibold">{readout.title}</span>
-					<span class="text-text-secondary mt-2 flex items-baseline gap-1 text-xs">
-						<Datum value={readout.metric.value} cite={readout.metric.cite} />
-						<span>{readout.metric.label}</span>
-					</span>
-					<span class="text-text-tertiary mt-2 block text-xs leading-relaxed">
-						{readout.detail}
-					</span>
-					<span class="mt-3 block text-xs font-semibold text-teal-300">
-						{actionLabel(readout.state, readout.action)}
-					</span>
-					<span class="text-text-quaternary mt-2 block text-xs leading-relaxed">
-						{readout.gate}
-					</span>
-				</a>
-			{/each}
-		</div>
-
-		<div
-			id="text-dispatch"
-			class="my-6 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3"
-		>
-			<p class="text-sm font-medium text-amber-300">Dispatch boundary</p>
-			<p class="text-text-tertiary mt-1 text-sm">
-				{textDispatchRow?.ground ?? textDeliveryReadiness.detail}
-			</p>
-		</div>
+		{#if textLimitNotice}
+			<div
+				id="text-dispatch"
+				class="border-surface-border bg-surface-base my-6 rounded-md border px-4 py-3"
+			>
+				<BoundedNotice notice={textLimitNotice} />
+			</div>
+		{/if}
 
 		{#if errorMsg}
 			<div
@@ -489,7 +209,7 @@
 			</div>
 			{#if segmentCount > 1}
 				<p class="text-text-tertiary mt-1 text-xs">
-					If later dispatched, this packet occupies {segmentCount} carrier segments.
+					This message sends as {segmentCount} text segments.
 				</p>
 			{/if}
 		</div>
@@ -523,7 +243,7 @@
 				</div>
 				<div class="bg-surface-overlay rounded-md px-4 py-3 text-right">
 					<p class="text-text-primary text-2xl leading-none font-semibold">
-						<Datum value={audienceCount} cite="sms.countEligibleRecipientsForFilter" />
+						<Datum value={audienceCount} />
 					</p>
 					<p class="text-text-tertiary mt-1 text-xs">
 						{audienceCounting ? 'counting...' : 'eligible phones'}
@@ -597,31 +317,9 @@
 				{/if}
 			</div>
 
-			<div
-				class="border-surface-border-strong/70 bg-surface-overlay mt-4 grid gap-3 rounded-md border px-3 py-3 text-xs md:grid-cols-3"
-			>
-				<div>
-					<p class="text-text-tertiary">Batch limit</p>
-					<p class="text-text-primary mt-1 font-mono tabular-nums">
-						<Datum value={audienceBatchLimit} cite="sms.getEncryptedRecipientsForBlast" />
-					</p>
-				</div>
-				<div>
-					<p class="text-text-tertiary">Dispatch route</p>
-					<p class="text-text-primary mt-1">
-						{data.textDispatchClientBatchRouteMounted ? 'detail browser batch' : 'not mounted'}
-					</p>
-				</div>
-				<div>
-					<p class="text-text-tertiary">Saved filter</p>
-					<p class="text-text-primary mt-1">{hasAudienceFilter ? 'scoped' : 'all eligible'}</p>
-				</div>
-			</div>
-
 			{#if audienceHasMoreThanBatchLimit}
 				<p class="text-text-tertiary mt-3 text-xs">
-					Dispatch continues through saved {audienceBatchLimit}-recipient browser-decrypted batches
-					on the detail route.
+					This audience sends in batches of {audienceBatchLimit} from the text's page.
 				</p>
 			{/if}
 			{#if audienceCountError}
@@ -663,7 +361,7 @@
 				disabled={saving || !canContinueToDispatch}
 				class="border-surface-border-strong text-text-secondary rounded-md border px-4 py-2 text-sm hover:border-amber-500/50 hover:text-amber-300 disabled:opacity-50"
 			>
-				{saving ? 'Saving...' : 'Save and open dispatch'}
+				{saving ? 'Saving...' : 'Save and continue to send'}
 			</button>
 		</div>
 	</div>

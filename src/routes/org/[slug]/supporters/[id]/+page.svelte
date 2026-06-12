@@ -1,40 +1,11 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
-	import {
-		buildPersonDetailRows,
-		getGateEvidence,
-		type PersonDetailRow
-	} from '$lib/data/capability-hypergraph';
 	import { formatPeopleSourceLabel } from '$lib/data/platform-export-profiles';
-	import { Datum } from '$lib/design';
 	import type { PageData, ActionData } from './$types';
 
 	type TagView = { id: string; name: string };
-	type PersonRowCustodyMetric = {
-		value: number | null;
-		label: string;
-		cite: string;
-	};
-	type CapabilityItem = {
-		label: string;
-		state: PersonDetailRow['state'];
-		phase: string;
-		cluster: string;
-		action: string;
-		handoff?: string;
-		detail: string;
-		unlock: string;
-		href: string;
-		metric?: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
-	const base = $derived(`/org/${data.org.slug}`);
 	const supporterTags = $derived((data.supporter.tags ?? []) as TagView[]);
 	const allTags = $derived((data.allTags ?? []) as TagView[]);
 
@@ -118,25 +89,6 @@
 	}
 
 	const canEdit = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
-	const verificationTrustGate = getGateEvidence('CP-mainnet-deployment', ['T3-6', 'T5-3'], {
-		name: 'Verification trust hardening',
-		dependency: 'Scroll mainnet DistrictRegistry + TEE resolver attestation'
-	});
-	const emailProxyGate = getGateEvidence('CP-2', ['T2-2'], {
-		name: 'Email send proxy',
-		dependency: 'AWS Lambda deploy + BLAST receipts secret sync'
-	});
-	const platformApiGate = getGateEvidence('CP-platform-api-sync', ['T1-3'], {
-		name: 'Platform API sync',
-		downstream: 1,
-		dependency: 'Encrypted API-key contracts + paginated per-platform clients'
-	});
-	const customFieldsGate = getGateEvidence('CP-custom-fields-type-system', ['T10-7'], {
-		name: 'Custom fields type system',
-		downstream: 1,
-		dependency: 'Org custom-field definitions, validation, CSV mapping, and segment behavior'
-	});
-
 	const vState = $derived(
 		data.supporter.identityVerified
 			? 'Verified'
@@ -148,77 +100,6 @@
 	const currentTagIds = $derived(new Set(supporterTags.map((t) => t.id)));
 	const availableTags = $derived(allTags.filter((t) => !currentTagIds.has(t.id)));
 	const customFieldEntries = $derived(Object.entries(decryptedCustomFields));
-	const encryptedFieldCount = $derived(
-		Number(Boolean(data.supporter.encryptedEmail)) +
-			Number(Boolean(data.supporter.encryptedName)) +
-			Number(Boolean(data.supporter.encryptedPhone)) +
-			Number(Boolean(data.supporter.encryptedCustomFields))
-	);
-	const personDetailRows = $derived<PersonDetailRow[]>(
-		buildPersonDetailRows({
-			base,
-			person: {
-				id: data.supporter.id,
-				identityVerified: data.supporter.identityVerified,
-				postalCode: data.supporter.postalCode,
-				emailStatus: data.supporter.emailStatus,
-				source: data.supporter.source,
-				hasEncryptedCustomFields: Boolean(data.supporter.encryptedCustomFields)
-			},
-			gates: {
-				verificationTrustGate,
-				emailProxyGate,
-				platformApiGate,
-				customFieldsGate
-			}
-		})
-	);
-	const customFieldCustodyRow = $derived(
-		personDetailRows.find((row) => row.id === 'custom-field-custody')
-	);
-	const personRowCustodyNext = $derived(
-		customFieldCustodyRow?.boundary ??
-			`${customFieldsGate.name}: ${customFieldsGate.tasks} (${customFieldsGate.status}; ${customFieldsGate.completed}/${customFieldsGate.total} complete).`
-	);
-	const capabilityItems = $derived<CapabilityItem[]>(
-		personDetailRows.map((row) => ({
-			label: row.label,
-			state: row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action: row.action,
-			handoff: row.handoff,
-			detail: row.ground,
-			unlock: row.boundary,
-			href: row.href,
-			metric: row.metric
-		}))
-	);
-	const personRowCustodyMetrics = $derived<PersonRowCustodyMetric[]>([
-		{
-			value: personDetailRows.length,
-			label: 'capability rows',
-			cite: 'buildPersonDetailRows'
-		},
-		{
-			value: encryptedFieldCount,
-			label: 'encrypted fields',
-			cite: 'supporters.getById encrypted row'
-		},
-		{
-			value: supporterTags.length,
-			label: 'tag labels',
-			cite: 'supporters.getTags'
-		},
-		{
-			value: customFieldEntries.length || (data.supporter.encryptedCustomFields ? null : 0),
-			label: 'custom fields',
-			cite: data.supporter.encryptedCustomFields
-				? 'encryptedCustomFields custody'
-				: 'supporter row custom fields'
-		}
-	]);
-
 	function sourceLabel(s: string | null): string {
 		return formatPeopleSourceLabel(s ?? 'unknown', {
 			style: 'record',
@@ -240,15 +121,13 @@
 	<!-- Breadcrumb -->
 	<nav class="text-text-tertiary flex items-center gap-2 text-sm">
 		<a href="/org/{data.org.slug}/supporters" class="hover:text-text-secondary transition-colors">
-			People ledger
+			People
 		</a>
 		<svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 			<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
 		</svg>
 		<span class="text-text-tertiary truncate">{decryptedName || decryptedEmail || '\u2014'}</span>
 	</nav>
-
-	<WorkspaceCapabilityStrip label="Person capability" items={capabilityItems} />
 
 	<!-- Verification status hero -->
 	<div id="person-verification" class="border-surface-border bg-surface-base rounded-md border p-6">
@@ -285,44 +164,6 @@
 			{/if}
 		</div>
 	</div>
-
-	<section
-		id="person-row-custody"
-		aria-label="Person row custody boundary"
-		data-state={customFieldsGate.state}
-		class="border-surface-border bg-surface-base grid gap-4 rounded-md border px-5 py-4 md:grid-cols-[minmax(0,1fr)_auto]"
-	>
-		<div class="min-w-0 space-y-2">
-			<div class="space-y-1">
-				<p class="text-text-tertiary font-mono text-[0.68rem] tracking-wider uppercase">
-					Person row custody
-				</p>
-				<h2 class="text-text-primary text-sm font-medium">
-					Decrypted fields are evidence drilldown, not identity proof
-				</h2>
-			</div>
-			<p class="text-text-quaternary max-w-3xl text-xs leading-relaxed">
-				Verification weight, reach authorization, source custody, and custom-field custody are the
-				capability contract above; decrypted values below stay row inspection.
-			</p>
-			<p class="text-text-tertiary text-xs leading-relaxed">
-				<span class="text-text-secondary font-mono text-[0.68rem] tracking-wider uppercase"
-					>Next</span
-				>
-				{personRowCustodyNext}
-			</p>
-		</div>
-		<div class="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-4 md:min-w-[28rem]">
-			{#each personRowCustodyMetrics as metric (metric.label)}
-				<div class="bg-surface-overlay flex min-w-0 flex-col gap-1 rounded px-3 py-2">
-					<span class="text-text-primary text-sm leading-none">
-						<Datum value={metric.value} cite={metric.cite} />
-					</span>
-					<span class="text-text-quaternary truncate text-[0.68rem] uppercase">{metric.label}</span>
-				</div>
-			{/each}
-		</div>
-	</section>
 
 	<!-- Row fields -->
 	<div

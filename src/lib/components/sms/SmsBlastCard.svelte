@@ -84,9 +84,7 @@
 				</p>
 			{:else}
 				<p class="text-text-tertiary mt-0.5 text-xs" aria-label="Saved text custody evidence">
-					{carrierStatusEvidenceObserved
-						? 'carrier status recorded; counters not loaded'
-						: 'carrier counters hidden until receipt rows exist'}
+					{carrierStatusEvidenceObserved ? 'sent; delivery counts pending' : 'not sent yet'}
 				</p>
 			{/if}
 		</div>

@@ -190,7 +190,7 @@ export const actions: Actions = {
 		if (!FEATURES.EMAIL_SERVER_DISPATCH) {
 			return fail(403, {
 				error:
-					'Server dispatch is dependency-first for this delivery; A/B test cohorts remain preserved drafts until runtime evidence clears.'
+					"Email sending from our servers isn't available yet. Your A/B test drafts are saved."
 			});
 		}
 		const boundary = await serverDispatchBoundary(params.slug);
@@ -235,7 +235,7 @@ export const actions: Actions = {
 		if (!FEATURES.EMAIL_SERVER_DISPATCH) {
 			return fail(403, {
 				error:
-					'Server dispatch is dependency-first for this delivery; the A/B remainder remains a preserved draft until runtime evidence clears.'
+					"Email sending from our servers isn't available yet. The follow-up email is saved as a draft."
 			});
 		}
 		const boundary = await serverDispatchBoundary(params.slug);

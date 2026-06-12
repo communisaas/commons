@@ -1,11 +1,5 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
-	import {
-		buildSignedWebhookReadiness,
-		getGateEvidence,
-		type SignedWebhookReadinessRow
-	} from '$lib/data/capability-hypergraph';
 	import { Datum, RegistryMark } from '$lib/design';
 	import type { ActionData, PageData } from './$types';
 
@@ -49,68 +43,6 @@
 	const testedDeliveryId = $derived(
 		form?.tested && form.tested.error === null ? form.tested.deliveryId : null
 	);
-	const eventRecordsGate = getGateEvidence('CP-outbound-webhooks', ['T9-3', 'T9-7', 'T6-9'], {
-		name: 'Signed event delivery substrate',
-		downstream: 5,
-		dependency: 'orgEvents rows + orgWebhookDeliveries retry log + HMAC signed POST'
-	});
-	const readerOfficeGate = getGateEvidence('CP-dm-office-profile', ['T8-1b', 'T8-8'], {
-		name: 'Reader-office notification boundary',
-		downstream: 3,
-		dependency: 'Reader-side office profile + notification consumer'
-	});
-	const webhookArchiveGate = getGateEvidence('CP-receipt-anchoring', ['T6-1', 'T6-2', 'T6-9'], {
-		name: 'Durable event archive boundary',
-		downstream: 4,
-		dependency: 'Receipt manifest archive + anchored event receipt pattern'
-	});
-
-	const signedWebhookReadiness = $derived(
-		buildSignedWebhookReadiness({
-			base: `/org/${data.orgSlug}`,
-			webhooks: {
-				eventKindCount: AVAILABLE_EVENTS.length,
-				endpointCount,
-				activeEndpointCount,
-				subscribedEventCount,
-				recentDeliveryCount,
-				deliveredCount,
-				retryingCount,
-				deadCount,
-				failureCount
-			},
-			gates: {
-				eventRecordsGate,
-				readerOfficeGate,
-				webhookArchiveGate
-			}
-		})
-	);
-
-	function webhookCapabilityHref(row: SignedWebhookReadinessRow): string {
-		if (row.id === 'signed-event-substrate') return '#signed-event-ground';
-		if (row.id === 'endpoint-custody') return '#webhook-endpoints';
-		if (row.id === 'delivery-attempt-register') return '#webhook-delivery-evidence';
-		if (row.id === 'reader-office-notification-boundary') return '#reader-notification-boundary';
-		if (row.id === 'durable-event-archive-boundary') return '#webhook-archive-boundary';
-		return row.href;
-	}
-
-	const capabilityItems = $derived(
-		signedWebhookReadiness.rows.map((row) => ({
-			label: row.label,
-			state: row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action: row.action,
-			handoff: row.handoff,
-			detail: row.ground,
-			unlock: row.boundary,
-			href: webhookCapabilityHref(row),
-			metric: row.metric
-		}))
-	);
-
 	function fmtDate(ms: number | null | undefined): string {
 		if (!ms) return '—';
 		return new Date(ms).toLocaleString();
@@ -141,7 +73,7 @@
 </script>
 
 <svelte:head>
-	<title>Signed event webhooks | Org authority</title>
+	<title>Signed event webhooks | Settings</title>
 </svelte:head>
 
 <div class="bg-surface-raised text-text-primary min-h-screen">
@@ -153,16 +85,15 @@
 						href="/org/{data.orgSlug}/settings"
 						class="hover:text-text-secondary transition-colors"
 					>
-						Org authority
+						Settings
 					</a>
 					<span aria-hidden="true">/</span>
 					<span>Signed event webhooks</span>
 				</nav>
 				<h1 class="text-text-primary text-xl font-semibold">Signed event webhooks</h1>
 				<p class="text-text-tertiary mt-1 max-w-3xl text-sm">
-					Subscribe external systems to Commons org events. Deliveries are signed, retryable, and
-					visible as attempt records without claiming receiver-side processing or durable receipt
-					anchoring.
+					Subscribe external systems to Commons org events. Every delivery is signed and retried,
+					and each attempt is recorded below.
 				</p>
 			</div>
 			<button
@@ -173,8 +104,6 @@
 				{showCreate ? 'Close form' : 'Add endpoint'}
 			</button>
 		</header>
-
-		<WorkspaceCapabilityStrip label="Signed event webhook capability" items={capabilityItems} />
 
 		{#if form?.signingSecret && form?.created}
 			<aside
@@ -242,19 +171,19 @@
 				<div class="grid min-w-52 grid-cols-3 gap-3 text-right">
 					<div>
 						<p class="text-text-primary text-lg font-bold">
-							<Datum value={AVAILABLE_EVENTS.length} cite="orgWebhooks SESSION_ALLOWED_EVENTS" />
+							<Datum value={AVAILABLE_EVENTS.length} />
 						</p>
 						<p class="text-text-tertiary text-xs">event kinds</p>
 					</div>
 					<div>
 						<p class="text-text-primary text-lg font-bold">
-							<Datum value={subscribedEventCount} cite="orgWebhooks.events" />
+							<Datum value={subscribedEventCount} />
 						</p>
 						<p class="text-text-tertiary text-xs">subscriptions</p>
 					</div>
 					<div>
 						<p class="text-text-primary text-lg font-bold">
-							<Datum value={failureCount} cite="orgWebhooks.failureCount" />
+							<Datum value={failureCount} />
 						</p>
 						<p class="text-text-tertiary text-xs">failures</p>
 					</div>
@@ -273,13 +202,13 @@
 				<div class="flex gap-4 text-right text-xs">
 					<div>
 						<p class="text-text-primary text-base font-bold">
-							<Datum value={activeEndpointCount} cite="orgWebhooks.enabled" />
+							<Datum value={activeEndpointCount} />
 						</p>
 						<p class="text-text-tertiary">enabled</p>
 					</div>
 					<div>
 						<p class="text-text-primary text-base font-bold">
-							<Datum value={pausedEndpointCount} cite="orgWebhooks.enabled" />
+							<Datum value={pausedEndpointCount} />
 						</p>
 						<p class="text-text-tertiary">paused</p>
 					</div>
@@ -389,7 +318,7 @@
 									{fmtDate(webhook.lastDeliveredAt)}
 								</td>
 								<td class="px-3 py-3 align-top">
-									<Datum value={webhook.failureCount} cite="orgWebhooks.failureCount" />
+									<Datum value={webhook.failureCount} />
 								</td>
 								<td class="px-3 py-3 align-top">
 									<div class="flex flex-wrap gap-3">
@@ -463,19 +392,19 @@
 				<div class="grid grid-cols-3 gap-4 text-right text-xs">
 					<div>
 						<p class="text-text-primary text-base font-bold">
-							<Datum value={deliveredCount} cite="orgWebhookDeliveries.deliveredAt" />
+							<Datum value={deliveredCount} />
 						</p>
 						<p class="text-text-tertiary">delivered</p>
 					</div>
 					<div>
 						<p class="text-text-primary text-base font-bold">
-							<Datum value={retryingCount} cite="orgWebhookDeliveries.nextRetryAt" />
+							<Datum value={retryingCount} />
 						</p>
 						<p class="text-text-tertiary">retrying</p>
 					</div>
 					<div>
 						<p class="text-text-primary text-base font-bold">
-							<Datum value={deadCount} cite="orgWebhookDeliveries.isDead" />
+							<Datum value={deadCount} />
 						</p>
 						<p class="text-text-tertiary">dead</p>
 					</div>
@@ -524,10 +453,10 @@
 									{/if}
 								</td>
 								<td class="px-3 py-3 align-top">
-									<Datum value={delivery.statusCode} cite="orgWebhookDeliveries.statusCode" />
+									<Datum value={delivery.statusCode} />
 								</td>
 								<td class="px-3 py-3 align-top">
-									<Datum value={delivery.attempt} cite="orgWebhookDeliveries.attempt" />
+									<Datum value={delivery.attempt} />
 								</td>
 								<td class="text-text-tertiary px-3 py-3 align-top text-xs">
 									{fmtDate(deliveryTimestamp(delivery))}
@@ -539,30 +468,5 @@
 			</div>
 		</section>
 
-		<div class="grid gap-3 lg:grid-cols-2">
-			<section
-				id="reader-notification-boundary"
-				class="border-surface-border bg-surface-base rounded-md border p-4"
-			>
-				<p class="text-text-primary text-sm font-medium">Reader-office notification boundary</p>
-				<p class="text-text-tertiary mt-1 text-sm">
-					External endpoints can receive signed Commons events today. Commons-owned notification
-					workflows for reader-side office profiles remain a separate consumer path and should not
-					be implied by endpoint delivery.
-				</p>
-			</section>
-
-			<section
-				id="webhook-archive-boundary"
-				class="border-surface-border bg-surface-base rounded-md border p-4"
-			>
-				<p class="text-text-primary text-sm font-medium">Durable event archive boundary</p>
-				<p class="text-text-tertiary mt-1 text-sm">
-					Delivery attempts are operational evidence from <code>orgWebhookDeliveries</code>.
-					Anchored receipt manifests, long-term event archives, and receiver attestations remain
-					outside this route’s claim.
-				</p>
-			</section>
-		</div>
 	</div>
 </div>

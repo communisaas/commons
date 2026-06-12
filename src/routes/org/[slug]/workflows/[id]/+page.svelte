@@ -1,20 +1,9 @@
 <script lang="ts">
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
 	import ExecutionTable from '$lib/components/automation/ExecutionTable.svelte';
 	import WorkflowEmailDependencyPanel from '$lib/components/automation/WorkflowEmailDependencyPanel.svelte';
 	import { FEATURES } from '$lib/config/features';
 	import { TRIGGER_LABELS, STEP_LABELS } from '$lib/config/workflow-labels';
 	import { Datum } from '$lib/design';
-	import {
-		buildCoordinationReadiness,
-		getGateEvidence,
-		type CapabilityState,
-		type CoordinationReadinessRow
-	} from '$lib/data/capability-hypergraph';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel
-	} from '$lib/data/capability-state-labels';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -22,37 +11,6 @@
 	let toggling = $state(false);
 	let deleting = $state(false);
 	let errorMsg = $state('');
-
-	type CapabilityItem = {
-		label: string;
-		state: CapabilityState;
-		phase: string;
-		cluster: string;
-		action: string;
-		detail: string;
-		unlock: string;
-		href: string;
-		metric?: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
-	type CoordinationPressureReadout = {
-		id: string;
-		label: string;
-		state: CapabilityState;
-		title: string;
-		action: string;
-		detail: string;
-		gate: string;
-		href: string;
-		metric: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
 
 	function triggerScopeLabel(trigger: {
 		type: string;
@@ -76,196 +34,16 @@
 	const emailStepCount = $derived(
 		data.workflow.steps.filter((step) => step.type === 'send_email').length
 	);
-	const tagWriteStepCount = $derived(
-		data.workflow.steps.filter((step) => ['add_tag', 'remove_tag'].includes(step.type)).length
-	);
-	const conditionStepCount = $derived(
-		data.workflow.steps.filter((step) => step.type === 'condition').length
-	);
-	const hasEmailSteps = $derived(emailStepCount > 0);
-	const workflowEffectsGate = getGateEvidence('CP-workflow-effects', ['T1-9a'], {
-		name: 'Bounded workflow runner',
-		downstream: 1,
-		dependency: 'Trigger dispatch + tag/branch/delay runner'
-	});
-	const workflowRunEvidenceGate = getGateEvidence('CP-coordination-integrity', ['T10-10'], {
-		name: 'Workflow run evidence',
-		downstream: 1,
-		dependency: 'Execution records + packet-local coordination metrics'
-	});
-	const emailProxyGate = getGateEvidence('CP-2', ['T2-2'], {
-		name: 'Email send proxy',
-		dependency: 'AWS Lambda deploy + BLAST receipts secret sync'
-	});
-	const coordinationReadiness = $derived(
-		buildCoordinationReadiness({
-			base: `/org/${data.org.slug}`,
-			coordination: {
-				enabled: FEATURES.AUTOMATION,
-				executionEnabled: FEATURES.WORKFLOW_EXECUTION,
-				loaded: true,
-				definitionCount: 1,
-				enabledCount: data.workflow.enabled ? 1 : 0,
-				triggerFamilyCount: 1,
-				plannedStepCount: data.workflow.steps.length,
-				emailStepCount,
-				tagStepCount: tagWriteStepCount,
-				conditionStepCount,
-				runEvidenceCount: data.workflow.totalExecutions
-			},
-			gates: {
-				workflowEffectsGate,
-				workflowRunEvidenceGate,
-				emailProxyGate
-			}
-		})
-	);
-	const workflowRunnerArmed = $derived(
-		FEATURES.WORKFLOW_EXECUTION && workflowEffectsGate.state === 'live'
-	);
-	const workflowStatusLabel = $derived(
-		data.workflow.enabled ? (workflowRunnerArmed ? 'runner enabled' : 'enabled draft') : 'draft'
-	);
+	const workflowStatusLabel = $derived(data.workflow.enabled ? 'enabled' : 'draft');
 	const workflowStatusClass = $derived(
 		data.workflow.enabled
-			? workflowRunnerArmed
-				? 'bg-green-900/50 text-green-400'
-				: 'bg-amber-500/15 text-amber-300'
+			? 'bg-green-900/50 text-green-400'
 			: 'bg-surface-border-strong text-text-secondary'
 	);
-	const workflowToggleLabel = $derived(
-		data.workflow.enabled ? 'Disable' : workflowRunnerArmed ? 'Enable runner' : 'Enable draft'
-	);
+	const workflowToggleLabel = $derived(data.workflow.enabled ? 'Disable' : 'Enable');
 	const partialNoOpRunCount = $derived(
 		data.executions.filter((execution) => execution.status === 'partial_no_op').length
 	);
-	const coordinationRows = $derived<CoordinationReadinessRow[]>(
-		coordinationReadiness.rows.map((row) => ({
-			...row,
-			href:
-				row.id === 'coordination-definitions'
-					? '#coordination-definition'
-					: row.id === 'trigger-dispatch-contracts'
-						? '#coordination-trigger'
-						: row.id === 'step-grammar'
-							? '#coordination-definition'
-							: row.id === 'side-effect-runner'
-								? '#coordination-execution-status'
-								: row.id === 'run-evidence'
-									? '#coordination-run-log'
-									: row.href
-		}))
-	);
-	const definitionCoordinationRow = $derived(
-		coordinationRows.find((row) => row.id === 'coordination-definitions') ?? null
-	);
-	const sideEffectCoordinationRow = $derived(
-		coordinationRows.find((row) => row.id === 'side-effect-runner') ?? null
-	);
-	const runEvidenceCoordinationRow = $derived(
-		coordinationRows.find((row) => row.id === 'run-evidence') ?? null
-	);
-	const heldCoordinationRows = $derived(
-		coordinationRows.filter((row) => row.state === 'draft-only' || row.state === 'gated')
-	);
-	const firstHeldCoordinationRow = $derived(
-		heldCoordinationRows.find(
-			(row) => row.id !== 'coordination-definitions' && row.id !== 'side-effect-runner'
-		) ??
-			heldCoordinationRows[0] ??
-			null
-	);
-	const nextRunLiftCoordinationRow = $derived(
-		(runEvidenceCoordinationRow &&
-		(runEvidenceCoordinationRow.state === 'draft-only' ||
-			runEvidenceCoordinationRow.state === 'gated')
-			? runEvidenceCoordinationRow
-			: null) ??
-			firstHeldCoordinationRow ??
-			runEvidenceCoordinationRow ??
-			sideEffectCoordinationRow
-	);
-	const coordinationPressureReadouts = $derived<CoordinationPressureReadout[]>([
-		{
-			id: 'definition-ground',
-			label: 'Definition ground',
-			state: definitionCoordinationRow?.state ?? coordinationReadiness.state,
-			title: definitionCoordinationRow?.handoff ?? coordinationReadiness.handoff,
-			action: definitionCoordinationRow?.action ?? coordinationReadiness.action,
-			detail: definitionCoordinationRow?.ground ?? coordinationReadiness.signal,
-			gate: definitionCoordinationRow?.boundary ?? coordinationReadiness.gate,
-			href: definitionCoordinationRow?.href ?? '#coordination-definition',
-			metric: definitionCoordinationRow?.metric ?? coordinationReadiness.metric
-		},
-		{
-			id: 'side-effect-runner',
-			label: 'Side-effect runner',
-			state: sideEffectCoordinationRow?.state ?? coordinationReadiness.state,
-			title: sideEffectCoordinationRow?.handoff ?? 'Workflow execution',
-			action: sideEffectCoordinationRow?.action ?? 'read execution boundary',
-			detail:
-				sideEffectCoordinationRow?.ground ??
-				'Definitions are preserved; side effects stay dependency-first until the runner clears.',
-			gate: sideEffectCoordinationRow?.boundary ?? coordinationReadiness.gate,
-			href: sideEffectCoordinationRow?.href ?? '#coordination-execution-status',
-			metric: sideEffectCoordinationRow?.metric ?? {
-				value: data.workflow.enabled ? 1 : 0,
-				label: 'enabled flags',
-				cite: 'workflow.enabled'
-			}
-		},
-		{
-			id: 'next-run-lift',
-			label: 'Next run lift',
-			state: nextRunLiftCoordinationRow?.state ?? coordinationReadiness.state,
-			title: nextRunLiftCoordinationRow?.handoff ?? coordinationReadiness.nextGate.name,
-			action: nextRunLiftCoordinationRow?.action ?? 'read run boundary',
-			detail:
-				nextRunLiftCoordinationRow?.ground ??
-				'Run evidence, workflow email dependencies, and scheduled side effects stay separate.',
-			gate: nextRunLiftCoordinationRow?.boundary ?? coordinationReadiness.gate,
-			href: nextRunLiftCoordinationRow?.href ?? '#coordination-run-log',
-			metric: nextRunLiftCoordinationRow?.metric ?? {
-				value: coordinationReadiness.nextGate.downstream,
-				label: 'downstream gates',
-				cite: coordinationReadiness.nextGate.id
-			}
-		}
-	]);
-	const capabilityItems = $derived<CapabilityItem[]>(
-		coordinationRows.map((row) => ({
-			label: row.label,
-			state: row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action: row.action,
-			detail: row.ground,
-			unlock: row.boundary,
-			href: row.href,
-			metric: row.metric
-		}))
-	);
-
-	function stateLabel(state: CapabilityState): string {
-		return operatorCapabilityStateLabel(state);
-	}
-
-	function actionLabel(state: CapabilityState, action: string): string {
-		return operatorCapabilityActionLabel(state, action, { appendReadyArrow: true });
-	}
-
-	function pressureCellClass(state: CapabilityState): string {
-		const stateClass =
-			state === 'live'
-				? 'border-teal-500/35 bg-teal-500/10'
-				: state === 'partial'
-					? 'border-blue-500/30 bg-blue-500/10'
-					: state === 'draft-only'
-						? 'border-amber-500/30 bg-amber-500/10'
-						: 'border-surface-border-strong bg-surface-overlay';
-		return `rounded-md border p-3 text-left transition hover:border-text-tertiary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500 ${stateClass}`;
-	}
-
 	function formatDate(iso: string): string {
 		return new Intl.DateTimeFormat('en-US', {
 			weekday: 'short',
@@ -319,7 +97,7 @@
 	}
 
 	async function deleteWorkflow() {
-		if (!confirm('Delete this coordination draft? This cannot be undone.')) return;
+		if (!confirm('Delete this workflow? This cannot be undone.')) return;
 		deleting = true;
 		try {
 			const res = await fetch(`/api/org/${data.org.slug}/workflows/${data.workflow.id}`, {
@@ -337,7 +115,7 @@
 </script>
 
 <svelte:head>
-	<title>{data.workflow.name} | Coordination Logic | {data.org.name}</title>
+	<title>{data.workflow.name} | Workflows | {data.org.name}</title>
 </svelte:head>
 
 <div id="coordination-logic-detail" class="bg-surface-raised text-text-primary min-h-screen">
@@ -346,7 +124,7 @@
 			href="/org/{data.org.slug}/workflows"
 			class="text-text-tertiary hover:text-text-primary mb-6 inline-block text-sm"
 		>
-			&larr; Coordination logic
+			&larr; Workflows
 		</a>
 
 		<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -381,38 +159,6 @@
 			</div>
 		</div>
 
-		<WorkspaceCapabilityStrip label="Coordination detail capability" items={capabilityItems} />
-
-		<div class="mt-4 grid gap-3 md:grid-cols-3" aria-label="Coordination readiness pressure">
-			{#each coordinationPressureReadouts as readout (readout.id)}
-				<a
-					href={readout.href}
-					class={pressureCellClass(readout.state)}
-					data-sveltekit-preload-data="off"
-					aria-label={`${readout.label}: ${stateLabel(readout.state)}; ${readout.detail}; ${readout.gate}`}
-				>
-					<span
-						class="text-text-quaternary block font-mono text-[0.65rem] tracking-[0.18em] uppercase"
-						>{readout.label}</span
-					>
-					<span class="text-text-primary mt-2 block text-sm font-semibold">{readout.title}</span>
-					<span class="text-text-secondary mt-2 flex items-baseline gap-1 text-xs">
-						<Datum value={readout.metric.value} cite={readout.metric.cite} />
-						<span>{readout.metric.label}</span>
-					</span>
-					<span class="text-text-tertiary mt-2 block text-xs leading-relaxed">
-						{readout.detail}
-					</span>
-					<span class="mt-3 block text-xs font-semibold text-teal-300">
-						{actionLabel(readout.state, readout.action)}
-					</span>
-					<span class="text-text-quaternary mt-2 block text-xs leading-relaxed">
-						{readout.gate}
-					</span>
-				</a>
-			{/each}
-		</div>
-
 		{#if errorMsg}
 			<div
 				class="my-6 rounded-md border border-red-800/60 bg-red-950/30 px-4 py-3 text-sm text-red-400"
@@ -421,41 +167,7 @@
 			</div>
 		{/if}
 
-		<div
-			id="coordination-execution-status"
-			class="my-6 rounded-md border {workflowRunnerArmed
-				? 'border-green-600/30 bg-green-900/10'
-				: 'border-amber-500/30 bg-amber-500/10'} px-4 py-3"
-		>
-			<p class="text-sm font-medium {workflowRunnerArmed ? 'text-green-300' : 'text-amber-300'}">
-				{workflowRunnerArmed
-					? 'Bounded coordination runner is armed'
-					: 'Coordination execution is not armed'}
-			</p>
-			<p class="text-text-tertiary mt-1 text-sm">
-				{#if workflowRunnerArmed}
-					Enabled workflows can run trigger dispatch, tag writes/removals, branch conditions, and
-					scheduled delay/resume. {#if hasEmailSteps}This definition has email steps, so enabling
-						also requires SES credentials, a configured workflow/from address, and org-key verifier;
-						each email run then requires a supporter cursor and subscribed supporter.{:else}This
-						definition has no email steps, so it can enable through the runner without the email
-						proxy dependency.{/if}
-				{:else}
-					This definition is saved. Tag writes, branch conditions, scheduled resume, and saved
-					trigger families stay preserved contracts until the execution gate opens. Workflow email
-					stays dependency-first behind SES, configured workflow/from address, org-key verifier,
-					supporter cursor, and subscribed-supporter checks.
-				{/if}
-			</p>
-		</div>
-
-		{#if hasEmailSteps}
-			<WorkflowEmailDependencyPanel
-				{emailStepCount}
-				readiness={data.workflowEmailReadiness}
-				cite="workflow.steps.type.send_email"
-			/>
-		{/if}
+		<WorkflowEmailDependencyPanel {emailStepCount} readiness={data.workflowEmailReadiness} />
 
 		<div
 			id="coordination-trigger"
@@ -477,17 +189,17 @@
 				</p>
 			</div>
 			<div class="border-surface-border rounded-lg border p-4">
-				<p class="text-text-tertiary text-xs font-medium">Draft steps</p>
+				<p class="text-text-tertiary text-xs font-medium">Steps</p>
 				<p class="text-text-primary mt-1 text-lg font-bold">{data.workflow.steps.length}</p>
 			</div>
 			<div class="border-surface-border rounded-lg border p-4">
-				<p class="text-text-tertiary text-xs font-medium">Run records</p>
+				<p class="text-text-tertiary text-xs font-medium">Runs</p>
 				<p class="text-text-primary mt-1 text-lg font-bold">{data.workflow.totalExecutions}</p>
 			</div>
 		</div>
 
 		<div id="coordination-definition" class="border-surface-border mb-6 rounded-lg border p-4">
-			<h3 class="text-text-tertiary mb-3 text-sm font-medium">Step grammar</h3>
+			<h3 class="text-text-tertiary mb-3 text-sm font-medium">Steps</h3>
 			{#if data.workflow.steps.length === 0}
 				<p class="text-text-tertiary py-4 text-center text-sm">No steps defined</p>
 			{:else}
@@ -509,19 +221,18 @@
 			{#if partialNoOpRunCount > 0}
 				<div
 					class="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3"
-					aria-label="Unsupported step boundary"
+					aria-label="Runs with skipped steps"
 				>
 					<div class="flex flex-wrap items-baseline justify-between gap-3">
-						<p class="text-sm font-medium text-amber-300">Unsupported step boundary</p>
+						<p class="text-sm font-medium text-amber-300">Some steps were skipped</p>
 						<p class="text-text-secondary flex items-baseline gap-1 text-xs">
-							<Datum value={partialNoOpRunCount} cite="workflowExecutions.status.partial_no_op" />
-							<span>partial no-op runs</span>
+							<Datum value={partialNoOpRunCount} />
+							<span>runs with skipped steps</span>
 						</p>
 					</div>
 					<p class="text-text-tertiary mt-1 text-sm leading-relaxed">
-						These runs completed with unsupported legacy steps audited as no-ops. Treat them as
-						boundary evidence, not clean coordination completion, until the definition is inspected
-						and replayed through supported step grammar.
+						These runs finished, but one or more older step types were skipped. Review the
+						workflow's steps before counting these as complete runs.
 					</p>
 				</div>
 			{/if}

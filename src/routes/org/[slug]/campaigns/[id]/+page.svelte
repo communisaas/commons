@@ -8,15 +8,9 @@
 	import GeographicSpread from '$lib/components/org/GeographicSpread.svelte';
 	import CoordinationIntegrity from '$lib/components/org/CoordinationIntegrity.svelte';
 	import IntegrityAssessment from '$lib/components/org/IntegrityAssessment.svelte';
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
 	import CountrySelector from '$lib/components/geographic/CountrySelector.svelte';
 	import JurisdictionPicker from '$lib/components/geographic/JurisdictionPicker.svelte';
 	import DebateSettlement from '$lib/components/debate/DebateSettlement.svelte';
-	import {
-		buildActionRecordReadiness,
-		getGateEvidence,
-		type ActionRecordReadinessRowKey
-	} from '$lib/data/capability-hypergraph';
 	import type { PageData, ActionData } from './$types';
 
 	type CampaignView = PageData['campaign'] & {
@@ -309,106 +303,6 @@
 			? Math.min(100, Math.round((data.actionCount / data.campaign.debateThreshold) * 100))
 			: 0
 	);
-	const targetCount = $derived(
-		Array.isArray(data.campaign.targets) ? data.campaign.targets.length : 0
-	);
-	const activeOrPaused = $derived(
-		data.campaign.status === 'ACTIVE' || data.campaign.status === 'PAUSED'
-	);
-	const receiptAnchoringGate = getGateEvidence('CP-receipt-anchoring', ['T6-1', 'T6-2'], {
-		name: 'Receipt anchoring',
-		downstream: 8,
-		dependency: 'Mainnet SnapshotAnchor + receipt writer'
-	});
-	const decisionReachGate = getGateEvidence(
-		'CP-reach-expansion',
-		['T3-1', 'T3-2', 'T3-3', 'T3-4', 'T3-5', 'T8-8'],
-		{
-			name: 'Decision-maker reach and response',
-			downstream: 6,
-			dependency: 'State/local/international resolver coverage + reader-side notifications'
-		}
-	);
-	const readerActionProofGate = getGateEvidence('CP-quality-settlement', ['T5-3', 'T6-2'], {
-		name: 'Reader action proof lift',
-		downstream: 8,
-		dependency: 'TEE quality settlement + Scroll mainnet survivability'
-	});
-	const coordinationHistoryGate = getGateEvidence('CP-coordination-integrity', ['T10-10'], {
-		name: 'Coordination integrity snapshots',
-		downstream: 1,
-		dependency: 'Packet-local integrity snapshot + history depth'
-	});
-	const congressionalLaunchGate = getGateEvidence('CP-congressional-launch', ['NEW-A-7'], {
-		name: 'Congressional delivery launch',
-		downstream: 1,
-		dependency: 'First-org staging confirmation + CWC launch flag'
-	});
-	const actionRecordReadiness = $derived(
-		buildActionRecordReadiness({
-			base: `/org/${data.org.slug}`,
-			context: 'detail',
-			action: {
-				recordCount: 1,
-				status: data.campaign.status,
-				hasSavedRecord: true,
-				actionCount: data.actionCount ?? 0,
-				verifiedActionCount: packet?.verified ?? data.actionCount ?? 0,
-				hasPacket: !!packet,
-				packetVerified: packet?.verified ?? null,
-				targetCount,
-				targetCountry,
-				targetJurisdiction: data.campaign.targetJurisdiction ?? null,
-				debateEnabled: data.campaign.debateEnabled,
-				hasDebate: !!liveDebate,
-				debateResolved: liveDebate?.status === 'resolved'
-			},
-			gates: {
-				actionProofGate: receiptAnchoringGate,
-				reachExpansionGate: decisionReachGate,
-				qualitySettlementGate: readerActionProofGate,
-				coordinationHistoryGate,
-				congressionalLaunchGate
-			},
-			hrefs: {
-				'action-record': '#action-settings',
-				'reader-action-surface': activeOrPaused ? '#reader-action-embed' : '#action-settings',
-				'packet-artifact': packet
-					? `/org/${data.org.slug}/campaigns/${data.campaign.id}/report#proof-preview`
-					: '#action-settings',
-				'decision-maker-delivery':
-					packet && targetCount > 0
-						? `/org/${data.org.slug}/campaigns/${data.campaign.id}/report#proof-delivery`
-						: '#decision-maker-recipients',
-				'quality-settlement': '#quality-settlement'
-			}
-		})
-	);
-	const actionCapabilityRowIds = [
-		'action-record',
-		'packet-artifact',
-		'decision-maker-delivery',
-		'reader-action-surface',
-		'quality-settlement'
-	] satisfies ActionRecordReadinessRowKey[];
-	const actionCapabilityItems = $derived(
-		actionCapabilityRowIds.map((id) => {
-			const row = actionRecordReadiness.rows.find((candidate) => candidate.id === id);
-			if (!row) throw new Error(`Missing action readiness row: ${id}`);
-			return {
-				label: row.label,
-				state: row.state,
-				phase: row.phase,
-				cluster: row.clusters,
-				action: row.action,
-				handoff: row.handoff,
-				detail: row.ground,
-				unlock: row.boundary,
-				href: row.href,
-				metric: row.metric
-			};
-		})
-	);
 </script>
 
 <div class="space-y-6">
@@ -475,8 +369,6 @@
 			{form.newStatus ? `Status updated to ${form.newStatus}` : 'Action saved'}
 		</div>
 	{/if}
-
-	<WorkspaceCapabilityStrip label="Action detail capability" items={actionCapabilityItems} />
 
 	<!-- HERO: Verification Packet — the proof this action has assembled -->
 	<VerificationPacket

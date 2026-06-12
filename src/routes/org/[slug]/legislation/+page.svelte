@@ -1,32 +1,6 @@
 <script lang="ts">
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
-	import {
-		buildLegislativeMonitoringReadiness,
-		getGateEvidence,
-		type LegislativeMonitoringReadinessRow
-	} from '$lib/data/capability-hypergraph';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel
-	} from '$lib/data/capability-state-labels';
 	import { Datum } from '$lib/design';
 	import type { PageData } from './$types';
-
-	type CapabilityItem = {
-		label: string;
-		state: LegislativeMonitoringReadinessRow['state'];
-		phase: string;
-		cluster: string;
-		action: string;
-		detail: string;
-		unlock: string;
-		href: string;
-		metric?: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
 
 	type Bill = {
 		id: string;
@@ -64,7 +38,6 @@
 	};
 
 	let { data }: { data: ViewData } = $props();
-	const base = $derived(`/org/${data.org.slug}`);
 
 	// Search state
 	let searchQuery = $state('');
@@ -106,85 +79,6 @@
 	const watchedCount = $derived(watchedBillIds.size);
 	const positionedCount = $derived(Object.values(positions).filter(Boolean).length);
 	const relevantCount = $derived(data.relevant.length);
-	const searchResultCount = $derived(hasSearched ? searchResults.length : null);
-
-	const stateBillGate = getGateEvidence('CP-state-bill-terrain', ['T6-6', 'T3-1'], {
-		name: 'State bill terrain',
-		downstream: 4,
-		dependency: 'OpenStates or equivalent state-bill ingestion plus state legislator data'
-	});
-	const multiJurisdictionGate = getGateEvidence('CP-multi-jurisdiction-routing', ['T3-8'], {
-		name: 'Multi-jurisdiction bill routing',
-		downstream: 3,
-		dependency: 'State/local corpora and campaign-layer multi-leg routing'
-	});
-	const perSupporterAlertGate = getGateEvidence('CP-per-supporter-bill-alerts', ['T4-3'], {
-		name: 'Per-supporter bill alerts',
-		downstream: 2,
-		dependency: 'Constituent subscriptions, dedup, and state-bill source data'
-	});
-	const agenticMonitoringGate = getGateEvidence(
-		'CP-agentic-legislative-monitoring',
-		['T4-4', 'T4-1'],
-		{
-			name: 'Agentic bill monitoring',
-			downstream: 4,
-			dependency: 'Delegation executor plus state/local terrain feeds'
-		}
-	);
-
-	const legislativeMonitoringReadiness = $derived(
-		buildLegislativeMonitoringReadiness({
-			base,
-			legislation: {
-				loaded: true,
-				enabled: true,
-				watchedBillCount: watchedCount,
-				relevantBillCount: relevantCount,
-				positionedBillCount: positionedCount,
-				searchResultCount
-			},
-			gates: {
-				stateBillTerrainGate: stateBillGate,
-				perSupporterAlertsGate: perSupporterAlertGate,
-				delegatedMonitoringGate: agenticMonitoringGate,
-				multiJurisdictionRoutingGate: multiJurisdictionGate
-			}
-		})
-	);
-	const legislativeMonitoringRows = $derived<LegislativeMonitoringReadinessRow[]>(
-		legislativeMonitoringReadiness.rows
-	);
-	const heldTerrainRowIds = new Set<LegislativeMonitoringReadinessRow['id']>([
-		'state-local-corpus',
-		'per-supporter-alerts',
-		'delegated-monitoring',
-		'multi-jurisdiction-routing'
-	]);
-	const heldTerrainRows = $derived<LegislativeMonitoringReadinessRow[]>(
-		legislativeMonitoringRows.filter((row) => heldTerrainRowIds.has(row.id))
-	);
-	const capabilityItems = $derived<CapabilityItem[]>(
-		legislativeMonitoringRows.map((row) => ({
-			label: row.label,
-			state: row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action: row.action,
-			detail: row.ground,
-			unlock: row.boundary,
-			href: row.href,
-			metric: row.metric
-		}))
-	);
-
-	function stateLabel(state: LegislativeMonitoringReadinessRow['state']): string {
-		return operatorCapabilityStateLabel(state);
-	}
-
-	function actionLabel(row: LegislativeMonitoringReadinessRow): string {
-		return operatorCapabilityActionLabel(row.state, row.action, { appendReadyArrow: true });
-	}
 
 	function onSearchInput(e: Event) {
 		const value = (e.target as HTMLInputElement).value;
@@ -319,15 +213,11 @@
 	<!-- Header -->
 	<div class="space-y-4">
 		<div class="space-y-2">
-			<p class="font-mono text-[10px] font-semibold tracking-[0.14em] text-teal-600/80 uppercase">
-				Power / Bills
-			</p>
 			<div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
 				<div>
-					<h1 class="text-text-primary font-sans text-2xl font-semibold">Bills terrain</h1>
+					<h1 class="text-text-primary font-sans text-2xl font-semibold">Bills</h1>
 					<p class="text-text-tertiary mt-1 max-w-2xl text-sm leading-6">
-						Federal bill search, org watchlist, relevance rows, and position-setting are armed here.
-						State/local corpora, per-supporter alerts, and delegated monitoring remain bounded.
+						Search federal bills, watch the ones that matter, and set your organization's position.
 					</p>
 				</div>
 				<div
@@ -335,7 +225,7 @@
 				>
 					<div class="bg-surface-base px-3 py-2">
 						<p class="text-text-primary font-mono text-lg font-semibold tabular-nums">
-							<Datum value={watchedCount} cite="legislation.listWatchedBills" />
+							<Datum value={watchedCount} />
 						</p>
 						<p class="text-text-quaternary font-mono text-[9px] tracking-[0.12em] uppercase">
 							watched
@@ -343,7 +233,7 @@
 					</div>
 					<div class="bg-surface-base px-3 py-2">
 						<p class="text-text-primary font-mono text-lg font-semibold tabular-nums">
-							<Datum value={relevantCount} cite="legislation.listRelevantBills" />
+							<Datum value={relevantCount} />
 						</p>
 						<p class="text-text-quaternary font-mono text-[9px] tracking-[0.12em] uppercase">
 							relevant
@@ -351,63 +241,12 @@
 					</div>
 					<div class="bg-surface-base px-3 py-2">
 						<p class="text-text-primary font-mono text-lg font-semibold tabular-nums">
-							<Datum value={positionedCount} cite="orgBillWatches.position" />
+							<Datum value={positionedCount} />
 						</p>
 						<p class="text-text-quaternary font-mono text-[9px] tracking-[0.12em] uppercase">
 							positions
 						</p>
 					</div>
-				</div>
-			</div>
-		</div>
-
-		<WorkspaceCapabilityStrip label="Bills terrain capability" items={capabilityItems} />
-
-		<div
-			id="bill-terrain-boundary"
-			class="rounded-md border border-amber-500/25 bg-amber-500/[0.06] p-4"
-		>
-			<div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-				<div class="max-w-3xl">
-					<p class="font-mono text-[10px] font-semibold tracking-[0.14em] text-amber-600 uppercase">
-						Terrain boundary
-					</p>
-					<p class="text-text-secondary mt-1 text-sm leading-6">
-						{legislativeMonitoringReadiness.effect}
-						{legislativeMonitoringReadiness.detail}
-						Loaded bill records are org-side terrain. Search, watch/unwatch, relevance review, and position-setting
-						are live for the current corpus. This route does not claim state/local bill ingestion, per-supporter
-						alert fan-out, delegated monitoring, or a joined decision-maker/bill/scorecard plane.
-					</p>
-				</div>
-				<div
-					class="grid min-w-[min(100%,28rem)] gap-2"
-					aria-label="Bills terrain held boundary rows"
-				>
-					{#each heldTerrainRows as row (row.id)}
-						<a
-							href={row.href}
-							class="border-surface-border bg-surface-base grid gap-2 rounded-md border px-3 py-2 transition-colors hover:border-amber-500/40"
-							title={row.boundary}
-							aria-label="{row.label}: {stateLabel(row.state)}. {row.boundary}"
-						>
-							<span class="flex items-center justify-between gap-3">
-								<span class="text-text-primary text-xs font-medium">{row.label}</span>
-								<span class="font-mono text-[10px] tracking-[0.12em] text-amber-700 uppercase">
-									{stateLabel(row.state)}
-								</span>
-							</span>
-							<span class="flex items-end justify-between gap-3">
-								<span class="text-text-quaternary text-xs">{row.gate.name}</span>
-								<span class="text-text-primary font-mono text-sm font-semibold tabular-nums">
-									<Datum value={row.metric.value} cite={row.metric.cite} />
-								</span>
-							</span>
-							<span class="text-text-tertiary font-mono text-[10px] tracking-[0.08em] uppercase">
-								{actionLabel(row)}
-							</span>
-						</a>
-					{/each}
 				</div>
 			</div>
 		</div>

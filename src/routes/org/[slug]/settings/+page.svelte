@@ -3,16 +3,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import { computeOrgScopedEmailHash } from '$lib/core/crypto/org-scoped-hash';
 	import { FEATURES } from '$lib/config/features';
-	import {
-		buildOperatingAuthorityReadiness,
-		getGateEvidence
-	} from '$lib/data/capability-hypergraph';
 	import { Datum } from '$lib/design';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel
-	} from '$lib/data/capability-state-labels';
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -21,38 +12,6 @@
 	const canEdit = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
 	const canInvite = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
 	const planName = $derived(data.usage.plan ?? data.subscription?.plan ?? 'free');
-
-	type CapabilityState = 'live' | 'partial' | 'draft-only' | 'gated';
-	type CapabilityItem = {
-		label: string;
-		state: CapabilityState;
-		phase: string;
-		cluster: string;
-		action: string;
-		detail: string;
-		unlock: string;
-		href: string;
-		metric?: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
-	type AuthorityPressureReadout = {
-		id: string;
-		label: string;
-		state: CapabilityState;
-		title: string;
-		action: string;
-		detail: string;
-		gate: string;
-		href: string;
-		metric: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
 
 	// Invite form state
 	let inviteEmail = $state('');
@@ -282,16 +241,29 @@
 
 	const plans = $derived(data.planCatalog);
 
-	function featureStateClass(state: CapabilityState): string {
+	type PlanFeatureState = 'live' | 'partial' | 'draft-only' | 'gated';
+
+	function featureStateClass(state: PlanFeatureState): string {
 		switch (state) {
 			case 'live':
 				return 'border-teal-500/30 bg-teal-500/10 text-teal-300';
 			case 'partial':
 				return 'border-blue-500/30 bg-blue-500/10 text-blue-300';
 			case 'draft-only':
-				return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
 			case 'gated':
 				return 'border-surface-border-strong bg-surface-overlay text-text-quaternary';
+		}
+	}
+
+	function featureStateLabel(state: PlanFeatureState): string {
+		switch (state) {
+			case 'live':
+				return 'included';
+			case 'partial':
+				return 'limited';
+			case 'draft-only':
+			case 'gated':
+				return 'coming';
 		}
 	}
 
@@ -359,178 +331,6 @@
 
 	// ── Encryption setup state ──
 	const encryptionConfigured = $derived(!!data.encryption.orgKeyVerifier);
-	const eventRecordsGate = getGateEvidence('CP-outbound-webhooks', ['T9-3', 'T9-7', 'T6-9'], {
-		name: 'Event emission records'
-	});
-	const customDomainGate = getGateEvidence('CP-custom-domain-dkim', ['T2-6'], {
-		name: 'Sender domain authentication',
-		downstream: 2,
-		dependency: 'Per-org SES identity, DKIM, DMARC, and From-domain verification'
-	});
-	const auditLogGate = getGateEvidence('CP-audit-log', ['T9-5'], {
-		name: 'Org audit log',
-		downstream: 3,
-		dependency: 'auditEvents table + mutation emitters + query/API surface'
-	});
-	const mainnetGate = getGateEvidence('CP-mainnet-deployment', ['T3-6', 'T5-5', 'T6-2', 'T6-1']);
-	const operatingAuthorityReadiness = $derived(
-		buildOperatingAuthorityReadiness({
-			base: `/org/${data.org.slug}`,
-			authority: {
-				role: data.membership.role,
-				canPublish: canEdit,
-				canInvite,
-				isOwner,
-				memberCount: data.members.length,
-				inviteCount: data.invites.length,
-				maxSeats,
-				planName,
-				planStatus: data.usage.status ?? data.subscription?.status ?? null,
-				maxVerifiedActions: data.usage.maxVerifiedActions,
-				maxEmails: data.usage.maxEmails,
-				publicApiEnabled: FEATURES.PUBLIC_API,
-				encryptionConfigured,
-				registryEnvironment: 'Sepolia testnet'
-			},
-			gates: {
-				eventRecordsGate,
-				customDomainGate,
-				mainnetGate,
-				auditLogGate
-			}
-		})
-	);
-	const developerGroundRow = $derived(
-		operatingAuthorityReadiness.rows.find((row) => row.id === 'public-api-ground') ?? null
-	);
-	const signedWebhookRow = $derived(
-		operatingAuthorityReadiness.rows.find((row) => row.id === 'signed-webhooks') ?? null
-	);
-	const publishAuthorityRow = $derived(
-		operatingAuthorityReadiness.rows.find((row) => row.id === 'publish-authority') ?? null
-	);
-	const auditLogAuthorityRow = $derived(
-		operatingAuthorityReadiness.rows.find((row) => row.id === 'org-audit-log') ?? null
-	);
-	const heldOperatingAuthorityRows = $derived(
-		operatingAuthorityReadiness.rows.filter(
-			(row) => row.state === 'draft-only' || row.state === 'gated'
-		)
-	);
-	const firstHeldOperatingAuthorityRow = $derived(
-		heldOperatingAuthorityRows.find(
-			(row) => row.id !== 'publish-authority' && row.id !== 'signed-webhooks'
-		) ??
-			heldOperatingAuthorityRows[0] ??
-			null
-	);
-	const nextAuthorityLiftRow = $derived(
-		firstHeldOperatingAuthorityRow ??
-			auditLogAuthorityRow ??
-			signedWebhookRow ??
-			publishAuthorityRow
-	);
-	const developerGroundState = $derived<CapabilityState>(
-		developerGroundRow?.state ?? (FEATURES.PUBLIC_API ? 'live' : 'gated')
-	);
-	const webhookState = $derived<CapabilityState>(signedWebhookRow?.state ?? eventRecordsGate.state);
-	function authorityRowHref(
-		row: { id: string; href: string } | null | undefined,
-		fallback: string
-	): string {
-		if (!row) return fallback;
-		if (row.id === 'signed-webhooks') {
-			return `${$page.url.pathname.replace(/\/$/, '')}/webhooks#signed-event-ground`;
-		}
-		const settingsBase = `/org/${data.org.slug}/settings`;
-		if (row.href.startsWith(settingsBase)) {
-			return row.href.replace(settingsBase, '') || '#org-authority';
-		}
-		return row.href;
-	}
-	const authorityPressureReadouts = $derived<AuthorityPressureReadout[]>([
-		{
-			id: 'authority-ground',
-			label: 'Authority ground',
-			state: publishAuthorityRow?.state ?? operatingAuthorityReadiness.state,
-			title: publishAuthorityRow?.handoff ?? operatingAuthorityReadiness.handoff,
-			action: publishAuthorityRow?.action ?? operatingAuthorityReadiness.action,
-			detail: publishAuthorityRow?.ground ?? operatingAuthorityReadiness.signal,
-			gate: publishAuthorityRow?.boundary ?? operatingAuthorityReadiness.gate,
-			href: authorityRowHref(publishAuthorityRow, '#team-authority'),
-			metric: publishAuthorityRow?.metric ?? operatingAuthorityReadiness.metric
-		},
-		{
-			id: 'signed-substrate',
-			label: 'Signed substrate',
-			state: signedWebhookRow?.state ?? operatingAuthorityReadiness.state,
-			title: signedWebhookRow?.handoff ?? 'Signed event delivery',
-			action: signedWebhookRow?.action ?? 'read webhook boundary',
-			detail:
-				signedWebhookRow?.ground ??
-				'Signed event delivery is event substrate, not public API chrome.',
-			gate: signedWebhookRow?.boundary ?? operatingAuthorityReadiness.gate,
-			href: authorityRowHref(signedWebhookRow, `/org/${data.org.slug}/settings/webhooks`),
-			metric: signedWebhookRow?.metric ?? {
-				value: eventRecordsGate.completed,
-				label: 'event tasks complete',
-				cite: 'CP-outbound-webhooks'
-			}
-		},
-		{
-			id: 'next-authority-lift',
-			label: 'Next authority lift',
-			state: nextAuthorityLiftRow?.state ?? operatingAuthorityReadiness.state,
-			title: nextAuthorityLiftRow?.handoff ?? operatingAuthorityReadiness.nextGate.name,
-			action: nextAuthorityLiftRow?.action ?? 'read authority boundary',
-			detail:
-				nextAuthorityLiftRow?.ground ??
-				'Owner succession, audit evidence, API/webhook ground, org-key custody, and registry posture stay separate.',
-			gate: nextAuthorityLiftRow?.boundary ?? operatingAuthorityReadiness.gate,
-			href: authorityRowHref(nextAuthorityLiftRow, '#org-authority'),
-			metric: nextAuthorityLiftRow?.metric ?? {
-				value: operatingAuthorityReadiness.nextGate.downstream,
-				label: 'downstream gates',
-				cite: operatingAuthorityReadiness.nextGate.id
-			}
-		}
-	]);
-	const capabilityItems = $derived<CapabilityItem[]>([
-		...operatingAuthorityReadiness.rows.map((row) => ({
-			label: row.label,
-			state: row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action: row.action,
-			detail: row.ground,
-			unlock: row.boundary,
-			href:
-				row.id === 'signed-webhooks'
-					? `${$page.url.pathname.replace(/\/$/, '')}/webhooks#signed-event-ground`
-					: row.href.replace(`/org/${data.org.slug}/settings`, ''),
-			metric: row.metric
-		}))
-	]);
-
-	function stateLabel(state: CapabilityState): string {
-		return operatorCapabilityStateLabel(state);
-	}
-
-	function actionLabel(state: CapabilityState, action: string): string {
-		return operatorCapabilityActionLabel(state, action, { appendReadyArrow: true });
-	}
-
-	function pressureCellClass(state: CapabilityState): string {
-		const stateClass =
-			state === 'live'
-				? 'border-teal-500/35 bg-teal-500/10'
-				: state === 'partial'
-					? 'border-blue-500/30 bg-blue-500/10'
-					: state === 'draft-only'
-						? 'border-amber-500/30 bg-amber-500/10'
-						: 'border-surface-border-strong bg-surface-overlay';
-		return `rounded-md border p-3 text-left transition hover:border-text-tertiary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500 ${stateClass}`;
-	}
 	type SetupStep = 'idle' | 'passphrase' | 'recovery' | 'saving' | 'done';
 	let setupStep = $state<SetupStep>('idle');
 	let passphrase = $state('');
@@ -1008,43 +808,10 @@
 <div class="space-y-8">
 	<!-- Header -->
 	<div id="org-authority">
-		<h1 class="text-text-primary text-xl font-semibold">Org authority</h1>
+		<h1 class="text-text-primary text-xl font-semibold">Settings</h1>
 		<p class="text-text-tertiary mt-1 text-sm">
-			Review billing limits, role power, programmatic substrate, PII custody, and registry
-			authority.
+			Plan and billing, team roles, data custody, and integrations.
 		</p>
-	</div>
-
-	<WorkspaceCapabilityStrip label="Org authority capability" items={capabilityItems} />
-
-	<div class="grid gap-3 md:grid-cols-3" aria-label="Org authority pressure">
-		{#each authorityPressureReadouts as readout (readout.id)}
-			<a
-				href={readout.href}
-				class={pressureCellClass(readout.state)}
-				data-sveltekit-preload-data="off"
-				aria-label={`${readout.label}: ${stateLabel(readout.state)}; ${readout.detail}; ${readout.gate}`}
-			>
-				<span
-					class="text-text-quaternary block font-mono text-[0.65rem] tracking-[0.18em] uppercase"
-					>{readout.label}</span
-				>
-				<span class="text-text-primary mt-2 block text-sm font-semibold">{readout.title}</span>
-				<span class="text-text-secondary mt-2 flex items-baseline gap-1 text-xs">
-					<Datum value={readout.metric.value} cite={readout.metric.cite} />
-					<span>{readout.metric.label}</span>
-				</span>
-				<span class="text-text-tertiary mt-2 block text-xs leading-relaxed">
-					{readout.detail}
-				</span>
-				<span class="mt-3 block text-xs font-semibold text-teal-300">
-					{actionLabel(readout.state, readout.action)}
-				</span>
-				<span class="text-text-quaternary mt-2 block text-xs leading-relaxed">
-					{readout.gate}
-				</span>
-			</a>
-		{/each}
 	</div>
 
 	<!-- Billing status banner -->
@@ -1115,10 +882,8 @@
 					<span class="text-text-secondary font-mono tabular-nums">
 						<Datum
 							value={data.usage.verifiedActions}
-							cite="subscriptions.checkPlanLimits current.verifiedActions"
 						/> / <Datum
 							value={data.usage.maxVerifiedActions}
-							cite="subscriptions.checkPlanLimits limits.maxVerifiedActions"
 						/>
 					</span>
 				</div>
@@ -1135,10 +900,8 @@
 					<span class="text-text-secondary font-mono tabular-nums">
 						<Datum
 							value={data.usage.emailsSent}
-							cite="subscriptions.checkPlanLimits current.emailsSent"
 						/> / <Datum
 							value={data.usage.maxEmails}
-							cite="subscriptions.checkPlanLimits limits.maxEmails"
 						/>
 					</span>
 				</div>
@@ -1155,10 +918,8 @@
 					<span class="text-text-secondary font-mono tabular-nums">
 						<Datum
 							value={data.usage.smsSent}
-							cite="subscriptions.checkPlanLimits current.smsSent"
 						/> / <Datum
 							value={data.usage.maxSms}
-							cite="subscriptions.checkPlanLimits limits.maxSms"
 						/>
 					</span>
 				</div>
@@ -1169,24 +930,20 @@
 					></div>
 				</div>
 				<p class="text-text-quaternary text-[11px]">
-					SMS quota is reserved; bulk SMS dispatch is still draft-only.
+					Your plan reserves this text quota for when bulk texting is fully available.
 				</p>
 			</div>
 		</div>
 	</section>
 
-	<!-- Tier feature boundaries -->
+	<!-- Plans -->
 	{#if isOwner}
 		<section id="plan-feature-boundary" class="space-y-4">
-			<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">
-				Tier feature boundaries
-			</h2>
-			<div class="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-				<p class="text-sm font-medium text-amber-300">Plan capability boundary</p>
-				<p class="text-text-tertiary mt-1 text-sm">
-					Quotas and seats are live enforcement. SMS quota, A/B testing, custom domains, SQL mirror,
-					and white-label entries are shown with their current capability state instead of treated
-					as armed execution.
+			<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">Plans</h2>
+			<div class="border-surface-border bg-surface-base rounded-md border px-4 py-3">
+				<p class="text-text-tertiary text-sm">
+					Quotas and seats are enforced today. Features marked "coming" are listed for
+					transparency and aren't available yet.
 				</p>
 			</div>
 			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1214,7 +971,7 @@
 												feature.state
 											)}"
 										>
-											{feature.state === 'draft-only' ? 'draft' : feature.state}
+											{featureStateLabel(feature.state)}
 										</span>
 									</div>
 									<p class="text-text-quaternary text-[11px] leading-4">{feature.detail}</p>
@@ -1240,12 +997,8 @@
 
 	<section id="developer-ground" class="space-y-4">
 		<div>
-			<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">
-				Developer ground
-			</h2>
-			<p class="text-text-tertiary mt-1 text-xs">
-				Programmatic authority for API reads and signed event deliveries.
-			</p>
+			<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">Developers</h2>
+			<p class="text-text-tertiary mt-1 text-xs">API access and event webhooks.</p>
 		</div>
 		<div class="grid gap-3 sm:grid-cols-2">
 			<a
@@ -1254,55 +1007,30 @@
 				rel="noopener"
 				class="border-surface-border bg-surface-base hover:border-surface-border-strong rounded-md border p-4 transition-colors"
 			>
-				<div class="flex items-start justify-between gap-3">
-					<div>
-						<p class="text-text-primary text-sm font-medium">Public API contract</p>
-						<p class="text-text-tertiary mt-1 text-xs leading-5">
-							OpenAPI v1 reflects currently armed public API routes when developer ground is
-							enabled.
-						</p>
-					</div>
-					<span
-						class="rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase {featureStateClass(
-							developerGroundState
-						)}"
-					>
-						{developerGroundState}
-					</span>
-				</div>
+				<p class="text-text-primary text-sm font-medium">API documentation</p>
+				<p class="text-text-tertiary mt-1 text-xs leading-5">
+					OpenAPI reference for the public read API.
+				</p>
 			</a>
 			<a
 				href="/org/{data.org.slug}/settings/webhooks"
 				class="border-surface-border bg-surface-base hover:border-surface-border-strong rounded-md border p-4 transition-colors"
 			>
-				<div class="flex items-start justify-between gap-3">
-					<div>
-						<p class="text-text-primary text-sm font-medium">Signed webhooks</p>
-						<p class="text-text-tertiary mt-1 text-xs leading-5">
-							Subscribe endpoints to org events with HMAC signatures, retries, and secret rotation.
-						</p>
-					</div>
-					<span
-						class="rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase {featureStateClass(
-							webhookState
-						)}"
-					>
-						{webhookState}
-					</span>
-				</div>
+				<p class="text-text-primary text-sm font-medium">Signed webhooks</p>
+				<p class="text-text-tertiary mt-1 text-xs leading-5">
+					Subscribe endpoints to org events with HMAC signatures, retries, and secret rotation.
+				</p>
 			</a>
 		</div>
 	</section>
 
-	<!-- Role authority -->
+	<!-- Team -->
 	<section id="team-authority" class="space-y-4">
 		<div class="flex items-center justify-between">
 			<div>
-				<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">
-					Role authority
-				</h2>
+				<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">Team</h2>
 				<p class="text-text-quaternary mt-1 text-xs">
-					Owner-only role mutation and removal stay bounded by rank ceiling and last-owner lockout.
+					Only owners can change roles or remove members; the last owner can't be removed.
 				</p>
 			</div>
 			<div class="text-right">

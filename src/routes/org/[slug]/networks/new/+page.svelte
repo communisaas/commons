@@ -1,30 +1,7 @@
 <script lang="ts">
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
-	import { FEATURES } from '$lib/config/features';
-	import {
-		buildCoalitionReadiness,
-		getGateEvidence,
-		type CoalitionReadinessRow
-	} from '$lib/data/capability-hypergraph';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
-
-	type CapabilityItem = {
-		label: string;
-		state: 'live' | 'partial' | 'draft-only' | 'gated';
-		phase: string;
-		cluster: string;
-		action: string;
-		detail: string;
-		unlock: string;
-		href: string;
-		metric?: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
 
 	let name = $state('');
 	let slug = $state('');
@@ -32,70 +9,6 @@
 	let slugManual = $state(false);
 	let saving = $state(false);
 	let errorMsg = $state('');
-
-	const coalitionStatsGate = getGateEvidence('CP-coalition-aggregate-stats', ['T7-1'], {
-		name: 'Coalition aggregate stats',
-		downstream: 1,
-		dependency: 'Network member aggregate query'
-	});
-	const crossBorderCoalitionGate = getGateEvidence(
-		'CP-cross-border-coalition',
-		['T7-4', 'T7-6', 'T6-2'],
-		{
-			name: 'Cross-border coalition routing',
-			downstream: 3,
-			dependency: 'International Phase 2 + mainnet settlement'
-		}
-	);
-	const coalitionArtifactGate = getGateEvidence('CP-coalition-artifact', ['T6-1', 'T6-2', 'T7-6'], {
-		name: 'Durable coalition artifact',
-		downstream: 4,
-		dependency: 'Receipt anchoring + cross-border delivery path'
-	});
-	const draftNetworkCount = $derived(name.trim() || slug.trim() || description.trim() ? 1 : 0);
-	const coalitionReadiness = $derived(
-		buildCoalitionReadiness({
-			base: `/org/${data.org.slug}`,
-			context: 'creation',
-			coalition: {
-				enabled: FEATURES.NETWORKS,
-				loaded: true,
-				activeNetworkCount: 0,
-				pendingInviteCount: 0,
-				activeMemberRows: 0,
-				topActiveNetworkId: null,
-				draftNetworkCount,
-				creationAuthority: true
-			},
-			gates: {
-				coalitionStatsGate,
-				crossBorderCoalitionGate,
-				coalitionArtifactGate
-			},
-			hrefs: {
-				'network-memberships': '#coalition-definition',
-				'invite-response-queue': '#coalition-authority',
-				'member-roster-aggregate': '#coalition-member-path',
-				'aggregate-proof-detail': '#coalition-member-path',
-				'cross-border-routing': '#coalition-member-path',
-				'durable-coalition-artifact': '#coalition-artifact-boundary'
-			}
-		})
-	);
-	const coalitionRows = $derived<CoalitionReadinessRow[]>(coalitionReadiness.rows);
-	const capabilityItems = $derived<CapabilityItem[]>(
-		coalitionRows.map((row) => ({
-			label: row.label,
-			state: row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action: row.action,
-			detail: row.ground,
-			unlock: row.boundary,
-			href: row.href,
-			metric: row.metric
-		}))
-	);
 
 	function toSlug(input: string): string {
 		return input
@@ -175,7 +88,7 @@
 			href="/org/{data.org.slug}/networks"
 			class="text-text-tertiary hover:text-text-primary inline-block text-sm"
 		>
-			&larr; Coalition layer
+			&larr; Networks
 		</a>
 
 		<div>
@@ -185,19 +98,16 @@
 				</a>
 				<span aria-hidden="true">/</span>
 				<a href="/org/{data.org.slug}/networks" class="hover:text-text-secondary transition-colors">
-					Coalition layer
+					Networks
 				</a>
 				<span aria-hidden="true">/</span>
 				<span>Create</span>
 			</nav>
 			<h1 class="text-text-primary text-xl font-semibold">Create coalition network</h1>
 			<p class="text-text-tertiary mt-1 max-w-2xl text-sm">
-				Define the coalition record with an explicit proof handoff. Invitations, aggregate stats,
-				and durable artifacts stay on post-save routes and gates.
+				Name the network now; invite member organizations from its page after it's created.
 			</p>
 		</div>
-
-		<WorkspaceCapabilityStrip label="Coalition creation capability" items={capabilityItems} />
 
 		<!-- Error -->
 		{#if errorMsg}
@@ -206,29 +116,6 @@
 			</div>
 		{/if}
 
-		<div
-			id="coalition-authority"
-			class="border-surface-border bg-surface-base rounded-md border px-4 py-3"
-		>
-			<p class="text-text-primary text-sm font-medium">Creation authority</p>
-			<p class="text-text-tertiary mt-1 text-sm">
-				Rendering this form is route evidence that coalition subscription and owner-role gates
-				passed. Saving only creates the coordination record; invites and proof stay on the detail
-				route.
-			</p>
-		</div>
-
-		<div
-			id="coalition-member-path"
-			class="border-surface-border bg-surface-base rounded-md border px-4 py-3"
-		>
-			<p class="text-text-primary text-sm font-medium">Member proof path</p>
-			<p class="text-text-tertiary mt-1 text-sm">
-				After creation, the network detail route owns invites, active member rows, and live
-				aggregate stats. This page does not invent proof posture before any member record exists.
-			</p>
-		</div>
-
 		<!-- Form -->
 		<div
 			id="coalition-definition"
@@ -236,10 +123,7 @@
 		>
 			<div>
 				<p class="text-text-tertiary font-mono text-xs font-semibold tracking-wider uppercase">
-					Coalition definition
-				</p>
-				<p class="text-text-tertiary mt-1 text-sm">
-					The saved network record is the live capability; proof posture starts on the detail route.
+					Network details
 				</p>
 			</div>
 			<div>
@@ -290,17 +174,6 @@
 				></textarea>
 				<p class="text-text-tertiary mt-1 text-xs">{description.trim().length}/500 characters</p>
 			</div>
-		</div>
-
-		<div
-			id="coalition-artifact-boundary"
-			class="border-surface-border bg-surface-base rounded-md border px-4 py-3"
-		>
-			<p class="text-text-primary text-sm font-medium">Artifact boundary</p>
-			<p class="text-text-tertiary mt-1 text-sm">
-				A created record can coordinate member organizations. Archive-grade coalition packets,
-				receipt anchoring, and cross-border settlement remain outside this creation action.
-			</p>
 		</div>
 
 		<!-- Actions -->

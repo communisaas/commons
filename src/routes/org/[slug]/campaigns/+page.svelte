@@ -1,10 +1,4 @@
 <script lang="ts">
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
-	import {
-		buildActionRecordReadiness,
-		getGateEvidence,
-		type ActionRecordReadinessRowKey
-	} from '$lib/data/capability-hypergraph';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -18,91 +12,6 @@
 	);
 
 	const canCreate = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
-	const actionProofGate = getGateEvidence('CP-receipt-anchoring', ['T6-1', 'T6-2', 'T8-8'], {
-		name: 'Action-to-proof receipt and response',
-		downstream: 8,
-		dependency: 'Receipt writer/mainnet anchoring + reader-side notifications'
-	});
-	const reachExpansionGate = getGateEvidence(
-		'CP-reach-expansion',
-		['T3-1', 'T3-2', 'T3-3', 'T3-4', 'T3-5'],
-		{
-			name: 'State, local, and international reach',
-			downstream: 5,
-			dependency: 'Multi-state + international resolver coverage'
-		}
-	);
-	const coordinationHistoryGate = getGateEvidence('CP-coordination-integrity', ['T10-10'], {
-		name: 'Coordination integrity snapshots',
-		downstream: 1,
-		dependency: 'Packet-local integrity snapshot + history depth'
-	});
-	const qualitySettlementGate = getGateEvidence('CP-quality-settlement', ['T5-3', 'T5-5', 'T5-2'], {
-		name: 'Quality settlement',
-		downstream: 6,
-		dependency: 'TEE + Scroll mainnet settlement'
-	});
-	const congressionalLaunchGate = getGateEvidence('CP-congressional-launch', ['NEW-A-7'], {
-		name: 'Congressional delivery launch',
-		downstream: 1,
-		dependency: 'First-org staging confirmation + CWC launch flag'
-	});
-	const actionRecordReadiness = $derived(
-		buildActionRecordReadiness({
-			base: `/org/${data.org.slug}`,
-			context: 'index',
-			action: {
-				recordCount: data.counts.ALL,
-				draftCount: data.counts.DRAFT ?? 0,
-				activeCount: data.counts.ACTIVE ?? 0,
-				completeCount: data.counts.COMPLETE ?? 0,
-				debateEnabled: data.campaigns.some((campaign) => campaign.debateEnabled)
-			},
-			gates: {
-				actionProofGate,
-				reachExpansionGate,
-				qualitySettlementGate,
-				coordinationHistoryGate,
-				congressionalLaunchGate
-			},
-			hrefs: {
-				'action-record':
-					data.counts.ALL > 0
-						? `/org/${data.org.slug}/campaigns`
-						: `/org/${data.org.slug}/campaigns/new`,
-				'jurisdiction-resolve':
-					(data.counts.ACTIVE ?? 0) > 0
-						? `/org/${data.org.slug}/campaigns`
-						: `/org/${data.org.slug}/campaigns/new#proof-destination`,
-				'packet-artifact': `/org/${data.org.slug}/campaigns`,
-				'completed-evidence': `/org/${data.org.slug}/campaigns`
-			}
-		})
-	);
-	const capabilityRowIds = [
-		'action-record',
-		'jurisdiction-resolve',
-		'packet-artifact',
-		'completed-evidence'
-	] satisfies ActionRecordReadinessRowKey[];
-	const capabilityItems = $derived(
-		capabilityRowIds.map((id) => {
-			const row = actionRecordReadiness.rows.find((candidate) => candidate.id === id);
-			if (!row) throw new Error(`Missing action readiness row: ${id}`);
-			return {
-				label: row.label,
-				state: row.state,
-				phase: row.phase,
-				cluster: row.clusters,
-				action: row.action,
-				handoff: row.handoff,
-				detail: row.ground,
-				unlock: row.boundary,
-				href: row.href,
-				metric: row.metric
-			};
-		})
-	);
 
 	const filters = ['ALL', 'DRAFT', 'ACTIVE', 'COMPLETE'] as const;
 
@@ -166,8 +75,6 @@
 			</a>
 		{/if}
 	</div>
-
-	<WorkspaceCapabilityStrip label="Action-record capability" items={capabilityItems} />
 
 	<!-- Filter tabs -->
 	<div class="border-surface-border flex gap-1 border-b">

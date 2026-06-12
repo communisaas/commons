@@ -33,7 +33,7 @@ describe('org member authority contract', () => {
 		const settings = source('src/routes/org/[slug]/settings/+page.svelte');
 
 		// In-page member controls: owner-gated mutation UI with last-owner lockout.
-		expect(settings).toContain('Role authority');
+		expect(settings).toContain('id="team-authority"');
 		expect(settings).toContain('{#if isOwner}');
 		expect(settings).toContain('ownerCount');
 		expect(settings).toContain('canRemoveMember');

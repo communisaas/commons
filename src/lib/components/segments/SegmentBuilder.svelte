@@ -42,7 +42,7 @@
 		showSaveControls = true,
 		showBulkActions = false,
 		initialFilter,
-		civicGeographyBoundary = 'Imported state/congressional and action-time district labels can shape cohorts; verified local and special district labels remain gated.'
+		civicGeographyBoundary = 'Geography filters use imported state and congressional districts, plus districts recorded when people take action.'
 	}: Props = $props();
 
 	// --- State ---
@@ -361,7 +361,7 @@
 		aria-label="Segment civic geography boundary"
 	>
 		<div class="min-w-0 space-y-1">
-			<p class="text-text-secondary text-xs font-medium">Civic geography boundary</p>
+			<p class="text-text-secondary text-xs font-medium">Geography coverage</p>
 			<p class="text-text-quaternary text-xs leading-relaxed">
 				{civicGeographyBoundary}
 			</p>

@@ -1,28 +1,5 @@
 <script lang="ts">
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
-	import {
-		buildPowerTargetDetailRows,
-		getGateEvidence,
-		type PowerTargetDetailRow
-	} from '$lib/data/capability-hypergraph';
 	import type { PageData } from './$types';
-
-	type CapabilityItem = {
-		label: string;
-		state: PowerTargetDetailRow['state'];
-		phase: string;
-		cluster: string;
-		action: string;
-		handoff?: string;
-		detail: string;
-		unlock: string;
-		href: string;
-		metric?: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
 
 	type DecisionMaker = {
 		id: string;
@@ -76,66 +53,10 @@
 	let { data }: { data: ViewData } = $props();
 
 	const dm = $derived(data.decisionMaker);
-	const base = $derived(`/org/${data.org.slug}`);
 
 	// Follow state
 	let isFollowed = $state(!!data.follow);
 	let followPending = $state(false);
-	const hasContactRoute = $derived(
-		Boolean(dm.phone || dm.email || dm.websiteUrl || dm.officeAddress)
-	);
-	const timelineCount = $derived(data.actions.length + data.receipts.length);
-	const stateLocalTerrainGate = getGateEvidence(
-		'CP-state-local-terrain',
-		['T3-1', 'T3-2', 'T3-10'],
-		{
-			name: 'State/local power terrain',
-			downstream: 3,
-			dependency: 'OpenStates, special-district officeholders, and per-district feeds'
-		}
-	);
-	const readerOfficeGate = getGateEvidence('CP-reader-office-profile', ['T8-1a', 'T8-1b', 'T8-8'], {
-		name: 'Reader office response terrain',
-		downstream: 4,
-		dependency:
-			'Decision-maker office profile enrichment, office-response workflow, and notification webhooks'
-	});
-	const receiptAnchoringGate = getGateEvidence('CP-receipt-anchoring', ['T6-1', 'T6-2', 'T6-9'], {
-		name: 'Receipt anchoring + response detection',
-		downstream: 4,
-		dependency: 'Receipt writer/mainnet anchoring + event-stream response detection'
-	});
-	const powerTargetDetailRows = $derived<PowerTargetDetailRow[]>(
-		buildPowerTargetDetailRows({
-			base,
-			target: {
-				id: dm.id,
-				isFollowed,
-				hasContactRoute,
-				timelineCount,
-				receiptCount: data.accountability.receiptCount
-			},
-			gates: {
-				stateLocalTerrainGate,
-				readerOfficeGate,
-				receiptAnchoringGate
-			}
-		})
-	);
-	const capabilityItems = $derived<CapabilityItem[]>([
-		...powerTargetDetailRows.map((row) => ({
-			label: row.label,
-			state: row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action: row.action,
-			handoff: row.handoff,
-			detail: row.ground,
-			unlock: row.boundary,
-			href: row.href,
-			metric: row.metric
-		}))
-	]);
 
 	// Merge actions and receipts into a single timeline
 	const timeline = $derived.by(() => {
@@ -293,10 +214,8 @@
 		<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 			<path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
 		</svg>
-		Power targets
+		Decision-makers
 	</a>
-
-	<WorkspaceCapabilityStrip label="Power target detail capability" items={capabilityItems} />
 
 	<!-- Header card -->
 	<div id="target-posture" class="bg-surface-base border-surface-border rounded-md border p-6">
@@ -478,11 +397,10 @@
 		{:else}
 			<div class="bg-surface-base border-surface-border rounded-md border p-5">
 				<h2 class="text-text-secondary mb-2 text-sm font-medium tracking-wider uppercase">
-					Contact route boundary
+					Contact
 				</h2>
 				<p class="text-text-tertiary text-sm">
-					No public contact route is loaded for this target. Resolve delivery through Studio or the
-					current campaign target list before claiming a send path.
+					No public contact information on file for this official.
 				</p>
 			</div>
 		{/if}

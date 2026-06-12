@@ -5,23 +5,14 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { env } from '$env/dynamic/public';
-	import { Datum, Ratio } from '$lib/design';
+	import { Datum } from '$lib/design';
 	import { FEATURES } from '$lib/config/features';
-	import { formatCapabilityClusters } from '$lib/data/capability-clusters';
+	import BoundedNotice from '$lib/components/org/BoundedNotice.svelte';
 	import {
-		buildSendReadiness,
-		buildStudioDraftHandoffRows,
-		formatGateEvidence,
-		getGateEvidence,
-		type CapabilityState,
-		type SendReadinessMode,
-		type StudioDraftHandoffRow
-	} from '$lib/data/capability-hypergraph';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel,
-		operatorCapabilityStateRatioSegments
-	} from '$lib/data/capability-state-labels';
+		CLIENT_DIRECT_EMAIL_THRESHOLD,
+		buildOrgLimitNotice,
+		emailDeliveryLimitNotice
+	} from '$lib/data/org-limit-sentences';
 	import {
 		deleteOrgEmailComposeDraft,
 		getOrgEmailComposeDraft,
@@ -36,18 +27,6 @@
 	import type { BlastProgress } from '$lib/services/client-blast-sender';
 	import type { Id } from '$convex/_generated/dataModel';
 
-	type DeliveryContractRow = {
-		label: string;
-		state: CapabilityState;
-		action: string;
-		effect: string;
-		gate: string;
-		metric: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
 	type RecipientSourceRow = {
 		source: string;
 		label: string;
@@ -73,7 +52,6 @@
 	let showPreview = $state(false);
 
 	// Client-direct send state
-	const CLIENT_DIRECT_THRESHOLD = 500;
 	let showPassphraseDialog = $state(false);
 	let passphrase = $state('');
 	let passphraseError = $state('');
@@ -100,42 +78,6 @@
 	const canPublish = $derived(
 		data.membership.role === 'owner' || data.membership.role === 'editor'
 	);
-	const base = $derived(`/org/${data.org.slug}`);
-	const emailDeliveryHref = $derived(`${base}/emails/compose#email-delivery`);
-	const emailProxyGate = getGateEvidence('CP-2', ['T2-2'], {
-		name: 'Email send proxy',
-		dependency: 'AWS Lambda deploy + BLAST receipts secret sync'
-	});
-	const abAutomationGate = getGateEvidence('CP-ab-automated-dispatch', ['T1-6b'], {
-		name: 'A/B automated dispatch',
-		downstream: 1,
-		dependency: 'Idempotent test-cohort and winning-remainder send runner'
-	});
-	const smsDispatchGate = getGateEvidence('CP-sms-dispatch', ['T2-1'], {
-		name: 'SMS dispatch',
-		downstream: 2,
-		dependency: 'Client-side phone decryptor + Twilio proxy'
-	});
-	const eventArtifactGate = getGateEvidence('CP-event-artifacts', ['T6-7'], {
-		name: 'Event artifacts',
-		downstream: 1,
-		dependency: 'Calendar-provider sync, QR check-in, and anchored event receipts'
-	});
-	const workflowEffectsGate = getGateEvidence('CP-workflow-execution', ['T1-9a'], {
-		name: 'Bounded workflow runner',
-		downstream: 3,
-		dependency: 'Trigger dispatch + tag/branch/delay runner'
-	});
-	const congressionalLaunchGate = getGateEvidence('CP-congressional-launch', ['NEW-A-7'], {
-		name: 'Congressional launch gate',
-		dependency: 'CWC production credentials + proof-authority launch flag'
-	});
-	const messageProofGate = getGateEvidence('CP-message-proof-binding', ['T4-2', 'T4-7'], {
-		name: 'Artifact proof binding',
-		downstream: 3,
-		dependency: 'Drafted artifact proof attachment and writer proof plumbing'
-	});
-
 	// A/B testing state
 	let abEnabled = $state(false);
 	let subjectA = $state('');
@@ -182,20 +124,12 @@
 			}))
 			.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
 	);
-	const topRecipientSource = $derived(recipientSourceRows[0] ?? null);
 	const platformRecipientSourceCount = $derived(
 		recipientSourceRows.reduce(
 			(total, row) => total + (platformSourceIds.has(row.source) ? row.count : 0),
 			0
 		)
 	);
-	const recipientPlatformProfileCount = $derived(
-		recipientSourceRows.filter((row) => platformSourceIds.has(row.source)).length
-	);
-	const recipientSourceState = $derived<CapabilityState>(
-		recipientSourceRows.length > 0 ? 'live' : 'partial'
-	);
-
 	const mergeFieldCount = $derived(
 		countMergeFields(subject) +
 			countMergeFields(bodyHtml) +
@@ -209,204 +143,26 @@
 		hasMergeFields && !FEATURES.EMAIL_CLIENT_DIRECT_MERGE
 	);
 	const clientDirectConfigured = $derived(Boolean(env.PUBLIC_SES_PROXY_URL));
-	const emailDeliveryGround = $derived({
-		subscribedCount: recipientCount,
-		clientDirectThreshold: CLIENT_DIRECT_THRESHOLD,
-		sesProxyConfigured: clientDirectConfigured,
-		orgKeyConfigured: hasOrgKey,
-		serverDispatchRuntimeReady: data.serverDispatchRuntimeReady,
-		serverDispatchRuntimeMissing: data.serverDispatchRuntimeMissing,
-		serverDispatchRuntimeDependency: data.serverDispatchRuntimeDependency,
-		serverDispatchRuntimeMessage: data.serverDispatchRuntimeMessage
-	});
-	const congressionalDelivery = $derived(data.spaces.operating?.congressionalDelivery ?? null);
-	const sendReadiness = $derived(
-		buildSendReadiness({
-			base,
-			emailDeliveryHref,
-			canPublish,
-			emailDelivery: emailDeliveryGround,
-			congressionalDelivery,
-			fallbackSubscribedCount: data.subscribedCount,
-			features: {
-				EMAIL_CLIENT_DIRECT_MERGE: FEATURES.EMAIL_CLIENT_DIRECT_MERGE,
-				EMAIL_SERVER_DISPATCH: FEATURES.EMAIL_SERVER_DISPATCH,
-				AB_TESTING: FEATURES.AB_TESTING,
-				SMS_DISPATCH: FEATURES.SMS_DISPATCH,
-				EVENTS: FEATURES.EVENTS,
-				WORKFLOW_EXECUTION: FEATURES.WORKFLOW_EXECUTION,
-				CONGRESSIONAL: FEATURES.CONGRESSIONAL
-			},
-			gates: {
-				emailProxyGate,
-				abAutomationGate,
-				smsDispatchGate,
-				eventArtifactGate,
-				workflowEffectsGate,
-				congressionalLaunchGate
-			}
-		})
-	);
-	const sendReadinessModes = $derived<SendReadinessMode[]>(sendReadiness.modes);
-	const sendBoundarySummary = $derived(sendReadiness.sendBoundarySummary);
-	const sendBoundaryGateSummary = $derived(sendReadiness.sendBoundaryGate);
 	const serverDispatchRuntimeArmed = $derived(
 		FEATURES.EMAIL_SERVER_DISPATCH && data.serverDispatchRuntimeReady
 	);
-	const browserDirectExecutable = $derived(
-		sendReadiness.browserDirectState === 'partial' && !mergeFieldsBlockClientSend
+	const browserDirectReady = $derived(
+		canPublish &&
+			recipientCount > 0 &&
+			recipientCount < CLIENT_DIRECT_EMAIL_THRESHOLD &&
+			hasOrgKey &&
+			clientDirectConfigured
 	);
-	const verificationContextState = $derived<CapabilityState>(
-		verifiedFilter === 'any' ? 'partial' : 'live'
+	const browserDirectExecutable = $derived(browserDirectReady && !mergeFieldsBlockClientSend);
+	const emailLimitNotice = $derived(
+		serverDispatchRuntimeArmed
+			? null
+			: emailDeliveryLimitNotice({
+					serverDispatchRuntimeMissing: data.serverDispatchRuntimeMissing,
+					serverDispatchRuntimeDependency: data.serverDispatchRuntimeDependency,
+					serverDispatchRuntimeMessage: data.serverDispatchRuntimeMessage
+				})
 	);
-
-	function requiredSendMode(
-		modes: SendReadinessMode[],
-		key: SendReadinessMode['key']
-	): SendReadinessMode {
-		const mode = modes.find((candidate) => candidate.key === key);
-		if (!mode) throw new Error(`Missing send readiness mode: ${key}`);
-		return mode;
-	}
-
-	const browserDirectMode = $derived(requiredSendMode(sendReadinessModes, 'browser-direct'));
-	const serverDispatchMode = $derived(requiredSendMode(sendReadinessModes, 'server-email'));
-	const abContinuationMode = $derived(requiredSendMode(sendReadinessModes, 'ab-automation'));
-	const mergePersonalizationState = $derived<CapabilityState>(
-		!hasMergeFields ? 'live' : sendReadiness.clientDirectMergeState
-	);
-	const mergePersonalizationGate = $derived(
-		!hasMergeFields
-			? 'No personalization gate currently blocks this message.'
-			: sendReadiness.clientDirectMergeGate
-	);
-	const abContinuationState = $derived<CapabilityState>(
-		data.abTestingAllowed ? abContinuationMode.state : 'gated'
-	);
-	const deliveryContractRows = $derived<DeliveryContractRow[]>([
-		{
-			label: 'Browser-direct email',
-			state: mergeFieldsBlockClientSend ? 'gated' : browserDirectMode.state,
-			action:
-				browserDirectMode.state === 'partial' ? 'send from browser' : browserDirectMode.action,
-			effect: mergeFieldsBlockClientSend
-				? 'Browser-direct send is blocked for this message because the client-direct merge runner is not armed; preserve the draft or use a runtime-ready server send.'
-				: browserDirectMode.effect,
-			gate: mergeFieldsBlockClientSend
-				? 'Personalized browser sends require EMAIL_CLIENT_DIRECT_MERGE plus the org-key and SES proxy path; remove merge fields, preserve the draft, or use server dispatch when runtime-ready.'
-				: browserDirectMode.unlock,
-			metric: {
-				value: recipientCount,
-				label: 'recipient cohort',
-				cite: 'people summary + recipient filter count'
-			}
-		},
-		{
-			label: 'Server dispatch',
-			state: serverDispatchMode.state,
-			action: serverDispatchMode.action,
-			effect: serverDispatchMode.effect,
-			gate: serverDispatchMode.unlock,
-			metric: {
-				value: recipientCount,
-				label: 'recipient cohort',
-				cite: 'recipient filter count'
-			}
-		},
-		{
-			label: 'Audience source basis',
-			state: recipientSourceState,
-			action: recipientSourceRows.length > 0 ? 'read source basis' : 'import source',
-			effect: topRecipientSource
-				? `${topRecipientSource.label} is the largest source in the selected cohort; ${platformRecipientSourceCount} recipients carry recognized platform-profile origin.`
-				: 'The selected cohort has no preserved source counts yet; send readiness still uses the recipient filter count.',
-			gate:
-				recipientSourceRows.length > 0
-					? `Source counts come from email.countRecipientsForFilter after subscribed, tag, segment, and verification filters; ${recipientPlatformProfileCount} platform profiles are represented.`
-					: 'Import People through CSV profiles, widgets, or organic signup before claiming audience-origin evidence.',
-			metric: {
-				value: platformRecipientSourceCount,
-				label: 'platform-origin recipients',
-				cite: 'email.countRecipientsForFilter sourceCounts'
-			}
-		},
-		{
-			label: 'A/B continuation',
-			state: abContinuationState,
-			action: data.abTestingAllowed ? abContinuationMode.action : 'read experiment boundary',
-			effect: data.abTestingAllowed
-				? abContinuationMode.effect
-				: 'A/B setup requires an eligible plan and an armed continuation gate.',
-			gate: data.abTestingAllowed
-				? abContinuationMode.unlock
-				: formatGateEvidence(abAutomationGate, {
-						prefix: 'Starter plan or above plus the A/B continuation gate is required.'
-					}),
-			metric: {
-				value: recipientCount,
-				label: 'candidate cohort',
-				cite: 'recipient filter count + emailAbTestCohorts'
-			}
-		},
-		{
-			label: 'Merge personalization',
-			state: mergePersonalizationState,
-			action: mergePersonalizationState === 'live' ? 'use body' : 'remove tokens',
-			effect: !hasMergeFields
-				? 'No merge tokens are present, so direct send is not blocked by personalization.'
-				: FEATURES.EMAIL_CLIENT_DIRECT_MERGE
-					? 'Client-direct send resolves supported tokens after recipient decrypt, using one-recipient Lambda calls when personalization is present.'
-					: 'Preview can render tokens with sample context, but browser-direct personalization stays draft-only until the client merge runner is armed; server dispatch still owns its own runtime gate.',
-			gate: mergePersonalizationGate,
-			metric: {
-				value: mergeFieldCount,
-				label: 'merge tokens',
-				cite: 'EMAIL_CLIENT_DIRECT_MERGE'
-			}
-		},
-		{
-			label: 'Verification context',
-			state: verificationContextState,
-			action: verifiedFilter === 'any' ? 'qualify cohort' : 'include proof block',
-			effect:
-				verifiedFilter === 'verified'
-					? 'The cohort is constrained to verified people, so the proof block can state the count exactly.'
-					: verifiedFilter === 'unverified'
-						? 'The cohort is constrained to unverified people, so the proof block stays exact.'
-						: 'Mixed verification cohorts omit aggregate proof rather than approximate a count.',
-			gate:
-				verifiedFilter === 'any'
-					? 'Choose a verification filter before claiming a cohort-level verification number.'
-					: 'Filter-scoped verification block is generated by compileEmailShell.',
-			metric: {
-				value: recipientCount,
-				label: verifiedFilter === 'any' ? 'mixed cohort' : `${verifiedFilter} cohort`,
-				cite: 'compileEmailShell verificationBlock'
-			}
-		}
-	]);
-	const deliveryStateCounts = $derived(
-		deliveryContractRows.reduce(
-			(acc, row) => {
-				acc[row.state] += 1;
-				return acc;
-			},
-			{ live: 0, partial: 0, 'draft-only': 0, gated: 0 } as Record<CapabilityState, number>
-		)
-	);
-	const deliverySegments = $derived(operatorCapabilityStateRatioSegments(deliveryStateCounts));
-
-	function deliveryStateLabel(state: CapabilityState): string {
-		return operatorCapabilityStateLabel(state);
-	}
-
-	function deliveryActionLabel(row: DeliveryContractRow): string {
-		return operatorCapabilityActionLabel(row.state, row.action, { appendReadyArrow: true });
-	}
-
-	function studioHandoffActionLabel(row: StudioDraftHandoffRow): string {
-		return operatorCapabilityActionLabel(row.state, row.action, { appendReadyArrow: true });
-	}
 
 	// Draft auto-save
 	interface ComposeDraft {
@@ -425,51 +181,6 @@
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
 	const draftKey = $derived(`draft:compose:${data.org.id}`);
 	const studioDraftId = $derived($page.url.searchParams.get('studioDraft') ?? '');
-	const studioDraftSourceCount = $derived(studioDraftRestored?.metadata.sourceCount ?? 0);
-	const studioDraftEvaluatedSourceCount = $derived(
-		studioDraftRestored?.metadata.evaluatedSourceCount ?? 0
-	);
-	const studioDraftSearchOnlySourceCount = $derived(
-		studioDraftRestored?.metadata.searchOnlySourceCount ??
-			Math.max(0, studioDraftSourceCount - studioDraftEvaluatedSourceCount)
-	);
-	const studioHandoffRows = $derived<StudioDraftHandoffRow[]>(
-		studioDraftRestored
-			? buildStudioDraftHandoffRows({
-					destination: 'email-composer',
-					targetCount: studioDraftRestored.metadata.decisionMakerCount,
-					evaluatedSourceCount: studioDraftEvaluatedSourceCount,
-					searchOnlySourceCount: studioDraftSearchOnlySourceCount,
-					scopeLabel: studioDraftRestored.metadata.geographicScopeLabel ?? null,
-					scopeBasis: studioDraftRestored.metadata.geographicScopeBasis ?? null,
-					scopeSource: studioDraftRestored.metadata.geographicScopeSource ?? null,
-					scopeMetricCite: 'orgEmailComposeDraft geographicScope',
-					recoveryJobPresent: Boolean(studioDraftRestored.metadata.messageJobId),
-					recoveryJobStatus: studioDraftRestored.metadata.messageJobStatus ?? null,
-					recoveryMetricCite: 'orgEmailComposeDraft messageJobId/inputHash',
-					traceHandle: studioDraftRestored.metadata.messageTraceId
-						? studioDraftRestored.metadata.messageTraceId.slice(0, 8)
-						: null,
-					traceMetricCite: 'orgEmailComposeDraft messageTraceId',
-					draftEffect:
-						'Studio supplied the subject and body; this composer now owns cohort selection, preview, and send confirmation.',
-					draftMetricCite: 'orgEmailComposeDraft studioDraft',
-					messageProofGate
-				})
-			: []
-	);
-	const studioHandoffStateCounts = $derived(
-		studioHandoffRows.reduce(
-			(acc, row) => {
-				acc[row.state] += 1;
-				return acc;
-			},
-			{ live: 0, partial: 0, 'draft-only': 0, gated: 0 } as Record<CapabilityState, number>
-		)
-	);
-	const studioHandoffSegments = $derived(
-		operatorCapabilityStateRatioSegments(studioHandoffStateCounts)
-	);
 
 	// Restore a STUDIO handoff before the generic composer draft restore. This is
 	// a one-time import: STUDIO has already saved the generated subject/body; the
@@ -646,6 +357,19 @@
 	);
 	const errorDraftHref = $derived(
 		form && 'draftHref' in form ? (form as { draftHref: string }).draftHref : null
+	);
+	const errorLimitNotice = $derived(
+		errorCode === 'email_server_dispatch_dependency_missing'
+			? buildOrgLimitNotice('email_server_dispatch_dependency_missing', {
+					missing: form && 'missing' in form ? (form as { missing: string[] }).missing : null,
+					dependency:
+						form && 'dependency' in form ? (form as { dependency: string }).dependency : null,
+					message:
+						form && 'runtimeMessage' in form
+							? (form as { runtimeMessage: string }).runtimeMessage
+							: null
+				})
+			: null
 	);
 
 	function toggleTag(tagId: string) {
@@ -982,106 +706,44 @@
 			</svg>
 		</a>
 		<div>
-			<h1 class="text-text-primary text-xl font-semibold">Compose delivery</h1>
+			<h1 class="text-text-primary text-xl font-semibold">Compose email</h1>
 			<p class="text-text-tertiary mt-1 text-sm">
-				Author a proof-aware email and send only through an armed path.
+				Write your email, choose recipients, preview, and send.
 			</p>
 		</div>
 	</div>
 
-	{#if errorMsg}
-		<div class="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-			<p>{errorMsg}</p>
-			{#if errorCode === 'email_server_dispatch_dependency_missing' && errorDraftHref}
+	{#if errorLimitNotice}
+		<div class="border-surface-border bg-surface-base rounded-md border px-4 py-3">
+			<BoundedNotice notice={errorLimitNotice} />
+			{#if errorDraftHref}
 				<a
 					href={errorDraftHref}
-					class="mt-2 inline-flex font-medium text-red-200 underline underline-offset-4"
+					class="text-text-secondary hover:text-text-primary mt-2 inline-flex text-sm font-medium underline underline-offset-4"
 				>
-					Open preserved draft
+					Open saved draft
 				</a>
 			{/if}
+		</div>
+	{:else if errorMsg}
+		<div class="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+			<p>{errorMsg}</p>
 		</div>
 	{/if}
 
 	{#if studioDraftRestored}
 		<div
-			class="studio-handoff-contract"
-			aria-label="Studio email composer handoff contract"
-			data-state="draft-only"
+			class="flex items-center justify-between rounded-md border border-teal-500/20 bg-teal-500/5 px-4 py-2.5"
 		>
-			<div class="studio-handoff-top">
-				<div class="studio-handoff-main">
-					<p class="studio-handoff-kicker">Studio provenance:</p>
-					<h2 class="studio-handoff-title">Email composer draft from Studio</h2>
-					<p class="studio-handoff-copy">
-						Subject and body came from Studio. Choose recipients, preview, then send only through an
-						armed email path.
-					</p>
-				</div>
-				<div class="studio-handoff-counts" aria-label="Studio handoff counts">
-					<span>
-						<Datum
-							value={studioDraftRestored.metadata.decisionMakerCount}
-							cite="orgEmailComposeDraft metadata.decisionMakerCount"
-						/>
-						targets
-					</span>
-					<span>
-						<Datum
-							value={studioDraftEvaluatedSourceCount}
-							cite="orgEmailComposeDraft metadata.evaluatedSourceCount"
-						/>
-						evaluated sources
-					</span>
-					{#if studioDraftSearchOnlySourceCount > 0}
-						<span>
-							<Datum
-								value={studioDraftSearchOnlySourceCount}
-								cite="orgEmailComposeDraft metadata.searchOnlySourceCount"
-							/>
-							search-only
-						</span>
-					{/if}
-				</div>
-			</div>
-			<Ratio segments={studioHandoffSegments} height={8} />
-			<div class="studio-handoff-facts" aria-label="Studio provenance handles">
-				{#if studioDraftRestored.metadata.messageTraceId}
-					<span>trace {studioDraftRestored.metadata.messageTraceId.slice(0, 8)}</span>
-				{:else if studioDraftRestored.metadata.messageJobId}
-					<span>job {studioDraftRestored.metadata.messageJobId.slice(0, 8)}</span>
-				{:else}
-					<span>no trace handle</span>
-				{/if}
-				{#if studioDraftRestored.metadata.messageJobStatus}
-					<span>recovery {studioDraftRestored.metadata.messageJobStatus}</span>
-				{/if}
-				{#if studioDraftRestored.metadata.geographicScopeLabel}
-					<span>scope {studioDraftRestored.metadata.geographicScopeLabel}</span>
-				{/if}
-			</div>
-			<div class="studio-handoff-list">
-				{#each studioHandoffRows as row (row.label)}
-					<div class="studio-handoff-row" data-state={row.state}>
-						<div class="studio-handoff-row-main">
-							<span class="studio-handoff-row-name">{row.label}</span>
-							<span class="studio-handoff-row-cluster">
-								{formatCapabilityClusters(row.clusters)}
-							</span>
-							<span class="studio-handoff-row-effect">{row.effect}</span>
-						</div>
-						<span class="studio-handoff-row-state">{deliveryStateLabel(row.state)}</span>
-						<span class="studio-handoff-row-metric">
-							<Datum value={row.metric.value} cite={row.metric.cite} />
-							<span>{row.metric.label}</span>
-						</span>
-						<span class="studio-handoff-row-action">{studioHandoffActionLabel(row)}</span>
-						<span class="studio-handoff-row-gate">{row.gate}</span>
-					</div>
-				{/each}
-			</div>
-			<button type="button" class="studio-handoff-discard" onclick={clearComposerDraft}>
-				Discard prefill
+			<p class="text-sm text-teal-400">
+				Draft from Studio — subject and body are filled in. Choose recipients, preview, then send.
+			</p>
+			<button
+				type="button"
+				class="text-text-tertiary hover:text-text-secondary text-xs transition-colors"
+				onclick={clearComposerDraft}
+			>
+				Discard
 			</button>
 		</div>
 	{/if}
@@ -1765,11 +1427,12 @@
 
 				{#if hasMergeFields && !FEATURES.EMAIL_CLIENT_DIRECT_MERGE}
 					<div class="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-						<p class="text-xs font-medium text-amber-300">Browser-direct merge is draft-only</p>
+						<p class="text-xs font-medium text-amber-300">
+							Personalized fields can't be sent from the browser yet
+						</p>
 						<p class="text-text-tertiary mt-1 text-xs">
-							Preview resolves supported tokens with sample context. Browser-to-Lambda
-							personalization needs the client merge runner, while server-side personalization still
-							depends on the server dispatch runtime gate.
+							Preview fills the fields with sample values. Remove the merge fields to send from
+							the browser, or save this as a draft.
 						</p>
 					</div>
 				{:else if hasMergeFields}
@@ -1778,8 +1441,7 @@
 							Merge fields will personalize at send time
 						</p>
 						<p class="text-text-tertiary mt-1 text-xs">
-							The browser decrypts each recipient, resolves supported tokens, and sends personalized
-							messages one recipient at a time through the Lambda path.
+							Each recipient's message is personalized in your browser and sent individually.
 						</p>
 					</div>
 				{/if}
@@ -1908,17 +1570,11 @@
 				>
 					<div class="flex items-start justify-between gap-3">
 						<div>
-							<p class="text-text-secondary text-xs font-semibold">Source basis</p>
-							<p class="text-text-tertiary mt-0.5 text-[11px]">
-								Filtered People source counts, no plaintext identity.
-							</p>
+							<p class="text-text-secondary text-xs font-semibold">Where these people came from</p>
 						</div>
 						<span class="text-text-tertiary font-mono text-[11px]">
-							<Datum
-								value={platformRecipientSourceCount}
-								cite="email.countRecipientsForFilter sourceCounts"
-							/>
-							platform
+							<Datum value={platformRecipientSourceCount} />
+							from platforms
 						</span>
 					</div>
 					{#if recipientSourceRows.length > 0}
@@ -1927,14 +1583,14 @@
 								<div class="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3 text-xs">
 									<span class="text-text-tertiary truncate">{row.label}</span>
 									<span class="text-text-primary font-mono tabular-nums">
-										<Datum value={row.count} cite="selected cohort source count" />
+										<Datum value={row.count} />
 									</span>
 								</div>
 							{/each}
 						</div>
 					{:else}
 						<p class="text-text-tertiary mt-3 text-xs">
-							No source counts are available for this selected cohort.
+							No source information for the selected recipients yet.
 						</p>
 					{/if}
 				</div>
@@ -1950,7 +1606,7 @@
 						<div>
 							<h3 class="text-text-secondary text-sm font-medium">A/B Test</h3>
 							<p class="text-text-tertiary mt-0.5 text-xs">
-								Create linked variants; continuation is draft-only
+								Try two versions with part of your list; the winner goes to the rest
 							</p>
 						</div>
 						<button
@@ -2042,12 +1698,12 @@
 								</select>
 							</div>
 							<div class="bg-surface-overlay text-text-tertiary rounded-lg px-3 py-2.5 text-xs">
-								{Math.round((recipientCount * testGroupPct) / 100)} in test group ({Math.round(
+								{Math.round((recipientCount * testGroupPct) / 100)} in the test group ({Math.round(
 									(((recipientCount * testGroupPct) / 100) * splitPct) / 100
 								)} A,
-								{Math.round((((recipientCount * testGroupPct) / 100) * (100 - splitPct)) / 100)} B). Remainder
-								{Math.round((recipientCount * (100 - testGroupPct)) / 100)} stays held as an exact continuation
-								cohort.
+								{Math.round((((recipientCount * testGroupPct) / 100) * (100 - splitPct)) / 100)} B). The
+								remaining {Math.round((recipientCount * (100 - testGroupPct)) / 100)} get the winning
+								version afterward.
 							</div>
 						</div>
 					{/if}
@@ -2059,56 +1715,6 @@
 				id="email-delivery"
 				class="border-surface-border bg-surface-base scroll-mt-24 space-y-3 rounded-md border p-6"
 			>
-				<div class="delivery-contract" aria-label="Email delivery capability contract">
-					<div class="delivery-contract-head">
-						<div>
-							<p class="delivery-contract-kicker">Delivery contract</p>
-							<h3 class="delivery-contract-title">Send only what is armed</h3>
-						</div>
-						<div class="delivery-contract-count">
-							<Datum value={recipientCount} cite="recipient filter count" />
-							<span>recipients</span>
-						</div>
-					</div>
-					<div
-						class="delivery-boundary"
-						data-state={sendReadiness.state}
-						aria-label="Shared email send readiness boundary"
-					>
-						<div class="delivery-boundary-main">
-							<span class="delivery-boundary-kicker">shared readiness</span>
-							<span class="delivery-boundary-summary">{sendBoundarySummary}</span>
-						</div>
-						<div class="delivery-boundary-facts">
-							<span>
-								<Datum value={sendReadiness.heldCount} cite="buildSendReadiness heldCount" />
-								held
-							</span>
-							<span>{sendReadiness.heldModeSummary}</span>
-							<span>{sendReadiness.browserDirectSignal}</span>
-							<span>{sendBoundaryGateSummary}</span>
-						</div>
-					</div>
-					<Ratio segments={deliverySegments} height={8} />
-					<div class="delivery-contract-list">
-						{#each deliveryContractRows as row (row.label)}
-							<div class="delivery-contract-row" data-state={row.state}>
-								<div class="delivery-contract-main">
-									<span class="delivery-contract-name">{row.label}</span>
-									<span class="delivery-contract-effect">{row.effect}</span>
-								</div>
-								<span class="delivery-contract-state">{deliveryStateLabel(row.state)}</span>
-								<span class="delivery-contract-metric">
-									<Datum value={row.metric.value} cite={row.metric.cite} />
-									<span>{row.metric.label}</span>
-								</span>
-								<span class="delivery-contract-action">{deliveryActionLabel(row)}</span>
-								<span class="delivery-contract-gate">{row.gate}</span>
-							</div>
-						{/each}
-					</div>
-				</div>
-
 				<!-- Preview -->
 				<form
 					method="POST"
@@ -2145,7 +1751,7 @@
 							else bodyHtmlB = bodyHtml;
 							if (
 								!confirm(
-									`Create A/B draft variants for ${recipientCount.toLocaleString()} recipient${recipientCount === 1 ? '' : 's'}? The test cohort will be snapshotted; exact dispatch is controlled from the A/B detail runner when server dispatch is armed.`
+									`Create A/B draft variants for ${recipientCount.toLocaleString()} recipient${recipientCount === 1 ? '' : 's'}? The test groups are saved exactly as selected; sending is controlled from the A/B detail page.`
 								)
 							) {
 								cancel();
@@ -2207,9 +1813,8 @@
 							{/if}
 						</button>
 						<p class="text-text-quaternary mt-2 text-center text-xs">
-							This creates linked draft variants with exact test-cohort filters. Sent-sibling winner
-							marking can create the held-back remainder draft; automated side effects remain gated
-							by server dispatch.
+							This saves both variants as drafts with their exact recipient groups. Sending and
+							winner follow-up happen from the A/B detail page.
 						</p>
 					</form>
 				{:else if browserDirectExecutable}
@@ -2359,10 +1964,10 @@
 						method="POST"
 						action="?/send"
 						use:enhance={({ cancel }) => {
-							const verb = serverDispatchRuntimeArmed ? 'Send email' : 'Create delivery draft';
+							const verb = serverDispatchRuntimeArmed ? 'Send email' : 'Save draft';
 							const note = serverDispatchRuntimeArmed
 								? 'Each email includes your verification proof.'
-								: 'It will not send until server-side email runtime dependencies are ready.';
+								: 'It stays a draft until your email infrastructure is connected.';
 							if (
 								!confirm(
 									`${verb} for ${recipientCount.toLocaleString()} recipient${recipientCount === 1 ? '' : 's'}? ${note}`
@@ -2405,24 +2010,22 @@
 								sending}
 						>
 							{#if sending}
-								{serverDispatchRuntimeArmed ? 'Sending...' : 'Creating draft...'}
+								{serverDispatchRuntimeArmed ? 'Sending...' : 'Saving draft...'}
 							{:else if !canPublish}
 								Editor role required
 							{:else}
 								{serverDispatchRuntimeArmed
 									? `Send email to ${recipientCount.toLocaleString()} recipient${recipientCount === 1 ? '' : 's'}`
-									: 'Create delivery draft'}
+									: 'Save draft'}
 							{/if}
 						</button>
-						{#if !serverDispatchRuntimeArmed}
+						{#if emailLimitNotice && !errorLimitNotice}
+							<div class="mt-3">
+								<BoundedNotice notice={emailLimitNotice} />
+							</div>
+						{:else if serverDispatchRuntimeArmed && recipientCount >= CLIENT_DIRECT_EMAIL_THRESHOLD}
 							<p class="text-text-quaternary mt-2 text-center text-xs">
-								Server-side dispatch is dependency-bound in this runtime. This stores a draft; it
-								does not send.
-							</p>
-						{:else if recipientCount >= CLIENT_DIRECT_THRESHOLD}
-							<p class="text-text-quaternary mt-2 text-center text-xs">
-								Large blast -- will be processed via our server-side delivery worker
-								(hardware-isolated enclave is on the roadmap)
+								Sends this large go out from our servers.
 							</p>
 						{/if}
 					</form>
@@ -2431,497 +2034,3 @@
 		</div>
 	</div>
 </div>
-
-<style>
-	.studio-handoff-contract {
-		position: relative;
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-		border: 1px solid oklch(0.72 0.11 180 / 0.42);
-		border-radius: 0.5rem;
-		background: var(--surface-base, oklch(0.993 0.003 60));
-		padding: 1rem;
-	}
-
-	.studio-handoff-contract[data-state='draft-only'] {
-		border-color: oklch(0.78 0.12 82 / 0.62);
-		background: oklch(0.985 0.006 70);
-	}
-
-	.studio-handoff-top {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		gap: 1rem;
-	}
-
-	.studio-handoff-main {
-		display: grid;
-		gap: 0.2rem;
-		min-width: 0;
-	}
-
-	.studio-handoff-kicker,
-	.studio-handoff-counts,
-	.studio-handoff-facts,
-	.studio-handoff-row-state,
-	.studio-handoff-row-action,
-	.studio-handoff-row-metric,
-	.studio-handoff-discard {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.625rem;
-		font-weight: 700;
-		line-height: 1.2;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-	}
-
-	.studio-handoff-kicker,
-	.studio-handoff-facts,
-	.studio-handoff-row-state {
-		color: var(--text-tertiary, oklch(0.56 0.012 60));
-	}
-
-	.studio-handoff-title {
-		margin: 0;
-		color: var(--text-primary, oklch(0.25 0.01 60));
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.95rem;
-		font-weight: 750;
-		line-height: 1.25;
-	}
-
-	.studio-handoff-copy {
-		margin: 0;
-		color: var(--text-secondary, oklch(0.42 0.015 60));
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.78rem;
-		line-height: 1.4;
-	}
-
-	.studio-handoff-counts {
-		display: flex;
-		flex-wrap: wrap;
-		justify-content: flex-end;
-		gap: 0.45rem;
-		color: var(--text-secondary, oklch(0.42 0.015 60));
-		text-align: right;
-	}
-
-	.studio-handoff-counts span,
-	.studio-handoff-row-metric {
-		display: inline-flex;
-		align-items: baseline;
-		gap: 0.3rem;
-	}
-
-	.studio-handoff-facts {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4rem 0.75rem;
-	}
-
-	.studio-handoff-list {
-		display: grid;
-		gap: 0.25rem;
-	}
-
-	.studio-handoff-row {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr);
-		gap: 0.35rem;
-		padding: 0.625rem 0;
-		border-top: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.72));
-	}
-
-	@media (min-width: 860px) {
-		.studio-handoff-row {
-			grid-template-columns: minmax(10rem, 1fr) 5.25rem 7.75rem auto minmax(0, 1.15fr);
-			align-items: baseline;
-		}
-	}
-
-	.studio-handoff-row-main {
-		display: flex;
-		min-width: 0;
-		flex-direction: column;
-		gap: 0.15rem;
-	}
-
-	.studio-handoff-row-name {
-		color: var(--text-primary, oklch(0.25 0.01 60));
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.8125rem;
-		font-weight: 700;
-		line-height: 1.25;
-	}
-
-	.studio-handoff-row-effect,
-	.studio-handoff-row-cluster,
-	.studio-handoff-row-gate {
-		color: var(--text-tertiary, oklch(0.56 0.012 60));
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.72rem;
-		line-height: 1.4;
-		overflow-wrap: anywhere;
-	}
-
-	.studio-handoff-row-cluster {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.58rem;
-		font-weight: 700;
-		text-transform: uppercase;
-	}
-
-	.studio-handoff-row-action {
-		color: oklch(0.5 0.012 60);
-		text-transform: none;
-		letter-spacing: 0;
-		white-space: nowrap;
-	}
-
-	.studio-handoff-row[data-state='live'] .studio-handoff-row-state,
-	.studio-handoff-row[data-state='live'] .studio-handoff-row-action {
-		color: var(--coord-verified, #10b981);
-	}
-
-	.studio-handoff-row[data-state='partial'] .studio-handoff-row-state,
-	.studio-handoff-row[data-state='partial'] .studio-handoff-row-action {
-		color: var(--coord-route-solid, #3bc4b8);
-	}
-
-	.studio-handoff-row[data-state='draft-only'] {
-		border-top-style: dashed;
-	}
-
-	.studio-handoff-row[data-state='draft-only'] .studio-handoff-row-state,
-	.studio-handoff-row[data-state='draft-only'] .studio-handoff-row-action {
-		color: oklch(0.62 0.12 78);
-	}
-
-	.studio-handoff-row[data-state='gated'] {
-		border-top-style: dashed;
-	}
-
-	.studio-handoff-row[data-state='gated'] .studio-handoff-row-state,
-	.studio-handoff-row[data-state='gated'] .studio-handoff-row-action {
-		color: oklch(0.48 0.02 60);
-	}
-
-	.studio-handoff-discard {
-		align-self: flex-start;
-		border: 0;
-		background: transparent;
-		padding: 0;
-		color: var(--text-tertiary, oklch(0.56 0.012 60));
-		cursor: pointer;
-		letter-spacing: 0;
-		text-transform: none;
-	}
-
-	.studio-handoff-discard:hover,
-	.studio-handoff-discard:focus-visible {
-		color: var(--text-secondary, oklch(0.42 0.015 60));
-		outline: none;
-	}
-
-	@media (max-width: 640px) {
-		.studio-handoff-top {
-			flex-direction: column;
-		}
-
-		.studio-handoff-counts {
-			justify-content: flex-start;
-			text-align: left;
-		}
-
-		.studio-handoff-row-action {
-			white-space: normal;
-		}
-	}
-
-	.delivery-contract {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-		padding-bottom: 0.875rem;
-		border-bottom: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
-	}
-
-	.delivery-contract-head {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 1rem;
-	}
-
-	.delivery-contract-kicker,
-	.delivery-boundary-kicker,
-	.delivery-contract-state,
-	.delivery-contract-action {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.625rem;
-		font-weight: 700;
-		line-height: 1.2;
-		text-transform: uppercase;
-		letter-spacing: 0.1em;
-	}
-
-	.delivery-contract-kicker {
-		color: oklch(0.52 0.012 250);
-	}
-
-	.delivery-boundary {
-		display: grid;
-		gap: 0.5rem;
-		padding: 0.75rem;
-		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.78));
-		border-radius: 0.5rem;
-		background: var(--surface-overlay, oklch(0.96 0.006 65));
-	}
-
-	.delivery-boundary[data-state='draft-only'],
-	.delivery-boundary[data-state='gated'] {
-		border-style: dashed;
-	}
-
-	.delivery-boundary-main {
-		display: grid;
-		gap: 0.2rem;
-	}
-
-	.delivery-boundary-kicker {
-		color: oklch(0.52 0.012 250);
-	}
-
-	.delivery-boundary-summary {
-		font-size: 0.78rem;
-		font-weight: 650;
-		line-height: 1.35;
-		color: var(--text-primary, oklch(0.25 0.01 60));
-	}
-
-	.delivery-boundary-facts {
-		display: grid;
-		gap: 0.35rem;
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.6875rem;
-		line-height: 1.35;
-		color: var(--text-tertiary, oklch(0.56 0.012 60));
-	}
-
-	@media (min-width: 860px) {
-		.delivery-boundary {
-			grid-template-columns: minmax(0, 1fr) minmax(11rem, 0.8fr);
-			align-items: start;
-		}
-	}
-
-	.delivery-contract-title {
-		margin: 0.125rem 0 0;
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.95rem;
-		font-weight: 700;
-		line-height: 1.25;
-		color: var(--text-primary, oklch(0.25 0.01 60));
-	}
-
-	.delivery-contract-count,
-	.delivery-contract-metric {
-		display: inline-flex;
-		align-items: baseline;
-		gap: 0.35rem;
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.6875rem;
-		color: var(--text-tertiary, oklch(0.56 0.012 60));
-		white-space: nowrap;
-	}
-
-	.delivery-contract-list {
-		display: grid;
-		gap: 0.25rem;
-	}
-
-	.delivery-contract-row {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr);
-		gap: 0.35rem;
-		padding: 0.625rem 0;
-		border-top: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.72));
-	}
-
-	@media (min-width: 860px) {
-		.delivery-contract-row {
-			grid-template-columns: minmax(10rem, 1fr) 5.25rem 7.75rem auto minmax(0, 1.15fr);
-			align-items: baseline;
-		}
-	}
-
-	.delivery-contract-main {
-		display: flex;
-		min-width: 0;
-		flex-direction: column;
-		gap: 0.15rem;
-	}
-
-	.delivery-contract-name {
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.8125rem;
-		font-weight: 700;
-		line-height: 1.25;
-		color: var(--text-primary, oklch(0.25 0.01 60));
-	}
-
-	.delivery-contract-effect,
-	.delivery-contract-gate {
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.72rem;
-		line-height: 1.4;
-		color: var(--text-tertiary, oklch(0.56 0.012 60));
-	}
-
-	.delivery-contract-action {
-		color: oklch(0.5 0.012 60);
-		text-transform: none;
-		letter-spacing: 0;
-		white-space: nowrap;
-	}
-
-	.delivery-contract-row[data-state='live'] .delivery-contract-state,
-	.delivery-contract-row[data-state='live'] .delivery-contract-action {
-		color: var(--coord-verified, #10b981);
-	}
-
-	.delivery-contract-row[data-state='partial'] .delivery-contract-state,
-	.delivery-contract-row[data-state='partial'] .delivery-contract-action {
-		color: var(--coord-route-solid, #3bc4b8);
-	}
-
-	.delivery-contract-row[data-state='draft-only'] {
-		border-top-style: dashed;
-	}
-
-	.delivery-contract-row[data-state='draft-only'] .delivery-contract-state,
-	.delivery-contract-row[data-state='draft-only'] .delivery-contract-action {
-		color: oklch(0.62 0.12 78);
-	}
-
-	.delivery-contract-row[data-state='gated'] {
-		border-top-style: dashed;
-	}
-
-	.delivery-contract-row[data-state='gated'] .delivery-contract-state,
-	.delivery-contract-row[data-state='gated'] .delivery-contract-action {
-		color: oklch(0.48 0.02 60);
-	}
-
-	/* Tiptap ProseMirror editor styles */
-	:global(.tiptap-editor .ProseMirror) {
-		min-height: 18rem;
-		padding: 0.75rem 1rem;
-		font-size: 0.875rem;
-		line-height: 1.625;
-		color: var(--text-primary);
-		outline: none;
-	}
-
-	:global(.tiptap-editor .ProseMirror p) {
-		margin-bottom: 0.5rem;
-	}
-
-	:global(.tiptap-editor .ProseMirror h1) {
-		font-size: 1.5rem;
-		font-weight: 700;
-		color: var(--text-primary);
-		margin-bottom: 0.75rem;
-		margin-top: 1rem;
-		line-height: 1.25;
-	}
-
-	:global(.tiptap-editor .ProseMirror h2) {
-		font-size: 1.25rem;
-		font-weight: 600;
-		color: var(--text-primary);
-		margin-bottom: 0.5rem;
-		margin-top: 0.75rem;
-		line-height: 1.3;
-	}
-
-	:global(.tiptap-editor .ProseMirror h3) {
-		font-size: 1.1rem;
-		font-weight: 600;
-		color: var(--text-secondary);
-		margin-bottom: 0.5rem;
-		margin-top: 0.75rem;
-		line-height: 1.4;
-	}
-
-	:global(.tiptap-editor .ProseMirror ul) {
-		list-style-type: disc;
-		padding-left: 1.5rem;
-		margin-bottom: 0.5rem;
-	}
-
-	:global(.tiptap-editor .ProseMirror ol) {
-		list-style-type: decimal;
-		padding-left: 1.5rem;
-		margin-bottom: 0.5rem;
-	}
-
-	:global(.tiptap-editor .ProseMirror li) {
-		margin-bottom: 0.25rem;
-	}
-
-	:global(.tiptap-editor .ProseMirror blockquote) {
-		border-left: 3px solid var(--surface-border-strong);
-		padding-left: 1rem;
-		color: var(--text-tertiary);
-		margin: 0.75rem 0;
-		font-style: italic;
-	}
-
-	:global(.tiptap-editor .ProseMirror a) {
-		color: #2dd4bf; /* teal-400 */
-		text-decoration: underline;
-	}
-
-	:global(.tiptap-editor .ProseMirror code) {
-		background: var(--surface-overlay);
-		border-radius: 0.25rem;
-		padding: 0.15rem 0.35rem;
-		font-size: 0.8em;
-		font-family: ui-monospace, monospace;
-		color: var(--text-secondary);
-	}
-
-	:global(.tiptap-editor .ProseMirror pre) {
-		background: var(--surface-raised);
-		border: 1px solid var(--surface-border-strong);
-		border-radius: 0.5rem;
-		padding: 0.75rem 1rem;
-		margin: 0.75rem 0;
-		overflow-x: auto;
-	}
-
-	:global(.tiptap-editor .ProseMirror pre code) {
-		background: none;
-		padding: 0;
-		border-radius: 0;
-	}
-
-	:global(.tiptap-editor .ProseMirror hr) {
-		border: none;
-		border-top: 1px solid var(--surface-border-strong);
-		margin: 1rem 0;
-	}
-
-	/* Placeholder */
-	:global(.tiptap-editor .ProseMirror p.is-editor-empty:first-child::before) {
-		content: 'Write your email content here...';
-		float: left;
-		color: var(--text-quaternary);
-		pointer-events: none;
-		height: 0;
-	}
-</style>

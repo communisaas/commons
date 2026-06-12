@@ -1,28 +1,6 @@
 <script lang="ts">
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
-	import {
-		buildPowerTerrainReadiness,
-		getGateEvidence,
-		type PowerTerrainRow
-	} from '$lib/data/capability-hypergraph';
 	import { Datum } from '$lib/design';
 	import type { PageData } from './$types';
-
-	type CapabilityItem = {
-		label: string;
-		state: PowerTerrainRow['state'];
-		phase: string;
-		cluster: string;
-		action: string;
-		detail: string;
-		unlock: string;
-		href: string;
-		metric?: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
 
 	type DecisionMaker = {
 		id: string;
@@ -49,7 +27,6 @@
 	};
 
 	let { data }: { data: ViewData } = $props();
-	const base = $derived(`/org/${data.org.slug}`);
 
 	// Search / filter state
 	let searchQuery = $state('');
@@ -208,131 +185,30 @@
 	const hasFilters = $derived(!!searchQuery || !!partyFilter || !!jurisdictionFilter);
 	const followedCount = $derived(Math.max(0, data.followedCount + followedCountDelta));
 	const discoverCount = $derived(data.discover.filter((dm) => !followedIds.has(dm.id)).length);
-	const loadedTargetCount = $derived(localFollowed.length + discoverCount);
-	const stateLocalTerrainGate = getGateEvidence(
-		'CP-state-local-terrain',
-		['T3-1', 'T3-2', 'T3-10'],
-		{
-			name: 'State/local power terrain',
-			downstream: 3,
-			dependency: 'OpenStates, special-district officeholders, and per-district feeds'
-		}
-	);
-	const internationalTerrainGate = getGateEvidence(
-		'CP-international-power-terrain',
-		['T3-3', 'T3-4', 'T3-5'],
-		{
-			name: 'International power resolver',
-			downstream: 3,
-			dependency: 'CA, GB, and AU representative lookup wiring'
-		}
-	);
-	const stateBillTerrainGate = getGateEvidence('CP-state-bill-terrain', ['T6-6', 'T3-1'], {
-		name: 'State bill terrain',
-		downstream: 4,
-		dependency: 'OpenStates or equivalent state-bill ingestion plus state legislator data'
-	});
-	const nonFederalScorecardGate = getGateEvidence('CP-non-federal-scorecards', ['T6-6', 'T3-1'], {
-		name: 'Non-federal scorecard terrain',
-		downstream: 3,
-		dependency: 'State bill ingestion + state officeholder coverage'
-	});
-	const readerOfficeGate = getGateEvidence('CP-reader-office-profile', ['T8-1a', 'T8-1b', 'T8-8'], {
-		name: 'Reader office response terrain',
-		downstream: 4,
-		dependency:
-			'Decision-maker office profile enrichment, office-response workflow, and notification webhooks'
-	});
-	const powerTerrainReadiness = $derived(
-		buildPowerTerrainReadiness({
-			base,
-			power: {
-				loaded: true,
-				legislationEnabled: Boolean(data.spaces.landscape?.legislationEnabled),
-				followedCount,
-				discoverableOfficialCount: discoverCount,
-				watchedBillCount: data.spaces.landscape?.bills.length ?? null,
-				scorecardCount: data.spaces.landscape?.scorecards.length ?? null
-			},
-			gates: {
-				powerStateLocalTerrainGate: stateLocalTerrainGate,
-				powerInternationalTerrainGate: internationalTerrainGate,
-				powerStateBillTerrainGate: stateBillTerrainGate,
-				powerNonFederalScorecardGate: nonFederalScorecardGate,
-				powerOfficeResponseGate: readerOfficeGate
-			}
-		})
-	);
-	const powerTerrainRows = $derived<PowerTerrainRow[]>(powerTerrainReadiness.rows);
-	const capabilityItems = $derived<CapabilityItem[]>(
-		powerTerrainRows.map((row) => ({
-			label: row.label,
-			state: row.state,
-			phase: row.phase,
-			cluster: row.clusters,
-			action: row.action,
-			detail: row.ground,
-			unlock: row.boundary,
-			href: row.href,
-			metric: row.metric
-		}))
-	);
 </script>
 
 <div class="space-y-6">
 	<!-- Header -->
 	<div class="space-y-4">
-		<div>
-			<p class="text-text-quaternary font-mono text-xs tracking-widest uppercase">
-				Power / Resolve
-			</p>
-			<h1 class="text-text-primary mt-2 text-xl font-semibold">Power targets</h1>
-			<p class="text-text-tertiary mt-2 max-w-3xl text-sm">
-				Followed officials and discoverable targets are the terrain Studio resolves against. Loaded
-				target records are usable; broader state/local coverage, international reach, and
-				reader-office response loops stay qualified.
-			</p>
-		</div>
-
-		<WorkspaceCapabilityStrip label="Power target capability" items={capabilityItems} />
-
-		<div
-			id="power-reach-boundary"
-			class="rounded-md border border-amber-500/30 bg-amber-500/10 p-4"
-		>
-			<div class="flex flex-wrap items-start justify-between gap-4">
-				<div class="max-w-2xl">
-					<p class="text-sm font-medium text-amber-300">Power terrain boundary</p>
-					<p class="text-text-tertiary mt-1 text-sm">
-						{powerTerrainReadiness.effect}
-						{powerTerrainReadiness.detail} Loaded target records are live where follows exist; discoverable
-						officials are a bounded route slice. Full multi-jurisdiction terrain is bounded by state,
-						local, special-district, and international resolver tasks. No cross-route decision-maker,
-						bill, and scorecard join is claimed here.
+		<div class="flex flex-wrap items-start justify-between gap-4">
+			<div>
+				<h1 class="text-text-primary text-xl font-semibold">Decision-makers</h1>
+				<p class="text-text-tertiary mt-2 max-w-3xl text-sm">
+					Follow the officials your organization works on, and discover more to follow.
+				</p>
+			</div>
+			<div class="grid min-w-[180px] grid-cols-2 gap-2 text-center">
+				<div>
+					<p class="text-text-primary font-mono text-sm font-bold">
+						<Datum value={followedCount} />
 					</p>
+					<p class="text-text-quaternary text-[0.65rem] uppercase">followed</p>
 				</div>
-				<div class="grid min-w-[240px] grid-cols-3 gap-2 text-center">
-					<div>
-						<p class="text-text-primary font-mono text-sm font-bold">
-							<Datum value={followedCount} cite="legislation.listOrgDmFollows" />
-						</p>
-						<p class="text-text-quaternary text-[0.65rem] uppercase">followed</p>
-					</div>
-					<div>
-						<p class="font-mono text-sm font-bold text-teal-300">
-							<Datum value={discoverCount} cite="legislation.discoverDms" />
-						</p>
-						<p class="text-text-quaternary text-[0.65rem] uppercase">discover</p>
-					</div>
-					<div>
-						<p class="font-mono text-sm font-bold text-amber-300">
-							<Datum
-								value={loadedTargetCount}
-								cite="legislation.listOrgDmFollows + legislation.discoverDms"
-							/>
-						</p>
-						<p class="text-text-quaternary text-[0.65rem] uppercase">loaded</p>
-					</div>
+				<div>
+					<p class="font-mono text-sm font-bold text-teal-300">
+						<Datum value={discoverCount} />
+					</p>
+					<p class="text-text-quaternary text-[0.65rem] uppercase">to discover</p>
 				</div>
 			</div>
 		</div>

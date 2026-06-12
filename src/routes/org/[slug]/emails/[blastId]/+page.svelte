@@ -1,17 +1,7 @@
 <script lang="ts">
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
 	import { FEATURES } from '$lib/config/features';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel
-	} from '$lib/data/capability-state-labels';
-	import {
-		buildEmailDeliveryEvidenceReadiness,
-		getGateEvidence,
-		type CapabilityState,
-		type EmailDeliveryEvidenceRow
-	} from '$lib/data/capability-hypergraph';
-	import { Datum } from '$lib/design';
+	import BoundedNotice from '$lib/components/org/BoundedNotice.svelte';
+	import { emailDeliveryLimitNotice } from '$lib/data/org-limit-sentences';
 	import type { PageData } from './$types';
 
 	type EmailBlast = {
@@ -71,22 +61,6 @@
 		bounceEvents: BounceEvent[];
 		serverDispatchRuntimeReady: boolean;
 	};
-	type AbContinuationPressureReadout = {
-		id: string;
-		label: string;
-		state: CapabilityState;
-		title: string;
-		action: string;
-		detail: string;
-		gate: string;
-		href: string;
-		metric: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
-
 	let { data, form }: { data: ViewData; form?: { error?: string; errorCode?: string } } = $props();
 
 	function pct(num: number, denom: number): string {
@@ -137,16 +111,6 @@
 			? data.variants.reduce((sum, v) => sum + (v?.totalSent ?? 0), 0)
 			: data.blast.totalSent
 	);
-	const totalOpened = $derived(
-		data.isAbTest
-			? data.variants.reduce((sum, v) => sum + (v?.totalOpened ?? 0), 0)
-			: data.blast.totalOpened
-	);
-	const totalClicked = $derived(
-		data.isAbTest
-			? data.variants.reduce((sum, v) => sum + (v?.totalClicked ?? 0), 0)
-			: data.blast.totalClicked
-	);
 	const totalComplained = $derived(
 		data.isAbTest
 			? data.variants.reduce((sum, v) => sum + (v?.totalComplained ?? 0), 0)
@@ -162,173 +126,16 @@
 		abWinnerMetricSupported || Boolean(recordedWinnerBlastId)
 	);
 	const abWinnerVariant = $derived(data.variants.find((variant) => isWinner(variant)) ?? null);
-	const hasExperimentView = $derived(data.isAbTest && data.variants.length >= 2);
 	const suppressedSignal = $derived(totalBounced + totalComplained);
-	const abRemainderSignal = $derived(
-		data.abCohort?.remainderCount ?? data.abConfig?.cohortSnapshot?.remainderCount ?? null
-	);
 	const hasDraftAbVariant = $derived(data.variants.some((variant) => variant?.status === 'draft'));
-	const hasQueuedOrSentAbVariant = $derived(
-		data.variants.some((variant) =>
-			['scheduled', 'sending', 'sent'].includes(variant?.status ?? '')
-		)
-	);
 	const hasDraftRemainder = $derived(data.remainderDraft?.status === 'draft');
-	const hasQueuedOrSentRemainder = $derived(
-		!!data.remainderDraft && ['scheduled', 'sending', 'sent'].includes(data.remainderDraft.status)
-	);
 	const serverDispatchRuntimeArmed = $derived(
 		FEATURES.EMAIL_SERVER_DISPATCH && data.serverDispatchRuntimeReady
 	);
-	const base = $derived(`/org/${data.org.slug}`);
-	const emailProxyGate = getGateEvidence('CP-2', ['T2-2'], {
-		name: 'Email send proxy',
-		dependency: 'AWS Lambda deploy + BLAST receipts secret sync'
-	});
-	const receiptAnchoringGate = getGateEvidence('CP-receipt-anchoring', ['T6-1', 'T6-2', 'T8-8'], {
-		name: 'Email receipt and response',
-		downstream: 8,
-		dependency: 'Receipt writer/mainnet anchoring + reader-side notifications'
-	});
-	const abAutomationGate = getGateEvidence('CP-ab-automated-dispatch', ['T1-6b'], {
-		name: 'A/B automated dispatch',
-		downstream: 1,
-		dependency: 'Idempotent test-cohort and winning-remainder send runner'
-	});
-	const listHealthGate = getGateEvidence('CP-2', ['T2-2'], {
-		name: 'Bounce and complaint attribution',
-		dependency: 'SES webhook correlation + List-Unsubscribe receipt path'
-	});
-	const engagementTelemetryGate = getGateEvidence('CP-email-engagement-attribution', ['T2-10'], {
-		name: 'Email engagement attribution',
-		downstream: 1,
-		dependency: 'SES open/click attribution + Configuration Set evidence'
-	});
-
-	const emailDeliveryEvidence = $derived(
-		buildEmailDeliveryEvidenceReadiness({
-			base,
-			blastId: data.blast.id,
-			delivery: {
-				status: data.blast.status,
-				totalSent,
-				totalOpened,
-				totalClicked,
-				totalBounced,
-				totalComplained,
-				receiptPageCount: data.receiptSummary.pageCount,
-				receiptSentCount: data.receiptSummary.sentCount,
-				receiptFailedCount: data.receiptSummary.failedCount,
-				receiptHasMore: data.receiptSummary.hasMore,
-				engagementMetricsEnabled: FEATURES.ENGAGEMENT_METRICS,
-				hasExperimentView,
-				abWinnerPickedAt,
-				hasDraftAbVariant,
-				hasQueuedOrSentAbVariant,
-				hasDraftRemainder,
-				hasQueuedOrSentRemainder,
-				hasRemainderDraft: !!data.remainderDraft,
-				abRemainderCount: abRemainderSignal,
-				serverDispatchRuntimeArmed
-			},
-			gates: {
-				emailProxyGate,
-				receiptAnchoringGate,
-				abAutomationGate,
-				listHealthGate,
-				engagementTelemetryGate
-			}
-		})
-	);
-
-	function emailDetailHref(row: EmailDeliveryEvidenceRow): string {
-		if (row.id === 'delivery-record') return '#email-record';
-		if (row.id === 'engagement-telemetry') return '#email-engagement-telemetry';
-		if (row.id === 'receipt-evidence') return '#email-receipt-evidence';
-		if (row.id === 'experiment-continuation') {
-			return hasExperimentView ? '#email-experiment-boundary' : row.href;
-		}
-		if (row.id === 'list-health-response') return '#email-list-health';
-		return row.href;
-	}
-
-	const capabilityItems = $derived(
-		emailDeliveryEvidence.detailRows.map((row) => ({
-			...row,
-			href: emailDetailHref(row)
-		}))
-	);
-	const experimentContinuationRow = $derived(
-		emailDeliveryEvidence.detailRows.find((row) => row.id === 'experiment-continuation') ?? null
-	);
-	const abSnapshotCount = $derived(
-		data.abCohort?.totalCount ?? data.abConfig?.cohortSnapshot?.totalCount ?? null
-	);
-	const abContinuationPressureReadouts = $derived<AbContinuationPressureReadout[]>([
-		{
-			id: 'ab-snapshot-ground',
-			label: 'Snapshot ground',
-			state: data.abCohort ? 'partial' : data.abConfig?.cohortSnapshot ? 'draft-only' : 'gated',
-			title: 'Exact cohort snapshot',
-			action: data.abCohort ? 'read cohort snapshot' : 'create exact test',
-			detail: data.abCohort
-				? 'Stored email-hash cohorts define the test split and held-back remainder; tags and segments are not reselected at dispatch.'
-				: 'No stored A/B cohort snapshot is loaded for this record; continuation cannot claim exact cohort custody.',
-			gate:
-				experimentContinuationRow?.unlock ??
-				'Exact A/B continuation requires stored cohort snapshots and runtime-gated dispatch.',
-			href: '#email-experiment-boundary',
-			metric: {
-				value: abSnapshotCount,
-				label: 'snapshot people',
-				cite: data.abCohort ? 'emailAbTestCohorts.totalCount' : 'abTestConfig.cohortSnapshot'
-			}
-		},
-		{
-			id: 'ab-held-remainder',
-			label: 'Held remainder',
-			state:
-				abRemainderSignal !== null ? (data.remainderDraft ? 'partial' : 'draft-only') : 'gated',
-			title: data.remainderDraft ? 'Remainder draft materialized' : 'Remainder held',
-			action: data.remainderDraft ? 'open remainder draft' : 'create remainder draft',
-			detail:
-				abRemainderSignal !== null
-					? 'The held-back cohort stays exact until a recorded winner materializes the remainder draft or runtime-ready dispatch queues it.'
-					: 'No held-back remainder count is available for this experiment record.',
-			gate: abWinnerMetricSupported
-				? (experimentContinuationRow?.unlock ??
-					'A/B continuation remains held by the server-dispatch gate.')
-				: 'Verified-action A/B winner selection is not armed; a recorded winner id is required before remainder materialization.',
-			href: '#email-experiment-boundary',
-			metric: {
-				value: abRemainderSignal,
-				label: 'held-back people',
-				cite: 'emailAbTestCohorts.remainderCount'
-			}
-		},
-		{
-			id: 'ab-dispatch-gate',
-			label: 'Dispatch gate',
-			state: experimentContinuationRow?.state ?? 'draft-only',
-			title: serverDispatchRuntimeArmed ? 'Runtime checks clear' : 'Server dispatch held',
-			action: experimentContinuationRow?.action ?? 'read experiment boundary',
-			detail: serverDispatchRuntimeArmed
-				? 'Exact test and remainder queue actions can pass through the runtime-gated server dispatch path.'
-				: 'Exact queue hooks exist, but variants and remainder stay preserved drafts until SES, org-key, unsubscribe, and public URL checks pass.',
-			gate:
-				experimentContinuationRow?.unlock ??
-				'A/B continuation stays dependency-first until server-dispatch runtime evidence clears.',
-			href: '#email-experiment-boundary',
-			metric: {
-				value: serverDispatchRuntimeArmed ? 1 : 0,
-				label: 'runtime ready',
-				cite: 'EMAIL_SERVER_DISPATCH + getEmailServerDispatchReadiness'
-			}
-		}
-	]);
-	const engagementTelemetryGateSummary = $derived(
-		emailDeliveryEvidence.detailRows.find((row) => row.id === 'engagement-telemetry')?.unlock ??
-			emailDeliveryEvidence.gate
+	const emailLimitNotice = $derived(
+		serverDispatchRuntimeArmed
+			? null
+			: emailDeliveryLimitNotice(data.spaces.operating?.emailDelivery ?? null)
 	);
 
 	function isWinner(variant: (typeof data.variants)[0]): boolean {
@@ -352,25 +159,6 @@
 		return v.totalOpened / sent;
 	}
 
-	function stateLabel(state: CapabilityState): string {
-		return operatorCapabilityStateLabel(state);
-	}
-
-	function actionLabel(state: CapabilityState, action: string): string {
-		return operatorCapabilityActionLabel(state, action, { appendReadyArrow: true });
-	}
-
-	function pressureCellClass(state: CapabilityState): string {
-		const stateClass =
-			state === 'live'
-				? 'border-teal-500/35 bg-teal-500/10'
-				: state === 'partial'
-					? 'border-blue-500/30 bg-blue-500/10'
-					: state === 'draft-only'
-						? 'border-amber-500/30 bg-amber-500/10'
-						: 'border-surface-border-strong bg-surface-overlay';
-		return `rounded-md border p-3 text-left transition hover:border-text-tertiary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-500 ${stateClass}`;
-	}
 </script>
 
 <div class="space-y-6">
@@ -410,51 +198,8 @@
 		</div>
 	</div>
 
-	<WorkspaceCapabilityStrip label="Email detail capability" items={capabilityItems} />
-
-	{#if !FEATURES.ENGAGEMENT_METRICS}
-		<div
-			id="email-engagement-telemetry"
-			class="border-surface-border bg-surface-base rounded-md border p-4"
-			aria-label="Email engagement telemetry boundary"
-		>
-			<p class="text-text-secondary text-sm font-medium">Engagement telemetry boundary</p>
-			<p class="font-brand text-text-tertiary mt-1 text-xs">{engagementTelemetryGateSummary}</p>
-		</div>
-	{/if}
-
 	{#if data.isAbTest && data.variants.length >= 2}
 		{@const config = data.abConfig}
-
-		<div class="grid gap-3 md:grid-cols-3" aria-label="A/B continuation pressure">
-			{#each abContinuationPressureReadouts as readout (readout.id)}
-				<a
-					href={readout.href}
-					class={pressureCellClass(readout.state)}
-					data-sveltekit-preload-data="off"
-					aria-label={`${readout.label}: ${stateLabel(readout.state)}; ${readout.detail}; ${readout.gate}`}
-				>
-					<span
-						class="text-text-quaternary block font-mono text-[0.65rem] tracking-[0.18em] uppercase"
-						>{readout.label}</span
-					>
-					<span class="text-text-primary mt-2 block text-sm font-semibold">{readout.title}</span>
-					<span class="text-text-secondary mt-2 flex items-baseline gap-1 text-xs">
-						<Datum value={readout.metric.value} cite={readout.metric.cite} />
-						<span>{readout.metric.label}</span>
-					</span>
-					<span class="text-text-tertiary mt-2 block text-xs leading-relaxed">
-						{readout.detail}
-					</span>
-					<span class="mt-3 block text-xs font-semibold text-teal-300">
-						{actionLabel(readout.state, readout.action)}
-					</span>
-					<span class="text-text-quaternary mt-2 block text-xs leading-relaxed">
-						{readout.gate}
-					</span>
-				</a>
-			{/each}
-		</div>
 
 		<!-- Config summary -->
 		<div
@@ -591,19 +336,18 @@
 			{#if !abWinnerMetricSupported}
 				<div class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
 					<p class="text-xs font-medium text-amber-300">
-						Verified-action A/B winner selection is not armed
+						This test uses a winner measure that is no longer tracked
 					</p>
 					<p class="text-text-tertiary mt-1 text-xs leading-relaxed">
-						This older experiment names a winner metric that is not backed by the current picker. A
-						recorded winner id can still preserve exact remainder custody; otherwise create a new
-						open/click experiment.
+						If a winner was already recorded, the held-back group can still receive the winning
+						email. Otherwise, create a new test that picks its winner by opens or clicks.
 					</p>
 				</div>
 			{/if}
 			{#if abWinnerPickedAt && data.remainderDraft}
 				<p class="text-text-tertiary text-sm">
-					Winner marker recorded for Variant {abWinnerVariant?.abVariant ?? 'A'}. The held-back
-					remainder cohort has been materialized as an exact draft with status
+					Variant {abWinnerVariant?.abVariant ?? 'A'} won. A follow-up email for the held-back group
+					is saved with status
 					<span class="text-text-secondary font-mono">{data.remainderDraft.status}</span>.
 				</p>
 				<div class="flex flex-wrap gap-2 pt-1">
@@ -665,20 +409,20 @@
 				{/if}
 			{:else if abWinnerPickedAt && data.abCohort?.remainderCount}
 				<p class="text-text-tertiary text-sm">
-					Winner marker exists, but this experiment has no recorded winner id for its unsupported
-					metric. The held-back cohort remains preserved; create a new open/click experiment before
-					claiming automated continuation.
+					A winner was marked, but this older test didn't record which email won. The held-back
+					group is unchanged; create a new test that picks its winner by opens or clicks.
 				</p>
 			{:else if abWinnerPickedAt}
 				<p class="text-text-tertiary text-sm">
-					Winner marker recorded for Variant {abWinnerVariant?.abVariant ?? 'A'}, but this older
-					test has no stored cohort snapshot. Create a new A/B test to preserve the remainder
-					contract.
+					Variant {abWinnerVariant?.abVariant ?? 'A'} won, but this older test has no saved
+					recipient snapshot, so there is no held-back group to follow up with. Create a new A/B
+					test to keep one.
 				</p>
 			{:else if hasDraftAbVariant}
 				<p class="text-text-tertiary text-sm">
-					Linked variant drafts exist{data.abCohort ? ' with exact test-cohort filters' : ''}. The
-					runner will not reselect tags or saved segments.
+					Both variant drafts are saved{data.abCohort
+						? ' with their exact recipient groups'
+						: ''}. Recipients are not reselected at send time.
 				</p>
 				{#if serverDispatchRuntimeArmed}
 					<form method="POST" action="?/sendTestCohorts" class="pt-1">
@@ -686,20 +430,18 @@
 							type="submit"
 							class="rounded-md bg-teal-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-teal-500"
 						>
-							Queue test cohorts
+							Send to test groups
 						</button>
 					</form>
-				{:else}
-					<p class="text-text-quaternary text-xs">
-						Exact test-cohort queueing is wired, but this runtime keeps the variants draft-only
-						until SES, org-key, and unsubscribe dependencies pass.
-					</p>
 				{/if}
 			{:else}
 				<p class="text-text-tertiary text-sm">
-					Sibling variants are visible here. The winner picker can mark the stronger sent variant;
-					the stored runner keeps test and remainder dispatch bounded by exact cohort snapshots.
+					Both variants appear here. Once results come in, the stronger one can be marked the
+					winner and sent to the held-back group.
 				</p>
+			{/if}
+			{#if emailLimitNotice}
+				<BoundedNotice notice={emailLimitNotice} />
 			{/if}
 			{#if form?.error}
 				<p class="text-sm text-red-400">{form.error}</p>
@@ -751,7 +493,7 @@
 		{/if}
 	{/if}
 
-	<!-- Delivery receipts surface — bounded per-recipient send register -->
+	<!-- Per-recipient delivery receipts -->
 	<div
 		id="email-receipt-evidence"
 		class="border-surface-border bg-surface-base flex items-center justify-between gap-4 rounded-md border p-6"
@@ -759,14 +501,13 @@
 		<div>
 			<h3 class="text-text-secondary text-sm font-medium">Delivery receipts</h3>
 			<p class="font-brand text-text-tertiary mt-1 text-xs">
-				Per-recipient SES messageId, status, and error appear when this blast has receipt rows. Sent
-				counters alone are not treated as durable receipt proof.
+				Each recipient's delivery receipt records the message ID, status, and any error.
 				{#if data.receiptSummary.pageCount > 0}
-					Loaded {data.receiptSummary.pageCount} receipt row{data.receiptSummary.pageCount === 1
+					{data.receiptSummary.pageCount} receipt{data.receiptSummary.pageCount === 1
 						? ''
-						: 's'}{data.receiptSummary.hasMore ? ' on the first page' : ''}.
+						: 's'} loaded{data.receiptSummary.hasMore ? ' so far' : ''}.
 				{:else}
-					No receipt rows are loaded for this record.
+					No delivery receipts yet.
 				{/if}
 			</p>
 		</div>
@@ -780,17 +521,13 @@
 		class="border-surface-border bg-surface-base space-y-2 rounded-md border p-6"
 	>
 		<div class="flex items-baseline justify-between gap-4">
-			<h3 class="text-text-secondary text-sm font-medium">List-health response</h3>
+			<h3 class="text-text-secondary text-sm font-medium">List health</h3>
 			<span class="text-text-tertiary font-mono text-xs">
-				{suppressedSignal.toLocaleString()} bounce/complaint counter{suppressedSignal === 1
-					? ''
-					: 's'}
+				{suppressedSignal.toLocaleString()} bounced or complained
 			</span>
 		</div>
 		<p class="font-brand text-text-tertiary text-xs">
-			Bounce and complaint counters are delivery-record evidence. People suppression updates remain
-			the list-health source of truth; this page does not invent a complete campaign-level complaint
-			metric.
+			Bounces and complaints from this send update each person's email status automatically.
 		</p>
 	</div>
 

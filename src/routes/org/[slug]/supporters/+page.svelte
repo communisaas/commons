@@ -4,50 +4,19 @@
 	import { page } from '$app/stores';
 	import { Upload } from '@lucide/svelte';
 	import VerificationPipeline from '$lib/components/org/VerificationPipeline.svelte';
-	import WorkspaceCapabilityStrip from '$lib/components/org/os/WorkspaceCapabilityStrip.svelte';
 	import SegmentBuilder from '$lib/components/segments/SegmentBuilder.svelte';
-	import {
-		buildEmailListHealthReadiness,
-		buildPeopleSegmentationReadiness,
-		buildPeopleSourceProvenanceReadiness,
-		formatGateEvidence,
-		getDataHonestyEvidence,
-		getGateEvidence,
-		type CapabilityState
-	} from '$lib/data/capability-hypergraph';
 	import {
 		PEOPLE_SOURCE_FILTER_OPTIONS,
 		formatPeopleSourceLabel
 	} from '$lib/data/platform-export-profiles';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel
-	} from '$lib/data/capability-state-labels';
 	import { Datum } from '$lib/design';
 	import type { PageData } from './$types';
 
 	type TagView = { id: string; name: string; supporterCount?: number };
-	type CapabilityItem = {
-		label: string;
-		state: CapabilityState;
-		phase: string;
-		cluster: string;
-		action: string;
-		detail: string;
-		unlock: string;
-		href: string;
-		metric?: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-	};
 	type PeopleLedgerMetric = {
 		value: number | null;
 		label: string;
-		cite: string;
 	};
-	type PeopleRowDrilldownMetric = PeopleLedgerMetric;
 
 	let { data }: { data: PageData } = $props();
 	const tags = $derived((data.tags ?? []) as TagView[]);
@@ -183,13 +152,6 @@
 		if (key === 'q') searchInputOverride = '';
 	}
 
-	function weakestCapabilityState(states: CapabilityState[]): CapabilityState {
-		if (states.includes('gated')) return 'gated';
-		if (states.includes('draft-only')) return 'draft-only';
-		if (states.includes('partial')) return 'partial';
-		return 'live';
-	}
-
 	// Active filter chips
 	const activeChips = $derived(buildActiveChips());
 
@@ -237,255 +199,12 @@
 
 	// Role check
 	const canEdit = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
-	const verificationTrustGate = getGateEvidence('CP-mainnet-deployment', ['T3-6', 'T5-3'], {
-		name: 'Verification trust hardening',
-		dependency: 'Scroll mainnet DistrictRegistry + TEE resolver attestation'
-	});
-	const platformApiGate = getGateEvidence('CP-platform-api-sync', ['T1-3'], {
-		name: 'Platform API sync',
-		downstream: 1,
-		dependency: 'Encrypted API-key contracts + paginated per-platform clients'
-	});
-	const emailProxyGate = getGateEvidence('CP-2', ['T2-2'], {
-		name: 'Email send proxy',
-		dependency: 'AWS Lambda deploy + BLAST receipts secret sync'
-	});
-	const listUnsubscribeGate = getGateEvidence('CP-list-unsubscribe', ['T2-4'], {
-		name: 'List-Unsubscribe headers',
-		downstream: 2,
-		dependency: 'SES v2 Simple.Headers + per-recipient HMAC URL on the Convex path'
-	});
-	const listUnsubscribeProviderGate = getGateEvidence(
-		'CP-list-unsubscribe-provider-rendering',
-		['T2-4b'],
-		{
-			name: 'Mailbox unsubscribe rendering',
-			downstream: 1,
-			dependency: 'Production Gmail/Yahoo seed sends confirming one-click affordance rendering'
-		}
-	);
-	const softBounceGate = getGateEvidence('CP-soft-bounce-categorization', ['T2-5'], {
-		name: 'Soft-bounce suppression',
-		downstream: 1,
-		dependency: '3-strike transient bounce threshold + suppressedEmails TTL'
-	});
-	const customDomainGate = getGateEvidence('CP-custom-domain-dkim', ['T2-6'], {
-		name: 'Sender domain authentication',
-		downstream: 2,
-		dependency: 'Per-org SES identity, DKIM, DMARC, and From-domain verification'
-	});
-	const civicGeographyLabelsGate = getGateEvidence('CP-civic-geography-labels', ['T1-8c'], {
-		name: 'Civic geography labels',
-		downstream: 1,
-		dependency: 'Supporter civic-label materialization/backfill'
-	});
-	const softBounceHonesty = getDataHonestyEvidence('V-7', null, {
-		live: 'Soft-bounce threshold evidence is verified against webhook and suppression rows.',
-		gated: 'Soft-bounce threshold evidence is unresolved.',
-		gate: 'Verify soft-bounce threshold handling before claiming suppression integrity.'
-	});
-	const verificationSignalCount = $derived(
-		Math.max(data.summary.postal, data.summary.district, data.summary.verified)
-	);
-	const verificationSignalState = $derived<CapabilityState>(
-		verificationTrustGate.state === 'live' && verificationSignalCount > 0
-			? 'live'
-			: verificationSignalCount > 0
-				? 'partial'
-				: 'draft-only'
-	);
 	const peopleLedgerMetrics = $derived<PeopleLedgerMetric[]>([
-		{
-			value: data.total,
-			label: 'people loaded',
-			cite: 'supporters.getSummaryStats total'
-		},
-		{
-			value: data.summary.postal,
-			label: 'address evidence',
-			cite: 'supporters.getSummaryStats postal'
-		},
-		{
-			value: data.summary.district,
-			label: 'district signal',
-			cite: 'supporters.getSummaryStats district'
-		},
-		{
-			value: data.summary.verified,
-			label: 'identity verified',
-			cite: 'supporters.getSummaryStats verified'
-		},
-		{
-			value: data.emailHealth.subscribed,
-			label: 'subscribed reach',
-			cite: 'supporters.getSummaryStats emailHealth.subscribed'
-		}
-	]);
-	const baseHref = $derived(`/org/${data.org.slug}`);
-	const peopleSourceProvenanceReadiness = $derived(
-		buildPeopleSourceProvenanceReadiness({
-			base: baseHref,
-			sourceCounts: data.sourceCounts,
-			totalPeople: data.total,
-			platformApiGate
-		})
-	);
-	const peopleSegmentation = $derived(data.segmentation ?? null);
-	const peopleSegmentationReadiness = $derived(
-		buildPeopleSegmentationReadiness({
-			base: baseHref,
-			segmentation: {
-				loaded: Boolean(peopleSegmentation),
-				segmentCount: peopleSegmentation?.segmentCount ?? null,
-				conditionCount: peopleSegmentation?.conditionCount ?? null,
-				tagConditionCount: peopleSegmentation?.tagConditionCount ?? null,
-				verificationConditionCount: peopleSegmentation?.verificationConditionCount ?? null,
-				sourceConditionCount: peopleSegmentation?.sourceConditionCount ?? null,
-				emailStatusConditionCount: peopleSegmentation?.emailStatusConditionCount ?? null,
-				dateConditionCount: peopleSegmentation?.dateConditionCount ?? null,
-				postalCountryConditionCount: peopleSegmentation?.postalCountryConditionCount ?? null,
-				stateCodeConditionCount: peopleSegmentation?.stateCodeConditionCount ?? null,
-				congressionalDistrictConditionCount:
-					peopleSegmentation?.congressionalDistrictConditionCount ?? null,
-				campaignParticipationConditionCount:
-					peopleSegmentation?.campaignParticipationConditionCount ?? null,
-				actionDistrictHashConditionCount:
-					peopleSegmentation?.actionDistrictHashConditionCount ?? null,
-				actionDistrictLabelConditionCount:
-					peopleSegmentation?.actionDistrictLabelConditionCount ?? null,
-				engagementTierConditionCount: peopleSegmentation?.engagementTierConditionCount ?? null,
-				humanReadableGeographyConditionCount:
-					peopleSegmentation?.humanReadableGeographyConditionCount ?? null
-			},
-			gates: {
-				civicGeographyLabelsGate,
-				platformApiGate
-			}
-		})
-	);
-	const emailListHealthReadiness = $derived(
-		buildEmailListHealthReadiness({
-			base: baseHref,
-			emailHealth: {
-				loaded: true,
-				subscribed: data.emailHealth.subscribed,
-				unsubscribed: data.emailHealth.unsubscribed,
-				bounced: data.emailHealth.bounced,
-				complained: data.emailHealth.complained,
-				consentEvidenceCount: data.consentEvidence?.email ?? null,
-				subscribedConsentEvidenceCount: data.consentEvidence?.emailSubscribed ?? null
-			},
-			gates: {
-				emailProxyGate,
-				listUnsubscribeGate,
-				listUnsubscribeProviderGate,
-				softBounceGate,
-				customDomainGate
-			},
-			honesty: {
-				softBounceThreshold: softBounceHonesty
-			}
-		})
-	);
-	const rowDrilldownState = $derived<CapabilityState>(
-		weakestCapabilityState([peopleSegmentationReadiness.state, civicGeographyLabelsGate.state])
-	);
-	const rowDrilldownAction = $derived(
-		operatorCapabilityActionLabel(
-			rowDrilldownState,
-			activeChips.length > 0 ? 'read filtered row evidence' : 'shape row drilldown'
-		)
-	);
-	const rowDrilldownNext = $derived(
-		formatGateEvidence(civicGeographyLabelsGate, {
-			prefix:
-				'Row drilldown can target imported and action-time labels; verified local and special district labels remain gated.',
-			density: 'operator'
-		})
-	);
-	const rowDrilldownMetrics = $derived<PeopleRowDrilldownMetric[]>([
-		{
-			value: allSupporters.length,
-			label: 'page rows',
-			cite: 'supporters.list page rows'
-		},
-		{
-			value: data.total,
-			label: 'total people',
-			cite: 'supporters.getSummaryStats total'
-		},
-		{
-			value: activeChips.length,
-			label: 'active filters',
-			cite: 'URL filter state'
-		},
-		{
-			value: tags.length,
-			label: 'tag labels',
-			cite: 'supporters.getTags'
-		}
-	]);
-	const capabilityItems = $derived<CapabilityItem[]>([
-		{
-			label: 'People verification signal',
-			state: verificationSignalState,
-			phase: 'GROUND',
-			cluster: 'C-verification / C-data-sovereignty',
-			action: data.total > 0 ? 'read proof weight' : 'import people',
-			detail:
-				'Postal, district, and identity signals are loaded as reach weight, not CRM decoration.',
-			unlock: formatGateEvidence(verificationTrustGate, {
-				prefix: 'Move district and resolver trust beyond testnet/local assumptions.'
-			}),
-			href:
-				data.total > 0
-					? '#people-verification'
-					: `/org/${data.org.slug}/supporters/import#csv-intake`,
-			metric: {
-				value: data.summary.verified,
-				label: 'identity verified',
-				cite: 'supporters.getSummaryStats'
-			}
-		},
-		{
-			label: 'People source custody',
-			state: peopleSourceProvenanceReadiness.state,
-			phase: 'GROUND',
-			cluster: 'C-data-sovereignty / C-reach',
-			action: peopleSourceProvenanceReadiness.action,
-			detail: peopleSourceProvenanceReadiness.effect,
-			unlock: peopleSourceProvenanceReadiness.gate,
-			href: peopleSourceProvenanceReadiness.href,
-			metric: peopleSourceProvenanceReadiness.metric
-		},
-		{
-			label: 'People segmentation posture',
-			state: peopleSegmentationReadiness.state,
-			phase: 'AUTHOR / GROUND',
-			cluster: 'C-reach / C-data-sovereignty',
-			action: peopleSegmentationReadiness.action,
-			detail: peopleSegmentationReadiness.effect,
-			unlock: formatGateEvidence(peopleSegmentationReadiness.nextGate, {
-				prefix: peopleSegmentationReadiness.detail,
-				density: 'operator'
-			}),
-			href: peopleSegmentationReadiness.href,
-			metric: peopleSegmentationReadiness.metric
-		},
-		{
-			label: 'Consent-bound reach',
-			state: emailListHealthReadiness.state,
-			phase: 'GROUND / SEND',
-			cluster: 'C-reach / C-data-sovereignty',
-			action: emailListHealthReadiness.action,
-			detail: emailListHealthReadiness.effect,
-			unlock: formatGateEvidence(emailListHealthReadiness.nextGate, {
-				prefix: emailListHealthReadiness.detail,
-				density: 'operator'
-			}),
-			href: emailListHealthReadiness.href,
-			metric: emailListHealthReadiness.metric
-		}
+		{ value: data.total, label: 'people' },
+		{ value: data.summary.postal, label: 'with addresses' },
+		{ value: data.summary.district, label: 'with districts' },
+		{ value: data.summary.verified, label: 'identity verified' },
+		{ value: data.emailHealth.subscribed, label: 'subscribed' }
 	]);
 
 	// Verification status helper
@@ -567,16 +286,16 @@
 	<!-- Header -->
 	<div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
 		<div class="min-w-0 space-y-3">
-			<h1 class="text-text-primary text-xl font-semibold">People ledger</h1>
+			<h1 class="text-text-primary text-xl font-semibold">People</h1>
 			<div
 				class="flex max-w-4xl flex-wrap items-center gap-x-4 gap-y-2"
-				aria-label="People ledger evidence counts"
+				aria-label="People counts"
 			>
 				{#each peopleLedgerMetrics as metric (metric.label)}
 					<span
 						class="text-text-secondary inline-flex min-w-0 items-baseline gap-1 font-mono text-[0.68rem] tracking-wider uppercase"
 					>
-						<Datum value={metric.value} cite={metric.cite} />
+						<Datum value={metric.value} />
 						<span>{metric.label}</span>
 					</span>
 				{/each}
@@ -594,8 +313,6 @@
 			{/if}
 		</div>
 	</div>
-
-	<WorkspaceCapabilityStrip label="People capability" items={capabilityItems} />
 
 	<!-- Verification Pipeline Hero -->
 	{#if data.total > 0}
@@ -617,14 +334,8 @@
 			class="border-surface-border bg-surface-base flex flex-col gap-3 rounded-md border px-5 py-4"
 		>
 			<div class="flex flex-wrap items-center gap-3">
-				<span class="text-text-secondary text-xs font-medium">Source custody</span>
-				<span class="text-text-tertiary min-w-0 text-xs"
-					>{peopleSourceProvenanceReadiness.signal}</span
-				>
+				<span class="text-text-secondary text-xs font-medium">Where your people came from</span>
 			</div>
-			<p class="text-text-quaternary text-xs leading-relaxed">
-				{peopleSourceProvenanceReadiness.detail}
-			</p>
 			{#if visibleSourceRows.length > 0}
 				<div class="flex flex-wrap items-center gap-2">
 					{#each visibleSourceRows as row}
@@ -654,12 +365,8 @@
 		>
 			<div class="min-w-0 space-y-1">
 				<div class="flex flex-wrap items-center gap-3">
-					<span class="text-text-secondary text-xs font-medium">Consent-bound Reach</span>
-					<span class="text-text-tertiary min-w-0 text-xs">{emailListHealthReadiness.signal}</span>
+					<span class="text-text-secondary text-xs font-medium">Email reach</span>
 				</div>
-				<p class="text-text-quaternary text-xs leading-relaxed">
-					{emailListHealthReadiness.effect}
-				</p>
 			</div>
 			<div class="flex flex-wrap items-center gap-4">
 				<span class="inline-flex items-center gap-1.5 text-xs">
@@ -681,99 +388,6 @@
 			</div>
 		</div>
 	{/if}
-
-	<!-- Ledger boundary -->
-	{#if data.total > 0}
-		<section
-			id="people-ledger-boundary"
-			aria-label="People ledger row evidence boundary"
-			class="border-surface-border bg-surface-base grid gap-4 rounded-md border px-5 py-4 md:grid-cols-[minmax(0,1fr)_auto]"
-		>
-			<div class="min-w-0 space-y-2">
-				<div class="space-y-1">
-					<p class="text-text-tertiary font-mono text-[0.68rem] tracking-wider uppercase">
-						Ledger boundary
-					</p>
-					<h2 class="text-text-primary text-sm font-medium">
-						Person rows are drilldown, not proof by themselves
-					</h2>
-				</div>
-				<p class="text-text-quaternary max-w-3xl text-xs leading-relaxed">
-					Rows below are encrypted person records and filter drilldown. Capability claims above come
-					from aggregate verification, source custody, segmentation, and consent evidence.
-				</p>
-				<p class="text-text-tertiary text-xs leading-relaxed">
-					{formatGateEvidence(civicGeographyLabelsGate, {
-						prefix:
-							'Imported state/congressional and action-time district labels are targetable; action-district hashes are evidence, not readable district labels.',
-						density: 'operator'
-					})}
-				</p>
-			</div>
-			<div class="grid min-w-0 grid-cols-3 gap-3 md:min-w-72">
-				<div class="bg-surface-overlay flex min-w-0 flex-col gap-1 rounded px-3 py-2">
-					<span class="text-text-primary text-sm leading-none">
-						<Datum value={allSupporters.length} cite="supporters.list page rows" />
-					</span>
-					<span class="text-text-quaternary truncate text-[0.68rem] uppercase">page rows</span>
-				</div>
-				<div class="bg-surface-overlay flex min-w-0 flex-col gap-1 rounded px-3 py-2">
-					<span class="text-text-primary text-sm leading-none">
-						<Datum value={data.total} cite="supporters.getSummaryStats total" />
-					</span>
-					<span class="text-text-quaternary truncate text-[0.68rem] uppercase">total people</span>
-				</div>
-				<div class="bg-surface-overlay flex min-w-0 flex-col gap-1 rounded px-3 py-2">
-					<span class="text-text-primary text-sm leading-none">
-						<Datum value={activeChips.length} cite="URL filter state" />
-					</span>
-					<span class="text-text-quaternary truncate text-[0.68rem] uppercase">filters</span>
-				</div>
-			</div>
-		</section>
-	{/if}
-
-	<section
-		id="people-row-drilldown-controls"
-		aria-label="People row drilldown controls"
-		data-state={rowDrilldownState}
-		class="border-surface-border bg-surface-base grid gap-4 rounded-md border px-5 py-4 md:grid-cols-[minmax(0,1fr)_auto]"
-	>
-		<div class="min-w-0 space-y-2">
-			<div class="flex flex-wrap items-center gap-2">
-				<span class="text-text-tertiary font-mono text-[0.68rem] tracking-wider uppercase">
-					Row drilldown
-				</span>
-				<span class="text-text-secondary font-mono text-[0.68rem] tracking-wider uppercase">
-					{operatorCapabilityStateLabel(rowDrilldownState)}
-				</span>
-				<span class="text-text-tertiary text-xs">{rowDrilldownAction}</span>
-			</div>
-			<h2 class="text-text-primary text-sm font-medium">
-				Encrypted rows stay drilldown; aggregate proof stays above
-			</h2>
-			<p class="text-text-quaternary max-w-3xl text-xs leading-relaxed">
-				Source, tag, status, and cohort controls constrain the ledger without promoting person rows
-				into People capability proof.
-			</p>
-			<p class="text-text-tertiary text-xs leading-relaxed">
-				<span class="text-text-secondary font-mono text-[0.68rem] tracking-wider uppercase"
-					>Next</span
-				>
-				{rowDrilldownNext}
-			</p>
-		</div>
-		<div class="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-4 md:min-w-[26rem]">
-			{#each rowDrilldownMetrics as metric (metric.label)}
-				<div class="bg-surface-overlay flex min-w-0 flex-col gap-1 rounded px-3 py-2">
-					<span class="text-text-primary text-sm leading-none">
-						<Datum value={metric.value} cite={metric.cite} />
-					</span>
-					<span class="text-text-quaternary truncate text-[0.68rem] uppercase">{metric.label}</span>
-				</div>
-			{/each}
-		</div>
-	</section>
 
 	<!-- Search -->
 	<div class="relative">
@@ -948,11 +562,7 @@
 				{tags}
 				campaigns={data.campaigns}
 				showBulkActions={true}
-				civicGeographyBoundary={formatGateEvidence(civicGeographyLabelsGate, {
-					prefix:
-						'Imported state/congressional and action-time district labels are targetable; verified local and special district labels remain gated.',
-					density: 'operator'
-				})}
+				civicGeographyBoundary="Geography filters use imported state and congressional districts, plus districts recorded when people take action."
 			/>
 		</div>
 	{/if}
