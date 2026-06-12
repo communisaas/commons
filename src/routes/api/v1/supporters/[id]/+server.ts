@@ -33,6 +33,9 @@ export const GET: RequestHandler = async ({ request, params }) => {
 	return apiOk({
 		id: supporter._id,
 		encryptedEmail: supporter.encryptedEmail,
+		// Org-scoped hash — required as AAD input when decrypting the
+		// encrypted blobs with the org key (see SDK README).
+		emailHash: supporter.emailHash,
 		encryptedName: supporter.encryptedName ?? null,
 		postalCode: supporter.postalCode,
 		stateCode: supporter.stateCode ?? null,

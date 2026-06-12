@@ -98,6 +98,9 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		.map((s) => ({
 			id: s._id,
 			encryptedEmail: s.encryptedEmail,
+			// Org-scoped hash — required as AAD input when decrypting the
+			// encrypted blobs with the org key (see SDK README).
+			emailHash: s.emailHash,
 			encryptedName: s.encryptedName ?? null,
 			postalCode: s.postalCode,
 			stateCode: s.stateCode ?? null,

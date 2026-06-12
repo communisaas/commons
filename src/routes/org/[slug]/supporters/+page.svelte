@@ -2,7 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { Upload } from '@lucide/svelte';
+	import { Download, Upload } from '@lucide/svelte';
 	import VerificationPipeline from '$lib/components/org/VerificationPipeline.svelte';
 	import SegmentBuilder from '$lib/components/segments/SegmentBuilder.svelte';
 	import {
@@ -96,6 +96,138 @@
 	// Helper to get decrypted value or fallback
 	function pii(supporterId: string, field: 'email' | 'name' | 'phone'): string {
 		return decryptedPii[supporterId]?.[field] || '\u2014';
+	}
+
+	// \u2500\u2500 CSV takeout (decrypted in this browser, downloaded as files) \u2500\u2500
+	let exporting = $state(false);
+	let exportStatus = $state('');
+	let exportNotice = $state('');
+	let exportError = $state('');
+	let showExportPassphrase = $state(false);
+	let exportPassphrase = $state('');
+	let exportPassphraseError = $state('');
+
+	async function startExport() {
+		if (exporting) return;
+		exportError = '';
+		exportNotice = '';
+
+		const verifier = data.encryption?.orgKeyVerifier;
+		if (!verifier) {
+			exportError = 'Set up the organization passphrase before exporting.';
+			return;
+		}
+
+		try {
+			const { getOrPromptOrgKey } = await import('$lib/services/org-key-manager');
+			const orgKey = await getOrPromptOrgKey(data.org.id, verifier);
+			if (!orgKey) {
+				showExportPassphrase = true;
+				return;
+			}
+			await runExport(orgKey);
+		} catch (err) {
+			exportError = err instanceof Error ? err.message : 'Export failed.';
+		}
+	}
+
+	async function onExportPassphraseSubmit() {
+		const verifier = data.encryption?.orgKeyVerifier;
+		if (!exportPassphrase.trim() || !verifier) return;
+		exportPassphraseError = '';
+		try {
+			const { deriveAndCacheOrgKey } = await import('$lib/services/org-key-manager');
+			const orgKey = await deriveAndCacheOrgKey(exportPassphrase, data.org.id, verifier);
+			if (!orgKey) {
+				exportPassphraseError = 'Wrong passphrase. Please try again.';
+				return;
+			}
+			showExportPassphrase = false;
+			exportPassphrase = '';
+			await runExport(orgKey);
+		} catch (err) {
+			exportPassphraseError = err instanceof Error ? err.message : 'Key derivation failed';
+		}
+	}
+
+	async function runExport(orgKey: CryptoKey) {
+		exporting = true;
+		exportError = '';
+		exportNotice = '';
+		try {
+			const [
+				{
+					fetchAllSupporters,
+					decryptSupporterRows,
+					buildSupporterCsv,
+					buildTakeoutSidecar,
+					exportSummary,
+					takeoutFilenames,
+					downloadTextFile
+				},
+				{ getConvexClient },
+				{ api }
+			] = await Promise.all([
+				import('$lib/core/org/supporter-export'),
+				import('convex-sveltekit'),
+				import('$lib/convex')
+			]);
+
+			const convex = getConvexClient();
+
+			exportStatus = 'Fetching rows\u2026';
+			const records = await fetchAllSupporters(
+				async (cursor) => {
+					const result = await convex.query(api.supporters.list, {
+						orgSlug: data.org.slug,
+						paginationOpts: { cursor, numItems: 100 }
+					});
+					return {
+						supporters: result.supporters.map((s) => ({ ...s, id: s._id as string })),
+						nextCursor: result.nextCursor,
+						hasMore: result.hasMore
+					};
+				},
+				(fetched) => {
+					exportStatus = `Fetched ${fmt(fetched)} rows\u2026`;
+				}
+			);
+
+			const rows = await decryptSupporterRows(records, orgKey, (done, total) => {
+				exportStatus = `Decrypted ${fmt(done)} of ${fmt(total)}\u2026`;
+			});
+
+			const segmentsResult = await convex
+				.query(api.segments.list, { slug: data.org.slug })
+				.catch(() => ({ segments: [] }));
+
+			const filenames = takeoutFilenames(data.org.slug);
+			downloadTextFile(buildSupporterCsv(rows), filenames.csv, 'text/csv');
+			downloadTextFile(
+				buildTakeoutSidecar({
+					org: { slug: data.org.slug, name: data.org.name },
+					tags: tags.map((t) => ({ name: t.name, supporterCount: t.supporterCount })),
+					segments: (segmentsResult.segments ?? []).map(
+						(s: { name: string; filters: unknown; createdAt?: number; updatedAt?: number }) => ({
+							name: s.name,
+							filters: s.filters,
+							createdAt: s.createdAt,
+							updatedAt: s.updatedAt
+						})
+					)
+				}),
+				filenames.sidecar,
+				'application/json'
+			);
+
+			const total = Math.max(data.total ?? 0, rows.length);
+			exportNotice = exportSummary(rows.length, total).message;
+		} catch (err) {
+			exportError = err instanceof Error ? err.message : 'Export failed.';
+		} finally {
+			exporting = false;
+			exportStatus = '';
+		}
 	}
 
 	// Segment builder toggle
@@ -287,10 +419,7 @@
 	<div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
 		<div class="min-w-0 space-y-3">
 			<h1 class="text-text-primary text-xl font-semibold">People</h1>
-			<div
-				class="flex max-w-4xl flex-wrap items-center gap-x-4 gap-y-2"
-				aria-label="People counts"
-			>
+			<div class="flex max-w-4xl flex-wrap items-center gap-x-4 gap-y-2" aria-label="People counts">
 				{#each peopleLedgerMetrics as metric (metric.label)}
 					<span
 						class="text-text-secondary inline-flex min-w-0 items-baseline gap-1 font-mono text-[0.68rem] tracking-wider uppercase"
@@ -303,6 +432,15 @@
 		</div>
 		<div class="flex items-center gap-3 md:justify-end">
 			{#if canEdit}
+				<button
+					type="button"
+					disabled={exporting}
+					onclick={startExport}
+					class="border-surface-border-strong bg-surface-raised text-text-secondary hover:bg-surface-overlay inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					<Download size={16} strokeWidth={1.8} aria-hidden="true" />
+					{exporting ? exportStatus || 'Exporting…' : 'Export CSV'}
+				</button>
 				<a
 					href="/org/{data.org.slug}/supporters/import"
 					class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500"
@@ -313,6 +451,74 @@
 			{/if}
 		</div>
 	</div>
+
+	<!-- Export outcome -->
+	{#if exportNotice}
+		<p class="text-text-tertiary text-sm" role="status">
+			{exportNotice} Names, emails, and phones were decrypted in this browser — nothing left it.
+		</p>
+	{:else if exportError}
+		<p class="text-sm text-red-400" role="alert">{exportError}</p>
+	{/if}
+
+	<!-- Passphrase dialog for export decryption -->
+	{#if showExportPassphrase}
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+			<div
+				class="border-surface-border-strong bg-surface-raised w-full max-w-sm space-y-4 rounded-md border p-6"
+			>
+				<div>
+					<h3 class="text-text-primary text-base font-semibold">Enter organization passphrase</h3>
+					<p class="text-text-tertiary mt-1 text-sm">
+						Your passphrase decrypts people data in this browser for the download. It is never sent
+						to our servers.
+					</p>
+				</div>
+
+				{#if exportPassphraseError}
+					<div
+						class="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+					>
+						{exportPassphraseError}
+					</div>
+				{/if}
+
+				<form
+					onsubmit={(e) => {
+						e.preventDefault();
+						onExportPassphraseSubmit();
+					}}
+				>
+					<input
+						type="password"
+						bind:value={exportPassphrase}
+						placeholder="Organization passphrase"
+						class="border-surface-border-strong bg-surface-base text-text-primary placeholder-text-quaternary w-full rounded-lg border px-3 py-2 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+					/>
+					<div class="mt-4 flex gap-3">
+						<button
+							type="button"
+							class="border-surface-border-strong bg-surface-overlay text-text-primary hover:border-text-quaternary flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors"
+							onclick={() => {
+								showExportPassphrase = false;
+								exportPassphrase = '';
+								exportPassphraseError = '';
+							}}
+						>
+							Cancel
+						</button>
+						<button
+							type="submit"
+							class="flex-1 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:opacity-50"
+							disabled={!exportPassphrase.trim()}
+						>
+							Unlock & Export
+						</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	{/if}
 
 	<!-- Verification Pipeline Hero -->
 	{#if data.total > 0}
