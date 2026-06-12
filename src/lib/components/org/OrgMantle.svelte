@@ -8,11 +8,11 @@
 
   Anatomy:
     · Org identity (mark + name + role)
-    · Strong center: state-bound authoring command + draft-in-flight
+    · Strong center: authoring command + draft-in-flight
     · Ambient WATERMARK (faint Rings + Datum "authored & sent this period" + Pulse)
     · 4-mark WorkspaceSwitcher (Studio / People / Power / Results)
-    · Substrate (authority / API / webhooks / coalition / RegistryMark) —
-      ambient, not a workspace
+    · Substrate (authority / webhooks / coalition / RegistryMark) —
+      plain nav links, ambient, not a workspace
     · Right edge: SignalWell + CommandBar (cmd-K)
 
   The authoring command targets the org-scoped STUDIO interior (`/org/[slug]/studio`) — the
@@ -20,6 +20,11 @@
   public citizen entry (`/?create=true`, TemplateCreator) remains intact and is
   reachable from inside STUDIO. Draft-in-flight is read from templateDraftStore
   client-side and resumed via the public `?resumeDraft=…` contract.
+
+  The command binds to one readiness boolean from the server env probe: when
+  the authoring runtime is ready it is a live link into Studio; when it is not,
+  it renders disabled with the shared plain-language limit sentence as its
+  title and accessible label.
 
   Renders in two variants:
     'rail'   — desktop vertical rail (warm-dark Mantle ground)
@@ -33,34 +38,15 @@
 	import { PenLine } from '@lucide/svelte';
 	import { page } from '$app/stores';
 	import { templateDraftStore } from '$lib/stores/templateDraft';
-	import { Datum, Ratio, RegistryMark } from '$lib/design';
+	import { RegistryMark } from '$lib/design';
 	import { TIMING, EASING } from '$lib/design/motion';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel,
-		operatorCapabilityStateRatioSegments
-	} from '$lib/data/capability-state-labels';
-	import type { StudioAuthoringReadinessSummary } from '$lib/data/capability-hypergraph';
+	import { orgLimitSentence } from '$lib/data/org-limit-sentences';
 	import WorkspaceSwitcher, { type WorkspaceMark } from './WorkspaceSwitcher.svelte';
 	import MantleWatermark, { type WatermarkTier } from './MantleWatermark.svelte';
 	import SignalWell from './SignalWell.svelte';
 	import CommandBar from './CommandBar.svelte';
 	import ProcessDock from './os/ProcessDock.svelte';
 
-	type OperatingGroundCapabilityState = 'live' | 'partial' | 'gated' | 'testnet';
-	type CapabilityPostureState = WorkspaceMark['state'] | OperatingGroundCapabilityState;
-	type CapabilityPostureCopy = Partial<Record<CapabilityPostureState, string>>;
-	type CapabilityPostureGate = Partial<Record<CapabilityPostureState, string>>;
-	type CapabilityPostureSignal = Partial<Record<CapabilityPostureState, string>>;
-	type OperatingGroundCapability = {
-		label: string;
-		value: string;
-		state: OperatingGroundCapabilityState;
-		action: string;
-		gate: string;
-		gateSignal?: string;
-		href?: string;
-	};
 	type OrgSignal = {
 		id: string;
 		event: string;
@@ -73,11 +59,7 @@
 		marks,
 		substrateLinks,
 		signalEvents = null,
-		operatingGroundCapabilities = [],
-		posturePressureCopy = {},
-		posturePressureGate = {},
-		posturePressureSignal = {},
-		studioAuthoringReadiness = null,
+		authoringReady = false,
 		watermark,
 		variant = 'rail'
 	}: {
@@ -86,11 +68,7 @@
 		marks: WorkspaceMark[];
 		substrateLinks: { href: string; label: string; latent?: boolean }[];
 		signalEvents?: OrgSignal[] | null;
-		operatingGroundCapabilities?: OperatingGroundCapability[];
-		posturePressureCopy?: CapabilityPostureCopy;
-		posturePressureGate?: CapabilityPostureGate;
-		posturePressureSignal?: CapabilityPostureSignal;
-		studioAuthoringReadiness?: StudioAuthoringReadinessSummary | null;
+		authoringReady?: boolean;
 		watermark: { thisWeek: number | null; lastWeek: number | null; tiers: WatermarkTier[] };
 		variant?: 'rail' | 'header';
 	} = $props();
@@ -152,177 +130,30 @@
 		content: 'Author'
 	};
 
-	const capabilityLoopHref = $derived(`${base}/studio#capability-loop`);
-	const sendReadinessHref = $derived(`${base}/studio#capability-send`);
-	const gateRegisterHref = $derived(`${base}/studio#capability-gates`);
-	const authoringRuntimeReady = $derived(studioAuthoringReadiness?.runtimeReady === true);
-	const authoringCommandState = $derived<WorkspaceMark['state']>(
-		!studioAuthoringReadiness
-			? 'gated'
-			: authoringRuntimeReady
-				? studioAuthoringReadiness.state
-				: 'gated'
-	);
-	const authoringCommandLabel = $derived(
-		authoringRuntimeReady ? 'Start authoring' : 'Authoring boundary'
-	);
-	const authoringCommandSignal = $derived(
-		studioAuthoringReadiness?.signal ?? 'authoring readiness uncounted'
-	);
-	const authoringCommandBoundaryCount = $derived(studioAuthoringReadiness?.boundaryCount ?? null);
-	const authoringCommandAction = $derived(
-		operatorCapabilityActionLabel(
-			authoringCommandState,
-			authoringRuntimeReady ? 'open Studio intent' : 'context / read authoring boundary',
-			{ appendReadyArrow: true }
-		)
-	);
-	const authoringCommandGate = $derived(
-		studioAuthoringReadiness?.gate ?? 'Authoring runtime readiness has not loaded.'
-	);
-	const authoringCommandTitle = $derived(
-		`${studioAuthoringReadiness?.effect ?? 'Studio authoring readiness is uncounted.'} ${authoringCommandGate}`
-	);
-	const authoringCommandAriaLabel = $derived(
-		`${authoringCommandLabel}. ${operatorCapabilityStateLabel(authoringCommandState)}. ${authoringCommandSignal}. ${authoringCommandBoundaryCount ?? 'Uncounted'} authoring boundaries. ${authoringCommandAction}. ${authoringCommandGate}`
-	);
-
-	const postureStates = $derived<CapabilityPostureState[]>([
-		...marks.map((mark) => mark.state),
-		...operatingGroundCapabilities.map((item) => item.state)
-	]);
-	const postureCounts = $derived({
-		live: postureStates.filter((state) => state === 'live').length,
-		partial: postureStates.filter((state) => state === 'partial').length,
-		'draft-only': postureStates.filter((state) => state === 'draft-only').length,
-		gated: postureStates.filter((state) => state === 'gated').length,
-		testnet: postureStates.filter((state) => state === 'testnet').length
-	});
-	const postureTotal = $derived(postureStates.length);
-	const postureSegments = $derived(
-		operatorCapabilityStateRatioSegments(postureCounts, {
-			includeTestnet: true,
-			colors: {
-				'draft-only': 'oklch(0.72 0.14 65)',
-				gated: 'oklch(0.56 0.1 25)'
-			}
-		})
-	);
-	const posturePressureState = $derived<CapabilityPostureState>(
-		postureCounts.gated > 0
-			? 'gated'
-			: postureCounts.testnet > 0
-				? 'testnet'
-				: postureCounts['draft-only'] > 0
-					? 'draft-only'
-					: postureCounts.partial > 0
-						? 'partial'
-						: 'live'
-	);
-	const posturePressureHref = $derived(
-		posturePressureState === 'gated' || posturePressureState === 'testnet'
-			? gateRegisterHref
-			: posturePressureState === 'draft-only'
-				? sendReadinessHref
-				: capabilityLoopHref
-	);
-	const posturePressureAction = $derived(
-		posturePressureState === 'gated' || posturePressureState === 'testnet'
-			? 'context / read gate register'
-			: posturePressureState === 'draft-only'
-				? 'draft / read send readiness'
-				: 'open capability loop ->'
-	);
-	const defaultPosturePressureCopy: Record<CapabilityPostureState, string> = {
-		live: 'All visible surfaces are armed from current state.',
-		partial: 'Bounded surfaces are usable, with named trust or scope limits.',
-		'draft-only': 'Draft-only execution paths route to Send readiness.',
-		gated: 'Dependency-first surfaces route to the gate register.',
-		testnet: 'Testnet-bound surfaces route to the gate register.'
-	};
-	const defaultPosturePressureGate: Record<CapabilityPostureState, string> = {
-		live: 'No unresolved visible-surface gate.',
-		partial: 'Read bounded scope limits in the capability loop.',
-		'draft-only': 'Read the first held send mode in Send readiness.',
-		gated: 'Read the load-bearing gate in the gate register.',
-		testnet: 'Read the mainnet registry gate.'
-	};
-	const activePosturePressureCopy = $derived(
-		posturePressureCopy[posturePressureState] ?? defaultPosturePressureCopy[posturePressureState]
-	);
-	const activePosturePressureGate = $derived(
-		posturePressureGate[posturePressureState] ?? defaultPosturePressureGate[posturePressureState]
-	);
-	function defaultPosturePressureSignalFor(state: CapabilityPostureState): string {
-		if (state === 'live') return 'all visible surfaces';
-		if (state === 'partial') return `${postureCounts.partial} bounded`;
-		if (state === 'draft-only') return `${postureCounts['draft-only']} held`;
-		if (state === 'testnet') return `${postureCounts.testnet} testnet`;
-		return `${postureCounts.gated + postureCounts.testnet} held`;
-	}
-	const activePosturePressureSignal = $derived(
-		posturePressureSignal[posturePressureState] ??
-			defaultPosturePressureSignalFor(posturePressureState)
-	);
-	const posturePressureAriaLabel = $derived(
-		`Capability posture: ${operatorCapabilityStateLabel(posturePressureState)}. ${activePosturePressureSignal}. ${posturePressureAction}. ${activePosturePressureCopy}. Next unlock: ${activePosturePressureGate}`
-	);
-
-	function operatingGroundActionLabel(item: OperatingGroundCapability): string {
-		const action = item.action.trim();
-		if (!action) {
-			return operatorCapabilityActionLabel(
-				item.state,
-				item.state === 'gated' || item.state === 'testnet'
-					? 'read substrate gate'
-					: 'open substrate',
-				{ appendReadyArrow: true }
-			);
-		}
-		return operatorCapabilityActionLabel(item.state, action, {
-			appendReadyArrow: Boolean(item.href)
-		});
-	}
-
-	function operatingGroundAriaLabel(item: OperatingGroundCapability): string {
-		return `${item.label}: ${item.value}. ${operatorCapabilityStateLabel(item.state)}. ${operatingGroundActionLabel(item)}. ${item.gate}`;
-	}
-
-	function operatingGroundGateSignal(item: OperatingGroundCapability): string {
-		return item.gateSignal ?? operatorCapabilityStateLabel(item.state);
-	}
+	// The one plain-language sentence shown when the authoring runtime is held.
+	// Sourced from the shared limit-sentence module so the copy cannot drift
+	// from the server readiness probe that enforces it.
+	const authoringHeldSentence = orgLimitSentence('authoring_runtime');
 </script>
 
 {#snippet composeButton()}
-	<a
-		class="mantle-compose"
-		href={composeHref}
-		data-state={authoringCommandState}
-		aria-label={authoringCommandAriaLabel}
-		title={authoringCommandTitle}
-		data-sveltekit-preload-data="off"
-	>
-		<span class="mantle-compose-primary">
+	{#if authoringReady}
+		<a class="mantle-compose" href={composeHref} data-sveltekit-preload-data="off">
 			<PenLine class="mantle-compose-icon" aria-hidden="true" />
-			<span class="mantle-compose-label">{authoringCommandLabel}</span>
-			<span class="mantle-compose-state">{operatorCapabilityStateLabel(authoringCommandState)}</span
-			>
+			<span class="mantle-compose-label">Start authoring</span>
+		</a>
+	{:else}
+		<span
+			class="mantle-compose mantle-compose--held"
+			role="link"
+			aria-disabled="true"
+			title={authoringHeldSentence}
+			aria-label="Start authoring. {authoringHeldSentence}"
+		>
+			<PenLine class="mantle-compose-icon" aria-hidden="true" />
+			<span class="mantle-compose-label">Start authoring</span>
 		</span>
-		<span class="mantle-compose-contract" aria-hidden="true">
-			<span class="mantle-compose-axis">signal</span>
-			<span class="mantle-compose-value">{authoringCommandSignal}</span>
-			<span class="mantle-compose-axis">boundaries</span>
-			<span class="mantle-compose-value mantle-compose-value--number">
-				<Datum
-					value={authoringCommandBoundaryCount}
-					cite="buildStudioAuthoringReadiness boundaryCount"
-				/>
-			</span>
-			<span class="mantle-compose-axis">action</span>
-			<span class="mantle-compose-value mantle-compose-value--action">{authoringCommandAction}</span
-			>
-		</span>
-	</a>
+	{/if}
 {/snippet}
 
 {#snippet identityMark()}
@@ -349,7 +180,7 @@
 			{@render identityMark()}
 		</div>
 
-		<!-- Strong center: state-bound authoring command + draft-in-flight -->
+		<!-- Strong center: authoring command + draft-in-flight -->
 		<div class="mantle-center">
 			{@render composeButton()}
 			{#if draft}
@@ -372,56 +203,6 @@
 			/>
 		</div>
 
-		<div class="mantle-posture" aria-label="Capability posture across visible Commons surfaces">
-			<div class="mantle-posture-head">
-				<span class="mantle-posture-title">Capability posture</span>
-			</div>
-			<div class="mantle-posture-ratio" aria-label="Visible capability state mix">
-				<Ratio segments={postureSegments} height={8} />
-			</div>
-			<div
-				class="mantle-posture-counts"
-				role="group"
-				aria-label="{postureTotal} visible capability surfaces"
-			>
-				<span>
-					<Datum value={postureCounts.live} class="mantle-posture-datum" />
-					{operatorCapabilityStateLabel('live')}
-				</span>
-				<span>
-					<Datum value={postureCounts.partial} class="mantle-posture-datum" />
-					{operatorCapabilityStateLabel('partial')}
-				</span>
-				<span>
-					<Datum value={postureCounts['draft-only']} class="mantle-posture-datum" />
-					{operatorCapabilityStateLabel('draft-only')}
-				</span>
-				<span>
-					<Datum value={postureCounts.gated + postureCounts.testnet} class="mantle-posture-datum" />
-					{operatorCapabilityStateLabel('gated')}
-				</span>
-			</div>
-			<a
-				class="mantle-posture-pressure"
-				href={posturePressureHref}
-				data-state={posturePressureState}
-				aria-label={posturePressureAriaLabel}
-				title="{activePosturePressureCopy} Next unlock: {activePosturePressureGate}"
-				data-sveltekit-preload-data="off"
-			>
-				<span class="mantle-posture-pressure-top">
-					<span class="mantle-posture-action">{posturePressureAction}</span>
-					<span class="mantle-posture-signal"
-						>{operatorCapabilityStateLabel(posturePressureState)}</span
-					>
-				</span>
-				<span class="mantle-posture-unlock">
-					<span class="mantle-posture-unlock-label">next unlock</span>
-					<span>{activePosturePressureSignal}</span>
-				</span>
-			</a>
-		</div>
-
 		<!-- Workspace switcher: Studio / People / Power / Results -->
 		<div class="mantle-workspaces">
 			<WorkspaceSwitcher {marks} {base} orientation="vertical" />
@@ -434,56 +215,10 @@
 			<ProcessDock />
 		</div>
 
-		<!-- Substrate — ambient, not a workspace -->
+		<!-- Substrate — plain nav links, ambient, not a workspace -->
 		<div class="mantle-substrate">
 			<span class="mantle-substrate-label">Substrate</span>
-			{#if operatingGroundCapabilities.length > 0}
-				<ul class="mantle-substrate-capabilities" aria-label="Substrate status">
-					{#each operatingGroundCapabilities as item (`${item.label}-${item.value}`)}
-						<li class="mantle-substrate-row">
-							{#if item.href}
-								<a
-									href={item.href}
-									class="mantle-substrate-capability"
-									aria-label={operatingGroundAriaLabel(item)}
-									title={item.gate}
-								>
-									<span
-										class="mantle-substrate-state mantle-substrate-state--{item.state}"
-										aria-hidden="true"
-									></span>
-									<span class="mantle-substrate-name">{item.label}</span>
-									<span class="mantle-substrate-state-label"
-										>{operatorCapabilityStateLabel(item.state)}</span
-									>
-									<span class="mantle-substrate-value">{item.value}</span>
-									<span class="mantle-substrate-action">{operatingGroundActionLabel(item)}</span>
-									<span class="mantle-substrate-gate">{operatingGroundGateSignal(item)}</span>
-								</a>
-							{:else}
-								<span
-									class="mantle-substrate-capability"
-									aria-label={operatingGroundAriaLabel(item)}
-									title={item.gate}
-								>
-									<span
-										class="mantle-substrate-state mantle-substrate-state--{item.state}"
-										aria-hidden="true"
-									></span>
-									<span class="mantle-substrate-name">{item.label}</span>
-									<span class="mantle-substrate-state-label"
-										>{operatorCapabilityStateLabel(item.state)}</span
-									>
-									<span class="mantle-substrate-value">{item.value}</span>
-									<span class="mantle-substrate-action">{operatingGroundActionLabel(item)}</span>
-									<span class="mantle-substrate-gate">{operatingGroundGateSignal(item)}</span>
-								</span>
-							{/if}
-						</li>
-					{/each}
-				</ul>
-			{/if}
-			<nav class="mantle-substrate-links" aria-label="Substrate handoffs">
+			<nav class="mantle-substrate-links" aria-label="Substrate">
 				{#each substrateLinks as link (link.href)}
 					<a
 						href={link.href}
@@ -608,10 +343,6 @@
 		font-size: 0.875rem;
 	}
 
-	.mantle--header .mantle-compose-contract {
-		display: none;
-	}
-
 	.mantle-draft--inline {
 		flex: 1 1 auto;
 		flex-direction: row;
@@ -681,7 +412,7 @@
 		color: var(--org-sidebar-text-dim);
 	}
 
-	/* ─── State-bound authoring command (strong center) ─── */
+	/* ─── Authoring command (strong center) ─── */
 	.mantle-center {
 		display: flex;
 		flex-direction: column;
@@ -690,16 +421,15 @@
 
 	.mantle-compose {
 		display: flex;
-		flex-direction: column;
-		align-items: stretch;
+		align-items: center;
 		justify-content: center;
-		gap: 0.625rem;
+		gap: 0.5rem;
 		padding: 0.75rem 0.875rem;
 		border: 1px solid var(--org-sidebar-border);
-		border-left: 3px solid var(--coord-route-solid);
+		border-left: 3px solid var(--coord-verified, #10b981);
 		border-radius: 8px;
-		background: oklch(0.33 0.03 230 / 0.72);
-		color: var(--org-sidebar-text);
+		background: var(--coord-route-solid);
+		color: var(--org-sidebar-bg);
 		text-decoration: none;
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 		font-size: 0.9375rem;
@@ -711,44 +441,24 @@
 			transform var(--timing-normal) var(--easing);
 	}
 
-	.mantle-compose[data-state='live'] {
-		border-left-color: var(--coord-verified, #10b981);
-		background: var(--coord-route-solid);
-		color: var(--org-sidebar-bg);
-	}
-
-	.mantle-compose[data-state='partial'] {
-		border-left-color: var(--coord-route-solid);
-	}
-
-	.mantle-compose[data-state='draft-only'] {
-		border-left-color: oklch(0.72 0.14 65);
-		border-left-style: dashed;
-	}
-
-	.mantle-compose[data-state='gated'] {
+	/* Held: the runtime is not ready — same command, visibly dormant. The
+	   plain-language sentence rides on title/aria-label. */
+	.mantle-compose--held {
 		border-left-color: oklch(0.56 0.1 25);
 		border-left-style: dashed;
 		background: transparent;
-		color: var(--org-sidebar-text);
+		color: var(--org-sidebar-text-muted);
+		cursor: default;
 	}
 
-	.mantle-compose:hover,
-	.mantle-compose:focus-visible {
+	a.mantle-compose:hover,
+	a.mantle-compose:focus-visible {
 		border-color: var(--coord-route-solid);
 		filter: brightness(1.06);
 		outline: none;
 	}
 
-	.mantle-compose-primary {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.5rem;
-		min-width: 0;
-	}
-
-	.mantle-compose-icon {
+	.mantle-compose :global(.mantle-compose-icon) {
 		width: 1.125rem;
 		height: 1.125rem;
 		flex: 0 0 auto;
@@ -759,50 +469,6 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-	}
-
-	.mantle-compose-state {
-		flex: 0 0 auto;
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.5625rem;
-		font-weight: 700;
-		color: currentColor;
-		opacity: 0.72;
-	}
-
-	.mantle-compose-contract {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr);
-		gap: 0.1875rem 0.5rem;
-		padding-top: 0.5rem;
-		border-top: 1px solid currentColor;
-		font-weight: 500;
-		color: currentColor;
-		opacity: 0.78;
-	}
-
-	.mantle-compose-axis,
-	.mantle-compose-value {
-		min-width: 0;
-		font-size: 0.625rem;
-		line-height: 1.25;
-	}
-
-	.mantle-compose-axis {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-weight: 700;
-	}
-
-	.mantle-compose-value {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.mantle-compose-value--number,
-	.mantle-compose-value--action {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-weight: 700;
 	}
 
 	.mantle-draft {
@@ -871,154 +537,6 @@
 		display: none;
 	}
 
-	/* ─── Capability posture ─── */
-	.mantle-posture {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-		padding: 0.75rem 0.25rem 0.875rem;
-		border-top: 1px solid var(--org-sidebar-border);
-		border-bottom: 1px solid var(--org-sidebar-border);
-	}
-
-	.mantle-posture-head {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 0.5rem;
-	}
-
-	.mantle-posture-title,
-	.mantle-posture-action {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.625rem;
-		font-weight: 700;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-	}
-
-	.mantle-posture-title {
-		color: var(--org-sidebar-text-muted);
-	}
-
-	.mantle-posture-ratio {
-		width: 100%;
-	}
-
-	.mantle-posture-counts {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 0.25rem 0.5rem;
-	}
-
-	.mantle-posture-counts span {
-		display: inline-flex;
-		align-items: baseline;
-		gap: 0.25rem;
-		min-width: 0;
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.6875rem;
-		color: var(--org-sidebar-text-dim);
-	}
-
-	.mantle-posture-counts :global(.mantle-posture-datum) {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.6875rem;
-		font-weight: 700;
-		color: var(--org-sidebar-text);
-	}
-
-	.mantle-posture-pressure {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3125rem;
-		padding-left: 0.625rem;
-		border-left: 2px solid var(--coord-route-solid);
-		color: inherit;
-		text-decoration: none;
-		transition:
-			border-color var(--timing-normal) var(--easing),
-			color var(--timing-normal) var(--easing);
-	}
-
-	.mantle-posture-pressure[data-state='draft-only'],
-	.mantle-posture-pressure[data-state='gated'],
-	.mantle-posture-pressure[data-state='testnet'] {
-		border-left-style: dashed;
-	}
-
-	.mantle-posture-pressure[data-state='live'] {
-		border-left-color: var(--coord-verified, #10b981);
-	}
-
-	.mantle-posture-pressure[data-state='partial'] {
-		border-left-color: var(--coord-route-solid, #3bc4b8);
-	}
-
-	.mantle-posture-pressure[data-state='draft-only'] {
-		border-left-color: oklch(0.72 0.14 65);
-	}
-
-	.mantle-posture-pressure[data-state='gated'] {
-		border-left-color: oklch(0.56 0.1 25);
-	}
-
-	.mantle-posture-pressure[data-state='testnet'] {
-		border-left-color: oklch(0.65 0.1 245);
-	}
-
-	.mantle-posture-pressure:hover,
-	.mantle-posture-pressure:focus-visible {
-		color: var(--org-sidebar-text);
-		outline: none;
-	}
-
-	.mantle-posture-action {
-		min-width: 0;
-		color: var(--org-sidebar-text-muted);
-		text-transform: none;
-		letter-spacing: 0;
-	}
-
-	.mantle-posture-pressure-top {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 0.5rem;
-		min-width: 0;
-	}
-
-	.mantle-posture-signal {
-		flex: 0 0 auto;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.625rem;
-		font-weight: 700;
-		color: var(--org-sidebar-text);
-	}
-
-	.mantle-posture-unlock {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr);
-		gap: 0.35rem;
-		min-width: 0;
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.6875rem;
-		line-height: 1.35;
-		color: var(--org-sidebar-text-dim);
-	}
-
-	.mantle-posture-unlock-label {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.5625rem;
-		font-weight: 700;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--org-sidebar-text-muted);
-	}
-
 	/* ─── Workspaces ─── */
 	.mantle-workspaces {
 		flex: 1 1 auto;
@@ -1045,118 +563,6 @@
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
 		color: var(--org-sidebar-text-muted);
-	}
-
-	.mantle-substrate-capabilities {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3125rem;
-		list-style: none;
-		margin: 0;
-		padding: 0;
-	}
-
-	.mantle-substrate-row {
-		min-width: 0;
-	}
-
-	.mantle-substrate-capability {
-		display: grid;
-		grid-template-columns: 0.5rem minmax(0, 1fr) auto;
-		grid-template-areas:
-			'dot name state'
-			'. value value'
-			'. action gate';
-		align-items: start;
-		gap: 0.1875rem 0.375rem;
-		min-width: 0;
-		color: inherit;
-		text-decoration: none;
-	}
-
-	a.mantle-substrate-capability {
-		transition: color var(--timing-normal) var(--easing);
-	}
-
-	a.mantle-substrate-capability:hover,
-	a.mantle-substrate-capability:focus-visible {
-		color: var(--org-sidebar-text);
-		outline: none;
-	}
-
-	.mantle-substrate-state {
-		grid-area: dot;
-		margin-top: 0.1875rem;
-		width: 0.4375rem;
-		height: 0.4375rem;
-		border-radius: 4px;
-		background: var(--org-sidebar-text-dim);
-		box-shadow: 0 0 0 1px oklch(1 0 0 / 0.08);
-	}
-
-	.mantle-substrate-state--live {
-		background: var(--coord-route-solid);
-	}
-
-	.mantle-substrate-state--partial {
-		background: oklch(0.72 0.14 65);
-	}
-
-	.mantle-substrate-state--gated {
-		background: oklch(0.56 0.1 25);
-	}
-
-	.mantle-substrate-state--testnet {
-		background: oklch(0.65 0.1 245);
-	}
-
-	.mantle-substrate-name,
-	.mantle-substrate-state-label,
-	.mantle-substrate-value,
-	.mantle-substrate-action,
-	.mantle-substrate-gate {
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.6875rem;
-		line-height: 1.25;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.mantle-substrate-name {
-		grid-area: name;
-		color: var(--org-sidebar-text-dim);
-		white-space: nowrap;
-	}
-
-	.mantle-substrate-state-label {
-		grid-area: state;
-		max-width: 5.5rem;
-		color: var(--org-sidebar-text-muted);
-		text-align: right;
-		white-space: nowrap;
-	}
-
-	.mantle-substrate-value {
-		grid-area: value;
-		color: var(--org-sidebar-text);
-		white-space: nowrap;
-	}
-
-	.mantle-substrate-action {
-		grid-area: action;
-		color: var(--coord-route-solid);
-		white-space: nowrap;
-	}
-
-	.mantle-substrate-gate {
-		grid-area: gate;
-		justify-self: end;
-		max-width: 6rem;
-		color: var(--org-sidebar-text-muted);
-		font-size: 0.625rem;
-		text-align: right;
-		white-space: nowrap;
 	}
 
 	.mantle-substrate-links {

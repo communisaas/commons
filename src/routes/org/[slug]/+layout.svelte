@@ -27,7 +27,6 @@
 		summarizeCriticalPath,
 		summarizeGateRegister,
 		summarizeLaunchPressure,
-		type CapabilityState,
 		type GateEvidence
 	} from '$lib/data/capability-hypergraph';
 	import { CAPABILITY_CLUSTER_IDS } from '$lib/data/capability-clusters';
@@ -51,41 +50,7 @@
 	} from '$lib/components/org/WorkspaceSwitcher.svelte';
 	import type { WatermarkTier } from '$lib/components/org/MantleWatermark.svelte';
 
-	type OperatingGroundCapability = {
-		label: string;
-		value: string;
-		state: 'live' | 'partial' | 'gated' | 'testnet';
-		action: string;
-		gate: string;
-		gateSignal?: string;
-		href?: string;
-	};
-
 	type CapabilityCommandState = Exclude<SpotlightState, 'testnet'>;
-	type OperatingGroundReadinessSource = {
-		label?: string;
-		state: CapabilityState;
-		signal?: string;
-		action: string;
-		gate?: string;
-		boundary?: string;
-		href: string;
-		metric?: {
-			value: number | null;
-			label: string;
-			cite: string;
-		};
-		rowCount?: number;
-		boundaryCount?: number;
-		liveCount?: number;
-	};
-	type OperatingGroundReadinessOptions = {
-		label?: string;
-		value?: string;
-		state?: OperatingGroundCapability['state'];
-		gateSignal?: string;
-		href?: string;
-	};
 	type CapabilityMetricSource = {
 		metric: {
 			value: number | null;
@@ -189,64 +154,6 @@
 
 	function spotlightState(state: WorkspaceCapabilityState): SpotlightState {
 		return state;
-	}
-
-	function operatingGroundCapabilityState(
-		state: CapabilityState
-	): OperatingGroundCapability['state'] {
-		return state === 'draft-only' ? 'partial' : state;
-	}
-
-	function compactGateSignal(gate: GateEvidence): string {
-		if (gate.state === 'live') return `${gate.completed}/${gate.total} tasks complete`;
-		if (gate.downstream > 0) return `${gate.downstream} downstream`;
-		return gate.tasks;
-	}
-
-	function readinessRowSignal(rowCount: number, boundaryCount: number, liveCount: number): string {
-		if (rowCount <= 0) return 'unread rows';
-		if (boundaryCount <= 0) return `${liveCount}/${rowCount} armed`;
-		return `${boundaryCount}/${rowCount} bounded`;
-	}
-
-	function operatingGroundValue(source: OperatingGroundReadinessSource): string {
-		if (source.signal) return source.signal;
-		if (source.metric) {
-			return source.metric.value === null
-				? source.metric.label
-				: `${source.metric.value.toLocaleString('en-US')} ${source.metric.label}`;
-		}
-		return source.label ?? 'substrate';
-	}
-
-	function operatingGroundGateSignalFor(source: OperatingGroundReadinessSource): string {
-		if (
-			source.rowCount !== undefined &&
-			source.boundaryCount !== undefined &&
-			source.liveCount !== undefined
-		) {
-			return readinessRowSignal(source.rowCount, source.boundaryCount, source.liveCount);
-		}
-		if (source.state === 'live') return 'armed';
-		if (source.metric?.value !== null && source.metric?.value !== undefined) {
-			return `${source.metric.value.toLocaleString('en-US')} ${source.metric.label}`;
-		}
-		return source.metric?.label ?? source.signal ?? 'boundary';
-	}
-
-	function operatingGroundFromReadiness(
-		source: OperatingGroundReadinessSource,
-		options: OperatingGroundReadinessOptions = {}
-	): OperatingGroundCapability {
-		return {
-			label: options.label ?? source.label ?? 'Substrate',
-			value: options.value ?? operatingGroundValue(source),
-			state: options.state ?? operatingGroundCapabilityState(source.state),
-			action: source.action,
-			gate: source.boundary ?? source.gate ?? '',
-			gateSignal: options.gateSignal ?? operatingGroundGateSignalFor(source),
-			href: options.href ?? source.href
-		};
 	}
 
 	function spotlightActionForState(state: SpotlightState, action: string): string {
@@ -762,17 +669,6 @@
 				auditLogGate
 			}
 		})
-	);
-	const operatingAuthorityGroundRows = $derived(
-		operatingAuthorityReadiness.rows.filter((row) =>
-			[
-				'publish-authority',
-				'org-audit-log',
-				'public-api-ground',
-				'signed-webhooks',
-				'registry-environment'
-			].includes(row.id)
-		)
 	);
 	const publishAuthorityOperatingRow = $derived(
 		operatingAuthorityReadiness.rows.find((row) => row.id === 'publish-authority') ?? null
@@ -2032,77 +1928,9 @@
 		avatar: data.org.avatar
 	});
 
-	const operatingGroundCapabilities = $derived<OperatingGroundCapability[]>([
-		...operatingAuthorityGroundRows.map((row) =>
-			operatingGroundFromReadiness(row, {
-				label:
-					row.id === 'public-api-ground'
-						? 'Public API'
-						: row.id === 'registry-environment'
-							? 'Registry'
-							: row.label,
-				value: row.id === 'registry-environment' ? 'Sepolia testnet' : undefined,
-				state: row.id === 'registry-environment' ? 'testnet' : undefined,
-				gateSignal: row.id === 'registry-environment' ? 'testnet' : undefined
-			})
-		),
-		operatingGroundFromReadiness(fundraisingReadiness, {
-			label: 'Donation posture'
-		}),
-		operatingGroundFromReadiness(coordinationReadiness, {
-			label: 'Coordination logic'
-		}),
-		operatingGroundFromReadiness(textDeliveryReadiness, {
-			label: 'Text delivery',
-			href: `${base}/studio#capability-text-delivery`
-		}),
-		operatingGroundFromReadiness(callRoutingReadiness, {
-			label: 'Call routing',
-			href: `${base}/studio#capability-call-routing`
-		}),
-		operatingGroundFromReadiness(coalitionReadiness, {
-			label: 'Coalition layer'
-		})
-	]);
-	const mantlePartialSurfaceCount = $derived(
-		marks.filter((mark) => mark.state === 'partial').length +
-			operatingGroundCapabilities.filter((item) => item.state === 'partial').length
-	);
-	const mantleDraftOnlyPressureCopy = $derived(
-		sendReadiness.nextHeldMode
-			? `${sendReadiness.heldModeSummary}; next held mode is ${sendReadiness.nextHeldLabel}. ${sendReadiness.nextHeldMode.effect}`
-			: sendReadiness.sendBoundarySummary
-	);
-	const mantlePosturePressureCopy = $derived({
-		gated: commandGate(
-			loadBearingGate?.gate ?? delegationGate,
-			'Load-bearing capability gate remains unresolved.'
-		),
-		testnet: commandGate(mainnetGate, 'Registry-backed claims remain testnet-bound.'),
-		'draft-only': mantleDraftOnlyPressureCopy,
-		partial: 'Usable surfaces are armed, with named trust or scope limits.',
-		live: 'All visible surfaces are armed from current state.'
-	});
-	const mantlePosturePressureGate = $derived({
-		gated: loadBearingGateSummary,
-		testnet: commandGate(mainnetGate, 'Next registry unlock remains unresolved.'),
-		'draft-only': sendReadiness.nextHeldMode
-			? `${sendReadiness.nextHeldLabel}: ${sendReadiness.nextHeldGate}`
-			: sendReadiness.sendBoundaryGate,
-		partial: loadBearingGateSummary,
-		live: 'No unresolved visible-surface gate.'
-	});
-	const mantlePosturePressureSignal = $derived({
-		gated: loadBearingGate
-			? compactGateSignal(loadBearingGate.gate)
-			: compactGateSignal(delegationGate),
-		testnet: compactGateSignal(mainnetGate),
-		'draft-only': sendReadiness.nextHeldMode
-			? sendReadiness.nextHeldLabel
-			: `${heldSendModeCount} held modes`,
-		partial: `${mantlePartialSurfaceCount} bounded`,
-		live: 'all armed'
-	});
+	// The Mantle's authoring command binds to one readiness boolean from the
+	// real env probe in load data — not a derived capability summary.
+	const authoringReady = $derived(data.spaces.operating?.authoring?.runtimeReady === true);
 
 	// Measured height of the fixed mobile header, so the main content clears it
 	// exactly — no magic spacer that clips a tall header or over-pads a short one.
@@ -2129,11 +1957,7 @@
 			{marks}
 			{substrateLinks}
 			signalEvents={data.signalEvents}
-			{operatingGroundCapabilities}
-			posturePressureCopy={mantlePosturePressureCopy}
-			posturePressureGate={mantlePosturePressureGate}
-			posturePressureSignal={mantlePosturePressureSignal}
-			{studioAuthoringReadiness}
+			{authoringReady}
 			{watermark}
 			variant="rail"
 		/>
@@ -2147,11 +1971,7 @@
 			{marks}
 			{substrateLinks}
 			signalEvents={data.signalEvents}
-			{operatingGroundCapabilities}
-			posturePressureCopy={mantlePosturePressureCopy}
-			posturePressureGate={mantlePosturePressureGate}
-			posturePressureSignal={mantlePosturePressureSignal}
-			{studioAuthoringReadiness}
+			{authoringReady}
 			{watermark}
 			variant="header"
 		/>

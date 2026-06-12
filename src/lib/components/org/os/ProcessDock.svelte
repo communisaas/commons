@@ -69,7 +69,7 @@
 		<div class="dock-head">
 			<span class="dock-label">Studio runs</span>
 			<span class="dock-count">
-				<Datum value={runningCount} cite="orgOS runningProcesses" />
+				<Datum value={runningCount} />
 				running
 			</span>
 		</div>
