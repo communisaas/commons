@@ -1259,7 +1259,7 @@ describe('Message Writer — generateMessage', () => {
 				}
 			});
 
-			expect(completeMessage).toContain('2 source rows');
+			expect(completeMessage).toContain('2 sources attached');
 		});
 	});
 });

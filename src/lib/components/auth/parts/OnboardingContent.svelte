@@ -122,7 +122,7 @@
 				{
 					icon: CheckCircle2,
 					title: 'Proof waits for route completion',
-					desc: 'A receipt can be recorded only after the route-owned delivery step completes.'
+					desc: 'A receipt is recorded once your message is actually delivered.'
 				}
 			];
 		} else if (directOutreach) {
@@ -158,7 +158,7 @@
 				{
 					icon: CheckCircle2,
 					title: 'Receipt waits for completion',
-					desc: 'A receipt can be recorded only after the route-owned delivery step completes.'
+					desc: 'A receipt is recorded once your message is actually delivered.'
 				}
 			];
 		}

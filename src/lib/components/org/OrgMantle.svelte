@@ -516,6 +516,10 @@
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 		font-size: 0.8125rem;
 		color: var(--org-sidebar-text);
+		/* In the inline (mobile header) variant the title is a row-flex child;
+		   without min-width: 0 it refuses to shrink and long titles hard-clip
+		   instead of ellipsizing. Harmless in the column-flex rail variant. */
+		min-width: 0;
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;

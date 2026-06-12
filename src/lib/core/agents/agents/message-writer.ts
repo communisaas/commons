@@ -175,7 +175,7 @@ export async function generateMessage(
 	const externalCounts = emptyExternalCounts();
 
 	if (verifiedSources.length === 0) {
-		onPhase?.('sources', 'Discovering and evaluating source ground...');
+		onPhase?.('sources', 'Finding and checking sources…');
 
 		console.debug('[message-writer] Phase 1: Discovering sources...');
 
@@ -265,7 +265,7 @@ export async function generateMessage(
 	// Phase 2: Message Generation with source ground
 	// ====================================================================
 
-	onPhase?.('message', 'Writing message with source ground...');
+	onPhase?.('message', 'Writing your message…');
 
 	// Build decision-maker list for context
 	const decisionMakerList = decisionMakers
@@ -437,7 +437,12 @@ The stranger who shares this link should think "I need to send that too." Every 
 		geographicScope: data.geographic_scope?.type || 'none'
 	});
 
-	onPhase?.('complete', `Message generated with ${verifiedSourcesForOutput.length} source rows`);
+	onPhase?.(
+		'complete',
+		verifiedSourcesForOutput.length > 0
+			? `Your message is ready, with ${verifiedSourcesForOutput.length} source${verifiedSourcesForOutput.length === 1 ? '' : 's'} attached.`
+			: 'Your message is ready.'
+	);
 
 	return data;
 }

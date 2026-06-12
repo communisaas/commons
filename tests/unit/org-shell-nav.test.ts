@@ -15,6 +15,7 @@ import type {
 	WorkspaceMark
 } from '$lib/components/org/WorkspaceSwitcher.svelte';
 import type { SpotlightDestination } from '$lib/components/org/os/Spotlight.svelte';
+import { rankSpotlightMatches, spotlightScore } from '$lib/components/org/os/orgOS.svelte';
 
 const SWITCHER = 'src/lib/components/org/WorkspaceSwitcher.svelte';
 const SPOTLIGHT = 'src/lib/components/org/os/Spotlight.svelte';
@@ -128,6 +129,69 @@ describe('spotlight', () => {
 	it('guards the space switch with the URL-aware check', () => {
 		expect(spotlight).toContain('rendersSpaceForUrl($page.url, base)');
 		expect(spotlight).not.toMatch(/isSpacePath\(/);
+	});
+});
+
+describe('spotlight match ranking', () => {
+	const searchText = (d: SpotlightDestination) =>
+		[d.label, d.group, d.note].filter(Boolean).join(' ');
+
+	it('scores a substring match above a subsequence match', () => {
+		expect(spotlightScore('Calls', 'calls')).toBe(2);
+		expect(spotlightScore('Coalition and lists', 'calls')).toBe(1);
+		expect(spotlightScore('Bills', 'calls')).toBe(0);
+	});
+
+	it('ranks the exact-label match first even when an earlier destination matches by subsequence', () => {
+		const destinations: SpotlightDestination[] = [
+			{
+				id: 'route-emails',
+				label: 'Emails',
+				group: 'Studio',
+				kind: 'route',
+				href: '/org/x/emails',
+				note: 'Choose recipients and personalize fields.'
+			},
+			{
+				id: 'route-calls',
+				label: 'Calls',
+				group: 'Studio',
+				kind: 'route',
+				href: '/org/x/calls'
+			}
+		];
+		// The decoy really does match the query — but only as a subsequence.
+		expect(spotlightScore(searchText(destinations[0]), 'calls')).toBe(1);
+
+		const ranked = rankSpotlightMatches(destinations, 'calls', searchText);
+		expect(ranked[0]?.id).toBe('route-calls');
+		expect(ranked.map((d) => d.id)).toEqual(['route-calls', 'route-emails']);
+	});
+
+	it('keeps the original grouped order for an empty query and within equal score bands', () => {
+		const destinations: SpotlightDestination[] = [
+			{ id: 'a', label: 'Supporters', group: 'People', kind: 'route', href: '/org/x/supporters' },
+			{ id: 'b', label: 'Bills', group: 'Power', kind: 'route', href: '/org/x/legislation' },
+			{ id: 'c', label: 'Scorecards', group: 'Power', kind: 'route', href: '/org/x/scorecards' }
+		];
+		expect(rankSpotlightMatches(destinations, '', searchText).map((d) => d.id)).toEqual([
+			'a',
+			'b',
+			'c'
+		]);
+		// 's' is a substring of every entry — all tie, so the grouped order holds.
+		expect(rankSpotlightMatches(destinations, 's', searchText).map((d) => d.id)).toEqual([
+			'a',
+			'b',
+			'c'
+		]);
+	});
+
+	it('drops non-matches entirely', () => {
+		const destinations: SpotlightDestination[] = [
+			{ id: 'a', label: 'Emails', group: 'Studio', kind: 'route', href: '/org/x/emails' }
+		];
+		expect(rankSpotlightMatches(destinations, 'zzz', searchText)).toEqual([]);
 	});
 });
 

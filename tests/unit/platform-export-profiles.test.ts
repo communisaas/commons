@@ -4,7 +4,6 @@ import {
 	PEOPLE_IMPORT_FIELD_ALIASES,
 	PEOPLE_SOURCE_FILTER_OPTIONS,
 	PEOPLE_SOURCE_SEGMENT_OPTIONS,
-	PLATFORM_API_RUNNER_PROOF_REQUIREMENTS,
 	PLATFORM_EXPORT_PROFILES,
 	detectPlatformExportProfile,
 	formatPeopleSourceLabel
@@ -23,16 +22,6 @@ describe('platform export profiles', () => {
 			'Engaging Networks',
 			'CiviCRM',
 			'Salesforce / Nonprofit Cloud'
-		]);
-	});
-
-	it('keeps direct API runner proof requirements platform-neutral and explicit', () => {
-		expect(PLATFORM_API_RUNNER_PROOF_REQUIREMENTS).toEqual([
-			'resource pagination',
-			'consent and suppression mapping',
-			'idempotent source-key upsert',
-			'rate-limit backoff',
-			'chunked continuation checkpoint'
 		]);
 	});
 

@@ -52,7 +52,6 @@ import type { ResolutionStopReason, StudioProcessEvidence } from '$lib/types/stu
 // ─── Spaces ──────────────────────────────────────────────────────────
 export type SpaceId = 'studio' | 'base' | 'landscape' | 'return';
 
-export const SPACE_ORDER: SpaceId[] = ['studio', 'base', 'landscape', 'return'];
 export const SPACE_LABELS: Record<SpaceId, 'Studio' | 'People' | 'Power' | 'Results'> = {
 	studio: 'Studio',
 	base: 'People',
@@ -141,6 +140,38 @@ export function rendersSpaceForUrl(
 	return (
 		isSpacePath(url.pathname, base) && url.searchParams.get(FULL_VIEW_PARAM) !== FULL_VIEW_VALUE
 	);
+}
+
+// ─── Spotlight matching ──────────────────────────────────────────────
+/** Spotlight match score: a substring match beats a subsequence match;
+ * 0 = no match. An empty query matches everything at the floor score. */
+export function spotlightScore(text: string, query: string): number {
+	if (!query) return 1;
+	const t = text.toLowerCase();
+	const q = query.toLowerCase();
+	if (t.includes(q)) return 2;
+	let i = 0;
+	for (const ch of t) {
+		if (ch === q[i]) i += 1;
+		if (i === q.length) return 1;
+	}
+	return 0;
+}
+
+/** Filter to matching items and order them best match first, so Enter on the
+ * top row always takes the strongest match. The sort is stable: items with
+ * equal scores keep their original (grouped) order, and an empty query leaves
+ * the list untouched. */
+export function rankSpotlightMatches<T>(
+	items: T[],
+	query: string,
+	searchText: (item: T) => string
+): T[] {
+	return items
+		.map((item) => ({ item, score: spotlightScore(searchText(item), query) }))
+		.filter((scored) => scored.score > 0)
+		.sort((a, b) => b.score - a.score)
+		.map((scored) => scored.item);
 }
 
 // ─── Processes ───────────────────────────────────────────────────────

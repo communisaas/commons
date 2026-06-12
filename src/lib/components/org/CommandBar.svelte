@@ -23,10 +23,10 @@
 	aria-haspopup="dialog"
 	aria-expanded={os.spotlightOpen}
 	aria-keyshortcuts="Meta+K Control+K"
-	aria-label="Find capability"
+	aria-label="Search pages"
 	style="--timing-fast: {TIMING.FAST}ms; --easing: {EASING};"
 >
-	<span class="cmdk-trigger-label">Find capability</span>
+	<span class="cmdk-trigger-label">Search pages</span>
 	<kbd class="cmdk-kbd">⌘K</kbd>
 </button>
 

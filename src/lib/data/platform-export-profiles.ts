@@ -19,14 +19,6 @@ export type PlatformExportProfile = {
 	requiredAnyHeaders?: string[];
 };
 
-export const PLATFORM_API_RUNNER_PROOF_REQUIREMENTS = [
-	'resource pagination',
-	'consent and suppression mapping',
-	'idempotent source-key upsert',
-	'rate-limit backoff',
-	'chunked continuation checkpoint'
-] as const;
-
 export type PeopleImportField =
 	| 'email'
 	| 'name'

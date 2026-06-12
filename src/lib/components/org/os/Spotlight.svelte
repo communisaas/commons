@@ -12,7 +12,8 @@
 	      path so the switch is visible.
 	    · a ROUTE destination → goto.
 
-	  Fuzzy match (substring, then subsequence), keyboard-driven (↑/↓/Enter/Esc),
+	  Fuzzy match (substring outranks subsequence, best match first),
+	  keyboard-driven (↑/↓/Enter/Esc),
 	  grouped by space. Motion is ease-out (navigation-class, no spring). No data
 	  is fabricated — destinations are the real routes the org exposes, a count is
 	  a real loaded count, and a note is the plain-language limit sentence that
@@ -40,7 +41,7 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { TIMING, EASING } from '$lib/design/motion';
-	import { getOrgOS, pathForSpace, rendersSpaceForUrl } from './orgOS.svelte';
+	import { getOrgOS, pathForSpace, rankSpotlightMatches, rendersSpaceForUrl } from './orgOS.svelte';
 
 	let {
 		destinations,
@@ -56,27 +57,14 @@
 	let selected = $state(0);
 	let inputEl = $state<HTMLInputElement | null>(null);
 
-	/** Substring match scores higher than subsequence; 0 = no match. */
-	function score(label: string, q: string): number {
-		if (!q) return 1;
-		const l = label.toLowerCase();
-		const query = q.toLowerCase();
-		if (l.includes(query)) return 2;
-		let i = 0;
-		for (const ch of l) {
-			if (ch === query[i]) i += 1;
-			if (i === query.length) return 1;
-		}
-		return 0;
-	}
-
 	function destinationSearchText(d: SpotlightDestination): string {
 		return [d.label, d.group, d.note].filter(Boolean).join(' ');
 	}
 
-	// Keep the original (grouped) order so group headers stay contiguous; just
-	// filter. Substring and subsequence matches both survive.
-	const filtered = $derived(destinations.filter((d) => score(destinationSearchText(d), query) > 0));
+	// Best match first: substring outranks subsequence, so Enter on the top row
+	// takes the strongest match. The sort is stable, so equal scores keep the
+	// original grouped order — an empty query leaves the list untouched.
+	const filtered = $derived(rankSpotlightMatches(destinations, query, destinationSearchText));
 
 	// Focus + reset whenever the palette opens.
 	$effect(() => {

@@ -204,7 +204,7 @@
 		<Link2 class="mt-0.5 h-3 w-3 flex-shrink-0 md:h-3.5 md:w-3.5" aria-hidden="true" />
 		<span>
 			<span class="font-medium text-participation-primary-700">Action page link</span> —
-			after public-action publish, this opens reader confirmation. Send and proof stay route-owned.
+			after you publish, this link opens the page where readers review, send, and get their receipt.
 		</span>
 	</p>
 
