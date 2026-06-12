@@ -124,14 +124,14 @@ function tagActionError(error: unknown, fallback: string): string {
 export const load: PageServerLoad = async ({ parent, url }) => {
 	const { org, membership } = await parent();
 
-	// Parse filter params
-	const q = url.searchParams.get('q')?.trim() || '';
+	// Parse filter params. Free-text search is client-side (PII is org-key
+	// encrypted; the server cannot match against it), so no text param here.
 	const status = url.searchParams.get('status') || '';
 	const verified = url.searchParams.get('verified') || '';
 	const tagId = url.searchParams.get('tag') || '';
 	const source = url.searchParams.get('source') || '';
 	const cursor = url.searchParams.get('cursor') || '';
-	const filters = { q, status, verified, tagId, source };
+	const filters = { status, verified, tagId, source };
 
 	const convexFilters: Record<string, unknown> = {};
 	if (status && ['subscribed', 'unsubscribed', 'bounced', 'complained'].includes(status)) {
@@ -144,9 +144,6 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 	}
 	if (tagId) {
 		convexFilters.tagId = tagId;
-	}
-	if (q) {
-		convexFilters.q = q;
 	}
 
 	// Load encryption verifier for client-side PII decryption

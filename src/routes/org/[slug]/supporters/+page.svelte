@@ -9,6 +9,13 @@
 		PEOPLE_SOURCE_FILTER_OPTIONS,
 		formatPeopleSourceLabel
 	} from '$lib/data/platform-export-profiles';
+	import {
+		matchesSupporterQuery,
+		parseSearchQuery,
+		passesStructuralFilters,
+		searchCoverage
+	} from '$lib/core/org/supporter-search';
+	import type { DecryptedSupporterRow } from '$lib/core/org/supporter-export';
 	import { Datum } from '$lib/design';
 	import type { PageData } from './$types';
 
@@ -16,6 +23,20 @@
 	type PeopleLedgerMetric = {
 		value: number | null;
 		label: string;
+	};
+	/** Row decrypted in this browser for search, with its creation time. */
+	type SearchRow = DecryptedSupporterRow & { createdAt: string };
+	/** What the table renders — same shape for server pages and search results. */
+	type TableRow = {
+		id: string;
+		name: string;
+		email: string;
+		identityVerified: boolean;
+		postalCode: string | null;
+		emailStatus: string;
+		source: string | null;
+		tags: Array<{ name: string }>;
+		createdAt: string | null;
 	};
 
 	let { data }: { data: PageData } = $props();
@@ -103,9 +124,10 @@
 	let exportStatus = $state('');
 	let exportNotice = $state('');
 	let exportError = $state('');
-	let showExportPassphrase = $state(false);
-	let exportPassphrase = $state('');
-	let exportPassphraseError = $state('');
+	let showPassphraseDialog = $state(false);
+	let passphraseIntent = $state<'export' | 'search'>('export');
+	let passphraseInput = $state('');
+	let passphraseError = $state('');
 
 	async function startExport() {
 		if (exporting) return;
@@ -122,7 +144,8 @@
 			const { getOrPromptOrgKey } = await import('$lib/services/org-key-manager');
 			const orgKey = await getOrPromptOrgKey(data.org.id, verifier);
 			if (!orgKey) {
-				showExportPassphrase = true;
+				passphraseIntent = 'export';
+				showPassphraseDialog = true;
 				return;
 			}
 			await runExport(orgKey);
@@ -131,22 +154,28 @@
 		}
 	}
 
-	async function onExportPassphraseSubmit() {
+	async function onPassphraseSubmit() {
 		const verifier = data.encryption?.orgKeyVerifier;
-		if (!exportPassphrase.trim() || !verifier) return;
-		exportPassphraseError = '';
+		if (!passphraseInput.trim() || !verifier) return;
+		passphraseError = '';
 		try {
 			const { deriveAndCacheOrgKey } = await import('$lib/services/org-key-manager');
-			const orgKey = await deriveAndCacheOrgKey(exportPassphrase, data.org.id, verifier);
+			const orgKey = await deriveAndCacheOrgKey(passphraseInput, data.org.id, verifier);
 			if (!orgKey) {
-				exportPassphraseError = 'Wrong passphrase. Please try again.';
+				passphraseError = 'Wrong passphrase. Please try again.';
 				return;
 			}
-			showExportPassphrase = false;
-			exportPassphrase = '';
-			await runExport(orgKey);
+			showPassphraseDialog = false;
+			passphraseInput = '';
+			void decryptSupporterPii(data.supporters);
+			if (passphraseIntent === 'export') {
+				await runExport(orgKey);
+			} else {
+				searchLocked = false;
+				await runSearchWithKey(orgKey);
+			}
 		} catch (err) {
-			exportPassphraseError = err instanceof Error ? err.message : 'Key derivation failed';
+			passphraseError = err instanceof Error ? err.message : 'Key derivation failed';
 		}
 	}
 
@@ -247,25 +276,6 @@
 	const nextCursor = $derived(data.nextCursor);
 	let loadingMore = $state(false);
 
-	// Search debounce
-	let searchInputOverride = $state<string | undefined>();
-	const searchInput = $derived(searchInputOverride ?? data.filters.q);
-	let searchTimeout: ReturnType<typeof setTimeout> | undefined;
-
-	$effect(() => {
-		data.filters.q;
-		searchInputOverride = undefined;
-	});
-
-	function onSearchInput(e: Event) {
-		const value = (e.target as HTMLInputElement).value;
-		searchInputOverride = value;
-		clearTimeout(searchTimeout);
-		searchTimeout = setTimeout(() => {
-			updateFilter('q', value || null);
-		}, 300);
-	}
-
 	// Filter helpers
 	function updateFilter(key: string, value: string | null) {
 		const url = new URL($page.url);
@@ -281,7 +291,6 @@
 
 	function removeFilter(key: string) {
 		updateFilter(key, null);
-		if (key === 'q') searchInputOverride = '';
 	}
 
 	// Active filter chips
@@ -289,7 +298,6 @@
 
 	function buildActiveChips(): Array<{ key: string; label: string }> {
 		const chips: Array<{ key: string; label: string }> = [];
-		if (data.filters.q) chips.push({ key: 'q', label: `Search: "${data.filters.q}"` });
 		if (data.filters.status) chips.push({ key: 'status', label: `Status: ${data.filters.status}` });
 		if (data.filters.verified)
 			chips.push({
@@ -331,6 +339,211 @@
 
 	// Role check
 	const canEdit = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
+
+	// ── Free-text search (matches against rows decrypted in this browser) ──
+	// The org key never reaches the server, so substring search runs here over
+	// client-decrypted rows. A complete email address skips the scan and asks
+	// the server for the one row with that org-scoped email hash.
+	let searchInputValue = $state('');
+	let activeQuery = $state('');
+	let searchDebounce: ReturnType<typeof setTimeout> | undefined;
+
+	let scanState = $state<'idle' | 'running' | 'done' | 'error'>('idle');
+	let scanRows = $state<SearchRow[]>([]);
+	let searchLocked = $state(false);
+	let searchError = $state('');
+	let emailLookup = $state<{ email: string; row: SearchRow | null; pending: boolean } | null>(
+		null
+	);
+
+	const parsedQuery = $derived(parseSearchQuery(activeQuery));
+	const searchActive = $derived(parsedQuery.kind !== 'empty');
+	const searchEngaged = $derived(searchActive && !searchLocked);
+	const canSearch = $derived(canEdit && Boolean(data.encryption?.orgKeyVerifier));
+
+	function onSearchInput(e: Event) {
+		const value = (e.target as HTMLInputElement).value;
+		searchInputValue = value;
+		clearTimeout(searchDebounce);
+		searchDebounce = setTimeout(() => {
+			activeQuery = value;
+		}, 250);
+	}
+
+	function clearSearch() {
+		clearTimeout(searchDebounce);
+		searchInputValue = '';
+		activeQuery = '';
+	}
+
+	$effect(() => {
+		const parsed = parsedQuery;
+		if (parsed.kind === 'empty') return;
+		void ensureSearchData(parsed);
+	});
+
+	async function ensureSearchData(parsed: ReturnType<typeof parseSearchQuery>) {
+		const verifier = data.encryption?.orgKeyVerifier;
+		if (!verifier) return;
+		try {
+			const { getOrPromptOrgKey } = await import('$lib/services/org-key-manager');
+			const orgKey = await getOrPromptOrgKey(data.org.id, verifier);
+			if (!orgKey) {
+				searchLocked = true;
+				return;
+			}
+			searchLocked = false;
+			await runSearchWithKey(orgKey, parsed);
+		} catch (err) {
+			searchError = err instanceof Error ? err.message : 'Search failed.';
+		}
+	}
+
+	async function runSearchWithKey(
+		orgKey: CryptoKey,
+		parsed: ReturnType<typeof parseSearchQuery> = parseSearchQuery(activeQuery)
+	) {
+		if (parsed.kind === 'email') {
+			if (emailLookup?.email !== parsed.email) {
+				await lookupByEmail(parsed.email, orgKey);
+			}
+		} else if (parsed.kind === 'text' && (scanState === 'idle' || scanState === 'error')) {
+			await scanAllRows(orgKey);
+		}
+	}
+
+	/**
+	 * Decrypt the whole reachable list once, page by page, so text queries can
+	 * match against plaintext that exists only in this browser.
+	 */
+	async function scanAllRows(orgKey: CryptoKey) {
+		scanState = 'running';
+		searchError = '';
+		scanRows = [];
+		try {
+			const [{ fetchAllSupporters, decryptSupporterRows }, { getConvexClient }, { api }] =
+				await Promise.all([
+					import('$lib/core/org/supporter-export'),
+					import('convex-sveltekit'),
+					import('$lib/convex')
+				]);
+			const convex = getConvexClient();
+			const collected: SearchRow[] = [];
+			await fetchAllSupporters(async (cursor) => {
+				const result = await convex.query(api.supporters.list, {
+					orgSlug: data.org.slug,
+					paginationOpts: { cursor, numItems: 100 }
+				});
+				const records = result.supporters.map((s) => ({ ...s, id: s._id as string }));
+				const decrypted = await decryptSupporterRows(records, orgKey);
+				collected.push(
+					...decrypted.map((row, i) => ({
+						...row,
+						createdAt: new Date(result.supporters[i]._creationTime).toISOString()
+					}))
+				);
+				scanRows = [...collected];
+				return { supporters: records, nextCursor: result.nextCursor, hasMore: result.hasMore };
+			});
+			scanState = 'done';
+		} catch (err) {
+			scanState = 'error';
+			searchError = err instanceof Error ? err.message : 'Search failed.';
+		}
+	}
+
+	/**
+	 * Exact-email path: hash the address with the org-scoped hash in this
+	 * browser and ask the server for the one matching row — no scan, no
+	 * plaintext on the wire.
+	 */
+	async function lookupByEmail(email: string, orgKey: CryptoKey) {
+		emailLookup = { email, row: null, pending: true };
+		searchError = '';
+		try {
+			const [
+				{ computeOrgScopedEmailHash },
+				{ decryptSupporterRows },
+				{ getConvexClient },
+				{ api }
+			] = await Promise.all([
+				import('$lib/core/crypto/org-scoped-hash'),
+				import('$lib/core/org/supporter-export'),
+				import('convex-sveltekit'),
+				import('$lib/convex')
+			]);
+			const convex = getConvexClient();
+			const emailHash = await computeOrgScopedEmailHash(data.org.id, email);
+			const match = await convex.query(api.supporters.searchByEmail, {
+				orgSlug: data.org.slug,
+				emailHash
+			});
+			if (!match) {
+				emailLookup = { email, row: null, pending: false };
+				return;
+			}
+			const full = await convex.query(api.supporters.get, {
+				orgSlug: data.org.slug,
+				supporterId: match._id
+			});
+			const [row] = await decryptSupporterRows([{ ...full, id: full._id as string }], orgKey);
+			emailLookup = {
+				email,
+				row: row ? { ...row, createdAt: new Date(full._creationTime).toISOString() } : null,
+				pending: false
+			};
+		} catch (err) {
+			emailLookup = { email, row: null, pending: false };
+			searchError = err instanceof Error ? err.message : 'Search failed.';
+		}
+	}
+
+	const emailLookupSettled = $derived(
+		parsedQuery.kind === 'email' &&
+			emailLookup !== null &&
+			emailLookup.email === parsedQuery.email &&
+			!emailLookup.pending
+	);
+
+	// Search narrows WITHIN the active structural filters, not around them.
+	const searchTagName = $derived(
+		data.filters.tagId ? (tags.find((t) => t.id === data.filters.tagId)?.name ?? null) : undefined
+	);
+
+	const searchCriteria = $derived({
+		emailStatus: data.filters.status || undefined,
+		verified:
+			data.filters.verified === 'true'
+				? true
+				: data.filters.verified === 'false'
+					? false
+					: undefined,
+		source: data.filters.source || undefined,
+		tagName: searchTagName ?? undefined
+	});
+
+	const searchMatches = $derived.by((): SearchRow[] => {
+		if (!searchEngaged) return [];
+		// Tag filter set but the tag no longer exists — nothing can match it.
+		if (searchTagName === null) return [];
+		const pool =
+			parsedQuery.kind === 'email'
+				? emailLookup && emailLookup.email === parsedQuery.email && emailLookup.row
+					? [emailLookup.row]
+					: []
+				: scanRows.filter((row) => matchesSupporterQuery(row, parsedQuery));
+		return pool.filter((row) => passesStructuralFilters(row, searchCriteria));
+	});
+
+	const coverage = $derived.by(() => {
+		if (!searchEngaged || parsedQuery.kind !== 'text' || searchError) return null;
+		return searchCoverage({
+			scannedCount: scanRows.length,
+			totalCount: data.total ?? 0,
+			scanning: scanState === 'running' || scanState === 'idle'
+		});
+	});
+
 	const peopleLedgerMetrics = $derived<PeopleLedgerMetric[]>([
 		{ value: data.total, label: 'people' },
 		{ value: data.summary.postal, label: 'with addresses' },
@@ -340,11 +553,43 @@
 	]);
 
 	// Verification status helper
-	function verificationState(s: (typeof data.supporters)[0]): 'Verified' | 'Resolved' | 'Imported' {
+	function verificationState(s: {
+		identityVerified: boolean;
+		postalCode: string | null;
+	}): 'Verified' | 'Resolved' | 'Imported' {
 		if (s.identityVerified) return 'Verified';
 		if (s.postalCode) return 'Resolved';
 		return 'Imported';
 	}
+
+	// One table shape for both sources: the server page (decrypted per-row
+	// above) and client-side search matches.
+	const tableRows = $derived.by((): TableRow[] => {
+		if (searchEngaged) {
+			return searchMatches.map((row) => ({
+				id: row.id,
+				name: row.name || '—',
+				email: row.email || '—',
+				identityVerified: row.identityVerified,
+				postalCode: row.postalCode || null,
+				emailStatus: row.emailStatus || 'subscribed',
+				source: row.source || null,
+				tags: row.tags.map((name) => ({ name })),
+				createdAt: row.createdAt
+			}));
+		}
+		return allSupporters.map((s) => ({
+			id: s.id,
+			name: pii(s.id, 'name'),
+			email: pii(s.id, 'email'),
+			identityVerified: s.identityVerified,
+			postalCode: s.postalCode,
+			emailStatus: s.emailStatus,
+			source: s.source,
+			tags: s.tags,
+			createdAt: s.createdAt
+		}));
+	});
 
 	function sourceLabel(source: string | null): string {
 		return formatPeopleSourceLabel(source ?? 'unknown', {
@@ -461,8 +706,8 @@
 		<p class="text-sm text-red-400" role="alert">{exportError}</p>
 	{/if}
 
-	<!-- Passphrase dialog for export decryption -->
-	{#if showExportPassphrase}
+	<!-- Passphrase dialog for client-side decryption (export + search) -->
+	{#if showPassphraseDialog}
 		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
 			<div
 				class="border-surface-border-strong bg-surface-raised w-full max-w-sm space-y-4 rounded-md border p-6"
@@ -470,28 +715,33 @@
 				<div>
 					<h3 class="text-text-primary text-base font-semibold">Enter organization passphrase</h3>
 					<p class="text-text-tertiary mt-1 text-sm">
-						Your passphrase decrypts people data in this browser for the download. It is never sent
-						to our servers.
+						{#if passphraseIntent === 'export'}
+							Your passphrase decrypts people data in this browser for the download. It is never
+							sent to our servers.
+						{:else}
+							Your passphrase decrypts people data in this browser so you can search it. It is
+							never sent to our servers.
+						{/if}
 					</p>
 				</div>
 
-				{#if exportPassphraseError}
+				{#if passphraseError}
 					<div
 						class="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400"
 					>
-						{exportPassphraseError}
+						{passphraseError}
 					</div>
 				{/if}
 
 				<form
 					onsubmit={(e) => {
 						e.preventDefault();
-						onExportPassphraseSubmit();
+						onPassphraseSubmit();
 					}}
 				>
 					<input
 						type="password"
-						bind:value={exportPassphrase}
+						bind:value={passphraseInput}
 						placeholder="Organization passphrase"
 						class="border-surface-border-strong bg-surface-base text-text-primary placeholder-text-quaternary w-full rounded-lg border px-3 py-2 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 					/>
@@ -500,9 +750,9 @@
 							type="button"
 							class="border-surface-border-strong bg-surface-overlay text-text-primary hover:border-text-quaternary flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors"
 							onclick={() => {
-								showExportPassphrase = false;
-								exportPassphrase = '';
-								exportPassphraseError = '';
+								showPassphraseDialog = false;
+								passphraseInput = '';
+								passphraseError = '';
 							}}
 						>
 							Cancel
@@ -510,9 +760,9 @@
 						<button
 							type="submit"
 							class="flex-1 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:opacity-50"
-							disabled={!exportPassphrase.trim()}
+							disabled={!passphraseInput.trim()}
 						>
-							Unlock & Export
+							{passphraseIntent === 'export' ? 'Unlock & Export' : 'Unlock & Search'}
 						</button>
 					</div>
 				</form>
@@ -596,29 +846,57 @@
 	{/if}
 
 	<!-- Search -->
-	<div class="relative">
-		<svg
-			class="text-text-tertiary absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2"
-			fill="none"
-			viewBox="0 0 24 24"
-			stroke="currentColor"
-			stroke-width="1.5"
-		>
-			<path
-				stroke-linecap="round"
-				stroke-linejoin="round"
-				d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
-			/>
-		</svg>
-		<input
-			type="text"
-			aria-label="Find encrypted person row"
-			placeholder="Find encrypted row..."
-			value={searchInput}
-			oninput={onSearchInput}
-			class="participation-input py-2 pr-4 pl-10 text-sm"
-		/>
-	</div>
+	{#if canSearch}
+		<div class="space-y-2">
+			<div class="relative">
+				<svg
+					class="text-text-tertiary absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="1.5"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+					/>
+				</svg>
+				<input
+					type="text"
+					aria-label="Search people by name, email, postal code, or phone"
+					placeholder="Search by name, email, postal code, or phone…"
+					value={searchInputValue}
+					oninput={onSearchInput}
+					class="participation-input py-2 pr-4 pl-10 text-sm"
+				/>
+			</div>
+			{#if searchActive}
+				{#if searchLocked}
+					<p class="text-text-tertiary text-sm">
+						People data is encrypted on this device.
+						<button
+							type="button"
+							class="text-teal-400 transition-colors hover:text-teal-300"
+							onclick={() => {
+								passphraseIntent = 'search';
+								showPassphraseDialog = true;
+							}}
+						>
+							Enter the organization passphrase
+						</button>
+						to search names, emails, and phones.
+					</p>
+				{:else if searchError}
+					<p class="text-sm text-red-400" role="alert">{searchError}</p>
+				{:else if parsedQuery.kind === 'email' && !emailLookupSettled}
+					<p class="text-text-tertiary text-sm" role="status">Checking that exact email…</p>
+				{:else if coverage && coverage.message}
+					<p class="text-text-tertiary text-sm" role="status">{coverage.message}</p>
+				{/if}
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Filter bar -->
 	<div id="people-segments" class="flex flex-wrap items-center gap-3">
@@ -1044,7 +1322,7 @@
 					onclick={() => {
 						const url = new URL($page.url);
 						url.search = '';
-						searchInputOverride = '';
+						clearSearch();
 						goto(url.toString(), { replaceState: true });
 					}}
 				>
@@ -1055,7 +1333,27 @@
 	{/if}
 
 	<!-- Table -->
-	{#if allSupporters.length === 0}
+	{#if tableRows.length === 0 && searchEngaged}
+		<!-- Search states: still scanning, or genuinely no match -->
+		<div class="bg-surface-base border-surface-border rounded-md border p-8 text-center">
+			{#if parsedQuery.kind === 'email'}
+				{#if !emailLookupSettled}
+					<p class="text-text-tertiary text-sm">Checking that exact email…</p>
+				{:else}
+					<p class="text-text-tertiary text-sm">No one on the list has that email.</p>
+				{/if}
+			{:else if scanState === 'running' || scanState === 'idle'}
+				<p class="text-text-tertiary text-sm">Searching…</p>
+			{:else}
+				<p class="text-text-tertiary text-sm">No one matches “{activeQuery.trim()}”.</p>
+				{#if activeChips.length > 0}
+					<p class="text-text-quaternary mt-1 text-sm">
+						Filters are still applied — clear them to widen the search.
+					</p>
+				{/if}
+			{/if}
+		</div>
+	{:else if tableRows.length === 0}
 		<!-- Empty state -->
 		<div class="bg-surface-base border-surface-border rounded-md border p-12 text-center">
 			<div
@@ -1123,7 +1421,7 @@
 						</tr>
 					</thead>
 					<tbody class="divide-surface-border divide-y">
-						{#each allSupporters as supporter (supporter.id)}
+						{#each tableRows as supporter (supporter.id)}
 							{@const vState = verificationState(supporter)}
 							<tr class="hover:bg-surface-raised group transition-colors">
 								<!-- Verification status -->
@@ -1154,7 +1452,7 @@
 										href="/org/{data.org.slug}/supporters/{supporter.id}"
 										class="text-text-primary text-sm transition-colors hover:text-teal-400"
 									>
-										{pii(supporter.id, 'name')}
+										{supporter.name}
 									</a>
 								</td>
 
@@ -1177,7 +1475,7 @@
 												? 'text-text-tertiary line-through'
 												: 'text-text-tertiary'}"
 										>
-											{pii(supporter.id, 'email')}
+											{supporter.email}
 										</span>
 									</div>
 								</td>
@@ -1223,7 +1521,7 @@
 								<!-- Added -->
 								<td class="hidden px-4 py-3 md:table-cell">
 									<span class="text-text-quaternary font-mono text-xs tabular-nums"
-										>{relativeTime(supporter.createdAt)}</span
+										>{supporter.createdAt ? relativeTime(supporter.createdAt) : '—'}</span
 									>
 								</td>
 							</tr>
@@ -1234,7 +1532,7 @@
 		</div>
 
 		<!-- Load more -->
-		{#if hasMore}
+		{#if hasMore && !searchEngaged}
 			<div class="flex justify-center pt-2">
 				<button
 					type="button"
