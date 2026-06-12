@@ -3,17 +3,18 @@
 
 	type NetworkStats = {
 		memberCount: number;
-		totalSupporters: number;
-		uniqueSupporters: number;
-		verifiedSupporters: number;
-		totalCampaignActions: number;
-		verifiedCampaignActions: number;
+		// Counts arrive sub-K suppressed: 1-4 (districts 1-2) read as null.
+		totalSupporters: number | null;
+		uniqueSupporters: number | null;
+		verifiedSupporters: number | null;
+		totalCampaignActions: number | null;
+		verifiedCampaignActions: number | null;
 		stateDistribution: Record<string, number>;
 		gds: number | null;
 		ald: number | null;
 		temporalEntropy: number | null;
 		cai: number | null;
-		districtCount: number;
+		districtCount: number | null;
 	};
 
 	let { stats, loading, brandingAccent = null }: {
@@ -40,13 +41,22 @@
 
 	// A coalition with nothing on record gets one quiet sentence, not a grid
 	// of zero tiles.
+	// Null means sub-K suppressed — records exist but the count is withheld,
+	// so null counts as "something on record".
 	const hasStatRecords = $derived(
 		stats !== null &&
 			(stats.memberCount > 0 ||
-				stats.verifiedCampaignActions > 0 ||
-				stats.districtCount > 0 ||
-				stats.verifiedSupporters > 0)
+				stats.verifiedCampaignActions !== 0 ||
+				stats.districtCount !== 0 ||
+				stats.verifiedSupporters !== 0)
 	);
+
+	function formatCount(value: number | null): string {
+		return value === null ? 'fewer than 5' : value.toLocaleString();
+	}
+	function formatDistrictCount(value: number | null): string {
+		return value === null ? 'fewer than 3' : value.toLocaleString();
+	}
 
 	function formatScalar(value: number | null): string {
 		return value === null ? 'unavailable' : value.toFixed(2);
@@ -96,15 +106,15 @@
 			</div>
 			<div class="rounded-lg bg-zinc-900/50 p-3">
 				<p class="text-xs font-medium text-zinc-500">Verified Actions</p>
-				<p class="mt-1 text-xl font-bold text-zinc-100">{stats.verifiedCampaignActions.toLocaleString()}</p>
+				<p class="mt-1 text-xl font-bold text-zinc-100">{formatCount(stats.verifiedCampaignActions)}</p>
 			</div>
 			<div class="rounded-lg bg-zinc-900/50 p-3">
 				<p class="text-xs font-medium text-zinc-500">Unique Districts</p>
-				<p class="mt-1 text-xl font-bold" style="color: var(--coalition-accent, #2dd4bf);">{stats.districtCount.toLocaleString()}</p>
+				<p class="mt-1 text-xl font-bold" style="color: var(--coalition-accent, #2dd4bf);">{formatDistrictCount(stats.districtCount)}</p>
 			</div>
 			<div class="rounded-lg bg-zinc-900/50 p-3">
 				<p class="text-xs font-medium text-zinc-500">Verified Supporters</p>
-				<p class="mt-1 text-xl font-bold text-green-400">{stats.verifiedSupporters.toLocaleString()}</p>
+				<p class="mt-1 text-xl font-bold text-green-400">{formatCount(stats.verifiedSupporters)}</p>
 			</div>
 		</div>
 	{:else}

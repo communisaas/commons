@@ -103,3 +103,23 @@ describe('org report route', () => {
 		expect(orgReportRoute).toContain('return json({ data: stats })');
 	});
 });
+
+describe('convex-layer access gate (route gates alone are bypassable)', () => {
+	it('both aggregates gate on requireNetworkAccess before reading anything', () => {
+		const stats = section(networks, 'export const getStats = query', 'export const getProofPressure');
+		expect(stats).toContain('await requireNetworkAccess(ctx, networkId, _secret);');
+		const pressure = networks.slice(networks.indexOf('export const getProofPressure = query'));
+		expect(pressure).toContain('await requireNetworkAccess(ctx, networkId, _secret);');
+	});
+
+	it('the gate accepts a signed-in member or the internal secret, nothing else', () => {
+		const gate = section(networks, 'async function requireNetworkAccess', 'function coalitionFloor5');
+		expect(gate).toContain('requireInternalSecret(secret);');
+		expect(gate).toContain('await requireAuth(');
+		expect(gate).toContain("Access denied — no active membership in this network");
+	});
+
+	it('the API-key route presents the internal secret (it carries no user identity)', () => {
+		expect(publicStatsRoute).toContain('_secret: getInternalSecret()');
+	});
+});

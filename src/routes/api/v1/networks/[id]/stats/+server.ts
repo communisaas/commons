@@ -4,6 +4,7 @@
 // CONVEX: Keep SvelteKit — uses getNetworkStats which aggregates across multiple server modules
 
 import { serverQuery } from 'convex-sveltekit';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
@@ -52,8 +53,11 @@ export const GET: RequestHandler = async ({ params, request }) => {
 		return apiError('FORBIDDEN', 'Organization is not an active member of this network', 403);
 	}
 
+	// API-key auth carries no user identity; the route proved org membership
+	// above, so it presents the internal secret to the gated Convex query.
 	const stats = await serverQuery(api.networks.getStats, {
-		networkId: params.id as Id<'orgNetworks'>
+		networkId: params.id as Id<'orgNetworks'>,
+		_secret: getInternalSecret()
 	});
 	return apiOk(stats);
 };

@@ -7,7 +7,8 @@
 
 import { query, mutation } from './_generated/server';
 import { v } from 'convex/values';
-import { requireOrgRole, loadOrg } from './_authHelpers';
+import { requireOrgRole, loadOrg, requireAuth } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
 import type { Id } from './_generated/dataModel';
 
 // =============================================================================
@@ -715,14 +716,60 @@ export const refreshCoalitionPacketHash = mutation({
 });
 
 /**
+ * Coalition aggregates are member-only reads. A caller proves access either
+ * as a signed-in user whose org is an active member of the network, or as
+ * trusted SvelteKit server code presenting the internal secret (the v1 API
+ * route authenticates by API key, carries no user identity, and performs its
+ * own org-membership proof before calling).
+ */
+async function requireNetworkAccess(
+	ctx: { auth: any; db: any },
+	networkId: Id<'orgNetworks'>,
+	secret: string | undefined
+): Promise<void> {
+	if (secret !== undefined) {
+		requireInternalSecret(secret);
+		return;
+	}
+	const { userId } = await requireAuth(ctx as any);
+	const userOrgs = await (ctx as any).db
+		.query('orgMemberships')
+		.withIndex('by_userId_orgId', (q: any) => q.eq('userId', userId))
+		.collect();
+	for (const m of userOrgs) {
+		const networkMembership = await (ctx as any).db
+			.query('orgNetworkMembers')
+			.withIndex('by_networkId', (q: any) => q.eq('networkId', networkId))
+			.filter((q: any) => q.and(q.eq(q.field('orgId'), m.orgId), q.eq(q.field('status'), 'active')))
+			.first();
+		if (networkMembership) return;
+	}
+	throw new Error('Access denied — no active membership in this network');
+}
+
+/**
+ * Sub-K suppression on coalition aggregates, mirroring the public-receipt
+ * floors: counts of 1-4 (districts: 1-2) suppress to null. Zero stays zero —
+ * an honest absence reveals no individual, and the coalition zero state
+ * renders as a plain sentence.
+ */
+function coalitionFloor5(n: number): number | null {
+	return n > 0 && n < 5 ? null : n;
+}
+function coalitionFloor3(n: number): number | null {
+	return n > 0 && n < 3 ? null : n;
+}
+
+/**
  * Coalition stats — union of verified campaignActions across all active
  * member orgs, district-deduped via districtHash. Computes the same packet
  * scalars as a single-org packet (GDS / ALD / temporal entropy / CAI) so the
  * coalition surface is comparable to the per-org one. T7-1.
  */
 export const getStats = query({
-	args: { networkId: v.id('orgNetworks') },
-	handler: async (ctx, { networkId }) => {
+	args: { networkId: v.id('orgNetworks'), _secret: v.optional(v.string()) },
+	handler: async (ctx, { networkId, _secret }) => {
+		await requireNetworkAccess(ctx, networkId, _secret);
 		const members = await ctx.db
 			.query('orgNetworkMembers')
 			.withIndex('by_networkId', (idx) => idx.eq('networkId', networkId))
@@ -845,19 +892,24 @@ export const getStats = query({
 				? null
 				: Math.round(((tier3 + tier4) / Math.max(tier1, 1)) * 100) / 100;
 
+		const flooredStateDistribution: Record<string, number> = {};
+		for (const [state, count] of Object.entries(stateDistribution)) {
+			if (count >= 5) flooredStateDistribution[state] = count;
+		}
+
 		return {
 			memberCount: members.length,
-			totalSupporters,
-			uniqueSupporters: uniqueEmailHashes.size,
-			verifiedSupporters,
-			totalCampaignActions,
-			verifiedCampaignActions,
-			stateDistribution,
+			totalSupporters: coalitionFloor5(totalSupporters),
+			uniqueSupporters: coalitionFloor5(uniqueEmailHashes.size),
+			verifiedSupporters: coalitionFloor5(verifiedSupporters),
+			totalCampaignActions: coalitionFloor5(totalCampaignActions),
+			verifiedCampaignActions: coalitionFloor5(verifiedCampaignActions),
+			stateDistribution: flooredStateDistribution,
 			gds,
 			ald,
 			temporalEntropy,
 			cai,
-			districtCount: districtHashes.size
+			districtCount: coalitionFloor3(districtHashes.size)
 		};
 	}
 });
@@ -874,9 +926,11 @@ export const getStats = query({
 export const getProofPressure = query({
 	args: {
 		networkId: v.id('orgNetworks'),
-		limit: v.optional(v.number())
+		limit: v.optional(v.number()),
+		_secret: v.optional(v.string())
 	},
-	handler: async (ctx, { networkId, limit }) => {
+	handler: async (ctx, { networkId, limit, _secret }) => {
+		await requireNetworkAccess(ctx, networkId, _secret);
 		const cappedLimit = Math.max(1, Math.min(Math.floor(limit ?? 12), 25));
 		const members = await ctx.db
 			.query('orgNetworkMembers')
@@ -999,8 +1053,8 @@ export const getProofPressure = query({
 					dmName: entry.dmName,
 					orgCount: entry.orgWeights.size,
 					combinedProofWeight,
-					verifiedActionEvidence: entry.verifiedActionEvidence,
-					districtSignalCount: entry.districtSignalCount,
+					verifiedActionEvidence: coalitionFloor5(entry.verifiedActionEvidence),
+					districtSignalCount: coalitionFloor3(entry.districtSignalCount),
 					receiptCount: entry.receiptCount,
 					bills,
 					latestReceiptAt: entry.latestAt

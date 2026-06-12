@@ -29,25 +29,26 @@
 		dmName: string;
 		orgCount: number;
 		combinedProofWeight: number;
-		verifiedActionEvidence: number;
-		districtSignalCount: number;
+		verifiedActionEvidence: number | null;
+		districtSignalCount: number | null;
 		receiptCount: number;
 		latestReceiptAt: number;
 		bills: ProofPressureBill[];
 	};
 	type CoalitionStats = {
 		memberCount: number;
-		totalSupporters: number;
-		uniqueSupporters: number;
-		verifiedSupporters: number;
-		totalCampaignActions: number;
-		verifiedCampaignActions: number;
+		// Sub-K suppressed at the Convex layer: 1-4 (districts 1-2) arrive null.
+		totalSupporters: number | null;
+		uniqueSupporters: number | null;
+		verifiedSupporters: number | null;
+		totalCampaignActions: number | null;
+		verifiedCampaignActions: number | null;
 		stateDistribution: Record<string, number>;
 		gds: number | null;
 		ald: number | null;
 		temporalEntropy: number | null;
 		cai: number | null;
-		districtCount: number;
+		districtCount: number | null;
 	};
 	type ViewData = Omit<PageData, 'members' | 'proofPressure' | 'stats'> & {
 		members: NetworkMember[];
