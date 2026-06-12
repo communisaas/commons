@@ -16,6 +16,7 @@ import { requireOrgRole, requireAuth } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii } from './_orgKey';
+import { computeOrgScopedEmailHash } from './_orgHash';
 import { applyEmailRecipientFilter } from './_emailRecipientFilter';
 import { applyEmailMergeFields, buildEmailTierContext } from './_emailMergeFields';
 
@@ -688,7 +689,6 @@ export const applyUnsubscribeByBlastEmail = mutation({
 	},
 	handler: async (ctx, args) => {
 		requireInternalSecret(args._secret);
-		const { computeOrgScopedEmailHash } = await import('./_orgHash');
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast) {
 			return { applied: false, reason: 'blast-not-found' as const };

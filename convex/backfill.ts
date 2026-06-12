@@ -11,7 +11,7 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { encryptWithOrgKey } from "./_orgKey";
+import { encryptWithOrgKey, decryptOrgPii } from "./_orgKey";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
 import {
   computeOrgScopedEmailHash,
@@ -391,8 +391,6 @@ export const backfillSupporterGlobalHashes = internalAction({
     force: v.optional(v.boolean()),
   },
   handler: async (ctx, { orgId, force }) => {
-    const { decryptOrgPii } = await import("./_orgKey");
-
     const orgKey = await getOrgKeyForAction(ctx, orgId);
     if (!orgKey) throw new Error("Org encryption not configured");
 
@@ -543,8 +541,6 @@ export const backfillSupporterGlobalHashes = internalAction({
 export const migrateEmailHashes = internalAction({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, { orgId }) => {
-    const { decryptOrgPii } = await import("./_orgKey");
-
     const orgKey = await getOrgKeyForAction(ctx, orgId);
     if (!orgKey) throw new Error("Org encryption not configured");
 

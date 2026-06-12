@@ -14,7 +14,7 @@ import { campaignStatus, donationStatus } from './_validators';
 import { requireOrgRole } from './_authHelpers';
 import { computeOrgScopedEmailHash } from './_orgHash';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
-import { decryptOrgPii } from './_orgKey';
+import { decryptOrgPii, encryptForSupporterV2 } from './_orgKey';
 import { sendViaSesWithResult } from './email';
 import type { Id } from './_generated/dataModel';
 
@@ -537,7 +537,6 @@ export const processCheckout = action({
 		// steps. Legacy donations (v=org-1) keep decrypting via the post-id
 		// AAD; the sweep cron still bounds any future regression that
 		// re-introduces the two-phase pattern.
-		const { encryptForSupporterV2 } = await import('./_orgKey');
 		const [encEmail, encName] = await Promise.all([
 			encryptForSupporterV2(normalizedEmail, orgKey, emailHash, 'email'),
 			encryptForSupporterV2(args.name.trim(), orgKey, emailHash, 'name')

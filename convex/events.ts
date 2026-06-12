@@ -11,6 +11,8 @@ import {
 import { requireOrgRole } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
 import { computeOrgScopedEmailHash } from './_orgHash';
+import { getOrgKeyForAction } from './_orgKeyUnseal';
+import { encryptWithOrgKey } from './_orgKey';
 import type { Doc, Id } from './_generated/dataModel';
 
 type InsertRsvpResult = {
@@ -568,8 +570,6 @@ export const createRsvp = action({
 		if (!rl.allowed) throw new Error('Rate limit exceeded — please try again shortly');
 
 		// Encrypt RSVP PII with org key
-		const { getOrgKeyForAction } = await import('./_orgKeyUnseal');
-		const { encryptWithOrgKey } = await import('./_orgKey');
 
 		const orgKey = await getOrgKeyForAction(ctx, orgId);
 		if (!orgKey) {

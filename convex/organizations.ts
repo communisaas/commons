@@ -2,6 +2,7 @@ import { query, mutation, action, internalMutation, internalQuery } from './_gen
 import { internal } from './_generated/api';
 import { v } from 'convex/values';
 import { requireAuth, requireOrgRole, loadOrg } from './_authHelpers';
+import { sealOrgKey as sealOrgKeyHelper } from './_orgKeyUnseal';
 import type { Doc, Id } from './_generated/dataModel';
 // Billing email: returned as encrypted blob, client decrypts with org key
 
@@ -1423,8 +1424,7 @@ export const sealOrgKey = action({
 		});
 		if (!orgData) throw new Error('Not authorized or org not found');
 
-		const { sealOrgKey: seal } = await import('./_orgKeyUnseal');
-		const sealedBlob = await seal(args.rawKeyBase64, orgData.orgId);
+		const sealedBlob = await sealOrgKeyHelper(args.rawKeyBase64, orgData.orgId);
 
 		await ctx.runMutation(internal.organizations.patchServerSealedKey, {
 			orgId: orgData.orgId,

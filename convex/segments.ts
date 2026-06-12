@@ -9,6 +9,8 @@ import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
+import { getOrgKeyForAction } from "./_orgKeyUnseal";
+import { decryptOrgPii } from "./_orgKey";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
@@ -748,8 +750,6 @@ export const exportDecrypted = action({
     // action must clear the explicit gate before touching the org key.
     await ctx.runQuery(requireExportAuthRef, { slug });
 
-    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
-    const { decryptOrgPii } = await import("./_orgKey");
 
     // Get org context
     const org = await ctx.runQuery(getOrganizationBySlugRef, { slug });

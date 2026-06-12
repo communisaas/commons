@@ -22,6 +22,15 @@ import type { FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
 import { requireOrgRole } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
+import {
+	assertPiiTripleCreate,
+	computeOrgScopedEmailHash,
+	computeOrgScopedPhoneHash,
+	computeGlobalEmailHash,
+	computeGlobalPhoneHash
+} from './_orgHash';
+import { getOrgKeyForAction } from './_orgKeyUnseal';
+import { encryptForSupporterV2 } from './_orgKey';
 
 const getOrganizationBySlugRef = makeFunctionReference<'query'>('organizations:getBySlug');
 const importBatchRef = makeFunctionReference<'mutation'>('supporters:importBatch');
@@ -577,7 +586,6 @@ export const create = mutation({
 		// `campaigns.submitAction` is exempted because its placeholder
 		// ciphertext state is transient by design; that path is tracked
 		// for a future refactor.
-		const { assertPiiTripleCreate } = await import('./_orgHash');
 		assertPiiTripleCreate(args);
 
 		// Dedup check using org-scoped emailHash
@@ -1099,7 +1107,6 @@ export const importBatch = mutation({
 		// transient state. Public-facing mutations (`supporters.create`,
 		// `v1api.createSupporter`) pass false to reject placeholder rows
 		// from being minted by direct callers.
-		const { assertPiiTripleCreate } = await import('./_orgHash');
 		for (const s of supporters) {
 			assertPiiTripleCreate({ ...s, allowPlaceholder: true });
 		}
@@ -1360,14 +1367,6 @@ export const importWithEncryption = action({
 		// `segments.exportDecrypted`.
 		await ctx.runQuery(requireImportAuthRef, { slug: args.slug });
 
-		const {
-			computeOrgScopedEmailHash,
-			computeOrgScopedPhoneHash,
-			computeGlobalEmailHash,
-			computeGlobalPhoneHash
-		} = await import('./_orgHash');
-		const { getOrgKeyForAction } = await import('./_orgKeyUnseal');
-		const { encryptForSupporterV2 } = await import('./_orgKey');
 
 		// Get org ID from slug
 		const org = await ctx.runQuery(getOrganizationBySlugRef, { slug: args.slug });

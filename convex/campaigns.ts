@@ -13,8 +13,14 @@ import { v } from 'convex/values';
 import { campaignType, campaignStatus } from './_validators';
 import { requireOrgRole, loadOrg, requireAuth, requireOrgMembership } from './_authHelpers';
 import type { Doc, Id } from './_generated/dataModel';
-import { computeOrgScopedEmailHash } from './_orgHash';
+import {
+	computeOrgScopedEmailHash,
+	computeOrgScopedPhoneHash,
+	computeGlobalEmailHash,
+	computeGlobalPhoneHash
+} from './_orgHash';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
+import { encryptForSupporterV2 } from './_orgKey';
 
 declare const process: { env: Record<string, string | undefined> };
 type ActiveCampaignForSubmission = {
@@ -1356,8 +1362,6 @@ export const submitAction = action({
 		// mutation call. Computing globals only inside an `if (isNew)` branch
 		// would leave existing rows invisible to the SES/TCPA webhooks until
 		// an operator ran the backfill action.
-		const { computeOrgScopedPhoneHash, computeGlobalEmailHash, computeGlobalPhoneHash } =
-			await import('./_orgHash');
 		const globalEmailHash = await computeGlobalEmailHash(normalizedEmail);
 		let phoneHash: string | undefined;
 		let globalPhoneHash: string | undefined;
@@ -1385,7 +1389,6 @@ export const submitAction = action({
 		// reached via findOrCreateSupporter's existing-row branch still get
 		// their global hashes backfilled but skip the placeholder ciphertext
 		// write entirely.
-		const { encryptForSupporterV2 } = await import('./_orgKey');
 		const [encEmail, encName, encPhone] = await Promise.all([
 			encryptForSupporterV2(normalizedEmail, orgKey, emailHash, 'email'),
 			args.name ? encryptForSupporterV2(args.name.trim(), orgKey, emailHash, 'name') : null,

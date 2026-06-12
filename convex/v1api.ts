@@ -12,6 +12,7 @@ import { internal } from './_generated/api';
 import { campaignType } from './_validators';
 import { resolveDmAndCanonical } from './legislation';
 import { requireInternalSecret } from './_internalAuth';
+import { assertPiiTripleCreate } from './_orgHash';
 // PII returned as encrypted blobs — v1 API consumers decrypt with org key
 
 // =============================================================================
@@ -337,7 +338,6 @@ export const createSupporter = mutation({
 		// third-party API consumers can't write partial-coherence rows
 		// any more than internal callers can. Shares the same helper +
 		// error names as `supporters.create` and `importBatch`.
-		const { assertPiiTripleCreate } = await import('./_orgHash');
 		assertPiiTripleCreate(args);
 
 		// Check for duplicate by emailHash via the dedicated composite

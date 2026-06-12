@@ -33,6 +33,9 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { sealOrgKey, getOrgKeyForAction } from "./_orgKeyUnseal";
+import { encryptWithOrgKey, importOrgKey } from "./_orgKey";
+import { computeOrgScopedEmailHash, computeGlobalEmailHash } from "./_orgHash";
 // Org encryption configured during seed — supporters encrypted with org key, hashes org-scoped.
 
 // =============================================================================
@@ -629,8 +632,6 @@ export const insertOrgs = internalMutation({
 export const configureOrgEncryption = internalAction({
   args: { orgIds: v.array(v.id("organizations")) },
   handler: async (ctx, { orgIds }) => {
-    const { sealOrgKey } = await import("./_orgKeyUnseal");
-    const { encryptWithOrgKey, importOrgKey } = await import("./_orgKey");
 
     for (const orgId of orgIds) {
       // Generate random 32-byte org key
@@ -1013,9 +1014,6 @@ export const insertSupporters = internalAction({
     orgIds: v.array(v.id("organizations")),
   },
   handler: async (ctx, { orgIds }): Promise<Id<"supporters">[]> => {
-    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
-    const { encryptWithOrgKey } = await import("./_orgKey");
-    const { computeOrgScopedEmailHash, computeGlobalEmailHash } = await import("./_orgHash");
 
     const ids: Id<"supporters">[] = [];
     const distribution = [8, 7, 5];
@@ -2521,9 +2519,6 @@ const PLANS_SEED: Record<string, { maxSeats: number; maxTemplatesMonth: number }
 export const encryptSeedPii = internalAction({
   args: { orgIds: v.array(v.id("organizations")) },
   handler: async (ctx, { orgIds }) => {
-    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
-    const { encryptWithOrgKey } = await import("./_orgKey");
-    const { computeOrgScopedEmailHash } = await import("./_orgHash");
 
     for (const orgId of orgIds) {
       const orgKey = await getOrgKeyForAction(ctx, orgId);
