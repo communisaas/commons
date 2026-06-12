@@ -141,7 +141,7 @@
 		receiptBlockers: string[];
 	}): string {
 		if (delivery.receiptBacked) {
-			return 'Accountability receipt row is present; anchoring remains bounded by the receipt-root gate.';
+			return 'Accountability receipt row is present; anchoring still waits on the receipt-root gate.';
 		}
 		if (delivery.receiptEligibility === 'eligible') {
 			return 'Power target and bill are bound; the receipt writer runs after SES accepts delivery, while mainnet anchoring remains gated.';

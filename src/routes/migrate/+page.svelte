@@ -28,7 +28,7 @@
 		<p class="text-text-secondary mx-auto max-w-xl text-base leading-relaxed">
 			Commons turns existing supporter exports into a People ledger with source custody,
 			reachability, and verification weight. Direct platform sync remains gated until credential
-			custody and sync-proof gates are armed.
+			custody and sync-proof checks pass.
 		</p>
 	</header>
 
@@ -123,7 +123,7 @@
 						<td class="text-text-secondary px-4 py-3">Direct sync</td>
 						<td class="text-text-quaternary px-4 py-3 text-center">Per-vendor adapters</td>
 						<td class="text-text-primary px-4 py-3 text-center"
-							>Not armed until custody and sync-proof gates pass</td
+							>Available once custody and sync-proof checks pass</td
 						>
 					</tr>
 					<tr>
@@ -146,7 +146,7 @@
 				<h3 class="text-text-primary text-sm font-semibold">Can we keep our current platform?</h3>
 				<p class="text-text-secondary text-sm leading-relaxed">
 					Yes. CSV export intake does not require changing your current vendor. Direct API sync is
-					not armed yet, so Commons does not claim live vendor-to-vendor mirroring.
+					not available yet, so Commons does not claim live vendor-to-vendor mirroring.
 				</p>
 			</div>
 			<div class="space-y-2">

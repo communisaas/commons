@@ -624,7 +624,7 @@
 					<div class="platform__tile">
 						<span class="platform__tile-name">Events</span>
 						<span class="platform__tile-desc"
-							>Public RSVP records and bounded attendance artifacts; proof ceremony stays gated.</span
+							>Public RSVP records and a limited set of attendance artifacts; proof ceremony stays gated.</span
 						>
 					</div>
 					<div class="platform__tile">
