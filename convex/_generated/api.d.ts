@@ -14,6 +14,7 @@ import type * as _bufferSource from "../_bufferSource.js";
 import type * as _credentialSelect from "../_credentialSelect.js";
 import type * as _cwcXml from "../_cwcXml.js";
 import type * as _downgradeGuard from "../_downgradeGuard.js";
+import type * as _emailMergeFields from "../_emailMergeFields.js";
 import type * as _emailRecipientFilter from "../_emailRecipientFilter.js";
 import type * as _externalIds from "../_externalIds.js";
 import type * as _internalAuth from "../_internalAuth.js";
@@ -84,6 +85,7 @@ declare const fullApi: ApiFromModules<{
   _credentialSelect: typeof _credentialSelect;
   _cwcXml: typeof _cwcXml;
   _downgradeGuard: typeof _downgradeGuard;
+  _emailMergeFields: typeof _emailMergeFields;
   _emailRecipientFilter: typeof _emailRecipientFilter;
   _externalIds: typeof _externalIds;
   _internalAuth: typeof _internalAuth;

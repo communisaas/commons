@@ -1,3 +1,4 @@
+import { applyEmailMergeFields } from '$lib/core/email/merge-fields';
 import { escapeHtml } from './escape';
 
 export interface MergeContext {
@@ -19,16 +20,13 @@ export interface VerificationBlock {
 
 // Replace merge fields in a template string. Supported tokens: {{firstName}},
 // {{lastName}}, {{email}}, {{postalCode}}, {{verificationStatus}}, {{tierLabel}},
-// {{tierContext}}.
+// {{tierContext}}. Each accepts an optional fallback — {{firstName|Friend}} —
+// used when the recipient value is blank; a blank token with no fallback
+// collapses along with one preceding space so punctuation is not orphaned.
+// Delegates to the shared grammar in $lib/core/email/merge-fields so the
+// server and browser-direct paths cannot drift.
 export function compileMergeFields(template: string, ctx: MergeContext): string {
-	return template
-		.replace(/\{\{firstName\}\}/g, escapeHtml(ctx.firstName))
-		.replace(/\{\{lastName\}\}/g, escapeHtml(ctx.lastName))
-		.replace(/\{\{email\}\}/g, escapeHtml(ctx.email))
-		.replace(/\{\{postalCode\}\}/g, escapeHtml(ctx.postalCode ?? ''))
-		.replace(/\{\{verificationStatus\}\}/g, escapeHtml(ctx.verificationStatus))
-		.replace(/\{\{tierLabel\}\}/g, escapeHtml(ctx.tierLabel ?? ''))
-		.replace(/\{\{tierContext\}\}/g, escapeHtml(ctx.tierContext));
+	return applyEmailMergeFields(template, ctx, 'html');
 }
 
 // Render the structural verification context block. Appended to every email

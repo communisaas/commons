@@ -17,48 +17,7 @@ import { requireInternalSecret } from './_internalAuth';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii } from './_orgKey';
 import { applyEmailRecipientFilter } from './_emailRecipientFilter';
-
-// HTML escape — mirror of src/lib/server/email/escape.ts. Cannot share the
-// canonical module because Convex's V8 runtime doesn't resolve $lib paths.
-// Keep these escapings in sync if either side changes.
-function _escapeHtml(s: string): string {
-	return s
-		.replace(/&/g, '&amp;')
-		.replace(/</g, '&lt;')
-		.replace(/>/g, '&gt;')
-		.replace(/"/g, '&quot;')
-		.replace(/'/g, '&#39;');
-}
-
-// Per-recipient merge-field substitution — mirror of compileMergeFields in
-// src/lib/server/email/compiler.ts. Applied after PII decrypt so the blast's
-// pre-shelled bodyHtml renders "Dear Maria," instead of "Dear {{firstName}}".
-function _applyMergeFields(
-	body: string,
-	ctx: {
-		firstName: string;
-		lastName: string;
-		email: string;
-		postalCode: string | null;
-		verificationStatus: 'verified' | 'postal-resolved' | 'imported';
-	}
-): string {
-	const tierLabel = ''; // engagement tier not loaded per-recipient on this path
-	const tierContext =
-		ctx.verificationStatus === 'verified'
-			? 'Your identity is verified. You appear as a verified contact in this campaign.'
-			: ctx.verificationStatus === 'postal-resolved'
-				? 'Your postal code is on file. Verification is pending.'
-				: 'You were added by an organization. Verification is pending.';
-	return body
-		.replace(/\{\{firstName\}\}/g, _escapeHtml(ctx.firstName))
-		.replace(/\{\{lastName\}\}/g, _escapeHtml(ctx.lastName))
-		.replace(/\{\{email\}\}/g, _escapeHtml(ctx.email))
-		.replace(/\{\{postalCode\}\}/g, _escapeHtml(ctx.postalCode ?? ''))
-		.replace(/\{\{verificationStatus\}\}/g, _escapeHtml(ctx.verificationStatus))
-		.replace(/\{\{tierLabel\}\}/g, _escapeHtml(tierLabel))
-		.replace(/\{\{tierContext\}\}/g, _escapeHtml(tierContext));
-}
+import { applyEmailMergeFields, buildEmailTierContext } from './_emailMergeFields';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -1485,20 +1444,20 @@ export const sendBlastBatch = internalAction({
 						: recipient.postalCode
 							? 'postal-resolved'
 							: 'imported';
-					const personalizedBody = _applyMergeFields(blast.bodyHtml, {
+					// Engagement tier is not loaded per-recipient on this path:
+					// {{tierLabel}} renders its fallback (or collapses) and
+					// tierContext derives from verification status alone.
+					const mergeContext = {
 						firstName,
 						lastName,
 						email,
 						postalCode: recipient.postalCode ?? null,
-						verificationStatus
-					});
-					const personalizedSubject = _applyMergeFields(blast.subject, {
-						firstName,
-						lastName,
-						email,
-						postalCode: recipient.postalCode ?? null,
-						verificationStatus
-					});
+						verificationStatus,
+						tierLabel: '',
+						tierContext: buildEmailTierContext(verificationStatus)
+					};
+					const personalizedBody = applyEmailMergeFields(blast.bodyHtml, mergeContext);
+					const personalizedSubject = applyEmailMergeFields(blast.subject, mergeContext);
 					const unsubscribeUrl = await buildConvexUnsubscribeUrl(
 						String(recipient._id),
 						String(blast.orgId)

@@ -91,7 +91,7 @@
 	let winnerMetric = $state('open');
 	let testGroupPct = $state(20);
 	const mergeFieldPattern =
-		/\{\{(?:firstName|lastName|email|postalCode|verificationStatus|tierLabel|tierContext)\}\}/g;
+		/\{\{(?:firstName|lastName|email|postalCode|verificationStatus|tierLabel|tierContext)(?:\|[^{}|]*)?\}\}/g;
 	const platformSourceIds = new Set<string>(
 		PLATFORM_EXPORT_PROFILES.map((profile) => profile.source)
 	);
@@ -408,6 +408,10 @@
 
 	const mergeFieldHints = [
 		{ field: '{{firstName}}', desc: "Recipient's first name" },
+		{
+			field: '{{firstName|Friend}}',
+			desc: 'First name, with "Friend" used when the name is missing'
+		},
 		{ field: '{{lastName}}', desc: "Recipient's last name" },
 		{ field: '{{postalCode}}', desc: "Recipient's postal code" },
 		{

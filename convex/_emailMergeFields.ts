@@ -1,3 +1,14 @@
+// Per-recipient merge-field substitution for the Convex batch send path.
+// Mirror of src/lib/core/email/merge-fields.ts — Convex's bundler cannot
+// resolve $lib paths, so the grammar is hand-duplicated here and a unit
+// parity suite holds the two implementations identical.
+//
+// Grammar: {{token}} or {{token|fallback}}. The fallback (no pipes or braces
+// inside it) renders when the recipient value is blank, so an imported list
+// with missing names gets "Dear Friend," instead of "Dear ,". A token that
+// resolves blank with no usable fallback collapses together with one
+// preceding space, leaving no orphaned punctuation.
+
 export type VerificationStatus = 'verified' | 'postal-resolved' | 'imported';
 
 export type EmailMergeContext = {
@@ -24,19 +35,10 @@ type MergeFieldName = (typeof MERGE_FIELD_NAMES)[number];
 
 const TOKEN_ALTERNATION = MERGE_FIELD_NAMES.join('|');
 
-// Grammar: {{token}} or {{token|fallback}}. The fallback (no pipes or braces
-// inside it) renders when the recipient value is blank, so an imported list
-// with missing names gets "Dear Friend," instead of "Dear ,". A token that
-// resolves blank with no usable fallback collapses together with one
-// preceding space, leaving no orphaned punctuation. This grammar is mirrored
-// in convex/_emailMergeFields.ts (the Convex bundler cannot resolve $lib
-// paths); a parity suite holds the implementations identical.
 const MERGE_FIELD_RESOLVE_RE = new RegExp(
 	`( ?)\\{\\{(${TOKEN_ALTERNATION})(?:\\|([^{}|]*))?\\}\\}`,
 	'g'
 );
-const MERGE_FIELD_RE = new RegExp(`\\{\\{(?:${TOKEN_ALTERNATION})(?:\\|[^{}|]*)?\\}\\}`, 'g');
-const HAS_MERGE_FIELD_RE = new RegExp(`\\{\\{(?:${TOKEN_ALTERNATION})(?:\\|[^{}|]*)?\\}\\}`);
 
 function escapeHtml(value: string): string {
 	return value
@@ -68,14 +70,6 @@ function mergeValue(ctx: EmailMergeContext, field: MergeFieldName): string {
 		case 'tierContext':
 			return ctx.tierContext;
 	}
-}
-
-export function hasEmailMergeFields(value: string): boolean {
-	return HAS_MERGE_FIELD_RE.test(value);
-}
-
-export function countEmailMergeFields(value: string): number {
-	return value.match(MERGE_FIELD_RE)?.length ?? 0;
 }
 
 export function buildEmailTierContext(status: VerificationStatus): string {
