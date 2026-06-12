@@ -1,50 +1,38 @@
 <!--
 	  Spotlight — the universal command surface (Cmd/Ctrl-K).
 
-	  This is the command ground of the OS: with the link cabinet gone from the rail,
-	  Spotlight carries recognition-over-recall across capability surfaces, workspaces,
-	  and real handoffs. It is rendered ONCE at the shell level (outside the
+	  With the link cabinet gone from the rail, Spotlight carries
+	  recognition-over-recall navigation across the workspaces and every route
+	  folded under them. It is rendered ONCE at the shell level (outside the
 	  hideable OrgShell) so it is reachable from every space AND every deep route,
 	  reads the OS kernel's `spotlightOpen` flag, and executes against the kernel:
 
-    · a SPACE destination  → os.switchSpace (instant, stateful) — and, when on a
-      deep route where the shell is hidden, a navigation to the space path so the
-      switch is visible.
-	    · a HANDOFF destination → goto (a capability anchor or deep page the OS hasn't
-	      absorbed yet, with state/gate context).
+	    · a SPACE destination → os.switchSpace (instant, stateful) — and, when the
+	      current URL is not rendering a mounted space, a navigation to the space
+	      path so the switch is visible.
+	    · a ROUTE destination → goto.
 
-  Fuzzy match (substring, then subsequence), keyboard-driven (↑/↓/Enter/Esc),
-  grouped by space. Motion is ease-out (navigation-class, no spring). No data is
-  fabricated — destinations are the real routes the org exposes.
+	  Fuzzy match (substring, then subsequence), keyboard-driven (↑/↓/Enter/Esc),
+	  grouped by space. Motion is ease-out (navigation-class, no spring). No data
+	  is fabricated — destinations are the real routes the org exposes, a count is
+	  a real loaded count, and a note is the plain-language limit sentence that
+	  bounds the action it links to.
 -->
 <script lang="ts" module>
 	import type { SpaceId } from './orgOS.svelte';
 
-	export type SpotlightState = 'live' | 'partial' | 'draft-only' | 'gated' | 'testnet';
-
 	export interface SpotlightDestination {
 		id: string;
 		label: string;
-		/** Short qualifier shown after the label (e.g. a space's gloss). */
-		sublabel?: string;
-		/** Compact capability state. Same grammar as the Mantle and capability map. */
-		state?: SpotlightState;
-		/** One real signal or count, if the destination carries one. */
-		signal?: string;
-		/** What Enter will do, in route/capability language. */
-		action?: string;
-		/** The operational object or workspace this command hands the operator to. */
-		handoff?: string;
-		/** The real route effect after execution; never a stronger capability claim. */
-		effect?: string;
-		/** Gate or boundary that keeps the command honest. */
-		gate?: string;
-		/** Group header (the workspace it belongs to, or "Substrate"). */
+		/** Group header — the workspace it belongs to, "Workspaces", or "Substrate". */
 		group: string;
 		kind: 'space' | 'route';
 		spaceId?: SpaceId;
 		href?: string;
-		latent?: boolean;
+		/** Real loaded count, when the destination carries one. Null = unread. */
+		count?: number | null;
+		/** One plain-language limit sentence, for a bounded action. */
+		note?: string;
 	}
 </script>
 
@@ -52,11 +40,7 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { TIMING, EASING } from '$lib/design/motion';
-	import {
-		operatorCapabilityActionLabel,
-		operatorCapabilityStateLabel
-	} from '$lib/data/capability-state-labels';
-	import { getOrgOS, isSpacePath, pathForSpace } from './orgOS.svelte';
+	import { getOrgOS, pathForSpace, rendersSpaceForUrl } from './orgOS.svelte';
 
 	let {
 		destinations,
@@ -86,39 +70,8 @@
 		return 0;
 	}
 
-	function stateLabel(state: SpotlightState): string {
-		return operatorCapabilityStateLabel(state);
-	}
-
-	function actionLabel(d: SpotlightDestination): string {
-		const action = d.action ?? (d.kind === 'space' ? 'switch' : 'open');
-		return operatorCapabilityActionLabel(d.state, action);
-	}
-
-	function handoffLabel(d: SpotlightDestination): string {
-		return d.handoff ?? d.label;
-	}
-
-	function effectLabel(d: SpotlightDestination): string | null {
-		return d.effect ?? d.sublabel ?? d.signal ?? null;
-	}
-
 	function destinationSearchText(d: SpotlightDestination): string {
-		return [
-			d.label,
-			d.sublabel,
-			d.group,
-			d.kind,
-			d.state ? stateLabel(d.state) : null,
-			d.latent ? 'not armed latent held' : null,
-			handoffLabel(d),
-			effectLabel(d),
-			d.signal,
-			d.gate,
-			actionLabel(d)
-		]
-			.filter(Boolean)
-			.join(' ');
+		return [d.label, d.group, d.note].filter(Boolean).join(' ');
 	}
 
 	// Keep the original (grouped) order so group headers stay contiguous; just
@@ -147,22 +100,20 @@
 		}
 		if (d.kind === 'space' && d.spaceId) {
 			os.switchSpace(d.spaceId);
-			// On a deep route the shell is hidden — navigate to the space path so
-			// the switch is actually visible. On a space path, OrgShell's shallow
-			// routing updates the URL without a remount.
-			if (!isSpacePath($page.url.pathname, base)) goto(pathForSpace(d.spaceId, base));
+			// When the current URL is not rendering a mounted space — a deep route,
+			// or a space path under the ?view=full opt-out — navigate to the space
+			// path so the switch is actually visible. On a rendering space path,
+			// OrgShell's shallow routing updates the URL without a remount.
+			if (!rendersSpaceForUrl($page.url, base)) goto(pathForSpace(d.spaceId, base));
 		}
 	}
 
 	function itemAria(d: SpotlightDestination): string {
 		const parts = [d.label];
-		if (d.state) parts.push(`state ${stateLabel(d.state)}`);
-		parts.push(`handoff ${handoffLabel(d)}`);
-		const effect = effectLabel(d);
-		if (effect) parts.push(`effect ${effect}`);
-		if (d.signal) parts.push(`signal ${d.signal}`);
-		if (d.gate) parts.push(`gate ${d.gate}`);
-		parts.push(`action ${actionLabel(d)}`);
+		if (d.count !== undefined && d.count !== null) {
+			parts.push(d.count.toLocaleString('en-US'));
+		}
+		if (d.note) parts.push(d.note);
 		return parts.join(', ');
 	}
 
@@ -198,7 +149,7 @@
 			class="sp-panel"
 			role="dialog"
 			aria-modal="true"
-			aria-label="Spotlight — search capabilities, workspaces, or handoffs"
+			aria-label="Spotlight — search pages and workspaces"
 			tabindex="-1"
 			onclick={(e) => e.stopPropagation()}
 		>
@@ -212,22 +163,15 @@
 				aria-expanded="true"
 				aria-controls="sp-list"
 				aria-autocomplete="list"
-				placeholder="Search capabilities, workspaces, handoffs…"
-				aria-label="Capability command search"
+				placeholder="Search pages and workspaces…"
+				aria-label="Page and workspace search"
 			/>
 
 			{#if filtered.length === 0}
 				<p class="sp-empty">No match. <kbd class="sp-kbd">Esc</kbd> to close.</p>
 			{:else}
-				<ul
-					id="sp-list"
-					class="sp-list"
-					role="listbox"
-					aria-label="Capabilities, workspaces, and handoffs"
-				>
+				<ul id="sp-list" class="sp-list" role="listbox" aria-label="Pages and workspaces">
 					{#each filtered as d, i (d.id)}
-						{@const handoff = handoffLabel(d)}
-						{@const effect = effectLabel(d)}
 						{#if i === 0 || filtered[i - 1].group !== d.group}
 							<li class="sp-group" aria-hidden="true">{d.group}</li>
 						{/if}
@@ -237,7 +181,6 @@
 								type="button"
 								class="sp-item"
 								class:sp-item--sel={i === selected}
-								data-state={d.state}
 								aria-label={itemAria(d)}
 								onmouseenter={() => (selected = i)}
 								onclick={() => execute(d)}
@@ -245,38 +188,14 @@
 								<span class="sp-item-main">
 									<span class="sp-line">
 										<span class="sp-label">{d.label}</span>
-										{#if d.state}
-											<span class="sp-state" data-state={d.state}>{stateLabel(d.state)}</span>
-										{/if}
-										{#if d.latent}<span class="sp-latent">not yet armed</span>{/if}
-									</span>
-									<span class="sp-meta">
-										{#if d.sublabel}<span class="sp-sublabel">{d.sublabel}</span>{/if}
-										<span class="sp-meta-field sp-handoff">
-											<span class="sp-meta-label">handoff</span>
-											<span>{handoff}</span>
-										</span>
-										{#if effect}
-											<span class="sp-meta-field sp-effect">
-												<span class="sp-meta-label">effect</span>
-												<span>{effect}</span>
-											</span>
-										{/if}
-										{#if d.signal}
-											<span class="sp-meta-field sp-signal">
-												<span class="sp-meta-label">signal</span>
-												<span>{d.signal}</span>
-											</span>
-										{/if}
-										{#if d.gate}
-											<span class="sp-meta-field sp-gate">
-												<span class="sp-meta-label">gate</span>
-												<span>{d.gate}</span>
-											</span>
+										{#if d.count !== undefined && d.count !== null}
+											<span class="sp-count">{d.count.toLocaleString('en-US')}</span>
 										{/if}
 									</span>
+									{#if d.note}
+										<span class="sp-note">{d.note}</span>
+									{/if}
 								</span>
-								<span class="sp-kind">{actionLabel(d)}</span>
 							</button>
 						</li>
 					{/each}
@@ -285,7 +204,7 @@
 
 			<div class="sp-foot">
 				<kbd class="sp-kbd">↑↓</kbd> move
-				<kbd class="sp-kbd">↵</kbd> execute
+				<kbd class="sp-kbd">↵</kbd> open
 				<kbd class="sp-kbd">esc</kbd> close
 			</div>
 		</div>
@@ -349,38 +268,17 @@
 
 	.sp-item {
 		width: 100%;
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.75rem;
+		display: block;
 		padding: 0.5rem;
 		border: none;
 		border-radius: 6px;
-		border-left: 2px solid transparent;
 		background: transparent;
 		text-align: left;
 		cursor: pointer;
-		min-height: 3.375rem;
 	}
 
 	.sp-item--sel {
 		background: var(--coord-node-bg, oklch(0.6 0.14 175 / 0.1));
-	}
-	.sp-item[data-state='live'] {
-		border-left-color: color-mix(in oklch, var(--coord-verified, #10b981), transparent 45%);
-	}
-	.sp-item[data-state='partial'] {
-		border-left-color: color-mix(in oklch, var(--coord-route-solid, #3bc4b8), transparent 42%);
-	}
-	.sp-item[data-state='draft-only'] {
-		border-left-color: oklch(0.68 0.12 78);
-		border-left-style: dashed;
-	}
-	.sp-item[data-state='gated'],
-	.sp-item[data-state='testnet'] {
-		border-left-color: oklch(0.62 0.02 60);
-		border-left-style: dashed;
 	}
 
 	.sp-item-main {
@@ -389,19 +287,13 @@
 		gap: 0.125rem;
 		min-width: 0;
 	}
-	.sp-line,
-	.sp-meta {
+
+	.sp-line {
 		display: flex;
 		align-items: baseline;
 		gap: 0.5rem;
 		min-width: 0;
-	}
-	.sp-line {
 		flex-wrap: wrap;
-	}
-	.sp-meta {
-		flex-wrap: wrap;
-		gap: 0.25rem 0.5rem;
 	}
 
 	.sp-label {
@@ -412,82 +304,21 @@
 		overflow-wrap: anywhere;
 	}
 
-	.sp-sublabel,
-	.sp-meta-field {
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.75rem;
-		color: var(--text-tertiary);
-		overflow-wrap: anywhere;
-	}
-	.sp-meta-field {
-		display: inline-flex;
-		align-items: baseline;
-		gap: 0.25rem;
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.625rem;
-		min-width: 0;
-		max-width: 100%;
-	}
-	.sp-handoff {
-		color: var(--text-secondary, oklch(0.4 0.012 60));
-	}
-	.sp-effect {
-		color: oklch(0.42 0.018 175);
-	}
-	.sp-gate {
-		color: oklch(0.48 0.012 60);
-	}
-	.sp-meta-label {
-		flex: 0 0 auto;
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.5625rem;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: var(--text-tertiary);
-		opacity: 0.78;
-	}
-	.sp-meta-field span:last-child {
-		min-width: 0;
-		overflow-wrap: anywhere;
-	}
-
-	.sp-state,
-	.sp-latent {
-		font-family: 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 0.5625rem;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: var(--text-tertiary);
-		opacity: 0.8;
-	}
-	.sp-state[data-state='live'] {
-		color: var(--coord-verified, #10b981);
-	}
-	.sp-state[data-state='partial'] {
-		color: var(--coord-route-solid, #3bc4b8);
-	}
-	.sp-state[data-state='draft-only'] {
-		color: oklch(0.62 0.12 78);
-	}
-	.sp-state[data-state='gated'],
-	.sp-state[data-state='testnet'] {
-		color: oklch(0.48 0.02 60);
-	}
-
-	.sp-kind {
+	.sp-count {
 		font-family: 'JetBrains Mono', ui-monospace, monospace;
 		font-variant-numeric: tabular-nums;
-		font-size: 0.625rem;
+		font-size: 0.6875rem;
 		color: var(--text-tertiary);
-		flex-shrink: 0;
 		white-space: nowrap;
-		align-self: start;
-		padding-top: 0.125rem;
 	}
-	.sp-item--sel .sp-kind {
-		color: var(--text-secondary);
+
+	.sp-note {
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+		font-size: 0.75rem;
+		line-height: 1.4;
+		color: var(--text-tertiary);
+		min-width: 0;
+		overflow-wrap: anywhere;
 	}
 
 	.sp-empty {
