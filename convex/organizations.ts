@@ -3,7 +3,7 @@ import { internal } from './_generated/api';
 import { v } from 'convex/values';
 import { requireAuth, requireOrgRole, loadOrg } from './_authHelpers';
 import { sealOrgKey as sealOrgKeyHelper } from './_orgKeyUnseal';
-import { emptySupporterStats } from './_supporterStats';
+import { emptySupporterStats, computeSupporterStats } from './_supporterStats';
 import { computeDistrictVerified, computeGrowthWindow } from './_dashboardStats';
 import type { Doc, Id } from './_generated/dataModel';
 // Billing email: returned as encrypted blob, client decrypts with org key
@@ -260,7 +260,11 @@ export const getDashboardStats = query({
 			tiers,
 			growth: {
 				thisWeek: growth.thisWeek,
-				lastWeek: growth.lastWeek
+				lastWeek: growth.lastWeek,
+				// Surface the per-week caps like districtVerifiedTruncated above, so a
+				// consumer renders a floor instead of a wrong exact past the scan cap.
+				thisWeekTruncated: growth.thisWeekTruncated,
+				lastWeekTruncated: growth.lastWeekTruncated
 			}
 		};
 	}
@@ -649,6 +653,60 @@ export const getSettingsData = query({
 				weight: d.weight,
 				updatedAt: d.updatedAt
 			}))
+		};
+	}
+});
+
+/**
+ * Rebuild an org's denormalized DISPLAY counters from the actual rows — the
+ * recovery path a denormalized-counter system needs.
+ *
+ * Pre-launch there is no production data to "backfill"; this exists to (a) correct
+ * dev/seed orgs created before the counters existed, and (b) repair drift if a
+ * writer ever bypasses applySupporterStatsDelta despite the coverage guard. Run
+ * manually per org (compose for many).
+ *
+ * Bounded by the same scan caps as the reads, so it can never throw the doc cap;
+ * for an org past the cap the rebuilt values are the same bounded truth the reads
+ * serve. It rebuilds supporterStats / supporterCount / actionTierCounts (the
+ * multi-writer, drift-prone counters). It deliberately does NOT touch
+ * verifiedActionsLifetime or the billing baseline — those have a single writer
+ * (createCampaignAction) and the billing read self-heals off a bounded range, so
+ * recomputing them here would risk a baseline-vs-lifetime inconsistency for no gain.
+ */
+const RECONCILE_SCAN_CAP = 16_000;
+export const reconcileOrgStats = internalMutation({
+	args: { orgId: v.id('organizations') },
+	handler: async (ctx, args) => {
+		const org = await ctx.db.get(args.orgId);
+		if (!org) return { skipped: true as const };
+
+		const supporters = await ctx.db
+			.query('supporters')
+			.withIndex('by_orgId', (idx) => idx.eq('orgId', args.orgId))
+			.take(RECONCILE_SCAN_CAP);
+		let stats = emptySupporterStats();
+		for (const s of supporters) stats = computeSupporterStats(stats, null, s);
+
+		const actions = await ctx.db
+			.query('campaignActions')
+			.withIndex('by_orgId_supporterId', (idx) => idx.eq('orgId', args.orgId))
+			.take(RECONCILE_SCAN_CAP);
+		const tierCounts = [0, 0, 0, 0, 0];
+		for (const a of actions) {
+			const t = a.engagementTier;
+			if (typeof t === 'number' && t >= 0 && t < 5) tierCounts[t]++;
+		}
+
+		await ctx.db.patch(args.orgId, {
+			supporterStats: stats,
+			supporterCount: supporters.length,
+			actionTierCounts: tierCounts
+		});
+
+		return {
+			supporterCount: supporters.length,
+			truncated: supporters.length >= RECONCILE_SCAN_CAP || actions.length >= RECONCILE_SCAN_CAP
 		};
 	}
 });

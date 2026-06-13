@@ -54,7 +54,18 @@ const PLANS: Record<
  * saturates, return the cap rather than a wrong low number — enforcement
  * over-counts (stricter) rather than under-counts when uncertain.
  */
+// INVARIANT: this cap MUST stay strictly above the largest maxVerifiedActions /
+// maxEmails / maxSms across PLANS (currently 10K / 250K-ish are below... see note).
+// When a period scan saturates, the count is clamped to the cap; enforcement
+// (`usage >= limit`) then still trips ONLY because the cap exceeds every plan
+// limit it gates. For verified actions the max plan limit is 10K < 16K cap, so a
+// saturated clamp (16K) still blocks. If a plan limit ever rises above a cap,
+// raise the cap in lockstep or the clamp would UNDER-enforce.
 const VERIFIED_ACTION_PERIOD_SCAN_CAP = 16_000;
+// Blasts are one row per send (not per recipient), so a period rarely holds many;
+// the cap is a doc-cap backstop. On saturation blastSentThisPeriod fails safe by
+// returning MAX_SAFE_INTEGER (blocks) rather than clamping a recipient SUM low.
+const BLAST_SCAN_CAP = 16_000;
 
 async function verifiedActionsThisPeriod(
   ctx: QueryCtx,
@@ -80,8 +91,10 @@ async function verifiedActionsThisPeriod(
       idx.eq("orgId", org._id).eq("verified", true).gte("sentAt", periodStart),
     )
     .take(VERIFIED_ACTION_PERIOD_SCAN_CAP + 1);
-  // If the period's own volume somehow exceeds the cap, return the cap so
-  // enforcement over-counts (fails safe) rather than under-reporting.
+  // If the period's own volume exceeds the cap, clamp to the cap. This is the
+  // true count below the cap; above it, the clamp is a floor that STILL trips
+  // enforcement because the cap exceeds every plan's maxVerifiedActions (see the
+  // cap INVARIANT above) — not because it "over-counts". Honor that invariant.
   return Math.min(rows.length, VERIFIED_ACTION_PERIOD_SCAN_CAP);
 }
 
@@ -109,7 +122,13 @@ async function blastSentThisPeriod(
     .withIndex("by_orgId_sentAt", (idx) =>
       idx.eq("orgId", orgId).gte("sentAt", periodStart),
     )
-    .collect();
+    .take(BLAST_SCAN_CAP + 1);
+  // Hard-bounded like the verified-action scan — a `.collect()` here would
+  // re-introduce the doc-cap throw if a single period somehow holds >16K blasts.
+  // If the period saturates the cap, fail SAFE for a send-volume limit: return a
+  // value that always trips the limit (block) rather than a low number that would
+  // under-enforce. (One row per blast, so this is only reachable pathologically.)
+  if (blasts.length > BLAST_SCAN_CAP) return Number.MAX_SAFE_INTEGER;
   let sent = 0;
   for (const blast of blasts) {
     if (blast.status !== "sent") continue;

@@ -105,7 +105,12 @@ export function emptySupporterStats(): SupporterStats {
 }
 
 function sourceValue(s: CountableSupporter): string {
-	return typeof s.source === 'string' && s.source.trim() ? s.source.trim() : 'unknown';
+	const raw = typeof s.source === 'string' ? s.source.trim() : '';
+	if (!raw) return 'unknown';
+	// A user label must never equal the reserved overflow sentinel, or a real
+	// source would be indistinguishable from the folded tail (and corrupt the
+	// decrement). Remap the (vanishingly rare) collision to a visible label.
+	return raw === OTHER_SOURCE_KEY ? 'other (label)' : raw;
 }
 
 /**

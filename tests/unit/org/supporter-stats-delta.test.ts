@@ -200,15 +200,17 @@ describe('computeSupporterStats — delete deltas + drift invariant', () => {
 		expect(summed).toBe(200);
 	});
 
-	it('a real source label "__other__" never collides with the fold sentinel', () => {
-		// The sentinel is reserved; if a user literally imports source='__other__'
-		// it is just one of the real keys until the cap, and folding still sums
-		// correctly. (The point of the change: the OLD sentinel 'other' WAS a real
-		// label, so this asserts the bucket math stays exact regardless.)
+	it('a real source label "__other__" is remapped so it never collides with the fold sentinel', () => {
+		// The sentinel '__other__' is reserved for the overflow tail. If a user
+		// literally imports source='__other__', sourceValue remaps it to a visible
+		// label so it can NEVER be confused with the fold bucket (which would
+		// corrupt the decrement). With only 2 distinct sources the cap isn't hit,
+		// so the sentinel key stays absent and the math still sums exactly.
 		let s = emptySupporterStats();
 		s = computeSupporterStats(s, null, subscribed({ source: '__other__' }));
 		s = computeSupporterStats(s, null, subscribed({ source: 'organic' }));
-		expect(s.sourceCounts['__other__']).toBe(1);
+		expect(s.sourceCounts['__other__']).toBeUndefined(); // sentinel not used as a real key
+		expect(s.sourceCounts['other (label)']).toBe(1); // the user's '__other__' remapped
 		expect(s.sourceCounts.organic).toBe(1);
 		const summed = Object.values(s.sourceCounts).reduce((a, b) => a + b, 0);
 		expect(summed).toBe(2);
