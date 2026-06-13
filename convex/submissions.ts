@@ -276,18 +276,16 @@ export const create = action({
 		if (!credentialStatus.active) {
 			throw new Error('NO_ACTIVE_DISTRICT_CREDENTIAL');
 		}
-		// Defense-in-depth tier-4 gate at the Convex action.
-		// The SvelteKit endpoint at `/api/submissions/create/+server.ts:221`
-		// enforces tier 4 (REQUIRED_CONGRESSIONAL_PROOF_TIER) via both the
-		// proof's `publicInputs.authorityLevel` AND `locals.user.trust_tier`.
-		// But this public Convex action is reachable directly via the
-		// Convex client by any authenticated user with an active credential,
-		// bypassing the SvelteKit endpoint entirely. Without this check, a
-		// tier-2 user with an active address credential could call
-		// `api.submissions.create` and reach `deliverToCongress`. Tier 4 is
-		// the documented launch-floor for congressional delivery — see
-		// `REQUIRED_CONGRESSIONAL_PROOF_TIER` in the SvelteKit handler.
-		const REQUIRED_CONGRESSIONAL_PROOF_TIER = 4;
+		// Defense-in-depth congressional-floor gate at the Convex action, mirroring
+		// the SvelteKit endpoint (`/api/submissions/create/+server.ts`). This public
+		// Convex action is reachable directly via the Convex client by any
+		// authenticated user, so it re-enforces the floor independently of the
+		// SvelteKit path. Tiered floor: tier 2 (address-verified — district confirmed)
+		// DELIVERS; gov-ID (tier 4) raises the assurance BADGE, it is not the bar. The
+		// active-credential / revocation / nullifier / domain-binding fail-closed
+		// checks above are independent of this threshold and are unchanged. MUST stay
+		// in sync with REQUIRED_CONGRESSIONAL_PROOF_TIER in the SvelteKit handler.
+		const REQUIRED_CONGRESSIONAL_PROOF_TIER = 2;
 		if (credentialStatus.trustTier < REQUIRED_CONGRESSIONAL_PROOF_TIER) {
 			throw new Error('INSUFFICIENT_AUTHORITY');
 		}

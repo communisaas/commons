@@ -238,7 +238,7 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 		const publicInputsArray: string[] = new Array(31).fill('0x' + '01'.repeat(32));
 		publicInputsArray[26] = VALID_NULLIFIER;
 		publicInputsArray[27] = CANONICAL_DOMAIN;
-		publicInputsArray[28] = '3';
+		publicInputsArray[28] = '1'; // canonical authority below the tier-2 floor — must match authorityLevel
 		publicInputsArray[30] = '0'; // claimed engagement tier; matches server-derived tier 0
 
 		const response = await POST(
@@ -247,7 +247,7 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 					publicInputs: {
 						publicInputsArray,
 						actionDomain: CANONICAL_DOMAIN,
-						authorityLevel: 3,
+						authorityLevel: 1, // below the tier-2 congressional floor — still rejected
 						nullifier: VALID_NULLIFIER
 					}
 				})
@@ -271,7 +271,7 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 						id: 'user_abc',
 						verified_at: Date.now() - 1000,
 						district_hash: 'dh',
-						trust_tier: 2
+						trust_tier: 1
 					}
 				}
 			})

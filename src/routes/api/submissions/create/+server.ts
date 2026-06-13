@@ -21,7 +21,14 @@ import { FEATURES } from '$lib/config/features';
  * Rotate on each Congressional session transition.
  */
 const CURRENT_SESSION_ID = '119th-congress';
-const REQUIRED_CONGRESSIONAL_PROOF_TIER = 4;
+// Tiered congressional floor: tier 2 (address-verified — district confirmed via
+// Shadow Atlas) is the DELIVERY floor; gov-ID (tier 4) is not required to deliver,
+// it raises the packet's assurance BADGE. tier-2 already carries an active,
+// non-revoked district credential (the structural requirement deliverToCongress
+// enforces), so this is a policy threshold, not a security mechanic — every
+// fail-closed check (active credential, revocation, nullifier, domain binding,
+// witness expiry) is unchanged.
+const REQUIRED_CONGRESSIONAL_PROOF_TIER = 2;
 
 /**
  * Submission Creation Endpoint
@@ -260,7 +267,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					error: 'insufficient_authority',
 					code: 'INSUFFICIENT_AUTHORITY',
 					message:
-						'Government-ID verification is required before submitting verified messages to Congress.',
+						'Address verification (confirming your congressional district) is required before submitting messages to Congress.',
 					requiresReverification: true
 				},
 				{ status: 403 }
