@@ -1790,8 +1790,12 @@ export const deliverToCongress = internalAction({
 				});
 			}
 
-			// On any successful delivery, persist district + increment template reach
-			// Wrapped in own try/catch: counter failures must never revert delivery status
+			// On any successful delivery, persist district + increment template reach +
+			// emit the attributed campaignAction (cross-channel ledger).
+			// Wrapped in own try/catch: counter/attribution failures must never revert
+			// delivery status. anySuccess means at least one chamber actually received
+			// the message — so partial deliveries (e.g. House ok / Senate fail) still
+			// attribute, and a fully-failed delivery emits nothing.
 			if (anySuccess) {
 				try {
 					await ctx.runMutation(internal.submissions.updateResolvedDistrict, {
@@ -1804,9 +1808,19 @@ export const deliverToCongress = internalAction({
 						verifiedAt: Date.now(),
 						trustTier: submission.trustTier
 					});
+					// Cross-channel attribution: write a campaignActions row through the
+					// shared counter-maintaining create path so congressional actions
+					// land in the same ledger as org email/form actions. No-op when the
+					// template isn't owned by a campaign (person-layer unaffiliated send).
+					await ctx.runMutation(internal.submissions.emitCongressionalAction, {
+						submissionId: args.submissionId,
+						templateId: submission.templateId,
+						districtCode,
+						trustTier: submission.trustTier
+					});
 				} catch (counterErr) {
 					console.error(
-						'[deliverToCongress] Counter update failed (delivery unaffected):',
+						'[deliverToCongress] Counter/attribution update failed (delivery unaffected):',
 						counterErr
 					);
 				}
@@ -1975,6 +1989,93 @@ export const incrementTemplateReach = internalMutation({
 					}
 				: {})
 		});
+	}
+});
+
+/**
+ * Internal mutation: emit an attributed campaignAction for a successful
+ * congressional (CWC) delivery.
+ *
+ * Closes the disjoint-ledger split: before this, a successful congressional
+ * delivery wrote ONLY templates.verifiedSends, so congressional actions and
+ * org email/form actions lived in two separate tallies. Here we ALSO write a
+ * campaignActions row with channel='congressional' carrying the action's
+ * trustTier (the assurance level — a tier-4 gov-ID action is distinguishable
+ * for higher-assurance badging from a tier-2 address-verified action) and
+ * verified=true (delivery landed). The write reuses campaigns.createCampaignAction
+ * so the SAME path that maintains campaign counters, verifiedActionsLifetime,
+ * actionTierCounts, and tier3VerifiedActionCount runs — no separate counter
+ * site to drift.
+ *
+ * Attribution requires a campaign that owns the delivered template. Person-layer
+ * congressional sends against an unaffiliated public template have no campaign
+ * to attribute to; those still bump templates.verifiedSends (unchanged) but emit
+ * no campaignAction. Only org-authored congressional campaigns (campaigns.templateId)
+ * land in the org ledger.
+ *
+ * Dedup is on (campaignId, congressionalSubmissionId) inside createCampaignAction,
+ * so an idempotent delivery retry never double-counts. Non-throwing: like the
+ * verifiedSends counter, attribution failures must never affect delivery status —
+ * the caller wraps this in the same counter try/catch.
+ */
+export const emitCongressionalAction = internalMutation({
+	args: {
+		submissionId: v.id('submissions'),
+		templateId: v.string(),
+		districtCode: v.optional(v.string()),
+		trustTier: v.optional(v.number())
+	},
+	handler: async (
+		ctx,
+		args
+	): Promise<
+		| { attributed: false; reason: 'template_not_found' | 'no_campaign' }
+		| { attributed: true; alreadySubmitted: boolean }
+	> => {
+		// Resolve the delivered template to a templates._id. Submissions carry
+		// either the Convex id or a slug (mirrors getTemplateForDelivery).
+		const normalizedTemplateId = (ctx.db as any).normalizeId?.(
+			'templates',
+			args.templateId
+		) as Id<'templates'> | null | undefined;
+		const template =
+			(normalizedTemplateId ? await ctx.db.get(normalizedTemplateId) : null) ??
+			(await ctx.db
+				.query('templates')
+				.withIndex('by_slug', (q) => q.eq('slug', args.templateId))
+				.first());
+		if (!template) {
+			return { attributed: false, reason: 'template_not_found' as const };
+		}
+
+		// Find the campaign that owns this template. Org-authored congressional
+		// campaigns set campaigns.templateId; person-layer sends against an
+		// unaffiliated public template have none.
+		const campaign = await ctx.db
+			.query('campaigns')
+			.withIndex('by_templateId', (q) => q.eq('templateId', template._id))
+			.first();
+		if (!campaign) {
+			return { attributed: false, reason: 'no_campaign' as const };
+		}
+
+		// Reuse the shared counter-maintaining create path. channel='congressional'
+		// + verified=true; trustTier carries the assurance level for badging. No
+		// supporterId (constituent PII is never custodied for congressional sends);
+		// dedup keys on congressionalSubmissionId instead. engagementTier defaults
+		// to 0 — congressional submissions don't carry an engagement tier, and the
+		// org actionTierCounts histogram only buckets 0-4 engagement tiers.
+		const result = await ctx.runMutation(internal.campaigns.createCampaignAction, {
+			campaignId: campaign._id,
+			verified: true,
+			engagementTier: 0,
+			districtCode: args.districtCode,
+			trustTier: args.trustTier,
+			channel: 'congressional',
+			congressionalSubmissionId: args.submissionId
+		});
+
+		return { attributed: true, alreadySubmitted: result.alreadySubmitted === true };
 	}
 });
 

@@ -1123,7 +1123,11 @@ export const findOrCreateSupporter = internalMutation({
 export const createCampaignAction = internalMutation({
 	args: {
 		campaignId: v.id('campaigns'),
-		supporterId: v.id('supporters'),
+		// Optional to support the congressional-delivery channel, which has no
+		// server-side supporter row (constituent PII is never custodied for
+		// person-layer CWC sends). Email/form/web actions still pass a real
+		// supporterId; the schema field is already optional.
+		supporterId: v.optional(v.id('supporters')),
 		verified: v.boolean(),
 		engagementTier: v.number(),
 		districtHash: v.optional(v.string()),
@@ -1133,22 +1137,48 @@ export const createCampaignAction = internalMutation({
 		trustTier: v.optional(v.number()),
 		compositionMode: v.optional(v.string()),
 		atlasVersion: v.optional(v.string()),
-		userId: v.optional(v.id('users'))
+		userId: v.optional(v.id('users')),
+		// Delivery-channel discriminator (closed union mirrors the schema field).
+		// Defaults to undefined (unattributed) when omitted, preserving existing
+		// email/form writers that don't set it yet.
+		channel: v.optional(
+			v.union(
+				v.literal('congressional'),
+				v.literal('email'),
+				v.literal('sms'),
+				v.literal('web')
+			)
+		),
+		// Congressional dedup key — the submission whose delivery produced this
+		// action. Used in place of supporterId when the channel has no supporter.
+		congressionalSubmissionId: v.optional(v.id('submissions'))
 	},
 	handler: async (ctx, args) => {
-		// Dedup via the composite index. Without `by_campaignId_supporterId`,
-		// a `withIndex("by_campaignId").collect()` would return every action
-		// for the campaign so the in-memory `.find()` could match the
-		// supporter, then re-filter the SAME list for verified count — two
-		// O(n) passes on a list that grows linearly with campaign size, and
-		// popular campaigns would hit Convex's row-scan cap. With the
-		// composite index this is a single-doc lookup.
-		const alreadySubmitted = await ctx.db
-			.query('campaignActions')
-			.withIndex('by_campaignId_supporterId', (q) =>
-				q.eq('campaignId', args.campaignId).eq('supporterId', args.supporterId)
-			)
-			.first();
+		// Dedup via a single-doc composite-index lookup. Two keys depending on
+		// channel:
+		//   - supporter-bearing channels (email/form/web): (campaignId, supporterId)
+		//   - congressional (no supporter): (campaignId, congressionalSubmissionId)
+		// Without an index, a `withIndex("by_campaignId").collect()` would scan
+		// every action for the campaign — two O(n) passes that hit Convex's
+		// row-scan cap on popular campaigns. The composite indexes keep this a
+		// single-doc lookup on either key.
+		const alreadySubmitted = args.congressionalSubmissionId
+			? await ctx.db
+					.query('campaignActions')
+					.withIndex('by_campaignId_congressionalSubmissionId', (q) =>
+						q
+							.eq('campaignId', args.campaignId)
+							.eq('congressionalSubmissionId', args.congressionalSubmissionId)
+					)
+					.first()
+			: args.supporterId
+				? await ctx.db
+						.query('campaignActions')
+						.withIndex('by_campaignId_supporterId', (q) =>
+							q.eq('campaignId', args.campaignId).eq('supporterId', args.supporterId)
+						)
+						.first()
+				: null;
 
 		// Denormalize orgId from campaign for billing query performance.
 		// Also: returns `verifiedActionCount` from the denormalized
@@ -1185,6 +1215,8 @@ export const createCampaignAction = internalMutation({
 			trustTier: args.trustTier,
 			compositionMode: args.compositionMode,
 			atlasVersion: args.atlasVersion,
+			channel: args.channel,
+			congressionalSubmissionId: args.congressionalSubmissionId,
 			delegated: false,
 			sentAt: Date.now()
 		});

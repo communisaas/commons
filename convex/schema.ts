@@ -1813,7 +1813,11 @@ export default defineSchema({
 	})
 		.index('by_orgId', ['orgId'])
 		.index('by_status', ['status'])
-		.index('by_debateId', ['debateId']),
+		.index('by_debateId', ['debateId'])
+		// Resolve the campaign that owns a given template — used by the
+		// congressional delivery path to attribute a successful CWC send back to
+		// the org campaign whose templateId matches the delivered submission.
+		.index('by_templateId', ['templateId']),
 
 	campaignActions: defineTable({
 		campaignId: v.id('campaigns'),
@@ -1847,12 +1851,29 @@ export default defineSchema({
 		delegated: v.boolean(),
 		delegationGrantId: v.optional(v.string()),
 
-		// Delivery-channel discriminator for cross-channel attribution. Values:
-		// 'email' (direct email), 'congressional' (CWC / legislative delivery),
-		// 'sms', 'web' (on-site form / embed). Optional: existing rows predate
-		// the field and read as undefined (treated as unattributed). The per-
-		// channel emit is wired separately — this is the storage substrate only.
-		channel: v.optional(v.string()),
+		// Delivery-channel discriminator for cross-channel attribution. Now that
+		// the channel taxonomy is fixed, the field is a closed union rather than a
+		// bare string: 'congressional' (CWC / legislative delivery, written by
+		// submissions.emitCongressionalAction), 'email' (direct email), 'sms', and
+		// 'web' (on-site form / embed) are forward values for the remaining writers.
+		// Optional: existing rows predate the field and read as undefined (treated
+		// as unattributed). Adding a value requires a schema deploy + a matching
+		// read-side branch — the right friction for a cross-channel discriminator.
+		channel: v.optional(
+			v.union(
+				v.literal('congressional'),
+				v.literal('email'),
+				v.literal('sms'),
+				v.literal('web')
+			)
+		),
+
+		// Set only on congressional-channel rows: the submissions row whose
+		// successful CWC delivery produced this attributed action. Lets
+		// createCampaignAction dedup the congressional path (which has no
+		// supporterId) on the submission instead of (campaignId, supporterId),
+		// so an idempotent delivery retry never double-counts a campaign.
+		congressionalSubmissionId: v.optional(v.id('submissions')),
 
 		sentAt: v.number()
 	})
@@ -1868,7 +1889,13 @@ export default defineSchema({
 		// an unbounded .collect().
 		.index('by_orgId_verified_sentAt', ['orgId', 'verified', 'sentAt'])
 		// Per-channel attribution queries (bounded per campaign).
-		.index('by_campaignId_channel', ['campaignId', 'channel']),
+		.index('by_campaignId_channel', ['campaignId', 'channel'])
+		// Congressional-path dedup: a single-doc lookup for the action a given
+		// submission already produced, so retries are idempotent.
+		.index('by_campaignId_congressionalSubmissionId', [
+			'campaignId',
+			'congressionalSubmissionId'
+		]),
 
 	campaignDeliveries: defineTable({
 		campaignId: v.id('campaigns'),
