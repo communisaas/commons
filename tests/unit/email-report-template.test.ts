@@ -140,3 +140,53 @@ describe('renderReport', () => {
 		expect(r.html).not.toMatch(/sha256:[0-9a-f]{8}…[0-9a-f]{4}/);
 	});
 });
+
+describe('renderReport — org branding (D-09)', () => {
+	const accentCtx = {
+		...baseCtx,
+		branding: { accent: '#ff5500', logoUrl: 'https://cdn.example.com/logo.png' }
+	};
+
+	it('renders the org accent on the eyebrow header, primary bar, and verify link', async () => {
+		const r = await renderReport(accentCtx);
+		// Eyebrow "Verification Report" color is the accent (was the muted gray).
+		expect(r.html).toContain('color:#ff5500;text-transform:uppercase');
+		// Verify-independently link is tinted with the accent.
+		expect(r.html).toContain('color:#ff5500;text-decoration:none');
+		// Identity / geography primary segment uses the accent.
+		expect(r.html).toContain('background-color:#ff5500');
+	});
+
+	it('renders the org logo in the header when set', async () => {
+		const r = await renderReport(accentCtx);
+		expect(r.html).toContain('src="https://cdn.example.com/logo.png"');
+		expect(r.html).toContain('alt="Sample Coalition"');
+	});
+
+	it('falls back to Commons teal + no logo when branding is unset', async () => {
+		const r = await renderReport(baseCtx);
+		// Default Commons teal primary segment.
+		expect(r.html).toContain('background-color:#3bc4b8');
+		// Eyebrow keeps the muted gray default.
+		expect(r.html).toContain('color:#a3a3a3;text-transform:uppercase');
+		// No injected logo img.
+		expect(r.html).not.toContain('<img');
+	});
+
+	it('ignores a malformed accent and falls back to Commons styling', async () => {
+		const r = await renderReport({ ...baseCtx, branding: { accent: 'not-a-hex' } });
+		expect(r.html).toContain('background-color:#3bc4b8');
+		expect(r.html).not.toContain('not-a-hex');
+	});
+
+	it('branding NEVER changes the attestation hash (presentation-only invariant)', async () => {
+		const plain = await renderReport(baseCtx);
+		const branded = await renderReport(accentCtx);
+		const whiteLabeled = await renderReport({ ...baseCtx, whiteLabel: true });
+		// All three carry identical attestation hashes — branding + white-label
+		// are excluded from the canonical preimage by design.
+		expect(branded.attestationHash).toBe(plain.attestationHash);
+		expect(whiteLabeled.attestationHash).toBe(plain.attestationHash);
+		expect(canonicalPreimage(accentCtx)).toBe(canonicalPreimage(baseCtx));
+	});
+});

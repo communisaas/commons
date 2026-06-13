@@ -54,7 +54,11 @@ export const load: PageServerLoad = async ({ params, parent, locals, platform })
 		campaignTitle: preview.campaign.title,
 		orgName: org.name ?? org.slug,
 		packet: fullPacket,
-		verificationUrl: `${baseUrl}/v/${preview.campaign._id}`
+		verificationUrl: `${baseUrl}/v/${preview.campaign._id}`,
+		// D-09: org branding (accent + logo). Coalition-gated at the writer, so
+		// these are only populated for Coalition orgs that have set them;
+		// otherwise the report renders in default Commons styling.
+		branding: { accent: org.brandingAccent ?? null, logoUrl: org.logoUrl ?? null }
 	});
 	const renderedHtml = rendered.html;
 
@@ -204,7 +208,13 @@ export const actions: Actions = {
 					campaignTitle: preview.campaign.title,
 					orgName: ctx.org.name ?? params.slug,
 					packet: fullPacket,
-					verificationUrl: `${baseUrl}/v/${preview.campaign._id}`
+					verificationUrl: `${baseUrl}/v/${preview.campaign._id}`,
+					// D-09: org branding threaded into the SENT email (this rendered
+					// HTML is what `sendReport` persists + dispatches via SES).
+					branding: {
+						accent: ctx.org.brandingAccent ?? null,
+						logoUrl: ctx.org.logoUrl ?? null
+					}
 				});
 				renderedHtml = rendered.html;
 				packetDigest = rendered.attestationHash;

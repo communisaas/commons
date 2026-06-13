@@ -331,6 +331,13 @@ export const getPublicAny = query({
 			orgName: org?.name ?? null,
 			orgSlug: org?.slug ?? null,
 			orgAvatar: org?.avatar ?? null,
+			// Branding for the embed widget (D-09) + white-label flag (D-10).
+			// Coalition-gated at the writer, so these are only set for Coalition
+			// orgs that have configured branding; the widget falls back to its
+			// default Commons styling otherwise.
+			orgBrandingAccent: org?.brandingAccent ?? null,
+			orgLogoUrl: org?.logoUrl ?? null,
+			orgWhiteLabel: org?.whiteLabel ?? false,
 			verifiedActionCount,
 			targets: campaign.targets ?? null
 		};

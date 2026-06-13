@@ -47,7 +47,9 @@ export const GET: RequestHandler = async ({ params, locals, platform, request })
 		campaignTitle: preview.campaign.title,
 		orgName: ctx.org.name ?? params.slug,
 		packet,
-		verificationUrl: `${baseUrl}/v/${preview.campaign._id}`
+		verificationUrl: `${baseUrl}/v/${preview.campaign._id}`,
+		// D-09: same org branding as the email body so the print/PDF matches.
+		branding: { accent: ctx.org.brandingAccent ?? null, logoUrl: ctx.org.logoUrl ?? null }
 	});
 
 	// `Content-Disposition: inline` so the browser opens the page directly;

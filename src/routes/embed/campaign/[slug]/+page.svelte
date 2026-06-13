@@ -20,10 +20,15 @@
 	let districtVerifying = $state(false);
 	let districtError = $state('');
 
-	// URL param customization
+	// URL param customization. A `?accent=` URL param (host embed control) wins;
+	// otherwise the org's Coalition-gated brandingAccent is the default; finally
+	// the Commons teal. logoUrl comes only from org branding (no URL override).
 	const bgColor = $derived($page.url.searchParams.get('bg') || 'ffffff');
-	const accentColor = $derived($page.url.searchParams.get('accent') || '0d9488');
+	const accentColor = $derived(
+		$page.url.searchParams.get('accent') || data.campaign.brandingAccent || '0d9488'
+	);
 	const hideCount = $derived($page.url.searchParams.get('hide_count') === '1');
+	const orgLogoUrl = $derived(data.campaign.logoUrl ?? null);
 
 	// Sanitize hex colors — strip # prefix and only allow hex chars
 	function sanitizeHex(hex: string): string {
@@ -136,6 +141,13 @@
 		{:else}
 			<!-- Campaign header -->
 			<div class="mb-5">
+				{#if orgLogoUrl}
+					<img
+						src={orgLogoUrl}
+						alt={data.campaign.orgName}
+						class="mb-3 max-h-10 w-auto object-contain"
+					/>
+				{/if}
 				<p class="text-xs font-medium uppercase tracking-wider text-gray-400">
 					{data.campaign.orgName}
 				</p>
