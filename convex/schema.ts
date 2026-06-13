@@ -1398,6 +1398,19 @@ export default defineSchema({
 		sentEmailCount: v.optional(v.number()),
 		smsSentCount: v.optional(v.number()),
 
+		// Scale-safe verified-action metering. The billing read counts verified
+		// actions WITHIN the current period; the prior implementation collected
+		// every verified action and filtered by sentAt in memory, which throws
+		// past the per-query document cap and hard-locks the org on every submit
+		// once it has >16K verified actions. This is a monotonic lifetime total
+		// (only ever increments, never resets — so no never-reset bug) minus a
+		// per-period baseline snapshotted at rollover: period_count = lifetime -
+		// baseline. baselineAt records WHICH period the baseline belongs to so a
+		// late/missed rollover can be detected and self-healed at read time.
+		verifiedActionsLifetime: v.optional(v.number()),
+		verifiedActionsPeriodBaseline: v.optional(v.number()),
+		verifiedActionsPeriodBaselineAt: v.optional(v.number()),
+
 		// Denormalized per-supporter breakdown counters. Backs the verification
 		// funnel + list-health summary without a full-table scan (the scan
 		// throws past the per-query doc cap once an org's roster is large).
@@ -1830,7 +1843,12 @@ export default defineSchema({
 		.index('by_campaignId_districtHash', ['campaignId', 'districtHash'])
 		.index('by_campaignId_supporterId', ['campaignId', 'supporterId'])
 		.index('by_orgId_supporterId', ['orgId', 'supporterId'])
-		.index('by_orgId_verified', ['orgId', 'verified']),
+		.index('by_orgId_verified', ['orgId', 'verified'])
+		// Range index for the billing self-heal: when the period baseline is
+		// stale/missing, count THIS period's verified actions via a sentAt range
+		// (bounded to one period's volume — never the lifetime table) instead of
+		// an unbounded .collect().
+		.index('by_orgId_verified_sentAt', ['orgId', 'verified', 'sentAt']),
 
 	campaignDeliveries: defineTable({
 		campaignId: v.id('campaigns'),

@@ -1211,6 +1211,21 @@ export const createCampaignAction = internalMutation({
 			});
 		}
 
+		// Monotonic lifetime tally of verified actions for the org — the
+		// only-ever-increments base for scale-safe billing metering. Bumped here,
+		// next to the campaign counter, so there's exactly one new write site and
+		// it can never drift. Period usage = lifetime - period baseline (the
+		// baseline is snapshotted at billing-period rollover). Only verified
+		// actions count toward the metered quota.
+		if (args.verified && orgId) {
+			const org = await ctx.db.get(orgId);
+			if (org) {
+				await ctx.db.patch(orgId, {
+					verifiedActionsLifetime: (org.verifiedActionsLifetime ?? 0) + 1
+				});
+			}
+		}
+
 		// Reputation-tier on-action increment (T10-1 hybrid model). Only ZK
 		// paths supply userId — non-ZK actions rely on the nightly cron to
 		// recompute. Only verified actions count toward reputation; unverified

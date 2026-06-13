@@ -11,7 +11,8 @@ import { v } from "convex/values";
 import { subscriptionPlan, subscriptionStatus, subscriptionPaymentMethod } from "./_validators";
 import { requireAuth, requireOrgRole } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
-import type { Id } from "./_generated/dataModel";
+import type { Id, Doc } from "./_generated/dataModel";
+import type { QueryCtx } from "./_generated/server";
 
 // Plan limits — mirrored from src/lib/server/billing/plans.ts (MUST stay in sync)
 const PLANS: Record<
@@ -30,6 +31,59 @@ const PLANS: Record<
   organization: { priceCents: 7_500, maxSeats: 10, maxTemplatesMonth: 500, maxVerifiedActions: 5_000, maxEmails: 100_000, maxSms: 10_000 },
   coalition: { priceCents: 20_000, maxSeats: 25, maxTemplatesMonth: 1_000, maxVerifiedActions: 10_000, maxEmails: 250_000, maxSms: 50_000 },
 };
+
+/**
+ * Verified actions within the current billing period — scale-safe.
+ *
+ * The naive implementation collected every verified campaignAction and filtered
+ * by sentAt in memory; that throws past the per-query document cap and
+ * hard-locks the org on EVERY submit once it has >16K verified actions.
+ *
+ * Instead: period_count = verifiedActionsLifetime - verifiedActionsPeriodBaseline,
+ * where the baseline is snapshotted at period rollover. Both are O(1) reads off
+ * the org row. The baseline carries `baselineAt` = the periodStart it belongs
+ * to, so we only trust the O(1) path when it matches the period we're metering.
+ *
+ * Self-heal (no write — this runs in a query): if the baseline is missing or
+ * belongs to a DIFFERENT period (a late/missed Stripe webhook, or a free-tier
+ * calendar-month rollover that has no webhook), count THIS period's verified
+ * actions via the `by_orgId_verified_sentAt` range index — bounded to one
+ * period's volume, never the lifetime table, so it can never throw the cap.
+ *
+ * Fail-safe: the range count is itself bounded (take(cap + 1)); if it
+ * saturates, return the cap rather than a wrong low number — enforcement
+ * over-counts (stricter) rather than under-counts when uncertain.
+ */
+const VERIFIED_ACTION_PERIOD_SCAN_CAP = 16_000;
+
+async function verifiedActionsThisPeriod(
+  ctx: QueryCtx,
+  org: Doc<"organizations">,
+  periodStart: number,
+): Promise<number> {
+  const baselineAt = org.verifiedActionsPeriodBaselineAt;
+
+  // Trust the O(1) lifetime-minus-baseline path only when the snapshot belongs
+  // to exactly the period we're metering. For a paid org the read's periodStart
+  // is the same `currentPeriodStart` the webhook snapshotted, so they match.
+  if (baselineAt !== undefined && baselineAt === periodStart) {
+    const lifetime = org.verifiedActionsLifetime ?? 0;
+    const baseline = org.verifiedActionsPeriodBaseline ?? 0;
+    return Math.max(0, lifetime - baseline);
+  }
+
+  // Self-heal: baseline missing or for a different period. Count this period's
+  // verified actions via the sentAt range index — bounded, never unbounded.
+  const rows = await ctx.db
+    .query("campaignActions")
+    .withIndex("by_orgId_verified_sentAt", (idx) =>
+      idx.eq("orgId", org._id).eq("verified", true).gte("sentAt", periodStart),
+    )
+    .take(VERIFIED_ACTION_PERIOD_SCAN_CAP + 1);
+  // If the period's own volume somehow exceeds the cap, return the cap so
+  // enforcement over-counts (fails safe) rather than under-reporting.
+  return Math.min(rows.length, VERIFIED_ACTION_PERIOD_SCAN_CAP);
+}
 
 // =============================================================================
 // QUERIES
@@ -151,23 +205,15 @@ export const checkPlanLimits = query({
     }
 
     // === Period-scoped usage aggregation ===
-    // All usage is computed at query time within the billing period window.
-    // No denormalized counters used for billing — avoids the "never-reset" bug.
-
-    // Verified actions: period-scoped via campaignActions.sentAt
-    // Uses by_orgId_verified index for single-pass query (no N+1 per campaign)
-    const verifiedActionRows = await ctx.db
-      .query("campaignActions")
-      .withIndex("by_orgId_verified", (idx) =>
-        idx.eq("orgId", org._id).eq("verified", true),
-      )
-      .collect();
-    let verifiedActions = 0;
-    for (const action of verifiedActionRows) {
-      if (action.sentAt >= periodStart) {
-        verifiedActions++;
-      }
-    }
+    // Email/SMS usage is computed at query time within the billing period window.
+    //
+    // Verified actions use a monotonic lifetime tally minus a per-period
+    // baseline (snapshotted at rollover) — O(1), never-reset-safe, and it never
+    // scans the whole verified-action table (which throws past the document cap
+    // and hard-locks the org on every submit at scale). NOT a per-period
+    // denormalized counter — the baseline only ever moves forward, so there is
+    // no never-reset bug.
+    const verifiedActions = await verifiedActionsThisPeriod(ctx, org, periodStart);
 
     // Emails: aggregate from completed blasts within the billing period
     const emailBlasts = await ctx.db
@@ -257,20 +303,9 @@ export const checkPlanLimitsByOrgId = internalQuery({
       periodStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
     }
 
-    // Period-scoped aggregation (mirrors checkPlanLimits logic)
-    // Single-pass via by_orgId_verified index — no N+1 campaign loop
-    const verifiedActionRows = await ctx.db
-      .query("campaignActions")
-      .withIndex("by_orgId_verified", (idx) =>
-        idx.eq("orgId", org._id).eq("verified", true),
-      )
-      .collect();
-    let verifiedActions = 0;
-    for (const action of verifiedActionRows) {
-      if (action.sentAt >= periodStart) {
-        verifiedActions++;
-      }
-    }
+    // Verified actions: lifetime-minus-baseline (mirrors checkPlanLimits) —
+    // O(1), never-reset-safe, no full verified-action scan.
+    const verifiedActions = await verifiedActionsThisPeriod(ctx, org, periodStart);
 
     const emailBlasts = await ctx.db
       .query("emailBlasts")
@@ -643,6 +678,33 @@ function mapStripeStatus(status: string): "active" | "past_due" | "canceled" | "
 // =============================================================================
 
 /**
+ * Snapshot the verified-action period baseline at billing-period rollover.
+ *
+ * Sets baseline = the org's current monotonic lifetime tally and records which
+ * period the baseline belongs to (baselineAt = periodStart). The billing read
+ * then computes period_count = lifetime - baseline in O(1), no scan.
+ *
+ * Idempotent + monotonic: only advances the baseline when `periodStart` is
+ * newer than the recorded baselineAt, so a duplicate or out-of-order Stripe
+ * webhook can't rewind it (which would over-count the period). A snapshot for
+ * the SAME period start is a no-op. The baseline only ever moves forward.
+ */
+async function snapshotVerifiedActionBaseline(
+  ctx: { db: { get: (id: Id<"organizations">) => Promise<{ verifiedActionsLifetime?: number; verifiedActionsPeriodBaselineAt?: number } | null>; patch: (id: Id<"organizations">, patch: Record<string, unknown>) => Promise<unknown> } },
+  orgId: Id<"organizations">,
+  periodStart: number,
+): Promise<void> {
+  const org = await ctx.db.get(orgId);
+  if (!org) return;
+  const existingAt = org.verifiedActionsPeriodBaselineAt ?? 0;
+  if (periodStart <= existingAt) return; // same/older period — no rewind
+  await ctx.db.patch(orgId, {
+    verifiedActionsPeriodBaseline: org.verifiedActionsLifetime ?? 0,
+    verifiedActionsPeriodBaselineAt: periodStart,
+  });
+}
+
+/**
  * Upsert a subscription from Stripe checkout completion.
  */
 export const upsertFromStripe = internalMutation({
@@ -706,6 +768,10 @@ export const upsertFromStripe = internalMutation({
         updatedAt: now,
       });
     }
+
+    // Snapshot the verified-action billing baseline for the new period so the
+    // metering read is O(1) (no scan) for this paid org going forward.
+    await snapshotVerifiedActionBaseline(ctx, org._id, args.currentPeriodStart);
   },
 });
 
@@ -874,6 +940,14 @@ export const updateByStripeId = internalMutation({
         maxTemplatesMonth: freeLimits.maxTemplatesMonth,
         updatedAt: now,
       });
+    }
+
+    // When Stripe advances the billing period (customer.subscription.updated
+    // carries the new current_period_start), snapshot the verified-action
+    // baseline so the metering read resets to 0 for the new period. The helper
+    // is monotonic — it ignores a stale/duplicate period start.
+    if (args.currentPeriodStart !== undefined && sub.orgId) {
+      await snapshotVerifiedActionBaseline(ctx, sub.orgId, args.currentPeriodStart);
     }
   },
 });
