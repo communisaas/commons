@@ -22,8 +22,17 @@ import {
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { encryptForSupporterV2 } from './_orgKey';
 import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
+import { computeCampaignDistrictSets } from './_campaignStats';
 
 declare const process: { env: Record<string, string | undefined> };
+
+/**
+ * Cap on the public packet-summary scan (`getCampaignPacketSummary`). Bounded
+ * so it never hits the per-query doc cap; the surface is aggregate/qualitative
+ * and K-floored, so a most-recent capped sample is a sound floor.
+ */
+const PACKET_SUMMARY_SCAN_CAP = 10_000;
+
 type ActiveCampaignForSubmission = {
 	_id: Id<'campaigns'>;
 	orgId: Id<'organizations'>;
@@ -712,22 +721,26 @@ export const remove = mutation({
 			throw new Error('Campaign not found');
 		}
 
-		// Delete campaign actions
+		// Enumerate-to-delete over campaignActions/campaignDeliveries — both grow
+		// with supporter activity and can exceed BOTH the per-query doc-read cap
+		// (the `.collect()` throws) AND the per-mutation write-op budget. Delete a
+		// BOUNDED batch of each here, then drop the campaign row. Any remainder is
+		// drained out-of-band by `purgeCampaignData` (bounded self-scheduling
+		// batches). Orphaned action/delivery rows pointing at a now-deleted
+		// campaign are read-safe: org/campaign-scoped readers resolve via the
+		// campaign id and drop them once the campaign row is gone.
 		const actions = await ctx.db
 			.query('campaignActions')
 			.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
-			.collect();
-
+			.take(CAMPAIGN_PURGE_BATCH);
 		for (const action of actions) {
 			await ctx.db.delete(action._id);
 		}
 
-		// Delete campaign deliveries
 		const deliveries = await ctx.db
 			.query('campaignDeliveries')
 			.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
-			.collect();
-
+			.take(CAMPAIGN_PURGE_BATCH);
 		for (const delivery of deliveries) {
 			await ctx.db.delete(delivery._id);
 		}
@@ -742,7 +755,48 @@ export const remove = mutation({
 			updatedAt: Date.now()
 		});
 
+		// Drain any remaining child rows out-of-band if either batch saturated.
+		if (actions.length >= CAMPAIGN_PURGE_BATCH || deliveries.length >= CAMPAIGN_PURGE_BATCH) {
+			await ctx.scheduler.runAfter(0, internal.campaigns.purgeCampaignData, {
+				campaignId: args.campaignId
+			});
+		}
+
 		return args.campaignId;
+	}
+});
+
+/** Per-mutation cap on campaign child-row deletes. Under the ~4096 write-op budget. */
+const CAMPAIGN_PURGE_BATCH = 2_000;
+
+/**
+ * Drain remaining campaignActions + campaignDeliveries for a deleted campaign
+ * in bounded batches. Self-schedules until both child sets are empty. The
+ * campaign row is already gone, so any in-flight orphans are read-safe.
+ */
+export const purgeCampaignData = internalMutation({
+	args: { campaignId: v.id('campaigns') },
+	handler: async (ctx, args) => {
+		const actions = await ctx.db
+			.query('campaignActions')
+			.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
+			.take(CAMPAIGN_PURGE_BATCH);
+		for (const action of actions) {
+			await ctx.db.delete(action._id);
+		}
+		const deliveries = await ctx.db
+			.query('campaignDeliveries')
+			.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
+			.take(CAMPAIGN_PURGE_BATCH);
+		for (const delivery of deliveries) {
+			await ctx.db.delete(delivery._id);
+		}
+		if (actions.length >= CAMPAIGN_PURGE_BATCH || deliveries.length >= CAMPAIGN_PURGE_BATCH) {
+			await ctx.scheduler.runAfter(0, internal.campaigns.purgeCampaignData, {
+				campaignId: args.campaignId
+			});
+		}
+		return { actionsRemoved: actions.length, deliveriesRemoved: deliveries.length };
 	}
 });
 
@@ -1718,15 +1772,14 @@ export const getForOrgPage = query({
 			}
 		}
 
-		// Action count for pre-threshold debate progress
+		// Action count for pre-threshold debate progress. Sub-class (B) pure
+		// count — read the denormalized verifiedActionCount counter maintained at
+		// createCampaignAction instead of a .collect() that throws past the
+		// per-query doc cap once the campaign passes ~16K actions.
 		const isActive = campaign.status !== 'DRAFT';
 		let actionCount: number | null = null;
 		if (isActive && campaign.debateEnabled && !campaign.debateId) {
-			const actions = await ctx.db
-				.query('campaignActions')
-				.withIndex('by_campaignId', (idx) => idx.eq('campaignId', campaign._id))
-				.collect();
-			actionCount = actions.filter((a) => a.verified).length;
+			actionCount = campaign.verifiedActionCount ?? 0;
 		}
 
 		return {
@@ -1787,27 +1840,41 @@ export const getPublicActive = query({
 export const getStats = query({
 	args: { campaignId: v.id('campaigns') },
 	handler: async (ctx, { campaignId }) => {
-		const actions = await ctx.db
-			.query('campaignActions')
-			.withIndex('by_campaignId', (idx) => idx.eq('campaignId', campaignId))
-			.collect();
+		const campaign = await ctx.db.get(campaignId);
+		if (!campaign) {
+			return {
+				verifiedActions: null,
+				totalActions: null,
+				uniqueDistricts: null,
+				tier3VerifiedActions: null,
+				tier3UniqueDistricts: null
+			};
+		}
 
-		const verified = actions.filter((a) => a.verified);
-		const districtSet = new Set(verified.filter((a) => a.districtHash).map((a) => a.districtHash!));
-		const tier3Verified = verified.filter((a) => (a.trustTier ?? 0) >= 3);
-		const tier3DistrictSet = new Set(
-			tier3Verified.filter((a) => a.districtHash).map((a) => a.districtHash!)
-		);
+		// Pure sums (sub-class B) — read the denormalized campaign counters
+		// maintained at createCampaignAction. Counting these in memory required a
+		// `.collect()` over every campaignAction, which throws past the per-query
+		// doc cap once a campaign passes ~16K actions.
+		const verifiedCount = campaign.verifiedActionCount ?? 0;
+		const totalCount = campaign.actionCount ?? 0;
+		const tier3Count = campaign.tier3VerifiedActionCount ?? 0;
+
+		// Set cardinality (sub-class C) — distinct verified districts / distinct
+		// tier-3 verified districts. A scalar counter would DRIFT (a supporter
+		// active in two districts double-counts), so this is a BOUNDED scan over
+		// verified actions, capped, with a truncated floor on saturation.
+		const { verifiedDistricts, tier3VerifiedDistricts } =
+			await computeCampaignDistrictSets(ctx, campaignId);
 
 		const kFloor5 = (n: number): number | null => (n < 5 ? null : n);
 		const kFloor3 = (n: number): number | null => (n < 3 ? null : n);
 
 		return {
-			verifiedActions: kFloor5(verified.length),
-			totalActions: kFloor5(actions.length),
-			uniqueDistricts: kFloor3(districtSet.size),
-			tier3VerifiedActions: kFloor5(tier3Verified.length),
-			tier3UniqueDistricts: kFloor3(tier3DistrictSet.size)
+			verifiedActions: kFloor5(verifiedCount),
+			totalActions: kFloor5(totalCount),
+			uniqueDistricts: kFloor3(verifiedDistricts),
+			tier3VerifiedActions: kFloor5(tier3Count),
+			tier3UniqueDistricts: kFloor3(tier3VerifiedDistricts)
 		};
 	}
 });
@@ -1820,29 +1887,44 @@ export const getStats = query({
  * "Not authenticated"; use getCampaignPacketSummary for the public aggregate.
  */
 export const getActionsForPacket = query({
-	args: { campaignId: v.id('campaigns') },
-	handler: async (ctx, { campaignId }) => {
+	args: {
+		campaignId: v.id('campaigns'),
+		// Cursor pagination over the campaign's actions. Sub-class (A)
+		// must-enumerate: the packet/analytics need the actual rows, so the caller
+		// loops pages (see fetchAllPacketActions) to enumerate the FULL set across
+		// page boundaries — never a single unbounded .collect() that throws past
+		// the per-query doc cap once a campaign passes ~16K actions. Args are
+		// optional so a legacy single-shot caller still gets the first page.
+		cursor: v.optional(v.union(v.string(), v.null())),
+		numItems: v.optional(v.number())
+	},
+	handler: async (ctx, { campaignId, cursor, numItems }) => {
 		const { userId } = await requireAuth(ctx);
 		const campaign = await ctx.db.get(campaignId);
 		if (!campaign) throw new Error('Campaign not found');
 		await requireOrgMembership(ctx, campaign.orgId, userId);
 
-		const actions = await ctx.db
+		const { page, isDone, continueCursor } = await ctx.db
 			.query('campaignActions')
 			.withIndex('by_campaignId', (idx) => idx.eq('campaignId', campaignId))
-			.collect();
+			.order('asc')
+			.paginate({ cursor: cursor ?? null, numItems: Math.min(numItems ?? 2000, 4000) });
 
-		return actions.map((a) => ({
-			verified: a.verified,
-			engagementTier: a.engagementTier,
-			districtHash: a.districtHash ?? null,
-			h3Cell: a.h3Cell ?? null,
-			messageHash: a.messageHash ?? null,
-			sentAt: a.sentAt,
-			trustTier: a.trustTier ?? null,
-			compositionMode: a.compositionMode ?? null,
-			atlasVersion: a.atlasVersion ?? null
-		}));
+		return {
+			actions: page.map((a) => ({
+				verified: a.verified,
+				engagementTier: a.engagementTier,
+				districtHash: a.districtHash ?? null,
+				h3Cell: a.h3Cell ?? null,
+				messageHash: a.messageHash ?? null,
+				sentAt: a.sentAt,
+				trustTier: a.trustTier ?? null,
+				compositionMode: a.compositionMode ?? null,
+				atlasVersion: a.atlasVersion ?? null
+			})),
+			continueCursor: isDone ? null : continueCursor,
+			isDone
+		};
 	}
 });
 
@@ -1897,10 +1979,19 @@ export const getCampaignPacketSummary = query({
 		const campaign = await ctx.db.get(campaignId);
 		if (!campaign) return null;
 
+		// Anonymous public surface. The aggregates here (qualitative phrases +
+		// K-floored counts + top districts) need the actual rows, but a single
+		// unbounded `.collect()` throws past the per-query doc cap once the
+		// campaign passes ~16K actions. Sub-class (A) bounded scan: operate over a
+		// capped, most-recent sample. The output is already aggregate/qualitative
+		// and K-floored, so a bounded sample is a sound floor for this surface
+		// (the org-authed packet path enumerates fully via getActionsForPacket).
 		const actions = await ctx.db
 			.query('campaignActions')
 			.withIndex('by_campaignId', (idx) => idx.eq('campaignId', campaignId))
-			.collect();
+			.order('desc')
+			.take(PACKET_SUMMARY_SCAN_CAP + 1)
+			.then((rows) => rows.slice(0, PACKET_SUMMARY_SCAN_CAP));
 
 		if (actions.length === 0) {
 			return {
@@ -2050,14 +2141,13 @@ export const getReportPreview = query({
 
 		const targets = (campaign.targets as CampaignTarget[]) ?? [];
 
-		// Compute a lightweight packet summary for the preview
-		const actions = await ctx.db
-			.query('campaignActions')
-			.withIndex('by_campaignId', (idx) => idx.eq('campaignId', campaignId))
-			.collect();
-
-		const verified = actions.filter((a) => a.verified);
-		const districtSet = new Set(verified.filter((a) => a.districtHash).map((a) => a.districtHash!));
+		// Lightweight packet summary for the preview. Pure sums (verified/total)
+		// from the denormalized campaign counters (sub-class B); distinct-district
+		// cardinality from a BOUNDED verified-action scan (sub-class C — a scalar
+		// counter would double-count a supporter active in two districts). The
+		// prior `.collect()` of every campaignAction threw past the per-query doc
+		// cap once the campaign passed ~16K actions.
+		const { verifiedDistricts } = await computeCampaignDistrictSets(ctx, campaignId);
 
 		return {
 			campaign: {
@@ -2074,9 +2164,9 @@ export const getReportPreview = query({
 				decisionMakerId: t.decisionMakerId ?? null
 			})),
 			packet: {
-				verified: verified.length,
-				total: actions.length,
-				districtCount: districtSet.size
+				verified: campaign.verifiedActionCount ?? 0,
+				total: campaign.actionCount ?? 0,
+				districtCount: verifiedDistricts
 			},
 			// HTML rendering happens server-side via report-template.ts
 			renderedHtml: null

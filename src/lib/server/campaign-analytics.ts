@@ -11,6 +11,7 @@
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { fetchAllPacketActions } from './packet-actions';
 
 // ── Types matching component interfaces ──
 
@@ -49,8 +50,9 @@ export async function loadCampaignAnalytics(
 	campaignId: Id<'campaigns'>,
 	orgId: Id<'organizations'>
 ): Promise<CampaignAnalytics> {
-	// Reuse the same query as packet computation — single Convex roundtrip
-	const actions = await serverQuery(api.campaigns.getActionsForPacket, { campaignId });
+	// Reuse the same query as packet computation — paginated under the hood so a
+	// large campaign never hits the per-query doc cap (cured).
+	const actions = await fetchAllPacketActions(campaignId);
 
 	// Timeline: group by day
 	const dayMap = new Map<string, { total: number; verified: number }>();

@@ -8,7 +8,7 @@ import {
 import { internal } from './_generated/api';
 import { makeFunctionReference } from 'convex/server';
 import type { FunctionReference } from 'convex/server';
-import type { Doc, Id } from './_generated/dataModel';
+import type { Id } from './_generated/dataModel';
 import type { MutationCtx } from './_generated/server';
 import { v } from 'convex/values';
 import { recipientFilterValidator } from './_validators';
@@ -17,7 +17,12 @@ import { requireInternalSecret } from './_internalAuth';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii } from './_orgKey';
 import { computeOrgScopedEmailHash } from './_orgHash';
-import { applyEmailRecipientFilter } from './_emailRecipientFilter';
+import {
+	collectFilteredRecipients,
+	countFilteredRecipients,
+	pageFilteredRecipients,
+	RECIPIENT_COHORT_CAP
+} from './_emailRecipientFilter';
 import { applyEmailMergeFields, buildEmailTierContext } from './_emailMergeFields';
 import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
 
@@ -98,6 +103,9 @@ const getBlastByIdRef = makeFunctionReference<'query'>(
 const getBlastRecipientsRef = makeFunctionReference<'query'>(
 	'email:getBlastRecipients'
 ) as unknown as FunctionReference<'query', 'internal'>;
+const countBlastRecipientsRef = makeFunctionReference<'query'>(
+	'email:countBlastRecipients'
+) as unknown as FunctionReference<'query', 'internal'>;
 const updateBlastStatusRef = makeFunctionReference<'mutation'>(
 	'email:updateBlastStatus'
 ) as unknown as FunctionReference<'mutation', 'internal'>;
@@ -137,18 +145,6 @@ type RecipientFilterShape = {
 	includeEmailHashes?: string[];
 	excludeEmailHashes?: string[];
 };
-
-function countSupporterSources(supporters: Array<{ source?: string }>): Record<string, number> {
-	const counts: Record<string, number> = {};
-	for (const supporter of supporters) {
-		const source =
-			typeof supporter.source === 'string' && supporter.source.trim()
-				? supporter.source.trim()
-				: 'unknown';
-		counts[source] = (counts[source] ?? 0) + 1;
-	}
-	return counts;
-}
 
 function cleanStringArray(
 	value: unknown,
@@ -361,7 +357,6 @@ async function queueExactServerDispatch(
 		blastId: Id<'emailBlasts'>;
 		expectedEmailHashes: string[];
 		label: string;
-		supporters: Doc<'supporters'>[];
 	}
 ): Promise<{
 	blastId: Id<'emailBlasts'>;
@@ -390,9 +385,17 @@ async function queueExactServerDispatch(
 		};
 	}
 
-	const recipients = await applyEmailRecipientFilter(ctx, args.orgId, args.supporters, {
-		includeEmailHashes: args.expectedEmailHashes
-	});
+	// Sub-class (A) must-enumerate: resolve the still-subscribed subset of the
+	// stored cohort via a bounded paginated scan keyed by the exact hash set
+	// (≤ MAX_AB_COHORT_RECIPIENTS hashes, so the cohort is itself bounded).
+	// Replaces a .collect() of the whole supporter roster passed in by the
+	// caller — that scan threw past the per-read doc cap on a large org.
+	const { recipients } = await collectFilteredRecipients(
+		ctx,
+		args.orgId,
+		{ includeEmailHashes: args.expectedEmailHashes },
+		MAX_AB_COHORT_RECIPIENTS
+	);
 	if (recipients.length === 0) {
 		throw new Error(`${args.label} has no currently subscribed recipients`);
 	}
@@ -567,12 +570,17 @@ export const resolveRecipientHashesForFilter = query({
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 		const filter = readSafeRecipientFilter(args.recipientFilter);
 
-		const supporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-
-		const filtered = await applyEmailRecipientFilter(ctx, org._id, supporters, filter);
+		// Sub-class (A) must-enumerate: the A/B cohort snapshot needs the actual
+		// matching hashes. Paginated bounded scan — never an unbounded .collect()
+		// over the supporter roster (throws past the per-read doc cap once an org
+		// passes ~16K supporters). Cohort is capped at MAX_AB_COHORT_RECIPIENTS;
+		// `limited` surfaces a saturated floor.
+		const { recipients: filtered, truncated } = await collectFilteredRecipients(
+			ctx,
+			org._id,
+			filter,
+			MAX_AB_COHORT_RECIPIENTS
+		);
 
 		const emailHashes = filtered
 			.map((s) => s.emailHash)
@@ -580,9 +588,9 @@ export const resolveRecipientHashesForFilter = query({
 			.sort();
 
 		return {
-			emailHashes: emailHashes.slice(0, MAX_AB_COHORT_RECIPIENTS),
+			emailHashes,
 			totalCount: emailHashes.length,
-			limited: emailHashes.length > MAX_AB_COHORT_RECIPIENTS,
+			limited: truncated,
 			maxSupported: MAX_AB_COHORT_RECIPIENTS
 		};
 	}
@@ -600,14 +608,24 @@ export const countRecipientsForFilter = query({
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 		const filter = readSafeRecipientFilter(args.recipientFilter);
-		const supporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-		const filtered = await applyEmailRecipientFilter(ctx, org._id, supporters, filter);
+
+		// Sub-class (B) pure count + per-source breakdown. The unfiltered org
+		// counter (supporterStats.emailSubscribed) gives only the total, and its
+		// sourceCounts tally ALL email statuses — not the subscribed-only source
+		// breakdown the composer renders. So a bounded paginated count is used:
+		// it returns both the total and the subscribed source breakdown without
+		// ever a single unbounded .collect() (which throws past the per-read doc
+		// cap on a large roster). Count saturates at RECIPIENT_COHORT_CAP.
+		const { totalCount, sourceCounts, truncated } = await countFilteredRecipients(
+			ctx,
+			org._id,
+			filter,
+			RECIPIENT_COHORT_CAP
+		);
 		return {
-			totalCount: filtered.length,
-			sourceCounts: countSupporterSources(filtered)
+			totalCount,
+			sourceCounts,
+			truncated
 		};
 	}
 });
@@ -989,15 +1007,16 @@ export const enqueueServerDispatch = mutation({
 			throw new Error('Only draft blasts can be queued for server dispatch');
 		}
 
-		const supporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-		const recipients = await applyEmailRecipientFilter(
+		// Sub-class (A) must-enumerate: bounded paginated scan resolves the
+		// matching cohort to set totalRecipients. The actual per-recipient send
+		// re-resolves the cohort page-by-page in sendBlastBatch (cursor-paged),
+		// so this read only needs the count + non-empty guard. Capped so it never
+		// hits the per-read doc cap the prior .collect() would on a large roster.
+		const { recipients, truncated } = await collectFilteredRecipients(
 			ctx,
 			org._id,
-			supporters,
-			readSafeRecipientFilter(blast.recipientFilter)
+			readSafeRecipientFilter(blast.recipientFilter),
+			RECIPIENT_COHORT_CAP
 		);
 		if (recipients.length === 0) {
 			throw new Error('No subscribed recipients match this blast filter');
@@ -1015,7 +1034,7 @@ export const enqueueServerDispatch = mutation({
 			blastId: args.blastId
 		});
 
-		return { scheduled: true, totalRecipients: recipients.length };
+		return { scheduled: true, totalRecipients: recipients.length, truncated };
 	}
 });
 
@@ -1061,10 +1080,9 @@ export const enqueueAbTestDispatch = mutation({
 			throw new Error('A/B test needs both stored variants before dispatch');
 		}
 
-		const supporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
+		// queueExactServerDispatch now resolves each variant's still-subscribed
+		// cohort via its own bounded paginated scan keyed by the stored hash set,
+		// so no whole-roster .collect() is needed (or passed) here.
 		const results = [];
 		results.push(
 			await queueExactServerDispatch(ctx, {
@@ -1072,8 +1090,7 @@ export const enqueueAbTestDispatch = mutation({
 				orgId: org._id,
 				blastId: variantA._id,
 				expectedEmailHashes: cohort.variantAEmailHashes,
-				label: 'A/B variant A',
-				supporters
+				label: 'A/B variant A'
 			})
 		);
 		results.push(
@@ -1082,8 +1099,7 @@ export const enqueueAbTestDispatch = mutation({
 				orgId: org._id,
 				blastId: variantB._id,
 				expectedEmailHashes: cohort.variantBEmailHashes,
-				label: 'A/B variant B',
-				supporters
+				label: 'A/B variant B'
 			})
 		);
 
@@ -1137,17 +1153,14 @@ export const enqueueAbRemainderDispatch = mutation({
 			throw new Error('A/B cohort snapshot not found');
 		}
 
-		const supporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
+		// queueExactServerDispatch resolves the still-subscribed remainder cohort
+		// via its own bounded paginated scan keyed by the stored hash set.
 		const dispatch = await queueExactServerDispatch(ctx, {
 			orgSlug: args.orgSlug,
 			orgId: org._id,
 			blastId: remainder.blastId,
 			expectedEmailHashes: cohort.remainderEmailHashes,
-			label: 'A/B remainder',
-			supporters
+			label: 'A/B remainder'
 		});
 
 		return {
@@ -1218,7 +1231,7 @@ export const getBlastRecipients = internalQuery({
 	args: {
 		orgId: v.id('organizations'),
 		limit: v.number(),
-		cursor: v.optional(v.string()),
+		cursor: v.optional(v.union(v.string(), v.null())),
 		blastId: v.optional(v.id('emailBlasts'))
 	},
 	handler: async (ctx, args) => {
@@ -1240,15 +1253,51 @@ export const getBlastRecipients = internalQuery({
 			}
 			filter = readSafeRecipientFilter(blast.recipientFilter);
 		}
-		const results = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (q) => q.eq('orgId', args.orgId))
-			.order('asc')
-			.take(args.limit + 1);
+		// Sub-class (A) must-enumerate: ONE bounded page of matching recipients
+		// plus a continuation cursor. The send loop (sendBlastBatch) carries the
+		// cursor batch-to-batch so the FULL cohort is enumerated across pages —
+		// no recipient is dropped past a fixed ceiling, and the supporter table
+		// is never .collect()ed in a single read (which throws past the per-read
+		// doc cap once an org passes ~16K supporters). `recipients` is at most
+		// `limit` rows; `continueCursor` is null when the scan is exhausted.
+		const { recipients, continueCursor, isDone } = await pageFilteredRecipients(
+			ctx,
+			args.orgId,
+			filter,
+			args.cursor ?? null,
+			args.limit
+		);
+		return { recipients, continueCursor, isDone };
+	}
+});
 
-		const subscribed = await applyEmailRecipientFilter(ctx, args.orgId, results, filter);
-
-		return subscribed;
+/**
+ * Bounded count of a blast's matching recipients for the pre-send
+ * totalRecipients display. Sub-class (B): a count, served by the same bounded
+ * paginated scan as the send enumerator — never an unbounded .collect(). The
+ * count saturates at RECIPIENT_COHORT_CAP and surfaces `truncated` as a floor.
+ */
+export const countBlastRecipients = internalQuery({
+	args: {
+		orgId: v.id('organizations'),
+		blastId: v.optional(v.id('emailBlasts'))
+	},
+	handler: async (ctx, args) => {
+		let filter: RecipientFilterShape = {};
+		if (args.blastId) {
+			const blast = await ctx.db.get(args.blastId);
+			if (!blast || blast.orgId !== args.orgId) {
+				throw new Error('Blast not found in this organization');
+			}
+			filter = readSafeRecipientFilter(blast.recipientFilter);
+		}
+		const { totalCount, truncated } = await countFilteredRecipients(
+			ctx,
+			args.orgId,
+			filter,
+			RECIPIENT_COHORT_CAP
+		);
+		return { totalCount, truncated };
 	}
 });
 
@@ -1303,21 +1352,21 @@ export const sendBlast = internalAction({
 		});
 		if (!blast) throw new Error('Blast not found');
 
-		// Get recipients to count them — pass blastId so the persisted
-		// recipientFilter is enforced at load  (cured).
-		const recipients = await ctx.runQuery(getBlastRecipientsRef, {
+		// Bounded count for totalRecipients — pass blastId so the persisted
+		// recipientFilter is enforced at load. Counts via the paginated scan,
+		// never a .collect() (cured).
+		const { totalCount } = await ctx.runQuery(countBlastRecipientsRef, {
 			orgId: blast.orgId,
-			limit: 10000,
 			blastId: args.blastId
 		});
 
 		await ctx.runMutation(updateBlastStatusRef, {
 			blastId: args.blastId,
 			status: 'sending',
-			totalRecipients: recipients.length
+			totalRecipients: totalCount
 		});
 
-		if (recipients.length === 0) {
+		if (totalCount === 0) {
 			await ctx.runMutation(updateBlastStatusRef, {
 				blastId: args.blastId,
 				status: 'sent',
@@ -1327,13 +1376,13 @@ export const sendBlast = internalAction({
 			return { sent: 0 };
 		}
 
-		// Schedule the first batch (offset 0)
+		// Schedule the first batch (cursor null → first page).
 		await ctx.scheduler.runAfter(0, sendBlastBatchRef, {
 			blastId: args.blastId,
-			offset: 0
+			cursor: null
 		});
 
-		return { scheduled: true, totalRecipients: recipients.length };
+		return { scheduled: true, totalRecipients: totalCount };
 	}
 });
 
@@ -1344,7 +1393,11 @@ export const sendBlast = internalAction({
 export const sendBlastBatch = internalAction({
 	args: {
 		blastId: v.id('emailBlasts'),
-		offset: v.number()
+		// Continuation cursor into the paginated recipient scan. null = first
+		// page. Carried batch-to-batch so the FULL cohort is enumerated across
+		// pages — no recipient is dropped past a fixed offset ceiling, and each
+		// batch reads only its own page (not a re-scan of the entire roster).
+		cursor: v.union(v.string(), v.null())
 	},
 	handler: async (ctx, args) => {
 		const BATCH_SIZE = 100;
@@ -1376,23 +1429,39 @@ export const sendBlastBatch = internalAction({
 		}
 
 		try {
-			// Get all recipients (bounded by getBlastRecipients limit) — pass
-			// blastId so the persisted recipientFilter is enforced at load
-			//  (cured).
-			const allRecipients = await ctx.runQuery(getBlastRecipientsRef, {
+			// Fetch ONE supporter-page of recipients for this batch — pass blastId
+			// so the persisted recipientFilter is enforced at load (cured).
+			// BATCH_SIZE bounds the SUPPORTERS scanned per page; the matching
+			// subset (`batch`) is at most that many. `continueCursor` resumes the
+			// next batch exactly where this one stopped (clean page boundary — no
+			// skips, no re-scan of the whole roster).
+			const {
+				recipients: batch,
+				continueCursor,
+				isDone
+			} = await ctx.runQuery(getBlastRecipientsRef, {
 				orgId: blast.orgId,
-				limit: 10000,
+				limit: BATCH_SIZE,
+				cursor: args.cursor,
 				blastId: args.blastId
 			});
 
-			const batch = allRecipients.slice(args.offset, args.offset + BATCH_SIZE);
+			// A page can match zero recipients (all filtered out) yet NOT be the
+			// last page. Only finalize when the scan is exhausted; otherwise resume
+			// from the cursor so later pages are not skipped.
 			if (batch.length === 0) {
-				// No more recipients — finalize
-				await ctx.runMutation(updateBlastStatusRef, {
-					blastId: args.blastId,
-					status: 'sent',
-					sentAt: Date.now()
-				});
+				if (!isDone && continueCursor !== null) {
+					await ctx.scheduler.runAfter(0, sendBlastBatchRef, {
+						blastId: args.blastId,
+						cursor: continueCursor
+					});
+				} else {
+					await ctx.runMutation(updateBlastStatusRef, {
+						blastId: args.blastId,
+						status: 'sent',
+						sentAt: Date.now()
+					});
+				}
 				return;
 			}
 
@@ -1499,12 +1568,14 @@ export const sendBlastBatch = internalAction({
 				bouncedDelta: batchFailed
 			});
 
-			// Schedule next batch if more recipients remain
-			const nextOffset = args.offset + BATCH_SIZE;
-			if (nextOffset < allRecipients.length) {
+			// Schedule next batch if the scan isn't exhausted. `isDone` (cursor
+			// null) means this was the final page — finalize. Otherwise resume
+			// from `continueCursor` so the next batch picks up exactly where this
+			// one stopped.
+			if (!isDone && continueCursor !== null) {
 				await ctx.scheduler.runAfter(0, sendBlastBatchRef, {
 					blastId: args.blastId,
-					offset: nextOffset
+					cursor: continueCursor
 				});
 			} else {
 				// All done — finalize
@@ -1517,7 +1588,7 @@ export const sendBlastBatch = internalAction({
 		} catch (err) {
 			const message = err instanceof Error ? err.message : 'Unknown error';
 			console.error(
-				`[sendBlastBatch] Blast ${args.blastId} batch at offset ${args.offset} failed:`,
+				`[sendBlastBatch] Blast ${args.blastId} batch (cursor ${args.cursor ?? 'start'}) failed:`,
 				message
 			);
 

@@ -10,7 +10,8 @@ import { v } from 'convex/values';
 import { requireOrgRole } from './_authHelpers';
 import type { Id } from './_generated/dataModel';
 import {
-	applyEmailRecipientFilter,
+	collectFilteredRecipients,
+	RECIPIENT_COHORT_CAP,
 	type EmailRecipientFilter as SharedEmailRecipientFilter
 } from './_emailRecipientFilter';
 
@@ -395,18 +396,23 @@ export const getBlastForEnclave = internalQuery({
 export const getEncryptedSupporters = internalQuery({
 	args: { orgId: v.id('organizations') },
 	handler: async (ctx, args) => {
-		const supporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (q) => q.eq('orgId', args.orgId))
-			.collect();
+		// Sub-class (A) must-enumerate: the enclave needs the actual encrypted
+		// recipient blobs. Bounded paginated scan over subscribed supporters
+		// (empty filter == subscribed-only, applied per page) — never an
+		// unbounded .collect() of the roster (throws past the per-read doc cap
+		// once an org passes ~16K supporters). Capped at RECIPIENT_COHORT_CAP.
+		const { recipients } = await collectFilteredRecipients(
+			ctx,
+			args.orgId,
+			{},
+			RECIPIENT_COHORT_CAP
+		);
 
-		return supporters
-			.filter((s) => s.emailStatus === 'subscribed')
-			.map((s) => ({
-				_id: s._id,
-				encryptedEmail: s.encryptedEmail,
-				emailHash: s.emailHash
-			}));
+		return recipients.map((s) => ({
+			_id: s._id,
+			encryptedEmail: s.encryptedEmail,
+			emailHash: s.emailHash
+		}));
 	}
 });
 
@@ -501,12 +507,17 @@ export const getEncryptedSupportersForBlast = query({
 			}
 			filter = readSafeEmailRecipientFilter(blast.recipientFilter);
 		}
-		const supporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-
-		const filtered = await applyEmailRecipientFilter(ctx, org._id, supporters, filter);
+		// Sub-class (A) must-enumerate: the browser-direct send needs the actual
+		// encrypted recipient blobs. Bounded paginated scan — never an unbounded
+		// .collect() of the roster. The dispatch-claim route caps the cohort at
+		// 10K and rejects past it; this cap matches so a saturated cohort can be
+		// surfaced rather than silently dropping recipients.
+		const { recipients: filtered } = await collectFilteredRecipients(
+			ctx,
+			org._id,
+			filter,
+			RECIPIENT_COHORT_CAP
+		);
 
 		return filtered.map((s) => ({
 			_id: s._id,

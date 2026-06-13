@@ -12,6 +12,7 @@
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { fetchAllPacketActions } from './packet-actions';
 import type {
 	VerificationPacket,
 	TierCount,
@@ -81,8 +82,9 @@ export async function computeVerificationPacketCached(
 		}
 	}
 
-	// Fetch raw actions from Convex
-	const actions = await serverQuery(api.campaigns.getActionsForPacket, { campaignId });
+	// Fetch raw actions from Convex — paginated under the hood so a large
+	// campaign never hits the per-query doc cap (cured).
+	const actions = await fetchAllPacketActions(campaignId);
 
 	// NEW-E-3: fetch debate snapshot when campaign has a linked debate.
 	// Query returns null when no debate is set; computePacket emits debate=null
