@@ -22,6 +22,7 @@ import {
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { encryptForSupporterV2 } from './_orgKey';
 import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
+import { computeCampaignDistrictSets } from './_campaignStats';
 
 declare const process: { env: Record<string, string | undefined> };
 type ActiveCampaignForSubmission = {
@@ -1787,27 +1788,41 @@ export const getPublicActive = query({
 export const getStats = query({
 	args: { campaignId: v.id('campaigns') },
 	handler: async (ctx, { campaignId }) => {
-		const actions = await ctx.db
-			.query('campaignActions')
-			.withIndex('by_campaignId', (idx) => idx.eq('campaignId', campaignId))
-			.collect();
+		const campaign = await ctx.db.get(campaignId);
+		if (!campaign) {
+			return {
+				verifiedActions: null,
+				totalActions: null,
+				uniqueDistricts: null,
+				tier3VerifiedActions: null,
+				tier3UniqueDistricts: null
+			};
+		}
 
-		const verified = actions.filter((a) => a.verified);
-		const districtSet = new Set(verified.filter((a) => a.districtHash).map((a) => a.districtHash!));
-		const tier3Verified = verified.filter((a) => (a.trustTier ?? 0) >= 3);
-		const tier3DistrictSet = new Set(
-			tier3Verified.filter((a) => a.districtHash).map((a) => a.districtHash!)
-		);
+		// Pure sums (sub-class B) — read the denormalized campaign counters
+		// maintained at createCampaignAction. Counting these in memory required a
+		// `.collect()` over every campaignAction, which throws past the per-query
+		// doc cap once a campaign passes ~16K actions.
+		const verifiedCount = campaign.verifiedActionCount ?? 0;
+		const totalCount = campaign.actionCount ?? 0;
+		const tier3Count = campaign.tier3VerifiedActionCount ?? 0;
+
+		// Set cardinality (sub-class C) — distinct verified districts / distinct
+		// tier-3 verified districts. A scalar counter would DRIFT (a supporter
+		// active in two districts double-counts), so this is a BOUNDED scan over
+		// verified actions, capped, with a truncated floor on saturation.
+		const { verifiedDistricts, tier3VerifiedDistricts } =
+			await computeCampaignDistrictSets(ctx, campaignId);
 
 		const kFloor5 = (n: number): number | null => (n < 5 ? null : n);
 		const kFloor3 = (n: number): number | null => (n < 3 ? null : n);
 
 		return {
-			verifiedActions: kFloor5(verified.length),
-			totalActions: kFloor5(actions.length),
-			uniqueDistricts: kFloor3(districtSet.size),
-			tier3VerifiedActions: kFloor5(tier3Verified.length),
-			tier3UniqueDistricts: kFloor3(tier3DistrictSet.size)
+			verifiedActions: kFloor5(verifiedCount),
+			totalActions: kFloor5(totalCount),
+			uniqueDistricts: kFloor3(verifiedDistricts),
+			tier3VerifiedActions: kFloor5(tier3Count),
+			tier3UniqueDistricts: kFloor3(tier3VerifiedDistricts)
 		};
 	}
 });

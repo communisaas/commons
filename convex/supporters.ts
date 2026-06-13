@@ -39,6 +39,7 @@ import {
 	visibleSourceCounts,
 	type CountableSupporter
 } from './_supporterStats';
+import { countTagSupporters, collectTagSupporterIds } from './_tagCounts';
 
 const getOrganizationBySlugRef = makeFunctionReference<'query'>('organizations:getBySlug');
 const importBatchRef = makeFunctionReference<'mutation'>('supporters:importBatch');
@@ -212,13 +213,12 @@ export const list = query({
 			filtered = filtered.filter((s) => supporterSourceValue(s) === filters.source);
 		}
 
-		// Tag filter: need to join supporterTags
+		// Tag filter: join supporterTags via a BOUNDED scan (a popular tag's link
+		// set can exceed the per-query doc cap). The list page already scans a
+		// bounded supporter window and intersects, so a capped membership set
+		// still yields a correct page for the scanned window.
 		if (filters?.tagId) {
-			const tagLinks = await ctx.db
-				.query('supporterTags')
-				.withIndex('by_tagId', (idx) => idx.eq('tagId', filters.tagId!))
-				.collect();
-			const supporterIds = new Set(tagLinks.map((t) => t.supporterId));
+			const { supporterIds } = await collectTagSupporterIds(ctx, filters.tagId);
 			filtered = filtered.filter((s) => supporterIds.has(s._id));
 		}
 
@@ -565,15 +565,15 @@ export const getTags = query({
 
 		const rows = await Promise.all(
 			tags.map(async (t) => {
-				const links = await ctx.db
-					.query('supporterTags')
-					.withIndex('by_tagId', (idx) => idx.eq('tagId', t._id))
-					.collect();
+				// Sub-class (B) pure count via a BOUNDED scan — a popular tag's link
+				// set can exceed the per-query doc cap. `truncated` marks a floor.
+				const { count, truncated } = await countTagSupporters(ctx, t._id);
 				return {
 					_id: t._id,
 					id: t._id,
 					name: t.name,
-					supporterCount: links.length
+					supporterCount: count,
+					supporterCountTruncated: truncated
 				};
 			})
 		);
@@ -651,16 +651,55 @@ export const deleteTag = mutation({
 			throw new Error('TAG_NOT_FOUND');
 		}
 
-		const links = await ctx.db
+		// Enumerate-to-delete over a per-tag link set that can exceed both the
+		// per-query doc-read cap AND the per-mutation write-op budget. Delete a
+		// BOUNDED batch here, then drop the tag row. Any remaining links are
+		// scheduled for drain in `purgeTagLinks` (an internalMutation that loops
+		// bounded batches). Orphaned links pointing at a now-deleted tag are
+		// read-safe in the meantime: every reader resolves the tag via
+		// `ctx.db.get(link.tagId)` and drops the row when it returns null.
+		const batch = await ctx.db
 			.query('supporterTags')
 			.withIndex('by_tagId', (idx) => idx.eq('tagId', args.tagId))
-			.collect();
-		for (const link of links) {
+			.take(TAG_DELETE_BATCH);
+		for (const link of batch) {
 			await ctx.db.delete(link._id);
 		}
 		await ctx.db.delete(args.tagId);
 
-		return { deleted: true, removedLinks: links.length };
+		// More links than one batch could hold → drain the remainder out-of-band.
+		if (batch.length >= TAG_DELETE_BATCH) {
+			await ctx.scheduler.runAfter(0, internal.supporters.purgeTagLinks, { tagId: args.tagId });
+		}
+
+		return { deleted: true, removedLinks: batch.length };
+	}
+});
+
+/** Per-mutation cap on tag-link deletes. Well under the ~4096 write-op budget. */
+const TAG_DELETE_BATCH = 2_000;
+
+/**
+ * Drain the remaining `supporterTags` rows for a deleted tag in bounded
+ * batches. Self-schedules until the link set is empty. Idempotent: if the tag
+ * id has no links it's a no-op. Reads tolerate the in-flight orphans (the tag
+ * row is already gone, so `ctx.db.get(link.tagId)` returns null and the link is
+ * dropped from any join).
+ */
+export const purgeTagLinks = internalMutation({
+	args: { tagId: v.id('tags') },
+	handler: async (ctx, args) => {
+		const batch = await ctx.db
+			.query('supporterTags')
+			.withIndex('by_tagId', (idx) => idx.eq('tagId', args.tagId))
+			.take(TAG_DELETE_BATCH);
+		for (const link of batch) {
+			await ctx.db.delete(link._id);
+		}
+		if (batch.length >= TAG_DELETE_BATCH) {
+			await ctx.scheduler.runAfter(0, internal.supporters.purgeTagLinks, { tagId: args.tagId });
+		}
+		return { removed: batch.length };
 	}
 });
 

@@ -14,6 +14,7 @@ import { resolveDmAndCanonical } from './legislation';
 import { requireInternalSecret } from './_internalAuth';
 import { assertPiiTripleCreate } from './_orgHash';
 import { applySupporterStatsDelta } from './_supporterStats';
+import { countTagSupporters, collectTagSupporterIds } from './_tagCounts';
 // PII returned as encrypted blobs — v1 API consumers decrypt with org key
 
 // =============================================================================
@@ -199,13 +200,11 @@ export const listSupporters = query({
 			filtered = filtered.filter((s) => s.source === args.source);
 		}
 
-		// Tag filter
+		// Tag filter — BOUNDED membership scan (a popular tag's link set can
+		// exceed the per-query doc cap). The list scans a bounded supporter
+		// window and intersects, so a capped set still pages the window correctly.
 		if (args.tagId) {
-			const tagLinks = await ctx.db
-				.query('supporterTags')
-				.withIndex('by_tagId', (q) => q.eq('tagId', args.tagId as Id<'tags'>))
-				.collect();
-			const supporterIds = new Set(tagLinks.map((t) => t.supporterId));
+			const { supporterIds } = await collectTagSupporterIds(ctx, args.tagId as Id<'tags'>);
 			filtered = filtered.filter((s) => supporterIds.has(s._id));
 		}
 
@@ -455,11 +454,10 @@ export const listTags = query({
 
 		const result = await Promise.all(
 			tags.map(async (t) => {
-				const count = await ctx.db
-					.query('supporterTags')
-					.withIndex('by_tagId', (q) => q.eq('tagId', t._id))
-					.collect();
-				return { id: t._id, name: t.name, supporterCount: count.length };
+				// Sub-class (B) pure count via a BOUNDED scan — a popular tag's link
+				// set can exceed the per-query doc cap. `truncated` marks a floor.
+				const { count, truncated } = await countTagSupporters(ctx, t._id);
+				return { id: t._id, name: t.name, supporterCount: count, supporterCountTruncated: truncated };
 			})
 		);
 
