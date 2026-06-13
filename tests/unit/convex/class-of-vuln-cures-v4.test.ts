@@ -618,10 +618,12 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 
 	it('createCampaignAction dedups via by_campaignId_supporterId, not .collect()', () => {
 		const svelte = source('convex/campaigns.ts');
-		const mutation = svelte.slice(
-			svelte.indexOf('export const createCampaignAction'),
-			svelte.indexOf('export const createCampaignAction') + 3000,
-		);
+		// Bound the extraction by the next export rather than a fixed char window —
+		// the args validator grew (metersOrgQuota/deliveryStatus) and a fixed
+		// window would clip the dedup logic. Matches the sibling tests below.
+		const start = svelte.indexOf('export const createCampaignAction');
+		const next = svelte.indexOf('export const ', start + 30);
+		const mutation = svelte.slice(start, next > 0 ? next : start + 10000);
 		// Composite index lookup replaces the scan-then-find.
 		expect(mutation).toMatch(/withIndex\(['"]by_campaignId_supporterId['"]/);
 		// Stripped of comments — legacy .collect() on by_campaignId is gone from this mutation.

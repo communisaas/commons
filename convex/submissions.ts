@@ -282,9 +282,15 @@ export const create = action({
 		// authenticated user, so it re-enforces the floor independently of the
 		// SvelteKit path. Tiered floor: tier 2 (address-verified — district confirmed)
 		// DELIVERS; gov-ID (tier 4) raises the assurance BADGE, it is not the bar. The
-		// active-credential / revocation / nullifier / domain-binding fail-closed
-		// checks above are independent of this threshold and are unchanged. MUST stay
-		// in sync with REQUIRED_CONGRESSIONAL_PROOF_TIER in the SvelteKit handler.
+		// active-credential / revocation / nullifier checks above are independent of
+		// this threshold and are unchanged. MUST stay in sync with
+		// REQUIRED_CONGRESSIONAL_PROOF_TIER in the SvelteKit handler.
+		//
+		// NOTE: the canonical action-domain REBIND (recompute the domain from
+		// server-held inputs and reject mismatch) is performed by the SvelteKit
+		// resolver (`+server.ts`), NOT here — on the direct Convex path the domain
+		// in publicInputs is still self-referential. See follow-up note in the
+		// security review; closing it means moving the rebind into this action.
 		const REQUIRED_CONGRESSIONAL_PROOF_TIER = 2;
 		if (credentialStatus.trustTier < REQUIRED_CONGRESSIONAL_PROOF_TIER) {
 			throw new Error('INSUFFICIENT_AUTHORITY');
@@ -293,15 +299,19 @@ export const create = action({
 		// shadow_atlas credentials — would bypass delivery recheck on falsy guard).
 		const issuingCredentialId: Id<'districtCredentials'> = credentialStatus.credentialId;
 
-		// Check org verified action quota (if template belongs to an org)
-		if (template?.orgId) {
-			const limits = await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
-				orgId: template.orgId
-			});
-			if (limits && limits.current.verifiedActions >= limits.limits.maxVerifiedActions) {
-				throw new Error('VERIFIED_ACTION_QUOTA_EXCEEDED');
-			}
-		}
+		// NOTE: congressional (CWC) deliveries are PERSON-LAYER civic actions — a
+		// constituent contacting their own representative — NOT the org's metered
+		// paid usage (which meters org-INITIATED sends like email/SMS blasts). This
+		// action is reachable only for deliverable CWC templates
+		// (assertDeliverableCongressionalTemplate above), so a per-org
+		// verified-action quota CHECK here would let an external attacker exhaust a
+		// victim org's quota via its public template (billing-quota DoS). The crypto
+		// gates (active credential, revocation, nullifier uniqueness) plus the
+		// recipientSubdivision bound limit abuse. Attribution still happens at
+		// delivery time (emitCongressionalAction → createCampaignAction), but with
+		// metersOrgQuota:false so it never consumes the org's paid quota. The org
+		// verified-action quota therefore is neither counted by nor enforced on this
+		// congressional path; org-initiated sends remain gated in their own paths.
 
 		// Extract action_id from public inputs
 		const publicInputsTyped = args.publicInputs as Record<string, unknown> | undefined;
@@ -2070,7 +2080,13 @@ export const emitCongressionalAction = internalMutation({
 			districtCode: args.districtCode,
 			trustTier: args.trustTier,
 			channel: 'congressional',
-			congressionalSubmissionId: args.submissionId
+			congressionalSubmissionId: args.submissionId,
+			// Person-layer civic action — a constituent contacting their own rep.
+			// Attribute it (campaign + org tier histogram) but do NOT consume the
+			// org's metered billing quota; metering congressional sends would let an
+			// external attacker exhaust a victim org's verified-action quota via its
+			// public template. The crypto gates + recipientSubdivision bound limit abuse.
+			metersOrgQuota: false
 		});
 
 		return { attributed: true, alreadySubmitted: result.alreadySubmitted === true };

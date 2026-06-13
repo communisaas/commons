@@ -1146,7 +1146,15 @@ export const createCampaignAction = internalMutation({
 		),
 		// Congressional dedup key — the submission whose delivery produced this
 		// action. Used in place of supporterId when the channel has no supporter.
-		congressionalSubmissionId: v.optional(v.id('submissions'))
+		congressionalSubmissionId: v.optional(v.id('submissions')),
+		// Whether this action consumes the org's METERED billing quota. Default
+		// true preserves the org-initiated paths (email/form/web blasts). Set to
+		// false for person-layer congressional deliveries: a constituent
+		// contacting their own rep is attributed (campaign + org tier histogram)
+		// for reach/reporting, but it is NOT org-initiated paid usage, so it must
+		// not bump verifiedActionsLifetime (the metered billing base). This
+		// restores the pre-attribution-emit non-metering of congressional sends.
+		metersOrgQuota: v.optional(v.boolean())
 	},
 	handler: async (ctx, args) => {
 		// Dedup via a single-doc composite-index lookup. Two keys depending on
@@ -1254,7 +1262,12 @@ export const createCampaignAction = internalMutation({
 			const org = await ctx.db.get(orgId);
 			if (org) {
 				const patch: Record<string, unknown> = {};
-				if (args.verified) {
+				// Only bump the metered billing base for actions that consume the
+				// org quota. Congressional person-layer deliveries pass
+				// metersOrgQuota:false — attributed below (actionTierCounts /
+				// campaign counters) but never charged to the org's paid usage.
+				const metersOrgQuota = args.metersOrgQuota !== false;
+				if (args.verified && metersOrgQuota) {
 					patch.verifiedActionsLifetime = (org.verifiedActionsLifetime ?? 0) + 1;
 				}
 				const tier = args.engagementTier;
