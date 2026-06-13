@@ -30,6 +30,8 @@ type SupporterListResult = {
 	}>;
 	hasMore: boolean;
 	nextCursor: string | null;
+	truncated?: boolean;
+	scanLimit?: number;
 };
 
 type CampaignListResult = {
@@ -194,6 +196,10 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		total: summaryStats.total,
 		hasMore: convexResult.hasMore,
 		nextCursor: convexResult.nextCursor,
+		// When the org exceeds the per-query scan cap, the list reflects only the
+		// most recent `scanLimit` rows — surface it so the page can say so.
+		scanCapped: convexResult.truncated ?? false,
+		scanLimit: convexResult.scanLimit ?? null,
 		tags: (tags ?? []).map((t: Record<string, unknown>) => ({
 			id: t._id ?? t.id,
 			name: t.name,
