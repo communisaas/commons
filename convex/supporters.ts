@@ -190,14 +190,16 @@ export const list = query({
 		const allDocs = await ctx.db
 			.query('supporters')
 			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
+			.order('desc')
 			.take(MAX_SCAN);
 
-		// When the scan saturates the cap, this list reflects only a 10K window
-		// of the org — rows beyond it are silently absent (and because the
-		// by_orgId scan is oldest-first, the missing rows are the NEWEST). Surface
-		// the cap honestly so the page can warn the operator instead of presenting
-		// a truncated list as complete. Mirrors the v1 API's `truncated`/`scanLimit`
-		// envelope (convex/v1api.ts listSupporters).
+		// Scan newest-first so the 10K window is the MOST RECENT supporters — the
+		// rows an operator actually wants, and what the page's "showing the most
+		// recent 10,000" notice truthfully describes. When the scan saturates the
+		// cap, rows beyond the window (the OLDEST) are absent; surface the cap
+		// honestly so the page warns instead of presenting a truncated list as
+		// complete. Mirrors the v1 API's `truncated`/`scanLimit` envelope
+		// (convex/v1api.ts listSupporters).
 		const scanCapped = allDocs.length >= MAX_SCAN;
 
 		// Apply filters in memory (Convex indexes are limited to equality prefixes)
@@ -256,7 +258,7 @@ export const list = query({
 						_id: s._id,
 						_creationTime: s._creationTime,
 						encryptedEmail: s.encryptedEmail,
-						emailHash: s.emailHash as string | null,
+						emailHash: s.emailHash ?? null,
 						encryptedName: s.encryptedName ?? null,
 						postalCode: s.postalCode ?? null,
 						stateCode: s.stateCode ?? null,
@@ -330,7 +332,7 @@ export const get = query({
 				_id: supporter._id,
 				_creationTime: supporter._creationTime,
 				encryptedEmail: supporter.encryptedEmail,
-				emailHash: supporter.emailHash as string | null,
+				emailHash: supporter.emailHash ?? null,
 				encryptedName: supporter.encryptedName ?? null,
 				postalCode: supporter.postalCode ?? null,
 				stateCode: supporter.stateCode ?? null,
@@ -368,11 +370,41 @@ export const findByEmailHash = query({
 			)
 			.first();
 		if (!doc) return null;
-		// Raw .first() returns the full document (consent text + the join-key
-		// hash). The caller already holds the hash, so a non-editor learns
-		// nothing new by getting it back — but the consent-evidence fields are
-		// editor-only, so project them out for plain members.
-		return projectSupporterFields(doc, isEditor);
+		// Return a CURATED allowlist, not the raw document: .first() carries
+		// cross-org join keys (globalEmailHash/globalPhoneHash/phoneHash) and
+		// other internal columns that no reader should expose. Mirror the
+		// deliberate field set the other readers emit, then role-gate the
+		// editor-only fields through the shared projection.
+		return projectSupporterFields(
+			{
+				_id: doc._id,
+				_creationTime: doc._creationTime,
+				encryptedEmail: doc.encryptedEmail,
+				emailHash: doc.emailHash ?? null,
+				encryptedName: doc.encryptedName ?? null,
+				postalCode: doc.postalCode ?? null,
+				stateCode: doc.stateCode ?? null,
+				congressionalDistrict: doc.congressionalDistrict ?? null,
+				country: doc.country ?? null,
+				encryptedPhone: doc.encryptedPhone ?? null,
+				verified: doc.verified,
+				identityVerified: !!(doc.identityCommitment && doc.verified),
+				identityCommitment: doc.identityCommitment ?? null,
+				emailStatus: doc.emailStatus,
+				smsStatus: doc.smsStatus,
+				source: doc.source ?? null,
+				emailConsentSource: doc.emailConsentSource ?? null,
+				emailConsentedAt: doc.emailConsentedAt ?? null,
+				emailConsentText: doc.emailConsentText ?? null,
+				smsConsentSource: doc.smsConsentSource ?? null,
+				smsConsentedAt: doc.smsConsentedAt ?? null,
+				smsConsentText: doc.smsConsentText ?? null,
+				encryptedCustomFields: doc.encryptedCustomFields ?? null,
+				importedAt: doc.importedAt ?? null,
+				updatedAt: doc.updatedAt
+			},
+			isEditor
+		);
 	}
 });
 

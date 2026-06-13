@@ -1,12 +1,13 @@
 /**
- * C-21 — convex/supporters.ts `list` surfaces scan-cap truncation honestly.
+ * convex/supporters.ts `list` surfaces scan-cap truncation honestly.
  *
- * `list` does `.take(MAX_SCAN)` over the `by_orgId` index (oldest-first) and
- * then filters/sorts in memory. Above MAX_SCAN it silently drops the overflow
- * — and because the scan is oldest-first, the dropped rows are the NEWEST. The
- * response now carries `truncated` (true when the scan saturated the cap) plus
- * `scanLimit`, mirroring the v1 API envelope, so the page can warn the operator
- * instead of presenting a 10K window as the complete roster.
+ * `list` does `.order('desc').take(MAX_SCAN)` over the `by_orgId` index
+ * (newest-first) and then filters/sorts in memory. Above MAX_SCAN it drops the
+ * overflow — now the OLDEST rows, so the 10K window is the most recent
+ * supporters the page's notice truthfully describes. The response carries
+ * `truncated` (true when the scan saturated the cap) plus `scanLimit`,
+ * mirroring the v1 API envelope, so the page warns instead of presenting a 10K
+ * window as the complete roster.
  *
  * convex-test isn't wired in this repo (see v1-supporters-truncation.test.ts),
  * so this mirrors the handler's take/derive logic against in-memory rows and
@@ -43,7 +44,7 @@ function makeRows(n: number): Row[] {
 	return Array.from({ length: n }, (_, i) => ({ _id: `sup_${i}`, _creationTime: i }));
 }
 
-describe('C-21 supporter list scan-cap signal', () => {
+describe('supporter list scan-cap signal', () => {
 	it('flags truncated + carries scanLimit when the org saturates the scan cap', () => {
 		const result = list(makeRows(15_000));
 		expect(result.truncated).toBe(true);
@@ -68,7 +69,7 @@ describe('C-21 supporter list scan-cap signal', () => {
 	});
 });
 
-describe('C-21 source wiring (Convex envelope + page banner)', () => {
+describe('source wiring (Convex envelope + page banner)', () => {
 	const convexSource = readFileSync(
 		path.resolve(process.cwd(), 'convex/supporters.ts'),
 		'utf8'

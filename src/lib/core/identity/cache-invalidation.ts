@@ -25,12 +25,10 @@ const ADDRESS_DB_NAME = 'commons-address';
 const LOCATION_DB_NAME = 'commons_location';
 const SEARCH_CACHE_DB_NAME = 'commons-search-cache';
 const MESSAGE_JOB_RECOVERY_DB_NAME = 'commons-message-jobs';
-// Wrapped org keys (src/lib/services/org-key-manager.ts) + device master
-// keystore (src/lib/core/identity/credential-encryption.ts). Both must be
-// swept on logout or the next user on a shared browser can re-derive and
-// decrypt cached org PII.
-const ORG_KEY_DB_NAME = 'commons-org-keys';
-const KEYSTORE_DB_NAME = 'commons-keystore';
+// The wrapped org keys (commons-org-keys) and device master keystore
+// (commons-keystore) are swept on logout by their owning modules'
+// clearAllOrgKeys() / clearKeystore() — called below — so the next user on a
+// shared browser cannot re-derive and decrypt cached org PII.
 
 // localStorage keys
 const GUEST_STATE_KEY = 'commons_guest_template';

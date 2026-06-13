@@ -1,5 +1,5 @@
 /**
- * C-20 — emailHash + consent evidence are editor-only in the Convex layer.
+ * emailHash + consent evidence are editor-only, enforced in the Convex layer.
  *
  * `convex/supporters.ts` member-gated readers (`list`, `get`, `searchByEmail`,
  * `findByEmailHash`) ran `requireOrgRole(ctx, slug, 'member')` and then returned
@@ -70,7 +70,7 @@ function makeListRow() {
 	};
 }
 
-describe('C-20 supporter role projection (Convex layer is the real boundary)', () => {
+describe('supporter role projection (Convex layer is the real boundary)', () => {
 	it('nulls emailHash + all six consent fields for a member-role caller', () => {
 		const projected = projectSupporterFields(makeListRow(), /* isEditor */ false);
 		expect(projected.emailHash).toBeNull();
@@ -110,7 +110,7 @@ describe('C-20 supporter role projection (Convex layer is the real boundary)', (
 	});
 });
 
-describe('C-20 every member-gated reader routes through the shared projection', () => {
+describe('every member-gated reader routes through the shared projection', () => {
 	const convexSource = readFileSync(
 		path.resolve(process.cwd(), 'convex/supporters.ts'),
 		'utf8'
@@ -140,10 +140,19 @@ describe('C-20 every member-gated reader routes through the shared projection', 
 		expect(body).toContain('return projectSupporterFields(');
 	});
 
-	it('findByEmailHash projects the raw .first() doc', () => {
+	it('findByEmailHash returns a CURATED allowlist, never the raw .first() doc', () => {
 		const body = readerBody('export const findByEmailHash = query', 'export const searchByEmail = query');
 		expect(body).toContain('membershipIsEditor(membership.role)');
-		expect(body).toContain('return projectSupporterFields(doc, isEditor);');
+		expect(body).toContain('return projectSupporterFields(');
+		// The raw document carries cross-org join keys (globalEmailHash /
+		// globalPhoneHash / phoneHash) that no reader should expose. The fix builds
+		// an explicit field set instead of denylisting the raw doc, so projecting
+		// `doc` directly must NOT reappear, and the curated object's keys are emitted.
+		expect(body).not.toContain('projectSupporterFields(doc');
+		// Join keys must not be emitted as object properties (comment mentions are
+		// fine — check for the `key:` form, not bare references).
+		expect(body).not.toMatch(/globalEmailHash:|globalPhoneHash:|phoneHash:/);
+		expect(body).toContain('emailConsentText:');
 	});
 
 	it('searchByEmail projects its mapped shape', () => {

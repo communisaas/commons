@@ -1,5 +1,5 @@
 /**
- * C-19 — logout must sweep the wrapped org keys + the device master keystore.
+ * Logout must sweep the wrapped org keys + the device master keystore.
  *
  * `clearAllClientCaches` deleted five IndexedDB DBs on logout but never
  * `commons-org-keys` (wrapped org keys) nor `commons-keystore` (the device
@@ -9,12 +9,12 @@
  * decrypt cached org PII.
  *
  * This pins the module-owned teardown helpers (which `clearAllClientCaches` now
- * calls) against real fake-indexeddb behavior, and source-pins the logout
- * wiring so both DBs are in the swept set.
+ * calls) against real fake-indexeddb behavior, proves a blocked deletion is
+ * surfaced rather than reported as success, and source-pins the logout wiring.
  */
 
 import 'fake-indexeddb/auto';
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -45,7 +45,7 @@ function dbExists(name: string): Promise<boolean> {
 	});
 }
 
-describe('C-19 device keystore teardown', () => {
+describe('device keystore teardown', () => {
 	it('clearKeystore deletes commons-keystore and nulls the in-memory master bytes', async () => {
 		// Materialize the device master on disk + in memory.
 		const first = await getOrCreateMasterBytes();
@@ -69,7 +69,7 @@ describe('C-19 device keystore teardown', () => {
 	});
 });
 
-describe('C-19 wrapped org-key teardown', () => {
+describe('wrapped org-key teardown', () => {
 	it('clearAllOrgKeys deletes commons-org-keys so no wrapped key survives', async () => {
 		const orgId = 'org_abc';
 		const passphrase = 'correct horse battery staple';
@@ -87,24 +87,51 @@ describe('C-19 wrapped org-key teardown', () => {
 	});
 });
 
-describe('C-19 logout wiring includes both stores in the swept set', () => {
+describe('blocked deletion is surfaced, not silently reported as success', () => {
+	// A second open connection (e.g. another tab) blocks deleteDatabase: the key
+	// DB stays on disk. The teardown must reject so the logout path logs the
+	// incomplete wipe instead of redirecting as if the keys were gone.
+	const realDeleteDatabase = indexedDB.deleteDatabase.bind(indexedDB);
+	afterEach(() => {
+		indexedDB.deleteDatabase = realDeleteDatabase;
+	});
+
+	function stubBlockedDeletion() {
+		indexedDB.deleteDatabase = ((_name: string) => {
+			const request: Record<string, unknown> = {};
+			// Fire onblocked once the caller has wired its handler.
+			queueMicrotask(() => {
+				const handler = request.onblocked as (() => void) | undefined;
+				handler?.();
+			});
+			return request as unknown as IDBOpenDBRequest;
+		}) as typeof indexedDB.deleteDatabase;
+	}
+
+	it('clearKeystore rejects when the keystore deletion is blocked', async () => {
+		stubBlockedDeletion();
+		await expect(clearKeystore()).rejects.toThrow(/blocked/i);
+	});
+
+	it('clearAllOrgKeys rejects when the org-key deletion is blocked', async () => {
+		stubBlockedDeletion();
+		await expect(clearAllOrgKeys()).rejects.toThrow(/blocked/i);
+	});
+});
+
+describe('logout wiring delegates both stores to their owning teardown', () => {
 	const source = readFileSync(
 		path.resolve(process.cwd(), 'src/lib/core/identity/cache-invalidation.ts'),
 		'utf8'
 	);
 
-	it('names both IndexedDB databases', () => {
-		expect(source).toContain("'commons-org-keys'");
-		expect(source).toContain("'commons-keystore'");
-	});
-
 	it('clearAllClientCaches calls the module-owned teardown for both stores', () => {
 		const from = source.indexOf('export async function clearAllClientCaches');
 		expect(from).toBeGreaterThan(-1);
 		const body = source.slice(from, source.indexOf('async function clearDatabase', from));
-		// The keystore sweep (which nulls cachedMasterBytes + deletes the DB)
-		// and the org-key sweep both run on logout — not just the old
-		// in-memory-only discardDerivedKeys().
+		// The keystore sweep (which nulls cachedMasterBytes + deletes the DB) and
+		// the org-key sweep both run on logout — not just the old in-memory-only
+		// discardDerivedKeys().
 		expect(body).toContain('clearKeystore');
 		expect(body).toContain('clearAllOrgKeys');
 	});

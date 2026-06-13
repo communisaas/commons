@@ -318,8 +318,12 @@ export async function clearKeystore(): Promise<void> {
 			resolve();
 		};
 		request.onerror = () => reject(request.error);
-		// Resolve on block too — deletion completes once remaining handles close.
-		request.onblocked = () => resolve();
+		// Do NOT resolve on block: another open connection holds the keystore, so
+		// the device master survives on disk. Resolving would let logout report
+		// success while the next user on a shared browser can still re-derive —
+		// reject so the caller logs the incomplete wipe.
+		request.onblocked = () =>
+			reject(new Error('device keystore deletion blocked by an open connection'));
 	});
 }
 

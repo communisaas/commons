@@ -158,7 +158,11 @@ export async function clearAllOrgKeys(): Promise<void> {
 		const request = indexedDB.deleteDatabase(ORG_KEY_DB_NAME);
 		request.onsuccess = () => resolve();
 		request.onerror = () => reject(request.error);
-		// Resolve on block too — deletion completes once remaining handles close.
-		request.onblocked = () => resolve();
+		// Do NOT resolve on block: another open connection (e.g. a second tab)
+		// holds the database, so the wrapped org keys remain on disk. Resolving
+		// would let logout report success while the keys survive the shared-
+		// browser sweep — reject so the caller logs the incomplete wipe.
+		request.onblocked = () =>
+			reject(new Error('org-key database deletion blocked by an open connection'));
 	});
 }
