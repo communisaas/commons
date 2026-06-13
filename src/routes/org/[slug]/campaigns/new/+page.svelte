@@ -11,6 +11,9 @@
 	let targetCountry = $state(form?.targetCountry ?? 'US');
 	let targetJurisdiction = $state(form?.targetJurisdiction ?? '');
 	let position = $state<string>('');
+	let campaignType = $state<string>(form?.type ?? data.initialType ?? 'LETTER');
+
+	const isCongressional = $derived(campaignType === 'CONGRESSIONAL');
 </script>
 
 <div class="space-y-6">
@@ -178,12 +181,30 @@
 					id="type"
 					name="type"
 					required
+					bind:value={campaignType}
 					class="participation-input w-full rounded-lg text-sm transition-colors focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 				>
-					<option value="LETTER" selected={form?.type === 'LETTER' || !!prefill}>Letter</option>
-					<option value="EVENT" selected={form?.type === 'EVENT'}>Event</option>
-					<option value="FORM" selected={form?.type === 'FORM'}>Form</option>
+					<option value="LETTER">Letter</option>
+					<option value="EVENT">Event</option>
+					<option value="FORM">Form</option>
+					{#if data.congressionalAuthoringEnabled}
+						<option value="CONGRESSIONAL">Congressional message (to Congress)</option>
+					{/if}
 				</select>
+
+				{#if isCongressional}
+					<div class="mt-3 rounded-lg border border-teal-500/25 bg-teal-500/5 px-4 py-3">
+						<p class="text-text-secondary text-sm font-medium">Delivers to Congress</p>
+						<p class="text-text-tertiary mt-1 text-xs leading-relaxed">
+							This action sends each supporter's message to their House and Senate offices
+							through the Communicating with Congress system. Supporters who have verified
+							their address deliver. Supporters who have verified with a government ID
+							deliver too — and their messages carry a higher-assurance badge in the proof
+							packet, so a staffer can see at a glance how many came from gov-ID-verified
+							constituents.
+						</p>
+					</div>
+				{/if}
 			</div>
 
 			<!-- Body -->
@@ -282,6 +303,27 @@
 					Packet evidence assembles after save and verified participation.
 				</p>
 			</div>
+
+			{#if isCongressional}
+				<div class="border-surface-border space-y-2 rounded-lg border px-4 py-3">
+					<p class="text-text-quaternary font-mono text-[10px] tracking-wider uppercase">
+						Assurance breakdown
+					</p>
+					<div class="flex items-center justify-between text-xs">
+						<span class="text-text-secondary">Address-verified — delivers</span>
+						<span class="text-text-quaternary font-mono tabular-nums">Pending</span>
+					</div>
+					<div class="flex items-center justify-between text-xs">
+						<span class="text-text-secondary">Government-ID verified — delivers, badged</span>
+						<span class="text-text-quaternary font-mono tabular-nums">Pending</span>
+					</div>
+					<p class="text-text-quaternary mt-1 text-[11px] leading-relaxed">
+						The packet shows both counts so a recipient office can weigh reach against
+						gov-ID-grade assurance. Address verification is the delivery floor; gov-ID
+						verification raises the badge, not the bar.
+					</p>
+				</div>
+			{/if}
 		</div>
 
 		<!-- Submit -->

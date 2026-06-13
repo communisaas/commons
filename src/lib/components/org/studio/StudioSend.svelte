@@ -18,14 +18,14 @@
   why in one quiet line.
 -->
 <script lang="ts">
-	import { FileUp, Mail, type Icon } from '@lucide/svelte';
+	import { FileUp, Mail, Landmark, type Icon } from '@lucide/svelte';
 	import type { Component } from 'svelte';
 	import BoundedNotice from '$lib/components/org/BoundedNotice.svelte';
 	import type { OrgLimitNotice } from '$lib/data/org-limit-sentences';
 	import { TIMING, EASING } from '$lib/design/motion';
 
 	type SendAction = {
-		key: 'publish' | 'email';
+		key: 'publish' | 'email' | 'congressional';
 		name: string;
 		detail: string;
 		icon: Component<Icon>;
@@ -36,18 +36,23 @@
 	let {
 		ready,
 		canPublish,
+		congressionalAvailable = false,
 		congressionalNotice = null,
 		onpublish,
-		onemail
+		onemail,
+		oncongressional
 	}: {
 		/** True once a composed message exists to hand off. */
 		ready: boolean;
 		/** Role-derived: members can watch; owner/editor can hand off drafts. */
 		canPublish: boolean;
+		/** True only when congressional delivery is available end to end. */
+		congressionalAvailable?: boolean;
 		/** One plain sentence about congressional delivery, when it applies. */
 		congressionalNotice?: OrgLimitNotice | null;
 		onpublish?: () => void;
 		onemail?: () => void;
+		oncongressional?: () => void;
 	} = $props();
 
 	const actions = $derived<SendAction[]>([
@@ -68,7 +73,25 @@
 			icon: Mail,
 			handler: onemail,
 			enabled: ready && canPublish && Boolean(onemail)
-		}
+		},
+		// Congressional dispatch appears only once delivery to Congress is
+		// available. When it is, the button drafts a congressional campaign:
+		// address-verified supporters deliver; gov-ID-verified supporters deliver
+		// and carry a higher-assurance badge in the packet — a tiered floor, not
+		// a gate.
+		...(congressionalAvailable
+			? [
+					{
+						key: 'congressional' as const,
+						name: 'Send to Congress',
+						detail:
+							'Drafts a congressional message campaign. Address-verified supporters deliver to their House and Senate offices; gov-ID-verified supporters deliver too and badge the packet with higher assurance. You confirm before anything sends.',
+						icon: Landmark,
+						handler: oncongressional,
+						enabled: ready && canPublish && Boolean(oncongressional)
+					}
+				]
+			: [])
 	]);
 
 	const holdReason = $derived(
@@ -88,7 +111,11 @@
 >
 	<header class="send-head">
 		<span class="send-title">Send</span>
-		<span class="send-gloss">Take the composed message to publishing or email.</span>
+		<span class="send-gloss">
+			{congressionalAvailable
+				? 'Take the composed message to publishing, email, or Congress.'
+				: 'Take the composed message to publishing or email.'}
+		</span>
 	</header>
 
 	<div class="send-row" role="group" aria-label="Send options">

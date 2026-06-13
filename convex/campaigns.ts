@@ -466,12 +466,10 @@ export const create = mutation({
 	args: {
 		slug: v.string(),
 		title: v.string(),
-		type: v.union(
-			v.literal('LETTER'),
-			v.literal('EVENT'),
-			v.literal('FORM'),
-			v.literal('FUNDRAISER')
-		),
+		// Single-sourced from the shared campaignType validator so adding a
+		// value (e.g. CONGRESSIONAL) is one edit, not a per-mutation inline
+		// union to keep in sync.
+		type: campaignType,
 		body: v.optional(v.string()),
 		templateId: v.optional(v.id('templates')),
 		debateEnabled: v.optional(v.boolean()),
@@ -488,12 +486,11 @@ export const create = mutation({
 			throw new Error('Title is required');
 		}
 
-		// Runtime allowlist must mirror the campaignType union in
-		// convex/_validators.ts. Pre-fix the two disagreed: validator
-		// accepted FUNDRAISER (donations.ts:622 writes it for goal-amount
-		// campaigns) but this runtime check rejected it. Single source
-		// would be cleaner; for now keep them in sync explicitly.
-		const validTypes = ['LETTER', 'EVENT', 'FORM', 'FUNDRAISER'];
+		// Runtime allowlist mirrors the campaignType union in
+		// convex/_validators.ts. The args validator already rejects anything
+		// outside the union; this is the redundant in-handler guard kept for
+		// defense in depth.
+		const validTypes = ['LETTER', 'EVENT', 'FORM', 'FUNDRAISER', 'CONGRESSIONAL'];
 		if (!validTypes.includes(args.type)) {
 			throw new Error('Invalid campaign type');
 		}
@@ -638,12 +635,10 @@ export const update = mutation({
 			updates.title = args.title.trim();
 		}
 		if (args.type !== undefined) {
-			// Runtime allowlist must mirror the campaignType union in
-			// convex/_validators.ts. Pre-fix the two disagreed: validator
-			// accepted FUNDRAISER (donations.ts:622 writes it for goal-amount
-			// campaigns) but this runtime check rejected it. Single source
-			// would be cleaner; for now keep them in sync explicitly.
-			const validTypes = ['LETTER', 'EVENT', 'FORM', 'FUNDRAISER'];
+			// Runtime allowlist mirrors the campaignType union in
+			// convex/_validators.ts (args validator already enforces it; this
+			// is the redundant defense-in-depth guard).
+			const validTypes = ['LETTER', 'EVENT', 'FORM', 'FUNDRAISER', 'CONGRESSIONAL'];
 			if (!validTypes.includes(args.type)) {
 				throw new Error('Invalid campaign type');
 			}

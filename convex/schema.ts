@@ -1735,11 +1735,14 @@ export default defineSchema({
 		// campaign that holds a goalAmountCents + receives stripe
 		// payments). Brutalist sweep caught FUNDRAISER missing from the
 		// initial union — donations.ts:622 inserts it directly.
+		// CONGRESSIONAL is dispatched through the CWC delivery spine; its
+		// authoring surface is gated by FEATURES.CONGRESSIONAL.
 		type: v.union(
 			v.literal('LETTER'),
 			v.literal('EVENT'),
 			v.literal('FORM'),
-			v.literal('FUNDRAISER')
+			v.literal('FUNDRAISER'),
+			v.literal('CONGRESSIONAL')
 		),
 		title: v.string(),
 		body: v.optional(v.string()),

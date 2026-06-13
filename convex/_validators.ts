@@ -70,7 +70,12 @@ export const campaignType = v.union(
 	v.literal('LETTER'),
 	v.literal('EVENT'),
 	v.literal('FORM'),
-	v.literal('FUNDRAISER')
+	v.literal('FUNDRAISER'),
+	// Congressional / CWC delivery campaign. Authored like a LETTER but
+	// dispatched through the congressional delivery spine (House proxy / Senate
+	// CWC). Tier-2 address-verified supporters DELIVER; tier-4 gov-ID actions
+	// are badged higher-assurance — a tiered floor, not a hard gate.
+	v.literal('CONGRESSIONAL')
 );
 
 export const campaignStatus = v.union(

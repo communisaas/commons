@@ -210,6 +210,14 @@
 		const draftId = saveStudioProcessAsOrgEmailDraft(proc);
 		window.location.href = `${orgEmailHref}?studioDraft=${encodeURIComponent(draftId)}`;
 	}
+
+	function takeToCongressional() {
+		if (!proc || proc.status !== 'composed' || !composedMessage.trim()) return;
+		// The congressional campaign is authored on the new-campaign surface with
+		// the type preselected — that surface owns target chambers, the tiered
+		// floor explainer, and the confirm step before any CWC send.
+		window.location.href = `${os.base}/campaigns/new?type=CONGRESSIONAL`;
+	}
 </script>
 
 <div class="studio" style="--timing-slow: {TIMING.SLOW}ms; --easing: {EASING};">
@@ -434,9 +442,11 @@
 	<StudioSend
 		ready={sendReady}
 		{canPublish}
+		{congressionalAvailable}
 		{congressionalNotice}
 		onpublish={takeToPublish}
 		onemail={takeToOrgEmail}
+		oncongressional={takeToCongressional}
 	/>
 </div>
 
