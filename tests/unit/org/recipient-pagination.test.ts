@@ -41,13 +41,10 @@ const ORG = 'org_1' as unknown as Parameters<typeof collectFilteredRecipients>[1
  */
 function fakeCtx(rows: Supporter[], pageSize: number) {
 	let collectCalled = false;
-	return {
-		get collectCalled() {
-			return collectCalled;
-		},
-		ctx: {
-			db: {
-				query(_table: string) {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const ctx: any = {
+		db: {
+			query(_table: string) {
 					return {
 						withIndex(_name: string, fn: (q: unknown) => unknown) {
 							const q = {
@@ -93,9 +90,13 @@ function fakeCtx(rows: Supporter[], pageSize: number) {
 						}
 					};
 				}
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			} as any
-		}
+			}
+	};
+	return {
+		get collectCalled() {
+			return collectCalled;
+		},
+		ctx
 	};
 }
 
@@ -114,9 +115,9 @@ describe('collectFilteredRecipients (bounded must-enumerate scan)', () => {
 		// 3500 supporters, all subscribed; helper page size is 1000, so this
 		// crosses 4 page boundaries. A correct cursor walk returns all 3500.
 		const roster = makeRoster(3500);
-		const { ctx, collectCalled } = fakeCtx(roster, 1000);
-		const { recipients, truncated } = await collectFilteredRecipients(ctx, ORG, {});
-		expect(collectCalled).toBe(false);
+		const fake = fakeCtx(roster, 1000);
+		const { recipients, truncated } = await collectFilteredRecipients(fake.ctx, ORG, {});
+		expect(fake.collectCalled).toBe(false);
 		expect(recipients).toHaveLength(3500);
 		expect(truncated).toBe(false);
 		// No duplicates, no skips: the returned id set equals the input id set.
@@ -230,9 +231,9 @@ describe('pageFilteredRecipients (resumable send-batch page)', () => {
 describe('countFilteredRecipients (bounded count + source breakdown)', () => {
 	it('counts the full subscribed cohort across page boundaries (matches collect)', async () => {
 		const roster = makeRoster(3500);
-		const { ctx, collectCalled } = fakeCtx(roster, 1000);
-		const { totalCount, truncated } = await countFilteredRecipients(ctx, ORG, {});
-		expect(collectCalled).toBe(false);
+		const fake = fakeCtx(roster, 1000);
+		const { totalCount, truncated } = await countFilteredRecipients(fake.ctx, ORG, {});
+		expect(fake.collectCalled).toBe(false);
 		expect(totalCount).toBe(3500);
 		expect(truncated).toBe(false);
 	});

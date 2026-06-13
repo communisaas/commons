@@ -53,15 +53,38 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 		expect(clean).toMatch(/typeof item === ['"]string['"] && predicate\(item\)/);
 		// getBlastRecipients validates the persisted filter at recipient-load
 		// (org-scoped lookup, fail-closed) and applies it via the shared
-		// _emailRecipientFilter module.
+		// _emailRecipientFilter module. The recipient scan is now PAGINATED
+		// (pageFilteredRecipients) rather than a single .collect() — but the
+		// same filter validation runs first, so the security invariant holds.
 		const blastStart = svelte.indexOf('export const getBlastRecipients = internalQuery');
 		expect(blastStart).toBeGreaterThan(-1);
 		const getRecip = svelte.slice(blastStart, blastStart + 3000);
 		expect(getRecip).toMatch(/if \(!blast \|\| blast\.orgId !== args\.orgId\)/);
 		expect(getRecip).toContain('readSafeRecipientFilter(blast.recipientFilter)');
-		expect(getRecip).toContain('applyEmailRecipientFilter(ctx, args.orgId, results, filter)');
-		expect(svelte).toContain(
-			"import { applyEmailRecipientFilter } from './_emailRecipientFilter';"
+		// Filter is applied via the shared paginated resolver, which calls
+		// applyEmailRecipientFilter per page internally.
+		expect(getRecip).toContain('pageFilteredRecipients(');
+		expect(svelte).toMatch(/import \{[\s\S]*?from '\.\/_emailRecipientFilter';/);
+	});
+
+	it('email recipient resolution paginates the supporter roster (no unbounded .collect())', () => {
+		const svelte = source('convex/email.ts');
+		// The whole-roster `.query('supporters')....collect()` send-path scans are
+		// replaced by the shared bounded/paginated resolvers. None of the four
+		// send-path resolution helpers may `.collect()` supporters directly.
+		const helper = source('convex/_emailRecipientFilter.ts');
+		expect(helper).toContain('export async function pageFilteredRecipients');
+		expect(helper).toContain('export async function collectFilteredRecipients');
+		expect(helper).toContain('export async function countFilteredRecipients');
+		// The page primitive paginates rather than collects.
+		expect(helper).toMatch(/\.paginate\(\{ cursor, numItems: scanPageSize \}\)/);
+		// The recipient-resolution send paths no longer scan the whole org roster
+		// via `by_orgId` + `.collect()` (the >16K scan-cliff). The remaining
+		// supporter reads in email.ts are bounded single-key lookups
+		// (by_orgId_emailHash .first()) and a bounded cross-org bounce
+		// correlation (by_globalEmailHash), not the per-org roster.
+		expect(svelte).not.toMatch(
+			/\.withIndex\('by_orgId',[\s\S]{0,80}?\.collect\(\)/
 		);
 	});
 

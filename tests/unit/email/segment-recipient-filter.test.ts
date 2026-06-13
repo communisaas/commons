@@ -34,8 +34,16 @@ describe('saved segment email recipient filters', () => {
 		expect(recipientFilterSource).toContain('matchesAnySegment');
 		expect(recipientFilterSource).toContain('applyEmailRecipientFilter');
 		expect(emailSource).toContain('export const countRecipientsForFilter = query');
-		expect(emailSource).toContain('const filtered = await applyEmailRecipientFilter');
-		expect(blastsSource).toContain('const filtered = await applyEmailRecipientFilter');
+		// Recipient resolution now routes through the shared BOUNDED/PAGINATED
+		// resolvers (countFilteredRecipients / collectFilteredRecipients), which
+		// apply the same segment filter per page internally — no unbounded
+		// .collect() of the supporter roster. The segment-matching invariant is
+		// preserved through the shared module.
+		expect(emailSource).toContain('await countFilteredRecipients');
+		expect(blastsSource).toContain('await collectFilteredRecipients');
+		expect(recipientFilterSource).toMatch(
+			/applyEmailRecipientFilter\(ctx, orgId, page as T\[\], filter\)/
+		);
 	});
 
 	it('wires saved People segments through the composer instead of a local facade', () => {

@@ -35,39 +35,37 @@ interface Recorded {
 
 function fakeCtx(rows: Array<ActionRow | LinkRow>) {
 	const calls: Recorded[] = [];
-	return {
-		calls,
-		ctx: {
-			db: {
-				query(_table: string) {
-					return {
-						withIndex(name: string, fn: (q: unknown) => unknown) {
-							const rec: Recorded = { index: name, eqs: {} };
-							const q = {
-								eq(field: string, value: unknown) {
-									rec.eqs[field] = value;
-									return q;
-								}
-							};
-							fn(q);
-							const builder = {
-								async take(n: number) {
-									rec.takeN = n;
-									calls.push(rec);
-									return rows.slice(0, n);
-								},
-								async collect() {
-									throw new Error('bounded read must not .collect() a scalable collection');
-								}
-							};
-							return builder;
-						}
-					};
-				}
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			} as any
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const ctx: any = {
+		db: {
+			query(_table: string) {
+				return {
+					withIndex(name: string, fn: (q: unknown) => unknown) {
+						const rec: Recorded = { index: name, eqs: {} };
+						const q = {
+							eq(field: string, value: unknown) {
+								rec.eqs[field] = value;
+								return q;
+							}
+						};
+						fn(q);
+						const builder = {
+							async take(n: number) {
+								rec.takeN = n;
+								calls.push(rec);
+								return rows.slice(0, n);
+							},
+							async collect() {
+								throw new Error('bounded read must not .collect() a scalable collection');
+							}
+						};
+						return builder;
+					}
+				};
+			}
 		}
 	};
+	return { calls, ctx };
 }
 
 const CAMPAIGN = 'campaign_1' as unknown as Parameters<typeof computeCampaignDistrictSets>[1];
