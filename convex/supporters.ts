@@ -187,11 +187,15 @@ export const list = query({
 		// Use .take() with a bounded cap to prevent unbounded memory usage.
 		const limit = Math.min(numItems, 100);
 		const MAX_SCAN = 10_000;
-		const allDocs = await ctx.db
+		// Take ONE extra row as a truncation sentinel: an org sitting at exactly
+		// MAX_SCAN is complete, not truncated. `take(MAX_SCAN)` + `>= MAX_SCAN`
+		// would false-flag it. Fetch MAX_SCAN + 1 and treat `> MAX_SCAN` as the
+		// real truncation signal, then drop the sentinel row from the working set.
+		const scanned = await ctx.db
 			.query('supporters')
 			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
 			.order('desc')
-			.take(MAX_SCAN);
+			.take(MAX_SCAN + 1);
 
 		// Scan newest-first so the 10K window is the MOST RECENT supporters — the
 		// rows an operator actually wants, and what the page's "showing the most
@@ -200,7 +204,9 @@ export const list = query({
 		// honestly so the page warns instead of presenting a truncated list as
 		// complete. Mirrors the v1 API's `truncated`/`scanLimit` envelope
 		// (convex/v1api.ts listSupporters).
-		const scanCapped = allDocs.length >= MAX_SCAN;
+		const scanCapped = scanned.length > MAX_SCAN;
+		// Drop the sentinel +1 row so it isn't processed or returned.
+		const allDocs = scanned.slice(0, MAX_SCAN);
 
 		// Apply filters in memory (Convex indexes are limited to equality prefixes)
 		let filtered = allDocs;
@@ -361,7 +367,13 @@ export const get = query({
 export const findByEmailHash = query({
 	args: { slug: v.string(), emailHash: v.string() },
 	handler: async (ctx, args) => {
-		const { org, membership } = await requireOrgRole(ctx, args.slug, 'member');
+		// Editor-gated, not member: this reader returns null-vs-object keyed on a
+		// caller-supplied emailHash, which is an existence/membership oracle (a
+		// plain member could probe whether any email is in the org regardless of
+		// field projection). It has zero app consumers, so the legitimate
+		// supporter-search feature (searchByEmail) stays 'member' while existence-
+		// probing is restricted to editors.
+		const { org, membership } = await requireOrgRole(ctx, args.slug, 'editor');
 		const isEditor = membershipIsEditor(membership.role);
 		const doc = await ctx.db
 			.query('supporters')

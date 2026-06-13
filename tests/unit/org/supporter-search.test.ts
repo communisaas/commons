@@ -222,7 +222,9 @@ describe('searchCoverage', () => {
 		);
 		expect(SUPPORTER_SEARCH_SCAN_CAP).toBe(10_000);
 		expect(convexSource).toContain('MAX_SCAN = 10_000');
-		expect(convexSource).toContain('.take(MAX_SCAN)');
+		// The scan takes MAX_SCAN + 1 as a truncation sentinel (an org sitting at
+		// exactly the cap is complete, not truncated), then slices back to the cap.
+		expect(convexSource).toContain('.take(MAX_SCAN + 1)');
 	});
 });
 

@@ -26,12 +26,15 @@ interface Row {
 }
 
 /**
- * Mirror of convex/supporters.ts `list`: take(MAX_SCAN), derive `truncated`
- * from window saturation, return `{ hasMore, truncated, scanLimit }`.
+ * Mirror of convex/supporters.ts `list`: take(MAX_SCAN + 1) as a truncation
+ * sentinel, derive `truncated` from `> MAX_SCAN` (an org sitting at exactly the
+ * cap is complete, not truncated), drop the sentinel row from the working set,
+ * return `{ hasMore, truncated, scanLimit }`.
  */
 function list(allRows: Row[], pageLimit = 50) {
-	const allDocs = allRows.slice(0, MAX_SCAN);
-	const scanCapped = allDocs.length >= MAX_SCAN;
+	const scanned = allRows.slice(0, MAX_SCAN + 1);
+	const scanCapped = scanned.length > MAX_SCAN;
+	const allDocs = scanned.slice(0, MAX_SCAN);
 
 	const sorted = [...allDocs].sort((a, b) => b._creationTime - a._creationTime);
 	const page = sorted.slice(0, pageLimit + 1);
@@ -57,8 +60,13 @@ describe('supporter list scan-cap signal', () => {
 		expect(result.scanLimit).toBe(MAX_SCAN);
 	});
 
-	it('treats an org sitting exactly on the cap as truncated (cannot prove completeness)', () => {
+	it('treats an org sitting exactly on the cap as NOT truncated (the sentinel +1 row proves completeness)', () => {
 		const result = list(makeRows(MAX_SCAN));
+		expect(result.truncated).toBe(false);
+	});
+
+	it('flags truncated as soon as the org exceeds the cap by one', () => {
+		const result = list(makeRows(MAX_SCAN + 1));
 		expect(result.truncated).toBe(true);
 	});
 
@@ -83,12 +91,13 @@ describe('source wiring (Convex envelope + page banner)', () => {
 		'utf8'
 	);
 
-	it('list derives the cap from MAX_SCAN saturation and returns truncated + scanLimit', () => {
+	it('list takes the sentinel +1 row, derives the cap from > MAX_SCAN, and returns truncated + scanLimit', () => {
 		const body = convexSource.slice(
 			convexSource.indexOf('export const list = query'),
 			convexSource.indexOf('export const get = query')
 		);
-		expect(body).toContain('allDocs.length >= MAX_SCAN');
+		expect(body).toContain('.take(MAX_SCAN + 1)');
+		expect(body).toContain('scanned.length > MAX_SCAN');
 		expect(body).toContain('truncated: scanCapped');
 		expect(body).toContain('scanLimit: MAX_SCAN');
 	});
@@ -98,9 +107,11 @@ describe('source wiring (Convex envelope + page banner)', () => {
 		expect(pageServerSource).toContain('scanLimit: convexResult.scanLimit');
 	});
 
-	it('the page shows a quiet banner when the list is capped', () => {
+	it('the page shows a quiet, accurate banner when the list is capped', () => {
 		expect(pageSource).toContain('scanCapped');
-		expect(pageSource).toContain('Showing the most recent');
+		expect(pageSource).toContain('most recent supporters');
+		// The banner must NOT imply filtering reaches beyond the loaded window.
+		expect(pageSource).not.toContain('refine filters to narrow');
 	});
 
 	it('does not break the existing list envelope consumers depend on', () => {

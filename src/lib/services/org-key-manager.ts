@@ -141,28 +141,51 @@ export async function cacheOrgKey(orgKey: CryptoKey, orgId: string): Promise<voi
 export { clearCachedWrapped as clearCachedOrgKey };
 
 /**
- * Delete the entire wrapped-org-key store from this device.
+ * Wipe every wrapped org key from this device.
  *
  * Logout has no list of which orgs the user unwrapped, so a per-org
- * `clearCachedOrgKey(orgId)` cannot sweep them all. Dropping the whole DB
- * guarantees no wrapped org key survives for the next user on a shared
- * browser to re-derive and decrypt cached org PII. The cached connection is
- * closed first so `deleteDatabase` isn't blocked by an open handle.
+ * `clearCachedOrgKey(orgId)` cannot sweep them all. We must clear the whole
+ * store so no wrapped org key survives for the next user on a shared browser
+ * to re-derive and decrypt cached org PII.
+ *
+ *   1. Clear the ORG_KEY_STORE_NAME ('wrapped-keys') object-store CONTENTS in a
+ *      readwrite transaction. Unlike `deleteDatabase`, `objectStore.clear()` is
+ *      NOT blocked by other open connections, so the wrapped keys are
+ *      guaranteed gone from disk even if a second tab holds the DB open.
+ *   2. Best-effort delete the database to drop the empty shell — resolve on
+ *      success, error, AND blocked, since the sensitive data is already gone.
  */
 export async function clearAllOrgKeys(): Promise<void> {
+	// Step 1 — guaranteed wipe: clear the store contents. clear() in a readwrite
+	// transaction succeeds even while another tab holds the DB open.
+	try {
+		const db = await openOrgKeyDB();
+		await new Promise<void>((resolve, reject) => {
+			const tx = db.transaction(ORG_KEY_STORE_NAME, 'readwrite');
+			const store = tx.objectStore(ORG_KEY_STORE_NAME);
+			store.clear();
+			tx.oncomplete = () => resolve();
+			tx.onerror = () => reject(tx.error);
+			tx.onabort = () => reject(tx.error);
+		});
+	} catch (err) {
+		// Tolerate "store/DB doesn't exist" — nothing cached means nothing to wipe.
+		console.debug('[OrgKeyManager] Org-key clear skipped (store/DB absent):', err);
+	}
+
+	// Close our handle so the best-effort delete below isn't blocked by us.
 	if (dbInstance) {
 		dbInstance.close();
 		dbInstance = null;
 	}
-	return new Promise((resolve, reject) => {
+
+	// Step 2 — best-effort: drop the now-empty DB shell. The wrapped keys are
+	// already cleared in step 1, so resolve on success, error, AND blocked. A
+	// blocked delete only leaves an EMPTY database behind until other tabs close.
+	return new Promise((resolve) => {
 		const request = indexedDB.deleteDatabase(ORG_KEY_DB_NAME);
 		request.onsuccess = () => resolve();
-		request.onerror = () => reject(request.error);
-		// Do NOT resolve on block: another open connection (e.g. a second tab)
-		// holds the database, so the wrapped org keys remain on disk. Resolving
-		// would let logout report success while the keys survive the shared-
-		// browser sweep — reject so the caller logs the incomplete wipe.
-		request.onblocked = () =>
-			reject(new Error('org-key database deletion blocked by an open connection'));
+		request.onerror = () => resolve();
+		request.onblocked = () => resolve();
 	});
 }

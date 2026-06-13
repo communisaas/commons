@@ -140,8 +140,14 @@ describe('every member-gated reader routes through the shared projection', () =>
 		expect(body).toContain('return projectSupporterFields(');
 	});
 
-	it('findByEmailHash returns a CURATED allowlist, never the raw .first() doc', () => {
+	it('findByEmailHash is editor-gated (existence oracle) and returns a CURATED allowlist, never the raw .first() doc', () => {
 		const body = readerBody('export const findByEmailHash = query', 'export const searchByEmail = query');
+		// Editor-gated, not member: the null-vs-object return keyed on a
+		// caller-supplied emailHash is an existence/membership oracle, so it is
+		// restricted to editors (it has zero app consumers). searchByEmail — the
+		// legitimate supporter-search feature — stays 'member'.
+		expect(body).toContain("requireOrgRole(ctx, args.slug, 'editor')");
+		expect(body).not.toContain("requireOrgRole(ctx, args.slug, 'member')");
 		expect(body).toContain('membershipIsEditor(membership.role)');
 		expect(body).toContain('return projectSupporterFields(');
 		// The raw document carries cross-org join keys (globalEmailHash /
@@ -155,8 +161,9 @@ describe('every member-gated reader routes through the shared projection', () =>
 		expect(body).toContain('emailConsentText:');
 	});
 
-	it('searchByEmail projects its mapped shape', () => {
+	it('searchByEmail stays member-gated (the legitimate supporter-search feature) and projects its mapped shape', () => {
 		const body = readerBody('export const searchByEmail = query', 'export const getSummaryStats = query');
+		expect(body).toContain("requireOrgRole(ctx, args.orgSlug, 'member')");
 		expect(body).toContain('membershipIsEditor(membership.role)');
 		expect(body).toContain('return projectSupporterFields(');
 	});

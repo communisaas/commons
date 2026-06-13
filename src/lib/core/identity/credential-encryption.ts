@@ -118,6 +118,15 @@ let cachedMasterBytes: ArrayBuffer | null = null;
 /** Serialization lock — prevents concurrent callers from generating duplicate master keys */
 let masterKeyPromise: Promise<ArrayBuffer> | null = null;
 
+/**
+ * Monotonic generation counter for the master key. Bumped by `clearKeystore`
+ * as part of its in-memory wipe. An in-flight `getOrCreateMasterBytes` IIFE
+ * captures the epoch at entry and refuses to re-populate `cachedMasterBytes`
+ * if a clear happened mid-fetch — otherwise a fetch that started before logout
+ * could resurrect the master in memory AFTER `clearKeystore` nulled it.
+ */
+let masterKeyEpoch = 0;
+
 /** Cached per-user derived keys: Map<recordId, CryptoKey> */
 const derivedKeyCache = new Map<string, CryptoKey>();
 
@@ -139,6 +148,11 @@ export async function getOrCreateMasterBytes(): Promise<ArrayBuffer> {
 	// and the first encryption becomes undecryptable.
 	if (!masterKeyPromise) {
 		masterKeyPromise = (async () => {
+			// Capture the epoch at entry. If `clearKeystore` bumps it while this
+			// fetch is in flight, the assignments below skip the cache write — the
+			// in-flight caller still gets its value, but the master is NOT
+			// resurrected in memory after logout nulled it.
+			const startEpoch = masterKeyEpoch;
 			try {
 				const db = await openKeyDB();
 
@@ -156,7 +170,7 @@ export async function getOrCreateMasterBytes(): Promise<ArrayBuffer> {
 				});
 
 				if (existing) {
-					cachedMasterBytes = existing;
+					if (startEpoch === masterKeyEpoch) cachedMasterBytes = existing;
 					console.debug('[CredentialEncryption] Retrieved existing derivation master key');
 					return existing;
 				}
@@ -177,7 +191,7 @@ export async function getOrCreateMasterBytes(): Promise<ArrayBuffer> {
 					request.onsuccess = () => resolve();
 				});
 
-				cachedMasterBytes = rawBytes;
+				if (startEpoch === masterKeyEpoch) cachedMasterBytes = rawBytes;
 				console.debug('[CredentialEncryption] Created new derivation master key');
 				return rawBytes;
 			} finally {
@@ -295,35 +309,68 @@ export function discardDerivedKeys(): void {
  * per-user key from that master and decrypt cached PII. This:
  *
  *   1. Nulls every in-memory cache (master bytes, the master-key generation
- *      promise, the legacy device key, and the derived-key Map).
- *   2. Closes the cached IndexedDB connection so `deleteDatabase` isn't blocked.
- *   3. Deletes the entire `commons-keystore` database so the device master is
- *      gone from disk — without it, the ciphertext in other stores is inert.
+ *      promise, the legacy device key, and the derived-key Map) and bumps the
+ *      master-key epoch so an in-flight `getOrCreateMasterBytes` cannot
+ *      re-populate `cachedMasterBytes` after this wipe.
+ *   2. Clears the KEY_STORE_NAME object-store CONTENTS in a readwrite
+ *      transaction. Unlike `deleteDatabase`, `objectStore.clear()` is NOT
+ *      blocked by other open connections, so the device master bytes are
+ *      guaranteed gone from disk even if another tab holds the keystore open.
+ *   3. Best-effort deletes the `commons-keystore` database to remove the empty
+ *      shell. The sensitive data is already cleared, so this resolves on
+ *      success, error, AND blocked — a lingering empty DB is harmless.
  */
 export async function clearKeystore(): Promise<void> {
 	cachedMasterBytes = null;
 	masterKeyPromise = null;
 	cachedLegacyKey = null;
 	derivedKeyCache.clear();
+	// Invalidate any in-flight master-key fetch so it can't resurrect the cache.
+	masterKeyEpoch++;
 
+	// Step 1 — guaranteed wipe: clear the object-store contents. A readwrite
+	// transaction's clear() succeeds even while other tabs hold the DB open, so
+	// the master bytes are gone from disk regardless of `deleteDatabase` blocking.
+	try {
+		const db = await openKeyDB();
+		await new Promise<void>((resolve, reject) => {
+			const tx = db.transaction(KEY_STORE_NAME, 'readwrite');
+			const store = tx.objectStore(KEY_STORE_NAME);
+			store.clear();
+			tx.oncomplete = () => resolve();
+			tx.onerror = () => reject(tx.error);
+			tx.onabort = () => reject(tx.error);
+		});
+	} catch (err) {
+		// Tolerate "store/DB doesn't exist" — nothing to wipe means the goal
+		// (no master bytes on disk) is already met.
+		console.debug('[CredentialEncryption] Keystore clear skipped (store/DB absent):', err);
+	}
+
+	// Close our connection so the best-effort deleteDatabase below isn't blocked
+	// by our own handle.
 	if (keyDBInstance) {
 		keyDBInstance.close();
 		keyDBInstance = null;
 	}
 
-	return new Promise((resolve, reject) => {
+	// Step 2 — best-effort: drop the now-empty DB shell. The sensitive data is
+	// already cleared in step 1, so resolve on success, error, AND blocked. A
+	// blocked delete only leaves an EMPTY database behind until other tabs close.
+	return new Promise((resolve) => {
 		const request = indexedDB.deleteDatabase(KEY_DB_NAME);
 		request.onsuccess = () => {
 			console.debug('[CredentialEncryption] Device keystore deleted');
 			resolve();
 		};
-		request.onerror = () => reject(request.error);
-		// Do NOT resolve on block: another open connection holds the keystore, so
-		// the device master survives on disk. Resolving would let logout report
-		// success while the next user on a shared browser can still re-derive —
-		// reject so the caller logs the incomplete wipe.
-		request.onblocked = () =>
-			reject(new Error('device keystore deletion blocked by an open connection'));
+		request.onerror = () => {
+			console.debug('[CredentialEncryption] Device keystore delete errored (contents already cleared)');
+			resolve();
+		};
+		request.onblocked = () => {
+			console.debug('[CredentialEncryption] Device keystore delete blocked (contents already cleared)');
+			resolve();
+		};
 	});
 }
 

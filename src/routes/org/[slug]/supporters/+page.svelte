@@ -706,7 +706,7 @@
 	<!-- Scan-cap notice: the list reflects only the most recent window -->
 	{#if scanCapped}
 		<p class="text-text-tertiary text-sm" role="status">
-			Showing the most recent {fmt(scanLimit)} — refine filters to narrow the list.
+			Showing the {fmt(scanLimit)} most recent supporters — older ones aren't listed here.
 		</p>
 	{/if}
 
