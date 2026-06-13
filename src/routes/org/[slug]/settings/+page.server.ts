@@ -130,9 +130,10 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 						detail: 'Coalition networks work today; international coalition reporting is coming.'
 					},
 					{
-						label: 'White-label surface',
-						state: 'gated',
-						detail: 'Not available yet.'
+						label: 'White-label outbound surfaces',
+						state: 'live',
+						detail:
+							'Put your logo + accent on reports, the embed widget, and the scorecard, and drop the "powered by Commons" footer from those outbound surfaces. The public verification page keeps its independent Commons attestation. Set it in Settings → Branding.'
 					}
 				);
 			}

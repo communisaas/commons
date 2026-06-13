@@ -49,7 +49,9 @@ export const GET: RequestHandler = async ({ params, locals, platform, request })
 		packet,
 		verificationUrl: `${baseUrl}/v/${preview.campaign._id}`,
 		// D-09: same org branding as the email body so the print/PDF matches.
-		branding: { accent: ctx.org.brandingAccent ?? null, logoUrl: ctx.org.logoUrl ?? null }
+		branding: { accent: ctx.org.brandingAccent ?? null, logoUrl: ctx.org.logoUrl ?? null },
+		// D-10: white-label de-brands the footer on the print/PDF view too.
+		whiteLabel: ctx.org.whiteLabel ?? false
 	});
 
 	// `Content-Disposition: inline` so the browser opens the page directly;

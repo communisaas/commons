@@ -56,6 +56,31 @@ export const getBySlug = query({
 });
 
 /**
+ * Public query: outbound branding for an org by slug. No auth required.
+ * Returns ONLY the fields an outbound surface needs to honor white-label
+ * (the scorecard embed reads this to decide whether to drop the Commons
+ * "powered by"). Coalition-gated at the writer, so these reflect a paid
+ * configuration; null org → caller falls back to default Commons chrome.
+ * Used by: src/routes/api/embed/scorecard/[id]/+server.ts
+ */
+export const getPublicBrandingBySlug = query({
+	args: { slug: v.string() },
+	handler: async (ctx, { slug }) => {
+		const org = await ctx.db
+			.query('organizations')
+			.withIndex('by_slug', (q) => q.eq('slug', slug))
+			.first();
+		if (!org) return null;
+		return {
+			name: org.name,
+			brandingAccent: org.brandingAccent ?? null,
+			logoUrl: org.logoUrl ?? null,
+			whiteLabel: org.whiteLabel ?? false
+		};
+	}
+});
+
+/**
  * Public paginated list of orgs (isPublic: true). No auth required.
  * Returns public-safe fields only. Manual offset pagination (no cursor).
  * Used by: src/routes/directory/+page.server.ts

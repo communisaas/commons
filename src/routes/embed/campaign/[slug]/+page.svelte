@@ -374,10 +374,13 @@
 				</button>
 			</form>
 
-			<!-- Powered by footer -->
-			<p class="mt-6 text-center text-xs text-gray-400">
-				Powered by <a href="https://commons.email" target="_blank" rel="noopener noreferrer" class="underline hover:text-gray-500">commons.email</a>
-			</p>
+			<!-- Powered by footer — D-10: suppressed under Coalition white-label.
+			     OUTBOUND chrome only; the verification page keeps its attestation. -->
+			{#if !data.campaign.whiteLabel}
+				<p class="mt-6 text-center text-xs text-gray-400">
+					Powered by <a href="https://commons.email" target="_blank" rel="noopener noreferrer" class="underline hover:text-gray-500">commons.email</a>
+				</p>
+			{/if}
 		{/if}
 	</div>
 </div>
