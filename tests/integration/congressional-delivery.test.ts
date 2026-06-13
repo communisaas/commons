@@ -258,6 +258,9 @@ describe('deliverToCongress — chamber split, rollup, tiered floor, attribution
 		const emit = h.mutationCalls.find((c) => c.name === 'submissions:emitCongressionalAction');
 		expect(emit).toBeTruthy();
 		expect(emit!.args.submissionId).toBe('sub_1');
+		// FIX 4: the emit carries the honest partial rollup so the org ledger
+		// records this as a partial (not full) delivery.
+		expect(emit!.args.deliveryStatus).toBe('partial');
 		// verifiedSends counter still bumps on partial success.
 		expect(h.mutationCalls.some((c) => c.name === 'submissions:incrementTemplateReach')).toBe(true);
 	});
@@ -350,7 +353,9 @@ describe('deliverToCongress — chamber split, rollup, tiered floor, attribution
 			submissionId: 'sub_1',
 			templateId: 'tmpl_1',
 			districtCode: 'CA-11',
-			trustTier: 4
+			trustTier: 4,
+			// FIX 4: both chambers delivered → full delivery recorded.
+			deliveryStatus: 'delivered'
 		});
 	});
 });
@@ -413,7 +418,8 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 			submissionId: 'sub_1' as any,
 			templateId: 'tmpl_1',
 			districtCode: 'CA-11',
-			trustTier: 4
+			trustTier: 4,
+			deliveryStatus: 'delivered'
 		});
 
 		expect(result).toEqual({ attributed: true, alreadySubmitted: false });
@@ -436,11 +442,34 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 			submissionId: 'sub_1' as any,
 			templateId: 'tmpl_1',
 			districtCode: 'CA-11',
-			trustTier: 4
+			trustTier: 4,
+			deliveryStatus: 'delivered'
 		});
 		// The emit must explicitly opt OUT of metering — a constituent contacting
 		// their own rep is person-layer civic action, not the org's paid usage.
 		expect(createCalls[0].metersOrgQuota).toBe(false);
+	});
+
+	it('FIX 4: carries the delivery rollup (partial vs delivered) onto the attributed action', async () => {
+		const partial = makeEmitCtx({});
+		await runEmit(partial.ctx as any, {
+			submissionId: 'sub_1' as any,
+			templateId: 'tmpl_1',
+			districtCode: 'CA-11',
+			trustTier: 4,
+			deliveryStatus: 'partial'
+		});
+		expect(partial.createCalls[0].deliveryStatus).toBe('partial');
+
+		const full = makeEmitCtx({});
+		await runEmit(full.ctx as any, {
+			submissionId: 'sub_1' as any,
+			templateId: 'tmpl_1',
+			districtCode: 'CA-11',
+			trustTier: 4,
+			deliveryStatus: 'delivered'
+		});
+		expect(full.createCalls[0].deliveryStatus).toBe('delivered');
 	});
 
 	it('no-ops (no campaignAction) when the template is owned by no campaign', async () => {
@@ -467,7 +496,8 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 			submissionId: 'sub_1' as any,
 			templateId: 'tmpl_1',
 			districtCode: 'CA-11',
-			trustTier: 4
+			trustTier: 4,
+			deliveryStatus: 'delivered'
 		});
 		expect(result).toEqual({ attributed: false, reason: 'cross_org' });
 		expect(createCalls).toHaveLength(0);
@@ -485,7 +515,8 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 			submissionId: 'sub_1' as any,
 			templateId: 'tmpl_1',
 			districtCode: 'CA-11',
-			trustTier: 4
+			trustTier: 4,
+			deliveryStatus: 'delivered'
 		});
 		expect(result).toEqual({ attributed: true, alreadySubmitted: false });
 		expect(createCalls).toHaveLength(1);

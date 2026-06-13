@@ -1178,7 +1178,13 @@ export const createCampaignAction = internalMutation({
 		// for reach/reporting, but it is NOT org-initiated paid usage, so it must
 		// not bump verifiedActionsLifetime (the metered billing base). This
 		// restores the pre-attribution-emit non-metering of congressional sends.
-		metersOrgQuota: v.optional(v.boolean())
+		metersOrgQuota: v.optional(v.boolean()),
+		// Delivery completeness for multi-recipient channels (congressional):
+		// 'delivered' = every targeted chamber received the message; 'partial' =
+		// at least one delivered AND at least one failed. Stored on the action so
+		// the org ledger distinguishes full from partial delivery. Undefined for
+		// single-recipient channels, treated as fully delivered.
+		deliveryStatus: v.optional(v.union(v.literal('delivered'), v.literal('partial')))
 	},
 	handler: async (ctx, args) => {
 		// Dedup via a single-doc composite-index lookup. Two keys depending on
@@ -1244,6 +1250,7 @@ export const createCampaignAction = internalMutation({
 			atlasVersion: args.atlasVersion,
 			channel: args.channel,
 			congressionalSubmissionId: args.congressionalSubmissionId,
+			deliveryStatus: args.deliveryStatus,
 			delegated: false,
 			sentAt: Date.now()
 		});

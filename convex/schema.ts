@@ -1878,6 +1878,16 @@ export default defineSchema({
 		// so an idempotent delivery retry never double-counts a campaign.
 		congressionalSubmissionId: v.optional(v.id('submissions')),
 
+		// Delivery completeness for multi-recipient channels (currently
+		// congressional, where a send may target both House + Senate):
+		// 'delivered' = every targeted recipient received the message;
+		// 'partial' = at least one delivered AND at least one failed. Optional /
+		// undefined for single-recipient channels and pre-field rows, which are
+		// treated as fully delivered. Keeps the org ledger honest: a House-ok /
+		// Senate-fail rollup is recorded as 'partial', not silently counted as a
+		// full delivery.
+		deliveryStatus: v.optional(v.union(v.literal('delivered'), v.literal('partial'))),
+
 		sentAt: v.number()
 	})
 		.index('by_campaignId', ['campaignId'])

@@ -1824,7 +1824,11 @@ export const deliverToCongress = internalAction({
 						submissionId: args.submissionId,
 						templateId: submission.templateId,
 						districtCode,
-						trustTier: submission.trustTier
+						trustTier: submission.trustTier,
+						// Carry the chamber-rollup so the attributed action records
+						// partial-vs-full delivery. anySuccess guards this block, so
+						// deliveryStatus is 'delivered' or 'partial' here, never 'failed'.
+						deliveryStatus: deliveryStatus === 'partial' ? 'partial' : 'delivered'
 					});
 				} catch (counterErr) {
 					console.error(
@@ -2031,7 +2035,13 @@ export const emitCongressionalAction = internalMutation({
 		submissionId: v.id('submissions'),
 		templateId: v.string(),
 		districtCode: v.optional(v.string()),
-		trustTier: v.optional(v.number())
+		trustTier: v.optional(v.number()),
+		// Delivery rollup for this submission: 'delivered' = every targeted
+		// chamber received the message; 'partial' = at least one chamber delivered
+		// AND at least one failed. The emit only fires on any-success, so 'failed'
+		// never reaches here. Carried onto the attributed action so the org ledger
+		// distinguishes full from partial delivery instead of overclaiming.
+		deliveryStatus: v.optional(v.union(v.literal('delivered'), v.literal('partial')))
 	},
 	handler: async (
 		ctx,
@@ -2101,7 +2111,10 @@ export const emitCongressionalAction = internalMutation({
 			// org's metered billing quota; metering congressional sends would let an
 			// external attacker exhaust a victim org's verified-action quota via its
 			// public template. The crypto gates + recipientSubdivision bound limit abuse.
-			metersOrgQuota: false
+			metersOrgQuota: false,
+			// Carry whether every targeted chamber actually delivered. A House-ok /
+			// Senate-fail rollup must not be ledgered as a full delivery.
+			deliveryStatus: args.deliveryStatus
 		});
 
 		return { attributed: true, alreadySubmitted: result.alreadySubmitted === true };
