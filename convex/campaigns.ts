@@ -1337,6 +1337,13 @@ export const createCampaignAction = internalMutation({
 		// simultaneous threshold-crossers don't double-spawn.
 		if (
 			args.verified &&
+			// Congressional emits are person-layer civic deliveries; their volume must
+			// not force-spawn an org's debate. The recipientSubdivision nullifier
+			// multiplier is not yet bounded (see the congressional-launch hardening
+			// gating the CONGRESSIONAL flag flip), so an attacker could otherwise push
+			// a victim's verifiedActionCount over the threshold. Debates spawn from
+			// org-initiated action volume only.
+			args.channel !== 'congressional' &&
 			campaign?.debateEnabled &&
 			!campaign?.debateId &&
 			(campaign?.verifiedActionCount ?? 0) + 1 >= (campaign?.debateThreshold ?? 0)
