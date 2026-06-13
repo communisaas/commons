@@ -148,10 +148,10 @@ export async function getOrCreateMasterBytes(): Promise<ArrayBuffer> {
 	// and the first encryption becomes undecryptable.
 	if (!masterKeyPromise) {
 		masterKeyPromise = (async () => {
-			// Capture the epoch at entry. If `clearKeystore` bumps it while this
-			// fetch is in flight, the assignments below skip the cache write — the
-			// in-flight caller still gets its value, but the master is NOT
-			// resurrected in memory after logout nulled it.
+			// Capture the epoch at entry. A clear() (clearKeystore/clearAllKeys) bumps
+			// it AND nulls masterKeyPromise. We use that one signal for two guards
+			// below: skip the cache write (don't resurrect the master after logout),
+			// and skip releasing the promise slot (a post-clear fetch may now own it).
 			const startEpoch = masterKeyEpoch;
 			try {
 				const db = await openKeyDB();
@@ -195,7 +195,10 @@ export async function getOrCreateMasterBytes(): Promise<ArrayBuffer> {
 				console.debug('[CredentialEncryption] Created new derivation master key');
 				return rawBytes;
 			} finally {
-				masterKeyPromise = null;
+				// Only release the lock if no clear() happened during this fetch
+				// (epoch unchanged) — a clear nulls the slot and a new fetch may now
+				// own it, so our stale finally must not clobber that newer promise.
+				if (startEpoch === masterKeyEpoch) masterKeyPromise = null;
 			}
 		})();
 	}
@@ -342,9 +345,17 @@ export async function clearKeystore(): Promise<void> {
 			tx.onabort = () => reject(tx.error);
 		});
 	} catch (err) {
-		// Tolerate "store/DB doesn't exist" — nothing to wipe means the goal
-		// (no master bytes on disk) is already met.
-		console.debug('[CredentialEncryption] Keystore clear skipped (store/DB absent):', err);
+		if (err instanceof DOMException && err.name === 'NotFoundError') {
+			// Benign: the store/DB never existed, so there are no master bytes to
+			// wipe — the goal is already met.
+			console.debug('[CredentialEncryption] Keystore clear skipped (store/DB absent):', err);
+		} else {
+			// A real transaction failure (abort, quota, corruption) means the master
+			// bytes may STILL be on disk. Do not let logout report success silently —
+			// surface it and rethrow so the caller records a failed key sweep.
+			console.error('[CredentialEncryption] Keystore content wipe FAILED — master bytes may persist:', err);
+			throw err;
+		}
 	}
 
 	// Close our connection so the best-effort deleteDatabase below isn't blocked
@@ -637,6 +648,9 @@ export async function clearAllKeys(): Promise<void> {
 	masterKeyPromise = null;
 	cachedLegacyKey = null;
 	derivedKeyCache.clear();
+	// Bump the epoch like clearKeystore so an in-flight getOrCreateMasterBytes
+	// can't resurrect cachedMasterBytes after this clear (same race guard).
+	masterKeyEpoch++;
 
 	console.debug('[CredentialEncryption] All key material cleared');
 }

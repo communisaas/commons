@@ -230,7 +230,9 @@ export const list = query({
 			filtered = filtered.filter((s) => supporterIds.has(s._id));
 		}
 
-		// Sort by _creationTime descending (newest first)
+		// Two-stage ordering: the DB `order('desc')` above selects WHICH rows enter
+		// the scan window (the newest MAX_SCAN); this in-memory sort fixes the
+		// DISPLAY order of the filtered subset (newest first) after the filters run.
 		filtered.sort((a, b) => b._creationTime - a._creationTime);
 
 		// Cursor-based slicing
@@ -374,6 +376,10 @@ export const findByEmailHash = query({
 		// supporter-search feature (searchByEmail) stays 'member' while existence-
 		// probing is restricted to editors.
 		const { org, membership } = await requireOrgRole(ctx, args.slug, 'editor');
+		// The editor gate above IS the access control here; isEditor is therefore
+		// always true and the projection below is a no-op today. It is kept as
+		// belt-and-suspenders so the field-level gate still holds if this reader is
+		// ever downgraded to 'member' — the role check and the projection won't drift.
 		const isEditor = membershipIsEditor(membership.role);
 		const doc = await ctx.db
 			.query('supporters')

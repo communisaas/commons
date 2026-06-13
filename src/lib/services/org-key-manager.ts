@@ -169,8 +169,16 @@ export async function clearAllOrgKeys(): Promise<void> {
 			tx.onabort = () => reject(tx.error);
 		});
 	} catch (err) {
-		// Tolerate "store/DB doesn't exist" — nothing cached means nothing to wipe.
-		console.debug('[OrgKeyManager] Org-key clear skipped (store/DB absent):', err);
+		if (err instanceof DOMException && err.name === 'NotFoundError') {
+			// Benign: the store/DB never existed, so there are no wrapped keys to wipe.
+			console.debug('[OrgKeyManager] Org-key clear skipped (store/DB absent):', err);
+		} else {
+			// A real transaction failure means wrapped org keys may STILL be on disk.
+			// Surface it and rethrow so logout records a failed key sweep rather than
+			// silently reporting success.
+			console.error('[OrgKeyManager] Org-key content wipe FAILED — wrapped keys may persist:', err);
+			throw err;
+		}
 	}
 
 	// Close our handle so the best-effort delete below isn't blocked by us.
