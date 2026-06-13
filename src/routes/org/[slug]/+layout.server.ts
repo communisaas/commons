@@ -197,8 +197,14 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 	// Pipeline + email-health summary for the BASE surface. The full supporter
 	// table (paginated, filterable, with PII decryption) stays on the /supporters
 	// deep route; BASE surfaces the pipeline signal + a link in.
-	const [supporterSummary, orgKeyResult, segmentsResult] = await Promise.all([
+	const [supporterSummary, districtVerifiedResult, orgKeyResult, segmentsResult] = await Promise.all([
 		serverQuery(api.supporters.getSummaryStats, {
+			orgSlug: slug
+		}).catch(() => null),
+		// District-of-record is set cardinality, served by a separate bounded
+		// query (not the always-on funnel summary). Null-safe so a failure or an
+		// org with no district signal just shows 0.
+		serverQuery(api.supporters.getDistrictVerifiedCount, {
 			orgSlug: slug
 		}).catch(() => null),
 		serverQuery(api.organizations.getOrgKeyVerifier, { slug }).catch(() => null),
@@ -337,7 +343,7 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 				imported: asNumber(supporterSummary.imported),
 				sourceCounts: asNumberRecord(supporterSummary.sourceCounts),
 				postalResolved: asNumber(supporterSummary.postalResolved),
-				districtVerified: asNumber(supporterSummary.districtVerified),
+				districtVerified: asNumber(districtVerifiedResult?.districtVerified),
 				identityVerified: asNumber(supporterSummary.identityVerified),
 				emailHealth: {
 					subscribed: asNumber(supporterSummary.emailHealth?.subscribed),

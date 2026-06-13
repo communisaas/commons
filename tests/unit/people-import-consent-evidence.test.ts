@@ -60,8 +60,11 @@ describe('People import consent evidence custody', () => {
 		expect(supporters).toContain('emailConsentSource: s.emailConsentSource');
 		expect(supporters).toContain('smsConsentText: s.smsConsentText');
 		expect(supporters).toContain('consentEvidence: {');
-		expect(supporters).toContain('emailSubscribed: emailSubscribedConsentEvidence');
-		expect(supporters).toContain('smsSubscribed: smsSubscribedConsentEvidence');
+		// getSummaryStats now reads the denormalized breakdown counters instead
+		// of scanning every supporter row; the consent-evidence block is sourced
+		// from org.supporterStats rather than per-row locals.
+		expect(supporters).toContain('emailSubscribed: stats.emailSubscribedConsentEvidence');
+		expect(supporters).toContain('smsSubscribed: stats.smsSubscribedConsentEvidence');
 	});
 
 	it('threads aggregate consent evidence into space load data', () => {

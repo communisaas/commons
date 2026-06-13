@@ -154,20 +154,24 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		? await serverQuery(api.organizations.getOrgKeyVerifier, { slug: org.slug })
 		: { orgKeyVerifier: null };
 
-	const [convexResult, summaryStats, tags, campaigns, segmentsResult] = await Promise.all([
-		serverQuery(api.supporters.list, {
-			orgSlug: org.slug,
-			paginationOpts: { cursor: cursor || null, numItems: PAGE_SIZE },
-			filters: Object.keys(convexFilters).length > 0 ? convexFilters : undefined
-		}) as Promise<SupporterListResult>,
-		serverQuery(api.supporters.getSummaryStats, { orgSlug: org.slug }),
-		serverQuery(api.supporters.getTags, { orgSlug: org.slug }),
-		serverQuery(api.campaigns.list, {
-			slug: org.slug,
-			paginationOpts: { cursor: null, numItems: 100 }
-		}) as Promise<CampaignListResult>,
-		serverQuery(api.segments.list, { slug: org.slug }).catch(() => null)
-	]);
+	const [convexResult, summaryStats, districtVerifiedResult, tags, campaigns, segmentsResult] =
+		await Promise.all([
+			serverQuery(api.supporters.list, {
+				orgSlug: org.slug,
+				paginationOpts: { cursor: cursor || null, numItems: PAGE_SIZE },
+				filters: Object.keys(convexFilters).length > 0 ? convexFilters : undefined
+			}) as Promise<SupporterListResult>,
+			serverQuery(api.supporters.getSummaryStats, { orgSlug: org.slug }),
+			// District-of-record is set cardinality — served by a separate
+			// bounded query, not the always-on funnel summary.
+			serverQuery(api.supporters.getDistrictVerifiedCount, { orgSlug: org.slug }).catch(() => null),
+			serverQuery(api.supporters.getTags, { orgSlug: org.slug }),
+			serverQuery(api.campaigns.list, {
+				slug: org.slug,
+				paginationOpts: { cursor: null, numItems: 100 }
+			}) as Promise<CampaignListResult>,
+			serverQuery(api.segments.list, { slug: org.slug }).catch(() => null)
+		]);
 
 	// Pass encrypted blobs through — client decrypts with org key
 	const supporters = convexResult.supporters.map((s) => ({
@@ -209,7 +213,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		summary: {
 			verified: summaryStats.identityVerified,
 			postal: summaryStats.postalResolved,
-			district: summaryStats.districtVerified,
+			district: districtVerifiedResult?.districtVerified ?? 0,
 			imported: summaryStats.imported
 		},
 		emailHealth: summaryStats.emailHealth,

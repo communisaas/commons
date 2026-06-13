@@ -34,6 +34,7 @@ import { encryptForSupporterV2 } from './_orgKey';
 import {
 	applySupporterStatsDelta,
 	applySupporterStatsDeltaBatch,
+	emptySupporterStats,
 	type CountableSupporter
 } from './_supporterStats';
 
@@ -80,22 +81,6 @@ function stricterStatus(
 	const currentRank = rank[current ?? ''] ?? 0;
 	const incomingRank = rank[incoming] ?? 0;
 	return incomingRank > currentRank ? incoming : (current ?? incoming);
-}
-
-function hasConsentEvidence(supporter: {
-	emailConsentSource?: string;
-	emailConsentedAt?: number;
-	emailConsentText?: string;
-	smsConsentSource?: string;
-	smsConsentedAt?: number;
-	smsConsentText?: string;
-}): { email: boolean; sms: boolean } {
-	return {
-		email: Boolean(
-			supporter.emailConsentSource || supporter.emailConsentedAt || supporter.emailConsentText
-		),
-		sms: Boolean(supporter.smsConsentSource || supporter.smsConsentedAt || supporter.smsConsentText)
-	};
 }
 
 function supporterSourceValue(supporter: { source?: string }): string {
@@ -480,10 +465,21 @@ export const searchByEmail = query({
 
 /**
  * Verification funnel summary stats for an org.
- * Uses org's denormalized supporterCount for total, queries supporters for
- * address/identity signal, and campaignActions for district signal. The
- * returned buckets are not mutually exclusive: total people can also be
- * address-resolved, district-resolved, and identity-verified.
+ *
+ * Reads the org's denormalized supporterCount + supporterStats breakdown
+ * counters — NO full-table scan. The previous implementation collected every
+ * supporter row plus every verified campaign action, which throws once an org
+ * passes the per-query document cap (and the page 500s). The counters are
+ * maintained at every supporter writer (applySupporterStatsDelta) so this read
+ * is O(1) and exact from the first insert.
+ *
+ * District-of-record cardinality is NOT in this always-on payload: it is set
+ * cardinality (a supporter active in two districts would double-count a scalar
+ * counter), so a denormalized counter can't represent it without drift. It is
+ * served separately by the bounded getDistrictVerifiedCount query.
+ *
+ * The returned buckets are not mutually exclusive: total people can also be
+ * address-resolved and identity-verified.
  */
 export const getSummaryStats = query({
 	args: {
@@ -492,90 +488,76 @@ export const getSummaryStats = query({
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 
-		const allSupporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.collect();
+		const total = org.supporterCount ?? 0;
+		const stats = org.supporterStats ?? emptySupporterStats();
 
-		const total = org.supporterCount ?? allSupporters.length;
-
-		let identityVerified = 0;
-		let postalResolved = 0;
-		const sourceCounts: Record<string, number> = {};
-		const emailHealth: Record<string, number> = {
-			subscribed: 0,
-			unsubscribed: 0,
-			bounced: 0,
-			complained: 0
+		return {
+			total,
+			imported: total,
+			identityVerified: stats.identityVerified,
+			postalResolved: stats.postalResolved,
+			sourceCounts: stats.sourceCounts,
+			emailHealth: {
+				subscribed: stats.emailSubscribed,
+				unsubscribed: stats.emailUnsubscribed,
+				bounced: stats.emailBounced,
+				complained: stats.emailComplained
+			},
+			smsHealth: {
+				subscribed: stats.smsSubscribed,
+				unsubscribed: stats.smsUnsubscribed,
+				stopped: stats.smsStopped,
+				none: stats.smsNone,
+				phonePresent: stats.phonePresent
+			},
+			consentEvidence: {
+				email: stats.emailConsentEvidence,
+				emailSubscribed: stats.emailSubscribedConsentEvidence,
+				sms: stats.smsConsentEvidence,
+				smsSubscribed: stats.smsSubscribedConsentEvidence
+			}
 		};
-		const smsHealth: Record<string, number> = {
-			subscribed: 0,
-			unsubscribed: 0,
-			stopped: 0,
-			none: 0
-		};
-		let phonePresent = 0;
-		let emailConsentEvidence = 0;
-		let emailSubscribedConsentEvidence = 0;
-		let smsConsentEvidence = 0;
-		let smsSubscribedConsentEvidence = 0;
+	}
+});
 
-		for (const s of allSupporters) {
-			if (s.postalCode) postalResolved++;
-			if (s.identityCommitment && s.verified) identityVerified++;
-			if (s.encryptedPhone || s.phoneHash) phonePresent++;
-			const source = supporterSourceValue(s);
-			sourceCounts[source] = (sourceCounts[source] ?? 0) + 1;
+/**
+ * District-of-record count for an org — distinct supporters with at least one
+ * verified action carrying a districtHash. Lazy + bounded: a separate query so
+ * the always-on funnel summary stays O(1), and the scan is capped so it can
+ * never throw the per-query document-cap error the way the old unbounded
+ * .collect() did. When the cap saturates, `truncated` is surfaced so the
+ * consumer can present a floor (">= N") instead of a wrong exact number.
+ *
+ * Set cardinality (distinct supporterIds) can't be a denormalized counter
+ * without double-counting cross-district supporters, so it is computed on
+ * demand here rather than maintained as a scalar.
+ */
+export const getDistrictVerifiedCount = query({
+	args: {
+		orgSlug: v.string()
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 
-			if (s.emailStatus in emailHealth) {
-				emailHealth[s.emailStatus]++;
-			}
-			if (s.smsStatus in smsHealth) {
-				smsHealth[s.smsStatus]++;
-			}
-			const consentEvidence = hasConsentEvidence(s);
-			if (consentEvidence.email) {
-				emailConsentEvidence++;
-				if (s.emailStatus === 'subscribed') emailSubscribedConsentEvidence++;
-			}
-			if (consentEvidence.sms) {
-				smsConsentEvidence++;
-				if (s.smsStatus === 'subscribed') smsSubscribedConsentEvidence++;
-			}
-		}
-
-		const districtSupporters = new Set<string>();
-		const actions = await ctx.db
+		const MAX_SCAN = 10_000;
+		const scanned = await ctx.db
 			.query('campaignActions')
 			.withIndex('by_orgId_verified', (idx) => idx.eq('orgId', org._id))
-			.collect();
-		for (const action of actions) {
+			.order('desc')
+			.take(MAX_SCAN + 1);
+
+		const truncated = scanned.length > MAX_SCAN;
+		const districtSupporters = new Set<string>();
+		for (const action of scanned.slice(0, MAX_SCAN)) {
 			if (action.supporterId && action.districtHash) {
 				districtSupporters.add(action.supporterId);
 			}
 		}
 
 		return {
-			total,
-			imported: total,
-			identityVerified,
-			postalResolved,
 			districtVerified: districtSupporters.size,
-			sourceCounts,
-			emailHealth,
-			smsHealth: {
-				subscribed: smsHealth.subscribed,
-				unsubscribed: smsHealth.unsubscribed,
-				stopped: smsHealth.stopped,
-				none: smsHealth.none,
-				phonePresent
-			},
-			consentEvidence: {
-				email: emailConsentEvidence,
-				emailSubscribed: emailSubscribedConsentEvidence,
-				sms: smsConsentEvidence,
-				smsSubscribed: smsSubscribedConsentEvidence
-			}
+			truncated,
+			scanLimit: MAX_SCAN
 		};
 	}
 });
