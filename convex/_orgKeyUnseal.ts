@@ -12,6 +12,7 @@
  * Sealed blob format: JSON { ciphertext: base64, iv: base64, v: "seal-1" }
  */
 
+import { internal } from "./_generated/api";
 import { importOrgKey } from "./_orgKey";
 import { toArrayBuffer } from "./_bufferSource";
 
@@ -153,7 +154,6 @@ export async function getOrgKeyForAction(
     sealedBlob = org.serverSealedOrgKey;
   } else if (typeof ctx.runQuery === "function") {
     // Action context — read via internal query
-    const { internal } = await import("./_generated/api");
     const org = await ctx.runQuery(internal.organizations.getOrgById, { orgId });
     if (!org) return null;
     sealedBlob = org.serverSealedOrgKey;

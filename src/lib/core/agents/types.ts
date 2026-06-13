@@ -72,6 +72,9 @@ export interface Source {
 	title: string;
 	url: string;
 	type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other';
+	credibility_rationale?: string;
+	incentive_position?: 'adversarial' | 'neutral' | 'aligned';
+	source_order?: 'primary' | 'secondary' | 'opinion';
 }
 
 // ============================================================================
@@ -295,7 +298,7 @@ export interface StreamResultWithThoughts<T = unknown> {
 	parseError?: string;
 	/**
 	 * Grounding metadata from Google Search (when enableGrounding=true)
-	 * Contains verified source URLs in groundingChunks - use these instead of
+	 * Contains provider-returned source URLs in groundingChunks - use these instead of
 	 * trusting URLs generated in the LLM's text output.
 	 */
 	groundingMetadata?: GroundingMetadata;
@@ -311,4 +314,3 @@ export type SubjectStreamEvent =
 	| { type: 'clarification'; data: _SubjectLineResponseWithClarification }
 	| { type: 'complete'; data: _SubjectLineResponseWithClarification }
 	| { type: 'error'; message: string };
-

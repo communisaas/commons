@@ -14,25 +14,30 @@ import { v } from "convex/values";
  * boundary so a malformed write cannot persist a structurally
  * different filter — the failure mode the prior `v.any()` admitted
  * (e.g., tagIds: "abc" instead of ["abc"]) could widen a targeted
- * blast to the entire subscribed cohort. The single-tagId limit is
- * not encoded here (validator can't express it cleanly); the
- * application-level guard at email.ts/blasts.ts checks `length > 1`
- * after the validator passes.
+ * blast to the entire subscribed cohort.
  *
  * Fields:
- *   tagIds  — supporter-tag IDs to restrict the cohort to. Multi-tag
- *             semantics deferred (see email.ts comment); validator
- *             allows array of any length, application throws on >1.
+ *   tagIds  — supporter-tag IDs to restrict the cohort to. Multiple
+ *             tags are treated as a de-duplicated union of supporters.
+ *   segmentIds — saved People segment IDs to restrict the cohort to.
+ *             Multiple segments are treated as a de-duplicated union,
+ *             then tag/verification/hash axes can narrow that cohort.
  *   verified — verification-status restriction. "any" is the no-op.
+ *   includeEmailHashes — exact supporter email-hash allowlist, used by
+ *             A/B cohort snapshots and other saved cohort partitions.
+ *   excludeEmailHashes — exact supporter email-hash denylist.
  *
- * Any future filter axis (district, postalCode, segment) MUST be
+ * Any future filter axis (district, postalCode, consent) MUST be
  * added here, NOT bolted on via a separate v.any() field.
  */
 export const recipientFilterValidator = v.object({
 	tagIds: v.optional(v.array(v.id("tags"))),
+	segmentIds: v.optional(v.array(v.id("segments"))),
 	verified: v.optional(
 		v.union(v.literal("any"), v.literal("verified"), v.literal("unverified"))
-	)
+	),
+	includeEmailHashes: v.optional(v.array(v.string())),
+	excludeEmailHashes: v.optional(v.array(v.string()))
 });
 
 /**
@@ -40,7 +45,7 @@ export const recipientFilterValidator = v.object({
  * recipientFilterValidator above. The SMS HTTP endpoint at
  * src/routes/api/org/[slug]/sms/+server.ts:17-21 validates with a zod
  * schema using `{tags, segments, excludeTags}` (cohort-include +
- * cohort-exclude + segment-add); email uses `{tagIds, verified}`. The
+ * cohort-exclude + segment-add); email uses `{tagIds, segmentIds, verified}`. The
  * two channels' UIs and dispatchers diverged in product semantics, so
  * a single validator can't represent both honestly. tags/excludeTags
  * are typed v.array(v.id('tags')) — the zod boundary accepts string

@@ -87,14 +87,17 @@
 					<span class="point-index" aria-hidden="true">3.</span>
 					<div class="point-content">
 						<strong>It joins the record.</strong>
-						<span>Verified sends from one district arrive together. The volume is the evidence.</span>
+						<span
+							>Verified sends from one district arrive together. The volume is the evidence.</span
+						>
 					</div>
 				</li>
 			</ol>
 
 			<div class="org-whisper">
 				<p class="org-whisper__text">
-					Organizations assemble proof, verify constituents, and deliver evidence to decision-makers.
+					Organizations assemble proof, verify constituents, and deliver evidence to
+					decision-makers.
 				</p>
 				<a href="/org" class="org-whisper__link">
 					Organization tools <span class="org-whisper__arrow" aria-hidden="true">→</span>

@@ -254,14 +254,17 @@
 					Press <kbd>⌘</kbd><kbd>Enter</kbd> to continue
 				</p>
 			{/if}
-
 		</div>
 	</div>
 
 	<!-- Or browse existing -->
 	<div class="spark-divider">
 		<span class="divider-line"></span>
-		<span class="divider-text"><span class="divider-text--mobile">or scroll to join an existing campaign</span><span class="divider-text--desktop">or join an existing campaign</span></span>
+		<span class="divider-text"
+			><span class="divider-text--mobile">or scroll to join an existing campaign</span><span
+				class="divider-text--desktop">or join an existing campaign</span
+			></span
+		>
 		<span class="divider-line"></span>
 	</div>
 
@@ -379,8 +382,14 @@
 	}
 
 	@keyframes draftPulse {
-		0% { opacity: 0; transform: translateX(4px); }
-		100% { opacity: 1; transform: translateX(0); }
+		0% {
+			opacity: 0;
+			transform: translateX(4px);
+		}
+		100% {
+			opacity: 1;
+			transform: translateX(0);
+		}
 	}
 
 	.draft-indicator :global(.draft-icon) {

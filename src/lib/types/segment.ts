@@ -1,6 +1,7 @@
 /**
  * Segment filter types shared between client and server.
  */
+import { PEOPLE_SOURCE_SEGMENT_OPTIONS } from '$lib/data/platform-export-profiles';
 
 export type ConditionField =
 	| 'tag'
@@ -10,7 +11,11 @@ export type ConditionField =
 	| 'emailStatus'
 	| 'dateRange'
 	| 'campaignParticipation'
+	| 'actionDistrict'
+	| 'actionDistrictLabel'
 	| 'postalCode'
+	| 'stateCode'
+	| 'congressionalDistrict'
 	| 'country';
 
 export type ConditionOperator =
@@ -39,13 +44,31 @@ export interface SegmentFilter {
 }
 
 const VALID_FIELDS = new Set<string>([
-	'tag', 'verification', 'engagementTier', 'source',
-	'emailStatus', 'dateRange', 'campaignParticipation',
-	'postalCode', 'country'
+	'tag',
+	'verification',
+	'engagementTier',
+	'source',
+	'emailStatus',
+	'dateRange',
+	'campaignParticipation',
+	'actionDistrict',
+	'actionDistrictLabel',
+	'postalCode',
+	'stateCode',
+	'congressionalDistrict',
+	'country'
 ]);
 const VALID_OPERATORS = new Set<string>([
-	'includes', 'excludes', 'equals', 'gte', 'lte',
-	'before', 'after', 'between', 'participated', 'notParticipated',
+	'includes',
+	'excludes',
+	'equals',
+	'gte',
+	'lte',
+	'before',
+	'after',
+	'between',
+	'participated',
+	'notParticipated',
 	'startsWith'
 ]);
 
@@ -96,16 +119,9 @@ export const FIELD_OPTIONS: Array<{
 		label: 'Verification Status',
 		operators: [{ value: 'equals', label: 'is' }]
 	},
-	// engagementTier is kept here labeled "(legacy)" so saved segments still
-	// render in the SegmentBuilder dropdown, but the suffix discourages new
-	// use. Server-side handler in convex/segments.ts is a no-op pass-through
-	// (always matches) — supporters have no engagementTier field; the metric
-	// lives on action tables (campaignActions, debateArguments, eventRsvps).
-	// A real aggregate-from-actions implementation should replace this when
-	// engagement-tier becomes a surfaced product metric.
 	{
 		value: 'engagementTier',
-		label: 'Engagement Tier (legacy)',
+		label: 'Engagement Tier',
 		operators: [
 			{ value: 'equals', label: 'is' },
 			{ value: 'gte', label: 'at least' },
@@ -146,12 +162,32 @@ export const FIELD_OPTIONS: Array<{
 		]
 	},
 	{
+		value: 'actionDistrict',
+		label: 'Action District',
+		operators: [{ value: 'equals', label: 'is' }]
+	},
+	{
+		value: 'actionDistrictLabel',
+		label: 'Action-Time District',
+		operators: [{ value: 'equals', label: 'is' }]
+	},
+	{
 		value: 'postalCode',
 		label: 'Postal Code',
 		operators: [
 			{ value: 'equals', label: 'is' },
 			{ value: 'startsWith', label: 'starts with' }
 		]
+	},
+	{
+		value: 'stateCode',
+		label: 'State / Province Code',
+		operators: [{ value: 'equals', label: 'is' }]
+	},
+	{
+		value: 'congressionalDistrict',
+		label: 'Congressional District',
+		operators: [{ value: 'equals', label: 'is' }]
 	},
 	{
 		value: 'country',
@@ -174,12 +210,7 @@ export const TIER_OPTIONS = [
 	{ value: 4, label: 'Pillar (4)' }
 ] as const;
 
-export const SOURCE_OPTIONS = [
-	{ value: 'csv', label: 'CSV Import' },
-	{ value: 'action_network', label: 'Action Network' },
-	{ value: 'organic', label: 'Organic' },
-	{ value: 'widget', label: 'Widget' }
-] as const;
+export const SOURCE_OPTIONS = PEOPLE_SOURCE_SEGMENT_OPTIONS;
 
 export const EMAIL_STATUS_OPTIONS = [
 	{ value: 'subscribed', label: 'Subscribed' },

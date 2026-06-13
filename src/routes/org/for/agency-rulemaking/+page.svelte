@@ -2,10 +2,12 @@
 	import type { PageData } from './$types';
 	import { goto } from '$app/navigation';
 	import { modalActions } from '$lib/stores/modalSystem.svelte';
+	import { PLATFORM_EXPORT_PROFILES } from '$lib/data/platform-export-profiles';
 
 	let { data }: { data: PageData } = $props();
 
 	const user = $derived(data.user);
+	const platformProfileCount = PLATFORM_EXPORT_PROFILES.length;
 
 	function handleSignIn(): void {
 		modalActions.openModal('sign-in-modal', 'sign-in');
@@ -378,7 +380,7 @@
 			</div>
 
 			<p class="pricing__friction">
-				No demo required. No procurement review. Import your list from Action Network, EveryAction, NationBuilder, or any CSV export &mdash; a packet produced before the comment period closes, not a year from now.
+				No demo required. No procurement review. Import from {platformProfileCount} recognized platform CSV exports or generic CSV &mdash; a packet produced before the comment period closes, not a year from now.
 			</p>
 		</div>
 

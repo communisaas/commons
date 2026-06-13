@@ -29,6 +29,7 @@ const CreateSupporterSchema = z.object({
 	globalEmailHash: z.string().max(128).optional(),
 	encryptedName: z.string().max(512).optional(),
 	postalCode: z.string().max(20).optional(),
+	stateCode: z.string().max(8).optional(),
 	country: z.string().max(10).optional(),
 	encryptedPhone: z.string().max(256).optional(),
 	phoneHash: z.string().max(128).optional(),
@@ -70,10 +71,26 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				? emailStatus
 				: undefined,
 		source:
-			source && ['csv', 'action_network', 'organic', 'widget'].includes(source)
+			source &&
+			[
+				'csv',
+				'action_network',
+				'everyaction',
+				'nationbuilder',
+				'mailchimp',
+				'salsa',
+				'mobilize',
+				'actblue',
+				'engaging_networks',
+				'civicrm',
+				'salesforce',
+				'organic',
+				'widget'
+			].includes(source)
 				? source
 				: undefined,
-		tagId: tagId ?? undefined});
+		tagId: tagId ?? undefined
+	});
 
 	// Return encrypted blobs — client decrypts with org key
 	const data = result.items
@@ -81,8 +98,12 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		.map((s) => ({
 			id: s._id,
 			encryptedEmail: s.encryptedEmail,
+			// Org-scoped hash — required as AAD input when decrypting the
+			// encrypted blobs with the org key (see SDK README).
+			emailHash: s.emailHash,
 			encryptedName: s.encryptedName ?? null,
 			postalCode: s.postalCode,
+			stateCode: s.stateCode ?? null,
 			country: s.country,
 			encryptedPhone: s.encryptedPhone ?? null,
 			verified: s.verified,
@@ -94,7 +115,17 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			tags: s.tags
 		}));
 
-	return apiOk(data, { cursor: result.cursor, hasMore: result.hasMore, total: result.total });
+	return apiOk(data, {
+		cursor: result.cursor,
+		hasMore: result.hasMore,
+		// `total` counts only the scanned window. When `truncated` is true the org
+		// exceeds `scanLimit` rows and the oldest fall outside this enumeration —
+		// page with `cursor` to walk what is in-window; do not treat `total` as the
+		// org's complete supporter count.
+		total: result.total,
+		truncated: result.truncated,
+		scanLimit: result.scanLimit
+	});
 };
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -130,6 +161,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		globalEmailHash,
 		encryptedName,
 		postalCode,
+		stateCode,
 		country,
 		encryptedPhone,
 		phoneHash,
@@ -148,13 +180,15 @@ export const POST: RequestHandler = async ({ request }) => {
 		globalEmailHash,
 		encryptedName,
 		postalCode: postalCode || undefined,
+		stateCode: stateCode?.trim().toUpperCase() || undefined,
 		country: country || 'US',
 		encryptedPhone,
 		phoneHash,
 		globalPhoneHash,
 		source: source || 'api',
 		encryptedCustomFields,
-		tagIds: tags});
+		tagIds: tags
+	});
 
 	if (result.duplicate) {
 		return apiError('CONFLICT', 'A supporter with this email already exists', 409);
@@ -171,6 +205,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			encryptedEmail: s.encryptedEmail,
 			encryptedName: s.encryptedName ?? null,
 			postalCode: s.postalCode,
+			stateCode: s.stateCode ?? null,
 			country: s.country,
 			encryptedPhone: s.encryptedPhone ?? null,
 			verified: s.verified,

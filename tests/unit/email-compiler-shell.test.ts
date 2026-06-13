@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
 	compileEmailShell,
+	compileSubjectMergeFields,
+	type MergeContext,
 	type VerificationBlock
 } from '$lib/server/email/compiler';
 
@@ -27,7 +29,7 @@ describe('compileEmailShell', () => {
 		expect(out).toContain('8 districts');
 	});
 
-	it('does NOT process merge fields (bulk-mode contract)', () => {
+	it('leaves merge fields for the dispatch path to resolve per recipient', () => {
 		const out = compileEmailShell('Hi {{firstName}}!', verification, {});
 		expect(out).toContain('{{firstName}}');
 	});
@@ -72,5 +74,37 @@ describe('compileEmailShell', () => {
 		});
 		expect(out).not.toContain('Verification Context');
 		expect(out).toContain('<p>hi</p>');
+	});
+});
+
+describe('compileSubjectMergeFields (subject is a header)', () => {
+	const ctx: MergeContext = {
+		firstName: 'Jane',
+		lastName: 'Doe',
+		email: 'jane@example.com',
+		postalCode: '90210',
+		verificationStatus: 'verified',
+		tierLabel: 'Established',
+		tierContext: 'Your identity is verified.'
+	};
+
+	it('resolves merge tokens with the supplied values (compose preview honesty)', () => {
+		expect(compileSubjectMergeFields('Hi {{firstName}}, an update', ctx)).toBe(
+			'Hi Jane, an update'
+		);
+	});
+
+	it('strips CR/LF from resolved values — no header injection on the subject', () => {
+		const injected: MergeContext = { ...ctx, firstName: 'Jane\r\nBcc: evil@example.com' };
+		const out = compileSubjectMergeFields('Hi {{firstName}}', injected);
+		expect(out).not.toContain('\r');
+		expect(out).not.toContain('\n');
+		expect(out).toBe('Hi JaneBcc: evil@example.com');
+	});
+
+	it('does not HTML-escape (a subject is not HTML)', () => {
+		expect(compileSubjectMergeFields('{{firstName}}', { ...ctx, firstName: 'Tom & Jerry' })).toBe(
+			'Tom & Jerry'
+		);
 	});
 });

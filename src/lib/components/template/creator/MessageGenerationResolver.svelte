@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick } from 'svelte';
 	import type { TemplateFormData, Source } from '$lib/types/template';
+	import type { PipelinePhase } from '$lib/core/agents/agents/message-writer';
 	import { cleanHtmlFormatting } from '$lib/utils/message-processing';
 	import { parseSSEStream } from '$lib/utils/sse-stream';
 	import {
@@ -41,8 +42,16 @@
 	}: Props = $props();
 
 	type Stage = 'generating' | 'results' | 'editing' | 'error' | 'auth-required' | 'rate-limited';
+	type GenerationBoundary = {
+		code: string;
+		message: string;
+		missing: string[];
+		dependency: string | null;
+		retryable: boolean;
+	};
 	let stage = $state<Stage>('generating');
 	let errorMessage = $state<string | null>(null);
+	let generationBoundary = $state<GenerationBoundary | null>(null);
 	let rateLimitResetAt = $state<string | null>(null);
 	let rateLimitMessage = $state<string | null>(null);
 	let isGenerating = $state(false);
@@ -50,6 +59,18 @@
 
 	// Streaming state
 	let thoughts = $state<string[]>([]);
+	let currentPhase = $state<PipelinePhase | 'recovering' | null>(null);
+	let currentPhaseMessage = $state<string | null>(null);
+	let liveSourceCount = $state(0);
+	let liveEvaluatedSourceCount = $state(0);
+	let liveSearchOnlySourceCount = $state(0);
+	let liveSourceMode = $state<'discovery' | 'preverified' | null>(null);
+	const SOURCE_EVALUATION_FALLBACK_PREFIX = 'Evaluation unavailable';
+	const generationBoundaryTitle = $derived(
+		generationBoundary?.code === 'message_generation_rate_limited'
+			? 'Message limit reached'
+			: "Couldn't finish your message"
+	);
 
 	/**
 	 * Check if error indicates auth is required
@@ -99,6 +120,72 @@
 		}
 
 		return items;
+	}
+
+	function phaseLabel(phase: PipelinePhase | 'recovering' | null): string {
+		if (phase === 'sources') return 'Finding sources';
+		if (phase === 'message') return 'Writing your message';
+		if (phase === 'complete') return 'Message ready';
+		if (phase === 'recovering') return 'Picking up where you left off';
+		return 'Getting started';
+	}
+
+	function boundaryFromResponse(
+		body: Record<string, unknown>,
+		status: number,
+		fallbackMessage: string
+	): GenerationBoundary {
+		const code = typeof body.code === 'string' ? body.code : 'message_generation_request_failed';
+		return {
+			code,
+			message: typeof body.error === 'string' ? body.error : fallbackMessage,
+			missing: Array.isArray(body.missing)
+				? body.missing.filter((item): item is string => typeof item === 'string')
+				: [],
+			dependency: typeof body.dependency === 'string' ? body.dependency : null,
+			retryable: status >= 500 && code !== 'message_generation_runtime_not_configured'
+		};
+	}
+
+	function boundaryFromThrownError(err: unknown): GenerationBoundary {
+		const message =
+			err instanceof Error ? err.message : 'Message writing stopped before it finished.';
+		const inputNotReady =
+			message.includes('Missing subject line') || message.includes('No decision-makers selected');
+		return {
+			code: inputNotReady
+				? 'message_generation_input_not_ready'
+				: 'message_generation_stream_closed',
+			message,
+			missing: inputNotReady ? ['operator intent or selected decision-maker'] : [],
+			dependency: inputNotReady ? 'subject line + core message + selected decision-maker' : null,
+			retryable: !inputNotReady
+		};
+	}
+
+	function isPipelinePhase(value: unknown): value is PipelinePhase {
+		return value === 'sources' || value === 'message' || value === 'complete';
+	}
+
+	function isSearchOnlySource(source: Source): boolean {
+		return (
+			!source.incentive_position ||
+			(source.credibility_rationale ?? '').startsWith(SOURCE_EVALUATION_FALLBACK_PREFIX)
+		);
+	}
+
+	function sourceEvidenceCounts(sources: Source[]): {
+		total: number;
+		evaluated: number;
+		searchOnly: number;
+	} {
+		const total = sources.length;
+		const searchOnly = sources.filter(isSearchOnlySource).length;
+		return {
+			total,
+			evaluated: total - searchOnly,
+			searchOnly
+		};
 	}
 
 	// Store original AI-generated content for "start fresh"
@@ -303,9 +390,25 @@
 			status: ActiveMessageJob['status'];
 			encryptedResult?: EncryptedMessageJobResult | null;
 			errorMessage?: string | null;
+			traceId?: string | null;
 		};
 		error?: string;
 	};
+
+	function updateActiveMessageJobFromServer(job: {
+		jobId: string;
+		inputHash: string;
+		status: ActiveMessageJob['status'];
+		traceId?: string | null;
+	}) {
+		const activeJob = formData.content.activeMessageJob;
+		if (!activeJob || activeJob.jobId !== job.jobId || activeJob.inputHash !== job.inputHash)
+			return;
+
+		activeJob.status = job.status;
+		if (job.traceId) activeJob.traceId = job.traceId;
+		onSaveDraft?.();
+	}
 
 	function buildGenerationPayload(): MessageGenerationPayload {
 		const subjectLine = formData.objective.title;
@@ -339,6 +442,12 @@
 
 	function applyMessageResult(result: MessageGenerationResult) {
 		const cleanedMessage = cleanHtmlFormatting(result.message || '');
+		if (Array.isArray(result.sources)) {
+			const counts = sourceEvidenceCounts(result.sources as Source[]);
+			liveSourceCount = counts.total;
+			liveEvaluatedSourceCount = counts.evaluated;
+			liveSearchOnlySourceCount = counts.searchOnly;
+		}
 
 		originalMessage = cleanedMessage;
 		originalSubject = formData.objective.title;
@@ -367,7 +476,7 @@
 		if (response.status === 404) return null;
 		if (!response.ok) {
 			const body = (await response.json().catch(() => ({}))) as RecoverableJobResponse;
-			throw new Error(body.error || 'Could not recover message generation job');
+			throw new Error(body.error || 'Could not check on your message');
 		}
 		const body = (await response.json()) as RecoverableJobResponse;
 		return body.job ?? null;
@@ -376,6 +485,8 @@
 	async function applyRecoveredJob(
 		job: NonNullable<RecoverableJobResponse['job']>
 	): Promise<boolean> {
+		updateActiveMessageJobFromServer(job);
+
 		if (job.status === 'completed' && job.encryptedResult) {
 			const result = await decryptMessageJobResult<MessageGenerationResult>(
 				job.jobId,
@@ -391,7 +502,7 @@
 		}
 
 		if (job.status === 'expired') {
-			throw new Error('Message generation expired. Please try again.');
+			throw new Error('That message run expired. Please try again.');
 		}
 
 		return false;
@@ -417,15 +528,21 @@
 		isGenerating = true;
 		stage = 'generating';
 		errorMessage = null;
-		thoughts = ['Reconnecting to the message generation job...'];
+		thoughts = ['Reconnecting to your message...'];
+		liveSourceCount = 0;
+		liveEvaluatedSourceCount = 0;
+		liveSearchOnlySourceCount = 0;
+		liveSourceMode = null;
+		currentPhase = 'recovering';
+		currentPhaseMessage = 'Checking this device for your finished message.';
 
 		try {
 			const recovered = await pollActiveMessageJob(activeJob);
 			if (!recovered && !destroyed) {
-				throw new Error('Message generation is still running. Please try again in a moment.');
+				throw new Error('Your message is still being written. Please try again in a moment.');
 			}
 		} catch (err) {
-			errorMessage = err instanceof Error ? err.message : 'Could not recover message generation.';
+			errorMessage = err instanceof Error ? err.message : 'Could not recover your message.';
 			stage = 'error';
 		} finally {
 			isGenerating = false;
@@ -440,7 +557,14 @@
 		try {
 			stage = 'generating';
 			errorMessage = null;
+			generationBoundary = null;
 			thoughts = [];
+			liveSourceCount = 0;
+			liveEvaluatedSourceCount = 0;
+			liveSearchOnlySourceCount = 0;
+			liveSourceMode = null;
+			currentPhase = null;
+			currentPhaseMessage = 'Getting your message started.';
 			console.log('[MessageGenerationResolver] Starting streaming generation...');
 
 			const payload = buildGenerationPayload();
@@ -486,10 +610,21 @@
 			}
 
 			if (!response.ok) {
-				const errorData = await response.json().catch(() => ({}));
+				const errorData = (await response.json().catch(() => ({}))) as Record<string, unknown>;
 				formData.content.activeMessageJob = null;
 				onSaveDraft?.();
-				throw new Error(errorData.error || 'Failed to generate message');
+				generationBoundary = boundaryFromResponse(
+					errorData,
+					response.status,
+					'Your message could not be generated'
+				);
+				currentPhase = null;
+				currentPhaseMessage = generationBoundary.message;
+				throw new Error(
+					typeof errorData.error === 'string'
+						? errorData.error
+						: 'Your message could not be generated'
+				);
 			}
 
 			let streamCompleted = false;
@@ -498,7 +633,18 @@
 			for await (const event of parseSSEStream<Record<string, unknown>>(response)) {
 				switch (event.type) {
 					case 'job':
-						if (formData.content.activeMessageJob) {
+						if (
+							typeof event.data.jobId === 'string' &&
+							typeof event.data.inputHash === 'string' &&
+							typeof event.data.status === 'string'
+						) {
+							updateActiveMessageJobFromServer({
+								jobId: event.data.jobId,
+								inputHash: event.data.inputHash,
+								status: event.data.status as ActiveMessageJob['status'],
+								traceId: typeof event.data.traceId === 'string' ? event.data.traceId : null
+							});
+						} else if (formData.content.activeMessageJob) {
 							formData.content.activeMessageJob.status = 'running';
 						}
 						break;
@@ -507,10 +653,72 @@
 						if (typeof event.data.content === 'string') {
 							thoughts = [...thoughts, event.data.content];
 						}
+						if (isPipelinePhase(event.data.phase)) {
+							currentPhase = event.data.phase;
+						}
 						break;
+
+					case 'phase':
+						if (isPipelinePhase(event.data.phase)) {
+							currentPhase = event.data.phase;
+						}
+						currentPhaseMessage =
+							typeof event.data.message === 'string' ? event.data.message : currentPhaseMessage;
+						break;
+
+					case 'source-evidence': {
+						const sourceCount =
+							typeof event.data.sourceCount === 'number' && Number.isFinite(event.data.sourceCount)
+								? Math.max(0, Math.floor(event.data.sourceCount))
+								: null;
+						let evaluatedSourceCount =
+							typeof event.data.evaluatedSourceCount === 'number' &&
+							Number.isFinite(event.data.evaluatedSourceCount)
+								? Math.max(0, Math.floor(event.data.evaluatedSourceCount))
+								: null;
+						let searchOnlySourceCount =
+							typeof event.data.searchOnlySourceCount === 'number' &&
+							Number.isFinite(event.data.searchOnlySourceCount)
+								? Math.max(0, Math.floor(event.data.searchOnlySourceCount))
+								: null;
+						if (sourceCount !== null) {
+							liveSourceCount = sourceCount;
+							if (evaluatedSourceCount === null || searchOnlySourceCount === null) {
+								if (event.data.evaluationFallback === true) {
+									evaluatedSourceCount = 0;
+									searchOnlySourceCount = sourceCount;
+								} else {
+									evaluatedSourceCount = sourceCount;
+									searchOnlySourceCount = 0;
+								}
+							}
+							liveEvaluatedSourceCount = Math.min(evaluatedSourceCount, sourceCount);
+							liveSearchOnlySourceCount = Math.min(
+								searchOnlySourceCount,
+								Math.max(0, sourceCount - liveEvaluatedSourceCount)
+							);
+						}
+						liveSourceMode =
+							event.data.mode === 'discovery' || event.data.mode === 'preverified'
+								? event.data.mode
+								: liveSourceMode;
+						if (sourceCount !== null) {
+							currentPhaseMessage =
+								sourceCount === 0
+									? 'No sources attached yet — your message can still be written without citations.'
+									: liveSearchOnlySourceCount > 0
+										? `${liveEvaluatedSourceCount} evaluated · ${liveSearchOnlySourceCount} search-only source${liveSearchOnlySourceCount === 1 ? '' : 's'} attached.`
+										: liveSourceMode === 'preverified'
+											? `${liveEvaluatedSourceCount} cached evaluated source${liveEvaluatedSourceCount === 1 ? '' : 's'} ready to cite.`
+											: `${liveEvaluatedSourceCount} evaluated source${liveEvaluatedSourceCount === 1 ? '' : 's'} ready to cite.`;
+						}
+						break;
+					}
 
 					case 'complete': {
 						streamCompleted = true;
+						currentPhase = 'complete';
+						currentPhaseMessage = 'Your message is ready.';
 						const result = event.data as MessageGenerationResult;
 						applyMessageResult(result);
 
@@ -540,7 +748,9 @@
 					case 'error':
 						streamCompleted = true;
 						throw new Error(
-							typeof event.data.message === 'string' ? event.data.message : 'Generation failed'
+							typeof event.data.message === 'string'
+								? event.data.message
+								: 'Message generation failed'
 						);
 				}
 			}
@@ -548,7 +758,7 @@
 			if (!streamCompleted) {
 				const activeJob = formData.content.activeMessageJob;
 				if (activeJob && (await pollActiveMessageJob(activeJob, 30_000))) return;
-				throw new Error('Connection closed before message generation finished. Please try again.');
+				throw new Error('Connection closed before authoring finished. Please try again.');
 			}
 		} catch (err: any) {
 			console.error('[MessageGenerationResolver] Error:', err);
@@ -559,10 +769,20 @@
 			} else if (err?._kind === 'rate-limited') {
 				rateLimitResetAt = err.resetAt ?? null;
 				rateLimitMessage = err.message ?? null;
+				generationBoundary = {
+					code: 'message_generation_rate_limited',
+					message: rateLimitMessage || "You've used your message generations for now.",
+					missing: ['available authoring quota'],
+					dependency: rateLimitResetAt
+						? `authoring quota reset at ${new Date(rateLimitResetAt).toLocaleString()}`
+						: 'authoring quota reset or upgraded allowance',
+					retryable: false
+				};
 				stage = 'rate-limited';
 			} else {
 				errorMessage =
-					err instanceof Error ? err.message : 'Failed to generate message. Please try again.';
+					err instanceof Error ? err.message : 'Message generation failed. Please try again.';
+				generationBoundary ??= boundaryFromThrownError(err);
 				stage = 'error';
 			}
 		} finally {
@@ -587,6 +807,7 @@
 				formData.content.aiGenerated = false;
 				formData.content.generatedForSubject = undefined;
 				formData.content.activeMessageJob = null;
+				formData.content.draftOrigin = null;
 				await generateMessage();
 			} else if (!formData.content.preview || !formData.content.aiGenerated) {
 				const activeJob = formData.content.activeMessageJob;
@@ -624,7 +845,7 @@
 	}
 
 	function handleStartFresh() {
-		// Reset to original AI-generated message + sources
+		// Reset to original authored artifact + sources
 		formData.content.preview = originalMessage;
 		formData.objective.title = originalSubject;
 		formData.content.sources = [...originalSources];
@@ -667,8 +888,21 @@
 
 <div class="mx-auto max-w-3xl">
 	{#if stage === 'generating'}
-		<!-- Thought-centered loading: the agent's reasoning IS the experience -->
-		<AgentThinking {thoughts} isActive={stage === 'generating'} context="Writing your message" />
+		<div class="generation-live">
+			<div class="generation-status" aria-live="polite">
+				<p class="generation-phase">{phaseLabel(currentPhase)}</p>
+				{#if currentPhaseMessage}
+					<p class="generation-note">{currentPhaseMessage}</p>
+				{/if}
+			</div>
+
+			<!-- Thought-centered loading: the agent's reasoning IS the experience -->
+			<AgentThinking
+				{thoughts}
+				isActive={stage === 'generating'}
+				context="Researching and writing"
+			/>
+		</div>
 	{:else if stage === 'results'}
 		<!-- Results display with citations, sources, and research log -->
 		<MessageResults
@@ -677,6 +911,7 @@
 			subject={formData.objective.title}
 			sources={formData.content.sources || []}
 			researchLog={formData.content.researchLog || []}
+			draftOrigin={formData.content.draftOrigin ?? null}
 			onEdit={handleEdit}
 		/>
 
@@ -730,12 +965,16 @@
 						></div>
 						Publishing...
 					{:else if publishError}
-						Try Again →
+						Try publishing again
 					{:else}
-						Publish →
+						Publish action page
 					{/if}
 				</button>
 			</div>
+
+			<p class="mt-3 text-right text-xs text-slate-500">
+				Publishing creates a public action page — sending happens from that page.
+			</p>
 		</div>
 	{:else if stage === 'editing'}
 		<!-- Message editor -->
@@ -807,21 +1046,22 @@
 			</div>
 		</div>
 	{:else if stage === 'error'}
-		<!-- Error state -->
-		<div class="space-y-4 py-8">
-			<div class="rounded-lg border border-red-200 bg-red-50 p-6 text-center">
-				<p class="text-lg font-semibold text-red-900">Something went wrong</p>
-				<p class="mt-2 text-sm text-red-700">{errorMessage}</p>
+		<div class="generation-live" data-state="error">
+			<div class="generation-boundary" role="alert">
+				<p class="generation-boundary-title">{generationBoundaryTitle}</p>
+				<p class="generation-note">{generationBoundary?.message ?? errorMessage}</p>
 			</div>
 
 			<div class="flex items-center justify-center gap-4">
-				<button
-					type="button"
-					onclick={generateMessage}
-					class="bg-participation-primary-600 hover:bg-participation-primary-700 inline-flex items-center gap-2 rounded-lg px-6 py-3 text-sm font-medium text-white transition-colors"
-				>
-					Try again
-				</button>
+				{#if generationBoundary?.retryable !== false}
+					<button
+						type="button"
+						onclick={generateMessage}
+						class="bg-participation-primary-600 hover:bg-participation-primary-700 inline-flex items-center gap-2 rounded-lg px-6 py-3 text-sm font-medium text-white transition-colors"
+					>
+						Try again
+					</button>
+				{/if}
 
 				<button
 					type="button"
@@ -833,16 +1073,17 @@
 			</div>
 		</div>
 	{:else if stage === 'rate-limited'}
-		<!-- Rate limit reached — friendly, non-blocking -->
-		<div class="space-y-6 py-8">
-			<div class="rounded-lg border border-amber-200 bg-amber-50 p-6 text-center">
-				<p class="text-base font-semibold text-amber-900">Generation limit reached</p>
-				<p class="mt-2 text-sm text-amber-700">
-					{rateLimitMessage || "You've used your available message generations for now."}
+		<div class="generation-live" data-state="rate-limited">
+			<div class="generation-boundary" role="status">
+				<p class="generation-boundary-title">{generationBoundaryTitle}</p>
+				<p class="generation-note">
+					{generationBoundary?.message ??
+						rateLimitMessage ??
+						"You've used your message generations for now."}
 				</p>
 				{#if rateLimitResetAt}
-					<p class="mt-2 text-xs text-amber-600">
-						Resets at {new Date(rateLimitResetAt).toLocaleTimeString()}
+					<p class="generation-note">
+						You can write again after {new Date(rateLimitResetAt).toLocaleString()}.
 					</p>
 				{/if}
 			</div>
@@ -861,8 +1102,8 @@
 		<!-- Auth required - progressive commitment overlay -->
 		<div class="relative min-h-[400px]">
 			<AuthGateOverlay
-				title="Unlock Message Generation"
-				description="Free account required to craft your message"
+				title="Sign in to continue authoring"
+				description="Authentication preserves quota, recovery, and draft continuity for this run."
 				icon={FileText}
 				hints={[]}
 				progress={buildAuthProgressItems()}
@@ -873,3 +1114,43 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	.generation-live {
+		display: grid;
+		gap: 1rem;
+		padding-block: 1rem;
+	}
+
+	.generation-status,
+	.generation-boundary {
+		display: grid;
+		gap: 0.35rem;
+		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		border-radius: 8px;
+		background: var(--surface-raised, oklch(0.985 0.004 60));
+		padding: 1rem 1.125rem;
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+	}
+
+	.generation-phase,
+	.generation-boundary-title {
+		margin: 0;
+		color: var(--text-primary, oklch(0.22 0.015 60));
+		font-size: 0.95rem;
+		font-weight: 700;
+		line-height: 1.2;
+	}
+
+	.generation-note {
+		margin: 0;
+		color: var(--text-secondary, oklch(0.38 0.012 60));
+		font-size: 0.82rem;
+		font-weight: 500;
+		line-height: 1.45;
+	}
+
+	.generation-boundary[role='alert'] {
+		border-left: 3px solid oklch(0.58 0.18 28);
+	}
+</style>

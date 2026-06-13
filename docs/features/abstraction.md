@@ -15,9 +15,10 @@
 >   There is no `src/lib/core/legislative/adapters/us-congress.ts`.
 > - **Location resolvers (postcode/ZIP → district) are live** for US,
 >   CA, GB, AU at `src/lib/core/location/resolvers/*`. **Representative
->   lookup for CA/GB/AU is a stub**: `rep-lookup.ts:~26-34` returns
->   `[]`. US reps come through Census + Congress.gov helpers outside
->   any adapter pattern.
+>   lookup for CA/GB/AU is a fail-closed boundary**:
+>   `rep-lookup.ts` throws `REP_LOOKUP_NOT_CONFIGURED` until country
+>   official data sources are hydrated. US reps come through Census +
+>   Congress.gov helpers outside any adapter pattern.
 > - **Phantom API routes listed in §6** (`/api/address/lookup`,
 >   `/api/submit`) are not in the codebase. Real endpoints:
 >   `/api/location/resolve-address`, `/api/geographic/resolve`,

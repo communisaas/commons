@@ -6,10 +6,7 @@ import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, url }) => {
 	const cursor = url.searchParams.get('cursor');
-	const numItems = Math.min(
-		Math.max(Number(url.searchParams.get('limit') ?? '50'), 1),
-		100
-	);
+	const numItems = Math.min(Math.max(Number(url.searchParams.get('limit') ?? '50'), 1), 100);
 
 	const blast = await serverQuery(api.email.getBlast, {
 		orgSlug: params.slug,
@@ -29,6 +26,7 @@ export const load: PageServerLoad = async ({ params, url }) => {
 	});
 
 	return {
+		orgSlug: params.slug,
 		blast: {
 			id: blast._id,
 			subject: blast.subject,

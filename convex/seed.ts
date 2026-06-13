@@ -33,6 +33,9 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { sealOrgKey, getOrgKeyForAction } from "./_orgKeyUnseal";
+import { encryptWithOrgKey, importOrgKey } from "./_orgKey";
+import { computeOrgScopedEmailHash, computeGlobalEmailHash } from "./_orgHash";
 // Org encryption configured during seed — supporters encrypted with org key, hashes org-scoped.
 
 // =============================================================================
@@ -429,8 +432,8 @@ export const insertUsers = internalMutation({
 // =============================================================================
 // Verified users (trustTier ≥ 2) need a backing districtCredential row so
 // any join from users → credential renders honest trust-context. Without
-// this, isVerified=true users have nothing behind the claim — the H-phase
-// tier-display SSOT helper (H6) would see undefined trust-context fields
+// this, isVerified=true users have nothing behind the claim — the
+// tier-display SSOT helper would see undefined trust-context fields
 // and render "unknown" badges for every verified seed user.
 //
 // Trust-context fields (trustTier, cellStraddles, cellAnchorMode,
@@ -629,8 +632,6 @@ export const insertOrgs = internalMutation({
 export const configureOrgEncryption = internalAction({
   args: { orgIds: v.array(v.id("organizations")) },
   handler: async (ctx, { orgIds }) => {
-    const { sealOrgKey } = await import("./_orgKeyUnseal");
-    const { encryptWithOrgKey, importOrgKey } = await import("./_orgKey");
 
     for (const orgId of orgIds) {
       // Generate random 32-byte org key
@@ -1013,9 +1014,6 @@ export const insertSupporters = internalAction({
     orgIds: v.array(v.id("organizations")),
   },
   handler: async (ctx, { orgIds }): Promise<Id<"supporters">[]> => {
-    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
-    const { encryptWithOrgKey } = await import("./_orgKey");
-    const { computeOrgScopedEmailHash, computeGlobalEmailHash } = await import("./_orgHash");
 
     const ids: Id<"supporters">[] = [];
     const distribution = [8, 7, 5];
@@ -2242,23 +2240,29 @@ export const insertDebates = internalMutation({
 // PHASE 16: GRANT DEV ACCOUNT ACCESS
 // =============================================================================
 
+const DEV_ACCOUNT_EMAIL = "mock7ee@gmail.com";
+
 export const grantDevAccount = internalMutation({
   args: {
     orgIds: v.array(v.id("organizations")),
+    // Optional override so a dev signing in with a different Google account
+    // can grant themselves owner. Defaults to DEV_ACCOUNT_EMAIL.
+    email: v.optional(v.string()),
   },
-  handler: async (ctx, { orgIds }) => {
+  handler: async (ctx, { orgIds, email }) => {
+    const devEmail = email ?? DEV_ACCOUNT_EMAIL;
     // Check if dev account exists
     const devUser = await ctx.db
       .query("users")
-      .withIndex("by_email", (q) => q.eq("email", "mock7ee@gmail.com"))
+      .withIndex("by_email", (q) => q.eq("email", devEmail))
       .first();
 
     if (!devUser) {
-      console.log("[seed] Dev account mock7ee@gmail.com not found — skipping dev grants.");
+      console.log(`[seed] Dev account ${devEmail} not found — skipping dev grants.`);
       return;
     }
 
-    console.log("[seed] Found dev account — granting owner on all seeded orgs.");
+    console.log(`[seed] Found dev account ${devEmail} — granting owner on ${orgIds.length} seeded org(s).`);
     const now = Date.now();
 
     for (const orgId of orgIds) {
@@ -2279,6 +2283,31 @@ export const grantDevAccount = internalMutation({
         await ctx.db.patch(existing._id, { role: "owner" });
       }
     }
+  },
+});
+
+// =============================================================================
+// STANDALONE DEV GRANT
+// =============================================================================
+// Resolves org IDs itself, so it works any time — independent of seedAll's
+// idempotency guard. Use when the dev Google account was created AFTER the
+// initial seed (the common case): the Phase-16 grant inside seedAll skipped
+// because the account didn't exist yet, and re-running `npm run seed` no-ops
+// on an already-seeded DB, so the grant never lands.
+//   npx convex run seed:grantDev
+//   npx convex run seed:grantDev '{"email":"you@example.com"}'
+// (prefix with the IPv4-first NODE_OPTIONS on this dev machine — see CLAUDE memory)
+export const grantDev = internalAction({
+  args: {
+    email: v.optional(v.string()),
+  },
+  handler: async (ctx, { email }) => {
+    const orgIds = await ctx.runQuery(internal.seed.getSeedOrgIds);
+    if (orgIds.length === 0) {
+      console.log("[seed] No organizations found — nothing to grant. Run `npm run seed` first.");
+      return;
+    }
+    await ctx.runMutation(internal.seed.grantDevAccount, { orgIds, email });
   },
 });
 
@@ -2490,9 +2519,6 @@ const PLANS_SEED: Record<string, { maxSeats: number; maxTemplatesMonth: number }
 export const encryptSeedPii = internalAction({
   args: { orgIds: v.array(v.id("organizations")) },
   handler: async (ctx, { orgIds }) => {
-    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
-    const { encryptWithOrgKey } = await import("./_orgKey");
-    const { computeOrgScopedEmailHash } = await import("./_orgHash");
 
     for (const orgId of orgIds) {
       const orgKey = await getOrgKeyForAction(ctx, orgId);

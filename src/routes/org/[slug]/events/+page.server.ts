@@ -33,18 +33,16 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			id: asString(e._id),
 			title: asString(e.title, 'Untitled event'),
 			eventType: asString(e.eventType, 'event'),
-			startAt: typeof e.startAt === 'number'
-				? new Date(e.startAt).toISOString()
-				: String(e.startAt),
-			endAt: typeof e.endAt === 'number'
-				? new Date(e.endAt).toISOString()
-				: null,
+			startAt:
+				typeof e.startAt === 'number' ? new Date(e.startAt).toISOString() : String(e.startAt),
+			endAt: typeof e.endAt === 'number' ? new Date(e.endAt).toISOString() : null,
 			timezone: asString(e.timezone, 'UTC'),
 			venue: typeof e.venue === 'string' ? e.venue : null,
 			city: typeof e.city === 'string' ? e.city : null,
 			status: asString(e.status, 'draft'),
 			rsvpCount: asNumber(e.rsvpCount),
 			capacity: typeof e.capacity === 'number' ? e.capacity : null,
+			waitlistEnabled: e.waitlistEnabled === true,
 			attendeeCount: asNumber(e.attendeeCount),
 			verifiedAttendees: asNumber(e.verifiedAttendees)
 		}))

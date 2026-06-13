@@ -11,22 +11,25 @@
 
 	let expanded = $state(defaultExpanded);
 
-	function scoreClass(score: number): string {
+	function scoreClass(score: number | null): string {
+		if (score === null) return 'score-unknown';
 		if (score >= 67) return 'score-high';
 		if (score >= 34) return 'score-mid';
 		return 'score-low';
 	}
 
-	function formatHours(hours: number | null): string {
-		if (hours === null) return '--';
+	function formatCount(value: number | null): string {
+		return value === null ? '--' : value.toLocaleString('en-US');
+	}
+
+	function formatHours(hours: number): string {
 		if (hours < 1) return '<1h';
 		if (hours < 24) return `${Math.round(hours)}h`;
 		const days = Math.round(hours / 24);
 		return `${days}d`;
 	}
 
-	function formatDate(iso: string | null): string {
-		if (!iso) return '--';
+	function formatDate(iso: string): string {
 		const d = new Date(iso);
 		return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	}
@@ -35,12 +38,16 @@
 		if (rate === null) return '--';
 		return `${Math.round(rate * 100)}%`;
 	}
+
+	const scoreLabel = $derived(
+		scorecard.score === null ? 'Score unavailable' : `Score: ${scorecard.score} out of 100`
+	);
 </script>
 
 <div class="scorecard-card">
 	<button
 		class="scorecard-header"
-		onclick={() => expanded = !expanded}
+		onclick={() => (expanded = !expanded)}
 		aria-expanded={expanded}
 		aria-label="Toggle details for {scorecard.name}"
 	>
@@ -49,24 +56,26 @@
 			{#if scorecard.title || scorecard.district}
 				<span class="official-detail">
 					{#if scorecard.title}{scorecard.title}{/if}
-					{#if scorecard.title && scorecard.district} &middot; {/if}
+					{#if scorecard.title && scorecard.district}
+						&middot;
+					{/if}
 					{#if scorecard.district}{scorecard.district}{/if}
 				</span>
 			{/if}
 		</div>
 		<div class="header-score">
-			<span
-				class="score-badge {scoreClass(scorecard.score)}"
-				role="img"
-				aria-label="Score: {scorecard.score} out of 100"
-			>
-				{scorecard.score}
+			<span class="score-badge {scoreClass(scorecard.score)}" role="img" aria-label={scoreLabel}>
+				{scorecard.score ?? '--'}
 			</span>
 			<svg
 				class="expand-icon"
 				class:rotated={expanded}
-				width="16" height="16" viewBox="0 0 24 24"
-				fill="none" stroke="currentColor" stroke-width="2"
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
 			>
 				<path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
 			</svg>
@@ -83,13 +92,22 @@
 							<span class="metric-key">{scorecard.reportsReceived} reports sent</span>
 						</div>
 						<div class="metric-row">
-							<span class="metric-key">{scorecard.reportsOpened} opened</span>
+							<span class="metric-key">{formatCount(scorecard.reportsOpened)} opened</span>
 						</div>
 						<div class="metric-row">
-							<span class="metric-key">{scorecard.verifyLinksClicked} verify click{scorecard.verifyLinksClicked !== 1 ? 's' : ''}</span>
+							<span class="metric-key"
+								>{formatCount(scorecard.verifyLinksClicked)} verify click{scorecard.verifyLinksClicked ===
+								1
+									? ''
+									: 's'}</span
+							>
 						</div>
 						<div class="metric-row">
-							<span class="metric-key">{scorecard.repliesLogged} repl{scorecard.repliesLogged !== 1 ? 'ies' : 'y'} logged</span>
+							<span class="metric-key"
+								>{formatCount(scorecard.repliesLogged)} repl{scorecard.repliesLogged === 1
+									? 'y'
+									: 'ies'} logged</span
+							>
 						</div>
 					</div>
 				</div>
@@ -97,9 +115,17 @@
 				<div class="metric-section">
 					<p class="metric-label">Alignment</p>
 					<div class="metric-rows">
-						{#if scorecard.relevantVotes > 0}
+						{#if scorecard.relevantVotes === null}
 							<div class="metric-row">
-								<span class="metric-key">{scorecard.alignedVotes}/{scorecard.relevantVotes} votes aligned ({formatAlignment(scorecard.alignmentRate)})</span>
+								<span class="metric-key dim">Vote basis not loaded</span>
+							</div>
+						{:else if scorecard.relevantVotes > 0}
+							<div class="metric-row">
+								<span class="metric-key"
+									>{formatCount(scorecard.alignedVotes)}/{scorecard.relevantVotes} votes aligned ({formatAlignment(
+										scorecard.alignmentRate
+									)})</span
+								>
 							</div>
 						{:else}
 							<div class="metric-row">
@@ -112,12 +138,23 @@
 				<div class="metric-section">
 					<p class="metric-label">Responsiveness</p>
 					<div class="metric-rows">
-						<div class="metric-row">
-							<span class="metric-key">Avg: {formatHours(scorecard.avgResponseTime)}</span>
-						</div>
-						<div class="metric-row">
-							<span class="metric-key">Last: {formatDate(scorecard.lastContactDate)}</span>
-						</div>
+						{#if scorecard.avgResponseTime !== null}
+							<div class="metric-row">
+								<span class="metric-key">Response time ~{formatHours(scorecard.avgResponseTime)}</span>
+							</div>
+							<div class="metric-row">
+								<span class="metric-key dim">Estimated from response rate</span>
+							</div>
+						{:else}
+							<div class="metric-row">
+								<span class="metric-key dim">No response estimate yet</span>
+							</div>
+						{/if}
+						{#if scorecard.lastContactDate}
+							<div class="metric-row">
+								<span class="metric-key">Last contact: {formatDate(scorecard.lastContactDate)}</span>
+							</div>
+						{/if}
 					</div>
 				</div>
 			</div>
@@ -205,6 +242,12 @@
 		color: #f87171;
 		background: rgba(248, 113, 113, 0.1);
 		border-color: rgba(248, 113, 113, 0.2);
+	}
+
+	.score-unknown {
+		color: var(--text-tertiary);
+		background: var(--surface-overlay);
+		border-color: var(--surface-border);
 	}
 
 	.expand-icon {

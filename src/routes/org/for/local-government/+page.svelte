@@ -3,12 +3,14 @@
 	import { goto } from '$app/navigation';
 	import { modalActions } from '$lib/stores/modalSystem.svelte';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import { PLATFORM_EXPORT_PROFILES } from '$lib/data/platform-export-profiles';
 
 	let { data }: { data: PageData } = $props();
 
 	const labels = getJurisdictionLabels();
 
 	const user = $derived(data.user);
+	const platformProfileCount = PLATFORM_EXPORT_PROFILES.length;
 
 	function handleSignIn(): void {
 		modalActions.openModal('sign-in-modal', 'sign-in');
@@ -282,7 +284,7 @@
 		<!-- ═══ INCUMBENT WINDOW ═══ -->
 		<div class="window">
 			<h2 class="window__pull-quote">
-				A small district clerk's filing experience is four hundred Action Network blasts against <code>board@district.gov</code>, with no triage tool.
+				A small district clerk's filing experience is four hundred undifferentiated campaign-platform blasts against <code>board@district.gov</code>, with no triage tool.
 			</h2>
 
 			<p class="window__body">
@@ -351,7 +353,7 @@
 			</div>
 
 			<p class="pricing__friction">
-				No demo required. No procurement review. Import your list from Action Network, EveryAction, NationBuilder, or any CSV export &mdash; a packet page produced before Friday's distribution deadline, not a year from now.
+				No demo required. No procurement review. Import from {platformProfileCount} recognized platform CSV exports or generic CSV &mdash; a packet page produced before Friday's distribution deadline, not a year from now.
 			</p>
 		</div>
 

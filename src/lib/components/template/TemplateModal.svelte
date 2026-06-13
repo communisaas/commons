@@ -217,7 +217,7 @@
 		return 'missing';
 	});
 
-	// Pre-written share messages for different contexts
+	// Pre-written action-page messages for different contexts.
 	const shareMessages = $derived(() => {
 		const actionCount = numericCount(template.send_count);
 		const domain = typeof template.domain === 'string' ? template.domain.toLowerCase() : 'advocacy';
@@ -226,20 +226,20 @@
 			// Short & urgent (Twitter, Discord) - <280 chars
 			short:
 				actionCount > 1000
-					? `🔥 ${actionCount.toLocaleString()}+ people coordinating: "${template.title}"\n\n${shareUrl}`
+					? `🔥 ${actionCount.toLocaleString()}+ people confirming routes: "${template.title}"\n\n${shareUrl}`
 					: `"${template.title}"\n\n${shareUrl}`,
 
 			// Medium (Slack, group chats)
-			medium: `Coordinating on ${domain}.\n\n"${template.title}"\n\n${actionCount > 0 ? `${actionCount.toLocaleString()} people already sent. ` : ''}Takes 2 minutes: ${shareUrl}`,
+			medium: `Coordinating on ${domain}.\n\n"${template.title}"\n\n${actionCount > 0 ? `${actionCount.toLocaleString()} reader${actionCount === 1 ? '' : 's'} already confirmed. ` : ''}Open the action page to confirm your route: ${shareUrl}`,
 
 			// Long (Email, Reddit)
-			long: `I sent this.\n\n"${template.title}"\n\n${template.description}\n\n${actionCount > 1000 ? `${actionCount.toLocaleString()}+ people already sent this. ` : actionCount > 100 ? `${actionCount.toLocaleString()} people acted. ` : ''}Takes 2 minutes.\n\n${shareUrl}`,
+			long: `I confirmed my route on this action page.\n\n"${template.title}"\n\n${template.description}\n\n${actionCount > 1000 ? `${actionCount.toLocaleString()}+ readers already confirmed. ` : actionCount > 100 ? `${actionCount.toLocaleString()} readers confirmed. ` : ''}Open the action page to confirm your route.\n\n${shareUrl}`,
 
 			// SMS-friendly (under 160 chars)
 			sms:
 				actionCount > 0
-					? `${template.title} - Join ${actionCount.toLocaleString()}+: ${shareUrl}`
-					: `${template.title} - ${shareUrl}`
+					? `${template.title} - ${actionCount.toLocaleString()} confirmed: ${shareUrl}`
+					: `${template.title} - confirm your route: ${shareUrl}`
 		};
 	});
 
@@ -1497,8 +1497,8 @@
 						<Share2 class="h-5 w-5" />
 						<span
 							>{typeof navigator !== 'undefined' && 'share' in navigator
-								? 'Share template'
-								: 'Copy share message'}</span
+								? 'Share action page'
+								: 'Copy action page message'}</span
 						>
 					</button>
 				</div>
@@ -1546,9 +1546,9 @@
 						class="mb-2 w-full rounded border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-700"
 					/>
 					<div class="flex items-center justify-between text-xs text-slate-500">
-						<span>Share link</span>
+						<span>Action page URL</span>
 						<button onclick={copyTemplateUrl} class="text-slate-700 hover:underline">
-							Copy URL
+							Copy action page
 						</button>
 					</div>
 				</div>

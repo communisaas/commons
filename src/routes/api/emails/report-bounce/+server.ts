@@ -19,9 +19,12 @@ const MAX_EMAIL_LENGTH = 254; // RFC 5321
 const MAX_ACTIVE_REPORTS_PER_USER = 10;
 const MIN_TRUST_TIER = 2; // Require address-verified identity
 
-/** Deterministic SHA-256 hash for bounce report dedup — no server-held key needed */
+/**
+ * Deterministic global email hash for bounce report dedup and supporter lookup.
+ * Mirrors computeGlobalEmailHash in convex/_orgHash.ts.
+ */
 async function hashEmail(email: string): Promise<string> {
-	const data = new TextEncoder().encode(email.trim().toLowerCase());
+	const data = new TextEncoder().encode(`email:${email.trim().toLowerCase()}`);
 	const hash = await crypto.subtle.digest('SHA-256', data);
 	return Array.from(new Uint8Array(hash))
 		.map((b) => b.toString(16).padStart(2, '0'))
@@ -77,7 +80,7 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
-	// Compute deterministic hash for dedup — no server-held key
+	// Compute canonical global hash for dedup and supporter-status propagation
 	const emailHash = await hashEmail(email);
 	const domain = email.split('@')[1] ?? '';
 

@@ -2,7 +2,6 @@
   "type": "blocks",
   "description": "Directed binary edges where source must reach status=completed before target can begin.",
   "edges": [
-    {"source": "T2-2", "target": "T1-9", "reason": "Workflow send_email requires SES send path which requires Lambda deployed"},
     {"source": "T2-1", "target": "T2-8", "reason": "A2P 10DLC compliance only matters once SMS dispatch is live"},
     {"source": "T2-1", "target": "T2-9", "reason": "MMS support requires SMS dispatch baseline"},
     {"source": "T2-8", "target": "T2-9", "reason": "MMS requires A2P compliance for production"},
@@ -73,8 +72,8 @@
     {"source": "T1-4", "target": "T10-11", "reason": "T10-11 is the trialing portion of T1-4 (dedup pointer)"}
   ],
   "statistics": {
-    "total_edges": 60,
-    "tasks_with_no_blockers": 41,
+    "total_edges": 59,
+    "tasks_with_no_blockers": 42,
     "tasks_blocking_many": [
       {"task": "T4-1", "downstream_blocked": 7},
       {"task": "T3-1", "downstream_blocked": 3},

@@ -11,20 +11,20 @@
  */
 
 export const TRIGGER_LABELS: Record<string, string> = {
-	supporter_created: 'New Supporter',
-	campaign_action: 'Campaign Action',
+	supporter_created: 'New person',
+	campaign_action: 'Action record response',
 	event_rsvp: 'Event RSVP',
 	event_checkin: 'Event Check-in',
 	donation_completed: 'Donation Completed',
-	tag_added: 'Tag Added'
+	tag_added: 'Tag applied'
 };
 
 export const STEP_LABELS: Record<string, string> = {
-	send_email: 'Send Email',
-	add_tag: 'Add Tag',
-	remove_tag: 'Remove Tag',
-	delay: 'Wait',
-	condition: 'Condition'
+	send_email: 'Email step',
+	add_tag: 'Tag write step',
+	remove_tag: 'Tag removal step',
+	delay: 'Wait step',
+	condition: 'Branch condition'
 };
 
 export const DELAY_UNITS = [
@@ -42,9 +42,8 @@ export function toDelayMinutes(duration: number, unit: DelayUnit): number {
 	return Math.max(1, Math.round(duration * entry.multiplier));
 }
 
-/** Condition operators the Convex executor can honor once condition evaluation
- * is wired. The UI exposes these; the runtime is currently a no-op (always
- * takes the else branch) — see convex/workflows.ts `conditionResult = false`. */
+/** Condition operators the Convex executor honors when the gated workflow
+ * runner is invoked. Side-effecting workflow verbs remain separately gated. */
 export const CONDITION_OPERATORS = [
 	{ value: 'equals', label: 'equals' },
 	{ value: 'not_equals', label: 'does not equal' },

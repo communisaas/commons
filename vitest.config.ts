@@ -81,17 +81,19 @@ export default defineConfig({
 			// See: docs/testing/svelte-component-testing.md for migration path
 			'tests/unit/ProofGenerator.test.ts',
 			'tests/unit/components/AddressChangeFlow.test.ts',
-			// Cycle 268: behavioral test for VerificationGate auto-dismiss
-			// requires the components-lane config for @testing-library/svelte
-			// + stub modules.
+			// Behavioral test for VerificationGate auto-dismiss — requires the
+			// components-lane config for @testing-library/svelte + stub modules.
 			'tests/unit/components/VerificationGate-auto-dismiss.test.ts',
-			// Cycle 280: behavioral test for GovernmentCredentialVerification
-			// conditional dead-end copy. Same components-lane setup.
+			// Behavioral test for GovernmentCredentialVerification conditional
+			// dead-end copy. Same components-lane setup.
 			'tests/unit/components/GovernmentCredentialVerification-conditional-copy.test.ts',
 			// Same Svelte 5 lifecycle_function_unavailable issue.
 			// `mount(...)` is not available on the server-side render path that
 			// runs under the current vitest jsdom + MSW config.
 			'tests/unit/components/GroundCard.test.ts',
+			// Behavioral first-paint test for the Datum spring primitive —
+			// needs the components-lane browser runtime to mount.
+			'tests/unit/components/datum-first-paint.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',

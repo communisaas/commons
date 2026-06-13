@@ -82,14 +82,14 @@
 		})()
 	);
 
-	// Enhanced description with social proof for Open Graph
+	// Description with route-confirmation proof for Open Graph.
 	const socialProofDescription = $derived(
 		(() => {
-			const sent = template.send_count || 0;
-			if (sent > 1000) {
-				return `Join ${sent.toLocaleString()}+ constituents who took action. ${template.description}`;
-			} else if (sent > 100) {
-				return `${sent.toLocaleString()} people have taken action. ${template.description}`;
+			const confirmed = template.send_count || 0;
+			if (confirmed > 1000) {
+				return `Join ${confirmed.toLocaleString()}+ readers confirming routes. ${template.description}`;
+			} else if (confirmed > 100) {
+				return `${confirmed.toLocaleString()} readers have confirmed routes. ${template.description}`;
 			}
 			return template.description;
 		})()
@@ -357,7 +357,7 @@
 	let reportedBounces = $state(new Set<string>());
 	let reportingBounce = $state<string | null>(null);
 
-	// Contextual share message — shifts from recruiting to movement-building after email handoff
+	// Contextual share message shifts from action-page invitation to route-handoff evidence.
 	const shareMessage = $derived(
 		generateShareMessage(
 			{
@@ -800,7 +800,7 @@
 	<meta property="og:image" content="{shareUrl.split('?')[0]}/og-image" />
 	<meta property="og:image:width" content="1200" />
 	<meta property="og:image:height" content="630" />
-	<meta property="og:image:alt" content="{template.title} - Join the movement on Commons" />
+	<meta property="og:image:alt" content="{template.title} - Confirm your route on Commons" />
 
 	<!-- Twitter -->
 	<meta property="twitter:card" content="summary_large_image" />
@@ -808,7 +808,7 @@
 	<meta property="twitter:title" content={template.title} />
 	<meta property="twitter:description" content={socialProofDescription} />
 	<meta property="twitter:image" content="{shareUrl.split('?')[0]}/og-image" />
-	<meta property="twitter:image:alt" content="{template.title} - Join the movement on Commons" />
+	<meta property="twitter:image:alt" content="{template.title} - Confirm your route on Commons" />
 </svelte:head>
 
 <!-- Template content with zoned layout: Orient → Commit → Act -->
@@ -856,7 +856,7 @@
 			{#if FEATURES.ENGAGEMENT_METRICS && (template.send_count || 0) >= 5}
 				<span class="flex items-center gap-1.5 text-slate-400">
 					<Users class="h-3.5 w-3.5" />
-					{template.send_count.toLocaleString()} acted on this
+					{template.send_count.toLocaleString()} routes confirmed
 				</span>
 			{/if}
 			<!-- Views: pending DP analytics pipeline (tasks #31-32) -->

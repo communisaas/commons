@@ -1,5 +1,5 @@
 /**
- * Representative Lookup — Stub
+ * Representative Lookup boundary
  *
  * Looks up elected representatives for a given country + district.
  * Used by the /api/geographic/resolve endpoint for GB/CA/AU resolution.
@@ -12,12 +12,26 @@
 
 import type { CountryCode, InternationalRepresentativeData } from './types';
 
+export class RepresentativeLookupNotConfiguredError extends Error {
+	readonly code = 'REP_LOOKUP_NOT_CONFIGURED';
+
+	constructor(
+		readonly countryCode: CountryCode,
+		readonly districtId: string
+	) {
+		super(
+			`Representative lookup is not configured for ${countryCode}; country resolver claims stay dependency-first until rep-lookup data is hydrated.`
+		);
+		this.name = 'RepresentativeLookupNotConfiguredError';
+	}
+}
+
 /**
  * Look up representatives for a country and district.
  *
- * Stub implementation: returns an empty array.
- * The resolvers for CA/GB/AU are documented stubs
- * (see docs/design/CROSS-BORDER-PLAN.md).
+ * Boundary implementation: fail closed until country data sources are wired.
+ * Returning [] would make an unsupported representative lookup look like a
+ * successful district with no officials.
  *
  * @param countryCode - ISO country code
  * @param districtId - District identifier from resolver
@@ -28,7 +42,7 @@ export async function lookupRepresentatives(
 	districtId: string
 ): Promise<InternationalRepresentativeData[]> {
 	console.debug(
-		`[rep-lookup] Stub: lookupRepresentatives(${countryCode}, ${districtId}) — no data source configured`
+		`[rep-lookup] Boundary: lookupRepresentatives(${countryCode}, ${districtId}) has no configured data source`
 	);
-	return [];
+	throw new RepresentativeLookupNotConfiguredError(countryCode, districtId);
 }

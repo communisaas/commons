@@ -8,8 +8,8 @@
 	 * to context.
 	 *
 	 * Forms:
-	 *   whisper   — Provenance materializes in the void below on
-	 *               hover/focus. For hero metrics, dashboard counts.
+	 *   whisper   — Provenance surfaces in an overlay below the content
+	 *               on hover/focus. For hero metrics, dashboard counts.
 	 *   mark      — Dotted underline signals "pull this thread."
 	 *               Hover reveals popover. For inline claims.
 	 *   footnote  — Superscript ref, collected at bottom of parent Artifact.
@@ -68,6 +68,33 @@
 		}
 	});
 
+	// ─── Whisper overlay positioning ─────────────────────────
+	// The provenance overlay must escape ancestor clipping contexts
+	// (overflow-x scroll wrappers around tables, overflow-x: clip
+	// frames). On reveal we lift it to position: fixed, computed from
+	// the anchor's viewport rect — clamped away from the right edge,
+	// flipped above the anchor when there is no room below. Before
+	// hydration the absolute CSS fallback applies unchanged.
+	let whisperEl = $state<HTMLElement>();
+	let whisperOverlayEl = $state<HTMLElement>();
+	let whisperStyle = $state('');
+
+	function placeWhisper() {
+		if (!whisperEl || !whisperOverlayEl) return;
+		const margin = 16; // breathing room from the viewport edges
+		const gap = 4; // matches the at-rest offset below the anchor
+		const anchor = whisperEl.getBoundingClientRect();
+		// The hidden overlay is rendered (opacity: 0), so its intrinsic
+		// size is measurable before the reveal.
+		const { offsetWidth: width, offsetHeight: height } = whisperOverlayEl;
+		const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - margin - width));
+		let top = anchor.bottom + gap;
+		if (top + height > window.innerHeight - margin && anchor.top - gap - height >= margin) {
+			top = anchor.top - gap - height;
+		}
+		whisperStyle = `position: fixed; top: ${top}px; left: ${left}px;`;
+	}
+
 	// ─── Mark popover state ──────────────────────────────────
 	let markOpen = $state(false);
 	let markTimer: ReturnType<typeof setTimeout> | null = null;
@@ -107,18 +134,27 @@
 	{@render children()}
 {:else if effectiveForm === 'whisper'}
 	<!--
-	  Whisper: provenance materializes in the void below.
-	  The whisper lives in the generous gap EntityCluster creates.
+	  Whisper: provenance surfaces in an overlay anchored below the
+	  content. Out of flow at rest — the citation costs no height and
+	  the reveal never moves surrounding content.
 	-->
 	<span
+		bind:this={whisperEl}
 		class="cite-whisper group relative inline-flex flex-col items-start {className}"
 		aria-describedby={id}
 		role="group"
+		onmouseenter={placeWhisper}
+		onfocusin={placeWhisper}
 	>
 		<span class="cite-content">
 			{@render children()}
 		</span>
-		<span class="cite-provenance" aria-hidden="true">
+		<span
+			bind:this={whisperOverlayEl}
+			class="cite-provenance"
+			aria-hidden="true"
+			style={whisperStyle || undefined}
+		>
 			{#if provenance}
 				{@render provenance()}
 			{:else if cite}
@@ -192,27 +228,66 @@
 
 <style>
 	/* ─── Whisper ─────────────────────────────────────────── */
+	/* The wrapper must NOT clip: the provenance overlay hangs
+	   below its border box. Text containment stays on the content
+	   span instead. */
+	.cite-whisper,
+	.cite-content {
+		min-width: 0;
+		max-width: 100%;
+	}
 
+	.cite-content {
+		overflow: hidden;
+	}
+
+	/* Out of flow at rest: the citation reserves no height, and the
+	   reveal overlays surrounding content instead of pushing it.
+	   Same surface treatment as the mark popover so the text stays
+	   legible over whatever sits beneath the anchor.
+	   Absolute is the pre-hydration fallback; on reveal an inline
+	   position: fixed (see placeWhisper) escapes ancestor overflow
+	   clipping and viewport edges. */
 	.cite-provenance {
-		display: block;
-		margin-top: 2px;
+		position: absolute;
+		top: calc(100% + 4px);
+		left: 0;
+		z-index: 50;
+
+		width: max-content;
+		max-width: min(36ch, calc(100vw - 2rem));
+		padding: 6px 10px;
+		border-radius: 6px;
+		border: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		background: var(--surface-overlay, oklch(0.975 0.005 55));
+		box-shadow: 0 4px 12px -4px oklch(0 0 0 / 0.1);
+
+		overflow-wrap: anywhere;
+		word-break: break-word;
 		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 		font-size: 0.6875rem; /* 11px — subordinate */
 		line-height: 1.3;
 		color: var(--text-tertiary, #6b7280);
+		white-space: normal;
+
 		opacity: 0;
 		transform: translateY(-2px);
 		transition:
 			opacity 150ms cubic-bezier(0.4, 0, 0.2, 1),
 			transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
 		pointer-events: none;
-		white-space: nowrap;
 	}
 
 	.cite-whisper:hover .cite-provenance,
 	.cite-whisper:focus-within .cite-provenance {
 		opacity: 1;
 		transform: translateY(0);
+	}
+
+	.sr-only {
+		white-space: normal;
+		overflow-wrap: anywhere;
+		word-break: break-word;
 	}
 
 	/* ─── Mark ────────────────────────────────────────────── */

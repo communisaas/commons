@@ -15,10 +15,10 @@
       "name": "Launch Enablement",
       "duration": "weeks 1-4",
       "goal": "First-paying-org operational. Items here are larger but parallelizable across four tracks (comms infrastructure, developer platform, migration unblockers, substrate honesty).",
-      "completion_signal": "First org signs up, imports from AN via OSDI sync, sends a verified campaign, dispatches SMS, receives donation receipts, manages team. Substrate metrics (CAI, tier distribution) reflect real engagement. Outbound webhooks live. SDKs published. ses-proxy Lambda deployed.",
+      "completion_signal": "First org signs up, imports from a recognized platform export or first live API adapter, sends a verified campaign, dispatches SMS, receives donation receipts, manages team. Substrate metrics (CAI, tier distribution) reflect real engagement. Outbound webhooks live. SDKs published. ses-proxy Lambda deployed.",
       "task_ids": [
         "T1-3",
-        "T2-1", "T2-2", "T2-3", "T2-4", "T2-5",
+        "T2-1", "T2-2", "T2-3", "T2-4", "T2-4b", "T2-5",
         "T9-1", "T9-2", "T9-3", "T9-4", "T9-9",
         "T10-1", "T10-2", "T10-4", "T10-6", "T10-7", "T10-8", "T10-9", "T10-10"
       ],

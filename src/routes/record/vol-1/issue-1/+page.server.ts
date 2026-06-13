@@ -27,10 +27,11 @@ import constitutionMd from '../../../../../CONSTITUTION.md?raw';
 import issueMd from '../../../../../docs/record/vol-1/issue-1.md?raw';
 import type { PageServerLoad } from './$types';
 
-// Source sha256 as of latest commit. These are the as-committed hashes; the
-// canonical first-publication hash freezes when the v1.0.0 release tag is cut
-// (see Phase 1 do-3 release script, deferred). Until then, any further edit
-// to either source file requires re-computing and updating these literals.
+// Source sha256 for the currently committed files. These are the as-committed
+// hashes; the canonical first-publication hash freezes when the v1.0.0 release
+// tag is cut. The release tooling that pins that frozen hash is not built yet,
+// so until then any further edit to either source file requires re-computing
+// and updating these literals.
 const CANONICAL_HASHES = {
 	constitution: '6f707fec2ff3be443eca2a871754654af1218280b3dd699707d24cfc04c9d93c',
 	issue: 'f8e2f2e7c6a0e317e06a8ee5da778eeeb8c02a5756fb57a754d15c6a9c569dfe'

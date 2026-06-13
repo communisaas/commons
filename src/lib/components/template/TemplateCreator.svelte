@@ -159,7 +159,8 @@
 						researchLog: [],
 						geographicScope: null,
 						aiGenerated: false,
-						edited: false
+						edited: false,
+						draftOrigin: null
 					},
 					review: {}
 				}
@@ -255,6 +256,7 @@
 					formData.content.preview = '';
 					formData.content.aiGenerated = false;
 					formData.content.generatedForSubject = undefined;
+					formData.content.draftOrigin = null;
 				}
 				downstreamSubjectCheckpoint = currentTitle;
 			}

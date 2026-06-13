@@ -228,6 +228,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 				topics: Array.isArray(data.objective?.topics) ? [...data.objective.topics] : [],
 				voiceSample: data.objective?.voiceSample ?? '',
 				rawInput: data.objective?.rawInput ?? '',
+				audienceGuidance: data.objective?.audienceGuidance,
 				aiGenerated: data.objective?.aiGenerated ?? false
 			},
 			audience: {
@@ -246,7 +247,20 @@ function createTemplateDraftStore(): TemplateDraftStore {
 							email: dm.email ?? '',
 							source: dm.source ?? '',
 							isAiResolved: dm.isAiResolved ?? true,
-							provenance: dm.provenance ?? ''
+							provenance: dm.provenance ?? '',
+							recencyCheck: dm.recencyCheck,
+							positionSourceDate: dm.positionSourceDate,
+							emailGrounded: dm.emailGrounded,
+							emailSource: dm.emailSource,
+							emailSourceTitle: dm.emailSourceTitle,
+							contactNotes: dm.contactNotes,
+							discovered: dm.discovered,
+							accountabilityOpener: dm.accountabilityOpener,
+							roleCategory: dm.roleCategory,
+							relevanceRank: dm.relevanceRank,
+							publicActions: Array.isArray(dm.publicActions) ? [...dm.publicActions] : undefined,
+							personalPrompt: dm.personalPrompt,
+							emailVerified: dm.emailVerified
 						}))
 					: [],
 				// These fields were missing - critical for recipient extraction
@@ -278,7 +292,19 @@ function createTemplateDraftStore(): TemplateDraftStore {
 				aiGenerated: data.content?.aiGenerated ?? false,
 				edited: data.content?.edited ?? false,
 				generatedForSubject: data.content?.generatedForSubject,
-				activeMessageJob: data.content?.activeMessageJob ?? null
+				activeMessageJob: data.content?.activeMessageJob ?? null,
+				draftOrigin: data.content?.draftOrigin
+					? {
+							source: data.content.draftOrigin.source,
+							handoff: data.content.draftOrigin.handoff,
+							label: data.content.draftOrigin.label,
+							processId: data.content.draftOrigin.processId,
+							processTitle: data.content.draftOrigin.processTitle,
+							createdAt: data.content.draftOrigin.createdAt,
+							effect: data.content.draftOrigin.effect,
+							sourceRef: data.content.draftOrigin.sourceRef
+						}
+					: null
 			},
 			review: {}
 		};

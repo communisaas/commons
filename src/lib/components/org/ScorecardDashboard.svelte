@@ -1,6 +1,26 @@
+<!--
+  ScorecardDashboard — accountability scores for the decision-makers an org
+  follows, in plain words: how each scored, what was sent to them, what came
+  back. Sort and CSV export stay here; every number traces to the org's own
+  scorecard read.
+-->
 <script lang="ts">
 	import ScorecardCard from './ScorecardCard.svelte';
+	import {
+		SCORECARDS_BUILD_SENTENCE,
+		describeReportSignals
+	} from '$lib/components/org/os/power-coverage';
+	import { Datum } from '$lib/design';
 	import type { DecisionMakerScore } from '$lib/server/legislation/scorecard/types';
+
+	type ScorecardMeta = {
+		orgId: string;
+		computedAt: string;
+		decisionMakers: number;
+		avgScore: number | null;
+		totalFollowed?: number;
+		withScorecards?: number;
+	};
 
 	let {
 		scorecards,
@@ -10,45 +30,50 @@
 		isMember = true
 	}: {
 		scorecards: DecisionMakerScore[];
-		meta: { orgId: string; computedAt: string; decisionMakers: number; avgScore: number };
+		meta: ScorecardMeta;
 		orgSlug: string;
 		orgName: string;
 		isMember?: boolean;
 	} = $props();
 
 	type SortKey = 'score' | 'name' | 'alignment';
+	type ScorecardSignalKey = 'reportsOpened' | 'repliesLogged';
 	let sortBy = $state<SortKey>('score');
-	let makingPublic = $state(false);
 
-	const sorted = $derived((() => {
-		const copy = [...scorecards];
-		switch (sortBy) {
-			case 'name':
-				return copy.sort((a, b) => a.name.localeCompare(b.name));
-			case 'alignment':
-				return copy.sort((a, b) => (b.alignmentRate ?? -1) - (a.alignmentRate ?? -1));
-			case 'score':
-			default:
-				return copy.sort((a, b) => b.score - a.score);
+	function scoreSortValue(score: number | null): number {
+		return score ?? -1;
+	}
+
+	function sumKnown(rows: DecisionMakerScore[], key: ScorecardSignalKey): number | null {
+		let sum = 0;
+		let hasKnown = false;
+		for (const row of rows) {
+			const value = row[key];
+			if (value !== null) {
+				sum += value;
+				hasKnown = true;
+			}
 		}
-	})());
+		return hasKnown ? sum : null;
+	}
+
+	const sorted = $derived(
+		(() => {
+			const copy = [...scorecards];
+			switch (sortBy) {
+				case 'name':
+					return copy.sort((a, b) => a.name.localeCompare(b.name));
+				case 'alignment':
+					return copy.sort((a, b) => (b.alignmentRate ?? -1) - (a.alignmentRate ?? -1));
+				case 'score':
+				default:
+					return copy.sort((a, b) => scoreSortValue(b.score) - scoreSortValue(a.score));
+			}
+		})()
+	);
 
 	function handleExportCSV(): void {
 		window.location.href = `/api/org/${orgSlug}/scorecards/export?format=csv`;
-	}
-
-	async function togglePublic(): Promise<void> {
-		makingPublic = true;
-		try {
-			await fetch(`/api/org/${orgSlug}/settings`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ scorecardsPublic: true })
-			});
-		} catch {
-			// Stub: API not implemented yet
-		}
-		makingPublic = false;
 	}
 
 	// Desktop: cards default expanded; mobile: collapsed
@@ -57,21 +82,44 @@
 	$effect(() => {
 		const mql = window.matchMedia('(min-width: 768px)');
 		isDesktop = mql.matches;
-		const handler = (e: MediaQueryListEvent) => { isDesktop = e.matches; };
+		const handler = (e: MediaQueryListEvent) => {
+			isDesktop = e.matches;
+		};
 		mql.addEventListener('change', handler);
 		return () => mql.removeEventListener('change', handler);
 	});
+
+	const scoreSnapshotCount = $derived(
+		meta.withScorecards ?? scorecards.filter((scorecard) => scorecard.score !== null).length
+	);
+	const reportSignals = $derived(
+		describeReportSignals({
+			reportsReceived: scorecards.reduce(
+				(total, scorecard) => total + scorecard.reportsReceived,
+				0
+			),
+			reportsOpened: sumKnown(scorecards, 'reportsOpened'),
+			repliesLogged: sumKnown(scorecards, 'repliesLogged')
+		})
+	);
 </script>
 
 <div class="scorecard-dashboard">
 	<!-- Header -->
 	<div class="dashboard-header">
 		<div>
-			<h1 class="dashboard-title">{orgName} -- Decision-Maker Scorecards</h1>
-			<p class="dashboard-subtitle">
-				<span class="mono">{meta.decisionMakers}</span> official{meta.decisionMakers !== 1 ? 's' : ''} tracked
-				&middot; Avg score: <span class="mono">{meta.avgScore}</span>
-			</p>
+			<p class="dashboard-kicker">Power / Accountability</p>
+			<h1 class="dashboard-title">Accountability scores</h1>
+			{#if scoreSnapshotCount > 0}
+				<p class="dashboard-subtitle">
+					{orgName}: <Datum value={scoreSnapshotCount} />
+					score snapshot{scoreSnapshotCount === 1 ? '' : 's'}{#if meta.avgScore !== null}
+						&nbsp;&middot; Avg score <Datum value={meta.avgScore} />{/if}
+				</p>
+			{/if}
+			{#if scorecards.length > 0}
+				<p class="dashboard-signals">{reportSignals}</p>
+			{/if}
 		</div>
 	</div>
 
@@ -80,16 +128,7 @@
 		<div class="controls">
 			{#if isMember}
 				<div class="control-actions">
-					<button class="btn-secondary" onclick={handleExportCSV}>
-						Export CSV
-					</button>
-					<button
-						class="btn-secondary"
-						onclick={togglePublic}
-						disabled={makingPublic}
-					>
-						{makingPublic ? 'Saving...' : 'Make Public'}
-					</button>
+					<button class="btn-secondary" onclick={handleExportCSV}> Export CSV </button>
 				</div>
 			{/if}
 			<div class="sort-controls">
@@ -97,21 +136,17 @@
 				<button
 					class="sort-btn"
 					class:active={sortBy === 'score'}
-					onclick={() => sortBy = 'score'}
+					onclick={() => (sortBy = 'score')}
 				>
 					Score
 				</button>
-				<button
-					class="sort-btn"
-					class:active={sortBy === 'name'}
-					onclick={() => sortBy = 'name'}
-				>
+				<button class="sort-btn" class:active={sortBy === 'name'} onclick={() => (sortBy = 'name')}>
 					Name
 				</button>
 				<button
 					class="sort-btn"
 					class:active={sortBy === 'alignment'}
-					onclick={() => sortBy = 'alignment'}
+					onclick={() => (sortBy = 'alignment')}
 				>
 					Alignment
 				</button>
@@ -121,19 +156,15 @@
 
 	<!-- Cards or Empty State -->
 	{#if sorted.length === 0}
-		<div class="empty-state">
+		<div id="scorecard-list" class="empty-state">
 			<div class="empty-inner">
-				<p class="empty-title">No scorecards yet</p>
-				<p class="empty-body">
-					Send proof reports to decision-makers to start tracking accountability.
-				</p>
-				<a href="/org/{orgSlug}/campaigns/new" class="empty-cta">
-					Create Campaign
-				</a>
+				<p class="empty-title">No accountability scores yet</p>
+				<p class="empty-body">{SCORECARDS_BUILD_SENTENCE}</p>
+				<a href="/org/{orgSlug}/campaigns/new" class="empty-cta"> Create action </a>
 			</div>
 		</div>
 	{:else}
-		<div class="card-list">
+		<div id="scorecard-list" class="card-list">
 			{#each sorted as scorecard (scorecard.name + scorecard.district)}
 				<ScorecardCard {scorecard} defaultExpanded={isDesktop} />
 			{/each}
@@ -154,11 +185,21 @@
 		gap: 0.25rem;
 	}
 
+	.dashboard-kicker {
+		margin-bottom: 0.35rem;
+		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-size: 0.6875rem;
+		font-weight: 700;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--text-quaternary);
+	}
+
 	.dashboard-title {
 		font-size: 1.25rem;
 		font-weight: 600;
 		color: var(--text-primary);
-		font-family: monospace;
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
 	}
 
 	.dashboard-subtitle {
@@ -166,9 +207,10 @@
 		color: var(--text-tertiary);
 	}
 
-	.mono {
-		font-family: monospace;
-		font-variant-numeric: tabular-nums;
+	.dashboard-signals {
+		margin-top: 0.25rem;
+		font-size: 0.75rem;
+		color: var(--text-tertiary);
 	}
 
 	.controls {
@@ -185,14 +227,19 @@
 	}
 
 	.btn-secondary {
+		display: inline-flex;
+		align-items: center;
 		padding: 0.375rem 0.75rem;
 		font-size: 0.75rem;
-		font-family: monospace;
+		font-family: 'JetBrains Mono', ui-monospace, monospace;
 		color: var(--text-secondary);
 		background: var(--surface-raised);
 		border: 1px solid var(--surface-border);
 		cursor: pointer;
-		transition: background 0.15s, color 0.15s;
+		text-decoration: none;
+		transition:
+			background 0.15s,
+			color 0.15s;
 	}
 
 	.btn-secondary:hover {

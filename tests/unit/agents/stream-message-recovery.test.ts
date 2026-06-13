@@ -89,6 +89,22 @@ vi.mock('$lib/server/message-job-encryption', () => ({
 
 vi.mock('../../../src/routes/api/agents/stream-message/$types', () => ({}));
 
+// The handler returns 503 unless the message-generation runtime is configured
+// (GEMINI/EXA/FIRECRAWL env). Recovery behavior is independent of that gate, so
+// pin readiness — otherwise these pass locally (.env supplies keys) and 503 in
+// CI (no keys).
+vi.mock('$lib/server/agents/message-generation-readiness', () => ({
+	getMessageGenerationReadiness: () => ({
+		ready: true,
+		modelProviderConfigured: true,
+		sourceSearchConfigured: true,
+		sourceFetchConfigured: true,
+		missing: [],
+		dependency: 'test',
+		message: 'ready'
+	})
+}));
+
 const { POST } = await import('../../../src/routes/api/agents/stream-message/+server');
 
 function baseBody(overrides: Record<string, unknown> = {}) {
@@ -199,7 +215,9 @@ describe('POST /api/agents/stream-message recoverable jobs', () => {
 
 		expect(response.status).toBe(200);
 		expect(mockGenerateMessage).not.toHaveBeenCalled();
-		expect(mockEmitter.send).toHaveBeenCalledWith('job-running', { job: activeJob });
+		expect(mockEmitter.send).toHaveBeenCalledWith('job-running', {
+			job: { ...activeJob, traceId: expect.any(String) }
+		});
 	});
 
 	it('persists encrypted completion for a newly created recoverable job', async () => {

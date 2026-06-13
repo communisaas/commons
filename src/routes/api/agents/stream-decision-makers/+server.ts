@@ -34,6 +34,12 @@ interface RequestBody {
 	target_type?: string;
 	target_entity?: string;
 	audience_guidance?: string;
+	/**
+	 * Transparency level for the RESOLVE tool-loop reasoning. STUDIO sets this
+	 * true to surface the agent's real planning (light filter); the public
+	 * citizen flow keeps the strict filter. Never fabricates reasoning.
+	 */
+	verbose?: boolean;
 }
 
 export const POST: RequestHandler = async (event) => {
@@ -177,6 +183,7 @@ export const POST: RequestHandler = async (event) => {
 				topics,
 				voiceSample: voice_sample,
 				audienceGuidance: audience_guidance,
+				verbose: body.verbose === true,
 				signal: abortController.signal
 			};
 

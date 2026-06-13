@@ -20,7 +20,7 @@
 
 **Parallelization:** All independent. 3 engineers ship Wave 1 in 2-3 days. Single engineer = 4-5 days.
 
-**Completion signal:** Demo at `/org/[slug]` renders real packet, real funnel, real tier distribution. `{{firstName}}` no longer ships as literal. Donation receipts send. Multi-person orgs work. Acquisition pages have OG images. All 23 critical stubs from `org_critical_stubs_inventory` that are W-1 eligible are closed.
+**Completion signal:** Demo at `/org/[slug]` renders real packet, real funnel, real tier distribution. `{{firstName}}` no longer ships as literal. Baseline donor-confirmation outcomes are recorded. Multi-person orgs work. Acquisition pages have OG images. All 23 critical stubs from `org_critical_stubs_inventory` that are W-1 eligible are closed.
 
 ---
 
@@ -34,7 +34,8 @@
 |---|---|---|---|
 | T2-2 | ses-proxy Lambda deployment | 1d | First (unblocks client-direct blasts) |
 | T2-3 | Email plaintext multipart | 1d | Batched with T2-4 |
-| T2-4 | List-Unsubscribe on Convex path | 2d | After T2-3 (both touch sendViaSes) |
+| T2-4 | List-Unsubscribe on Convex path | 2d | Implemented through SES v2 Simple.Headers on sendViaSes |
+| T2-4b | List-Unsubscribe provider rendering verification | 0.5d | After T2-4; production Gmail/Yahoo seed-send confidence |
 | T2-5 | Soft-bounce categorization | 1d | Independent |
 | T2-1 | SMS blast dispatch (client-side) | 3d | Independent of email |
 
@@ -51,10 +52,10 @@
 
 | ID | Name | Effort | Sequence |
 |---|---|---|---|
-| T1-3 | AN OSDI sync shipped | 7d | Independent |
+| T1-3 | Platform API / OSDI adapter shipped | 7d | Independent |
 | T9-4 | OSDI compliance (/api/osdi/v1/) | 2d | Independent |
 | T1-6 | A/B winner picker | 2.5d | Independent |
-| T1-9 | Workflow send_email + add_tag | 2d | Depends on T2-2 |
+| T1-9 | Workflow send_email + tag verbs | completed | Implemented; email arming remains runtime-checked |
 
 ### Track D: Substrate honesty (Lane 10)
 
@@ -76,7 +77,7 @@
 
 **Chokepoint:** T9-3 outbound webhooks unblocks T9-7, T8-8, T9-8 in later waves.
 
-**Completion signal:** First org signs up, imports from AN via OSDI sync, sends a verified campaign, dispatches SMS, receives donation receipts, manages team. Substrate metrics (CAI, tier distribution) reflect real engagement. Outbound webhooks live. SDKs published. ses-proxy Lambda deployed in prod.
+**Completion signal:** First org signs up, imports from a recognized platform export or first live API adapter, sends a verified campaign, dispatches SMS, receives donation receipts, manages team. Substrate metrics (CAI, tier distribution) reflect real engagement. Outbound webhooks live. SDKs published. ses-proxy Lambda deployed in prod.
 
 ---
 

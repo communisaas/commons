@@ -791,8 +791,8 @@ All four phases implemented 2026-03-17. Three implementation waves with three re
 - `src/routes/verify/receipt/[id]/` — public receipt verification page
 - `src/routes/accountability/[bioguideId]/` — public cross-org accountability page
 
-### Phase 3: Cross-Org + Anchoring — COMPLETE
-- `src/lib/server/legislation/receipts/aggregation.ts` — `getNetworkProofPressure()`
+### Phase 3: Cross-Org + Anchoring — PARTIAL
+- `convex/networks.ts` — `getProofPressure()` bounded network-detail read from active-member accountability receipts
 - `src/routes/org/[slug]/networks/[networkId]/` — proof pressure section on network page
 - `src/lib/server/legislation/receipts/anchor.ts` — `buildAnchorMerkleTree()`
 - `scripts/anchor-receipts.ts` — CLI for batch Merkle anchoring
@@ -802,7 +802,7 @@ All four phases implemented 2026-03-17. Three implementation waves with three re
 - **Two-layer hashing**: SHA-256 hot path (CF Workers), Poseidon2 cold path (anchoring). Poseidon2 requires WASM/SharedArrayBuffer unavailable on CF Workers.
 - **Attestation field**: Schema uses `attestationDigest` (SHA-256) not `attestationHash` (Poseidon2). Design doc's Poseidon2 attestation hash deferred to Phase 4 chain anchoring.
 - **K-anonymity**: Verified counts <5 suppressed on public receipt page; verified counts ≤0 show "--" on accountability page.
-- **Cross-org dedup**: `totalVerified` is SUM (not deduped), `maxDistricts` is MAX (not union) — v1 conservative trade-off documented in design doc.
+- **Cross-org dedup**: network proof-pressure rows use receipt-backed verified action evidence and district-count signals. They are not globally deduped constituents or unique district unions.
 - **Name matching**: Generator and scorecard use last-name substring matching (same as existing correlator). Future: exact bioguideId join.
 
 ### Review Gate Summary

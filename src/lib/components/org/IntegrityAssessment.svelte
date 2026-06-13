@@ -1,5 +1,12 @@
+<!--
+  IntegrityAssessment — the one-line, plain-language reading of a campaign's
+  coordination metrics. Qualitative by design: raw scores live in the
+  collapsed coordination audit, not here. Amber only on a burst-velocity
+  spike. See integrity-assessment.ts for the privacy rationale.
+-->
 <script lang="ts">
 	import type { IntegrityMetrics } from '$lib/types/verification-packet';
+	import { assessIntegrity, hasBurstWarning } from './integrity-assessment';
 
 	let {
 		packet,
@@ -9,34 +16,16 @@
 		class?: string;
 	} = $props();
 
-	// Privacy model (see docs/design/READER-PRIVACY-MODEL.md): this prose is
-	// the only surface where integrity metrics reach the reader. We render
-	// qualitative thresholds ("spread across multiple areas") instead of raw
-	// numeric values (0.71, 0.84) because a 0.71 → 0.72 increment is a polling
-	// oracle — an adversary watching the value tick by one can attribute that
-	// increment to a single new action, defeating per-campaign K-anonymity.
-	function assessIntegrity(p: IntegrityMetrics): string {
-		if (p.burstVelocity !== null && p.burstVelocity > 5)
-			return 'Unusual activity spike detected. May warrant review.';
-		const parts: string[] = [];
-		if (p.gds !== null && p.gds >= 0.7) parts.push('spread across multiple areas');
-		else if (p.gds !== null) parts.push('concentrated in a few areas');
-		if (p.ald !== null && p.ald >= 0.7) parts.push('most messages are distinct');
-		else if (p.ald !== null) parts.push('many messages are similar');
-		if (p.temporalEntropy !== null && p.temporalEntropy >= 2) parts.push('submitted over time');
-		if (parts.length === 0) return 'Accumulating data.';
-		return parts.join(', ') + '.';
-	}
-
 	const text = $derived(assessIntegrity(packet));
-	const isWarning = $derived(packet.burstVelocity !== null && packet.burstVelocity > 5);
-	const capitalized = $derived(text.charAt(0).toUpperCase() + text.slice(1));
+	const isWarning = $derived(hasBurstWarning(packet));
 </script>
 
 {#if isWarning}
-	<div class="bg-amber-500/10 border border-amber-500/20 px-4 py-2 rounded text-sm font-medium text-amber-700 {className}">
-		{capitalized}
+	<div
+		class="rounded border border-amber-500/20 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-700 {className}"
+	>
+		{text}
 	</div>
 {:else}
-	<p class="text-sm text-secondary {className}">{capitalized}</p>
+	<p class="text-text-secondary text-sm {className}">{text}</p>
 {/if}

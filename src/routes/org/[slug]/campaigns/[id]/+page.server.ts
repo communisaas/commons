@@ -28,21 +28,28 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 
 	// Compute verification packet and analytics for non-draft campaigns
 	const packetKV = platform?.env?.PACKET_CACHE_KV as
-		| { get(key: string): Promise<string | null>; put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> }
+		| {
+				get(key: string): Promise<string | null>;
+				put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+		  }
 		| undefined;
 	const isActive = campaign.status !== 'DRAFT';
 	const [packet, analytics] = await Promise.all([
 		isActive ? computeVerificationPacketCached(campaign._id, org.id, packetKV) : null,
-		isActive && FEATURES.ANALYTICS_EXPANDED
-			? loadCampaignAnalytics(campaign._id, org.id)
-			: null
+		isActive && FEATURES.ANALYTICS_EXPANDED ? loadCampaignAnalytics(campaign._id, org.id) : null
 	]);
 
 	// Strip target emails for non-editor members (PII minimization)
 	const rawTargets = campaign.targets;
-	const safeTargets = memberRole === 'member' && Array.isArray(rawTargets)
-		? rawTargets.map((t: Record<string, unknown>) => ({ name: t.name, title: t.title, district: t.district }))
-		: rawTargets;
+	const safeTargets =
+		memberRole === 'member' && Array.isArray(rawTargets)
+			? rawTargets.map((t: Record<string, unknown>) => ({
+					name: t.name,
+					title: t.title,
+					district: t.district,
+					decisionMakerId: typeof t.decisionMakerId === 'string' ? t.decisionMakerId : undefined
+				}))
+			: rawTargets;
 
 	return {
 		campaign: {
@@ -130,7 +137,10 @@ export const actions: Actions = {
 			return fail(400, { error: 'targetCountry must be 8 characters or fewer' });
 		}
 
-		if (debateEnabled && (isNaN(debateThreshold) || debateThreshold < 1 || debateThreshold > 1_000_000)) {
+		if (
+			debateEnabled &&
+			(isNaN(debateThreshold) || debateThreshold < 1 || debateThreshold > 1_000_000)
+		) {
 			return fail(400, { error: 'Debate threshold must be 1 to 1,000,000' });
 		}
 

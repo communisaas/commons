@@ -40,60 +40,67 @@
 	const sourceMessages = $derived(getSourceMessages(isCongressional, isDirectOutreach));
 
 	function getSourceMessages(congressional: boolean, directOutreach: boolean) {
-		const sendCount = (template.send_count || 0).toLocaleString();
+		const confirmedCount = template.send_count || 0;
+		const confirmationHeadline =
+			confirmedCount > 0
+				? `${confirmedCount.toLocaleString()} routes confirmed on this action page`
+				: 'Review this action page';
 		if (congressional) {
 			return {
 				'social-link': {
-					headline: `${sendCount} people have sent this template`,
-					subtext: 'You can review the message before sending.',
-					cta: 'Send your message'
+					headline: confirmationHeadline,
+					subtext: 'Review the message and confirm your representative route before any send claim.',
+					cta: 'Review route'
 				},
 				'direct-link': {
-					headline: 'Your message will be sent to your district office',
+					headline: 'Confirm your route to your district office',
 					subtext:
-						`${labels.legislativeBody} offices log constituent messages by district. Outcomes are not promised.`,
-					cta: 'Send your message'
+						`${labels.legislativeBody} offices log constituent messages by district. Commons checks the route first; outcomes are not promised.`,
+					cta: 'Review route'
 				},
 				share: {
-					headline: `${sendCount} people have sent this template`,
-					subtext: 'You can review the message before sending.',
-					cta: 'Send your message'
+					headline: confirmationHeadline,
+					subtext: 'Review the message and confirm your representative route before any send claim.',
+					cta: 'Review route'
 				}
 			};
 		} else if (directOutreach) {
 			return {
 				'social-link': {
-					headline: 'Send your message to the decision-maker',
-					subtext: 'They receive it directly. You can review the message before sending.',
-					cta: 'Send your message'
+					headline: 'Confirm your route to the decision-maker',
+					subtext: 'Review the message before any email handoff is recorded.',
+					cta: 'Review route'
 				},
 				'direct-link': {
-					headline: 'Send your position to the decision-maker',
-					subtext: 'They receive it directly. Outcomes are not promised.',
-					cta: 'Send your position'
+					headline: 'Confirm your position route',
+					subtext: 'Commons opens the decision-maker path; outcomes are not promised.',
+					cta: 'Review route'
 				},
 				share: {
-					headline: `${sendCount} people have sent this template`,
-					subtext: 'You can review the message before sending.',
-					cta: 'Send your message'
+					headline: confirmationHeadline,
+					subtext: 'Review the message before any email handoff is recorded.',
+					cta: 'Review route'
 				}
 			};
 		} else {
 			return {
 				'social-link': {
-					headline: 'Send your message',
-					subtext: 'Someone shared this template with you. You can review it before sending.',
-					cta: 'Send your message'
+					headline: 'Confirm your route',
+					subtext: 'Someone shared this action page with you. Review it before confirmation.',
+					cta: 'Review route'
 				},
 				'direct-link': {
-					headline: 'Send your position',
-					subtext: `${sendCount} people have sent this template. You can review it before sending.`,
-					cta: 'Send your position'
+					headline: 'Confirm your position route',
+					subtext:
+						confirmedCount > 0
+							? `${confirmedCount.toLocaleString()} routes confirmed on this action page. Review before confirming your own route.`
+							: 'Review this action page before confirming your own route.',
+					cta: 'Review route'
 				},
 				share: {
 					headline: 'Shared with you',
-					subtext: 'You can review this template before sending.',
-					cta: 'Send your message'
+					subtext: 'Review this action page before confirming your route.',
+					cta: 'Review route'
 				}
 			};
 		}
@@ -104,54 +111,54 @@
 			return [
 				{
 					icon: Mail,
-					title: `Sent through the official ${labels.legislativeAdjective} system`,
-					desc: 'Your message is delivered via Communicating with Congress (CWC).'
+					title: 'Representative route is resolved',
+					desc: `Commons checks the ${labels.legislativeAdjective} district path before any delivery route opens.`
 				},
 				{
 					icon: Users,
-					title: 'Recorded in the office constituent log',
-					desc: `${labels.legislativeBody} offices log messages by district and issue.`
+					title: 'Message is reviewed before handoff',
+					desc: `${labels.legislativeBody} offices log messages by district and issue after delivery. Outcomes are not promised.`
 				},
 				{
 					icon: CheckCircle2,
-					title: 'Receipt added to the public record',
-					desc: 'A delivery receipt is recorded. Outcomes are not promised.'
+					title: 'Proof waits for route completion',
+					desc: 'A receipt is recorded once your message is actually delivered.'
 				}
 			];
 		} else if (directOutreach) {
 			return [
 				{
 					icon: Mail,
-					title: 'Sent by email to the decision-maker',
-					desc: 'Your message is delivered to the address on file for the recipient.'
+					title: 'Decision-maker route opens',
+					desc: 'Commons prepares the addressed email path before the handoff.'
 				},
 				{
 					icon: Users,
-					title: 'Your verified identity is attached',
-					desc: 'Your role and verification tier are included so the recipient can read context.'
+					title: 'Verified context can be attached',
+					desc: 'Your role and verification tier can travel with the message where available.'
 				},
 				{
 					icon: CheckCircle2,
-					title: 'Receipt added to the public record',
-					desc: 'A delivery receipt is recorded. The recipient may or may not reply.'
+					title: 'Handoff record follows completion',
+					desc: 'The route can record a handoff; the recipient may or may not reply.'
 				}
 			];
 		} else {
 			return [
 				{
 					icon: Mail,
-					title: 'Sent by email to the listed recipient',
-					desc: 'Your message is delivered to the address configured for this template.'
+					title: 'Configured recipient route opens',
+					desc: 'Commons prepares the configured delivery path before confirmation.'
 				},
 				{
 					icon: Users,
-					title: 'Recorded in the public log',
-					desc: 'The send count is incremented; your identity tier is attached.'
+					title: 'Confirmation is recorded',
+					desc: 'The route count advances only after confirmation, with your identity tier where available.'
 				},
 				{
 					icon: CheckCircle2,
-					title: 'Receipt added to the public record',
-					desc: 'A delivery receipt is recorded. Outcomes are not promised.'
+					title: 'Receipt waits for completion',
+					desc: 'A receipt is recorded once your message is actually delivered.'
 				}
 			];
 		}
@@ -210,15 +217,15 @@
 		<!-- Header -->
 		<div class="mb-6 text-center">
 			<h2 class="mb-2 text-xl font-bold text-slate-900">
-				{message?.headline || 'Send your position'}
+				{message?.headline || 'Confirm your route'}
 			</h2>
 			<p class="text-sm text-slate-600">
 				{#if isCongressional}
-					Your message is sent to your district office through the official {labels.legislativeAdjective} system.
+					Your district route is checked before the official {labels.legislativeAdjective} delivery path opens.
 				{:else if isDirectOutreach}
-					Your message is sent by email to the decision-maker.
+					Your message is reviewed before the decision-maker handoff opens.
 				{:else}
-					Your message is sent by email and a receipt is recorded.
+					Review the action page before confirmation or receipt claims are recorded.
 				{/if}
 			</p>
 		</div>
@@ -234,11 +241,11 @@
 				{template.description}
 			</p>
 
-			<!-- Send count (factual) -->
+			<!-- Route confirmation count (factual) -->
 			<div class="flex items-center gap-3 text-xs text-slate-500">
 				<div class="flex items-center gap-1">
 					<Users class="h-3 w-3" />
-					<span>{(template.send_count || 0).toLocaleString()} sent</span>
+					<span>{(template.send_count || 0).toLocaleString()} confirmed</span>
 				</div>
 			</div>
 		</div>

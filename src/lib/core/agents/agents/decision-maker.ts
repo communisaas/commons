@@ -47,7 +47,7 @@ import { searchWeb, readPage, type ExaPageContent } from '../exa-search';
 import type { DocumentType } from '$lib/server/reducto/types';
 import type { ResolveContext, DecisionMakerResult } from '../providers/types';
 import type { ThoughtSegment, Citation } from '$lib/core/thoughts/types';
-import { cleanThoughtForDisplay } from '../utils/thought-filter';
+import { filterThoughtForDisplay } from '../utils/thought-filter';
 import type { ProcessedDecisionMaker } from '$lib/types/template';
 
 /** Decision-maker has a verified, contactable email address. */
@@ -585,7 +585,10 @@ export async function resolveDecisionMakers(
 			...context,
 			streaming: {
 				onThought: (thought, phase) => {
-					const cleaned = cleanThoughtForDisplay(thought);
+					const cleaned = filterThoughtForDisplay(
+						thought,
+						context.verbose ? 'verbose' : 'strict'
+					);
 					if (cleaned) {
 						emitter.think(cleaned);
 					}

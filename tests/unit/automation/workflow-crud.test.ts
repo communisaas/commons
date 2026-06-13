@@ -3,14 +3,19 @@
  *
  * Current routes are thin SvelteKit wrappers over Convex workflow queries and
  * mutations. Validation and role checks live in Convex requireOrgRole handlers.
+ * PATCH additionally fail-closes `enabled: true` for email workflows behind the
+ * workflow-email runtime-readiness gate (SES credentials + from-email + org key
+ * verifier) before the dedicated `workflows.setEnabled` mutation runs.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { orgLimitSentence } from '../../../src/lib/data/org-limit-sentences';
 
 const {
 	mockFeatures,
 	mockServerMutation,
 	mockServerQuery,
+	mockEmailReadiness,
 	mockApi
 } = vi.hoisted(() => ({
 	mockFeatures: {
@@ -28,18 +33,31 @@ const {
 	},
 	mockServerMutation: vi.fn(),
 	mockServerQuery: vi.fn(),
+	mockEmailReadiness: vi.fn(),
 	mockApi: {
 		workflows: {
 			create: 'api.workflows.create',
 			list: 'api.workflows.list',
+			get: 'api.workflows.get',
 			update: 'api.workflows.update',
+			setEnabled: 'api.workflows.setEnabled',
 			remove: 'api.workflows.remove',
 			getExecutions: 'api.workflows.getExecutions'
+		},
+		organizations: {
+			getOrgKeyVerifier: 'api.organizations.getOrgKeyVerifier'
 		}
 	}
 }));
 
 vi.mock('$lib/config/features', () => ({ FEATURES: mockFeatures }));
+
+// The PATCH route consults the email-runtime readiness helper before arming
+// workflows with send_email steps. Mock it so tests control the gate without
+// depending on AWS/SES env vars present in the test environment.
+vi.mock('$lib/server/workflows/workflow-email-readiness', () => ({
+	getWorkflowEmailRuntimeReadinessFromEnv: (...args: unknown[]) => mockEmailReadiness(...args)
+}));
 
 vi.mock('convex-sveltekit', () => ({
 	serverMutation: (...args: unknown[]) => mockServerMutation(...args),
@@ -87,6 +105,18 @@ function makeWorkflow(overrides: Record<string, unknown> = {}) {
 		_creationTime: Date.parse('2026-03-12T10:00:00Z'),
 		updatedAt: Date.parse('2026-03-12T10:01:00Z'),
 		...overrides
+	};
+}
+
+function makeReadiness(ready: boolean, missing: string[] = []) {
+	return {
+		ready,
+		missing,
+		dependency: 'AWS SES credentials + configured workflow/from email + org key verifier',
+		perRunDependencies: ['supporter cursor', 'subscribed supporter'],
+		message: ready
+			? 'Workflow email arm-time runtime is ready.'
+			: 'Workflow email is dependency-bound.'
 	};
 }
 
@@ -242,6 +272,8 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 		vi.clearAllMocks();
 		mockFeatures.AUTOMATION = true;
 		mockServerMutation.mockResolvedValue('wf-1');
+		mockServerQuery.mockResolvedValue(makeWorkflow());
+		mockEmailReadiness.mockReturnValue(makeReadiness(true));
 	});
 
 	it('updates workflow fields through Convex', async () => {
@@ -262,33 +294,155 @@ describe('PATCH /api/org/[slug]/workflows/[id]', () => {
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(body.id).toBe('wf-1');
+		// Definition patches go through `workflows.update`; the enabled flag is
+		// handled exclusively by the separate `workflows.setEnabled` mutation,
+		// which must NOT fire when the request omits `enabled`.
+		expect(mockServerMutation).toHaveBeenCalledTimes(1);
 		expect(mockServerMutation).toHaveBeenCalledWith(mockApi.workflows.update, {
 			workflowId: 'wf-1',
 			slug: 'test-org',
 			name: 'Updated Name',
 			description: 'Updated description',
 			trigger: validTrigger,
-			steps: validSteps,
-			enabled: undefined
+			steps: validSteps
 		});
 	});
 
-	it('passes enabled status to the current route mutation call', async () => {
+	it('passes enabled status to the dedicated setEnabled mutation', async () => {
+		// Non-email steps: the enable path must not consult the email gate.
+		mockServerQuery.mockResolvedValue(
+			makeWorkflow({ steps: [{ type: 'add_tag', tag: 'welcome' }] })
+		);
+
 		const { PATCH } = await import(
 			'../../../src/routes/api/org/[slug]/workflows/[id]/+server'
 		);
-		await PATCH({
+		const res = await PATCH({
 			params: { slug: 'test-org', id: 'wf-1' },
 			request: makeRequest({ enabled: true }),
 			locals: makeLocals()
 		} as any);
 
-		// The route splits PATCH into two mutations: `workflows.update` first
-		// (carries name/description/trigger/steps; no `enabled`), then
-		// `workflows.setEnabled` only when `enabled` is supplied. Assert the
-		// second call carries the enabled flag.
-		expect(mockServerMutation).toHaveBeenCalledTimes(2);
-		expect(mockServerMutation.mock.calls[1][1].enabled).toBe(true);
+		expect(res.status).toBe(200);
+		// Enable-only PATCH carries no definition fields, so `workflows.update`
+		// is skipped; the route loads the workflow to inspect its steps, then
+		// the toggle flows through `workflows.setEnabled` exclusively.
+		expect(mockServerQuery).toHaveBeenCalledWith(mockApi.workflows.get, {
+			workflowId: 'wf-1',
+			slug: 'test-org'
+		});
+		expect(mockServerMutation).toHaveBeenCalledTimes(1);
+		expect(mockServerMutation).toHaveBeenCalledWith(mockApi.workflows.setEnabled, {
+			workflowId: 'wf-1',
+			slug: 'test-org',
+			enabled: true
+		});
+		// Workflows without send_email steps skip the email-readiness gate.
+		expect(mockEmailReadiness).not.toHaveBeenCalled();
+	});
+
+	it('fail-closes enable for email workflows when the email runtime is not ready', async () => {
+		mockServerQuery.mockImplementation(async (ref: unknown) => {
+			if (ref === mockApi.workflows.get) return makeWorkflow(); // validSteps has send_email
+			if (ref === mockApi.organizations.getOrgKeyVerifier) return { orgKeyVerifier: null };
+			return null;
+		});
+		mockEmailReadiness.mockReturnValue(makeReadiness(false, ['AWS_ACCESS_KEY_ID']));
+
+		const { PATCH } = await import(
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server'
+		);
+		const res = await PATCH({
+			params: { slug: 'test-org', id: 'wf-1' },
+			request: makeRequest({ enabled: true }),
+			locals: makeLocals()
+		} as any);
+
+		expect(res.status).toBe(424);
+		const body = await res.json();
+		expect(body.error).toBe('workflow_email_dependency_missing');
+		expect(body.blockedVerb).toBe('enable_workflow_email');
+		expect(body.definitionSaved).toBe(false);
+		expect(body.missing).toContain('AWS_ACCESS_KEY_ID');
+		// The boundary speaks plainly: no internal gate identifiers ride along,
+		// the member-facing headline is the shared limit sentence (not the
+		// readiness module's internal prose, which moves to runtimeMessage for
+		// operators), and the headline carries no internal state vocabulary.
+		expect(body).not.toHaveProperty('gate');
+		expect(body).not.toHaveProperty('taskIds');
+		expect(body.message).toBe(orgLimitSentence('workflow_email_dependency_missing'));
+		expect(body.message).not.toMatch(/\b(arm(ed|ing)?|dependency-bound|draft-only|gated)\b/i);
+		expect(body.runtimeMessage).toBe('Workflow email is dependency-bound.');
+		// The org key verifier presence feeds the readiness check.
+		expect(mockEmailReadiness).toHaveBeenCalledWith({ orgKeyConfigured: false });
+		// Fail-closed: the workflow must NOT be enabled (no setEnabled call).
+		expect(mockServerMutation).not.toHaveBeenCalled();
+	});
+
+	it('enables email workflows when the email runtime is ready', async () => {
+		mockServerQuery.mockImplementation(async (ref: unknown) => {
+			if (ref === mockApi.workflows.get) return makeWorkflow();
+			if (ref === mockApi.organizations.getOrgKeyVerifier) {
+				return { orgKeyVerifier: 'verifier-1' };
+			}
+			return null;
+		});
+		mockEmailReadiness.mockReturnValue(makeReadiness(true));
+
+		const { PATCH } = await import(
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server'
+		);
+		const res = await PATCH({
+			params: { slug: 'test-org', id: 'wf-1' },
+			request: makeRequest({ enabled: true }),
+			locals: makeLocals()
+		} as any);
+
+		expect(res.status).toBe(200);
+		expect(mockEmailReadiness).toHaveBeenCalledWith({ orgKeyConfigured: true });
+		expect(mockServerMutation).toHaveBeenCalledWith(mockApi.workflows.setEnabled, {
+			workflowId: 'wf-1',
+			slug: 'test-org',
+			enabled: true
+		});
+	});
+
+	it('returns 404 and skips setEnabled when enabling a missing workflow', async () => {
+		mockServerQuery.mockResolvedValue(null);
+
+		const { PATCH } = await import(
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server'
+		);
+		await expect(
+			PATCH({
+				params: { slug: 'test-org', id: 'wf-missing' },
+				request: makeRequest({ enabled: true }),
+				locals: makeLocals()
+			} as any)
+		).rejects.toThrow('Workflow not found');
+
+		expect(mockServerMutation).not.toHaveBeenCalled();
+	});
+
+	it('disables without consulting the email-readiness gate', async () => {
+		const { PATCH } = await import(
+			'../../../src/routes/api/org/[slug]/workflows/[id]/+server'
+		);
+		const res = await PATCH({
+			params: { slug: 'test-org', id: 'wf-1' },
+			request: makeRequest({ enabled: false }),
+			locals: makeLocals()
+		} as any);
+
+		expect(res.status).toBe(200);
+		// Disabling is always allowed: no workflow fetch, no readiness check.
+		expect(mockServerQuery).not.toHaveBeenCalled();
+		expect(mockEmailReadiness).not.toHaveBeenCalled();
+		expect(mockServerMutation).toHaveBeenCalledWith(mockApi.workflows.setEnabled, {
+			workflowId: 'wf-1',
+			slug: 'test-org',
+			enabled: false
+		});
 	});
 
 	it('surfaces Convex not-found errors', async () => {

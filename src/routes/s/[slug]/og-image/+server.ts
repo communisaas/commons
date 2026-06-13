@@ -87,7 +87,7 @@ export const GET: RequestHandler = async ({ params }) => {
 															alignItems: 'center',
 															gap: '8px'
 														},
-														children: `👥 ${actionCount.toLocaleString()} people took action`
+														children: `👥 ${actionCount.toLocaleString()} routes confirmed`
 													}
 												}
 											]
@@ -193,7 +193,7 @@ export const GET: RequestHandler = async ({ params }) => {
 															fontWeight: 600,
 															fontSize: '20px'
 														},
-														children: '✨ Join the movement'
+														children: '✨ Confirm your route'
 													}
 												}
 											]

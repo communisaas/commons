@@ -39,7 +39,7 @@
       "id": "TR-F",
       "slug": "partnership-platform",
       "name": "Track F — Partnership + platform",
-      "description": "AN OSDI sync, OSDI compliance namespace, developer portal, CRM integration story, SDK publish pipelines. Each gated on a partnership or RFP outcome — bundling so the sequencing is visible.",
+      "description": "First platform API adapter, OSDI compliance namespace, developer portal, CRM integration story, SDK publish pipelines. Each gated on a partnership, adapter format, or RFP outcome — bundling so the sequencing is visible.",
       "wave_ceiling": "W-3"
     }
   ]
