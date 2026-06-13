@@ -657,6 +657,12 @@
 	const emailStatuses = ['subscribed', 'unsubscribed', 'bounced', 'complained'] as const;
 
 	const sourceOptions = $derived(buildSourceFilterOptions(data.sourceCounts));
+
+	// The list query scans at most `scanLimit` rows per org. When the org has
+	// more, only the most recent window comes back — say so plainly instead of
+	// presenting a truncated list as the whole roster.
+	const scanCapped = $derived(Boolean(data.scanCapped));
+	const scanLimit = $derived(data.scanLimit ?? 10000);
 </script>
 
 <div class="space-y-5">
@@ -696,6 +702,13 @@
 			{/if}
 		</div>
 	</div>
+
+	<!-- Scan-cap notice: the list reflects only the most recent window -->
+	{#if scanCapped}
+		<p class="text-text-tertiary text-sm" role="status">
+			Showing the most recent {fmt(scanLimit)} — refine filters to narrow the list.
+		</p>
+	{/if}
 
 	<!-- Export outcome -->
 	{#if exportNotice}

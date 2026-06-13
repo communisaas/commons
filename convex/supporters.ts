@@ -192,6 +192,14 @@ export const list = query({
 			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
 			.take(MAX_SCAN);
 
+		// When the scan saturates the cap, this list reflects only a 10K window
+		// of the org — rows beyond it are silently absent (and because the
+		// by_orgId scan is oldest-first, the missing rows are the NEWEST). Surface
+		// the cap honestly so the page can warn the operator instead of presenting
+		// a truncated list as complete. Mirrors the v1 API's `truncated`/`scanLimit`
+		// envelope (convex/v1api.ts listSupporters).
+		const scanCapped = allDocs.length >= MAX_SCAN;
+
 		// Apply filters in memory (Convex indexes are limited to equality prefixes)
 		let filtered = allDocs;
 		if (filters?.emailStatus) {
@@ -281,7 +289,10 @@ export const list = query({
 		return {
 			supporters,
 			nextCursor,
-			hasMore
+			hasMore,
+			// Additive — existing consumers read { supporters, nextCursor, hasMore }.
+			truncated: scanCapped,
+			scanLimit: MAX_SCAN
 		};
 	}
 });
