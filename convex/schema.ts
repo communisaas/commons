@@ -2005,6 +2005,11 @@ export default defineSchema({
 	})
 		.index('by_orgId', ['orgId'])
 		.index('by_status', ['status'])
+		// Range index for the billing period read: checkPlanLimits ranges
+		// sentAt >= periodStart so it touches only this period's blasts, not the
+		// org's entire blast history (one row per blast — same unbounded-collect
+		// cliff the verified-action read already fixed via by_orgId_verified_sentAt).
+		.index('by_orgId_sentAt', ['orgId', 'sentAt'])
 		.index('by_abParentId', ['abParentId']),
 
 	emailAbTestCohorts: defineTable({
@@ -2379,7 +2384,11 @@ export default defineSchema({
 		updatedAt: v.number()
 	})
 		.index('by_orgId', ['orgId'])
-		.index('by_status', ['status']),
+		.index('by_status', ['status'])
+		// Range index for the billing period read — same rationale as
+		// emailBlasts.by_orgId_sentAt: bound the sms-quota sum to the period's
+		// blasts instead of collecting the org's whole blast history.
+		.index('by_orgId_sentAt', ['orgId', 'sentAt']),
 
 	smsMessages: defineTable({
 		blastId: v.id('smsBlasts'),

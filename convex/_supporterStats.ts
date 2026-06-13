@@ -114,9 +114,38 @@ function sourceValue(s: CountableSupporter): string {
  * Convex's ~1MB cap. Bound it: once the map holds MAX_SOURCE_KEYS distinct
  * sources, fold new ones into OTHER_SOURCE_KEY. The breakdown is display-only,
  * so an approximate tail is acceptable; the common handful of sources stay exact.
+ *
+ * OTHER_SOURCE_KEY is a sentinel (`__other__`) that real user input can't equal:
+ * `sourceValue` trims and falls back to 'unknown', and a literal '__other__'
+ * label would be indistinguishable from the fold bucket — using a sentinel that
+ * is documented as reserved avoids a real source colliding with the overflow tail.
+ *
+ * The real-key set only GROWS (zero-count keys are never pruned — see
+ * computeSupporterStats), so once a source has been folded into the sentinel the
+ * map stays full and that source stays folded forever. This makes the decrement
+ * heuristic unambiguous: a present key is decremented directly; an absent key
+ * was provably folded, so the sentinel is decremented. The bound holds at
+ * MAX_SOURCE_KEYS real keys + the single sentinel.
  */
 const MAX_SOURCE_KEYS = 32;
-const OTHER_SOURCE_KEY = 'other';
+const OTHER_SOURCE_KEY = '__other__';
+
+/**
+ * Read-boundary filter: strip zero-count source buckets before returning to the
+ * UI. Because computeSupporterStats no longer prunes keys (the stable-fold
+ * invariant requires a monotonically growing real-key set), a source whose
+ * supporters were all deleted persists as `{ "csv": 0 }`. Filtering at the read
+ * boundary keeps the breakdown display honest without re-introducing the
+ * prune-induced decrement ambiguity. Sum-of-buckets still equals the active
+ * total because zero buckets contribute nothing.
+ */
+export function visibleSourceCounts(sourceCounts: Record<string, number>): Record<string, number> {
+	const out: Record<string, number> = {};
+	for (const [key, count] of Object.entries(sourceCounts)) {
+		if (count > 0) out[key] = count;
+	}
+	return out;
+}
 
 function hasEmailConsent(s: CountableSupporter): boolean {
 	return Boolean(s.emailConsentSource || s.emailConsentedAt || s.emailConsentText);
@@ -187,23 +216,32 @@ export function computeSupporterStats(
 	// generally still keeps the map correct if a writer ever changes source.
 	if (before) {
 		let key = sourceValue(before);
-		// If this source was folded into 'other' on the way in (key space was
-		// full), its own key isn't present — decrement 'other' to stay consistent.
-		if (next.sourceCounts[key] === undefined && next.sourceCounts[OTHER_SOURCE_KEY] !== undefined) {
+		// Stable fold: the real-key set never shrinks (we don't prune zeros), so
+		// a key absent from the map was provably folded into the sentinel at
+		// create time. Present key → decrement it directly; absent key → it was
+		// folded, decrement the sentinel. No heuristic ambiguity: a real key
+		// pruned-to-zero can never reappear as "absent" because we never prune.
+		if (next.sourceCounts[key] === undefined) {
 			key = OTHER_SOURCE_KEY;
 		}
 		next.sourceCounts[key] = Math.max(0, (next.sourceCounts[key] ?? 0) - 1);
-		if (next.sourceCounts[key] === 0) delete next.sourceCounts[key];
+		// Intentionally NOT deleting zero-count keys: a stable (monotonically
+		// growing) real-key set is what makes the decrement above unambiguous.
+		// Zero-count buckets are stripped at the READ boundary, not here.
 	}
 	if (after) {
 		let key = sourceValue(after);
-		// Bound the key space: a new source beyond MAX_SOURCE_KEYS folds into
-		// 'other' so a messy/hostile import can't grow the org doc unbounded.
-		if (
-			next.sourceCounts[key] === undefined &&
-			Object.keys(next.sourceCounts).length >= MAX_SOURCE_KEYS
-		) {
-			key = OTHER_SOURCE_KEY;
+		// Bound the key space: a new source is folded into the sentinel once the
+		// REAL-key set is full, so a messy/hostile import can't grow the org doc
+		// unbounded. The sentinel itself doesn't count toward MAX_SOURCE_KEYS, so
+		// the map is bounded at MAX_SOURCE_KEYS real keys + the single sentinel.
+		if (next.sourceCounts[key] === undefined) {
+			const realKeyCount =
+				Object.keys(next.sourceCounts).length -
+				(next.sourceCounts[OTHER_SOURCE_KEY] !== undefined ? 1 : 0);
+			if (realKeyCount >= MAX_SOURCE_KEYS) {
+				key = OTHER_SOURCE_KEY;
+			}
 		}
 		next.sourceCounts[key] = (next.sourceCounts[key] ?? 0) + 1;
 	}

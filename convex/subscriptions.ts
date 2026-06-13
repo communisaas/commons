@@ -85,6 +85,43 @@ async function verifiedActionsThisPeriod(
   return Math.min(rows.length, VERIFIED_ACTION_PERIOD_SCAN_CAP);
 }
 
+/**
+ * Sum send volume from a blast table's "sent" rows within the billing period.
+ *
+ * Previously this `.collect()`-ed the org's ENTIRE blast history then filtered
+ * `sentAt >= periodStart` in memory — one row per blast, so a long-lived org
+ * with thousands of historical blasts re-scans them all on every limit check
+ * (the same unbounded-collect cliff fixed for verified actions). The range
+ * index `by_orgId_sentAt` bounds the read to the current period's blasts.
+ *
+ * `sentAt` is set only when status === 'sent', so a `gte(periodStart)` range
+ * skips never-sent (undefined-sentAt) rows; we still guard on status === 'sent'
+ * because a future status (e.g. a partially-sent state) could carry a sentAt.
+ */
+async function blastSentThisPeriod(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  periodStart: number,
+  table: "emailBlasts" | "smsBlasts",
+): Promise<number> {
+  const blasts = await ctx.db
+    .query(table)
+    .withIndex("by_orgId_sentAt", (idx) =>
+      idx.eq("orgId", orgId).gte("sentAt", periodStart),
+    )
+    .collect();
+  let sent = 0;
+  for (const blast of blasts) {
+    if (blast.status !== "sent") continue;
+    // emailBlasts tally `totalSent`; smsBlasts tally `sentCount`.
+    sent +=
+      (blast as { totalSent?: number; sentCount?: number }).totalSent ??
+      (blast as { totalSent?: number; sentCount?: number }).sentCount ??
+      0;
+  }
+  return sent;
+}
+
 // =============================================================================
 // QUERIES
 // =============================================================================
@@ -215,29 +252,10 @@ export const checkPlanLimits = query({
     // no never-reset bug.
     const verifiedActions = await verifiedActionsThisPeriod(ctx, org, periodStart);
 
-    // Emails: aggregate from completed blasts within the billing period
-    const emailBlasts = await ctx.db
-      .query("emailBlasts")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
-    let emailsSent = 0;
-    for (const blast of emailBlasts) {
-      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
-        emailsSent += blast.totalSent ?? 0;
-      }
-    }
-
-    // SMS: aggregate from completed blasts within the billing period
-    const smsBlasts = await ctx.db
-      .query("smsBlasts")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
-    let smsSent = 0;
-    for (const blast of smsBlasts) {
-      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
-        smsSent += blast.sentCount ?? 0;
-      }
-    }
+    // Emails + SMS: aggregate from completed blasts within the billing period
+    // via the bounded sentAt range index (no full-history collect).
+    const emailsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "emailBlasts");
+    const smsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "smsBlasts");
 
     return {
       plan,
@@ -307,27 +325,9 @@ export const checkPlanLimitsByOrgId = internalQuery({
     // O(1), never-reset-safe, no full verified-action scan.
     const verifiedActions = await verifiedActionsThisPeriod(ctx, org, periodStart);
 
-    const emailBlasts = await ctx.db
-      .query("emailBlasts")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
-    let emailsSent = 0;
-    for (const blast of emailBlasts) {
-      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
-        emailsSent += blast.totalSent ?? 0;
-      }
-    }
-
-    const smsBlasts = await ctx.db
-      .query("smsBlasts")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
-    let smsSent = 0;
-    for (const blast of smsBlasts) {
-      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
-        smsSent += blast.sentCount ?? 0;
-      }
-    }
+    // Bounded sentAt range reads (mirrors checkPlanLimits) — no full-history collect.
+    const emailsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "emailBlasts");
+    const smsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "smsBlasts");
 
     return {
       plan,

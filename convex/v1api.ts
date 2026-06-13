@@ -303,7 +303,12 @@ export const updateSupporter = mutation({
 		if (data.encryptedCustomFields !== undefined)
 			updates.encryptedCustomFields = data.encryptedCustomFields;
 
+		// Build the post-patch shape BEFORE writing so the counter delta sees
+		// the transition. postalCode changes shift the postalResolved bucket;
+		// without this the funnel drifts on every v1 API update.
+		const after = { ...supporter, ...updates };
 		await ctx.db.patch(supporter._id, updates);
+		await applySupporterStatsDelta(ctx, orgId, supporter, after);
 		return { id: supporter._id, updatedAt: Date.now() };
 	}
 });
@@ -318,6 +323,16 @@ export const deleteSupporter = mutation({
 			.take(10_000);
 		const supporter = supporters.find((s) => s._id === supporterId);
 		if (!supporter) return false;
+		// Drop this row's contributions from the breakdown counters and the
+		// total before deleting, mirroring the create path's count bump.
+		await applySupporterStatsDelta(ctx, orgId, supporter, null);
+		const org = await ctx.db.get(orgId);
+		if (org) {
+			await ctx.db.patch(orgId, {
+				supporterCount: Math.max(0, (org.supporterCount ?? 0) - 1),
+				updatedAt: Date.now()
+			});
+		}
 		await ctx.db.delete(supporter._id);
 		return true;
 	}

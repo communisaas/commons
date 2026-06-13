@@ -214,6 +214,9 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 			verified: summaryStats.identityVerified,
 			postal: summaryStats.postalResolved,
 			district: districtVerifiedResult?.districtVerified ?? 0,
+			// True when the district scan saturated its cap — `district` is then a
+			// floor, not an exact count, so the page can render "N+" instead.
+			districtTruncated: districtVerifiedResult?.truncated ?? false,
 			imported: summaryStats.imported
 		},
 		emailHealth: summaryStats.emailHealth,

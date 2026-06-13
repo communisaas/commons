@@ -15,9 +15,15 @@ import path from 'node:path';
 import {
 	computeSupporterStats,
 	emptySupporterStats,
+	visibleSourceCounts,
 	type CountableSupporter,
 	type SupporterStats
 } from '../../../convex/_supporterStats';
+
+// Mirrors the (unexported) MAX_SOURCE_KEYS bound in _supporterStats.ts. Kept in
+// sync by the bound tests below — if the source constant changes, the cap
+// assertions surface the drift.
+const MAX_SOURCE_KEYS = 32;
 
 function subscribed(overrides: Partial<CountableSupporter> = {}): CountableSupporter {
 	return { emailStatus: 'subscribed', smsStatus: 'none', source: 'organic', ...overrides };
@@ -125,11 +131,13 @@ describe('computeSupporterStats — transitions', () => {
 });
 
 describe('computeSupporterStats — delete deltas + drift invariant', () => {
-	it('deleting a row restores the empty tally', () => {
+	it('deleting a row restores the empty tally (modulo retained zero-count source key)', () => {
 		const row = subscribed({ postalCode: '94110', phoneHash: 'x' });
 		let s = computeSupporterStats(undefined, null, row);
 		s = computeSupporterStats(s, row, null);
-		expect(s).toEqual(emptySupporterStats());
+		// Scalars all return to zero; the source key is retained at 0 (stable fold),
+		// so compare against the empty tally with the zero-bucket stripped.
+		expect({ ...s, sourceCounts: visibleSourceCounts(s.sourceCounts) }).toEqual(emptySupporterStats());
 	});
 
 	it('a stream of mixed deltas equals a fresh tally of the survivors', () => {
@@ -161,28 +169,81 @@ describe('computeSupporterStats — delete deltas + drift invariant', () => {
 		expect(s.sourceCounts.organic).toBeUndefined();
 	});
 
-	it('source key is removed from the map when its count hits zero', () => {
+	it('zero-count source keys PERSIST in the map (stable fold), and the read filter strips them', () => {
+		// The map intentionally does NOT prune a key when its count hits zero: the
+		// real-key set must only grow so the fold decrement stays unambiguous (a
+		// pruned key could later reappear as "absent" and be mis-decremented as
+		// the sentinel). The zero bucket is stripped at the READ boundary instead.
 		const row = subscribed({ source: 'csv' });
 		let s = computeSupporterStats(undefined, null, row);
 		expect(s.sourceCounts.csv).toBe(1);
 		s = computeSupporterStats(s, row, null);
-		expect(s.sourceCounts.csv).toBeUndefined();
+		expect(s.sourceCounts.csv).toBe(0); // retained, not deleted
+		// Read-boundary filter drops the zero bucket so the UI never shows "csv: 0".
+		expect(visibleSourceCounts(s.sourceCounts)).toEqual({});
 	});
 
-	it('bounds the source key space: distinct sources past the cap fold into "other"', () => {
+	it('bounds the source key space: distinct sources past the cap fold into the sentinel', () => {
 		// `source` is a user-controlled import label — an unbounded distinct set
 		// would grow the org doc toward Convex's ~1MB cap. Build many distinct
-		// sources and assert the map stays bounded (the overflow lands in 'other').
+		// sources and assert the map stays bounded (the overflow lands in the
+		// reserved '__other__' sentinel, which user input can't collide with).
 		let s = emptySupporterStats();
 		for (let i = 0; i < 200; i++) {
 			s = computeSupporterStats(s, null, subscribed({ source: `src-${i}` }));
 		}
 		const keyCount = Object.keys(s.sourceCounts).length;
-		expect(keyCount).toBeLessThanOrEqual(33); // MAX_SOURCE_KEYS (32) + 'other'
-		expect(s.sourceCounts.other).toBeGreaterThan(0);
+		expect(keyCount).toBeLessThanOrEqual(33); // MAX_SOURCE_KEYS (32) + sentinel
+		expect(s.sourceCounts['__other__']).toBeGreaterThan(0);
 		// Every supporter is still accounted for: the buckets sum to the total.
 		const summed = Object.values(s.sourceCounts).reduce((a, b) => a + b, 0);
 		expect(summed).toBe(200);
+	});
+
+	it('a real source label "__other__" never collides with the fold sentinel', () => {
+		// The sentinel is reserved; if a user literally imports source='__other__'
+		// it is just one of the real keys until the cap, and folding still sums
+		// correctly. (The point of the change: the OLD sentinel 'other' WAS a real
+		// label, so this asserts the bucket math stays exact regardless.)
+		let s = emptySupporterStats();
+		s = computeSupporterStats(s, null, subscribed({ source: '__other__' }));
+		s = computeSupporterStats(s, null, subscribed({ source: 'organic' }));
+		expect(s.sourceCounts['__other__']).toBe(1);
+		expect(s.sourceCounts.organic).toBe(1);
+		const summed = Object.values(s.sourceCounts).reduce((a, b) => a + b, 0);
+		expect(summed).toBe(2);
+	});
+
+	it('regression: a folded source deleted after the map is full decrements the sentinel, not a negative/total drift', () => {
+		// Corruption scenario the stable fold fixes. Fill the real-key set to the
+		// cap with distinct sources, then create supporter X with a NEW source so
+		// X folds into the sentinel. Later delete X. The decrement must land on the
+		// sentinel (X's own key was never stored), and the buckets must still sum
+		// to the surviving total with no negative counts.
+		let s = emptySupporterStats();
+		// 32 distinct real sources, one supporter each → real-key set is full.
+		for (let i = 0; i < MAX_SOURCE_KEYS; i++) {
+			s = computeSupporterStats(s, null, subscribed({ source: `real-${i}` }));
+		}
+		expect(Object.keys(s.sourceCounts).length).toBe(MAX_SOURCE_KEYS);
+		// Create X with a brand-new source — folds into the sentinel.
+		const x = subscribed({ source: 'overflow-src-x' });
+		s = computeSupporterStats(s, null, x);
+		expect(s.sourceCounts['__other__']).toBe(1);
+		expect(s.sourceCounts['overflow-src-x']).toBeUndefined();
+		const totalAfterCreate = Object.values(s.sourceCounts).reduce((a, b) => a + b, 0);
+		expect(totalAfterCreate).toBe(MAX_SOURCE_KEYS + 1);
+		// Delete X — its key was never stored, so the sentinel must decrement.
+		s = computeSupporterStats(s, x, null);
+		expect(s.sourceCounts['__other__']).toBe(0);
+		// No bucket went negative.
+		for (const count of Object.values(s.sourceCounts)) expect(count).toBeGreaterThanOrEqual(0);
+		// Buckets sum to the surviving total (32 real supporters left).
+		const totalAfterDelete = Object.values(visibleSourceCounts(s.sourceCounts)).reduce(
+			(a, b) => a + b,
+			0
+		);
+		expect(totalAfterDelete).toBe(MAX_SOURCE_KEYS);
 	});
 });
 

@@ -344,6 +344,7 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 				sourceCounts: asNumberRecord(supporterSummary.sourceCounts),
 				postalResolved: asNumber(supporterSummary.postalResolved),
 				districtVerified: asNumber(districtVerifiedResult?.districtVerified),
+				districtVerifiedTruncated: Boolean(districtVerifiedResult?.truncated),
 				identityVerified: asNumber(supporterSummary.identityVerified),
 				emailHealth: {
 					subscribed: asNumber(supporterSummary.emailHealth?.subscribed),

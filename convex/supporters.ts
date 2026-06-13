@@ -36,6 +36,7 @@ import {
 	applySupporterStatsDelta,
 	applySupporterStatsDeltaBatch,
 	emptySupporterStats,
+	visibleSourceCounts,
 	type CountableSupporter
 } from './_supporterStats';
 
@@ -497,7 +498,10 @@ export const getSummaryStats = query({
 			imported: total,
 			identityVerified: stats.identityVerified,
 			postalResolved: stats.postalResolved,
-			sourceCounts: stats.sourceCounts,
+			// Strip zero-count buckets so a fully-deleted source ('csv: 0') never
+			// shows in the breakdown. computeSupporterStats keeps zeros for the
+			// stable-fold invariant; the UI only wants live buckets.
+			sourceCounts: visibleSourceCounts(stats.sourceCounts),
 			emailHealth: {
 				subscribed: stats.emailSubscribed,
 				unsubscribed: stats.emailUnsubscribed,
