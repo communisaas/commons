@@ -25,6 +25,12 @@ const ADDRESS_DB_NAME = 'commons-address';
 const LOCATION_DB_NAME = 'commons_location';
 const SEARCH_CACHE_DB_NAME = 'commons-search-cache';
 const MESSAGE_JOB_RECOVERY_DB_NAME = 'commons-message-jobs';
+// Wrapped org keys (src/lib/services/org-key-manager.ts) + device master
+// keystore (src/lib/core/identity/credential-encryption.ts). Both must be
+// swept on logout or the next user on a shared browser can re-derive and
+// decrypt cached org PII.
+const ORG_KEY_DB_NAME = 'commons-org-keys';
+const KEYSTORE_DB_NAME = 'commons-keystore';
 
 // localStorage keys
 const GUEST_STATE_KEY = 'commons_guest_template';
@@ -173,11 +179,27 @@ export async function clearAllClientCaches(): Promise<void> {
 
 	// Clear session credentials + derived key material from memory
 	await invalidateSessionCredentials();
+
+	// Tear down the device master keystore (commons-keystore): null the
+	// in-memory master bytes + derived-key cache AND delete the on-disk store.
+	// discardDerivedKeys() alone leaves both the master and cachedMasterBytes,
+	// so the next user on a shared browser could re-derive per-user keys and
+	// decrypt cached PII.
 	try {
-		const { discardDerivedKeys } = await import('./credential-encryption');
-		discardDerivedKeys();
-	} catch {
-		// credential-encryption may not be loaded — safe to ignore
+		const { clearKeystore } = await import('./credential-encryption');
+		await clearKeystore();
+	} catch (error) {
+		console.error('[CacheInvalidation] Failed to clear device keystore:', error);
+	}
+
+	// Drop every wrapped org key (commons-org-keys). Logout has no list of
+	// which orgs were unwrapped, so dropping the whole store is the only way to
+	// guarantee no wrapped org key survives for the next user to re-derive.
+	try {
+		const { clearAllOrgKeys } = await import('$lib/services/org-key-manager');
+		await clearAllOrgKeys();
+	} catch (error) {
+		console.error('[CacheInvalidation] Failed to clear org keys:', error);
 	}
 
 	// Clear decision-maker search results — surveillance-leak vector on shared

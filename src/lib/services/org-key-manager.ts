@@ -139,3 +139,26 @@ export async function cacheOrgKey(orgKey: CryptoKey, orgId: string): Promise<voi
  * Clear the cached org key for an org (e.g., on logout or passphrase change).
  */
 export { clearCachedWrapped as clearCachedOrgKey };
+
+/**
+ * Delete the entire wrapped-org-key store from this device.
+ *
+ * Logout has no list of which orgs the user unwrapped, so a per-org
+ * `clearCachedOrgKey(orgId)` cannot sweep them all. Dropping the whole DB
+ * guarantees no wrapped org key survives for the next user on a shared
+ * browser to re-derive and decrypt cached org PII. The cached connection is
+ * closed first so `deleteDatabase` isn't blocked by an open handle.
+ */
+export async function clearAllOrgKeys(): Promise<void> {
+	if (dbInstance) {
+		dbInstance.close();
+		dbInstance = null;
+	}
+	return new Promise((resolve, reject) => {
+		const request = indexedDB.deleteDatabase(ORG_KEY_DB_NAME);
+		request.onsuccess = () => resolve();
+		request.onerror = () => reject(request.error);
+		// Resolve on block too — deletion completes once remaining handles close.
+		request.onblocked = () => resolve();
+	});
+}

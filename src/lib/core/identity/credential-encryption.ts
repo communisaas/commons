@@ -286,6 +286,43 @@ export function discardDerivedKeys(): void {
 	console.debug('[CredentialEncryption] All derived keys discarded');
 }
 
+/**
+ * Tear down the device keystore for logout on a shared browser.
+ *
+ * `discardDerivedKeys()` only clears the in-memory derived-key Map — it leaves
+ * the on-disk device master (`commons-keystore`) AND the in-memory
+ * `cachedMasterBytes`. On a shared device the next user could re-derive any
+ * per-user key from that master and decrypt cached PII. This:
+ *
+ *   1. Nulls every in-memory cache (master bytes, the master-key generation
+ *      promise, the legacy device key, and the derived-key Map).
+ *   2. Closes the cached IndexedDB connection so `deleteDatabase` isn't blocked.
+ *   3. Deletes the entire `commons-keystore` database so the device master is
+ *      gone from disk — without it, the ciphertext in other stores is inert.
+ */
+export async function clearKeystore(): Promise<void> {
+	cachedMasterBytes = null;
+	masterKeyPromise = null;
+	cachedLegacyKey = null;
+	derivedKeyCache.clear();
+
+	if (keyDBInstance) {
+		keyDBInstance.close();
+		keyDBInstance = null;
+	}
+
+	return new Promise((resolve, reject) => {
+		const request = indexedDB.deleteDatabase(KEY_DB_NAME);
+		request.onsuccess = () => {
+			console.debug('[CredentialEncryption] Device keystore deleted');
+			resolve();
+		};
+		request.onerror = () => reject(request.error);
+		// Resolve on block too — deletion completes once remaining handles close.
+		request.onblocked = () => resolve();
+	});
+}
+
 // ============================================================================
 // Legacy v1 Key Management (for migration)
 // ============================================================================
