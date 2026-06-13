@@ -717,6 +717,8 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 			dm_cache_ttl_days: result.org.dmCacheTtlDays,
 			identity_commitment: result.org.identityCommitment,
 			brandingAccent: result.org.brandingAccent ?? null,
+			logoUrl: result.org.logoUrl ?? null,
+			whiteLabel: result.org.whiteLabel ?? false,
 			createdAt: new Date(result.org._creationTime)
 		},
 		membership: {

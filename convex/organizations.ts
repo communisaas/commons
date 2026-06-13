@@ -1,7 +1,21 @@
-import { query, mutation, action, internalMutation, internalQuery } from './_generated/server';
+import {
+	query,
+	mutation,
+	action,
+	internalMutation,
+	internalQuery,
+	type MutationCtx,
+	type QueryCtx
+} from './_generated/server';
 import { internal } from './_generated/api';
 import { v } from 'convex/values';
 import { requireAuth, requireOrgRole, loadOrg } from './_authHelpers';
+import {
+	effectivePlan,
+	decideAccentWrite,
+	logoWriteAllowed,
+	whiteLabelWriteAllowed
+} from './_brandingGate';
 import { sealOrgKey as sealOrgKeyHelper } from './_orgKeyUnseal';
 import { emptySupporterStats, computeSupporterStats } from './_supporterStats';
 import { computeDistrictVerified, computeGrowthWindow } from './_dashboardStats';
@@ -322,6 +336,8 @@ export const getOrgContext = query({
 				dmCacheTtlDays: org.dmCacheTtlDays ?? 7,
 				identityCommitment: org.identityCommitment ?? null,
 				brandingAccent: org.brandingAccent ?? null,
+				logoUrl: org.logoUrl ?? null,
+				whiteLabel: org.whiteLabel ?? false,
 				_creationTime: org._creationTime
 			},
 			membership: {
@@ -464,6 +480,111 @@ export const updateMemberRole = mutation({
 });
 
 /**
+ * Resolve an org's effective billing plan. Only `active`/`trialing`
+ * subscriptions count toward a paid tier; anything else (canceled, past_due,
+ * none) reads as `free`. Shared by every Coalition-gated branding writer so the
+ * gate is enforced in exactly one place.
+ */
+async function resolveOrgPlan(
+	ctx: MutationCtx | QueryCtx,
+	orgId: Id<'organizations'>
+): Promise<string> {
+	const sub = await ctx.db
+		.query('subscriptions')
+		.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
+		.first();
+	return effectivePlan(sub);
+}
+
+/**
+ * Issue a short-lived Convex storage upload URL for an org logo. Coalition-tier
+ * gated and editor+ — the caller PUTs the image bytes to the returned URL, then
+ * passes the resulting storageId to `setBranding`. Replaces the prior
+ * URL-paste-only path so logos are first-class uploads, not arbitrary remote
+ * URLs.
+ */
+export const generateBrandingUploadUrl = mutation({
+	args: { slug: v.string() },
+	handler: async (ctx, { slug }) => {
+		const { org } = await requireOrgRole(ctx, slug, 'editor');
+		const plan = await resolveOrgPlan(ctx, org._id);
+		if (plan !== 'coalition') {
+			throw new Error('Custom branding requires Coalition tier');
+		}
+		return await ctx.storage.generateUploadUrl();
+	}
+});
+
+/**
+ * Coalition-gated branding writer: accent color, uploaded logo, and the
+ * outbound white-label flag. All three fields are Coalition-only (the gate is
+ * the single source of truth for who can de-brand outbound surfaces). Editor+
+ * role required. Each field is independently optional so the editor can patch
+ * one at a time; passing `null` clears accent or logo.
+ *
+ * White-label is OUTBOUND-ONLY by design — it suppresses Commons chrome on the
+ * report email, embed widget, and scorecard embed. It deliberately does NOT
+ * touch the /v/[hash] verification page, which keeps its Commons attestation
+ * because that page is the independent third-party proof.
+ */
+export const setBranding = mutation({
+	args: {
+		slug: v.string(),
+		brandingAccent: v.optional(v.union(v.string(), v.null())),
+		logoStorageId: v.optional(v.union(v.id('_storage'), v.null())),
+		whiteLabel: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.slug, 'editor');
+		const plan = await resolveOrgPlan(ctx, org._id);
+
+		const updates: Partial<Doc<'organizations'>> = { updatedAt: Date.now() };
+		let touched = false;
+
+		if (args.brandingAccent !== undefined) {
+			const decision = decideAccentWrite(plan, args.brandingAccent);
+			if (!decision.ok) {
+				throw new Error(
+					decision.reason === 'tier'
+						? 'Custom accent color requires Coalition tier'
+						: 'brandingAccent must be a valid hex color (e.g. #0d9488)'
+				);
+			}
+			updates.brandingAccent = decision.cleared ? undefined : decision.value;
+			touched = true;
+		}
+
+		if (args.logoStorageId !== undefined) {
+			if (!logoWriteAllowed(plan, args.logoStorageId === null)) {
+				throw new Error('Custom logo requires Coalition tier');
+			}
+			if (args.logoStorageId === null) {
+				updates.logoUrl = undefined;
+			} else {
+				const url = await ctx.storage.getUrl(args.logoStorageId);
+				if (!url) throw new Error('Uploaded logo could not be resolved');
+				updates.logoUrl = url;
+			}
+			touched = true;
+		}
+
+		if (args.whiteLabel !== undefined) {
+			// whiteLabel=false is always allowed (re-attaching Commons branding).
+			if (!whiteLabelWriteAllowed(plan, args.whiteLabel)) {
+				throw new Error('White-label requires Coalition tier');
+			}
+			updates.whiteLabel = args.whiteLabel;
+			touched = true;
+		}
+
+		if (!touched) throw new Error('No branding fields to update');
+
+		await ctx.db.patch(org._id, updates);
+		return org._id;
+	}
+});
+
+/**
  * Update org profile fields. Requires editor+ role.
  */
 export const update = mutation({
@@ -498,27 +619,19 @@ export const update = mutation({
 		if (args.logoUrl !== undefined) updates.logoUrl = args.logoUrl;
 		if (args.brandingAccent !== undefined) {
 			// FIX-V4: Coalition-tier gate. brandingAccent (white-label Layer a) is
-			// a Coalition plan feature only. v2 spec said 'Coalition-tier gate
-			// enforced at organizations.update boundary' but the original v2
-			// shipped only hex-format validation. Plan check added here.
+			// a Coalition plan feature only. Gate + hex validation routed through
+			// the shared `decideAccentWrite` helper (same gate as `setBranding`).
 			// Empty string is always allowed (clears the override).
-			if (args.brandingAccent !== '') {
-				const sub = await ctx.db
-					.query('subscriptions')
-					.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-					.first();
-				const plan =
-					sub?.status === 'active' || sub?.status === 'trialing' ? (sub.plan ?? 'free') : 'free';
-				if (plan !== 'coalition') {
-					throw new Error('brandingAccent requires Coalition tier');
-				}
+			const plan = await resolveOrgPlan(ctx, org._id);
+			const decision = decideAccentWrite(plan, args.brandingAccent);
+			if (!decision.ok) {
+				throw new Error(
+					decision.reason === 'tier'
+						? 'brandingAccent requires Coalition tier'
+						: 'brandingAccent must be a valid hex color (e.g. #0d9488)'
+				);
 			}
-			const hexPattern = /^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
-			if (args.brandingAccent === '' || hexPattern.test(args.brandingAccent)) {
-				updates.brandingAccent = args.brandingAccent === '' ? undefined : args.brandingAccent;
-			} else {
-				throw new Error('brandingAccent must be a valid hex color (e.g. #0d9488)');
-			}
+			updates.brandingAccent = decision.cleared ? undefined : decision.value;
 		}
 
 		// Update onboarding state if description was set

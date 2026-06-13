@@ -10,6 +10,7 @@
 
 import type * as _actionDomain from "../_actionDomain.js";
 import type * as _authHelpers from "../_authHelpers.js";
+import type * as _brandingGate from "../_brandingGate.js";
 import type * as _bufferSource from "../_bufferSource.js";
 import type * as _credentialSelect from "../_credentialSelect.js";
 import type * as _cwcXml from "../_cwcXml.js";
@@ -83,6 +84,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   _actionDomain: typeof _actionDomain;
   _authHelpers: typeof _authHelpers;
+  _brandingGate: typeof _brandingGate;
   _bufferSource: typeof _bufferSource;
   _credentialSelect: typeof _credentialSelect;
   _cwcXml: typeof _cwcXml;
