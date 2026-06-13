@@ -191,6 +191,64 @@ async function applySmsRecipientFilter<T extends Doc<"supporters">>(
 }
 
 /**
+ * Page size for the bounded supporter scan that backs SMS recipient
+ * resolution. One indexed `by_orgId` read per page — far below the per-read
+ * ~16K doc cap, so a single page never throws.
+ */
+const SMS_RECIPIENT_SCAN_PAGE = 1_000;
+
+/**
+ * Cohort ceiling for the eligible-SMS-recipient scan. The dispatch cohort
+ * loader slices to SMS_CLIENT_DISPATCH_BATCH_LIMIT per batch, but the
+ * composer-side audience count needs a bounded eligible total. The scan stops
+ * one past the cap so a saturated cohort surfaces as a floor instead of an
+ * unbounded `.collect()` (which throws past the per-read doc cap on a large
+ * roster).
+ */
+const SMS_RECIPIENT_COHORT_CAP = 10_000;
+
+interface BoundedSmsRecipients<T> {
+  recipients: Array<T & { encryptedPhone: string }>;
+  truncated: boolean;
+}
+
+/**
+ * All SMS-eligible recipients matching the filter, accumulated across bounded
+ * pages up to `cap`. Sub-class (A) must-enumerate: the dispatch path needs the
+ * actual encrypted-phone rows. Never an unbounded `.collect()` of the roster;
+ * the filter (subscribed + has-phone + tag/segment/exclude) is applied per page.
+ */
+async function collectSmsRecipients<T extends Doc<"supporters">>(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  filter: SmsRecipientFilterShape,
+  cap: number = SMS_RECIPIENT_COHORT_CAP,
+): Promise<BoundedSmsRecipients<T>> {
+  const out: Array<T & { encryptedPhone: string }> = [];
+  let cursor: string | null = null;
+  let done = false;
+
+  while (!done && out.length <= cap) {
+    const { page, isDone, continueCursor } = await ctx.db
+      .query("supporters")
+      .withIndex("by_orgId", (idx) => idx.eq("orgId", orgId))
+      .order("asc")
+      .paginate({ cursor, numItems: SMS_RECIPIENT_SCAN_PAGE });
+
+    cursor = continueCursor;
+    done = isDone;
+
+    if (page.length > 0) {
+      const matches = await applySmsRecipientFilter(ctx, orgId, page as T[], filter);
+      out.push(...matches);
+    }
+  }
+
+  const truncated = out.length > cap;
+  return { recipients: truncated ? out.slice(0, cap) : out, truncated };
+}
+
+/**
  * List SMS blasts for an org.
  */
 export const listBlasts = query({
@@ -367,16 +425,18 @@ export const getEncryptedRecipientsForBlast = query({
     }
 
     const filter = readSafeSmsRecipientFilter(blast.recipientFilter);
+    // Bounded scan of already-dispatched supporters for this blast — the
+    // exclusion set. Capped at the cohort ceiling +1: the eligible scan below
+    // is bounded to the same cap, so any recorded message past it cannot affect
+    // which (capped) eligible rows remain. Never an unbounded .collect().
     const existingMessages = await ctx.db
       .query("smsMessages")
       .withIndex("by_blastId", (idx) => idx.eq("blastId", blastId))
-      .collect();
+      .take(SMS_RECIPIENT_COHORT_CAP + 1);
     const alreadyRecorded = new Set(existingMessages.map((message) => String(message.supporterId)));
-    const supporters = await ctx.db
-      .query("supporters")
-      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
-      .collect();
-    const eligible = await applySmsRecipientFilter(ctx, org._id, supporters, filter);
+    // Sub-class (A) must-enumerate: bounded paginated scan over SMS-eligible
+    // supporters — never an unbounded .collect() of the roster.
+    const { recipients: eligible } = await collectSmsRecipients(ctx, org._id, filter);
     const remaining = eligible.filter((supporter) => !alreadyRecorded.has(String(supporter._id)));
     const recipients = remaining.slice(0, SMS_CLIENT_DISPATCH_BATCH_LIMIT).map((supporter) => ({
       _id: supporter._id,
@@ -412,19 +472,18 @@ export const countEligibleRecipientsForFilter = query({
   },
   handler: async (ctx, { slug, recipientFilter }) => {
     const { org } = await requireOrgRole(ctx, slug, "editor");
-    const supporters = await ctx.db
-      .query("supporters")
-      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
-      .collect();
-    const eligible = await applySmsRecipientFilter(
+    // Sub-class (B) count via the same bounded paginated scan as the dispatch
+    // cohort — never an unbounded .collect(). `truncated` surfaces a floor when
+    // the eligible cohort saturates the cap.
+    const { recipients: eligible, truncated } = await collectSmsRecipients(
       ctx,
       org._id,
-      supporters,
       readSafeSmsRecipientFilter(recipientFilter),
     );
 
     return {
       eligibleCount: eligible.length,
+      truncated,
       batchLimit: SMS_CLIENT_DISPATCH_BATCH_LIMIT,
       hasMoreThanBatchLimit: eligible.length > SMS_CLIENT_DISPATCH_BATCH_LIMIT,
       source: "sms.applySmsRecipientFilter",
