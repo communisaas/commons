@@ -36,6 +36,7 @@ import type { Id } from "./_generated/dataModel";
 import { sealOrgKey, getOrgKeyForAction } from "./_orgKeyUnseal";
 import { encryptWithOrgKey, importOrgKey } from "./_orgKey";
 import { computeOrgScopedEmailHash, computeGlobalEmailHash } from "./_orgHash";
+import { computeSupporterStats, emptySupporterStats } from "./_supporterStats";
 // Org encryption configured during seed — supporters encrypted with org key, hashes org-scoped.
 
 // =============================================================================
@@ -1114,6 +1115,10 @@ export const insertSupporterBatch = internalMutation({
   },
   handler: async (ctx, { supporters, orgId, orgIdx }): Promise<Id<"supporters">[]> => {
     const ids: Id<"supporters">[] = [];
+    // Fold each seeded row into the org's breakdown counters as we go so the
+    // dev fixture's supporterStats matches the inserted rows (same source of
+    // truth getSummaryStats reads).
+    let stats = emptySupporterStats();
     for (const s of supporters) {
       // Use the validated `orgId` arg for every insert and ignore
       // `s.orgId` entirely. The supporters payload is untyped
@@ -1136,10 +1141,18 @@ export const insertSupporterBatch = internalMutation({
         updatedAt: s.updatedAt,
       });
       ids.push(id);
+      stats = computeSupporterStats(stats, null, {
+        emailStatus: s.emailStatus,
+        smsStatus: s.smsStatus,
+        source: s.source,
+        postalCode: s.postalCode,
+        verified: s.verified,
+      });
     }
 
     await ctx.db.patch(orgId, {
       supporterCount: supporters.length,
+      supporterStats: stats,
       onboardingState: {
         hasDescription: true,
         hasIssueDomains: false,
@@ -2000,6 +2013,11 @@ export const insertCampaignActions = internalMutation({
       { campaignIdx: 2, orgIdx: 2, supporterStart: 15, supporterCount: 4 },
     ];
 
+    // Accumulate the org-level engagement-tier histogram so dev dashboards
+    // (getDashboardStats reads org.actionTierCounts) match the seeded actions.
+    // Keyed by org index; each is a 5-slot [T0..T4] tally over ALL actions.
+    const orgTierCounts = new Map<number, number[]>();
+
     for (const lc of letterCampaigns) {
       let actionCountTotal = 0;
       let verifiedCountTotal = 0;
@@ -2007,19 +2025,23 @@ export const insertCampaignActions = internalMutation({
       for (let i = 0; i < lc.supporterCount; i++) {
         const sIdx = (lc.supporterStart + i) % supporterIds.length;
         const isVerified = i % 4 !== 3; // 75% verified
+        const tier = isVerified ? 2 : 1;
 
         const actionId = await ctx.db.insert("campaignActions", {
           campaignId: campaignIds[lc.campaignIdx],
           orgId: orgIds[lc.orgIdx],
           supporterId: supporterIds[sIdx],
           verified: isVerified,
-          engagementTier: isVerified ? 2 : 1,
+          engagementTier: tier,
           districtHash: `district-hash-${sIdx}`,
           delegated: false,
           sentAt: daysAgo(i + 1),
         });
         actionCountTotal++;
         if (isVerified) verifiedCountTotal++;
+        const counts = orgTierCounts.get(lc.orgIdx) ?? [0, 0, 0, 0, 0];
+        counts[tier] += 1;
+        orgTierCounts.set(lc.orgIdx, counts);
 
         // Create 1-2 deliveries per action
         const repCount = i % 3 === 0 ? 2 : 1;
@@ -2046,6 +2068,11 @@ export const insertCampaignActions = internalMutation({
         actionCount: actionCountTotal,
         verifiedActionCount: verifiedCountTotal,
       });
+    }
+
+    // Persist the org-level tier histograms accumulated above.
+    for (const [orgIdx, counts] of orgTierCounts) {
+      await ctx.db.patch(orgIds[orgIdx], { actionTierCounts: counts });
     }
   },
 });

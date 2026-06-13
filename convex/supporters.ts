@@ -22,6 +22,7 @@ import type { FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
 import { requireOrgRole } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
+import { computeDistrictVerified } from './_dashboardStats';
 import {
 	assertPiiTripleCreate,
 	computeOrgScopedEmailHash,
@@ -31,6 +32,13 @@ import {
 } from './_orgHash';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { encryptForSupporterV2 } from './_orgKey';
+import {
+	applySupporterStatsDelta,
+	applySupporterStatsDeltaBatch,
+	emptySupporterStats,
+	visibleSourceCounts,
+	type CountableSupporter
+} from './_supporterStats';
 
 const getOrganizationBySlugRef = makeFunctionReference<'query'>('organizations:getBySlug');
 const importBatchRef = makeFunctionReference<'mutation'>('supporters:importBatch');
@@ -75,22 +83,6 @@ function stricterStatus(
 	const currentRank = rank[current ?? ''] ?? 0;
 	const incomingRank = rank[incoming] ?? 0;
 	return incomingRank > currentRank ? incoming : (current ?? incoming);
-}
-
-function hasConsentEvidence(supporter: {
-	emailConsentSource?: string;
-	emailConsentedAt?: number;
-	emailConsentText?: string;
-	smsConsentSource?: string;
-	smsConsentedAt?: number;
-	smsConsentText?: string;
-}): { email: boolean; sms: boolean } {
-	return {
-		email: Boolean(
-			supporter.emailConsentSource || supporter.emailConsentedAt || supporter.emailConsentText
-		),
-		sms: Boolean(supporter.smsConsentSource || supporter.smsConsentedAt || supporter.smsConsentText)
-	};
 }
 
 function supporterSourceValue(supporter: { source?: string }): string {
@@ -475,10 +467,21 @@ export const searchByEmail = query({
 
 /**
  * Verification funnel summary stats for an org.
- * Uses org's denormalized supporterCount for total, queries supporters for
- * address/identity signal, and campaignActions for district signal. The
- * returned buckets are not mutually exclusive: total people can also be
- * address-resolved, district-resolved, and identity-verified.
+ *
+ * Reads the org's denormalized supporterCount + supporterStats breakdown
+ * counters — NO full-table scan. The previous implementation collected every
+ * supporter row plus every verified campaign action, which throws once an org
+ * passes the per-query document cap (and the page 500s). The counters are
+ * maintained at every supporter writer (applySupporterStatsDelta) so this read
+ * is O(1) and exact from the first insert.
+ *
+ * District-of-record cardinality is NOT in this always-on payload: it is set
+ * cardinality (a supporter active in two districts would double-count a scalar
+ * counter), so a denormalized counter can't represent it without drift. It is
+ * served separately by the bounded getDistrictVerifiedCount query.
+ *
+ * The returned buckets are not mutually exclusive: total people can also be
+ * address-resolved and identity-verified.
  */
 export const getSummaryStats = query({
 	args: {
@@ -487,91 +490,63 @@ export const getSummaryStats = query({
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 
-		const allSupporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.collect();
-
-		const total = org.supporterCount ?? allSupporters.length;
-
-		let identityVerified = 0;
-		let postalResolved = 0;
-		const sourceCounts: Record<string, number> = {};
-		const emailHealth: Record<string, number> = {
-			subscribed: 0,
-			unsubscribed: 0,
-			bounced: 0,
-			complained: 0
-		};
-		const smsHealth: Record<string, number> = {
-			subscribed: 0,
-			unsubscribed: 0,
-			stopped: 0,
-			none: 0
-		};
-		let phonePresent = 0;
-		let emailConsentEvidence = 0;
-		let emailSubscribedConsentEvidence = 0;
-		let smsConsentEvidence = 0;
-		let smsSubscribedConsentEvidence = 0;
-
-		for (const s of allSupporters) {
-			if (s.postalCode) postalResolved++;
-			if (s.identityCommitment && s.verified) identityVerified++;
-			if (s.encryptedPhone || s.phoneHash) phonePresent++;
-			const source = supporterSourceValue(s);
-			sourceCounts[source] = (sourceCounts[source] ?? 0) + 1;
-
-			if (s.emailStatus in emailHealth) {
-				emailHealth[s.emailStatus]++;
-			}
-			if (s.smsStatus in smsHealth) {
-				smsHealth[s.smsStatus]++;
-			}
-			const consentEvidence = hasConsentEvidence(s);
-			if (consentEvidence.email) {
-				emailConsentEvidence++;
-				if (s.emailStatus === 'subscribed') emailSubscribedConsentEvidence++;
-			}
-			if (consentEvidence.sms) {
-				smsConsentEvidence++;
-				if (s.smsStatus === 'subscribed') smsSubscribedConsentEvidence++;
-			}
-		}
-
-		const districtSupporters = new Set<string>();
-		const actions = await ctx.db
-			.query('campaignActions')
-			.withIndex('by_orgId_verified', (idx) => idx.eq('orgId', org._id))
-			.collect();
-		for (const action of actions) {
-			if (action.supporterId && action.districtHash) {
-				districtSupporters.add(action.supporterId);
-			}
-		}
+		const total = org.supporterCount ?? 0;
+		const stats = org.supporterStats ?? emptySupporterStats();
 
 		return {
 			total,
 			imported: total,
-			identityVerified,
-			postalResolved,
-			districtVerified: districtSupporters.size,
-			sourceCounts,
-			emailHealth,
+			identityVerified: stats.identityVerified,
+			postalResolved: stats.postalResolved,
+			// Strip zero-count buckets so a fully-deleted source ('csv: 0') never
+			// shows in the breakdown. computeSupporterStats keeps zeros for the
+			// stable-fold invariant; the UI only wants live buckets.
+			sourceCounts: visibleSourceCounts(stats.sourceCounts),
+			emailHealth: {
+				subscribed: stats.emailSubscribed,
+				unsubscribed: stats.emailUnsubscribed,
+				bounced: stats.emailBounced,
+				complained: stats.emailComplained
+			},
 			smsHealth: {
-				subscribed: smsHealth.subscribed,
-				unsubscribed: smsHealth.unsubscribed,
-				stopped: smsHealth.stopped,
-				none: smsHealth.none,
-				phonePresent
+				subscribed: stats.smsSubscribed,
+				unsubscribed: stats.smsUnsubscribed,
+				stopped: stats.smsStopped,
+				none: stats.smsNone,
+				phonePresent: stats.phonePresent
 			},
 			consentEvidence: {
-				email: emailConsentEvidence,
-				emailSubscribed: emailSubscribedConsentEvidence,
-				sms: smsConsentEvidence,
-				smsSubscribed: smsSubscribedConsentEvidence
+				email: stats.emailConsentEvidence,
+				emailSubscribed: stats.emailSubscribedConsentEvidence,
+				sms: stats.smsConsentEvidence,
+				smsSubscribed: stats.smsSubscribedConsentEvidence
 			}
 		};
+	}
+});
+
+/**
+ * District-of-record count for an org — distinct supporters with at least one
+ * verified action carrying a districtHash. Lazy + bounded: a separate query so
+ * the always-on funnel summary stays O(1), and the scan is capped so it can
+ * never throw the per-query document-cap error the way the old unbounded
+ * .collect() did. When the cap saturates, `truncated` is surfaced so the
+ * consumer can present a floor (">= N") instead of a wrong exact number.
+ *
+ * Set cardinality (distinct supporterIds) can't be a denormalized counter
+ * without double-counting cross-district supporters, so it is computed on
+ * demand here rather than maintained as a scalar.
+ */
+export const getDistrictVerifiedCount = query({
+	args: {
+		orgSlug: v.string()
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
+
+		// Shared bounded path — same scan getDashboardStats's funnel uses, so the
+		// two never drift on the cap or the cardinality math.
+		return await computeDistrictVerified(ctx, org._id);
 	}
 });
 
@@ -826,6 +801,20 @@ export const create = mutation({
 			updatedAt: now
 		});
 
+		// Maintain the denormalized breakdown counters for the just-created row.
+		// New rows always land subscribed/none with no identity/consent, so the
+		// only non-zero contributions are emailSubscribed + (postal/phone/source
+		// when present). Re-read the org inside the helper to fold onto the count
+		// we just wrote.
+		await applySupporterStatsDelta(ctx, org._id, null, {
+			emailStatus: 'subscribed',
+			smsStatus: 'none',
+			source: args.source ?? 'organic',
+			postalCode: args.postalCode,
+			encryptedPhone: args.encryptedPhone,
+			phoneHash: args.phoneHash
+		});
+
 		return supporterId;
 	}
 });
@@ -903,6 +892,37 @@ export const update = mutation({
 			patch.encryptedCustomFields = args.encryptedCustomFields;
 
 		await ctx.db.patch(args.supporterId, patch);
+
+		// postalCode / phone are counted breakdown fields and can change here
+		// (e.g. a supporter gains an address or phone on edit). Apply a
+		// transition delta from the pre-patch row to the post-patch row so
+		// postalResolved / phonePresent stay exact. The merged `after` view
+		// reuses the existing value for any field this update didn't touch.
+		await applySupporterStatsDelta(
+			ctx,
+			org._id,
+			supporter as CountableSupporter,
+			{
+				emailStatus: supporter.emailStatus,
+				smsStatus: supporter.smsStatus,
+				source: supporter.source,
+				postalCode:
+					'postalCode' in patch ? (patch.postalCode as string | undefined) : supporter.postalCode,
+				encryptedPhone:
+					'encryptedPhone' in patch
+						? (patch.encryptedPhone as string | undefined)
+						: supporter.encryptedPhone,
+				phoneHash: 'phoneHash' in patch ? (patch.phoneHash as string | undefined) : supporter.phoneHash,
+				identityCommitment: supporter.identityCommitment,
+				verified: supporter.verified,
+				emailConsentSource: supporter.emailConsentSource,
+				emailConsentedAt: supporter.emailConsentedAt,
+				emailConsentText: supporter.emailConsentText,
+				smsConsentSource: supporter.smsConsentSource,
+				smsConsentedAt: supporter.smsConsentedAt,
+				smsConsentText: supporter.smsConsentText
+			}
+		);
 	}
 });
 
@@ -943,6 +963,23 @@ export const patchEncryptedPii = internalMutation({
 			patch.encryptedCustomFields = args.encryptedCustomFields;
 
 		await ctx.db.patch(args.supporterId, patch);
+
+		// encryptedPhone / phoneHash can change here (operator repair path), so
+		// keep phonePresent exact via a transition delta. All other counted
+		// fields are unchanged by this mutation.
+		await applySupporterStatsDelta(
+			ctx,
+			supporter.orgId,
+			supporter as CountableSupporter,
+			{
+				...(supporter as CountableSupporter),
+				encryptedPhone:
+					'encryptedPhone' in patch
+						? (patch.encryptedPhone as string | undefined)
+						: supporter.encryptedPhone,
+				phoneHash: 'phoneHash' in patch ? (patch.phoneHash as string | undefined) : supporter.phoneHash
+			}
+		);
 	}
 });
 
@@ -985,6 +1022,9 @@ export const remove = mutation({
 			supporterCount: newCount,
 			updatedAt: Date.now()
 		});
+
+		// Decrement the breakdown counters for the deleted row.
+		await applySupporterStatsDelta(ctx, org._id, supporter as CountableSupporter, null);
 
 		return { deleted: true };
 	}
@@ -1107,10 +1147,18 @@ export const updateSmsStatus = mutation({
 			);
 		}
 
+		if (supporter.smsStatus === args.smsStatus) {
+			return { updated: true };
+		}
+
+		const after = { ...supporter, smsStatus: args.smsStatus };
 		await ctx.db.patch(args.supporterId, {
 			smsStatus: args.smsStatus,
 			updatedAt: Date.now()
 		});
+		// This manual editor is a status writer like the webhook paths; without
+		// the delta the smsSubscribed/smsUnsubscribed/smsNone buckets drift.
+		await applySupporterStatsDelta(ctx, org._id, supporter, after);
 
 		return { updated: true };
 	}
@@ -1154,6 +1202,12 @@ export const unsubscribe = mutation({
 		await ctx.db.patch(supporterId, {
 			emailStatus: 'unsubscribed',
 			updatedAt: Date.now()
+		});
+		// emailStatus transition — move the supporter out of its old email
+		// bucket and into 'unsubscribed' in the breakdown counters.
+		await applySupporterStatsDelta(ctx, supporter.orgId, supporter as CountableSupporter, {
+			...(supporter as CountableSupporter),
+			emailStatus: 'unsubscribed'
 		});
 		return { success: true };
 	}
@@ -1256,6 +1310,13 @@ export const importBatch = mutation({
 		let updated = 0;
 		let skipped = 0;
 		const errors: string[] = [];
+		// Breakdown-counter deltas accumulated across the batch and folded into
+		// the org's supporterStats once after the loop (one org write, not one
+		// per row). Includes both new-row creates and existing-row transitions.
+		const statsDeltas: Array<{
+			before: CountableSupporter | null;
+			after: CountableSupporter | null;
+		}> = [];
 
 		// Pre-validate every tagId belongs to THIS org. Accepting
 		// `tagIds: v.array(v.string())` with a `tagId as any` cast at
@@ -1343,6 +1404,15 @@ export const importBatch = mutation({
 					if (Object.keys(patch).length > 0) {
 						patch.updatedAt = Date.now();
 						await ctx.db.patch(existing._id, patch);
+						// Import can fill in postal/phone/consent and apply a
+						// stricter email/sms status on an existing row — all
+						// counted. Queue a transition delta from the pre-patch row
+						// to the merged post-patch row; folded into the org once
+						// after the loop so a 5000-row import does one org write.
+						statsDeltas.push({
+							before: existing as CountableSupporter,
+							after: { ...(existing as CountableSupporter), ...(patch as Partial<CountableSupporter>) }
+						});
 					}
 
 					// Add tags (skip duplicates). tagId was pre-validated against
@@ -1403,6 +1473,24 @@ export const importBatch = mutation({
 						});
 					}
 					imported++;
+					// Queue a create delta for the new row's breakdown counters.
+					statsDeltas.push({
+						before: null,
+						after: {
+							emailStatus: s.emailStatus,
+							smsStatus: s.smsStatus,
+							source: s.source ?? 'csv',
+							postalCode: s.postalCode ?? undefined,
+							encryptedPhone: s.encryptedPhone,
+							phoneHash: s.phoneHash,
+							emailConsentSource: s.emailConsentSource,
+							emailConsentedAt: s.emailConsentedAt,
+							emailConsentText: s.emailConsentText,
+							smsConsentSource: s.smsConsentSource,
+							smsConsentedAt: s.smsConsentedAt,
+							smsConsentText: s.smsConsentText
+						}
+					});
 				}
 			} catch (err) {
 				// Log the per-row error so an operator can see what failed and
@@ -1417,6 +1505,27 @@ export const importBatch = mutation({
 				console.warn(`[importBatch] Row ${i} skipped (slug=${slug}): ${msg}`);
 			}
 		}
+
+		// Fold all breakdown-counter deltas into the org once, and advance
+		// supporterCount by the new-row count. supporterCount was previously not
+		// maintained on this import path — bringing it forward here keeps total
+		// and the breakdown coherent (stats buckets must never exceed total).
+		if (imported > 0) {
+			const onboarding = org.onboardingState ?? {
+				hasDescription: false,
+				hasIssueDomains: false,
+				hasSupporters: false,
+				hasCampaigns: false,
+				hasTeam: false,
+				hasSentEmail: false
+			};
+			await ctx.db.patch(org._id, {
+				supporterCount: (org.supporterCount ?? 0) + imported,
+				onboardingState: { ...onboarding, hasSupporters: true },
+				updatedAt: Date.now()
+			});
+		}
+		await applySupporterStatsDeltaBatch(ctx, org._id, statsDeltas);
 
 		return { imported, updated, skipped, errors };
 	}
@@ -1667,6 +1776,17 @@ export const deleteStrandedPlaceholder = internalMutation({
 			return { ok: false, reason: 'not_placeholder' } as const;
 		}
 		await ctx.db.delete(supporterId);
+		// The placeholder was counted into supporterCount + supporterStats when
+		// findOrCreateSupporter created it; decrement both so deleting a stranded
+		// row doesn't leave the counters overstated.
+		const org = await ctx.db.get(current.orgId);
+		if (org) {
+			await ctx.db.patch(current.orgId, {
+				supporterCount: Math.max((org.supporterCount ?? 1) - 1, 0),
+				updatedAt: Date.now()
+			});
+		}
+		await applySupporterStatsDelta(ctx, current.orgId, current as CountableSupporter, null);
 		return { ok: true } as const;
 	}
 });

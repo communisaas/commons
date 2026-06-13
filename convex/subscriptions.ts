@@ -11,7 +11,8 @@ import { v } from "convex/values";
 import { subscriptionPlan, subscriptionStatus, subscriptionPaymentMethod } from "./_validators";
 import { requireAuth, requireOrgRole } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
-import type { Id } from "./_generated/dataModel";
+import type { Id, Doc } from "./_generated/dataModel";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
 
 // Plan limits — mirrored from src/lib/server/billing/plans.ts (MUST stay in sync)
 const PLANS: Record<
@@ -30,6 +31,115 @@ const PLANS: Record<
   organization: { priceCents: 7_500, maxSeats: 10, maxTemplatesMonth: 500, maxVerifiedActions: 5_000, maxEmails: 100_000, maxSms: 10_000 },
   coalition: { priceCents: 20_000, maxSeats: 25, maxTemplatesMonth: 1_000, maxVerifiedActions: 10_000, maxEmails: 250_000, maxSms: 50_000 },
 };
+
+/**
+ * Verified actions within the current billing period — scale-safe.
+ *
+ * The naive implementation collected every verified campaignAction and filtered
+ * by sentAt in memory; that throws past the per-query document cap and
+ * hard-locks the org on EVERY submit once it has >16K verified actions.
+ *
+ * Instead: period_count = verifiedActionsLifetime - verifiedActionsPeriodBaseline,
+ * where the baseline is snapshotted at period rollover. Both are O(1) reads off
+ * the org row. The baseline carries `baselineAt` = the periodStart it belongs
+ * to, so we only trust the O(1) path when it matches the period we're metering.
+ *
+ * Self-heal (no write — this runs in a query): if the baseline is missing or
+ * belongs to a DIFFERENT period (a late/missed Stripe webhook, or a free-tier
+ * calendar-month rollover that has no webhook), count THIS period's verified
+ * actions via the `by_orgId_verified_sentAt` range index — bounded to one
+ * period's volume, never the lifetime table, so it can never throw the cap.
+ *
+ * Fail-safe: the range count is itself bounded (take(cap + 1)); if it
+ * saturates, return the cap rather than a wrong low number — enforcement
+ * over-counts (stricter) rather than under-counts when uncertain.
+ */
+// INVARIANT: this cap MUST stay strictly above the largest maxVerifiedActions /
+// maxEmails / maxSms across PLANS (currently 10K / 250K-ish are below... see note).
+// When a period scan saturates, the count is clamped to the cap; enforcement
+// (`usage >= limit`) then still trips ONLY because the cap exceeds every plan
+// limit it gates. For verified actions the max plan limit is 10K < 16K cap, so a
+// saturated clamp (16K) still blocks. If a plan limit ever rises above a cap,
+// raise the cap in lockstep or the clamp would UNDER-enforce.
+const VERIFIED_ACTION_PERIOD_SCAN_CAP = 16_000;
+// Blasts are one row per send (not per recipient), so a period rarely holds many;
+// the cap is a doc-cap backstop. On saturation blastSentThisPeriod fails safe by
+// returning MAX_SAFE_INTEGER (blocks) rather than clamping a recipient SUM low.
+const BLAST_SCAN_CAP = 16_000;
+
+async function verifiedActionsThisPeriod(
+  ctx: QueryCtx,
+  org: Doc<"organizations">,
+  periodStart: number,
+): Promise<number> {
+  const baselineAt = org.verifiedActionsPeriodBaselineAt;
+
+  // Trust the O(1) lifetime-minus-baseline path only when the snapshot belongs
+  // to exactly the period we're metering. For a paid org the read's periodStart
+  // is the same `currentPeriodStart` the webhook snapshotted, so they match.
+  if (baselineAt !== undefined && baselineAt === periodStart) {
+    const lifetime = org.verifiedActionsLifetime ?? 0;
+    const baseline = org.verifiedActionsPeriodBaseline ?? 0;
+    return Math.max(0, lifetime - baseline);
+  }
+
+  // Self-heal: baseline missing or for a different period. Count this period's
+  // verified actions via the sentAt range index — bounded, never unbounded.
+  const rows = await ctx.db
+    .query("campaignActions")
+    .withIndex("by_orgId_verified_sentAt", (idx) =>
+      idx.eq("orgId", org._id).eq("verified", true).gte("sentAt", periodStart),
+    )
+    .take(VERIFIED_ACTION_PERIOD_SCAN_CAP + 1);
+  // If the period's own volume exceeds the cap, clamp to the cap. This is the
+  // true count below the cap; above it, the clamp is a floor that STILL trips
+  // enforcement because the cap exceeds every plan's maxVerifiedActions (see the
+  // cap INVARIANT above) — not because it "over-counts". Honor that invariant.
+  return Math.min(rows.length, VERIFIED_ACTION_PERIOD_SCAN_CAP);
+}
+
+/**
+ * Sum send volume from a blast table's "sent" rows within the billing period.
+ *
+ * Previously this `.collect()`-ed the org's ENTIRE blast history then filtered
+ * `sentAt >= periodStart` in memory — one row per blast, so a long-lived org
+ * with thousands of historical blasts re-scans them all on every limit check
+ * (the same unbounded-collect cliff fixed for verified actions). The range
+ * index `by_orgId_sentAt` bounds the read to the current period's blasts.
+ *
+ * `sentAt` is set only when status === 'sent', so a `gte(periodStart)` range
+ * skips never-sent (undefined-sentAt) rows; we still guard on status === 'sent'
+ * because a future status (e.g. a partially-sent state) could carry a sentAt.
+ */
+async function blastSentThisPeriod(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  periodStart: number,
+  table: "emailBlasts" | "smsBlasts",
+): Promise<number> {
+  const blasts = await ctx.db
+    .query(table)
+    .withIndex("by_orgId_sentAt", (idx) =>
+      idx.eq("orgId", orgId).gte("sentAt", periodStart),
+    )
+    .take(BLAST_SCAN_CAP + 1);
+  // Hard-bounded like the verified-action scan — a `.collect()` here would
+  // re-introduce the doc-cap throw if a single period somehow holds >16K blasts.
+  // If the period saturates the cap, fail SAFE for a send-volume limit: return a
+  // value that always trips the limit (block) rather than a low number that would
+  // under-enforce. (One row per blast, so this is only reachable pathologically.)
+  if (blasts.length > BLAST_SCAN_CAP) return Number.MAX_SAFE_INTEGER;
+  let sent = 0;
+  for (const blast of blasts) {
+    if (blast.status !== "sent") continue;
+    // emailBlasts tally `totalSent`; smsBlasts tally `sentCount`.
+    sent +=
+      (blast as { totalSent?: number; sentCount?: number }).totalSent ??
+      (blast as { totalSent?: number; sentCount?: number }).sentCount ??
+      0;
+  }
+  return sent;
+}
 
 // =============================================================================
 // QUERIES
@@ -151,47 +261,20 @@ export const checkPlanLimits = query({
     }
 
     // === Period-scoped usage aggregation ===
-    // All usage is computed at query time within the billing period window.
-    // No denormalized counters used for billing — avoids the "never-reset" bug.
+    // Email/SMS usage is computed at query time within the billing period window.
+    //
+    // Verified actions use a monotonic lifetime tally minus a per-period
+    // baseline (snapshotted at rollover) — O(1), never-reset-safe, and it never
+    // scans the whole verified-action table (which throws past the document cap
+    // and hard-locks the org on every submit at scale). NOT a per-period
+    // denormalized counter — the baseline only ever moves forward, so there is
+    // no never-reset bug.
+    const verifiedActions = await verifiedActionsThisPeriod(ctx, org, periodStart);
 
-    // Verified actions: period-scoped via campaignActions.sentAt
-    // Uses by_orgId_verified index for single-pass query (no N+1 per campaign)
-    const verifiedActionRows = await ctx.db
-      .query("campaignActions")
-      .withIndex("by_orgId_verified", (idx) =>
-        idx.eq("orgId", org._id).eq("verified", true),
-      )
-      .collect();
-    let verifiedActions = 0;
-    for (const action of verifiedActionRows) {
-      if (action.sentAt >= periodStart) {
-        verifiedActions++;
-      }
-    }
-
-    // Emails: aggregate from completed blasts within the billing period
-    const emailBlasts = await ctx.db
-      .query("emailBlasts")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
-    let emailsSent = 0;
-    for (const blast of emailBlasts) {
-      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
-        emailsSent += blast.totalSent ?? 0;
-      }
-    }
-
-    // SMS: aggregate from completed blasts within the billing period
-    const smsBlasts = await ctx.db
-      .query("smsBlasts")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
-    let smsSent = 0;
-    for (const blast of smsBlasts) {
-      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
-        smsSent += blast.sentCount ?? 0;
-      }
-    }
+    // Emails + SMS: aggregate from completed blasts within the billing period
+    // via the bounded sentAt range index (no full-history collect).
+    const emailsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "emailBlasts");
+    const smsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "smsBlasts");
 
     return {
       plan,
@@ -257,42 +340,13 @@ export const checkPlanLimitsByOrgId = internalQuery({
       periodStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
     }
 
-    // Period-scoped aggregation (mirrors checkPlanLimits logic)
-    // Single-pass via by_orgId_verified index — no N+1 campaign loop
-    const verifiedActionRows = await ctx.db
-      .query("campaignActions")
-      .withIndex("by_orgId_verified", (idx) =>
-        idx.eq("orgId", org._id).eq("verified", true),
-      )
-      .collect();
-    let verifiedActions = 0;
-    for (const action of verifiedActionRows) {
-      if (action.sentAt >= periodStart) {
-        verifiedActions++;
-      }
-    }
+    // Verified actions: lifetime-minus-baseline (mirrors checkPlanLimits) —
+    // O(1), never-reset-safe, no full verified-action scan.
+    const verifiedActions = await verifiedActionsThisPeriod(ctx, org, periodStart);
 
-    const emailBlasts = await ctx.db
-      .query("emailBlasts")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
-    let emailsSent = 0;
-    for (const blast of emailBlasts) {
-      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
-        emailsSent += blast.totalSent ?? 0;
-      }
-    }
-
-    const smsBlasts = await ctx.db
-      .query("smsBlasts")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
-    let smsSent = 0;
-    for (const blast of smsBlasts) {
-      if (blast.status === "sent" && blast.sentAt !== undefined && blast.sentAt >= periodStart) {
-        smsSent += blast.sentCount ?? 0;
-      }
-    }
+    // Bounded sentAt range reads (mirrors checkPlanLimits) — no full-history collect.
+    const emailsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "emailBlasts");
+    const smsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "smsBlasts");
 
     return {
       plan,
@@ -643,6 +697,33 @@ function mapStripeStatus(status: string): "active" | "past_due" | "canceled" | "
 // =============================================================================
 
 /**
+ * Snapshot the verified-action period baseline at billing-period rollover.
+ *
+ * Sets baseline = the org's current monotonic lifetime tally and records which
+ * period the baseline belongs to (baselineAt = periodStart). The billing read
+ * then computes period_count = lifetime - baseline in O(1), no scan.
+ *
+ * Idempotent + monotonic: only advances the baseline when `periodStart` is
+ * newer than the recorded baselineAt, so a duplicate or out-of-order Stripe
+ * webhook can't rewind it (which would over-count the period). A snapshot for
+ * the SAME period start is a no-op. The baseline only ever moves forward.
+ */
+async function snapshotVerifiedActionBaseline(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  periodStart: number,
+): Promise<void> {
+  const org = await ctx.db.get(orgId);
+  if (!org) return;
+  const existingAt = org.verifiedActionsPeriodBaselineAt ?? 0;
+  if (periodStart <= existingAt) return; // same/older period — no rewind
+  await ctx.db.patch(orgId, {
+    verifiedActionsPeriodBaseline: org.verifiedActionsLifetime ?? 0,
+    verifiedActionsPeriodBaselineAt: periodStart,
+  });
+}
+
+/**
  * Upsert a subscription from Stripe checkout completion.
  */
 export const upsertFromStripe = internalMutation({
@@ -706,6 +787,10 @@ export const upsertFromStripe = internalMutation({
         updatedAt: now,
       });
     }
+
+    // Snapshot the verified-action billing baseline for the new period so the
+    // metering read is O(1) (no scan) for this paid org going forward.
+    await snapshotVerifiedActionBaseline(ctx, org._id, args.currentPeriodStart);
   },
 });
 
@@ -874,6 +959,14 @@ export const updateByStripeId = internalMutation({
         maxTemplatesMonth: freeLimits.maxTemplatesMonth,
         updatedAt: now,
       });
+    }
+
+    // When Stripe advances the billing period (customer.subscription.updated
+    // carries the new current_period_start), snapshot the verified-action
+    // baseline so the metering read resets to 0 for the new period. The helper
+    // is monotonic — it ignores a stale/duplicate period start.
+    if (args.currentPeriodStart !== undefined && sub.orgId) {
+      await snapshotVerifiedActionBaseline(ctx, sub.orgId, args.currentPeriodStart);
     }
   },
 });

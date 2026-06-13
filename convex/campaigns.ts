@@ -21,6 +21,7 @@ import {
 } from './_orgHash';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { encryptForSupporterV2 } from './_orgKey';
+import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
 
 declare const process: { env: Record<string, string | undefined> };
 type ActiveCampaignForSubmission = {
@@ -1050,6 +1051,13 @@ export const findOrCreateSupporter = internalMutation({
 			if (Object.keys(patch).length > 0) {
 				patch.updatedAt = Date.now();
 				await ctx.db.patch(existing._id, patch);
+				// postalCode / phone fill-ins are counted breakdown fields —
+				// apply a transition delta so postalResolved / phonePresent stay
+				// exact when a returning supporter supplies new contact data.
+				await applySupporterStatsDelta(ctx, args.orgId, existing as CountableSupporter, {
+					...(existing as CountableSupporter),
+					...(patch as Partial<CountableSupporter>)
+				});
 			}
 			return { supporterId: existing._id, isNew: false };
 		}
@@ -1092,6 +1100,17 @@ export const findOrCreateSupporter = internalMutation({
 				updatedAt: now
 			});
 		}
+
+		// Maintain the breakdown counters for the new row. Created subscribed/none
+		// with no identity/consent; postal/phone/source contribute when present.
+		await applySupporterStatsDelta(ctx, args.orgId, null, {
+			emailStatus: 'subscribed',
+			smsStatus: 'none',
+			source: args.source,
+			postalCode: args.postalCode,
+			encryptedPhone: args.encryptedPhone,
+			phoneHash: args.phoneHash
+		});
 
 		return { supporterId, isNew: true };
 	}
@@ -1190,6 +1209,40 @@ export const createCampaignAction = internalMutation({
 				tier3VerifiedActionCount: newTier3Count,
 				updatedAt: Date.now()
 			});
+		}
+
+		// Monotonic org-level counters bumped on insert — the only-ever-increments
+		// bases for scale-safe dashboard + billing reads. Bumped here, next to the
+		// campaign counter, so there's exactly one new write site and they can
+		// never drift.
+		//   - verifiedActionsLifetime: lifetime tally of VERIFIED actions, the base
+		//     for billing metering (period usage = lifetime - period baseline,
+		//     baseline snapshotted at billing-period rollover). Only verified
+		//     actions count toward the metered quota.
+		//   - actionTierCounts: engagement-tier histogram over ALL actions (matches
+		//     the prior getDashboardStats loop, which counted every action's tier
+		//     regardless of verified). engagementTier is immutable post-creation, so
+		//     a monotonic counter is exact. Indexed 0-4; out-of-range tiers ignored.
+		if (orgId) {
+			const org = await ctx.db.get(orgId);
+			if (org) {
+				const patch: Record<string, unknown> = {};
+				if (args.verified) {
+					patch.verifiedActionsLifetime = (org.verifiedActionsLifetime ?? 0) + 1;
+				}
+				const tier = args.engagementTier;
+				if (typeof tier === 'number' && tier >= 0 && tier <= 4) {
+					const counts = [...(org.actionTierCounts ?? [0, 0, 0, 0, 0])];
+					// Defensive: pad/truncate to exactly 5 slots in case a legacy doc
+					// stored a shorter array.
+					while (counts.length < 5) counts.push(0);
+					counts[tier] = (counts[tier] ?? 0) + 1;
+					patch.actionTierCounts = counts.slice(0, 5);
+				}
+				if (Object.keys(patch).length > 0) {
+					await ctx.db.patch(orgId, patch);
+				}
+			}
 		}
 
 		// Reputation-tier on-action increment (T10-1 hybrid model). Only ZK

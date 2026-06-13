@@ -13,6 +13,7 @@ import { campaignType } from './_validators';
 import { resolveDmAndCanonical } from './legislation';
 import { requireInternalSecret } from './_internalAuth';
 import { assertPiiTripleCreate } from './_orgHash';
+import { applySupporterStatsDelta } from './_supporterStats';
 // PII returned as encrypted blobs — v1 API consumers decrypt with org key
 
 // =============================================================================
@@ -302,7 +303,12 @@ export const updateSupporter = mutation({
 		if (data.encryptedCustomFields !== undefined)
 			updates.encryptedCustomFields = data.encryptedCustomFields;
 
+		// Build the post-patch shape BEFORE writing so the counter delta sees
+		// the transition. postalCode changes shift the postalResolved bucket;
+		// without this the funnel drifts on every v1 API update.
+		const after = { ...supporter, ...updates };
 		await ctx.db.patch(supporter._id, updates);
+		await applySupporterStatsDelta(ctx, orgId, supporter, after);
 		return { id: supporter._id, updatedAt: Date.now() };
 	}
 });
@@ -317,6 +323,16 @@ export const deleteSupporter = mutation({
 			.take(10_000);
 		const supporter = supporters.find((s) => s._id === supporterId);
 		if (!supporter) return false;
+		// Drop this row's contributions from the breakdown counters and the
+		// total before deleting, mirroring the create path's count bump.
+		await applySupporterStatsDelta(ctx, orgId, supporter, null);
+		const org = await ctx.db.get(orgId);
+		if (org) {
+			await ctx.db.patch(orgId, {
+				supporterCount: Math.max(0, (org.supporterCount ?? 0) - 1),
+				updatedAt: Date.now()
+			});
+		}
 		await ctx.db.delete(supporter._id);
 		return true;
 	}
@@ -399,6 +415,25 @@ export const createSupporter = mutation({
 				}
 			}
 		}
+
+		// Maintain org counters for the new row. supporterCount was previously
+		// not advanced on the v1 API create path — bring it forward so total and
+		// the breakdown stay coherent.
+		const org = await ctx.db.get(args.orgId);
+		if (org) {
+			await ctx.db.patch(args.orgId, {
+				supporterCount: (org.supporterCount ?? 0) + 1,
+				updatedAt: Date.now()
+			});
+		}
+		await applySupporterStatsDelta(ctx, args.orgId, null, {
+			emailStatus: 'subscribed',
+			smsStatus: 'none',
+			source: args.source,
+			postalCode: args.postalCode,
+			encryptedPhone: args.encryptedPhone,
+			phoneHash: args.phoneHash
+		});
 
 		const supporter = await ctx.db.get(id);
 		return { duplicate: false, supporter };

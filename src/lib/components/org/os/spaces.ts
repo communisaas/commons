@@ -71,6 +71,10 @@ export type BaseSpaceData = {
 	sourceCounts: Record<string, number>;
 	postalResolved: number;
 	districtVerified: number;
+	// True when the district-of-record scan hit its cap, so districtVerified is a
+	// floor (">= N"), not an exact count. Threaded from the bounded
+	// getDistrictVerifiedCount query so a >10K-action org can render "10,000+".
+	districtVerifiedTruncated: boolean;
 	identityVerified: number;
 	emailHealth: {
 		subscribed: number;

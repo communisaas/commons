@@ -3,6 +3,8 @@ import { internal } from './_generated/api';
 import { v } from 'convex/values';
 import { requireAuth, requireOrgRole, loadOrg } from './_authHelpers';
 import { sealOrgKey as sealOrgKeyHelper } from './_orgKeyUnseal';
+import { emptySupporterStats, computeSupporterStats } from './_supporterStats';
+import { computeDistrictVerified, computeGrowthWindow } from './_dashboardStats';
 import type { Doc, Id } from './_generated/dataModel';
 // Billing email: returned as encrypted blob, client decrypts with org key
 
@@ -201,81 +203,68 @@ export const getDashboard = query({
 
 /**
  * Dashboard stats: funnel, engagement-tier histogram, growth. Held separately
- * from `getDashboard` because these aggregates scan supporters + actions and
- * we don't want them slowing the main load.
+ * from `getDashboard` because these are aggregates — but NONE of them scan a
+ * scalable collection anymore. The previous implementation `.collect()`ed every
+ * supporter AND every verified action, which throws past the per-query document
+ * cap and 500s the dashboard once an org passes ~16K of either. Now:
  *
- * - funnel: total imported people → postal resolved → district verified →
- *   identity verified. imported/postalResolved/identityVerified are supporter-level;
- *   districtVerified counts distinct supporters with at least one action carrying
- *   a districtHash (the strongest district-of-record signal we hold).
- * - tiers: action-level engagementTier histogram (T0 New ... T4 Pillar). Page
- *   labels confirm this is the engagement axis, not the identity-trust axis.
- * - growth: verified actions this week vs last week.
+ * - funnel.imported/postalResolved/identityVerified: read O(1) from the
+ *   denormalized org.supporterStats counters (maintained at every supporter
+ *   writer), exactly as getSummaryStats does. No supporters scan.
+ * - funnel.districtVerified: distinct supporters with a verified action carrying
+ *   a districtHash. Set cardinality, can't be a scalar counter, so it is
+ *   computed via the shared BOUNDED scan (computeDistrictVerified, capped at
+ *   10K) — the same path getDistrictVerifiedCount uses, so the two never drift.
+ * - tiers: action-level engagementTier histogram (T0 New ... T4 Pillar). Read
+ *   O(1) from org.actionTierCounts — a monotonic counter bumped in
+ *   createCampaignAction (engagementTier is immutable post-creation). No actions
+ *   scan.
+ * - growth: verified actions this week vs last week via two BOUNDED sentAt range
+ *   reads on by_orgId_verified_sentAt (computeGrowthWindow). One week's volume is
+ *   bounded, never the lifetime table.
  */
 export const getDashboardStats = query({
 	args: { slug: v.string() },
 	handler: async (ctx, { slug }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'member');
 
-		const supporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
+		// Supporter funnel — O(1) denormalized counters (same as getSummaryStats).
+		const total = org.supporterCount ?? 0;
+		const stats = org.supporterStats ?? emptySupporterStats();
 
-		let imported = 0;
-		let postalResolved = 0;
-		let identityVerified = 0;
-		for (const s of supporters) {
-			imported++;
-			if (s.postalCode) postalResolved++;
-			if (s.identityCommitment && s.verified) identityVerified++;
-		}
+		// District-of-record — shared bounded scan (capped at 10K, never .collect()).
+		const district = await computeDistrictVerified(ctx, org._id);
 
-		// campaignActions are denormalized with orgId — use it.
-		const actions = await ctx.db
-			.query('campaignActions')
-			.withIndex('by_orgId_verified', (q) => q.eq('orgId', org._id))
-			.collect();
+		// Growth window — two bounded sentAt range reads, one week's volume each.
+		const growth = await computeGrowthWindow(ctx, org._id);
 
-		const supportersWithDistrict = new Set<string>();
-		const tierCounts = [0, 0, 0, 0, 0];
-		const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-		const now = Date.now();
-		let verifiedThisWeek = 0;
-		let verifiedLastWeek = 0;
-		for (const a of actions) {
-			if (a.districtHash && a.supporterId) {
-				supportersWithDistrict.add(a.supporterId);
-			}
-			const t = a.engagementTier;
-			if (typeof t === 'number' && t >= 0 && t <= 4) {
-				tierCounts[t]++;
-			}
-			if (a.verified) {
-				const age = now - a.sentAt;
-				if (age <= WEEK_MS) verifiedThisWeek++;
-				else if (age <= 2 * WEEK_MS) verifiedLastWeek++;
-			}
-		}
-
+		// Engagement-tier histogram — O(1) monotonic counter, padded to 5 slots.
 		const TIER_LABELS = ['New', 'Active', 'Established', 'Veteran', 'Pillar'];
-		const tiers = tierCounts.map((count, tier) => ({
+		const tierCounts = org.actionTierCounts ?? [];
+		const tiers = TIER_LABELS.map((label, tier) => ({
 			tier,
-			label: TIER_LABELS[tier],
-			count
+			label,
+			count: tierCounts[tier] ?? 0
 		}));
 
 		return {
 			funnel: {
-				imported,
-				postalResolved,
-				identityVerified,
-				districtVerified: supportersWithDistrict.size
+				imported: total,
+				postalResolved: stats.postalResolved,
+				identityVerified: stats.identityVerified,
+				districtVerified: district.districtVerified,
+				// Surface the cap so a consumer can render a floor (">= N") instead of
+				// presenting a truncated district count as exact past the scan cap.
+				districtVerifiedTruncated: district.truncated
 			},
 			tiers,
 			growth: {
-				thisWeek: verifiedThisWeek,
-				lastWeek: verifiedLastWeek
+				thisWeek: growth.thisWeek,
+				lastWeek: growth.lastWeek,
+				// Surface the per-week caps like districtVerifiedTruncated above, so a
+				// consumer renders a floor instead of a wrong exact past the scan cap.
+				thisWeekTruncated: growth.thisWeekTruncated,
+				lastWeekTruncated: growth.lastWeekTruncated
 			}
 		};
 	}
@@ -664,6 +653,60 @@ export const getSettingsData = query({
 				weight: d.weight,
 				updatedAt: d.updatedAt
 			}))
+		};
+	}
+});
+
+/**
+ * Rebuild an org's denormalized DISPLAY counters from the actual rows — the
+ * recovery path a denormalized-counter system needs.
+ *
+ * Pre-launch there is no production data to "backfill"; this exists to (a) correct
+ * dev/seed orgs created before the counters existed, and (b) repair drift if a
+ * writer ever bypasses applySupporterStatsDelta despite the coverage guard. Run
+ * manually per org (compose for many).
+ *
+ * Bounded by the same scan caps as the reads, so it can never throw the doc cap;
+ * for an org past the cap the rebuilt values are the same bounded truth the reads
+ * serve. It rebuilds supporterStats / supporterCount / actionTierCounts (the
+ * multi-writer, drift-prone counters). It deliberately does NOT touch
+ * verifiedActionsLifetime or the billing baseline — those have a single writer
+ * (createCampaignAction) and the billing read self-heals off a bounded range, so
+ * recomputing them here would risk a baseline-vs-lifetime inconsistency for no gain.
+ */
+const RECONCILE_SCAN_CAP = 16_000;
+export const reconcileOrgStats = internalMutation({
+	args: { orgId: v.id('organizations') },
+	handler: async (ctx, args) => {
+		const org = await ctx.db.get(args.orgId);
+		if (!org) return { skipped: true as const };
+
+		const supporters = await ctx.db
+			.query('supporters')
+			.withIndex('by_orgId', (idx) => idx.eq('orgId', args.orgId))
+			.take(RECONCILE_SCAN_CAP);
+		let stats = emptySupporterStats();
+		for (const s of supporters) stats = computeSupporterStats(stats, null, s);
+
+		const actions = await ctx.db
+			.query('campaignActions')
+			.withIndex('by_orgId_supporterId', (idx) => idx.eq('orgId', args.orgId))
+			.take(RECONCILE_SCAN_CAP);
+		const tierCounts = [0, 0, 0, 0, 0];
+		for (const a of actions) {
+			const t = a.engagementTier;
+			if (typeof t === 'number' && t >= 0 && t < 5) tierCounts[t]++;
+		}
+
+		await ctx.db.patch(args.orgId, {
+			supporterStats: stats,
+			supporterCount: supporters.length,
+			actionTierCounts: tierCounts
+		});
+
+		return {
+			supporterCount: supporters.length,
+			truncated: supporters.length >= RECONCILE_SCAN_CAP || actions.length >= RECONCILE_SCAN_CAP
 		};
 	}
 });
