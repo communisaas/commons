@@ -1397,6 +1397,44 @@ export default defineSchema({
 		memberCount: v.optional(v.number()),
 		sentEmailCount: v.optional(v.number()),
 		smsSentCount: v.optional(v.number()),
+
+		// Denormalized per-supporter breakdown counters. Backs the verification
+		// funnel + list-health summary without a full-table scan (the scan
+		// throws past the per-query doc cap once an org's roster is large).
+		// Every count is a per-supporter scalar tally — maintained on insert,
+		// status transition, and delete via applySupporterStatsDelta. Excluded:
+		// district-of-record cardinality (a set, not a per-row tally — a scalar
+		// counter would double-count a supporter active in two districts). That
+		// signal is served by a separate bounded query. Optional so pre-existing
+		// orgs default cleanly (all counts read as 0 until first maintained write).
+		supporterStats: v.optional(
+			v.object({
+				// Supporters with a backed identity commitment AND verified flag.
+				identityVerified: v.number(),
+				// Supporters carrying a postal code (address-resolution signal).
+				postalResolved: v.number(),
+				// Supporters carrying a phone (encryptedPhone or phoneHash present).
+				phonePresent: v.number(),
+				// emailStatus histogram.
+				emailSubscribed: v.number(),
+				emailUnsubscribed: v.number(),
+				emailBounced: v.number(),
+				emailComplained: v.number(),
+				// smsStatus histogram.
+				smsSubscribed: v.number(),
+				smsUnsubscribed: v.number(),
+				smsStopped: v.number(),
+				smsNone: v.number(),
+				// Consent-evidence tallies (compliance posture).
+				emailConsentEvidence: v.number(),
+				emailSubscribedConsentEvidence: v.number(),
+				smsConsentEvidence: v.number(),
+				smsSubscribedConsentEvidence: v.number(),
+				// Per-source acquisition tally. source is set at create and never
+				// patched, so this map only grows on insert / shrinks on delete.
+				sourceCounts: v.record(v.string(), v.number())
+			})
+		),
 		onboardingState: v.optional(
 			v.object({
 				hasDescription: v.boolean(),
